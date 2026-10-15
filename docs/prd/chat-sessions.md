@@ -641,7 +641,7 @@ D-58) and returned oldest first, at most `limit` (200 when absent, 1,000 at most
 of JSON (a page always holds one); `more` says older events exist and `before` is what to ask with next (the first event's seq, null when
 there are no more). In a page, a `tool_result` longer than 2,000 characters keeps its first 2,000 (never half a surrogate pair) and
 `textLength` says how long the whole is; `GET /api/chat/sessions/:id/events/:seq` returns that one event whole (404 for a seq the session
-does not have). `after` together with `before` or `limit`, or a limit or before that is not a whole number from 1, is a 400. Both routes
+does not have). `after` together with `before` or `limit`, or a limit or before that is not a whole number from 1, is a 422 (validation failed). Both routes
 are declared `view` on the session: another user gets the same 404 as a session that does not exist. Every JSON answer under `/api/*`
 is gzip-compressed when the request accepts gzip and is at least 1 KiB (hono/compress, scoped to `application/json`); an event stream,
 a WebSocket upgrade, a blob, a download or a range answer never is. Not yet built: the web reading pages (it still loads the whole

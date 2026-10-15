@@ -88,8 +88,8 @@ test('pages: from the newest, oldest first, more and before, walked back to the 
     assert.equal(byDefault.events.length, EVENT_PAGE_LIMIT, 'no limit: the default page size');
     assert.deepEqual(seqs(byDefault.events), seqs(whole.slice(-EVENT_PAGE_LIMIT)));
 
-    assert.equal((await owner.request(`/${s.id}/events?limit=0`)).status, 400);
-    assert.equal((await owner.request(`/${s.id}/events?after=3&limit=10`)).status, 400, 'after does not mix with a page');
+    assert.equal((await owner.request(`/${s.id}/events?limit=0`)).status, 422);
+    assert.equal((await owner.request(`/${s.id}/events?after=3&limit=10`)).status, 422, 'after does not mix with a page');
   } finally {
     await s.done();
   }

@@ -845,7 +845,7 @@ export const CHAT_API = {
   /**
    * GET `?after=<seq>`: stored transcript events after a sequence number (history and resume), whole, as `ChatEvent[]`; neither `after`
    * nor the page parameters: the whole transcript, the same way. GET `?before=<seq>&limit=<n>` (either one is enough): a `ChatEventPage`
-   * counted back from `before` (from the newest without it). `after` with `before` or `limit` is refused (400).
+   * counted back from `before` (from the newest without it). `after` with `before` or `limit` is refused (422).
    */
   events: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/events`,
   /** GET: one stored event whole (a `tool_result` a page cut to its preview); 404 when the session has no such event. */

@@ -10,7 +10,7 @@ import { eventPage, eventsQuery, previewEvent } from './eventPage.js';
 const ev = (seq: number, kind: ChatEvent['kind'] = 'assistant', text = `event ${seq}`): ChatEvent => ({ seq, at: '2026-01-01T00:00:00.000Z', kind, text });
 /** Events 1..n, newest first (what the store reads for a page). */
 const newestFirst = (n: number, from = n) => Array.from({ length: n }, (_, i) => ev(from - i));
-const invalid = (e: unknown) => isAppError(e) && e.status === 400;
+const invalid = (e: unknown) => isAppError(e) && e.status === 422;
 
 test('query: neither before nor limit is the after form, read exactly as before (no parameter: the whole transcript)', () => {
   assert.deepEqual(eventsQuery({}), { kind: 'after', after: 0 });
@@ -25,7 +25,7 @@ test('query: before or limit asks for a page; limit defaults and is capped; befo
   assert.deepEqual(eventsQuery({ limit: String(EVENT_PAGE_LIMIT_MAX * 10) }), { kind: 'page', before: null, limit: EVENT_PAGE_LIMIT_MAX });
 });
 
-test('query: a page with a bad number, or with after, is refused (400)', () => {
+test('query: a page with a bad number, or with after, is refused (422)', () => {
   for (const bad of [{ limit: '0' }, { limit: '-3' }, { limit: '2.5' }, { limit: 'x' }, { before: '0' }, { before: '1e3' }, { before: 'abc' }]) {
     assert.throws(() => eventsQuery(bad), invalid, JSON.stringify(bad));
   }
