@@ -3,6 +3,7 @@
 Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-overs: ab99b45, bb58413, 639202e.
 
 ## DONE
+- MERGED ff cc26c96: T-531 S2c (gate GREEN 55d5fad, suite 587 s, peak 1971Mi). CLOSED T-531. Rides the deploy after #38.
 - MERGED ff 3f81869: T-524 S2 0fbc6be (gate-job Pending report, memory peak line, ENOSPC hint). Gate GREEN claudepilot-gate-3f81869-1ecd
   (suite 575 s, peak 2325Mi/8192Mi, 0 OOM). No web files in the diff, so no web suite. Scripts only: no deploy needed.
 - DEPLOYED run #37 rmv9dxygu680003 (0316fae = b37628e + status): gate 690 s, build, release, verify, chats all passed.
@@ -12,7 +13,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   d2e7b532 impl-t576 (sonnet) T-576 Runners UI WAITING 7b26e14 (web only). T-558 e652c44: 7d33708d ended (125k, coordinator); QA runs its Jobs (5052).
   fb538d7d qa-t486 (sonnet) T-486 QA WAITING GO, 03c496b6 impl-t546 (sonnet) T-546 crew digest WAITING bb7cdb0 (118k: ends after T-546).)
   Sweep: PASS T-109/280/282/285, GAP T-259/294/136(?)/338/317/287; nobody can claim in_review tickets -> coordinator (T-525 4659).
-  Cluster: lead gate T-531 pre-merge 55d5fad (re-merged on T-557 S1 59eca49) -> T-486 QA -> T-546 -> T-561 -> T-576 -> T-558 QA.
+  Cluster: deploy #38 gate (coordinator) -> T-486 QA -> T-546 -> T-561 -> T-576 -> T-558 QA.
   Then DEPLOY integration (carries T-557 S1 + T-575, coordinator asked). Next free slot: T-558 QA (sonnet), then T-576 ux-checker.
   Later: T-426 QA + blind review (after T-401 merges), T-416 S1b QA, T-548.
 - T-557: the COORDINATOR builds it (dev/t557-runners); 8dc6a739 ended, its 02357fd offered as input (4925). Collision lines on T-557.
@@ -24,9 +25,6 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - T-416 (high incident): S1 d37c5f0; QA b1aa2e47 PASS WITH GAPS (4623: 995/999 0 fail job-2c410105; mutations A2/B/C caught);
   ended. Decision 4637: S1b a769b00 (race fix + push-bridge test, UNTESTED; author ended for T-379, 4688). QA runs its Jobs,
   then blind review (opus), lead gate, merge, deploy. S2 = Bypass restore.
-- T-531 (high, authz): S1 df65563; blind review PASS WITH CONDITIONS (4520); S2 9cd240f. QA 47710391 PASS WITH GAPS (4761/4762:
-  1428/1433 0 fail job-a8a40ad8; mutation holds job-620ab38d; no agent path uses the refused routes). Decision 4763: S2c (sonnet)
-  tests legacy refs get the same 404 -> S2c 7afbd0d QA PASS no gap (5008) -> lead gate 950c17d -> merge. T-538..T-540 ticketed.
 - T-486 (high): S1 live. S2 DONE 75fd6a4 (4671, Jobs green; webhook, attention, allow-list, migration 783); 45148907 ended.
   Blind review 10382d36 PASS WITH CONDITIONS (4693, 6 minors); decision 4703: S2b cffb12b1 fixes m1/m4/m5 + PRD risks m2/m3;
   web hookSecret field -> T-556. Then QA -> lead gate -> merge -> deploy -> real Event branch check.
@@ -42,8 +40,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - 14:30 Coordinator (D-65 idle slots): workers waiting on the one-at-a-time cluster hold slots; over 120k they end after their
   ticket. 7d33708d ended, T-576 started in its slot. The cluster queue (D-61), not the workers, is the bottleneck.
 - 14:45 Coordinator started deploy #38 (c957f50: T-557 S1 + T-575) itself; I start NO deploy. Then the kohi-event pod restarts.
-  All worker branches pushed and clean (T-561 a649874, T-576 7b26e14, T-546 bb7cdb0, lead pre-merge 55d5fad). After the restart: if the
-  gate on 55d5fad has no verdict in /tmp/gate-55d5fad.out, re-run scripts/gate-job.sh 55d5fad1... then resume the cluster queue.
+  All worker branches pushed and clean (T-561 a649874, T-576 7b26e14, T-546 bb7cdb0). After the restart: resume the cluster queue.
 - 12:50 Coordinator: it builds T-557 itself (owner's ask); no T-557 slices from me; T-426 stays mine; a line on T-557 when I touch
   ci/ or connect/ in a big way. (Supersedes 12:45's fold of T-426 into the lease.)
 - 13:20 D-66 (pulled, 619b4b5): workers run scripts/quick-check.sh (one Job: format, lint, named tests) before a branch goes
@@ -70,7 +67,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   T-509 kit republish; T-525 session_get + scribe tools; T-527 finding 4 (owner triggers tagging owner-checklist).
 
 ## NEXT (in order, as slots free)
-1. Merges: T-401 -> T-379 -> T-531 (S2c) -> T-486 -> T-426; then deploy. 2. T-416 S1b QA -> blind review (opus) -> merge; then S2.
+1. Merges: T-401 -> T-379 -> T-486 -> T-426; then deploy. 2. T-416 S1b QA -> blind review (opus) -> merge; then S2.
 3. NEXT FREE SLOTS: T-426 QA + blind review; T-558 review (opus); T-546 + T-548 (one sonnet worker); T-561 (opus, deny rules);
    T-547 + T-549 (+ wasted-calls row, 4802); T-574 (session_family summary, from T-282 4801). Sweep results: the lead closes on PASS or reopens with the gap. 4. T-524 measurement with T-513. 5. T-537. 6. T-513.
 7. T-472 live re-check (4294), T-422, T-147, T-438, T-425, T-436, T-437, T-432, T-378 S1 verify, T-382, T-377, T-386, T-409, T-402, T-398, T-399, T-370 HOLD,
