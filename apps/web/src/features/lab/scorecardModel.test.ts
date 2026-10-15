@@ -44,7 +44,7 @@ test('measured and estimate figures are labelled MEASURED and ESTIMATE, with the
   assert.equal(by(p, 'leadShare').basis, 'ESTIMATE');
   assert.match(by(p, 'costPerDone').tip, /ESTIMATE\. Source: a source/);
   assert.equal(by(p, 'leadShare').value, '40 %');
-  assert.equal(by(p, 'costPerDone').value, '$5.00');
+  assert.equal(by(p, 'costPerDone').value, '$5');
 });
 
 test('unavailable is a state with its reason, never 0 or a guess', () => {
