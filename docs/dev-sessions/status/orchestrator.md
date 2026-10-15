@@ -1,4 +1,4 @@
-# orchestrator status (2026-10-15 21:15 UTC, session 355881a3, continuation of de232389)
+# orchestrator status (2026-10-15 22:45 UTC, session 355881a3, continuation of de232389)
 
 Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-overs: ab99b45, bb58413, 639202e.
 
@@ -15,11 +15,13 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 
 ## IN FLIGHT (6 of 6, D-71)
   QA Perf's ticket_comment refused on unassigned tickets: lead posts its verdicts.
-- T-325 S1c 1e6fe70f DONE (N3/N5 tests, 6327; Backend 7979da21 ended) -> QA PERF 7e4879c7 delta check; then gate, merge S1+S1b+S1c.
+- BATCH 8 wip/main-d116939 (T-325 S1+S1b+S1c QA Perf PASS 6357, lead read migration 785 + authz; T-574 PASS W/ GAPS 6358,
+  decision 6359: merge, cap/cut tests -> Backend lane next): GATE RUNNING (job-out/gate-d116939.log).
+- T-341 QA BE PASS WITH GAPS (reply only; lead can't comment, unassigned): 4 doc errors -> BE Infra lane after T-549 (D-65); D not verified.
 - T-416 S1d 89e270cc: review 6310 CHANGES (sev-2 restart skips budget) + QA 6326 PASS WITH GAPS (M2/M3/M9/M10 survive) -> IMPL S1e
   3d92ab62 (opus, why: incident) on ticket/T-416-s1e fixes 1-3 + those 4 tests; then QA Perf delta, gate, merge.
 - BACKEND lane 8962fc38 (sonnet, respawned) on T-633 S2: G3 deflake + H1/H2 tests (ticket/T-633-s2 from 1a4a7933).
-- QA BE 2 42e5408f (sonnet): T-574 124ca45f (Backend 6280) then T-341 e4284315 (BE Infra 6292; A partial, D not verified).
+- QA BE 2 42e5408f (sonnet): idle; next T-633 S2, then T-549. QA Perf 7e4879c7 idle; next T-416 S1e.
 - BE INFRA lane b6df312e (sonnet, respawned; aa8dc58b ended) on T-549 D-65 scorecard rows (ticket/T-549-d65-rows from integration).
 - QA UI 8b13bb5a: BLOCKED on T-376 (no Write; dontAsk refuses heredocs): posts harness design on T-376, idle. An implementer
   (next free slot, with T-681) writes tools/qa/chat-open.mjs; QA UI then runs it. T-576 gap 4 = SLOW ONLY.
