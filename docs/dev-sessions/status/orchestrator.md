@@ -20,18 +20,18 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   PLANNED T-600 BE 5540, T-597 5546, T-325 5547 (S1+S2 only, 5549). T-600 BE: respawn Backend on a branch from FE 7d19c94 after QA UI. LANE f13a9442 "ClaudePilot Frontend" (lane-frontend, sonnet,
   ticket/T-600-crew-pace-ui): T-600 FE DONE 7d19c94 (5473/5478); T-556 PLANNED 5497 (one "Upstream" dialog, 4 fields: no upstream UI exists);
   builds after T-486 merges + T-595. QA UI then T-576 ux. LANE 83921ca7 "ClaudePilot BE Infra" (lane-backend, sonnet,
-  ticket/T-611-job-placement) on T-611; queue T-547, T-610 (T-401/T-426 fixes, if any). 6 of 6: QA Perf, Backend, BE Infra, QA UI, 2 reviewers.
+  ticket/T-611-job-placement) on T-611; queue T-547, T-610 (T-401/T-426 fixes, if any). 6 of 6: QA Perf, Backend, BE Infra, QA UI, reviewer T-619, impl-t426.
   16:35 Frontend f13a9442 ENDED (idle, T-556 parked) for REVIEWER 219d5558 (sonnet) on T-619 browser allow-list (owner priority).
   T-600 FE: QA UI FAIL 5565 (Home card grid follows viewport; labels cut at 1280) -> FE S1b (5573): respawn Frontend on a fresh
   branch from 7d19c94 at next free slot; QA UI fixes home.mjs harness meanwhile. T-558 QA -> end of QA Perf queue. No prettier/eslint in Jobs (T-612).
 - 16:12 OWNER PRIORITY (coordinator, T-426 5538): T-401 then T-426 FIRST (Konfersi QA UI needs stg login in a Job; done = T-617 screenshots).
-  T-426 ab93b54 (on T-401 060aca4): QA Perf FIRST (5541), blind review opus at next free slot (impl-t591 ends -> reviewer), gate, merge.
+  T-426 ab93b54: QA Perf PASS 33/33 (5564) but blind review d4c49b5c FAIL 5571 (sev 2: refused arg echoed, pasted hex secret printed).
+  IMPL 7ec2dc72 (impl-t426-s1b, sonnet, ticket/T-426-s1b-review) -> QA Perf re-probe -> 2nd blind review -> gate -> merge on T-401 ack.
   T-401 re-merged wip/main-54ba328: gate GREEN gate-54ba328-6502 (suite 570 s, peak 2228Mi; 5560/5562); ff only on the person's ack (4941).
 - T-379 S2 3f11b28 PASS (4948; review 4938) -> merge after T-401. T-401 060aca4: review 4936, QA 4943; HELD on the ack (4941).
 - T-416 (high incident): S1 d37c5f0; QA b1aa2e47 PASS WITH GAPS (4623: 995/999 0 fail job-2c410105; mutations A2/B/C caught);
   ended. Decision 4637: S1b a769b00 (race fix + push-bridge test, UNTESTED; author ended for T-379, 4688). QA runs its Jobs,
   then blind review (opus), lead gate, merge, deploy. S2 = Bypass restore.
-- T-404 open until deployed. T-376 (high): S2 0b0faf7 needs integration merged in, ux re-check, S3 perf.
 
 ## DECISIONS (binding)
 - 16:30 D-71 (coordinator): limit 6; 3rd build lane BE Infra (CI, runners, job-run, k3s, deploy, secrets delivery, usage, spend, quota):
@@ -74,7 +74,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
    T-340 (hook refuses typed rtk hiding a denied command; a hook change is landed by a person/coordinator) -> T-341 -> T-306
    delivery (dev/t-306-1 has items 1-2); T-547 + T-549 (+ wasted-calls row, 4802); T-574 (session_family summary, from T-282 4801). Sweep results: the lead closes on PASS or reopens with the gap. 4. T-524 measurement with T-513. 5. T-537. 6. T-513.
 7. T-472 live re-check (4294), T-422, T-147, T-438, T-425, T-436, T-437, T-432, T-378 S1 verify, T-382, T-377, T-386, T-409, T-402, T-398, T-399, T-370 HOLD,
-   T-371..T-374, T-363, T-451, T-470, T-507, T-508, T-512, T-520; T-376 S2.
+   T-371..T-374, T-363, T-451, T-470, T-507, T-508, T-512, T-520; T-376 S2 0b0faf7 (merge integration in, ux, S3 perf); T-404 open till deployed.
 
 LESSONS: node --test, never vitest; a gate-done notice needs action; dontAsk workers cannot read /tmp, merge, gate or wait, and Bash only in their spawn worktree (new branch = new worker); whole
 test folders; cite a comment id only after the post returns it (wrong twice); trailers in one block; FULL hashes; gate before every push; status via Edit/Write ONLY (broken twice 2026-10-15: python, sed -i); ancestor check before ff.
