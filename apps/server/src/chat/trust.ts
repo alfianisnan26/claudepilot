@@ -431,17 +431,26 @@ export async function findSameRepo(
   const candidates = new ChatStore(store).foldersTrustedAt(scan.workspaceId, scan.hash, SAME_REPO_CANDIDATES + 1).filter((f) => f !== scan.folder);
   for (const folder of candidates.slice(0, SAME_REPO_CANDIDATES)) {
     const other = await readTrustScan(workspaces, scan.workspaceId, folder, { timeoutMs: opts.timeoutMs }).catch(() => null);
-    if (
-      other &&
-      other.hash === scan.hash &&
-      other.files.length > 0 &&
-      other.origin === scan.origin &&
-      sameRepoRefusal(other) === null &&
-      JSON.stringify(other.extras) === extras
-    )
-      return { matched: folder };
+    if (other && other.origin === scan.origin && vouchesAtHash(other, scan.hash, extras)) return { matched: folder };
   }
   return { refusal: NO_SAME_REPO };
+}
+
+/** A trusted folder's scan of now vouches for another at `hash` with these `extras` (JSON): the same hash, settings, nothing outside the hash, the same extras. */
+function vouchesAtHash(other: HostScan, hash: string, extras: string): boolean {
+  return other.hash === hash && other.files.length > 0 && sameRepoRefusal(other) === null && JSON.stringify(other.extras) === extras;
+}
+
+/**
+ * Whether a portal worktree may take its repository's trust at the same hash (T-435): the same checks as {@link findSameRepo}, on
+ * the repository folder the worktree was made from. Neither may hold anything outside the hash ({@link sameRepoRefusal}: a linked
+ * skill, hooks, MCP servers, plugins, env), and the repository, scanned again now, is still at that hash with the same `extras`. A
+ * repository that can't be scanned now vouches for nothing.
+ */
+export async function worktreeMayCopyTrust(workspaces: Workspaces, scan: FolderScan, repoFolder: string, opts: TrustOptions = {}): Promise<boolean> {
+  if (scan.empty || sameRepoRefusal(scan) !== null) return false;
+  const repo = await readTrustScan(workspaces, scan.workspaceId, repoFolder, { timeoutMs: opts.timeoutMs }).catch(() => null);
+  return repo !== null && vouchesAtHash(repo, scan.hash, JSON.stringify(scan.extras));
 }
 
 /**

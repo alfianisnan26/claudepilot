@@ -119,7 +119,7 @@ import { ChatStore, claudeSessionOf, EVENT_TEXT_MAX, sessionCwd, type ChatSessio
 import { BtwEngine, readBtwConfig, type BtwHost } from './btw.js';
 import { BtwStore } from './btwStore.js';
 import { conversationBudget, transferConversation, transferFile, transferOpening, type TransferMeta } from './transfer.js';
-import { autoTrustable, autoTrustRefusal, findSameRepo, FOLDER_CHANGED, saveTrust, scanFolder, untrustedError, type FolderScan } from './trust.js';
+import { autoTrustable, autoTrustRefusal, findSameRepo, FOLDER_CHANGED, saveTrust, scanFolder, untrustedError, worktreeMayCopyTrust, type FolderScan } from './trust.js';
 import { usageReport } from './usage.js';
 import {
   controlDigest,
@@ -3727,7 +3727,9 @@ export class ChatController {
     }
     // The same place in the worktree as the one asked for in the repository; its top when that folder isn't committed.
     let cwd = made.rel ? `${made.path}${made.rel}` : made.path;
-    // Scanned without the policy first: the repository's own trust at the same hash is copied as before (T-366 keeps that path).
+    // Scanned without the policy first: the repository's own trust at the same hash is copied (T-366 keeps that path), but only past
+    // the same-repo checks (T-435): nothing outside the hash (a linked skill, hooks, MCP servers, plugins, env) in either folder and the
+    // same extras; otherwise it takes the same-repo path below and waits for a person when that refuses too.
     let scan = await this.#scan(workspaceId, cwd, { auto: false }).catch(() => null);
     if (!scan) {
       cwd = made.path;
@@ -3735,7 +3737,7 @@ export class ChatController {
     }
     if (!scan.empty && !scan.trusted) {
       const trusted = this.#chat.folderTrust(workspaceId, repoFolder);
-      if (trusted?.hash && trusted.hash === scan.hash) {
+      if (trusted?.hash && trusted.hash === scan.hash && (await worktreeMayCopyTrust(this.#workspaces, scan, repoFolder, { timeoutMs: this.execTimeoutMs }))) {
         const { files, invalid, mcpServers, hooks, plugins, allowRules, envNames } = scan;
         this.#chat.saveFolderTrust(workspaceId, scan.folder, scan.hash, { files, invalid, mcpServers, hooks, plugins, allowRules, envNames }, 'portal:worktree');
         // T-323: trusted now, so its launch gets the project rules too (the scan above was noted before this trust existed).
