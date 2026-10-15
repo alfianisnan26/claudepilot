@@ -529,6 +529,9 @@ export class ChatController {
    * they count as running, so a second start can't take the same room.
    */
   readonly #granted = new Map<string, { workspaceId: string; weight: number }>();
+
+  /** T-416: new sessions whose memory estimate is held (id to workspace) from the budget check until their launch settles or fails. */
+  readonly #memoryReserved = new Map<string, string>();
   /** T-417 review: per worker, its spawn delivery (mode, model, effort, first instruction): every other message waits for it. */
   readonly #inputHolds = new Map<string, Promise<void>>();
   /** T-417: per session waiting for a slot, why (what `slotWait` shows). */
@@ -1515,7 +1518,22 @@ export class ChatController {
   /** The spawns under way per parent (checked, not yet a row): they count against its limits (T-295). */
   readonly #spawning = new Map<string, number>();
 
+  /**
+   * T-416: the memory a new session needs is reserved for its `id` (`#memoryReserved`) in the same synchronous step as the budget check,
+   * so a create at the same moment counts it. Let go here on any failure, and by the body when the start is queued (it holds no memory
+   * then) or its launch settles.
+   */
   async #create(req: Partial<CreateChatSessionRequest>, opts: ChatCreateOptions, spawnChecked = false): Promise<ChatSession> {
+    const id = randomUUID();
+    try {
+      return await this.#createBody(id, req, opts, spawnChecked);
+    } catch (e) {
+      this.#memoryReserved.delete(id);
+      throw e;
+    }
+  }
+
+  async #createBody(id: string, req: Partial<CreateChatSessionRequest>, opts: ChatCreateOptions, spawnChecked: boolean): Promise<ChatSession> {
     const actor = opts.actor ?? CHAT_ACTOR_UI;
     if (!isChatActor(actor)) throw new AppError('VALIDATION_FAILED', 'Unknown actor.', { details: { actor: 'Expected ui, ticket:<id>, session:<id> or portal-mcp:<id>.' } });
     const ticketId = this.#ticket(req.ticketId);
@@ -1553,7 +1571,7 @@ export class ChatController {
       if (!scan.empty && !scan.trusted) throw untrustedError(scan, this.#chat.folderTrust(workspaceId, scan.folder) !== null);
     }
     // T-416: the memory budget refuses at once, before a worktree or a row is made: a start that would leave too little free is not queued.
-    await this.#memoryBudget(workspaceId, null, actor);
+    await this.#memoryBudget(workspaceId, null, actor, id);
     // A worktree of its own (the repository's folder was trusted above): made now, its own folder checked for trust, and the chat's folder.
     let worktree: ChatWorktree | null = null;
     if (wtReq) {
@@ -1566,8 +1584,8 @@ export class ChatController {
     this.#requireEligible(workspaceId);
     // T-417: the cap full with nothing that may sleep: the session is made and its start waits for a slot (below), never refused at once.
     // A newcomer queues behind the starts already waiting for that room (first come, first served); room it gets is held for it (`#granted`).
-    const id = randomUUID();
     const full = this.#waitingAhead(workspaceId, null) ?? (await this.#tryRoom(workspaceId, null, id));
+    if (full) this.#memoryReserved.delete(id); // queued: asleep, no process, no memory until a slot comes
     try {
       return this.#insert(id, full, { workspaceId, cwd, title, actor, claude, ticketId, parentId, worktree, folderBranch, agent, limits, continuedFrom, installed }, opts);
     } catch (e) {
@@ -1662,7 +1680,7 @@ export class ChatController {
     // Its slot counts as running until the launch settles (T-417 review: else a start waiting in line takes the same room).
     void this.#startProcess(id, { checked: installed })
       .catch(() => undefined)
-      .finally(() => this.#granted.delete(id));
+      .finally(() => (this.#granted.delete(id), this.#memoryReserved.delete(id)));
     return session;
   }
 
@@ -3621,12 +3639,14 @@ export class ChatController {
    * headroom free: its estimate (one more per Agent-tool sub-agent it runs) plus one per launch there that the reading can't see yet (a slot
    * granted or a launch in flight). An unavailable reading, or no `memory` installed, never blocks. The refusal is on the record.
    */
-  async #memoryBudget(workspaceId: string, waking: ChatSessionRow | null, actor: string): Promise<void> {
+  async #memoryBudget(workspaceId: string, waking: ChatSessionRow | null, actor: string, reserveFor: string | null = null): Promise<void> {
     if (!this.memory) return;
     const reading = await this.memory.reading(workspaceId);
     if (!reading) return;
+    // Everything from here to the end is synchronous: the check and the reservation cannot be split by another create.
     const agents = waking ? (this.#chat.get(waking.id)?.agentsRunning ?? 0) : 0;
     const pending = new Set<string>();
+    for (const [id, w] of this.#memoryReserved) if (w === workspaceId) pending.add(id);
     for (const [id, g] of this.#granted) if (g.workspaceId === workspaceId) pending.add(id);
     for (const id of this.#launching.keys()) if (this.#chat.row(id)?.workspace_id === workspaceId) pending.add(id);
     // Both maps let go when the launch settles, so what is in them is not in the reading yet. Not filtered on `process`: a new row reads
@@ -3634,7 +3654,10 @@ export class ChatController {
     if (waking) pending.delete(waking.id);
     const need = sessionEstimate(agents) + pending.size * SESSION_MEMORY_ESTIMATE_BYTES;
     const refused = budgetVerdict(reading, need);
-    if (!refused) return;
+    if (!refused) {
+      if (reserveFor) this.#memoryReserved.set(reserveFor, workspaceId);
+      return;
+    }
     this.#chat.addAudit({
       severity: 'medium',
       kind: 'memory.refused',
