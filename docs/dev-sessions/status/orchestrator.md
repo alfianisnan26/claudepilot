@@ -10,10 +10,11 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - QA UI bbbe2b38 (qa/T-600-ui): home.mjs fix 924f1bfb PASS WITH GAPS (27/27 on its branch, not on integration; rides with T-600); now re-running FE S1b 32985e2 (crew-summary, Home/Crew grids); then T-576 ux (2427d98, after T-586 merges). Headless only (5503).
 - BACKEND 6d72b5c6 (ticket/T-597-portal-slash, plan 5546) on T-597; then T-600 BE (plan 5540, respawn on FE S1b), T-325 S1+S2 (5549).
 - BE INFRA 5825f112 (ticket/T-547-quota-placement) on T-547; then T-623 (high, coordinator; respawn fresh branch, plan 5622; opus blind review), then T-610.
-- REVIEWER 2590789a (sonnet, read-only): T-619 egress decision 5605 (deploy #41 waits); 5625.
+- IMPL a6a0ea9d (impl-t548-s1b, ticket/T-548-s1b from 9b822ba) on T-548 S1b (5515); then QA Perf (S1+S1b together).
+- T-619 egress review 2590789a PASS WITH CONDITIONS 5627 (ended) -> coordinator 5629: owner ack on D-60 relax before #41 release; T-624 follow-up.
 - FRONTEND: 6a1a061e DONE FE S1b 32985e2 (5621) -> QA UI; ended (slot for T-619). Respawn for T-556 (5497/5525) after T-486, or FE S1c on QA UI FAIL.
 - IMPL 7ec2dc72 (ticket/T-426-s1b-review) on T-426 S1b.
-- Waiting for a slot: T-548 S1b (5515, one-off sonnet from 9b822ba). Lane respawn = new base (lane-backend has no ff, T-595 5553).
+- Lane respawn = new base (lane-backend has no ff, T-595 5553).
 - Merge notes: T-546 merges 10b22e0, not branch head 0004ac5. T-486 = S2d 2979f99 + S2e ea1c006. Ended: 5f8f392b, 74a8d857, 83921ca7,
   f13a9442, 4ba6c5db, d4c49b5c, 219d5558. T-619: review CHANGES 5575 -> coordinator lands the named list (5584). No prettier/eslint in Jobs (T-612).
 - 16:12 OWNER PRIORITY (coordinator, T-426 5538): T-401 then T-426 FIRST (Konfersi QA UI needs stg login in a Job; done = T-617 screenshots).
