@@ -9,6 +9,9 @@ import { Outbox } from './delivery/outbox.js';
 import { LiveHub } from './live.js';
 import { SocketGuard } from './sockets.js';
 import { workspaceView } from './workspaces/view.js';
+import { readWorkspaceMemory } from './workspaces/memory.js';
+import { runToEnd } from './workspaces/runToEnd.js';
+import { memoryAttentionSource, WorkspaceMemory } from './chat/memory.js';
 import { Reconciler, type FragmentProvider } from './delivery/reconciler.js';
 import { References } from './pools/references.js';
 import { deliveredSecretValue, exposedSecretValues } from './secrets/exposed.js';
@@ -345,6 +348,18 @@ const attention = createAttention(store, {
   publish: () => live.publish('attention'),
   agentAssignUserTags: () => settingsModule.settings.get<string>(TICKET_SETTING_KEYS.agentAssignUserTags),
 });
+// T-416 (D-61): each workspace's memory (anon + active_file against memory.max), read through its runtime: the budget of a start or a
+// wake, and the 85 percent alert (a Needs you item, so a notification) on the chat's liveness round.
+const workspaceMemory = new WorkspaceMemory({
+  read: (id) => {
+    const slash = id.indexOf('/');
+    return readWorkspaceMemory((command) => runToEnd(workspaces, id.slice(0, slash), id.slice(slash + 1), command));
+  },
+  log: (line) => console.log(line),
+  onChange: () => attention.changed(),
+});
+attention.register(memoryAttentionSource(workspaceMemory));
+chatController.memory = workspaceMemory;
 const ATTENTION_TOPICS = new Set<LiveTopic>(['pools', 'tickets', 'ci']);
 const notify = (...topics: LiveTopic[]) =>
   topics.forEach((t) => {

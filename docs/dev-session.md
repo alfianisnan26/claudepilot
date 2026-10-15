@@ -174,6 +174,10 @@ scripts/job-run.sh --list ; scripts/job-run.sh --stop --chat <session id>
   killed outright is removed by the next run on this host.
 - **npm cache:** none shared. A cold `npm ci` in a Job is 15 to 20 s (job-run and gate logs); a shared cache would be a node-bound `local-path`
   PVC (the only storage class) for a few seconds.
+- **The workspace pod's own memory (T-416, D-61):** the portal refuses a session start or wake in a workspace when anon + active_file
+  (cgroup v2 `memory.stat`, not `memory.current`) + 350 MB per session and per running sub-agent + 1.5 GiB headroom is over `memory.max`
+  (409 `MEMORY_BUDGET`, audited `memory.refused`; chat PRD FR39b). Past 85% a Needs you item and a push name the largest processes. If an
+  agent's spawn or wake is refused for memory: end or sleep a session there, or move the heavy job into the cluster; never raise the limit.
 
 ## Building an image in the cluster
 

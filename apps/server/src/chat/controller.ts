@@ -118,6 +118,7 @@ import { NO_VALUES, SessionStream, ValueRedactor } from './valueRedact.js';
 import { HANDOFF_ACTOR, HANDOFF_QA, HandoffEngine } from './handoff.js';
 import { MessageRate, pickSpawnClaude, spawnProblem, SUBAGENT_TOOLS, WORKER_REPORTS, workerLimits, type AgentCaps, type SpawnClaudeWhy, type WorkerLimitsAsk, type WorkerReport } from './agents.js';
 import { capError, makeRoom, SESSION_CAP, slotWaitText, weightOf, type LiveCaps } from './caps.js';
+import { budgetVerdict, MEMORY_SETTLE_MS, memoryBudgetError, SESSION_MEMORY_ESTIMATE_BYTES, sessionEstimate, type WorkspaceMemory } from './memory.js';
 import { branchProblem, defaultBranch, Worktrees, type MadeWorktree } from './worktrees.js';
 import { ChatStore, claudeSessionOf, EVENT_TEXT_MAX, sessionCwd, type ChatSessionPatch, type ChatSessionRow, type InputState } from './store.js';
 import { BtwEngine, readBtwConfig, type BtwHost } from './btw.js';
@@ -513,6 +514,12 @@ export class ChatController {
    * they count as running, so a second start can't take the same room.
    */
   readonly #granted = new Map<string, { workspaceId: string; weight: number }>();
+
+  /**
+   * T-416: the sessions (new, queued or waking) whose memory estimate is held, from the budget check on. A launch that failed lets go at
+   * once; one that ran is marked `releasedAt` and still counts until a reading taken MEMORY_SETTLE_MS after that (`#releaseMemory`).
+   */
+  readonly #memoryReserved = new Map<string, { workspaceId: string; releasedAt: number | null }>();
   /** T-417 review: per worker, its spawn delivery (mode, model, effort, first instruction): every other message waits for it. */
   readonly #inputHolds = new Map<string, Promise<void>>();
   /** T-417: per session waiting for a slot, why (what `slotWait` shows). */
@@ -766,6 +773,12 @@ export class ChatController {
    * with none that can, the start waits for a slot (`slotWaitMs`) and is refused naming the cap only when that runs out.
    */
   liveCaps?: () => LiveCaps;
+  /**
+   * Installed by the owner (T-416, D-61): each workspace's memory, read through its runtime. A start or a wake that would leave less than
+   * the headroom free is refused naming the memory (memory.ts); an unavailable reading does not block. The liveness round reads each
+   * workspace that runs a session at most once a minute, for the 85 percent alert. Unset: no budget (tests).
+   */
+  memory?: WorkspaceMemory;
   /** Installed by the owner: what a session on a pool's keys may spend before Claude Code stops it (`--max-budget-usd`), in dollars. Unset: $10. */
   sessionBudgetUsd?: () => number;
   /**
@@ -979,7 +992,10 @@ export class ChatController {
     if (this.#ticking || this.#closed) return;
     this.#ticking = true;
     try {
-      await Promise.allSettled(this.#chat.liveRows().map((row) => this.#check(row)));
+      const rows = this.#chat.liveRows();
+      // T-416: the memory alert, on this round (each workspace read at most once a minute; not awaited, a slow exec holds nothing up).
+      if (this.memory) void this.memory.look(rows.map((r) => r.workspace_id)).catch(() => undefined);
+      await Promise.allSettled(rows.map((row) => this.#check(row)));
       // T-284: a request of a process that is no longer the live one (a move, a restart, a crash, a resume) is resolved `stale`.
       if (!this.#closed) for (const id of this.#chat.sessionsWithOpenRequests()) this.#dropStale(id, 'sweep');
     } catch {
@@ -1554,7 +1570,22 @@ export class ChatController {
   /** The spawns under way per parent (checked, not yet a row): they count against its limits (T-295). */
   readonly #spawning = new Map<string, number>();
 
+  /**
+   * T-416: the memory a new session needs is reserved for its `id` (`#memoryReserved`) in the same synchronous step as the budget check,
+   * so a create at the same moment counts it. Let go here on any failure, and by the body when the start is queued (it holds no memory
+   * then; the queue checks and holds again when its slot comes); when its launch settles, `#releaseMemory`.
+   */
   async #create(req: Partial<CreateChatSessionRequest>, opts: ChatCreateOptions, spawnChecked = false): Promise<ChatSession> {
+    const id = randomUUID();
+    try {
+      return await this.#createBody(id, req, opts, spawnChecked);
+    } catch (e) {
+      this.#memoryReserved.delete(id);
+      throw e;
+    }
+  }
+
+  async #createBody(id: string, req: Partial<CreateChatSessionRequest>, opts: ChatCreateOptions, spawnChecked: boolean): Promise<ChatSession> {
     const actor = opts.actor ?? CHAT_ACTOR_UI;
     if (!isChatActor(actor)) throw new AppError('VALIDATION_FAILED', 'Unknown actor.', { details: { actor: 'Expected ui, ticket:<id>, session:<id> or portal-mcp:<id>.' } });
     const ticketId = this.#ticket(req.ticketId);
@@ -1593,6 +1624,8 @@ export class ChatController {
       const scan = await this.#scan(workspaceId, cwd);
       if (!scan.empty && !scan.trusted) throw untrustedError(scan, this.#chat.folderTrust(workspaceId, scan.folder) !== null);
     }
+    // T-416: the memory budget refuses at once, before a worktree or a row is made: a start that would leave too little free is not queued.
+    await this.#memoryBudget(workspaceId, null, actor, id);
     // A worktree of its own (the repository's folder was trusted above): made now, its own folder checked for trust, and the chat's folder.
     let worktree: ChatWorktree | null = null;
     if (wtReq) {
@@ -1605,8 +1638,8 @@ export class ChatController {
     this.#requireEligible(workspaceId);
     // T-417: the cap full with nothing that may sleep: the session is made and its start waits for a slot (below), never refused at once.
     // A newcomer queues behind the starts already waiting for that room (first come, first served); room it gets is held for it (`#granted`).
-    const id = randomUUID();
     const full = this.#waitingAhead(workspaceId, null) ?? (await this.#tryRoom(workspaceId, null, id));
+    if (full) this.#memoryReserved.delete(id); // queued: asleep, no process, no memory until a slot comes
     try {
       return this.#insert(id, full, { workspaceId, cwd, title, actor, claude, ticketId, parentId, worktree, folderBranch, agent, limits, continuedFrom, installed, lead }, opts);
     } catch (e) {
@@ -1703,7 +1736,7 @@ export class ChatController {
     // Its slot counts as running until the launch settles (T-417 review: else a start waiting in line takes the same room).
     void this.#startProcess(id, { checked: installed })
       .catch(() => undefined)
-      .finally(() => this.#granted.delete(id));
+      .finally(() => (this.#granted.delete(id), this.#releaseMemory(id)));
     return session;
   }
 
@@ -1734,11 +1767,26 @@ export class ChatController {
         }
         return;
       }
-      if (this.#busy.get(id) === held) this.#busy.delete(id);
+      // T-416 review: the memory is checked (and held) again when the slot comes, which can be many minutes after the create. `#busy` is
+      // still held through the check, so a send meanwhile waits for this start instead of running a wake check of its own (review 6310).
+      try {
+        const now = this.#chat.row(id) ?? row;
+        await this.#memoryBudget(now.workspace_id, now, now.started_by ?? 'portal', id, 'queued');
+      } catch (e) {
+        this.#granted.delete(id);
+        const now = this.#chat.row(id);
+        if (now && now.state !== 'ended' && now.process !== 'live') {
+          this.#chat.patchSession(id, { state: 'interrupted', process: 'gone', endedReason: this.#message(e) });
+          this.#emitSession(id);
+        }
+        return;
+      }
+      if (this.#busy.get(id) === held) this.#busy.delete(id); // the launch holds `#busy` itself from here
       try {
         await this.#startProcess(id, { checked }).catch(() => undefined);
       } finally {
         this.#granted.delete(id); // its slot counted as running until the launch settled
+        this.#releaseMemory(id);
       }
     })();
     held = op.catch(() => undefined);
@@ -2991,9 +3039,18 @@ export class ChatController {
     const agents = this.#chat.tasks(sessionId).filter((t) => t.status === 'running').length;
     // A deliberate restart keeps Bypass (the person confirmed it for this chat), while the policy allows it and the session can.
     const keep = row.mode === 'bypassPermissions' && this.#keepsBypass(row);
-    await this.#stopForRestart(sessionId, 'The session restarted.', keep);
-    this.#queuedRestart.delete(sessionId); // whatever waited for the turn's end is done by this one
-    await this.#live(sessionId); // `--resume` on a new segment; its settings are put back
+    // T-416: only a restart of a running process skips the memory check (it needs no more than the process it stops). One that is asleep
+    // or gone is a wake: checked and held as one, before anything is touched, so a refusal leaves it (and its mode) as it was (review 6310).
+    const wake = row.process !== 'live';
+    if (wake) await this.#memoryBudget(row.workspace_id, row, o.actor, sessionId, 'restart');
+    try {
+      await this.#stopForRestart(sessionId, 'The session restarted.', keep);
+      this.#queuedRestart.delete(sessionId); // whatever waited for the turn's end is done by this one
+      // `--resume` on a new segment; its settings are put back. The check (if any) was made above.
+      await this.#live(sessionId, true, false);
+    } finally {
+      if (wake) this.#releaseMemory(sessionId); // `#live` let go already when it launched; this covers a throw or a launch it skipped
+    }
     this.#append(sessionId, { kind: 'system', text: 'Restarted: MCP reconnected', restart: true });
     if (keep) await this.#keepBypass(sessionId, 'restart');
     const now = this.#chat.row(sessionId);
@@ -3694,6 +3751,57 @@ export class ChatController {
       // Keep going can't tell: the other signs decide
     }
     return false;
+  }
+
+  /**
+   * T-416 (D-61): throws MEMORY_BUDGET when one more session in `workspaceId` (`waking`, or a new one: null) would leave less than the
+   * headroom free: its estimate (one more per Agent-tool sub-agent it runs) plus one per launch there that the reading can't see yet (a slot
+   * granted or a launch in flight). An unavailable reading, or no `memory` installed, never blocks. The refusal is on the record.
+   */
+  async #memoryBudget(workspaceId: string, waking: ChatSessionRow | null, actor: string, reserveFor: string | null = null, at?: 'queued' | 'restart'): Promise<void> {
+    if (!this.memory) return;
+    const reading = await this.memory.reading(workspaceId);
+    if (!reading) return;
+    // Everything from here to the end is synchronous: the check and the reservation cannot be split by another create or wake.
+    const agents = waking ? (this.#chat.get(waking.id)?.agentsRunning ?? 0) : 0;
+    const pending = new Set<string>();
+    for (const [id, r] of this.#memoryReserved) {
+      if (r.workspaceId !== workspaceId) continue;
+      // A launch that ran is in this reading once it was taken long enough after the launch settled: its hold ends here.
+      if (r.releasedAt !== null && reading.at >= r.releasedAt + MEMORY_SETTLE_MS) this.#memoryReserved.delete(id);
+      else pending.add(id);
+    }
+    for (const [id, g] of this.#granted) if (g.workspaceId === workspaceId) pending.add(id);
+    for (const id of this.#launching.keys()) if (this.#chat.row(id)?.workspace_id === workspaceId) pending.add(id);
+    // Both maps let go when the launch settles, so what is in them is not in the reading yet. Not filtered on `process`: a new row reads
+    // 'live' (the column's default) before its process exists.
+    if (waking) pending.delete(waking.id);
+    const need = sessionEstimate(agents) + pending.size * SESSION_MEMORY_ESTIMATE_BYTES;
+    const refused = budgetVerdict(reading, need);
+    if (!refused) {
+      if (reserveFor) this.#memoryReserved.set(reserveFor, { workspaceId, releasedAt: null });
+      return;
+    }
+    this.#chat.addAudit({
+      severity: 'medium',
+      kind: 'memory.refused',
+      ...(waking ? { sessionId: waking.id } : {}),
+      workspaceId,
+      actor,
+      detail: { at: at ?? (waking ? 'wake' : 'start'), usedBytes: refused.usedBytes, limitBytes: refused.limitBytes, needBytes: refused.needBytes, agents, pending: pending.size },
+    });
+    throw memoryBudgetError(workspaceId, refused);
+  }
+
+  /**
+   * T-416 review: a launch held by `#memoryBudget` settled. Its process runs: the hold stays (marked) until a reading late enough to see
+   * it (`#memoryBudget` ends it). It doesn't run (the spawn failed, the wait ran out): let go at once.
+   */
+  #releaseMemory(id: string): void {
+    const r = this.#memoryReserved.get(id);
+    if (!r || r.releasedAt !== null) return;
+    if (this.memory && this.#isLive(id)) r.releasedAt = this.memory.now();
+    else this.#memoryReserved.delete(id);
   }
 
   /**
@@ -4543,18 +4651,22 @@ export class ChatController {
   }
 
   /** Makes sure there is a running process to talk to: waits out work in flight, resumes or wakes one that isn't running. */
-  async #live(sessionId: string, relaunchGone = true): Promise<void> {
+  async #live(sessionId: string, relaunchGone = true, budget = true): Promise<void> {
     await this.#busy.get(sessionId);
     let row = this.#chat.row(sessionId);
     if (row && row.state !== 'ended' && row.process !== 'live') {
       // T-294: a crew report wakes a sleeping lead; one whose process is gone stays as it is.
       if (!relaunchGone && row.process === 'gone') throw new AppError('CONFLICT', 'This session is not running.');
       const slept = row.process === 'asleep';
+      // T-416: a wake needs the memory as a start does, and holds it as a start does (two wakes at once see each other); refused, it stays
+      // as it is (asleep or interrupted) and the caller reads why. A restart (`budget` false) is exempt: its own process just stopped.
+      if (budget) await this.#memoryBudget(row.workspace_id, row, 'portal', sessionId);
       try {
         await this.#slot(row.workspace_id, row);
         await this.#startProcess(sessionId, { resume: true });
       } finally {
         this.#granted.delete(sessionId); // its slot counted as running until the launch settled (T-417 review)
+        this.#releaseMemory(sessionId);
       }
       row = this.#chat.row(sessionId);
       // T-417: a lead's sleep kept its Bypass: the wake puts it back the way a Restart does, every gate checked again (never twice at once).
