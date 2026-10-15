@@ -26,11 +26,14 @@ and remote hosts that dial in (Connect). Node 22, Hono and `node:sqlite` on the 
 
 ## Commands
 
+Nothing heavy runs in the pod (D-61, T-413: it was OOMKilled). The first four lines below run ONLY in the cluster: wrap the first three as
+`scripts/job-run.sh --ref <full commit of a pushed branch> --out job-out/ -- '<command>; exit $?'`, and run the gate as `scripts/gate-job.sh <commit>`.
+
 ```sh
-npm run typecheck                    # server, web, contracts
-npm run build -w @portal/web
-(cd apps/server && npm test)         # about 2,400 tests; Docker-only ones skip without CLAUDEPILOT_DOCKER_TESTS=1
-scripts/gate.sh                      # the release gate on a clean copy of HEAD
+npm run typecheck                    # CLUSTER ONLY (job-run): server, web, contracts
+npm run build -w @portal/web         # CLUSTER ONLY (job-run)
+(cd apps/server && npm test)         # CLUSTER ONLY (job-run); about 2,400 tests; Docker-only ones skip without CLAUDEPILOT_DOCKER_TESTS=1
+scripts/gate-job.sh <commit>         # CLUSTER: the release gate on a clean clone (scripts/gate.sh is what the Job runs; not in the pod)
 scripts/scratch-portal.sh start 3403 # a throwaway portal (clean environment) for looking at the UI; then tools/qa/*.mjs
 scripts/k3s-status.sh                # cluster health at a glance
 scripts/context-pack.sh              # regenerate docs/context-pack.md (read it first) after a merge; the gate fails on a stale pack
