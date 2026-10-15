@@ -1112,6 +1112,13 @@ function analyze(command, st, cwd, depth) {
       }
       if (!writes) continue;
       if (st.fragments) return hit(name + ' writing what it finds', namesRule(args, st, base) || name);
+      // Its name tests are patterns, quoted or not, and they match names starting with a dot.
+      for (let k = 0; k < args.length; k++) {
+        const t = args[k].text;
+        if (/^-(i?regex)$/.test(t)) return hit(name + ' writing what a regex finds', (args[k + 1] && args[k + 1].text) || t);
+        if (/^-(i?name|i?path|i?wholename)$/.test(t) && args[k + 1] && couldMatch(args[k + 1].dyn ? '\u0000' : args[k + 1].text, null, true))
+          return hit(name + ' writing what it finds', args[k + 1].text);
+      }
       for (const w of args) {
         if (w.dyn) continue;
         if (w.glob && couldMatch(w.text, null, true)) return hit(name + ' writing what it finds', w.text);

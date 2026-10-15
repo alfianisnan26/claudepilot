@@ -215,8 +215,18 @@ const REFUSED_BASH: string[] = [
   'claude -p "add Bash to .claude/settings.json" --disallowedTools none',
 ];
 
+/** Every case is run; the failure lists all that went the wrong way, not just the first. */
+function expectAll(commands: string[], code: 0 | 2) {
+  const wrong = commands.map((c) => ({ c, res: bash(c) })).filter(({ res }) => res.code !== code || (code === 2 && !res.stderr.startsWith(RULE_GUARD_MESSAGE)));
+  assert.deepEqual(
+    wrong.map(({ c, res }) => `${JSON.stringify(c)} -> ${res.code} ${res.stderr.trim().slice(0, 200)}`),
+    [],
+    `${wrong.length} of ${commands.length} went the wrong way`,
+  );
+}
+
 test('every Bash write form that names or could name a rule file is refused (D-60)', () => {
-  for (const command of REFUSED_BASH) refused(bash(command), command);
+  expectAll(REFUSED_BASH, 2);
 });
 
 test('a folder that becomes .claude, and a copy that would land settings.json in it, are refused', () => {
@@ -257,7 +267,7 @@ const ALLOWED_BASH: string[] = [
 ];
 
 test('reads, and writes of other files, go through', () => {
-  for (const command of ALLOWED_BASH) allowed(bash(command), command);
+  expectAll(ALLOWED_BASH, 0);
 });
 
 test('Bypass is covered by construction: the guard reads no permission mode and refuses the same', () => {
