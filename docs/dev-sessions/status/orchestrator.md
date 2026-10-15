@@ -6,6 +6,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - MERGED ff 275cea5b: T-586, T-486 (S2d+S2e), T-547, T-611, T-548 (gate GREEN 4071aa5, claudepilot-gate-4071aa5-b4a2; 5795-5800).
 - MERGED ff bcb27182: T-561 S1c, T-546 (gate GREEN 36632f8, claudepilot-gate-36632f8-7b4c; 5892/5893). T-546 CLOSED done.
   T-561 open, waits-t640 (5898): its done-when is a live crew check -> T-640 (scratch portal, real Claude Code).
+- MERGED ff 1772d2d0: T-576 cb6bd216 (gate GREEN f63c5f9, claudepilot-gate-f63c5f9-a7da; 5991).
 ## IN FLIGHT (6 of 6, D-71): all sonnet
 - T-591 S1d DONE 394abdd5 (5867; 783->784, lead checked no dup) -> QA Perf delta. T-325 S1 DONE 39a9faa8 (5896; 4083876c ended) -> QA Perf queue (S3 held).
 - BACKEND respawned 4b025fae (ticket/T-633-digest-mutants from integration) on T-633. QA T-416 S1c ec59993c (qa/T-416-s1c-r2, sonnet) on 7af4b269.
@@ -18,8 +19,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - BE INFRA respawned e92c5ba3 (ticket/T-578-gate-reuse) on T-578 S1 (reuse green gate of same tree + per-file progress): a GATE change,
   merge only on a person's ack + blind review. T-578 claim refused by id (T-634): worker on it by spawn.
 - QA PERF 7e4879c7 (lane/cp-qa-perf): current item, then T-426 S1c+S1d 80f5bb72 (FRONT, owner), then rest of T-600 BE 1a95fb03 / T-597 S1b 75656845, then T-623 S1b 784926f, then T-591 S1d delta 394abdd5; T-636 trust check queued after T-426 (19:33). QA is the bottleneck (6 queued).
-- BATCH 3 premerge f63c5f9 (T-576 cb6bd216, QA UI PASS WITH GAPS 5883; PRD local-git-ci conflict: kept 23.1 + T-576 line) GATE RUNNING
-  (job-out/gate-f63c5f9.log) -> ff integration on green. Kit 44 px gap -> T-639; phone check stays.
+- T-576 phone check (390/1280 on the real build) still open; kit 44 px -> T-639. Closes on that evidence (5991).
 - T-600 FE S1c DONE d1b31305 (5954; fa9d3d56 ended) -> QA UI respawned de862414 on qa/T-600-ui-r4 81684f78 (r3 + FE head, lead merge)
   re-runs crew-grid.mjs at 390/1280. Frontend lane is free: next FE item when the QA UI verdict is in.
 - 16:12 OWNER PRIORITY (coordinator, T-426 5538): T-401 then T-426 FIRST (Konfersi QA UI needs stg login in a Job; done = T-617 screenshots).
