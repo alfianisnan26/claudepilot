@@ -188,7 +188,7 @@ managed `CLAUDE.md` and a managed skill both reached the model request, and the 
 | Secrets & env | not given, by design (0440 `node`; skipped with a warning, S0 4.5) | not given |
 | Account pool | not given, by design: the person signs in themselves | n/a |
 | Portal MCP (tickets, knowledge) | through the per-connection token (S4) | the CLIs that speak MCP, through the same token |
-| Bypass | the portal's gates do not apply: a person can start their own Claude with `--dangerously-skip-permissions` (checked: `permissionMode: bypassPermissions`). Owner decision pending: allow with a visible badge, or forbid for people only | the same per CLI (`--yolo`, full-access modes) |
+| Bypass | the portal's gates do not apply: a person can start their own Claude with `--dangerously-skip-permissions` (checked: `permissionMode: bypassPermissions`). Per workspace (D-59): allowed with a `bypass` badge and an audit row by default; the admin can forbid it for people only (a people-only managed setting, proven by a test in S1) | the same per CLI (`--yolo`, full-access modes) |
 
 ## 9. Data and storage
 
