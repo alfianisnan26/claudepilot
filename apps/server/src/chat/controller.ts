@@ -1680,7 +1680,7 @@ export class ChatController {
     // Its slot counts as running until the launch settles (T-417 review: else a start waiting in line takes the same room).
     void this.#startProcess(id, { checked: installed })
       .catch(() => undefined)
-      .finally(() => this.#granted.delete(id));
+      .finally(() => (this.#granted.delete(id), this.#memoryReserved.delete(id)));
     return session;
   }
 
