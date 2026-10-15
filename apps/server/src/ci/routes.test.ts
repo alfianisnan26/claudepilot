@@ -4,10 +4,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { AppError, isAppError } from '@isnanme/core';
-import type { Actor } from '@portal/contracts';
+import { objectRef, type Actor } from '@portal/contracts';
 import { Hono } from 'hono';
+import { registerResolver } from '../authz/seam.js';
 import { CI_POLICIES, registerCiAuthz } from './authz.js';
 import { createCiRoutes } from './routes.js';
+import type { CiServiceOptions } from './service.js';
 import { harness, remote, WS } from './testkit.js';
 
 const DEPLOY = 'on: manual\njobs:\n  build:\n    steps: [{ run: echo b }]\n  release:\n    needs: [build]\n    environment: production\n    steps: [{ run: echo r }]\n';
@@ -20,8 +22,8 @@ const ACTORS: Record<string, Actor> = {
   agent: { kind: 'agent', userId: 'u_a', tokenId: 't2', sessionId: 's1', workspaceId: WS },
 };
 
-async function build() {
-  const h = await harness();
+async function build(opts: CiServiceOptions = {}) {
+  const h = await harness(opts);
   const routes = createCiRoutes(h.svc);
   // The workspace belongs to A (single-owner production answers the founding user).
   registerCiAuthz(h.svc, (ws) => (ws === WS ? 'u_a' : 'u_owner'));
@@ -126,6 +128,73 @@ test('two users: B can not see or touch A’s runs, remotes or environments; ids
     assert.equal((await call('a', 'PUT', `/api/ci/repos/${repo.id}/environments/production`, { protected: true })).status, 200);
     const on = await call('a', 'PUT', `/api/ci/repos/${repo.id}/environments/production/auto-approve`, { mode: 'on', window: '06:00-18:00' });
     assert.deepEqual([on.status, on.data.autoApprove, on.data.autoApproveWindow, on.data.updatedBy], [200, 'on', '06:00-18:00', 'user:u_a']);
+  } finally {
+    h.done();
+  }
+});
+
+// T-591: release reports. The setting names a vault the portal later writes into as `system`, so it is checked at the route, as the person.
+test('release report routes: person only, 404 on a vault the person may not write, input checks, audit, and the 409 of the backfill', async () => {
+  const audits: { kind: string; actor: string; detail?: Record<string, unknown> }[] = [];
+  const { h, call } = await build({ audit: (e) => void audits.push(e) });
+  try {
+    // Two vaults: `vmine` is A's, `vtheirs` belongs to someone else (A may not even see it). `vgone` does not exist.
+    registerResolver({
+      type: 'vault',
+      resolve: (id) => (id === 'vmine' ? { ref: objectRef('vault', id), owner: { kind: 'user', id: 'u_a' } } : id === 'vtheirs' ? { ref: objectRef('vault', id), owner: { kind: 'user', id: 'u_owner' } } : null),
+    });
+    const sink = { exists: (v: string) => v === 'vmine' || v === 'vtheirs', read: () => null, put: () => ({ created: true, unchanged: false }) };
+    h.svc.releaseNotes = sink;
+    const repo = await remote(h, { '.pilot/deploy.yml': DEPLOY });
+    const url = `/api/ci/repos/${repo.id}/release-report`;
+    const good = { setting: { pipeline: 'deploy', vaultId: 'vmine', folder: 'Releases' } };
+
+    // A token with every right and the agent of that workspace are not a person: 403, nothing stored.
+    for (const who of ['token', 'agent']) assert.equal((await call(who, 'PUT', url, good)).status, 403, `${who} PUT`);
+    assert.equal((await call('a', 'GET', url)).data, null, 'nothing was set by a token or an agent');
+    // B does not see A's remote at all: 404.
+    assert.equal((await call('b', 'PUT', url, good)).status, 404);
+
+    // A vault A may not write, and one that does not exist: the same 404, and nothing is stored.
+    const denied = await call('a', 'PUT', url, { setting: { ...good.setting, vaultId: 'vtheirs' } });
+    const ghost = await call('a', 'PUT', url, { setting: { ...good.setting, vaultId: 'vgone' } });
+    assert.equal(denied.status, 404, JSON.stringify(denied.error));
+    assert.deepEqual(denied.error, ghost.error, 'the same answer as a vault that does not exist');
+    assert.equal((await call('a', 'GET', url)).data, null);
+    assert.equal(audits.length, 0, 'a refused setting leaves no audit row');
+    h.svc.releaseNotes = undefined;
+    assert.equal((await call('a', 'PUT', url, good)).status, 404, 'no vault connected: fails closed');
+    h.svc.releaseNotes = sink;
+
+    // Input checks.
+    for (const [what, setting] of [
+      ['folder with ..', { ...good.setting, folder: 'Releases/../x' }],
+      ['empty folder', { ...good.setting, folder: '' }],
+      ['bad vault id', { ...good.setting, vaultId: 'a b/c' }],
+      ['bad pipeline', { ...good.setting, pipeline: '../deploy' }],
+    ] as const) assert.equal((await call('a', 'PUT', url, { setting })).status, 422, what);
+    assert.equal((await call('a', 'PUT', url, {})).status, 422, 'no setting key');
+    assert.equal((await call('a', 'PUT', url, { setting: 'x' })).status, 422, 'not an object');
+    assert.equal((await call('a', 'GET', url)).data, null, 'nothing stored by a bad request');
+
+    // A may write `vmine`: stored (trimmed), audited as the person, readable back; null turns it off.
+    const ok = await call('a', 'PUT', url, { setting: { pipeline: ' deploy ', vaultId: 'vmine', folder: '/Releases/' } });
+    assert.deepEqual([ok.status, ok.data], [200, { pipeline: 'deploy', vaultId: 'vmine', folder: 'Releases' }]);
+    assert.deepEqual((await call('a', 'GET', url)).data, ok.data);
+    assert.deepEqual(audits.map((e) => [e.kind, e.actor, e.detail?.vault]), [['ci.release_report_setting', 'user:u_a', 'vmine']]);
+
+    // The backfill: a person only, 404 for B, and 409 with the reason for a run that gets no report.
+    const start = await call('a', 'POST', '/api/ci/runs', { repoId: repo.id, pipeline: 'deploy', ref: 'main' });
+    assert.equal(start.status, 201, JSON.stringify(start.error));
+    const post = `/api/ci/runs/${start.data.id}/release-report`;
+    for (const who of ['token', 'agent']) assert.equal((await call(who, 'POST', post)).status, 403, `${who} POST`);
+    assert.equal((await call('b', 'POST', post)).status, 404);
+    const running = await call('a', 'POST', post);
+    assert.equal(running.status, 409, JSON.stringify(running.error));
+    assert.equal((await call('a', 'PUT', url, { setting: null })).status, 200);
+    const off = await call('a', 'POST', post);
+    assert.equal(off.status, 409);
+    assert.match(off.error!.message, /no release report is set/);
   } finally {
     h.done();
   }

@@ -24,6 +24,8 @@ export interface RepoRow {
   upstream_state?: string | null;
   /** Migration 783 (T-486 S2): the Secrets & env NAME whose value signs the upstream's push webhook; null: no webhook. */
   upstream_hook_secret?: string | null;
+  /** Migration 783 (T-591): where release reports go, JSON {pipeline, vaultId, folder}; null: off. */
+  release_report?: string | null;
 }
 
 /** A test a gate saw pass only on its rerun (T-95 item 4). */
@@ -199,7 +201,7 @@ const RUN_COLUMNS = [
 type RunPatch = Partial<Pick<RunRow, (typeof RUN_COLUMNS)[number]>>;
 const REPO_COLUMNS = [
   'default_branch', 'protected', 'required_checks', 'merge_only', 'connected', 'hook_state', 'removed_at', 'source_path',
-  'upstream_url', 'upstream_secret', 'upstream_every_s', 'upstream_state', 'upstream_hook_secret',
+  'upstream_url', 'upstream_secret', 'upstream_every_s', 'upstream_state', 'upstream_hook_secret', 'release_report',
 ] as const;
 type RepoPatch = Partial<Pick<RepoRow, (typeof REPO_COLUMNS)[number]>>;
 
