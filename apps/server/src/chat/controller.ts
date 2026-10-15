@@ -113,6 +113,7 @@ import { redact } from './redact.js';
 import { TurnCost } from './turnCost.js';
 import { redactSecrets, stripUnsafe } from '../portalmcp/sanitize.js';
 import { NO_VALUES, SessionStream, ValueRedactor } from './valueRedact.js';
+import { HANDOFF_QA, HandoffEngine } from './handoff.js';
 import { MessageRate, pickSpawnClaude, spawnProblem, SUBAGENT_TOOLS, WORKER_REPORTS, workerLimits, type AgentCaps, type SpawnClaudeWhy, type WorkerLimitsAsk, type WorkerReport } from './agents.js';
 import { capError, makeRoom, SESSION_CAP, slotWaitText, weightOf, type LiveCaps } from './caps.js';
 import { branchProblem, defaultBranch, Worktrees, type MadeWorktree } from './worktrees.js';
@@ -597,6 +598,62 @@ export class ChatController {
   readonly #crewOut = new Map<string, { due: Map<string, CrewState>; at: number; timer?: () => void; sending: boolean; tries: number; retryAt: number }>();
   /** T-294: leads a person stopped (Stop): their news waits until a message from someone else lets them run again. */
   readonly #crewHeld = new Set<string>();
+  /** T-548: auto hand-off (an implementer's `DONE <sha>` starts QA); off for every lead until its `autoHandoff` is set. */
+  readonly #handoff = new HandoffEngine({
+    get: (id) => {
+      const s = this.#chat.get(id);
+      return s ? { id: s.id, parentId: s.parentId ?? null, agent: s.agent ?? null, ticketId: s.ticketId ?? null, claudeId: s.claudeId } : null;
+    },
+    enabled: (leadId) => this.#chat.row(leadId)?.auto_handoff === 1,
+    lastReply: (id) => this.lastReply(id),
+    // The context the session holds now stands for its tokens (a session's whole use is not kept per session); unknown is over budget.
+    tokens: (id) => this.#chat.get(id)?.context?.usedTokens ?? null,
+    live: (id) => {
+      const s = this.#chat.get(id);
+      return !!s && s.state !== 'ended';
+    },
+    spawnQa: (a) => this.#spawnQa(a),
+    tell: (to, text) => this.send(to, randomUUID(), text, { actor: CREW_REPORT_ACTOR, actorLabel: 'Auto hand-off', priority: 'later' }),
+    audit: (kind, detail) => this.#chat.addAudit({ severity: 'info', kind, sessionId: String(detail.implementer ?? detail.qa ?? ''), actor: 'portal', detail }),
+  });
+
+  /** T-548: turns auto hand-off on or off for a lead (the setting; off by default). */
+  setAutoHandoff(rawId: string, on: boolean): void {
+    const id = this.#require(this.#chat.resolveId(rawId)).id;
+    this.#chat.patchSession(id, { autoHandoff: on });
+    this.#emitSession(id);
+  }
+
+  /**
+   * T-548: the QA worker for `sha` of `ticket`: role qa-verifier on sonnet in dontAsk mode, a worker of the lead through the same
+   * create as session_spawn (so the lead's max workers, depth and rate hold: a refusal throws), on another Claude than the author's
+   * when the workspace has one.
+   */
+  async #spawnQa(a: { leadId: string; ticket: string; sha: string; authorClaudeId: string }): Promise<{ id: string }> {
+    const lead = this.#require(a.leadId);
+    let on = await this.spawnClaude(a.leadId, 'auto', 'sonnet');
+    if (on.claudeId === a.authorClaudeId) {
+      const other = this.#chat.listClaudes(lead.workspaceId).find((c) => c.id !== a.authorClaudeId && !c.removedAt);
+      if (other) on = { claudeId: other.id, name: other.name, why: 'named' };
+    }
+    const child = await this.create(
+      { workspaceId: lead.workspaceId, cwd: lead.cwd, title: `QA ${a.ticket} ${a.sha.slice(0, 8)}`, claudeId: on.claudeId, agent: HANDOFF_QA, ticketId: a.ticket },
+      { actor: `session:${a.leadId}`, parentId: a.leadId, spawn: { claude: on.claudeId, why: on.why, role: HANDOFF_QA, model: 'sonnet', mode: 'dontAsk' } },
+    );
+    if (child.slotWait) {
+      // S1 does not queue: no room to start now means no QA now (the lead is told).
+      await this.end(child.id).catch(() => undefined);
+      throw new Error(`no free slot to start it (${child.slotWait})`);
+    }
+    await this.control(child.id, 'mode', { mode: 'dontAsk' });
+    await this.control(child.id, 'model', { model: 'sonnet' });
+    const prompt =
+      `[Your role: ${HANDOFF_QA}.] Verify ${a.ticket} at commit ${a.sha} (the implementer's branch ticket/${a.ticket}-*, fetched from origin). ` +
+      `Read the ticket, check the diff against it, run its tests as the brief allows, never close the ticket. End your reply with line 1 exactly "PASS ${a.sha}" or "FAIL ${a.sha}: <short reasons>".`;
+    await this.send(child.id, randomUUID(), prompt, { actor: `session:${a.leadId}`, relation: 'parent', opening: true });
+    return { id: child.id };
+  }
+
   /** When this controller was made: a worker first seen ended or stopped since then never ran in this portal's sight (T-294). */
   readonly #bornAt = Date.now();
   readonly #idleMs: number;
@@ -3476,6 +3533,8 @@ export class ChatController {
       before === undefined
         ? gone && Date.parse(this.#chat.row(s.id)?.state_since ?? '') >= this.#bornAt
         : (now === 'idle' && (before === 'working' || before === 'waiting')) || now === 'waiting' || gone;
+    // T-548: an implementer or QA worker's turn ended: auto hand-off reads its reply (it does nothing unless the lead turned it on).
+    if (now === 'idle' && (before === 'working' || before === 'waiting')) void this.#handoff.onIdle(s.id);
     const out = this.#crewOut.get(s.parentId);
     if (!news || !this.#crewReports(s.id, now)) return void out?.due.delete(s.id);
     const entry = out ?? { due: new Map<string, CrewState>(), at: 0, sending: false, tries: 0, retryAt: 0 };

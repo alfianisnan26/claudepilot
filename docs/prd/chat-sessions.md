@@ -1379,3 +1379,13 @@ the supervisor, its URL from a local file). Slice 3, if wanted: a "Heartbeat" ro
 4. Two misses at 60 s (alarm after about 3 minutes, as T-315 asks), or a longer grace at night to avoid waking you for a short deploy? A
    deploy restarts the pod (`/deploy`): should the check pause for it, or is one "down, up again" pair acceptable?
 5. Should the Docker deployment on the Mac (`pilot.dev.isnan.me`) get its own check, or only the cluster portal?
+
+## 24. Auto hand-off: an implementer's DONE starts QA (2026-10-15, T-548 slice 1)
+
+Opt-in per lead (`auto_handoff`, migration 778, off by default; `ChatController.setAutoHandoff`; no UI toggle yet). Engine: `apps/server/src/chat/handoff.ts`, called from `#crewWatch` when a worker turns idle.
+
+- **Trigger.** A worker with role `implementer` whose latest reply has `DONE <40 lower-case hex>` alone on line 1. Anything looser (case, prefix, trailing text, a quote, a later line) starts nothing. The ticket is the worker's own (set by its spawn), never read from the text. One QA per (lead, ticket, sha).
+- **QA spawn.** The lead's worker through the same `create` as `session_spawn`, so depth, the lead's max workers (and the global cap) and the hourly rate hold. Role `qa-verifier`, sonnet, `dontAsk`, same workspace, folder and ticket; another Claude than the author's when the workspace has one. A full cap or no free slot spawns nothing (no queue in S1): `handoff.skipped` is audited and the lead is told in one line.
+- **Verdict.** The QA worker's line 1 `PASS <sha>` or `FAIL <sha>: reasons`, only for the sha it was spawned for. PASS tells the lead. FAIL goes back to the implementer (reasons quoted as untrusted) while fails are at most 2 and its context is under 150k tokens and it is live; otherwise the lead is told. The counter is in memory: a portal restart resets it.
+- **Audit.** `handoff.qa_started`, `handoff.skipped`, `handoff.fail_loop`, `handoff.pass`, with ticket, sha and worker ids, never worker text.
+- **Not built (S2/S3).** The reviewer step, the "ready to merge" line, the UI toggle, the scorecard metric. Tokens are approximated by the session's context use.
