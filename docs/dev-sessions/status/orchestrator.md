@@ -9,8 +9,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - DEPLOYED run #37 rmv9dxygu680003 (0316fae = b37628e + status): gate 690 s, build, release, verify, chats all passed.
   Carries T-486 S1, T-490, T-450 S3, T-524 S1, T-515, T-527. CLOSED T-527 (live D-62 refusal 10:42) and T-515.
 
-## IN FLIGHT (4 of 4 workers, D-65: 65914e62 review-t561 (opus, D-62 blind) on T-561 DONE a649874 (Jobs green, 5215; 445c3e1b ended),
-  d2e7b532 impl-t576 (sonnet) T-576 Runners UI Jobs (GO 14:20). T-558 e652c44: 7d33708d ended (125k, coordinator); QA runs its Jobs (5052).
+## IN FLIGHT (3 of 4 workers, D-65): T-561 a649874 blind review PASS W/ CONDITIONS (5227; 65914e62 ended); decision 5230:
+  7f11145e impl-t561-s1b (sonnet) on ticket/T-561-s1b fixes the 6 findings. d2e7b532 impl-t576 (sonnet) T-576 Runners UI Jobs (GO 14:20). T-558 e652c44: 7d33708d ended (125k, coordinator); QA runs its Jobs (5052).
   cee43422 impl-t486-s2c (opus, why secret-path collision) WAITING 3cb0883 (one helper deliveredSecretValue; T-557 lines kept),
   d23cb713 impl-t548 (sonnet) T-548 S1 WAITING 9b822ba (design 5152; migration 779, T-561 has 778). T-486 QA PASS W/ GAPS 5125.)
   T-546 bb7cdb0: 03c496b6 ended (118k, restart cut its Jobs; 5143): a fresh sonnet worker runs its Jobs after the restart.
@@ -30,7 +30,6 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - T-486 (high): S1 live. S2 DONE 75fd6a4 (4671, Jobs green; webhook, attention, allow-list, migration 783); 45148907 ended.
   Blind review 10382d36 PASS WITH CONDITIONS (4693, 6 minors); decision 4703: S2b cffb12b1 fixes m1/m4/m5 + PRD risks m2/m3;
   web hookSecret field -> T-556. Then QA -> lead gate -> merge -> deploy -> real Event branch check.
-- T-450: S3 deployed; 5 % real-data check + harness assertions (4354) still open.
 - T-525 (mine): QA/reviewer lack session_get (4362); scribe role has no Bash or ticket tools (4471). Coordinator decides.
 
 ## STATE PER TICKET
@@ -39,12 +38,13 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - T-378 S1 dev/t-378-1 9834ff7 ready: needs a verifier.
 
 ## DECISIONS (binding)
+- 16:10 Coordinator back: deploy #40 (pilot at 433da24) is its own; no deploy from me; one workspace restart after #40. The 4th slot
+  (T-546 Jobs on bb7cdb0, ticket/T-546-crew-digest) is spawned after that restart, since the cluster is busy until then.
 - 14:30 Coordinator (D-65 idle slots): workers waiting on the one-at-a-time cluster hold slots; over 120k they end after their
   ticket. 7d33708d ended, T-576 started in its slot. The cluster queue (D-61), not the workers, is the bottleneck.
 - 15:50 Workspace restarted 13:46 UTC; 03c496b6 (T-546, mid-Jobs) and cee43422 (T-486 port, WAITING 3cb0883) are gone, all branches
   pushed and clean. Deploy #39 (coordinator, RBAC + T-557 fix) holds the cluster, finishes by itself. 14:05 Coordinator AWAY (owner offline): restart POSTPONED, long work OK, Mac runner off.
-  The coordinator ran #38/#39; I start no deploy until it is back.
-  After it: fresh workers re-run T-546's Jobs on bb7cdb0 and T-486's on 3cb0883.
+  The coordinator ran #38/#39. After it: fresh workers re-run T-546's Jobs on bb7cdb0 and T-486's on 3cb0883.
 - 12:50 Coordinator: it builds T-557 itself (owner's ask); no T-557 slices from me; T-426 stays mine; a line on T-557 when I touch
   ci/ or connect/ in a big way. (Supersedes 12:45's fold of T-426 into the lease.)
 - 13:20 D-66 (pulled, 619b4b5): workers run scripts/quick-check.sh (one Job: format, lint, named tests) before a branch goes
