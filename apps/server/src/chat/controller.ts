@@ -353,7 +353,14 @@ export interface ChatSendOptions {
   actorLabel?: string;
   attachments?: unknown;
   transfer?: ChatTransferContext;
+  /** T-417 review: a worker's first instruction from its spawn: it goes in before any other message ({@link ChatController.holdInput}). */
+  opening?: boolean;
 }
+
+/** T-417: the live cap that is full: which, its limit, and how many run. */
+type SlotFull = { scope: 'workspace' | 'total'; limit: number; running: number };
+/** T-417: one start or wake waiting for a slot, and the cap it last found full. */
+type SlotTurn = { workspaceId: string; full: SlotFull };
 
 /**
  * What a session's Claude Code process gets for portal tools (I8): the environment that holds its per-session token,
@@ -496,8 +503,15 @@ export class ChatController {
   /** Per session: the permission mode the stream must report. */
   readonly #modes = new Map<string, ModeTrack>();
   readonly #idleTimers = new Map<string, NodeJS.Timeout>();
-  /** T-417: the starts and wakes waiting for a slot under the live cap, first come first served. */
-  readonly #slotQueue: { workspaceId: string }[] = [];
+  /** T-417: the starts and wakes waiting for a slot under the live cap, first come first served, with the cap each found full. */
+  readonly #slotQueue: SlotTurn[] = [];
+  /**
+   * T-417 review: the slots granted under the live cap whose session is not live yet (between its room and the end of its launch):
+   * they count as running, so a second start can't take the same room.
+   */
+  readonly #granted = new Map<string, { workspaceId: string; weight: number }>();
+  /** T-417 review: per worker, its spawn delivery (mode, model, effort, first instruction): every other message waits for it. */
+  readonly #inputHolds = new Map<string, Promise<void>>();
   /** T-417: per session waiting for a slot, why (what `slotWait` shows). */
   readonly #slotWaits = new Map<string, string>();
   /** T-417: the sessions whose Bypass is being put back after a wake (a retry inside it wakes it again: never twice). */
@@ -1469,8 +1483,38 @@ export class ChatController {
     // Asked again: the pool may have changed while the host was checked. The launch asks once more.
     this.#requireEligible(workspaceId);
     // T-417: the cap full with nothing that may sleep: the session is made and its start waits for a slot (below), never refused at once.
-    const full = await this.#tryRoom(workspaceId, null);
+    // A newcomer queues behind the starts already waiting for that room (first come, first served); room it gets is held for it (`#granted`).
     const id = randomUUID();
+    const full = this.#waitingAhead(workspaceId, null) ?? (await this.#tryRoom(workspaceId, null, id));
+    try {
+      return this.#insert(id, full, { workspaceId, cwd, title, actor, claude, ticketId, parentId, worktree, agent, limits, continuedFrom, installed }, opts);
+    } catch (e) {
+      this.#granted.delete(id);
+      throw e;
+    }
+  }
+
+  /** {@link #create} after its last await: the row, its records, and its start (now, or queued for a slot). Synchronous (T-349). */
+  #insert(
+    id: string,
+    full: SlotFull | null,
+    m: {
+      workspaceId: string;
+      cwd: string;
+      title: string;
+      actor: string;
+      claude: { id: string };
+      ticketId: string | null;
+      parentId: string | null;
+      worktree: ChatWorktree | null;
+      agent: string | null;
+      limits: { maxWorkers: number | null; subagents: boolean } | null;
+      continuedFrom: { id: string; chain: string[] } | null;
+      installed: boolean;
+    },
+    opts: ChatCreateOptions,
+  ): ChatSession {
+    const { workspaceId, cwd, title, actor, claude, ticketId, parentId, worktree, agent, limits, continuedFrom, installed } = m;
     // Bypass capability (FR20): only a person's own opt-in, only where the policy allows it, never inherited or granted to another caller.
     let bypassCapable = false;
     if (opts.bypassOptIn === true) {
@@ -1526,7 +1570,10 @@ export class ChatController {
     }
     if (bypassCapable) this.#chat.addAudit({ severity: 'medium', kind: 'bypass.capable', sessionId: id, workspaceId, actor, detail: { how: 'start' } });
     if (full) return this.#queueStart(id, installed, full);
-    void this.#startProcess(id, { checked: installed }).catch(() => undefined);
+    // Its slot counts as running until the launch settles (T-417 review: else a start waiting in line takes the same room).
+    void this.#startProcess(id, { checked: installed })
+      .catch(() => undefined)
+      .finally(() => this.#granted.delete(id));
     return session;
   }
 
@@ -1535,7 +1582,7 @@ export class ChatController {
    * waits for a slot (`#slot`), showing why at once, in what this returns too. A message sent meanwhile waits for that start (it is the
    * session's lifecycle work). When the wait runs out it reads Interrupted with the cap's reason, and a later message starts it.
    */
-  #queueStart(id: string, checked: boolean, full: { scope: 'workspace' | 'total'; limit: number; running: number }): ChatSession {
+  #queueStart(id: string, checked: boolean, full: SlotFull): ChatSession {
     const row = this.#chat.row(id)!;
     this.#chat.patchSession(id, { process: 'asleep' });
     this.#showSlotWait(id, slotWaitText(full.scope, full.limit, full.running, row.workspace_id));
@@ -1543,7 +1590,12 @@ export class ChatController {
     let held: Promise<void> | undefined;
     const op = (async () => {
       try {
-        await this.#slot(row.workspace_id, this.#chat.row(id) ?? row);
+        try {
+          await this.#slot(row.workspace_id, this.#chat.row(id) ?? row);
+        } finally {
+          // Cleared here, whichever way the wait went (T-417 review: `#slot` returns early when its first look finds room).
+          this.#showSlotWait(id, null);
+        }
       } catch (e) {
         const now = this.#chat.row(id);
         if (now && now.state !== 'ended' && now.process !== 'live') {
@@ -1553,7 +1605,11 @@ export class ChatController {
         return;
       }
       if (this.#busy.get(id) === held) this.#busy.delete(id);
-      await this.#startProcess(id, { checked }).catch(() => undefined);
+      try {
+        await this.#startProcess(id, { checked }).catch(() => undefined);
+      } finally {
+        this.#granted.delete(id); // its slot counted as running until the launch settled
+      }
     })();
     held = op.catch(() => undefined);
     this.#busy.set(id, held);
@@ -2076,6 +2132,8 @@ export class ChatController {
     this.#gate(sessionId);
     // A Restart under way: the message goes to the new process, after the ones sent before it.
     await this.#restarting.get(sessionId);
+    // T-417 review: a worker's spawn delivery (its narrowing mode, then its parent's first instruction) goes in before any other message.
+    if (!opts.opening) await this.#inputHolds.get(sessionId);
     this.#sending.set(sessionId, (this.#sending.get(sessionId) ?? 0) + 1);
     try {
       return await this.#send(sessionId, uuid, text, opts);
@@ -2939,8 +2997,9 @@ export class ChatController {
    * The one place a deliberate relaunch puts Bypass back (T-256): the manual Move, the auto move engine and the supervisor's
    * `/switch` (all through `switchClaude`), a Restart, and T-136's recover in place. The transcript says which way it went, in one form:
    * "Bypass kept after the move." or "Bypass not kept after the move: <why>." (never pretended). A wake from sleep is one of them only for
-   * a lead whose sleep kept it (T-417, `wake`: the owner's order, chat-sessions FR20): there, besides every check below, the person's own
-   * entry for this chat must be on record with its acknowledgement and a fresh server code. Any other wake keeps FR20/FR38: off after sleep.
+   * a lead whose sleep kept it (T-417, `wake`: the owner's ticket text, chat-sessions FR20): there, besides every check below, it must still
+   * be a lead, and the person's own entry for this chat must be on record saying the acknowledgement was ticked and the server code was
+   * fresh THEN (no new code is asked at the wake). Any other wake keeps FR20/FR38: off after sleep.
    */
   async #keepBypass(sessionId: string, how: 'move' | 'restart' | 'recover' | 'wake'): Promise<void> {
     const after = how === 'move' ? 'after the move' : how === 'restart' ? 'after the restart' : how === 'wake' ? 'after the wake' : 'after the recovery';
@@ -2959,6 +3018,8 @@ export class ChatController {
       if (row.mode === 'bypassPermissions') this.#chat.patchSession(sessionId, { mode: START_MODE });
       if (!this.#bypassAllowed()) return drop('policy', `Bypass not kept ${after}: the policy no longer allows it.`);
       if (row.bypass_capable !== 1) return drop('not_capable', `Bypass not kept ${after}: this session wasn’t started to allow Bypass.`);
+      // T-417 review: a lead when it slept, and still one now (its workers may have ended, its limit or Keep going been cleared meanwhile).
+      if (how === 'wake' && !this.#keptLead(row)) return drop('not_lead', `Bypass not kept ${after}: this chat is no longer a lead (no live workers, no workers limit, no Keep going).`);
       if (how === 'wake' && !this.#personEntered(sessionId)) return drop('not_confirmed', `Bypass not kept ${after}: no entry by a person with the confirmation and the server code is on record for this chat.`);
       try {
         await this.#setBypass(sessionId);
@@ -3218,6 +3279,45 @@ export class ChatController {
   }
 
   /**
+   * T-417 review: every message to `sessionId` but its `opening` one waits until `until` settles (a worker's spawn delivery: its mode, model
+   * and effort, then its first instruction), so no other input reaches it before its narrowing mode applies. Set right after the worker
+   * is made, before its id is handed out.
+   */
+  holdInput(sessionId: string, until: Promise<unknown>): void {
+    const hold: Promise<void> = until.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.#inputHolds.set(sessionId, hold);
+    void hold.then(() => {
+      if (this.#inputHolds.get(sessionId) === hold) this.#inputHolds.delete(sessionId);
+    });
+  }
+
+  /**
+   * T-417 review: waits until the session's start (a queued one included: its slot wait, then its launch) has settled; true when it runs.
+   */
+  async startSettled(sessionId: string): Promise<boolean> {
+    for (let i = 0; i < 3; i++) {
+      const work = this.#busy.get(sessionId) ?? this.#launching.get(sessionId);
+      if (!work) break;
+      await work.catch(() => undefined);
+    }
+    const row = this.#chat.row(sessionId);
+    return !!row && row.state !== 'ended' && row.process === 'live';
+  }
+
+  /**
+   * T-417 review: the portal tells a worker's lead one thing about its spawn (a queued start that failed, settings not confirmed), framed as
+   * a portal report (the worker's own text is not in it). Whatever the worker's `report`: it answers the lead's own spawn.
+   */
+  async tellLead(workerId: string, text: string): Promise<void> {
+    const parentId = this.#chat.row(workerId)?.parent_id;
+    if (!parentId) return;
+    await this.send(parentId, randomUUID(), text, { actor: CREW_REPORT_ACTOR, actorLabel: 'Spawn report', priority: 'later' });
+  }
+
+  /**
    * T-294 (Crew over MCP): one message to every live worker of the sender (`workers`) or every live member of its crew (`crew`), each
    * framed as a direct message is (the relation as that receiver sees it). Every recipient counts against the sender's `messagesPerHour`,
    * and a broadcast that does not fit whole is refused before anything is sent. Says which got it, and which could not be sent to.
@@ -3415,18 +3515,37 @@ export class ChatController {
    * One try at room for one more awake session in `workspaceId` (`waking` is the session being woken or started, which doesn't count
    * against itself): idle workers sleep first, then idle chats without workers, longest-idle first in each, until it fits. A lead
    * ({@link keptLead}) never sleeps for this, nor a session that is working, waiting on a person, or has background work. Null when
-   * it fits (or no caps), else the cap that is full.
+   * it fits (or no caps), else the cap that is full. Sessions not live yet count as running too (T-417 review): a slot granted and not yet
+   * launched (`#granted`) and a launch in flight (`#launching`). When it fits, the room is held for `forId` (`#granted`, synchronously, before
+   * anything sleeps) until the caller's launch settles and the caller lets it go.
    */
-  async #tryRoom(workspaceId: string, waking: ChatSessionRow | null): Promise<{ scope: 'workspace' | 'total'; limit: number; running: number } | null> {
+  async #tryRoom(workspaceId: string, waking: ChatSessionRow | null, forId: string | null = waking?.id ?? null): Promise<SlotFull | null> {
     const caps = this.liveCaps?.();
     if (!caps) return null;
     const rows = this.#chat.liveRows().filter((r) => r.id !== waking?.id);
     const live = rows.map((r) => ({ id: r.id, workspaceId: r.workspace_id, weight: weightOf(r) }));
+    const counted = new Set(live.map((r) => r.id));
+    for (const [id, g] of this.#granted) {
+      if (id === waking?.id || id === forId || counted.has(id)) continue;
+      const r = this.#chat.row(id);
+      if (r && (r.state === 'ended' || r.process === 'live')) continue; // ended, or already counted as live
+      live.push({ id, workspaceId: g.workspaceId, weight: g.weight });
+      counted.add(id);
+    }
+    for (const id of this.#launching.keys()) {
+      if (id === waking?.id || id === forId || counted.has(id)) continue;
+      const r = this.#chat.row(id);
+      if (!r || r.state === 'ended' || r.process === 'live') continue;
+      live.push({ id, workspaceId: r.workspace_id, weight: weightOf(r) });
+      counted.add(id);
+    }
     const sleepable = rows
       .filter((r) => r.state === 'idle' && !this.#busy.has(r.id) && !this.#moving.has(r.id) && this.#canSleep(r.id) && !this.#keptLead(r))
       .map((r) => ({ id: r.id, since: this.#idleSince(r), rank: r.parent_id ? 0 : 1 }));
-    const plan = makeRoom(live, sleepable, workspaceId, waking ? weightOf(waking) : 1, caps);
+    const weight = waking ? weightOf(waking) : 1;
+    const plan = makeRoom(live, sleepable, workspaceId, weight, caps);
     if ('refuse' in plan) return plan.refuse;
+    if (forId) this.#granted.set(forId, { workspaceId, weight });
     for (const id of plan.sleep) {
       const row = this.#chat.row(id);
       if (!row || row.state !== 'idle' || row.process !== 'live') continue;
@@ -3442,9 +3561,10 @@ export class ChatController {
    * refused naming the cap only after `slotWaitMs`, or when the portal stops. A session that became live meanwhile needs no slot.
    */
   async #slot(workspaceId: string, waking: ChatSessionRow | null): Promise<void> {
-    let full = await this.#tryRoom(workspaceId, waking);
+    // First come, first served: behind the ones already waiting for this room, a newcomer doesn't even try (T-417 review).
+    let full = this.#waitingAhead(workspaceId, null) ?? (await this.#tryRoom(workspaceId, waking));
     if (!full) return;
-    const turn = { workspaceId };
+    const turn: SlotTurn = { workspaceId, full };
     this.#slotQueue.push(turn);
     const deadline = Date.now() + this.slotWaitMs;
     const id = waking?.id ?? null;
@@ -3457,17 +3577,29 @@ export class ChatController {
         const mine = id ? this.#chat.row(id) : null;
         if (id && (!mine || mine.state === 'ended')) throw new AppError('CONFLICT', 'This session has ended.');
         if (mine?.process === 'live') return;
-        // First come, first served within a workspace: one waiting longer there goes first.
-        if (this.#slotQueue.find((t) => t.workspaceId === workspaceId) !== turn) continue;
+        // First come, first served: one waiting longer for the same room goes first.
+        if (this.#waitingAhead(workspaceId, turn)) continue;
         const now = await this.#tryRoom(workspaceId, mine ?? waking);
         if (!now) return;
-        full = now;
+        full = turn.full = now;
       }
     } finally {
       const at = this.#slotQueue.indexOf(turn);
       if (at >= 0) this.#slotQueue.splice(at, 1);
       if (id) this.#showSlotWait(id, null);
     }
+  }
+
+  /**
+   * T-417 review: the cap a start in `workspaceId` waits behind, when one already waits for the same room ahead of `turn` (all of the line
+   * for a newcomer, `null`): one in the same workspace, or one anywhere the total cap holds. Null when none does.
+   */
+  #waitingAhead(workspaceId: string, turn: SlotTurn | null): SlotFull | null {
+    for (const t of this.#slotQueue) {
+      if (t === turn) return null;
+      if (t.workspaceId === workspaceId || t.full.scope === 'total') return t.full;
+    }
+    return null;
   }
 
   /** T-417: shows (or clears, `null`) why a session waits for a slot; tells its watchers only when that changed. */
@@ -4168,8 +4300,12 @@ export class ChatController {
       // T-294: a crew report wakes a sleeping lead; one whose process is gone stays as it is.
       if (!relaunchGone && row.process === 'gone') throw new AppError('CONFLICT', 'This session is not running.');
       const slept = row.process === 'asleep';
-      await this.#slot(row.workspace_id, row);
-      await this.#startProcess(sessionId, { resume: true });
+      try {
+        await this.#slot(row.workspace_id, row);
+        await this.#startProcess(sessionId, { resume: true });
+      } finally {
+        this.#granted.delete(sessionId); // its slot counted as running until the launch settled (T-417 review)
+      }
       row = this.#chat.row(sessionId);
       // T-417: a lead's sleep kept its Bypass: the wake puts it back the way a Restart does, every gate checked again (never twice at once).
       if (slept && row?.process === 'live' && row.state !== 'ended' && !this.#wakeBypass.has(sessionId) && this.#sleptInBypass(sessionId)) {

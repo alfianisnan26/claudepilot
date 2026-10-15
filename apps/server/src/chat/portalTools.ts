@@ -26,7 +26,13 @@ export interface ChatToolHost {
       report?: WorkerReport;
     },
   ): Promise<ChatSession>;
-  send(id: string, uuid: string, text: string, opts: { actor: string; actorLabel?: string; relation?: 'parent' | 'worker' | 'crew' }): Promise<void>;
+  send(id: string, uuid: string, text: string, opts: { actor: string; actorLabel?: string; relation?: 'parent' | 'worker' | 'crew'; opening?: boolean }): Promise<void>;
+  /** T-417 review: every other message to a worker waits until its spawn delivery (`until`) settles. */
+  holdInput(id: string, until: Promise<unknown>): void;
+  /** T-417 review: waits for a session's start (a queued one included) to settle; true when it runs. */
+  startSettled(id: string): Promise<boolean>;
+  /** T-417 review: one portal line to a worker's lead about its spawn. */
+  tellLead(workerId: string, text: string): Promise<void>;
   messageFamily(fromId: string, toId: string, text: string, opts?: { priority?: 'next' | 'later' }): Promise<void>;
   /** T-294: one message to every live worker, or every live crew member, of the sender; refused whole over the hourly limit. */
   messageGroup(fromId: string, to: 'workers' | 'crew', text: string, opts?: { priority?: 'next' | 'later' }): Promise<{ sent: string[]; failed: string[] }>;
@@ -191,13 +197,31 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
         // Claude Code runs an agent name it has no definition for as the default, silently: one line lets the worker say so (T-294 slice 2).
         const first = args.role ? `[Your role: ${args.role}. If your instructions do not describe this role (its agent file, in the folder's .claude/agents or the workspace persona's), tell your parent with session_message before you start.]\n\n${args.prompt}` : args.prompt;
         // From its parent, said so in the frame its Claude reads (T-294 QA: the first instruction said "another session").
-        await chat.send(child.id, randomUUID(), first, { actor: ctx.actor, relation: 'parent', ...(ctx.actorLabel ? { actorLabel: ctx.actorLabel } : {}) });
+        await chat.send(child.id, randomUUID(), first, { actor: ctx.actor, relation: 'parent', opening: true, ...(ctx.actorLabel ? { actorLabel: ctx.actorLabel } : {}) });
       };
       // T-417: the live cap is full and nothing may sleep: the worker waits for a slot. The caller learns it at once (not after the wait);
-      // its settings and its first instruction follow when it starts. If that fails, it is ended, so its report (the end) tells the parent.
+      // its settings and its first instruction follow when it starts. A queued start that fails ends the worker at once (no control call
+      // relaunches it to wait again), and the lead is told why; settings not confirmed are told it in a line too (nobody reads `unconfirmed`).
       const waits = child.slotWait ?? null;
-      if (waits) void deliver().catch(() => chat.end(child.id).catch(() => undefined));
-      else await deliver();
+      const tell = (text: string) => chat.tellLead(child.id, text).catch(() => undefined);
+      const queued = async () => {
+        if (!(await chat.startSettled(child.id))) {
+          const why = chat.get(child.id)?.endedReason;
+          await chat.end(child.id).catch(() => undefined);
+          return void (await tell(`Worker ${child.id} could not start${why ? ` (${why.slice(0, 200)})` : ''}, so it was ended before it got any instruction.`));
+        }
+        try {
+          await deliver();
+        } catch (e) {
+          await chat.end(child.id).catch(() => undefined);
+          return void (await tell(`Worker ${child.id} was ended before it got your instruction: ${e instanceof Error ? e.message.slice(0, 200) : 'its settings failed'}.`));
+        }
+        if (unconfirmed.length) await tell(`Worker ${child.id} started with your instruction. Not confirmed: ${unconfirmed.join('; ')}.`);
+      };
+      const delivery = waits ? queued() : deliver();
+      // T-417 review: nothing else (its parent's session_message, its crew) reaches the worker before its mode applies and its first instruction is in.
+      chat.holdInput(child.id, delivery);
+      if (!waits) await delivery;
       ctx.affected(`session:${child.id}`);
       const where = on.claudeId === parent.claudeId ? WHY_TEXT[on.why] : `${on.name}, ${WHY_TEXT[on.why]}`;
       return {
