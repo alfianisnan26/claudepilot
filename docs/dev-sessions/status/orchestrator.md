@@ -15,11 +15,12 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 ## IN FLIGHT (6 of 6, D-71)
 - GATE batch 7 premerge 7d87d90a (wip/main-7d87d90; job-out/gate-7d87d90.log): T-633 399e7b5d (QA 6283) + T-638 6fdb5b29 (QA 6284).
   QA Perf's ticket_comment refused on unassigned tickets: lead posts its verdicts. T-633 H1/H2 mutant tests -> Backend lane after T-574.
-- IMPL T-416 S1d 41675b08 (opus, why: incident) on ticket/T-416-s1d (base a63e181e = S1c + integration, lead merged; 2 conflicts kept both).
-  Fixes for review 6187 CHANGES: wake reserves, hold reservation past the 5 s cache, queued start checked, restart vs Bypass, item 2, PRD.
-- IMPL T-325 S1b 7eb43876 (opus, idle) DONE 92bd7e23 (6271; lead read verdicts.ts rule: ok) -> QA PERF 7e4879c7 verifying (6291).
-- BACKEND lane d762b5fc (sonnet) on T-574 session_family summary (ticket/T-574-family-summary).
-- BE INFRA lane aa8dc58b (sonnet) on T-341 RTK fidelity (ticket/T-341-rtk-fidelity = dev/t-306-1 + integration dca5e36f; no hook registration).
+- T-325 S1b DONE 92bd7e23 (impl 7eb43876 ended; 6271; lead read verdicts.ts rule: ok) -> QA PERF 7e4879c7 verifying (6291).
+- T-416 S1d DONE 89e270cc (impl 41675b08 ended; 6289; 5/8/10 -> T-675) -> REVIEWER 6a216d7b (sonnet, delta a63e181e..89e270cc);
+  then QA Perf, gate, merge.
+- QA BE 2 42e5408f (sonnet): T-574 124ca45f (Backend 6280) then T-341 e4284315 (BE Infra 6292; A partial, D not verified).
+- BACKEND lane d762b5fc (sonnet, idle): next T-633 H1/H2 mutant tests on a fresh branch after batch 7 lands (respawn).
+- BE INFRA lane b6df312e (sonnet, respawned; aa8dc58b ended) on T-549 D-65 scorecard rows (ticket/T-549-d65-rows from integration).
 - QA UI 8b13bb5a: repro of T-576 gap 4 (run page blank at 2.5 s, 2 of ~12 loads); kit 44 px -> T-639.
 - HELD: T-426 S1e 2174eee1 QA PASS 6169 -> merge on the T-401 ack (4941). T-578 51f6c153 review CHANGES 6168 -> owner decision.
   T-631 review CHANGES 5850: absolute-path entry (a) for the coordinator; F1 on job-run.sh -> T-635 (high).
