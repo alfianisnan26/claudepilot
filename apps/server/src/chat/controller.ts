@@ -108,6 +108,7 @@ import {
   type StoredEvent,
 } from './protocol.js';
 import { type BypassFacts, type BypassRefusal, type BypassState } from './bypass.js';
+import { isLead, leadRulesSettings } from './leadRules.js';
 import { isStagedUpload } from './artifacts/records.js';
 import { redact } from './redact.js';
 import { TurnCost } from './turnCost.js';
@@ -676,6 +677,8 @@ export class ChatController {
   mcpServersSeen?: (workspaceId: string, directory: string, servers: { name: string; status: string }[]) => string[];
   /** Installed by the owner: whether the policy allows Bypass in chat (the interim switch `sessions.allowBypass`). Unset: no. */
   bypassAllowed?: () => boolean;
+  /** Installed by the owner (T-561): whether a crew lead launches with the lead rules (`sessions.leadRules`). Unset or unreadable: no. */
+  leadRulesOn?: () => boolean;
   /**
    * Installed by the owner (T-109): whether a Claude shows a usage window of a model family (the Fable week), from the usage monitor's last
    * reading; what decides whether it has a family only some plans include until its `list_models` is known. Unset: no window known.
@@ -1301,6 +1304,7 @@ export class ChatController {
     const moving = this.#moving.get(session.id);
     let out = moving ? { ...session, switching: { ...moving } } : session;
     if (this.#restarting.has(session.id)) out = { ...out, restarting: true };
+    if (this.#launchedLeadRules.has(session.id) && out.process === 'live') out = { ...out, leadRules: true };
     const slotWait = this.#slotWaits.get(session.id);
     if (slotWait) out = { ...out, slotWait };
     const change = this.#configChange(session);
@@ -1527,6 +1531,8 @@ export class ChatController {
     const title = (typeof req.title === 'string' && req.title.trim() ? req.title.trim() : 'New session').slice(0, CHAT_SESSION_TITLE_MAX);
     // A continuation (T-270): refused before anything is made when the session it names is live or elsewhere.
     const continuedFrom = this.#continuation(req.continuedFrom, workspaceId);
+    // T-561: marked a crew lead by its starter (it only ever makes the session stricter), or the continuation of one.
+    const lead = req.lead === true || (continuedFrom !== null && this.#chat.row(continuedFrom.id)?.lead === 1);
     this.#requireEligible(workspaceId);
     const claude = typeof req.claudeId === 'string' && req.claudeId.trim() ? this.#chat.claude(req.claudeId.trim()) : this.#chat.ensureDefault(workspaceId);
     if (!claude || claude.workspaceId !== workspaceId || claude.removedAt) {
@@ -1557,7 +1563,7 @@ export class ChatController {
     const id = randomUUID();
     const full = this.#waitingAhead(workspaceId, null) ?? (await this.#tryRoom(workspaceId, null, id));
     try {
-      return this.#insert(id, full, { workspaceId, cwd, title, actor, claude, ticketId, parentId, worktree, folderBranch, agent, limits, continuedFrom, installed }, opts);
+      return this.#insert(id, full, { workspaceId, cwd, title, actor, claude, ticketId, parentId, worktree, folderBranch, agent, limits, continuedFrom, installed, lead }, opts);
     } catch (e) {
       this.#granted.delete(id);
       throw e;
@@ -1582,10 +1588,11 @@ export class ChatController {
       limits: { maxWorkers: number | null; subagents: boolean } | null;
       continuedFrom: { id: string; chain: string[] } | null;
       installed: boolean;
+      lead?: boolean;
     },
     opts: ChatCreateOptions,
   ): ChatSession {
-    const { workspaceId, cwd, title, actor, claude, ticketId, parentId, worktree, folderBranch, agent, limits, continuedFrom, installed } = m;
+    const { workspaceId, cwd, title, actor, claude, ticketId, parentId, worktree, folderBranch, agent, limits, continuedFrom, installed, lead } = m;
     // Bypass capability (FR20): only a person's own opt-in, only where the policy allows it, never inherited or granted to another caller.
     let bypassCapable = false;
     if (opts.bypassOptIn === true) {
@@ -1617,6 +1624,7 @@ export class ChatController {
       folderBranch,
       agent,
       spawnWhy,
+      ...(lead ? { lead: true } : {}),
       ...(limits ? { maxWorkers: limits.maxWorkers, subagents: limits.subagents } : {}),
     };
     let session!: ChatSession;
@@ -4171,6 +4179,10 @@ export class ChatController {
     // What this process starts with (T-294): a limits change compares with it, not with the value saved before the change.
     this.#launchedSubagents.set(o.sessionId, launched?.subagents !== 0);
     const agent = launched?.agent;
+    // T-561: a crew lead under the policy launches with the lead rules, at every start like the agent (Bypass included: a hook binds there too).
+    const leadRules = launched ? this.#leadRulesFor(launched) : false;
+    if (leadRules) this.#launchedLeadRules.add(o.sessionId);
+    else this.#launchedLeadRules.delete(o.sessionId);
     // `--allow-dangerously-skip-permissions` only for a session that opted in, and only while the policy allows it: without it
     // Claude Code refuses the switch to Bypass (`bypass_not_launched`). It never turns Bypass on by itself.
     const flags = [
@@ -4188,9 +4200,25 @@ export class ChatController {
       ...(o.bypass ? ['--allow-dangerously-skip-permissions'] : []),
       // T-323: the project's permission rules the portal trusts, as flag settings (Claude Code ignores them in a folder it doesn't trust).
       ...(this.#projectSettings.has(`${workspaceId}\u0000${sessionCwd(o.cwd)}`) ? ['--settings', this.#projectSettings.get(`${workspaceId}\u0000${sessionCwd(o.cwd)}`)!] : []),
+      // T-561: last, so that if Claude Code keeps only one --settings value, the one it keeps is the lead rules (fewer allows, never more).
+      ...(leadRules ? ['--settings', leadRulesSettings(sessionCwd(o.cwd))] : []),
     ];
     const args = ['start', o.csid, String(o.seg), o.cwd, ...(lines.length ? ['--env', String(lines.length)] : []), '--', ...flags];
     return this.#runOnce(workspaceId, args, lines.length ? `${lines.join('\n')}\n` : undefined, this.#chat.configDir(o.claudeId));
+  }
+
+  /** T-561: the sessions whose current process was launched with the lead rules; unknown after a portal restart. */
+  readonly #launchedLeadRules = new Set<string>();
+
+  /** T-561: whether a session launches with the lead rules now: the policy is on and it is a crew lead (marked, or it has started workers). */
+  #leadRulesFor(row: ChatSessionRow): boolean {
+    let on = false;
+    try {
+      on = this.leadRulesOn?.() === true;
+    } catch {
+      // the policy couldn't be read: off, like every other unreadable policy here
+    }
+    return on && isLead(row, this.#chat.hasWorkers(row.id));
   }
 
   /** The spending limit of a session on a pool's keys: the setting when the owner installed one, else $10. */

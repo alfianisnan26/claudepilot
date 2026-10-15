@@ -319,7 +319,8 @@ const kickoff = (t, again, reason) =>
 const recoverBody = () => ({ by: 'agent' });
 /** What a recover answer means: back in place; wait (the pause between recoveries, or the portal restarting); or a new session (absent, the cap, a suspicious cause, a person's close). */
 const recoverVerdict = (r) => (!r.error && r.status < 300 ? 'recovered' : r.error?.code === 'RECOVER_PAUSED' || r.status >= 500 ? 'wait' : 'new');
-const createBody = (t, claudeId, continuedFrom) => ({ workspaceId: WORKSPACE, title: t.title, claudeId, allowBypass: true, cwd: t.folder ?? MAIN, ...(continuedFrom ? { continuedFrom } : {}) });
+// T-561: `lead: true` marks it a crew lead: with the portal's `sessions.leadRules` policy on, it launches with the lead rules (an older portal ignores it).
+const createBody = (t, claudeId, continuedFrom) => ({ workspaceId: WORKSPACE, title: t.title, claudeId, allowBypass: true, lead: true, cwd: t.folder ?? MAIN, ...(continuedFrom ? { continuedFrom } : {}) });
 
 async function startSession(t, tstate, again, reason, continuedFrom = null) {
   const pick = await bestClaude(t.claudes);
