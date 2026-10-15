@@ -406,7 +406,7 @@ test('the Job\'s own script: checkout, the command\'s exit code, the artifacts b
   assert.match(cfg, /useHttpPath = true/);
   assert.equal((cfg.match(/\[credential/g) ?? []).length, 1, 'one credential section, no global helper');
   assert.doesNotMatch(cfg, /^\[credential\]/m, 'no unscoped credential section');
-  assert.match(ev.stdout, /---\n1\n0\n0\n0\n$/, 'a password for the Event URL only: not another path, a look-alike path, or another host');
+  assert.match(ev.stdout, /---\n1\n0\n0\n0\n=== JOB-RUN SUMMARY/, 'a password for the Event URL only: not another path, a look-alike path, or another host');
   // claudepilot (its own URL, here the local bare repository): no npmrc, the global helper as before.
   const cp = pod('main', 'test ! -e "$HOME/.npmrc" && echo no npmrc; git config --global --get credential.helper >/dev/null && echo global helper');
   assert.match(cp.stdout, /no npmrc\nglobal helper\n/, 'not Event: no npmrc, the global helper');
