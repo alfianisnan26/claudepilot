@@ -17,7 +17,6 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - T-623 S1b DONE 784926f (5855; 6d431441 ended; lead read diff: stdin not argv, Memory emptyDir 0400, no values in audit/hash, no RBAC) -> QA Perf queue.
 - BE INFRA respawned e92c5ba3 (ticket/T-578-gate-reuse) on T-578 S1 (reuse green gate of same tree + per-file progress): a GATE change,
   merge only on a person's ack + blind review. T-578 claim refused by id (T-634): worker on it by spawn.
-- T-619 browser proof PASS 5793 (screenshots t619-390/1280.png in qa-t-600-ui-r3) -> 5810; #41 release is the coordinator's.
 - QA PERF 7e4879c7 (lane/cp-qa-perf): current item, then T-426 S1c+S1d 80f5bb72 (FRONT, owner), then rest of T-600 BE 1a95fb03 / T-597 S1b 75656845, then T-623 S1b 784926f, then T-591 S1d delta 394abdd5. QA is the bottleneck (5 queued).
 - T-576 QA UI PASS WITH GAPS 5883 -> lead 5884: merge cb6bd216 (2427d98 + runners.mjs) in batch 3; kit 44 px gap -> T-639; phone check stays.
 - QA UI b3f769c5 ENDED (idle until FE S1c; slot swap, 19:19) -> FRONTEND fa9d3d56 (ticket/T-600-fe-s1c from 1a95fb03) on FE S1c
@@ -35,7 +34,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 ## DECISIONS (binding)
 - 18:45 in_review sweep (coordinator): all 9 unassigned, close/update/comment FORBIDDEN to me -> T-634. Coordinator closes. READY done (QA PASS
   WITH GAPS, code on integration+main, merge-base checked): T-109 1771, T-280 1767, T-282 1768, T-285 1769, T-287 1770 (rest T-450, 3161),
-  T-136 1772 (gaps T-312/T-313), T-338 1846 (e4efeca; rest T-342). WAITS: T-259 QA FAIL 1773 (full text; rest T-315/T-316) -> waits-t315-t316;
+  T-136 1772 (gaps T-312/T-313). CORRECTION: T-338 has NO QA pass, only blind re-review 1846 SAFE AFTER FIXES (e4efeca merged; B3 rest T-342):
+  needs a qa-verifier before done. WAITS: T-259 QA FAIL 1773 (full text; rest T-315/T-316) -> waits-t315-t316;
   T-317 part 2 = live Keep going run on the real portal -> waits-live-run (production: a person's step).
 - 16:57 Workspace restarted by coordinator (pilot browser, T-619, D-73); release portal 2026.10.15-12 merged (c29d75c7). All 6 workers' processes stopped;
   every worktree clean and pushed. Woke QA Perf, impl-t426, BE Infra, Backend, impl-t548 by message (re-run cut Jobs). QA UI respawned 80df7bb9 on qa/T-600-ui-r2.
