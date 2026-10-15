@@ -18,7 +18,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - T-623 S1b DONE 784926f (5855; 6d431441 ended; lead read diff: stdin not argv, Memory emptyDir 0400, no values in audit/hash, no RBAC) -> QA Perf queue.
 - BE INFRA respawned e92c5ba3 (ticket/T-578-gate-reuse) on T-578 S1 (reuse green gate of same tree + per-file progress): a GATE change,
   merge only on a person's ack + blind review. T-578 claim refused by id (T-634): worker on it by spawn.
-- QA PERF 7e4879c7 (lane/cp-qa-perf): current item, then T-426 S1c+S1d 80f5bb72 (FRONT, owner), then rest of T-600 BE 1a95fb03 / T-597 S1b 75656845, then T-623 S1b 784926f, then T-591 S1d delta 394abdd5; T-636 trust check queued after T-426 (19:33). QA is the bottleneck (6 queued).
+- QA PERF 7e4879c7 (lane/cp-qa-perf) queue (19:59): T-623 S1b -> T-636 -> T-591 S1d -> T-600 BE/T-597 (if not done) -> T-325 S1 -> T-558 S1b.
 - T-576 phone check (390/1280 on the real build) still open; kit 44 px -> T-639. Closes on that evidence (5991).
 - T-600 FE S1c DONE d1b31305 (5954; fa9d3d56 ended) -> QA UI respawned de862414 on qa/T-600-ui-r4 81684f78 (r3 + FE head, lead merge)
   re-runs crew-grid.mjs at 390/1280. Frontend lane is free: next FE item when the QA UI verdict is in.
@@ -26,7 +26,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   T-426 ab93b54: QA Perf PASS 33/33 (5564) but blind review d4c49b5c FAIL 5571 (sev 2: refused arg echoed, pasted hex secret printed).
   S1b 350dd399 (5661): 2nd blind review 14385e7d CHANGES 5674 (sev 2: parser :104 echoes $1, lead confirmed) -> decision 5682 ->
   S1c DONE 5d9bee7e (5743) -> delta review 3a7d9ffc PASS WITH CONDITIONS 5777 (apply annotation, non-UTF-8 error echo, 2 doc
-  over-claims, no failure-path tests) -> decision 5778 -> S1d DONE 80f5bb72 (5852; ba717049 ended) -> QA Perf S1c+S1d -> gate -> merge on T-401 ack.
+  over-claims, no failure-path tests) -> decision 5778 -> S1d DONE 80f5bb72 (5852) -> QA Perf PASS WITH GAPS 5992 (create-stderr mutant
+  survived; docs not re-read) -> decision 5995: S1e test + doc re-read on BE INFRA after T-578 -> delta QA -> gate -> merge on T-401 ack.
   T-401 re-merged wip/main-54ba328: gate GREEN gate-54ba328-6502 (suite 570 s, peak 2228Mi; 5560/5562); ff only on the person's ack (4941).
 - T-379 S2 3f11b28 PASS (4948; review 4938) -> merge after T-401. T-401 060aca4: review 4936, QA 4943; HELD on the ack (4941).
 - T-416 (high incident): S1 d37c5f0 QA PASS WITH GAPS 4623; S1b a769b00 QA FAIL 5792 -> S1c 0e5bcf50. S2 = Bypass restore.
