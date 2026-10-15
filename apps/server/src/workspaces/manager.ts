@@ -19,6 +19,7 @@ import {
 } from '@portal/contracts';
 import { workspaceRef, type Actor } from '@portal/contracts';
 import { actorString, actorUserId, ownerActor, requireCan } from '../authz/seam.js';
+import { redact } from '../chat/redact.js';
 import type { JsonFile } from '../jsonFile.js';
 import { PLAIN_NAME } from '../names.js';
 import { findWorkspace, WorkspaceIdentities, type WorkspaceIdentity } from './identity.js';
@@ -35,11 +36,38 @@ const SETTLE_MS = 20_000;
 
 const CHECK_TTL_MS = 10_000;
 const CHECK_TIMEOUT_MS = 4_000;
+/** How long one target's list may take before the manager answers from its last good list (T-515): a slow API never holds up the page. */
+const LIST_TIMEOUT_MS = 8_000;
+/** How often an unchanged last good list is written again (only its time moved): the file stays quiet while the lists do. */
+const LAST_KNOWN_REWRITE_MS = 60_000;
 
-/** How long a target's check counts, and how long one may take (tests shorten both). */
+/** How long a target's check counts, and how long one may take, and how long a list may take (tests shorten them). */
 export interface CheckTiming {
   ttlMs?: number;
   timeoutMs?: number;
+  listTimeoutMs?: number;
+}
+
+/** A target's last good list (T-515): what its runtime last answered, and when. Kept in memory and on disk, per target id. */
+export interface LastKnownList {
+  at: string;
+  workspaces: Workspace[];
+}
+export type LastKnownLists = Record<string, LastKnownList>;
+
+const REASON_MAX = 160;
+
+/**
+ * Why a target's list could not be had, as the UI may show it: one line, credential shapes redacted, no URL (a kube URL may carry a
+ * token or an internal address), at most 160 characters.
+ */
+export function unavailableReason(e: unknown): string {
+  const text = redact(runtimeMessage(e))
+    .replace(/\b[a-z][a-z0-9+.-]*:\/\/\S+/gi, '[url]')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const short = text.length > REASON_MAX ? `${text.slice(0, REASON_MAX - 1)}…` : text;
+  return short || 'No answer';
 }
 
 /** The readable part of a Docker (`json.message`) or Kubernetes (`body.message`) error. */
@@ -57,13 +85,17 @@ export function runtimeMessage(e: unknown): string {
   return err.message ?? String(e);
 }
 
-const timeout = <T>(p: Promise<T>, ms: number) =>
-  Promise.race([p, new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Timed out')), ms))]);
+/** `p`, or "Timed out" after `ms`; the timer goes when `p` settles first (a list answers on every page load). */
+const timeout = <T>(p: Promise<T>, ms: number): Promise<T> => {
+  let timer: NodeJS.Timeout | undefined;
+  return Promise.race([p, new Promise<never>((_, reject) => (timer = setTimeout(() => reject(new Error('Timed out')), ms)))]).finally(() => clearTimeout(timer));
+};
 
 /**
  * Every target's workspaces in one place. What exists is read from the runtimes each time; only
  * creates in flight (and creates that failed, until removed) live here. Those are also saved to
- * disk, so a restart picks an interrupted create back up instead of dropping it.
+ * disk, so a restart picks an interrupted create back up instead of dropping it. Each target's last
+ * good list is kept too (memory and disk), shown `unavailable` while its runtime does not answer (T-515).
  */
 export class Workspaces {
   readonly #runtimes = new Map<string, Runtime>();
@@ -75,6 +107,13 @@ export class Workspaces {
   readonly #checking = new Map<string, Promise<WorkspaceTarget>>();
   readonly #ttlMs: number;
   readonly #timeoutMs: number;
+  readonly #listTimeoutMs: number;
+  /** Per target: its last good list (T-515), read from disk at the start so a restart during an outage keeps it too. */
+  readonly #lastGood = new Map<string, LastKnownList>();
+  /** When each target's last good list was last written, and the list then (to write only when it changed, or a minute on). */
+  readonly #lastWritten = new Map<string, { at: number; json: string }>();
+  /** Targets whose last list came from `#lastGood` (their API did not answer), with the reason shown. */
+  readonly #unavailable = new Map<string, string>();
   /**
    * `beforeStop`: runs (for at most 5 s) before the portal stops a workspace, such as an outbox pull.
    * `changed`: the list changed through the portal (a create's progress, start, stop, remove).
@@ -107,6 +146,8 @@ export class Workspaces {
     private readonly saved: JsonFile<Workspace[]>,
     timing: CheckTiming = {},
     identities: WorkspaceIdentities = WorkspaceIdentities.memory(),
+    /** Where the last good lists live between restarts (T-515); none: memory only. */
+    private readonly lastKnown: JsonFile<LastKnownLists> | null = null,
   ) {
     this.identities = identities;
     for (const r of runtimes) {
@@ -115,6 +156,14 @@ export class Workspaces {
     }
     this.#ttlMs = timing.ttlMs ?? CHECK_TTL_MS;
     this.#timeoutMs = timing.timeoutMs ?? CHECK_TIMEOUT_MS;
+    this.#listTimeoutMs = timing.listTimeoutMs ?? LIST_TIMEOUT_MS;
+    const stored = lastKnown?.read() ?? {};
+    for (const [id, entry] of Object.entries(stored && typeof stored === 'object' ? stored : {})) {
+      if (entry && typeof entry.at === 'string' && Array.isArray(entry.workspaces)) {
+        this.#lastGood.set(id, entry);
+        this.#lastWritten.set(id, { at: Date.parse(entry.at) || 0, json: JSON.stringify(entry.workspaces) });
+      }
+    }
   }
 
   /* ---------- Runtimes that come and go (enrolled targets, targets-connect PRD §12.5, FR36) ---------- */
@@ -137,6 +186,9 @@ export class Workspaces {
     this.#unwatch(targetId);
     this.#known.delete(targetId);
     this.#checking.delete(targetId);
+    this.#unavailable.delete(targetId);
+    this.#lastWritten.delete(targetId);
+    if (this.#lastGood.delete(targetId)) this.#saveLastKnown();
     this.#runtimeListeners.forEach((fn) => fn(targetId, null));
     this.hooks.changed?.();
   }
@@ -273,21 +325,7 @@ export class Workspaces {
 
   async list(): Promise<Workspace[]> {
     const targets = (await this.targets()).filter((t) => this.#runtimes.has(t.id));
-    // An enrolled target that can't be reached shows its last known list, each workspace `unreachable` (FR37); a scanned one is skipped.
-    const lastKnown = (t: WorkspaceTarget) => this.#runtimes.get(t.id)?.listLastKnown?.() ?? [];
-    const lists = await Promise.all(
-      targets.map((t) =>
-        !t.available
-          ? lastKnown(t)
-          : this.#runtime(t.id)
-              .list()
-              .catch((e: unknown) => {
-                if (isTargetUnreachable(e)) return lastKnown(t);
-                console.error(`[workspaces] listing ${t.id} failed: ${runtimeMessage(e)}`);
-                return [];
-              }),
-      ),
-    );
+    const lists = await Promise.all(targets.map((t) => this.#listOf(this.#runtimes.get(t.id)!, t)));
     // Every workspace a runtime reports has an identity: one it has no record of yet gets its id now, with the runtime name the runtime
     // says it has (T-42); the response carries both the id and the alias.
     const found = lists.flat().map((w) => this.#identified(w));
@@ -296,6 +334,64 @@ export class Workspaces {
     for (const [id, w] of this.#pending) if (w.status === 'creating' && ids.has(id)) this.#deletePending(id);
     const pending = [...this.#pending.values()].filter((w) => !ids.has(w.id));
     return [...pending, ...found].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+
+  /**
+   * One target's workspaces for the list. An enrolled target whose tunnel is down shows its own last known list, each `unreachable` (FR37).
+   * Any other target whose check or list fails or takes longer than the list timeout shows its last good list, each `unavailable` with the
+   * reason and the time of that answer (T-515), instead of vanishing; its next good answer replaces it.
+   */
+  async #listOf(runtime: Runtime, t: WorkspaceTarget): Promise<Workspace[]> {
+    const id = t.id;
+    if (!t.available) {
+      if (runtime.listLastKnown) return runtime.listLastKnown();
+      return this.#fromLastGood(id, t.problem ?? 'No answer');
+    }
+    try {
+      const list = await timeout(runtime.list(), this.#listTimeoutMs);
+      if (this.#runtimes.get(id) === runtime) this.#remember(id, list);
+      return list;
+    } catch (e) {
+      if (isTargetUnreachable(e) && runtime.listLastKnown) return runtime.listLastKnown();
+      console.error(`[workspaces] listing ${id} failed: ${unavailableReason(e)}`);
+      return this.#fromLastGood(id, e);
+    }
+  }
+
+  /** The target's last good list, each workspace `unavailable` (T-515); empty when it never answered. */
+  #fromLastGood(id: string, why: unknown): Workspace[] {
+    const reason = unavailableReason(typeof why === 'string' ? new Error(why) : why);
+    const last = this.#lastGood.get(id);
+    if (!last) return [];
+    if (this.#unavailable.get(id) !== reason) console.log(`[workspaces] ${id} unavailable, showing its list of ${last.at}: ${reason}`);
+    this.#unavailable.set(id, reason);
+    return last.workspaces.map((w) => ({ ...w, status: 'unavailable' as const, detail: reason, lastSeenAt: last.at }));
+  }
+
+  /** A good answer: kept as the target's last good list, written to disk when it changed (or a minute on, for its time). */
+  #remember(id: string, list: Workspace[]) {
+    const now = Date.now();
+    if (this.#unavailable.delete(id)) console.log(`[workspaces] ${id} answers again`);
+    this.#lastGood.set(id, { at: new Date(now).toISOString(), workspaces: list });
+    if (!this.lastKnown) return;
+    const json = JSON.stringify(list);
+    const written = this.#lastWritten.get(id);
+    if (written && written.json === json && now - written.at < LAST_KNOWN_REWRITE_MS) return;
+    this.#lastWritten.set(id, { at: now, json });
+    this.#saveLastKnown();
+  }
+
+  #saveLastKnown() {
+    try {
+      this.lastKnown?.write(Object.fromEntries(this.#lastGood));
+    } catch (e) {
+      console.error(`[workspaces] could not save the last known lists: ${(e as Error).message}`);
+    }
+  }
+
+  /** Whether a target's last list came from its last good answer (its API did not answer): calls that need the target skip it (T-515). */
+  isUnavailable(targetId: string): boolean {
+    return this.#unavailable.has(targetId);
   }
 
   /** A listed workspace with its identity: adopted when the portal has no record of it, the stored runtime name over the reported one. */
@@ -710,7 +806,8 @@ export class Workspaces {
     const id = workspaceId(target, name);
     if (this.#pending.has(id)) return true;
     try {
-      return (await runtime.list()).some((w) => w.id === id);
+      // Bounded like the list (T-515): a slow API answers "yes" in time instead of holding the caller.
+      return (await timeout(runtime.list(), this.#listTimeoutMs)).some((w) => w.id === id);
     } catch {
       return true;
     }

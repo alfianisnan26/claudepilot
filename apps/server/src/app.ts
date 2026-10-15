@@ -544,6 +544,8 @@ export function createApp(
   ws.get('/:target/:name/claudes', async (c) => {
     const [target, name] = [c.req.param('target'), c.req.param('name')];
     const live = (await chatController.claudesOf(`${target}/${name}`)).filter((x) => !x.removedAt);
+    // Its target's API does not answer (T-515): the Claudes come from the store, and their sign-in and terminals are unknown, not waited for.
+    if (workspaces.isUnavailable(target)) return c.json(success(live.map((claude): WorkspaceClaudeState => ({ claude, auth: null, terminals: 0 }))));
     const open = await terminals.list(target, name).catch(() => []);
     const states = await Promise.all(
       live.map(async (claude): Promise<WorkspaceClaudeState> => ({
