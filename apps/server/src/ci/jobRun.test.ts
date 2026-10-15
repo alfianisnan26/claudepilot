@@ -62,6 +62,7 @@ if (verb === 'get' && kind === 'jobs') { process.stdout.write(JSON.stringify({ i
 else if (verb === 'get' && kind === 'job') { const j = job(name); if (!j) process.exit(1); process.stdout.write(a.includes('json') ? JSON.stringify(k8s(j)) : 'uid-' + name); }
 else if (verb === 'get' && kind === 'pods' && a.includes('json')) { process.stdout.write(JSON.stringify(podOf(job(a[3].replace('job-name=', ''))))); }
 else if (verb === 'create' && kind === 'secret') { const t = stdin(); lock((s) => { s.secrets[a[3]] = t; }); }
+else if (verb === 'top' && kind === 'nodes') { const t = path.join(F, 'top.txt'); if (!fs.existsSync(t)) process.exit(1); const v = fs.readFileSync(t, 'utf8'); if (v === 'FAIL') process.exit(1); process.stdout.write(v); }
 else if (verb === 'apply') { const m = stdin(); const n = m.match(/^ {2}name: (\S+)/m)[1]; fs.mkdirSync(path.join(F, 'applied'), { recursive: true }); fs.writeFileSync(path.join(F, 'applied', n + '.yaml'), m);
   const lab = (k) => m.match(new RegExp(k + ': ([^,}]+)'))[1].trim();
   lock((s) => { s.seq += 1; s.jobs.push({ name: n, chat: lab('job-run/chat'), role: lab('job-run/role'), program: lab('job-run/program'), owner: m.match(/job-run\/owner: "([^"]*)"/)[1], suspend: true, seq: s.seq }); }); }
@@ -74,7 +75,8 @@ else { process.stderr.write('unexpected kubectl ' + args.join(' ') + '\n'); proc
 `;
 
 interface Seed { name: string; chat: string; suspend?: boolean; done?: boolean; rc?: number; owner?: string; program?: string; repo?: string }
-interface Scenario { log?: string; rc?: number; hang?: boolean; oom?: boolean; evicted?: string; reason?: string }
+/** What the fake "kubectl top nodes" prints for the control-plane node (T-611): a memory percentage, a raw text, or "FAIL"; none = the metrics API is missing (exit 1). */
+interface Scenario { top?: number | string; log?: string; rc?: number; hang?: boolean; oom?: boolean; evicted?: string; reason?: string }
 
 const hex = (n: number) => randomBytes(n).toString('hex');
 
@@ -96,6 +98,7 @@ function world(seeds: Seed[] = [], scenario: Scenario = {}) {
   writeFileSync(join(bin, 'gh'), '#!/bin/sh\nexit 1\n'); chmodSync(join(bin, 'gh'), 0o755);
   writeFileSync(join(root, 'state.json'), JSON.stringify({ seq: seeds.length, secrets: {}, jobs: seeds.map((s, i) => ({ suspend: false, ...s, seq: i })) }));
   const rc = scenario.rc ?? 0;
+  if (scenario.top !== undefined) writeFileSync(join(root, 'top.txt'), typeof scenario.top === 'number' ? `k3s-master   310m   7%   9000Mi   ${scenario.top}%\n` : scenario.top);
   writeFileSync(join(root, 'scenario.json'), JSON.stringify({ ...scenario, rc, hang: scenario.hang ?? false, log: scenario.log ?? jobLog(root, rc) }));
   // Runtime-made credentials (never literals): the npm token, and Gitea's through git's credential helper as the real script reads it.
   const npmToken = `fx${hex(18)}`, giteaToken = `gt${hex(18)}`;
@@ -114,8 +117,8 @@ function world(seeds: Seed[] = [], scenario: Scenario = {}) {
     const done = new Promise<{ code: number | null; out: string }>((res) => p.on('close', (code) => res({ code, out })));
     return { p, done, out: () => out };
   };
-  const run = (argv: string[], over: Record<string, string> = {}) => {
-    const r = spawnSync('bash', [SCRIPT, ...argv], { env: env(over), cwd: root, encoding: 'utf8', timeout: 30_000 });
+  const run = (argv: string[], over: Record<string, string> = {}, script = SCRIPT) => {
+    const r = spawnSync('bash', [script, ...argv], { env: env(over), cwd: root, encoding: 'utf8', timeout: 30_000 });
     return { code: r.status, out: r.stdout + r.stderr };
   };
   const state = () => JSON.parse(readFileSync(join(root, 'state.json'), 'utf8')) as { secrets: Record<string, string>; jobs: (Seed & { suspend: boolean })[] };
@@ -708,7 +711,7 @@ test('the Job\'s own script: the proof (passes on the ref, fails on the other, k
 
 test('T-365: job-run and gate Jobs prefer a node away from the portal (preferred: a required rule left every Job Pending)', () => {
   for (const name of ['job-run.yaml', 'gate-job.yaml']) {
-    const text = readFileSync(join(REPO, 'deploy/k3s-build', name), 'utf8').replace(/__[A-Z_]+__/g, 'x');
+    const text = readFileSync(join(REPO, 'deploy/k3s-build', name), 'utf8').replace(/__MASTER_REQUIRED__/g, '').replace(/__[A-Z_]+__/g, 'x');
     type Term = { weight: number; podAffinityTerm: { namespaces: string[]; labelSelector: { matchLabels: Record<string, string> } } };
     const job = yamlLoad(text) as { spec: { template: { spec: { affinity?: { podAntiAffinity?: { requiredDuringSchedulingIgnoredDuringExecution?: unknown[]; preferredDuringSchedulingIgnoredDuringExecution?: Term[] } } } } } };
     const anti = job.spec.template.spec.affinity?.podAntiAffinity;
@@ -728,7 +731,7 @@ test('T-524: the heavy Jobs prefer a node other than the control plane (preferre
     containers: { resources: { requests: { memory: string }; limits: { memory: string } } }[]; volumes?: { name: string; emptyDir?: { sizeLimit?: string } }[] };
   const gi = (v: string) => { const m = /^(\d+)(Gi|Mi)$/.exec(v); assert.ok(m, v); return Number(m[1]) / (m[2] === 'Mi' ? 1024 : 1); };
   for (const name of ['job-run.yaml', 'gate-job.yaml', 'browser-job.yaml']) {
-    const text = readFileSync(join(REPO, 'deploy/k3s-build', name), 'utf8').replace(/__MEMORY__/g, '4Gi').replace(/__TMP_SIZE__/g, '2Gi').replace(/__[A-Z_]+__/g, 'x');
+    const text = readFileSync(join(REPO, 'deploy/k3s-build', name), 'utf8').replace(/__MASTER_REQUIRED__/g, '').replace(/__MEMORY__/g, '4Gi').replace(/__TMP_SIZE__/g, '2Gi').replace(/__[A-Z_]+__/g, 'x');
     const pod = (yamlLoad(text) as { spec: { template: { spec: Pod } } }).spec.template.spec;
     const na = pod.affinity?.nodeAffinity;
     assert.equal(na?.requiredDuringSchedulingIgnoredDuringExecution, undefined, `${name}: never required (a required rule left every Job Pending)`);
@@ -739,4 +742,73 @@ test('T-524: the heavy Jobs prefer a node other than the control plane (preferre
     if (tmp) assert.ok(gi(tmp) < gi(lim), `${name}: the in-memory /tmp (${tmp}) fits inside the limit (${lim}) with room for the processes`);
   }
   // The label the rule names is on k3s-master (kubectl get nodes --show-labels, 2026-10-15): node-role.kubernetes.io/control-plane=true.
+});
+
+// T-611: the scheduler counts memory REQUESTS, the control-plane node's own pods use far more for real. job-run.sh reads its real use
+// (kubectl top) and, over JOB_RUN_MASTER_MAX_PCT (75), makes the rule away from the control plane REQUIRED in the Job's manifest.
+const CP_RULE = { nodeSelectorTerms: [{ matchExpressions: [{ key: 'node-role.kubernetes.io/control-plane', operator: 'DoesNotExist' }] }] };
+type NodeAff = { requiredDuringSchedulingIgnoredDuringExecution?: unknown; preferredDuringSchedulingIgnoredDuringExecution?: unknown };
+function placed(top: number | string | undefined, extra: string[] = [], over: Record<string, string> = {}, script = SCRIPT) {
+  const w = world([], top === undefined ? {} : { top });
+  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', ...extra, '--', 'true'], over, script);
+  const m = yamlLoad(w.applied1()) as Manifest;
+  const na = (m.spec.template.spec.affinity as { nodeAffinity: NodeAff }).nodeAffinity;
+  return { r, required: na.requiredDuringSchedulingIgnoredDuringExecution, preferred: na.preferredDuringSchedulingIgnoredDuringExecution };
+}
+/** A scratch checkout of the two files under test, each optionally edited (the mutation: the same check must fail on the mutant). */
+function mutant(editYaml: (s: string) => string, editScript: (s: string) => string) {
+  const dir = mkdtempSync(join(tmpdir(), 'cp-jobrun-mut-'));
+  roots.push(dir);
+  mkdirSync(join(dir, 'scripts')); mkdirSync(join(dir, 'deploy/k3s-build'), { recursive: true });
+  writeFileSync(join(dir, 'deploy/k3s-build/job-run.yaml'), editYaml(readFileSync(TEMPLATE, 'utf8')));
+  writeFileSync(join(dir, 'scripts/job-run.sh'), editScript(readFileSync(SCRIPT, 'utf8')));
+  return join(dir, 'scripts/job-run.sh');
+}
+
+test('T-611: over the line the Job gets a REQUIRED rule away from the control plane, for a normal Job and --big, and the log says so', () => {
+  for (const extra of [[], ['--big']]) {
+    const p = placed(83, extra);
+    assert.equal(p.r.code, 0, p.r.out);
+    assert.deepEqual(p.required, CP_RULE, `required rule (${extra.join(' ') || 'normal'})`);
+    assert.ok(p.preferred, 'the preferred rules stay');
+    assert.match(p.r.out, /placement: the control-plane node is at 83% of its memory \(over 75%\).*waits for k3s-node2/);
+    assert.match(p.r.out, /rc=0 in \d+s .* on k3s-master with/, 'the final line names the node');
+  }
+  assert.deepEqual(placed(76).required, CP_RULE, 'just over');
+  const custom = placed(60, [], { JOB_RUN_MASTER_MAX_PCT: '50' });
+  assert.deepEqual(custom.required, CP_RULE, 'the line is JOB_RUN_MASTER_MAX_PCT');
+});
+
+test('T-611: at or under the line, or when the metrics fail, only the preferred rules apply (a metrics failure never blocks every Job)', () => {
+  const cases: [string, number | string | undefined][] = [['under', 60], ['at the line', 75], ['API missing', undefined], ['kubectl fails', 'FAIL'], ['not a number', 'k3s-master <unknown> <unknown> <unknown> <unknown>\n'], ['empty', '']];
+  for (const [what, top] of cases) {
+    for (const extra of [[], ['--big']]) {
+      const p = placed(top, extra);
+      assert.equal(p.r.code, 0, `${what}: ${p.r.out}`);
+      assert.equal(p.required, undefined, `${what}: no required rule`);
+      assert.ok(p.preferred, `${what}: preferred rules`);
+    }
+  }
+  assert.match(placed(60).r.out, /placement: the control-plane node is at 60% of its memory \(limit 75%\): preferred rules only/);
+  assert.match(placed(undefined).r.out, /placement: the control-plane node's memory is unknown \(metrics unavailable\): preferred rules only/);
+  const bad = world([], { top: 50 }).run(['--repo', 'claudepilot', '--ref', 'main', '--', 'true'], { JOB_RUN_MASTER_MAX_PCT: 'lots' });
+  assert.equal(bad.code, 2, 'a bad line is a usage error');
+});
+
+test('T-611 mutation: without the rule in the Job\'s clone of the template, or in the script, the over-the-line check fails', () => {
+  assert.deepEqual(placed(90).required, CP_RULE, 'the real files pass the check');
+  const noTemplateMarker = mutant((y) => y.replace(/^ *__MASTER_REQUIRED__\n/m, ''), (s) => s);
+  assert.notDeepEqual(placed(90, [], {}, noTemplateMarker).required, CP_RULE, 'template without the marker: the required rule is missing, so the check catches it');
+  const noScriptRule = mutant((y) => y, (s) => s.replace('-e "s#__MASTER_REQUIRED__#$master_rule#"', '-e "s#__MASTER_REQUIRED__##"'));
+  assert.notDeepEqual(placed(90, [], {}, noScriptRule).required, CP_RULE, 'script that never fills the rule: caught');
+  const neverOver = mutant((y) => y, (s) => s.replace('[ "$master_pct" -gt "$master_max" ]', '[ "$master_pct" -gt 1000 ]'));
+  assert.notDeepEqual(placed(90, [], {}, neverOver).required, CP_RULE, 'script that ignores the reading: caught');
+});
+
+test('T-611: a Job Pending on the required rule says it waits for k3s-node2', async () => {
+  const w = world([], { top: 88 });
+  writeFileSync(join(w.root, 'pending'), "0/2 nodes are available: 1 node(s) didn't match Pod's node affinity/selector, 1 Insufficient memory.");
+  const j = w.start(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'true'], { JOB_RUN_START_WAIT_S: '1' });
+  const r = await j.done;
+  assert.match(r.out, /is Pending: the control-plane node is over 75% of its memory, so this Job waits for k3s-node2/);
 });
