@@ -146,7 +146,8 @@ scripts/job-run.sh --repo konfersi:<org>/<repo> --ref <branch> --image registry.
 ```
 
 - **`--image <ref>` (T-379):** the image of the command container only. Allowed: `registry.int.isnan.me/claudepilot/<path>` or
-  `registry.int.isnan.me/konfersi/<path>` (the paths `scripts/image-build.sh` pushes to), pinned by `:<tag>` or `@sha256:<digest>`; any other
+  `registry.int.isnan.me/konfersi/<path>` or `registry.int.isnan.me/event/<path>` (the paths `scripts/image-build.sh` pushes to), pinned by
+  `:<tag>` (never `:latest`) or `@sha256:<digest>`; any other
   registry, path or odd character is refused (rc 2) before any kubectl call. The `fetch` container, the only one with the credentials, keeps the
   workspace image, and the checkout reaches the command container on the shared `/tmp`, as without the option. The image may have no node, npm
   or git: the npm steps are skipped with a note (`--steps npm-ci` is refused) and `--against` is refused. Without `--image` nothing changes.

@@ -20,8 +20,8 @@
 #     --also <org>/<repo>[@<ref>]                     one more repository cloned next to it (Konfersi's file:../konfersi-shared), ref stg
 #     --steps npm-ci|none                               before the command (default npm-ci, at the root of the repository and of each --also clone that has a package-lock.json)
 #     --image <ref>                                     (T-379) the COMMAND container's image, for a test stage the workspace image lacks (Python, pytest):
-#                                                       registry.int.isnan.me/claudepilot/<path> or /konfersi/<path>, as built by scripts/image-build.sh,
-#                                                       pinned by :<tag> or @sha256:<digest>; anything else is refused before any kubectl call. The fetch
+#                                                       registry.int.isnan.me/claudepilot|konfersi|event/<path>, as built by scripts/image-build.sh,
+#                                                       pinned by :<tag> (not :latest) or @sha256:<digest>; anything else is refused before any kubectl call. The fetch
 #                                                       container (the only one with credentials) keeps the workspace image. The image may have no
 #                                                       node, npm or git: the npm steps are skipped (--steps npm-ci is refused) and --against is refused
 #     --artifacts <paths>  --out <dir>                  files in the repository (comma separated) copied back into <dir> (default
@@ -104,11 +104,11 @@ done
 if [ $# -eq 1 ]; then cmd=$1; else cmd=$(printf '%q ' "$@"); fi
 [[ $steps =~ ^(npm-ci|none)$ ]] || die "--steps: npm-ci or none"
 # --image (T-379): the command container's image, from the internal registry only, under the paths scripts/image-build.sh pushes to
-# (claudepilot/ and konfersi/), pinned by a tag or a sha256 digest. Checked here, before any kubectl call. The fetch container (the only one
+# (claudepilot/, konfersi/ and event/, the three programs), pinned by a tag or a sha256 digest. Checked here, before any kubectl call. The fetch container (the only one
 # with the credentials) keeps the workspace image; the command's image never sees them.
 if [ -n "$image_given" ]; then
-  img_re="^${registry//./\\.}/(claudepilot|konfersi)/[a-z0-9]+([._-][a-z0-9]+)*(/[a-z0-9]+([._-][a-z0-9]+)*)*(:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}|@sha256:[0-9a-f]{64})\$"
-  [[ $run_image =~ $img_re ]] || die "--image: an image on $registry under claudepilot/ or konfersi/ (as built by scripts/image-build.sh), pinned by a :tag or @sha256:<digest> (got $run_image)"
+  img_re="^${registry//./\\.}/(claudepilot|konfersi|event)/[a-z0-9]+([._-][a-z0-9]+)*(/[a-z0-9]+([._-][a-z0-9]+)*)*(:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}|@sha256:[0-9a-f]{64})\$"
+  [[ $run_image =~ $img_re && $run_image != *:latest ]] || die "--image: an image on $registry under claudepilot/, konfersi/ or event/ (as built by scripts/image-build.sh), pinned by a :tag (not :latest) or @sha256:<digest> (got $run_image)"
   # No node, npm or git is assumed in a foreign image: the npm steps are skipped, and the proof (it needs git in the command container) is refused.
   [ -z "$steps_given" ] || [ "$steps" = none ] || die "--image: the image may have no node or npm; use --steps none (or leave --steps out)"
   [ -z "$against" ] || die "--image cannot be used with --against (the proof needs git in the command container)"

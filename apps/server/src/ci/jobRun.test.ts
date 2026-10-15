@@ -558,7 +558,7 @@ test('T-379 --image: an allowed ref is the command container\'s image only; fetc
   const none = w0.applied1();
   assert.deepEqual([imagesOf(none).fetch, imagesOf(none).run], [ws, ws]);
   assert.ok(!/__[A-Z_]+__/.test(none.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n')));
-  for (const ref of ['registry.int.isnan.me/claudepilot/py-test:abc123', 'registry.int.isnan.me/konfersi/metocean/test-stage:req-9f2', `registry.int.isnan.me/claudepilot/py-test@${digest}`]) {
+  for (const ref of ['registry.int.isnan.me/claudepilot/py-test:abc123', 'registry.int.isnan.me/konfersi/metocean/test-stage:req-9f2', 'registry.int.isnan.me/event/web-test:r1',`registry.int.isnan.me/claudepilot/py-test@${digest}`]) {
     const w = world();
     const r = w.run([...base, '--image', ref, '--', 'python -m pytest -q']);
     assert.equal(r.code, 0, r.out);
@@ -586,7 +586,7 @@ test('T-379 --image: another registry, a path outside the prefix, an untagged or
   const w = world();
   const bad = [
     'docker.io/library/python:3.11', 'registry.evil.example/claudepilot/x:1', 'registry.int.isnan.me.evil.example/claudepilot/x:1',
-    'registry.int.isnan.me/other/x:1', 'registry.int.isnan.me/claudepilot', 'registry.int.isnan.me/claudepilot/x', 'registry.int.isnan.me/claudepilot/x:latest;id',
+    'registry.int.isnan.me/other/x:1', 'registry.int.isnan.me/claudepilot/x:latest', 'registry.int.isnan.me/event/x:latest', 'registry.int.isnan.me/claudepilot', 'registry.int.isnan.me/claudepilot/x', 'registry.int.isnan.me/claudepilot/x:latest;id',
     'registry.int.isnan.me/claudepilot/x:1 --privileged', 'registry.int.isnan.me/claudepilot/x:$(id)', 'registry.int.isnan.me/claudepilot/../other/x:1',
     'registry.int.isnan.me/claudepilot/X:1', 'registry.int.isnan.me/claudepilot/x@sha256:abc', 'registry.int.isnan.me/claudepilot/x:1\nimage: y', 'registry.int.isnan.me/claudepilot/x:1#y',
     'http://registry.int.isnan.me/claudepilot/x:1', 'registry.int.isnan.me/konfersi//x:1', '',
@@ -594,7 +594,7 @@ test('T-379 --image: another registry, a path outside the prefix, an untagged or
   for (const ref of bad) {
     const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--image', ref, '--', 'true']);
     assert.equal(r.code, 2, `${JSON.stringify(ref)}: ${r.out}`);
-    assert.match(r.out, /--image: an image on registry\.int\.isnan\.me under claudepilot\/ or konfersi\//);
+    assert.match(r.out, /--image: an image on registry\.int\.isnan\.me under claudepilot\/, konfersi\/ or event\//);
   }
   const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--image', 'registry.int.isnan.me/claudepilot/x:1', '--against', 'abc1234', '--', 'true']);
   assert.equal(r.code, 2, r.out);
