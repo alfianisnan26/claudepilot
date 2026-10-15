@@ -3233,6 +3233,15 @@ export const MIGRATIONS: Migration[] = [
     },
   },
   {
+    version: 776,
+    name: 'chat sessions: the branch of a worker\'s folder when it started (T-476)',
+    up(db) {
+      // T-476: a worker started in a plain folder that is a git work tree records the folder's branch once, at its start, so CI counts it as
+      // the worker's own branch (ci_run_trigger). Null for every row so far, and for sessions with a worktree of their own.
+      db.exec(`ALTER TABLE chat_sessions ADD COLUMN folder_branch TEXT;`);
+    },
+  },
+  {
     version: 870,
     name: 'notify: quota alerts as one row that updates, and the Claudes a person hears of when idle (T-126)',
     up(db) {

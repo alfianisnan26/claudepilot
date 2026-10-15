@@ -108,6 +108,11 @@ export interface ChatSession {
   parentId: string | null;
   /** The git worktree it runs in, which is also its `cwd`, or null when it runs in a plain folder. */
   worktree: ChatWorktree | null;
+  /**
+   * T-476: for a worker started in a plain folder (no worktree of the portal's) that is a git work tree on a branch, that branch as it was
+   * when the worker started (recorded once, never re-read): CI counts it as the session's own branch. Absent or null otherwise.
+   */
+  folderBranch?: string | null;
   /** Who started it: `ui` (a person), `ticket:<id>`, `session:<id>` or `portal-mcp:<token id>`; null for sessions from before this field. */
   startedBy: string | null;
   /**
