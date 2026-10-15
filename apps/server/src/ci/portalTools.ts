@@ -82,7 +82,7 @@ export function registerCiTools(ci: CiService, sessions: CiSessionsPort | undefi
   registry.register({
     name: 'ci_runs_list',
     title: 'List CI runs',
-    description: 'Recent runs of the pipelines in workspace remotes, newest first, as short rows (id, pipeline, branch, short sha, status, ticket, when); full true for every field, ci_run_get for one run. An agent sees the runs of its own branch and ticket; a lead (has workers) also every run on its program\'s remotes.',
+    description: 'Recent runs of the pipelines in workspace remotes, newest first, as short rows (id, pipeline, branch, short sha, status, ticket, when); full true for every field, ci_run_get for one run. An agent sees the runs of its own branch and ticket; a lead (has workers) also every run on its program\'s remotes, with stg_age_minutes per remote (minutes since the last stg deploy that passed, or "unavailable").',
     scope: 'agent',
     hints: { readOnly: true },
     input: z.object({
@@ -97,6 +97,9 @@ export function registerCiTools(ci: CiService, sessions: CiSessionsPort | undefi
       const limit = args.limit ?? 20;
       const status: CiStatus[] | undefined = args.status ? [args.status] : undefined;
       let items: CiRunSummary[];
+      // T-558: minutes since the last stg deploy that went through, per program remote; "unavailable" when there is none, never a guess.
+      let stgAge: { repo: string; minutes: number | 'unavailable' }[] = [];
+      const ageOf = (r: CiRepo) => ({ repo: r.name, minutes: ci.stgAgeMinutes(r.id) ?? ('unavailable' as const) });
       if (ctx.isAgent) {
         const me = ctx.sessionId ? sessions?.get(ctx.sessionId) : null;
         const found = new Map<string, CiRunSummary>();
@@ -107,6 +110,7 @@ export function registerCiTools(ci: CiService, sessions: CiSessionsPort | undefi
         const repos = ctx.workspaceId ? await ci.repos(ctx.workspaceId) : [];
         // A lead reads every run of its program's remotes (T-476).
         for (const r of repos) if (leadReadsRemote(me, r)) add(ci.list({ repo: r.id, status, limit }).items);
+        stgAge = repos.filter((r) => leadReadsRemote(me, r)).map(ageOf);
         items = [...found.values()]
           .filter((r) => own(ctx, r, repos.find((x) => x.id === r.repoId), true) &&(!args.branch || r.branch === args.branch) && (!args.ticket || r.ticketId === args.ticket))
           .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
@@ -114,7 +118,11 @@ export function registerCiTools(ci: CiService, sessions: CiSessionsPort | undefi
       } else {
         items = ci.list({ workspace: args.workspace_id, branch: args.branch, ticket: args.ticket, status, limit }).items;
       }
-      return { summary: `${items.length} run${items.length === 1 ? '' : 's'}`, runs: items.map((r) => (args.full ? runView(ctx, r) : runRow(r))) };
+      return {
+        summary: `${items.length} run${items.length === 1 ? '' : 's'}`,
+        runs: items.map((r) => (args.full ? runView(ctx, r) : runRow(r))),
+        ...(stgAge.length ? { stg_age_minutes: stgAge } : {}),
+      };
     },
   });
 
@@ -204,7 +212,8 @@ export function registerCiTools(ci: CiService, sessions: CiSessionsPort | undefi
     title: 'Start a CI run',
     description:
       'Starts a pipeline that has a manual trigger, on a branch or tag of a workspace remote. An agent: on its own branch (worktree, or a worker\'s folder ' +
-      'branch at start); a lead (has workers) also on dev/* or ticket/* of its program\'s remote (its folder); or a DEPLOYMENT pipeline (names an ' +
+      'branch at start); a lead (has workers) also on dev/* or ticket/* of its program\'s remote (its folder), and on its branch stg only a pipeline ' +
+      'that deploys to exactly the environment stg (e.g. stg-deploy); or a DEPLOYMENT pipeline (names an ' +
       'environment) on any branch of its workspace, whose deploying job waits for a person\'s approval. ' +
       'To deploy ClaudePilot from its development workspace: repo "claudepilot", pipeline "deploy", ref "integration"; inputs: images ("portal", "portal,workspace", ' +
       '"portal,workspace,workspace-dev" or "none"), gate (true: run the release gate first), deploy (false: build only), dry_run (true: print every action, change nothing). ' +
@@ -229,6 +238,8 @@ export function registerCiTools(ci: CiService, sessions: CiSessionsPort | undefi
       const run = await ci.startRun({ repoId: repo.id, pipeline: args.pipeline, ref: start?.ref ?? args.ref, inputs: args.inputs }, ctx.actor, {
         sessionId: ctx.isAgent ? ctx.sessionId : null,
         deploymentOnly: start?.rule === 'deployment' ? start.refusal : undefined,
+        // T-558: a lead on `stg` of its program's remote: only a pipeline that deploys to exactly stg (its file decides), else a missing remote.
+        stgOnly: start?.rule === 'program_stg' ? start.refusal : undefined,
         actorLabel: ctx.actorLabel ?? null,
         rule: start?.rule ?? 'token',
       });

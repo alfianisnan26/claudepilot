@@ -48,10 +48,25 @@ export const isProgramRemote = (repo: Pick<CiRepo, 'sourcePath' | 'connected'>, 
  * - `own_branch`: the branch its session works on (its worktree's, or a worker's folder branch at its start): any pipeline;
  * - `program_branch`: a lead (no parent, holds a crew) on a `dev/*` or `ticket/*` branch of its program's remote: any pipeline, on that BRANCH
  *   only (`refs/heads/...`, never a tag of the same name);
+ * - `program_stg` (T-558, D-62): a lead on the branch `stg` of its program's remote: only a pipeline whose every job that names an environment
+ *   names exactly `stg` (the file at that commit decides, never an input); anything else there is refused like a missing remote (`refusal`);
  * - `deployment`: anything else: only a pipeline that deploys to an environment, whose deploying job the portal holds for a person (today's rule,
  *   unchanged). A lead asking it on another program's remote is refused exactly like a remote that does not exist.
+ * Approval is untouched by every rule: a protected environment still holds its job for a person (or the environment's own rule, FR41a).
  */
-export type AgentStart = { rule: 'own_branch' | 'program_branch'; ref: string } | { rule: 'deployment'; ref: string; refusal: AppError };
+export type AgentStart =
+  | { rule: 'own_branch' | 'program_branch'; ref: string }
+  | { rule: 'program_stg'; ref: string; refusal: AppError }
+  | { rule: 'deployment'; ref: string; refusal: AppError };
+
+/** T-558: the one environment a lead may deploy to on its own (D-62: stg is the harness's; uat and production stay a person's). */
+export const LEAD_ENVIRONMENT = 'stg';
+
+/** T-558: a pipeline a lead may start on `stg`: at least one job names an environment, and every one that does names exactly `stg`. */
+export const deploysOnlyToStg = (jobs: readonly { hidden?: boolean; environment?: string | null }[]): boolean => {
+  const named = jobs.filter((j) => !j.hidden && j.environment);
+  return named.length > 0 && named.every((j) => j.environment === LEAD_ENVIRONMENT);
+};
 
 /**
  * T-476: is `branch` the session's own, on this remote? A worktree branch (flag set by the session adapter) is its own anywhere; a folder
@@ -78,6 +93,7 @@ export function agentStart(me: CiSession | null, repo: Pick<CiRepo, 'name' | 'wo
   if (me?.lead && me.cwd) {
     if (!isProgramRemote(repo, me.cwd)) return { rule: 'deployment', ref, refusal: noRemote(repo.name, repo.workspaceId) };
     if (isProgramBranch(ref)) return { rule: 'program_branch', ref: `refs/heads/${ref}` };
+    if (ref === LEAD_ENVIRONMENT) return { rule: 'program_stg', ref: `refs/heads/${ref}`, refusal: noRemote(repo.name, repo.workspaceId) };
   }
   const own = me?.branch ? ` (${me.branch})` : ', and this session has no worktree branch';
   return { rule: 'deployment', ref, refusal: new AppError('FORBIDDEN', `An agent can start a run only on the branch its own session works on${own}, or a pipeline that deploys to an environment.`) };

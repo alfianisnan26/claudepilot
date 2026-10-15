@@ -46,6 +46,7 @@ import {
 } from '@portal/contracts';
 import { NO_VALUES, SessionStream } from '../chat/valueRedact.js';
 import { evaluateRule, needsPersonOf, ruleLine, WINDOW } from './autoApprove.js';
+import { deploysOnlyToStg, LEAD_ENVIRONMENT } from './authz.js';
 import type { Store } from '../store/store.js';
 import { globMatches } from './glob.js';
 import { CiUnreachable, type CiHost, type CiReply } from './host.js';
@@ -164,7 +165,7 @@ export interface CiServiceOptions {
   secrets?: (workspaceId: string, name: string) => { kind: string; asFile: boolean; asVariable: boolean } | null;
   /** The platform audit (approvals, protection changes). Names, ids and fixed codes only. */
   audit?: (e: { kind: string; actor: string; userId: string | null; severity?: 'info' | 'medium' | 'high'; subject?: string; detail?: Record<string, unknown> }) => void;
-  /** The clock of the auto-approve rule (its daily cap and window, FR41a); tests pass a fake one. */
+  /** The clock of the auto-approve rule (its daily cap and window, FR41a) and of the stg age (T-558); tests pass a fake one. */
   now?: () => Date;
   /** Upstream sync (FR8a): how a host name resolves for the SSRF guard (default: the system's resolver); tests pass a fake one. */
   lookup?: Lookup;
@@ -1137,8 +1138,14 @@ export class CiService {
    * `deploymentOnly` refuses a pipeline in which no job names an environment: what an agent may start on a branch that is not its own (PRD §14);
    * a text is refused as FORBIDDEN, an error is thrown as it is (T-476: another program's remote reads as a missing one). `rule` names why an
    * agent may start it (T-476); every start is one platform audit row `ci.run_started`: who, which pipeline, on which branch, by which rule.
+   * `stgOnly` (T-558) refuses, with that error, a pipeline that is invalid or does not deploy to exactly `stg` (ci/authz.ts, deploysOnlyToStg):
+   * the environments come from the file at the resolved commit, never from the inputs.
    */
-  async startRun(req: Partial<StartCiRunRequest>, actor = 'ui', opts: { sessionId?: string | null; deploymentOnly?: string | AppError; actorLabel?: string | null; rule?: string } = {}): Promise<CiRun> {
+  async startRun(
+    req: Partial<StartCiRunRequest>,
+    actor = 'ui',
+    opts: { sessionId?: string | null; deploymentOnly?: string | AppError; stgOnly?: AppError; actorLabel?: string | null; rule?: string } = {},
+  ): Promise<CiRun> {
     if (typeof req.repoId !== 'string') throw invalid('repoId', 'Pick a remote.');
     const repo = this.#needRepo(req.repoId);
     if (typeof req.pipeline !== 'string' || !req.pipeline) throw invalid('pipeline', 'Pick a pipeline.');
@@ -1148,6 +1155,7 @@ export class CiService {
     const snap = await this.#snapshot(repo, ref.sha);
     const found = validateFiles(snap.files ?? []).pipelines.find((p) => p.info.file.replace(/^\.pilot\//, '').replace(/\.ya?ml$/, '') === req.pipeline);
     if (!found) throw notFound('pipeline');
+    if (opts.stgOnly && !(found.pipeline && deploysOnlyToStg(found.pipeline.jobs))) throw opts.stgOnly;
     if (!found.pipeline) throw new AppError('CONFLICT', 'That pipeline has errors. Fix them and push first.', { details: { diagnostics: found.info.diagnostics } });
     if (!found.pipeline.on.manual) throw new AppError('CONFLICT', 'That pipeline can not be started by hand: it has no manual trigger.');
     if (opts.deploymentOnly && !found.pipeline.jobs.some((j) => !j.hidden && j.environment)) throw typeof opts.deploymentOnly === 'string' ? new AppError('FORBIDDEN', opts.deploymentOnly) : opts.deploymentOnly;
@@ -1165,6 +1173,16 @@ export class CiService {
       detail: { workspace: repo.workspace_id, repo: repo.name, run: row.number, pipeline: req.pipeline, ref: ref.ref, sessionId: opts.sessionId ?? null, rule: opts.rule ?? null },
     });
     return this.get(row.id);
+  }
+
+  /**
+   * T-558: whole minutes since the last stg deploy of a remote that went through: a run that passed whose `stg` deploying job passed, timed at
+   * the run's end, on the service's clock. Null when there is none (or the deployments table is not there): the caller says "unavailable".
+   */
+  stgAgeMinutes(repoId: string): number | null {
+    const at = this.#cs.deploymentsReady ? this.#cs.lastDeployFinished(repoId, LEAD_ENVIRONMENT) : null;
+    const t = at ? Date.parse(at) : NaN;
+    return Number.isFinite(t) ? Math.max(0, Math.floor((this.#opts.now().getTime() - t) / 60_000)) : null;
   }
 
   async #resolveRef(repo: RepoRow, input: string): Promise<{ ref: string; sha: string }> {
