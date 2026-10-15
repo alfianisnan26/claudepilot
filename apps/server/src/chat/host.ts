@@ -56,9 +56,9 @@ def cpCmd:
   def launch($wild): if any(.[]; cpIn("-c", "--call") or startswith("--call=")) then true else cpDropOpts as $v | if ($v | length) == 0 then $wild else ($v | cpCmd) end end;
   def after($t; words): ([range(0; $t | length) | select($t[.] | cpIn(words))] | first) as $i | if $i == null then null else $t[$i + 1:] end;
   . as $t | any($t[]; test("\\*")) as $wild | $t[1:] as $r
-  | ($t[0] | gsub("[\"'\\\\]"; "")) as $raw | ($raw | sub("^.*/"; "") | ascii_downcase) as $c
+  | ($t[0] | gsub("[\"\\x27\\\\]"; "")) as $raw | ($raw | sub("^.*/"; "") | ascii_downcase) as $c
   | if ($raw | test("^[A-Za-z_][A-Za-z0-9_]*=")) then true
-    elif $c == "" or ($c | test("[*?\\[\\]{}$`()~!<>|;&]")) then true
+    elif $c == "" or ($c | test("[*?\\[\\]{}$\\x60()~!<>|;&]")) then true
     elif ($c | cpRunner) then true
     elif ($c | cpIn("find", "gfind", "fd", "fdfind")) then $wild or any($r[]; cpIn("-exec", "-execdir", "-ok", "-okdir", "-x", "-X") or startswith("--exec"))
     elif ($c | cpInterp) then any($r[]; test("^-[A-Za-z]*[ecpE][A-Za-z]*$") or test("^--(eval|print|command|exec)(=|$)") or cpIn("eval", "exec", "x", "repl", "-")) or ($wild and ($r | cpScript | not))
@@ -69,7 +69,7 @@ def cpCmd:
     elif $c == "git" then ($r | cpLeadWild) or any($r[]; cpIn("-c", "--config-env", "-x", "--exec", "--extcmd", "foreach", "filter-branch", "run") or startswith("--config-env=") or startswith("--exec=") or startswith("--extcmd=")) or ($wild and any($r[]; . == "config"))
     else false end;
 def cpBash: cpTrim as $s
-  | if ($s | test("[;|&`]|\\$\\(|[<>]\\(") and test("\\*")) then true
+  | if ($s | test("[;|&\\x60]|\\$\\(|[<>]\\(") and test("\\*")) then true
     else ($s | gsub(":\\*"; " *") | [splits("\\s+")] | map(select(. != ""))) as $t | if ($t | length) == 0 then true else $t | cpCmd end end;
 def cpGlob: test("[*?\\[{]");
 def cpPath: cpTrim as $p
