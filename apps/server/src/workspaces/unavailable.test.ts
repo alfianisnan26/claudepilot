@@ -15,7 +15,7 @@ import { FakeKube } from '../connect/agent/testkit/fakeKube.js';
 import { JsonFile } from '../jsonFile.js';
 import { Portal } from '../portal.js';
 import { kubeRuntimeOn } from './kubeTestkit.js';
-import { unavailableReason, Workspaces, type LastKnownLists } from './manager.js';
+import { Workspaces, type LastKnownLists } from './manager.js';
 import type { Runtime } from './runtime.js';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -139,14 +139,7 @@ test('the reason shown never carries a credential or a URL, and stays one short 
   // Built at run time: no token-shaped literal in the repository.
   const secret = ['Zq', '9x', 'Lm', '4T'].join('').repeat(6);
   const message = `Get "https://10.43.0.1:6443/api/v1/namespaces/x/pods?token=${secret}": net/http: TLS handshake timeout\nAuthorization: Bearer ${secret}\n${'x'.repeat(400)}`;
-  const reason = unavailableReason(new Error(message));
-  assert.ok(!reason.includes(secret), 'the token is gone');
-  assert.ok(!reason.includes('10.43.0.1'), 'the URL is gone');
-  assert.ok(!reason.includes('\n'));
-  assert.ok(reason.length <= 160, `${reason.length} characters`);
-  assert.match(reason, /TLS handshake timeout/);
-
-  // Through the manager: a list that fails with that message lists the workspace with the clean reason only.
+  // A list that fails with that message lists the workspace with a clean, short reason only.
   let fail = false;
   const kube = {
     target: { id: 'kubernetes', label: 'Kubernetes', kind: 'kubernetes', where: 'ns' },
@@ -161,8 +154,12 @@ test('the reason shown never carries a credential or a URL, and stays one short 
   fail = true;
   const [kohi] = await ws.list();
   assert.equal(kohi?.status, 'unavailable');
-  assert.ok(!JSON.stringify(kohi).includes(secret));
-  assert.equal(kohi?.detail, reason);
+  assert.ok(!JSON.stringify(kohi).includes(secret), 'the token is nowhere in the workspace');
+  const reason = kohi?.detail ?? '';
+  assert.ok(!reason.includes('10.43.0.1'), 'the URL is gone');
+  assert.ok(!reason.includes('\n'));
+  assert.ok(reason.length <= 160, `${reason.length} characters`);
+  assert.match(reason, /TLS handshake timeout/);
 });
 
 test('a target that never answered lists nothing (no guess), and the others still answer', async () => {
