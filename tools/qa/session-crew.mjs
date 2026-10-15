@@ -8,7 +8,8 @@
 //     Claude only when it differs from its lead's;
 //   - the Needs you chip lists the waiting worker under a lead header (not the lead as a row), with no "from";
 //   - T-369: the In progress chip with the lead idle lists the working worker under a lead header (title, Idle, crew count 6, a link to the
-//     lead, a 44 px target, no ⋯ of its own), not as a flat row with "from";
+//     lead, a 44 px target, no ⋯ of its own), not as a flat row with "from"; when the lead flips to Working (a match) and back to Idle the
+//     header stays a header with its state updated and the worker under it does not move (QA A9, 1 px);
 //   - a worker's page links up to its lead (title and Claude); the lead's page counts its workers and lists them on a tap (sheet or popover);
 //   - nothing scrolls sideways; on touch every crew control is a 44 px target.
 // usage: scripts/scratch-portal.sh start 3417 && QA_PORT=3417 QA_CODE=24681372 node tools/qa/session-crew.mjs [--shots dir] [--keep]
@@ -36,10 +37,7 @@ const WS = 'docker/qa-crew';
 const purge = () =>
   db.exec(`DELETE FROM chat_requests WHERE session_id LIKE 'qacrew-%'; DELETE FROM chat_sessions WHERE id LIKE 'qacrew-%';
     DELETE FROM workspace_claudes WHERE id LIKE 'qacrew-%'`);
-purge();
-const now = Date.now();
 const iso = (ms) => new Date(ms).toISOString();
-db.prepare(`INSERT INTO workspace_claudes (id, workspace_id, name, directory, created_at) VALUES ('qacrew-work', ?, 'Work', '', ?)`).run(WS, iso(now));
 const ins = db.prepare(`INSERT INTO chat_sessions (id, workspace_id, cwd, title, origin, state, state_since, process, model, mode, cost_est_usd, launch, created_at,
   last_activity_at, ended_reason, parent_id, claude_id, archived_at, started_by) VALUES (?, ?, '/home/node', ?, 'ui', ?, ?, ?, 'claude-opus-5-5', 'default', 0, '{}', ?, ?, ?, ?, ?, ?, ?)`);
 const LONG = 'QA crew worker with a very long title that has to truncate on a narrow phone screen without pushing anything sideways at all';
@@ -58,12 +56,23 @@ const rows = [
 // T-321: the waiting worker's process is 'live'. A request with no live process behind it is one nobody can answer: the portal's liveness
 // tick (every 60 s) resolves it `stale` and the session reads Interrupted (T-284), so with 'gone' the check failed whenever a tick fell
 // inside the run. The scratch portal cannot reach docker/qa-crew, so its status check answers "unknown" and leaves the live row alone.
-// T-369: the working worker is 'live' too, so the In progress chip keeps it for the whole run.
-for (const [id, title, state, parent, claude, born, archived] of rows) {
-  const at = iso(now - born * 60_000);
-  ins.run(id, WS, title, state, at, state === 'waiting' || state === 'working' ? 'live' : 'gone', at, at, state === 'ended' ? 'ended by you' : null, parent, claude, archived ? at : null, parent ? `session:${parent}` : 'ui');
-}
-db.prepare(`INSERT INTO chat_requests (session_id, request_id, kind, tool_name, title, detail, created_at) VALUES ('qacrew-e', 'r1', 'tool', 'Bash', 'Run a command', 'npm test', ?)`).run(iso(now));
+// T-369: the working worker is 'live' too, so the In progress chip keeps it. What the tick does not do, a READER does: opening a live
+// session's page attaches one (controller.ts attach -> #ensureReader), it cannot reach docker/qa-crew, and after MAX_IMMEDIATE_RETRIES (5,
+// 1 s apart) it marks the session gone, Interrupted. Worker A's page was opened in every combo, so from the next combo on A read Interrupted
+// (11 checks failed from 390-dark, job claudepilot-job-06f4999a; E, live too and never opened, stayed Waiting all run). So the run opens
+// only pages of sessions with no live process (the worker page is worker B's), and seeds afresh at the start of every size and theme.
+const seed = () => {
+  purge();
+  const now = Date.now();
+  db.prepare(`INSERT INTO workspace_claudes (id, workspace_id, name, directory, created_at) VALUES ('qacrew-work', ?, 'Work', '', ?)`).run(WS, iso(now));
+  for (const [id, title, state, parent, claude, born, archived] of rows) {
+    const at = iso(now - born * 60_000);
+    ins.run(id, WS, title, state, at, state === 'waiting' || state === 'working' ? 'live' : 'gone', at, at, state === 'ended' ? 'ended by you' : null, parent, claude, archived ? at : null, parent ? `session:${parent}` : 'ui');
+  }
+  db.prepare(`INSERT INTO chat_requests (session_id, request_id, kind, tool_name, title, detail, created_at) VALUES ('qacrew-e', 'r1', 'tool', 'Bash', 'Run a command', 'npm test', ?)`).run(iso(now));
+};
+// T-369: the lead flips state the way a report does (it works, its latest activity is now); its process stays 'gone', so nothing attaches.
+const leadState = (state) => db.prepare(`UPDATE chat_sessions SET state = ?, state_since = ?, last_activity_at = ? WHERE id = 'qacrew-lead'`).run(state, iso(Date.now()), iso(Date.now()));
 
 // --- the browser --------------------------------------------------------------------------------------------------------------------------
 const IPHONE = { top: 59, bottom: 34, left: 0, right: 0 };
@@ -164,6 +173,7 @@ for (const size of SIZES) {
   for (const dark of [false, true]) {
     const tag = `${size.name}-${dark ? 'dark' : 'light'}`;
     console.log(tag);
+    seed();
     await b.setViewport(size.w, size.h, size.mobile);
     await b.send('Emulation.setSafeAreaInsetsOverride', { insets: size.insets }).catch(() => {});
     await b.media({ dark });
@@ -235,9 +245,24 @@ for (const size of SIZES) {
     await b.eval(`document.querySelector('a[data-crew-header]')?.scrollIntoView({ block: 'center' })`);
     await sleep(200);
     await shot(`t369-in-progress-${tag}`);
+    // T-369, QA A9: the lead flips Idle -> Working (now a match of the chip) and back. It keeps the header line with its state updated, and
+    // worker A under it does not move. The list polls every 5 s; the wait ends when the header says the new state.
+    const aTop = () => b.eval(`(${HELPERS}) && __row('QA crew worker A')?.getBoundingClientRect().top`);
+    const topIdle = await aTop();
+    leadState('working');
+    await b.waitFor(`(${HELPERS}) && /Working/.test(__header('QA crew lead')?.text ?? '')`, LOAD_MS, 'lead working').catch(() => {});
+    await sleep(300);
+    const workHead = await header('QA crew lead');
+    const topWorking = await aTop();
+    leadState('idle');
+    await b.waitFor(`(${HELPERS}) && /Idle/.test(__header('QA crew lead')?.text ?? '')`, LOAD_MS, 'lead idle').catch(() => {});
+    await sleep(300);
+    const topBack = await aTop();
+    check(`${tag} In progress, lead Working: still the header, its state updated, worker A under it`, workHead?.top && /Working/.test(workHead.text) && JSON.stringify(workHead.kids) === JSON.stringify(['QA crew worker A']), JSON.stringify(workHead));
+    check(`${tag} In progress: worker A holds still when the lead flips Idle -> Working -> Idle (1 px)`, [topIdle, topWorking, topBack].every((t) => typeof t === 'number') && Math.abs(topWorking - topIdle) <= 1 && Math.abs(topBack - topIdle) <= 1, `${topIdle} -> ${topWorking} -> ${topBack}`);
 
-    // A worker's page: up to its lead.
-    await b.goto('/admin/sessions/qacrew-a', 2500);
+    // A worker's page: up to its lead. Worker B's (idle, no process): opening a live one's page would start a reader that fails (see seed).
+    await b.goto('/admin/sessions/qacrew-b', 2500);
     await b.waitFor(`!!document.querySelector('[data-crew-lead]')`, LOAD_MS, 'lead link').catch(() => {});
     const up = await b.eval(`(() => { const a = document.querySelector('[data-crew-lead]'); if (!a) return null; const r = a.getBoundingClientRect(); return { href: a.getAttribute('href'), text: a.textContent.trim(), h: r.height, right: r.right }; })()`);
     check(`${tag} worker page: a link up to its lead, with its Claude`, up?.href === '/admin/sessions/qacrew-lead' && /QA crew lead/.test(up.text) && /Default/.test(up.text), JSON.stringify(up));
