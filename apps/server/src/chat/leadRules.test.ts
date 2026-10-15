@@ -137,9 +137,23 @@ test('hook input that carries agent_id (a sub-agent: a dispatch) is allowed; the
   assert.equal(runHook(command, { ...call, agent_id: 7 }).code, 2, 'nor a non-string');
 });
 
+/** A new folder whose real path is not under /tmp (a home folder may be: the Job’s is). It throws when no candidate is writable. */
+function outsideTmp(): string {
+  for (const base of ['/var/tmp', '/dev/shm', homedir()]) {
+    try {
+      const dir = realpathSync(mkdtempSync(join(base, 'lead-rules-')));
+      if (!dir.startsWith('/tmp/')) return dir;
+      rmSync(dir, { recursive: true, force: true });
+    } catch {
+      /* not writable: the next one */
+    }
+  }
+  throw new Error('no writable folder outside /tmp for the symlink test');
+}
+
 test('a symlink inside an allowed folder cannot lead out of it, and a symlink to an allowed one is followed', () => {
   // Not under /tmp: /tmp is itself an allowed folder, so a fixture there would be allowed whatever the links do.
-  const root = realpathSync(mkdtempSync(join(homedir(), 'lead-rules-')));
+  const root = outsideTmp();
   try {
     const repo = join(root, 'repo');
     mkdirSync(join(repo, 'docs', 'dev-sessions', 'status'), { recursive: true });
