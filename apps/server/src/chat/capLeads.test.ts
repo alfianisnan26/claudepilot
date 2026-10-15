@@ -22,10 +22,15 @@ async function started(s: Live, o: { parentId?: string; bypassOptIn?: boolean } 
 
 const procs = (s: Live) => Object.fromEntries(s.controller.list().map((x) => [x.id, x.process]));
 const slept = (s: Live) => s.controller.audit({ kind: 'cap.slept' }).map((a) => a.sessionId);
+const pick = (s: Live, id: string) => {
+  const x = s.controller.get(id)!;
+  return { state: x.state, process: x.process, slotWait: x.slotWait ?? null, open: s.controller.openRequests(id).length };
+};
 const notes = (s: Live, id: string) => s.controller.history(id).flatMap((e) => (e.kind === 'system' && e.text ? [e.text] : []));
 
 /** A turn of `id` ends on `tail`: its message is done, so it is idle with nothing open. */
 function endTurn(id: string, tail: { push(x: string): void }, uuid: string) {
+  for (const state of ['queued', 'started']) tail.push(line({ type: 'command_lifecycle', command_uuid: uuid, state, uuid: `${uuid}-${state}`, session_id: id }));
   tail.push(line({ type: 'result', subtype: 'success', total_cost_usd: 0.01, is_error: false, session_id: id }));
   tail.push(line({ type: 'command_lifecycle', command_uuid: uuid, state: 'completed', uuid: `${uuid}-done`, session_id: id }));
 }
@@ -88,7 +93,9 @@ test('T-417: the cap full with only working workers and idle leads: the start wa
 
     // The worker's turn ends: an idle worker may sleep, so the waiting start takes its slot.
     endTurn(worker.id, worker.tail, 'w-turn-1');
-    await until(() => s.controller.get(queued.id)!.process === 'live' && s.controller.get(queued.id)!.state === 'idle');
+    const seen = () => JSON.stringify({ worker: pick(s, worker.id), queued: pick(s, queued.id), lead: pick(s, s.id), inputs: s.inputs('w-turn-1') });
+    await until(() => s.controller.get(worker.id)!.state === 'idle').catch(() => assert.fail(`the worker's turn did not end: ${seen()}`));
+    await until(() => s.controller.get(queued.id)!.process === 'live' && s.controller.get(queued.id)!.state === 'idle').catch(() => assert.fail(`the waiting start did not run: ${seen()}`));
     assert.equal(s.controller.get(worker.id)!.process, 'asleep');
     assert.equal(s.controller.get(s.id)!.process, 'live');
     assert.deepEqual(slept(s), [worker.id]);
