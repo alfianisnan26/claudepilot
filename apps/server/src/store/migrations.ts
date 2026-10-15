@@ -3216,6 +3216,15 @@ export const MIGRATIONS: Migration[] = [
     },
   },
   {
+    version: 783,
+    name: 'CI: the secret name that signs a remote’s upstream webhook (T-486 S2)',
+    up(db) {
+      // T-486 S2 (local-git-ci PRD FR8a): an upstream may call `POST /hooks/ci/<remote id>` on a push, signed with the value of this
+      // Secrets & env NAME (never a value here). Null on every row so far: no webhook, the timer only, as before.
+      db.exec(`ALTER TABLE ci_repos ADD COLUMN upstream_hook_secret TEXT;`);
+    },
+  },
+  {
     version: 773,
     name: 'chat sessions: the agent a session runs as (T-294)',
     up(db) {

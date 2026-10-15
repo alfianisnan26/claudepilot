@@ -11,7 +11,7 @@ import { SocketGuard } from './sockets.js';
 import { workspaceView } from './workspaces/view.js';
 import { Reconciler, type FragmentProvider } from './delivery/reconciler.js';
 import { References } from './pools/references.js';
-import { exposedSecretValues } from './secrets/exposed.js';
+import { exposedSecretValues, secretValueByName } from './secrets/exposed.js';
 import { SecretsKind } from './secrets/kind.js';
 import { registerMcpSets } from './mcp/index.js';
 import { SkillsModule } from './skills/module.js';
@@ -44,6 +44,7 @@ import { internalUrlResolver } from './portalmcp/internalUrl.js';
 import { OrphanSweep } from './tickets/orphans.js';
 import { Tickets } from './tickets/service.js';
 import { CiService } from './ci/service.js';
+import { upstreamHostsFrom } from './ci/settings.js';
 import { WorkspacesCiHost } from './ci/host.js';
 import { registerCiTools } from './ci/portalTools.js';
 import { valueRedactors } from './ci/values.js';
@@ -467,6 +468,9 @@ const ci = new CiService(store, new WorkspacesCiHost(workspaces), {
   redactFor: ciValues.redactFor,
   streamFor: ciValues.streamFor,
   secrets: (id, name) => secretName(references, id, name),
+  // T-486 S2: the upstream webhook checks its signature with the named secret's value, in memory; the host allow-list setting is read at each use.
+  secretValue: (id, name) => secretValueByName(poolService, id, name),
+  upstreamHosts: upstreamHostsFrom(settingsModule.settings),
   // Deployment approvals and environment protection changes (FR41) go to the platform audit, created further down.
   audit: (e) => platform.audit.record(e),
 });

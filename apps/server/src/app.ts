@@ -83,6 +83,7 @@ import type { Tickets } from './tickets/service.js';
 import { createTicketRoutes } from './tickets/routes.js';
 import type { CiService } from './ci/service.js';
 import { createCiRoutes } from './ci/routes.js';
+import { createCiHookRoutes } from './ci/upstreamHook.js';
 import type { BrowserModule } from './browser/index.js';
 import { createReposRoutes, createWorkspaceReposRoutes, type ReposService } from './repos/index.js';
 import { isWorkspaceId, PLAIN_NAME } from './names.js';
@@ -790,6 +791,8 @@ export function createApp(
     cr.use(requireSession);
     cr.route('/', createCiRoutes(ci));
     app.route('/api/ci', cr);
+    // T-486 S2: the upstream webhook, outside /api and the session guard: its door is the Git host's signature (ci/upstreamHook.ts).
+    app.route('/hooks/ci', createCiHookRoutes(ci) as never);
   }
 
   // Workspace git: every workspace's repositories at a glance, the audit, and one repository (docs/prd/workspace-git.md).

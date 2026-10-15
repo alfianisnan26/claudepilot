@@ -60,7 +60,7 @@ import type { CiTicketsPort } from './tickets.js';
 import { cleanLog, oneLine, redactSecrets } from './text.js';
 import { flakyComment, flakyDescription, flakyExcerpt, flakyTitle, parseFlaky, repoTag, type FlakySighting } from './flaky.js';
 import type { CiEventFile, Plan } from './plan.js';
-import { checkUpstream, defaultLookup, EMPTY_STATE, nextState, readState, upstreamPin, upstreamView, type Lookup, type SyncReply } from './upstream.js';
+import { checkUpstream, defaultLookup, EMPTY_STATE, nextState, readState, upstreamPin, upstreamView, withoutUserinfo, type Lookup, type SyncReply } from './upstream.js';
 
 /** The flaky rows of a run, per job: the count and the distinct tickets, in order. */
 function flakyOfJobs(rows: { job: string; ticket_id: string | null }[]): CiRunFlaky[] {
@@ -168,9 +168,22 @@ export interface CiServiceOptions {
   now?: () => Date;
   /** Upstream sync (FR8a): how a host name resolves for the SSRF guard (default: the system's resolver); tests pass a fake one. */
   lookup?: Lookup;
-  /** Upstream sync: the only hosts an upstream may be on. Unset: any host whose every address is public. */
-  upstreamHosts?: readonly string[];
+  /**
+   * Upstream sync: the only hosts an upstream may be on, read at each use (T-486 S2: the `ci.upstreamHosts` setting). Unset or empty: any
+   * host whose every address is public. The SSRF guard holds either way.
+   */
+  upstreamHosts?: readonly string[] | (() => readonly string[] | undefined);
+  /**
+   * T-486 S2: the value of a Secrets & env NAME the workspace's sets deliver as a secret, for checking the upstream webhook's signature.
+   * In memory only: never logged, stored, returned or audited. Without it (or null: no such secret, or Locked) every delivery is refused.
+   */
+  secretValue?: (workspaceId: string, name: string) => string | null;
+  /** T-486 S2: the least time between two webhook-kicked syncs of one remote (default UPSTREAM_HOOK_GAP_MS); tests pass a short one. */
+  hookGapMs?: number;
 }
+
+/** T-486 S2: webhook kicks of one remote closer than this coalesce into one sync. */
+export const UPSTREAM_HOOK_GAP_MS = 10_000;
 
 /** Who decided something a person must decide (an approval, a protection change): the actor string for records and the user for the audit. */
 export interface CiDecider {
@@ -201,10 +214,15 @@ export class CiService {
   onChange?: () => void;
   hooks: CiHooks = {};
   readonly #cs: CiStore;
-  readonly #opts: Required<Omit<CiServiceOptions, 'redactFor' | 'streamFor' | 'tickets' | 'sessions' | 'secrets' | 'audit' | 'upstreamHosts'>> & Pick<CiServiceOptions, 'redactFor' | 'streamFor' | 'secrets' | 'audit' | 'upstreamHosts'>;
+  readonly #opts: Required<Omit<CiServiceOptions, 'redactFor' | 'streamFor' | 'tickets' | 'sessions' | 'secrets' | 'audit' | 'upstreamHosts' | 'secretValue'>> &
+    Pick<CiServiceOptions, 'redactFor' | 'streamFor' | 'secrets' | 'audit' | 'upstreamHosts' | 'secretValue'>;
   /** Upstream sync: when each remote last tried (ms), and the sync in flight per remote (one at a time). */
   readonly #upstreamAt = new Map<string, number>();
   readonly #syncing = new Map<string, Promise<SyncReply>>();
+  /** T-486 S2: remotes a webhook asked for while their sync ran: one more sync after it, however many asked. */
+  readonly #again = new Set<string>();
+  /** T-486 S2: one wake-up timer per remote whose webhook sync is due after the gap. */
+  readonly #wake = new Map<string, NodeJS.Timeout>();
   /** The auto-approve rule's evaluations in flight (dry mode), so a test or a shutdown can wait for them. */
   readonly #ruling = new Set<Promise<void>>();
   /** Runs with an approval being decided right now: one decision at a time per run. */
@@ -245,7 +263,16 @@ export class CiService {
       now: opts.now ?? (() => new Date()),
       lookup: opts.lookup ?? defaultLookup,
       upstreamHosts: opts.upstreamHosts,
+      secretValue: opts.secretValue,
+      hookGapMs: opts.hookGapMs ?? UPSTREAM_HOOK_GAP_MS,
     };
+  }
+
+  /** The upstream host allow-list as it is now (a setting may change it at any time); undefined: none. */
+  #allowedHosts(): readonly string[] | undefined {
+    const h = this.#opts.upstreamHosts;
+    const list = typeof h === 'function' ? h() : h;
+    return list?.length ? list : undefined;
   }
 
   /* ---------- Life ---------- */
@@ -391,10 +418,60 @@ export class CiService {
   #sync(repo: RepoRow, by: CiDecider | null): Promise<SyncReply> {
     const running = this.#syncing.get(repo.id);
     if (running) return running;
-    this.#upstreamAt.set(repo.id, Date.now());
-    const p = this.#syncOnce(repo, by).finally(() => this.#syncing.delete(repo.id));
+    const started = Date.now();
+    this.#upstreamAt.set(repo.id, started);
+    this.#again.delete(repo.id);
+    const p = this.#syncOnce(repo, by).finally(() => {
+      this.#syncing.delete(repo.id);
+      // A webhook came while this sync ran: the push it announced may be newer than this fetch. One more, due one gap after this start.
+      if (this.#again.delete(repo.id)) this.#dueAt(repo, started + this.#opts.hookGapMs);
+    });
     this.#syncing.set(repo.id, p);
     return p;
+  }
+
+  /** Makes a remote's next sync due at `at` (ms) instead of after its `everyS`, and has the workspace looked at soon. */
+  #dueAt(repo: RepoRow, at: number): void {
+    const every = (repo.upstream_every_s ?? 30) * 1000;
+    this.#upstreamAt.set(repo.id, Math.min(this.#upstreamAt.get(repo.id) ?? 0, at - every));
+    this.kick(repo.workspace_id);
+    // Due later than now (the gap): look again then, not at the next idle poll.
+    const wait = at - Date.now();
+    if (wait > 0 && !this.#wake.has(repo.id)) {
+      const t = setTimeout(() => {
+        this.#wake.delete(repo.id);
+        this.kick(repo.workspace_id);
+      }, wait);
+      t.unref();
+      this.#wake.set(repo.id, t);
+    }
+  }
+
+  /**
+   * T-486 S2: the upstream's webhook asks for a sync now. It never fetches here: it only makes the remote's detached, one-at-a-time sync due
+   * (started by the next poll). Kicks coalesce: during a sync they ask for ONE more after it; otherwise a sync at most every
+   * `UPSTREAM_HOOK_GAP_MS` per remote. The caller has checked the signature and the seam.
+   */
+  kickUpstream(id: string): void {
+    const repo = this.#cs.repo(id);
+    if (!repo || repo.removed_at || !repo.upstream_url) return;
+    if (this.#syncing.has(id)) {
+      this.#again.add(id);
+      return;
+    }
+    this.#dueAt(repo, Math.max(Date.now(), (this.#upstreamAt.get(id) ?? 0) + this.#opts.hookGapMs));
+  }
+
+  /**
+   * T-486 S2: what the webhook route needs to check a delivery for remote `id`: its workspace and the signing value, or null (no such
+   * remote, it follows no upstream, no hook secret set, or the value is not available). The value is never kept beyond the check.
+   */
+  upstreamHookKey(id: string): { workspaceId: string; key: string } | null {
+    if (!this.#ok()) return null;
+    const repo = this.#cs.repo(id);
+    if (!repo || repo.removed_at || !repo.upstream_url || !repo.upstream_hook_secret) return null;
+    const key = this.#opts.secretValue?.(repo.workspace_id, repo.upstream_hook_secret) ?? null;
+    return key ? { workspaceId: repo.workspace_id, key } : null;
   }
 
   async #syncOnce(repo: RepoRow, by: CiDecider | null): Promise<SyncReply> {
@@ -402,17 +479,23 @@ export class CiService {
     const prev = readState(repo.upstream_state);
     const at = new Date().toISOString();
     const fail = (message: string): never => {
-      const error = oneLine(this.#redact(repo.workspace_id, message))?.slice(0, 300) ?? 'The sync failed.';
-      if (prev.error !== error) {
-        this.#cs.updateRepo(repo.id, { upstream_state: JSON.stringify({ ...prev, at, error }) });
-        this.#changed();
+      const error = oneLine(withoutUserinfo(this.#redact(repo.workspace_id, message)))?.slice(0, 300) ?? 'The sync failed.';
+      // T-486 S2: the first failure of a row is when the Needs you item starts; a later, different message keeps that time.
+      const errorSince = (prev.error && prev.errorSince) || at;
+      if (prev.error !== error || prev.errorSince !== errorSince) {
+        // Only if it still follows this upstream (it may have been changed or removed while this sync ran).
+        const still = this.#cs.repo(repo.id);
+        if (still && !still.removed_at && still.upstream_url === url) {
+          this.#cs.updateRepo(repo.id, { upstream_state: JSON.stringify({ ...prev, at, error, errorSince }) });
+          this.#changed();
+        }
       }
       throw new AppError('SERVICE_UNAVAILABLE', error, { expose: true });
     };
     // The SSRF guard, before every sync: the host may resolve elsewhere now. git is pinned to the address checked here.
     let pin: string;
     try {
-      pin = await upstreamPin(url, this.#opts.lookup, this.#opts.upstreamHosts);
+      pin = await upstreamPin(url, this.#opts.lookup, this.#allowedHosts());
     } catch (e) {
       return fail((e as Error).message);
     }
@@ -1445,21 +1528,26 @@ export class CiService {
       if (req.upstream === null) {
         // The old upstream's staging refs stay in the remote until the next sync clears them: remember that, even after the removal.
         const stale = repo.upstream_url || readState(repo.upstream_state).reset;
-        Object.assign(patch, { upstream_url: null, upstream_secret: null, upstream_every_s: null, upstream_state: stale ? JSON.stringify({ ...EMPTY_STATE, reset: true }) : null });
+        Object.assign(patch, { upstream_url: null, upstream_secret: null, upstream_every_s: null, upstream_hook_secret: null, upstream_state: stale ? JSON.stringify({ ...EMPTY_STATE, reset: true }) : null });
         if (repo.upstream_url) audit = { kind: 'ci.upstream_cleared', detail: { repo: repo.name, url: repo.upstream_url } };
       } else {
         const u = checkUpstream(req.upstream);
         // The SSRF guard on set too, so a refused host is said at once, not by the first sync.
-        await upstreamPin(u.url, this.#opts.lookup, this.#opts.upstreamHosts);
+        await upstreamPin(u.url, this.#opts.lookup, this.#allowedHosts());
         if (u.secret && this.#opts.secrets) {
           const info = this.#opts.secrets(repo.workspace_id, u.secret);
           if (!info?.asFile) throw invalid('upstream.secret', `${u.secret} does not reach this workspace as a file. Assign it in Secrets & env as a secret or a tool login.`);
         }
+        // T-486 S2: the webhook's signing secret is checked by the portal itself, so it must be a secret the workspace's sets deliver.
+        if (u.hookSecret && this.#opts.secrets) {
+          const info = this.#opts.secrets(repo.workspace_id, u.hookSecret);
+          if (info?.kind !== 'secret') throw invalid('upstream.hookSecret', `${u.hookSecret} is not a secret assigned to this workspace. Add it in Secrets & env as a secret.`);
+        }
         // A new URL is a new upstream (the same URL again is not): its sync starts from a clean staging area, so it is a baseline.
         const changed = u.url !== repo.upstream_url;
         const staged = changed && (repo.upstream_url || readState(repo.upstream_state).reset);
-        Object.assign(patch, { upstream_url: u.url, upstream_secret: u.secret, upstream_every_s: u.everyS, ...(changed ? { upstream_state: staged ? JSON.stringify({ ...EMPTY_STATE, reset: true }) : null } : {}) });
-        audit = { kind: 'ci.upstream_set', detail: { repo: repo.name, url: u.url, secret: u.secret, everyS: u.everyS } };
+        Object.assign(patch, { upstream_url: u.url, upstream_secret: u.secret, upstream_every_s: u.everyS, upstream_hook_secret: u.hookSecret, ...(changed ? { upstream_state: staged ? JSON.stringify({ ...EMPTY_STATE, reset: true }) : null } : {}) });
+        audit = { kind: 'ci.upstream_set', detail: { repo: repo.name, url: u.url, secret: u.secret, everyS: u.everyS, hookSecret: u.hookSecret } };
       }
       this.#upstreamAt.delete(repo.id);
     }

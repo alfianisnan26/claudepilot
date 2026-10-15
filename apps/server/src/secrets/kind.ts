@@ -599,6 +599,23 @@ export class SecretsKind implements PoolKind<SecretsContent>, SecretNameSource {
     return [...out];
   }
 
+  /**
+   * T-486 S2 (the CI upstream webhook): the value a workspace gets for the SECRET named `name`, for checking a signature in memory.
+   * Null when no set assigned to it has a secret of that name with a value (a plain variable never counts), or it can not be opened
+   * (Locked). Several sets naming it: the last one wins, as in `namesFor`. Callers never log, store, return or audit it.
+   */
+  secretValueByName(workspaceId: string, name: string): string | null {
+    let id: string | null = null;
+    for (const a of this.service.assignedPools<SecretsContent>(workspaceId, 'secrets'))
+      for (const e of a.content.entries) if (e.kind === 'secret' && e.name === name) id = this.#valueOf(a.pool.id, e) ?? id;
+    if (!id) return null;
+    try {
+      return this.values.open(id);
+    } catch {
+      return null;
+    }
+  }
+
   /* ---------- The workspace's Configuration row ---------- */
 
   /** What a workspace's sets deliver, by name only, and the variables still on their way out (A6). */

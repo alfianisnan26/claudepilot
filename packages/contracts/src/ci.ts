@@ -396,6 +396,11 @@ export interface CiUpstream {
   secret: string | null;
   /** Seconds between two syncs. */
   everyS: number;
+  /**
+   * T-486 S2: the Secrets & env NAME whose value signs the upstream's push webhook (`POST /hooks/ci/<remote id>`, GitHub's
+   * `X-Hub-Signature-256` or Gitea's `X-Gitea-Signature`); null: no webhook, the timer only.
+   */
+  hookSecret: string | null;
   /** The last sync: when, and its error (null when it worked). */
   lastAt: string | null;
   error: string | null;
@@ -423,7 +428,15 @@ export interface UpdateCiUpstream {
   url: string;
   secret?: string | null;
   everyS?: number;
+  /** T-486 S2: the Secrets & env name that signs the push webhook (null or absent: none). */
+  hookSecret?: string | null;
 }
+
+/** T-486 S2: the portal-wide list of hosts an upstream may be on (Settings, CI); empty: any public host. The SSRF guard holds either way. */
+export const CI_UPSTREAM_HOSTS_SETTING = 'ci.upstreamHosts';
+
+/** T-486 S2: the public path of a remote's upstream webhook; the id is the remote's. */
+export const CI_UPSTREAM_HOOK_PATH = '/hooks/ci/:id';
 
 /** A branch of a remote with where the checks stand. */
 export interface CiBranch {
