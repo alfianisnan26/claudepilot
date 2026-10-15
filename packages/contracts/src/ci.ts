@@ -535,7 +535,7 @@ export interface ValidateCiResult {
 }
 
 export const CI_API = {
-  /** GET: `CiRunner[]`. PUT `UpsertCiRunnerRequest`: the `CiRunner`. DELETE `?workspaceId=`: it is a runner no more (T-557). */
+  /** GET: `CiRunner[]`. PUT `/<workspace id, encoded>` with `UpsertCiRunnerRequest`: the `CiRunner`. DELETE `/<workspace id, encoded>`: it is a runner no more (T-557; the routes take the id in the path, T-576). */
   runners: '/api/ci/runners',
   /** GET `CiRunFilter` as a query string: `CiRunList`. POST `StartCiRunRequest`: the new `CiRun`. */
   runs: '/api/ci/runs',

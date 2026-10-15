@@ -11,6 +11,8 @@ import {
   type CiPipelineInfo,
   type CiRepo,
   type CiRun,
+  type CiRunner,
+  type UpsertCiRunnerRequest,
   type CiRunFilter,
   type CiRunList,
   type ConnectCiRepoRequest,
@@ -82,6 +84,10 @@ export const ciApi = {
   reject: (id: string, job: string) => request<CiRun>('POST', CI_API.reject(id), { job }),
   environments: (repoId: string) => request<CiEnvironment[]>('GET', CI_API.environments(repoId)),
   setEnvironment: (repoId: string, name: string, isProtected: boolean) => request<CiEnvironment>('PUT', CI_API.environment(repoId, name), { protected: isProtected }),
+  /** Runners (T-557, T-576): GET is for anyone who can see the workspace; PUT and DELETE are a person with manage on it. The id is the workspace's, as one path segment. */
+  runners: () => request<CiRunner[]>('GET', CI_API.runners),
+  upsertRunner: (body: UpsertCiRunnerRequest) => request<CiRunner>('PUT', `${CI_API.runners}/${encodeURIComponent(body.workspaceId)}`, body),
+  removeRunner: (workspaceId: string) => request<{ ok: true }>('DELETE', `${CI_API.runners}/${encodeURIComponent(workspaceId)}`),
   /** The auto-approve rule (T-110 FR41a): a person with manage; off, dry or on (on only for a protected environment). */
   setAutoApprove: (repoId: string, name: string, body: UpdateCiAutoApproveRequest) => request<CiEnvironment>('PUT', CI_API.environmentAutoApprove(repoId, name), body),
 };
