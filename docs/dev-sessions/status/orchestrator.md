@@ -29,7 +29,6 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   over-claims, no failure-path tests) -> decision 5778 -> S1d DONE 80f5bb72 (5852) -> QA Perf PASS WITH GAPS 5992 (create-stderr mutant
   survived; docs not re-read) -> decision 5995: S1e test + doc re-read on BE INFRA after T-578 -> delta QA -> gate -> merge on T-401 ack.
   T-401 re-merged wip/main-54ba328: gate GREEN gate-54ba328-6502 (suite 570 s, peak 2228Mi; 5560/5562); ff only on the person's ack (4941).
-- T-379 S2 3f11b28 PASS (4948; review 4938) -> merge after T-401. T-401 060aca4: review 4936, QA 4943; HELD on the ack (4941).
 - T-416 (high incident): S1 d37c5f0 QA PASS WITH GAPS 4623; S1b a769b00 QA FAIL 5792 -> S1c 0e5bcf50. S2 = Bypass restore.
 
 ## DECISIONS (binding)
@@ -71,7 +70,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   T-591 #40 backfill after deploy (5511); T-325 S3 push door vs charter "only the main chat merges integration" + its token (5549); T-527 finding 4 (owner triggers tagging owner-checklist).
 
 ## NEXT (in order, as slots free)
-1. Merges: T-401 (ack) -> T-426 -> T-379; deploys are the coordinator's. 2. T-416 S1c QA -> blind review (opus) -> merge; then S2.
+1. Merges: T-401 060aca4 (ack 4941; review 4936, QA 4943) -> T-426 -> T-379 S2 3f11b28 (PASS 4948, review 4938); deploys are the coordinator's. 2. T-416 S1c QA -> blind review (opus) -> merge; then S2.
 3. After the slots above: T-558 QA + review; T-426 blind review; then RTK (coordinator 14:55): T-340 (hook refuses typed rtk hiding a denied command; a hook change is landed by a person/coordinator) -> T-341 -> T-306
    delivery (dev/t-306-1 has items 1-2); T-547 + T-549 (+ wasted-calls row, 4802); T-574 (session_family summary, from T-282 4801). Sweep results: the lead closes on PASS or reopens with the gap. 4. T-524 measurement with T-513. 5. T-537. 6. T-513.
 7. T-472 live re-check (4294), T-422, T-147, T-438, T-425, T-436, T-437, T-432, T-378 S1 verify, T-382, T-377, T-386, T-409, T-402, T-398, T-399, T-370 HOLD,
