@@ -7,7 +7,8 @@
 #     --repo claudepilot | event | konfersi[:<org>/<repo>]
 #                                                       default: from the current folder's origin (konfersi alone: the folder's Gitea repo).
 #                                                       event (T-491) is exactly GitHub isnanme/event, nothing else: no event:<org>/<repo>;
-#                                                       it gets the same GitHub token as claudepilot (npm for @isnanme, and the clone)
+#                                                       it gets the same GitHub token as claudepilot (npm for @isnanme, and the clone), offered to
+#                                                       that one URL only; --also is refused with it
 #     --ref <branch or commit>                          default: HEAD of the current folder, which must be on the remote (push it first:
 #                                                       git push origin HEAD:wip/<name>); uncommitted changes are NOT in the Job
 #     --against <ref>                                   PROOF (T-333): run the command on --ref, then on <ref> in the same Job (a full commit hash or
@@ -113,6 +114,7 @@ case "$repo" in
     kind=gitea; url=https://$gitea/$path.git; repo_label=$(label "${path#*/}") ;;
   *) die "--repo: claudepilot, event or konfersi:<org>/<repo>" ;;
 esac
+[ "$repo" != event ] || [ ${#also[@]} -eq 0 ] || die "--also cannot be used with --repo event (T-491: the Event Job's token is for isnanme/event alone)"
 alsos=
 for a in ${also[@]+"${also[@]}"}; do
   [[ ! $a =~ \.\. && $a =~ ^([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(@([A-Za-z0-9][A-Za-z0-9._/-]{0,199}))?$ ]] || die "--also <org>/<repo>[@<ref>] (got $a)"

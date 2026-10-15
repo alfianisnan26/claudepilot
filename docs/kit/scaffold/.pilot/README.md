@@ -56,6 +56,8 @@ environment: `deploy-stg.yml` naming `stg`, `deploy.yml` naming `production`, ea
   workspace only streams the log, so the pipeline needs no `flock /tmp/heavy.lock`: do not add one. The commit
   must be on the repository job-run clones from (GitHub or Gitea), not only on `pilot`: push it to both. A red
   install, check or build is the step's exit code. Without a cluster, replace the line with the bare command.
+  Each step's `timeout` is job-run's own `--timeout` plus 10 minutes for the Job queue (3 Jobs at once cluster-wide):
+  keep that margin when you change either. `--repo event` takes no `--also`, and its token goes to that one URL only.
 - **The quick gate's base.** In CI the commit the branch moved from is `$PILOT_BASE_SHA` (empty for a new branch or
   a manual run). The Job does not see `PILOT_*` variables and its clone is one commit deep: pass the base as an
   argument (`{{JOB_RUN}} --ref "$PILOT_SHA" -- {{TEST_QUICK}} "$PILOT_BASE_SHA"`, the several-words form) and

@@ -64,11 +64,19 @@ spec:
               export HOME=$root/home npm_config_cache=$root/npm-cache npm_config_update_notifier=false CI=1
               mkdir -p "$HOME" "$root/w"
               # Credentials only through a helper that reads the environment: the token is never on a command line or in a URL.
-              git config --global credential.helper '!f() { [ -n "${GIT_TOKEN:-}" ] || exit 0; echo "username=${GIT_USER:-git}"; echo "password=$GIT_TOKEN"; }; f'
-              # GitHub Packages for @isnanme (T-491): a repository without its own auth line (Event's) still installs. The file holds a
-              # reference that npm expands, never the token; a repository's own .npmrc still wins.
-              # shellcheck disable=SC2016 # the reference stays literal
-              [ -z "${NODE_AUTH_TOKEN:-}" ] || printf '%s\n' '@isnanme:registry=https://npm.pkg.github.com' '//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}' > "$HOME/.npmrc"
+              helper='!f() { [ -n "${GIT_TOKEN:-}" ] || exit 0; echo "username=${GIT_USER:-git}"; echo "password=$GIT_TOKEN"; }; f'
+              if [ "$JR_REPO_URL" = https://github.com/isnanme/event.git ]; then
+                # Event (T-491): the token is offered to that one URL and path only (useHttpPath), never to another host, an --also
+                # repository, an npm git dependency or any other https fetch. The .npmrc is written for Event alone, too.
+                git config --global credential."$JR_REPO_URL".helper "$helper"
+                git config --global credential."$JR_REPO_URL".useHttpPath true
+                # GitHub Packages for @isnanme: a repository without its own auth line (Event's) still installs. The file holds a
+                # reference that npm expands, never the token; a repository's own .npmrc still wins.
+                # shellcheck disable=SC2016 # the reference stays literal
+                [ -z "${NODE_AUTH_TOKEN:-}" ] || printf '%s\n' '@isnanme:registry=https://npm.pkg.github.com' '//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}' > "$HOME/.npmrc"
+              else
+                git config --global credential.helper "$helper"
+              fi
               t0=$(date +%s)
               fetch() { # <dir> <url> <ref>
                 git init -q "$root/w/$1" && git -C "$root/w/$1" fetch -q --depth 1 "$2" "$3" && git -C "$root/w/$1" checkout -q FETCH_HEAD \

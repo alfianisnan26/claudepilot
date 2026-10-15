@@ -338,6 +338,14 @@ test('usage errors: nothing is created', () => {
     [['--repo', 'event:isnanme/event', '--ref', 'main', '--', 'x'], /--repo: claudepilot, event or konfersi/],
     [['--repo', 'Event', '--ref', 'main', '--', 'x'], /--repo: claudepilot, event or konfersi/],
     [['--repo', 'events', '--ref', 'main', '--', 'x'], /--repo: claudepilot, event or konfersi/],
+    [['--repo', 'event ', '--ref', 'main', '--', 'x'], /--repo: claudepilot, event or konfersi/],
+    [['--repo', 'event isnanme/event', '--ref', 'main', '--', 'x'], /--repo: claudepilot, event or konfersi/],
+    [['--repo', 'isnanme/event', '--ref', 'main', '--', 'x'], /--repo: claudepilot, event or konfersi/],
+    [['--repo', 'https://github.com/isnanme/event.git', '--ref', 'main', '--', 'x'], /--repo: claudepilot, event or konfersi/],
+    [['--repo=event', '--ref', 'main', '--', 'x'], /unknown option --repo=event/], // the script defines no --repo=value form: refused as an unknown option
+    // T-491: the Event token is for that one repository; no second one rides along.
+    [['--repo', 'event', '--also', 'x/y', '--ref', 'main', '--', 'x'], /--also cannot be used with --repo event/],
+    [['--also', 'x/y', '--repo', 'event', '--ref', 'main', '--', 'x'], /--also cannot be used with --repo event/],
   ];
   for (const [argv, re] of cases) {
     const r = w.run(argv);
@@ -374,15 +382,35 @@ test('the Job\'s own script: checkout, the command\'s exit code, the artifacts b
   assert.equal(missing.status, 2);
   assert.match(missing.stdout, /=== JOB-RUN EXIT 2\njob-run: no-such-branch of .* is not on the remote \(push it first\)/);
 
-  // T-491: with a token, the user npmrc maps @isnanme to GitHub Packages through a reference npm expands; the value is never written.
+  // T-491: for Event only, with a token, the user npmrc maps @isnanme to GitHub Packages through a reference npm expands (the value is
+  // never written) and the git credential helper is scoped to that one URL and path. The https URL is served from the local bare
+  // repository through an environment-level insteadOf (the credential lookup still sees the https URL).
   const token = `fx${hex(18)}`;
-  const withToken = spawnSync('bash', ['-c', body], { encoding: 'utf8', env: {
-    PATH: process.env.PATH, JR_ROOT: join(root, `run-${hex(3)}`), JR_REPO_URL: `file://${join(root, 'claudepilot.git')}`, JR_REF: 'main', JR_ALSO: '',
-    JR_STEPS: 'none', JR_ARTIFACTS: '', JR_ARTIFACT_MAX: '100000', JR_CMD: Buffer.from('cat "$HOME/.npmrc"').toString('base64'), NODE_AUTH_TOKEN: token } });
-  assert.equal(withToken.status, 0, withToken.stdout + withToken.stderr);
-  assert.match(withToken.stdout, /^@isnanme:registry=https:\/\/npm\.pkg\.github\.com\n\/\/npm\.pkg\.github\.com\/:_authToken=\$\{NODE_AUTH_TOKEN\}\n/m);
-  assert.ok(!withToken.stdout.includes(token), 'the npmrc holds the reference, not the value');
-  const noToken = pod('main', 'test ! -e "$HOME/.npmrc" && echo no npmrc');
+  const eventUrl = 'https://github.com/isnanme/event.git';
+  const asksFor = (url: string) => { // does `git credential fill` give a password for this URL?
+    const u = new URL(url);
+    return `printf 'protocol=https\\nhost=${u.host}\\npath=${u.pathname.slice(1)}\\n\\n' | GIT_TERMINAL_PROMPT=0 git credential fill 2>/dev/null | grep -c '^password=' || true`;
+  };
+  const podEvent = (url: string, cmd: string, tok: string | undefined) => spawnSync('bash', ['-c', body], { encoding: 'utf8', env: {
+    PATH: process.env.PATH, JR_ROOT: join(root, `run-${hex(3)}`), JR_REPO_URL: url, JR_REF: 'main', JR_ALSO: '', JR_STEPS: 'none', JR_ARTIFACTS: '',
+    JR_ARTIFACT_MAX: '100000', JR_CMD: Buffer.from(cmd).toString('base64'), GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: `url.file://${join(root, 'claudepilot.git')}.insteadOf`,
+    GIT_CONFIG_VALUE_0: url, ...(tok ? { NODE_AUTH_TOKEN: tok, GIT_TOKEN: tok, GIT_USER: 'x-access-token' } : {}) } });
+  const ev = podEvent(eventUrl, ['cat "$HOME/.npmrc"', 'echo ---', 'cat "$HOME/.gitconfig"', 'echo ---',
+    asksFor(eventUrl), asksFor('https://github.com/isnanme/other.git'), asksFor('https://github.com/isnanme/event.git.evil/x'),
+    asksFor('https://example.com/isnanme/event.git')].join('\n'), token);
+  assert.equal(ev.status, 0, ev.stdout + ev.stderr);
+  assert.match(ev.stdout, /^@isnanme:registry=https:\/\/npm\.pkg\.github\.com\n\/\/npm\.pkg\.github\.com\/:_authToken=\$\{NODE_AUTH_TOKEN\}\n/m);
+  assert.ok(!ev.stdout.includes(token), 'the files hold references, not the value');
+  const cfg = ev.stdout.split('---\n')[1] ?? '';
+  assert.match(cfg, /\[credential "https:\/\/github\.com\/isnanme\/event\.git"\]/);
+  assert.match(cfg, /useHttpPath = true/);
+  assert.equal((cfg.match(/\[credential/g) ?? []).length, 1, 'one credential section, no global helper');
+  assert.doesNotMatch(cfg, /^\[credential\]/m, 'no unscoped credential section');
+  assert.match(ev.stdout, /---\n1\n0\n0\n0\n$/, 'a password for the Event URL only: not another path, a look-alike path, or another host');
+  // claudepilot (its own URL, here the local bare repository): no npmrc, the global helper as before.
+  const cp = pod('main', 'test ! -e "$HOME/.npmrc" && echo no npmrc; git config --global --get credential.helper >/dev/null && echo global helper');
+  assert.match(cp.stdout, /no npmrc\nglobal helper\n/, 'not Event: no npmrc, the global helper');
+  const noToken = podEvent(eventUrl, 'test ! -e "$HOME/.npmrc" && echo no npmrc', undefined);
   assert.match(noToken.stdout, /no npmrc\n/, 'no token, no npmrc');
 });
 
