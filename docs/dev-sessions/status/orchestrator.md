@@ -10,16 +10,19 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - MERGED ff ffd4bcdd: T-600 (BE QA 5864, FE QA UI 6128; gate GREEN 6bb628c, claudepilot-gate-6bb628c-3b2f; + portal tag -15 merged in).
 - MERGED ff 8d9eab44 (batch 6): T-623 S1b (6069), T-591 S1d (6107), T-558 S1b (6182), T-631 F2 (6195); gate GREEN 033f0e2
   (job-out/gate-033f0e2.log); comments 6244-6249. Deploy = coordinator's.
-- T-636 CLOSED done on QA PASS WITH GAPS 5962 (built by the coordinator, ad9f7ad8).
+- T-636 CLOSED done on QA PASS WITH GAPS 5962 (built by the coordinator, ad9f7ad8). T-576 CLOSED on QA UI PASS WITH GAPS 6268; 40 px -> T-681.
 
 ## IN FLIGHT (6 of 6, D-71)
-- IMPL T-416 S1d 41675b08 (opus, why: incident) on ticket/T-416-s1d (base a63e181e = S1c + integration, lead merged; 2 conflicts kept both).
-  Fixes for review 6187 CHANGES: wake reserves, hold reservation past the 5 s cache, queued start checked, restart vs Bypass, item 2, PRD.
-- IMPL T-325 S1b 7eb43876 (opus, why: security) on ticket/T-325-s1b: QA FAIL 6133 F1 (author's child named qa-verifier), M4, M7.
-- QA PERF 7e4879c7: T-633 399e7b5d (6220, Backend 4b025fae ended) -> T-638 6fdb5b29 (6217, BE Infra ae4e3f72 ended); then T-325 S1b, T-416 S1d.
-- BACKEND lane d762b5fc (sonnet) on T-574 session_family summary (ticket/T-574-family-summary).
-- BE INFRA lane aa8dc58b (sonnet) on T-341 RTK fidelity (ticket/T-341-rtk-fidelity = dev/t-306-1 + integration dca5e36f; no hook registration).
-- QA UI 8b13bb5a: T-576 phone check (390/1280 on the real build); kit 44 px -> T-639.
+- GATE batch 7 premerge 7d87d90a (wip/main-7d87d90; job-out/gate-7d87d90.log): T-633 399e7b5d (QA 6283) + T-638 6fdb5b29 (QA 6284).
+  QA Perf's ticket_comment refused on unassigned tickets: lead posts its verdicts. T-633 H1/H2 mutant tests -> Backend lane after T-574.
+- T-325 S1b 92bd7e23 QA PASS WITH GAPS 6297 (N3, N5 survive) -> decision (b) 6301: BACKEND lane 7979da21 (sonnet, respawned;
+  d762b5fc ended) adds N3/N5 tests on ticket/T-325-s1c; then QA delta, gate, merge S1+S1b+S1c.
+- T-416 S1d DONE 89e270cc (impl 41675b08 ended; 6289; 5/8/10 -> T-675) -> REVIEWER 6a216d7b (sonnet, delta a63e181e..89e270cc)
+  and QA PERF 7e4879c7 in parallel; then gate, merge.
+- QA BE 2 42e5408f (sonnet): T-574 124ca45f (Backend 6280) then T-341 e4284315 (BE Infra 6292; A partial, D not verified).
+- BE INFRA lane b6df312e (sonnet, respawned; aa8dc58b ended) on T-549 D-65 scorecard rows (ticket/T-549-d65-rows from integration).
+- QA UI 8b13bb5a: BLOCKED on T-376 (no Write; dontAsk refuses heredocs): posts harness design on T-376, idle. An implementer
+  (next free slot, with T-681) writes tools/qa/chat-open.mjs; QA UI then runs it. T-576 gap 4 = SLOW ONLY.
 - HELD: T-426 S1e 2174eee1 QA PASS 6169 -> merge on the T-401 ack (4941). T-578 51f6c153 review CHANGES 6168 -> owner decision.
   T-631 review CHANGES 5850: absolute-path entry (a) for the coordinator; F1 on job-run.sh -> T-635 (high).
 - 16:12 OWNER PRIORITY (coordinator, T-426 5538): T-401 then T-426 FIRST. T-401 gate GREEN gate-54ba328-6502; ff only on the person's ack.
@@ -61,7 +64,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 
 ## NEXT (in order, as slots free)
 1. Merges: T-401 060aca4 (ack 4941) -> T-426 S1e -> T-379 S2 3f11b28 (PASS 4948, review 4938); deploys are the coordinator's.
-2. QA Perf: T-633 -> T-325 S1b -> T-416 S1d (then a delta blind review for T-416, gate, merge; then S2 = Bypass restore).
+2. Backend lane after T-325 S1c: T-633 H1/H2 tests (fresh branch). Implementer for T-681 (40 px). QA: T-325 S1c delta -> T-416 S1d (then a delta blind review for T-416, gate, merge; then S2 = Bypass restore).
 3. RTK (coordinator 14:55): T-340 (a hook change is landed by a person/coordinator) -> T-341 -> T-306 delivery (dev/t-306-1 has items 1-2);
    T-549 (+ wasted-calls row, 4802); T-574 (session_family summary, 4801). 4. T-524 measurement with T-513. 5. T-537. 6. T-513.
 7. T-472 live re-check (4294), T-422, T-147, T-438, T-425, T-436, T-437, T-432, T-378 S1 verify, T-382, T-377, T-386, T-409, T-402, T-398, T-399, T-370 HOLD,
