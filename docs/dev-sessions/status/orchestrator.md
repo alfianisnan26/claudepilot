@@ -40,8 +40,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 ## DECISIONS (binding)
 - 14:56 D-70 LANES (DECISIONS.md; my decision T-595 5380): current 5 workers finish; freed slots become lanes, spawned ONCE on sonnet and fed
   by session_message, never ended for lack of work: CP Backend -> CP QA Perf -> CP Frontend -> CP QA UI -> 5th = blind reviewer.
-  Every delivery goes to its side's QA lane before merge. T-591 S1 stays with eaec4cc5, then Backend. GAP: lanes cannot make branches (T-595).
-- 16:10 Coordinator back: deploy #40 is its own; no deploy from me; one workspace restart after #40.
+  Every delivery goes to its side's QA lane before merge. T-591 S1 stays with eaec4cc5, then Backend. T-595 5389: the LEAD makes each ticket's
+  worktree+branch (git worktree add -b ticket/T-n-slug origin/integration) and gives the lane the path; risk (5390): Bash outside the spawn worktree.
 - 15:50 Workspace restarted 13:46 UTC; 03c496b6 (T-546, mid-Jobs) and cee43422 (T-486 port, WAITING 3cb0883) are gone, all branches
   pushed and clean. Deploy #39 (coordinator, RBAC + T-557 fix) holds the cluster, finishes by itself. 14:05 Coordinator AWAY (owner offline): restart POSTPONED, long work OK, Mac runner off.
   The coordinator ran #38/#39. After it: fresh workers re-run T-546's Jobs on bb7cdb0 and T-486's on 3cb0883.
