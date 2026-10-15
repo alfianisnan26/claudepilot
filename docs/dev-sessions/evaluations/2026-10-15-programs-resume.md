@@ -47,3 +47,32 @@ Cost per closed ticket (ESTIMATE, lead plus workers over closed tickets, setup i
 
 Two hours after the hand-overs: cost per closed ticket per program, leads' context per hour, function-session reuse (spawns per function),
 share of commits by workers, CI cancelled/failed share.
+
+## Second window: 02:00 to 03:35 UTC (after the hand-overs and fixes)
+
+MEASURED from the portal (sessions, tickets, CI) and git at 03:35; lead cost split by the time each lead lived in the window (ESTIMATE), worker
+cost counted in the window the worker started.
+
+| | ClaudePilot | Konfersi | Event |
+| --- | --- | --- | --- |
+| Tickets closed | 4 | 3 | 2 |
+| Cost (leads + workers) | about 66 USD (lead 13, workers 53) | about 43 USD (16 + 27) | about 38 USD (12 + 26) |
+| Cost per closed ticket | about 16 USD | about 14 USD | about 19 USD |
+| Workers started | 22 (implementer 12, reviewer 5, qa-verifier 3) | 15 (konfersi-qa 4, reviewer 5, -ai 3, -web 2) | **26** (event-qa 10, -devops 6, -builder 6, -web 3) |
+| Worker models | opus 18, sonnet 4 | opus 6, sonnet 9 | **opus 21**, sonnet 5 |
+| Most workers on one Claude | 11 | 7 | 11 |
+| In review now | 10 (waiting for a deploy) | 18 (waiting for the stg merge gate, T-387) | 2 |
+| Commits | 36 on integration | (module branches) | 30, **16 by the lead** (`main`) |
+| CI | deploy 32 passed | stg-deploy 17 passed | none |
+
+Across the three: QA and review workers cost 1.21 USD a session on opus against 0.47 on sonnet (15 of 28 on opus); build workers 2.65 on opus
+against 0.42 on sonnet. Throughput: 9 closed in 95 minutes (about 5.7 an hour); 30 tickets are done in work but wait in review on a gate
+(a deploy, the Konfersi stg merge gate).
+
+What got better since the first window: Konfersi's cost per closed ticket (47 to 14 USD), no outage, no OOM, no duplicate lead, the owner's
+queue at zero (D-62), spawns spread once the leads named the Claude (two.claude from 5 live sessions to 0).
+
+What is still wrong, and the defaults now in force (D-63): opus where sonnet does (QA and review on sonnet; opus only for gate, rule and
+security reviews and large slices); spawn churn instead of reusing function sessions; Event's lead implementing; leads copying worker reports
+because workers have no ticket tools in ClaudePilot and Konfersi (T-433); leads growing 200k to 300k context an hour (T-423). Next measurement
+at about 05:30 UTC, same table.
