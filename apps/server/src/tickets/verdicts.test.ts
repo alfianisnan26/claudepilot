@@ -37,6 +37,22 @@ test('canRecordVerdict: a person, or a QA/review session of its own role that is
   assert.deepEqual(canRecordVerdict({ ...base, session: { id: 'i', agent: 'implementer' } }), { allow: false, why: 'not_a_verifier' });
   assert.deepEqual(canRecordVerdict({ ...base, session: { id: 'l', agent: null } }), { allow: false, why: 'not_a_verifier' }, 'a lead is no verifier');
   for (const callerKind of ['system', 'token', 'trigger'] as const) assert.deepEqual(canRecordVerdict({ ...base, callerKind, session: null }), { allow: false, why: 'not_a_verifier' }, callerKind);
+  // QA M4 (T-325 S1b): the caller kind is checked even when a QA session is passed in (a token acting for it is not it).
+  for (const callerKind of ['system', 'token', 'trigger'] as const) assert.deepEqual(canRecordVerdict({ ...base, callerKind }), { allow: false, why: 'not_a_verifier' }, `${callerKind} with a QA session`);
+});
+
+test('canRecordVerdict (T-325 S1b, QA F1): a verifier whose spawn chain holds an author is refused; a holder that leads the work may be its parent', () => {
+  const base = { callerKind: 'agent' as const, role: 'qa' as const, session: { id: 'q', agent: 'qa-verifier' }, authors: new Set(['impl']), leads: new Set(['lead']), commit: A, chain: ['lead'], leadHolders: new Set<string>() };
+  assert.deepEqual(canRecordVerdict(base), { allow: true }, 'spawned by the lead, who is no author');
+  assert.deepEqual(canRecordVerdict({ ...base, chain: ['impl', 'lead'] }), { allow: false, why: 'descends_from_author' }, 'the author’s child named qa-verifier');
+  assert.deepEqual(canRecordVerdict({ ...base, session: { id: 'q', agent: 'my-verifier' }, chain: ['impl', 'lead'] }), { allow: false, why: 'descends_from_author' }, 'any QA-shaped name the author picks');
+  assert.deepEqual(canRecordVerdict({ ...base, chain: ['x', 'impl', 'lead'] }), { allow: false, why: 'descends_from_author' }, 'a grandchild of the author');
+  // The orchestrator holds the ticket (an author) and leads it: its own QA worker may verify.
+  const held = { ...base, authors: new Set(['orch', 'impl']), leads: new Set(['orch']), chain: ['orch'] };
+  assert.deepEqual(canRecordVerdict({ ...held, leadHolders: new Set(['orch']) }), { allow: true }, 'the holder that leads the work');
+  assert.deepEqual(canRecordVerdict(held), { allow: false, why: 'descends_from_author' }, 'a holder that is not a lead is an author like any other');
+  assert.deepEqual(canRecordVerdict({ ...held, leadHolders: new Set(['orch']), chain: ['impl', 'orch'] }), { allow: false, why: 'descends_from_author' }, 'the exemption covers the holder only, not its workers');
+  assert.deepEqual(canRecordVerdict({ ...held, leadHolders: new Set(['orch']), session: { id: 'orch', agent: 'qa-verifier' }, chain: [] }), { allow: false, why: 'is_author' }, 'the holder itself still cannot');
 });
 
 test('evaluateVerdicts: the latest verdict of each role ON THE HEAD decides; another commit’s verdict is stale', () => {
@@ -138,6 +154,58 @@ test('a QA session that held the ticket, or leads its holder, is refused as auth
     r.sessions.add({ id: 'qaOld', workspaceId: WS, agent: 'qa-verifier', state: 'ended' });
     r.sessions.sessions.get('impl')!.continuedFrom = 'qaOld';
     assert.throws(() => record(r, 'qaOld', 'qa', 'pass', A), (e: any) => e.code === 'FORBIDDEN');
+    assert.equal(r.tickets.verdicts(UI, r.id).length, 0);
+  } finally {
+    r.done();
+  }
+});
+
+test('QA F1 (T-325 S1b): the author’s child or grandchild with a QA name, and its successor, are refused; nothing is written', async () => {
+  const r = await rig();
+  try {
+    const refusedAsDescendant = (who: string) => assert.throws(() => record(r, who, 'qa', 'pass', A), (e: any) => e.code === 'FORBIDDEN' && /descends from/.test(e.message), who);
+    r.sessions.add({ id: 'fakeQa', workspaceId: WS, agent: 'qa-verifier', parentId: 'impl' });
+    refusedAsDescendant('fakeQa');
+    r.sessions.add({ id: 'renamed', workspaceId: WS, agent: 'konfersi-qa', parentId: 'impl' });
+    refusedAsDescendant('renamed');
+    r.sessions.add({ id: 'helper', workspaceId: WS, agent: 'implementer', parentId: 'impl' });
+    r.sessions.add({ id: 'grandQa', workspaceId: WS, agent: 'reviewer', parentId: 'helper' });
+    assert.throws(() => record(r, 'grandQa', 'review', 'pass', A), (e: any) => e.code === 'FORBIDDEN' && /descends from/.test(e.message));
+    r.sessions.add({ id: 'movedQa', workspaceId: WS, agent: 'qa-verifier', continuedFrom: 'fakeQa' });
+    refusedAsDescendant('movedQa');
+    assert.equal(r.tickets.verdicts(UI, r.id).length, 0);
+    const why = r.audits.filter((a) => a.kind === 'ticket.verdict_refused').map((a) => a.detail!.why);
+    assert.deepEqual(why, ['descends_from_author', 'descends_from_author', 'descends_from_author', 'descends_from_author']);
+    record(r, 'qa1', 'qa', 'pass', A); // the lead's own QA still may
+  } finally {
+    r.done();
+  }
+});
+
+test('QA F1: when the orchestrator holds the ticket and leads its implementer, its QA worker verifies; a holder that leads nobody cannot spawn one', async () => {
+  const h = await ticketsHarness();
+  try {
+    const s = h.sessions;
+    s.add({ id: 'orch', workspaceId: WS, agent: null });
+    const t = h.tickets.create(UI, { summary: 'held by the lead', workspaceId: WS });
+    h.tickets.update(UI, t.id, { assignee: { kind: 'session', sessionId: 'orch' }, status: 'in_progress' });
+    s.add({ id: 'qaW', workspaceId: WS, agent: 'qa-verifier', parentId: 'orch' });
+    const rec = (who: string) => h.tickets.recordVerdict(agent(WS, who), t.id, { role: 'qa', verdict: 'pass', commit: A });
+    assert.throws(() => rec('qaW'), (e: any) => e.code === 'FORBIDDEN' && /descends from/.test(e.message), 'a holder with no worker on the ticket is the author');
+    s.add({ id: 'impl', workspaceId: WS, agent: 'implementer', parentId: 'orch', ticketId: t.id });
+    assert.equal(rec('qaW').actor, 'session:qaW', 'the holder leads the implementer: its QA is independent');
+    s.add({ id: 'implQa', workspaceId: WS, agent: 'qa-verifier', parentId: 'impl' });
+    assert.throws(() => rec('implQa'), (e: any) => e.code === 'FORBIDDEN', 'the implementer’s child is not');
+  } finally {
+    h.done();
+  }
+});
+
+test('QA M7 (T-325 S1b): a QA-named session started with this ticket_id is an author', async () => {
+  const r = await rig();
+  try {
+    r.sessions.add({ id: 'qaOn', workspaceId: WS, agent: 'qa-verifier', parentId: 'lead', ticketId: r.id });
+    assert.throws(() => record(r, 'qaOn', 'qa', 'pass', A), (e: any) => e.code === 'FORBIDDEN' && /author of this ticket/.test(e.message));
     assert.equal(r.tickets.verdicts(UI, r.id).length, 0);
   } finally {
     r.done();
