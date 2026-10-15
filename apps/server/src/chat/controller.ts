@@ -115,6 +115,7 @@ import { redactSecrets, stripUnsafe } from '../portalmcp/sanitize.js';
 import { NO_VALUES, SessionStream, ValueRedactor } from './valueRedact.js';
 import { MessageRate, pickSpawnClaude, spawnProblem, SUBAGENT_TOOLS, WORKER_REPORTS, workerLimits, type AgentCaps, type SpawnClaudeWhy, type WorkerLimitsAsk, type WorkerReport } from './agents.js';
 import { capError, makeRoom, SESSION_CAP, slotWaitText, weightOf, type LiveCaps } from './caps.js';
+import { budgetVerdict, memoryBudgetError, SESSION_MEMORY_ESTIMATE_BYTES, sessionEstimate, type WorkspaceMemory } from './memory.js';
 import { branchProblem, defaultBranch, Worktrees, type MadeWorktree } from './worktrees.js';
 import { ChatStore, claudeSessionOf, EVENT_TEXT_MAX, sessionCwd, type ChatSessionPatch, type ChatSessionRow, type InputState } from './store.js';
 import { BtwEngine, readBtwConfig, type BtwHost } from './btw.js';
@@ -722,6 +723,12 @@ export class ChatController {
    * with none that can, the start waits for a slot (`slotWaitMs`) and is refused naming the cap only when that runs out.
    */
   liveCaps?: () => LiveCaps;
+  /**
+   * Installed by the owner (T-416, D-61): each workspace's memory, read through its runtime. A start or a wake that would leave less than
+   * the headroom free is refused naming the memory (memory.ts); an unavailable reading does not block. The liveness round reads each
+   * workspace that runs a session at most once a minute, for the 85 percent alert. Unset: no budget (tests).
+   */
+  memory?: WorkspaceMemory;
   /** Installed by the owner: what a session on a pool's keys may spend before Claude Code stops it (`--max-budget-usd`), in dollars. Unset: $10. */
   sessionBudgetUsd?: () => number;
   /**
@@ -931,7 +938,10 @@ export class ChatController {
     if (this.#ticking || this.#closed) return;
     this.#ticking = true;
     try {
-      await Promise.allSettled(this.#chat.liveRows().map((row) => this.#check(row)));
+      const rows = this.#chat.liveRows();
+      // T-416: the memory alert, on this round (each workspace read at most once a minute; not awaited, a slow exec holds nothing up).
+      if (this.memory) void this.memory.look(rows.map((r) => r.workspace_id)).catch(() => undefined);
+      await Promise.allSettled(rows.map((row) => this.#check(row)));
       // T-284: a request of a process that is no longer the live one (a move, a restart, a crash, a resume) is resolved `stale`.
       if (!this.#closed) for (const id of this.#chat.sessionsWithOpenRequests()) this.#dropStale(id, 'sweep');
     } catch {
@@ -1542,6 +1552,8 @@ export class ChatController {
       const scan = await this.#scan(workspaceId, cwd);
       if (!scan.empty && !scan.trusted) throw untrustedError(scan, this.#chat.folderTrust(workspaceId, scan.folder) !== null);
     }
+    // T-416: the memory budget refuses at once, before a worktree or a row is made: a start that would leave too little free is not queued.
+    await this.#memoryBudget(workspaceId, null, actor);
     // A worktree of its own (the repository's folder was trusted above): made now, its own folder checked for trust, and the chat's folder.
     let worktree: ChatWorktree | null = null;
     if (wtReq) {
@@ -3605,6 +3617,35 @@ export class ChatController {
   }
 
   /**
+   * T-416 (D-61): throws MEMORY_BUDGET when one more session in `workspaceId` (`waking`, or a new one: null) would leave less than the
+   * headroom free: its estimate (one more per Agent-tool sub-agent it runs) plus one per launch there that the reading can't see yet (a slot
+   * granted or a launch in flight). An unavailable reading, or no `memory` installed, never blocks. The refusal is on the record.
+   */
+  async #memoryBudget(workspaceId: string, waking: ChatSessionRow | null, actor: string): Promise<void> {
+    if (!this.memory) return;
+    const reading = await this.memory.reading(workspaceId);
+    if (!reading) return;
+    const agents = waking ? (this.#chat.get(waking.id)?.agentsRunning ?? 0) : 0;
+    const pending = new Set<string>();
+    for (const [id, g] of this.#granted) if (g.workspaceId === workspaceId) pending.add(id);
+    for (const id of this.#launching.keys()) if (this.#chat.row(id)?.workspace_id === workspaceId) pending.add(id);
+    if (waking) pending.delete(waking.id);
+    for (const id of [...pending]) if (this.#chat.row(id)?.process === 'live') pending.delete(id); // running: in the reading already
+    const need = sessionEstimate(agents) + pending.size * SESSION_MEMORY_ESTIMATE_BYTES;
+    const refused = budgetVerdict(reading, need);
+    if (!refused) return;
+    this.#chat.addAudit({
+      severity: 'medium',
+      kind: 'memory.refused',
+      ...(waking ? { sessionId: waking.id } : {}),
+      workspaceId,
+      actor,
+      detail: { at: waking ? 'wake' : 'start', usedBytes: refused.usedBytes, limitBytes: refused.limitBytes, needBytes: refused.needBytes, agents, pending: pending.size },
+    });
+    throw memoryBudgetError(workspaceId, refused);
+  }
+
+  /**
    * One try at room for one more awake session in `workspaceId` (`waking` is the session being woken or started, which doesn't count
    * against itself): idle workers sleep first, then idle chats without workers, longest-idle first in each, until it fits. A lead
    * ({@link keptLead}) never sleeps for this, nor a session that is working, waiting on a person, or has background work. Null when
@@ -4408,6 +4449,8 @@ export class ChatController {
       // T-294: a crew report wakes a sleeping lead; one whose process is gone stays as it is.
       if (!relaunchGone && row.process === 'gone') throw new AppError('CONFLICT', 'This session is not running.');
       const slept = row.process === 'asleep';
+      // T-416: a wake needs the memory as a start does; refused, it stays as it is (asleep or interrupted) and the caller reads why.
+      await this.#memoryBudget(row.workspace_id, row, 'portal');
       try {
         await this.#slot(row.workspace_id, row);
         await this.#startProcess(sessionId, { resume: true });
