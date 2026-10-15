@@ -967,5 +967,5 @@ test('T-426 --pool-env: a clean artifact set keeps rc 0, and the packed copy (ar
   assert.equal(r.code, 0, r.out);
   assert.ok(existsSync(join(out, 'reports/junit.xml')), 'the clean artifact is kept');
   assert.ok(existsSync(join(w.root, 'scan-ran')), 'the scan ran (the shim saw it)');
-  assert.ok(!existsSync(join(w.root, 'art-seen')), 'art.b64 was already deleted when the scan ran');
+  assert.equal(readFileSync(join(w.root, 'art-seen'), 'utf8'), '', 'art.b64 was already deleted when the scan ran (the file is made empty by the redirect either way)');
 });
