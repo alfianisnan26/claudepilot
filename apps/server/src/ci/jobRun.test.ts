@@ -373,6 +373,17 @@ test('the Job\'s own script: checkout, the command\'s exit code, the artifacts b
   const missing = pod('no-such-branch', 'true');
   assert.equal(missing.status, 2);
   assert.match(missing.stdout, /=== JOB-RUN EXIT 2\njob-run: no-such-branch of .* is not on the remote \(push it first\)/);
+
+  // T-491: with a token, the user npmrc maps @isnanme to GitHub Packages through a reference npm expands; the value is never written.
+  const token = `fx${hex(18)}`;
+  const withToken = spawnSync('bash', ['-c', body], { encoding: 'utf8', env: {
+    PATH: process.env.PATH, JR_ROOT: join(root, `run-${hex(3)}`), JR_REPO_URL: `file://${join(root, 'claudepilot.git')}`, JR_REF: 'main', JR_ALSO: '',
+    JR_STEPS: 'none', JR_ARTIFACTS: '', JR_ARTIFACT_MAX: '100000', JR_CMD: Buffer.from('cat "$HOME/.npmrc"').toString('base64'), NODE_AUTH_TOKEN: token } });
+  assert.equal(withToken.status, 0, withToken.stdout + withToken.stderr);
+  assert.match(withToken.stdout, /^@isnanme:registry=https:\/\/npm\.pkg\.github\.com\n\/\/npm\.pkg\.github\.com\/:_authToken=\$\{NODE_AUTH_TOKEN\}\n/m);
+  assert.ok(!withToken.stdout.includes(token), 'the npmrc holds the reference, not the value');
+  const noToken = pod('main', 'test ! -e "$HOME/.npmrc" && echo no npmrc');
+  assert.match(noToken.stdout, /no npmrc\n/, 'no token, no npmrc');
 });
 
 test('--against and --keep-tests: parsed into the manifest, validated; absent, the manifest carries nothing', () => {

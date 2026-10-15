@@ -65,6 +65,10 @@ spec:
               mkdir -p "$HOME" "$root/w"
               # Credentials only through a helper that reads the environment: the token is never on a command line or in a URL.
               git config --global credential.helper '!f() { [ -n "${GIT_TOKEN:-}" ] || exit 0; echo "username=${GIT_USER:-git}"; echo "password=$GIT_TOKEN"; }; f'
+              # GitHub Packages for @isnanme (T-491): a repository without its own auth line (Event's) still installs. The file holds a
+              # reference that npm expands, never the token; a repository's own .npmrc still wins.
+              # shellcheck disable=SC2016 # the reference stays literal
+              [ -z "${NODE_AUTH_TOKEN:-}" ] || printf '%s\n' '@isnanme:registry=https://npm.pkg.github.com' '//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}' > "$HOME/.npmrc"
               t0=$(date +%s)
               fetch() { # <dir> <url> <ref>
                 git init -q "$root/w/$1" && git -C "$root/w/$1" fetch -q --depth 1 "$2" "$3" && git -C "$root/w/$1" checkout -q FETCH_HEAD \
