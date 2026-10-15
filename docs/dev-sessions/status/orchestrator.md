@@ -11,7 +11,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 ## IN FLIGHT (4 of 4 workers, D-65: 7d33708d impl-t558 (opus, why D-62 authz) T-558 (claimed, plan 4930), 03b631f0 impl-t531-s2c (sonnet) T-531 S2c,
   fb538d7d qa-t486 (sonnet) T-486 QA (reading, then GO), d39c25c1 impl-t379-s2 (sonnet) T-379 S2 3f11b28 (GO 13:08, has the slot))
   Sweep: PASS T-109/280/282/285, GAP T-259/294/136(?)/338/317/287; nobody can claim in_review tickets -> coordinator (T-525 4659).
-  Cluster: T-379 S2 Job -> T-401 gate-job 3d7ba13 (lead) -> T-531 S2c (WAITING 7afbd0d) -> T-486 QA -> T-558. 47710391 ended. Next free workers: T-426 QA +
+  Cluster: T-379 S2 Job -> T-401 gate-job 3d7ba13 (lead) -> T-531 S2c (WAITING 7afbd0d) -> T-486 QA -> T-558 (WAITING e652c44). 47710391 ended. Next free workers: T-426 QA +
   blind review (after T-401 merges), T-416 S1b QA, T-546 + T-548.
 - T-557: the COORDINATOR builds it (dev/t557-runners); 8dc6a739 ended, its 02357fd offered as input (4925). Collision lines on T-557.
 - T-426 (mine again, 4926): ab93b54 --pool-env; the coordinator reuses its secret resolution. QA + blind review after T-401 merges.
