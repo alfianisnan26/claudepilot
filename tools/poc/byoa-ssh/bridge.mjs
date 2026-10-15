@@ -26,7 +26,7 @@ function open(ws, person, workspace) {
   const key = fs.readFileSync(path.join(DIR, `desk/${person}/id_ed25519.pub`), 'utf8');
   put(`${cdir}/authorized_keys`, key, 'root:root', '644');
   const others = [...new Set([...live.values()].filter((c) => c.workspace === workspace && c.person !== person).map((c) => c.person))];
-  put(`${cdir}/welcome`, `\n  pilot · workspace ${workspace} · you are ${person} (connection ${id})\n  agent: run \`claude\` and /login with YOUR account (one sign-in per workspace)\n  online now: ${others.length ? others.join(', ') : 'only you'}\n  tickets: T-370 S0 spike (high) · T-371 S1 transport\n  rules: work on dev/* branches, never main; claim a ticket before you start\n\n`, `p-${person}:pilot-people`, '400');
+  put(`${cdir}/welcome`, `\n  pilot · workspace ${workspace} · you are ${person} (connection ${id})\n  agents (sign in with YOUR account, once per workspace):\n    claude          then /login\n    gemini          then Login with Google (paste the code it asks for)\n    cursor-agent login\n    codex login --device-auth\n  online now: ${others.length ? others.join(', ') : 'only you'}\n  tickets: T-370 S0 spike (high) · T-371 S1 transport\n  rules: work on dev/* branches, never main; claim a ticket before you start\n\n`, `p-${person}:pilot-people`, '400');
   const child = spawn('docker', ['exec', '-i', '-u', 'node', CTR, 'sudo', '/usr/sbin/sshd', '-i', '-e', '-f', '/etc/claudepilot/ssh/sshd_config',
     '-o', `AuthorizedKeysFile=${cdir}/authorized_keys`, '-o', `AllowUsers=p-${person}`, '-o', `SetEnv=PILOT_PERSON=${person} PILOT_CONN_ID=${id}`]);
   const log = fs.createWriteStream(path.join(DIR, `state/sshd-${id}.log`)); child.stderr.pipe(log);

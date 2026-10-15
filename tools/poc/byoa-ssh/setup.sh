@@ -9,7 +9,11 @@ mk() { # label uid
   mkdir -p "$h"; chown "$u":pilot-people "$h"; chmod 700 "$h"
 }
 mkdir -p /home/people; chmod 755 /home/people
-mk alice 20001; mk bob 20002
+i=0; for p in ${PEOPLE:-alice bob}; do i=$((i+1)); mk "$p" $((20000+i)); done
+# for people only: private files by default (5.12), and agent CLIs that sign in without opening a browser (an SSH session has none)
+cat > /etc/profile.d/50-pilot-people.sh <<'C'
+if id -nG 2>/dev/null | grep -qw pilot-people; then umask 077; export NO_BROWSER=true; fi
+C
 chmod 700 /home/node
 # host key on node's volume, made once
 install -d -o node -g node -m 700 /home/node/.claudepilot/ssh
@@ -86,6 +90,7 @@ cat > /etc/claude-code/managed-settings.d/50-claudepilot-desktop.json <<'C'
  "SessionEnd":[{"hooks":[{"type":"command","command":"/etc/claudepilot/bin/desktop-event"}]}]}}
 C
 chmod 644 /etc/claude-code/managed-settings.d/50-claudepilot-desktop.json
+if [ "${FAKE_POOL:-1}" = 1 ]; then
 # a stand-in account pool and Secrets drop-in, shaped like the real ones (accounts/pools.ts:577-584, delivery/ownership.ts:132-134)
 install -d -o root -g node -m 750 /etc/claudepilot/account
 printf 'pool-key-%s\n' "$(head -c6 /dev/urandom | od -An -tx1 | tr -d ' \n')" > /etc/claudepilot/account/acct1.key
@@ -93,4 +98,5 @@ chown root:node /etc/claudepilot/account/acct1.key; chmod 440 /etc/claudepilot/a
 printf '#!/bin/sh\ncat /etc/claudepilot/account/$1.key\n' > /etc/claudepilot/bin/account-key; chmod 755 /etc/claudepilot/bin/account-key
 echo '{"env":{"POC_POOL_SECRET":"s3cr3t-from-pool"}}' > /etc/claude-code/managed-settings.d/20-claudepilot-env.json
 chown root:node /etc/claude-code/managed-settings.d/20-claudepilot-env.json; chmod 440 /etc/claude-code/managed-settings.d/20-claudepilot-env.json
+fi
 echo "setup ok"

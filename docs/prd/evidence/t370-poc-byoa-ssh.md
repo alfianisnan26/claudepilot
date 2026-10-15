@@ -201,8 +201,20 @@ node tools/poc/byoa-ssh/rtt.mjs /tmp/cp-poc-byoa/desk/alice/ssh_config   # laten
 tools/poc/byoa-ssh/poc.sh down
 ```
 
-Butuh image `claudepilot-workspace:cc-2.1.296` di Docker lokal (atau `BASE=<image>`). Agent CLI lain dipasang manual di home orang itu
-(lihat 4.6); Codex dan Gemini butuh config provider/env yang ditulis di bagian itu.
+Butuh image `claudepilot-workspace:cc-2.1.296` di Docker lokal (atau `BASE=<image>`). Sejak simulasi kedua (di bawah), Gemini, Codex
+dan Cursor dipasang **sekali di image** (versi di-pin, plus `bubblewrap`), sesuai temuan 5.8 dan 5.9.
+
+**Simulasi dengan login asli** (owner, 2026-10-15: login sendiri di Claude, Gemini dan Cursor lewat SSH):
+
+```sh
+PEOPLE="alfian bob" FAKE_POOL=0 tools/poc/byoa-ssh/poc.sh up   # orang sesuai nama, tanpa pool palsu
+ssh -F /tmp/cp-poc-byoa/desk/alfian/ssh_config poc-ws           # consent, lalu: claude (/login), gemini, cursor-agent login
+PEOPLE="alfian bob" tools/poc/byoa-ssh/poc.sh view              # yang dilihat pilot: koneksi, sesi, status login (tanpa membaca isinya)
+tools/poc/byoa-ssh/poc.sh down                                  # hapus container: semua login di dalamnya ikut hilang
+```
+
+Untuk orang (`pilot-people`) sesi SSH memakai `umask 077` dan `NO_BROWSER=true`, jadi login agent memberi URL untuk dibuka di browser
+desktop dan kode untuk ditempel kembali.
 
 ## 8. Yang berubah di desain (PRD workspace-ssh.md)
 
