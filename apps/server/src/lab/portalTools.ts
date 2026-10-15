@@ -176,7 +176,7 @@ export function registerLabTools(lab: Lab, registry: ToolRegistry = portalTools)
       const summary = `${s.programs.length} program${s.programs.length === 1 ? '' : 's'} over the last ${s.window}${own ? ' (your own program only)' : ''}. Dollars are estimates.`;
       // Full: every figure without its own `source` (the `basis` map names each source once), so a portal of a few programs and two windows
       // stays under the result limit (MAX_RESULT_CHARS); the route keeps the sources on each figure.
-      if (args.full) return { summary, scope, ...s, programs: s.programs.map(withoutSources) };
+      if (args.full) return { summary, scope, ...s, ...(s.headline ? { headline: withoutSources(s.headline) } : {}), programs: s.programs.map(withoutSources) };
       return { summary, scope, window: s.window, ...(s.headline ? { headline: s.headline } : {}), programs: s.programs.map(scoreShort), more: 'full: true for every figure with its basis, types, CI, deploys, efficiency, health and the review list; basis names the sources.' };
     },
   });
