@@ -1,18 +1,22 @@
-# orchestrator status (2026-10-15 04:15 UTC, session 355881a3, continuation of de232389)
+# orchestrator status (2026-10-15 04:35 UTC, session 355881a3, continuation of de232389)
 
 Older log: `orchestrator-log-2026-10-14.md`. Hand-overs: ab99b45 (a8393f6b), bb58413 (83842ba6), 639202e (de232389).
 
 ## DONE
-- T-375 + T-369 (UX PASS 013b974) merged into integration: 17e0392, pack ea2d59c (PRD conflict: FR50 integration's, FR51 T-369's; 0 markers). Comment 3120.
-- T-366, T-417 CLOSED earlier (integration 7b1a05a).
+- T-375 + T-369 merged (17e0392), gate GREEN ea2d59c; deploy run 33 (rmv914lde880bdb) on ffa7703: gate passed, build running.
+- T-427 CLOSED (QA 3126), T-413 CLOSED (QA 3123/3138; gaps -> T-448): merged, gate GREEN ed18de4, integration pushed 6629fb9
+  (with the coordinator's T-416 supervisor commits merged in; pack regenerated).
+- T-404 merged a690f49 (QA PASS WITH GAPS 3325; hook = second layer, decision 3314; primary layer = T-451); gate GREEN (gate-job a690f49-5383).
 
 ## IN FLIGHT
-- Gate: scripts/gate-job.sh ea2d59c (log /tmp/gate-job-ea2d59c.out). On green: push integration, trigger /deploy (gate on), close T-375 + T-369.
-- Worker 17efd4d1 (qa-verifier, sonnet, satria): T-427 verify of 47a5aea in dev-t-349-1 (dev/t-427-1). PASS -> merge -> next deploy.
-- Worker e94bf27e (qa-verifier, sonnet, alfian.isnan): T-413 incident check of b27bc48 in dev-t-366-1. PASS -> close.
+- Deploy run 33: gate, build, release, verify passed; Chats step running.
+- Worker 55c2f12f (qa-verifier, sonnet, fadlilah): T-449 S2 verify of dev/t-449-2 f490c45 (report 3357), read-only in the main folder
+  (dev-t-333-1 and dev-t-366-1 answered FOLDER_UNTRUSTED after run 33 deployed T-366).
+- Worker 5e3ae624 (implementer, satria): T-376 S2 harness tools/qa/chat-paging.mjs on dev/t-376-3 in dev-t-349-1.
+- Worker ac71a2db (ux-checker, sonnet, satria): idle; runs chat-paging.mjs for the T-376 S2 verdict.
 
 ## STATE PER TICKET
-- T-404 (high): second review SAFE AFTER FIXES: next = fixer (opus) for its major findings on dev/t-404-1 (dev-t-352-1), then a third reviewer.
+- T-404: third blind review gave NO verdict (declined probes, design point -> T-451); fixes verified 3325; open until deployed.
 - T-376 (high): S1 deployed; S2 NOT DONE: dev/t-376-3 0b0faf7 needs integration merged in (the lead's job: dontAsk refused merge), then
   a ux re-check that counts page reads in a production build, then S3 perf-tester.
 - T-378 S1 dev/t-378-1 9834ff7 ready (qa tools only): needs a verifier.
