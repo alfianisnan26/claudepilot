@@ -213,8 +213,44 @@ test('T-369: the tree holds still when its lead flips between Idle and Working (
   const flipped = list.map((x) => (x.id === 'lead' ? { ...x, state: 'working' as const, lastActivityAt: at(0) } : x));
   const after = buildListView(flipped, { filter: 'working' }).groups[0]!.rows;
   assert.deepEqual(ids(after), ['newer', 'lead', 'older'], 'the same place');
-  assert.equal(after[1]!.context, false, 'now a row of the chip');
+  assert.deepEqual([before[1]!.header, after[1]!.header], [true, true], 'a header line both times');
+  assert.equal(after[1]!.context, false, 'now a match of the chip');
   assert.deepEqual(ids(after[1]!.children), ['w']);
+});
+
+/** Every row in reading order, as `id:kind`: what decides where each row sits and how tall it is. */
+const layout = (rows: readonly ListRow[], depth = 0): string[] =>
+  rows.flatMap((r) => [`${depth}:${r.session.id}:${r.header ? 'header' : 'row'}`, ...layout(crewOfRows(r.children).live, depth + 1)]);
+
+// T-369 UX check: under In progress, the lead flipping Idle -> Working became a match and its full row replaced the one-line header, so
+// worker A moved down 50 px at 390 and 33 px at 1280. A lead that matches with workers under it keeps the header (QA A9).
+test('T-369: the flip moves nothing: the lead keeps the header line, in the same place, whether or not it matches the chip', () => {
+  const list = [
+    s({ id: 'newer', state: 'working', min: 1, born: 99 }),
+    s({ id: 'lead', state: 'idle', born: 90, min: 40 }),
+    s({ id: 'wa', state: 'working', parentId: 'lead', born: 50, min: 5 }),
+    s({ id: 'wb', state: 'working', parentId: 'lead', born: 45, min: 6 }),
+    s({ id: 'older', state: 'working', min: 9, born: 98 }),
+  ];
+  const flip = (state: 'idle' | 'working', min: number) => list.map((x) => (x.id === 'lead' ? { ...x, state, lastActivityAt: at(min) } : x));
+  const expected = ['0:newer:row', '0:lead:header', '1:wa:row', '1:wb:row', '0:older:row'];
+  const idle = buildListView(list, { filter: 'working' });
+  assert.deepEqual(layout(idle.groups[0]!.rows), expected, 'idle: the lead is a header (context) where its first worker would sit');
+  const working = buildListView(flip('working', 0), { filter: 'working' });
+  assert.deepEqual(layout(working.groups[0]!.rows), expected, 'working: the same rows, the same kinds, the same places');
+  const lead = working.groups[0]!.rows[1]!;
+  assert.deepEqual([lead.context, lead.header, lead.session.state], [false, true, 'working'], 'a match shown as the header, its state updated');
+  assert.equal(working.groups[0]!.count, 5, 'a match counts');
+  assert.ok(selectable(working.groups[0]!.rows).some((x) => x.id === 'lead'), 'Select all takes the matching lead');
+  assert.deepEqual(layout(buildListView(flip('idle', 0), { filter: 'working' }).groups[0]!.rows), expected, 'and back to idle: still the same');
+  // Needs you: the lead starts waiting on a person while its worker waits too.
+  const asks = [s({ id: 'L', state: 'idle', born: 80 }), s({ id: 'W', state: 'waiting', waiting: 1, parentId: 'L', born: 70 })];
+  const before = layout(buildListView(asks, { filter: 'attention' }).groups[0]!.rows);
+  const after = layout(buildListView(asks.map((x) => (x.id === 'L' ? { ...x, state: 'waiting' as const, waiting: 1 } : x)), { filter: 'attention' }).groups[0]!.rows);
+  assert.deepEqual([before, after], [['0:L:header', '1:W:row'], ['0:L:header', '1:W:row']]);
+  // In All (no chip) a lead with its workers is a full row, as before.
+  const all = layout(buildListView(flip('working', 0)).groups[0]!.rows);
+  assert.deepEqual(all.slice(all.indexOf('0:lead:row'), all.indexOf('0:lead:row') + 3), ['0:lead:row', '1:wa:row', '1:wb:row']);
 });
 
 test('done: ended workers fold, one ended for safety stays in sight (it needs you)', () => {

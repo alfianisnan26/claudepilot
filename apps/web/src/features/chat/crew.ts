@@ -10,8 +10,9 @@
 // while its lead waits idle for reports, Needs you, a search the lead does not match) sits under a LEAD HEADER: the lead as a muted context
 // row (title, state, crew count, Claude; a tap opens it), all its workers in the view under one header, deeper levels kept. The header is
 // not a match: the chip's count and a heading's count are the matching sessions only, Select all does not take it (`selectable`), and it
-// has no swipe, checkbox or ⋯. It sits where its first worker would sit, and a lead with live workers under it is ordered by them, so the
-// tree holds still when the lead flips between Idle and Working (QA A9). Only a worker whose lead is archived (no header) says "from
+// has no swipe, checkbox or ⋯. It sits where its first worker would sit, and a lead with live workers under it is ordered by them; in a
+// chip, a lead that matches with workers under it shows as the same header (`ListRow.header`, a match: counted, selectable), so the tree
+// holds still when the lead flips between Idle and Working (QA A9). Only a worker whose lead is archived (no header) says "from
 // <lead>". In All (the status headings) a worker that does not need you sits under its lead's heading, nested under it; one that needs you
 // keeps the Needs you heading (it never folds), under a header for its lead.
 import { matchesQuery, needsYou, rollupLine, type ChatSession, type ListRow, type Rollup } from '@portal/contracts';

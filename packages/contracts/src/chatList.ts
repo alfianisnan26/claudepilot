@@ -50,6 +50,12 @@ export interface ListRow {
    * does not take it, it has no swipe, checkbox or ⋯. Its `children` are its workers in the group.
    */
   context: boolean;
+  /**
+   * Shown as a lead header: every `context` row, and in a chip (not All) a lead that matches it with workers under it (T-369, QA A9). So a
+   * lead that flips in and out of the chip (Idle and Working under In progress) keeps the header's place and height, only its state
+   * changes; a matching one still counts and Select all takes it. A header is ordered by its workers.
+   */
+  header: boolean;
 }
 
 export interface ListGroup {
@@ -116,13 +122,13 @@ const membersUnder = (r: ListRow): ChatSession[] => r.children.flatMap((c) => [.
 
 /**
  * The session a row is ordered by (T-369). A lead with live workers under it goes by the most urgent of them, and by itself only when it
- * needs you, so a lead that flips between Idle and Working does not move its tree, and a lead header (`context`) sits where its first
- * worker would sit. Any other row goes by itself; a header whose workers are all done, by the most urgent of them.
+ * needs you, so a lead that flips between Idle and Working does not move its tree, and a lead header (`header`, matching or not) sits where
+ * its first worker would sit. Any other row goes by itself; a header whose workers are all done, by the most urgent of them.
  */
 function orderedBy(r: ListRow): ChatSession {
   const below = membersUnder(r);
   const live = below.filter((s) => !done(s));
-  const pool = r.context ? (live.length ? live : below) : live.length ? (needsYou(r.session) ? [r.session, ...live] : live) : [r.session];
+  const pool = r.header ? (live.length ? live : below) : live.length ? (needsYou(r.session) ? [r.session, ...live] : live) : [r.session];
   return [...pool].sort(byNeed)[0] ?? r.session;
 }
 
@@ -246,6 +252,7 @@ export function buildListView(all: readonly ChatSession[], opts: ListOptions = {
     workspaceGone: !!workspaces?.(s.workspaceId)?.gone,
     parentTitle: null,
     context: false,
+    header: false,
   });
 
   // Rows per group, then nest.
@@ -272,7 +279,7 @@ export function buildListView(all: readonly ChatSession[], opts: ListOptions = {
       if (!lead || inGroup.has(lead.id)) continue;
       if (lead.archivedAt) rows.get(s.id)!.parentTitle = lead.title || 'another session';
       else if (!rows.has(lead.id)) {
-        rows.set(lead.id, { ...makeRow(lead), context: true });
+        rows.set(lead.id, { ...makeRow(lead), context: true, header: true });
         headers.push(lead);
       }
     }
@@ -292,8 +299,12 @@ export function buildListView(all: readonly ChatSession[], opts: ListOptions = {
       if (parentRow && parentRow !== row && !underItself(s)) parentRow.children.push(row);
       else top.push(row);
     }
+    // T-369: in a chip, a lead that matches with workers under it is shown as their header too, so its flip in and out of the chip moves nothing.
     const sortTree = (list: ListRow[]): ListRow[] => {
-      for (const r of list) sortTree(r.children);
+      for (const r of list) {
+        if (filter !== 'all' && r.children.length) r.header = true;
+        sortTree(r.children);
+      }
       return list.sort(byRow);
     };
     groups.push({
@@ -323,7 +334,7 @@ export function buildListView(all: readonly ChatSession[], opts: ListOptions = {
   }
   // Groups ordered by their most urgent session; the "none of" groups last. A lead header is not a session of its group.
   const rank = (g: ListGroup) => Math.min(5, ...members.get(g.key)!.sessions.map(attentionTier));
-  const newest = (g: ListGroup) => Math.max(...g.rows.flatMap((r) => (r.context ? r.children : [r])).map((r) => Date.parse(r.session.lastActivityAt)));
+  const newest = (g: ListGroup) => Math.max(...g.rows.flatMap((r) => (r.header ? r.children : [r])).map((r) => Date.parse(r.session.lastActivityAt)));
   const order = (g: ListGroup) => members.get(g.key)!.meta.order ?? 0;
   groups.sort((a, b) => order(a) - order(b) || Number(members.get(a.key)!.meta.last) - Number(members.get(b.key)!.meta.last) || rank(a) - rank(b) || newest(b) - newest(a) || a.title.localeCompare(b.title));
 
