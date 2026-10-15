@@ -12,15 +12,15 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - Earlier: 4ba5d37, 73bb581 merged; deploys #35/#36 (closed T-483, T-397, T-491, T-435, T-476, T-449).
 
 ## IN FLIGHT (4 of 4 workers, D-65: c10daf0e T-401 S1 (GO 11:28, has the slot), 10382d36 rev-t486-2 (opus, D-62) T-486 S2,
-  47710391 qa-sweep (sonnet) T-531 S2 QA WAITING GO (sweep done: 4656), dc1ba33c impl-t416b (sonnet) T-416 S1b)
+  47710391 qa-sweep (sonnet) T-531 S2 QA WAITING GO (sweep done: 4656), 0df3dd19 impl-t379 (sonnet) T-379 --image on fe62fa6)
   Sweep: PASS T-109/280/282/285, GAP T-259/294/136(?)/338/317/287; nobody can claim in_review tickets -> coordinator (T-525 4659).
-  Cluster slot order: T-401 -> T-531 QA -> T-416 S1b (a769b00). T-486 QA goes to 47710391 after T-531 (reuse). Next free worker slot: T-546 + T-548 (T-426 waits for T-401).
+  Cluster slot order: T-401 -> T-531 QA -> T-379. T-486 QA goes to 47710391 after T-531 (reuse); T-416 S1b QA after that. Next free worker slot: T-546 + T-548 (T-426 waits for T-401).
 - T-401 (high, security; claimed, 4576: M, sev 2, ~2.5 h): S1 c10daf0e (opus, impl-t401) on ticket/T-401-job-env from 58ce041:
   credentials only for clone/fetch (init container preferred), gone before npm scripts and the command; live FOUND/ABSENT check.
 - T-416 (high incident): S1 d37c5f0; QA b1aa2e47 PASS WITH GAPS (4623: 995/999 0 fail job-2c410105; mutations A2/B/C caught);
-  ended. Decision 4637 (D-65 lever 3): S1b dc1ba33c fixes the parallel-create race + push-bridge test on ticket/T-416-budget-s1b.
-  Then blind review (opus), lead gate, merge, deploy. S2 = Bypass restore.
-- T-426 (claimed 4642): starts on T-401's merged head (same Secret block of job-run.sh); opus + blind review; T-379 after it.
+  ended. Decision 4637: S1b a769b00 (race fix + push-bridge test, UNTESTED; author ended for T-379, 4688). QA runs its Jobs,
+  then blind review (opus), lead gate, merge, deploy. S2 = Bypass restore.
+- T-426 (claimed 4642): starts on T-401's merged head (same Secret block of job-run.sh); opus + blind review. T-379 (4687) running.
 - T-531 (high, authz): S1 df65563 (4515: typecheck a3cf20b8; 1105/1111 0 fail ed930af1; proof 535ee3fc 6/6); 74a6ee0e ended.
   Blind review 21731f30 PASS WITH CONDITIONS (4520: preflight at view runs a shell, adopt at operate; ended). Decision 4524: fix
   round S2 eef38632 DONE 9cd240f (4573: typecheck e68ac93a; 1001/1015 0 fail 2bc6a50e; proof 55c7eff0 8/8 vs 4 fail); ended.
@@ -38,6 +38,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - T-378 S1 dev/t-378-1 9834ff7 ready: needs a verifier.
 
 ## DECISIONS (binding)
+- 11:30 Coordinator (owner priority, metocean): T-379 NOW in its own worker; built on T-401's fe62fa6 (fetch stage holds creds).
 - 11:15 D-65 (coordinator): 4 ClaudePilot workers; implementers sonnet by default (opus only with a written why); small QA/review
   findings fixed in the same slice; a worker takes 2-3 related tickets (reuse under 150k); full report on the ticket, the lead
   reads line 1 and opens it only on FAIL; ready features over chores. Targets under 8 USD per ticket, lead share under 30 %.
@@ -48,7 +49,6 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   (gate/security). They come before T-416 S2, T-537 and T-538..T-540.
 - 11:05 Coordinator: sweep 10 in_review tickets against live. Order: T-401 keeps the first free slot (it blocks 6 Konfersi tickets);
   the sweep takes the second. QA cannot close tickets it doesn't hold, so it reports and the lead closes on PASS (D-63).
-- 10:40 Scribe workers cannot hand in (no Bash, no ticket tools): doc fixes go to implementer slices until the coordinator decides.
 - 10:25 dontAsk workers cannot wait: the lead hands out the cluster slot with "GO T-n"; workers end with WAITING <hash>.
 - 10:02 The free-slot check counts only OUR program's Jobs (app=claudepilot-gate or job-run/program=claudepilot); Konfersi Jobs are
   capped per program by job-run.sh.
