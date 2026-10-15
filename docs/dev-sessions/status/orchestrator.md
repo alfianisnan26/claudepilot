@@ -31,6 +31,10 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - T-416 (high incident): S1 d37c5f0 QA PASS WITH GAPS 4623; S1b a769b00 QA FAIL 5792 -> S1c 0e5bcf50. S2 = Bypass restore.
 
 ## DECISIONS (binding)
+- 18:45 in_review sweep (coordinator): all 9 unassigned, close/update/comment FORBIDDEN to me -> T-634. Coordinator closes. READY done (QA PASS
+  WITH GAPS, code on integration+main, merge-base checked): T-109 1771, T-280 1767, T-282 1768, T-285 1769, T-287 1770 (rest T-450, 3161),
+  T-136 1772 (gaps T-312/T-313), T-338 1846 (e4efeca; rest T-342). WAITS: T-259 QA FAIL 1773 (full text; rest T-315/T-316) -> waits-t315-t316;
+  T-317 part 2 = live Keep going run on the real portal -> waits-live-run (production: a person's step).
 - 16:57 Workspace restarted by coordinator (pilot browser, T-619, D-73); release portal 2026.10.15-12 merged (c29d75c7). All 6 workers' processes stopped;
   every worktree clean and pushed. Woke QA Perf, impl-t426, BE Infra, Backend, impl-t548 by message (re-run cut Jobs). QA UI respawned 80df7bb9 on qa/T-600-ui-r2.
 - 16:30 D-71 (coordinator): limit 6; 3rd build lane BE Infra (CI, runners, job-run, k3s, deploy, secrets delivery, usage, spend, quota):
@@ -41,9 +45,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   worktree+branch and gives the lane the path. 15:19 CONFIRMED refused (5443): no lane can take a 2nd ticket; coordinator asked (a/b/c);
   16:25 (T-595 5552/5553): QA Perf may `git merge --ff-only` a base the lead pushed; lane-backend may NOT. An implementing lane
   needing a new base is ended and respawned as the same lane on a fresh branch from that base.
-- 15:50 Workspace restarted 13:46 UTC; 03c496b6 (T-546, mid-Jobs) and cee43422 (T-486 port, WAITING 3cb0883) are gone, all branches
-  pushed and clean. Deploy #39 (coordinator, RBAC + T-557 fix) holds the cluster, finishes by itself. 14:05 Coordinator AWAY (owner offline): restart POSTPONED, long work OK, Mac runner off.
-  BINDING: the coordinator runs deploys (#38-#40); I start NO deploy. (Old T-546/T-486 workers replaced.)
+- BINDING: the coordinator runs deploys; I start NO deploy.
 - 12:50 Coordinator: it builds T-557 itself (owner's ask); no T-557 slices from me; T-426 stays mine; a line on T-557 when I touch
   ci/ or connect/ in a big way. (Supersedes 12:45's fold of T-426 into the lease.)
 - 13:20 D-66: quick-check (format, lint, named tests) before the gate. Workers cannot git merge: the lead merges base heads in (4852).
