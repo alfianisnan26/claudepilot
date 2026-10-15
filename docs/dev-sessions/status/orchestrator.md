@@ -1,37 +1,34 @@
-# orchestrator status (2026-10-15 01:25 UTC, session a8393f6b, HAND-OVER to the continuation)
+# orchestrator status (2026-10-15 01:40 UTC, session 83842ba6, continuation of a8393f6b)
 
-Older log: `orchestrator-log-2026-10-14.md` (same folder).
+Older log: `orchestrator-log-2026-10-14.md` (same folder). Previous hand-over: commit ab99b45.
 
 ## DONE
-- LIVE portal 2026.10.15-1 (run 31 rmv8s72zu862989 PASSED on 0831ba7; Argo Synced/Healthy c685eea): T-338, T-342, T-333, T-336, T-343, T-312, crew hand-over.
-- integration 79ef74f (origin + pilot), NOT deployed: T-348 (tool policy at dispatch), T-315 slice 1 (heartbeat workflow, runs only once on main), T-330/T-331/T-272 (cpbview), coordinator's job anti-affinity 96f47b8, D-55/D-56 docs, byoa-ssh PoC tools. Last full gate: gate-job 781cb3d GREEN (before T-330 + coordinator merges); server tsc rc 0 and jobRun 15/15 on 3ea503d.
-- Closed in this chat: T-333, T-336, T-343, T-342, T-312, T-353 (my incident: integration red on tsc 23:05-00:09, fixed), T-334, T-348, T-315, T-330, T-331, T-272. Filed: T-347..T-352, T-354..T-356, T-388.
+- LIVE portal 2026.10.15-1 (run 31 PASSED on 0831ba7; Argo c685eea): T-338, T-342, T-333, T-336, T-343, T-312, crew hand-over.
+- integration ab99b45 (origin + pilot), NOT deployed: T-348, T-315 s1, T-330/T-331/T-272, job anti-affinity 96f47b8, D-55/D-56 docs. Last full gate: gate-job 781cb3d GREEN.
+- 01:24 adopted T-366, T-369, T-321, T-349, T-352 (claimed by id; the ended lead's tickets had gone back to the queue).
+- Ended workers: 7be4aeac (T-366 reviewer, verdict copied below), 2005bc7f (old T-321/T-312 verifier; T-312 already closed, UI part is T-354).
 
-## IN FLIGHT (live workers move to the continuation; do not end them)
-- T-366 (urgent, D-55 folder trust): implementer done, branch dev/t-366-1 head d647d14 (report copied to T-366 comment 2236). WAIT FOR: blind reviewer worker 7be4aeac (opus) verdict on T-366. SAFE -> merge, typecheck, then the real-job QA (a dontAsk worker in a brand-new rules-only worktree starts without a person; one with `Bash(flock /tmp/heavy.lock:*)` is refused with the reason). Deploy needs images=portal,workspace (broadAllow is computed by the workspace's cp-session host copy; an old host scans broad = fail closed).
-- T-369 (urgent, owner phone bug: crew tree under a lead header): implementer worker 151ab26d (opus, dontAsk), branch dev/t-369-1 from origin/dev/t-321-2. WAIT FOR: its ACTUAL on T-369; then a ux-checker worker (390 then 1280, light/dark); then send T-375 to the SAME worker (same component).
-- T-349 (session_start TOCTOU): implementer worker a893d274 (opus), dev/t-349-1 from wip/batch-6; proof job 07f615ed passed (3 new tests fail on 781cb3d). WAIT FOR: its typecheck + chat/portalmcp job result, then a verifier worker.
-- T-352 (factory minors m1-m3 + live cost estimate): implementer worker 0571ff1c (opus), dev/t-352-1 aa8b815 pushed; idle on its own job monitor. WAIT FOR: its ACTUAL on T-352 (message it if it stays silent), then a verifier worker.
-- T-321 (empty crew list flake): an Agent-tool SUB-AGENT of this chat: it ENDS with this chat. Its pushed work: dev/t-321-2 (361fdab --diag, c0cec96/ccb280a chip stays picked, 74bbb76 session-crew waits for the page). Read T-321's comments for its ACTUAL; if none, a worker finishes it (30+ runs with --hogs, base vs fix). T-369 is built on this branch: merge T-321 first.
+## IN FLIGHT
+- T-366 (urgent): reviewer 7be4aeac = SAFE AFTER FIXES on d647d14. B1 runner deny-list -> vetted allow list; M1 any outside path broad; M2 skills/commands/agents frontmatter (stricter only); m1 help text. NEXT STEP: implementer worker (opus, high) on dev/t-366-1, then a fresh reviewer. Dispatch failed 01:26: portal MCP down (pod 0/1, restarting).
+- T-369 (urgent): implementer 151ab26d done at 731fa28 (web 575/575 job a4d4c68e, typecheck 8a1fd102). NEXT STEP: ux-checker worker (sonnet) on 731fa28; then T-375 to 151ab26d. Dispatch failed with the portal.
+- T-349: implementer a893d274 on dev/t-349-1 b58d4b7, proof job 07f615ed (3 new tests fail on base). Lead read controller diff: live check repeated with no await before insert, OK. WAIT FOR: its typecheck + chat/portalmcp job (messaged 01:24), then a verifier worker.
+- T-352: implementer 0571ff1c on dev/t-352-1 aa8b815. WAIT FOR: its ACTUAL (messaged 01:24), then a verifier.
+- T-321: dev/t-321-2 74bbb76 (set A 15/15 on the fix, job 59b3c5d7). Left: set B (base under the same load) by a qa-verifier worker when a slot frees. T-369 sits on it: merge T-321 first.
 
 ## DECISIONS
-- New slices only as session_spawn workers (D-49); at most five in flight (D-43), the Konfersi and Event crews share the workspace.
-- D-50/D-51/D-55/D-56 applied; only T-63 blocked (upstream).
-- T-366 builds exactly D-55 (owner's decision, DECISIONS.md:61); every implementer choice was stricter.
-- Deploy cap three a day; run 31 was the first of 2026-10-15.
+- 01:25 T-366: fix the review's B1/M1/M2/m1 BEFORE merge (a gate change; merging would ship weaker than D-55). M2 only in the stricter direction, so no owner decision. Reason on T-366 (comment pending, portal down).
+- New slices only as session_spawn workers (D-49); at most five in flight (D-43). Quota 01:23: alfian.isnan session 1 %, projection 18 % (claude_usage).
+- Deploy cap three a day; run 31 was the first of 2026-10-15. Next deploy needs images=portal,workspace once T-366 is in.
 
 ## NEEDS A HUMAN
 - T-93 production cutover (Konfersi, paused).
 - T-306 item 4 / T-340: installing the rtk hook is a permission change.
 
 ## NEXT (in order)
-1. T-366 (review verdict, merge, real-job QA) and T-369 (+ ux-checker).
-2. A full gate-job on the integration head before the next deploy (none running now); deploy with images=portal,workspace once T-366 is in.
-3. T-378 (QA at scale: one QA worker owns the shared fixture and gate, FAIL first then PASS), T-376 (transcript paging from newest + compression) in parallel.
-4. T-375 (two-line rows, same implementer as T-369).
-5. T-382 (lists epic: S1 cursor standard + JSON compression first; shares T-378's fixture and gate; covers T-376's paging).
-6. T-377 (nested lists fold), T-386.
-7. T-370: HOLD the spike (session claudepilot-b7 runs it locally; evidence lands as docs/prd/evidence/t370-*.md); then its k8s part, then T-371..T-374 (PRD workspace-ssh.md v0.2).
-8. T-365 rest, T-354, T-347, T-350, T-351, T-355, T-356, T-388, T-341, T-344, T-345, T-332, T-335, T-313, T-314, T-306 item 3, T-149. Konfersi and Event stay paused for this track (D-45).
+1. T-366 fix + re-review, merge, real-job QA; T-369 ux-check, merge after T-321.
+2. Full gate-job on the integration head, then deploy (images=portal,workspace).
+3. T-378, T-376 in parallel; T-375 (same worker as T-369); T-382 (lists epic S1); T-377, T-386.
+4. T-370 HOLD (claudepilot-b7 runs the spike), then T-371..T-374.
+5. T-365 rest, T-354, T-347, T-350, T-351, T-355, T-356, T-388, T-341, T-344, T-345, T-332, T-335, T-313, T-314, T-306 item 3, T-149. Konfersi and Event stay paused for this track (D-45).
 
-LESSONS: typecheck before every integration push; report=end hides a worker's finished turn (use idle); job-run --help exits 2 (briefs point at the header); worker ticket tools can be missing or the portal can stall: copy verdicts to the ticket; a 20x test-repeat Job on the portal's node stalled the portal (anti-affinity now on integration).
+LESSONS: typecheck before every integration push; report=end hides a worker's finished turn (use idle); ticket_claim_next takes an id now (claim by id); the portal can stall: copy verdicts to the ticket and re-dispatch after it is back.
