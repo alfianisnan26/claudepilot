@@ -156,6 +156,21 @@ The agent then has the ticket tools; a claim records the person and the connecti
 tokens keep their limits (`portalmcp/registry.ts:29`: no operate or admin tools), and a desktop token gets less: the read tools and the
 ticket tools only, no `session_*` tool, so a desktop agent cannot start or steer a session on any Claude through pilot.
 
+## 8a. Managing logins, sessions and people
+
+Owner, 2026-10-15: logins and sessions in a workspace can be managed (removed) from pilot. Who: the person for their own; the admin for
+anyone (offboarding). Every action is an audit row with ids only; the destructive ones ask for a confirmation.
+
+| Action | How | Never |
+| --- | --- | --- |
+| Sign out one agent | the portal runs that CLI's own logout **as the person**: `claude auth logout`, `codex logout`, `cursor-agent logout` (each checked in S0's image). Gemini has no logout command: the portal removes its credential files under the person's `~/.gemini` (the Google token, the stored API key). Then it reads the sign-in state again | reads or copies a credential |
+| Delete a desktop session | its row, and its transcript in the person's home (Claude `~/.claude/projects/<folder>/<id>.jsonl`, Codex `~/.codex/sessions/.../rollout-*.jsonl`, Gemini `~/.gemini/tmp/<proj>/chats/session-*.jsonl`, Cursor's chat store). A live session is ended first (revoke, or the person exits) | deletes another person's files without the admin's confirmation |
+| Remove a person from a workspace | revoke their tokens, end their processes, sign out every agent; their home is **kept** until the admin deletes it with a second confirmation (destructive data, D-10) | deletes the home in the same step |
+| Retention | desktop sessions follow the chat sessions' retention | |
+
+UI: the SSH sheet gets **People**: per person their connections (Revoke), agents (state, Sign out), sessions (Delete) and Remove. None of
+these are Portal MCP tools (people's data and sign-ins are `humanOnly`).
+
 ## 9. Data and storage
 
 | What | Where | Retention |
@@ -178,7 +193,7 @@ Migrations go in the next free block (`docs/coord/PLAN.md`); append only.
 | --- | --- | --- |
 | S0 spike (**done on Docker**, [evidence](evidence/t370-poc-byoa-ssh.md); Kubernetes items open) | On the real workspace image and the pinned Claude Code: `sshd -i` as `node` over `docker exec -i` and kube exec (binary, no TTY); `SetEnv`; `AllowTcpForwarding local` with VS Code Remote-SSH through a ProxyCommand; hook input fields; a headers helper for an MCP server; `sudo sshd -i` in the pod (privilege escalation allowed?); `useradd` with a fixed uid at runtime and the home mount; what the pinned Claude Code does for a person with an unreadable managed drop-in and with the account `apiKeyHelper`; whether anything in the workspace uses the service account token. Evidence file under `docs/prd/evidence/`. | each item ✅ or ❌ with the output |
 | S1 transport | `openssh-server` in the image (no daemon); `sshd_config`, `ssh-enter`; the route `/api/ssh/<workspaceId>` (bearer, `operate`, audit, connection row, close on revoke); people, Unix users, tokens, keys; `pilot-ssh`; the G6 list as tests. | `ssh` and VS Code Remote-SSH from a second container as the desktop, on Docker and on a Kubernetes rig; a revoked token ends a live connection in < 2 s |
-| S2 access UI | Workspace → SSH sheet: person, token (shown once), public key, config block with `HostKeyAlias` and the known-hosts line, download `pilot-ssh`; Connected now; revoke. 390 px first. | ux-checker PASS |
+| S2 access UI | Workspace → SSH sheet: person, token (shown once), public key, config block with `HostKeyAlias` and the known-hosts line, download `pilot-ssh`; Connected now; revoke; People (8a): sign out an agent, delete a session, remove a person. 390 px first. | ux-checker PASS |
 | S3 observe | Hooks drop-in, `desktop-event`, outbox ingest, desktop sessions, read-only transcript, welcome screen, consent. | a `claude` started over SSH shows in pilot in ≤ 15 s with person, branch and transcript |
 | S4 work pickup | Per-connection Portal MCP token and managed MCP entry; claims attributed. | the desktop agent claims a ticket and the ticket shows the person and the desktop session |
 
