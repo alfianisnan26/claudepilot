@@ -721,6 +721,9 @@ test('MCP crew_scorecard: short by default, full on ask; an agent of program A g
     assert.ok(!refused(fullCall), `the full form fits the result limit: ${JSON.stringify(fullCall).slice(0, 300)}`);
     const full = where(fullCall);
     assert.equal(full.window, '6h');
+    const fa = full.programs.find((p: any) => p.program === 'L1');
+    assert.deepEqual(fa.targets.find((t: any) => t.id === 'lead_share'), { id: 'lead_share', state: 'breach', value: 76.92, offenders: ['L1', 'L2'] }, 'a D-65 target is one short row in the full form');
+    assert.equal(fa.targets.find((t: any) => t.id === 'quota_unused').value, 'unavailable:no_samples');
     // Each figure has its basis; its source is named once in `basis`.
     const done = full.programs[0].current.effectiveness.done;
     assert.deepEqual([done.basis, done.source, typeof full.basis.done, typeof full.basis.health], ['measured', undefined, 'string', 'string']);

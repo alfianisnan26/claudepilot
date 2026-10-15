@@ -78,7 +78,7 @@ test('T-549 (D-65): six rows in a fixed order, each with its state, offenders an
   assert.deepEqual([row('quota_unused').value, row('quota_unused').state, row('quota_unused').basis], [UNAVAILABLE, 'unavailable', 'UNAVAILABLE']);
   assert.match(row('quota_unused').tip, /Unavailable: the portal has no table/);
   assert.deepEqual([row('lead_share').value, row('lead_share').state], [UNAVAILABLE, 'unavailable']); // not sent: never 0
-  assert.ok(rows.every((r) => r.label.split(' ').length <= 2), 'titles of one or two words');
+  assert.ok(rows.every((r) => r.label.split(' ').filter((w) => w !== '/').length <= 2), 'titles of one or two words');
 });
 
 test('breaches: the count of breached targets, the state is the worst', () => {

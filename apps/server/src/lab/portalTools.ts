@@ -83,9 +83,10 @@ export function withoutSources<T>(x: T): T {
  * A program in the full form: no figure sources and no target `rule` (the rules are fixed text: `basis.targets` and `basis.d65` name them once,
  * the route keeps them on each target; the MCP result limit is 20,000 characters and ten targets a program carry it over).
  */
-export function fullProgram(p: CrewProgramScore): CrewProgramScore {
+export function fullProgram(p: CrewProgramScore) {
   const q = withoutSources(p);
-  return { ...q, targets: q.targets.map(({ rule: _rule, ...t }) => t as CrewProgramScore['targets'][number]) };
+  // A D-65 target is one short row (id, state, value or `unavailable:<reason>`, offenders when there are some); the older ones keep their figure.
+  return { ...q, targets: q.targets.map(({ rule: _rule, ...t }) => (t.decision === 'D-65' ? { id: t.id, state: t.state, value: v(t.figure), ...(t.offenders.length ? { offenders: t.offenders } : {}) } : t)) };
 }
 
 /** One short row: the figures the coordinator compares every pass. */
