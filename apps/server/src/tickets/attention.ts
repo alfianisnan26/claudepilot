@@ -10,8 +10,8 @@ import { can } from '../authz/seam.js';
 import { clip, present, readsPersonOnly, verbFor, type AttentionSource } from '../attention/registry.js';
 import { AGENT_ASSIGN_USER_TAGS_DEFAULT, allowedAssignTags, OWNER_CHECKLIST_TAG } from './authz.js';
 
-/** The only event actor that is a person: the page (`ui`). Agents, admin tokens, triggers and the portal are not (T-527). */
-const PERSON_ACTOR = 'ui';
+/** An event actor that is a person: the page (`ui`) or a named person (`user:<name>`), as notify/adapters/tickets.ts counts. Agents, admin tokens, triggers and the portal are not (T-527). */
+const isPersonActor = (actor: string | undefined): boolean => actor === 'ui' || (actor?.startsWith('user:') ?? false);
 
 interface Row {
   number: number;
@@ -93,7 +93,7 @@ export function ticketAttentionSource(db: () => DatabaseSync | null, agentAssign
         for (const t of tagged) withAllowed.add(t.ticket_number);
       }
       const adders = checklistAdders(d, checklistOnly.filter((n) => !withAllowed.has(n)));
-      const counts = (r: Row) => approval(r) || withAllowed.has(r.number) || adders.get(r.number) === PERSON_ACTOR;
+      const counts = (r: Row) => approval(r) || withAllowed.has(r.number) || isPersonActor(adders.get(r.number));
       return rows
         .filter(counts)
         .map((r) => ({ r, id: ticketIdOf(r.number) }))

@@ -8,7 +8,7 @@ import type { AttentionList } from '@portal/contracts';
 import { ownerActor } from '../authz/seam.js';
 import { createAttention } from '../attention/index.js';
 import { canAgentTagChecklist, D62_CHECKLIST_REFUSAL, OWNER_CHECKLIST_TAG } from './authz.js';
-import type { TicketAudit } from './service.js';
+import type { Caller, TicketAudit } from './service.js';
 import { agent, ticketsHarness, token, UI } from './testkit.js';
 
 const WS = 'kubernetes/kohi-event';
@@ -168,6 +168,98 @@ test('removing owner-checklist is always allowed, for an agent too, and drops th
     r.tickets.update(UI, p.id, { tags: [CL] });
     assert.deepEqual(r.tickets.update(r.lead, p.id, { tags: ['git'] }).tags, ['git']);
     assert.equal(r.audits.length, 0);
+  } finally {
+    r.done();
+  }
+});
+
+test('the tag is normalised before it is judged: Owner-Checklist and " owner-checklist " are refused for an agent too', async () => {
+  const r = await rig();
+  try {
+    assertD62(refusal(() => r.tickets.create(r.lead, { summary: 'upper case', tags: ['Owner-Checklist'] })), 'create, mixed case');
+    assertD62(refusal(() => r.tickets.create(r.lead, { summary: 'spaces', tags: [` ${CL} `] })), 'create, spaces');
+    const t = r.tickets.create(r.lead, { summary: 'plain' });
+    assertD62(refusal(() => r.tickets.update(r.lead, t.id, { tags: ['OWNER-CHECKLIST'] })), 'update, upper case');
+    assertD62(refusal(() => r.tickets.update(r.lead, t.id, { tags: [`\t ${CL}\n`] })), 'update, whitespace');
+    assert.deepEqual(r.tickets.get(UI, t.id).ticket.tags, []);
+    assert.deepEqual(r.listed(), []);
+    assert.equal(r.audits.length, 4);
+  } finally {
+    r.done();
+  }
+});
+
+test("an agent re-adding the tag after a person's tag was removed is refused and not listed", async () => {
+  const r = await rig();
+  try {
+    const t = r.tickets.create(r.lead, { summary: 'Asked of the owner' });
+    r.tickets.update(UI, t.id, { tags: [CL] });
+    assert.deepEqual(r.listed(), [t.id]);
+    r.tickets.update(UI, t.id, { tags: [] });
+    assert.deepEqual(r.listed(), []);
+    assertD62(refusal(() => r.tickets.update(r.lead, t.id, { tags: [CL] })), 're-add');
+    assert.deepEqual(r.tickets.get(UI, t.id).ticket.tags, []);
+    assert.deepEqual(r.listed(), []);
+    assert.equal(r.audits.length, 1);
+  } finally {
+    r.done();
+  }
+});
+
+test('a trigger and the portal (system) may tag owner-checklist, but it is not a person: not listed on Needs you', async () => {
+  const r = await rig();
+  try {
+    const trigger: Caller = { kind: 'trigger', triggerId: 'tr1', ownerId: 'u_owner', label: 'Nightly' };
+    const byTrigger = r.tickets.create(trigger, { summary: 'From a trigger', tags: [CL] });
+    const bySystem = r.tickets.create({ kind: 'system' }, { summary: 'From the portal', tags: [CL] });
+    const later = r.tickets.create(r.lead, { summary: 'Tagged later' });
+    r.tickets.update(trigger, later.id, { tags: [CL] });
+    assert.deepEqual(byTrigger.tags, [CL]);
+    assert.deepEqual(bySystem.tags, [CL]);
+    assert.deepEqual(r.tickets.get(UI, later.id).ticket.tags, [CL]);
+    assert.deepEqual(r.listed(), [], 'neither a trigger nor the portal is a person');
+    assert.equal(r.audits.length, 0);
+  } finally {
+    r.done();
+  }
+});
+
+test("an admin's token acting for a session is not refused, and the tag it adds is audited", async () => {
+  const r = await rig();
+  try {
+    const admin = token('adm', 'admin');
+    const t = r.tickets.create(admin, { summary: 'For the worker', tags: [CL, 'production'] }, { sessionId: 'worker' });
+    const u = r.tickets.create(r.lead, { summary: 'Plain' });
+    r.tickets.update(admin, u.id, { tags: [CL] }, { sessionId: 'worker' });
+    r.tickets.update(admin, u.id, { summary: 'Plain, sharpened' }, { sessionId: 'worker' });
+    assert.deepEqual([...r.tickets.get(UI, t.id).ticket.tags].sort(), [CL, 'production']);
+    assert.deepEqual(r.tickets.get(UI, u.id).ticket.tags, [CL]);
+    assert.deepEqual(
+      r.audits.map((a) => [a.kind, a.subject, a.detail]),
+      [
+        ['ticket.agent_checklist_tagged', `ticket:${t.id}`, { ticketId: t.id, action: 'create', actorKind: 'token', sessionId: 'worker', leadId: 'lead', allowedTag: 'production' }],
+        ['ticket.agent_checklist_tagged', `ticket:${u.id}`, { ticketId: u.id, action: 'update', actorKind: 'token', sessionId: 'worker', leadId: 'lead', allowedTag: null }],
+      ],
+      'one row per added tag; an edit that leaves the tag alone writes none',
+    );
+    assert.equal(r.audits[0]!.actor, 'portal-mcp:adm');
+    // Without a session the token is not audited.
+    r.tickets.create(admin, { summary: 'No session', tags: [CL] });
+    assert.equal(r.audits.length, 2);
+  } finally {
+    r.done();
+  }
+});
+
+test('a tags event by a named person (user:<name>) counts as a person, as the notifier counts it', async () => {
+  const r = await rig();
+  try {
+    const db = r.store.db!;
+    const t = r.tickets.create(r.lead, { summary: 'Tagged by a named person' });
+    const n = Number(t.id.slice(2));
+    db.prepare('INSERT INTO ticket_tags (ticket_number, tag) VALUES (?, ?)').run(n, CL);
+    db.prepare('INSERT INTO ticket_events (ticket_number, at, kind, actor, actor_label, body, data) VALUES (?, ?, ?, ?, ?, ?, ?)').run(n, new Date().toISOString(), 'tags', 'user:alice', 'Alice', null, JSON.stringify({ from: [], to: [CL] }));
+    assert.deepEqual(r.listed(), [t.id]);
   } finally {
     r.done();
   }

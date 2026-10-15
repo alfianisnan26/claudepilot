@@ -148,7 +148,7 @@ function assigneeOf(tickets: Tickets, ctx: PortalToolContext, raw: string, sessi
 
 /** FR9d (D-62, T-527): what an agent reads about the owner-checklist tag before it tries it. */
 const CHECKLIST_TAG_HINT = 'An agent adds owner-checklist only with an allowed tag (default production, D-62): otherwise it is refused.';
-const assigneeArg =z.string().max(100).optional().describe('me (your session), user or user:<name> (a person: agents only with an allowed tag, default production, D-62), session:<id>, or none (the agents’ queue).');
+const assigneeArg = z.string().max(100).optional().describe('me (your session), user or user:<name> (a person: agents only with an allowed tag, default production, D-62), session:<id>, or none (the agents’ queue).');
 
 export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = portalTools): void {
   declareTicketPolicies();
