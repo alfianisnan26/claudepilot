@@ -38,6 +38,11 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - T-450: S3 (gaps 3902) and the 5 % real-data check.
 
 ## DECISIONS (binding)
+- 08:50 Coordinator: T-524 (high, Job memory on k3s-master) right after T-515, placement coordinated with T-513. Read the manifests:
+  /tmp already has sizeLimit 3Gi (job-run.yaml:143); the gap is request 2Gi vs limit 8Gi (scheduler sees 2Gi), and gate-job.yaml:71 and
+  browser-job.yaml:28 have the same overcommit -> one slice covers all three. Plan on claim: request ~= limit (4Gi, a flag for 8Gi that
+  prefers node2), node preference by free memory weighted above the portal rule, per-program Job count in job-run.sh's caps. T-513's
+  runner anti-affinity is a cluster GitOps MR (outside this repo) and stays its own ticket. A slice of opus + blind review (gate change, D-63).
 - 08:15 77ad393 merged ff (origin/integration fac68c4 was an ancestor). Next deploy after T-483 merges (with T-435, T-397, T-491).
 - 08:10 Coordinator: T-515 (high) right after T-483; T-490 S1 already running keeps its slot (no preemption).
 - 07:58 Coordinator: T-509 folded into the T-483 slice. Kit republish (publish.mjs --apply) is the owner's step (docs/kit/README.md:25).
@@ -63,7 +68,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 
 ## NEXT (in order, as slots free)
 1. Deploy #36 (gate on) -> live checks T-435, T-397, T-491, T-483 (+ T-472) by a verifier WITH portal tools; close.
-2. T-486 lead reads df6dc0c7's diff; merge. 3. T-490 merge on QA PASS. 4. T-515 QA + ux-checker. 5. Remove wip-t483-premerge.
+2. T-486 lead reads df6dc0c7's diff; merge. 3. T-490 merge on QA PASS. 4. T-515 QA + ux-checker. 5. T-524 (opus implementer; then blind review opus + QA), with T-513. 6. Remove wip-t483-premerge.
 7. T-450 S3, T-416, T-422, T-147, T-438, T-425, T-436, T-437, T-432, T-378 S1 verify, T-382, T-377, T-386, T-409, T-402, T-398, T-399,
    T-370 HOLD, T-371..T-374, T-363, T-451, T-470, T-507, T-508, T-512.
 
