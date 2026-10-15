@@ -9,7 +9,7 @@ Older log: `orchestrator-log-2026-10-14.md`. Previous hand-overs: ab99b45 (a8393
 
 ## IN FLIGHT (3 live workers = the D-61 budget; no Agent-tool sub-agents)
 - T-366 (urgent): worker 033e1b23 (opus, on alfian.isnan: no other Claude had room) in dev-t-366-1, branch dev/t-366-1 from 688aee1: FIRST trust by repository identity (D-62 / T-403 option a; comment 2653); classifier stays the re-trust gate. Then a THIRD blind reviewer (not 7be4aeac / a72a5caa pairs), merge, deploy images=portal,workspace (after it every ClaudePilot folder re-trusts once: hash covers skills/agents/commands), real-job QA.
-- T-417 (high): worker d8dfb37f (opus, hasyim) in dev-t-336-1, dev/t-417-1 from c8ee3ea: the live cap never sleeps a lead with live workers; idle workers first; queue otherwise; Bypass kept across sleep with every other Bypass gate still checked (comment 2617). Then a blind reviewer.
+- T-417 (high): built, dev/t-417-1 9622deb (comment 2837: proof 5/5, chat 697/0 fail, typecheck 0); worker d8dfb37f ended. Blind reviewer 775a1756 (opus, fadlilah) in dev-t-336-1: main question = wake's Bypass gates vs restart. Default if weaker: leads drop Bypass on sleep.
 - T-375 (high): worker 07cef3b0 (opus, hasyim) in dev-t-333-1 (switched to dev/t-375-1, a5fc68a): merging origin/dev/t-369-1 (SessionRow.tsx conflict) + T-378's density check + the screenshot check. Then ONE ux-checker covering T-369 item 4 and T-375, then merge T-369 + T-375 together.
 
 ## READY, NOT MERGED
