@@ -3,6 +3,10 @@
 // the loop is short and cheap, then to the lead. Worker text is untrusted: only a strict first line is read, and the ticket is the
 // worker's own (set by its spawn), never taken from the text.
 
+import { crewQuote } from './crewQuote.js';
+
+/** The actor of the portal's hand-off messages (not the lead's, not the crew report's "your worker" frame). */
+export const HANDOFF_ACTOR = 'portal:handoff';
 export const HANDOFF_MAX_FAILS = 2;
 export const HANDOFF_TOKEN_BUDGET = 150_000;
 export const HANDOFF_IMPLEMENTER = 'implementer';
@@ -24,12 +28,8 @@ export function parseVerdict(reply: string | null | undefined): { verdict: 'PASS
   return m ? { verdict: m[1] as 'PASS' | 'FAIL', sha: m[2]!, reasons: clean(m[3] ?? '', 400) } : null;
 }
 
-/** Untrusted text as one quiet line: control characters and quotes gone, cut. */
-function clean(text: string, max: number): string {
-  // eslint-disable-next-line no-control-regex
-  const t = text.replace(/[\u0000-\u001f\u007f“”"`]/g, ' ').replace(/\s+/g, ' ').trim();
-  return t.length > max ? `${t.slice(0, max - 1)}…` : t;
-}
+/** Untrusted crew text as one quiet line: the crew report's own quoting (T-548 review F1), redacted and bracket-safe, cut. */
+const clean = crewQuote;
 
 export interface HandoffSession {
   id: string;
@@ -77,6 +77,9 @@ export class HandoffEngine {
     try {
       const w = this.d.get(workerId);
       if (!w?.parentId || !this.d.enabled(w.parentId)) return;
+      // Known limit (T-548 review F3): this fires only for a WORKER session with role `implementer`. D-47 keeps implementers as Agent-tool
+      // sub-agents until the owner decides Bypass for workers, so today it never fires for them; function personas (`konfersi-*`) do not
+      // trigger it either. Whether to widen it or wait is the coordinator's decision, not changed here.
       if (w.agent === HANDOFF_IMPLEMENTER) await this.#implementerDone(w);
       else if (w.agent === HANDOFF_QA && this.#qa.has(w.id)) await this.#qaVerdict(w);
     } catch {
@@ -91,6 +94,7 @@ export class HandoffEngine {
     const key = `${leadId}:${w.ticketId}`;
     const loop = this.#loops.get(key) ?? { ticket: w.ticketId, leadId, implementerId: w.id, fails: 0, shas: new Set<string>() };
     if (loop.shas.has(sha)) return;
+    if (loop.fails > HANDOFF_MAX_FAILS) return; // past the fail limit the lead has been told: a new DONE starts no more QA (T-548 review F6)
     this.#loops.set(key, loop);
     loop.implementerId = w.id;
     loop.shas.add(sha);

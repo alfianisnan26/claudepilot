@@ -111,9 +111,9 @@ import { type BypassFacts, type BypassRefusal, type BypassState } from './bypass
 import { isStagedUpload } from './artifacts/records.js';
 import { redact } from './redact.js';
 import { TurnCost } from './turnCost.js';
-import { redactSecrets, stripUnsafe } from '../portalmcp/sanitize.js';
+import { crewQuote } from './crewQuote.js';
 import { NO_VALUES, SessionStream, ValueRedactor } from './valueRedact.js';
-import { HANDOFF_QA, HandoffEngine } from './handoff.js';
+import { HANDOFF_ACTOR, HANDOFF_QA, HandoffEngine } from './handoff.js';
 import { MessageRate, pickSpawnClaude, spawnProblem, SUBAGENT_TOOLS, WORKER_REPORTS, workerLimits, type AgentCaps, type SpawnClaudeWhy, type WorkerLimitsAsk, type WorkerReport } from './agents.js';
 import { capError, makeRoom, SESSION_CAP, slotWaitText, weightOf, type LiveCaps } from './caps.js';
 import { branchProblem, defaultBranch, Worktrees, type MadeWorktree } from './worktrees.js';
@@ -443,25 +443,9 @@ const CREW_TRIES = 3;
 /** T-294: a worker's state as its lead hears of it (see `#crewState`). */
 type CrewState = 'idle' | 'waiting' | 'ended' | 'stopped' | 'working' | 'other';
 
-// T-294: what a quoted text could close the report's quotes or open a frame of its own with: quotes become ', brackets ( and ).
-const CREW_QUOTES = /["\u201c\u201d\u201e\u201f\u00ab\u00bb\uff02\u2018\u2019\u201a\u201b]/g; // not ‹ ›: they close no “ ” quote, and a menu path (Settings › Sessions) stays readable
-const CREW_OPENS = /[[<\uff3b\uff1c\u3010\u3014\u3008\u300a]/g;
-const CREW_CLOSES = /[\]>\uff3d\uff1e\u3011\u3015\u3009\u300b]/g;
-
-/**
- * T-294: a worker's text as a crew report quotes it (its reply, what it waits on, why it stopped or ended, its title, its Claude): escapes
- * and invisible characters out and secrets redacted (`stripUnsafe`, `redactSecrets`, as session_family's untrusted text), one line, with no
- * character that could close the report's quotes or open a frame of its own, at most `max` characters.
- */
-export function crewQuote(raw: string | null | undefined, max: number): string {
-  const text = redactSecrets(stripUnsafe(raw ?? ''))
-    .replace(CREW_QUOTES, "'")
-    .replace(CREW_OPENS, '(')
-    .replace(CREW_CLOSES, ')')
-    .replace(/\s+/g, ' ')
-    .trim();
-  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
-}
+// T-548: crewQuote's patterns moved to crewQuote.ts (they leave out‹ ›: they close no “ ” quote, and a menu path (Settings › Sessions) stays readable
+// T-548: crewQuote moved to ./crewQuote.ts so handoff.ts can use it; re-exported for its callers.
+export { crewQuote };
 
 /**
  * What Claude reads for a message a portal actor sent: the text under a one-line header that says where
@@ -613,7 +597,7 @@ export class ChatController {
       return !!s && s.state !== 'ended';
     },
     spawnQa: (a) => this.#spawnQa(a),
-    tell: (to, text) => this.send(to, randomUUID(), text, { actor: CREW_REPORT_ACTOR, actorLabel: 'Auto hand-off', priority: 'later' }),
+    tell: (to, text) => this.send(to, randomUUID(), text, { actor: HANDOFF_ACTOR, actorLabel: 'Auto hand-off', priority: 'later' }),
     audit: (kind, detail) => this.#chat.addAudit({ severity: 'info', kind, sessionId: String(detail.implementer ?? detail.qa ?? ''), actor: 'portal', detail }),
   });
 
@@ -632,6 +616,7 @@ export class ChatController {
   async #spawnQa(a: { leadId: string; ticket: string; sha: string; authorClaudeId: string }): Promise<{ id: string }> {
     const lead = this.#require(a.leadId);
     let on = await this.spawnClaude(a.leadId, 'auto', 'sonnet');
+    // The other Claude is the first non-removed one, without a usage look (T-548 review F7); create's credential check still refuses an ineligible one.
     if (on.claudeId === a.authorClaudeId) {
       const other = this.#chat.listClaudes(lead.workspaceId).find((c) => c.id !== a.authorClaudeId && !c.removedAt);
       if (other) on = { claudeId: other.id, name: other.name, why: 'named' };
@@ -650,7 +635,7 @@ export class ChatController {
     const prompt =
       `[Your role: ${HANDOFF_QA}.] Verify ${a.ticket} at commit ${a.sha} (the implementer's branch ticket/${a.ticket}-*, fetched from origin). ` +
       `Read the ticket, check the diff against it, run its tests as the brief allows, never close the ticket. End your reply with line 1 exactly "PASS ${a.sha}" or "FAIL ${a.sha}: <short reasons>".`;
-    await this.send(child.id, randomUUID(), prompt, { actor: `session:${a.leadId}`, relation: 'parent', opening: true });
+    await this.send(child.id, randomUUID(), prompt, { actor: HANDOFF_ACTOR, actorLabel: 'Auto hand-off', opening: true });
     return { id: child.id };
   }
 
