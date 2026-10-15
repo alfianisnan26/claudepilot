@@ -169,11 +169,11 @@ const PROBE = `(() => {
   new MutationObserver(() => {
     const now = Math.min(...rowOf().map((r) => r.n));
     if (now >= lowest || !ref) return;
-    lowest = now; pending = true;
+    lowest = now; pending = true; window.__pending = true;
     const rec = { ref: ref.n, before: ref.top, after: at(ref.n), later: [], lowest: now };
     window.__prepends.push(rec);
     setTimeout(() => rec.later.push(at(ref.n)), 120);
-    setTimeout(() => { rec.later.push(at(ref.n)); pending = false; }, 450);
+    setTimeout(() => { rec.later.push(at(ref.n)); pending = false; window.__pending = false; }, 450);
   }).observe(scroller, { childList: true, subtree: true });
   return true;
 })()`;
@@ -314,6 +314,8 @@ async function runConfig(cookie, cfg) {
     while (tries++ < 40 && (await b.eval('window.__prepends.length')) < 3) {
       await wheel(-900);
       await sleep(800);
+      // A page can land late on a heavy render: no input until its 450 ms window has closed (else the next wheel is read as a shift).
+      for (let i = 0; i < 100 && (await b.eval('window.__pending === true')); i++) await sleep(50);
     }
     await sleep(900);
     const pre = await b.eval('window.__prepends');
