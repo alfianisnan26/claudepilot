@@ -644,8 +644,22 @@ there are no more). In a page, a `tool_result` longer than 2,000 characters keep
 does not have). `after` together with `before` or `limit`, or a limit or before that is not a whole number from 1, is a 422 (validation failed). Both routes
 are declared `view` on the session: another user gets the same 404 as a session that does not exist. Every JSON answer under `/api/*`
 is gzip-compressed when the request accepts gzip and is at least 1 KiB (hono/compress, scoped to `application/json`); an event stream,
-a WebSocket upgrade, a blob, a download or a range answer never is. Not yet built: the web reading pages (it still loads the whole
-transcript), the opaque cursor (T-382).
+a WebSocket upgrade, a blob, a download or a range answer never is. Not yet built: the opaque cursor (T-382).
+
+**History pages in the web (T-376, web slice, as built 2026-10-15).** Opening a session reads the newest page only (`?limit=200`) and
+shows it at the bottom; the socket subscribes after that page's newest seq (a subscribe without `afterSeq` sends the whole backlog, so it
+waits for the page; a page that cannot be read falls back to exactly that). Reconnects resume with `afterSeq` as before, and live events
+go at the end while older pages are read. Within a screen of the top (at least 400 px) the transcript reads the page before the first
+event it holds, one at a time; while it reads, a fixed-height row at the top says "Loading earlier" (a failed read: "Load earlier" to
+retry), and once the first event is held it says "Start of the chat". The reading position holds exactly as a page goes in above (QA A9):
+the first row in view and its distance from the top of the view are measured before the commit and put back before paint (the rows carry
+`data-anchor`, their last seq, which stays the same when older rows join a turn; `scrollAnchor.ts`, pure and tested). A cut `tool_result`
+shows its preview in Output, marked "preview", with "Show all (N chars)", which reads the event whole (`…/events/:seq`) and puts it in
+the preview's place; Copy waits for the whole. Rendering stays bounded by the pages held: folded activity rows, runs of calls and closed
+tool rows do not mount their contents (not virtualized). An open request older than the pages held would be missing from the dock: while
+the session's `waiting` count is more than the open requests held, the page reads up to 5 older pages by itself to find it. Usage says
+"Loaded turns only" while older pages are not held (its figures count what is held). The paging state is `history.ts` (pure, tested).
+The transcript has no search and no link to one event yet, so neither had to learn pages.
 
 ## 11. Per-target notes
 
