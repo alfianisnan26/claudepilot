@@ -2,20 +2,20 @@
 // scratch portal seeded with a lead (no ticket, $10) whose workers carry tickets, a done ticket, an open ticket, a ticket the portal does not
 // know, a long-named session and a solo session. It takes a screenshot of each view and asserts (QA-STANDARDS A1-A9, measured):
 //   - A2: no horizontal scroll (document and the tab's own content: scrollWidth <= clientWidth + 1);
-//   - A1: every visible control (button, link, tab, segmented option) is at least 44 px tall and wide; inline InfoTips are counted and
-//     reported, not failed (they are a known 44 px hit area via padding in the design system; the count is in the log);
+//   - A5: every visible control (button, link, tab, segmented option) is at least 44 px tall and wide AT 390 PX (a FAIL). At 1280 px the same
+//     measure only warns (the lead's decision on T-449: the rule binds at the touch width). Inline InfoTips are counted, not failed;
 //   - Group by Ticket shows its rows, with "via lead" on the lead-fed tickets and an InfoTip that explains it;
 //   - the Done filter exists only under Ticket, switches to done tickets only (the open ticket and the unknown one drop out), shows the
 //     "Done, per ticket" line, and returns to All;
-//   - a figure that is missing reads as a state ("unavailable", "Not recorded", "unknown"), never "NaN", "undefined" or "null";
+//   - a figure that is missing reads as a named state ("unknown", "unavailable", "Not recorded"), never "NaN", "undefined" or "null", and
+//     never a bare dash: the ticket the portal does not know (T-9199) must say so in words;
 //   - the long text breaks or truncates inside its row (no row past the viewport's edge);
-//   - keyboard: a Tickets option takes focus.
+//   - keyboard: Tab onto a Tickets option (a real key press, so :focus-visible applies) shows a focus ring (outline or box-shadow).
 // (screenshots go to QA_SHOTS, default /tmp/qa-shots; --out is created and named in the last line)
 // usage: tools/qa/with-portal.sh 3471 env QA_SHOTS=dir node tools/qa/attribution-tab.mjs [--out dir] [--keep]
-//   scripts/job-run.sh --ref <commit> --out job-out/ux-t-449/ -- 'npm run build -w @portal/web && tools/qa/with-portal.sh 3471 env QA_SHOTS=job-out/ux-t-449 node tools/qa/attribution-tab.mjs --out job-out/ux-t-449; exit $?'
+//   scripts/job-run.sh --ref <commit> --artifacts job-out/ux-t-449 --out job-out/ux-t-449-art/ -- 'npm run build -w @portal/web >/dev/null 2>&1 && tools/qa/with-portal.sh 3471 env QA_SHOTS=job-out/ux-t-449 node tools/qa/attribution-tab.mjs --out job-out/ux-t-449; exit $?'
 //   Seeds /tmp/scratch-portal-$QA_PORT/data/portal.db (ATTR_DB overrides): sessions "qaattr-*", tickets 9101-9103; removes them at the end.
 import { mkdirSync } from 'node:fs';
-import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { Browser } from './browser.mjs';
 import { login, PORT, sleep } from './lib.mjs';
@@ -30,6 +30,11 @@ const check = (name, ok, extra = '') => {
   console.log(`  ${ok ? 'ok  ' : 'FAIL'} ${name}${extra ? ` ${extra}` : ''}`);
   if (!ok) failed++;
 };
+// A5: a FAIL at the touch width, a note at 1280 px.
+const sizes = (name, strict, list) =>
+  strict
+    ? check(name, list.length === 0, JSON.stringify(list))
+    : console.log(`  warn ${name} (1280 px: a note, not a fail) ${list.length ? `${list.length} under 44 px, e.g. ${JSON.stringify(list.slice(0, 4))}` : 'ok'}`);
 
 // --- seed -------------------------------------------------------------------------------------------------------------------------------
 const db = new DatabaseSync(dbPath, { timeout: 10_000 });
@@ -73,10 +78,11 @@ const MEASURE = `(() => {
   const root = document.querySelector('main') || document.body;
   const doc = document.scrollingElement;
   const ctl = [...root.querySelectorAll('a[href], button, [role=tab], [role=radio], [role=menuitem], input, select, summary')].filter(vis);
-  const tip = (e) => /why|about|how cost/i.test(e.getAttribute('aria-label') || '');
+  const tip = (e) => /why|about|how cost|how this/i.test(e.getAttribute('aria-label') || '');
   const small = (e) => { const r = e.getBoundingClientRect(); return r.width < 43.5 || r.height < 43.5; };
   const cardRight = Math.max(0, ...[...root.querySelectorAll('ul li')].map((e) => e.getBoundingClientRect().right));
   const bad = [...root.querySelectorAll('li, span, p')].filter((e) => vis(e) && e.children.length === 0 && /\\b(NaN|undefined|null)\\b/.test(e.textContent || '')).map(desc);
+  const row = (id) => [...root.querySelectorAll('ul.divide-y > li')].find((li) => (li.innerText || '').includes(id));
   return {
     vw: innerWidth, docScroll: doc.scrollWidth, docClient: doc.clientWidth,
     rootScroll: root.scrollWidth, rootClient: root.clientWidth,
@@ -86,6 +92,7 @@ const MEASURE = `(() => {
     rowsRight: Math.round(cardRight),
     bad,
     text: root.innerText,
+    row9199: (row('T-9199')?.innerText || '').replace(/\\s+/g, ' ').trim(),
     hasDone: !!ctl.find((e) => /^Done$/.test((e.innerText || '').trim())),
     rows: root.querySelectorAll('ul.divide-y > li').length,
   };
@@ -122,7 +129,7 @@ try {
       check(`${tag}: session view lists rows`, s.rows >= 5, `rows=${s.rows}`);
       check(`${tag}: session view: the Done filter is absent (only under Ticket)`, !s.hasDone);
       check(`${tag}: session view: no sideways scroll`, noScroll(s), JSON.stringify([s.docScroll, s.docClient, s.rootScroll, s.rootClient]));
-      check(`${tag}: session view: controls >= 44 px`, s.small.length === 0, JSON.stringify(s.small));
+      sizes(`${tag}: session view: controls >= 44 px`, size.mobile, s.small);
       check(`${tag}: session view: the long title stays inside the viewport`, s.rowsRight <= s.vw + 1, `rowsRight=${s.rowsRight}`);
       console.log(`  info InfoTips under 44 px: ${s.smallTips}`);
       await b.shot(`attr-session-${tag}`, { full: true });
@@ -137,9 +144,9 @@ try {
       check(`${tag}: ticket view: the Done filter is present`, s.hasDone);
       check(`${tag}: ticket view: the open ticket and the unknown one are listed`, /T-9102/.test(s.text) && /T-9199/.test(s.text));
       check(`${tag}: ticket view: no NaN, undefined or null text`, s.bad.length === 0, JSON.stringify(s.bad));
-      check(`${tag}: ticket view: a missing fact is a state ("unknown"/"unavailable"/"Not recorded")`, /unknown|unavailable|not recorded/i.test(s.text));
+      check(`${tag}: ticket view: the unknown ticket T-9199 names its missing type and status in words, not bare dashes`, /unknown|unavailable|not recorded/i.test(s.row9199), JSON.stringify(s.row9199));
       check(`${tag}: ticket view: no sideways scroll`, noScroll(s), JSON.stringify([s.docScroll, s.docClient, s.rootScroll, s.rootClient]));
-      check(`${tag}: ticket view: controls >= 44 px`, s.small.length === 0, JSON.stringify(s.small));
+      sizes(`${tag}: ticket view: controls >= 44 px`, size.mobile, s.small);
       console.log(`  info InfoTips under 44 px: ${s.smallTips}`);
       await b.shot(`attr-ticket-all-${tag}`, { full: true });
 
@@ -153,12 +160,16 @@ try {
       check(`${tag}: done view: "Done, per ticket" lists feature and chore`, /Done, per ticket/.test(s.text) && /feature/.test(s.text) && /chore/.test(s.text));
       check(`${tag}: done view: no NaN, undefined or null text`, s.bad.length === 0, JSON.stringify(s.bad));
       check(`${tag}: done view: no sideways scroll`, noScroll(s), JSON.stringify([s.docScroll, s.docClient, s.rootScroll, s.rootClient]));
-      check(`${tag}: done view: controls >= 44 px`, s.small.length === 0, JSON.stringify(s.small));
+      sizes(`${tag}: done view: controls >= 44 px`, size.mobile, s.small);
       await b.shot(`attr-ticket-done-${tag}`, { full: true });
 
-      // Keyboard: a Tickets option takes focus.
-      const focus = await b.eval(`(() => { const e = [...document.querySelectorAll('button, [role=radio], [role=tab]')].find((x) => (x.innerText || '').trim() === 'All'); if (!e) return null; e.focus(); const cs = getComputedStyle(e); return { focused: document.activeElement === e, outline: cs.outlineStyle + ' ' + cs.outlineWidth, shadow: cs.boxShadow }; })()`);
-      check(`${tag}: keyboard: a Tickets option takes focus`, !!focus?.focused, JSON.stringify(focus));
+      // Keyboard: focus the Ticket option, press Tab (a real key, so :focus-visible applies) onto the next option, read its ring.
+      await b.eval(`(() => { const e = [...document.querySelectorAll('button, [role=radio], [role=tab]')].find((x) => (x.innerText || '').trim() === 'Ticket'); e?.focus(); })()`);
+      await b.key('Tab');
+      await sleep(200);
+      const ring = await b.eval(`(() => { const e = document.activeElement; if (!e || e === document.body) return null; const cs = getComputedStyle(e); const vis = cs.outlineStyle !== 'none' && parseFloat(cs.outlineWidth) > 0; return { el: e.tagName + ' "' + (e.innerText || e.getAttribute('aria-label') || '').trim().slice(0, 20) + '"', focusVisible: e.matches(':focus-visible'), outline: cs.outlineStyle + ' ' + cs.outlineWidth, shadow: cs.boxShadow.slice(0, 60), ring: vis || cs.boxShadow !== 'none' }; })()`);
+      check(`${tag}: keyboard: Tab lands on a control and shows a focus ring`, !!ring && ring.focusVisible && ring.ring, JSON.stringify(ring));
+      await b.shot(`attr-focus-${tag}`);
 
       // Back to All; the persona view, where nothing was recorded, says so.
       await clickLabel(b, 'All');
