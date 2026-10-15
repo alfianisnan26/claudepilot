@@ -831,7 +831,7 @@ test('T-426 --pool-env refusals, before any kubectl call: a name outside E2E_CF_
 
 test('T-426 --pool-env: a pasted value that looks like a variable name (lowercase hex starting with a letter) is refused and shown nowhere', () => {
   const w = world();
-  const pasted = `a${hex(31)}`; // 64 hex characters, built at runtime; it matches ^[A-Za-z_][A-Za-z0-9_]{0,63}$
+  const pasted = `a${hex(32).slice(1)}`; // 64 hex characters, built at runtime; it matches ^[A-Za-z_][A-Za-z0-9_]{0,63}$
   assert.match(pasted, /^[a-f][0-9a-f]{63}$/);
   for (const arg of [pasted, pasted.toUpperCase(), `E2E_CF_ACCESS_${pasted}`]) {
     const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--pool-env', arg, '--', 'true'], { [arg]: 'x'.repeat(12) });
