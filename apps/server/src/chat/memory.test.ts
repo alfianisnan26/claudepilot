@@ -134,3 +134,45 @@ test('T-416: the liveness round reads a workspace at most once a minute; a works
   await mem.look([]);
   assert.equal(mem.alerts().length, 0);
 });
+
+test('T-416: the Needs you item reaches the push bridge with its kind in fixed words, its title cut as the untrusted detail, and no command lines', async () => {
+  const { bridgeAttentionNotify } = await import('../attention/notify.js');
+  const { createBus } = await import('../notify/bus.js');
+  const { render } = await import('../notify/templates.js');
+  let now = Date.parse('2026-10-15T02:00:00Z');
+  let next = reading(6 * GiB);
+  const mem = new WorkspaceMemory({ read: async () => next, now: () => now });
+  const registry = new AttentionRegistry({ now: () => now, tickMs: 0 });
+  registry.register(memoryAttentionSource(mem));
+  const bus = createBus();
+  const sent: { kind: string; subject: { id: string }; audience?: string[]; detail?: { text: string; truncated: boolean }; facts: Record<string, unknown> }[] = [];
+  bus.on('*', (e) => void sent.push(e as never));
+  const stop = bridgeAttentionNotify(registry, bus, () => ['u_owner']);
+  try {
+    registry.check(); // the baseline
+    const long = `kubernetes/${'w'.repeat(150)}`;
+    now += 61_000;
+    next = reading(Math.round(7 * GiB), 8 * GiB, now);
+    await mem.look(['kubernetes/kohi-event', long]);
+    registry.check();
+    assert.equal(sent.length, 2, 'one notification per workspace item, to the owner');
+    for (const e of sent) {
+      assert.equal(e.kind, 'attention');
+      assert.deepEqual(e.audience, ['u_owner']);
+      assert.deepEqual(e.facts, { what: 'Memory', why: 'Question' }, 'fixed words only');
+      assert.ok(e.subject.id.startsWith('attention:workspace_memory:'));
+      assert.ok(!/(--|\/usr\/|\/bin\/)/.test(e.detail!.text), `no command line: ${e.detail!.text}`);
+    }
+    const short = sent.find((e) => e.subject.id.includes('kohi-event'))!;
+    assert.equal(short.detail?.text, 'kubernetes/kohi-event: memory 88% (claude 1240 MB, node 487 MB)');
+    assert.equal(short.detail?.truncated, false);
+    const cut = sent.find((e) => !e.subject.id.includes('kohi-event'))!;
+    assert.equal(cut.detail?.text.length, 120, 'cut to 120 characters');
+    assert.ok(cut.detail?.text.endsWith('…') && cut.detail.truncated);
+    const shown = render(short as never);
+    assert.equal(shown.title, 'Needs you');
+    assert.ok(!shown.body.includes('kohi-event'), 'the workspace text is not in the body, only the untrusted detail');
+  } finally {
+    stop();
+  }
+});
