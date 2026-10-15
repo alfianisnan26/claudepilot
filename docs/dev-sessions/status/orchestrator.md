@@ -1,46 +1,37 @@
-# Orchestrator status (chat a8393f6b, continues 75f044fb), 2026-10-15 00:15 UTC
+# orchestrator status (2026-10-15 00:45 UTC, session a8393f6b, continues 75f044fb)
 
 Older log: `orchestrator-log-2026-10-14.md` (same folder).
 
-## STATE
-- LIVE: portal 2026.10.14-10 (run 30). DEPLOYING: run 31 (rmv8s72zu862989) on integration 0831ba7 = batches 3-5: factory --start fixes (T-338, T-342; --start off), T-333 job-run --against, T-336 session_start parent (portalmcp: the release may wait for a person), T-343 live turn cost, T-312 spikes/lab by root, the coordinator's crew hand-over (9dfb193). Gate-job 0be97b8 green; run 31 gates 0831ba7 again.
-- integration = 0831ba7 on origin and pilot. No unmerged branch of value except those IN FLIGHT.
+## DONE
+- LIVE portal 2026.10.15-1 (run 31 rmv8s72zu862989 PASSED on 0831ba7: gate, build, release auto, verify, chats; Argo Synced/Healthy c685eea). Carries T-338, T-342 (factory, --start off), T-333, T-336, T-343, T-312, crew hand-over 9dfb193.
+- integration abcb31b (origin + pilot) = live + batch 6: T-348 (tool policy at dispatch), T-315 slice 1 (heartbeat workflow; runs only once on main). gate-job 781cb3d GREEN; server+contracts tsc rc 0 after the last merges (docs only).
+- Closed tonight: T-333, T-336, T-343, T-342, T-312, T-353 (incident), T-334, T-348, T-315. Follow-ups filed: T-347..T-352, T-354..T-356.
+- FAILURE: INCIDENT T-353 (mine): integration red on typecheck 23:05-00:09 (pushed after tsx tests only); fixed, gated, nothing deployed red.
 
-## IN FLIGHT (max 5; new slices only as session_spawn workers, D-49 / coordinator 23:15)
-- sub-agent implementer T-321 (opus, high): empty crew list at 390-light, dev/t-321-2.
-- sub-agent implementer T-348 (opus, high, security): declared tool policies enforced, dev/t-348-1.
-- worker d9a3cdd8 qa-verifier T-334 (sonnet, dontAsk): follows the dontAsk text, counts refusals.
-- worker 9f670a04 implementer T-330/T-331/T-272 (opus, dontAsk): dev/t-330-2 (line of record, comment 1995). Orphan worker c378d9e7 (old lead) also on T-330: not mine, asked on the ticket to stop.
-- worker 4d903086 implementer T-315 slice 1 (sonnet, dontAsk): GitHub Actions heartbeat, dev/t-315-2.
+## IN FLIGHT (5; workers only for new slices, D-49)
+- T-366 urgent (D-55 folder trust): worker b48936e7 implementer, opus high, dev/t-366-1. Then a blind reviewer worker (opus) before merge, then the real-job QA.
+- T-330/T-331/T-272 cpbview: dev/t-330-2 ecb0ea5 (20/20 by the author, job 164d48de); verifier worker e2a7357f (sonnet).
+- T-349 session_start TOCTOU: worker a893d274 implementer, opus, dev/t-349-1 (proof job 07f615ed passed; typecheck pending).
+- T-352 factory minors: worker 0571ff1c implementer, opus, dev/t-352-1 (idle on its own job monitor).
+- T-321 empty crew list: sub-agent implementer (opus), dev/t-321-2 (started before the workers-only rule).
+
+## DECISIONS
+- 23:15 coordinator: new slices only as session_spawn workers (D-49); at most five in flight.
+- 00:00 D-50 / D-51 applied: only T-63 blocked (upstream); T-93, rtk hook (T-306 item 4, T-340) stay the owner's.
+- T-330: dev/t-330-2 is the line of record (ahead); orphan c378d9e7 ended.
+- T-366 builds exactly D-55 (owner's own decision, DECISIONS.md:61) although gates are a person's: the decision is the person's.
+- Deploy cap: three portal deploys a day; run 31 is the first of 2026-10-15.
+
+## NEEDS A HUMAN
+- T-93 production cutover (Konfersi, paused).
+- T-306 item 4 / T-340: installing the rtk hook is a permission change.
 
 ## NEXT (ranked)
-1. Run 31: read gate, build, release, verify, chats; `git pull`; list live tickets under DONE.
-2. Each return: verifier worker (sonnet), merge, typecheck or gate-job BEFORE every integration push, close on PASS with a follow-up per gap.
-3. T-293 per D-50: wire --start through session_start with parent; T-352 minors first.
-4. T-354 (T-312 chips, UI + ux-checker), T-349, T-347, T-350, T-351, T-341, T-344, T-345, T-332, T-335, T-313, T-314, T-306 item 3, T-149 leftovers.
+1. T-366 review + merge + real-job QA; deploy batch 6+7 with T-366 (second deploy of the day).
+2. T-365 (high): keep job-run Jobs off the portal's node (fsync stall after run 31).
+3. Merge returns: T-330, T-349, T-352, T-321 (verifier worker each, typecheck before every push).
+4. T-293 per D-50: wire --start through session_start with parent (after T-352).
+5. T-354 (chips UI + ux-checker), T-347, T-350, T-351, T-355, T-356, T-341, T-344, T-345, T-332, T-335, T-313, T-314, T-306 item 3, T-149.
 CUT LINE: Konfersi and Event stay paused (D-45).
 
-## DONE tonight (this chat)
-- Closed: T-333 (gap T-347), T-336 (gaps T-348, T-349), T-343 (gaps T-350, T-351), T-342 (minors T-352), T-312 (UI rest T-354), T-353 (incident, below).
-- Filed: T-347..T-354.
-
-## FAILURES
-- INCIDENT T-353 (mine): integration red on typecheck 23:05-00:09 (T-342 merge pushed after tsx tests only). Found by gate-job 49af31a, fixed, gate-job 0be97b8 green, nothing deployed red.
-- T-330 first fix FAIL (comment 1984: 18/20 under hogs; parent 7/20).
-
-## NEEDS A HUMAN (required items only, D-51)
-- T-93 production cutover (Konfersi, paused).
-- T-306 item 4 and T-340: installing the rtk hook is a permission change.
-- Run 31's release may wait for an approval in the portal (T-336 touches portalmcp tools).
-
-## DECISIONS (this chat)
-- Deploy cap: runs 28-30 were three on 2026-10-14, so batches 3-5 waited for 00:00 UTC.
-- T-330: dev/t-330-2 over dev/t-330-1 (ahead, built on the verifier's data).
-- T-312 lab widening accepted: the chain reaches only the session's own continued_from ancestors (verifier confirmed).
-- D-51 blocked check: only T-63 blocked (upstream release); nothing else to unblock.
-
-## LESSONS
-- typecheck (or a gate-job) before EVERY integration push: tsx test runs do not check types.
-- a local web typecheck can fail on missing node_modules (@codemirror): trust the clean-copy gate for web.
-- a hand-over moved tickets, not live workers: check the old lead's workers on the tickets (fixed by 9dfb193 from the next start).
-- workers cannot read files outside the repo (~/work/briefs): put the brief inline.
+LESSONS: typecheck before EVERY integration push (tsx does not check types); report=end hides a worker's finished turn: use idle; scripts/job-run.sh --help exits 2: point briefs at the header; worker ticket tools may be missing: copy its verdict to the ticket.
