@@ -1447,7 +1447,8 @@ export class CiService {
   async show(id: string): Promise<CiRun> {
     const run = this.get(id);
     const states = await this.host.states();
-    return { ...run, workspaceState: states.get(run.workspaceId) ?? 'gone' };
+    // A runner's run (T-557): its logs live where it executes.
+    return { ...run, workspaceState: states.get(run.runnerWorkspaceId ?? run.workspaceId) ?? 'gone' };
   }
 
   /* ---------- Logs ---------- */
@@ -1519,7 +1520,7 @@ export class CiService {
       sourcePath: row.source_path,
       connected: json<string[]>(row.connected, []),
       hooks: (['ok', 'outdated', 'missing'] as const).find((h) => h === row.hook_state) ?? 'unknown',
-      workspaceState: map.get(execOf(row)) ?? 'gone',
+      workspaceState: map.get(row.workspace_id) ?? 'gone',
       createdAt: row.created_at,
       upstream: upstreamView(row),
     };
