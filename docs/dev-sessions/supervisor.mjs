@@ -53,7 +53,6 @@ const DRY = process.env.DRY_RUN === '1';
 
 /** What is kept alive: one orchestrator in the main folder (no worktree of its own: its sub-agents make theirs). The Claudes are tried by name, best room first. */
 const KONFERSI = process.env.KONFERSI_FOLDER ?? join(homedir(), 'work/konfersi-universe');
-const EVENT = process.env.EVENT_FOLDER ?? join(homedir(), 'work/event');
 const TRACKS = [
   { key: 'orchestrator', title: 'Orchestrator: ClaudePilot dev', claudes: ['hasyim', 'fadlilah', 'alfian.isnan'] },
   // The Konfersi program as a crew (D-52): its own folder, tickets tagged konfersi-migration. Not named Orchestrator: the title prefix finds the track's chats.
@@ -67,21 +66,11 @@ const TRACKS = [
     nudge: 'Nobody is here to answer. Continue now: look at your pilot tickets (ticket_list, tag konfersi-migration) and your crew (session_family): give each function session with work its next ticket of its owner label, send every delivery to konfersi-qa or konfersi-qa-ui before you merge, end the function sessions with no work. If you asked a question, answer it yourself with the default written on the ticket and go on. Do not stop to summarise or wait.',
     wake: (why) => `This chat was interrupted (${why}). Continue where you left off: your pilot tickets (tag konfersi-migration), your crew (session_family), git worktree list in ~/work/agentic-worktrees, and carry on. Nobody is here to answer questions.`,
   },
-  // The Event program as a crew (event.isnan.me, D-35..D-37, D-52): its own folder, tickets tagged event-program, the knowledge folder Event. Title prefix `Event:` finds the track's chats.
-  {
-    key: 'event',
-    title: 'Event: program',
-    folder: EVENT,
-    claudes: ['rossi', 'sekar', 'regitha', 'satria', 'one.claude', 'two.claude'],
-    kickoff: (again, reason) =>
-      `You are the Event lead, running in ClaudePilot${again ? ` (the earlier chat ended: ${reason}; its live function sessions are now yours: session_family)` : ''}, and the lead of its crew (D-52). You plan, route, merge and deploy to stg; you never implement or verify yourself. Nobody answers questions: decide by the written defaults, write it on the ticket, go on; the owner's only standing action is Konfersi production (D-62): never assign a ticket to the owner or ask him anything; permissions, secrets within the systems you already use, folder trust, rule files and gate changes (propose text; a tightening is landed by the coordinator, a loosening after a blind reviewer's PASS, D-60) are the harness's: put them on a ticket assigned to yourself for the coordinator, never to the owner. Event production (main, master) is the owner's only if it ever comes up. Read first: ~/work/claudepilot/docs/dev-sessions/CHARTER.md and DECISIONS.md (D-35, D-36, D-37, D-47, D-49, D-51, D-52, D-57, D-60, D-61, D-62 bind you), ~/work/claudepilot/docs/kit/skills/orchestration/SKILL.md (the crew rules), your pilot tickets (ticket_list, tag event-program; status ticket T-150; T-155 issue import, T-151 stg deploy, T-157 Builder as a full MCP, T-152 E2E QA, T-153 AI re-scope, T-154 autonomy), and in ~/work/event (isnanme/event; integration line stg, main and master move only by a person; work in worktrees under ~/work/event.worktrees): docs/product, docs/contracts, and docs/kb and docs/deploy.md where they exist on stg. The crew: one dedicated worker session per FUNCTION, spawned with session_spawn (claude auto, mode dontAsk, report idle, worktree for builders, role = the function's persona): event-builder (owner:builder), event-web (owner:web), event-api (owner:api), event-devops (owner:devops), and the QA session event-qa. Strict: every ticket carries one owner label and goes only to that function's session; a function never edits another function's area; event-qa never authors and verifies every delivery before you merge; reuse a live function session for its next ticket (session_message), end it when its function has no work (live cap 14 in the workspace, at most 3 live workers for you, D-61 and D-65; QA and review on sonnet, reuse a session only under 150k context, D-63). First, in order: (1) widen ~/work/event/.claude/settings.json to D-49's shape (Edit and Write under ~/work/event/** and ~/work/event.worktrees/**; git status, diff, log, add, commit, fetch, grep, worktree, push of work branches; the repo's test and build commands; deny pushes to stg, main and master, force pushes and anything production), through the normal flow, and check that the portal trusts the folder; (2) write docs/agentic/OPERATING-MODEL.md in the Event repo: the functions, their areas and labels, QA independence, the flow from ticket to stg; label the open tickets; (3) prove the job once: one event-qa worker reads a ticket, runs the repo's tests and comments its verdict; fix what it could not do before you dispatch more; (4) then dispatch by owner label. Heavy jobs (npm ci, typecheck, tests, builds, Playwright, Lighthouse) only as cluster Jobs (job-run.sh, or the gate pipeline once T-491 moves it out), never in the pod (D-61); stg only; secrets arrive through the Secrets pool event-stg by name (never printed); commits with Ticket, Pilot-Session and Pilot-Agent trailers, as a plain 'git commit' (signing is off in the pod; never 'git -c ...', the allow list refuses it); status on T-150 every ~2 h; shared context in the knowledge folder Event.`,
-    nudge: 'Nobody is here to answer. Continue now: look at your pilot tickets (ticket_list, tag event-program) and your crew (session_family): give each function session with work its next ticket of its owner label, send every delivery to event-qa before you merge, end the function sessions with no work. If you asked a question, answer it yourself with the default written on the ticket and go on. Do not stop to summarise or wait.',
-    wake: (why) => `This chat was interrupted (${why}). Continue where you left off: your pilot tickets (tag event-program), your crew (session_family), git worktree list and git status in ~/work/event, and carry on. Nobody is here to answer questions.`,
-  },
+  // The Event program left pilot on 2026-10-15 (owner, D-67): no track; its work goes on outside pilot.
 ];
 
 /** D-61: live workers per lead (the memory budget of the shared pod). */
-const LEAD_WORKERS = { orchestrator: 4, konfersi: 4, event: 3 };
+const LEAD_WORKERS = { orchestrator: 4, konfersi: 4 };
 
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
 const sleep = (s) => new Promise((r) => setTimeout(r, s * 1000));
@@ -644,7 +633,7 @@ async function watch({ rounds = Infinity } = {}) {
         log(`${t.key}: adopted the live chat ${live.id.slice(0, 8)}: watched again`);
         saveState(state);
       }
-      // A paused program (the owner's order, 2026-10-14): `touch ~/.claudepilot/dev-sessions/PAUSE-<track key>` (orchestrator, konfersi, event); nothing is nudged, woken, moved or restarted until the file is removed.
+      // A paused program (the owner's order, 2026-10-14): `touch ~/.claudepilot/dev-sessions/PAUSE-<track key>` (orchestrator, konfersi); nothing is nudged, woken, moved or restarted until the file is removed.
       const held = portalPauses.find((p) => p.program === null || p.program === t.key);
       if (held || existsSync(join(STATE_DIR, `PAUSE-${t.key}`))) {
         if (!ts.pausedLogged) { log(`${t.key}: PAUSED by the owner (${held ? `the portal: ${held.program ?? 'all'}` : `file PAUSE-${t.key}`}): left alone`); ts.pausedLogged = true; }
