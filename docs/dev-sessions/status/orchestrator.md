@@ -19,7 +19,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   LANE 5f8f392b "ClaudePilot Backend" (lane-backend, sonnet) on T-546 Jobs (ticket/T-546-digest; 8822ba59 ended). Backend queue (coordinator,
   efficiency order): T-546 -> T-600 BE -> T-597 -> T-325 -> T-591 S2. LANE f13a9442 "ClaudePilot Frontend" (lane-frontend, sonnet,
   spawn worktree ticket/T-600-crew-pace-ui) on T-600 FE (5413). Next slots: blind review (T-586, T-548), QA UI (T-576 ux, T-600). QA Perf queue: T-561, T-548, T-486, T-546.
-  Cluster: T-586 S2 fc9ce1d (GO now) -> T-600 FE re-run 7d19c94 (Job 1 FAIL typecheck, renamed to `headline`, 5459) -> T-546 -> T-561 S1c -> T-548 QA -> T-591 S1 6853486 -> T-558 QA. quick-check: its checks in ONE Job (T-586); no prettier/eslint in Jobs (T-612).
+  Jobs (all GO 15:29, job-run queues): T-586 S2 fc9ce1d, T-600 FE 7d19c94 (Job 1 FAIL typecheck -> `headline`, 5459), T-546, T-548 QA, T-591 S1. Then T-561 S1c, T-558 QA. quick-check: its checks in ONE Job (T-586); no prettier/eslint in Jobs (T-612).
 - T-557: the COORDINATOR builds it (dev/t557-runners); 8dc6a739 ended, its 02357fd offered as input (4925). Collision lines on T-557.
 - T-426 (mine again, 4926): ab93b54 --pool-env; the coordinator reuses its secret resolution. QA + blind review after T-401 merges.
 - T-379 3ddbcbc: src/ci 144/144 job-5b4609a6 (4905); lead live proof PASS job-c71c5bfe (4906); blind review 30dc0f13 PASS WITH
@@ -47,13 +47,13 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   BINDING: the coordinator runs deploys (#38-#40); I start NO deploy. (Old T-546/T-486 workers replaced.)
 - 12:50 Coordinator: it builds T-557 itself (owner's ask); no T-557 slices from me; T-426 stays mine; a line on T-557 when I touch
   ci/ or connect/ in a big way. (Supersedes 12:45's fold of T-426 into the lease.)
-- 13:20 D-66 (pulled, 619b4b5): workers run scripts/quick-check.sh (one Job: format, lint, named tests) before a branch goes
-  to the gate; every brief from now on says so. Workers cannot git merge: the lead merges base heads into slice branches (4852).
+- 13:20 D-66: quick-check (format, lint, named tests) before the gate. Workers cannot git merge: the lead merges base heads in (4852).
 - 12:00 Coordinator tool review (4820): the lead edits ONLY the status file and notes.
 - 11:15 D-65 (coordinator): 4 ClaudePilot workers; implementers sonnet by default (opus only with a written why); small QA/review
   findings fixed in the same slice; a worker takes 2-3 related tickets (reuse under 150k); full report on the ticket, the lead
   reads line 1 and opens it only on FAIL; ready features over chores. Targets under 8 USD per ticket, lead share under 30 %.
-- 10:25 Workers end with WAITING <hash>; the lead hands out the cluster slot with "GO T-n" (free-slot check: OUR Jobs only).
+- 15:29 Coordinator: job-run.sh caps and queues Jobs (2/program, 3 cluster); "one at a time" is PER AGENT. Workers start their own Jobs
+  when pushed; no GO protocol (supersedes 10:25). gate-job before each merge stays mine.
 - 09:00 Persona/role-tool/permission questions go to the coordinator, NEVER the owner; `owner-checklist` = production only.
 - D-63: QA/ux/reviewer on SONNET (opus needs a `why`: security, gate, rule or large slice); the lead never implements or commits code.
 - D-61: (worker count now 5 by D-68, coordinator 2026-10-15), NO Agent-tool sub-agents, heavy work ONLY via scripts/job-run.sh or gate-job.sh, one at a time. Hand over before 250k.
