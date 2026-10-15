@@ -39,7 +39,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 ## DECISIONS (binding)
 - 12:50 Coordinator: it builds T-557 itself (owner's ask); no T-557 slices from me; T-426 stays mine; a line on T-557 when I touch
   ci/ or connect/ in a big way. (Supersedes 12:45's fold of T-426 into the lease.)
-- 12:09 Workers cannot git merge: the lead merges base heads into slice branches (T-379 090fbbf, 4852).
+- 13:20 D-66 (pulled, 619b4b5): workers run scripts/quick-check.sh (one Job: format, lint, named tests) before a branch goes
+  to the gate; every brief from now on says so. Workers cannot git merge: the lead merges base heads into slice branches (4852).
 - 11:30 Coordinator (owner priority, metocean): T-379 NOW in its own worker; built on T-401's fe62fa6 (fetch stage holds creds).
 - 12:00 Coordinator tool review: lead edits of code (dev-t-376 commits 01:57-02:03, no trailers, before D-63 03:36; 4820).
   The lead edits ONLY the status file and notes. Order: T-379, T-426, T-558, T-546, T-548, T-561 (opus, deny rules), T-557.
@@ -51,8 +52,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   (gate/security). They come before T-416 S2, T-537 and T-538..T-540.
 - 11:05 Coordinator: sweep of in_review tickets; QA reports, the lead closes on PASS (D-63).
 - 10:25 dontAsk workers cannot wait: the lead hands out the cluster slot with "GO T-n"; workers end with WAITING <hash>.
-- 10:02 The free-slot check counts only OUR program's Jobs (app=claudepilot-gate or job-run/program=claudepilot); Konfersi Jobs are
-  capped per program by job-run.sh.
+- 10:02 The free-slot check counts only OUR program's Jobs (app=claudepilot-gate or job-run/program=claudepilot).
 - 09:00 Coordinator: persona, role-tool and permission questions go to the coordinator (ticket assigned to me), NEVER the owner;
   `owner-checklist` is production only.
 - 08:10 A running slice keeps its slot. 06:00 The lead holds T-n claim to close. 05:50 UX checks are cluster Jobs; fresh worktrees.
