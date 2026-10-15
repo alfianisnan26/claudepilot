@@ -103,7 +103,8 @@ let follow = true;
 let dialogOpen = false;
 let buttons = 0;
 let tabsTimer = null;
-let emulating = false;
+/** The size Chrome has taken as an override ({ w, h } in CSS pixels), or null for the window's own. */
+let emulated = null;
 
 const isPage = (t) => t.type === 'page' && /^(https?:|about:|file:|chrome:)/.test(t.url || '');
 
@@ -158,7 +159,7 @@ async function attach(targetId) {
   const { sessionId } = await cdp.send('Target.attachToTarget', { targetId, flatten: true });
   cur = { targetId, sessionId };
   buttons = 0;
-  emulating = false;
+  emulated = null;
   dialogOpen = false;
   await cdp.send('Page.enable', {}, sessionId);
   // Playwright does the same for every page it drives: input reaches a page that isn't the focused window's.
@@ -292,18 +293,20 @@ async function handle(m) {
     case 'closeTab':
       if (tabs.has(m.id)) await cdp.send('Target.closeTarget', { targetId: m.id });
       return;
-    case 'viewport':
+    case 'viewport': {
       if (!cur) return;
-      if (m.reset) {
-        emulating = false;
-        return void (await cdp.send('Emulation.clearDeviceMetricsOverride', {}, cur.sessionId));
-      }
-      emulating = true;
-      return void (await cdp.send(
-        'Emulation.setDeviceMetricsOverride',
-        { width: clamp(Math.round(num(m.w, 1280)), 100, 4096), height: clamp(Math.round(num(m.h, 800)), 100, 4096), deviceScaleFactor: clamp(num(m.dpr, 1), 1, 4), mobile: m.mobile === true },
-        cur.sessionId,
-      ));
+      const at = cur;
+      const size = m.reset ? null : { w: clamp(Math.round(num(m.w, 1280)), 100, 4096), h: clamp(Math.round(num(m.h, 800)), 100, 4096) };
+      if (!size) await cdp.send('Emulation.clearDeviceMetricsOverride', {}, at.sessionId);
+      else await cdp.send('Emulation.setDeviceMetricsOverride', { width: size.w, height: size.h, deviceScaleFactor: clamp(num(m.dpr, 1), 1, 4), mobile: m.mobile === true }, at.sessionId);
+      if (cur !== at) return; // switched tabs meanwhile: attach() reset it for the new one
+      // Set once Chrome has taken the change, not before; a frame is called emulated only when it has this size (T-330).
+      emulated = size;
+      // Chrome sends a frame only when the page paints, and the frame of the resize itself can carry the old size: on a
+      // still page the new size then never showed (T-331). A restarted screencast always sends a frame of what is there now.
+      await cdp.send('Page.stopScreencast', {}, at.sessionId).catch(() => undefined);
+      return startScreencast();
+    }
     case 'quality': {
       const next = { quality: clamp(num(m.q, 60), 10, 95), maxW: clamp(num(m.maxW, settings.maxW), 200, 3840), fps: clamp(num(m.fps, settings.fps), 1, 30) };
       if (next.quality === settings.quality && next.maxW === settings.maxW && next.fps === settings.fps) return;
@@ -364,7 +367,10 @@ async function main() {
     last = { dw: Math.max(1, Math.round(num(md.deviceWidth, last.dw))), dh: Math.max(1, Math.round(num(md.deviceHeight, last.dh))) };
     // Acknowledge at once: the portal drops frames a slow viewer can't take, so Chrome never has to wait for it.
     cdp.send('Page.screencastFrameAck', { sessionId: p.sessionId }, sessionId).catch(() => undefined);
-    offer({ header: { dw: last.dw, dh: last.dh, tab: cur.targetId, emu: emulating }, jpeg: Buffer.from(p.data, 'base64') });
+    // A frame painted before the change (in flight, or the first one of the restarted screencast while Chrome has not yet
+    // painted the new size) still has the old size: emulated means this frame is of the emulated size, not that one was asked for.
+    const emu = emulated !== null && last.dw === emulated.w;
+    offer({ header: { dw: last.dw, dh: last.dh, tab: cur.targetId, emu }, jpeg: Buffer.from(p.data, 'base64') });
   });
   cdp.on('Page.javascriptDialogOpening', (p, sessionId) => {
     if (cur && sessionId === cur.sessionId) dialogOpen = true;
