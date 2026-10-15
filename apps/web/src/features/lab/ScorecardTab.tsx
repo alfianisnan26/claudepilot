@@ -10,7 +10,7 @@ import { NotAvailable } from '../usage/spend/shared';
 import { useLoad } from '../usage/spend/useLoad';
 import { labApi } from './api';
 import { SummaryBlock } from './SummaryBlock';
-import { fmtAge, fmtFigure, fmtPerHour, qaOpusLine, tiles, UNAVAILABLE, WINDOW_OPTIONS, type Tile, type TileState } from './scorecardModel';
+import { d65Rows, fmtAge, fmtFigure, fmtPerHour, qaOpusLine, tiles, UNAVAILABLE, WINDOW_OPTIONS, type Tile, type TileState } from './scorecardModel';
 
 const STATE_CLASS: Record<TileState, string> = {
   ok: 'text-ink',
@@ -37,6 +37,39 @@ function TileView({ t }: { t: Tile }) {
           {t.state === 'unavailable' ? t.basis : `${t.state} · ${t.basis}`}
         </span>
       </dd>
+    </div>
+  );
+}
+
+/** T-549 (D-65): the efficiency targets, one row each: label, value and state; the offenders under it; the rule and source in the tip. */
+function D65Rows({ p }: { p: CrewProgramScore }) {
+  return (
+    <div className="border-t border-line px-4 py-2" data-d65="">
+      <h4 className="text-[12.5px] font-semibold">D-65</h4>
+      <ul className="mt-1 divide-y divide-line">
+        {d65Rows(p).map((r) => (
+          <li key={r.id} className="min-w-0 py-1.5" data-d65-row={r.id} data-state={r.state}>
+            <div className="flex min-h-11 items-center gap-2 text-[13px]">
+              <span className="flex min-w-0 flex-1 items-center">
+                <span className="truncate">{r.label}</span>
+                <InfoTip label={`About ${r.label}`}>{r.tip}</InfoTip>
+              </span>
+              {r.value === UNAVAILABLE ? (
+                <span className="shrink-0 text-[12px] text-muted">{UNAVAILABLE}</span>
+              ) : (
+                <span className={`shrink-0 font-semibold tabular-nums ${STATE_CLASS[r.state]}`}>{r.value}</span>
+              )}
+              <span className={`w-14 shrink-0 text-right text-[10.5px] uppercase tracking-wide ${r.state === 'unavailable' ? 'text-muted' : STATE_CLASS[r.state]}`}>{r.state === 'unavailable' ? 'n/a' : r.state}</span>
+            </div>
+            {r.offenders.length > 0 && (
+              <p className="-mt-1 break-words text-[11.5px] text-muted [overflow-wrap:anywhere]" data-d65-offenders="">
+                {r.offenders.slice(0, 5).join(', ')}
+                {r.offenders.length > 5 ? ` +${r.offenders.length - 5}` : ''}
+              </p>
+            )}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
@@ -74,7 +107,7 @@ function Detail({ p }: { p: CrewProgramScore }) {
       <List title="Deploys" rows={e.deploys.map((d) => `#${d.runNumber} ${d.pipeline} → ${d.environment}, ${d.approval}${d.outcome ? `, ${d.outcome}` : ''}`)} />
       <List
         title="Targets"
-        rows={p.targets.map((t) => `${t.decision} ${t.id.replace(/_/g, ' ')}: ${t.state}${t.figure.basis === 'unavailable' ? ' (unavailable)' : ''}${t.offenders.length ? `, ${t.offenders.slice(0, 5).join(', ')}` : ''}`)}
+        rows={p.targets.filter((t) => t.decision !== 'D-65').map((t) => `${t.decision} ${t.id.replace(/_/g, ' ')}: ${t.state}${t.figure.basis === 'unavailable' ? ' (unavailable)' : ''}${t.offenders.length ? `, ${t.offenders.slice(0, 5).join(', ')}` : ''}`)}
       />
       <p className="mt-2 text-[12px] text-muted">
         Cost {fmtFigure(p.current.cost.total, formatCost)} · lead {fmtFigure(p.current.cost.lead, formatCost)} · workers {fmtFigure(p.current.cost.workers, formatCost)}
@@ -104,6 +137,7 @@ function ProgramCard({ p }: { p: CrewProgramScore }) {
           ))}
         </dl>
       </div>
+      <D65Rows p={p} />
       <button
         type="button"
         aria-expanded={open}

@@ -23,7 +23,7 @@ import { Lab } from './index.js';
 import { registerLabTools, scoreShort } from './portalTools.js';
 import { createLabRoutes } from './routes.js';
 import { paceBlock, type PaceClaude } from './headline.js';
-import { percentile } from './scorecard.js';
+import { percentile, wasteKind } from './scorecard.js';
 
 const H = 3_600_000;
 // Any fixed moment: the lab's clock is injected, nothing reads the real one.
@@ -243,13 +243,90 @@ test('targets: D-61 live workers and lead sub-agents, D-62 owner queue, D-63 QA 
     assert.deepEqual([target(b, 'lead_subagents').state, target(b, 'lead_subagents').figure.value, target(b, 'lead_subagents').offenders], ['breach', 2, ['M1']]);
     assert.deepEqual([target(b, 'owner_queue').state, target(b, 'owner_queue').offenders], ['breach', ['T-11']]);
     assert.deepEqual([target(b, 'qa_review_model').state, target(b, 'qa_review_model').figure.basis, target(b, 'qa_review_model').figure.reason], ['unavailable', 'unavailable', 'not_recorded']);
-    for (const t of [...a.targets, ...b.targets]) assert.ok(['D-61', 'D-62', 'D-63'].includes(t.decision) && t.rule.length > 10, t.id);
+    for (const t of [...a.targets, ...b.targets]) assert.ok(['D-61', 'D-62', 'D-63', 'D-65'].includes(t.decision) && t.rule.length > 10, t.id);
     // Sub-agents allowed but none run: a warn, not a breach.
     h.db.prepare('DELETE FROM chat_usage WHERE session_id = ?').run('M1');
     assert.deepEqual(target(prog(h.lab.scorecard({ window: 'day' })!, 'M1'), 'lead_subagents').state, 'warn');
   } finally {
     h.done();
   }
+});
+
+test('T-549 (D-65): the six rows with state, figure, source and offenders; unavailable is a state with its reason', async () => {
+  const h = await seeded();
+  try {
+    const ev = h.db.prepare(`INSERT INTO chat_events (session_id, seq, at, kind, payload) VALUES (?, ?, ?, 'tool_result', ?)`);
+    const result = (seq: number, hoursAgo: number, p: Record<string, unknown>) => ev.run('W3', seq, iso(at(hoursAgo)), JSON.stringify(p));
+    // W3, in the window: 7 good results, a permission denial, a portal tool error and a failed command = 3 of 10 wasted (30 %).
+    for (let i = 1; i <= 7; i++) result(i, 2, { toolName: 'Read', text: 'ok' });
+    result(8, 2, { toolName: 'Bash', text: 'Permission to use Bash has been denied.', isError: true });
+    result(9, 2, { toolName: 'mcp__pilot__ticket_get', text: 'not found', isError: true });
+    result(10, 2, { toolName: 'Bash', text: 'exit code 1', isError: true });
+    result(11, 30, { toolName: 'Bash', text: 'exit code 1', isError: true }); // before the window: not counted
+    // Quota: c1 left 60 percent unused at its reset 3 h ago (a reading 5 min before), c2 10.
+    const sample = h.db.prepare(`INSERT INTO claude_usage_samples (at_ms, claude_id, workspace_id, win, used_pct, resets_at_ms, level, source) VALUES (?, ?, 'docker/api', 'session', ?, ?, 'ok', 'probe')`);
+    sample.run(at(3) - 5 * 60_000, 'c1', 40, at(3));
+    sample.run(at(2) - 5 * 60_000, 'c2', 90, at(2));
+    h.db.prepare(`UPDATE chat_sessions SET workspace_id = 'kubernetes/claudepilot' WHERE id = 'L1'`).run();
+
+    const s = h.lab.scorecard({ window: 'day' })!;
+    const a = prog(s, 'L1');
+    const d65 = a.targets.filter((t) => t.decision === 'D-65');
+    assert.deepEqual(d65.map((t) => t.id), ['cost_per_done', 'lead_share', 'qa_opus_share', 'done_rate', 'quota_unused', 'wasted_tool_calls']);
+    for (const t of d65) assert.ok(t.rule.length > 20 && t.figure.source.length > 5, `${t.id} states its rule and source`);
+    const row = (id: CrewTarget['id']) => target(a, id);
+    // 4.10 USD over 3 done tickets (T-1, T-2, T-7) = 1.37: under 8.
+    assert.deepEqual([row('cost_per_done').state, row('cost_per_done').figure.value, row('cost_per_done').offenders], ['ok', 1.366667, []]);
+    // The lead chain spent 3.00 of 4.10.
+    assert.deepEqual([row('lead_share').state, row('lead_share').figure.value, row('lead_share').offenders], ['breach', 73.17, ['L1', 'L2']]);
+    // QA and review: W2 (opus) and W4 (sonnet) = 50 percent.
+    assert.deepEqual([row('qa_opus_share').state, row('qa_opus_share').figure.value, row('qa_opus_share').offenders], ['breach', 50, ['W2']]);
+    // Feature and task done in 24 h: T-1 and T-7 = 2 a day against 48 (workspace claudepilot).
+    assert.deepEqual([row('done_rate').state, row('done_rate').figure.value], ['breach', 2]);
+    // The worst unused at a reset: 60 percent (c1).
+    assert.deepEqual([row('quota_unused').state, row('quota_unused').figure.value, row('quota_unused').offenders], ['breach', 60, ['c1']]);
+    assert.deepEqual([row('wasted_tool_calls').state, row('wasted_tool_calls').figure.value, row('wasted_tool_calls').offenders], ['breach', 30, ['W3']]);
+
+    // Program B: no baseline for its workspace, no done ticket, no tool result: unavailable, each with a reason, never a 0.
+    const b = prog(s, 'M1');
+    const reason = (id: CrewTarget['id']) => [target(b, id).state, target(b, id).figure.value, target(b, id).figure.reason];
+    assert.deepEqual(reason('done_rate'), ['unavailable', null, 'not_recorded']);
+    assert.deepEqual(reason('cost_per_done'), ['unavailable', null, 'no_samples']);
+    assert.deepEqual(reason('wasted_tool_calls'), ['unavailable', null, 'no_samples']);
+    assert.deepEqual(reason('qa_opus_share'), ['unavailable', null, 'no_samples']);
+
+    // An agent's own read never sees the quota (every Claude's), and the row says why.
+    const own = prog(h.lab.scorecard({ window: 'day', sessionId: 'W3' })!, 'L1');
+    assert.deepEqual([target(own, 'quota_unused').state, target(own, 'quota_unused').figure.reason], ['unavailable', 'no_source']);
+    assert.ok(s.basis.d65, 'the D-65 rows have a written basis');
+  } finally {
+    h.done();
+  }
+});
+
+test('T-549 (D-65): thresholds: warn from 80 percent of a ceiling; the done rate is scaled to a day and breaches far under its baseline', async () => {
+  const h = await seeded();
+  try {
+    h.db.prepare(`INSERT INTO claude_usage_samples (at_ms, claude_id, workspace_id, win, used_pct, resets_at_ms, level, source) VALUES (?, 'c1', 'docker/api', 'session', ?, ?, 'ok', 'probe')`).run(at(3) - 60_000, 75, at(3));
+    const a = prog(h.lab.scorecard({ window: 'day' })!, 'L1');
+    assert.deepEqual([target(a, 'quota_unused').state, target(a, 'quota_unused').figure.value], ['warn', 25], '25 of a 30 ceiling is past 80 percent');
+    h.db.prepare(`UPDATE claude_usage_samples SET used_pct = 90`).run();
+    assert.deepEqual([target(prog(h.lab.scorecard({ window: 'day' })!, 'L1'), 'quota_unused').state], ['ok']);
+    // The window scales to a day: T-1, T-6 and T-7 (feature, feature, task) done in a week = 3 / 7 = 0.43 a day, far under konfersi's 47: a breach.
+    h.db.prepare(`UPDATE chat_sessions SET workspace_id = 'kubernetes/konfersi' WHERE id = 'L1'`).run();
+    const week = target(prog(h.lab.scorecard({ window: 'week' })!, 'L1'), 'done_rate');
+    assert.deepEqual([week.state, week.figure.value], ['breach', 0.43]);
+  } finally {
+    h.done();
+  }
+});
+
+test('T-549 (D-65): a permission denial, a portal tool error and a failed command are told apart', () => {
+  assert.equal(wasteKind('Bash', 'Permission to use Bash with command rm has been denied.'), 'denied');
+  assert.equal(wasteKind('mcp__pilot__ticket_comment', 'Claude requested permissions to use mcp__pilot__ticket_comment, but you haven’t granted it yet.'), 'denied');
+  assert.equal(wasteKind('mcp__pilot__ticket_get', 'ticket not found'), 'portal');
+  assert.equal(wasteKind('Bash', 'exit code 2'), 'failed');
+  assert.equal(wasteKind(null, null), 'failed');
 });
 
 test('T-490 (D-63): the opus share of QA and review workers per program, with its workspace; a worker started with a why is no offender', async () => {
@@ -625,7 +702,18 @@ test('MCP crew_scorecard: short by default, full on ask; an agent of program A g
     assert.deepEqual(short.programs.map((p: any) => p.program).sort(), ['L1', 'M1']);
     const a = short.programs.find((p: any) => p.program === 'L1');
     assert.deepEqual([a.now.done, a.now.cost_usd, a.now.lead_share_pct, a.before.done], [3, 4.1, 73.17, 1]);
-    assert.deepEqual(a.targets, { live_workers: 'breach', lead_subagents: 'ok', owner_queue: 'ok', qa_review_model: 'breach' });
+    assert.deepEqual(a.targets, {
+      live_workers: 'breach',
+      lead_subagents: 'ok',
+      owner_queue: 'ok',
+      qa_review_model: 'breach',
+      cost_per_done: 'ok',
+      lead_share: 'breach',
+      qa_opus_share: 'breach',
+      done_rate: 'unavailable',
+      quota_unused: 'unavailable',
+      wasted_tool_calls: 'unavailable',
+    });
     const b = short.programs.find((p: any) => p.program === 'M1');
     assert.equal(b.now.per_done_usd, 'unavailable:no_samples');
     assert.equal(short.basis, undefined, 'the sources are in the full form');
