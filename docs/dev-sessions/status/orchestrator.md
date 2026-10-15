@@ -3,6 +3,8 @@
 Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-overs: ab99b45, bb58413, 639202e.
 
 ## DONE
+- MERGED ff 3f81869: T-524 S2 0fbc6be (gate-job Pending report, memory peak line, ENOSPC hint). Gate GREEN claudepilot-gate-3f81869-1ecd
+  (suite 575 s, peak 2325Mi/8192Mi, 0 OOM). No web files in the diff, so no web suite. Scripts only: no deploy needed.
 - DEPLOYED run #37 rmv9dxygu680003 (0316fae = b37628e + status): gate 690 s, build, release, verify, chats all passed.
   Carries T-486 S1, T-490, T-450 S3, T-524 S1, T-515, T-527. CLOSED T-527 (live D-62 refusal 10:42) and T-515.
 - MERGED ff b37628e (T-515 e021cb6 + T-527 ea81071 + packs): gate GREEN claudepilot-gate-b37628e-0953 (memory peak 2189Mi/8192Mi,
@@ -10,19 +12,20 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - MERGED ff 4ba5d37: T-490 c8c8197 + T-450 S3 7f7f18c + T-524 S1 d44bf24 (gate green, web 626/626). MERGED 73bb581: T-486 S1.
 - DEPLOYED runs #36 (8062398) and #35 (98e6de4): CLOSED T-483, T-397, T-491, T-435, T-476, T-449.
 
-## IN FLIGHT (3 of 3 workers: 21731f30 T-531 review, ad68c3a4 T-416 S1 (has the slot), 45148907 T-486 S2)
-- T-416 (high incident; 4439: L, sev 2, ~5 h): S1 ad68c3a4 (opus, impl-t416) 4ba2d69+ on ticket/T-416-memory-budget from 44eb2c8:
-  budget anon+active_file vs memory.max, 350 MB/session (+1 per sub-agent), 1.5 GiB headroom; 85% attention + push (top RSS names).
-  Running its Jobs now (GO 10:37). Then blind review (opus) + QA (no model given = T-490 live check), lead gate. S2 = Bypass restore.
-- T-524 S2 0fbc6be: review df797f3d PASS WITH CONDITIONS (4440), QA e88db594 PASS WITH GAPS (4468: 174/174 d31b630c, proof 889c9088).
-  CANDIDATE 677660a (wip/main-677660a, worktree wip-t524-premerge): lead gate after T-416's Jobs -> ff -> close T-524 (scripts only,
-  no deploy needed). Minors 1-4 (4440) -> follow-up. Open: master under 85% measured (T-513 cluster). Event Jobs over 4Gi need --big.
+## IN FLIGHT (3 of 3 workers: eef38632 T-531 S2 (GO, has the slot), b1aa2e47 T-416 QA WAITING (4547), 45148907 T-486 S2)
+  Slot order: T-531 S2 9cd240f -> T-416 QA -> T-486 S2.
+- T-416 (high incident; 4439): S1 DONE d37c5f0 (4534: typecheck 396fbc13; server 995 pass 0 fail 4e6521ec; web 626/626 0ccd8ea5;
+  proof 1d735457 weak (module absent) + a163ad18 in-flight bug caught); ad68c3a4 ended. QA b1aa2e47 (sonnet = role default) incl.
+  mutation proof. Then blind review (opus), lead gate, merge, deploy. S2 = Bypass restore. D-34 vs the memory item: built as the
+  ticket asks; for the coordinator.
+- T-524: S1 + S2 merged (4551). Open ONLY: k3s-master under 85% in a busy hour, measured (with T-513). Minors -> T-543.
+  Event Jobs over 4Gi need --big (tell Event).
 - T-531 (high, authz): S1 df65563 (4515: typecheck a3cf20b8; 1105/1111 0 fail ed930af1; proof 535ee3fc 6/6); 74a6ee0e ended.
-  Blind review 21731f30 (opus, D-62) -> QA (sonnet) -> lead gate -> merge. Open: pools/repos/accounts/endpoints routes undeclared;
-  pool ids in PUT .../account and .../pools/:type not checked; workspace remove has no password re-check.
+  Blind review 21731f30 PASS WITH CONDITIONS (4520: preflight at view runs a shell, adopt at operate; ended). Decision 4524: fix
+  round S2 eef38632 (opus, impl-t531-2, ticket/T-531-verbs from df65563): verbs to the PRD table + a verb-table test; stop stays
+  operate. Then QA -> lead gate -> merge. Open points ticketed: T-538 (pool ids in PUT), T-539 (other prefixes), T-540 (remove re-check).
 - T-486 (high): S1 live. S2 45148907 (opus, impl-t486-2) on ticket/T-486-sync-s2 from 0316fae: attention for failing/diverged sync,
   webhook kick (authz seam, coalesced), upstream host allow-list setting. Then QA + real Event branch check; close after deploy.
-- T-490: deployed; close after the live check (a QA spawn with no model gets sonnet). Gaps -> T-520.
 - T-450: S3 deployed; 5 % real-data check + harness assertions (4354) still open.
 - T-472: live paths/restarts/pool re-assign NOT VERIFIED (4294). Retry with the new read tools.
 - T-525 (mine): QA/reviewer lack session_get (4362); scribe role has no Bash or ticket tools (4471). Coordinator decides.
@@ -58,7 +61,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   T-509 kit republish; T-525 session_get + scribe tools; T-527 finding 4 (owner triggers tagging owner-checklist).
 
 ## NEXT (in order, as slots free)
-1. Slot: T-416 Jobs -> lead gate 677660a (T-524 S2) -> ff, close T-524. 2. T-531 review -> QA. 3. T-416 review + QA, then S2.
+1. 2. T-531 review -> QA. 3. T-416 review + QA, then S2.
 4. T-486 S2 -> QA -> deploy. 5. T-537. 6. T-513 (cluster GitOps MR).
 7. T-422, T-147, T-438, T-425, T-436, T-437, T-432, T-378 S1 verify, T-382, T-377, T-386, T-409, T-402, T-398, T-399, T-370 HOLD,
    T-371..T-374, T-363, T-451, T-470, T-507, T-508, T-512, T-520; T-376 S2.
