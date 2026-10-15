@@ -88,6 +88,7 @@ const row = (session: ChatSession, over: Partial<ListRow> = {}): ListRow => ({
   workspaceGone: false,
   parentTitle: null,
   context: false,
+  header: false,
   ...over,
 });
 
