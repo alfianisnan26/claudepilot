@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { estimatedFigure, unavailableFigure, type AttributionRow, type ChatUsageTotals } from '@portal/contracts';
-import { countsLine, coverageNote, maxTotal, rowName, sessionLine, shareText } from './attribution.js';
+import { countsLine, coverageNote, maxTotal, rowName, sessionLine, shareText, ticketLine } from './attribution.js';
 
 const totals = (costUsd: number, requests: number): ChatUsageTotals => ({ costUsd, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, requests, agents: 0 });
 const row = (over: Partial<AttributionRow>): AttributionRow => ({ by: 'session', key: 'uus-1', label: 'Refactor billing', state: 'known', own: totals(0.5, 2), total: totals(1, 3), share: estimatedFigure(23.75), sessions: 2, firstAt: null, lastAt: null, ...over });
@@ -48,4 +48,12 @@ test('coverage: said below 100 %, quiet at 100 % and when it cannot be told', ()
   assert.deepEqual(coverageNote({ coverage: estimatedFigure(33.25) }), { pct: 33 });
   assert.equal(coverageNote({ coverage: estimatedFigure(100) }), null);
   assert.equal(coverageNote({ coverage: unavailableFigure('no_samples') }), null);
+});
+
+// T-449: a ticket row says its type and status and, when leads' dollars were apportioned to it, "via lead $x".
+test('a ticket row shows type, status and via lead only when there is one', () => {
+  const t = (viaLeadUsd: number) => row({ by: 'ticket', key: 'T-1', ticket: { type: 'feature', status: 'in_review', doneAt: null, viaLeadUsd, viaLeadWorkers: viaLeadUsd > 0 ? 2 : 0 } });
+  assert.deepEqual(ticketLine(t(6.5)), { type: 'feature', status: 'in review', viaLead: 'via lead $6.5' });
+  assert.deepEqual(ticketLine(t(0)), { type: 'feature', status: 'in review', viaLead: null });
+  assert.equal(ticketLine(row({})), null);
 });

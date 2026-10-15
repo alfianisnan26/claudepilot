@@ -42,7 +42,8 @@ export const usageSpendApi = {
   summary: () => request<SpendSummary>('GET', USAGE_SPEND_API.summary),
   /** The last day's budget and spike alerts that are not snoozed, newest first. */
   alerts: () => request<SpendAlert[]>('GET', USAGE_SPEND_API.alerts),
-  attribution: (by: AttributionBy, range: ChatUsageRange) => request<AttributionReport>('GET', `${USAGE_SPEND_API.attribution}?by=${by}&range=${range}`),
+  /** `done`: by ticket, only tickets closed as done in the window. */
+  attribution: (by: AttributionBy, range: ChatUsageRange, done = false) => request<AttributionReport>('GET', `${USAGE_SPEND_API.attribution}?by=${by}&range=${range}${done && by === 'ticket' ? '&done=1' : ''}`),
   /** A download link for the same rows (the browser sends the session cookie). */
   attributionCsv: (by: AttributionBy, range: ChatUsageRange) => `${USAGE_SPEND_API.attribution}?by=${by}&range=${range}&format=csv`,
   budgets: () => request<BudgetsReport>('GET', USAGE_SPEND_API.budgets),

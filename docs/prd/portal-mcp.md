@@ -548,7 +548,9 @@ A session's own tools for a crew (agent scope, [Chat sessions](chat-sessions.md)
 busy first; with none, T-427, another Claude, the least used now of those with more than 10 % left (the auto move's default
 threshold), none above ceil((sessions + 1) / Claudes) + 1 sessions not ended (asleep ones count: a message wakes them), why
 `no_room_lowest`; its own only when no other qualifies), `role` (the worker runs as `.claude/agents/<role>.md`), `model`, `effort`, `mode` (`default`, `plan`,
-`dontAsk`), `max_workers` and `subagents` (the worker's own limits, never wider than the caller's) and `report`
+`dontAsk`), `ticket` (`T-<n>`: the worker's ticket, the field usage attribution reads, so its cost counts under that ticket;
+none means "No ticket"; a malformed id or a ticket that does not exist is refused as `NOT_FOUND` and starts nothing, T-449),
+`max_workers` and `subagents` (the worker's own limits, never wider than the caller's) and `report`
 (`idle`, the default: the portal tells the lead in one line when the worker's turn
 ends, when it waits on a person and when it ends; `end`: only the end; `none`), `session_message` takes `to`
 (`workers` or `crew`) instead of `session_id`, every recipient counted against the hourly limit, and

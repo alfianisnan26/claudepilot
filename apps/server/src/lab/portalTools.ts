@@ -9,7 +9,7 @@
 //
 // Counts and ids only; an experiment's name and hypothesis are a person's text and come back labelled untrusted.
 
-import { LAB_STRATUM_KEYS, type LabExperimentView, type LabInterval, type LabStat, type LabSummaryRow } from '@portal/contracts';
+import { ATTRIBUTION_LEAD_BASIS, LAB_STRATUM_KEYS, type LabTicketCost, type LabExperimentView, type LabInterval, type LabStat, type LabSummaryRow } from '@portal/contracts';
 import { fullInput } from '../portalmcp/compact.js';
 import { PortalToolError, portalTools, z, type PortalToolContext, type ToolRegistry } from '../portalmcp/registry.js';
 import { declareLabPolicies } from './authz.js';
@@ -22,6 +22,10 @@ const r2 = (x: number | null | undefined): number | null => (x === null || x ===
 const r3 = (x: number | null | undefined): number | null => (x === null || x === undefined ? null : Math.round(x * 1000) / 1000);
 const med = (s: LabStat | null) => (s ? s.median : null);
 const ci = (i: LabInterval) => (i === 'n too small' ? i : [r2(i.low), r2(i.high)]);
+
+/** The tickets' dollars (usage spend's per-ticket figures, T-449): ticket, type, status, own, via lead, total. Top `n` (default 10). */
+const ticketsShort = (t: LabTicketCost[] | undefined, n = 10) =>
+  (t ?? []).slice(0, n).map((x) => ({ ticket: x.ticket, type: x.type, status: x.status, done_at: x.doneAt, own_usd: x.ownUsd, via_lead_usd: x.viaLeadUsd, total_usd: x.totalUsd }));
 
 /** One short row: the figures the coordinator compares every pass. */
 export function compactRow(r: LabSummaryRow) {
@@ -83,13 +87,15 @@ export function registerLabTools(lab: Lab, registry: ToolRegistry = portalTools)
       const s = lab.summary({ ...(args.period ? { period: args.period } : {}), ...(sinceMs !== undefined ? { sinceMs } : {}), ...(own ? { sessionId: own } : {}) });
       const n = s.rows.reduce((t, r) => t + r.n, 0);
       const summary = `${n} slice${n === 1 ? '' : 's'} in ${s.rows.length} row${s.rows.length === 1 ? '' : 's'} since ${new Date(s.sinceMs).toISOString().slice(0, 10)}${own ? ' (this session only)' : ''}. Dollars are estimates.`;
-      if (!args.full) return { summary, scope: own ? 'session' : 'portal', period: s.period, rows: s.rows.map(compactRow), more: 'full: true for p90s, outcomes, Bash classes, experiments and sources.' };
+      if (!args.full) return { summary, scope: own ? 'session' : 'portal', period: s.period, rows: s.rows.map(compactRow), tickets: ticketsShort(s.tickets), more: 'full: true for p90s, outcomes, Bash classes, experiments and sources.' };
       return {
         summary,
         scope: own ? 'session' : 'portal',
         period: s.period,
         since_ms: s.sinceMs,
         rows: s.rows,
+        tickets: ticketsShort(s.tickets, 25),
+        tickets_basis: ATTRIBUTION_LEAD_BASIS,
         ...(own ? {} : { experiments: lab.experimentViews().map((v) => experimentRow(v, ctx, lab)) }),
         basis: s.basis,
       };

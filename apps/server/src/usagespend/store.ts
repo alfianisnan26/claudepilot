@@ -287,6 +287,23 @@ export class SpendStore {
     });
   }
 
+  /** The type, status and done time (ms, when closed as done) of tickets (`T-n`); a ticket that does not exist is not in the map (T-449). */
+  ticketFacts(ticketIds: Iterable<string>): Map<string, { type: string; status: string; doneAtMs: number | null }> {
+    return this.#read(new Map<string, { type: string; status: string; doneAtMs: number | null }>(), (db) => {
+      const out = new Map<string, { type: string; status: string; doneAtMs: number | null }>();
+      const numbers = [...new Set(ticketIds)].map((t) => /^T-(\d{1,9})$/.exec(t)?.[1]).filter((n): n is string => !!n).map(Number);
+      for (let i = 0; i < numbers.length; i += CHUNK) {
+        const part = numbers.slice(i, i + CHUNK);
+        const rows = db.prepare(`SELECT number, type, status, closed_at FROM tickets WHERE number IN ${inList(part.length)}`).all(...part) as unknown as { number: number; type: string; status: string; closed_at: string | null }[];
+        for (const r of rows) {
+          const ms = r.status === 'done' && r.closed_at ? Date.parse(r.closed_at) : NaN;
+          out.set(`T-${r.number}`, { type: r.type, status: r.status, doneAtMs: Number.isFinite(ms) ? ms : null });
+        }
+      }
+      return out;
+    });
+  }
+
   /* ---------- Sessions ---------- */
 
   /**

@@ -39,7 +39,7 @@ export function createUsageSpendRoutes(spend: UsageSpend): Hono {
     const q = c.req.query();
     const format = q.format ?? 'json';
     if (format !== 'json' && format !== 'csv') throw new AppError('VALIDATION_FAILED', 'Pick json or csv.', { details: { format: 'One of json, csv.' } });
-    const report = spend.attribution({ by: q.by, range: q.range, claudeId: q.claudeId || undefined, workspaceId: q.workspaceId || undefined, limit: q.limit }, actorOf(c));
+    const report = spend.attribution({ by: q.by, range: q.range, claudeId: q.claudeId || undefined, workspaceId: q.workspaceId || undefined, limit: q.limit, done: q.done === '1' || q.done === 'true' }, actorOf(c));
     if (format === 'json') return c.json(success(report));
     c.header('Content-Type', 'text/csv; charset=utf-8');
     c.header('Content-Disposition', `attachment; filename="usage-by-${report.by}-${report.range}.csv"`);
