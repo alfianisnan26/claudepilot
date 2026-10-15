@@ -82,5 +82,5 @@ test('D-70: idle lanes past 120k are compacted, each at most once per gap; other
   assert.match(brief, /at most two QA lanes/);
   // The owner's Konfersi split: four build lanes by area; ClaudePilot keeps one Backend and one Frontend.
   for (const lane of ['Konfersi FE Business', 'Konfersi FE Lab', 'Konfersi BE Business', 'Konfersi BE Lab & AI']) assert.ok(brief.includes(lane), lane);
-  assert.ok(sup.LANES('ClaudePilot').includes("'ClaudePilot Backend'") && !sup.LANES('ClaudePilot').includes('FE Lab'));
+  assert.ok(sup.LANES('ClaudePilot').includes("'ClaudePilot Backend'") && sup.LANES('ClaudePilot').includes("'ClaudePilot BE Infra'") && !sup.LANES('ClaudePilot').includes('FE Lab'));
 });
