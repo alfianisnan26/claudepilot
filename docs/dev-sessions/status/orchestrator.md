@@ -13,7 +13,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - T-597 QA FAIL 5727 (sev 2: text after /compact goes unframed) -> decision 5742 -> S1b queued to Backend after T-600 BE.
 - QA PERF 7e4879c7 (lane/cp-qa-perf): T-426 S1c -> T-623 -> T-561 S1c 0beae29 -> T-546 10b22e0 (5535) -> T-558 e652c44; T-426 S1c to the front when DONE.
 - QA UI b3f769c5 (qa/T-600-ui-r3 32f67b8f): T-619 PARTIAL 5720 (both targets blocked; scratch portal not started, no node_modules,
-  deps script refused) -> asked coordinator to link deps 5726; then steps a,b,d. T-600 FE S1b FAIL 5721 (Pace 2 cols at 1280) -> FE S1c. Then T-576.
+  deps script refused) -> coordinator linked deps (18:06), QA UI rerunning steps a,b,d. T-600 FE S1b FAIL 5721 (Pace 2 cols at 1280) -> FE S1c. Then T-576.
 - BACKEND 4b4edaf8 (ticket/T-600-be from T-600-fe-s1b 32985e2) on T-600 BE (plan 5540); then T-597 S1b; then T-325 S1+S2 (5549).
 - T-623 DONE 4d68e843 (5750; 174/174, typecheck; not real Chromium/k8s) -> REVIEW 6b97efb4 (opus, security) + QA Perf after T-426 (5754).
   RBAC widening (all Secrets in workspaces ns) = person; CDP read-back vs "never visible". BE INFRA feaba810 ended; respawn: T-591 S1d, T-610.
