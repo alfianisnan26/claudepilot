@@ -1036,6 +1036,21 @@ tables the portal already keeps; nothing new is stored.
 - **Windows.** `1h`, `6h`, `day` (default) or `week`, ending now; with `compare` (default on) the window before it, the same length.
 - **The program's tickets**: held by one of its sessions (`ticket_id`), assigned to one, or with a timeline event written by one
   (`session:<id>`). A ticket two programs touched counts in both.
+- **Headline** (T-600; `CrewScorecard.headline`, filled by `lab/headline.ts`; no new route, the authz seam unchanged; named `headline`
+  because the `crew_scorecard` tool already puts a text `summary` beside the scorecard). Over the programs the response keeps (an
+  agent: its own only), each figure with its basis and source, unavailable with a reason, never a division by zero:
+  - **Pace** (ESTIMATE, global, a snapshot of now): sum of `usedPct` over sum of `evenPct` of the 5-hour `session` window of every Claude
+    on its own plan that is signed in and has a pace (claudeusage `WindowPace`, read through `Lab`'s optional `paceSource`, which is
+    `claudeUsage.report()`). Left out: signed out (`runsOn` none or state `signed_out`), pooled, key, a Claude without a pace. Under 10
+    points of even pace in all: `windows_just_reset`; none left: `no_claude`; no source (none wired, it failed, or an agent's read, since
+    the quota is not one program's): `no_source`. Per Claude `usedPct / evenPct` (`no_samples` when `evenPct` is 0). Under 0.9 the
+    unused part at reset: 100 minus the mean `projectedPct` of those Claudes (null when none says). Weekly: the same on the `week` window.
+  - **Per window** (current, and the window before with `compare`): requests and estimated dollars per hour; tickets resolved (done,
+    `closed_at` in the window) and won't-do, global and per program; dollars over resolved (`no_samples` with none); tickets created over
+    tickets closed (done plus won't-do), global and per program (`no_samples` with none closed). A ticket two programs touched counts
+    once globally and once in each program row, so the rows equal the program rows of the same response.
+  - **Server**: `Lab.scorecard` fills it (paces passed in, none by default); `Lab.scorecardWithPace` awaits the source first and is what the
+    route and the tool call. The full tool form drops each figure's `source` here too (`basis` names it once).
 - **Effectiveness** (all MEASURED): done (status done, `closed_at` in the window) by type and per hour; reopened (a `reopened` event, or a
   change from done or wont_do back to work, in the window); wont_do (closed as wont_do in the window); lead time from the first change to
   in_progress to `closed_at`, p50 and p90 by nearest rank per type (a done ticket with no start recorded is counted as `noStart`, not
