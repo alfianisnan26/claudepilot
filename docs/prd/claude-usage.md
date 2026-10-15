@@ -1089,7 +1089,9 @@ tables the portal already keeps; nothing new is stored.
   be checked); the review backlog warns when a ticket has waited more than 24 hours (a default of this page, not a decision); the other three
   have no target, so their state is `ok` when measured. "Details" opens the tables the API returns as lists (done by type, in review with
   what each waits for, CI by pipeline, deploys, the targets with their offenders), so nothing scrolls sideways. Layout: two numbers a row on a
-  phone, 44 px controls, light and dark. Check: `tools/qa/crew-scorecard.mjs`; tests `scorecardModel.test.ts`.
+  phone, 44 px controls, light and dark. S3: on a phone the Details button is a chevron only (labelled "Show details" / "Hide details"); the
+  Sources InfoTip sits beside the window picker it explains; when targets warn and none breaches, the Breaches tile reads "2 warn" (the
+  warn count) instead of "0" beside WARN. Check: `tools/qa/crew-scorecard.mjs`; tests `scorecardModel.test.ts`.
 - **Attribution export (T-450 S2 fix).** Usage → Attribution's CSV followed `by` and `range` but not the Done filter, so a done-only view
   exported every ticket; the download now carries `done=1` like the rows (`attributionUrl`, test `attributionUrl.test.ts`).
 - **Known limits.** A done ticket's life cost looks back at most 30 days; waits-for is derived for the current window only; context per

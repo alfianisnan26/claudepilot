@@ -91,7 +91,8 @@ export function tiles(p: CrewProgramScore): Tile[] {
     {
       key: 'breaches',
       label: 'Breaches',
-      value: allUnavailable ? UNAVAILABLE : fmtCount(breaches),
+      // A warn with no breach reads "1 warn", not "0" beside a WARN state; breaches keep the plain count (the state word says breach).
+      value: allUnavailable ? UNAVAILABLE : breaches === 0 && warns > 0 ? `${fmtCount(warns)} warn` : fmtCount(breaches),
       state: breachState,
       basis: allUnavailable ? 'UNAVAILABLE' : 'MEASURED',
       tip: `${allUnavailable ? 'UNAVAILABLE' : 'MEASURED'}. Source: the D-61, D-62 and D-63 checks (${breachList || 'none ran'}). Breach when any is a breach, warn when any is a warn.`,
