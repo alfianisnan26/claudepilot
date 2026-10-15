@@ -52,7 +52,8 @@ test('the policy drop-in carries exactly the declared names, with the defaults a
     assert.ok(file, 'the policy drop-in is compiled');
     assert.deepEqual([file.mode, file.uid, file.gid], [0o644, 0, 0]);
     const parsed = JSON.parse(file.content) as Record<string, unknown>;
-    assert.deepEqual(Object.keys(parsed), ['env']);
+    // The agent policy's env, and the rule-file guard every workspace gets with it (D-60, T-404; ruleGuard.test.ts).
+    assert.deepEqual(Object.keys(parsed), ['env', 'hooks']);
     assert.deepEqual(Object.keys(parsed.env as object).sort(), NAMES);
     assert.deepEqual(parsed.env, {
       CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL: '1h',

@@ -4,6 +4,7 @@ import type { FragmentProvider } from '../delivery/reconciler.js';
 import { dropInPath } from '../delivery/ownership.js';
 import type { Store } from '../store/store.js';
 import { defineSetting } from './registry.js';
+import { RULE_GUARD_FILES, RULE_GUARD_HOOKS } from './ruleGuard.js';
 import type { Settings } from './store.js';
 
 /**
@@ -146,8 +147,9 @@ export class AgentEnvPolicy implements FragmentProvider {
     return [];
   }
 
+  /** The agent policy's `env`, and the rule-file guard (D-60, T-404), which every workspace gets with it. */
   fragments(): Fragment[] {
-    return [{ owner: 'policy', settings: { env: this.desired() } }];
+    return [{ owner: 'policy', files: RULE_GUARD_FILES, settings: { env: this.desired(), hooks: RULE_GUARD_HOOKS } }];
   }
 
   /** After a delivery that wrote the policy drop-in: remember what landed (names and values, none of them secret). */
