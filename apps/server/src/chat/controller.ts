@@ -1539,6 +1539,8 @@ export class ChatController {
     const row = this.#chat.row(id)!;
     this.#chat.patchSession(id, { process: 'asleep' });
     this.#showSlotWait(id, slotWaitText(full.scope, full.limit, full.running, row.workspace_id));
+    // The wait is this session's lifecycle work (`#busy`) until the launch takes over (it holds `#busy` itself).
+    let held: Promise<void> | undefined;
     const op = (async () => {
       try {
         await this.#slot(row.workspace_id, this.#chat.row(id) ?? row);
@@ -1553,7 +1555,7 @@ export class ChatController {
       if (this.#busy.get(id) === held) this.#busy.delete(id);
       await this.#startProcess(id, { checked }).catch(() => undefined);
     })();
-    const held = op.catch(() => undefined);
+    held = op.catch(() => undefined);
     this.#busy.set(id, held);
     void held.finally(() => {
       if (this.#busy.get(id) === held) this.#busy.delete(id);
