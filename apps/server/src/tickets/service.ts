@@ -1320,6 +1320,17 @@ export class Tickets {
     return { ticket: this.#items([this.#row(row.number)!])[0]!, session: this.#sessionView(this.sessions.get(session.id) ?? session), mode };
   }
 
+  /**
+   * T-546: the latest comment a session wrote on any ticket: the ticket and the comment's id (what a lead's crew digest points to for the
+   * worker's full report), or null. A fact for the portal's own digest, not a read for a caller: it carries no text.
+   */
+  latestCommentOf(sessionId: string): { ticket: string; comment: number } | null {
+    const r = this.#db
+      .prepare("SELECT id, ticket_number AS number FROM ticket_events WHERE kind = 'comment' AND json_extract(data, '$.session') = ? ORDER BY id DESC LIMIT 1")
+      .get(sessionId) as { id: number; number: number } | undefined;
+    return r ? { ticket: ticketIdOf(r.number), comment: r.id } : null;
+  }
+
   /** FR31: the tickets bumped into a session, the latest bump of each, newest first (the session page's chips). */
   bumpedInto(caller: Caller, sessionId: string): TicketBumped[] {
     const rows = this.#db

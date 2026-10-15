@@ -422,6 +422,9 @@ tickets.start();
 const orphanSweep = new OrphanSweep(tickets);
 orphanSweep.start();
 chatController.ticketExists = (id) => tickets.exists(id);
+// T-546: the crew digest's window is a setting, and each worker's line points to its latest ticket comment.
+chatController.crewSettings = (key) => settingsModule.settings.get(key);
+chatController.crewTicketOf = (sessionId) => tickets.latestCommentOf(sessionId);
 // T-270: a continuation takes its predecessors' tickets in the transaction that creates it.
 chatController.continueTickets = (to, from) => tickets.continueFrom(to, from);
 // T-136: recover in place reads its cap and pause from the settings; past the cap, ONE watchdog ticket says so (facts, no transcript).
