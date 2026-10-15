@@ -76,14 +76,17 @@ const MEASURE = `(() => {
     tileStates: tiles.map((t) => t.getAttribute('data-state')),
     tileTips: tiles.filter((t) => t.querySelector('[aria-label^="About"]')).length,
     tileBasis: tiles.filter((t) => /MEASURED|ESTIMATE|UNAVAILABLE/.test(t.innerText)).length,
-    was: (root.innerText.match(/\\bwas\\b/g) || []).length,
+    was: (document.body.innerText.match(/\\bwas [0-9$]/g) || []).length,
     detail: !!root.querySelector('[data-scorecard-detail]'),
   };
 })()`;
 const m = (b) => b.eval(MEASURE);
 const clickLabel = (b, text) =>
   b.eval(`(() => { const e = [...document.querySelectorAll('button, [role=tab], [role=radio], label')].find((x) => (x.innerText || '').trim() === ${JSON.stringify(text)}); if (!e) return false; e.click(); return true; })()`);
-const noScroll = (s) => s.docScroll <= s.docClient + 1 && s.rootScroll <= s.rootClient + 1;
+// The Details button reads "Details" plus a +/- glyph: match its start.
+const clickDetails = (b) =>
+  b.eval(`(() => { const e = [...document.querySelectorAll('button[aria-expanded]')].find((x) => /^(Details|Hide)/.test((x.innerText || '').trim())); if (!e) return false; e.click(); return true; })()`);
+const noScroll =(s) => s.docScroll <= s.docClient + 1 && s.rootScroll <= s.rootClient + 1;
 
 const cookie = await login();
 const b = await Browser.launch({ width: 390, height: 844, mobile: true, cookie });
@@ -124,10 +127,10 @@ try {
       await sleep(1500);
       s = await m(b);
       check(`${tag}: compare: layout holds, no sideways scroll`, s.tiles >= 5 && noScroll(s) && s.bad.length === 0);
-      console.log(`  info "was" shown ${s.was} times`);
+      check(`${tag}: compare shows "was" under the numbers`, s.was > 0, `was=${s.was}`);
       await b.shot(`crew-compare-${tag}`, { full: true });
 
-      check(`${tag}: Details clicks`, await clickLabel(b, 'Details'));
+      check(`${tag}: Details clicks`, await clickDetails(b));
       await sleep(400);
       s = await m(b);
       check(`${tag}: details: the lists show (done by type, in review, CI, deploys, targets)`, s.detail && /Done by type/.test(s.text) && /In review/.test(s.text) && /Targets/.test(s.text));
