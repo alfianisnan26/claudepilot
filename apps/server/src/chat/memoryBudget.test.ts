@@ -212,6 +212,97 @@ test('T-416: a wake counts the sleeping session’s sub-agents: refused with two
   }
 });
 
+/* ---------- T-416 review (comment 6187): each fails without its fix ---------- */
+
+/** A second session in `s`, started and idle (its reader the newest tail). */
+async function another(s: Awaited<ReturnType<typeof liveSession>>): Promise<string> {
+  const before = s.ws.tails.length;
+  const { id } = await s.controller.create({ workspaceId: 'docker/ws1' });
+  await until(() => s.ws.tails.length === before + 1);
+  await until(() => s.controller.get(id)?.state === 'idle');
+  await sleep(20);
+  return id;
+}
+
+test('T-416 review 1: two wakes at once with room for exactly one: one wakes, the other is refused with the budget reason', async () => {
+  const s = await liveSession({ idleSleepMs: 200 }, true);
+  try {
+    const other = await another(s);
+    await until(() => s.controller.get(s.id)!.process === 'asleep' && s.controller.get(other)!.process === 'asleep', 4000);
+    s.controller.memory = budget(ONE_FITS).memory;
+    const starts = s.ws.starts;
+    // Both checks share one reading: without the wake's reservation (made in the check's own step) neither sees the other and both wake.
+    const outcomes: unknown[] = [];
+    for (const [id, uuid] of [
+      [s.id, 'wake-a'],
+      [other, 'wake-b'],
+    ] as const)
+      void s.controller.send(id, uuid, 'go on').then(
+        () => outcomes.push('ok'),
+        (e: unknown) => outcomes.push(e),
+      );
+    await until(() => outcomes.some(isBudget), 4000);
+    await until(() => s.ws.starts === starts + 1, 4000);
+    await sleep(200);
+    assert.equal(s.ws.starts, starts + 1, 'one process');
+    assert.equal([s.id, other].filter((id) => s.controller.get(id)!.process === 'asleep').length, 1, 'the refused one stays asleep');
+    const refused = s.controller.audit({ kind: 'memory.refused' });
+    assert.deepEqual([refused.length, refused[0]!.detail.at, refused[0]!.detail.pending], [1, 'wake', 1]);
+  } finally {
+    await s.done();
+  }
+});
+
+test('T-416 review 2: a launch that settled still counts until a reading late enough to see it; then its hold ends', async () => {
+  const s = await liveSession();
+  try {
+    const b = budget(ONE_FITS);
+    s.controller.memory = b.memory;
+    const a = await another(s); // launched and settled; the reading (cached, taken before it) cannot see it
+    assert.ok(a);
+    await sleep(50);
+    await assert.rejects(s.controller.create({ workspaceId: 'docker/ws1' }), isBudget);
+    assert.equal(s.controller.audit({ kind: 'memory.refused' })[0]!.detail.pending, 1);
+    b.set(ONE_FITS); // a reading a minute later: it sees the process, and room for one again
+    const c = await s.controller.create({ workspaceId: 'docker/ws1' });
+    assert.ok(c.id);
+    assert.equal(s.controller.audit({ kind: 'memory.refused' }).length, 1, 'the hold ended with the newer reading');
+  } finally {
+    await s.done();
+  }
+});
+
+test('T-416 review 3: a queued start is checked again when its slot comes; while queued it holds nothing', async () => {
+  const s = await liveSession();
+  try {
+    s.controller.setLimits(s.id, { maxWorkers: 3 }, { actor: 'ui' }); // a lead: it never sleeps for the cap
+    s.controller.slotPollMs = 100;
+    const caps = { perWorkspace: 1, total: 10 };
+    s.controller.liveCaps = () => caps;
+    const b = budget(ONE_FITS);
+    s.controller.memory = b.memory;
+    const starts = s.ws.starts;
+    const q = await s.controller.create({ workspaceId: 'docker/ws1' });
+    assert.ok(q.slotWait, 'q waits for a slot');
+    // Room for one, and q is asleep in the queue: r is not refused for q's memory (it queues behind q).
+    const r = await s.controller.create({ workspaceId: 'docker/ws1' });
+    assert.ok(r.slotWait, 'r waits too, not refused');
+    assert.equal(s.controller.audit({ kind: 'memory.refused' }).length, 0);
+    // The memory runs out while they wait; then the slots come.
+    b.set(ONE_FITS + 1);
+    caps.perWorkspace = 10;
+    await until(() => [q.id, r.id].every((id) => s.controller.get(id)!.state === 'interrupted'), 4000);
+    assert.equal(s.ws.starts, starts, 'no process started');
+    for (const id of [q.id, r.id]) assert.match(s.controller.get(id)!.endedReason ?? '', /^Not enough memory in docker\/ws1/);
+    assert.deepEqual(
+      s.controller.audit({ kind: 'memory.refused' }).map((a) => a.detail.at),
+      ['queued', 'queued'],
+    );
+  } finally {
+    await s.done();
+  }
+});
+
 test('T-416: the liveness round reads the memory of the workspaces it runs sessions in and raises the 85 percent alert', async () => {
   const s = await liveSession({ livenessMs: 50 }, true);
   try {

@@ -27,6 +27,11 @@ export const MEMORY_CLEAR_RATIO = 0.8;
 /** A workspace is read at most this often by the liveness round; a start or wake takes a reading at most this old. */
 export const MEMORY_LOOK_MS = 60_000;
 export const MEMORY_FRESH_MS = 5_000;
+/**
+ * A launch that ran holds its reservation until a reading taken at least this long after it settled (T-416 review): a cached reading
+ * from before cannot see the process, and a new Claude is far below its steady size in its first seconds.
+ */
+export const MEMORY_SETTLE_MS = 10_000;
 
 export const MEMORY_BUDGET = 'MEMORY_BUDGET';
 declare module '@isnanme/core' {
@@ -94,6 +99,11 @@ export class WorkspaceMemory {
 
   #now(): number {
     return (this.#o.now ?? Date.now)();
+  }
+
+  /** The clock the readings' `at` is on (index.ts: both are `Date.now`), so a release time compares with a reading's. */
+  now(): number {
+    return this.#now();
   }
 
   /** A reading at most `maxAgeMs` old (one exec at a time per workspace); null when unavailable. Never throws. */

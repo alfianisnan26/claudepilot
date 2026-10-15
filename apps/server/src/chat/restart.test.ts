@@ -9,7 +9,9 @@ import { test } from 'node:test';
 import { isAppError } from '@isnanme/core';
 import type { ChatServerMessage } from '@portal/contracts';
 import type { Workspaces } from '../workspaces/manager.js';
+import { parseMemoryProbe } from '../workspaces/memory.js';
 import { ChatController } from './controller.js';
+import { WorkspaceMemory } from './memory.js';
 import { parseLine } from './protocol.js';
 import { APPLIED, fail, firstTurn, init, line, liveSession, ok, sleep, until, USAGE_API_KEY, vanish, type Live } from './testkit.js';
 
@@ -248,6 +250,25 @@ test('restart keeps Bypass: relaunched with the flag and switched back through t
     s.ws.tails.at(-1)!.push(init(csidOf(s, id), 'bypassPermissions'));
     await sleep(60);
     assert.notEqual(s.controller.get(id)!.state, 'ended');
+  } finally {
+    await s.done();
+  }
+});
+
+test('T-416 review 4: a restart is never refused by the memory budget: a Bypass lead past the line comes back in Bypass, not in the start mode', async () => {
+  const s = await liveSession();
+  try {
+    s.controller.controlTimeoutMs = 150;
+    policy(s, true);
+    const id = await inBypass(s);
+    // The workspace is past the line (a cached reading that still holds the old process looks the same): a new session would be refused.
+    const limit = 8 * 1024 ** 3;
+    s.controller.memory = new WorkspaceMemory({ read: async () => parseMemoryProbe(`max ${limit}\nanon ${limit}\nactive_file 0\n`, Date.now()) });
+    const restarted = await s.answering(modesAnswered(s, s.controller.restart(id)));
+    assert.equal(restarted.process, 'live');
+    assert.equal(restarted.mode, 'bypassPermissions', 'Bypass kept');
+    assert.equal(s.controller.audit({ kind: 'memory.refused' }).length, 0, 'no memory check on a restart');
+    assert.equal(s.controller.audit({ kind: 'session.restart' })[0]!.detail.bypass, 'kept');
   } finally {
     await s.done();
   }
