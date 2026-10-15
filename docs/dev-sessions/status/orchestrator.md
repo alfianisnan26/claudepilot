@@ -11,10 +11,11 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 
 ## IN FLIGHT (4 of 4 workers, D-65: 445c3e1b impl-t561 (opus, why deny rules/authz) T-561 S1 WAITING a649874 (migration 778, no clash),
   d2e7b532 impl-t576 (sonnet) T-576 Runners UI WAITING 7b26e14 (web only). T-558 e652c44: 7d33708d ended (125k, coordinator); QA runs its Jobs (5052).
-  fb538d7d qa-t486 (sonnet) T-486 QA WAITING GO, 03c496b6 impl-t546 (sonnet) T-546 crew digest WAITING bb7cdb0 (118k: ends after T-546).)
+  cee43422 impl-t486-s2c (opus, why secret-path collision) ports 6eb6fbf onto integration (ticket/T-486-s2c-onint; 5126, T-557 5127),
+  03c496b6 impl-t546 (sonnet) T-546 Jobs (GO 15:22; 118k: ends after T-546). T-486 QA PASS WITH GAPS 5125; fb538d7d ended.)
   Sweep: PASS T-109/280/282/285, GAP T-259/294/136(?)/338/317/287; nobody can claim in_review tickets -> coordinator (T-525 4659).
-  Cluster: T-486 QA (GO 15:10) -> T-546 -> T-561 -> T-576 -> T-558 QA.
-  Then DEPLOY integration (carries T-557 S1 + T-575, coordinator asked). Next free slot: T-558 QA (sonnet), then T-576 ux-checker.
+  Cluster: T-546 (GO 15:22) -> T-561 -> T-576 -> T-486 s2c -> T-558 QA. Deploy #38 (coordinator) shipped T-557 S1 + T-575.
+  Next free slot: T-558 QA (sonnet), then T-576 ux-checker, T-486 s2c blind review (secret union).
   Later: T-426 QA + blind review (after T-401 merges), T-416 S1b QA, T-548.
 - T-557: the COORDINATOR builds it (dev/t557-runners); 8dc6a739 ended, its 02357fd offered as input (4925). Collision lines on T-557.
 - T-426 (mine again, 4926): ab93b54 --pool-env; the coordinator reuses its secret resolution. QA + blind review after T-401 merges.
