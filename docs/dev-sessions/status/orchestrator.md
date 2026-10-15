@@ -30,7 +30,8 @@ Older log: `orchestrator-log-2026-10-14.md`. Previous hand-overs: ab99b45 (a8393
 - T-93 Konfersi production only. Coordinator items: T-397 (authz+persona loosening; charter-wall conflict named), T-422 (sudo removal, tightening), T-306 item 4 / T-340 (rtk hook).
 
 ## NEXT (in order, as slots free)
-1. T-404 fixes (worker in dev-t-352-1 on dev/t-404-1), then a new blind reviewer.
+1. T-427 (high, owner's ticket, coordinator 03:45: same batch as T-417; agents.ts pickSpawnClaude + agents.test.ts; implementer, sonnet is enough). Next deploy batch = T-417 + T-427, on 2026-10-16 (today's cap of 3 is used).
+1b. T-404 fixes (worker in dev-t-352-1 on dev/t-404-1), then a new blind reviewer.
 2. T-413 post-mortem (incident-analyst worker, sonnet).
 3. ux-checker for T-369+T-375 when 07cef3b0 reports; ux-checker + S3 perf-tester for T-376 S2.
 4. T-416 (portal memory budget, high), T-422 build (sudo), T-147 (narrow ClusterRole in a rig, after T-416/T-417).
