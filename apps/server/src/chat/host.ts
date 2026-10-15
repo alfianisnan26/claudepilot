@@ -24,26 +24,42 @@ export const TRUST_FILES = ['.mcp.json', '.claude/settings.json', '.claude/setti
 export const TRUST_MAX_FILE_BYTES = 1_000_000;
 /** `trustscan`'s hash when none of {@link TRUST_FILES} is there: the sha256 of nothing. */
 export const TRUST_EMPTY_HASH = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
+/** `trustscan` reads at most this many skill, command and agent files (T-366); more makes the folder `unreadable`. */
+export const TRUST_MAX_EXTRA_FILES = 200;
+/** Each skill, command or agent file is read when it has at most this many bytes; a larger one is hashed whole and `unreadable`. */
+export const TRUST_MAX_EXTRA_BYTES = 262_144;
+/** `trustscan` lists at most this many entries under `.claude/skills`, `commands` and `agents`; more makes the folder `unreadable`. */
+export const TRUST_MAX_EXTRA_ENTRIES = 5_000;
+/** The Bash commands a wildcard rule may name and stay narrow (T-366): what they do with any argument is read or print, never run another command or write. */
+export const TRUST_VETTED_COMMANDS = ['ls', 'cat', 'head', 'tail', 'wc', 'grep', 'egrep', 'fgrep', 'echo', 'pwd'] as const;
 
 /**
- * The jq definitions behind `trustscan`'s `broadAllow` (T-366, D-55): `cpBroad` reads one `permissions.allow` entry and is true when
- * the rule would let anything run or be touched without asking, so a folder holding it is never trusted by itself:
+ * The jq definitions behind `trustscan`'s `broadAllow` (T-366, D-55): `cpBroad` reads one `permissions.allow` entry (or one
+ * `allowed-tools` entry of a skill, command or agent) and is true when the rule would let anything run or be touched without asking,
+ * so a folder holding it is never trusted by itself. It needs `$here` (the folder's real path) and `$home` (the home folder):
  * - a blanket: a bare `Bash`, `Edit`, `Write`, `MultiEdit`, `NotebookEdit`, `WebFetch` or `Read`, a tool name with a wildcard, or a
  *   spec of wildcards only (`*`, `:*`, `**`, empty);
- * - a path rule (`Edit`, `Write`, `MultiEdit`, `NotebookEdit`, `Read`) over the whole disk or home: `/**`, `//**`, `~/**`, `$HOME/**`,
- *   `**`, a first segment with a glob, a dotfile in home, a whole home under `/home` or `/Users`, `/root`, `/etc`, `/proc`, or any `..`;
- * - a Bash rule whose command runs another command: sudo, env, the shells, eval, exec, xargs, flock, timeout, nice, nohup, stdbuf,
- *   time, watch, setsid, chroot, ssh, awk and the like (matched on the command's base name, unquoted, any case: `/usr/bin/env`,
- *   `"sudo"`); an interpreter with an eval flag (`node -e`, `python3 -c`, `perl -e`, `deno eval`) or with a wildcard and no script;
- *   `find`/`fd` with `-exec` or a wildcard; `npx`/`npm exec`/`uv run` and the like with what they launch checked the same way; git
- *   with `-c`, a config wildcard or a command option; `kubectl`/`docker exec`, `run` or `debug`; a leading `NAME=value`; a command
- *   name with a glob or an expansion; a launcher followed by a wildcard; a shell operator together with a wildcard;
- * - anything it can't read (not a string, a control character, unbalanced parentheses, a WebFetch spec other than `domain:`).
- * When in doubt it is broad. It cannot know what a repository's own script does with its arguments: that one is the lead's.
- * No single quote (the script holds it in one) and no template expression.
+ * - a path rule (`Edit`, `Write`, `MultiEdit`, `NotebookEdit`, `Read`) that is absolute (`/x` and `//x` alike: `/x` is read as
+ *   absolute, the stricter reading) or in home (`~/x`, `$HOME/x`) and not inside `$here`; a relative `**` or glob-only path; any `..`;
+ * - a Bash rule with a wildcard (`*`, `:*`) whose command is not one of {@link TRUST_VETTED_COMMANDS} named bare, or `git status`:
+ *   an allow list, so `make *`, `sed *`, `npm run *`, `node *`, `git push:*`, `kubectl get *` (a kubeconfig can run a program) and
+ *   `git diff *` (`--output` writes anywhere) are broad;
+ * - an exact Bash rule (no wildcard) whose command runs another command: sudo, env, the shells, eval, exec, xargs, flock, timeout,
+ *   nice, nohup, stdbuf, time, watch, setsid, chroot, ssh, awk and the like (matched on the command's base name, unquoted, any case:
+ *   `/usr/bin/env`, `"sudo"`); an interpreter with an eval flag (`node -e`, `python3 -c`, `perl -e`, `deno eval`); `find`/`fd` with
+ *   `-exec`; `npx`/`npm exec`/`uv run` and the like with what they launch checked the same way; git with `-c` or a command option;
+ *   `kubectl`/`docker exec`, `run` or `debug`; a leading `NAME=value`; a command name with a glob or an expansion;
+ * - anything it can't read (not a string, a control character, unbalanced parentheses, parentheses inside a Bash rule, a WebFetch
+ *   spec other than `domain:`).
+ * When in doubt it is broad. It cannot know what a repository's own script does with its arguments: an exact rule for one that runs
+ * them is the lead's to keep out. `cpFront` reads a skill's, command's or agent's Markdown and says whether its frontmatter declares
+ * `hooks` or a `permissionMode`, has an `allowed-tools` entry `cpBroad` calls broad (or one it can't read), or is YAML it doesn't
+ * read line by line (`odd`: flow mappings, merge keys, complex keys, escaped quoted keys).
+ * No single quote (the script holds it in one) and no template expression but the vetted list.
  */
 export const TRUST_BROAD_JQ = String.raw`def cpIn(xs): . as $x | any(xs; . == $x);
 def cpTrim: sub("^\\s+"; "") | sub("\\s+$"; "");
+def cpVetted: (.[0] | gsub("[\"\\x27\\\\]"; "")) as $c | ($c | cpIn(${TRUST_VETTED_COMMANDS.map((c) => `"${c}"`).join(', ')})) or ($c == "git" and (.[1] // "") == "status");
 def cpOptVal($r; $i): $i > 0 and ($r[$i - 1] | startswith("-") and (contains("=") | not));
 def cpLeadWild: . as $r | ([range(0; length) | select(($r[.] | test("\\*")) or ((($r[.] | startswith("-")) | not) and (cpOptVal($r; .) | not)))] | first) as $i | if $i == null then false else ($r[$i] | test("\\*")) end;
 def cpScript: . as $r | any(range(0; length); . as $i | $r[$i] as $x | (if $i > 0 then $r[$i - 1] else "" end) as $p
@@ -57,7 +73,8 @@ def cpCmd:
   def after($t; words): ([range(0; $t | length) | select($t[.] | cpIn(words))] | first) as $i | if $i == null then null else $t[$i + 1:] end;
   . as $t | any($t[]; test("\\*")) as $wild | $t[1:] as $r
   | ($t[0] | gsub("[\"\\x27\\\\]"; "")) as $raw | ($raw | sub("^.*/"; "") | ascii_downcase) as $c
-  | if ($raw | test("^[A-Za-z_][A-Za-z0-9_]*=")) then true
+  | if $wild then ($t | cpVetted | not)
+    elif ($raw | test("^[A-Za-z_][A-Za-z0-9_]*=")) then true
     elif $c == "" or ($c | test("[*?\\[\\]{}$\\x60()~!<>|;&]")) then true
     elif ($c | cpRunner) then true
     elif ($c | cpIn("find", "gfind", "fd", "fdfind")) then $wild or any($r[]; cpIn("-exec", "-execdir", "-ok", "-okdir", "-x", "-X") or startswith("--exec"))
@@ -69,20 +86,18 @@ def cpCmd:
     elif $c == "git" then ($r | cpLeadWild) or any($r[]; cpIn("-c", "--config-env", "-x", "--exec", "--extcmd", "foreach", "filter-branch", "run") or startswith("--config-env=") or startswith("--exec=") or startswith("--extcmd=")) or ($wild and any($r[]; . == "config"))
     else false end;
 def cpBash: cpTrim as $s
-  | if ($s | test("[;|&\\x60]|\\$\\(|[<>]\\(") and test("\\*")) then true
+  | if ($s | test("[()]")) then true
+    elif ($s | test("[;|&\\x60]|\\$\\(|[<>]\\(") and test("\\*")) then true
     else ($s | gsub(":\\*"; " *") | [splits("\\s+")] | map(select(. != ""))) as $t | if ($t | length) == 0 then true else $t | cpCmd end end;
-def cpGlob: test("[*?\\[{]");
+def cpInside: ($here | split("/") | map(select(. != ""))) as $h | (split("/") | map(select(. != ""))) as $s
+  | ($here | startswith("/")) and ($h | length) > 0 and ($s | length) >= ($h | length) and all(range(0; $h | length); $s[.] == $h[.]);
 def cpPath: cpTrim as $p
   | if ($p | test("(^|/)\\.\\.(/|$)")) then true
-    else ($p | sub("^\\$\\{?HOME\\}?"; "~")) as $q
-    | (if ($q | startswith("~")) then "home" elif ($q | startswith("/")) then "root" elif ($q | startswith("./")) or $q == "." then "here" else "rel" end) as $a
-    | ($q | sub("^(~|/+|\\./)"; "") | split("/") | map(select(. != ""))) as $seg
-    | ([foreach $seg[] as $x (true; . and ($x | cpGlob | not); if . then $x else empty end)]) as $fixed
-    | if $a == "here" then false
-      elif $a == "rel" then ($seg | length) == 0 or all($seg[]; test("^[*?]+$"))
-      elif ($fixed | length) == 0 then true
-      elif $a == "home" then ($fixed[0] | startswith("."))
-      else ($fixed[0] | cpIn("root", "etc", "proc", "sys", "dev")) or (($fixed[0] | cpIn("home", "Users")) and (($fixed | length) <= 2 or (($fixed[2] // "") | startswith(".")))) end end;
+    else ($p | sub("^\\$\\{?HOME\\}?"; "~")) as $q | ($home | sub("/+$"; "")) as $hm
+    | if ($q | startswith("~")) then (if ($q | test("^~(/|$)")) and ($hm | startswith("/")) then ($hm + ($q | ltrimstr("~"))) | cpInside | not else true end)
+      elif ($q | startswith("/")) then ($q | cpInside | not)
+      elif ($q | startswith("./")) or $q == "." then false
+      else ($q | split("/") | map(select(. != ""))) as $seg | ($seg | length) == 0 or all($seg[]; test("^[*?]+$")) end end;
 def cpFetch: cpTrim | if startswith("domain:") then (ltrimstr("domain:") | cpTrim | test("^[*.]*$")) else true end;
 def cpBroad:
   if type != "string" then true
@@ -98,6 +113,27 @@ def cpBroad:
       elif ($tool | cpIn("edit", "write", "multiedit", "notebookedit", "read")) then $m.spec | cpPath
       elif $tool == "webfetch" then $m.spec | cpFetch
       else false end end end;
+def cpUnq: cpTrim | if test("^\"[^\"]*\"$") or test("^\\x27[^\\x27]*\\x27$") then .[1:-1] | cpTrim else . end;
+def cpTool: cpUnq | if . == "" then false elif (test("^[A-Za-z0-9_.*-]+(\\(.*\\))?$") | not) then true else cpBroad end;
+def cpVal: cpTrim | if test("^[|>&*!{%@\\x60]") or test("#") then true
+  else cpUnq | if test("^\\[") then (if test("\\]$") then .[1:-1] | split(",") | any(.[]; cpTool) else true end) else split(",") | any(.[]; cpTool) end end;
+def cpToolsAt($f; $k; $v):
+  if ($v | cpTrim) != "" then $v | cpVal
+  else $f[$k + 1:] as $r
+  | ([range(0; $r | length) | select($r[.] | test("^[^\\s#-]") or test("^-[^\\s]"))] | first // ($r | length)) as $e
+  | any($r[:$e][]; if test("^\\s*(#.*)?$") then false elif test("^\\s*-(\\s|$)") then sub("^\\s*-"; "") | cpVal else true end) end;
+def cpFront:
+  sub("^\uFEFF"; "") | split("\n") | map(sub("\\r$"; "")) as $l
+  | ([range(0; $l | length) | select($l[.] | test("\\S"))] | first) as $i0
+  | if $i0 == null or ($l[$i0] | startswith("---") | not) then {hooks: false, mode: false, broad: false, odd: false}
+    else $l[$i0 + 1:] as $r
+    | ([range(0; $r | length) | select($r[.] | test("^(---|\\.\\.\\.)\\s*$"))] | first // ($r | length)) as $e
+    | $r[:$e] as $f
+    | {hooks: any($f[]; test("(^|[\\s{,\"\\x27?])hooks[\"\\x27]?\\s*:"; "i")),
+       mode: any($f[]; test("(^|[\\s{,\"\\x27?])permission[-_]?mode[\"\\x27]?\\s*:"; "i")),
+       broad: any(range(0; $f | length); . as $k | ($f[$k] | capture("^\\s*[\"\\x27]?allowed[-_]tools[\"\\x27]?\\s*:(?<v>.*)$"; "i") // null) as $m
+         | if $m == null then false else cpToolsAt($f; $k; $m.v) end),
+       odd: any($f[]; test("^\\s*[{?\\[]|<<|^\\s*[\"\\x27][^:]*\\\\"))} end;
 `;
 
 /** The environment names `start --env` accepts (anything else exits 2): a session's portal-tool token and where to reach them, and the switch that keeps claude.ai's connectors out. */
@@ -164,10 +200,16 @@ export const ACCOUNT_HELPER = '/etc/claudepilot/bin/account-key';
  *   `allowRules` (entries in `permissions.allow`) and `envNames` (keys of `env`), from every file read;
  *   `rulesOnly` (no `.mcp.json`, every file read, and each holds nothing but `$schema` and `permissions` with
  *   `allow`, `deny` and `ask` lists of strings: no hook, server, plugin, env, helper command or default mode);
- *   `broadAllow` (T-366: an allow rule is a blanket or a command runner, {@link TRUST_BROAD_JQ}; a boolean, never the rule);
+ *   `broadAllow` (T-366: an allow rule, or a skill's or command's `allowed-tools` entry, is a blanket or a command runner,
+ *   {@link TRUST_BROAD_JQ}; a boolean, never the rule); `extras` (T-366, only beside a settings file and not at the files root:
+ *   `skill:hooks`, `command:hooks`, `agent:hooks` when a `.claude/skills/**\/SKILL.md`, `.claude/commands/**\/*.md` or
+ *   `.claude/agents/**\/*.md` frontmatter declares hooks, `…:mode` when it sets a `permissionMode`, `unreadable` when one can't
+ *   be checked: a link, more than {@link TRUST_MAX_EXTRA_FILES} files, one over {@link TRUST_MAX_EXTRA_BYTES} bytes, YAML it
+ *   doesn't read; any of them clears `rulesOnly`);
  *   `files` (those present) and `invalid` (present but not a JSON object, or not read). `hash` is the
- *   sha256 of `<sha256 of the file>  <name>` lines for the files present, in that order, so any change
- *   to any of them changes it; with none it's {@link TRUST_EMPTY_HASH}. Each file is read once, through
+ *   sha256 of `<sha256 of the file>  <name>` lines for the files present, in that order, then the same lines for the skill,
+ *   command and agent files read, so any change to any of them changes it; with no settings file it's
+ *   {@link TRUST_EMPTY_HASH}. Each file is read once, through
  *   a checked descriptor, and only when it leads to a regular file the policy allows; one over
  *   {@link TRUST_MAX_FILE_BYTES} is hashed whole but not read for names. At the files root `.claude` is
  *   Claude Code's own folder (the user settings), so only `.mcp.json` counts there.
@@ -258,14 +300,15 @@ catfd() {
   cat <&3
 }
 # Copies the settings file open on fd 3, once the opened file itself checks out as $r, into $1 when it
-# has at most ${TRUST_MAX_FILE_BYTES} bytes; of a larger one only the digest of all of it is kept, in $1.big.
+# has at most $2 bytes (${TRUST_MAX_FILE_BYTES} without it); of a larger one only the digest of all of it is kept, in $1.big.
 grab() {
   l="$(readlink "/proc/$$/fd/3" && printf x)" || return 1
   l="\${l%x}"
   l="\${l%"$nl"}"
   [ "$l" = "$r" ] && [ -f "/proc/$$/fd/3" ] || return 1
-  head -c ${TRUST_MAX_FILE_BYTES + 1} <&3 > "$1" || return 1
-  [ "$(wc -c < "$1")" -le ${TRUST_MAX_FILE_BYTES} ] && return 0
+  m="\${2:-${TRUST_MAX_FILE_BYTES}}"
+  head -c "$((m + 1))" <&3 > "$1" || return 1
+  [ "$(wc -c < "$1")" -le "$m" ] && return 0
   rm -f "$1"
   sha256sum < "/proc/$$/fd/3" | cut -c1-64 > "$1.big"
 }
@@ -830,9 +873,56 @@ case "$cmd" in
       if [ -n "$ok" ]; then set -- "$@" "$t/$n"; else invalid="$invalid $name"; fi
       printf '%s  %s\\n' "$d" "$name" >> "$t/sums"
     done
+    # Skills, commands and agents (T-366): their frontmatter can load hooks, set a permission mode or allow tools without asking.
+    # Looked at only beside settings files (with none there is nothing to trust), never through a link, at most
+    # ${TRUST_MAX_EXTRA_FILES} files of at most ${TRUST_MAX_EXTRA_BYTES} bytes; anything else makes the folder unreadable (xbad),
+    # which is never trusted by itself. Each file read is in the hash, after the settings files, in name order.
+    xbad=
+    : > "$t/fm" || exit 1
+    if [ -n "$files" ] && [ "$here" != "$root" ]; then
+      xd=
+      for d in .claude .claude/skills .claude/commands .claude/agents; do
+        if [ -L "$d" ]; then xbad=1; elif [ "$d" != .claude ] && [ -d "$d" ]; then xd="$xd $d"; fi
+      done
+      if [ -z "$xbad" ] && [ -n "$xd" ]; then
+        timeout 10 find $xd -xdev -mindepth 1 \\( -path "*$nl*" -printf 'n\\tx\\n' -o ! -type d -printf '%y\\t%p\\n' \\) > "$t/xl" || xbad=1
+        [ "$(wc -l < "$t/xl")" -le ${TRUST_MAX_EXTRA_ENTRIES} ] || xbad=1
+        LC_ALL=C sort -o "$t/xl" "$t/xl"
+        i=0
+        while [ -z "$xbad" ] && IFS="$tab" read -r ty p; do
+          # A link may lead to a skill folder Claude Code follows: not followed here, so not checked.
+          [ "$ty" != n ] && [ "$ty" != l ] || { xbad=1; break; }
+          case "$p" in
+            .claude/skills/*/[Ss][Kk][Ii][Ll][Ll].[Mm][Dd]) k=skill ;;
+            .claude/commands/*.[Mm][Dd]) k=command ;;
+            .claude/agents/*.[Mm][Dd]) k=agent ;;
+            *) continue ;;
+          esac
+          [ "$ty" = f ] || { xbad=1; break; }
+          i=$((i + 1))
+          [ "$i" -le ${TRUST_MAX_EXTRA_FILES} ] || { xbad=1; break; }
+          d=
+          r=
+          if real "$p" && inroot "$r" && [ -f "$r" ] && [ -r "$r" ] && grab "$t/x$i" ${TRUST_MAX_EXTRA_BYTES} 3<"$r"; then
+            if [ -f "$t/x$i" ]; then
+              d="$(sha256sum < "$t/x$i" | cut -c1-64)"
+              jq -Rs --arg k "$k" '{k: $k, s: .}' "$t/x$i" >> "$t/fm" </dev/null || xbad=1
+            else
+              d="$(cat "$t/x$i.big")"
+              xbad=1
+            fi
+          else
+            xbad=1
+          fi
+          [ -n "$d" ] || d="x$(printf '%s' "$r" | sha256sum | cut -c1-64)"
+          printf '%s  %s\\n' "$d" "$p" >> "$t/sums"
+        done < "$t/xl"
+      fi
+    fi
     # Names only, from the files that parsed: never a value, a command or an argument.
-    jq -cn --arg hash "$(sha256sum < "$t/sums" | cut -c1-64)" --arg files "$files" --arg invalid "$invalid" '${TRUST_BROAD_JQ}
-    [inputs] as $s | {
+    jq -cn --arg hash "$(sha256sum < "$t/sums" | cut -c1-64)" --arg files "$files" --arg invalid "$invalid" --arg here "$here" --arg home "\${HOME:-}" \\
+      --arg xbad "$xbad" --slurpfile fm "$t/fm" '${TRUST_BROAD_JQ}
+    [inputs] as $s | ($fm | map((.s | cpFront) + {k: .k})) as $x | {
       hash: $hash,
       files: ($files | split(" ") | map(select(. != ""))),
       invalid: ($invalid | split(" ") | map(select(. != ""))),
@@ -843,9 +933,10 @@ case "$cmd" in
         | .key] | unique),
       plugins: ([$s[] | .enabledPlugins | objects | to_entries[] | select(.value == true) | .key] | unique),
       allowRules: ([$s[] | .permissions | objects | .allow | arrays | length] | add // 0),
-      broadAllow: any($s[] | .permissions | objects | .allow | select(. != null) | if type == "array" then .[] else . end; cpBroad),
+      broadAllow: (any($s[] | .permissions | objects | .allow | select(. != null) | if type == "array" then .[] else . end; cpBroad) or any($x[]; .broad)),
       envNames: ([$s[] | .env | objects | keys[]] | unique),
-      rulesOnly: ($invalid == "" and ($files | split(" ") | any(. == ".mcp.json") | not)
+      extras: ((if $xbad != "" or any($x[]; .odd) then ["unreadable"] else [] end) + [$x[] | select(.hooks) | .k + ":hooks"] + [$x[] | select(.mode) | .k + ":mode"] | unique),
+      rulesOnly: ($invalid == "" and ($files | split(" ") | any(. == ".mcp.json") | not) and $xbad == "" and all($x[]; (.hooks or .mode or .odd) | not)
         and all($s[]; (keys - ["$schema", "permissions"]) == []
           and ((.permissions // {}) | type == "object" and (keys - ["allow", "deny", "ask"]) == []
             and all(.[]; type == "array" and all(.[]; type == "string")))))

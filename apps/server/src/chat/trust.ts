@@ -41,7 +41,7 @@ defineSetting({
   group: 'sessions',
   order: 20,
   label: 'Trust rules-only folders',
-  help: 'A folder whose Claude Code settings hold only permission rules (allow, deny, ask) is trusted by itself, the first time and when the rules change, so a new worktree, a Move, a restart or an auto move does not stop. A hook, MCP server, plugin or env still needs you, and so does an allow rule that is a blanket (Bash, Edit, a whole-disk path) or runs any command (sudo, env, bash, flock, timeout, xargs, node -e and the like). The check cannot see what a repository script does: one that runs its arguments (like scripts/job-run.sh) must stay out of allow lists. Rules can let tools run without asking.',
+  help: 'A folder whose Claude Code settings hold only permission rules (allow, deny, ask) is trusted by itself, the first time and when the rules change, so a new worktree, a Move, a restart or an auto move does not stop. Still needs you: a hook, MCP server, plugin or env; a skill, command or agent that loads hooks or sets a permission mode, or one that cannot be checked; an allow rule (or a skill’s allowed-tools) that is a blanket (Bash, Edit, Read), a path outside the folder, a wildcard command other than ls, cat, head, tail, wc, grep, echo, pwd or git status, or an exact command that runs another (sudo, env, bash, flock, timeout, xargs, node -e and the like). Not checked: what a repository script does, so an exact rule for one that runs a command it is given is yours to keep out. Rules can let tools run without asking.',
   protective: false,
 });
 
@@ -58,6 +58,8 @@ export interface FolderScan extends ChatFolderScan {
   invalid: string[];
   rulesOnly: boolean;
   broadAllow: boolean;
+  /** {@link HostScan.extras}; a scan without it counts as `unscanned` (fail closed). */
+  extras?: string[];
   /** Set by the session launch when the policy is on and the folder can't be trusted by itself: why, by name ({@link autoTrustRefusal}). */
   autoRefusal?: string;
 }
@@ -76,7 +78,24 @@ export interface HostScan {
   rulesOnly: boolean;
   /** An allow rule is a blanket or a command runner (T-366, host.ts `TRUST_BROAD_JQ`); true from a host older than this (fail closed). */
   broadAllow: boolean;
+  /**
+   * What the folder's skills, commands and agents load (T-366), from {@link EXTRAS} only: `skill:hooks`, `agent:mode`, `unreadable`
+   * and the like; `unscanned` from a host older than this (fail closed).
+   */
+  extras: string[];
 }
+
+/** Each `extras` value and why it keeps a folder from being trusted by itself; anything else from the host is a fault. */
+const EXTRAS: Record<string, string> = {
+  'skill:hooks': 'a skill loads hooks',
+  'command:hooks': 'a command loads hooks',
+  'agent:hooks': 'an agent loads hooks',
+  'skill:mode': 'a skill sets a permission mode',
+  'command:mode': 'a command sets a permission mode',
+  'agent:mode': 'an agent sets a permission mode',
+  unreadable: 'a skill, command or agent file can’t be checked',
+  unscanned: 'the workspace’s chat host doesn’t check skills, commands and agents',
+};
 
 export interface TrustOptions {
   /** Brings cp-session up to date first (a host older than folder trust has no `trustscan`). */
@@ -137,6 +156,8 @@ export function parseTrustScan(out: string): HostScan {
   if (typeof allowRules !== 'number' || !Number.isSafeInteger(allowRules) || allowRules < 0) throw unexpected();
   if (o.rulesOnly !== undefined && typeof o.rulesOnly !== 'boolean') throw unexpected();
   if (o.broadAllow !== undefined && typeof o.broadAllow !== 'boolean') throw unexpected();
+  const extras = o.extras === undefined ? ['unscanned'] : o.extras;
+  if (!Array.isArray(extras) || !extras.every((x) => typeof x === 'string' && Object.hasOwn(EXTRAS, x))) throw unexpected();
   const scan: HostScan = {
     hash: o.hash,
     files: fileNames(o.files),
@@ -148,6 +169,7 @@ export function parseTrustScan(out: string): HostScan {
     envNames: names(o.envNames),
     rulesOnly: o.rulesOnly === true,
     broadAllow: o.broadAllow !== false,
+    extras: [...new Set(extras as string[])],
   };
   // Nothing there must read exactly as nothing there.
   if ((scan.files.length === 0) !== (scan.hash === TRUST_EMPTY_HASH)) throw unexpected();
@@ -272,13 +294,15 @@ export async function scanFolder(workspaces: Workspaces, store: Store, workspace
     invalid: host.invalid,
     rulesOnly: host.rulesOnly,
     broadAllow: host.broadAllow,
+    extras: host.extras,
   };
 }
 
 /**
  * Why a scan can't be trusted without a person (T-38, T-366, D-55), by name only, never a rule or a value; null when it can:
- * every file read, no `.mcp.json`, no server, hook, plugin or env name, nothing but permission rules (the host's word), and no
- * allow rule that is a blanket or a command runner. The names are checked too, not only the host's word.
+ * every file read, no `.mcp.json`, no server, hook, plugin or env name, no skill, command or agent that loads hooks, sets a
+ * permission mode or can't be checked, nothing but permission rules (the host's word), and no allow rule that is a blanket or a
+ * command runner. The names are checked too, not only the host's word.
  */
 export function autoTrustRefusal(scan: FolderScan): string | null {
   const why: string[] = [];
@@ -287,6 +311,8 @@ export function autoTrustRefusal(scan: FolderScan): string | null {
   if (scan.hooks.length) why.push('it loads hooks');
   if (scan.plugins.length) why.push('it enables plugins');
   if (scan.envNames.length) why.push('it sets environment variables');
+  // A scan without the field (built before T-366's skills check) is one nobody checked.
+  for (const x of scan.extras ?? ['unscanned']) why.push(EXTRAS[x] ?? EXTRAS.unreadable!);
   if (!scan.rulesOnly && why.length === 0) why.push('it holds more than permission rules');
   if (scan.broadAllow) why.push('an allow rule runs any command or covers everything');
   return why.length ? why.join('; ') : null;
