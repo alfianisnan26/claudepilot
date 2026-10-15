@@ -12,10 +12,14 @@ export const LAB_POLICIES = {
   'GET /api/lab/slices': { kind: 'platform', area: 'usage', verb: 'view' },
   'GET /api/lab/experiments': { kind: 'platform', area: 'usage', verb: 'view' },
   'GET /api/lab/summary': { kind: 'platform', area: 'usage', verb: 'view' },
+  // The crew scorecard (T-450): an agent actor reads only its own program (the lead chain and workers its session is in).
+  'GET /api/lab/scorecard': { kind: 'platform', area: 'usage', verb: 'view' },
 } satisfies RoutePolicies;
 
 export const LAB_TOOL_POLICIES: ToolPolicies = {
   lab_summary: { kind: 'agent', reach: 'session' },
+  // Read only; an agent's token: its own program; an admin's: every program.
+  crew_scorecard: { kind: 'agent', reach: 'session' },
   lab_arm_draw: { kind: 'agent', reach: 'session', audit: 'lab.arm.draw' },
   lab_experiment_set: { kind: 'platform', area: 'usage', verb: 'manage', confirm: true, audit: 'lab.experiment.set' },
 };

@@ -3,13 +3,15 @@
 // - `lab_summary`: the coordinator's pass in one call. Short rows by default (T-282's compact rule: a result is read again on every later
 //   request), `full: true` for every field, the experiments and the sources. An admin's token reads the portal; an agent's token reads only
 //   its own session's slices (no experiments).
+// - `crew_scorecard` (T-450): per program and window, effectiveness, cost and the D-61/D-62/D-63 targets (lab/scorecard.ts). Read only;
+//   an agent's token reads its own program (the top of its session's lineage), another program is not found; an admin's reads all.
 // - `lab_arm_draw` (T-292 slice 3): the arms of a slice drawn BEFORE its brief is written, for an experiment whose treatment is the brief
 //   itself (E2: pack on or off). The caller's own session only; the lab draws, the caller never picks; the brief carries the draw key.
 // - `lab_experiment_set`: admin tokens only, with the confirmation round trip: start a randomized or before-and-after experiment, or stop one.
 //
 // Counts and ids only; an experiment's name and hypothesis are a person's text and come back labelled untrusted.
 
-import { ATTRIBUTION_LEAD_BASIS, LAB_STRATUM_KEYS, type LabTicketCost, type LabExperimentView, type LabInterval, type LabStat, type LabSummaryRow } from '@portal/contracts';
+import { ATTRIBUTION_LEAD_BASIS, CREW_WINDOWS, LAB_STRATUM_KEYS, type CrewFigure, type CrewProgramScore, type CrewWindowScore, type LabTicketCost, type LabExperimentView, type LabInterval, type LabStat, type LabSummaryRow } from '@portal/contracts';
 import { fullInput } from '../portalmcp/compact.js';
 import { PortalToolError, portalTools, z, type PortalToolContext, type ToolRegistry } from '../portalmcp/registry.js';
 import { declareLabPolicies } from './authz.js';
@@ -26,6 +28,36 @@ const ci = (i: LabInterval) => (i === 'n too small' ? i : [r2(i.low), r2(i.high)
 /** The tickets' dollars (usage spend's per-ticket figures, T-449): ticket, type, status, own, via lead, total. Top `n` (default 10). */
 const ticketsShort = (t: LabTicketCost[] | undefined, n = 10) =>
   (t ?? []).slice(0, n).map((x) => ({ ticket: x.ticket, type: x.type, status: x.status, done_at: x.doneAt, own_usd: x.ownUsd, via_lead_usd: x.viaLeadUsd, total_usd: x.totalUsd }));
+
+/** A figure in a short row: its value, or `unavailable:<reason>`. */
+const v = (f: CrewFigure) => (f.basis === 'unavailable' ? `unavailable:${f.reason ?? 'no_source'}` : f.value);
+const windowShort = (w: CrewWindowScore | null) =>
+  w && {
+    done: v(w.effectiveness.done),
+    done_per_hour: v(w.effectiveness.donePerHour),
+    reopened: v(w.effectiveness.reopened),
+    wont_do: v(w.effectiveness.wontDo),
+    review_backlog: v(w.effectiveness.reviewBacklog),
+    ci_runs: v(w.effectiveness.ciRuns),
+    deploys: v(w.effectiveness.deploysCount),
+    cost_usd: v(w.cost.total),
+    lead_share_pct: v(w.cost.leadShare),
+    per_done_usd: v(w.cost.perDoneAllIn),
+    per_done_workers_usd: v(w.cost.perDoneWorkers),
+  };
+
+/** One program in a short result: the window's headline figures, the one before, and the targets not ok. */
+export function scoreShort(p: CrewProgramScore) {
+  return {
+    program: p.program,
+    leads: p.leads.length,
+    workers: p.workers,
+    now: windowShort(p.current),
+    before: windowShort(p.previous),
+    targets: Object.fromEntries(p.targets.map((t) => [t.id, t.state])),
+    flags: p.targets.filter((t) => t.state !== 'ok').map((t) => ({ id: t.id, decision: t.decision, state: t.state, offenders: t.offenders.slice(0, 5) })),
+  };
+}
 
 /** One short row: the figures the coordinator compares every pass. */
 export function compactRow(r: LabSummaryRow) {
@@ -99,6 +131,31 @@ export function registerLabTools(lab: Lab, registry: ToolRegistry = portalTools)
         ...(own ? {} : { experiments: lab.experimentViews().map((v) => experimentRow(v, ctx, lab)) }),
         basis: s.basis,
       };
+    },
+  });
+
+  registry.register({
+    name: 'crew_scorecard',
+    title: 'Crew scorecard',
+    description:
+      'Per program (a lead chain with its continuations and every worker under it) over the last 1h, 6h, day or week, with the window before it: tickets done (by type, per hour, lead time p50 and p90), reopened, wont_do, the review backlog (age, what it waits for), CI runs by pipeline, deploys; cost (estimated dollars): total, lead versus workers, per done ticket all-in and workers only; and the targets of D-61, D-62 and D-63 as ok, warn, breach or unavailable. Every figure says measured, estimate or unavailable (with the reason) and its source. Short by default; full true for every figure. An agent’s token reads only its own program; an admin’s reads all.',
+    scope: 'agent',
+    hints: { readOnly: true, idempotent: true },
+    input: z.object({
+      program: z.string().regex(/^[A-Za-z0-9_.:=-]{1,120}$/).optional().describe('A program id (its first lead session). Default: every program you may read.'),
+      window: z.enum(CREW_WINDOWS).optional().describe('Default day.'),
+      compare: z.boolean().optional().describe('With the previous window too. Default true.'),
+      ...fullInput,
+    }),
+    handler(ctx, args) {
+      const own = ctx.isAgent ? ctx.sessionId : null;
+      if (ctx.isAgent && !own) throw new PortalToolError('FORBIDDEN', 'This token is not bound to a session.');
+      const s = lab.scorecard({ window: args.window ?? 'day', compare: args.compare ?? true, ...(args.program ? { program: args.program } : {}), ...(own ? { sessionId: own } : {}) });
+      if (!s) throw new PortalToolError('NOT_FOUND', 'No such program.');
+      const scope = own ? 'program' : 'portal';
+      const summary = `${s.programs.length} program${s.programs.length === 1 ? '' : 's'} over the last ${s.window}${own ? ' (your own program only)' : ''}. Dollars are estimates.`;
+      if (args.full) return { summary, scope, ...s };
+      return { summary, scope, window: s.window, programs: s.programs.map(scoreShort), more: 'full: true for every figure with its basis and source, types, CI, deploys and the review list.' };
     },
   });
 

@@ -5,7 +5,9 @@
 // their declarations with the authz seam (authz.ts). Slice 3 adds result tokens, effort and idle gaps per slice, and stratum keys for
 // randomized experiments (ESTIMATE size, role, model, effort). T-292 slice 3 adds draws: the arms of a slice drawn before its brief (E2).
 
-import type { LabExperiment, LabExperimentReport, LabExperimentView, LabPeriod, LabSliceMetrics, LabSliceView, LabSummary, LabTicketCost } from '@portal/contracts';
+import { CREW_WINDOW_MS, type CrewScorecard, type CrewWindow, type LabExperiment, type LabExperimentReport, type LabExperimentView, type LabPeriod, type LabSliceMetrics, type LabSliceView, type LabSummary, type LabTicketCost } from '@portal/contracts';
+import { programIdOf, programScore, programsOf, SCORECARD_BASIS } from './scorecard.js';
+import { loadCrewFacts } from './scorecardData.js';
 import type { Store } from '../store/store.js';
 import { chainOf } from '../usagespend/attribution.js';
 import { SpendStore } from '../usagespend/store.js';
@@ -194,6 +196,26 @@ export class Lab {
     return a.rows
       .filter((r) => r.state === 'known')
       .map((r) => ({ ticket: r.key, type: r.ticket?.type ?? null, status: r.ticket?.status ?? null, doneAt: r.ticket?.doneAt ?? null, ownUsd: r.own.costUsd, viaLeadUsd: r.ticket?.viaLeadUsd ?? 0, totalUsd: r.total.costUsd }));
+  }
+
+  /**
+   * The crew scorecard (T-450, §28.14): per program, effectiveness, cost and the standing decisions' targets over the window (and the one
+   * before it with `compare`). `program` keeps one; `sessionId` (an agent's own read) keeps only the program that session is in, none when it
+   * is in none. A program asked for that is not there (or not the session's) is null: the caller answers not found.
+   */
+  scorecard(opts: { window: CrewWindow; compare?: boolean; program?: string; sessionId?: string }): CrewScorecard | null {
+    const nowMs = this.#now();
+    const windowMs = CREW_WINDOW_MS[opts.window];
+    const compare = opts.compare ?? true;
+    const empty: CrewScorecard = { window: opts.window, nowMs, programs: [], basis: SCORECARD_BASIS };
+    const facts = loadCrewFacts(this.opts.store, nowMs, nowMs - (compare ? 2 : 1) * windowMs);
+    if (!facts) return opts.program ? null : empty;
+    const programs = programsOf(facts.sessions, facts.extra);
+    const own = opts.sessionId ? (facts.sessions.has(opts.sessionId) ? programIdOf(opts.sessionId, facts.sessions) : null) : undefined;
+    if (opts.program && (!programs.has(opts.program) || (own !== undefined && own !== opts.program))) return null;
+    const keep = [...programs.values()].filter((p) => (opts.program ? p.id === opts.program : own === undefined || p.id === own));
+    const scores = keep.map((p) => programScore(p, facts, windowMs, compare)).sort((a, b) => (b.current.cost.total.value ?? 0) - (a.current.cost.total.value ?? 0) || a.program.localeCompare(b.program));
+    return { ...empty, programs: scores };
   }
 
   /** Each experiment with its arms' n, accepted count and the primary (median loaded cost per accepted slice) with its interval. */
