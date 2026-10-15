@@ -11,7 +11,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 
 ## IN FLIGHT (4 of 4 workers, D-65: 445c3e1b impl-t561 (opus, why deny rules/authz) T-561 S1 WAITING a649874 (migration 778, no clash),
   d2e7b532 impl-t576 (sonnet) T-576 Runners UI WAITING 7b26e14 (web only). T-558 e652c44: 7d33708d ended (125k, coordinator); QA runs its Jobs (5052).
-  cee43422 impl-t486-s2c (opus, why secret-path collision) ports 6eb6fbf onto integration (ticket/T-486-s2c-onint; 5126, T-557 5127),
+  cee43422 impl-t486-s2c (opus, why secret-path collision) WAITING 3cb0883 (one helper deliveredSecretValue; T-557 lines kept),
   03c496b6 impl-t546 (sonnet) T-546 Jobs (GO 15:22; 118k: ends after T-546). T-486 QA PASS WITH GAPS 5125; fb538d7d ended.)
   Sweep: PASS T-109/280/282/285, GAP T-259/294/136(?)/338/317/287; nobody can claim in_review tickets -> coordinator (T-525 4659).
   Cluster: T-546 (GO 15:22) -> T-561 -> T-576 -> T-486 s2c -> T-558 QA. Deploy #38 (coordinator) shipped T-557 S1 + T-575.
