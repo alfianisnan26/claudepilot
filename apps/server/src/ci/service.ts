@@ -230,6 +230,8 @@ export class CiService {
     Pick<CiServiceOptions, 'redactFor' | 'streamFor' | 'secrets' | 'secretValue' | 'audit' | 'upstreamHosts'>;
   /** Runs a runner is being handed right now (T-557), so two workspaces' dispatches can not both fill its last slot. */
   readonly #handing = new Map<string, number>();
+  /** Runs whose hand-off is in flight (T-557): handed off beside the poll, never twice at once. */
+  readonly #handingRuns = new Set<string>();
   /** Upstream sync: when each remote last tried (ms), and the sync in flight per remote (one at a time). */
   readonly #upstreamAt = new Map<string, number>();
   readonly #syncing = new Map<string, Promise<SyncReply>>();
@@ -696,7 +698,14 @@ export class CiService {
       // `runs-on` (T-557): a runner takes it, not this workspace's own slots.
       const labels = runsOnOf(run);
       if (labels) {
-        await this.#toRunner(run, labels);
+        // Beside the poll, never inside it: a slow or stalled runner (a tunnel that resets, a bundle that takes minutes) must not hold
+        // this workspace's own runs, events and approvals (seen on a Docker Desktop runner, 2026-10-15).
+        if (!this.#handingRuns.has(run.id)) {
+          this.#handingRuns.add(run.id);
+          void this.#toRunner(run, labels)
+            .catch((e: unknown) => this.#retry(this.#cs.run(run.id) ?? run, `runner: ${(e as Error).message}`))
+            .finally(() => this.#handingRuns.delete(run.id));
+        }
         continue;
       }
       const text = run.plan;
@@ -728,6 +737,10 @@ export class CiService {
    * none is free or online: it waits, up to `runnerWaitMs` from when it was queued. A failure on the way is retried like a start (3 tries).
    */
   async #toRunner(run: RunRow, labels: string[]): Promise<void> {
+    // Read again: the run may have been cancelled or started since the poll listed it.
+    const live = this.#cs.run(run.id);
+    if (!live || live.status !== 'queued') return;
+    run = live;
     const fits = this.#cs.runners().filter((r) => {
       const has = new Set(JSON.parse(r.labels) as string[]);
       return r.enabled && labels.every((l) => has.has(l));

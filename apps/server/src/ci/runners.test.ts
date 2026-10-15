@@ -25,6 +25,8 @@ class Homes implements CiHost {
   readonly homes = new Map<string, Home>();
   readonly calls: { ws: string; args: string[] }[] = [];
   readonly down = new Set<string>();
+  /** Workspaces whose cp-ci never answers (a stalled tunnel). */
+  readonly hang = new Set<string>();
   add(id: string): Home {
     const h = new Home(`cp-ci-${id.replace('/', '-')}-`);
     this.homes.set(id, h);
@@ -38,6 +40,7 @@ class Homes implements CiHost {
   }
   async cp(id: string, args: string[], opts?: { stdin?: string }): Promise<CiReply> {
     this.calls.push({ ws: id, args });
+    if (this.hang.has(id)) return new Promise<CiReply>(() => undefined);
     const h = this.homes.get(id);
     if (!h) throw new Error(`no workspace ${id}`);
     return h.ci(args, { stdin: opts?.stdin });
@@ -152,6 +155,20 @@ test('a drained or stopped runner gets no run: it waits queued', async () => {
   assert.equal((await s.svc.show(run.id)).status, 'queued');
   s.host.down.delete(RUNNER);
   assert.equal((await s.settle(run.id)).status, 'passed');
+});
+
+test('a stalled runner never holds the source workspace\'s poll, and a run is handed to it once', async () => {
+  const s = await setup();
+  await s.svc.upsertRunner(RUNNER, { labels: ['big', 'python'] }, PERSON);
+  s.host.hang.add(RUNNER);
+  const run = await s.svc.startRun({ repoId: s.repo.id, pipeline: 'ci', ref: 'main' });
+  for (let i = 0; i < 3; i++) {
+    const t0 = Date.now();
+    await s.svc.poll(SRC);
+    assert.ok(Date.now() - t0 < 5_000, `poll ${i} took ${Date.now() - t0} ms`);
+  }
+  assert.equal((await s.svc.show(run.id)).status, 'queued');
+  assert.equal(s.host.calls.filter((c) => c.ws === RUNNER && c.args[0] === 'mirror').length, 1, 'one hand-off in flight, not one per poll');
 });
 
 test('runner settings: labels are checked, and a runner that is gone is refused', async () => {
