@@ -366,6 +366,100 @@ test('T-524 Pending for memory: one clear line (not a silent wait), then the Job
   assert.match(r2.out, /did not start in 1s \(pod: Pending: 0\/2 nodes are available/);
 });
 
+test('T-524 a full in-memory /tmp: "No space left on device" in a failed Job gives the --big hint (no eviction comes); a passing Job does not', () => {
+  const full = 'npm error nospc ENOSPC: No space left on device, write\n';
+  for (const [argv, re] of [[[], /: No space left on device: \/tmp holds at most 2Gi in memory \(it and \/dev\/shm count against the 4Gi limit\); rerun with --big \(\/tmp 4Gi\)/],
+    [['--big'], /: No space left on device: \/tmp holds at most 4Gi in memory .*the 8Gi limit\); 4Gi is the most \/tmp gets/]] as const) {
+    const w = world();
+    writeFileSync(join(w.root, 'scenario.json'), JSON.stringify({ rc: 1, log: jobLog(w.root, 1, full) }));
+    const r = w.run([...argv, '--repo', 'claudepilot', '--ref', 'main', '--', 'npm ci']);
+    assert.equal(r.code, 1, r.out);
+    assert.match(r.out, re);
+  }
+  const ok = world();
+  writeFileSync(join(ok.root, 'scenario.json'), JSON.stringify({ rc: 0, log: jobLog(ok.root, 0, full) }));
+  const r = ok.run(['--repo', 'claudepilot', '--ref', 'main', '--', 'true']);
+  assert.equal(r.code, 0, r.out);
+  assert.doesNotMatch(r.out, /job-run: .*No space left/, 'the text in a passing Job is not a failure');
+});
+
+/** scripts/gate-job.sh in a scratch checkout, against a fake kubectl: the Job is done when the file "done" exists, its pod Pending while "pending" holds the scheduler's message. */
+const FAKE_GATE_KUBECTL = String.raw`#!/usr/bin/env bash
+printf 'kubectl %s\n' "$*" >> "$FAKE/calls.log"
+case " $* " in
+  *" create secret "*|*" apply -f -"*) cat > /dev/null ;;
+  *" get job "*"metadata.uid"*) printf 'uid-1' ;;
+  *" get job "*) if [ -f "$FAKE/done" ]; then printf '1/'; else printf '/'; fi ;;
+  *" get pods "*) if [ -f "$FAKE/pending" ]; then jq -n --rawfile m "$FAKE/pending" '{items: [{status: {phase: "Pending", conditions: [{type: "PodScheduled", status: "False", reason: "Unschedulable", message: $m}]}}]}'
+    else printf '{"items":[{"status":{"phase":"Running"}}]}'; fi ;;
+  *" logs job/"*) if [ -f "$FAKE/joblog" ]; then cat "$FAKE/joblog"; else printf '=== SUMMARY\ntypecheck rc=0 1s\nGATE-VERDICT: green\n'; fi ;;
+  *) ;;
+esac
+`;
+
+function gateWorld() {
+  const root = mkdtempSync(join(tmpdir(), 'cp-gatejob-'));
+  roots.push(root);
+  const bin = join(root, 'bin'), repo = join(root, 'repo');
+  mkdirSync(bin); mkdirSync(join(repo, 'scripts'), { recursive: true }); mkdirSync(join(repo, 'deploy/k3s-build'), { recursive: true });
+  writeFileSync(join(bin, 'kubectl'), FAKE_GATE_KUBECTL); chmodSync(join(bin, 'kubectl'), 0o755);
+  writeFileSync(join(root, 'token'), `gx${hex(18)}`); // made at runtime, never a literal
+  writeFileSync(join(bin, 'gh'), '#!/bin/sh\n[ "$1 $2" = "auth token" ] && cat "$FAKE/token"\n'); chmodSync(join(bin, 'gh'), 0o755);
+  for (const f of ['scripts/gate-job.sh', 'scripts/gate-verdict.sh', 'deploy/k3s-build/gate-job.yaml']) writeFileSync(join(repo, f), readFileSync(join(REPO, f), 'utf8'));
+  const env = { PATH: `${bin}:/usr/local/bin:/usr/bin:/bin`, HOME: root, TMPDIR: root, FAKE: root, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
+  const git = (args: string[]) => spawnSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', ...args], { cwd: repo, env, encoding: 'utf8' });
+  git(['init', '-q']); git(['add', '.']); git(['commit', '-qm', 'gate']);
+  const start = (over: Record<string, string>) => {
+    const p = spawn('bash', ['scripts/gate-job.sh', 'HEAD', 'typecheck'], { cwd: repo, env: { ...env, GATE_IMAGE: 'registry.test/claudepilot/workspace:1-dev-1', GATE_JOB_LOG: join(root, 'gate.log'), GATE_JOB_POLL_S: '1', ...over } });
+    children.push(p);
+    let out = '';
+    p.stdout.on('data', (d) => (out += d)); p.stderr.on('data', (d) => (out += d));
+    return { done: new Promise<{ code: number | null; out: string }>((res) => p.on('close', (code) => res({ code, out }))), out: () => out };
+  };
+  return { root, start };
+}
+
+test('T-524 gate-job.sh: a gate Pending for room says so with the reason; never scheduled ends red naming that, not "did not finish"', async () => {
+  const why = '0/2 nodes are available: 2 Insufficient memory. preemption: 0/2 nodes are available: 2 No preemption victims found for incoming pod.';
+  const w = gateWorld();
+  writeFileSync(join(w.root, 'pending'), why);
+  const r = await w.start({ GATE_JOB_WAIT_S: '3' }).done;
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.out, /gate job claudepilot-gate-[0-9a-f]{7}-[0-9a-f]{4} is Pending: 0\/2 nodes are available: 2 Insufficient memory\. .*; it waits for a node with room \(a Job that ends frees memory\), up to 3s\n/);
+  assert.equal((r.out.match(/is Pending/g) ?? []).length, 1, 'said once, not every poll');
+  assert.match(r.out, /\nGATE-VERDICT: red: not scheduled in \d+s: 0\/2 nodes are available: 2 Insufficient memory\./);
+  assert.doesNotMatch(r.out, /did not finish/, 'the cause is named');
+
+  // Pending, then room frees: it says so and the gate's own verdict stands (green, exit 0).
+  const w2 = gateWorld();
+  writeFileSync(join(w2.root, 'pending'), why);
+  writeFileSync(join(w2.root, 'joblog'), '=== SUMMARY\ntypecheck rc=0 1s\nmemory peak=5120Mi limit=8192Mi oom_kills=0\nGATE-VERDICT: green\n');
+  const s = w2.start({ GATE_JOB_WAIT_S: '60' });
+  await waitFor('the Pending line', () => /is Pending/.test(s.out()));
+  rmSync(join(w2.root, 'pending'));
+  await waitFor('scheduled', () => /scheduled after \d+s Pending/.test(s.out()));
+  writeFileSync(join(w2.root, 'done'), '');
+  const r2 = await s.done;
+  assert.equal(r2.code, 0, r2.out);
+  assert.match(r2.out, /GATE-VERDICT: green\n$/);
+  assert.match(r2.out, /\ntypecheck rc=0 1s\nmemory peak=5120Mi limit=8192Mi oom_kills=0\nlog: /, 'the Job\'s memory peak in the summary');
+  assert.equal((r2.out.match(/memory peak=/g) ?? []).length, 1, 'one memory line');
+
+  // A Job that printed no memory line (an older manifest): the summary says unavailable, never a guess; the verdict is unchanged.
+  const w4 = gateWorld();
+  writeFileSync(join(w4.root, 'done'), '');
+  const r4 = await w4.start({ GATE_JOB_WAIT_S: '10' }).done;
+  assert.equal(r4.code, 0, r4.out);
+  assert.match(r4.out, /\ntypecheck rc=0 1s\nmemory peak=unavailable \(the gate Job printed no memory line\)\nlog: [^\n]+\nGATE-VERDICT: green\n$/);
+
+  // Scheduled but not finished in time: the old message, unchanged.
+  const w3 = gateWorld();
+  const r3 = await w3.start({ GATE_JOB_WAIT_S: '2' }).done;
+  assert.equal(r3.code, 1, r3.out);
+  assert.match(r3.out, /GATE-VERDICT: red: the job did not finish in 2s\n$/);
+  assert.doesNotMatch(r3.out, /Pending|not scheduled/);
+});
+
 test('cleanup: interrupted while queued, the Job and its Secret are deleted', async () => {
   const w = world([1, 2, 3].map((i) => ({ name: `claudepilot-job-0000000${i}`, chat: 'chat-x' })));
   const s = w.start(['--repo', 'claudepilot', '--ref', 'main', '--', 'true'], { JOB_RUN_MAX_PER_CHAT: '5' });

@@ -312,6 +312,12 @@ elif ooms=$(sed -n 's/^=== JOB-RUN MEMORY .* oom_kills=\([0-9]\{1,9\}\)$/\1/p' "
 fi
 if [ "$(pod_get '.items[0].status.reason' "$pj")" = Evicted ]; then
   echo "job-run: $job was evicted: $(pod_get '.items[0].status.message' "$pj") (/tmp holds at most $tmp_size in memory; --big gives $tmp_big)" >&2
+elif { [ -n "$rc" ] && [ "$rc" != 0 ]; } || [ "${st%%:*}" = Failed ]; then
+  # A memory-backed /tmp is a tmpfs of its sizeLimit: when it fills, the command gets ENOSPC (no eviction), so the log is the only sign.
+  if grep -q 'No space left on device' "$log" 2>/dev/null; then
+    if [ -n "$big" ]; then hint="$tmp_big is the most /tmp gets: write less there or split the command"; else hint="rerun with --big (/tmp $tmp_big)"; fi
+    echo "job-run: $job: No space left on device: /tmp holds at most $tmp_size in memory (it and /dev/shm count against the $memory limit); $hint" >&2
+  fi
 fi
 if [ -z "$rc" ]; then
   case "$st" in

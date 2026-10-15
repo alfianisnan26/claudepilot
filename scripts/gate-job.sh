@@ -39,10 +39,18 @@ if [ -n "$uid" ]; then
   kubectl -n "$ns" patch secret "$job" --type merge -p "{\"metadata\":{\"ownerReferences\":[{\"apiVersion\":\"batch/v1\",\"kind\":\"Job\",\"name\":\"$job\",\"uid\":\"$uid\"}],\"labels\":{\"app\":\"claudepilot-gate\",\"claudepilot-gate/by\":\"${GATE_JOB_BY:-manual}\"}}}" >/dev/null || true
 fi
 echo "gate job $job: $steps at $sha on $image ..."
-state=
+state=; why=; t1=$(date +%s); pend_t=
 for _ in $(seq 1 $(( wait_s / poll_s ))); do
   state=$(kubectl -n "$ns" get job "$job" -o jsonpath='{.status.succeeded}/{.status.failed}' 2>/dev/null || true)
   case "$state" in 1/*|*/1) break ;; esac
+  # Pending because no node can hold it (T-524: 8Gi requested fits one node only): say so when it starts and when it ends, not a silent wait.
+  why=$(kubectl -n "$ns" get pods -l "job-name=$job" -o json 2>/dev/null | jq -r '[.items[0].status.conditions[]? | select(.type == "PodScheduled" and .status == "False" and .reason == "Unschedulable") | .message] | first // ""' 2>/dev/null || true)
+  if [ -n "$why" ] && [ -z "$pend_t" ]; then
+    pend_t=$(date +%s)
+    echo "gate job $job is Pending: $why; it waits for a node with room (a Job that ends frees memory), up to ${wait_s}s"
+  elif [ -z "$why" ] && [ -n "$pend_t" ]; then
+    echo "gate job $job: scheduled after $(( $(date +%s) - pend_t ))s Pending"; pend_t=
+  fi
   sleep "$poll_s"
 done
 kubectl -n "$ns" logs "job/$job" > "$out" 2>&1 || true
@@ -52,8 +60,16 @@ if [ -n "$t" ] && grep -q -F -- "$t" "$out"; then
   echo "WARNING: the token was in the gate log (masked in $out)" >&2
 fi
 unset t
-case "$state" in 1/*|*/1) ;; *) kubectl -n "$ns" delete job "$job" --ignore-not-found >/dev/null 2>&1 || true; echo "GATE-VERDICT: red: the job did not finish in ${wait_s}s"; exit 1 ;; esac
-sed -n '/^=== SUMMARY$/,$p' "$out" | grep -v '^GATE-VERDICT: ' || true
+case "$state" in 1/*|*/1) ;; *) kubectl -n "$ns" delete job "$job" --ignore-not-found >/dev/null 2>&1 || true
+  # Never scheduled is not a slow or failed gate: the verdict names the scheduler's reason (nothing of the commit was checked).
+  if [ -n "$pend_t" ]; then echo "GATE-VERDICT: red: not scheduled in $(( $(date +%s) - t1 ))s: $why"
+  else echo "GATE-VERDICT: red: the job did not finish in ${wait_s}s"; fi
+  exit 1 ;; esac
+sed -n '/^=== SUMMARY$/,$p' "$out" | grep -v -e '^GATE-VERDICT: ' -e '^memory peak=' || true
+# The Job's own memory peak (T-524: the 8Gi request is sized from it), always one line: the Job's cgroup reading, or "unavailable" when
+# the Job printed none (a gate-job.yaml from before T-524).
+mem=$(grep -E '^memory peak=' "$out" | tail -n 1 || true)
+echo "${mem:-memory peak=unavailable (the gate Job printed no memory line)}"
 echo "log: $out"
 rc=0; bash scripts/gate-verdict.sh joblog "$out" || rc=$?
 exit "$rc"
