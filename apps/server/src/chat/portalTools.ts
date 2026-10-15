@@ -188,7 +188,7 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
         }
       }
       // Claude Code runs an agent name it has no definition for as the default, silently: one line lets the worker say so (T-294 slice 2).
-      const first = args.role ? `[Your role: ${args.role}. If .claude/agents/${args.role}.md is not in your folder, tell your parent with session_message before you start.]\n\n${args.prompt}` : args.prompt;
+      const first = args.role ? `[Your role: ${args.role}. If your instructions do not describe this role (its agent file, in the folder's .claude/agents or the workspace persona's), tell your parent with session_message before you start.]\n\n${args.prompt}` : args.prompt;
       // From its parent, said so in the frame its Claude reads (T-294 QA: the first instruction said "another session").
       await chat.send(child.id, randomUUID(), first, { actor: ctx.actor, relation: 'parent', ...(ctx.actorLabel ? { actorLabel: ctx.actorLabel } : {}) });
       ctx.affected(`session:${child.id}`);
