@@ -2,9 +2,9 @@
 
 | | |
 | --- | --- |
-| Status | **Draft v0.4.** Built on Docker and verified (2026-10-12): the pool type and editor, the browser container, the gate with Playwright MCP, the VNC live view with control, Private and handoff, and the proxy view (§22). Built on Kubernetes and verified on a rig namespace of the k3s cluster (2026-10-13, B3): the browser as a second container in the workspace's pod, a Playwright MCP call from a chat session, the live view, a handoff with take-over pausing the tools; see §18 for each milestone's state and §23 for what the build changed. Not built: the desktop tier and its MCP server, Monitoring and chat panels, Downloads and Send a file. Revised after the security and UX reviews (v0.2). ✅ = observed in our experiments: Docker 29.9 DinD on arm64; Chromium 154 headful under Xvfb at 1280×800 and chrome-headless-shell 156 at 800×600; Playwright MCP 0.0.83 and chrome-devtools-mcp 1.10.1 driven by an MCP probe client; Claude Code 2.1.296 (`claude mcp list`); read-only checks and one server-side dry run on the k3s cluster. 🗂 = seen in the operator's isnan setup (its live configuration, read-only, or its own notes), not tested by us. 📄 = vendor documentation. 🔬 = unverified, listed in §21. |
+| Status | **Draft v0.4.** Built on Docker and verified (2026-10-12): the pool type and editor, the browser container, the gate with Playwright MCP, the VNC live view with control, Private and handoff, and the proxy view (§22). Built on Kubernetes and verified on a rig namespace of the k3s cluster (2026-10-13, B3): the browser as a second container in the workspace's pod, a Playwright MCP call from a chat session, the live view, a handoff with take-over pausing the tools; see §18 for each milestone's state and §23 for what the build changed. Request headers from named secrets (§24, T-623) are built and unit-tested; not yet run against a real Chromium or the Kubernetes API (§24 "Not verified"). Not built: the desktop tier and its MCP server, Monitoring and chat panels, Downloads and Send a file. Revised after the security and UX reviews (v0.2). ✅ = observed in our experiments: Docker 29.9 DinD on arm64; Chromium 154 headful under Xvfb at 1280×800 and chrome-headless-shell 156 at 800×600; Playwright MCP 0.0.83 and chrome-devtools-mcp 1.10.1 driven by an MCP probe client; Claude Code 2.1.296 (`claude mcp list`); read-only checks and one server-side dry run on the k3s cluster. 🗂 = seen in the operator's isnan setup (its live configuration, read-only, or its own notes), not tested by us. 📄 = vendor documentation. 🔬 = unverified, listed in §21. |
 | Owner | Alfian Isnan |
-| Last updated | 2026-10-13 |
+| Last updated | 2026-10-15 |
 | Depends on | [Pools foundation](foundation-pools.md) (storage, delivery, structure manager, plugin marketplace), [MCP set](mcpset-pool.md) (plugin and install conventions), [Web app & PWA](web-app-pwa.md) (immersive routes, devices, HTTPS, push) |
 | Related | [Settings & policies](settings-policies.md) (tool rules, allow group, network isolation values), [Chat sessions](chat-sessions.md) (handoff card, Browser panel), [Monitoring dashboard](monitoring-dashboard.md), [Portal MCP server](portal-mcp.md) |
 
@@ -133,7 +133,8 @@ deliver MCP (§11); the bridge serves the live view under a lease (§12); Chrome
 
 ## 9. Data model
 
-Stored in the portal database (foundation §4). A browser pool holds no secrets, and the portal never
+Stored in the portal database (foundation §4). A browser pool holds no secrets (its `headers` setting
+holds the *names* of Secrets & env entries, never a value, §24), and the portal never
 stores frames, keystrokes, clipboard text or cookies. Pools use the foundation's tables with type `browser`:
 
 ```json
@@ -141,7 +142,8 @@ stores frames, keystrokes, clipboard text or cookies. Pools use the foundation's
   "resources": { "cpu": [0.5, 2], "memoryMiB": [1536, 3072], "shmMiB": 1024, "pids": 1024 }, "start": "first_use", "idleMinutes": 30,
   "downloads": { "enabled": true, "restrictions": 1 }, "policy": { "blocked": ["metadata.google.internal"], "allowlistMode": false, "allowed": [], "extensions": [] },
   "mcp": { "devtools": false, "desktop": false, "tools": { "browser_file_upload": "ask", "browser_run_code_unsafe": "block" } },
-  "liveView": true, "takeOver": true, "privateTakeOvers": false, "requireSandbox": false }
+  "liveView": true, "takeOver": true, "privateTakeOvers": false, "requireSandbox": false,
+  "headers": [{ "hosts": ["app.stg.example.com", "*.stg.example.com"], "name": "CF-Access-Client-Id", "secret": "CF_ACCESS_CLIENT_ID" }] }
 ```
 
 | Table | Key fields |
@@ -279,7 +281,7 @@ noVNC's `viewOnly` only stops a cooperative client 📄, so the bridge filters b
 | Area | Requirement |
 | --- | --- |
 | Enforced | No other workspace or pod reaches CDP, the supervisor or the desktop server; web pages can't drive them; nothing but the bridge reaches VNC; viewers can't send input, or see the screen while Private; input needs a secure context; raw CDP and VNC never reach a browser tab. |
-| Not enforced | Workspace users and the agent can drive the browser and read its cookies, through CDP ✅ or the profile. The agent can send anything it can read (files, delivered secrets, cookies) to any site the browser reaches, and act as anyone signed in there. Policies and Playwright's origin flags are guardrails; Playwright MCP says it isn't a security boundary 📄. Every assign dialog says so. |
+| Not enforced | Workspace users and the agent can drive the browser and read its cookies, through CDP ✅ or the profile. The agent can send anything it can read (files, delivered secrets, cookies) to any site the browser reaches, and act as anyone signed in there. Policies and Playwright's origin flags are guardrails; Playwright MCP says it isn't a security boundary 📄. Every assign dialog says so. A header the pool adds from a secret (§24) is kept out of the agent's files, context, tool results and transcripts, but an agent that drives raw CDP could read it back from the browser's own network events. |
 | Loopback services | Every listener the pool adds (supervisor `9220`, desktop `8930`) binds `127.0.0.1` explicitly (Node's default is `::`), refuses any request with an `Origin` header, accepts only `Host: 127.0.0.1:<port>`, and needs `X-CPB: 1` on every request and `Content-Type: application/json` on every POST; `8930` also needs `Mcp-Session-Id` after `initialize`. A page can't add that header without a preflight, so cross-origin `no-cors` requests and DNS rebinding fail, as isnan's `X-Kb` header does 🗂. Chrome's Local Network Access policies keep public sites off loopback as a second layer (🔬 Q21). Pages the agent opens still reach the workspace's own dev servers (US2). |
 | CDP | Bound to `127.0.0.1`; full Chromium ignored `--remote-debugging-address=0.0.0.0` ✅. Never headless-shell's stock entrypoint (socat on `0.0.0.0` ✅), `--remote-allow-origins=*`, a Service or a published port. Chrome's checks stay on: on headless-shell, a name in `Host` got 500 and a foreign `Origin` 403 ✅. |
 | Display and VNC | (Built with TigerVNC's `Xvnc` instead of Xvfb plus x11vnc, §23 F1.) Xvfb with `-nolisten tcp -nolisten local` and an auth cookie, because a second container in the namespace drove the display through its abstract socket ✅ (🔬 Q9). VNC only on the `0600` socket (§12.1). |
@@ -569,3 +571,44 @@ reads the title the person's click set; a second device is a viewer and its inpu
 | F8 | B3: kubelet `emptyDir`s are root-owned and world-writable, so the root init sets `/tmp` sticky and makes `/run/cpb` as uid 1001 inside a `/run` it closes again; `tini` is PID 1 (no `Init: true` on Kubernetes). Pod phase is not workspace state: it stayed Pending while the browser image could not be pulled with the workspace Ready, so status, delivery and exec now read the workspace container's own state. A namespaced Role (a rig) can't create the namespace: a 403 there now means "use the one that exists". |
 | F9 | B3, small: one line of example.com showed as boxes (no CJK font in the image: add `fonts-noto-cjk` if wanted, about 50 MB); the supervisor reports "sandbox on" until Chrome's first start settles `auto`. |
 | D4 | B3 decisions: browser requests 100m CPU and 512 MiB (§14.1); 2 assigned browsers per Kubernetes target; the template changes only while no workspace container runs (§10.2); the egress policy stays on by default with admin exceptions and an audited opt-out, though this cluster does not enforce it; the image is built in the cluster (`scripts/k3s-build.sh browser <tag>`, `BUILD_NAMESPACE=dev-rig-<name>` for a dev branch). |
+
+## 24. Request headers from named secrets
+
+**Why.** A staging site behind Cloudflare Access wants two headers on every request (`CF-Access-Client-Id`, `CF-Access-Client-Secret`).
+The agent must browse the site without ever seeing the values: not in its context, files, tool results, transcript, a log or an audit row.
+The owner's brief is T-623; the design is on that ticket.
+
+**Setting.** `headers` on the pool, a list of `{ hosts: [pattern], name, secret }`:
+
+| Field | Rule |
+| --- | --- |
+| `name` | A header name (letters, digits, hyphens). The ones the browser owns (`Host`, `Cookie`, `Content-Length`, `Content-Type`, `Origin`, `Referer`, `User-Agent`, `Connection` and the like; `FORBIDDEN_HEADERS` in `headers.ts`) are refused. |
+| `secret` | The NAME of one Secrets & env entry (kind secret). Never a value: a `value` field is dropped at save. The name must belong to exactly one secret in the current revisions of all Secrets & env sets; the set need not be assigned to the workspace. |
+| `hosts` | `app.example.com`, `app.example.com:8443` or `*.example.com` (up to 20). Each must be covered by an entry of `allowedSites`; saving is refused otherwise, and so is removing an allowed site that a header still uses. At most 10 rules. |
+
+**How it works** (no proxy: HTTPS would need a CA the browser trusts):
+
+| Step | What happens |
+| --- | --- |
+| Resolve | At each delivery the portal looks the secret up by name (`SecretsKind.secretByName`) and holds the value in memory only. A secret that is missing, in two sets, without a value or unreadable leaves its header out; the reason is audited. |
+| Deliver | **Docker:** the archive API writes `/etc/cpb-secrets/headers.json`, root `0400` in a `0700` folder, next to (not inside) the world-readable config. **Kubernetes:** a Secret `ws-<name>-browser-headers` owned by the Deployment, volume `cpb-secrets` (mode `0400`), mounted read-only at `/etc/cpb-secrets` in the browser container only; the workspace container never mounts it. |
+| Build | At each Chrome start the root init reads the file and hands the entries on stdin to a uid 1000 child (`cpb/headers-ext.mjs write`), which writes a managed extension to `/dev/shm/cpb-ext` (folder `0700`, files `0400`; memory, never on a volume). Its static `declarativeNetRequest` rules use `modifyHeaders` with `set`, one rule per host pattern carrying that host's headers, matched by a `regexFilter` built from the pattern (`https://` only, so a header never goes out in clear text; host and port are anchored, so `example.com.evil.net` doesn't match). Names, values and hosts that could inject (line breaks, forbidden names, bad patterns) are dropped; the init logs only the count and the dropped names. |
+| Load | Chromium runs with `--load-extension` and `--disable-extensions-except` for that folder; `DisableLoadExtensionCommandLineSwitch` is added to the one `--disable-features` flag. Policy then allows exactly that extension id (`ExtensionInstallAllowlist`, the id derived from the fixed path, the same function in the portal and the image, tested equal) beside `ExtensionInstallBlocklist ["*"]`, and `URLBlocklist` gains `chrome-extension://*` so pages can't open it. Only when the pool has headers. |
+| Follow | The container's spec hash includes each header's name, hosts, secret NAME and the value's version id, never the value. A rotated value changes the hash, a removed secret changes it too, and the container is recreated at the next idle recreate (Docker) or workspace start (Kubernetes). A pool without headers hashes as before, so nothing restarts. |
+
+**Who can read the value.**
+
+| Reader | Can read it? |
+| --- | --- |
+| The agent, through files, tool results, transcripts, plugin files, `config.json`, the policy file, the pool view, the audit, logs | No. The value exists only in the portal's memory, the headers file or Secret, and the extension folder. A test searches the compiled pool, plugin, config, policy, spec, template and audit for it. |
+| The gate's tool results | Header names are redacted: `cf-access-client-id` and `cf-access-client-secret` always, and every name in the pool (`--redact a,b`, names validated, no values). |
+| Chrome's own process (uid 1000) | Yes: it has to send it. On Kubernetes `fsGroup` 1000 also makes the Secret file group-readable by gid 1000; the extension files in `/dev/shm` are Chrome-readable anyway. |
+| The pool view and the audit | Names only: the header name, secret name, hosts and skip reasons. The audit row (`headers`, in `browser_events`) is written when the set changes, not at every delivery. |
+
+**Not enforced** (stated in §13): an agent that drives raw CDP (`Network` events, `Fetch`, or the extension's own page) can read a header from the browser. The gate never offers that, the gate redacts the names, and the extension's pages are blocked; but this is a guardrail like the rest of §13's Not enforced row, not a boundary.
+
+**Needs a person.** `deploy/k3s/rbac.yaml` gives the portal's Role the `secrets` verbs get, create, update and delete in `isnan-claudepilot-workspaces`; it takes effect when the cluster applies it. Setting the real secret values (Secrets & env) and the pool's `headers` setting is the owner's or coordinator's step.
+
+**Verified** (unit tests, `apps/server/src/browser/headers.test.ts`, `gate.test.ts`, the cluster Job runs on the ticket): a matching host gets the header and a non-matching one doesn't; the value is in no place but the headers file; a removed secret leaves the header out and recreates the container without it; the file modes (`0400` file in a `0700` folder, config world-readable); the extension id the policy allows equals the id the path gives; header redaction by name. Each of the key tests fails without its fix (mutations run on a throwaway branch).
+
+**Not verified** (not testable in the pod): Chromium actually loading the extension under the managed policy and sending the header (needs the browser image and a real Chromium: the id, `--load-extension` and the newer-Chrome switch are from vendor behaviour 📄, not observed here 🔬); the Kubernetes Secret create, replace and delete path (`ensureHeadersSecret`, no fake-API test) and the mount; the RBAC rule applied to the cluster. Check them in a rig namespace with a scratch portal and a header-echo site before relying on a real staging site.
