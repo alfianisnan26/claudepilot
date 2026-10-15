@@ -10,10 +10,10 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - MERGED ff b37628e (T-515 e021cb6 + T-527 ea81071 + packs): gate GREEN claudepilot-gate-b37628e-0953 (memory peak 2189Mi/8192Mi,
   0 OOM) + web 629/629 (claudepilot-job-a19b47c9).
 
-## IN FLIGHT (4 of 4 workers, D-65: c10daf0e T-426 WAITING ab93b54 (on T-401 060aca4), 03b631f0 impl-t531-s2c (sonnet) T-531 S2c (cffb12b1 ended: T-486 S2b DONE 6eb6fbf 4880),
+## IN FLIGHT (4 of 4 workers, D-65: 8dc6a739 impl-t557 (sonnet) T-557 S0+S1 (c10daf0e ended; T-426 ab93b54 waits for QA, 4899), 03b631f0 impl-t531-s2c (sonnet) T-531 S2c (cffb12b1 ended: T-486 S2b DONE 6eb6fbf 4880),
   47710391 qa (sonnet) T-401 QA WAITING GO, 0df3dd19 impl-t379 (sonnet) T-379 090fbbf (minors 8dadddb + lead merge of 060aca4, 4852): GO 12:20 src/ci re-run)
   Sweep: PASS T-109/280/282/285, GAP T-259/294/136(?)/338/317/287; nobody can claim in_review tickets -> coordinator (T-525 4659).
-  Cluster: T-379 re-run (GO 12:20) -> T-401 QA -> T-426 -> T-531 S2c -> T-486 QA (6eb6fbf). T-379 live proof PASS (4845, job-2d70c331). Next free workers: T-401 blind review (opus), T-531 S2c fix. T-486 QA goes to 47710391 after T-531 (reuse); T-416 S1b QA after that. Next free worker slot: T-546 + T-548 (T-426 waits for T-401).
+  Cluster: T-379 re-run (GO 12:20) -> T-401 QA -> T-531 S2c / T-557 -> T-486 QA (6eb6fbf) -> T-426 QA (ab93b54). T-379 live proof PASS (4845, job-2d70c331). Next free workers: T-401 blind review (opus), T-531 S2c fix. T-486 QA goes to 47710391 after T-531 (reuse); T-416 S1b QA after that. Next free worker slot: T-546 + T-548 (T-426 waits for T-401).
 - T-401 (high, security): S1 DONE 060aca4 (4 Jobs green per author; fetch does npm ci --ignore-scripts with creds). Touches
   gate-job.yaml: review must confirm the gate's checks unchanged (4745). Next: blind review (opus) + QA, lead gate, merge.
 - T-416 (high incident): S1 d37c5f0; QA b1aa2e47 PASS WITH GAPS (4623: 995/999 0 fail job-2c410105; mutations A2/B/C caught);
@@ -35,6 +35,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - T-378 S1 dev/t-378-1 9834ff7 ready: needs a verifier.
 
 ## DECISIONS (binding)
+- 12:35 Coordinator: T-557 S0+S1 now (owner priority; burst runners, no 24/7 codespace); S2 waits for the owner's GitHub account + limit.
 - 12:09 Workers cannot git merge: the lead merges base heads into slice branches (T-379 090fbbf, 4852).
 - 11:30 Coordinator (owner priority, metocean): T-379 NOW in its own worker; built on T-401's fe62fa6 (fetch stage holds creds).
 - 12:00 Coordinator tool review: lead edits of code (dev-t-376 commits 01:57-02:03, no trailers, before D-63 03:36; 4820).
@@ -43,8 +44,6 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - 11:15 D-65 (coordinator): 4 ClaudePilot workers; implementers sonnet by default (opus only with a written why); small QA/review
   findings fixed in the same slice; a worker takes 2-3 related tickets (reuse under 150k); full report on the ticket, the lead
   reads line 1 and opens it only on FAIL; ready features over chores. Targets under 8 USD per ticket, lead share under 30 %.
-- 11:15 Coordinator priority: T-524 (done), T-401, T-426, T-379, then T-546 (report digest), T-548 (auto hand-off), then T-547
-  (quota placement), T-549 (scorecard rows).
 - 11:00 Coordinator: the next implementer slot goes to T-401 (security: job-run env carries GIT_TOKEN/NODE_AUTH_TOKEN), then T-426
   (--pool-env door for Konfersi stg e2e), then T-379 (Python in job-run). They unblock 6 Konfersi tickets. Opus + blind review
   (gate/security). They come before T-416 S2, T-537 and T-538..T-540.
