@@ -10,7 +10,7 @@ Older log: `orchestrator-log-2026-10-14.md`. Previous hand-overs: ab99b45 (a8393
 ## IN FLIGHT (3 live workers = the D-61 budget; no Agent-tool sub-agents)
 - T-366 (urgent): built dev/t-366-1 086a9e1 (proof 57/57 vs 8 fail on base, chat 703/0 fail, typecheck 0; worker 033e1b23 ended). THIRD blind reviewer 5f83b665 (opus, hasyim) in dev-t-366-1. Then merge, deploy images=portal,workspace on 2026-10-16, real-job QA.
 - T-417 (high): review SAFE AFTER FIXES (comment 2875; reviewer 775a1756 ended). Fixer a1bf3da8 (opus, fadlilah) in dev-t-336-1 on dev/t-417-1 from 9622deb: findings 1,2,3,5,7,8,9. Then a DIFFERENT reviewer (not 775a1756), merge. Finding 6 = T-425 (new, normal). Bypass across sleep rests on the owner's T-417 text; D-row is the coordinator's.
-- T-375 (high): worker 07cef3b0 (opus, hasyim) in dev-t-333-1 (switched to dev/t-375-1, a5fc68a): merging origin/dev/t-369-1 (SessionRow.tsx conflict) + T-378's density check + the screenshot check. Then ONE ux-checker covering T-369 item 4 and T-375, then merge T-369 + T-375 together.
+- T-375 (high) + T-369: dev/t-375-1 c84657f merges T-369; typecheck, web 589/589, crew 108, density 0/492 over 80 px, session-rows 44 (comment on T-375); worker 07cef3b0 ended. ux-checker e44c2a1b (sonnet, hasyim) in dev-t-333-1. Then merge both, regenerate the context pack.
 
 - T-427 (high): the lead, in dev-t-349-1 on dev/t-427-1 3198f5d (comment 2918); proof Job (typecheck + agents.test.ts vs 2121788) running; then a qa-verifier worker, merge with T-417.
 
@@ -36,7 +36,7 @@ Older log: `orchestrator-log-2026-10-14.md`. Previous hand-overs: ab99b45 (a8393
 1. T-427 (high, owner's ticket, coordinator 03:45: same batch as T-417; agents.ts pickSpawnClaude + agents.test.ts; implementer, sonnet is enough). Next deploy batch = T-417 + T-427, on 2026-10-16 (today's cap of 3 is used).
 1b. T-404 fixes (worker in dev-t-352-1 on dev/t-404-1), then a new blind reviewer.
 2. T-413 post-mortem (incident-analyst worker, sonnet).
-3. ux-checker for T-369+T-375 when 07cef3b0 reports; ux-checker + S3 perf-tester for T-376 S2.
+3. ux-checker + S3 perf-tester for T-376 S2.
 4. T-416 (portal memory budget, high), T-422 build (sudo), T-147 (narrow ClusterRole in a rig, after T-416/T-417).
 5. T-425, T-378 S2-S4, T-382, T-377, T-386, T-409, T-402, T-398, T-399.
 6. T-370 HOLD (claudepilot-b7), then T-371..T-374, T-363 (read D-59 / PRD 8b criteria first).
