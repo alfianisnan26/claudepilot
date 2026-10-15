@@ -426,3 +426,28 @@ test('T-294 over MCP: a worker on auto runs on a Claude with room, as its role (
     await r.done();
   }
 });
+
+test('pickSpawnClaude (T-460): never a Claude auto move would leave by projection, even above the 10 % floor', () => {
+  const at = (m: number) => new Date(NOW + m * 60_000).toISOString();
+  const fig = (value: number | string, basis = 'estimate') => ({ value, basis });
+  // 22 % left, projected 143 % at the reset and out of quota within the hour: what the Event lead was started on (T-460).
+  const leaving = (id: string): ClaudeUsage =>
+    usageRow(id, 78, NOW, {
+      windows: [
+        {
+          key: 'session',
+          label: 'Session',
+          usedPct: 78,
+          resetsAt: at(180),
+          level: 'ok',
+          pace: { speed: fig(1), projectedPct: fig(143), etaAt: fig(at(60)), status: fig('over'), evenPct: fig(40), aheadPts: fig(30), readings: 6, spanMin: 60, method: 'least_squares', lowConfidence: false },
+        } as ClaudeUsageWindow,
+      ],
+      outlook: { status: { value: 'over', basis: 'estimate' }, window: null, etaAt: { value: null, basis: 'unavailable' }, projectedPct: { value: null, basis: 'unavailable' } },
+    } as Partial<ClaudeUsage>);
+  const over = (id: string, usedPct: number) =>
+    usageRow(id, usedPct, NOW, { outlook: { status: { value: 'over', basis: 'estimate' }, window: null, etaAt: { value: null, basis: 'unavailable' }, projectedPct: { value: null, basis: 'unavailable' } } } as Partial<ClaudeUsage>);
+  assert.deepEqual(pick('auto', [usageRow('p', 95, NOW), leaving('a')]), { claudeId: 'p', why: 'no_room' }, 'the one projected to run out is not picked');
+  assert.deepEqual(pick('auto', [usageRow('p', 95, NOW), leaving('a'), over('b', 82)]), { claudeId: 'b', why: 'no_room_lowest' }, 'another with no confident projection still is');
+  assert.deepEqual(pick('auto', [usageRow('p', 70, NOW), leaving('a'), usageRow('b', 40, NOW)]), { claudeId: 'b', why: 'room' }, 'and room beats it as before');
+});

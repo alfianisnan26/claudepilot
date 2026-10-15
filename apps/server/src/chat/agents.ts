@@ -7,7 +7,7 @@
 
 import { AppError } from '@isnanme/core';
 import type { ClaudeUsage, WorkspaceClaude } from '@portal/contracts';
-import { unknownUsage } from '../autotransfer/decide.js';
+import { autoMoveLeaves, unknownUsage } from '../autotransfer/decide.js';
 import { recommendMove } from '../claudeusage/recommend.js';
 import { defineSetting } from '../settings/registry.js';
 import { SESSION_CAP } from './caps.js';
@@ -232,7 +232,8 @@ export function pickSpawnClaude(p: SpawnPick): { claudeId: string; why: SpawnCla
     const ranking = recommendMove([...p.usage], { workspaceId: p.workspaceId, from: null, nowMs: p.nowMs });
     const usable = (c: (typeof ranking.candidates)[number]) => {
       const u = usageOf(c.claudeId);
-      return c.rank !== null && !c.stale && ids.has(c.claudeId) && u?.runsOn === 'plan' && unknownUsage(u, p.family, p.nowMs) === null;
+      // T-460: never a Claude auto move would leave (the one projection rule), so a worker is not started where it would be moved off again.
+      return c.rank !== null && !c.stale && ids.has(c.claudeId) && u?.runsOn === 'plan' && unknownUsage(u, p.family, p.nowMs) === null && !autoMoveLeaves(u, p.family, p.nowMs);
     };
     const fit = ranking.candidates.filter((c) => usable(c) && c.reason === 'room' && c.basis === 'measured');
     if (!fit.length) {

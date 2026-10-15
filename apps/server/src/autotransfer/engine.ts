@@ -52,6 +52,12 @@ const WAIT_CODES: ReadonlySet<string> = new Set(['no_destination', 'destination_
  */
 const STEER_TEXT = (claude: string, leftPct: number, to: string, inMin: number | null) =>
   `Your Claude (${claude}) is at ${leftPct}% left: finish the current step, commit and push your work and every sub-agent's work in progress, put one line per role on your status ticket if you keep one, then stop. The portal moves this chat to ${to} ${inMin === null ? 'at the end of this turn' : `in about ${inMin} minute${inMin === 1 ? '' : 's'} at the latest (at the end of this turn)`}; after the move, start again the sub-agents and roles it interrupted.`;
+/**
+ * T-460: the steer told the chat to stop for a move, and the move is off (the source recovered, no destination, a refusal, a failure, the
+ * mode went off). Said at once on the same channel; the chat must not sit idle waiting for a move that will not come.
+ */
+const CANCEL_TEXT = (claude: string) =>
+  `The move is off: the portal is not moving this chat, you stay on ${claude}. Continue where you stopped, and start again the sub-agents and roles you stopped.`;
 const CONTINUE_TEXT = (to: string, why: 'exhausted' | 'steered') =>
   `Moved to ${to} by the portal (${why === 'exhausted' ? 'the Claude you were on ran out of quota' : 'as announced'}). Continue where you stopped, and start again the sub-agents and roles the move interrupted.`;
 
@@ -430,6 +436,7 @@ export class AutoTransferEngine {
     if (!x) return null;
     const { s, ownerId, settings, mode } = x;
     if (mode === 'off') {
+      await this.#cancelSteer(s, ownerId, mode, 'mode_off', settings.dryRun);
       if (this.#cards.has(id) || this.#d.store.openSuggestion(id)) this.#closeCard(id, 'expired');
       if (this.#d.store.session(id)?.waitingSince) this.#d.store.patchSession(id, ownerId, { waitingSince: null, waitingCode: null });
       return null;
@@ -452,6 +459,10 @@ export class AutoTransferEngine {
     } else if (!holds && row.waitingSince && (d.act === 'move' || d.act === 'suggest' || d.act === 'wait' || (d.act === 'none' && (d.code === 'above_threshold' || d.code === 'pace_under')))) {
       this.#d.store.patchSession(id, ownerId, { waitingSince: null, waitingCode: null });
       this.#record({ ...this.#base(s, ownerId, mode), kind: 'resumed', reason: d.reading?.reason ?? null, facts: d.reading?.facts ?? null, to: d.act === 'move' || d.act === 'wait' || d.act === 'suggest' ? d.to : null, code: d.act === 'none' ? d.code : null }, 'info');
+    }
+    // T-460: a chat told to stop for a move that now will not happen (not a move, not a steer again) is told so at once.
+    if (row.steeredPeriod !== null && d.act !== 'move' && d.act !== 'wait') {
+      await this.#cancelSteer(s, ownerId, mode, d.act === 'suggest' ? 'suggested' : d.code, settings.dryRun);
     }
     switch (d.act) {
       case 'none': {
@@ -504,6 +515,31 @@ export class AutoTransferEngine {
     }
     this.#d.publish();
     return d;
+  }
+
+  /**
+   * T-460: a steered move that does not happen. Clears the steer mark, audits `move.cancelled` with the reason, and (unless a dry run, which
+   * said nothing) tells the chat the move is off. Does nothing when no steer is standing.
+   */
+  async #cancelSteer(s: ChatSession, ownerId: string, mode: AutoMode, reason: string, dryRun: boolean): Promise<void> {
+    const row = this.#d.store.session(s.id);
+    if (!row?.steeredPeriod) return;
+    this.#d.store.patchSession(s.id, ownerId, { steeredPeriod: null });
+    this.#d.audit?.record({
+      kind: 'move.cancelled',
+      severity: 'info',
+      actor: ENGINE_ACTOR,
+      userId: ownerId,
+      subject: `session:${s.id}`,
+      detail: { workspace: s.workspaceId, mode, from: s.claudeId, fromName: s.claudeName ?? null, reason, told: !dryRun && s.state !== 'ended' },
+    });
+    console.info(`[autotransfer] move.cancelled session=${s.id} reason=${reason}`);
+    if (dryRun || s.state === 'ended') return;
+    try {
+      await this.#d.chat.send(s.id, CANCEL_TEXT(s.claudeName ?? 'Claude'), { priority: 'next', actor: ENGINE_ACTOR, actorLabel: 'Auto move' });
+    } catch (e) {
+      console.error(`[autotransfer] could not tell a chat the move is off: ${(e as Error).message}`);
+    }
   }
 
   /** The steer (T-105 item 2): one message, priority next, as the portal; recorded as `steered`, remembered per period. Dry run: recorded only. */
@@ -670,6 +706,7 @@ export class AutoTransferEngine {
       // A folder whose settings changed since it was trusted stops every move until someone trusts it again: say so, loudly (T-38).
       const untrusted = code === CHAT_FOLDER_UNTRUSTED;
       this.#record({ ...base, kind: 'failed', code: untrusted ? 'folder_untrusted' : 'move_failed' }, 'medium');
+      if (m.auto) await this.#cancelSteer(s, ownerId, m.mode, untrusted ? 'folder_untrusted' : 'move_failed', false);
       if (untrusted && m.auto) this.#notify(s, ownerId, { to: m.to.name, blocked: 'trust', leftPct: m.facts.leftPct.value ?? 0 });
       console.error(`[autotransfer] a move did not finish (${code})`);
       this.#wake(s.id, m.settings.minPauseMin * MIN);
