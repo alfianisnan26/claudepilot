@@ -348,7 +348,7 @@ test('T-294 over MCP: a worker on auto runs on a Claude with room, as its role (
     const launch = r.s.ws.startArgs.find((x) => x.includes(worker.claudeSessionId))!;
     assert.equal(launch[launch.indexOf('--agent') + 1], 'qa-verifier');
     const opening = r.s.controller.history(worker.id).find((e) => e.kind === 'user')!;
-    assert.equal(opening.text, '[Your role: qa-verifier. If .claude/agents/qa-verifier.md is not in your folder, tell your parent with session_message before you start.]\n\nVerify T-7 against its done criteria.');
+    assert.equal(opening.text, '[Your role: qa-verifier. If your instructions do not describe this role (its agent file, in the folder\'s .claude/agents or the workspace persona\'s), tell your parent with session_message before you start.]\n\nVerify T-7 against its done criteria.');
     // What the worker's Claude reads: its first instruction framed as from its parent (T-294 QA: it said "another session").
     const firstLine = r.s.ws.sends.find((x) => x.args[1] === worker.claudeSessionId && x.line.includes('Verify T-7'))!.line;
     assert.match(firstLine, /Portal message from your parent session/);
