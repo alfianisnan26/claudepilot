@@ -11,8 +11,18 @@ export function slashWord(text: string): string {
 
 /** `/compact` may carry a same-line argument of at most this many characters (T-597 S1b). */
 export const COMPACT_ARG_MAX = 500;
-/** Line breaks (\n, \r, U+2028, U+2029, NEL, VT, FF) and other control characters: a text with one is never one line. */
-const NOT_ONE_LINE = /[\u0000-\u0008\u000a-\u001f\u007f\u0085  ]/;
+
+/**
+ * Whether a text holds a line break of any kind (LF, CR, VT, FF, NEL, the Unicode line and paragraph separators) or another control
+ * character (a tab is allowed). Checked by character code so no invisible character sits in this source.
+ */
+function notOneLine(text: string): boolean {
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    if (c <= 8 || (c >= 10 && c <= 31) || c === 127 || c === 0x85 || c === 0x2028 || c === 0x2029) return true;
+  }
+  return false;
+}
 
 /**
  * Whether a portal text may reach Claude Code as the bare command and not as framed prose (T-597 S1b; QA 5727 F1: whatever follows the
@@ -23,7 +33,7 @@ const NOT_ONE_LINE = /[\u0000-\u0008\u000a-\u001f\u007f\u0085  ]/;
  */
 export function bareSlashCommand(text: string, actor: string | null, hasAttachment: boolean): boolean {
   if (hasAttachment || !actor || !(actor.startsWith('session:') || actor.startsWith('portal-mcp:'))) return false;
-  if (NOT_ONE_LINE.test(text)) return false;
+  if (notOneLine(text)) return false;
   if (text === '/context' || text === '/reload-plugins' || text === '/compact') return true;
   return text.startsWith('/compact ') && text.length - '/compact '.length <= COMPACT_ARG_MAX;
 }
