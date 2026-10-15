@@ -1,4 +1,4 @@
-# orchestrator status (2026-10-15 10:45 UTC, session 355881a3, continuation of de232389)
+# orchestrator status (2026-10-15 16:01 UTC, session 355881a3, continuation of de232389)
 
 Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-overs: ab99b45, bb58413, 639202e.
 
@@ -9,7 +9,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - DEPLOYED run #37 rmv9dxygu680003 (0316fae = b37628e + status): gate 690 s, build, release, verify, chats all passed.
   Carries T-486 S1, T-490, T-450 S3, T-524 S1, T-515, T-527. CLOSED T-527 (live D-62 refusal 10:42) and T-515.
 
-## IN FLIGHT (5 of 5, D-68/D-70): LANE 7e4879c7 "ClaudePilot QA Perf" (lane-qa-perf, sonnet, lane/cp-qa-perf): queue T-548 -> T-586 -> T-561 S1c -> T-486 S2d -> T-591.
+## IN FLIGHT (5 of 5, D-68/D-70): LANE 7e4879c7 "ClaudePilot QA Perf" (lane-qa-perf, sonnet, lane/cp-qa-perf): queue T-586 -> T-561 S1c -> T-486 S2d -> T-591 S1+S1b -> T-548 S1+S1b.
   T-561: S1b QA PASS WITH GAPS (5440, symlink holes A, B) -> S1c DONE 0beae29 (5498/5501; 77c04fc0 ended) -> QA Perf re-probe -> lead
   gate + merge. LANE bbbe2b38 "ClaudePilot QA UI" (lane-qa-ui, sonnet, qa/T-600-ui, deps linked by lead) on T-600 FE ux: browser tools refused (5503 PASS
   WITH GAPS; T-525 5505 to coordinator); default: headless tools/qa/*.mjs. T-576 DONE 2427d98 (Jobs green; no
@@ -17,11 +17,12 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   caught, 5419; 2ae78a99 ended): review PASS W/ COND (5456) -> S2 fc9ce1d DONE (5464; 813992cf ended) -> premerge
   wip/main-5b66aa0, gate GREEN gate-5b66aa0-44ef (suite 559 s, peak 2172Mi) -> QA Perf after T-548 -> ff integration (no deploy).
   T-486 S2d DONE 2979f99 (5454/5455: tests 16/16, typecheck, ci+secrets 258/259, mutation caught; 5feb4875 ended) -> QA Perf -> lead merge + gate.
-  T-548 S1 9b822ba + T-591 S1 DONE bf932c3 (5508/5511; eaec4cc5 ended): blind review 9651c9fa (opus, D-62) on both; QA Perf queue.
+  T-548 S1 9b822ba + T-591 S1 bf932c3: blind review 9651c9fa (ended) PASS W/ COND both (5512/5513; sev 2 vault authz on T-591). Decisions
+  5514/5515: S1b fixes. IMPL 4ba6c5db (impl-t591-s1b, sonnet, ticket/T-591-s1b-review). T-548 S1b = one-off sonnet at next free slot.
   LANE 5f8f392b "ClaudePilot Backend" (lane-backend, sonnet) on T-546 Jobs (ticket/T-546-digest; 8822ba59 ended). Backend queue (coordinator,
   efficiency order): T-546 -> T-600 BE -> T-597 -> T-325 -> T-591 S2. LANE f13a9442 "ClaudePilot Frontend" (lane-frontend, sonnet,
   ticket/T-600-crew-pace-ui): T-600 FE DONE 7d19c94 (5473/5478); T-556 PLANNED 5497 (one "Upstream" dialog, 4 fields: no upstream UI exists);
-  builds after T-486 merges + T-595. QA UI then T-576 ux. 5 of 5: QA Perf, Backend, Frontend, QA UI, reviewer.
+  builds after T-486 merges + T-595. QA UI then T-576 ux. 5 of 5: QA Perf, Backend, Frontend, QA UI, impl-t591-s1b.
   Jobs: each agent starts its own (15:29). Still to place: T-558 QA (e652c44, 5052). No prettier/eslint in Jobs (T-612).
 - T-426 (mine again, 4926): ab93b54 --pool-env; the coordinator reuses its secret resolution. QA + blind review after T-401 merges.
 - T-379 3ddbcbc: src/ci 144/144 job-5b4609a6 (4905); lead live proof PASS job-c71c5bfe (4906); blind review 30dc0f13 PASS WITH
