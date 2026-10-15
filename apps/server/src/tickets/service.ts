@@ -48,7 +48,16 @@ import {
 import { assertBumpable, bumpMode, bumpNote, bumpTargets as targetsFor } from '../chat/bump.js';
 import { cleanText } from '../portalmcp/sanitize.js';
 import type { Store } from '../store/store.js';
-import { canActForEnded, canWorkerComment, type EndedGrantReason, type WorkerCommentReason } from './authz.js';
+import {
+  AGENT_ASSIGN_USER_TAGS_DEFAULT,
+  allowedAssignTags,
+  canActForEnded,
+  canAgentAssignUser,
+  canWorkerComment,
+  D62_ASSIGN_REFUSAL,
+  type EndedGrantReason,
+  type WorkerCommentReason,
+} from './authz.js';
 import './errors.js';
 import { bumpTicketMessage, openingMessage } from './opening.js';
 import type { TicketSessionInfo, TicketSessions } from './sessions.js';
@@ -78,6 +87,16 @@ export type Caller =
 interface EndedGrant {
   forSession: string;
   why: EndedGrantReason;
+}
+
+/** What the audit row for an allowed assignment to a person (`ticket.agent_assigned_person`) says; the ticket id is added once it exists. */
+interface AssignedPersonAudit {
+  action: 'create' | 'update';
+  actor: string;
+  actorKind: 'agent' | 'token';
+  sessionId: string | null;
+  leadId: string | null;
+  allowedTag: string | null;
 }
 
 /** The identity a change is recorded under. */
@@ -173,6 +192,8 @@ export interface TicketsOptions {
   orphanAfterMin?: () => number;
   /** FR20: open agent-made tickets a workspace may hold (`tickets.agentOpenPerWorkspace`). Default {@link OPEN_PER_WORKSPACE}. */
   agentOpenPerWorkspace?: () => number;
+  /** FR9c (D-62, T-483): the tags that let an agent put a ticket on a person (`tickets.agentAssignUserTags`). Default `production`. */
+  agentAssignUserTags?: () => string;
 }
 
 /** One move the orphan sweep made (T-270 layer 3): where the ticket went and why. `to` null: back in the agents' queue. */
@@ -235,6 +256,7 @@ export class Tickets {
   readonly #refs: TicketsOptions['workspaceRefs'];
   readonly #orphanAfterMin: () => number;
   readonly #agentOpenPerWorkspace: () => number;
+  readonly #agentAssignUserTags: () => string;
   #orphans: { lastRunAt: string | null; dead: Record<string, string> } | null = null;
 
   constructor(
@@ -247,6 +269,7 @@ export class Tickets {
     this.#refs = opts.workspaceRefs;
     this.#orphanAfterMin = opts.orphanAfterMin ?? (() => ORPHAN_DEFAULT_MIN);
     this.#agentOpenPerWorkspace = opts.agentOpenPerWorkspace ?? (() => OPEN_PER_WORKSPACE);
+    this.#agentAssignUserTags = opts.agentAssignUserTags ?? (() => AGENT_ASSIGN_USER_TAGS_DEFAULT);
   }
 
   /* ---------- The workspace column (T-42 slice 3): written as the stable id, read as the key, matched in either form ---------- */
@@ -745,6 +768,51 @@ export class Tickets {
     return { kind: 'session', session: s };
   }
 
+  /**
+   * FR9c (D-62, T-483): an agent may not put a ticket on a person without an allowed tag (authz.ts `canAgentAssignUser`). A refusal is
+   * FORBIDDEN with the D-62 path (not a 404: the agent may see the ticket) and one `ticket.agent_assign_refused` audit row (ids and tags only).
+   */
+  #assertAgentAssign(caller: Caller, w: Writer, facts: { ticketId: string | null; action: 'create' | 'update'; assigneeAfter: 'session' | 'user' | null; assignsUser: boolean; tagsBefore: readonly string[]; tagsAfter: readonly string[] }): AssignedPersonAudit | null {
+    // An admin's token acting for a session is never refused, but the assignment it makes to a person is audited (T-483).
+    const forSession = caller.kind === 'token' && w.session !== null;
+    if (caller.kind !== 'agent' && !forSession) return null;
+    let raw: unknown = AGENT_ASSIGN_USER_TAGS_DEFAULT;
+    try {
+      raw = this.#agentAssignUserTags();
+    } catch {
+      // the setting could not be read: the built-in default holds
+    }
+    const allowedTags = allowedAssignTags(raw);
+    const d = canAgentAssignUser({ callerKind: caller.kind, assigneeAfter: facts.assigneeAfter, assignsUser: facts.assignsUser, tagsBefore: facts.tagsBefore, tagsAfter: facts.tagsAfter, allowedTags });
+    if (d.allow) {
+      if (!facts.assignsUser) return null;
+      const allowedTag = facts.tagsAfter.find((t) => allowedTags.includes(t)) ?? null;
+      return { action: facts.action, actor: w.actor, actorKind: caller.kind === 'agent' ? 'agent' : 'token', sessionId: w.session?.id ?? null, leadId: w.session?.parentId ?? null, allowedTag };
+    }
+    this.onAudit?.({
+      kind: 'ticket.agent_assign_refused',
+      actor: w.actor,
+      actorLabel: null,
+      userId: FOUNDING_USER_ID,
+      subject: facts.ticketId ? `ticket:${facts.ticketId}` : null,
+      detail: { ticketId: facts.ticketId, action: facts.action, sessionId: w.session?.id ?? null, leadId: w.session?.parentId ?? null, tags: [...facts.tagsAfter], allowedTags, why: d.why },
+    });
+    throw new AppError('FORBIDDEN', D62_ASSIGN_REFUSAL);
+  }
+
+  /** The audit row for an allowed assignment to a person (ids, actor kind and the allowing tag; no ticket text). Called after the write. */
+  #auditAssignedPerson(a: AssignedPersonAudit | null, ticketId: string) {
+    if (!a) return;
+    this.onAudit?.({
+      kind: 'ticket.agent_assigned_person',
+      actor: a.actor,
+      actorLabel: null,
+      userId: FOUNDING_USER_ID,
+      subject: `ticket:${ticketId}`,
+      detail: { ticketId, action: a.action, actorKind: a.actorKind, sessionId: a.sessionId, leadId: a.leadId, allowedTag: a.allowedTag },
+    });
+  }
+
   /** FR20: the queue is protected from a looping agent. */
   #createLimit(caller: Caller) {
     if (caller.kind === 'ui' || caller.kind === 'system' || caller.kind === 'trigger') return; // a trigger has its own limits
@@ -774,6 +842,7 @@ export class Tickets {
     const priority = req.priority === undefined ? 'normal' : oneOf(req.priority, TICKET_PRIORITIES, 'priority');
     const tags = cleanTags(req.tags);
     const assignee = this.#assignee(caller, req.assignee);
+    const assignedAudit = this.#assertAgentAssign(caller, w, { ticketId: null, action: 'create', assigneeAfter: assignee?.kind ?? null, assignsUser: assignee?.kind === 'user', tagsBefore: [], tagsAfter: tags });
     // An agent's ticket concerns its own workspace; a session assignee's workspace is where the work is.
     let workspaceId = caller.kind === 'agent' ? caller.workspaceId : workspaceIdOf(req.workspaceId);
     if (assignee?.kind === 'session') workspaceId = assignee.session.workspaceId;
@@ -804,6 +873,7 @@ export class Tickets {
       if (assignee) this.#addEvent(n, 'assigned', w, null, { from: null, to: assignee.kind === 'session' ? { kind: 'session', sessionId: assignee.session.id } : { kind: 'user', name: assignee.name } });
       return n;
     });
+    this.#auditAssignedPerson(assignedAudit, ticketIdOf(number));
     this.onChange?.();
     return this.#items([this.#row(number)!])[0]!;
   }
@@ -842,11 +912,15 @@ export class Tickets {
 
     // Assignee first: it can move the status (unassigning an in-progress ticket puts it back in the queue) and the workspace.
     let status = row.status;
+    let assigneeAfter = row.assignee_kind;
+    let assignsUser = false;
     if (req.assignee !== undefined) {
       const a = this.#assignee(caller, req.assignee);
       const before = row.assignee_kind ? `${row.assignee_kind}:${row.assignee_ref}` : null;
       const after = a ? (a.kind === 'session' ? `session:${a.session.id}` : `user:${a.name}`) : null;
       if (before !== after) {
+        assigneeAfter = a ? a.kind : null;
+        assignsUser = a?.kind === 'user';
         sets.assignee_kind = a ? a.kind : null;
         sets.assignee_ref = a ? (a.kind === 'session' ? a.session.id : a.name) : null;
         entries.push({
@@ -860,6 +934,7 @@ export class Tickets {
         if (!a && status === 'in_progress') status = 'open';
       }
     }
+    const assignedAudit = this.#assertAgentAssign(caller, w, { ticketId: ticketIdOf(row.number), action: 'update', assigneeAfter, assignsUser, tagsBefore: tags, tagsAfter: newTags ?? tags });
     if (req.workspaceId !== undefined && !('workspace_id' in sets)) {
       if (agent) throw new AppError('FORBIDDEN', 'An agent’s tickets stay in its own workspace.');
       const v = workspaceIdOf(req.workspaceId);
@@ -895,6 +970,7 @@ export class Tickets {
       for (const e of entries) this.#addEvent(row.number, e.kind, w, e.body ?? null, e.data);
     });
     this.#auditForEnded(grant, w, row, 'update');
+    this.#auditAssignedPerson(assignedAudit, ticketIdOf(row.number));
     this.onChange?.();
     return this.#items([this.#row(row.number)!])[0]!;
   }

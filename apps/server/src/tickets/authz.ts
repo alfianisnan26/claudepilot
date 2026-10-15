@@ -75,6 +75,48 @@ export function canActForEnded(facts: {
   return { allow: false, why: 'live_successor' };
 }
 
+/* ---------- An agent puts a ticket on a person (D-62, T-483) ---------- */
+
+/** The refusal an agent reads: the D-62 path instead of a person. */
+export const D62_ASSIGN_REFUSAL =
+  'D-62: agents do not assign tickets to a person. Decide by the written default and note it on the ticket; a production step goes on the owner checklist (tag production); a rule change goes through a blind reviewer and the coordinator.';
+
+/** The tags that let an agent's ticket wait for a person when the setting is absent or unreadable. */
+export const AGENT_ASSIGN_USER_TAGS_DEFAULT = 'production';
+
+/** `tickets.agentAssignUserTags` as a list: comma or space separated, lowercase. Not a string: the default. Empty: no tag allows it. */
+export function allowedAssignTags(raw: unknown): string[] {
+  const s = typeof raw === 'string' ? raw : AGENT_ASSIGN_USER_TAGS_DEFAULT;
+  return [...new Set(s.split(/[\s,]+/).map((t) => t.trim().toLowerCase()).filter(Boolean))];
+}
+
+export type AgentAssignDecision = { allow: true } | { allow: false; why: 'no_allowed_tag' };
+
+/**
+ * THE rule for an agent putting a ticket on a person (FR9c, D-62, T-483), the tickets module's `can()` for it. Only an agent's own token
+ * (a chat session or a crew worker) is judged: a person, the portal, an admin's token and a trigger a person made are never refused. The
+ * agent is refused when, after its change, the ticket is on a person (`user`, `user:<name>`) without a tag the owner allows
+ * (`allowedTags`), and its change is what puts it there: it creates it so, moves it to a person (or another person), or removes the
+ * last allowed tag from a ticket a person holds. A ticket already on a person that the change leaves so is not judged again.
+ * Pure: the service gathers the facts, refuses with {@link D62_ASSIGN_REFUSAL} and writes the audit row.
+ */
+export function canAgentAssignUser(facts: {
+  callerKind: 'ui' | 'system' | 'token' | 'agent' | 'trigger';
+  /** The holder after the change. */
+  assigneeAfter: 'session' | 'user' | null;
+  /** The change sets the assignee to a person (a new ticket, or a different holder than before). */
+  assignsUser: boolean;
+  tagsBefore: readonly string[];
+  tagsAfter: readonly string[];
+  allowedTags: readonly string[];
+}): AgentAssignDecision {
+  if (facts.callerKind !== 'agent' || facts.assigneeAfter !== 'user') return { allow: true };
+  const allowed = (tags: readonly string[]) => tags.some((t) => facts.allowedTags.includes(t));
+  if (allowed(facts.tagsAfter)) return { allow: true };
+  if (facts.assignsUser || allowed(facts.tagsBefore)) return { allow: false, why: 'no_allowed_tag' };
+  return { allow: true };
+}
+
 /* ---------- A crew worker reports on its work (T-294, T-397) ---------- */
 
 /** Why a worker may comment: the ticket its spawn named (`spawn_ticket`), or a ticket its lead holds (`lead_ticket`). */

@@ -3,6 +3,7 @@
 
 import { TICKET_SETTING_KEYS } from '@portal/contracts';
 import { defineSetting, defineSettingGroup } from '../settings/registry.js';
+import { AGENT_ASSIGN_USER_TAGS_DEFAULT } from './authz.js';
 
 defineSettingGroup('tickets', 'Tickets', 44);
 
@@ -30,4 +31,19 @@ defineSetting({
   order: 20,
   label: 'Open agent tickets per workspace',
   help: 'How many open tickets agents may have made in one workspace before the portal refuses another (FR20, the queue is protected from a looping agent). Several programs can share a workspace; a person is never limited.',
+});
+
+// D-62 (T-483): an agent may put a ticket on a person only with one of these tags. Owner only (the settings route); no agent tool writes it.
+defineSetting({
+  key: TICKET_SETTING_KEYS.agentAssignUserTags,
+  type: 'string',
+  default: AGENT_ASSIGN_USER_TAGS_DEFAULT,
+  protective: AGENT_ASSIGN_USER_TAGS_DEFAULT,
+  confirmText: 'Agents may then assign more tickets to a person.',
+  max: 200,
+  scope: 'global',
+  group: 'tickets',
+  order: 30,
+  label: 'Agent to person',
+  help: 'Tags (comma separated) that let an agent assign a ticket to a person (D-62). Without one the portal refuses and points the agent to the written default. Empty: agents never assign to a person. A person, the page and admin tokens are never limited.',
 });
