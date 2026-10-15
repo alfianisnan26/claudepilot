@@ -42,8 +42,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - 14:30 Coordinator (D-65 idle slots): workers waiting on the one-at-a-time cluster hold slots; over 120k they end after their
   ticket. 7d33708d ended, T-576 started in its slot. The cluster queue (D-61), not the workers, is the bottleneck.
 - 15:50 Workspace restarted 13:46 UTC; 03c496b6 (T-546, mid-Jobs) and cee43422 (T-486 port, WAITING 3cb0883) are gone, all branches
-  pushed and clean. Deploy #39 (coordinator, RBAC + T-557 fix) holds the cluster ~30 min, then ONE more restart: nothing long till then.
-  The coordinator runs the deploys today (#38, #39); I start none until it says so.
+  pushed and clean. Deploy #39 (coordinator, RBAC + T-557 fix) holds the cluster, finishes by itself. 14:05 Coordinator AWAY (owner offline): restart POSTPONED, long work OK, Mac runner off.
+  The coordinator ran #38/#39; I start no deploy until it is back.
   After it: fresh workers re-run T-546's Jobs on bb7cdb0 and T-486's on 3cb0883.
 - 12:50 Coordinator: it builds T-557 itself (owner's ask); no T-557 slices from me; T-426 stays mine; a line on T-557 when I touch
   ci/ or connect/ in a big way. (Supersedes 12:45's fold of T-426 into the lease.)
