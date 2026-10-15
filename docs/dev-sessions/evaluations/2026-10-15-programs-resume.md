@@ -101,3 +101,16 @@ d354977, live after the next deploy and each Claude's next start); until then an
 QA briefs stay narrow (the diff, the criteria, logs through grep or tail). Expected effect (ESTIMATE): requests of the big sessions read
 about half to a third of today's context, so their cost per request falls by the same factor. Measure after the deploy: context p50 and
 cost per request of workers and leads, the spike count per day.
+
+### Second cost source: a restart storm (05:30 UTC)
+
+MEASURED (chat audit, and `delivery_events` read-only from the portal database): 87 automatic session restarts with why `mcp` in three
+hours, about 30 an hour, every live lead and worker restarted 3 to 6 times. 11 of the 13 deliveries into the workspace in that time were
+the pool `claudepilot-context-pack` (T-292 slice 2): every push to integration that changes `docs/context-pack.md` made a new revision
+(30 today), each delivery marked every live session's config as changed, and the portal restarted them all at the next boundary. A restart
+re-reads the whole context and writes it to the prompt cache again; Konfersi and Event sessions restarted for ClaudePilot's pack. One
+example: the ClaudePilot lead's 11 USD turn at 05:18 included such a restart.
+
+Done: the pool is off the workspace (05:29); ClaudePilot sessions read `docs/context-pack.md` themselves. T-472: context-only deliveries
+never restart (Claude Code re-reads managed instructions), the rest debounced, the pack scoped to its own repository. Measure: restarts with
+why `mcp` per hour, before and after.
