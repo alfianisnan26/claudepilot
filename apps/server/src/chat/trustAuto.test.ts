@@ -236,44 +236,53 @@ test('worktree: the repository’s trust at the same hash is still copied (porta
   }
 });
 
-test('worktree (T-435): a linked skill, a hook or an MCP server is outside the hash: the repository’s trust is not copied at the same hash, the worktree waits for a person', async () => {
+// T-435: the portal:worktree copy at the same hash passes the same-repo checks first. What trustscan prints for a committed
+// .claude/skills/x/SKILL.md that is a RELATIVE link (host.test.ts): the hash stops at the link, so it is the clean repository's H1,
+// and the link may resolve elsewhere from the worktree.
+const LINKED = rules(H1, { origin: ORIGIN_SCP, extras: ['unreadable'], rulesOnly: false });
+const HOOKED = rules(H1, { origin: ORIGIN_SCP, hooks: ['SessionStart'], rulesOnly: false });
+const SERVED = rules(H1, { origin: ORIGIN_SCP, files: ['.mcp.json', '.claude/settings.json'], mcpServers: ['tools'], rulesOnly: false });
+
+/** A portal worktree of REPO (trusted at H1) with `table`'s scans (REPO's and the worktree's) waits, policy off and on, and nothing is trusted. */
+async function worktreeWaits(table: { repo: string; wt: string }, refusal: string) {
   const s = await liveSession();
   try {
     new ChatStore(s.store).saveFolderTrust('docker/ws1', REPO, H1, {}, 'ui');
-    // What trustscan prints for a committed .claude/skills/x/SKILL.md that is a RELATIVE link (host.test.ts): the hash stops at the
-    // link, so it is the clean repository's H1, and the link may resolve elsewhere from the worktree.
-    const linked = rules(H1, { origin: ORIGIN_SCP, extras: ['unreadable'], rulesOnly: false });
-    const hook = rules(H1, { origin: ORIGIN_SCP, hooks: ['SessionStart'], rulesOnly: false });
-    const mcp = rules(H1, { origin: ORIGIN_SCP, files: ['.mcp.json', '.claude/settings.json'], mcpServers: ['tools'], rulesOnly: false });
-    const cases: [string, Record<string, string> | string, string][] = [
-      ['a relatively linked skill', linked, UNREADABLE],
-      ['a hook', hook, HOOKS],
-      ['an MCP server', mcp, MCP],
-      // The other way round: the repository's own scan stopped at a link, so it can't vouch for the worktree's skills.
-      ['the repository’s linked skill', { [REPO]: linked }, NO_SAME_REPO],
-    ];
-    for (const [why, out, refusal] of cases) {
-      s.ws.scanFor = (f) => (typeof out === 'string' ? out : (out[f] ?? rules(H1, { origin: ORIGIN_SCP })));
-      // The policy off: the person is asked, as on the same-repo path.
-      s.controller.autoTrustRules = () => false;
-      let e = await err(s.controller.create({ workspaceId: 'docker/ws1', cwd: REPO, worktree: {} }));
-      assert.deepEqual([codeOf(e), e?.message], [CHAT_FOLDER_UNTRUSTED, FOLDER_NOT_TRUSTED], why);
-      let scan = (e as unknown as { details: ChatFolderScan }).details;
-      assert.equal(scan.worktree?.repo, REPO, `${why}: the retry’s plan rides along`);
-      assert.equal(trustRow(s, scan.folder), undefined, why);
-      // The policy on: it waits too, saying why.
-      s.controller.autoTrustRules = () => true;
-      e = await err(s.controller.create({ workspaceId: 'docker/ws1', cwd: REPO, worktree: {} }));
-      assert.equal(codeOf(e), CHAT_FOLDER_UNTRUSTED, why);
-      assert.equal(refusalOf(e), refusal, why);
-      scan = (e as unknown as { details: ChatFolderScan }).details;
-      assert.equal(trustRow(s, scan.folder), undefined, why);
-    }
+    s.ws.scanFor = (f) => (f === REPO ? table.repo : table.wt);
+    // The policy off: the person is asked, as on the same-repo path.
+    let e = await err(s.controller.create({ workspaceId: 'docker/ws1', cwd: REPO, worktree: {} }));
+    assert.deepEqual([codeOf(e), e?.message], [CHAT_FOLDER_UNTRUSTED, FOLDER_NOT_TRUSTED]);
+    let scan = (e as unknown as { details: ChatFolderScan }).details;
+    assert.equal(scan.worktree?.repo, REPO, 'the retry’s plan rides along');
+    assert.equal(trustRow(s, scan.folder), undefined);
+    // The policy on: it waits too, saying why.
+    s.controller.autoTrustRules = () => true;
+    e = await err(s.controller.create({ workspaceId: 'docker/ws1', cwd: REPO, worktree: {} }));
+    assert.equal(codeOf(e), CHAT_FOLDER_UNTRUSTED);
+    assert.equal(refusalOf(e), refusal);
+    scan = (e as unknown as { details: ChatFolderScan }).details;
+    assert.equal(trustRow(s, scan.folder), undefined);
     assert.equal(s.controller.audit({ kind: 'trust.auto' }).length, 0);
     assert.deepEqual(trustRow(s, REPO), { scan_hash: H1, actor: 'ui' }, 'the repository’s own trust is untouched');
+  } finally {
+    await s.done();
+  }
+}
 
-    // A clean repository at the same hash still gets the copy, with the policy off (no audit, as before).
-    s.controller.autoTrustRules = () => false;
+test('worktree (T-435, a): a committed skill that is a relative link is outside the hash: the repository’s trust is not copied, it waits', () =>
+  worktreeWaits({ repo: LINKED, wt: LINKED }, UNREADABLE));
+
+test('worktree (T-435, b): a hook in the repository’s settings: not copied, it waits', () => worktreeWaits({ repo: HOOKED, wt: HOOKED }, HOOKS));
+
+test('worktree (T-435, c): an MCP server: not copied, it waits', () => worktreeWaits({ repo: SERVED, wt: SERVED }, MCP));
+
+test('worktree (T-435): the repository’s own scan stopped at a link (unequal extras): it can’t vouch for the worktree, which waits', () =>
+  worktreeWaits({ repo: LINKED, wt: rules(H1, { origin: ORIGIN_SCP }) }, NO_SAME_REPO));
+
+test('worktree (T-435, d): a clean repository at the same hash still gets the copy, policy off (portal:worktree, no audit)', async () => {
+  const s = await liveSession();
+  try {
+    new ChatStore(s.store).saveFolderTrust('docker/ws1', REPO, H1, {}, 'ui');
     s.ws.scanFor = () => rules(H1, { origin: ORIGIN_SCP });
     const same = await start(s, { cwd: REPO, worktree: {} });
     assert.notEqual(same.cwd, REPO);
