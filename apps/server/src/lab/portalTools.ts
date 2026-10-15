@@ -167,17 +167,17 @@ export function registerLabTools(lab: Lab, registry: ToolRegistry = portalTools)
       compare: z.boolean().optional().describe('With the previous window too. Default true.'),
       ...fullInput,
     }),
-    handler(ctx, args) {
+    async handler(ctx, args) {
       const own = ctx.isAgent ? ctx.sessionId : null;
       if (ctx.isAgent && !own) throw new PortalToolError('FORBIDDEN', 'This token is not bound to a session.');
-      const s = lab.scorecard({ window: args.window ?? 'day', compare: args.compare ?? true, ...(args.program ? { program: args.program } : {}), ...(own ? { sessionId: own } : {}) });
+      const s = await lab.scorecardWithPace({ window: args.window ?? 'day', compare: args.compare ?? true, ...(args.program ? { program: args.program } : {}), ...(own ? { sessionId: own } : {}) });
       if (!s) throw new PortalToolError('NOT_FOUND', 'No such program.');
       const scope = own ? 'program' : 'portal';
       const summary = `${s.programs.length} program${s.programs.length === 1 ? '' : 's'} over the last ${s.window}${own ? ' (your own program only)' : ''}. Dollars are estimates.`;
       // Full: every figure without its own `source` (the `basis` map names each source once), so a portal of a few programs and two windows
       // stays under the result limit (MAX_RESULT_CHARS); the route keeps the sources on each figure.
-      if (args.full) return { summary, scope, ...s, programs: s.programs.map(withoutSources) };
-      return { summary, scope, window: s.window, programs: s.programs.map(scoreShort), more: 'full: true for every figure with its basis, types, CI, deploys, efficiency, health and the review list; basis names the sources.' };
+      if (args.full) return { summary, scope, ...s, ...(s.headline ? { headline: withoutSources(s.headline) } : {}), programs: s.programs.map(withoutSources) };
+      return { summary, scope, window: s.window, ...(s.headline ? { headline: s.headline } : {}), programs: s.programs.map(scoreShort), more: 'full: true for every figure with its basis, types, CI, deploys, efficiency, health and the review list; basis names the sources.' };
     },
   });
 

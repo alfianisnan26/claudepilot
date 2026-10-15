@@ -8,7 +8,7 @@ const gone = (reason: CrewFigure['reason'] = 'no_samples'): CrewFigure => fig(nu
 
 test('the summary grid follows the card width, never the viewport', () => {
   assert.ok(!/(^|\s)(sm|md|lg|xl|2xl):/.test(SUMMARY_GRID_CLASS));
-  assert.match(SUMMARY_GRID_CLASS, /@sm:grid-cols-3/);
+  assert.match(SUMMARY_GRID_CLASS, /@min-\[366px\]:grid-cols-3/);
   assert.match(SUMMARY_GRID_CLASS, /@xl:grid-cols-5/);
 });
 

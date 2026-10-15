@@ -8,6 +8,7 @@
 import { CREW_WINDOW_MS, type CrewScorecard, type CrewWindow, type LabExperiment, type LabExperimentReport, type LabExperimentView, type LabPeriod, type LabSliceMetrics, type LabSliceView, type LabSummary, type LabTicketCost } from '@portal/contracts';
 import { programIdOf, programScore, programsOf, SCORECARD_BASIS } from './scorecard.js';
 import { loadCrewFacts } from './scorecardData.js';
+import { buildHeadline, type PaceClaude, type PaceSource } from './headline.js';
 import type { Store } from '../store/store.js';
 import { chainOf } from '../usagespend/attribution.js';
 import { SpendStore } from '../usagespend/store.js';
@@ -28,7 +29,7 @@ export class Lab {
   readonly #ingest: LabIngest;
   #timers: NodeJS.Timeout[] = [];
 
-  constructor(private readonly opts: { store: Store; now?: () => number; log?: (msg: string) => void; tickets?: TicketReader }) {
+  constructor(private readonly opts: { store: Store; now?: () => number; log?: (msg: string) => void; tickets?: TicketReader; paceSource?: PaceSource }) {
     const now = opts.now ?? Date.now;
     this.#ingest = new LabIngest(() => (opts.store.writable ? opts.store.db : null), now, (s) => {
       const db = this.#db();
@@ -203,7 +204,7 @@ export class Lab {
    * before it with `compare`). `program` keeps one; `sessionId` (an agent's own read) keeps only the program that session is in, none when it
    * is in none. A program asked for that is not there (or not the session's) is null: the caller answers not found.
    */
-  scorecard(opts: { window: CrewWindow; compare?: boolean; program?: string; sessionId?: string }): CrewScorecard | null {
+  scorecard(opts: { window: CrewWindow; compare?: boolean; program?: string; sessionId?: string; paces?: readonly PaceClaude[] | null }): CrewScorecard | null {
     const nowMs = this.#now();
     const windowMs = CREW_WINDOW_MS[opts.window];
     const compare = opts.compare ?? true;
@@ -215,7 +216,23 @@ export class Lab {
     if (opts.program && (!programs.has(opts.program) || (own !== undefined && own !== opts.program))) return null;
     const keep = [...programs.values()].filter((p) => (opts.program ? p.id === opts.program : own === undefined || p.id === own));
     const scores = keep.map((p) => programScore(p, facts, windowMs, compare)).sort((a, b) => (b.current.cost.total.value ?? 0) - (a.current.cost.total.value ?? 0) || a.program.localeCompare(b.program));
-    return { ...empty, programs: scores };
+    // T-600: the headline over the same programs. Pace is quota data of every Claude: an agent's read never gets it.
+    const paces = opts.sessionId !== undefined ? null : opts.paces ?? null;
+    const headline = buildHeadline({ programs: keep, facts, windowMs, compare, paces });
+    return { ...empty, programs: scores, headline };
+  }
+
+  /** `scorecard` with the Claudes' paces read from claudeusage (`paceSource`); an agent's read skips it. A source that fails is `no_source`. */
+  async scorecardWithPace(opts: { window: CrewWindow; compare?: boolean; program?: string; sessionId?: string }): Promise<CrewScorecard | null> {
+    let paces: readonly PaceClaude[] | null = null;
+    if (opts.sessionId === undefined && this.opts.paceSource) {
+      try {
+        paces = await this.opts.paceSource();
+      } catch (e) {
+        this.opts.log?.(`lab: pace source failed (${e instanceof Error ? e.name : 'error'})`);
+      }
+    }
+    return this.scorecard({ ...opts, paces });
   }
 
   /** Each experiment with its arms' n, accepted count and the primary (median loaded cost per accepted slice) with its interval. */
