@@ -10,7 +10,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   Carries T-486 S1, T-490, T-450 S3, T-524 S1, T-515, T-527. CLOSED T-527 (live D-62 refusal 10:42) and T-515.
 
 ## IN FLIGHT (3 of 4 workers, D-65): T-561 a649874 blind review PASS W/ CONDITIONS (5227; 65914e62 ended); decision 5230:
-  7f11145e impl-t561-s1b (sonnet) on ticket/T-561-s1b fixes the 6 findings. d2e7b532 impl-t576 (sonnet) T-576 Runners UI Jobs (GO 14:20). T-558 e652c44: 7d33708d ended (125k, coordinator); QA runs its Jobs (5052).
+  7f11145e impl-t561-s1b (sonnet) on ticket/T-561-s1b fixes the 6 findings: WAITING fc35ded. d2e7b532 impl-t576 (sonnet) T-576 Runners UI Jobs (GO 14:20). T-558 e652c44: 7d33708d ended (125k, coordinator); QA runs its Jobs (5052).
   cee43422 impl-t486-s2c (opus, why secret-path collision) WAITING 3cb0883 (one helper deliveredSecretValue; T-557 lines kept),
   d23cb713 impl-t548 (sonnet) T-548 S1 WAITING 9b822ba (design 5152; migration 779, T-561 has 778). T-486 QA PASS W/ GAPS 5125.)
   T-546 bb7cdb0: 03c496b6 ended (118k, restart cut its Jobs; 5143): a fresh sonnet worker runs its Jobs after the restart.
