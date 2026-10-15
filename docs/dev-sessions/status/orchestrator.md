@@ -15,13 +15,14 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - IMPL a6a0ea9d (impl-t548-s1b, ticket/T-548-s1b from 9b822ba) on T-548 S1b (5515); then QA Perf (S1+S1b together).
 - T-619 egress review 2590789a PASS WITH CONDITIONS 5627 (ended) -> coordinator 5629: owner ack on D-60 relax before #41 release; T-624 follow-up.
 - FRONTEND: 6a1a061e DONE FE S1b 32985e2 (5621) -> QA UI; ended (slot for T-619). Respawn for T-556 (5497/5525) after T-486, or FE S1c on QA UI FAIL.
-- IMPL 7ec2dc72 (ticket/T-426-s1b-review) on T-426 S1b.
+- REVIEWER 14385e7d (opus): T-426 2nd blind review.
 - Lane respawn = new base (lane-backend has no ff, T-595 5553).
 - Merge notes: T-546 merges 10b22e0, not branch head 0004ac5. T-486 = S2d 2979f99 + S2e ea1c006. Ended: 5f8f392b, 74a8d857, 83921ca7,
   f13a9442, 4ba6c5db, d4c49b5c, 219d5558. T-619: review CHANGES 5575 -> coordinator lands the named list (5584). No prettier/eslint in Jobs (T-612).
 - 16:12 OWNER PRIORITY (coordinator, T-426 5538): T-401 then T-426 FIRST (Konfersi QA UI needs stg login in a Job; done = T-617 screenshots).
   T-426 ab93b54: QA Perf PASS 33/33 (5564) but blind review d4c49b5c FAIL 5571 (sev 2: refused arg echoed, pasted hex secret printed).
-  IMPL 7ec2dc72 (impl-t426-s1b, sonnet, ticket/T-426-s1b-review) -> QA Perf re-probe -> 2nd blind review -> gate -> merge on T-401 ack.
+  S1b DONE 350dd399 (5661; 36/36; lead read the diff: no echo, len>=8, xtrace refused, --out scan) -> QA Perf re-probe (front) +
+  2nd blind review 14385e7d (opus, why security) in parallel -> gate -> merge on T-401 ack.
   T-401 re-merged wip/main-54ba328: gate GREEN gate-54ba328-6502 (suite 570 s, peak 2228Mi; 5560/5562); ff only on the person's ack (4941).
 - T-379 S2 3f11b28 PASS (4948; review 4938) -> merge after T-401. T-401 060aca4: review 4936, QA 4943; HELD on the ack (4941).
 - T-416 (high incident): S1 d37c5f0; QA b1aa2e47 PASS WITH GAPS (4623: 995/999 0 fail job-2c410105; mutations A2/B/C caught);
