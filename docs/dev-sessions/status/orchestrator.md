@@ -9,13 +9,14 @@ Older log: `orchestrator-log-2026-10-14.md` (same folder). Previous hand-over: c
 - Ended workers: 7be4aeac (T-366 reviewer, verdict copied below), 2005bc7f (old T-321/T-312 verifier; T-312 already closed, UI part is T-354).
 
 ## IN FLIGHT
-- T-366 (urgent): reviewer 7be4aeac = SAFE AFTER FIXES on d647d14. B1 runner deny-list -> vetted allow list; M1 any outside path broad; M2 skills/commands/agents frontmatter (stricter only); m1 help text. NEXT STEP: implementer worker (opus, high) on dev/t-366-1, then a fresh reviewer. Dispatch failed 01:26: portal MCP down (pod 0/1, restarting).
-- T-369 (urgent): implementer 151ab26d done at 731fa28 (web 575/575 job a4d4c68e, typecheck 8a1fd102). NEXT STEP: ux-checker worker (sonnet) on 731fa28; then T-375 to 151ab26d. Dispatch failed with the portal.
+- T-366 (urgent): reviewer 7be4aeac = SAFE AFTER FIXES on d647d14. B1 runner deny-list -> vetted allow list; M1 any outside path broad; M2 skills/commands/agents frontmatter (stricter only); m1 help text. 01:55 Agent-tool SUB-AGENT implementer (opus) on dev/t-366-1 (ends with this chat; branch pushed is the resume point). Then a fresh reviewer.
+- T-369 (urgent): implementer 151ab26d done at 731fa28 (web 575/575 job a4d4c68e, typecheck 8a1fd102). 01:55 Agent-tool SUB-AGENT ux-checker (sonnet) on 731fa28. Then T-375 to 151ab26d (needs the portal MCP to message it).
 - T-349: implementer a893d274 on dev/t-349-1 b58d4b7, proof job 07f615ed (3 new tests fail on base). Lead read controller diff: live check repeated with no await before insert, OK. WAIT FOR: its typecheck + chat/portalmcp job (messaged 01:24), then a verifier worker.
 - T-352: implementer 0571ff1c on dev/t-352-1 aa8b815. WAIT FOR: its ACTUAL (messaged 01:24), then a verifier.
 - T-321: dev/t-321-2 74bbb76 (set A 15/15 on the fix, job 59b3c5d7). Left: set B (base under the same load) by a qa-verifier worker when a slot frees. T-369 sits on it: merge T-321 first.
 
 ## DECISIONS
+- 01:50 Portal stalled 01:26-01:52 (readiness/liveness timeouts, T-365; coordinator pushed 3438d9b WAL fix to integration, not deployed). This chat's portal MCP did not reconnect: options (a) wait, (b) Agent-tool sub-agents (allowed by the org rules; D-49 does not forbid them). Took (b). Ticket comments and closes are queued here until the MCP is back; sub-agents report in their final message.
 - 01:25 T-366: fix the review's B1/M1/M2/m1 BEFORE merge (a gate change; merging would ship weaker than D-55). M2 only in the stricter direction, so no owner decision. Reason on T-366 (comment pending, portal down).
 - New slices only as session_spawn workers (D-49); at most five in flight (D-43). Quota 01:23: alfian.isnan session 1 %, projection 18 % (claude_usage).
 - Deploy cap three a day; run 31 was the first of 2026-10-15. Next deploy needs images=portal,workspace once T-366 is in.
