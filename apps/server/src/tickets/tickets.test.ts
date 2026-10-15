@@ -350,6 +350,22 @@ test('queue limits: 50 tickets an hour per session, 200 open agent tickets per w
   }
 });
 
+test('the open agent ticket cap per workspace is a setting: several programs share a workspace (2026-10-15: 200 refused the crews)', async () => {
+  let cap = 3;
+  const h = await ticketsHarness({ agentOpenPerWorkspace: () => cap });
+  try {
+    for (let i = 0; i < 3; i++) h.sessions.add({ workspaceId: 'docker/api', id: `s${i}` });
+    for (let i = 0; i < 3; i++) h.tickets.create(agent('docker/api', `s${i}`), { summary: `t${i}` });
+    assert.equal(code(() => h.tickets.create(agent('docker/api', 's0'), { summary: 'over the setting' })), 'RATE_LIMITED');
+    assert.match(String((() => { try { h.tickets.create(agent('docker/api', 's1'), { summary: 'x' }); } catch (e) { return (e as Error).message; } })()), /already has 3 open tickets/);
+    cap = 4; // read at each create: raising the setting lets the crews file again at once
+    assert.equal(h.tickets.create(agent('docker/api', 's1'), { summary: 'after raising it' }).source, 'agent');
+    assert.equal(h.tickets.create(UI, { summary: 'a person is never limited' }).source, 'human');
+  } finally {
+    h.done();
+  }
+});
+
 test('starting a session: created for the ticket, assigned before the message, opened as ticket:<id>', async () => {
   const h = await ticketsHarness();
   try {
