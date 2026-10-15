@@ -183,6 +183,44 @@ test('a symlink inside an allowed folder cannot lead out of it, and a symlink to
   }
 });
 
+test('a link whose target does not exist yet is judged by where it points (QA A), also through a chain', () => {
+  const root = outsideTmp();
+  try {
+    const repo = join(root, 'repo');
+    const status = join(repo, 'docs', 'dev-sessions', 'status');
+    mkdirSync(status, { recursive: true });
+    mkdirSync(join(repo, 'apps'), { recursive: true });
+    symlinkSync(join(repo, 'apps', 'later'), join(status, 'dangling')); // -> apps/later, which does not exist
+    symlinkSync(join(status, 'dangling'), join(status, 'hop')); // a chain: hop -> dangling -> apps/later
+    symlinkSync(join(status, 'fresh'), join(status, 'inside')); // -> status/fresh, which does not exist: stays allowed
+    const command = hookCommand(leadRulesSettings(repo));
+    const call = (path: string) => ({ hook_event_name: 'PreToolUse', tool_name: 'Write', cwd: repo, tool_input: { file_path: path } });
+    assert.equal(runHook(command, call(join(status, 'dangling', 'a.ts'))).code, 2, 'a link to a missing folder under apps, written through');
+    assert.equal(runHook(command, call(join(status, 'dangling'))).code, 2, 'the link itself as the file');
+    assert.equal(runHook(command, call(join(status, 'hop', 'a.ts'))).code, 2, 'a chain of links');
+    assert.equal(runHook(command, call(join(status, 'inside', 'a.md'))).code, 0, 'a missing target that is itself inside the allowed folder');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('an allowed folder that is itself a link into a refused tree allows nothing (QA B)', () => {
+  const root = outsideTmp();
+  try {
+    const repo = join(root, 'repo');
+    mkdirSync(join(repo, 'docs', 'dev-sessions', 'notes'), { recursive: true });
+    mkdirSync(join(repo, 'apps'), { recursive: true });
+    symlinkSync(join(repo, 'apps'), join(repo, 'docs', 'dev-sessions', 'status')); // status -> apps
+    const command = hookCommand(leadRulesSettings(repo));
+    const call = (path: string) => ({ hook_event_name: 'PreToolUse', tool_name: 'Write', cwd: repo, tool_input: { file_path: path } });
+    assert.equal(runHook(command, call(join(repo, 'docs', 'dev-sessions', 'status', 'y.ts'))).code, 2, 'status/y.ts is apps/y.ts: refused');
+    assert.equal(runHook(command, call(join(repo, 'apps', 'y.ts'))).code, 2, 'apps itself stays refused');
+    assert.equal(runHook(command, call(join(repo, 'docs', 'dev-sessions', 'notes', 'n.md'))).code, 0, 'the other allowed folder still works');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('mutation proof: the command’s `|| exit 2` is what refuses when node cannot run (without it the status is the shell’s 127)', () => {
   const command = hookCommand(leadRulesSettings(REPO));
   assert.ok(command.endsWith(' || exit 2'));

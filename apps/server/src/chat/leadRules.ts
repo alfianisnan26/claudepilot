@@ -61,9 +61,12 @@ export function leadAllowedDirs(cwd: string): string[] {
 export function leadHookScript(cwd: string): string {
   const script =
     `const p=require("path"),fs=require("fs");const msg=${JSON.stringify(LEAD_RULES_MESSAGE)};` +
-    // The real path of the nearest existing parent (a symlink out of an allowed folder is followed), the rest of the path appended.
-    `const rp=(a)=>{let t=a,r="";for(;;){try{return p.join(fs.realpathSync(t),r);}catch(e){const u=p.dirname(t);if(u===t)return a;r=p.join(p.basename(t),r);t=u;}}};` +
-    `const ok=${JSON.stringify(leadAllowedDirs(cwd))}.map(rp);` +
+    // The real path of the nearest existing parent, the rest appended. A link whose target does not exist yet is read (readlink) and judged
+    // by where it points, up to 8 levels (a chain or a loop beyond that is refused).
+    `const rp=(a,n)=>{n=n||0;let t=a,r="";for(;;){try{return p.join(fs.realpathSync(t),r);}catch(e){try{const l=fs.readlinkSync(t);if(n>=8)return "/lead-rules-link-loop";return rp(p.join(p.resolve(fs.realpathSync(p.dirname(t)),l),r),n+1);}catch(e2){}const u=p.dirname(t);if(u===t)return a;r=p.join(p.basename(t),r);t=u;}}};` +
+    // An allowed folder that is itself a link leading elsewhere (status -> apps) is dropped: its resolved path must lie where it does under the resolved session folder.
+    `const root=${JSON.stringify(posix.resolve('/', cwd))};const rr=rp(root);` +
+    `const ok=${JSON.stringify(leadAllowedDirs(cwd))}.filter((d)=>d.startsWith(root+"/")?rp(d)===p.join(rr,p.relative(root,d)):true).map((d)=>rp(d));` +
     `let s="";process.stdin.setEncoding("utf8");process.stdin.on("data",(c)=>{s+=c;});process.stdin.on("end",()=>{` +
     `let f="";let base=${JSON.stringify(posix.resolve('/', cwd))};` +
     // A call that carries agent_id comes from a sub-agent: a dispatch, allowed (D-47).
