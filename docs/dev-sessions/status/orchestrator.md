@@ -16,7 +16,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   d23cb713 impl-t548 (sonnet) T-548 S1 WAITING 9b822ba (design 5152; migration 779, T-561 has 778). T-486 QA PASS W/ GAPS 5125.)
   T-546 bb7cdb0: 03c496b6 ended (118k, restart cut its Jobs; 5143): a fresh sonnet worker runs its Jobs after the restart.
   Sweep: PASS T-109/280/282/285, GAP T-259/294/136(?)/338/317/287; nobody can claim in_review tickets -> coordinator (T-525 4659).
-  Cluster: T-486 s2c (now) -> T-548 -> T-561 S1b -> T-546 -> T-558 QA. quick-check unusable by dontAsk workers: T-586 (mine,
+  Cluster: T-486 s2c (now) -> T-576 web build for ux (scratch portal; recipe on T-586 5334) -> T-548 -> T-561 S1b -> T-546 -> T-558 QA. quick-check unusable by dontAsk workers: T-586 (mine,
   coordinator decides); briefs say: its checks in ONE job-run Job. Next free slot: T-546 Jobs, T-558 QA, T-486 review.
 - T-557: the COORDINATOR builds it (dev/t557-runners); 8dc6a739 ended, its 02357fd offered as input (4925). Collision lines on T-557.
 - T-426 (mine again, 4926): ab93b54 --pool-env; the coordinator reuses its secret resolution. QA + blind review after T-401 merges.
