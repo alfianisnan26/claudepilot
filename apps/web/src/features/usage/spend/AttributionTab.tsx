@@ -124,7 +124,7 @@ export function AttributionTab() {
         action={
           <ExportMenu
             items={[
-              { label: 'Attribution · CSV', url: usageSpendApi.attributionCsv(by, range) },
+              { label: 'Attribution · CSV', url: usageSpendApi.attributionCsv(by, range, doneOnly) },
             ]}
           />
         }

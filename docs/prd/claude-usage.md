@@ -1020,7 +1020,7 @@ preloaded files, against today's brief) needs the arm before the brief is writte
   draws outside the blocks and the seed; the fifth review's opt-outs only for drawing roles, only after the draw, only the experiment's
   own draws, a made-up ticket as no ticket on the real tickets table; the tool) and `qa/planStep.test.ts`.
 
-### 28.14 Crew scorecard (T-450 slices S1a and S1b: the read API and `crew_scorecard`; no migration, no UI yet)
+### 28.14 Crew scorecard (T-450 slices S1a, S1b and S2: the read API, `crew_scorecard` and the Usage → Crew tab; no migration)
 
 How well a crew works and what it costs, per PROGRAM and per WINDOW, with the standing decisions it is held to. Read only, over the
 tables the portal already keeps; nothing new is stored.
@@ -1075,6 +1075,18 @@ tables the portal already keeps; nothing new is stored.
   `crew_scorecard` (agent, reach session, read only; the same scoping, `NOT_FOUND`; an admin's token reads every program; short by
   default; `full: true` for every figure with its basis, the sources named once in `basis` so the result stays under the MCP size limit;
   the route keeps a source on each figure). Wire types: `packages/contracts/src/scorecard.ts`.
+- **The page (S2): Usage → Crew** (`?tab=crew`; `features/lab/ScorecardTab.tsx`, pure wording in `scorecardModel.ts`). A window picker (1h, 6h,
+  Day, Week) and Alone / Compare (Compare asks `compare=1` and shows each number's earlier value as "was"); the sources of every figure
+  in one InfoTip. One card per program with five numbers: done per hour, dollars per done ticket (all-in), the lead's share, tickets in
+  review, and breaches (the count of D-61, D-62 and D-63 targets in breach). Each number shows its state (`ok`, `warn`, `breach`, or
+  `unavailable`) and MEASURED, ESTIMATE or UNAVAILABLE, with its source (and the reason when unavailable) in an InfoTip: unavailable reads
+  as the word, never 0. Only breaches take their state from the targets (breach when any is, warn when any warns, unavailable when none could
+  be checked); the review backlog warns when a ticket has waited more than 24 hours (a default of this page, not a decision); the other three
+  have no target, so their state is `ok` when measured. "Details" opens the tables the API returns as lists (done by type, in review with
+  what each waits for, CI by pipeline, deploys, the targets with their offenders), so nothing scrolls sideways. Layout: two numbers a row on a
+  phone, 44 px controls, light and dark. Check: `tools/qa/crew-scorecard.mjs`; tests `scorecardModel.test.ts`.
+- **Attribution export (T-450 S2 fix).** Usage → Attribution's CSV followed `by` and `range` but not the Done filter, so a done-only view
+  exported every ticket; the download now carries `done=1` like the rows (`attributionUrl`, test `attributionUrl.test.ts`).
 - **Known limits.** A done ticket's life cost looks back at most 30 days; waits-for is derived for the current window only; context per
   hour (T-423) is not computed, only hand-overs; the session list is bounded at 5,000 per load.
 - Source: `lab/scorecard.ts` (pure), `lab/scorecardData.ts` (the loader), `Lab.scorecard` (`lab/index.ts`), `lab/routes.ts`,

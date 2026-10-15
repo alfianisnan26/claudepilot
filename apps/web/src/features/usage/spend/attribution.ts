@@ -1,7 +1,7 @@
 // What an attribution row says (docs/prd/claude-usage.md §21): who spent what, by session (a tree: a session's children are rolled up into it),
 // workspace, ticket or persona. Pure, so the wording is tested without a browser. Dollars are estimates; the page's header carries the "est.".
 
-import type { AttributionBy, AttributionReport, AttributionRow, SpendFigure } from '@portal/contracts';
+import type { AttributionBy, ChatUsageRange, AttributionReport, AttributionRow, SpendFigure } from '@portal/contracts';
 import { formatCost } from '@/lib/usage/format';
 
 /** The dimensions the tab offers. (By Claude and by model are the Requests tab's.) */
@@ -11,6 +11,14 @@ export const BY_OPTIONS: { value: AttributionBy; label: string }[] = [
   { value: 'ticket', label: 'Ticket' },
   { value: 'persona', label: 'Persona' },
 ];
+
+/**
+ * The attribution request's URL, for the page's rows and for the CSV download alike, so Export follows the filter the page shows: `done`
+ * (only tickets closed as done in the window) applies to the ticket view only.
+ */
+export function attributionUrl(base: string, by: AttributionBy, range: ChatUsageRange, opts: { done?: boolean; csv?: boolean } = {}): string {
+  return `${base}?by=${by}&range=${range}${opts.done && by === 'ticket' ? '&done=1' : ''}${opts.csv ? '&format=csv' : ''}`;
+}
 
 /** A share of the window's dollars, a percent from 0 to 100: "24 %", or "-" where it cannot be told. */
 export const shareText = (share: SpendFigure): string => (share.basis === 'unavailable' ? '-' : `${Math.round(share.value)} %`);
