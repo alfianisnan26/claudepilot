@@ -10,7 +10,9 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { ToolRegistry } from '../portalmcp/registry.js';
 import { portalMcpHarness } from '../portalmcp/testkit.js';
+import { parseMemoryProbe } from '../workspaces/memory.js';
 import { CREW_REPORT_ACTOR } from './controller.js';
+import { MEMORY_HEADROOM_BYTES, SESSION_MEMORY_ESTIMATE_BYTES, WorkspaceMemory } from './memory.js';
 import { registerChatTools } from './portalTools.js';
 import { controls, init, line, liveSession, ok, sleep, until, USAGE_API_KEY, type Live } from './testkit.js';
 
@@ -180,6 +182,36 @@ test('T-417 review 3: a queued worker whose start fails is ended at once, waits 
     assert.equal(waitNotes(r.s, id), 1, 'it waited once: nothing relaunched it to wait again');
     assert.equal(r.s.ws.starts, starts, 'it never started');
     assert.equal(r.s.controller.history(id).some((e) => e.kind === 'user'), false, 'no instruction went in');
+  } finally {
+    await r.done();
+  }
+});
+
+test('T-416 review 6310 #2: a queued worker refused for memory when its slot comes is ended, and its lead is told it could not start, with the reason', async () => {
+  const r = await mcpRig();
+  try {
+    // Room for one more at the spawn; when the slot comes the workspace is past the line (a newer reading).
+    const limit = 8 * 1024 ** 3;
+    const fits = limit - MEMORY_HEADROOM_BYTES - SESSION_MEMORY_ESTIMATE_BYTES;
+    const st = { used: fits, clock: 1_000_000 };
+    r.s.controller.memory = new WorkspaceMemory({ read: async () => parseMemoryProbe(`max ${limit}\nanon ${st.used}\nactive_file 0\n`, st.clock), now: () => st.clock });
+    const starts = r.s.ws.starts;
+    const spawned = await r.h.call(r.a.secret, 'session_spawn', { prompt: 'Check the parser.', title: 'Parser' });
+    assert.equal(spawned.result?.isError, undefined, JSON.stringify(spawned.raw));
+    const out = spawned.result!.structuredContent.session as { id: string; slot_wait: string | null };
+    assert.match(out.slot_wait ?? '', /^Waiting for a slot/);
+    st.used = fits + 1;
+    st.clock += 60_000;
+    r.caps.perWorkspace = 2; // the slot comes
+    await until(() => r.s.controller.get(out.id)!.state === 'ended', 4000);
+    await until(() => spawnReports(r.s).length > 0, 4000);
+    assert.match(spawnReports(r.s).join('\n'), new RegExp(`Worker ${out.id} could not start \\(Not enough memory in docker/ws1: .*\\), so it was ended before it got any instruction\\.`));
+    assert.equal(r.s.ws.starts, starts, 'it never started');
+    assert.equal(r.s.controller.history(out.id).some((e) => e.kind === 'user'), false, 'no instruction went in');
+    assert.deepEqual(
+      r.s.controller.audit({ kind: 'memory.refused' }).map((a) => a.detail.at),
+      ['queued'],
+    );
   } finally {
     await r.done();
   }

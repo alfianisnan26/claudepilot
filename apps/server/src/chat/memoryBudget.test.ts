@@ -8,7 +8,7 @@ import { AppError } from '@isnanme/core';
 import { parseMemoryProbe, type MemoryReading } from '../workspaces/memory.js';
 import { MEMORY_BUDGET, MEMORY_HEADROOM_BYTES, SESSION_MEMORY_ESTIMATE_BYTES, WorkspaceMemory } from './memory.js';
 import { ChatStore } from './store.js';
-import { liveSession, sleep, until } from './testkit.js';
+import { firstTurn, liveSession, sleep, until, vanish } from './testkit.js';
 
 const GiB = 1024 ** 3;
 const LIMIT = 8 * GiB;
@@ -299,6 +299,99 @@ test('T-416 review 3: a queued start is checked again when its slot comes; while
       ['queued', 'queued'],
     );
   } finally {
+    await s.done();
+  }
+});
+
+/* ---------- T-416 review 6310: each fails on 89e270cc ---------- */
+
+const refusedAt = (s: Awaited<ReturnType<typeof liveSession>>) => s.controller.audit({ kind: 'memory.refused' }).map((a) => a.detail.at);
+
+test('T-416 review 6310 #1: a restart of an asleep session is a wake: refused when memory is short (it stays asleep), runs when there is room', async () => {
+  const s = await liveSession({ idleSleepMs: 200 }, true);
+  try {
+    await until(() => s.controller.get(s.id)!.process === 'asleep', 4000);
+    const b = budget(ONE_FITS + 1);
+    s.controller.memory = b.memory;
+    const starts = s.ws.starts;
+    await assert.rejects(s.controller.restart(s.id), isBudget);
+    assert.equal(s.controller.get(s.id)!.process, 'asleep', 'still asleep');
+    assert.equal(s.ws.starts, starts, 'no process');
+    assert.deepEqual(isRestartRefusal(s), ['restart']);
+    b.set(ONE_FITS);
+    const restarted = await s.answering(s.controller.restart(s.id));
+    assert.equal(restarted.process, 'live');
+    assert.equal(s.ws.starts, starts + 1);
+  } finally {
+    await s.done();
+  }
+});
+
+test('T-416 review 6310 #1: a restart of a gone (interrupted) session is a wake: refused when memory is short, nothing started', async () => {
+  const s = await liveSession();
+  try {
+    await firstTurn(s);
+    await vanish(s);
+    assert.equal(s.controller.get(s.id)!.process, 'gone');
+    const b = budget(ONE_FITS + 1);
+    s.controller.memory = b.memory;
+    const starts = s.ws.starts;
+    await assert.rejects(s.controller.restart(s.id), isBudget);
+    assert.deepEqual([s.controller.get(s.id)!.state, s.controller.get(s.id)!.process], ['interrupted', 'gone']);
+    assert.equal(s.ws.starts, starts, 'no process');
+    assert.deepEqual(isRestartRefusal(s), ['restart']);
+    b.set(ONE_FITS);
+    const restarted = await s.answering(s.controller.restart(s.id));
+    assert.equal(restarted.process, 'live');
+  } finally {
+    await s.done();
+  }
+});
+
+/** Counts the budget checks (a start's, a wake's, a restart's): the liveness round's looks pass a max age and are not counted. */
+class CountedMemory extends WorkspaceMemory {
+  checks = 0;
+  override async reading(workspaceId: string, maxAgeMs?: number) {
+    if (maxAgeMs === undefined) this.checks++;
+    return super.reading(workspaceId, maxAgeMs);
+  }
+}
+
+test('T-416 review 6310 #3: a send while a queued start checks the memory waits for that start: no second check, one launch', async () => {
+  const s = await liveSession();
+  let open: () => void = () => undefined;
+  try {
+    s.controller.setLimits(s.id, { maxWorkers: 3 }, { actor: 'ui' }); // a lead: it never sleeps for the cap
+    s.controller.slotPollMs = 20;
+    const caps = { perWorkspace: 1, total: 10 };
+    s.controller.liveCaps = () => caps;
+    const st = { clock: 1_000_000, gate: null as Promise<void> | null };
+    const memory = new CountedMemory({
+      read: async () => {
+        if (st.gate) await st.gate;
+        return reading(ONE_FITS - SESSION_MEMORY_ESTIMATE_BYTES, st.clock);
+      },
+      now: () => st.clock,
+    });
+    s.controller.memory = memory;
+    const q = await s.controller.create({ workspaceId: 'docker/ws1' });
+    assert.ok(q.slotWait, 'q waits for a slot');
+    const checks = memory.checks; // the create's
+    const starts = s.ws.starts;
+    st.gate = new Promise<void>((r) => (open = r)); // the queued check's reading is held
+    st.clock += 60_000;
+    caps.perWorkspace = 10; // the slot comes
+    await until(() => memory.checks === checks + 1, 4000);
+    void s.controller.send(q.id, 'q-1', 'go on').catch(() => undefined);
+    await sleep(150);
+    assert.equal(memory.checks, checks + 1, 'the send waits for the queued start: it runs no check of its own');
+    open();
+    await until(() => s.controller.get(q.id)!.process === 'live', 4000);
+    await sleep(100);
+    assert.equal(memory.checks, checks + 1, 'one check for the queued start');
+    assert.equal(s.ws.starts, starts + 1, 'one launch');
+  } finally {
+    open();
     await s.done();
   }
 });
