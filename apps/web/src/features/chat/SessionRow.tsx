@@ -124,7 +124,7 @@ function ClaudeQuota({ claude }: { claude: NonNullable<RowMeta['claude']> }) {
   return (
     <span data-row-claude="" title={m.title} className="inline-flex items-center gap-1">
       {claude.name && (
-        <span aria-hidden="true" className="max-w-24 min-w-0 truncate">
+        <span aria-hidden="true" className="max-w-16 min-w-0 truncate">
           {claude.name}
         </span>
       )}

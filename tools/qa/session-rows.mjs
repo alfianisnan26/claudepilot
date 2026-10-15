@@ -4,7 +4,8 @@
 // each and asserts:
 //   - every seeded row is there; a row that does not wait on you is at most two lines (its own block <= 80 px); the waiting row has its third
 //     line (what it waits on);
-//   - the model is on line two with its id in a title; the Claude's quota bar has a title (the source, or "unavailable");
+//   - the model is on line two with its id in a title; the Claude's quota bar has a title (the source, or "unavailable") and is in sight on
+//     the lead's row (a long Claude name and the fold button take room there);
 //   - a worker on its lead's Claude does not repeat the Claude; one on another Claude names it;
 //   - the Bypass row carries its shield dot (and the word from 640 px);
 //   - nothing on line two paints past its own item (the quota bar once painted over the cost when the line was full);
@@ -86,12 +87,15 @@ const FACT = `(t) => {
   }
   const claude = own.querySelector('[data-row-claude]');
   const model = own.querySelector('[data-row-model]');
-  const bypassWord = [...own.querySelectorAll('span')].find((s) => s.textContent.trim() === 'Bypass' && s.getBoundingClientRect().width > 0);
+  const bar = claude?.querySelector('[data-quota-bar]')?.getBoundingClientRect();
+  const line = meta?.getBoundingClientRect();
+  const bypassWord =[...own.querySelectorAll('span')].find((s) => s.textContent.trim() === 'Bypass' && s.getBoundingClientRect().width > 0);
   return {
     h: Math.round(own.getBoundingClientRect().height),
     third: own.querySelector('[data-row-third]')?.textContent.trim() ?? null,
     model: model ? { text: model.textContent.trim(), title: model.getAttribute('title') } : null,
     claude: claude ? { text: claude.textContent.trim(), title: claude.getAttribute('title'), bar: claude.querySelector('[data-quota-bar]')?.getAttribute('data-quota-bar') ?? null } : null,
+    barInSight: !!bar && !!line && bar.width > 0 && bar.right <= line.right + 0.5,
     bypassDot: !!own.querySelector('[data-row-bypass]'),
     bypassWord: !!bypassWord,
     bleeds: [...new Set(bleeds)],
@@ -133,6 +137,7 @@ for (const size of SIZES) {
     check(`${tag}: the waiting row says what it waits on (line three)`, /Run a command/.test(f.waiting?.third ?? ''), JSON.stringify(f.waiting?.third));
     check(`${tag}: the model is on line two with its id in the title`, !!f.lead?.model && /claude-opus-5-5/.test(f.lead.model.title ?? ''), JSON.stringify(f.lead?.model));
     check(`${tag}: the quota bar has a source (its title)`, !!f.lead?.claude?.title && !!f.lead.claude.bar, JSON.stringify(f.lead?.claude));
+    check(`${tag}: the lead's quota bar is in sight (a long Claude name and the fold do not push it off line two)`, !!f.lead?.barInSight, JSON.stringify(f.lead?.barInSight));
     check(`${tag}: a worker on its lead's Claude does not repeat it`, !!f.same && !f.same.claude, JSON.stringify(f.same?.claude));
     check(`${tag}: a worker on another Claude names it`, /Work/.test(f.other?.claude?.text ?? ''), JSON.stringify(f.other?.claude));
     check(`${tag}: the Bypass row has its shield dot${size.mobile ? '' : ' and the word'}`, !!f.bypass?.bypassDot && (size.mobile || f.bypass.bypassWord), JSON.stringify({ dot: f.bypass?.bypassDot, word: f.bypass?.bypassWord }));
