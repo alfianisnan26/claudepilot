@@ -8,11 +8,11 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - MERGED ff 1772d2d0: T-576 (gate GREEN f63c5f9; 5991). Open until the phone check (QA UI 8b13bb5a).
 - MERGED ff ce819bd0: T-597 S1b (gate GREEN 2c53982) -> coordinator deploys with T-546.
 - MERGED ff ffd4bcdd: T-600 (BE QA 5864, FE QA UI 6128; gate GREEN 6bb628c, claudepilot-gate-6bb628c-3b2f; + portal tag -15 merged in).
+- MERGED ff 8d9eab44 (batch 6): T-623 S1b (6069), T-591 S1d (6107), T-558 S1b (6182), T-631 F2 (6195); gate GREEN 033f0e2
+  (job-out/gate-033f0e2.log); comments 6244-6249. Deploy = coordinator's.
 - T-636 CLOSED done on QA PASS WITH GAPS 5962 (built by the coordinator, ad9f7ad8).
 
 ## IN FLIGHT (6 of 6, D-71)
-- BATCH 6 premerge 033f0e22 (wip/main-033f0e2): T-623 S1b 784926f (QA 6069), T-591 S1d 394abdd5 (6107), T-558 S1b 728b58d0 (6182),
-  T-631 F2 8815a6e1 (QA PASS 6195). No conflicts; migrations 780-792 unique. GATE RUNNING job-out/gate-033f0e2.log -> ff on green.
 - IMPL T-416 S1d 41675b08 (opus, why: incident) on ticket/T-416-s1d (base a63e181e = S1c + integration, lead merged; 2 conflicts kept both).
   Fixes for review 6187 CHANGES: wake reserves, hold reservation past the 5 s cache, queued start checked, restart vs Bypass, item 2, PRD.
 - IMPL T-325 S1b 7eb43876 (opus, why: security) on ticket/T-325-s1b: QA FAIL 6133 F1 (author's child named qa-verifier), M4, M7.
