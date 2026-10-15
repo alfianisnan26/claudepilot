@@ -466,7 +466,7 @@ account, **W** workspace, **S** chat session (within caps).
 | Chat sessions per workspace / in total | 4 / 20 | G P W / G | Portal (FR13) |
 | Scheduled tools in chat | Off | G P W | `--disallowedTools` ([Chat sessions](chat-sessions.md) §10.2) |
 | Idle chat sessions sleep after | 30 min | G | Chat sessions' idle sleep |
-| Lead rules (`sessions.leadRules`) | Off | G | A crew lead's file edits refused outside its status, notes and scratch folders, in Bypass too, by a PreToolUse hook in a second `--settings` ([Chat sessions](chat-sessions.md) FR79, T-561, D-63). Protective: turning it off asks first. |
+| Lead rules (`sessions.leadRules`) | Off | G | A crew lead's file edits refused outside its status, notes and scratch folders, in Bypass too, by a PreToolUse hook in the one merged `--settings` value (a session that ever had a worker counts as a lead) ([Chat sessions](chat-sessions.md) FR79, T-561, D-63). Protective: turning it off asks first. |
 | Subagents per session, depth (Advanced) | 20, 3 | G P W | `env`: `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS`, `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH` |
 | Default / highest CPU, memory | 2 / 8 CPUs, 4 / 16 GB | G T | Create dialog and API. A change (FR14): today the dialog stops at 4 CPUs and 8 GB, and the server allows 64 CPUs with no memory ceiling. |
 | Offer "No limit"; home volume size | Docker yes, Kubernetes no; 10 Gi | T | Create dialog and API (today every target offers it); PVC size (`PORTAL_K8S_STORAGE` today) |

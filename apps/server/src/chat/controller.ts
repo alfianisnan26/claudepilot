@@ -4180,8 +4180,8 @@ export class ChatController {
     this.#launchedSubagents.set(o.sessionId, launched?.subagents !== 0);
     const agent = launched?.agent;
     // T-561: a crew lead under the policy launches with the lead rules, at every start like the agent (Bypass included: a hook binds there too).
-    const leadRules = launched ? this.#leadRulesFor(launched) : false;
-    if (leadRules) this.#launchedLeadRules.add(o.sessionId);
+    const leadSettings = launched && this.#leadRulesFor(launched) ? await this.#mergedLeadSettings(workspaceId, o.cwd) : null;
+    if (leadSettings !== null) this.#launchedLeadRules.add(o.sessionId);
     else this.#launchedLeadRules.delete(o.sessionId);
     // `--allow-dangerously-skip-permissions` only for a session that opted in, and only while the policy allows it: without it
     // Claude Code refuses the switch to Bypass (`bypass_not_launched`). It never turns Bypass on by itself.
@@ -4199,9 +4199,12 @@ export class ChatController {
       ...(this.#viaPool(workspaceId) ? ['--max-budget-usd', String(this.#budgetUsd())] : []),
       ...(o.bypass ? ['--allow-dangerously-skip-permissions'] : []),
       // T-323: the project's permission rules the portal trusts, as flag settings (Claude Code ignores them in a folder it doesn't trust).
-      ...(this.#projectSettings.has(`${workspaceId}\u0000${sessionCwd(o.cwd)}`) ? ['--settings', this.#projectSettings.get(`${workspaceId}\u0000${sessionCwd(o.cwd)}`)!] : []),
-      // T-561: last, so that if Claude Code keeps only one --settings value, the one it keeps is the lead rules (fewer allows, never more).
-      ...(leadRules ? ['--settings', leadRulesSettings(sessionCwd(o.cwd))] : []),
+      // T-561: for a lead under the policy, ONE inline value: those rules merged with the lead rules (never two --settings flags).
+      ...(leadSettings !== null
+        ? ['--settings', leadSettings]
+        : this.#projectSettings.has(`${workspaceId}\u0000${sessionCwd(o.cwd)}`)
+          ? ['--settings', this.#projectSettings.get(`${workspaceId}\u0000${sessionCwd(o.cwd)}`)!]
+          : []),
     ];
     const args = ['start', o.csid, String(o.seg), o.cwd, ...(lines.length ? ['--env', String(lines.length)] : []), '--', ...flags];
     return this.#runOnce(workspaceId, args, lines.length ? `${lines.join('\n')}\n` : undefined, this.#chat.configDir(o.claudeId));
@@ -4209,6 +4212,25 @@ export class ChatController {
 
   /** T-561: the sessions whose current process was launched with the lead rules; unknown after a portal restart. */
   readonly #launchedLeadRules = new Set<string>();
+
+  /**
+   * T-561: the one `--settings` value of a lead: the lead rules merged with the project's trusted permission rules, read by the host's
+   * `psettings` (the portal never holds the file). A host that cannot print them (an older script, an unreadable file) gives the lead rules
+   * alone: the rules bind, and the project's allow rules are missing for that start.
+   */
+  async #mergedLeadSettings(workspaceId: string, cwd: string): Promise<string> {
+    const entry = this.#projectSettings.get(`${workspaceId}\u0000${sessionCwd(cwd)}`);
+    let project: string | null = null;
+    if (entry) {
+      try {
+        const r = await this.#runOnce(workspaceId, ['psettings', entry.slice(0, -(PROJECT_SETTINGS_FILE.length + 1))]);
+        if (r.code === 0 && r.out.trim()) project = r.out.trim().split('\n')[0]!;
+      } catch {
+        // unreadable: the lead rules alone
+      }
+    }
+    return leadRulesSettings(sessionCwd(cwd), project);
+  }
 
   /** T-561: whether a session launches with the lead rules now: the policy is on and it is a crew lead (marked, or it has started workers). */
   #leadRulesFor(row: ChatSessionRow): boolean {

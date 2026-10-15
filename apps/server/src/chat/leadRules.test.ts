@@ -1,14 +1,19 @@
-// T-561 (chat-sessions PRD FR53, D-63): a crew lead, under the policy `sessions.leadRules` (off by default), launches with the lead
-// rules: one more `--settings` value, a PreToolUse hook that refuses Edit, Write, MultiEdit and NotebookEdit outside its status files, its
-// notes folder and /tmp, with a message that names D-63. The hook is run for real here; the launch is checked on the fake host.
+// T-561 (chat-sessions PRD FR79, D-63): a crew lead, under the policy `sessions.leadRules` (off by default), launches with the lead
+// rules: ONE `--settings` value (the project's permission rules merged with the lead rules), holding a PreToolUse hook that refuses Edit,
+// Write, MultiEdit and NotebookEdit outside its status files, its notes folder and /tmp, with a message that names D-63. The hook is run
+// for real here; the launch is checked on the fake host.
 
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import { settingDef } from '../settings/registry.js';
 import { SETTINGS_POLICIES } from '../settings/authz.js';
 import { isLead, LEAD_RULES_MATCHER, LEAD_RULES_SETTING, leadAllowedDirs, leadHookScript, leadRulesSettings } from './leadRules.js';
-import { APPLIED, init, liveSession, ok, sleep, until, type Live } from './testkit.js';
+import { ChatStore } from './store.js';
+import { APPLIED, EMPTY_SCAN, init, liveSession, ok, sleep, until, type Live } from './testkit.js';
 
 const FLAG = '--allow-dangerously-skip-permissions';
 const REPO = '/home/node/work/repo';
@@ -107,6 +112,84 @@ test('the hook refuses an edit outside the allowed folders with the D-63 text, a
   assert.equal(runHook(command, { tool_input: {} }).code, 2, 'a call without a path is refused');
 });
 
+test('the matcher names exactly the four file tools, MultiEdit included (a literal, not the constant against itself)', () => {
+  const entry = (JSON.parse(leadRulesSettings(REPO)) as { hooks: { PreToolUse: { matcher: string }[] } }).hooks.PreToolUse[0]!;
+  assert.equal(entry.matcher, 'Edit|Write|MultiEdit|NotebookEdit');
+  assert.deepEqual(entry.matcher.split('|').sort(), ['Edit', 'MultiEdit', 'NotebookEdit', 'Write']);
+  const command = hookCommand(leadRulesSettings(REPO));
+  assert.equal(runHook(command, edit('MultiEdit', `${REPO}/apps/a.ts`)).code, 2, 'MultiEdit is refused outside the folders');
+  assert.equal(runHook(command, edit('MultiEdit', '/tmp/a.ts')).code, 0);
+});
+
+test('a path in another worktree of the same repository is refused, its own status folder allowed', () => {
+  const command = hookCommand(leadRulesSettings(REPO));
+  const other = '/home/node/work/repo.worktrees/ticket-t-1';
+  assert.equal(runHook(command, edit('Edit', `${other}/apps/a.ts`)).code, 2);
+  assert.equal(runHook(command, edit('Write', `${other}/docs/dev-sessions/status/x.md`)).code, 2, 'another folder’s status folder is not the lead’s');
+});
+
+test('hook input that carries agent_id (a sub-agent: a dispatch) is allowed; the same call without it is refused', () => {
+  const command = hookCommand(leadRulesSettings(REPO));
+  const call = edit('Edit', `${REPO}/apps/server/src/index.ts`);
+  assert.equal(runHook(command, call).code, 2, 'the lead itself');
+  assert.equal(runHook(command, { ...call, agent_id: 'agent-1', agent_type: 'implementer' }).code, 0, 'a sub-agent');
+  assert.equal(runHook(command, { ...call, agent_id: '' }).code, 2, 'an empty agent_id is not one');
+  assert.equal(runHook(command, { ...call, agent_id: 7 }).code, 2, 'nor a non-string');
+});
+
+test('a symlink inside an allowed folder cannot lead out of it, and a symlink to an allowed one is followed', () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'lead-rules-')));
+  try {
+    const repo = join(root, 'repo');
+    mkdirSync(join(repo, 'docs', 'dev-sessions', 'status'), { recursive: true });
+    mkdirSync(join(repo, 'apps'), { recursive: true });
+    const scratch = join(root, 'scratch');
+    mkdirSync(scratch);
+    symlinkSync(join(repo, 'apps'), join(scratch, 'x')); // scratch/x -> repo/apps
+    symlinkSync(join(repo, 'apps'), join(repo, 'docs', 'dev-sessions', 'status', 'out'));
+    symlinkSync(join(repo, 'docs', 'dev-sessions', 'status'), join(repo, 'link'));
+    const command = hookCommand(leadRulesSettings(repo));
+    const call = (path: string) => ({ hook_event_name: 'PreToolUse', tool_name: 'Write', cwd: repo, tool_input: { file_path: path } });
+    assert.equal(runHook(command, call(join(repo, 'docs', 'dev-sessions', 'status', 'out', 'a.ts'))).code, 2, 'status/out -> apps: refused');
+    assert.equal(runHook(command, call(join(repo, 'docs', 'dev-sessions', 'status', 'new', 'a.md'))).code, 0, 'a folder that does not exist yet, under an allowed one');
+    assert.equal(runHook(command, call(join(repo, 'link', 'a.md'))).code, 0, 'a link that stays inside the allowed folder');
+    // The same rule for /tmp: a link in it that leads into the repository. (/tmp itself is the allowed folder; build one under it.)
+    const tmpLink = join(tmpdir(), `lead-rules-link-${process.pid}`);
+    if (tmpdir() === '/tmp') {
+      symlinkSync(join(repo, 'apps'), tmpLink);
+      try {
+        assert.equal(runHook(command, call(join(tmpLink, 'a.ts'))).code, 2, '/tmp/link -> repo/apps: refused');
+      } finally {
+        rmSync(tmpLink, { force: true });
+      }
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('mutation proof: the command’s `|| exit 2` is what refuses when node cannot run (without it the status is the shell’s 127)', () => {
+  const command = hookCommand(leadRulesSettings(REPO));
+  assert.ok(command.endsWith(' || exit 2'));
+  const broken = (c: string) => c.replace('PATH=/usr/local/bin:/usr/bin:/bin', 'PATH=/nonexistent');
+  assert.equal(runHook(broken(command), edit('Edit', '/tmp/a')).code, 2, 'node missing: refused');
+  const mutated = broken(command).replace(/ \|\| exit 2$/, '');
+  assert.notEqual(mutated, broken(command));
+  assert.equal(runHook(mutated, edit('Edit', '/tmp/a')).code, 127, 'the mutant exits 127, which the check above tells apart from 2');
+});
+
+test('the merged value: the project’s rules and the lead rules in one JSON, deny lists joined, hooks joined, unreadable project input left out', () => {
+  const project = JSON.stringify({ permissions: { allow: ['Bash(ls)', 'Read'], deny: ['Bash(rm *)'] } });
+  const merged = JSON.parse(leadRulesSettings(REPO, project)) as { permissions: Record<string, string[]>; hooks: { PreToolUse: { matcher: string }[] } };
+  assert.deepEqual(merged.permissions, { allow: ['Bash(ls)', 'Read'], deny: ['Bash(rm *)'] });
+  assert.equal(merged.hooks.PreToolUse.length, 1);
+  assert.equal(merged.hooks.PreToolUse[0]!.matcher, 'Edit|Write|MultiEdit|NotebookEdit');
+  const withHook = JSON.parse(leadRulesSettings(REPO, JSON.stringify({ hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [] }] }, permissions: { deny: ['A', 'A'], allow: [3, 'B'] } }))) as typeof merged;
+  assert.deepEqual(withHook.hooks.PreToolUse.map((h) => h.matcher), ['Bash', 'Edit|Write|MultiEdit|NotebookEdit'], 'their hook stays, the lead’s is added');
+  assert.deepEqual(withHook.permissions, { allow: ['B'], deny: ['A'] });
+  for (const bad of [null, '', 'not json', '[1]', '"x"']) assert.equal(leadRulesSettings(REPO, bad), leadRulesSettings(REPO), `${bad}`);
+});
+
 test('the allowed folders are the lead’s own folder’s status and notes, and /tmp; a folder that cannot be quoted is refused', () => {
   assert.deepEqual(leadAllowedDirs('/w/x/'), ['/w/x/docs/dev-sessions/status', '/w/x/docs/dev-sessions/notes', '/tmp']);
   assert.throws(() => leadHookScript("/w/it's"), /quoted/);
@@ -140,6 +223,41 @@ test('a lead under the policy launches with the lead rules after the host’s ar
     assert.equal(leadSettingsOf(plain.args), null, 'not a lead: no rules');
     assert.equal(s.controller.get(plain.id)!.leadRules, undefined);
     assert.equal(s.controller.get(plain.id)!.lead, undefined);
+  } finally {
+    await s.done();
+  }
+});
+
+test('a lead in a folder with trusted project rules gets ONE --settings value holding both the project’s allow rules and the lead rules', async () => {
+  const s = await liveSession();
+  try {
+    policy(s, true);
+    const hash = 'a'.repeat(64);
+    s.ws.scanFor = () => JSON.stringify({ ...EMPTY_SCAN, hash, files: ['.claude/settings.json'], allowRules: 2, rulesOnly: true, extras: [] });
+    new ChatStore(s.store).saveFolderTrust('docker/ws1', REPO, hash, { files: ['.claude/settings.json'], invalid: [], mcpServers: [], hooks: [], plugins: [], allowRules: 2, envNames: [] }, 'ui');
+    s.ws.psettingsOut = JSON.stringify({ permissions: { allow: ['Bash(ls)', 'Read'], deny: ['Bash(rm *)'] } });
+    const lead = await another(s, { lead: true, cwd: REPO });
+    assert.equal(lead.args.filter((a) => a === '--settings').length, 1, 'never two --settings flags');
+    const value = lead.args[lead.args.indexOf('--settings') + 1]!;
+    assert.ok(value.startsWith('{'), 'inline JSON, not the project’s file path');
+    const merged = JSON.parse(value) as { permissions: { allow: string[]; deny: string[] }; hooks: unknown };
+    assert.deepEqual(merged.permissions.allow, ['Bash(ls)', 'Read'], 'the project’s allow rules');
+    assert.deepEqual(merged.permissions.deny, ['Bash(rm *)']);
+    assert.equal(hookCommand(value).includes('exit 2'), true, 'and the lead rules');
+    assert.equal(value, leadRulesSettings(REPO, s.ws.psettingsOut));
+    assert.ok(s.ws.ops.includes('psettings'));
+    assert.equal(s.controller.get(lead.id)!.leadRules, true, 'Session info reflects the merged value');
+
+    // A host that cannot print the project's rules: the lead rules alone, still one flag, still shown as on.
+    s.ws.psettingsOut = null;
+    const alone = await another(s, { lead: true, cwd: REPO });
+    assert.equal(alone.args.filter((a) => a === '--settings').length, 1);
+    assert.equal(leadSettingsOf(alone.args), leadRulesSettings(REPO));
+    assert.equal(s.controller.get(alone.id)!.leadRules, true);
+
+    // Not a lead: the project's file path, as before (T-323).
+    const plain = await another(s, { cwd: REPO });
+    assert.equal(plain.args[plain.args.indexOf('--settings') + 1], `${REPO}/.claude/settings.json`);
   } finally {
     await s.done();
   }

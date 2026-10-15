@@ -1,6 +1,6 @@
 // T-561: the lead rules (chat-sessions PRD FR79, D-63). A crew lead plans, routes, merges and deploys; it does not edit code (D-63 item 3),
-// and a lead's edit costs several times a worker's. With the policy `sessions.leadRules` on, a lead's process launches with one more
-// `--settings` value from the portal (never the repository's own rule files): a PreToolUse hook on Edit, Write, MultiEdit and NotebookEdit
+// and a lead's edit costs several times a worker's. With the policy `sessions.leadRules` on, a lead's process launches with ONE
+// `--settings` value from the portal (the project's trusted permission rules merged with these; never the repository's own rule files): a PreToolUse hook on Edit, Write, MultiEdit and NotebookEdit
 // that refuses a path outside its status files, its notes folder and the scratch folder, and tells it to dispatch a worker. Bash stays.
 //
 // A hook, not `permissions.deny`: in Claude Code a deny rule beats every allow rule, so "deny Edit except the status file" cannot be written
@@ -24,7 +24,7 @@ defineSetting({
   group: 'sessions',
   order: 12,
   label: 'Lead rules',
-  help: 'A crew lead (a session with workers, or one the supervisor started) may not edit files outside its status files (docs/dev-sessions/status), its notes (docs/dev-sessions/notes) and /tmp: a refused edit tells it to dispatch a worker (D-63). Bash stays allowed. Applies at each session’s next start, Bypass included.',
+  help: 'A crew lead (a session with workers, or one the supervisor started) may not edit files outside its status files (docs/dev-sessions/status), its notes (docs/dev-sessions/notes) and /tmp: a refused edit tells it to dispatch a worker (D-63). Bash stays allowed. A session that has ever started a worker counts as a lead, for good, even when the worker ended. Applies at each session’s next start, Bypass included.',
   protective: true,
   confirmText: 'Leads will be able to edit code again.',
 });
@@ -60,22 +60,55 @@ export function leadAllowedDirs(cwd: string): string[] {
  */
 export function leadHookScript(cwd: string): string {
   const script =
-    `const p=require("path");const ok=${JSON.stringify(leadAllowedDirs(cwd))};const msg=${JSON.stringify(LEAD_RULES_MESSAGE)};` +
+    `const p=require("path"),fs=require("fs");const msg=${JSON.stringify(LEAD_RULES_MESSAGE)};` +
+    // The real path of the nearest existing parent (a symlink out of an allowed folder is followed), the rest of the path appended.
+    `const rp=(a)=>{let t=a,r="";for(;;){try{return p.join(fs.realpathSync(t),r);}catch(e){const u=p.dirname(t);if(u===t)return a;r=p.join(p.basename(t),r);t=u;}}};` +
+    `const ok=${JSON.stringify(leadAllowedDirs(cwd))}.map(rp);` +
     `let s="";process.stdin.setEncoding("utf8");process.stdin.on("data",(c)=>{s+=c;});process.stdin.on("end",()=>{` +
     `let f="";let base=${JSON.stringify(posix.resolve('/', cwd))};` +
-    `try{const i=JSON.parse(s);const t=(i&&i.tool_input)||{};f=String(t.file_path||t.notebook_path||"");if(typeof i.cwd==="string"&&i.cwd.startsWith("/"))base=i.cwd;}catch(e){}` +
-    `const a=f?p.resolve(base,f):"";` +
+    // A call that carries agent_id comes from a sub-agent: a dispatch, allowed (D-47).
+    `try{const i=JSON.parse(s);if(i&&typeof i.agent_id==="string"&&i.agent_id){process.exitCode=0;return;}const t=(i&&i.tool_input)||{};f=String(t.file_path||t.notebook_path||"");if(typeof i.cwd==="string"&&i.cwd.startsWith("/"))base=i.cwd;}catch(e){}` +
+    `const a=f?rp(p.resolve(base,f)):"";` +
     `if(a&&ok.some((d)=>a===d||a.startsWith(d+"/"))){process.exitCode=0;return;}` +
     `process.exitCode=2;process.stderr.write(msg+(a?" Refused: "+a:"")+"\\n");});`;
   if (script.includes("'")) throw new Error('lead rules: the folder cannot be quoted for the hook');
   return script;
 }
 
+/** The hook command line: `node` from a fixed PATH in an emptied environment (nothing the session sets loads first); `|| exit 2`: a hook that cannot run refuses. */
+export function leadHookCommand(cwd: string): string {
+  return `/usr/bin/env -i PATH=/usr/local/bin:/usr/bin:/bin node -e '${leadHookScript(cwd)}' || exit 2`;
+}
+
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
+
 /**
- * The `--settings` value for a lead in `cwd`: inline JSON with the hook only. `node` from a fixed PATH in an emptied environment (nothing the
- * session sets loads first); `|| exit 2`: a hook that cannot run refuses.
+ * The ONE `--settings` value for a lead in `cwd`: inline JSON with the lead rules' hook, merged with the project settings the portal trusts
+ * (`project`: the JSON the host's `psettings` printed, permission rules only; anything unreadable is left out, which only makes the lead
+ * stricter). The permission lists are joined (allow, deny, ask: the project's first, no repeats) and the hooks are joined per event. Never two
+ * `--settings` flags: how Claude Code treats a repeated flag is not something to depend on.
  */
-export function leadRulesSettings(cwd: string): string {
-  const command = `/usr/bin/env -i PATH=/usr/local/bin:/usr/bin:/bin node -e '${leadHookScript(cwd)}' || exit 2`;
-  return JSON.stringify({ hooks: { PreToolUse: [{ matcher: LEAD_RULES_MATCHER, hooks: [{ type: 'command', command, timeout: 15 }] }] } });
+export function leadRulesSettings(cwd: string, project?: string | null): string {
+  const hook = { matcher: LEAD_RULES_MATCHER, hooks: [{ type: 'command', command: leadHookCommand(cwd), timeout: 15 }] };
+  let theirs: Record<string, unknown> = {};
+  try {
+    const parsed: unknown = project ? JSON.parse(project) : {};
+    if (isRecord(parsed)) theirs = parsed;
+  } catch {
+    // unreadable project settings: the lead rules alone
+  }
+  const out: Record<string, unknown> = {};
+  const perms = isRecord(theirs.permissions) ? theirs.permissions : {};
+  const permissions: Record<string, string[]> = {};
+  for (const k of ['allow', 'deny', 'ask']) {
+    const list = [...new Set(strings(perms[k]))];
+    if (list.length) permissions[k] = list;
+  }
+  if (Object.keys(permissions).length) out.permissions = permissions;
+  const hooks: Record<string, unknown[]> = {};
+  if (isRecord(theirs.hooks)) for (const [ev, list] of Object.entries(theirs.hooks)) if (Array.isArray(list)) hooks[ev] = [...list];
+  hooks.PreToolUse = [...(hooks.PreToolUse ?? []), hook];
+  out.hooks = hooks;
+  return JSON.stringify(out);
 }
