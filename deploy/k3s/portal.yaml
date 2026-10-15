@@ -41,7 +41,7 @@ spec:
         kubernetes.io/hostname: k3s-node2
       containers:
         - name: portal
-          image: registry.int.isnan.me/claudepilot/portal:2026.10.15-3
+          image: registry.int.isnan.me/claudepilot/portal:2026.10.15-4
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
@@ -62,7 +62,7 @@ spec:
             - name: PORTAL_K8S_NAMESPACE
               value: isnan-claudepilot-workspaces
             - name: PORTAL_K8S_IMAGE
-              value: registry.int.isnan.me/claudepilot/workspace:2.1.296-2026.10.12-1
+              value: registry.int.isnan.me/claudepilot/workspace:2.1.296-2026.10.15-1
             - name: PORTAL_K8S_STORAGE_CLASS
               value: local-path
             - name: PORTAL_K8S_STORAGE
