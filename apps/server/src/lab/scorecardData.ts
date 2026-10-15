@@ -130,6 +130,13 @@ function loadExtra(db: DatabaseSync, ids: readonly string[]): Map<string, CrewSe
       endedReason: r.ended_reason,
       stateSinceMs: ms(r.state_since),
     });
+  // A deleted continuation: its creation is the moment of its `session.continued` audit row (a hand-over); nothing else is known.
+  const gone = ids.filter((id) => !out.has(id));
+  const audits = chunked<{ session_id: string; at: string }>(db, gone, (l) => `SELECT session_id, MIN(at) AS at FROM chat_audit WHERE kind = 'session.continued' AND session_id IN ${l} GROUP BY session_id`);
+  for (const a of audits) {
+    const atMs = ms(a.at);
+    if (atMs !== null) out.set(a.session_id, { agent: null, model: null, maxWorkers: null, subagents: false, createdAtMs: atMs, contextUsed: null, endedReason: null, stateSinceMs: null });
+  }
   return out;
 }
 

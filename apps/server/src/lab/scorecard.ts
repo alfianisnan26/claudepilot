@@ -152,12 +152,29 @@ export function programsOf(sessions: ReadonlyMap<string, SessionInfo>, extra: Re
   }
   const out = new Map<string, Program>();
   for (const [top, members] of byTop) {
-    const leads = [...members].filter((m) => chainRootOf(m, sessions) === top).sort((a, b) => (extra.get(a)?.createdAtMs ?? 0) - (extra.get(b)?.createdAtMs ?? 0) || a.localeCompare(b));
+    const leads = chainOrder(top, [...members].filter((m) => chainRootOf(m, sessions) === top), sessions, extra);
     if (members.size === leads.length) continue; // no worker: a chat, not a crew
     const last = leads.at(-1) ?? top;
     out.set(top, { id: top, title: sessions.get(last)?.title || sessions.get(top)?.title || '', leads, members });
   }
   return out;
+}
+
+/**
+ * The lead chain oldest first, by its links: from the top, each next row is the one that continues the last (the older by creation when
+ * two do). A deleted row has no creation time of its own, so the links decide, not the clock; a row the walk misses goes last by creation.
+ */
+function chainOrder(top: string, chain: string[], sessions: ReadonlyMap<string, SessionInfo>, extra: ReadonlyMap<string, CrewSessionExtra>): string[] {
+  const byAge = (a: string, b: string) => (extra.get(a)?.createdAtMs ?? 0) - (extra.get(b)?.createdAtMs ?? 0) || a.localeCompare(b);
+  const left = new Set(chain);
+  const out: string[] = [];
+  for (let cur: string | undefined = left.has(top) ? top : undefined; cur; ) {
+    out.push(cur);
+    left.delete(cur);
+    const from = cur;
+    cur = [...left].filter((id) => sessions.get(id)?.continuedFrom === from).sort(byAge)[0];
+  }
+  return [...out, ...[...left].sort(byAge)];
 }
 
 /** The program a session belongs to (the top of its lineage), or null when the portal has no record of it. */
