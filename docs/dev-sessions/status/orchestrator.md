@@ -16,19 +16,16 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 
 ## IN FLIGHT (6 of 6, D-71)
   QA Perf's ticket_comment refused on unassigned tickets: lead posts its verdicts.
-- BATCH 8 d116939 (T-325 + T-574) gate RED: T-574 broke sessionStartParent.test.ts:71 (family workers not an array) -> 6396.
-  T-574 back to the Backend lane after T-633 S2 (shape fix + cap/cut tests + whole src/chat in a Job).
-- T-341 QA BE PASS WITH GAPS (reply only; lead can't comment, unassigned): 4 doc errors -> BE INFRA lane 17a36fce (sonnet, respawned;
-  b6df312e ended) on ticket/T-341-docfix from e4284315. D not verified.
-- T-549 70b081f8 DONE (6378) -> QA BE 2 (backend, running); QA UI PASS WITH GAPS (job f7730a9b, reply only: refused on T-549;
-  long offender id wrap + D-65 harness assertions not run). T-416 S1e ff3f5d0c DONE (6372) -> QA Perf delta (6385).
-  T-675 findings 4/5 written on T-416 6385 (T-675 unassigned: lead refused).
-- T-416 S1d 89e270cc: review 6310 CHANGES (sev-2 restart skips budget) + QA 6326 PASS WITH GAPS (M2/M3/M9/M10 survive) -> IMPL S1e
-  3d92ab62 (opus, ended after DONE ff3f5d0c) -> QA Perf delta, then gate, merge; fixes go to a fresh impl.
+- BATCH 9 wip/main-1803cf2 = T-416 S1-S1e (QA Perf PASS WITH GAPS 6420; R2 throw-path test -> T-675; no migration/authz files): GATE RUNNING.
+- T-574: batch 8 gate RED (sessionStartParent.test.ts:71, family workers not an array; 6396) -> BACKEND lane 06e9ff5c (sonnet,
+  respawned; 8962fc38 ended) on ticket/T-574-s2 from 124ca45f: keep the array, cap/cut tests, whole src/chat + portalmcp in a Job.
+- T-633 S2 0a5b686a DONE (6400; G3 waits on the timer, H1/H2 tests; x20 under load 0 fails) -> QA Perf delta (+ whole src/chat).
+- T-549 70b081f8 (6378): QA BE 2 42e5408f backend check running; QA UI PASS WITH GAPS (job f7730a9b, reply only; long id wrap
+  + D-65 harness assertions not run). Then T-341 docfix 2ed9bc64 delta (counts differ from QA's) queued on QA BE 2.
+- BE INFRA lane 17a36fce (sonnet; on ticket/T-341-docfix, DONE 2ed9bc64): now T-524 done-when measurement (no code).
 - IMPL ff009a65 (sonnet) on ticket/T-376-chat-open-harness: tools/qa/chat-open.mjs to design 6305; then T-681 by message.
-- BACKEND lane 8962fc38 (sonnet, respawned) on T-633 S2: G3 deflake + H1/H2 tests (ticket/T-633-s2 from 1a4a7933).
-- QA UI 8b13bb5a: BLOCKED on T-376 (no Write; dontAsk refuses heredocs): posts harness design on T-376, idle. An implementer
-  (next free slot, with T-681) writes tools/qa/chat-open.mjs; QA UI then runs it. T-576 gap 4 = SLOW ONLY.
+- QA UI 8b13bb5a: idle until the T-376 harness lands, then runs it. T-576 gap 4 = SLOW ONLY.
+- T-675 (unassigned, lead refused): findings 4/5 on T-416 6385, R2 on 6420.
 - HELD: T-426 S1e 2174eee1 QA PASS 6169 -> merge on the T-401 ack (4941). T-578 51f6c153 review CHANGES 6168 -> owner decision.
   T-631 review CHANGES 5850: absolute-path entry (a) for the coordinator; F1 on job-run.sh -> T-635 (high).
 - 16:12 OWNER PRIORITY (coordinator, T-426 5538): T-401 then T-426 FIRST. T-401 gate GREEN gate-54ba328-6502; ff only on the person's ack.
