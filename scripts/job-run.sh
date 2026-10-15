@@ -4,7 +4,10 @@
 # a node without a workspace pod (deploy/k3s-build/job-run.yaml), `npm ci`, then the command. The log streams back, the exit code is the
 # command's, artifacts come back to a folder you name.
 #   scripts/job-run.sh [options] -- <command>          one argument: a shell command line; several: the words of one command
-#     --repo claudepilot | konfersi[:<org>/<repo>]      default: from the current folder's origin (konfersi alone: the folder's Gitea repo)
+#     --repo claudepilot | event | konfersi[:<org>/<repo>]
+#                                                       default: from the current folder's origin (konfersi alone: the folder's Gitea repo).
+#                                                       event (T-491) is exactly GitHub isnanme/event, nothing else: no event:<org>/<repo>;
+#                                                       it gets the same GitHub token as claudepilot (npm for @isnanme, and the clone)
 #     --ref <branch or commit>                          default: HEAD of the current folder, which must be on the remote (push it first:
 #                                                       git push origin HEAD:wip/<name>); uncommitted changes are NOT in the Job
 #     --against <ref>                                   PROOF (T-333): run the command on --ref, then on <ref> in the same Job (a full commit hash or
@@ -33,6 +36,7 @@ ns=${JOB_RUN_NAMESPACE:-isnan-claudepilot}; registry=${DEPLOY_REGISTRY:-registry
 max=${JOB_RUN_MAX:-3}; per=${JOB_RUN_MAX_PER_CHAT:-2}; poll=${JOB_RUN_POLL_S:-5}
 queue_wait=${JOB_RUN_QUEUE_WAIT_S:-3600}; start_wait=${JOB_RUN_START_WAIT_S:-900}; art_max=${JOB_RUN_ARTIFACT_MAX:-4194304}
 gitea=${JOB_RUN_GITEA:-git.konfersi.com}; github_repo=${JOB_RUN_GITHUB_REPO:-alfianisnan26/claudepilot}
+event_repo=isnanme/event # fixed on purpose (T-491): the door names one repository, no override
 die() { echo "job-run: $*" >&2; exit 2; }
 for n in "$max" "$per" "$art_max"; do [[ $n =~ ^[0-9]+$ ]] || die "the caps are numbers"; done
 label() { local v; v=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9.-' '-' | cut -c1-63 | sed -E 's/^[^a-z0-9]+//; s/[^a-z0-9]+$//'); printf '%s' "${v:-none}"; }
@@ -93,19 +97,21 @@ origin=$(git remote get-url origin 2>/dev/null | sed -E 's#^(https?://)[^@/]*@#\
 from_origin() {
   case "$origin" in
     *github.com[:/]"$github_repo"|*github.com[:/]"$github_repo".git) echo claudepilot ;;
+    *github.com[:/]"$event_repo"|*github.com[:/]"$event_repo".git) echo event ;;
     *"$gitea"/*) echo "konfersi:$(printf '%s' "${origin#*"$gitea"/}" | sed 's/\.git$//')" ;;
   esac
 }
 [ -n "$repo" ] || repo=$(from_origin)
-[ -n "$repo" ] || die "--repo: claudepilot or konfersi:<org>/<repo> (the current folder's origin is neither)"
+[ -n "$repo" ] || die "--repo: claudepilot, event or konfersi:<org>/<repo> (the current folder's origin is none of them)"
 if [ "$repo" = konfersi ]; then repo=$(from_origin); [[ $repo == konfersi:* ]] || die "--repo konfersi: the current folder is not a Gitea checkout; name it, konfersi:<org>/<repo>"; fi
 case "$repo" in
   claudepilot) kind=github; url=https://github.com/$github_repo.git; repo_label=claudepilot ;;
+  event) kind=github; url=https://github.com/$event_repo.git; repo_label=event ;;
   konfersi:*)
     path=${repo#konfersi:}
     [[ $path =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || die "--repo konfersi:<org>/<repo> (got $repo)"
     kind=gitea; url=https://$gitea/$path.git; repo_label=$(label "${path#*/}") ;;
-  *) die "--repo: claudepilot or konfersi:<org>/<repo>" ;;
+  *) die "--repo: claudepilot, event or konfersi:<org>/<repo>" ;;
 esac
 alsos=
 for a in ${also[@]+"${also[@]}"}; do
@@ -165,6 +171,11 @@ secret="job=$job"; mask=
 if [ "$kind" = github ]; then
   t=${NODE_AUTH_TOKEN:-}; [ -n "$t" ] || t=$(gh auth token 2>/dev/null || true)
   if [ -n "$t" ]; then secret="$secret"$'\n'"node-auth-token=$t"; mask=$t; else echo "job-run: no npm token (NODE_AUTH_TOKEN, gh): private packages will not install" >&2; fi
+  # Event's repository is private (T-491): the same token is the Job's git credential, through its helper, never in a URL.
+  if [ "$repo" = event ]; then
+    [ -n "$t" ] || die "--repo event: no GitHub token (NODE_AUTH_TOKEN, gh) to clone the private $event_repo"
+    secret="$secret"$'\n'"git-user=x-access-token"$'\n'"git-token=$t"
+  fi
 else
   creds=$(printf 'protocol=https\nhost=%s\n\n' "$gitea" | GIT_TERMINAL_PROMPT=0 git credential fill 2>/dev/null || true)
   u=$(printf '%s\n' "$creds" | sed -n 's/^username=//p'); t=$(printf '%s\n' "$creds" | sed -n 's/^password=//p'); unset creds
