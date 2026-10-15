@@ -44,8 +44,9 @@ const SCRIPT = (scen) => `(() => {
     if (!/scorecard/.test(url) || !res.ok) return res;
     const j = await res.clone().json().catch(() => null);
     if (!j) return res;
-    j.headline = ${FIXTURE};
-    if (!/compare=1/.test(url)) j.headline.previous = null;
+    const d = j.data ?? j;
+    d.headline = ${FIXTURE};
+    if (!/compare=1/.test(url)) d.headline.previous = null;
     return new Response(JSON.stringify(j), { status: 200, headers: { 'content-type': 'application/json' } });
   };
 })()`;
