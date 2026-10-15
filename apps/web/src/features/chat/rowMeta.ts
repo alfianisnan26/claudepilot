@@ -135,12 +135,18 @@ export interface RowMetaInput {
   /** The Claude's claude-usage row; null while the snapshot loads or when the Claude is not listed. */
   usage: ClaudeUsage | null | undefined;
   nowMs: number;
+  /** The lead a worker sits under (its row or header is right above); a worker on the same Claude does not repeat it (T-294, T-375). */
+  lead?: Pick<ChatSession, 'claudeId' | 'claudeName'> | null;
 }
+
+/** The same Claude: by id when both have one, else by name. */
+const sameClaude = (a: Pick<ChatSession, 'claudeId' | 'claudeName'>, b: Pick<ChatSession, 'claudeId' | 'claudeName'>) =>
+  a.claudeId && b.claudeId ? a.claudeId === b.claudeId : !!a.claudeName && a.claudeName === b.claudeName;
 
 /** Line two's facts (and line three's). Null where there is nothing to say; never a made-up value. */
 export interface RowMeta {
   model: { label: string; title: string } | null;
-  /** `name` is null under a Claude's own heading (the heading says it); the bar stays. */
+  /** `name` is null under a Claude's own heading (the heading says it); the bar stays. Null for a worker on its lead's Claude. */
   claude: { name: string | null; meter: QuotaMeter } | null;
   cost: { usd: number; estimate: boolean } | null;
   workspace: { label: string; title: string } | null;
@@ -149,11 +155,11 @@ export interface RowMeta {
   waitingFor: string | null;
 }
 
-export function rowMeta({ session: s, groupBy, showWorkspace, usage, nowMs }: RowMetaInput): RowMeta {
+export function rowMeta({ session: s, groupBy, showWorkspace, usage, nowMs, lead }: RowMetaInput): RowMeta {
   const label = modelShortName(s.model);
   const model = label ? { label, title: `Model: ${s.model}${s.effort ? `, effort ${s.effort}` : ''}` } : null;
   const claudeName = s.claudeName ?? usage?.claudeName ?? null;
-  const claude = s.claudeId || claudeName ? { name: groupBy === 'claude' ? null : claudeName, meter: quotaMeter(claudeName ?? 'this Claude', usage, nowMs) } : null;
+  const claude = (s.claudeId || claudeName) && !(lead && sameClaude(s, lead)) ? { name: groupBy === 'claude' ? null : claudeName, meter: quotaMeter(claudeName ?? 'this Claude', usage, nowMs) } : null;
   const c = sessionCost(s);
   return {
     model,

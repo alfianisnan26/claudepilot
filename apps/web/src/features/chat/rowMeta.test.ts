@@ -163,6 +163,17 @@ test('row meta: the Claude is named with its bar; under a Claude heading only th
   assert.equal(rowMeta({ session: s({ claudeId: '', claudeName: null }), groupBy: 'none', showWorkspace: false, usage: null, nowMs: NOW }).claude, null);
 });
 
+test('row meta: a worker on its lead\'s Claude does not repeat it (the lead above says it); on another Claude it names it', () => {
+  const worker = s();
+  const same = { claudeId: worker.claudeId, claudeName: worker.claudeName };
+  assert.equal(rowMeta({ session: worker, groupBy: 'none', showWorkspace: false, usage: usage(), nowMs: NOW, lead: same }).claude, null);
+  assert.equal(rowMeta({ session: worker, groupBy: 'none', showWorkspace: false, usage: usage(), nowMs: NOW, lead: { claudeId: '', claudeName: worker.claudeName } }).claude, null, 'the same name, no id');
+  const other = rowMeta({ session: worker, groupBy: 'none', showWorkspace: false, usage: usage(), nowMs: NOW, lead: { claudeId: 'claude-other', claudeName: 'Work' } });
+  assert.equal(other.claude?.name, worker.claudeName);
+  assert.equal(other.claude?.meter.kind, 'plan');
+  assert.equal(rowMeta({ session: worker, groupBy: 'none', showWorkspace: false, usage: usage(), nowMs: NOW, lead: null }).claude?.name, worker.claudeName, 'no lead: its own');
+});
+
 test('row meta: the cost (an estimate while a turn runs), nothing at 0; branch and ticket unless the grouping says them', () => {
   assert.equal(rowMeta({ session: s(), groupBy: 'none', showWorkspace: false, usage: null, nowMs: NOW }).cost, null);
   assert.deepEqual(rowMeta({ session: s({ costUsd: 10, turnCostEstimateUsd: 0.39 }), groupBy: 'none', showWorkspace: false, usage: null, nowMs: NOW }).cost, { usd: 10.39, estimate: true });

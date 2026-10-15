@@ -168,7 +168,8 @@ const BYPASS_DOT = (
  * plainly.
  *
  * Crew (T-294, crew.ts): a lead's row counts what it started (an icon and a number; the words in the tip); its workers sit under it on a
- * rail, the live ones in spawn order, the done ones behind one "N done" row. A worker whose lead is not among the rows sits under a lead
+ * rail, the live ones in spawn order, the done ones behind one "N done" row; a worker shows its Claude and bar only when it differs from its
+ * lead's (`lead`). A worker whose lead is not among the rows sits under a lead
  * header (T-369, `row.context`: the lead as muted context, a tap opens it); in a chip, a lead that matches with workers under it shows as
  * the same header (`row.header`), so its flip in and out of the chip moves nothing; one whose lead is archived links to it ("from …").
  */
@@ -184,9 +185,12 @@ export function SessionRow({
   actions,
   personas,
   facts = NO_FACTS,
+  lead = null,
 }: {
   row: ListRow;
   depth?: number;
+  /** The lead this row sits under (its row or header is right above): a worker on the same Claude does not repeat it. */
+  lead?: ChatSession | null;
   groupBy: ListGroupBy;
   selecting: boolean;
   selected: ReadonlySet<string>;
@@ -225,7 +229,7 @@ export function SessionRow({
   const bypass = s.mode === 'bypassPermissions' && s.state !== 'ended';
   const role = roleShown(s);
   const state = rowState(s, row.workspaceGone, safety?.label ?? null);
-  const meta = rowMeta({ session: s, groupBy, showWorkspace: facts.showWorkspace, usage: facts.usage?.get(s.claudeId) ?? null, nowMs: facts.nowMs });
+  const meta = rowMeta({ session: s, groupBy, showWorkspace: facts.showWorkspace, usage: facts.usage?.get(s.claudeId) ?? null, nowMs: facts.nowMs, lead });
   const third = thirdLine(meta);
 
   const branch = meta.branch && (
@@ -304,6 +308,7 @@ export function SessionRow({
       actions={actions}
       personas={personas}
       facts={facts}
+      lead={s}
     />
   );
 
