@@ -16,10 +16,10 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - IMPL T-416 S1d 41675b08 (opus, why: incident) on ticket/T-416-s1d (base a63e181e = S1c + integration, lead merged; 2 conflicts kept both).
   Fixes for review 6187 CHANGES: wake reserves, hold reservation past the 5 s cache, queued start checked, restart vs Bypass, item 2, PRD.
 - IMPL T-325 S1b 7eb43876 (opus, why: security) on ticket/T-325-s1b: QA FAIL 6133 F1 (author's child named qa-verifier), M4, M7.
-- BACKEND 4b025fae on T-633 (ticket/T-633-digest-mutants). -> QA Perf when done.
-- BE INFRA ae4e3f72 (sonnet) on T-638 flakes (imageBuild EPIPE, quota relevance, knowledge/layout).
+- QA PERF 7e4879c7: T-633 399e7b5d (6220, Backend 4b025fae ended) -> T-638 6fdb5b29 (6217, BE Infra ae4e3f72 ended); then T-325 S1b, T-416 S1d.
+- BACKEND lane d762b5fc (sonnet) on T-574 session_family summary (ticket/T-574-family-summary).
+- BE INFRA lane aa8dc58b (sonnet) on T-341 RTK fidelity (ticket/T-341-rtk-fidelity = dev/t-306-1 + integration dca5e36f; no hook registration).
 - QA UI 8b13bb5a: T-576 phone check (390/1280 on the real build); kit 44 px -> T-639.
-- QA PERF 7e4879c7: idle, queue empty; next T-633, then T-416 S1d / T-325 S1b.
 - HELD: T-426 S1e 2174eee1 QA PASS 6169 -> merge on the T-401 ack (4941). T-578 51f6c153 review CHANGES 6168 -> owner decision.
   T-631 review CHANGES 5850: absolute-path entry (a) for the coordinator; F1 on job-run.sh -> T-635 (high).
 - 16:12 OWNER PRIORITY (coordinator, T-426 5538): T-401 then T-426 FIRST. T-401 gate GREEN gate-54ba328-6502; ff only on the person's ack.
