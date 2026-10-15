@@ -8,7 +8,6 @@ import { TreeSkeleton } from '@/features/repos';
 import { api, errorText } from '@/lib/api';
 import { formatBytes, formatDateTime, formatUntil, timeAgo } from '@/lib/format';
 import { ClaudesSection } from './ClaudesSection';
-import { unavailableNote } from './lastKnown';
 import { ResourcesRow } from './ResourcesRow';
 import { VersionChip } from '@/features/claudeversion/VersionChip';
 import { usageFractions } from './usage';
@@ -96,7 +95,6 @@ export function WorkspaceSheet({
     }
   };
   const running = w.status === 'running';
-  const note = unavailableNote(w);
   const account = w.account;
   const limits = [w.cpus && `${w.cpus} CPU`, w.memoryMb && formatBytes(w.memoryMb * 1024 * 1024)].filter(Boolean).join(' · ');
   const fractions = usageFractions(usage, w.cpus, w.memoryMb);
@@ -239,18 +237,8 @@ export function WorkspaceSheet({
           <Row label="Runs on">{targetLabel}</Row>
           {w.node && <Row label="Node">{w.node}</Row>}
           {isLastKnownStatus(w.status) && w.lastSeenAt && (
-            <Row
-              label={
-                note ? (
-                  <span className="inline-flex items-center gap-1">
-                    Last seen
-                    <InfoTip label="Why it is unavailable">{note}</InfoTip>
-                  </span>
-                ) : (
-                  'Last seen'
-                )
-              }
-            >
+            // The reason is in the banner above (once); this row says only when.
+            <Row label="Last seen">
               <span title={formatDateTime(w.lastSeenAt)}>{timeAgo(w.lastSeenAt)}</span>
             </Row>
           )}

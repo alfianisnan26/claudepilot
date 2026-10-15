@@ -101,6 +101,10 @@ try {
       check(/Default/.test(sheet.text) && /Claude/.test(sheet.text), `${tag}: the sheet lists its Claude (${JSON.stringify(sheet.text.replace(/\s+/g, ' ').slice(0, 160))})`);
       check(/Last seen/.test(sheet.text), `${tag}: the sheet says Last seen`);
       check(!sheet.scroll, `${tag}: no horizontal scroll with the sheet open`);
+      // The reason is shown once in the sheet (the banner); no ⓘ repeats it. Terminals wait (the server would refuse them at once).
+      const once = await b.eval(`(() => { const d = document.querySelector('[role=dialog]'); const t = d?.innerText ?? ''; return { shown: (t.match(/Timed out/g) ?? []).length, tips: d?.querySelectorAll('button[aria-label="Why it is unavailable"]').length ?? 0, term: document.querySelector('button[aria-label^="Open a terminal as"]')?.disabled ?? null }; })()`);
+      check(once.shown === 1 && once.tips === 0, `${tag}: the sheet shows the reason once (${JSON.stringify(once)})`);
+      check(once.term === true, `${tag}: the terminal button is disabled while it is unavailable`);
       await b.shot(`workspace-unavailable-${tag}-sheet`);
       await b.key('Escape');
       await sleep(400);

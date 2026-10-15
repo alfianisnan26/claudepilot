@@ -364,8 +364,8 @@ function WorkspaceRow({
   const limits = [w.cpus && `${w.cpus} CPU`, w.memoryMb && formatBytes(w.memoryMb * 1024 * 1024)].filter(Boolean).join(' · ');
   const items: MenuItem[] = [
     running || w.status === 'starting'
-      ? { label: 'Stop', icon: <Square className="size-4" />, onSelect: onStop, disabled: busy }
-      : { label: 'Start', icon: <Play className="size-4" />, onSelect: onStart, disabled: busy || w.status !== 'stopped' },
+      ? { label: 'Stop', icon: <Square className="size-4" />, onSelect: onStop, disabled: busy || unreachable }
+      : { label: 'Start', icon: <Play className="size-4" />, onSelect: onStart, disabled: busy || unreachable || w.status !== 'stopped' },
     // Every pool type in one place, the account pool included (foundation PRD §10).
     { label: 'Configuration…', icon: <SlidersHorizontal className="size-4" />, onSelect: onConfigure, disabled: w.status === 'creating' || unreachable },
     ...(w.delivery?.status === 'frozen' ? [{ label: 'Adopt workspace', icon: <ShieldCheck className="size-4" />, onSelect: onAdopt }] : []),
@@ -451,7 +451,7 @@ function WorkspaceRow({
       <div className={`flex shrink-0 items-center gap-1 ${picking ? 'hidden' : ''}`}>
         {note && (
           <InfoTip label={`Why ${workspaceDisplayName(w)} is unavailable`} className="sm:mr-1">
-            {note}
+            {note}. Start, Stop, Remove and terminals wait until it answers.
           </InfoTip>
         )}
         {running ? (
