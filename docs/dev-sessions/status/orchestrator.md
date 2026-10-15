@@ -8,7 +8,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 ## IN FLIGHT (6 of 6, D-71): all sonnet
 - BATCH 2 premerge e48066f (T-561 S1c 0beae29 + T-546 10b22e0; conflicts: migrations 778/779 kept both, PRD FR51 = T-546's + FR79)
   pushed wip/main-e48066f, GATE RUNNING (job-out/gate-e48066f.log) -> ff integration on green.
-- BACKEND respawned 9e80bf9a (ticket/T-591-s1d from my mechanical merge 1a075a36: both 783s kept) on T-591 S1d; then T-325 S1+S2.
+- T-591 S1d DONE 394abdd5 (5867; 783->784, lead checked no dup) -> QA Perf delta. Backend respawned 4083876c (ticket/T-325-s1) on T-325 S1 (5549 (b); S3 held).
   Old Backend 4b4edaf8 ended: T-600 BE 1a95fb03 (5756) + T-597 S1b 75656845 (5849) DONE -> QA Perf.
 - T-631 review CHANGES 5850 -> lead 5853: absolute-path entry (a) for the coordinator; F2 small slice; F1 also on job-run.sh -> T-635 (high).
 - IMPL T-558 S1b 191bd6f1 (ticket/T-558-s1b from e652c44; QA FAIL 5846 -> 5847).
@@ -18,7 +18,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - BE INFRA respawned e92c5ba3 (ticket/T-578-gate-reuse) on T-578 S1 (reuse green gate of same tree + per-file progress): a GATE change,
   merge only on a person's ack + blind review. T-578 claim refused by id (T-634): worker on it by spawn.
 - T-619 browser proof PASS 5793 (screenshots t619-390/1280.png in qa-t-600-ui-r3) -> 5810; #41 release is the coordinator's.
-- QA PERF 7e4879c7 (lane/cp-qa-perf): current item, then T-426 S1c+S1d 80f5bb72 (FRONT, owner), then rest of T-600 BE 1a95fb03 / T-597 S1b 75656845, then T-623 S1b 784926f.
+- QA PERF 7e4879c7 (lane/cp-qa-perf): current item, then T-426 S1c+S1d 80f5bb72 (FRONT, owner), then rest of T-600 BE 1a95fb03 / T-597 S1b 75656845, then T-623 S1b 784926f, then T-591 S1d delta 394abdd5. QA is the bottleneck (5 queued).
 - QA UI b3f769c5 (qa/T-600-ui-r3 32f67b8f): on T-576 ux (2427d98) now; then T-600 re-run after FE S1c (FE S1b FAIL 5721, Pace 2 cols at 1280).
 - FRONTEND: 6a1a061e DONE FE S1b 32985e2 (5621) -> QA UI; ended. FE S1c T-600 Pace grid (5721); then T-556 (T-486 now merged).
 - Merge notes: T-546 merges 10b22e0, not branch head 0004ac5. T-486 = S2d 2979f99 + S2e ea1c006. Ended: 5f8f392b, 74a8d857, 83921ca7,
