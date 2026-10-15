@@ -7,7 +7,7 @@ import { login, sleep } from './lib.mjs';
 
 let failed = 0;
 const check = (name, ok, extra = '') => {
-  console.log(`  ${ok ? 'ok  ' : 'FAIL'} ${name}${extra ? ` ${extra}` : ''}`);
+  if (!ok || !process.env.QUIET) console.log(`  ${ok ? 'ok  ' : 'FAIL'} ${name}${extra ? ` ${extra.slice(0, 300)}` : ''}`);
   if (!ok) failed++;
 };
 const note = (s) => console.log(`  note ${s}`);
@@ -107,14 +107,14 @@ try {
         // InfoTip by touch / keyboard
         await b.clickSel('[data-summary-tile="pace"] button');
         await sleep(300);
-        const tipOpen = await b.eval(`(() => { const t = [...document.querySelectorAll('[role=tooltip], [role=dialog], [data-infotip-open]')].filter((e) => e.getBoundingClientRect().width > 0); return t.map((e) => e.innerText.slice(0, 160)); })()`);
+        const tipOpen = await b.eval(`[...document.querySelectorAll('[role=note]')].filter((e) => e.getBoundingClientRect().width > 0).map((e) => e.innerText.slice(0, 160))`);
         check(`${tag}: pace InfoTip opens on click`, tipOpen.length > 0, JSON.stringify(tipOpen));
         await b.shot(`summary-tip-${tag}`);
         await b.key('Escape');
         await b.focusSel('[data-summary-tile="usage"] button');
         await b.key('Enter');
         await sleep(300);
-        const kb = await b.eval(`[...document.querySelectorAll('[role=tooltip], [role=dialog], [data-infotip-open]')].filter((e) => e.getBoundingClientRect().width > 0).length`);
+        const kb = await b.eval(`[...document.querySelectorAll('[role=note]')].filter((e) => e.getBoundingClientRect().width > 0).length`);
         check(`${tag}: usage InfoTip opens by keyboard Enter`, kb > 0);
         await b.key('Escape');
         // expand
