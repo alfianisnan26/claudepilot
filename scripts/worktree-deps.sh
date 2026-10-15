@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Gives a git worktree of this repository the dependencies of the main checkout, without npm ci (nothing heavy runs in the pod, D-61):
-#   scripts/worktree-deps.sh [--main <main checkout>] <worktree>     --main defaults to /home/node/work/claudepilot (tests point it elsewhere)
+#   scripts/worktree-deps.sh <worktree>     main checkout /home/node/work/claudepilot, worktrees under /home/node/work/claudepilot.worktrees
+# The flags --main <path> and --root <path> are for the tests only: refused unless WORKTREE_TEST_MODE=1 is set.
+# A <worktree> outside the worktrees folder is refused.
 # What it does (T-586, the same steps the coordinator did by hand for T-576):
 #   - <worktree>/node_modules becomes a real folder whose every entry (and every @scope entry) links to the main checkout's install;
 #   - @portal/contracts, @portal/server and @portal/web link to the WORKTREE's own packages/contracts, apps/server and apps/web;
@@ -10,10 +12,20 @@
 # dependencies are not the same and a link would lie), when <worktree> is not a git worktree of the main checkout's repository, and
 # for the main checkout itself. It deletes only symlinks it replaces; a real file or folder in its way is left and reported.
 set -eu
-main=/home/node/work/claudepilot
-if [ "${1:-}" = "--main" ]; then main=${2:?--main <path>}; shift 2; fi
-wt=${1:?usage: scripts/worktree-deps.sh [--main <main checkout>] <worktree>}
+set -o pipefail
 refuse() { echo "refused: $*" >&2; exit 2; }
+main=/home/node/work/claudepilot; root=/home/node/work/claudepilot.worktrees
+# --main and --root exist for the tests only: without WORKTREE_TEST_MODE=1 the caller cannot move the script's reach.
+while [ $# -gt 0 ]; do
+  case $1 in
+    --main|--root)
+      [ "${WORKTREE_TEST_MODE:-}" = 1 ] || refuse "$1 is for tests only (set WORKTREE_TEST_MODE=1); the defaults are the only reach"
+      if [ "$1" = --main ]; then main=${2:?--main <path>}; else root=${2:?--root <path>}; fi
+      shift 2 ;;
+    *) break ;;
+  esac
+done
+wt=${1:?usage: scripts/worktree-deps.sh <worktree>}
 
 [ -d "$main/node_modules" ] || refuse "no install at $main/node_modules"
 [ -d "$wt" ] || refuse "$wt is not a folder"
@@ -24,6 +36,10 @@ wt=$(cd "$wt" && pwd -P)
 common=$(git -C "$wt" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || :)
 [ -n "$common" ] && [ "$(cd "$common" && pwd -P)" = "$(cd "$main/.git" && pwd -P)" ] || refuse "$wt is not a worktree of $main"
 [ "$(git -C "$wt" rev-parse --absolute-git-dir)" != "$(cd "$main/.git" && pwd -P)" ] || refuse "$wt is the main checkout, not a worktree"
+# Only a worktree under the worktree root: never another agent's folder elsewhere.
+[ -d "$root" ] || refuse "no worktrees folder $root"
+root=$(cd "$root" && pwd -P)
+case $wt in "$root"/*) ;; *) refuse "$wt is outside the worktrees folder $root" ;; esac
 
 # Same package files as the main checkout? (the lockfile and every package.json, tracked on either side)
 files=$( { git -C "$wt" ls-files; git -C "$main" ls-files; } | grep -E '(^|/)(package\.json|package-lock\.json)$' | sort -u || :)

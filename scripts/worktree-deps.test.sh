@@ -23,7 +23,7 @@ g -C "$main" add -A
 g -C "$main" commit -q -m init
 g -C "$main" worktree add -q -b ticket/x "$wt"
 
-run() { bash "$script" --main "$main" "$@"; }
+run() { WORKTREE_TEST_MODE=1 bash "$script" --main "$main" --root "${root:-$base}" "$@"; }
 # expect <name> <exit code> <stderr fragment or ""> -- args...
 expect() {
   local name=$1 code=$2 frag=$3; shift 4
@@ -79,6 +79,22 @@ expect "subfolder refused" 2 "not the top" -- "$wt/apps"
 # the main checkout itself
 expect "main checkout refused" 2 "main checkout" -- "$main"
 [ -L "$main/node_modules/left-pad" ] && bad "main untouched" || ok "main untouched"
+# a worktree outside the worktrees folder is refused, and nothing in it is linked
+mkdir -p "$base/elsewhere"
+root=$base/elsewhere expect "worktree outside the root refused" 2 "outside the worktrees folder" -- "$wt"
+mkdir -p "$base/trees"; g -C "$main" worktree add -q -b ticket/y "$base/trees/y"
+root=$base/trees expect "worktree inside the root passes" 0 "" -- "$base/trees/y"
+root=$base/nope expect "missing root refused" 2 "no worktrees folder" -- "$wt"
+# the flags are refused without the test-only variable
+for flag in --main --root; do
+  rc=0; err=$(env -u WORKTREE_TEST_MODE bash "$script" "$flag" "$base" "$wt" 2>&1 >/dev/null) || rc=$?
+  if [ "$rc" = 2 ] && [[ $err == *"$flag is for tests only"* ]]; then ok "$flag refused without WORKTREE_TEST_MODE"; else bad "$flag refused without WORKTREE_TEST_MODE (exit $rc: $err)"; fi
+done
+rc=0; err=$(WORKTREE_TEST_MODE=0 bash "$script" --main "$main" "$wt" 2>&1 >/dev/null) || rc=$?
+[ "$rc" = 2 ] && ok "--main refused when the variable is not 1" || bad "--main refused when the variable is not 1 (exit $rc)"
+# without the flags, the real defaults apply: the fake worktree is not a worktree of the real main checkout, so it is refused
+rc=0; err=$(env -u WORKTREE_TEST_MODE bash "$script" "$wt" 2>&1 >/dev/null) || rc=$?
+[ "$rc" = 2 ] && ok "defaults apply without flags (refused)" || bad "defaults apply without flags (exit $rc: $err)"
 
 [ "$fails" = 0 ] && { echo "all passed"; exit 0; }
 echo "$fails failed"; exit 1

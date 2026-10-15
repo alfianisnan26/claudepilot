@@ -23,7 +23,7 @@ g -C "$main" commit -q -m init
 g -C "$main" remote add origin "$base/origin.git"
 g -C "$main" push -q origin integration
 
-run() { bash "$script" --main "$main" --root "$root" "$@"; }
+run() { WORKTREE_TEST_MODE=1 bash "$script" --main "$main" --root "$root" "$@"; }
 expect() {
   local name=$1 code=$2 frag=$3; shift 4
   local rc=0 err
@@ -43,6 +43,18 @@ expect "existing branch refused" 2 "branch ticket/T-13-taken already exists" -- 
 expect "bad ticket id refused" 2 "T-<n>" -- 13 slug
 expect "path escape refused" 2 "slug" -- T-14 ../evil
 expect "slash slug refused" 2 "slug" -- T-14 a/b
+expect "leading-dash slug refused" 2 "slug" -- T-14 -evil
+expect "glob star slug refused" 2 "slug" -- T-14 'a*'
+expect "glob bracket slug refused" 2 "slug" -- T-14 '[a]b'
+expect "glob question slug refused" 2 "slug" -- T-14 'a?b'
+# --main and --root are refused without the test-only variable (env -u: the variable may be set around this test)
+for flag in --main --root; do
+  rc=0; err=$(env -u WORKTREE_TEST_MODE bash "$script" "$flag" "$base" T-16 flagtest 2>&1 >/dev/null) || rc=$?
+  if [ "$rc" = 2 ] && [[ $err == *"$flag is for tests only"* ]]; then ok "$flag refused without WORKTREE_TEST_MODE"; else bad "$flag refused without WORKTREE_TEST_MODE (exit $rc: $err)"; fi
+done
+rc=0; err=$(WORKTREE_TEST_MODE=0 bash "$script" --root "$base" T-16 flagtest 2>&1 >/dev/null) || rc=$?
+[ "$rc" = 2 ] && ok "--root refused when the variable is not 1" || bad "--root refused when the variable is not 1 (exit $rc)"
+[ ! -e "$root/ticket-t-16-flagtest" ] && ok "nothing made by a refused flag" || bad "nothing made by a refused flag"
 [ ! -e "$base/evil" ] && ok "nothing made outside the folder" || bad "nothing made outside the folder"
 
 [ "$fails" = 0 ] && { echo "all passed"; exit 0; }
