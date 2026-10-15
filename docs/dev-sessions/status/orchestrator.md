@@ -26,6 +26,7 @@ Older log: `orchestrator-log-2026-10-14.md`. Previous hand-overs: ab99b45 (a8393
 - T-378 (high): S1 dev/t-378-1 9834ff7 (comment 2631: FAIL proof on the owner's cases). Merge with the next batch (qa tools only); S2 transcript-perf + long-lists next; S4 the PASS runs.
 
 ## DECISIONS (binding)
+- 03:45 coordinator: T-433 landed: workers HAVE ticket tools; brief them to post their full report with ticket_comment and start the final reply with the verdict line; the lead reads verdict lines only. At most 2 live sessions per Claude, least used first. Hand over at 250k context. Its "2 Agent-tool sub-agents" are this lead's 2 background Bash Jobs (gate-job, job-run), not the Agent tool (never used by de232389).
 - 04:00 coordinator T-433: copy only a worker's verdict line + pointer, never the whole report (until A lands; then workers comment themselves). T-433 blind reviewer = FIRST free slot (D-61 cap 3 kept; conflict named on T-433).
 - 03:50 CONFLICT named: the supervisor's nudge (5 workers, claude auto, one own sub-agent, D-43/D-49) vs D-61 (3 live workers, NO Agent-tool sub-agents) and the coordinator's placement rule. D-61 is newer and binding: 3 workers, placed by claude_usage. The lead does T-427 itself (D-61 allows it).
 - 03:40 coordinator (quota): until T-427 ships, never claude:auto; read claude_usage first and pass the Claude with the lowest session % not at its limit; at most 2 live sessions per Claude (now: fadlilah = me + a1bf3da8, hasyim = 07cef3b0, alfian.isnan = 033e1b23).
