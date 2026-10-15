@@ -225,6 +225,8 @@ const FRONT: [string, Partial<Front>][] = [
   ['---\n- a\n---\n', { odd: true }],
   ['---x\nname: a\n---\n', { odd: true }], // an opening line other than ---
   ['---\nname: a\ndescription: >\n  long\n  text\nmodel: opus\ncolor: blue\ntools: Read, Grep\nargument-hint: [x] [y]\n# a note\n---\nbody\n', {}],
+  // 2026-10-15: an ordinary agent file (the keys the persona renders) is clean, so a repository with such agents can be trusted by itself.
+  ['---\nname: event-qa\ndescription: QA\nmodel: sonnet\neffort: high\nmaxTurns: 80\ndisallowedTools: Edit, NotebookEdit\n---\nbody\n', {}],
   // m1: only --- ends the frontmatter; a ... line is odd, and what follows it is read.
   ['---\nname: a\n...\n---\n', { odd: true }],
   ['---\ndescription: a\n...\nallowed-tools: Bash\n---\n', { broad: true, odd: true }],
