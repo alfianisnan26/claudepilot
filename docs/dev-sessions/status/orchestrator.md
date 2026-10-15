@@ -10,11 +10,11 @@ Older log: `orchestrator-log-2026-10-14.md`. Previous hand-overs: ab99b45 (a8393
 ## IN FLIGHT (3 live workers = the D-61 budget; no Agent-tool sub-agents)
 - T-366 (urgent): fixes dev/t-366-1 f541f64 (comment 2974). FOURTH reviewer 3596b2c3 (opus, hasyim) on 086a9e1..f541f64. T-435 (high), T-432 (low) filed.
 - T-417 (high): fixes on dev/t-417-1 c606ef6 (proof 7/7 vs 9622deb, chat 704/0 fail, typecheck 0; fixer a1bf3da8 ended). qa-verifier f20d8008 (opus, fadlilah) in dev-t-336-1 verifies T-417 AND T-427 (3198f5d). PASS on both -> merge both, gate.
-- T-375 (high) + T-369: dev/t-375-1 c84657f; ux FAIL (comment on T-375): 390 line two clips cost/Claude name, lead cost missing; header 36 px at 1280; gaps (Select all, multi-workspace, branch+ticket). ux-checker e44c2a1b ended. NEEDS an implementer (dev-t-333-1) then a new ux-checker.
+- T-375 (high) + T-369: ux FAIL on c84657f (comment 2978). Fixer ee1a1b05 (opus, hasyim) in dev-t-333-1: no clipped values at 390, header 44 px, new checks. Then a new ux-checker.
 
 - T-427 (high, in_review): dev/t-427-1 3198f5d; proof green (job dea8cc76, comment 2932); in f20d8008's verification.
 
-- T-433 (high): blind reviewer b3027001 (opus, hasyim) in dev-t-349-1; verdict line goes on T-433, then the coordinator lands A+B.
+- T-433 (high, in_review): blind review PASS conditional (comment 2984): A ok; B/C hit the persona wall (named for the coordinator); A may be redundant (tools likely missing via --agent lists, not refused). T-436 (vault binding) filed. Coordinator lands.
 
 ## READY, NOT MERGED
 - T-369 (urgent): dev/t-369-1 ff0088d (comment 2568: web 576/576, flip proof f9d87e3b, session-crew 5/5 a9166dc2). Waits for the ux-check above.
@@ -36,7 +36,6 @@ Older log: `orchestrator-log-2026-10-14.md`. Previous hand-overs: ab99b45 (a8393
 - T-93 Konfersi production only. Coordinator items: T-397 (authz+persona loosening; charter-wall conflict named), T-422 (sudo removal, tightening), T-306 item 4 / T-340 (rtk hook).
 
 ## NEXT (in order, as slots free)
-0. T-375/T-369 fix implementer (opus, dev-t-333-1).
 1. T-427 (high, owner's ticket, coordinator 03:45: same batch as T-417; agents.ts pickSpawnClaude + agents.test.ts; implementer, sonnet is enough). Next deploy batch = T-417 + T-427, on 2026-10-16 (today's cap of 3 is used).
 1b. T-404 fixes (worker in dev-t-352-1 on dev/t-404-1), then a new blind reviewer.
 2. T-413 post-mortem (incident-analyst worker, sonnet).
