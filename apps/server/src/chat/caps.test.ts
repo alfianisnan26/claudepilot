@@ -25,6 +25,8 @@ test('makeRoom: nothing to do under the caps; the longest-idle session of the wo
   assert.deepEqual(makeRoom(live(['a', 'w1']), idle(['a', 1]), 'w1', 2, { perWorkspace: 2, total: 9 }), { sleep: ['a'] }, 'an Ultracode session needs two slots');
   // More than one may have to sleep.
   assert.deepEqual(makeRoom(live(['a', 'w1'], ['b', 'w1']), idle(['a', 1], ['b', 2]), 'w1', 2, { perWorkspace: 2, total: 9 }), { sleep: ['a', 'b'] });
+  // T-417: the lower rank sleeps first (an idle worker before an idle chat without workers), however long the other was idle.
+  assert.deepEqual(makeRoom(live(['a', 'w1'], ['b', 'w1']), [{ id: 'a', since: 1, rank: 1 }, { id: 'b', since: 9, rank: 0 }], 'w1', 1, caps), { sleep: ['b'] });
   const e = capError('workspace', 2, 2, 'docker/api');
   assert.equal(e.code, SESSION_CAP);
   assert.match(e.message, /2 sessions are already running in docker\/api, which is the limit \(Settings › Sessions\)/);
@@ -40,7 +42,7 @@ async function idleSession(s: Live) {
   return created;
 }
 
-test('over the per-workspace cap a new session puts the longest-idle one to sleep; with none that can, it is refused naming the cap', async () => {
+test('over the per-workspace cap a new session puts the longest-idle one to sleep; with none that can, it waits for a slot, then is refused naming the cap', async () => {
   const s = await liveSession();
   try {
     s.controller.liveCaps = () => ({ perWorkspace: 2, total: 10 });
@@ -53,18 +55,24 @@ test('over the per-workspace cap a new session puts the longest-idle one to slee
     assert.equal(procs[third.id], 'live');
     assert.deepEqual(s.controller.audit({ kind: 'cap.slept' }).map((a) => a.sessionId), [s.id]);
 
-    // A working session never sleeps for this: with both of the awake ones busy, the next start is refused.
+    // A working session never sleeps for this: with both of the awake ones busy, the next start waits for a slot (T-417), saying why;
+    // when none comes free in time it reads Interrupted, naming the cap.
     for (const x of [second, third]) await s.controller.send(x.id, `u-${x.id.slice(0, 6)}`, 'work');
     await until(() => [second.id, third.id].every((id) => s.controller.get(id)!.state === 'working'));
-    const refused = await s.controller.create({ workspaceId: 'docker/ws1' }).then(() => null, (e: unknown) => e);
-    assert.ok(isAppError(refused) && refused.code === SESSION_CAP, String(refused));
-    assert.match((refused as Error).message, /2 sessions are already running in docker\/ws1/);
-    assert.deepEqual((refused as unknown as { details: unknown }).details, { scope: 'workspace', limit: 2, running: 2, setting: 'sessions.maxLivePerWorkspace' });
-    assert.equal(s.controller.list().length, 3, 'no session was made');
+    s.controller.slotWaitMs = 300;
+    s.controller.slotPollMs = 20;
+    const queued = await s.controller.create({ workspaceId: 'docker/ws1' });
+    assert.match(queued.slotWait ?? '', /^Waiting for a slot · 2 of 2 running in docker\/ws1 \(Settings › Sessions\)$/);
+    assert.equal(s.controller.list().length, 4, 'the session is made; its start waits');
+    await until(() => s.controller.get(queued.id)!.state === 'interrupted');
+    assert.match(s.controller.get(queued.id)!.endedReason ?? '', /2 sessions are already running in docker\/ws1/);
+    assert.equal(s.controller.get(queued.id)!.slotWait ?? null, null);
 
-    // Waking the sleeper at the cap is refused the same way (nothing can sleep), and says so instead of hanging.
+    // Waking the sleeper at the cap waits the same way (nothing can sleep), then is refused naming the cap instead of hanging.
     const woken = await s.controller.send(s.id, 'wake-1', 'hello').then(() => null, (e: unknown) => e);
-    assert.ok(isAppError(woken) && woken.code === SESSION_CAP);
+    assert.ok(isAppError(woken) && woken.code === SESSION_CAP, String(woken));
+    assert.match((woken as Error).message, /2 sessions are already running in docker\/ws1/);
+    assert.deepEqual((woken as unknown as { details: unknown }).details, { scope: 'workspace', limit: 2, running: 2, setting: 'sessions.maxLivePerWorkspace' });
     // Lowering a cap never stops a running session.
     s.controller.liveCaps = () => ({ perWorkspace: 1, total: 1 });
     assert.equal(s.controller.get(second.id)!.process, 'live');
