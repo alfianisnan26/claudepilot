@@ -19,7 +19,7 @@ import { errorText } from '@/lib/api';
 import { chatApi } from './api';
 import { BulkBar, runBulk, type BulkAction } from './BulkBar';
 import { crewStatusGroup } from './crew';
-import { canFold, chipCounts, defaultChip, ofProgram, programCounts } from './listOrder';
+import { canFold, chipCounts, ofProgram, programCounts, withChange, withDefaultChip, type ChipChoice } from './listOrder';
 import { NewSessionDialog } from './NewSessionDialog';
 import { ArchiveSessionDialog, DeleteSessionDialog, EndSessionDialog, RenameSessionDialog } from './SessionDialogs';
 import { SessionRow, type RowActions } from './SessionRow';
@@ -71,15 +71,18 @@ export function SessionsPage() {
   // Counts for the filter chips, over what's open (never changed by the search).
   const counts = useMemo(() => chipCounts(shown ?? []), [shown]);
   // The chip opens on the first one with sessions in the order of attention (T-100: Needs you, In progress, Idle, Pinned, Ended, else All); once
-  // the sessions are known, and only until the person picks one.
-  const [baseView, setView] = useState<Omit<ViewState, 'program'>>(() => ({ ...savedView(), filter: 'attention', query: '', archived: false }));
+  // the sessions are known, and only until the person picks one (the pick is in the same state, so a pending default never undoes it: T-321).
+  const [baseView, setView] = useState<Omit<ViewState, 'program'> & ChipChoice>(() => ({
+    ...savedView(),
+    filter: 'attention',
+    query: '',
+    archived: false,
+    picked: false,
+  }));
   const view: ViewState = useMemo(() => ({ ...baseView, program }), [baseView, program]);
-  const [chosenFilter, setChosenFilter] = useState(false);
   useEffect(() => {
-    if (chosenFilter || !sessions) return;
-    const filter = defaultChip(counts);
-    setView((v) => (v.filter === filter ? v : { ...v, filter }));
-  }, [sessions, counts, chosenFilter]);
+    if (sessions) setView((v) => withDefaultChip(v, counts));
+  }, [sessions, counts]);
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   const [folded, setFolded] = useState<ReadonlySet<string>>(new Set());
   const [selecting, setSelecting] = useState(false);
@@ -94,9 +97,8 @@ export function SessionsPage() {
 
   const change = ({ program: nextProgram, ...next }: Partial<ViewState>) => {
     if (nextProgram !== undefined) setProgram(nextProgram);
-    if (next.filter !== undefined || next.archived !== undefined) setChosenFilter(true);
     setView((v) => {
-      const merged = { ...v, ...next };
+      const merged = withChange(v, next);
       try {
         localStorage.setItem(VIEW_KEY, JSON.stringify({ groupBy: merged.groupBy }));
       } catch {

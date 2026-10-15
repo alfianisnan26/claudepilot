@@ -18,3 +18,16 @@ defineSetting({
   label: 'Orphan delay',
   help: 'Minutes a ticket’s session must have ended (or be gone) before the portal moves the ticket by itself: to the live session that continues that track, else back to the agents’ queue. A session that comes back within this time keeps its tickets.',
 });
+
+defineSetting({
+  key: TICKET_SETTING_KEYS.agentOpenPerWorkspace,
+  type: 'number',
+  default: 600,
+  min: 50,
+  max: 5000,
+  scope: 'global',
+  group: 'tickets',
+  order: 20,
+  label: 'Open agent tickets per workspace',
+  help: 'How many open tickets agents may have made in one workspace before the portal refuses another (FR20, the queue is protected from a looping agent). Several programs can share a workspace; a person is never limited.',
+});

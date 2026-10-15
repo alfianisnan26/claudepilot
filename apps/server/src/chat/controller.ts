@@ -46,6 +46,8 @@ import {
   WORKTREE_DIRTY,
   type ChatConfigChange,
   type ChatControl,
+  type ChatEvent,
+  type ChatEventPage,
   type ChatFile,
   type ChatFolderScan,
   type ChatImage,
@@ -79,6 +81,7 @@ import { HOME, type ExecSession } from '../workspaces/runtime.js';
 import { ChatContent, blobFileFor, type BlobFile } from './artifacts/index.js';
 import { decodeToolImage, pruneBlobs, readBlob, saveBlob } from './blobs.js';
 import { ineligibleError, NOT_SET_UP, NOT_SIGNED_IN, UNKNOWN, type Eligibility } from './eligibility.js';
+import { eventPage } from './eventPage.js';
 import { workspacePath } from './files.js';
 import { CP_SESSION_PATH, HOST_ENV_NAMES, parseStartOutput } from './host.js';
 import {
@@ -329,6 +332,12 @@ export interface ChatCreateOptions {
   limits?: WorkerLimitsAsk;
   /** T-294 (Crew over MCP): what a worker (only with `parentId`) tells its lead unasked; unset is `idle`. */
   report?: WorkerReport;
+  /**
+   * T-349: only with `parentId`: the parent must be live (not ended, not archived) and of the new session's workspace, checked when its
+   * place is held and again right before the row is written (no await between that check and the insert), so a parent that ends while
+   * the worker is being made gets no worker. Refused, it is a NOT_FOUND with exactly this message (the caller's one answer for a parent).
+   */
+  liveParent?: string;
 }
 
 export interface ChatSendOptions {
@@ -1082,6 +1091,18 @@ export class ChatController {
     return this.#chat.history(this.#chat.resolveId(id), after);
   }
 
+  /** A page of the transcript counted back from `before` (the newest when null), oldest first, tool_result bodies cut (T-376, `eventPage.ts`). */
+  historyPage(id: string, before: number | null, limit: number): ChatEventPage {
+    return eventPage(this.#chat.historyBefore(this.#chat.resolveId(id), before, limit + 1), limit);
+  }
+
+  /** One stored event whole (what a page cut to a preview); 404 when the session has no such event. */
+  event(id: string, seq: number): ChatEvent {
+    const ev = Number.isSafeInteger(seq) && seq > 0 ? this.#chat.event(this.#chat.resolveId(id), seq) : null;
+    if (!ev) throw new AppError('NOT_FOUND', 'No such event.');
+    return ev;
+  }
+
   /** The session's sub-agents and background tasks. */
   tasks(id: string): ChatTask[] {
     const session = this.#require(id);
@@ -1365,6 +1386,7 @@ export class ChatController {
     if (!opts.parentId) return this.#create(req, opts);
     // A worker: its parent's limits are checked and a place is held in ONE synchronous step, so parallel spawns (several session_spawn calls
     // in one turn run at once) see each other; the place is given back when the row exists or the start was refused.
+    if (opts.liveParent !== undefined) this.#requireLiveParent(opts.parentId, req.workspaceId, opts.liveParent);
     const parentId = this.#require(this.#chat.resolveId(opts.parentId)).id;
     this.#checkSpawn(parentId);
     this.#spawning.set(parentId, (this.#spawning.get(parentId) ?? 0) + 1);
@@ -1440,6 +1462,8 @@ export class ChatController {
       }
       bypassCapable = true;
     }
+    // T-349: asked again after the last await, so nothing runs between this answer and the insert below.
+    if (parentId && opts.liveParent !== undefined) this.#requireLiveParent(parentId, workspaceId, opts.liveParent);
     const row = {
       id,
       workspaceId,
@@ -2971,6 +2995,13 @@ export class ChatController {
     let depth = 0;
     for (let s = this.#chat.get(sessionId); s?.parentId && depth < 32; s = this.#chat.get(s.parentId)) depth++;
     return depth;
+  }
+
+  /** T-349: the parent a `liveParent` create names is live, not archived and of this workspace; anything else is ONE not-found. */
+  #requireLiveParent(rawParent: string, rawWorkspace: unknown, notFound: string): void {
+    const p = this.#chat.get(this.#chat.resolveId(rawParent));
+    const ws = typeof rawWorkspace === 'string' ? rawWorkspace.trim() : '';
+    if (!p || p.state === 'ended' || p.archivedAt || p.workspaceId !== ws) throw new AppError('NOT_FOUND', notFound);
   }
 
   /** The limits on starting a worker under `parentId`: depth, how many are running, how many an hour. */

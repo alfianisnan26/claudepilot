@@ -14,8 +14,9 @@
 //   RESUME <id> run=<r> next=<step>    a finished CI run of a dispatch (--apply writes the FACTORY RESUME marker; dry says "would")
 //   START <id> <started|adopted|skipped|refused|failed> [session <sid>][: why]   --start: the slice's worker session
 //   BUDGET <id> over: <measure> ...    --start: a measure of the slice's session past 100 percent of its size's budget (factory.mjs
-//                                      watchBudget: wall minutes and transcript events move mid-turn, cost_usd only at a turn's end; at 150
-//                                      percent of any one it is interrupted and stopped: an EXCEPTION line)
+//                                      watchBudget: wall minutes, transcript events and cost_usd (with the running turn's estimate,
+//                                      T-343) move mid-turn; at 150 percent of any one it is interrupted and stopped: an EXCEPTION line;
+//                                      a stopped session still busy 10 min later, STOP_GRACE_MIN, is ended: one more EXCEPTION line)
 //   NEXT <ticket> <id> <step> <role>/<model>: <why>   the step a role runs now (review, verify, fix) or the coordinator (integrate)
 //   LEARN <id>: wrote | would comment  followed by the ACTUAL text, indented: --apply writes it (it ends the dispatch), dry prints it
 //   EXCEPTION <ticket> <id>: <why>     the coordinator's: stale, cancelled, out of order, conflict, rework limit, budget stop, held after a
@@ -80,7 +81,19 @@ export async function runRound(deps) {
   let next = 0;
   for (const raw of tickets) {
     const t = f.normalizeTicket(raw);
-    if (!f.dispatchesOf(t).some((d) => !d.ended)) continue;
+    if (!f.dispatchesOf(t).some((d) => !d.ended)) {
+      // T-352 m1: a budget-stopped slice stays in the watch for its "commit WIP and report" turn; past the grace a busy session is ended.
+      const stopped = watch ? f.stoppedSession(t) : null;
+      if (stopped) {
+        try {
+          const w = await watch(raw);
+          for (const x of w.exceptions ?? []) except(x.ticket, x.dispatchId, x.reason);
+        } catch (e) {
+          except(t.id, stopped.dispatchId, `stopped session not checked this round: ${oneLine(e)}`);
+        }
+      }
+      continue;
+    }
     if (start || watch) {
       const open = f.dispatchesOf(t).filter((d) => !d.ended);
       const last = open[open.length - 1];

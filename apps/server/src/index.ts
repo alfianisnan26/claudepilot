@@ -394,6 +394,7 @@ const tickets = new Tickets(store, new ChatTicketSessions(chatController), {
   link: (id) => `${(config.portalMcp.uiUrl ?? `http://localhost:${config.port}`).replace(/\/+$/, '')}/admin/tickets/${id}`,
   workspaceRefs: workspaces.identities,
   orphanAfterMin: () => settingsModule.settings.get<number>(TICKET_SETTING_KEYS.orphanAfterMin),
+  agentOpenPerWorkspace: () => settingsModule.settings.get<number>(TICKET_SETTING_KEYS.agentOpenPerWorkspace),
 });
 tickets.onChange = () => notify('tickets');
 // A bump reaches into a session: the platform audit (created further down) records who, which ticket, which session and how (FR30).

@@ -705,6 +705,25 @@ export class ChatStore {
     return rows.map((r) => this.#toEvent(r));
   }
 
+  /**
+   * At most `count` events before `before` (from the newest when null), NEWEST FIRST: a page of the transcript (T-376, `eventPage.ts`).
+   * Keyset on the primary key's `seq`, never an offset (D-58).
+   */
+  historyBefore(sessionId: string, before: number | null, count: number): ChatEvent[] {
+    const rows = this.#db()
+      .prepare('SELECT seq, at, kind, uuid, parent_tool_use_id, request_id, payload FROM chat_events WHERE session_id = ? AND seq < ? ORDER BY seq DESC LIMIT ?')
+      .all(sessionId, before ?? Number.MAX_SAFE_INTEGER, count) as EventRow[];
+    return rows.map((r) => this.#toEvent(r));
+  }
+
+  /** One stored event by its seq, whole, or null. */
+  event(sessionId: string, seq: number): ChatEvent | null {
+    const row = this.#db().prepare('SELECT seq, at, kind, uuid, parent_tool_use_id, request_id, payload FROM chat_events WHERE session_id = ? AND seq = ?').get(sessionId, seq) as
+      | EventRow
+      | undefined;
+    return row ? this.#toEvent(row) : null;
+  }
+
   /** The running cost the session's newest `result` reported, or null before the first. */
   lastResultCost(sessionId: string): number | null {
     const row = this.#db()
