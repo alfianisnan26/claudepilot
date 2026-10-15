@@ -323,7 +323,7 @@ hardened() {
   export GIT_OPTIONAL_LOCKS=0 GIT_TERMINAL_PROMPT=0 GIT_PAGER=cat LC_ALL=C
   unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_NAMESPACE GIT_CEILING_DIRECTORIES
   gf='-c core.fsmonitor= -c core.hooksPath=/dev/null -c diff.external= -c core.pager=cat -c core.quotePath=false -c color.ui=false'
-  for f in $(git $gf config --name-only --get-regexp '^filter\\.' | sed -n 's/^filter\\.\\([A-Za-z0-9_.-]*\\)\\.[a-z]*$/\\1/p' | sort -u); do
+  for f in $(timeout 10 git $gf config --name-only --get-regexp '^filter\\.' | sed -n 's/^filter\\.\\([A-Za-z0-9_.-]*\\)\\.[a-z]*$/\\1/p' | sort -u); do
     gf="$gf -c filter.$f.clean= -c filter.$f.smudge= -c filter.$f.process= -c filter.$f.required=false"
   done
 }
@@ -966,7 +966,7 @@ case "$cmd" in
     origin=
     if [ -n "$files" ] && [ "$here" != "$root" ]; then
       origin="$(hardened
-        if top="$(hg rev-parse --show-toplevel 2>/dev/null && printf x)"; then
+        if top="$(timeout 10 git $gf rev-parse --show-toplevel 2>/dev/null && printf x)"; then
           top="\${top%x}"; top="\${top%"$nl"}"
           if real "$top" && [ "$r" = "$here" ]; then
             timeout 10 git $gf config --get remote.origin.url 2>/dev/null | head -n 1 | sed -e 's|\\(://\\)[^/]*@|\\1|' -e 's|^[^/@]*@||' -e 's|[?#].*$||'
