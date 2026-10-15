@@ -11,15 +11,15 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   0 OOM) + web 629/629 (claudepilot-job-a19b47c9).
 - Earlier: 4ba5d37, 73bb581 merged; deploys #35/#36 (closed T-483, T-397, T-491, T-435, T-476, T-449).
 
-## IN FLIGHT (4 of 4 workers, D-65: c10daf0e T-401 S1, b1aa2e47 T-416 QA (GO, has the slot), 45148907 T-486 S2 WAITING 90716cf,
-  47710391 qa-sweep (sonnet) T-531 S2 QA then the 10-ticket in_review sweep, on qa/t-531-2 from 9cd240f)
-  Cluster slot order: T-416 QA -> T-486 S2 -> T-401 -> T-531 QA. Next free worker slot: T-426 (then T-379, T-546, T-548).
+## IN FLIGHT (4 of 4 workers, D-65: c10daf0e T-401 S1, 45148907 T-486 S2 (GO 11:15, has the slot; last ticket, ~145k),
+  47710391 qa-sweep (sonnet) T-531 S2 QA then the 10-ticket in_review sweep, dc1ba33c impl-t416b (sonnet) T-416 S1b)
+  Cluster slot order: T-486 S2 -> T-401 -> T-531 QA -> T-416 S1b. Next free worker slot: T-546 + T-548 (T-426 waits for T-401).
 - T-401 (high, security; claimed, 4576: M, sev 2, ~2.5 h): S1 c10daf0e (opus, impl-t401) on ticket/T-401-job-env from 58ce041:
   credentials only for clone/fetch (init container preferred), gone before npm scripts and the command; live FOUND/ABSENT check.
-- T-416 (high incident; 4439): S1 DONE d37c5f0 (4534: typecheck 396fbc13; server 995 pass 0 fail 4e6521ec; web 626/626 0ccd8ea5;
-  proof 1d735457 weak (module absent) + a163ad18 in-flight bug caught); ad68c3a4 ended. QA b1aa2e47 (sonnet = role default) incl.
-  mutation proof. Then blind review (opus), lead gate, merge, deploy. S2 = Bypass restore. D-34 vs the memory item: built as the
-  ticket asks; for the coordinator.
+- T-416 (high incident): S1 d37c5f0; QA b1aa2e47 PASS WITH GAPS (4623: 995/999 0 fail job-2c410105; mutations A2/B/C caught);
+  ended. Decision 4637 (D-65 lever 3): S1b dc1ba33c fixes the parallel-create race + push-bridge test on ticket/T-416-budget-s1b.
+  Then blind review (opus), lead gate, merge, deploy. S2 = Bypass restore.
+- T-426 (claimed 4642): starts on T-401's merged head (same Secret block of job-run.sh); opus + blind review; T-379 after it.
 - T-524: S1 + S2 merged (4551). Open ONLY: k3s-master under 85% in a busy hour, measured (with T-513). Minors -> T-543.
 - T-531 (high, authz): S1 df65563 (4515: typecheck a3cf20b8; 1105/1111 0 fail ed930af1; proof 535ee3fc 6/6); 74a6ee0e ended.
   Blind review 21731f30 PASS WITH CONDITIONS (4520: preflight at view runs a shell, adopt at operate; ended). Decision 4524: fix
@@ -70,7 +70,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 
 ## NEXT (in order, as slots free)
 1. T-531 S2 Jobs -> QA (sonnet) -> lead gate -> merge. 2. T-416 QA Jobs -> blind review (opus) -> lead gate -> merge -> deploy; then S2.
-3. NEXT FREE SLOT: T-426 (opus, why: security door) then T-379 (sonnet) in the same worker; then T-546 + T-548 (one worker),
+3. NEXT FREE SLOT: T-546 + T-548 (one sonnet worker); T-426 (opus, why: secret door) + T-379 once T-401 merges;
    then T-547 + T-549. Sweep results (47710391): the lead closes on PASS or reopens with the gap. 4. T-524 measurement with T-513.
 4. T-486 S2 -> QA -> deploy. 5. T-537. 6. T-513 (cluster GitOps MR).
 7. T-422, T-147, T-438, T-425, T-436, T-437, T-432, T-378 S1 verify, T-382, T-377, T-386, T-409, T-402, T-398, T-399, T-370 HOLD,
