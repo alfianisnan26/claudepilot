@@ -11,7 +11,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 ## IN FLIGHT (4 of 4 workers, D-65: 445c3e1b impl-t561 (opus, why deny rules/authz) T-561 S1 WAITING a649874 (migration 778, no clash), 7d33708d impl-t558 (opus, why D-62 authz) T-558 WAITING e652c44 (plan 4930),
   fb538d7d qa-t486 (sonnet) T-486 QA WAITING GO, 03c496b6 impl-t546 (sonnet) T-546 crew digest WAITING bb7cdb0. 03b631f0 ended.)
   Sweep: PASS T-109/280/282/285, GAP T-259/294/136(?)/338/317/287; nobody can claim in_review tickets -> coordinator (T-525 4659).
-  Cluster: lead gate T-531 pre-merge 950c17d (wip/main-950c17d, running) -> T-486 QA -> T-558 -> T-546 -> T-561.
+  Cluster: lead gate T-531 pre-merge 55d5fad (re-merged on T-557 S1 59eca49; 950c17d gate stopped) -> T-486 QA -> T-558 ->
+  T-546 -> T-561. Then DEPLOY integration (carries T-557 S1 + T-575, coordinator asked). Next free slot: T-576 (sonnet + ux-checker).
   Later: T-426 QA + blind review (after T-401 merges), T-416 S1b QA, T-548.
 - T-557: the COORDINATOR builds it (dev/t557-runners); 8dc6a739 ended, its 02357fd offered as input (4925). Collision lines on T-557.
 - T-426 (mine again, 4926): ab93b54 --pool-env; the coordinator reuses its secret resolution. QA + blind review after T-401 merges.
@@ -37,8 +38,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - T-378 S1 dev/t-378-1 9834ff7 ready: needs a verifier.
 
 ## DECISIONS (binding)
-- 14:15 Coordinator: 58b7039 (T-575, portal.yaml PORTAL_K8S_BROWSER_IMAGE) rides the next deploy; the coordinator then makes the
-  Browser pool for kohi-event and names the restart time. 950c17d lacks it: the merge onto integration is redone after the gate.
+- 14:15 Coordinator: T-575 + T-557 S1 ride the next deploy; then it makes kohi-event's Browser pool and names the restart time.
 - 12:50 Coordinator: it builds T-557 itself (owner's ask); no T-557 slices from me; T-426 stays mine; a line on T-557 when I touch
   ci/ or connect/ in a big way. (Supersedes 12:45's fold of T-426 into the lease.)
 - 13:20 D-66 (pulled, 619b4b5): workers run scripts/quick-check.sh (one Job: format, lint, named tests) before a branch goes
