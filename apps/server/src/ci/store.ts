@@ -24,7 +24,7 @@ export interface RepoRow {
   upstream_state?: string | null;
   /** Migration 783 (T-486 S2): the Secrets & env NAME whose value signs the upstream's push webhook; null: no webhook. */
   upstream_hook_secret?: string | null;
-  /** Migration 783 (T-591): where release reports go, JSON {pipeline, vaultId, folder}; null: off. */
+  /** Migration 784 (T-591): where release reports go, JSON {pipeline, vaultId, folder}; null: off. */
   release_report?: string | null;
 }
 

@@ -3310,7 +3310,7 @@ export const MIGRATIONS: Migration[] = [
     },
   },
   {
-    version: 783,
+    version: 784,
     name: 'CI: where a remote\'s release reports go (T-591)',
     up(db) {
       // T-591 (D-69, local-git-ci PRD "Release reports"): `release_report` is the remote's setting as JSON {pipeline, vaultId, folder}; null is

@@ -535,3 +535,35 @@ test('a release report that fails is logged redacted and on one line', async () 
     h.done();
   }
 });
+
+// T-591 (QA gap M5a): the workspace's own redactor (a value redactSecrets cannot recognise by shape) also covers the failed-report log line.
+test('a release report that fails is logged without a workspace secret value (the workspace redactor layer)', async () => {
+  const value = `plain-${'q7Zk'.repeat(4)}`; // built at runtime; no pattern in redactSecrets matches it, only the workspace redactor knows it
+  const h = await harness({ redactFor: () => (t) => t.split(value).join('[workspace-secret]') });
+  try {
+    h.svc.releaseNotes = {
+      read: () => null,
+      put: () => {
+        throw new Error(`vault write failed: ${value} was refused`);
+      },
+    };
+    const deploy = 'on: manual\njobs:\n  release:\n    steps: [{ run: \'echo "release: abc1234 (portal v1, workspace v2) to main"\' }]\n';
+    const repo = await remote(h, { '.pilot/deploy.yml': deploy });
+    h.svc.setReleaseReport(repo.id, { pipeline: 'deploy', vaultId: 'v1', folder: 'Releases' }, { actor: 'user:u_owner', userId: 'u_owner' });
+    const logged: string[] = [];
+    const orig = console.error;
+    console.error = (m: unknown) => void logged.push(String(m));
+    try {
+      const run = await h.svc.startRun({ repoId: repo.id, pipeline: 'deploy', ref: 'main' });
+      await h.until('the run to pass', () => h.svc.get(run.id).status === 'passed');
+      await h.until('the failure to be logged', () => logged.some((l) => l.includes('release report failed')));
+    } finally {
+      console.error = orig;
+    }
+    const line = logged.find((l) => l.includes('release report failed'))!;
+    assert.ok(!line.includes(value), line);
+    assert.ok(line.includes('[workspace-secret]'), line);
+  } finally {
+    h.done();
+  }
+});

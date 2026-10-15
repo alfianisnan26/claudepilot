@@ -107,7 +107,7 @@ const facts = (over: Partial<ReportFacts> = {}): ReportFacts => ({
     { id: 'T-10', summary: 'The thing', type: 'feature', status: 'closed' },
     { id: 'T-11', summary: null, type: null, status: null },
   ],
-  migrations: [783],
+  migrations: [784],
   contractsChanged: true,
   jobs: [{ id: 'release', name: 'release', status: 'passed', durationMs: 5000 }],
   gate: ['gate: ok'],
@@ -125,7 +125,7 @@ test('the note has its sections, tickets by type and loose commits', () => {
   assert.match(md, /- T-10 \(feature, now closed\): The thing, 2 commits/);
   assert.match(md, /- T-11 \(unavailable, now unavailable\): unavailable, 1 commit/);
   assert.match(md, /- ccccccc No ticket here/);
-  assert.match(md, /Migrations added: 783/);
+  assert.match(md, /Migrations added: 784/);
   assert.match(md, /result: released and verified/);
 });
 
