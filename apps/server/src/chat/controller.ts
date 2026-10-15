@@ -3629,8 +3629,9 @@ export class ChatController {
     const pending = new Set<string>();
     for (const [id, g] of this.#granted) if (g.workspaceId === workspaceId) pending.add(id);
     for (const id of this.#launching.keys()) if (this.#chat.row(id)?.workspace_id === workspaceId) pending.add(id);
+    // Both maps let go when the launch settles, so what is in them is not in the reading yet. Not filtered on `process`: a new row reads
+    // 'live' (the column's default) before its process exists.
     if (waking) pending.delete(waking.id);
-    for (const id of [...pending]) if (this.#chat.row(id)?.process === 'live') pending.delete(id); // running: in the reading already
     const need = sessionEstimate(agents) + pending.size * SESSION_MEMORY_ESTIMATE_BYTES;
     const refused = budgetVerdict(reading, need);
     if (!refused) return;
