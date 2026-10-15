@@ -9,16 +9,16 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   Carries T-486 S1, T-490, T-450 S3, T-524 S1, T-515, T-527. CLOSED T-527 (live D-62 refusal 10:42) and T-515.
 
 ## IN FLIGHT (4 of 4 workers, D-65: 7d33708d impl-t558 (opus, why D-62 authz) T-558 (claimed, plan 4930), 03b631f0 impl-t531-s2c (sonnet) T-531 S2c,
-  47710391 qa (sonnet) T-401 QA (GO 12:24, has the cluster slot), 30dc0f13 rev-t401-t379 (opus, why D-62) blind review T-401 then T-379)
+  fb538d7d qa-t486 (sonnet) T-486 QA WAITING GO, 03c496b6 impl-t546 (sonnet) T-546 crew digest WAITING bb7cdb0, 03b631f0 T-531 S2c Jobs, 7d33708d T-558 WAITING.)
   Sweep: PASS T-109/280/282/285, GAP T-259/294/136(?)/338/317/287; nobody can claim in_review tickets -> coordinator (T-525 4659).
-  Cluster: T-401 QA -> T-531 S2c (WAITING 7afbd0d) -> T-486 QA (6eb6fbf, reuse 47710391) -> T-558. Next free workers: T-426 QA +
+  Cluster: T-531 S2c 7afbd0d (GO 13:25) -> T-486 QA -> T-558 (WAITING e652c44). 47710391 ended. Next free workers: T-426 QA +
   blind review (after T-401 merges), T-416 S1b QA, T-546 + T-548.
 - T-557: the COORDINATOR builds it (dev/t557-runners); 8dc6a739 ended, its 02357fd offered as input (4925). Collision lines on T-557.
 - T-426 (mine again, 4926): ab93b54 --pool-env; the coordinator reuses its secret resolution. QA + blind review after T-401 merges.
-- T-379 DONE 3ddbcbc (0df3dd19 ended): src/ci 144/144 job-5b4609a6 (4905); lead live proof on the final script PASS job-c71c5bfe (4906).
-  Next: blind review (30dc0f13), merge right after T-401.
-- T-401 (high, security): S1 DONE 060aca4 (4 Jobs green per author; fetch does npm ci --ignore-scripts with creds). Touches
-  gate-job.yaml: review must confirm the gate's checks unchanged (4745). Next: blind review (opus) + QA, lead gate, merge.
+- T-379 3ddbcbc: src/ci 144/144 job-5b4609a6 (4905); lead live proof PASS job-c71c5bfe (4906); blind review 30dc0f13 PASS WITH
+  CONDITIONS (4938) -> S2 3f11b28 PASS src/ci 144/144 job-83899ca9 (4948; d39c25c1 ended) -> merge after T-401.
+- T-401 060aca4: blind review PASS WITH CONDITIONS (4936). HELD for a person's ack of the gate change (4941, NEEDS A HUMAN);
+  QA PASS WITH GAPS (4943: 189/189 --big; 4Gi hit ENOSPC /tmp). Gate GREEN 3d7ba13 (gate-3d7ba13-2c4f, 5002). On ack: re-merge + re-gate. T-567.
 - T-416 (high incident): S1 d37c5f0; QA b1aa2e47 PASS WITH GAPS (4623: 995/999 0 fail job-2c410105; mutations A2/B/C caught);
   ended. Decision 4637: S1b a769b00 (race fix + push-bridge test, UNTESTED; author ended for T-379, 4688). QA runs its Jobs,
   then blind review (opus), lead gate, merge, deploy. S2 = Bypass restore.
@@ -39,7 +39,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 ## DECISIONS (binding)
 - 12:50 Coordinator: it builds T-557 itself (owner's ask); no T-557 slices from me; T-426 stays mine; a line on T-557 when I touch
   ci/ or connect/ in a big way. (Supersedes 12:45's fold of T-426 into the lease.)
-- 12:09 Workers cannot git merge: the lead merges base heads into slice branches (T-379 090fbbf, 4852).
+- 13:20 D-66 (pulled, 619b4b5): workers run scripts/quick-check.sh (one Job: format, lint, named tests) before a branch goes
+  to the gate; every brief from now on says so. Workers cannot git merge: the lead merges base heads into slice branches (4852).
 - 11:30 Coordinator (owner priority, metocean): T-379 NOW in its own worker; built on T-401's fe62fa6 (fetch stage holds creds).
 - 12:00 Coordinator tool review: lead edits of code (dev-t-376 commits 01:57-02:03, no trailers, before D-63 03:36; 4820).
   The lead edits ONLY the status file and notes. Order: T-379, T-426, T-558, T-546, T-548, T-561 (opus, deny rules), T-557.
@@ -49,11 +50,9 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - 11:00 Coordinator: the next implementer slot goes to T-401 (security: job-run env carries GIT_TOKEN/NODE_AUTH_TOKEN), then T-426
   (--pool-env door for Konfersi stg e2e), then T-379 (Python in job-run). They unblock 6 Konfersi tickets. Opus + blind review
   (gate/security). They come before T-416 S2, T-537 and T-538..T-540.
-- 11:05 Coordinator: sweep 10 in_review tickets against live. Order: T-401 keeps the first free slot (it blocks 6 Konfersi tickets);
-  the sweep takes the second. QA cannot close tickets it doesn't hold, so it reports and the lead closes on PASS (D-63).
+- 11:05 Coordinator: sweep of in_review tickets; QA reports, the lead closes on PASS (D-63).
 - 10:25 dontAsk workers cannot wait: the lead hands out the cluster slot with "GO T-n"; workers end with WAITING <hash>.
-- 10:02 The free-slot check counts only OUR program's Jobs (app=claudepilot-gate or job-run/program=claudepilot); Konfersi Jobs are
-  capped per program by job-run.sh.
+- 10:02 The free-slot check counts only OUR program's Jobs (app=claudepilot-gate or job-run/program=claudepilot).
 - 09:00 Coordinator: persona, role-tool and permission questions go to the coordinator (ticket assigned to me), NEVER the owner;
   `owner-checklist` is production only.
 - 08:10 A running slice keeps its slot. 06:00 The lead holds T-n claim to close. 05:50 UX checks are cluster Jobs; fresh worktrees.
@@ -62,6 +61,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - Hand over before 250k context (coordinator).
 
 ## NEEDS A HUMAN (D-62)
+- T-401 gate wall (via the coordinator): the owner acks on T-401 that gate-job.yaml's change is credential plumbing plus one
+  stricter red (exit 3 on a credential value in the gate's files); gate.sh's checks unchanged. Question text in 4941.
 - T-93 Konfersi production only. Coordinator items: T-422 (sudo), T-306 item 4 / T-340; D-row for T-417's Bypass across sleep;
   T-433's persona-wall question (2984).
 - For the coordinator, NOT the owner (not tagged owner-checklist): T-476 lead may START a deploy whose release waits for a person
@@ -76,4 +77,4 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
    T-371..T-374, T-363, T-451, T-470, T-507, T-508, T-512, T-520; T-376 S2.
 
 LESSONS: node --test, never vitest; a gate-done notice needs action; dontAsk workers cannot read /tmp, merge, gate or wait, and Bash only in their spawn worktree (new branch = new worker); whole
-test folders; trailers in one block; FULL hashes; gate before every push; status via Edit/Write only; ancestor check before ff.
+test folders; trailers in one block; FULL hashes; gate before every push; status via Edit/Write ONLY (broken twice 2026-10-15: python, sed -i); ancestor check before ff.
