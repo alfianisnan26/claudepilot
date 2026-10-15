@@ -1,5 +1,5 @@
 import { Badge, Button, buttonClass, cn, Dialog, FormDialog, Segmented, Spinner, TextField, useToast, type BadgeTone, type MenuItem } from '@isnanme/ui';
-import { WORKSPACE_LABEL_MAX, workspaceDisplayName, workspaceLabelProblem, type Workspace, type WorkspaceUsage } from '@portal/contracts';
+import { isLastKnownStatus, WORKSPACE_LABEL_MAX, workspaceDisplayName, workspaceLabelProblem, type Workspace, type WorkspaceUsage } from '@portal/contracts';
 import { Copy, Pencil, Play, Square, SquareTerminal } from 'lucide-react';
 import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
@@ -8,6 +8,7 @@ import { TreeSkeleton } from '@/features/repos';
 import { api, errorText } from '@/lib/api';
 import { formatBytes, formatDateTime, formatUntil, timeAgo } from '@/lib/format';
 import { ClaudesSection } from './ClaudesSection';
+import { unavailableNote } from './lastKnown';
 import { ResourcesRow } from './ResourcesRow';
 import { VersionChip } from '@/features/claudeversion/VersionChip';
 import { usageFractions } from './usage';
@@ -95,6 +96,7 @@ export function WorkspaceSheet({
     }
   };
   const running = w.status === 'running';
+  const note = unavailableNote(w);
   const account = w.account;
   const limits = [w.cpus && `${w.cpus} CPU`, w.memoryMb && formatBytes(w.memoryMb * 1024 * 1024)].filter(Boolean).join(' · ');
   const fractions = usageFractions(usage, w.cpus, w.memoryMb);
@@ -190,7 +192,8 @@ export function WorkspaceSheet({
           </div>
         )}
 
-        {running && <ClaudesSection workspace={w} onLeave={onClose} />}
+        {/* Its Claudes stay listed while its target does not answer (T-515): they live in the portal's store. */}
+        {(running || isLastKnownStatus(w.status)) && <ClaudesSection workspace={w} onLeave={onClose} />}
 
         <dl className="divide-y divide-line rounded-2xl border border-line text-sm">
           <Row
@@ -235,8 +238,19 @@ export function WorkspaceSheet({
           {resources && <ResourcesRow w={w} open={open} />}
           <Row label="Runs on">{targetLabel}</Row>
           {w.node && <Row label="Node">{w.node}</Row>}
-          {w.status === 'unreachable' && w.lastSeenAt && (
-            <Row label="Last seen">
+          {isLastKnownStatus(w.status) && w.lastSeenAt && (
+            <Row
+              label={
+                note ? (
+                  <span className="inline-flex items-center gap-1">
+                    Last seen
+                    <InfoTip label="Why it is unavailable">{note}</InfoTip>
+                  </span>
+                ) : (
+                  'Last seen'
+                )
+              }
+            >
               <span title={formatDateTime(w.lastSeenAt)}>{timeAgo(w.lastSeenAt)}</span>
             </Row>
           )}
