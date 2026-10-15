@@ -417,9 +417,9 @@ const MAX_NUDGES = Number(process.env.MAX_NUDGES ?? 40);
  * tokens). An idle lead past COMPACT_AT tokens is told to `/compact` (allowed over MCP), at most once every COMPACT_GAP_MIN: the same chat, its
  * workers and Bypass stay; only the transcript shrinks.
  */
-// OFF by default until T-597 lands: over MCP the portal frames the text as a portal message, so `/compact` reached both leads as plain text
-// (2026-10-15: "I can't run /compact myself") and cost a turn each. Set COMPACT_AT to turn it on once the portal passes the command through.
-const COMPACT_AT = Number(process.env.COMPACT_AT ?? Infinity);
+// ON since T-597 shipped (deploy #89, 2026-10-15): the portal passes an allowed slash command through unframed, and a real `/compact` took the
+// tradingbot lead from 117k to 49k. Set COMPACT_AT=Infinity to turn it off.
+const COMPACT_AT = Number(process.env.COMPACT_AT ?? 120_000);
 const COMPACT_GAP_MIN = Number(process.env.COMPACT_GAP_MIN ?? 30);
 const COMPACT =
   '/compact Keep only what your next turns need: your crew (each live worker: session id, function, the ticket it works on), the tickets in flight with their state and next step, branches waiting to merge or deploy, decisions taken today and why, and the rules that bind you (charter, D-61 to D-67). Drop tool output, diffs, logs and finished work.';
