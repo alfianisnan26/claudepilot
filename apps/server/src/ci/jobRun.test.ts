@@ -11,6 +11,7 @@ import { dirname, join } from 'node:path';
 import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { load as yamlLoad } from 'js-yaml';
+import { runPod } from './jobRunTestkit.js';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '../../../..');
 const SCRIPT = join(REPO, 'scripts/job-run.sh');
@@ -61,7 +62,7 @@ const [verb, kind, name] = a;
 if (verb === 'get' && kind === 'jobs') { process.stdout.write(JSON.stringify({ items: read().jobs.map(k8s) })); }
 else if (verb === 'get' && kind === 'job') { const j = job(name); if (!j) process.exit(1); process.stdout.write(a.includes('json') ? JSON.stringify(k8s(j)) : 'uid-' + name); }
 else if (verb === 'get' && kind === 'pods' && a.includes('json')) { process.stdout.write(JSON.stringify(podOf(job(a[3].replace('job-name=', ''))))); }
-else if (verb === 'create' && kind === 'secret') { const t = stdin(); lock((s) => { s.secrets[a[3]] = t; }); }
+else if (verb === 'create' && kind === 'secret') { const t = stdin(); fs.writeFileSync(path.join(F, 'secret-' + a[3] + '.env'), t); lock((s) => { s.secrets[a[3]] = t; }); }
 else if (verb === 'apply') { const m = stdin(); const n = m.match(/^ {2}name: (\S+)/m)[1]; fs.mkdirSync(path.join(F, 'applied'), { recursive: true }); fs.writeFileSync(path.join(F, 'applied', n + '.yaml'), m);
   const lab = (k) => m.match(new RegExp(k + ': ([^,}]+)'))[1].trim();
   lock((s) => { s.seq += 1; s.jobs.push({ name: n, chat: lab('job-run/chat'), role: lab('job-run/role'), program: lab('job-run/program'), owner: m.match(/job-run\/owner: "([^"]*)"/)[1], suspend: true, seq: s.seq }); }); }
@@ -134,9 +135,12 @@ async function waitFor(what: string, cond: () => boolean, ms = 15_000) {
   }
 }
 
-type Manifest = { metadata: { name: string; labels: Record<string, string>; annotations: Record<string, string> }; spec: Record<string, unknown> & { template: { metadata: { labels: Record<string, string> }; spec: Record<string, unknown> & { containers: { image: string; env: { name: string; value?: string; valueFrom?: { secretKeyRef?: { name: string; key: string } } }[]; resources: unknown; args: string[]; volumeMounts: unknown }[]; volumes: unknown } } } };
+type Container = { image: string; env: { name: string; value?: string; valueFrom?: { secretKeyRef?: { name: string; key: string } } }[]; resources: unknown; args: string[]; volumeMounts: unknown };
+type Manifest = { metadata: { name: string; labels: Record<string, string>; annotations: Record<string, string> }; spec: Record<string, unknown> & { template: { metadata: { labels: Record<string, string> }; spec: Record<string, unknown> & { initContainers?: Container[]; containers: Container[]; volumes: unknown } } } };
 const container = (m: Manifest) => { const c = m.spec.template.spec.containers[0]; assert.ok(c); return c; };
 const envOf = (m: Manifest) => Object.fromEntries(container(m).env.map((e) => [e.name, e.value ?? e.valueFrom]));
+/** T-401: the credentials are in the init container `fetch` alone. */
+const fetchEnvOf = (m: Manifest) => { const c = m.spec.template.spec.initContainers?.[0]; assert.ok(c, 'the fetch init container'); return Object.fromEntries(c.env.map((e) => [e.name, e.value ?? e.valueFrom])); };
 
 test('a run: the suspended Job manifest, the stream, the exit code, the artifacts, the Secret gone and the Job kept for its TTL', () => {
   const w = world([], { rc: 3 });
@@ -164,7 +168,9 @@ test('a run: the suspended Job manifest, the stream, the exit code, the artifact
   assert.match(JSON.stringify(pod.affinity), /"podAntiAffinity".*"namespaces":\["isnan-claudepilot-workspaces"\].*"claudepilot.managed":"true"/);
   // T-524: memory requested = limited, so the scheduler only places the Job where all of it fits; /tmp (in memory) inside that limit.
   assert.deepEqual(c.resources, { requests: { cpu: '1000m', memory: '4Gi' }, limits: { cpu: '4', memory: '4Gi' } });
-  assert.deepEqual(pod.volumes, [{ name: 'tmp', emptyDir: { medium: 'Memory', sizeLimit: '2Gi' } }, { name: 'shm', emptyDir: { medium: 'Memory', sizeLimit: '1Gi' } }]);
+  // T-401: fetch-home holds the fetch container's credential helper and .npmrc; the run container never mounts it.
+  assert.deepEqual(pod.volumes, [{ name: 'tmp', emptyDir: { medium: 'Memory', sizeLimit: '2Gi' } }, { name: 'shm', emptyDir: { medium: 'Memory', sizeLimit: '1Gi' } }, { name: 'fetch-home', emptyDir: { medium: 'Memory', sizeLimit: '64Mi' } }]);
+  assert.ok(!JSON.stringify(c.volumeMounts).includes('fetch-home'), 'T-401: the run container does not mount the fetch home');
   assert.ok(!/__[A-Z_]+__/.test(text.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n')), 'every placeholder is filled');
   assert.equal(c.image, 'registry.test/claudepilot/workspace:1-dev-1');
   const e = envOf(m);
@@ -173,7 +179,8 @@ test('a run: the suspended Job manifest, the stream, the exit code, the artifact
   assert.equal(e.JR_STEPS, 'npm-ci');
   assert.equal(e.JR_ARTIFACTS, 'reports');
   assert.equal(Buffer.from(String(e.JR_CMD), 'base64').toString(), 'npm test -w @portal/server');
-  assert.deepEqual(e.NODE_AUTH_TOKEN, { secretKeyRef: { name: m.metadata.name, key: 'node-auth-token', optional: true } });
+  assert.equal(e.NODE_AUTH_TOKEN, undefined, 'T-401: no credential in the run container');
+  assert.deepEqual(fetchEnvOf(m).NODE_AUTH_TOKEN, { secretKeyRef: { name: m.metadata.name, key: 'node-auth-token', optional: true } });
   assert.ok(!text.includes(w.npmToken), 'the token is not in the manifest');
 
   const calls = w.calls();
@@ -217,7 +224,8 @@ test('Konfersi: from Gitea with the credential helper\'s token in the Secret (ne
   assert.equal(e.JR_REPO_URL, 'https://git.konfersi.com/platform/konfersi-backend.git');
   assert.equal(e.JR_ALSO, 'konfersi-shared=https://git.konfersi.com/platform/konfersi-shared.git@stg');
   assert.equal(m.metadata.labels['job-run/repo'], 'konfersi-backend');
-  assert.deepEqual(e.GIT_TOKEN, { secretKeyRef: { name: m.metadata.name, key: 'git-token', optional: true } });
+  assert.equal(e.GIT_TOKEN, undefined, 'T-401: no credential in the run container');
+  assert.deepEqual(fetchEnvOf(m).GIT_TOKEN, { secretKeyRef: { name: m.metadata.name, key: 'git-token', optional: true } });
   for (const where of [r.out, w.log(), w.calls(), w.applied1()]) assert.ok(!where.includes(w.giteaToken));
   assert.match(r.out, /git said \[redacted\]/);
 });
@@ -232,8 +240,10 @@ test('T-491 Event: exactly GitHub isnanme/event, the GitHub token as npm token a
   const e = envOf(m);
   assert.equal(e.JR_REPO_URL, 'https://github.com/isnanme/event.git');
   assert.equal(m.metadata.labels['job-run/repo'], 'event');
-  assert.deepEqual(e.NODE_AUTH_TOKEN, { secretKeyRef: { name: m.metadata.name, key: 'node-auth-token', optional: true } });
-  assert.deepEqual(e.GIT_TOKEN, { secretKeyRef: { name: m.metadata.name, key: 'git-token', optional: true } });
+  assert.equal(e.NODE_AUTH_TOKEN ?? e.GIT_TOKEN, undefined, 'T-401: no credential in the run container');
+  const f = fetchEnvOf(m);
+  assert.deepEqual(f.NODE_AUTH_TOKEN, { secretKeyRef: { name: m.metadata.name, key: 'node-auth-token', optional: true } });
+  assert.deepEqual(f.GIT_TOKEN, { secretKeyRef: { name: m.metadata.name, key: 'git-token', optional: true } });
   const sent = w.calls(); // the Secret went in on stdin; its content is checked in the next test, while the Job waits in the queue
   assert.match(sent, new RegExp(`create secret generic ${m.metadata.name} --from-env-file=/dev/stdin`));
   for (const where of [r.out, w.log(), sent, text]) assert.ok(!where.includes(w.npmToken), 'the token is nowhere but the Secret');
@@ -548,11 +558,9 @@ test('the Job\'s own script: checkout, the command\'s exit code, the artifacts b
   git(['add', '.'], join(root, 'src'));
   git(['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'one'], join(root, 'src'));
   git(['clone', '-q', '--bare', join(root, 'src'), join(root, 'claudepilot.git')], root);
-  const tpl = readFileSync(TEMPLATE, 'utf8');
-  const body = tpl.slice(tpl.indexOf('# JOB-RUN-SCRIPT BEGIN'), tpl.indexOf('# JOB-RUN-SCRIPT END')).replace(/^ {14}/gm, '');
-  const pod = (ref: string, cmd: string) => spawnSync('bash', ['-c', body], { encoding: 'utf8', env: {
+  const pod = (ref: string, cmd: string) => runPod(TEMPLATE, {
     PATH: process.env.PATH, JR_ROOT: join(root, `run-${hex(3)}`), JR_REPO_URL: `file://${join(root, 'claudepilot.git')}`, JR_REF: ref, JR_ALSO: '',
-    JR_STEPS: 'none', JR_ARTIFACTS: 'out', JR_ARTIFACT_MAX: '100000', JR_CMD: Buffer.from(cmd).toString('base64'), NODE_NAME: 'k3s-master' } });
+    JR_STEPS: 'none', JR_ARTIFACTS: 'out', JR_ARTIFACT_MAX: '100000', JR_CMD: Buffer.from(cmd).toString('base64'), NODE_NAME: 'k3s-master' });
   const r = pod('main', 'mkdir -p out && echo report > out/r.txt && echo ran in $(basename $PWD); exit 3');
   assert.equal(r.status, 3, r.stdout + r.stderr);
   assert.match(r.stdout, /ran in claudepilot\n/);
@@ -563,22 +571,22 @@ test('the Job\'s own script: checkout, the command\'s exit code, the artifacts b
   assert.match(list, /out\/r\.txt/);
   const missing = pod('no-such-branch', 'true');
   assert.equal(missing.status, 2);
-  assert.match(missing.stdout, /=== JOB-RUN EXIT 2\njob-run: no-such-branch of .* is not on the remote \(push it first\)/);
+  assert.match(missing.stdout, /job-run: no-such-branch of .* is not on the remote \(push it first\)\n=== JOB-RUN EXIT 2\n$/);
 
   // T-524: the memory line reads the Job's own cgroup (peak, limit, OOM kills), the numbers the limit is sized from.
   const cg = join(root, 'cgroup'); mkdirSync(cg);
   writeFileSync(join(cg, 'memory.peak'), `${3 * 1024 * 1048576 + 5}\n`);
   writeFileSync(join(cg, 'memory.max'), `${4 * 1024 * 1048576}\n`);
   writeFileSync(join(cg, 'memory.events'), 'low 0\nhigh 0\nmax 2\noom 1\noom_kill 1\n');
-  const mem = spawnSync('bash', ['-c', body], { encoding: 'utf8', env: {
+  const mem = runPod(TEMPLATE, {
     PATH: process.env.PATH, JR_ROOT: join(root, `run-${hex(3)}`), JR_REPO_URL: `file://${join(root, 'claudepilot.git')}`, JR_REF: 'main', JR_ALSO: '',
-    JR_STEPS: 'none', JR_ARTIFACTS: '', JR_ARTIFACT_MAX: '1', JR_CMD: Buffer.from('true').toString('base64'), JR_CGROUP: cg } });
+    JR_STEPS: 'none', JR_ARTIFACTS: '', JR_ARTIFACT_MAX: '1', JR_CMD: Buffer.from('true').toString('base64'), JR_CGROUP: cg });
   assert.equal(mem.status, 0, mem.stdout + mem.stderr);
   assert.match(mem.stdout, /=== JOB-RUN MEMORY peak=3072Mi limit=4096Mi oom_kills=1\n=== JOB-RUN EXIT 0\n$/);
   writeFileSync(join(cg, 'memory.max'), 'max\n'); rmSync(join(cg, 'memory.peak')); rmSync(join(cg, 'memory.events'));
-  const unl = spawnSync('bash', ['-c', body], { encoding: 'utf8', env: {
+  const unl = runPod(TEMPLATE, {
     PATH: process.env.PATH, JR_ROOT: join(root, `run-${hex(3)}`), JR_REPO_URL: `file://${join(root, 'claudepilot.git')}`, JR_REF: 'main', JR_ALSO: '',
-    JR_STEPS: 'none', JR_ARTIFACTS: '', JR_ARTIFACT_MAX: '1', JR_CMD: Buffer.from('true').toString('base64'), JR_CGROUP: cg } });
+    JR_STEPS: 'none', JR_ARTIFACTS: '', JR_ARTIFACT_MAX: '1', JR_CMD: Buffer.from('true').toString('base64'), JR_CGROUP: cg });
   assert.match(unl.stdout, /=== JOB-RUN MEMORY peak=\? limit=max oom_kills=\?\n/, 'a missing file is "?", never a guessed number');
 
   // T-491: for Event only, with a token, the user npmrc maps @isnanme to GitHub Packages through a reference npm expands (the value is
@@ -590,28 +598,41 @@ test('the Job\'s own script: checkout, the command\'s exit code, the artifacts b
     const m = /^https:\/\/([^/]+)\/(.*)$/.exec(url); // split by hand: new URL() would fold a "/../" away before git sees it
     return `printf 'protocol=https\\nhost=${m?.[1]}\\npath=${m?.[2]}\\n\\n' | GIT_TERMINAL_PROMPT=0 git credential fill 2>/dev/null | grep -c '^password=' || true`;
   };
-  const podEvent = (url: string, cmd: string, tok: string | undefined) => spawnSync('bash', ['-c', body], { encoding: 'utf8', env: {
-    PATH: process.env.PATH, JR_ROOT: join(root, `run-${hex(3)}`), JR_REPO_URL: url, JR_REF: 'main', JR_ALSO: '', JR_STEPS: 'none', JR_ARTIFACTS: '',
-    JR_ARTIFACT_MAX: '100000', JR_CMD: Buffer.from(cmd).toString('base64'), GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: `url.file://${join(root, 'claudepilot.git')}.insteadOf`,
-    GIT_CONFIG_VALUE_0: url, ...(tok ? { NODE_AUTH_TOKEN: tok, GIT_TOKEN: tok, GIT_USER: 'x-access-token' } : {}) } });
-  const ev = podEvent(eventUrl, ['cat "$HOME/.npmrc"', 'echo ---', 'cat "$HOME/.gitconfig"', 'echo ---',
-    asksFor(eventUrl), asksFor('https://github.com/isnanme/other.git'), asksFor('https://github.com/isnanme/event.git.evil/x'),
-    asksFor('https://example.com/isnanme/event.git'), asksFor('https://github.com/isnanme/event'), asksFor('https://github.com/isnanme/event-x.git'),
-    asksFor('https://github.com/isnanme/event.git/../other.git')].join('\n'), token);
-  assert.equal(ev.status, 0, ev.stdout + ev.stderr);
-  assert.match(ev.stdout, /^@isnanme:registry=https:\/\/npm\.pkg\.github\.com\n\/\/npm\.pkg\.github\.com\/:_authToken=\$\{NODE_AUTH_TOKEN\}\n/m);
-  assert.ok(!ev.stdout.includes(token), 'the files hold references, not the value');
-  const cfg = ev.stdout.split('---\n')[1] ?? '';
+  // T-401: those files are in the fetch container's own HOME (JR_FETCH_HOME here), which the run container never mounts; the command
+  // finds neither file and no helper.
+  const podEvent = (url: string, cmd: string, tok: string | undefined) => {
+    const jr = join(root, `run-${hex(3)}`);
+    const insteadOf = { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: `url.file://${join(root, 'claudepilot.git')}.insteadOf`, GIT_CONFIG_VALUE_0: url };
+    const r = runPod(TEMPLATE, { PATH: process.env.PATH, JR_ROOT: jr, JR_FETCH_HOME: `${jr}-fh`, JR_REPO_URL: url, JR_REF: 'main', JR_ALSO: '', JR_STEPS: 'none', JR_ARTIFACTS: '',
+      JR_ARTIFACT_MAX: '100000', JR_CMD: Buffer.from(cmd).toString('base64'), ...insteadOf }, tok ? { NODE_AUTH_TOKEN: tok, GIT_TOKEN: tok, GIT_USER: 'x-access-token' } : {});
+    // What git would hand out from the fetch container's HOME, with its credential in the environment.
+    const ask = (urls: string[]) => spawnSync('bash', ['-c', urls.map(asksFor).join('\n')], { encoding: 'utf8',
+      env: { PATH: process.env.PATH, HOME: `${jr}-fh`, GIT_CONFIG_NOSYSTEM: '1', ...(tok ? { GIT_TOKEN: tok, GIT_USER: 'x-access-token' } : {}) } }).stdout;
+    return { r, fetchHome: `${jr}-fh`, ask };
+  };
+  const ev = podEvent(eventUrl, ['test ! -e "$HOME/.npmrc" && echo no npmrc', 'git config --global --get-regexp "^credential" || echo no helper', asksFor(eventUrl)].join('\n'), token);
+  assert.equal(ev.r.status, 0, ev.r.stdout + ev.r.stderr);
+  assert.match(ev.r.stdout, /no npmrc\nno helper\n0\n/, 'T-401: the command has no npmrc, no git helper, no password for the Event URL');
+  const npmrc = readFileSync(join(ev.fetchHome, '.npmrc'), 'utf8');
+  assert.equal(npmrc, '@isnanme:registry=https://npm.pkg.github.com\n//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}\n');
+  const cfg = readFileSync(join(ev.fetchHome, '.gitconfig'), 'utf8');
+  assert.ok(!npmrc.includes(token) && !cfg.includes(token), 'the files hold references, not the value');
   assert.match(cfg, /\[credential "https:\/\/github\.com\/isnanme\/event\.git"\]/);
   assert.match(cfg, /useHttpPath = true/);
   assert.equal((cfg.match(/\[credential/g) ?? []).length, 1, 'one credential section, no global helper');
   assert.doesNotMatch(cfg, /^\[credential\]/m, 'no unscoped credential section');
-  assert.match(ev.stdout, /---\n1\n0\n0\n0\n0\n0\n0\n=== JOB-RUN SUMMARY/, 'a password for the Event URL only: not another path, a look-alike path, another host, the URL without .git, event-x.git or a /../ path');
-  // claudepilot (its own URL, here the local bare repository): no npmrc, the global helper as before.
-  const cp = pod('main', 'test ! -e "$HOME/.npmrc" && echo no npmrc; git config --global --get credential.helper >/dev/null && echo global helper');
-  assert.match(cp.stdout, /no npmrc\nglobal helper\n/, 'not Event: no npmrc, the global helper');
-  const noToken = podEvent(eventUrl, 'test ! -e "$HOME/.npmrc" && echo no npmrc', undefined);
-  assert.match(noToken.stdout, /no npmrc\n/, 'no token, no npmrc');
+  assert.equal(ev.ask([eventUrl, 'https://github.com/isnanme/other.git', 'https://github.com/isnanme/event.git.evil/x', 'https://example.com/isnanme/event.git',
+    'https://github.com/isnanme/event', 'https://github.com/isnanme/event-x.git', 'https://github.com/isnanme/event.git/../other.git']), '1\n0\n0\n0\n0\n0\n0\n',
+  'a password for the Event URL only: not another path, a look-alike path, another host, the URL without .git, event-x.git or a /../ path');
+  // claudepilot (its own URL, here the local bare repository): no npmrc and the global helper, in the fetch container's HOME; the command
+  // sees neither.
+  const cp = podEvent(`file://${join(root, 'claudepilot.git')}`, 'test ! -e "$HOME/.npmrc" && echo no npmrc; git config --global --get credential.helper >/dev/null || echo no helper', token);
+  assert.match(cp.r.stdout, /no npmrc\nno helper\n/, 'the command: no npmrc, no helper');
+  assert.ok(!existsSync(join(cp.fetchHome, '.npmrc')), 'not Event: no npmrc');
+  assert.match(readFileSync(join(cp.fetchHome, '.gitconfig'), 'utf8'), /^\[credential\]\n\thelper = /m, 'not Event: the global helper, in the fetch HOME');
+  const noToken = podEvent(eventUrl, 'true', undefined);
+  assert.equal(noToken.r.status, 0, noToken.r.stdout + noToken.r.stderr);
+  assert.ok(!existsSync(join(noToken.fetchHome, '.npmrc')), 'no token, no npmrc');
 });
 
 test('--against and --keep-tests: parsed into the manifest, validated; absent, the manifest carries nothing', () => {
@@ -658,17 +679,15 @@ test('the Job\'s own script: the proof (passes on the ref, fails on the other, k
   writeFileSync(join(src, 'check.sh'), 'test "$(cat value.txt)" = new\n');
   git(['add', '.'], src); git(['commit', '-qm', 'fix'], src);
   git(['clone', '-q', '--bare', src, join(root, 'claudepilot.git')], root);
-  const tpl = readFileSync(TEMPLATE, 'utf8');
-  const body = tpl.slice(tpl.indexOf('# JOB-RUN-SCRIPT BEGIN'), tpl.indexOf('# JOB-RUN-SCRIPT END')).replace(/^ {14}/gm, '');
   // A fake npm that fails until it has been called NPM_FAIL_UNTIL times (a flake), and counts its calls.
   const bin = join(root, 'bin'); mkdirSync(bin);
   writeFileSync(join(bin, 'npm'), `#!/bin/sh\necho x >> "${root}/npm.calls"\n[ "$(wc -l < "${root}/npm.calls")" -ge "\${NPM_FAIL_UNTIL:-2}" ] || exit 7\nmkdir -p node_modules\n`);
   chmodSync(join(bin, 'npm'), 0o755);
   const pod = (over: Record<string, string>) => {
     rmSync(join(root, 'npm.calls'), { force: true });
-    return spawnSync('bash', ['-c', body], { encoding: 'utf8', env: {
+    return runPod(TEMPLATE, {
       PATH: `${bin}:${process.env.PATH}`, JR_ROOT: join(root, `run-${hex(3)}`), JR_REPO_URL: `file://${join(root, 'claudepilot.git')}`, JR_REF: 'main', JR_ALSO: '',
-      JR_STEPS: 'none', JR_ARTIFACTS: '', JR_ARTIFACT_MAX: '1', JR_CMD: Buffer.from('bash check.sh').toString('base64'), NODE_NAME: 'k3s-master', ...over } });
+      JR_STEPS: 'none', JR_ARTIFACTS: '', JR_ARTIFACT_MAX: '1', JR_CMD: Buffer.from('bash check.sh').toString('base64'), NODE_NAME: 'k3s-master', ...over });
   };
   const text = (r: ReturnType<typeof pod>) => r.stdout + r.stderr;
 
@@ -725,7 +744,8 @@ test('T-365: job-run and gate Jobs prefer a node away from the portal (preferred
 
 test('T-524: the heavy Jobs prefer a node other than the control plane (preferred only) and request all the memory they may use', () => {
   type Pod = { affinity?: { nodeAffinity?: { requiredDuringSchedulingIgnoredDuringExecution?: unknown; preferredDuringSchedulingIgnoredDuringExecution?: unknown } };
-    containers: { resources: { requests: { memory: string }; limits: { memory: string } } }[]; volumes?: { name: string; emptyDir?: { sizeLimit?: string } }[] };
+    containers: { resources: { requests: { memory: string }; limits: { memory: string } } }[]; initContainers?: { resources: { requests: { memory: string }; limits: { memory: string } } }[];
+    volumes?: { name: string; emptyDir?: { sizeLimit?: string } }[] };
   const gi = (v: string) => { const m = /^(\d+)(Gi|Mi)$/.exec(v); assert.ok(m, v); return Number(m[1]) / (m[2] === 'Mi' ? 1024 : 1); };
   for (const name of ['job-run.yaml', 'gate-job.yaml', 'browser-job.yaml']) {
     const text = readFileSync(join(REPO, 'deploy/k3s-build', name), 'utf8').replace(/__MEMORY__/g, '4Gi').replace(/__TMP_SIZE__/g, '2Gi').replace(/__[A-Z_]+__/g, 'x');
@@ -733,10 +753,77 @@ test('T-524: the heavy Jobs prefer a node other than the control plane (preferre
     const na = pod.affinity?.nodeAffinity;
     assert.equal(na?.requiredDuringSchedulingIgnoredDuringExecution, undefined, `${name}: never required (a required rule left every Job Pending)`);
     assert.deepEqual(na?.preferredDuringSchedulingIgnoredDuringExecution, [{ weight: 100, preference: { matchExpressions: [{ key: 'node-role.kubernetes.io/control-plane', operator: 'DoesNotExist' }] } }], name);
-    for (const c of pod.containers) assert.equal(c.resources.requests.memory, c.resources.limits.memory, `${name}: memory request = limit`);
+    for (const c of [...pod.containers, ...(pod.initContainers ?? [])]) assert.equal(c.resources.requests.memory, c.resources.limits.memory, `${name}: memory request = limit`);
     const tmp = pod.volumes?.find((v) => v.name === 'tmp')?.emptyDir?.sizeLimit;
     const lim = pod.containers[0]?.resources.limits.memory ?? '';
     if (tmp) assert.ok(gi(tmp) < gi(lim), `${name}: the in-memory /tmp (${tmp}) fits inside the limit (${lim}) with room for the processes`);
   }
   // The label the rule names is on k3s-master (kubectl get nodes --show-labels, 2026-10-15): node-role.kubernetes.io/control-plane=true.
+});
+
+// T-426: --pool-env NAME, the Secrets pool's scoped test credentials (E2E_CF_ACCESS_*) for the command. Values made at runtime, never literals.
+const POOL_SECRET = 'E2E_CF_ACCESS_CLIENT_SECRET', POOL_ID = 'E2E_CF_ACCESS_CLIENT_ID';
+
+test('T-426 --pool-env: the value goes on stdin into the Secret and reaches the run container by secretKeyRef; not fetch, argv, the spec or the log', () => {
+  const w = world();
+  const secret = `cs${hex(20)}`, id = `ci${hex(12)}`;
+  // The command prints both: the streamed output and the log file are masked for them.
+  writeFileSync(join(w.root, 'scenario.json'), JSON.stringify({ rc: 0, log: jobLog(w.root, 0, `header ${secret} id ${id}\n`) }));
+  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--pool-env', POOL_SECRET, '--pool-env', POOL_ID, '--pool-env', POOL_SECRET, '--', 'npm run e2e'],
+    { [POOL_SECRET]: secret, [POOL_ID]: id });
+  assert.equal(r.code, 0, r.out);
+  const text = w.applied1();
+  const m = yamlLoad(text) as Manifest;
+  const job = m.metadata.name;
+  // The run container: one secretKeyRef per name (the repeat is dropped), the key is the name.
+  const refs = container(m).env.filter((e) => e.name.startsWith('E2E_CF_ACCESS_'));
+  assert.deepEqual(refs, [
+    { name: POOL_SECRET, valueFrom: { secretKeyRef: { name: job, key: POOL_SECRET } } },
+    { name: POOL_ID, valueFrom: { secretKeyRef: { name: job, key: POOL_ID } } },
+  ]);
+  assert.deepEqual(Object.keys(fetchEnvOf(m)).filter((n) => n.startsWith('E2E_')), [], 'the fetch container does not get them');
+  // The Secret (on stdin) holds them; nothing else does.
+  const sec = readFileSync(join(w.root, `secret-${job}.env`), 'utf8');
+  assert.ok(sec.includes(`\n${POOL_SECRET}=${secret}\n`) && sec.includes(`\n${POOL_ID}=${id}\n`), 'both values are in the Secret');
+  for (const v of [secret, id]) {
+    assert.ok(!text.includes(v), 'not in the rendered spec');
+    assert.ok(!w.calls().includes(v), 'not on a kubectl command line');
+    assert.ok(!r.out.includes(v), 'not in the output');
+    assert.ok(!w.log().includes(v), 'not in the log file');
+  }
+  assert.match(r.out, /header \[redacted\] id \[redacted\]/);
+  assert.match(r.out, /WARNING: a credential was in the Job's log/);
+  assert.match(w.calls(), new RegExp(`delete secret ${job}`), 'the Secret goes with the Job');
+  assert.deepEqual(w.state().secrets, {});
+});
+
+test('T-426 without --pool-env the run container has no secretKeyRef at all (T-401 holds)', () => {
+  const w = world();
+  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--', 'true'], { [POOL_SECRET]: `cs${hex(20)}` });
+  assert.equal(r.code, 0, r.out);
+  const m = yamlLoad(w.applied1()) as Manifest;
+  assert.deepEqual(container(m).env.filter((e) => e.valueFrom?.secretKeyRef).map((e) => e.name), []);
+  assert.ok(!readFileSync(join(w.root, `secret-${m.metadata.name}.env`), 'utf8').includes(POOL_SECRET), 'a pool variable is copied only when named');
+});
+
+test('T-426 --pool-env refusals, before any kubectl call: a name outside E2E_CF_ACCESS_*, a non-name (not echoed), an unset, empty or multi-line one', () => {
+  const w = world();
+  const val = `cs${hex(20)}`;
+  const cases: [string[], Record<string, string>, RegExp][] = [
+    [['--pool-env', 'GITHUB_TOKEN'], { GITHUB_TOKEN: val }, /--pool-env: only E2E_CF_ACCESS_\* names \(got GITHUB_TOKEN\)/],
+    [['--pool-env', 'E2E_CF_ACCESS_'], {}, /only E2E_CF_ACCESS_\* names \(got E2E_CF_ACCESS_\)/],
+    [['--pool-env', 'E2E_CF_ACCESS_id'], { E2E_CF_ACCESS_id: val }, /only E2E_CF_ACCESS_\* names/],
+    [['--pool-env', `E2E_CF_ACCESS_X=${val}`], {}, /the argument is not a variable name; not shown/],
+    [['--pool-env', 'E2E_CF_ACCESS_NOT_SET'], {}, /--pool-env: E2E_CF_ACCESS_NOT_SET is not set in this workspace/],
+    [['--pool-env', POOL_ID], { [POOL_ID]: '' }, /--pool-env: E2E_CF_ACCESS_CLIENT_ID is not set in this workspace/],
+    [['--pool-env', POOL_ID], { [POOL_ID]: `${val}\nX=y` }, /--pool-env: E2E_CF_ACCESS_CLIENT_ID holds a line break; refused/],
+  ];
+  for (const [opt, over, want] of cases) {
+    const r = w.run(['--repo', 'claudepilot', '--ref', 'main', ...opt, '--', 'true'], over);
+    assert.equal(r.code, 2, `${opt.join(' ')}: ${r.out}`);
+    assert.match(r.out, want);
+    assert.ok(!r.out.includes(val), 'a value is never shown');
+  }
+  assert.equal(w.calls(), '', 'refused before any kubectl call');
+  assert.deepEqual(w.applied(), []);
 });

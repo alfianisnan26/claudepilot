@@ -5,6 +5,12 @@
 # Like gate-job.yaml: it prefers a node WITHOUT a development workspace pod, requests 1 CPU (limit 4), requests memory equal to its limit, and
 # /tmp (the clone, node_modules, the tests' databases) is an emptyDir in memory that counts against that limit. npm's cache is in /tmp too: a cold `npm ci` is about 20 s in a Job (gate logs), a shared cache
 # volume would have to be a node-bound local-path PVC (the only storage class) for a few seconds' gain.
+# Credentials (T-401): only the init container `fetch` has the Secret. It clones (git's helper reads the token from its environment) and runs
+# `npm ci --ignore-scripts` (the npm token), so no code of the repository or of a dependency runs while a credential is there; its HOME
+# (git config, the user .npmrc) is a volume the `run` container does not mount; it checks that no credential value is in /tmp and writes
+# its log and exit code there. The `run` container has NO secret: it prints that log, runs the install scripts npm ci left out
+# (`npm rebuild` and the package's own lifecycle scripts), then the command. --against is fetched by `fetch` too (and, when its lockfile
+# differs, its packages go into npm's cache, so `run` installs them offline).
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -20,6 +26,7 @@ spec:
   template:
     metadata:
       labels: {app: claudepilot-job-run, job-run/chat: __CHAT__, job-run/role: __ROLE__}
+      annotations: {kubectl.kubernetes.io/default-container: run}
     spec:
       restartPolicy: Never
       automountServiceAccountToken: false
@@ -50,31 +57,32 @@ spec:
                 topologyKey: kubernetes.io/hostname
                 namespaces: [isnan-claudepilot-workspaces]
                 labelSelector: {matchLabels: {claudepilot.managed: "true"}}
-      containers:
-        - name: run
+      initContainers:
+        # T-401: the only container with the Secret. No repository or dependency code runs here (npm ci --ignore-scripts, no command).
+        - name: fetch
           image: __IMAGE__
           env:
             - {name: JR_REPO_URL, value: "__REPO_URL__"}
             - {name: JR_REF, value: "__REF__"}
             - {name: JR_ALSO, value: "__ALSO__"}
             - {name: JR_STEPS, value: "__STEPS__"}
-            - {name: JR_ARTIFACTS, value: "__ARTIFACTS__"}
-            - {name: JR_ARTIFACT_MAX, value: "__ARTMAX__"}
-            - {name: JR_CMD, value: "__CMD__"}
             - {name: JR_AGAINST, value: "__AGAINST__"}
-            - {name: JR_KEEP, value: "__KEEP__"}
-            - {name: NODE_NAME, valueFrom: {fieldRef: {fieldPath: spec.nodeName}}}
             - {name: NODE_AUTH_TOKEN, valueFrom: {secretKeyRef: {name: __NAME__, key: node-auth-token, optional: true}}}
             - {name: GIT_USER, valueFrom: {secretKeyRef: {name: __NAME__, key: git-user, optional: true}}}
             - {name: GIT_TOKEN, valueFrom: {secretKeyRef: {name: __NAME__, key: git-token, optional: true}}}
           command: [bash, -c]
           args:
             - |
-              # JOB-RUN-SCRIPT BEGIN (the test runs this part on its own, with JR_ROOT pointing elsewhere)
+              # JOB-RUN-FETCH BEGIN (the test runs this part on its own, with JR_ROOT and JR_FETCH_HOME pointing elsewhere)
               set -u
-              root=${JR_ROOT:-/tmp}; say() { echo "=== JOB-RUN $*"; }
-              export HOME=$root/home npm_config_cache=$root/npm-cache npm_config_update_notifier=false CI=1
-              mkdir -p "$HOME" "$root/w"
+              root=${JR_ROOT:-/tmp}; mkdir -p "$root/w"
+              # Everything goes to fetch.log and its code to fetch.rc on the shared /tmp; this container always ends 0, so the run container
+              # starts, prints the log and ends with that code (the streamed log and the EXIT line stay where job-run.sh reads them).
+              (
+              say() { echo "=== JOB-RUN $*"; }
+              # HOME (git config, the user .npmrc) is this container's own volume: the run container never sees it.
+              export HOME=${JR_FETCH_HOME:-/fetch-home} npm_config_cache=$root/npm-cache npm_config_update_notifier=false CI=1
+              mkdir -p "$HOME"
               # Credentials only through a helper that reads the environment: the token is never on a command line or in a URL.
               helper='!f() { [ -n "${GIT_TOKEN:-}" ] || exit 0; echo "username=${GIT_USER:-git}"; echo "password=$GIT_TOKEN"; }; f'
               if [ "$JR_REPO_URL" = https://github.com/isnanme/event.git ]; then
@@ -92,22 +100,95 @@ spec:
               t0=$(date +%s)
               fetch() { # <dir> <url> <ref>
                 git init -q "$root/w/$1" && git -C "$root/w/$1" fetch -q --depth 1 "$2" "$3" && git -C "$root/w/$1" checkout -q FETCH_HEAD \
-                  || { say "EXIT 2"; echo "job-run: $3 of $2 is not on the remote (push it first)"; exit 2; }
+                  || { echo "job-run: $3 of $2 is not on the remote (push it first)"; exit 2; }
               }
               main=$(basename "$JR_REPO_URL" .git)
               for a in $JR_ALSO; do fetch "${a%%=*}" "$(printf '%s' "${a#*=}" | sed 's/@[^@]*$//')" "${a##*@}"; done
               fetch "$main" "$JR_REPO_URL" "$JR_REF"
               sha=$(git -C "$root/w/$main" rev-parse --short HEAD); t1=$(date +%s)
               say "checked out $main at $sha in $((t1 - t0))s"
-              npmci() { # <dir>: npm ci, once more when it fails (a flake), and it says so
-                [ -f "$root/w/$1/package-lock.json" ] || return 0
-                (cd "$root/w/$1" && npm ci --no-audit --no-fund --loglevel=error) && return 0
-                rc=$?; say "npm ci failed in $1 (rc=$rc); retrying once"
-                (cd "$root/w/$1" && npm ci --no-audit --no-fund --loglevel=error) && { say "npm ci passed on the retry in $1"; return 0; }
-                rc=$?; say "npm ci failed in $1 (rc=$rc)"; say "EXIT $rc"; exit "$rc"
+              # The proof's other ref (T-333), fetched here while the credential is: the run container checks it out from refs/job-run/against.
+              if [ -n "${JR_AGAINST:-}" ] && git -C "$root/w/$main" fetch -q --depth 1 "$JR_REPO_URL" "$JR_AGAINST" 2>/dev/null; then
+                git -C "$root/w/$main" update-ref refs/job-run/against FETCH_HEAD
+              fi
+              npmci() { # <dir> <name>: npm ci WITHOUT install scripts (the run container runs them), once more when it fails (a flake)
+                [ -f "$1/package-lock.json" ] || return 0
+                (cd "$1" && npm ci --ignore-scripts --no-audit --no-fund --loglevel=error) && return 0
+                rc=$?; say "npm ci failed in $2 (rc=$rc); retrying once"
+                (cd "$1" && npm ci --ignore-scripts --no-audit --no-fund --loglevel=error) && { say "npm ci passed on the retry in $2"; return 0; }
+                rc=$?; say "npm ci failed in $2 (rc=$rc)"; exit "$rc"
               }
               if [ "$JR_STEPS" = npm-ci ]; then
-                for d in $(for a in $JR_ALSO; do echo "${a%%=*}"; done) "$main"; do npmci "$d"; done
+                for d in $(for a in $JR_ALSO; do echo "${a%%=*}"; done) "$main"; do npmci "$root/w/$d" "$d"; done
+                # Another lockfile on the other ref: its packages into npm's cache now, so the run container installs them offline.
+                if git -C "$root/w/$main" rev-parse -q --verify refs/job-run/against >/dev/null \
+                  && ! git -C "$root/w/$main" diff --quiet HEAD refs/job-run/against -- package-lock.json; then
+                  rm -rf "$root/warm"; mkdir -p "$root/warm"
+                  git -C "$root/w/$main" archive refs/job-run/against | tar -x -C "$root/warm" && npmci "$root/warm" "$main at $JR_AGAINST"
+                  rm -rf "$root/warm"
+                fi
+              fi
+              echo "$t0 $t1" > "$root/fetch.times"
+              # The check (T-401): no credential VALUE in what the run container gets (the pattern goes to grep on a pipe, never as an argument;
+              # only file names are printed).
+              for v in NODE_AUTH_TOKEN GIT_TOKEN; do
+                val=${!v:-}; [ "${#val}" -ge 8 ] || continue
+                if printf '%s\n' "$val" | grep -rlF -f - "$root" 2>/dev/null | head -n 20 | grep .; then
+                  say "the credential $v is in the files above, which the command would see: stopping"; exit 3
+                fi
+              done
+              say "credentials: used for the fetch only; none is in the files the command gets ($root checked)"
+              ) > "$root/fetch.log" 2>&1
+              echo $? > "$root/fetch.rc"
+              # JOB-RUN-FETCH END
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+            - {name: fetch-home, mountPath: /fetch-home}
+          resources:
+            # As the run container's (the pod requests the larger of the two, not the sum: T-524's sizing holds).
+            requests: {cpu: 1000m, memory: __MEMORY__}
+            limits: {cpu: "4", memory: __MEMORY__}
+      containers:
+        # T-401: no git or npm credential here, no envFrom. The one exception (T-426): each --pool-env name (E2E_CF_ACCESS_* only, the
+        # command's own scoped test credentials) as a secretKeyRef, written by job-run.sh in place of the __POOL_ENV__ line; never in fetch.
+        - name: run
+          image: __IMAGE__
+          env:
+            # __POOL_ENV__ (job-run.sh puts the --pool-env secretKeyRefs here)
+            - {name: JR_REPO_URL, value: "__REPO_URL__"}
+            - {name: JR_REF, value: "__REF__"}
+            - {name: JR_ALSO, value: "__ALSO__"}
+            - {name: JR_STEPS, value: "__STEPS__"}
+            - {name: JR_ARTIFACTS, value: "__ARTIFACTS__"}
+            - {name: JR_ARTIFACT_MAX, value: "__ARTMAX__"}
+            - {name: JR_CMD, value: "__CMD__"}
+            - {name: JR_AGAINST, value: "__AGAINST__"}
+            - {name: JR_KEEP, value: "__KEEP__"}
+            - {name: NODE_NAME, valueFrom: {fieldRef: {fieldPath: spec.nodeName}}}
+          command: [bash, -c]
+          args:
+            - |
+              # JOB-RUN-SCRIPT BEGIN (the test runs this part on its own, after the fetch part, with JR_ROOT pointing elsewhere)
+              set -u
+              root=${JR_ROOT:-/tmp}; say() { echo "=== JOB-RUN $*"; }
+              # A fresh HOME: no git credential helper, no user .npmrc (those were in the fetch container's own HOME).
+              export HOME=$root/home npm_config_cache=$root/npm-cache npm_config_update_notifier=false CI=1
+              mkdir -p "$HOME"
+              cat "$root/fetch.log" 2>/dev/null
+              frc=$(cat "$root/fetch.rc" 2>/dev/null || true)
+              if [ "$frc" != 0 ]; then [ -n "$frc" ] || echo "job-run: the fetch left no exit code"; say "EXIT ${frc:-1}"; exit "${frc:-1}"; fi
+              read -r t0 t1 < "$root/fetch.times"
+              main=$(basename "$JR_REPO_URL" .git); sha=$(git -C "$root/w/$main" rev-parse --short HEAD)
+              # What npm ci --ignore-scripts left out, now without a credential: the dependencies' install scripts (npm rebuild) and the
+              # package's own lifecycle scripts, in npm ci's order.
+              lifecycle() { [ -f package.json ] || return 0; node -e 'const s = require("./package.json").scripts || {}; for (const n of ["preinstall", "install", "postinstall", "prepublish", "preprepare", "prepare", "postprepare"]) if (s[n]) console.log(n)'; }
+              installscripts() { # <dir> <name>
+                [ -f "$1/package-lock.json" ] || return 0
+                (cd "$1" && npm rebuild --no-audit --no-fund --loglevel=error && for s in $(lifecycle); do npm run --ignore-scripts --loglevel=error "$s" || exit; done) && return 0
+                rc=$?; say "install scripts failed in $2 (rc=$rc)"; say "EXIT $rc"; exit "$rc"
+              }
+              if [ "$JR_STEPS" = npm-ci ]; then
+                for d in $(for a in $JR_ALSO; do echo "${a%%=*}"; done) "$main"; do installscripts "$root/w/$d" "$d"; done
               fi
               t2=$(date +%s); say "steps ($JR_STEPS) in $((t2 - t1))s; running the command"
               cd "$root/w/$main" && printf '%s' "$JR_CMD" | base64 -d > "$root/cmd.sh"
@@ -128,12 +209,18 @@ spec:
                 # other = PROOF. Exit 0 for a proof, 1 for none, 2 when the other ref or a kept path is missing.
                 rc1=$rc; refsha=$(git rev-parse HEAD)
                 noproof() { say "SUMMARY-AGAINST $JR_AGAINST rc=${1:-?}"; say "PROOF: NO PROOF: $2"; say "EXIT ${3:-1}"; exit "${3:-1}"; }
-                git fetch -q --depth 1 "$JR_REPO_URL" "$JR_AGAINST" 2>/dev/null || noproof "-" "$JR_AGAINST is not on the remote (use a full commit hash or a branch)" 2
-                afull=$(git rev-parse FETCH_HEAD); asha=$(git rev-parse --short FETCH_HEAD)
+                # Fetched by the fetch container (it has the credential); none here.
+                afull=$(git rev-parse -q --verify refs/job-run/against) || noproof "-" "$JR_AGAINST is not on the remote (use a full commit hash or a branch)" 2
+                asha=$(git rev-parse --short "$afull")
                 git checkout -q -f "$afull" || noproof "-" "cannot check out $JR_AGAINST" 2
                 # shellcheck disable=SC2086 # a list of paths
                 if [ -n "${JR_KEEP:-}" ]; then git checkout -q "$refsha" -- $JR_KEEP || noproof "-" "kept test path not at $JR_REF: $JR_KEEP" 2; fi
-                if [ "$JR_STEPS" = npm-ci ] && ! git diff --quiet "$refsha" "$afull" -- package-lock.json; then say "lockfile differs on $JR_AGAINST: npm ci again"; npmci "$main"; fi
+                if [ "$JR_STEPS" = npm-ci ] && ! git diff --quiet "$refsha" "$afull" -- package-lock.json; then
+                  # Offline from npm's cache, which the fetch container filled for this lockfile: no credential is needed.
+                  say "lockfile differs on $JR_AGAINST: npm ci again (offline, from the cache)"
+                  npm ci --ignore-scripts --prefer-offline --no-audit --no-fund --loglevel=error || { rc=$?; say "npm ci failed on $JR_AGAINST (rc=$rc)"; say "EXIT $rc"; exit "$rc"; }
+                  installscripts "$root/w/$main" "$main"
+                fi
                 tA=$(date +%s)
                 bash -o pipefail "$root/cmd.sh"; rc2=$?
                 say "SUMMARY-AGAINST $main@$asha tests-from=$sha kept=${JR_KEEP:-none} run=$(( $(date +%s) - tA ))s rc=$rc2"
@@ -160,3 +247,6 @@ spec:
           emptyDir: {medium: Memory, sizeLimit: __TMP_SIZE__}
         - name: shm
           emptyDir: {medium: Memory, sizeLimit: 1Gi}
+        # The fetch container's HOME (its git credential helper and user .npmrc); never mounted in the run container (T-401).
+        - name: fetch-home
+          emptyDir: {medium: Memory, sizeLimit: 64Mi}
