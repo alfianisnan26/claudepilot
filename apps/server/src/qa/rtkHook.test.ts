@@ -60,7 +60,7 @@ test('a command a deny rule names is untouched, read from the rules given (no mi
   assert.equal(decide('git status', ['git status:*']).action, 'skip');
   assert.equal(decide('git status', ['git status:*']).reason, 'matches a deny rule');
   assert.equal(decide('git status docs', ['git status docs']).reason, 'matches a deny rule');
-  assert.equal(decide('git status main', ['git status * main']).reason, 'matches a deny rule');
+  assert.equal(decide('git status docs main', ['git status * main']).reason, 'matches a deny rule');
   assert.equal(decide('git status', ['*']).reason, 'matches a deny rule');
   assert.equal(decide('git  status  docs', ['git status docs']).reason, 'matches a deny rule', 'collapsed spaces still match');
   assert.equal(decide('git status', ['rtk git:*']).reason, 'the rewritten form matches a deny rule');
