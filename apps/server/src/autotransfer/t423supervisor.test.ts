@@ -15,6 +15,8 @@ Object.assign(process.env, {
   STATE_DIR: dir,
   MAIN_FOLDER: dir,
   DRY_RUN: '1',
+  // Off by default until T-597 (the portal framed `/compact`); tested at the line it runs at once on.
+  COMPACT_AT: '120000',
 });
 
 type Lead = { id: string; state: string; context?: { usedTokens: number } };
