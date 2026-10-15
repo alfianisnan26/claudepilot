@@ -115,6 +115,11 @@ twice. `scripts/gate-job.sh <commit> [steps]` (T-37) runs `scripts/gate.sh` as a
 - **The verdict:** the Job ends with one `GATE-VERDICT: green` or `GATE-VERDICT: red: <why>` line from `scripts/gate-verdict.sh` (the same
   reading the local gate uses: every step at rc=0, the last suite summary at 0 failing and 0 timed out). The script prints the summary and
   that line, keeps the whole log in `GATE_JOB_LOG` (default `/tmp/gate-job-<sha>.log`), exits 0 green, 1 red.
+- **Pending (T-524):** 8Gi requested fits only k3s-node2, and the gate is not counted in job-run's caps, so it can wait for room. Its pod
+  Pending for that says so once, `gate job <name> is Pending: <the scheduler's reason>; it waits for a node with room (a Job that ends frees
+  memory), up to <GATE_JOB_WAIT_S>s`, and `gate job <name>: scheduled after Ns Pending` when it gets a node. A gate never scheduled in
+  `GATE_JOB_WAIT_S` (5400) ends `GATE-VERDICT: red: not scheduled in Ns: <reason>` (exit 1: nothing of the commit was checked); one that
+  started and did not end keeps `GATE-VERDICT: red: the job did not finish in Ns`.
 - **The commit must be on GitHub** (any branch: a sub-agent's pushed branch, `integration`, or `wip/orchestrator-local-backup` for an
   unpushed merge). The deploy pipeline's gate job uses it by default.
 
@@ -144,7 +149,9 @@ scripts/job-run.sh --list ; scripts/job-run.sh --stop --chat <session id>
   4Gi by default with `/tmp` at most 2Gi; `--big` gives 8Gi with `/tmp` 4Gi (only k3s-node2 has that much free). The whole server suite peaked
   at 1480Mi (claudepilot-job-4c34ebf9, 2026-10-15), a test folder at 1365Mi; the Event Job above reached 4.1 GB and needs `--big`.
   Every Job ends with `=== JOB-RUN MEMORY peak=… limit=… oom_kills=…` (its own cgroup). An OOMKilled Job says so with its limit and the hint
-  `--big`; a Job Pending because no node has the memory free says so once, instead of a silent wait.
+  `--big`; a Job Pending because no node has the memory free says so once, instead of a silent wait. `/tmp` and `/dev/shm` (1Gi) are both
+  in memory and count against the same limit: with `/tmp` and `/dev/shm` full, a 4Gi Job has 1Gi left for its processes. A full `/tmp` is a
+  full tmpfs, so the command gets `No space left on device` (no eviction); a failed Job with that text in its log gets the `--big` hint too.
 - **Placement (T-365, T-524):** preferred, never required (a required rule left every Job Pending): away from the control-plane node, the
   portal's node and workspace pods. The scheduler scales each rule to 0..100 before adding them, so with two nodes the control-plane and the
   portal rules cancel and the node with the most free memory and CPU after the request wins; the honest request is what keeps the master
