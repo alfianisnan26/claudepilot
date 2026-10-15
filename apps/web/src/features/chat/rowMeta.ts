@@ -1,7 +1,7 @@
 // T-375 (the owner, 2026-10-15: "aku pengen tau juga informasi bar quota, dan model yang sedang digunakan, buat lebih compact tapi clean dan
 // tidak bloated"): what a row of the Sessions list shows, apart from React so every rule is tested (rowMeta.test.ts). A row is two lines:
-// the title with its marks and time, then one muted line of facts (state, model, the Claude with its quota bar, cost; branch and ticket
-// from 640 px). A third line only when it carries something: the open request, or (on a phone) the branch and ticket. A label that is the
+// the title with its marks and time, then one muted line of facts in priority order (LINE_TWO_ORDER: what does not fit is dropped whole).
+// A third line only when it carries something: the open request. A label that is the
 // same on every row says nothing, so the workspace shows only when the rows span several, and a persona's avatar only when they have
 // several personas. Every number has a source: the quota bar is the Claude's 5-hour window from the claude-usage readings (the same
 // snapshot as the top bar's chip), "unavailable" when the reading is missing, old or past its reset; never a guess.
@@ -173,6 +173,33 @@ export function rowMeta({ session: s, groupBy, showWorkspace, usage, nowMs, lead
     ticket: s.ticketId && groupBy !== 'ticket' ? s.ticketId : null,
     waitingFor: s.waiting > 0 || s.state === 'waiting' ? s.waitingFor : null,
   };
+}
+
+/**
+ * Line two's items, in priority order, which is also the order they read in (T-375, the ux check of c84657f: at 390 px the line cut the cost
+ * mid-number, the Claude's name to "De" with no ellipsis, and dropped the lead's cost). The line is one line high and wraps: an item that does
+ * not fit whole goes to the hidden second line with everything after it, so a lower-priority item is dropped whole and a number is never
+ * cut. A name that must shorten (the Claude, the workspace, the branch) is capped and ends in an ellipsis, its full text in the tip.
+ *   state · quota (bar and percent) · cost · model · workspace · Claude's name · branch · ticket
+ * The workspace shows only when the card's rows span several workspaces (it then tells rows apart, more than the Claude's name, which the
+ * bar's tip also says).
+ */
+export const LINE_TWO_ORDER = ['state', 'quota', 'cost', 'model', 'workspace', 'claude', 'branch', 'ticket'] as const;
+export type LineTwoItem = (typeof LINE_TWO_ORDER)[number];
+
+/** The items line two carries for these facts, in {@link LINE_TWO_ORDER}; the quota item only when there is a bar (not a pool or a key). */
+export function lineTwo(m: Pick<RowMeta, 'model' | 'claude' | 'cost' | 'workspace' | 'branch' | 'ticket'>): LineTwoItem[] {
+  const has: Record<LineTwoItem, boolean> = {
+    state: true,
+    quota: !!m.claude && m.claude.meter.kind !== 'no_limits',
+    cost: !!m.cost,
+    model: !!m.model,
+    workspace: !!m.workspace,
+    claude: !!m.claude?.name,
+    branch: !!m.branch,
+    ticket: !!m.ticket,
+  };
+  return LINE_TWO_ORDER.filter((k) => has[k]);
 }
 
 /**

@@ -29,7 +29,7 @@ import { formatDateTime } from '@/lib/format';
 import { crewCount, crewOfRows, fromLead } from './crew';
 import { RecoverButton } from './Recover';
 import { RoleBadge } from './RoleBadge';
-import { barWidth, roleShown, rowMeta, rowState, thirdLine, type QuotaMeter, type RowMeta, type RowState } from './rowMeta';
+import { barWidth, lineTwo, roleShown, rowMeta, rowState, thirdLine, type LineTwoItem, type QuotaMeter, type RowState } from './rowMeta';
 import { endedForSafety, formatUsd, StateBadge, timeShort } from './shared';
 import { SWIPE_SETTLE_MS, useRowSwipe } from './swipe';
 
@@ -115,13 +115,12 @@ const BAR: Record<'neutral' | 'warn' | 'critical', string> = { neutral: 'bg-ink-
 const PCT: Record<'neutral' | 'warn' | 'critical', string> = { neutral: '', warn: 'text-amber-700 dark:text-amber-400', critical: 'text-danger' };
 
 /**
- * The mini quota bar (28 x 4 px) of the Claude a session runs on, then its name (capped; a short line cuts the name, never the bar): the
- * 5-hour window's percent used, neutral, amber from 70, red from 90; grey with no number when the reading is unavailable; no bar for a pool
- * or a key. The words (5-hour and week, resets, the reading's age)
- * are the tip and the screen reader's text: the row is one link, and a button inside a link is not allowed (nor would a tap stay on it).
+ * The mini quota bar (28 x 4 px) of the Claude a session runs on and its percent: the 5-hour window's percent used, neutral, amber from 70,
+ * red from 90; grey with no number when the reading is unavailable; nothing for a pool or a key. The Claude's name is an item of its own,
+ * lower on line two's priority (rowMeta.LINE_TWO_ORDER). The words (5-hour and week, resets, the reading's age) are the tip and the screen
+ * reader's text: the row is one link, and a button inside a link is not allowed (nor would a tap stay on it).
  */
-function ClaudeQuota({ claude }: { claude: NonNullable<RowMeta['claude']> }) {
-  const m: QuotaMeter = claude.meter;
+function ClaudeQuota({ meter: m }: { meter: QuotaMeter }) {
   return (
     <span data-row-claude="" title={m.title} className="inline-flex items-center gap-1">
       {m.kind !== 'no_limits' && (
@@ -136,11 +135,6 @@ function ClaudeQuota({ claude }: { claude: NonNullable<RowMeta['claude']> }) {
       {m.kind === 'plan' && (
         <span aria-hidden="true" className={cn('shrink-0 tabular-nums', PCT[m.tone])}>
           {Math.round(m.usedPct)}%
-        </span>
-      )}
-      {claude.name && (
-        <span aria-hidden="true" className="max-w-16 min-w-0 truncate">
-          {claude.name}
         </span>
       )}
       <span className="sr-only">{m.title}</span>
@@ -158,12 +152,13 @@ const BYPASS_DOT = (
 /**
  * One session in the list (T-375): two lines at 390 px, a third only when it carries something.
  *   (o) Konfersi: migration              [crew 3]   2m  ⋯
- *       ● Working · Opus 5.5 · ▬▬── 62% satria · ≈ $10.39
+ *       ● Working · ▬▬── 62% · ≈ $10.39 · Opus 5.5 · satria
  * The icon is the state's ring (amber needs you, accent working, a line otherwise) around the session's kind (a role, asleep, removed, a
  * chat), or the persona's avatar when the rows on screen have more than one persona; Bypass is a red shield dot on its corner (a tip says
  * it; the word too from 640 px). Line one: the title, the pin, the role (an icon on a phone, hidden when the title already starts with it),
- * the crew count, the time. Line two (muted, one line, cut on the right): the state, the model (its id and effort in the tip), the Claude and
- * its quota bar, the cost, the workspace only when the card's rows span several, the branch and ticket. Line three: only what it waits on
+ * the crew count, the time. Line two (muted, one line, rowMeta.LINE_TWO_ORDER): the state, the quota bar and percent, the cost, the model
+ * (its id and effort in the tip), the workspace only when the card's rows span several, the Claude's name, the branch and ticket; what does
+ * not fit is dropped whole, never cut mid-value. Line three: only what it waits on
  * (amber). The folder lives on the session page. Selecting turns the row into a checkbox. Grouped by
  * Claude, a chat that moved is also listed, lighter, under the Claudes it ran on earlier: the same chat. A removed workspace is stated
  * plainly.
@@ -233,46 +228,61 @@ export function SessionRow({
   const meta = rowMeta({ session: s, groupBy, showWorkspace: facts.showWorkspace, usage: facts.usage?.get(s.claudeId) ?? null, nowMs: facts.nowMs, lead });
   const third = thirdLine(meta);
 
-  const branch = meta.branch && (
-    <span title={meta.branch.title} className="inline-flex min-w-0 items-center gap-1 font-mono">
-      <GitBranch className="size-3 shrink-0" aria-hidden="true" />
-      <span className="min-w-0 truncate">{meta.branch.label}</span>
-    </span>
-  );
-  const ticket = meta.ticket && (
-    <span className="inline-flex shrink-0 items-center gap-1">
-      <Ticket className="size-3" aria-hidden="true" />
-      {meta.ticket}
-    </span>
-  );
-  // Line two: one line, the facts in this order; what does not fit is cut on the right. Only the workspace and the branch give up room
-  // (they truncate); the Claude's name is capped and its bar never shrinks (a shrinking item let the bar paint over the cost).
-  const facts2: { key: string; node: React.ReactNode; shrinks?: boolean }[] = [{ key: 'state', node: <StateWord state={state} /> }];
-  if (meta.model)
-    facts2.push({
-      key: 'model',
-      node: (
-        <span data-row-model="" title={meta.model.title}>
-          {meta.model.label}
-        </span>
-      ),
-    });
-  if (meta.claude) facts2.push({ key: 'claude', node: <ClaudeQuota claude={meta.claude} /> });
-  // T-343: a running turn's cost is an estimate (≈) until its result; a model without a price adds nothing (unavailable, never a guess).
-  if (meta.cost)
-    facts2.push({ key: 'cost', node: <span className="tabular-nums">{meta.cost.estimate ? `≈ ${formatUsd(meta.cost.usd)}` : formatUsd(meta.cost.usd)}</span> });
-  if (meta.workspace)
-    facts2.push({
-      key: 'ws',
-      shrinks: true,
-      node: (
-        <span title={meta.workspace.title} className={cn('min-w-0 truncate font-mono', row.workspaceGone && 'line-through')}>
-          {meta.workspace.label}
-        </span>
-      ),
-    });
-  if (branch) facts2.push({ key: 'wt', shrinks: true, node: branch });
-  if (ticket) facts2.push({ key: 'ticket', node: ticket });
+  // Line two (rowMeta.lineTwo): the items in priority order, each whole or not at all; a capped name ends in an ellipsis (its tip says it all).
+  const item = (k: LineTwoItem): React.ReactNode => {
+    switch (k) {
+      case 'state':
+        return <StateWord state={state} />;
+      case 'quota':
+        return meta.claude && <ClaudeQuota meter={meta.claude.meter} />;
+      case 'cost':
+        // T-343: a running turn's cost is an estimate (≈) until its result; a model without a price adds nothing (unavailable, never a guess).
+        return meta.cost && <span data-row-cost="" className="tabular-nums">{meta.cost.estimate ? `≈ ${formatUsd(meta.cost.usd)}` : formatUsd(meta.cost.usd)}</span>;
+      case 'model':
+        return (
+          meta.model && (
+            <span data-row-model="" title={meta.model.title}>
+              {meta.model.label}
+            </span>
+          )
+        );
+      case 'workspace':
+        return (
+          meta.workspace && (
+            <span data-row-workspace="" title={meta.workspace.title} className={cn('max-w-32 truncate font-mono', row.workspaceGone && 'line-through')}>
+              {meta.workspace.label}
+            </span>
+          )
+        );
+      case 'claude':
+        return (
+          meta.claude?.name && (
+            <span data-row-claude-name="" title={meta.claude.meter.kind === 'no_limits' ? meta.claude.meter.title : meta.claude.name} className="max-w-24 truncate">
+              {meta.claude.name}
+            </span>
+          )
+        );
+      case 'branch':
+        return (
+          meta.branch && (
+            <span data-row-branch="" title={meta.branch.title} className="inline-flex items-center gap-1 font-mono">
+              <GitBranch className="size-3 shrink-0" aria-hidden="true" />
+              <span className="max-w-40 truncate">{meta.branch.label}</span>
+            </span>
+          )
+        );
+      case 'ticket':
+        return (
+          meta.ticket && (
+            <span data-row-ticket="" className="inline-flex items-center gap-1">
+              <Ticket className="size-3 shrink-0" aria-hidden="true" />
+              {meta.ticket}
+            </span>
+          )
+        );
+    }
+  };
+  const facts2 = lineTwo(meta);
 
   const icon = depth > 0 ? 'size-8' : 'size-10';
   const glyph = depth > 0 ? 'size-4' : 'size-[18px]';
@@ -340,7 +350,7 @@ export function SessionRow({
   // T-369: a lead header. The lead of workers shown here while it is not (it does not match the chip or the search, or sits under another
   // heading): one muted line, its title, state, crew count and Claude, a tap opens it. Context, not a match: no checkbox, swipe or ⋯. In a
   // chip, a lead that matches with workers under it keeps this same line (its state badge says Working), so the flip moves nothing (QA A9);
-  // being a match, it takes a checkbox while selecting (no taller: the line is 44 px on a phone, 36 px from 640 px).
+  // being a match, it takes a checkbox while selecting (no taller: the line is 44 px at every width, a touch target, QA A5).
   if (row.header)
     return (
       <li data-lead-header="">
@@ -365,7 +375,7 @@ export function SessionRow({
             data-crew-header={s.id}
             title={title}
             onClick={(e) => (row.context ? selecting && e.preventDefault() : click(e))}
-            className="press flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded-[inherit] py-1.5 pr-4 pl-4 text-[13px] text-muted hover:text-ink sm:min-h-9 sm:pl-5"
+            className="press flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded-[inherit] py-1.5 pr-4 pl-4 text-[13px] text-muted hover:text-ink sm:pl-5"
           >
             <span className="sr-only">Lead: </span>
             <span data-header-title="" className="min-w-0 flex-1 truncate font-semibold text-ink-soft">
@@ -499,11 +509,12 @@ export function SessionRow({
                 {timeShort(s.lastActivityAt)}
               </span>
             </div>
-            <p data-row-meta="" className="mt-0.5 flex min-w-0 items-center gap-1 overflow-hidden text-[12.5px] whitespace-nowrap text-muted">
-              {facts2.map((f, i) => (
-                <span key={f.key} className={cn('flex items-center gap-1', f.shrinks ? 'min-w-0' : 'shrink-0')}>
+            {/* One line high (h-5) and wrapping: an item that does not fit whole goes to the second, hidden line with all after it. */}
+            <p data-row-meta="" className="mt-0.5 flex h-5 min-w-0 flex-wrap content-start items-center gap-x-1 overflow-hidden text-[12.5px] leading-5 whitespace-nowrap text-muted">
+              {facts2.map((k, i) => (
+                <span key={k} data-line-two={k} className="flex h-5 shrink-0 items-center gap-1">
                   {i > 0 && <span aria-hidden="true">·</span>}
-                  {f.node}
+                  {item(k)}
                 </span>
               ))}
             </p>

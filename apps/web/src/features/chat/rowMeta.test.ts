@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { ChatSession, ClaudeUsage, ClaudeUsageWindow, ListRow, PersonaIdentity } from '@portal/contracts';
 import { modelShortName } from './modelName';
-import { avatarsShown, barWidth, listFacts, quotaMeter, quotaTone, roleShown, rowMeta, rowState, thirdLine, workspaceShown } from './rowMeta';
+import { avatarsShown, barWidth, LINE_TWO_ORDER, lineTwo, listFacts, quotaMeter, quotaTone, roleShown, rowMeta, rowState, thirdLine, workspaceShown } from './rowMeta';
 
 // Times are relative to the real clock (no fixed dates).
 const NOW = Date.now();
@@ -184,6 +184,21 @@ test('row meta: the cost (an estimate while a turn runs), nothing at 0; branch a
   assert.equal(m.ticket, 'T-375');
   assert.equal(rowMeta({ session: wt, groupBy: 'worktree', showWorkspace: false, usage: null, nowMs: NOW }).branch, null);
   assert.equal(rowMeta({ session: wt, groupBy: 'ticket', showWorkspace: false, usage: null, nowMs: NOW }).ticket, null);
+});
+
+test('line two: the items in priority order (state, quota, cost, model, workspace, Claude, branch, ticket); only those it has', () => {
+  assert.deepEqual([...LINE_TWO_ORDER], ['state', 'quota', 'cost', 'model', 'workspace', 'claude', 'branch', 'ticket']);
+  const full = s({ costUsd: 1.5, ticketId: 'T-1', worktree: { path: '/w/x', branch: 'ticket/T-1-x' } as ChatSession['worktree'] });
+  assert.deepEqual(lineTwo(rowMeta({ session: full, groupBy: 'none', showWorkspace: true, usage: usage(), nowMs: NOW })), [...LINE_TWO_ORDER]);
+  // The cost comes before the model and the Claude's name, so a short line keeps the number (the ux check of c84657f: the lead's cost gone).
+  const lead = lineTwo(rowMeta({ session: s({ costUsd: 10.39 }), groupBy: 'none', showWorkspace: false, usage: usage(), nowMs: NOW }));
+  assert.deepEqual(lead, ['state', 'quota', 'cost', 'model', 'claude']);
+  // Under a Claude heading: the bar, not the name. A pool or a key: no bar, the name stays. A worker on its lead's Claude: neither.
+  assert.deepEqual(lineTwo(rowMeta({ session: s(), groupBy: 'claude', showWorkspace: false, usage: usage(), nowMs: NOW })), ['state', 'quota', 'model']);
+  assert.deepEqual(lineTwo(rowMeta({ session: s(), groupBy: 'none', showWorkspace: false, usage: usage({ runsOn: 'pool' }), nowMs: NOW })), ['state', 'model', 'claude']);
+  const lead2 = s();
+  assert.deepEqual(lineTwo(rowMeta({ session: s(), groupBy: 'none', showWorkspace: false, usage: usage(), nowMs: NOW, lead: lead2 })), ['state', 'model']);
+  assert.deepEqual(lineTwo(rowMeta({ session: s({ model: null, claudeId: null, claudeName: null } as Partial<ChatSession>), groupBy: 'none', showWorkspace: false, usage: null, nowMs: NOW })), ['state']);
 });
 
 test('line three: only the open request; a branch or ticket stays on line two (two lines)', () => {
