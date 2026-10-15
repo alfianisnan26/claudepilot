@@ -14,7 +14,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   caught, 5419; 2ae78a99 ended): review PASS W/ COND (5456) -> S2 fc9ce1d DONE (5464; 813992cf ended) -> premerge
   wip/main-5b66aa0, gate GREEN gate-5b66aa0-44ef (suite 559 s, peak 2172Mi) -> QA Perf after T-548 -> ff integration (no deploy).
   T-486 S2d 2979f99: QA Perf PASS WITH GAPS 5548 (junk drains the global 120/min bucket -> signed hook 429). Decision 5551: S2e fix
-  (one-off sonnet, next free slot) -> QA Perf bucket re-probe -> lead gate + merge. QA Perf T-426: lead merged ab93b54 into
+  -> BACKEND LANE now (lead merged 2979f99 into its branch = 0004ac5; merge order T-546 first) -> QA Perf re-probe -> gate + merge. QA Perf T-426: lead merged ab93b54 into
   lane/cp-qa-perf = 7fbbe4c (lane cannot merge/archive); if its ff pull is refused too -> one-off QA worker on T-426.
   T-548 S1 9b822ba + T-591 S1 bf932c3: blind review 9651c9fa (ended) PASS W/ COND both (5512/5513; sev 2 vault authz on T-591). Decisions
   5514/5515: S1b fixes. IMPL 4ba6c5db (impl-t591-s1b, sonnet, ticket/T-591-s1b-review). T-548 S1b = one-off sonnet at next free slot.
@@ -41,7 +41,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   by session_message, never ended for lack of work: CP Backend -> CP QA Perf -> CP Frontend -> CP QA UI -> 5th = blind reviewer.
   Every delivery goes to its side's QA lane before merge. T-591 S1 stays with eaec4cc5, then Backend. T-595 5389: the LEAD makes each ticket's
   worktree+branch and gives the lane the path. 15:19 CONFIRMED refused (5443): no lane can take a 2nd ticket; coordinator asked (a/b/c);
-  default: lanes keep their ticket, a new-branch ticket goes to a one-off sonnet implementer (own spawn worktree) at a free slot.
+  16:20 PATH FOUND (T-595 5552): lead merges the base into the lane's spawn branch + plain push; lane `git merge --ff-only` WORKS.
 - 15:50 Workspace restarted 13:46 UTC; 03c496b6 (T-546, mid-Jobs) and cee43422 (T-486 port, WAITING 3cb0883) are gone, all branches
   pushed and clean. Deploy #39 (coordinator, RBAC + T-557 fix) holds the cluster, finishes by itself. 14:05 Coordinator AWAY (owner offline): restart POSTPONED, long work OK, Mac runner off.
   BINDING: the coordinator runs deploys (#38-#40); I start NO deploy. (Old T-546/T-486 workers replaced.)
