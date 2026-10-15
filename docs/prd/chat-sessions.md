@@ -1252,7 +1252,22 @@ the portal's own external heartbeat (designed in §23.3, T-315, not built); dele
 
 **Needs you (T-146):** a tool request a waiting session has held for ten minutes or more is listed on Needs you ([attention.md](attention.md) §2, `chat/attention.ts`); answering stays on the session page.
 
-### 23.3 The external heartbeat (design for a decision, T-315; nothing below is built)
+### 23.3 The external heartbeat (design for a decision, T-315; slice 1 below is built, the rest is not)
+
+**Built, slice 1 (T-315, decided under D-51: no owner question, no new account, no new secret).** A scheduled GitHub Actions workflow,
+`.github/workflows/heartbeat.yml` (every 5 minutes and `workflow_dispatch`; permissions `issues: write`, `contents: read`; only the
+workflow's own `GITHUB_TOKEN`), runs `scripts/heartbeat.mjs` (Node 22, no dependencies) against `https://pilot.ai.isnan.me/healthz`. A miss is
+anything but a 200 within 10 s. **The miss count is kept in the run, not stored:** a run that misses waits 60 s and probes once more; two
+misses in that one run are "two in a row", so there is no cache or counter to go stale, and the alarm comes after about 1 to 6 minutes. Two
+misses open ONE issue labelled `portal-down` (never a second while one with the label is open: the check reads the open issues first); a
+healthy answer while one is open comments and closes it. The owner is told by GitHub's own notifications. Probe B is not in slice 1.
+Proof: `apps/server/src/qa/heartbeat.test.ts` runs the script against a fake health endpoint and a fake GitHub API: one miss opens nothing; two
+open exactly one; a third run opens no second; recovery comments and closes; `--dry-run` reads and writes nothing.
+
+**Not observed, and plainly limited.** (1) A schedule runs only from the default branch: the heartbeat does not start until the workflow is on
+`main`. (2) GitHub's runners are outside the cluster and `pilot.ai.isnan.me` resolves only on the private network (T-259), so the runners
+probably cannot reach it: every run would then report a miss and open the issue although the portal is up. That has not been run, so it is
+unproven either way; if the first runs show it, the next slice moves the probe to a host that can reach the portal, still without a new secret.
 
 **Why.** Keep going runs inside the portal (§23, `apps/server/src/keepgoing/`), so it cannot see the portal go away, and it cannot see the
 outage of 2026-10-14 either: then the portal was not the thing that broke; `pilot.ai.isnan.me` did not resolve from the owner's dev

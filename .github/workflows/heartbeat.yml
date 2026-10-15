@@ -1,0 +1,30 @@
+# External heartbeat (T-315, docs/prd/chat-sessions.md §23.3). The scheduled run starts only once this file is on the
+# default branch (main). GitHub's runners are outside the cluster; if they cannot resolve or reach the portal (private DNS,
+# access rules) every run reports a miss: the next slice moves the probe.
+name: heartbeat
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+permissions:
+  issues: write
+  contents: read
+concurrency:
+  group: heartbeat
+  cancel-in-progress: false
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts/heartbeat.mjs
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Probe the portal
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/heartbeat.mjs --url https://pilot.ai.isnan.me/healthz
