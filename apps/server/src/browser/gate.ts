@@ -120,7 +120,6 @@ function redact(s) {
     .replace(new RegExp('("value"\\s*:\\s*)"(?:[^"\\\\]|\\\\.)*"(\\s*,\\s*"name"\\s*:\\s*"' + CRED + '")', 'gi'), '$1"[redacted]"$2')
     .replace(new RegExp('(\\|\\s*' + CRED + '\\s*\\|\\s*)[^|\\n]*', 'gi'), '$1[redacted] ')
     .replace(new RegExp('(^[ \\t>-]*\\[?' + CRED + '\\]?\\s*[:=]\\s*)(.+)$', 'gim'), '$1[redacted]');
-  for (const v of SECRET_VALUES) out = out.split(v).join('[redacted]');
   return out;
 }
 function redactResult(result) {

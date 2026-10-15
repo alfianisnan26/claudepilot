@@ -71,7 +71,7 @@ export function buildExtension(entries) {
     const action = { type: 'modifyHeaders', requestHeaders: [...headers.values()] };
     return [
       { id: 2 * i + 1, priority: 1, action, condition: { regexFilter, isUrlFilterCaseSensitive: false, resourceTypes: ['main_frame'] } },
-      { id: 2 * i + 2, priority: 1, action, condition: { regexFilter, isUrlFilterCaseSensitive: false, resourceTypes: TYPES.filter((t) => t !== 'main_frame'), initiatorDomains: [domain] } },
+      { id: 2 * i + 2, priority: 1, action, condition: { regexFilter, isUrlFilterCaseSensitive: false, resourceTypes: TYPES.filter((t) => t !== 'main_frame') } },
     ];
   });
   const manifest = {

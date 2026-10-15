@@ -148,7 +148,7 @@ export function browserVolumes(runtimeName: string, content: BrowserPoolContent)
   const cm = configMapName(runtimeName);
   return [
     // Memory-backed, only the browser container mounts it, and never on a disk (PRD §24); the portal's exec makes it 0700 with a 0400 file.
-    { name: 'cpb-secrets', emptyDir: { medium: 'Memory', sizeLimit: '1Mi' } },
+    { name: 'cpb-secrets', emptyDir: { sizeLimit: '1Mi' } },
     { name: 'cpb-home', emptyDir: { sizeLimit: '512Mi' } },
     { name: 'cpb-tmp', emptyDir: { sizeLimit: '1Gi' } },
     { name: 'cpb-run', emptyDir: { medium: 'Memory', sizeLimit: '16Mi' } },
@@ -460,8 +460,9 @@ export class KubeBrowsers {
    */
   async deliverHeaders(workspace: string, headers: ResolvedHeader[]): Promise<'changed' | 'same' | null> {
     const body = headers.length ? headersFile(headers) : null;
+    if (body === null) return 'same';
     const script = body === null ? REMOVE_HEADERS_SCRIPT : WRITE_HEADERS_SCRIPT;
-    const argv = ['sh', '-c', script, 'cpb-headers', ...(body === null ? [] : [String(Buffer.byteLength(body))])];
+    const argv = ['sh', '-c', script, 'cpb-headers', ...(body === null ? [] : [String(Buffer.byteLength(body)), body])];
     let r: ExecResult;
     try {
       r = await this.exec(workspace, argv, { user: '0', ...(body === null ? {} : { stdin: body }) });
