@@ -241,21 +241,24 @@ export class SpendStore {
     });
   }
 
-  /** Finished requests of one session in (fromMs, toMs], and what they cost. */
-  sessionWindow(sessionId: string, fromMs: number, toMs: number): { requests: number; costUsd: number } {
+  /** Finished requests of these sessions (one session, or the rows of a continued chain) in (fromMs, toMs], and what they cost. */
+  sessionWindow(sessionIds: readonly string[], fromMs: number, toMs: number): { requests: number; costUsd: number } {
     return this.#read({ requests: 0, costUsd: 0 }, (db) => {
-      const r = db.prepare('SELECT COALESCE(SUM(requests), 0) AS n, COALESCE(SUM(cost_usd), 0) AS usd FROM chat_usage WHERE session_id = ? AND at_ms > ? AND at_ms <= ?').get(sessionId, fromMs, toMs) as unknown as { n: number; usd: number };
+      const ids = sessionIds.slice(0, CHUNK);
+      const r = db
+        .prepare(`SELECT COALESCE(SUM(requests), 0) AS n, COALESCE(SUM(cost_usd), 0) AS usd FROM chat_usage WHERE session_id IN ${inList(ids.length)} AND at_ms > ? AND at_ms <= ?`)
+        .get(...ids, fromMs, toMs) as unknown as { n: number; usd: number };
       return { requests: r.n, costUsd: r.usd };
     });
   }
 
-  /** Dollars of the Claude's requests since `fromMs` (to `toMs`, exclusive) and the session that spent most of them. */
-  claudeWindow(claudeId: string, fromMs: number, toMs: number): { costUsd: number; top: { sessionId: string; costUsd: number } | null } {
-    return this.#read({ costUsd: 0, top: null }, (db) => {
+  /** Dollars of the Claude's requests since `fromMs` (to `toMs`, exclusive), and what each session spent of them, most first. */
+  claudeWindow(claudeId: string, fromMs: number, toMs: number): { costUsd: number; bySession: { sessionId: string; costUsd: number }[] } {
+    return this.#read<{ costUsd: number; bySession: { sessionId: string; costUsd: number }[] }>({ costUsd: 0, bySession: [] }, (db) => {
       const s = this.#scope({ kind: 'claude', id: claudeId }, this.defaultClaudes());
       const rows = db.prepare(`SELECT session_id, SUM(cost_usd) AS usd FROM chat_usage WHERE at_ms >= ? AND at_ms < ? AND ${s.sql} GROUP BY session_id ORDER BY usd DESC`).all(fromMs, toMs, ...s.args) as unknown as { session_id: string; usd: number }[];
       const total = rows.reduce((t, r) => t + r.usd, 0);
-      return { costUsd: total, top: rows[0] ? { sessionId: rows[0].session_id, costUsd: rows[0].usd } : null };
+      return { costUsd: total, bySession: rows.map((r) => ({ sessionId: r.session_id, costUsd: r.usd })) };
     });
   }
 

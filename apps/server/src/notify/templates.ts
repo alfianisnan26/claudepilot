@@ -135,7 +135,8 @@ export function tagOf(e: NotifyEvent): string {
     case 'auto_move':
       return `move:${s.id}`;
     case 'cost_spike':
-      return `cost:${s.id}`;
+      // A spike of a continued chat (T-312): one tag for the whole chain, so its rows replace each other's notification.
+      return `cost:${typeof e.facts.root === 'string' && e.facts.root ? e.facts.root : s.id}`;
     case 'keepgoing_attention':
       return `keepgoing:${s.id}:${name(e.facts.what, 'what')}`;
     case 'attention':

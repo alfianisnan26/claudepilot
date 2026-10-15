@@ -252,7 +252,7 @@ export interface SpikeEvent {
   at: string;
   /** Always true: a rule of thumb, not proof that anything is wrong. */
   heuristic: true;
-  /** The session it names (burst, outlier; rate when one session dominates); null otherwise. */
+  /** The session it names (burst, outlier; rate when one chat dominates, by the first row of its continued chain); null otherwise. */
   sessionId: string | null;
   sessionTitle: string | null;
   claudeId: string;
@@ -266,7 +266,10 @@ export interface SpikeEvent {
   alerted: boolean;
   /** Who it is for (a user id; `u_owner` today): the manager of what it is about once the portal has several users. */
   owner: string;
-  /** What a snooze of this event covers: the session (burst, outlier) or the Claude (rate). */
+  /**
+   * What a snooze of this event covers: the session (burst, outlier) or the Claude (rate). For a session it is the first row of its
+   * `continued_from` chain (T-312): the rows of a continued chat share one cooldown and one snooze.
+   */
   subject: string;
   /** Until when its subject is snoozed, if it is. */
   snoozedUntil: string | null;
@@ -336,7 +339,13 @@ export type SpendAlert =
       summary: string;
       spikeId: string;
       spikeKind: SpikeKind;
+      /** The session the spike happened in (a rate spike: the chat that spent most of it, by the first row of its chain). */
       sessionId: string | null;
+      /**
+       * The first row of that session's `continued_from` chain (T-312): a chat continued as new rows is one subject, so the alerts of its rows
+       * group under this id. The session itself when it continues nothing; null when the spike names no session.
+       */
+      rootSessionId: string | null;
       claudeId: string;
       workspaceId: string;
       heuristic: true;

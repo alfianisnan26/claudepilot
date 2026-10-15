@@ -1,6 +1,7 @@
 // Efficiency lab and the authorization seam (apps/server/src/authz/seam.ts, docs/prd/authorization.md). The lab's numbers are the portal's
 // usage across every session: the platform area `usage`, `view` to read (the owner, an admin). An agent reads only its own session's slices
-// (the Portal MCP tool `lab_summary`, reach `session`, or an agent actor on a route) and draws arms for its own session's next slice
+// (the Portal MCP tool `lab_summary`, reach `session`, or an agent actor on a route; with the rows its chat continues, `continued_from`,
+// T-312: one chat, never another chat's) and draws arms for its own session's next slice
 // (`lab_arm_draw`, reach `session`, T-292 slice 3); changing an experiment is `manage` on the area with the
 // confirmation round trip. Every denial on a route answers the same 404 as a route that is not there (no existence leak).
 

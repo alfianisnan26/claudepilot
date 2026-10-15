@@ -7,6 +7,8 @@
 
 import type { LabExperiment, LabExperimentReport, LabExperimentView, LabPeriod, LabSliceMetrics, LabSliceView, LabSummary } from '@portal/contracts';
 import type { Store } from '../store/store.js';
+import { chainOf } from '../usagespend/attribution.js';
+import { SpendStore } from '../usagespend/store.js';
 import { armMembers, assignSlice, bindDraw, createExperiment, decideExperiment, drawArms, excludeSlice, experimentReport, listExperiments, drawStats, newDrawKey, ticketExistsIn, normTicket, stopExperiment, type DrawStat, type NewExperiment } from './experiments.js';
 import { LabIngest } from './ingest.js';
 import { sliceMetrics, type SliceFilter } from './metrics.js';
@@ -54,9 +56,15 @@ export class Lab {
     }
   }
 
+  /**
+   * The slices that match. A session (an agent's own read, `?session=`) is the session with the rows of its `continued_from` chain before it
+   * (T-312): a chat continued as new rows is one unit, so its earlier rows' slices are still its own. The chain is usage spend's (attribution.ts).
+   */
   slices(filter: SliceFilter = {}): LabSliceMetrics[] {
     const db = this.opts.store.db;
-    return db ? sliceMetrics(db, filter) : [];
+    if (!db) return [];
+    const { sessionId, ...rest } = filter;
+    return sliceMetrics(db, sessionId ? { ...rest, sessionIds: chainOf(sessionId, new SpendStore(this.opts.store).sessions([sessionId])) } : rest);
   }
 
   createExperiment(e: NewExperiment): LabExperiment {

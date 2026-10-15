@@ -133,6 +133,17 @@ export function chainRootOf(id: string, sessions: ReadonlyMap<string, SessionInf
 }
 
 /**
+ * The rows of a session's `continued_from` chain that `sessions` holds (`chainRootOf` of each is the session's own root), the session itself
+ * always among them. With the map `SpendStore.sessions` loads for one session (it and what it continues) these are the session and the rows
+ * before it: the unit a spike and the lab read a continued chat as (T-312).
+ */
+export function chainOf(id: string, sessions: ReadonlyMap<string, SessionInfo>): string[] {
+  const root = chainRootOf(id, sessions);
+  const out = [...sessions.keys()].filter((k) => k !== id && chainRootOf(k, sessions) === root);
+  return [id, ...out];
+}
+
+/**
  * A session and then each step up (the session it continues, else its parent; `upOf`), as far as the portal knows them: the one place a child or a
  * continuation rolls up. `broken` is true when the walk stopped at a session the portal has no record of (deleted before its links were kept), or
  * at a cycle of links, rather than at a root.

@@ -24,7 +24,8 @@ export function adaptSpend(spend: { onAlert(fn: (a: SpendAlert) => void): () => 
     bus.emit({
       kind: 'cost_spike',
       subject: a.sessionId ? { type: 'session', id: a.sessionId, workspaceId: a.workspaceId } : { type: 'claude', id: a.claudeId, workspaceId: a.workspaceId },
-      facts: { what: 'spike', spikeKind: a.spikeKind, workspace: a.workspaceId },
+      // The subject stays the session it happened in (the link, the "already looking at it" check); `root` groups a continued chat (T-312).
+      facts: { what: 'spike', spikeKind: a.spikeKind, workspace: a.workspaceId, ...(a.rootSessionId ? { root: a.rootSessionId } : {}) },
       ...(audience ? { audience } : {}),
     });
   });

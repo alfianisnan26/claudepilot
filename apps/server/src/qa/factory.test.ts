@@ -948,7 +948,7 @@ test('budget watch (T-342 N1): a session_get that fails for one ticket does not 
     assert.ok(round.lines.some((l: string) => l.startsWith(`EXCEPTION ${good.t.id} ${good.id}: budget stop: `)), tag);
     assert.ok(mcp.calls.some(([n, a]) => n === 'session_interrupt' && a.id === 's-9'), tag);
     assert.ok(!mcp.calls.some(([n, a]) => n === 'session_interrupt' && a.id === 's-8'), tag);
-    const badWrites = portal.writes.filter(([id]: [string]) => id === bad.t.id);
+    const badWrites = portal.writes.filter(([id]: [string, string]) => id === bad.t.id);
     if (failure === gone) {
       assert.deepEqual(badWrites, [[bad.t.id, `FACTORY END ${bad.id} failed: session gone`]], tag);
       assert.ok(round.lines.includes(`EXCEPTION ${bad.t.id} ${bad.id}: session s-8 of ${bad.id} is gone: dispatch ended, held until FACTORY RETRY`), tag);
@@ -956,7 +956,7 @@ test('budget watch (T-342 N1): a session_get that fails for one ticket does not 
       const after = portal.byId.get(bad.t.id);
       assert.equal(f.heldOn(f.normalizeTicket(after))?.id, bad.id, tag);
       assert.equal((await f.watchBudget(after, { portal, mcp, now: NOW })).action, 'none', tag);
-      assert.equal(portal.writes.filter(([id]: [string]) => id === bad.t.id).length, 1, tag);
+      assert.equal(portal.writes.filter(([id]: [string, string]) => id === bad.t.id).length, 1, tag);
     } else {
       assert.deepEqual(badWrites, [], tag);
       assert.ok(round.lines.includes(`EXCEPTION ${bad.t.id} ${bad.id}: budget not watched this round: session_get: no answer (502)`), tag);
