@@ -85,7 +85,8 @@ async function run(w, dark) {
 
     // Scroll up until the first older page lands, then hold still.
     const base = reads.length;
-    for (let i = 0; i < 100 && (await b.eval('window.__log.length')) < 1; i++) { await wheel(b, w, -700); await sleep(110); }
+    // One wheel step, then no input while the page may load and prepend: a later wheel would move the row and look like a jump.
+    for (let i = 0; i < 100 && (await b.eval('window.__log.length')) < 1; i++) { await wheel(b, w, -700); await sleep(700); }
     await sleep(900);
     const older1 = reads.slice(base);
     const log = await b.eval('window.__log');
