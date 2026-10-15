@@ -198,7 +198,7 @@ test('line two: the items in priority order (state, quota, cost, model, workspac
   assert.deepEqual(lineTwo(rowMeta({ session: s(), groupBy: 'none', showWorkspace: false, usage: usage({ runsOn: 'pool' }), nowMs: NOW })), ['state', 'model', 'claude']);
   const lead2 = s();
   assert.deepEqual(lineTwo(rowMeta({ session: s(), groupBy: 'none', showWorkspace: false, usage: usage(), nowMs: NOW, lead: lead2 })), ['state', 'model']);
-  assert.deepEqual(lineTwo(rowMeta({ session: s({ model: null, claudeId: null, claudeName: null } as Partial<ChatSession>), groupBy: 'none', showWorkspace: false, usage: null, nowMs: NOW })), ['state']);
+  assert.deepEqual(lineTwo(rowMeta({ session: s({ model: null, claudeId: '', claudeName: null }), groupBy: 'none', showWorkspace: false, usage: null, nowMs: NOW })), ['state']);
 });
 
 test('line three: only the open request; a branch or ticket stays on line two (two lines)', () => {
