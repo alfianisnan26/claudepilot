@@ -417,16 +417,18 @@ test('the Job\'s own script: the proof (passes on the ref, fails on the other, k
   assert.match(dead.stdout, /retrying once[\s\S]*npm ci failed in claudepilot \(rc=7\)\n=== JOB-RUN EXIT 7\n$/);
 });
 
-test('T-365: job-run and gate Jobs are never scheduled on the portal’s node (a heavy Job there starved its SQLite fsync)', () => {
+test('T-365: job-run and gate Jobs prefer a node away from the portal (preferred: a required rule left every Job Pending)', () => {
   for (const name of ['job-run.yaml', 'gate-job.yaml']) {
     const text = readFileSync(join(REPO, 'deploy/k3s-build', name), 'utf8').replace(/__[A-Z_]+__/g, 'x');
-    const job = yamlLoad(text) as { spec: { template: { spec: { affinity?: { podAntiAffinity?: { requiredDuringSchedulingIgnoredDuringExecution?: unknown[] } } } } } };
-    const required = job.spec.template.spec.affinity?.podAntiAffinity?.requiredDuringSchedulingIgnoredDuringExecution ?? [];
-    assert.deepEqual(
-      required,
-      [{ topologyKey: 'kubernetes.io/hostname', namespaces: ['isnan-claudepilot'], labelSelector: { matchLabels: { app: 'claudepilot-portal' } } }],
-      `${name}: required anti-affinity to the portal pod (label app=claudepilot-portal, deploy/k3s)`,
-    );
+    type Term = { weight: number; podAffinityTerm: { namespaces: string[]; labelSelector: { matchLabels: Record<string, string> } } };
+    const job = yamlLoad(text) as { spec: { template: { spec: { affinity?: { podAntiAffinity?: { requiredDuringSchedulingIgnoredDuringExecution?: unknown[]; preferredDuringSchedulingIgnoredDuringExecution?: Term[] } } } } } };
+    const anti = job.spec.template.spec.affinity?.podAntiAffinity;
+    // Never required: k3s-master's memory requests were at 96% (2026-10-15) and a required rule kept the gate from scheduling at all.
+    assert.equal(anti?.requiredDuringSchedulingIgnoredDuringExecution, undefined, `${name}: no required anti-affinity`);
+    const portal = (anti?.preferredDuringSchedulingIgnoredDuringExecution ?? []).find((t) => t.podAffinityTerm.labelSelector.matchLabels.app === 'claudepilot-portal');
+    assert.ok(portal, `${name}: a preferred anti-affinity to the portal pod (label app=claudepilot-portal)`);
+    assert.equal(portal.weight, 100);
+    assert.deepEqual(portal.podAffinityTerm.namespaces, ['isnan-claudepilot']);
   }
   // The label the rule names is the portal Deployment's own pod label.
   assert.match(readFileSync(join(REPO, 'deploy/k3s/portal.yaml'), 'utf8'), /app: claudepilot-portal/);

@@ -26,13 +26,15 @@ spec:
       restartPolicy: Never
       automountServiceAccountToken: false
       affinity:
-        # Never on the portal's node (T-365): a heavy Job there starved the portal's SQLite fsync and it stopped answering for minutes (2026-10-15, twice).
+        # Away from the portal's node when there is room (T-365): a heavy Job there starved the portal's SQLite fsync (2026-10-15).
+        # Preferred, not required: k3s-master's memory requests are at 96%, and a required rule left every Job Pending.
         podAntiAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-            - topologyKey: kubernetes.io/hostname
-              namespaces: [isnan-claudepilot]
-              labelSelector: {matchLabels: {app: claudepilot-portal}}
           preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                namespaces: [isnan-claudepilot]
+                labelSelector: {matchLabels: {app: claudepilot-portal}}
             - weight: 100
               podAffinityTerm:
                 topologyKey: kubernetes.io/hostname
