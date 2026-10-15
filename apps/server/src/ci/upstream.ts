@@ -63,7 +63,10 @@ export function hostList(v: unknown): string[] | undefined {
 }
 
 /** T-486 S2: any `scheme://user:password@` or `scheme://token@` in text loses the part before the @ (for a sync's error, wherever shown). */
-export const withoutUserinfo = (text: string): string => text.replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@]*@/gi, '$1');
+export const withoutUserinfo = (text: string): string =>
+  // The authority's userinfo only: `token@` or `user:pw@`, or `user:pw@` whose password holds a `/` or a space (a `:` after the first name
+  // that is not a port). A `@` in a path after the host (`host/a@b`, `host:8080/a@b`) is left alone.
+  text.replace(/\b([a-z][a-z0-9+.-]*:\/\/)(?:[^\s/@]*|[^\s/:@]+:(?!\d*(?:[/?#\s]|$))[^@\n]*)@/gi, '$1');
 
 export type Lookup = (host: string) => Promise<string[]>;
 

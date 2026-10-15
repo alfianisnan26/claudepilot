@@ -10,14 +10,14 @@ import { test } from 'node:test';
 import { CI_UPSTREAM_HOSTS_SETTING, type Actor } from '@portal/contracts';
 import { singleOwner, useAuthz } from '../authz/seam.js';
 import { settingDef } from '../settings/registry.js';
-import { registerCiAuthz } from './authz.js';
+import { CI_HOOK_POLICIES, registerCiAuthz } from './authz.js';
 import { UPSTREAM_HOOK_GAP_MS } from './service.js';
 import { upstreamHostsFrom } from './settings.js';
 import { harness, remote, sleep, codeOf, WS, type H } from './testkit.js';
 import type { Home } from './runner/testkit.js';
-import { hostList } from './upstream.js';
+import { hostList, withoutUserinfo } from './upstream.js';
 import { syncReason, upstreamAttentionSource } from './upstreamAttention.js';
-import { CI_HOOK_LIMITS, createCiHookRoutes } from './upstreamHook.js';
+import { CI_HOOK_LIMITS, burnHmac, createCiHookRoutes } from './upstreamHook.js';
 
 const URL_ = 'https://upstream.test/x.git';
 const PUBLIC = '93.184.216.34';
@@ -351,5 +351,50 @@ test('the upstream host allow-list: a portal setting, empty by default; it narro
     assert.equal(syncCalls(h), calls + 1);
   } finally {
     h.done();
+  }
+});
+
+test('every hook route is declared in CI_HOOK_POLICIES, and every declaration names a real route (a route added without a policy fails)', () => {
+  const routes = createCiHookRoutes({ upstreamHookKey: () => null, kickUpstream: () => undefined });
+  const listed = new Set(routes.routes.map((r) => `${r.method} /hooks/ci${r.path}`));
+  const declared = new Set(Object.keys(CI_HOOK_POLICIES));
+  assert.deepEqual([...listed].filter((k) => !declared.has(k)), [], 'undeclared routes');
+  assert.deepEqual([...declared].filter((k) => !listed.has(k)), [], 'declarations without a route');
+});
+
+test('the webhook: an unknown id, a malformed id and a remote with no hook key still run an HMAC check (timing cover); a real key does not need it', async () => {
+  const body = JSON.stringify({ n: rnd(8) });
+  const seen: number[] = [];
+  const key = `k-${rnd(16)}`;
+  const kicked: string[] = [];
+  const app = createCiHookRoutes(
+    { upstreamHookKey: (id: string) => (id === 'known' ? { key } : null), kickUpstream: (id: string) => void kicked.push(id) } as never,
+    { clientAddress: () => '198.51.100.9', dummyCheck: (raw) => void seen.push(raw.length) },
+  );
+  const post = (id: string, headers: Record<string, string> = {}) => app.request(`/${id}`, { method: 'POST', body, headers });
+  assert.equal((await post(`cr_${rnd(6)}`)).status, 404);
+  assert.equal((await post('bad.id')).status, 404);
+  assert.deepEqual(seen, [body.length, body.length]);
+  assert.equal((await post('known', { 'x-hub-signature-256': `sha256=${sign(key, body)}` })).status, 202);
+  assert.equal(seen.length, 2);
+  assert.deepEqual(kicked, ['known']);
+  burnHmac(Buffer.from(body)); // the default does not throw
+});
+
+test('withoutUserinfo: the authority’s userinfo goes, whatever the password holds; an @ after the host stays', () => {
+  const pw = rnd(8);
+  const cases: [string, string][] = [
+    [`https://bob:${pw}@host.test/a.git`, 'https://host.test/a.git'],
+    [`ssh://${pw}@host.test/x`, 'ssh://host.test/x'],
+    [`fatal: https://bob:${pw}/${pw}@host.test/a.git failed`, 'fatal: https://host.test/a.git failed'],
+    [`fatal: https://bob:${pw} ${pw}@host.test/a.git failed`, 'fatal: https://host.test/a.git failed'],
+    ['https://host.test/path/a@b.git', 'https://host.test/path/a@b.git'],
+    ['https://host.test:8080/path/a@b.git', 'https://host.test:8080/path/a@b.git'],
+    ['https://host.test/x then mail me@host.test', 'https://host.test/x then mail me@host.test'],
+  ];
+  for (const [input, want] of cases) {
+    const got = withoutUserinfo(input);
+    assert.equal(got, want, input);
+    assert.ok(!got.includes(pw), input);
   }
 });

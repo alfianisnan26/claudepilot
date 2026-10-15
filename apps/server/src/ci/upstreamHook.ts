@@ -10,6 +10,7 @@
 // Logs carry nothing of the body, the signature or the key.
 
 import { HOOK_MAX_BYTES, HOOK_READ_TIMEOUT_S, objectRef } from '@portal/contracts';
+import { createHmac, randomBytes } from 'node:crypto';
 import { Hono, type Context } from 'hono';
 import { asUser, can, ownersOf } from '../authz/seam.js';
 import { config } from '../config.js';
@@ -25,6 +26,14 @@ export interface CiHookDeps {
   /** The client's address (default: as the triggers' receiver reads it, the proxy's forwarded one when `trustProxy`). */
   clientAddress?(c: Context): string;
   now?: () => number;
+  /** Called with the body when there is no hook key (default: an HMAC over it with a per-process random key). A test spies on it. */
+  dummyCheck?(raw: Buffer): void;
+}
+
+const DUMMY_KEY = randomBytes(32);
+/** An HMAC-SHA256 over the body with a key made at start, thrown away: timing cover for a refusal that has no real key. */
+export function burnHmac(raw: Buffer): void {
+  createHmac('sha256', DUMMY_KEY).update(raw).digest();
 }
 
 const portalAddress = (c: Context): string => {
@@ -49,6 +58,7 @@ export function createCiHookRoutes(ci: Pick<CiService, 'upstreamHookKey' | 'kick
   const hooks = new Hono();
   const now = d.now ?? Date.now;
   const address = d.clientAddress ?? portalAddress;
+  const dummyCheck = d.dummyCheck ?? burnHmac;
   let global = { at: 0, n: 0 };
   const failures = new Map<string, { at: number; n: number }>();
   const blocked = new Map<string, number>();
@@ -80,7 +90,12 @@ export function createCiHookRoutes(ci: Pick<CiService, 'upstreamHookKey' | 'kick
     };
 
     const hook = ID.test(id) ? ci.upstreamHookKey(id) : null;
-    if (!hook || !signedBy((name) => c.req.header(name) ?? null, raw, hook.key)) return refuse();
+    // No key to check against: do the same HMAC work with a throwaway key, so an unknown id or a remote with no secret takes about as long.
+    if (!hook) {
+      dummyCheck(raw);
+      return refuse();
+    }
+    if (!signedBy((name) => c.req.header(name) ?? null, raw, hook.key)) return refuse();
     // Signed: the seam decides as the remote's owner (a job acting for them), like a trigger acting for its owner.
     const ref = objectRef('ci_repo', id);
     const owner = ownersOf(ref)[0];
@@ -89,7 +104,7 @@ export function createCiHookRoutes(ci: Pick<CiService, 'upstreamHookKey' | 'kick
     return json(c, 202, { ok: true });
   });
 
-  // Every other method: the same 404.
-  hooks.on(['GET', 'HEAD', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'], '/:id', (c) => notFound(c));
+  // Every other method is no route (the table above is all CI_HOOK_POLICIES declares): the same 404 body.
+  hooks.notFound((c) => notFound(c));
   return hooks;
 }
