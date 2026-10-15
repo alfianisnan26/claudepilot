@@ -10,10 +10,11 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   Carries T-486 S1, T-490, T-450 S3, T-524 S1, T-515, T-527. CLOSED T-527 (live D-62 refusal 10:42) and T-515.
 
 ## IN FLIGHT (5 of 5, D-68/D-70): LANE 7e4879c7 "ClaudePilot QA Perf" (lane-qa-perf, sonnet, lane/cp-qa-perf) on T-548 QA read.
-  T-561 S1b 7227bb3: QA PASS WITH GAPS (5440: 743/749 0 fail, mutation caught; symlink holes A, B). Decision 5442/5444: S1c fix = one-off sonnet
-  implementer (own spawn worktree, base origin/ticket/T-561-s1c-symlinks) at next free slot -> QA Perf re-probe -> lead gate + merge. T-576 DONE 2427d98 (Jobs green; no
+  T-561 S1b 7227bb3: QA PASS WITH GAPS (5440: 743/749 0 fail, mutation caught; symlink holes A, B). Decision 5442/5444: S1c fix = 77c04fc0
+  impl-t561-s1c (sonnet, ticket/T-561-s1c-fix) -> QA Perf re-probe -> lead gate + merge. T-576 DONE 2427d98 (Jobs green; no
   prettier/eslint in the Job): ux BLOCKED (a `folder` spawn gets no Bash; 5368) until T-586 merges. T-586 DONE 1d27635 (Job 6be903ec rc 0, mutation
-  caught, 5419; 2ae78a99 ended): review PASS W/ COND (5456) -> S2 813992cf narrow flags (5457) -> Job -> gate -> merge. T-558 e652c44: QA runs its Jobs (5052).
+  caught, 5419; 2ae78a99 ended): review PASS W/ COND (5456) -> S2 fc9ce1d DONE (5464; 813992cf ended) -> premerge
+  wip/main-5b66aa0, gate-job running (5472) -> QA Perf after T-548 -> ff integration (no deploy). T-558 e652c44: QA runs its Jobs (5052).
   T-486 S2d DONE 2979f99 (5454/5455: tests 16/16, typecheck, ci+secrets 258/259, mutation caught; 5feb4875 ended) -> QA Perf -> lead merge + gate.
   T-548 S1 DONE 9b822ba (Jobs green, 5364; d23cb713 ended): QA (sonnet) + blind review (opus, authz) next. eaec4cc5 impl-t591 (sonnet) S1 (plan 5366).
   LANE 5f8f392b "ClaudePilot Backend" (lane-backend, sonnet) on T-546 Jobs (ticket/T-546-digest; 8822ba59 ended). Backend queue (coordinator,
@@ -29,9 +30,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - T-416 (high incident): S1 d37c5f0; QA b1aa2e47 PASS WITH GAPS (4623: 995/999 0 fail job-2c410105; mutations A2/B/C caught);
   ended. Decision 4637: S1b a769b00 (race fix + push-bridge test, UNTESTED; author ended for T-379, 4688). QA runs its Jobs,
   then blind review (opus), lead gate, merge, deploy. S2 = Bypass restore.
-- T-486 (high): S1 live. S2 DONE 75fd6a4 (4671, Jobs green; webhook, attention, allow-list, migration 783); 45148907 ended.
-  Blind review 10382d36 PASS WITH CONDITIONS (4693, 6 minors); decision 4703: S2b cffb12b1 fixes m1/m4/m5 + PRD risks m2/m3;
-  web hookSecret field -> T-556. Then QA -> lead gate -> merge -> deploy -> real Event branch check.
+- T-486 (high): S1 live; S2..S2d (migration 783; web hookSecret -> T-556); after merge: deploy (coordinator) -> real Event branch check.
 
 ## STATE PER TICKET (T-404: open until deployed, design point -> T-451)
 - T-376 (high): S2 dev/t-376-3 0b0faf7 needs integration merged in by the lead, then ux re-check (production build), then S3 perf-tester.
