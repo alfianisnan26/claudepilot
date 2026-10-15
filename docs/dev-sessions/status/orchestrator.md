@@ -9,27 +9,27 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   Carries T-486 S1, T-490, T-450 S3, T-524 S1, T-515, T-527. CLOSED T-527 (live D-62 refusal 10:42) and T-515.
 - MERGED ff b37628e (T-515 e021cb6 + T-527 ea81071 + packs): gate GREEN claudepilot-gate-b37628e-0953 (memory peak 2189Mi/8192Mi,
   0 OOM) + web 629/629 (claudepilot-job-a19b47c9).
-- MERGED ff 4ba5d37: T-490 c8c8197 + T-450 S3 7f7f18c + T-524 S1 d44bf24 (gate green, web 626/626). MERGED 73bb581: T-486 S1.
-- DEPLOYED runs #36 (8062398) and #35 (98e6de4): CLOSED T-483, T-397, T-491, T-435, T-476, T-449.
+- Earlier: 4ba5d37, 73bb581 merged; deploys #35/#36 (closed T-483, T-397, T-491, T-435, T-476, T-449).
 
-## IN FLIGHT (3 of 3 workers: eef38632 T-531 S2 (GO, has the slot), b1aa2e47 T-416 QA WAITING (4547), 45148907 T-486 S2)
-  Slot order: T-531 S2 9cd240f -> T-416 QA -> T-486 S2.
-- T-416 (high incident; 4439): S1 DONE d37c5f0 (4534: typecheck 396fbc13; server 995 pass 0 fail 4e6521ec; web 626/626 0ccd8ea5;
-  proof 1d735457 weak (module absent) + a163ad18 in-flight bug caught); ad68c3a4 ended. QA b1aa2e47 (sonnet = role default) incl.
-  mutation proof. Then blind review (opus), lead gate, merge, deploy. S2 = Bypass restore. D-34 vs the memory item: built as the
-  ticket asks; for the coordinator.
-- T-524: S1 + S2 merged (4551). Open ONLY: k3s-master under 85% in a busy hour, measured (with T-513). Minors -> T-543.
-  Event Jobs over 4Gi need --big (tell Event).
-- T-531 (high, authz): S1 df65563 (4515: typecheck a3cf20b8; 1105/1111 0 fail ed930af1; proof 535ee3fc 6/6); 74a6ee0e ended.
-  Blind review 21731f30 PASS WITH CONDITIONS (4520: preflight at view runs a shell, adopt at operate; ended). Decision 4524: fix
-  round S2 eef38632 (opus, impl-t531-2, ticket/T-531-verbs from df65563): verbs to the PRD table + a verb-table test; stop stays
-  operate. Then QA -> lead gate -> merge. Open points ticketed: T-538 (pool ids in PUT), T-539 (other prefixes), T-540 (remove re-check).
-- T-486 (high): S1 live. S2 45148907 (opus, impl-t486-2) on ticket/T-486-sync-s2 from 0316fae: attention for failing/diverged sync,
-  webhook kick (authz seam, coalesced), upstream host allow-list setting. Then QA + real Event branch check; close after deploy.
+## IN FLIGHT (4 of 4 workers, D-65: c10daf0e T-426 WAITING ab93b54 (on T-401 060aca4), cffb12b1 T-486 S2b WAITING 27b95c7,
+  47710391 qa (sonnet) T-531 done -> now T-401 QA (code reading, then GO), 0df3dd19 impl-t379 (sonnet) T-379 --image on fe62fa6)
+  Sweep: PASS T-109/280/282/285, GAP T-259/294/136(?)/338/317/287; nobody can claim in_review tickets -> coordinator (T-525 4659).
+  Cluster: T-379 (GO 11:55) -> T-486 S2b -> T-401 QA -> T-426. Next free workers: T-401 blind review (opus), T-531 S2c fix. T-486 QA goes to 47710391 after T-531 (reuse); T-416 S1b QA after that. Next free worker slot: T-546 + T-548 (T-426 waits for T-401).
+- T-401 (high, security): S1 DONE 060aca4 (4 Jobs green per author; fetch does npm ci --ignore-scripts with creds). Touches
+  gate-job.yaml: review must confirm the gate's checks unchanged (4745). Next: blind review (opus) + QA, lead gate, merge.
+- T-416 (high incident): S1 d37c5f0; QA b1aa2e47 PASS WITH GAPS (4623: 995/999 0 fail job-2c410105; mutations A2/B/C caught);
+  ended. Decision 4637: S1b a769b00 (race fix + push-bridge test, UNTESTED; author ended for T-379, 4688). QA runs its Jobs,
+  then blind review (opus), lead gate, merge, deploy. S2 = Bypass restore.
+- T-426 (claimed 4642): starts on T-401's merged head (same Secret block of job-run.sh); opus + blind review. T-379 (4687) running.
+- T-531 (high, authz): S1 df65563; blind review PASS WITH CONDITIONS (4520); S2 9cd240f. QA 47710391 PASS WITH GAPS (4761/4762:
+  1428/1433 0 fail job-a8a40ad8; mutation holds job-620ab38d; no agent path uses the refused routes). Decision 4763: S2c (sonnet)
+  tests legacy refs get the same 404 (workspaceRefGuard checks ws_ ids only) -> lead gate -> merge. T-538..T-540 ticketed.
+- T-486 (high): S1 live. S2 DONE 75fd6a4 (4671, Jobs green; webhook, attention, allow-list, migration 783); 45148907 ended.
+  Blind review 10382d36 PASS WITH CONDITIONS (4693, 6 minors); decision 4703: S2b cffb12b1 fixes m1/m4/m5 + PRD risks m2/m3;
+  web hookSecret field -> T-556. Then QA -> lead gate -> merge -> deploy -> real Event branch check.
 - T-450: S3 deployed; 5 % real-data check + harness assertions (4354) still open.
 - T-472: live paths/restarts/pool re-assign NOT VERIFIED (4294). Retry with the new read tools.
 - T-525 (mine): QA/reviewer lack session_get (4362); scribe role has no Bash or ticket tools (4471). Coordinator decides.
-- T-537 (new, low): commit the T-527 doc edit (uncommitted in worktree ticket-t-527-docs) in an implementer slice.
 
 ## STATE PER TICKET
 - T-404: third blind review gave no verdict (design point -> T-451); fixes verified 3325; open until deployed.
@@ -37,23 +37,26 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - T-378 S1 dev/t-378-1 9834ff7 ready: needs a verifier.
 
 ## DECISIONS (binding)
+- 11:30 Coordinator (owner priority, metocean): T-379 NOW in its own worker; built on T-401's fe62fa6 (fetch stage holds creds).
+- 11:40 Coordinator: epic T-557 (external runners, Codespaces first) after T-379/T-426; S0 + S1 in parallel with T-546/T-548.
+- 11:15 D-65 (coordinator): 4 ClaudePilot workers; implementers sonnet by default (opus only with a written why); small QA/review
+  findings fixed in the same slice; a worker takes 2-3 related tickets (reuse under 150k); full report on the ticket, the lead
+  reads line 1 and opens it only on FAIL; ready features over chores. Targets under 8 USD per ticket, lead share under 30 %.
+- 11:15 Coordinator priority: T-524 (done), T-401, T-426, T-379, then T-546 (report digest), T-548 (auto hand-off), then T-547
+  (quota placement), T-549 (scorecard rows).
 - 11:00 Coordinator: the next implementer slot goes to T-401 (security: job-run env carries GIT_TOKEN/NODE_AUTH_TOKEN), then T-426
   (--pool-env door for Konfersi stg e2e), then T-379 (Python in job-run). They unblock 6 Konfersi tickets. Opus + blind review
   (gate/security). They come before T-416 S2, T-537 and T-538..T-540.
-- 10:40 Scribe workers cannot hand in (no Bash, no ticket tools): doc fixes go to implementer slices until the coordinator decides.
+- 11:05 Coordinator: sweep 10 in_review tickets against live. Order: T-401 keeps the first free slot (it blocks 6 Konfersi tickets);
+  the sweep takes the second. QA cannot close tickets it doesn't hold, so it reports and the lead closes on PASS (D-63).
 - 10:25 dontAsk workers cannot wait: the lead hands out the cluster slot with "GO T-n"; workers end with WAITING <hash>.
 - 10:02 The free-slot check counts only OUR program's Jobs (app=claudepilot-gate or job-run/program=claudepilot); Konfersi Jobs are
   capped per program by job-run.sh.
-- 09:43 Server and web tests are node --test (npm test), not vitest. Vitest Jobs are no evidence.
-- 09:12 Workers cannot run scripts/gate-job.sh (refused in dontAsk): the lead runs gates for slices.
-- 09:05 Coordinator pushed eac20db/82cee3c straight to integration (no trailers); my candidate was re-merged and re-gated (4331).
 - 09:00 Coordinator: persona, role-tool and permission questions go to the coordinator (ticket assigned to me), NEVER the owner;
   `owner-checklist` is production only.
-- 08:50 Coordinator: T-524 placement coordinated with T-513 (runner anti-affinity = cluster GitOps MR, own ticket).
-- 08:10 A running slice keeps its slot (no preemption). 06:00 The lead holds T-n from claim to close.
-- 05:55 A5 binds touch targets at 390 px. 05:50 UX checks run as cluster Jobs. 05:04 New slices get FRESH worktrees.
+- 08:10 A running slice keeps its slot. 06:00 The lead holds T-n claim to close. 05:50 UX checks are cluster Jobs; fresh worktrees.
 - D-63: QA/ux/reviewer on SONNET (opus needs a `why`: security, gate, rule or large slice); the lead never implements or commits code.
-- D-61: at most 3 live workers, NO Agent-tool sub-agents, heavy work ONLY via scripts/job-run.sh or gate-job.sh, one at a time.
+- D-61: (worker count now 4 by D-65), NO Agent-tool sub-agents, heavy work ONLY via scripts/job-run.sh or gate-job.sh, one at a time.
 - Hand over before 250k context (coordinator).
 
 ## NEEDS A HUMAN (D-62)
@@ -65,12 +68,12 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 
 ## NEXT (in order, as slots free)
 1. T-531 S2 Jobs -> QA (sonnet) -> lead gate -> merge. 2. T-416 QA Jobs -> blind review (opus) -> lead gate -> merge -> deploy; then S2.
-3. NEXT FREE SLOT: T-401 (opus), then T-426, then T-379 (coordinator 11:00). 4. T-524 measurement with T-513.
+3. NEXT FREE SLOTS: T-426 (opus, why: secret door) once T-401 merges; T-558 (lead starts own stg-deploy, authz: opus +
+   blind review, D-62; coordinator 11:45); then in parallel T-557 S0 PRD (sonnet implementer),
+   T-557 S1 runner seam (sonnet, fake runner), T-546 + T-548 (one sonnet worker); then T-547 + T-549; T-557 S2 (opus, transport). Sweep results (47710391): the lead closes on PASS or reopens with the gap. 4. T-524 measurement with T-513.
 4. T-486 S2 -> QA -> deploy. 5. T-537. 6. T-513 (cluster GitOps MR).
 7. T-422, T-147, T-438, T-425, T-436, T-437, T-432, T-378 S1 verify, T-382, T-377, T-386, T-409, T-402, T-398, T-399, T-370 HOLD,
    T-371..T-374, T-363, T-451, T-470, T-507, T-508, T-512, T-520; T-376 S2.
 
-LESSONS: tests run with node --test (npm test), NEVER vitest; a gate-done notification always needs action; dontAsk workers cannot
-Read /tmp, git merge, run gate-job.sh or wait; briefs run the module's WHOLE test folder; trailers in ONE block; FULL hashes with
-job-run, --against included; gate before every integration push; the status file is edited with Edit/Write only (D-60 hook);
-check the ancestor right before the ff; a Pending gate pod waits for memory (Konfersi Jobs share the nodes).
+LESSONS: node --test, never vitest; a gate-done notice needs action; dontAsk workers cannot read /tmp, merge, gate or wait; whole
+test folders; trailers in one block; FULL hashes; gate before every push; status via Edit/Write only; ancestor check before ff.
