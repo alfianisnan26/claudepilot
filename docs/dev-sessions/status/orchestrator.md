@@ -59,6 +59,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   T-591 #40 backfill after deploy (5511); T-325 S3 push door vs charter "only the main chat merges integration" + its token (5549); T-527 finding 4 (owner triggers tagging owner-checklist).
 
 ## NEXT (in order, as slots free)
+0. FIRST FREE SLOT: fresh blind reviewer (sonnet, read-only) on T-619 egress decision 5605 (deploy #41 waits); 6/6 busy, asked coordinator for a 7th (5616).
 1. Merges: T-401 (ack) -> T-426 -> T-379 -> T-486; deploys are the coordinator's. 2. T-416 S1b QA -> blind review (opus) -> merge; then S2.
 3. NEXT FREE SLOTS: T-558 QA (sonnet) + review (opus); T-426 QA + blind review; T-548 (sonnet); T-578 (high: deploy reuses a green gate for the same
    tree + per-file gate progress; a gate change: built + blind review, merged only on a person's ack like T-401); then RTK (coordinator 14:55):
