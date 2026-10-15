@@ -402,6 +402,7 @@ const tickets = new Tickets(store, new ChatTicketSessions(chatController), {
   workspaceRefs: workspaces.identities,
   orphanAfterMin: () => settingsModule.settings.get<number>(TICKET_SETTING_KEYS.orphanAfterMin),
   agentOpenPerWorkspace: () => settingsModule.settings.get<number>(TICKET_SETTING_KEYS.agentOpenPerWorkspace),
+  agentAssignUserTags: () => settingsModule.settings.get<string>(TICKET_SETTING_KEYS.agentAssignUserTags),
 });
 tickets.onChange = () => notify('tickets');
 // A bump reaches into a session: the platform audit (created further down) records who, which ticket, which session and how (FR30).

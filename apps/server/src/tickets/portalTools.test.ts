@@ -80,7 +80,12 @@ test('an agent asks a person for something: a ticket assigned to them, then read
   const r = await rig();
   try {
     const a = await r.agent('docker/api', 'sa');
-    const created = r.out(await r.h.call(a.secret, 'ticket_create', { summary: 'May I delete branch feature/old?', description: 'It is merged.', type: 'approval', priority: 'high', assignee: 'user', tags: ['git'] }));
+    // D-62 (T-483): without an allowed tag the portal refuses and names the path; with the production tag it waits for the person.
+    const refused = await r.h.call(a.secret, 'ticket_create', { summary: 'May I delete branch feature/old?', type: 'approval', assignee: 'user', tags: ['git'] });
+    assert.equal(refused.result?.structuredContent?.error?.code, 'FORBIDDEN');
+    assert.match(JSON.stringify(refused.result?.structuredContent), /D-62: agents do not assign tickets to a person/);
+    assert.equal(r.tickets.list(UI, {}).total, 0, 'nothing was made');
+    const created = r.out(await r.h.call(a.secret, 'ticket_create', { summary: 'May I delete branch feature/old?', description: 'It is merged.', type: 'approval', priority: 'high', assignee: 'user', tags: ['git', 'production'] }));
     assert.equal(created.ticket.id, 'T-1');
     assert.deepEqual(created.ticket.assignee, { kind: 'user', name: 'admin' });
     assert.equal(created.ticket.workspace_id, 'docker/api');

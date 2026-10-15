@@ -204,8 +204,8 @@ test('what an agent may change: its own assigned tickets, and the ones it made t
     assert.equal(code(() => h.tickets.close(me, mine.id, {})), 'VALIDATION_FAILED', 'an agent must say what was done');
     assert.equal(code(() => h.tickets.comment(me, mine.id, 'x', { sessionId: sb.id })), 'FORBIDDEN', 'an agent cannot act as another session');
 
-    // A ticket an agent made for a person: it can comment and close it, and read the answer.
-    const ask = h.tickets.create(me, { summary: 'May I delete the branch?', type: 'approval', assignee: { kind: 'user', name: 'admin' } });
+    // A ticket an agent made for a person (with the production tag, D-62 FR9c): it can comment and close it, and read the answer.
+    const ask = h.tickets.create(me, { summary: 'May I delete the branch?', type: 'approval', tags: ['production'], assignee: { kind: 'user', name: 'admin' } });
     assert.equal(ask.source, 'agent');
     assert.equal(ask.workspaceId, 'docker/api', 'its own workspace');
     assert.deepEqual(ask.reporter, { kind: 'token', ref: 'session:sa', label: 'Alpha', workspaceId: 'docker/api' });
