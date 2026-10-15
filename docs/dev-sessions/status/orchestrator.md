@@ -12,6 +12,8 @@ Older log: `orchestrator-log-2026-10-14.md`. Previous hand-overs: ab99b45 (a8393
 - T-417 (high): review SAFE AFTER FIXES (comment 2875; reviewer 775a1756 ended). Fixer a1bf3da8 (opus, fadlilah) in dev-t-336-1 on dev/t-417-1 from 9622deb: findings 1,2,3,5,7,8,9. Then a DIFFERENT reviewer (not 775a1756), merge. Finding 6 = T-425 (new, normal). Bypass across sleep rests on the owner's T-417 text; D-row is the coordinator's.
 - T-375 (high): worker 07cef3b0 (opus, hasyim) in dev-t-333-1 (switched to dev/t-375-1, a5fc68a): merging origin/dev/t-369-1 (SessionRow.tsx conflict) + T-378's density check + the screenshot check. Then ONE ux-checker covering T-369 item 4 and T-375, then merge T-369 + T-375 together.
 
+- T-427 (high): the lead, in dev-t-349-1 on dev/t-427-1 3198f5d (comment 2918); proof Job (typecheck + agents.test.ts vs 2121788) running; then a qa-verifier worker, merge with T-417.
+
 ## READY, NOT MERGED
 - T-369 (urgent): dev/t-369-1 ff0088d (comment 2568: web 576/576, flip proof f9d87e3b, session-crew 5/5 a9166dc2). Waits for the ux-check above.
 - T-376 (high): S2 web dev/t-376-2 1fa258c (comment 2580: web 589/589). Needs a ux-checker (390/1280, light/dark, scroll-up hold) and S3 perf-tester (10k/25k fixture from T-378's seed-scale.mjs).
@@ -19,6 +21,7 @@ Older log: `orchestrator-log-2026-10-14.md`. Previous hand-overs: ab99b45 (a8393
 - T-404 (high): dev/t-404-1 2dd0f9e (comment 2750); blind review SAFE AFTER FIXES (comment 2770): guard must protect /etc/claude-code and /etc/claudepilot, own ~20 s deadline, readers/git writers 3-4, MCP verbs 5, eval of file 6, pull scope 7, /usr/bin/env 8, audit label 9. Persona/skill text to propose after the fix, corrected for D-62.
 
 ## DECISIONS (binding)
+- 03:50 CONFLICT named: the supervisor's nudge (5 workers, claude auto, one own sub-agent, D-43/D-49) vs D-61 (3 live workers, NO Agent-tool sub-agents) and the coordinator's placement rule. D-61 is newer and binding: 3 workers, placed by claude_usage. The lead does T-427 itself (D-61 allows it).
 - 03:40 coordinator (quota): until T-427 ships, never claude:auto; read claude_usage first and pass the Claude with the lowest session % not at its limit; at most 2 live sessions per Claude (now: fadlilah = me + a1bf3da8, hasyim = 07cef3b0, alfian.isnan = 033e1b23).
 - 03:10 de232389 resumed: the 3 workers (033e1b23 T-366, 07cef3b0 T-375, d8dfb37f T-417) are alive and now report to this session; budget full, no new spawn until one returns. Run 32: build-portal pod running, main still d4a0adc. This session sits in kubernetes/kohi-event and ci_runs_list shows it no runs: read run 32 via main/argocd (k3s-status.sh).
 - D-60/D-61/D-62: no rule-file writes by agents; at most 3 live workers, NO Agent-tool sub-agents, heavy work ONLY via scripts/job-run.sh or gate-job (never npm ci/tests/builds in the pod: OOM 02:11, T-413); the owner's only action is Konfersi production: proposals go on a ticket assigned to this session + one line to the coordinator (tightening landed by the coordinator, loosening after a blind PASS).
