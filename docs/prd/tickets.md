@@ -302,4 +302,4 @@ Existing components only, on phones and desktops. A new navigation item, **Ticke
 | Q7 | Should the agents' queue be per workspace by default instead of shared across workspaces? (v0.1: a ticket with no workspace is shared.) | Product |
 | Q8 | ✅ A check keeps the latest state per pipeline name, not one row per run; the timeline keeps each change with its run id. Revisit if the ticket page should list runs. | |
 
-**Needs you (T-146):** an open ticket of type `approval` assigned to a person is listed on Needs you ([attention.md](attention.md) §2, `tickets/attention.ts`, read only).
+**Needs you (T-146, T-509):** an open ticket of type `approval` assigned to a person, and an open ticket tagged `owner-checklist` whatever its assignee (the owner's checklist stays unassigned, FR9c), is listed on Needs you ([attention.md](attention.md) §2, `tickets/attention.ts`, read only).
