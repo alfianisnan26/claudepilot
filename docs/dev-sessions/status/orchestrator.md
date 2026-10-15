@@ -3,20 +3,16 @@
 Older log: `orchestrator-log-2026-10-14.md`. Previous hand-overs: ab99b45 (a8393f6b), bb58413 (83842ba6), this one.
 
 ## FIRST STEPS FOR THE CONTINUATION
-1. LOCAL BATCH NOT PUSHED: integration in ~/work/claudepilot is 31+ commits ahead of origin, saved as branch `wip/handover-de232389` (this commit).
-   It holds merges T-366 (423cb65, gate GREEN /tmp/gate-job-423cb65.log), T-417 (311f366), docs b27bc48 (T-413: no heavy work in the pod),
-   D-63 merge, status. Full gate on dd7abce348fea62749f6cb8fb3e0ee7f0d310a6f was RUNNING (log /tmp/gate-job-dd7abce.log; re-run
-   `scripts/gate-job.sh dd7abce348fea62749f6cb8fb3e0ee7f0d310a6f` if no verdict). On GREEN: `git merge origin/integration` (2 coordinator
-   commits ec1d8c4 persona T-433, 9854c0c pack; context-pack.md WILL conflict: `git checkout origin/integration -- docs/context-pack.md`,
-   run scripts/context-pack.sh, check 0 markers, THEN commit), push integration, close T-366 and T-417 (D-63: QA PASS + merge in).
+1. DONE by de232389 after the hand-over: batch gate GREEN on dd7abce (/tmp/gate-job-dd7abce.log); merged origin/integration (pack
+   regenerated, 0 markers); integration pushed 7b1a05a (origin and pilot); T-366 and T-417 CLOSED. wip/handover-de232389 is obsolete.
 2. Workers live (3 = D-61 budget), each posts its own report on its ticket (T-433 landed); read the verdict line only:
    - (ended) 458defa3: T-404 second blind review = SAFE AFTER FIXES (full report on T-404): 10 items closed, 30/30 tests (f40365e5); MAJOR bypasses still allowed by the real guard: a fixer (opus) on dev/t-404-1 in dev-t-352-1, then a third reviewer. One slot is FREE.
    - b22b5fae ux-checker, sonnet, alfian.isnan, dev-t-333-1: T-375 + T-369 re-check of dev/t-375-1 013b974.
    - ca172194 implementer, sonnet, fadlilah, dev-t-349-1: T-376 S2 double page read on open, new branch dev/t-376-3.
 
 ## STATE PER TICKET
-- T-366 (urgent): fourth blind review SAFE (comment 2989); in the local batch. Needs deploy images=portal,workspace (every folder re-trusts once).
-- T-417 (high): verifier PASS WITH GAPS (comment 2995); in the local batch. Gap = T-438.
+- T-366: CLOSED, on integration 7b1a05a. Needs deploy images=portal,workspace (every folder re-trusts once).
+- T-417: CLOSED, on integration 7b1a05a. Gap = T-438.
 - T-427 (high): verifier FAIL on 3198f5d (comment 2996); fix 47a5aea on dev/t-427-1 (written by the lead before D-63), PROOF green
   (comment 3007). NEEDS a different verifier (sonnet) -> merge.
 - T-404 (high): second review SAFE AFTER FIXES (report on T-404): next = fixer (opus) for its major findings, then a third reviewer.
