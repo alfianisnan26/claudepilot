@@ -348,14 +348,24 @@ export interface ToolObjectCheck {
   arg: string;
   /** For a `pool`: the argument that carries the pool type. */
   poolTypeArg?: string;
+  /** The argument may be left out (or empty): then nothing is checked for it. It must match the tool's input (a test walks every tool). */
   optional?: boolean;
   many?: boolean;
+  /**
+   * T-348: the text the tool itself answers NOT_FOUND with for a missing object of this argument ("No such run."), so a refusal at dispatch
+   * reads byte for byte like a missing one. Default "Not found." (what `requireCan` says).
+   */
+  notFound?: string;
 }
 
 /**
  * What a Portal MCP tool declares (the registry refuses to start with a tool that has none, once the layer lands). The tool's `scope`
  * stays, as a CAP on the owner's rights; this says which objects the call touches. An agent's identity (its own session, workspace) is
  * verified from its token, never from arguments.
+ *
+ * T-348: the dispatch (`requireToolPolicy`, portalmcp/server.ts) enforces `objects` (every check through `can()`) and `platform` before the
+ * handler runs; a refusal is NOT_FOUND. `signed-in` and `self` hold for every token; `filter`, `creates` and `agent` (whose reach comes
+ * from the token, with no argument to check) are the handler's: it must enforce them itself.
  */
 export type ToolAccess =
   | { kind: 'signed-in'; filter?: ObjectType; creates?: ObjectType }

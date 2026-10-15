@@ -19,7 +19,7 @@ export const TICKET_BUMP_TOOL_POLICIES = {
     kind: 'objects',
     checks: [
       { type: 'ticket', verb: 'operate', arg: 'id' },
-      { type: 'session', verb: 'operate', arg: 'session_id' },
+      { type: 'session', verb: 'operate', arg: 'session_id', optional: true },
     ],
     confirm: true,
     audit: 'ticket.bumped',

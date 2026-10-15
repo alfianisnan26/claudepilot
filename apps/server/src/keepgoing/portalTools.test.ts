@@ -78,5 +78,5 @@ test('a token below admin and an agent never reach it; another user’s chat and
 });
 
 test('the tool is declared through the seam: operate on the session, confirmed, audited', () => {
-  assert.deepEqual(KEEPGOING_TOOL_POLICIES.session_keepgoing_set, { kind: 'objects', checks: [{ type: 'session', verb: 'operate', arg: 'session_id' }], confirm: true, audit: 'keepgoing.set' });
+  assert.deepEqual(KEEPGOING_TOOL_POLICIES.session_keepgoing_set, { kind: 'objects', checks: [{ type: 'session', verb: 'operate', arg: 'session_id', notFound: 'No such session.' }], confirm: true, audit: 'keepgoing.set' });
 });

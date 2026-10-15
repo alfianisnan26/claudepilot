@@ -7,6 +7,7 @@ import { WORKER_REPORTS } from '../../chat/agents.js';
 import { paginate, pageInput } from '../paging.js';
 import { PortalToolError, portalTools, type PortalToolContext, type ToolRegistry } from '../registry.js';
 import { cleanText } from '../sanitize.js';
+import { NO_PARENT } from '../authz.js';
 import { assertCanChange, costFields, uiLink } from './common.js';
 import type { PortalToolDeps } from './deps.js';
 
@@ -82,7 +83,7 @@ export function registerSessionTools(deps: Pick<PortalToolDeps, 'store' | 'chat'
         ok = false;
       }
     }
-    if (!ok) throw new AppError('NOT_FOUND', 'No such live session in that workspace to be the parent. List them with session_list.');
+    if (!ok) throw new AppError('NOT_FOUND', NO_PARENT);
     return p!.id;
   };
 

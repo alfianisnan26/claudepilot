@@ -28,7 +28,10 @@ export function registerCiAuthz(facts: CiAuthzFacts, ownerOf: (workspaceId: stri
   }
 }
 
-const run = (verb: 'view' | 'operate' | 'manage') => ({ kind: 'objects' as const, checks: [{ type: 'ci_run' as const, verb, from: 'path' as const, param: 'id' }] });
+/** T-348: the tools' one answer for a run that is missing, not the agent's or refused (the dispatch's check and the handler's say the same). */
+export const NO_RUN = 'No such run.';
+
+const run = (verb:'view' | 'operate' | 'manage') => ({ kind: 'objects' as const, checks: [{ type: 'ci_run' as const, verb, from: 'path' as const, param: 'id' }] });
 const repo = (verb: 'view' | 'operate' | 'manage') => ({ kind: 'objects' as const, checks: [{ type: 'ci_repo' as const, verb, from: 'path' as const, param: 'id' }] });
 
 /** The route table, exported for the tests that walk it. */
@@ -65,15 +68,15 @@ export function declareCiPolicies(): void {
   // The tools filter to the caller's own runs themselves (an agent: its branch, its ticket, its session's runs). None approves.
   declareToolPolicies('ci', {
     ci_runs_list: { kind: 'signed-in', filter: 'ci_run' },
-    ci_run_get: { kind: 'objects', checks: [{ type: 'ci_run', verb: 'view', arg: 'id' }] },
-    ci_run_logs: { kind: 'objects', checks: [{ type: 'ci_run', verb: 'view', arg: 'id' }] },
+    ci_run_get: { kind: 'objects', checks: [{ type: 'ci_run', verb: 'view', arg: 'id', notFound: NO_RUN }] },
+    ci_run_logs: { kind: 'objects', checks: [{ type: 'ci_run', verb: 'view', arg: 'id', notFound: NO_RUN }] },
     ci_validate: { kind: 'signed-in' },
     ci_run_trigger: { kind: 'signed-in', creates: 'ci_run' },
-    ci_run_cancel: { kind: 'objects', checks: [{ type: 'ci_run', verb: 'operate', arg: 'id' }] },
+    ci_run_cancel: { kind: 'objects', checks: [{ type: 'ci_run', verb: 'operate', arg: 'id', notFound: NO_RUN }] },
     ci_run_bump: {
       kind: 'objects',
       checks: [
-        { type: 'ci_run', verb: 'operate', arg: 'id' },
+        { type: 'ci_run', verb: 'operate', arg: 'id', notFound: NO_RUN },
         { type: 'session', verb: 'operate', arg: 'session_id', optional: true },
       ],
       confirm: true,

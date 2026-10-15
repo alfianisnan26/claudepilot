@@ -11,7 +11,7 @@ import { actorOfPrincipal, requireCan } from '../authz/seam.js';
 import { bumpNote } from '../chat/bump.js';
 import { fullInput } from '../portalmcp/compact.js';
 import { portalTools, z, type PortalToolContext, type ToolRegistry } from '../portalmcp/registry.js';
-import { declareCiPolicies } from './authz.js';
+import { declareCiPolicies, NO_RUN } from './authz.js';
 import type { CiService } from './service.js';
 import type { CiSessionsPort } from './sessions.js';
 
@@ -30,10 +30,10 @@ export function registerCiTools(ci: CiService, sessions: CiSessionsPort | undefi
 
   const need = async (ctx: PortalToolContext, id: string): Promise<CiRun> => {
     const run = await ci.show(id).catch(() => {
-      throw new AppError('NOT_FOUND', 'No such run.');
+      throw new AppError('NOT_FOUND', NO_RUN);
     });
     // An agent gets the same answer for a run that is not its own as for one that does not exist.
-    if (!own(ctx, run)) throw new AppError('NOT_FOUND', 'No such run.');
+    if (!own(ctx, run)) throw new AppError('NOT_FOUND', NO_RUN);
     return run;
   };
 
