@@ -44,7 +44,13 @@
           "mcp__pilot__ticket_get",
           "mcp__pilot__ticket_comment",
           "mcp__pilot__note_read",
-          "mcp__pilot__session_message"
+          "mcp__pilot__session_message",
+          "mcp__pilot__portal_status",
+          "mcp__pilot__attention_list",
+          "mcp__pilot__ci_runs_list",
+          "mcp__pilot__ci_run_get",
+          "mcp__pilot__ci_run_logs",
+          "mcp__pilot__session_get"
         ],
         "disallowedTools": [],
         "model": "sonnet",
@@ -64,7 +70,13 @@
           "mcp__pilot__ticket_get",
           "mcp__pilot__ticket_comment",
           "mcp__pilot__note_read",
-          "mcp__pilot__session_message"
+          "mcp__pilot__session_message",
+          "mcp__pilot__portal_status",
+          "mcp__pilot__attention_list",
+          "mcp__pilot__ci_runs_list",
+          "mcp__pilot__ci_run_get",
+          "mcp__pilot__ci_run_logs",
+          "mcp__pilot__session_get"
         ],
         "disallowedTools": [],
         "model": "sonnet",
