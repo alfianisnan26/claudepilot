@@ -20,11 +20,12 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   quick-check PASS 12295a2b). Then T-524 S3b 23330c28 (test-only +25: name pin, no-patch-on-top-fail; src/ci 208/208 job
   54784775; mutants D,F killed f69b2de3). Live re-read patch NOT verified. 6775 was WRONG (rule set at creation, 78%): 6788.
 - QA UI 8b13bb5a: standby -> T-376 S4.
-- QA BE 2 42e5408f: standby -> T-574 S3. T-251 (no code) PASS WITH GAPS: 255/255 job 45e984db, M1-M6 killed 8870ab0c; gaps:
-  claudeusage.ts:208 early return untested/redundant, mid-turn limit path untested -> T-251 S2 for BE Infra after T-610.
+- QA BE 2 42e5408f: T-610 26f8ba37 (cause: #recordTurn booked whole total on any drop; usageDelta.ts + suspect rows skipped;
+  job 346cdb40 1076/1079; old-code mutants asked; lead read SQL ok 6871; qc-t610 running), then T-574 S3.
+  T-251 (no code) PASS WITH GAPS (45e984db 255/255; M1-M6 killed 8870ab0c) -> S2 below.
 - IMPL lane 0d799c90 (sonnet, rossi; bccb756f ended after T-710) T-376 S4 on ticket/T-376-s4 from be431d6a: createApp wiring
   test + 4x CPU, long tasks, DOM/heap, older-page render budgets.
-- BE INFRA lane c305a138 (sonnet, satria; 4d010bea ended after T-251 audit) T-610 on ticket/T-610-cost-attribution from be431d6a.
+- BE INFRA lane 5b9b7122 (sonnet, two.claude; c305a138 ended after T-610) T-251 S2 on ticket/T-251-s2 from 92900150: mid-turn limit test, :208.
 - BACKEND lane 216dbe18 (sonnet, regitha) T-574 S3 on ticket/T-574-s3 from integration: cross-lead NOT_FOUND test, size trim
   toward 600 avg, bound back toward 1.5k.
 - HELD: T-426 S1e 2174eee1 QA PASS 6169 -> merge on the T-401 ack (4941). T-578 51f6c153 review CHANGES 6168 -> owner decision.
