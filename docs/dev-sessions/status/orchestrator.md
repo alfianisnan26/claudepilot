@@ -16,16 +16,15 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   T-781 S8+S8b, T-623 S2, T-416 S2+S2b (lead's mechanical controller.ts resolution 056fe1a4). Coordinator told T-731 8617.
   T-772 held out: quick-check red on RunsTab.tsx:112 (T-732 line, 8544) -> S2c/S2d, batch 26.
 - BATCH 26 CANDIDATES: T-591 S3 9861313b (QA 8534, rev 8535) READY; T-611 merge f722dca1 (rev APPROVE 8537; QA Perf QA pending);
-  T-772 S2 188cd077 + S2b 4b484431 (QA PWG 8599, rev 8568) + S2c 464be382 + S2d (Impl); T-610 b3e7e3a7 (rev 8611; QA BE 2).
+  T-772 S2 188cd077 + S2b 4b484431 (QA PWG 8599, rev 8568) + S2c 464be382 + S2d 03b635b5 (8627; QA UI QA now); T-610 b3e7e3a7 (rev 8611; QA BE 2).
 
 ## IN FLIGHT (6 of 6, D-71)
 - QA PERF 8e8912fc (perf-tester/sonnet): T-426 S1h PASS 14/14 (8270). Now QA T-611 S2b 96d7c148 -> QA T-611 merge f722dca1.
 - QA UI 8b13bb5a (no Write): today T-623 S2/T-781 S8/T-611 merge/T-610/T-623 S2c reviews APPROVE; T-591 S3 + T-772 S2b QA PWG;
-  T-860 attack list 8540/8541 (52 forms). NEXT: blind REVIEW T-860 S2 against its list (held free for it).
+  T-860 attack list 8540/8541 (52 forms). NOW QA T-772 S2c+S2d; T-860 S2 blind REVIEW preempts when DONE.
 - QA BE 2 42e5408f (no Write): reviews APPROVE T-772 S2 8449, T-416 S2b 8450, T-591 S3 8535, T-772 S2b 8568.
   NOW QA T-623 S2c 6f4f6d56 -> QA T-610 b3e7e3a7; QA T-860 S2 takes priority when DONE.
-- IMPL 46632d91 (sonnet): T-772 S2b 4b484431 + S2c 464be382 DONE (8559). NOW T-772 S2d (system colour test, BtwCard marker,
-  8599) -> T-525 proposal draft (8236).
+- IMPL 46632d91 (sonnet): T-772 S2b-S2d DONE (S2d 03b635b5, mutant red, 8627). NOW T-525 proposal draft (8236).
 - BE INFRA 16c2494f (sonnet): DONE T-860 12deae78 (8553), T-623 S2c 6f4f6d56 (8569), T-610 b3e7e3a7 (8571; lead read mig 384,
   free on all branches 8577). NOW T-860 S2 URGENT (--git-dir/--work-tree/-c core.worktree/GIT_DIR + attack list; 8575) ->
   T-623 S2d (mask parity, 8613) -> T-736 S3g (parked) -> T-524 S3c + T-733 S5 -> T-612 S1. T-860 gates ALONE.
