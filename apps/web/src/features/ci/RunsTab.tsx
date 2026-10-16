@@ -109,7 +109,7 @@ export function RunsTab({ onNewRemote }: { onNewRemote: () => void }) {
           </label>
         )}
         {branch && (
-          <button type="button" onClick={() => set({ branch: null })} className="press inline-flex h-11 items-center sm:h-9 gap-1.5 rounded-full border border-primary bg-surface pr-2.5 pl-3.5 text-[13.5px] font-semibold" aria-label={`Clear branch ${branch}`}>
+          <button type="button" onClick={() => set({ branch: null })} className="press inline-flex h-11 items-center sm:h-9 gap-1.5 rounded-full border border-primary bg-surface pr-2.5 pl-3.5 text-[13.5px] font-semibold focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none" aria-label={`Clear branch ${branch}`}>
             <span className={cn(MONO, 'max-w-40 truncate')}>{branch}</span>
             <X className="size-3.5 text-muted" aria-hidden="true" />
           </button>
