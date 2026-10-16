@@ -6,37 +6,34 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - DEPLOY 191 LIVE (coordinator, 2026.10.16-1 from 12c68374 = batches <=18). T-404 CLOSED (live hook in managed 10-policy.json + D-60
   refusal 7407). T-597 CLOSED (live 6208). Live checks: T-472 UNAVAILABLE with agent tokens (admin read, 7505); T-591 FAIL:
   release_report setting unset = silent skip; a person's PUT + backfill steps in 7556; silent skips -> T-776. FOR THE COORDINATOR.
-- FOR THE COORDINATOR, batch sooner: the T-401 merge (security; waits the ack + gate door T-595 7316). Hold migration 383 until
-  scaled by the real row count (0.41 s/1M synthetic, T-739 7487). T-781, T-731, T-727 now assigned to the lead (coordinator).
+- T-781, T-731, T-727 assigned to the lead (coordinator). Migration 383: 0.41 s/1M synthetic rows (T-739 7487), for the coordinator.
 
 ## IN FLIGHT (6 of 6, D-71)
-  Lanes' ticket_comment refused on unassigned tickets (T-341, T-549, T-675): verdicts live in their replies + this file.
-- QA PERF 7e4879c7: T-426 S1h PWG 7880 (-> S1i redact loop). REVIEW T-781 S5 CHANGES (7905 -> S7). REVIEW T-772 S1b
-  CHANGES (2xl: false positive, no self-test -> S2, 7916). PROBES S1b 2a494942+8c9e58fc+9be66b11, S1i 6c8a2392, S6 d478c8c0, C5 120f76bf. QA S1b BLOCKED (Bash refused mid-turn; C5e probe wrong, product safer). Retry: probe fix, then Job.
-- QA UI 8b13bb5a: T-736 S3c PWG 7875 (-> S3d). REVIEW T-781 S3 APPROVE (F1' F2). REVIEW T-723 S3c APPROVE (7908 gaps).
-  PLAN QA T-781 S6 7918; no Write tool (7939, coordinator 7944). REVIEW S6 PRE APPROVE a-d 7945. T-733 PRE CHANGES 7950 (->Backend). REVIEW T-781 S6 APPROVE 8006 (#inflight -> S7). Now REVIEW T-611 S1b final.
-- QA BE 2 42e5408f: QA T-781 S5 FAIL (F1: prod adapter index.ts has no interrupt; 7905). QA T-723 S3c PWG 7903 (39/0, m1 m3
-  killed). T-736 C1 holds 7907. T-723 m2 KILLED 7932 = PASS. No Write either (7946: 3 findings -> Impl S6). T-611 S1b PRE CHANGES C5 7949 (->BE Infra). PLAN QA T-733 7964. Now QA T-733 Job at 1afaf8a6; then QA T-781 S6 on wip/qa-t781s6-8fac4ec.
-- T-781 (D-76) assigned to the lead: 7905, 7944, 7947. S6 DONE fb70258d, review APPROVE 8006, QA queued; S7 open.
-- IMPL lane 7cc1b2f5 (sonnet, satria; c959661f ended: T-772 S1b DONE 1e1e0ba1 7900). T-781 S6 DONE fb70258d 7992 (job b38e850f 145/0). 
-  Now T-781 S7 (F2 + S5 items 1-4 + sync-throw mutant) -> T-736 S3d -> T-772 S2 (7599 + 7916).
-- BE INFRA fad38191 (sonnet; 3958fe14 ended: T-426 S1h DONE 9573a085 7847, job 7a3a11e7 65/0, 4 mutants killed; lead read N1
-  redact/safe_name/say: mask before cut, holds). T-611 S1b DONE 16eb9975 7993 (job 6d364883 78/0; lead read C5 kubectl patch: own Job only). 
-  Now T-426 S1i from S1h (7888; lead merges it into T-611 S1b) -> T-611 S2 -> T-524 S3c + T-733 S5 (job-run.sh) -> T-612 S1.
-- BACKEND 3484bd4d (sonnet; b2f0e95f ended: T-781 S5 DONE 71f9dc76 7869, job f86ac5de 274/0, 4 mutants killed -> QA BE 2 queue).
-  T-733 S4 S6 S1 DONE 1afaf8a6 (7950 fix in) -> QA BE 2. Now T-675 (findings 4/5 + R2) (S5 job-run -> BE Infra) (T-781 moved to Impl, D-76). T-778 = person.
-- HELD: T-426 S1e 2174eee1 QA PASS 6169, review CHANGES 7121 -> fix, re-QA, merge after T-401. T-578 51f6c153 review CHANGES 6168 -> owner. T-631 CHANGES 5850 -> coordinator.
-- 16:12 OWNER PRIORITY (coordinator, T-426 5538): T-401 then T-426 FIRST. T-401 gate GREEN gate-54ba328-6502; ff only on the person's ack.
+- GATE b19r: wip/main-f14e9d2 f14e9d2d (1444d836 + T-697 a84a51b3 + T-574 S3 d97cbb16 + pack), gate-job running (Pending for a node).
+  Then gate b21 wip/main-91da8de 91da8de3 (on b19r: T-731, r.txt drop, T-376 S4b, T-732, T-610 r3, T-739 B mig 383, T-723 S3c).
+  Each green -> ff origin+pilot, rebase+push status, tell the coordinator (deploys at once). Old 35f917a9/71a2317f superseded.
+  Lanes' ticket_comment refused on unassigned tickets (T-341, T-549, T-675; T-675 assign refused too): verdicts in replies + this file.
+- QA PERF 330855ba (respawned; 7e4879c7 ended: Bash refused twice). T-611 S1b: probe fix C5e (add-fail rc 2 + cleanup, drop-fail
+  keeps rule), then ONE Job on the rebuilt QA branch + mutants 1-3. Probes ready: S1i 6c8a2392, S6 d478c8c0 (in 8fac4ec1).
+- QA UI 8b13bb5a (no Write tool, 7939/7944/7947): REVIEW T-781 S6 APPROVE 8006; REVIEW T-611 S1b APPROVE 8018 (3 follow-ups -> S1c).
+  Waits: T-772 S2 (plan 7963).
+- QA BE 2 42e5408f (no Write tool, 7946): QA T-733 Job at 1afaf8a6 (plan 7964); then QA T-781 S6 on wip/qa-t781s6-8fac4ec 8fac4ec1.
+- T-781 (D-76) assigned to the lead: S6 DONE fb70258d 7992 (job b38e850f 145/0), review APPROVE 8006, QA queued.
+- IMPL 7cc1b2f5: T-781 S7 (F2 + S5 items 1-4 + sync-throw mutant + #inflight during stop 8006) -> T-736 S3d -> T-772 S2.
+- BE INFRA fad38191: T-426 S1i DONE b7fa0ba7 8019 (67/0, M1 M2 red). Lead merged S1i into S1b: ab91adf9 (union of appended tests,
+  63; not run). Now T-611 S1c from ab91adf9 (8018 items 1-3 + one Job proving the merge) -> T-611 S2 -> T-524 S3c + T-733 S5 -> T-612 S1.
+- BACKEND 3484bd4d: T-733 DONE 1afaf8a6 -> QA BE 2. Now T-675 item 3 (lead warning, N=6 D-71, FR39b) + R2 restart test; items
+  1/2 only with a named test (item 2 = T-723 S3c in b21).
+- HELD: T-401 S2b a4ad3052 (QA PASS, review APPROVE 7387): a person's OK on the gate change (charter wall; 8023), then merge + gate.
+  T-426 S1h/S1e after T-401; T-379 S2 3f11b28 behind it. T-578 -> owner. T-631 -> coordinator.
 
 ## DECISIONS (binding)
-- 12:55 Self-answered (supervisor: PRD default): batch 20 stays HELD till a green gate; no lead gate (D-75), no ungated merge
-  (charter), no Check trigger by the lead (same as running the gate). Status commits stay local so 35f917a9 stays ff-able.
+- 13:45 D-75 AMENDED (coordinator, 1444d836, checked in DECISIONS.md): the lead runs the gate before a merge (gate-job.sh, one per
+  batch). Batch 19 rebuilt on 1444d836, then batch 21 = batch 20 + T-739 B + T-723 S3c. The 12:55 hold is superseded.
+- 13:45 T-739 B in b21 on the coordinator's list; migration 383 (CREATE INDEX on chat_events) cost at real row count is the coordinator's at deploy.
 - 11:00 T-612 default A (pinned prettier/eslint devDeps, changed files only; quick-check must not say "passed" for a skipped step); FOR THE COORDINATOR 7592.
-- 10:10 T-731 F1: lanes are refused rm/git rm, so the lead drops job-out/t731b/r.txt as its own traced commit in the premerge (a log, not code).
-- 09:38 MERGES HELD: D-75 (lead runs no Jobs) vs gate-job.sh absent from the allow list (lanes refused). Batch 19 71a2317f
-  (T-697 + T-574 S3) waits; coordinator picks (a) a person adds the allow entry [default], (b) gate exempt, (c) hold (T-595 7316).
 - 07:45 D-75 (coordinator): one Job per commit (checks chained), never the same command twice on a commit, QA reads the builder's log;
-  the LEAD RUNS NO JOBS (quick-check and gate go to a lane); idle QA gets no-Job work (reviews, browser). T-731 -> BE Infra after T-697.
+  the lead runs no Jobs but the merge gate (13:45); idle QA gets no-Job work (reviews, browser). T-731 -> BE Infra after T-697.
 - 03:55 Lead false claim corrected: T-524 6775 said job 4d5cb657 proved the S3 patch; its log shows the rule at creation. 6788; incident T-721.
 - 16:30 D-71 (coordinator): limit 6; 3rd build lane BE Infra (CI, runners, job-run, k3s, deploy, secrets delivery, usage, spend, quota):
   T-401, T-426, T-611, T-547, T-610. Backend: T-546, T-597, T-600 route, T-325. Spawn lanes with claude auto.
@@ -68,11 +65,9 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   T-527 finding 4 (owner triggers tagging owner-checklist); T-657 reopen T-259/T-317/T-338; T-739 A scoring defs (scoring = person's wall).
 
 ## NEXT (in order, as slots free)
-1. T-401 fix (7103) + re-QA, then ack 4941 -> T-426 S1e -> T-379 S2 3f11b28 (PASS 4948, review 4938); deploys are the coordinator's.
-2. BATCH 20 BUILT wip/main-35f917a 35f917a9 (T-731 + r.txt drop, T-376 S4b, T-732, T-610 r3, pack a4c76eaa; worktree premerge-b20):
-   waits a gate (T-731 7902, coordinator asked to merge it for ~13:20 deploy; default (a) coordinator gates it, then lead ff).
-   Then: T-739 B (mig 383 note), T-723 S3c fadee77e READY, batch 19 rebuilt, T-736 after S3d.
-3. T-574 S3 (6615), T-416 S2 (Bypass restore).
+1. Gates b19r then b21 (IN FLIGHT). Next batch: T-733 (after QA), T-781 S6 (after QA), T-611 S1b+S1i+S1c (after QA), T-736 S3c+S3d.
+2. T-401 after a person's OK (8023) -> T-426 S1e -> T-379 S2 3f11b28; deploys are the coordinator's.
+3. T-416 S2 (Bypass restore).
 4. RTK: T-340 (person/coordinator) -> T-341 merge -> T-306 item 3. 5. T-537. 6. T-513. 7. T-472 live re-check (needs portal_status), T-422, T-147, T-438, T-425, T-436, T-437, T-432, T-382, T-377, T-386, T-409, T-402, T-398,
    T-399, T-370 HOLD, T-371..T-374, T-363, T-451, T-470, T-507, T-508, T-512, T-520; T-404 open till deployed.
 
