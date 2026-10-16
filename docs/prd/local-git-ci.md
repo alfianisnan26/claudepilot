@@ -609,3 +609,29 @@ runs-on: { labels: [mac], fallback: workspace }
 ```
 
 The labels pick a runner exactly as the list form does. With `fallback: workspace`, a run whose labels no runner carries, or whose runners are all offline, drained or full, or whose hand-off fails (a tunnel that resets the stream, an install that times out), **starts in the repository's own workspace at once** instead of waiting `runnerWaitMs` or failing as `no_runner`. It uses the workspace's own run slots (full: it stays queued and the next look tries the runners again), and the run carries a warning diagnostic `runner-fallback` saying why, audited as `ci.run_fallback`. A run handed to a runner gets `PILOT_RUNNER` (the runner workspace's id) in its steps' environment, so a step can choose what to do where: ClaudePilot's `.pilot/check.yml` runs the gate in place on a runner and sends it to the cluster as a Job from the workspace (D-61). `fallback` takes only `workspace`; every job of a pipeline shares it with the labels (`runs-on-mixed`). Tests: `runners.test.ts` (no runner, a stopped runner, a failed hand-off, a ready runner still preferred), `checkPipeline.test.ts`.
+
+## 24. `job-run` Jobs: size and reused results (T-731, D-75)
+
+`scripts/job-run.sh` (heavy agent work as a cluster Job, `deploy/k3s-build/job-run.yaml`; `docs/dev-session.md`) is not a pipeline run, but it is the same
+CI capacity, so its two rules live here.
+
+**Size.** A Job requests = limits 3Gi of memory (was 4Gi), `/tmp` at most 2Gi in memory, 1 CPU requested (limit 4); `--big` gives 8Gi with `/tmp` 4Gi.
+Source: 518 `=== JOB-RUN MEMORY` peaks (ticket T-731, 2026-10-16): median 1133Mi, p90 1971Mi, p99 2270Mi, max 2536Mi on a 4Gi limit, no OOM. 3Gi leaves
+35% over the p99 and 21% over the max. An OOMKilled Job still says so and names `--big`.
+
+**Reuse.** A Job that passed is saved; the same work later returns the saved log and exit code with no Job (and no kubectl call).
+
+- **Key:** the SHA-256 of these, NUL-separated, in order: key version `v1`; the hash of `scripts/job-run.sh` and `deploy/k3s-build/job-run.yaml` together (a change
+  to either, even a comment, is a miss); the repository's clone URL; the full 40-hex commit; the exact command (the single string, or the quoted words);
+  `--against`; `--keep-tests`; the `--also` list with its refs; `--steps`. Not in it, because they do not change what a pass means: `--big`, `--timeout`,
+  `--role`, the chat.
+- **Only exact inputs have a key.** `--ref` (or HEAD), `--against` and every `--also` ref must be full commits: a branch or `stg` moves. A run with `--artifacts`
+  has no key (the files are not saved). Such a run is never saved and never reused.
+- **Store:** `JOB_RUN_CACHE_DIR`, default `~/.cache/claudepilot-job-run` (mode 700), files `<key>.log` and `<key>.rc`. It is per user and host (a workspace's home), shared
+  by every chat in it; another workspace does not see it. Only exit 0 with the Job `Complete`, the command's own `=== JOB-RUN EXIT 0` line and no credential in the log is saved.
+  The saved text is the log after the credential mask (the file `JOB_RUN_LOG` gets), never the raw stream; the artifacts block is not in it. The `.rc` is written last.
+- **Hit:** a result younger than `JOB_RUN_REUSE_MAX_AGE_DAYS` (7); the output starts with `job-run: reused a passed result … --fresh runs it again`, then the saved log; exit 0.
+  `--fresh` runs the Job and saves the new pass. Entries older than twice the age are removed when a result is saved.
+- **Not covered:** `scripts/gate-job.sh` is never reused (the charter wants the full gate on the exact commit; reuse of gate results is owner decision T-578).
+  A pass that depended on something outside the key (the network, the clock, a registry) is reused too: use `--fresh` for such a check.
+- **Tests:** `apps/server/src/ci/jobRun.test.ts` (hit, miss, `--fresh`, failure, each changed key part, the age limit, and a mutant that drops the commit from the key).

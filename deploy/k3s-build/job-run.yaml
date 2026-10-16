@@ -35,7 +35,7 @@ spec:
         # the real limit (resources below): the master takes a Job only when its requests leave room for the whole of it, and node2 (30 GB) wins
         # while it has more free. The Jobs do not all pile onto the portal's node: the portal rule still pulls the other way.
         # The gap (T-611): the scheduler counts memory REQUESTS, but the master's own pods (API server, Argo CD, Gitea, Hermes, LiteLLM)
-        # use about 10 GiB of real memory with small or no requests, so a 4 GiB Job "fits" while the master's real use goes to 83%.
+        # use about 10 GiB of real memory with small or no requests, so a 3 GiB Job "fits" while the master's real use goes to 83%.
         # scripts/job-run.sh reads the master's real use (kubectl top) and, over JOB_RUN_MASTER_MAX_PCT (75), replaces the marker below with
         # a REQUIRED rule away from the control plane (the Job then waits for k3s-node2 or for the master to have room). Under the line, or
         # when the metrics fail, the marker is empty and only the preferred rules apply (a metrics failure never blocks every Job).
@@ -159,7 +159,8 @@ spec:
             - {name: shm, mountPath: /dev/shm}
           resources:
             # Memory request = limit (T-524): with 2Gi requested and 8Gi allowed a 4.1 GB Job fitted k3s-master "on paper" and took it to
-            # 92% (portal 503s). job-run.sh fills in 4Gi, or 8Gi with --big, and says when a Job is OOMKilled or Pending for memory.
+            # 92% (portal 503s). job-run.sh fills in 3Gi (T-731: sized from 518 measured peaks, p99 2270Mi, max 2536Mi), or 8Gi with --big, and
+            # says when a Job is OOMKilled or Pending for memory. The CPU request stays 1 CPU: on k3s-node2 CPU requests, not memory, now bind (T-731).
             requests: {cpu: 1000m, memory: __MEMORY__}
             limits: {cpu: "4", memory: __MEMORY__}
       volumes:
