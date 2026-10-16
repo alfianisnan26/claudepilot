@@ -674,6 +674,24 @@ test('T-723 #8: a queued start refused for memory names who started it (`started
   }
 });
 
+test('T-723 #8 (F3): a queued start with no recorded starter is a system start: the refusal names `portal`', async () => {
+  const s = await liveSession();
+  try {
+    const caps = queueing(s);
+    const b = budget(ONE_FITS);
+    s.controller.memory = b.memory;
+    const q = await s.controller.create({ workspaceId: 'docker/ws1' });
+    assert.ok(q.slotWait, 'q waits for a slot');
+    s.store.db!.prepare('UPDATE chat_sessions SET started_by = NULL WHERE id = ?').run(q.id);
+    b.set(ONE_FITS + 1);
+    caps.perWorkspace = 10;
+    await until(() => s.controller.get(q.id)!.state === 'interrupted', 4000);
+    assert.deepEqual(actorsOfId(s, q.id), ['portal']);
+  } finally {
+    await s.done();
+  }
+});
+
 test('T-723: Keep going’s resume of an asleep session names its own actor, not `ui`', async () => {
   const s = await asleepShort();
   try {

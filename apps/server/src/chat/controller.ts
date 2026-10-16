@@ -1789,7 +1789,7 @@ export class ChatController {
       // still held through the check, so a send meanwhile waits for this start instead of running a wake check of its own (review 6310).
       try {
         const now = this.#chat.row(id) ?? row;
-        await this.#memoryBudget(now.workspace_id, now, now.started_by ?? 'portal', id, 'queued');
+        await this.#memoryBudget(now.workspace_id, now, now.started_by ?? 'portal', id, 'queued'); // T-723: `portal` is true only for a start nobody recorded (a system start)
       } catch (e) {
         this.#granted.delete(id);
         const now = this.#chat.row(id);
@@ -2870,7 +2870,7 @@ export class ChatController {
    * moves; a move is refused while it runs. Messages sent meanwhile wait for the new process, in order. Running background tasks stop with
    * the old process (the app lists them before asking). Audited (`session.restart`), and the transcript marks it.
    */
-  async restart(rawId: string, opts: { why?: unknown; when?: unknown; interrupt?: unknown; actor?: 'ui' | 'portal'; from?: 'queue' | 'auto' } = {}): Promise<ChatSession> {
+  async restart(rawId: string, opts: { why?: unknown; when?: unknown; interrupt?: unknown; actor?: string; from?: 'queue' | 'auto' } = {}): Promise<ChatSession> {
     const sessionId = this.#chat.resolveId(rawId);
     let session = this.#require(sessionId);
     this.#notMoving(sessionId);
@@ -3040,7 +3040,7 @@ export class ChatController {
     if (this.#chat.hasOpenInputs(session.id) || this.#sending.has(session.id)) throw new AppError('CONFLICT', 'A message is still on its way. Try again in a moment.');
   }
 
-  async #restart(sessionId: string, why: 'mcp' | 'manual', o: { interrupt: boolean; actor: 'ui' | 'portal'; how: 'now' | 'queue' | 'auto' | 'interrupt' } = { interrupt: false, actor: 'ui', how: 'now' }): Promise<ChatSession> {
+  async #restart(sessionId: string, why: 'mcp' | 'manual', o: { interrupt: boolean; actor: string; how: 'now' | 'queue' | 'auto' | 'interrupt' } = { interrupt: false, actor: 'ui', how: 'now' }): Promise<ChatSession> {
     await this.#busy.get(sessionId); // a launch or a sleep in flight settles first
     this.#restartable(this.#require(sessionId), o.interrupt); // and things may have moved on while it did
     const busy = () => {
