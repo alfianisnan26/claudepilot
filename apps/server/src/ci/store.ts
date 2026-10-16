@@ -604,15 +604,20 @@ export class CiStore {
       .all(repoId, environment, `rule:${environment}`, limit) as unknown as (DeploymentRow & { run_status: string | null })[];
   }
 
-  /** The last deployment of an environment that was released and held: its job passed and its run passed (verify too), newest first. */
-  lastReleased(repoId: string, environment: string, exceptRun: string): DeploymentRow | undefined {
+  /**
+   * The last deployment of an environment that was released and held: its job passed and its run passed (verify too), newest first.
+   * `before` (T-591, a backfill) is the created_at of the deployment being reported: only a release made BEFORE it counts, so the report of an old
+   * run takes the release that preceded it, not the newest one overall.
+   */
+  lastReleased(repoId: string, environment: string, exceptRun: string, before?: string): DeploymentRow | undefined {
     return this.#db
       .prepare(
         `SELECT d.* FROM ci_deployments d JOIN ci_runs r ON r.id = d.run_id
          WHERE d.repo_id = ? AND d.environment = ? AND d.run_id <> ? AND d.approval IN ('approved', 'auto') AND d.outcome = 'passed' AND r.status = 'passed'
+           AND (? IS NULL OR d.created_at < ?)
          ORDER BY d.created_at DESC, d.id DESC LIMIT 1`,
       )
-      .get(repoId, environment, exceptRun) as unknown as DeploymentRow | undefined;
+      .get(repoId, environment, exceptRun, before ?? null, before ?? null) as unknown as DeploymentRow | undefined;
   }
 
   /** T-558: when the last run that deployed to an environment ended, counting only a run that passed whose deploying job passed; null if none. */
