@@ -5,14 +5,17 @@ import {
   type KnowledgeSource,
   type NoteHistoryEntry,
   type NoteVersion,
+  type PortalAgentWorkspace,
   type VaultImportPolicy,
   type VaultImportReport,
   type VaultSummary,
 } from '@portal/contracts';
 import { ArrowLeft, FileUp, RotateCcw } from 'lucide-react';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { InfoTip } from '@/components/InfoTip';
 import { formatBytes, timeAgo } from '@/lib/format';
+import { portalMcpApi } from '../portalmcp/api';
+import { settingsPayload, toggleWorkspace, workspaceChoices } from './agentWorkspaces';
 import { errorText, knowledgeApi } from './api';
 import { DiffView } from './NoteEditor';
 import { useLoad } from './hooks';
@@ -219,16 +222,59 @@ export function ImportDialog({ open, into, onClose, onDone }: { open: boolean; i
   );
 }
 
+/**
+ * T-436: which workspaces' agents may reach this vault. A tick list (each row a 44 px target) of the workspaces the portal knows; a vault no
+ * workspace is ticked on is reached by no agent.
+ */
+function WorkspacesField({ value, onChange }: { value: string[]; onChange: (v: string[]) => void }) {
+  const [known, setKnown] = useState<PortalAgentWorkspace[] | null>(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    let live = true;
+    portalMcpApi.agents().then(
+      (w) => live && setKnown(w),
+      () => live && setFailed(true),
+    );
+    return () => {
+      live = false;
+    };
+  }, []);
+  const rows = workspaceChoices(known ?? [], value);
+  return (
+    <fieldset className="min-w-0">
+      <legend className="mb-1.5 flex items-center gap-1.5 text-[13px] font-medium text-ink-soft">
+        Workspaces
+        <InfoTip label="About workspaces">
+          Agents in a ticked workspace can read this vault, within the Agents setting above. A vault with none ticked is reached by no agent. A workspace is the finest the list can tell apart: two programs that share one workspace share its notes.
+        </InfoTip>
+      </legend>
+      {known === null && !failed && <p className="text-[13px] text-muted">Loading…</p>}
+      {failed && <p className="text-[13px] text-danger">Couldn’t list workspaces.</p>}
+      <ul className="divide-y divide-line rounded-xl border border-line">
+        {rows.map((r) => (
+          <li key={r.workspaceId}>
+            <label className="flex min-h-11 cursor-pointer items-center gap-3 px-3 py-2 text-[14px] text-ink">
+              <input type="checkbox" className="size-5 shrink-0 accent-[var(--color-accent)]" checked={r.checked} onChange={(e) => onChange(toggleWorkspace(value, r.workspaceId, e.target.checked))} />
+              <span className="min-w-0 break-all">{r.workspaceId}</span>
+              {r.gone && <span className="shrink-0 text-[12.5px] text-muted">gone</span>}
+            </label>
+          </li>
+        ))}
+      </ul>
+    </fieldset>
+  );
+}
+
 /** Name, agent access, daily notes, links and labels; deleting the vault is in here too. */
 export function VaultSettingsDialog({ vault, onClose, onSaved, onDelete }: { vault: VaultSummary | null; onClose: () => void; onSaved: (v: VaultSummary) => void; onDelete: () => void }) {
-  const [form, setForm] = useState<{ name: string; agents: AgentPolicy; dailyFolder: string; timezone: string; rewrite: boolean; labels: 'filename' | 'heading' } | null>(null);
+  const [form, setForm] = useState<{ name: string; agents: AgentPolicy; dailyFolder: string; timezone: string; rewrite: boolean; labels: 'filename' | 'heading'; agentWorkspaces: string[] } | null>(null);
   const [openFor, setOpenFor] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   if ((vault?.id ?? null) !== openFor) {
     setOpenFor(vault?.id ?? null);
     setError(null);
-    setForm(vault ? { name: vault.name, agents: vault.agents, dailyFolder: vault.dailyFolder, timezone: vault.timezone, rewrite: vault.settings.rewriteLinksOnRename, labels: vault.settings.labels } : null);
+    setForm(vault ? { name: vault.name, agents: vault.agents, dailyFolder: vault.dailyFolder, timezone: vault.timezone, rewrite: vault.settings.rewriteLinksOnRename, labels: vault.settings.labels, agentWorkspaces: vault.settings.agentWorkspaces ?? [] } : null);
   }
   if (!vault || !form) return <FormDialog open={false} onClose={onClose} title="Settings" onSubmit={() => undefined}>{null}</FormDialog>;
 
@@ -242,7 +288,7 @@ export function VaultSettingsDialog({ vault, onClose, onSaved, onDelete }: { vau
           agents: form.agents,
           dailyFolder: form.dailyFolder,
           timezone: form.timezone,
-          settings: { rewriteLinksOnRename: form.rewrite, labels: form.labels },
+          settings: settingsPayload(form),
         }),
       );
     } catch (e) {
@@ -271,6 +317,7 @@ export function VaultSettingsDialog({ vault, onClose, onSaved, onDelete }: { vau
     >
       <TextField label="Name" value={form.name} onChange={(e) => set('name', e.target.value)} maxLength={60} autoComplete="off" />
       <PolicyField value={form.agents} onChange={(v) => set('agents', v)} />
+      <WorkspacesField value={form.agentWorkspaces} onChange={(v) => set('agentWorkspaces', v)} />
       <div className="grid grid-cols-2 gap-3">
         <TextField label="Daily notes" value={form.dailyFolder} onChange={(e) => set('dailyFolder', e.target.value)} autoComplete="off" />
         <TextField label="Time zone" value={form.timezone} onChange={(e) => set('timezone', e.target.value)} autoComplete="off" />
