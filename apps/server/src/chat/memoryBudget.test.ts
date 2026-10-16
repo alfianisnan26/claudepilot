@@ -327,7 +327,7 @@ test('T-416 review 6310 #1: a restart of an asleep session is a wake: refused wh
   }
 });
 
-test('T-675 R2: a message sent while a restart of an asleep session waits for its memory reading is not lost and its process is not stopped by the restart', async () => {
+test('T-675 R2: a message sent while a restart of an asleep session waits for its memory reading (the in-flight reading is shared, so the send queues behind the restart) is not lost and its process is not stopped by the restart', async () => {
   const s = await liveSession({ idleSleepMs: 200 }, true);
   try {
     await until(() => s.controller.get(s.id)!.process === 'asleep', 4000);
@@ -335,9 +335,11 @@ test('T-675 R2: a message sent while a restart of an asleep session waits for it
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
     let reads = 0;
-    // R2b: ONLY the restart's reading is held. Any other reading (the send's own wake check, if the send were not held back by
-    // `#restarting` in `send()`) answers at once, so without that wait the send would start its process while the restart is still
-    // waiting, and the restart would then stop it. No real-clock sleep: the send gets many turns of the event loop to get ahead.
+    // R2b: ONLY the first reading (the restart's) is held; a second read call would answer at once. What keeps the send behind the restart
+    // here is WorkspaceMemory.reading(): a reading already in flight is shared (`#inFlight`), so the send's wake check joins the held one
+    // and resumes after the restart's. (`await this.#restarting.get()` in send() is a second guard that this window does not need: removing
+    // it leaves this test green, T-675 R2b evidence.) Without the shared reading, the send would start its process while the restart waits,
+    // and the restart would then stop it: that mutant turns this test red. No real-clock sleep: the send gets many event-loop turns.
     s.controller.memory = new WorkspaceMemory({ read: async () => (reads++ === 0 && (await gate), reading(2 * GiB)) });
     const [starts, stops] = [s.ws.starts, s.ws.stops];
     const restarting = s.controller.restart(s.id);
