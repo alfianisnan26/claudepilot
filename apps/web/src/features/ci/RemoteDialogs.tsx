@@ -172,7 +172,7 @@ function ModePicker({ value, onChange }: { value: CiAutoApproveMode; onChange: (
           onClick={() => onChange(m.value)}
           onKeyDown={(e) => move(e, i)}
           className={cn(
-            'press h-11 flex-1 rounded-full text-[14px] font-semibold focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none',
+            'press h-11 flex-1 rounded-full text-[14px] font-semibold focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden',
             value === m.value ? 'bg-surface text-ink shadow-sm' : 'text-muted hover:text-ink',
           )}
         >
