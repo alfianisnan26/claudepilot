@@ -370,18 +370,17 @@ test('T-739 (D-65): wasteKind table: what is a denial, what is not, the 400-char
   for (const [tool, text, want] of cases) assert.equal(wasteKind(tool, text), want, `${tool} / ${text?.slice(-30)}`);
 });
 
-// T-739 B gap f. Mutants: drop the offenders; keep the rule on a D-65 target; treat every target as D-65.
-test('T-739 (D-65): fullProgram: a D-65 target keeps its offenders and drops its rule; an older target keeps its rule', () => {
+// T-739 B gap f. Mutants: drop the offenders; keep the rule on a D-65 target; treat every target as D-65. (Plan 7349 said older targets keep
+// their rule: they do not, the code drops `rule` from every target; what differs is the row shape.)
+test('T-739 (D-65): fullProgram: a D-65 target is a short row with its offenders, an older target keeps its shape; neither carries its rule', () => {
   const figure = { value: 7, basis: 'measured' as const, source: 'a source' };
   const row = (id: CrewTarget['id'], decision: CrewTarget['decision'], offenders: string[]): CrewTarget => ({ id, decision, rule: `rule of ${id}`, state: 'breach', figure, offenders });
   const p = { program: 'L1', title: 't', workspaceId: null, leads: ['L1'], workers: 1, current: {}, previous: null, targets: [row('lead_share', 'D-65', ['L1', 'L2']), row('done_rate', 'D-65', []), row('live_workers', 'D-61', ['W1'])] } as unknown as CrewProgramScore;
   const [a, b, c] = fullProgram(p).targets as Record<string, unknown>[];
   assert.deepEqual(a, { id: 'lead_share', state: 'breach', value: 7, offenders: ['L1', 'L2'] });
   assert.deepEqual(b, { id: 'done_rate', state: 'breach', value: 7 }, 'no offenders: the key is absent, not empty');
-  assert.equal(c!.rule, 'rule of live_workers');
-  assert.equal(c!.decision, 'D-61');
-  assert.deepEqual(c!.offenders, ['W1']);
-  assert.equal((c!.figure as Record<string, unknown>).source, undefined, 'figure sources are left out of the full form');
+  // An older target keeps its whole shape (decision, figure, offenders) but, like every target, not its rule (`basis.targets` names it once).
+  assert.deepEqual(c, { id: 'live_workers', decision: 'D-61', state: 'breach', figure: { value: 7, basis: 'measured' }, offenders: ['W1'] }, 'figure sources are left out of the full form');
 });
 
 // T-739 B gap e. Mutants: an agent's own read gets the quota figure; a single-program read gets it.
