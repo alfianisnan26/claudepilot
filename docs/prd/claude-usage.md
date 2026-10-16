@@ -1092,8 +1092,8 @@ tables the portal already keeps; nothing new is stored.
   dollars over done tickets under 8 USD (offenders: done tickets whose all-in cost over their life is 8 or more). (2) `lead_share`:
   the lead chain's part of the dollars under 30 % (offenders: the lead chain). (3) `qa_opus_share`: QA and review workers with a request
   on opus or fable under 10 % of them (a `spawn_why` does not exempt here; offenders: those sessions; none: unavailable, `no_samples`).
-  (4) `done_rate`: feature and task tickets done in the window, scaled to a day, against the 2026-10-15 baseline of 48 / 47 / 12 a day
-  (ClaudePilot / Konfersi / Event, which counted all ticket types, so the comparison is hard), matched by the lead's exact workspace id (`kubernetes/kohi-event` and `kubernetes/claudepilot` 48, `kubernetes/konfersi` 47, `kubernetes/event` 12; never a pattern on the name, which gave ClaudePilot's own workspace the Event 12):
+  (4) `done_rate`: feature and task tickets done in the window, scaled to a day, against the 2026-10-15 baseline of 48 / 47 a day
+  (ClaudePilot / Konfersi, which counted all ticket types, so the comparison is hard), matched by the lead's exact workspace id (`kubernetes/kohi-event` 48, `kubernetes/konfersi` 47; the Event program left pilot, D-67; never a pattern on the name, which gave ClaudePilot's own workspace the Event 12):
   at or above is ok, under it warn, under half breach; no baseline for the workspace: unavailable, `not_recorded`. (5) `quota_unused`:
   the worst quota left unused at a reset inside the window (T-547, `claude_usage_samples`) over 30 % is a breach; whole portal, so the
   row repeats on every program and an agent's own read gets unavailable (`no_source`); offenders are Claude ids; "while a crew had work

@@ -267,7 +267,7 @@ test('T-549 (D-65): the six rows with state, figure, source and offenders; unava
     const sample = h.db.prepare(`INSERT INTO claude_usage_samples (at_ms, claude_id, workspace_id, win, used_pct, resets_at_ms, level, source) VALUES (?, ?, 'docker/api', 'session', ?, ?, 'ok', 'probe')`);
     sample.run(at(3) - 5 * 60_000, 'c1', 40, at(3));
     sample.run(at(2) - 5 * 60_000, 'c2', 90, at(2));
-    h.db.prepare(`UPDATE chat_sessions SET workspace_id = 'kubernetes/claudepilot' WHERE id = 'L1'`).run();
+    h.db.prepare(`UPDATE chat_sessions SET workspace_id = 'kubernetes/kohi-event' WHERE id = 'L1'`).run();
 
     const s = h.lab.scorecard({ window: 'day' })!;
     const a = prog(s, 'L1');
@@ -321,18 +321,18 @@ test('T-549 (D-65): thresholds: warn from 80 percent of a ceiling; the done rate
   }
 });
 
-test('T-549 (D-65): the done baseline is picked by workspace id: kubernetes/kohi-event is ClaudePilot (48), not Event (12)', async () => {
+test('T-549 (D-65): the done baseline is picked by workspace id: kubernetes/kohi-event is ClaudePilot (48)', async () => {
   const h = await seeded();
   try {
     const baseline = async (ws: string) => {
       h.db.prepare(`UPDATE chat_sessions SET workspace_id = ? WHERE id = 'L1'`).run(ws);
       const t = target(prog(h.lab.scorecard({ window: 'week' })!, 'L1'), 'done_rate');
-      return [t.state, t.figure.source.includes('(48 a day)') ? 48 : t.figure.source.includes('(47 a day)') ? 47 : t.figure.source.includes('(12 a day)') ? 12 : null] as const;
+      return [t.state, t.figure.source.includes('(48 a day)') ? 48 : t.figure.source.includes('(47 a day)') ? 47 : null] as const;
     };
     assert.deepEqual(await baseline('kubernetes/kohi-event'), ['breach', 48]);
     assert.deepEqual(await baseline('kubernetes/konfersi'), ['breach', 47]);
-    assert.deepEqual(await baseline('kubernetes/event'), ['breach', 12]);
-    // A name that merely contains a program's word has no baseline: unavailable, never another program's.
+    // No listed id (Event left pilot, D-67; a name that merely contains a program's word): unavailable, never another program's baseline.
+    assert.deepEqual(await baseline('kubernetes/event'), ['unavailable', null]);
     assert.deepEqual(await baseline('kubernetes/event-konfersi-x'), ['unavailable', null]);
   } finally {
     h.done();
@@ -774,22 +774,26 @@ test('MCP crew_scorecard full: 2, 3, 4 and 5 programs stay under the result limi
     const sizes: number[] = [];
     for (let n = 2; n <= 5; n++) {
       if (n > 2) {
-        const id = `N${n}`;
+        // A big program: a chain of 600 lead sessions (each continues the one before; the program's `leads` lists them all), about 9,000 characters in the full form.
         const ins = h.db.prepare(
-          `INSERT INTO chat_sessions (id, workspace_id, title, state, state_since, created_at, last_activity_at, claude_id, parent_id, agent, max_workers, subagents) VALUES (?, 'docker/api', ?, ?, ?, ?, ?, 'c1', ?, ?, 2, 0)`,
+          `INSERT INTO chat_sessions (id, workspace_id, title, state, state_since, created_at, last_activity_at, claude_id, continued_from, max_workers, subagents) VALUES (?, 'docker/api', ?, ?, ?, ?, ?, 'c1', ?, 2, 0)`,
         );
-        ins.run(id, `title ${id}`, 'idle', iso(at(8)), iso(at(8)), iso(at(8)), null, null);
-        ins.run(`${id}w`, `title ${id}w`, 'idle', iso(at(7)), iso(at(7)), iso(at(7)), id, 'implementer');
-        h.db.prepare(`INSERT INTO chat_usage (at, at_ms, session_id, workspace_id, claude_id, model, cost_usd, requests, agents) VALUES (?, ?, ?, 'docker/api', 'c1', 'claude-opus-5-5', 1, 1, 0)`).run(iso(at(2)), at(2), id);
+        for (let i = 0; i < 600; i++) {
+          const id = `N${n}-${String(i).padStart(4, '0')}`;
+          ins.run(id, `title ${id}`, i === 599 ? 'idle' : 'ended', iso(at(20 - i / 100)), iso(at(20 - i / 100)), iso(at(20 - i / 100)), i === 0 ? null : `N${n}-${String(i - 1).padStart(4, '0')}`);
+        }
+        h.db.prepare(`INSERT INTO chat_usage (at, at_ms, session_id, workspace_id, claude_id, model, cost_usd, requests, agents) VALUES (?, ?, ?, 'docker/api', 'c1', 'claude-opus-5-5', 1, 1, 0)`).run(iso(at(2)), at(2), `N${n}-0599`);
       }
       const call = await mcp.call(admin.secret, 'crew_scorecard', { full: true });
       assert.ok(!refused(call), `${n} programs: refused: ${JSON.stringify(call).slice(0, 200)}`);
       const text = (call as any).result.content[0].text as string;
-      sizes.push(text.length);
-      assert.ok(text.length <= 20_000, `${n} programs: ${text.length} characters`);
+      const body = text.slice(text.indexOf('\n') + 1);
+      sizes.push(body.length);
+      assert.ok(body.length <= 19_000, `${n} programs: ${body.length} characters`);
       const full = where(call);
       assert.equal(full.programs.length + (full.omitted?.length ?? 0), n, `${n} programs: every program is either carried or named`);
-      assert.ok(full.programs.length >= 1);
+      assert.ok(full.programs.length >= 1, 'at least one program is carried');
+      if (n >= 3) assert.ok(full.omitted?.length > 0, `${n} programs go over 19,000 characters: the rest are named in omitted (${sizes.join(', ')})`);
       for (const id of full.omitted ?? []) {
         const one = await mcp.call(admin.secret, 'crew_scorecard', { full: true, program: id });
         assert.ok(!refused(one) && where(one).programs[0].program === id, `omitted ${id} can be asked for alone`);

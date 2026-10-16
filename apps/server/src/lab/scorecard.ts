@@ -676,11 +676,12 @@ export const D65 = {
   warnFrac: 0.8,
   /** Feature and task tickets done a day at the baseline (scorecard T-450, 24 h to 2026-10-15 11:00 UTC; all ticket types), by the lead's workspace name. */
   doneBaselines: [
-    // By exact workspace id, never a pattern on the name: ClaudePilot's own workspace is kubernetes/kohi-event, and /event/ would give it the Event program's 12.
+    // By exact workspace id, never a pattern on the name (a pattern on "event" gave kubernetes/kohi-event the Event program's 12).
+    // Source of the numbers: D-65 baseline (docs/dev-sessions/DECISIONS.md). The Event program left pilot (D-67), so it has no row.
+    // kubernetes/kohi-event is ClaudePilot's own workspace (deploy pipeline and continuation tests: PILOT_WORKSPACE, WORKSPACE): D-65's 48.
     { workspace: 'kubernetes/kohi-event', perDay: 48 },
-    { workspace: 'kubernetes/claudepilot', perDay: 48 },
+    // kubernetes/konfersi is Konfersi's workspace (chat/lineage.test.ts): D-65's 47.
     { workspace: 'kubernetes/konfersi', perDay: 47 },
-    { workspace: 'kubernetes/event', perDay: 12 },
   ],
   /** From the baseline down to this fraction of it is a warn; below it a breach. */
   doneBreachFrac: 0.5,
@@ -735,7 +736,7 @@ export function d65Targets(p: Program, facts: CrewFacts, rows: UsageRow[], win: 
   }
 
   // 4. Feature and task tickets done a day, against the baseline.
-  const ruleDone = 'Feature and task tickets done a day at or above the 2026-10-15 baseline (48 / 47 / 12 a day, all types: ClaudePilot / Konfersi / Event).';
+  const ruleDone = 'Feature and task tickets done a day at or above the 2026-10-15 baseline (48 / 47 a day, all types: ClaudePilot / Konfersi).';
   const wsName = facts.sessions.get(p.id)?.workspaceId ?? '';
   const base = D65.doneBaselines.find((b) => b.workspace === wsName);
   if (!done) out.push(unavailable('done_rate', ruleDone, 'no_source', SRC.tickets));
@@ -829,5 +830,5 @@ export const SCORECARD_BASIS: Record<string, string> = {
   perResolved: 'T-600 headline: the window’s dollars over its resolved tickets; unavailable (no_samples) with none. ESTIMATE.',
   createdPerClosed: 'T-600 headline: tickets created in the window over tickets closed (done plus won’t-do) in it; under 1 the backlog shrinks; unavailable (no_samples) with none closed. MEASURED.',
   targets: 'D-61 live workers and no Agent-tool sub-agents in a lead; D-62 the owner’s queue; D-63 QA and review on sonnet (a worker started with a why is not an offender). Live workers are measured now; the rest over the window.',
-  d65: 'D-65 (T-549): cost per done under 8 USD, lead share under 30 %, QA on opus under 10 %, feature and task done a day over the 48 / 47 / 12 baseline, no quota over 30 % unused at reset, wasted tool calls (error results) under 3 %. Warn from 80 % of a ceiling.',
+  d65: 'D-65 (T-549): cost per done under 8 USD, lead share under 30 %, QA on opus under 10 %, feature and task done a day over the 48 / 47 baseline, no quota over 30 % unused at reset, wasted tool calls (error results) under 3 %. Warn from 80 % of a ceiling.',
 };
