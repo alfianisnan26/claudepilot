@@ -553,7 +553,7 @@ test('T-781: an interrupt that throws synchronously does not block the move', as
 
 test('T-781: a chat that is switching is not hard-moved, however quiet', async () => {
   const r = await rig(AUTO, EXHAUSTED);
-  r.chat.sessions.set('s1', STUCK({ switching: true }));
+  r.chat.sessions.set('s1', STUCK({ switching: { toClaude: 'home', step: 'starting' } }));
   r.chat.stored('s1', [{ at: at(-30) }]);
   await r.engine.evaluate('s1');
   await r.engine.settled();
