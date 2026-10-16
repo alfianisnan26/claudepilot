@@ -17,7 +17,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 ## IN FLIGHT (6 of 6, D-71)
   Lanes' ticket_comment refused on unassigned tickets (T-341, T-549, T-675): verdicts live in their replies + this file.
 - QA PERF 7e4879c7: reviews T-610 CHANGES; T-251 S2, T-681, T-325 S1, T-379 S2 APPROVE; T-549 S2 CHANGES -> T-739 (cost 7161); now VERIFY T-697 a84a51b3.
-- QA UI 8b13bb5a: T-710, T-675, T-416 S1, T-341 (-> T-736 high), T-524 S3 APPROVE; pre-read S4 6 concerns (7162; B1 edit additive, ok); waits S4 DONE.
+- QA UI 8b13bb5a: T-710, T-675, T-416 S1, T-341 (-> T-736 high), T-524 S3 APPROVE; pre-read S4 (7162; B1 additive ok); T-732 plan 7210 (chip has NO focus ring: normal) -> Impl lane after S4; waits S4.
 - QA BE 2 42e5408f: T-401 CHANGES (7103); T-426 S1e CHANGES (7121); probe plan 7147; review T-697 APPROVE (gaps T-733 7172); now VERIFY T-574 S3 d97cbb16.
 - IMPL lane 0d799c90 (sonnet) T-376 S4 87144867: wiring proven (3fa76653); long task 207-273ms red 1-2/4 (a435d70e) -> one try content-visibility (6952); wiring
   test + 4x CPU, long-task, DOM/heap, older-page budgets; if still red -> QA UI as is, budget question -> coordinator.
