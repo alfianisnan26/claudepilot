@@ -241,7 +241,7 @@ unset t
 pool_refs=
 for n in $pool_names; do
   secret="$secret"$'\n'"$n=${!n}"; mask="$mask"$'\n'"${!n}"
-  pool_refs="$pool_refs\\n            - {name: $n, valueFrom: {secretKeyRef: {name: $job, key: $n}}}"
+  pool_refs="$pool_refs\\n            - {name: JR_POOL_$n, valueFrom: {secretKeyRef: {name: $job, key: $n}}}"
 done
 pool_refs=${pool_refs#\\n}
 [ -n "$pool_refs" ] || pool_refs='            # no --pool-env'
@@ -393,8 +393,14 @@ if [ -n "$artifacts" ] && [ -s "$work/art.b64" ]; then
   # scan what was unpacked for each value (the values on stdin, never in argv), delete a file that has one, and fail.
   if [ -n "$pool_names" ]; then
     vals=; for n in $pool_names; do vals="$vals${!n}"$'\n'; done
-    hits=$(printf '%s' "$vals" | grep -rlaF -f - -- "$out" 2>/dev/null || true); unset vals
-    if [ -n "$hits" ]; then
+    # Fail closed (as the fetch scan, T-401): grep 0 = found, 1 = clean, 2 or more = the scan failed: nothing is known to be clean, so every
+    # file unpacked is deleted and the run is red (rc 3).
+    gst=0; hits=$(printf '%s' "$vals" | grep -rlaF -f - -- "$out" 2>/dev/null) || gst=$?; unset vals
+    if [ "$gst" -ge 2 ]; then
+      while IFS= read -r -d '' f; do rm -f -- "$f"; done < <(find "$out" -type f -print0 2>/dev/null)
+      echo "job-run: ERROR: with --pool-env the artifacts could not be checked for the credentials (the scan failed): all deleted" >&2
+      [ "$rc" != 0 ] || rc=3
+    elif [ -n "$hits" ]; then
       while IFS= read -r f; do rm -f -- "$f"; echo "job-run: ERROR: a --pool-env credential was in the artifact $f: deleted" >&2; done <<<"$hits"
       [ "$rc" != 0 ] || rc=3
     fi

@@ -172,7 +172,8 @@ scripts/job-run.sh --list ; scripts/job-run.sh --stop --chat <session id>
   workspace's Secrets pool, today Konfersi's stg e2e and Lighthouse behind Cloudflare Access:
   `scripts/job-run.sh --pool-env E2E_CF_ACCESS_CLIENT_ID --pool-env E2E_CF_ACCESS_CLIENT_SECRET -- 'scripts/e2e-stg.sh'`. Only
   `E2E_CF_ACCESS_*` names are accepted, and the variable must be set in the workspace; anything else is refused (exit 2) before a Job is made.
-  The unknown-option branch and the `--pool-env` name check never show what they refuse (it may be a pasted value; an argument is named only
+  An unknown option now gets a quieter message than before (T-426: it names the argument only when it is a plain `--option`, otherwise it says
+  an option is not known and shows nothing of it). The unknown-option branch and the `--pool-env` name check never show what they refuse (it may be a pasted value; an argument is named only
   when it is a plain `--option`), but other options' messages still show their own value (`--ref ... (got X)`): never paste a value into any
   option. A value under 8 characters is refused (the log mask skips those), and so is a command that holds a value: write the variable in single
   quotes (`'$E2E_CF_ACCESS_CLIENT_SECRET'`) so the Job expands it, not your shell. The value goes on stdin into the Job's Secret. The Job is applied
@@ -183,15 +184,19 @@ scripts/job-run.sh --list ; scripts/job-run.sh --stop --chat <session id>
   and the reap only removes Jobs whose owner is the same host, on the next `job-run.sh` run there. If none runs (the workspace pod was
   replaced), the Job and its Secret stay until a person runs `--stop` or deletes them. A Job that was released and is running does end by its
   deadline and TTL. (Widening the reap to suspended Jobs of any host is a separate ticket.) A value that is not printable ASCII is refused
-  (kubectl's env-file parser may print such a line), and kubectl's error text for the Secret is never shown. The `run` container gets it as env by `secretKeyRef` and the `fetch` container does
+  (kubectl's env-file parser may print such a line), and kubectl's error text for the Secret is never shown. The `run` container gets it by `secretKeyRef` as `JR_POOL_<name>` and the `fetch` container does
   not; this is the reverse of the git and npm tokens, on purpose. It is never on a command line or in the manifest, and the streamed log is masked
-  for it. Limits: (1) the `run` container's `npm rebuild`, every dependency's install script and the package's lifecycle scripts can read the
-  value (so only scoped `E2E_CF_ACCESS_*` test credentials may be passed; `--steps none` when the dependencies are already installed); (2) the
+  for it. The run script moves each value out of the environment into a shell array at start, and exports `<name>` only for the command (after
+  `npm rebuild` and the lifecycle scripts, T-426 S1f), so the install steps do not inherit it. Limits: (1) the shell's own start-up environment
+  (`/proc/1/environ`) still holds the value, so code that reads it still can (only scoped `E2E_CF_ACCESS_*` test credentials may be passed;
+  `--steps none` when the dependencies are already installed); (2) the
   raw Job log in the cluster is unmasked until the Job is cleaned up (TTL), only the streamed copy is masked; (3) after unpacking `--out`, the
   script scans the files for each value, deletes a file that holds one, names it (never the value) and exits 3 when the command had passed; the
   scan finds plain text only, so with `--pool-env` every compressed file of a known format is deleted the same way, rc 3, never read: by extension (`.zip .gz .tgz .bz2
   .xz .zst .br .7z .jar`) or by magic bytes (zip, gzip, bzip2, xz, zstd; a renamed file too), such as a Playwright `trace.zip` or the report's
-  `data/*.zip`. Not seen: other formats (a renamed 7z or lz4, a `.Z`, deflate streams inside a PDF or PNG), and an encoded value, such as base64
+  `data/*.zip`. The `--out` scan fails closed: when grep itself fails (exit 2 or more) every unpacked file is deleted and the run ends 3. This is
+  a different scan from the credential check of T-401: that one runs in the `fetch` container, reads `.gz` and `.tgz` files and covers the tree
+  the command gets; the `--out` scan (T-426, in `job-run.sh`) covers the artifacts coming back and deletes compressed files unread. Not seen: other formats (a renamed 7z or lz4, a `.Z`, deflate streams inside a PDF or PNG), and an encoded value, such as base64
   in a HAR or inside the Playwright HTML report's `index.html` (it can embed the report as a base64 zip). Switch the trace off or leave zips and
   the HTML report out of `--artifacts`; `job-out/` is git-ignored (an `--out` elsewhere is not); (4) the script refuses to run under
   `bash -x` / xtrace, which would print the values.

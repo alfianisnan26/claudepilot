@@ -801,10 +801,11 @@ test('T-426 --pool-env: the value goes on stdin into the Secret and reaches the 
   const m = yamlLoad(text) as Manifest;
   const job = m.metadata.name;
   // The run container: one secretKeyRef per name (the repeat is dropped), the key is the name.
-  const refs = container(m).env.filter((e) => e.name.startsWith('E2E_CF_ACCESS_'));
+  // (named JR_POOL_<name> in the container env: the run script moves them out of the environment until the command, S1f)
+  const refs = container(m).env.filter((e) => e.name.startsWith('JR_POOL_'));
   assert.deepEqual(refs, [
-    { name: POOL_SECRET, valueFrom: { secretKeyRef: { name: job, key: POOL_SECRET } } },
-    { name: POOL_ID, valueFrom: { secretKeyRef: { name: job, key: POOL_ID } } },
+    { name: `JR_POOL_${POOL_SECRET}`, valueFrom: { secretKeyRef: { name: job, key: POOL_SECRET } } },
+    { name: `JR_POOL_${POOL_ID}`, valueFrom: { secretKeyRef: { name: job, key: POOL_ID } } },
   ]);
   assert.deepEqual(Object.keys(fetchEnvOf(m)).filter((n) => n.startsWith('E2E_')), [], 'the fetch container does not get them');
   // The Secret (on stdin) holds them; nothing else does.
@@ -982,6 +983,35 @@ test('T-426 --pool-env: a clean artifact set keeps rc 0, and the packed copy (ar
   assert.ok(existsSync(join(out, 'reports/junit.xml')), 'the clean artifact is kept');
   assert.ok(existsSync(join(w.root, 'scan-ran')), 'the scan ran (the shim saw it)');
   assert.equal(readFileSync(join(w.root, 'art-seen'), 'utf8'), '', 'art.b64 was already deleted when the scan ran (the file is made empty by the redirect either way)');
+});
+
+// S1f (review 7121): the --out scan fails closed; an encoded copy is a known limit.
+test('T-426 --pool-env: a scan that fails (grep exit 2) is red, rc 3, and every unpacked artifact is deleted (never "clean")', () => {
+  const w = world();
+  const secret = `cs${hex(20)}`;
+  const shim = join(w.root, 'bin/grep');
+  writeFileSync(shim, '#!/bin/bash\nif [ "$1" = -rlaF ]; then echo "grep: scan stub failed" >&2; exit 2; fi\nexec /bin/grep "$@"\n');
+  chmodSync(shim, 0o755);
+  const out = join(w.root, 'out');
+  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--pool-env', POOL_SECRET, '--artifacts', 'reports', '--out', out, '--', 'true'], { [POOL_SECRET]: secret });
+  assert.equal(r.code, 3, r.out);
+  assert.match(r.out, /the artifacts could not be checked for the credentials \(the scan failed\): all deleted/);
+  assert.ok(!existsSync(join(out, 'reports/junit.xml')), 'the unchecked artifact is deleted');
+  assert.ok(!r.out.includes(secret), 'the value is not shown');
+});
+
+test('T-426 --pool-env: a base64 copy of a value in an artifact is NOT caught (a known limit, docs/dev-session.md); the plain value is', () => {
+  const w = world();
+  const secret = `cs${hex(20)}`;
+  const art = join(w.root, 'art-b64');
+  mkdirSync(join(art, 'reports'), { recursive: true });
+  writeFileSync(join(art, 'reports/encoded.txt'), `authorization: ${Buffer.from(secret).toString('base64')}\n`);
+  const tgz = spawnSync('tar', ['-czf', '-', '-C', art, 'reports']).stdout.toString('base64');
+  writeFileSync(join(w.root, 'scenario.json'), JSON.stringify({ rc: 0, log: `=== JOB-RUN ARTIFACTS BEGIN\n${tgz}\n\n=== JOB-RUN ARTIFACTS END\n=== JOB-RUN EXIT 0\n` }));
+  const out = join(w.root, 'out');
+  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--pool-env', POOL_SECRET, '--artifacts', 'reports', '--out', out, '--', 'true'], { [POOL_SECRET]: secret });
+  assert.equal(r.code, 0, r.out);
+  assert.ok(existsSync(join(out, 'reports/encoded.txt')), 'an encoded copy passes the scan: documented limit');
 });
 
 // S1d (review 5777): the failure paths of the Secret. Each exits non-zero, shows no value, and leaves no Job or Secret behind.

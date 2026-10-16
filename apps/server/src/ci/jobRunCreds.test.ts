@@ -90,6 +90,7 @@ uc=; prev=
 for a in "$@"; do [ "$prev" = --userconfig ] && uc=$a; prev=$a; done
 [ -z "\${STUB_LEAK:-}" ] || cat "${tokfile}" >&2
 case "$*" in *--prefer-offline*) if [ -n "\${STUB_MISS:-}" ]; then echo "npm ERR! code ENOTCACHED" >&2; exit 1; fi ;; esac
+echo "npm $* pool=\${E2E_CF_ACCESS_CLIENT_ID:+set}" >> "${calls}.pool"
 echo "npm $* ${probe}" >> "${calls}"
 mkdir -p node_modules
 `);
@@ -324,4 +325,19 @@ test('T-401 gate cache miss: npm ci failing in the gate container (a package not
   assert.match(v.stdout, /^GATE-VERDICT: red: npm-ci failed\n$/);
   // The gate container says why, in words, before the end of that log.
   assert.match(readFileSync(GATE, 'utf8'), /echo "=== npm ci failed in the gate container: it has no credential and installs from the cache.*is red, never skipped"/);
+});
+
+test('T-426 S1f --pool-env: the install steps (npm rebuild, lifecycle scripts) see no pool variable; only the command does', () => {
+  const w = world();
+  const id = `ci${hex(12)}`;
+  const pool = `${w.root}/calls.pool`;
+  const cmd = Buffer.from(`echo "cmd value=$E2E_CF_ACCESS_CLIENT_ID" >> "${pool}"`).toString('base64');
+  const { r } = w.pod({ JR_POOL_E2E_CF_ACCESS_CLIENT_ID: id, JR_CMD: cmd });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  const lines = readFileSync(pool, 'utf8').trim().split('\n').map(noUc);
+  // npm ci ran in fetch (no pool variable there at all); rebuild and the two lifecycle scripts ran in the run container: still none.
+  assert.ok(lines.some((l) => l.startsWith('npm rebuild')) && lines.some((l) => l.includes('postinstall')), lines.join('\n'));
+  for (const l of lines.filter((x) => x.startsWith('npm '))) assert.ok(l.endsWith('pool='), `no pool variable during install: ${l}`);
+  assert.equal(lines[lines.length - 1], `cmd value=${id}`, 'the command step gets the value');
+  assert.ok(!(r.stdout + r.stderr).includes(id));
 });

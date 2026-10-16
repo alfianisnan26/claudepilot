@@ -219,6 +219,13 @@ spec:
               mkdir -p "$HOME"
               # Defined and empty: a repository's .npmrc with an auth line `${NODE_AUTH_TOKEN}` (ClaudePilot's) is refused by npm when it is not set.
               export NODE_AUTH_TOKEN=
+              # --pool-env (T-426): the container env holds each value as JR_POOL_<name>. At once they move into a shell array (not exported) and
+              # leave the environment, so npm rebuild and the commit's lifecycle scripts do not inherit them; pool_on exports them for the
+              # command alone. Known limit: this shell's own start-up environment (/proc/1/environ) still holds them: not hidden from code that reads it.
+              declare -A jr_pool=()
+              for v in $(compgen -e); do case $v in JR_POOL_E2E_CF_ACCESS_*) jr_pool[${v#JR_POOL_}]=${!v}; unset "$v" ;; esac; done
+              pool_on() { local k; for k in "${!jr_pool[@]}"; do export "$k=${jr_pool[$k]}"; done; }
+              pool_off() { local k; for k in "${!jr_pool[@]}"; do unset "$k"; done; }
               cat "$root/fetch.log" 2>/dev/null
               frc=$(cat "$root/fetch.rc" 2>/dev/null || true)
               if [ "$frc" != 0 ]; then [ -n "$frc" ] || echo "job-run: the fetch left no exit code"; say "EXIT ${frc:-1}"; exit "${frc:-1}"; fi
@@ -237,6 +244,7 @@ spec:
               fi
               t2=$(date +%s); say "steps ($JR_STEPS) in $((t2 - t1))s; running the command"
               cd "$root/w/$main" && printf '%s' "$JR_CMD" | base64 -d > "$root/cmd.sh"
+              pool_on
               bash -o pipefail "$root/cmd.sh"; rc=$?
               t3=$(date +%s)
               if [ -n "$JR_ARTIFACTS" ]; then
@@ -257,6 +265,7 @@ spec:
                 # Fetched by the fetch container (it has the credential); none here.
                 afull=$(git rev-parse -q --verify refs/job-run/against) || noproof "-" "$JR_AGAINST is not on the remote (use a full commit hash or a branch)" 2
                 asha=$(git rev-parse --short "$afull")
+                pool_off # the install below (npm ci, install scripts) runs without them; the command gets them back
                 git checkout -q -f "$afull" || noproof "-" "cannot check out $JR_AGAINST" 2
                 # shellcheck disable=SC2086 # a list of paths
                 if [ -n "${JR_KEEP:-}" ]; then git checkout -q "$refsha" -- $JR_KEEP || noproof "-" "kept test path not at $JR_REF: $JR_KEEP" 2; fi
@@ -266,7 +275,7 @@ spec:
                   npm ci --ignore-scripts --prefer-offline --no-audit --no-fund --loglevel=error || { rc=$?; say "npm ci failed on $JR_AGAINST (rc=$rc): this container has no credential, so a package missing from npm's cache (the fetch container filled it) is red, never skipped"; say "EXIT $rc"; exit "$rc"; }
                   installscripts "$root/w/$main" "$main"
                 fi
-                tA=$(date +%s)
+                tA=$(date +%s); pool_on
                 bash -o pipefail "$root/cmd.sh"; rc2=$?
                 say "SUMMARY-AGAINST $main@$asha tests-from=$sha kept=${JR_KEEP:-none} run=$(( $(date +%s) - tA ))s rc=$rc2"
                 if [ "$rc1" -ne 0 ]; then say "PROOF: NO PROOF: it fails on $JR_REF ($sha) already (rc=$rc1)"; rc=1
