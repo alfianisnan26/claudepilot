@@ -16,9 +16,9 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 ## IN FLIGHT (6 of 6, D-71)
   Lanes' ticket_comment refused on unassigned tickets (T-341, T-549, T-675): verdicts live in their replies + this file.
 - QA PERF 7e4879c7: T-697 PASS WITH GAPS (b33f46ad; T-733 7310); gate b19 refused (allow list); review T-736 CHANGES (sibling scripts,
-  guard fails open) -> T-736 S2 7336; now no-Job plan T-739 B (index migration, budget, tests).
+  guard fails open) -> T-736 S2 7336; plan T-739 B 7349; now no-Job plan T-733 slices.
 - QA UI 8b13bb5a: T-376 S4 PASS WITH GAPS (1025f2a0; red 203-209ms; S4b: dist deletion, drop Vary wrapper, 7318); S5 plan 7324
-  (windowed rows; waits coordinator budget 7264); now no-Job plan T-723 (actor per site + mutants).
+  (windowed rows; waits coordinator budget 7264); plan T-723 7348; now no-Job plan T-524 S3c.
 - QA BE 2 42e5408f: T-574 S3 PASS WITH GAPS (T-733 7255); T-401 fix PASS WITH GAPS -> S2b; T-736 PASS WITH GAPS (b09d2de1) -> S2; now VERIFY T-401 S2b a4ad3052.
 - IMPL lane 65dd09f6 (sonnet, satria; 0d799c90 ended: T-376 S4 BLOCKED 5b095822, long task red 11/12 207-466ms, older page red 7/12,
   content-visibility reverted; -> QA UI as is, budgets -> coordinator T-376 7264) T-732 items 1-5 (plan 7210) on ticket/T-732-ci-focus-ring.
