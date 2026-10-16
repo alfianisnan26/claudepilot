@@ -158,7 +158,7 @@ test('T-881: another pool’s revisions never reach this workspace’s allowlist
   }
 });
 
-test('T-881: drafts, revisions waiting for review and rejected ones are never admitted', async () => {
+test('T-881: drafts and revisions waiting for review are never admitted', async () => {
   const h = await browserHarness();
   try {
     const p = h.create('Dev browser', {});
@@ -170,12 +170,12 @@ test('T-881: drafts, revisions waiting for review and rejected ones are never ad
     copy(2, 'draft', 1);
     bump(h, p.id, 3); // revision 3: deliverable and current
     const r3 = dirsOf(h)[0]!;
-    copy(4, 'rejected', 1);
+    copy(4, 'draft', 1); // (the store has no 'rejected' status: a CHECK allows draft, waiting_review and deliverable)
     copy(5, 'waiting_review', 1);
     copy(6, 'deliverable', 3);
     sql.prepare('UPDATE pools SET current_revision = 6 WHERE id = ?').run(p.id);
     const got = dirsOf(h);
-    assert.equal(got.length, 3, `revision 6 and the deliverable r3 and r1: not the draft (2), rejected (4) or waiting (5); got ${JSON.stringify(got)}`);
+    assert.equal(got.length, 3, `revision 6 and the deliverable r3 and r1: not the drafts (2, 4) or waiting (5); got ${JSON.stringify(got)}`);
     assert.ok(got.includes(r1) && got.includes(r3));
   } finally {
     h.done();
