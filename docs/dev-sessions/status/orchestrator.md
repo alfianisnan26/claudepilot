@@ -1,4 +1,4 @@
-# orchestrator status (2026-10-16 05:00 UTC, session 355881a3, continuation of de232389)
+# orchestrator status (2026-10-16 05:20 UTC, session 355881a3, continuation of de232389)
 
 Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-10-15 DONE batches 1-7: see 4fbab374). Hand-overs: ab99b45, bb58413, 639202e.
 
@@ -18,10 +18,11 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - QA PERF 7e4879c7: T-697 29b4ce58 (test-only actions.test fix; limits + G3 not reproduced; 30x under load asked; lead
   quick-check PASS 12295a2b). Then T-524 S3b 23330c28 (test-only +25: name pin, no-patch-on-top-fail; src/ci 208/208 job
   54784775; mutants D,F killed f69b2de3). Live re-read patch NOT verified. 6775 was WRONG (rule set at creation, 78%): 6788.
-- QA UI 8b13bb5a: standby; next T-710 re-sweep on bccb756f DONE (told 04:01).
+- QA UI 8b13bb5a: T-710 re-sweep of 8107098a (impl DONE: ci-sweep.mjs, 44 px steps/picker, focus ring; job 3c8d8a0f rc 0;
+  shots not found); lead quick-check running (qc-t710).
 - QA BE 2 42e5408f: T-251 verify at 7dcf19f8 (lane audit: all 5 reqs already built, no code, nothing run; mutants M1-M6), then T-574 S3.
-- IMPL bccb756f (sonnet, rossi) T-710 on ticket/T-710-ci-sweep from wip/qa-t710-8bb9a2c: seeded run with jobs/steps/log,
-  every control 390/1280 light/dark, Tab/focus pass, fixes in slice.
+- IMPL lane 0d799c90 (sonnet, rossi; bccb756f ended after T-710) T-376 S4 on ticket/T-376-s4 from be431d6a: createApp wiring
+  test + 4x CPU, long tasks, DOM/heap, older-page render budgets.
 - BE INFRA lane c305a138 (sonnet, satria; 4d010bea ended after T-251 audit) T-610 on ticket/T-610-cost-attribution from be431d6a.
 - BACKEND lane 216dbe18 (sonnet, regitha) T-574 S3 on ticket/T-574-s3 from integration: cross-lead NOT_FOUND test, size trim
   toward 600 avg, bound back toward 1.5k.
@@ -69,7 +70,6 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 1. Merges: T-401 060aca4 (ack 4941) -> T-426 S1e -> T-379 S2 3f11b28 (PASS 4948, review 4938); deploys are the coordinator's.
 2. On PASS: T-697, T-549 S2, T-376 S3 -> gate, merge. BE Infra after T-549 S2: T-524 S3b.
    T-710 sweep PASS WITH GAPS 6737 (job abef017c); harness slice in flight, then QA UI re-sweep. Then T-376 S3, T-549 S2, T-697 -> QA.
-   T-376 S4 (6798: createApp wiring test; 4x CPU, long tasks, DOM/memory, older-page render) -> next implementer slot.
 3. T-675 (memory findings 4/5 + R2 test, Backend lane), T-574 S3 (6615), T-416 S2 (Bypass restore).
 4. RTK: T-340 (hook change landed by a person/coordinator) -> T-341 merge -> T-306 item 3 (lab A/B). 5. T-537. 6. T-513.
 7. T-472 live re-check (needs portal_status), T-422, T-147, T-438, T-425, T-436, T-437, T-432, T-382, T-377, T-386, T-409, T-402, T-398,
