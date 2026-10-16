@@ -15,6 +15,11 @@ export interface VaultSettings {
   rewriteLinksOnRename: boolean;
   /** What notes are called in lists and the graph: their file name, or their first heading. */
   labels: 'filename' | 'heading';
+  /**
+   * T-436: the workspaces (`<target>/<name>`) whose agents may reach this vault. A session's agent token is bound at mint to the vaults that list
+   * its workspace; a vault with no list is reached by no agent. Absent on the wire reads as none.
+   */
+  agentWorkspaces?: string[];
 }
 
 export interface VaultCounts {

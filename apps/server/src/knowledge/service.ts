@@ -91,7 +91,8 @@ interface VaultRow {
   deleted_at: string | null;
 }
 
-const DEFAULT_SETTINGS: VaultSettings = { attachmentsFolder: '', rewriteLinksOnRename: true, labels: 'filename' };
+const DEFAULT_SETTINGS: VaultSettings = { attachmentsFolder: '', rewriteLinksOnRename: true, labels: 'filename', agentWorkspaces: [] };
+const WORKSPACE_KEY = /^[A-Za-z0-9][A-Za-z0-9._-]{0,62}\/[A-Za-z0-9][A-Za-z0-9._-]{0,62}$/;
 const DAY = 86_400_000;
 /** The most a note embed returns (`![[Note]]` shows a note inside another). */
 const EMBED_CHARS = 40_000;
@@ -211,6 +212,7 @@ export class KnowledgeService {
         attachmentsFolder: typeof raw.attachmentsFolder === 'string' ? raw.attachmentsFolder : DEFAULT_SETTINGS.attachmentsFolder,
         rewriteLinksOnRename: typeof raw.rewriteLinksOnRename === 'boolean' ? raw.rewriteLinksOnRename : DEFAULT_SETTINGS.rewriteLinksOnRename,
         labels: raw.labels === 'heading' ? 'heading' : 'filename',
+        agentWorkspaces: Array.isArray(raw.agentWorkspaces) ? raw.agentWorkspaces.filter((w): w is string => typeof w === 'string') : [],
       };
     } catch {
       return { ...DEFAULT_SETTINGS };
@@ -260,6 +262,16 @@ export class KnowledgeService {
     });
     this.#vaults.set(row.id, vault);
     return vault;
+  }
+
+  /** T-436: called after a vault's list of agent workspaces changes, so the live agent tokens are rebound (index.ts wires it). */
+  onAgentWorkspacesChange?: () => void;
+
+  /** T-436: the ids of the vaults whose agent workspaces list names this workspace: what a session token of that workspace is bound to. Empty when none does. */
+  vaultsForWorkspace(workspaceId: string): string[] {
+    return this.#rows()
+      .filter((r) => (this.#settings(r).agentWorkspaces ?? []).includes(workspaceId))
+      .map((r) => r.id);
   }
 
   /** A vault by id or exact name, among those the caller may see. */
@@ -414,6 +426,7 @@ export class KnowledgeService {
     if (!this.store.writable) throw new KnowledgeError('UNAVAILABLE', 'The portal’s database isn’t available for changes.');
     const next = { ...row };
     const changes: string[] = [];
+    let rebind = false;
     if (req.name !== undefined) {
       next.name = this.#validName(req.name, id);
       changes.push('name');
@@ -436,12 +449,18 @@ export class KnowledgeService {
       if (s.attachmentsFolder !== undefined) cur.attachmentsFolder = typeof s.attachmentsFolder === 'string' ? cleanPath(s.attachmentsFolder.trim(), { strict: true, folder: true }) : cur.attachmentsFolder;
       if (s.rewriteLinksOnRename !== undefined) cur.rewriteLinksOnRename = s.rewriteLinksOnRename === true;
       if (s.labels !== undefined) cur.labels = s.labels === 'heading' ? 'heading' : 'filename';
+      if (s.agentWorkspaces !== undefined) {
+        if (!Array.isArray(s.agentWorkspaces) || s.agentWorkspaces.some((w) => typeof w !== 'string' || !WORKSPACE_KEY.test(w))) throw new KnowledgeError('INVALID_INPUT', 'Agent workspaces are a list of `<target>/<name>`.');
+        cur.agentWorkspaces = [...new Set(s.agentWorkspaces)].sort();
+        rebind = true;
+      }
       next.settings = JSON.stringify(cur);
       changes.push('settings');
     }
     next.updated_at = this.#now().toISOString();
     db.prepare('UPDATE kg_vaults SET name = ?, agents = ?, daily_folder = ?, timezone = ?, settings = ?, updated_at = ? WHERE id = ?').run(next.name, next.agents, next.daily_folder, next.timezone, next.settings, next.updated_at, id);
     if (changes.length) this.journal.audit({ vaultId: id, actor: actor.id, op: 'vault.update', outcome: 'ok', detail: changes.join(', ') });
+    if (rebind) this.onAgentWorkspacesChange?.();
     return this.#summary(next);
   }
 
