@@ -13,13 +13,19 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   Lanes' ticket_comment refused on unassigned tickets (T-341, T-549, T-675): verdicts live in their replies + this file.
 - T-574: batch 8 gate RED (sessionStartParent.test.ts:71, family workers not an array; 6396) -> BACKEND lane 06e9ff5c (sonnet,
   respawned) on ticket/T-574-s2 from 124ca45f: keep the array, cap/cut tests, whole src/chat + portalmcp in a Job.
-- T-633 S2 0a5b686a DONE (6400; G3 waits on the timer, H1/H2 tests; x20 under load 0 fails) -> QA Perf 7e4879c7 delta (+ whole src/chat).
-- T-549 70b081f8 (6378): QA BE 2 42e5408f backend check running; QA UI PASS WITH GAPS (job f7730a9b; long id wrap
-  + D-65 harness assertions not run). Then T-341 docfix 2ed9bc64 delta (counts differ from QA's) queued on QA BE 2.
+- BATCH 10 wip/main-c57ab11 = T-633 S2 0a5b686a (QA Perf PASS 6523: old G3 8/20 fail under load, fixed 0/20): GATE RUNNING;
+  close T-633 on green merge. QA Perf next: T-524 S3 when delivered.
+- T-549 70b081f8: QA BE 2 FAIL crit 2 (full form 18,539 chars at 2 programs, ~27k at 3; job 96771ba8), mutant B (exact ceiling)
+  survives, done_rate baseline regex gives kubernetes/kohi-event (ClaudePilot) Event's 12/day. QA UI PASS WITH GAPS (f7730a9b).
+  Lead refused on T-549 too (unassigned). S2 (size test 3-5 programs + shrink/page, boundary test, baseline by program id) ->
+  BE Infra lane after T-524 S3, fresh branch from 70b081f8.
+- T-341 docfix 2ed9bc64: QA BE 2 PASS (recount: author right, QA's 10/4/1 a miscount; ls 25.0% vs 26.1% = one root entry
+  differs between clones). -> batch 11 after batch 10's gate (hook installed nowhere; D not verified stays a person's).
+- QA BE 2 idle: next T-574 S2. QA UI idle: next T-681.
 - T-524 measured FAIL 6488 (master peak 87% > 85%; ~1/3 of Jobs on master) -> decision 6489 (a): BE INFRA lane f5aded2f
   (sonnet, respawned) on ticket/T-524-s3: Jobs off master over the T-611 line (required) + OOM-report test.
-- T-376 harness tools/qa/chat-open.mjs 982c527f DONE (6474, 6490: FAIL on today's code: no "Show all (", oldest not reached in 120 s)
-  -> QA UI 8b13bb5a: QA the harness + T-376 verdict on the integration head. Impl ff009a65 ended.
+- T-376 QA UI FAIL 6542 (job 1a3f4179 on 2611d173 = integration + harness 982c527f): open pulls ~14 MB (events read 4.7 KB),
+  first row 2.5-9.6 s, no "Show all (", oldest not reached in 120 s. Decision 6543: S3 app fix + harness logging, next impl slot.
 - IMPL d5c6f211 (sonnet) on ticket/T-681-ci-44px: CI Runs filter + back link to 44 px at 390.
 - T-675 (unassigned, lead refused): findings 4/5 on T-416 6385, R2 on 6420.
 - HELD: T-426 S1e 2174eee1 QA PASS 6169 -> merge on the T-401 ack (4941). T-578 51f6c153 review CHANGES 6168 -> owner decision.
