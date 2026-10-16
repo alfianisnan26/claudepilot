@@ -13,7 +13,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   Lanes' ticket_comment refused on unassigned tickets (T-341, T-549, T-675): verdicts live in their replies + this file.
 - T-574: batch 8 gate RED (sessionStartParent.test.ts:71, family workers not an array; 6396) -> BACKEND lane 06e9ff5c (sonnet,
   respawned) on ticket/T-574-s2 from 124ca45f: keep the array, cap/cut tests, whole src/chat + portalmcp in a Job.
-- T-633 S2 0a5b686a DONE (6400; G3 waits on the timer, H1/H2 tests; x20 under load 0 fails) -> QA Perf 7e4879c7 delta (+ whole src/chat).
+- BATCH 10 wip/main-c57ab11 = T-633 S2 0a5b686a (QA Perf PASS 6523: old G3 8/20 fail under load, fixed 0/20): GATE RUNNING;
+  close T-633 on green merge. QA Perf next: T-524 S3 when delivered.
 - T-549 70b081f8 (6378): QA BE 2 42e5408f backend check running; QA UI PASS WITH GAPS (job f7730a9b; long id wrap
   + D-65 harness assertions not run). Then T-341 docfix 2ed9bc64 delta (counts differ from QA's) queued on QA BE 2.
 - T-524 measured FAIL 6488 (master peak 87% > 85%; ~1/3 of Jobs on master) -> decision 6489 (a): BE INFRA lane f5aded2f
