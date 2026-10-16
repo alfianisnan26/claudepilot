@@ -127,7 +127,6 @@ const SECRET_VALUES = String(flag('--redact-env') || '')
   .map((n) => process.env[n])
   .filter((v) => typeof v === 'string' && v.length >= 8)
   .flatMap((v) => parsedForms(v))
-  .filter((v) => v.length >= 8)
   .flatMap((v) => [v, JSON.stringify(v).slice(1, -1), encodeURIComponent(v)])
   .filter((v, i, all) => v.length >= 8 && all.indexOf(v) === i)
   .sort((a, b) => b.length - a.length);
