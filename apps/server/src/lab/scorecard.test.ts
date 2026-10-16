@@ -782,6 +782,10 @@ test('MCP crew_scorecard full: 2, 3, 4 and 5 programs stay under the result limi
           const id = `N${n}-${String(i).padStart(4, '0')}`;
           ins.run(id, `title ${id}`, i === 599 ? 'idle' : 'ended', iso(at(20 - i / 100)), iso(at(20 - i / 100)), iso(at(20 - i / 100)), i === 0 ? null : `N${n}-${String(i - 1).padStart(4, '0')}`);
         }
+        // A program needs a worker: one under the last lead.
+        h.db.prepare(
+          `INSERT INTO chat_sessions (id, workspace_id, title, state, state_since, created_at, last_activity_at, claude_id, parent_id, agent) VALUES (?, 'docker/api', 'w', 'idle', ?, ?, ?, 'c1', ?, 'implementer')`,
+        ).run(`N${n}w`, iso(at(3)), iso(at(3)), iso(at(3)), `N${n}-0599`);
         h.db.prepare(`INSERT INTO chat_usage (at, at_ms, session_id, workspace_id, claude_id, model, cost_usd, requests, agents) VALUES (?, ?, ?, 'docker/api', 'c1', 'claude-opus-5-5', 1, 1, 0)`).run(iso(at(2)), at(2), `N${n}-0599`);
       }
       const call = await mcp.call(admin.secret, 'crew_scorecard', { full: true });
