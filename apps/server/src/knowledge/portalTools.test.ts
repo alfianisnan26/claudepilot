@@ -453,7 +453,7 @@ test('T-436 S2: a bad workspace key is refused with a reason that names the key'
   try {
     assert.throws(
       () => r.svc.update(r.alpha.id, { settings: { agentWorkspaces: ['docker/api', 'bad key!'] } }),
-      (e: unknown) => isKnowledgeError(e) && e.code === 'INVALID_INPUT' && /"bad key!"/.test(e.message) && !/docker\/api"/.test(e.message),
+      (e: unknown) => isKnowledgeError(e) && e.code === 'VALIDATION_FAILED' && /"bad key!"/.test(e.message) && !/docker\/api"/.test(e.message),
     );
   } finally {
     r.done();
