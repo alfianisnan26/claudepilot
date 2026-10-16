@@ -12,8 +12,9 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   T-591 S3, T-610 (mig 384; pre-deploy read-only prod count of the 2 rows is the coordinator's), T-772 S2b-S2d 03b635b5 + S2c
   464be382. Main folder ff'd (165db813 in). Coordinator told T-731.
 - RESPAWN (coordinator, T-525/T-631 landed 165db813): respawn each lane BETWEEN tickets, brief: job-run.sh, k3s-status.sh etc.
-  ONLY by /home/node/work/claudepilot/scripts/..., never scripts/.... BLOCKED: spawn says FOLDER_UNTRUSTED ("an allow rule runs
-  any command or covers everything") -> coordinator T-525 8804. Impl ENDED; its T-425 brief is ready. 5 lanes left on old rules. If T-860 S2 is ready mid-gate: stop b26 gate, gate T-860 alone. T-611 (8537) -> batch 27; T-623 S2c (8603) waits S2d.
+  ONLY by /home/node/work/claudepilot/scripts/..., never scripts/.... FOLDER_UNTRUSTED 20:00-20:25 (T-525 8804), then trust back.
+  Done: Impl -> fe93b032 (T-425). Next between tickets: Backend (after T-436 c), BE Infra, QA Perf, QA BE 2, QA UI. Old-rule lanes
+  use their own form until respawned (20:21 correction). If T-860 S2 is ready mid-gate: stop b26 gate, gate T-860 alone. T-611 (8537) -> batch 27; T-623 S2c (8603) waits S2d.
 
 ## IN FLIGHT (6 of 6, D-71)
 - QA PERF 8e8912fc (perf-tester/sonnet): T-611 merge PWG 8715 (READY, b27 with T-426); T-868 rev CHANGES 2 8724; T-537 APPROVE
@@ -23,8 +24,9 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   NOW QA T-856 7d2acb8d -> re-review T-860 S2b.
 - QA BE 2 42e5408f (no Write): reviews APPROVE T-772 S2 8449, T-416 S2b 8450, T-591 S3 8535, T-772 S2b 8568.
   T-623 S2c PASS 8603, T-610 PASS W/ GAPS 8637. T-860 QA plan 8650. NOW QA T-860 S2 068606f5 (URGENT) -> T-416 S2c -> T-675 R2d -> T-781 S8c.
-- IMPL 46632d91 ENDED for respawn: DONE T-525+T-631 diff 8678, T-772 S2e fc9158ed (8701), T-856 7d2acb8d, T-868 S2 0520dc29
-  (8790; QA Perf re-reviews it, incl. the SHOTS_TEST_MODE --hook). Next: T-425 (on respawn, after re-trust). Deploy 261 is the coordinator's.
+- IMPL fe93b032 (respawned, new rules; was 46632d91: T-772 S2e fc9158ed, T-856 7d2acb8d QA PWG 8837 -> b27, T-868 S2 0520dc29 ->
+  QA Perf re-review incl. SHOTS_TEST_MODE --hook). NOW T-425 slotWait on ticket/T-425-slotwait.
+- T-860: S2b bd2a2b1f review APPROVE (QA UI 8840); QA BE 2 delta QA Jobs queued; then gate ALONE. S2c follow-up (set -a etc., 8845).
 - BE INFRA 16c2494f (sonnet): DONE T-860 12deae78 (8553), T-623 S2c 6f4f6d56 (8569), T-610 b3e7e3a7 (8571; lead read mig 384,
   free 8577), T-860 S2 068606f5 (8680; lead read 8737), T-623 S2d c288c0d5 (8725), T-860 S2b bd2a2b1f (8817; job-bb58079a, 6 mutants red;
   -> QA BE 2 delta + QA UI re-review). NOW INCIDENT T-881 S1 (allowlist vs installed
