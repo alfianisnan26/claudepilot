@@ -21,11 +21,11 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   posts the estimate + D1-D7 there. Order S1, S2, S4, S3, S5 (the file must carry the chat before a hard move). T-731 is DONE.
 - QA BE 2 42e5408f: T-600 live UNAVAILABLE for the lane (7597); lead read crew_scorecard: LIVE PARTIAL, pace no_source (7610);
   T-723 S3 PASS WITH GAPS 7665 (4 actor mutants survive, strip/trim, bidi) -> S3b items 7677 (Cf strip default) for Impl
-  after T-739 S4 -> now RE-QA T-610 r2 c2246fb0 (builder 7674, job 3848b831 162/0, m6-m8 red; COUNTED mutants unrun).
+  after T-739 S4. T-610 r2 PASS WITH GAPS 7695 (store.ts:238 COUNTED mutant survives) -> r3 7699 -> now QA T-781 S1+S2.
 - IMPL lane 46007215 (sonnet; 09fee945 ended: T-772 S1 DONE c9ee2ba2, job 8f10b14d 16/16 combos, 7656 -> QA UI queued)
   T-739 B S4 mutant-killing tests (M1 M3-M7) on ticket/T-739-scorecard-index -> T-723 S3b (7677) -> T-772 S2 (sweep 7599).
 - BE INFRA 7c3ee28b (sonnet; T-610 r2 DONE c2246fb0) T-611 S0 7688: no H testable (placement never in Job log) -> decision 7694
-  (a): now T-611 S1 (headroom, log line, Secret error code) -> S2 -> T-524 S3c (7360) -> T-612 S1.
+  (a): now T-611 S1 (headroom, log line, Secret error code) -> T-610 r3 -> T-611 S2 -> T-524 S3c (7360) -> T-612 S1.
 - BACKEND lane b2f0e95f (sonnet): T-781 S1+S2 DONE 1b46072d (7675, job ae47236a 119/0, 5 mutants; lead read diff) -> QA BE 2
   after T-610; now T-781 S4 + #conflicts cleanup -> S3, S5 -> T-733. T-778 filed (bypass routes lack own requireCan; authz = person).
 - HELD: T-426 S1e 2174eee1 QA PASS 6169, review CHANGES 7121 -> fix, re-QA, merge after T-401. T-578 51f6c153 review CHANGES 6168 -> owner. T-631 CHANGES 5850 -> coordinator.
