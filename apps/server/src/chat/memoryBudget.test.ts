@@ -556,6 +556,7 @@ test('T-675 (T-416 QA R2): a restart of an asleep session whose check passed but
     const made = await s.controller.create({ workspaceId: 'docker/ws1' });
     await until(() => s.controller.get(made.id)?.process === 'live', 4000);
     assert.equal(s.controller.audit({ kind: 'memory.refused' }).length, 0, 'no hold left behind');
+    await sleep(300); // the ended session's own follow-up work settles before the store closes
   } finally {
     await s.done();
   }

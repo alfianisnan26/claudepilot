@@ -174,7 +174,7 @@ const ITEM_ID_WORKSPACE_MAX = 100;
  * id with a long workspace id lost its push without a trace. A workspace id over 100 characters is clipped and given a hash of the whole.
  */
 export function memoryItemId(workspaceId: string, since: string): string {
-  const ws = workspaceId.length > ITEM_ID_WORKSPACE_MAX ? `${workspaceId.slice(0, ITEM_ID_WORKSPACE_MAX)}~${createHash('sha256').update(workspaceId).digest('hex').slice(0, 10)}` : workspaceId;
+  const ws = workspaceId.length > ITEM_ID_WORKSPACE_MAX ? `${workspaceId.slice(0, ITEM_ID_WORKSPACE_MAX)}.${createHash('sha256').update(workspaceId).digest('hex').slice(0, 10)}` : workspaceId;
   return `${ws}@${since}`;
 }
 
