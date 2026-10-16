@@ -207,12 +207,25 @@ test('QA-O1 (1) a leaking file whose NAME holds a line break is deleted (the hit
   assert.ok(existsSync(join(out, 'reports/clean.xml')), 'a clean file stays');
 });
 
+test('QA-N1 (review 7773) an artifact whose NAME is the value: the value is in no stdout, stderr or the Job log (S1h re-QA)', () => {
+  const secret = `cs${hex(20)}`;
+  const w = world({ [`${secret}.txt`]: `cf-access-client-secret: ${secret}\n`, [`x${secret}`]: 'plain\n', 'clean.xml': '<testsuites/>' });
+  const out = join(w.root, 'out');
+  const r = w.run(ARGS(out), { [POOL_ID]: secret });
+  assert.equal(r.code, 3, 'the run is red');
+  assert.ok(!r.out.includes(secret), `the value reached stdout or stderr (hash ${h16(secret)})`);
+  const log = existsSync(join(w.root, 'job.log')) ? readFileSync(join(w.root, 'job.log'), 'utf8') : '';
+  assert.ok(!log.includes(secret), 'the value reached the Job log');
+  assert.ok(!tree(join(out, 'reports')).some((n) => n.includes(secret)), 'a file named after the value survived');
+  assert.ok(existsSync(join(out, 'reports/clean.xml')), 'a clean file stays');
+});
+
 test('QA-O2 (1) a scan that fails closed also deletes a file with a line break in its name; rc 3', () => {
   const secret = `cs${hex(20)}`;
   const w = world({ 'a\nb.txt': 'plain\n', 'clean.xml': '<testsuites/>' });
   const shim = mkdtempSync(join(tmpdir(), 'cp-qa-shim-'));
   roots.push(shim);
-  writeFileSync(join(shim, 'grep'), '#!/bin/bash\nif [ "$1" = -rlaF ]; then echo "grep: scan stub failed" >&2; exit 2; fi\nexec /bin/grep "$@"\n');
+  writeFileSync(join(shim, 'grep'), '#!/bin/bash\nif [ "$1" = -rlaFZ ]; then echo "grep: scan stub failed" >&2; exit 2; fi\nexec /bin/grep "$@"\n');
   chmodSync(join(shim, 'grep'), 0o755);
   const out = join(w.root, 'out');
   const r = w.run(ARGS(out), { [POOL_ID]: secret }, shim);
@@ -225,7 +238,7 @@ test('QA-O3 (1) grep exit 3 or higher counts as a failed scan too (not only exac
   const w = world({ 'leak.txt': `x ${secret}\n` });
   const shim = mkdtempSync(join(tmpdir(), 'cp-qa-shim-'));
   roots.push(shim);
-  writeFileSync(join(shim, 'grep'), '#!/bin/bash\nif [ "$1" = -rlaF ]; then exit 127; fi\nexec /bin/grep "$@"\n');
+  writeFileSync(join(shim, 'grep'), '#!/bin/bash\nif [ "$1" = -rlaFZ ]; then exit 127; fi\nexec /bin/grep "$@"\n');
   chmodSync(join(shim, 'grep'), 0o755);
   const out = join(w.root, 'out');
   const r = w.run(ARGS(out), { [POOL_ID]: secret }, shim);
