@@ -327,6 +327,35 @@ test('T-416 review 6310 #1: a restart of an asleep session is a wake: refused wh
   }
 });
 
+test('T-675 R2: a message sent while a restart of an asleep session waits for its memory reading is not lost and its process is not stopped by the restart', async () => {
+  const s = await liveSession({ idleSleepMs: 200 }, true);
+  try {
+    await until(() => s.controller.get(s.id)!.process === 'asleep', 4000);
+    // The reading is held back: the restart (a wake) waits in `#memoryBudget`, the gap the turn can start in.
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let reads = 0;
+    s.controller.memory = new WorkspaceMemory({ read: async () => (reads++, await gate, reading(2 * GiB)) });
+    const [starts, stops] = [s.ws.starts, s.ws.stops];
+    const restarting = s.controller.restart(s.id);
+    await until(() => reads >= 1, 4000);
+    const sent = s.controller.send(s.id, 'gap-1', 'MESSAGE in the gap').then(() => 'sent', (e: unknown) => `rejected: ${String(e)}`);
+    await sleep(50);
+    release();
+    const [restarted, outcome] = await s.answering(Promise.all([restarting, sent]));
+    assert.equal(outcome, 'sent');
+    assert.equal(restarted.process, 'live');
+    assert.equal(s.controller.get(s.id)!.state === 'ended', false, 'the session was not ended');
+    assert.equal(s.ws.stops, stops, 'no process was stopped: the message did not start a process the restart then killed');
+    assert.equal(s.ws.starts, starts + 1, 'one process, the restart’s');
+    const line = s.ws.sends.find((x) => x.line.includes('MESSAGE in the gap'));
+    assert.ok(line, 'the message reached a process');
+    assert.equal(line.args[1], s.controller.get(s.id)!.claudeSessionId, 'the process that is live now');
+  } finally {
+    await s.done();
+  }
+});
+
 test('T-416 review 6310 #1: a restart of a gone (interrupted) session is a wake: refused when memory is short, nothing started', async () => {
   const s = await liveSession();
   try {

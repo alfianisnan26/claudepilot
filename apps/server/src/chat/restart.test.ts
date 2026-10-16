@@ -255,7 +255,7 @@ test('restart keeps Bypass: relaunched with the flag and switched back through t
   }
 });
 
-test('T-416 review 4: a restart is never refused by the memory budget: a Bypass lead past the line comes back in Bypass, not in the start mode', async () => {
+test('T-416 review 4: a restart of a running process is never refused by the memory budget: a Bypass lead past the line comes back in Bypass, not in the start mode', async () => {
   const s = await liveSession();
   try {
     s.controller.controlTimeoutMs = 150;
