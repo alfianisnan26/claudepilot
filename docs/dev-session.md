@@ -211,8 +211,13 @@ scripts/job-run.sh --list ; scripts/job-run.sh --stop --chat <session id>
   k3s-node2 or for room ("placement:" line, and a Pending line that says so; a Job that never starts says "run it again"). The decision is made
   when the Job is created and AGAIN just before it leaves the queue (a Job can wait suspended for minutes): if the answer changed, the suspended
   Job's required rule is patched in or out first (a merge patch of that rule alone; scheduling directives of a suspended Job are mutable from
-  Kubernetes 1.27, this cluster runs 1.35). A reading that fails then changes nothing; a required rule that cannot be added stops the run (rc 2,
-  "run it again"). Known limits: the projected percentage is rounded, and `top` itself is a sample, so the line is good to about 0.5 points; the
+  Kubernetes 1.27, this cluster runs 1.35). A reading that fails then changes nothing and the Job's log says so:
+  `=== JOB-RUN PLACEMENT node=control-plane at=release reading=failed kept=<required-away|preferred> pct=<create-time pct> (the create-time reading)`
+  (the last placement line then keeps that percentage, never "unknown"); a required rule that cannot be added stops the run (rc 2,
+  "run it again"). `JOB_RUN_AVOID_NODES` (T-611 S2, default empty) is a comma list of node names (letters, digits, `.` and `-`, at most 20; anything
+  else stops the run, rc 2) that no Job may run on: a REQUIRED `kubernetes.io/hostname NotIn` rule, in the same term as the control-plane rule when
+  the memory decision adds it, and kept by the release patch. It is off by default on purpose: an always-on required rule left every Job Pending
+  when the other node was full (T-365, T-524). Known limits: the projected percentage is rounded, and `top` itself is a sample, so the line is good to about 0.5 points; the
   peak counted is the typical 2300 Mi, not the 4 Gi limit, so a rare larger Job can still land on a master that fit the typical one. A master at 74% therefore takes no 4 GiB Job (74% + 4 GiB is about 100%). The line is exact: use plus peak
   AT the line stays, the projection printed is rounded up. An odd bytes column falls back to the percentage alone; under the line, or when the
   metrics fail, only the preferred rules apply. Numbers are read in base 10 (`08` is eight). The decision, the Pending wait, the node it ran on,
