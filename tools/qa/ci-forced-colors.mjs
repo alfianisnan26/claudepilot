@@ -3,6 +3,7 @@
 // forced-colors, Tabs through the CI pages (Runs tab, Remotes tab, Runners tab, a run page) and asserts that every focused element
 // has an outline (outline-style not none and outline-width > 0). At 390 and 1280 px, light and dark.
 // Seeds straight into the scratch portal's database, as ci-sweep.mjs does.
+// Optional path arguments replace the default page list (CI, tickets, attention list, sessions list).
 // usage: scripts/job-run.sh --ref <commit> --out job-out/t772 -- 'tools/qa/with-portal.sh 3482 node tools/qa/ci-forced-colors.mjs; exit $?'
 import { randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
@@ -45,7 +46,11 @@ const b = await Browser.launch({ width: 390, height: 844, mobile: true, cookie }
 try {
   await b.cookie(cookie);
   await b.send('Emulation.setEmulatedMedia', { features: [{ name: 'forced-colors', value: 'active' }] });
-  const pages = ['/admin/ci?tab=runs', '/admin/ci?tab=remotes', '/admin/ci?tab=runners', '/admin/ci/runs/run-fc'];
+  // The CI pages (seeded above) plus the tickets, attention and chat (sessions list) pages. A path list on the command line replaces
+  // the default. A chat session page and the attention deck need seeded data: not covered here.
+  const pages = process.argv.slice(2).length
+    ? process.argv.slice(2)
+    : ['/admin/ci?tab=runs', '/admin/ci?tab=remotes', '/admin/ci?tab=runners', '/admin/ci/runs/run-fc', '/admin/tickets', '/admin/attention?view=list', '/admin/sessions'];
   for (const [w, h, mobile] of [[390, 844, true], [1280, 900, false]]) {
     for (const dark of [false, true]) {
       const tag = `${w}-${dark ? 'dark' : 'light'}`;
