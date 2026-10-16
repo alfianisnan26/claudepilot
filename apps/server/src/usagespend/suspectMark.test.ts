@@ -27,6 +27,7 @@ const SEEDS: Seed[] = [
   { key: 'near-cost', atMs: BAD2, usd: 68.66, session: 'lead-b' },
   { key: 'same-minute', atMs: BAD1 + 20_000, usd: 1.25, session: 'lead-a' },
   { key: 'too-late', atMs: BAD2 + 61_000, usd: 68.65, session: 'lead-b' },
+  { key: 'too-early', atMs: BAD1 - 61_000, usd: 96.31, session: 'lead-a' },
   { key: 'btw', atMs: BAD1, usd: 96.31, session: 'lead-a', kind: 'btw' },
   { key: 'already', atMs: BAD2, usd: 68.65, session: 'lead-c', kind: 'suspect' },
   { key: 'plain', atMs: DAY0 + 3_600_000, usd: 2.5, session: 'lead-c' },
@@ -54,7 +55,7 @@ test('T-610 migration 384: exists once; marks exactly the two rows; the day stop
     try {
       const db = upgraded.db!;
       const kinds = () => Object.fromEntries((db.prepare('SELECT ref, kind FROM chat_usage ORDER BY id').all() as { ref: string; kind: string }[]).map((r) => [r.ref, r.kind]));
-      const want = { bad1: 'suspect', bad2: 'suspect', 'other-day': 'turn', 'other-cost': 'turn', 'near-cost': 'turn', 'same-minute': 'turn', 'too-late': 'turn', btw: 'btw', already: 'suspect', plain: 'turn' };
+      const want = { bad1: 'suspect', bad2: 'suspect', 'other-day': 'turn', 'other-cost': 'turn', 'near-cost': 'turn', 'same-minute': 'turn', 'too-late': 'turn', 'too-early': 'turn', btw: 'btw', already: 'suspect', plain: 'turn' };
       assert.deepEqual(kinds(), want, 'only the two rows are marked; nothing else changed');
       assert.equal((db.prepare('SELECT COUNT(*) AS n FROM chat_usage').get() as { n: number }).n, SEEDS.length, 'no row deleted');
       // The rest of the two rows is untouched: marking changes `kind` and nothing else.
