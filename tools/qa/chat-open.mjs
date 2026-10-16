@@ -319,6 +319,21 @@ async function runConfig(cookie, cfg) {
       console.log(`     opened "${t.label}" (${t.left} collapsed left): Show all ${sa ? 'found' : 'not found'}, ${await b.eval(`document.querySelectorAll('section[aria-label=Output]').length`)} Output blocks`);
     }
     if (!sa) {
+      // What the first tap left in the DOM (the row's wrapper, cut short), for the report.
+      res.afterTap = await b.eval(`(() => { const e = document.querySelector('button[aria-expanded=true]'); return e ? e.parentElement.outerHTML.replace(/\\s+/g, ' ').slice(0, 900) : 'no expanded button'; })()`).catch(() => 'n/a');
+      console.log(`     after the taps: ${res.afterTap}`);
+      // Show all details (the menu's own switch, remembered in localStorage): every row open, so the cut result's Output is in the page.
+      await b.eval(`localStorage.setItem('claudepilot.chat-details', '1')`);
+      await b.send('Page.reload', {});
+      for (let i = 0; i < 100 && !(await b.eval(`/Turn \\d+:/.test(document.body.innerText)`).catch(() => false)); i++) await sleep(100);
+      await sleep(800);
+      await b.eval(`(() => { const s = ${SCROLLER}; if (s) s.scrollTop = s.scrollHeight; })()`);
+      await sleep(800);
+      sa = await b.eval(findShowAll);
+      console.log(`     with Show all details on: Show all ${sa ? 'found' : 'not found'}`);
+      res.showAllVia = sa ? 'details' : null;
+    }
+    if (!sa) {
       // Diagnostics for a miss: what the newest page holds as its last tool results, and which Output blocks the page shows.
       const diag = await b.eval(`(async () => {
         const r = await fetch('/api/chat/sessions/${SID}/events?limit=200', { credentials: 'same-origin' }).then((x) => x.json());
@@ -355,6 +370,15 @@ async function runConfig(cookie, cfg) {
       await sleep(400);
     }
 
+    // Back to the default view (rows folded) for the paging steps.
+    if (await b.eval(`localStorage.getItem('claudepilot.chat-details') === '1'`)) {
+      await b.eval(`localStorage.removeItem('claudepilot.chat-details')`);
+      await b.send('Page.reload', {});
+      for (let i = 0; i < 100 && !(await b.eval(`/Turn \\d+:/.test(document.body.innerText)`).catch(() => false)); i++) await sleep(100);
+      await sleep(1000);
+      await b.eval(`(() => { const s = ${SCROLLER}; if (s) s.scrollTop = s.scrollHeight; })()`);
+      await sleep(500);
+    }
     // 6. Scroll up: the anchor holds still.
     await b.eval(PROBE);
     const readsBeforeUp = reads().length;
