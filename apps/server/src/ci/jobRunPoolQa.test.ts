@@ -151,7 +151,11 @@ const [verb, kind, name] = a;
 if (verb === 'get' && kind === 'jobs') { process.stdout.write(JSON.stringify({ items: read().jobs.map(k8s) })); }
 else if (verb === 'get' && kind === 'job') { const j = job(name); if (!j) process.exit(1); process.stdout.write(a.includes('json') ? JSON.stringify(k8s(j)) : 'uid-' + name); }
 else if (verb === 'get' && kind === 'pods' && a.includes('json')) { process.stdout.write(JSON.stringify(podOf(job(a[3].replace('job-name=', ''))))); }
-else if (verb === 'create' && kind === 'secret') { const t = stdin(); lock((s) => { s.secrets[a[3]] = t; }); }
+else if (verb === 'create' && kind === '-f') { const o = JSON.parse(stdin()); const n = o.metadata.name; const env = Object.entries(o.data).map(([k, v]) => k + '=' + Buffer.from(v, 'base64').toString()).join('\n') + '\n';
+  if (o.metadata.annotations) process.exit(7); lock((s) => { s.secrets[n] = env; }); }
+else if (verb === 'create' && kind === 'secret') { const t = stdin(); const data = {}; for (const l of t.split('\n')) { const i = l.indexOf('='); if (i > 0) data[l.slice(0, i)] = Buffer.from(l.slice(i + 1)).toString('base64'); }
+  if (!a.includes('--dry-run=client')) lock((s) => { s.secrets[a[3]] = t; });
+  else process.stdout.write(JSON.stringify({ apiVersion: 'v1', kind: 'Secret', metadata: { name: a[3] }, data })); }
 else if (verb === 'top' && kind === 'nodes') { process.exit(1); }
 else if (verb === 'apply') { const m = stdin(); const n = m.match(/^ {2}name: (\S+)/m)[1]; fs.mkdirSync(path.join(F, 'applied'), { recursive: true }); fs.writeFileSync(path.join(F, 'applied', n + '.yaml'), m);
   const lab = (k) => m.match(new RegExp(k + ': ([^,}]+)'))[1].trim();
