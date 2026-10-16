@@ -45,6 +45,14 @@ test('T-610: the models’ costs never add up to more than the turn’s own cost
   near(capped[0]!.costUsd / capped[1]!.costUsd, 15);
 });
 
+test('T-610: a turn cost of 0 caps model costs above the 0.05 margin to 0, and leaves those within it (pinned)', () => {
+  const small = [m('x', 1, 1, 0, 0, 0.05)];
+  assert.equal(capToTurnCost(small, 0), small, 'at the margin: untouched');
+  const capped = capToTurnCost([m('x', 1, 1, 0, 0, 0.5), m('y', 1, 1, 0, 0, 0.1)], 0);
+  assert.deepEqual(capped.map((r) => r.costUsd), [0, 0]);
+  assert.deepEqual(capped.map((r) => r.input), [1, 1], 'only the cost changes');
+});
+
 test('T-610: a suspect row is the kind readers leave out', () => {
   assert.equal(SUSPECT_USAGE_KIND, 'suspect');
   assert.equal(COUNTED_USAGE, `kind <> 'suspect'`);

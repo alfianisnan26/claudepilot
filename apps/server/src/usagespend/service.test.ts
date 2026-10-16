@@ -405,6 +405,25 @@ test('a row marked suspect (T-610: a running total booked as one request) is in 
   }
 });
 
+test('a row marked suspect (T-610) is out of sessionWindow, claudeWindow and activePeriods (one query each)', async () => {
+  const h = await spendHarness();
+  try {
+    h.seed.claude('c1', 'docker/api', 'Kresna');
+    h.seed.session('S', { claudeId: 'c1' });
+    h.seed.usage({ atMs: NOW - HOUR, session: 'S', costUsd: 0.5 });
+    h.seed.usage({ atMs: NOW - HOUR + MIN, session: 'S', costUsd: 96.31, kind: 'suspect' });
+    const st = new SpendStore(h.store);
+    const w = st.sessionWindow(['S'], NOW - 2 * HOUR, NOW);
+    assert.deepEqual([w.requests, w.costUsd], [1, 0.5], 'sessionWindow');
+    const c = st.claudeWindow('c1', NOW - 2 * HOUR, NOW);
+    assert.equal(c.costUsd, 0.5, 'claudeWindow total');
+    assert.deepEqual(c.bySession, [{ sessionId: 'S', costUsd: 0.5 }], 'claudeWindow by session');
+    assert.deepEqual(st.activePeriods('c1', NOW, NOW - 2 * HOUR, 2 * HOUR), [0.5], 'activePeriods');
+  } finally {
+    h.done();
+  }
+});
+
 // T-312: the orchestrator's chain split on 2026-10-13 (attribution.test.ts has the same ids): O1 fe3df8bc -> O2 fdb140be -> O3 5c9fcb5f.
 const chainId = (prefix: string) => `${prefix}-0000-4000-8000-${prefix}0000`;
 const [O1, O2, O3, K1] = [chainId('fe3df8bc'), chainId('fdb140be'), chainId('5c9fcb5f'), chainId('541948a5')];

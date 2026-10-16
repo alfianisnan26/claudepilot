@@ -2987,17 +2987,58 @@ test('usage (T-610): the models’ costs of a turn never add up to more than the
   }
 });
 
-test('usage (T-610): the cap does not scale real costs down when a total started again (the turn figure is a guess then)', async () => {
+test('usage (T-610): the cap holds when a total started again too (decision (a): never book more than the turn’s cost, even if that under-counts)', async () => {
   const s = await liveSession();
   try {
     await modelTurn(s, 5, { 'claude-opus-5-5': mu(1000, 5) });
     // A process that counts from zero again spent 7: opus 4 (lower than the 5 before: a new count), haiku 3 (new). The total (7) is above the
-    // old base (5), so the turn figure reads 2, smaller than what was spent.
+    // old base (5), so the turn figure reads 2: that is what is booked, an under-count that is the price of the guarantee.
     await modelTurn(s, 7, { 'claude-opus-5-5': mu(200, 4), 'claude-haiku-5-5': mu(300, 3) });
     await until(() => s.controller.history(s.id).filter((e) => e.kind === 'result').length === 2);
     const rows = usageRows(s).slice(1);
     assert.equal(rows.length, 2);
-    assert.ok(Math.abs(rows.reduce((t, r) => t + r.c, 0) - 7) < 1e-6, `real costs kept: ${JSON.stringify(rows)}`);
+    assert.ok(Math.abs(rows.reduce((t, r) => t + r.c, 0) - 2) < 1e-6, `capped to the turn’s cost: ${JSON.stringify(rows)}`);
+  } finally {
+    await s.done();
+  }
+});
+
+test('usage (T-610, QA BE 2 probe): the total drops to 0.05 while a model goes 0.1 to 96.4: the turn books 0.05, not $96.30', async () => {
+  const s = await liveSession();
+  try {
+    await modelTurn(s, 0.1, { 'claude-opus-5-5': mu(100, 0.1) });
+    await modelTurn(s, 0.05, { 'claude-opus-5-5': mu(200, 96.4) }); // the total started again: the new total is the turn's cost
+    await until(() => s.controller.history(s.id).filter((e) => e.kind === 'result').length === 2);
+    const rows = usageRows(s);
+    assert.ok(Math.abs(rows[1]!.c - 0.05) < 1e-6, `capped on a reset: ${rows[1]!.c}`);
+    assert.ok(rows.reduce((t, r) => t + r.c, 0) < 0.2, 'no $96 anywhere');
+  } finally {
+    await s.done();
+  }
+});
+
+test('usage (T-610): a total a hair below the base (float jitter) is not a reset: the turn costs 0 and the cap books no $96', async () => {
+  const s = await liveSession();
+  try {
+    await modelTurn(s, 0.3, { 'claude-opus-5-5': mu(100, 0.3) });
+    await modelTurn(s, 0.3 - 1e-12, { 'claude-opus-5-5': mu(200, 96.4) });
+    await until(() => s.controller.history(s.id).filter((e) => e.kind === 'result').length === 2);
+    const rows = usageRows(s);
+    assert.ok(rows[1]!.c < 1e-6, `jitter is a change of 0, capped to 0 (a reset would book 0.3 here): ${rows[1]!.c}`);
+  } finally {
+    await s.done();
+  }
+});
+
+test('usage (T-610): a turn whose own cost is 0 books no model cost above the 0.05 margin (pinned)', async () => {
+  const s = await liveSession();
+  try {
+    await modelTurn(s, 0.1, { 'claude-opus-5-5': mu(100, 0.1) });
+    await modelTurn(s, 0.1, { 'claude-opus-5-5': mu(200, 0.6) }); // the process total did not move; the model's cost did by 0.5
+    await until(() => s.controller.history(s.id).filter((e) => e.kind === 'result').length === 2);
+    const rows = usageRows(s);
+    assert.equal(rows[1]!.c, 0, `capped to the turn’s 0: ${rows[1]!.c}`);
+    assert.equal(rows[1]!.i, 100, 'tokens are still the change');
   } finally {
     await s.done();
   }
@@ -3015,6 +3056,23 @@ test('usage (T-610): a row marked suspect is out of the Usage charts and stays i
     assert.equal(t.requests, 1);
     assert.equal(t.input, 100);
     assert.equal(usageRows(s).length, 2, 'the row is kept as evidence');
+  } finally {
+    await s.done();
+  }
+});
+
+test('usage (T-610): a row marked suspect is also out of the report of one Claude (the claude_id read of usageSince)', async () => {
+  const s = await liveSession();
+  try {
+    await modelTurn(s, 0.1, { 'claude-opus-5-5': mu(100, 0.1) });
+    await modelTurn(s, 0.2, { 'claude-opus-5-5': mu(300, 0.2) });
+    await until(() => s.controller.history(s.id).filter((e) => e.kind === 'result').length === 2);
+    s.store.db!.exec(`UPDATE chat_usage SET claude_id = 'cX'`);
+    assert.equal(s.controller.usage('1h', { claudeId: 'cX' }).totals.requests, 2);
+    s.store.db!.exec(`UPDATE chat_usage SET kind = 'suspect' WHERE input_tokens = 200`);
+    const t = s.controller.usage('1h', { claudeId: 'cX' }).totals;
+    assert.equal(t.requests, 1);
+    assert.equal(t.input, 100);
   } finally {
     await s.done();
   }
