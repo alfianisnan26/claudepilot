@@ -8,21 +8,21 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - BATCH 22 ON INTEGRATION 0d521d67 (gate claudepilot-gate-0d521d6-7b1d GREEN): T-697, T-574 S3, T-731, r.txt drop, T-376 S4b,
   T-732, T-610 r3, T-739 B (mig 383), T-723 S3c. Coordinator told on T-731.
 - DEPLOY 233 LIVE (coordinator, portal 2026.10.16-2 from b2d0a3d9 = batch 22; b23 NOT in it). NO Releases/ note for it (T-591
-  still fails; told 8158). Live checks of b22 tickets -> QA BE 2; close each on LIVE PASS. Deploy 191 = batches <=18.
+  still fails; told 8158). Live checks of b22 tickets -> QA UI; close each on LIVE PASS. Deploy 191 = batches <=18.
 
 ## IN FLIGHT (6 of 6, D-71)
-- NONE gating.
-  Lanes' ticket_comment refused on unassigned tickets (T-341, T-549, T-675; T-675 assign refused too): verdicts in replies + this file.
+- NONE gating. Lanes can't comment on unassigned tickets (T-341, T-549, T-675): verdicts in replies + this file.
 - QA PERF 8e8912fc (respawned perf-tester/sonnet; old 330855ba had no Write, ended; decision 8148). T-426 S1i PASS WITH GAPS 8109.
   T-611 S1c FAIL 8111 classified 8140: 0 PRODUCT, 6 PROBE. Now fixes its probes on qa/T-611-probes 780ffa57 (48d3230f + S2
-  80ffedea, lead merge) + C5e, one Job -> `QA T-611 probes: PASS|FAIL`.
+  80ffedea, lead merge) + C5e, one Job. Bash denied once (combined cmd) -> told Edit + plain git (8164: C5e-i fail-closed kept,
+  probe fixed; C5e-ii known red = product gap -> S2b).
 - QA UI 8b13bb5a (no Write tool, 7939/7944/7947): REVIEWS APPROVE: T-781 S6 8006, T-611 S1b 8018, T-781 S7 8049.
   QA T-675 R2 PASS WITH GAPS (mutant `await #restarting` removed at controller.ts:2330 survives) -> R2b to Impl.
   REVIEW T-611 S1c APPROVE 8095. QA T-416 S2 PASS WITH GAPS 8131 (gates red; GAP: workspace stop/person end/restart leave a stale
-  kept record -> Bypass could return; HELD for S2b). REVIEW T-736 S3c+S3d APPROVE 8137. REVIEW T-611 S2 APPROVE 8141 (newline gap -> S2b). Now REVIEW T-426 S1i b7fa0ba7.
+  kept record -> Bypass could return; HELD for S2b). REVIEW T-736 S3c+S3d APPROVE 8137. REVIEW T-611 S2 APPROVE 8141; T-426 S1i APPROVE 8157. Now LIVE checks deploy 233.
 - QA BE 2 42e5408f (no Write tool, 7946): QA T-733 1afaf8a6 PASS 8007 (S1 S4 S6; S5 not delivered). QA T-781 S6 PASS WITH GAPS
   8054; S7 PASS WITH GAPS 8083 (spaced clip probes 5/5: no leak). QA T-736 S3d PASS WITH GAPS 8130 (write list misses touch/sed -i/...;
-  S3c QA 7875/7907). Now QA T-611 S2 80ffedea -> LIVE checks of deploy 233 (b22 tickets).
+  S3c QA 7875/7907). Now QA T-611 S2 80ffedea.
 - IMPL 7cc1b2f5: T-736 S3d DONE 41daac15 8078 (job 68d3cd21 38/0, M5 M7 red). Now T-675 R2b on ticket/T-675-r2b from b4024e17
   (kill the controller.ts:2330 mutant or prove the real guard) -> T-772 S2.
 - BE INFRA fad38191: T-611 S1c DONE 44c293ea 8052 (80/0, proves the S1i merge ab91adf9). T-611 S2 DONE 80ffedea 8129
