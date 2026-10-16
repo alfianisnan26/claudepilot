@@ -126,7 +126,7 @@ export function RunPage() {
   return (
     <>
       <div className="mb-4 flex items-center gap-2">
-        <Link to="/admin/ci" aria-label="CI" title="CI" className="press -ml-2 flex size-10 shrink-0 items-center justify-center rounded-full text-muted hover:bg-surface-2 hover:text-ink">
+        <Link to="/admin/ci" aria-label="CI" title="CI" className="press -ml-2 flex size-11 shrink-0 sm:size-10 items-center justify-center rounded-full text-muted hover:bg-surface-2 hover:text-ink">
           <ChevronLeft className="size-5" />
         </Link>
         <StatusIcon status={run.status} className="[&_svg]:size-6" />
