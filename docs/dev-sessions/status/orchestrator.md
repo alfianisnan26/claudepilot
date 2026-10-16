@@ -27,8 +27,10 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   -> T-416 S2c dcdb6553.
 - IMPL 89ca3bd2 (new rules): T-425 c22a76b3 (8957; "Queued" kept; -> QA UI), T-772 S2f b36f6a54 (9014, Job 4c8104e6; -> QA UI 3rd).
   NOW T-436 S2 (review notes 8941: guarded rebind, audit names, VALIDATION_FAILED) on ticket/T-436-s2 from 5be5699a.
-- BATCH 29 (next, after QA): T-524 S3c+T-733 S5 ee56bab9 (READY), T-881 S1b 4dba5701 (READY), T-436+S2, T-382 S1, T-425, T-772 S2f,
-  T-736 S3f+S3g, T-416 S2c, T-675 R2c/R2d, T-781 S8c, T-612 S1 fix.
+- BATCH 29 READY TO GATE after restart: premerge-b29 62f72772 (wip/main-62f7277) = T-524 S3c+T-733 S5 ee56bab9 + T-881 S1b
+  4dba5701 + release merge-back e6d403d9. Quick-check job-89646cfa green (on 3f591f5). First gate never ran (integration moved).
+  After restart: merge integration (status) in, pack, push wip, gate-job. BATCH 30 (after QA): T-436+S2, T-382 S1, T-425, T-772 S2f, T-736 S3f+S3g, T-416 S2c,
+  T-675 R2c/R2d, T-781 S8c, T-612 S1 fix.
 - BE INFRA 4ed98960 (new rules): NOW fix T-612 S1 per QA FAIL 9040 (eslint tseslint base spread; prettier quickCheck.test.ts; a real
   quick-check run) -> S2a baseline -> T-860 S2c after T-860 merges (gaps 8936 + 8845).
 - BACKEND 658bdc65 (new rules; was 1e80e003: T-881 S1b DONE 4dba5701). NOW T-382 S2 GET /api/chat/sessions cursor (ticket/T-382-s2-sessions
@@ -36,6 +38,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - QUEUE Impl after T-436 S2: T-868 S3 (CHANGES 8803: test-only copy with hook via sed; .gitignore .shots-in.*).
 
 ## DECISIONS (binding)
+- 22:45 Coordinator: workspace RESTART 23:10 UTC (cpb-secrets volume for T-623). All 6 lanes told to push WIP, no Job after 23:05,
+  end `PAUSED <hash>`. Batch 29 gate deferred to after the restart (a ~40 min queue+suite would be cut). Respawn ended lanes after.
 - 13:45 D-75 AMENDED (coordinator, 1444d836, in DECISIONS.md): the lead runs the gate before a merge (gate-job.sh, one per batch).
 - 07:45 D-75 (coordinator): one Job per commit (checks chained), never the same command twice on a commit, QA reads the builder's log;
   the lead runs no Jobs but the merge gate (13:45); idle QA gets no-Job work (reviews, browser). T-731 -> BE Infra after T-697.
