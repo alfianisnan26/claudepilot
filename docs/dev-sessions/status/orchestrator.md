@@ -18,8 +18,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   T-426 S1i on wip/qa-t611s1c-48d3230 48d3230f (44c293ea + all probes), M1 + 5fad547e-loop mutants.
 - QA UI 8b13bb5a (no Write tool, 7939/7944/7947): REVIEWS APPROVE: T-781 S6 8006, T-611 S1b 8018, T-781 S7 8049.
   Now QA T-675 R2 b4024e17 (read + one mutant Job). Then T-772 S2 (plan 7963).
-- QA BE 2 42e5408f (no Write tool, 7946): QA T-733 at 1afaf8a6 (plan 7964); now QA T-781 S6 8fac4ec1 (Job waited for a node);
-  then QA T-781 S7 on wip/qa-t781s7-d44e2d3 d44e2d3f (S7 + probes d478c8c0).
+- QA BE 2 42e5408f (no Write tool, 7946): QA T-733 1afaf8a6 PASS 8007 (S1 S4 S6; S5 not delivered). QA T-781 S6 PASS WITH GAPS
+  8054 (4/4 mutants red; clip probes c1/c2/c4 glued-token = redact.ts:39 lookbehind, re-run spaced in S7 Job). Now QA T-781 S7 d44e2d3f.
 - T-781 (D-76): S6 fb70258d review APPROVE 8006; S7 DONE 0c73e71f 8041 (job 45f2f203 153/0; S5-3c mutant survives, unobservable?).
 - IMPL 7cc1b2f5: T-781 S7 DONE 0c73e71f. Now T-736 S3d from fdc5636b (7889 cd pin + 7875 gaps) -> T-772 S2.
 - BE INFRA fad38191: T-426 S1i DONE b7fa0ba7 8019 (67/0, M1 M2 red). Lead merged S1i into S1b: ab91adf9 (union of appended tests,
