@@ -13,13 +13,13 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 ## IN FLIGHT (6 of 6, D-71)
 - NONE gating.
   Lanes' ticket_comment refused on unassigned tickets (T-341, T-549, T-675; T-675 assign refused too): verdicts in replies + this file.
-- QA PERF 330855ba (respawned; 7e4879c7 ended: Bash refused twice; new one has no Write and heredocs refused). QA T-611 S1b Job on
-  f74638f1, C5e skipped as a probe defect (decided: no edit), mutants 1-3; add-fail cleanup by reading. Queued (sent): QA T-611 S1c +
-  T-426 S1i on wip/qa-t611s1c-48d3230 48d3230f (44c293ea + all probes), M1 + 5fad547e-loop mutants.
+- QA PERF 330855ba (no Write; heredocs refused). On 48d3230f (job bd27b715): T-426 S1i PASS WITH GAPS 8109 (21/21, M1 red;
+  5fad547e mutant not verified: commit not in clone). T-611 S1c FAIL 8111: 6 placement probes red (H1 H2 H3b T C5c C5d, same as
+  S1b 8060). Now CLASSIFY each PRODUCT vs PROBE by reading -> BE Infra fixes PRODUCT. T-611 chain blocked until then.
 - QA UI 8b13bb5a (no Write tool, 7939/7944/7947): REVIEWS APPROVE: T-781 S6 8006, T-611 S1b 8018, T-781 S7 8049.
   QA T-675 R2 PASS WITH GAPS (mutant `await #restarting` removed at controller.ts:2330 survives) -> R2b to Impl.
   REVIEW T-611 S1c APPROVE 8095. QA T-416 S2 PASS WITH GAPS 8131 (gates red; GAP: workspace stop/person end/restart leave a stale
-  kept record -> Bypass could return; HELD for S2b). Now REVIEW T-736 S3c+S3d (read only).
+  kept record -> Bypass could return; HELD for S2b). REVIEW T-736 S3c+S3d APPROVE 8137 (cd || exit + comment -> S3e). Now REVIEW T-611 S2.
 - QA BE 2 42e5408f (no Write tool, 7946): QA T-733 1afaf8a6 PASS 8007 (S1 S4 S6; S5 not delivered). QA T-781 S6 PASS WITH GAPS
   8054; S7 PASS WITH GAPS 8083 (spaced clip probes 5/5: no leak). QA T-736 S3d PASS WITH GAPS 8130 (write list misses touch/sed -i/...;
   S3c QA 7875/7907). Now QA T-611 S2 80ffedea.
