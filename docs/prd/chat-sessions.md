@@ -648,7 +648,7 @@ are declared `view` on the session: another user gets the same 404 as a session 
 is gzip-compressed when the request accepts gzip and is at least 1 KiB (hono/compress, scoped to `application/json`); an event stream,
 a WebSocket upgrade, a blob, a download or a range answer never is. Not yet built: the opaque cursor (T-382).
 
-**History pages in the web (T-376, web slice, as built 2026-10-15).** Opening a session reads the newest page only (`?limit=80` since T-376 S4; older pages are `limit=200`) and
+**History pages in the web (T-376, web slice, as built 2026-10-15).** Opening a session reads the newest page only (`?limit=200`; tried at 80 in T-376 S4 and reverted: a shorter page does not fill the screen, so older pages load by themselves during the open and add long tasks) and
 shows it at the bottom, rendered in a React transition (the page's rows commit in slices the browser can interrupt; older pages too), with the
 entry script split into `react`, `motion` and `router-icons` chunks so no single script is one long task. Measured on the built app with
 `tools/qa/chat-open.mjs` (10,000-event chat, 4x CPU throttle): no long task over 200 ms at the open (before S4: 312 to 449 ms for the page's

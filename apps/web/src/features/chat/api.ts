@@ -68,12 +68,6 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   throw new ApiError('INTERNAL_ERROR', `Unexpected response (${res.status}).`, res.status);
 }
 
-/**
- * The newest page an open asks for (T-376 S4): less than an older page, because the open commits its rows in one task (about 160-220 ms of
- * commit at 4x CPU with 200 events, over the 200 ms long-task budget); a phone screen holds a few dozen, and older pages follow on scroll.
- */
-const NEWEST_PAGE_LIMIT = 80;
-
 /** A query string from the options that are set. */
 const query = (o: Record<string, string | undefined>) => {
   const set = Object.entries(o).filter((e): e is [string, string] => !!e[1]);
@@ -109,7 +103,7 @@ export const chatApi = {
   unpin: (id: string) => request<ChatSession>('DELETE', CHAT_API.pin(id)),
   /** One page of the transcript counted back from `before` (the newest without it; T-376). A portal from before T-376 answers the whole list. */
   page: (id: string, before?: number | null) =>
-    request<ChatEvent[] | ChatEventPage>('GET', CHAT_API.events(id) + query({ before: before ? String(before) : undefined, limit: String(before ? EVENT_PAGE_LIMIT : NEWEST_PAGE_LIMIT) })).then(asPage),
+    request<ChatEvent[] | ChatEventPage>('GET', CHAT_API.events(id) + query({ before: before ? String(before) : undefined, limit: String(EVENT_PAGE_LIMIT) })).then(asPage),
   /** One stored event whole: a `tool_result` a page cut to its preview. */
   event: (id: string, seq: number) => request<ChatEvent>('GET', CHAT_API.event(id, seq)),
   /** Models this session can switch to (Claude Code's own list). */
