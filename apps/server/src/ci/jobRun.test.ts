@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict';
 import { type ChildProcess, spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { hostname, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, test } from 'node:test';
@@ -860,4 +860,216 @@ test('T-611: a Job Pending on the required rule says it waits for k3s-node2', as
   const j = w.start(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'true'], { JOB_RUN_START_WAIT_S: '1' });
   const r = await j.done;
   assert.match(r.out, /is Pending: the control-plane node is over 75% of its memory, so this Job waits for k3s-node2/);
+});
+
+// T-731: with --reuse, a Job that passed is reused for the same repository, full commit and command (the key and the store: docs/prd/local-git-ci.md).
+const sha = () => hex(20); // 40 hex characters, as a full commit
+const jobs = (w: ReturnType<typeof world>) => w.applied().length;
+/** Run `--reuse --ref <ref>` with its own options on the world's script; the whole thing is one Job unless it is reused. */
+const go = (w: ReturnType<typeof world>, ref: string, cmd: string, extra: string[] = [], script = SCRIPT, env: Record<string, string> = {}) =>
+  w.run(['--repo', 'claudepilot', '--reuse', '--ref', ref, ...extra, '--', cmd], env, script);
+const store = (w: ReturnType<typeof world>) => join(w.root, 'home/.cache/claudepilot-job-run');
+
+test('T-731 reuse is opt-in: without --reuse a saved entry is not used and nothing is written', () => {
+  const w = world();
+  const c = sha();
+  assert.equal(go(w, c, 'npm test').code, 0); // saved
+  assert.equal(jobs(w), 1);
+  const plain = w.run(['--repo', 'claudepilot', '--ref', c, '--', 'npm test']);
+  assert.equal(plain.code, 0, plain.out);
+  assert.doesNotMatch(plain.out, /reused a passed result/);
+  assert.equal(jobs(w), 2, 'no flag: a Job');
+  const w2 = world();
+  assert.equal(w2.run(['--repo', 'claudepilot', '--ref', c, '--', 'npm test']).code, 0);
+  assert.ok(!existsSync(store(w2)), 'no flag: nothing saved, no folder made');
+});
+
+test('T-731 reuse: a pass is saved (masked log, exit 0); the same repo, commit and command returns it at once with no Job; the log file is written', () => {
+  const w = world();
+  const c = sha();
+  const first = go(w, c, 'npm test');
+  assert.equal(first.code, 0, first.out);
+  assert.match(first.out, /result saved for reuse/);
+  assert.equal(jobs(w), 1);
+  const calls = w.calls();
+  const second = go(w, c, 'npm test');
+  assert.equal(second.code, 0, second.out);
+  const origin = /^job-run: (claudepilot-job-[0-9a-f]{8}) rc=0/m.exec(first.out)?.[1];
+  assert.ok(origin, 'the first run names its Job');
+  assert.match(second.out, new RegExp(`job-run: reused a passed result for claudepilot@[0-9a-f]{12} from Job ${origin} \\(passed \\d{4}-\\d\\d-\\d\\dT[\\d:]+Z, key [0-9a-f]{12}\\); drop --reuse to run it again`));
+  assert.match(second.out, /hello from the job/);
+  assert.match(second.out, /=== JOB-RUN EXIT 0/);
+  assert.ok(!second.out.includes(w.npmToken));
+  assert.equal(jobs(w), 1, 'no second Job');
+  assert.equal(w.calls(), calls, 'no kubectl call at all on a hit');
+  assert.match(w.log(), /hello from the job/);
+  const saved = readdirSync(join(w.root, 'home/.cache/claudepilot-job-run')).map((f) => readFileSync(join(w.root, 'home/.cache/claudepilot-job-run', f), 'utf8')).join('');
+  assert.ok(!saved.includes(w.npmToken), 'nothing unmasked is stored');
+  assert.doesNotMatch(saved, /ARTIFACTS BEGIN/);
+});
+
+test('T-731 reuse: a pass whose log held the credential is masked in the output but never saved', () => {
+  const w = world();
+  writeFileSync(join(w.root, 'scenario.json'), JSON.stringify({ rc: 0, log: jobLog(w.root, 0, 'authorization {TOKEN}\n') }));
+  const c = sha();
+  for (let i = 1; i <= 2; i++) {
+    const r = go(w, c, 'npm test');
+    assert.equal(r.code, 0, r.out);
+    assert.match(r.out, /authorization \[redacted\]/);
+    assert.ok(!r.out.includes(w.npmToken));
+    assert.doesNotMatch(r.out, /reused|saved for reuse/);
+    assert.equal(jobs(w), i);
+  }
+  assert.ok(!existsSync(join(w.root, 'home/.cache/claudepilot-job-run')), 'nothing stored');
+});
+
+test('T-731 reuse: a failed run is never saved or reused', () => {
+  const bad = world([], { rc: 3 });
+  const d = sha();
+  for (let i = 1; i <= 2; i++) {
+    const r = go(bad, d, 'npm test');
+    assert.equal(r.code, 3, r.out);
+    assert.doesNotMatch(r.out, /reused|saved for reuse/);
+    assert.equal(jobs(bad), i, 'a failure runs the Job every time');
+  }
+  assert.ok(!existsSync(join(bad.root, 'home/.cache/claudepilot-job-run')), 'nothing stored');
+});
+
+test('T-731 reuse: a changed commit, command, steps, --against, --also, the hash of job-run.sh or job-run.yaml, the runner image tag or --big is a miss; a branch, --artifacts or a non-commit --also/--against are never keyed', () => {
+  const w = world();
+  const c = sha();
+  assert.equal(go(w, c, 'npm test').code, 0);
+  const n = () => jobs(w);
+  let seen = n();
+  const miss = (what: string, r: { code: number | null; out: string }) => {
+    assert.equal(r.code, 0, `${what}: ${r.out}`);
+    assert.doesNotMatch(r.out, /reused a passed result/, what);
+    assert.equal(n(), ++seen, `${what} runs a Job`);
+  };
+  miss('another commit', go(w, sha(), 'npm test'));
+  miss('another command', go(w, c, 'npm test -w a'));
+  miss('--steps none', go(w, c, 'npm test', ['--steps', 'none']));
+  miss('--against', go(w, c, 'npm test', ['--against', sha()]));
+  miss('--keep-tests', go(w, c, 'npm test', ['--against', sha(), '--keep-tests', 'a.test.ts']));
+  miss('--also at a commit', go(w, c, 'npm test', ['--also', `org/shared@${sha()}`]));
+  const upgraded = mutant((y) => `${y}# a newer runner\n`, (s) => s);
+  miss('another job-run.yaml', go(w, c, 'npm test', [], upgraded));
+  const newer = mutant((y) => y, (s) => `${s}# a newer runner\n`);
+  miss('another job-run.sh', go(w, c, 'npm test', [], newer));
+  miss('another runner image tag', go(w, c, 'npm test', [], SCRIPT, { JOB_RUN_IMAGE: 'registry.test/claudepilot/workspace:2-dev-2' }));
+  miss('--big', go(w, c, 'npm test', ['--big']));
+  // Not keyed at all, so never saved and never reused: a branch moves, so does "stg", and the artifacts do not come back from a store.
+  for (const [what, extra, ref] of [['a branch', [], 'main'], ['--artifacts', ['--artifacts', 'reports'], c], ['--also on stg', ['--also', 'org/shared'], c], ['--against a branch', ['--against', 'main'], c]] as const) {
+    miss(`${what} (1)`, go(w, ref, 'npm test', [...extra]));
+    miss(`${what} (2)`, go(w, ref, 'npm test', [...extra]));
+  }
+  // And the original is still a hit.
+  assert.match(go(w, c, 'npm test').out, /reused a passed result/);
+  assert.equal(n(), seen);
+});
+
+const edit = (from: string, to: string) => (s: string) => {
+  const t = s.replace(from, to);
+  assert.notEqual(t, s, `the mutation applies: ${from}`);
+  return t;
+};
+
+test('T-731 mutation: without the commit in the key a second commit would be served the first one\'s result; the check fails on that script', () => {
+  const differentCommitRuns = (script: string) => {
+    const w = world();
+    assert.equal(go(w, sha(), 'npm test', [], script).code, 0);
+    const r = go(w, sha(), 'npm test', [], script);
+    return !/reused a passed result/.test(r.out) && jobs(w) === 2;
+  };
+  assert.equal(differentCommitRuns(SCRIPT), true, 'the real script runs the other commit');
+  assert.equal(differentCommitRuns(mutant((y) => y, edit('"$url" "$ref" "$cmd"', '"$url" "$cmd"'))), false, 'the mutant reuses it: the check catches it');
+});
+
+test('T-731 mutation: without --keep-tests in the key, a run with other kept tests would be served the first one\'s result', () => {
+  const c = sha(), a = sha();
+  const keptTestsRun = (script: string) => {
+    const w = world();
+    assert.equal(go(w, c, 'npm test', ['--against', a, '--keep-tests', 'a.test.ts'], script).code, 0);
+    const r = go(w, c, 'npm test', ['--against', a, '--keep-tests', 'b.test.ts'], script); // only --keep-tests differs
+    return !/reused a passed result/.test(r.out) && jobs(w) === 2;
+  };
+  assert.equal(keptTestsRun(SCRIPT), true, 'the real script runs it again');
+  assert.equal(keptTestsRun(mutant((y) => y, edit('"$against" "$keep" "$steps"', '"$against" "$steps"'))), false, 'the mutant reuses it: the check catches it');
+});
+
+test('T-731 mutation: a Job that did not end Complete is not saved even if its log says EXIT 0; without the Complete condition it would be', () => {
+  const failedButExit0 = (script: string) => {
+    const w = world();
+    writeFileSync(join(w.root, 'scenario.json'), JSON.stringify({ rc: 1, log: jobLog(w.root, 0) })); // the Job is Failed, the last log line says EXIT 0
+    const c = sha();
+    go(w, c, 'npm test', [], script);
+    return existsSync(store(w)) && readdirSync(store(w)).some((f) => f.endsWith('.rc'));
+  };
+  assert.equal(failedButExit0(SCRIPT), false, 'the real script saves nothing');
+  assert.equal(failedButExit0(mutant((y) => y, edit('&& [ "${st:-}" = Complete ]', ''))), true, 'the mutant saves it: the check catches it');
+});
+
+test('T-731 reuse: a failed mv leaves no .log.tmp behind and no entry; the run still ends with the Job\'s exit code', () => {
+  const w = world();
+  // A mv that fails for the store's .log (the move of the temporary file), and is the real one otherwise.
+  const fake = join(w.root, 'bin/mv');
+  writeFileSync(fake, '#!/bin/sh\ncase "$2" in *.log) exit 1;; esac\nexec /bin/mv "$@"\n');
+  chmodSync(fake, 0o755);
+  const r = go(w, sha(), 'npm test');
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /could not save the result for reuse/);
+  assert.deepEqual(existsSync(store(w)) ? readdirSync(store(w)) : [], [], 'nothing left in the store, no .tmp');
+});
+
+test('T-731 reuse: no $work/n (the leak check did not run) is not saved (fail closed); a mutant without that condition saves it', () => {
+  const noLeakFile = (s: string) => edit('JR_N=$work/n awk', 'JR_N=$work/n.none awk')(s);
+  const saved = (script: string) => {
+    const w = world();
+    const r = go(w, sha(), 'npm test', [], script);
+    assert.equal(r.code, 0, r.out);
+    return existsSync(store(w)) && readdirSync(store(w)).some((f) => f.endsWith('.rc'));
+  };
+  assert.equal(saved(mutant((y) => y, noLeakFile)), false, 'the real check: a missing $work/n is not saved');
+  assert.equal(saved(mutant((y) => y, (s) => edit('&& [ -f "$work/n" ] ', '')(noLeakFile(s)))), true, 'without the -f condition it would be saved: the check catches it');
+  assert.equal(saved(SCRIPT), true, 'and a normal run is saved');
+});
+
+test('T-731 reuse: a store that is /, the home folder or the repository is refused (exit 2)', () => {
+  const w = world();
+  for (const dir of ['/', join(w.root, 'home'), REPO]) {
+    const r = go(w, sha(), 'npm test', [], SCRIPT, { JOB_RUN_CACHE_DIR: dir });
+    assert.equal(r.code, 2, `${dir}: ${r.out}`);
+    assert.match(r.out, /JOB_RUN_CACHE_DIR must be a folder of its own/);
+  }
+  assert.equal(jobs(w), 0, 'no Job was made');
+});
+
+test('T-731 reuse: cleanup deletes only old files of the store\'s own form (64-hex key + .log/.rc/.job) directly in it; foreign files (even *.log), subfolders and an existing mode stay', () => {
+  const w = world();
+  const dir = join(w.root, 'own-store');
+  mkdirSync(join(dir, 'sub'), { recursive: true });
+  chmodSync(dir, 0o755);
+  const old = new Date(Date.now() - 20 * 86_400_000);
+  const k = hex(32); // 64 hex characters, as a key
+  const own = [`${k}.log`, `${k}.rc`, `${k}.job`];
+  const foreign = ['notes.txt', 'sub/x.log', 'syslog.log', 'old.rc', 'old.job', `${k}.log.bak`, `${hex(31)}.log`];
+  for (const f of [...own, ...foreign]) { writeFileSync(join(dir, f), 'x'); utimesSync(join(dir, f), old, old); }
+  const r = go(w, sha(), 'npm test', [], SCRIPT, { JOB_RUN_CACHE_DIR: dir });
+  assert.equal(r.code, 0, r.out);
+  for (const f of foreign) assert.ok(existsSync(join(dir, f)), `${f} stays`);
+  for (const f of own) assert.ok(!existsSync(join(dir, f)), `${f} is removed`);
+  assert.equal(statSync(dir).mode & 0o777, 0o755, 'an existing folder keeps its mode');
+  assert.ok(readdirSync(dir).some((f) => f.endsWith('.rc')), 'and the new pass is saved');
+});
+
+test('T-731 reuse: a saved result older than the age limit is a miss', () => {
+  const w = world();
+  const c = sha();
+  assert.equal(go(w, c, 'npm test').code, 0);
+  const dir = join(w.root, 'home/.cache/claudepilot-job-run');
+  const old = new Date(Date.now() - 8 * 86_400_000);
+  for (const f of readdirSync(dir)) utimesSync(join(dir, f), old, old);
+  const r = go(w, c, 'npm test');
+  assert.doesNotMatch(r.out, /reused a passed result/);
+  assert.equal(jobs(w), 2);
 });
