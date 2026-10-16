@@ -26,8 +26,9 @@ db.close();
 
 const sizes = `(() => {
   const box = (e) => { if (!e) return null; const r = e.getBoundingClientRect(); return { w: Math.round(r.width * 10) / 10, h: Math.round(r.height * 10) / 10 }; };
-  const filters = [...document.querySelectorAll('main button, main a')].filter((e) => /^(all runs|running|failed|passed)$/i.test((e.getAttribute('aria-label') || e.innerText || '').trim()));
-  return { filters: filters.map((e) => ({ t: e.getAttribute('aria-label') || e.innerText, ...box(e) })), back: box(document.querySelector('a[aria-label=CI]')) };
+  const filters = [...document.querySelectorAll('[role=group][aria-label=Show] button')];
+  const back = [...document.querySelectorAll('a[aria-label=CI]')].find((e) => e.getBoundingClientRect().width > 0 && !e.closest('nav, aside, header'));
+  return { filters: filters.map((e) => ({ t: e.getAttribute('aria-label'), ...box(e) })), back: box(back), pathname: location.pathname };
 })()`;
 
 const b = await Browser.launch({ width: 390, height: 844, mobile: true, cookie });
@@ -36,10 +37,12 @@ try {
   for (const [w, h, mobile, min] of [[390, 844, true, 44], [1280, 900, false, 40]]) {
     await b.setViewport(w, h, mobile);
     await b.goto('/admin/ci', 2500);
+    await b.waitFor(`document.querySelectorAll('[role=group][aria-label=Show] button').length === 4`, 15000, 'filter buttons');
     const runs = await b.eval(sizes);
     console.log(`  ${w}px runs tab: ${JSON.stringify(runs.filters)}`);
     check(`${w}: four filter buttons, each >= ${min} px`, runs.filters.length === 4 && runs.filters.every((f) => f.w >= min - 0.5 && f.h >= min - 0.5));
     await b.goto(`/admin/ci/runs/${runId}`, 2500);
+    await b.waitFor(`!!document.querySelector('a[aria-label=CI]') && document.querySelector('h1')?.innerText.includes('#12')`, 15000, 'run page');
     const page = await b.eval(sizes);
     console.log(`  ${w}px run page back link: ${JSON.stringify(page.back)}`);
     check(`${w}: CI back link >= ${min} px`, !!page.back && page.back.w >= min - 0.5 && page.back.h >= min - 0.5);

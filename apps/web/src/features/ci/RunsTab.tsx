@@ -84,7 +84,7 @@ export function RunsTab({ onNewRemote }: { onNewRemote: () => void }) {
               aria-label={label}
               title={label}
               onClick={() => set({ s: id === 'all' ? null : id })}
-              className={cn('press flex size-11 items-center sm:size-10 justify-center rounded-full', scope === id ? 'bg-primary text-primary-ink' : 'text-muted hover:text-ink')}
+              className={cn('press flex size-11 items-center justify-center sm:size-10 rounded-full', scope === id ? 'bg-primary text-primary-ink' : 'text-muted hover:text-ink')}
             >
               <Icon className="size-[18px]" />
             </button>
