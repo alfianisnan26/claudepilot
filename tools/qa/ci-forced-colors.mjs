@@ -54,6 +54,8 @@ try {
       await b.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: dark ? 'dark' : 'light' }, { name: 'forced-colors', value: 'active' }] });
       for (const path of pages) {
         await b.goto(path, 2200);
+        await b.waitFor(`document.querySelectorAll('main button, main a, main select').length > 3`, 15_000, path).catch((e) => console.log(`  warn ${e.message}`));
+        await sleep(500);
         check(`${tag} ${path}: forced-colors is active`, await b.eval(`matchMedia('(forced-colors: active)').matches`));
         await b.eval('document.activeElement && document.activeElement.blur && document.activeElement.blur()');
         const stops = [];
