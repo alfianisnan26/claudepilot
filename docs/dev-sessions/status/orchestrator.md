@@ -11,15 +11,15 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 
 ## IN FLIGHT (6 of 6, D-71)
   Lanes' ticket_comment refused on unassigned tickets (T-341, T-549, T-675): verdicts live in their replies + this file.
-- QA PERF 7e4879c7: T-426 S1h PWG 7880 (-> S1i redact loop). REVIEW T-781 S5 CHANGES (7905 -> S7). Now blind REVIEW
-  T-772 S1b 1e1e0ba1 (no Job).
+- QA PERF 7e4879c7: T-426 S1h PWG 7880 (-> S1i redact loop). REVIEW T-781 S5 CHANGES (7905 -> S7). REVIEW T-772 S1b
+  CHANGES (2xl: false positive, no self-test -> S2, 7916). Now T-611 S1b probes in advance (no Job).
 - QA UI 8b13bb5a: T-736 S3c PWG 7875 (-> S3d). REVIEW T-781 S3 APPROVE (F1' F2). REVIEW T-723 S3c APPROVE (7908 gaps).
-  Now QA T-772 S1b 1e1e0ba1 (7900, job deaa7d60 2/0, mutant red; browser ring check).
+  QA T-772 S1b PWG 7909 (browser not run -> S2 QA). Now PLAN QA T-781 S6 (no Job); it runs the S6 QA.
 - QA BE 2 42e5408f: QA T-781 S5 FAIL (F1: prod adapter index.ts has no interrupt; 7905). QA T-723 S3c PWG 7903 (39/0, m1 m3
   killed, m2 broke the regex). Now T-736 C1 re-read, then a corrected T-723 m2 Job -> T-723 READY if KILLED.
 - T-781 (D-76) now assigned to the lead: verdicts posted 7905. S1-S5 built; S6 (QA FAIL F1) and S7 open.
 - IMPL lane 7cc1b2f5 (sonnet, satria; c959661f ended: T-772 S1b DONE 1e1e0ba1 7900). Now T-781 S6 (7905: a prod interrupt,
-  b re-check, c redact before clip, d tests; D-76 first) -> T-781 S7 (F2 + S5 items) -> T-736 S3d -> T-772 S2 (7599).
+  b re-check, c redact before clip, d tests; D-76 first) -> T-781 S7 (F2 + S5 items) -> T-736 S3d -> T-772 S2 (7599 + 7916).
 - BE INFRA fad38191 (sonnet; 3958fe14 ended: T-426 S1h DONE 9573a085 7847, job 7a3a11e7 65/0, 4 mutants killed; lead read N1
   redact/safe_name/say: mask before cut, holds). Now T-611 S1b on ticket/T-611-s1b (from S1h; S1 re-applied by hand, conflicts)
   -> T-426 S1i (7888; lead merges it into T-611 S1b) -> T-611 S2 -> T-524 S3c + T-733 S5 (job-run.sh) -> T-612 S1.
