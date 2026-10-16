@@ -26,8 +26,8 @@ every case of it is at 95 percent or more.
 
 | class | cases (min parity) | facts / missing | bytes plain → rtk per case | verdict | on the allowlist |
 | --- | --- | --- | --- | --- | --- |
-| git-status | `git status` 100, `-s` 100, `--short --branch` 100 | 108 / 0 | 2142→1504, 1472→1471, 1492→1491 | KEEP | `git status [paths]` only (the short forms pass through) |
-| git-log | `--oneline -20` 100, `-5` 100, `--stat -3` 100 | 61 / 0 | 602→602, 1432→833, 1097→1097 | KEEP | `git log [-N \| --max-count=N] [refs/paths]` only |
+| git-status | `git status` 100, `-s` 100, `--short --branch` 100 | 108 / 0 | 2142→1504, 1472→1471, 1492→1491 | KEEP | `git status [--] [paths]`, no other flag (T-341: 13 more cases) |
+| git-log | `--oneline -20` 100, `-5` 100, `--stat -3` 100 | 61 / 0 | 602→602, 1432→833, 1097→1097 | **DROP (T-341: scratch bodies were 3 lines; real ones lose trailers, 62.5 percent)** | no (was `git log [-N \| --max-count=N] [refs/paths]`) |
 | git-diff-stat | `--stat HEAD~10`, `--stat`, `--cached --stat`: 100 | 82 / 0 | byte-identical (2512, 1716, 166) | KEEP | no: no saving |
 | git-diff-names | `--name-only`, `--name-status`: 100 | 84 / 0 | byte-identical (1673, 1757) | KEEP | no: no saving |
 | grep-list | `grep -rl` ×2, `rg -l` ×2: 100 | 411 / 0 | 1609→933, 4772→3975, 1609→933, 4655→3873 | KEEP | `grep -rl` (letters r R i l), `rg -l` / `--files-with-matches` |
@@ -68,15 +68,64 @@ rewrite bypassed 28 of 70.
 
 Tests: `apps/server/src/qa/rtkHook.test.ts`, 12 of 12 pass (`test.txt`); `npx tsc --noEmit -p apps/server` clean (`tsc.txt`), same Job.
 
+## T-341: the fidelity gaps (A to D), 2026-10-15
+
+Script: `tools/qa/rtk-history.sh` (same method and the same checksummed rtk v1.0.0). Source of every number below: Job
+**claudepilot-job-e9baa000** (commit 63119f0b94e0, rc 0, 12 s run; files `cases.tsv`, `fidelity.tsv`, `classes.tsv`, `<case>.fid.json`,
+`history.txt`, `busy-count.txt` in the worktree's `job-out/t341/job-out/`, not committed). **This supersedes the git log and git status
+rows of the table above.**
+
+**A. Sample.** Busy worktree: done. The real repository tree with 205 changed paths (`git ls-files -m -d -o` counts 205, `git status -s` shows 161
+lines; built by the script: 60 modified, 40 staged, 15 deleted, 3 renamed, 40 untracked in nested folders, a folder with a space in its name). `git status` ×13 cases (long, `-s`, `-sb`,
+paths: one folder, two folders, a file, `--` form, a new folder, `.env`, a missing folder): 747 facts, 1 missing, min 99.4 percent: KEEP.
+The one miss is cosmetic: rtk prints `?? "rtkh-new/with space/"` (quoted), the path is there. Bytes plain→rtk: `git status` 7685→6242 (19
+percent), `-s` 6215→6214, a folder 3650→3462, `docs` 836→632, `--` form 407→353, a file 63→62. **Real history: NOT done.** The Job's clone
+is depth 1 and has no `origin` (`fatal: 'origin' does not appear to be a git repository`), so `git log` ran on one real commit (a 7-line
+body with trailers); merges, many authors and long histories are not sampled (a bundle would have to be shipped into the Job). It did not
+change the answer: see git log below.
+
+**B. Dates and e-mail.** Scored now (classes `git-log-meta`, `ls-meta`). git log (15 cases of class `git-log-meta`): e-mail and `Date:` line 0 percent in
+8 cases (2 facts each, both missing), 100 percent in 1 (`--stat`, 2 facts found), and **no facts to score in 6** (`--oneline`, `--max-count=N --oneline`,
+refs, `--merges`: the plain output has no date or e-mail). Class totals: 18 facts, 16 missing. Where rtk prints the commit it gives `(20 minutes ago)` and
+`<name>`, no e-mail, no absolute date. ls (`-la`, `-lh`, folders; class `ls-meta`, 3 cases, 136 facts, 130 missing): owner+group, exact size and
+date 25.0, 0 and 0 percent per case (rtk prints mode, name, a rounded size). The 25.0 is the root listing (24 facts, 18 missing) and depends on
+what the clone holds; an earlier rerun (QA, claudepilot-job-4d747bcd) gave 26.1. Source of these figures: Job **claudepilot-job-640d3a6f**
+(commit e428431, rc 0, `classes.tsv`, `fidelity.tsv`). Verdict: **not dropped silently, dropped on purpose and stated**: an agent
+that needs who wrote a commit or when (blame, "what changed since Tuesday", release notes) needs them; rtk loses them. The git log
+class is therefore removed from the allowlist (next paragraph). ls is already off the allowlist, so its meta loss costs nothing.
+
+**C. Allowlist narrowed to the measured forms** (hook and tests changed, not the settings). `git log` in EVERY form is now off the allowlist:
+`git log -5`, `--max-count=10`, `-5 -- <path>`, `<path>/`, `--no-merges`, `--since` all scored 62.5 percent (8 facts, 3 missing: rtk keeps three
+body lines and prints `[+2 lines omitted]`, so the trailers `Ticket:`, `Pilot-Session:` go); `--oneline` and `--stat` are byte for byte
+(no saving). The earlier 100 percent was an artefact of scratch commits whose bodies had three lines. A ref operand (`HEAD~50`) failed in
+both arms (shallow clone), so refs were not measured. `git status` is allowed as exactly: no flag, one optional `--`, then operands
+(measured). `git status -s/-sb` and any other flag: untouched. grep-list was measured earlier (4 cases, not extended here).
+
+**Operands are not checked.** `git status .env` is rewritten to `rtk git status .env` (measured: output 62 bytes, branch line only). This is
+not a bypass: `git status <path>` prints names and states, never file contents; the deny rules still run on the original and the rewritten
+command inside the hook (a rule naming the operand wins: `git status /proc/x/environ` is untouched), and the rewritten command goes through
+Claude Code's own permission check again (see D, not verified).
+
+**D. Does Claude Code apply `updatedInput` and still check allow/deny on the rewritten command? NOT VERIFIED.** It needs a real Claude Code
+session against the model API (a credential), which a Job must not hold. Probe for a person or the coordinator, in a scratch session
+(`scripts/scratch-portal.sh`, a throwaway project, never this repository): 1. register the hook (the settings diff below) in that project and put
+`Bash(rtk git status)` in `allow` and `Bash(rtk git status .env)` in `deny`; 2. ask the model to run `git status`: expect the transcript
+to show `rtk git status` run with no prompt; 3. ask for `git status .env`: expect a refusal naming the DENY rule (proves the deny check runs on
+the rewritten command; an executed command means it does not); 4. remove the allow rule and run `git status` under dontAsk: expect a refusal
+(proves the allow check runs on the rewritten command); 5. with `RTK_HOOK_DEBUG=1` read the hook's stderr line to see the decision.
+
+Tests: `apps/server/src/qa/rtkHook.test.ts` (13 tests) in a Job; result in the ticket comment.
+
 ## Open before delivery (item 4, the owner decides)
 
 1. Installing the rtk binary on PATH lets an agent TYPE `rtk git push --force …` and get past the anchored deny rules (step 1: 28 rules,
    3 not refused by rtk itself). The hook does not cause this, but delivery must close it: either mirror the dangerous deny rules as
    `Bash(rtk <rule>)`, or extend the hook to deny a typed `rtk <cmd>` whose `<cmd>` a deny rule names (a permission decision: needs approval).
-2. Confirm in a scratch session that Claude Code applies `updatedInput` without a permission decision and still checks the rewritten command
+2. (T-341 D, probe steps above, not verified) Confirm in a scratch session that Claude Code applies `updatedInput` without a permission decision and still checks the rewritten command
    against allow and deny rules.
-3. Item 3: the lab A/B (arm rtk-subset against control). On these outputs the saving is small: only `git status`, `git log -N` and grep
-   listings shrink (bytes 30 percent for `git status`, 42 for `git log -5`, 17 to 42 for the grep listings); the honest outcome may be "not worth it".
+3. Item 3: the lab A/B (arm rtk-subset against control). On these outputs the saving is small: only `git status` and `grep -rl` / `rg -l` listings shrink
+   (bytes: 19 percent for `git status` on the busy tree, 17 to 42 for the grep listings; `git log` is refused by the hook and no longer counts); the honest
+   outcome may be "not worth it".
 
 ## Proposed settings diff (NOT applied)
 
@@ -87,7 +136,6 @@ Tests: `apps/server/src/qa/rtkHook.test.ts`, 12 of 12 pass (`test.txt`); `npx ts
        "Bash(git log:*)",
 +      "Bash(rtk git status)",
 +      "Bash(rtk git status:*)",
-+      "Bash(rtk git log:*)",
 @@ (top level, after "permissions")
 +  "hooks": {
 +    "PreToolUse": [
