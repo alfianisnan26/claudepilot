@@ -238,6 +238,7 @@ test('T-416 S2c: a Restart of a live session (the stop for a restart) supersedes
   try {
     const { lead } = await liveWithStaleKept(s);
     s.store.db!.prepare("UPDATE chat_sessions SET state = 'idle' WHERE id = ?").run(lead.id); // a turn boundary: the restart is allowed
+    s.store.db!.prepare("UPDATE chat_inputs SET state = 'discarded' WHERE session_id = ? AND state IN ('sending', 'queued', 'started')").run(lead.id); // and nothing is on its way
     const asked = bypassAsks(s).length;
     const restarted = await s.answering(s.controller.restart(lead.id));
     assert.equal(restarted.process, 'live');
@@ -261,8 +262,8 @@ test('T-416 S2c: the record that the Bypass restart made capable is written even
     await assert.rejects(s.controller.allowBypass(lead.id), /audit store failed/);
     s.store.db!.exec('DROP TRIGGER fail_left');
     assert.equal(s.controller.get(lead.id)!.bypassCapable, true, 'the session was made capable');
-    const rows = s.controller.audit({ kind: 'bypass.capable', sessionId: lead.id });
-    assert.deepEqual(rows.map((a) => a.detail.how), ['restart'], 'and the record of it is there');
+    const rows = s.controller.audit({ kind: 'bypass.capable', sessionId: lead.id }).filter((a) => a.detail.how === 'restart');
+    assert.equal(rows.length, 1, 'and the record of it is there (the earlier `start` record is another row)');
   } finally {
     await s.done();
   }
