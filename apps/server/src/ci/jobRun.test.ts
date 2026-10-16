@@ -801,7 +801,7 @@ test('T-611 mutation: without the rule in the Job\'s clone of the template, or i
   assert.notDeepEqual(placed(90, [], {}, noTemplateMarker).required, CP_RULE, 'template without the marker: the required rule is missing, so the check catches it');
   const noScriptRule = mutant((y) => y, (s) => s.replace('-e "s#__MASTER_REQUIRED__#$master_rule#"', '-e "s#__MASTER_REQUIRED__##"'));
   assert.notDeepEqual(placed(90, [], {}, noScriptRule).required, CP_RULE, 'script that never fills the rule: caught');
-  const neverOver = mutant((y) => y, (s) => s.replace('[ "$master_pct" -gt "$master_max" ]', '[ "$master_pct" -gt 1000 ]'));
+  const neverOver = mutant((y) => y, (s) => s.replaceAll('[ "$pct" -gt "$master_max" ]', '[ "$pct" -gt 1000 ]'));
   assert.notDeepEqual(placed(90, [], {}, neverOver).required, CP_RULE, 'script that ignores the reading: caught');
 });
 
