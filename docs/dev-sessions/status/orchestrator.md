@@ -14,17 +14,19 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   moved to f4de2647 (coordinator, docs) -> combined (8047). Green -> ff origin+pilot, rebase+push status, tell coordinator on T-731.
   Lanes' ticket_comment refused on unassigned tickets (T-341, T-549, T-675; T-675 assign refused too): verdicts in replies + this file.
 - QA PERF 330855ba (respawned; 7e4879c7 ended: Bash refused twice; new one has no Write and heredocs refused). QA T-611 S1b Job on
-  f74638f1, C5e skipped as a probe defect (decided: no edit), mutants 1-3; add-fail cleanup by reading. Probes ready: S1i 6c8a2392, S6 d478c8c0 (in 8fac4ec1).
-- QA UI 8b13bb5a (no Write tool, 7939/7944/7947): REVIEW T-781 S6 APPROVE 8006; REVIEW T-611 S1b APPROVE 8018 (3 follow-ups -> S1c).
-  Now REVIEW T-781 S7 (delta fb70258d..0c73e71f). Then T-772 S2 (plan 7963).
+  f74638f1, C5e skipped as a probe defect (decided: no edit), mutants 1-3; add-fail cleanup by reading. Queued (sent): QA T-611 S1c +
+  T-426 S1i on wip/qa-t611s1c-48d3230 48d3230f (44c293ea + all probes), M1 + 5fad547e-loop mutants.
+- QA UI 8b13bb5a (no Write tool, 7939/7944/7947): REVIEWS APPROVE: T-781 S6 8006, T-611 S1b 8018, T-781 S7 8049.
+  Now QA T-675 R2 b4024e17 (read + one mutant Job). Then T-772 S2 (plan 7963).
 - QA BE 2 42e5408f (no Write tool, 7946): QA T-733 at 1afaf8a6 (plan 7964); now QA T-781 S6 8fac4ec1 (Job waited for a node);
   then QA T-781 S7 on wip/qa-t781s7-d44e2d3 d44e2d3f (S7 + probes d478c8c0).
 - T-781 (D-76): S6 fb70258d review APPROVE 8006; S7 DONE 0c73e71f 8041 (job 45f2f203 153/0; S5-3c mutant survives, unobservable?).
 - IMPL 7cc1b2f5: T-781 S7 DONE 0c73e71f. Now T-736 S3d from fdc5636b (7889 cd pin + 7875 gaps) -> T-772 S2.
 - BE INFRA fad38191: T-426 S1i DONE b7fa0ba7 8019 (67/0, M1 M2 red). Lead merged S1i into S1b: ab91adf9 (union of appended tests,
-  63; not run). Now T-611 S1c from ab91adf9 (8018 items 1-3 + one Job proving the merge) -> T-611 S2 -> T-524 S3c + T-733 S5 -> T-612 S1.
-- BACKEND 3484bd4d: T-733 DONE 1afaf8a6 -> QA BE 2. T-675 items 1-3 already on integration (actors.test 234/243, memory.test,
-  memoryBudget.test 520; N stays D-43's 5, lead's 6 was wrong). Now R2 option (a): test a turn starting during the memory read, fix if red.
+  63). T-611 S1c DONE 44c293ea 8052 (job b22e7964 80/0 proves the merge). Now T-611 S2 from 44c293ea (+ `reading=failed` doc line)
+  -> T-524 S3c + T-733 S5 -> T-612 S1.
+- BACKEND 3484bd4d: T-733 DONE 1afaf8a6 -> QA BE 2. T-675 R2 DONE b4024e17 (job 5b59ecfb 61/0, test only, no bug) -> QA UI.
+  Now T-416 S2 (Bypass restore after OOM; every Bypass gate re-checked) from f4de2647.
 - HELD: T-401 S2b a4ad3052 (QA PASS, review APPROVE 7387): a person's OK on the gate change (charter wall; 8023), then merge + gate.
   T-426 S1h/S1e after T-401; T-379 S2 3f11b28 behind it. T-578 -> owner. T-631 -> coordinator.
 
@@ -66,9 +68,9 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   T-527 finding 4 (owner triggers tagging owner-checklist); T-657 reopen T-259/T-317/T-338; T-739 A scoring defs (scoring = person's wall).
 
 ## NEXT (in order, as slots free)
-1. Gates b19r then b21 (IN FLIGHT). Next batch: T-733 (after QA), T-781 S6 (after QA), T-611 S1b+S1i+S1c (after QA), T-736 S3c+S3d.
+1. Gate b22 (IN FLIGHT). Next batch: T-733, T-781 S6+S7 0c73e71f, T-611 S1b+S1i+S1c 44c293ea, T-675 b4024e17 (each after QA), T-736 S3c+S3d.
 2. T-401 after a person's OK (8023) -> T-426 S1e -> T-379 S2 3f11b28; deploys are the coordinator's.
-3. T-416 S2 (Bypass restore).
+3. T-416 S2 review + QA when Backend is done.
 4. RTK: T-340 (person/coordinator) -> T-341 merge -> T-306 item 3. 5. T-537. 6. T-513. 7. T-472 live re-check (needs portal_status), T-422, T-147, T-438, T-425, T-436, T-437, T-432, T-382, T-377, T-386, T-409, T-402, T-398,
    T-399, T-370 HOLD, T-371..T-374, T-363, T-451, T-470, T-507, T-508, T-512, T-520; T-404 open till deployed.
 
