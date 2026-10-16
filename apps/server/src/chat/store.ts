@@ -31,6 +31,7 @@ import { fileRefs } from './artifacts/records.js';
 import { lineageOf, type Lineage } from './lineage.js';
 import { readEnding } from './integrity.js';
 import { redact, redactMaybe } from './redact.js';
+import { COUNTED_USAGE } from './usageDelta.js';
 
 /**
  * The folder a session runs in: its stored folder made absolute (from the home folder) and tidied, or
@@ -97,6 +98,8 @@ export type ChatSessionRow = {
   subagents?: number | null;
   /** T-294 (migration 775): what a worker reports to its lead unasked (`idle`, `end`, `none`); null: `idle`. */
   report?: string | null;
+  /** T-548 (migration 779): 1 starts QA when a worker of this session ends with `DONE <sha>`; 0 (default) never. */
+  auto_handoff?: number | null;
   worktree_path?: string | null;
   worktree_branch?: string | null;
   worktree_repo?: string | null;
@@ -104,6 +107,8 @@ export type ChatSessionRow = {
   folder_branch?: string | null;
   /** T-490 (migration 777): why its lead started it above its role's model (D-63); null: none given. */
   spawn_why?: string | null;
+  /** T-561 (migration 778): 1 when its starter marked it a crew lead; null otherwise. */
+  lead?: number | null;
   bypass_capable?: number | null;
   claude_session_id?: string | null;
   cost_base_usd?: number | null;
@@ -138,6 +143,10 @@ type TaskRow = {
   ended_at: string | null;
 };
 
+/** T-723: the longest actor an audit row keeps. */
+export const AUDIT_ACTOR_MAX = 120;
+/** Control, format and line or paragraph separator characters, except U+200C to U+200F (ZWNJ, ZWJ, the RTL marks); written as escapes, no raw invisible character in the source. */
+const ACTOR_STRIPPED = /(?:(?!\u{200c}|\u{200d}|\u{200e}|\u{200f})[\p{Cc}\p{Cf}\p{Zl}\p{Zp}])+/gu;
 const TASK_COLUMNS = 'task_id, tool_use_id, label, subagent_type, model, status, tokens, tool_uses, duration_ms, summary, started_at, ended_at';
 
 function taskOut(r: TaskRow): ChatTask {
@@ -205,6 +214,8 @@ export interface ChatSessionPatch {
   /** T-294: its limits (migration 774); null workers: the global setting. */
   maxWorkers?: number | null;
   subagents?: boolean;
+  /** T-548: auto hand-off (migration 779). */
+  autoHandoff?: boolean;
   title?: string;
   ticketId?: string | null;
   /** Sets or clears the session's worktree (its three columns together). */
@@ -402,6 +413,8 @@ export class ChatStore {
     subagents?: boolean;
     /** T-490 (D-63): why its lead started it above its role's model; redacted and capped here. */
     spawnWhy?: string | null;
+    /** T-561: its starter marked it a crew lead (stored 1; otherwise null). */
+    lead?: boolean;
   }): ChatSession {
     const now = this.#stamp();
     const db = this.#writable();
@@ -410,8 +423,8 @@ export class ChatStore {
       .prepare(
         `INSERT INTO chat_sessions (id, workspace_id, cwd, title, origin, state, state_since, created_at, last_activity_at, claude_id, predecessor_id,
            ticket_id, parent_id, started_by, worktree_path, worktree_branch, worktree_repo, claude_session_id, bypass_capable, continued_from, agent,
-           max_workers, subagents, folder_branch, spawn_why)
-         VALUES (?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           max_workers, subagents, folder_branch, spawn_why, lead)
+         VALUES (?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         opts.id,
@@ -438,6 +451,7 @@ export class ChatStore {
         opts.subagents === false ? 0 : 1,
         opts.worktree ? null : (opts.folderBranch ?? null),
         why,
+        opts.lead === true ? 1 : null,
       );
     // Its first run: on its Claude, under its own id.
     db.prepare(`INSERT INTO chat_segments (session_id, n, claude_id, claude_session_id, cwd, started_at) VALUES (?, 1, ?, ?, ?, ?)`).run(opts.id, opts.claudeId ?? '', opts.id, opts.cwd, now);
@@ -478,6 +492,11 @@ export class ChatStore {
       .prepare(`SELECT * FROM chat_sessions ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY last_activity_at DESC, created_at DESC`)
       .all(...vals) as ChatSessionRow[];
     return rows.map((r) => this.toSession(this.#keyed(r)));
+  }
+
+  /** T-561: whether any session (live or ended) was started as a worker of `id`: one that ever had workers is a crew lead. */
+  hasWorkers(id: string): boolean {
+    return this.#db().prepare('SELECT 1 FROM chat_sessions WHERE parent_id = ? LIMIT 1').get(id) !== undefined;
   }
 
   /** T-294: what a worker reports to its lead unasked (`session_spawn` `report`), set once when it is started. */
@@ -572,6 +591,7 @@ export class ChatStore {
       maxWorkers: row.max_workers ?? null,
       subagents: row.subagents !== 0,
       ...(row.spawn_why ? { spawnWhy: row.spawn_why } : {}),
+      ...(row.lead === 1 ? { lead: true } : {}),
     };
   }
 
@@ -786,8 +806,8 @@ export class ChatStore {
       cache_read_tokens AS cacheRead, cache_write_tokens AS cacheWrite, cost_usd AS costUsd, requests, agents, duration_ms AS durationMs`;
     return (
       claudeId
-        ? this.#db().prepare(`SELECT ${cols} FROM chat_usage WHERE at_ms >= ? AND claude_id = ? ORDER BY at_ms`).all(fromMs, claudeId)
-        : this.#db().prepare(`SELECT ${cols} FROM chat_usage WHERE at_ms >= ? ORDER BY at_ms`).all(fromMs)
+        ? this.#db().prepare(`SELECT ${cols} FROM chat_usage WHERE at_ms >= ? AND claude_id = ? AND ${COUNTED_USAGE} ORDER BY at_ms`).all(fromMs, claudeId)
+        : this.#db().prepare(`SELECT ${cols} FROM chat_usage WHERE at_ms >= ? AND ${COUNTED_USAGE} ORDER BY at_ms`).all(fromMs)
     ) as unknown as UsageRecord[];
   }
 
@@ -868,6 +888,7 @@ export class ChatStore {
     if (patch.autoApply !== undefined) set('auto_apply', patch.autoApply === null ? null : patch.autoApply ? 1 : 0);
     if (patch.maxWorkers !== undefined) set('max_workers', patch.maxWorkers);
     if (patch.subagents !== undefined) set('subagents', patch.subagents ? 1 : 0);
+    if (patch.autoHandoff !== undefined) set('auto_handoff', patch.autoHandoff ? 1 : 0);
     if (patch.title !== undefined) set('title', patch.title);
     if (patch.endedReason !== undefined) set('ended_reason', redactMaybe(patch.endedReason));
     if (patch.endedFor !== undefined) set('ended_for', patch.endedFor);
@@ -1423,9 +1444,17 @@ export class ChatStore {
   addAudit(entry: { severity: ChatAuditEntry['severity']; kind: string; sessionId?: string | null; workspaceId?: string | null; actor?: string | null; actorLabel?: string | null; detail?: Record<string, unknown> }): void {
     // A Portal MCP token's label as it was when it acted, kept in the row's detail (redacted with the rest) so a later rename changes nothing.
     const detail = entry.actorLabel ? { ...entry.detail, actorLabel: entry.actorLabel.replace(/\s+/g, ' ').trim().slice(0, 60) } : entry.detail;
-    this.#writable()
+    // T-723: the actor is a short name; one from outside is stored on one line and cut (control and format characters, bidi overrides and zero width ones included, and newlines become a space).
+    // ZWNJ, ZWJ and the RTL marks (U+200C to U+200F) stay: a Persian word or a ZWJ emoji needs them. Cut on code points; a name left empty is NULL.
+    const actor =
+      entry.actor == null
+        ? null
+        : Array.from(entry.actor.replace(ACTOR_STRIPPED, ' ').trim())
+            .slice(0, AUDIT_ACTOR_MAX)
+            .join('') || null;
+      this.#writable()
       .prepare('INSERT INTO chat_audit (at, severity, kind, session_id, workspace_id, actor, detail) VALUES (?, ?, ?, ?, ?, ?, ?)')
-      .run(this.#stamp(), entry.severity, entry.kind, entry.sessionId ?? null, entry.workspaceId ?? null, entry.actor ?? null, redact(JSON.stringify(detail ?? {})));
+      .run(this.#stamp(), entry.severity, entry.kind, entry.sessionId ?? null, entry.workspaceId ?? null, actor, redact(JSON.stringify(detail ?? {})));
   }
 
   /** The audit trail, newest first; optionally one kind (a prefix such as `bypass`) or one session's. */

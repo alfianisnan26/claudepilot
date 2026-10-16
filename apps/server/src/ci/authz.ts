@@ -4,8 +4,8 @@
 // person's acts: the routes also refuse any actor that is not a signed-in user, and no Portal MCP tool reaches them, so an agent never approves.
 
 import { AppError } from '@isnanme/core';
-import { FOUNDING_USER_ID, objectRef, workspaceRef, type CiRepo, type RoutePolicies, type UserId } from '@portal/contracts';
-import { declarePolicies, declareToolPolicies, registerResolver } from '../authz/seam.js';
+import { FOUNDING_USER_ID, objectRef, vaultRef, workspaceRef, type Actor, type CiRepo, type RoutePolicies, type UserId } from '@portal/contracts';
+import { can, declarePolicies, declareToolPolicies, registerResolver } from '../authz/seam.js';
 import { branchProblem } from '../chat/worktrees.js';
 import type { CiSession } from './sessions.js';
 
@@ -48,10 +48,25 @@ export const isProgramRemote = (repo: Pick<CiRepo, 'sourcePath' | 'connected'>, 
  * - `own_branch`: the branch its session works on (its worktree's, or a worker's folder branch at its start): any pipeline;
  * - `program_branch`: a lead (no parent, holds a crew) on a `dev/*` or `ticket/*` branch of its program's remote: any pipeline, on that BRANCH
  *   only (`refs/heads/...`, never a tag of the same name);
+ * - `program_stg` (T-558, D-62): a lead on the branch `stg` of its program's remote: only a pipeline whose every job that names an environment
+ *   names exactly `stg` (the file at that commit decides, never an input); anything else there is refused like a missing remote (`refusal`);
  * - `deployment`: anything else: only a pipeline that deploys to an environment, whose deploying job the portal holds for a person (today's rule,
  *   unchanged). A lead asking it on another program's remote is refused exactly like a remote that does not exist.
+ * Approval is untouched by every rule: a protected environment still holds its job for a person (or the environment's own rule, FR41a).
  */
-export type AgentStart = { rule: 'own_branch' | 'program_branch'; ref: string } | { rule: 'deployment'; ref: string; refusal: AppError };
+export type AgentStart =
+  | { rule: 'own_branch' | 'program_branch'; ref: string }
+  | { rule: 'program_stg'; ref: string; refusal: AppError }
+  | { rule: 'deployment'; ref: string; refusal: AppError };
+
+/** T-558: the one environment a lead may deploy to on its own (D-62: stg is the harness's; uat and production stay a person's). */
+export const LEAD_ENVIRONMENT = 'stg';
+
+/** T-558: a pipeline a lead may start on `stg`: at least one job names an environment, and every one that does names exactly `stg`. */
+export const deploysOnlyToStg = (jobs: readonly { hidden?: boolean; environment?: string | null }[]): boolean => {
+  const named = jobs.filter((j) => !j.hidden && j.environment);
+  return named.length > 0 && named.every((j) => j.environment === LEAD_ENVIRONMENT);
+};
 
 /**
  * T-476: is `branch` the session's own, on this remote? A worktree branch (flag set by the session adapter) is its own anywhere; a folder
@@ -78,9 +93,19 @@ export function agentStart(me: CiSession | null, repo: Pick<CiRepo, 'name' | 'wo
   if (me?.lead && me.cwd) {
     if (!isProgramRemote(repo, me.cwd)) return { rule: 'deployment', ref, refusal: noRemote(repo.name, repo.workspaceId) };
     if (isProgramBranch(ref)) return { rule: 'program_branch', ref: `refs/heads/${ref}` };
+    if (ref === LEAD_ENVIRONMENT) return { rule: 'program_stg', ref: `refs/heads/${ref}`, refusal: noRemote(repo.name, repo.workspaceId) };
   }
   const own = me?.branch ? ` (${me.branch})` : ', and this session has no worktree branch';
   return { rule: 'deployment', ref, refusal: new AppError('FORBIDDEN', `An agent can start a run only on the branch its own session works on${own}, or a pipeline that deploys to an environment.`) };
+}
+
+/**
+ * T-591: the release report is written as the portal (`system`), so the person who sets its vault must be able to WRITE there themselves
+ * (`operate` on the vault: OBJECT_TYPES `vault`). A vault that does not exist or that they may not write answers the same 404 as one they
+ * cannot see. The vault's own agent policy does not apply: the writer is never an agent.
+ */
+export function requireVaultWrite(actor: Actor, vaultId: string, exists: (vaultId: string) => boolean): void {
+  if (!exists(vaultId) || !can(actor, 'operate', vaultRef(vaultId)).allow) throw new AppError('NOT_FOUND', 'Not found.');
 }
 
 const run = (verb:'view' | 'operate' | 'manage') => ({ kind: 'objects' as const, checks: [{ type: 'ci_run' as const, verb, from: 'path' as const, param: 'id' }] });
@@ -115,11 +140,37 @@ export const CI_POLICIES = {
   'PUT /api/ci/repos/:id/environments/:name': { ...repo('manage'), audit: 'ci.environment_protection' },
   // The auto-approve rule (T-110, FR41a): a person with manage only (the handler refuses tokens and agents); no tool reaches it.
   'PUT /api/ci/repos/:id/environments/:name/auto-approve': { ...repo('manage'), audit: 'ci.environment_auto_approve' },
+  // Release reports (T-591): the setting and the backfill are a person's with manage only (the handlers refuse tokens and agents); no tool reaches
+  // them. The backfill takes a run id and nothing else: it writes only into the vault and folder the remote's own setting names.
+  'GET /api/ci/repos/:id/release-report': repo('view'),
+  'PUT /api/ci/repos/:id/release-report': { ...repo('manage'), audit: 'ci.release_report_setting' },
+  'POST /api/ci/runs/:id/release-report': { ...run('manage'), audit: 'ci.release_report' },
   'POST /api/ci/validate': { kind: 'signed-in' },
+  // Runners (T-557): the list shows the workspaces the person may see (the handler filters). Making a workspace a runner sends other
+  // workspaces' commits and secrets to it: manage on that workspace, a person only (the handler refuses tokens and agents), audited.
+  'GET /api/ci/runners': { kind: 'signed-in' },
+  'PUT /api/ci/runners/:id': { kind: 'objects', checks: [{ type: 'workspace', verb: 'manage', from: 'path', param: 'id' }], audit: 'ci.runner_changed' },
+  'DELETE /api/ci/runners/:id': { kind: 'objects', checks: [{ type: 'workspace', verb: 'manage', from: 'path', param: 'id' }], audit: 'ci.runner_changed' },
+} satisfies RoutePolicies;
+
+/**
+ * The public upstream webhook (FR8a, T-486 S2), outside /api and the session guard: its door is the Git host's signature, then the seam
+ * acts as the remote's owner. Every refusal before the kick is the same 404. Kept apart from CI_POLICIES, which lists the /api/ci routes.
+ */
+export const CI_HOOK_POLICIES = {
+  'POST /hooks/ci/:id': {
+    kind: 'handler',
+    checks: [
+      'the remote follows an upstream and names a hook secret that its workspace delivers',
+      'the Git host’s HMAC-SHA256 over the raw body (X-Hub-Signature-256 or X-Gitea-Signature)',
+      'the remote’s owner is the actor: can(owner, operate, ci_repo)',
+    ],
+  },
 } satisfies RoutePolicies;
 
 export function declareCiPolicies(): void {
   declarePolicies('ci', CI_POLICIES);
+  declarePolicies('ci', CI_HOOK_POLICIES);
   // The tools filter to the caller's own runs themselves (an agent: its branch, its ticket, its session's runs). None approves.
   declareToolPolicies('ci', {
     ci_runs_list: { kind: 'signed-in', filter: 'ci_run' },

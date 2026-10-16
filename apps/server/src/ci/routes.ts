@@ -13,6 +13,7 @@ import {
   type Actor,
   type BumpRequest,
   type CiApprovalRequest,
+  type CiReleaseReportSetting,
   type UpdateCiEnvironmentRequest,
   type UpdateCiAutoApproveRequest,
   type ConnectCiRepoRequest,
@@ -21,11 +22,12 @@ import {
   type StartCiRunRequest,
   type UpdateCiRepoRequest,
   type ValidateCiRequest,
+  type UpsertCiRunnerRequest,
   type CiStatus,
 } from '@portal/contracts';
 import { Hono, type Context } from 'hono';
 import { actorOf, can, requireCan, visible } from '../authz/seam.js';
-import { declareCiPolicies, registerCiAuthz } from './authz.js';
+import { declareCiPolicies, registerCiAuthz, requireVaultWrite } from './authz.js';
 import type { CiDecider, CiService } from './service.js';
 
 async function body<T>(c: Context): Promise<Partial<T>> {
@@ -125,6 +127,24 @@ export function createCiRoutes(ci: CiService): Hono {
     const actor = may(c, 'operate', repoRef);
     return c.json(success(await ci.syncUpstream(id(c), { actor: actorString(actor), userId: actorUserId(actor) })));
   });
+  // Runners (T-557). The id is the workspace's (`<target>/<name>`, encoded as one path segment).
+  app.get('/runners', async (c) => {
+    const actor = actorOf(c);
+    const all = await ci.runners();
+    return c.json(success(all.filter((r) => can(actor, 'view', workspaceRef(r.workspaceId)))));
+  });
+  app.put('/runners/:id', async (c) => {
+    const actor = actorOf(c);
+    requireCan(actor, 'manage', workspaceRef(id(c)));
+    const req = await body<UpsertCiRunnerRequest>(c);
+    return c.json(success(await ci.upsertRunner(id(c), req, person(actor))));
+  });
+  app.delete('/runners/:id', async (c) => {
+    const actor = actorOf(c);
+    requireCan(actor, 'manage', workspaceRef(id(c)));
+    await ci.removeRunner(id(c), person(actor));
+    return c.json(success({ ok: true }));
+  });
   app.delete('/repos/:id', async (c) => {
     may(c, 'manage', repoRef);
     await ci.deleteRepo(id(c));
@@ -143,6 +163,24 @@ export function createCiRoutes(ci: CiService): Hono {
   app.put('/repos/:id/environments/:name/auto-approve', async (c) => {
     const by = person(may(c, 'manage', repoRef));
     return c.json(success(ci.setAutoApprove(id(c), c.req.param('name'), await body<UpdateCiAutoApproveRequest>(c), by)));
+  });
+
+  // Release reports (T-591): where a remote's passed releases are written (a vault and a folder). The setting is a person's only (403 for
+  // tokens and agents); audited. The backfill takes a run id and nothing else: the vault and folder are always the remote's own setting.
+  app.get('/repos/:id/release-report', (c) => (may(c, 'view', repoRef), c.json(success(ci.releaseReportSetting(id(c))))));
+  app.put('/repos/:id/release-report', async (c) => {
+    const actor = may(c, 'manage', repoRef);
+    const by = person(actor);
+    const req = await body<{ setting: CiReleaseReportSetting | null }>(c);
+    if (req.setting !== null && (typeof req.setting !== 'object' || req.setting === undefined)) throw new AppError('VALIDATION_FAILED', 'Send { "setting": { pipeline, vaultId, folder } } or { "setting": null }.');
+    // The note is written as the portal later, so the person must be able to write that vault themselves (404 otherwise, as for one they cannot see).
+    const vaultId = typeof req.setting?.vaultId === 'string' ? req.setting.vaultId.trim() : '';
+    if (req.setting && vaultId && /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(vaultId)) requireVaultWrite(actor, vaultId, (v) => ci.vaultExists(v));
+    return c.json(success(ci.setReleaseReport(id(c), req.setting, by)));
+  });
+  app.post('/runs/:id/release-report', async (c) => {
+    person(may(c, 'manage', runRef));
+    return c.json(success(await ci.reportRelease(id(c))));
   });
 
   app.post('/validate', async (c) => c.json(success(ci.validate(await body<ValidateCiRequest>(c)))));

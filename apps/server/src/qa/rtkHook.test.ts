@@ -21,8 +21,8 @@ const decide = (cmd: string, deny: string[] = repoDeny, rtkOnPath = true): Decis
 
 test('allowlisted read-only commands are rewritten to their rtk form', () => {
   for (const [cmd, cls] of <[string, string][]>[
-    ['git status', 'git-status'], ['git status apps/server', 'git-status'],
-    ['git log -5', 'git-log'], ['git log -20 main', 'git-log'], ['git log --max-count=3', 'git-log'],
+    ['git status', 'git-status'], ['git status apps/server', 'git-status'], ['git status apps/web/src docs', 'git-status'],
+    ['git status -- apps/server/src/chat', 'git-status'], ['git status .env', 'git-status'],
     ['grep -rl actorOf apps/server/src', 'grep-list'], ["grep -rli 'sameHost' apps", 'grep-list'], ['rg -l actorOf apps/server/src', 'grep-list'],
     ['rg --files-with-matches actorOf docs', 'grep-list'],
   ]) {
@@ -40,10 +40,40 @@ test('test runners, builds, typecheck, kubectl, cat/sed, writes and unmeasured f
     'git diff', 'git diff HEAD~1', 'git log -p', 'git log --format=%H', 'git status --porcelain', 'git -C x status', 'ls -R', 'ls -la --color=always',
     'grep -rn actorOf apps', 'grep actorOf x', 'rg -n actorOf apps', 'find . -name x', 'find . -delete', 'tree -L 2', 'npm ls', 'rtk git status',
     'FOO=1 git status', '/usr/bin/ls -la',
+    // T-341: git log is off the allowlist (rtk drops body lines past three, the e-mail and the absolute date); status takes no flag, one `--` at most.
+    'git log -5', 'git log -20 main', 'git log --max-count=3', 'git log -5 -- apps/server', 'git log --merges -5', 'git status -u', 'git status --ignored apps',
+    'git status -- -- x', 'git status docs --short',
     // Dropped on fidelity (ls, find, grep -n) or passed through byte for byte by rtk (no saving): never rewritten.
     'ls', 'ls -la', 'ls -la apps/server/src/chat', 'git status -sb', 'git status -s', 'git log --oneline -20', 'git log --stat -3', 'git diff --stat',
     'git diff --name-only HEAD~1', 'grep -rc actorOf apps', 'rg --count actorOf apps', 'grep -rlw x apps', 'grep -rl --include=*.ts x apps',
   ]) assert.equal(decide(cmd).action, 'skip', cmd);
+});
+
+// T-733 S6 (T-341): the edges the allowlist test above does not reach.
+test('length cap: 2000 characters are rewritten, 2001 are skipped as "too long"', () => {
+  const at = (n: number) => 'git status ' + 'a'.repeat(n - 'git status '.length);
+  assert.equal(at(2000).length, 2000);
+  assert.equal(decide(at(2000), []).action, 'rewrite');
+  const long = decide(at(2001), []);
+  assert.equal(long.action, 'skip');
+  assert.equal(long.reason, 'too long');
+});
+
+test('git status takes ONE `--`, at any position after the head: `git status x --` is rewritten, a second `--` is not', () => {
+  const one = decide('git status x --', []);
+  assert.equal(one.action, 'rewrite');
+  assert.equal(one.command, 'rtk git status x --');
+  assert.equal(decide('git status x -- y --', []).action, 'skip');
+  assert.equal(decide('git status -- -- x', []).action, 'skip');
+});
+
+test('an empty quoted operand is a word of its own (tokenize), and git status with one is rewritten', () => {
+  assert.deepEqual(hook.tokenize("git status ''"), ['git', 'status', '']);
+  assert.deepEqual(hook.tokenize('git status ""'), ['git', 'status', '']);
+  assert.deepEqual(hook.tokenize("git status '' x"), ['git', 'status', '', 'x']);
+  const d = decide("git status ''", []);
+  assert.equal(d.action, 'rewrite');
+  assert.equal(d.command, "rtk git status ''");
 });
 
 test('compound commands, pipes, subshells, redirects and expansions stay untouched even when every part is allowlisted', () => {
@@ -56,15 +86,15 @@ test('compound commands, pipes, subshells, redirects and expansions stay untouch
 test('a command a deny rule names is untouched, read from the rules given (no mirrored copy)', () => {
   assert.equal(decide('git status', ['git status:*']).action, 'skip');
   assert.equal(decide('git status', ['git status:*']).reason, 'matches a deny rule');
-  assert.equal(decide('git log -5', ['git log -5']).reason, 'matches a deny rule');
-  assert.equal(decide('git log -5 main', ['git log * main']).reason, 'matches a deny rule');
+  assert.equal(decide('git status docs', ['git status docs']).reason, 'matches a deny rule');
+  assert.equal(decide('git status docs main', ['git status * main']).reason, 'matches a deny rule');
   assert.equal(decide('git status', ['*']).reason, 'matches a deny rule');
-  assert.equal(decide('git  log  -5', ['git log -5']).reason, 'matches a deny rule', 'collapsed spaces still match');
+  assert.equal(decide('git  status  docs', ['git status docs']).reason, 'matches a deny rule', 'collapsed spaces still match');
   assert.equal(decide('git status', ['rtk git:*']).reason, 'the rewritten form matches a deny rule');
   // The repository's own wildcard rule: an allowlisted command aimed at another process's environment.
   assert.equal(decide('git status /proc/1/environ').reason, 'matches a deny rule');
   assert.equal(decide('grep -rl x /proc/1/environ').reason, 'matches a deny rule');
-  assert.equal(decide('git log -5', []).action, 'rewrite');
+  assert.equal(decide('git status docs', []).action, 'rewrite');
   assert.equal(decide('git status /proc/1/status').action, 'rewrite', 'the wildcard rule only catches what it names');
 });
 
@@ -167,4 +197,13 @@ test('fidelity per class: git log keeps hashes, subjects, authors and body lines
   assert.equal(fid.scoreClass('git-log', plain, '7e74674 scratch 1: touch x (0 seconds ago) <rtk-scratch>\nWhy: a body line.\nTicket: T-901').parity_percent, 100);
   const r = fid.scoreClass('git-log', plain, '7e74674 scratch 1: touch x (0 seconds ago) <rtk-scratch>');
   assert.deepEqual(r.by_kind.text.missing, ['Why: a body line.', 'Ticket: T-901']);
+});
+
+test('fidelity per class (T-341): git-log-meta scores the e-mail and the date line, ls-meta owner, size and date', () => {
+  const plain = ['commit 7e74674aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'Author: A B <a@example.invalid>', 'Date:   Tue Oct 14 21:31:00 2026 +0000', '', '    s', ''].join('\n');
+  assert.equal(fid.scoreClass('git-log-meta', plain, '7e74674 s (20 minutes ago) <A B>').parity_percent, 0, 'rtk shows neither');
+  assert.equal(fid.scoreClass('git-log-meta', plain, 'a@example.invalid\nTue Oct 14 21:31:00 2026 +0000').parity_percent, 100);
+  const ls = '-rw-r--r--  1 node staff 7197 Oct 14 21:31 CLAUDE.md';
+  assert.equal(fid.scoreClass('ls-meta', ls, '644  CLAUDE.md  7.0K').parity_percent, 0);
+  assert.equal(fid.scoreClass('ls-meta', ls, 'node staff 7197 Oct 14 21:31 CLAUDE.md').parity_percent, 100);
 });

@@ -15,7 +15,7 @@ const STATES = ['starting', 'idle', 'working', 'waiting', 'interrupted', 'ended'
 /** Over MCP a session's mode is limited to the ones that can't run commands unasked (PRD §13.3): never Auto (the controller refuses it too) or Bypass. */
 const MCP_MODES = ['plan', 'default', 'acceptEdits', 'dontAsk'] as const satisfies readonly ChatPermissionMode[];
 /** Slash commands MCP text may use (chat-sessions FR13): anything else is for the terminal. */
-const SLASH_ALLOWED = new Set(['/compact', '/context', '/reload-plugins']);
+import { SLASH_ALLOWED, slashWord } from '../../chat/slash.js';
 /** What `session_get` returns of the transcript stays under this, so one call fits a result block. */
 const EVENT_CHARS_MAX = 12_000;
 /** T-294: `session_get` lists at most this many of a session's workers (live ones first); the count is always whole. */
@@ -275,8 +275,8 @@ export function registerSessionTools(
     ctx: PortalToolContext,
     as?: { actor: `session:${string}`; relation: 'parent' },
   ) {
-    const first = text.trimStart().split(/\s/)[0] ?? '';
-    if (first.startsWith('/') && !SLASH_ALLOWED.has(first)) throw new PortalToolError('FORBIDDEN', `${cleanText(first, 40)} is for the terminal. Over MCP only ${[...SLASH_ALLOWED].join(', ')} are allowed.`);
+    const first = slashWord(text);
+    if (first && !SLASH_ALLOWED.has(first)) throw new PortalToolError('FORBIDDEN', `${cleanText(first, 40)} is for the terminal. Over MCP only ${[...SLASH_ALLOWED].join(', ')} are allowed.`);
     const from = as ? { actor: as.actor, relation: as.relation } : { actor: ctx.actor, ...(ctx.actorLabel ? { actorLabel: ctx.actorLabel } : {}) };
     await chat.send(id, randomUUID(), text, { ...from, ...(priority ? { priority } : {}) });
   }
@@ -359,9 +359,9 @@ export function registerSessionTools(
         : null;
       // A control that fails after the limits changed says so (the limits stay changed and audited: they are not undone).
       try {
-        if (args.model) await chat.control(args.id, 'model', { model: args.model });
-        if (args.effort) await chat.control(args.id, 'effort', { effort: args.effort });
-        if (args.mode) await chat.control(args.id, 'mode', { mode: args.mode });
+        if (args.model) await chat.control(args.id, 'model', { model: args.model }, { actor: ctx.actor });
+        if (args.effort) await chat.control(args.id, 'effort', { effort: args.effort }, { actor: ctx.actor });
+        if (args.mode) await chat.control(args.id, 'mode', { mode: args.mode }, { actor: ctx.actor });
       } catch (e) {
         if (!changed) throw e;
         const why = e instanceof Error ? e.message : 'refused';

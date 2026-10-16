@@ -47,6 +47,7 @@ spec:
         # (75), replaces the marker below with a REQUIRED rule away from the control plane (the Job then waits for k3s-node2 or for the master to
         # have room). Under the line, or when the metrics fail, the marker is empty and only the preferred rules apply (a metrics failure never
         # blocks every Job).
+        # T-524: the script reads again when the queue lets the (suspended) Job out and patches the same required rule in if the master filled meanwhile.
         nodeAffinity:
           __MASTER_REQUIRED__
           preferredDuringSchedulingIgnoredDuringExecution:
@@ -301,6 +302,7 @@ spec:
           resources:
             # Memory request = limit (T-524): with 2Gi requested and 8Gi allowed a 4.1 GB Job fitted k3s-master "on paper" and took it to
             # 92% (portal 503s). job-run.sh fills in 4Gi, or 8Gi with --big, and says when a Job is OOMKilled or Pending for memory.
+            # T-731: 518 measured peaks (p99 2270Mi, max 2536Mi) would fit 3Gi, but on k3s-node2 the 1 CPU requests bind at 3 Jobs: a lower default waits on a CPU-request measurement.
             requests: {cpu: 1000m, memory: __MEMORY__}
             limits: {cpu: "4", memory: __MEMORY__}
       volumes:

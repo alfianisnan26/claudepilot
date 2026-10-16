@@ -39,6 +39,27 @@ export interface CiHost {
 }
 
 const OUTPUT_MAX = 8 * 1024 * 1024;
+/** How long a workspace's state and an install of the runner may take before the caller goes on (T-557: remote targets stall). */
+const STATE_MS = 15_000;
+const INSTALL_MS = 90_000;
+
+/** The promise, or `fallback()` (made only then: a value, or a throw) once `ms` passed. The slow call itself is left to finish or fail. */
+function within<T>(p: Promise<T>, ms: number, fallback: () => T): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const late = new Promise<T>((resolve, reject) => {
+    timer = setTimeout(() => {
+      try {
+        resolve(fallback());
+      } catch (e) {
+        reject(e);
+      }
+    }, ms);
+    timer.unref();
+  });
+  // The slow call may still fail later: that is not this caller's error any more.
+  p.catch(() => undefined);
+  return Promise.race([p, late]).finally(() => clearTimeout(timer));
+}
 const split = (id: string): [string, string] => {
   const slash = id.indexOf('/');
   return [id.slice(0, slash), id.slice(slash + 1)];
@@ -58,7 +79,8 @@ export class WorkspacesCiHost implements CiHost {
     const [target, name] = split(workspaceId);
     const access = this.workspaces.runtimeFor(target)?.delivery;
     if (!access) return this.workspaces.runtimeFor(target) ? ('unsupported' as const) : ('gone' as const);
-    const s = await access.state(name);
+    // Bounded (T-557): a remote target whose tunnel stalls answers "stopped" for now, never holds the caller.
+    const s = await within(access.state(name), STATE_MS, () => ({ exists: true, running: false }));
     const state = !s.exists ? ('gone' as const) : s.running ? ('running' as const) : ('stopped' as const);
     // A workspace seen stopped or gone comes back from its image: the runner lives in the container, not on the volume (T-99).
     if (state !== 'running') this.#checked.delete(workspaceId);
@@ -139,7 +161,9 @@ export class WorkspacesCiHost implements CiHost {
     if (at !== undefined && Date.now() - at < this.recheckMs) return Promise.resolve();
     const running = this.#installing.get(workspaceId);
     if (running) return running;
-    const p = this.#install(workspaceId)
+    const p = within(this.#install(workspaceId), INSTALL_MS, () => {
+      throw new CiUnreachable('Installing the CI runner took too long.', false);
+    })
       .then(() => void this.#checked.set(workspaceId, Date.now()))
       .finally(() => this.#installing.delete(workspaceId));
     this.#installing.set(workspaceId, p);

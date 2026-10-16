@@ -82,14 +82,15 @@ test('pickSpawnClaude (T-294): the parent’s by default; on auto a plan Claude 
   assert.deepEqual(pick(undefined, rows), { claudeId: 'p', why: 'parent' });
   assert.deepEqual(pick(' same ', null), { claudeId: 'p', why: 'parent' }, 'same never needs the report');
 
-  assert.deepEqual(pick('auto', rows), { claudeId: 'b', why: 'room' }, 'the most room among the fresh, measured plan Claudes');
-  assert.deepEqual(pick('AUTO', rows, { b: 1 }), { claudeId: 'a', why: 'room' }, 'a burst spreads: the least busy with room first');
-  assert.deepEqual(pick('auto', rows, { p: 2, a: 2, b: 2 }), { claudeId: 'b', why: 'room' }, 'equal load: the ranking decides');
-  assert.deepEqual(pick('auto', rows, { a: 2, b: 2 }), { claudeId: 'p', why: 'parent' }, 'its own Claude when it is the least busy with room');
+  const core = (r: ReturnType<typeof pickSpawnClaude>) => ({ claudeId: r.claudeId, why: r.why });
+  assert.deepEqual(core(pick('auto', rows)), { claudeId: 'b', why: 'room' }, 'the most room among the fresh, measured plan Claudes (same reset: room decides)');
+  assert.deepEqual(core(pick('AUTO', rows, { b: 1 })), { claudeId: 'a', why: 'room' }, 'a burst spreads: load divides the score');
+  assert.deepEqual(core(pick('auto', rows, { p: 2, a: 2, b: 2 })), { claudeId: 'b', why: 'room' }, 'equal load: the ranking decides');
+  assert.deepEqual(core(pick('auto', rows, { a: 3, b: 3 })), { claudeId: 'p', why: 'parent' }, 'its own Claude when the others are busier (T-547: score = room per minute, divided by 1 + load)');
   assert.deepEqual(pick('auto', null), { claudeId: 'p', why: 'usage_unknown' }, 'no report: stays');
   const onlyBad = [usageRow('p', 95, NOW), rows[3]!, rows[4]!, rows[5]!, rows[6]!, usageRow('a', 95, NOW), usageRow('b', 50, NOW, { stale: true })];
   assert.deepEqual(pick('auto', onlyBad), { claudeId: 'p', why: 'no_room' }, 'never a key, an unknown, an old, a removed, a tight or a stale Claude');
-  assert.deepEqual(pick('auto', [usageRow('p', 5, NOW), usageRow('a', 40, NOW)]), { claudeId: 'p', why: 'parent' }, 'its own when that has the most room');
+  assert.deepEqual(core(pick('auto', [usageRow('p', 5, NOW), usageRow('a', 40, NOW)])), { claudeId: 'p', why: 'parent' }, 'its own when that has the most room');
 
   assert.deepEqual(pick('hasyim', rows), { claudeId: 'b', why: 'named' }, 'by name, any case');
   assert.deepEqual(pick('a', rows), { claudeId: 'a', why: 'named' }, 'by id');
@@ -130,6 +131,27 @@ test('pickSpawnClaude (T-427): with no Claude with room, the least used now (nev
   for (const id of ['p', 'a', 'b']) assert.ok((load[id] ?? 0) <= share, `${id} holds ${load[id]} of 7 live sessions: at most ${share}`);
   assert.equal(got[0], 'b', 'the first goes to the least used');
   assert.ok(got.includes('a'), `a burst spreads past the least used one (${got.join(',')})`);
+});
+
+test('pickSpawnClaude (T-547, D-65): use it or lose it: less room but a sooner reset wins; past the auto-move line it is skipped; an unknown reset is never picked', () => {
+  const at = (m: number) => new Date(NOW + m * 60_000).toISOString();
+  const withReset = (id: string, usedPct: number, resetsInMin: number | null) => {
+    const r = usageRow(id, usedPct, NOW);
+    r.windows = [{ ...r.windows[0]!, resetsAt: resetsInMin === null ? null : at(resetsInMin) }];
+    return r;
+  };
+  // b: 60 % left but resets in 30 min (2 per minute); a: 90 % left but resets in 300 min (0.3 per minute).
+  const near = pick('auto', [withReset('p', 80, 200), withReset('a', 10, 300), withReset('b', 40, 30)]);
+  assert.equal(near.claudeId, 'b', 'the sooner reset wins although it has less room');
+  assert.equal(near.why, 'room');
+  assert.equal(near.detail, 'Hasyim: 60 % left, resets in 30 min (use it or lose it)', 'the choice is explained with its figures');
+  // Past the line (D-64: 10 % left or less): never, however soon it resets.
+  assert.equal(pick('auto', [withReset('p', 80, 200), withReset('a', 10, 300), withReset('b', 95, 1)]).claudeId, 'a', 'b is past the line: skipped');
+  // Unknown readings: no reset time (monitor marks it unknown) is not picked; no usage report keeps the parent.
+  assert.equal(pick('auto', [withReset('p', 80, 200), withReset('a', 10, 300), withReset('b', 40, null)]).claudeId, 'a', 'unknown reset time: skipped');
+  assert.deepEqual(pick('auto', null), { claudeId: 'p', why: 'usage_unknown' });
+  // Equal figures: the least busy first (a burst spreads).
+  assert.equal(pick('auto', [withReset('p', 80, 100), withReset('a', 40, 100), withReset('b', 40, 100)], { b: 1 }).claudeId, 'a');
 });
 
 test('portalFrame (T-294): a session sender is named by its relation; a peer is told it carries no authority', () => {
@@ -265,7 +287,9 @@ test('T-294: a worker’s Claude is its parent’s, a named plan Claude, or on a
     assert.equal((await s.controller.spawnClaude(s.id, 'auto')).why, 'usage_unknown', 'no report installed');
     await assert.rejects(s.controller.spawnClaude(s.id, 'work'), /plan can’t be read now/, 'named, no report: refused');
     s.controller.spawnUsage = async () => [usageRow(mine, 60, now), usageRow(work.id, 10, now)];
-    assert.deepEqual(await s.controller.spawnClaude(s.id, 'auto'), { claudeId: work.id, name: 'Work', why: 'room' });
+    const auto = await s.controller.spawnClaude(s.id, 'auto');
+    assert.deepEqual({ claudeId: auto.claudeId, name: auto.name, why: auto.why }, { claudeId: work.id, name: 'Work', why: 'room' });
+    assert.match(auto.detail ?? '', /^Work: 90 % left, resets in 180 min \(use it or lose it\)$/, 'T-547: the figures that decided it');
     assert.deepEqual(await s.controller.spawnClaude(s.id, 'work'), { claudeId: work.id, name: 'Work', why: 'named' });
     s.controller.spawnUsage = async () => [usageRow(mine, 95, now), usageRow(work.id, null, now, { runsOn: 'key', windows: [] })];
     await assert.rejects(s.controller.spawnClaude(s.id, 'Work'), /billed per use/);
@@ -316,7 +340,7 @@ test('over MCP a session starts a worker in its own workspace, on its own Claude
     const opening = r.s.controller.history(worker.id).find((e) => e.kind === 'user')!;
     assert.deepEqual([opening.actor, opening.text], [`session:${r.s.id}`, 'Split the router into two files.']);
 
-    const seen = (await r.h.call(a.secret, 'session_family', {})).result!;
+    const seen = (await r.h.call(a.secret, 'session_family', { view: 'detail' })).result!;
     const family = seen.structuredContent;
     assert.equal(family.workers.length, 1);
     assert.equal(family.workers[0].id, worker.id);
@@ -368,7 +392,7 @@ test('T-294 over MCP: a worker on auto runs on a Claude with room, as its role (
     const out = started.result!.structuredContent.session as { id: string; claude: { id: string; name: string; why: string }; role: string; applied: string[]; unconfirmed: string[] };
     assert.deepEqual(out.claude, { id: work.id, name: 'Work', why: 'room' });
     assert.deepEqual([out.role, out.applied, out.unconfirmed], ['qa-verifier', ['mode dontAsk'], []]);
-    assert.match(started.result!.content![0]!.text, /^Started worker \S+ on Work, a Claude with room by a fresh, measured reading, mode dontAsk\./);
+    assert.match(started.result!.content![0]!.text, /^Started worker \S+ on Work, a Claude with room by a fresh, measured reading \(Work: \d+ % left, resets in \d+ min \(use it or lose it\)\), mode dontAsk\./);
     const worker = r.s.controller.get(out.id)!;
     assert.deepEqual([worker.claudeId, worker.parentId, worker.bypassCapable, worker.mode, worker.agent], [work.id, r.s.id, false, 'dontAsk', 'qa-verifier']);
     // The role is its agent: its process starts as `claude --agent qa-verifier`, so the first instruction is the parent's, as written.
@@ -420,8 +444,100 @@ test('T-294 over MCP: a worker on auto runs on a Claude with room, as its role (
     const toNobody = (await r.h.call(w1.secret, 'session_message', { session_id: 'no-such-session', text: 'hi' })).result!;
     assert.deepEqual(toStranger.structuredContent.error, toNobody.structuredContent.error, 'a stranger answers exactly like a session that does not exist');
     assert.equal((await r.h.call(w1.secret, 'session_stop_worker', { session_id: s2.id, action: 'end' })).result?.structuredContent.error.code, 'NOT_FOUND', 'a peer is not its worker');
-    const parentView = (await r.h.call(a.secret, 'session_family', {})).result!.structuredContent;
+    const parentView = (await r.h.call(a.secret, 'session_family', { view: 'detail' })).result!.structuredContent;
     assert.deepEqual(new Set(parentView.workers.filter((w: { state: string }) => w.state !== 'ended').map((w: { claude: string }) => w.claude)), new Set(['Work', 'Default']));
+  } finally {
+    await r.done();
+  }
+});
+
+test('T-574 over MCP: a lead with 10 workers gets one line per worker under 1.5k characters; worker_id and reply_of still give the details; a stranger is a 404; worker text stays untrusted', async () => {
+  const r = await rig();
+  try {
+    r.s.controller.agentCaps = () => ({ ...CAPS, maxChildren: 12, spawnsPerHour: 40 });
+    const a = await r.h.agentToken('docker/ws1', r.s.id);
+    const ids: string[] = [];
+    for (let i = 0; i < 10; i++) {
+      const started = await r.h.call(a.secret, 'session_spawn', { prompt: `Do part ${i} of a long task with a long title`, title: `Worker number ${i} with a rather long title that goes on` });
+      assert.equal(started.result?.isError, undefined, JSON.stringify(started.raw));
+      ids.push((started.result!.structuredContent.session as { id: string }).id);
+    }
+    const res = (await r.h.call(a.secret, 'session_family', {})).result!;
+    const whole = JSON.stringify(res.structuredContent) + res.content![0]!.text;
+    // T-574 S3: rows carry no id (workers holds it once), so both copies together (structured and text) stay under 2.2k (they were 2.5k; the size test prints the sizes); the 6,374 before is far away.
+    assert.ok(whole.length < 2200, `default result is ${whole.length} characters`);
+    const block = res.structuredContent.lines as { untrusted_text: string; source: string };
+    assert.equal(block.source, 'agent', 'worker text stays labelled');
+    const rows = block.untrusted_text.split('\n');
+    assert.equal(rows.length, 10);
+    // workers stays an array of objects with an id (readers of the detail view): the same sessions as the lines, in the same order.
+    const listed = (res.structuredContent.workers as { id: string }[]).map((w) => w.id);
+    assert.deepEqual([...listed].sort(), [...ids].sort());
+    assert.deepEqual(rows.map((x) => x.split(' ')[0]), listed.map((_, i) => String(i + 1)), 'row n is workers[n-1]');
+    assert.ok(rows.every((x) => !ids.some((id) => x.includes(id.slice(0, 8)))), 'no id in the rows');
+    assert.deepEqual(Object.keys(res.structuredContent.workers[0]), ['id'], 'workers carries only the id');
+    assert.equal(res.structuredContent.cut, undefined);
+    assert.equal(res.structuredContent.parent, undefined, 'no full rows in the lines view');
+
+    // The details are still reachable: one worker by its id8, the whole list as detail, the reply by reply_of.
+    const one = (await r.h.call(a.secret, 'session_family', { worker_id: ids[3]!.slice(0, 8) })).result!.structuredContent;
+    assert.deepEqual(one.workers.map((w: { id: string }) => w.id), [ids[3]]);
+    assert.ok('turns' in one.workers[0]);
+    assert.equal((await r.h.call(a.secret, 'session_family', { view: 'detail' })).result!.structuredContent.workers.length, 10);
+    assert.equal((await r.h.call(a.secret, 'session_family', { reply_of: ids[3] })).result?.isError, undefined);
+    // A session that is not in the family is the same 404 as none.
+    const stranger = (await r.h.call(a.secret, 'session_family', { worker_id: r.stranger.id })).result!;
+    const nobody = (await r.h.call(a.secret, 'session_family', { worker_id: 'no-such-session' })).result!;
+    assert.deepEqual(stranger.structuredContent.error, nobody.structuredContent.error);
+    assert.equal(stranger.isError, true);
+    // Another lead's worker (same workspace), by full id and by id8: the very same 404 as an unknown id.
+    const theirs = await child(r.s, r.stranger.id, 'Theirs');
+    for (const want of [theirs.id, theirs.id.slice(0, 8)]) {
+      const other = (await r.h.call(a.secret, 'session_family', { worker_id: want })).result!;
+      assert.equal(other.isError, true, want);
+      assert.deepEqual(other.structuredContent.error, nobody.structuredContent.error, `lead B's worker ${want.length === 8 ? 'id8' : 'id'} answers like an unknown id`);
+      assert.ok(!JSON.stringify(other).includes(theirs.id), 'its id is not echoed');
+    }
+    assert.equal((await r.h.call(a.secret, 'session_family', { worker_id: 'no-such-id8' })).result!.isError, true);
+  } finally {
+    await r.done();
+  }
+});
+
+test('T-574 S3 over MCP: size of the default family result for 0, 1, 5, 10 and 25 workers (structured plus text), printed, and bounded', async () => {
+  const r = await rig();
+  try {
+    r.s.controller.agentCaps = () => ({ ...CAPS, maxChildren: 30, spawnsPerHour: 60 });
+    const a = await r.h.agentToken('docker/ws1', r.s.id);
+    const sizes: Record<number, number> = {};
+    let have = 0;
+    for (const n of [0, 1, 5, 10, 25]) {
+      while (have < n) await child(r.s, r.s.id, `Worker number ${have++} with a rather long title that goes on`);
+      const res = (await r.h.call(a.secret, 'session_family', {})).result!;
+      sizes[n] = JSON.stringify(res.structuredContent).length;
+      console.log(`T-574 S3 size: ${n} workers: structured ${sizes[n]}, text ${res.content![0]!.text.length}`);
+    }
+    // One copy; the full id of a worker is 46 characters of JSON by itself, so 10 workers cannot go far below 800.
+    assert.ok(sizes[1]! < 280 && sizes[5]! < 600 && sizes[10]! < 1100 && sizes[25]! < 2100, JSON.stringify(sizes));
+  } finally {
+    await r.done();
+  }
+});
+
+test('T-574 over MCP: 25 workers: the lines stop at 600 characters, workers lists only the lines shown, and cut says how many were left out', async () => {
+  const r = await rig();
+  try {
+    r.s.controller.agentCaps = () => ({ ...CAPS, maxChildren: 30, spawnsPerHour: 60 });
+    const a = await r.h.agentToken('docker/ws1', r.s.id);
+    for (let i = 0; i < 25; i++) await child(r.s, r.s.id, `Worker number ${i} with a rather long title that goes on`);
+    const sc = (await r.h.call(a.secret, 'session_family', {})).result!.structuredContent;
+    const text = (sc.lines as { untrusted_text: string }).untrusted_text;
+    const rows = text.split('\n');
+    assert.ok(text.length <= 600, `lines are ${text.length} characters`);
+    assert.ok(rows.length > 0 && rows.length < 25, `${rows.length} rows listed`);
+    assert.equal((sc.workers as { id: string }[]).length, rows.length, 'workers lists the rows shown');
+    assert.deepEqual(sc.cut, [`${25 - rows.length} of 25 workers not listed (size cap): worker_id for one, view detail for all.`]);
+    assert.equal((await r.h.call(a.secret, 'session_family', { view: 'detail' })).result!.structuredContent.workers.length, 25, 'detail still has them all');
   } finally {
     await r.done();
   }
@@ -536,5 +652,6 @@ test('pickSpawnClaude (T-460): never a Claude auto move would leave by projectio
     usageRow(id, usedPct, NOW, { outlook: { status: { value: 'over', basis: 'estimate' }, window: null, etaAt: { value: null, basis: 'unavailable' }, projectedPct: { value: null, basis: 'unavailable' } } } as Partial<ClaudeUsage>);
   assert.deepEqual(pick('auto', [usageRow('p', 95, NOW), leaving('a')]), { claudeId: 'p', why: 'no_room' }, 'the one projected to run out is not picked');
   assert.deepEqual(pick('auto', [usageRow('p', 95, NOW), leaving('a'), over('b', 82)]), { claudeId: 'b', why: 'no_room_lowest' }, 'another with no confident projection still is');
-  assert.deepEqual(pick('auto', [usageRow('p', 70, NOW), leaving('a'), usageRow('b', 40, NOW)]), { claudeId: 'b', why: 'room' }, 'and room beats it as before');
+  const b = pick('auto', [usageRow('p', 70, NOW), leaving('a'), usageRow('b', 40, NOW)]);
+  assert.deepEqual({ claudeId: b.claudeId, why: b.why }, { claudeId: 'b', why: 'room' }, 'and room beats it as before');
 });

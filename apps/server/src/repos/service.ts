@@ -158,6 +158,8 @@ export class ReposService {
   readonly #sessionTimers = new Map<string, NodeJS.Timeout>();
   readonly #lastSessionScan = new Map<string, number>();
   #timer: NodeJS.Timeout | undefined;
+  /** Scans the timer started and has not seen end yet (see `timerScansDone`). */
+  readonly #timerScans = new Set<Promise<void>>();
   #unsubscribe: (() => void) | undefined;
   #lastPurge = 0;
   #closed = false;
@@ -246,8 +248,17 @@ export class ReposService {
         continue;
       }
       if ((this.#nextAt.get(id) ?? 0) > now || this.#scanning.has(id)) continue;
-      void this.scanWorkspace(id, { actor: 'portal:timer', syncPass: true, wait: false }).catch(() => undefined);
+      const started: Promise<void> = this.scanWorkspace(id, { actor: 'portal:timer', syncPass: true, wait: false })
+        .then(() => this.#scanning.get(id)?.run)
+        .catch(() => undefined)
+        .finally(() => this.#timerScans.delete(started));
+      this.#timerScans.add(started);
     }
+  }
+
+  /** Resolves when every scan a `tick` started has ended, including the part before it registers as running (a seam for tests; no behaviour of its own). */
+  async timerScansDone(): Promise<void> {
+    while (this.#timerScans.size) await Promise.all([...this.#timerScans]);
   }
 
   /** A chat's turn ended or a chat began or ended: look at the repository it is in (debounced, and not more than every 30 s per workspace). */

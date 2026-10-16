@@ -79,6 +79,38 @@ export function withoutSources<T>(x: T): T {
   return Object.fromEntries(Object.entries(o).filter(([k]) => !(figure && k === 'source')).map(([k, v]) => [k, withoutSources(v)])) as T;
 }
 
+/**
+ * A program in the full form: no figure sources and no target `rule` (the rules are fixed text: `basis.targets` and `basis.d65` name them once,
+ * the route keeps them on each target; the MCP result limit is 20,000 characters and ten targets a program carry it over).
+ */
+export function fullProgram(p: CrewProgramScore) {
+  const q = withoutSources(p);
+  // A D-65 target is one short row (id, state, value or `unavailable:<reason>`, offenders when there are some); the older ones keep their figure.
+  return { ...q, targets: q.targets.map(({ rule: _rule, ...t }) => (t.decision === 'D-65' ? { id: t.id, state: t.state, value: v(t.figure), ...(t.offenders.length ? { offenders: t.offenders } : {}) } : t)) };
+}
+
+/** The full form is paged by size: programs are added while the whole result stays at or under this (the MCP limit is 20,000; a margin for cleaning). */
+export const FULL_BUDGET_CHARS = 19_000;
+
+/**
+ * Puts programs into `head` in order while the JSON of the whole result is at or under `max` characters; the rest are named in `omitted`
+ * (ask for each with `program`). At least one program is always kept. At exactly `max` a program still fits; one character over, it does not.
+ */
+export function fitPrograms(head: Record<string, unknown>, rows: ReadonlyArray<{ program: string }>, max: number): Record<string, unknown> {
+  const kept: unknown[] = [];
+  for (let i = 0; i < rows.length; i++) {
+    const rest = rows.slice(i + 1).map((r) => r.program);
+    const candidate = { ...head, programs: [...kept, rows[i]], ...(rest.length ? { omitted: rest, more: 'Over the size limit: ask for each omitted program with `program`.' } : {}) };
+    if (kept.length > 0 && JSON.stringify(candidate).length > max) {
+      const omitted = rows.slice(i).map((r) => r.program);
+      return { ...head, programs: kept, omitted, more: 'Over the size limit: ask for each omitted program with `program`.' };
+    }
+    kept.push(rows[i]);
+    if (i === rows.length - 1) return { ...head, programs: kept };
+  }
+  return { ...head, programs: kept };
+}
+
 /** One short row: the figures the coordinator compares every pass. */
 export function compactRow(r: LabSummaryRow) {
   return {
@@ -167,17 +199,21 @@ export function registerLabTools(lab: Lab, registry: ToolRegistry = portalTools)
       compare: z.boolean().optional().describe('With the previous window too. Default true.'),
       ...fullInput,
     }),
-    handler(ctx, args) {
+    async handler(ctx, args) {
       const own = ctx.isAgent ? ctx.sessionId : null;
       if (ctx.isAgent && !own) throw new PortalToolError('FORBIDDEN', 'This token is not bound to a session.');
-      const s = lab.scorecard({ window: args.window ?? 'day', compare: args.compare ?? true, ...(args.program ? { program: args.program } : {}), ...(own ? { sessionId: own } : {}) });
+      const s = await lab.scorecardWithPace({ window: args.window ?? 'day', compare: args.compare ?? true, ...(args.program ? { program: args.program } : {}), ...(own ? { sessionId: own } : {}) });
       if (!s) throw new PortalToolError('NOT_FOUND', 'No such program.');
       const scope = own ? 'program' : 'portal';
       const summary = `${s.programs.length} program${s.programs.length === 1 ? '' : 's'} over the last ${s.window}${own ? ' (your own program only)' : ''}. Dollars are estimates.`;
       // Full: every figure without its own `source` (the `basis` map names each source once), so a portal of a few programs and two windows
       // stays under the result limit (MAX_RESULT_CHARS); the route keeps the sources on each figure.
-      if (args.full) return { summary, scope, ...s, programs: s.programs.map(withoutSources) };
-      return { summary, scope, window: s.window, programs: s.programs.map(scoreShort), more: 'full: true for every figure with its basis, types, CI, deploys, efficiency, health and the review list; basis names the sources.' };
+      // Paged by size: a portal of five programs is more than one result holds; the rest are named in `omitted`.
+      if (args.full) {
+        const { programs, ...rest } = s;
+        return fitPrograms({ summary, scope, ...rest, ...(s.headline ? { headline: withoutSources(s.headline) } : {}) }, programs.map(fullProgram), FULL_BUDGET_CHARS);
+      }
+      return { summary, scope, window: s.window, ...(s.headline ? { headline: s.headline } : {}), programs: s.programs.map(scoreShort), more: 'full: true for every figure with its basis, types, CI, deploys, efficiency, health and the review list; basis names the sources.' };
     },
   });
 

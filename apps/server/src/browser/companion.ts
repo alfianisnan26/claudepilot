@@ -8,6 +8,7 @@ import { homeVolumeOf, legacyRuntimeName } from '../workspaces/identity.js';
 import type { RuntimeNames } from '../workspaces/runtime.js';
 import { companionOf, DOWNLOADS_DIR, HOME, LABELS, PROFILE_REL, sha256 } from './spec.js';
 import { chromePolicy, containerConfig } from './policy.js';
+import { HEADERS_DIR, HEADERS_FILE, headersFile, headersSpec, type ResolvedHeader } from './headers.js';
 
 /**
  * Browser containers on one Docker daemon (browser & desktop PRD §10.1): one companion per workspace, in the
@@ -31,6 +32,8 @@ export interface CompanionPlan {
   sandbox: boolean;
   /** `host:port` pairs of the portal as the browser would reach it, so the policy can refuse them. */
   portalHosts: string[];
+  /** The pool's request headers with their values (PRD §24), read at delivery; in memory only. */
+  headers?: ResolvedHeader[];
 }
 
 export interface CompanionInfo {
@@ -224,7 +227,9 @@ export class Companions {
   async specHash(plan: CompanionPlan): Promise<string> {
     const config = containerConfig(plan.content, { sandbox: plan.sandbox });
     const policy = chromePolicy(plan.content, { portalHosts: plan.portalHosts });
-    return sha256(JSON.stringify({ image: await this.imageId(), config, policy, resources: plan.content.resources, seccomp: sha256(chromeSeccompProfile()) })).slice(0, 16);
+    // Headers by name and value version (PRD §24): a changed or removed secret recreates the container, and no value is hashed.
+    const headers = headersSpec(plan.headers ?? []);
+    return sha256(JSON.stringify({ image: await this.imageId(), config, policy, resources: plan.content.resources, seccomp: sha256(chromeSeccompProfile()), ...(headers.length ? { headers } : {}) })).slice(0, 16);
   }
 
   /** `~/.claudepilot/browser/profile` and `~/Downloads` in the workspace's home volume, created before the container mounts them. */
@@ -272,10 +277,12 @@ export class Companions {
         ],
       },
     });
-    const files = [
+    const files: { path: string; content: string; private?: boolean }[] = [
       { path: 'etc/cpb/config.json', content: `${JSON.stringify(containerConfig(content, { sandbox: plan.sandbox }), null, 2)}\n` },
       { path: 'etc/chromium/policies/managed/cpb.json', content: `${JSON.stringify(chromePolicy(content, { portalHosts: plan.portalHosts }), null, 2)}\n` },
     ];
+    // The one file that holds values (PRD §24): root-only, in the container's own layer, never in the config, policy or a label.
+    if (plan.headers?.length) files.push({ path: `${HEADERS_DIR.slice(1)}/${HEADERS_FILE}`, content: headersFile(plan.headers), private: true });
     await container.putArchive(await tarOf(files), { path: '/' });
   }
 
@@ -442,8 +449,11 @@ export class Companions {
   }
 }
 
-/** A tar archive of root-owned files (paths relative to `/`): config and policy, never secrets. */
-async function tarOf(files: { path: string; content: string }[]): Promise<Buffer> {
+/**
+ * A tar archive of root-owned files (paths relative to `/`): config and policy are world-readable; a `private` file (the headers' values,
+ * PRD §24) is 0400 in a 0700 folder, so only the root init reads it, never the agent's tools or Chromium's user.
+ */
+export async function tarOf(files: { path: string; content: string; private?: boolean }[]): Promise<Buffer> {
   const p = pack();
   const dirs = new Set<string>();
   for (const f of files) {
@@ -452,9 +462,9 @@ async function tarOf(files: { path: string; content: string }[]): Promise<Buffer
       const d = parts.slice(0, i).join('/');
       if (dirs.has(d)) continue;
       dirs.add(d);
-      p.entry({ name: `${d}/`, type: 'directory', mode: 0o755, uid: 0, gid: 0, mtime: new Date() });
+      p.entry({ name: `${d}/`, type: 'directory', mode: f.private && i === parts.length - 1 ? 0o700 : 0o755, uid: 0, gid: 0, mtime: new Date() });
     }
-    p.entry({ name: f.path, type: 'file', mode: 0o644, uid: 0, gid: 0, mtime: new Date() }, f.content);
+    p.entry({ name: f.path, type: 'file', mode: f.private ? 0o400 : 0o644, uid: 0, gid: 0, mtime: new Date() }, f.content);
   }
   p.finalize();
   const chunks: Buffer[] = [];

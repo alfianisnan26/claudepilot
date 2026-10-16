@@ -16,6 +16,8 @@ export interface ChatPort {
   modelFamilies?(claudeId: string): string[] | null;
   /** Changes the chat's model on the Claude it runs on (`sonnet`): the chat control `model`, as a person's model picker does. */
   setModel(id: string, model: string): Promise<void>;
+  /** Stops the chat's running turn, not the chat (T-781, the hard move); the chat controller's own `interrupt`. Absent in some tests. */
+  interrupt?(id: string): Promise<void>;
   onEvent(cb: (sessionId: string, msg: ChatServerMessage) => void): () => void;
   history(id: string, after?: number): ChatEvent[];
   /**

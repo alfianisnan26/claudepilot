@@ -26,11 +26,17 @@ async function setup() {
   const phone = fakeBrowser(`http://push.example.test:${svc.port}/send/a`);
   const dest = h.notify.destinations.registerPush('u_a', { subscription: phone.subscription, tz: 'Asia/Jakarta' }).destination;
   h.notify.destinations.update(dest.id, 'u_a', { kinds: ['quota_low'] });
-  const emit = (facts: Record<string, string | number | boolean | null>) => h.bus.emit({ kind: 'quota_low', subject: { type: 'claude', id: 'c1' }, facts });
+  // `handle` has no await before it routes, so the Inbox row and every suppressed log row exist when emit returns; only a real push is async.
+  let mark = 0;
+  const emit = (facts: Record<string, string | number | boolean | null>) => {
+    mark = status().length;
+    return h.bus.emit({ kind: 'quota_low', subject: { type: 'claude', id: 'c1' }, facts });
+  };
   const rows = () => h.store.db!.prepare("SELECT id, at, body, read_at, resolved_at, resolution, stage FROM notify_history WHERE kind = 'quota_low' ORDER BY at").all() as { id: string; at: string; body: string; read_at: string | null; resolved_at: string | null; resolution: string | null; stage: number }[];
   const status = () => h.notify.history.deliveries('u_a', { limit: 100 }).reverse().map((d) => (d.status === 'sent' ? 'sent' : `${d.status}:${d.code}`));
-  const settle = async () => {
-    await new Promise((r) => setTimeout(r, 20));
+  /** Waits for the delivery log rows the last emit makes (`rows`: how many, suppressed ones included), then for the stand-in to have them all. */
+  const settle = async (rows: number) => {
+    await until(() => status().length >= mark + rows);
     await until(() => svc.got.length === status().filter((s) => s === 'sent').length);
   };
   return { h, svc, emit, rows, status, settle, advance: (ms: number) => void (now += ms), close: async () => (h.notify.stop(), await svc.close()) };
@@ -40,14 +46,14 @@ test('relevance: no chat on the Claude and not watched is no row and no push; a 
   const s = await setup();
   try {
     s.emit({ ...high, chats: 0 });
-    await s.settle();
+    await s.settle(0);
     assert.equal(s.rows().length, 0, 'an idle Claude near its limit is information, not an Inbox row');
     assert.deepEqual(s.status(), [], 'and not a push');
 
     s.h.notify.history.setWatch('u_a', 'c1', true);
     assert.equal(s.h.notify.history.watches('u_a', 'c1'), true);
     s.emit({ ...high, chats: 0 });
-    await s.settle();
+    await s.settle(1);
     assert.equal(s.rows().length, 1, 'a watched Claude alerts when idle');
     assert.match(s.rows()[0]!.body, /· idle$/);
     assert.deepEqual(s.status(), ['sent']);
@@ -55,14 +61,14 @@ test('relevance: no chat on the Claude and not watched is no row and no push; a 
     s.h.notify.history.setWatch('u_a', 'c1', false);
     s.h.notify.history.clear('u_a');
     s.emit({ ...out });
-    await s.settle();
+    await s.settle(1);
     assert.equal(s.rows().length, 1, 'a Claude a chat runs on alerts');
     assert.match(s.rows()[0]!.body, /· 1 chat$/);
 
     s.h.notify.history.clear('u_a');
     const { chats: _gone, ...unknown } = high;
     s.emit(unknown);
-    await s.settle();
+    await s.settle(1);
     assert.equal(s.rows().length, 1, 'not known (no chat list): the alert goes as before');
   } finally {
     await s.close();
@@ -73,13 +79,13 @@ test('one row that updates: near, projected, again, high, a milder projection, o
   const s = await setup();
   try {
     s.emit(near);
-    await s.settle();
+    await s.settle(0);
     assert.equal(s.rows().length, 1);
     assert.deepEqual(s.status(), [], 'near (80 %) is a row only');
 
     s.advance(60_000);
     s.emit(proj);
-    await s.settle();
+    await s.settle(1);
     assert.equal(s.rows().length, 1, 'the same row');
     assert.equal(s.rows()[0]!.stage, 1);
     assert.deepEqual(s.status(), ['sent'], 'worse: pushed');
@@ -87,7 +93,7 @@ test('one row that updates: near, projected, again, high, a milder projection, o
 
     s.advance(60_000);
     s.emit({ ...proj, etaAt: new Date(T0 + 2 * 3_600_000).toISOString() });
-    await s.settle();
+    await s.settle(1);
     assert.equal(s.rows().length, 1);
     assert.deepEqual(s.status(), ['sent', 'suppressed:collapsed'], 'the same stage is never pushed twice');
     assert.notEqual(s.rows()[0]!.read_at, null, 'and stays read');
@@ -95,7 +101,7 @@ test('one row that updates: near, projected, again, high, a milder projection, o
     s.advance(60_000);
     const before = s.rows()[0]!.at;
     s.emit(high);
-    await s.settle();
+    await s.settle(1);
     const afterHigh = s.rows();
     assert.equal(afterHigh.length, 1);
     assert.equal(afterHigh[0]!.stage, 2);
@@ -106,13 +112,13 @@ test('one row that updates: near, projected, again, high, a milder projection, o
 
     s.advance(60_000);
     s.emit(proj);
-    await s.settle();
+    await s.settle(1);
     assert.deepEqual(s.rows(), afterHigh, 'a milder stage leaves the row as it is');
     assert.deepEqual(s.status().at(-1), 'suppressed:collapsed');
 
     s.advance(60_000);
     s.emit({ ...out, resetsAt: new Date(Date.parse(RESET) + 20_000).toISOString() });
-    await s.settle();
+    await s.settle(1);
     assert.equal(s.rows().length, 1, 'a reset time a few seconds off is the same period');
     assert.equal(s.rows()[0]!.stage, 3);
     assert.deepEqual(s.status().filter((x) => x === 'sent').length, 3);
@@ -125,7 +131,7 @@ test('one row that updates: near, projected, again, high, a milder projection, o
 
     // the next period opens a new row
     s.emit({ ...near, resetsAt: NEXT_RESET });
-    await s.settle();
+    await s.settle(0);
     assert.equal(s.rows().length, 2);
     assert.equal(s.rows()[1]!.resolved_at, null);
   } finally {
@@ -137,10 +143,10 @@ test('an open row of an earlier period is closed as Recovered when the next peri
   const s = await setup();
   try {
     s.emit(high);
-    await s.settle();
+    await s.settle(1);
     s.advance(60_000); // no tick ran across the reset
     s.emit({ ...high, resetsAt: NEXT_RESET });
-    await s.settle();
+    await s.settle(1);
     const r = s.rows();
     assert.equal(r.length, 2);
     assert.equal(r[0]!.resolution, 'Recovered');

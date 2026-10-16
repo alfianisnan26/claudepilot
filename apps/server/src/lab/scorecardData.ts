@@ -2,12 +2,13 @@
 // store does not have (or can not read) is `null`, which the scorecard shows as unavailable (no_source), never as 0.
 
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
+import { COUNTED_USAGE } from '../chat/usageDelta.js';
 import type { Store } from '../store/store.js';
 import { SpendStore } from '../usagespend/store.js';
 import { ticketReport } from '../usagespend/ticketReport.js';
 import type { SpikeEvidence } from '@portal/contracts';
 import type { SessionInfo, UsageRow } from '../usagespend/model.js';
-import { programIdOf, type CrewDeployRow, type CrewFacts, type CrewRefusal, type CrewRun, type CrewSessionExtra, type CrewSpikeRow, type CrewTicket, type TicketCostRow } from './scorecard.js';
+import { programIdOf, wasteKind, type ToolResultCount, type CrewDeployRow, type CrewFacts, type CrewRefusal, type CrewRun, type CrewSessionExtra, type CrewSpikeRow, type CrewTicket, type TicketCostRow } from './scorecard.js';
 
 const CHUNK = 400;
 const inList = (n: number) => `(${Array(n).fill('?').join(', ')})`;
@@ -41,7 +42,7 @@ function chunked<R>(db: DatabaseSync, ids: readonly (string | number)[], sql: (l
  */
 function loadSessions(db: DatabaseSync, spend: SpendStore, sinceMs: number): Map<string, SessionInfo> {
   const seed = new Set<string>();
-  for (const r of db.prepare('SELECT DISTINCT session_id FROM chat_usage WHERE at_ms >= ?').all(sinceMs) as unknown as { session_id: string }[]) seed.add(r.session_id);
+  for (const r of db.prepare(`SELECT DISTINCT session_id FROM chat_usage WHERE at_ms >= ? AND ${COUNTED_USAGE}`).all(sinceMs) as unknown as { session_id: string }[]) seed.add(r.session_id);
   for (const r of db.prepare(`SELECT id FROM chat_sessions WHERE state != 'ended'`).all() as unknown as { id: string }[]) seed.add(r.id);
   const up = spend.sessions(seed);
   restoreLinks(db, spend, up);
@@ -187,6 +188,29 @@ function loadRefusals(db: DatabaseSync, sinceMs: number): CrewRefusal[] {
   });
 }
 
+// T-739: the literal `kind = 'tool_result'` must stay a literal. Migration 383's index is partial (WHERE kind = 'tool_result') and SQLite uses a
+// partial index only when the query's WHERE provably implies the index's; a bound parameter would not, and the scan would come back.
+export const toolResultCountSql = (l: string) => `SELECT session_id, COUNT(*) AS n FROM chat_events WHERE session_id IN ${l} AND kind = 'tool_result' AND at >= ? AND at < ? GROUP BY session_id`;
+export const toolResultErrorSql = (l: string) =>
+  `SELECT session_id, json_extract(payload, '$.toolName') AS tool, substr(json_extract(payload, '$.text'), 1, 400) AS text FROM chat_events WHERE session_id IN ${l} AND kind = 'tool_result' AND at >= ? AND at < ? AND json_extract(payload, '$.isError') = 1`;
+
+/**
+ * T-549 (D-65): the tool results of these sessions in [fromMs, toMs), counted per session: all of them, and the error ones by kind (a
+ * permission denial, an error of a portal tool, another failure). Read from `chat_events` (kind tool_result, payload isError); the error
+ * text is cut to its first 400 characters in SQL, so a long output never travels.
+ */
+export function loadToolResults(db: DatabaseSync, fromMs: number, toMs: number, ids: ReadonlySet<string>): ToolResultCount[] {
+  const from = new Date(fromMs).toISOString();
+  const to = new Date(toMs).toISOString();
+  const by = new Map<string, ToolResultCount>();
+  const of = (id: string) => by.get(id) ?? by.set(id, { sessionId: id, total: 0, denied: 0, portal: 0, failed: 0 }).get(id)!;
+  const list = [...ids];
+  for (const r of chunked<{ session_id: string; n: number }>(db, list, toolResultCountSql, [from, to])) of(r.session_id).total += r.n;
+  const errors = chunked<{ session_id: string; tool: string | null; text: string | null }>(db, list, toolResultErrorSql, [from, to]);
+  for (const e of errors) of(e.session_id)[wasteKind(e.tool, e.text)]++;
+  return [...by.values()].filter((r) => r.total > 0).sort((a, b) => a.sessionId.localeCompare(b.sessionId));
+}
+
 /** Tickets that may matter since `sinceMs`: not closed, or changed or closed since then (a ticket closed before it stayed closed). */
 function loadTickets(db: DatabaseSync, sinceMs: number): CrewTicket[] {
   const since = new Date(sinceMs).toISOString();
@@ -271,6 +295,7 @@ export function loadCrewFacts(store: Store, nowMs: number, sinceMs: number): Cre
     pendingDeployTickets: tryRead(() => loadPendingDeployTickets(db)),
     spikes: tryRead(() => loadSpikes(db, sinceMs)),
     refusals: tryRead(() => loadRefusals(db, sinceMs)),
+    toolResults: (fromMs: number, toMs: number, ids: ReadonlySet<string>): ToolResultCount[] | null => tryRead(() => loadToolResults(db, fromMs, toMs, ids)),
     usage: (fromMs: number, toMs: number, ids: ReadonlySet<string>): UsageRow[] => spend.usageRows(fromMs, toMs, { sessionIds: ids }),
     // Usage spend's ONE per-ticket function (T-449), done tickets of the window only.
     ticketCosts: (rows: UsageRow[], fromMs: number, toMs: number): TicketCostRow[] =>

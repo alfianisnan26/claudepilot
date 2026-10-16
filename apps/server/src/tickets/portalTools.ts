@@ -22,6 +22,7 @@ import { portalTools, z, type PortalToolContext, type ToolRegistry } from '../po
 import { config } from '../config.js';
 import { declareTicketPolicies } from './authz.js';
 import type { Caller, Tickets } from './service.js';
+import { VERDICT_ROLES, VERDICTS } from './verdicts.js';
 
 // The ticket tools of the Portal MCP (tickets PRD §12). Every one is also offered to agents (their per-session token,
 // interface I8), except `ticket_start_session`. Who may change what is the service's call (FR9): these only turn a
@@ -382,6 +383,38 @@ export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = p
       const r = tickets.adopt(caller, args.from_session, { sessionId: args.session_id });
       ctx.affected(...r.tickets.map((id) => `ticket:${id}`));
       return { summary: r.tickets.length ? `Took over ${r.tickets.length} tickets: ${r.tickets.join(', ')}.` : 'That session holds no unfinished tickets.', tickets: r.tickets, why: r.why, from_session: r.from };
+    },
+  });
+
+  registerPortalTool({
+    name: 'ticket_verdict',
+    title: 'Record a QA or review verdict',
+    description:
+      'Records a verdict (pass or fail) of role qa or review on ONE exact commit of a ticket’s work: the full 40-character sha you verified. Only a QA or review session of that role may: the author of the work, its lead and every other session are refused. A branch that moves afterwards is a different commit, so a pass on the old one no longer counts. With no verdict and no role it lists the ticket’s verdicts; with head (a full sha) it also says whether that head is passing.',
+    scope: 'agent',
+    input: z.object({
+      id: z.string().max(20).describe('T-12'),
+      role: z.enum(VERDICT_ROLES).optional().describe('qa or review. Needed to record.'),
+      verdict: z.enum(VERDICTS).optional().describe('pass or fail. Leave out to read.'),
+      commit: z.string().max(64).optional().describe('The full commit sha you verified (40 hex characters). Needed to record.'),
+      head: z.string().max(64).optional().describe('To read: a full sha; the answer says whether it is passing now (needs qa, plus review when need includes it).'),
+      need: z.array(z.enum(VERDICT_ROLES)).max(2).optional().describe('With head: the roles that must pass. Default qa.'),
+      session_id: sessionIdArg,
+    }),
+    handler(ctx, args) {
+      const caller = callerOf(ctx);
+      if (args.verdict === undefined) {
+        const list = tickets.verdicts(caller, args.id);
+        const status = args.head ? tickets.verdictStatus(caller, args.id, args.head, args.need ?? ['qa']) : null;
+        return {
+          summary: status ? `${args.id}: ${args.head!.slice(0, 12)} is ${status.pass ? 'passing' : 'not passing'}.` : `${args.id} has ${list.length} verdicts.`,
+          verdicts: list.map((v) => ({ id: v.id, role: v.role, verdict: v.verdict, commit: v.commit, actor: v.actor, at: v.at })),
+          ...(status ? { head: { commit: args.head, pass: status.pass, roles: status.roles } } : {}),
+        };
+      }
+      const v = tickets.recordVerdict(caller, args.id, { role: args.role, verdict: args.verdict, commit: args.commit }, { sessionId: args.session_id });
+      ctx.affected(`ticket:${args.id}`);
+      return { summary: `Recorded ${v.role} ${v.verdict} on ${v.commit.slice(0, 12)} for ${args.id}.`, verdict: { id: v.id, role: v.role, verdict: v.verdict, commit: v.commit, at: v.at } };
     },
   });
 

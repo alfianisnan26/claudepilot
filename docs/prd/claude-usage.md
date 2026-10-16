@@ -512,6 +512,8 @@ Added 2026-10-12 at the owner's request: usage attributed per session, workspace
 
 ### 21.1 What the numbers rest on
 
+**A turn is a true change (T-610).** Claude Code reports each model's totals for the whole process, and after a restart or a `--resume` some totals may be carried over and others start again. The portal books the difference since the last result it saw, one dimension at a time (input, output, cache read, cache write, cost; `chat/usageDelta.ts`): a dimension that dropped restarts alone, and never books another dimension's carried total (a $96.31 "request" came from taking the whole of a model's totals once any one token total was lower). The base remembers every model seen, not only the last result's, and a turn's model costs are scaled down to the turn's own cost (the change of `total_cost_usd`) when they add up to more than 1.5 x it + $0.05. The cap always applies, a restarted total included (decision (a), T-610): the goal is never to book more than the turn cost **in dollars**. Tokens are counts from Claude Code, not money: they are booked as reported (the change per dimension) and never scaled, so a process with no earlier result books its carried token totals whole. When the process total started again (lower than the base by more than $1e-9, so float jitter is not a restart) the new total is the turn's cost; a change never reads below 0. The price is an under-count when a restart turn really cost more than the new total. The limit is a cliff, pinned by a test: model costs up to 1.5 x the turn cost + $0.05 are booked as they are, above it they are scaled to exactly the turn cost. A turn whose own cost is **$0** (the total did not move) books model costs of at most $0.05 as they are and anything above that margin as $0 (tokens stay the change). A resumed process keeps the base it had (restored or restarted totals both read right); one with no earlier result at all books its carried total whole. **Not verified:** what Claude Code really restores on `--resume`; a person or the coordinator checks one resumed session's rows after the deploy. A row that was booked wrong is **marked** `chat_usage.kind = 'suspect'` (a person's repair, `UPDATE chat_usage SET kind = 'suspect' WHERE id IN (...)`): every reader (Requests report, Usage charts, attribution, budgets, spike baselines and rules, the Requests report's own sums, the "history starts" date, the scorecard's rows and the sessions it seeds from them) leaves it out, and the row stays as evidence. `service.test.ts`, `chat.test.ts` and `usageDelta.test.ts` check it.
+
 The source is `chat_usage`: one row per model per finished turn, the turn's sub-agents included; the first row of a turn carries its request, its sub-agent count and its time. A **request** is a finished turn, so the sum of `requests` is the number of turns, and a request's sub-agents run inside it and are counted once, in it. A **child session** is another session (`chat_sessions.parent_id`), with rows of its own: that is what rolls up. Everything here follows §20.0: tokens and counts are `measured`, **every dollar figure is an `estimate`** (Claude Code prices tokens at API list prices; for a plan it is what the same use would cost, not a bill), and a figure that cannot be given is `unavailable` with a reason (`no_samples`, `no_cost` for requests that reported no dollars, `no_history`, `not_recorded`, `session_deleted`). **Tokens** for a budget are input + output + cache writes; cache reads are shown beside them, not added.
 
 A request recorded without a Claude (before Claudes existed) counts under its workspace's Default Claude (the `workspace_claudes` row with an empty directory), else under `default:<workspace id>`, the same key the palette uses.
@@ -1036,6 +1038,21 @@ tables the portal already keeps; nothing new is stored.
 - **Windows.** `1h`, `6h`, `day` (default) or `week`, ending now; with `compare` (default on) the window before it, the same length.
 - **The program's tickets**: held by one of its sessions (`ticket_id`), assigned to one, or with a timeline event written by one
   (`session:<id>`). A ticket two programs touched counts in both.
+- **Headline** (T-600; `CrewScorecard.headline`, filled by `lab/headline.ts`; no new route, the authz seam unchanged; named `headline`
+  because the `crew_scorecard` tool already puts a text `summary` beside the scorecard). Over the programs the response keeps (an
+  agent: its own only), each figure with its basis and source, unavailable with a reason, never a division by zero:
+  - **Pace** (ESTIMATE, global, a snapshot of now): sum of `usedPct` over sum of `evenPct` of the 5-hour `session` window of every Claude
+    on its own plan that is signed in and has a pace (claudeusage `WindowPace`, read through `Lab`'s optional `paceSource`, which is
+    `claudeUsage.report()`). Left out: signed out (`runsOn` none or state `signed_out`), pooled, key, a Claude without a pace. Under 10
+    points of even pace in all: `windows_just_reset`; none left: `no_claude`; no source (none wired, it failed, or an agent's read, since
+    the quota is not one program's): `no_source`. Per Claude `usedPct / evenPct` (`no_samples` when `evenPct` is 0). Under 0.9 the
+    unused part at reset: 100 minus the mean `projectedPct` of those Claudes (null when none says). Weekly: the same on the `week` window.
+  - **Per window** (current, and the window before with `compare`): requests and estimated dollars per hour; tickets resolved (done,
+    `closed_at` in the window) and won't-do, global and per program; dollars over resolved (`no_samples` with none); tickets created over
+    tickets closed (done plus won't-do), global and per program (`no_samples` with none closed). A ticket two programs touched counts
+    once globally and once in each program row, so the rows equal the program rows of the same response.
+  - **Server**: `Lab.scorecard` fills it (paces passed in, none by default); `Lab.scorecardWithPace` awaits the source first and is what the
+    route and the tool call. The full tool form drops each figure's `source` here too (`basis` names it once).
 - **Effectiveness** (all MEASURED): done (status done, `closed_at` in the window) by type and per hour; reopened (a `reopened` event, or a
   change from done or wont_do back to work, in the window); wont_do (closed as wont_do in the window); lead time from the first change to
   in_progress to `closed_at`, p50 and p90 by nearest rank per type (a done ticket with no start recorded is counted as `noStart`, not
@@ -1072,6 +1089,19 @@ tables the portal already keeps; nothing new is stored.
   `qa_review_model` (a worker whose role, `chat_sessions.agent`, is QA, verifier, ux-checker or reviewer with a request on a model that
   is not sonnet is a breach, unless its lead started it with a reason, `spawn_why`, T-490; workers with requests but no role recorded at
   all: unavailable, `not_recorded`).
+- **D-65 targets** (T-549; the same `targets` list, `decision: "D-65"`, ids in `CREW_D65_TARGETS`), over the window, each with its figure,
+  source and offenders. Warn from 80 % of a ceiling (this page's margin, not the decision's); breach at it. (1) `cost_per_done`: all-in
+  dollars over done tickets under 8 USD (offenders: done tickets whose all-in cost over their life is 8 or more). (2) `lead_share`:
+  the lead chain's part of the dollars under 30 % (offenders: the lead chain). (3) `qa_opus_share`: QA and review workers with a request
+  on opus or fable under 10 % of them (a `spawn_why` does not exempt here; offenders: those sessions; none: unavailable, `no_samples`).
+  (4) `done_rate`: feature and task tickets done in the window, scaled to a day, against the 2026-10-15 baseline of 48 / 47 a day
+  (ClaudePilot / Konfersi, which counted all ticket types, so the comparison is hard), matched by the lead's exact workspace id (`kubernetes/kohi-event` 48, `kubernetes/konfersi` 47; the Event program left pilot, D-67; never a pattern on the name, which gave ClaudePilot's own workspace the Event 12):
+  at or above is ok, under it warn, under half breach; no baseline for the workspace: unavailable, `not_recorded`. (5) `quota_unused`:
+  the worst quota left unused at a reset inside the window (T-547, `claude_usage_samples`) over 30 % is a breach; whole portal, so the
+  row repeats on every program and an agent's own read gets unavailable (`no_source`); offenders are Claude ids; "while a crew had work
+  queued" is not measured. (6) `wasted_tool_calls`: tool results of the program's sessions (`chat_events`, kind `tool_result`) that are
+  an error (a permission denial, an error of a portal `mcp__pilot__*` tool, or a failed command; baseline 2026-10-15 about 2,000 of
+  26,781) over all of them, under 3 % (offenders: the sessions with the most). The error text read is cut to 400 characters in SQL.
 - **Unavailable is a state.** Every figure carries `value`, `basis` (`measured`, `estimate`, `unavailable`) and `source`; unavailable
   is `null` with a reason: `no_source` (the table cannot be read), `no_samples` (nothing to divide by), `not_recorded`. A measured
   nothing is 0.
@@ -1079,11 +1109,13 @@ tables the portal already keeps; nothing new is stored.
   own program, the top of its session's lineage; another program, or one that does not exist, is the same 404) and the Portal MCP tool
   `crew_scorecard` (agent, reach session, read only; the same scoping, `NOT_FOUND`; an admin's token reads every program; short by
   default; `full: true` for every figure with its basis, the sources named once in `basis` so the result stays under the MCP size limit;
-  the route keeps a source on each figure). Wire types: `packages/contracts/src/scorecard.ts`.
+  the route keeps a source on each figure; the full form is paged by size: programs are carried in order while the result is at or under
+  19,000 characters, the rest are named in `omitted` and asked for with `program`). Wire types: `packages/contracts/src/scorecard.ts`.
 - **The page (S2): Usage → Crew** (`?tab=crew`; `features/lab/ScorecardTab.tsx`, pure wording in `scorecardModel.ts`). A window picker (1h, 6h,
   Day, Week) and Alone / Compare (Compare asks `compare=1` and shows each number's earlier value as "was"); the sources of every figure
   in one InfoTip. One card per program with five numbers: done per hour, dollars per done ticket (all-in), the lead's share, tickets in
-  review, and breaches (the count of D-61, D-62 and D-63 targets in breach). Each number shows its state (`ok`, `warn`, `breach`, or
+  review, and breaches (the count of D-61, D-62, D-63 and D-65 targets in breach). Under the numbers, always visible, a **D-65** list of the six rows above (label of one
+  or two words, value, state, offenders under it, rule and source in an InfoTip; rows at least 44 px tall, ids wrap). Each number shows its state (`ok`, `warn`, `breach`, or
   `unavailable`) and MEASURED, ESTIMATE or UNAVAILABLE, with its source (and the reason when unavailable) in an InfoTip: unavailable reads
   as the word, never 0. Only breaches take their state from the targets (breach when any is, warn when any warns, unavailable when none could
   be checked); the review backlog warns when a ticket has waited more than 24 hours (a default of this page, not a decision); the other three
@@ -1100,3 +1132,13 @@ tables the portal already keeps; nothing new is stored.
   `lab/portalTools.ts`; tests `lab/scorecard.test.ts` (a seeded crew: two programs, a continuation, workers on two Claudes, tickets of
   each kind, CI runs and deploys, usage rows; the numbers in each window, the targets, the previous window, unavailable, life cost,
   derived waits, a deleted continuation, efficiency, health, the route and the tool's scoping).
+- **Tool-result index (T-739 B, migration 383).** `chat_events_result_at (session_id, at) WHERE kind = 'tool_result'` serves `loadToolResults`
+  (the wasted-tool-calls target). The queries keep `kind = 'tool_result'` as a literal (a bound parameter would not match a partial index);
+  `lab/scorecardIndex.test.ts` checks the plan (the index named, no `SCAN chat_events`, the count query covered). **Measured, no budget set**
+  (Job `claudepilot-job-86693c96`, commit `fdd97a6`, node k3s-master, `lab/scorecardPerf.test.ts` with `CLAUDEPILOT_PERF=1`; synthetic
+  database, 1,000,000 events over 100 sessions and 14 days, 35 % tool results (an assumption: about one line in three of a transcript), 5 % of
+  all events error results (1 in 7, about 14 %, of the tool results); not a real portal database, so the real row count and share are unknown): index build 0.41 s for the 1M rows (350k results),
+  the index 13.0 MB on a 336 MB database (3.9 %); `loadToolResults` median of 5, before to after: 20 sessions 24 h 702.6 to 9.3 ms, 20 sessions
+  7 d 706.9 to 92.0 ms, 100 sessions 24 h 3399.7 to 44.2 ms, 100 sessions 7 d 3543.7 to 478.9 ms (the answers are identical); insert cost per
+  10k events 49.5 ms without and 67.3 ms with the index (1.36 times, the whole 1M: 5.09 s and 6.91 s); process RSS 207 MiB. The migration
+  runs in the startup transaction: scale 0.41 s per million events (this Job's disk) to the real count before a deploy.

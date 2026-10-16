@@ -39,6 +39,11 @@ test('canary: a secret value never appears in API responses, errors, logs, event
     if (err.status >= 500) console.error(e);
     return c.json(err.toJSON(), err.status as ContentfulStatusCode);
   });
+  // Like app.ts's session guard: the caller is the signed-in owner (the workspace routes ask the seam, T-531).
+  app.use('*', async (c, next) => {
+    (c as unknown as { set(k: string, v: unknown): void }).set('token', 'signed-in');
+    await next();
+  });
   app.route('/api/pools', createPoolRoutes({ service: h.service }));
   app.route('/api/workspaces', createWorkspacePoolRoutes({ service: h.service, reconciler }));
   app.route('/api/workspaces', createSecretsRoutes({ pools: h.service, workspaces: { runtimeFor: () => ws.runtime } }));

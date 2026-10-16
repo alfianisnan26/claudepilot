@@ -14,5 +14,21 @@ const themeBeforePaint = (): Plugin => ({
 export default defineConfig({
   plugins: [react(), tailwindcss(), themeBeforePaint()],
   resolve: { alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) } },
-  build: { outDir: 'dist', emptyOutDir: true },
+  build: {
+    outDir: 'dist',
+    emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        // T-376 S4: one 1.27 MB entry script is one 240 ms task at 4x CPU. The big libraries are their own scripts, each evaluated in its own
+        // task (and cached across deploys while the library does not change).
+        manualChunks(id) {
+          if (!id.includes('/node_modules/')) return undefined;
+          if (/\/node_modules\/(react|react-dom|scheduler)\//.test(id)) return 'react';
+          if (/\/node_modules\/(motion|motion-dom|motion-utils|framer-motion)\//.test(id)) return 'motion';
+          if (/\/node_modules\/(react-router|lucide-react)\//.test(id)) return 'router-icons';
+          return undefined;
+        },
+      },
+    },
+  },
 });

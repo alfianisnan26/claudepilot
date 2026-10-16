@@ -13,7 +13,7 @@ export type CiUnitStatus = CiStatus | 'pending' | 'skipped' | 'waiting';
 export const isCiActive = (s: CiUnitStatus): boolean => s === 'queued' || s === 'running' || s === 'pending' || s === 'waiting';
 
 /** Why a run or a unit failed, when it isn't just "a step exited non-zero". */
-export const CI_REASONS = ['step_failed', 'timeout', 'invalid_pipeline', 'runner_lost', 'no_space', 'runner_error', 'cancelled', 'superseded', 'needs', 'condition', 'signal', 'fail_fast', 'rejected'] as const;
+export const CI_REASONS = ['step_failed', 'timeout', 'invalid_pipeline', 'runner_lost', 'no_space', 'runner_error', 'cancelled', 'superseded', 'needs', 'condition', 'signal', 'fail_fast', 'rejected', 'no_runner'] as const;
 export type CiReason = (typeof CI_REASONS)[number];
 
 /** What started a run. A rerun keeps the trigger it repeats in `rerunOf`. */
@@ -161,6 +161,42 @@ export interface CiRunSummary {
   durationMs: number | null;
   /** Each job's id and status, for the strip a list row shows. */
   jobs: { id: string; status: CiUnitStatus }[];
+  /** The `runs-on` labels the pipeline asked for (T-557); null: it runs in the repository's workspace. */
+  runsOn: string[] | null;
+  /** The runner that executes it when that is another workspace (T-557); null: `workspaceId`. */
+  runnerWorkspaceId: string | null;
+}
+
+/**
+ * A runner (T-557, PRD §23): a workspace (in the cluster, or a machine enrolled through Connect) that takes the runs of other workspaces whose
+ * pipeline says `runs-on: [labels]`. It gets each run's commit (into a mirror) and secrets (a lease removed with the run) from the portal.
+ */
+export interface CiRunner {
+  workspaceId: string;
+  /** Lowercase labels; a run goes to a runner whose labels include all of its `runs-on`. */
+  labels: string[];
+  /** Runs it executes at once (its own included). */
+  maxRuns: number;
+  enabled: boolean;
+  /** Its running runs finish; it gets no new one. */
+  drained: boolean;
+  note: string | null;
+  /** online: its workspace runs; offline: stopped; gone: the workspace no longer exists. */
+  state: 'online' | 'offline' | 'gone';
+  /** Runs executing on it now. */
+  running: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** `PUT CI_API.runners`: make a workspace a runner, or change one. */
+export interface UpsertCiRunnerRequest {
+  workspaceId: string;
+  labels: string[];
+  maxRuns?: number;
+  enabled?: boolean;
+  drained?: boolean;
+  note?: string | null;
 }
 
 export interface CiRun extends CiRunSummary {
@@ -396,6 +432,11 @@ export interface CiUpstream {
   secret: string | null;
   /** Seconds between two syncs. */
   everyS: number;
+  /**
+   * T-486 S2: the Secrets & env NAME whose value signs the upstream's push webhook (`POST /hooks/ci/<remote id>`, GitHub's
+   * `X-Hub-Signature-256` or Gitea's `X-Gitea-Signature`); null: no webhook, the timer only.
+   */
+  hookSecret: string | null;
   /** The last sync: when, and its error (null when it worked). */
   lastAt: string | null;
   error: string | null;
@@ -423,7 +464,15 @@ export interface UpdateCiUpstream {
   url: string;
   secret?: string | null;
   everyS?: number;
+  /** T-486 S2: the Secrets & env name that signs the push webhook (null or absent: none). */
+  hookSecret?: string | null;
 }
+
+/** T-486 S2: the portal-wide list of hosts an upstream may be on (Settings, CI); empty: any public host. The SSRF guard holds either way. */
+export const CI_UPSTREAM_HOSTS_SETTING = 'ci.upstreamHosts';
+
+/** T-486 S2: the public path of a remote's upstream webhook; the id is the remote's. */
+export const CI_UPSTREAM_HOOK_PATH = '/hooks/ci/:id';
 
 /** A branch of a remote with where the checks stand. */
 export interface CiBranch {
@@ -499,6 +548,8 @@ export interface ValidateCiResult {
 }
 
 export const CI_API = {
+  /** GET: `CiRunner[]`. PUT `/<workspace id, encoded>` with `UpsertCiRunnerRequest`: the `CiRunner`. DELETE `/<workspace id, encoded>`: it is a runner no more (T-557; the routes take the id in the path, T-576). */
+  runners: '/api/ci/runners',
   /** GET `CiRunFilter` as a query string: `CiRunList`. POST `StartCiRunRequest`: the new `CiRun`. */
   runs: '/api/ci/runs',
   /** GET: `CiRun`. */
@@ -537,7 +588,29 @@ export const CI_API = {
   environment: (repoId: string, name: string) => `/api/ci/repos/${encodeURIComponent(repoId)}/environments/${encodeURIComponent(name)}`,
   /** PUT `UpdateCiAutoApproveRequest`: `CiEnvironment` (FR41a; a person with manage only). */
   environmentAutoApprove: (repoId: string, name: string) => `/api/ci/repos/${encodeURIComponent(repoId)}/environments/${encodeURIComponent(name)}/auto-approve`,
+  /** GET: the `CiReleaseReportSetting` of a remote or null. PUT `{ setting: CiReleaseReportSetting | null }`: set or clear it (a person with manage only; T-591). */
+  releaseReport: (repoId: string) => `/api/ci/repos/${encodeURIComponent(repoId)}/release-report`,
+  /** POST: write the release report of a past run (backfill) into the vault its remote's setting names; `CiReleaseReportResult` (a person with manage only; T-591). */
+  runReleaseReport: (runId: string) => `/api/ci/runs/${encodeURIComponent(runId)}/release-report`,
 } as const;
+
+/** T-591 (D-69): where a remote's release reports go. Null on a remote: no reports. The vault and folder are never taken from a run or a tool call. */
+export interface CiReleaseReportSetting {
+  /** The pipeline whose passed `release` job writes a note (for claudepilot: `Deploy`'s file name stem, e.g. `deploy`). */
+  pipeline: string;
+  /** A knowledge vault id. */
+  vaultId: string;
+  /** A folder in it, without leading or trailing slash (e.g. `Releases`). */
+  folder: string;
+}
+
+export interface CiReleaseReportResult {
+  /** The note in the vault. */
+  path: string;
+  /** False when the note was already there and is now replaced, or unchanged. */
+  created: boolean;
+  unchanged: boolean;
+}
 
 /** The first 7 characters of a commit. */
 export const shortSha = (sha: string): string => sha.slice(0, 7);

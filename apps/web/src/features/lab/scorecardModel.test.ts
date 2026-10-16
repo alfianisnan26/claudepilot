@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { CrewFigure, CrewProgramScore, CrewTarget, CrewWindowScore } from '@portal/contracts';
-import { fmtAge, fmtFigure, fmtPerHour, qaOpusLine, REVIEW_WARN_MS, tiles, UNAVAILABLE } from './scorecardModel';
+import { d65Rows, fmtAge, fmtFigure, fmtPerHour, qaOpusLine, REVIEW_WARN_MS, tiles, UNAVAILABLE } from './scorecardModel';
 
 const fig = (value: number | null, basis: CrewFigure['basis'] = 'measured', reason?: CrewFigure['reason']): CrewFigure => ({ value, basis, source: 'a source', reason });
 const gone = (reason: CrewFigure['reason'] = 'no_samples'): CrewFigure => fig(null, 'unavailable', reason);
@@ -57,6 +57,28 @@ test('unavailable is a state with its reason, never 0 or a guess', () => {
   assert.match(by(p, 'donePerHour').tip, /no table/);
   assert.equal(fmtFigure(fig(null), String), UNAVAILABLE);
   assert.equal(fmtFigure(fig(0), String), '0');
+});
+
+test('T-549 (D-65): six rows in a fixed order, each with its state, offenders and rule; a row the server did not send is unavailable', () => {
+  const t = (id: CrewTarget['id'], state: CrewTarget['state'], value: number | null, offenders: string[] = []): CrewTarget => ({
+    id,
+    decision: 'D-65',
+    rule: `rule of ${id}`,
+    state,
+    figure: value === null ? gone('no_source') : fig(value),
+    offenders,
+  });
+  const p = program({ targets: [t('wasted_tool_calls', 'breach', 4.25, ['S1', 'S2']), t('cost_per_done', 'warn', 6.5, ['T-1']), t('quota_unused', 'unavailable', null)] });
+  const rows = d65Rows(p);
+  assert.deepEqual(rows.map((r) => r.id), ['cost_per_done', 'lead_share', 'qa_opus_share', 'done_rate', 'quota_unused', 'wasted_tool_calls']);
+  const row = (id: string) => rows.find((r) => r.id === id)!;
+  assert.deepEqual([row('cost_per_done').value, row('cost_per_done').state, row('cost_per_done').offenders], ['$6.5', 'warn', ['T-1']]);
+  assert.deepEqual([row('wasted_tool_calls').value, row('wasted_tool_calls').state, row('wasted_tool_calls').offenders], ['4.3 %', 'breach', ['S1', 'S2']]);
+  assert.match(row('wasted_tool_calls').tip, /rule of wasted_tool_calls/);
+  assert.deepEqual([row('quota_unused').value, row('quota_unused').state, row('quota_unused').basis], [UNAVAILABLE, 'unavailable', 'UNAVAILABLE']);
+  assert.match(row('quota_unused').tip, /Unavailable: the portal has no table/);
+  assert.deepEqual([row('lead_share').value, row('lead_share').state], [UNAVAILABLE, 'unavailable']); // not sent: never 0
+  assert.ok(rows.every((r) => r.label.split(' ').filter((w) => w !== '/').length <= 2), 'titles of one or two words');
 });
 
 test('breaches: the count of breached targets, the state is the worst', () => {

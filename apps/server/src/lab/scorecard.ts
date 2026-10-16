@@ -34,6 +34,7 @@ import {
   type CrewTypeRow,
   type CrewUnavailable,
   type CrewWindowScore,
+  type QuotaUnusedRow,
   type SpikeEvidence,
 } from '@portal/contracts';
 import { chainRootOf, rootOf } from '../usagespend/attribution.js';
@@ -114,6 +115,18 @@ export interface TicketCostRow {
   totalUsd: number;
 }
 
+/** T-549: one session's tool results in a window: all, and the ones that were a waste (`denied`, `portal`, `failed` add up to `wasted`). */
+export interface ToolResultCount {
+  sessionId: string;
+  total: number;
+  /** An error result that says a permission was denied (or never granted). */
+  denied: number;
+  /** An error result of one of the portal's own tools (`mcp__pilot__*`). */
+  portal: number;
+  /** Any other error result (a command that failed). */
+  failed: number;
+}
+
 export interface CrewFacts {
   nowMs: number;
   /** Usage spend's view of every session (live, or kept after a delete), continuations included. */
@@ -131,6 +144,13 @@ export interface CrewFacts {
   spikes: CrewSpikeRow[] | null;
   /** null: chat_audit could not be read. */
   refusals: CrewRefusal[] | null;
+  /**
+   * T-549 (D-65): the tool results (chat_events kind tool_result) in [fromMs, toMs) of these sessions, counted per session. null: the table
+   * could not be read; absent: the facts carry no such reader (both are `no_source`).
+   */
+  toolResults?(fromMs: number, toMs: number, sessionIds: ReadonlySet<string>): ToolResultCount[] | null;
+  /** T-549 (D-65): quota left unused at the resets inside the window (T-547). Absent or null: not read for this caller (`no_source`). */
+  quotaUnused?: readonly QuotaUnusedRow[] | null;
   /** The requests in [fromMs, toMs) of these sessions. */
   usage(fromMs: number, toMs: number, sessionIds: ReadonlySet<string>): UsageRow[];
   /** Done-in-window tickets' dollars (usage spend's `ticketReport`, doneOnly) over these rows. */
@@ -221,6 +241,9 @@ export const SRC = {
   refusals: 'chat_audit agent.refused of the program’s sessions',
   endings: 'chat_sessions.ended_reason and state_since (integrity:, credential:, or interrupted by an error)',
   pod: 'not recorded by the portal (no pod memory or OOM source)',
+  doneRate: 'tickets (type feature or task, status done, closed_at in the window) of the program, scaled to a day; baseline: D-65',
+  quotaUnused: 'claude_usage_samples (T-547): per Claude and plan window, 100 minus the percent used in the last reading before each reset in the window',
+  toolResults: 'chat_events (kind tool_result, is_error) of the program’s sessions in the window / all their tool results',
 } as const;
 
 const CLOSED = new Set(['done', 'wont_do']);
@@ -393,7 +416,7 @@ export function ticketLifeFrom(tickets: readonly CrewTicket[] | null, fromMs: nu
   return Math.max(oldest, toMs - TICKET_LIFE_CAP_MS);
 }
 
-export function windowScore(p: Program, facts: CrewFacts, fromMs: number, toMs: number): { score: CrewWindowScore; rows: UsageRow[] } {
+export function windowScore(p: Program, facts: CrewFacts, fromMs: number, toMs: number): { score: CrewWindowScore; rows: UsageRow[]; costs: TicketCostRow[] } {
   const tickets = facts.tickets ? programTickets(p, facts.tickets, facts.sessions) : null;
   const rows = facts.usage(fromMs, toMs, p.members);
   const lifeFrom = Math.min(fromMs, ticketLifeFrom(tickets, fromMs, toMs));
@@ -403,6 +426,7 @@ export function windowScore(p: Program, facts: CrewFacts, fromMs: number, toMs: 
   return {
     score: { fromMs, toMs, effectiveness: eff, cost: cost(p, rows, facts.sessions, eff.done.value), efficiency: efficiency(p, facts, rows, fromMs, toMs), health: health(p, facts, fromMs, toMs) },
     rows,
+    costs,
   };
 }
 
@@ -416,6 +440,13 @@ export function roleOf(p: Program, id: string, extra: ReadonlyMap<string, CrewSe
 function contextRow(key: string, tokens: number[]): CrewContextRow {
   const s = [...tokens].sort((a, b) => a - b);
   return { key, sessions: s.length, p50: percentile(s, 0.5), p90: percentile(s, 0.9) };
+}
+
+/** T-490, T-549: the QA and review workers with a request in `rows`, and those with a request on opus or fable. */
+function qaOpusSets(p: Program, facts: CrewFacts, rows: UsageRow[]): { qaWorkers: string[]; onOpus: string[] } {
+  const active = [...new Set(rows.map((r) => r.sessionId))].sort();
+  const qaWorkers = active.filter((id) => !p.leads.includes(id) && QA_ROLE.test(facts.extra.get(id)?.agent ?? '') && rows.some((r) => r.sessionId === id && r.model !== '<synthetic>'));
+  return { qaWorkers, onOpus: qaWorkers.filter((id) => rows.some((r) => r.sessionId === id && isOpusOrAbove(r.model))) };
 }
 
 function efficiency(p: Program, facts: CrewFacts, rows: UsageRow[], fromMs: number, toMs: number): CrewEfficiency {
@@ -498,8 +529,7 @@ function efficiency(p: Program, facts: CrewFacts, rows: UsageRow[], fromMs: numb
   spikes.sort((a, b) => a.at.localeCompare(b.at));
 
   // T-490 (D-63): the QA and review workers active in the window, and those on opus or fable (any request).
-  const qaWorkers = active.filter((id) => !p.leads.includes(id) && QA_ROLE.test(facts.extra.get(id)?.agent ?? '') && rows.some((r) => r.sessionId === id && r.model !== '<synthetic>'));
-  const onOpus = qaWorkers.filter((id) => rows.some((r) => r.sessionId === id && isOpusOrAbove(r.model)));
+  const { qaWorkers, onOpus } = qaOpusSets(p, facts, rows);
   const qaReviewOpus = {
     sessions: qaWorkers.length,
     opus: onOpus.length,
@@ -574,7 +604,7 @@ export const DEFAULT_WORKER_CAP = 3;
 /** The one ticket allowed in the owner's queue (D-62: Konfersi production). */
 export const OWNER_QUEUE_ALLOWED = ['T-93'];
 
-export function targets(p: Program, facts: CrewFacts, rows: UsageRow[]): CrewTarget[] {
+export function targets(p: Program, facts: CrewFacts, rows: UsageRow[], win?: D65Window): CrewTarget[] {
   const out: CrewTarget[] = [];
   const workers = [...p.members].filter((m) => !p.leads.includes(m));
   const liveLead = [...p.leads].reverse().find((l) => facts.sessions.get(l)?.exists) ?? p.leads.at(-1)!;
@@ -629,6 +659,128 @@ export function targets(p: Program, facts: CrewFacts, rows: UsageRow[]): CrewTar
     const off = qa.filter((w) => !facts.extra.get(w)?.spawnWhy && workerRows.some((r) => r.sessionId === w && !/sonnet/i.test(r.model))).sort();
     out.push({ id: 'qa_review_model', decision: 'D-63', rule, state: off.length ? 'breach' : 'ok', figure: fig(off.length, 'measured', SRC.model), offenders: off.slice(0, 20) });
   }
+  if (win) out.push(...d65Targets(p, facts, rows, win));
+  return out;
+}
+
+/* ---------- D-65 (T-549) ---------- */
+
+/** D-65's targets (owner, 2026-10-15) and this page's warn margin (a default of the page, not of the decision). */
+export const D65 = {
+  costPerDoneUsd: 8,
+  leadSharePct: 30,
+  qaOpusPct: 10,
+  unusedPct: 30,
+  wastedPct: 3,
+  /** Warn from this fraction of a ceiling up to it (breach at or above the ceiling). */
+  warnFrac: 0.8,
+  /** Feature and task tickets done a day at the baseline (scorecard T-450, 24 h to 2026-10-15 11:00 UTC; all ticket types), by the lead's workspace name. */
+  doneBaselines: [
+    // By exact workspace id, never a pattern on the name (a pattern on "event" gave kubernetes/kohi-event the Event program's 12).
+    // Source of the numbers: D-65 baseline (docs/dev-sessions/DECISIONS.md). The Event program left pilot (D-67), so it has no row.
+    // kubernetes/kohi-event is ClaudePilot's own workspace (deploy pipeline and continuation tests: PILOT_WORKSPACE, WORKSPACE): D-65's 48.
+    { workspace: 'kubernetes/kohi-event', perDay: 48 },
+    // kubernetes/konfersi is Konfersi's workspace (chat/lineage.test.ts): D-65's 47.
+    { workspace: 'kubernetes/konfersi', perDay: 47 },
+  ],
+  /** From the baseline down to this fraction of it is a warn; below it a breach. */
+  doneBreachFrac: 0.5,
+} as const;
+
+const DENIED = /permission (to use .* )?(has been |was )?denied|permission denied|haven.t granted|requested permissions? to use|doesn.t want to proceed|denied by|not allowed to use|blocked by (a )?(deny|policy)/i;
+
+/** Classifies an error tool result: a permission denial, an error of a portal tool, or another failure. */
+export function wasteKind(toolName: string | null, text: string | null): 'denied' | 'portal' | 'failed' {
+  if (DENIED.test((text ?? '').slice(0, 400))) return 'denied';
+  return toolName !== null && toolName.startsWith('mcp__pilot__') ? 'portal' : 'failed';
+}
+
+/** A ceiling target: breach at or above it, warn from `warnFrac` of it. */
+const ceilingState = (v: number, ceiling: number) => (v >= ceiling ? 'breach' : v >= ceiling * D65.warnFrac ? 'warn' : 'ok');
+
+export interface D65Window {
+  fromMs: number;
+  toMs: number;
+  /** The done tickets' dollars over their life (usage spend's ticketReport), for the offenders of the cost row. */
+  costs: TicketCostRow[];
+}
+
+export function d65Targets(p: Program, facts: CrewFacts, rows: UsageRow[], win: D65Window): CrewTarget[] {
+  const out: CrewTarget[] = [];
+  const unavailable = (id: CrewTarget['id'], rule: string, reason: CrewUnavailable, source: string): CrewTarget => ({ id, decision: 'D-65', rule, state: 'unavailable', figure: none(reason, source), offenders: [] });
+  const inWin = (ms: number | null) => ms !== null && ms >= win.fromMs && ms < win.toMs;
+  const tickets = facts.tickets ? programTickets(p, facts.tickets, facts.sessions) : null;
+  const done = tickets ? tickets.filter((t) => t.status === 'done' && inWin(t.closedAtMs)) : null;
+  const c = cost(p, rows, facts.sessions, done ? done.length : null);
+
+  // 1. All-in cost per done ticket under 8 USD.
+  const ruleCost = `All-in cost per done ticket under ${D65.costPerDoneUsd} USD (lead included).`;
+  if (c.perDoneAllIn.value === null) out.push(unavailable('cost_per_done', ruleCost, c.perDoneAllIn.reason ?? 'no_source', c.perDoneAllIn.source));
+  else {
+    const over = win.costs.filter((t) => t.totalUsd >= D65.costPerDoneUsd).sort((a, b) => b.totalUsd - a.totalUsd || a.ticket.localeCompare(b.ticket));
+    out.push({ id: 'cost_per_done', decision: 'D-65', rule: ruleCost, state: ceilingState(c.perDoneAllIn.value, D65.costPerDoneUsd), figure: c.perDoneAllIn, offenders: over.map((t) => t.ticket).slice(0, 20) });
+  }
+
+  // 2. Lead share of cost under 30 percent.
+  const ruleLead = `The lead chain’s share of the program’s cost under ${D65.leadSharePct} percent.`;
+  if (c.leadShare.value === null) out.push(unavailable('lead_share', ruleLead, c.leadShare.reason ?? 'no_source', c.leadShare.source));
+  else out.push({ id: 'lead_share', decision: 'D-65', rule: ruleLead, state: ceilingState(c.leadShare.value, D65.leadSharePct), figure: c.leadShare, offenders: c.leadShare.value >= D65.leadSharePct * D65.warnFrac ? p.leads.slice(0, 20) : [] });
+
+  // 3. QA and review sessions on opus under 10 percent (a why does not exempt: D-65 measures the share).
+  const ruleQa = `QA and review sessions on opus under ${D65.qaOpusPct} percent of them.`;
+  const { qaWorkers, onOpus } = qaOpusSets(p, facts, rows);
+  if (!qaWorkers.length) out.push(unavailable('qa_opus_share', ruleQa, 'no_samples', SRC.qaReviewOpus));
+  else {
+    const share = r2((onOpus.length / qaWorkers.length) * 100);
+    out.push({ id: 'qa_opus_share', decision: 'D-65', rule: ruleQa, state: ceilingState(share, D65.qaOpusPct), figure: fig(share, 'measured', SRC.qaReviewOpus), offenders: onOpus.slice(0, 20) });
+  }
+
+  // 4. Feature and task tickets done a day, against the baseline.
+  const ruleDone = 'Feature and task tickets done a day at or above the 2026-10-15 baseline (48 / 47 a day, all types: ClaudePilot / Konfersi).';
+  const wsName = facts.sessions.get(p.id)?.workspaceId ?? '';
+  const base = D65.doneBaselines.find((b) => b.workspace === wsName);
+  if (!done) out.push(unavailable('done_rate', ruleDone, 'no_source', SRC.tickets));
+  else if (!base) out.push(unavailable('done_rate', ruleDone, 'not_recorded', `${SRC.doneRate}; no baseline for workspace ${wsName || 'unknown'}`));
+  else {
+    const days = (win.toMs - win.fromMs) / 86_400_000;
+    const perDay = r2(done.filter((t) => t.type === 'feature' || t.type === 'task').length / days);
+    out.push({
+      id: 'done_rate',
+      decision: 'D-65',
+      rule: ruleDone,
+      state: perDay >= base.perDay ? 'ok' : perDay >= base.perDay * D65.doneBreachFrac ? 'warn' : 'breach',
+      figure: fig(perDay, 'measured', `${SRC.doneRate} (${base.perDay} a day)`),
+      offenders: [],
+    });
+  }
+
+  // 5. Quota left unused at a window's reset: no Claude over 30 percent (whole portal; the work-queued condition is not measured).
+  const ruleQuota = `No Claude ends a quota window with more than ${D65.unusedPct} percent unused (whole portal; “work queued” is not measured).`;
+  if (facts.quotaUnused === undefined || facts.quotaUnused === null) out.push(unavailable('quota_unused', ruleQuota, 'no_source', SRC.quotaUnused));
+  else {
+    const known = facts.quotaUnused.filter((r) => r.unusedPct.value !== null);
+    if (!known.length) out.push(unavailable('quota_unused', ruleQuota, 'no_samples', SRC.quotaUnused));
+    else {
+      const worst = Math.max(...known.map((r) => r.unusedPct.value!));
+      const offenders = [...new Set(known.filter((r) => r.unusedPct.value! >= D65.unusedPct * D65.warnFrac).sort((a, b) => b.unusedPct.value! - a.unusedPct.value!).map((r) => r.claudeId))];
+      out.push({ id: 'quota_unused', decision: 'D-65', rule: ruleQuota, state: worst > D65.unusedPct ? 'breach' : worst >= D65.unusedPct * D65.warnFrac ? 'warn' : 'ok', figure: fig(r2(worst), 'measured', SRC.quotaUnused), offenders: offenders.slice(0, 20) });
+    }
+  }
+
+  // 6. Wasted tool calls (comment 4802): error results (a permission denial, a portal error, a failed command) over all tool results, under 3 percent.
+  const ruleWaste = `Wasted tool calls (a permission denial, a portal error or a failed command) under ${D65.wastedPct} percent of tool results.`;
+  const counts = facts.toolResults ? facts.toolResults(win.fromMs, win.toMs, p.members) : null;
+  if (!counts) out.push(unavailable('wasted_tool_calls', ruleWaste, 'no_source', SRC.toolResults));
+  else {
+    const total = counts.reduce((n, r) => n + r.total, 0);
+    if (!total) out.push(unavailable('wasted_tool_calls', ruleWaste, 'no_samples', SRC.toolResults));
+    else {
+      const wasted = (r: ToolResultCount) => r.denied + r.portal + r.failed;
+      const pct = r2((counts.reduce((n, r) => n + wasted(r), 0) / total) * 100);
+      const offenders = counts.filter((r) => wasted(r) > 0).sort((a, b) => wasted(b) - wasted(a) || a.sessionId.localeCompare(b.sessionId)).map((r) => r.sessionId);
+      out.push({ id: 'wasted_tool_calls', decision: 'D-65', rule: ruleWaste, state: ceilingState(pct, D65.wastedPct), figure: fig(pct, 'measured', SRC.toolResults), offenders: (pct >= D65.wastedPct * D65.warnFrac ? offenders : []).slice(0, 20) });
+    }
+  }
   return out;
 }
 
@@ -645,13 +797,14 @@ export function programScore(p: Program, facts: CrewFacts, windowMs: number, com
     workers: p.members.size - p.leads.length,
     current: cur.score,
     previous: compare ? windowScore(p, facts, to - 2 * windowMs, to - windowMs).score : null,
-    targets: targets(p, facts, cur.rows),
+    targets: targets(p, facts, cur.rows, { fromMs: to - windowMs, toMs: to, costs: cur.costs }),
   };
 }
 
 export const SCORECARD_BASIS: Record<string, string> = {
   program: 'The top of a session’s lineage (continuations, then parents) with at least one worker; the lead chain is that row and its continuations.',
-  tickets: 'A program’s tickets: held by one of its sessions (ticket_id), assigned to one, or with an event written by one. MEASURED.',
+  quotaUnused: 'Quota left unused at reset (T-547): per Claude and plan window, 100 minus the percent used in the last usage reading taken within 30 minutes before the reset. No such reading: unavailable. MEASURED.',
+  tickets: 'A program’s tickets:held by one of its sessions (ticket_id), assigned to one, or with an event written by one. MEASURED.',
   done: 'Tickets whose status is done and closed_at is in the window. MEASURED.',
   reopened: 'Tickets with a reopen (or a change from done or wont_do back to work) in the window. MEASURED.',
   leadTime: 'From the first change to in_progress to closed_at, per done ticket; p50 and p90 by nearest rank. MEASURED.',
@@ -670,5 +823,12 @@ export const SCORECARD_BASIS: Record<string, string> = {
   perDone: 'All-in: the window’s dollars over its done tickets; workers only: the workers’ dollars over them. ESTIMATE.',
   qaReviewOpus:
     'D-63 (T-490): of the QA, verifier, ux-check and review workers (their role) with a request in the window, the share with a request on opus or fable; how many of those were started with a why (session_spawn). Unavailable with no such worker. MEASURED.',
+  pace: 'T-600 headline: sum of usedPct over sum of evenPct of the 5-hour session window of every Claude on its own plan that is signed in and has a pace (claudeusage WindowPace); 1 spends the quota exactly by its reset. Under 10 points of even pace in all: windows_just_reset; no such Claude: no_claude; an agent’s read: no_source (quota is not a program’s). ESTIMATE.',
+  unusedAtReset: 'T-600 headline: with the pace under 0.9, 100 minus the mean projectedPct at reset of those Claudes. ESTIMATE.',
+  usage: 'T-600 headline: requests and estimated dollars of the programs’ sessions in the window, per hour. Requests MEASURED, dollars ESTIMATE.',
+  resolved: 'T-600 headline: tickets of the programs done (won’t-do apart) with closed_at in the window; a ticket two programs touched counts once globally and once in each program. MEASURED.',
+  perResolved: 'T-600 headline: the window’s dollars over its resolved tickets; unavailable (no_samples) with none. ESTIMATE.',
+  createdPerClosed: 'T-600 headline: tickets created in the window over tickets closed (done plus won’t-do) in it; under 1 the backlog shrinks; unavailable (no_samples) with none closed. MEASURED.',
   targets: 'D-61 live workers and no Agent-tool sub-agents in a lead; D-62 the owner’s queue; D-63 QA and review on sonnet (a worker started with a why is not an offender). Live workers are measured now; the rest over the window.',
+  d65: 'D-65 (T-549): cost per done under 8 USD, lead share under 30 %, QA on opus under 10 %, feature and task done a day over the 48 / 47 baseline, no quota over 30 % unused at reset, wasted tool calls (error results) under 3 %. Warn from 80 % of a ceiling.',
 };

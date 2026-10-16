@@ -2705,6 +2705,15 @@ export const MIGRATIONS: Migration[] = [
     },
   },
   {
+    version: 383,
+    name: 'chat_events: partial index on tool results for the crew scorecard (T-739)',
+    up(db) {
+      // The crew scorecard counts tool results per session and window (lab/scorecardData.ts loadToolResults). Without this it walks every
+      // event of the session. Partial: only tool results pay the write cost. Idempotent. `at` is fixed-width ISO text, so order is time order.
+      db.exec("CREATE INDEX IF NOT EXISTS chat_events_result_at ON chat_events (session_id, at) WHERE kind = 'tool_result'");
+    },
+  },
+  {
     version: 755,
     name: 'chat sessions: the restart hint, hidden until the next change, and applying tool changes by itself',
     up(db) {
@@ -3216,6 +3225,41 @@ export const MIGRATIONS: Migration[] = [
     },
   },
   {
+    version: 783,
+    name: 'CI: the secret name that signs a remote’s upstream webhook (T-486 S2)',
+    up(db) {
+      // T-486 S2 (local-git-ci PRD FR8a): an upstream may call `POST /hooks/ci/<remote id>` on a push, signed with the value of this
+      // Secrets & env NAME (never a value here). Null on every row so far: no webhook, the timer only, as before.
+      db.exec(`ALTER TABLE ci_repos ADD COLUMN upstream_hook_secret TEXT;`);
+    },
+  },
+  {
+    version: 789,
+    name: 'CI: runners with labels, and the runner a run executes on (T-557)',
+    up(db) {
+      // T-557 (local-git-ci PRD §23, runners): a runner is a workspace (in the cluster or a machine enrolled through Connect) that takes
+      // runs whose pipeline says `runs-on: [labels]`. `labels` is a sorted JSON array; `max_runs` caps the runs it executes at once;
+      // `drained` lets its running runs finish and gives it no new one. On a run: `runs_on` is the labels it asked for (JSON, null: the
+      // repository's workspace, as before) and `runner_workspace_id` the workspace it executes on (null: `workspace_id`, as before).
+      db.exec(`
+        CREATE TABLE ci_runners (
+          workspace_id TEXT PRIMARY KEY,
+          labels TEXT NOT NULL,
+          max_runs INTEGER NOT NULL DEFAULT 1,
+          enabled INTEGER NOT NULL DEFAULT 1,
+          drained INTEGER NOT NULL DEFAULT 0,
+          note TEXT,
+          created_by TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        ) STRICT;
+        ALTER TABLE ci_runs ADD COLUMN runs_on TEXT;
+        ALTER TABLE ci_runs ADD COLUMN runner_workspace_id TEXT;
+        CREATE INDEX ci_runs_runner ON ci_runs (runner_workspace_id, status) WHERE runner_workspace_id IS NOT NULL;
+      `);
+    },
+  },
+  {
     version: 773,
     name: 'chat sessions: the agent a session runs as (T-294)',
     up(db) {
@@ -3266,6 +3310,33 @@ export const MIGRATIONS: Migration[] = [
     },
   },
   {
+    version: 778,
+    name: 'chat sessions: marked a crew lead at its start (T-561)',
+    up(db) {
+      // T-561: a session its starter marked a crew lead (the supervisor's leads, `lead: true` on create; a continuation keeps it). With the
+      // policy `sessions.leadRules` on, a lead launches with the portal's lead rules. 1 marked; null for every row so far and every other start.
+      db.exec(`ALTER TABLE chat_sessions ADD COLUMN lead INTEGER;`);
+    },
+  },
+  {
+    version: 779,
+    name: 'chat sessions: auto hand-off, an implementer\'s DONE starts QA (T-548)',
+    up(db) {
+      // T-548 (chat-sessions PRD, "Auto hand-off"): 1 on a lead starts a qa-verifier worker when one of its implementer workers ends with
+      // `DONE <sha>`. Opt-in: every row keeps 0.
+      db.exec(`ALTER TABLE chat_sessions ADD COLUMN auto_handoff INTEGER NOT NULL DEFAULT 0 CHECK (auto_handoff IN (0, 1));`);
+    },
+  },
+  {
+    version: 784,
+    name: 'CI: where a remote\'s release reports go (T-591)',
+    up(db) {
+      // T-591 (D-69, local-git-ci PRD "Release reports"): `release_report` is the remote's setting as JSON {pipeline, vaultId, folder}; null is
+      // off, as for every remote so far. Set by a person only (PUT /api/ci/repos/:id/release-report).
+      db.exec(`ALTER TABLE ci_repos ADD COLUMN release_report TEXT;`);
+    },
+  },
+  {
     version: 870,
     name: 'notify: quota alerts as one row that updates, and the Claudes a person hears of when idle (T-126)',
     up(db) {
@@ -3282,6 +3353,28 @@ export const MIGRATIONS: Migration[] = [
           at TEXT NOT NULL,
           PRIMARY KEY (owner_id, claude_id)
         ) STRICT;
+      `);
+    },
+  },
+  {
+    version: 785,
+    name: 'tickets: structured QA and review verdicts, each bound to one commit (T-325)',
+    up(db) {
+      // T-325 S1 (tickets PRD FR36): a verdict is a row, never a comment's words. `commit_sha` is the FULL sha that was verified: a branch that
+      // moved afterwards is a different commit, so the verdict no longer counts (the reader compares, nothing here expires). Rows are never
+      // edited; a later verdict of the same role on the same commit supersedes an earlier one. `actor` is `session:<id>` or `ui`.
+      db.exec(`
+        CREATE TABLE ticket_verdicts (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          ticket_number INTEGER NOT NULL REFERENCES tickets (number) ON DELETE CASCADE,
+          role TEXT NOT NULL CHECK (role IN ('qa', 'review')),
+          verdict TEXT NOT NULL CHECK (verdict IN ('pass', 'fail')),
+          commit_sha TEXT NOT NULL CHECK (length(commit_sha) = 40),
+          actor TEXT NOT NULL,
+          actor_label TEXT NOT NULL,
+          at TEXT NOT NULL
+        ) STRICT;
+        CREATE INDEX ticket_verdicts_ticket ON ticket_verdicts (ticket_number, id);
       `);
     },
   },

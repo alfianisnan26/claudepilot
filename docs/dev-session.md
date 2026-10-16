@@ -42,6 +42,8 @@ npm run build -w @portal/web
 scripts/gate.sh                                   # the same on a clean copy of HEAD: the release gate
 scripts/gate-job.sh <commit> [steps]              # the release gate as a Job in the cluster (other CPUs); the commit must be on GitHub
 scripts/scratch-portal.sh start 3403              # a clean-environment portal; tools/qa/*.mjs drive a real browser against it
+scripts/worktree-deps.sh <worktree>               # links a worktree's node_modules to this checkout's install (no npm ci); refuses, exit 2, when a package file differs (cluster npm ci needed) or the worktree is outside ~/work/claudepilot.worktrees; --main/--root are test-only (WORKTREE_TEST_MODE=1)
+scripts/worktree-new.sh T-<n> <slug>              # branch ticket/T-<n>-<slug> from origin/integration under ~/work/claudepilot.worktrees, deps linked; refuses an existing branch or folder, a bad slug (leading dash, glob characters); no path flags outside tests
 scripts/k3s-status.sh                             # Argo CD, pods, node load, warnings, the portal log
 kubectl -n isnan-claudepilot logs deploy/claudepilot-portal --tail=50
 ```
@@ -98,6 +100,13 @@ guards the sanctioned path (and every caller that only has MCP or the API), not 
 **Every deploy:** push `integration` to GitHub and to `pilot` (`git push origin integration && git push pilot integration`), then run `/deploy`
 (or Run in the portal), approve when the hand shows, and `git pull` afterwards (the release commit is on `integration`).
 
+**Upstream sync** (optional, local-git-ci PRD FR8a, T-486): a remote can follow its GitHub repository, so a push there reaches `pilot`
+without a hand push. The owner sets it on the remote (URL, a read token by Secrets & env name for a private one). For a sync at once on
+each push instead of every 30 s: add a Secrets & env *secret* (a random string) assigned to this workspace, name it as the remote's hook
+secret, and in GitHub add a webhook to `https://<portal>/hooks/ci/<remote id>` (content type JSON, that string as the secret, the push
+event). A wrong signature gets the same 404 as an unknown remote; a failing sync shows in Needs you. Settings → CI → Upstream hosts limits
+the hosts (empty: any public host).
+
 ## Gates in the cluster
 
 The workspace pod has 4 CPUs shared with the agents, their scratch portals and Chromium; the full gate took 15 to 40 minutes there and hung
@@ -139,6 +148,7 @@ git push origin HEAD:wip/<name>                                              # t
 scripts/job-run.sh -- 'cd apps/server && node --import tsx --test src/ci/jobRun.test.ts'
 scripts/job-run.sh --repo konfersi:platform/konfersi-backend --ref <branch> --also platform/konfersi-shared -- 'npx vitest run'   # platform/, not the manifest's stale shared/
 scripts/job-run.sh --artifacts test-results --out /tmp/cp-shots -- 'npx playwright test'   # files back, at most 4 MiB compressed
+# Scripts that rewrite the checkout (tools/qa/rtk-history.sh, rtk-classes.sh, rtk-measure.sh, and the mutant runner rtk-guard-mutants.sh; T-736) refuse unless the Job's own env var JR_REPO_URL is set and the tree is clean.
 scripts/job-run.sh --list ; scripts/job-run.sh --stop --chat <session id>
 ```
 
@@ -232,9 +242,19 @@ scripts/job-run.sh --list ; scripts/job-run.sh --stop --chat <session id>
   `... pending=affinity|memory|other ...`, and a last one with the node (`node=none ... outcome=did-not-start` when it never started).
   A Secret that cannot be created ends the run (rc 2) with `kubectl exit N, category: <fixed>` and a `=== JOB-RUN SECRET-FAILED` line; kubectl's
   own text is never shown or logged.
+  `gate-job.sh` has its own manifest with preferred rules only (the gate's checks and placement are unchanged here).
+- **Reuse (T-731), opt-in with `--reuse`:** without the flag every run is a Job. With it, a Job that passed (same repo, full commit, exact command, steps,
+  `--also`/`--against`, `--keep-tests`, `--big`, runner image, on the same `job-run.sh` and YAML) returns its saved masked log and exit 0 at once, with no Job:
+  "job-run: reused a passed result … from Job <name>". The store is one workspace home: any session there can write an entry, and a hit prints the
+  saved log as it is (the current mask is not applied to it: a planted or stale entry is shown as found; accepted limit). A branch name as `--ref`,
+  `--artifacts` and failures are never saved, and a run whose log held a masked value (the leak check) is not saved. `--reuse` together with
+  `--pool-env` is refused (rc 2, after the `--pool-env` checks and before any kubectl call): a pass without the credential must never stand for a
+  run with it, and nothing made with a credential is saved. A hit makes no kubectl call (no placement, no avoid rule, no Secret, no Job), so the
+  reused log shows the node of the run that passed, not a new one: the "last line names the node" statement above is true for a Job, not for a reused run.
+  Key and store: `docs/prd/local-git-ci.md` section 24. `gate-job.sh` is not reused (T-578).
 - **Memory (T-524):** requested = limited, so the scheduler places a Job only where all of it fits (2Gi requested with 8Gi allowed let a
   4.1 GB Event Job take k3s-master, the 15 GB control-plane node that also runs the API server, to 92%, and the portal answered 503).
-  4Gi by default with `/tmp` at most 2Gi; `--big` gives 8Gi with `/tmp` 4Gi (only k3s-node2 has that much free). The whole server suite peaked
+  4Gi by default (T-731: 518 peaks, p99 2270Mi, max 2536Mi, would fit 3Gi, but CPU requests bind at 3 Jobs; a lower default waits on a CPU-request measurement) with `/tmp` at most 2Gi; `--big` gives 8Gi with `/tmp` 4Gi (only k3s-node2 has that much free). The whole server suite peaked
   at 1480Mi (claudepilot-job-4c34ebf9, 2026-10-15), a test folder at 1365Mi; the Event Job above reached 4.1 GB and needs `--big`.
   Every Job ends with `=== JOB-RUN MEMORY peak=… limit=… oom_kills=…` (its own cgroup). An OOMKilled Job says so with its limit and the hint
   `--big`; a Job Pending because no node has the memory free says so once, instead of a silent wait. `/tmp` and `/dev/shm` (1Gi) are both
@@ -248,6 +268,10 @@ scripts/job-run.sh --list ; scripts/job-run.sh --stop --chat <session id>
   killed outright is removed by the next run on this host.
 - **npm cache:** none shared. A cold `npm ci` in a Job is 15 to 20 s (job-run and gate logs); a shared cache would be a node-bound `local-path`
   PVC (the only storage class) for a few seconds.
+- **The workspace pod's own memory (T-416, D-61):** the portal refuses a session start or wake in a workspace when anon + active_file
+  (cgroup v2 `memory.stat`, not `memory.current`) + 350 MB per session and per running sub-agent + 1.5 GiB headroom is over `memory.max`
+  (409 `MEMORY_BUDGET`, audited `memory.refused`; chat PRD FR39b). Past 85% a Needs you item and a push name the largest processes. If an
+  agent's spawn or wake is refused for memory: end or sleep a session there, or move the heavy job into the cluster; never raise the limit.
 
 ## Building an image in the cluster
 

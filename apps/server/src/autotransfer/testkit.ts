@@ -76,8 +76,16 @@ export class MoveChat extends FakeChat {
   readonly models: { id: string; model: string }[] = [];
   /** What the engine said to a chat (the steer, the continuation), in order. */
   readonly sent: { id: string; text: string; priority: string; actor: string }[] = [];
+  /** `send` fails this many times (a CONFLICT), then works; `sendTries` counts every call (T-781 S5). */
+  sendFails = 0;
+  sendTries = 0;
   async send(id: string, text: string, opts: { priority: 'next' | 'later'; actor: string; actorLabel?: string }): Promise<void> {
     const s = this.get(id);
+    this.sendTries++;
+    if (this.sendFails > 0) {
+      this.sendFails--;
+      throw new AppError('CONFLICT', 'The session is restarting.');
+    }
     if (!s || s.state === 'ended') throw new AppError('CONFLICT', 'This session has ended.');
     this.sent.push({ id, text, priority: opts.priority, actor: opts.actor });
   }
@@ -91,6 +99,8 @@ export class MoveChat extends FakeChat {
   fail: string | null = null;
   /** The error code a failing move throws (SERVICE_UNAVAILABLE when unset). */
   failCode: string | null = null;
+  /** When set, a failing move fails this many times and then succeeds. */
+  failTimes: number | null = null;
   #n = 0;
 
   list(filter: { workspaceId?: string } = {}) {
@@ -121,7 +131,15 @@ export class MoveChat extends FakeChat {
   appliedModel: string | null = null;
   async switchClaude(id: string, to: string, opts: { handoff?: 'ask' | 'skip'; model?: string }): Promise<ChatSession> {
     this.moves.push({ id, to, handoff: opts.handoff, ...(opts.model ? { model: opts.model } : {}) });
-    if (this.fail) throw new AppError((this.failCode ?? 'SERVICE_UNAVAILABLE') as 'SERVICE_UNAVAILABLE', this.fail);
+    if (this.fail) {
+      const msg = this.fail;
+      // `failTimes`: the move fails that many times, then works (T-781).
+      if (this.failTimes !== null && --this.failTimes <= 0) {
+        this.fail = null;
+        this.failTimes = null;
+      }
+      throw new AppError((this.failCode ?? 'SERVICE_UNAVAILABLE') as 'SERVICE_UNAVAILABLE', msg);
+    }
     const s = this.get(id)!;
     const name = this.names.get(to)!;
     const handoffId = `h-${++this.#n}`;
@@ -148,6 +166,31 @@ export class MoveChat extends FakeChat {
     const moved = { ...s, claudeId: to, claudeName: this.names.get(to)! };
     this.sessions.set(id, moved);
     this.dispatch(id, { type: 'session', session: moved });
+  }
+  /** Chats whose running turn the engine stopped (T-781, the hard move). */
+  readonly interrupted: string[] = [];
+  async interrupt(id: string): Promise<void> {
+    this.interrupted.push(id);
+    const s = this.get(id);
+    if (s) this.sessions.set(id, { ...s, state: 'idle' });
+  }
+  /** The chat is deleted from the portal (a `removed` message). */
+  removes(id: string) {
+    this.sessions.delete(id);
+    this.dispatch(id, { type: 'removed', session: id });
+  }
+  /** The chat's stored events, as the history gives them (`at` is the fake clock's time). */
+  stored(id: string, items: { at: string; kind?: ChatEvent['kind']; text?: string }[]) {
+    const evs = items.map((e, i) => ({ seq: i + 1, kind: e.kind ?? 'assistant', text: e.text ?? 'x', at: e.at }) as ChatEvent);
+    this.events.set(id, evs);
+    const s = this.get(id)!;
+    this.sessions.set(id, { ...s, lastSeq: evs.length });
+  }
+  /** The chat ends (T-781: the engine forgets what it kept for it). */
+  ends(id: string) {
+    const ended = { ...this.get(id)!, state: 'ended' as const };
+    this.sessions.set(id, ended);
+    this.dispatch(id, { type: 'session', session: ended });
   }
   /** A main-thread turn ends: the `result` row, then the chat at `idle`. */
   turnEnds(id: string) {

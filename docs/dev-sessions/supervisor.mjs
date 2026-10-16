@@ -53,7 +53,19 @@ const DRY = process.env.DRY_RUN === '1';
 
 /** What is kept alive: one orchestrator in the main folder (no worktree of its own: its sub-agents make theirs). The Claudes are tried by name, best room first. */
 const KONFERSI = process.env.KONFERSI_FOLDER ?? join(homedir(), 'work/konfersi-universe');
-const EVENT = process.env.EVENT_FOLDER ?? join(homedir(), 'work/event');
+const TRADINGBOT = process.env.TRADINGBOT_FOLDER ?? join(homedir(), 'work/tradingbot');
+/**
+ * D-70 (owner, 2026-10-15): each program's crew is long-lived LANES: a Backend and a Frontend build lane and at most two QA lanes (UI; performance
+ * and security), spawned once and fed ticket after ticket, plus one free slot. Shared by the kickoffs and nudges below.
+ */
+const BUILD_LANES = {
+  // D-71: a second backend lane, by area, so the backlog runs in parallel and the quota is used.
+  ClaudePilot: `'ClaudePilot Backend' (role lane-backend: chat and sessions, Portal MCP, tickets, knowledge, glance and the lab: APIs, data, performance, security, logic), 'ClaudePilot BE Infra' (role lane-backend: CI and runners, job-run and the cluster Jobs, k3s and deploy, secrets delivery, usage, spend and quota placement), 'ClaudePilot Frontend' (role lane-frontend: UI, UX, Lighthouse)`,
+  // The owner's split for Konfersi (2026-10-15): four build lanes by area.
+  Konfersi: `'Konfersi FE Business' (role lane-frontend: landing page, courses, console, accounts), 'Konfersi FE Lab' (role lane-frontend: the VS Code web lab at lab.konfersi.com and the standalone app, and all UI/UX responsiveness and UI performance work), 'Konfersi BE Business' (role lane-backend: the generic API, projects, everything in konfersi-backend that is not heavy), 'Konfersi BE Lab & AI' (role lane-backend: metocean compute, the AI reporting rewrites and the rest of lab and AI)`,
+};
+const LANES = (prog) =>
+  `Your crew is LANES (D-70): long-lived worker sessions you spawn once each (session_spawn, claude auto, mode dontAsk, report idle, model sonnet) and keep: the build lanes ${BUILD_LANES[prog]}, and at most two QA lanes: '${prog} QA UI' (role lane-qa-ui: UI/UX, refinement, Lighthouse, responsiveness, journeys end to end) and '${prog} QA Perf' (role lane-qa-perf: performance, security, load tests, API behaviour). Every build lane and one QA lane are always live; give each lane its area in its first brief. Give a lane its next ticket with session_message; never end a lane for lack of work and never start a second session of a live lane. Every delivery goes to the QA lane of its side before you merge (UI to QA UI, the rest to QA Perf; with one QA lane, to it); QA never authors. The free slot is for a blind reviewer (a new sonnet session each time) or an explorer. A lane goes to opus for one ticket only with a why on the ticket (session_configure), then back. The supervisor compacts an idle lane past 120k.`;
 const TRACKS = [
   { key: 'orchestrator', title: 'Orchestrator: ClaudePilot dev', claudes: ['hasyim', 'fadlilah', 'alfian.isnan'] },
   // The Konfersi program as a crew (D-52): its own folder, tickets tagged konfersi-migration. Not named Orchestrator: the title prefix finds the track's chats.
@@ -63,25 +75,26 @@ const TRACKS = [
     folder: KONFERSI,
     claudes: ['alfian.isnan', 'hasyim', 'satria', 'one.claude', 'two.claude', 'sekar'],
     kickoff: (again, reason) =>
-      `You are the Konfersi lead, running in ClaudePilot${again ? ` (the earlier chat ended: ${reason}; its live function sessions are now yours: session_family)` : ''}, and the lead of its crew (D-52). You plan, route, merge and deploy to stg; you never implement or verify yourself. Nobody answers questions: decide by the written defaults, write it on the ticket, go on; the owner's ONLY standing action is Konfersi production (D-62): never assign a ticket to the owner or ask him anything else; permissions, secrets within the systems you already use, rule files and gate changes (propose text on a ticket assigned to yourself; a tightening is landed by the coordinator, a loosening after a blind reviewer's PASS, D-60) and stg merges (gated by konfersi-qa's PASS) are the harness's; a ticket assigned to the owner for any of these is a defect. Production questions go as one line on T-93. Read first: ~/work/claudepilot/docs/dev-sessions/CHARTER.md and DECISIONS.md (D-47, D-49, D-51, D-52, D-60, D-61, D-62 bind you), ~/work/claudepilot/docs/kit/skills/orchestration/SKILL.md (the crew rules), your pilot tickets (ticket_list, tag konfersi-migration; status ticket T-84), docs/agentic/OPERATING-MODEL.md and RULES.md in ~/work/agentic-worktrees/orch-charter, git worktree list in ~/work/agentic-worktrees. The crew: one dedicated worker session per FUNCTION, spawned with session_spawn (claude auto, mode dontAsk, report idle, role = the function's persona): konfersi-web (owner:39), konfersi-core (owner:d2), konfersi-ai (owner:fb), konfersi-metocean (owner:metocean), and the QA sessions konfersi-qa (qp: data, performance, cost, security) and konfersi-qa-ui (b9: UI, UX, journeys). Strict: every ticket carries one owner label and goes only to that function's session; a function never edits another function's area; QA never authors and verifies every delivery before you merge; reuse a live function session for its next ticket (session_message), end it when its function has no work (live cap 12 in the workspace, at most 3 live workers for you, D-61; QA and review on sonnet, reuse a session only under 150k context, D-63). First, in order: (1) give ~/work/konfersi-universe a .claude/settings.json allow list in D-49's shape (Edit and Write under ~/work/konfersi-universe/**, ~/work/konfersi-universe.worktrees/** and ~/work/agentic-worktrees/**; git status, diff, log, add, commit, fetch, grep, worktree, push of work branches; the modules' test and build commands; deny pushes to stg and main, force pushes and anything production or uat), commit it to a work branch through the normal flow, and check that the portal trusts the folder; (2) prove the job once: one konfersi-qa worker reads a ticket, runs one module's tests and comments its verdict; fix what it could not do before you dispatch more; (3) refresh docs/agentic/OPERATING-MODEL.md so its roles name these sessions; (4) then dispatch by owner label. Heavy jobs only as cluster Jobs through ~/work/claudepilot/scripts/job-run.sh, never in the pod (D-61); stg only; secrets by name only, never printed; commits with Ticket, Pilot-Session and Pilot-Agent trailers; status on T-84 every ~2 h.`,
-    nudge: 'Nobody is here to answer. Continue now: look at your pilot tickets (ticket_list, tag konfersi-migration) and your crew (session_family): give each function session with work its next ticket of its owner label, send every delivery to konfersi-qa or konfersi-qa-ui before you merge, end the function sessions with no work. If you asked a question, answer it yourself with the default written on the ticket and go on. Do not stop to summarise or wait.',
+      `You are the Konfersi lead, running in ClaudePilot${again ? ` (the earlier chat ended: ${reason}; its live function sessions are now yours: session_family)` : ''}, and the lead of its crew (D-52). You plan, route, merge and deploy to stg; you never implement or verify yourself. Nobody answers questions: decide by the written defaults, write it on the ticket, go on; the owner's ONLY standing action is Konfersi production (D-62): never assign a ticket to the owner or ask him anything else; permissions, secrets within the systems you already use, rule files and gate changes (propose text on a ticket assigned to yourself; a tightening is landed by the coordinator, a loosening after a blind reviewer's PASS, D-60) and stg merges (gated by konfersi-qa's PASS) are the harness's; a ticket assigned to the owner for any of these is a defect. Production questions go as one line on T-93. Read first: ~/work/claudepilot/docs/dev-sessions/CHARTER.md and DECISIONS.md (D-47, D-49, D-51, D-52, D-60, D-61, D-62 bind you), ~/work/claudepilot/docs/kit/skills/orchestration/SKILL.md (the crew rules), your pilot tickets (ticket_list, tag konfersi-migration; status ticket T-84), docs/agentic/OPERATING-MODEL.md and RULES.md in ~/work/agentic-worktrees/orch-charter, git worktree list in ~/work/agentic-worktrees. ${LANES('Konfersi')} Route by area: owner label 39 to FE Business, lab UI to FE Lab, d2 to BE Business, fb and metocean to BE Lab & AI, qp to QA Perf, b9 to QA UI. Live cap 14 in the workspace, at most 7 live workers for you (six lanes and the free slot; D-61, D-68, D-70); QA and review on sonnet (D-63). First, in order: (1) give ~/work/konfersi-universe a .claude/settings.json allow list in D-49's shape (Edit and Write under ~/work/konfersi-universe/**, ~/work/konfersi-universe.worktrees/** and ~/work/agentic-worktrees/**; git status, diff, log, add, commit, fetch, grep, worktree, push of work branches; the modules' test and build commands; deny pushes to stg and main, force pushes and anything production or uat), commit it to a work branch through the normal flow, and check that the portal trusts the folder; (2) prove the job once: one konfersi-qa worker reads a ticket, runs one module's tests and comments its verdict; fix what it could not do before you dispatch more; (3) refresh docs/agentic/OPERATING-MODEL.md so its roles name these sessions; (4) then dispatch by owner label. Heavy jobs only as cluster Jobs through ~/work/claudepilot/scripts/job-run.sh, never in the pod (D-61); stg only; secrets by name only, never printed; commits with Ticket, Pilot-Session and Pilot-Agent trailers; status on T-84 every ~2 h.`,
+    nudge: 'Nobody is here to answer. Continue now: look at your pilot tickets (ticket_list, tag konfersi-migration) and your crew (session_family): give each lane its next ticket (session_message), send every delivery to the QA lane of its side before you merge, keep the lanes alive (D-70) and end other workers with no work. If you asked a question, answer it yourself with the default written on the ticket and go on. Do not stop to summarise or wait.',
     wake: (why) => `This chat was interrupted (${why}). Continue where you left off: your pilot tickets (tag konfersi-migration), your crew (session_family), git worktree list in ~/work/agentic-worktrees, and carry on. Nobody is here to answer questions.`,
   },
-  // The Event program as a crew (event.isnan.me, D-35..D-37, D-52): its own folder, tickets tagged event-program, the knowledge folder Event. Title prefix `Event:` finds the track's chats.
+  // The Event program left pilot on 2026-10-15 (owner, D-67): no track; its work goes on outside pilot.
+  // Tradingbot (owner, 2026-10-15, D-74): a paper-trading lab, one lead and two lanes, no human in the loop.
   {
-    key: 'event',
-    title: 'Event: program',
-    folder: EVENT,
-    claudes: ['rossi', 'sekar', 'regitha', 'satria', 'one.claude', 'two.claude'],
+    key: 'tradingbot',
+    title: 'Tradingbot: program',
+    folder: TRADINGBOT,
+    claudes: ['satria', 'sekar', 'two.claude', 'hasyim', 'fadlilah', 'one.claude'],
     kickoff: (again, reason) =>
-      `You are the Event lead, running in ClaudePilot${again ? ` (the earlier chat ended: ${reason}; its live function sessions are now yours: session_family)` : ''}, and the lead of its crew (D-52). You plan, route, merge and deploy to stg; you never implement or verify yourself. Nobody answers questions: decide by the written defaults, write it on the ticket, go on; the owner's only standing action is Konfersi production (D-62): never assign a ticket to the owner or ask him anything; permissions, secrets within the systems you already use, folder trust, rule files and gate changes (propose text; a tightening is landed by the coordinator, a loosening after a blind reviewer's PASS, D-60) are the harness's: put them on a ticket assigned to yourself for the coordinator, never to the owner. Event production (main, master) is the owner's only if it ever comes up. Read first: ~/work/claudepilot/docs/dev-sessions/CHARTER.md and DECISIONS.md (D-35, D-36, D-37, D-47, D-49, D-51, D-52, D-57, D-60, D-61, D-62 bind you), ~/work/claudepilot/docs/kit/skills/orchestration/SKILL.md (the crew rules), your pilot tickets (ticket_list, tag event-program; status ticket T-150; T-155 issue import, T-151 stg deploy, T-157 Builder as a full MCP, T-152 E2E QA, T-153 AI re-scope, T-154 autonomy), and in ~/work/event (isnanme/event; integration line stg, main and master move only by a person; work in worktrees under ~/work/event.worktrees): docs/product, docs/contracts, and docs/kb and docs/deploy.md where they exist on stg. The crew: one dedicated worker session per FUNCTION, spawned with session_spawn (claude auto, mode dontAsk, report idle, worktree for builders, role = the function's persona): event-builder (owner:builder), event-web (owner:web), event-api (owner:api), event-devops (owner:devops), and the QA session event-qa. Strict: every ticket carries one owner label and goes only to that function's session; a function never edits another function's area; event-qa never authors and verifies every delivery before you merge; reuse a live function session for its next ticket (session_message), end it when its function has no work (live cap 12 in the workspace, at most 2 live workers for you, D-61; QA and review on sonnet, reuse a session only under 150k context, D-63). First, in order: (1) widen ~/work/event/.claude/settings.json to D-49's shape (Edit and Write under ~/work/event/** and ~/work/event.worktrees/**; git status, diff, log, add, commit, fetch, grep, worktree, push of work branches; the repo's test and build commands; deny pushes to stg, main and master, force pushes and anything production), through the normal flow, and check that the portal trusts the folder; (2) write docs/agentic/OPERATING-MODEL.md in the Event repo: the functions, their areas and labels, QA independence, the flow from ticket to stg; label the open tickets; (3) prove the job once: one event-qa worker reads a ticket, runs the repo's tests and comments its verdict; fix what it could not do before you dispatch more; (4) then dispatch by owner label. Heavy jobs (npm ci, typecheck, tests, builds, Playwright, Lighthouse) only as cluster Jobs (job-run.sh, or the gate pipeline once T-491 moves it out), never in the pod (D-61); stg only; secrets arrive through the Secrets pool event-stg by name (never printed); commits with Ticket, Pilot-Session and Pilot-Agent trailers, unsigned; status on T-150 every ~2 h; shared context in the knowledge folder Event.`,
-    nudge: 'Nobody is here to answer. Continue now: look at your pilot tickets (ticket_list, tag event-program) and your crew (session_family): give each function session with work its next ticket of its owner label, send every delivery to event-qa before you merge, end the function sessions with no work. If you asked a question, answer it yourself with the default written on the ticket and go on. Do not stop to summarise or wait.',
-    wake: (why) => `This chat was interrupted (${why}). Continue where you left off: your pilot tickets (tag event-program), your crew (session_family), git worktree list and git status in ~/work/event, and carry on. Nobody is here to answer questions.`,
+      `You are the Tradingbot lead, running in ClaudePilot${again ? ` (the earlier chat ended: ${reason}; its live lanes are now yours: session_family)` : ''}: the orchestrator of a paper-trading lab (D-74). You plan, decide, route and merge; you never implement or analyse yourself. No human is in the loop: nobody answers questions, so decide by the rules, write the decision on the ticket and go on; never assign a ticket to the owner or ask him anything (D-62). Read first: ~/work/tradingbot/README.md (the goals) and CLAUDE.md (the rules: PAPER ONLY, never a real order or a key that can trade or withdraw, public data within rate limits, never scrape TradingView's data, the pod limits for installs, tests and long-running processes), and ~/work/claudepilot/docs/dev-sessions/CHARTER.md. Your crew is two long-lived lanes you spawn once each (session_spawn, claude auto, mode dontAsk, report idle, model sonnet, folder ~/work/tradingbot) and keep, giving each its next ticket with session_message: 'Tradingbot Fullstack' (role lane-fullstack: the collectors' code, the paper-trading engine with fees, slippage and latency, the store, the API, the dashboard with TradingView Lightweight Charts, tests, and pilot-browser screenshots at 390 and 1280 px) and 'Tradingbot Analyst' (role lane-analyst: data on intervals from public exchange REST and WebSocket APIs and public sentiment, history, the live market, strategies, backtests out of sample, paper sessions, tooling, and knowledge notes in the vault folder Tradingbot/). At most 2 live workers; never end a lane for lack of work. Tickets: tag tradingbot; your status every ~2 h on T-641. First, in order: (1) write the plan as tickets (collector, paper engine, strategy framework and the first strategies, backtest harness, dashboard v1, sentiment, self-healing run scripts); (2) spawn both lanes with their first tickets at once; (3) reach a working vertical slice soon: live prices into a paper session into a dashboard chart, with screenshots; then (4) improve by measured results only (return, Sharpe or Sortino, drawdown, win rate, fees, exposure, out of sample), and keep the dashboard simple. Self-healing: a dead process is restarted by its script and its cause ticketed. Merge to main only with the evidence of a check by the other lane or you (tests, screenshots, numbers). Commits with Ticket, Pilot-Session and Pilot-Agent trailers.`,
+    nudge: 'Nobody is here to answer. Continue now: look at your tradingbot tickets and your two lanes (session_family): give each lane its next ticket, merge what is checked, restart what died, and post your status on T-641 when it is due. If you asked a question, answer it yourself by the rules in ~/work/tradingbot/CLAUDE.md and go on.',
+    wake: (why) => `This chat was interrupted (${why}). Continue where you left off: your tradingbot tickets, your lanes (session_family), git status in ~/work/tradingbot, and the run scripts (scripts/*.sh status). Nobody is here to answer questions.`,
   },
 ];
 
 /** D-61: live workers per lead (the memory budget of the shared pod). */
-const LEAD_WORKERS = { orchestrator: 3, konfersi: 3, event: 2 };
+const LEAD_WORKERS = { orchestrator: 6, konfersi: 7, tradingbot: 2 };
 
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
 const sleep = (s) => new Promise((r) => setTimeout(r, s * 1000));
@@ -309,7 +322,7 @@ async function moveIfLow(t, ts, cur) {
 const kickoff = (t, again, reason) =>
   again
     ? `You are the continuation of the ${t.title} session, which ended (${reason}). Nobody answers questions: decide, write it down, go on; the owner's only standing action is Konfersi production (D-62): never assign a ticket to the owner, tag it owner-checklist or ask him anything else; persona tools, permissions, rule files and gates are the harness's (propose on a ticket assigned to yourself; the coordinator lands it, D-60). First read docs/dev-sessions/README.md, docs/dev-sessions/orchestrator.md and your status file docs/dev-sessions/status/${t.key}.md. Sub-agents of the earlier session are gone: look at git worktree list, git status -sb and git log --oneline origin/integration..HEAD in each worktree under ~/work/claudepilot.worktrees/ for what is unmerged, keep what is good, then continue from NEXT. When the whole backlog is done, make TRACK COMPLETE the first line of the status file, commit and push, and end with the final report.`
-    : `You are the ${t.title} session: the one autonomous development session of ClaudePilot and the lead of its crew (D-47, D-48, D-49): implementation, verification, review and exploration all run as worker sessions (Portal MCP session_spawn with claude auto, role, mode dontAsk, an explicit model, worktree for implementers, report idle) so the load spreads over the Claude accounts; no Agent-tool sub-agents of your own (off, D-61); you wait for the workers' one-line reports, never poll. Nobody answers questions: decide, write it down, go on; the owner's only standing action is Konfersi production (D-62): never assign a ticket to the owner, tag it owner-checklist or ask him anything else; persona tools, permissions, rule files and gates are the harness's (propose on a ticket assigned to yourself; the coordinator lands it, D-60). First read docs/dev-sessions/README.md (the rules that bind you, every sub-agent and every worker), docs/dev-sessions/orchestrator.md (your brief, its Crew rule) and docs/context-pack.md, then start: read your status file docs/dev-sessions/status/${t.key}.md (create it if missing), and dispatch up to your worker limit (3 live workers, D-61; QA and review on sonnet, D-63; you never implement or verify yourself). A supervisor watches you: if you go idle it tells you to continue. Do not rename the chat.`;
+    : `You are the ${t.title} session: the one autonomous development session of ClaudePilot and the lead of its crew (D-47, D-48, D-49): implementation, verification, review and exploration all run as worker sessions (Portal MCP session_spawn with claude auto, role, mode dontAsk, an explicit model, worktree for implementers, report idle) so the load spreads over the Claude accounts; no Agent-tool sub-agents of your own (off, D-61); you wait for the workers' one-line reports, never poll. ${LANES('ClaudePilot')} Nobody answers questions: decide, write it down, go on; the owner's only standing action is Konfersi production (D-62): never assign a ticket to the owner, tag it owner-checklist or ask him anything else; persona tools, permissions, rule files and gates are the harness's (propose on a ticket assigned to yourself; the coordinator lands it, D-60). First read docs/dev-sessions/README.md (the rules that bind you, every sub-agent and every worker), docs/dev-sessions/orchestrator.md (your brief, its Crew rule) and docs/context-pack.md, then start: read your status file docs/dev-sessions/status/${t.key}.md (create it if missing), and dispatch up to your worker limit (5 live workers, D-61, D-65 and D-67; QA and review on sonnet, D-63; you never implement or verify yourself). A supervisor watches you: if you go idle it tells you to continue. Do not rename the chat.`;
 
 /**
  * The create request. A start again names the ended session it continues (T-270): the portal links the lineage and moves that chat's tickets
@@ -319,7 +332,8 @@ const kickoff = (t, again, reason) =>
 const recoverBody = () => ({ by: 'agent' });
 /** What a recover answer means: back in place; wait (the pause between recoveries, or the portal restarting); or a new session (absent, the cap, a suspicious cause, a person's close). */
 const recoverVerdict = (r) => (!r.error && r.status < 300 ? 'recovered' : r.error?.code === 'RECOVER_PAUSED' || r.status >= 500 ? 'wait' : 'new');
-const createBody = (t, claudeId, continuedFrom) => ({ workspaceId: WORKSPACE, title: t.title, claudeId, allowBypass: true, cwd: t.folder ?? MAIN, ...(continuedFrom ? { continuedFrom } : {}) });
+// T-561: `lead: true` marks it a crew lead: with the portal's `sessions.leadRules` policy on, it launches with the lead rules (an older portal ignores it).
+const createBody = (t, claudeId, continuedFrom) => ({ workspaceId: WORKSPACE, title: t.title, claudeId, allowBypass: true, lead: true, cwd: t.folder ?? MAIN, ...(continuedFrom ? { continuedFrom } : {}) });
 
 async function startSession(t, tstate, again, reason, continuedFrom = null) {
   const pick = await bestClaude(t.claudes);
@@ -392,12 +406,82 @@ const statusSaysDone = (tstate) => {
   }
 };
 
-const NUDGE = 'Nobody is here to answer. Continue now: integrate what finished sub-agents and worker sessions brought, dispatch the next slices as session_spawn workers on claude auto within your worker limit (ClaudePilot and Konfersi 3, Event 2, D-61; sub-agents are off; QA and review on sonnet, D-63; you never implement yourself), keep your status file current. If you asked a question, answer it yourself with the PRD default and go on. When the whole backlog is done, make TRACK COMPLETE the first line of your status file, commit and push it, and end with the final report. Do not stop to summarise or wait.';
+const NUDGE = 'Nobody is here to answer. Continue now: integrate what finished sub-agents and worker sessions brought, give each lane its next ticket (session_message) and keep the lanes alive (D-70), within your worker limit (6 live workers, D-71; sub-agents are off; QA and review on sonnet, D-63; you never implement yourself), keep your status file current. If you asked a question, answer it yourself with the PRD default and go on. When the whole backlog is done, make TRACK COMPLETE the first line of your status file, commit and push it, and end with the final report. Do not stop to summarise or wait.';
 const WAKE = (why) => `This session was interrupted (${why}). Continue where you left off: read your status file docs/dev-sessions/status/orchestrator.md, look at git worktree list and git status in each worktree, and carry on. Nobody is here to answer questions.`;
 const MOVED = (to) => `This chat was moved to another Claude (${to}) and its process restarted: the sub-agents of the old process stopped. Continue now where you stopped: look at your tickets or status file, git worktree list and git status, restart the work that was in flight, commit and push WIP early. Nobody is here to answer questions.`;
 const NUDGE_AFTER_MIN = Number(process.env.NUDGE_AFTER_MIN ?? 3);
 const NUDGE_GAP_MIN = Number(process.env.NUDGE_GAP_MIN ?? 10);
 const MAX_NUDGES = Number(process.env.MAX_NUDGES ?? 40);
+/**
+ * T-423, D-65: every turn of a lead re-reads its whole context (cache reads were half the crews' dollars, leads 67-78% of them, at 150-480k
+ * tokens). An idle lead past COMPACT_AT tokens is told to `/compact` (allowed over MCP), at most once every COMPACT_GAP_MIN: the same chat, its
+ * workers and Bypass stay; only the transcript shrinks.
+ */
+// ON since T-597 shipped (deploy #89, 2026-10-15): the portal passes an allowed slash command through unframed, and a real `/compact` took the
+// tradingbot lead from 117k to 49k. Set COMPACT_AT=Infinity to turn it off.
+const COMPACT_AT = Number(process.env.COMPACT_AT ?? 120_000);
+const COMPACT_GAP_MIN = Number(process.env.COMPACT_GAP_MIN ?? 30);
+const COMPACT =
+  '/compact Keep only what your next turns need: your crew (each live worker: session id, function, the ticket it works on), the tickets in flight with their state and next step, branches waiting to merge or deploy, decisions taken today and why, and the rules that bind you (charter, D-61 to D-67). Drop tool output, diffs, logs and finished work.';
+const COMPACT_LANE =
+  '/compact Keep only what your next tickets need: your program, repository, integration line, areas and commands from your first brief, the rules that bind you, and open follow-ups with their ticket ids. Drop finished diffs, tool output and logs.';
+/** D-70: an idle lane past COMPACT_AT is compacted like a lead (each lane at most every COMPACT_GAP_MIN); ended lanes leave the state. */
+async function compactLanes(t, ts, sessions, cur) {
+  const lanes = sessions.filter((x) => x.parentId === cur.id && /^lane-/.test(x.agent ?? '') && x.state !== 'ended');
+  const last = Object.fromEntries(Object.entries(ts.laneCompacted ?? {}).filter(([id]) => lanes.some((l) => l.id === id)));
+  for (const w of lanes) {
+    if (!compactDue(w, { compactedAt: last[w.id] })) continue;
+    last[w.id] = Date.now();
+    try {
+      await sessionSend(w.id, COMPACT_LANE);
+      log(`${t.key}: lane ${String(w.title ?? w.id.slice(0, 8)).slice(0, 40)} at ${Math.round(w.context.usedTokens / 1000)}k: told to compact`);
+    } catch (e) {
+      log(`${t.key}: could not compact lane ${w.id.slice(0, 8)}: ${e.message}`);
+    }
+  }
+  ts.laneCompacted = last;
+}
+/**
+ * A lane shown `working` with no event for STALE_LANE_MIN is most likely waiting on a background task whose finish never reached it: the T-574 S3
+ * lane sat four hours on a test Job that had ended 36 minutes after it started. It is told, at most once per STALE_LANE_GAP_MIN, to read the
+ * task's output itself and go on. A lane still in a long Job only spends one short turn on it.
+ */
+const STALE_LANE_MIN = Number(process.env.STALE_LANE_MIN ?? 45);
+const STALE_LANE_GAP_MIN = Number(process.env.STALE_LANE_GAP_MIN ?? 60);
+const STALE_LANE = (min) =>
+  `Supervisor: no event from you for ${min} min. If you are waiting on a background task (a job-run Job), its finish may not have reached you: read its output file now, act on the result and continue your ticket. If it is still running, say so in one line and keep waiting.`;
+function laneStale(w, wokenAt, now = Date.now()) {
+  return w.state === 'working' && now - Date.parse(w.lastActivityAt ?? 0) >= STALE_LANE_MIN * 60_000 && now - (wokenAt ?? 0) >= STALE_LANE_GAP_MIN * 60_000;
+}
+async function wakeStaleLanes(t, ts, sessions, cur, now = Date.now()) {
+  const lanes = sessions.filter((x) => x.parentId === cur.id && /^lane-/.test(x.agent ?? '') && x.state !== 'ended');
+  const last = Object.fromEntries(Object.entries(ts.laneWoken ?? {}).filter(([id]) => lanes.some((l) => l.id === id)));
+  for (const w of lanes) {
+    if (!laneStale(w, last[w.id], now)) continue;
+    last[w.id] = now;
+    const min = Math.round((now - Date.parse(w.lastActivityAt)) / 60_000);
+    try {
+      await sessionSend(w.id, STALE_LANE(min));
+      log(`${t.key}: lane ${String(w.title ?? w.id.slice(0, 8)).slice(0, 40)} silent ${min} min while working: told to read its task output`);
+    } catch (e) {
+      log(`${t.key}: could not wake lane ${w.id.slice(0, 8)}: ${e.message}`);
+    }
+  }
+  ts.laneWoken = last;
+}
+/** Whether an idle lead is due a compaction now. */
+function compactDue(cur, ts, now = Date.now()) {
+  const used = cur?.context?.usedTokens ?? 0;
+  return cur?.state === 'idle' && used >= COMPACT_AT && now - (ts?.compactedAt ?? 0) >= COMPACT_GAP_MIN * 60_000;
+}
+/**
+ * D-65: a nudge only costs a turn that re-reads the lead's context, so a lead whose worker slots are all busy (working, active in the last 15
+ * min) is left alone: their reports wake it. With a free slot it is nudged, so idle workers and an open backlog never wait on one busy worker.
+ */
+function slotsFull(sessions, cur, cap, now = Date.now()) {
+  const busy = sessions.filter((x) => x.parentId === cur.id && x.state === 'working' && now - Date.parse(x.lastActivityAt ?? 0) < 15 * 60_000).length;
+  return busy >= cap;
+}
 
 /**
  * A session waiting for an answer: a QUESTION (AskUserQuestion, an elicitation) is answered with a denial that tells it to decide itself, so it goes on; nobody is
@@ -480,8 +564,49 @@ async function denyStaleToolApprovals(cur) {
 async function ensureTrust() {
   for (const folder of new Set(TRACKS.map((t) => t.folder ?? MAIN))) await ensureTrustOf(folder);
 }
+async function ensureWorktreeTrust(sessions) {
+  // A crew worker's worktree (2026-10-15: a lane stood still on FOLDER_UNTRUSTED after its branch merged integration): its rules come from
+  // its own branch, which a worker can change, so it is trusted again ONLY when its settings hash is one the portal already trusted for this
+  // workspace (seen trusted on a scan: reviewed content) and it loads nothing but permission rules.
+  const leads = new Set(sessions.filter((s) => TRACKS.some((t) => (s.title ?? '').startsWith(t.title))).map((s) => s.id));
+  const folders = new Set(sessions.filter((s) => s.state !== 'ended' && leads.has(s.parentId) && s.cwd).map((s) => s.cwd));
+  for (const folder of folders) await ensureTrustOfWorktree(folder);
+}
+/** Settings hashes seen trusted on this workspace, in a file of their own (the round's state is written back whole), so a restart remembers them. */
+const TRUSTED_FILE = join(STATE_DIR, 'trusted-hashes.json');
+const knownTrusted = new Set((() => {
+  try {
+    return existsSync(TRUSTED_FILE) ? JSON.parse(readFileSync(TRUSTED_FILE, 'utf8')) : [];
+  } catch {
+    return [];
+  }
+})());
+function rememberTrusted(hash) {
+  if (!hash || knownTrusted.has(hash)) return;
+  knownTrusted.add(hash);
+  writeFileSync(TRUSTED_FILE, JSON.stringify([...knownTrusted].slice(-200)));
+}
+/** Whether a worktree's scan may be trusted without a person: rules only, and content the portal trusted before. */
+function worktreeTrustable(scan, known) {
+  if (!scan || scan.trusted || scan.empty) return false;
+  if (scan.hooks?.length || scan.mcpServers?.length || scan.plugins?.length || scan.envNames?.length) return false;
+  return known.has(scan.hash);
+}
+async function ensureTrustOfWorktree(folder) {
+  const scan = (await api('GET', `/api/chat/trust/scan?workspaceId=${encodeURIComponent(WORKSPACE)}&folder=${encodeURIComponent(folder)}`)).data;
+  if (!scan) return;
+  if (scan.trusted) return rememberTrusted(scan.hash);
+  if (!worktreeTrustable(scan, knownTrusted)) {
+    if (!scan.empty && !trustLogged.has(scan.hash)) log(`folder trust: ${folder} has settings never trusted here (or loads more than rules): left for the coordinator`), trustLogged.add(scan.hash);
+    return;
+  }
+  if (DRY) return log(`[dry] would trust the worktree ${folder} (settings already trusted elsewhere)`);
+  const tr = await api('POST', '/api/chat/trust', { workspaceId: WORKSPACE, folder: scan.folder ?? folder, hash: scan.hash });
+  log(tr.error ? `folder trust: refused: ${tr.error.message}` : `folder trust: the worktree ${folder} has settings already trusted here (${scan.allowRules} rules): trusted`);
+}
 async function ensureTrustOf(folder) {
   const scan = (await api('GET', `/api/chat/trust/scan?workspaceId=${encodeURIComponent(WORKSPACE)}&folder=${encodeURIComponent(folder)}`)).data;
+  if (scan?.trusted) rememberTrusted(scan.hash);
   if (!scan || scan.trusted || scan.empty) return;
   if (scan.hooks?.length || scan.mcpServers?.length || scan.plugins?.length || scan.envNames?.length) {
     if (!trustLogged.has(scan.hash)) log(`folder trust: the project settings now load hooks, MCP servers, plugins or env: a person must look (${folder})`), trustLogged.add(scan.hash);
@@ -490,6 +615,7 @@ async function ensureTrustOf(folder) {
   if (DRY) return log(`[dry] would trust ${folder} (${scan.allowRules} permission rules, nothing else)`);
   const tr = await api('POST', '/api/chat/trust', { workspaceId: WORKSPACE, folder: scan.folder ?? folder, hash: scan.hash });
   log(tr.error ? `folder trust: refused: ${tr.error.message}` : `folder trust: the permission rules of ${folder} changed (${scan.allowRules} rules, no hooks, servers, plugins or env): trusted again`);
+  if (!tr.error) rememberTrusted(scan.hash);
 }
 const trustLogged = new Set();
 
@@ -617,6 +743,7 @@ async function watch({ rounds = Infinity } = {}) {
       continue;
     }
     goodRounds++;
+    await ensureWorktreeTrust(list).catch((e) => log(`folder trust: could not check the worktrees: ${e.message}`));
     const steady = badAt === null || (goodRounds >= STEADY_ROUNDS && Date.now() - badAt >= HEALTH_QUIET_MIN * 60_000);
     if (netDownSince) {
       const mins = Math.round((Date.now() - netDownSince) / 60_000);
@@ -644,7 +771,7 @@ async function watch({ rounds = Infinity } = {}) {
         log(`${t.key}: adopted the live chat ${live.id.slice(0, 8)}: watched again`);
         saveState(state);
       }
-      // A paused program (the owner's order, 2026-10-14): `touch ~/.claudepilot/dev-sessions/PAUSE-<track key>` (orchestrator, konfersi, event); nothing is nudged, woken, moved or restarted until the file is removed.
+      // A paused program (the owner's order, 2026-10-14): `touch ~/.claudepilot/dev-sessions/PAUSE-<track key>` (orchestrator, konfersi); nothing is nudged, woken, moved or restarted until the file is removed.
       const held = portalPauses.find((p) => p.program === null || p.program === t.key);
       if (held || existsSync(join(STATE_DIR, `PAUSE-${t.key}`))) {
         if (!ts.pausedLogged) { log(`${t.key}: PAUSED by the owner (${held ? `the portal: ${held.program ?? 'all'}` : `file PAUSE-${t.key}`}): left alone`); ts.pausedLogged = true; }
@@ -685,6 +812,8 @@ async function watch({ rounds = Infinity } = {}) {
         }
         seenClaude.set(cur.id, cur.claudeId);
         await ensureBypass(t, ts, cur).catch((e) => log(`${t.key}: could not check Bypass: ${e.message}`));
+        await compactLanes(t, ts, sessions, cur).catch((e) => log(`${t.key}: lane compaction failed: ${e.message}`));
+        await wakeStaleLanes(t, ts, sessions, cur).catch((e) => log(`${t.key}: stale lane check failed: ${e.message}`));
         if (ts.pendingContinue === cur.id && cur.state === 'idle') {
           try {
             await ensureBypass(t, ts, cur, true);
@@ -700,6 +829,23 @@ async function watch({ rounds = Infinity } = {}) {
         }
         if (cur.state === 'idle') {
           if (await moveIfLow(t, ts, cur).catch((e) => (log(`${t.key}: low-quota check failed: ${e.message}`), false))) {
+            idleSince.delete(t.key);
+            continue;
+          }
+          if (compactDue(cur, ts)) {
+            try {
+              await ensureBypass(t, ts, cur, true);
+              await sessionSend(cur.id, COMPACT);
+              ts.compactedAt = Date.now();
+              log(`${t.key}: context ${Math.round(cur.context.usedTokens / 1000)}k: told to compact`);
+            } catch (e) {
+              log(`${t.key}: could not compact: ${e.message}`);
+              ts.compactedAt = Date.now();
+            }
+            idleSince.delete(t.key);
+            continue;
+          }
+          if (slotsFull(sessions, cur, LEAD_WORKERS[t.key] ?? 4)) {
             idleSince.delete(t.key);
             continue;
           }
@@ -825,7 +971,7 @@ async function watch({ rounds = Infinity } = {}) {
 
 /* ---------- Go ---------- */
 
-export { harmlessEnding, watch, STATE_FILE, bestClaude };
+export { harmlessEnding, watch, STATE_FILE, bestClaude, compactDue, slotsFull, compactLanes, wakeStaleLanes, worktreeTrustable, COMPACT, COMPACT_LANE, LANES };
 if (IS_MAIN) {
   process.on('SIGTERM', () => revokeMcpToken().finally(() => process.exit(0)));
   process.on('SIGINT', () => revokeMcpToken().finally(() => process.exit(0)));

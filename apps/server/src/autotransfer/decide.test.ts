@@ -254,6 +254,34 @@ test('S10: Home already carries 2 sessions (max 2): Spare (30 % left... 70 % use
   assert.equal(decide(input([WORK_92(), HOME_60()], { load: () => 1 })).act, 'move');
 });
 
+test('T-781: an exhausted source ignores maxPerDestination: every candidate full, it moves to the one with the most room', () => {
+  const EXH = () => claude('work', 'Work', [win('session', 100)]);
+  const spare = claude('spare', 'Spare', [win('session', 70)]); // 30 % left
+  const d = decide(input([EXH(), HOME_60(), spare], { load: () => 5 })); // cap 2, all carry 5
+  assert.equal(d.act, 'move');
+  assert.equal(d.act === 'move' && d.to.id, 'home'); // 40 % left beats 30 %
+  // Ties on what is left: the fewest chats.
+  const home2 = claude('home2', 'Home2', [win('session', 60), win('week', 20)]);
+  const t = decide(input([EXH(), HOME_60(), home2], { load: (id) => (id === 'home' ? 6 : 4) }));
+  assert.equal(t.act === 'move' && t.to.id, 'home2');
+  // Never an exhausted destination, however empty.
+  const dead = claude('dead', 'Dead', [win('session', 100)]);
+  const n = decide(input([EXH(), dead], { load: () => 9 }));
+  assert.deepEqual([n.act, n.act === 'warn' && n.code], ['warn', 'no_destination']);
+});
+
+test('T-781: a source that is only low still waits when every destination is full (destination_busy)', () => {
+  const d = decide(input([WORK_92(), HOME_60()], { load: () => 5 }));
+  assert.deepEqual([d.act, d.act === 'warn' && d.code], ['warn', 'destination_busy']);
+});
+
+test('T-781: the ping-pong guard (FR9) still refuses an exhausted source the Claude it just left', () => {
+  const c = input([]).counters;
+  const left = [{ claudeId: 'home', atMs: NOW - 10 * 60_000, resetsAtMs: null }];
+  const d = decide(input([claude('work', 'Work', [win('session', 100)]), HOME_60()], { load: () => 5, counters: { ...c, left } }));
+  assert.deepEqual([d.act, d.act === 'warn' && d.code], ['warn', 'no_destination']);
+});
+
 test('S11: a move 10 minutes ago, pause 30: paused (the minimum pause), nothing moves; 31 minutes ago: moves', () => {
   const c = input([WORK_92(), HOME_60()]).counters;
   const d = decide(input([WORK_92(), HOME_60()], { counters: { ...c, lastMoveMs: NOW - 10 * 60_000 } }));

@@ -12,6 +12,7 @@ import {
   type SpendSpeed,
   type SpendToday,
 } from '@portal/contracts';
+import { COUNTED_USAGE } from '../chat/usageDelta.js';
 import type { Store } from '../store/store.js';
 
 const MIN = 60_000;
@@ -58,7 +59,7 @@ export class SpendReader {
       const rows = db
         .prepare(
           `SELECT at_ms, workspace_id, claude_id, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, requests, agents, duration_ms
-           FROM chat_usage WHERE at_ms >= ? AND at_ms < ? ORDER BY at_ms, id`,
+           FROM chat_usage WHERE at_ms >= ? AND at_ms < ? AND ${COUNTED_USAGE} ORDER BY at_ms, id`,
         )
         .all(fromMs, toMs) as {
         at_ms: number;
@@ -98,7 +99,7 @@ export class SpendReader {
     const db = this.store.db;
     if (!db) return null;
     try {
-      const r = db.prepare('SELECT MIN(at_ms) AS at FROM chat_usage').get() as { at: number | null } | undefined;
+      const r = db.prepare(`SELECT MIN(at_ms) AS at FROM chat_usage WHERE ${COUNTED_USAGE}`).get() as { at: number | null } | undefined;
       return r?.at ?? null;
     } catch {
       return null;

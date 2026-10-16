@@ -3,7 +3,7 @@
 //   node tools/qa/rtk-fidelity.mjs <plain.txt> <rtk.txt> [--json]     exit 0 when every item of plain is in rtk, 1 otherwise
 // T-306 (step 2, item 1): fidelity PER COMMAND CLASS for read-only, high-volume commands.
 //   node tools/qa/rtk-fidelity.mjs <plain.txt> <rtk.txt> --class <class> [--json]     exit 0 at 95 percent or more, 1 below
-// Classes: git-status git-log git-diff-stat git-diff-names ls find tree grep-lines grep-list grep-count. The facts an agent acts on are
+// Classes: git-log-meta ls-meta (T-341: the facts left out of the main classes) git-status git-log git-diff-stat git-diff-names ls find tree grep-lines grep-list grep-count. The facts an agent acts on are
 // parsed from the PLAIN output in its known format (paths, line numbers, names, states, counts, hashes, subjects and message lines), then each
 // is looked up in the rtk output, whatever its layout (rtk groups paths under a directory, rewrites git status in short form, and so on).
 // Not scored, on purpose: ls owner, group, date and exact byte size (rtk shows a rounded size), git log dates and e-mail addresses, full
@@ -108,6 +108,20 @@ export function plainFacts(cls, text) {
         if ((m = /^([0-9a-f]{7,40}) (.+)$/.exec(raw))) { f.push(["hash", m[1].slice(0, 7)]); f.push(["text", m[2]]); continue; }
         if (statLine(raw, f)) continue;
         if (/^ {4}\S/.test(raw)) f.push(["text", raw.trim()]);
+      }
+      break;
+    case "git-log-meta": // T-341 B: what the main class leaves out on purpose: the e-mail of every Author and the whole Date line
+      for (const raw of lines) {
+        if ((m = /^Author:\s+.*<(.+)>\s*$/.exec(raw))) f.push(["text", m[1]]);
+        else if ((m = /^Date:\s+(.+?)\s*$/.exec(raw))) f.push(["text", m[1]]);
+      }
+      break;
+    case "ls-meta": // T-341 B: owner+group, exact size and the date of each long-format entry
+      for (const raw of lines) {
+        const l = raw.trim();
+        if ((m = /^[-dlcbps][rwxsStT-]{9}[.+@]?\s+\d+\s+(\S+)\s+(\S+)\s+(\d+)\s+(\S+\s+\S+\s+\S+)\s+(.+)$/.exec(l))) {
+          f.push(["text", `${m[1]} ${m[2]}`]); f.push(["text", m[3]]); f.push(["text", ws(m[4])]);
+        }
       }
       break;
     case "git-diff-stat":

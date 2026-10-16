@@ -41,6 +41,7 @@ const session = (id: string, over: Row = {}) => ({
 
 /** Records every call the tools make on a service, so a test can say what happened and what did not. */
 const calls: string[] = [];
+const controlActors: unknown[] = [];
 const rec = <T>(name: string, value?: T) => (...args: unknown[]) => {
   calls.push(`${name}${args.length ? `:${args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(',')}` : ''}`);
   return value;
@@ -116,7 +117,7 @@ const fakes = {
     ),
     send: async (id: string, _uuid: string, text: string, o: Row) => void (calls.push(`chat.send:${id}:${o.actor}:${text}`), sentLabels.push(o.actorLabel)),
     respond: async (id: string, req: string, decision: string, o: Row) => void calls.push(`chat.respond:${id}:${req}:${decision}:${o.actor}`),
-    control: async (id: string, kind: string, v: Row) => void calls.push(`chat.control:${id}:${kind}:${JSON.stringify(v)}`),
+    control: async (id: string, kind: string, v: Row, o?: Row) => void (calls.push(`chat.control:${id}:${kind}:${JSON.stringify(v)}`), controlActors.push(o?.actor)),
     setLimits: (id: string, req: Row, o: Row) => (calls.push(`chat.limits:${id}:${JSON.stringify(req)}:${o.actor}`), { session: session(id, req), restartNeeded: req.subagents !== undefined }),
   },
   accounts: {
@@ -506,8 +507,9 @@ test('session_start and session_configure: the actor is the token, and a session
     const bypass = await h.call(admin.secret, 'session_configure', { id: 's1', mode: 'bypassPermissions' });
     assert.ok(bypass.result?.isError || bypass.error, 'bypass is not an option here');
     assert.equal(err(await h.call(admin.secret, 'session_configure', { id: 's1' })), 'VALIDATION_FAILED');
-    await h.call(admin.secret, 'session_configure', { id: 's1', mode: 'plan', effort: 'high' });
-    assert.deepEqual(calls, ['chat.control:s1:effort:{"effort":"high"}', 'chat.control:s1:mode:{"mode":"plan"}']);
+    await h.call(admin.secret, 'session_configure', { id: 's1', model: 'sonnet', mode: 'plan', effort: 'high' });
+    assert.deepEqual(calls, ['chat.control:s1:model:{"model":"sonnet"}', 'chat.control:s1:effort:{"effort":"high"}', 'chat.control:s1:mode:{"mode":"plan"}']);
+    assert.deepEqual(controlActors.slice(-3), Array(3).fill(`portal-mcp:${admin.id}`), 'T-723: the audit names the token, for model, effort and mode');
   } finally {
     h.module.settings.update({ sessionControl: false });
   }

@@ -561,6 +561,51 @@ export class SecretsKind implements PoolKind<SecretsContent>, SecretNameSource {
     return out;
   }
 
+  /**
+   * The value a workspace's sets deliver as the file of secret `name` (T-557): what a CI runner gets as a lease when it takes one of this
+   * workspace's runs, so the runner sees exactly what a run in the workspace itself would. Null when no assigned set delivers it as a file
+   * (a variable, a secret with no value or only a revoked one) or the value can't be opened. In memory only; callers never log or store it.
+   */
+  deliveredValue(workspaceId: string, name: string): string | null {
+    for (const a of this.service.assignedPools<SecretsContent>(workspaceId, 'secrets')) {
+      for (const e of a.content.entries) {
+        if (e.kind === 'variable' || e.name !== name) continue;
+        const valueId = this.#valueOf(a.pool.id, e);
+        if (!valueId) return null;
+        try {
+          return this.values.open(valueId);
+        } catch {
+          return null;
+        }
+      }
+    }
+    return null;
+  }
+
+  /**
+   * The value of the secret called `name`, found in the current revisions of the Secrets & env sets, whether or not a workspace has the
+   * set (browser PRD §24: a request header's value goes to the browser container only, so the set needn't be in the agent's workspace).
+   * The name must belong to exactly one secret. `version` is the value's id (never the value, nor anything derived from it), so a caller
+   * can tell that the value changed without holding it. In memory only; callers never log or store `value`.
+   */
+  secretByName(name: string): { ok: true; value: string; version: string } | { ok: false; why: 'not found' | 'ambiguous' | 'has no value' | 'can’t be opened' } {
+    const rows = (this.store.db?.prepare("SELECT id FROM pools WHERE type = 'secrets'").all() ?? []) as { id: string }[];
+    const found: { poolId: string; entry: StoredEntry }[] = [];
+    for (const { id } of rows) {
+      for (const entry of this.currentContent(id)?.entries ?? []) if (entry.kind === 'secret' && entry.name === name) found.push({ poolId: id, entry });
+    }
+    if (found.length === 0) return { ok: false, why: 'not found' };
+    if (found.length > 1) return { ok: false, why: 'ambiguous' };
+    const { poolId, entry } = found[0]!;
+    const version = this.#valueOf(poolId, entry);
+    if (!version) return { ok: false, why: 'has no value' };
+    try {
+      return { ok: true, value: this.values.open(version), version };
+    } catch {
+      return { ok: false, why: 'can’t be opened' };
+    }
+  }
+
   /* ---------- Redaction (QA-006, Secrets PRD A9) ---------- */
 
   /**

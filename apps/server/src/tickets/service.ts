@@ -65,6 +65,7 @@ import './errors.js';
 import { bumpTicketMessage, openingMessage } from './opening.js';
 import type { TicketSessionInfo, TicketSessions } from './sessions.js';
 import { cleanLine, cleanMarkdown, cleanTags } from './text.js';
+import { canRecordVerdict, evaluateVerdicts, normalizeSha, VERDICT_REFUSAL_TEXT, VERDICT_ROLES, VERDICTS, type StoredVerdict, type Verdict, type VerdictEvaluation, type VerdictRole } from './verdicts.js';
 
 // The tickets service (tickets PRD): one queue of work for people and agents. Every change is a timeline entry
 // in the transaction that makes it. Who may change what is decided here (FR9 to FR11), from the caller the
@@ -716,10 +717,10 @@ export class Tickets {
   }
 
   /** A ticket's id and summary, for a link to it. */
-  brief(id: string): { id: string; summary: string; status: TicketStatus } | null {
+  brief(id: string): { id: string; summary: string; status: TicketStatus; type: TicketType } | null {
     const n = parseTicketId(id);
     const row = n === null ? undefined : this.#row(n);
-    return row ? { id: ticketIdOf(row.number), summary: row.summary, status: row.status } : null;
+    return row ? { id: ticketIdOf(row.number), summary: row.summary, status: row.status, type: row.type } : null;
   }
 
   /** The message a session started for this ticket would open with, for the dialog's preview (its session id is not known yet). */
@@ -1186,6 +1187,103 @@ export class Tickets {
     return true;
   }
 
+  /* ---------- Verdicts (FR36, T-325 S1) ---------- */
+
+  /**
+   * The sessions whose work a ticket's verdict would judge (`authors`) and the sessions that lead them (`leads`): the holder and its
+   * lineage, every session that was ever assigned the ticket, and every session started on it, and the parents of all of those.
+   */
+  #workers(row: Row): { authors: Set<string>; leads: Set<string>; leadHolders: Set<string> } {
+    const authors = new Set<string>();
+    const holderLine: string[] = [];
+    const holder = row.assignee_kind === 'session' && row.assignee_ref ? this.sessions.get(row.assignee_ref) : null;
+    if (row.assignee_kind === 'session' && row.assignee_ref) {
+      holderLine.push(row.assignee_ref);
+      if (holder) holderLine.push(...this.#ancestors(holder));
+      for (const a of holderLine) authors.add(a);
+    }
+    const assigned = this.#db.prepare("SELECT DISTINCT json_extract(data, '$.to.sessionId') AS s FROM ticket_events WHERE ticket_number = ? AND kind = 'assigned'").all(row.number) as { s: string | null }[];
+    for (const r of assigned) if (r.s) authors.add(r.s);
+    for (const s of this.sessions.list({ ticketId: ticketIdOf(row.number) })) authors.add(s.id);
+    const leads = new Set<string>();
+    for (const id of authors) {
+      const p = this.sessions.get(id)?.parentId;
+      if (p) leads.add(p);
+    }
+    // T-325 S1b: the holder (with its lineage) may be a verifier's ancestor only when it leads the work: it is the parent of another author
+    // and was not itself started on this ticket. An implementer holding the ticket leads nobody, so a QA it spawns is refused.
+    const leadsWork = !!row.assignee_ref && leads.has(row.assignee_ref) && holder?.ticketId !== ticketIdOf(row.number);
+    return { authors, leads, leadHolders: new Set(leadsWork ? holderLine : []) };
+  }
+
+  /** A session's spawn chain, nearest first: its parent and the session it continues, then theirs (bounded, cycle safe). Not the session itself. */
+  #spawnChain(s: TicketSessionInfo): string[] {
+    const out: string[] = [];
+    const seen = new Set<string>([s.id]);
+    let frontier: TicketSessionInfo[] = [s];
+    while (frontier.length && out.length < 200) {
+      const next: TicketSessionInfo[] = [];
+      for (const cur of frontier) {
+        for (const up of [cur.parentId, cur.continuedFrom]) {
+          if (!up || seen.has(up)) continue;
+          seen.add(up);
+          out.push(up);
+          const info = this.sessions.get(up);
+          if (info) next.push(info);
+        }
+      }
+      frontier = next;
+    }
+    return out;
+  }
+
+  /**
+   * Records a QA or review verdict on ONE full commit. Refused by `canRecordVerdict` (the author, the lead, anything but a QA/review session
+   * or a person); a ticket the caller cannot see is the same not found. Rows are never edited: the latest verdict of a role on a commit wins.
+   * Writes a timeline entry and an audit row `ticket.verdict`.
+   */
+  recordVerdict(caller: Caller, id: string, req: { role?: unknown; verdict?: unknown; commit?: unknown }, opts: { sessionId?: string | null } = {}): StoredVerdict {
+    this.#assertWrites(caller);
+    const row = this.#need(caller, id);
+    const role = oneOf(req.role, VERDICT_ROLES, 'role');
+    const verdict = oneOf(req.verdict, VERDICTS, 'verdict');
+    const commit = normalizeSha(req.commit);
+    const w = this.#writer(caller, opts.sessionId);
+    // An admin's token acting "for" a session is not that session: only the agent's own token or a person may record.
+    const { authors, leads, leadHolders } = this.#workers(row);
+    const self = caller.kind === 'agent' && w.session ? w.session : null;
+    const d = canRecordVerdict({ callerKind: caller.kind, role, session: self ? { id: self.id, agent: self.agent } : null, authors, leads, commit, chain: self ? this.#spawnChain(self) : [], leadHolders });
+    const ticketId = ticketIdOf(row.number);
+    if (!d.allow) {
+      this.onAudit?.({ kind: 'ticket.verdict_refused', actor: w.actor, actorLabel: null, userId: FOUNDING_USER_ID, subject: `ticket:${ticketId}`, detail: { ticketId, role, why: d.why, sessionId: w.session?.id ?? null } });
+      throw new AppError(d.why === 'bad_commit' ? 'VALIDATION_FAILED' : 'FORBIDDEN', VERDICT_REFUSAL_TEXT[d.why], d.why === 'bad_commit' ? { details: { commit: VERDICT_REFUSAL_TEXT.bad_commit } } : undefined);
+    }
+    const at = this.#now().toISOString();
+    const stored = this.#tx(() => {
+      this.#db.prepare('INSERT INTO ticket_verdicts (ticket_number, role, verdict, commit_sha, actor, actor_label, at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(row.number, role, verdict, commit!, w.actor, w.label, at);
+      const vid = Number((this.#db.prepare('SELECT last_insert_rowid() AS id').get() as { id: number }).id);
+      this.#db.prepare('UPDATE tickets SET updated_at = ? WHERE number = ?').run(at, row.number);
+      this.#addEvent(row.number, 'comment', w, `${role === 'qa' ? 'QA' : 'Review'} ${verdict.toUpperCase()} recorded on commit ${commit}.`, { verdict, role, commit, verdictId: vid });
+      return { id: vid, role, verdict, commit: commit!, actor: w.actor, at } satisfies StoredVerdict;
+    });
+    this.onAudit?.({ kind: 'ticket.verdict', actor: w.actor, actorLabel: null, userId: FOUNDING_USER_ID, subject: `ticket:${ticketId}`, detail: { ticketId, role, verdict, commit, sessionId: w.session?.id ?? null } });
+    this.onChange?.();
+    return stored;
+  }
+
+  /** Every verdict on a ticket, oldest first. A ticket the caller cannot see: not found. */
+  verdicts(caller: Caller, id: string): StoredVerdict[] {
+    const row = this.#need(caller, id);
+    return (this.#db.prepare('SELECT id, role, verdict, commit_sha, actor, at FROM ticket_verdicts WHERE ticket_number = ? ORDER BY id').all(row.number) as { id: number; role: VerdictRole; verdict: Verdict; commit_sha: string; actor: string; at: string }[]).map((v) => ({ id: v.id, role: v.role, verdict: v.verdict, commit: v.commit_sha, actor: v.actor, at: v.at }));
+  }
+
+  /** Whether `head` (a full sha) is passing now: each needed role's latest verdict ON THAT COMMIT is a pass. An older commit's verdict never counts. */
+  verdictStatus(caller: Caller, id: string, head: string, need: readonly VerdictRole[] = ['qa']): VerdictEvaluation {
+    const sha = normalizeSha(head);
+    if (!sha) throw invalid('commit', VERDICT_REFUSAL_TEXT.bad_commit);
+    return evaluateVerdicts(this.verdicts(caller, id), sha, need);
+  }
+
   /* ---------- Sessions ---------- */
 
   /**
@@ -1318,6 +1416,17 @@ export class Tickets {
       detail: { ticketId, sessionId: session.id, mode, note: note.length > 0 },
     });
     return { ticket: this.#items([this.#row(row.number)!])[0]!, session: this.#sessionView(this.sessions.get(session.id) ?? session), mode };
+  }
+
+  /**
+   * T-546: the latest comment a session wrote on any ticket: the ticket and the comment's id (what a lead's crew digest points to for the
+   * worker's full report), or null. A fact for the portal's own digest, not a read for a caller: it carries no text.
+   */
+  latestCommentOf(sessionId: string): { ticket: string; comment: number } | null {
+    const r = this.#db
+      .prepare("SELECT id, ticket_number AS number FROM ticket_events WHERE kind = 'comment' AND json_extract(data, '$.session') = ? ORDER BY id DESC LIMIT 1")
+      .get(sessionId) as { id: number; number: number } | undefined;
+    return r ? { ticket: ticketIdOf(r.number), comment: r.id } : null;
   }
 
   /** FR31: the tickets bumped into a session, the latest bump of each, newest first (the session page's chips). */

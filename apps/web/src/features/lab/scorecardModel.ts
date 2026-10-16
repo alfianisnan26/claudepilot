@@ -1,7 +1,7 @@
 // What the Crew scorecard page says (docs/prd/claude-usage.md §28.14): the five headline numbers of a program with their state, basis and source.
 // Pure, so the wording is tested without a browser. "unavailable" is a state with a reason, never a number.
 
-import type { CrewFigure, CrewProgramScore, CrewUnavailable, CrewWindow } from '@portal/contracts';
+import { CREW_D65_TARGETS, type CrewD65TargetId, type CrewFigure, type CrewProgramScore, type CrewUnavailable, type CrewWindow } from '@portal/contracts';
 import { formatCost } from '@/lib/usage/format';
 
 export const WINDOW_OPTIONS: { value: CrewWindow; label: string }[] = [
@@ -37,6 +37,8 @@ const REASON: Record<CrewUnavailable, string> = {
   no_source: 'the portal has no table for it',
   no_samples: 'nothing to divide by in this window',
   not_recorded: 'it was never recorded',
+  windows_just_reset: 'the quota windows just reset',
+  no_claude: 'no Claude is signed in and readable',
 };
 
 export const reasonText = (r: CrewUnavailable | undefined): string => (r ? REASON[r] : 'not available');
@@ -95,10 +97,44 @@ export function tiles(p: CrewProgramScore): Tile[] {
       value: allUnavailable ? UNAVAILABLE : breaches === 0 && warns > 0 ? `${fmtCount(warns)} warn` : fmtCount(breaches),
       state: breachState,
       basis: allUnavailable ? 'UNAVAILABLE' : 'MEASURED',
-      tip: `${allUnavailable ? 'UNAVAILABLE' : 'MEASURED'}. Source: the D-61, D-62 and D-63 checks (${breachList || 'none ran'}). Breach when any is a breach, warn when any is a warn.`,
+      tip: `${allUnavailable ? 'UNAVAILABLE' : 'MEASURED'}. Source: the D-61, D-62, D-63 and D-65 checks (${breachList || 'none ran'}). Breach when any is a breach, warn when any is a warn.`,
       was: null,
     },
   ];
+}
+
+/** T-549 (D-65): a target row as the page shows it. */
+export interface D65Row {
+  id: CrewD65TargetId;
+  /** One or two words. */
+  label: string;
+  value: string;
+  state: TileState;
+  basis: BasisLabel;
+  /** Session, ticket or Claude ids behind a warn or a breach (at most 5 shown). */
+  offenders: string[];
+  /** The InfoTip text: the rule, the source, the reason when unavailable. */
+  tip: string;
+}
+
+const pct1 = (n: number): string => `${n.toFixed(1)} %`;
+const D65_FORMAT: Record<CrewD65TargetId, { label: string; fmt: (n: number) => string }> = {
+  cost_per_done: { label: 'Cost / done', fmt: formatCost },
+  lead_share: { label: 'Lead share', fmt: pct1 },
+  qa_opus_share: { label: 'QA opus', fmt: pct1 },
+  done_rate: { label: 'Done / day', fmt: fmtPerHour },
+  quota_unused: { label: 'Quota unused', fmt: pct1 },
+  wasted_tool_calls: { label: 'Wasted calls', fmt: pct1 },
+};
+
+/** The D-65 rows of a program in a fixed order; a row the server did not send reads unavailable, never a number. */
+export function d65Rows(p: CrewProgramScore): D65Row[] {
+  return CREW_D65_TARGETS.map((id) => {
+    const t = p.targets.find((x) => x.id === id);
+    const { label, fmt } = D65_FORMAT[id];
+    if (!t) return { id, label, value: UNAVAILABLE, state: 'unavailable', basis: 'UNAVAILABLE', offenders: [], tip: 'UNAVAILABLE. This server did not send the row.' };
+    return { id, label, value: fmtFigure(t.figure, fmt), state: t.state, basis: basisLabel(t.figure), offenders: t.offenders, tip: tip(t.figure, t.rule) };
+  });
 }
 
 /**

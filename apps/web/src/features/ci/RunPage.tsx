@@ -12,6 +12,7 @@ import { LogView } from './LogView';
 import { elapsed, formatDuration, MONO, reasonLabel, refLabel, shortSha, StatusIcon } from './parts';
 import { bumpLine, reportLine } from './report';
 import { RunBumpDialog } from './RunBump';
+import { runnerLine } from './runners';
 import { cancelledLine, startedBy } from './startedBy';
 
 /** Jobs in the order they run: by how deep their `needs` go, then as written. */
@@ -120,11 +121,12 @@ export function RunPage() {
   const report = reportLine(run.reports);
   const bumped = bumpLine(run.bumps);
   const cancelled = cancelledLine(run);
+  const on = runnerLine(run);
 
   return (
     <>
       <div className="mb-4 flex items-center gap-2">
-        <Link to="/admin/ci" aria-label="CI" title="CI" className="press -ml-2 flex size-10 shrink-0 items-center justify-center rounded-full text-muted hover:bg-surface-2 hover:text-ink">
+        <Link to="/admin/ci" aria-label="CI" title="CI" className="press -ml-2 flex size-11 shrink-0 items-center justify-center rounded-full sm:size-10 text-muted hover:bg-surface-2 hover:text-ink">
           <ChevronLeft className="size-5" />
         </Link>
         <StatusIcon status={run.status} className="[&_svg]:size-6" />
@@ -156,6 +158,12 @@ export function RunPage() {
           {duration !== null && <span className="tabular-nums">{formatDuration(duration)}</span>}
           <span title={run.createdAt}>{timeAgo(run.createdAt)}</span>
         </p>
+        {(on.runner || on.labels.length > 0) && (
+          <p className="flex min-w-0 flex-wrap items-center gap-x-2 [overflow-wrap:anywhere]">
+            {on.runner && <span className="text-ink-soft">Ran on {on.runner}</span>}
+            {on.labels.length > 0 && <span className={MONO}>runs-on {on.labels.join(' ')}</span>}
+          </p>
+        )}
         {run.subject && (
           <p className="truncate text-ink-soft" title={run.subject}>
             {run.subject}
@@ -245,7 +253,7 @@ export function RunPage() {
                           disabled={!can}
                           aria-expanded={can ? stepOpen : undefined}
                           onClick={() => toggle(key)}
-                          className="flex w-full min-w-0 items-center gap-2.5 rounded-xl px-2 py-2 text-left hover:bg-surface-2/60 focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none disabled:opacity-60 disabled:hover:bg-transparent"
+                          className="flex min-h-11 w-full min-w-0 items-center gap-2.5 rounded-xl px-2 py-2 text-left hover:bg-surface-2/60 focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none disabled:opacity-60 disabled:hover:bg-transparent"
                         >
                           <StatusIcon status={s.status} className="[&_svg]:size-4" />
                           <span className="min-w-0 flex-1 truncate text-[13.5px]">{s.name}</span>

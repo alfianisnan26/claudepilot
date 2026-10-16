@@ -22,6 +22,10 @@ export interface RepoRow {
   upstream_secret?: string | null;
   upstream_every_s?: number | null;
   upstream_state?: string | null;
+  /** Migration 783 (T-486 S2): the Secrets & env NAME whose value signs the upstream's push webhook; null: no webhook. */
+  upstream_hook_secret?: string | null;
+  /** Migration 784 (T-591): where release reports go, JSON {pipeline, vaultId, folder}; null: off. */
+  release_report?: string | null;
 }
 
 /** A test a gate saw pass only on its rerun (T-95 item 4). */
@@ -33,6 +37,20 @@ export interface FlakyRow {
   test: string;
   ticket_id: string | null;
   at: string;
+}
+
+/** A workspace that takes runs by label (T-557). */
+export interface RunnerRow {
+  workspace_id: string;
+  /** Sorted JSON array of labels. */
+  labels: string;
+  max_runs: number;
+  enabled: number;
+  drained: number;
+  note: string | null;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface RunRow {
@@ -59,6 +77,10 @@ export interface RunRow {
   cancelled_by?: string | null;
   cancelled_by_label?: string | null;
   cancel_note?: string | null;
+  /** `runs-on` labels as a JSON array (T-557); null: the run executes in the repository's workspace. */
+  runs_on?: string | null;
+  /** The workspace the run executes on when that is a runner (T-557); null: `workspace_id`. */
+  runner_workspace_id?: string | null;
   inputs: string;
   ticket_id: string | null;
   ticket_source: string | null;
@@ -174,11 +196,12 @@ export interface RunFilter {
 const RUN_COLUMNS = [
   'status', 'reason', 'plan', 'state', 'diagnostics', 'attempts', 'started_at', 'finished_at', 'duration_ms', 'archived', 'subject',
   'ticket_id', 'ticket_source', 'session_id', 'concurrency_group', 'cancel_in_progress', 'cancelled_by', 'cancelled_by_label', 'cancel_note',
+  'runner_workspace_id',
 ] as const;
 type RunPatch = Partial<Pick<RunRow, (typeof RUN_COLUMNS)[number]>>;
 const REPO_COLUMNS = [
   'default_branch', 'protected', 'required_checks', 'merge_only', 'connected', 'hook_state', 'removed_at', 'source_path',
-  'upstream_url', 'upstream_secret', 'upstream_every_s', 'upstream_state',
+  'upstream_url', 'upstream_secret', 'upstream_every_s', 'upstream_state', 'upstream_hook_secret', 'release_report',
 ] as const;
 type RepoPatch = Partial<Pick<RepoRow, (typeof REPO_COLUMNS)[number]>>;
 
@@ -317,8 +340,10 @@ export class CiStore {
     return { rows, total, active };
   }
 
+  /** Runs executing in this workspace: its own, and those a runner took from other workspaces (T-557). */
   runningRuns(workspaceId: string): RunRow[] {
-    return this.#db.prepare("SELECT * FROM ci_runs WHERE workspace_id = ? AND status = 'running' ORDER BY created_at").all(workspaceId) as unknown as RunRow[];
+    const where = this.runnersReady ? 'COALESCE(runner_workspace_id, workspace_id) = ?' : 'workspace_id = ?';
+    return this.#db.prepare(`SELECT * FROM ci_runs WHERE ${where} AND status = 'running' ORDER BY created_at`).all(workspaceId) as unknown as RunRow[];
   }
 
   queuedRuns(workspaceId: string): RunRow[] {
@@ -327,7 +352,50 @@ export class CiStore {
 
   /** Workspaces with a run that is not finished: polled even when no remote is listed (a removed one still has runs to finish). */
   workspacesWithActiveRuns(): string[] {
-    return (this.#db.prepare("SELECT DISTINCT workspace_id FROM ci_runs WHERE status IN ('queued', 'running')").all() as { workspace_id: string }[]).map((r) => r.workspace_id);
+    const ids = (this.#db.prepare("SELECT DISTINCT workspace_id FROM ci_runs WHERE status IN ('queued', 'running')").all() as { workspace_id: string }[]).map((r) => r.workspace_id);
+    if (!this.runnersReady) return ids;
+    // A runner executing another workspace's run is polled too (T-557).
+    const runners = (this.#db.prepare("SELECT DISTINCT runner_workspace_id AS id FROM ci_runs WHERE status = 'running' AND runner_workspace_id IS NOT NULL").all() as { id: string }[]).map((r) => r.id);
+    return [...new Set([...ids, ...runners])];
+  }
+
+  /* ---------- Runners (T-557) ---------- */
+
+  /** Whether the table and columns of migration 789 are there. */
+  get runnersReady(): boolean {
+    try {
+      this.#db.prepare('SELECT runner_workspace_id, runs_on FROM ci_runs LIMIT 1').get();
+      this.#db.prepare('SELECT 1 FROM ci_runners LIMIT 1').get();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  runners(): RunnerRow[] {
+    if (!this.runnersReady) return [];
+    return this.#db.prepare('SELECT * FROM ci_runners ORDER BY workspace_id').all() as unknown as RunnerRow[];
+  }
+
+  runner(workspaceId: string): RunnerRow | undefined {
+    if (!this.runnersReady) return undefined;
+    return this.#db.prepare('SELECT * FROM ci_runners WHERE workspace_id = ?').get(workspaceId) as unknown as RunnerRow | undefined;
+  }
+
+  /** Makes the workspace a runner, or changes one. */
+  upsertRunner(r: Pick<RunnerRow, 'workspace_id' | 'labels' | 'max_runs' | 'enabled' | 'drained' | 'note'>, by: string): RunnerRow {
+    const now = new Date().toISOString();
+    this.#writableDb
+      .prepare(
+        `INSERT INTO ci_runners (workspace_id, labels, max_runs, enabled, drained, note, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (workspace_id) DO UPDATE SET labels = excluded.labels, max_runs = excluded.max_runs, enabled = excluded.enabled, drained = excluded.drained, note = excluded.note, updated_at = excluded.updated_at`,
+      )
+      .run(r.workspace_id, r.labels, r.max_runs, r.enabled, r.drained, r.note ?? null, by, now, now);
+    return this.runner(r.workspace_id)!;
+  }
+
+  removeRunner(workspaceId: string): boolean {
+    return this.#writableDb.prepare('DELETE FROM ci_runners WHERE workspace_id = ?').run(workspaceId).changes > 0;
   }
 
   /** Runs of a concurrency group in a remote that are queued or running, other than `exceptId`. */
@@ -545,6 +613,17 @@ export class CiStore {
          ORDER BY d.created_at DESC, d.id DESC LIMIT 1`,
       )
       .get(repoId, environment, exceptRun) as unknown as DeploymentRow | undefined;
+  }
+
+  /** T-558: when the last run that deployed to an environment ended, counting only a run that passed whose deploying job passed; null if none. */
+  lastDeployFinished(repoId: string, environment: string): string | null {
+    const row = this.#db
+      .prepare(
+        `SELECT MAX(r.finished_at) AS at FROM ci_deployments d JOIN ci_runs r ON r.id = d.run_id
+         WHERE d.repo_id = ? AND d.environment = ? AND d.outcome = 'passed' AND r.status = 'passed'`,
+      )
+      .get(repoId, environment) as { at: string | null } | undefined;
+    return row?.at ?? null;
   }
 
   insertDeployment(d: DeploymentRow): void {

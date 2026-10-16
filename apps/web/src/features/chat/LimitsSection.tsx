@@ -161,6 +161,16 @@ export function LimitsSection({ session, onRestart }: { session: ChatSession; on
         onChange={(v) => void toggle(v)}
         disabled={subBusy}
       />
+      {session.leadRules && (
+        <p data-lead-rules="" className="inline-flex min-h-11 min-w-0 items-center gap-1 text-[15px] font-semibold text-ink">
+          Lead rules on
+          <InfoTip label="About lead rules">
+            A crew lead (T-561, D-63): its file edits are refused outside its status files (docs/dev-sessions/status), its notes
+            (docs/dev-sessions/notes) and /tmp, in Bypass too, and a refused edit tells it to dispatch a worker. Bash still works. Settings ›
+            Sessions › Lead rules; a change applies at its next start.
+          </InfoTip>
+        </p>
+      )}
       {note && (
         <div role="status" data-crew-limits-note="" className="flex min-w-0 items-center gap-2 text-[13px] text-ink-soft">
           <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{note.line}</span>

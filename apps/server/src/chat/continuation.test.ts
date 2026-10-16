@@ -119,7 +119,7 @@ test('the supervisor’s start again names the session it continues (docs/dev-se
   assert.ok(line, 'createBody is one line the test can read');
   const createBody = new Function('WORKSPACE', 'MAIN', `${line}\nreturn createBody;`)('kubernetes/kohi-event', '/home/node/work/claudepilot') as (t: object, claudeId: string, from: string | null) => Record<string, unknown>;
   const t = { title: 'Orchestrator: ClaudePilot dev' };
-  assert.deepEqual(createBody(t, 'c1', 'prev-id'), { workspaceId: 'kubernetes/kohi-event', title: t.title, claudeId: 'c1', allowBypass: true, cwd: '/home/node/work/claudepilot', continuedFrom: 'prev-id' });
+  assert.deepEqual(createBody(t, 'c1', 'prev-id'), { workspaceId: 'kubernetes/kohi-event', title: t.title, claudeId: 'c1', allowBypass: true, lead: true, cwd: '/home/node/work/claudepilot', continuedFrom: 'prev-id' });
   assert.equal('continuedFrom' in createBody(t, 'c1', null), false, 'a first start continues nothing');
   assert.match(src, /startSession\(t, ts, !!cur, [^\n]*cur\?\.state === 'ended' \? cur\.id : null\)/, 'the start-again path passes the ended session');
 });

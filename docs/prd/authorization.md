@@ -421,7 +421,7 @@ To build (work packages A2, A9): the enumeration test (FR16, X19), the generated
 
 ## Appendix A. Route policy v0: every route of the real route table
 
-Generated from the REAL app (`createApp` with stub services, `app.routes`: 261 routes, plus the 6 browser routes whose module was stubbed = **267**) and checked for coverage: every route is declared exactly once and no rule is unused. It is the starting declaration of work package MU2; the enumeration test (FR16) fails on any route not in it. Notation: `public`; `in` = any active user (the handler returns the person's own data or a filtered one); `in:list(T)` = signed in and the list holds only objects of type T the person may view; `in:create(T)` = signed in, the new object is owned by the creator; `obj(T verb from param)` = a right on one object named in the path, query or body (several are ANDed); `platform(area,verb)` = platform admins; `self` = the caller's own account or tokens; `+reauth` = a recent password check; `REMOVED` = the route goes away with the server code.
+Generated from the REAL app (`createApp` with stub services, `app.routes`: 261 routes, plus the 6 browser routes whose module was stubbed = **267**) and checked for coverage: every route is declared exactly once and no rule is unused. It is the starting declaration of work package MU2; the enumeration test (FR16) fails on any route not in it. T-531 added the 14 `/api/workspaces` rows for routes that came after the count (labels, the stable-id and alias forms, resources, a workspace's Claude Code version); the rows for `/api/workspaces` are the target `workspaces/routeAuthz.test.ts` reads and compares every declaration with (§B.2). Notation: `public`; `in` = any active user (the handler returns the person's own data or a filtered one); `in:list(T)` = signed in and the list holds only objects of type T the person may view; `in:create(T)` = signed in, the new object is owned by the creator; `obj(T verb from param)` = a right on one object named in the path, query or body (several are ANDed); `platform(area,verb)` = platform admins; `self` = the caller's own account or tokens; `+reauth` = a recent password check; `REMOVED` = the route goes away with the server code.
 
 | Route | Access | Note |
 | --- | --- | --- |
@@ -466,6 +466,20 @@ Generated from the REAL app (`createApp` with stub services, `app.routes`: 261 r
 | `POST /api/workspaces/:target/:name/repos/scan` | obj(workspace operate path target+name) |  |
 | `GET /api/workspaces/:target/:name/repos/settings` | obj(workspace view path target+name) |  |
 | `PUT /api/workspaces/:target/:name/repos/settings` | obj(workspace manage path target+name) |  |
+| `GET /api/workspaces/labels` | in:list(workspace) | the labels of renamed workspaces (T-42), only those the person may view |
+| `GET /api/workspaces/:ref` | obj(workspace view path ref) | a stable id (`ws_…`), resolved to its `<target>/<name>` before the decision (T-42) |
+| `GET /api/workspaces/:target/:name` | obj(workspace view path target+name) | follows a label alias (T-42) |
+| `PATCH /api/workspaces/:ref` | obj(workspace operate path ref) | rename (T-42) |
+| `PATCH /api/workspaces/:target/:name` | obj(workspace operate path target+name) | rename, by the alias |
+| `GET /api/workspaces/:ref/resources` | obj(workspace view path ref) | CPU and memory of a Kubernetes workspace (T-98) |
+| `GET /api/workspaces/:target/:name/resources` | obj(workspace view path target+name) |  |
+| `PATCH /api/workspaces/:ref/resources` | obj(workspace operate path ref) | never an agent's (the manager refuses it: a restart ends its session); audited |
+| `PATCH /api/workspaces/:target/:name/resources` | obj(workspace operate path target+name) |  |
+| `GET /api/workspaces/:target/:name/claude-version` | obj(workspace view path target+name) | claude-version-pinning PRD §17 |
+| `GET /api/workspaces/:target/:name/claude-version/history` | obj(workspace view path target+name) |  |
+| `GET /api/workspaces/:target/:name/claude-version/plan` | obj(workspace view path target+name) |  |
+| `POST /api/workspaces/:target/:name/claude-version/apply` | obj(workspace manage path target+name) | audit claude.upgrade |
+| `POST /api/workspaces/:target/:name/claude-version/rollback` | obj(workspace manage path target+name) | audit claude.rollback |
 | `GET /api/accounts` | in:list(account) + account pools | the overview holds only what the person may view; an API key is never returned |
 | `POST /api/accounts` | in:create(account) | owned by the creator (or a team they belong to) |
 | `POST /api/accounts/bulk` | in:create(account) | owned by the creator (or a team they belong to) |
@@ -813,8 +827,37 @@ The table above is the target. What is true today: 26 tools carry a declaration 
 | `notify_status` | self | nothing | the token's own user (`notify/portalTools.ts:21`) |
 | `session_recover`, `session_request_clear` | agent, reach workspace | nothing | `requireCan` workspace (agent) or session (person) (`chat/portalTools.ts:357`, `:403`) |
 | `ticket_adopt` | agent, reach workspace | nothing | the adopt rule in the service (`tickets/portalTools.ts:372`) |
+| `ticket_verdict` | agent, reach workspace | nothing | the verdict rule `canRecordVerdict` (`tickets/verdicts.ts`): a QA or review session of its own role, never the author or the lead; an invisible ticket is the same not found (T-325) |
 | `lab_summary`, `lab_arm_draw` | agent, reach session | nothing | its own session only (`lab/portalTools.ts:81-82`, `:114`) |
 | `crew_scorecard` (T-450) | agent, reach session | nothing | its own program only (the top of its session's lineage; another program is `NOT_FOUND`) in `Lab.scorecard` (`lab/index.ts`) |
+
+### B.2 The workspaces router, declared and enforced (T-531)
+
+Every route under `/api/workspaces` is declared: `workspaces/authz.ts` for app.ts's own routes, and `pools/authz.ts`, `secrets/authz.ts`, `browser/authz.ts`, `repos/authz.ts` and `claudeversion/authz.ts` for the routes those modules mount on the router. Each `…/:target/:name…` route runs `workspaceGuard(verb)` (`workspaces/authz.ts`) with its declared verb **before** its handler (claudeversion asks `requireCan` first thing in each handler): a workspace the actor may not see is `404 Not found.`, the same as a missing one; one it sees without the verb is the seam's 403; no sign-in is 401. Routes that follow a label alias (T-42: `GET`/`PATCH …/:target/:name` and `…/resources`) ask about the workspace the alias resolves to. The lists (`GET /api/workspaces`, `/usage`, `/labels`, `/targets`) keep the rows the actor may view (`visible`).
+
+The `/:ref…` routes (a stable id `ws_…`) run `workspaceRefGuard(verb)` before their handler: the seam is asked about the `<target>/<name>` the id resolves to (the manager asks again inside). A stable id nobody knows goes on to the manager, which lists once and answers the same 404. `POST /api/workspaces` runs `targetBodyGuard('operate')` before its handler reads the account pools or the add-on sets: `operate` on the body's `target` (a missing target is the manager's own 422). `DELETE …/terminals/:term` and `PATCH`/`DELETE …/claudes/:claude` ask a second object after the workspace (`childGuard`): `manage` on the terminal `<target>/<name>/<term>` or on the Claude (by its id). The seam has both types; neither has a resolver yet, so today the one owner passes and an agent (capped at `operate`) is refused there.
+
+| Route (`/api/workspaces/:target/:name…`) | Verb | Audit row on success |
+| --- | --- | --- |
+| `GET` (one), `/resources`, `/claude-login`, `/claudes`, `/pools`, `/browser`, `/browser/configuration`, `/repos`, `/repos/settings`, `/claude-version`, `/history`, `/plan` | view | none |
+| `POST /start`, `/stop` | operate | `workspace.start`, `workspace.stop` (subject: the stable id) |
+| `PATCH` (rename), `PATCH /resources` | operate | the manager's own rows |
+| `GET /preflight` (runs a shell script in the workspace), `GET`/`POST /terminals`, `GET /secrets` (names only), `POST /secrets/check`, browser control, handoffs and actions, `POST /repos/scan` | operate | none |
+| `DELETE /terminals/:term` | operate on the workspace, then manage on the terminal | none |
+| `PATCH /claudes/:claude` | operate on the workspace, then manage on the Claude | none |
+| `POST /adopt` (overwrites the manifest, queues file removals) | manage | `workspace.adopt` (subject: the stable id) |
+| `DELETE` (remove: the workspace and its home volume) | manage | `workspace.remove` (subject: the stable id, read before the remove) |
+| `PUT /account`, `PUT /pools/:type`, `PUT /repos/settings`, `POST /browser/install/retry`, claude-login (sign in, code, cancel, sign out), claude-version apply and rollback | manage | claude-version's own rows |
+| `DELETE /claudes/:claude` | manage on the workspace, then manage on the Claude | none |
+
+**Declared and enforced, against the target.** `workspaces/routeAuthz.test.ts` reads the app's route table and the `/api/workspaces` rows of Appendix A (the one target table; nothing is copied into the test). It fails on a route with no declaration or no Appendix A row (and on a declaration or a row with no route); on a declaration whose objects and verbs differ from its Appendix A row (a check on a Claude or a terminal brings its parent guard, `operate` on the workspace, as `OBJECT_TYPES` says), unless the difference is one listed below; on a listed difference that no longer differs or that this section does not name; and, for every route with object checks (the `/:target/:name…`, `/:ref…` and `POST /` ones), on a check that is not asked in order before the handler, or a refusal at any one of them that is not `404 Not found.` or that reached a dependency.
+
+**Differences that remain (declared and enforced as written here, not as Appendix A says):**
+- `POST …/claude-login`, `POST …/claude-login/code`, `DELETE …/claude-login`, `POST …/claude-logout`: `manage` on the workspace, and no check on the Claude. Stricter on the workspace than the target (`operate` on the workspace and `manage` on the Claude in `?claude=`, the Default one when absent). The Claude check waits for a Claude resolver (per-person sign-ins).
+- `DELETE …/claudes/:claude`: `manage` on the workspace as well as `manage` on the Claude; the target's parent guard is `operate` on the workspace. Stricter: removing a Claude also removes its login.
+- `PUT …/account`, `PUT …/pools/:type`: `manage` on the workspace only. The target also wants `operate` on the account pool and on each set in the body; not checked yet (T-538).
+
+Not compared by the test, and not built: `+reauth` on remove (T-540); `consent: credential` on `PUT …/account` and `PUT …/pools/:type`; the per-person `filter` of terminals and Claudes in `GET …/terminals` and `GET …/claudes` (there are no per-person terminals or Claudes yet); the team clause of `POST /api/workspaces` (no teams yet). The `/api/pools…`, `/api/repos…`, `/api/accounts…` and `/api/endpoints…` routes are not declared yet (T-539).
 
 ## Appendix C. Sockets and other doors outside the route table
 

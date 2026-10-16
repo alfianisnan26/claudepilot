@@ -16,7 +16,21 @@ export type BrowserDisplay = (typeof BROWSER_DISPLAYS)[number];
 /** Per tool (FR7): follow the default, ask every call, or block. */
 export type BrowserToolRule = 'default' | 'ask' | 'block';
 
-/** What a browser pool holds (PRD §9). Never a secret: the portal doesn't store website credentials. */
+/**
+ * A request header the browser adds on its own (PRD §24): for requests over https to `hosts` it sets `name` to the value of the
+ * Secrets & env entry called `secret`. The pool holds the entry's NAME, never its value; the portal reads the value at delivery
+ * and only the browser container gets it. Each host must also be one of the pool's `allowedSites`.
+ */
+export interface BrowserHeaderRule {
+  /** Hosts the header goes to: `app.example.com`, `app.example.com:8443` or `*.example.com`. */
+  hosts: string[];
+  /** The header's name, e.g. `CF-Access-Client-Id`. */
+  name: string;
+  /** The Secrets & env entry whose value is the header's value. */
+  secret: string;
+}
+
+/** What a browser pool holds (PRD §9). Never a secret value: the portal doesn't store website credentials; `headers` names entries. */
 export interface BrowserPoolContent {
   tier: BrowserTier;
   display: BrowserDisplay;
@@ -36,6 +50,8 @@ export interface BrowserPoolContent {
   /** Allowlist mode: block everything but `allowedSites`. */
   allowlistMode: boolean;
   allowedSites: string[];
+  /** Headers the browser adds for some hosts, from named secrets (PRD §24). Pools saved before this have none. */
+  headers: BrowserHeaderRule[];
   /** Also deliver chrome-devtools-mcp (console, network, traces, Lighthouse). */
   devtools: boolean;
   /** Coordinate tools (click at x,y, wheel scroll) beside the snapshot-based ones. */
@@ -66,6 +82,7 @@ export const BROWSER_POOL_DEFAULTS: BrowserPoolContent = {
   blockedSites: [],
   allowlistMode: false,
   allowedSites: [],
+  headers: [],
   devtools: false,
   vision: true,
   toolRules: { browser_file_upload: 'ask', browser_run_code_unsafe: 'block' },

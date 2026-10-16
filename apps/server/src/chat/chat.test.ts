@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdtempSync, rmSync, statSync } from 'node:fs';
 import { createServer } from 'node:http';
@@ -42,7 +43,7 @@ import { createChatRoutes } from './routes.js';
 import { attachChat } from './socket.js';
 import { usageReport } from './usage.js';
 import { ChatStore, EVENT_TEXT_MAX, sessionCwd } from './store.js';
-import { conversationBudget, transferConversation, transferOpening, type TransferMeta } from './transfer.js';
+import { conversationBudget, FILE_MAX_CHARS, FILE_MESSAGE_MAX_CHARS, TRANSFER_WRITE_SCRIPT, transferConversation, transferFileConversation, transferOpening, type TransferMeta } from './transfer.js';
 import { FOLDER_CHANGED, FOLDER_NOT_TRUSTED } from './trust.js';
 import { APPLIED, controls, EMPTY_SCAN, fail, FakeExec, FakeWorkspaces, firstTurn, freshStore, init, line, liveSession, ok, sleep, until, USAGE_API_KEY, vanish, type Control, type Live } from './testkit.js';
 
@@ -2831,6 +2832,91 @@ test('transferConversation: what you sent and Claude’s replies with the tools 
   assert.ok(!transferConversation([ev({ kind: 'user', text: 'key sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' })]).text.includes('sk-ant-api03-AAAA'));
 });
 
+test('T-781 transferFileConversation: a 150-message chat lands complete in the context file; a message is clipped at the file’s 20,000, the total is bounded and the newest are kept', () => {
+  let seq = 0;
+  const ev = (e: Omit<ChatEvent, 'seq' | 'at'>): ChatEvent => ({ seq: ++seq, at: '2026-10-16T12:00:00Z', ...e });
+  // 150 messages of 6,000 characters (0.9 M, under the file's 1 M): the opening's budget and 4,000 clip would cut this, the file must not.
+  const chat = Array.from({ length: 150 }, (_, i) => ev({ kind: i % 2 ? 'assistant' : 'user', text: `${i} ${'x'.repeat(6000)} end${i}` }));
+  const whole = transferFileConversation(chat);
+  assert.equal(whole.messages, 150);
+  assert.equal(whole.truncated, false);
+  for (let i = 0; i < 150; i++) assert.ok(whole.text.includes(` end${i}`), `message ${i} is whole`);
+  // The opening's own copy is still bounded and clipped.
+  assert.ok(transferConversation(chat, 14_000).messages < 10);
+
+  // One message over the file's clip is cut there.
+  const big = transferFileConversation([ev({ kind: 'user', text: 'y'.repeat(FILE_MESSAGE_MAX_CHARS + 500) })]);
+  assert.ok(big.text.length < FILE_MESSAGE_MAX_CHARS + 100 && big.text.includes('(cut)'));
+
+  // The total is bounded: the oldest whole messages go, the newest stay, and it says so.
+  const huge = Array.from({ length: 300 },(_, i) => ev({ kind: i % 2 ? 'assistant' : 'user', text: `${i} ${'z'.repeat(15_000)} end${i}` }));
+  const bounded = transferFileConversation(huge);
+  assert.equal(bounded.truncated, true);
+  assert.ok(bounded.text.length <= FILE_MAX_CHARS);
+  assert.ok(bounded.text.endsWith(' end299'), 'the newest message is last and whole');
+  assert.ok(bounded.text.startsWith('### '));
+  assert.ok(bounded.messages < 300 && bounded.messages > 40, 'about 1 MB of 15,000-character messages');
+  assert.equal(FILE_MAX_CHARS, 1_000_000, 'a slow tunnel must write it inside the exec timeout (R3)');
+});
+
+test('T-781 transferOpening: it says what the file holds: the whole conversation, or only the last N messages when the file hit its bound', () => {
+  const meta: TransferMeta = { handoffId: '00000000-0000-4000-8000-000000000000', at: new Date('2026-10-16T12:00:00Z'), workspaceId: 'docker/ws1', cwd: '/home/node', sourceSessionId: 'src', fromClaude: 'Satria', toClaude: 'Default', path: '/home/node/.claudepilot/transfer/x.md' };
+  const convo = { text: '### You\n\nhi', messages: 1, truncated: false };
+  const whole = transferOpening(meta, convo, undefined, { messages: 300, truncated: false });
+  assert.match(whole, /The whole conversation, every message, is also in the context file\. Reading it is optional/);
+  const cut = transferOpening(meta, convo, undefined, { messages: 266, truncated: true });
+  assert.match(cut, /The context file also holds the last 266 messages of the conversation \(older ones were left out of it too\)\. Reading it is optional/);
+  assert.ok(!cut.includes('every message'), 'no false claim of completeness');
+  // R2: the opening never requires a tool: the conversation is inline, the file is optional, and the chat is told to run none.
+  for (const o of [whole, cut]) {
+    assert.match(o, /Do not run any tool or change any file to answer/);
+    assert.ok(!/Read it\b|before you continue|Apart from reading/.test(o), 'nothing asks for a read');
+    assert.ok(o.includes('<conversation>') && o.includes('hi'), 'the conversation is inline');
+  }
+});
+
+test('T-781 G5: an unterminated private-key header in an old message is redacted in that message only: the later messages stay in the file', () => {
+  let seq = 0;
+  const ev = (e: Omit<ChatEvent, 'seq' | 'at'>): ChatEvent => ({ seq: ++seq, at: '2026-10-16T12:00:00Z', ...e });
+  const header = `-----BEGIN ${'PRIVATE'} KEY-----`; // built at runtime, no footer
+  const chat = [
+    ev({ kind: 'user', text: 'first question' }),
+    ev({ kind: 'assistant', text: `here is a key\n${header}\nAAAA BBBB` }),
+    ev({ kind: 'user', text: 'LATER-ONE after the key' }),
+    ev({ kind: 'assistant', text: 'LATER-TWO answer' }),
+  ];
+  const c = transferFileConversation(chat);
+  assert.ok(c.text.includes('LATER-ONE') && c.text.includes('LATER-TWO'), 'later messages survive');
+  assert.ok(c.text.includes('first question'));
+  assert.ok(!c.text.includes('AAAA BBBB') && !c.text.includes(header), 'the key itself is gone');
+  assert.ok(c.text.includes('[redacted]'), 'the file shows where something was removed');
+  assert.equal(c.messages, 4);
+});
+
+test('T-781 G6: the context file is written 600 in a 700 directory, whatever the umask or an older wider directory', () => {
+  const root = mkdtempSync(join(tmpdir(), 'cp-transfer-'));
+  try {
+    const dir = join(root, 'transfer');
+    const path = join(dir, 'x.md');
+    const body = 'hello\n';
+    const run = () => execFileSync('sh', ['-c', TRANSFER_WRITE_SCRIPT, 'sh', dir, path, String(Buffer.byteLength(body))], { input: body, env: { PATH: process.env.PATH ?? '/usr/bin:/bin' } });
+    const prior = process.umask(0o022);
+    try {
+      run();
+      assert.equal(statSync(dir).mode & 0o777, 0o700);
+      assert.equal(statSync(path).mode & 0o777, 0o600);
+      // An older directory made 755 is tightened by the next write.
+      execFileSync('chmod', ['755', dir]);
+      run();
+      assert.equal(statSync(dir).mode & 0o777, 0o700);
+    } finally {
+      process.umask(prior);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('transferOpening: even a long conversation fits the event store’s cap, so the stored copy keeps the newest messages; a literal closing tag in carried text can’t end the conversation early', () => {
   let seq = 0;
   const ev = (e: Omit<ChatEvent, 'seq' | 'at'>): ChatEvent => ({ seq: ++seq, at: '2026-10-11T12:00:00Z', ...e });
@@ -2879,6 +2965,204 @@ test('usage: each result stores its turn’s tokens and duration, and what the t
 });
 
 /* ========================= Usage metrics ========================= */
+
+test('usage (T-610): a process resumed with --resume carries Claude Code’s running total over, so its first turn costs the change, not the whole total; a total that starts again from zero is a new process’s', async () => {
+  const s = await liveSession();
+  try {
+    const turn = async (tail: { push(x: string): void }, total: number) => {
+      tail.push(line({ type: 'result', subtype: 'success', total_cost_usd: total, duration_ms: 10, usage: { input_tokens: 1, output_tokens: 1 }, is_error: false, session_id: s.id }));
+      tail.push(ok((await s.take('get_usage')).id, USAGE_API_KEY));
+    };
+    s.tail.push(init(s.id));
+    await until(() => s.controller.history(s.id).some((e) => e.text === 'Ready'));
+    await s.answering(sleep(30));
+    await turn(s.tail, 0.5);
+    await until(() => s.controller.history(s.id).filter((e) => e.kind === 'result').length === 1);
+
+    // The process goes away and comes back with --resume: Claude Code restores the session's cost, so the first result says 0.62.
+    await vanish(s);
+    await s.answering(s.controller.control(s.id, 'resume'));
+    assert.ok(s.ws.startArgs[1]!.includes('--resume'));
+    s.ws.tails[1]!.push(init(s.id));
+    await until(() => s.controller.history(s.id).filter((e) => e.text === 'Ready').length >= 1);
+    await s.answering(sleep(30));
+    await turn(s.ws.tails[1]!, 0.62);
+    await until(() => s.controller.history(s.id).filter((e) => e.kind === 'result').length === 2);
+    const resumed = s.controller.history(s.id).filter((e) => e.kind === 'result')[1]!;
+    assert.ok(Math.abs(resumed.turnCostUsd! - 0.12) < 1e-9, `the change since the last total, not the whole running total: ${resumed.turnCostUsd}`);
+
+    // A total lower than the last one is a process that counts from zero again: that total is the turn.
+    await turn(s.ws.tails[1]!, 0.03);
+    await until(() => s.controller.history(s.id).filter((e) => e.kind === 'result').length === 3);
+    const fresh = s.controller.history(s.id).filter((e) => e.kind === 'result')[2]!;
+    assert.ok(Math.abs(fresh.turnCostUsd! - 0.03) < 1e-9, `a new count: ${fresh.turnCostUsd}`);
+  } finally {
+    await s.done();
+  }
+});
+
+test('usage (T-610): a restart whose tokens count again from zero but whose cost total is carried over books the change in cost, not the carried total', async () => {
+  const s = await liveSession();
+  try {
+    const M = 'claude-opus-5-5';
+    const turn = async (tail: { push(x: string): void }, total: number, input: number) => {
+      const modelUsage = { [M]: { inputTokens: input, outputTokens: 1, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, costUSD: total } };
+      tail.push(line({ type: 'result', subtype: 'success', total_cost_usd: total, duration_ms: 10, usage: { input_tokens: 1, output_tokens: 1 }, modelUsage, is_error: false, session_id: s.id }));
+      tail.push(ok((await s.take('get_usage')).id, USAGE_API_KEY));
+    };
+    s.tail.push(init(s.id));
+    await until(() => s.controller.history(s.id).some((e) => e.text === 'Ready'));
+    await s.answering(sleep(30));
+    await turn(s.tail, 96, 900_000);
+    await until(() => s.controller.history(s.id).filter((e) => e.kind === 'result').length === 1);
+    await vanish(s);
+    await s.answering(s.controller.control(s.id, 'resume'));
+    s.ws.tails[1]!.push(init(s.id));
+    await until(() => s.controller.history(s.id).filter((e) => e.text === 'Ready').length >= 1);
+    await s.answering(sleep(30));
+    // Tokens count from zero again (50 < 900000), the cost total is the carried 96.2.
+    await turn(s.ws.tails[1]!, 96.2, 50);
+    await until(() => s.controller.history(s.id).filter((e) => e.kind === 'result').length === 2);
+    const rows = s.store.db!.prepare('SELECT cost_usd AS c, input_tokens AS i FROM chat_usage ORDER BY id').all() as { c: number; i: number }[];
+    assert.equal(rows.length, 2);
+    assert.ok(Math.abs(rows[1]!.c - 0.2) < 1e-9, `the cost change, not the carried total: ${rows[1]!.c}`);
+    assert.equal(rows[1]!.i, 50, 'the tokens that started again are the turn’s');
+  } finally {
+    await s.done();
+  }
+});
+
+/** T-610 helpers: a turn whose result carries the models' running totals. */
+const mu = (input: number, cost: number) => ({ inputTokens: input, outputTokens: 1, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, costUSD: cost });
+async function modelTurn(s: Awaited<ReturnType<typeof liveSession>>, total: number, modelUsage: Record<string, unknown>): Promise<void> {
+  s.tail.push(line({ type: 'result', subtype: 'success', total_cost_usd: total, duration_ms: 10, usage: { input_tokens: 1, output_tokens: 1 }, modelUsage, is_error: false, session_id: s.id }));
+  s.tail.push(ok((await s.take('get_usage')).id, USAGE_API_KEY));
+}
+const usageRows = (s: Awaited<ReturnType<typeof liveSession>>) =>
+  s.store.db!.prepare('SELECT model, input_tokens AS i, cost_usd AS c FROM chat_usage ORDER BY id').all() as { model: string; i: number; c: number }[];
+
+test('usage (T-610): a model missing from one result is not booked whole on the next', async () => {
+  const s = await liveSession();
+  try {
+    await modelTurn(s, 0.15, { 'claude-opus-5-5': mu(100, 0.1), 'claude-haiku-5-5': mu(500, 0.05) });
+    await modelTurn(s, 0.25, { 'claude-opus-5-5': mu(160, 0.2) }); // the sub-agent's model is not in this result
+    await modelTurn(s, 0.29, { 'claude-opus-5-5': mu(200, 0.24), 'claude-haiku-5-5': mu(500, 0.05) }); // and is back, unchanged
+    await until(() => s.controller.history(s.id).filter((e) => e.kind === 'result').length === 3);
+    const rows = usageRows(s);
+    const haiku = rows.filter((r) => r.model === 'claude-haiku-5-5');
+    assert.deepEqual(haiku.map((r) => r.i), [500], `haiku counted once: ${JSON.stringify(rows)}`);
+    assert.equal(rows.length, 4);
+    assert.equal(rows[3]!.i, 40, 'the third turn is opus’s change only');
+  } finally {
+    await s.done();
+  }
+});
+
+test('usage (T-610): the models’ costs of a turn never add up to more than the turn’s own cost', async () => {
+  const s = await liveSession();
+  try {
+    await modelTurn(s, 0.1, { 'claude-opus-5-5': mu(100, 0.1) });
+    // The model's cost jumps by 96.3 while the process's total moved by 0.1: the total is the truth.
+    await modelTurn(s, 0.2, { 'claude-opus-5-5': mu(200, 96.4) });
+    await until(() => s.controller.history(s.id).filter((e) => e.kind === 'result').length === 2);
+    const rows = usageRows(s);
+    assert.ok(Math.abs(rows[1]!.c - 0.1) < 1e-6, `capped to the turn’s cost: ${rows[1]!.c}`);
+    assert.equal(rows[1]!.i, 100, 'tokens are the change');
+  } finally {
+    await s.done();
+  }
+});
+
+test('usage (T-610): the cap holds when a total started again too (decision (a): never book more than the turn’s cost, even if that under-counts)', async () => {
+  const s = await liveSession();
+  try {
+    await modelTurn(s, 5, { 'claude-opus-5-5': mu(1000, 5) });
+    // A process that counts from zero again spent 7: opus 4 (lower than the 5 before: a new count), haiku 3 (new). The total (7) is above the
+    // old base (5), so the turn figure reads 2: that is what is booked, an under-count that is the price of the guarantee.
+    await modelTurn(s, 7, { 'claude-opus-5-5': mu(200, 4), 'claude-haiku-5-5': mu(300, 3) });
+    await until(() => s.controller.history(s.id).filter((e) => e.kind === 'result').length === 2);
+    const rows = usageRows(s).slice(1);
+    assert.equal(rows.length, 2);
+    assert.ok(Math.abs(rows.reduce((t, r) => t + r.c, 0) - 2) < 1e-6, `capped to the turn’s cost: ${JSON.stringify(rows)}`);
+  } finally {
+    await s.done();
+  }
+});
+
+test('usage (T-610, QA BE 2 probe): the total drops to 0.05 while a model goes 0.1 to 96.4: the turn books 0.05, not $96.30', async () => {
+  const s = await liveSession();
+  try {
+    await modelTurn(s, 0.1, { 'claude-opus-5-5': mu(100, 0.1) });
+    await modelTurn(s, 0.05, { 'claude-opus-5-5': mu(200, 96.4) }); // the total started again: the new total is the turn's cost
+    await until(() => s.controller.history(s.id).filter((e) => e.kind === 'result').length === 2);
+    const rows = usageRows(s);
+    assert.ok(Math.abs(rows[1]!.c - 0.05) < 1e-6, `capped on a reset: ${rows[1]!.c}`);
+    assert.ok(rows.reduce((t, r) => t + r.c, 0) < 0.2, 'no $96 anywhere');
+  } finally {
+    await s.done();
+  }
+});
+
+test('usage (T-610): a total a hair below the base (float jitter) is not a reset: the turn costs 0 and the cap books no $96', async () => {
+  const s = await liveSession();
+  try {
+    await modelTurn(s, 0.3, { 'claude-opus-5-5': mu(100, 0.3) });
+    await modelTurn(s, 0.3 - 1e-12, { 'claude-opus-5-5': mu(200, 96.4) });
+    await until(() => s.controller.history(s.id).filter((e) => e.kind === 'result').length === 2);
+    const rows = usageRows(s);
+    assert.ok(rows[1]!.c < 1e-6, `jitter is a change of 0, capped to 0 (a reset would book 0.3 here): ${rows[1]!.c}`);
+  } finally {
+    await s.done();
+  }
+});
+
+test('usage (T-610): a turn whose own cost is 0 books no model cost above the 0.05 margin (pinned)', async () => {
+  const s = await liveSession();
+  try {
+    await modelTurn(s, 0.1, { 'claude-opus-5-5': mu(100, 0.1) });
+    await modelTurn(s, 0.1, { 'claude-opus-5-5': mu(200, 0.6) }); // the process total did not move; the model's cost did by 0.5
+    await until(() => s.controller.history(s.id).filter((e) => e.kind === 'result').length === 2);
+    const rows = usageRows(s);
+    assert.equal(rows[1]!.c, 0, `capped to the turn’s 0: ${rows[1]!.c}`);
+    assert.equal(rows[1]!.i, 100, 'tokens are still the change');
+  } finally {
+    await s.done();
+  }
+});
+
+test('usage (T-610): a row marked suspect is out of the Usage charts and stays in the table', async () => {
+  const s = await liveSession();
+  try {
+    await modelTurn(s, 0.1, { 'claude-opus-5-5': mu(100, 0.1) });
+    await modelTurn(s, 0.2, { 'claude-opus-5-5': mu(300, 0.2) });
+    await until(() => s.controller.history(s.id).filter((e) => e.kind === 'result').length === 2);
+    assert.equal(s.controller.usage('1h').totals.requests, 2);
+    s.store.db!.exec(`UPDATE chat_usage SET kind = 'suspect' WHERE input_tokens = 200`);
+    const t = s.controller.usage('1h').totals;
+    assert.equal(t.requests, 1);
+    assert.equal(t.input, 100);
+    assert.equal(usageRows(s).length, 2, 'the row is kept as evidence');
+  } finally {
+    await s.done();
+  }
+});
+
+test('usage (T-610): a row marked suspect is also out of the report of one Claude (the claude_id read of usageSince)', async () => {
+  const s = await liveSession();
+  try {
+    await modelTurn(s, 0.1, { 'claude-opus-5-5': mu(100, 0.1) });
+    await modelTurn(s, 0.2, { 'claude-opus-5-5': mu(300, 0.2) });
+    await until(() => s.controller.history(s.id).filter((e) => e.kind === 'result').length === 2);
+    s.store.db!.exec(`UPDATE chat_usage SET claude_id = 'cX'`);
+    assert.equal(s.controller.usage('1h', { claudeId: 'cX' }).totals.requests, 2);
+    s.store.db!.exec(`UPDATE chat_usage SET kind = 'suspect' WHERE input_tokens = 200`);
+    const t = s.controller.usage('1h', { claudeId: 'cX' }).totals;
+    assert.equal(t.requests, 1);
+    assert.equal(t.input, 100);
+  } finally {
+    await s.done();
+  }
+});
 
 test('usage metrics: each turn is stored per model from the change in the running totals, sub-agents included, and charts add them up', async () => {
   const s = await liveSession();

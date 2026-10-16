@@ -20,9 +20,10 @@ import { burstEvidence, rateEvidence } from '../usagespend/spikes.js';
 import { SpendStore } from '../usagespend/store.js';
 import { LAB_POLICIES } from './authz.js';
 import { Lab } from './index.js';
-import { registerLabTools, scoreShort } from './portalTools.js';
+import { fitPrograms, fullProgram, registerLabTools, scoreShort } from './portalTools.js';
 import { createLabRoutes } from './routes.js';
-import { percentile } from './scorecard.js';
+import { paceBlock, type PaceClaude } from './headline.js';
+import { SCORECARD_BASIS, SRC, percentile, wasteKind } from './scorecard.js';
 
 const H = 3_600_000;
 // Any fixed moment: the lab's clock is injected, nothing reads the real one.
@@ -242,10 +243,201 @@ test('targets: D-61 live workers and lead sub-agents, D-62 owner queue, D-63 QA 
     assert.deepEqual([target(b, 'lead_subagents').state, target(b, 'lead_subagents').figure.value, target(b, 'lead_subagents').offenders], ['breach', 2, ['M1']]);
     assert.deepEqual([target(b, 'owner_queue').state, target(b, 'owner_queue').offenders], ['breach', ['T-11']]);
     assert.deepEqual([target(b, 'qa_review_model').state, target(b, 'qa_review_model').figure.basis, target(b, 'qa_review_model').figure.reason], ['unavailable', 'unavailable', 'not_recorded']);
-    for (const t of [...a.targets, ...b.targets]) assert.ok(['D-61', 'D-62', 'D-63'].includes(t.decision) && t.rule.length > 10, t.id);
+    for (const t of [...a.targets, ...b.targets]) assert.ok(['D-61', 'D-62', 'D-63', 'D-65'].includes(t.decision) && t.rule.length > 10, t.id);
     // Sub-agents allowed but none run: a warn, not a breach.
     h.db.prepare('DELETE FROM chat_usage WHERE session_id = ?').run('M1');
     assert.deepEqual(target(prog(h.lab.scorecard({ window: 'day' })!, 'M1'), 'lead_subagents').state, 'warn');
+  } finally {
+    h.done();
+  }
+});
+
+test('T-549 (D-65): the six rows with state, figure, source and offenders; unavailable is a state with its reason', async () => {
+  const h = await seeded();
+  try {
+    const ev = h.db.prepare(`INSERT INTO chat_events (session_id, seq, at, kind, payload) VALUES (?, ?, ?, 'tool_result', ?)`);
+    const result = (seq: number, hoursAgo: number, p: Record<string, unknown>) => ev.run('W3', seq, iso(at(hoursAgo)), JSON.stringify(p));
+    // W3, in the window: 7 good results, a permission denial, a portal tool error and a failed command = 3 of 10 wasted (30 %).
+    for (let i = 1; i <= 7; i++) result(i, 2, { toolName: 'Read', text: 'ok' });
+    result(8, 2, { toolName: 'Bash', text: 'Permission to use Bash has been denied.', isError: true });
+    result(9, 2, { toolName: 'mcp__pilot__ticket_get', text: 'not found', isError: true });
+    result(10, 2, { toolName: 'Bash', text: 'exit code 1', isError: true });
+    result(11, 30, { toolName: 'Bash', text: 'exit code 1', isError: true }); // before the window: not counted
+    // Quota: c1 left 60 percent unused at its reset 3 h ago (a reading 5 min before), c2 10.
+    const sample = h.db.prepare(`INSERT INTO claude_usage_samples (at_ms, claude_id, workspace_id, win, used_pct, resets_at_ms, level, source) VALUES (?, ?, 'docker/api', 'session', ?, ?, 'ok', 'probe')`);
+    sample.run(at(3) - 5 * 60_000, 'c1', 40, at(3));
+    sample.run(at(2) - 5 * 60_000, 'c2', 90, at(2));
+    h.db.prepare(`UPDATE chat_sessions SET workspace_id = 'kubernetes/kohi-event' WHERE id = 'L1'`).run();
+
+    const s = h.lab.scorecard({ window: 'day' })!;
+    const a = prog(s, 'L1');
+    const d65 = a.targets.filter((t) => t.decision === 'D-65');
+    assert.deepEqual(d65.map((t) => t.id), ['cost_per_done', 'lead_share', 'qa_opus_share', 'done_rate', 'quota_unused', 'wasted_tool_calls']);
+    for (const t of d65) assert.ok(t.rule.length > 20 && t.figure.source.length > 5, `${t.id} states its rule and source`);
+    const row = (id: CrewTarget['id']) => target(a, id);
+    // 4.10 USD over 3 done tickets (T-1, T-2, T-7) = 1.37: under 8.
+    assert.deepEqual([row('cost_per_done').state, row('cost_per_done').figure.value, row('cost_per_done').offenders], ['ok', 1.366667, []]);
+    // The lead chain spent 3.00 of 4.10.
+    assert.deepEqual([row('lead_share').state, row('lead_share').figure.value, row('lead_share').offenders], ['breach', 73.17, ['L1', 'L2']]);
+    // QA and review: W2 (opus) and W4 (sonnet) = 50 percent.
+    assert.deepEqual([row('qa_opus_share').state, row('qa_opus_share').figure.value, row('qa_opus_share').offenders], ['breach', 50, ['W2']]);
+    // Feature and task done in 24 h: T-1 and T-7 = 2 a day against 48 (workspace claudepilot).
+    assert.deepEqual([row('done_rate').state, row('done_rate').figure.value], ['breach', 2]);
+    // The worst unused at a reset: 60 percent (c1).
+    assert.deepEqual([row('quota_unused').state, row('quota_unused').figure.value, row('quota_unused').offenders], ['breach', 60, ['c1']]);
+    assert.deepEqual([row('wasted_tool_calls').state, row('wasted_tool_calls').figure.value, row('wasted_tool_calls').offenders], ['breach', 30, ['W3']]);
+
+    // Program B: no baseline for its workspace, no done ticket, no tool result: unavailable, each with a reason, never a 0.
+    const b = prog(s, 'M1');
+    const reason = (id: CrewTarget['id']) => [target(b, id).state, target(b, id).figure.value, target(b, id).figure.reason];
+    assert.deepEqual(reason('done_rate'), ['unavailable', null, 'not_recorded']);
+    assert.deepEqual(reason('cost_per_done'), ['unavailable', null, 'no_samples']);
+    assert.deepEqual(reason('wasted_tool_calls'), ['unavailable', null, 'no_samples']);
+    assert.deepEqual(reason('qa_opus_share'), ['unavailable', null, 'no_samples']);
+
+    // An agent's own read never sees the quota (every Claude's), and the row says why.
+    const own = prog(h.lab.scorecard({ window: 'day', sessionId: 'W3' })!, 'L1');
+    assert.deepEqual([target(own, 'quota_unused').state, target(own, 'quota_unused').figure.reason], ['unavailable', 'no_source']);
+    assert.ok(s.basis.d65, 'the D-65 rows have a written basis');
+  } finally {
+    h.done();
+  }
+});
+
+test('T-549 (D-65): thresholds: warn from 80 percent of a ceiling; the done rate is scaled to a day and breaches far under its baseline', async () => {
+  const h = await seeded();
+  try {
+    h.db.prepare(`INSERT INTO claude_usage_samples (at_ms, claude_id, workspace_id, win, used_pct, resets_at_ms, level, source) VALUES (?, 'c1', 'docker/api', 'session', ?, ?, 'ok', 'probe')`).run(at(3) - 60_000, 75, at(3));
+    const a = prog(h.lab.scorecard({ window: 'day' })!, 'L1');
+    assert.deepEqual([target(a, 'quota_unused').state, target(a, 'quota_unused').figure.value], ['warn', 25], '25 of a 30 ceiling is past 80 percent');
+    h.db.prepare(`UPDATE claude_usage_samples SET used_pct = 90`).run();
+    assert.deepEqual([target(prog(h.lab.scorecard({ window: 'day' })!, 'L1'), 'quota_unused').state], ['ok']);
+    // The window scales to a day: T-1, T-6 and T-7 (feature, feature, task) done in a week = 3 / 7 = 0.43 a day, far under konfersi's 47: a breach.
+    h.db.prepare(`UPDATE chat_sessions SET workspace_id = 'kubernetes/konfersi' WHERE id = 'L1'`).run();
+    const week = target(prog(h.lab.scorecard({ window: 'week' })!, 'L1'), 'done_rate');
+    assert.deepEqual([week.state, week.figure.value], ['breach', 0.43]);
+  } finally {
+    h.done();
+  }
+});
+
+test('T-549 (D-65): the done baseline is picked by workspace id: kubernetes/kohi-event is ClaudePilot (48)', async () => {
+  const h = await seeded();
+  try {
+    const baseline = async (ws: string) => {
+      h.db.prepare(`UPDATE chat_sessions SET workspace_id = ? WHERE id = 'L1'`).run(ws);
+      const t = target(prog(h.lab.scorecard({ window: 'week' })!, 'L1'), 'done_rate');
+      return [t.state, t.figure.source.includes('(48 a day)') ? 48 : t.figure.source.includes('(47 a day)') ? 47 : null] as const;
+    };
+    assert.deepEqual(await baseline('kubernetes/kohi-event'), ['breach', 48]);
+    assert.deepEqual(await baseline('kubernetes/konfersi'), ['breach', 47]);
+    // No listed id (Event left pilot, D-67; a name that merely contains a program's word): unavailable, never another program's baseline.
+    assert.deepEqual(await baseline('kubernetes/event'), ['unavailable', null]);
+    assert.deepEqual(await baseline('kubernetes/event-konfersi-x'), ['unavailable', null]);
+  } finally {
+    h.done();
+  }
+});
+
+test('T-549 (D-65): a permission denial, a portal tool error and a failed command are told apart', () => {
+  assert.equal(wasteKind('Bash', 'Permission to use Bash with command rm has been denied.'), 'denied');
+  assert.equal(wasteKind('mcp__pilot__ticket_comment', 'Claude requested permissions to use mcp__pilot__ticket_comment, but you haven’t granted it yet.'), 'denied');
+  assert.equal(wasteKind('mcp__pilot__ticket_get', 'ticket not found'), 'portal');
+  assert.equal(wasteKind('Bash', 'exit code 2'), 'failed');
+  assert.equal(wasteKind(null, null), 'failed');
+});
+
+// T-739 B gap h (pins today's behaviour; part A may change it). Mutants: widen the denial pattern (a bare "denied" matches); drop the 400-character cut;
+// match the portal prefix loosely.
+test('T-739 (D-65): wasteKind table: what is a denial, what is not, the 400-character cut and the portal prefix', () => {
+  const cases: [string | null, string | null, 'denied' | 'portal' | 'failed'][] = [
+    ['Bash', 'Permission to use Bash has been denied.', 'denied'],
+    ['Bash', 'permission denied', 'denied'],
+    ['Bash', 'The user doesn’t want to proceed with this tool use.', 'denied'],
+    ['Bash', 'the request was denied', 'failed'], // "denied" alone is not a permission denial
+    ['Bash', 'cat: denied.txt: No such file', 'failed'],
+    ['Bash', `${'x'.repeat(400)} permission denied`, 'failed'], // the cut: only the first 400 characters are read
+    ['Bash', `${'x'.repeat(385)} permission denied`, 'failed'], // the pattern straddles the cut (403 characters): it is cut in half and does not match
+    ['Bash', `${'x'.repeat(380)} permission denied`, 'denied'], // it ends inside the first 400
+    ['Bash', `${'x'.repeat(382)} permission denied`, 'denied'], // exactly 400 characters: the last one is still read
+    ['Bash', `${'x'.repeat(383)} permission denied`, 'failed'], // 401 characters: the last one is cut
+    ['mcp__pilot__ticket_get', 'ticket not found', 'portal'],
+    ['mcp__pilot__ticket_get', null, 'portal'],
+    ['mcp__pilot_ticket_get', 'ticket not found', 'failed'],
+    ['xmcp__pilot__ticket_get', 'ticket not found', 'failed'],
+    ['mcp__pilot__ticket_get', 'Permission to use mcp__pilot__ticket_get has been denied.', 'denied'], // a denial wins over the portal
+    [null, 'exit code 1', 'failed'],
+    ['Bash', null, 'failed'],
+  ];
+  for (const [tool, text, want] of cases) assert.equal(wasteKind(tool, text), want, `${tool} / ${text?.slice(-30)}`);
+});
+
+// T-739 B gap f. Mutants: drop the offenders; keep the rule on a D-65 target; treat every target as D-65. (Plan 7349 said older targets keep
+// their rule: they do not, the code drops `rule` from every target; what differs is the row shape.)
+test('T-739 (D-65): fullProgram: a D-65 target is a short row with its offenders, an older target keeps its shape; neither carries its rule', () => {
+  const figure = { value: 7, basis: 'measured' as const, source: 'a source' };
+  const row = (id: CrewTarget['id'], decision: CrewTarget['decision'], offenders: string[]): CrewTarget => ({ id, decision, rule: `rule of ${id}`, state: 'breach', figure, offenders });
+  const p = { program: 'L1', title: 't', workspaceId: null, leads: ['L1'], workers: 1, current: {}, previous: null, targets: [row('lead_share', 'D-65', ['L1', 'L2']), row('done_rate', 'D-65', []), row('live_workers', 'D-61', ['W1'])] } as unknown as CrewProgramScore;
+  const [a, b, c] = fullProgram(p).targets as Record<string, unknown>[];
+  assert.deepEqual(a, { id: 'lead_share', state: 'breach', value: 7, offenders: ['L1', 'L2'] });
+  assert.deepEqual(b, { id: 'done_rate', state: 'breach', value: 7 }, 'no offenders: the key is absent, not empty');
+  // An older target keeps its whole shape (decision, figure, offenders) but, like every target, not its rule (`basis.targets` names it once).
+  assert.deepEqual(c, { id: 'live_workers', decision: 'D-61', state: 'breach', figure: { value: 7, basis: 'measured' }, offenders: ['W1'] }, 'figure sources are left out of the full form');
+});
+
+// T-739 B S4 (M6): an unavailable D-65 figure reads `unavailable:<reason>`, `no_source` without a reason. Mutant: `v = f => f.value`.
+test('T-739 (D-65): fullProgram: an unavailable D-65 figure names its reason', () => {
+  const gone = (reason?: string) => ({ value: null, basis: 'unavailable' as const, source: 'a source', ...(reason ? { reason } : {}) });
+  const q = (reason?: string) => ({ id: 'quota_unused', decision: 'D-65', rule: 'r', state: 'unavailable', figure: gone(reason), offenders: [] });
+  const p = { program: 'L1', title: 't', workspaceId: null, leads: ['L1'], workers: 1, current: {}, previous: null, targets: [q('no_samples'), q()] } as unknown as CrewProgramScore;
+  const [a, b] = fullProgram(p).targets as Record<string, unknown>[];
+  assert.equal(a!.value, 'unavailable:no_samples');
+  assert.equal(b!.value, 'unavailable:no_source');
+});
+
+// T-739 B S4 (M7): a short row lists at most five offenders. Mutant: `slice(0, 5)` -> `slice(0, 6)`.
+test('T-739 (D-65): scoreShort: a flag carries the first five offenders only', () => {
+  const figure = { value: 40, basis: 'measured' as const, source: 's' };
+  const offenders = ['L1', 'L2', 'L3', 'L4', 'L5', 'L6'];
+  const p = { program: 'L1', title: 't', workspaceId: null, leads: offenders, workers: 1, current: null, previous: null, targets: [{ id: 'lead_share', decision: 'D-65', rule: 'r', state: 'breach', figure, offenders }] } as unknown as CrewProgramScore;
+  assert.deepEqual(scoreShort(p).flags[0]!.offenders, ['L1', 'L2', 'L3', 'L4', 'L5']);
+});
+
+// T-739 B gap e. Mutants: an agent's own read gets the quota figure; a single-program read gets it.
+test('T-739 (D-65): quota is every Claude’s: an agent’s own read and a single-program read carry no quota figure, the whole read does', async () => {
+  const h = await seeded();
+  try {
+    h.db.prepare(`INSERT INTO claude_usage_samples (at_ms, claude_id, workspace_id, win, used_pct, resets_at_ms, level, source) VALUES (?, 'c1', 'docker/api', 'session', 40, ?, 'ok', 'probe')`).run(at(3) - 5 * 60_000, at(3));
+    const whole = h.lab.scorecard({ window: 'day' })!;
+    assert.equal(whole.quotaUnused?.[0]?.unusedPct.value, 60, 'the whole read has it (60 percent unused)');
+    assert.equal(target(prog(whole, 'L1'), 'quota_unused').figure.value, 60);
+    const own = h.lab.scorecard({ window: 'day', sessionId: 'W3' })!;
+    assert.equal(own.quotaUnused, undefined);
+    assert.equal(target(prog(own, 'L1'), 'quota_unused').figure.value, null);
+    const one = h.lab.scorecard({ window: 'day', program: 'L1' })!;
+    assert.equal(one.quotaUnused, undefined);
+    assert.equal(target(prog(one, 'L1'), 'quota_unused').figure.value, 60, 'a single-program read keeps the quota row');
+    // Another program asked for by an agent of L1 is not found, as a program that is not there.
+    assert.equal(h.lab.scorecard({ window: 'day', sessionId: 'W3', program: 'M1' }), null);
+    assert.equal(h.lab.scorecard({ window: 'day', program: 'nope' }), null);
+  } finally {
+    h.done();
+  }
+});
+
+// T-739 B docs test: the written definitions say what the code does. Mutant: change a number in the text.
+test('T-739 (D-65): the written basis and sources match the rules the code applies', async () => {
+  const h = await seeded();
+  try {
+    const d65 = SCORECARD_BASIS.d65!;
+    assert.match(d65, /no quota over 30 % unused at reset/);
+    assert.match(d65, /wasted tool calls \(error results\) under 3 %/);
+    assert.match(SCORECARD_BASIS.quotaUnused!, /within 30 minutes before the reset/);
+    assert.match(SRC.toolResults, /chat_events \(kind tool_result, is_error\)/);
+    // The same 30 in the rule the quota row states.
+    const whole = h.lab.scorecard({ window: 'day' })!;
+    assert.match(target(prog(whole, 'L1'), 'quota_unused').rule, /more than 30 percent unused/);
+    assert.match(target(prog(whole, 'L1'), 'wasted_tool_calls').rule, /under 3 percent/);
   } finally {
     h.done();
   }
@@ -624,7 +816,18 @@ test('MCP crew_scorecard: short by default, full on ask; an agent of program A g
     assert.deepEqual(short.programs.map((p: any) => p.program).sort(), ['L1', 'M1']);
     const a = short.programs.find((p: any) => p.program === 'L1');
     assert.deepEqual([a.now.done, a.now.cost_usd, a.now.lead_share_pct, a.before.done], [3, 4.1, 73.17, 1]);
-    assert.deepEqual(a.targets, { live_workers: 'breach', lead_subagents: 'ok', owner_queue: 'ok', qa_review_model: 'breach' });
+    assert.deepEqual(a.targets, {
+      live_workers: 'breach',
+      lead_subagents: 'ok',
+      owner_queue: 'ok',
+      qa_review_model: 'breach',
+      cost_per_done: 'ok',
+      lead_share: 'breach',
+      qa_opus_share: 'breach',
+      done_rate: 'unavailable',
+      quota_unused: 'unavailable',
+      wasted_tool_calls: 'unavailable',
+    });
     const b = short.programs.find((p: any) => p.program === 'M1');
     assert.equal(b.now.per_done_usd, 'unavailable:no_samples');
     assert.equal(short.basis, undefined, 'the sources are in the full form');
@@ -632,6 +835,9 @@ test('MCP crew_scorecard: short by default, full on ask; an agent of program A g
     assert.ok(!refused(fullCall), `the full form fits the result limit: ${JSON.stringify(fullCall).slice(0, 300)}`);
     const full = where(fullCall);
     assert.equal(full.window, '6h');
+    const fa = full.programs.find((p: any) => p.program === 'L1');
+    assert.deepEqual(fa.targets.find((t: any) => t.id === 'lead_share'), { id: 'lead_share', state: 'breach', value: 76.92, offenders: ['L1', 'L2'] }, 'a D-65 target is one short row in the full form');
+    assert.equal(fa.targets.find((t: any) => t.id === 'quota_unused').value, 'unavailable:no_samples');
     // Each figure has its basis; its source is named once in `basis`.
     const done = full.programs[0].current.effectiveness.done;
     assert.deepEqual([done.basis, done.source, typeof full.basis.done, typeof full.basis.health], ['measured', undefined, 'string', 'string']);
@@ -648,6 +854,229 @@ test('MCP crew_scorecard: short by default, full on ask; an agent of program A g
     assert.ok(refused(await mcp.call(m1.secret, 'crew_scorecard', { program: 'L1' })));
     assert.ok(refused(await mcp.call(admin.secret, 'crew_scorecard', { program: 'nope' })), 'not found for admin too');
     assert.ok(refused(await mcp.call(admin.secret, 'crew_scorecard', { window: 'year' })));
+  } finally {
+    mcp.done();
+    h.done();
+  }
+});
+
+test('MCP crew_scorecard full: 2, 3, 4 and 5 programs stay under the result limit; the rest are named and can be asked for', async () => {
+  const h = await seeded();
+  const registry = new ToolRegistry();
+  const mcp = await portalMcpHarness({ registry });
+  registerLabTools(h.lab, registry);
+  try {
+    const admin = mcp.token('admin');
+    const sizes: number[] = [];
+    for (let n = 2; n <= 5; n++) {
+      if (n > 2) {
+        // A big program: a chain of 600 lead sessions (each continues the one before; the program's `leads` lists them all), about 9,000 characters in the full form.
+        const ins = h.db.prepare(
+          `INSERT INTO chat_sessions (id, workspace_id, title, state, state_since, created_at, last_activity_at, claude_id, continued_from, max_workers, subagents) VALUES (?, 'docker/api', ?, ?, ?, ?, ?, 'c1', ?, 2, 0)`,
+        );
+        for (let i = 0; i < 600; i++) {
+          const id = `N${n}-${String(i).padStart(4, '0')}`;
+          ins.run(id, `title ${id}`, i === 599 ? 'idle' : 'ended', iso(at(23 - i / 100)), iso(at(23 - i / 100)), iso(at(23 - i / 100)), i === 0 ? null : `N${n}-${String(i - 1).padStart(4, '0')}`);
+        }
+        // A program needs a worker: one under the last lead.
+        h.db.prepare(
+          `INSERT INTO chat_sessions (id, workspace_id, title, state, state_since, created_at, last_activity_at, claude_id, parent_id, agent) VALUES (?, 'docker/api', 'w', 'idle', ?, ?, ?, 'c1', ?, 'implementer')`,
+        ).run(`N${n}w`, iso(at(3)), iso(at(3)), iso(at(3)), `N${n}-0599`);
+        h.db.prepare(`INSERT INTO chat_usage (at, at_ms, session_id, workspace_id, claude_id, model, cost_usd, requests, agents) VALUES (?, ?, ?, 'docker/api', 'c1', 'claude-opus-5-5', 1, 1, 0)`).run(iso(at(2)), at(2), `N${n}-0599`);
+      }
+      const call = await mcp.call(admin.secret, 'crew_scorecard', { full: true });
+      assert.ok(!refused(call), `${n} programs: refused: ${JSON.stringify(call).slice(0, 200)}`);
+      const text = (call as any).result.content[0].text as string;
+      const body = text.slice(text.indexOf('\n') + 1);
+      sizes.push(body.length);
+      assert.ok(body.length <= 19_000, `${n} programs: ${body.length} characters`);
+      const full = where(call);
+      assert.equal(full.programs.length + (full.omitted?.length ?? 0), n, `${n} programs: every program is either carried or named`);
+      assert.ok(full.programs.length >= 1, 'at least one program is carried');
+      if (n >= 3) assert.ok(full.omitted?.length > 0, `${n} programs go over 19,000 characters: the rest are named in omitted (${sizes.join(', ')})`);
+      // The seeded chains are longer than the lineage walk, so their program id is not a first lead: ask alone only for the ones the walk names right (L1, M1).
+      for (const id of (full.omitted ?? []).filter((p: string) => !p.startsWith('N'))) {
+        const one = await mcp.call(admin.secret, 'crew_scorecard', { full: true, program: id });
+        assert.ok(!refused(one) && where(one).programs[0].program === id, `omitted ${id} can be asked for alone`);
+      }
+      // A single program over the budget is still carried (the budget is a ceiling for the rest, not for the first).
+      if (n === 5) assert.equal((fitPrograms({}, [{ program: 'big', x: text } as { program: string }], 1000) as any).programs.length, 1);
+    }
+    console.log(`crew_scorecard full sizes at 2, 3, 4, 5 programs: ${sizes.join(', ')}`);
+  } finally {
+    mcp.done();
+    h.done();
+  }
+});
+
+test('fitPrograms: a program fits at exactly the ceiling and is left out one character over', () => {
+  const head = { scope: 'portal' };
+  const rows = [{ program: 'a', x: 'x'.repeat(20) }, { program: 'b', x: 'y'.repeat(20) }];
+  const both = JSON.stringify({ ...head, programs: rows }).length;
+  const exact = fitPrograms(head, rows, both) as any;
+  assert.deepEqual([exact.programs.length, exact.omitted], [2, undefined], 'at the ceiling both fit');
+  const over = fitPrograms(head, rows, both - 1) as any;
+  assert.deepEqual([over.programs.map((r: any) => r.program), over.omitted], [['a'], ['b']], 'one character over, the second is named, not carried');
+  const tiny = fitPrograms(head, rows, 1) as any;
+  assert.deepEqual([tiny.programs.length, tiny.omitted], [1, ['b']], 'one program is always carried');
+  assert.deepEqual((fitPrograms(head, [], 1) as any).programs, []);
+});
+
+/* ---------- T-600: the headline (lab/headline.ts) ---------- */
+
+type PaceTriple = [used: number, even: number | null, projected?: number | null];
+const pfig = (v: number | null | undefined) => (v === null || v === undefined ? { value: null, basis: 'unavailable', reason: 'no_samples' } : { value: v, basis: 'estimate' });
+const win = (key: string, t: PaceTriple) => ({ key, usedPct: t[0], pace: { evenPct: pfig(t[1]), projectedPct: pfig(t[2]) } as never });
+function claude(id: string, o: { runsOn?: PaceClaude['runsOn']; state?: PaceClaude['state']; session?: PaceTriple; week?: PaceTriple } = {}): PaceClaude {
+  return { claudeId: id, claudeName: `Claude ${id}`, runsOn: o.runsOn ?? 'plan', state: o.state ?? 'ok', windows: [...(o.session ? [win('session', o.session)] : []), ...(o.week ? [win('week', o.week)] : [])] };
+}
+
+test('headline pace: signed-out, pooled, key and pace-less Claudes are left out; ratio is the sum of used over the sum of even', () => {
+  const p = paceBlock([
+    claude('a', { session: [30, 50, 60] }),
+    claude('b', { session: [20, 50, 70] }),
+    claude('c', { runsOn: 'none', state: 'signed_out', session: [90, 10, 95] }), // signed out
+    claude('d', { runsOn: 'pool', state: 'no_limits', session: [90, 10, 95] }), // pooled
+    claude('e', { runsOn: 'key', session: [90, 10, 95] }), // API key
+    claude('f', { state: 'signed_out', session: [90, 10, 95] }), // state says signed out
+    claude('g', { session: [40, null] }), // pace unavailable
+  ]);
+  assert.deepEqual([p.ratio.value, p.ratio.basis], [0.5, 'estimate']); // (30 + 20) / (50 + 50)
+  assert.ok(p.ratio.source.length > 0);
+  assert.deepEqual(p.claudes.map((c) => c.claude), ['a', 'b']);
+  assert.equal(p.unusedAtResetPct, 35); // under 0.9: 100 - mean(60, 70)
+});
+
+test('headline pace: under 10 points of even pace is windows_just_reset; none readable is no_claude; no source is no_source', () => {
+  const reset = paceBlock([claude('a', { session: [1, 4] }), claude('b', { session: [2, 5.9] })]);
+  assert.deepEqual([reset.ratio.value, reset.ratio.basis, reset.ratio.reason, reset.unusedAtResetPct], [null, 'unavailable', 'windows_just_reset', null]);
+  assert.equal(paceBlock([claude('a', { session: [5, 10] })]).ratio.value, 0.5, '10 is enough');
+  assert.equal(paceBlock([claude('a', { session: [5, 9.9] })]).ratio.reason, 'windows_just_reset', '9.9 is not');
+  for (const none of [[], [claude('c', { runsOn: 'none', state: 'signed_out', session: [9, 50] })], [claude('d', { runsOn: 'pool', session: [9, 50] })]]) {
+    const p = paceBlock(none);
+    assert.deepEqual([p.ratio.value, p.ratio.reason, p.claudes], [null, 'no_claude', []]);
+  }
+  const src = paceBlock(null);
+  assert.deepEqual([src.ratio.reason, src.weekly.reason, src.claudes], ['no_source', 'no_source', []]);
+});
+
+test('headline pace: a ratio of 0.9 or more shows no unused quota; one Claude with even pace 0 has no ratio of its own; weekly the same way', () => {
+  const p = paceBlock([claude('a', { session: [60, 60, 100], week: [30, 40] }), claude('b', { session: [3, 0, 100], week: [10, 20] })]);
+  assert.equal(p.ratio.value, 1.05); // 63 / 60
+  assert.equal(p.unusedAtResetPct, null);
+  const b = p.claudes.find((c) => c.claude === 'b')!;
+  assert.deepEqual([b.ratio.value, b.ratio.basis, b.ratio.reason], [null, 'unavailable', 'no_samples']);
+  assert.equal(p.claudes.find((c) => c.claude === 'a')!.ratio.value, 1);
+  assert.equal(p.weekly.value, 0.67); // 40 / 60
+  assert.equal(paceBlock([claude('a', { session: [60, 60] })]).weekly.reason, 'no_source', 'no Claude reports a week');
+  assert.equal(paceBlock([claude('a', { session: [10, 60, null] })]).unusedAtResetPct, null, 'under 0.9 but no projection: unknown, not guessed');
+});
+
+const PACES = [claude('a', { session: [30, 50, 60] }), claude('b', { session: [20, 50, 70] })];
+
+test('headline: counts and dollars match the program rows; previous only with compare', async () => {
+  const h = await seeded();
+  try {
+    const lab = new Lab({ store: h.store, now: () => NOW, paceSource: async () => PACES });
+    const s = (await lab.scorecardWithPace({ window: 'day' }))!;
+    const hl = s.headline!;
+    assert.equal(hl.pace.ratio.value, 0.5);
+    // Current [NOW-24h, NOW): done T-1, T-2, T-7 (A) and none in B; T-5 won't-do. Requests 8 (A 6, B 2), dollars A 4.10 + B 0.75 = 4.85 (the solo chat is no program).
+    assert.deepEqual([hl.current.resolved.value, hl.current.wontDo.value, hl.current.resolved.basis], [3, 1, 'measured']);
+    assert.deepEqual(hl.current.resolvedByProgram.map((r) => [r.program, r.count]).sort(), [['L1', 3], ['M1', 0]]);
+    for (const r of hl.current.resolvedByProgram) assert.equal(r.count, prog(s, r.program).current.effectiveness.done.value, `${r.program} equals its program row`);
+    assert.equal(hl.current.requestsPerHour.value, 0.33); // 8 / 24
+    assert.equal(hl.current.usdPerHour.value, 0.202); // 4.85 / 24
+    assert.equal(hl.current.perResolvedUsd.value, 1.62); // 4.85 / 3
+    assert.equal(hl.current.usdPerHour.basis, 'estimate');
+    // Created in the window: none (every seeded ticket is 45 h old). Closed: T-1, T-2, T-7, T-5 = 4.
+    assert.equal(hl.current.createdPerClosed.value, 0);
+    const cur = Object.fromEntries(hl.current.createdPerClosedByProgram.map((r) => [r.program, r]));
+    assert.deepEqual([cur.L1!.created, cur.L1!.closed, cur.L1!.ratio.value], [0, 4, 0]);
+    assert.deepEqual([cur.M1!.closed, cur.M1!.ratio.value, cur.M1!.ratio.reason], [0, null, 'no_samples'], 'none closed is not a division by zero');
+    // Previous [NOW-48h, NOW-24h): T-6 done; ten tickets of the programs created (A 7, B 3); requests 2, dollars 1.90.
+    const pv = hl.previous!;
+    assert.deepEqual([pv.resolved.value, pv.requestsPerHour.value, pv.usdPerHour.value, pv.perResolvedUsd.value], [1, 0.08, 0.079, 1.9]);
+    assert.equal(pv.createdPerClosed.value, 10);
+    const prevRows = Object.fromEntries(pv.createdPerClosedByProgram.map((r) => [r.program, r]));
+    assert.deepEqual([prevRows.L1!.created, prevRows.L1!.closed, prevRows.L1!.ratio.value, prevRows.M1!.created, prevRows.M1!.ratio.reason], [7, 1, 7, 3, 'no_samples']);
+    assert.equal(pv.fromMs, NOW - 48 * H);
+    assert.equal((await lab.scorecardWithPace({ window: 'day', compare: false }))!.headline!.previous, null);
+  } finally {
+    h.done();
+  }
+});
+
+test('headline: none resolved gives no per-resolved cost, none closed gives no created-per-closed (never a division by zero)', async () => {
+  const h = await seeded();
+  try {
+    const lab = new Lab({ store: h.store, now: () => NOW });
+    h.db.prepare(`UPDATE tickets SET status = 'open', closed_at = NULL WHERE number = 7`).run(); // T-7 was done exactly 1 h ago
+    const one = lab.scorecard({ window: '1h', compare: false })!.headline!.current;
+    assert.deepEqual([one.resolved.value, one.wontDo.value], [0, 1], 'only T-5 closed in the hour, as won’t-do');
+    assert.deepEqual([one.perResolvedUsd.value, one.perResolvedUsd.basis, one.perResolvedUsd.reason], [null, 'unavailable', 'no_samples']);
+    assert.equal(one.usdPerHour.value, 0.1, 'the hour still has W5’s dollar tenth: cost is known, resolved is zero');
+    assert.equal(one.createdPerClosed.value, 0); // 0 created / 1 closed
+    h.db.prepare(`UPDATE tickets SET status = 'open', closed_at = NULL WHERE number = 5`).run();
+    const nothing = lab.scorecard({ window: '1h', compare: false })!.headline!.current;
+    assert.deepEqual([nothing.createdPerClosed.value, nothing.createdPerClosed.reason], [null, 'no_samples']);
+    assert.ok(nothing.createdPerClosedByProgram.every((r) => r.ratio.value === null && r.ratio.reason === 'no_samples'));
+  } finally {
+    h.done();
+  }
+});
+
+test('headline: an agent sees only its own program and no pace; a failing pace source is no_source', async () => {
+  const h = await seeded();
+  const logs: string[] = [];
+  try {
+    const lab = new Lab({ store: h.store, now: () => NOW, paceSource: async () => PACES, log: (m) => logs.push(m) });
+    const mine = (await lab.scorecardWithPace({ window: 'day', sessionId: 'W3' }))!.headline!;
+    assert.deepEqual([mine.pace.ratio.reason, mine.pace.weekly.reason, mine.pace.claudes], ['no_source', 'no_source', []], 'pace is quota of every program: an agent never gets it');
+    assert.deepEqual(mine.current.resolvedByProgram.map((r) => r.program), ['L1'], 'no other program in any list');
+    assert.deepEqual(mine.current.createdPerClosedByProgram.map((r) => r.program), ['L1']);
+    assert.equal(mine.current.requestsPerHour.value, 0.25); // A's 6 requests only (B's 2 are not its)
+    assert.equal(mine.current.usdPerHour.value, 0.171); // 4.10 / 24
+    assert.equal(mine.current.resolved.value, 3);
+    const other = (await lab.scorecardWithPace({ window: 'day', sessionId: 'M1' }))!.headline!;
+    assert.deepEqual([other.current.resolved.value, other.current.requestsPerHour.value, other.current.resolvedByProgram.map((r) => r.program)], [0, 0.08, ['M1']]);
+    const solo = (await lab.scorecardWithPace({ window: 'day', sessionId: 'S1' }))!.headline!;
+    assert.deepEqual([solo.current.resolvedByProgram, solo.current.requestsPerHour.value, solo.current.resolved.value], [[], 0, 0]);
+    // The owner's read has it.
+    assert.equal((await lab.scorecardWithPace({ window: 'day' }))!.headline!.pace.ratio.value, 0.5);
+    // A source that fails: no_source, one log line without the error text.
+    const broken = new Lab({ store: h.store, now: () => NOW, log: (m) => logs.push(m), paceSource: async () => Promise.reject(new Error('probe secret-looking text')) });
+    const b = (await broken.scorecardWithPace({ window: 'day' }))!;
+    assert.equal(b.headline!.pace.ratio.reason, 'no_source');
+    assert.ok(logs.some((l) => l.includes('pace source failed')) && !logs.some((l) => l.includes('secret-looking')));
+    // No source wired: the same.
+    assert.equal(h.lab.scorecard({ window: 'day' })!.headline!.pace.ratio.reason, 'no_source');
+  } finally {
+    h.done();
+  }
+});
+
+test('headline: the route and the crew_scorecard tool carry it; an agent token gets no pace', async () => {
+  const h = await seeded();
+  const lab = new Lab({ store: h.store, now: () => NOW, paceSource: async () => PACES });
+  const registry = new ToolRegistry();
+  const mcp = await portalMcpHarness({ registry });
+  registerLabTools(lab, registry);
+  try {
+    const owner = (await (await app(lab).request('/api/lab/scorecard?window=day')).json()) as { data: CrewScorecard };
+    assert.equal(owner.data.headline?.pace.ratio.value, 0.5);
+    assert.equal(owner.data.headline?.current.resolved.value, 3);
+    const w3 = app(lab, { kind: 'agent', userId: 'u_owner', tokenId: 't', sessionId: 'W3', workspaceId: 'docker/api' } as Actor);
+    const mine = (await (await w3.request('/api/lab/scorecard')).json()) as { data: CrewScorecard };
+    assert.equal(mine.data.headline?.pace.ratio.reason, 'no_source');
+    assert.deepEqual(mine.data.headline?.current.resolvedByProgram.map((r) => r.program), ['L1']);
+    const admin = mcp.token('admin');
+    assert.equal(where(await mcp.call(admin.secret, 'crew_scorecard', {})).headline.pace.ratio.value, 0.5, 'short form');
+    const full = await mcp.call(admin.secret, 'crew_scorecard', { full: true });
+    assert.ok(!refused(full) && where(full).headline.current.resolved.value === 3, 'full form fits the result limit');
+    const agent = await mcp.agentToken('docker/api', 'W3');
+    const hl = where(await mcp.call(agent.secret, 'crew_scorecard', {})).headline;
+    assert.deepEqual([hl.pace.ratio.reason, hl.current.resolvedByProgram.map((r: any) => r.program)], ['no_source', ['L1']]);
   } finally {
     mcp.done();
     h.done();

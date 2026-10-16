@@ -1,0 +1,121 @@
+// T-423, D-65 and D-70 in docs/dev-sessions/supervisor.mjs: an idle lead past the compaction line is told to `/compact` (at most once per gap),
+// a lead is left un-nudged only while every one of its worker slots is busy, and its idle lanes are compacted the same way. The real script is
+// imported in dry-run mode (it does not run its loop on import, and a send only logs); times are relative to now, never a fixed date.
+import assert from 'node:assert/strict';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { test } from 'node:test';
+import { pathToFileURL } from 'node:url';
+
+const dir = mkdtempSync(join(tmpdir(), 'supervisor-t423-'));
+Object.assign(process.env, {
+  PORTAL_URL: 'http://portal.test',
+  PORTAL_SERVER_CODE: `t${Math.random().toString(36).slice(2, 10)}`,
+  STATE_DIR: dir,
+  MAIN_FOLDER: dir,
+  DRY_RUN: '1',
+  // Off by default until T-597 (the portal framed `/compact`); tested at the line it runs at once on.
+  COMPACT_AT: '120000',
+});
+
+type Lead = { id: string; state: string; context?: { usedTokens: number } };
+type Row = { id: string; parentId: string | null; state: string; lastActivityAt: string };
+const sup = (await import(pathToFileURL(resolve(import.meta.dirname, '../../../../docs/dev-sessions/supervisor.mjs')).href)) as {
+  compactDue: (cur: Lead, ts: { compactedAt?: number }, now?: number) => boolean;
+  slotsFull: (sessions: Row[], cur: Lead, cap: number, now?: number) => boolean;
+  compactLanes: (t: { key: string }, ts: { laneCompacted?: Record<string, number> }, sessions: unknown[], cur: Lead) => Promise<void>;
+  wakeStaleLanes: (t: { key: string }, ts: { laneWoken?: Record<string, number> }, sessions: unknown[], cur: Lead, now?: number) => Promise<void>;
+  COMPACT: string;
+  COMPACT_LANE: string;
+  LANES: (prog: string) => string;
+  worktreeTrustable: (scan: Record<string, unknown> | null, known: Set<string>) => boolean;
+};
+
+const MIN = 60_000;
+
+test('T-423: an idle lead past 120k is due a compaction; not while it works, not under the line, not twice within 30 minutes', () => {
+  const now = Date.now();
+  assert.equal(sup.compactDue({ id: 'l', state: 'idle', context: { usedTokens: 156_000 } }, {}, now), true);
+  assert.equal(sup.compactDue({ id: 'l', state: 'working', context: { usedTokens: 300_000 } }, {}, now), false, 'never mid-turn');
+  assert.equal(sup.compactDue({ id: 'l', state: 'idle', context: { usedTokens: 80_000 } }, {}, now), false, 'under the line');
+  assert.equal(sup.compactDue({ id: 'l', state: 'idle' }, {}, now), false, 'no context figure: nothing is done');
+  assert.equal(sup.compactDue({ id: 'l', state: 'idle', context: { usedTokens: 200_000 } }, { compactedAt: now - 10 * MIN }, now), false, 'within the gap');
+  assert.equal(sup.compactDue({ id: 'l', state: 'idle', context: { usedTokens: 200_000 } }, { compactedAt: now - 31 * MIN }, now), true, 'after the gap');
+  // The command is one the portal lets MCP send (portalmcp/tools/sessions.ts SLASH_ALLOWED), with what the lead must keep.
+  assert.match(sup.COMPACT, /^\/compact /);
+  assert.match(sup.COMPACT, /crew/);
+});
+
+test('D-65: a lead is left alone only while all its worker slots are busy; idle, stale or other leads\' workers do not count', () => {
+  const now = Date.now();
+  const lead: Lead = { id: 'lead', state: 'idle' };
+  const at = (min: number) => new Date(now - min * MIN).toISOString();
+  const w = (id: string, state: string, min: number, parentId: string | null = 'lead'): Row => ({ id, parentId, state, lastActivityAt: at(min) });
+  const one = [w('a', 'working', 1), w('b', 'idle', 2), w('c', 'idle', 20)];
+  assert.equal(sup.slotsFull(one, lead, 5, now), false, 'one busy worker and free slots: the lead is nudged');
+  const full = [1, 2, 3, 4, 5].map((i) => w(`w${i}`, 'working', i));
+  assert.equal(sup.slotsFull(full, lead, 5, now), true, 'five busy of five: their reports wake it');
+  const stale = [...full.slice(0, 4), w('w5', 'working', 40)];
+  assert.equal(sup.slotsFull(stale, lead, 5, now), false, 'a worker silent for 40 min is not counted as busy');
+  const others = [...full.slice(0, 4), w('x', 'working', 1, 'other-lead')];
+  assert.equal(sup.slotsFull(others, lead, 5, now), false, 'another lead\'s worker does not fill this lead\'s slots');
+});
+
+test('D-70: idle lanes past 120k are compacted, each at most once per gap; other workers and ended lanes are left; the brief names the lanes', async () => {
+  const lead: Lead = { id: 'lead', state: 'idle' };
+  const s = (id: string, agent: string, state: string, k: number, parentId = 'lead') => ({ id, agent, state, parentId, title: id, context: { usedTokens: k * 1000 } });
+  const sessions = [
+    s('be', 'lane-backend', 'idle', 150),
+    s('fe', 'lane-frontend', 'working', 200),
+    s('qa', 'lane-qa-ui', 'idle', 60),
+    s('impl', 'implementer', 'idle', 180),
+    s('other', 'lane-backend', 'idle', 180, 'other-lead'),
+  ];
+  const ts: { laneCompacted?: Record<string, number> } = { laneCompacted: { gone: Date.now() - 60 * MIN } };
+  await sup.compactLanes({ key: 'orchestrator' }, ts, sessions, lead);
+  assert.deepEqual(Object.keys(ts.laneCompacted ?? {}), ['be'], 'only the idle lane over the line; the ended lane left the state');
+  const first = ts.laneCompacted!.be;
+  await sup.compactLanes({ key: 'orchestrator' }, ts, sessions, lead);
+  assert.equal(ts.laneCompacted!.be, first, 'not again within the gap');
+  assert.match(sup.COMPACT_LANE, /^\/compact /);
+  const brief = sup.LANES('Konfersi');
+  for (const role of ['lane-backend', 'lane-frontend', 'lane-qa-ui', 'lane-qa-perf']) assert.ok(brief.includes(role), role);
+  assert.match(brief, /at most two QA lanes/);
+  // The owner's Konfersi split: four build lanes by area; ClaudePilot keeps one Backend and one Frontend.
+  for (const lane of ['Konfersi FE Business', 'Konfersi FE Lab', 'Konfersi BE Business', 'Konfersi BE Lab & AI']) assert.ok(brief.includes(lane), lane);
+  assert.ok(sup.LANES('ClaudePilot').includes("'ClaudePilot Backend'") && sup.LANES('ClaudePilot').includes("'ClaudePilot BE Infra'") && !sup.LANES('ClaudePilot').includes('FE Lab'));
+});
+
+test('a lane working with no event for 45 min is woken to read its task output, once per hour; busy, idle, other and non-lane sessions are left', async () => {
+  const now = Date.now();
+  const lead: Lead = { id: 'lead', state: 'idle' };
+  const at = (min: number) => new Date(now - min * MIN).toISOString();
+  const s = (id: string, agent: string, state: string, min: number, parentId = 'lead') => ({ id, agent, state, parentId, title: id, lastActivityAt: at(min) });
+  const sessions = [
+    s('stuck', 'lane-backend', 'working', 240),
+    s('busy', 'lane-frontend', 'working', 5),
+    s('idle', 'lane-qa-ui', 'idle', 240),
+    s('impl', 'implementer', 'working', 240),
+    s('other', 'lane-backend', 'working', 240, 'other-lead'),
+  ];
+  const ts: { laneWoken?: Record<string, number> } = { laneWoken: { gone: now - 120 * MIN } };
+  await sup.wakeStaleLanes({ key: 'orchestrator' }, ts, sessions, lead, now);
+  assert.deepEqual(Object.keys(ts.laneWoken ?? {}), ['stuck'], 'only the silent working lane; the ended lane left the state');
+  await sup.wakeStaleLanes({ key: 'orchestrator' }, ts, sessions, lead, now + 30 * MIN);
+  assert.equal(ts.laneWoken!.stuck, now, 'not again within the hour');
+  await sup.wakeStaleLanes({ key: 'orchestrator' }, ts, sessions, lead, now + 61 * MIN);
+  assert.equal(ts.laneWoken!.stuck, now + 61 * MIN, 'again after the gap while it stays silent');
+});
+
+test('worktree trust: only rules, and only settings the portal already trusted here (a worker cannot widen its own rules on its branch)', () => {
+  const known = new Set(['h-reviewed']);
+  const scan = (o: Record<string, unknown>) => ({ trusted: false, empty: false, hash: 'h-reviewed', hooks: [], mcpServers: [], plugins: [], envNames: [], ...o });
+  assert.equal(sup.worktreeTrustable(scan({}), known), true, 'the same content a main folder had trusted');
+  assert.equal(sup.worktreeTrustable(scan({ hash: 'h-new' }), known), false, 'content never trusted here waits for the coordinator');
+  assert.equal(sup.worktreeTrustable(scan({ hooks: ['PreToolUse'] }), known), false, 'hooks: never by itself');
+  assert.equal(sup.worktreeTrustable(scan({ mcpServers: ['x'] }), known), false);
+  assert.equal(sup.worktreeTrustable(scan({ envNames: ['X'] }), known), false);
+  assert.equal(sup.worktreeTrustable(scan({ trusted: true }), known), false, 'already trusted: nothing to do');
+  assert.equal(sup.worktreeTrustable(null, known), false);
+});

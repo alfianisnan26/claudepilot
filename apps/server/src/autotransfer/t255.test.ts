@@ -5,7 +5,7 @@
 // at once, pause or not. Fake clock and fixtures only.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { AUTO_SETTING_KEYS as K, measuredFigure, type ClaudeUsage, type ClaudeUsageWindow, type ChatSwitchOptions } from '@portal/contracts';
+import { AUTO_SETTING_KEYS as K, measuredFigure, usageUnavailable, type ClaudeUsage, type ClaudeUsageWindow, type ChatSwitchOptions } from '@portal/contracts';
 import { fakeOwner, freshStore } from '../notify/testkit.js';
 import { recommendMove } from '../claudeusage/recommend.js';
 import { decide, unknownUsage, type DecideInput } from './decide.js';
@@ -148,4 +148,76 @@ test('watched: moved to an unknown Claude, the first turn answers with the limit
   assert.deepEqual(chat.moves.map((m) => m.to), ['one', 'spare'], 'moved on at once, pause or not, to the measured Claude');
   assert.equal(chat.get('s1')!.claudeId, 'spare');
   engine.stop();
+});
+
+test('T-251 S2: a limit answer in the MIDDLE of a turn (no turn boundary): the reading event triggers a tick, the chat is steered once and not moved mid-turn; at the boundary it moves at once, skip, no pause', async () => {
+  const { store } = await freshStore();
+  const clock = fakeClock();
+  const chat = new MoveChat();
+  chat.names.set('one', 'One');
+  // The chat works on One (it was moved there while One's usage was unknown); Spare is measured with room.
+  chat.sessions.set('s1', chatSession('s1', { state: 'working', claudeId: 'one', claudeName: 'One' }));
+  const read = () => new Date(clock.now() - 60_000).toISOString();
+  let oneReport = false;
+  const claudes = (): ClaudeUsage[] => [
+    { ...usage('spare', 'Spare', [win('session', 20)]), checkedAt: read() },
+    oneReport
+      ? { ...usage('one', 'One', [{ ...win('session', 100), resetsAt: at(300) }]), checkedAt: read(), state: 'exhausted', limitReport: { window: 'session', label: 'Session', at: read(), until: at(300), guessed: false, sessionId: 's1' } }
+      : { ...usage('one', 'One', [blind()]), checkedAt: read() },
+  ];
+  const u = fakeUsage(claudes);
+  const auto = new AutoStore(store, () => new Date(clock.now()));
+  const engine = new AutoTransferEngine({ chat, usage: u, owner: fakeOwner({}, { fallback: 'u_a' }), clock, store: auto, settings: settingsMap({ [K.enabled]: true, [K.automatic]: true }), bus: null, audit: null, publish: () => {} });
+  // The Claude the chat is on at the moment each message is sent (the continuation must follow the move).
+  const onClaude: (string | null | undefined)[] = [];
+  const send = chat.send.bind(chat);
+  chat.send = async (...a: Parameters<typeof chat.send>) => {
+    onClaude.push(chat.get(a[0])?.claudeId);
+    return send(...a);
+  };
+  engine.start();
+
+  // Before the report: One reads 0 % with no reset time (unknown): no reason to move, nothing happens.
+  clock.advance(1);
+  await new Promise((r) => setImmediate(r));
+  await engine.settled();
+  assert.equal(chat.moves.length, 0);
+  assert.equal(chat.sent.length, 0);
+
+  // The limit answer arrives mid-turn: the usage module has a new reading (`onReading`), no turn ended.
+  oneReport = true;
+  u.reading();
+  clock.advance(1); // the debounce (5 s) passes: the tick runs
+  await new Promise((r) => setImmediate(r));
+  await engine.settled();
+  assert.equal(chat.get('s1')!.state, 'working', 'still mid-turn');
+  assert.equal(chat.moves.length, 0, 'never moved mid-turn (FR10a)');
+  assert.equal(chat.sent.length, 1, 'told once to finish the step and stop');
+  assert.equal(chat.sent[0]!.actor, 'portal:autotransfer');
+  assert.equal(chat.sent[0]!.id, 's1');
+  assert.equal(chat.sent[0]!.priority, 'next', 'the steer waits for the step, it does not interrupt');
+  // FR10a text: One is used up (0 % left); the move to Spare comes at the end of the turn (or in N minutes at the latest).
+  assert.match(chat.sent[0]!.text, /^Your Claude \(One\) is at 0% left: finish the current step, commit and push your work and every sub-agent's work in progress, put one line per role on your status ticket if you keep one, then stop\. The portal moves this chat to Spare (at the end of this turn|in about \d+ minutes? at the latest \(at the end of this turn\)); after the move, start again the sub-agents and roles it interrupted\.$/);
+  assert.equal((await engine.state('s1', 'u_a')).pendingMove?.to.id, 'spare', 'the move to the measured Claude is announced');
+
+  // The boundary: moved at once (the source is used up), handoff skipped, then the continuation.
+  chat.turnEnds('s1');
+  await engine.settled();
+  assert.deepEqual(chat.moves, [{ id: 's1', to: 'spare', handoff: 'skip' }]);
+  assert.equal(chat.get('s1')!.claudeId, 'spare');
+  assert.equal(chat.sent.length, 2);
+  assert.equal(chat.sent[1]!.id, 's1');
+  assert.equal(chat.sent[1]!.priority, 'next');
+  assert.equal(chat.sent[1]!.actor, 'portal:autotransfer');
+  assert.equal(chat.sent[1]!.text, 'Moved to Spare by the portal (the Claude you were on ran out of quota). Continue where you stopped, and start again the sub-agents and roles the move interrupted.');
+  assert.deepEqual(onClaude, ['one', 'spare'], 'the steer went to the old Claude, the continuation only after the move');
+  engine.stop();
+});
+
+test('T-251 S2: usageUnavailable trusts a standing limit report on its own (no reading or windows yet), and not an expired one', () => {
+  const report = (untilMin: number) => ({ window: 'session', label: 'Session', at: at(-1), until: at(untilMin), guessed: false, sessionId: 's1' });
+  const never = (limitReport: ClaudeUsage['limitReport']) => ({ runsOn: 'plan' as const, windows: [], checkedAt: null, problem: null, limitReport });
+  assert.equal(usageUnavailable(never(null), T0), 'no_reading');
+  assert.equal(usageUnavailable(never(report(300)), T0), null, 'a limit reported until later is measured: the Claude is used up');
+  assert.equal(usageUnavailable(never(report(-1)), T0), 'no_reading', 'a report whose reset passed says nothing');
 });

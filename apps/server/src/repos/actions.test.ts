@@ -208,9 +208,10 @@ test('the timer: the first look follows a workspace’s start, then every interv
   const clock = { t: Date.parse('2026-10-12T10:00:00Z') };
   const pool = buildPool();
   const h = await reposHarness({ files: pool.files, now: clock, config: { auto: true, intervalS: 60 } });
-  const settled = async () => {
-    for (let i = 0; i < 100 && (await h.repos.workspace(WS)).scan.running; i++) await sleep(50);
-  };
+  // `tick` starts a scan without waiting for it, and the scan registers as running only after `await #requireRunning` (a real async call):
+  // any poll of `scan.running` can see "not yet running" and return before the scan runs (T-697). `timerScansDone` awaits the scans the
+  // timer started, from start to end, with no sleep.
+  const settled = () => h.repos.timerScansDone();
   try {
     await h.repos.tick();
     assert.equal((await h.repos.workspace(WS)).scan.at, null, 'the first round only notices the workspace is running');

@@ -84,6 +84,8 @@ export const AUTO_CONSTANTS = {
   pingPongMin: 240,
   /** A chat waiting for quota (no destination, a cap, a pause) and every chat at or under the threshold is looked at again this often (T-105). */
   waitRecheckMin: 2,
+  /** T-781: a chat on an exhausted Claude that still shows `working` with no stored event for this long is stopped and moved (the hard move). */
+  hardMoveIdleMin: 3,
 } as const;
 
 export interface AutoTransferSettings {

@@ -28,6 +28,12 @@ import type { Reauth } from './reauth.js';
 /** The sign-in a request belongs to: `requireSession` (app.ts) put its token on the context. */
 const tokenOf = (c: Context): string | undefined => (c as unknown as Context<{ Variables: { token?: string } }>).get('token');
 
+/** T-723: who an audit row names for this request: `ui` for a signed-in person, else the actor's own name (as recover, clearRequest and setLimits do). */
+const askerOf = (c: Context): string => {
+  const actor = actorOf(c);
+  return actor.kind === 'user' ? 'ui' : actorString(actor);
+};
+
 async function body<T>(c: Context): Promise<Partial<T>> {
   try {
     const value: unknown = await c.req.json();
@@ -89,16 +95,16 @@ export function createChatRoutes(controller: ChatController): Hono {
   // POST /api/chat/sessions/:id/bypass — turn it on: the policy, the opt-in, the tick, and the server code checked again.
   chat.post('/:id/bypass', async (c) => {
     const req = await body<EnterBypassRequest>(c);
-    return c.json(success(await controller.enterBypass(c.req.param('id'), { acknowledged: req.acknowledged === true, sessionToken: tokenOf(c) })));
+    return c.json(success(await controller.enterBypass(c.req.param('id'), { acknowledged: req.acknowledged === true, sessionToken: tokenOf(c), actor: askerOf(c) })));
   });
   // POST /api/chat/sessions/:id/bypass/allow — restart it so it can enter Bypass (at a turn boundary); the policy must allow it.
-  chat.post('/:id/bypass/allow', async (c) => c.json(success(await controller.allowBypass(c.req.param('id')))));
+  chat.post('/:id/bypass/allow', async (c) => c.json(success(await controller.allowBypass(c.req.param('id'), { actor: askerOf(c) }))));
   // POST /api/chat/sessions/:id/restart — stop its process at a turn boundary and resume the same conversation (MCP servers reconnect).
   chat.post('/:id/restart', async (c) => {
     requireCan(actorOf(c), 'operate', sessionRef(c.req.param('id')));
     const req = await body<RestartChatRequest>(c);
     // T-102: `when: 'turn_end'` queues it for the next boundary; `interrupt` lets "Restart now" stop a running turn (the person confirmed it).
-    return c.json(success(await controller.restart(c.req.param('id'), { why: req.why, when: req.when, interrupt: req.interrupt === true })));
+    return c.json(success(await controller.restart(c.req.param('id'), { why: req.why, when: req.when, interrupt: req.interrupt === true, actor: askerOf(c) })));
   });
   // POST /api/chat/sessions/:id/recover — bring a session ended for integrity back in place (T-136): the same row, its conversation resumed.
   // A person's sign-in is a person unless the body says `by: 'agent'` (the dev supervisor), which only makes it stricter: an agent never
@@ -181,7 +187,7 @@ export function createChatRoutes(controller: ChatController): Hono {
   });
 
   // GET /api/chat/sessions/:id/models — what the session can switch to (asks Claude Code; resumes it if needed).
-  chat.get('/:id/models', async (c) => c.json(success(await controller.models(c.req.param('id')))));
+  chat.get('/:id/models', async (c) => c.json(success(await controller.models(c.req.param('id'), { actor: askerOf(c) }))));
 
   // GET /api/chat/sessions/:id/tasks — sub-agents and background tasks.
   chat.get('/:id/tasks', (c) => c.json(success(controller.tasks(c.req.param('id')))));

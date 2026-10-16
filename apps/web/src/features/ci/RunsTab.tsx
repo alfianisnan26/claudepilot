@@ -1,12 +1,13 @@
 import { Button, cn, EmptyState, LoadError, Menu, RowsSkeleton, useToast } from '@isnanme/ui';
 import { isCiActive, type CiRunList, type CiRunSummary, type CiStatus } from '@portal/contracts';
-import { ChevronDown, ChevronsUp, CircleCheck, CircleX, List, LoaderCircle, Plus, Workflow, X } from 'lucide-react';
+import { ChevronDown, ChevronsUp, CircleCheck, CircleX, List, LoaderCircle, Plus, Server, Workflow, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
 import { timeAgo } from '@/lib/format';
 import { useLive } from '@/lib/live';
 import { ciApi } from './api';
 import { elapsed, formatDuration, MONO, reasonLabel, refLabel, runLook, shortSha, StatusIcon } from './parts';
+import { runnerLine } from './runners';
 import { RunBumpDialog } from './RunBump';
 
 type Scope = 'all' | 'active' | 'failed' | 'passed';
@@ -83,7 +84,7 @@ export function RunsTab({ onNewRemote }: { onNewRemote: () => void }) {
               aria-label={label}
               title={label}
               onClick={() => set({ s: id === 'all' ? null : id })}
-              className={cn('press flex size-10 items-center justify-center rounded-full', scope === id ? 'bg-primary text-primary-ink' : 'text-muted hover:text-ink')}
+              className={cn('press flex size-11 items-center justify-center sm:size-10 rounded-full', scope === id ? 'bg-primary text-primary-ink' : 'text-muted hover:text-ink')}
             >
               <Icon className="size-[18px]" />
             </button>
@@ -95,7 +96,7 @@ export function RunsTab({ onNewRemote }: { onNewRemote: () => void }) {
             <select
               value={repo ?? ''}
               onChange={(e) => set({ repo: e.target.value || null })}
-              className={cn('h-9 appearance-none rounded-full border bg-surface pr-8 pl-3.5 text-[16px] font-semibold focus:border-primary focus:outline-none sm:text-[13.5px]', repo ? 'border-primary text-ink' : 'border-line text-ink-soft')}
+              className={cn('h-11 appearance-none sm:h-9 rounded-full border bg-surface pr-8 pl-3.5 text-[16px] font-semibold focus:border-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-accent sm:text-[13.5px]', repo ? 'border-primary text-ink' : 'border-line text-ink-soft')}
             >
               <option value="">All remotes</option>
               {repos.map((r) => (
@@ -108,7 +109,7 @@ export function RunsTab({ onNewRemote }: { onNewRemote: () => void }) {
           </label>
         )}
         {branch && (
-          <button type="button" onClick={() => set({ branch: null })} className="press inline-flex h-9 items-center gap-1.5 rounded-full border border-primary bg-surface pr-2.5 pl-3.5 text-[13.5px] font-semibold" aria-label={`Clear branch ${branch}`}>
+          <button type="button" onClick={() => set({ branch: null })} className="press inline-flex h-11 items-center sm:h-9 gap-1.5 rounded-full border border-primary bg-surface pr-2.5 pl-3.5 text-[13.5px] font-semibold focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none" aria-label={`Clear branch ${branch}`}>
             <span className={cn(MONO, 'max-w-40 truncate')}>{branch}</span>
             <X className="size-3.5 text-muted" aria-hidden="true" />
           </button>
@@ -148,6 +149,7 @@ export function RunsTab({ onNewRemote }: { onNewRemote: () => void }) {
 function RunRow({ run: r, now, remote, onOpen, onBump }: { run: CiRunSummary; now: number; remote?: string; onOpen: () => void; onBump: () => void }) {
   const duration = r.durationMs ?? (isCiActive(r.status) ? elapsed(r.startedAt ?? r.createdAt, now) : null);
   const reason = r.status === 'failed' ? reasonLabel(r.reason) : null;
+  const on = runnerLine(r);
   return (
     <li className="relative">
       <button
@@ -167,6 +169,13 @@ function RunRow({ run: r, now, remote, onOpen, onBump }: { run: CiRunSummary; no
             </span>
             <span>{r.pipeline}</span>
             {remote && <span>{remote}</span>}
+            {on.runner && (
+              <span className="inline-flex min-w-0 items-center gap-1" title={`Ran on ${on.runner}`}>
+                <Server className="size-3.5 shrink-0" aria-hidden="true" />
+                <span className="truncate">{on.runner}</span>
+              </span>
+            )}
+            {on.labels.length > 0 && <span className={cn(MONO, 'truncate')}>{on.labels.join(' ')}</span>}
             {duration !== null && <span className="tabular-nums">{formatDuration(duration)}</span>}
             <span title={r.createdAt}>{timeAgo(r.createdAt)}</span>
             {reason && <span className="text-danger">{reason}</span>}
