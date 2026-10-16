@@ -9,8 +9,15 @@ test('a secret cut by the 59-character tool summary leaves no prefix in the tool
   const secret = `${['sk', 'ant', 'api03'].join('-')}-${'Zq7'.repeat(14)}`;
   for (const keep of [3, 7, 12, 20]) {
     const command = `${'p'.repeat(59 - keep)}${secret}`; // `keep` characters of the secret fall inside the 59
-    const events: ChatEvent[] = [{ seq: 1, at: '2026-10-16T12:00:00Z', kind: 'tool_use', toolName: 'Bash', text: command }];
+    // A tools line that opens the kept text is dropped, so it sits between two messages.
+    const at = '2026-10-16T12:00:00Z';
+    const events: ChatEvent[] = [
+      { seq: 1, at, kind: 'user', text: 'go' },
+      { seq: 2, at, kind: 'tool_use', toolName: 'Bash', text: command },
+      { seq: 3, at, kind: 'assistant', text: 'done' },
+    ];
     const out = transferConversation(events).text;
+    assert.ok(out.includes('_Tools used: Bash ('), `the tools line is in the text: ${out}`);
     assert.ok(!out.includes('sk-'), `no "sk-" prefix remains (keep=${keep}): ${out}`);
     assert.ok(!out.includes('Zq7'), `no secret body remains (keep=${keep})`);
   }
