@@ -8,7 +8,7 @@ import {
   isTicketClosed,
   type TicketFilter,
   type TicketItem,
-  type TicketList,
+  type TicketPage as TicketPageData,
   type TicketPriority,
   type TicketStatus,
   type TicketTag,
@@ -106,7 +106,9 @@ function TicketQueue({ selected }: { selected: string | null }) {
   const [text, setText] = useState(params.get('q') ?? '');
   const q = params.get('q') ?? '';
 
-  const [data, setData] = useState<TicketList | null>(null);
+  // The rows loaded so far (page 1, then every "Load more"), the cursor of the next page, and the counts from page 1 (D-58).
+  const [data, setData] = useState<TicketPageData | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [tags, setTags] = useState<TicketTag[]>([]);
   const [failed, setFailed] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -138,7 +140,25 @@ function TicketQueue({ selected }: { selected: string | null }) {
     }
   }, [filter]);
   useEffect(() => void load(), [load]);
+  // A change anywhere reads page 1 again (the loaded older pages are dropped; "Load more" brings them back).
   useLive('tickets', () => void load());
+
+  // The next page, added under the rows. A filter change or a reload while it loads makes this answer stale: it is dropped.
+  const loadMore = async () => {
+    const cursor = data?.next;
+    if (!cursor || loadingMore) return;
+    const mine = seq.current;
+    setLoadingMore(true);
+    try {
+      const more = await ticketsApi.list({ ...filter, cursor });
+      if (mine !== seq.current) return;
+      setData((d) => (d ? { ...d, items: [...d.items, ...more.items.filter((m) => !d.items.some((x) => x.id === m.id))], next: more.next } : d));
+    } catch (e) {
+      toast(errorText(e, 'Couldn’t load more.'), 'error');
+    } finally {
+      setLoadingMore(false);
+    }
+  };
 
   // The search box types freely and the list follows once typing pauses.
   useEffect(() => {
@@ -186,19 +206,32 @@ function TicketQueue({ selected }: { selected: string | null }) {
   // A ticket opens with the queue's address kept (its view and filters), so closing it, or Back, returns to the same queue.
   const open = (ticketId: string) => navigate({ pathname: `/admin/tickets/${ticketId}`, search });
 
+  const moreButton = data?.next ? (
+    <div className="flex justify-center py-3">
+      <Button variant="secondary" loading={loadingMore} onClick={() => void loadMore()}>
+        More
+      </Button>
+    </div>
+  ) : null;
   const body =
     data &&
     (data.items.length === 0 ? (
       <EmptyState icon={<TicketIcon className="size-6" />} title={q || needs || queue || orphans || priority || type || tag ? 'No match' : 'No tickets'} action={q || needs || queue || orphans || priority || type || tag ? undefined : add} />
     ) : view === 'list' ? (
       // As many columns of rows as the panel has room for (one on a phone): a wide screen shows more tickets, not longer rows.
-      <ul className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,28rem),1fr))] gap-2">
-        {data.items.map((t) => (
-          <TicketRow key={t.id} ticket={t} selected={t.id === selected} onOpen={() => open(t.id)} onBump={() => setBumping(t)} />
-        ))}
-      </ul>
+      <>
+        <ul className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,28rem),1fr))] gap-2">
+          {data.items.map((t) => (
+            <TicketRow key={t.id} ticket={t} selected={t.id === selected} onOpen={() => open(t.id)} onBump={() => setBumping(t)} />
+          ))}
+        </ul>
+        {moreButton}
+      </>
     ) : (
-      <Board items={data.items} selected={selected} search={search} pinned={pinned} onMove={move} onBump={setBumping} />
+      <>
+        <Board items={data.items} selected={selected} search={search} pinned={pinned} onMove={move} onBump={setBumping} />
+        {moreButton}
+      </>
     ));
 
   return (

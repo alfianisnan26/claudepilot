@@ -35,7 +35,7 @@ await made('POST', `/api/tickets`, { summary: 'A ticket nobody lost', workspaceI
 await made('POST', `/api/chat/sessions/${track.id}/end`);
 await made('POST', `/api/chat/sessions/${lone.id}/end`);
 await sleep(500);
-const seeded = await made('GET', '/api/tickets?orphan=1');
+const seeded = await made('GET', '/api/tickets?orphan=1&limit=100');
 check('api', 'three orphans listed and counted', seeded.items.length === 3 && seeded.counts.orphans === 3, JSON.stringify(seeded.counts));
 check('api', 'the orphan names its session and when', seeded.items.every((t) => t.orphan?.why === 'ended' && !!t.orphan.since), JSON.stringify(seeded.items.map((t) => t.orphan)));
 
@@ -91,7 +91,7 @@ await made('PUT', '/api/settings/tickets.orphanAfterMin', { value: 1 });
 let left = 3;
 for (let i = 0; i < 40 && left; i++) {
   await sleep(5000);
-  left = (await made('GET', '/api/tickets?orphan=1')).items.length;
+  left = (await made('GET', '/api/tickets?orphan=1&limit=100')).items.length;
 }
 check('sweep', 'no orphan left', left === 0, `left ${left}`);
 const [a, r2, q] = await Promise.all([t1, t2, t3].map((t) => made('GET', `/api/tickets/${t.id}`)));

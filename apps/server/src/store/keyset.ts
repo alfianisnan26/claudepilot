@@ -27,6 +27,11 @@ export function cursorAfter(scope: string, sort: string | number, id: string | n
   return `${body}.${mac(body)}`;
 }
 
+/** The key and id a cursor resumes after; a bad, forged or foreign-scope cursor is a 400. For a list whose order is more than one column. */
+export function decodeCursor(cursor: string, scope: string): { sort: string | number; id: string | number } {
+  return decode(cursor, scope);
+}
+
 function decode(cursor: string, scope: string): { sort: string | number; id: string | number } {
   const [body, sig, ...rest] = cursor.split('.');
   if (!body || !sig || rest.length) throw bad();

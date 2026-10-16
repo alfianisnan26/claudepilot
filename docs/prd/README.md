@@ -65,4 +65,6 @@ Build order and dependencies are added once the research is in.
   skip. A bad, forged or foreign cursor is a 400 `BAD_REQUEST`, and a restart ends every cursor. A cursor only says where to resume: the
   authz check and any visibility filter run before the query, so it never reveals a row the caller may not see, and a denial keeps the
   seam's same 404. A list route needs a clamp-and-walk test. Done so far: `GET /api/settings/audit` (S1); `GET /api/chat/sessions` (S2: the tie-break
-  id may be text; a filtered list points its cursor at the last row shown); the other routes follow in slices.
+  id may be text; a filtered list points its cursor at the last row shown); `GET /api/tickets` (S3: a list order of more than one column
+  keys the cursor on a composed sort value; the cursor scope holds every filter value; rows are summaries, text cut at 200 characters);
+  the other routes follow in slices. A list returns **summaries** (no long text); the one-item GET has the whole.
