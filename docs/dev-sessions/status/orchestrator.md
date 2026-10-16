@@ -20,18 +20,18 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   + review QA Perf.
 
 ## IN FLIGHT (6 of 6, D-71)
-- QA PERF 8e8912fc (perf-tester/sonnet, respawned for Write; 8148): cherry-pick denied, stopped (correct). Lead built QA base
-  wip/qa-t426-364c7ca 364c7ca4 (18a3dbb1 + -x db6b952a 155e334b). Now its one S1h probe Job.
-- QA UI 8b13bb5a (no Write): T-772 S2 188cd077 PASS WITH GAPS (Job 7fb8c3d0; lead posted 8336; gap 2 roving tabindex -> S2b).
-  T-611 S2b review APPROVE (8349); T-736 S3f review CHANGES 2 (8359: here= redirect, m before cd) -> S3g BE Infra.
-  Pre-read T-675 R2c READY (compile fix is one title line). Now QA Job T-675 R2c f7b4e34a (typecheck + M1, M3 mutants).
-- QA BE 2 42e5408f (no Write): T-416 S2b FAIL (8289: Bypass-restart test survives closeOut mutant). Now QA T-736 S3f a44c7cf8.
+- QA PERF 8e8912fc (perf-tester/sonnet): T-426 S1h PASS 14/14 (8270). Now QA T-611 S2b 96d7c148 (+ mutant per fix).
+- QA UI 8b13bb5a (no Write): T-772 S2 PWG (8336); T-611 S2b review APPROVE (8349); T-736 S3f review CHANGES 2 (8359);
+  T-675 R2c PWG (Job b3f31fbc: each guard alone untested -> R2d; T-675 refuses comments, posted on T-416 8423).
+  Now QA T-416 S2b again on 8382eb00 (lead read the Bypass diff: audit row moved after closeOut, gates unchanged; 8422).
+- QA BE 2 42e5408f (no Write): T-416 S2b FAIL (8289); T-736 S3f PWG (8412, same gaps as review -> S3g). Now QA T-781 S8b e663b9e9.
 - IMPL 46632d91 (sonnet): T-772 S2 DONE 188cd077. Now T-591 S3 lastReleased fix (ticket/T-591-s3 from b2932d0e) -> T-772 S2b
   (container marker, not tabindex -1) -> T-525 proposal draft.
 - BE INFRA 16c2494f (sonnet): T-736 S3f DONE a44c7cf8 (Job b263ibbvh on 4e63057, 14 mutants). Now resolving the T-611 merge of
   integration f9b836a1 that the lead started in its worktree (6 files UU; 8207 items; + review items 1-2 of 8349) -> T-623 S2 (HIGH, coordinator 8374: header rule key inside an env-file entry; plan 8387)
   -> T-736 S3g (8359) -> T-610 (8267) -> T-524 S3c + T-733 S5 -> T-612 S1.
-- BACKEND 3484bd4d: T-675 R2c f7b4e34a, T-781 S8b 0ed23dca Jobs pending (+ stop-mark test, B6) -> T-416 S2b fix -> T-537.
+- BACKEND 3484bd4d: DONE T-781 S8b e663b9e9 (Jobs 18d0360b, 02b167e7), T-675 R2c f7b4e34a (8ab9c4fa 22/22), T-416 S2b
+  8382eb00 (e2a88c2e 11/11, 4 mutants). Now T-675 R2d (one test per guard) -> T-537 docs (ticket/T-537-docs).
 - AFTER T-401: T-426 S1h/S1e; T-379 S2 3f11b28 behind it. T-578 -> owner. T-631 -> coordinator (after this batch).
 
 ## DECISIONS (binding)
