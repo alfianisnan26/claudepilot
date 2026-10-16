@@ -97,6 +97,7 @@ test('T-425: a send to a session waiting for a slot returns at once with the mes
     await until(() => [second.id, third.id].every((id) => s.controller.get(id)!.state === 'working'));
     s.controller.slotWaitMs = 5000;
     s.controller.slotPollMs = 20;
+    s.controller.controlTimeoutMs = 150; // the wake's own control request (the settings put back) goes unanswered here
     const sends = s.ws.sends.length;
     const t0 = Date.now();
     await s.controller.send(s.id, 'wait-1', 'hello after the wait');
