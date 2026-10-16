@@ -782,7 +782,7 @@ test('T-611: over the line the Job gets a REQUIRED rule away from the control pl
 test('T-611: at or under the line, or when the metrics fail, only the preferred rules apply (a metrics failure never blocks every Job)', () => {
   const cases: [string, number | string | undefined][] = [['under', 50], ['API missing', undefined], ['kubectl fails', 'FAIL'], ['not a number', 'k3s-master <unknown> <unknown> <unknown> <unknown>\n'], ['empty', '']];
   for (const [what, top] of cases) {
-    for (const extra of [[], ['--big']]) {
+    for (const extra of what === 'under' ? [[]] : [[], ['--big']]) { // --big adds 8192Mi of headroom: 50% is no longer "under" for it
       const p = placed(top, extra);
       assert.equal(p.r.code, 0, `${what}: ${p.r.out}`);
       assert.equal(p.required, undefined, `${what}: no required rule`);
