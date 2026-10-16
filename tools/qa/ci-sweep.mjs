@@ -42,6 +42,10 @@ p(1, 'deploy-gate-pipeline-with-a-long-name', 'passed', null);
 p(2, 'ci', 'failed', 'step_failed');
 p(3, 'ci', 'cancelled', 'cancelled');
 p(4, 'ci', 'passed', null);
+// A second remote, so the Runs tab shows its remote picker.
+const repo2 = `pqb${randomUUID().slice(0, 8)}`;
+db.prepare("INSERT INTO ci_repos (id, workspace_id, name, path, default_branch, created_at) VALUES (?, 'local/local', 'lib', '/home/node/.pilot/lib.git', 'main', ?)").run(repo2, now);
+insRun.run('run-lib', 1, repo2, 'ci', 'refs/heads/main', 'main', 'e'.repeat(40), 'Run on the second remote', 'passed', null, ago(7), ago(7), ago(6.5), 30000, null, null);
 const logs = db.prepare('INSERT INTO ci_logs (run_id, job, step, bytes, omitted, text) VALUES (?, ?, ?, ?, 0, ?)');
 const lines = (n) => Array.from({ length: n }, (_, i) => `line ${i + 1}: ok`).join('\n');
 logs.run('run-rich', 'test', 0, 400, 'RUN unit tests\n' + lines(60) + '\nFAIL src/a.test.ts: a-very-long-unbroken-token-' + 'y'.repeat(200) + '\nexit 1\n');
@@ -147,6 +151,10 @@ try {
       }
       await b.clickSel('[role=group][aria-label=Show] button').catch(() => {});
       await sleep(300);
+      await open('/admin/ci?tab=runs&branch=main', `!!document.querySelector('button[aria-label^="Clear branch"]')`);
+      await measure(b, tag, 'runs tab with a branch filter', { mobile });
+      await b.shot(`runs-branch-${tag}`);
+      await open('/admin/ci?tab=runs', `document.querySelector('select')`);
       await tabPass(b, tag, 'runs tab keyboard', { max: 40 });
 
       // Run page: richest state
