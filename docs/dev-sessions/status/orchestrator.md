@@ -11,27 +11,25 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   notes, close T-591 on PASS. Live checks: coordinator runs them ("Coordinator live check" comments), close each on PASS.
   CLOSED on coordinator live PASS: T-697, T-739 (A split to T-812, coordinator), T-732, T-723. T-574 re-check after 10-17
   15:00Z (8265). T-376 open for S5. T-733 kept open (S5 + gap items, 8277). Ack 8237, 8279.
-- BATCH 24B ON INTEGRATION b2932d0e (gate claudepilot-gate-b2932d0-16d9 GREEN, job-out/gate-b24c.log): T-401 S2b + S2c,
-  T-736 S3c-S3e, release merge f921fc41. (d9df1221 also green; 0c86256e red, 8224.) Coordinator told on T-731. Deploy 243 LIVE (b23).
-  On green + S2c QA: ff integration, tell coordinator on T-731. T-591 QA FAIL (backfill range base, store.ts:608; 8250).
-- T-611 S1b..S2b + merge f722dca1 (8411): QA Perf QA + QA UI review running; next batch after both.
-- BATCH 25 BUILT 1bae8b27 (premerge-b25, wip/main-1bae8b2): T-781 S8+S8b, T-623 S2 (8493: S2c follows), T-416 S2+S2b (lead's
-  mechanical controller.ts resolution, traced), T-772 S1..S2. Quick-check Job 135d3183 queued (1st try killed queued at 30 min) -> gate.
+- BATCH 24B b2932d0e (T-401 S2b+S2c, T-736 S3c-S3e): DEPLOY 257 LIVE from 7f83f13d. T-401 live check asked 8549 (close on PASS).
+- BATCH 25 ON INTEGRATION 7c3c1e44 (gate claudepilot-gate-7c3c1e4-c387 GREEN, re-gated after release merge-back f649e481):
+  T-781 S8+S8b, T-623 S2, T-416 S2+S2b (lead's mechanical controller.ts resolution 056fe1a4). Coordinator told T-731 8617.
+  T-772 held out: quick-check red on RunsTab.tsx:112 (T-732 line, 8544) -> S2c/S2d, batch 26.
+- BATCH 26 CANDIDATES: T-591 S3 9861313b (QA 8534, rev 8535) READY; T-611 merge f722dca1 (rev APPROVE 8537; QA Perf QA pending);
+  T-772 S2 188cd077 + S2b 4b484431 (QA PWG 8599, rev 8568) + S2c 464be382 + S2d (Impl); T-610 b3e7e3a7 (rev 8611; QA BE 2).
 
 ## IN FLIGHT (6 of 6, D-71)
 - QA PERF 8e8912fc (perf-tester/sonnet): T-426 S1h PASS 14/14 (8270). Now QA T-611 S2b 96d7c148 -> QA T-611 merge f722dca1.
-- QA UI 8b13bb5a (no Write): T-772 S2 PWG (8336); T-611 S2b review APPROVE (8349); T-736 S3f review CHANGES 2 (8359);
-  T-675 R2c PWG (Job b3f31fbc: each guard alone untested -> R2d; T-675 refuses comments, posted on T-416 8423).
-  T-416 S2b PWG (8445 -> S2c). Reviews APPROVE T-623 S2 8468, T-781 S8 8469. T-591 S3 QA PWG 8534. Now REVIEW T-611 merge.
-- QA BE 2 42e5408f (no Write): T-736 S3f PWG (8412 -> S3g); T-781 S8b PWG (8429: cascade -> S8c; S8+S8b batch, 8439).
-  T-623 S2 QA PWG 8476; reviews APPROVE T-772 S2 8449, T-416 S2b 8450. Now REVIEW T-591 S3 -> QA T-860 when DONE.
-- IMPL 46632d91 (sonnet): T-591 S3 DONE 9861313b (8451, Job 28/28, mutant 2 red). Now T-772 S2b (ticket/T-772-s2b from
-  188cd077, container marker) -> T-525 proposal draft.
-- BE INFRA 16c2494f (sonnet): T-736 S3f a44c7cf8; T-611 merge f722dca1 DONE (8411, Job 112/112; pack stale, lead regenerates);
-  T-623 S2 DONE 4869e756. NOW T-860 URGENT (coordinator 8511: git -C realpath in ruleGuard.ts; ticket/T-860-gitc-guard from
-  7f83f13d; S3g parked) -> T-736 S3g -> T-623 S2c (8493) -> T-610 -> T-524 S3c + T-733 S5 -> T-612 S1. T-860 gates ALONE.
-- BACKEND 3484bd4d: DONE T-781 S8b e663b9e9 (Jobs 18d0360b, 02b167e7), T-675 R2c f7b4e34a (8ab9c4fa 22/22), T-416 S2b
-  8382eb00 (e2a88c2e 11/11, 4 mutants). Now T-675 R2d (one test per guard) -> T-781 S8c -> T-416 S2c -> T-537 docs.
+- QA UI 8b13bb5a (no Write): today T-623 S2/T-781 S8/T-611 merge/T-610/T-623 S2c reviews APPROVE; T-591 S3 + T-772 S2b QA PWG;
+  T-860 attack list 8540/8541 (52 forms). NEXT: blind REVIEW T-860 S2 against its list (held free for it).
+- QA BE 2 42e5408f (no Write): reviews APPROVE T-772 S2 8449, T-416 S2b 8450, T-591 S3 8535, T-772 S2b 8568.
+  NOW QA T-623 S2c 6f4f6d56 -> QA T-610 b3e7e3a7; QA T-860 S2 takes priority when DONE.
+- IMPL 46632d91 (sonnet): T-772 S2b 4b484431 + S2c 464be382 DONE (8559). NOW T-772 S2d (system colour test, BtwCard marker,
+  8599) -> T-525 proposal draft (8236).
+- BE INFRA 16c2494f (sonnet): DONE T-860 12deae78 (8553), T-623 S2c 6f4f6d56 (8569), T-610 b3e7e3a7 (8571; lead read mig 384,
+  free on all branches 8577). NOW T-860 S2 URGENT (--git-dir/--work-tree/-c core.worktree/GIT_DIR + attack list; 8575) ->
+  T-623 S2d (mask parity, 8613) -> T-736 S3g (parked) -> T-524 S3c + T-733 S5 -> T-612 S1. T-860 gates ALONE.
+- BACKEND 3484bd4d: NOW T-675 R2d -> T-781 S8c (+minPauseMin test) -> T-416 S2c -> T-868 shots-in.sh (coordinator, 8616) -> T-537.
 - AFTER T-401: T-426 S1h/S1e; T-379 S2 3f11b28 behind it. T-578 -> owner. T-631 -> coordinator (after this batch).
 
 ## DECISIONS (binding)
