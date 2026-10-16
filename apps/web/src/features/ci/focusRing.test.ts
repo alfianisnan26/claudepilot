@@ -187,12 +187,90 @@ test('no source file has glued class names', () => {
   assert.deepEqual(hits, []);
 });
 
+// The EFFECTIVE outline of a declaration block (T-772 S2e): declarations apply in order, the `outline` shorthand resets style, width
+// and colour to their initial values (none, medium, currentcolor), and a later longhand overrides it. A first-match regex on the
+// shorthand would pass `outline: 2px solid Highlight; outline-width: 0`, which draws nothing.
+interface Outline { style: string; width: string; color: string }
+const STYLES = ['none', 'hidden', 'solid', 'dashed', 'dotted', 'double', 'groove', 'ridge', 'inset', 'outset', 'auto'];
+const WIDTH = /^(?:thin|medium|thick|[+-]?(?:\d+\.?\d*|\.\d+)(?:[a-z%]+)?|calc\(.*\))$/i;
+
+export function effectiveOutline(body: string): Outline {
+  const out: Outline = { style: 'none', width: 'medium', color: 'currentcolor' };
+  for (const decl of body.split(';')) {
+    const at = decl.indexOf(':');
+    if (at < 0) continue;
+    const prop = decl.slice(0, at).trim().toLowerCase();
+    const value = decl.slice(at + 1).replace(/!important/i, '').trim();
+    if (prop === 'outline') {
+      out.style = 'none';
+      out.width = 'medium';
+      out.color = 'currentcolor';
+      for (const tok of value.split(/\s+(?![^(]*\))/).filter(Boolean)) {
+        if (STYLES.includes(tok.toLowerCase())) out.style = tok.toLowerCase();
+        else if (WIDTH.test(tok)) out.width = tok;
+        else out.color = tok;
+      }
+    } else if (prop === 'outline-style') out.style = value.toLowerCase();
+    else if (prop === 'outline-width') out.width = value;
+    else if (prop === 'outline-color') out.color = value;
+  }
+  return out;
+}
+
+/** Why an outline draws nothing, or null when it is a visible system-colour outline. */
+export function outlineProblem(o: Outline): string | null {
+  if (o.style === 'none' || o.style === 'hidden') return `style ${o.style}`;
+  if (/^[+-]?0*\.?0+([a-z%]+)?$/i.test(o.width)) return `width ${o.width}`;
+  if (!/^(?:Highlight|CanvasText)$/i.test(o.color)) return `colour ${o.color}`;
+  return null;
+}
+
+/** The declaration bodies of every `<selector> { ... }` inside the `@media (forced-colors: active)` blocks of a stylesheet, in order. */
+export function forcedColorsBodies(css: string, selector: string): string[] {
+  const bodies: string[] = [];
+  const open = /@media \(forced-colors: active\) \{/g;
+  for (let m = open.exec(css); m; m = open.exec(css)) {
+    let depth = 1;
+    let i = open.lastIndex;
+    while (i < css.length && depth > 0) {
+      if (css[i] === '{') depth++;
+      else if (css[i] === '}') depth--;
+      i++;
+    }
+    const media = css.slice(open.lastIndex, i - 1);
+    const rule = /([^{}]+)\{([^{}]*)\}/g;
+    for (let r = rule.exec(media); r; r = rule.exec(media)) if (r[1]!.trim() === selector) bodies.push(r[2]!);
+  }
+  return bodies;
+}
+
+const FC_SELECTOR = ':focus-visible:not([data-focus-container])';
+
+test('the effective outline reads shorthand then longhands in order', () => {
+  const ok = 'outline: 2px solid Highlight; outline-offset: 2px;';
+  assert.equal(outlineProblem(effectiveOutline(ok)), null);
+  assert.equal(outlineProblem(effectiveOutline('outline: 2px solid CanvasText')), null);
+  // the mutants: each draws nothing although the shorthand alone looks right
+  assert.match(outlineProblem(effectiveOutline('outline: 2px solid Highlight; outline-color: transparent;'))!, /colour transparent/);
+  assert.match(outlineProblem(effectiveOutline('outline: 2px solid Highlight; outline-width: 0;'))!, /width 0/);
+  assert.match(outlineProblem(effectiveOutline('outline: 2px solid Highlight; outline-width: 0px !important;'))!, /width 0px/);
+  assert.match(outlineProblem(effectiveOutline('outline: 2px solid Highlight; outline-style: none;'))!, /style none/);
+  assert.match(outlineProblem(effectiveOutline('outline: 2px solid Highlight; outline: none;'))!, /style none/);
+  assert.match(outlineProblem(effectiveOutline('outline: 2px solid Highlight; outline: 0;'))!, /style none/);
+  // a longhand BEFORE the shorthand is reset by it, so it does not count
+  assert.equal(outlineProblem(effectiveOutline('outline-width: 0; outline: 2px solid Highlight;')), null);
+  // a later longhand that repairs an earlier break is fine
+  assert.equal(outlineProblem(effectiveOutline('outline: none; outline-style: solid; outline-width: 2px; outline-color: Highlight;')), null);
+  assert.match(outlineProblem(effectiveOutline('outline: 2px solid red;'))!, /colour red/);
+});
+
 test('index.css keeps a real outline for focusable controls under forced-colors', () => {
   const css = readFileSync(join(srcDir, 'index.css'), 'utf8');
-  assert.match(
-    css,
-    /@media \(forced-colors: active\) \{\s*:focus-visible:not\(\[data-focus-container\]\) \{[^}]*outline: [^;}]*solid (?:Highlight|CanvasText)\b[^;}]*;/,
-  );
+  const bodies = forcedColorsBodies(css, FC_SELECTOR);
+  assert.ok(bodies.length >= 1, 'the forced-colors rule for focusable controls is missing');
+  // the effective outline (every declaration, in order, across every such rule): visible style, non-zero width, a system colour
+  const effective = effectiveOutline(bodies.join(';'));
+  assert.equal(outlineProblem(effective), null, `the forced-colors outline draws nothing: ${JSON.stringify(effective)}`);
   // a transparent outline is not a system colour: forced-colors would repaint it, but the rule must name the colour itself
   assert.doesNotMatch(css, /:focus-visible:not\(\[data-focus-container\]\) \{[^}]*outline: [^;}]*transparent/);
   // the exclusion is the marker, never tabindex=-1 (a real control with tabindex=-1 keeps its ring)
