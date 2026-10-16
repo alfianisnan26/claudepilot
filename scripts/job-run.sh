@@ -72,6 +72,17 @@ for n in "$max" "$per" "$pprog" "$art_max"; do [[ $n =~ ^[0-9]+$ ]] || die "the 
 # The placement numbers are used in $(( )): at most 3 / 6 digits (no wrap-around to a negative), and base 10 (a leading 08 is not octal) (T-611 C1 C2).
 [[ $master_max =~ ^[0-9]{1,3}$ ]] || die "JOB_RUN_MASTER_MAX_PCT is a percentage (at most 3 digits)"
 master_max=$((10#$master_max))
+# T-611 S2: nodes a Job may never run on (a comma list of node names, default none: a required rule that is always on can leave every Job Pending
+# when the other node is full, T-365/T-524, so it is the operator's choice). The names go into JSON: the shape is checked, nothing else passes.
+avoid_json=
+if [ -n "${JOB_RUN_AVOID_NODES:-}" ]; then
+  IFS=, read -r -a avoid_list <<<"$JOB_RUN_AVOID_NODES"
+  [ "${#avoid_list[@]}" -le 20 ] || die "JOB_RUN_AVOID_NODES lists at most 20 node names"
+  for n in "${avoid_list[@]}"; do
+    [[ $n =~ ^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$ ]] || die "JOB_RUN_AVOID_NODES is a comma list of node names (letters, digits, . and -)"
+    avoid_json="${avoid_json:+$avoid_json,}\"$n\""
+  done
+fi
 label() { local v; v=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9.-' '-' | cut -c1-63 | sed -E 's/^[^a-z0-9]+//; s/[^a-z0-9]+$//'); printf '%s' "${v:-none}"; }
 jobs_json() { kubectl -n "$ns" get jobs -l app=claudepilot-job-run -o json 2>/dev/null; }
 stop_one() {
@@ -266,7 +277,6 @@ placement() {
     fi
     [ "$master_pct" -le "$master_max" ] || master_rule_why=over
     if [ -n "$master_rule_why" ]; then
-      master_rule='requiredDuringSchedulingIgnoredDuringExecution: {nodeSelectorTerms: [{matchExpressions: [{key: node-role.kubernetes.io/control-plane, operator: DoesNotExist}]}]}'
       if [ "$master_rule_why" = over ]; then place_msg="job-run: placement: the control-plane node is at ${master_pct}% of its memory (over ${master_max}%): this Job may not run there; it waits for k3s-node2 or for the master to have room"
       else place_msg="job-run: placement: the control-plane node is at ${master_pct}% of its memory and this Job may add ${peak_mi}Mi (about ${master_proj}%, over ${master_max}%): it may not run there; it waits for k3s-node2 or for the master to have room"; fi
       place_log="=== JOB-RUN PLACEMENT node=control-plane pct=$master_pct projected=$master_proj max=$master_max peak_mi=$peak_mi decision=required-away reason=$master_rule_why"
@@ -278,6 +288,16 @@ placement() {
     place_msg="job-run: placement: the control-plane node's memory is unknown (metrics unavailable): preferred rules only"
     place_log="=== JOB-RUN PLACEMENT node=control-plane pct=unknown max=$master_max peak_mi=$peak_mi decision=preferred-metrics-unavailable"
   fi
+  rule_placement
+}
+# The required rule: the control-plane expression (when the memory decision says so) AND the avoid-nodes expression (always, when set), in ONE term.
+# master_aff is the JSON of the rule (for the release patch), master_rule the same as the line the template takes (flow YAML accepts JSON).
+rule_placement() {
+  local ex=
+  [ -z "$master_rule_why" ] || ex='{"key":"node-role.kubernetes.io/control-plane","operator":"DoesNotExist"}'
+  [ -z "$avoid_json" ] || ex="${ex:+$ex,}{\"key\":\"kubernetes.io/hostname\",\"operator\":\"NotIn\",\"values\":[$avoid_json]}"
+  master_aff=; master_rule=
+  [ -z "$ex" ] || { master_aff="{\"nodeSelectorTerms\":[{\"matchExpressions\":[$ex]}]}"; master_rule="requiredDuringSchedulingIgnoredDuringExecution: $master_aff"; }
 }
 placement
 [ -z "$place_msg" ] || echo "$place_msg" >&2
@@ -391,21 +411,21 @@ done
 # suspended Job's affinity is patched first (a suspended Job's scheduling directives are mutable from Kubernetes 1.27; this cluster is 1.35), a merge
 # patch that touches only the required rule and keeps the preferred ones. A reading that fails changes nothing. A required rule that cannot be
 # added stops the run (the Job would land on a master over its line); a rule that cannot be dropped is only kept (harmless).
-was_why=$master_rule_why; was_rule=$master_rule; was_pct=$master_pct; was_known=$master_known
+was_why=$master_rule_why; was_rule=$master_rule; was_aff=$master_aff; was_pct=$master_pct; was_known=$master_known
 placement
 if [ -z "$master_known" ]; then
   # The reading failed: the create-time decision, and its percentage, stand (and the log says so, so the last line is not read as "unknown").
-  master_rule_why=$was_why; master_rule=$was_rule; master_pct=$was_pct; master_known=$was_known
+  master_rule_why=$was_why; master_rule=$was_rule; master_aff=$was_aff; master_pct=$was_pct; master_known=$was_known
   plog "=== JOB-RUN PLACEMENT node=control-plane at=release reading=failed kept=$([ -n "$was_why" ] && echo required-away || echo preferred) pct=${was_pct:-unknown} (the create-time reading)" >/dev/null
-elif [ "${was_why:+r}" != "${master_rule_why:+r}" ]; then
-  if [ -n "$master_rule_why" ]; then aff='{"nodeSelectorTerms":[{"matchExpressions":[{"key":"node-role.kubernetes.io/control-plane","operator":"DoesNotExist"}]}]}'; else aff=null; fi
+elif [ "$was_rule" != "$master_rule" ]; then
+  aff=${master_aff:-null}
   if kubectl -n "$ns" patch job "$job" --type merge -p '{"spec":{"template":{"spec":{"affinity":{"nodeAffinity":{"requiredDuringSchedulingIgnoredDuringExecution":'"$aff"'}}}}}}' >/dev/null 2>&1; then
     echo "job-run: placement changed while queued: ${place_msg:-$place_say}" >&2
     plog "$place_log at=release changed-from=$([ -n "$was_why" ] && echo required-away || echo preferred)" >/dev/null
   elif [ -n "$master_rule_why" ]; then
     plog "=== JOB-RUN PLACEMENT node=control-plane at=release outcome=patch-failed" >/dev/null
     die "the control-plane node went over its line while $job waited, and its rule could not be added: run it again"
-  else master_rule_why=$was_why; master_rule=$was_rule; fi
+  else master_rule_why=$was_why; master_rule=$was_rule; master_aff=$was_aff; fi
 fi
 kubectl -n "$ns" patch job "$job" --type merge -p '{"spec":{"suspend":false}}' >/dev/null
 t1=$(date +%s); tw=$t1; phase=running
@@ -425,7 +445,11 @@ while :; do
   # Pending because no node can hold it (T-524): say so once, instead of a silent wait.
   why=$(pod_get '[.items[0].status.conditions[]? | select(.type == "PodScheduled" and .status == "False" and .reason == "Unschedulable") | .message] | first' "$pj")
   # With the required rule on (T-611) an affinity mismatch is the master being over its line, whatever else the message adds.
-  case "${master_rule:+rule}:$why" in
+  if [ -n "$master_rule_why" ]; then rk=rule; elif [ -n "$master_rule" ]; then rk=avoid; else rk=none; fi
+  case "$rk:$why" in
+    avoid:*affinity*) [ "$said" = affinity ] || { said=affinity
+        echo "job-run: $job is Pending: it may not run on the nodes named in JOB_RUN_AVOID_NODES ($JOB_RUN_AVOID_NODES), and no other node fits ($why; waits up to ${start_wait}s)" >&2
+        plog "=== JOB-RUN PLACEMENT pending=affinity avoid=$JOB_RUN_AVOID_NODES decision=waits-off-avoided-nodes" >/dev/null; } ;;
     rule:*affinity*) [ "$said" = affinity ] || { said=affinity
         echo "job-run: $job is Pending: the control-plane node is over ${master_max}% of its memory, so this Job waits for k3s-node2 to have room ($why; waits up to ${start_wait}s)" >&2
         plog "=== JOB-RUN PLACEMENT pending=affinity pct=$master_pct decision=waits-for-node2" >/dev/null; } ;;
@@ -440,10 +464,10 @@ while :; do
   esac
   if [ $(( $(date +%s) - tw )) -ge "$start_wait" ]; then
     # C4: the decision was taken once, at create time: with the required rule on, the master may have room again by now.
-    if [ -n "$master_rule" ]; then again="; the control-plane node was over its line when this Job was placed: run it again, the master may have room now"; else again=; fi
+    if [ -n "$master_rule_why" ]; then again="; the control-plane node was over its line when this Job was placed: run it again, the master may have room now"; else again=; fi
     echo "job-run: the Job did not start in ${start_wait}s (pod: ${ph:-none}${why:+: $why})$again" >&2
     # QA Perf (7865): a Job that never starts has no final node line otherwise; the log must still show where the decision ended.
-    plog "=== JOB-RUN PLACEMENT node=none pct=${master_pct:-unknown} decision=$([ -n "$master_rule" ] && echo required-away || echo preferred) outcome=did-not-start waited=$(( $(date +%s) - tw ))s" >/dev/null
+    plog "=== JOB-RUN PLACEMENT node=none pct=${master_pct:-unknown} decision=$([ -n "$master_rule_why" ] && echo required-away || echo preferred) outcome=did-not-start waited=$(( $(date +%s) - tw ))s" >/dev/null
     exit 1
   fi
   sleep "$poll"
@@ -568,6 +592,6 @@ if [ -n "$artifacts" ] && [ -s "$work/art.b64" ]; then
 fi
 node=$(pod_get '.items[0].spec.nodeName' "$pj")
 t2=$(date +%s)
-plog "=== JOB-RUN PLACEMENT node=${node:-?} pct=${master_pct:-unknown} decision=$([ -n "$master_rule" ] && echo required-away || echo preferred) queued=$((t1 - t0))s" >/dev/null
+plog "=== JOB-RUN PLACEMENT node=${node:-?} pct=${master_pct:-unknown} decision=$([ -n "$master_rule_why" ] && echo required-away || echo preferred) queued=$((t1 - t0))s" >/dev/null
 echo "job-run: $job rc=$rc in $((t2 - t1))s (queued $((t1 - t0))s) on ${node:-?} with $memory; log: $log"
 exit "$rc"

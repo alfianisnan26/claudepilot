@@ -1377,11 +1377,11 @@ test('T-611: a Secret that cannot be created logs the kubectl exit code and a fi
 // C5 (QA BE 2): the master is read before the Job is created, but the Job may wait suspended for minutes. Just before the release it is read again;
 // a changed answer patches the suspended Job's affinity first (merge patch of the required rule alone). The fake prints top.txt for the first
 // reading and top2.txt for every later one; "patchfail" makes an affinity patch fail.
-function moved(first: number | string, second: number | string, patchFails = false) {
+function moved(first: number | string, second: number | string, patchFails = false, over: Record<string, string> = {}) {
   const w = world([], { top: first });
   writeFileSync(join(w.root, 'top2.txt'), typeof second === 'number' ? topLine('9000Mi', `${second}%`) : second);
   if (patchFails) writeFileSync(join(w.root, 'patchfail'), '1');
-  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'true']);
+  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'true'], over);
   return { w, r, patches: w.calls().split('\n').filter((l) => / patch job /.test(l)) };
 }
 const REQ = 'requiredDuringSchedulingIgnoredDuringExecution';
@@ -1430,6 +1430,45 @@ test('T-611 C5: a required rule that cannot be added stops the run (rc 2) withou
   const down = moved(80, 50, true);
   assert.equal(down.r.code, 0, down.r.out);
   assert.match(down.w.log(), /decision=required-away queued=/, 'the rule stays when it could not be dropped');
+});
+
+// ---- T-611 S2: JOB_RUN_AVOID_NODES, a comma list of node names a Job may never run on (default none). A required hostname NotIn rule, in the same
+// term as the control-plane rule when the memory decision adds it.
+const HOST = (...names: string[]) => ({ key: 'kubernetes.io/hostname', operator: 'NotIn', values: names });
+const CP_EXPR = { key: 'node-role.kubernetes.io/control-plane', operator: 'DoesNotExist' };
+const rule = (...exprs: unknown[]) => ({ nodeSelectorTerms: [{ matchExpressions: exprs }] });
+test('T-611 S2: JOB_RUN_AVOID_NODES gives a required hostname NotIn rule, alone when the master has room, with the control-plane rule when it is over', () => {
+  const alone = placed(50, [], { JOB_RUN_AVOID_NODES: 'k3s-master,node-9.lan' });
+  assert.equal(alone.r.code, 0, alone.r.out);
+  assert.deepEqual(alone.required, rule(HOST('k3s-master', 'node-9.lan')), 'one expression, both names');
+  const both = placed(83, [], { JOB_RUN_AVOID_NODES: 'k3s-master' });
+  assert.equal(both.r.code, 0, both.r.out);
+  assert.deepEqual(both.required, rule(CP_EXPR, HOST('k3s-master')), 'both expressions in ONE term (they are ANDed)');
+  const unset = placed(50, [], { JOB_RUN_AVOID_NODES: '' });
+  kept(unset, 'an empty list is no rule');
+});
+
+test('T-611 S2: a bad JOB_RUN_AVOID_NODES stops the run (rc 2) before anything is created', () => {
+  for (const bad of ['a b', 'x"y', '-a', 'a,,b', 'a,', 'a\\b', `${Array.from({ length: 21 }, (_, i) => `n${i}`).join(',')}`]) {
+    const p = placed(50, [], { JOB_RUN_AVOID_NODES: bad });
+    assert.equal(p.r.code, 2, `${JSON.stringify(bad)}: ${p.r.out}`);
+    assert.match(p.r.out, /JOB_RUN_AVOID_NODES/);
+    assert.equal(p.w.state().jobs.length, 0, 'no Job was created');
+  }
+});
+
+test('T-611 S2: at the release the patch keeps the avoid rule: 50 to 80 adds the control-plane expression to it, 80 to 50 drops only that one (not to null)', () => {
+  const avoid = { JOB_RUN_AVOID_NODES: 'k3s-master' };
+  const up = moved(50, 80, false, avoid);
+  assert.equal(up.r.code, 0, up.r.out);
+  assert.equal(up.patches.length, 2, up.patches.join('\n'));
+  assert.ok((up.patches[0] ?? '').includes(`"${REQ}":${JSON.stringify(rule(CP_EXPR, HOST('k3s-master')))}`), up.patches[0]);
+  const down = moved(80, 50, false, avoid);
+  assert.equal(down.r.code, 0, down.r.out);
+  assert.equal(down.patches.length, 2, down.patches.join('\n'));
+  assert.ok((down.patches[0] ?? '').includes(`"${REQ}":${JSON.stringify(rule(HOST('k3s-master')))}`), `the avoid rule stays: ${down.patches[0]}`);
+  const same = moved(50, 50, false, avoid);
+  assert.equal(same.patches.length, 1, 'an unchanged answer patches no affinity');
 });
 
 // ---- T-426 S1i (review 7888): the mask loop. The old awk loop (index, cut, index again) never ended when a value was or held the replacement
