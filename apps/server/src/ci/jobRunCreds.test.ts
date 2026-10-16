@@ -28,7 +28,7 @@ type C = { name: string; env?: Env[]; envFrom?: unknown[]; volumeMounts?: { name
 type Pod = { initContainers?: C[]; containers: C[]; volumes?: { name: string; secret?: unknown }[] };
 
 function podOf(file: string): Pod {
-  const text = readFileSync(file, 'utf8').replace(/__MEMORY__/g, '4Gi').replace(/__TMP_SIZE__/g, '2Gi').replace(/__[A-Z_]+__/g, 'x');
+  const text = readFileSync(file, 'utf8').replace(/__MASTER_REQUIRED__/g, '').replace(/__MEMORY__/g, '4Gi').replace(/__TMP_SIZE__/g, '2Gi').replace(/__[A-Z_]+__/g, 'x');
   return (yamlLoad(text) as { spec: { template: { spec: Pod } } }).spec.template.spec;
 }
 

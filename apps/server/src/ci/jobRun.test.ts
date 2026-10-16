@@ -70,6 +70,9 @@ else if (verb === 'get' && kind === 'job') { const j = job(name); if (!j || (fai
 else if (verb === 'get' && kind === 'pods' && a.includes('json')) { process.stdout.write(JSON.stringify(podOf(job(a[3].replace('job-name=', ''))))); }
 // The Secret is made by a client-side dry run (JSON on stdout, as kubectl prints it) and then created (never applied) with its ownerReference and label.
 else if (verb === 'create' && kind === 'secret' && a.includes('--dry-run=client') && failing('dry-run')) refuse();
+else if (verb === 'top' && kind === 'nodes') { const t = path.join(F, 'top.txt'); if (!fs.existsSync(t)) process.exit(1); const v = fs.readFileSync(t, 'utf8'); if (v === 'FAIL') process.exit(1); process.stdout.write(v); }
+// T-611: the file "secretfail" is the text a rejected Secret create prints to stderr (the category is read from it).
+else if (verb === 'create' && kind === '-f' && fs.existsSync(path.join(F, 'secretfail'))) { stdin(); process.stderr.write(fs.readFileSync(path.join(F, 'secretfail'), 'utf8')); process.exit(1); }
 else if (verb === 'create' && kind === '-f' && failing('create')) refuse();
 else if (verb === 'create' && kind === '-f') { const o = JSON.parse(stdin()); const n = o.metadata.name; const env = Object.entries(o.data).map(([k, v]) => k + '=' + Buffer.from(v, 'base64').toString()).join('\n') + '\n';
   if (o.metadata.annotations) process.exit(7);
@@ -91,7 +94,8 @@ else { process.stderr.write('unexpected kubectl ' + args.join(' ') + '\n'); proc
 `;
 
 interface Seed { name: string; chat: string; suspend?: boolean; done?: boolean; rc?: number; owner?: string; program?: string; repo?: string }
-interface Scenario { log?: string; rc?: number; hang?: boolean; oom?: boolean; evicted?: string; reason?: string }
+/** What the fake "kubectl top nodes" prints for the control-plane node (T-611): a memory percentage, a raw text, or "FAIL"; none = the metrics API is missing (exit 1). */
+interface Scenario { top?: number | string; log?: string; rc?: number; hang?: boolean; oom?: boolean; evicted?: string; reason?: string }
 
 const hex = (n: number) => randomBytes(n).toString('hex');
 
@@ -113,6 +117,7 @@ function world(seeds: Seed[] = [], scenario: Scenario = {}) {
   writeFileSync(join(bin, 'gh'), '#!/bin/sh\nexit 1\n'); chmodSync(join(bin, 'gh'), 0o755);
   writeFileSync(join(root, 'state.json'), JSON.stringify({ seq: seeds.length, secrets: {}, jobs: seeds.map((s, i) => ({ suspend: false, ...s, seq: i })) }));
   const rc = scenario.rc ?? 0;
+  if (scenario.top !== undefined) writeFileSync(join(root, 'top.txt'), typeof scenario.top === 'number' ? `k3s-master   310m   7%   9000Mi   ${scenario.top}%\n` : scenario.top);
   writeFileSync(join(root, 'scenario.json'), JSON.stringify({ ...scenario, rc, hang: scenario.hang ?? false, log: scenario.log ?? jobLog(root, rc) }));
   // Runtime-made credentials (never literals): the npm token, and Gitea's through git's credential helper as the real script reads it.
   const npmToken = `fx${hex(18)}`, giteaToken = `gt${hex(18)}`;
@@ -131,8 +136,8 @@ function world(seeds: Seed[] = [], scenario: Scenario = {}) {
     const done = new Promise<{ code: number | null; out: string }>((res) => p.on('close', (code) => res({ code, out })));
     return { p, done, out: () => out };
   };
-  const run = (argv: string[], over: Record<string, string> = {}) => {
-    const r = spawnSync('bash', [SCRIPT, ...argv], { env: env(over), cwd: root, encoding: 'utf8', timeout: 30_000 });
+  const run = (argv: string[], over: Record<string, string> = {}, script = SCRIPT) => {
+    const r = spawnSync('bash', [script, ...argv], { env: env(over), cwd: root, encoding: 'utf8', timeout: 30_000 });
     return { code: r.status, out: r.stdout + r.stderr };
   };
   const state = () => JSON.parse(readFileSync(join(root, 'state.json'), 'utf8')) as { secrets: Record<string, string>; jobs: (Seed & { suspend: boolean })[] };
@@ -752,7 +757,7 @@ test('the Job\'s own script: the proof (passes on the ref, fails on the other, k
 
 test('T-365: job-run and gate Jobs prefer a node away from the portal (preferred: a required rule left every Job Pending)', () => {
   for (const name of ['job-run.yaml', 'gate-job.yaml']) {
-    const text = readFileSync(join(REPO, 'deploy/k3s-build', name), 'utf8').replace(/__[A-Z_]+__/g, 'x');
+    const text = readFileSync(join(REPO, 'deploy/k3s-build', name), 'utf8').replace(/__MASTER_REQUIRED__/g, '').replace(/__[A-Z_]+__/g, 'x');
     type Term = { weight: number; podAffinityTerm: { namespaces: string[]; labelSelector: { matchLabels: Record<string, string> } } };
     const job = yamlLoad(text) as { spec: { template: { spec: { affinity?: { podAntiAffinity?: { requiredDuringSchedulingIgnoredDuringExecution?: unknown[]; preferredDuringSchedulingIgnoredDuringExecution?: Term[] } } } } } };
     const anti = job.spec.template.spec.affinity?.podAntiAffinity;
@@ -773,7 +778,7 @@ test('T-524: the heavy Jobs prefer a node other than the control plane (preferre
     volumes?: { name: string; emptyDir?: { sizeLimit?: string } }[] };
   const gi = (v: string) => { const m = /^(\d+)(Gi|Mi)$/.exec(v); assert.ok(m, v); return Number(m[1]) / (m[2] === 'Mi' ? 1024 : 1); };
   for (const name of ['job-run.yaml', 'gate-job.yaml', 'browser-job.yaml']) {
-    const text = readFileSync(join(REPO, 'deploy/k3s-build', name), 'utf8').replace(/__MEMORY__/g, '4Gi').replace(/__TMP_SIZE__/g, '2Gi').replace(/__[A-Z_]+__/g, 'x');
+    const text = readFileSync(join(REPO, 'deploy/k3s-build', name), 'utf8').replace(/__MASTER_REQUIRED__/g, '').replace(/__MEMORY__/g, '4Gi').replace(/__TMP_SIZE__/g, '2Gi').replace(/__[A-Z_]+__/g, 'x');
     const pod = (yamlLoad(text) as { spec: { template: { spec: Pod } } }).spec.template.spec;
     const na = pod.affinity?.nodeAffinity;
     assert.equal(na?.requiredDuringSchedulingIgnoredDuringExecution, undefined, `${name}: never required (a required rule left every Job Pending)`);
@@ -1203,4 +1208,157 @@ test('S1d the create failing (its stderr quotes the decoded value): a fixed mess
   assert.equal(r.code, 2, r.out);
   assert.match(r.out, /could not create the Secret/);
   assertNoTrace(w, r, secret);
+});
+
+// ---- T-611: placement. The scheduler counts memory REQUESTS, the control-plane node's own pods use far more for real. job-run.sh reads its real
+// use (kubectl top) and, when use PLUS the Job's expected peak is over JOB_RUN_MASTER_MAX_PCT (75), makes the rule away from it REQUIRED.
+// The fake master prints 9000Mi at the given percentage (allocatable = 9000 * 100 / pct); the default expected peak is 2300 Mi, --big's is 8192 Mi.
+const CP_RULE = { nodeSelectorTerms: [{ matchExpressions: [{ key: 'node-role.kubernetes.io/control-plane', operator: 'DoesNotExist' }] }] };
+type NodeAff = { requiredDuringSchedulingIgnoredDuringExecution?: unknown; preferredDuringSchedulingIgnoredDuringExecution?: unknown };
+const topLine = (used: string, pct: string) => `k3s-master   310m   7%   ${used}   ${pct}\n`;
+function placed(top: number | string | undefined, extra: string[] = [], over: Record<string, string> = {}) {
+  const w = world([], top === undefined ? {} : { top });
+  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', ...extra, '--', 'true'], over);
+  const required = r.code === 0 ? ((yamlLoad(w.applied1()) as Manifest).spec.template.spec.affinity as { nodeAffinity: NodeAff }).nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution : undefined;
+  return { r, w, required };
+}
+const away = (p: ReturnType<typeof placed>, what: string) => { assert.equal(p.r.code, 0, `${what}: ${p.r.out}`); assert.deepEqual(p.required, CP_RULE, `${what}: required rule`); };
+const kept = (p: ReturnType<typeof placed>, what: string) => { assert.equal(p.r.code, 0, `${what}: ${p.r.out}`); assert.equal(p.required, undefined, `${what}: no required rule`); };
+
+test('T-611: over the line the Job gets a REQUIRED rule away from the control plane, for a normal Job and --big', () => {
+  for (const extra of [[], ['--big']]) {
+    const p = placed(83, extra);
+    away(p, `83% ${extra.join(' ')}`);
+    assert.match(p.r.out, /placement: the control-plane node is at 83% of its memory \(over 75%\).*waits for k3s-node2/);
+    assert.match(p.r.out, /rc=0 in \d+s .* on k3s-master with/, 'the final line names the node');
+  }
+  away(placed(76), '76%');
+  away(placed(60, [], { JOB_RUN_MASTER_MAX_PCT: '50' }), 'the line is JOB_RUN_MASTER_MAX_PCT');
+});
+
+test('T-611: a normal Job well under the line, or when the metrics fail, keeps only the preferred rules (a metrics failure never blocks every Job)', () => {
+  kept(placed(50), '50%');
+  assert.match(placed(50).r.out, /placement: the control-plane node is at 50% of its memory \(about \d+% with this Job; limit 75%\): preferred rules only/);
+  for (const [what, top] of [['API missing', undefined], ['kubectl fails', 'FAIL'], ['not a number', 'k3s-master <unknown> <unknown> <unknown> <unknown>\n'], ['empty', '']] as const) {
+    for (const extra of [[], ['--big']]) kept(placed(top, extra), `${what} ${extra.join(' ')}`);
+  }
+  assert.match(placed(undefined).r.out, /placement: the control-plane node's memory is unknown \(metrics unavailable\): preferred rules only/);
+  assert.equal(world([], { top: 50 }).run(['--repo', 'claudepilot', '--ref', 'main', '--', 'true'], { JOB_RUN_MASTER_MAX_PCT: 'lots' }).code, 2, 'a bad line is a usage error');
+});
+
+test('T-611: headroom: use plus the Job\'s expected peak over the line keeps it off the master, though the use alone is under', () => {
+  away(placed(60), '60% + 2300Mi of a 15000Mi node is about 76%');
+  kept(placed(50), '50% + 2300Mi is about 63%');
+  away(placed(50, ['--big']), '--big counts its 8192Mi: 50% + 8192Mi is about 95%');
+  kept(placed(60, [], { JOB_RUN_EXPECTED_PEAK_MI: '100' }), 'a small expected peak leaves 60% alone');
+  away(placed(60, [], { JOB_RUN_EXPECTED_PEAK_MI: '3000' }), 'a bigger one blocks');
+  assert.match(placed(60).r.out, /60% of its memory and this Job may add 2300Mi \(about 76%, over 75%\)/);
+  kept(placed(topLine('9Gi', '50%')), 'Gi is read too');
+  away(placed(topLine('9Gi', '65%')), 'Gi is read too, headroom');
+});
+
+test('T-611 (coordinator 7806): a master at 74% does not take a Job of 4 GiB: use plus the Job\'s peak is counted, not the use alone', () => {
+  for (const [what, top, extra, over] of [
+    ['default peak', topLine('11100Mi', '74%'), [], {}],
+    ['a peak of 4 GiB (the request)', topLine('11100Mi', '74%'), [], { JOB_RUN_EXPECTED_PEAK_MI: '4096' }],
+    ['--big', topLine('11100Mi', '74%'), ['--big'], {}],
+  ] as const) {
+    const p = placed(top, [...extra], { ...over });
+    away(p, `74% ${what}`);
+    assert.match(p.w.log(), /^=== JOB-RUN PLACEMENT node=control-plane pct=74 projected=\d+ max=75 peak_mi=\d+ decision=required-away reason=headroom$/m, what);
+  }
+  assert.match(placed(topLine('11100Mi', '74%'), [], { JOB_RUN_EXPECTED_PEAK_MI: '4096' }).r.out, /about 10\d%, over 75%/, 'the Job would take the master to about 100%');
+});
+
+test('T-611 C3: the line is exact: at 75 a Job stays, one MiB over it goes away; the percentage-only fallback has the same edge', () => {
+  // 9200Mi at 60%: (9200 + 2300) * 60 = 75 * 9200 * 1: exactly the line. 9199Mi is one MiB less allocatable-use: over.
+  const at = placed(topLine('9200Mi', '60%')); kept(at, 'exactly at the line');
+  assert.match(at.w.log(), /projected=75 max=75/);
+  const over = placed(topLine('9199Mi', '60%')); away(over, 'just over the line');
+  assert.match(over.r.out, /about 76%, over 75%/, 'the projection is rounded up: it never reads "about 75%, over 75%"');
+  kept(placed(topLine('lots', '75%')), 'odd bytes at 75%: the percentage alone, at the line');
+  away(placed(topLine('lots', '76%')), 'odd bytes at 76%: the percentage alone, over');
+  kept(placed(topLine('lots', '60%')), 'odd bytes at 60%');
+  away(placed(topLine('lots', '80%')), 'odd bytes at 80%');
+});
+
+test('T-611 C1: a reading or a setting with a leading zero is a decimal number (08 and 09 are not octal): the run does not abort', () => {
+  kept(placed(topLine('9000Mi', '08%')), 'pct 08');
+  kept(placed(topLine('9000Mi', '09%')), 'pct 09');
+  away(placed(topLine('09000Mi', '60%')), 'bytes 09000Mi at 60%');
+  kept(placed(topLine('9000Mi', '50%'), [], { JOB_RUN_EXPECTED_PEAK_MI: '0100' }), 'peak 0100');
+  kept(placed(topLine('9000Mi', '50%'), [], { JOB_RUN_EXPECTED_PEAK_MI: '08' }), 'peak 08');
+  kept(placed(topLine('9000Mi', '50%'), [], { JOB_RUN_MASTER_MAX_PCT: '080' }), 'max 080');
+  away(placed(topLine('9000Mi', '50%'), [], { JOB_RUN_MASTER_MAX_PCT: '09' }), 'max 09 is 9');
+});
+
+test('T-611 C2: a number that could wrap in the arithmetic is refused (rc 2), never read as a negative that lets the Job on the master', () => {
+  for (const [name, val] of [['JOB_RUN_EXPECTED_PEAK_MI', '99999999999999999999'], ['JOB_RUN_EXPECTED_PEAK_MI', '1000000'], ['JOB_RUN_EXPECTED_PEAK_MI', 'garbage'], ['JOB_RUN_MASTER_MAX_PCT', '1000'], ['JOB_RUN_MASTER_MAX_PCT', '99999999999999999999']]) {
+    const p = placed(60, [], { [name]: val });
+    assert.equal(p.r.code, 2, `${name}=${val}: ${p.r.out}`);
+    assert.equal(p.w.applied().length, 0, `${name}=${val}: no Job was made`);
+  }
+  away(placed(50, [], { JOB_RUN_EXPECTED_PEAK_MI: '999999' }), 'six digits are still counted');
+  kept(placed(60, [], { JOB_RUN_EXPECTED_PEAK_MI: '0' }), 'a peak of 0 adds nothing');
+});
+
+test('T-611: the placement decision, the node it ran on and a Pending wait are lines in the Job log', async () => {
+  const w = world([], { top: 83 });
+  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'true']);
+  assert.equal(r.code, 0, r.out);
+  assert.match(w.log(), /^=== JOB-RUN PLACEMENT node=control-plane pct=83 projected=\d+ max=75 peak_mi=2300 decision=required-away reason=over$/m);
+  assert.match(w.log(), /^=== JOB-RUN PLACEMENT node=k3s-master pct=83 decision=required-away queued=\d+s$/m, 'the node it ran on');
+  const ok = world([], { top: 40 });
+  ok.run(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'true']);
+  assert.match(ok.log(), /^=== JOB-RUN PLACEMENT node=control-plane pct=40 projected=\d+ max=75 peak_mi=2300 decision=preferred$/m);
+  const none = world([], {});
+  none.run(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'true']);
+  assert.match(none.log(), /^=== JOB-RUN PLACEMENT node=control-plane pct=unknown .* decision=preferred-metrics-unavailable$/m);
+  const p = world([], { top: 88 });
+  writeFileSync(join(p.root, 'pending'), "0/2 nodes are available: 1 node(s) didn't match Pod's node affinity/selector, 1 Insufficient memory.");
+  await p.start(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'true'], { JOB_RUN_START_WAIT_S: '1' }).done;
+  assert.match(p.log(), /^=== JOB-RUN PLACEMENT pending=affinity pct=88 decision=waits-for-node2$/m);
+});
+
+test('T-611 C4 and QA Perf 7865: a Job that never starts on the required rule says "run it again" and leaves a final placement line', async () => {
+  const w = world([], { top: 88 });
+  writeFileSync(join(w.root, 'pending'), "0/2 nodes are available: 1 node(s) didn't match Pod's node affinity/selector, 1 Insufficient memory.");
+  const r = await w.start(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'true'], { JOB_RUN_START_WAIT_S: '1' }).done;
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.out, /the Job did not start in 1s .*run it again, the master may have room now/);
+  assert.match(w.log(), /^=== JOB-RUN PLACEMENT node=none pct=88 decision=required-away outcome=did-not-start waited=\d+s$/m);
+  // Without the required rule the Job waited for memory, not for the master: no "run it again" about the master.
+  const m = world([], { top: 40 });
+  writeFileSync(join(m.root, 'pending'), '0/2 nodes are available: 2 Insufficient memory.');
+  const r2 = await m.start(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'true'], { JOB_RUN_START_WAIT_S: '1' }).done;
+  assert.equal(r2.code, 1, r2.out);
+  assert.doesNotMatch(r2.out, /run it again/);
+  assert.match(m.log(), /^=== JOB-RUN PLACEMENT node=none pct=40 decision=preferred outcome=did-not-start waited=\d+s$/m);
+});
+
+// A Secret that cannot be created is reported by the exit code and ONE fixed category, never by kubectl's own text.
+function secretFails(text: string) {
+  const w = world([], { top: 40 });
+  writeFileSync(join(w.root, 'secretfail'), text);
+  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'true']);
+  return { w, r, all: r.out + w.log() + w.calls() };
+}
+test('T-611: a Secret that cannot be created logs the kubectl exit code and a fixed category, not kubectl\'s text', () => {
+  const sentinel = `sv${hex(16)}`;
+  const cases: [string, string][] = [
+    [`Error from server (Forbidden): secrets is forbidden: cannot create ${sentinel}`, 'not-allowed'],
+    [`Error from server (AlreadyExists): secrets "x" already exists ${sentinel}`, 'already-exists'],
+    [`Unable to connect to the server: dial tcp: connection refused ${sentinel}`, 'cluster-unreachable'],
+    [`The Secret "x" is invalid: ${sentinel}`, 'invalid'],
+    [`Error: something odd ${sentinel}`, 'other'],
+  ];
+  for (const [text, cat] of cases) {
+    const { w, r, all } = secretFails(text);
+    assert.equal(r.code, 2, r.out);
+    assert.match(r.out, new RegExp(`could not create the Secret for claudepilot-job-[0-9a-f]{8} \\(kubectl exit 1, category: ${cat}; the reason is not shown\\)`));
+    assert.match(w.log(), new RegExp(`^=== JOB-RUN SECRET-FAILED rc=1 category=${cat}$`, 'm'));
+    assert.ok(!all.includes(sentinel), `kubectl's text (${cat}) is nowhere in the output, the log or the calls`);
+    assert.ok(!all.includes(w.npmToken), 'the token is nowhere either');
+    assert.equal(w.state().jobs.length, 0, 'the Job made before the Secret is removed');
+  }
 });

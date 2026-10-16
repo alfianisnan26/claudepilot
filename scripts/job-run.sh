@@ -36,6 +36,11 @@
 #                                                       anything runs): a failed scan wipes its contents. A command
 #                                                       that holds a value is refused: single-quote the variable ('$E2E_CF_ACCESS_CLIENT_SECRET'),
 #                                                       so the Job expands it, not your shell
+# Placement (T-611): the scheduler counts memory REQUESTS, the master (control plane, Argo CD, Gitea...) uses far more for real. Before it creates a
+# Job this script reads the master's real memory (kubectl top nodes) and, when that use PLUS the Job's expected peak (JOB_RUN_EXPECTED_PEAK_MI,
+# default 2300 Mi; 8192 Mi for --big) is over JOB_RUN_MASTER_MAX_PCT (default 75), makes the Job's rule away from the control plane REQUIRED: it
+# waits for k3s-node2 or for room. Under the line, or when the metrics fail, the preferred rules stay. The decision, the wait and the node go
+# into the Job's log as "=== JOB-RUN PLACEMENT" lines.
 #   scripts/job-run.sh --list                           the Jobs, their chat, role and state
 #   scripts/job-run.sh --stop [<job> | --chat <id>]     stop Jobs (all, one, or a chat's) and delete their Secrets
 # Caps: JOB_RUN_MAX Jobs at once cluster-wide (default 3), JOB_RUN_MAX_PER_CHAT per chat (2) and JOB_RUN_MAX_PER_PROGRAM per program (2;
@@ -61,8 +66,12 @@ event_repo=isnanme/event # fixed on purpose (T-491): the door names one reposito
 # Memory per Job (T-524), request = limit, sized from measured cgroup peaks (docs/dev-session.md, "Heavy agent work in the cluster"); fixed here,
 # no environment override: the size is a cluster decision, not a caller's.
 mem_std=4Gi; tmp_std=2Gi; mem_big=8Gi; tmp_big=4Gi
+master_max=${JOB_RUN_MASTER_MAX_PCT:-75}
 die() { echo "job-run: $*" >&2; exit 2; }
 for n in "$max" "$per" "$pprog" "$art_max"; do [[ $n =~ ^[0-9]+$ ]] || die "the caps are numbers"; done
+# The placement numbers are used in $(( )): at most 3 / 6 digits (no wrap-around to a negative), and base 10 (a leading 08 is not octal) (T-611 C1 C2).
+[[ $master_max =~ ^[0-9]{1,3}$ ]] || die "JOB_RUN_MASTER_MAX_PCT is a percentage (at most 3 digits)"
+master_max=$((10#$master_max))
 label() { local v; v=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9.-' '-' | cut -c1-63 | sed -E 's/^[^a-z0-9]+//; s/[^a-z0-9]+$//'); printf '%s' "${v:-none}"; }
 jobs_json() { kubectl -n "$ns" get jobs -l app=claudepilot-job-run -o json 2>/dev/null; }
 stop_one() {
@@ -218,6 +227,7 @@ job=claudepilot-job-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')
 log=${JOB_RUN_LOG:-/tmp/job-run-$job.log}; [ -n "$out" ] || out=./job-run-artifacts/$job
 [[ $out != -* ]] || out=./$out # a name that starts with a dash is a path, never an option of mkdir, find or grep
 work=$(mktemp -d "${TMPDIR:-/tmp}/cp-job-run-XXXXXX")
+: > "$log" # from here the placement lines go into it too (T-611)
 phase=setup; wd=
 # shellcheck disable=SC2317 # called by the traps
 on_exit() {
@@ -227,6 +237,43 @@ on_exit() {
 }
 trap on_exit EXIT
 trap 'exit 130' INT TERM HUP
+
+# Placement (T-611): the control-plane node's real memory (working set against allocatable, from the metrics API). Over the line: a REQUIRED rule
+# away from it. A failed or odd reading keeps the preferred rules alone: the metrics must never block every Job.
+# Headroom: the Job adds up to its expected peak to the master's use, so the test is on use PLUS that peak (use * pct / used = allocatable, so
+# no new verb). The peak: JOB_RUN_EXPECTED_PEAK_MI (default 2300, the measured p99 of Job cgroup peaks, 2270 Mi, T-731 note; the largest in 847
+# runs is under 3000 Mi) for a normal Job; for --big (a rerun after an OOM kill, the peak is unknown) its whole limit. If the bytes column is odd,
+# the old test on the percentage alone stays. Every number goes into $(( )) in base 10 (10#: a reading of 08 is not octal) and is bounded in
+# digits (no wrap-around to a negative that would let the Job on the master).
+plog() { echo "$*"; echo "$*" >> "$log"; } # a line that goes to the caller and into the Job's log, where a later diagnosis finds it
+if [ -n "$big" ]; then peak_mi=8192; else peak_mi=${JOB_RUN_EXPECTED_PEAK_MI:-2300}; fi
+[[ $peak_mi =~ ^[0-9]{1,6}$ ]] || die "JOB_RUN_EXPECTED_PEAK_MI is a number of Mi (at most 6 digits)"
+peak_mi=$((10#$peak_mi))
+master_rule=; master_rule_why=; master_proj=
+read -r master_used master_pct < <(kubectl top nodes -l node-role.kubernetes.io/control-plane --no-headers 2>/dev/null | awk 'NR == 1 { gsub(/%/, "", $5); print $4, $5 }' || true) || true
+if [[ ${master_pct:-} =~ ^[0-9]{1,3}$ ]]; then
+  master_pct=$((10#$master_pct)); master_proj=$master_pct
+  used_mi=
+  if [[ ${master_used:-} =~ ^([0-9]{1,9})Mi$ ]]; then used_mi=$((10#${BASH_REMATCH[1]}))
+  elif [[ ${master_used:-} =~ ^([0-9]{1,6})Gi$ ]]; then used_mi=$(( 10#${BASH_REMATCH[1]} * 1024 )); fi
+  if [[ ${used_mi:-} =~ ^[0-9]+$ ]] && [ "$used_mi" -gt 0 ] && [ "$master_pct" -gt 0 ]; then
+    master_proj=$(( ( ( used_mi + peak_mi ) * master_pct + used_mi - 1 ) / used_mi )) # rounded UP, so "about N%, over M%" never reads N <= M
+    [ $(( ( used_mi + peak_mi ) * master_pct )) -le $(( master_max * used_mi )) ] || master_rule_why=headroom
+  fi
+  [ "$master_pct" -le "$master_max" ] || master_rule_why=over
+  if [ -n "$master_rule_why" ]; then
+    master_rule='requiredDuringSchedulingIgnoredDuringExecution: {nodeSelectorTerms: [{matchExpressions: [{key: node-role.kubernetes.io/control-plane, operator: DoesNotExist}]}]}'
+    if [ "$master_rule_why" = over ]; then echo "job-run: placement: the control-plane node is at ${master_pct}% of its memory (over ${master_max}%): this Job may not run there; it waits for k3s-node2 or for the master to have room" >&2
+    else echo "job-run: placement: the control-plane node is at ${master_pct}% of its memory and this Job may add ${peak_mi}Mi (about ${master_proj}%, over ${master_max}%): it may not run there; it waits for k3s-node2 or for the master to have room" >&2; fi
+    plog "=== JOB-RUN PLACEMENT node=control-plane pct=$master_pct projected=$master_proj max=$master_max peak_mi=$peak_mi decision=required-away reason=$master_rule_why" >/dev/null
+  else
+    plog "job-run: placement: the control-plane node is at ${master_pct}% of its memory (about ${master_proj}% with this Job; limit ${master_max}%): preferred rules only"
+    plog "=== JOB-RUN PLACEMENT node=control-plane pct=$master_pct projected=$master_proj max=$master_max peak_mi=$peak_mi decision=preferred" >/dev/null
+  fi
+else
+  echo "job-run: placement: the control-plane node's memory is unknown (metrics unavailable): preferred rules only" >&2
+  plog "=== JOB-RUN PLACEMENT node=control-plane pct=unknown max=$master_max peak_mi=$peak_mi decision=preferred-metrics-unavailable" >/dev/null
+fi
 
 # The credentials, into the Secret on stdin (printf is a builtin: no argument a process list would show).
 secret="job=$job"; mask=
@@ -254,7 +301,7 @@ for n in $pool_names; do
 done
 pool_refs=${pool_refs#\\n}
 [ -n "$pool_refs" ] || pool_refs='            # no --pool-env'
-sed -e "s|^ *# __POOL_ENV__.*\$|$pool_refs|" -e "s#__NAME__#$job#g" -e "s#__CHAT__#$chat#g" -e "s#__ROLE__#$role#g" -e "s#__REPO__#$repo_label#g" -e "s#__PROGRAM__#$program#g" \
+sed -e "s|^ *# __POOL_ENV__.*\$|$pool_refs|" -e "s#__MASTER_REQUIRED__#$master_rule#" -e "s#__NAME__#$job#g" -e "s#__CHAT__#$chat#g" -e "s#__ROLE__#$role#g" -e "s#__REPO__#$repo_label#g" -e "s#__PROGRAM__#$program#g" \
     -e "s#__MEMORY__#$memory#g" -e "s#__TMP_SIZE__#$tmp_size#" -e "s#__OWNER__#$host/$$/$(starttime $$)#" \
     -e "s#__DEADLINE__#$timeout#" -e "s#__IMAGE__#$image#" -e "s#__REPO_URL__#$url#" -e "s#__REF__#$ref#" -e "s#__ALSO__#$alsos#" \
     -e "s#__AGAINST__#$against#" -e "s#__KEEP__#$keep#" -e "s#__STEPS__#$steps#" -e "s#__ARTIFACTS__#$artifacts#" -e "s#__ARTMAX__#$art_max#" -e "s#__CMD__#$(printf '%s' "$cmd" | base64 -w0)#" \
@@ -269,10 +316,25 @@ uid=$(kubectl -n "$ns" get job "$job" -o jsonpath='{.metadata.uid}' 2>/dev/null 
 sjson=$(printf '%s\n' "$secret" | kubectl -n "$ns" create secret generic "$job" --from-env-file=/dev/stdin --dry-run=client -o json 2>/dev/null) ||
   die "could not build the Secret for $job (kubectl refused the credentials; the reason is not shown): no credentials were sent"
 unset secret
-printf '%s' "$sjson" | jq --arg job "$job" --arg uid "$uid" --arg chat "$chat" \
+# kubectl's own text is never shown or logged (T-611): a rejected create can echo part of what it was given. Its stderr is read here for ONE fixed
+# category, then dropped; the exit code and the category are enough to act on.
+kerr=$(printf '%s' "$sjson" | jq --arg job "$job" --arg uid "$uid" --arg chat "$chat" \
   '.metadata.labels = {"app": "claudepilot-job-run", "job-run/chat": $chat} | .metadata.ownerReferences = [{"apiVersion": "batch/v1", "kind": "Job", "name": $job, "uid": $uid}]' |
-  kubectl -n "$ns" create -f - >/dev/null 2>&1 || die "could not create the Secret for $job (the reason is not shown)"
+  kubectl -n "$ns" create -f - 2>&1 >/dev/null) && krc=0 || krc=$?
 unset sjson
+if [ "$krc" -ne 0 ]; then
+  case "$(printf '%s' "$kerr" | tr '[:upper:]' '[:lower:]')" in
+    *alreadyexists*|*'already exists'*) kcat=already-exists ;;
+    *forbidden*|*unauthorized*) kcat=not-allowed ;;
+    *'connection refused'*|*timeout*|*'no such host'*|*'unable to connect'*|*'was refused'*) kcat=cluster-unreachable ;;
+    *invalid*) kcat=invalid ;;
+    *) kcat=other ;;
+  esac
+  unset kerr
+  plog "=== JOB-RUN SECRET-FAILED rc=$krc category=$kcat" >/dev/null
+  die "could not create the Secret for $job (kubectl exit $krc, category: $kcat; the reason is not shown)"
+fi
+unset kerr
 # The chat ends: the Claude process this script runs under exits. Then the Job goes, and so does this script.
 watch=${JOB_RUN_WATCH_PID:-${CLAUDE_PID:-}}
 if [ -n "$watch" ] && [ "$watch" != none ] && kill -0 "$watch" 2>/dev/null; then
@@ -333,15 +395,28 @@ while :; do
   if [ -n "$(pod_get '.items[0].status.initContainerStatuses[0].state.running.startedAt' "$pj")" ]; then tw=$(date +%s); sleep "$poll"; continue; fi
   # Pending because no node can hold it (T-524): say so once, instead of a silent wait.
   why=$(pod_get '[.items[0].status.conditions[]? | select(.type == "PodScheduled" and .status == "False" and .reason == "Unschedulable") | .message] | first' "$pj")
-  case "$why" in
-    '') ;;
-    *'Insufficient memory'*)
+  # With the required rule on (T-611) an affinity mismatch is the master being over its line, whatever else the message adds.
+  case "${master_rule:+rule}:$why" in
+    rule:*affinity*) [ "$said" = affinity ] || { said=affinity
+        echo "job-run: $job is Pending: the control-plane node is over ${master_max}% of its memory, so this Job waits for k3s-node2 to have room ($why; waits up to ${start_wait}s)" >&2
+        plog "=== JOB-RUN PLACEMENT pending=affinity pct=$master_pct decision=waits-for-node2" >/dev/null; } ;;
+    *:'') ;;
+    *:*'Insufficient memory'*)
       [ "$said" = memory ] || { said=memory
         if [ -n "$big" ]; then hint="drop --big if the command fits in $mem_std"; else hint="it starts when a Job ends and frees memory"; fi
-        echo "job-run: $job is Pending: no node has $memory of memory free to request ($why); $hint (waits up to ${start_wait}s)" >&2; } ;;
-    *) [ "$said" = other ] || { said=other; echo "job-run: $job is Pending: $why (waits up to ${start_wait}s)" >&2; } ;;
+        echo "job-run: $job is Pending: no node has $memory of memory free to request ($why); $hint (waits up to ${start_wait}s)" >&2
+        plog "=== JOB-RUN PLACEMENT pending=memory pct=${master_pct:-unknown} decision=waits-for-memory" >/dev/null; } ;;
+    *) [ "$said" = other ] || { said=other; echo "job-run: $job is Pending: $why (waits up to ${start_wait}s)" >&2
+        plog "=== JOB-RUN PLACEMENT pending=other pct=${master_pct:-unknown} decision=waits" >/dev/null; } ;;
   esac
-  [ $(( $(date +%s) - tw )) -lt "$start_wait" ] || { echo "job-run: the Job did not start in ${start_wait}s (pod: ${ph:-none}${why:+: $why})" >&2; exit 1; }
+  if [ $(( $(date +%s) - tw )) -ge "$start_wait" ]; then
+    # C4: the decision was taken once, at create time: with the required rule on, the master may have room again by now.
+    if [ -n "$master_rule" ]; then again="; the control-plane node was over its line when this Job was placed: run it again, the master may have room now"; else again=; fi
+    echo "job-run: the Job did not start in ${start_wait}s (pod: ${ph:-none}${why:+: $why})$again" >&2
+    # QA Perf (7865): a Job that never starts has no final node line otherwise; the log must still show where the decision ended.
+    plog "=== JOB-RUN PLACEMENT node=none pct=${master_pct:-unknown} decision=$([ -n "$master_rule" ] && echo required-away || echo preferred) outcome=did-not-start waited=$(( $(date +%s) - tw ))s" >/dev/null
+    exit 1
+  fi
   sleep "$poll"
 done
 
@@ -356,7 +431,6 @@ FILTER='BEGIN { nt = split(ENVIRON["JR_MASK"], toks, "\n"); art = ENVIRON["JR_AR
   print line; print line >> lf; fflush() }
 END { print NR >> ENVIRON["JR_N"]; if (leak) print "leak" >> ENVIRON["JR_N"] }'
 filter() { JR_MASK=$mask JR_ART=$work/art.b64 JR_LOG=$log JR_N=$work/n awk "$FILTER"; }
-: > "$log"
 kubectl -n "$ns" logs -f "job/$job" 2>&1 | filter || true
 st=
 while :; do st=$(job_state); if [ -n "$st" ] || [ $(( $(date +%s) - t1 )) -ge $(( timeout + start_wait )) ]; then break; fi; sleep "$poll"; done
@@ -447,5 +521,6 @@ if [ -n "$artifacts" ] && [ -s "$work/art.b64" ]; then
 fi
 node=$(pod_get '.items[0].spec.nodeName' "$pj")
 t2=$(date +%s)
+plog "=== JOB-RUN PLACEMENT node=${node:-?} pct=${master_pct:-unknown} decision=$([ -n "$master_rule" ] && echo required-away || echo preferred) queued=$((t1 - t0))s" >/dev/null
 echo "job-run: $job rc=$rc in $((t2 - t1))s (queued $((t1 - t0))s) on ${node:-?} with $memory; log: $log"
 exit "$rc"
