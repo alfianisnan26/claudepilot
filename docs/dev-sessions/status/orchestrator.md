@@ -16,21 +16,21 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 
 ## IN FLIGHT (6 of 6, D-71)
   Lanes' ticket_comment refused on unassigned tickets (T-341, T-549, T-675): verdicts live in their replies + this file.
-- QA PERF 7e4879c7: standby -> T-697 rework. T-524 S3b 23330c28 PASS WITH GAPS 6934 (2ac43ac7 208/208; D,F,G killed ea36e239;
-  live patch NOT verified: no log line) -> next batch; S3c log line -> BE Infra after T-697.
-- QA UI 8b13bb5a: standby -> T-376 S4.
+- QA PERF 7e4879c7: blind review T-610 80a2f002 (no Job, D-75) -> then T-697 rework.
+- QA UI 8b13bb5a: blind review T-710 8107098a (no Job, D-75) -> then T-376 S4.
 - QA BE 2 42e5408f: T-610 rework 80a2f002 (m1-m5 killed 904039f5, m6 survives; 5b21f12e 1081/1084; qc-t610b PASS job 489f5796), then T-574 S3.
-  T-251: audit PASS WITH GAPS (45e984db, 8870ab0c); S2 9adfeee2 PASS (e04de7ab, A-D caught) -> batch 17.
 - IMPL lane 0d799c90 (sonnet) T-376 S4 87144867: wiring proven (3fa76653); long task 207-273ms red 1-2/4 (a435d70e) -> one try content-visibility (6952); wiring
   test + 4x CPU, long-task, DOM/heap, older-page budgets; if still red -> QA UI as is, budget question -> coordinator.
-- BE INFRA lane a7d33a84 (sonnet, sekar; 87749649 ended after T-610 rework) T-697 rework in ticket-t-697-flakes: await the scan, 30x load.
-- BACKEND lane 216dbe18 (sonnet, regitha) T-574 S3 on ticket/T-574-s3: cross-lead NOT_FOUND test, size trim, bound 1.5k.
+- BE INFRA lane a7d33a84 (sonnet, sekar; 87749649 ended after T-610 rework) T-697 rework (await scan, 30x load) -> T-524 S3c -> T-731.
+- BACKEND lane 216dbe18 (sonnet, regitha) T-574 S3 (cross-lead NOT_FOUND test, size trim, bound 1.5k) -> T-723.
 - HELD: T-426 S1e 2174eee1 QA PASS 6169 -> merge on the T-401 ack (4941). T-578 51f6c153 review CHANGES 6168 -> owner decision.
   T-631 review CHANGES 5850: absolute-path entry (a) for the coordinator; F1 on job-run.sh -> T-635 (high).
 - 16:12 OWNER PRIORITY (coordinator, T-426 5538): T-401 then T-426 FIRST. T-401 gate GREEN gate-54ba328-6502; ff only on the person's ack.
 
 ## DECISIONS (binding)
-- 06:50 T-251 S2: an exhausted source with a running turn is steered once and moves at the boundary (FR10a, PRD default); QA asks
+- 07:45 D-75 (coordinator): one Job per commit (checks chained), never the same command twice on a commit, QA reads the builder's log;
+  the LEAD RUNS NO JOBS (quick-check and gate go to a lane); idle QA gets no-Job work (reviews, browser). T-731 -> BE Infra after T-697.
+- 06:50 T-251 S2 exhausted source with a running turn is steered once and moves at the boundary (FR10a, PRD default); QA asks
   whether the owner wants a move mid-turn: product choice, not a defect; changing it means FR10a + t255 together.
 - 03:55 Lead false claim corrected: T-524 6775 said job 4d5cb657 proved the S3 patch; its log shows the rule at creation. 6788; incident T-721.
 - 23:55 T-524 S3 (6489): Jobs off k3s-master over the T-611 line; re-measure after merge. 22:59 T-574 out of batch 8 (6396).
