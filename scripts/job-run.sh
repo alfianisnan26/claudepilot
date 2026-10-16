@@ -472,7 +472,9 @@ if [ -z "$master_known" ]; then
 elif [ "$was_rule" != "$master_rule" ]; then
   aff=${master_aff:-null}
   if kubectl -n "$ns" patch job "$job" --type merge -p '{"spec":{"template":{"spec":{"affinity":{"nodeAffinity":{"requiredDuringSchedulingIgnoredDuringExecution":'"$aff"'}}}}}}' >/dev/null 2>&1; then
-    echo "job-run: placement changed while queued: ${place_msg:-$place_say}" >&2
+    # T-524 S3c: one line, only after the patch was accepted, that says which way the rule went (the log of a live run shows it was applied).
+    if [ -n "$master_rule_why" ]; then rule_way=added; else rule_way=dropped; fi
+    echo "job-run: placement changed while queued: the rule away from the control-plane node was $rule_way: ${place_msg:-$place_say}" >&2
     plog "$place_log at=release changed-from=$([ -n "$was_why" ] && echo required-away || echo preferred)" >/dev/null
   elif [ -n "$master_rule_why" ]; then
     plog "=== JOB-RUN PLACEMENT node=control-plane at=release outcome=patch-failed" >/dev/null
