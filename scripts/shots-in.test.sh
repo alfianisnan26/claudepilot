@@ -14,7 +14,8 @@ ok() { echo "ok   $1"; }
 bad() { echo "FAIL $1"; fails=$((fails + 1)); }
 mkdir -p "$src" "$root" "$outside"
 
-png() { printf '\211PNG\r\n\032\n%s' "${2:-body}" > "$src/$1"; }                       # a file with the PNG magic bytes
+HDR='\211PNG\r\n\032\n\000\000\000\rIHDR'                                                 # the signature and the IHDR chunk header
+png() { printf "$HDR%s" "${2:-body}" > "$src/$1"; }                                    # a file that passes: signature, IHDR, a body
 reset() { rm -rf "$wt"; mkdir -p "$wt"; echo "gitdir: x" > "$wt/.git"; }              # a clean worktree
 run() { SHOTS_TEST_MODE=1 bash "$script" --src "$src" --root "$root" "$@"; }
 # expect <name> <exit code> <fragment of stderr or ""> <args...>
@@ -116,7 +117,64 @@ reset; mkdir -p "$wt/docs/screenshots"; png ok.png; printf 'old' > "$wt/docs/scr
 expect "an existing regular file is refused without --force" 2 "exists" "$wt" ok.png
 [ "$(cat "$wt/docs/screenshots/ok.png")" = old ] && ok "the existing file is untouched" || bad "the existing file is untouched"
 
+# --- the PNG check: all 8 signature bytes, then the IHDR chunk name at bytes 12-15 (T-868 S2, finding 2)
+printf '\211PNG' > "$src/four.png"; printf 'xxxx\000\000\000\rIHDR' >> "$src/four.png"
+refused "only the first 4 signature bytes right is refused" "PNG magic" "$wt" four.png
+printf '\211PNG\r\n\032\nxxxxxxxx' > "$src/noihdr.png"
+refused "a signature with no IHDR chunk is refused" "IHDR" "$wt" noihdr.png
+printf '\211PNG\r\n\032\nIHDR\000\000\000\r' > "$src/shift.png"
+refused "IHDR at bytes 8-11 instead of 12-15 is refused" "IHDR" "$wt" shift.png
+printf '\211PNG\r\n\032\n\000\000\000\rIHDX' > "$src/ihdx.png"
+refused "a chunk name that is not IHDR is refused" "IHDR" "$wt" ihdx.png
+printf '\211PNG\r\n\032\n\000\000' > "$src/short.png"
+refused "a file shorter than 16 bytes is refused" "shorter than" "$wt" short.png
+reset; printf "$HDR" > "$src/exact.png"
+expect "exactly the 16 header bytes is accepted" 0 "" "$wt" exact.png
+
+# --- the copy is staged and verified (T-868 S2, finding 1): a hook swaps a file AFTER the checks, as a racing process would
+real_png=$outside/real.png; printf "${HDR}real" > "$real_png"
+mkhook() { printf '#!/usr/bin/env bash\n%s\nexit 0\n' "$1" > "$base/hook.sh"; chmod +x "$base/hook.sh"; }
+# refused_hook <name> <fragment> <hook body> <args...>: the hook runs at before-copy ($1) or before-move; nothing may be left behind
+refused_hook() {
+  local name=$1 frag=$2 body=$3; shift 3
+  reset; rm -rf "$src/ok.png"; png ok.png; mkhook "$body"
+  local rc=0 err
+  err=$(SHOTS_TEST_MODE=1 bash "$script" --src "$src" --root "$root" --hook "$base/hook.sh" "$@" 2>&1 >/dev/null) || rc=$?
+  if [ "$rc" = 2 ] && [[ $err == *"$frag"* ]]; then ok "$name"; else bad "$name (exit $rc: $err)"; fi
+}
+nothing_left() { if [ -z "$(ls -A "$wt/docs/screenshots" 2>/dev/null)" ]; then ok "$1: nothing left, staging removed"; else bad "$1: left behind: $(ls -A "$wt/docs/screenshots")"; fi; }
+refused_hook "a source swapped for a link to a PNG is refused" "not a regular file" "[ \"\$1\" = before-copy ] && rm -f '$src/ok.png' && ln -s '$real_png' '$src/ok.png'" "$wt" ok.png
+nothing_left "link swap"
+refused_hook "a source swapped for other bytes is refused" "PNG magic" "[ \"\$1\" = before-copy ] && printf 'swapped for text, not a png' > '$src/ok.png'" "$wt" ok.png
+nothing_left "bytes swap"
+refused_hook "a source swapped for a PNG without IHDR is refused" "IHDR" "[ \"\$1\" = before-copy ] && printf '\\211PNG\\r\\n\\032\\nxxxxxxxxxxxx' > '$src/ok.png'" "$wt" ok.png
+nothing_left "IHDR swap"
+refused_hook "a source grown over 5 MB after the check is refused" "over" "[ \"\$1\" = before-copy ] && truncate -s 5242881 '$src/ok.png'" "$wt" ok.png
+nothing_left "size swap"
+refused_hook "a source swapped for a folder is refused" "failed" "[ \"\$1\" = before-copy ] && rm -f '$src/ok.png' && mkdir '$src/ok.png'" "$wt" ok.png
+nothing_left "folder swap"
+reset; rm -rf "$src/ok.png"; png ok.png; rm -f "$base/hook-ran"; mkhook "touch '$base/hook-ran'"
+rc=0; SHOTS_TEST_MODE=1 bash "$script" --src "$src" --root "$root" --hook "$base/hook.sh" "$wt" text.png >/dev/null 2>&1 || rc=$?
+{ [ "$rc" = 2 ] && [ ! -e "$base/hook-ran" ] && [ ! -e "$wt/docs/screenshots" ]; } && ok "a bad source is refused before anything is staged" || bad "a bad source is refused before anything is staged (exit $rc)"
+rc=0; SHOTS_TEST_MODE=1 bash "$script" --src "$src" --root "$root" --hook "$base/hook.sh" "$wt" ok.png >/dev/null 2>&1 || rc=$?
+{ [ "$rc" = 0 ] && [ -e "$base/hook-ran" ]; } && ok "the hook runs for a good copy (the swap tests rely on it)" || bad "the hook runs for a good copy (exit $rc)"
+printf 'old' > "$base/old.txt"
+refused_hook "a file that appears at the destination before the move is kept" "exists" "[ \"\$1\" = before-move ] && cp '$base/old.txt' \"\$2/../ok.png\"" "$wt" ok.png
+[ "$(cat "$wt/docs/screenshots/ok.png")" = old ] && ok "the late file is untouched" || bad "the late file is untouched"
+[ -z "$(ls -A "$wt/docs/screenshots" | grep -v '^ok.png$' || true)" ] && ok "late file: staging removed" || bad "late file: staging left behind"
+printf 'secret' > "$outside/victim"
+refused_hook "a link that appears at the destination before the move is refused" "exists" "[ \"\$1\" = before-move ] && ln -s '$outside/victim' \"\$2/../ok.png\"" "$wt" ok.png
+[ "$(cat "$outside/victim")" = secret ] && ok "nothing written through the late link" || bad "nothing written through the late link"
+reset; rm -rf "$src/ok.png"; png ok.png; mkhook "[ \"\$1\" = before-move ] && ln -s '$outside/victim' \"\$2/../ok.png\""
+rc=0; SHOTS_TEST_MODE=1 bash "$script" --src "$src" --root "$root" --hook "$base/hook.sh" --force "$wt" ok.png >/dev/null 2>&1 || rc=$?
+{ [ "$rc" = 0 ] && [ ! -L "$wt/docs/screenshots/ok.png" ] && [ -f "$wt/docs/screenshots/ok.png" ] && [ "$(cat "$outside/victim")" = secret ]; } && ok "--force replaces a late link itself, never writing through it" || bad "--force and a late link (exit $rc, victim: $(cat "$outside/victim"))"
+reset; rm -rf "$src/ok.png"; png ok.png
+expect "a clean copy through the staging folder still works" 0 "" "$wt" ok.png
+cmp -s "$src/ok.png" "$wt/docs/screenshots/ok.png" && [ -z "$(ls -A "$wt/docs/screenshots" | grep -v '^ok.png$' || true)" ] && ok "clean copy: bytes equal, no staging left" || bad "clean copy: bytes or leftovers"
+
 # --- the flags
+rc=0; err=$(env -u SHOTS_TEST_MODE bash "$script" --hook "$base/hook.sh" "$wt" ok.png 2>&1 >/dev/null) || rc=$?
+if [ "$rc" = 2 ] && [[ $err == *"--hook is for tests only"* ]]; then ok "--hook refused without SHOTS_TEST_MODE"; else bad "--hook refused without SHOTS_TEST_MODE (exit $rc: $err)"; fi
 for flag in --src --root; do
   rc=0; err=$(env -u SHOTS_TEST_MODE bash "$script" "$flag" "$base" "$wt" ok.png 2>&1 >/dev/null) || rc=$?
   if [ "$rc" = 2 ] && [[ $err == *"$flag is for tests only"* ]]; then ok "$flag refused without SHOTS_TEST_MODE"; else bad "$flag refused without SHOTS_TEST_MODE (exit $rc: $err)"; fi

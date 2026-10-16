@@ -4,24 +4,31 @@
 # Why a script and not a `cp` allow line: a `*` in an allow line spans spaces, so `cp <png> <worktree>/docs/screenshots/*` would also let
 # `cp <png> ~/.ssh/<key> <worktree>/...` copy a secret into a commit. This door does one job and refuses everything else.
 # SOURCES: only a plain file named <name> directly in /home/node/Downloads/.playwright, ending in .png, starting with the PNG
-#   magic bytes, at most 5 MB, not a symlink (nor any path part of it).
+#   signature (all 8 bytes) and an IHDR chunk name at bytes 12-15, at most 5 MB, not a symlink (nor any path part of it).
 # DESTINATION: <root>/<worktree>/docs/screenshots/ where <root> is one of the worktree roots below and <worktree> is a git worktree
 #   directly in it; no symlink anywhere on the path; made if missing. A file already there is kept unless --force.
 # NAMES: [A-Za-z0-9._-] only, no leading dot, no `..`. Paths: no quote, backslash, space, glob or `..`.
 # Every source and the destination are checked BEFORE anything is copied: one refusal copies nothing (exit 2, with the reason on stderr).
-# Never deletes anything (the source stays). --src and --root are for the tests only: refused unless SHOTS_TEST_MODE=1.
+# The copy is staged in a private folder inside the target and verified there (no check-then-copy race), then renamed with `mv -n`.
+# Deletes only that staging folder (the source stays). --src, --root and --hook are for the tests only: refused unless
+# SHOTS_TEST_MODE=1; --hook <program> runs before the copy and before the move, to swap files in a test.
 set -eu
 set -o pipefail
 refuse() { echo "refused: $*" >&2; exit 2; }
 src=/home/node/Downloads/.playwright
 roots=(/home/node/work/claudepilot.worktrees /home/node/work/tradingbot.worktrees /home/node/work/agentic-worktrees /home/node/work/konfersi.worktrees)
-max=5242880; magic=89504e470d0a1a0a; force=0; test_roots=()
+max=5242880; magic=89504e470d0a1a0a; force=0; test_roots=(); stage=""; hookprog=""
+trap 'if [ -n "$stage" ]; then rm -rf -- "$stage"; fi' EXIT
 while [ $# -gt 0 ]; do
   case $1 in
     --force) force=1; shift ;;
-    --src|--root)
+    --src|--root|--hook)
       [ "${SHOTS_TEST_MODE:-}" = 1 ] || refuse "$1 is for tests only (set SHOTS_TEST_MODE=1); the defaults are the only reach" # G:testmode
-      if [ "$1" = --src ]; then src=${2:?--src <dir>}; else test_roots+=("${2:?--root <dir>}"); fi
+      case $1 in
+        --src) src=${2:?--src <dir>} ;;
+        --root) test_roots+=("${2:?--root <dir>}") ;;
+        *) hookprog=${2:?--hook <program>} ;;
+      esac
       shift 2 ;;
     --) shift; break ;;
     -*) refuse "unknown flag $1" ;;
@@ -31,6 +38,15 @@ done
 [ ${#test_roots[@]} -eq 0 ] || roots=("${test_roots[@]}")
 dest=${1:?usage: scripts/shots-in.sh [--force] <worktree> <name.png>...}; shift
 [ $# -gt 0 ] || refuse "no file names given"
+
+# A PNG starts with its 8 signature bytes, then the first chunk: 4 bytes of length and the name IHDR (bytes 12-15).
+check_png() {
+  local h
+  h=$(head -c 16 -- "$1" | od -An -tx1 | tr -d ' \n')
+  [ "${#h}" = 32 ] || refuse "$2 is shorter than a PNG signature and its IHDR chunk header"
+  [ "${h:0:16}" = "$magic" ] || refuse "$2 does not start with the PNG magic bytes (all 8)" # G:magic
+  [ "${h:24:8}" = 49484452 ] || refuse "$2 has no IHDR chunk at bytes 12-15" # G:ihdr
+}
 
 # --- the destination
 [[ $dest =~ ^/[A-Za-z0-9._/-]+$ ]] || refuse "worktree path has a character outside A-Za-z0-9._/- (quote, backslash, space, glob) or is not absolute" # G:destchars
@@ -63,15 +79,34 @@ for n in "$@"; do
   [ -f "$f" ] || refuse "$n is not a regular file in $src" # G:srcfile
   size=$(stat -c %s -- "$f")
   [ "$size" -le "$max" ] || refuse "$n is $size bytes (over $max)" # G:size
-  [ "$(head -c 8 -- "$f" | od -An -tx1 | tr -d ' \n')" = "$magic" ] || refuse "$n does not start with the PNG magic bytes" # G:magic
+  check_png "$f" "$n" # G:srcpng
   [ ! -L "$out/$n" ] || refuse "$out/$n is a symlink" # G:tolink
   if [ -e "$out/$n" ] && [ "$force" != 1 ]; then refuse "$out/$n exists (use --force to replace it)"; fi # G:exists
   files+=("$n")
 done
 
-# --- the copy
+# --- the copy (T-868 S2): a check and a copy are two steps, so a same-user process could swap a source for a link between them. The
+# copy therefore goes to a fresh private folder INSIDE the target folder, without following a link (--no-dereference: a swapped-in
+# link is copied as a link), the COPY is what gets verified, and only a verified regular file is renamed to its final name (`mv -n`:
+# it never overwrites, and it never follows a link at the destination). Any refusal removes the staging folder (the trap).
 mkdir -p -- "$out"
+stage=$(mktemp -d -- "$out/.shots-in.XXXXXX") || refuse "cannot make a staging folder in $out"
+hook() { if [ -n "$hookprog" ]; then "$hookprog" "$1" "$stage"; fi; }
+hook before-copy
 for n in "${files[@]}"; do
-  cp -T -- "$srcreal/$n" "$out/$n"
+  cp --no-dereference -T -- "$srcreal/$n" "$stage/$n" || refuse "copying $n failed" # G:cpfail
+  [ -f "$stage/$n" ] && [ ! -L "$stage/$n" ] || refuse "the copy of $n is not a regular file (the source was swapped for a link?)" # G:copylink
+  size=$(stat -c %s -- "$stage/$n")
+  [ "$size" -le "$max" ] || refuse "the copy of $n is $size bytes (over $max)" # G:copysize
+  check_png "$stage/$n" "$n" # G:copypng
+done
+hook before-move
+for n in "${files[@]}"; do
+  if [ "$force" = 1 ]; then
+    mv -f -T -- "$stage/$n" "$out/$n" || refuse "could not move $n into $out"
+  else
+    mv -n -T -- "$stage/$n" "$out/$n" || refuse "could not move $n into $out" # G:mvn
+    [ ! -e "$stage/$n" ] || refuse "$out/$n exists (use --force to replace it)" # G:mvexists
+  fi
   echo "shots-in: $srcreal/$n -> $out/$n"
 done
