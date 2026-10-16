@@ -21,7 +21,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   54784775; mutants D,F killed f69b2de3). Live re-read patch NOT verified. 6775 was WRONG (rule set at creation, 78%): 6788.
 - QA UI 8b13bb5a: standby -> T-376 S4.
 - QA BE 2 42e5408f: T-610 26f8ba37 (cause: #recordTurn booked whole total on any drop; usageDelta.ts + suspect rows skipped;
-  job 346cdb40 1076/1079; old-code mutants asked; lead read SQL ok 6871; qc-t610 running), then T-574 S3.
+  job 346cdb40 1076/1079; old-code mutants asked; lead read SQL ok 6871; quick-check PASS bb6c7769), then T-574 S3.
   T-251 (no code) PASS WITH GAPS (45e984db 255/255; M1-M6 killed 8870ab0c) -> S2 below.
 - IMPL lane 0d799c90 (sonnet, rossi; bccb756f ended after T-710) T-376 S4 on ticket/T-376-s4 from be431d6a: createApp wiring
   test + 4x CPU, long tasks, DOM/heap, older-page render budgets.
