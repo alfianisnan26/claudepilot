@@ -1290,6 +1290,12 @@ test('T-611 C1: a reading or a setting with a leading zero is a decimal number (
   kept(placed(topLine('9000Mi', '50%'), [], { JOB_RUN_EXPECTED_PEAK_MI: '08' }), 'peak 08');
   kept(placed(topLine('9000Mi', '50%'), [], { JOB_RUN_MASTER_MAX_PCT: '080' }), 'max 080');
   away(placed(topLine('9000Mi', '50%'), [], { JOB_RUN_MASTER_MAX_PCT: '09' }), 'max 09 is 9');
+  // An arithmetic error on 08 does not abort bash: it only skips the headroom test, so "kept" answers above pass by accident. These need the
+  // right answer to be "away" (or an octal-valid number whose octal value flips it), so a missing 10# turns them red.
+  away(placed(topLine('9000Mi', '08%'), [], { JOB_RUN_EXPECTED_PEAK_MI: '99999' }), 'pct 08 with a big peak: headroom is still tested');
+  away(placed(topLine('9000Mi', '50%'), [], { JOB_RUN_EXPECTED_PEAK_MI: '099999' }), 'peak 099999 is 99999');
+  away(placed(topLine('09Gi', '70%'), []), 'bytes 09Gi at 70% is 9216 Mi: headroom over the line');
+  kept(placed(topLine('9000Mi', '05%'), [], { JOB_RUN_EXPECTED_PEAK_MI: '9000', JOB_RUN_MASTER_MAX_PCT: '011' }), 'max 011 is 11, not octal 9 (proj 10%)');
 });
 
 test('T-611 C2: a number that could wrap in the arithmetic is refused (rc 2), never read as a negative that lets the Job on the master', () => {
