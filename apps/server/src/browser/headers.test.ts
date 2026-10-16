@@ -373,6 +373,28 @@ test('T-623 envFileValue: KEY=VALUE lines, export, quotes stripped, comments and
   assert.equal(envFileValue(`XCF_ID=${a}`, 'CF_ID'), null, 'a longer name is not the key');
 });
 
+test('T-623 S2c envFileValue: a key that is a prefix of another variable matches only its own line, in either order', () => {
+  const a = fresh(), b = fresh();
+  for (const text of [`CF_ID_2=${b}\nCF_ID=${a}\nCF_ID_2=${b}`, `CF_ID=${a}\nCF_ID_2=${b}`, `CF_ID_2=${b}\nCF_ID=${a}`]) {
+    assert.equal(envFileValue(text, 'CF_ID'), a);
+    assert.equal(envFileValue(text, 'CF_ID_2'), b);
+  }
+  assert.equal(envFileValue(`CF_ID_2=${b}`, 'CF_ID'), null, 'a key that only prefixes another variable is absent');
+});
+
+test('T-623 S2c envFileValue: an inline “# note” is dropped, a # without a space before it stays, a quoted value keeps its #, a BOM does not hide the first key', () => {
+  const a = fresh(), b = fresh();
+  assert.equal(envFileValue(`K=${a} # note`, 'K'), a);
+  assert.equal(envFileValue(`K=${a}\t#note`, 'K'), a);
+  assert.equal(envFileValue(`K="${a}" # note`, 'K'), a);
+  assert.equal(envFileValue(`K='${a}'  # it's "x"`, 'K'), a);
+  assert.equal(envFileValue(`K="${a} # kept"`, 'K'), `${a} # kept`);
+  assert.equal(envFileValue(`K=${a}#${b}`, 'K'), `${a}#${b}`, 'a # inside a value is part of it');
+  assert.equal(envFileValue('K= # only a note', 'K'), null);
+  assert.equal(envFileValue(`﻿FIRST=${a}\nSECOND=${b}`, 'FIRST'), a, 'a BOM does not hide the first key');
+  assert.equal(envFileValue(`﻿FIRST=${a}\nSECOND=${b}`, 'SECOND'), b);
+});
+
 test('T-623 resolveHeaders: a key from an env entry reaches headers.json; a missing key is left out with a reason that holds no value', () => {
   const id = fresh(), secret = fresh(), other = fresh();
   const entry = `CF_ID=${id}\nCF_SECRET="${secret}"\nUNRELATED=${other}\n`;
@@ -411,8 +433,13 @@ test('T-623: the key’s value never lands in argv, the pool, the view, the audi
       assert.throws(() => h.kind.parse({ allowedSites: ['app.example.com'], headers: [{ hosts: ['app.example.com'], name: 'X-A', secret: 'S', key }] }, null), (e) => isAppError(e) && e.code === 'VALIDATION_FAILED' && !String((e as Error).message).includes(id));
     }
     assert.throws(() => h.kind.parse({ allowedSites: ['app.example.com'], headers: [{ hosts: ['app.example.com'], name: 'X-A', secret: 'S', key: 7 }] }, null), (e) => isAppError(e));
-    const ok = h.kind.parse({ allowedSites: ['app.example.com'], headers: [{ hosts: ['app.example.com'], name: 'X-A', secret: 'S', key: ' CF_ID ' }, { hosts: ['app.example.com'], name: 'X-B', secret: 'S', key: '' }] }, null);
-    assert.deepEqual(ok.headers, [{ hosts: ['app.example.com'], name: 'X-A', secret: 'S', key: 'CF_ID' }, { hosts: ['app.example.com'], name: 'X-B', secret: 'S' }]);
+    const ok = h.kind.parse({ allowedSites: ['app.example.com'], headers: [{ hosts: ['app.example.com'], name: 'X-A', secret: 'S', key: ' CF_ID ' }, { hosts: ['app.example.com'], name: 'X-B', secret: 'S' }, { hosts: ['app.example.com'], name: 'X-C', secret: 'S', key: null }] }, null);
+    assert.deepEqual(ok.headers, [{ hosts: ['app.example.com'], name: 'X-A', secret: 'S', key: 'CF_ID' }, { hosts: ['app.example.com'], name: 'X-B', secret: 'S' }, { hosts: ['app.example.com'], name: 'X-C', secret: 'S' }]);
+    // T-623 S2c: a blank or whitespace key is refused with its reason (a 400), never saved as a rule that delivers the whole entry.
+    for (const key of ['', '   ', '\t', '\n ']) {
+      assert.throws(() => h.kind.parse({ allowedSites: ['app.example.com'], headers: [{ hosts: ['app.example.com'], name: 'X-A', secret: 'S', key }] }, null),
+        (e) => isAppError(e) && e.code === 'VALIDATION_FAILED' && /key can’t be blank/.test((e as Error).message));
+    }
   } finally {
     h.done();
   }

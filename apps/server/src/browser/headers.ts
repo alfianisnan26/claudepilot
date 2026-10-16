@@ -96,18 +96,20 @@ export interface HeaderSkip {
 
 /**
  * The value of `key` in an env-file entry (`KEY=VALUE` lines; `export ` allowed; blank lines and `#` comments skipped; one pair of matching
- * quotes stripped; the last line for a key wins), or null when the key is absent or empty. In memory only: nothing here stores or logs.
+ * quotes stripped; a ` # note` after the value dropped; a leading BOM ignored; the last line for a key wins), or null when the key is absent or empty. In memory only: nothing here stores or logs.
  */
 export function envFileValue(text: string, key: string): string | null {
   let found: string | null = null;
-  for (const raw of text.split(/\r?\n/)) {
+  // A leading byte-order mark (an editor's save) must not hide the first key.
+  for (const raw of text.replace(/^﻿/, '').split(/\r?\n/)) {
     const line = raw.trim();
     if (!line || line.startsWith('#')) continue;
     const m = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$/.exec(line);
     if (!m || m[1] !== key) continue;
-    let v = (m[2] ?? '').trim();
-    if (v.length >= 2 && (v[0] === '"' || v[0] === "'") && v.endsWith(v[0] as string)) v = v.slice(1, -1);
-    found = v;
+    const rest = (m[2] ?? '').trim();
+    // A quoted value ends at its closing quote (a `# note` after it is dropped); an unquoted one ends at whitespace followed by `#`.
+    const q = /^(["'])(.*?)\1(?:\s+#.*)?$/.exec(rest);
+    found = q ? (q[2] ?? '') : rest.replace(/\s+#.*$/, '');
   }
   return found ? found : null;
 }

@@ -60,7 +60,9 @@ function headerRules(v: unknown, allowedSites: string[], fallback: BrowserHeader
     if (typeof raw.name !== 'string' || typeof raw.secret !== 'string' || !Array.isArray(raw.hosts) || raw.hosts.some((h) => typeof h !== 'string'))
       throw invalid('headers', 'Each header needs hosts, a name and the name of a secret.');
     if (raw.key !== undefined && raw.key !== null && typeof raw.key !== 'string') throw invalid('headers', 'A key is the name of a variable in an env-file entry.');
-    const key = typeof raw.key === 'string' ? raw.key.trim() : '';
+    const key = typeof raw.key === 'string' ? raw.key.trim() : undefined;
+    // A blank key is refused, never dropped: dropping it would deliver the whole env-file entry (every variable in it) to the header's host.
+    if (key === '') throw invalid('headers', 'A key can’t be blank: name the variable in the entry, or leave key out.');
     const rule: BrowserHeaderRule = { hosts: [...new Set((raw.hosts as string[]).map((h) => h.trim().toLowerCase()).filter(Boolean))], name: raw.name.trim(), secret: raw.secret.trim(), ...(key ? { key } : {}) };
     const problem = headerProblem(rule, allowedSites);
     if (problem) throw invalid('headers', problem);
