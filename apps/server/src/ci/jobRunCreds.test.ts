@@ -98,6 +98,10 @@ mkdir -p node_modules
   const realGrep = spawnSync('sh', ['-c', 'command -v grep'], { encoding: 'utf8' }).stdout.trim();
   writeFileSync(join(bin, 'grep'), `#!/bin/bash\nif [ -n "\${STUB_GREP:-}" ] && [ "$1" = -rlF ]; then echo "grep: scan stub failed" >&2; exit 2; fi\nexec ${realGrep} "$@"\n`);
   chmodSync(join(bin, 'grep'), 0o755);
+  // A find that fails (exit 1, a message, nothing listed) for the scan's gz listing (-print0) and is the real find otherwise: STUB_FIND=1.
+  const realFind = spawnSync('sh', ['-c', 'command -v find'], { encoding: 'utf8' }).stdout.trim();
+  writeFileSync(join(bin, 'find'), `#!/bin/bash\nif [ -n "\${STUB_FIND:-}" ]; then for a in "$@"; do [ "$a" = -print0 ] && { echo "find: scan stub failed" >&2; exit 1; }; done; fi\nexec ${realFind} "$@"\n`);
+  chmodSync(join(bin, 'find'), 0o755);
   // Event's URL (the npmrc and the scoped helper are written for it alone, T-491), served from the local repository.
   const url = 'https://github.com/isnanme/event.git';
   const pod = (over: Record<string, string> = {}, c: Record<string, string> = creds) => {
@@ -208,6 +212,31 @@ test('T-401 the scan fails closed: a grep that fails (exit 2) is red, code 3, an
   assert.ok(!existsSync(join(jr, 'w')) && !lines.some((l) => l.startsWith('cmd ')), 'nothing was left or ran');
 });
 
+test('T-401 the scan fails closed on find: a find that fails (exit 1) while a gzipped copy of a credential is in the tree is red, code 3, never clean', () => {
+  const w = world();
+  writeFileSync(join(w.src, 'leak.txt.gz'), gzipSync(`token ${w.creds.GIT_TOKEN}\n`));
+  w.git(['add', '.'], w.src); w.git(['commit', '-qm', 'gz leak'], w.src); w.publish();
+  const { r, jr, lines } = w.pod({ STUB_FIND: '1' });
+  assert.equal(r.status, 3, r.stdout + r.stderr);
+  noValue(r.stdout + r.stderr, w.creds);
+  assert.match(r.stdout, /scan messages:\nfind: scan stub failed\n[\s\S]*the credential scan failed, so the files above could not be checked \(they are deleted\): stopping\n=== JOB-RUN EXIT 3\n$/);
+  assert.ok(!/credentials: used for the fetch only/.test(r.stdout), 'never reported clean');
+  assert.ok(!existsSync(join(jr, 'w')) && !lines.some((l) => l.startsWith('cmd ')), 'nothing was left or ran');
+});
+
+test('T-401 the run and gate containers export NODE_AUTH_TOKEN defined and empty (the repository\'s .npmrc auth line needs it defined)', () => {
+  for (const [file, main] of [[JOB_RUN, 'run'], [GATE, 'gate']] as const) {
+    const c = podOf(file).containers.find((x) => x.name === main) as C;
+    assert.match((c.args ?? []).join('\n'), /^\s*export NODE_AUTH_TOKEN=\s*$/m, `${file}: ${main} exports NODE_AUTH_TOKEN empty`);
+  }
+  // The run container's command sees it defined and empty, whichever way the fetch container ended.
+  const w = world();
+  const out = join(w.root, 'def');
+  const { r } = w.pod({ JR_CMD: Buffer.from(`echo "def=\${NODE_AUTH_TOKEN+yes} len=\${#NODE_AUTH_TOKEN}" > "${out}"`).toString('base64') });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.equal(readFileSync(out, 'utf8').trim(), 'def=yes len=0');
+});
+
 test('T-401 a gzipped copy of a credential is deleted and the Job is red; a gzip without one is left alone', () => {
   const w = world();
   writeFileSync(join(w.src, 'fine.txt.gz'), gzipSync('nothing here\n'));
@@ -270,6 +299,12 @@ test('T-401 gate: the fetch container clones and fills npm\'s cache without scri
   assert.equal(broken.rc, '3');
   assert.match(broken.log, /scan messages:\ngrep: scan stub failed\nGATE-VERDICT: red: the credential scan failed, so the files above could not be checked \(they are deleted\); nothing ran\n$/);
   assert.ok(!/credentials: used for npm/.test(broken.log) && !existsSync(join(root, 'src')));
+
+  // A find that fails is red too (a gzipped copy it did not list could hold the token).
+  const nofind = run(w.one, { STUB_FIND: '1' });
+  assert.equal(nofind.rc, '3');
+  assert.match(nofind.log, /scan messages:\nfind: scan stub failed\nGATE-VERDICT: red: the credential scan failed/);
+  assert.ok(!existsSync(join(root, 'src')));
 
   // A commit's own .npmrc (another registry, the variable in an auth line) never sees the token: it is left out of the copy npm ci runs in.
   writeFileSync(join(w.src, '.npmrc'), ['registry=https://evil.invalid/', '//evil.invalid/:_authToken=${NODE_AUTH_TOKEN}', ''].join('\n'));

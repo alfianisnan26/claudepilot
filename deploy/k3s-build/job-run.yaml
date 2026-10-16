@@ -93,14 +93,16 @@ spec:
                 for v in "$@"; do
                   val=${!v:-}; [ "${#val}" -ge 8 ] || continue
                   (umask 077; printf '%s\n' "$val" > "$HOME/scan.pat")
+                  # The gz and tgz list goes to a file first and find's status is checked: a find that fails (it may have skipped a file) is red.
+                  find "$croot" -type f \( -name '*.gz' -o -name '*.tgz' \) -print0 > "$HOME/scan.list" 2>> "$HOME/scan.err" || scan_bad=1
                   g=0; grep -rlF -f "$HOME/scan.pat" "$croot" >> "$HOME/scan.names" 2>> "$HOME/scan.err" || g=$?
                   case $g in 0) scan_hits="$scan_hits $v" ;; 1) ;; *) scan_bad=1 ;; esac
                   while IFS= read -r -d '' f; do
                     gzip -dc -- "$f" 2>> "$HOME/scan.err" | grep -qF -f "$HOME/scan.pat" 2>> "$HOME/scan.err"; st=("${PIPESTATUS[@]}")
                     if [ "${st[1]}" = 0 ]; then scan_hits="$scan_hits $v"; printf '%s\n' "$f" >> "$HOME/scan.names"; rm -f -- "$f"
                     elif [ "${st[0]}" != 0 ] || [ "${st[1]}" != 1 ]; then scan_bad=1; printf '%s\n' "$f" >> "$HOME/scan.names"; rm -f -- "$f"; fi
-                  done < <(find "$croot" -type f \( -name '*.gz' -o -name '*.tgz' \) -print0 2>> "$HOME/scan.err")
-                  rm -f "$HOME/scan.pat"
+                  done < "$HOME/scan.list"
+                  rm -f "$HOME/scan.pat" "$HOME/scan.list"
                 done
                 [ -z "$scan_hits" ] && [ -z "$scan_bad" ]
               }
