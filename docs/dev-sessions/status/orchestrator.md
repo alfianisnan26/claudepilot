@@ -22,15 +22,14 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 ## IN FLIGHT (6 of 6, D-71)
 - QA PERF 8e8912fc (perf-tester/sonnet, respawned for Write; 8148): cherry-pick denied, stopped (correct). Lead built QA base
   wip/qa-t426-364c7ca 364c7ca4 (18a3dbb1 + -x db6b952a 155e334b). Now its one S1h probe Job.
-- QA UI 8b13bb5a (no Write): T-611 merge risks 10 (8207). Now T-591 cause read (no Job) -> QA T-675 R2c f7b4e34a.
-- QA BE 2 42e5408f (no Write): T-611 S2 PWG 8186, T-736 S3e PWG 8198. Now QA T-781 S8 543240b8.
-- IMPL 46632d91 (sonnet): T-772 S2 DONE 188cd077 (8287; Job c3d11356 5/5, mutants 95509db6 50901cf1) -> QA UI queue.
-  Now T-591 S3 lastReleased fix on ticket/T-591-s3 from b2932d0e -> then T-525 proposal draft.
-- BE INFRA 16c2494f (sonnet): T-401 S2c DONE c0c0ce7d; T-611 S2b DONE 96d7c148 (Job c2e54e28 71/71, mutant 5662dc0a 4 red;
-  8234) -> QA. Now T-736 S3f (8200) -> T-611 integration merge after b24b lands (8207) -> T-610 mark 2 rows (append-only
-  migration + test, 8267) -> T-524 S3c + T-733 S5 -> T-612 S1.
-- BACKEND 3484bd4d: built T-416 S2b f5b96b25, T-675 R2c f7b4e34a, T-781 S8b 0ed23dca; 3 Jobs at once (told: one per agent),
-  none reported, cluster queue long. Then T-537 (docs).
+- QA UI 8b13bb5a (no Write): T-772 S2 188cd077 PASS WITH GAPS (Job 7fb8c3d0; lead posted 8336; gap 2 roving tabindex -> S2b).
+  Now blind review T-611 S2b -> QA T-675 R2c f7b4e34a (after Backend's Job).
+- QA BE 2 42e5408f (no Write): T-416 S2b FAIL (8289: Bypass-restart test survives closeOut mutant). Now QA T-736 S3f a44c7cf8.
+- IMPL 46632d91 (sonnet): T-772 S2 DONE 188cd077. Now T-591 S3 lastReleased fix (ticket/T-591-s3 from b2932d0e) -> T-772 S2b
+  (container marker, not tabindex -1) -> T-525 proposal draft.
+- BE INFRA 16c2494f (sonnet): T-736 S3f DONE a44c7cf8 (Job b263ibbvh on 4e63057, 14 mutants). Now resolving the T-611 merge of
+  integration f9b836a1 that the lead started in its worktree (6 files UU; 8207 items) -> T-610 (8267) -> T-524 S3c + T-733 S5 -> T-612 S1.
+- BACKEND 3484bd4d: T-675 R2c f7b4e34a, T-781 S8b 0ed23dca Jobs pending (+ stop-mark test, B6) -> T-416 S2b fix -> T-537.
 - AFTER T-401: T-426 S1h/S1e; T-379 S2 3f11b28 behind it. T-578 -> owner. T-631 -> coordinator (after this batch).
 
 ## DECISIONS (binding)
