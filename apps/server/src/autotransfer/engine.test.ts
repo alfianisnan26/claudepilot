@@ -546,6 +546,49 @@ test('T-781: a person moves the chat while the stop is waited for: the move is n
   r.engine.stop();
 });
 
+test('T-781 S8b: a second evaluation during the stop is skipped by the stop mark: one stop call, answered at once (no hang without the mark)', async () => {
+  const r = await rig(AUTO, EXHAUSTED);
+  r.chat.sessions.set('s1', STUCK());
+  r.chat.stored('s1', [{ at: at(-4) }]);
+  const calls: string[] = [];
+  // A stop that records its calls and settles by itself after 150 ms.
+  (r.chat as { interrupt: unknown }).interrupt = (id: string) => (calls.push(id), new Promise<void>((res) => setTimeout(res, 150)));
+  const first = r.engine.evaluate('s1');
+  try {
+    for (let i = 0; i < 200 && calls.length < 1; i++) await new Promise((res) => setTimeout(res, 10));
+    assert.equal(calls.length, 1, 'the first stop has been called');
+    // With the mark the second look returns at once; without it the second look runs the hard path and waits for its own stop (150 ms),
+    // so a bounded 100 ms wait fails here by an assertion.
+    const second = await Promise.race([r.engine.evaluate('s1'), new Promise((res) => setTimeout(() => res('still waiting'), 100))]);
+    assert.equal(second, null, 'the chat is marked as moving during the stop');
+    assert.equal(calls.length, 1, 'one stop call');
+  } finally {
+    await first;
+    r.engine.stop();
+  }
+  await r.engine.settled();
+  assert.deepEqual(calls, ['s1']);
+  assert.equal(r.chat.moves.length, 1, 'one move');
+});
+
+test('T-781 S8b: when a person moved the chat during the stop, the stop mark is cleared: the next look is not skipped as moving', async () => {
+  const r = await rig(AUTO, EXHAUSTED);
+  r.chat.sessions.set('s1', STUCK());
+  r.chat.stored('s1', [{ at: at(-4) }]);
+  (r.chat as { interrupt: unknown }).interrupt = async () => {
+    r.chat.personMoves('s1', 'spare');
+  };
+  try {
+    await r.engine.evaluate('s1');
+    assert.equal(r.chat.moves.length, 0, 'the person\'s move is not overridden');
+    const again = await Promise.race([r.engine.evaluate('s1'), new Promise((res) => setTimeout(() => res('still waiting'), 100))]);
+    assert.notEqual(again, null, 'a stale stop mark would skip every later look as "moving"');
+    assert.notEqual(again, 'still waiting');
+  } finally {
+    r.engine.stop();
+  }
+});
+
 test('T-781: a stop that never settles is given 30 s, then the chat moves anyway', async () => {
   const r = await rig(AUTO, EXHAUSTED);
   r.chat.sessions.set('s1', STUCK());
