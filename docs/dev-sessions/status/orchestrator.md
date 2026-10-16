@@ -12,9 +12,9 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 ## IN FLIGHT (6 of 6, D-71)
   Lanes' ticket_comment refused on unassigned tickets (T-341, T-549, T-675): verdicts live in their replies + this file.
 - QA PERF 7e4879c7: T-426 S1h PWG 7880 (-> S1i redact loop). REVIEW T-781 S5 CHANGES (7905 -> S7). REVIEW T-772 S1b
-  CHANGES (2xl: false positive, no self-test -> S2, 7916). Now T-611 S1b probes in advance (no Job).
+  CHANGES (2xl: false positive, no self-test -> S2, 7916). PROBES T-611 S1b 2a494942+8c9e58fc+9be66b11 (unrun). Now T-426 S1i probes.
 - QA UI 8b13bb5a: T-736 S3c PWG 7875 (-> S3d). REVIEW T-781 S3 APPROVE (F1' F2). REVIEW T-723 S3c APPROVE (7908 gaps).
-  QA T-772 S1b PWG 7909 (browser not run -> S2 QA). Now PLAN QA T-781 S6 (no Job); it runs the S6 QA.
+  QA T-772 S1b PWG 7909 (browser not run -> S2 QA). PLAN QA T-781 S6 7918. Now S6 probes in advance; runs the S6 QA.
 - QA BE 2 42e5408f: QA T-781 S5 FAIL (F1: prod adapter index.ts has no interrupt; 7905). QA T-723 S3c PWG 7903 (39/0, m1 m3
   killed, m2 broke the regex). Now T-736 C1 re-read, then a corrected T-723 m2 Job -> T-723 READY if KILLED.
 - T-781 (D-76) now assigned to the lead: verdicts posted 7905. S1-S5 built; S6 (QA FAIL F1) and S7 open.
