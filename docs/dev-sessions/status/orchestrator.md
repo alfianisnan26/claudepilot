@@ -9,9 +9,9 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - T-781, T-731, T-727 assigned to the lead (coordinator). Migration 383: 0.41 s/1M synthetic rows (T-739 7487), for the coordinator.
 
 ## IN FLIGHT (6 of 6, D-71)
-- GATE b19r: wip/main-f14e9d2 f14e9d2d (1444d836 + T-697 a84a51b3 + T-574 S3 d97cbb16 + pack), gate-job running (Pending for a node).
-  Then gate b21 wip/main-91da8de 91da8de3 (on b19r: T-731, r.txt drop, T-376 S4b, T-732, T-610 r3, T-739 B mig 383, T-723 S3c).
-  Each green -> ff origin+pilot, rebase+push status, tell the coordinator (deploys at once). Old 35f917a9/71a2317f superseded.
+- GATE b22: wip/main-0d521d6 0d521d67 on f4de2647 = b19 (T-697, T-574 S3) + b21 (T-731, r.txt drop, T-376 S4b, T-732, T-610 r3,
+  T-739 B mig 383, T-723 S3c), worktree premerge-b22, gate running. b19r f14e9d2d gate GREEN (gate-f14e9d2-3b63) but integration
+  moved to f4de2647 (coordinator, docs) -> combined (8047). Green -> ff origin+pilot, rebase+push status, tell coordinator on T-731.
   Lanes' ticket_comment refused on unassigned tickets (T-341, T-549, T-675; T-675 assign refused too): verdicts in replies + this file.
 - QA PERF 330855ba (respawned; 7e4879c7 ended: Bash refused twice; new one has no Write and heredocs refused). QA T-611 S1b Job on
   f74638f1, C5e skipped as a probe defect (decided: no edit), mutants 1-3; add-fail cleanup by reading. Probes ready: S1i 6c8a2392, S6 d478c8c0 (in 8fac4ec1).
