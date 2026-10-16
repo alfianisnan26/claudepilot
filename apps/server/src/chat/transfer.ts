@@ -50,7 +50,7 @@ export function transferConversation(events: ChatEvent[], maxChars: number = MIN
     if (!tools.size) return;
     const shown = [...tools].slice(0, TOOLS_PER_TURN).map(([call, n]) => (n > 1 ? `${call} ×${n}` : call));
     if (tools.size > TOOLS_PER_TURN) shown.push(`and ${tools.size - TOOLS_PER_TURN} more`);
-    sections.push(`_Tools used: ${shown.join(', ')}_`);
+    sections.push(redact(`_Tools used: ${shown.join(', ')}_`));
     tools = new Map();
   };
   // The handoff exchange (the portal's request and the note it got) is carried as the note, not twice.
@@ -76,9 +76,12 @@ export function transferConversation(events: ChatEvent[], maxChars: number = MIN
     const text = ev.text?.trim();
     if (!text || (ev.kind !== 'user' && ev.kind !== 'assistant')) continue;
     flushTools();
-    if (ev.kind === 'user' && ev.transfer) sections.push(`### Earlier context (transferred from ${ev.transfer.fromClaude})\n\n${clip(text, messageMax)}`);
-    else if (ev.kind === 'user' && ev.actor) sections.push(`### Message from ${ev.actorLabel ? `${ev.actor} “${ev.actorLabel}”` : ev.actor}\n\n${clip(text, messageMax)}`);
-    else sections.push(`### ${ev.kind === 'user' ? 'You' : 'Claude'}\n\n${clip(text, messageMax)}`);
+    // Redacted per message (G5): an unterminated key header runs to the end of ITS message only, and shows as [redacted] there; the
+    // later messages are not swallowed.
+    const body = redact(clip(text, messageMax));
+    if (ev.kind === 'user' && ev.transfer) sections.push(`### Earlier context (transferred from ${ev.transfer.fromClaude})\n\n${body}`);
+    else if (ev.kind === 'user' && ev.actor) sections.push(`### Message from ${ev.actorLabel ? `${ev.actor} “${ev.actorLabel}”` : ev.actor}\n\n${body}`);
+    else sections.push(`### ${ev.kind === 'user' ? 'You' : 'Claude'}\n\n${body}`);
   }
   flushTools();
 
@@ -99,6 +102,12 @@ export function transferConversation(events: ChatEvent[], maxChars: number = MIN
   const messages = kept.filter((s) => s.startsWith('### ')).length;
   return { text: redact(kept.join('\n\n')), messages, truncated };
 }
+
+/**
+ * The shell that writes the context file (`sh -c SCRIPT sh DIR PATH BYTES`, the body on stdin): the file is 600 and its directory 700,
+ * whatever the umask of the exec or an older, wider directory (G6): the conversation is the owner's alone.
+ */
+export const TRANSFER_WRITE_SCRIPT = 'umask 077 && mkdir -p -- "$1" && chmod 700 -- "$1" && head -c "$3" > "$2" && chmod 600 -- "$2"';
 
 /** The context file's per-message clip (T-781, D5): a whole long answer, not the opening's 4,000. */
 export const FILE_MESSAGE_MAX_CHARS = 20_000;

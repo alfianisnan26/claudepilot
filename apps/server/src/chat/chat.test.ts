@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdtempSync, rmSync, statSync } from 'node:fs';
 import { createServer } from 'node:http';
@@ -42,7 +43,7 @@ import { createChatRoutes } from './routes.js';
 import { attachChat } from './socket.js';
 import { usageReport } from './usage.js';
 import { ChatStore, EVENT_TEXT_MAX, sessionCwd } from './store.js';
-import { conversationBudget, FILE_MAX_CHARS, FILE_MESSAGE_MAX_CHARS, transferConversation, transferFileConversation, transferOpening, type TransferMeta } from './transfer.js';
+import { conversationBudget, FILE_MAX_CHARS, FILE_MESSAGE_MAX_CHARS, TRANSFER_WRITE_SCRIPT, transferConversation, transferFileConversation, transferOpening, type TransferMeta } from './transfer.js';
 import { FOLDER_CHANGED, FOLDER_NOT_TRUSTED } from './trust.js';
 import { APPLIED, controls, EMPTY_SCAN, fail, FakeExec, FakeWorkspaces, firstTurn, freshStore, init, line, liveSession, ok, sleep, until, USAGE_API_KEY, vanish, type Control, type Live } from './testkit.js';
 
@@ -2871,6 +2872,48 @@ test('T-781 transferOpening: it says what the file holds: the whole conversation
     assert.match(o, /Do not run any tool or change any file to answer/);
     assert.ok(!/Read it\b|before you continue|Apart from reading/.test(o), 'nothing asks for a read');
     assert.ok(o.includes('<conversation>') && o.includes('hi'), 'the conversation is inline');
+  }
+});
+
+test('T-781 G5: an unterminated private-key header in an old message is redacted in that message only: the later messages stay in the file', () => {
+  let seq = 0;
+  const ev = (e: Omit<ChatEvent, 'seq' | 'at'>): ChatEvent => ({ seq: ++seq, at: '2026-10-16T12:00:00Z', ...e });
+  const header = `-----BEGIN ${'PRIVATE'} KEY-----`; // built at runtime, no footer
+  const chat = [
+    ev({ kind: 'user', text: 'first question' }),
+    ev({ kind: 'assistant', text: `here is a key\n${header}\nAAAA BBBB` }),
+    ev({ kind: 'user', text: 'LATER-ONE after the key' }),
+    ev({ kind: 'assistant', text: 'LATER-TWO answer' }),
+  ];
+  const c = transferFileConversation(chat);
+  assert.ok(c.text.includes('LATER-ONE') && c.text.includes('LATER-TWO'), 'later messages survive');
+  assert.ok(c.text.includes('first question'));
+  assert.ok(!c.text.includes('AAAA BBBB') && !c.text.includes(header), 'the key itself is gone');
+  assert.ok(c.text.includes('[redacted]'), 'the file shows where something was removed');
+  assert.equal(c.messages, 4);
+});
+
+test('T-781 G6: the context file is written 600 in a 700 directory, whatever the umask or an older wider directory', () => {
+  const root = mkdtempSync(join(tmpdir(), 'cp-transfer-'));
+  try {
+    const dir = join(root, 'transfer');
+    const path = join(dir, 'x.md');
+    const body = 'hello\n';
+    const run = () => execFileSync('sh', ['-c', TRANSFER_WRITE_SCRIPT, 'sh', dir, path, String(Buffer.byteLength(body))], { input: body, env: { PATH: process.env.PATH ?? '/usr/bin:/bin' } });
+    const prior = process.umask(0o022);
+    try {
+      run();
+      assert.equal(statSync(dir).mode & 0o777, 0o700);
+      assert.equal(statSync(path).mode & 0o777, 0o600);
+      // An older directory made 755 is tightened by the next write.
+      execFileSync('chmod', ['755', dir]);
+      run();
+      assert.equal(statSync(dir).mode & 0o777, 0o700);
+    } finally {
+      process.umask(prior);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
 

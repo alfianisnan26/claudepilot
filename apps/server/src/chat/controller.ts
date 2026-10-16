@@ -123,7 +123,7 @@ import { branchProblem, defaultBranch, Worktrees, type MadeWorktree } from './wo
 import { ChatStore, claudeSessionOf, EVENT_TEXT_MAX, sessionCwd, type ChatSessionPatch, type ChatSessionRow, type InputState } from './store.js';
 import { BtwEngine, readBtwConfig, type BtwHost } from './btw.js';
 import { BtwStore } from './btwStore.js';
-import { conversationBudget, transferConversation, transferFile, transferFileConversation, transferOpening, type TransferMeta } from './transfer.js';
+import { TRANSFER_WRITE_SCRIPT, conversationBudget, transferConversation, transferFile, transferFileConversation, transferOpening, type TransferMeta } from './transfer.js';
 import { autoTrustable, autoTrustRefusal, findSameRepo, FOLDER_CHANGED, saveTrust, scanFolder, untrustedError, worktreeMayCopyTrust, type FolderScan } from './trust.js';
 import { usageReport } from './usage.js';
 import {
@@ -2302,7 +2302,7 @@ export class ChatController {
     if (!path.startsWith(`${dir}/`) || path.includes('..')) throw new AppError('VALIDATION_FAILED', 'That transfer path is not allowed.');
     const [target, name] = this.#split(workspaceId);
     const bytes = Buffer.byteLength(body);
-    const exec = await this.#workspaces.exec(target, name, ['sh', '-c', 'mkdir -p -- "$1" && head -c "$3" > "$2"', 'sh', dir, path, String(bytes)]);
+    const exec = await this.#workspaces.exec(target, name, ['sh', '-c', TRANSFER_WRITE_SCRIPT, 'sh', dir, path, String(bytes)]);
     if (bytes) exec.write(body);
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
