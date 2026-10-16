@@ -118,11 +118,11 @@ export function CheckChips({ checks }: { checks: TicketCheck[] }) {
                 {body}
               </span>
             ) : c.link.startsWith('/') ? (
-              <Link to={c.link} className={cn(cls, 'hover:text-ink focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none')} title={title}>
+              <Link to={c.link} className={cn(cls, 'hover:text-ink focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden')} title={title}>
                 {body}
               </Link>
             ) : (
-              <a href={c.link} target="_blank" rel="noreferrer noopener" className={cn(cls, 'hover:text-ink focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none')} title={title}>
+              <a href={c.link} target="_blank" rel="noreferrer noopener" className={cn(cls, 'hover:text-ink focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden')} title={title}>
                 {body}
               </a>
             )}

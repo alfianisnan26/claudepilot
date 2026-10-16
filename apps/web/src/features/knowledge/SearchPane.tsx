@@ -65,7 +65,7 @@ export function SearchPane({ vault, q, tick, autoFocus, onQuery, onOpen }: { vau
             spellCheck={false}
             aria-label="Search"
             placeholder="Search"
-            className="h-11 min-w-0 flex-1 bg-transparent text-[16px] outline-none placeholder:text-muted sm:h-10 sm:text-[14.5px]"
+            className="h-11 min-w-0 flex-1 bg-transparent text-[16px] outline-hidden placeholder:text-muted sm:h-10 sm:text-[14.5px]"
           />
           {text && (
             <button type="button" aria-label="Clear" onClick={() => (setText(''), input.current?.focus())} className="press inline-flex size-7 items-center justify-center rounded-full text-muted hover:text-ink">
@@ -101,7 +101,7 @@ export function SearchPane({ vault, q, tick, autoFocus, onQuery, onOpen }: { vau
 function Hit({ hit: h, vault, onOpen }: { hit: NoteSearchHit; vault: VaultSummary; onOpen: (p: string) => void }) {
   return (
     <li>
-      <button type="button" onClick={() => onOpen(h.path)} className={cn('press flex w-full min-w-0 flex-col gap-0.5 rounded-xl px-2.5 py-2.5 text-left hover:bg-surface-2/70 focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none')}>
+      <button type="button" onClick={() => onOpen(h.path)} className={cn('press flex w-full min-w-0 flex-col gap-0.5 rounded-xl px-2.5 py-2.5 text-left hover:bg-surface-2/70 focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden')}>
         <span className="flex items-center gap-1.5">
           <span className="min-w-0 flex-1 truncate text-[14.5px] font-semibold">{displayName(h.name, h.title, vault.settings.labels)}</span>
           {h.agent && <Bot className="size-3.5 shrink-0 text-muted" aria-label="Written by an agent" />}

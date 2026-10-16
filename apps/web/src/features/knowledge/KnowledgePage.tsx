@@ -91,7 +91,7 @@ function VaultRow({ vault: v, onOpen }: { vault: VaultSummary; onOpen: () => voi
       <button
         type="button"
         onClick={onOpen}
-        className="flex w-full min-w-0 items-center gap-3 rounded-2xl border border-line bg-surface px-3.5 py-3 text-left transition-colors hover:bg-surface-2/60 focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none"
+        className="flex w-full min-w-0 items-center gap-3 rounded-2xl border border-line bg-surface px-3.5 py-3 text-left transition-colors hover:bg-surface-2/60 focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden"
       >
         <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-accent-soft text-accent">
           <Library className="size-[18px]" />

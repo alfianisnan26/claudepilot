@@ -201,7 +201,7 @@ function InstanceLine({
   return (
     <li className="flex min-h-9 items-center gap-1.5 text-[13px]">
       <Check className="size-4 shrink-0 text-accent" strokeWidth={2.75} aria-hidden="true" />
-      <Link to={`/admin/pools/mcp/${instance.poolId}/edit`} className="min-w-0 truncate font-medium text-ink hover:underline focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none">
+      <Link to={`/admin/pools/mcp/${instance.poolId}/edit`} className="min-w-0 truncate font-medium text-ink hover:underline focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden">
         {instance.poolName}
       </Link>
       <span className="shrink-0 text-muted">{AUTH_MODE[instance.auth]}</span>

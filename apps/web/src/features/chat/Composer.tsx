@@ -273,7 +273,7 @@ export function Composer({
           aria-label="Message"
           {...(listOpen ? { role: 'combobox', 'aria-expanded': true, 'aria-controls': listId, 'aria-activedescendant': `${listId}-${pick}`, 'aria-autocomplete': 'list' as const } : {})}
           placeholder={working ? 'Steer Claude…' : 'Message Claude…'}
-          className="block min-h-[52px] w-full resize-none bg-transparent px-[18px] pt-[15px] pb-1 text-[16.5px] leading-[1.45] text-ink outline-none placeholder:text-muted sm:text-[15.5px]"
+          className="block min-h-[52px] w-full resize-none bg-transparent px-[18px] pt-[15px] pb-1 text-[16.5px] leading-[1.45] text-ink outline-hidden placeholder:text-muted sm:text-[15.5px]"
         />
         <div data-steer={working && canSend ? '' : undefined} className="flex items-center gap-1 px-2 pt-1 pb-2.5 sm:gap-1.5 sm:px-2.5">
           <button type="button" aria-label="Attach files" title="Attach files" onClick={() => fileInput.current?.click()} className={cn(ROUND, GHOST)}>
@@ -475,7 +475,7 @@ function SendItem({ label, hint, keys, disabled, onClick }: { label: string; hin
       role="menuitem"
       disabled={disabled}
       onClick={onClick}
-      className="flex w-full items-start gap-3 rounded-xl px-3 py-2 text-left outline-none hover:bg-surface-2 focus:bg-surface-2 disabled:opacity-40"
+      className="flex w-full items-start gap-3 rounded-xl px-3 py-2 text-left outline-hidden hover:bg-surface-2 focus:bg-surface-2 disabled:opacity-40"
     >
       <span className="min-w-0 flex-1">
         <span className="block text-sm font-semibold text-ink">{label}</span>

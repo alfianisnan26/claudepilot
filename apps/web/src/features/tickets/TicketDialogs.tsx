@@ -61,7 +61,7 @@ function TagPicks({ value, onPick }: { value: string; onPick: (tag: string) => v
           key={t.tag}
           type="button"
           onClick={() => onPick(t.tag)}
-          className="press rounded-md bg-surface-2 px-2 py-1 text-[12px] font-medium text-ink-soft hover:text-ink focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none"
+          className="press rounded-md bg-surface-2 px-2 py-1 text-[12px] font-medium text-ink-soft hover:text-ink focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden"
         >
           + {t.tag}
         </button>

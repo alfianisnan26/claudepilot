@@ -145,7 +145,7 @@ export function ReposTab({ workspace }: { workspace: Workspace }) {
               spellCheck={false}
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              className="h-full w-full min-w-0 bg-transparent text-base text-ink outline-none placeholder:text-muted/70"
+              className="h-full w-full min-w-0 bg-transparent text-base text-ink outline-hidden placeholder:text-muted/70"
             />
           </div>
         )}

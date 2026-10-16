@@ -154,7 +154,7 @@ export default function Palette() {
                 autoCorrect="off"
                 autoCapitalize="none"
                 spellCheck={false}
-                className="h-12 min-w-0 flex-1 bg-transparent text-base outline-none placeholder:text-muted"
+                className="h-12 min-w-0 flex-1 bg-transparent text-base outline-hidden placeholder:text-muted"
               />
               <button type="button" onClick={closePalette} aria-label="Close search" className="press inline-flex size-11 shrink-0 items-center justify-center rounded-full text-muted hover:bg-surface-2 hover:text-ink">
                 <X className="size-4" aria-hidden="true" />

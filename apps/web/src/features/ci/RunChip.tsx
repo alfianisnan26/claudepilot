@@ -34,7 +34,7 @@ export function RunChip({ sessionId, ticketId, compact, lead, className }: { ses
           to={`/admin/ci/runs/${r.id}`}
           title={`${r.pipeline} #${r.number}: ${r.status}${r.branch ? ` on ${r.branch}` : ''}`}
           className={cn(
-            'inline-flex items-center gap-1 rounded-full font-semibold text-ink-soft hover:text-ink focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none',
+            'inline-flex items-center gap-1 rounded-full font-semibold text-ink-soft hover:text-ink focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden',
             compact ? 'text-[12px]' : 'border border-line bg-surface px-2.5 py-1 text-[12.5px]',
           )}
         >

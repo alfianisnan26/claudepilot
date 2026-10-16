@@ -47,7 +47,7 @@ export function QuickSwitcher({ open, vault, onClose, onOpen }: { open: boolean;
           spellCheck={false}
           aria-label="Note name"
           placeholder="Note name"
-          className="h-11 min-w-0 flex-1 bg-transparent text-[16px] outline-none placeholder:text-muted"
+          className="h-11 min-w-0 flex-1 bg-transparent text-[16px] outline-hidden placeholder:text-muted"
         />
       </div>
       <ul className="mt-2 max-h-[50dvh] overflow-y-auto" role="listbox">

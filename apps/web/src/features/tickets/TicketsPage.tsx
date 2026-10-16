@@ -219,7 +219,7 @@ function TicketQueue({ selected }: { selected: string | null }) {
               autoComplete="off"
               autoCapitalize="none"
               spellCheck={false}
-              className="h-11 w-full rounded-full border border-line bg-surface pr-10 pl-10 text-[16px] text-ink placeholder:text-muted focus:border-primary focus:outline-none sm:text-[15px] [&::-webkit-search-cancel-button]:hidden"
+              className="h-11 w-full rounded-full border border-line bg-surface pr-10 pl-10 text-[16px] text-ink placeholder:text-muted focus:border-primary focus:outline-hidden sm:text-[15px] [&::-webkit-search-cancel-button]:hidden"
             />
             {text && (
               <button type="button" aria-label="Clear search" onClick={() => (setText(''), set({ q: null }))} className="press absolute top-1/2 right-2 flex size-8 -translate-y-1/2 items-center justify-center rounded-full text-muted hover:bg-surface-2 hover:text-ink tap:right-0 tap:size-11">
@@ -345,7 +345,7 @@ function FilterSelect({ label, value, onChange, options }: { label: string; valu
         value={value}
         onChange={(e) => onChange(e.target.value)}
         className={cn(
-          'h-9 appearance-none rounded-full border bg-surface pr-8 pl-3.5 text-[16px] font-semibold focus:border-primary focus:outline-none tap:h-11 sm:text-[13.5px]',
+          'h-9 appearance-none rounded-full border bg-surface pr-8 pl-3.5 text-[16px] font-semibold focus:border-primary focus:outline-hidden tap:h-11 sm:text-[13.5px]',
           value ? 'border-primary text-ink' : 'border-line text-ink-soft',
         )}
       >
@@ -374,7 +374,7 @@ function TicketRow({ ticket: t, selected, onOpen, onBump }: { ticket: TicketItem
         onClick={onOpen}
         aria-current={selected ? 'true' : undefined}
         className={cn(
-          'flex h-full w-full min-w-0 items-start gap-3 rounded-2xl border bg-surface px-3.5 py-3 text-left transition-colors hover:bg-surface-2/60 focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none',
+          'flex h-full w-full min-w-0 items-start gap-3 rounded-2xl border bg-surface px-3.5 py-3 text-left transition-colors hover:bg-surface-2/60 focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden',
           selected ? 'border-primary' : 'border-line',
           open && 'pr-12',
         )}
@@ -472,7 +472,7 @@ function Board({
                   <PriorityMark priority={t.priority} className="mt-px" />
                   <Link
                     to={{ pathname: `/admin/tickets/${t.id}`, search }}
-                    className="min-w-0 flex-1 rounded-md focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none tap:min-h-11"
+                    className="min-w-0 flex-1 rounded-md focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden tap:min-h-11"
                   >
                     <span className="text-[12px] font-semibold text-muted tabular-nums">{t.id}</span>
                     <span className="line-clamp-3 block text-[13.5px] font-semibold [overflow-wrap:anywhere]">{t.summary}</span>
