@@ -3,8 +3,7 @@
 Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-10-15 DONE batches 1-7: see 4fbab374). Hand-overs: ab99b45, bb58413, 639202e.
 
 ## DONE
-- Batches 22-23 and deploy 233: see git history of this file (e8b962f9). Live checks: coordinator ("Coordinator live check"),
-  close each on PASS. T-574 re-check after 10-17 15:00Z (8265). T-376 open for S5. T-733 open (S5 + gap items, 8277).
+- Batches 22-23: git history (e8b962f9). Close on "Coordinator live check" PASS. T-574 re-check after 10-17 15:00Z; T-376 S5; T-733 S5.
 - BATCH 24B b2932d0e (T-401 S2b+S2c, T-736 S3c-S3e): DEPLOY 257 LIVE from 7f83f13d. T-401 live check asked 8549 (close on PASS).
 - BATCH 25 ON INTEGRATION 7c3c1e44 (gate claudepilot-gate-7c3c1e4-c387 GREEN, re-gated after release merge-back f649e481):
   T-781 S8+S8b, T-623 S2, T-416 S2+S2b (lead's mechanical controller.ts resolution 056fe1a4). Coordinator told T-731 8617.
@@ -19,8 +18,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 ## IN FLIGHT (6 of 6, D-71)
 - QA PERF 8e8912fc (perf-tester/sonnet): T-611 merge PWG 8715 (READY, b27 with T-426); T-868 rev CHANGES 2 8724; T-537 APPROVE
   (lead posted 8738). NOW QA T-623 S2d c288c0d5 -> QA T-772 S2e fc9158ed.
-- QA UI fcc8b8aa (respawned; was 8b13bb5a: T-856 QA PWG 8837, T-860 S2b rev APPROVE 8840, T-524 S3c rev APPROVE 8852).
-  NOW T-856 browser check 390/1280 (worktree qa/T-856-browser from 7d2acb8d = OLD rules, relative form) -> review T-436 web field.
+- QA UI 66c13056 (respawned from integration, new rules; fcc8b8aa T-856 browser BLOCKED 8855: no node_modules for scratch portal
+  -> browser check stays open follow-up, 8860). NOW QA T-881 S1 09461062 (own Job + mutants) -> review T-772 S2e -> review T-436 web.
 - QA BE 2 42e5408f (no Write): reviews APPROVE T-772 S2 8449, T-416 S2b 8450, T-591 S3 8535, T-772 S2b 8568.
   T-623 S2c PASS 8603, T-610 PASS W/ GAPS 8637. T-860 QA plan 8650. NOW QA T-860 S2 068606f5 (URGENT) -> T-416 S2c -> T-675 R2d -> T-781 S8c.
 - IMPL fe93b032 (respawned, new rules; was 46632d91: T-772 S2e fc9158ed, T-856 7d2acb8d QA PWG 8837 -> b27, T-868 S2 0520dc29 ->
@@ -28,8 +27,9 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - T-860: S2b bd2a2b1f review APPROVE (QA UI 8840); QA BE 2 delta QA Jobs queued; then gate ALONE. S2c follow-up (set -a etc., 8845).
 - BE INFRA 16c2494f (sonnet): DONE T-860 12deae78 (8553), T-623 S2c 6f4f6d56 (8569), T-610 b3e7e3a7 (8571; lead read mig 384,
   free 8577), T-860 S2 068606f5 (8680; lead read 8737), T-623 S2d c288c0d5 (8725), T-860 S2b bd2a2b1f (8817; job-bb58079a, 6 mutants red;
-  -> QA BE 2 delta + QA UI re-review). NOW INCIDENT T-881 S1 (allowlist vs installed
-  plugin; rev 3 blocked browser 19:14-19:29; plan 8744; coordinator's, high) -> T-736 S3g -> T-612 S1. T-860 gates ALONE.
+  -> QA BE 2 delta + QA UI re-review), T-881 S1 0946106271 (8857; lead read 8866, coordinator OK 8863, live proof theirs; heads b27).
+  Respawned as 4ed98960 (new rules): NOW T-612 S1 (lint devDeps; lockfile via Job or BLOCKED). T-860 S2c after T-860 merges.
+  T-736 S3g 4eb08f4e (8461) is BUILT: needs QA. T-772 S2e QA PWG 8838 -> b27; gaps -> S2f (Impl after T-425, 8858).
 - BACKEND 3484bd4d: DONE R2d b82cdcb9, S8c 8cb00f79, T-416 S2c dcdb6553 (lead read 8700), T-868 28d24ee3 (8697; roots guessed),
   T-537 d6833850, T-524 S3c + T-733 S5 ee56bab9 (8815/8816; 8/8 mutants; -> QA Perf after T-868 S2). T-436 011de98b BUILT, NOT
   RUN: job-run refused after the branch switch (old-rule lane vs new settings) -> its Jobs go to QA BE 2 after T-860. T-436 deploy
@@ -37,8 +37,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - AFTER T-401: T-426 S1h/S1e; T-379 S2 3f11b28 behind it. T-578 -> owner. T-631 -> coordinator (after this batch).
 
 ## DECISIONS (binding)
-- 13:45 D-75 AMENDED (coordinator, 1444d836, checked in DECISIONS.md): the lead runs the gate before a merge (gate-job.sh, one per
-  batch). Batch 19 rebuilt on 1444d836, then batch 21 = batch 20 + T-739 B + T-723 S3c. The 12:55 hold is superseded.
+- 13:45 D-75 AMENDED (coordinator, 1444d836, in DECISIONS.md): the lead runs the gate before a merge (gate-job.sh, one per batch).
 - 11:00 T-612 default A (pinned prettier/eslint devDeps, changed files only; quick-check must not say "passed" for a skipped step); FOR THE COORDINATOR 7592.
 - 07:45 D-75 (coordinator): one Job per commit (checks chained), never the same command twice on a commit, QA reads the builder's log;
   the lead runs no Jobs but the merge gate (13:45); idle QA gets no-Job work (reviews, browser). T-731 -> BE Infra after T-697.
@@ -62,7 +61,6 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - T-578 (gate wall, via coordinator): owner picks same-tree gate reuse (a) portal CI store [lead default], (b) pipeline-only RBAC
   ConfigMap, (c) accept risk, (d) drop reuse; reuse also conflicts with "full gate on the exact commit" (charter). Lead can't comment (T-634).
 - T-666 (high, RBAC = a person's wall): workspace kohi-event can create/delete ConfigMaps in isnan-claudepilot (review 6168, can-i).
-- T-401 gate wall: RESOLVED, coordinator's ack 8027 (13:50, D-62), conditions met except the gate (batch 24 gating).
 - T-341 D (updatedInput) needs a real Claude Code session (person/coordinator). T-93 Konfersi production only. Coordinator items: T-422 (sudo), T-306 item 4 / T-340; D-row for T-417's Bypass across sleep;
   T-433's persona-wall question (2984).
 - For the coordinator, NOT the owner (not tagged owner-checklist): T-476 lead may START a deploy whose release waits for a person
