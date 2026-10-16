@@ -10,9 +10,9 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - DEPLOY 233 LIVE (portal 2026.10.16-2, b22). Its Releases/ note exists (coordinator: my search came early) -> QA UI re-reads 4
   notes, close T-591 on PASS. Live checks: coordinator runs them ("Coordinator live check" comments), close each on PASS.
   T-697 CLOSED (gate + QA b33f46ad). DEPLOY 243 RUNNING (coordinator) from eb59ab42 = b23. Ack 8237.
-- BATCH 24 GATE RED 0c86256e (claudepilot-gate-0c86256-3bdf, job-out/gate-b24.log; integration untouched): 2 tests in
-  jobRunCreds.test.ts (T-401's `__X__`->x makes T-611 S1's `__MASTER_REQUIRED__` line invalid YAML). 8224: BE Infra builds
-  T-401 S2c (test only) from 0c86256e, then QA + rebuilt b24 + re-gate. T-736 S3c-S3e 1cd5047d waits in b24 with it.
+- BATCH 24B GATING d9df1221 (wip/main-d9df122, worktree premerge-b24b, job-out/gate-b24b.log; NO status push until done):
+  b24 0c86256e (RED: jobRunCreds marker, 8224) + T-401 S2c c0c0ce7d (test only, Job fb946901 58/58; QA UI QAs it).
+  On green + S2c QA: ff integration, tell coordinator on T-731. T-591 QA FAIL (backfill range base, store.ts:608; 8250).
 - T-611 S1b..S2 80ffedea: QA done (8186, 8187 16/17) but NOT mechanical onto integration (T-731 --reuse; 8202) -> BE Infra resolves
   after S2b (lead starts the merge in its worktree; --reuse + --pool-env refused). QA UI pre-reads the merge risks.
 - T-675 R2b FAIL (QA UI: apostrophe at memoryBudget.test.ts:330 breaks compile) -> Backend R2c. T-781 S8 DONE 543240b8 -> QA BE 2
@@ -26,9 +26,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - QA BE 2 42e5408f (no Write): T-611 S2 PWG 8186, T-736 S3e PWG 8198. Now QA T-781 S8 543240b8.
 - IMPL 46632d91 (respawned, sonnet; old 7cc1b2f5 ended after T-675 R2b DONE 5d38ab69): T-772 S2 on ticket/T-772-s2 from
   1e1e0ba1 (7916 items 1-5 + 7599 sweep; QA plan 7963).
-- BE INFRA 16c2494f (respawned, sonnet; old fad38191 ended after T-736 S3e DONE 1cd5047d): T-611 S2b on ticket/T-611-s2b from
-  80ffedea (newline + non-ASCII refusal, C5e-ii log line, PLACEMENT avoid list, tests, docs) -> resolve integration merge (8202)
-  -> T-736 S3f (allow-list, 8200) -> T-524 S3c + T-733 S5 -> T-612 S1.
+- BE INFRA 16c2494f (sonnet): T-401 S2c DONE c0c0ce7d; T-611 S2b DONE 96d7c148 (Job c2e54e28 71/71, mutant 5662dc0a 4 red;
+  8234) -> QA. Now T-736 S3f (8200) -> T-611 integration merge after b24b lands (8207) -> T-524 S3c + T-733 S5 -> T-612 S1.
 - BACKEND 3484bd4d: built T-416 S2b f5b96b25, T-675 R2c f7b4e34a, T-781 S8b 0ed23dca; 3 Jobs at once (told: one per agent),
   none reported, cluster queue long. Then T-537 (docs).
 - AFTER T-401: T-426 S1h/S1e; T-379 S2 3f11b28 behind it. T-578 -> owner. T-631 -> coordinator (after this batch).
@@ -70,7 +69,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   T-527 finding 4 (owner triggers tagging owner-checklist); T-657 reopen T-259/T-317/T-338; T-739 A scoring defs (scoring = person's wall).
 
 ## NEXT (in order, as slots free)
-0. T-525 (coordinator asks soon): Impl drafts a persona_propose_update after T-772 S2; a person applies (8236).
+0. QA T-611 S2b 96d7c148 (QA Perf after S1h). T-591 lastReleased fix (Impl after T-772 S2). T-525: Impl drafts a persona_propose_update after T-772 S2; a person applies (8236).
 1. Next batch (each after QA/review): T-611 S1b..S2b, T-736 S3c-S3e, T-675 R2b, T-781 S8; T-416 S2+S2b (after S2b QA + review).
 2. T-401 in b24 (ack 8027 sat unseen 13:50-15:15: re-read HELD tickets' last comments each hour) -> T-426 S1e -> T-379 S2 3f11b28; deploys are the coordinator's. ticket_list fails: use ticket_get.
 4. RTK: T-340 (person/coordinator) -> T-341 merge -> T-306 item 3. 5. T-537. 6. T-513. 7. T-472 live re-check (needs portal_status), T-422, T-147, T-438, T-425, T-436, T-437, T-432, T-382, T-377, T-386, T-409, T-402, T-398,
