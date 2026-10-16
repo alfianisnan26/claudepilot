@@ -230,11 +230,61 @@ test('each script cds into the guarded folder after the guard and before its fir
     const lines = readFileSync(join(ROOT, 'tools/qa', script), 'utf8').split('\n');
     const code = (i: number) => !lines[i].trimStart().startsWith('#');
     const guard = lines.findIndex((l, i) => code(i) && /rtk_guard rtk-/.test(l));
-    const cd = lines.findIndex((l, i) => code(i) && /\bcd "\$(here|repo)"/.test(l));
-    const git = lines.findIndex((l, i) => code(i) && /\bgit (-c |ls-files|rev-|remote|fetch|status|reset|checkout|rm |mv |add |commit)/.test(l));
-    assert.ok(guard >= 0 && cd > guard, `${script}: no cd into the guarded folder after the guard`);
-    assert.ok(git > cd, `${script}: a git call (line ${git + 1}) comes before the cd (line ${cd + 1})`);
+    // `git <cmd>` and the scripts' own helper `g <cmd>` (git with a scratch identity).
+    const gitCall = /(\bgit|(^|[\s;&|(])g) (-c |ls-files|rev-|remote|fetch|status|reset|checkout|rm |mv |add |commit)/;
+    const cds = lines.map((l, i) => i).filter((i) => code(i) && /\bcd "\$(here|repo)"/.test(lines[i]));
+    const gits = lines.map((l, i) => i).filter((i) => code(i) && gitCall.test(lines[i]));
+    assert.ok(guard >= 0 && cds.length > 0 && cds.every((i) => i > guard), `${script}: no cd into the guarded folder after the guard`);
+    assert.ok(gits.length > 0, `${script}: no git call found (the check would test nothing)`);
+    for (const g of gits) {
+      assert.ok(cds.some((c) => c < g), `${script}: a git call (line ${g + 1}) comes before the cd (line ${cds[0] + 1})`);
+    }
+    // The cd must run: a plain statement, nothing like `[ x ] && cd` or `a || cd` in front of it on its line.
+    for (const c of cds) {
+      const before = lines[c].slice(0, lines[c].search(/\bcd "\$(here|repo)"/));
+      assert.doesNotMatch(before, /&&|\|\|/, `${script}: the cd on line ${c + 1} may not run (a && or || in front of it)`);
+    }
   }
+});
+
+test('the helper regex of the order test sees `g <cmd>` and the chained cd (self-check)', () => {
+  const gitCall = /(\bgit|(^|[\s;&|(])g) (-c |ls-files|rev-|remote|fetch|status|reset|checkout|rm |mv |add |commit)/;
+  assert.ok(gitCall.test('  g commit -q -m x'));
+  assert.ok(gitCall.test('a && g add f'));
+  assert.ok(gitCall.test('git status'));
+  assert.ok(!gitCall.test('# e.g. nothing'));
+});
+
+/** rtk-guard-mutants.sh in a scratch repo, with a git stub (first on PATH) that fails one subcommand and passes the rest to the real git. */
+function runMutants(failing: 'status' | 'diff', code: number) {
+  const { dir, git } = scratchRepo();
+  copyFileSync(join(ROOT, 'tools/qa/rtk-guard-mutants.sh'), join(dir, 'tools/qa/rtk-guard-mutants.sh'));
+  git('add', '-A');
+  git('commit', '-q', '-m', 'mutants');
+  const stubDir = join(dir, '..', `${dir.split('/').pop()}-stub-git`);
+  mkdirSync(stubDir, { recursive: true });
+  writeFileSync(join(stubDir, 'git'), `#!/bin/sh\nfor a in "$@"; do [ "$a" = ${failing} ] && exit ${code}; done\nPATH="$REAL_PATH" exec git "$@"\n`, { mode: 0o755 });
+  const env = { PATH: `${stubDir}:${process.env.PATH ?? ''}`, REAL_PATH: process.env.PATH ?? '', HOME: dir, JR_REPO_URL: 'https://example.invalid/repo.git', GIT_CEILING_DIRECTORIES: dirname(dir) };
+  const r = spawnSync('bash', [join(dir, 'tools/qa/rtk-guard-mutants.sh')], { cwd: dir, env, encoding: 'utf8', timeout: 60_000 });
+  return { r, dir, git };
+}
+
+test('rtk-guard-mutants.sh: when git status fails it refuses (exit 2), edits nothing and runs no mutant', () => {
+  const { r, dir, git } = runMutants('status', 128);
+  assert.equal(r.status, 2, r.stdout + r.stderr);
+  assert.match(r.stderr, /git status failed/);
+  assert.doesNotMatch(r.stdout, /MUTANT/);
+  assert.equal(git('status', '--porcelain'), '');
+  assert.match(readFileSync(join(dir, 'tools/qa/rtk-guard.sh'), 'utf8'), /JR_REPO_URL/);
+});
+
+test('rtk-guard-mutants.sh: when git diff fails after a mutant edit it restores tools, refuses (exit 2) and runs no test', () => {
+  const { r, dir, git } = runMutants('diff', 129);
+  assert.equal(r.status, 2, r.stdout + r.stderr);
+  assert.match(r.stderr, /git diff failed/);
+  assert.doesNotMatch(r.stdout, /CAUGHT|SURVIVED/);
+  assert.equal(git('status', '--porcelain'), '');
+  assert.match(readFileSync(join(dir, 'tools/qa/rtk-guard.sh'), 'utf8'), /JR_REPO_URL/);
 });
 
 test('rtk-classes.sh on a repo without docs/prd: no pathspec error on stderr', () => {

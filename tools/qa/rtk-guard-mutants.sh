@@ -6,14 +6,18 @@
 set -u
 cd "$(dirname "$0")/../.." || exit 2
 [ -n "${JR_REPO_URL:-}" ] || { echo "rtk-guard-mutants.sh: refusing: it edits tracked files; run it through scripts/job-run.sh" >&2; exit 2; }
-[ -z "$(git status --porcelain)" ] || { echo "rtk-guard-mutants.sh: refusing: the checkout has uncommitted changes" >&2; exit 2; }
+# A failing git status prints nothing, which would read as clean: check the exit status, as rtk-guard.sh does.
+st=$(git status --porcelain 2>&1) || { echo "rtk-guard-mutants.sh: refusing: git status failed (not a clean, readable checkout)" >&2; exit 2; }
+[ -z "$st" ] || { echo "rtk-guard-mutants.sh: refusing: the checkout has uncommitted changes" >&2; exit 2; }
 survived=0
 mutant() { # <name> <what> <file...> -- <sed script>
   local name=$1 what=$2; shift 2
   local files=() script
   while [ "$1" != -- ]; do files+=("$1"); shift; done; shift; script=$1
   sed -i "$script" "${files[@]}"
-  if git diff --quiet; then echo "MUTANT $name: no change made (the sed pattern is stale)"; survived=1; return; fi
+  git diff --quiet; d=$?  # 0 clean, 1 changed, more = git failed
+  if [ "$d" -gt 1 ]; then git checkout -q -- tools; echo "rtk-guard-mutants.sh: refusing: git diff failed (exit $d) after mutant $name" >&2; exit 2; fi
+  if [ "$d" -eq 0 ]; then echo "MUTANT $name: no change made (the sed pattern is stale)"; survived=1; return; fi
   (cd apps/server && node --import tsx --disable-warning=ExperimentalWarning --test "src/qa/rtkHistoryGuard.test.ts" > "/tmp/mutant-$name.log" 2>&1); rc=$?
   git checkout -q -- tools
   if [ "$rc" -ne 0 ]; then echo "MUTANT $name ($what): CAUGHT (test exit $rc; failing: $(grep -c '^not ok\|^    not ok' "/tmp/mutant-$name.log") not-ok lines)"
@@ -30,4 +34,8 @@ mutant MJ "do not check that rtk_guard is defined" tools/qa/rtk-history.sh tools
 mutant ML "drop the cd into the guarded folder from rtk-classes.sh" tools/qa/rtk-classes.sh -- '/^cd "\$here" || exit$/d'
 mutant MM "git rm the docs/prd file even when there is none" tools/qa/rtk-classes.sh -- 's/^\[ -n "\$prd" \] && //'
 mutant MK "skip the other-repo check in rtk-measure.sh" tools/qa/rtk-measure.sh -- '/^if \[ "\${1:-}" = light \]/d'
+mutant MN "rtk-guard-mutants.sh ignores a failing git status" tools/qa/rtk-guard-mutants.sh -- 's/^\(st=\$(git status --porcelain 2>&1)\) || {.*$/\1 || true/'
+mutant MO "rtk-guard-mutants.sh ignores a failing git diff" tools/qa/rtk-guard-mutants.sh -- '/^  if \[ "\$d" -gt 1 \]/d'
+mutant MP "order test: a chained cd (&&) in front of the cd in rtk-history.sh" tools/qa/rtk-history.sh -- 's/^cd "\$here" || exit$/[ -n "$here" ] \&\& cd "$here" || exit/'
+mutant MQ "order test: the g helper runs before the cd in rtk-classes.sh" tools/qa/rtk-classes.sh -- 's/^cd "\$here" || exit$/g status >\/dev\/null 2>\&1; cd "$here" || exit/'
 exit "$survived"
