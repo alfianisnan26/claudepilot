@@ -24,8 +24,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   wip/qa-t426-364c7ca 364c7ca4 (18a3dbb1 + -x db6b952a 155e334b). Now its one S1h probe Job.
 - QA UI 8b13bb5a (no Write): T-611 merge risks 10 (8207). Now T-591 cause read (no Job) -> QA T-675 R2c f7b4e34a.
 - QA BE 2 42e5408f (no Write): T-611 S2 PWG 8186, T-736 S3e PWG 8198. Now QA T-781 S8 543240b8.
-- IMPL 46632d91 (respawned, sonnet; old 7cc1b2f5 ended after T-675 R2b DONE 5d38ab69): T-772 S2 on ticket/T-772-s2 from
-  1e1e0ba1 (7916 items 1-5 + 7599 sweep; QA plan 7963).
+- IMPL 46632d91 (sonnet): T-772 S2 DONE 188cd077 (8287; Job c3d11356 5/5, mutants 95509db6 50901cf1) -> QA UI queue.
+  Now T-591 S3 lastReleased fix on ticket/T-591-s3 from b2932d0e -> then T-525 proposal draft.
 - BE INFRA 16c2494f (sonnet): T-401 S2c DONE c0c0ce7d; T-611 S2b DONE 96d7c148 (Job c2e54e28 71/71, mutant 5662dc0a 4 red;
   8234) -> QA. Now T-736 S3f (8200) -> T-611 integration merge after b24b lands (8207) -> T-610 mark 2 rows (append-only
   migration + test, 8267) -> T-524 S3c + T-733 S5 -> T-612 S1.
