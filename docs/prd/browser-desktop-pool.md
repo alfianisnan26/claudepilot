@@ -578,13 +578,22 @@ reads the title the person's click set; a second device is a viewer and its inpu
 The agent must browse the site without ever seeing the values: not in its context, files, tool results, transcript, a log or an audit row.
 The owner's brief is T-623; the design is on that ticket.
 
-**Setting.** `headers` on the pool, a list of `{ hosts: [pattern], name, secret }`:
+**Setting.** `headers` on the pool, a list of `{ hosts: [pattern], name, secret, key? }` (`key`: T-623 S2, below the table):
 
 | Field | Rule |
 | --- | --- |
 | `name` | A header name (letters, digits, hyphens). The ones the browser owns (`Host`, `Cookie`, `Content-Length`, `Content-Type`, `Origin`, `Referer`, `User-Agent`, `Connection` and the like; `FORBIDDEN_HEADERS` in `headers.ts`) are refused. |
 | `secret` | The NAME of one Secrets & env entry (kind secret). Never a value: a `value` field is dropped at save. The name must belong to exactly one secret in the current revisions of all Secrets & env sets; the set need not be assigned to the workspace. |
 | `hosts` | `app.example.com`, `app.example.com:8443` or `*.example.com` (up to 20). Each must be covered by an entry of `allowedSites`; saving is refused otherwise, and so is removing an allowed site that a header still uses. At most 10 rules. |
+
+**A key inside an env-file entry (T-623 S2).** A credential that is one env-file entry (`KEY=VALUE` lines, both values inside) is not split into two entries
+(that would copy it and double its rotation). A rule may add `key: "<VAR>"` (`HEADER_SECRET_KEY`: letters, digits, underscores, up to 128, not starting with a
+digit): `secret` names the env-file entry and the header's value is that variable's value. The portal parses the entry at delivery (`envFileValue` in
+`headers.ts`: `export ` allowed, blank lines and `#` comments skipped, one pair of matching quotes stripped, the last line for a key wins), in memory only; only the
+key's value goes to `headers.json`, never the other variables. A missing or empty key leaves the header out, and the audited reason is `the entry has no <KEY>`: the
+key's name, never a value. The audit, the spec hash input and the pool hold the entry's name, the key's name and the entry's value id, never a value. The gate masks
+the value by the key's own variable name (`--redact-env <KEY>`), since the workspace has an env file's variables, not a variable called after the entry. Without
+`key` a rule behaves as before (the whole value).
 
 **How it works** (no proxy: HTTPS would need a CA the browser trusts):
 

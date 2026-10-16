@@ -44,7 +44,7 @@ export function mcpServers(content: BrowserPoolContent): Record<string, unknown>
   const redactNames = [...new Set((content.headers ?? []).map((h) => h.name))].sort();
   // The secrets' values are masked by value too: the gate reads them from variables of the same name that Claude Code passes through
   // (`${NAME:-}`, empty when the workspace doesn't have it). Only names are in the file; a name that isn't an environment variable is skipped.
-  const secretVars = [...new Set((content.headers ?? []).map((h) => h.secret).filter((n) => /^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(n)))].sort();
+  const secretVars = [...new Set((content.headers ?? []).map((h) => h.key ?? h.secret).filter((n) => /^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(n)))].sort();
   const valueEnv = Object.fromEntries(secretVars.map((n) => [n, `\${${n}:-}`]));
   const common = (name: 'playwright' | 'devtools') => [
     '--tools',
