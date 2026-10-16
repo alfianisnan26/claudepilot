@@ -164,16 +164,18 @@ test('T-881: drafts, revisions waiting for review and rejected ones are never ad
     const p = h.create('Dev browser', {});
     h.pools.setAssignments('docker/dev', 'browser', [{ poolId: p.id }]);
     const r1 = dirsOf(h)[0]!;
-    bump(h, p.id, 2, true); // revision 2: a draft
+    const sql = h.store.db!;
+    const copy = (revision: number, status: string, from: number) =>
+      sql.prepare(`INSERT INTO pool_revisions (pool_id, revision, content, note, created_at, status) SELECT pool_id, ?, content, note, created_at, ? FROM pool_revisions WHERE pool_id = ? AND revision = ?`).run(revision, status, p.id, from);
+    copy(2, 'draft', 1);
     bump(h, p.id, 3); // revision 3: deliverable and current
     const r3 = dirsOf(h)[0]!;
-    const sql = h.store.db!;
-    sql.prepare("INSERT INTO pool_revisions (pool_id, revision, content, note, created_at, status) SELECT pool_id, 4, content, note, created_at, 'rejected' FROM pool_revisions WHERE pool_id = ? AND revision = 1").run(p.id);
-    sql.prepare("INSERT INTO pool_revisions (pool_id, revision, content, note, created_at, status) SELECT pool_id, 5, content, note, created_at, 'waiting_review' FROM pool_revisions WHERE pool_id = ? AND revision = 1").run(p.id);
-    sql.prepare("INSERT INTO pool_revisions (pool_id, revision, content, note, created_at, status) SELECT pool_id, 6, content, note, created_at, 'deliverable' FROM pool_revisions WHERE pool_id = ? AND revision = 3").run(p.id);
+    copy(4, 'rejected', 1);
+    copy(5, 'waiting_review', 1);
+    copy(6, 'deliverable', 3);
     sql.prepare('UPDATE pools SET current_revision = 6 WHERE id = ?').run(p.id);
     const got = dirsOf(h);
-    assert.equal(got.length, 3, 'revision 6 and the deliverable r3 and r1: not the draft (2), rejected (4) or waiting (5)');
+    assert.equal(got.length, 3, `revision 6 and the deliverable r3 and r1: not the draft (2), rejected (4) or waiting (5); got ${JSON.stringify(got)}`);
     assert.ok(got.includes(r1) && got.includes(r3));
   } finally {
     h.done();
