@@ -301,7 +301,7 @@ body {
    programmatic focus carry data-focus-container and keep no ring; a tabindex="-1" control (a real button) still gets one. */
 @media (forced-colors: active) {
   :focus-visible:not([data-focus-container]) {
-    outline: 2px solid Highlight;
+    outline: 2px solid transparent;
     outline-offset: 2px;
   }
 }
