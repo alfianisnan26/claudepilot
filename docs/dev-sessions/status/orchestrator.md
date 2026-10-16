@@ -21,8 +21,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - QA UI 8b13bb5a: standby -> T-376 S4.
 - QA BE 2 42e5408f: T-610 rework 80a2f002 (m1-m5 killed 904039f5, m6 survives; 5b21f12e 1081/1084; qc-t610b PASS job 489f5796), then T-574 S3.
   T-251: audit PASS WITH GAPS (45e984db, 8870ab0c); S2 9adfeee2 PASS (e04de7ab, A-D caught) -> batch 17.
-- IMPL lane 0d799c90 (sonnet, rossi; bccb756f ended after T-710) T-376 S4 on ticket/T-376-s4 from be431d6a: createApp wiring
-  test + 4x CPU, long tasks, DOM/heap, older-page render budgets.
+- IMPL lane 0d799c90 (sonnet) T-376 S4 87144867: wiring proven (3fa76653); long task 207-273ms red 1-2/4 (a435d70e) -> one try content-visibility (6952); wiring
+  test + 4x CPU, long-task, DOM/heap, older-page budgets; if still red -> QA UI as is, budget question -> coordinator.
 - BE INFRA lane a7d33a84 (sonnet, sekar; 87749649 ended after T-610 rework) T-697 rework in ticket-t-697-flakes: await the scan, 30x load.
 - BACKEND lane 216dbe18 (sonnet, regitha) T-574 S3 on ticket/T-574-s3: cross-lead NOT_FOUND test, size trim, bound 1.5k.
 - HELD: T-426 S1e 2174eee1 QA PASS 6169 -> merge on the T-401 ack (4941). T-578 51f6c153 review CHANGES 6168 -> owner decision.
