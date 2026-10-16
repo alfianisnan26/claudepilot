@@ -364,9 +364,8 @@ export function Transcript({
           !(it.kind === 'row' && it.row.type === 'event' && it.row.event.kind === 'user' && !it.row.event.transfer && !it.row.event.actor) &&
           !(it.kind === 'row' && it.row.type === 'event' && adopted.has(it.row.event.seq));
         return (
-          // T-376 S4: a row off screen skips its style and layout (`content-visibility`); `auto` in the size keeps the height it was last
-          // rendered with, so the scroll anchor and the scroll height stay where they were. The commit of 200 events was a 160-270 ms task at 4x CPU.
-          <motion.div key={it.key} data-anchor={anchorSeq(it)} className="[content-visibility:auto] [contain-intrinsic-size:auto_72px]" {...RISE} initial={rise ? RISE.initial : false}>
+          // `content-visibility:auto` on this row was tried (T-376 S4) and removed: the row you read moved 160-430 px when a page landed.
+          <motion.div key={it.key} data-anchor={anchorSeq(it)} {...RISE} initial={rise ? RISE.initial : false}>
             {it.kind === 'activity' ? (
               <ActivityBlock
                 rows={it.rows}

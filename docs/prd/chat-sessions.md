@@ -651,8 +651,10 @@ a WebSocket upgrade, a blob, a download or a range answer never is. Not yet buil
 **History pages in the web (T-376, web slice, as built 2026-10-15).** Opening a session reads the newest page only (`?limit=200`; tried at 80 in T-376 S4 and reverted: a shorter page does not fill the screen, so older pages load by themselves during the open and add long tasks) and
 shows it at the bottom, rendered in a React transition (the page's rows commit in slices the browser can interrupt; older pages too), with the
 entry script split into `react`, `motion` and `router-icons` chunks so no single script is one long task. Measured on the built app with
-`tools/qa/chat-open.mjs` (10,000-event chat, 4x CPU throttle): no long task over 200 ms at the open (before S4: 312 to 449 ms for the page's
-render and 239 ms for the 1.27 MB entry script), one older page painted within 300 ms of the scroll that triggers its read, and DOM nodes and
+`tools/qa/chat-open.mjs` (10,000-event chat, 4x CPU throttle): the budget is no long task over 200 ms at the open. **It is not always met**: before S4 the
+longest task was 238 to 396 ms (render 312 to 449 ms, entry script 239 ms); after, 137 to 273 ms across runs (some configs pass, some fail by 70 ms: the
+commit of the 200-event page at 4x CPU). `content-visibility:auto` on the rows was tried once and removed: the row you read moved 160 to 430 px
+when a page landed. The budget is unchanged; a person decides on it. One older page painted within 300 ms of the scroll that triggers its read, and DOM nodes and
 JS heap recorded before and after the older pages (about 1,700 to 3,750 nodes, 10 to 16 MB for three pages); the socket subscribes after that page's newest seq (a subscribe without `afterSeq` sends the whole backlog, so it
 waits for the page; a page that cannot be read falls back to exactly that). Reconnects resume with `afterSeq` as before, and live events
 go at the end while older pages are read. Within a screen of the top (at least 400 px) the transcript reads the page before the first
