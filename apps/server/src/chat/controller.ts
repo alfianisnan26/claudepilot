@@ -452,7 +452,25 @@ export { crewQuote };
  * What Claude reads for a message a portal actor sent: the text under a one-line header that says where
  * it came from and that the person didn't type it. The transcript keeps the text as sent, with its actor.
  */
-export function portalFrame(actor: string, label: string | undefined, text: string, relation?: 'parent' | 'worker' | 'crew'): string {
+export function portalFrame(actor: string, label: string | undefined, text: string, relation?: 'parent' | 'worker' | 'crew', warning?: string): string {
+  const framed = portalFrameBase(actor, label, text, relation);
+  // T-675: the portal's own note to the lead, between the header and the text (the header is the first `]` line).
+  if (!warning) return framed;
+  const at = framed.indexOf('\n\n');
+  return `${framed.slice(0, at)}\n[Portal note: ${warning}]${framed.slice(at)}`;
+}
+
+/** T-675: Agent-tool sub-agents a lead may run before its frame warns; the lead's own `max_workers`, else this (D-43: five at once). */
+export const LEAD_SUBAGENT_WARN_DEFAULT = 5;
+
+/** T-675: the warning for a lead running more Agent-tool sub-agents than `limit` (its max_workers, else 5), or undefined. */
+export function leadSubagentWarning(agentsRunning: number, maxWorkers: number | null | undefined): string | undefined {
+  const limit = maxWorkers ?? LEAD_SUBAGENT_WARN_DEFAULT;
+  if (!(agentsRunning > limit)) return undefined;
+  return `you run ${agentsRunning} sub-agents at once, over your limit of ${limit}. Each one costs the workspace memory (about 350 MB); wait for some to finish before starting more.`;
+}
+
+function portalFrameBase(actor: string, label: string | undefined, text: string, relation?: 'parent' | 'worker' | 'crew'): string {
   const [kind] = actor.split(':');
   // T-294: a session says what it is to the receiver; a peer's title is its own choice, so the frame says what a peer can't ask.
   const session = relation === 'parent' ? 'your parent session' : relation === 'worker' ? 'your worker session' : relation === 'crew' ? 'a peer worker of your parent (your crew)' : 'another session';
@@ -2373,7 +2391,7 @@ export class ChatController {
       if (report && this.#crewHeld.has(sessionId)) throw new AppError('CONFLICT', 'A person stopped this session.');
     };
     held();
-    await this.#live(sessionId, !report);
+    await this.#live(sessionId, !report, true, opts.actor ?? 'ui');
     if (this.#chat.hasInput(sessionId, uuid)) throw new AppError('CONFLICT', 'That message was already sent.'); // a retry raced it
     held(); // a Stop while it woke
     if (!report) this.#crewHeld.delete(sessionId); // someone else's message runs it again: its crew's news may follow
@@ -2405,7 +2423,7 @@ export class ChatController {
     try {
       await this.#writeLine(
         sessionId,
-        userLine(att.withNote(portal && !bare ? portalFrame(portal, actorLabel, text, opts.relation) : text), { uuid, priority, images: att.inline(), imagesFirst: att.needsStaging }),
+        userLine(att.withNote(portal && !bare ? portalFrame(portal, actorLabel, text, opts.relation, leadSubagentWarning(this.#chat.get(sessionId)?.agentsRunning ?? 0, this.#chat.row(sessionId)?.max_workers)) : text), { uuid, priority, images: att.inline(), imagesFirst: att.needsStaging }),
       );
       att.done();
     } catch (e) {
@@ -2538,7 +2556,7 @@ export class ChatController {
       case 'cancel_queued':
         return this.#cancelQueued(sessionId, a.inputUuid);
       case 'resume':
-        return this.#resume(sessionId);
+        return this.#resume(sessionId, opts.actor);
       case 'stop_task':
         return this.#stopTask(sessionId, a.taskId);
       case 'rename':
@@ -2707,9 +2725,9 @@ export class ChatController {
   }
 
   /** Resume: an Interrupted or sleeping session relaunches with `--resume`; a running one is left as it is. */
-  async #resume(sessionId: string): Promise<void> {
+  async #resume(sessionId: string, actor?: string): Promise<void> {
     this.#require(sessionId);
-    await this.#live(sessionId);
+    await this.#live(sessionId, true, true, actor ?? 'ui');
   }
 
   /* ---------- Bypass permissions (FR20) ---------- */
@@ -3122,7 +3140,7 @@ export class ChatController {
       this.#append(sessionId, { kind: 'system', text: `Recovered in place after an integrity ending: ${why}`, recovered: true });
       this.#note(sessionId, `The line that ended it was dropped: it isn’t read again (${ending!.classified}, ${ending!.origin}).`);
       try {
-        await this.#live(sessionId);
+        await this.#live(sessionId, true, true, actor);
       } catch (e) {
         // It stays ended, as it was, with its reason and its classification: a later recover (or a new session) is still possible.
         this.#stopReader(sessionId);
@@ -4651,7 +4669,7 @@ export class ChatController {
   }
 
   /** Makes sure there is a running process to talk to: waits out work in flight, resumes or wakes one that isn't running. */
-  async #live(sessionId: string, relaunchGone = true, budget = true): Promise<void> {
+  async #live(sessionId: string, relaunchGone = true, budget = true, actor = 'portal'): Promise<void> {
     await this.#busy.get(sessionId);
     let row = this.#chat.row(sessionId);
     if (row && row.state !== 'ended' && row.process !== 'live') {
@@ -4660,7 +4678,7 @@ export class ChatController {
       const slept = row.process === 'asleep';
       // T-416: a wake needs the memory as a start does, and holds it as a start does (two wakes at once see each other); refused, it stays
       // as it is (asleep or interrupted) and the caller reads why. A restart (`budget` false) is exempt: its own process just stopped.
-      if (budget) await this.#memoryBudget(row.workspace_id, row, 'portal', sessionId);
+      if (budget) await this.#memoryBudget(row.workspace_id, row, actor, sessionId);
       try {
         await this.#slot(row.workspace_id, row);
         await this.#startProcess(sessionId, { resume: true });
