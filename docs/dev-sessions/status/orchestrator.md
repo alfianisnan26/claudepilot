@@ -13,18 +13,17 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 
 ## IN FLIGHT (6 of 6, D-71)
   Lanes' ticket_comment refused on unassigned tickets (T-341, T-549, T-675): verdicts live in their replies + this file.
-- QA PERF 7e4879c7: T-697 29b4ce58 (test-only: actions.test settled() yields a turn; limits + crewMcp G3 not reproduced;
-  G3 failed in 7d87d90 which predates the wait at :773). Asked: 30x under load with/without fix. Lead quick-check PASS (job 12295a2b).
-- QA UI 8b13bb5a: T-376 S3 3ec8fa94 (6765: 14 MB was Vite dev mode; assetCompress gzips /assets (read: low risk), bundle
-  1,264->387 KB; Show all existed; first row 645-708 ms built; oldest page 41-48 s by paging). Lead quick-check queued. QA BE 2 42e5408f: T-675 65d93dea (job 2f55f771: 837/840 chat+notify, typecheck 0;
-  id clip+hash '.', wake actor, lead [Portal note] N=max_workers|5, R2). Lead quick-check PASS (job 4e7f31dc). Then T-549 S2 (lead quick-check PASS job 4d5cb657, which
-  also showed T-524 S3 live: master >75%, Job kept off it; T-524 6775).
+- QA PERF 7e4879c7: T-697 29b4ce58 (test-only actions.test fix; limits + G3 not reproduced; 30x under load asked; lead
+  quick-check PASS 12295a2b). Then T-524 S3b 23330c28 (test-only +25: name pin, no-patch-on-top-fail; src/ci 208/208 job
+  54784775; mutants D,F killed f69b2de3). Live re-read patch NOT verified. 6775 was WRONG (rule set at creation, 78%): 6788.
+- QA UI 8b13bb5a: T-376 S3 3ec8fa94 (6765: 14 MB was Vite dev mode; assetCompress gzips /assets, read: low risk; bundle
+  1,264->387 KB; first row 645-708 ms built; oldest page 41-48 s). Lead quick-check PASS 92fd9942.
+- QA BE 2 42e5408f: T-675 65d93dea (job 2f55f771 837/840; quick-check PASS 4e7f31dc). Then T-549 S2 5d97103d (lab 81/81
+  job 773122d5; ids with a source only, D-67; budget drops M1 at 2 programs; quick-check PASS 4d5cb657; gap: 3-5 seeds small).
 - IMPL bccb756f (sonnet, rossi) T-710 on ticket/T-710-ci-sweep from wip/qa-t710-8bb9a2c: seeded run with jobs/steps/log,
   every control 390/1280 light/dark, Tab/focus pass, fixes in slice.
-- T-549 S2 DONE 5d97103d (job 773122d5: lab 81/81; ids kohi-event 48 / konfersi 47 only, D-67 Event dropped; budget pages
-  M1 out at 2 programs, 19,209 unbudgeted) -> QA BE 2 after T-675. Gap: 3-5 seeds small; boundary mutants not rerun.
-- BE INFRA lane 07d4830c (sonnet, two.claude) T-524 S3b on ticket/T-524-s3b from integration: pin job name, no-patch-on-
-  top-fail test, test-only master-pct override + live suspended-Job patch, master re-measure.
+- BE INFRA lane 4d010bea (sonnet, two.claude) T-251 (urgent rank-02d) on ticket/T-251-unknown-usage: audit 5 reqs vs code
+  (T-255 limitMessage exists), build only gaps.
 - BACKEND lane 216dbe18 (sonnet, regitha) T-574 S3 on ticket/T-574-s3 from integration: cross-lead NOT_FOUND test, size trim
   toward 600 avg, bound back toward 1.5k.
 - HELD: T-426 S1e 2174eee1 QA PASS 6169 -> merge on the T-401 ack (4941). T-578 51f6c153 review CHANGES 6168 -> owner decision.
@@ -32,6 +31,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - 16:12 OWNER PRIORITY (coordinator, T-426 5538): T-401 then T-426 FIRST. T-401 gate GREEN gate-54ba328-6502; ff only on the person's ack.
 
 ## DECISIONS (binding)
+- 03:55 Lead false claim corrected: T-524 6775 said job 4d5cb657 proved the S3 patch; its log shows the rule at creation. 6788.
 - 23:55 T-524 S3 (6489): Jobs off k3s-master over the T-611 line; re-measure after merge. 22:59 T-574 out of batch 8 (6396).
 - 20:14 PUSHBACK T-657: T-259 (QA FAIL 1773), T-317 (live run not done), T-338 (no QA pass) closed against the evidence -> reopen
   proposed; lead can't (T-634).
