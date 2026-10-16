@@ -13,14 +13,16 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 ## IN FLIGHT (6 of 6, D-71)
   Lanes' ticket_comment refused on unassigned tickets (T-341, T-549, T-675): verdicts live in their replies + this file.
 - QA PERF 7e4879c7: T-739 B S3 PASS WITH GAPS (job e9352e97; mutants M1 M3 M4 M5 M7 survived -> Impl after T-772 S1)
-  N1 PASS + killing tests (T-739 record) -> now PLAN T-611 (no Job).
-- QA UI 8b13bb5a: T-772 sweep (7599), PLAN T-592 (7601), REVIEW T-723 S3 APPROVE 7609 (T-778 confirmed) -> now PLAN T-733.
+  N1 PASS + killing tests (7613); PLAN T-611 (7621, lead order 7642) -> now RE-QA T-426 S1f 4313670d (lead read diff, 7640).
+- QA UI 8b13bb5a: T-772 sweep (7599), PLAN T-592 (7601), REVIEW T-723 S3 APPROVE 7609, PLAN T-733 (7630, 7633) -> now PLAN T-781.
+- FOR THE COORDINATOR, T-781 (D-76): the lead cannot claim or comment on it (unassigned; claim_next takes the queue top). The
+  Backend lane is spawned with ticket T-781 right after T-736 S3 (destructive-script fix, already running; not preempted). T-731 is DONE.
 - QA BE 2 42e5408f: T-600 live UNAVAILABLE for the lane (7597); lead read crew_scorecard: LIVE PARTIAL, pace no_source (7610);
   PLAN T-776 4 slices (lead decisions 7608) -> now QA T-723 S3 b78d7f6b (builder job e178a510 101/0, 5/5 mutants).
 - IMPL lane 09fee945 (sonnet, sekar; fce0c981 ended: T-739 B S1-S3 + docs N1 9be41062) T-772 S1 on ticket/T-772-forced-colors
   (base b7f02cad): ci outline-hidden + tools/qa forced-colors check.
-- BE INFRA lane 2dc2be75 (sonnet; b11ecab1 ended: T-731 DONE 31b1ad73, N1-N3) T-426 S1e fix 7121 on ticket/T-426-s1f
-  (base e630964d) -> T-610 7053 (respawn) -> T-524 S3c (7360).
+- BE INFRA lane 72bdc262 (sonnet, satria; 2dc2be75 ended: T-426 S1f DONE 4313670d, job 6c72bc7f 57/0, M1-M3 red) T-610 rework 2
+  (7053 items 1-5, m6) -> T-611 S0 -> T-524 S3c (7360).
 - BACKEND lane 4762d05d (sonnet; 4123bb21 ended: T-723 S3 DONE b78d7f6b, 7595) T-736 S3: QA FAIL 7452 F1 other-repo guard,
   F2 fail closed on missing guard, cwd mutant -> T-733 S4, S6. T-778 filed (bypass routes lack own requireCan; authz = person, coordinator).
 - HELD: T-426 S1e 2174eee1 QA PASS 6169, review CHANGES 7121 -> fix, re-QA, merge after T-401. T-578 51f6c153 review CHANGES 6168 -> owner. T-631 CHANGES 5850 -> coordinator.
@@ -68,8 +70,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 
 ## NEXT (in order, as slots free)
 1. T-401 fix (7103) + re-QA, then ack 4941 -> T-426 S1e -> T-379 S2 3f11b28 (PASS 4948, review 4938); deploys are the coordinator's.
-2. On PASS: T-697, T-549 S2, T-376 S3 -> gate, merge. BE Infra after T-549 S2: T-524 S3b.
-   T-710 sweep PASS WITH GAPS 6737 (job abef017c); harness slice in flight, then QA UI re-sweep. Then T-376 S3, T-549 S2, T-697 -> QA.
+2. Batch at the gate door: T-376 S4b, T-732, T-731, T-723 S1-S3, batch 19 rebuilt (T-697, T-574 S3); then T-739 B, T-736.
 3. T-675 (memory findings 4/5 + R2 test, Backend lane), T-574 S3 (6615), T-416 S2 (Bypass restore).
 4. RTK: T-340 (hook change landed by a person/coordinator) -> T-341 merge -> T-306 item 3 (lab A/B). 5. T-537. 6. T-513.
 7. T-472 live re-check (needs portal_status), T-422, T-147, T-438, T-425, T-436, T-437, T-432, T-382, T-377, T-386, T-409, T-402, T-398,
