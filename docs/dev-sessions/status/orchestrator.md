@@ -16,7 +16,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - QA BE 2 42e5408f: REVIEW T-731 CHANGES; QA T-736 S2 FAIL 7452 (light mode resets other repo; missing guard fails open)
   -> S3 (7455, Backend after T-723 S2); now QA T-723 S1 9099a383.
 - IMPL lane fce0c981 (sonnet; 2f4ee38f ended: T-376 S4b DONE 103520e7, 7436, job 92c6f13b, no mutants; 65dd09f6: T-732 DONE
-  c9a032f7, item 5 -> coordinator 7407) T-739 B (plan 7349, index migration: lead reads) on ticket/T-739-scorecard-index from c4cee694.
+  c9a032f7, item 5 -> coordinator 7407) T-739 B S1 DONE 65b821d7 (migration 383 partial index, lead read OK; 4/4, 3 mutants;
+  7471: no deploy of 383 before build time is measured) -> S2 measure on 1M synthetic rows + gaps a-c. QA waits a free QA lane.
 - BE INFRA lane b11ecab1 (sonnet): T-731 2cfbc7e9 review CHANGES -> fixing: 4Gi back (CPU binds), reuse opt-in --reuse, key +image
   +big, cleanup own files only, leak check fail closed, 4 mutants, job-out/ removed (lead can't comment T-731)
   -> T-426 S1e fix 7121 -> T-610 7053 -> T-524 S3c (plan 7360).
