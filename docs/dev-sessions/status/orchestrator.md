@@ -1,28 +1,26 @@
-# orchestrator status (2026-10-16 05:30 UTC, session 355881a3, continuation of de232389)
+# orchestrator status (2026-10-16 06:50 UTC, session 355881a3, continuation of de232389)
 
 Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-10-15 DONE batches 1-7: see 4fbab374). Hand-overs: ab99b45, bb58413, 639202e.
 
 ## DONE
+- GATING 59652877 (batch 17): T-251 S2 9adfeee2 (tests only). T-251 then all 5 reqs + gaps closed; lead can't close (T-634).
 - MERGED 92900150 (batch 16): T-710 8107098a (QA UI PASS WITH GAPS ae9b7dae; mutant caught 5b304d1c; 24 px desktop -> T-724);
   gate GREEN gate-2d10963. T-710 unassigned: lead can't close (T-634), evidence here.
 - MERGED be431d6a (batch 15): T-675 65d93dea + T-549 S2 5d97103d (QA BE 2 PASS WITH GAPS; T-723); gate GREEN gate-9f5afa1
   (actions.test timer flaked in suite, passed alone: T-697's case).
 - MERGED de3a3515 (batch 14): T-376 S3 (QA UI 6797; open S4 6798), gate-d0975fa green.
-- MERGED c3cad1a6 (batch 13): T-524 S3 b68f043d (QA Perf PASS WITH GAPS 6623; open for S3b 6624) + T-681 1fbca960
-  (QA UI 6633; CLOSED, gaps -> T-710); gate GREEN gate-7526daa.
+- MERGED c3cad1a6 (batch 13): T-524 S3 (open S3b 6624) + T-681 (CLOSED; gaps -> T-710); gate-7526daa green.
 - MERGED 5f54dbcf (batch 12): T-574 S2 57bc14bf (QA BE 2 PASS WITH GAPS); gate GREEN gate-5a379d4 (6637). Open for S3 (6615).
 - Batches 11 24570945 T-341 (open D, person); 8b-10 (2026-10-15/16): 38d6d3fb T-325 S1 (open S3, person), 7ff6561d T-416 S1 (open S2, T-675), 7569d582 T-633 CLOSED.
 - Earlier 2026-10-15: batches 1-7 (275cea5b .. 1a4a7933); T-546, T-636, T-576, T-638 CLOSED.
 
 ## IN FLIGHT (6 of 6, D-71)
   Lanes' ticket_comment refused on unassigned tickets (T-341, T-549, T-675): verdicts live in their replies + this file.
-- QA PERF 7e4879c7: T-697 29b4ce58 (test-only actions.test fix; limits + G3 not reproduced; 30x under load asked; lead
-  quick-check PASS 12295a2b). Then T-524 S3b 23330c28 (test-only +25: name pin, no-patch-on-top-fail; src/ci 208/208 job
-  54784775; mutants D,F killed f69b2de3). Live re-read patch NOT verified. 6775 was WRONG (rule set at creation, 78%): 6788.
+- QA PERF 7e4879c7: T-524 S3b 23330c28 (test-only +25; src/ci 208/208 54784775; D,F killed f69b2de3; live re-read patch asked,
+  proof = patch-path log line, T-721). T-697 29b4ce58 QA FAIL 6923 (8/30 under load, job 96cc41c6) -> rework, next impl slot.
 - QA UI 8b13bb5a: standby -> T-376 S4.
-- QA BE 2 42e5408f: T-251 S2 9adfeee2 (test-only: mid-turn = steer, move at boundary per FR10a vs T-105 R2 asked; :208 kept,
-  tested; mutants A-C killed 685814f2; quick-check PASS c792d493), then T-574 S3. T-610 26f8ba37 QA FAIL 6895 (3a5d9444: 4 mutants).
-  T-251 (no code) PASS WITH GAPS (45e984db 255/255; M1-M6 killed 8870ab0c) -> S2 below.
+- QA BE 2 42e5408f: standby -> T-574 S3. T-610 26f8ba37 QA FAIL 6895 (3a5d9444: 4 mutants) -> rework below.
+  T-251: audit PASS WITH GAPS (45e984db, 8870ab0c); S2 9adfeee2 PASS (e04de7ab, A-D caught) -> batch 17.
 - IMPL lane 0d799c90 (sonnet, rossi; bccb756f ended after T-710) T-376 S4 on ticket/T-376-s4 from be431d6a: createApp wiring
   test + 4x CPU, long tasks, DOM/heap, older-page render budgets.
 - BE INFRA lane 87749649 (sonnet, sekar; 5b9b7122 ended after T-251 S2) T-610 rework in its worktree: 4 mutants, undercount, resume.
@@ -32,6 +30,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - 16:12 OWNER PRIORITY (coordinator, T-426 5538): T-401 then T-426 FIRST. T-401 gate GREEN gate-54ba328-6502; ff only on the person's ack.
 
 ## DECISIONS (binding)
+- 06:50 T-251 S2: an exhausted source with a running turn is steered once and moves at the boundary (FR10a, PRD default); QA asks
+  whether the owner wants a move mid-turn: product choice, not a defect; changing it means FR10a + t255 together.
 - 03:55 Lead false claim corrected: T-524 6775 said job 4d5cb657 proved the S3 patch; its log shows the rule at creation. 6788; incident T-721.
 - 23:55 T-524 S3 (6489): Jobs off k3s-master over the T-611 line; re-measure after merge. 22:59 T-574 out of batch 8 (6396).
 - 20:14 PUSHBACK T-657: T-259 (QA FAIL 1773), T-317 (live run not done), T-338 (no QA pass) closed against the evidence -> reopen
