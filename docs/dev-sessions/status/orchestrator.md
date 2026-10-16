@@ -3,7 +3,7 @@
 Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-10-15 DONE batches 1-7: see 4fbab374). Hand-overs: ab99b45, bb58413, 639202e.
 
 ## DONE
-- GATING 1c0290c7 (batch 18): T-524 S3b 23330c28 (QA Perf PASS WITH GAPS 6934), gate-1c0290c.
+- MERGED 98cdfb55 (batch 18): T-524 S3b 23330c28 (QA Perf PASS WITH GAPS 6934), gate GREEN gate-1c0290c (actions.test flake = T-697).
 - MERGED bf61c5ee (batch 17): T-251 S2 9adfeee2, gate GREEN gate-5965287. T-251 all 5 reqs + gaps closed; lead can't close (T-634).
 - MERGED 92900150 (batch 16): T-710 8107098a (QA UI PASS WITH GAPS ae9b7dae; mutant caught 5b304d1c; 24 px desktop -> T-724);
   gate GREEN gate-2d10963. T-710 unassigned: lead can't close (T-634), evidence here.
