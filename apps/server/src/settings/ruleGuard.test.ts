@@ -648,7 +648,7 @@ function gitCRig() {
   const lanes = join(g.root, 'agentic-worktrees');
   const wt = join(lanes, 'lane1');
   const main = join(g.root, 'main-folder-MARK860');
-  for (const d of [join(wt, 'sub'), join(wt, 'my wt'), join(wt, 't-860.fix'), join(wt, 'harmless'), join(main, '.git'), join(g.root, 'agentic-worktrees-evil', 'x')]) mkdirSync(d, { recursive: true });
+  for (const d of [join(wt, 'sub'), join(wt, 'my wt'), join(wt, 't-860.fix'), join(wt, '$..'), join(wt, 'harmless'), join(main, '.git'), join(g.root, 'agentic-worktrees-evil', 'x')]) mkdirSync(d, { recursive: true });
   symlinkSync(main, join(wt, 'out-link'));
   const rootsFile = join(g.root, 'git-c-roots');
   writeFileSync(rootsFile, `# lane roots\n${lanes}\n`);
@@ -827,6 +827,7 @@ test('T-860 S2: --git-dir, --work-tree, -c, other options, GIT_ variables, wrapp
     ['an unclosed quote', `git -C '${wt}/.. status`],
     ['an unclosed double quote', `git -C "${wt} status`],
     ['a trailing backslash', `git -C ${wt} status \\`],
+    // A folder named $.. exists in the scratch lane, so only the refusal of a $ in the word stops it (the shell reads $".." as ..).
     ['$"..." (any $ in the word)', `git -C ${wt}/$".." status`],
     ['ANSI-C dots', `git -C ${wt}/$'..'/$'..'/main-folder-MARK860 status`],
     ['ANSI-C octal dots', `git -C ${wt}/$'\\056\\056'/$'\\056\\056'/main-folder-MARK860 status`],
@@ -853,7 +854,6 @@ test('T-860 S2: --git-dir, --work-tree, -c, other options, GIT_ variables, wrapp
     ['the root with a slash', `git -C ${lanes}/ status`],
     ['a root-like name', `git -C ${lanes}X status`],
     ['dots to a sibling of the root', `git -C ${lanes}/../agentic-worktrees-evil/x status`],
-    ['a dot', 'git -C . status'],
     ['two dots', 'git -C .. status'],
     ['a name', 'git -C x status'],
     ['an empty word', 'git -C "" status'],
@@ -863,7 +863,16 @@ test('T-860 S2: --git-dir, --work-tree, -c, other options, GIT_ variables, wrapp
     ['a NUL', `git -C ${wt}/sub\u0000/.. status`],
     ['a path past PATH_MAX', `git -C ${wt}/${'a'.repeat(5000)} status`],
   ];
-  for (const [what, command] of R) refused(sh(command), `S2 ${what}: ${JSON.stringify(command)}`);
+  // Every form is run and the misses are listed together, so one run shows them all.
+  const misses: string[] = [];
+  const tryForm = (fn: () => void) => {
+    try {
+      fn();
+    } catch (e) {
+      misses.push((e as Error).message.split('\n')[0] ?? 'failed');
+    }
+  };
+  for (const [what, command] of R) tryForm(() => refused(sh(command), `S2 ${what}: ${JSON.stringify(command)}`));
 
   const A: [string, string][] = [
     ['status', `git -C ${wt} status`],
@@ -895,6 +904,7 @@ test('T-860 S2: --git-dir, --work-tree, -c, other options, GIT_ variables, wrapp
     ['a quoted folder', `git -C '${wt}' status`],
     ['a double quoted folder', `git -C "${wt}" status`],
     ['a folder with a slash at the end', `git -C ${wt}/ status`],
+    ['a dot (the cwd is a lane worktree)', 'git -C . status'],
     ['a folder with ./', `git -C ${wt}/./sub status`],
     ['a folder with an escaped space', `git -C ${wt}/my\\ wt status`],
     ['a folder with a quoted space', `git -C "${wt}/my wt" status`],
@@ -918,7 +928,8 @@ test('T-860 S2: --git-dir, --work-tree, -c, other options, GIT_ variables, wrapp
     ['a heredoc message', `git -C ${wt} commit -F - <<'EOF'\nsee git -C ${M} status and GIT_DIR=x\nEOF`],
     ['find without git', `find ${wt} -maxdepth 1 -name x`],
   ];
-  for (const [what, command] of A) allowed(sh(command), `S2 ${what}: ${JSON.stringify(command)}`);
+  for (const [what, command] of A) tryForm(() => allowed(sh(command), `S2 ${what}: ${JSON.stringify(command)}`));
+  assert.deepEqual(misses, []);
 });
 
 test('T-860: a refusal writes one outbox line with no path text, and the guard stays off in a workspace with no lane folder', () => {

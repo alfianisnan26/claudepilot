@@ -1012,8 +1012,22 @@ working. A session takes the hook when it starts: one started before the guard l
   Every `-C` of a command is checked (`git -C a -C b`), in a pipe, after `cd x &&`, in `bash -c`. The refusal's audit line carries the
   form and no path (`path` is empty), never the command. The check is on only in a workspace that has the lane folder or a roots file;
   elsewhere (no lane allow rule to guard) `git -C` is tracked as before, so it does not refuse a lead's `git -C` in its own repository.
-  Not covered: `git --git-dir` and `--work-tree` (still tracked as an unknown folder for the rule-file checks only). Tests:
-  `settings/ruleGuard.test.ts` (T-860), which build a scratch lane root and give it to the guard by `CLAUDEPILOT_GUARD_GITC_ROOTS_FILE`
+  **S2: the allow's `*` takes everything after the folder**, so in a lane workspace the rest of the command is read too:
+  `--git-dir` and `--work-tree` (both `=` and two-word forms) are read like `-C` and must stay below a lane root; before the subcommand
+  only `--no-pager`, `-P`, `-p`, `--paginate`, `--no-optional-locks`, `--no-lazy-fetch`, the pathspec switches, `--no-advice`,
+  `--no-replace-objects` and `--version` pass, so every `-c`, `--config-env`, `--exec-path`, `--namespace`, `--bare`, a glued `-Cpath`,
+  a `--` and a variable or pattern there are refused (after the subcommand `-c` and `-C` are git's own and pass). A `GIT_*` variable that
+  moves a folder or runs a program (`GIT_DIR`, `GIT_WORK_TREE`, `GIT_COMMON_DIR`, `GIT_CONFIG_*`, `GIT_EXEC_PATH`, `GIT_SSH_COMMAND`, ...) is
+  refused as a prefix, after `env`, `export` or `declare`; author, committer, trace and prompt variables pass. `env -C` and `sudo -D`
+  before git are read like `-C`; `find -exec git ...` is read as a git command; `alias` is refused; an unclosed quote or a trailing
+  backslash next to `git` is refused; `git config` of `core.worktree`, `core.bare`, `core.hooksPath`, `core.fsmonitor`, `core.sshCommand`,
+  `alias.*`, `include.*` and the like is refused; and a line that holds a `git -C` and, in another command, `ln`, `mv`, `cp`, `rm`, `mkdir`,
+  `tar`, `unzip` or a `git config` or `git worktree` is refused (the path is read before the line runs, so a link swapped in the same line
+  would point elsewhere). Out of scope, named so they are not a surprise: a race between the check and the run (permissions close it);
+  a `.git` file planted in a lane folder that points at the main repository; repository hooks; `cd M && git commit` (the cwd moves, not
+  `-C`: a sibling rule); writes from inside the lane folder to other places (`worktree add /abs`, `archive -o`, `checkout-index --prefix`,
+  `push M`), reads outside it, and `git -C <other-lane>` (a lane may reach a sibling lane: the ticket allows everything under the root).
+  Tests: `settings/ruleGuard.test.ts` (T-860), which build a scratch lane root and give it to the guard by `CLAUDEPILOT_GUARD_GITC_ROOTS_FILE`
   (read only by the Node half, which the wrapper starts with an emptied environment, so a session cannot set it). Not yet observed in a
   running Claude Code in a lane pod; the coordinator's deny lines (T-860 stopgap) stay as the first layer.
 
