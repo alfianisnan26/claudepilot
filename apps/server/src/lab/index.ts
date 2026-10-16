@@ -216,9 +216,12 @@ export class Lab {
     const own = opts.sessionId ? (facts.sessions.has(opts.sessionId) ? programIdOf(opts.sessionId, facts.sessions) : null) : undefined;
     if (opts.program && (!programs.has(opts.program) || (own !== undefined && own !== opts.program))) return null;
     const keep = [...programs.values()].filter((p) => (opts.program ? p.id === opts.program : own === undefined || p.id === own));
-    const scores = keep.map((p) => programScore(p, facts, windowMs, compare)).sort((a, b) => (b.current.cost.total.value ?? 0) - (a.current.cost.total.value ?? 0) || a.program.localeCompare(b.program));
+    // T-549 (D-65): the quota row reads the same T-547 figure; an agent's own read never sees it (quota is every Claude's).
+    const unusedRows = opts.sessionId ? undefined : loadQuotaUnused(this.opts.store.db, nowMs, nowMs - windowMs);
+    const scoreFacts = { ...facts, quotaUnused: unusedRows ?? null };
+    const scores = keep.map((p) => programScore(p, scoreFacts, windowMs, compare)).sort((a, b) => (b.current.cost.total.value ?? 0) - (a.current.cost.total.value ?? 0) || a.program.localeCompare(b.program));
     // T-547: whole-portal figure (Claudes cross programs): not in an agent's own-program read or a single-program read.
-    const quotaUnused = opts.sessionId || opts.program ? undefined : loadQuotaUnused(this.opts.store.db, nowMs, nowMs - windowMs);
+    const quotaUnused = opts.program ? undefined : unusedRows;
     // T-600: the headline over the same programs. Pace is quota data of every Claude: an agent's read never gets it.
     const paces = opts.sessionId !== undefined ? null : opts.paces ?? null;
     const headline = buildHeadline({ programs: keep, facts, windowMs, compare, paces });

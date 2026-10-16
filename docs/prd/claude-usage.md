@@ -1087,6 +1087,19 @@ tables the portal already keeps; nothing new is stored.
   `qa_review_model` (a worker whose role, `chat_sessions.agent`, is QA, verifier, ux-checker or reviewer with a request on a model that
   is not sonnet is a breach, unless its lead started it with a reason, `spawn_why`, T-490; workers with requests but no role recorded at
   all: unavailable, `not_recorded`).
+- **D-65 targets** (T-549; the same `targets` list, `decision: "D-65"`, ids in `CREW_D65_TARGETS`), over the window, each with its figure,
+  source and offenders. Warn from 80 % of a ceiling (this page's margin, not the decision's); breach at it. (1) `cost_per_done`: all-in
+  dollars over done tickets under 8 USD (offenders: done tickets whose all-in cost over their life is 8 or more). (2) `lead_share`:
+  the lead chain's part of the dollars under 30 % (offenders: the lead chain). (3) `qa_opus_share`: QA and review workers with a request
+  on opus or fable under 10 % of them (a `spawn_why` does not exempt here; offenders: those sessions; none: unavailable, `no_samples`).
+  (4) `done_rate`: feature and task tickets done in the window, scaled to a day, against the 2026-10-15 baseline of 48 / 47 a day
+  (ClaudePilot / Konfersi, which counted all ticket types, so the comparison is hard), matched by the lead's exact workspace id (`kubernetes/kohi-event` 48, `kubernetes/konfersi` 47; the Event program left pilot, D-67; never a pattern on the name, which gave ClaudePilot's own workspace the Event 12):
+  at or above is ok, under it warn, under half breach; no baseline for the workspace: unavailable, `not_recorded`. (5) `quota_unused`:
+  the worst quota left unused at a reset inside the window (T-547, `claude_usage_samples`) over 30 % is a breach; whole portal, so the
+  row repeats on every program and an agent's own read gets unavailable (`no_source`); offenders are Claude ids; "while a crew had work
+  queued" is not measured. (6) `wasted_tool_calls`: tool results of the program's sessions (`chat_events`, kind `tool_result`) that are
+  an error (a permission denial, an error of a portal `mcp__pilot__*` tool, or a failed command; baseline 2026-10-15 about 2,000 of
+  26,781) over all of them, under 3 % (offenders: the sessions with the most). The error text read is cut to 400 characters in SQL.
 - **Unavailable is a state.** Every figure carries `value`, `basis` (`measured`, `estimate`, `unavailable`) and `source`; unavailable
   is `null` with a reason: `no_source` (the table cannot be read), `no_samples` (nothing to divide by), `not_recorded`. A measured
   nothing is 0.
@@ -1094,11 +1107,13 @@ tables the portal already keeps; nothing new is stored.
   own program, the top of its session's lineage; another program, or one that does not exist, is the same 404) and the Portal MCP tool
   `crew_scorecard` (agent, reach session, read only; the same scoping, `NOT_FOUND`; an admin's token reads every program; short by
   default; `full: true` for every figure with its basis, the sources named once in `basis` so the result stays under the MCP size limit;
-  the route keeps a source on each figure). Wire types: `packages/contracts/src/scorecard.ts`.
+  the route keeps a source on each figure; the full form is paged by size: programs are carried in order while the result is at or under
+  19,000 characters, the rest are named in `omitted` and asked for with `program`). Wire types: `packages/contracts/src/scorecard.ts`.
 - **The page (S2): Usage → Crew** (`?tab=crew`; `features/lab/ScorecardTab.tsx`, pure wording in `scorecardModel.ts`). A window picker (1h, 6h,
   Day, Week) and Alone / Compare (Compare asks `compare=1` and shows each number's earlier value as "was"); the sources of every figure
   in one InfoTip. One card per program with five numbers: done per hour, dollars per done ticket (all-in), the lead's share, tickets in
-  review, and breaches (the count of D-61, D-62 and D-63 targets in breach). Each number shows its state (`ok`, `warn`, `breach`, or
+  review, and breaches (the count of D-61, D-62, D-63 and D-65 targets in breach). Under the numbers, always visible, a **D-65** list of the six rows above (label of one
+  or two words, value, state, offenders under it, rule and source in an InfoTip; rows at least 44 px tall, ids wrap). Each number shows its state (`ok`, `warn`, `breach`, or
   `unavailable`) and MEASURED, ESTIMATE or UNAVAILABLE, with its source (and the reason when unavailable) in an InfoTip: unavailable reads
   as the word, never 0. Only breaches take their state from the targets (breach when any is, warn when any warns, unavailable when none could
   be checked); the review backlog warns when a ticket has waited more than 24 hours (a default of this page, not a decision); the other three

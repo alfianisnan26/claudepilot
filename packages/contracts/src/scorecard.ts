@@ -33,15 +33,19 @@ export interface CrewFigure {
 
 export type CrewTargetState = 'ok' | 'warn' | 'breach' | 'unavailable';
 
+/** T-549 (D-65): the six efficiency targets, in the order the page shows them. */
+export const CREW_D65_TARGETS = ['cost_per_done', 'lead_share', 'qa_opus_share', 'done_rate', 'quota_unused', 'wasted_tool_calls'] as const;
+export type CrewD65TargetId = (typeof CREW_D65_TARGETS)[number];
+
 /** A metric checked against a standing decision. */
 export interface CrewTarget {
-  id: 'live_workers' | 'lead_subagents' | 'owner_queue' | 'qa_review_model';
-  decision: 'D-61' | 'D-62' | 'D-63';
+  id: 'live_workers' | 'lead_subagents' | 'owner_queue' | 'qa_review_model' | CrewD65TargetId;
+  decision: 'D-61' | 'D-62' | 'D-63' | 'D-65';
   /** The rule, in one line. */
   rule: string;
   state: CrewTargetState;
   figure: CrewFigure;
-  /** Session or ticket ids behind a warn or a breach (at most 20). */
+  /** Session, ticket or Claude ids behind a warn or a breach (at most 20). */
   offenders: string[];
 }
 
