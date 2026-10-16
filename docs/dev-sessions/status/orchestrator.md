@@ -1,9 +1,10 @@
-# orchestrator status (2026-10-16 06:50 UTC, session 355881a3, continuation of de232389)
+# orchestrator status (2026-10-16 07:05 UTC, session 355881a3, continuation of de232389)
 
 Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-10-15 DONE batches 1-7: see 4fbab374). Hand-overs: ab99b45, bb58413, 639202e.
 
 ## DONE
-- GATING 59652877 (batch 17): T-251 S2 9adfeee2 (tests only). T-251 then all 5 reqs + gaps closed; lead can't close (T-634).
+- GATING 1c0290c7 (batch 18): T-524 S3b 23330c28 (QA Perf PASS WITH GAPS 6934), gate-1c0290c.
+- MERGED bf61c5ee (batch 17): T-251 S2 9adfeee2, gate GREEN gate-5965287. T-251 all 5 reqs + gaps closed; lead can't close (T-634).
 - MERGED 92900150 (batch 16): T-710 8107098a (QA UI PASS WITH GAPS ae9b7dae; mutant caught 5b304d1c; 24 px desktop -> T-724);
   gate GREEN gate-2d10963. T-710 unassigned: lead can't close (T-634), evidence here.
 - MERGED be431d6a (batch 15): T-675 65d93dea + T-549 S2 5d97103d (QA BE 2 PASS WITH GAPS; T-723); gate GREEN gate-9f5afa1
@@ -11,15 +12,14 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - MERGED de3a3515 (batch 14): T-376 S3 (QA UI 6797; open S4 6798), gate-d0975fa green.
 - MERGED c3cad1a6 (batch 13): T-524 S3 (open S3b 6624) + T-681 (CLOSED; gaps -> T-710); gate-7526daa green.
 - MERGED 5f54dbcf (batch 12): T-574 S2 57bc14bf (QA BE 2 PASS WITH GAPS); gate GREEN gate-5a379d4 (6637). Open for S3 (6615).
-- Batches 11 24570945 T-341 (open D, person); 8b-10 (2026-10-15/16): 38d6d3fb T-325 S1 (open S3, person), 7ff6561d T-416 S1 (open S2, T-675), 7569d582 T-633 CLOSED.
-- Earlier 2026-10-15: batches 1-7 (275cea5b .. 1a4a7933); T-546, T-636, T-576, T-638 CLOSED.
+- Batches 1-11 (2026-10-15/16, 275cea5b .. 24570945): T-341 (open D), T-325 S1 (open S3), T-416 S1 (open S2); T-633, T-546, T-636, T-576, T-638 CLOSED.
 
 ## IN FLIGHT (6 of 6, D-71)
   Lanes' ticket_comment refused on unassigned tickets (T-341, T-549, T-675): verdicts live in their replies + this file.
 - QA PERF 7e4879c7: standby -> T-697 rework. T-524 S3b 23330c28 PASS WITH GAPS 6934 (2ac43ac7 208/208; D,F,G killed ea36e239;
   live patch NOT verified: no log line) -> next batch; S3c log line -> BE Infra after T-697.
 - QA UI 8b13bb5a: standby -> T-376 S4.
-- QA BE 2 42e5408f: T-610 rework 80a2f002 (m1-m5 killed 904039f5, m6 survives; 5b21f12e 1081/1084; qc-t610b running), then T-574 S3.
+- QA BE 2 42e5408f: T-610 rework 80a2f002 (m1-m5 killed 904039f5, m6 survives; 5b21f12e 1081/1084; qc-t610b PASS job 489f5796), then T-574 S3.
   T-251: audit PASS WITH GAPS (45e984db, 8870ab0c); S2 9adfeee2 PASS (e04de7ab, A-D caught) -> batch 17.
 - IMPL lane 0d799c90 (sonnet, rossi; bccb756f ended after T-710) T-376 S4 on ticket/T-376-s4 from be431d6a: createApp wiring
   test + 4x CPU, long tasks, DOM/heap, older-page render budgets.
