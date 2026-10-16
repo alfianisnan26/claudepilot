@@ -742,6 +742,8 @@ export class AutoTransferEngine {
         if (tries <= CONFLICT_RETRIES) {
           this.#conflicts.set(s.id, tries);
           this.#retryAt.set(s.id, now + CONFLICT_RETRY_MS);
+          // The trail says it (R4): an info row per retry, `deferred` with `busy`, so a person sees why the chat has not moved yet.
+          this.#record({ ...base, kind: 'deferred', code: 'busy' }, 'info');
           this.#wake(s.id, CONFLICT_RETRY_MS);
           return false;
         }

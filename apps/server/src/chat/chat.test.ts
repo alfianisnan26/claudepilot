@@ -2854,17 +2854,24 @@ test('T-781 transferFileConversation: a 300-message chat lands complete in the c
   assert.ok(bounded.text.length <= FILE_MAX_CHARS);
   assert.ok(bounded.text.endsWith(' end299'), 'the newest message is last and whole');
   assert.ok(bounded.text.startsWith('### '));
-  assert.ok(bounded.messages < 300 && bounded.messages > 200);
+  assert.ok(bounded.messages < 300 && bounded.messages > 40, 'about 1 MB of 15,000-character messages');
+  assert.equal(FILE_MAX_CHARS, 1_000_000, 'a slow tunnel must write it inside the exec timeout (R3)');
 });
 
 test('T-781 transferOpening: it says what the file holds: the whole conversation, or only the last N messages when the file hit its bound', () => {
   const meta: TransferMeta = { handoffId: '00000000-0000-4000-8000-000000000000', at: new Date('2026-10-16T12:00:00Z'), workspaceId: 'docker/ws1', cwd: '/home/node', sourceSessionId: 'src', fromClaude: 'Satria', toClaude: 'Default', path: '/home/node/.claudepilot/transfer/x.md' };
   const convo = { text: '### You\n\nhi', messages: 1, truncated: false };
   const whole = transferOpening(meta, convo, undefined, { messages: 300, truncated: false });
-  assert.match(whole, /The whole conversation, every message, is in the context file: Read it/);
+  assert.match(whole, /The whole conversation, every message, is also in the context file\. Reading it is optional/);
   const cut = transferOpening(meta, convo, undefined, { messages: 266, truncated: true });
-  assert.match(cut, /The context file holds the last 266 messages of the conversation \(older ones were left out of it too\): Read it/);
+  assert.match(cut, /The context file also holds the last 266 messages of the conversation \(older ones were left out of it too\)\. Reading it is optional/);
   assert.ok(!cut.includes('every message'), 'no false claim of completeness');
+  // R2: the opening never requires a tool: the conversation is inline, the file is optional, and the chat is told to run none.
+  for (const o of [whole, cut]) {
+    assert.match(o, /Do not run any tool or change any file to answer/);
+    assert.ok(!/Read it\b|before you continue|Apart from reading/.test(o), 'nothing asks for a read');
+    assert.ok(o.includes('<conversation>') && o.includes('hi'), 'the conversation is inline');
+  }
 });
 
 test('transferOpening: even a long conversation fits the event store’s cap, so the stored copy keeps the newest messages; a literal closing tag in carried text can’t end the conversation early', () => {

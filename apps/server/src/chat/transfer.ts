@@ -102,8 +102,12 @@ export function transferConversation(events: ChatEvent[], maxChars: number = MIN
 
 /** The context file's per-message clip (T-781, D5): a whole long answer, not the opening's 4,000. */
 export const FILE_MESSAGE_MAX_CHARS = 20_000;
-/** The context file's total bound (T-781): about 4 MB of text; past it the oldest whole messages are left out and the file says so. */
-export const FILE_MAX_CHARS = 4_000_000;
+/**
+ * The context file's total bound (T-781): about 1 MB of text; past it the oldest whole messages are left out and the file says so.
+ * It goes over the workspace exec's stdin, so it stays small enough for a slow Connect or Kubernetes tunnel inside the exec timeout:
+ * a timeout there would count as a failed move (R3).
+ */
+export const FILE_MAX_CHARS = 1_000_000;
 
 /** The conversation for the context file: every stored message (redacted, tools summarised), bounded per message and in total; the opening keeps its own, smaller budget. */
 export function transferFileConversation(events: ChatEvent[]): TransferConversation {
@@ -159,10 +163,11 @@ export function transferOpening(meta: TransferMeta, convo: TransferConversation,
     ...(convo.truncated ? [`- Only the last ${convo.messages} messages are included; older ones were left out.`] : []),
     // What the file holds is said as it is: when it hit its own bound the oldest messages are missing from it too (T-781).
     file?.truncated
-      ? `- The context file holds the last ${file.messages} messages of the conversation (older ones were left out of it too): Read it (use offset and limit for a long one) before you continue.`
-      : '- The whole conversation, every message, is in the context file: Read it (use offset and limit for a long one) before you continue.',
+      ? `- The context file also holds the last ${file.messages} messages of the conversation (older ones were left out of it too). Reading it is optional: use offset and limit for a long one, only if a later message needs more than is below.`
+      : '- The whole conversation, every message, is also in the context file. Reading it is optional: use offset and limit for a long one, only if a later message needs more than is below.',
     '',
-    'Read it as prior context. Apart from reading the context file, do not run tools or change files. Reply with one short line saying you have it and what the next step is, then wait for my next message.',
+    // No tool is needed to answer (R2): a read outside the working folder can sit on an approval nobody is there to give.
+    'Read this as prior context. Do not run any tool or change any file to answer: what you need to reply is below. Reply with one short line saying you have it and what the next step is, then wait for my next message.',
     '',
     ...(noteText ? [`<handoff_note from="${attr(meta.fromClaude)}">`, 'Written by that Claude, with the whole conversation in view, when the portal asked for a handoff before moving it.', fence(noteText), '</handoff_note>', ''] : []),
     '<conversation>',

@@ -270,6 +270,8 @@ test('T-781: a CONFLICT on an exhausted chat retries in 30 s, moves, is not a fa
     await r.engine.settled();
     assert.equal(r.chat.moves.length, 1);
     assert.equal(r.chat.get('s1')!.claudeId, 'work');
+    // R4: the retry leaves one info row in the trail (`deferred`, `busy`).
+    assert.deepEqual(r.auto.events('u_a', { kinds: ['deferred'] }).map((e) => e.code), ['busy']);
     r.clock.advance(0.49); // not yet
     await r.engine.settled();
     assert.equal(r.chat.moves.length, 1);
@@ -483,6 +485,24 @@ test('T-781 hard move: an exhausted chat that is idle moves as before, with no i
   await r.engine.settled();
   assert.equal(r.chat.moves.length, 1);
   assert.equal(r.chat.interrupted.length, 0);
+  r.engine.stop();
+});
+
+test('T-781 R5: with no destination ceiling for an exhausted source, a herd still spreads (fewest chats on a tie)', async () => {
+  const two = () => [usage('work', 'Work', [win('session', 100)]), usage('home', 'Home', [win('session', 60)]), usage('spare', 'Spare', [win('session', 60)])];
+  const r = await rig({ ...AUTO, [K.maxPerDestination]: 1 }, two);
+  r.chat.sessions.set('s2', chatSession('s2'));
+  r.chat.sessions.set('s3', chatSession('s3'));
+  r.chat.sessions.set('s4', chatSession('s4'));
+  for (const id of ['s1', 's2', 's3', 's4']) {
+    r.chat.turnEnds(id);
+    await r.engine.settled();
+  }
+  assert.equal(r.chat.moves.length, 4, 'the ceiling of 1 does not stop an exhausted chat');
+  const per = (to: string) => r.chat.moves.filter((m) => m.to === to).length;
+  assert.deepEqual([per('home'), per('spare')], [2, 2], 'ties go to the Claude with the fewest chats: no herd on one');
+  assert.ok(r.chat.moves.every((m) => m.to !== 'work'));
+  // The ping-pong guard for a forced source is the decide.test.ts case "the ping-pong guard (FR9) still refuses an exhausted source the Claude it just left".
   r.engine.stop();
 });
 

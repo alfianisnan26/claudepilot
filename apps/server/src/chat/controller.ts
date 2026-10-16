@@ -2104,8 +2104,9 @@ export class ChatController {
       const row = this.#chat.row(sessionId)!;
       const meta: TransferMeta = { handoffId, at: new Date(), workspaceId, cwd: source.cwd, sourceSessionId: sessionId, fromClaude: from, toClaude: dest.name, path };
       const facts = this.#moveFacts(sessionId, source);
-      const convo = transferConversation(this.#chat.history(sessionId), conversationBudget(meta, EVENT_TEXT_MAX, document));
-      const fileConvo = transferFileConversation(this.#chat.history(sessionId));
+      const stored = this.#chat.history(sessionId); // once: the opening's copy and the file's copy come from the same read
+      const convo = transferConversation(stored, conversationBudget(meta, EVENT_TEXT_MAX, document));
+      const fileConvo = transferFileConversation(stored);
       await this.#shellWrite(workspaceId, `${HOME}/.claudepilot/transfer`, path, transferFile(meta, fileConvo, document, facts));
       const sourceClaudeId = source.claudeId || this.#chat.ensureDefault(workspaceId).id;
       this.#chat.saveHandoff({ id: handoffId, workspaceId, sourceSessionId: sessionId, sourceClaudeId, destClaudeId: dest.id, path });

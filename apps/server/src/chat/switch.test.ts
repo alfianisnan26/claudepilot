@@ -316,7 +316,8 @@ test('switch: the Claude the chat runs on is asked for a handoff (the default): 
     // T-781: the file carries the whole message; the opening keeps its own budget and tells the new session to read the file.
     assert.ok(file.includes('END-OF-ASK'), 'the context file has the whole first message');
     assert.ok(!opening.text!.includes('END-OF-ASK'), 'the opening clips it');
-    assert.match(opening.text!, /Read it \(use offset and limit for a long one\)/);
+    assert.match(opening.text!, /Reading it is optional: use offset and limit for a long one/);
+    assert.match(opening.text!, /Do not run any tool or change any file to answer/);
     assert.equal(moved.claudeName, 'Work');
   } finally {
     await s.done();
