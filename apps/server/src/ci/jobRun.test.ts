@@ -1009,6 +1009,31 @@ test('T-731 mutation: a Job that did not end Complete is not saved even if its l
   assert.equal(failedButExit0(mutant((y) => y, edit('&& [ "${st:-}" = Complete ]', ''))), true, 'the mutant saves it: the check catches it');
 });
 
+test('T-731 reuse: a failed mv leaves no .log.tmp behind and no entry; the run still ends with the Job\'s exit code', () => {
+  const w = world();
+  // A mv that fails for the store's .log (the move of the temporary file), and is the real one otherwise.
+  const fake = join(w.root, 'bin/mv');
+  writeFileSync(fake, '#!/bin/sh\ncase "$2" in *.log) exit 1;; esac\nexec /bin/mv "$@"\n');
+  chmodSync(fake, 0o755);
+  const r = go(w, sha(), 'npm test');
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /could not save the result for reuse/);
+  assert.deepEqual(existsSync(store(w)) ? readdirSync(store(w)) : [], [], 'nothing left in the store, no .tmp');
+});
+
+test('T-731 reuse: no $work/n (the leak check did not run) is not saved (fail closed); a mutant without that condition saves it', () => {
+  const noLeakFile = (s: string) => edit('JR_N=$work/n awk', 'JR_N=$work/n.none awk')(s);
+  const saved = (script: string) => {
+    const w = world();
+    const r = go(w, sha(), 'npm test', [], script);
+    assert.equal(r.code, 0, r.out);
+    return existsSync(store(w)) && readdirSync(store(w)).some((f) => f.endsWith('.rc'));
+  };
+  assert.equal(saved(mutant((y) => y, noLeakFile)), false, 'the real check: a missing $work/n is not saved');
+  assert.equal(saved(mutant((y) => y, (s) => edit('&& [ -f "$work/n" ] ', '')(noLeakFile(s)))), true, 'without the -f condition it would be saved: the check catches it');
+  assert.equal(saved(SCRIPT), true, 'and a normal run is saved');
+});
+
 test('T-731 reuse: a store that is /, the home folder or the repository is refused (exit 2)', () => {
   const w = world();
   for (const dir of ['/', join(w.root, 'home'), REPO]) {
@@ -1019,19 +1044,20 @@ test('T-731 reuse: a store that is /, the home folder or the repository is refus
   assert.equal(jobs(w), 0, 'no Job was made');
 });
 
-test('T-731 reuse: cleanup deletes only old *.log, *.rc and *.job directly in the store; other files, subfolders and an existing mode stay', () => {
+test('T-731 reuse: cleanup deletes only old files of the store\'s own form (64-hex key + .log/.rc/.job) directly in it; foreign files (even *.log), subfolders and an existing mode stay', () => {
   const w = world();
   const dir = join(w.root, 'own-store');
   mkdirSync(join(dir, 'sub'), { recursive: true });
   chmodSync(dir, 0o755);
   const old = new Date(Date.now() - 20 * 86_400_000);
-  const files = ['notes.txt', 'sub/x.log', 'old.log', 'old.rc', 'old.job'];
-  for (const f of files) { writeFileSync(join(dir, f), 'x'); utimesSync(join(dir, f), old, old); }
+  const k = hex(32); // 64 hex characters, as a key
+  const own = [`${k}.log`, `${k}.rc`, `${k}.job`];
+  const foreign = ['notes.txt', 'sub/x.log', 'syslog.log', 'old.rc', 'old.job', `${k}.log.bak`, `${hex(31)}.log`];
+  for (const f of [...own, ...foreign]) { writeFileSync(join(dir, f), 'x'); utimesSync(join(dir, f), old, old); }
   const r = go(w, sha(), 'npm test', [], SCRIPT, { JOB_RUN_CACHE_DIR: dir });
   assert.equal(r.code, 0, r.out);
-  assert.ok(existsSync(join(dir, 'notes.txt')), 'an old file of another kind stays');
-  assert.ok(existsSync(join(dir, 'sub/x.log')), 'a file in a subfolder stays');
-  for (const f of ['old.log', 'old.rc', 'old.job']) assert.ok(!existsSync(join(dir, f)), `${f} is removed`);
+  for (const f of foreign) assert.ok(existsSync(join(dir, f)), `${f} stays`);
+  for (const f of own) assert.ok(!existsSync(join(dir, f)), `${f} is removed`);
   assert.equal(statSync(dir).mode & 0o777, 0o755, 'an existing folder keeps its mode');
   assert.ok(readdirSync(dir).some((f) => f.endsWith('.rc')), 'and the new pass is saved');
 });

@@ -636,8 +636,8 @@ session's result. With it, a Job that passed is saved, and the same work later r
 - **Store:** `JOB_RUN_CACHE_DIR`, default `~/.cache/claudepilot-job-run`, files `<key>.log`, `<key>.job` (`<Job name> <UTC time it passed>`) and `<key>.rc`. A new
   folder is made mode 700; an existing folder's mode is never changed. A folder that is `/`, the home folder or the repository is refused. Only `--reuse`, exit 0,
   the Job `Complete` and a leak check that ran and found nothing are saved (no `$work/n`, no save). The saved text is the log after the credential mask (the file
-  `JOB_RUN_LOG` gets), never the raw stream; the artifacts block is not in it. The `.rc` is written last. Only `*.log`, `*.rc` and `*.job` files directly in the
-  folder are ever deleted: those older than twice the age, when a result is saved.
+  `JOB_RUN_LOG` gets), never the raw stream; the artifacts block is not in it. The `.rc` is written last. Only files named like the store's own (a 64-hex key plus `.log`,
+  `.rc` or `.job`) directly in the folder are ever deleted: those older than twice the age, when a result is saved. A failed copy or move leaves no `.log.tmp`.
 - **Hit:** a result younger than `JOB_RUN_REUSE_MAX_AGE_DAYS` (7); the output starts with `job-run: reused a passed result for <repo>@<commit> from Job <name> (passed <time>, key …)`,
   then the saved log; exit 0. A `--reuse` run with no exact key says so and runs as a Job.
 - **Not covered:** `scripts/gate-job.sh` is never reused (the charter wants the full gate on the exact commit; reuse of gate results is owner decision T-578).

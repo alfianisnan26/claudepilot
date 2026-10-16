@@ -416,7 +416,11 @@ if [ -n "$key" ] && [ "$rc" = 0 ] && [ "${st:-}" = Complete ] && [ -f "$work/n" 
   if { [ -d "$cache" ] || mkdir -p -m 700 "$cache"; } && cp "$log" "$cache/$key.log.tmp" && mv "$cache/$key.log.tmp" "$cache/$key.log" \
      && printf '%s %s\n' "$job" "$(date -u +%FT%TZ)" > "$cache/$key.job" && printf '0\n' > "$cache/$key.rc"; then
     echo "job-run: result saved for reuse (key ${key:0:12}, ${reuse_days} days)"
-    find "$cache" -maxdepth 1 -type f \( -name '*.log' -o -name '*.rc' -o -name '*.job' \) -mtime "+$((reuse_days * 2))" -delete 2>/dev/null || true
-  else echo "job-run: could not save the result for reuse (no harm done)" >&2; fi
+    # Only names of the store's own form (64-hex key + .log/.rc/.job): a folder like /var/log or /tmp loses nothing else.
+    find "$cache" -maxdepth 1 -type f -regextype posix-extended -regex '.*/[0-9a-f]{64}\.(log|rc|job)' -mtime "+$((reuse_days * 2))" -delete 2>/dev/null || true
+  else
+    rm -f "$cache/$key.log.tmp" 2>/dev/null # a failed cp or mv leaves no half file behind
+    echo "job-run: could not save the result for reuse (no harm done)" >&2
+  fi
 fi
 exit "$rc"
