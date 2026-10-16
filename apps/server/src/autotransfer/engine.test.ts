@@ -488,6 +488,90 @@ test('T-781 hard move: an exhausted chat that is idle moves as before, with no i
   r.engine.stop();
 });
 
+/** An exhausted rig whose usage read runs `between` once: it happens after the chat was read and before the decision is acted on. */
+async function hardRig(between: (r: Awaited<ReturnType<typeof rig>>) => void) {
+  let ran = false;
+  let rr: Awaited<ReturnType<typeof rig>> | null = null;
+  const r = await rig(AUTO, () => {
+    if (!ran && rr) {
+      ran = true;
+      between(rr);
+    }
+    return EXHAUSTED();
+  });
+  rr = r;
+  r.chat.sessions.set('s1', STUCK());
+  r.chat.stored('s1', [{ at: at(-4) }]);
+  return r;
+}
+
+test('T-781 F1\': a person moves the chat between the decision and the stop: no interrupt and no move', async () => {
+  const r = await hardRig((x) => x.chat.personMoves('s1', 'spare'));
+  await r.engine.evaluate('s1');
+  await r.engine.settled();
+  assert.equal(r.chat.interrupted.length, 0);
+  assert.equal(r.chat.moves.length, 0);
+  assert.equal(r.chat.get('s1')!.claudeId, 'spare');
+  r.engine.stop();
+});
+
+test('T-781 F1\': the chat speaks again between the decision and the stop (the turn is alive): no interrupt and no move', async () => {
+  const r = await hardRig((x) => x.chat.stored('s1', [{ at: at(-4) }, { at: at(0) }]));
+  await r.engine.evaluate('s1');
+  await r.engine.settled();
+  assert.equal(r.chat.interrupted.length, 0);
+  assert.equal(r.chat.moves.length, 0);
+  r.engine.stop();
+});
+
+test('T-781 F1\': the chat was restarted (no longer working) between the decision and the stop: no interrupt', async () => {
+  const r = await hardRig((x) => x.chat.sessions.set('s1', { ...x.chat.get('s1')!, state: 'interrupted' }));
+  await r.engine.evaluate('s1');
+  await r.engine.settled();
+  assert.equal(r.chat.interrupted.length, 0);
+  r.engine.stop();
+});
+
+test('T-781: an interrupt that throws synchronously does not block the move', async () => {
+  const r = await rig(AUTO, EXHAUSTED);
+  r.chat.sessions.set('s1', STUCK());
+  r.chat.stored('s1', [{ at: at(-4) }]);
+  (r.chat as { interrupt: unknown }).interrupt = () => {
+    throw new Error('no control channel');
+  };
+  const orig = console.error;
+  console.error = () => {};
+  try {
+    await r.engine.evaluate('s1');
+    await r.engine.settled();
+  } finally {
+    console.error = orig;
+  }
+  assert.deepEqual(r.chat.moves, [{ id: 's1', to: 'home', handoff: 'skip' }]);
+  r.engine.stop();
+});
+
+test('T-781: a chat that is switching is not hard-moved, however quiet', async () => {
+  const r = await rig(AUTO, EXHAUSTED);
+  r.chat.sessions.set('s1', STUCK({ switching: true }));
+  r.chat.stored('s1', [{ at: at(-30) }]);
+  await r.engine.evaluate('s1');
+  await r.engine.settled();
+  assert.equal(r.chat.interrupted.length, 0);
+  assert.equal(r.chat.moves.length, 0);
+  r.engine.stop();
+});
+
+test('T-781: an exhausted working chat with no stored event is not hard-moved', async () => {
+  const r = await rig(AUTO, EXHAUSTED);
+  r.chat.sessions.set('s1', STUCK());
+  await r.engine.evaluate('s1');
+  await r.engine.settled();
+  assert.equal(r.chat.interrupted.length, 0);
+  assert.equal(r.chat.moves.length, 0);
+  r.engine.stop();
+});
+
 test('T-781 S5: a continuation that fails (the chat just restarted) is tried again after 15 s and arrives; the trail has one `continued` row', async () => {
   const r = await rig(AUTO, EXHAUSTED);
   r.chat.sendFails = 1;

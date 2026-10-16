@@ -398,6 +398,14 @@ export class AutoTransferEngine {
     return Number.isFinite(t) ? t : null;
   }
 
+  /** The hard move's last look before it stops a turn: the chat is still on the source Claude, still working, not switching, still silent. */
+  #stillStuck(decided: ChatSession): boolean {
+    const cur = this.#d.chat.get(decided.id);
+    if (!cur || cur.claudeId !== decided.claudeId || cur.state !== 'working' || cur.switching) return false;
+    const last = this.#lastEventMs(cur);
+    return last !== null && this.#d.clock.now() - last >= AUTO_CONSTANTS.hardMoveIdleMin * MIN;
+  }
+
   #load(workspaceId: string, self: string) {
     const sessions = this.#d.chat.list({ workspaceId });
     return (claudeId: string) =>
@@ -545,8 +553,17 @@ export class AutoTransferEngine {
         const steered = row.steeredPeriod !== null;
         // T-781, the hard move: the turn is stuck on an exhausted Claude (no event for 3 minutes): stop the turn, not the chat, then move.
         if (d.hard) {
+          // Just before the stop: a person may have moved or restarted the chat since the decision was made; then nothing is done.
+          if (!this.#stillStuck(s)) {
+            console.info(`[autotransfer] hard move session=${id}: the chat changed since the decision, nothing done`);
+            break;
+          }
           console.info(`[autotransfer] hard move session=${id}: no event for ${AUTO_CONSTANTS.hardMoveIdleMin} minutes on an exhausted Claude, stopping the turn`);
-          await this.#d.chat.interrupt?.(id).catch((e: unknown) => console.error(`[autotransfer] could not stop a stuck turn: ${(e as Error).message}`));
+          try {
+            await this.#d.chat.interrupt?.(id); // a throw here, sync or async, never blocks the move
+          } catch (e) {
+            console.error(`[autotransfer] could not stop a stuck turn: ${(e as Error).message}`);
+          }
         }
         await this.#move(s, ownerId, { to: d.to, handoff: steered ? 'skip' : d.handoff, reason: d.reason, facts: d.facts, mode, settings, actor: ENGINE_ACTOR, auto: true, steered });
         break;

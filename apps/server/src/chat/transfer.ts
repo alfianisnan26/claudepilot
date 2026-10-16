@@ -78,7 +78,8 @@ export function transferConversation(events: ChatEvent[], maxChars: number = MIN
     flushTools();
     // Redacted per message (G5): an unterminated key header runs to the end of ITS message only, and shows as [redacted] there; the
     // later messages are not swallowed.
-    const body = redact(clip(text, messageMax));
+    // Redacted BEFORE the clip: a clip first can cut a secret in two, and the redactor cannot know the rest of a half left behind.
+    const body = clip(redact(text), messageMax);
     if (ev.kind === 'user' && ev.transfer) sections.push(`### Earlier context (transferred from ${ev.transfer.fromClaude})\n\n${body}`);
     else if (ev.kind === 'user' && ev.actor) sections.push(`### Message from ${ev.actorLabel ? `${ev.actor} “${ev.actorLabel}”` : ev.actor}\n\n${body}`);
     else sections.push(`### ${ev.kind === 'user' ? 'You' : 'Claude'}\n\n${body}`);
