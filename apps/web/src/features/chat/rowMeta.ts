@@ -109,7 +109,12 @@ export interface RowState {
   tone: 'busy' | 'ask' | 'danger' | 'quiet';
   /** Sub-agents and background tasks still running, said from 640 px ("Working · 2 agents"). */
   agents: number;
+  /** Why it waits for a slot (the server's `slotWait` line, "Waiting for a slot · 4 of 4 running in …"); a tip says it. */
+  why?: string;
 }
+
+/** The one-word label for a session waiting for a slot (T-425); the full "Waiting for a slot · …" line is its explanation. */
+export const SLOT_WAIT_WORD = 'Queued';
 
 const WORDS: Record<ChatSession['state'], string> = {
   starting: 'Starting',
@@ -121,11 +126,13 @@ const WORDS: Record<ChatSession['state'], string> = {
 };
 
 /** `safety`: the label when the portal ended it for safety or integrity (`endedForSafety`). */
-export function rowState(s: Pick<ChatSession, 'state' | 'waiting' | 'switching' | 'agentsRunning'>, workspaceGone: boolean, safety: string | null): RowState {
+export function rowState(s: Pick<ChatSession, 'state' | 'waiting' | 'switching' | 'agentsRunning' | 'slotWait'>, workspaceGone: boolean, safety: string | null): RowState {
   if (workspaceGone) return { word: 'Removed', tone: 'danger', agents: 0 };
   if (safety) return { word: safety, tone: 'danger', agents: 0 };
   if (s.switching) return { word: 'Moving', tone: 'busy', agents: 0 };
   if (s.waiting > 0 || s.state === 'waiting') return { word: s.waiting > 1 ? `${s.waiting} waiting` : 'Needs you', tone: 'ask', agents: 0 };
+  // T-425: a start or wake waiting for a slot (T-417) says so, in one word; the session's own line has the full text.
+  if (s.slotWait && s.state !== 'ended') return { word: SLOT_WAIT_WORD, tone: 'busy', agents: 0, why: s.slotWait };
   const tone = s.state === 'working' || s.state === 'starting' ? 'busy' : s.state === 'interrupted' ? 'ask' : 'quiet';
   return { word: WORDS[s.state], tone, agents: s.state === 'working' ? (s.agentsRunning ?? 0) : 0 };
 }

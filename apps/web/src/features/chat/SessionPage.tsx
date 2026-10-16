@@ -30,7 +30,7 @@ import { FilesPanel, FilesSheet, INITIAL_FILES_VIEW, type FilesView } from './Fi
 import { KeepGoingChip } from './KeepGoing';
 import { RoleChip } from './RoleBadge';
 import { SessionInfoDialog } from './SessionInfo';
-import { endedForSafety, StateBadge } from './shared';
+import { endedForSafety, SlotWaitBadge, StateBadge } from './shared';
 import { Transcript } from './Transcript';
 import { RecoverButton } from './Recover';
 import { ResumeBanner } from './ResumeBanner';
@@ -490,6 +490,9 @@ export function SessionPage() {
                     <Spinner className="size-3" />
                     <span className="sr-only sm:not-sr-only">Reconnecting</span>
                   </Badge>
+                ) : session?.slotWait && !ended ? (
+                  // T-425: waiting for a slot at a cap: one word and an ⓘ with the server's line.
+                  <SlotWaitBadge why={session.slotWait} tip />
                 ) : session && working ? (
                   // Working: on phones the spinner alone (the composer's Stop ring says it too), the title keeps its room.
                   <>

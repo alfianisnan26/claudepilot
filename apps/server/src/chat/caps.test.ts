@@ -2,7 +2,6 @@
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { isAppError } from '@isnanme/core';
 import { capError, makeRoom, SESSION_CAP, weightOf } from './caps.js';
 import { line, liveSession, sleep, until, type Live } from './testkit.js';
 
@@ -68,14 +67,47 @@ test('over the per-workspace cap a new session puts the longest-idle one to slee
     assert.match(s.controller.get(queued.id)!.endedReason ?? '', /2 sessions are already running in docker\/ws1/);
     assert.equal(s.controller.get(queued.id)!.slotWait ?? null, null);
 
-    // Waking the sleeper at the cap waits the same way (nothing can sleep), then is refused naming the cap instead of hanging.
-    const woken = await s.controller.send(s.id, 'wake-1', 'hello').then(() => null, (e: unknown) => e);
-    assert.ok(isAppError(woken) && woken.code === SESSION_CAP, String(woken));
-    assert.match((woken as Error).message, /2 sessions are already running in docker\/ws1/);
-    assert.deepEqual((woken as unknown as { details: unknown }).details, { scope: 'workspace', limit: 2, running: 2, setting: 'sessions.maxLivePerWorkspace' });
+    // Waking the sleeper at the cap waits the same way (nothing can sleep). T-425: the send does not wait with it: the message is stored and
+    // the session says why at once; the wake is refused naming the cap when the wait runs out, and the transcript says it wasn't delivered.
+    s.controller.slotWaitMs = 400;
+    const t0 = Date.now();
+    await s.controller.send(s.id, 'wake-1', 'hello');
+    assert.ok(Date.now() - t0 < 300, 'the send returns without waiting for the slot');
+    assert.ok(s.controller.history(s.id).some((e) => e.kind === 'user' && e.text === 'hello'), 'the message is stored at once');
+    assert.match(s.controller.get(s.id)!.slotWait ?? '', /^Waiting for a slot · 2 of 2 running in docker\/ws1/);
+    await until(() => s.controller.history(s.id).some((e) => /wasn’t delivered: .*2 sessions are already running in docker\/ws1/.test(e.text ?? '')));
+    assert.equal(s.controller.get(s.id)!.slotWait ?? null, null);
+    assert.equal(s.controller.get(s.id)!.process, 'asleep');
     // Lowering a cap never stops a running session.
     s.controller.liveCaps = () => ({ perWorkspace: 1, total: 1 });
     assert.equal(s.controller.get(second.id)!.process, 'live');
+  } finally {
+    await s.done();
+  }
+});
+
+test('T-425: a send to a session waiting for a slot returns at once with the message stored, and the line goes to Claude when the slot comes', async () => {
+  const s = await liveSession();
+  try {
+    s.controller.liveCaps = () => ({ perWorkspace: 2, total: 10 });
+    const second = await idleSession(s);
+    const third = await idleSession(s); // s.id slept for it
+    assert.equal(s.controller.get(s.id)!.process, 'asleep');
+    for (const x of [second, third]) await s.controller.send(x.id, `w-${x.id.slice(0, 6)}`, 'work');
+    await until(() => [second.id, third.id].every((id) => s.controller.get(id)!.state === 'working'));
+    s.controller.slotWaitMs = 5000;
+    s.controller.slotPollMs = 20;
+    const sends = s.ws.sends.length;
+    const t0 = Date.now();
+    await s.controller.send(s.id, 'wait-1', 'hello after the wait');
+    assert.ok(Date.now() - t0 < 1000, 'the send did not wait for the slot');
+    assert.ok(s.controller.history(s.id).some((e) => e.kind === 'user' && e.text === 'hello after the wait'), 'stored at once');
+    assert.match(s.controller.get(s.id)!.slotWait ?? '', /^Waiting for a slot/);
+    assert.equal(s.ws.sends.length, sends, 'nothing reached Claude yet');
+    s.controller.liveCaps = () => ({ perWorkspace: 5, total: 10 }); // a slot comes
+    await until(() => s.controller.get(s.id)!.process === 'live', 4000);
+    await until(() => s.ws.sends.slice(sends).some((x) => x.line.includes('hello after the wait')), 4000);
+    assert.equal(s.controller.get(s.id)!.slotWait ?? null, null);
   } finally {
     await s.done();
   }

@@ -1,7 +1,9 @@
 import { Badge, Spinner, type BadgeTone } from '@isnanme/ui';
 import { CHAT_ENDED_CREDENTIAL, CHAT_ENDED_INTEGRITY, CHAT_INELIGIBLE, type ChatSessionState } from '@portal/contracts';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { InfoTip } from '@/components/InfoTip';
 import { ApiError } from '@/lib/api';
+import { SLOT_WAIT_WORD } from './rowMeta';
 import { ChatAckError } from './useChatSocket';
 
 /** State → label and badge tone. `starting`/`working` spin; `waiting`/`interrupted` ask for you. */
@@ -42,6 +44,26 @@ export function StateBadge({ state, agents = 0 }: { state: ChatSessionState; age
       {s.busy && <Spinner className="size-3" />}
       {s.label}
     </Badge>
+  );
+}
+
+/**
+ * T-425: a start or wake waiting for a slot at a cap (T-417): one word, "Queued", and the server's line ("Waiting for a slot · 4 of 4 running in
+ * <workspace> (Settings › Sessions)") as its explanation: an ⓘ where a button is allowed (`tip`: the session page), else the title and the
+ * screen reader's text (inside a row's link).
+ */
+export function SlotWaitBadge({ why, tip = false }: { why: string; tip?: boolean }) {
+  return (
+    <>
+      <span title={tip ? undefined : why} className="inline-flex">
+        <Badge tone="neutral">
+          <Spinner className="size-3" />
+          {SLOT_WAIT_WORD}
+          {!tip && <span className="sr-only">: {why}</span>}
+        </Badge>
+      </span>
+      {tip && <InfoTip label="About the wait">{why}</InfoTip>}
+    </>
   );
 }
 

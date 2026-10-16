@@ -247,6 +247,13 @@ test('role: hidden when the title already starts with it, shown otherwise, none 
 test('state: one word and a tone; removed, safety and moving first; several open requests counted', () => {
   assert.deepEqual(rowState(s({ state: 'working', agentsRunning: 2 }), false, null), { word: 'Working', tone: 'busy', agents: 2 });
   assert.deepEqual(rowState(s({ state: 'idle', agentsRunning: 2 }), false, null), { word: 'Idle', tone: 'quiet', agents: 0 });
+  // T-425: a start or wake waiting for a slot says so in one word and keeps the server's line as its explanation; a question to you still wins.
+  const why = 'Waiting for a slot · 4 of 4 running in docker/ws1 (Settings › Sessions)';
+  assert.deepEqual(rowState(s({ state: 'idle', process: 'asleep', slotWait: why }), false, null), { word: 'Queued', tone: 'busy', agents: 0, why });
+  assert.deepEqual(rowState(s({ state: 'starting', slotWait: why }), false, null), { word: 'Queued', tone: 'busy', agents: 0, why });
+  assert.equal(rowState(s({ state: 'idle', slotWait: null }), false, null).word, 'Idle');
+  assert.equal(rowState(s({ state: 'waiting', waiting: 1, slotWait: why }), false, null).word, 'Needs you');
+  assert.equal(rowState(s({ state: 'ended', slotWait: why }), false, null).word, 'Ended');
   assert.equal(rowState(s({ state: 'waiting', waiting: 1 }), false, null).word, 'Needs you');
   assert.deepEqual(rowState(s({ state: 'waiting', waiting: 3 }), false, null), { word: '3 waiting', tone: 'ask', agents: 0 });
   assert.equal(rowState(s({ state: 'interrupted' }), false, null).tone, 'ask');
