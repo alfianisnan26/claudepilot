@@ -108,7 +108,8 @@ export function createSettingsRoutes(module: SettingsModule): Hono {
   app.get('/audit', (c) => {
     // T-329: the trail of changes is the platform's (`view` on the `settings` area: admins).
     requireCan(actorOf(c), 'view', platformRef('settings'));
-    return c.json(success(settings.audit(Number(c.req.query('limit')) || 100)));
+    // D-58: a page of the trail (`items`, `next`); `limit` 25 by default, 100 at most; a bad cursor is a 400. The seam check above runs first.
+    return c.json(success(settings.auditPage({ cursor: c.req.query('cursor'), limit: c.req.query('limit') })));
   });
   app.get('/lockdown/:target/:name', (c) => {
     const id = `${c.req.param('target')}/${c.req.param('name')}`;

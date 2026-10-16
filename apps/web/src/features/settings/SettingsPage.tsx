@@ -180,12 +180,29 @@ function ValueField({ setting, busy, onCommit }: { setting: SettingView; busy: b
 function HistoryDialog({ open, labels, onClose }: { open: boolean; labels: Record<string, string>; onClose: () => void }) {
   const [rows, setRows] = useState<SettingChange[] | null>(null);
   const [failed, setFailed] = useState(false);
+  const [next, setNext] = useState<string | null>(null);
+  const [more, setMore] = useState(false);
   useEffect(() => {
     if (!open) return;
     setRows(null);
+    setNext(null);
     setFailed(false);
-    settingsApi.audit().then(setRows, () => setFailed(true));
+    settingsApi.audit().then(
+      (page) => (setRows(page.items), setNext(page.next)),
+      () => setFailed(true),
+    );
   }, [open]);
+  const loadMore = () => {
+    if (!next) return;
+    setMore(true);
+    settingsApi
+      .audit({ cursor: next })
+      .then(
+        (page) => (setRows((cur) => [...(cur ?? []), ...page.items]), setNext(page.next)),
+        () => setFailed(true),
+      )
+      .finally(() => setMore(false));
+  };
   return (
     <Dialog open={open} onClose={onClose} title="History">
       {failed && <p className="text-[13px] text-danger">Could not load.</p>}
@@ -207,6 +224,13 @@ function HistoryDialog({ open, labels, onClose }: { open: boolean; labels: Recor
             </li>
           ))}
         </ul>
+      )}
+      {next && (
+        <div className="mt-3 flex justify-center">
+          <Button variant="secondary" loading={more} onClick={loadMore}>
+            Older
+          </Button>
+        </div>
       )}
     </Dialog>
   );

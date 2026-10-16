@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { isAppError } from '@isnanme/core';
-import { SETTING_KEYS, type LockdownStatus, type SettingChange, type SettingsView } from '@portal/contracts';
+import { SETTING_KEYS, type CursorPage, type LockdownStatus, type SettingChange, type SettingsView } from '@portal/contracts';
 import { Hono } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { compile } from '../delivery/compile.js';
@@ -331,12 +331,57 @@ test('routes: list, one change with the confirmation the server enforces, the au
     assert.equal((await call('PUT', '/api/settings/nope.such', { value: true })).status, 404);
     assert.equal((await call('PUT', `/api/settings/${SETTING_KEYS.mcpPoolOnly}`, {})).status, 422);
 
-    const audit = await call<SettingChange[]>('GET', '/api/settings/audit?limit=5');
-    assert.deepEqual(audit.data.map((c) => c.newValue), [false, true]);
-    assert.equal(audit.data[0]!.actor, 'Admin');
+    const audit = await call<CursorPage<SettingChange>>('GET', '/api/settings/audit?limit=5');
+    assert.deepEqual(audit.data.items.map((c) => c.newValue), [false, true]);
+    assert.equal(audit.data.items[0]!.actor, 'Admin');
+    assert.equal(audit.data.next, null);
     on(h, SETTING_KEYS.mcpAccountOff);
     const status = await call<LockdownStatus>('GET', `/api/settings/lockdown/docker/ws1`);
     assert.deepEqual([status.data.workspaceId, status.data.accountOff, status.data.poolOnly, status.data.state], [WS, true, false, 'pending']);
+  } finally {
+    h.done();
+  }
+});
+
+test('audit route pages (D-58): 25 by default, 100 at most, a walk with changes made meanwhile, and a bad cursor is a 400', async () => {
+  const h = await setup();
+  try {
+    const db = h.store.db!;
+    const ins = db.prepare('INSERT INTO setting_changes (at, key, old_value, new_value, actor) VALUES (?, ?, ?, ?, ?)');
+    for (let i = 0; i < 230; i++) ins.run(`2026-02-01T00:${String(Math.floor(i / 60)).padStart(2, '0')}:${String(i % 60).padStart(2, '0')}Z`, 'k', 'false', 'true', 'Admin');
+    const app = new Hono<{ Variables: { token: string } }>();
+    app.use(async (c, next) => (c.set('token', 'signed-in'), next()));
+    app.onError((err, c) => (isAppError(err) ? c.json({ success: false, error: { code: err.code, message: err.message } }, err.status as ContentfulStatusCode) : c.json({}, 500)));
+    app.route('/api/settings', createSettingsRoutes(h.mod));
+    const get = async (qs: string) => {
+      const res = await app.request(`/api/settings/audit${qs}`);
+      return { status: res.status, body: (await res.json()) as { data?: CursorPage<SettingChange>; error?: { code: string } } };
+    };
+    assert.equal((await get('')).body.data!.items.length, 25);
+    const huge = await get('?limit=100000');
+    assert.equal(huge.body.data!.items.length, 100);
+    assert.ok(huge.body.data!.next);
+
+    // Walk all 230, with a change landing after each page: each old row once, in order.
+    const seen: number[] = [];
+    let cursor = '';
+    for (let page = 0; page < 50; page++) {
+      const r = await get(`?limit=40${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`);
+      assert.equal(r.status, 200);
+      seen.push(...r.body.data!.items.map((c) => c.id));
+      if (!r.body.data!.next) break;
+      cursor = r.body.data!.next;
+      ins.run(`2027-01-01T00:00:${String(page).padStart(2, '0')}Z`, 'k', 'true', 'false', 'Admin');
+    }
+    const old = seen.filter((id) => id <= 230);
+    assert.equal(old.length, 230);
+    assert.equal(new Set(seen).size, seen.length, 'no duplicate');
+    assert.deepEqual(old, [...old].sort((a, b) => b - a), 'newest first');
+
+    for (const bad of ['?cursor=garbage', `?cursor=${huge.body.data!.next}x`]) {
+      const r = await get(bad);
+      assert.deepEqual([r.status, r.body.error?.code], [400, 'BAD_REQUEST'], bad);
+    }
   } finally {
     h.done();
   }
