@@ -12,19 +12,19 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 
 ## IN FLIGHT (6 of 6, D-71)
   Lanes' ticket_comment refused on unassigned tickets (T-341, T-549, T-675): verdicts live in their replies + this file.
-- QA PERF 7e4879c7: T-781 S4 FAIL (job 408dacb1) -> Backend. QA T-426 S1g PWG (job 4ae40f5d 8/0, O1 fixed; lead posted) -> S1h. Now QA T-611 S1 on wip/qa-t611-b06b62b. Was:
-  on lead-built wip/qa-t426-1db0f53 (fc0f8be5 + probes e1dd7b69, e864da9d). T-611 S1 CONFLICTS with T-426 -> rebase after S1g.
-- QA UI 8b13bb5a: REVIEW T-781 S1-S4 CHANGES R1-R5 (reply: history loaded twice, opening needs a Read outside the folder,
-  4M stdin write timeout, no audit row on retry, herd test) -> Backend. QA T-736 S3b PWG 7783 (job da445312) -> S3c 7796. REVIEW T-723 CHANGES 7815 (Cf strip splits ZWJ/ZWNJ, empty actor, indent) -> S3c 7832. Idle.
+- QA PERF 7e4879c7: QA T-426 S1g PWG (job 4ae40f5d, O1 fixed; lead posted 7797). Now QA T-611 S1 on wip/qa-t611-b06b62b;
+  then adds an N1 probe on lane/cp-qa-perf for the S1h re-QA. T-611 S1 CONFLICTS with T-426 -> rebase after S1h.
+- QA UI 8b13bb5a: REVIEW T-723 CHANGES 7815 -> S3c 7832. Now re-QA T-736 S3c fdc5636b (7842, job 9e34bc35 37/0, 15 mutants),
+  then a blind re-read of T-781 S3 R1-R5.
+- QA BE 2 42e5408f: QA T-723 S3b PWG 7833 (job ba0960c9). T-610 r3 PASS 7844 (job a5bdc271) -> READY 7846. Now QA T-781 S3
+  6563633a (7839, job 56feb0b0 271/0; lead read: write script umask 077/700/600, path check holds; asked: hard move => handoff
+  skip?), then a re-read of T-736 C1. REVIEW T-611 S1 CHANGES 7762 (C1-C4) -> T-611 S1b.
 - FOR THE COORDINATOR, T-781 (D-76): lead cannot claim/comment it (unassigned); Backend lane b2f0e95f on it. Order S1, S2, S4, S3, S5.
-- QA BE 2 42e5408f: REVIEW T-611 S1 CHANGES 7762 (C1 octal 08/09 under set -e, C2 peak overflow cap 6 digits, C3 pin the
-  -le boundary, C4 timeout line says run again) -> T-611 S1b. REVIEW T-426 S1g CHANGES 7773 (N1 SECURITY: raw artifact name in
-  stderr leaks a value-named file; N2 compressed-branch test; N3 refuse non-empty --out) -> S1h 7782. REVIEW T-736 CHANGES 7788 (C1 mutants script fails open) -> S3c 7796. Now QA T-723 S3b 2255085e (7800, job 098262d3 86/0); queued re-QA T-610 r3 ae974c8f (7810, job 29b5bc59 174/0).
-- IMPL lane 88eec6be (sonnet; 3fc7326e ended: T-723 S3b DONE 2255085e 7800; raw U+2028 left, edit refused -> T-788 low)
-  now T-736 S3c (7796) -> T-723 S3c (7832, folds T-788) -> T-772 S1b (7719) -> T-772 S2 (7599).
-- BE INFRA 3958fe14 (sonnet; e1673dcb ended: T-610 r3 DONE ae974c8f 7810, mutants A-F killed) now T-426 S1h (7782: N1
-  security, N2, N3) -> T-611 S1b (7762 C1-C4 + QA Perf, rebase on S1h) -> T-611 S2 -> T-524 S3c (7360) -> T-612 S1.
-- BACKEND b2f0e95f (sonnet): T-781 S3 + G1-G7 + R1-R5 (R2 default: opening works with no tool call) -> S5 -> T-733. T-778 = person.
+- IMPL lane 750a7327 (sonnet; 88eec6be ended: T-736 S3c DONE fdc5636b) now T-723 S3c (7832 + 7833 stub, folds T-788)
+  -> T-772 S1b (7719) -> T-772 S2 (7599).
+- BE INFRA 3958fe14 (sonnet): T-426 S1h (7782: N1 security, N2, N3; worktree switched back to the ticket branch by the lead)
+  -> T-611 S1b (7762 C1-C4 + QA Perf, rebase on S1h) -> T-611 S2 -> T-524 S3c (7360) -> T-612 S1.
+- BACKEND b2f0e95f (sonnet): T-781 S3 DONE 6563633a (7839) -> QA; now T-781 S5 -> T-733 (7630, 7633). T-778 = person.
 - HELD: T-426 S1e 2174eee1 QA PASS 6169, review CHANGES 7121 -> fix, re-QA, merge after T-401. T-578 51f6c153 review CHANGES 6168 -> owner. T-631 CHANGES 5850 -> coordinator.
 - 16:12 OWNER PRIORITY (coordinator, T-426 5538): T-401 then T-426 FIRST. T-401 gate GREEN gate-54ba328-6502; ff only on the person's ack.
 
@@ -68,7 +68,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 
 ## NEXT (in order, as slots free)
 1. T-401 fix (7103) + re-QA, then ack 4941 -> T-426 S1e -> T-379 S2 3f11b28 (PASS 4948, review 4938); deploys are the coordinator's.
-2. Batch at the gate door: T-376 S4b, T-732, T-731, T-739 B READY 7757 (mig 383 note), T-723 after S3b, batch 19 rebuilt; T-736 after S3b QA.
+2. Batch at the gate door: T-376 S4b, T-732, T-731, T-739 B READY 7757 (mig 383 note), T-610 r3 READY 7846, T-723 after S3c, batch 19 rebuilt; T-736 after S3c QA.
 3. T-675 (memory findings 4/5 + R2 test, Backend lane), T-574 S3 (6615), T-416 S2 (Bypass restore).
 4. RTK: T-340 (person/coordinator) -> T-341 merge -> T-306 item 3. 5. T-537. 6. T-513. 7. T-472 live re-check (needs portal_status), T-422, T-147, T-438, T-425, T-436, T-437, T-432, T-382, T-377, T-386, T-409, T-402, T-398,
    T-399, T-370 HOLD, T-371..T-374, T-363, T-451, T-470, T-507, T-508, T-512, T-520; T-404 open till deployed.
