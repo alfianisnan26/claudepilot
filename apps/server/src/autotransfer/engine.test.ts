@@ -250,6 +250,88 @@ test('FR14: a failed move leaves the chat where it was, records failed, pauses; 
   r.engine.stop();
 });
 
+const EXHAUSTED = () => [usage('work', 'Work', [win('session', 100)]), usage('home', 'Home', [win('session', 60)])];
+
+async function conflictRig(claudes = EXHAUSTED) {
+  const r = await rig(AUTO, claudes);
+  r.chat.fail = 'This session can’t take it now.';
+  r.chat.failCode = 'CONFLICT';
+  return r;
+}
+
+test('T-781: a CONFLICT on an exhausted chat retries in 30 s, moves, is not a failure, and its message is logged', async () => {
+  const r = await conflictRig();
+  r.chat.failTimes = 1;
+  const logged: string[] = [];
+  const orig = console.error;
+  console.error = (...a: unknown[]) => void logged.push(a.join(' '));
+  try {
+    r.chat.turnEnds('s1');
+    await r.engine.settled();
+    assert.equal(r.chat.moves.length, 1);
+    assert.equal(r.chat.get('s1')!.claudeId, 'work');
+    r.clock.advance(0.49); // not yet
+    await r.engine.settled();
+    assert.equal(r.chat.moves.length, 1);
+    r.clock.advance(0.02); // 30 s
+    await r.engine.settled();
+  } finally {
+    console.error = orig;
+  }
+  assert.equal(r.chat.moves.length, 2);
+  assert.equal(r.chat.get('s1')!.claudeId, 'home');
+  assert.equal(r.auto.events('u_a', { kinds: ['failed'] }).length, 0, 'a CONFLICT is not a failure');
+  assert.ok(logged.some((l) => l.includes('can’t take it now')), 'the message is logged');
+  r.engine.stop();
+});
+
+test('T-781: a CONFLICT on a source that is only low keeps the normal pause (minPauseMin)', async () => {
+  const r = await conflictRig(() => [usage('work', 'Work', [win('session', 92)]), usage('home', 'Home', [win('session', 60)])]);
+  r.chat.turnEnds('s1');
+  await r.engine.settled();
+  assert.equal(r.auto.events('u_a', { kinds: ['failed'] }).length, 1);
+  assert.equal((await r.engine.state('s1', 'u_a')).pausedUntil, at(5));
+  r.clock.advance(1);
+  await r.engine.settled();
+  assert.equal(r.chat.moves.length, 1, 'no retry at 30 s or 1 min');
+  r.engine.stop();
+});
+
+test('T-781: after a CONFLICT a chat moved by someone else is re-evaluated: no second move', async () => {
+  const r = await conflictRig();
+  r.chat.turnEnds('s1');
+  await r.engine.settled();
+  assert.equal(r.chat.moves.length, 1);
+  r.chat.personMoves('s1', 'spare');
+  r.chat.fail = null;
+  r.clock.advance(0.6);
+  await r.engine.settled();
+  assert.equal(r.chat.moves.length, 1);
+  assert.equal(r.chat.get('s1')!.claudeId, 'spare');
+  r.engine.stop();
+});
+
+test('T-781: the CONFLICT retries are capped at 5, then the failure is recorded with the pause', async () => {
+  const r = await conflictRig();
+  const orig = console.error;
+  console.error = () => {};
+  try {
+    r.chat.turnEnds('s1');
+    await r.engine.settled();
+    // Stop at the first recorded failure (a tick may add an attempt on its own; each attempt counts the same).
+    for (let i = 0; i < 10 && !r.auto.events('u_a', { kinds: ['failed'] }).length; i++) {
+      r.clock.advance(0.51);
+      await r.engine.settled();
+    }
+  } finally {
+    console.error = orig;
+  }
+  assert.equal(r.auto.events('u_a', { kinds: ['failed'] }).length, 1);
+  assert.equal(r.chat.moves.length, 6, 'the first try and five retries, then the failure');
+  assert.ok((await r.engine.state('s1', 'u_a')).pausedUntil, 'the normal pause is set');
+  r.engine.stop();
+});
+
 test('T-38: a move refused because the folder needs trusting again is recorded as such and notified (not a silent stall)', async () => {
   const r = await rig();
   r.chat.fail = 'This folder’s project settings changed since you trusted it. Check them and trust it again.';

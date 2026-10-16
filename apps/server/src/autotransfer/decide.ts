@@ -293,6 +293,7 @@ export function candidates(
   input: DecideInput,
   mode: 'ask' | 'auto',
   family: string | null = modelFamily(input.session.model),
+  forced = false,
 ): { eligible: MoveCandidate[]; alternatives: MoveCandidate[]; full: boolean } {
   const { session, settings, nowMs } = input;
   const rec = input.recommend(input.claudes, { workspaceId: session.workspaceId, from: session.claudeId, nowMs, allow: input.allow });
@@ -326,7 +327,8 @@ export function candidates(
     // Ping-pong: a Claude the chat left in the last 4 hours, unless the window that pushed it out has reset since.
     const left = input.counters.left.find((l) => l.claudeId === c.claudeId && nowMs - l.atMs < AUTO_CONSTANTS.pingPongMin * MIN);
     if (left && !(left.resetsAtMs !== null && left.resetsAtMs <= nowMs)) return false;
-    if (input.load(c.claudeId) >= settings.maxPerDestination) {
+    // T-781: a source that is out of quota ignores the per-destination cap (FR9): the chat can do nothing where it is.
+    if (!forced && input.load(c.claudeId) >= settings.maxPerDestination) {
       full = true;
       return false;
     }
@@ -346,7 +348,8 @@ export function candidates(
   };
   // The ranking's shape kept (room first, then Claudes without plan limits, then tight), each part by what it leaves the chat, ties in
   // the ranking's own order (stable sort).
-  const byLeft = (a: MoveCandidate, b: MoveCandidate) => (b.leftPct.value ?? -1) - (a.leftPct.value ?? -1);
+  const byLeft = (a: MoveCandidate, b: MoveCandidate) =>
+    (b.leftPct.value ?? -1) - (a.leftPct.value ?? -1) || (forced ? input.load(a.claudeId) - input.load(b.claudeId) : 0);
   // T-255: a Claude whose usage is unknown for this chat (no reading, no reset time, stale) is taken out of the measured ranking and
   // listed after every measured candidate, with why on its `leftPct`: it is chosen only when no measured one qualifies.
   const unknowns: MoveCandidate[] = [];
@@ -428,7 +431,7 @@ export function decide(input: DecideInput): Decision {
   // for a measured destination rather than gamble on a Claude that may be at its limit already.
   const forced0 = reading.reason === 'exhausted';
   const pick = (f: string | null) => {
-    const r = candidates(input, autoish ? 'auto' : 'ask', f);
+    const r = candidates(input, autoish ? 'auto' : 'ask', f, forced0);
     return forced0 ? r : { ...r, eligible: r.eligible.filter((c) => !isUnknown(c)) };
   };
   const { eligible, alternatives, full } = pick(family);

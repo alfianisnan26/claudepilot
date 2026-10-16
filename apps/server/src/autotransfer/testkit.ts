@@ -91,6 +91,8 @@ export class MoveChat extends FakeChat {
   fail: string | null = null;
   /** The error code a failing move throws (SERVICE_UNAVAILABLE when unset). */
   failCode: string | null = null;
+  /** When set, a failing move fails this many times and then succeeds. */
+  failTimes: number | null = null;
   #n = 0;
 
   list(filter: { workspaceId?: string } = {}) {
@@ -121,7 +123,15 @@ export class MoveChat extends FakeChat {
   appliedModel: string | null = null;
   async switchClaude(id: string, to: string, opts: { handoff?: 'ask' | 'skip'; model?: string }): Promise<ChatSession> {
     this.moves.push({ id, to, handoff: opts.handoff, ...(opts.model ? { model: opts.model } : {}) });
-    if (this.fail) throw new AppError((this.failCode ?? 'SERVICE_UNAVAILABLE') as 'SERVICE_UNAVAILABLE', this.fail);
+    if (this.fail) {
+      const msg = this.fail;
+      // `failTimes`: the move fails that many times, then works (T-781).
+      if (this.failTimes !== null && --this.failTimes <= 0) {
+        this.fail = null;
+        this.failTimes = null;
+      }
+      throw new AppError((this.failCode ?? 'SERVICE_UNAVAILABLE') as 'SERVICE_UNAVAILABLE', msg);
+    }
     const s = this.get(id)!;
     const name = this.names.get(to)!;
     const handoffId = `h-${++this.#n}`;

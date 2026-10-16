@@ -37,6 +37,9 @@ const DAY = 24 * 60 * MIN;
 export const ENGINE_ACTOR = 'portal:autotransfer';
 /** A deferred move is looked at again this often. */
 const RECHECK_MS = 60_000;
+/** T-781: a CONFLICT on an exhausted chat is tried again after this long, at most this many times, then the normal pause. */
+const CONFLICT_RETRY_MS = 30_000;
+const CONFLICT_RETRIES = 5;
 /** Every chat at or under the threshold, waiting or working, is looked at again this often (T-105): the tick, jittered up to 20 s. */
 const TICK_MS = AUTO_CONSTANTS.waitRecheckMin * MIN;
 const JITTER_MS = 20_000;
@@ -123,6 +126,8 @@ export class AutoTransferEngine {
   readonly #inflight = new Map<string, string>();
   /** Chats with an automatic move in the last day: watched for an Undo. */
   readonly #moved = new Set<string>();
+  /** CONFLICTs met moving an exhausted chat, per chat (T-781); reset by a move or when the retries run out. */
+  readonly #conflicts = new Map<string, number>();
   /** Chats with an open card: closed when the chat ends or moves. */
   readonly #cards = new Set<string>();
   /** The last evaluation of each chat, for tests and the state route. */
@@ -696,13 +701,26 @@ export class AutoTransferEngine {
       this.#record({ ...base, kind: 'moved', handoffId: marker?.transfer?.handoffId ?? null }, m.auto ? 'medium' : 'info');
       if (m.auto) this.#notify(s, ownerId, { to: m.to.name, leftPct: m.facts.leftPct.value ?? 0 });
       this.#moved.add(s.id);
+      this.#conflicts.delete(s.id);
       this.#wake(s.id, m.settings.minPauseMin * MIN);
       if (why) await this.#continue(s, ownerId, m.mode, m.to, why);
       return true;
     } catch (e) {
       const now = this.#d.clock.now();
-      this.#d.store.patchSession(s.id, ownerId, { pausedUntil: iso(now + m.settings.minPauseMin * MIN), deferSince: null });
       const code = e instanceof AppError ? e.code : 'error';
+      // T-781: a CONFLICT (the chat is busy this second) on an exhausted source is not a failure: it can do nothing where it is, so look
+      // again in 30 s, at most CONFLICT_RETRIES times, with the message in the log. Not a `failed` row, so failures24h does not count it.
+      if (m.auto && m.reason === 'exhausted' && code === 'CONFLICT') {
+        const tries = (this.#conflicts.get(s.id) ?? 0) + 1;
+        console.error(`[autotransfer] a move of an exhausted chat hit a conflict (${tries}/${CONFLICT_RETRIES}): ${(e as Error).message}`);
+        if (tries <= CONFLICT_RETRIES) {
+          this.#conflicts.set(s.id, tries);
+          this.#wake(s.id, CONFLICT_RETRY_MS);
+          return false;
+        }
+      }
+      this.#conflicts.delete(s.id);
+      this.#d.store.patchSession(s.id, ownerId, { pausedUntil: iso(now + m.settings.minPauseMin * MIN), deferSince: null });
       // A folder whose settings changed since it was trusted stops every move until someone trusts it again: say so, loudly (T-38).
       const untrusted = code === CHAT_FOLDER_UNTRUSTED;
       this.#record({ ...base, kind: 'failed', code: untrusted ? 'folder_untrusted' : 'move_failed' }, 'medium');
