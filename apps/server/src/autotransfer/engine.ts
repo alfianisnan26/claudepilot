@@ -383,7 +383,9 @@ export class AutoTransferEngine {
   /** When the chat's newest stored event happened (T-781: the hard move's "no event for 3 minutes"); its last activity when none is stored. */
   #lastEventMs(s: ChatSession): number | null {
     const [last] = this.#d.chat.history(s.id, Math.max(0, (s.lastSeq ?? 0) - 1)).slice(-1);
-    const t = ms(last?.at ?? s.lastActivityAt ?? '');
+    // Only a stored event counts: `lastActivityAt` also moves with things that are not the turn's output, and a chat with no stored
+    // event has nothing to measure a silence from (it is steered and waited for as before).
+    const t = ms(last?.at ?? '');
     return Number.isFinite(t) ? t : null;
   }
 
