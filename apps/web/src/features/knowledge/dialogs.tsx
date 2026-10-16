@@ -15,7 +15,7 @@ import { useEffect, useRef, useState } from 'react';
 import { InfoTip } from '@/components/InfoTip';
 import { formatBytes, timeAgo } from '@/lib/format';
 import { portalMcpApi } from '../portalmcp/api';
-import { settingsPayload, toggleWorkspace, workspaceChoices } from './agentWorkspaces';
+import { saveWarning, settingsPayload, toggleWorkspace, workspaceChoices } from './agentWorkspaces';
 import { errorText, knowledgeApi } from './api';
 import { DiffView } from './NoteEditor';
 import { useLoad } from './hooks';
@@ -267,6 +267,7 @@ function WorkspacesField({ value, onChange }: { value: string[]; onChange: (v: s
 
 /** Name, agent access, daily notes, links and labels; deleting the vault is in here too. */
 export function VaultSettingsDialog({ vault, onClose, onSaved, onDelete }: { vault: VaultSummary | null; onClose: () => void; onSaved: (v: VaultSummary) => void; onDelete: () => void }) {
+  const toast = useToast();
   const [form, setForm] = useState<{ name: string; agents: AgentPolicy; dailyFolder: string; timezone: string; rewrite: boolean; labels: 'filename' | 'heading'; agentWorkspaces: string[] } | null>(null);
   const [openFor, setOpenFor] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -282,15 +283,16 @@ export function VaultSettingsDialog({ vault, onClose, onSaved, onDelete }: { vau
     setSaving(true);
     setError(null);
     try {
-      onSaved(
-        await knowledgeApi.updateVault(vault.id, {
-          name: form.name,
-          agents: form.agents,
-          dailyFolder: form.dailyFolder,
-          timezone: form.timezone,
-          settings: settingsPayload(form),
-        }),
-      );
+      const saved = await knowledgeApi.updateVault(vault.id, {
+        name: form.name,
+        agents: form.agents,
+        dailyFolder: form.dailyFolder,
+        timezone: form.timezone,
+        settings: settingsPayload(form),
+      });
+      onSaved(saved);
+      const warning = saveWarning(saved);
+      if (warning) toast(warning, 'error');
     } catch (e) {
       setError(errorText(e, 'Could not save.'));
     } finally {

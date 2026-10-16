@@ -432,6 +432,24 @@ test('T-436 S2: a rebind that throws still saves the list, warns, audits, and sh
   }
 });
 
+test('T-436 S2: a corrupt stored list fails closed (no vaults), and does not touch the other vaults', async () => {
+  const r = await bindRig();
+  try {
+    const set = (id: string, raw: string) => r.h.store.db!.prepare('UPDATE kg_vaults SET settings = ? WHERE id = ?').run(raw, id);
+    // Not JSON at all, a string instead of a list, an object, null, and a list of non-strings: none admits a workspace.
+    for (const raw of ['{not json', '{"agentWorkspaces":"docker/api"}', '{"agentWorkspaces":{"0":"docker/api"}}', '{"agentWorkspaces":null}', '{"agentWorkspaces":[1,null,{"a":"docker/api"}]}']) {
+      set(r.alpha.id, raw);
+      assert.deepEqual(r.svc.vaultsForWorkspace('docker/api'), [], `corrupt list ${raw} admits nobody`);
+      assert.deepEqual(r.svc.vaultsForWorkspace('docker/web'), [r.beta.id], 'the other vault keeps its own list');
+    }
+    // A list with a stray non-string keeps only its real keys.
+    set(r.alpha.id, '{"agentWorkspaces":[7,"docker/api"]}');
+    assert.deepEqual(r.svc.vaultsForWorkspace('docker/api'), [r.alpha.id]);
+  } finally {
+    r.done();
+  }
+});
+
 test('T-436 S2: the audit row names the workspaces added and removed', () => {
   return bindRig().then((r) => {
     try {

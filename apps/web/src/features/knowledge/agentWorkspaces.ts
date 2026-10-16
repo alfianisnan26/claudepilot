@@ -39,3 +39,9 @@ export function toggleWorkspace(selected: readonly string[], workspaceId: string
 export function settingsPayload(form: { rewrite: boolean; labels: 'filename' | 'heading'; agentWorkspaces: readonly string[] }): NonNullable<UpdateVaultRequest['settings']> {
   return { rewriteLinksOnRename: form.rewrite, labels: form.labels, agentWorkspaces: [...form.agentWorkspaces].sort() };
 }
+
+/** The warning a save came back with (the list was saved but live agents could not be rebound), or null when there is none. */
+export function saveWarning(saved: { warning?: string | null }): string | null {
+  const w = typeof saved.warning === 'string' ? saved.warning.trim() : '';
+  return w ? w : null;
+}

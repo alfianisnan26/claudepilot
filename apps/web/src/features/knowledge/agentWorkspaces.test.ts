@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { PortalAgentWorkspace } from '@portal/contracts';
-import { invalidWorkspaceKeys, settingsPayload, toggleWorkspace, workspaceChoices } from './agentWorkspaces';
+import { invalidWorkspaceKeys, saveWarning, settingsPayload, toggleWorkspace, workspaceChoices } from './agentWorkspaces';
 
 const ws = (workspaceId: string): PortalAgentWorkspace => ({ workspaceId, name: workspaceId.split('/')[1]!, enabled: true, liveTokens: 0 });
 
@@ -39,4 +39,10 @@ test('T-436 S2: a listed key that is not <target>/<name> is named, and its row i
   assert.deepEqual(invalidWorkspaceKeys(['docker/api']), []);
   const rows = workspaceChoices([ws('docker/api')], ['docker/api', 'bad key']);
   assert.deepEqual(rows.map((r) => [r.workspaceId, r.invalid]), [['bad key', true], ['docker/api', false]]);
+});
+
+test('T-436 S2: a save that came back with a warning shows it; a clean save shows none', () => {
+  assert.equal(saveWarning({}), null);
+  assert.equal(saveWarning({ warning: '  ' }), null);
+  assert.equal(saveWarning({ warning: 'Saved, but live agent sessions could not be updated.' }), 'Saved, but live agent sessions could not be updated.');
 });
