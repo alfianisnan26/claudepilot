@@ -29,5 +29,5 @@ mutant MI "do not fail when rtk-guard.sh cannot be sourced" tools/qa/rtk-history
 mutant MJ "do not check that rtk_guard is defined" tools/qa/rtk-history.sh tools/qa/rtk-classes.sh tools/qa/rtk-measure.sh -- '/^declare -F rtk_guard/d'
 mutant ML "drop the cd into the guarded folder from rtk-classes.sh" tools/qa/rtk-classes.sh -- '/^cd "\$here" || exit$/d'
 mutant MM "git rm the docs/prd file even when there is none" tools/qa/rtk-classes.sh -- 's/^\[ -n "\$prd" \] && //'
-mutant MK"skip the other-repo check in rtk-measure.sh" tools/qa/rtk-measure.sh -- '/^if \[ "\${1:-}" = light \]/d'
+mutant MK "skip the other-repo check in rtk-measure.sh" tools/qa/rtk-measure.sh -- '/^if \[ "\${1:-}" = light \]/d'
 exit "$survived"
