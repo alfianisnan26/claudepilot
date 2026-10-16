@@ -110,7 +110,7 @@ function RemoteRow({ repo, open, onToggle, onProtected, onConnect, onRemove }: {
           type="button"
           aria-expanded={open}
           onClick={onToggle}
-          className="flex min-w-0 flex-1 items-center gap-3 rounded-2xl px-3.5 py-3 text-left focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none"
+          className="flex min-w-0 flex-1 items-center gap-3 rounded-2xl px-3.5 py-3 text-left focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden"
         >
           <GitBranch className="size-5 shrink-0 text-muted" aria-hidden="true" />
           <span className="min-w-0 flex-1">
@@ -238,7 +238,7 @@ function RemoteDetail({ repo }: { repo: CiRepo }) {
                 <button
                   type="button"
                   onClick={() => setInfo(p)}
-                  className="flex w-full min-w-0 items-center gap-2 rounded-xl px-1 py-1.5 text-left hover:bg-surface-2/60 focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none"
+                  className="flex w-full min-w-0 items-center gap-2 rounded-xl px-1 py-1.5 text-left hover:bg-surface-2/60 focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden"
                 >
                   <span className={cn(MONO, 'min-w-0 flex-1 truncate')}>{p.file.replace(/^\.pilot\//, '')}</span>
                   <span className="text-[12px] text-muted">{p.triggers.join(' ')}</span>
@@ -351,7 +351,7 @@ function Environments({ repo }: { repo: CiRepo }) {
                   disabled={busy === e.name}
                   onClick={() => setRuleFor(e)}
                   className={cn(
-                    'press flex h-11 min-w-11 shrink-0 items-center justify-center rounded-full px-2.5 text-[12.5px] font-semibold focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none disabled:opacity-60',
+                    'press flex h-11 min-w-11 shrink-0 items-center justify-center rounded-full px-2.5 text-[12.5px] font-semibold focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden disabled:opacity-60',
                     e.autoApprove === 'on' ? 'bg-accent text-white' : e.autoApprove === 'dry' ? 'bg-accent-soft text-accent' : 'text-muted hover:bg-surface-2',
                   )}
                 >

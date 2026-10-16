@@ -134,7 +134,8 @@ export class ReleaseReporter {
     const released = parseReleaseLog(this.#jobLog(run, state, 'release') ?? '');
     if (!released) return null;
     const deployment = cs.deploymentsOfRun(run.id).find((d) => d.job === 'release') ?? null;
-    const previous = deployment ? cs.lastReleased(run.repo_id, deployment.environment, run.id) : undefined;
+    // The release BEFORE this one (a backfill of an old run must not take a newer release as its base).
+    const previous = deployment ? cs.lastReleased(run.repo_id, deployment.environment, run.id, deployment.created_at) : undefined;
 
     // The repository, read only: the manifest at the run's commit (the tags before), the paths and the migrations file over the range.
     const base = previous?.sha ?? run.sha;

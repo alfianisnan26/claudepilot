@@ -70,7 +70,7 @@ export function CodeArea({
         onChange={(e) => onChange(e.target.value)}
         style={{ fontFamily: MONO }}
         className={cn(
-          'w-full resize-y rounded-xl border bg-surface px-3.5 py-2.5 text-base leading-relaxed text-ink outline-none transition-[border-color,box-shadow] placeholder:text-muted/70 sm:text-[13.5px]',
+          'w-full resize-y rounded-xl border bg-surface px-3.5 py-2.5 text-base leading-relaxed text-ink outline-hidden transition-[border-color,box-shadow] placeholder:text-muted/70 sm:text-[13.5px]',
           'focus:border-ink/40 focus:ring-4 focus:ring-[var(--ring)] disabled:opacity-60',
           error ? 'border-danger/70' : 'border-line hover:border-line-strong',
         )}

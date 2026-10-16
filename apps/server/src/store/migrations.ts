@@ -2714,6 +2714,21 @@ export const MIGRATIONS: Migration[] = [
     },
   },
   {
+    version: 384,
+    name: 'chat_usage: mark the two carried-total rows of 2026-10-15 as suspect (T-610)',
+    up(db) {
+      // T-610: a resumed process booked its running totals as ONE request twice: $96.31 at 2026-10-15 15:05:34 UTC and $68.65 at 15:08:38 (the
+      // spike events 97 and 99). The cause is fixed; these two rows stay in the table as evidence and are marked `suspect`, which every reader of
+      // the spend rows leaves out (COUNTED_USAGE). The row ids are not known to the code (they live in the deployed store), so a row is picked by
+      // what the spike events recorded: its time to the minute and its cost to the cent, whatever its session (the ticket's 93b468c8 and 5802dfa4
+      // are chain roots; the rows themselves belong to the live leads). Only a plain `turn` row is touched, so a second run, a missing row, a btw
+      // row or one already marked changes nothing. Nothing is deleted or rewritten but `kind`, and a person can undo it by id.
+      for (const [atMs, usd] of [[Date.UTC(2026, 9, 15, 15, 5, 34), 96.31], [Date.UTC(2026, 9, 15, 15, 8, 38), 68.65]] as const) {
+        db.prepare("UPDATE chat_usage SET kind = 'suspect' WHERE kind = 'turn' AND at_ms BETWEEN ? AND ? AND ABS(cost_usd - ?) < 0.005").run(atMs - 60_000, atMs + 60_000, usd);
+      }
+    },
+  },
+  {
     version: 755,
     name: 'chat sessions: the restart hint, hidden until the next change, and applying tool changes by itself',
     up(db) {

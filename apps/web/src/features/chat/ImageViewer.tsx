@@ -150,6 +150,7 @@ function LightboxPanel({ images, index, onIndex, onClose }: { images: ViewerImag
       aria-modal="true"
       aria-label={image.alt}
       tabIndex={-1}
+      data-focus-container
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0, transition: { duration: 0.12 } }}

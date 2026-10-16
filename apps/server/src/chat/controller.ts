@@ -1054,17 +1054,19 @@ export class ChatController {
   #markGone(sessionId: string, why = 'Claude Code stopped before it answered.'): void {
     this.#stopReader(sessionId);
     this.#forget(sessionId, why);
-    this.#closeOut(sessionId);
+    // T-416 S2: a lead that vanished in Bypass (an OOM kill) has it put back at its relaunch, every gate checked again (`#live`).
+    const lead = this.#chat.row(sessionId);
+    this.#closeOut(sessionId, 'stopped', !!lead && this.#keptLead(lead));
     this.#chat.patchSession(sessionId, { process: 'gone', state: 'interrupted' });
     this.#emitSession(sessionId);
   }
 
   /** A process is over: its unfinished messages are discarded, its open requests expire, its tasks are killed, and Bypass is off. */
-  #closeOut(sessionId: string, how: 'stopped' | 'ended' = 'stopped'): void {
+  #closeOut(sessionId: string, how: 'stopped' | 'ended' = 'stopped', kept = false): void {
     for (const uuid of this.#chat.discardOpenInputs(sessionId)) this.#emit(sessionId, { type: 'input', session: sessionId, uuid, state: 'discarded' });
     for (const requestId of this.#chat.expireOpenRequests(sessionId)) this.#append(sessionId, { kind: 'resolved', requestId, outcome: 'expired' });
     if (this.#chat.endRunningTasks(sessionId)) this.#emitTasks(sessionId);
-    this.#bypassOver(sessionId, how);
+    this.#bypassOver(sessionId, how, kept);
   }
 
   /**
@@ -1146,10 +1148,24 @@ export class ChatController {
    */
   #bypassOver(sessionId: string, how: 'sleep' | 'stopped' | 'ended', kept = false): void {
     const row = this.#chat.row(sessionId);
-    if (!row || row.mode !== 'bypassPermissions') return;
+    if (!row) return;
+    if (row.mode !== 'bypassPermissions') {
+      // T-416 S2b: the session is not in Bypass, but its newest Bypass record may still say a vanished process (or a sleep) kept it. A stop,
+      // an end or a restart that is not itself a vanishing supersedes that record: only `#markGone` (kept) may leave it standing.
+      if (!kept && this.#sleptInBypass(sessionId))
+        this.#chat.addAudit({ severity: 'info', kind: 'bypass.left', sessionId, workspaceId: row.workspace_id, actor: 'portal', detail: { why: how, superseded: true } });
+      return;
+    }
     this.#chat.patchSession(sessionId, { mode: START_MODE });
     // T-417: a lead's sleep keeps it (`kept`, the wake puts it back through `#keepBypass` and every gate it checks).
-    const said = how === 'sleep' ? (kept ? 'Bypass paused for sleep: it comes back at the wake if the policy still allows it.' : 'Bypass turned off after sleep.') : 'Bypass turned off: Claude Code stopped.';
+    const said =
+      how === 'sleep'
+        ? kept
+          ? 'Bypass paused for sleep: it comes back at the wake if the policy still allows it.'
+          : 'Bypass turned off after sleep.'
+        : kept
+          ? 'Bypass paused: Claude Code stopped. It comes back when the session runs again if every gate still allows it.'
+          : 'Bypass turned off: Claude Code stopped.';
     if (how !== 'ended') this.#note(sessionId, said);
     this.#chat.addAudit({ severity: 'info', kind: 'bypass.left', sessionId, workspaceId: row.workspace_id, actor: 'portal', detail: { why: how, ...(kept ? { kept: true } : {}) } });
   }
@@ -2846,7 +2862,6 @@ export class ChatController {
       throw new AppError('CONFLICT', 'Wait for the turn to end, then restart it for Bypass.');
     }
     this.#chat.patchSession(sessionId, { bypassCapable: true });
-    this.#chat.addAudit({ severity: 'medium', kind: 'bypass.capable', sessionId, workspaceId: session.workspaceId, actor: 'ui', detail: { how: 'restart' } });
     // The running process wasn't started with the flag: it stops and the next launch resumes the session with it.
     const row = this.#chat.row(sessionId)!;
     if (row.process === 'live') {
@@ -2858,6 +2873,8 @@ export class ChatController {
       this.#chat.patchSession(sessionId, { process: 'asleep' });
       this.#emitSession(sessionId);
     }
+    // After the close-out: `#sleptInBypass` reads the newest Bypass record, and this one would hide a kept record from the close-out that supersedes it.
+    this.#chat.addAudit({ severity: 'medium', kind: 'bypass.capable', sessionId, workspaceId: session.workspaceId, actor: 'ui', detail: { how: 'restart' } });
     await this.#live(sessionId, true, true, opts.actor);
     return this.#chat.get(sessionId)!;
   }
@@ -3229,8 +3246,9 @@ export class ChatController {
    * be a lead, and the person's own entry for this chat must be on record saying the acknowledgement was ticked and the server code was
    * fresh THEN (no new code is asked at the wake). Any other wake keeps FR20/FR38: off after sleep.
    */
-  async #keepBypass(sessionId: string, how: 'move' | 'restart' | 'recover' | 'wake'): Promise<void> {
-    const after = how === 'move' ? 'after the move' : how === 'restart' ? 'after the restart' : how === 'wake' ? 'after the wake' : 'after the recovery';
+  async #keepBypass(sessionId: string, how: 'move' | 'restart' | 'recover' | 'wake' | 'lost'): Promise<void> {
+    const after = how === 'move' ? 'after the move' : how === 'restart' ? 'after the restart' : how === 'wake' ? 'after the wake' : how === 'lost' ? 'after Claude Code stopped' : 'after the recovery';
+    const lead = how === 'wake' || how === 'lost'; // the lead's own paths: the same extra gates (T-417, T-416 S2)
     const drop = (why: string, text: string) => {
       const row = this.#chat.row(sessionId);
       if (!row || row.state === 'ended') return;
@@ -3247,8 +3265,8 @@ export class ChatController {
       if (!this.#bypassAllowed()) return drop('policy', `Bypass not kept ${after}: the policy no longer allows it.`);
       if (row.bypass_capable !== 1) return drop('not_capable', `Bypass not kept ${after}: this session wasn’t started to allow Bypass.`);
       // T-417 review: a lead when it slept, and still one now (its workers may have ended, its limit or Keep going been cleared meanwhile).
-      if (how === 'wake' && !this.#keptLead(row)) return drop('not_lead', `Bypass not kept ${after}: this chat is no longer a lead (no live workers, no workers limit, no Keep going).`);
-      if (how === 'wake' && !this.#personEntered(sessionId)) return drop('not_confirmed', `Bypass not kept ${after}: no entry by a person with the confirmation and the server code is on record for this chat.`);
+      if (lead && !this.#keptLead(row)) return drop('not_lead', `Bypass not kept ${after}: this chat is no longer a lead (no live workers, no workers limit, no Keep going).`);
+      if (lead && !this.#personEntered(sessionId)) return drop('not_confirmed', `Bypass not kept ${after}: no entry by a person with the confirmation and the server code is on record for this chat.`);
       try {
         await this.#setBypass(sessionId);
       } catch {
@@ -3306,7 +3324,7 @@ export class ChatController {
   /** T-417: the newest Bypass record of this chat is its sleep that kept it (a lead's), so its wake puts it back through `#keepBypass`. */
   #sleptInBypass(sessionId: string): boolean {
     const last = this.#chat.audit({ kind: 'bypass', sessionId, limit: 1 })[0];
-    return last?.kind === 'bypass.left' && last.detail.why === 'sleep' && last.detail.kept === true;
+    return last?.kind === 'bypass.left' && (last.detail.why === 'sleep' || last.detail.why === 'stopped') && last.detail.kept === true;
   }
 
   /** The one request that enters Bypass, under the grant (the policy and the capability checked by the caller, and again here). */
@@ -4679,6 +4697,7 @@ export class ChatController {
       // T-294: a crew report wakes a sleeping lead; one whose process is gone stays as it is.
       if (!relaunchGone && row.process === 'gone') throw new AppError('CONFLICT', 'This session is not running.');
       const slept = row.process === 'asleep';
+      const lost = row.process === 'gone' && row.state === 'interrupted'; // T-416 S2: it vanished (an OOM kill), not a person's stop
       // T-416: a wake needs the memory as a start does, and holds it as a start does (two wakes at once see each other); refused, it stays
       // as it is (asleep or interrupted) and the caller reads why. A restart (`budget` false) is exempt: its own process just stopped.
       if (budget) await this.#memoryBudget(row.workspace_id, row, actor, sessionId);
@@ -4691,10 +4710,11 @@ export class ChatController {
       }
       row = this.#chat.row(sessionId);
       // T-417: a lead's sleep kept its Bypass: the wake puts it back the way a Restart does, every gate checked again (never twice at once).
-      if (slept && row?.process === 'live' && row.state !== 'ended' && !this.#wakeBypass.has(sessionId) && this.#sleptInBypass(sessionId)) {
+      // T-416 S2: the same for a lead whose process vanished in Bypass: its relaunch asks every gate again (`how: 'lost'`).
+      if ((slept || lost) && row?.process === 'live' && row.state !== 'ended' && !this.#wakeBypass.has(sessionId) && this.#sleptInBypass(sessionId)) {
         this.#wakeBypass.add(sessionId);
         try {
-          await this.#keepBypass(sessionId, 'wake');
+          await this.#keepBypass(sessionId, slept ? 'wake' : 'lost');
         } finally {
           this.#wakeBypass.delete(sessionId);
         }

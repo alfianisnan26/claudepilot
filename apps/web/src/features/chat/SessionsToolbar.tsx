@@ -70,7 +70,7 @@ export function SessionsToolbar({
             autoComplete="off"
             autoCapitalize="none"
             spellCheck={false}
-            className="h-11 w-full rounded-full border border-line bg-surface pr-10 pl-10 text-[16px] text-ink placeholder:text-muted focus:border-primary focus:outline-none sm:text-[15px] [&::-webkit-search-cancel-button]:hidden"
+            className="h-11 w-full rounded-full border border-line bg-surface pr-10 pl-10 text-[16px] text-ink placeholder:text-muted focus:border-primary focus:outline-hidden sm:text-[15px] [&::-webkit-search-cancel-button]:hidden"
           />
           {view.query && (
             <button

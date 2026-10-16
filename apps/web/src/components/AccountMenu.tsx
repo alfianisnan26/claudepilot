@@ -87,6 +87,7 @@ export function AccountMenu({ variant = 'avatar', onLogout }: { variant?: 'avata
             role="dialog"
             aria-label="Account"
             tabIndex={-1}
+            data-focus-container
             initial={{ opacity: 0, scale: 0.95, y: -4 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.97, transition: { duration: 0.1 } }}

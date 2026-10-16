@@ -26,9 +26,18 @@ export interface BrowserHeaderRule {
   hosts: string[];
   /** The header's name, e.g. `CF-Access-Client-Id`. */
   name: string;
-  /** The Secrets & env entry whose value is the header's value. */
+  /** The Secrets & env entry whose value is the header's value (or, with `key`, the env-file entry that holds it). */
   secret: string;
+  /**
+   * T-623: a variable inside an env-file entry (`KEY=VALUE` lines). The portal parses the entry at delivery, in memory only, and the header's
+   * value is that variable's value; a missing key leaves the header out, with an audited reason that never holds a value. Without it the
+   * entry's whole value is the header's value.
+   */
+  key?: string;
 }
+
+/** A variable name inside an env-file entry (`BrowserHeaderRule.key`). */
+export const HEADER_SECRET_KEY = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
 
 /** What a browser pool holds (PRD §9). Never a secret value: the portal doesn't store website credentials; `headers` names entries. */
 export interface BrowserPoolContent {

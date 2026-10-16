@@ -59,15 +59,37 @@ const podOf = (j) => {
   return { items: [{ spec: { nodeName: 'k3s-master' }, status }] };
 };
 const [verb, kind, name] = a;
+// Failure injection: the file "fail" lists the calls that fail (uid, dry-run, create). A failing call prints its stdin to stderr, as kubectl may.
+const failing = (w) => { const f = path.join(F, 'fail'); return fs.existsSync(f) && JSON.parse(fs.readFileSync(f, 'utf8')).includes(w); };
+// T-426 S1e: the Secret's JSON holds each value as base64, so a failing create prints the DECODED values too: the value itself, as a
+// kubectl error that quotes the object might. Without this the 2>&1 on the real create could be dropped and no test would notice.
+const refuse = () => { const t = stdin(); let plain = ''; try { plain = Object.values(JSON.parse(t).data || {}).map((v) => Buffer.from(v, 'base64').toString()).join(' '); } catch {}
+  process.stderr.write('error: ' + t + ' ' + plain + '\n'); process.exit(1); };
 if (verb === 'get' && kind === 'jobs') { process.stdout.write(JSON.stringify({ items: read().jobs.map(k8s) })); }
-else if (verb === 'get' && kind === 'job') { const j = job(name); if (!j) process.exit(1); process.stdout.write(a.includes('json') ? JSON.stringify(k8s(j)) : 'uid-' + name); }
+else if (verb === 'get' && kind === 'job') { const j = job(name); if (!j || (failing('uid') && !a.includes('json'))) process.exit(1); process.stdout.write(a.includes('json') ? JSON.stringify(k8s(j)) : 'uid-' + name); }
 else if (verb === 'get' && kind === 'pods' && a.includes('json')) { process.stdout.write(JSON.stringify(podOf(job(a[3].replace('job-name=', ''))))); }
-else if (verb === 'create' && kind === 'secret') { const t = stdin(); lock((s) => { s.secrets[a[3]] = t; }); }
-else if (verb === 'top' && kind === 'nodes') { const t = path.join(F, 'top.txt'); if (!fs.existsSync(t)) process.exit(1); const v = fs.readFileSync(t, 'utf8'); if (v === 'FAIL') process.exit(1); process.stdout.write(v); }
-else if (verb === 'apply') { const m = stdin(); const n = m.match(/^ {2}name: (\S+)/m)[1]; fs.mkdirSync(path.join(F, 'applied'), { recursive: true }); fs.writeFileSync(path.join(F, 'applied', n + '.yaml'), m);
+// The Secret is made by a client-side dry run (JSON on stdout, as kubectl prints it) and then created (never applied) with its ownerReference and label.
+else if (verb === 'create' && kind === 'secret' && a.includes('--dry-run=client') && failing('dry-run')) refuse();
+else if (verb === 'top' && kind === 'nodes') { let t = path.join(F, 'top.txt'); if (!fs.existsSync(t)) process.exit(1);
+  // T-611 C5: the file "top2.txt" is what every reading AFTER the first prints (the master moves while the Job waits suspended).
+  const cnt = path.join(F, 'top.count'); const nth = (fs.existsSync(cnt) ? Number(fs.readFileSync(cnt, 'utf8')) : 0) + 1; fs.writeFileSync(cnt, String(nth));
+  if (nth > 1 && fs.existsSync(path.join(F, 'top2.txt'))) t = path.join(F, 'top2.txt');
+  const v = fs.readFileSync(t, 'utf8'); if (v === 'FAIL') process.exit(1); process.stdout.write(v); }
+// T-611: the file "secretfail" is the text a rejected Secret create prints to stderr (the category is read from it).
+else if (verb === 'create' && kind === '-f' && fs.existsSync(path.join(F, 'secretfail'))) { stdin(); process.stderr.write(fs.readFileSync(path.join(F, 'secretfail'), 'utf8')); process.exit(1); }
+else if (verb === 'create' && kind === '-f' && failing('create')) refuse();
+else if (verb === 'create' && kind === '-f') { const o = JSON.parse(stdin()); const n = o.metadata.name; const env = Object.entries(o.data).map(([k, v]) => k + '=' + Buffer.from(v, 'base64').toString()).join('\n') + '\n';
+  if (o.metadata.annotations) process.exit(7);
+  fs.writeFileSync(path.join(F, 'secret-' + n + '.env'), env); fs.writeFileSync(path.join(F, 'secret-' + n + '.meta.json'), JSON.stringify(o.metadata)); lock((s) => { s.secrets[n] = env; }); }
+else if (verb === 'create' && kind === 'secret') { const t = stdin(); const data = {}; for (const l of t.split('\n')) { const i = l.indexOf('='); if (i > 0) data[l.slice(0, i)] = Buffer.from(l.slice(i + 1)).toString('base64'); }
+  if (!a.includes('--dry-run=client')) { fs.writeFileSync(path.join(F, 'secret-' + a[3] + '.env'), t); lock((s) => { s.secrets[a[3]] = t; }); }
+  else process.stdout.write(JSON.stringify({ apiVersion: 'v1', kind: 'Secret', metadata: { name: a[3] }, data })); }
+else if (verb === 'apply') { const m = stdin();
+  if (m.trimStart().startsWith('{')) process.exit(8); // a Secret is never applied (last-applied annotation): only the Job is
+  const n = m.match(/^ {2}name: (\S+)/m)[1]; fs.mkdirSync(path.join(F, 'applied'), { recursive: true }); fs.writeFileSync(path.join(F, 'applied', n + '.yaml'), m);
   const lab = (k) => m.match(new RegExp(k + ': ([^,}]+)'))[1].trim();
   lock((s) => { s.seq += 1; s.jobs.push({ name: n, chat: lab('job-run/chat'), role: lab('job-run/role'), program: lab('job-run/program'), owner: m.match(/job-run\/owner: "([^"]*)"/)[1], suspend: true, seq: s.seq }); }); }
-else if (verb === 'patch' && kind === 'job') { lock((s) => { const j = s.jobs.find((x) => x.name === name); if (j) j.suspend = false; }); }
+else if (verb === 'patch' && kind === 'job') { if (fs.existsSync(path.join(F, 'patchfail')) && args.join(' ').includes('affinity')) process.exit(1); lock((s) => { const j = s.jobs.find((x) => x.name === name); if (j) j.suspend = false; }); }
 else if (verb === 'patch' && kind === 'secret') { /* recorded in calls.log */ }
 else if (verb === 'delete' && kind === 'job') { lock((s) => { s.jobs = s.jobs.filter((j) => j.name !== name); }); }
 else if (verb === 'delete' && kind === 'secret') { lock((s) => { delete s.secrets[name]; }); }
@@ -187,8 +209,15 @@ test('a run: the suspended Job manifest, the stream, the exit code, the artifact
   assert.ok(!text.includes(w.npmToken), 'the token is not in the manifest');
 
   const calls = w.calls();
-  assert.match(calls, new RegExp(`create secret generic ${m.metadata.name} --from-env-file=/dev/stdin`));
-  assert.match(calls, /patch secret claudepilot-job-[0-9a-f]{8} --type merge -p .*"ownerReferences":\[\{"apiVersion":"batch\/v1","kind":"Job"/);
+  assert.match(calls, new RegExp(`create secret generic ${m.metadata.name} --from-env-file=/dev/stdin --dry-run=client -o json`));
+  assert.doesNotMatch(calls, /patch secret/, 'T-426: no patch step: the Secret is born owned');
+  // T-426: the Job exists (suspended) first; the Secret is applied in one call that already has the label and the ownerReference: no window.
+  // S1d: the Secret is CREATED (`create -f -`), never applied: apply would keep the data a second time in a last-applied annotation.
+  assert.equal(calls.split('\n').filter((l) => /apply -f -$/.test(l)).length, 1, 'apply is for the Job alone');
+  assert.ok(calls.indexOf('apply -f -') < calls.indexOf('create secret') && calls.indexOf('create secret') < calls.indexOf('create -f -'), 'Job (apply), then the Secret (create -f -)');
+  assert.deepEqual(JSON.parse(readFileSync(join(w.root, `secret-${m.metadata.name}.meta.json`), 'utf8')), {
+    name: m.metadata.name, labels: { app: 'claudepilot-job-run', 'job-run/chat': 'chat-a' },
+    ownerReferences: [{ apiVersion: 'batch/v1', kind: 'Job', name: m.metadata.name, uid: `uid-${m.metadata.name}` }] });
   assert.match(calls, /patch job claudepilot-job-[0-9a-f]{8} --type merge -p \{"spec":\{"suspend":false\}\}/);
   assert.match(calls, /delete secret claudepilot-job-/);
   assert.doesNotMatch(calls, /delete job /, 'a finished Job stays for its TTL');
@@ -538,7 +567,7 @@ test('usage errors: nothing is created', () => {
     [['--repo', 'event isnanme/event', '--ref', 'main', '--', 'x'], /--repo: claudepilot, event or konfersi/],
     [['--repo', 'isnanme/event', '--ref', 'main', '--', 'x'], /--repo: claudepilot, event or konfersi/],
     [['--repo', 'https://github.com/isnanme/event.git', '--ref', 'main', '--', 'x'], /--repo: claudepilot, event or konfersi/],
-    [['--repo=event', '--ref', 'main', '--', 'x'], /unknown option --repo=event/], // the script defines no --repo=value form: refused as an unknown option
+    [['--repo=event', '--ref', 'main', '--', 'x'], /unknown option \(the argument is not shown/], // no --repo=value form: refused as an unknown option, and not echoed (T-426: it may be a pasted value)
     // T-491: the Event token is for that one repository; no second one rides along.
     [['--repo', 'event', '--also', 'x/y', '--ref', 'main', '--', 'x'], /--also cannot be used with --repo event/],
     [['--also', 'x/y', '--repo', 'event', '--ref', 'main', '--', 'x'], /--also cannot be used with --repo event/],
@@ -766,17 +795,809 @@ test('T-524: the heavy Jobs prefer a node other than the control plane (preferre
   // The label the rule names is on k3s-master (kubectl get nodes --show-labels, 2026-10-15): node-role.kubernetes.io/control-plane=true.
 });
 
-// T-611: the scheduler counts memory REQUESTS, the control-plane node's own pods use far more for real. job-run.sh reads its real use
-// (kubectl top) and, over JOB_RUN_MASTER_MAX_PCT (75), makes the rule away from the control plane REQUIRED in the Job's manifest.
+// T-426: --pool-env NAME, the Secrets pool's scoped test credentials (E2E_CF_ACCESS_*) for the command. Values made at runtime, never literals.
+const POOL_SECRET = 'E2E_CF_ACCESS_CLIENT_SECRET', POOL_ID = 'E2E_CF_ACCESS_CLIENT_ID';
+
+test('T-426 --pool-env: the value goes on stdin into the Secret and reaches the run container by secretKeyRef; not fetch, argv, the spec or the log', () => {
+  const w = world();
+  const secret = `cs${hex(20)}`, id = `ci${hex(12)}`;
+  // The command prints both: the streamed output and the log file are masked for them.
+  writeFileSync(join(w.root, 'scenario.json'), JSON.stringify({ rc: 0, log: jobLog(w.root, 0, `header ${secret} id ${id}\n`) }));
+  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--pool-env', POOL_SECRET, '--pool-env', POOL_ID, '--pool-env', POOL_SECRET, '--', 'npm run e2e'],
+    { [POOL_SECRET]: secret, [POOL_ID]: id });
+  assert.equal(r.code, 0, r.out);
+  const text = w.applied1();
+  const m = yamlLoad(text) as Manifest;
+  const job = m.metadata.name;
+  // The run container: one secretKeyRef per name (the repeat is dropped), the key is the name.
+  // (named JR_POOL_<name> in the container env: the run script moves them out of the environment until the command, S1f)
+  const refs = container(m).env.filter((e) => e.name.startsWith('JR_POOL_'));
+  assert.deepEqual(refs, [
+    { name: `JR_POOL_${POOL_SECRET}`, valueFrom: { secretKeyRef: { name: job, key: POOL_SECRET } } },
+    { name: `JR_POOL_${POOL_ID}`, valueFrom: { secretKeyRef: { name: job, key: POOL_ID } } },
+  ]);
+  assert.deepEqual(Object.keys(fetchEnvOf(m)).filter((n) => n.startsWith('E2E_')), [], 'the fetch container does not get them');
+  // The Secret (on stdin) holds them; nothing else does.
+  const sec = readFileSync(join(w.root, `secret-${job}.env`), 'utf8');
+  assert.ok(sec.includes(`\n${POOL_SECRET}=${secret}\n`) && sec.includes(`\n${POOL_ID}=${id}\n`), 'both values are in the Secret');
+  for (const v of [secret, id]) {
+    assert.ok(!text.includes(v), 'not in the rendered spec');
+    assert.ok(!w.calls().includes(v), 'not on a kubectl command line');
+    assert.ok(!r.out.includes(v), 'not in the output');
+    assert.ok(!w.log().includes(v), 'not in the log file');
+  }
+  assert.match(r.out, /header \[redacted\] id \[redacted\]/);
+  assert.match(r.out, /WARNING: a credential was in the Job's log/);
+  assert.match(w.calls(), new RegExp(`delete secret ${job}`), 'the Secret goes with the Job');
+  assert.deepEqual(w.state().secrets, {});
+});
+
+test('T-426 without --pool-env the run container has no secretKeyRef at all (T-401 holds)', () => {
+  const w = world();
+  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--', 'true'], { [POOL_SECRET]: `cs${hex(20)}` });
+  assert.equal(r.code, 0, r.out);
+  const m = yamlLoad(w.applied1()) as Manifest;
+  assert.deepEqual(container(m).env.filter((e) => e.valueFrom?.secretKeyRef).map((e) => e.name), []);
+  assert.ok(!readFileSync(join(w.root, `secret-${m.metadata.name}.env`), 'utf8').includes(POOL_SECRET), 'a pool variable is copied only when named');
+});
+
+test('T-426 --pool-env refusals, before any kubectl call: a name outside E2E_CF_ACCESS_*, a non-name (not echoed), an unset, empty or multi-line one', () => {
+  const w = world();
+  const val = `cs${hex(20)}`;
+  const cases: [string[], Record<string, string>, RegExp][] = [
+    [['--pool-env', 'GITHUB_TOKEN'], { GITHUB_TOKEN: val }, /--pool-env: refused: not an allowed name \(E2E_CF_ACCESS_\*\)/],
+    [['--pool-env', 'E2E_CF_ACCESS_'], {}, /not an allowed name/],
+    [['--pool-env', 'E2E_CF_ACCESS_id'], { E2E_CF_ACCESS_id: val }, /not an allowed name/],
+    [['--pool-env', `E2E_CF_ACCESS_X=${val}`], {}, /not an allowed name/],
+    [['--pool-env', POOL_ID], { [POOL_ID]: 'short7!' }, /shorter than 8 characters/],
+    [['--pool-env', 'E2E_CF_ACCESS_NOT_SET'], {}, /--pool-env: E2E_CF_ACCESS_NOT_SET is not set in this workspace/],
+    [['--pool-env', POOL_ID], { [POOL_ID]: '' }, /--pool-env: E2E_CF_ACCESS_CLIENT_ID is not set in this workspace/],
+    [['--pool-env', POOL_ID], { [POOL_ID]: `${val}\nX=y` }, /--pool-env: E2E_CF_ACCESS_CLIENT_ID holds a line break; refused/],
+  ];
+  for (const [opt, over, want] of cases) {
+    const r = w.run(['--repo', 'claudepilot', '--ref', 'main', ...opt, '--', 'true'], over);
+    assert.equal(r.code, 2, `${opt.join(' ')}: ${r.out}`);
+    assert.match(r.out, want);
+    assert.ok(!r.out.includes(val), 'a value is never shown');
+  }
+  assert.equal(w.calls(), '', 'refused before any kubectl call');
+  assert.deepEqual(w.applied(), []);
+});
+
+test('T-426 --pool-env: a pasted value that looks like a variable name (lowercase hex starting with a letter) is refused and shown nowhere', () => {
+  const w = world();
+  const pasted = `a${hex(32).slice(1)}`; // 64 hex characters, built at runtime; it matches ^[A-Za-z_][A-Za-z0-9_]{0,63}$
+  assert.match(pasted, /^[a-f][0-9a-f]{63}$/);
+  for (const arg of [pasted, pasted.toUpperCase(), `E2E_CF_ACCESS_${pasted}`]) {
+    const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--pool-env', arg, '--', 'true'], { [arg]: 'x'.repeat(12) });
+    assert.equal(r.code, 2, r.out);
+    assert.match(r.out, /refused/);
+    assert.ok(!r.out.toLowerCase().includes(pasted), 'the argument is not echoed, in any case');
+  }
+  assert.equal(w.calls(), '');
+});
+
+test('T-426 --pool-env: refuses to run under xtrace, which would print the values', () => {
+  const w = world();
+  const secret = `cs${hex(20)}`;
+  const r = spawnSync('bash', ['-x', SCRIPT, '--repo', 'claudepilot', '--ref', 'main', '--pool-env', POOL_SECRET, '--', 'true'],
+    { env: { PATH: process.env.PATH ?? '', HOME: w.root, [POOL_SECRET]: secret }, cwd: w.root, encoding: 'utf8', timeout: 30_000 });
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /refuses to run under xtrace/);
+  assert.ok(!(r.stdout + r.stderr).includes(secret));
+  assert.equal(w.calls(), '');
+});
+
+test('T-426 --pool-env: an artifact that holds a value is deleted after unpacking, named without the value, and the run fails (rc 3)', () => {
+  const w = world();
+  const secret = `cs${hex(20)}`;
+  const art = join(w.root, 'art-leak');
+  mkdirSync(join(art, 'reports'), { recursive: true });
+  writeFileSync(join(art, 'reports/trace.txt'), `GET / cf-access-client-secret: ${secret}\n`);
+  writeFileSync(join(art, 'reports/clean.xml'), '<testsuites tests="1"/>');
+  const tgz = spawnSync('tar', ['-czf', '-', '-C', art, 'reports']).stdout.toString('base64');
+  const log = `=== JOB-RUN ARTIFACTS BEGIN\n${tgz}\n\n=== JOB-RUN ARTIFACTS END\n=== JOB-RUN EXIT 0\n`;
+  writeFileSync(join(w.root, 'scenario.json'), JSON.stringify({ rc: 0, log }));
+  const out = join(w.root, 'out');
+  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--pool-env', POOL_SECRET, '--artifacts', 'reports', '--out', out, '--', 'true'], { [POOL_SECRET]: secret });
+  assert.equal(r.code, 3, r.out);
+  assert.match(r.out, /a --pool-env credential was in the artifact .*trace\.txt: deleted/);
+  assert.ok(!r.out.includes(secret), 'the value is not shown');
+  assert.ok(!existsSync(join(out, 'reports/trace.txt')), 'the file is deleted');
+  assert.ok(existsSync(join(out, 'reports/clean.xml')), 'a clean file stays');
+});
+
+// T-426 S1c (2nd blind review 5674/5675): the option parser, the command, compressed artifacts, the early delete.
+const artifactLog = (src: string, extra = '') => {
+  const tgz = spawnSync('tar', ['-czf', '-', '-C', src, 'reports']).stdout.toString('base64');
+  return `${extra}=== JOB-RUN ARTIFACTS BEGIN\n${tgz}\n\n=== JOB-RUN ARTIFACTS END\n=== JOB-RUN EXIT 0\n`;
+};
+
+test('T-426 the option parser echoes only a plain option name: --pool-env=<value> and a stray value after --pool-env NAME are shown nowhere', () => {
+  const w = world();
+  const v = hex(32); // 64 hex characters, built at runtime
+  assert.equal(v.length, 64);
+  const cases = [[`--pool-env=${v}`, '--', 'true'], ['--pool-env', POOL_SECRET, v, '--', 'true'], [`--${v}`, '--', 'true'], [v, '--', 'true']];
+  for (const rest of cases) {
+    const r = w.run(['--repo', 'claudepilot', '--ref', 'main', ...rest], { [POOL_SECRET]: v });
+    assert.equal(r.code, 2, r.out);
+    assert.match(r.out, /unknown option \(the argument is not shown/);
+    assert.ok(!r.out.includes(v), 'not in stdout or stderr');
+    assert.ok(!existsSync(join(w.root, 'job.log')) || !w.log().includes(v), 'not in the log');
+  }
+  assert.equal(w.calls(), '', 'refused before any kubectl call');
+  // A plain option name is still named, so a typo is easy to see.
+  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--bogus', '--', 'true']);
+  assert.equal(r.code, 2);
+  assert.match(r.out, /unknown option --bogus /);
+});
+
+test('T-426 --pool-env: a command that holds a value (expanded in the caller\'s shell) is refused, naming the variable only; a single-quoted variable passes', () => {
+  const w = world();
+  const secret = `cs${hex(20)}`;
+  const over = { [POOL_SECRET]: secret };
+  const base = ['--repo', 'claudepilot', '--ref', 'main', '--pool-env', POOL_SECRET, '--'];
+  for (const rest of [[`curl -H 'X: ${secret}' https://x.test`], ['curl', '-H', `X: ${secret}`, 'https://x.test'], [`echo ${secret}`]]) {
+    const r = w.run([...base, ...rest], over);
+    assert.equal(r.code, 2, r.out);
+    assert.match(r.out, /--pool-env: the command holds the value of E2E_CF_ACCESS_CLIENT_SECRET .*single-quote the variable/);
+    assert.ok(!r.out.includes(secret), 'the value is not shown');
+  }
+  assert.equal(w.calls(), '', 'refused before any kubectl call');
+  const ok = w.run([...base, "curl -H 'X: $E2E_CF_ACCESS_CLIENT_SECRET' https://x.test"], over);
+  assert.equal(ok.code, 0, ok.out);
+  const e = envOf(yamlLoad(w.applied1()) as Manifest);
+  assert.equal(Buffer.from(String(e.JR_CMD), 'base64').toString(), "curl -H 'X: $E2E_CF_ACCESS_CLIENT_SECRET' https://x.test");
+  assert.ok(!w.applied1().includes(secret) && !w.calls().includes(secret));
+});
+
+test('T-426 --pool-env: compressed artifacts cannot be scanned, so they are deleted (rc 3), by name or by magic bytes, and a clean plain file stays', () => {
+  const w = world();
+  const secret = `cs${hex(20)}`;
+  const art = join(w.root, 'art-z');
+  mkdirSync(join(art, 'reports/data'), { recursive: true });
+  const gz = spawnSync('gzip', ['-c'], { input: `cf-access-client-secret: ${secret}\n` }).stdout;
+  assert.ok(!gz.includes(secret), 'the gzip bytes do not hold the value in plain text: a plain scan is blind to it');
+  writeFileSync(join(art, 'reports/trace.gz'), gz);
+  writeFileSync(join(art, 'reports/data/trace.zip'), Buffer.concat([Buffer.from([0x50, 0x4b, 3, 4]), randomBytes(40)]));
+  writeFileSync(join(art, 'reports/renamed.bin'), gz); // gzip magic under another name
+  writeFileSync(join(art, 'reports/clean.xml'), '<testsuites tests="1"/>');
+  writeFileSync(join(w.root, 'scenario.json'), JSON.stringify({ rc: 0, log: artifactLog(art) }));
+  const out = join(w.root, 'out');
+  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--pool-env', POOL_SECRET, '--artifacts', 'reports', '--out', out, '--', 'true'], { [POOL_SECRET]: secret });
+  assert.equal(r.code, 3, r.out);
+  for (const f of ['trace.gz', 'data/trace.zip', 'renamed.bin']) {
+    assert.match(r.out, new RegExp(`a compressed artifact cannot be checked for the credentials: .*reports/${f.replace('.', '\\.')}: deleted`));
+    assert.ok(!existsSync(join(out, 'reports', f)), `${f} is deleted`);
+  }
+  assert.ok(existsSync(join(out, 'reports/clean.xml')), 'a clean plain file stays');
+  assert.ok(!r.out.includes(secret));
+  // Without --pool-env nothing is deleted.
+  const out2 = join(w.root, 'out2');
+  const plain = w.run(['--repo', 'claudepilot', '--ref', 'main', '--artifacts', 'reports', '--out', out2, '--', 'true']);
+  assert.equal(plain.code, 0, plain.out);
+  assert.ok(existsSync(join(out2, 'reports/trace.gz')), 'without --pool-env a compressed artifact is kept');
+});
+
+test('T-426 --pool-env: a clean artifact set keeps rc 0, and the packed copy (art.b64) is gone before the scan', () => {
+  const w = world();
+  const secret = `cs${hex(20)}`;
+  // A grep shim that records, when the scan runs, whether the packed copy still exists in the script's work folder.
+  const shim = join(w.root, 'bin/grep');
+  writeFileSync(shim, '#!/bin/bash\nif [ "$1" = -rlaFZ ]; then echo ran >> "$FAKE/scan-ran"; ls "$TMPDIR"/cp-job-run-*/art.b64 >> "$FAKE/art-seen" 2>/dev/null; fi\nexec /bin/grep "$@"\n');
+  chmodSync(shim, 0o755);
+  const out = join(w.root, 'out');
+  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--pool-env', POOL_SECRET, '--artifacts', 'reports', '--out', out, '--', 'true'], { [POOL_SECRET]: secret });
+  assert.equal(r.code, 0, r.out);
+  assert.ok(existsSync(join(out, 'reports/junit.xml')), 'the clean artifact is kept');
+  assert.ok(existsSync(join(w.root, 'scan-ran')), 'the scan ran (the shim saw it)');
+  assert.equal(readFileSync(join(w.root, 'art-seen'), 'utf8'), '', 'art.b64 was already deleted when the scan ran (the file is made empty by the redirect either way)');
+});
+
+// S1f (review 7121): the --out scan fails closed; an encoded copy is a known limit.
+test('T-426 --pool-env: a scan that fails (grep exit 2) is red, rc 3, and every unpacked artifact is deleted (never "clean")', () => {
+  const w = world();
+  const secret = `cs${hex(20)}`;
+  const shim = join(w.root, 'bin/grep');
+  writeFileSync(shim, '#!/bin/bash\nif [ "$1" = -rlaFZ ]; then echo "grep: scan stub failed" >&2; exit 2; fi\nexec /bin/grep "$@"\n');
+  chmodSync(shim, 0o755);
+  const out = join(w.root, 'out');
+  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--pool-env', POOL_SECRET, '--artifacts', 'reports', '--out', out, '--', 'true'], { [POOL_SECRET]: secret });
+  assert.equal(r.code, 3, r.out);
+  assert.match(r.out, /the artifacts could not be checked for the credentials \(the scan failed\): all deleted/);
+  assert.ok(!existsSync(join(out, 'reports/junit.xml')), 'the unchecked artifact is deleted');
+  assert.ok(!r.out.includes(secret), 'the value is not shown');
+});
+
+// S1g O1 (QA Perf FAIL): the hit list is NUL-separated, so a file name with a line break is deleted whole.
+test('T-426 S1g O1 --pool-env: an artifact whose NAME holds a line break and whose content holds the value is deleted (rc 3)', () => {
+  const w = world();
+  const secret = `cs${hex(20)}`;
+  const art = join(w.root, 'art-nl');
+  mkdirSync(join(art, 'reports'), { recursive: true });
+  writeFileSync(join(art, 'reports', 'a\nb.txt'), `cf-access-client-secret: ${secret}\n`);
+  writeFileSync(join(art, 'reports/clean.xml'), '<testsuites tests="1"/>');
+  writeFileSync(join(w.root, 'scenario.json'), JSON.stringify({ rc: 0, log: artifactLog(art) }));
+  const out = join(w.root, 'out');
+  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--pool-env', POOL_SECRET, '--artifacts', 'reports', '--out', out, '--', 'true'], { [POOL_SECRET]: secret });
+  assert.equal(r.code, 3, r.out);
+  assert.ok(!existsSync(join(out, 'reports', 'a\nb.txt')), 'the file with the line break in its name is deleted');
+  assert.ok(existsSync(join(out, 'reports/clean.xml')), 'a clean file stays');
+  assert.ok(!r.out.includes(secret));
+});
+
+// S1g C3: a find that fails in the fail-closed branch must not leave files behind while the message says "all deleted".
+test('T-426 S1g C3 --pool-env: scan failed AND find failed: every unpacked artifact is still deleted (rc 3)', () => {
+  const w = world();
+  const secret = `cs${hex(20)}`;
+  writeFileSync(join(w.root, 'bin/grep'), '#!/bin/bash\nif [ "$1" = -rlaFZ ]; then echo "grep: scan stub failed" >&2; exit 2; fi\nexec /bin/grep "$@"\n');
+  const realFind = spawnSync('sh', ['-c', 'command -v find'], { encoding: 'utf8' }).stdout.trim();
+  writeFileSync(join(w.root, 'bin/find'), `#!/bin/bash\nfor a in "$@"; do [ "$a" = -print0 ] && { echo "find: stub failed" >&2; exit 1; }; done\nexec ${realFind} "$@"\n`);
+  chmodSync(join(w.root, 'bin/grep'), 0o755); chmodSync(join(w.root, 'bin/find'), 0o755);
+  const out = join(w.root, 'out');
+  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--pool-env', POOL_SECRET, '--artifacts', 'reports', '--out', out, '--', 'true'], { [POOL_SECRET]: secret });
+  assert.equal(r.code, 3, r.out);
+  assert.match(r.out, /all deleted/);
+  assert.ok(!existsSync(join(out, 'reports/junit.xml')), 'nothing is left although find failed');
+});
+
+// S1h: artifacts of a Job whose files are named by the command. `files` maps a name under reports/ to its bytes.
+const poolArtifacts = (w: ReturnType<typeof world>, secret: string, files: Record<string, string | Buffer>, extraArgs: string[] = []) => {
+  const art = join(w.root, `art-${hex(3)}`);
+  mkdirSync(join(art, 'reports'), { recursive: true });
+  for (const [n, b] of Object.entries(files)) writeFileSync(join(art, 'reports', n), b);
+  writeFileSync(join(w.root, 'scenario.json'), JSON.stringify({ rc: 0, log: artifactLog(art) }));
+  const out = join(w.root, `out-${hex(3)}`);
+  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--pool-env', POOL_SECRET, '--artifacts', 'reports', '--out', out, ...extraArgs, '--', 'true'], { [POOL_SECRET]: secret });
+  return { r, out };
+};
+
+// S1h N1 (review 7773): a file NAMED after the value (plain, or with characters the sanitizer would turn into ?) must not put the value in
+// stdout, stderr or the log; a line break or a CR in a name must not make a line of its own. Kills a mutant that drops the sanitizer or the mask.
+test('T-426 S1h N1 --pool-env: an artifact named after the value leaks it nowhere (stdout, stderr, log), hit or compressed; names are sanitized', () => {
+  for (const secret of [`cs${hex(20)}`, `cs${hex(10)}+${hex(6)}=`]) {
+    const w = world();
+    const gz = spawnSync('gzip', ['-c'], { input: 'nothing\n' }).stdout;
+    const { r, out } = poolArtifacts(w, secret, { [`${secret}.txt`]: `x ${secret}\n`, [`${secret}.gz`]: gz, 'clean.xml': '<testsuites tests="1"/>' });
+    assert.equal(r.code, 3, r.out);
+    assert.ok(!r.out.includes(secret), 'the value is not in stdout or stderr');
+    assert.ok(!w.log().includes(secret), 'the value is not in the log');
+    assert.match(r.out, /a --pool-env credential was in the artifact \S*REDACTED\S*\.txt: deleted/);
+    assert.match(r.out, /a compressed artifact cannot be checked for the credentials: \S*REDACTED\S*\.gz: deleted/);
+    assert.match(r.out, /--pool-env: 2 artifact file\(s\) deleted/);
+    assert.ok(existsSync(join(out, 'reports/clean.xml')));
+  }
+});
+
+test('T-426 S1h N1 --pool-env: a name with a line break, a CR or a dash first is shown as ? and a forged line stays inside the message', () => {
+  const w = world();
+  const secret = `cs${hex(20)}`;
+  const gz = spawnSync('gzip', ['-c'], { input: 'nothing\n' }).stdout;
+  const { r, out } = poolArtifacts(w, secret, {
+    'a\nFORGED job-run: ok.txt': `x ${secret}\n`, 'c\rd.gz': gz, '\n': `x ${secret}\n`, '-rf': `x ${secret}\n`, '--version.txt': `x ${secret}\n`, 'clean.xml': '<testsuites tests="1"/>',
+  });
+  assert.equal(r.code, 3, r.out);
+  assert.ok(!r.out.includes(secret));
+  assert.match(r.out, /in the artifact \S*reports\/a\?FORGED\?job-run\?\?ok\.txt: deleted/);
+  assert.match(r.out, /cannot be checked for the credentials: \S*reports\/c\?d\.gz: deleted/);
+  assert.match(r.out, /in the artifact \S*reports\/\?: deleted/);
+  assert.ok(!/^FORGED/m.test(r.out) && !r.out.includes('\r'), 'no line of its own, no CR');
+  for (const l of r.out.split('\n').filter((x) => x.includes('artifact'))) assert.match(l, /^[A-Za-z0-9 .:_()/?*-]*$/, `a plain line: ${l}`);
+  for (const n of ['-rf', '--version.txt']) {
+    assert.ok(r.out.includes(`reports/${n}: deleted`), `${n} is named and deleted`);
+    assert.ok(!existsSync(join(out, 'reports', n)));
+  }
+  assert.ok(!existsSync(join(out, 'reports', '\n')) && !existsSync(join(out, 'reports', 'a\nFORGED job-run: ok.txt')));
+  assert.ok(existsSync(join(out, 'reports/clean.xml')));
+});
+
+// S1h N2 (review 7773): the compressed-scan branch. The scan finds nothing (grep exit 1, or 0 with no hit), then the listing for the compressed
+// check fails: nothing is known to be clean, so everything is deleted and the run is red. Kills a mutant without wipe_out in that branch.
+test('T-426 S1h N2 --pool-env: the scan is clean but find fails on -print0: fail closed, every artifact deleted, rc 3', () => {
+  for (const grepExit of [0, 1]) {
+    const w = world();
+    const secret = `cs${hex(20)}`;
+    writeFileSync(join(w.root, 'bin/grep'), `#!/bin/bash\nif [ "$1" = -rlaFZ ]; then exit ${grepExit}; fi\nexec /bin/grep "$@"\n`);
+    const realFind = spawnSync('sh', ['-c', 'command -v find'], { encoding: 'utf8' }).stdout.trim();
+    writeFileSync(join(w.root, 'bin/find'), `#!/bin/bash\nfor a in "$@"; do [ "$a" = -print0 ] && { echo "find: stub failed" >&2; exit 1; }; done\nexec ${realFind} "$@"\n`);
+    chmodSync(join(w.root, 'bin/grep'), 0o755); chmodSync(join(w.root, 'bin/find'), 0o755);
+    const { r, out } = poolArtifacts(w, secret, { 'junit.xml': '<testsuites tests="1"/>', '.hidden': 'x' });
+    assert.equal(r.code, 3, `grep exit ${grepExit}: ${r.out}`);
+    assert.match(r.out, /could not be listed to check for compressed files: all deleted/);
+    assert.ok(!existsSync(join(out, 'reports/junit.xml')) && !existsSync(join(out, 'reports/.hidden')), 'nothing is left');
+    assert.ok(!r.out.includes(secret));
+  }
+});
+
+// S1h N3 (review 7773): --pool-env wipes --out on a failed scan, so a folder that holds anything is refused before any kubectl call.
+test('T-426 S1h N3 --pool-env: a non-empty --out is refused in one plain line (rc 2) before anything runs and is left as it was; empty or new passes', () => {
+  const w = world();
+  const secret = `cs${hex(20)}`;
+  const out = join(w.root, 'out');
+  mkdirSync(out);
+  writeFileSync(join(out, 'keep.txt'), 'mine');
+  const args = ['--repo', 'claudepilot', '--ref', 'main', '--pool-env', POOL_SECRET, '--artifacts', 'reports', '--out', out, '--', 'true'];
+  const r = w.run(args, { [POOL_SECRET]: secret });
+  assert.equal(r.code, 2, r.out);
+  assert.equal(r.out.trim().split('\n').length, 1, r.out);
+  assert.match(r.out, /--out: with --pool-env the folder must be new or empty/);
+  assert.ok(!r.out.includes(out), 'the path is not shown');
+  assert.equal(w.calls(), '', 'refused before any kubectl call');
+  assert.equal(readFileSync(join(out, 'keep.txt'), 'utf8'), 'mine');
+  // A file in the place of the folder is refused too.
+  const file = join(w.root, 'afile');
+  writeFileSync(file, 'x');
+  assert.equal(w.run(args.map((a) => (a === out ? file : a)), { [POOL_SECRET]: secret }).code, 2);
+  // Without --pool-env nothing is deleted, so a used folder is allowed (as before).
+  const plain = w.run(['--repo', 'claudepilot', '--ref', 'main', '--artifacts', 'reports', '--out', out, '--', 'true']);
+  assert.equal(plain.code, 0, plain.out);
+  // An empty existing folder is fine.
+  const empty = join(w.root, 'empty');
+  mkdirSync(empty);
+  const ok = w.run(args.map((a) => (a === out ? empty : a)), { [POOL_SECRET]: secret });
+  assert.equal(ok.code, 0, ok.out);
+  assert.ok(existsSync(join(empty, 'reports/junit.xml')));
+});
+
+test('T-426 --pool-env: a base64 copy of a value in an artifact is NOT caught (a known limit, docs/dev-session.md); the plain value is', () => {
+  const w = world();
+  const secret = `cs${hex(20)}`;
+  const art = join(w.root, 'art-b64');
+  mkdirSync(join(art, 'reports'), { recursive: true });
+  writeFileSync(join(art, 'reports/encoded.txt'), `authorization: ${Buffer.from(secret).toString('base64')}\n`);
+  const tgz = spawnSync('tar', ['-czf', '-', '-C', art, 'reports']).stdout.toString('base64');
+  writeFileSync(join(w.root, 'scenario.json'), JSON.stringify({ rc: 0, log: `=== JOB-RUN ARTIFACTS BEGIN\n${tgz}\n\n=== JOB-RUN ARTIFACTS END\n=== JOB-RUN EXIT 0\n` }));
+  const out = join(w.root, 'out');
+  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--pool-env', POOL_SECRET, '--artifacts', 'reports', '--out', out, '--', 'true'], { [POOL_SECRET]: secret });
+  assert.equal(r.code, 0, r.out);
+  assert.ok(existsSync(join(out, 'reports/encoded.txt')), 'an encoded copy passes the scan: documented limit');
+});
+
+// S1d (review 5777): the failure paths of the Secret. Each exits non-zero, shows no value, and leaves no Job or Secret behind.
+const poolRun = (w: ReturnType<typeof world>, secret: string) =>
+  w.run(['--repo', 'claudepilot', '--ref', 'main', '--pool-env', POOL_SECRET, '--', 'true'], { [POOL_SECRET]: secret });
+const assertNoTrace = (w: ReturnType<typeof world>, r: { out: string }, secret: string) => {
+  const log = existsSync(join(w.root, 'job.log')) ? readFileSync(join(w.root, 'job.log'), 'utf8') : '';
+  for (const where of [r.out, w.calls(), log]) assert.ok(!where.includes(secret), 'the value is nowhere');
+  assert.deepEqual(w.state().jobs, [], 'no orphan Job');
+  assert.deepEqual(w.state().secrets, {}, 'no orphan Secret');
+};
+
+test('S1d the Secret is created with `create -f -`, never `apply`: no last-applied annotation can carry the data twice', () => {
+  const w = world();
+  const secret = `cs${hex(20)}`;
+  const r = poolRun(w, secret);
+  assert.equal(r.code, 0, r.out); // the fake exits 8 on an applied Secret and 7 on a created one that has an annotation
+  assert.match(w.calls(), /^kubectl -n \S+ create -f -$/m);
+  assert.equal(w.calls().split('\n').filter((l) => / apply /.test(l)).length, 1, 'only the Job is applied');
+});
+
+test('S1d --pool-env: a value that is not printable ASCII is refused before any kubectl call, and shown nowhere', () => {
+  const w = world();
+  for (const bad of [`cs${hex(20)}é`, `cs${hex(20)}\u0001x`, `cs${hex(20)}\tx`]) {
+    const r = poolRun(w, bad);
+    assert.equal(r.code, 2, r.out);
+    assert.match(r.out, /not printable ASCII; refused/);
+    assert.ok(!r.out.includes(bad) && !r.out.includes(bad.slice(0, 42)), 'the value is not shown');
+  }
+  assert.equal(w.calls(), '');
+});
+
+test('S1d kubectl\'s env-file error can hold the value: the dry run failing shows nothing, says a fixed message, and leaves no orphan', () => {
+  const w = world();
+  writeFileSync(join(w.root, 'fail'), JSON.stringify(['dry-run']));
+  const secret = `cs${hex(20)}`;
+  const r = poolRun(w, secret);
+  assert.notEqual(r.code, 0);
+  assert.match(r.out, /could not build the Secret/);
+  assertNoTrace(w, r, secret);
+});
+
+test('S1d the uid unreadable: the run dies before any Secret is made, and the Job is deleted', () => {
+  const w = world();
+  writeFileSync(join(w.root, 'fail'), JSON.stringify(['uid']));
+  const secret = `cs${hex(20)}`;
+  const r = poolRun(w, secret);
+  assert.equal(r.code, 2, r.out);
+  assert.match(r.out, /could not read the uid of claudepilot-job-[0-9a-f]{8}: no credentials were sent/);
+  assert.doesNotMatch(w.calls(), /create /);
+  assertNoTrace(w, r, secret);
+});
+
+test('S1d the create failing (its stderr quotes the decoded value): a fixed message, no value in stdout or stderr, no orphan Job or Secret', () => {
+  const w = world();
+  writeFileSync(join(w.root, 'fail'), JSON.stringify(['create']));
+  const secret = `cs${hex(20)}`;
+  const r = poolRun(w, secret);
+  assert.equal(r.code, 2, r.out);
+  assert.match(r.out, /could not create the Secret/);
+  assertNoTrace(w, r, secret);
+});
+
+// ---- T-611: placement. The scheduler counts memory REQUESTS, the control-plane node's own pods use far more for real. job-run.sh reads its real
+// use (kubectl top) and, when use PLUS the Job's expected peak is over JOB_RUN_MASTER_MAX_PCT (75), makes the rule away from it REQUIRED.
+// The fake master prints 9000Mi at the given percentage (allocatable = 9000 * 100 / pct); the default expected peak is 2300 Mi, --big's is 8192 Mi.
 const CP_RULE = { nodeSelectorTerms: [{ matchExpressions: [{ key: 'node-role.kubernetes.io/control-plane', operator: 'DoesNotExist' }] }] };
 type NodeAff = { requiredDuringSchedulingIgnoredDuringExecution?: unknown; preferredDuringSchedulingIgnoredDuringExecution?: unknown };
+const topLine = (used: string, pct: string) => `k3s-master   310m   7%   ${used}   ${pct}\n`;
 function placed(top: number | string | undefined, extra: string[] = [], over: Record<string, string> = {}, script = SCRIPT) {
   const w = world([], top === undefined ? {} : { top });
   const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', ...extra, '--', 'true'], over, script);
-  const m = yamlLoad(w.applied1()) as Manifest;
-  const na = (m.spec.template.spec.affinity as { nodeAffinity: NodeAff }).nodeAffinity;
-  return { r, required: na.requiredDuringSchedulingIgnoredDuringExecution, preferred: na.preferredDuringSchedulingIgnoredDuringExecution };
+  const required = r.code === 0 ? ((yamlLoad(w.applied1()) as Manifest).spec.template.spec.affinity as { nodeAffinity: NodeAff }).nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution : undefined;
+  return { r, w, required };
 }
+const away = (p: ReturnType<typeof placed>, what: string) => { assert.equal(p.r.code, 0, `${what}: ${p.r.out}`); assert.deepEqual(p.required, CP_RULE, `${what}: required rule`); };
+const kept = (p: ReturnType<typeof placed>, what: string) => { assert.equal(p.r.code, 0, `${what}: ${p.r.out}`); assert.equal(p.required, undefined, `${what}: no required rule`); };
+
+test('T-611: over the line the Job gets a REQUIRED rule away from the control plane, for a normal Job and --big', () => {
+  for (const extra of [[], ['--big']]) {
+    const p = placed(83, extra);
+    away(p, `83% ${extra.join(' ')}`);
+    assert.match(p.r.out, /placement: the control-plane node is at 83% of its memory \(over 75%\).*waits for k3s-node2/);
+    assert.match(p.r.out, /rc=0 in \d+s .* on k3s-master with/, 'the final line names the node');
+  }
+  away(placed(76), '76%');
+  away(placed(60, [], { JOB_RUN_MASTER_MAX_PCT: '50' }), 'the line is JOB_RUN_MASTER_MAX_PCT');
+});
+
+test('T-611: a normal Job well under the line, or when the metrics fail, keeps only the preferred rules (a metrics failure never blocks every Job)', () => {
+  kept(placed(50), '50%');
+  assert.match(placed(50).r.out, /placement: the control-plane node is at 50% of its memory \(about \d+% with this Job; limit 75%\): preferred rules only/);
+  for (const [what, top] of [['API missing', undefined], ['kubectl fails', 'FAIL'], ['not a number', 'k3s-master <unknown> <unknown> <unknown> <unknown>\n'], ['empty', '']] as const) {
+    for (const extra of [[], ['--big']]) kept(placed(top, extra), `${what} ${extra.join(' ')}`);
+  }
+  assert.match(placed(undefined).r.out, /placement: the control-plane node's memory is unknown \(metrics unavailable\): preferred rules only/);
+  assert.equal(world([], { top: 50 }).run(['--repo', 'claudepilot', '--ref', 'main', '--', 'true'], { JOB_RUN_MASTER_MAX_PCT: 'lots' }).code, 2, 'a bad line is a usage error');
+});
+
+test('T-611: headroom: use plus the Job\'s expected peak over the line keeps it off the master, though the use alone is under', () => {
+  away(placed(60), '60% + 2300Mi of a 15000Mi node is about 76%');
+  kept(placed(50), '50% + 2300Mi is about 63%');
+  away(placed(50, ['--big']), '--big counts its 8192Mi: 50% + 8192Mi is about 95%');
+  kept(placed(60, [], { JOB_RUN_EXPECTED_PEAK_MI: '100' }), 'a small expected peak leaves 60% alone');
+  away(placed(60, [], { JOB_RUN_EXPECTED_PEAK_MI: '3000' }), 'a bigger one blocks');
+  assert.match(placed(60).r.out, /60% of its memory and this Job may add 2300Mi \(about 76%, over 75%\)/);
+  kept(placed(topLine('9Gi', '50%')), 'Gi is read too');
+  away(placed(topLine('9Gi', '65%')), 'Gi is read too, headroom');
+});
+
+test('T-611 (coordinator 7806): a master at 74% does not take a Job of 4 GiB: use plus the Job\'s peak is counted, not the use alone', () => {
+  for (const [what, top, extra, over] of [
+    ['default peak', topLine('11100Mi', '74%'), [], {}],
+    ['a peak of 4 GiB (the request)', topLine('11100Mi', '74%'), [], { JOB_RUN_EXPECTED_PEAK_MI: '4096' }],
+    ['--big', topLine('11100Mi', '74%'), ['--big'], {}],
+  ] as const) {
+    const p = placed(top, [...extra], { ...over });
+    away(p, `74% ${what}`);
+    assert.match(p.w.log(), /^=== JOB-RUN PLACEMENT node=control-plane pct=74 projected=\d+ max=75 peak_mi=\d+ decision=required-away reason=headroom$/m, what);
+  }
+  assert.match(placed(topLine('11100Mi', '74%'), [], { JOB_RUN_EXPECTED_PEAK_MI: '4096' }).r.out, /about 10\d%, over 75%/, 'the Job would take the master to about 100%');
+});
+
+test('T-611 C3: the line is exact: at 75 a Job stays, one MiB over it goes away; the percentage-only fallback has the same edge', () => {
+  // 9200Mi at 60%: (9200 + 2300) * 60 = 75 * 9200 * 1: exactly the line. 9199Mi is one MiB less allocatable-use: over.
+  const at = placed(topLine('9200Mi', '60%')); kept(at, 'exactly at the line');
+  assert.match(at.w.log(), /projected=75 max=75/);
+  const over = placed(topLine('9199Mi', '60%')); away(over, 'just over the line');
+  assert.match(over.r.out, /about 76%, over 75%/, 'the projection is rounded up: it never reads "about 75%, over 75%"');
+  kept(placed(topLine('lots', '75%')), 'odd bytes at 75%: the percentage alone, at the line');
+  away(placed(topLine('lots', '76%')), 'odd bytes at 76%: the percentage alone, over');
+  kept(placed(topLine('lots', '60%')), 'odd bytes at 60%');
+  away(placed(topLine('lots', '80%')), 'odd bytes at 80%');
+});
+
+test('T-611 C1: a reading or a setting with a leading zero is a decimal number (08 and 09 are not octal): the run does not abort', () => {
+  kept(placed(topLine('9000Mi', '08%')), 'pct 08');
+  kept(placed(topLine('9000Mi', '09%')), 'pct 09');
+  away(placed(topLine('09000Mi', '60%')), 'bytes 09000Mi at 60%');
+  kept(placed(topLine('9000Mi', '50%'), [], { JOB_RUN_EXPECTED_PEAK_MI: '0100' }), 'peak 0100');
+  kept(placed(topLine('9000Mi', '50%'), [], { JOB_RUN_EXPECTED_PEAK_MI: '08' }), 'peak 08');
+  kept(placed(topLine('9000Mi', '50%'), [], { JOB_RUN_MASTER_MAX_PCT: '080' }), 'max 080');
+  away(placed(topLine('9000Mi', '50%'), [], { JOB_RUN_MASTER_MAX_PCT: '09' }), 'max 09 is 9');
+  // An arithmetic error on 08 does not abort bash: it only skips the headroom test, so "kept" answers above pass by accident. These need the
+  // right answer to be "away" (or an octal-valid number whose octal value flips it), so a missing 10# turns them red.
+  away(placed(topLine('9000Mi', '08%'), [], { JOB_RUN_EXPECTED_PEAK_MI: '99999' }), 'pct 08 with a big peak: headroom is still tested');
+  away(placed(topLine('9000Mi', '50%'), [], { JOB_RUN_EXPECTED_PEAK_MI: '099999' }), 'peak 099999 is 99999');
+  away(placed(topLine('09Gi', '70%'), []), 'bytes 09Gi at 70% is 9216 Mi: headroom over the line');
+  kept(placed(topLine('9000Mi', '05%'), [], { JOB_RUN_EXPECTED_PEAK_MI: '9000', JOB_RUN_MASTER_MAX_PCT: '011' }), 'max 011 is 11, not octal 9 (proj 10%)');
+});
+
+test('T-611 C2: a number that could wrap in the arithmetic is refused (rc 2), never read as a negative that lets the Job on the master', () => {
+  const bad: [string, string][] = [['JOB_RUN_EXPECTED_PEAK_MI', '99999999999999999999'], ['JOB_RUN_EXPECTED_PEAK_MI', '1000000'], ['JOB_RUN_EXPECTED_PEAK_MI', 'garbage'], ['JOB_RUN_MASTER_MAX_PCT', '1000'], ['JOB_RUN_MASTER_MAX_PCT', '99999999999999999999']];
+  for (const [name, val] of bad) {
+    const p = placed(60, [], { [name]: val });
+    assert.equal(p.r.code, 2, `${name}=${val}: ${p.r.out}`);
+    assert.equal(p.w.applied().length, 0, `${name}=${val}: no Job was made`);
+  }
+  away(placed(50, [], { JOB_RUN_EXPECTED_PEAK_MI: '999999' }), 'six digits are still counted');
+  kept(placed(60, [], { JOB_RUN_EXPECTED_PEAK_MI: '0' }), 'a peak of 0 adds nothing');
+});
+
+test('T-611: the placement decision, the node it ran on and a Pending wait are lines in the Job log', async () => {
+  const w = world([], { top: 83 });
+  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'true']);
+  assert.equal(r.code, 0, r.out);
+  assert.match(w.log(), /^=== JOB-RUN PLACEMENT node=control-plane pct=83 projected=\d+ max=75 peak_mi=2300 decision=required-away reason=over$/m);
+  assert.match(w.log(), /^=== JOB-RUN PLACEMENT node=k3s-master pct=83 decision=required-away queued=\d+s$/m, 'the node it ran on');
+  const ok = world([], { top: 40 });
+  ok.run(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'true']);
+  assert.match(ok.log(), /^=== JOB-RUN PLACEMENT node=control-plane pct=40 projected=\d+ max=75 peak_mi=2300 decision=preferred$/m);
+  const none = world([], {});
+  none.run(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'true']);
+  assert.match(none.log(), /^=== JOB-RUN PLACEMENT node=control-plane pct=unknown .* decision=preferred-metrics-unavailable$/m);
+  const p = world([], { top: 88 });
+  writeFileSync(join(p.root, 'pending'), "0/2 nodes are available: 1 node(s) didn't match Pod's node affinity/selector, 1 Insufficient memory.");
+  await p.start(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'true'], { JOB_RUN_START_WAIT_S: '1' }).done;
+  assert.match(p.log(), /^=== JOB-RUN PLACEMENT pending=affinity pct=88 decision=waits-for-node2$/m);
+});
+
+test('T-611 C4 and QA Perf 7865: a Job that never starts on the required rule says "run it again" and leaves a final placement line', async () => {
+  const w = world([], { top: 88 });
+  writeFileSync(join(w.root, 'pending'), "0/2 nodes are available: 1 node(s) didn't match Pod's node affinity/selector, 1 Insufficient memory.");
+  const r = await w.start(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'true'], { JOB_RUN_START_WAIT_S: '1' }).done;
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.out, /the Job did not start in 1s .*run it again, the master may have room now/);
+  assert.match(w.log(), /^=== JOB-RUN PLACEMENT node=none pct=88 decision=required-away outcome=did-not-start waited=\d+s$/m);
+  // Without the required rule the Job waited for memory, not for the master: no "run it again" about the master.
+  const m = world([], { top: 40 });
+  writeFileSync(join(m.root, 'pending'), '0/2 nodes are available: 2 Insufficient memory.');
+  const r2 = await m.start(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'true'], { JOB_RUN_START_WAIT_S: '1' }).done;
+  assert.equal(r2.code, 1, r2.out);
+  assert.doesNotMatch(r2.out, /run it again/);
+  assert.match(m.log(), /^=== JOB-RUN PLACEMENT node=none pct=40 decision=preferred outcome=did-not-start waited=\d+s$/m);
+});
+
+// A Secret that cannot be created is reported by the exit code and ONE fixed category, never by kubectl's own text.
+function secretFails(text: string) {
+  const w = world([], { top: 40 });
+  writeFileSync(join(w.root, 'secretfail'), text);
+  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'true']);
+  return { w, r, all: r.out + w.log() + w.calls() };
+}
+test('T-611: a Secret that cannot be created logs the kubectl exit code and a fixed category, not kubectl\'s text', () => {
+  const sentinel = `sv${hex(16)}`;
+  const cases: [string, string][] = [
+    [`Error from server (Forbidden): secrets is forbidden: cannot create ${sentinel}`, 'not-allowed'],
+    [`Error from server (AlreadyExists): secrets "x" already exists ${sentinel}`, 'already-exists'],
+    [`Unable to connect to the server: dial tcp: connection refused ${sentinel}`, 'cluster-unreachable'],
+    [`The Secret "x" is invalid: ${sentinel}`, 'invalid'],
+    [`Error: something odd ${sentinel}`, 'other'],
+  ];
+  for (const [text, cat] of cases) {
+    const { w, r, all } = secretFails(text);
+    assert.equal(r.code, 2, r.out);
+    assert.match(r.out, new RegExp(`could not create the Secret for claudepilot-job-[0-9a-f]{8} \\(kubectl exit 1, category: ${cat}; the reason is not shown\\)`));
+    assert.match(w.log(), new RegExp(`^=== JOB-RUN SECRET-FAILED rc=1 category=${cat}$`, 'm'));
+    assert.ok(!all.includes(sentinel), `kubectl's text (${cat}) is nowhere in the output, the log or the calls`);
+    assert.ok(!all.includes(w.npmToken), 'the token is nowhere either');
+    assert.equal(w.state().jobs.length, 0, 'the Job made before the Secret is removed');
+  }
+});
+
+// C5 (QA BE 2): the master is read before the Job is created, but the Job may wait suspended for minutes. Just before the release it is read again;
+// a changed answer patches the suspended Job's affinity first (merge patch of the required rule alone). The fake prints top.txt for the first
+// reading and top2.txt for every later one; "patchfail" makes an affinity patch fail.
+function moved(first: number | string, second: number | string, patchFails = false, over: Record<string, string> = {}) {
+  const w = world([], { top: first });
+  writeFileSync(join(w.root, 'top2.txt'), typeof second === 'number' ? topLine('9000Mi', `${second}%`) : second);
+  if (patchFails) writeFileSync(join(w.root, 'patchfail'), '1');
+  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'true'], over);
+  return { w, r, patches: w.calls().split('\n').filter((l) => / patch job /.test(l)) };
+}
+const REQ = 'requiredDuringSchedulingIgnoredDuringExecution';
+test('T-611 C5: 50% at create and 80% at release adds the required rule to the suspended Job before the release; the reverse drops it', () => {
+  const up = moved(50, 80);
+  assert.equal(up.r.code, 0, up.r.out);
+  assert.equal(up.patches.length, 2, up.patches.join('\n'));
+  assert.match(up.patches[0] ?? '', new RegExp(`"affinity":\\{"nodeAffinity":\\{"${REQ}":\\{"nodeSelectorTerms":\\[\\{"matchExpressions":\\[\\{"key":"node-role.kubernetes.io/control-plane","operator":"DoesNotExist"\\}\\]\\}\\]\\}\\}\\}`));
+  assert.match(up.patches[1] ?? '', /\{"spec":\{"suspend":false\}\}/, 'the release comes after the affinity patch');
+  assert.match(up.r.out, /placement changed while queued: job-run: placement: the control-plane node is at 80%/);
+  assert.match(up.w.log(), /decision=required-away reason=over .*at=release changed-from=preferred/);
+  assert.match(up.w.log(), /PLACEMENT node=\S+ pct=80 decision=required-away queued=/, 'the final line carries the decision that was used');
+
+  const down = moved(80, 50);
+  assert.equal(down.r.code, 0, down.r.out);
+  assert.equal(down.patches.length, 2, down.patches.join('\n'));
+  assert.ok((down.patches[0] ?? '').includes(`"${REQ}":null}`), 'the required rule is set to null (the preferred rules stay)');
+  assert.match(down.patches[1] ?? '', /suspend":false/);
+  assert.match(down.w.log(), /changed-from=required-away/);
+  assert.match(down.w.log(), /PLACEMENT node=\S+ pct=50 decision=preferred queued=/);
+});
+
+test('T-611 C5: an unchanged answer, or a reading that fails at release, patches no affinity (the first decision stands)', () => {
+  for (const [first, second] of [[50, 50], [80, 80], [80, 'FAIL'], [50, 'FAIL'], [80, 'k3s-master <unknown> <unknown> <unknown> <unknown>\n']] as const) {
+    const p = moved(first, second);
+    assert.equal(p.r.code, 0, `${first} then ${second}: ${p.r.out}`);
+    assert.equal(p.patches.length, 1, `${first} then ${second}: only the release: ${p.patches.join('\n')}`);
+    assert.doesNotMatch(p.r.out, /placement changed while queued/);
+  }
+  const failed = moved(80, 'FAIL').w.log();
+  assert.match(failed, /decision=required-away queued=/, 'a failed second reading keeps the rule');
+  assert.match(failed, /^=== JOB-RUN PLACEMENT node=control-plane at=release reading=failed kept=required-away pct=80 \(the create-time reading\)$/m, 'the log says the release reading failed');
+  assert.match(failed, /^=== JOB-RUN PLACEMENT node=\S+ pct=80 decision=required-away queued=/m, 'the last line keeps the create-time percentage, not unknown');
+  assert.doesNotMatch(failed, /pct=unknown/);
+});
+
+test('T-611 C5: a required rule that cannot be added stops the run (rc 2) without the release; a rule that cannot be dropped is only kept', () => {
+  const up = moved(50, 80, true);
+  assert.equal(up.r.code, 2, up.r.out);
+  assert.match(up.r.out, /went over its line while claudepilot-job-[0-9a-f]{8} waited, and its rule could not be added: run it again/);
+  assert.ok(!up.patches.some((l) => l.includes('suspend')), 'the Job was never released');
+  assert.equal(up.w.state().jobs.length, 0, 'the suspended Job is removed');
+  assert.deepEqual(up.w.state().secrets, {}, 'and its Secret is gone too (no credentials left behind)');
+  assert.match(up.w.log(), /PLACEMENT node=control-plane at=release outcome=patch-failed/);
+
+  const down = moved(80, 50, true);
+  assert.equal(down.r.code, 0, down.r.out);
+  assert.match(down.w.log(), /decision=required-away queued=/, 'the rule stays when it could not be dropped');
+});
+
+// ---- T-611 S2: JOB_RUN_AVOID_NODES, a comma list of node names a Job may never run on (default none). A required hostname NotIn rule, in the same
+// term as the control-plane rule when the memory decision adds it.
+const HOST = (...names: string[]) => ({ key: 'kubernetes.io/hostname', operator: 'NotIn', values: names });
+const CP_EXPR = { key: 'node-role.kubernetes.io/control-plane', operator: 'DoesNotExist' };
+const rule = (...exprs: unknown[]) => ({ nodeSelectorTerms: [{ matchExpressions: exprs }] });
+test('T-611 S2: JOB_RUN_AVOID_NODES gives a required hostname NotIn rule, alone when the master has room, with the control-plane rule when it is over', () => {
+  const alone = placed(50, [], { JOB_RUN_AVOID_NODES: 'k3s-master,node-9.lan' });
+  assert.equal(alone.r.code, 0, alone.r.out);
+  assert.deepEqual(alone.required, rule(HOST('k3s-master', 'node-9.lan')), 'one expression, both names');
+  const both = placed(83, [], { JOB_RUN_AVOID_NODES: 'k3s-master' });
+  assert.equal(both.r.code, 0, both.r.out);
+  assert.deepEqual(both.required, rule(CP_EXPR, HOST('k3s-master')), 'both expressions in ONE term (they are ANDed)');
+  const unset = placed(50, [], { JOB_RUN_AVOID_NODES: '' });
+  kept(unset, 'an empty list is no rule');
+});
+
+test('T-611 S2: a bad JOB_RUN_AVOID_NODES stops the run (rc 2) before anything is created', () => {
+  for (const bad of ['a b', 'x"y', '-a', 'a,,b', 'a,', 'a\\b', `${Array.from({ length: 21 }, (_, i) => `n${i}`).join(',')}`]) {
+    const p = placed(50, [], { JOB_RUN_AVOID_NODES: bad });
+    assert.equal(p.r.code, 2, `${JSON.stringify(bad)}: ${p.r.out}`);
+    assert.match(p.r.out, /JOB_RUN_AVOID_NODES/);
+    assert.equal(p.w.state().jobs.length, 0, 'no Job was created');
+  }
+});
+
+test('T-611 S2: at the release the patch keeps the avoid rule: 50 to 80 adds the control-plane expression to it, 80 to 50 drops only that one (not to null)', () => {
+  const avoid = { JOB_RUN_AVOID_NODES: 'k3s-master' };
+  const up = moved(50, 80, false, avoid);
+  assert.equal(up.r.code, 0, up.r.out);
+  assert.equal(up.patches.length, 2, up.patches.join('\n'));
+  assert.ok((up.patches[0] ?? '').includes(`"${REQ}":${JSON.stringify(rule(CP_EXPR, HOST('k3s-master')))}`), up.patches[0]);
+  const down = moved(80, 50, false, avoid);
+  assert.equal(down.r.code, 0, down.r.out);
+  assert.equal(down.patches.length, 2, down.patches.join('\n'));
+  assert.ok((down.patches[0] ?? '').includes(`"${REQ}":${JSON.stringify(rule(HOST('k3s-master')))}`), `the avoid rule stays: ${down.patches[0]}`);
+  const same = moved(50, 50, false, avoid);
+  assert.equal(same.patches.length, 1, 'an unchanged answer patches no affinity');
+});
+
+// T-611 S2b (review 8141, QA 8186/8187, decisions 8164).
+test('T-611 S2b: a newline in JOB_RUN_AVOID_NODES is refused (rc 2, nothing created) and the raw value is never echoed', () => {
+  for (const bad of ['k3s-master\nk3s-node2', 'a\n=== JOB-RUN PLACEMENT forged', 'a\r']) {
+    const p = placed(50, [], { JOB_RUN_AVOID_NODES: bad });
+    assert.equal(p.r.code, 2, `${JSON.stringify(bad)}: ${p.r.out}`);
+    assert.match(p.r.out, /JOB_RUN_AVOID_NODES must be one line/);
+    assert.ok(!p.r.out.includes('forged'), 'the value is not echoed');
+    assert.equal(p.w.state().jobs.length, 0, 'no Job was created');
+  }
+});
+
+test('T-611 S2b: a non-ASCII node name is refused (rc 2); the check is bytewise (LC_ALL=C), whatever the caller\'s locale', () => {
+  for (const bad of ['é', 'k3s-mastér', 'a,ñ']) {
+    for (const loc of ['C', 'en_US.UTF-8', 'C.UTF-8']) {
+      const p = placed(50, [], { JOB_RUN_AVOID_NODES: bad, LC_ALL: loc });
+      assert.equal(p.r.code, 2, `${JSON.stringify(bad)} under ${loc}: ${p.r.out}`);
+      assert.match(p.r.out, /ASCII/);
+      assert.equal(p.w.state().jobs.length, 0, 'no Job was created');
+    }
+  }
+});
+
+test('T-611 S2b: node names of 1 and 253 characters pass; 254 is refused', () => {
+  for (const ok of ['a', `a${'b'.repeat(251)}c`]) {
+    const p = placed(50, [], { JOB_RUN_AVOID_NODES: ok });
+    assert.equal(p.r.code, 0, `${ok.length} chars: ${p.r.out}`);
+    assert.deepEqual(p.required, rule(HOST(ok)));
+  }
+  const p = placed(50, [], { JOB_RUN_AVOID_NODES: `a${'b'.repeat(252)}c` });
+  assert.equal(p.r.code, 2, p.r.out);
+  assert.equal(p.w.state().jobs.length, 0, 'no Job was created');
+});
+
+test('T-611 S2b (D-65): a tab, DEL, a quote, a space and $ in JOB_RUN_AVOID_NODES are each refused (rc 2, no Job), and a name that holds one is not echoed', () => {
+  const cases: [string, string][] = [['a tab', 'k3s\tmaster'], ['DEL (0x7f)', 'k3s\x7fmaster'], ['a quote', 'k3s"master'], ['a single quote', "k3s'master"], ['a space', 'k3s master'], ['a dollar sign', 'k3s$master']];
+  for (const [what, bad] of cases) {
+    const p = placed(50, [], { JOB_RUN_AVOID_NODES: bad });
+    assert.equal(p.r.code, 2, `${what}: ${p.r.out}`);
+    assert.match(p.r.out, /JOB_RUN_AVOID_NODES is a comma list of node names/, what);
+    assert.ok(!p.r.out.includes(bad), `${what}: the value is not echoed`);
+    assert.equal(p.w.state().jobs.length, 0, `${what}: no Job was created`);
+    assert.equal(p.w.applied().length, 0, `${what}: nothing was applied`);
+  }
+});
+
+test('T-611 S2b: the avoid-only Pending message and log line name the validated list; the final PLACEMENT line carries it', async () => {
+  const w = world([], { top: 50 });
+  writeFileSync(join(w.root, 'pending'), "0/2 nodes are available: 1 node(s) didn't match Pod's node affinity/selector, 1 Insufficient memory.");
+  const r = await w.start(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'true'], { JOB_RUN_START_WAIT_S: '1', JOB_RUN_AVOID_NODES: 'k3s-master,node-9.lan' }).done;
+  assert.match(r.out, /is Pending: it may not run on the nodes named in JOB_RUN_AVOID_NODES \(k3s-master,node-9\.lan\), and no other node fits/);
+  assert.match(w.log(), /^=== JOB-RUN PLACEMENT pending=affinity avoid=k3s-master,node-9\.lan decision=waits-off-avoided-nodes$/m);
+  const ok = placed(50, [], { JOB_RUN_AVOID_NODES: 'k3s-master,node-9.lan' });
+  assert.match(ok.w.log(), /^=== JOB-RUN PLACEMENT node=\S+ pct=50 decision=preferred queued=\d+s avoid=k3s-master,node-9\.lan$/m);
+  const none = placed(50);
+  assert.doesNotMatch(none.w.log(), /avoid=/);
+});
+
+test('T-611 S2b: with the avoid rule on, a failed add patch stops the run (rc 2), a failed drop patch is logged and the Job runs, a failed read keeps the create-time rule', () => {
+  const avoid = { JOB_RUN_AVOID_NODES: 'k3s-master' };
+  const add = moved(50, 80, true, avoid);
+  assert.equal(add.r.code, 2, add.r.out);
+  assert.match(add.r.out, /could not be added: run it again/);
+  assert.ok(!add.patches.some((l) => l.includes('suspend')), 'never released');
+  assert.equal(add.w.state().jobs.length, 0);
+
+  const drop = moved(80, 50, true, avoid);
+  assert.equal(drop.r.code, 0, drop.r.out);
+  assert.match(drop.r.out, /the placement rule was not dropped .*runs on its create-time rule/);
+  assert.match(drop.w.log(), /^=== JOB-RUN PLACEMENT node=control-plane at=release outcome=drop-failed \(the rule was not dropped: the Job runs on its create-time rule\)$/m);
+  assert.match(drop.w.log(), /PLACEMENT node=\S+ pct=80 decision=required-away queued=\d+s avoid=k3s-master$/m);
+  assert.ok(drop.patches.some((l) => l.includes('suspend')), 'the Job was released');
+  const plain = moved(80, 50, true);
+  assert.match(plain.w.log(), /outcome=drop-failed/);
+
+  const read = moved(50, 'FAIL', false, avoid);
+  assert.equal(read.r.code, 0, read.r.out);
+  assert.equal(read.patches.length, 1, 'a failed read patches no affinity');
+  assert.match(read.w.log(), /at=release reading=failed kept=preferred pct=50/);
+  assert.match(read.w.log(), /PLACEMENT node=\S+ pct=50 decision=preferred queued=\d+s avoid=k3s-master$/m);
+});
+
+// ---- T-426 S1i (review 7888): the mask loop. The old awk loop (index, cut, index again) never ended when a value was or held the replacement
+// text. The mask is now one pass over the original line (MASKFN in job-run.sh). Each test has a hard timeout: a hang is a failure (awk gets 5 s,
+// a whole run 30 s).
+const maskFn = () => { const m = /^MASKFN='([^']*)'$/m.exec(readFileSync(SCRIPT, 'utf8')); assert.ok(m?.[1], 'MASKFN is in job-run.sh'); return m[1]; };
+function awkMask(masks: string[], line: string, repl = 'R') {
+  const prog = `${maskFn()}\nBEGIN { nt = split(ENVIRON["JR_MASK"], toks, "\\n") }\n{ print mask($0, nt, toks, ENVIRON["JR_REPL"]) }`;
+  const r = spawnSync('awk', [prog], { env: { PATH: process.env.PATH ?? '/usr/bin:/bin', JR_MASK: masks.join('\n'), JR_REPL: repl }, input: `${line}\n`, encoding: 'utf8', timeout: 5000 });
+  assert.equal(r.status, 0, `awk ended (a hang is a failure): ${r.error?.message ?? r.stderr}`);
+  return r.stdout.replace(/\n$/, '');
+}
+
+test('T-426 S1i the mask always ends and masks every hit: values that are or hold the replacement, overlapping, nested, adjacent, metacharacters', { timeout: 60_000 }, () => {
+  assert.equal(awkMask(['REDACTED'], 'a REDACTED b', 'REDACTED'), 'a REDACTED b', 'a value that IS the replacement');
+  assert.equal(awkMask(['xxREDACTEDxx'], 'p xxREDACTEDxx q xxREDACTEDxx', 'REDACTED'), 'p REDACTED q REDACTED', 'a value that holds it');
+  assert.equal(awkMask(['[redacted]'], 'v [redacted] w', '[redacted]'), 'v [redacted] w');
+  assert.equal(awkMask(['abcdefgh', 'efghijkl'], '<abcdefghijkl>'), '<R>', 'overlapping values leave no tail');
+  assert.equal(awkMask(['efghijkl', 'abcdefgh'], '<abcdefghijkl>'), '<R>', '... in either order');
+  assert.equal(awkMask(['abcdefghij', 'cdefghij'], 'x abcdefghij y'), 'x R y', 'one value inside another');
+  assert.equal(awkMask(['cdefghij', 'abcdefghij'], 'x abcdefghij y'), 'x R y');
+  assert.equal(awkMask(['aaaaaaaa'], 'aaaaaaaaaaaa'), 'R', 'a value that overlaps itself leaves no tail');
+  assert.equal(awkMask(['abcdefgh', 'ijklmnop'], 'abcdefghijklmnop'), 'R', 'adjacent values');
+  const meta = 'a.b*c+d?[e]\\f$g^h(i|j)&1', lookalike = 'aXb*c+d?[e]\\f$g^h(i|j)&1';
+  assert.equal(awkMask([meta, '(x|y)\\1&&&&'], `k ${meta} and ${lookalike} and (x|y)\\1&&&&`), 'k R and aXb*c+d?[e]\\f$g^h(i|j)&1 and R', 'regex and awk metacharacters are plain text; a lookalike stays');
+  assert.equal(awkMask(['abc', ''], 'abc abc'), 'abc abc', 'a value under 8 characters, or an empty one, masks nothing');
+  assert.equal(awkMask(['zzzzzzzz'], 'no hit here'), 'no hit here');
+  assert.equal(awkMask(['a&b\\&&&&c'], 'x a&b\\&&&&c y', '[redacted]'), 'x [redacted] y', 'an ampersand or a backslash in a value is not special in the replacement');
+});
+
+test('T-426 S1i a run whose --pool-env value holds REDACTED ends, and the value is nowhere (log stream, log file, artifact names)', { timeout: 120_000 }, () => {
+  for (const secret of [`REDACTED${hex(6)}`, `xx[redacted]${hex(6)}`]) {
+    const w = world();
+    writeFileSync(join(w.root, 'scenario.json'), JSON.stringify({ rc: 0, log: jobLog(w.root, 0, `header ${secret} end\n`) }));
+    const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--pool-env', POOL_SECRET, '--', 'npm run e2e'], { [POOL_SECRET]: secret });
+    assert.equal(r.code, 0, `ended (null = hung): ${r.out}`);
+    assert.ok(!r.out.includes(secret) && !w.log().includes(secret), 'the value is in neither the output nor the log');
+    assert.match(r.out, /header \S*redacted\S* end/i);
+  }
+  const secret = `REDACTED${hex(6)}`, w = world();
+  const gz = spawnSync('gzip', ['-c'], { input: 'nothing\n' }).stdout;
+  const { r } = poolArtifacts(w, secret, { [`${secret}.txt`]: `x ${secret}\n`, [`${secret}.gz`]: gz });
+  assert.equal(r.code, 3, `ended with the artifacts deleted (null = hung): ${r.out}`);
+  assert.ok(!r.out.includes(secret) && !w.log().includes(secret), 'the value is not shown in an artifact name either');
+});
+
+// T-731 (merged with T-611 S2b, one lineage): the reuse tests below build scratch copies of the two files with one edit each (the mutation:
+// the same check must fail on the mutant).
 /** A scratch checkout of the two files under test, each optionally edited (the mutation: the same check must fail on the mutant). */
 function mutant(editYaml: (s: string) => string, editScript: (s: string) => string) {
   const dir = mkdtempSync(join(tmpdir(), 'cp-jobrun-mut-'));
@@ -787,49 +1608,17 @@ function mutant(editYaml: (s: string) => string, editScript: (s: string) => stri
   return join(dir, 'scripts/job-run.sh');
 }
 
-test('T-611: over the line the Job gets a REQUIRED rule away from the control plane, for a normal Job and --big, and the log says so', () => {
-  for (const extra of [[], ['--big']]) {
-    const p = placed(83, extra);
-    assert.equal(p.r.code, 0, p.r.out);
-    assert.deepEqual(p.required, CP_RULE, `required rule (${extra.join(' ') || 'normal'})`);
-    assert.ok(p.preferred, 'the preferred rules stay');
-    assert.match(p.r.out, /placement: the control-plane node is at 83% of its memory \(over 75%\).*waits for k3s-node2/);
-    assert.match(p.r.out, /rc=0 in \d+s .* on k3s-master with/, 'the final line names the node');
-  }
-  assert.deepEqual(placed(76).required, CP_RULE, 'just over');
-  const custom = placed(60, [], { JOB_RUN_MASTER_MAX_PCT: '50' });
-  assert.deepEqual(custom.required, CP_RULE, 'the line is JOB_RUN_MASTER_MAX_PCT');
-});
-
-test('T-611: at or under the line, or when the metrics fail, only the preferred rules apply (a metrics failure never blocks every Job)', () => {
-  const cases: [string, number | string | undefined][] = [['under', 60], ['at the line', 75], ['API missing', undefined], ['kubectl fails', 'FAIL'], ['not a number', 'k3s-master <unknown> <unknown> <unknown> <unknown>\n'], ['empty', '']];
-  for (const [what, top] of cases) {
-    for (const extra of [[], ['--big']]) {
-      const p = placed(top, extra);
-      assert.equal(p.r.code, 0, `${what}: ${p.r.out}`);
-      assert.equal(p.required, undefined, `${what}: no required rule`);
-      assert.ok(p.preferred, `${what}: preferred rules`);
-    }
-  }
-  assert.match(placed(60).r.out, /placement: the control-plane node is at 60% of its memory \(limit 75%\): preferred rules only/);
-  assert.match(placed(undefined).r.out, /placement: the control-plane node's memory is unknown \(metrics unavailable\): preferred rules only/);
-  const bad = world([], { top: 50 }).run(['--repo', 'claudepilot', '--ref', 'main', '--', 'true'], { JOB_RUN_MASTER_MAX_PCT: 'lots' });
-  assert.equal(bad.code, 2, 'a bad line is a usage error');
-});
-
-test('T-611 mutation: without the rule in the Job\'s clone of the template, or in the script, the over-the-line check fails', () => {
+test('T-611 mutation: without the marker in the template, or without the fill in the script, the over-the-line check fails', () => {
   assert.deepEqual(placed(90).required, CP_RULE, 'the real files pass the check');
   const noTemplateMarker = mutant((y) => y.replace(/^ *__MASTER_REQUIRED__\n/m, ''), (s) => s);
   assert.notDeepEqual(placed(90, [], {}, noTemplateMarker).required, CP_RULE, 'template without the marker: the required rule is missing, so the check catches it');
   const noScriptRule = mutant((y) => y, (s) => s.replace('-e "s#__MASTER_REQUIRED__#$master_rule#"', '-e "s#__MASTER_REQUIRED__##"'));
   assert.notDeepEqual(placed(90, [], {}, noScriptRule).required, CP_RULE, 'script that never fills the rule: caught');
-  const neverOver = mutant((y) => y, (s) => s.replaceAll('[ "$pct" -gt "$master_max" ]', '[ "$pct" -gt 1000 ]'));
-  assert.notDeepEqual(placed(90, [], {}, neverOver).required, CP_RULE, 'script that ignores the reading: caught');
 });
 
 test('T-524: a Job queued while the master was under the line is read again when it is let out; over the line it gets the REQUIRED rule before it starts', async () => {
   const seeds = [1, 2, 3].map((i) => ({ name: `claudepilot-job-0000000${i}`, chat: 'chat-x' }));
-  const w = world(seeds, { top: 60 });
+  const w = world(seeds, { top: 50 });
   const s = w.start(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'true']);
   await waitFor('queued', () => /queued behind 3/.test(s.out()));
   assert.ok(!/requiredDuringScheduling/.test(w.applied1()), 'made under the line: preferred only');
@@ -840,6 +1629,7 @@ test('T-524: a Job queued while the master was under the line is read again when
   assert.match(r.out, /placement: the control-plane node is at 88% of its memory \(over 75%\)/);
   const calls = w.calls().split('\n');
   const rule = calls.findIndex((c) => /patch job .*requiredDuringSchedulingIgnoredDuringExecution.*node-role\.kubernetes\.io\/control-plane.*DoesNotExist/.test(c));
+  assert.ok(!/node-role[^\n]*kubernetes\.io\/hostname/.test(calls[rule] ?? ''), 'no avoid list: the patch holds the control-plane expression alone');
   const go = calls.findIndex((c) => /patch job .*"suspend":false/.test(c));
   assert.ok(rule >= 0 && go > rule, `the rule is patched in before the Job is let out:\n${calls.join('\n')}`);
   // The patch names this run's own Job (the one that is then let out), and that Job is the one that was created.
@@ -850,7 +1640,7 @@ test('T-524: a Job queued while the master was under the line is read again when
   assert.ok(w.applied1().includes(`name: ${ruleName}`), 'and that is the Job this run created');
   assert.equal(calls.filter((c) => /patch job .*requiredDuringScheduling/.test(c)).length, 1, 'one rule patch, one object');
   // Still under the line when let out: no patch.
-  const w2 = world(seeds, { top: 60 });
+  const w2 = world(seeds, { top: 50 });
   const s2 = w2.start(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'true']);
   await waitFor('queued', () => /queued behind 3/.test(s2.out()));
   w2.edit((st) => { Object.assign(st.jobs[0] ?? {}, { done: true, rc: 0 }); });
@@ -860,7 +1650,7 @@ test('T-524: a Job queued while the master was under the line is read again when
 
 const QUEUED = [1, 2, 3].map((i) => ({ name: `claudepilot-job-0000000${i}`, chat: 'chat-x' }));
 async function queuedThenReleased(env: Record<string, string>, beforeRelease: (root: string) => void) {
-  const w = world(QUEUED, { top: 60 });
+  const w = world(QUEUED, { top: 50 });
   const s = w.start(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'true'], env);
   await waitFor('queued', () => /queued behind 3/.test(s.out()));
   beforeRelease(w.root);
@@ -869,9 +1659,9 @@ async function queuedThenReleased(env: Record<string, string>, beforeRelease: (r
 }
 
 test('T-524: when kubectl top fails on the re-read, no patch of the rule is made and the Job still runs', async () => {
-  const { w, r } = await queuedThenReleased({}, (root) => writeFileSync(join(root, 'top.txt'), 'FAIL')); // the first reading (60%) was fine
+  const { w, r } = await queuedThenReleased({}, (root) => writeFileSync(join(root, 'top.txt'), 'FAIL')); // the first reading (50%) was fine
   assert.equal(r.code, 0, r.out);
-  assert.match(r.out, /memory is unknown \(metrics unavailable\): preferred rules only/);
+  assert.match(w.log(), /=== JOB-RUN PLACEMENT node=control-plane at=release reading=failed kept=preferred pct=50 /, 'the log says the create-time reading stands');
   assert.doesNotMatch(w.calls(), /patch job .*requiredDuringScheduling/, 'no rule patch');
   assert.match(w.calls(), /patch job claudepilot-job-[0-9a-f]{8} --type merge -p \{"spec":\{"suspend":false\}\}/, 'the Job is let out');
 });
@@ -1094,4 +1884,102 @@ test('T-731 reuse: a saved result older than the age limit is a miss', () => {
   const r = go(w, c, 'npm test');
   assert.doesNotMatch(r.out, /reused a passed result/);
   assert.equal(jobs(w), 2);
+});
+
+// ---- The merge of T-731 (--reuse) with T-426 (--pool-env) and T-611 (placement), QA UI's read on T-611 (comment 8207).
+const poolValue = () => `s${hex(8)}`; // at least 8 characters, made at runtime
+
+test('T-611 merge (8207 items 2, 4): --reuse together with --pool-env is refused (rc 2) before any kubectl call, and nothing is saved or reused', () => {
+  const w = world();
+  const secret = poolValue(), c = sha();
+  const r = go(w, c, 'npm test', ['--pool-env', POOL_SECRET], SCRIPT, { [POOL_SECRET]: secret });
+  assert.equal(r.code, 2, r.out);
+  assert.match(r.out, /--reuse cannot be used with --pool-env/);
+  assert.ok(!r.out.includes(secret), 'the value is not shown');
+  assert.equal(w.calls(), '', 'no kubectl call');
+  assert.equal(jobs(w), 0, 'no Job');
+  assert.ok(!existsSync(store(w)), 'nothing saved, no store made');
+  // A saved entry for the same commit and command (made without the credential) is not served to a run that has one.
+  assert.equal(go(w, c, 'npm test').code, 0);
+  assert.equal(jobs(w), 1);
+  const again = go(w, c, 'npm test', ['--pool-env', POOL_SECRET], SCRIPT, { [POOL_SECRET]: secret });
+  assert.equal(again.code, 2, again.out);
+  assert.doesNotMatch(again.out, /reused a passed result/);
+  assert.equal(jobs(w), 1, 'still one Job');
+});
+
+test('T-611 merge (8207 item 3): with a saved entry present, --reuse and a bad --pool-env name still dies at the --pool-env check (rc 2) without showing the argument', () => {
+  const w = world();
+  const c = sha();
+  assert.equal(go(w, c, 'npm test').code, 0);
+  const calls = w.calls();
+  const bad = `BAD_${hex(6)}`;
+  const r = go(w, c, 'npm test', ['--pool-env', bad]);
+  assert.equal(r.code, 2, r.out);
+  assert.match(r.out, /--pool-env: refused: not an allowed name/);
+  assert.ok(!r.out.includes(bad), 'the argument is not shown');
+  assert.doesNotMatch(r.out, /reused a passed result/);
+  assert.equal(w.calls(), calls, 'no kubectl call');
+});
+
+test('T-611 merge (8207 item 2): without --reuse a --pool-env run is a Job every time and writes nothing in the store', () => {
+  const w = world();
+  const secret = poolValue(), c = sha();
+  assert.equal(go(w, c, 'npm test').code, 0); // an entry exists for the same commit and command
+  for (let i = 2; i <= 3; i++) {
+    const r = w.run(['--repo', 'claudepilot', '--ref', c, '--pool-env', POOL_SECRET, '--', 'npm test'], { [POOL_SECRET]: secret });
+    assert.equal(r.code, 0, r.out);
+    assert.doesNotMatch(r.out, /reused|saved for reuse/);
+    assert.equal(jobs(w), i, 'a Job each time');
+  }
+  assert.equal(readdirSync(store(w)).length, 3, 'only the first run\'s entry (log, rc, job) is in the store');
+});
+
+test('T-611 merge (8207 item 6): a --reuse hit makes no kubectl call and ignores JOB_RUN_AVOID_NODES; a bad avoid list still stops the run first', () => {
+  const w = world([], { top: 83 });
+  const c = sha();
+  assert.equal(go(w, c, 'npm test').code, 0);
+  const calls = w.calls();
+  const hit = go(w, c, 'npm test', [], SCRIPT, { JOB_RUN_AVOID_NODES: 'k3s-master' });
+  assert.equal(hit.code, 0, hit.out);
+  assert.match(hit.out, /reused a passed result/);
+  assert.match(hit.out, /=== JOB-RUN PLACEMENT node=/, 'the saved log is shown as it was: it names the node of the run that passed');
+  assert.equal(w.calls(), calls, 'no kubectl call (no top, no Secret, no Job)');
+  const bad = go(w, c, 'npm test', [], SCRIPT, { JOB_RUN_AVOID_NODES: 'a b' });
+  assert.equal(bad.code, 2, bad.out);
+  assert.equal(w.calls(), calls, 'and still no kubectl call');
+});
+
+test('T-611 merge (8207 item 8): no __X__ placeholder is left in the applied manifest, with pool refs, with an avoid rule, with both and with neither', () => {
+  for (const [what, extra, env] of [
+    ['neither', [], {}],
+    ['pool refs', ['--pool-env', POOL_SECRET, '--pool-env', POOL_ID], { [POOL_SECRET]: poolValue(), [POOL_ID]: poolValue() }],
+    ['an avoid rule', [], { JOB_RUN_AVOID_NODES: 'k3s-master' }],
+    ['both, over the line', ['--pool-env', POOL_SECRET, '--big'], { [POOL_SECRET]: poolValue(), JOB_RUN_AVOID_NODES: 'k3s-master,node-9.lan' }],
+  ] as const) {
+    const w = world([], { top: what === 'both, over the line' ? 90 : 50 });
+    const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', ...extra, '--', 'true'], env);
+    assert.equal(r.code, 0, `${what}: ${r.out}`);
+    const parsed = JSON.stringify(yamlLoad(w.applied1())); // comments in the template are not part of the manifest
+    assert.doesNotMatch(parsed, /__[A-Z_]+__/, `${what}: a placeholder is left`);
+    assert.doesNotMatch(w.applied1(), /^\s*# __POOL_ENV__/m, `${what}: the pool marker line is replaced`);
+  }
+});
+
+test('T-611 merge: the reuse key hashes job-run.sh AND job-run.yaml; the Secret in `run` is scoped (pool names only) and `fetch` has none', () => {
+  const w = world();
+  const c = sha();
+  assert.equal(go(w, c, 'npm test').code, 0);
+  const yamlEdited = mutant((y) => `${y}# edited\n`, (s) => s);
+  assert.doesNotMatch(go(w, c, 'npm test', [], yamlEdited).out, /reused a passed result/, 'job-run.yaml is in the key');
+  const scriptEdited = mutant((y) => y, (s) => `${s}# edited\n`);
+  assert.doesNotMatch(go(w, c, 'npm test', [], scriptEdited).out, /reused a passed result/, 'job-run.sh is in the key');
+  const p = world();
+  const secret = poolValue();
+  assert.equal(p.run(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--pool-env', POOL_SECRET, '--', 'true'], { [POOL_SECRET]: secret }).code, 0);
+  const m = yamlLoad(p.applied1()) as Manifest;
+  const refs = (cs: Container[] | undefined) => (cs ?? []).flatMap((x) => x.env.filter((e) => e.valueFrom?.secretKeyRef).map((e) => e.name));
+  assert.deepEqual(refs(m.spec.template.spec.initContainers).filter((n) => n.startsWith('JR_POOL_')), [], 'no pool ref in fetch');
+  assert.deepEqual(refs(m.spec.template.spec.containers), [`JR_POOL_${POOL_SECRET}`], 'run: the scoped pool name only');
+  assert.ok(!p.applied1().includes(secret), 'the value is never in the manifest');
 });

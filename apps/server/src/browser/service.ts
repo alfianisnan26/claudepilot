@@ -43,6 +43,8 @@ const EVENT_KEEP_DAYS = 90;
 /** Viewers per browser and in total (PRD §14.1 caps): the display's encoding costs CPU for each. */
 export const VIEWERS_PER_BROWSER = 3;
 export const VIEWERS_TOTAL = 20;
+/** How many earlier deliverable revisions of a browser pool keep their commands on the lockdown allowlist while their folder is retained (T-881). */
+const RETAINED_REVISIONS = 5;
 
 export interface BrowserServiceDeps {
   store: Store;
@@ -192,7 +194,21 @@ export class BrowserService {
   /** The servers this workspace's browser pool delivers, as the MCP lockdown must admit them (none without a pool). */
   matchers(workspaceId: string): McpMatcher[] {
     const a = this.deps.pools.assignedPools<BrowserPoolContent>(workspaceId, 'browser')[0];
-    return a ? browserMatchers(a.content, compileBrowser({ pool: a.pool, content: a.content }).plugin.dir) : [];
+    if (!a) return [];
+    const current = compileBrowser({ pool: a.pool, content: a.content }).plugin.dir;
+    const out = browserMatchers(a.content, current);
+    // T-881: Claude Code is not told to update the plugin (the marketplace has autoUpdate off), so sessions keep launching the
+    // version they installed while the pool moves on, and a command the allowlist forgot is blocked for them. Until the
+    // reconciler retires an older version's folder, that version's exact commands stay allowed too: its own deliverable
+    // revisions, newest first, at most RETAINED_REVISIONS, each only while its folder is in the workspace (all of them when
+    // no delivery has been reported since the portal started). Nothing but those exact commands: no pattern, no other folder.
+    const retained = this.deps.kind.retainedFolders(workspaceId);
+    for (const prev of this.deps.pools.deliverableBefore<BrowserPoolContent>(a.pool.id, a.pool.revision, RETAINED_REVISIONS)) {
+      const { dir, hash12 } = compileBrowser({ pool: prev.pool, content: prev.content }).plugin;
+      if (dir === current || (retained && !retained.has(hash12))) continue;
+      out.push(...browserMatchers(prev.content, dir));
+    }
+    return out;
   }
 
   /** Where a workspace's browser runs commands: its Docker companion or its pod's `browser` container. */

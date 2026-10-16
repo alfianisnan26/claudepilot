@@ -226,7 +226,7 @@ export function RunPage() {
                 aria-expanded={isOpen}
                 onClick={() => toggle(j.id)}
                 title={j.needs.length ? `after ${j.needs.join(', ')}` : undefined}
-                className="flex w-full min-w-0 items-center gap-3 rounded-2xl px-3.5 py-3 text-left focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none"
+                className="flex w-full min-w-0 items-center gap-3 rounded-2xl px-3.5 py-3 text-left focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden"
               >
                 <StatusIcon status={j.status} />
                 <span className="min-w-0 flex-1 truncate text-[14.5px] font-semibold">{j.name}</span>
@@ -253,7 +253,7 @@ export function RunPage() {
                           disabled={!can}
                           aria-expanded={can ? stepOpen : undefined}
                           onClick={() => toggle(key)}
-                          className="flex min-h-11 w-full min-w-0 items-center gap-2.5 rounded-xl px-2 py-2 text-left hover:bg-surface-2/60 focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none disabled:opacity-60 disabled:hover:bg-transparent"
+                          className="flex min-h-11 w-full min-w-0 items-center gap-2.5 rounded-xl px-2 py-2 text-left hover:bg-surface-2/60 focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden disabled:opacity-60 disabled:hover:bg-transparent"
                         >
                           <StatusIcon status={s.status} className="[&_svg]:size-4" />
                           <span className="min-w-0 flex-1 truncate text-[13.5px]">{s.name}</span>

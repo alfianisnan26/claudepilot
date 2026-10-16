@@ -82,6 +82,37 @@ test('lockdown matchers: each server’s command line with the plugin’s folder
   }
 });
 
+test('T-881: after a revision changes the plugin, the old exact command stays allowed while its folder is retained, then goes; never anything else', async () => {
+  const h = await browserHarness();
+  try {
+    const p = h.create('Dev browser', {});
+    h.pools.setAssignments('docker/dev', 'browser', [{ poolId: p.id }]);
+    const [first] = h.service.matchers('docker/dev') as { serverCommand: string[] }[];
+    const dirOf = (m: { serverCommand: string[] }) => m.serverCommand.find((a) => a.endsWith('/tools/playwright.json'))!.replace(/\/tools\/playwright\.json$/, '');
+    const oldDir = dirOf(first!);
+    // Rev 2 changes what the plugin holds (isolated sessions: other servers arguments), so it lives in another folder.
+    h.pools.update(p.id, { content: { sessions: 'isolated' } });
+    const both = h.service.matchers('docker/dev') as { serverCommand: string[] }[];
+    const newDir = dirOf(both[0]!);
+    assert.notEqual(newDir, oldDir, 'the revision moved the plugin to a new folder');
+    assert.deepEqual(both.map(dirOf), [newDir, oldDir], 'before any delivery report: the new command and the old one, nothing else');
+    assert.ok(both[0]!.serverCommand.includes('--isolated') && !both[1]!.serverCommand.includes('--isolated'), 'each is the exact command of its own revision');
+    const folders = (...hashes: string[]) => new Map([['cpb-browser', hashes]]);
+    const report = (m: Map<string, string[]>) => h.kind.delivered('docker/dev', { running: true, now: new Date(), pluginFolders: m });
+    // The reconciler still holds both folders: both commands.
+    report(folders(newDir.slice(-12), oldDir.slice(-12)));
+    assert.deepEqual((h.service.matchers('docker/dev') as typeof both).map(dirOf), [newDir, oldDir]);
+    // The old folder is retired: only the new command.
+    report(folders(newDir.slice(-12)));
+    assert.deepEqual((h.service.matchers('docker/dev') as typeof both).map(dirOf), [newDir]);
+    // A folder that is not one of this pool's revisions never makes the list.
+    report(folders(newDir.slice(-12), 'f'.repeat(12)));
+    assert.deepEqual((h.service.matchers('docker/dev') as typeof both).map(dirOf), [newDir]);
+  } finally {
+    h.done();
+  }
+});
+
 test('tool rules: asks, blocks, devtools’ network tools ask by default, and the profile is never readable', () => {
   const rules = permissionRules(content());
   assert.deepEqual(rules.ask, ['mcp__plugin_cpb-browser_browser__browser_file_upload']);

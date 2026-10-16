@@ -10,7 +10,7 @@ import { extract } from 'tar-stream';
 import { secretsHarness } from '../secrets/testkit.js';
 import { tarOf } from './companion.js';
 import { compileBrowser, mcpServers } from './compile.js';
-import { coveredBy, extensionId, headersFile, headersSpec, resolveHeaders, type ResolvedHeader, type SecretLookup } from './headers.js';
+import { coveredBy, envFileValue, extensionId, headersFile, headersSpec, headersSummary, resolveHeaders, type ResolvedHeader, type SecretLookup } from './headers.js';
 import { browserHarness, supervisorStatus } from './testkit.js';
 import { browserContainer, browserVolumes, configMapData, specOf, withBrowser, type KubePlan } from './kube.js';
 import { chromePolicy } from './policy.js';
@@ -351,6 +351,123 @@ test('secretByName: found by name in the current revision, and a removed secret 
     h.service.delete(h.service.list('secrets').find((s) => s.name === 'other')!.id);
     assert.deepEqual(h.kind.secretByName('CF_ACCESS_SECRET'), { ok: false, why: 'not found' });
     assert.deepEqual(resolveHeaders([RULE], (n) => h.kind.secretByName(n)), { entries: [], skipped: [{ name: RULE.name, secret: RULE.secret, why: 'not found' }] });
+  } finally {
+    h.done();
+  }
+});
+
+// T-623 S2: a header rule may name a variable inside an env-file entry (`{ hosts, name, secret, key }`). Values are built at run time.
+const ENV_RULE = (key: string): BrowserHeaderRule => ({ hosts: ['app.example.com'], name: 'CF-Access-Client-Id', secret: 'u__.stg-handoff__cf-access.env', key });
+
+test('T-623 envFileValue: KEY=VALUE lines, export, quotes stripped, comments and blanks skipped, the last line wins, a missing or empty key is null', () => {
+  const a = fresh(), d = fresh(), b = fresh(), c = fresh();
+  const text = ['# a comment', '', `CF_ID=${a}`, `export CF_SECRET="${b}"`, `QUOTED='${c}'`, `OTHER=${d}\r`, 'EMPTY=', `CF_ID=${d}`, `  SPACED  =  ${a}  `].join('\n');
+  assert.equal(envFileValue(text, 'CF_ID'), d, 'the last line wins');
+  assert.equal(envFileValue(text, 'CF_SECRET'), b);
+  assert.equal(envFileValue(text, 'QUOTED'), c);
+  assert.equal(envFileValue(text, 'OTHER'), d, 'CRLF');
+  assert.equal(envFileValue(text, 'SPACED'), a);
+  assert.equal(envFileValue(text, 'EMPTY'), null);
+  assert.equal(envFileValue(text, 'MISSING'), null);
+  assert.equal(envFileValue(`# CF_ID=${a}`, 'CF_ID'), null, 'a commented line is not a value');
+  assert.equal(envFileValue(`XCF_ID=${a}`, 'CF_ID'), null, 'a longer name is not the key');
+});
+
+test('T-623 S2c envFileValue: a key that is a prefix of another variable matches only its own line, in either order', () => {
+  const a = fresh(), b = fresh();
+  for (const text of [`CF_ID_2=${b}\nCF_ID=${a}\nCF_ID_2=${b}`, `CF_ID=${a}\nCF_ID_2=${b}`, `CF_ID_2=${b}\nCF_ID=${a}`]) {
+    assert.equal(envFileValue(text, 'CF_ID'), a);
+    assert.equal(envFileValue(text, 'CF_ID_2'), b);
+  }
+  assert.equal(envFileValue(`CF_ID_2=${b}`, 'CF_ID'), null, 'a key that only prefixes another variable is absent');
+});
+
+test('T-623 S2c envFileValue: an inline “# note” is dropped, a # without a space before it stays, a quoted value keeps its #, a BOM does not hide the first key', () => {
+  const a = fresh(), b = fresh();
+  assert.equal(envFileValue(`K=${a} # note`, 'K'), a);
+  assert.equal(envFileValue(`K=${a}\t#note`, 'K'), a);
+  assert.equal(envFileValue(`K="${a}" # note`, 'K'), a);
+  assert.equal(envFileValue(`K='${a}'  # it's "x"`, 'K'), a);
+  assert.equal(envFileValue(`K="${a} # kept"`, 'K'), `${a} # kept`);
+  assert.equal(envFileValue(`K=${a}#${b}`, 'K'), `${a}#${b}`, 'a # inside a value is part of it');
+  assert.equal(envFileValue('K= # only a note', 'K'), null);
+  const bom = String.fromCharCode(0xfeff); // written as an escape: the character itself is invisible in an editor
+  assert.equal(envFileValue(`${bom}FIRST=${a}\nSECOND=${b}`, 'FIRST'), a, 'a BOM does not hide the first key');
+  assert.equal(envFileValue(`${bom}FIRST=${a}\nSECOND=${b}`, 'SECOND'), b);
+});
+
+test('T-623 resolveHeaders: a key from an env entry reaches headers.json; a missing key is left out with a reason that holds no value', () => {
+  const id = fresh(), secret = fresh(), other = fresh();
+  const entry = `CF_ID=${id}\nCF_SECRET="${secret}"\nUNRELATED=${other}\n`;
+  const lookup: SecretLookup = (n) => (n === ENV_RULE('x').secret ? { ok: true, value: entry, version: 'entry-v1' } : { ok: false, why: 'not found' });
+  const { entries, skipped } = resolveHeaders([ENV_RULE('CF_ID'), { ...ENV_RULE('CF_SECRET'), name: 'CF-Access-Client-Secret' }, { ...ENV_RULE('CF_NOPE'), name: 'X-Missing' }], lookup);
+  assert.deepEqual(entries.map((e) => [e.name, e.value, e.key]), [['CF-Access-Client-Id', id, 'CF_ID'], ['CF-Access-Client-Secret', secret, 'CF_SECRET']]);
+  const file = JSON.parse(headersFile(entries)) as { name: string; value: string }[];
+  assert.deepEqual(file.map((f) => [f.name, f.value]), [['CF-Access-Client-Id', id], ['CF-Access-Client-Secret', secret]], 'headers.json holds the key’s value, not the entry');
+  assert.ok(!headersFile(entries).includes(other), 'the other variables of the entry are not delivered');
+  assert.deepEqual(skipped, [{ name: 'X-Missing', secret: ENV_RULE('x').secret, key: 'CF_NOPE', why: 'the entry has no CF_NOPE' }]);
+  for (const v of [id, secret, other]) assert.ok(!JSON.stringify(skipped).includes(v), 'the skip reason never holds a value');
+});
+
+test('T-623: the key’s value never lands in argv, the pool, the view, the audit, the spec hash or an error', async () => {
+  const id = fresh(), secret = fresh();
+  const entry = `CF_ID=${id}\nCF_SECRET=${secret}\n`;
+  const rules = [ENV_RULE('CF_ID'), { ...ENV_RULE('CF_SECRET'), name: 'CF-Access-Client-Secret' }, { ...ENV_RULE('CF_NOPE'), name: 'X-Missing' }];
+  const lookup: SecretLookup = () => ({ ok: true, value: entry, version: 'entry-v1' });
+  const { entries, skipped } = resolveHeaders(rules, lookup);
+  const c = content({ headers: rules });
+  const plan: KubePlan = { workspace: 'dev', poolId: 'p1', content: c, portalHosts: ['portal:3000'], image: 'img:1', headers: entries };
+  const where: [string, unknown][] = [
+    ['pool content', c], ['compiled plugin', compileBrowser({ pool, content: c })], ['gate argv and env', mcpServers(c)], ['policy', chromePolicy(c, { portalHosts: [] })],
+    ['container args', browserContainer(plan)], ['config map', configMapData(plan)], ['spec hash input', specOf(plan, 'ws-dev')], ['spec headers', headersSpec(entries)],
+    ['audit summary', headersSummary(entries, skipped)], ['skips', skipped],
+  ];
+  for (const v of [id, secret, entry]) for (const [what, data] of where) assert.ok(!(typeof data === 'string' ? data : JSON.stringify(data)).includes(v), `${what} holds no value`);
+  assert.ok(headersFile(entries).includes(id) && headersFile(entries).includes(secret), 'the file the container reads is the one place');
+  assert.deepEqual(headersSpec(entries).map((e) => e.key), ['CF_ID', 'CF_SECRET'], 'the key name is in the spec: a rule that changes key changes the hash');
+  // The gate masks by the key's own variable name (the workspace has the env file's variables), not by the entry's name.
+  assert.deepEqual((mcpServers(c) as { browser: { env?: Record<string, string> } }).browser.env, { CF_ID: '${CF_ID:-}', CF_NOPE: '${CF_NOPE:-}', CF_SECRET: '${CF_SECRET:-}' });
+  // An error from saving never holds a value either.
+  const h = await browserHarness();
+  try {
+    for (const key of ['bad key', '1X', 'A'.repeat(129)]) {
+      assert.throws(() => h.kind.parse({ allowedSites: ['app.example.com'], headers: [{ hosts: ['app.example.com'], name: 'X-A', secret: 'S', key }] }, null), (e) => isAppError(e) && e.code === 'VALIDATION_FAILED' && !String((e as Error).message).includes(id));
+    }
+    assert.throws(() => h.kind.parse({ allowedSites: ['app.example.com'], headers: [{ hosts: ['app.example.com'], name: 'X-A', secret: 'S', key: 7 }] }, null), (e) => isAppError(e));
+    const ok = h.kind.parse({ allowedSites: ['app.example.com'], headers: [{ hosts: ['app.example.com'], name: 'X-A', secret: 'S', key: ' CF_ID ' }, { hosts: ['app.example.com'], name: 'X-B', secret: 'S' }, { hosts: ['app.example.com'], name: 'X-C', secret: 'S', key: null }] }, null);
+    assert.deepEqual(ok.headers, [{ hosts: ['app.example.com'], name: 'X-A', secret: 'S', key: 'CF_ID' }, { hosts: ['app.example.com'], name: 'X-B', secret: 'S' }, { hosts: ['app.example.com'], name: 'X-C', secret: 'S' }]);
+    // T-623 S2c: a blank or whitespace key is refused with its reason (a 400), never saved as a rule that delivers the whole entry.
+    for (const key of ['', '   ', '\t', '\n ']) {
+      assert.throws(() => h.kind.parse({ allowedSites: ['app.example.com'], headers: [{ hosts: ['app.example.com'], name: 'X-A', secret: 'S', key }] }, null),
+        (e) => isAppError(e) && e.code === 'VALIDATION_FAILED' && /key can’t be blank/.test((e as Error).message));
+    }
+  } finally {
+    h.done();
+  }
+});
+
+test('T-623 service: a keyed header is delivered, a missing key is audited and left out, and the audit never holds a value', async () => {
+  const id = fresh(), secret = fresh();
+  let text = `CF_ID=${id}\nCF_SECRET=${secret}\n`;
+  const rule = ENV_RULE('CF_ID');
+  const lookup: SecretLookup = (n) => (n === rule.secret ? { ok: true, value: text, version: `v-${text.length}` } : { ok: false, why: 'not found' });
+  const h = await browserHarness({ secretByName: lookup });
+  try {
+    h.target.addWorkspace('dev');
+    const p = h.create('Dev browser', { allowedSites: ['app.example.com'], headers: [rule] });
+    h.pools.setAssignments('docker/dev', 'browser', [{ poolId: p.id }]);
+    await h.service.converge('docker/dev', 'test');
+    assert.deepEqual(h.target.state.created[0]!.headers.map((e) => [e.name, e.value]), [[rule.name, id]]);
+    const rows = () => h.store.db!.prepare("SELECT details FROM browser_events WHERE workspace_id = ? AND kind = 'headers' ORDER BY id").all('docker/dev') as { details: string }[];
+    assert.deepEqual(JSON.parse(rows()[0]!.details), { headers: [{ name: rule.name, secret: rule.secret, key: 'CF_ID', hosts: rule.hosts }], skipped: [] });
+    // The variable leaves the entry: the header goes at the next delivery, and the audit says which key was missing.
+    text = `CF_SECRET=${secret}\n`;
+    h.target.state.supervisor = supervisorStatus({ activity: { at: Date.now() - 120_000, toolAt: Date.now() - 120_000, tool: null, session: null } });
+    await h.service.converge('docker/dev', 'key removed');
+    assert.deepEqual(h.target.state.created.at(-1)!.headers, []);
+    assert.deepEqual(JSON.parse(rows().at(-1)!.details), { headers: [], skipped: [{ name: rule.name, secret: rule.secret, key: 'CF_ID', why: 'the entry has no CF_ID' }] });
+    const everything = JSON.stringify(h.store.db!.prepare('SELECT * FROM browser_events').all()) + JSON.stringify(h.store.db!.prepare('SELECT * FROM pool_revisions').all());
+    for (const v of [id, secret]) assert.ok(!everything.includes(v), 'no event and no pool revision holds a value');
   } finally {
     h.done();
   }

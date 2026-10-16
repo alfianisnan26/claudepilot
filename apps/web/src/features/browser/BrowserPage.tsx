@@ -385,7 +385,7 @@ function Dock({
               autoCapitalize="none"
               autoCorrect="off"
               spellCheck={false}
-              className="h-10 min-w-0 flex-1 rounded-lg border border-white/15 bg-white/5 px-3 text-sm text-white outline-none focus:border-white/40"
+              className="h-10 min-w-0 flex-1 rounded-lg border border-white/15 bg-white/5 px-3 text-sm text-white outline-hidden focus:border-white/40"
             />
             <button type="button" aria-label={hidden ? 'Show text' : 'Hide text'} onClick={() => setHidden((h) => !h)} className="flex size-10 items-center justify-center rounded-lg text-white/70 hover:bg-white/10">
               {hidden ? <EyeOff className="size-4" /> : <Eye className="size-4" />}

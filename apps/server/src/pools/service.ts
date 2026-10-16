@@ -694,6 +694,20 @@ export class PoolService {
   }
 
   /**
+   * The deliverable revisions of a pool before `revision`, newest first, at most `limit`, each with its content. For a
+   * kind that must still recognise what an older revision delivered while sessions move off it (the browser's lockdown
+   * allowlist, T-881). Drafts and rejected revisions are never in it.
+   */
+  deliverableBefore<C = unknown>(poolId: string, revision: number, limit: number): { pool: { id: string; name: string; revision: number }; content: C }[] {
+    const p = this.store.db?.prepare('SELECT id, name FROM pools WHERE id = ?').get(poolId) as { id: string; name: string } | undefined;
+    if (!p) return [];
+    const rows = this.store.db!
+      .prepare("SELECT revision, content FROM pool_revisions WHERE pool_id = ? AND revision < ? AND status = 'deliverable' ORDER BY revision DESC LIMIT ?")
+      .all(poolId, revision, limit) as { revision: number; content: string }[];
+    return rows.map((r) => ({ pool: { id: p.id, name: p.name, revision: r.revision }, content: JSON.parse(r.content) as C }));
+  }
+
+  /**
    * A pool at the revision workspaces get by default (its current one), with its content, or null when the
    * pool is unknown or has nothing deliverable yet. How one kind reads another's pools by ID: a persona
    * holding instruction contexts, for one. Pins and rollout pauses are per workspace and don't apply.

@@ -48,6 +48,7 @@ def self_test():
     assert m("Bash(git -C * merge -s*)", "git -C /w merge -sours origin/stg")
     assert m("Bash(git -C * merge * -X*)", "git -C /w merge --no-ff -Xtheirs origin/stg")
     assert m("Bash(npm run deploy*)", "cd x && npm run deploy:stg"), "a compound command is checked part by part"
+    assert rule_body("Bash(git * push * :*)").endswith(":*") and "*" in rule_body("Bash(git * push * :*)")[:-2], "the dead form is detectable"
     print("self-test ok")
 
 
@@ -66,6 +67,10 @@ def main():
         line = line.strip()
         if line and not line.startswith("#") and rule_body(line) is not None and line not in current:
             new.append((line, matcher(rule_body(line))))
+    # Claude Code never matches a legacy `:*` prefix after an earlier `*` (konfersi check-allowlist.mjs T-380): say so, never land it.
+    dead = [rule for rule, _ in new if rule_body(rule).endswith(":*") and "*" in rule_body(rule)[:-2]]
+    for rule in dead:
+        print(f"NEVER MATCHES (':*' after a wildcard): {rule}")
     hits, seen = {}, 0
     for raw in open(a.corpus):
         try:
@@ -85,7 +90,7 @@ def main():
         print(f"\n{rule}  refuses {len(rows)}")
         for r in rows[:4]:
             print(f"  {r.get('session', '')[:8]} {r.get('at', '')[11:19]}  {r['command'][:180]!r}")
-    return 1 if hits else 0
+    return 1 if hits or dead else 0
 
 
 if __name__ == "__main__":

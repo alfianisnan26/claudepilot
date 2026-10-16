@@ -132,7 +132,7 @@ function ProgramField({ sessionId, program }: { sessionId: string; program: stri
         onKeyDown={(e) => {
           if (e.key === 'Enter') (e.currentTarget as HTMLInputElement).blur();
         }}
-        className="h-11 min-w-0 flex-1 rounded-xl border border-line bg-surface px-3 text-[16px] text-ink placeholder:text-muted focus:border-primary focus:outline-none sm:text-[14px]"
+        className="h-11 min-w-0 flex-1 rounded-xl border border-line bg-surface px-3 text-[16px] text-ink placeholder:text-muted focus:border-primary focus:outline-hidden sm:text-[14px]"
       />
     </label>
   );

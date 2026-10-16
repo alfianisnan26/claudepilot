@@ -639,3 +639,332 @@ test('review 9: the audit keeps a resolved path or a fixed label, never a comman
     store.close();
   }
 });
+
+// T-860: git -C. The lane allow rules are text (git -C /home/node/work/agentic-worktrees/* ...) and the shell builds ".." from forms with no
+// two dots in a row. The guard reads the path as the shell does, takes its real path and allows it only below a lane root.
+// A scratch lane root stands in for /home/node/work/agentic-worktrees (given to the guard by its roots file).
+function gitCRig() {
+  const g = rig();
+  const lanes = join(g.root, 'agentic-worktrees');
+  const wt = join(lanes, 'lane1');
+  const main = join(g.root, 'main-folder-MARK860');
+  for (const d of [join(wt, 'sub'), join(wt, 'my wt'), join(wt, 't-860.fix'), join(wt, '$..'), join(wt, 'harmless'), join(main, '.git'), join(g.root, 'agentic-worktrees-evil', 'x')]) mkdirSync(d, { recursive: true });
+  symlinkSync(main, join(wt, 'out-link'));
+  const rootsFile = join(g.root, 'git-c-roots');
+  writeFileSync(rootsFile, `# lane roots\n${lanes}\n`);
+  const env = { CLAUDEPILOT_GUARD_GITC_ROOTS_FILE: rootsFile };
+  const sh = (command: string) => run(g, 'Bash', { command, description: 'x' }, { cwd: wt, env });
+  return { g, lanes, wt, main, env, sh };
+}
+
+test('T-860: git -C is refused for every spelling that leaves the lane worktrees, and allowed inside them', () => {
+  const { g, lanes, wt, sh } = gitCRig();
+  const up2 = (dots: string) => `${wt}/${dots}/${dots}/main-folder-MARK860`; // two levels up from the worktree: the scratch "main folder"
+  const REFUSED: [string, string][] = [
+    ['single quotes in the dots', `git -C ${up2(".''.")} status`],
+    ['double quotes in the dots', `git -C ${up2('."".')} status`],
+    ['a quoted dot', `git -C ${up2(".'.'")} status`],
+    ['a backslash', `git -C ${up2('.\\.')} status`],
+    // One level up is the lane root itself, which is refused; a guard that drops the backslash or the quotes reads the worktree and allows it.
+    ['a backslash dot to the root', `git -C ${wt}/.\\. status`],
+    ['a quoted dot to the root', `git -C ${wt}/.''. status`],
+    ['a plain ..',`git -C ${up2('..')} status`],
+    ['the whole path in quotes', `git -C '${up2('..')}' status`],
+    ['ANSI-C quoting', `git -C ${wt}/$'\\x2e\\x2e'/$'\\x2e\\x2e'/main-folder-MARK860 status`],
+    ['a symlink pointing out', `git -C ${wt}/out-link status`],
+    ['a symlink pointing out, with a write', `git -C ${wt}/out-link commit -m x`],
+    ['a sibling whose name starts like the root', `git -C ${lanes}-evil/x status`],
+    ['the root itself', `git -C ${lanes} status`],
+    ['a folder that does not exist', `git -C ${wt}/nope status`],
+    ['a variable', `git -C $PWD/.. status`],
+    ['a variable name alone', `git -C "$X" status`],
+    ['a command substitution', `git -C $(echo ${g.root}) status`],
+    ['backticks', 'git -C `pwd` status'],
+    ['a pattern', `git -C ${wt}/.? status`],
+    ['a bracket pattern', `git -C ${wt}/.[.] status`],
+    ['a brace pattern', `git -C ${wt}/{.,.}. status`],
+    ['a relative path out', 'git -C ../.. status'],
+    ['a relative path out in quotes', "git -C '..' status"],
+    ['no folder at all', 'git -C'],
+    ['a second -C that leaves', `git -C ${wt} -C ../.. status`],
+    ['after other options', `git -c color.ui=never --no-pager -C ${up2("'.'.")} status`],
+    ['after a cd and &&', `cd ${wt} && git -C ${up2('.\\.')} status`],
+    ['in a shell -c string', `bash -c "git -C ${up2('..')} status"`],
+    ['in a pipe', `echo x | git -C ${up2(".''.")} hash-object --stdin`],
+    ['a tilde user', 'git -C ~root status'],
+  ];
+  for (const [what, command] of REFUSED) refused(sh(command), `git -C ${what}: ${command}`);
+  // Inside: the lane worktree, its folders, quotes around it, a relative path, and a message with quotes and dots.
+  const ALLOWED: [string, string][] = [
+    ['status', `git -C ${wt} status`],
+    ['quoted', `git -C '${wt}' status`],
+    ['double quoted', `git -C "${wt}" status`],
+    ['a sub folder', `git -C ${wt}/sub log --oneline`],
+    ['dots inside the worktree', `git -C ${wt}/sub/.. status`],
+    ['a quoted dot that stays inside', `git -C ${wt}/sub/.''. status`],
+    ['relative to the cwd', 'git -C sub status'],
+    ['a commit message with quotes and ..', `git -C ${wt} commit -m "Fix 'a' and \\"b\\"... see ../x and ..'' here"`],
+    ['a commit message with single quotes', `git -C ${wt} commit -m 'Refuse .\\. and .''. in -C paths'`],
+    ['grep with a regex', `git -C ${wt} grep -n 'a\\|b' -- src`],
+    ['grep with a dotted regex', `git -C ${wt} grep -nE '\\.\\.|[.]+' -- .`],
+    ['a second -C that stays', `git -C ${wt} -C sub status`],
+    ['git without -C', 'git status'],
+  ];
+  for (const [what, command] of ALLOWED) allowed(sh(command), `git -C ${what}: ${command}`);
+});
+
+// T-860 S2: the lane allow is git -C <lane>/* ..., and its * takes everything after the folder. So the options before the subcommand, the
+// environment and the shape of the line are read too. The forms below are the owner's QA attack list (T-860 comments 8540, 8541): R refused, A allowed.
+test('T-860 S2: --git-dir, --work-tree, -c, other options, GIT_ variables, wrappers, chains and swaps are refused; the plain forms stay allowed', () => {
+  const { lanes, wt, main, sh } = gitCRig();
+  const M = main;
+  const up2 = `${wt}/.''./.''./main-folder-MARK860`;
+  const R: [string, string][] = [
+    ['--git-dir= to the main repo', `git -C ${wt} --git-dir=${M}/.git commit -m x`],
+    ['--git-dir to the main repo', `git -C ${wt} --git-dir ${M}/.git commit -m x`],
+    ['--work-tree=', `git -C ${wt} --work-tree=${M} status`],
+    ['--work-tree with add -A', `git -C ${wt} --work-tree ${M} add -A`],
+    ['--git-dir before -C', `git --git-dir=${M}/.git -C ${wt} status`],
+    ['--git-dir with a quoted dot path', `git -C ${wt} --git-dir=${up2}/.git status`],
+    ['--git-dir of a variable', `git -C ${wt} --git-dir="$D" status`],
+    ['--git-dir that does not exist', `git -C ${wt} --git-dir=${wt}/nope status`],
+    ['--git-dir through a link out', `git -C ${wt} --git-dir=${wt}/out-link/.git status`],
+    ['--git-dir with no value', `git -C ${wt} --git-dir`],
+    ['--bare', `git -C ${wt} --bare status`],
+    ['--namespace', `git -C ${wt} --namespace=x status`],
+    ['-c core.worktree', `git -C ${wt} -c core.worktree=${M} status`],
+    ['-c core.bare', `git -C ${wt} -c core.bare=true status`],
+    ['-c core.hooksPath', `git -C ${wt} -c core.hooksPath=/tmp/h commit -m x`],
+    ['-c core.fsmonitor', `git -C ${wt} -c core.fsmonitor=cmd status`],
+    ['-c alias', `git -C ${wt} -c alias.s='!cmd' s`],
+    ['-c include.path', `git -C ${wt} -c include.path=/tmp/c status`],
+    ['-c core.sshCommand', `git -C ${wt} -c core.sshCommand=cmd fetch`],
+    ['-c of a safe key (every -c is refused)', `git -C ${wt} -c user.name=x commit -m y`],
+    ['-c before -C', `git -c core.worktree=${M} -C ${wt} status`],
+    ['--config-env', `git -C ${wt} --config-env=core.worktree=VAR status`],
+    ['--exec-path=', `git -C ${wt} --exec-path=/tmp/x status`],
+    ['--exec-path', `git -C ${wt} --exec-path`],
+    ['an unknown global option', `git -C ${wt} --super-prefix=x status`],
+    ['a glued -C', `git -C${wt} status`],
+    ['-C=', `git -C=${wt} status`],
+    ['a -- before the subcommand', `git -C ${wt} -- status`],
+    ['a variable as the subcommand', `git -C ${wt} "$S" status`],
+    ['a second -C to the main repo', `git -C ${wt} -C ${M} commit -m y`],
+    ['a second -C up', `git -C ${wt} -C .. status`],
+    ['GIT_DIR before git', `GIT_DIR=${M}/.git git -C ${wt} commit -m y`],
+    ['GIT_WORK_TREE before git', `GIT_WORK_TREE=${M} git -C ${wt} add -A`],
+    ['GIT_COMMON_DIR before git', `GIT_COMMON_DIR=${M}/.git git -C ${wt} status`],
+    ['GIT_INDEX_FILE', `GIT_INDEX_FILE=/tmp/i git -C ${wt} status`],
+    ['GIT_OBJECT_DIRECTORY', `GIT_OBJECT_DIRECTORY=/tmp/o git -C ${wt} status`],
+    ['GIT_ALTERNATE_OBJECT_DIRECTORIES', `GIT_ALTERNATE_OBJECT_DIRECTORIES=/tmp/o git -C ${wt} status`],
+    ['GIT_CEILING_DIRECTORIES', `GIT_CEILING_DIRECTORIES=/ git -C ${wt} status`],
+    ['GIT_CONFIG_COUNT', `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.worktree GIT_CONFIG_VALUE_0=${M} git -C ${wt} status`],
+    ['GIT_CONFIG_GLOBAL', `GIT_CONFIG_GLOBAL=/tmp/c git -C ${wt} status`],
+    ['GIT_EXEC_PATH', `GIT_EXEC_PATH=/tmp/x git -C ${wt} status`],
+    ['GIT_EXTERNAL_DIFF', `GIT_EXTERNAL_DIFF=cmd git -C ${wt} diff`],
+    ['GIT_SSH_COMMAND', `GIT_SSH_COMMAND=cmd git -C ${wt} fetch`],
+    ['GIT_EDITOR', `GIT_EDITOR=cmd git -C ${wt} commit`],
+    ['export GIT_DIR', `export GIT_DIR=${M}/.git; git -C ${wt} status`],
+    ['env GIT_DIR', `env GIT_DIR=${M}/.git git -C ${wt} status`],
+    ['declare -x GIT_DIR', `declare -x GIT_DIR=${M}/.git; git -C ${wt} status`],
+    ['GIT_DIR on a line of its own', `GIT_DIR=${M}/.git; git -C ${wt} status`],
+    ['env -C to the main repo', `env -C ${M} git commit -m y`],
+    ['env --chdir=', `env --chdir=${M} git add -A`],
+    ['env -C of a variable', `env -C "$D" git status`],
+    ['env wrapper', `env git -C ${M} status`],
+    ['command wrapper', `command git -C ${M} status`],
+    ['git by its path', `/usr/bin/git -C ${M} status`],
+    ['a backslash before git', `\\git -C ${M} status`],
+    ['git in quotes', `'git' -C ${M} status`],
+    ['a backslash inside git', `g\\it -C ${M} status`],
+    ['a leading space', `   git -C ${M} status`],
+    ['a leading tab', `\tgit -C ${M} status`],
+    ['exec', `exec git -C ${M} status`],
+    ['timeout', `timeout 5 git -C ${M} status`],
+    ['time', `time git -C ${M} status`],
+    ['nice', `nice -n 5 git -C ${M} status`],
+    ['nohup', `nohup git -C ${M} status`],
+    ['stdbuf', `stdbuf -oL git -C ${M} status`],
+    ['xargs', `echo x | xargs git -C ${M} status`],
+    ['xargs with {}', `echo ${M} | xargs -I{} git -C {} status`],
+    ['sudo', `sudo git -C ${M} status`],
+    ['sh -c', `sh -c "git -C ${M} status"`],
+    ['eval', `eval "git -C ${M} status"`],
+    ['find -exec with {}', `find ${wt} -exec git -C {} commit -m y \\;`],
+    ['find -exec to the main repo', `find ${wt} -maxdepth 0 -exec git -C ${M} status \\;`],
+    ['find -exec --git-dir', `find ${wt} -maxdepth 0 -exec git --git-dir=${M}/.git status \\;`],
+    ['a good command then a bad one (;)', `git -C ${wt} status; git -C ${M} commit -m y`],
+    ['&&', `git -C ${wt} status && git -C ${M} commit -m y`],
+    ['||', `git -C ${wt} status || git -C ${M} commit -m y`],
+    ['a pipe', `git -C ${wt} status | git -C ${M} commit -m y`],
+    ['&', `git -C ${wt} status & git -C ${M} commit -m y`],
+    ['a newline', `git -C ${wt} status\ngit -C ${M} commit -m y`],
+    ['CRLF', `git -C ${wt} status\r\ngit -C ${M} commit -m y`],
+    ['a command substitution in an argument', `git -C ${wt} commit -m "$(git -C ${M} commit -m z)"`],
+    ['backticks in an argument', `git -C ${wt} commit -m "\x60git -C ${M} commit -m z\x60"`],
+    ['a process substitution', `cat <(git -C ${M} status)`],
+    ['a subshell', `( git -C ${M} status )`],
+    ['a brace group', `{ git -C ${M} status; }`],
+    ['a function', `f(){ git -C ${M} "$@"; }; f status`],
+    ['an alias', `alias git='git -C ${M}'; git status`],
+    ['a for loop', `for d in ..; do git -C ${wt}/$d status; done`],
+    ['a while loop', `while read p; do git -C "$p" status; done`],
+    ['an if body', `if true; then git -C ${M} status; fi`],
+    ['after a comment line', `git -C ${wt} status #\ngit -C ${M} commit -m y`],
+    ['a heredoc to a shell', `sh <<'EOF'\ngit -C ${M} commit -m y\nEOF`],
+    ['a link swapped in the same line (ln)', `ln -sfn ${M} ${wt}/harmless && git -C ${wt}/harmless commit -m y`],
+    ['a link swapped in the same line (rm then ln)', `rm -rf ${wt}/harmless && ln -s ${M} ${wt}/harmless && git -C ${wt}/harmless status`],
+    ['a move in the same line', `git -C ${wt} status && mv ${wt}/harmless ${wt}/h2`],
+    ['a config change in another command', `git -C ${wt} status && git -C ${wt} config user.name x`],
+    ['config core.worktree', `git -C ${wt} config core.worktree ${M}`],
+    ['config core.hooksPath', `git -C ${wt} config core.hooksPath /tmp/h`],
+    ['config core.fsmonitor', `git -C ${wt} config core.fsmonitor cmd`],
+    ['config alias', `git -C ${wt} config alias.x '!cmd'`],
+    ['config include.path', `git -C ${wt} config include.path /tmp/c`],
+    ['config core.sshCommand', `git -C ${wt} config core.sshCommand cmd`],
+    ['config of a variable key', `git -C ${wt} config "$K" v`],
+    // S2b (review 8740): git applies every -C first, so a relative --git-dir/--work-tree is read after the LAST -C.
+    ['a relative --git-dir with a later -C', `git -C ${wt}/sub --git-dir=../../konfersi-universe/.git -C ${wt} commit -m x`],
+    ['a relative --work-tree with a later -C', `git -C ${wt}/sub --work-tree=../../konfersi-universe -C ${wt} status`],
+    ['a relative --git-dir (two words)', `git -C ${wt} --git-dir ../x/.git status`],
+    ['a relative --work-tree (two words)', `git -C ${wt} --work-tree sub status`],
+    ['a relative --git-dir with no -C', 'git --git-dir=.git status'],
+    // The name alone, filled by read or printf -v, then exported.
+    ['export GIT_DIR with no value', `read GIT_DIR <<< ${M}/.git; export GIT_DIR; git -C ${wt} status`],
+    ['declare -x GIT_WORK_TREE with no value', `declare -x GIT_WORK_TREE; git -C ${wt} status`],
+    ['read into GIT_DIR', `read -r GIT_DIR <<< ${M}/.git; git -C ${wt} status`],
+    ['printf -v GIT_DIR', `printf -v GIT_DIR %s ${M}/.git; git -C ${wt} status`],
+    ['printf -vGIT_DIR', `printf -vGIT_DIR %s ${M}/.git; git -C ${wt} status`],
+    // Tracing appends to the file it names.
+    ['GIT_TRACE to a file', `GIT_TRACE=${M}/x git -C ${wt} status`],
+    ['GIT_TRACE2_EVENT to a file', `GIT_TRACE2_EVENT=${M}/x git -C ${wt} status`],
+    ['export GIT_TRACE to a file', `export GIT_TRACE=/tmp/t; git -C ${wt} status`],
+    ['GIT_TRACE of a variable', `GIT_TRACE="$T" git -C ${wt} status`],
+    // git config of another file.
+    ['config --file', `git -C ${wt} config --file ${M}/.git/config user.name x`],
+    ['config -f', `git -C ${wt} config -f /tmp/c user.name x`],
+    ['config --global', `git -C ${wt} config --global user.name x`],
+    ['config --system', `git -C ${wt} config --system user.name x`],
+    ['a folder that does not exist', `git -C ${wt}/new commit -m y`],
+    ['an unclosed quote', `git -C '${wt}/.. status`],
+    ['an unclosed double quote', `git -C "${wt} status`],
+    ['a trailing backslash', `git -C ${wt} status \\`],
+    // A folder named $.. exists in the scratch lane, so only the refusal of a $ in the word stops it (the shell reads $".." as ..).
+    ['$"..." (any $ in the word)', `git -C ${wt}/$".." status`],
+    ['ANSI-C dots', `git -C ${wt}/$'..'/$'..'/main-folder-MARK860 status`],
+    ['ANSI-C octal dots', `git -C ${wt}/$'\\056\\056'/$'\\056\\056'/main-folder-MARK860 status`],
+    ['a backslash newline inside the dots', `git -C ${wt}/.\\\n./.\\\n./main-folder-MARK860 status`],
+    ['a whole word quoted with ..', `git -C '${wt}/../..' status`],
+    ['a quoted prefix and a plain suffix', `git -C "${wt}"/../../main-folder-MARK860 status`],
+    ['a single quoted prefix', `git -C '${wt}'/.. status`],
+    ['.* pattern', `git -C ${wt}/.* status`],
+    ['..? pattern', `git -C ${wt}/..? status`],
+    ['an extglob', `shopt -s extglob; git -C ${wt}/.@(.)/x status`],
+    ['an extglob +()', `shopt -s extglob; git -C ${wt}/.+(.) status`],
+    ['a brace {..}', `git -C ${wt}/{..} status`],
+    ['${PWD}', `git -C \${PWD}/.. status`],
+    ['$HOME', 'git -C $HOME/work/konfersi-universe status'],
+    ['a variable set before', `d=..; git -C ${wt}/$d status`],
+    ['a variable in double quotes', `git -C "${wt}/$d" status`],
+    ['a substitution in double quotes', `git -C "$(echo ${M})" status`],
+    ['a process substitution as the folder', `git -C <(echo x) status`],
+    ['tilde', 'git -C ~/work/konfersi-universe status'],
+    ['~+', 'git -C ~+ status'],
+    ['~-', 'git -C ~- status'],
+    ['plain dots up to the root', `git -C ${wt}/.. status`],
+    ['dots down and up', `git -C ${wt}/sub/../.. status`],
+    ['the root with a slash', `git -C ${lanes}/ status`],
+    ['a root-like name', `git -C ${lanes}X status`],
+    ['dots to a sibling of the root', `git -C ${lanes}/../agentic-worktrees-evil/x status`],
+    ['two dots', 'git -C .. status'],
+    ['a name', 'git -C x status'],
+    ['an empty word', 'git -C "" status'],
+    ['an empty single quoted word', "git -C '' status"],
+    ['the next word taken as the folder', 'git -C status'],
+    ['-c taken as the folder', 'git -C -c a=b status'],
+    ['a NUL', `git -C ${wt}/sub\u0000/.. status`],
+    ['a path past PATH_MAX', `git -C ${wt}/${'a'.repeat(5000)} status`],
+  ];
+  // Every form is run and the misses are listed together, so one run shows them all.
+  const misses: string[] = [];
+  const tryForm = (fn: () => void) => {
+    try {
+      fn();
+    } catch (e) {
+      misses.push((e as Error).message.split('\n')[0] ?? 'failed');
+    }
+  };
+  for (const [what, command] of R) tryForm(() => refused(sh(command), `S2 ${what}: ${JSON.stringify(command)}`));
+
+  const A: [string, string][] = [
+    ['status', `git -C ${wt} status`],
+    ['status -sb', `git -C ${wt} status -sb`],
+    ['status --porcelain', `git -C ${wt} status --porcelain`],
+    ['--git-dir and --work-tree inside the lane', `git -C ${wt} --git-dir=${wt}/sub --work-tree ${wt} status`],
+    ['tracing as a switch', `GIT_TRACE=1 git -C ${wt} status`],
+    ['tracing off', `GIT_TRACE2=0 git -C ${wt} log`],
+    ['--no-pager before -C', `git --no-pager -C ${wt} log -3`],
+    ['--no-pager after -C', `git -C ${wt} --no-pager log -3`],
+    ['-P --no-optional-locks', `git -P --no-optional-locks -C ${wt} status`],
+    ['a commit message', `git -C ${wt} commit -m "Fix bug."`],
+    ['a commit message with ..', `git -C ${wt} commit -m 'a..b'`],
+    ['a commit message with quotes', `git -C ${wt} commit -m "see ../x and \\"quoted\\""`],
+    ['a commit message that holds git -C', `git -C ${wt} commit -m "git -C ${M} status"`],
+    ['a commit message that holds GIT_DIR=', `git -C ${wt} commit -m "GIT_DIR=${M}/.git and -c core.worktree=x"`],
+    ['grep with an alternation', `git -C ${wt} grep -n 'a\\|b' -- src`],
+    ['grep -nE with dots', `git -C ${wt} grep -nE '\\.\\.' file`],
+    ['log main..HEAD', `git -C ${wt} log main..HEAD`],
+    ['log a...b', `git -C ${wt} log a...b`],
+    ['log with a pathspec after --', `git -C ${wt} log --oneline -5 -- ../x`],
+    ['diff HEAD~1..HEAD', `git -C ${wt} diff HEAD~1..HEAD`],
+    ['show HEAD:path', `git -C ${wt} show HEAD:path`],
+    ['commit -C HEAD', `git -C ${wt} commit -C HEAD`],
+    ['grep -n -C 3', `git -C ${wt} grep -n -C 3 foo`],
+    ['log -C', `git -C ${wt} log -C`],
+    ['diff -C', `git -C ${wt} diff -C`],
+    ['blame -C -C', `git -C ${wt} blame -C -C file`],
+    ['switch -C', `git -C ${wt} switch -C newbranch`],
+    ['commit -c', `git -C ${wt} commit -c HEAD`],
+    ['a quoted folder', `git -C '${wt}' status`],
+    ['a double quoted folder', `git -C "${wt}" status`],
+    ['a folder with a slash at the end', `git -C ${wt}/ status`],
+    ['a dot (the cwd is a lane worktree)', 'git -C . status'],
+    ['a folder with ./', `git -C ${wt}/./sub status`],
+    ['a folder with an escaped space', `git -C ${wt}/my\\ wt status`],
+    ['a folder with a quoted space', `git -C "${wt}/my wt" status`],
+    ['a doubled slash', `git -C /${wt} status`],
+    ['a name with a dot', `git -C ${wt}/t-860.fix status`],
+    ['chained', `git -C ${wt} status && git -C ${wt} diff | head -20`],
+    ['stderr to stdout', `git -C ${wt} status 2>&1`],
+    ['then echo', `git -C ${wt} status; echo done`],
+    ['timeout', `timeout 60 git -C ${wt} status`],
+    ['a trailing comment', `git -C ${wt} commit -m "x" # note`],
+    ['a # inside a word', `git -C ${wt} log a#b`],
+    ['branch -a', `git -C ${wt} branch -a`],
+    ['fetch origin', `git -C ${wt} fetch origin`],
+    ['rebase', `git -C ${wt} rebase origin/integration`],
+    ['merge', `git -C ${wt} merge --no-ff ticket/T-1`],
+    ['worktree list (same command)', `git -C ${wt} worktree list`],
+    ['config of a harmless key', `git -C ${wt} config --get remote.origin.url`],
+    ['GIT_AUTHOR_NAME', `GIT_AUTHOR_NAME=x git -C ${wt} commit -m y`],
+    ['GIT_TERMINAL_PROMPT', `GIT_TERMINAL_PROMPT=0 git -C ${wt} fetch origin`],
+    ['env -C inside the lane', `env -C ${wt} git status`],
+    ['a heredoc message', `git -C ${wt} commit -F - <<'EOF'\nsee git -C ${M} status and GIT_DIR=x\nEOF`],
+    ['find without git', `find ${wt} -maxdepth 1 -name x`],
+  ];
+  for (const [what, command] of A) tryForm(() => allowed(sh(command), `S2 ${what}: ${JSON.stringify(command)}`));
+  assert.deepEqual(misses, []);
+});
+
+test('T-860: a refusal writes one outbox line with no path text, and the guard stays off in a workspace with no lane folder', () => {
+  const { g, wt, main, sh } = gitCRig();
+  refused(sh(`git -C ${wt}/out-link status`), 'out link');
+  const lines = readFileSync(join(g.home, '.claudepilot', 'outbox', `${GUARD_CHANNEL}.jsonl`), 'utf8').trim().split('\n');
+  assert.equal(lines.length, 1);
+  const line = JSON.parse(lines[0] as string) as Record<string, string>;
+  assert.match(line.form ?? '', /git -C outside the lane worktrees/);
+  assert.equal(line.path, '', 'no path of the command in the audit');
+  assert.ok(!lines[0]!.includes('MARK860') && !lines[0]!.includes(main), 'the line holds no path');
+  // No lane folder and no roots file: nothing to guard, so git -C works as it did (only when this machine has no lane folder either).
+  if (!existsSync('/home/node/work/agentic-worktrees')) allowed(run(g, 'Bash', { command: `git -C ${main} status` }, { cwd: g.repo, env: { CLAUDEPILOT_GUARD_GITC_ROOTS_FILE: join(g.root, 'none') } }), 'no lane workspace');
+});

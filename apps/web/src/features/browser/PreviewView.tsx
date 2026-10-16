@@ -504,7 +504,7 @@ export const PreviewView = forwardRef<PreviewHandle, Props>(function PreviewView
             }}
             onBlur={() => setDraft(null)}
             onKeyDown={(e) => e.key === 'Escape' && (e.currentTarget.blur(), setDraft(null))}
-            className="h-8 w-full min-w-0 truncate rounded-lg border border-white/10 bg-white/5 px-3 text-[13px] text-white outline-none placeholder:text-white/30 read-only:text-white/60 focus:border-white/40"
+            className="h-8 w-full min-w-0 truncate rounded-lg border border-white/10 bg-white/5 px-3 text-[13px] text-white outline-hidden placeholder:text-white/30 read-only:text-white/60 focus:border-white/40"
           />
         </form>
         <span className="[&>div>button]:size-8 [&>div>button]:rounded-lg [&>div>button]:text-white/70 [&>div>button:hover]:bg-white/10 [&>div>button:hover]:text-white [&>div>button[aria-expanded=true]]:bg-white/10">
@@ -543,7 +543,7 @@ export const PreviewView = forwardRef<PreviewHandle, Props>(function PreviewView
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerCancel}
         onContextMenu={(e) => controller && e.preventDefault()}
-        className={cn('relative min-h-0 flex-1 overflow-hidden bg-[#0b0b0c] outline-none select-none', controller && 'touch-none')}
+        className={cn('relative min-h-0 flex-1 overflow-hidden bg-[#0b0b0c] outline-hidden select-none', controller && 'touch-none')}
       >
         <canvas ref={canvas} aria-label="The browser’s page" className="absolute inset-0 size-full object-contain" />
         {!live && (
@@ -561,7 +561,7 @@ export const PreviewView = forwardRef<PreviewHandle, Props>(function PreviewView
                 onChange={(e) => setAnswer(e.target.value)}
                 aria-label="Answer"
                 autoComplete="off"
-                className="mt-2 h-9 w-full rounded-lg border border-white/15 bg-white/5 px-3 text-sm text-white outline-none focus:border-white/40"
+                className="mt-2 h-9 w-full rounded-lg border border-white/15 bg-white/5 px-3 text-sm text-white outline-hidden focus:border-white/40"
               />
             )}
             {isControl ? (

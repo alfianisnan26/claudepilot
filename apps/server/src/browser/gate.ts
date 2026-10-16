@@ -105,11 +105,28 @@ const CRED = '(cookie|set-cookie|authorization|proxy-authorization|x-api-key|' +
 // The values of the secrets behind those headers (--redact-env a,b: the names of environment variables the plugin's .mcp.json passes through
 // from Claude Code's own, so no value is in a file or on a command line). A value is masked wherever it appears: as it is, JSON-escaped or
 // URL-encoded. Values under 8 characters are not masked: they would hit ordinary words.
+// The header carries the value of a KEY=VALUE line as the portal reads it: without its quotes and without a trailing " # note"
+// (headers.ts envFileValue). A reader that keeps the note (docker --env-file) leaves the variable longer than that value, and then masking the
+// variable alone would let the real, shorter value through. So the parsed form of the variable is masked too, and of each line of a
+// multi-line one.
+function parsedForms(v) {
+  const out = [v];
+  for (const raw of v.split(/\r?\n/)) {
+    let rest = raw.trim();
+    const m = /^(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*\s*=(.*)$/.exec(rest);
+    if (m) rest = (m[1] || '').trim();
+    out.push(rest);
+    const q = /^(["'])(.*?)\1(?:\s+#.*)?$/.exec(rest);
+    out.push(q ? q[2] : rest.replace(/(^|\s+)#.*$/, ''));
+  }
+  return out;
+}
 const SECRET_VALUES = String(flag('--redact-env') || '')
   .split(',')
   .filter((n) => /^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(n))
   .map((n) => process.env[n])
   .filter((v) => typeof v === 'string' && v.length >= 8)
+  .flatMap((v) => parsedForms(v))
   .flatMap((v) => [v, JSON.stringify(v).slice(1, -1), encodeURIComponent(v)])
   .filter((v, i, all) => v.length >= 8 && all.indexOf(v) === i)
   .sort((a, b) => b.length - a.length);
