@@ -441,6 +441,34 @@ async function compactLanes(t, ts, sessions, cur) {
   }
   ts.laneCompacted = last;
 }
+/**
+ * A lane shown `working` with no event for STALE_LANE_MIN is most likely waiting on a background task whose finish never reached it: the T-574 S3
+ * lane sat four hours on a test Job that had ended 36 minutes after it started. It is told, at most once per STALE_LANE_GAP_MIN, to read the
+ * task's output itself and go on. A lane still in a long Job only spends one short turn on it.
+ */
+const STALE_LANE_MIN = Number(process.env.STALE_LANE_MIN ?? 45);
+const STALE_LANE_GAP_MIN = Number(process.env.STALE_LANE_GAP_MIN ?? 60);
+const STALE_LANE = (min) =>
+  `Supervisor: no event from you for ${min} min. If you are waiting on a background task (a job-run Job), its finish may not have reached you: read its output file now, act on the result and continue your ticket. If it is still running, say so in one line and keep waiting.`;
+function laneStale(w, wokenAt, now = Date.now()) {
+  return w.state === 'working' && now - Date.parse(w.lastActivityAt ?? 0) >= STALE_LANE_MIN * 60_000 && now - (wokenAt ?? 0) >= STALE_LANE_GAP_MIN * 60_000;
+}
+async function wakeStaleLanes(t, ts, sessions, cur, now = Date.now()) {
+  const lanes = sessions.filter((x) => x.parentId === cur.id && /^lane-/.test(x.agent ?? '') && x.state !== 'ended');
+  const last = Object.fromEntries(Object.entries(ts.laneWoken ?? {}).filter(([id]) => lanes.some((l) => l.id === id)));
+  for (const w of lanes) {
+    if (!laneStale(w, last[w.id], now)) continue;
+    last[w.id] = now;
+    const min = Math.round((now - Date.parse(w.lastActivityAt)) / 60_000);
+    try {
+      await sessionSend(w.id, STALE_LANE(min));
+      log(`${t.key}: lane ${String(w.title ?? w.id.slice(0, 8)).slice(0, 40)} silent ${min} min while working: told to read its task output`);
+    } catch (e) {
+      log(`${t.key}: could not wake lane ${w.id.slice(0, 8)}: ${e.message}`);
+    }
+  }
+  ts.laneWoken = last;
+}
 /** Whether an idle lead is due a compaction now. */
 function compactDue(cur, ts, now = Date.now()) {
   const used = cur?.context?.usedTokens ?? 0;
@@ -785,6 +813,7 @@ async function watch({ rounds = Infinity } = {}) {
         seenClaude.set(cur.id, cur.claudeId);
         await ensureBypass(t, ts, cur).catch((e) => log(`${t.key}: could not check Bypass: ${e.message}`));
         await compactLanes(t, ts, sessions, cur).catch((e) => log(`${t.key}: lane compaction failed: ${e.message}`));
+        await wakeStaleLanes(t, ts, sessions, cur).catch((e) => log(`${t.key}: stale lane check failed: ${e.message}`));
         if (ts.pendingContinue === cur.id && cur.state === 'idle') {
           try {
             await ensureBypass(t, ts, cur, true);
@@ -942,7 +971,7 @@ async function watch({ rounds = Infinity } = {}) {
 
 /* ---------- Go ---------- */
 
-export { harmlessEnding, watch, STATE_FILE, bestClaude, compactDue, slotsFull, compactLanes, worktreeTrustable, COMPACT, COMPACT_LANE, LANES };
+export { harmlessEnding, watch, STATE_FILE, bestClaude, compactDue, slotsFull, compactLanes, wakeStaleLanes, worktreeTrustable, COMPACT, COMPACT_LANE, LANES };
 if (IS_MAIN) {
   process.on('SIGTERM', () => revokeMcpToken().finally(() => process.exit(0)));
   process.on('SIGINT', () => revokeMcpToken().finally(() => process.exit(0)));

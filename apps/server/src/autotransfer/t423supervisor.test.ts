@@ -25,6 +25,7 @@ const sup = (await import(pathToFileURL(resolve(import.meta.dirname, '../../../.
   compactDue: (cur: Lead, ts: { compactedAt?: number }, now?: number) => boolean;
   slotsFull: (sessions: Row[], cur: Lead, cap: number, now?: number) => boolean;
   compactLanes: (t: { key: string }, ts: { laneCompacted?: Record<string, number> }, sessions: unknown[], cur: Lead) => Promise<void>;
+  wakeStaleLanes: (t: { key: string }, ts: { laneWoken?: Record<string, number> }, sessions: unknown[], cur: Lead, now?: number) => Promise<void>;
   COMPACT: string;
   COMPACT_LANE: string;
   LANES: (prog: string) => string;
@@ -84,6 +85,27 @@ test('D-70: idle lanes past 120k are compacted, each at most once per gap; other
   // The owner's Konfersi split: four build lanes by area; ClaudePilot keeps one Backend and one Frontend.
   for (const lane of ['Konfersi FE Business', 'Konfersi FE Lab', 'Konfersi BE Business', 'Konfersi BE Lab & AI']) assert.ok(brief.includes(lane), lane);
   assert.ok(sup.LANES('ClaudePilot').includes("'ClaudePilot Backend'") && sup.LANES('ClaudePilot').includes("'ClaudePilot BE Infra'") && !sup.LANES('ClaudePilot').includes('FE Lab'));
+});
+
+test('a lane working with no event for 45 min is woken to read its task output, once per hour; busy, idle, other and non-lane sessions are left', async () => {
+  const now = Date.now();
+  const lead: Lead = { id: 'lead', state: 'idle' };
+  const at = (min: number) => new Date(now - min * MIN).toISOString();
+  const s = (id: string, agent: string, state: string, min: number, parentId = 'lead') => ({ id, agent, state, parentId, title: id, lastActivityAt: at(min) });
+  const sessions = [
+    s('stuck', 'lane-backend', 'working', 240),
+    s('busy', 'lane-frontend', 'working', 5),
+    s('idle', 'lane-qa-ui', 'idle', 240),
+    s('impl', 'implementer', 'working', 240),
+    s('other', 'lane-backend', 'working', 240, 'other-lead'),
+  ];
+  const ts: { laneWoken?: Record<string, number> } = { laneWoken: { gone: now - 120 * MIN } };
+  await sup.wakeStaleLanes({ key: 'orchestrator' }, ts, sessions, lead, now);
+  assert.deepEqual(Object.keys(ts.laneWoken ?? {}), ['stuck'], 'only the silent working lane; the ended lane left the state');
+  await sup.wakeStaleLanes({ key: 'orchestrator' }, ts, sessions, lead, now + 30 * MIN);
+  assert.equal(ts.laneWoken!.stuck, now, 'not again within the hour');
+  await sup.wakeStaleLanes({ key: 'orchestrator' }, ts, sessions, lead, now + 61 * MIN);
+  assert.equal(ts.laneWoken!.stuck, now + 61 * MIN, 'again after the gap while it stays silent');
 });
 
 test('worktree trust: only rules, and only settings the portal already trusted here (a worker cannot widen its own rules on its branch)', () => {
