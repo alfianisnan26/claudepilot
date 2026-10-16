@@ -11,9 +11,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   notes, close T-591 on PASS. Live checks: coordinator runs them ("Coordinator live check" comments), close each on PASS.
   CLOSED on coordinator live PASS: T-697, T-739 (A split to T-812, coordinator), T-732, T-723. T-574 re-check after 10-17
   15:00Z (8265). T-376 open for S5. T-733 kept open (S5 + gap items, 8277). Ack 8237, 8279.
-- BATCH 24B RE-GATING b2932d0e (wip/main-b2932d0, premerge-b24b, job-out/gate-b24c.log; NO status push until done): d9df1221
-  GREEN (gate-d9df122-c8f8) but integration moved (release f921fc41, portal.yaml tag) -> merged + pack + re-gate.
-  = b24 0c86256e (RED: jobRunCreds marker, 8224) + T-401 S2c c0c0ce7d (QA PWG 8269). Deploy 243 LIVE (b23).
+- BATCH 24B ON INTEGRATION b2932d0e (gate claudepilot-gate-b2932d0-16d9 GREEN, job-out/gate-b24c.log): T-401 S2b + S2c,
+  T-736 S3c-S3e, release merge f921fc41. (d9df1221 also green; 0c86256e red, 8224.) Coordinator told on T-731. Deploy 243 LIVE (b23).
   On green + S2c QA: ff integration, tell coordinator on T-731. T-591 QA FAIL (backfill range base, store.ts:608; 8250).
 - T-611 S1b..S2 80ffedea: QA done (8186, 8187 16/17) but NOT mechanical onto integration (T-731 --reuse; 8202) -> BE Infra resolves
   after S2b (lead starts the merge in its worktree; --reuse + --pool-env refused). QA UI pre-reads the merge risks.
