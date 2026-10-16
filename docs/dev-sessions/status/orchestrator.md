@@ -12,19 +12,19 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 
 ## IN FLIGHT (6 of 6, D-71)
   Lanes' ticket_comment refused on unassigned tickets (T-341, T-549, T-675): verdicts live in their replies + this file.
-- QA PERF 7e4879c7: T-426 S1f r3 FAIL O1 (job a25088a9, newline name survives delete; O2-O5, P1-P3 hold; r1/r2 harness
-  defects) -> S1g 7718+7741 for BE Infra -> now QA T-781 S4 on lead-built wip/qa-t781-eb58615 (probes 240df23c).
-- QA UI 8b13bb5a: T-772 S1 FAIL F1 7700 -> S1b 7719. T-736 S3 PASS WITH GAPS 7717 -> S3b 7743. Now no-Job REVIEW T-610 c2246fb0.
+- QA PERF 7e4879c7: T-426 S1f r3 FAIL O1 (job a25088a9). T-781 S4 FAIL (job 408dacb1: G3 opening, key-block swallow,
+  mode 644) -> Backend. Now QA T-611 S1 62c38599 (Secret stderr, headroom edges, conflict with T-426 S1f base).
+- QA UI 8b13bb5a: T-772 S1 FAIL -> S1b 7719. T-736 S3 PWG 7717 -> S3b 7743. REVIEW T-610 APPROVE+3 7742 -> r3 7748. Now REVIEW T-739 B.
 - FOR THE COORDINATOR, T-781 (D-76): lead cannot claim/comment it (unassigned); Backend lane b2f0e95f spawned on it (S1+S2),
   posts the estimate + D1-D7 there. Order S1, S2, S4, S3, S5 (the file must carry the chat before a hard move). T-731 is DONE.
 - QA BE 2 42e5408f: T-723 S3 PASS WITH GAPS 7665 -> S3b 7677 (Cf strip default). T-610 r2 PASS WITH GAPS 7695 -> r3 7699.
   T-781 S1+S2 PASS WITH GAPS (reply) -> Backend. REVIEW T-426 S1f CHANGES 7723 (C1-C3) -> S1g. Now QA T-739 S4 12a41c76.
 - IMPL lane fc05043b (sonnet; 46007215 ended: T-739 B S4 DONE 12a41c76, 7722, job 9d1b63e5 38/0, 6 mutants caught)
   now T-736 S3b (7743) in ticket-t-736-rtk-guard -> T-723 S3b (7677) -> T-772 S1b (7719) -> T-772 S2 (7599).
-- BE INFRA 7c3ee28b (sonnet; T-610 r2 DONE c2246fb0) T-611 S0 7688: no H testable (placement never in Job log) -> decision 7694
-  (a): now T-611 S1 -> T-426 S1g (7718, owner prio) -> T-610 r3 (7699) -> T-611 S2 -> T-524 S3c (7360) -> T-612 S1.
+- BE INFRA dd395048 (sonnet; 7c3ee28b ended: T-611 S1 DONE 62c38599 7735, 35/0, 3 Jobs not 1 (own | tail), lead read Secret
+  stderr path) now T-426 S1g (7718+7741) -> T-610 r3 (7748) -> T-611 S2 -> T-524 S3c (7360) -> T-612 S1.
 - BACKEND lane b2f0e95f (sonnet): T-781 S4 DONE 6b767069 (7709, job fe36b99c 260/0, 4 mutants; lead read diff) -> QA Perf;
-  now T-781 S3 + G1-G4 (QA gaps, false 'every message' when truncated) -> S5 -> T-733. T-778 filed (authz = person).
+  now T-781 S3 + G1-G7 (QA gaps; G5 key-block swallow, G6 umask 077, G7 PRD chars) -> S5 -> T-733. T-778 (authz = person).
 - HELD: T-426 S1e 2174eee1 QA PASS 6169, review CHANGES 7121 -> fix, re-QA, merge after T-401. T-578 51f6c153 review CHANGES 6168 -> owner. T-631 CHANGES 5850 -> coordinator.
 - 16:12 OWNER PRIORITY (coordinator, T-426 5538): T-401 then T-426 FIRST. T-401 gate GREEN gate-54ba328-6502; ff only on the person's ack.
 
