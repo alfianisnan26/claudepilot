@@ -10,9 +10,10 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - DEPLOY 233 LIVE (portal 2026.10.16-2, b22). Its Releases/ note exists (coordinator: my search came early) -> QA UI re-reads 4
   notes, close T-591 on PASS. Live checks: coordinator runs them ("Coordinator live check" comments), close each on PASS.
   CLOSED on coordinator live PASS: T-697, T-739 (A split to T-812, coordinator), T-732, T-723. T-574 re-check after 10-17
-  15:00Z (8265). T-376 open for S5. DEPLOY 243 RUNNING (coordinator) from eb59ab42 = b23. Ack 8237.
-- BATCH 24B GATING d9df1221 (wip/main-d9df122, worktree premerge-b24b, job-out/gate-b24b.log; NO status push until done):
-  b24 0c86256e (RED: jobRunCreds marker, 8224) + T-401 S2c c0c0ce7d (test only, Job fb946901 58/58; QA UI QAs it).
+  15:00Z (8265). T-376 open for S5. T-733 kept open (S5 + gap items, 8277). Ack 8237, 8279.
+- BATCH 24B RE-GATING b2932d0e (wip/main-b2932d0, premerge-b24b, job-out/gate-b24c.log; NO status push until done): d9df1221
+  GREEN (gate-d9df122-c8f8) but integration moved (release f921fc41, portal.yaml tag) -> merged + pack + re-gate.
+  = b24 0c86256e (RED: jobRunCreds marker, 8224) + T-401 S2c c0c0ce7d (QA PWG 8269). Deploy 243 LIVE (b23).
   On green + S2c QA: ff integration, tell coordinator on T-731. T-591 QA FAIL (backfill range base, store.ts:608; 8250).
 - T-611 S1b..S2 80ffedea: QA done (8186, 8187 16/17) but NOT mechanical onto integration (T-731 --reuse; 8202) -> BE Infra resolves
   after S2b (lead starts the merge in its worktree; --reuse + --pool-env refused). QA UI pre-reads the merge risks.
@@ -20,7 +21,6 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   + review QA Perf.
 
 ## IN FLIGHT (6 of 6, D-71)
-- NONE gating. Lanes can't comment on unassigned tickets (T-341, T-549, T-675): verdicts in replies + this file.
 - QA PERF 8e8912fc (perf-tester/sonnet, respawned for Write; 8148): cherry-pick denied, stopped (correct). Lead built QA base
   wip/qa-t426-364c7ca 364c7ca4 (18a3dbb1 + -x db6b952a 155e334b). Now its one S1h probe Job.
 - QA UI 8b13bb5a (no Write): T-611 merge risks 10 (8207). Now T-591 cause read (no Job) -> QA T-675 R2c f7b4e34a.
