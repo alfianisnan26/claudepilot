@@ -4,7 +4,7 @@ import tseslint from 'typescript-eslint';
 
 export default [
   { ignores: ['**/node_modules/**', '**/dist/**', '**/build/**', '**/coverage/**', 'job-out/**', 'job-run-artifacts/**'] },
-  ...tseslint.configs.base,
+  tseslint.configs.base,
   {
     files: ['**/*.{ts,tsx,js,jsx,mjs,cjs}'],
     rules: {
