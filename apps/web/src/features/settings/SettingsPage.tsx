@@ -171,7 +171,7 @@ function ValueField({ setting, busy, onCommit }: { setting: SettingView; busy: b
       onChange={(e) => setText(e.target.value)}
       onBlur={commit}
       onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
-      className={`h-11 rounded-xl border border-line bg-surface px-3 text-base text-ink outline-none hover:border-line-strong focus:border-ink/40 focus:ring-4 focus:ring-[var(--ring)] disabled:opacity-50 ${number ? 'w-24 text-right' : 'w-48'}`}
+      className={`h-11 rounded-xl border border-line bg-surface px-3 text-base text-ink outline-hidden hover:border-line-strong focus:border-ink/40 focus:ring-4 focus:ring-[var(--ring)] disabled:opacity-50 ${number ? 'w-24 text-right' : 'w-48'}`}
     />
   );
 }

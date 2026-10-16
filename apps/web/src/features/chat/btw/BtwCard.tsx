@@ -129,11 +129,12 @@ export function BtwCard({
     <section
       ref={ref}
       tabIndex={-1}
+      data-focus-container
       aria-label="btw"
       data-btw={variant}
       onKeyDown={onKey}
       className={cn(
-        'flex min-h-0 min-w-0 flex-col overflow-hidden border border-line bg-surface outline-none focus-visible:ring-2 focus-visible:ring-accent',
+        'flex min-h-0 min-w-0 flex-col overflow-hidden border border-line bg-surface outline-hidden focus-visible:ring-2 focus-visible:ring-accent',
         variant === 'card' && 'btw-rise rounded-2xl',
         variant === 'panel' && 'h-full border-0',
         variant === 'sheet' && 'h-full border-0',

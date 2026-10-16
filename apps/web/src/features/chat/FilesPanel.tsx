@@ -379,6 +379,7 @@ function Sheet(props: FilesPanelProps) {
         aria-modal="true"
         aria-labelledby={titleId}
         tabIndex={-1}
+        data-focus-container
         initial={{ x: '100%' }}
         animate={{ x: 0 }}
         exit={{ x: '100%', transition: { duration: 0.18, ease } }}

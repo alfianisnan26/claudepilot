@@ -148,14 +148,14 @@ export function McpAccess() {
         {(gone > 0 || live.length > 1) && (
           <div className="mt-2 flex items-center justify-between gap-3 text-[13px] text-muted">
             {gone > 0 ? (
-              <button type="button" className="rounded-lg font-semibold hover:text-ink tap:min-h-11 tap:px-1 focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none" onClick={() => setShowAll((v) => !v)}>
+              <button type="button" className="rounded-lg font-semibold hover:text-ink tap:min-h-11 tap:px-1 focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden" onClick={() => setShowAll((v) => !v)}>
                 {showAll ? 'Hide' : 'Show'} {gone} ended
               </button>
             ) : (
               <span />
             )}
             {live.length > 1 && (
-              <button type="button" className="rounded-lg font-semibold text-danger tap:min-h-11 tap:px-1 focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none" onClick={() => setConfirm({ kind: 'all' })}>
+              <button type="button" className="rounded-lg font-semibold text-danger tap:min-h-11 tap:px-1 focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden" onClick={() => setConfirm({ kind: 'all' })}>
                 Revoke all
               </button>
             )}
@@ -218,7 +218,7 @@ export function McpAccess() {
           type="button"
           aria-expanded={more}
           onClick={() => setMore((v) => !v)}
-          className="inline-flex items-center gap-1 rounded-lg text-[13px] font-semibold text-muted hover:text-ink focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none"
+          className="inline-flex items-center gap-1 rounded-lg text-[13px] font-semibold text-muted hover:text-ink focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden"
         >
           <ChevronRight className={`size-4 transition-transform ${more ? 'rotate-90' : ''}`} />
           More
@@ -348,7 +348,7 @@ function GroupRow({ group: g, now, onRevoke, onRevokeLabel }: { group: TokenGrou
           type="button"
           aria-expanded={open}
           onClick={() => setOpen((v) => !v)}
-          className="flex min-h-11 min-w-0 flex-1 items-center gap-3 rounded-xl py-1.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          className="flex min-h-11 min-w-0 flex-1 items-center gap-3 rounded-xl py-1.5 text-left outline-hidden focus-visible:ring-2 focus-visible:ring-accent"
         >
           <ChevronRight className={`size-4 shrink-0 text-muted transition-transform ${open ? 'rotate-90' : ''}`} aria-hidden="true" />
           <span className="min-w-0 flex-1">

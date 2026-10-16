@@ -34,7 +34,7 @@ export function Disclosure({ summary, children, defaultOpen = false }: { summary
         aria-expanded={open}
         aria-controls={id}
         onClick={() => setOpen((o) => !o)}
-        className="flex w-full items-center gap-2 rounded-2xl px-3.5 py-3 text-left outline-none focus-visible:ring-2 focus-visible:ring-accent"
+        className="flex w-full items-center gap-2 rounded-2xl px-3.5 py-3 text-left outline-hidden focus-visible:ring-2 focus-visible:ring-accent"
       >
         <ChevronRight className={cn('size-4 shrink-0 text-muted transition-transform', open && 'rotate-90')} />
         <span className="min-w-0 flex-1 text-sm font-semibold">{summary}</span>

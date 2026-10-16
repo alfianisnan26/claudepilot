@@ -74,7 +74,7 @@ export function LogView({ runId, job, step, active, className }: { runId: string
           stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
         }}
         className={cn(
-          'max-h-[55vh] min-h-12 overflow-auto rounded-xl border border-line bg-surface-2/50 px-3 py-2.5 font-mono text-[12px] leading-[1.5] break-words whitespace-pre-wrap text-ink focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none',
+          'max-h-[55vh] min-h-12 overflow-auto rounded-xl border border-line bg-surface-2/50 px-3 py-2.5 font-mono text-[12px] leading-[1.5] break-words whitespace-pre-wrap text-ink focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden',
         )}
       >
         {cut && <span className="text-muted">…earlier output not shown{'\n'}</span>}

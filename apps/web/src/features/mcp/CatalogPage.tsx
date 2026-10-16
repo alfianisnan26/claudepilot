@@ -100,7 +100,7 @@ function EntryRow({ entry: e, onOpen }: { entry: McpCatalogEntry; onOpen: () => 
       <button
         type="button"
         onClick={onOpen}
-        className="flex w-full min-w-0 items-start gap-3 rounded-2xl border border-line bg-surface px-3.5 py-3 text-left transition-colors hover:bg-surface-2/60 focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none"
+        className="flex w-full min-w-0 items-start gap-3 rounded-2xl border border-line bg-surface px-3.5 py-3 text-left transition-colors hover:bg-surface-2/60 focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden"
       >
         <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-accent-soft text-accent">
           <Icon className="size-4" />

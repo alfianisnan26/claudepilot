@@ -399,7 +399,7 @@ function AddDialog({
                   type="button"
                   aria-expanded={details}
                   onClick={() => setDetails((d) => !d)}
-                  className="inline-flex min-h-8 items-center gap-1 rounded-lg text-[13px] font-semibold text-muted outline-none hover:text-ink focus-visible:ring-2 focus-visible:ring-accent"
+                  className="inline-flex min-h-8 items-center gap-1 rounded-lg text-[13px] font-semibold text-muted outline-hidden hover:text-ink focus-visible:ring-2 focus-visible:ring-accent"
                 >
                   <ChevronRight className={cn('size-4 transition-transform', details && 'rotate-90')} />
                   Details

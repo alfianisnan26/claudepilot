@@ -567,7 +567,7 @@ function OptionList({
             onClick={() => !on && !blocked && !busy && onPick(o.value)}
             title={dense ? o.hint : undefined}
             className={cn(
-              'flex min-h-11 w-full items-start gap-3 rounded-2xl px-3 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ink/40',
+              'flex min-h-11 w-full items-start gap-3 rounded-2xl px-3 text-left transition-colors outline-hidden focus-visible:ring-2 focus-visible:ring-ink/40',
               dense ? 'py-2' : 'py-2.5',
               on ? 'bg-surface-2' : 'hover:bg-surface-2/70',
               blocked && 'cursor-not-allowed opacity-50',

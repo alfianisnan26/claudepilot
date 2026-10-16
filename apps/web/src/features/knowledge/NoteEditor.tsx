@@ -321,7 +321,7 @@ export const NoteEditor = forwardRef<EditorHandle, { vaultId: string; path: stri
           spellCheck
           aria-label="Note text"
           placeholder="Start writing"
-          className="min-h-0 w-full flex-1 resize-none bg-transparent px-4 py-3 text-[16px] leading-[1.6] text-ink outline-none placeholder:text-muted sm:text-[14.5px]"
+          className="min-h-0 w-full flex-1 resize-none bg-transparent px-4 py-3 text-[16px] leading-[1.6] text-ink outline-hidden placeholder:text-muted sm:text-[14.5px]"
         />
         {suggest && suggest.items.length > 0 && (
           <ul className="flex gap-1.5 overflow-x-auto border-t border-line bg-surface px-2 py-1.5 [scrollbar-width:none]" aria-label="Links">

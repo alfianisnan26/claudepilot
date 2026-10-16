@@ -96,7 +96,7 @@ export function RunsTab({ onNewRemote }: { onNewRemote: () => void }) {
             <select
               value={repo ?? ''}
               onChange={(e) => set({ repo: e.target.value || null })}
-              className={cn('h-11 appearance-none sm:h-9 rounded-full border bg-surface pr-8 pl-3.5 text-[16px] font-semibold focus:border-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-accent sm:text-[13.5px]', repo ? 'border-primary text-ink' : 'border-line text-ink-soft')}
+              className={cn('h-11 appearance-none sm:h-9 rounded-full border bg-surface pr-8 pl-3.5 text-[16px] font-semibold focus:border-primary focus:outline-hidden focus-visible:ring-2 focus-visible:ring-accent sm:text-[13.5px]', repo ? 'border-primary text-ink' : 'border-line text-ink-soft')}
             >
               <option value="">All remotes</option>
               {repos.map((r) => (
@@ -155,7 +155,7 @@ function RunRow({ run: r, now, remote, onOpen, onBump }: { run: CiRunSummary; no
       <button
         type="button"
         onClick={onOpen}
-        className="flex w-full min-w-0 items-center gap-3 rounded-2xl border border-line bg-surface py-3 pr-12 pl-3.5 text-left transition-colors hover:bg-surface-2/60 focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none"
+        className="flex w-full min-w-0 items-center gap-3 rounded-2xl border border-line bg-surface py-3 pr-12 pl-3.5 text-left transition-colors hover:bg-surface-2/60 focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden"
       >
         <StatusIcon status={runLook(r)} className="[&_svg]:size-[22px]" />
         <span className="min-w-0 flex-1">

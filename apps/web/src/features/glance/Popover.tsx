@@ -87,6 +87,7 @@ export function GlancePopover({ anchor, side, label, onClose, children }: { anch
       role="dialog"
       aria-label={label}
       tabIndex={-1}
+      data-focus-container
       style={style ?? { position: 'fixed', visibility: 'hidden' }}
       className="z-[45] flex flex-col overflow-hidden rounded-[20px] border border-line bg-surface shadow-lift outline-none"
     >
