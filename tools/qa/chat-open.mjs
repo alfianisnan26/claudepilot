@@ -497,7 +497,12 @@ async function runConfig(cookie, cfg) {
       const loaf = await b.eval('window.__loaf').catch(() => null);
       if (Array.isArray(loaf)) {
         res.loaf = loaf.filter((x) => x.d > 100);
-        for (const x of res.loaf) console.log(`     loaf @${x.s} ${x.d} ms (blocking ${x.block}, render ${x.render}): ${JSON.stringify(x.scripts.filter((y) => y.d >= 20))}`);
+        for (const x of res.loaf) {
+          const big = x.scripts.filter((y) => y.d >= 20);
+          // The built source at the entry point of each script of the frame (PROFILE: so a minified name can be read).
+          if (PROFILE) for (const y of big) if (y.src.startsWith('/assets/')) y.code = await b.eval(`fetch(${JSON.stringify(y.src)}).then((r) => r.text()).then((t) => t.slice(Math.max(0, ${Number(y.pos)} - 30), ${Number(y.pos)} + 260))`).catch(() => '');
+          console.log(`     loaf @${x.s} ${x.d} ms (blocking ${x.block}, render ${x.render}): ${JSON.stringify(big)}`);
+        }
       }
       res.throttled = { rate: THROTTLE, firstRow: throttledFirst, longtasks: supported ? tasks.length : null, longestMs: supported ? longest : null };
       console.log(`     throttled ${THROTTLE}x open: first row ${throttledFirst} ms; ${supported ? tasks.length : '?'} long tasks (>50 ms), longest ${longest} ms: ${supported ? JSON.stringify(tasks.filter((t) => t.d > 50)) : 'observer unavailable'}`);
