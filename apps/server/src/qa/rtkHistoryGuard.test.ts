@@ -247,19 +247,55 @@ test('each script cds into the guarded folder after the guard and before its fir
   }
 });
 
-test('rtk-measure.sh heavy mode (the else branch) cds into the guarded folder before its first write or git call (a cd of the light branch does not count)', () => {
-  const lines = readFileSync(join(ROOT, 'tools/qa/rtk-measure.sh'), 'utf8').split('\n');
-  const code = (i: number) => !lines[i].trimStart().startsWith('#');
-  const start = lines.findIndex((l, i) => code(i) && /^else\s*$/.test(l));
-  const end = lines.findIndex((l, i) => i > start && code(i) && /^fi\s*$/.test(l));
-  assert.ok(start >= 0 && end > start, 'rtk-measure.sh has no top-level else ... fi block (the check would test nothing)');
-  const gitCall = /(\bgit|(^|[\s;&|(])g) (-c |ls-files|rev-|remote|fetch|status|reset|checkout|rm |mv |add |commit|diff|log)/;
-  const act = /^\s*(cat >|cp |rm |mkdir |printf .*>>|echo .*>)|\bgit\b|^\s*m /;
-  const cd = lines.findIndex((l, i) => i > start && i < end && code(i) && /^\s*cd "\$here"\s*$/.test(l));
-  const first = lines.findIndex((l, i) => i > start && i < end && code(i) && (act.test(l) || gitCall.test(l)));
-  assert.ok(first > 0, 'no write or git call in the else branch (the check would test nothing)');
-  assert.ok(cd > 0, 'the else branch has no plain `cd "$here"` statement');
-  assert.ok(cd < first, `the else branch writes or calls git (line ${first + 1}) before its cd (line ${cd + 1})`);
+/**
+ * The top-level `else ... fi` of a script (the heavy mode of rtk-measure.sh), walked once with its nesting depth: the first line that writes, runs
+ * a tool or calls git (at any depth, heredoc bodies skipped), and the first PLAIN `cd "$here"` at the else branch's OWN level (a cd inside a nested
+ * if / for / while / case does not count: it may never run). T-736 S3e (QA BE 2 8130): the write list was short (no touch, sed -i, tee, mv, ln,
+ * node, npx, a redirect) and a cd inside `if false; then ... fi` counted.
+ */
+const WRITES = /(^|[;&|(]|\s)(touch|tee|mv|ln|sed|node|npx|npm|cat|cp|rm|mkdir|chmod|tar|curl|printf|echo|dd|truncate|install)(\s|$)|(^|[^0-9&<>])>|(^|[\s;&|(])(git|g) |^\s*m /;
+function heavyBranch(src: string) {
+  const lines = src.split('\n');
+  const isCode = (l: string) => !l.trimStart().startsWith('#');
+  const start = lines.findIndex((l) => isCode(l) && /^else\s*$/.test(l));
+  let depth = 0, end = -1, first = -1, cd = -1, tag = '';
+  for (let i = start + 1; start >= 0 && i < lines.length; i++) {
+    const l = lines[i];
+    if (tag) { if (l.trim() === tag) tag = ''; continue; }
+    if (!isCode(l)) continue;
+    if (/^\s*(fi|done|esac)\b/.test(l)) { if (depth === 0 && /^\s*fi\b/.test(l)) { end = i; break; } depth--; continue; }
+    if (/^\s*(if|for|while|until|case)\b/.test(l) && !/;\s*(fi|done|esac)\s*$/.test(l)) depth++;
+    if (first < 0 && WRITES.test(l)) first = i;
+    if (cd < 0 && depth === 0 && /^\s*cd "\$here"\s*$/.test(l)) cd = i;
+    const h = /<<-?\s*['"]?(\w+)['"]?/.exec(l);
+    if (h) tag = h[1];
+  }
+  return { start, end, first, cd };
+}
+
+test('rtk-measure.sh heavy mode (the else branch) cds into the guarded folder before its first write, tool or git call (a cd of the light branch, or one in a nested block, does not count)', () => {
+  const b = heavyBranch(readFileSync(join(ROOT, 'tools/qa/rtk-measure.sh'), 'utf8'));
+  assert.ok(b.start >= 0 && b.end > b.start, 'rtk-measure.sh has no top-level else ... fi block (the check would test nothing)');
+  assert.ok(b.first > 0, 'no write or git call in the else branch (the check would test nothing)');
+  assert.ok(b.cd > 0, 'the else branch has no plain `cd "$here"` statement at its own nesting level');
+  assert.ok(b.cd < b.first, `the else branch writes or calls git (line ${b.first + 1}) before its cd (line ${b.cd + 1})`);
+});
+
+test('the heavy-branch walker (self-check): each write kind before the cd is seen, a cd in a nested block is not one, heredocs and later writes are fine', () => {
+  const branch = (body: string) => heavyBranch(`if x; then\n  y\nelse\n${body}\nfi\n`);
+  const ok = branch('  cd "$here"\n  cat > f <<\'EOT\'\ntouch inside-heredoc\nEOT\n  m a b c d e');
+  assert.ok(ok.cd > 0 && ok.cd < ok.first, 'a clean branch passes');
+  for (const w of ['touch f', 'sed -i s/a/b/ f', 'echo hi | tee f', 'mv a b', 'ln -s a b', 'node x.js', 'npx tsc', ': > f', 'echo x >> f', 'cp a b', 'git status', 'g add f', 'rm -f f', 'mkdir d', 'm a b c d e']) {
+    const b = branch(`  ${w}\n  cd "$here"`);
+    assert.ok(b.first >= 0 && b.first < b.cd, `${w}: seen before the cd`);
+  }
+  for (const nested of ['if false; then\n  cd "$here"\nfi', 'for i in 1; do\n  cd "$here"\ndone', 'case x in\n  y) true;;\nesac\nif false; then\n  cd "$here"\nfi']) {
+    const b = branch(`${nested}\n  touch f`);
+    assert.equal(b.cd, -1, `a cd inside a nested block does not count: ${nested}`);
+    assert.ok(b.end > b.start, 'the nested fi does not end the else branch');
+  }
+  assert.equal(branch('  echo x 2>&1 || true\n  cd "$here"').first, 3, 'echo is a write kind (the first body line is line 3)');
+  assert.ok(branch('  cd "$here"\n  true').first < 0, 'no write: first is -1');
 });
 
 test('the helper regex of the order test sees `g <cmd>` and the chained cd (self-check)', () => {
