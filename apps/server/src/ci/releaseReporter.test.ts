@@ -6,7 +6,7 @@ import { CI_POLICIES } from './authz.js';
 import type { CiReply } from './host.js';
 import { parseSetting, ReleaseReporter, ReportRefused, type ReleaseNoteSink } from './releaseReporter.js';
 import { MANIFEST_FILE } from './releaseReport.js';
-import { CiStore as RealCiStore, type CiStore, type DeploymentRow, RepoRow, RunRow } from './store.js';
+import { CiStore as RealCiStore, type CiStore, type DeploymentRow, type RepoRow, type RunRow } from './store.js';
 import type { CiTicketsPort } from './tickets.js';
 import { harness } from './testkit.js';
 
