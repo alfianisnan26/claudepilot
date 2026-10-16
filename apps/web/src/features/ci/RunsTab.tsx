@@ -96,7 +96,7 @@ export function RunsTab({ onNewRemote }: { onNewRemote: () => void }) {
             <select
               value={repo ?? ''}
               onChange={(e) => set({ repo: e.target.value || null })}
-              className={cn('h-9 appearance-none rounded-full border bg-surface pr-8 pl-3.5 text-[16px] font-semibold focus:border-primary focus:outline-none sm:text-[13.5px]', repo ? 'border-primary text-ink' : 'border-line text-ink-soft')}
+              className={cn('h-11 appearance-none sm:h-9 rounded-full border bg-surface pr-8 pl-3.5 text-[16px] font-semibold focus:border-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-accent sm:text-[13.5px]', repo ? 'border-primary text-ink' : 'border-line text-ink-soft')}
             >
               <option value="">All remotes</option>
               {repos.map((r) => (
@@ -109,7 +109,7 @@ export function RunsTab({ onNewRemote }: { onNewRemote: () => void }) {
           </label>
         )}
         {branch && (
-          <button type="button" onClick={() => set({ branch: null })} className="press inline-flex h-9 items-center gap-1.5 rounded-full border border-primary bg-surface pr-2.5 pl-3.5 text-[13.5px] font-semibold" aria-label={`Clear branch ${branch}`}>
+          <button type="button" onClick={() => set({ branch: null })} className="press inline-flex h-11 items-center sm:h-9 gap-1.5 rounded-full border border-primary bg-surface pr-2.5 pl-3.5 text-[13.5px] font-semibold" aria-label={`Clear branch ${branch}`}>
             <span className={cn(MONO, 'max-w-40 truncate')}>{branch}</span>
             <X className="size-3.5 text-muted" aria-hidden="true" />
           </button>
