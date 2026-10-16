@@ -13,3 +13,14 @@ export const COMPRESSED_TYPE = /^\s*application\/json\s*(?:;|$)/i;
 export function jsonCompress(): MiddlewareHandler {
   return compress({ encoding: 'gzip', contentTypeFilter: COMPRESSED_TYPE });
 }
+
+/** The built app's text files: scripts, styles, SVG and JSON (images and fonts are already compressed). */
+export const ASSET_TYPE = /^\s*(?:text\/(?:javascript|css)|application\/(?:javascript|json)|image\/svg\+xml)\s*(?:;|$)/i;
+
+/**
+ * The middleware for `/assets/*` (app.ts, T-376 S3): the main bundle was 1.27 MB on the wire, uncompressed, on every first open of the app.
+ * Files are immutable and cached for a year, so the compressor runs once per client.
+ */
+export function assetCompress(): MiddlewareHandler {
+  return compress({ encoding: 'gzip', contentTypeFilter: ASSET_TYPE });
+}

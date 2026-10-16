@@ -98,7 +98,7 @@ import { createClaudeVersionRoutes, createWorkspaceClaudeVersionRoutes, type Cla
 import { createCodespacesRoutes, type Codespaces } from './codespaces/index.js';
 import type { Platform } from './platform/index.js';
 import { actorOf, actorString, actorUserId, visible } from './authz/seam.js';
-import { jsonCompress } from './jsonCompress.js';
+import { assetCompress, jsonCompress } from './jsonCompress.js';
 
 type Env = { Bindings: HttpBindings; Variables: { token: string } };
 
@@ -942,6 +942,7 @@ export function createApp(
   if (serveWeb) {
     // serveStatic resolves `root` from the working directory.
     const root = relative(process.cwd(), config.paths.webDist) || '.';
+    app.use('/assets/*', assetCompress());
     app.use('/assets/*', async (c, next) => {
       await next();
       // Only a file that exists is immutable: a miss must never be kept for a year as if it were that file.
