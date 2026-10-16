@@ -452,7 +452,8 @@ async function runConfig(cookie, cfg) {
     await shot('oldest');
     // 8. A fresh open under a CPU throttle: no long task over the budget.
     await b.eval(`localStorage.removeItem('claudepilot.chat-details')`);
-    const lt = await b.send('Page.addScriptToEvaluateOnNewDocument', { source: `window.__lt = []; try { new PerformanceObserver((l) => { for (const e of l.getEntries()) window.__lt.push({ s: Math.round(e.startTime), d: Math.round(e.duration) }); }).observe({ type: 'longtask', buffered: true }); } catch (e) { window.__ltErr = String(e); }` });
+    const lt = await b.send('Page.addScriptToEvaluateOnNewDocument', { source: `window.__lt = []; try { new PerformanceObserver((l) => { for (const e of l.getEntries()) window.__lt.push({ s: Math.round(e.startTime), d: Math.round(e.duration) }); }).observe({ type: 'longtask', buffered: true }); } catch (e) { window.__ltErr = String(e); }
+      window.__loaf = []; try { new PerformanceObserver((l) => { for (const e of l.getEntries()) window.__loaf.push({ s: Math.round(e.startTime), d: Math.round(e.duration), block: Math.round(e.blockingDuration || 0), render: Math.round(e.renderStart ? e.startTime + e.duration - e.renderStart : 0), scripts: (e.scripts || []).map((x) => ({ src: String(x.sourceURL || '').replace(/^https?:\\/\\/[^/]+/, ''), fn: x.sourceFunctionName, inv: x.invoker, d: Math.round(x.duration), pos: x.sourceCharPosition })) }); }).observe({ type: 'long-animation-frame', buffered: true }); } catch (e) { window.__loafErr = String(e); }` });
     await b.send('Emulation.setCPUThrottlingRate', { rate: THROTTLE });
     try {
       const tT = Date.now();
@@ -466,6 +467,11 @@ async function runConfig(cookie, cfg) {
       const tasks = await b.eval('window.__lt').catch(() => null);
       const supported = Array.isArray(tasks);
       const longest = supported && tasks.length ? Math.max(...tasks.map((t) => t.d)) : 0;
+      const loaf = await b.eval('window.__loaf').catch(() => null);
+      if (Array.isArray(loaf)) {
+        res.loaf = loaf.filter((x) => x.d > 100);
+        for (const x of res.loaf) console.log(`     loaf @${x.s} ${x.d} ms (blocking ${x.block}, render ${x.render}): ${JSON.stringify(x.scripts.filter((y) => y.d >= 20))}`);
+      }
       res.throttled = { rate: THROTTLE, firstRow: throttledFirst, longtasks: supported ? tasks.length : null, longestMs: supported ? longest : null };
       console.log(`     throttled ${THROTTLE}x open: first row ${throttledFirst} ms; ${supported ? tasks.length : '?'} long tasks (>50 ms), longest ${longest} ms: ${supported ? JSON.stringify(tasks.filter((t) => t.d > 50)) : 'observer unavailable'}`);
       check(`${tag} ${THROTTLE}x CPU throttle: a first Turn row shows`, throttledFirst !== null, `${throttledFirst} ms`);
