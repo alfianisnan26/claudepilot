@@ -3,24 +3,23 @@
 Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-10-15 DONE batches 1-7: see 4fbab374). Hand-overs: ab99b45, bb58413, 639202e.
 
 ## DONE
-- MERGED ff 1a4a7933 (batch 7): T-633 (6283) + T-638 (6284, CLOSED); gate GREEN 7d87d90 (claudepilot-gate-7d87d90-b744).
+- MERGED ff 7569d582 (batch 10): T-633 S2 (QA Perf PASS 6523); gate GREEN c57ab11. T-633 CLOSED (S1 batch 7 1a4a7933).
 - MERGED ff 38d6d3fb (batch 8b): T-325 S1+S1b+S1c (QA Perf 6357, migration 785 read); gate GREEN e5d2de3. Open for S3 (person).
 - MERGED ff 7ff6561d (batch 9): T-416 S1-S1e (QA Perf 6420); gate GREEN 1803cf2 + re-gate 15aece0 (6498). Open: S2, T-675.
-  Flake src/repos/actions.test.ts timer -> T-697 (new).
-- Earlier 2026-10-15: batches 1-6 (275cea5b, bcb27182, 1772d2d0, ce819bd0, ffd4bcdd, 8d9eab44); T-546, T-636, T-576, T-638 CLOSED.
+  Flakes repos/actions.test.ts timer + chat/limits.test.ts -> T-697 (high, 6551; 2 of the last 3 gates).
+- Earlier 2026-10-15: batches 1-7 (275cea5b, bcb27182, 1772d2d0, ce819bd0, ffd4bcdd, 8d9eab44, 1a4a7933); T-546, T-636, T-576, T-638 CLOSED.
 
 ## IN FLIGHT (6 of 6, D-71)
   Lanes' ticket_comment refused on unassigned tickets (T-341, T-549, T-675): verdicts live in their replies + this file.
 - T-574: batch 8 gate RED (sessionStartParent.test.ts:71, family workers not an array; 6396) -> BACKEND lane 06e9ff5c (sonnet,
   respawned) on ticket/T-574-s2 from 124ca45f: keep the array, cap/cut tests, whole src/chat + portalmcp in a Job.
-- BATCH 10 wip/main-c57ab11 = T-633 S2 0a5b686a (QA Perf PASS 6523: old G3 8/20 fail under load, fixed 0/20): GATE RUNNING;
-  close T-633 on green merge. QA Perf next: T-524 S3 when delivered.
+- BATCH 11 wip/main-ea46530 = T-341 e4284315 + docfix 2ed9bc64: GATE RUNNING. QA Perf idle: next T-524 S3.
 - T-549 70b081f8: QA BE 2 FAIL crit 2 (full form 18,539 chars at 2 programs, ~27k at 3; job 96771ba8), mutant B (exact ceiling)
   survives, done_rate baseline regex gives kubernetes/kohi-event (ClaudePilot) Event's 12/day. QA UI PASS WITH GAPS (f7730a9b).
   Lead refused on T-549 too (unassigned). S2 (size test 3-5 programs + shrink/page, boundary test, baseline by program id) ->
   BE Infra lane after T-524 S3, fresh branch from 70b081f8.
 - T-341 docfix 2ed9bc64: QA BE 2 PASS (recount: author right, QA's 10/4/1 a miscount; ls 25.0% vs 26.1% = one root entry
-  differs between clones). -> batch 11 after batch 10's gate (hook installed nowhere; D not verified stays a person's).
+  differs between clones). Hook installed nowhere; D not verified stays a person's.
 - QA BE 2 idle: next T-574 S2. QA UI idle: next T-681.
 - T-524 measured FAIL 6488 (master peak 87% > 85%; ~1/3 of Jobs on master) -> decision 6489 (a): BE INFRA lane f5aded2f
   (sonnet, respawned) on ticket/T-524-s3: Jobs off master over the T-611 line (required) + OOM-report test.
