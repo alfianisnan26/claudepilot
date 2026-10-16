@@ -300,7 +300,7 @@ body {
    purpose: it must beat any utility (outline-hidden, outline-none, the slider reset above). Containers that only take
    programmatic focus carry data-focus-container and keep no ring; a tabindex="-1" control (a real button) still gets one. */
 @media (forced-colors: active) {
-  :focus-visible:not([data-focus-container]) {
+  :focus-visible:not([tabindex='-1']) {
     outline: 2px solid Highlight;
     outline-offset: 2px;
   }

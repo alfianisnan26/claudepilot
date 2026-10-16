@@ -59,6 +59,7 @@ export function KeyBar({
             key={i}
             type="button"
             tabIndex={-1}
+            data-focus-container
             aria-label={k.name}
             aria-pressed={k.modifier ? state !== 'off' : undefined}
             // Pointer down, not click: keeps the terminal focused (and the keyboard up), and lets arrows repeat.
