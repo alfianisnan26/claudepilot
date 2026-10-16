@@ -141,6 +141,8 @@ export class AutoTransferEngine {
   readonly #cards = new Set<string>();
   /** The last evaluation of each chat, for tests and the state route. */
   readonly last = new Map<string, Decision>();
+  /** After `stop()` (until `start()`): a continuation that fails arms no retry timer. */
+  #stopped = false;
   #sweep: (() => void) | null = null;
   #tick: (() => void) | null = null;
   #offUsage: (() => void) | null = null;
@@ -155,6 +157,7 @@ export class AutoTransferEngine {
 
   start(): void {
     if (this.#off) return;
+    this.#stopped = false;
     const now = this.#d.clock.now();
     for (const id of this.#d.store.recentlyMoved(now - DAY)) this.#moved.add(id);
     for (const p of this.#d.store.pending()) this.#wake(p.sessionId, Math.max(0, ms(p.at) - now));
@@ -173,6 +176,7 @@ export class AutoTransferEngine {
   }
 
   stop(): void {
+    this.#stopped = true;
     this.#off?.();
     this.#off = null;
     this.#sweep?.();
@@ -393,7 +397,9 @@ export class AutoTransferEngine {
 
   /** When the chat's newest stored event happened (T-781: the hard move's "no event for 3 minutes"); its last activity when none is stored. */
   #lastEventMs(s: ChatSession): number | null {
-    const [last] = this.#d.chat.history(s.id, Math.max(0, (s.lastSeq ?? 0) - 1)).slice(-1);
+    // No known last sequence number: nothing to measure from, and never a read of the whole history (`after` 0).
+    if (!(typeof s.lastSeq === 'number' && s.lastSeq > 0)) return null;
+    const [last] = this.#d.chat.history(s.id, s.lastSeq - 1).slice(-1);
     // Only a stored event counts: `lastActivityAt` also moves with things that are not the turn's output, and a chat with no stored
     // event has nothing to measure a silence from (it is steered and waited for as before).
     const t = ms(last?.at ?? '');
@@ -472,7 +478,7 @@ export class AutoTransferEngine {
       options: null,
       load: this.#load(s.workspaceId, s.id),
       counters: this.#counters(s, ownerId, row),
-      lastEventAtMs: s.state === 'working' ? this.#lastEventMs(s) : null,
+      lastEventAtMs: () => this.#lastEventMs(s), // read only when the source is exhausted (F2)
       recommend: this.#d.usage.recommend,
       // What each Claude's list_models said (T-109), when the chat controller knows it: it overrides the catalogue's guess from the windows.
       listed: (claudeId: string, family: string) => {
@@ -818,21 +824,31 @@ export class AutoTransferEngine {
 
   /** The continuation after an automatic move (T-105 item 3): one short message on the new Claude, priority next; recorded as `continued`. */
   async #continue(s: ChatSession, ownerId: string, mode: AutoMode, to: AutoClaudeRef, why: 'exhausted' | 'steered', attempt = 1): Promise<void> {
+    // A newer continuation (a move away and back inside the retry window) replaces an older pending retry, which would otherwise send a stale second one.
+    this.#contTimers.get(s.id)?.();
+    this.#contTimers.delete(s.id);
     try {
       await this.#d.chat.send(s.id, CONTINUE_TEXT(to.name, why), { priority: 'next', actor: ENGINE_ACTOR, actorLabel: 'Auto move' });
       this.#record({ ...this.#base(s, ownerId, mode), kind: 'continued', reason: why === 'exhausted' ? 'exhausted' : 'low', to, code: null }, 'info');
     } catch (e) {
       console.error(`[autotransfer] could not continue a moved chat (${attempt}/${CONTINUE_TRIES}): ${(e as Error).message}`);
+      // A failure that lands after stop() arms nothing: no timer would clear it.
+      if (this.#stopped) return;
+      if (attempt >= CONTINUE_TRIES) {
+        // Nobody else is told that the chat sits idle on the new Claude: one info row, not a `failed` one (that would count toward the day's failures).
+        this.#record({ ...this.#base(s, ownerId, mode), kind: 'refused', reason: null, to, code: 'move_failed' }, 'info');
+        return;
+      }
       // T-781 S5: a chat just restarted on the new Claude may not take a message yet; without the continuation the lane sits idle with nobody
-      // told. Try again a few times, only while the chat is still there and still on the Claude it was moved to.
-      if (attempt >= CONTINUE_TRIES) return;
-      this.#contTimers.get(s.id)?.();
+      // told. Try again a few times, only while the chat is still there, still on the Claude it was moved to, and nobody has written since.
+      const seenSeq = this.#d.chat.get(s.id)?.lastSeq ?? s.lastSeq ?? 0;
       this.#contTimers.set(
         s.id,
         this.#d.clock.timer(CONTINUE_RETRY_MS, () => {
           this.#contTimers.delete(s.id);
           const cur = this.#d.chat.get(s.id);
           if (!cur || cur.state === 'ended' || cur.claudeId !== to.id) return;
+          if (this.#d.chat.history(s.id, seenSeq).some((ev) => ev.kind === 'user' && !ev.agentLabel && ev.actor !== ENGINE_ACTOR)) return; // a newer message stands
           void this.#continue(cur, ownerId, mode, to, why, attempt + 1);
         }),
       );

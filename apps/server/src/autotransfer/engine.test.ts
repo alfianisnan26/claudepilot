@@ -608,6 +608,125 @@ test('T-781: an interrupt that throws synchronously does not block the move', as
   r.engine.stop();
 });
 
+/** A chat whose history calls are recorded. */
+function spyHistory(r: Awaited<ReturnType<typeof rig>>) {
+  const calls: { id: string; after: number | undefined }[] = [];
+  const hist = r.chat.history.bind(r.chat);
+  r.chat.history = (id: string, after?: number) => (calls.push({ id, after }), hist(id, after));
+  return calls;
+}
+
+test('T-781 F2: a working chat on a source that is only low reads no history for the silence', async () => {
+  const r = await rig(AUTO);
+  r.chat.sessions.set('s1', STUCK());
+  r.chat.stored('s1', [{ at: at(-30) }]);
+  const calls = spyHistory(r);
+  await r.engine.evaluate('s1');
+  await r.engine.settled();
+  assert.deepEqual(calls.filter((c) => c.id === 's1'), []);
+  assert.equal(r.chat.interrupted.length, 0);
+  assert.equal(r.chat.moves.length, 0);
+  r.engine.stop();
+});
+
+test('T-781 F2: an exhausted working chat with no lastSeq (missing or 0) reads no history from the start and is not hard-moved', async () => {
+  for (const lastSeq of [undefined, 0]) {
+    const r = await rig(AUTO, EXHAUSTED);
+    r.chat.sessions.set('s1', STUCK());
+    r.chat.stored('s1', [{ at: at(-30) }]);
+    r.chat.sessions.set('s1', { ...r.chat.get('s1')!, lastSeq: lastSeq as never });
+    const calls = spyHistory(r);
+    await r.engine.evaluate('s1');
+    await r.engine.settled();
+    assert.deepEqual(calls.filter((c) => c.id === 's1'), [], `lastSeq=${lastSeq}: no history read`);
+    assert.equal(r.chat.interrupted.length, 0);
+    assert.equal(r.chat.moves.length, 0);
+    r.engine.stop();
+  }
+});
+
+test('T-781 S5: stop() clears a pending continuation retry: nothing is sent after it', async () => {
+  const r = await rig(AUTO, EXHAUSTED);
+  r.chat.sendFails = 1;
+  const orig = console.error;
+  console.error = () => {};
+  try {
+    r.chat.turnEnds('s1');
+    await r.engine.settled();
+    assert.equal(r.chat.sendTries, 1);
+    r.engine.stop();
+    r.clock.advance(0.3);
+    await r.engine.settled();
+  } finally {
+    console.error = orig;
+  }
+  assert.equal(r.chat.sendTries, 1, 'the retry timer was cleared');
+  assert.equal(r.chat.sent.length, 0);
+});
+
+test('T-781 S5: a continuation that fails while the engine is stopping arms no retry', async () => {
+  const r = await rig(AUTO, EXHAUSTED);
+  let tries = 0;
+  (r.chat as { send: unknown }).send = async () => {
+    tries++;
+    r.engine.stop(); // the engine stops while the send is in flight; then it fails
+    throw new Error('the chat is restarting');
+  };
+  const orig = console.error;
+  console.error = () => {};
+  try {
+    r.chat.turnEnds('s1');
+    await r.engine.settled();
+    r.clock.advance(0.3);
+    await r.engine.settled();
+  } finally {
+    console.error = orig;
+  }
+  assert.equal(tries, 1, 'no retry after stop()');
+});
+
+test('T-781 S5: a retry of the continuation is dropped when a person has written since', async () => {
+  const r = await rig(AUTO, EXHAUSTED);
+  r.chat.sendFails = 1;
+  const orig = console.error;
+  console.error = () => {};
+  try {
+    r.chat.turnEnds('s1');
+    await r.engine.settled();
+    const s = r.chat.get('s1')!;
+    r.chat.events.set('s1', [...(r.chat.events.get('s1') ?? []), { seq: s.lastSeq + 1, at: new Date().toISOString(), kind: 'user', text: 'carry on with the other task' } as never]);
+    r.chat.sessions.set('s1', { ...s, lastSeq: s.lastSeq + 1 });
+    r.clock.advance(0.3);
+    await r.engine.settled();
+  } finally {
+    console.error = orig;
+  }
+  assert.equal(r.chat.sendTries, 1, 'a newer message stands: no stale continuation after it');
+  r.engine.stop();
+});
+
+test('T-781 S5: after 3 failed continuations the trail says so, with one info row that is not a failure', async () => {
+  const r = await rig(AUTO, EXHAUSTED);
+  r.chat.sendFails = 99;
+  const orig = console.error;
+  console.error = () => {};
+  try {
+    r.chat.turnEnds('s1');
+    await r.engine.settled();
+    for (let i = 0; i < 6; i++) {
+      r.clock.advance(0.26);
+      await r.engine.settled();
+    }
+  } finally {
+    console.error = orig;
+  }
+  const rows = r.auto.events('u_a', { kinds: ['refused'] });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]!.code, 'move_failed');
+  assert.equal(r.auto.events('u_a', { kinds: ['failed'] }).length, 0);
+  r.engine.stop();
+});
+
 test('T-781: a chat that is switching is not hard-moved, however quiet', async () => {
   const r = await rig(AUTO, EXHAUSTED);
   r.chat.sessions.set('s1', STUCK({ switching: { toClaude: 'home', step: 'starting' } }));
