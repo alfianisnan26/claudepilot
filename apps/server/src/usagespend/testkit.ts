@@ -31,7 +31,7 @@ export interface SeedUsage {
   requests?: number;
   agents?: number;
   /** A side question's row (chat PRD §20); default a turn's. */
-  kind?: 'turn' | 'side';
+  kind?: 'turn' | 'side' | 'suspect';
 }
 
 export async function spendHarness(opts: { now?: { t: number }; settings?: Record<string, SettingValue>; personaOf?: SpendOptions['personaOf']; personaName?: SpendOptions['personaName']; workspaceExists?: SpendOptions['workspaceExists']; visible?: SpendOptions['visible'] } = {}) {

@@ -108,6 +108,7 @@ import {
   type RawImage,
   type StoredEvent,
 } from './protocol.js';
+import { capToTurnCost, mergeBase, modelDelta } from './usageDelta.js';
 import { type BypassFacts, type BypassRefusal, type BypassState } from './bypass.js';
 import { isLead, leadRulesSettings } from './leadRules.js';
 import { isStagedUpload } from './artifacts/records.js';
@@ -4975,7 +4976,9 @@ export class ChatController {
       // portal restart, takes the last stored total; a total lower than that is a new process's).
       if (ev.kind === 'result' && ev.costUsd !== undefined) {
         const base = this.#costBase.get(sessionId) ?? this.#chat.lastResultCost(sessionId) ?? 0;
-        ev.turnCostUsd = ev.costUsd >= base ? ev.costUsd - base : ev.costUsd;
+        // T-610: a total lower than the base (past float jitter) started again, so the new total is the turn's cost; a change never reads below 0.
+        const costReset = ev.costUsd + 1e-9 < base;
+        ev.turnCostUsd = costReset ? ev.costUsd : Math.max(0, ev.costUsd - base);
         this.#costBase.set(sessionId, ev.costUsd);
       }
       if (ev.kind === 'result') this.#recordTurn(sessionId, ev);
@@ -5766,17 +5769,16 @@ export class ChatController {
       const row = this.#chat.row(sessionId);
       if (!row) return;
       const base = this.#modelBase.get(sessionId) ?? new Map((this.#chat.lastResultModelTotals(sessionId) ?? []).map((m) => [m.model, m]));
+      // T-610: the change since the last result, one dimension at a time (usageDelta.ts); the models' costs never exceed the turn's own.
+      // The turn's own cost caps the models' costs always, a restarted total included (decision (a)): never book more than the turn cost,
+      // even if that under-counts a turn whose costs carried over.
       const turn: ModelTotals[] = [];
       for (const cur of ev.modelTotals ?? []) {
-        const was = base.get(cur.model);
-        // A total lower than before means a new process, counting from zero.
-        const fresh = !was || cur.input < was.input || cur.output < was.output || cur.cacheRead < was.cacheRead || cur.cacheWrite < was.cacheWrite || cur.costUsd < was.costUsd - 1e-9;
-        const d = fresh
-          ? cur
-          : { model: cur.model, input: cur.input - was.input, output: cur.output - was.output, cacheRead: cur.cacheRead - was.cacheRead, cacheWrite: cur.cacheWrite - was.cacheWrite, costUsd: cur.costUsd - was.costUsd };
+        const d = modelDelta(cur, base.get(cur.model));
         if (d.input || d.output || d.cacheRead || d.cacheWrite || d.costUsd > 0) turn.push(d);
       }
-      if (ev.modelTotals?.length) this.#modelBase.set(sessionId, new Map(ev.modelTotals.map((m) => [m.model, m])));
+      if (ev.modelTotals?.length) this.#modelBase.set(sessionId, mergeBase(base, ev.modelTotals));
+      turn.splice(0, turn.length, ...capToTurnCost(turn, ev.turnCostUsd));
       if (turn.length) {
         ev.tokens = turn.reduce(
           (t, m) => ({ input: t.input + m.input, output: t.output + m.output, cacheRead: t.cacheRead + m.cacheRead, cacheWrite: t.cacheWrite + m.cacheWrite }),

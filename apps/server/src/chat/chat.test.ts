@@ -2915,6 +2915,169 @@ test('usage (T-610): a process resumed with --resume carries Claude Code’s run
   }
 });
 
+test('usage (T-610): a restart whose tokens count again from zero but whose cost total is carried over books the change in cost, not the carried total', async () => {
+  const s = await liveSession();
+  try {
+    const M = 'claude-opus-5-5';
+    const turn = async (tail: { push(x: string): void }, total: number, input: number) => {
+      const modelUsage = { [M]: { inputTokens: input, outputTokens: 1, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, costUSD: total } };
+      tail.push(line({ type: 'result', subtype: 'success', total_cost_usd: total, duration_ms: 10, usage: { input_tokens: 1, output_tokens: 1 }, modelUsage, is_error: false, session_id: s.id }));
+      tail.push(ok((await s.take('get_usage')).id, USAGE_API_KEY));
+    };
+    s.tail.push(init(s.id));
+    await until(() => s.controller.history(s.id).some((e) => e.text === 'Ready'));
+    await s.answering(sleep(30));
+    await turn(s.tail, 96, 900_000);
+    await until(() => s.controller.history(s.id).filter((e) => e.kind === 'result').length === 1);
+    await vanish(s);
+    await s.answering(s.controller.control(s.id, 'resume'));
+    s.ws.tails[1]!.push(init(s.id));
+    await until(() => s.controller.history(s.id).filter((e) => e.text === 'Ready').length >= 1);
+    await s.answering(sleep(30));
+    // Tokens count from zero again (50 < 900000), the cost total is the carried 96.2.
+    await turn(s.ws.tails[1]!, 96.2, 50);
+    await until(() => s.controller.history(s.id).filter((e) => e.kind === 'result').length === 2);
+    const rows = s.store.db!.prepare('SELECT cost_usd AS c, input_tokens AS i FROM chat_usage ORDER BY id').all() as { c: number; i: number }[];
+    assert.equal(rows.length, 2);
+    assert.ok(Math.abs(rows[1]!.c - 0.2) < 1e-9, `the cost change, not the carried total: ${rows[1]!.c}`);
+    assert.equal(rows[1]!.i, 50, 'the tokens that started again are the turn’s');
+  } finally {
+    await s.done();
+  }
+});
+
+/** T-610 helpers: a turn whose result carries the models' running totals. */
+const mu = (input: number, cost: number) => ({ inputTokens: input, outputTokens: 1, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, costUSD: cost });
+async function modelTurn(s: Awaited<ReturnType<typeof liveSession>>, total: number, modelUsage: Record<string, unknown>): Promise<void> {
+  s.tail.push(line({ type: 'result', subtype: 'success', total_cost_usd: total, duration_ms: 10, usage: { input_tokens: 1, output_tokens: 1 }, modelUsage, is_error: false, session_id: s.id }));
+  s.tail.push(ok((await s.take('get_usage')).id, USAGE_API_KEY));
+}
+const usageRows = (s: Awaited<ReturnType<typeof liveSession>>) =>
+  s.store.db!.prepare('SELECT model, input_tokens AS i, cost_usd AS c FROM chat_usage ORDER BY id').all() as { model: string; i: number; c: number }[];
+
+test('usage (T-610): a model missing from one result is not booked whole on the next', async () => {
+  const s = await liveSession();
+  try {
+    await modelTurn(s, 0.15, { 'claude-opus-5-5': mu(100, 0.1), 'claude-haiku-5-5': mu(500, 0.05) });
+    await modelTurn(s, 0.25, { 'claude-opus-5-5': mu(160, 0.2) }); // the sub-agent's model is not in this result
+    await modelTurn(s, 0.29, { 'claude-opus-5-5': mu(200, 0.24), 'claude-haiku-5-5': mu(500, 0.05) }); // and is back, unchanged
+    await until(() => s.controller.history(s.id).filter((e) => e.kind === 'result').length === 3);
+    const rows = usageRows(s);
+    const haiku = rows.filter((r) => r.model === 'claude-haiku-5-5');
+    assert.deepEqual(haiku.map((r) => r.i), [500], `haiku counted once: ${JSON.stringify(rows)}`);
+    assert.equal(rows.length, 4);
+    assert.equal(rows[3]!.i, 40, 'the third turn is opus’s change only');
+  } finally {
+    await s.done();
+  }
+});
+
+test('usage (T-610): the models’ costs of a turn never add up to more than the turn’s own cost', async () => {
+  const s = await liveSession();
+  try {
+    await modelTurn(s, 0.1, { 'claude-opus-5-5': mu(100, 0.1) });
+    // The model's cost jumps by 96.3 while the process's total moved by 0.1: the total is the truth.
+    await modelTurn(s, 0.2, { 'claude-opus-5-5': mu(200, 96.4) });
+    await until(() => s.controller.history(s.id).filter((e) => e.kind === 'result').length === 2);
+    const rows = usageRows(s);
+    assert.ok(Math.abs(rows[1]!.c - 0.1) < 1e-6, `capped to the turn’s cost: ${rows[1]!.c}`);
+    assert.equal(rows[1]!.i, 100, 'tokens are the change');
+  } finally {
+    await s.done();
+  }
+});
+
+test('usage (T-610): the cap holds when a total started again too (decision (a): never book more than the turn’s cost, even if that under-counts)', async () => {
+  const s = await liveSession();
+  try {
+    await modelTurn(s, 5, { 'claude-opus-5-5': mu(1000, 5) });
+    // A process that counts from zero again spent 7: opus 4 (lower than the 5 before: a new count), haiku 3 (new). The total (7) is above the
+    // old base (5), so the turn figure reads 2: that is what is booked, an under-count that is the price of the guarantee.
+    await modelTurn(s, 7, { 'claude-opus-5-5': mu(200, 4), 'claude-haiku-5-5': mu(300, 3) });
+    await until(() => s.controller.history(s.id).filter((e) => e.kind === 'result').length === 2);
+    const rows = usageRows(s).slice(1);
+    assert.equal(rows.length, 2);
+    assert.ok(Math.abs(rows.reduce((t, r) => t + r.c, 0) - 2) < 1e-6, `capped to the turn’s cost: ${JSON.stringify(rows)}`);
+  } finally {
+    await s.done();
+  }
+});
+
+test('usage (T-610, QA BE 2 probe): the total drops to 0.05 while a model goes 0.1 to 96.4: the turn books 0.05, not $96.30', async () => {
+  const s = await liveSession();
+  try {
+    await modelTurn(s, 0.1, { 'claude-opus-5-5': mu(100, 0.1) });
+    await modelTurn(s, 0.05, { 'claude-opus-5-5': mu(200, 96.4) }); // the total started again: the new total is the turn's cost
+    await until(() => s.controller.history(s.id).filter((e) => e.kind === 'result').length === 2);
+    const rows = usageRows(s);
+    assert.ok(Math.abs(rows[1]!.c - 0.05) < 1e-6, `capped on a reset: ${rows[1]!.c}`);
+    assert.ok(rows.reduce((t, r) => t + r.c, 0) < 0.2, 'no $96 anywhere');
+  } finally {
+    await s.done();
+  }
+});
+
+test('usage (T-610): a total a hair below the base (float jitter) is not a reset: the turn costs 0 and the cap books no $96', async () => {
+  const s = await liveSession();
+  try {
+    await modelTurn(s, 0.3, { 'claude-opus-5-5': mu(100, 0.3) });
+    await modelTurn(s, 0.3 - 1e-12, { 'claude-opus-5-5': mu(200, 96.4) });
+    await until(() => s.controller.history(s.id).filter((e) => e.kind === 'result').length === 2);
+    const rows = usageRows(s);
+    assert.ok(rows[1]!.c < 1e-6, `jitter is a change of 0, capped to 0 (a reset would book 0.3 here): ${rows[1]!.c}`);
+  } finally {
+    await s.done();
+  }
+});
+
+test('usage (T-610): a turn whose own cost is 0 books no model cost above the 0.05 margin (pinned)', async () => {
+  const s = await liveSession();
+  try {
+    await modelTurn(s, 0.1, { 'claude-opus-5-5': mu(100, 0.1) });
+    await modelTurn(s, 0.1, { 'claude-opus-5-5': mu(200, 0.6) }); // the process total did not move; the model's cost did by 0.5
+    await until(() => s.controller.history(s.id).filter((e) => e.kind === 'result').length === 2);
+    const rows = usageRows(s);
+    assert.equal(rows[1]!.c, 0, `capped to the turn’s 0: ${rows[1]!.c}`);
+    assert.equal(rows[1]!.i, 100, 'tokens are still the change');
+  } finally {
+    await s.done();
+  }
+});
+
+test('usage (T-610): a row marked suspect is out of the Usage charts and stays in the table', async () => {
+  const s = await liveSession();
+  try {
+    await modelTurn(s, 0.1, { 'claude-opus-5-5': mu(100, 0.1) });
+    await modelTurn(s, 0.2, { 'claude-opus-5-5': mu(300, 0.2) });
+    await until(() => s.controller.history(s.id).filter((e) => e.kind === 'result').length === 2);
+    assert.equal(s.controller.usage('1h').totals.requests, 2);
+    s.store.db!.exec(`UPDATE chat_usage SET kind = 'suspect' WHERE input_tokens = 200`);
+    const t = s.controller.usage('1h').totals;
+    assert.equal(t.requests, 1);
+    assert.equal(t.input, 100);
+    assert.equal(usageRows(s).length, 2, 'the row is kept as evidence');
+  } finally {
+    await s.done();
+  }
+});
+
+test('usage (T-610): a row marked suspect is also out of the report of one Claude (the claude_id read of usageSince)', async () => {
+  const s = await liveSession();
+  try {
+    await modelTurn(s, 0.1, { 'claude-opus-5-5': mu(100, 0.1) });
+    await modelTurn(s, 0.2, { 'claude-opus-5-5': mu(300, 0.2) });
+    await until(() => s.controller.history(s.id).filter((e) => e.kind === 'result').length === 2);
+    s.store.db!.exec(`UPDATE chat_usage SET claude_id = 'cX'`);
+    assert.equal(s.controller.usage('1h', { claudeId: 'cX' }).totals.requests, 2);
+    s.store.db!.exec(`UPDATE chat_usage SET kind = 'suspect' WHERE input_tokens = 200`);
+    const t = s.controller.usage('1h', { claudeId: 'cX' }).totals;
+    assert.equal(t.requests, 1);
+    assert.equal(t.input, 100);
+  } finally {
+    await s.done();
+  }
+});
+
 test('usage metrics: each turn is stored per model from the change in the running totals, sub-agents included, and charts add them up', async () => {
   const s = await liveSession();
   try {
