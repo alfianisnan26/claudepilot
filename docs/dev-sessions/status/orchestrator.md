@@ -16,10 +16,11 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - QA PERF 330855ba (respawned; 7e4879c7 ended: Bash refused twice; new one has no Write and heredocs refused). QA T-611 S1b Job on
   f74638f1, C5e skipped as a probe defect (decided: no edit), mutants 1-3; add-fail cleanup by reading. Probes ready: S1i 6c8a2392, S6 d478c8c0 (in 8fac4ec1).
 - QA UI 8b13bb5a (no Write tool, 7939/7944/7947): REVIEW T-781 S6 APPROVE 8006; REVIEW T-611 S1b APPROVE 8018 (3 follow-ups -> S1c).
-  Waits: T-772 S2 (plan 7963).
-- QA BE 2 42e5408f (no Write tool, 7946): QA T-733 Job at 1afaf8a6 (plan 7964); then QA T-781 S6 on wip/qa-t781s6-8fac4ec 8fac4ec1.
-- T-781 (D-76) assigned to the lead: S6 DONE fb70258d 7992 (job b38e850f 145/0), review APPROVE 8006, QA queued.
-- IMPL 7cc1b2f5: T-781 S7 (F2 + S5 items 1-4 + sync-throw mutant + #inflight during stop 8006) -> T-736 S3d -> T-772 S2.
+  Now REVIEW T-781 S7 (delta fb70258d..0c73e71f). Then T-772 S2 (plan 7963).
+- QA BE 2 42e5408f (no Write tool, 7946): QA T-733 at 1afaf8a6 (plan 7964); now QA T-781 S6 8fac4ec1 (Job waited for a node);
+  then QA T-781 S7 on wip/qa-t781s7-d44e2d3 d44e2d3f (S7 + probes d478c8c0).
+- T-781 (D-76): S6 fb70258d review APPROVE 8006; S7 DONE 0c73e71f 8041 (job 45f2f203 153/0; S5-3c mutant survives, unobservable?).
+- IMPL 7cc1b2f5: T-781 S7 DONE 0c73e71f. Now T-736 S3d from fdc5636b (7889 cd pin + 7875 gaps) -> T-772 S2.
 - BE INFRA fad38191: T-426 S1i DONE b7fa0ba7 8019 (67/0, M1 M2 red). Lead merged S1i into S1b: ab91adf9 (union of appended tests,
   63; not run). Now T-611 S1c from ab91adf9 (8018 items 1-3 + one Job proving the merge) -> T-611 S2 -> T-524 S3c + T-733 S5 -> T-612 S1.
 - BACKEND 3484bd4d: T-733 DONE 1afaf8a6 -> QA BE 2. T-675 items 1-3 already on integration (actors.test 234/243, memory.test,
