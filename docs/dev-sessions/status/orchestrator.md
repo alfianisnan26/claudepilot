@@ -19,7 +19,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   quick-check PASS 12295a2b). Then T-524 S3b 23330c28 (test-only +25: name pin, no-patch-on-top-fail; src/ci 208/208 job
   54784775; mutants D,F killed f69b2de3). Live re-read patch NOT verified. 6775 was WRONG (rule set at creation, 78%): 6788.
 - QA UI 8b13bb5a: T-710 re-sweep of 8107098a (impl DONE: ci-sweep.mjs, 44 px steps/picker, focus ring; job 3c8d8a0f rc 0;
-  shots not found); lead quick-check running (qc-t710).
+  shots not found); lead quick-check PASS 95f9a77d.
 - QA BE 2 42e5408f: T-251 verify at 7dcf19f8 (lane audit: all 5 reqs already built, no code, nothing run; mutants M1-M6), then T-574 S3.
 - IMPL lane 0d799c90 (sonnet, rossi; bccb756f ended after T-710) T-376 S4 on ticket/T-376-s4 from be431d6a: createApp wiring
   test + 4x CPU, long tasks, DOM/heap, older-page render budgets.
