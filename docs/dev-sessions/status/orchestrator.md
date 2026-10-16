@@ -18,8 +18,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   quick-check PASS 12295a2b). Then T-524 S3b 23330c28 (test-only +25: name pin, no-patch-on-top-fail; src/ci 208/208 job
   54784775; mutants D,F killed f69b2de3). Live re-read patch NOT verified. 6775 was WRONG (rule set at creation, 78%): 6788.
 - QA UI 8b13bb5a: standby; next T-710 re-sweep on bccb756f DONE (told 04:01).
-- QA BE 2 42e5408f: T-675 65d93dea (job 2f55f771 837/840; quick-check PASS 4e7f31dc). Then T-549 S2 5d97103d (lab 81/81
-  job 773122d5; ids with a source only, D-67; budget drops M1 at 2 programs; quick-check PASS 4d5cb657; gap: 3-5 seeds small).
+- QA BE 2 42e5408f: T-675 65d93dea verdict not found -> asked 04:06. T-549 S2 5d97103d PASS WITH GAPS (job bfad11ca: 81/81,
+  4 mutants killed on final; gaps: one program >19k carried, ids vs live names, 20k end to end) -> batch 15 (lead can't comment).
 - IMPL bccb756f (sonnet, rossi) T-710 on ticket/T-710-ci-sweep from wip/qa-t710-8bb9a2c: seeded run with jobs/steps/log,
   every control 390/1280 light/dark, Tab/focus pass, fixes in slice.
 - BE INFRA lane 4d010bea (sonnet, two.claude) T-251 (urgent rank-02d) on ticket/T-251-unknown-usage: audit 5 reqs vs code
