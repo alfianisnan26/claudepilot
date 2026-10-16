@@ -652,8 +652,8 @@ a WebSocket upgrade, a blob, a download or a range answer never is. Not yet buil
 shows it at the bottom, rendered in a React transition (the page's rows commit in slices the browser can interrupt; older pages too), with the
 entry script split into `react`, `motion` and `router-icons` chunks so no single script is one long task. Measured on the built app with
 `tools/qa/chat-open.mjs` (10,000-event chat, 4x CPU throttle): the budget is no long task over 200 ms at the open. **It is not always met**: before S4 the
-longest task was 238 to 396 ms (render 312 to 449 ms, entry script 239 ms); after, 137 to 273 ms across runs (some configs pass, some fail by 70 ms: the
-commit of the 200-event page at 4x CPU). `content-visibility:auto` on the rows was tried once and removed: the row you read moved 160 to 430 px
+longest task was 238 to 396 ms (render 312 to 449 ms, entry script 239 ms); after, 137 to 273 ms on a quiet node and 207 to 466 ms on a busy one (Job b966dee9, 3 runs x 4 configs: 1 of 12 under 200 ms; the
+older-page budget of 300 ms also failed in 7 of 12 there, 143 to 555 ms; the same code is node-load sensitive). The cost is the commit of the 200-event page at 4x CPU. `content-visibility:auto` on the rows was tried once and removed: the row you read moved 160 to 430 px
 when a page landed. The budget is unchanged; a person decides on it. One older page painted within 300 ms of the scroll that triggers its read, and DOM nodes and
 JS heap recorded before and after the older pages (about 1,700 to 3,750 nodes, 10 to 16 MB for three pages); the socket subscribes after that page's newest seq (a subscribe without `afterSeq` sends the whole backlog, so it
 waits for the page; a page that cannot be read falls back to exactly that). Reconnects resume with `afterSeq` as before, and live events
