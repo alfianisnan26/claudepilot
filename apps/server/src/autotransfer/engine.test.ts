@@ -532,6 +532,63 @@ test('T-781 F1\': the chat was restarted (no longer working) between the decisio
   r.engine.stop();
 });
 
+test('T-781: a person moves the chat while the stop is waited for: the move is not overridden', async () => {
+  const r = await rig(AUTO, EXHAUSTED);
+  r.chat.sessions.set('s1', STUCK());
+  r.chat.stored('s1', [{ at: at(-4) }]);
+  (r.chat as { interrupt: unknown }).interrupt = async () => {
+    r.chat.personMoves('s1', 'spare');
+  };
+  await r.engine.evaluate('s1');
+  await r.engine.settled();
+  assert.equal(r.chat.moves.length, 0);
+  assert.equal(r.chat.get('s1')!.claudeId, 'spare');
+  r.engine.stop();
+});
+
+test('T-781: a stop that never settles is given 30 s, then the chat moves anyway', async () => {
+  const r = await rig(AUTO, EXHAUSTED);
+  r.chat.sessions.set('s1', STUCK());
+  r.chat.stored('s1', [{ at: at(-4) }]);
+  (r.chat as { interrupt: unknown }).interrupt = () => new Promise<void>(() => {});
+  const orig = console.error;
+  console.error = () => {};
+  try {
+    const p = r.engine.evaluate('s1');
+    await new Promise((res) => setImmediate(res));
+    assert.equal(r.chat.moves.length, 0, 'still waiting for the stop');
+    r.clock.advance(0.49);
+    await new Promise((res) => setImmediate(res));
+    assert.equal(r.chat.moves.length, 0, 'not yet 30 s');
+    r.clock.advance(0.02);
+    await p;
+    await r.engine.settled();
+  } finally {
+    console.error = orig;
+  }
+  assert.deepEqual(r.chat.moves, [{ id: 's1', to: 'home', handoff: 'skip' }]);
+  r.engine.stop();
+});
+
+test('T-781: a stop that rejects does not block the move', async () => {
+  const r = await rig(AUTO, EXHAUSTED);
+  r.chat.sessions.set('s1', STUCK());
+  r.chat.stored('s1', [{ at: at(-4) }]);
+  (r.chat as { interrupt: unknown }).interrupt = async () => {
+    throw new Error('control request failed');
+  };
+  const orig = console.error;
+  console.error = () => {};
+  try {
+    await r.engine.evaluate('s1');
+    await r.engine.settled();
+  } finally {
+    console.error = orig;
+  }
+  assert.deepEqual(r.chat.moves, [{ id: 's1', to: 'home', handoff: 'skip' }]);
+  r.engine.stop();
+});
+
 test('T-781: an interrupt that throws synchronously does not block the move', async () => {
   const r = await rig(AUTO, EXHAUSTED);
   r.chat.sessions.set('s1', STUCK());

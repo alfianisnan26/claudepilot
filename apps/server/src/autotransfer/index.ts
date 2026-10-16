@@ -34,7 +34,7 @@ export function autoTransferPorts(deps: Platform['deps']): { chat: ChatPort; usa
       ...(typeof (chat as { modelFamilies?: unknown }).modelFamilies === 'function' ? { modelFamilies: (claudeId: string) => (chat as unknown as { modelFamilies(id: string): string[] | null }).modelFamilies(claudeId) } : {}),
       setModel: (id, model) => (chat as unknown as { control(id: string, op: 'model', args: { model: string }): Promise<void> }).control(id, 'model', { model }),
       // The chat controller's own `interrupt` (a plain interrupt control request; the chat itself stays): the hard move's first step (T-781).
-      interrupt: (id) => (chat as unknown as { interrupt(id: string): Promise<void> }).interrupt(id),
+      ...(typeof (chat as { interrupt?: unknown }).interrupt === 'function' ? { interrupt: (id: string) => (chat as unknown as { interrupt(id: string): Promise<void> }).interrupt(id) } : {}),
       onEvent: (cb) => c.onEvent(cb),
       history: (id, after) => c.history(id, after),
       send: (id, text, o) => (chat as unknown as { send(id: string, uuid: string, text: string, opts: object): Promise<void> }).send(id, randomUUID(), text, o),

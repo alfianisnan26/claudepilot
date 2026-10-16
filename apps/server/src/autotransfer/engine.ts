@@ -32,6 +32,8 @@ import { effectiveSettings, platformSettings, type AutoSettingsReader } from './
 import type { AutoStore, SessionRow, StoredSuggestion } from './store.js';
 
 const MIN = 60_000;
+/** How long the hard move waits for the stop of a turn before it moves anyway (T-781). */
+const HARD_STOP_MS = 30_000;
 const DAY = 24 * 60 * MIN;
 /** The actor of everything the engine does by itself. */
 export const ENGINE_ACTOR = 'portal:autotransfer';
@@ -398,6 +400,27 @@ export class AutoTransferEngine {
     return Number.isFinite(t) ? t : null;
   }
 
+  /**
+   * Stops the chat's turn (not the chat) and waits for it for at most HARD_STOP_MS. A stop that throws (sync or async), rejects or never
+   * settles does not block the move: the Move flow that follows works on the chat as it is.
+   */
+  async #stopTurn(id: string): Promise<void> {
+    await new Promise<void>((resolve) => {
+      const cancel = this.#d.clock.timer(HARD_STOP_MS, () => {
+        console.error(`[autotransfer] stopping a stuck turn took over ${HARD_STOP_MS / 1000} s, moving anyway`);
+        resolve();
+      });
+      new Promise<void>((ok) => ok(this.#d.chat.interrupt?.(id))).then(
+        () => (cancel(), resolve()),
+        (e: unknown) => {
+          cancel();
+          console.error(`[autotransfer] could not stop a stuck turn: ${(e as Error).message}`);
+          resolve();
+        },
+      );
+    });
+  }
+
   /** The hard move's last look before it stops a turn: the chat is still on the source Claude, still working, not switching, still silent. */
   #stillStuck(decided: ChatSession): boolean {
     const cur = this.#d.chat.get(decided.id);
@@ -559,10 +582,12 @@ export class AutoTransferEngine {
             break;
           }
           console.info(`[autotransfer] hard move session=${id}: no event for ${AUTO_CONSTANTS.hardMoveIdleMin} minutes on an exhausted Claude, stopping the turn`);
-          try {
-            await this.#d.chat.interrupt?.(id); // a throw here, sync or async, never blocks the move
-          } catch (e) {
-            console.error(`[autotransfer] could not stop a stuck turn: ${(e as Error).message}`);
+          await this.#stopTurn(id);
+          // A person may have moved the chat while the stop was waited for: that move is not overridden.
+          const now = this.#d.chat.get(id);
+          if (!now || now.state === 'ended' || now.claudeId !== s.claudeId || now.switching) {
+            console.info(`[autotransfer] hard move session=${id}: the chat moved while its turn was being stopped, nothing more done`);
+            break;
           }
         }
         await this.#move(s, ownerId, { to: d.to, handoff: steered ? 'skip' : d.handoff, reason: d.reason, facts: d.facts, mode, settings, actor: ENGINE_ACTOR, auto: true, steered });

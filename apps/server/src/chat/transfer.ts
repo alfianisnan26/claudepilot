@@ -68,7 +68,8 @@ export function transferConversation(events: ChatEvent[], maxChars: number = MIN
     }
     if (ev.kind === 'tool_use' && ev.toolName) {
       // By name and the one-line summary the transcript shows (a command, a path): never the input or the output.
-      const what = ev.text?.replace(/\s+/g, ' ').trim();
+      // Redacted before the cut, as the messages are: a cut first can leave a prefix of a secret that no pattern matches.
+      const what = ev.text ? redact(ev.text.replace(/\s+/g, ' ').trim()) : undefined;
       const call = what ? `${ev.toolName} (${what.length > TOOL_SUMMARY_MAX ? `${what.slice(0, TOOL_SUMMARY_MAX - 1)}…` : what})` : ev.toolName;
       tools.set(call, (tools.get(call) ?? 0) + 1);
       continue;
