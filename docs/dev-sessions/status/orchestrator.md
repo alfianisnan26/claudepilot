@@ -18,11 +18,11 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   Lanes' ticket_comment refused on unassigned tickets (T-341, T-549, T-675): verdicts live in their replies + this file.
 - QA PERF 7e4879c7: reviews T-610 CHANGES; T-251 S2, T-681, T-325 S1, T-379 S2 APPROVE; T-549 S2 CHANGES -> T-739 (cost 7161); now VERIFY T-697 a84a51b3.
 - QA UI 8b13bb5a: T-710, T-675, T-416 S1, T-341 (-> T-736 high), T-524 S3 APPROVE; pre-read S4 6 concerns (7162; B1 edit additive, ok); waits S4 DONE.
-- QA BE 2 42e5408f: T-401 CHANGES (7103); T-426 S1e CHANGES (7121); probe plan 7147; review T-697 APPROVE (gaps T-733 7172); waits T-574 S3.
+- QA BE 2 42e5408f: T-401 CHANGES (7103); T-426 S1e CHANGES (7121); probe plan 7147; review T-697 APPROVE (gaps T-733 7172); now VERIFY T-574 S3 d97cbb16.
 - IMPL lane 0d799c90 (sonnet) T-376 S4 87144867: wiring proven (3fa76653); long task 207-273ms red 1-2/4 (a435d70e) -> one try content-visibility (6952); wiring
   test + 4x CPU, long-task, DOM/heap, older-page budgets; if still red -> QA UI as is, budget question -> coordinator.
 - BE INFRA lane e53e56df (sonnet, satria; a7d33a84 ended: T-697 DONE a84a51b3, 0/30 vs old 30/30) T-401 fix 7103 (new ticket/T-401-s2 from T-401-job-env) -> T-426 S1e fix 7121 (rebase on T-401-s2) -> T-610 rework 7053 -> T-524 S3c -> T-731.
-- BACKEND lane 216dbe18 (sonnet, regitha) T-574 S3 e379a7b Job queued -> T-736 (high) -> T-723.
+- BACKEND lane 290745c3 (sonnet, regitha; 216dbe18 ended: T-574 S3 DONE d97cbb16, bound 2,200 decision 7178) T-736 (high) -> T-723.
 - HELD: T-426 S1e 2174eee1 QA PASS 6169, review CHANGES 7121 -> fix, re-QA, merge after T-401. T-736 (high) -> Backend lane after T-574 S3. T-578 51f6c153 review CHANGES 6168 -> owner decision.
   T-631 review CHANGES 5850: absolute-path entry (a) for the coordinator; F1 on job-run.sh -> T-635 (high).
 - 16:12 OWNER PRIORITY (coordinator, T-426 5538): T-401 then T-426 FIRST. T-401 gate GREEN gate-54ba328-6502; ff only on the person's ack.
