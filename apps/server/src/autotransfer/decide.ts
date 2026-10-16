@@ -264,6 +264,8 @@ export interface DecideInput {
   recommend: RecommendFn;
   /** What a Claude's `list_models` said about a family (T-109), null when not known (then the catalogue and the usage windows decide). */
   listed?: (claudeId: string, family: string) => boolean | null;
+  /** When the chat's newest stored event happened (T-781, the hard move); null or absent when not known. */
+  lastEventAtMs?: number | null;
 }
 
 export interface DecideChoice {
@@ -283,7 +285,8 @@ export type Decision =
   /** `why`: an `auto` chat that only gets a card (Bypass, the deferral ran out, two failures today), else null for `ask`. */
   | ({ act: 'suggest'; why: 'bypass' | 'deferred' | 'failed_today' | null; reading: SourceReading } & DecideChoice)
   | ({ act: 'wait'; code: 'busy'; reading: SourceReading } & DecideChoice)
-  | ({ act: 'move'; reading: SourceReading } & DecideChoice);
+  /** `hard` (T-781): the chat is stuck on an exhausted Claude; its turn is stopped first and the move does not wait for a boundary. */
+  | ({ act: 'move'; reading: SourceReading; hard?: true } & DecideChoice);
 
 const ref = (c: MoveCandidate): AutoClaudeRef => ({ id: c.claudeId, name: c.name });
 const ZERO = { approvals: 0, queued: 0, agents: 0 };
@@ -523,7 +526,15 @@ export function decide(input: DecideInput): Decision {
   if (failedToday) return { act: 'suggest', why: 'failed_today', reading, ...choice };
   const d = choice.dropped;
   const quiet = session.state === 'idle' && !session.switching && d.approvals === 0 && d.queued === 0 && d.agents === 0;
-  if (!quiet) {
+  // T-781: a chat on an exhausted Claude that still shows `working` with no stored event for 3 minutes is not coming to a boundary (the
+  // limit error ended its turn without a result): it is moved now, whatever it still holds (approvals, queue, sub-agents: the owner's D4).
+  const hard =
+    reading.reason === 'exhausted' &&
+    session.state === 'working' &&
+    !session.switching &&
+    input.lastEventAtMs != null &&
+    nowMs - input.lastEventAtMs >= AUTO_CONSTANTS.hardMoveIdleMin * MIN;
+  if (!quiet && !hard) {
     // A turn that runs (or sub-agents that do) is waited for however long it takes: the chat is told to finish its step and stop (T-105
     // item 2, the engine's steer) and moves at the boundary. Only an idle chat held by an open approval or a queue becomes a card after 30 minutes.
     const turnRuns = session.state === 'working';
@@ -531,5 +542,5 @@ export function decide(input: DecideInput): Decision {
     return { act: 'wait', code: 'busy', reading, ...choice };
   }
   // 10. The move.
-  return { act: 'move', reading, ...choice };
+  return { act: 'move', reading, ...choice, ...(hard && !quiet ? { hard: true as const } : {}) };
 }

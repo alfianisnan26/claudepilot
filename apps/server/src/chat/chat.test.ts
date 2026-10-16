@@ -2857,6 +2857,16 @@ test('T-781 transferFileConversation: a 300-message chat lands complete in the c
   assert.ok(bounded.messages < 300 && bounded.messages > 200);
 });
 
+test('T-781 transferOpening: it says what the file holds: the whole conversation, or only the last N messages when the file hit its bound', () => {
+  const meta: TransferMeta = { handoffId: '00000000-0000-4000-8000-000000000000', at: new Date('2026-10-16T12:00:00Z'), workspaceId: 'docker/ws1', cwd: '/home/node', sourceSessionId: 'src', fromClaude: 'Satria', toClaude: 'Default', path: '/home/node/.claudepilot/transfer/x.md' };
+  const convo = { text: '### You\n\nhi', messages: 1, truncated: false };
+  const whole = transferOpening(meta, convo, undefined, { messages: 300, truncated: false });
+  assert.match(whole, /The whole conversation, every message, is in the context file: Read it/);
+  const cut = transferOpening(meta, convo, undefined, { messages: 266, truncated: true });
+  assert.match(cut, /The context file holds the last 266 messages of the conversation \(older ones were left out of it too\): Read it/);
+  assert.ok(!cut.includes('every message'), 'no false claim of completeness');
+});
+
 test('transferOpening: even a long conversation fits the event store’s cap, so the stored copy keeps the newest messages; a literal closing tag in carried text can’t end the conversation early', () => {
   let seq = 0;
   const ev = (e: Omit<ChatEvent, 'seq' | 'at'>): ChatEvent => ({ seq: ++seq, at: '2026-10-11T12:00:00Z', ...e });

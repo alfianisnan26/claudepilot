@@ -2105,7 +2105,8 @@ export class ChatController {
       const meta: TransferMeta = { handoffId, at: new Date(), workspaceId, cwd: source.cwd, sourceSessionId: sessionId, fromClaude: from, toClaude: dest.name, path };
       const facts = this.#moveFacts(sessionId, source);
       const convo = transferConversation(this.#chat.history(sessionId), conversationBudget(meta, EVENT_TEXT_MAX, document));
-      await this.#shellWrite(workspaceId, `${HOME}/.claudepilot/transfer`, path, transferFile(meta, transferFileConversation(this.#chat.history(sessionId)), document, facts));
+      const fileConvo = transferFileConversation(this.#chat.history(sessionId));
+      await this.#shellWrite(workspaceId, `${HOME}/.claudepilot/transfer`, path, transferFile(meta, fileConvo, document, facts));
       const sourceClaudeId = source.claudeId || this.#chat.ensureDefault(workspaceId).id;
       this.#chat.saveHandoff({ id: handoffId, workspaceId, sourceSessionId: sessionId, sourceClaudeId, destClaudeId: dest.id, path });
 
@@ -2149,7 +2150,7 @@ export class ChatController {
       if (document) transfer.handoff = true;
       this.#step(sessionId, 'starting');
       const opening = randomUUID();
-      await this.#send(sessionId, opening, transferOpening(meta, convo, document), { transfer });
+      await this.#send(sessionId, opening, transferOpening(meta, convo, document, fileConvo), { transfer });
       const asked = this.#chat.history(sessionId).findLast((e) => e.kind === 'user' && e.uuid === opening);
       // The new Claude acknowledges: a chat that can't answer on the destination isn't moved.
       const ack = await this.#awaitTurn(sessionId, asked?.seq ?? 0, this.ackWaitMs, 'ack');

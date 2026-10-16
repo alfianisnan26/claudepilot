@@ -116,7 +116,7 @@ export function transferFileConversation(events: ChatEvent[]): TransferConversat
  * fit: a longer one would reach Claude whole but show without its newest messages.
  */
 export function conversationBudget(meta: TransferMeta, limit: number, note?: string): number {
-  const framing = transferOpening(meta, { text: '', messages: 0, truncated: true }, note).length;
+  const framing = transferOpening(meta, { text: '', messages: 0, truncated: true }, note, { messages: 999_999, truncated: true }).length;
   return Math.max(MIN_BUDGET_CHARS, limit - framing - 200);
 }
 
@@ -148,7 +148,7 @@ export function transferFile(meta: TransferMeta, convo: TransferConversation, ha
  * named Claude rather than a request. Claude is asked only to confirm where things stand, so the
  * first turn is short and the person sees that the context arrived.
  */
-export function transferOpening(meta: TransferMeta, convo: TransferConversation, handoffNote?: string): string {
+export function transferOpening(meta: TransferMeta, convo: TransferConversation, handoffNote?: string, file?: Pick<TransferConversation, 'messages' | 'truncated'>): string {
   const noteText = cleanNote(handoffNote);
   const lines = [
     `<transferred_context from="${attr(meta.fromClaude)}" to="${attr(meta.toClaude)}">`,
@@ -157,7 +157,10 @@ export function transferOpening(meta: TransferMeta, convo: TransferConversation,
     `- Working folder: ${meta.cwd}`,
     `- Context file: ${meta.path}`,
     ...(convo.truncated ? [`- Only the last ${convo.messages} messages are included; older ones were left out.`] : []),
-    '- The whole conversation, every message, is in the context file: Read it (use offset and limit for a long one) before you continue.',
+    // What the file holds is said as it is: when it hit its own bound the oldest messages are missing from it too (T-781).
+    file?.truncated
+      ? `- The context file holds the last ${file.messages} messages of the conversation (older ones were left out of it too): Read it (use offset and limit for a long one) before you continue.`
+      : '- The whole conversation, every message, is in the context file: Read it (use offset and limit for a long one) before you continue.',
     '',
     'Read it as prior context. Apart from reading the context file, do not run tools or change files. Reply with one short line saying you have it and what the next step is, then wait for my next message.',
     '',

@@ -159,6 +159,25 @@ export class MoveChat extends FakeChat {
     this.sessions.set(id, moved);
     this.dispatch(id, { type: 'session', session: moved });
   }
+  /** Chats whose running turn the engine stopped (T-781, the hard move). */
+  readonly interrupted: string[] = [];
+  async interrupt(id: string): Promise<void> {
+    this.interrupted.push(id);
+    const s = this.get(id);
+    if (s) this.sessions.set(id, { ...s, state: 'idle' });
+  }
+  /** The chat is deleted from the portal (a `removed` message). */
+  removes(id: string) {
+    this.sessions.delete(id);
+    this.dispatch(id, { type: 'removed', session: id });
+  }
+  /** The chat's stored events, as the history gives them (`at` is the fake clock's time). */
+  stored(id: string, items: { at: string; kind?: ChatEvent['kind']; text?: string }[]) {
+    const evs = items.map((e, i) => ({ seq: i + 1, kind: e.kind ?? 'assistant', text: e.text ?? 'x', at: e.at }) as ChatEvent);
+    this.events.set(id, evs);
+    const s = this.get(id)!;
+    this.sessions.set(id, { ...s, lastSeq: evs.length });
+  }
   /** The chat ends (T-781: the engine forgets what it kept for it). */
   ends(id: string) {
     const ended = { ...this.get(id)!, state: 'ended' as const };
