@@ -59,7 +59,9 @@ function headerRules(v: unknown, allowedSites: string[], fallback: BrowserHeader
     if (!isObject(raw)) throw invalid('headers', 'Each header needs hosts, a name and a secret.');
     if (typeof raw.name !== 'string' || typeof raw.secret !== 'string' || !Array.isArray(raw.hosts) || raw.hosts.some((h) => typeof h !== 'string'))
       throw invalid('headers', 'Each header needs hosts, a name and the name of a secret.');
-    const rule: BrowserHeaderRule = { hosts: [...new Set((raw.hosts as string[]).map((h) => h.trim().toLowerCase()).filter(Boolean))], name: raw.name.trim(), secret: raw.secret.trim() };
+    if (raw.key !== undefined && raw.key !== null && typeof raw.key !== 'string') throw invalid('headers', 'A key is the name of a variable in an env-file entry.');
+    const key = typeof raw.key === 'string' ? raw.key.trim() : '';
+    const rule: BrowserHeaderRule = { hosts: [...new Set((raw.hosts as string[]).map((h) => h.trim().toLowerCase()).filter(Boolean))], name: raw.name.trim(), secret: raw.secret.trim(), ...(key ? { key } : {}) };
     const problem = headerProblem(rule, allowedSites);
     if (problem) throw invalid('headers', problem);
     out.push(rule);

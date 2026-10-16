@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { SECRET_ENTRY_NAME, type BrowserHeaderRule } from '@portal/contracts';
+import { HEADER_SECRET_KEY, SECRET_ENTRY_NAME, type BrowserHeaderRule } from '@portal/contracts';
 
 /**
  * Request headers from named secrets (browser & desktop PRD §24). The pool holds names only; this module turns them into what is
@@ -62,6 +62,7 @@ export function headerProblem(rule: BrowserHeaderRule, allowedSites: string[]): 
   if (!HEADER_NAME.test(rule.name)) return `“${rule.name.slice(0, 40)}” isn’t a header name (letters, digits and hyphens).`;
   if (FORBIDDEN_HEADERS.has(rule.name.toLowerCase())) return `The browser sets ${rule.name} itself: pick another header.`;
   if (!SECRET_ENTRY_NAME.test(rule.secret)) return `“${rule.secret.slice(0, 40)}” isn’t the name of a Secrets & env entry.`;
+  if (rule.key !== undefined && !HEADER_SECRET_KEY.test(rule.key)) return `“${rule.key.slice(0, 40)}” isn’t a variable name (letters, digits and underscores).`;
   if (rule.hosts.length === 0) return `${rule.name}: list the hosts it goes to.`;
   if (rule.hosts.length > 20) return `${rule.name}: use at most 20 hosts.`;
   for (const host of rule.hosts) {
@@ -79,6 +80,8 @@ export interface ResolvedHeader {
   name: string;
   hosts: string[];
   secret: string;
+  /** The variable inside an env-file entry, when the rule names one (T-623). */
+  key?: string;
   value: string;
   /** The secret's value id: changes when the value does, and says nothing about it. */
   version: string;
@@ -87,7 +90,26 @@ export interface ResolvedHeader {
 export interface HeaderSkip {
   name: string;
   secret: string;
+  key?: string;
   why: string;
+}
+
+/**
+ * The value of `key` in an env-file entry (`KEY=VALUE` lines; `export ` allowed; blank lines and `#` comments skipped; one pair of matching
+ * quotes stripped; the last line for a key wins), or null when the key is absent or empty. In memory only: nothing here stores or logs.
+ */
+export function envFileValue(text: string, key: string): string | null {
+  let found: string | null = null;
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith('#')) continue;
+    const m = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$/.exec(line);
+    if (!m || m[1] !== key) continue;
+    let v = (m[2] ?? '').trim();
+    if (v.length >= 2 && (v[0] === '"' || v[0] === "'") && v.endsWith(v[0] as string)) v = v.slice(1, -1);
+    found = v;
+  }
+  return found ? found : null;
 }
 
 /**
@@ -99,8 +121,19 @@ export function resolveHeaders(rules: BrowserHeaderRule[] | undefined, lookup: S
   const skipped: HeaderSkip[] = [];
   for (const r of rules ?? []) {
     const found = lookup ? lookup(r.secret) : { ok: false as const, why: 'not found' };
-    if (!found.ok) skipped.push({ name: r.name, secret: r.secret, why: found.why });
-    else entries.push({ name: r.name, hosts: [...r.hosts], secret: r.secret, value: found.value, version: found.version });
+    const keyed = r.key !== undefined ? { key: r.key } : {};
+    if (!found.ok) {
+      skipped.push({ name: r.name, secret: r.secret, ...keyed, why: found.why });
+      continue;
+    }
+    let value = found.value;
+    if (r.key !== undefined) {
+      const v = envFileValue(found.value, r.key);
+      // The reason names the key and the entry, never a value (and never what the entry held in place of the key).
+      if (v === null) { skipped.push({ name: r.name, secret: r.secret, ...keyed, why: `the entry has no ${r.key}` }); continue; }
+      value = v;
+    }
+    entries.push({ name: r.name, hosts: [...r.hosts], secret: r.secret, ...keyed, value, version: found.version });
   }
   return { entries, skipped };
 }
@@ -111,11 +144,11 @@ export function headersFile(entries: ResolvedHeader[]): string {
 }
 
 /** What goes into a container's spec hash and the audit: names, hosts, secret names and value versions. Never a value. */
-export function headersSpec(entries: ResolvedHeader[]): { name: string; hosts: string[]; secret: string; version: string }[] {
-  return entries.map(({ name, hosts, secret, version }) => ({ name, hosts, secret, version })).sort((a, b) => a.name.localeCompare(b.name) || a.secret.localeCompare(b.secret));
+export function headersSpec(entries: ResolvedHeader[]): { name: string; hosts: string[]; secret: string; key?: string; version: string }[] {
+  return entries.map(({ name, hosts, secret, key, version }) => ({ name, hosts, secret, ...(key !== undefined ? { key } : {}), version })).sort((a, b) => a.name.localeCompare(b.name) || a.secret.localeCompare(b.secret));
 }
 
 /** A one-line summary for the audit and the browser's row: names only. */
-export function headersSummary(entries: ResolvedHeader[], skipped: HeaderSkip[]): { headers: { name: string; secret: string; hosts: string[] }[]; skipped: HeaderSkip[] } {
-  return { headers: entries.map(({ name, secret, hosts }) => ({ name, secret, hosts })), skipped };
+export function headersSummary(entries: ResolvedHeader[], skipped: HeaderSkip[]): { headers: { name: string; secret: string; key?: string; hosts: string[] }[]; skipped: HeaderSkip[] } {
+  return { headers: entries.map(({ name, secret, key, hosts }) => ({ name, secret, ...(key !== undefined ? { key } : {}), hosts })), skipped };
 }
