@@ -7,8 +7,9 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   T-781 S1-S7 (lead's mechanical index.ts resolution; decision 8094), T-733 S1 S4 S6. Coordinator told 8123.
 - BATCH 22 ON INTEGRATION 0d521d67 (gate claudepilot-gate-0d521d6-7b1d GREEN): T-697, T-574 S3, T-731, r.txt drop, T-376 S4b,
   T-732, T-610 r3, T-739 B (mig 383), T-723 S3c. Coordinator told on T-731.
-- DEPLOY 233 LIVE (coordinator, portal 2026.10.16-2 from b2d0a3d9 = batch 22; b23 NOT in it). NO Releases/ note for it (T-591
-  still fails; 8158). Live checks: 8 UNAVAILABLE (QA UI, no live read) -> coordinator 8192; none closed. Deploy 191 = b<=18.
+- DEPLOY 233 LIVE (portal 2026.10.16-2, b22). Its Releases/ note exists (coordinator: my search came early) -> QA UI re-reads 4
+  notes, close T-591 on PASS. Live checks: coordinator runs them ("Coordinator live check" comments), close each on PASS.
+  T-697 CLOSED (gate + QA b33f46ad). DEPLOY 243 RUNNING (coordinator) from eb59ab42 = b23. Ack 8237.
 - BATCH 24 GATE RED 0c86256e (claudepilot-gate-0c86256-3bdf, job-out/gate-b24.log; integration untouched): 2 tests in
   jobRunCreds.test.ts (T-401's `__X__`->x makes T-611 S1's `__MASTER_REQUIRED__` line invalid YAML). 8224: BE Infra builds
   T-401 S2c (test only) from 0c86256e, then QA + rebuilt b24 + re-gate. T-736 S3c-S3e 1cd5047d waits in b24 with it.
@@ -69,6 +70,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   T-527 finding 4 (owner triggers tagging owner-checklist); T-657 reopen T-259/T-317/T-338; T-739 A scoring defs (scoring = person's wall).
 
 ## NEXT (in order, as slots free)
+0. T-525 (coordinator asks soon): Impl drafts a persona_propose_update after T-772 S2; a person applies (8236).
 1. Next batch (each after QA/review): T-611 S1b..S2b, T-736 S3c-S3e, T-675 R2b, T-781 S8; T-416 S2+S2b (after S2b QA + review).
 2. T-401 in b24 (ack 8027 sat unseen 13:50-15:15: re-read HELD tickets' last comments each hour) -> T-426 S1e -> T-379 S2 3f11b28; deploys are the coordinator's. ticket_list fails: use ticket_get.
 4. RTK: T-340 (person/coordinator) -> T-341 merge -> T-306 item 3. 5. T-537. 6. T-513. 7. T-472 live re-check (needs portal_status), T-422, T-147, T-438, T-425, T-436, T-437, T-432, T-382, T-377, T-386, T-409, T-402, T-398,
