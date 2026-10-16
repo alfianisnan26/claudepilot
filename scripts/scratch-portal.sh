@@ -11,6 +11,8 @@
 #   SCRATCH_K8S_RIG=dev-rig-<name> scripts/scratch-portal.sh restart <port>   a Kubernetes target on a RIG namespace only (scripts/dev-rig.sh), through
 #       the kubeconfig at /tmp/scratch-portal-<port>/kubeconfig (a rig service account's, made by the caller; never ~/.kube/config); PORTAL_K8S_IMAGE,
 #       _BROWSER_IMAGE, _CPU_REQUEST, _MEMORY_REQUEST, _NODE_SELECTOR, _STORAGE, _STORAGE_CLASS and _BROWSER_EGRESS(_ALLOW) are passed through then
+#   SCRATCH_PRODUCTION=1 scripts/scratch-portal.sh start 3406   serves the BUILT web app (apps/web/dist, gzip, hashed chunks) as a deployed portal does;
+#       without it the portal runs in dev mode and Vite serves ~600 unbundled modules (about 14 MB, uncompressed) on every page open (T-376 S3)
 # `env -i` matters in a workspace like this one: without it the portal would inherit ~/.kube/config (cluster-admin) and could create or
 # delete real workspaces, and the GitHub and Claude credentials in the home folder. It starts with none of them and with Kubernetes off.
 set -eu
@@ -37,7 +39,7 @@ launch() {
   # shellcheck disable=SC2086 # $k8s: one VAR=value word each
   env -i "PATH=$PATH" "HOME=$dir/home" LANG=C.UTF-8 $k8s PORTAL_PORT="$port" \
     PORTAL_DATA_DIR="$dir/data" PORTAL_SERVER_CODE="$code" PORTAL_SECRET_KEY="$key" NODE_OPTIONS=--disable-warning=ExperimentalWarning \
-    ${PORTAL_LOCAL_ENABLED:+"PORTAL_LOCAL_ENABLED=$PORTAL_LOCAL_ENABLED"} $passthru \
+    ${PORTAL_LOCAL_ENABLED:+"PORTAL_LOCAL_ENABLED=$PORTAL_LOCAL_ENABLED"} ${SCRATCH_PRODUCTION:+NODE_ENV=production} $passthru \
     setsid nohup npx tsx src/index.ts >> "$dir/log" 2>&1 < /dev/null 3>&- 4>&- 5>&- 6>&- 7>&- 8>&- 9>&- &
   disown
   cd - >/dev/null
