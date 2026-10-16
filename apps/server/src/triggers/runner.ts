@@ -29,7 +29,7 @@ import { renderOpening, sessionTitle, ticketSummary } from './template.js';
 export interface TriggerChat {
   create(req: { workspaceId: string; title: string; cwd?: string; claudeId?: string; worktree?: Record<string, never> }, opts: { actor: string }): Promise<ChatSession>;
   send(id: string, uuid: string, text: string, opts: { actor: string; actorLabel: string }): Promise<void>;
-  control(id: string, op: 'mode', args: { mode: string }): Promise<void>;
+  control(id: string, op: 'mode', args: { mode: string }, opts: { actor: string }): Promise<void>;
   interrupt(id: string): Promise<void>;
   end(id: string, opts?: { children?: 'end' }): Promise<void>;
   get(id: string): ChatSession | null;
@@ -303,7 +303,7 @@ export class TriggerRunner {
         { actor },
       );
       store.setRun(runId, { session_id: s.id, state: 'running' });
-      if (a.permissionMode !== 'default') await chat.control(s.id, 'mode', { mode: a.permissionMode });
+      if (a.permissionMode !== 'default') await chat.control(s.id, 'mode', { mode: a.permissionMode }, { actor });
       await chat.send(s.id, randomUUID(), opening, { actor, actorLabel: label });
       return;
     }
@@ -327,7 +327,7 @@ export class TriggerRunner {
     const res = await tickets.startSession(caller, ticket.id, { workspaceId: a.workspaceId, ...(a.claudeId ? { claudeId: a.claudeId } : {}), ...(a.cwd ? { cwd: a.cwd } : {}), worktree: a.worktree });
     store.setRun(runId, { session_id: res.session.id, state: 'running' });
     // The ticket's own opening went with the start; the mode applies from the session's next request.
-    if (a.permissionMode !== 'default') await chat.control(res.session.id, 'mode', { mode: a.permissionMode });
+    if (a.permissionMode !== 'default') await chat.control(res.session.id, 'mode', { mode: a.permissionMode }, { actor });
   }
 
   /* ---------- A person's acts ---------- */
