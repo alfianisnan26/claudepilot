@@ -9,9 +9,9 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   T-732, T-610 r3, T-739 B (mig 383), T-723 S3c. Coordinator told on T-731.
 - DEPLOY 233 LIVE (coordinator, portal 2026.10.16-2 from b2d0a3d9 = batch 22; b23 NOT in it). NO Releases/ note for it (T-591
   still fails; 8158). Live checks: 8 UNAVAILABLE (QA UI, no live read) -> coordinator 8192; none closed. Deploy 191 = b<=18.
-- BATCH 24 GATING 0c86256e (wip/main-0c86256, worktree premerge-b24, log job-out/gate-b24.log; NO status push until done):
-  T-401 S2b a4ad3052 (ack 8027, review 7387; lead: docs conflict only, manifests read, 8205) + T-736 S3c-S3e 1cd5047d
-  (QA PWG 8198; review CHANGES -> S3f, decision 8200). On green: ff integration, tell coordinator on T-731.
+- BATCH 24 GATE RED 0c86256e (claudepilot-gate-0c86256-3bdf, job-out/gate-b24.log; integration untouched): 2 tests in
+  jobRunCreds.test.ts (T-401's `__X__`->x makes T-611 S1's `__MASTER_REQUIRED__` line invalid YAML). 8224: BE Infra builds
+  T-401 S2c (test only) from 0c86256e, then QA + rebuilt b24 + re-gate. T-736 S3c-S3e 1cd5047d waits in b24 with it.
 - T-611 S1b..S2 80ffedea: QA done (8186, 8187 16/17) but NOT mechanical onto integration (T-731 --reuse; 8202) -> BE Infra resolves
   after S2b (lead starts the merge in its worktree; --reuse + --pool-env refused). QA UI pre-reads the merge risks.
 - T-675 R2b FAIL (QA UI: apostrophe at memoryBudget.test.ts:330 breaks compile) -> Backend R2c. T-781 S8 DONE 543240b8 -> QA BE 2
