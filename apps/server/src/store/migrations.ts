@@ -2705,6 +2705,15 @@ export const MIGRATIONS: Migration[] = [
     },
   },
   {
+    version: 383,
+    name: 'chat_events: partial index on tool results for the crew scorecard (T-739)',
+    up(db) {
+      // The crew scorecard counts tool results per session and window (lab/scorecardData.ts loadToolResults). Without this it walks every
+      // event of the session. Partial: only tool results pay the write cost. Idempotent. `at` is fixed-width ISO text, so order is time order.
+      db.exec("CREATE INDEX IF NOT EXISTS chat_events_result_at ON chat_events (session_id, at) WHERE kind = 'tool_result'");
+    },
+  },
+  {
     version: 755,
     name: 'chat sessions: the restart hint, hidden until the next change, and applying tool changes by itself',
     up(db) {
