@@ -12,11 +12,11 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 ## IN FLIGHT (6 of 6, D-71)
   Lanes' ticket_comment refused on unassigned tickets (T-341, T-549, T-675): verdicts live in their replies + this file.
 - QA PERF 7e4879c7: T-376 S4b PASS WITH GAPS 7475 -> batch; T-739 B S1-S2 PASS WITH GAPS 7498 (job ba9ab470; gap 2 -> S3);
-  now T-731 probes on a81e64af.
+  T-731 probes BLOCKED (no merge in its allow list): lead builds wip = BE Infra's new head + probe c4ad3105, then its Job.
 - QA UI 8b13bb5a: T-732 PASS WITH GAPS 7467 (-> T-772); REVIEW T-723 S1-S2 CHANGES 7513 (routes hardcode 'ui' -> S3, 7516)
-  -> now BLIND REVIEW T-739 B S1+S2 (no Job).
+  REVIEW T-739 B S1-S2 APPROVE -> now PLAN T-772 (no Job).
 - QA BE 2 42e5408f: T-723 S1/S2 PASS WITH GAPS 7473/7497; REVIEW T-731 r2 APPROVE (reply; N1-N3 -> BE Infra)
-  -> now REVIEW of the lead's merge e630964d (T-426 S1f base, no Job).
+  REVIEW of the lead's merge e630964d OK (7526) -> next T-591 DIAG (read-only; send retried after a chat move).
 - IMPL lane fce0c981 (sonnet; 2f4ee38f ended: T-376 S4b DONE 103520e7, 7436, job 92c6f13b, no mutants; 65dd09f6: T-732 DONE
   c9a032f7, item 5 -> coordinator 7407) T-739 B S1 DONE 65b821d7 (migration 383 partial index, lead read OK; 4/4, 3 mutants;
   7471) S2 DONE 262663d5 (job 86693c96: build 0.41 s/1M synthetic rows, 7487 for the coordinator) -> now S3 tests d,e,f,h + docs.
