@@ -29,7 +29,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - IMPL 46632d91 (sonnet): T-772 S2 DONE 188cd077. Now T-591 S3 lastReleased fix (ticket/T-591-s3 from b2932d0e) -> T-772 S2b
   (container marker, not tabindex -1) -> T-525 proposal draft.
 - BE INFRA 16c2494f (sonnet): T-736 S3f DONE a44c7cf8 (Job b263ibbvh on 4e63057, 14 mutants). Now resolving the T-611 merge of
-  integration f9b836a1 that the lead started in its worktree (6 files UU; 8207 items; + review items 1-2 of 8349) -> T-736 S3g (8359) -> T-610 (8267) -> T-524 S3c + T-733 S5 -> T-612 S1.
+  integration f9b836a1 that the lead started in its worktree (6 files UU; 8207 items; + review items 1-2 of 8349) -> T-623 S2 (HIGH, coordinator 8374: header rule key inside an env-file entry; plan 8387)
+  -> T-736 S3g (8359) -> T-610 (8267) -> T-524 S3c + T-733 S5 -> T-612 S1.
 - BACKEND 3484bd4d: T-675 R2c f7b4e34a, T-781 S8b 0ed23dca Jobs pending (+ stop-mark test, B6) -> T-416 S2b fix -> T-537.
 - AFTER T-401: T-426 S1h/S1e; T-379 S2 3f11b28 behind it. T-578 -> owner. T-631 -> coordinator (after this batch).
 
