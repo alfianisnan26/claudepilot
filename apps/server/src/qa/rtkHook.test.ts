@@ -49,6 +49,33 @@ test('test runners, builds, typecheck, kubectl, cat/sed, writes and unmeasured f
   ]) assert.equal(decide(cmd).action, 'skip', cmd);
 });
 
+// T-733 S6 (T-341): the edges the allowlist test above does not reach.
+test('length cap: 2000 characters are rewritten, 2001 are skipped as "too long"', () => {
+  const at = (n: number) => 'git status ' + 'a'.repeat(n - 'git status '.length);
+  assert.equal(at(2000).length, 2000);
+  assert.equal(decide(at(2000), []).action, 'rewrite');
+  const long = decide(at(2001), []);
+  assert.equal(long.action, 'skip');
+  assert.equal(long.reason, 'too long');
+});
+
+test('git status takes ONE `--`, at any position after the head: `git status x --` is rewritten, a second `--` is not', () => {
+  const one = decide('git status x --', []);
+  assert.equal(one.action, 'rewrite');
+  assert.equal(one.command, 'rtk git status x --');
+  assert.equal(decide('git status x -- y --', []).action, 'skip');
+  assert.equal(decide('git status -- -- x', []).action, 'skip');
+});
+
+test('an empty quoted operand is a word of its own (tokenize), and git status with one is rewritten', () => {
+  assert.deepEqual(hook.tokenize("git status ''"), ['git', 'status', '']);
+  assert.deepEqual(hook.tokenize('git status ""'), ['git', 'status', '']);
+  assert.deepEqual(hook.tokenize("git status '' x"), ['git', 'status', '', 'x']);
+  const d = decide("git status ''", []);
+  assert.equal(d.action, 'rewrite');
+  assert.equal(d.command, "rtk git status ''");
+});
+
 test('compound commands, pipes, subshells, redirects and expansions stay untouched even when every part is allowlisted', () => {
   for (const cmd of [
     'git status && git log --oneline -5', 'git status; ls', 'ls -la | head', 'ls -la || true', '(git status)', 'ls $(pwd)', 'ls `pwd`', 'ls > out.txt',
