@@ -801,8 +801,32 @@ test('T-611 mutation: without the rule in the Job\'s clone of the template, or i
   assert.notDeepEqual(placed(90, [], {}, noTemplateMarker).required, CP_RULE, 'template without the marker: the required rule is missing, so the check catches it');
   const noScriptRule = mutant((y) => y, (s) => s.replace('-e "s#__MASTER_REQUIRED__#$master_rule#"', '-e "s#__MASTER_REQUIRED__##"'));
   assert.notDeepEqual(placed(90, [], {}, noScriptRule).required, CP_RULE, 'script that never fills the rule: caught');
-  const neverOver = mutant((y) => y, (s) => s.replace('[ "$master_pct" -gt "$master_max" ]', '[ "$master_pct" -gt 1000 ]'));
+  const neverOver = mutant((y) => y, (s) => s.replaceAll('[ "$pct" -gt "$master_max" ]', '[ "$pct" -gt 1000 ]'));
   assert.notDeepEqual(placed(90, [], {}, neverOver).required, CP_RULE, 'script that ignores the reading: caught');
+});
+
+test('T-524: a Job queued while the master was under the line is read again when it is let out; over the line it gets the REQUIRED rule before it starts', async () => {
+  const seeds = [1, 2, 3].map((i) => ({ name: `claudepilot-job-0000000${i}`, chat: 'chat-x' }));
+  const w = world(seeds, { top: 60 });
+  const s = w.start(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'true']);
+  await waitFor('queued', () => /queued behind 3/.test(s.out()));
+  assert.ok(!/requiredDuringScheduling/.test(w.applied1()), 'made under the line: preferred only');
+  writeFileSync(join(w.root, 'top.txt'), 'k3s-master   310m   7%   9000Mi   88%\n'); // the master fills while the Job waits
+  w.edit((st) => { Object.assign(st.jobs[0] ?? {}, { done: true, rc: 0 }); });
+  const r = await s.done;
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /placement: the control-plane node is at 88% of its memory \(over 75%\)/);
+  const calls = w.calls().split('\n');
+  const rule = calls.findIndex((c) => /patch job .*requiredDuringSchedulingIgnoredDuringExecution.*node-role\.kubernetes\.io\/control-plane.*DoesNotExist/.test(c));
+  const go = calls.findIndex((c) => /patch job .*"suspend":false/.test(c));
+  assert.ok(rule >= 0 && go > rule, `the rule is patched in before the Job is let out:\n${calls.join('\n')}`);
+  // Still under the line when let out: no patch.
+  const w2 = world(seeds, { top: 60 });
+  const s2 = w2.start(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'true']);
+  await waitFor('queued', () => /queued behind 3/.test(s2.out()));
+  w2.edit((st) => { Object.assign(st.jobs[0] ?? {}, { done: true, rc: 0 }); });
+  assert.equal((await s2.done).code, 0);
+  assert.doesNotMatch(w2.calls(), /requiredDuringScheduling/);
 });
 
 test('T-611: a Job Pending on the required rule says it waits for k3s-node2', async () => {

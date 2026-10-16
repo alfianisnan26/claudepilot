@@ -187,13 +187,18 @@ trap 'exit 130' INT TERM HUP
 
 # Placement (T-611): the control-plane node's real memory (working set against allocatable, from the metrics API). Over the line: a REQUIRED rule
 # away from it. A failed or odd reading keeps the preferred rules alone: the metrics must never block every Job.
-master_rule=; master_pct=$(kubectl top nodes -l node-role.kubernetes.io/control-plane --no-headers 2>/dev/null | awk 'NR == 1 { gsub(/%/, "", $5); print $5 }' || true)
-if [[ $master_pct =~ ^[0-9]{1,3}$ ]]; then
-  if [ "$master_pct" -gt "$master_max" ]; then
-    master_rule='requiredDuringSchedulingIgnoredDuringExecution: {nodeSelectorTerms: [{matchExpressions: [{key: node-role.kubernetes.io/control-plane, operator: DoesNotExist}]}]}'
-    echo "job-run: placement: the control-plane node is at ${master_pct}% of its memory (over ${master_max}%): this Job may not run there; it waits for k3s-node2 or for the master to have room" >&2
-  else echo "job-run: placement: the control-plane node is at ${master_pct}% of its memory (limit ${master_max}%): preferred rules only"; fi
-else echo "job-run: placement: the control-plane node's memory is unknown (metrics unavailable): preferred rules only" >&2; fi
+MASTER_RULE='requiredDuringSchedulingIgnoredDuringExecution: {nodeSelectorTerms: [{matchExpressions: [{key: node-role.kubernetes.io/control-plane, operator: DoesNotExist}]}]}'
+master_rule=
+master_check() { # sets master_rule and says what it read; called when the Job is made and again when the queue lets it out (T-524: a queued Job can wait an hour)
+  local pct; pct=$(kubectl top nodes -l node-role.kubernetes.io/control-plane --no-headers 2>/dev/null | awk 'NR == 1 { gsub(/%/, "", $5); print $5 }' || true)
+  if [[ $pct =~ ^[0-9]{1,3}$ ]]; then
+    if [ "$pct" -gt "$master_max" ]; then
+      master_rule=$MASTER_RULE
+      echo "job-run: placement: the control-plane node is at ${pct}% of its memory (over ${master_max}%): this Job may not run there; it waits for k3s-node2 or for the master to have room" >&2
+    else echo "job-run: placement: the control-plane node is at ${pct}% of its memory (limit ${master_max}%): preferred rules only"; fi
+  else echo "job-run: placement: the control-plane node's memory is unknown (metrics unavailable): preferred rules only" >&2; fi
+}
+master_check
 
 # The credentials, into the Secret on stdin (printf is a builtin: no argument a process list would show).
 secret="job=$job"; mask=
@@ -267,6 +272,16 @@ while :; do
   [ $(( $(date +%s) - t0 )) -lt "$queue_wait" ] || { echo "job-run: still queued after ${queue_wait}s: giving up" >&2; exit 1; }
   sleep "$poll"
 done
+# The reading above was taken when the Job was made; a queued Job can wait up to an hour and the master may have filled meanwhile (T-524: a third
+# of the Jobs ran on a master at 87%). Read again now: over the line, the REQUIRED rule goes into the still suspended Job (its scheduling
+# directives may change while it is suspended) before it is let out. A rule once required stays.
+if [ -z "$master_rule" ]; then
+  master_check
+  if [ -n "$master_rule" ]; then
+    kubectl -n "$ns" patch job "$job" --type merge -p '{"spec":{"template":{"spec":{"affinity":{"nodeAffinity":{"requiredDuringSchedulingIgnoredDuringExecution":{"nodeSelectorTerms":[{"matchExpressions":[{"key":"node-role.kubernetes.io/control-plane","operator":"DoesNotExist"}]}]}}}}}}}' >/dev/null \
+      || { echo "job-run: could not add the placement rule to $job: it runs with the preferred rules only" >&2; master_rule=; }
+  fi
+fi
 kubectl -n "$ns" patch job "$job" --type merge -p '{"spec":{"suspend":false}}' >/dev/null
 t1=$(date +%s); phase=running
 job_state() { # Complete, Failed:<reason>, gone, or nothing while it runs

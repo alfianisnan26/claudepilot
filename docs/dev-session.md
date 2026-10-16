@@ -157,7 +157,10 @@ scripts/job-run.sh --list ; scripts/job-run.sh --stop --chat <session id>
 - **Placement (T-611):** the scheduler counts memory requests, but the control-plane node's own pods use far more for real. Before it creates a
   Job, `job-run.sh` reads that node's real memory (`kubectl top nodes`); over `JOB_RUN_MASTER_MAX_PCT` (75) the Job gets a REQUIRED rule away
   from the control plane and waits for k3s-node2 or for room ("placement:" line, and a Pending line that says so). Under the line, or when the
-  metrics fail, only the preferred rules apply. The decision is taken when the Job is created; the run's last line names the node.
+  metrics fail, only the preferred rules apply. The run's last line names the node. The reading is taken again when the queue lets a waiting
+  Job out (T-524: a queue wait can last an hour, and a third of the Jobs ran on a master at 87%): over the line, the REQUIRED rule is patched
+  into the still suspended Job before it starts. A rule once required stays. `gate-job.sh` has its own manifest with preferred rules only (the
+  gate's checks and placement are unchanged here).
 - **Memory (T-524):** requested = limited, so the scheduler places a Job only where all of it fits (2Gi requested with 8Gi allowed let a
   4.1 GB Event Job take k3s-master, the 15 GB control-plane node that also runs the API server, to 92%, and the portal answered 503).
   4Gi by default with `/tmp` at most 2Gi; `--big` gives 8Gi with `/tmp` 4Gi (only k3s-node2 has that much free). The whole server suite peaked
