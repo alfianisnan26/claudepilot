@@ -18,10 +18,11 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   4M stdin write timeout, no audit row on retry, herd test) -> Backend. Now QA T-736 S3b 759e7e75 (7761, job 1fb4ce57 47/0).
 - FOR THE COORDINATOR, T-781 (D-76): lead cannot claim/comment it (unassigned); Backend lane b2f0e95f on it. Order S1, S2, S4, S3, S5.
 - QA BE 2 42e5408f: REVIEW T-611 S1 CHANGES 7762 (C1 octal 08/09 under set -e, C2 peak overflow cap 6 digits, C3 pin the
-  -le boundary, C4 timeout line says run again) -> T-611 S1b. Now blind re-review T-426 S1g fc0f8be5 (7764) vs 7723.
+  -le boundary, C4 timeout line says run again) -> T-611 S1b. REVIEW T-426 S1g CHANGES 7773 (N1 SECURITY: raw artifact name in
+  stderr leaks a value-named file; N2 compressed-branch test; N3 refuse non-empty --out) -> S1h 7782. Now REVIEW T-736 whole.
 - IMPL lane 3fc7326e (sonnet; fc05043b ended: T-736 S3b DONE 759e7e75) now T-723 S3b (7677) -> T-772 S1b (7719) -> T-772 S2 (7599).
 - BE INFRA e1673dcb (sonnet; dd395048 ended: T-426 S1g DONE fc0f8be5 7764, job ed6dcc90 44/0+17/0, 3 mutants KILLED; wip
-  9fc88b5b carries scratch mutant files, not merged) now T-610 r3 (7748) -> T-611 S1b (7762 C1-C4 + QA Perf, rebase on S1g) -> T-611 S2 -> T-524 S3c (7360) -> T-612 S1.
+  9fc88b5b carries scratch mutant files, not merged) now T-610 r3 (7748) -> T-426 S1h (7782 + QA Perf) -> T-611 S1b (7762 C1-C4 + QA Perf, rebase on S1g) -> T-611 S2 -> T-524 S3c (7360) -> T-612 S1.
 - BACKEND b2f0e95f (sonnet): T-781 S3 + G1-G7 + R1-R5 (R2 default: opening works with no tool call) -> S5 -> T-733. T-778 = person.
 - HELD: T-426 S1e 2174eee1 QA PASS 6169, review CHANGES 7121 -> fix, re-QA, merge after T-401. T-578 51f6c153 review CHANGES 6168 -> owner. T-631 CHANGES 5850 -> coordinator.
 - 16:12 OWNER PRIORITY (coordinator, T-426 5538): T-401 then T-426 FIRST. T-401 gate GREEN gate-54ba328-6502; ff only on the person's ack.
