@@ -31,7 +31,9 @@
 #                                                       value goes on stdin into the Job's Secret (deleted with the Job), the command's container
 #                                                       gets it as env by secretKeyRef (fetch does not), and the log is masked for it. Values under 8
 #                                                       characters are refused (the mask skips them); an --out file that holds a value, and any
-#                                                       compressed file (*.zip, *.gz, a trace.zip: it cannot be checked), is deleted (rc 3). A command
+#                                                       compressed file (*.zip, *.gz, a trace.zip: it cannot be checked), is deleted (rc 3); the messages name a file with a masked,
+#                                                       sanitized name (a-z A-Z 0-9 . _ / - only) and a count. --out must be new or empty (rc 2 before
+#                                                       anything runs): a failed scan wipes its contents. A command
 #                                                       that holds a value is refused: single-quote the variable ('$E2E_CF_ACCESS_CLIENT_SECRET'),
 #                                                       so the Job expands it, not your shell
 #   scripts/job-run.sh --list                           the Jobs, their chat, role and state
@@ -140,6 +142,12 @@ for n in $pool_names; do
   done
 done
 
+# S1h N3 (review 7773): with --pool-env a failed or hit scan wipes the folder's contents, so --out must be fresh: a folder that holds anything
+# (or a file) is refused here, before any kubectl call, in one line that does not show the path. Without --pool-env nothing is deleted.
+if [ -n "$pool_names" ] && [ -n "$out" ] && { [ -e "$out" ] || [ -L "$out" ]; }; then
+  { [ -d "$out" ] && [ -z "$(ls -A -- "$out" 2>/dev/null)" ]; } || die "--out: with --pool-env the folder must be new or empty (a failed scan deletes its contents); refused"
+fi
+
 # The repository: named, or the current folder's origin (its user and password part never kept or shown).
 origin=$(git remote get-url origin 2>/dev/null | sed -E 's#^(https?://)[^@/]*@#\1#' || true)
 from_origin() {
@@ -208,6 +216,7 @@ reap || true
 
 job=claudepilot-job-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')
 log=${JOB_RUN_LOG:-/tmp/job-run-$job.log}; [ -n "$out" ] || out=./job-run-artifacts/$job
+[[ $out != -* ]] || out=./$out # a name that starts with a dash is a path, never an option of mkdir, find or grep
 work=$(mktemp -d "${TMPDIR:-/tmp}/cp-job-run-XXXXXX")
 phase=setup; wd=
 # shellcheck disable=SC2317 # called by the traps
@@ -396,6 +405,15 @@ if [ -n "$artifacts" ] && [ -s "$work/art.b64" ]; then
     # Fail closed (as the fetch scan, T-401): grep 0 = found, 1 = clean, 2 or more = the scan failed: nothing is known to be clean, so every
     # file unpacked is deleted and the run is red (rc 3). The hits are listed NUL-separated into a file (a name may hold a line break, and a
     # command substitution drops NUL bytes).
+    # S1h N1 (review 7773): an artifact NAME is the command's to choose, so it may be the value, or hold a line break. Every message that names
+    # one goes through the mask first (the value becomes REDACTED, whatever the characters), then the name is cut to a-z A-Z 0-9 . _ / - (anything
+    # else, \n and \r too, becomes ?) and to 200 characters; the whole line goes through the mask again (defence in depth).
+    redact() { JR_MASK=$mask awk 'BEGIN { nt = split(ENVIRON["JR_MASK"], toks, "\n") }
+      { line = $0; for (k = 1; k <= nt; k++) { tok = toks[k]; if (length(tok) >= 8) while ((i = index(line, tok)) > 0) line = substr(line, 1, i - 1) "REDACTED" substr(line, i + length(tok)) } print line }'; }
+    # (the X keeps a trailing line break in the name: a command substitution would drop it)
+    safe_name() { local n; n=$(printf '%sX' "$1" | redact); n=${n%X}; printf '%s' "$n" | LC_ALL=C tr -c 'a-zA-Z0-9._/-' '?' | cut -c1-200; }
+    say() { printf '%s\n' "$1" | redact >&2; }
+    ndel=0
     wipe_out() { # find's list first; then, whatever find said, the folder's contents by glob (a failed find must never leave a file behind)
       while IFS= read -r -d '' f; do rm -f -- "$f"; done < "$work/all"
       ( shopt -s dotglob nullglob; rm -rf -- "$out"/* ) # a subshell on purpose: the shell options stay as they were
@@ -407,7 +425,7 @@ if [ -n "$artifacts" ] && [ -s "$work/art.b64" ]; then
       echo "job-run: ERROR: with --pool-env the artifacts could not be checked for the credentials (the scan failed): all deleted" >&2
       [ "$rc" != 0 ] || rc=3
     elif [ -s "$work/hits" ]; then
-      while IFS= read -r -d '' f; do rm -f -- "$f"; echo "job-run: ERROR: a --pool-env credential was in the artifact ${f//[$'\n\r']/?}: deleted" >&2; done < "$work/hits"
+      while IFS= read -r -d '' f; do rm -f -- "$f"; ndel=$((ndel + 1)); say "job-run: ERROR: a --pool-env credential was in the artifact $(safe_name "$f"): deleted"; done < "$work/hits"
       [ "$rc" != 0 ] || rc=3
     fi
     # A compressed file (a Playwright trace.zip, the report's data/*.zip, a .gz) cannot be scanned as plain bytes, and a value inside it would
@@ -422,8 +440,9 @@ if [ -n "$artifacts" ] && [ -s "$work/art.b64" ]; then
         *.zip|*.gz|*.tgz|*.bz2|*.xz|*.zst|*.br|*.7z|*.jar) z=1 ;;
         *) case "$(head -c 6 -- "$f" 2>/dev/null | od -An -tx1 | tr -d ' \n')" in 504b0304*|504b0506*|1f8b*|425a68*|fd377a585a00|28b52ffd*) z=1 ;; *) z=0 ;; esac ;;
       esac
-      if [ "$z" = 1 ]; then rm -f -- "$f"; echo "job-run: ERROR: with --pool-env a compressed artifact cannot be checked for the credentials: $f: deleted" >&2; [ "$rc" != 0 ] || rc=3; fi
+      if [ "$z" = 1 ]; then rm -f -- "$f"; ndel=$((ndel + 1)); say "job-run: ERROR: with --pool-env a compressed artifact cannot be checked for the credentials: $(safe_name "$f"): deleted"; [ "$rc" != 0 ] || rc=3; fi
     done < "$work/all"
+    [ "$ndel" -eq 0 ] || say "job-run: ERROR: --pool-env: $ndel artifact file(s) deleted"
   fi
 fi
 node=$(pod_get '.items[0].spec.nodeName' "$pj")

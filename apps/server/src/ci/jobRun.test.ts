@@ -1032,6 +1032,104 @@ test('T-426 S1g C3 --pool-env: scan failed AND find failed: every unpacked artif
   assert.ok(!existsSync(join(out, 'reports/junit.xml')), 'nothing is left although find failed');
 });
 
+// S1h: artifacts of a Job whose files are named by the command. `files` maps a name under reports/ to its bytes.
+const poolArtifacts = (w: ReturnType<typeof world>, secret: string, files: Record<string, string | Buffer>, extraArgs: string[] = []) => {
+  const art = join(w.root, `art-${hex(3)}`);
+  mkdirSync(join(art, 'reports'), { recursive: true });
+  for (const [n, b] of Object.entries(files)) writeFileSync(join(art, 'reports', n), b);
+  writeFileSync(join(w.root, 'scenario.json'), JSON.stringify({ rc: 0, log: artifactLog(art) }));
+  const out = join(w.root, `out-${hex(3)}`);
+  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--pool-env', POOL_SECRET, '--artifacts', 'reports', '--out', out, ...extraArgs, '--', 'true'], { [POOL_SECRET]: secret });
+  return { r, out };
+};
+
+// S1h N1 (review 7773): a file NAMED after the value (plain, or with characters the sanitizer would turn into ?) must not put the value in
+// stdout, stderr or the log; a line break or a CR in a name must not make a line of its own. Kills a mutant that drops the sanitizer or the mask.
+test('T-426 S1h N1 --pool-env: an artifact named after the value leaks it nowhere (stdout, stderr, log), hit or compressed; names are sanitized', () => {
+  for (const secret of [`cs${hex(20)}`, `cs${hex(10)}+${hex(6)}=`]) {
+    const w = world();
+    const gz = spawnSync('gzip', ['-c'], { input: 'nothing\n' }).stdout;
+    const { r, out } = poolArtifacts(w, secret, { [`${secret}.txt`]: `x ${secret}\n`, [`${secret}.gz`]: gz, 'clean.xml': '<testsuites tests="1"/>' });
+    assert.equal(r.code, 3, r.out);
+    assert.ok(!r.out.includes(secret), 'the value is not in stdout or stderr');
+    assert.ok(!w.log().includes(secret), 'the value is not in the log');
+    assert.match(r.out, /a --pool-env credential was in the artifact \S*REDACTED\S*\.txt: deleted/);
+    assert.match(r.out, /a compressed artifact cannot be checked for the credentials: \S*REDACTED\S*\.gz: deleted/);
+    assert.match(r.out, /--pool-env: 2 artifact file\(s\) deleted/);
+    assert.ok(existsSync(join(out, 'reports/clean.xml')));
+  }
+});
+
+test('T-426 S1h N1 --pool-env: a name with a line break, a CR or a dash first is shown as ? and a forged line stays inside the message', () => {
+  const w = world();
+  const secret = `cs${hex(20)}`;
+  const gz = spawnSync('gzip', ['-c'], { input: 'nothing\n' }).stdout;
+  const { r, out } = poolArtifacts(w, secret, {
+    'a\nFORGED job-run: ok.txt': `x ${secret}\n`, 'c\rd.gz': gz, '\n': `x ${secret}\n`, '-rf': `x ${secret}\n`, '--version.txt': `x ${secret}\n`, 'clean.xml': '<testsuites tests="1"/>',
+  });
+  assert.equal(r.code, 3, r.out);
+  assert.ok(!r.out.includes(secret));
+  assert.match(r.out, /in the artifact \S*reports\/a\?FORGED\?job-run\?\?ok\.txt: deleted/);
+  assert.match(r.out, /cannot be checked for the credentials: \S*reports\/c\?d\.gz: deleted/);
+  assert.match(r.out, /in the artifact \S*reports\/\?: deleted/);
+  assert.ok(!/^FORGED/m.test(r.out) && !r.out.includes('\r'), 'no line of its own, no CR');
+  for (const l of r.out.split('\n').filter((x) => x.includes('artifact'))) assert.match(l, /^[A-Za-z0-9 .:_()/?*-]*$/, `a plain line: ${l}`);
+  for (const n of ['-rf', '--version.txt']) {
+    assert.ok(r.out.includes(`reports/${n}: deleted`), `${n} is named and deleted`);
+    assert.ok(!existsSync(join(out, 'reports', n)));
+  }
+  assert.ok(!existsSync(join(out, 'reports', '\n')) && !existsSync(join(out, 'reports', 'a\nFORGED job-run: ok.txt')));
+  assert.ok(existsSync(join(out, 'reports/clean.xml')));
+});
+
+// S1h N2 (review 7773): the compressed-scan branch. The scan finds nothing (grep exit 1, or 0 with no hit), then the listing for the compressed
+// check fails: nothing is known to be clean, so everything is deleted and the run is red. Kills a mutant without wipe_out in that branch.
+test('T-426 S1h N2 --pool-env: the scan is clean but find fails on -print0: fail closed, every artifact deleted, rc 3', () => {
+  for (const grepExit of [0, 1]) {
+    const w = world();
+    const secret = `cs${hex(20)}`;
+    writeFileSync(join(w.root, 'bin/grep'), `#!/bin/bash\nif [ "$1" = -rlaFZ ]; then exit ${grepExit}; fi\nexec /bin/grep "$@"\n`);
+    const realFind = spawnSync('sh', ['-c', 'command -v find'], { encoding: 'utf8' }).stdout.trim();
+    writeFileSync(join(w.root, 'bin/find'), `#!/bin/bash\nfor a in "$@"; do [ "$a" = -print0 ] && { echo "find: stub failed" >&2; exit 1; }; done\nexec ${realFind} "$@"\n`);
+    chmodSync(join(w.root, 'bin/grep'), 0o755); chmodSync(join(w.root, 'bin/find'), 0o755);
+    const { r, out } = poolArtifacts(w, secret, { 'junit.xml': '<testsuites tests="1"/>', '.hidden': 'x' });
+    assert.equal(r.code, 3, `grep exit ${grepExit}: ${r.out}`);
+    assert.match(r.out, /could not be listed to check for compressed files: all deleted/);
+    assert.ok(!existsSync(join(out, 'reports/junit.xml')) && !existsSync(join(out, 'reports/.hidden')), 'nothing is left');
+    assert.ok(!r.out.includes(secret));
+  }
+});
+
+// S1h N3 (review 7773): --pool-env wipes --out on a failed scan, so a folder that holds anything is refused before any kubectl call.
+test('T-426 S1h N3 --pool-env: a non-empty --out is refused in one plain line (rc 2) before anything runs and is left as it was; empty or new passes', () => {
+  const w = world();
+  const secret = `cs${hex(20)}`;
+  const out = join(w.root, 'out');
+  mkdirSync(out);
+  writeFileSync(join(out, 'keep.txt'), 'mine');
+  const args = ['--repo', 'claudepilot', '--ref', 'main', '--pool-env', POOL_SECRET, '--artifacts', 'reports', '--out', out, '--', 'true'];
+  const r = w.run(args, { [POOL_SECRET]: secret });
+  assert.equal(r.code, 2, r.out);
+  assert.equal(r.out.trim().split('\n').length, 1, r.out);
+  assert.match(r.out, /--out: with --pool-env the folder must be new or empty/);
+  assert.ok(!r.out.includes(out), 'the path is not shown');
+  assert.equal(w.calls(), '', 'refused before any kubectl call');
+  assert.equal(readFileSync(join(out, 'keep.txt'), 'utf8'), 'mine');
+  // A file in the place of the folder is refused too.
+  const file = join(w.root, 'afile');
+  writeFileSync(file, 'x');
+  assert.equal(w.run(args.map((a) => (a === out ? file : a)), { [POOL_SECRET]: secret }).code, 2);
+  // Without --pool-env nothing is deleted, so a used folder is allowed (as before).
+  const plain = w.run(['--repo', 'claudepilot', '--ref', 'main', '--artifacts', 'reports', '--out', out, '--', 'true']);
+  assert.equal(plain.code, 0, plain.out);
+  // An empty existing folder is fine.
+  const empty = join(w.root, 'empty');
+  mkdirSync(empty);
+  const ok = w.run(args.map((a) => (a === out ? empty : a)), { [POOL_SECRET]: secret });
+  assert.equal(ok.code, 0, ok.out);
+  assert.ok(existsSync(join(empty, 'reports/junit.xml')));
+});
+
 test('T-426 --pool-env: a base64 copy of a value in an artifact is NOT caught (a known limit, docs/dev-session.md); the plain value is', () => {
   const w = world();
   const secret = `cs${hex(20)}`;
