@@ -9,7 +9,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   T-732, T-610 r3, T-739 B (mig 383), T-723 S3c. Coordinator told on T-731.
 - DEPLOY 233 LIVE (portal 2026.10.16-2, b22). Its Releases/ note exists (coordinator: my search came early) -> QA UI re-reads 4
   notes, close T-591 on PASS. Live checks: coordinator runs them ("Coordinator live check" comments), close each on PASS.
-  T-697 CLOSED (gate + QA b33f46ad). DEPLOY 243 RUNNING (coordinator) from eb59ab42 = b23. Ack 8237.
+  CLOSED on coordinator live PASS: T-697, T-739 (A split to T-812, coordinator), T-732, T-723. T-574 re-check after 10-17
+  15:00Z (8265). T-376 open for S5. DEPLOY 243 RUNNING (coordinator) from eb59ab42 = b23. Ack 8237.
 - BATCH 24B GATING d9df1221 (wip/main-d9df122, worktree premerge-b24b, job-out/gate-b24b.log; NO status push until done):
   b24 0c86256e (RED: jobRunCreds marker, 8224) + T-401 S2c c0c0ce7d (test only, Job fb946901 58/58; QA UI QAs it).
   On green + S2c QA: ff integration, tell coordinator on T-731. T-591 QA FAIL (backfill range base, store.ts:608; 8250).
@@ -27,7 +28,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - IMPL 46632d91 (respawned, sonnet; old 7cc1b2f5 ended after T-675 R2b DONE 5d38ab69): T-772 S2 on ticket/T-772-s2 from
   1e1e0ba1 (7916 items 1-5 + 7599 sweep; QA plan 7963).
 - BE INFRA 16c2494f (sonnet): T-401 S2c DONE c0c0ce7d; T-611 S2b DONE 96d7c148 (Job c2e54e28 71/71, mutant 5662dc0a 4 red;
-  8234) -> QA. Now T-736 S3f (8200) -> T-611 integration merge after b24b lands (8207) -> T-524 S3c + T-733 S5 -> T-612 S1.
+  8234) -> QA. Now T-736 S3f (8200) -> T-611 integration merge after b24b lands (8207) -> T-610 mark 2 rows (append-only
+  migration + test, 8267) -> T-524 S3c + T-733 S5 -> T-612 S1.
 - BACKEND 3484bd4d: built T-416 S2b f5b96b25, T-675 R2c f7b4e34a, T-781 S8b 0ed23dca; 3 Jobs at once (told: one per agent),
   none reported, cluster queue long. Then T-537 (docs).
 - AFTER T-401: T-426 S1h/S1e; T-379 S2 3f11b28 behind it. T-578 -> owner. T-631 -> coordinator (after this batch).
