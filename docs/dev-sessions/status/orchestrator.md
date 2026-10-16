@@ -1,8 +1,9 @@
-# orchestrator status (2026-10-16 05:20 UTC, session 355881a3, continuation of de232389)
+# orchestrator status (2026-10-16 05:30 UTC, session 355881a3, continuation of de232389)
 
 Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-10-15 DONE batches 1-7: see 4fbab374). Hand-overs: ab99b45, bb58413, 639202e.
 
 ## DONE
+- GATING 2d109634 (batch 16): T-710 8107098a (QA UI PASS WITH GAPS ae9b7dae; mutant caught 5b304d1c; 24 px desktop -> T-724).
 - MERGED be431d6a (batch 15): T-675 65d93dea + T-549 S2 5d97103d (QA BE 2 PASS WITH GAPS; T-723); gate GREEN gate-9f5afa1
   (actions.test timer flaked in suite, passed alone: T-697's case).
 - MERGED de3a3515 (batch 14): T-376 S3 (QA UI 6797; open S4 6798), gate-d0975fa green.
@@ -18,9 +19,9 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - QA PERF 7e4879c7: T-697 29b4ce58 (test-only actions.test fix; limits + G3 not reproduced; 30x under load asked; lead
   quick-check PASS 12295a2b). Then T-524 S3b 23330c28 (test-only +25: name pin, no-patch-on-top-fail; src/ci 208/208 job
   54784775; mutants D,F killed f69b2de3). Live re-read patch NOT verified. 6775 was WRONG (rule set at creation, 78%): 6788.
-- QA UI 8b13bb5a: T-710 re-sweep of 8107098a (impl DONE: ci-sweep.mjs, 44 px steps/picker, focus ring; job 3c8d8a0f rc 0;
-  shots not found); lead quick-check PASS 95f9a77d.
-- QA BE 2 42e5408f: T-251 verify at 7dcf19f8 (lane audit: all 5 reqs already built, no code, nothing run; mutants M1-M6), then T-574 S3.
+- QA UI 8b13bb5a: standby -> T-376 S4.
+- QA BE 2 42e5408f: standby -> T-574 S3. T-251 (no code) PASS WITH GAPS: 255/255 job 45e984db, M1-M6 killed 8870ab0c; gaps:
+  claudeusage.ts:208 early return untested/redundant, mid-turn limit path untested -> T-251 S2 for BE Infra after T-610.
 - IMPL lane 0d799c90 (sonnet, rossi; bccb756f ended after T-710) T-376 S4 on ticket/T-376-s4 from be431d6a: createApp wiring
   test + 4x CPU, long tasks, DOM/heap, older-page render budgets.
 - BE INFRA lane c305a138 (sonnet, satria; 4d010bea ended after T-251 audit) T-610 on ticket/T-610-cost-attribution from be431d6a.
@@ -75,5 +76,5 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 7. T-472 live re-check (needs portal_status), T-422, T-147, T-438, T-425, T-436, T-437, T-432, T-382, T-377, T-386, T-409, T-402, T-398,
    T-399, T-370 HOLD, T-371..T-374, T-363, T-451, T-470, T-507, T-508, T-512, T-520; T-404 open till deployed.
 
-LESSONS: node --test, never vitest; a gate-done notice needs action; dontAsk workers cannot read /tmp, merge, gate or wait, and Bash only in their spawn worktree (new branch = new worker); whole
+LESSONS: reply_of = LATEST reply only (verdict must be the last reply); node --test, never vitest; a gate-done notice needs action; dontAsk workers cannot read /tmp, merge, gate or wait, and Bash only in their spawn worktree (new branch = new worker); whole
 test folders (T-574 red 10-15); integration moved during a gate = merge + re-gate (pack goes stale); FULL hashes; trailers in one block; status via Edit/Write ONLY; ancestor check before ff.
