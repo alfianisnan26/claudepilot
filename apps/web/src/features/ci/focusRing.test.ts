@@ -83,7 +83,7 @@ function gluedVariant(line: string): boolean {
   return false;
 }
 
-const GLUED: Array<(line: string) => boolean> = [(line) => /outline-hidden(?=[a-z])/.test(line), gluedVariant];
+const GLUED: Array<(line: string) => boolean> = [];
 
 function isGlued(line: string): boolean {
   return GLUED.some((detect) => detect(line));
