@@ -2946,6 +2946,80 @@ test('usage (T-610): a restart whose tokens count again from zero but whose cost
   }
 });
 
+/** T-610 helpers: a turn whose result carries the models' running totals. */
+const mu = (input: number, cost: number) => ({ inputTokens: input, outputTokens: 1, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, costUSD: cost });
+async function modelTurn(s: Awaited<ReturnType<typeof liveSession>>, total: number, modelUsage: Record<string, unknown>): Promise<void> {
+  s.tail.push(line({ type: 'result', subtype: 'success', total_cost_usd: total, duration_ms: 10, usage: { input_tokens: 1, output_tokens: 1 }, modelUsage, is_error: false, session_id: s.id }));
+  s.tail.push(ok((await s.take('get_usage')).id, USAGE_API_KEY));
+}
+const usageRows = (s: Awaited<ReturnType<typeof liveSession>>) =>
+  s.store.db!.prepare('SELECT model, input_tokens AS i, cost_usd AS c FROM chat_usage ORDER BY id').all() as { model: string; i: number; c: number }[];
+
+test('usage (T-610): a model missing from one result is not booked whole on the next', async () => {
+  const s = await liveSession();
+  try {
+    await modelTurn(s, 0.15, { 'claude-opus-5-5': mu(100, 0.1), 'claude-haiku-5-5': mu(500, 0.05) });
+    await modelTurn(s, 0.25, { 'claude-opus-5-5': mu(160, 0.2) }); // the sub-agent's model is not in this result
+    await modelTurn(s, 0.29, { 'claude-opus-5-5': mu(200, 0.24), 'claude-haiku-5-5': mu(500, 0.05) }); // and is back, unchanged
+    await until(() => s.controller.history(s.id).filter((e) => e.kind === 'result').length === 3);
+    const rows = usageRows(s);
+    const haiku = rows.filter((r) => r.model === 'claude-haiku-5-5');
+    assert.deepEqual(haiku.map((r) => r.i), [500], `haiku counted once: ${JSON.stringify(rows)}`);
+    assert.equal(rows.length, 4);
+    assert.equal(rows[3]!.i, 40, 'the third turn is opus’s change only');
+  } finally {
+    await s.done();
+  }
+});
+
+test('usage (T-610): the models’ costs of a turn never add up to more than the turn’s own cost', async () => {
+  const s = await liveSession();
+  try {
+    await modelTurn(s, 0.1, { 'claude-opus-5-5': mu(100, 0.1) });
+    // The model's cost jumps by 96.3 while the process's total moved by 0.1: the total is the truth.
+    await modelTurn(s, 0.2, { 'claude-opus-5-5': mu(200, 96.4) });
+    await until(() => s.controller.history(s.id).filter((e) => e.kind === 'result').length === 2);
+    const rows = usageRows(s);
+    assert.ok(Math.abs(rows[1]!.c - 0.1) < 1e-6, `capped to the turn’s cost: ${rows[1]!.c}`);
+    assert.equal(rows[1]!.i, 100, 'tokens are the change');
+  } finally {
+    await s.done();
+  }
+});
+
+test('usage (T-610): the cap does not scale real costs down when a total started again (the turn figure is a guess then)', async () => {
+  const s = await liveSession();
+  try {
+    await modelTurn(s, 5, { 'claude-opus-5-5': mu(1000, 5) });
+    // A process that counts from zero again spent 7: opus 4 (lower than the 5 before: a new count), haiku 3 (new). The total (7) is above the
+    // old base (5), so the turn figure reads 2, smaller than what was spent.
+    await modelTurn(s, 7, { 'claude-opus-5-5': mu(200, 4), 'claude-haiku-5-5': mu(300, 3) });
+    await until(() => s.controller.history(s.id).filter((e) => e.kind === 'result').length === 2);
+    const rows = usageRows(s).slice(1);
+    assert.equal(rows.length, 2);
+    assert.ok(Math.abs(rows.reduce((t, r) => t + r.c, 0) - 7) < 1e-6, `real costs kept: ${JSON.stringify(rows)}`);
+  } finally {
+    await s.done();
+  }
+});
+
+test('usage (T-610): a row marked suspect is out of the Usage charts and stays in the table', async () => {
+  const s = await liveSession();
+  try {
+    await modelTurn(s, 0.1, { 'claude-opus-5-5': mu(100, 0.1) });
+    await modelTurn(s, 0.2, { 'claude-opus-5-5': mu(300, 0.2) });
+    await until(() => s.controller.history(s.id).filter((e) => e.kind === 'result').length === 2);
+    assert.equal(s.controller.usage('1h').totals.requests, 2);
+    s.store.db!.exec(`UPDATE chat_usage SET kind = 'suspect' WHERE input_tokens = 200`);
+    const t = s.controller.usage('1h').totals;
+    assert.equal(t.requests, 1);
+    assert.equal(t.input, 100);
+    assert.equal(usageRows(s).length, 2, 'the row is kept as evidence');
+  } finally {
+    await s.done();
+  }
+});
+
 test('usage metrics: each turn is stored per model from the change in the running totals, sub-agents included, and charts add them up', async () => {
   const s = await liveSession();
   try {

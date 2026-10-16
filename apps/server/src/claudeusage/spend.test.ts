@@ -96,6 +96,21 @@ test('a request recorded without a Claude is Default’s; a Claude that was remo
   assert.deepEqual(index.resolve({ workspaceId: 'docker/zzz', claudeId: '' }), { key: 'default:docker/zzz', claudeId: '', name: 'Default', workspaceId: 'docker/zzz' });
 });
 
+test('T-610: the reader leaves out a row marked suspect (a running total booked as one request)', async () => {
+  const h = await usageHarness();
+  try {
+    seedUsage(h.store, [
+      { at: at(9), claude: null, input: 7, cost: 0.25 },
+      { at: at(10), claude: null, input: 8, cost: 96.31 },
+    ]);
+    h.store.db!.exec(`UPDATE chat_usage SET kind = 'suspect' WHERE input_tokens = 8`);
+    const r = new SpendReader(h.store);
+    assert.deepEqual(r.rowsBetween(at(0)).map((x) => x.input), [7]);
+  } finally {
+    h.done();
+  }
+});
+
 test('the reader: rows in time order with a null Claude read as empty, the history starts at the first row, and a store without the table reads as nothing', async () => {
   const h = await usageHarness();
   try {

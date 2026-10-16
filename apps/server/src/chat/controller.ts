@@ -4974,12 +4974,14 @@ export class ChatController {
       }
       // What this turn cost: the change in the process's running total (a reattached reader, after a
       // portal restart, takes the last stored total; a total lower than that is a new process's).
+      let costReset = false; // T-610: the total started again, so the turn's cost is a guess (the cap leaves it)
       if (ev.kind === 'result' && ev.costUsd !== undefined) {
         const base = this.#costBase.get(sessionId) ?? this.#chat.lastResultCost(sessionId) ?? 0;
-        ev.turnCostUsd = ev.costUsd >= base ? ev.costUsd - base : ev.costUsd;
+        costReset = ev.costUsd < base;
+        ev.turnCostUsd = costReset ? ev.costUsd : ev.costUsd - base;
         this.#costBase.set(sessionId, ev.costUsd);
       }
-      if (ev.kind === 'result') this.#recordTurn(sessionId, ev);
+      if (ev.kind === 'result') this.#recordTurn(sessionId, ev, !costReset);
       // Name each result from its own call (parallel calls finish in any order).
       if (ev.kind === 'tool_use' && ev.toolUseId && ev.toolName) this.#calls(sessionId).set(ev.toolUseId, ev.toolName);
       // The first use of a portal tool in a session that has them pre-allowed says so, once and quietly: nothing asked.
@@ -5762,19 +5764,24 @@ export class ChatController {
    * result's tokens become that sum too (Claude Code's own `usage` counts the main agent only). Runs
    * before the result is stored, so "since the last result" means this turn.
    */
-  #recordTurn(sessionId: string, ev: StoredEvent): void {
+  #recordTurn(sessionId: string, ev: StoredEvent, turnCostTrusted = true): void {
     try {
       const row = this.#chat.row(sessionId);
       if (!row) return;
       const base = this.#modelBase.get(sessionId) ?? new Map((this.#chat.lastResultModelTotals(sessionId) ?? []).map((m) => [m.model, m]));
       // T-610: the change since the last result, one dimension at a time (usageDelta.ts); the models' costs never exceed the turn's own.
+      // The turn's own cost caps the models' costs only when it is a true change: a total that started again (the whole process's, or one
+      // model's) may be lower than what this turn really cost, and the cap would scale the real costs down to it.
+      let trusted = turnCostTrusted;
       const turn: ModelTotals[] = [];
       for (const cur of ev.modelTotals ?? []) {
-        const d = modelDelta(cur, base.get(cur.model));
+        const was = base.get(cur.model);
+        if (was && cur.costUsd + 1e-9 < was.costUsd) trusted = false;
+        const d = modelDelta(cur, was);
         if (d.input || d.output || d.cacheRead || d.cacheWrite || d.costUsd > 0) turn.push(d);
       }
       if (ev.modelTotals?.length) this.#modelBase.set(sessionId, mergeBase(base, ev.modelTotals));
-      turn.splice(0, turn.length, ...capToTurnCost(turn, ev.turnCostUsd));
+      if (trusted) turn.splice(0, turn.length, ...capToTurnCost(turn, ev.turnCostUsd));
       if (turn.length) {
         ev.tokens = turn.reduce(
           (t, m) => ({ input: t.input + m.input, output: t.output + m.output, cacheRead: t.cacheRead + m.cacheRead, cacheWrite: t.cacheWrite + m.cacheWrite }),
