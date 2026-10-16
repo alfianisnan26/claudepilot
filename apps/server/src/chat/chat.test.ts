@@ -2832,15 +2832,15 @@ test('transferConversation: what you sent and Claude’s replies with the tools 
   assert.ok(!transferConversation([ev({ kind: 'user', text: 'key sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' })]).text.includes('sk-ant-api03-AAAA'));
 });
 
-test('T-781 transferFileConversation: a 300-message chat lands complete in the context file; a message is clipped at the file’s 20,000, the total is bounded and the newest are kept', () => {
+test('T-781 transferFileConversation: a 150-message chat lands complete in the context file; a message is clipped at the file’s 20,000, the total is bounded and the newest are kept', () => {
   let seq = 0;
   const ev = (e: Omit<ChatEvent, 'seq' | 'at'>): ChatEvent => ({ seq: ++seq, at: '2026-10-16T12:00:00Z', ...e });
-  // 300 messages of 6,000 characters: the opening's budget and 4,000 clip would cut this, the file must not.
-  const chat = Array.from({ length: 300 }, (_, i) => ev({ kind: i % 2 ? 'assistant' : 'user', text: `${i} ${'x'.repeat(6000)} end${i}` }));
+  // 150 messages of 6,000 characters (0.9 M, under the file's 1 M): the opening's budget and 4,000 clip would cut this, the file must not.
+  const chat = Array.from({ length: 150 }, (_, i) => ev({ kind: i % 2 ? 'assistant' : 'user', text: `${i} ${'x'.repeat(6000)} end${i}` }));
   const whole = transferFileConversation(chat);
-  assert.equal(whole.messages, 300);
+  assert.equal(whole.messages, 150);
   assert.equal(whole.truncated, false);
-  for (let i = 0; i < 300; i++) assert.ok(whole.text.includes(` end${i}`), `message ${i} is whole`);
+  for (let i = 0; i < 150; i++) assert.ok(whole.text.includes(` end${i}`), `message ${i} is whole`);
   // The opening's own copy is still bounded and clipped.
   assert.ok(transferConversation(chat, 14_000).messages < 10);
 
