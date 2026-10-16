@@ -14,7 +14,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 ## IN FLIGHT (6 of 6, D-71)
   Lanes' ticket_comment refused on unassigned tickets (T-341, T-549, T-675): verdicts live in their replies + this file.
 - QA PERF 7e4879c7: T-697 29b4ce58 (test-only: actions.test settled() yields a turn; limits + crewMcp G3 not reproduced;
-  G3 failed in 7d87d90 which predates the wait at :773). Asked: 30x under load with/without fix. Lead quick-check timed out (queue).
+  G3 failed in 7d87d90 which predates the wait at :773). Asked: 30x under load with/without fix. Lead quick-check PASS (job 12295a2b).
 - QA UI 8b13bb5a: T-710 sweep now; T-376 S3 first when it is DONE. QA BE 2 42e5408f idle: next T-549 S2.
 - IMPL 0fd43a51 (sonnet) T-376 S3 on ticket/T-376-s3 from wip/qa-t376-2611d17: find+cut ~14 MB on open, Show all /
   oldest page, harness >500 KB log + open-time budget (FAIL 6542, decision 6543).
