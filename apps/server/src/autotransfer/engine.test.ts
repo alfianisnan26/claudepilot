@@ -250,6 +250,628 @@ test('FR14: a failed move leaves the chat where it was, records failed, pauses; 
   r.engine.stop();
 });
 
+const EXHAUSTED = () => [usage('work', 'Work', [win('session', 100)]), usage('home', 'Home', [win('session', 60)])];
+
+async function conflictRig(claudes = EXHAUSTED) {
+  const r = await rig(AUTO, claudes);
+  r.chat.fail = 'This session can’t take it now.';
+  r.chat.failCode = 'CONFLICT';
+  return r;
+}
+
+test('T-781: a CONFLICT on an exhausted chat retries in 30 s, moves, is not a failure, and its message is logged', async () => {
+  const r = await conflictRig();
+  r.chat.failTimes = 1;
+  const logged: string[] = [];
+  const orig = console.error;
+  console.error = (...a: unknown[]) => void logged.push(a.join(' '));
+  try {
+    r.chat.turnEnds('s1');
+    await r.engine.settled();
+    assert.equal(r.chat.moves.length, 1);
+    assert.equal(r.chat.get('s1')!.claudeId, 'work');
+    // R4: the retry leaves one info row in the trail (`deferred`, `busy`).
+    assert.deepEqual(r.auto.events('u_a', { kinds: ['deferred'] }).map((e) => e.code), ['busy']);
+    r.clock.advance(0.49); // not yet
+    await r.engine.settled();
+    assert.equal(r.chat.moves.length, 1);
+    r.clock.advance(0.02); // 30 s
+    await r.engine.settled();
+  } finally {
+    console.error = orig;
+  }
+  assert.equal(r.chat.moves.length, 2);
+  assert.equal(r.chat.get('s1')!.claudeId, 'home');
+  assert.equal(r.auto.events('u_a', { kinds: ['failed'] }).length, 0, 'a CONFLICT is not a failure');
+  assert.ok(logged.some((l) => l.includes('can’t take it now')), 'the message is logged');
+  r.engine.stop();
+});
+
+test('T-781: a CONFLICT on a source that is only low keeps the normal pause (minPauseMin)', async () => {
+  const r = await conflictRig(() => [usage('work', 'Work', [win('session', 92)]), usage('home', 'Home', [win('session', 60)])]);
+  r.chat.turnEnds('s1');
+  await r.engine.settled();
+  assert.equal(r.auto.events('u_a', { kinds: ['failed'] }).length, 1);
+  assert.equal((await r.engine.state('s1', 'u_a')).pausedUntil, at(5));
+  r.clock.advance(1);
+  await r.engine.settled();
+  assert.equal(r.chat.moves.length, 1, 'no retry at 30 s or 1 min');
+  r.engine.stop();
+});
+
+test('T-781: after a CONFLICT a chat moved by someone else is re-evaluated: no second move', async () => {
+  const r = await conflictRig();
+  r.chat.turnEnds('s1');
+  await r.engine.settled();
+  assert.equal(r.chat.moves.length, 1);
+  r.chat.personMoves('s1', 'spare');
+  r.chat.fail = null;
+  r.clock.advance(0.6);
+  await r.engine.settled();
+  assert.equal(r.chat.moves.length, 1);
+  assert.equal(r.chat.get('s1')!.claudeId, 'spare');
+  r.engine.stop();
+});
+
+test('T-781: the CONFLICT retries are capped at 5, then the failure is recorded with the pause', async () => {
+  const r = await conflictRig();
+  const orig = console.error;
+  console.error = () => {};
+  try {
+    r.chat.turnEnds('s1');
+    await r.engine.settled();
+    // Stop at the first recorded failure (a tick may add an attempt on its own; each attempt counts the same).
+    for (let i = 0; i < 10 && !r.auto.events('u_a', { kinds: ['failed'] }).length; i++) {
+      r.clock.advance(0.51);
+      await r.engine.settled();
+    }
+  } finally {
+    console.error = orig;
+  }
+  assert.equal(r.auto.events('u_a', { kinds: ['failed'] }).length, 1);
+  assert.equal(r.chat.moves.length, 6, 'the first try and five retries, then the failure');
+  assert.ok((await r.engine.state('s1', 'u_a')).pausedUntil, 'the normal pause is set');
+  r.engine.stop();
+});
+
+test('T-781: the CONFLICT count is forgotten when the chat ends: a chat of the same id starts again at zero (no growth, no inherited cap)', async () => {
+  const r = await conflictRig();
+  const orig = console.error;
+  console.error = () => {};
+  try {
+    r.chat.turnEnds('s1'); // one CONFLICT counted
+    await r.engine.settled();
+    assert.equal(r.chat.moves.length, 1);
+    r.chat.ends('s1');
+    await r.engine.settled();
+    r.chat.turnEnds('s1'); // the same id again, idle
+    await r.engine.settled();
+    for (let i = 0; i < 12 && !r.auto.events('u_a', { kinds: ['failed'] }).length; i++) {
+      r.clock.advance(0.51);
+      await r.engine.settled();
+    }
+  } finally {
+    console.error = orig;
+  }
+  assert.equal(r.auto.events('u_a', { kinds: ['failed'] }).length, 1);
+  assert.equal(r.chat.moves.length, 7, 'one attempt before the end, then the first try and five retries from zero');
+  r.engine.stop();
+});
+
+test('T-781: a deleted chat (a `removed` message) reaches the same forgetting: a new chat of that id starts at zero', async () => {
+  const r = await conflictRig();
+  const orig = console.error;
+  console.error = () => {};
+  try {
+    r.chat.turnEnds('s1'); // one CONFLICT counted
+    await r.engine.settled();
+    assert.equal(r.chat.moves.length, 1);
+    r.chat.removes('s1');
+    await r.engine.settled();
+    r.chat.sessions.set('s1', chatSession('s1'));
+    r.chat.turnEnds('s1');
+    await r.engine.settled();
+    for (let i = 0; i < 12 && !r.auto.events('u_a', { kinds: ['failed'] }).length; i++) {
+      r.clock.advance(0.51);
+      await r.engine.settled();
+    }
+  } finally {
+    console.error = orig;
+  }
+  assert.equal(r.chat.moves.length, 7, 'one attempt before the removal, then the first try and five retries from zero');
+  r.engine.stop();
+});
+
+test('T-781: a successful move clears the CONFLICT count: a new exhausted episode gets the full five retries', async () => {
+  const r = await conflictRig();
+  r.chat.failTimes = 3;
+  const orig = console.error;
+  console.error = () => {};
+  try {
+    r.chat.turnEnds('s1'); // 3 CONFLICTs, then the 4th try moves
+    await r.engine.settled();
+    for (let i = 0; i < 10 && r.chat.get('s1')!.claudeId === 'work'; i++) {
+      r.clock.advance(0.51);
+      await r.engine.settled();
+    }
+    assert.equal(r.chat.get('s1')!.claudeId, 'home');
+    assert.equal(r.chat.moves.length, 4);
+    // A new episode: the chat is back on the exhausted Claude and the moves conflict again.
+    r.chat.personMoves('s1', 'work');
+    r.chat.fail = 'This session can’t take it now.';
+    r.chat.failCode = 'CONFLICT';
+    r.chat.turnEnds('s1');
+    await r.engine.settled();
+    for (let i = 0; i < 12 && !r.auto.events('u_a', { kinds: ['failed'] }).length; i++) {
+      r.clock.advance(0.51);
+      await r.engine.settled();
+    }
+  } finally {
+    console.error = orig;
+  }
+  assert.equal(r.auto.events('u_a', { kinds: ['failed'] }).length, 1);
+  assert.equal(r.chat.moves.length, 10, 'four before, then the first try and five retries (a stale count of 3 would stop at 7)');
+  r.engine.stop();
+});
+
+test('T-781: inside the 30 s retry window the tick adds no attempt', async () => {
+  const r = await conflictRig();
+  const orig = console.error;
+  console.error = () => {};
+  try {
+    r.chat.turnEnds('s1');
+    await r.engine.settled();
+    assert.equal(r.chat.moves.length, 1);
+    await r.engine.tick(); // what the 2-minute tick does
+    await r.engine.settled();
+    assert.equal(r.chat.moves.length, 1, 'the tick waits for the retry timer');
+    r.chat.fail = null;
+    r.clock.advance(0.51); // the retry timer still works after a blocked tick
+    await r.engine.settled();
+  } finally {
+    console.error = orig;
+  }
+  assert.equal(r.chat.moves.length, 2);
+  assert.equal(r.chat.get('s1')!.claudeId, 'home');
+  r.engine.stop();
+});
+
+const STUCK = (over: Parameters<typeof chatSession>[1] = {}) => chatSession('s1', { state: 'working', ...over });
+
+test('T-781 hard move: exhausted, still working, no stored event for 3 minutes: the turn is stopped and the chat moves with the handoff skipped, then continues', async () => {
+  const r = await rig(AUTO, EXHAUSTED);
+  r.chat.sessions.set('s1', STUCK());
+  r.chat.stored('s1', [{ at: at(-4) }]); // the limit message, 4 minutes ago on the fake clock
+  await r.engine.evaluate('s1');
+  await r.engine.settled();
+  assert.deepEqual(r.chat.interrupted, ['s1']);
+  assert.deepEqual(r.chat.moves, [{ id: 's1', to: 'home', handoff: 'skip' }]);
+  assert.equal(r.chat.get('s1')!.claudeId, 'home');
+  assert.equal(r.auto.events('u_a', { kinds: ['moved'] })[0]!.reason, 'exhausted');
+  assert.equal(r.chat.sent.length, 1, 'told to continue after the move');
+  r.engine.stop();
+});
+
+test('T-781 hard move: with an event 1 minute ago it waits (and is steered); once 3 minutes are quiet it moves', async () => {
+  const r = await rig(AUTO, EXHAUSTED);
+  r.chat.sessions.set('s1', STUCK());
+  r.chat.stored('s1', [{ at: at(-1) }]);
+  await r.engine.evaluate('s1');
+  await r.engine.settled();
+  assert.equal(r.chat.moves.length, 0, 'an event a minute ago: the turn may still be going');
+  assert.equal(r.chat.interrupted.length, 0);
+  r.clock.advance(2.1); // 3.1 minutes since the last event; the engine looks again every minute
+  await r.engine.settled();
+  assert.deepEqual(r.chat.interrupted, ['s1']);
+  assert.equal(r.chat.moves.length, 1);
+  assert.equal(r.chat.moves[0]!.handoff, 'skip');
+  r.engine.stop();
+});
+
+test('T-781 hard move: only for an exhausted source: a working chat that is merely low keeps waiting for its boundary, however quiet', async () => {
+  const r = await rig(AUTO);
+  r.chat.sessions.set('s1', STUCK());
+  r.chat.stored('s1', [{ at: at(-30) }]);
+  await r.engine.evaluate('s1');
+  await r.engine.settled();
+  assert.equal(r.chat.interrupted.length, 0);
+  assert.equal(r.chat.moves.length, 0);
+  r.engine.stop();
+});
+
+test('T-781 hard move: an exhausted chat that is idle moves as before, with no interrupt', async () => {
+  const r = await rig(AUTO, EXHAUSTED);
+  r.chat.turnEnds('s1');
+  await r.engine.settled();
+  assert.equal(r.chat.moves.length, 1);
+  assert.equal(r.chat.interrupted.length, 0);
+  r.engine.stop();
+});
+
+/** An exhausted rig whose usage read runs `between` once: it happens after the chat was read and before the decision is acted on. */
+async function hardRig(between: (r: Awaited<ReturnType<typeof rig>>) => void) {
+  let ran = false;
+  let rr: Awaited<ReturnType<typeof rig>> | null = null;
+  const r = await rig(AUTO, () => {
+    if (!ran && rr) {
+      ran = true;
+      between(rr);
+    }
+    return EXHAUSTED();
+  });
+  rr = r;
+  r.chat.sessions.set('s1', STUCK());
+  r.chat.stored('s1', [{ at: at(-4) }]);
+  return r;
+}
+
+test('T-781 F1\': a person moves the chat between the decision and the stop: no interrupt and no move', async () => {
+  const r = await hardRig((x) => x.chat.personMoves('s1', 'spare'));
+  await r.engine.evaluate('s1');
+  await r.engine.settled();
+  assert.equal(r.chat.interrupted.length, 0);
+  assert.equal(r.chat.moves.length, 0);
+  assert.equal(r.chat.get('s1')!.claudeId, 'spare');
+  r.engine.stop();
+});
+
+test('T-781 F1\': the chat speaks again between the decision and the stop (the turn is alive): no interrupt and no move', async () => {
+  const r = await hardRig((x) => x.chat.stored('s1', [{ at: at(-4) }, { at: at(0) }]));
+  await r.engine.evaluate('s1');
+  await r.engine.settled();
+  assert.equal(r.chat.interrupted.length, 0);
+  assert.equal(r.chat.moves.length, 0);
+  r.engine.stop();
+});
+
+test('T-781 F1\': the chat was restarted (no longer working) between the decision and the stop: no interrupt', async () => {
+  const r = await hardRig((x) => x.chat.sessions.set('s1', { ...x.chat.get('s1')!, state: 'interrupted' }));
+  await r.engine.evaluate('s1');
+  await r.engine.settled();
+  assert.equal(r.chat.interrupted.length, 0);
+  r.engine.stop();
+});
+
+test('T-781: a person moves the chat while the stop is waited for: the move is not overridden', async () => {
+  const r = await rig(AUTO, EXHAUSTED);
+  r.chat.sessions.set('s1', STUCK());
+  r.chat.stored('s1', [{ at: at(-4) }]);
+  (r.chat as { interrupt: unknown }).interrupt = async () => {
+    r.chat.personMoves('s1', 'spare');
+  };
+  await r.engine.evaluate('s1');
+  await r.engine.settled();
+  assert.equal(r.chat.moves.length, 0);
+  assert.equal(r.chat.get('s1')!.claudeId, 'spare');
+  r.engine.stop();
+});
+
+test('T-781: a stop that never settles is given 30 s, then the chat moves anyway', async () => {
+  const r = await rig(AUTO, EXHAUSTED);
+  r.chat.sessions.set('s1', STUCK());
+  r.chat.stored('s1', [{ at: at(-4) }]);
+  (r.chat as { interrupt: unknown }).interrupt = () => new Promise<void>(() => {});
+  const orig = console.error;
+  console.error = () => {};
+  try {
+    const p = r.engine.evaluate('s1');
+    await new Promise((res) => setImmediate(res));
+    assert.equal(r.chat.moves.length, 0, 'still waiting for the stop');
+    r.clock.advance(0.49);
+    await new Promise((res) => setImmediate(res));
+    assert.equal(r.chat.moves.length, 0, 'not yet 30 s');
+    r.clock.advance(0.02);
+    await p;
+    await r.engine.settled();
+  } finally {
+    console.error = orig;
+  }
+  assert.deepEqual(r.chat.moves, [{ id: 's1', to: 'home', handoff: 'skip' }]);
+  r.engine.stop();
+});
+
+test('T-781: a stop that rejects does not block the move', async () => {
+  const r = await rig(AUTO, EXHAUSTED);
+  r.chat.sessions.set('s1', STUCK());
+  r.chat.stored('s1', [{ at: at(-4) }]);
+  (r.chat as { interrupt: unknown }).interrupt = async () => {
+    throw new Error('control request failed');
+  };
+  const orig = console.error;
+  console.error = () => {};
+  try {
+    await r.engine.evaluate('s1');
+    await r.engine.settled();
+  } finally {
+    console.error = orig;
+  }
+  assert.deepEqual(r.chat.moves, [{ id: 's1', to: 'home', handoff: 'skip' }]);
+  r.engine.stop();
+});
+
+test('T-781: an interrupt that throws synchronously does not block the move', async () => {
+  const r = await rig(AUTO, EXHAUSTED);
+  r.chat.sessions.set('s1', STUCK());
+  r.chat.stored('s1', [{ at: at(-4) }]);
+  (r.chat as { interrupt: unknown }).interrupt = () => {
+    throw new Error('no control channel');
+  };
+  const orig = console.error;
+  console.error = () => {};
+  try {
+    await r.engine.evaluate('s1');
+    await r.engine.settled();
+  } finally {
+    console.error = orig;
+  }
+  assert.deepEqual(r.chat.moves, [{ id: 's1', to: 'home', handoff: 'skip' }]);
+  r.engine.stop();
+});
+
+/** A chat whose history calls are recorded. */
+function spyHistory(r: Awaited<ReturnType<typeof rig>>) {
+  const calls: { id: string; after: number | undefined }[] = [];
+  const hist = r.chat.history.bind(r.chat);
+  r.chat.history = (id: string, after?: number) => (calls.push({ id, after }), hist(id, after));
+  return calls;
+}
+
+test('T-781: a second evaluation while the stop still waits does not stop or move again (exactly one stop, one move)', async () => {
+  const r = await rig(AUTO, EXHAUSTED);
+  r.chat.sessions.set('s1', STUCK());
+  r.chat.stored('s1', [{ at: at(-4) }]);
+  let stops = 0;
+  (r.chat as { interrupt: unknown }).interrupt = () => (stops++, new Promise<void>(() => {}));
+  const orig = console.error;
+  console.error = () => {};
+  try {
+    const first = r.engine.evaluate('s1');
+    await new Promise((res) => setImmediate(res));
+    const second = await r.engine.evaluate('s1'); // the stop is still waiting
+    assert.equal(second, null, 'the chat is marked as moving');
+    assert.equal(stops, 1);
+    assert.equal(r.chat.moves.length, 0);
+    r.clock.advance(0.51);
+    await first;
+    await r.engine.settled();
+  } finally {
+    console.error = orig;
+  }
+  assert.equal(stops, 1, 'one stop');
+  assert.deepEqual(r.chat.moves, [{ id: 's1', to: 'home', handoff: 'skip' }], 'one move');
+  r.engine.stop();
+});
+
+test('T-781: a dry run stops nothing, even for a stuck exhausted chat', async () => {
+  const r = await rig({ ...AUTO, [K.dryRun]: true }, EXHAUSTED);
+  r.chat.sessions.set('s1', STUCK());
+  r.chat.stored('s1', [{ at: at(-4) }]);
+  await r.engine.evaluate('s1');
+  await r.engine.settled();
+  assert.equal(r.chat.interrupted.length, 0);
+  assert.equal(r.chat.moves.length, 0);
+  assert.equal(r.auto.events('u_a', { kinds: ['dry_run'] }).length >= 1, true);
+  r.engine.stop();
+});
+
+test('T-781 F2: a working chat on a source that is only low reads no history for the silence', async () => {
+  const r = await rig(AUTO);
+  r.chat.sessions.set('s1', STUCK());
+  r.chat.stored('s1', [{ at: at(-30) }]);
+  const calls = spyHistory(r);
+  await r.engine.evaluate('s1');
+  await r.engine.settled();
+  assert.deepEqual(calls.filter((c) => c.id === 's1'), []);
+  assert.equal(r.chat.interrupted.length, 0);
+  assert.equal(r.chat.moves.length, 0);
+  r.engine.stop();
+});
+
+test('T-781 F2: an exhausted working chat with no lastSeq (missing or 0) reads no history from the start and is not hard-moved', async () => {
+  for (const lastSeq of [undefined, 0]) {
+    const r = await rig(AUTO, EXHAUSTED);
+    r.chat.sessions.set('s1', STUCK());
+    r.chat.stored('s1', [{ at: at(-30) }]);
+    r.chat.sessions.set('s1', { ...r.chat.get('s1')!, lastSeq: lastSeq as never });
+    const calls = spyHistory(r);
+    await r.engine.evaluate('s1');
+    await r.engine.settled();
+    assert.deepEqual(calls.filter((c) => c.id === 's1'), [], `lastSeq=${lastSeq}: no history read`);
+    assert.equal(r.chat.interrupted.length, 0);
+    assert.equal(r.chat.moves.length, 0);
+    r.engine.stop();
+  }
+});
+
+test('T-781 S5: stop() clears a pending continuation retry: nothing is sent after it', async () => {
+  const r = await rig(AUTO, EXHAUSTED);
+  r.chat.sendFails = 1;
+  const orig = console.error;
+  console.error = () => {};
+  try {
+    r.chat.turnEnds('s1');
+    await r.engine.settled();
+    assert.equal(r.chat.sendTries, 1);
+    r.engine.stop();
+    r.clock.advance(0.3);
+    await r.engine.settled();
+  } finally {
+    console.error = orig;
+  }
+  assert.equal(r.chat.sendTries, 1, 'the retry timer was cleared');
+  assert.equal(r.chat.sent.length, 0);
+});
+
+test('T-781 S5: a continuation that fails while the engine is stopping arms no retry', async () => {
+  const r = await rig(AUTO, EXHAUSTED);
+  let tries = 0;
+  (r.chat as { send: unknown }).send = async () => {
+    tries++;
+    r.engine.stop(); // the engine stops while the send is in flight; then it fails
+    throw new Error('the chat is restarting');
+  };
+  const orig = console.error;
+  console.error = () => {};
+  try {
+    r.chat.turnEnds('s1');
+    await r.engine.settled();
+    r.clock.advance(0.3);
+    await r.engine.settled();
+  } finally {
+    console.error = orig;
+  }
+  assert.equal(tries, 1, 'no retry after stop()');
+});
+
+test('T-781 S5: a retry of the continuation is dropped when a person has written since', async () => {
+  const r = await rig(AUTO, EXHAUSTED);
+  r.chat.sendFails = 1;
+  const orig = console.error;
+  console.error = () => {};
+  try {
+    r.chat.turnEnds('s1');
+    await r.engine.settled();
+    const s = r.chat.get('s1')!;
+    r.chat.events.set('s1', [...(r.chat.events.get('s1') ?? []), { seq: s.lastSeq + 1, at: new Date().toISOString(), kind: 'user', text: 'carry on with the other task' } as never]);
+    r.chat.sessions.set('s1', { ...s, lastSeq: s.lastSeq + 1 });
+    r.clock.advance(0.3);
+    await r.engine.settled();
+  } finally {
+    console.error = orig;
+  }
+  assert.equal(r.chat.sendTries, 1, 'a newer message stands: no stale continuation after it');
+  r.engine.stop();
+});
+
+test('T-781 S5: after 3 failed continuations the trail says so, with one info row that is not a failure', async () => {
+  const r = await rig(AUTO, EXHAUSTED);
+  r.chat.sendFails = 99;
+  const orig = console.error;
+  console.error = () => {};
+  try {
+    r.chat.turnEnds('s1');
+    await r.engine.settled();
+    for (let i = 0; i < 6; i++) {
+      r.clock.advance(0.26);
+      await r.engine.settled();
+    }
+  } finally {
+    console.error = orig;
+  }
+  const rows = r.auto.events('u_a', { kinds: ['refused'] });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]!.code, 'move_failed');
+  assert.equal(r.auto.events('u_a', { kinds: ['failed'] }).length, 0);
+  r.engine.stop();
+});
+
+test('T-781: a chat that is switching is not hard-moved, however quiet', async () => {
+  const r = await rig(AUTO, EXHAUSTED);
+  r.chat.sessions.set('s1', STUCK({ switching: { toClaude: 'home', step: 'starting' } }));
+  r.chat.stored('s1', [{ at: at(-30) }]);
+  await r.engine.evaluate('s1');
+  await r.engine.settled();
+  assert.equal(r.chat.interrupted.length, 0);
+  assert.equal(r.chat.moves.length, 0);
+  r.engine.stop();
+});
+
+test('T-781: an exhausted working chat with no stored event is not hard-moved', async () => {
+  const r = await rig(AUTO, EXHAUSTED);
+  r.chat.sessions.set('s1', STUCK());
+  await r.engine.evaluate('s1');
+  await r.engine.settled();
+  assert.equal(r.chat.interrupted.length, 0);
+  assert.equal(r.chat.moves.length, 0);
+  r.engine.stop();
+});
+
+test('T-781 S5: a continuation that fails (the chat just restarted) is tried again after 15 s and arrives; the trail has one `continued` row', async () => {
+  const r = await rig(AUTO, EXHAUSTED);
+  r.chat.sendFails = 1;
+  const orig = console.error;
+  console.error = () => {};
+  try {
+    r.chat.turnEnds('s1');
+    await r.engine.settled();
+    assert.equal(r.chat.moves.length, 1);
+    assert.equal(r.chat.sent.length, 0, 'the first attempt failed');
+    r.clock.advance(0.2); // 12 s: not yet
+    await r.engine.settled();
+    assert.equal(r.chat.sendTries, 1);
+    r.clock.advance(0.1); // 18 s
+    await r.engine.settled();
+  } finally {
+    console.error = orig;
+  }
+  assert.equal(r.chat.sent.length, 1, 'the continuation arrived');
+  assert.equal(r.chat.sent[0]!.actor, 'portal:autotransfer');
+  assert.match(r.chat.sent[0]!.text, /Continue where you stopped/);
+  assert.equal(r.auto.events('u_a', { kinds: ['continued'] }).length, 1);
+  r.engine.stop();
+});
+
+test('T-781 S5: at most 3 attempts to continue, then it stops (no pause, no failed row)', async () => {
+  const r = await rig(AUTO, EXHAUSTED);
+  r.chat.sendFails = 99;
+  const orig = console.error;
+  console.error = () => {};
+  try {
+    r.chat.turnEnds('s1');
+    await r.engine.settled();
+    for (let i = 0; i < 6; i++) {
+      r.clock.advance(0.26);
+      await r.engine.settled();
+    }
+  } finally {
+    console.error = orig;
+  }
+  assert.equal(r.chat.sendTries, 3);
+  assert.equal(r.chat.sent.length, 0);
+  assert.equal(r.auto.events('u_a', { kinds: ['failed'] }).length, 0);
+  r.engine.stop();
+});
+
+test('T-781 S5: no retry of the continuation once the chat is on another Claude or has ended', async () => {
+  for (const how of ['moved', 'ended'] as const) {
+    const r = await rig(AUTO, EXHAUSTED);
+    r.chat.sendFails = 1;
+    const orig = console.error;
+    console.error = () => {};
+    try {
+      r.chat.turnEnds('s1');
+      await r.engine.settled();
+      if (how === 'moved') r.chat.personMoves('s1', 'spare');
+      else r.chat.ends('s1');
+      r.clock.advance(0.3);
+      await r.engine.settled();
+    } finally {
+      console.error = orig;
+    }
+    assert.equal(r.chat.sent.length, 0, `nothing sent after ${how}`);
+    assert.equal(r.chat.sendTries, 1, `no second attempt after ${how}`);
+    r.engine.stop();
+  }
+});
+
+test('T-781 R5: with no destination ceiling for an exhausted source, a herd still spreads (fewest chats on a tie)', async () => {
+  const two = () => [usage('work', 'Work', [win('session', 100)]), usage('home', 'Home', [win('session', 60)]), usage('spare', 'Spare', [win('session', 60)])];
+  const r = await rig({ ...AUTO, [K.maxPerDestination]: 1 }, two);
+  r.chat.sessions.set('s2', chatSession('s2'));
+  r.chat.sessions.set('s3', chatSession('s3'));
+  r.chat.sessions.set('s4', chatSession('s4'));
+  for (const id of ['s1', 's2', 's3', 's4']) {
+    r.chat.turnEnds(id);
+    await r.engine.settled();
+  }
+  assert.equal(r.chat.moves.length, 4, 'the ceiling of 1 does not stop an exhausted chat');
+  const per = (to: string) => r.chat.moves.filter((m) => m.to === to).length;
+  assert.deepEqual([per('home'), per('spare')], [2, 2], 'ties go to the Claude with the fewest chats: no herd on one');
+  assert.ok(r.chat.moves.every((m) => m.to !== 'work'));
+  // The ping-pong guard for a forced source is the decide.test.ts case "the ping-pong guard (FR9) still refuses an exhausted source the Claude it just left".
+  r.engine.stop();
+});
+
 test('T-38: a move refused because the folder needs trusting again is recorded as such and notified (not a silent stall)', async () => {
   const r = await rig();
   r.chat.fail = 'This folder’s project settings changed since you trusted it. Check them and trust it again.';

@@ -17,7 +17,7 @@ import { AutoStore } from './store.js';
 export { AutoTransferEngine } from './engine.js';
 export { AutoStore } from './store.js';
 
-/** The chat controller and the usage monitor as the engine needs them; null when what was handed over lacks them (some tests). Exported for tests (ports.test.ts). */
+/** The chat controller and the usage monitor as the engine needs them; null when what was handed over lacks them (some tests). Exported for tests (ports.test.ts, t781ports.test.ts). */
 export function ports(deps: Platform['deps']): { chat: ChatPort; usage: UsagePort } | null {
   const chat = deps.chat as unknown as Partial<ChatPort> | null;
   const usage = deps.claudeUsage as unknown as Partial<Pick<UsagePort, 'report' | 'onReading'>> | null;
@@ -33,6 +33,8 @@ export function ports(deps: Platform['deps']): { chat: ChatPort; usage: UsagePor
       switchClaude: (id, to, o) => c.switchClaude(id, to, o),
       ...(typeof (chat as { modelFamilies?: unknown }).modelFamilies === 'function' ? { modelFamilies: (claudeId: string) => (chat as unknown as { modelFamilies(id: string): string[] | null }).modelFamilies(claudeId) } : {}),
       setModel: (id, model) => (chat as unknown as { control(id: string, op: 'model', args: { model: string }, opts: { actor: string }): Promise<void> }).control(id, 'model', { model }, { actor: ENGINE_ACTOR }),
+      // The chat controller's own `interrupt` (a plain interrupt control request; the chat itself stays): the hard move's first step (T-781).
+      ...(typeof (chat as { interrupt?: unknown }).interrupt === 'function' ? { interrupt: (id: string) => (chat as unknown as { interrupt(id: string): Promise<void> }).interrupt(id) } : {}),
       onEvent: (cb) => c.onEvent(cb),
       history: (id, after) => c.history(id, after),
       send: (id, text, o) => (chat as unknown as { send(id: string, uuid: string, text: string, opts: object): Promise<void> }).send(id, randomUUID(), text, o),

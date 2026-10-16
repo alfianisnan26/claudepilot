@@ -124,7 +124,7 @@ import { branchProblem, defaultBranch, Worktrees, type MadeWorktree } from './wo
 import { ChatStore, claudeSessionOf, EVENT_TEXT_MAX, sessionCwd, type ChatSessionPatch, type ChatSessionRow, type InputState } from './store.js';
 import { BtwEngine, readBtwConfig, type BtwHost } from './btw.js';
 import { BtwStore } from './btwStore.js';
-import { conversationBudget, transferConversation, transferFile, transferOpening, type TransferMeta } from './transfer.js';
+import { TRANSFER_WRITE_SCRIPT, conversationBudget, transferConversation, transferFile, transferFileConversation, transferOpening, type TransferMeta } from './transfer.js';
 import { autoTrustable, autoTrustRefusal, findSameRepo, FOLDER_CHANGED, saveTrust, scanFolder, untrustedError, worktreeMayCopyTrust, type FolderScan } from './trust.js';
 import { usageReport } from './usage.js';
 import {
@@ -2105,8 +2105,10 @@ export class ChatController {
       const row = this.#chat.row(sessionId)!;
       const meta: TransferMeta = { handoffId, at: new Date(), workspaceId, cwd: source.cwd, sourceSessionId: sessionId, fromClaude: from, toClaude: dest.name, path };
       const facts = this.#moveFacts(sessionId, source);
-      const convo = transferConversation(this.#chat.history(sessionId), conversationBudget(meta, EVENT_TEXT_MAX, document));
-      await this.#shellWrite(workspaceId, `${HOME}/.claudepilot/transfer`, path, transferFile(meta, convo, document, facts));
+      const stored = this.#chat.history(sessionId); // once: the opening's copy and the file's copy come from the same read
+      const convo = transferConversation(stored, conversationBudget(meta, EVENT_TEXT_MAX, document));
+      const fileConvo = transferFileConversation(stored);
+      await this.#shellWrite(workspaceId, `${HOME}/.claudepilot/transfer`, path, transferFile(meta, fileConvo, document, facts));
       const sourceClaudeId = source.claudeId || this.#chat.ensureDefault(workspaceId).id;
       this.#chat.saveHandoff({ id: handoffId, workspaceId, sourceSessionId: sessionId, sourceClaudeId, destClaudeId: dest.id, path });
 
@@ -2150,7 +2152,7 @@ export class ChatController {
       if (document) transfer.handoff = true;
       this.#step(sessionId, 'starting');
       const opening = randomUUID();
-      await this.#send(sessionId, opening, transferOpening(meta, convo, document), { transfer });
+      await this.#send(sessionId, opening, transferOpening(meta, convo, document, fileConvo), { transfer });
       const asked = this.#chat.history(sessionId).findLast((e) => e.kind === 'user' && e.uuid === opening);
       // The new Claude acknowledges: a chat that can't answer on the destination isn't moved.
       const ack = await this.#awaitTurn(sessionId, asked?.seq ?? 0, this.ackWaitMs, 'ack');
@@ -2301,7 +2303,7 @@ export class ChatController {
     if (!path.startsWith(`${dir}/`) || path.includes('..')) throw new AppError('VALIDATION_FAILED', 'That transfer path is not allowed.');
     const [target, name] = this.#split(workspaceId);
     const bytes = Buffer.byteLength(body);
-    const exec = await this.#workspaces.exec(target, name, ['sh', '-c', 'mkdir -p -- "$1" && head -c "$3" > "$2"', 'sh', dir, path, String(bytes)]);
+    const exec = await this.#workspaces.exec(target, name, ['sh', '-c', TRANSFER_WRITE_SCRIPT, 'sh', dir, path, String(bytes)]);
     if (bytes) exec.write(body);
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {

@@ -32,11 +32,19 @@ import { effectiveSettings, platformSettings, type AutoSettingsReader } from './
 import type { AutoStore, SessionRow, StoredSuggestion } from './store.js';
 
 const MIN = 60_000;
+/** How long the hard move waits for the stop of a turn before it moves anyway (T-781). */
+const HARD_STOP_MS = 30_000;
 const DAY = 24 * 60 * MIN;
 /** The actor of everything the engine does by itself. */
 export const ENGINE_ACTOR = 'portal:autotransfer';
 /** A deferred move is looked at again this often. */
 const RECHECK_MS = 60_000;
+/** T-781: a CONFLICT on an exhausted chat is tried again after this long, at most this many times, then the normal pause. */
+const CONFLICT_RETRY_MS = 30_000;
+/** A continuation message that failed is tried again, 15 s apart, up to 3 attempts in all (T-781 S5). */
+const CONTINUE_RETRY_MS = 15_000;
+const CONTINUE_TRIES = 3;
+const CONFLICT_RETRIES = 5;
 /** Every chat at or under the threshold, waiting or working, is looked at again this often (T-105): the tick, jittered up to 20 s. */
 const TICK_MS = AUTO_CONSTANTS.waitRecheckMin * MIN;
 const JITTER_MS = 20_000;
@@ -123,10 +131,18 @@ export class AutoTransferEngine {
   readonly #inflight = new Map<string, string>();
   /** Chats with an automatic move in the last day: watched for an Undo. */
   readonly #moved = new Set<string>();
+  /** CONFLICTs met moving an exhausted chat, per chat (T-781); reset by a move or when the retries run out. */
+  readonly #conflicts = new Map<string, number>();
+  /** Per chat: no evaluation before this time, while a CONFLICT retry is due (T-781): the tick and a boundary add no attempt inside it. */
+  readonly #retryAt = new Map<string, number>();
+  /** The pending retry of a continuation message, per chat (T-781 S5). */
+  readonly #contTimers = new Map<string, () => void>();
   /** Chats with an open card: closed when the chat ends or moves. */
   readonly #cards = new Set<string>();
   /** The last evaluation of each chat, for tests and the state route. */
   readonly last = new Map<string, Decision>();
+  /** After `stop()` (until `start()`): a continuation that fails arms no retry timer. */
+  #stopped = false;
   #sweep: (() => void) | null = null;
   #tick: (() => void) | null = null;
   #offUsage: (() => void) | null = null;
@@ -141,6 +157,7 @@ export class AutoTransferEngine {
 
   start(): void {
     if (this.#off) return;
+    this.#stopped = false;
     const now = this.#d.clock.now();
     for (const id of this.#d.store.recentlyMoved(now - DAY)) this.#moved.add(id);
     for (const p of this.#d.store.pending()) this.#wake(p.sessionId, Math.max(0, ms(p.at) - now));
@@ -159,6 +176,7 @@ export class AutoTransferEngine {
   }
 
   stop(): void {
+    this.#stopped = true;
     this.#off?.();
     this.#off = null;
     this.#sweep?.();
@@ -170,6 +188,8 @@ export class AutoTransferEngine {
     this.#refresh = null;
     for (const cancel of this.#timers.values()) cancel();
     this.#timers.clear();
+    for (const cancel of this.#contTimers.values()) cancel();
+    this.#contTimers.clear();
   }
 
   /** Resolves when no evaluation is queued or running (tests). */
@@ -213,6 +233,10 @@ export class AutoTransferEngine {
     this.#timers.delete(id);
     this.#moved.delete(id);
     this.#cards.delete(id);
+    this.#conflicts.delete(id);
+    this.#retryAt.delete(id);
+    this.#contTimers.get(id)?.();
+    this.#contTimers.delete(id);
   }
 
   /** Asks for an evaluation of a chat; a burst is one evaluation. */
@@ -371,6 +395,46 @@ export class AutoTransferEngine {
     };
   }
 
+  /** When the chat's newest stored event happened (T-781: the hard move's "no event for 3 minutes"); its last activity when none is stored. */
+  #lastEventMs(s: ChatSession): number | null {
+    // No known last sequence number: nothing to measure from, and never a read of the whole history (`after` 0).
+    if (!(typeof s.lastSeq === 'number' && s.lastSeq > 0)) return null;
+    const [last] = this.#d.chat.history(s.id, s.lastSeq - 1).slice(-1);
+    // Only a stored event counts: `lastActivityAt` also moves with things that are not the turn's output, and a chat with no stored
+    // event has nothing to measure a silence from (it is steered and waited for as before).
+    const t = ms(last?.at ?? '');
+    return Number.isFinite(t) ? t : null;
+  }
+
+  /**
+   * Stops the chat's turn (not the chat) and waits for it for at most HARD_STOP_MS. A stop that throws (sync or async), rejects or never
+   * settles does not block the move: the Move flow that follows works on the chat as it is.
+   */
+  async #stopTurn(id: string): Promise<void> {
+    await new Promise<void>((resolve) => {
+      const cancel = this.#d.clock.timer(HARD_STOP_MS, () => {
+        console.error(`[autotransfer] stopping a stuck turn took over ${HARD_STOP_MS / 1000} s, moving anyway`);
+        resolve();
+      });
+      new Promise<void>((ok) => ok(this.#d.chat.interrupt?.(id))).then(
+        () => (cancel(), resolve()),
+        (e: unknown) => {
+          cancel();
+          console.error(`[autotransfer] could not stop a stuck turn: ${(e as Error).message}`);
+          resolve();
+        },
+      );
+    });
+  }
+
+  /** The hard move's last look before it stops a turn: the chat is still on the source Claude, still working, not switching, still silent. */
+  #stillStuck(decided: ChatSession): boolean {
+    const cur = this.#d.chat.get(decided.id);
+    if (!cur || cur.claudeId !== decided.claudeId || cur.state !== 'working' || cur.switching) return false;
+    const last = this.#lastEventMs(cur);
+    return last !== null && this.#d.clock.now() - last >= AUTO_CONSTANTS.hardMoveIdleMin * MIN;
+  }
+
   #load(workspaceId: string, self: string) {
     const sessions = this.#d.chat.list({ workspaceId });
     return (claudeId: string) =>
@@ -414,6 +478,7 @@ export class AutoTransferEngine {
       options: null,
       load: this.#load(s.workspaceId, s.id),
       counters: this.#counters(s, ownerId, row),
+      lastEventAtMs: () => this.#lastEventMs(s), // read only when the source is exhausted (F2)
       recommend: this.#d.usage.recommend,
       // What each Claude's list_models said (T-109), when the chat controller knows it: it overrides the catalogue's guess from the windows.
       listed: (claudeId: string, family: string) => {
@@ -442,6 +507,12 @@ export class AutoTransferEngine {
       return null;
     }
     if (this.#inflight.has(id)) return null;
+    // T-781: inside a CONFLICT retry window nothing else (the tick, a boundary) adds an attempt: the retry timer is the only one.
+    const retryAt = this.#retryAt.get(id);
+    if (retryAt !== undefined && this.#d.clock.now() < retryAt) {
+      this.#wake(id, retryAt - this.#d.clock.now()); // a timer that fired a hair early still gets its retry
+      return null;
+    }
     const { d, claudes } = await this.#decide(x, true);
     this.last.set(id, d);
     const now = this.#d.clock.now();
@@ -509,6 +580,27 @@ export class AutoTransferEngine {
         // A chat that was steered (T-105, the coordinator's acceptance item 2) already committed, pushed and noted its roles: no handoff
         // turn on a Claude that is nearly out; the stored conversation carries, then the continuation.
         const steered = row.steeredPeriod !== null;
+        // T-781, the hard move: the turn is stuck on an exhausted Claude (no event for 3 minutes): stop the turn, not the chat, then move.
+        // A dry run only says what it would do: it stops nothing.
+        if (d.hard && !settings.dryRun) {
+          // Just before the stop: a person may have moved or restarted the chat since the decision was made; then nothing is done.
+          if (!this.#stillStuck(s)) {
+            console.info(`[autotransfer] hard move session=${id}: the chat changed since the decision, nothing done`);
+            break;
+          }
+          console.info(`[autotransfer] hard move session=${id}: no event for ${AUTO_CONSTANTS.hardMoveIdleMin} minutes on an exhausted Claude, stopping the turn`);
+          // The chat counts as moving from here: a second evaluation during the stop (up to HARD_STOP_MS; `evaluate` is not serialised for
+          // a direct caller) must not run the hard path again. `#move` keeps the mark and clears it when it ends.
+          this.#inflight.set(id, d.to.id);
+          await this.#stopTurn(id);
+          // A person may have moved the chat while the stop was waited for: that move is not overridden.
+          const now = this.#d.chat.get(id);
+          if (!now || now.state === 'ended' || now.claudeId !== s.claudeId || now.switching) {
+            this.#inflight.delete(id);
+            console.info(`[autotransfer] hard move session=${id}: the chat moved while its turn was being stopped, nothing more done`);
+            break;
+          }
+        }
         await this.#move(s, ownerId, { to: d.to, handoff: steered ? 'skip' : d.handoff, reason: d.reason, facts: d.facts, mode, settings, actor: ENGINE_ACTOR, auto: true, steered });
         break;
       }
@@ -696,13 +788,31 @@ export class AutoTransferEngine {
       this.#record({ ...base, kind: 'moved', handoffId: marker?.transfer?.handoffId ?? null }, m.auto ? 'medium' : 'info');
       if (m.auto) this.#notify(s, ownerId, { to: m.to.name, leftPct: m.facts.leftPct.value ?? 0 });
       this.#moved.add(s.id);
+      this.#conflicts.delete(s.id);
+      this.#retryAt.delete(s.id);
       this.#wake(s.id, m.settings.minPauseMin * MIN);
       if (why) await this.#continue(s, ownerId, m.mode, m.to, why);
       return true;
     } catch (e) {
       const now = this.#d.clock.now();
-      this.#d.store.patchSession(s.id, ownerId, { pausedUntil: iso(now + m.settings.minPauseMin * MIN), deferSince: null });
       const code = e instanceof AppError ? e.code : 'error';
+      // T-781: a CONFLICT (the chat is busy this second) on an exhausted source is not a failure: it can do nothing where it is, so look
+      // again in 30 s, at most CONFLICT_RETRIES times, with the message in the log. Not a `failed` row, so failures24h does not count it.
+      if (m.auto && m.reason === 'exhausted' && code === 'CONFLICT') {
+        const tries = (this.#conflicts.get(s.id) ?? 0) + 1;
+        console.error(`[autotransfer] a move of an exhausted chat hit a conflict (${tries}/${CONFLICT_RETRIES}): ${(e as Error).message}`);
+        if (tries <= CONFLICT_RETRIES) {
+          this.#conflicts.set(s.id, tries);
+          this.#retryAt.set(s.id, now + CONFLICT_RETRY_MS);
+          // The trail says it (R4): an info row per retry, `deferred` with `busy`, so a person sees why the chat has not moved yet.
+          this.#record({ ...base, kind: 'deferred', code: 'busy' }, 'info');
+          this.#wake(s.id, CONFLICT_RETRY_MS);
+          return false;
+        }
+      }
+      this.#conflicts.delete(s.id);
+      this.#retryAt.delete(s.id);
+      this.#d.store.patchSession(s.id, ownerId, { pausedUntil: iso(now + m.settings.minPauseMin * MIN), deferSince: null });
       // A folder whose settings changed since it was trusted stops every move until someone trusts it again: say so, loudly (T-38).
       const untrusted = code === CHAT_FOLDER_UNTRUSTED;
       this.#record({ ...base, kind: 'failed', code: untrusted ? 'folder_untrusted' : 'move_failed' }, 'medium');
@@ -718,12 +828,35 @@ export class AutoTransferEngine {
   }
 
   /** The continuation after an automatic move (T-105 item 3): one short message on the new Claude, priority next; recorded as `continued`. */
-  async #continue(s: ChatSession, ownerId: string, mode: AutoMode, to: AutoClaudeRef, why: 'exhausted' | 'steered'): Promise<void> {
+  async #continue(s: ChatSession, ownerId: string, mode: AutoMode, to: AutoClaudeRef, why: 'exhausted' | 'steered', attempt = 1): Promise<void> {
+    // A newer continuation (a move away and back inside the retry window) replaces an older pending retry, which would otherwise send a stale second one.
+    this.#contTimers.get(s.id)?.();
+    this.#contTimers.delete(s.id);
     try {
       await this.#d.chat.send(s.id, CONTINUE_TEXT(to.name, why), { priority: 'next', actor: ENGINE_ACTOR, actorLabel: 'Auto move' });
       this.#record({ ...this.#base(s, ownerId, mode), kind: 'continued', reason: why === 'exhausted' ? 'exhausted' : 'low', to, code: null }, 'info');
     } catch (e) {
-      console.error(`[autotransfer] could not continue a moved chat: ${(e as Error).message}`);
+      console.error(`[autotransfer] could not continue a moved chat (${attempt}/${CONTINUE_TRIES}): ${(e as Error).message}`);
+      // A failure that lands after stop() arms nothing: no timer would clear it.
+      if (this.#stopped) return;
+      if (attempt >= CONTINUE_TRIES) {
+        // Nobody else is told that the chat sits idle on the new Claude: one info row, not a `failed` one (that would count toward the day's failures).
+        this.#record({ ...this.#base(s, ownerId, mode), kind: 'refused', reason: null, to, code: 'move_failed' }, 'info');
+        return;
+      }
+      // T-781 S5: a chat just restarted on the new Claude may not take a message yet; without the continuation the lane sits idle with nobody
+      // told. Try again a few times, only while the chat is still there, still on the Claude it was moved to, and nobody has written since.
+      const seenSeq = this.#d.chat.get(s.id)?.lastSeq ?? s.lastSeq ?? 0;
+      this.#contTimers.set(
+        s.id,
+        this.#d.clock.timer(CONTINUE_RETRY_MS, () => {
+          this.#contTimers.delete(s.id);
+          const cur = this.#d.chat.get(s.id);
+          if (!cur || cur.state === 'ended' || cur.claudeId !== to.id) return;
+          if (this.#d.chat.history(s.id, seenSeq).some((ev) => ev.kind === 'user' && !ev.agentLabel && ev.actor !== ENGINE_ACTOR)) return; // a newer message stands
+          void this.#continue(cur, ownerId, mode, to, why, attempt + 1);
+        }),
+      );
     }
   }
 
