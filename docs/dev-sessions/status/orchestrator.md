@@ -26,10 +26,11 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   -> T-416 S2c dcdb6553.
 - IMPL 89ca3bd2 (new rules): T-425 c22a76b3 (8957; "Queued" kept; -> QA UI), T-772 S2f b36f6a54 (9014, Job 4c8104e6; -> QA UI 3rd).
   NOW T-436 S2 (review notes 8941: guarded rebind, audit names, VALIDATION_FAILED) on ticket/T-436-s2 from 5be5699a.
-- BATCH 29 READY TO GATE after restart: premerge-b29 62f72772 (wip/main-62f7277) = T-524 S3c+T-733 S5 ee56bab9 + T-881 S1b
-  4dba5701 + release merge-back e6d403d9. Quick-check job-89646cfa green (on 3f591f5). First gate never ran (integration moved).
-  After restart: merge integration (status) in, pack, push wip, gate-job. BATCH 30 (after QA): T-436+S2, T-382 S1, T-425, T-772 S2f, T-736 S3f+S3g, T-416 S2c,
-  T-675 R2c/R2d, T-781 S8c, T-612 S1 fix.
+- BATCH 29 READY TO GATE after restart: premerge-b29 96757f79 (wip/main-96757f7) = T-524 S3c+T-733 S5 ee56bab9, T-881 S1b
+  4dba5701, T-416 S2c dcdb6553 (lead's mechanical controller.ts resolution), T-382 S1 88b663fe, T-781 S8c 8cb00f79, T-675 R2c+R2d
+  b82cdcb9. Quick-check job-89646cfa green for the first two only. After restart: merge integration in, pack, push wip, quick-check
+  --test bypassLost/recover/bypass/keyset/settings/agentEnv/engine/memory/memoryBudget/restart tests, then gate-job.
+  QA verdicts for T-382 S1, T-436, T-675 sit only in worker reports (lead's ticket_comment FORBIDDEN on unassigned tickets). BATCH 30 (after QA): T-436 (QA PWG) + S2, T-425, T-772 S2f, T-736 S3f+S3g, T-612 S1 fix.
 - BE INFRA 4ed98960 (new rules): PAUSED 9135 (FAIL item 2 fixed+pushed; item 3 real quick-check run left). Fix T-612 S1 per QA FAIL 9040 (eslint tseslint base spread; prettier quickCheck.test.ts; a real
   quick-check run) -> S2a baseline -> T-860 S2c after T-860 merges (gaps 8936 + 8845).
 - BACKEND 658bdc65 (new rules; was 1e80e003: T-881 S1b DONE 4dba5701). NOW T-382 S2 GET /api/chat/sessions cursor (ticket/T-382-s2-sessions
