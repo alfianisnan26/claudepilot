@@ -345,9 +345,13 @@ test('T-675 R2: a message sent while a restart of an asleep session waits for it
     const restarting = s.controller.restart(s.id);
     await until(() => reads >= 1, 4000);
     const sent = s.controller.send(s.id, 'gap-1', 'MESSAGE in the gap').then(() => 'sent', (e: unknown) => `rejected: ${String(e)}`);
-    for (let i = 0; i < 50; i++) await new Promise<void>((r) => setImmediate(r));
+    // Answering starts BEFORE the release: a launch asks for the settings, so a send that got ahead could finish its start in this window.
+    const answered = s.answering(Promise.all([restarting, sent]));
+    // Wait for the event that shows the send got ahead (its process started while the restart is held); with the guards in place it never
+    // comes, so the wait is capped. It ends at once when it does, which is why this does not depend on a sleep being long enough.
+    await until(() => s.ws.starts > starts, 400).catch(() => undefined);
     release();
-    const [restarted, outcome] = await s.answering(Promise.all([restarting, sent]));
+    const [restarted, outcome] = await answered;
     assert.equal(outcome, 'sent');
     assert.equal(restarted.process, 'live');
     assert.equal(s.controller.get(s.id)!.state === 'ended', false, 'the session was not ended');
