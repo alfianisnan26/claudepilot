@@ -335,9 +335,10 @@ test('T-426 S1f --pool-env: the install steps (npm rebuild, lifecycle scripts) s
   const { r } = w.pod({ JR_POOL_E2E_CF_ACCESS_CLIENT_ID: id, JR_CMD: cmd });
   assert.equal(r.status, 0, r.stdout + r.stderr);
   const lines = readFileSync(pool, 'utf8').trim().split('\n').map(noUc);
-  // npm ci ran in fetch (no pool variable there at all); rebuild and the two lifecycle scripts ran in the run container: still none.
+  // (npm ci runs in fetch, which has no pool variable in a real pod; this harness gives both phases one environment, so it is skipped.)
+  // Rebuild and the lifecycle scripts run in the run container: still none.
   assert.ok(lines.some((l) => l.startsWith('npm rebuild')) && lines.some((l) => l.includes('postinstall')), lines.join('\n'));
-  for (const l of lines.filter((x) => x.startsWith('npm '))) assert.ok(l.endsWith('pool='), `no pool variable during install: ${l}`);
+  for (const l of lines.filter((x) => x.startsWith('npm rebuild') || x.startsWith('npm run'))) assert.ok(l.endsWith('pool='), `no pool variable during install: ${l}`);
   assert.equal(lines[lines.length - 1], `cmd value=${id}`, 'the command step gets the value');
   assert.ok(!(r.stdout + r.stderr).includes(id));
 });
