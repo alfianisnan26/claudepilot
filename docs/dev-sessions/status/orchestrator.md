@@ -24,7 +24,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   wip/qa-t426-364c7ca 364c7ca4 (18a3dbb1 + -x db6b952a 155e334b). Now its one S1h probe Job.
 - QA UI 8b13bb5a (no Write): T-772 S2 188cd077 PASS WITH GAPS (Job 7fb8c3d0; lead posted 8336; gap 2 roving tabindex -> S2b).
   T-611 S2b review APPROVE (8349); T-736 S3f review CHANGES 2 (8359: here= redirect, m before cd) -> S3g BE Infra.
-  Now pre-read T-675 R2c (no Job) -> QA T-675 R2c f7b4e34a (after Backend's Job).
+  Pre-read T-675 R2c READY (compile fix is one title line). Now QA Job T-675 R2c f7b4e34a (typecheck + M1, M3 mutants).
 - QA BE 2 42e5408f (no Write): T-416 S2b FAIL (8289: Bypass-restart test survives closeOut mutant). Now QA T-736 S3f a44c7cf8.
 - IMPL 46632d91 (sonnet): T-772 S2 DONE 188cd077. Now T-591 S3 lastReleased fix (ticket/T-591-s3 from b2932d0e) -> T-772 S2b
   (container marker, not tabindex -1) -> T-525 proposal draft.
