@@ -433,7 +433,7 @@ elif [ "$was_rule" != "$master_rule" ]; then
     die "the control-plane node went over its line while $job waited, and its rule could not be added: run it again"
   else
     # The rule could not be dropped: it is only kept (harmless), and the log says so, so the last placement line is not read as "dropped".
-    master_rule_why=$was_why; master_rule=$was_rule; master_aff=$was_aff
+    master_rule_why=$was_why; master_rule=$was_rule; master_aff=$was_aff; master_pct=$was_pct
     echo "job-run: the placement rule was not dropped (the patch failed): the Job runs on its create-time rule" >&2
     plog "=== JOB-RUN PLACEMENT node=control-plane at=release outcome=drop-failed (the rule was not dropped: the Job runs on its create-time rule)" >/dev/null
   fi
