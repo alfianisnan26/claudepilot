@@ -208,8 +208,12 @@ scripts/job-run.sh --list ; scripts/job-run.sh --stop --chat <session id>
   used gives allocatable, no new verb): `JOB_RUN_EXPECTED_PEAK_MI` (default 2300 Mi, the measured p99 of Job peaks, 2270 Mi in the T-731 note;
   no run in the 878 logs of 2026-10-16 reached 3000 Mi; at most 6 digits) and 8192 Mi for `--big` (a rerun after an OOM kill, so unknown: its
   whole limit). Over `JOB_RUN_MASTER_MAX_PCT` (75, at most 3 digits) the Job gets a REQUIRED rule away from the control plane and waits for
-  k3s-node2 or for room ("placement:" line, and a Pending line that says so; a Job that never starts says "run it again", since the decision is
-  taken once, when the Job is created). A master at 74% therefore takes no 4 GiB Job (74% + 4 GiB is about 100%). The line is exact: use plus peak
+  k3s-node2 or for room ("placement:" line, and a Pending line that says so; a Job that never starts says "run it again"). The decision is made
+  when the Job is created and AGAIN just before it leaves the queue (a Job can wait suspended for minutes): if the answer changed, the suspended
+  Job's required rule is patched in or out first (a merge patch of that rule alone; scheduling directives of a suspended Job are mutable from
+  Kubernetes 1.27, this cluster runs 1.35). A reading that fails then changes nothing; a required rule that cannot be added stops the run (rc 2,
+  "run it again"). Known limits: the projected percentage is rounded, and `top` itself is a sample, so the line is good to about 0.5 points; the
+  peak counted is the typical 2300 Mi, not the 4 Gi limit, so a rare larger Job can still land on a master that fit the typical one. A master at 74% therefore takes no 4 GiB Job (74% + 4 GiB is about 100%). The line is exact: use plus peak
   AT the line stays, the projection printed is rounded up. An odd bytes column falls back to the percentage alone; under the line, or when the
   metrics fail, only the preferred rules apply. Numbers are read in base 10 (`08` is eight). The decision, the Pending wait, the node it ran on,
   and a Job that never started are also lines in the Job's log (`/tmp/job-run-<job>.log`; the `job-run:` lines go to the caller only):
