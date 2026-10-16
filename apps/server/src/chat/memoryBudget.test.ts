@@ -335,12 +335,15 @@ test('T-675 R2: a message sent while a restart of an asleep session waits for it
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
     let reads = 0;
-    s.controller.memory = new WorkspaceMemory({ read: async () => (reads++, await gate, reading(2 * GiB)) });
+    // R2b: ONLY the restart's reading is held. Any other reading (the send's own wake check, if the send were not held back by
+    // `#restarting` in `send()`) answers at once, so without that wait the send would start its process while the restart is still
+    // waiting, and the restart would then stop it. No real-clock sleep: the send gets many turns of the event loop to get ahead.
+    s.controller.memory = new WorkspaceMemory({ read: async () => (reads++ === 0 && (await gate), reading(2 * GiB)) });
     const [starts, stops] = [s.ws.starts, s.ws.stops];
     const restarting = s.controller.restart(s.id);
     await until(() => reads >= 1, 4000);
     const sent = s.controller.send(s.id, 'gap-1', 'MESSAGE in the gap').then(() => 'sent', (e: unknown) => `rejected: ${String(e)}`);
-    await sleep(50);
+    for (let i = 0; i < 50; i++) await new Promise<void>((r) => setImmediate(r));
     release();
     const [restarted, outcome] = await s.answering(Promise.all([restarting, sent]));
     assert.equal(outcome, 'sent');
