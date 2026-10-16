@@ -29,11 +29,12 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - 16:12 OWNER PRIORITY (coordinator, T-426 5538): T-401 then T-426 FIRST. T-401 gate GREEN gate-54ba328-6502; ff only on the person's ack.
 
 ## DECISIONS (binding)
+- 12:55 Self-answered (supervisor: PRD default): batch 20 stays HELD till a green gate; no lead gate (D-75), no ungated merge
+  (charter), no Check trigger by the lead (same as running the gate). Status commits stay local so 35f917a9 stays ff-able.
 - 11:00 T-612 default A (pinned prettier/eslint devDeps, changed files only; quick-check must not say "passed" for a skipped step); FOR THE COORDINATOR 7592.
 - 10:10 T-731 F1: lanes are refused rm/git rm, so the lead drops job-out/t731b/r.txt as its own traced commit in the premerge (a log, not code).
 - 09:38 MERGES HELD: D-75 (lead runs no Jobs) vs gate-job.sh absent from the allow list (lanes refused). Batch 19 71a2317f
   (T-697 + T-574 S3) waits; coordinator picks (a) a person adds the allow entry [default], (b) gate exempt, (c) hold (T-595 7316).
-- 09:05 T-731 before the T-426 fix (coordinator). Conflict with owner order T-401 -> T-426 named: T-426 merge waits the T-401 ack anyway; swap if owner says.
 - 07:45 D-75 (coordinator): one Job per commit (checks chained), never the same command twice on a commit, QA reads the builder's log;
   the LEAD RUNS NO JOBS (quick-check and gate go to a lane); idle QA gets no-Job work (reviews, browser). T-731 -> BE Infra after T-697.
 - 03:55 Lead false claim corrected: T-524 6775 said job 4d5cb657 proved the S3 patch; its log shows the rule at creation. 6788; incident T-721.
