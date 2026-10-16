@@ -3,15 +3,15 @@
 Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-10-15 DONE batches 1-7: see 4fbab374). Hand-overs: ab99b45, bb58413, 639202e.
 
 ## DONE
+- BATCH 22 ON INTEGRATION 0d521d67 (ff origin+pilot from f4de2647; gate claudepilot-gate-0d521d6-7b1d GREEN, suite 637s): T-697,
+  T-574 S3, T-731, r.txt drop, T-376 S4b, T-732, T-610 r3, T-739 B (mig 383), T-723 S3c. Coordinator told on T-731.
 - DEPLOY 191 LIVE (coordinator, 2026.10.16-1 from 12c68374 = batches <=18). T-404 CLOSED (live hook in managed 10-policy.json + D-60
   refusal 7407). T-597 CLOSED (live 6208). Live checks: T-472 UNAVAILABLE with agent tokens (admin read, 7505); T-591 FAIL:
   release_report setting unset = silent skip; a person's PUT + backfill steps in 7556; silent skips -> T-776. FOR THE COORDINATOR.
 - T-781, T-731, T-727 assigned to the lead (coordinator). Migration 383: 0.41 s/1M synthetic rows (T-739 7487), for the coordinator.
 
 ## IN FLIGHT (6 of 6, D-71)
-- GATE b22: wip/main-0d521d6 0d521d67 on f4de2647 = b19 (T-697, T-574 S3) + b21 (T-731, r.txt drop, T-376 S4b, T-732, T-610 r3,
-  T-739 B mig 383, T-723 S3c), worktree premerge-b22, gate running. b19r f14e9d2d gate GREEN (gate-f14e9d2-3b63) but integration
-  moved to f4de2647 (coordinator, docs) -> combined (8047). Green -> ff origin+pilot, rebase+push status, tell coordinator on T-731.
+- NONE gating. Next batch builds when the S7 / S1c / T-675 QA verdicts land.
   Lanes' ticket_comment refused on unassigned tickets (T-341, T-549, T-675; T-675 assign refused too): verdicts in replies + this file.
 - QA PERF 330855ba (respawned; 7e4879c7 ended: Bash refused twice; new one has no Write and heredocs refused). QA T-611 S1b Job on
   f74638f1, C5e skipped as a probe defect (decided: no edit), mutants 1-3; add-fail cleanup by reading. Queued (sent): QA T-611 S1c +
@@ -68,7 +68,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   T-527 finding 4 (owner triggers tagging owner-checklist); T-657 reopen T-259/T-317/T-338; T-739 A scoring defs (scoring = person's wall).
 
 ## NEXT (in order, as slots free)
-1. Gate b22 (IN FLIGHT). Next batch: T-733, T-781 S6+S7 0c73e71f, T-611 S1b+S1i+S1c 44c293ea, T-675 b4024e17 (each after QA), T-736 S3c+S3d.
+1. Next batch: T-733, T-781 S6+S7 0c73e71f, T-611 S1b+S1i+S1c 44c293ea, T-675 b4024e17 (each after QA), T-736 S3c+S3d.
 2. T-401 after a person's OK (8023) -> T-426 S1e -> T-379 S2 3f11b28; deploys are the coordinator's.
 3. T-416 S2 review + QA when Backend is done.
 4. RTK: T-340 (person/coordinator) -> T-341 merge -> T-306 item 3. 5. T-537. 6. T-513. 7. T-472 live re-check (needs portal_status), T-422, T-147, T-438, T-425, T-436, T-437, T-432, T-382, T-377, T-386, T-409, T-402, T-398,
