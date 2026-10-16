@@ -16,7 +16,8 @@
 //   --cfg 390px-light (one config: 390px|1280px - light|dark)   --keep (leave the seed)
 //   --budget-first-ms 2000  --budget-settled-ms 4000  --budget-kb 1024   (the open's pass/fail budget; every request over 500 KB is printed)
 // The whole log is also written to <out>/run.log (kept with the screenshots, so a lost Job output cannot hide the evidence).
-// usage: scripts/job-run.sh --ref <branch> --out job-out/ -- 'tools/qa/with-portal.sh 3476 node tools/qa/chat-open.mjs --out job-out/chat-open; exit $?'
+// Run it against the BUILT app (SCRATCH_PRODUCTION=1): a dev-mode scratch portal serves ~600 Vite modules (14 MB) per open, which is not what a user gets.
+// usage: scripts/job-run.sh --ref <branch> --out job-out/ -- 'SCRATCH_PRODUCTION=1 tools/qa/with-portal.sh 3476 node tools/qa/chat-open.mjs --out job-out/chat-open; exit $?'
 import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -281,6 +282,8 @@ async function runConfig(cookie, cfg) {
     res.heavyRequests = heavy.map((r) => ({ url: r.url.replace(/^https?:\/\/[^/]+/, ''), status: r.status, encoding: r.enc, type: r.type, encodedKB: KB(r.encoded), decodedKB: KB(r.decoded), ms: r.ms }));
     for (const r of res.heavyRequests) console.log(`     heavy ${r.url.slice(0, 160)} -> ${r.status} ${r.encoding} ${r.type} ${r.encodedKB} KB on the wire, ${r.decodedKB} KB decoded, ${r.ms} ms`);
     if (!heavy.length) console.log('     heavy: no request over 500 KB');
+    const devModules = all.filter((r) => /\/@vite\/|\/node_modules\/\.vite\/|\/src\/.*\.tsx?(\?|$)/.test(r.url)).length;
+    check(`${tag} the portal serves the built app (not Vite dev modules)`, devModules === 0, devModules ? `${devModules} dev-server modules: start the portal with SCRATCH_PRODUCTION=1` : '');
     // The open budget (pass/fail): first row, settled, and what the open moves.
     check(`${tag} open budget: first row within ${BUDGET_FIRST_MS} ms`, firstRow <= BUDGET_FIRST_MS, `${firstRow} ms`);
     check(`${tag} open budget: settled within ${BUDGET_SETTLED_MS} ms`, settled !== null && settled <= BUDGET_SETTLED_MS, `${settled} ms`);
