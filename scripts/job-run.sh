@@ -44,7 +44,7 @@
 # the Job and is deleted on exit; they are never on a command line, and the streamed log is masked for them. Only the Job's init container
 # `fetch` reads that Secret (T-401): it clones and runs `npm ci --ignore-scripts`, and no code of the repository or a dependency runs there;
 # the install scripts and the command run in the `run` container, which has no git or npm credential in its environment, git config or files, and gets
-# only the --pool-env values (T-426) as env: install and lifecycle scripts can read those, so only E2E_CF_ACCESS_* test credentials may go there. The raw
+# only the --pool-env values (T-426) as env. They are kept out of the environment of npm rebuild and the lifecycle scripts, but a lifecycle script of the same user can still read /proc/<ppid>/environ (the shell's start-up environment); the real boundary is that only E2E_CF_ACCESS_* test credentials may go in. The raw
 # log in the cluster is unmasked until the Job is cleaned up (TTL); only the streamed copy is masked. The whole log: JOB_RUN_LOG
 # (default /tmp/job-run-<job>.log). Exit: the command's code; 1 when the Job did not finish, 2 for a usage error, 124 past the deadline.
 set -eu
@@ -394,26 +394,36 @@ if [ -n "$artifacts" ] && [ -s "$work/art.b64" ]; then
   if [ -n "$pool_names" ]; then
     vals=; for n in $pool_names; do vals="$vals${!n}"$'\n'; done
     # Fail closed (as the fetch scan, T-401): grep 0 = found, 1 = clean, 2 or more = the scan failed: nothing is known to be clean, so every
-    # file unpacked is deleted and the run is red (rc 3).
-    gst=0; hits=$(printf '%s' "$vals" | grep -rlaF -f - -- "$out" 2>/dev/null) || gst=$?; unset vals
+    # file unpacked is deleted and the run is red (rc 3). The hits are listed NUL-separated into a file (a name may hold a line break, and a
+    # command substitution drops NUL bytes).
+    wipe_out() { # find's list first; then, whatever find said, the folder's contents by glob (a failed find must never leave a file behind)
+      while IFS= read -r -d '' f; do rm -f -- "$f"; done < "$work/all"
+      ( shopt -s dotglob nullglob; rm -rf -- "$out"/* ) # a subshell on purpose: the shell options stay as they were
+    }
+    gst=0; printf '%s' "$vals" | grep -rlaFZ -f - -- "$out" > "$work/hits" 2>/dev/null || gst=$?; unset vals
     if [ "$gst" -ge 2 ]; then
-      while IFS= read -r -d '' f; do rm -f -- "$f"; done < <(find "$out" -type f -print0 2>/dev/null)
+      find "$out" -type f -print0 > "$work/all" 2>/dev/null || : > "$work/all"
+      wipe_out
       echo "job-run: ERROR: with --pool-env the artifacts could not be checked for the credentials (the scan failed): all deleted" >&2
       [ "$rc" != 0 ] || rc=3
-    elif [ -n "$hits" ]; then
-      while IFS= read -r f; do rm -f -- "$f"; echo "job-run: ERROR: a --pool-env credential was in the artifact $f: deleted" >&2; done <<<"$hits"
+    elif [ -s "$work/hits" ]; then
+      while IFS= read -r -d '' f; do rm -f -- "$f"; echo "job-run: ERROR: a --pool-env credential was in the artifact ${f//[$'\n\r']/?}: deleted" >&2; done < "$work/hits"
       [ "$rc" != 0 ] || rc=3
     fi
     # A compressed file (a Playwright trace.zip, the report's data/*.zip, a .gz) cannot be scanned as plain bytes, and a value inside it would
     # survive. Chosen: delete it, fail closed (the known formats, no unzip or zcat needed, nothing about the value in an argument). Found by
     # extension and by magic bytes (a renamed file too). To keep traces, run without --pool-env artifacts, or switch the trace off.
+    fst=0; find "$out" -type f -print0 > "$work/all" 2>/dev/null || fst=$?
+    if [ "$fst" != 0 ]; then
+      wipe_out; echo "job-run: ERROR: with --pool-env the artifacts could not be listed to check for compressed files: all deleted" >&2; [ "$rc" != 0 ] || rc=3
+    fi
     while IFS= read -r -d '' f; do
       case "${f,,}" in
         *.zip|*.gz|*.tgz|*.bz2|*.xz|*.zst|*.br|*.7z|*.jar) z=1 ;;
         *) case "$(head -c 6 -- "$f" 2>/dev/null | od -An -tx1 | tr -d ' \n')" in 504b0304*|504b0506*|1f8b*|425a68*|fd377a585a00|28b52ffd*) z=1 ;; *) z=0 ;; esac ;;
       esac
       if [ "$z" = 1 ]; then rm -f -- "$f"; echo "job-run: ERROR: with --pool-env a compressed artifact cannot be checked for the credentials: $f: deleted" >&2; [ "$rc" != 0 ] || rc=3; fi
-    done < <(find "$out" -type f -print0 2>/dev/null)
+    done < "$work/all"
   fi
 fi
 node=$(pod_get '.items[0].spec.nodeName' "$pj")

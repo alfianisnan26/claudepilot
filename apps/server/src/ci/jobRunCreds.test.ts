@@ -327,6 +327,34 @@ test('T-401 gate cache miss: npm ci failing in the gate container (a package not
   assert.match(readFileSync(GATE, 'utf8'), /echo "=== npm ci failed in the gate container: it has no credential and installs from the cache.*is red, never skipped"/);
 });
 
+// S1g C2 (review 7723): pool_off before the --against reinstall, pool_on before the second command. Removing pool_off turns this red.
+test('T-426 S1g --pool-env --against: the reinstall on the other ref sees no pool variable; both runs of the command do', () => {
+  const w = world();
+  writeFileSync(join(w.src, 'package-lock.json'), '{"v":2}');
+  w.git(['add', '.'], w.src); w.git(['commit', '-qm', 'two'], w.src); w.publish();
+  const id = `ci${hex(12)}`;
+  const pool = `${w.root}/calls.pool`;
+  const cmd = Buffer.from(`echo "cmd value=$E2E_CF_ACCESS_CLIENT_ID" >> "${pool}"`).toString('base64');
+  const { r } = w.pod({ JR_AGAINST: w.one, JR_POOL_E2E_CF_ACCESS_CLIENT_ID: id, JR_CMD: cmd });
+  assert.equal(r.status, 1, r.stdout + r.stderr); // passes on both refs: no proof, beside the point here
+  assert.match(r.stdout, /lockfile differs on [0-9a-f]{40}: npm ci again/);
+  const lines = readFileSync(pool, 'utf8').trim().split('\n').map(noUc);
+  const cmds = lines.filter((l) => l.startsWith('cmd '));
+  assert.deepEqual(cmds, [`cmd value=${id}`, `cmd value=${id}`], 'the command gets the value on the ref and on the other ref');
+  const firstCmd = lines.indexOf(cmds[0] as string);
+  const againstInstall = lines.slice(firstCmd + 1).filter((l) => l.startsWith('npm '));
+  assert.ok(againstInstall.some((l) => l.includes('--prefer-offline')), `the offline reinstall ran after the first command: ${lines.join('\n')}`);
+  for (const l of againstInstall) assert.ok(l.endsWith('pool='), `no pool variable during the reinstall: ${l}`);
+  assert.ok(!(r.stdout + r.stderr).includes(id));
+});
+
+test('T-426 S1g the run script\'s `declare -A` and "${!jr_pool[@]}" work under set -u with no pool name', () => {
+  const w = world();
+  const { r } = w.pod({ JR_CMD: Buffer.from('true').toString('base64') });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.ok(!/unbound variable|bad array subscript/.test(r.stdout + r.stderr));
+});
+
 test('T-426 S1f --pool-env: the install steps (npm rebuild, lifecycle scripts) see no pool variable; only the command does', () => {
   const w = world();
   const id = `ci${hex(12)}`;

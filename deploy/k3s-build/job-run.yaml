@@ -8,7 +8,7 @@
 # Credentials (T-401): only the init container `fetch` has the Secret. It clones (git's helper reads the token from its environment) and runs
 # `npm ci --ignore-scripts` (the npm token), so no code of the repository or of a dependency runs while a credential is there; its HOME
 # (git config, the user .npmrc) is a volume the `run` container does not mount; it checks that no credential value is in /tmp and writes
-# its log and exit code there. The `run` container has no git or npm secret, only the --pool-env values (T-426: E2E_CF_ACCESS_* test credentials, as env, so install and lifecycle scripts can read them): it prints that log, runs the install scripts npm ci left out
+# its log and exit code there. The `run` container has no git or npm secret, only the --pool-env values (T-426: E2E_CF_ACCESS_* test credentials, as env; they are moved out of the environment at once and back in only for the command, so npm rebuild and the lifecycle scripts do not inherit them, but /proc/1/environ still holds them): it prints that log, runs the install scripts npm ci left out
 # (`npm rebuild` and the package's own lifecycle scripts), then the command. --against is fetched by `fetch` too (and, when its lockfile
 # differs, its packages go into npm's cache, so `run` installs them offline).
 apiVersion: batch/v1

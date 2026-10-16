@@ -975,7 +975,7 @@ test('T-426 --pool-env: a clean artifact set keeps rc 0, and the packed copy (ar
   const secret = `cs${hex(20)}`;
   // A grep shim that records, when the scan runs, whether the packed copy still exists in the script's work folder.
   const shim = join(w.root, 'bin/grep');
-  writeFileSync(shim, '#!/bin/bash\nif [ "$1" = -rlaF ]; then echo ran >> "$FAKE/scan-ran"; ls "$TMPDIR"/cp-job-run-*/art.b64 >> "$FAKE/art-seen" 2>/dev/null; fi\nexec /bin/grep "$@"\n');
+  writeFileSync(shim, '#!/bin/bash\nif [ "$1" = -rlaFZ ]; then echo ran >> "$FAKE/scan-ran"; ls "$TMPDIR"/cp-job-run-*/art.b64 >> "$FAKE/art-seen" 2>/dev/null; fi\nexec /bin/grep "$@"\n');
   chmodSync(shim, 0o755);
   const out = join(w.root, 'out');
   const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--pool-env', POOL_SECRET, '--artifacts', 'reports', '--out', out, '--', 'true'], { [POOL_SECRET]: secret });
@@ -990,7 +990,7 @@ test('T-426 --pool-env: a scan that fails (grep exit 2) is red, rc 3, and every 
   const w = world();
   const secret = `cs${hex(20)}`;
   const shim = join(w.root, 'bin/grep');
-  writeFileSync(shim, '#!/bin/bash\nif [ "$1" = -rlaF ]; then echo "grep: scan stub failed" >&2; exit 2; fi\nexec /bin/grep "$@"\n');
+  writeFileSync(shim, '#!/bin/bash\nif [ "$1" = -rlaFZ ]; then echo "grep: scan stub failed" >&2; exit 2; fi\nexec /bin/grep "$@"\n');
   chmodSync(shim, 0o755);
   const out = join(w.root, 'out');
   const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--pool-env', POOL_SECRET, '--artifacts', 'reports', '--out', out, '--', 'true'], { [POOL_SECRET]: secret });
@@ -998,6 +998,38 @@ test('T-426 --pool-env: a scan that fails (grep exit 2) is red, rc 3, and every 
   assert.match(r.out, /the artifacts could not be checked for the credentials \(the scan failed\): all deleted/);
   assert.ok(!existsSync(join(out, 'reports/junit.xml')), 'the unchecked artifact is deleted');
   assert.ok(!r.out.includes(secret), 'the value is not shown');
+});
+
+// S1g O1 (QA Perf FAIL): the hit list is NUL-separated, so a file name with a line break is deleted whole.
+test('T-426 S1g O1 --pool-env: an artifact whose NAME holds a line break and whose content holds the value is deleted (rc 3)', () => {
+  const w = world();
+  const secret = `cs${hex(20)}`;
+  const art = join(w.root, 'art-nl');
+  mkdirSync(join(art, 'reports'), { recursive: true });
+  writeFileSync(join(art, 'reports', 'a\nb.txt'), `cf-access-client-secret: ${secret}\n`);
+  writeFileSync(join(art, 'reports/clean.xml'), '<testsuites tests="1"/>');
+  writeFileSync(join(w.root, 'scenario.json'), JSON.stringify({ rc: 0, log: artifactLog(art) }));
+  const out = join(w.root, 'out');
+  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--pool-env', POOL_SECRET, '--artifacts', 'reports', '--out', out, '--', 'true'], { [POOL_SECRET]: secret });
+  assert.equal(r.code, 3, r.out);
+  assert.ok(!existsSync(join(out, 'reports', 'a\nb.txt')), 'the file with the line break in its name is deleted');
+  assert.ok(existsSync(join(out, 'reports/clean.xml')), 'a clean file stays');
+  assert.ok(!r.out.includes(secret));
+});
+
+// S1g C3: a find that fails in the fail-closed branch must not leave files behind while the message says "all deleted".
+test('T-426 S1g C3 --pool-env: scan failed AND find failed: every unpacked artifact is still deleted (rc 3)', () => {
+  const w = world();
+  const secret = `cs${hex(20)}`;
+  writeFileSync(join(w.root, 'bin/grep'), '#!/bin/bash\nif [ "$1" = -rlaFZ ]; then echo "grep: scan stub failed" >&2; exit 2; fi\nexec /bin/grep "$@"\n');
+  const realFind = spawnSync('sh', ['-c', 'command -v find'], { encoding: 'utf8' }).stdout.trim();
+  writeFileSync(join(w.root, 'bin/find'), `#!/bin/bash\nfor a in "$@"; do [ "$a" = -print0 ] && { echo "find: stub failed" >&2; exit 1; }; done\nexec ${realFind} "$@"\n`);
+  chmodSync(join(w.root, 'bin/grep'), 0o755); chmodSync(join(w.root, 'bin/find'), 0o755);
+  const out = join(w.root, 'out');
+  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--pool-env', POOL_SECRET, '--artifacts', 'reports', '--out', out, '--', 'true'], { [POOL_SECRET]: secret });
+  assert.equal(r.code, 3, r.out);
+  assert.match(r.out, /all deleted/);
+  assert.ok(!existsSync(join(out, 'reports/junit.xml')), 'nothing is left although find failed');
 });
 
 test('T-426 --pool-env: a base64 copy of a value in an artifact is NOT caught (a known limit, docs/dev-session.md); the plain value is', () => {
