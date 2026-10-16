@@ -17,7 +17,7 @@ import { AutoStore } from './store.js';
 export { AutoTransferEngine } from './engine.js';
 export { AutoStore } from './store.js';
 
-/** The chat controller and the usage monitor as the engine needs them; null when what was handed over lacks them (some tests). */
+/** The chat controller and the usage monitor as the engine needs them; null when what was handed over lacks them (some tests). Exported for tests (ports.test.ts). */
 export function ports(deps: Platform['deps']): { chat: ChatPort; usage: UsagePort } | null {
   const chat = deps.chat as unknown as Partial<ChatPort> | null;
   const usage = deps.claudeUsage as unknown as Partial<Pick<UsagePort, 'report' | 'onReading'>> | null;

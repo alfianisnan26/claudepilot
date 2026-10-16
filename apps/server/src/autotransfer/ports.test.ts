@@ -18,7 +18,7 @@ test('T-723 S3b: setModel asks the controller for the model as ENGINE_ACTOR', as
     onEvent: noop,
     history: noop,
     send: noop,
-    control: async (id: string, op: string, args: unknown, opts: { actor?: string }) => void asked.push({ id, op, args, actor: opts.actor }),
+    control: async (id: string, op: string, args: unknown, opts?: { actor?: string }) => void asked.push({ id, op, args, actor: opts?.actor }), // `opts?`: a dropped actor fails the assertion below, not with a crash
   };
   const usage = { report: noop };
   const p = ports({ chat, claudeUsage: usage } as unknown as Platform['deps']);

@@ -144,6 +144,8 @@ type TaskRow = {
 
 /** T-723: the longest actor an audit row keeps. */
 export const AUDIT_ACTOR_MAX = 120;
+/** Control, format and line or paragraph separator characters, except U+200C to U+200F (ZWNJ, ZWJ, the RTL marks); written as escapes, no raw invisible character in the source. */
+const ACTOR_STRIPPED = /(?:(?!\u{200c}|\u{200d}|\u{200e}|\u{200f})[\p{Cc}\p{Cf}\p{Zl}\p{Zp}])+/gu;
 const TASK_COLUMNS = 'task_id, tool_use_id, label, subagent_type, model, status, tokens, tool_uses, duration_ms, summary, started_at, ended_at';
 
 function taskOut(r: TaskRow): ChatTask {
@@ -1442,7 +1444,13 @@ export class ChatStore {
     // A Portal MCP token's label as it was when it acted, kept in the row's detail (redacted with the rest) so a later rename changes nothing.
     const detail = entry.actorLabel ? { ...entry.detail, actorLabel: entry.actorLabel.replace(/\s+/g, ' ').trim().slice(0, 60) } : entry.detail;
     // T-723: the actor is a short name; one from outside is stored on one line and cut (control and format characters, bidi overrides and zero width ones included, and newlines become a space).
-    const actor = entry.actor == null ? null : entry.actor.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]+/gu, ' ').trim().slice(0, AUDIT_ACTOR_MAX);
+    // ZWNJ, ZWJ and the RTL marks (U+200C to U+200F) stay: a Persian word or a ZWJ emoji needs them. Cut on code points; a name left empty is NULL.
+    const actor =
+      entry.actor == null
+        ? null
+        : Array.from(entry.actor.replace(ACTOR_STRIPPED, ' ').trim())
+            .slice(0, AUDIT_ACTOR_MAX)
+            .join('') || null;
       this.#writable()
       .prepare('INSERT INTO chat_audit (at, severity, kind, session_id, workspace_id, actor, detail) VALUES (?, ?, ?, ?, ?, ?, ?)')
       .run(this.#stamp(), entry.severity, entry.kind, entry.sessionId ?? null, entry.workspaceId ?? null, actor, redact(JSON.stringify(detail ?? {})));
