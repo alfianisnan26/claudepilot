@@ -12,8 +12,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 
 ## IN FLIGHT (6 of 6, D-71)
   Lanes' ticket_comment refused on unassigned tickets (T-341, T-549, T-675): verdicts live in their replies + this file.
-- QA PERF 7e4879c7: now re-QA T-426 S1h on wip/qa-t426-9573a08 18a3dbb1 (S1h + probes e1dd7b69 e864da9d aeae0ff9); asked to
-  post its T-611 S1 verdict on T-611 (none seen). Then QA BE 2 re-reads N1-N3.
+- QA PERF 7e4879c7: QA T-611 S1 PWG 7865 (job 800d9236; harness fix 8c9e58fc). Now re-QA T-426 S1h on wip/qa-t426-5fad547
+  5fad547e (S1h + probes e1dd7b69 e864da9d aeae0ff9 db6b952a; 3 own mutants). Then QA BE 2 re-reads N1-N3.
 - QA UI 8b13bb5a: REVIEW T-723 CHANGES 7815 -> S3c 7832. Now re-QA T-736 S3c fdc5636b (7842, job 9e34bc35 37/0, 15 mutants),
   then a blind re-read of T-781 S3 R1-R5.
 - QA BE 2 42e5408f: QA T-723 S3b PWG 7833 (job ba0960c9). T-610 r3 PASS 7844 (job a5bdc271) -> READY 7846. Now QA T-781 S3
@@ -25,7 +25,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - BE INFRA fad38191 (sonnet; 3958fe14 ended: T-426 S1h DONE 9573a085 7847, job 7a3a11e7 65/0, 4 mutants killed; lead read N1
   redact/safe_name/say: mask before cut, holds). Now T-611 S1b on ticket/T-611-s1b (from S1h; S1 re-applied by hand, conflicts)
   -> T-611 S2 -> T-524 S3c (7360, job-run.sh too: base on T-611) -> T-612 S1.
-- BACKEND b2f0e95f (sonnet): T-781 S3 DONE 6563633a (7839) -> QA; now T-781 S5 -> T-733 (7630, 7633). T-778 = person.
+- BACKEND 3484bd4d (sonnet; b2f0e95f ended: T-781 S5 DONE 71f9dc76 7869, job f86ac5de 274/0, 4 mutants killed -> QA BE 2 queue).
+  Now T-733 S4 S6 S1 on ticket/T-733-test-gaps (S5 job-run -> BE Infra with T-524 S3c). T-778 = person.
 - HELD: T-426 S1e 2174eee1 QA PASS 6169, review CHANGES 7121 -> fix, re-QA, merge after T-401. T-578 51f6c153 review CHANGES 6168 -> owner. T-631 CHANGES 5850 -> coordinator.
 - 16:12 OWNER PRIORITY (coordinator, T-426 5538): T-401 then T-426 FIRST. T-401 gate GREEN gate-54ba328-6502; ff only on the person's ack.
 
