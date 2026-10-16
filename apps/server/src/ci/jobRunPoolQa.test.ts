@@ -6,7 +6,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, test } from 'node:test';
@@ -218,6 +218,107 @@ test('QA-N1 (review 7773) an artifact whose NAME is the value: the value is in n
   assert.ok(!log.includes(secret), 'the value reached the Job log');
   assert.ok(!tree(join(out, 'reports')).some((n) => n.includes(secret)), 'a file named after the value survived');
   assert.ok(existsSync(join(out, 'reports/clean.xml')), 'a clean file stays');
+});
+
+// ---------- S1h (T-426): names that are the value, odd names, the compressed branch, a fresh --out, a dash --out ----------
+
+const logOf = (w: { root: string }) => (existsSync(join(w.root, 'job.log')) ? readFileSync(join(w.root, 'job.log'), 'utf8') : '');
+const kubectlCalls = (w: { root: string }) => (existsSync(join(w.root, 'calls.log')) ? readFileSync(join(w.root, 'calls.log'), 'utf8').split('\n').filter((l) => l.startsWith('kubectl')).length : 0);
+
+test('QA-N1b (S1h) a name that IS the value, plain, with + and =, and with a line break next to it: never in stdout, stderr or the log; shown REDACTED or ?', () => {
+  const values = [`cs${hex(20)}`, `cs${hex(8)}+${hex(6)}=${hex(4)}`];
+  for (const secret of values) {
+    const w = world({
+      [`${secret}.txt`]: `cf-access-client-secret: ${secret}\n`,
+      [`${secret}\nfoo.txt`]: `cf-access-client-secret: ${secret}\n`,
+      [`bar\n${secret}`]: `cf-access-client-secret: ${secret}\n`,
+      'clean.xml': '<testsuites/>',
+    });
+    const out = join(w.root, 'out');
+    const r = w.run(ARGS(out), { [POOL_ID]: secret });
+    assert.equal(r.code, 3, r.out);
+    assert.ok(!r.out.includes(secret), `value ${h16(secret)} reached stdout or stderr`);
+    assert.ok(!logOf(w).includes(secret), `value ${h16(secret)} reached the log`);
+    assert.ok(!/^foo\.txt/m.test(r.out) && !/^bar$/m.test(r.out), 'a line break in a name started a line of its own');
+    assert.ok(/REDACTED|\?/.test(r.out), 'the name is shown as REDACTED or ?');
+    assert.deepEqual(tree(join(out, 'reports')).sort(), ['clean.xml'], 'only the clean file stays');
+  }
+});
+
+test('QA-N1c (S1h) odd names (-, -rf, --version.txt, non-ASCII, only a newline) with a hit inside: deleted, shown as ?, nothing non-ASCII in the output', () => {
+  const secret = `cs${hex(20)}`;
+  const names = ['-', '-rf', '--version.txt', 'é日本.txt', '\n'];
+  const w = world({ ...Object.fromEntries(names.map((n) => [n, `x ${secret}\n`])), 'clean.xml': '<testsuites/>' });
+  const out = join(w.root, 'out');
+  const r = w.run(ARGS(out), { [POOL_ID]: secret });
+  assert.equal(r.code, 3, r.out);
+  assert.ok(!r.out.includes(secret) && !logOf(w).includes(secret));
+  assert.ok(!/[^\x20-\x7e\n]/.test(r.out), 'a non-ASCII name byte reached the output');
+  assert.deepEqual(tree(join(out, 'reports')).sort(), ['clean.xml'], `survivors: ${JSON.stringify(tree(join(out, 'reports')))}`);
+});
+
+test('QA-N2 (S1h) the compressed branch: a zip by name, a gzip by magic under a plain name; and a find that fails (-print0) wipes everything including a dotfile; rc 3', () => {
+  const secret = `cs${hex(20)}`;
+  // bzip2 magic (BZh, ASCII) under a plain name: the by-name check does not see it, the magic check must
+  const files = { 'trace.zip': 'PK\u0003\u0004stuff', 'data.bin': `BZh9${hex(8)}`, 'clean.xml': '<testsuites/>' };
+  const a = world(files);
+  const outA = join(a.root, 'out');
+  const ra = a.run(ARGS(outA), { [POOL_ID]: secret });
+  assert.equal(ra.code, 3, ra.out);
+  assert.deepEqual(tree(join(outA, 'reports')).sort(), ['clean.xml'], 'both compressed files deleted, the clean one stays');
+  assert.ok(!ra.out.includes(secret));
+  // the find that fails: the compressed loop has no list, so nothing may be trusted as clean
+  const b = world({ ...files, '.hidden': 'plain\n' });
+  const shim = join(b.root, 'shim');
+  mkdirSync(shim);
+  writeFileSync(join(shim, 'find'), '#!/bin/bash\ncase " $* " in *" -print0 "*) exit 1;; esac\nexec /usr/bin/find "$@"\n'); chmodSync(join(shim, 'find'), 0o755);
+  const outB = join(b.root, 'out');
+  const rb = b.run(ARGS(outB), { [POOL_ID]: secret }, shim);
+  assert.equal(rb.code, 3, rb.out);
+  assert.deepEqual(tree(join(outB, 'reports')), [], `a file survived a failed list: ${JSON.stringify(tree(join(outB, 'reports')))}`);
+});
+
+test('QA-N3 (S1h) with --pool-env a non-empty --out, a file, a dotfile-only folder or a link to a full folder is refused, rc 2, before any kubectl call, nothing deleted, no path shown', () => {
+  const secret = `cs${hex(20)}`;
+  const cases: Array<[string, (out: string, root: string) => void, (out: string) => boolean]> = [
+    ['a folder with a file', (out) => { mkdirSync(out); writeFileSync(join(out, 'keep.txt'), 'mine\n'); }, (out) => readFileSync(join(out, 'keep.txt'), 'utf8') === 'mine\n'],
+    ['a file in its place', (out) => writeFileSync(out, 'mine\n'), (out) => readFileSync(out, 'utf8') === 'mine\n'],
+    ['a dotfile only', (out) => { mkdirSync(out); writeFileSync(join(out, '.keep'), 'mine\n'); }, (out) => readFileSync(join(out, '.keep'), 'utf8') === 'mine\n'],
+    ['a link to a full folder', (out, root) => { mkdirSync(join(root, 'full')); writeFileSync(join(root, 'full/keep.txt'), 'mine\n'); symlinkSync(join(root, 'full'), out); }, () => true],
+  ];
+  for (const [label, setup, intact] of cases) {
+    const w = world({ 'clean.xml': '<testsuites/>' });
+    const out = join(w.root, 'out');
+    setup(out, w.root);
+    const r = w.run(ARGS(out), { [POOL_ID]: secret });
+    assert.equal(r.code, 2, `${label}: ${r.out}`);
+    assert.equal(kubectlCalls(w), 0, `${label}: a kubectl call was made before the refusal`);
+    assert.ok(intact(out), `${label}: the content was touched`);
+    if (label === 'a link to a full folder') assert.equal(readFileSync(join(w.root, 'full/keep.txt'), 'utf8'), 'mine\n');
+    assert.ok(!r.out.includes(out) && !r.out.includes(secret), `${label}: the path or the value is in the refusal`);
+  }
+  // an empty folder is accepted, and without --pool-env nothing is refused and nothing deleted
+  const e = world({ 'clean.xml': '<testsuites/>' });
+  mkdirSync(join(e.root, 'out'));
+  assert.equal(e.run(ARGS(join(e.root, 'out')), { [POOL_ID]: secret }).code, 0, 'an empty folder is accepted');
+  const n = world({ 'clean.xml': '<testsuites/>' });
+  mkdirSync(join(n.root, 'out')); writeFileSync(join(n.root, 'out/keep.txt'), 'mine\n');
+  const rn = n.run(ARGS(join(n.root, 'out')).filter((x, i, a) => x !== '--pool-env' && a[i - 1] !== '--pool-env'));
+  assert.equal(rn.code, 0, rn.out);
+  assert.equal(readFileSync(join(n.root, 'out/keep.txt'), 'utf8'), 'mine\n', 'without --pool-env nothing is deleted');
+});
+
+test('QA-N3b (S1h) an --out that starts with a dash is a path (./-x): a leak in it is deleted, a clean file lands, a non-empty one is refused', () => {
+  const secret = `cs${hex(20)}`;
+  const w = world({ 'leak.txt': `v ${secret}\n`, 'clean.xml': '<testsuites/>' });
+  const r = w.run(ARGS('-dashout'), { [POOL_ID]: secret });
+  assert.equal(r.code, 3, r.out);
+  assert.deepEqual(tree(join(w.root, '-dashout/reports')).sort(), ['clean.xml']);
+  const p = world({ 'clean.xml': '<testsuites/>' });
+  mkdirSync(join(p.root, '-pre')); writeFileSync(join(p.root, '-pre/keep.txt'), 'mine\n');
+  const rp = p.run(ARGS('-pre'), { [POOL_ID]: secret });
+  assert.equal(rp.code, 2, rp.out);
+  assert.equal(readFileSync(join(p.root, '-pre/keep.txt'), 'utf8'), 'mine\n');
 });
 
 test('QA-O2 (1) a scan that fails closed also deletes a file with a line break in its name; rc 3', () => {
