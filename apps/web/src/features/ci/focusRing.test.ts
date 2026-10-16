@@ -58,7 +58,7 @@ test('no focusable control uses outline-none (use outline-hidden)', () => {
   assert.deepEqual(hits, []);
 });
 
-test('a data-focus-container marker sits only on an element with tabIndex={-1}, and the 8 containers are all marked', () => {
+test('a data-focus-container marker sits only on an element with tabIndex={-1}, and the 9 containers are all marked', () => {
   const files = sourceFiles();
   assert.deepEqual(files.flatMap((f) => markerHits(f, lines(f))), []);
   const marked = files.filter((f) => lines(f).some((l) => MARKER.test(l)));
@@ -71,6 +71,7 @@ test('a data-focus-container marker sits only on an element with tabIndex={-1}, 
     'features/chat/FilesPanel.tsx',
     'features/chat/ImageViewer.tsx',
     'features/chat/artifacts/FileViewer.tsx',
+    'features/chat/btw/BtwCard.tsx',
     'features/glance/Popover.tsx',
   ]);
 });
@@ -190,8 +191,10 @@ test('index.css keeps a real outline for focusable controls under forced-colors'
   const css = readFileSync(join(srcDir, 'index.css'), 'utf8');
   assert.match(
     css,
-    /@media \(forced-colors: active\) \{\s*:focus-visible:not\(\[data-focus-container\]\) \{[^}]*outline: [^;}]*solid[^;}]*;/,
+    /@media \(forced-colors: active\) \{\s*:focus-visible:not\(\[data-focus-container\]\) \{[^}]*outline: [^;}]*solid (?:Highlight|CanvasText)\b[^;}]*;/,
   );
+  // a transparent outline is not a system colour: forced-colors would repaint it, but the rule must name the colour itself
+  assert.doesNotMatch(css, /:focus-visible:not\(\[data-focus-container\]\) \{[^}]*outline: [^;}]*transparent/);
   // the exclusion is the marker, never tabindex=-1 (a real control with tabindex=-1 keeps its ring)
   assert.doesNotMatch(css, /:focus-visible:not\(\[tabindex/);
 });

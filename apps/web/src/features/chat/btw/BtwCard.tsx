@@ -129,6 +129,7 @@ export function BtwCard({
     <section
       ref={ref}
       tabIndex={-1}
+      data-focus-container
       aria-label="btw"
       data-btw={variant}
       onKeyDown={onKey}
