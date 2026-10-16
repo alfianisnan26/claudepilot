@@ -12,18 +12,18 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - MERGED de3a3515 (batch 14): T-376 S3 (QA UI 6797; open S4 6798), gate-d0975fa green.
 - MERGED c3cad1a6 (batch 13): T-524 S3 (open S3b 6624) + T-681 (CLOSED; gaps -> T-710); gate-7526daa green.
 - MERGED 5f54dbcf (batch 12): T-574 S2 57bc14bf (QA BE 2 PASS WITH GAPS); gate GREEN gate-5a379d4 (6637). Open for S3 (6615).
-- Batches 1-11 (2026-10-15/16, 275cea5b .. 24570945): T-341 (open D), T-325 S1 (open S3), T-416 S1 (open S2); T-633, T-546, T-636, T-576, T-638 CLOSED.
 
 ## IN FLIGHT (6 of 6, D-71)
   Lanes' ticket_comment refused on unassigned tickets (T-341, T-549, T-675): verdicts live in their replies + this file.
 - QA PERF 7e4879c7: reviews T-610 CHANGES; T-251 S2, T-681, T-325 S1, T-379 S2 APPROVE; T-549 S2 CHANGES -> T-739 (cost 7161); now VERIFY T-697 a84a51b3.
 - QA UI 8b13bb5a: T-710, T-675, T-416 S1, T-341 (-> T-736 high), T-524 S3 APPROVE; pre-read S4 (7162; B1 additive ok); T-732 plan 7210; now VERIFY T-376 S4 5b095822 (reads Job b966dee9, own probes only).
-- QA BE 2 42e5408f: T-401 CHANGES (7103); T-426 S1e CHANGES (7121); probe plan 7147; review T-697 APPROVE (gaps T-733 7172); T-574 S3 PASS WITH GAPS (gaps T-733 7255; gate+merge with T-697); now re-verify T-401 fix 0fb6ef62 (plan 7147).
+- QA BE 2 42e5408f: T-401 CHANGES (7103); T-426 S1e CHANGES (7121); probe plan 7147; review T-697 APPROVE (gaps T-733 7172); T-574 S3 PASS WITH GAPS (gaps T-733 7255; gate+merge with T-697); T-401 fix 0fb6ef62 PASS WITH GAPS (job 53a231a0) -> S2b; now VERIFY T-736 5f4a7e4d.
 - IMPL lane 65dd09f6 (sonnet, satria; 0d799c90 ended: T-376 S4 BLOCKED 5b095822, long task red 11/12 207-466ms, older page red 7/12,
   content-visibility reverted; -> QA UI as is, budgets -> coordinator T-376 7264) T-732 items 1-5 (plan 7210) on ticket/T-732-ci-focus-ring.
 - BE INFRA lane b11ecab1 (sonnet, satria; e53e56df ended: T-401 fix DONE 0fb6ef62, 147 pass, no mutants; lead read diff) T-731 (no gate reuse: T-578) -> T-426 S1e fix 7121 -> T-610 rework 7053 -> T-524 S3c -> T-731.
-- BACKEND lane 290745c3 (sonnet, regitha; 216dbe18 ended: T-574 S3 DONE d97cbb16, bound 2,200 decision 7178) T-736 (high) -> T-723.
-- HELD: T-426 S1e 2174eee1 QA PASS 6169, review CHANGES 7121 -> fix, re-QA, merge after T-401. T-736 (high) -> Backend lane after T-574 S3. T-578 51f6c153 review CHANGES 6168 -> owner decision.
+- BACKEND lane 5a4e9c2d (sonnet, satria; 290745c3 ended: T-736 DONE 5f4a7e4d job f78012ab -> QA BE 2) T-401 S2b on ticket/T-401-s2 (7296:
+  find fails open, M3 survives, clean-tree rc 1) -> T-723 -> T-733 items.
+- HELD: T-426 S1e 2174eee1 QA PASS 6169, review CHANGES 7121 -> fix, re-QA, merge after T-401. T-578 51f6c153 review CHANGES 6168 -> owner.
   T-631 review CHANGES 5850: absolute-path entry (a) for the coordinator; F1 on job-run.sh -> T-635 (high).
 - 16:12 OWNER PRIORITY (coordinator, T-426 5538): T-401 then T-426 FIRST. T-401 gate GREEN gate-54ba328-6502; ff only on the person's ack.
 
