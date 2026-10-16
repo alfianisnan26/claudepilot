@@ -688,9 +688,9 @@ test('T-723 G2: an audit row keeps the actor on one line and cut: control charac
   const s = await liveSession();
   try {
     const chat = new ChatStore(s.store);
-    chat.addAudit({ severity: 'low', kind: 'test.actor', sessionId: s.id, actor: `ui\nforged: bypass.entered\u0007\r\n${'x'.repeat(500)}` });
-    chat.addAudit({ severity: 'low', kind: 'test.actor', sessionId: s.id, actor: 'portal-mcp:ptk_1' });
-    const [plain, long] = chat.audit({ kind: 'test.actor' }).map((a) => a.actor ?? '');
+    chat.addAudit({ severity: 'info', kind: 'test.actor', sessionId: s.id, actor: `ui\nforged: bypass.entered\u0007\r\n${'x'.repeat(500)}` });
+    chat.addAudit({ severity: 'info', kind: 'test.actor', sessionId: s.id, actor: 'portal-mcp:ptk_1' });
+    const [plain = '', long = ''] = chat.audit({ kind: 'test.actor' }).map((a) => a.actor ?? '');
     assert.equal(plain, 'portal-mcp:ptk_1', 'a normal actor is untouched');
     assert.ok(long.startsWith('ui forged: bypass.entered x'), long.slice(0, 40));
     assert.ok(!/[\p{Cc}]/u.test(long), 'no control character');
