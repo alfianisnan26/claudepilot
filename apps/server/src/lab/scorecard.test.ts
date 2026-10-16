@@ -20,7 +20,7 @@ import { burstEvidence, rateEvidence } from '../usagespend/spikes.js';
 import { SpendStore } from '../usagespend/store.js';
 import { LAB_POLICIES } from './authz.js';
 import { Lab } from './index.js';
-import { registerLabTools, scoreShort } from './portalTools.js';
+import { fitPrograms, registerLabTools, scoreShort } from './portalTools.js';
 import { createLabRoutes } from './routes.js';
 import { paceBlock, type PaceClaude } from './headline.js';
 import { percentile, wasteKind } from './scorecard.js';
@@ -316,6 +316,24 @@ test('T-549 (D-65): thresholds: warn from 80 percent of a ceiling; the done rate
     h.db.prepare(`UPDATE chat_sessions SET workspace_id = 'kubernetes/konfersi' WHERE id = 'L1'`).run();
     const week = target(prog(h.lab.scorecard({ window: 'week' })!, 'L1'), 'done_rate');
     assert.deepEqual([week.state, week.figure.value], ['breach', 0.43]);
+  } finally {
+    h.done();
+  }
+});
+
+test('T-549 (D-65): the done baseline is picked by workspace id: kubernetes/kohi-event is ClaudePilot (48), not Event (12)', async () => {
+  const h = await seeded();
+  try {
+    const baseline = async (ws: string) => {
+      h.db.prepare(`UPDATE chat_sessions SET workspace_id = ? WHERE id = 'L1'`).run(ws);
+      const t = target(prog(h.lab.scorecard({ window: 'week' })!, 'L1'), 'done_rate');
+      return [t.state, t.figure.source.includes('(48 a day)') ? 48 : t.figure.source.includes('(47 a day)') ? 47 : t.figure.source.includes('(12 a day)') ? 12 : null] as const;
+    };
+    assert.deepEqual(await baseline('kubernetes/kohi-event'), ['breach', 48]);
+    assert.deepEqual(await baseline('kubernetes/konfersi'), ['breach', 47]);
+    assert.deepEqual(await baseline('kubernetes/event'), ['breach', 12]);
+    // A name that merely contains a program's word has no baseline: unavailable, never another program's.
+    assert.deepEqual(await baseline('kubernetes/event-konfersi-x'), ['unavailable', null]);
   } finally {
     h.done();
   }
@@ -744,6 +762,57 @@ test('MCP crew_scorecard: short by default, full on ask; an agent of program A g
     mcp.done();
     h.done();
   }
+});
+
+test('MCP crew_scorecard full: 2, 3, 4 and 5 programs stay under the result limit; the rest are named and can be asked for', async () => {
+  const h = await seeded();
+  const registry = new ToolRegistry();
+  const mcp = await portalMcpHarness({ registry });
+  registerLabTools(h.lab, registry);
+  try {
+    const admin = mcp.token('admin');
+    const sizes: number[] = [];
+    for (let n = 2; n <= 5; n++) {
+      if (n > 2) {
+        const id = `N${n}`;
+        const ins = h.db.prepare(
+          `INSERT INTO chat_sessions (id, workspace_id, title, state, state_since, created_at, last_activity_at, claude_id, parent_id, agent, max_workers, subagents) VALUES (?, 'docker/api', ?, ?, ?, ?, ?, 'c1', ?, ?, 2, 0)`,
+        );
+        ins.run(id, `title ${id}`, 'idle', iso(at(8)), iso(at(8)), iso(at(8)), null, null);
+        ins.run(`${id}w`, `title ${id}w`, 'idle', iso(at(7)), iso(at(7)), iso(at(7)), id, 'implementer');
+        h.db.prepare(`INSERT INTO chat_usage (at, at_ms, session_id, workspace_id, claude_id, model, cost_usd, requests, agents) VALUES (?, ?, ?, 'docker/api', 'c1', 'claude-opus-5-5', 1, 1, 0)`).run(iso(at(2)), at(2), id);
+      }
+      const call = await mcp.call(admin.secret, 'crew_scorecard', { full: true });
+      assert.ok(!refused(call), `${n} programs: refused: ${JSON.stringify(call).slice(0, 200)}`);
+      const text = (call as any).result.content[0].text as string;
+      sizes.push(text.length);
+      assert.ok(text.length <= 20_000, `${n} programs: ${text.length} characters`);
+      const full = where(call);
+      assert.equal(full.programs.length + (full.omitted?.length ?? 0), n, `${n} programs: every program is either carried or named`);
+      assert.ok(full.programs.length >= 1);
+      for (const id of full.omitted ?? []) {
+        const one = await mcp.call(admin.secret, 'crew_scorecard', { full: true, program: id });
+        assert.ok(!refused(one) && where(one).programs[0].program === id, `omitted ${id} can be asked for alone`);
+      }
+    }
+    console.log(`crew_scorecard full sizes at 2, 3, 4, 5 programs: ${sizes.join(', ')}`);
+  } finally {
+    mcp.done();
+    h.done();
+  }
+});
+
+test('fitPrograms: a program fits at exactly the ceiling and is left out one character over', () => {
+  const head = { scope: 'portal' };
+  const rows = [{ program: 'a', x: 'x'.repeat(20) }, { program: 'b', x: 'y'.repeat(20) }];
+  const both = JSON.stringify({ ...head, programs: rows }).length;
+  const exact = fitPrograms(head, rows, both) as any;
+  assert.deepEqual([exact.programs.length, exact.omitted], [2, undefined], 'at the ceiling both fit');
+  const over = fitPrograms(head, rows, both - 1) as any;
+  assert.deepEqual([over.programs.map((r: any) => r.program), over.omitted], [['a'], ['b']], 'one character over, the second is named, not carried');
+  const tiny = fitPrograms(head, rows, 1) as any;
+  assert.deepEqual([tiny.programs.length, tiny.omitted], [1, ['b']], 'one program is always carried');
+  assert.deepEqual((fitPrograms(head, [], 1) as any).programs, []);
 });
 
 /* ---------- T-600: the headline (lab/headline.ts) ---------- */

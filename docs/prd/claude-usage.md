@@ -1093,7 +1093,7 @@ tables the portal already keeps; nothing new is stored.
   the lead chain's part of the dollars under 30 % (offenders: the lead chain). (3) `qa_opus_share`: QA and review workers with a request
   on opus or fable under 10 % of them (a `spawn_why` does not exempt here; offenders: those sessions; none: unavailable, `no_samples`).
   (4) `done_rate`: feature and task tickets done in the window, scaled to a day, against the 2026-10-15 baseline of 48 / 47 / 12 a day
-  (ClaudePilot / Konfersi / Event, which counted all ticket types, so the comparison is hard), matched by the lead's workspace name:
+  (ClaudePilot / Konfersi / Event, which counted all ticket types, so the comparison is hard), matched by the lead's exact workspace id (`kubernetes/kohi-event` and `kubernetes/claudepilot` 48, `kubernetes/konfersi` 47, `kubernetes/event` 12; never a pattern on the name, which gave ClaudePilot's own workspace the Event 12):
   at or above is ok, under it warn, under half breach; no baseline for the workspace: unavailable, `not_recorded`. (5) `quota_unused`:
   the worst quota left unused at a reset inside the window (T-547, `claude_usage_samples`) over 30 % is a breach; whole portal, so the
   row repeats on every program and an agent's own read gets unavailable (`no_source`); offenders are Claude ids; "while a crew had work
@@ -1107,7 +1107,8 @@ tables the portal already keeps; nothing new is stored.
   own program, the top of its session's lineage; another program, or one that does not exist, is the same 404) and the Portal MCP tool
   `crew_scorecard` (agent, reach session, read only; the same scoping, `NOT_FOUND`; an admin's token reads every program; short by
   default; `full: true` for every figure with its basis, the sources named once in `basis` so the result stays under the MCP size limit;
-  the route keeps a source on each figure). Wire types: `packages/contracts/src/scorecard.ts`.
+  the route keeps a source on each figure; the full form is paged by size: programs are carried in order while the result is at or under
+  19,000 characters, the rest are named in `omitted` and asked for with `program`). Wire types: `packages/contracts/src/scorecard.ts`.
 - **The page (S2): Usage → Crew** (`?tab=crew`; `features/lab/ScorecardTab.tsx`, pure wording in `scorecardModel.ts`). A window picker (1h, 6h,
   Day, Week) and Alone / Compare (Compare asks `compare=1` and shows each number's earlier value as "was"); the sources of every figure
   in one InfoTip. One card per program with five numbers: done per hour, dollars per done ticket (all-in), the lead's share, tickets in

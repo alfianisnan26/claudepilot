@@ -676,9 +676,11 @@ export const D65 = {
   warnFrac: 0.8,
   /** Feature and task tickets done a day at the baseline (scorecard T-450, 24 h to 2026-10-15 11:00 UTC; all ticket types), by the lead's workspace name. */
   doneBaselines: [
-    { match: /claudepilot/i, perDay: 48 },
-    { match: /konfersi/i, perDay: 47 },
-    { match: /event/i, perDay: 12 },
+    // By exact workspace id, never a pattern on the name: ClaudePilot's own workspace is kubernetes/kohi-event, and /event/ would give it the Event program's 12.
+    { workspace: 'kubernetes/kohi-event', perDay: 48 },
+    { workspace: 'kubernetes/claudepilot', perDay: 48 },
+    { workspace: 'kubernetes/konfersi', perDay: 47 },
+    { workspace: 'kubernetes/event', perDay: 12 },
   ],
   /** From the baseline down to this fraction of it is a warn; below it a breach. */
   doneBreachFrac: 0.5,
@@ -735,7 +737,7 @@ export function d65Targets(p: Program, facts: CrewFacts, rows: UsageRow[], win: 
   // 4. Feature and task tickets done a day, against the baseline.
   const ruleDone = 'Feature and task tickets done a day at or above the 2026-10-15 baseline (48 / 47 / 12 a day, all types: ClaudePilot / Konfersi / Event).';
   const wsName = facts.sessions.get(p.id)?.workspaceId ?? '';
-  const base = D65.doneBaselines.find((b) => b.match.test(wsName));
+  const base = D65.doneBaselines.find((b) => b.workspace === wsName);
   if (!done) out.push(unavailable('done_rate', ruleDone, 'no_source', SRC.tickets));
   else if (!base) out.push(unavailable('done_rate', ruleDone, 'not_recorded', `${SRC.doneRate}; no baseline for workspace ${wsName || 'unknown'}`));
   else {
