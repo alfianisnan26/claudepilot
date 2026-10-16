@@ -11,7 +11,6 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   (actions.test timer flaked in suite, passed alone: T-697's case).
 - MERGED de3a3515 (batch 14): T-376 S3 (QA UI 6797; open S4 6798), gate-d0975fa green.
 - MERGED c3cad1a6 (batch 13): T-524 S3 (open S3b 6624) + T-681 (CLOSED; gaps -> T-710); gate-7526daa green.
-- MERGED 5f54dbcf (batch 12): T-574 S2 57bc14bf (QA BE 2 PASS WITH GAPS); gate GREEN gate-5a379d4 (6637). Open for S3 (6615).
 
 ## IN FLIGHT (6 of 6, D-71)
   Lanes' ticket_comment refused on unassigned tickets (T-341, T-549, T-675): verdicts live in their replies + this file.
