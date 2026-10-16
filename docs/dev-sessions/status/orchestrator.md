@@ -16,12 +16,12 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 
 ## IN FLIGHT (6 of 6, D-71)
   Lanes' ticket_comment refused on unassigned tickets (T-341, T-549, T-675): verdicts live in their replies + this file.
-- QA PERF 7e4879c7: reviews T-610 CHANGES, T-251 S2 + T-681 APPROVE (T-733, T-732 7089); now review T-325 S1 -> T-697.
-- QA UI 8b13bb5a: reviews T-710, T-675 APPROVE; T-574 S2 CHANGES (decision 7088: lines default stays); now T-416 S1 -> T-376 S4.
-- QA BE 2 42e5408f: T-610 FAIL -> rework 7053; reviews T-524 S3b, T-376 S3 APPROVE (Vary -> S4); now T-401 060aca4 -> T-574 S3.
+- QA PERF 7e4879c7: reviews T-610 CHANGES; T-251 S2, T-681, T-325 S1 APPROVE (-> T-733 7104); now T-379 S2 -> T-697.
+- QA UI 8b13bb5a: reviews T-710, T-675, T-416 S1 APPROVE; T-574 S2 CHANGES (7088); now T-341 -> T-376 S4.
+- QA BE 2 42e5408f: T-610 FAIL -> 7053; reviews T-524 S3b, T-376 S3 APPROVE; T-401 CHANGES (7103); now T-426 S1e -> T-574 S3.
 - IMPL lane 0d799c90 (sonnet) T-376 S4 87144867: wiring proven (3fa76653); long task 207-273ms red 1-2/4 (a435d70e) -> one try content-visibility (6952); wiring
   test + 4x CPU, long-task, DOM/heap, older-page budgets; if still red -> QA UI as is, budget question -> coordinator.
-- BE INFRA lane a7d33a84 (sonnet, sekar; 87749649 ended after T-610 rework) T-697 rework (await scan, 30x load) -> respawn in T-610 worktree for rework 7053 -> T-524 S3c -> T-731.
+- BE INFRA lane a7d33a84 (sonnet, sekar; 87749649 ended after T-610 rework) T-697 rework (await scan, 30x load) -> T-401 fix 7103 (new ticket/T-401-s2 from T-401-job-env) -> T-610 rework 7053 -> T-524 S3c -> T-731.
 - BACKEND lane 216dbe18 (sonnet, regitha) T-574 S3 (cross-lead NOT_FOUND test, size trim, bound 1.5k) -> T-723.
 - HELD: T-426 S1e 2174eee1 QA PASS 6169 -> merge on the T-401 ack (4941). T-578 51f6c153 review CHANGES 6168 -> owner decision.
   T-631 review CHANGES 5850: absolute-path entry (a) for the coordinator; F1 on job-run.sh -> T-635 (high).
@@ -56,8 +56,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - T-578 (gate wall, via coordinator): owner picks same-tree gate reuse (a) portal CI store [lead default], (b) pipeline-only RBAC
   ConfigMap, (c) accept risk, (d) drop reuse; reuse also conflicts with "full gate on the exact commit" (charter). Lead can't comment (T-634).
 - T-666 (high, RBAC = a person's wall): workspace kohi-event can create/delete ConfigMaps in isnan-claudepilot (review 6168, can-i).
-- T-401 gate wall (via the coordinator): the owner acks on T-401 that gate-job.yaml's change is credential plumbing plus one
-  stricter red (exit 3 on a credential value in the gate's files); gate.sh's checks unchanged. Question text in 4941.
+- T-401 gate wall (via the coordinator): ack 4941 ON HOLD. Review 7103: exit-3 evidence can leak a token, the scan fails open,
+  the commit's .npmrc sees the token. Fix -> re-QA -> re-ask the ack with corrected text (scope: init cache, tw clock).
 - T-341 D (updatedInput) needs a real Claude Code session: a person or the coordinator.
 - T-93 Konfersi production only. Coordinator items: T-422 (sudo), T-306 item 4 / T-340; D-row for T-417's Bypass across sleep;
   T-433's persona-wall question (2984).
@@ -68,7 +68,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   T-527 finding 4 (owner triggers tagging owner-checklist); T-657 reopen T-259/T-317/T-338.
 
 ## NEXT (in order, as slots free)
-1. Merges: T-401 060aca4 (ack 4941) -> T-426 S1e -> T-379 S2 3f11b28 (PASS 4948, review 4938); deploys are the coordinator's.
+1. T-401 fix (7103) + re-QA, then ack 4941 -> T-426 S1e -> T-379 S2 3f11b28 (PASS 4948, review 4938); deploys are the coordinator's.
 2. On PASS: T-697, T-549 S2, T-376 S3 -> gate, merge. BE Infra after T-549 S2: T-524 S3b.
    T-710 sweep PASS WITH GAPS 6737 (job abef017c); harness slice in flight, then QA UI re-sweep. Then T-376 S3, T-549 S2, T-697 -> QA.
 3. T-675 (memory findings 4/5 + R2 test, Backend lane), T-574 S3 (6615), T-416 S2 (Bypass restore).
