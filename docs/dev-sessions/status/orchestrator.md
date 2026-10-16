@@ -21,19 +21,19 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - QA BE 2 42e5408f: T-401 CHANGES (7103); T-426 S1e CHANGES (7121); probe plan 7147; review T-697 APPROVE (gaps T-733 7172); now VERIFY T-574 S3 d97cbb16.
 - IMPL lane 0d799c90 (sonnet) T-376 S4 87144867: wiring proven (3fa76653); long task 207-273ms red 1-2/4 (a435d70e) -> one try content-visibility (6952); wiring
   test + 4x CPU, long-task, DOM/heap, older-page budgets; if still red -> QA UI as is, budget question -> coordinator.
-- BE INFRA lane e53e56df (sonnet, satria; a7d33a84 ended: T-697 DONE a84a51b3, 0/30 vs old 30/30) T-401 fix 7103 (new ticket/T-401-s2 from T-401-job-env) -> T-426 S1e fix 7121 (rebase on T-401-s2) -> T-610 rework 7053 -> T-524 S3c -> T-731.
+- BE INFRA lane e53e56df (sonnet, satria; a7d33a84 ended: T-697 DONE a84a51b3, 0/30 vs old 30/30) T-401 fix 7103 (ticket/T-401-s2) -> T-731 (coordinator 09:05: first; T-731 unassigned, lane comments start) -> T-426 S1e fix 7121 -> T-610 rework 7053 -> T-524 S3c -> T-731.
 - BACKEND lane 290745c3 (sonnet, regitha; 216dbe18 ended: T-574 S3 DONE d97cbb16, bound 2,200 decision 7178) T-736 (high) -> T-723.
 - HELD: T-426 S1e 2174eee1 QA PASS 6169, review CHANGES 7121 -> fix, re-QA, merge after T-401. T-736 (high) -> Backend lane after T-574 S3. T-578 51f6c153 review CHANGES 6168 -> owner decision.
   T-631 review CHANGES 5850: absolute-path entry (a) for the coordinator; F1 on job-run.sh -> T-635 (high).
 - 16:12 OWNER PRIORITY (coordinator, T-426 5538): T-401 then T-426 FIRST. T-401 gate GREEN gate-54ba328-6502; ff only on the person's ack.
 
 ## DECISIONS (binding)
+- 09:05 T-731 before the T-426 fix (coordinator). Conflict with owner order T-401 -> T-426 named: T-426 merge waits the T-401 ack anyway; swap if owner says.
 - 07:45 D-75 (coordinator): one Job per commit (checks chained), never the same command twice on a commit, QA reads the builder's log;
   the LEAD RUNS NO JOBS (quick-check and gate go to a lane); idle QA gets no-Job work (reviews, browser). T-731 -> BE Infra after T-697.
 - 06:50 T-251 S2 exhausted source with a running turn is steered once and moves at the boundary (FR10a, PRD default); QA asks
   whether the owner wants a move mid-turn: product choice, not a defect; changing it means FR10a + t255 together.
 - 03:55 Lead false claim corrected: T-524 6775 said job 4d5cb657 proved the S3 patch; its log shows the rule at creation. 6788; incident T-721.
-- 23:55 T-524 S3 (6489): Jobs off k3s-master over the T-611 line; re-measure after merge. 22:59 T-574 out of batch 8 (6396).
 - 20:14 PUSHBACK T-657: T-259 (QA FAIL 1773), T-317 (live run not done), T-338 (no QA pass) closed against the evidence -> reopen
   proposed; lead can't (T-634).
 - 16:30 D-71 (coordinator): limit 6; 3rd build lane BE Infra (CI, runners, job-run, k3s, deploy, secrets delivery, usage, spend, quota):
