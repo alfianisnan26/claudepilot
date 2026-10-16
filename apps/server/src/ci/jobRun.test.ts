@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict';
 import { type ChildProcess, spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { hostname, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, test } from 'node:test';
@@ -147,7 +147,7 @@ test('a run: the suspended Job manifest, the stream, the exit code, the artifact
   assert.equal(r.code, 3, r.out);
   assert.match(r.out, /hello from the job/);
   assert.match(r.out, /=== JOB-RUN SUMMARY claudepilot@abc1234 .* rc=3/);
-  assert.match(r.out, /job-run: claudepilot-job-[0-9a-f]{8} rc=3 in \d+s \(queued \d+s\) on k3s-master with 3Gi; log: /);
+  assert.match(r.out, /job-run: claudepilot-job-[0-9a-f]{8} rc=3 in \d+s \(queued \d+s\) on k3s-master with 4Gi; log: /);
   assert.doesNotMatch(r.out, /OOM|Pending|evicted/, 'a plain failure is not reported as memory');
   assert.doesNotMatch(r.out, /ARTIFACTS BEGIN/, 'the artifacts block is not shown');
   assert.equal(readFileSync(join(w.root, 'got/reports/junit.xml'), 'utf8'), '<testsuites tests="1"/>');
@@ -166,7 +166,7 @@ test('a run: the suspended Job manifest, the stream, the exit code, the artifact
   assert.equal(pod.automountServiceAccountToken, false);
   assert.match(JSON.stringify(pod.affinity), /"podAntiAffinity".*"namespaces":\["isnan-claudepilot-workspaces"\].*"claudepilot.managed":"true"/);
   // T-524: memory requested = limited, so the scheduler only places the Job where all of it fits; /tmp (in memory) inside that limit.
-  assert.deepEqual(c.resources, { requests: { cpu: '1000m', memory: '3Gi' }, limits: { cpu: '4', memory: '3Gi' } });
+  assert.deepEqual(c.resources, { requests: { cpu: '1000m', memory: '4Gi' }, limits: { cpu: '4', memory: '4Gi' } });
   assert.deepEqual(pod.volumes, [{ name: 'tmp', emptyDir: { medium: 'Memory', sizeLimit: '2Gi' } }, { name: 'shm', emptyDir: { medium: 'Memory', sizeLimit: '1Gi' } }]);
   assert.ok(!/__[A-Z_]+__/.test(text.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n')), 'every placeholder is filled');
   assert.equal(c.image, 'registry.test/claudepilot/workspace:1-dev-1');
@@ -314,8 +314,8 @@ test('T-524 the per-program cap: two Konfersi Jobs running (one from before the 
   assert.equal(w.run(['--list'], { JOB_RUN_MAX_PER_PROGRAM: 'x' }).code, 2, 'the cap is a number');
 });
 
-test('T-524 --big: 8Gi requested = limited, /tmp 4Gi; the default is 3Gi with /tmp 2Gi (T-731); both prefer a node other than the control plane', () => {
-  for (const [argv, mem, tmp] of [[[], '3Gi', '2Gi'], [['--big'], '8Gi', '4Gi']] as const) {
+test('T-524 --big: 8Gi requested = limited, /tmp 4Gi; the default is 4Gi with /tmp 2Gi; both prefer a node other than the control plane', () => {
+  for (const [argv, mem, tmp] of [[[], '4Gi', '2Gi'], [['--big'], '8Gi', '4Gi']] as const) {
     const w = world();
     const r = w.run([...argv, '--repo', 'claudepilot', '--ref', 'main', '--', 'true']); // --big first: it takes no value
     assert.equal(r.code, 0, r.out);
@@ -330,7 +330,7 @@ test('T-524 --big: 8Gi requested = limited, /tmp 4Gi; the default is 3Gi with /t
 
 test('T-524 OOMKilled: the container killed at its limit says so with the limit and the hint --big (exit 137); with --big, split it', () => {
   const killed = '=== JOB-RUN checked out claudepilot at abc1234 in 1s\nrunning the suite\n'; // no exit line: bash itself was killed
-  for (const [argv, re] of [[[], /was OOMKilled: it reached its memory limit of 3Gi \(the in-memory \/tmp counts too\); rerun with --big \(8Gi, prefers k3s-node2\)/],
+  for (const [argv, re] of [[[], /was OOMKilled: it reached its memory limit of 4Gi \(the in-memory \/tmp counts too\); rerun with --big \(8Gi, prefers k3s-node2\)/],
     [['--big'], /was OOMKilled: it reached its memory limit of 8Gi .*; 8Gi is the most a Job gets: split the command/]] as const) {
     const w = world([], { oom: true, rc: 1, reason: 'BackoffLimitExceeded', log: killed });
     const r = w.run(['--repo', 'claudepilot', '--ref', 'main', ...argv, '--', 'npm test']);
@@ -342,7 +342,7 @@ test('T-524 OOMKilled: the container killed at its limit says so with the limit 
   const w = world([], { rc: 1, log: '=== JOB-RUN SUMMARY claudepilot@abc1234 checkout=1s steps=1s run=1s rc=1 node=k3s-node2\n=== JOB-RUN MEMORY peak=4095Mi limit=4096Mi oom_kills=2\n=== JOB-RUN EXIT 1\n' });
   const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--', 'npm test']);
   assert.equal(r.code, 1, r.out);
-  assert.match(r.out, /2 process\(es\) were OOM-killed at the memory limit of 3Gi; rerun with --big/);
+  assert.match(r.out, /2 process\(es\) were OOM-killed at the memory limit of 4Gi; rerun with --big/);
   // Evicted for /tmp over its sizeLimit.
   const ev = world([], { rc: 1, reason: 'BackoffLimitExceeded', evicted: 'Usage of EmptyDir volume "tmp" exceeds the limit "2Gi".', log: killed });
   const e = ev.run(['--repo', 'claudepilot', '--ref', 'main', '--', 'npm test']);
@@ -353,7 +353,7 @@ test('T-524 Pending for memory: one clear line (not a silent wait), then the Job
   const w = world();
   writeFileSync(join(w.root, 'pending'), '0/2 nodes are available: 2 Insufficient memory. preemption: 0/2 nodes are available: 2 No preemption victims found for incoming pod.');
   const s = w.start(['--repo', 'claudepilot', '--ref', 'main', '--', 'true']);
-  await waitFor('the Pending line', () => /is Pending: no node has 3Gi of memory free to request \(0\/2 nodes are available: 2 Insufficient memory\./.test(s.out()));
+  await waitFor('the Pending line', () => /is Pending: no node has 4Gi of memory free to request \(0\/2 nodes are available: 2 Insufficient memory\./.test(s.out()));
   assert.match(s.out(), /it starts when a Job ends and frees memory \(waits up to 900s\)/);
   await new Promise((r) => setTimeout(r, 400));
   rmSync(join(w.root, 'pending'));
@@ -371,7 +371,7 @@ test('T-524 Pending for memory: one clear line (not a silent wait), then the Job
 
 test('T-524 a full in-memory /tmp: "No space left on device" in a failed Job gives the --big hint (no eviction comes); a passing Job does not', () => {
   const full = 'npm error nospc ENOSPC: No space left on device, write\n';
-  for (const [argv, re] of [[[], /: No space left on device: \/tmp holds at most 2Gi in memory \(it and \/dev\/shm count against the 3Gi limit\); rerun with --big \(\/tmp 4Gi\)/],
+  for (const [argv, re] of [[[], /: No space left on device: \/tmp holds at most 2Gi in memory \(it and \/dev\/shm count against the 4Gi limit\); rerun with --big \(\/tmp 4Gi\)/],
     [['--big'], /: No space left on device: \/tmp holds at most 4Gi in memory .*the 8Gi limit\); 4Gi is the most \/tmp gets/]] as const) {
     const w = world();
     writeFileSync(join(w.root, 'scenario.json'), JSON.stringify({ rc: 1, log: jobLog(w.root, 1, full) }));
@@ -862,12 +862,27 @@ test('T-611: a Job Pending on the required rule says it waits for k3s-node2', as
   assert.match(r.out, /is Pending: the control-plane node is over 75% of its memory, so this Job waits for k3s-node2/);
 });
 
-// T-731: a Job that passed is reused for the same repository, full commit and command (the key and the store: docs/prd/local-git-ci.md).
+// T-731: with --reuse, a Job that passed is reused for the same repository, full commit and command (the key and the store: docs/prd/local-git-ci.md).
 const sha = () => hex(20); // 40 hex characters, as a full commit
 const jobs = (w: ReturnType<typeof world>) => w.applied().length;
-/** Run `--ref <ref>` with its own options on the world's script; the whole thing is one Job unless it is reused. */
-const go = (w: ReturnType<typeof world>, ref: string, cmd: string, extra: string[] = [], script = SCRIPT) =>
-  w.run(['--repo', 'claudepilot', '--ref', ref, ...extra, '--', cmd], {}, script);
+/** Run `--reuse --ref <ref>` with its own options on the world's script; the whole thing is one Job unless it is reused. */
+const go = (w: ReturnType<typeof world>, ref: string, cmd: string, extra: string[] = [], script = SCRIPT, env: Record<string, string> = {}) =>
+  w.run(['--repo', 'claudepilot', '--reuse', '--ref', ref, ...extra, '--', cmd], env, script);
+const store = (w: ReturnType<typeof world>) => join(w.root, 'home/.cache/claudepilot-job-run');
+
+test('T-731 reuse is opt-in: without --reuse a saved entry is not used and nothing is written', () => {
+  const w = world();
+  const c = sha();
+  assert.equal(go(w, c, 'npm test').code, 0); // saved
+  assert.equal(jobs(w), 1);
+  const plain = w.run(['--repo', 'claudepilot', '--ref', c, '--', 'npm test']);
+  assert.equal(plain.code, 0, plain.out);
+  assert.doesNotMatch(plain.out, /reused a passed result/);
+  assert.equal(jobs(w), 2, 'no flag: a Job');
+  const w2 = world();
+  assert.equal(w2.run(['--repo', 'claudepilot', '--ref', c, '--', 'npm test']).code, 0);
+  assert.ok(!existsSync(store(w2)), 'no flag: nothing saved, no folder made');
+});
 
 test('T-731 reuse: a pass is saved (masked log, exit 0); the same repo, commit and command returns it at once with no Job; the log file is written', () => {
   const w = world();
@@ -881,8 +896,7 @@ test('T-731 reuse: a pass is saved (masked log, exit 0); the same repo, commit a
   assert.equal(second.code, 0, second.out);
   const origin = /^job-run: (claudepilot-job-[0-9a-f]{8}) rc=0/m.exec(first.out)?.[1];
   assert.ok(origin, 'the first run names its Job');
-  assert.match(second.out, new RegExp(`job-run: reused a passed result for claudepilot@[0-9a-f]{12} from Job ${origin} \\(saved `));
-  assert.match(second.out, /job-run: reused a passed result for claudepilot@[0-9a-f]{12} from Job claudepilot-job-[0-9a-f]{8} \(saved.*; --fresh runs it again/);
+  assert.match(second.out, new RegExp(`job-run: reused a passed result for claudepilot@[0-9a-f]{12} from Job ${origin} \\(passed \\d{4}-\\d\\d-\\d\\dT[\\d:]+Z, key [0-9a-f]{12}\\); drop --reuse to run it again`));
   assert.match(second.out, /hello from the job/);
   assert.match(second.out, /=== JOB-RUN EXIT 0/);
   assert.ok(!second.out.includes(w.npmToken));
@@ -909,14 +923,7 @@ test('T-731 reuse: a pass whose log held the credential is masked in the output 
   assert.ok(!existsSync(join(w.root, 'home/.cache/claudepilot-job-run')), 'nothing stored');
 });
 
-test('T-731 reuse: --fresh runs the Job again; a failed run is never saved or reused', () => {
-  const w = world();
-  const c = sha();
-  assert.equal(go(w, c, 'npm test').code, 0);
-  const f = go(w, c, 'npm test', ['--fresh']);
-  assert.equal(f.code, 0, f.out);
-  assert.doesNotMatch(f.out, /reused a passed result/);
-  assert.equal(jobs(w), 2);
+test('T-731 reuse: a failed run is never saved or reused', () => {
   const bad = world([], { rc: 3 });
   const d = sha();
   for (let i = 1; i <= 2; i++) {
@@ -928,7 +935,7 @@ test('T-731 reuse: --fresh runs the Job again; a failed run is never saved or re
   assert.ok(!existsSync(join(bad.root, 'home/.cache/claudepilot-job-run')), 'nothing stored');
 });
 
-test('T-731 reuse: a changed commit, command, steps, --against, --also or runner version is a miss; a branch, --artifacts or a non-commit --also/--against are never keyed', () => {
+test('T-731 reuse: a changed commit, command, steps, --against, --also, the hash of job-run.sh or job-run.yaml, the runner image tag or --big is a miss; a branch, --artifacts or a non-commit --also/--against are never keyed', () => {
   const w = world();
   const c = sha();
   assert.equal(go(w, c, 'npm test').code, 0);
@@ -949,6 +956,8 @@ test('T-731 reuse: a changed commit, command, steps, --against, --also or runner
   miss('another job-run.yaml', go(w, c, 'npm test', [], upgraded));
   const newer = mutant((y) => y, (s) => `${s}# a newer runner\n`);
   miss('another job-run.sh', go(w, c, 'npm test', [], newer));
+  miss('another runner image tag', go(w, c, 'npm test', [], SCRIPT, { JOB_RUN_IMAGE: 'registry.test/claudepilot/workspace:2-dev-2' }));
+  miss('--big', go(w, c, 'npm test', ['--big']));
   // Not keyed at all, so never saved and never reused: a branch moves, so does "stg", and the artifacts do not come back from a store.
   for (const [what, extra, ref] of [['a branch', [], 'main'], ['--artifacts', ['--artifacts', 'reports'], c], ['--also on stg', ['--also', 'org/shared'], c], ['--against a branch', ['--against', 'main'], c]] as const) {
     miss(`${what} (1)`, go(w, ref, 'npm test', [...extra]));
@@ -959,12 +968,13 @@ test('T-731 reuse: a changed commit, command, steps, --against, --also or runner
   assert.equal(n(), seen);
 });
 
-test('T-731 mutation: without the commit in the key a second commit would be served the first one\'s result; the check above fails on that script', () => {
-  const dropCommit = (s: string) => {
-    const t = s.replace('"$url" "$ref" "$cmd"', '"$url" "$cmd"');
-    assert.notEqual(t, s, 'the mutation applies');
-    return t;
-  };
+const edit = (from: string, to: string) => (s: string) => {
+  const t = s.replace(from, to);
+  assert.notEqual(t, s, `the mutation applies: ${from}`);
+  return t;
+};
+
+test('T-731 mutation: without the commit in the key a second commit would be served the first one\'s result; the check fails on that script', () => {
   const differentCommitRuns = (script: string) => {
     const w = world();
     assert.equal(go(w, sha(), 'npm test', [], script).code, 0);
@@ -972,7 +982,58 @@ test('T-731 mutation: without the commit in the key a second commit would be ser
     return !/reused a passed result/.test(r.out) && jobs(w) === 2;
   };
   assert.equal(differentCommitRuns(SCRIPT), true, 'the real script runs the other commit');
-  assert.equal(differentCommitRuns(mutant((y) => y, dropCommit)), false, 'the mutant reuses it: the check catches it');
+  assert.equal(differentCommitRuns(mutant((y) => y, edit('"$url" "$ref" "$cmd"', '"$url" "$cmd"'))), false, 'the mutant reuses it: the check catches it');
+});
+
+test('T-731 mutation: without --keep-tests in the key, a run with other kept tests would be served the first one\'s result', () => {
+  const c = sha(), a = sha();
+  const keptTestsRun = (script: string) => {
+    const w = world();
+    assert.equal(go(w, c, 'npm test', ['--against', a, '--keep-tests', 'a.test.ts'], script).code, 0);
+    const r = go(w, c, 'npm test', ['--against', a, '--keep-tests', 'b.test.ts'], script); // only --keep-tests differs
+    return !/reused a passed result/.test(r.out) && jobs(w) === 2;
+  };
+  assert.equal(keptTestsRun(SCRIPT), true, 'the real script runs it again');
+  assert.equal(keptTestsRun(mutant((y) => y, edit('"$against" "$keep" "$steps"', '"$against" "$steps"'))), false, 'the mutant reuses it: the check catches it');
+});
+
+test('T-731 mutation: a Job that did not end Complete is not saved even if its log says EXIT 0; without the Complete condition it would be', () => {
+  const failedButExit0 = (script: string) => {
+    const w = world();
+    writeFileSync(join(w.root, 'scenario.json'), JSON.stringify({ rc: 1, log: jobLog(w.root, 0) })); // the Job is Failed, the last log line says EXIT 0
+    const c = sha();
+    go(w, c, 'npm test', [], script);
+    return existsSync(store(w)) && readdirSync(store(w)).some((f) => f.endsWith('.rc'));
+  };
+  assert.equal(failedButExit0(SCRIPT), false, 'the real script saves nothing');
+  assert.equal(failedButExit0(mutant((y) => y, edit('&& [ "${st:-}" = Complete ]', ''))), true, 'the mutant saves it: the check catches it');
+});
+
+test('T-731 reuse: a store that is /, the home folder or the repository is refused (exit 2)', () => {
+  const w = world();
+  for (const dir of ['/', join(w.root, 'home'), REPO]) {
+    const r = go(w, sha(), 'npm test', [], SCRIPT, { JOB_RUN_CACHE_DIR: dir });
+    assert.equal(r.code, 2, `${dir}: ${r.out}`);
+    assert.match(r.out, /JOB_RUN_CACHE_DIR must be a folder of its own/);
+  }
+  assert.equal(jobs(w), 0, 'no Job was made');
+});
+
+test('T-731 reuse: cleanup deletes only old *.log, *.rc and *.job directly in the store; other files, subfolders and an existing mode stay', () => {
+  const w = world();
+  const dir = join(w.root, 'own-store');
+  mkdirSync(join(dir, 'sub'), { recursive: true });
+  chmodSync(dir, 0o755);
+  const old = new Date(Date.now() - 20 * 86_400_000);
+  const files = ['notes.txt', 'sub/x.log', 'old.log', 'old.rc', 'old.job'];
+  for (const f of files) { writeFileSync(join(dir, f), 'x'); utimesSync(join(dir, f), old, old); }
+  const r = go(w, sha(), 'npm test', [], SCRIPT, { JOB_RUN_CACHE_DIR: dir });
+  assert.equal(r.code, 0, r.out);
+  assert.ok(existsSync(join(dir, 'notes.txt')), 'an old file of another kind stays');
+  assert.ok(existsSync(join(dir, 'sub/x.log')), 'a file in a subfolder stays');
+  for (const f of ['old.log', 'old.rc', 'old.job']) assert.ok(!existsSync(join(dir, f)), `${f} is removed`);
+  assert.equal(statSync(dir).mode & 0o777, 0o755, 'an existing folder keeps its mode');
+  assert.ok(readdirSync(dir).some((f) => f.endsWith('.rc')), 'and the new pass is saved');
 });
 
 test('T-731 reuse: a saved result older than the age limit is a miss', () => {

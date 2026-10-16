@@ -24,18 +24,20 @@
 #                                                       ./job-run-artifacts/<job>); at most JOB_RUN_ARTIFACT_MAX bytes compressed (4 MiB)
 #     --timeout <s>                                     the Job's deadline once it runs (default 3600, at most 5400)
 #     --role <label>                                    shown on the Job (default PILOT_AGENT or "agent"); the chat is PILOT_SESSION_ID
-#     --fresh                                           run the Job even when the same repo, commit and command already passed (T-731, see below)
-#     --big                                             8Gi of memory instead of 3Gi (T-524, T-731; /tmp 4Gi instead of 2Gi), for a run that was OOMKilled;
+#     --reuse                                           return the saved result of the same repo, full commit and command that already passed, with no Job;
+#                                                       a pass is saved only with it (T-731, see "Reuse" below). Without it every run is a Job.
+#     --big                                             8Gi of memory instead of 4Gi (T-524; /tmp 4Gi instead of 2Gi), for a run that was OOMKilled;
 #                                                       only k3s-node2 has room for it. Memory is requested = limited: the scheduler places a Job
 #                                                       only where it fits, says why it is Pending, and an OOMKilled Job says so with its limit.
 # Placement (T-611): the scheduler counts memory REQUESTS, the master (control plane, Argo CD, Gitea...) uses far more for real. Before it creates a
 # Job this script reads the master's real memory (kubectl top nodes) and, over JOB_RUN_MASTER_MAX_PCT (default 75), makes the Job's rule away
 # from the control plane REQUIRED: it waits for k3s-node2 or for room. Under the line, or when the metrics fail, the preferred rules stay.
-# Reuse (T-731): a run that PASSED (exit 0) is saved, masked log and exit code, under JOB_RUN_CACHE_DIR (default ~/.cache/claudepilot-job-run). The
-# same repo URL, FULL commit, exact command, --against, --keep-tests, --also and --steps, on the same job-run.sh and job-run.yaml (their hash is
-# in the key), returns that log and exit code at once, with no Job. --fresh runs anyway. Not reused: a ref that is not a full 40-hex commit (a
-# branch moves), an --also or --against ref that is not one, and a run with --artifacts (the files cannot come back). A failure is never saved.
-# A saved result older than JOB_RUN_REUSE_MAX_AGE_DAYS (7) is a miss. The key and the store: docs/prd/local-git-ci.md, "job-run results".
+# Reuse (T-731), OPT-IN with --reuse: a run with it that PASSED (exit 0) is saved, masked log, exit code and the Job's name, under JOB_RUN_CACHE_DIR
+# (default ~/.cache/claudepilot-job-run, one workspace home: any session there can write an entry). A later --reuse run with the same repo URL, FULL
+# commit, exact command, --against, --keep-tests, --also, --steps, --big and runner image, on the same job-run.sh and job-run.yaml (their hash is in
+# the key), returns that log and exit code at once with no Job, naming the Job that passed. Not reused: a ref that is not a full 40-hex commit (a
+# branch moves), an --also or --against ref that is not one, and a run with --artifacts. A failure is never saved. A result older than
+# JOB_RUN_REUSE_MAX_AGE_DAYS (7) is a miss. The key and the store: docs/prd/local-git-ci.md section 24.
 #   scripts/job-run.sh --list                        the Jobs, their chat, role and state
 #   scripts/job-run.sh --stop [<job> | --chat <id>]     stop Jobs (all, one, or a chat's) and delete their Secrets
 # Caps: JOB_RUN_MAX Jobs at once cluster-wide (default 3), JOB_RUN_MAX_PER_CHAT per chat (2) and JOB_RUN_MAX_PER_PROGRAM per program (2;
@@ -54,9 +56,9 @@ gitea=${JOB_RUN_GITEA:-git.konfersi.com}; github_repo=${JOB_RUN_GITHUB_REPO:-alf
 event_repo=isnanme/event # fixed on purpose (T-491): the door names one repository, no override
 # Memory per Job (T-524), request = limit, sized from measured cgroup peaks (docs/dev-session.md, "Heavy agent work in the cluster"); fixed here,
 # no environment override: the size is a cluster decision, not a caller's.
-# T-731: 3Gi by default (was 4Gi): 518 measured peaks were median 1133Mi, p90 1971Mi, p99 2270Mi, max 2536Mi, none OOMKilled; 3Gi leaves 35% over
-# the p99 and 21% over the max. /tmp stays 2Gi: it is a ceiling, not a reservation, and it holds the clone, node_modules and npm's cache.
-mem_std=3Gi; tmp_std=2Gi; mem_big=8Gi; tmp_big=4Gi
+# T-731: stays 4Gi. 518 measured peaks: median 1133Mi, p90 1971Mi, p99 2270Mi, max 2536Mi, none OOMKilled, so 3Gi would fit; but on k3s-node2 the CPU
+# requests bind at 3 Jobs and the master takes 0 by real use, so a lower default only cuts the margin: it waits on a CPU-request measurement.
+mem_std=4Gi; tmp_std=2Gi; mem_big=8Gi; tmp_big=4Gi
 master_max=${JOB_RUN_MASTER_MAX_PCT:-75}
 die() { echo "job-run: $*" >&2; exit 2; }
 for n in "$max" "$per" "$pprog" "$art_max" "$master_max"; do [[ $n =~ ^[0-9]+$ ]] || die "the caps are numbers"; done
@@ -86,12 +88,12 @@ case "${1:-}" in
     echo "$n job(s) stopped"; exit 0 ;;
 esac
 
-repo=; ref=; against=; keep=; steps=npm-ci; artifacts=; out=; timeout=3600; role=${PILOT_AGENT:-agent}; also=(); big=; fresh=
+repo=; ref=; against=; keep=; steps=npm-ci; artifacts=; out=; timeout=3600; role=${PILOT_AGENT:-agent}; also=(); big=; reuse=
 while [ $# -gt 0 ]; do
   case "$1" in
     --repo|--ref|--against|--keep-tests|--also|--steps|--artifacts|--out|--timeout|--role) [ $# -ge 2 ] || die "$1 needs a value" ;;&
     --big) big=1; shift ;;
-    --fresh) fresh=1; shift ;;
+    --reuse) reuse=1; shift ;;
     --repo) repo=$2; shift 2 ;;
     --ref) ref=$2; shift 2 ;;
     --against) against=$2; shift 2 ;;
@@ -159,27 +161,6 @@ fi
 [[ $ref =~ ^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$ && ! $ref =~ \.\. ]] || die "--ref: a branch or commit name (got $ref)"
 chat=$(label "${PILOT_SESSION_ID:-manual}"); role=$(label "$role")
 
-# Reuse (T-731): the same repository, full commit and command that already passed on this runner returns its saved log and exit code, no Job.
-# Only exact inputs make a key: a full 40-hex commit for the ref, for --against and for every --also ref (a branch or "stg" moves), and no
-# --artifacts (the files are not saved). The key holds the hash of this script and of the YAML, so a change to the runner is a miss.
-hex40='^[0-9a-f]{40}$'; cache=${JOB_RUN_CACHE_DIR:-${XDG_CACHE_HOME:-${HOME:-/tmp}/.cache}/claudepilot-job-run}; reuse_days=${JOB_RUN_REUSE_MAX_AGE_DAYS:-7}
-[[ $reuse_days =~ ^[0-9]+$ ]] || die "JOB_RUN_REUSE_MAX_AGE_DAYS is a number"
-key=
-if [[ $ref =~ $hex40 && -z $artifacts ]] && [[ -z $against || $against =~ $hex40 ]]; then
-  exact=1
-  for a in ${also[@]+"${also[@]}"}; do [[ ${a##*@} != "$a" && ${a##*@} =~ $hex40 ]] || exact=; done
-  if [ -n "$exact" ]; then
-    key=$({ printf '%s\0' v1 "$(cat "$0" "$here/deploy/k3s-build/job-run.yaml" | sha256sum | cut -d' ' -f1)" "$url" "$ref" "$cmd" "$against" "$keep" "$steps" "$alsos"; } | sha256sum | cut -d' ' -f1)
-  fi
-fi
-if [ -n "$key" ] && [ -z "$fresh" ] && [ -s "$cache/$key.log" ] && [ "$(cat "$cache/$key.rc" 2>/dev/null)" = 0 ] \
-   && [ -n "$(find "$cache/$key.log" -mmin "-$((reuse_days * 1440))" 2>/dev/null)" ]; then
-  echo "job-run: reused a passed result for $repo@${ref:0:12} from Job $(cat "$cache/$key.job" 2>/dev/null || echo unknown) (saved $(date -u -r "$cache/$key.log" +%FT%TZ), key ${key:0:12}); --fresh runs it again"
-  cat "$cache/$key.log"
-  [ -n "${JOB_RUN_LOG:-}" ] && cp "$cache/$key.log" "$JOB_RUN_LOG"
-  exit 0
-fi
-
 image=${JOB_RUN_IMAGE:-}
 if [ -z "$image" ]; then
   tag=$(curl -fsS "https://$registry/v2/claudepilot/workspace/tags/list" | jq -r '.tags[]? | select(test("-dev-"))' | sort -V | tail -n 1)
@@ -187,6 +168,35 @@ if [ -z "$image" ]; then
   image=$registry/claudepilot/workspace:$tag
 fi
 [[ $image =~ ^[A-Za-z0-9][A-Za-z0-9._/:@-]*$ ]] || die "JOB_RUN_IMAGE: an image reference"
+
+# Reuse (T-731), only with --reuse (every other run is a Job and neither reads nor writes the store): the same repository, full commit and command
+# that already passed on this runner returns its saved log and exit code, no Job. Only exact inputs make a key: a full 40-hex commit for the ref,
+# for --against and for every --also ref (a branch or "stg" moves), and no --artifacts (the files are not saved). The key holds the hash of this
+# script and of the YAML, the resolved runner image and --big, so a change to the runner is a miss.
+hex40='^[0-9a-f]{40}$'; reuse_days=${JOB_RUN_REUSE_MAX_AGE_DAYS:-7}; key=; cache=
+if [ -n "$reuse" ]; then
+  cache=${JOB_RUN_CACHE_DIR:-${XDG_CACHE_HOME:-${HOME:-/tmp}/.cache}/claudepilot-job-run}
+  [[ $reuse_days =~ ^[0-9]+$ ]] || die "JOB_RUN_REUSE_MAX_AGE_DAYS is a number"
+  # The store is cleaned and written in: never a folder that holds something else.
+  cache_real=$(realpath -m -- "$cache")
+  for bad in / "${HOME:-/}" "$here"; do [ "$cache_real" != "$(realpath -m -- "$bad")" ] || die "JOB_RUN_CACHE_DIR must be a folder of its own (not $bad)"; done
+  if [[ $ref =~ $hex40 && -z $artifacts ]] && [[ -z $against || $against =~ $hex40 ]]; then
+    exact=1
+    for a in ${also[@]+"${also[@]}"}; do [[ ${a##*@} != "$a" && ${a##*@} =~ $hex40 ]] || exact=; done
+    if [ -n "$exact" ]; then
+      key=$({ printf '%s\0' v2 "$(cat "$0" "$here/deploy/k3s-build/job-run.yaml" | sha256sum | cut -d' ' -f1)" "$image" "${big:+big}" "$url" "$ref" "$cmd" "$against" "$keep" "$steps" "$alsos"; } | sha256sum | cut -d' ' -f1)
+    fi
+  fi
+  [ -n "$key" ] || echo "job-run: --reuse: this run has no exact key (a full commit is needed for --ref, --against and --also; no --artifacts): it runs as a Job and is not saved" >&2
+fi
+if [ -n "$key" ] && [ -s "$cache/$key.log" ] && [ "$(cat "$cache/$key.rc" 2>/dev/null)" = 0 ] \
+   && [ -n "$(find "$cache/$key.log" -mmin "-$((reuse_days * 1440))" 2>/dev/null)" ]; then
+  read -r from_job from_at 2>/dev/null < "$cache/$key.job" || { from_job=unknown; from_at=unknown; }
+  echo "job-run: reused a passed result for $repo@${ref:0:12} from Job ${from_job:-unknown} (passed ${from_at:-unknown}, key ${key:0:12}); drop --reuse to run it again"
+  cat "$cache/$key.log"
+  [ -n "${JOB_RUN_LOG:-}" ] && cp "$cache/$key.log" "$JOB_RUN_LOG"
+  exit 0
+fi
 
 # Who owns a Job: this host, this script's PID and its start time. A Job whose script is gone (killed before its trap ran) is removed here.
 starttime() { sed -E 's/.*\) //' "/proc/$1/stat" 2>/dev/null | cut -d' ' -f20; }
@@ -398,12 +408,15 @@ fi
 node=$(pod_get '.items[0].spec.nodeName' "$pj")
 t2=$(date +%s)
 echo "job-run: $job rc=$rc in $((t2 - t1))s (queued $((t1 - t0))s) on ${node:-?} with $memory; log: $log"
-# Save a pass (T-731): the command's own exit line says 0, the Job itself ended Complete, and no credential showed up in the log. The log on disk
-# is the masked one. Written to a temporary name and moved, so a reader never sees half of it; the rc file goes last and decides.
-if [ -n "$key" ] && [ "$rc" = 0 ] && [ "${st:-}" = Complete ] && grep -qx '=== JOB-RUN EXIT 0' "$log" && ! grep -qx leak "$work/n" 2>/dev/null; then
-  if mkdir -p "$cache" && chmod 700 "$cache" && cp "$log" "$cache/$key.log.tmp" && mv "$cache/$key.log.tmp" "$cache/$key.log" && printf '%s\n' "$job" > "$cache/$key.job" && printf '0\n' > "$cache/$key.rc"; then
+# Save a pass (T-731, --reuse only): rc is 0 (it is only ever set to 0 from the command's own last "=== JOB-RUN EXIT 0" line), the Job itself ended
+# Complete, and the leak check RAN and found nothing (a missing $work/n, written by the log filter, is not a pass: fail closed). The log on disk is
+# the masked one. Written to a temporary name and moved, so a reader never sees half of it; the rc file goes last and decides. Only the store's own
+# files are touched: the folder is created private when it is new and its mode is never changed; the cleanup matches only *.log, *.rc and *.job.
+if [ -n "$key" ] && [ "$rc" = 0 ] && [ "${st:-}" = Complete ] && [ -f "$work/n" ] && ! grep -qx leak "$work/n"; then
+  if { [ -d "$cache" ] || mkdir -p -m 700 "$cache"; } && cp "$log" "$cache/$key.log.tmp" && mv "$cache/$key.log.tmp" "$cache/$key.log" \
+     && printf '%s %s\n' "$job" "$(date -u +%FT%TZ)" > "$cache/$key.job" && printf '0\n' > "$cache/$key.rc"; then
     echo "job-run: result saved for reuse (key ${key:0:12}, ${reuse_days} days)"
-    find "$cache" -type f -mtime "+$((reuse_days * 2))" -delete 2>/dev/null || true
+    find "$cache" -maxdepth 1 -type f \( -name '*.log' -o -name '*.rc' -o -name '*.job' \) -mtime "+$((reuse_days * 2))" -delete 2>/dev/null || true
   else echo "job-run: could not save the result for reuse (no harm done)" >&2; fi
 fi
 exit "$rc"

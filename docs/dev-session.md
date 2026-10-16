@@ -136,7 +136,7 @@ twice. `scripts/gate-job.sh <commit> [steps]` (T-37) runs `scripts/gate.sh` as a
 ## Heavy agent work in the cluster
 
 `scripts/job-run.sh` (T-107) runs any heavy command of an agent as a Job like the gate's (`deploy/k3s-build/job-run.yaml`: the development
-image, a node without a workspace pod preferred, 1 CPU requested and 4 the limit, memory requested = limited (3Gi, `--big` 8Gi), `/tmp` and
+image, a node without a workspace pod preferred, 1 CPU requested and 4 the limit, memory requested = limited (4Gi, `--big` 8Gi), `/tmp` and
 `/dev/shm` in memory, a deadline, gone 30 minutes
 after it ends), so the pod's flock queue is only for what must run in the pod:
 
@@ -154,9 +154,10 @@ scripts/job-run.sh --list ; scripts/job-run.sh --stop --chat <session id>
 - **Caps:** `JOB_RUN_MAX` (3) Jobs at once cluster-wide, `JOB_RUN_MAX_PER_CHAT` (2) per chat (`PILOT_SESSION_ID`) and `JOB_RUN_MAX_PER_PROGRAM`
   (2) per program (claudepilot, event, konfersi; T-524). A Job over a cap is created suspended and waits in creation order ("queued behind K").
   Jobs carry the labels `job-run/chat`, `job-run/role` (`PILOT_AGENT`), `job-run/repo`, `job-run/program`.
-- **Reuse (T-731):** a Job that passed (same repo, full commit, exact command, steps, `--also`/`--against`, on the same `job-run.sh` and YAML) returns its saved
-  masked log and exit 0 at once, with no Job: "job-run: reused a passed result". `--fresh` runs it anyway. A branch name as `--ref`, `--artifacts` and
-  failures are never saved. Key and store: `docs/prd/local-git-ci.md` section 24. `gate-job.sh` is not reused (T-578).
+- **Reuse (T-731), opt-in with `--reuse`:** without the flag every run is a Job. With it, a Job that passed (same repo, full commit, exact command, steps,
+  `--also`/`--against`, `--keep-tests`, `--big`, runner image, on the same `job-run.sh` and YAML) returns its saved masked log and exit 0 at once, with no Job:
+  "job-run: reused a passed result … from Job <name>". The store is one workspace home: any session there can write an entry. A branch name as `--ref`,
+  `--artifacts` and failures are never saved. Key and store: `docs/prd/local-git-ci.md` section 24. `gate-job.sh` is not reused (T-578).
 - **Placement (T-611):** the scheduler counts memory requests, but the control-plane node's own pods use far more for real. Before it creates a
   Job, `job-run.sh` reads that node's real memory (`kubectl top nodes`); over `JOB_RUN_MASTER_MAX_PCT` (75) the Job gets a REQUIRED rule away
   from the control plane and waits for k3s-node2 or for room ("placement:" line, and a Pending line that says so). Under the line, or when the
@@ -166,7 +167,7 @@ scripts/job-run.sh --list ; scripts/job-run.sh --stop --chat <session id>
   gate's checks and placement are unchanged here).
 - **Memory (T-524):** requested = limited, so the scheduler places a Job only where all of it fits (2Gi requested with 8Gi allowed let a
   4.1 GB Event Job take k3s-master, the 15 GB control-plane node that also runs the API server, to 92%, and the portal answered 503).
-  3Gi by default (T-731, was 4Gi; 518 peaks: p99 2270Mi, max 2536Mi) with `/tmp` at most 2Gi; `--big` gives 8Gi with `/tmp` 4Gi (only k3s-node2 has that much free). The whole server suite peaked
+  4Gi by default (T-731: 518 peaks, p99 2270Mi, max 2536Mi, would fit 3Gi, but CPU requests bind at 3 Jobs; a lower default waits on a CPU-request measurement) with `/tmp` at most 2Gi; `--big` gives 8Gi with `/tmp` 4Gi (only k3s-node2 has that much free). The whole server suite peaked
   at 1480Mi (claudepilot-job-4c34ebf9, 2026-10-15), a test folder at 1365Mi; the Event Job above reached 4.1 GB and needs `--big`.
   Every Job ends with `=== JOB-RUN MEMORY peak=… limit=… oom_kills=…` (its own cgroup). An OOMKilled Job says so with its limit and the hint
   `--big`; a Job Pending because no node has the memory free says so once, instead of a silent wait. `/tmp` and `/dev/shm` (1Gi) are both

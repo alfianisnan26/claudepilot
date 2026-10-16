@@ -615,23 +615,31 @@ The labels pick a runner exactly as the list form does. With `fallback: workspac
 `scripts/job-run.sh` (heavy agent work as a cluster Job, `deploy/k3s-build/job-run.yaml`; `docs/dev-session.md`) is not a pipeline run, but it is the same
 CI capacity, so its two rules live here.
 
-**Size.** A Job requests = limits 3Gi of memory (was 4Gi), `/tmp` at most 2Gi in memory, 1 CPU requested (limit 4); `--big` gives 8Gi with `/tmp` 4Gi.
-Source: 518 `=== JOB-RUN MEMORY` peaks (ticket T-731, 2026-10-16): median 1133Mi, p90 1971Mi, p99 2270Mi, max 2536Mi on a 4Gi limit, no OOM. 3Gi leaves
-35% over the p99 and 21% over the max. An OOMKilled Job still says so and names `--big`.
+**Size.** A Job requests = limits 4Gi of memory (unchanged), `/tmp` at most 2Gi in memory, 1 CPU requested (limit 4); `--big` gives 8Gi with `/tmp` 4Gi.
+Evidence (ticket T-731, 2026-10-16): 518 `=== JOB-RUN MEMORY` peaks, median 1133Mi, p90 1971Mi, p99 2270Mi, max 2536Mi on a 4Gi limit, no OOM, so 3Gi would fit
+(35% over the p99, 21% over the max). By requests, with `scripts/k3s-status.sh` (node2: 7520m of 8000m CPU, 26076Mi of about 29630Mi; master: 10368Mi of
+about 15026Mi): node2 holds 3 Jobs by memory before (3.87) and 5 after, but 3 by CPU requests (1000m each, 3480m free) either way; the master holds 1 by
+requests and 0 by real use (77-82%, over the 75% T-611 line). So CPU requests bind, and a smaller default only cuts the margin: **a lower default waits on a
+CPU-request measurement.** An OOMKilled Job says so and names `--big`.
 
-**Reuse.** A Job that passed is saved; the same work later returns the saved log and exit code with no Job (and no kubectl call).
+**Reuse (opt-in, `--reuse`).** Without `--reuse` every run is a Job and neither reads nor writes the store, so a QA run or a probe is never served another
+session's result. With it, a Job that passed is saved, and the same work later returns the saved log and exit code with no Job and no kubectl call.
 
-- **Key:** the SHA-256 of these, NUL-separated, in order: key version `v1`; the hash of `scripts/job-run.sh` and `deploy/k3s-build/job-run.yaml` together (a change
-  to either, even a comment, is a miss); the repository's clone URL; the full 40-hex commit; the exact command (the single string, or the quoted words);
-  `--against`; `--keep-tests`; the `--also` list with its refs; `--steps`. Not in it, because they do not change what a pass means: `--big`, `--timeout`,
-  `--role`, the chat.
+- **Key:** the SHA-256 of these, NUL-separated, in order: key version `v2`; the hash of `scripts/job-run.sh` and `deploy/k3s-build/job-run.yaml` together (a change
+  to either, even a comment, is a miss); the resolved runner image reference (its tag); `--big`; the repository's clone URL; the full 40-hex commit; the exact
+  command (the single string, or the quoted words); `--against`; `--keep-tests`; the `--also` list with its refs; `--steps`. Not in it, because they do not change
+  what a pass means: `--timeout`, `--role`, the chat.
+- **Trust boundary:** the store is one workspace home. Any session in that workspace can write an entry, and a `--reuse` run from any session there trusts it.
+  A result is evidence only as far as that is acceptable; the reuse line names the original Job and when it passed, so the evidence can be opened.
 - **Only exact inputs have a key.** `--ref` (or HEAD), `--against` and every `--also` ref must be full commits: a branch or `stg` moves. A run with `--artifacts`
   has no key (the files are not saved). Such a run is never saved and never reused.
-- **Store:** `JOB_RUN_CACHE_DIR`, default `~/.cache/claudepilot-job-run` (mode 700), files `<key>.log`, `<key>.job` (the name of the Job that passed, so a reused result still points at a real Job's evidence) and `<key>.rc`. It is per user and host (a workspace's home), shared
-  by every chat in it; another workspace does not see it. Only exit 0 with the Job `Complete`, the command's own `=== JOB-RUN EXIT 0` line and no credential in the log is saved.
-  The saved text is the log after the credential mask (the file `JOB_RUN_LOG` gets), never the raw stream; the artifacts block is not in it. The `.rc` is written last.
-- **Hit:** a result younger than `JOB_RUN_REUSE_MAX_AGE_DAYS` (7); the output starts with `job-run: reused a passed result … from Job <name> … --fresh runs it again`, then the saved log; exit 0.
-  `--fresh` runs the Job and saves the new pass. Entries older than twice the age are removed when a result is saved.
+- **Store:** `JOB_RUN_CACHE_DIR`, default `~/.cache/claudepilot-job-run`, files `<key>.log`, `<key>.job` (`<Job name> <UTC time it passed>`) and `<key>.rc`. A new
+  folder is made mode 700; an existing folder's mode is never changed. A folder that is `/`, the home folder or the repository is refused. Only `--reuse`, exit 0,
+  the Job `Complete` and a leak check that ran and found nothing are saved (no `$work/n`, no save). The saved text is the log after the credential mask (the file
+  `JOB_RUN_LOG` gets), never the raw stream; the artifacts block is not in it. The `.rc` is written last. Only `*.log`, `*.rc` and `*.job` files directly in the
+  folder are ever deleted: those older than twice the age, when a result is saved.
+- **Hit:** a result younger than `JOB_RUN_REUSE_MAX_AGE_DAYS` (7); the output starts with `job-run: reused a passed result for <repo>@<commit> from Job <name> (passed <time>, key …)`,
+  then the saved log; exit 0. A `--reuse` run with no exact key says so and runs as a Job.
 - **Not covered:** `scripts/gate-job.sh` is never reused (the charter wants the full gate on the exact commit; reuse of gate results is owner decision T-578).
-  A pass that depended on something outside the key (the network, the clock, a registry) is reused too: use `--fresh` for such a check.
-- **Tests:** `apps/server/src/ci/jobRun.test.ts` (hit, miss, `--fresh`, failure, each changed key part, the age limit, and a mutant that drops the commit from the key).
+  A pass that depended on something outside the key (the network, the clock, a registry) is reused too: leave `--reuse` off for such a check.
+- **Tests:** `apps/server/src/ci/jobRun.test.ts` (opt-in, hit, miss, failure, each changed key part, the age limit, the store's own files, and mutants that drop the commit, `--keep-tests` or the `Complete` condition).
