@@ -42,7 +42,7 @@ import { createChatRoutes } from './routes.js';
 import { attachChat } from './socket.js';
 import { usageReport } from './usage.js';
 import { ChatStore, EVENT_TEXT_MAX, sessionCwd } from './store.js';
-import { conversationBudget, transferConversation, transferOpening, type TransferMeta } from './transfer.js';
+import { conversationBudget, FILE_MAX_CHARS, FILE_MESSAGE_MAX_CHARS, transferConversation, transferFileConversation, transferOpening, type TransferMeta } from './transfer.js';
 import { FOLDER_CHANGED, FOLDER_NOT_TRUSTED } from './trust.js';
 import { APPLIED, controls, EMPTY_SCAN, fail, FakeExec, FakeWorkspaces, firstTurn, freshStore, init, line, liveSession, ok, sleep, until, USAGE_API_KEY, vanish, type Control, type Live } from './testkit.js';
 
@@ -2829,6 +2829,32 @@ test('transferConversation: what you sent and Claude’s replies with the tools 
   assert.ok(cut.text.startsWith('### '), 'starts on a message, not halfway through one');
   // Credentials never travel.
   assert.ok(!transferConversation([ev({ kind: 'user', text: 'key sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' })]).text.includes('sk-ant-api03-AAAA'));
+});
+
+test('T-781 transferFileConversation: a 300-message chat lands complete in the context file; a message is clipped at the file’s 20,000, the total is bounded and the newest are kept', () => {
+  let seq = 0;
+  const ev = (e: Omit<ChatEvent, 'seq' | 'at'>): ChatEvent => ({ seq: ++seq, at: '2026-10-16T12:00:00Z', ...e });
+  // 300 messages of 6,000 characters: the opening's budget and 4,000 clip would cut this, the file must not.
+  const chat = Array.from({ length: 300 }, (_, i) => ev({ kind: i % 2 ? 'assistant' : 'user', text: `${i} ${'x'.repeat(6000)} end${i}` }));
+  const whole = transferFileConversation(chat);
+  assert.equal(whole.messages, 300);
+  assert.equal(whole.truncated, false);
+  for (let i = 0; i < 300; i++) assert.ok(whole.text.includes(` end${i}`), `message ${i} is whole`);
+  // The opening's own copy is still bounded and clipped.
+  assert.ok(transferConversation(chat, 14_000).messages < 10);
+
+  // One message over the file's clip is cut there.
+  const big = transferFileConversation([ev({ kind: 'user', text: 'y'.repeat(FILE_MESSAGE_MAX_CHARS + 500) })]);
+  assert.ok(big.text.length < FILE_MESSAGE_MAX_CHARS + 100 && big.text.includes('(cut)'));
+
+  // The total is bounded: the oldest whole messages go, the newest stay, and it says so.
+  const huge = Array.from({ length: 300 },(_, i) => ev({ kind: i % 2 ? 'assistant' : 'user', text: `${i} ${'z'.repeat(15_000)} end${i}` }));
+  const bounded = transferFileConversation(huge);
+  assert.equal(bounded.truncated, true);
+  assert.ok(bounded.text.length <= FILE_MAX_CHARS);
+  assert.ok(bounded.text.endsWith(' end299'), 'the newest message is last and whole');
+  assert.ok(bounded.text.startsWith('### '));
+  assert.ok(bounded.messages < 300 && bounded.messages > 200);
 });
 
 test('transferOpening: even a long conversation fits the event store’s cap, so the stored copy keeps the newest messages; a literal closing tag in carried text can’t end the conversation early', () => {

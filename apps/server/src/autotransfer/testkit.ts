@@ -159,6 +159,12 @@ export class MoveChat extends FakeChat {
     this.sessions.set(id, moved);
     this.dispatch(id, { type: 'session', session: moved });
   }
+  /** The chat ends (T-781: the engine forgets what it kept for it). */
+  ends(id: string) {
+    const ended = { ...this.get(id)!, state: 'ended' as const };
+    this.sessions.set(id, ended);
+    this.dispatch(id, { type: 'session', session: ended });
+  }
   /** A main-thread turn ends: the `result` row, then the chat at `idle`. */
   turnEnds(id: string) {
     const s = this.get(id)!;

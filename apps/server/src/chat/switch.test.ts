@@ -271,7 +271,9 @@ test('switch: the Claude the chat runs on is asked for a handoff (the default): 
   const s = await liveSession();
   try {
     fast(s);
-    await s.controller.send(s.id, 'm1', 'Find out why login fails');
+    // Long enough that the opening clips it (4,000) and the context file must not (T-781).
+    const longAsk = `Find out why login fails. ${'detail line. '.repeat(800)}END-OF-ASK`;
+    await s.controller.send(s.id, 'm1', longAsk);
     s.tail.push(assistantText('Looking at it.'));
     s.tail.push(resultLine(s.id, 0.01));
     s.tail.push(ok((await s.take('get_usage')).id, USAGE_API_KEY));
@@ -298,7 +300,7 @@ test('switch: the Claude the chat runs on is asked for a handoff (the default): 
     assert.ok(events.some((e) => e.kind === 'system' && e.text === 'Default is writing the handoff…' && e.handoffId === id));
     assert.ok(events.some((e) => e.kind === 'system' && e.text === 'Starting Work…' && e.handoffId === id));
     // Nothing from before the move carries its id.
-    assert.ok(!events.find((e) => e.kind === 'user' && e.text === 'Find out why login fails')!.handoffId);
+    assert.ok(!events.find((e) => e.kind === 'user' && e.text === longAsk)!.handoffId);
     // The opening embeds the document (it must not depend on Claude being allowed to read the file).
     const opening = events.find((e) => e.kind === 'user' && e.transfer)!;
     assert.equal(opening.transfer!.handoff, true);
@@ -311,6 +313,10 @@ test('switch: the Claude the chat runs on is asked for a handoff (the default): 
     const file = s.ws.shells.find((x) => x.args.some((a) => a.includes('/.claudepilot/transfer/')) && x.exec.written)!.exec.written;
     assert.match(file, /## Handoff from Default\n[\s\S]*ROOT CAUSE: the stale token cache/);
     assert.match(file, /## What the portal knows\n\n- Folder: \/home\/node\n/);
+    // T-781: the file carries the whole message; the opening keeps its own budget and tells the new session to read the file.
+    assert.ok(file.includes('END-OF-ASK'), 'the context file has the whole first message');
+    assert.ok(!opening.text!.includes('END-OF-ASK'), 'the opening clips it');
+    assert.match(opening.text!, /Read it \(use offset and limit for a long one\)/);
     assert.equal(moved.claudeName, 'Work');
   } finally {
     await s.done();

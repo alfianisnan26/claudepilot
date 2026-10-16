@@ -218,6 +218,7 @@ export class AutoTransferEngine {
     this.#timers.delete(id);
     this.#moved.delete(id);
     this.#cards.delete(id);
+    this.#conflicts.delete(id);
   }
 
   /** Asks for an evaluation of a chat; a burst is one evaluation. */

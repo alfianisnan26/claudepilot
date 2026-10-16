@@ -332,6 +332,30 @@ test('T-781: the CONFLICT retries are capped at 5, then the failure is recorded 
   r.engine.stop();
 });
 
+test('T-781: the CONFLICT count is forgotten when the chat ends: a chat of the same id starts again at zero (no growth, no inherited cap)', async () => {
+  const r = await conflictRig();
+  const orig = console.error;
+  console.error = () => {};
+  try {
+    r.chat.turnEnds('s1'); // one CONFLICT counted
+    await r.engine.settled();
+    assert.equal(r.chat.moves.length, 1);
+    r.chat.ends('s1');
+    await r.engine.settled();
+    r.chat.turnEnds('s1'); // the same id again, idle
+    await r.engine.settled();
+    for (let i = 0; i < 12 && !r.auto.events('u_a', { kinds: ['failed'] }).length; i++) {
+      r.clock.advance(0.51);
+      await r.engine.settled();
+    }
+  } finally {
+    console.error = orig;
+  }
+  assert.equal(r.auto.events('u_a', { kinds: ['failed'] }).length, 1);
+  assert.equal(r.chat.moves.length, 7, 'one attempt before the end, then the first try and five retries from zero');
+  r.engine.stop();
+});
+
 test('T-38: a move refused because the folder needs trusting again is recorded as such and notified (not a silent stall)', async () => {
   const r = await rig();
   r.chat.fail = 'This folder’s project settings changed since you trusted it. Check them and trust it again.';

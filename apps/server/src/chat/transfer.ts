@@ -43,7 +43,7 @@ const TOOLS_PER_TURN = 12;
  * session's own opening is carried as the earlier context it was. `maxChars` is the room it may take:
  * the newest whole messages that fit are kept.
  */
-export function transferConversation(events: ChatEvent[], maxChars: number = MIN_BUDGET_CHARS * 6): TransferConversation {
+export function transferConversation(events: ChatEvent[], maxChars: number = MIN_BUDGET_CHARS * 6, messageMax: number = MESSAGE_MAX_CHARS): TransferConversation {
   const sections: string[] = [];
   let tools = new Map<string, number>();
   const flushTools = () => {
@@ -76,9 +76,9 @@ export function transferConversation(events: ChatEvent[], maxChars: number = MIN
     const text = ev.text?.trim();
     if (!text || (ev.kind !== 'user' && ev.kind !== 'assistant')) continue;
     flushTools();
-    if (ev.kind === 'user' && ev.transfer) sections.push(`### Earlier context (transferred from ${ev.transfer.fromClaude})\n\n${clip(text, MESSAGE_MAX_CHARS)}`);
-    else if (ev.kind === 'user' && ev.actor) sections.push(`### Message from ${ev.actorLabel ? `${ev.actor} “${ev.actorLabel}”` : ev.actor}\n\n${clip(text, MESSAGE_MAX_CHARS)}`);
-    else sections.push(`### ${ev.kind === 'user' ? 'You' : 'Claude'}\n\n${clip(text, MESSAGE_MAX_CHARS)}`);
+    if (ev.kind === 'user' && ev.transfer) sections.push(`### Earlier context (transferred from ${ev.transfer.fromClaude})\n\n${clip(text, messageMax)}`);
+    else if (ev.kind === 'user' && ev.actor) sections.push(`### Message from ${ev.actorLabel ? `${ev.actor} “${ev.actorLabel}”` : ev.actor}\n\n${clip(text, messageMax)}`);
+    else sections.push(`### ${ev.kind === 'user' ? 'You' : 'Claude'}\n\n${clip(text, messageMax)}`);
   }
   flushTools();
 
@@ -98,6 +98,16 @@ export function transferConversation(events: ChatEvent[], maxChars: number = MIN
   if (kept[0]?.startsWith('_Tools used')) kept.shift();
   const messages = kept.filter((s) => s.startsWith('### ')).length;
   return { text: redact(kept.join('\n\n')), messages, truncated };
+}
+
+/** The context file's per-message clip (T-781, D5): a whole long answer, not the opening's 4,000. */
+export const FILE_MESSAGE_MAX_CHARS = 20_000;
+/** The context file's total bound (T-781): about 4 MB of text; past it the oldest whole messages are left out and the file says so. */
+export const FILE_MAX_CHARS = 4_000_000;
+
+/** The conversation for the context file: every stored message (redacted, tools summarised), bounded per message and in total; the opening keeps its own, smaller budget. */
+export function transferFileConversation(events: ChatEvent[]): TransferConversation {
+  return transferConversation(events, FILE_MAX_CHARS, FILE_MESSAGE_MAX_CHARS);
 }
 
 /**
@@ -147,8 +157,9 @@ export function transferOpening(meta: TransferMeta, convo: TransferConversation,
     `- Working folder: ${meta.cwd}`,
     `- Context file: ${meta.path}`,
     ...(convo.truncated ? [`- Only the last ${convo.messages} messages are included; older ones were left out.`] : []),
+    '- The whole conversation, every message, is in the context file: Read it (use offset and limit for a long one) before you continue.',
     '',
-    'Read it as prior context. Do not run tools or change files. Reply with one short line saying you have it and what the next step is, then wait for my next message.',
+    'Read it as prior context. Apart from reading the context file, do not run tools or change files. Reply with one short line saying you have it and what the next step is, then wait for my next message.',
     '',
     ...(noteText ? [`<handoff_note from="${attr(meta.fromClaude)}">`, 'Written by that Claude, with the whole conversation in view, when the portal asked for a handoff before moving it.', fence(noteText), '</handoff_note>', ''] : []),
     '<conversation>',
