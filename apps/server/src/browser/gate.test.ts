@@ -298,6 +298,15 @@ describe('the gate', () => {
     } finally {
       g.close();
     }
+    // A parsed form under 8 characters is not masked either: it would hit ordinary words.
+    const short = gate(['--redact-env', 'TINY'], { TINY: 'T=abc # a long note here' });
+    try {
+      await short.init();
+      const r = await short.call('browser_dump');
+      assert.match(r.text, /short abc stays/);
+    } finally {
+      short.close();
+    }
   });
 
   test('forward and reload are built on the pinned server’s own tools', async () => {
