@@ -127,7 +127,7 @@ test('QA-H2 (2) headroom edges: exactly at the line is preferred, one Mi less me
   const g = read('9200Mi', '60%', { JOB_RUN_EXPECTED_PEAK_MI: 'garbage' });
   assert.equal(g.r.code, 2, `garbage peak: ${g.r.out}`);
   assert.match(g.r.out, /JOB_RUN_EXPECTED_PEAK_MI is a number of Mi/);
-  assert.match(read('9199Mi', '60%', { JOB_RUN_EXPECTED_PEAK_MI: '0' }).l, /decision=preferred.*peak_mi=0/, 'a zero peak adds nothing');
+  assert.match(read('9199Mi', '60%', { JOB_RUN_EXPECTED_PEAK_MI: '0' }).l, /peak_mi=0 .*decision=preferred/, 'a zero peak adds nothing');
   assert.match(read('9199Mi', '60%', {}, ['--big']).l, /peak_mi=8192/, '--big uses its whole limit');
   const lead0 = read('9200Mi', '60%', { JOB_RUN_EXPECTED_PEAK_MI: '08' });
   assert.equal(lead0.r.code, 0, `a leading-zero peak (08) must not abort the run: ${lead0.r.out}`);
@@ -163,5 +163,6 @@ test('QA-H3b a Job that never leaves Pending: the Pending line is in the log; wh
   const log = placement(w.log());
   console.log(`QA-H3b log lines: ${log.map((l) => l.replace('=== JOB-RUN PLACEMENT ', '')).join(' | ')}`);
   assert.ok(log.some((l) => /pending=memory/.test(l)), 'the Pending line is in the log');
-  assert.ok(log.some((l) => /PLACEMENT node=/.test(l)), 'a final node/queued line is also written when the Job never started');
+  // The FINAL line (a k3s node name and queued=), not the control-plane decision line. Expected to fail on 62c38599: a product gap.
+  assert.ok(log.some((l) => /PLACEMENT node=k3s-\S+ .*queued=/.test(l)), 'a final node/queued line is also written when the Job never started');
 });
