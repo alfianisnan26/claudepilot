@@ -338,8 +338,8 @@ test('T-675 R2: a message sent while a restart of an asleep session waits for it
     // R2b: ONLY the first reading (the restart's) is held; a second read call would answer at once. What keeps the send behind the restart
     // here is WorkspaceMemory.reading(): a reading already in flight is shared (`#inFlight`), so the send's wake check joins the held one
     // and resumes after the restart's. (`await this.#restarting.get()` in send() is a second, independent guard.) Either one alone keeps the
-    // send safe, so removing only one leaves this test green (defence in depth, T-675 R2b: Job claudepilot-job-bedbcb05); removing BOTH
-    // makes the send start its process while the restart waits, and the test goes red ("Couldn’t resume the session").
+    // send safe, so this test stays green with only one removed (defence in depth); removing BOTH makes it red ("Couldn’t resume the session").
+    // Each guard has its own test (T-675 R2d): memory.test.ts (two concurrent readings, one exec) and the next test here (no shared reading).
     s.controller.memory = new WorkspaceMemory({ read: async () => (reads++ === 0 && (await gate), reading(2 * GiB)) });
     const [starts, stops] = [s.ws.starts, s.ws.stops];
     const restarting = s.controller.restart(s.id);
@@ -358,6 +358,45 @@ test('T-675 R2: a message sent while a restart of an asleep session waits for it
     assert.equal(s.ws.stops, stops, 'no process was stopped: the message did not start a process the restart then killed');
     assert.equal(s.ws.starts, starts + 1, 'one process, the restart’s');
     const line = s.ws.sends.find((x) => x.line.includes('MESSAGE in the gap'));
+    assert.ok(line, 'the message reached a process');
+    assert.equal(line.args[1], s.controller.get(s.id)!.claudeSessionId, 'the process that is live now');
+  } finally {
+    await s.done();
+  }
+});
+
+test('T-675 R2d: a message sent while a restart of an asleep session waits is held by the restart itself, with no shared reading to hold it', async () => {
+  const s = await liveSession({ idleSleepMs: 200 }, true);
+  try {
+    await until(() => s.controller.get(s.id)!.process === 'asleep', 4000);
+    // A memory that holds ONLY its first reading (the restart's) and answers every other at once: nothing is shared (no `#inFlight`), so the
+    // only thing that keeps the send behind the restart is `await this.#restarting.get()` in send(). Without it the send's wake check passes
+    // at once and its process starts while the restart is held.
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let reads = 0;
+    class Unshared extends WorkspaceMemory {
+      override async reading(): Promise<ReturnType<typeof reading>> {
+        if (reads++ === 0) await gate;
+        return reading(2 * GiB);
+      }
+    }
+    s.controller.memory = new Unshared({ read: async () => reading(2 * GiB) });
+    const [starts, stops] = [s.ws.starts, s.ws.stops];
+    const restarting = s.controller.restart(s.id);
+    await until(() => reads >= 1, 4000);
+    const sent = s.controller.send(s.id, 'gap-2', 'MESSAGE in the unshared gap').then(() => 'sent', (e: unknown) => `rejected: ${String(e)}`);
+    const answered = s.answering(Promise.all([restarting, sent]));
+    // The event that shows the send got ahead (its process started while the restart is held); capped, since with the guard it never comes.
+    await until(() => s.ws.starts > starts, 400).catch(() => undefined);
+    assert.equal(s.ws.starts, starts, 'no process started while the restart is held');
+    release();
+    const [restarted, outcome] = await answered;
+    assert.equal(outcome, 'sent');
+    assert.equal(restarted.process, 'live');
+    assert.equal(s.ws.stops, stops, 'no process was stopped');
+    assert.equal(s.ws.starts, starts + 1, 'one process, the restart’s');
+    const line = s.ws.sends.find((x) => x.line.includes('MESSAGE in the unshared gap'));
     assert.ok(line, 'the message reached a process');
     assert.equal(line.args[1], s.controller.get(s.id)!.claudeSessionId, 'the process that is live now');
   } finally {

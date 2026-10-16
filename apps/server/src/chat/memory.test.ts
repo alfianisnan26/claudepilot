@@ -70,6 +70,22 @@ test('T-416: an unavailable reading is null (never blocks), is logged once per w
   assert.equal(reads, before, 'no second exec within the fresh window');
 });
 
+test('T-675 R2d: two readings asked at once share ONE exec (the in-flight reading), and a third after it settled reads again', async () => {
+  let reads = 0;
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  const mem = new WorkspaceMemory({ read: async () => (reads++, await gate, reading(GiB)) });
+  // maxAge 0: the cache never answers, so only `#inFlight` can keep the second call from a second exec.
+  const a = mem.reading('docker/ws1', 0);
+  const b = mem.reading('docker/ws1', 0);
+  release();
+  const [ra, rb] = await Promise.all([a, b]);
+  assert.equal(reads, 1, 'one exec for two concurrent readings');
+  assert.equal(ra, rb, 'the same reading');
+  await mem.reading('docker/ws1', 0);
+  assert.equal(reads, 2, 'a reading asked after it settled is a new exec');
+});
+
 test('T-416: past 85 percent a Needs you item appears with the top processes; it stays one item and clears below 80 percent', async () => {
   let next = reading(6 * GiB); // 75 percent
   let now = Date.parse('2026-10-15T02:00:00Z');
