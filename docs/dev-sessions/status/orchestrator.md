@@ -12,22 +12,18 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 
 ## IN FLIGHT (6 of 6, D-71)
   Lanes' ticket_comment refused on unassigned tickets (T-341, T-549, T-675): verdicts live in their replies + this file.
-- QA PERF 7e4879c7: T-426 S1f PASS WITH GAPS (job 22f0cb1a): pool creds P1-P3 hold; --out scan O1-O3+O5 red incl. clean
-  control O5; r2 job d6cdbd7d: all 4 = HARNESS defect (stale fake kubectl), probe fix e864da9d -> now r3 on lead-built
-  wip/qa-t426b-fe97a4c (fe97a4ca). job-run.sh:47 comment stale (/proc): fix in the T-426 rework if r3 finds more.
-- QA UI 8b13bb5a: REVIEW T-723 S3 APPROVE 7609, PLAN T-733 (7630, 7633), PLAN T-781 5 slices (reply; D1-D7 defaults taken)
-  -> now QA T-736 S3 2d10b092.
+- QA PERF 7e4879c7: T-426 S1f r3 FAIL O1 (job a25088a9, newline name survives delete; O2-O5, P1-P3 hold; r1/r2 harness
+  defects) -> S1g 7718 for BE Infra -> now QA T-781 S4 6b767069 (redaction, 4M bound, size).
+- QA UI 8b13bb5a: T-772 S1 FAIL F1 7700 (RunsTab:99 glued class) -> S1b 7719 for Impl; T-736 S3 verdict MISSING -> asked.
 - FOR THE COORDINATOR, T-781 (D-76): lead cannot claim/comment it (unassigned); Backend lane b2f0e95f spawned on it (S1+S2),
   posts the estimate + D1-D7 there. Order S1, S2, S4, S3, S5 (the file must carry the chat before a hard move). T-731 is DONE.
-- QA BE 2 42e5408f: T-600 live UNAVAILABLE for the lane (7597); lead read crew_scorecard: LIVE PARTIAL, pace no_source (7610);
-  T-723 S3 PASS WITH GAPS 7665 (4 actor mutants survive, strip/trim, bidi) -> S3b items 7677 (Cf strip default) for Impl
-  after T-739 S4. T-610 r2 PASS WITH GAPS 7695 (store.ts:238 COUNTED mutant survives) -> r3 7699 -> now QA T-781 S1+S2.
-- IMPL lane 46007215 (sonnet; 09fee945 ended: T-772 S1 DONE c9ee2ba2, job 8f10b14d 16/16 combos, 7656 -> QA UI queued)
-  T-739 B S4 mutant-killing tests (M1 M3-M7) on ticket/T-739-scorecard-index -> T-723 S3b (7677) -> T-772 S2 (sweep 7599).
+- QA BE 2 42e5408f: T-723 S3 PASS WITH GAPS 7665 -> S3b 7677 (Cf strip default). T-610 r2 PASS WITH GAPS 7695 -> r3 7699.
+  T-781 S1+S2 PASS WITH GAPS (reply; #conflicts reset untested, tick in retry window) -> Backend. Now no-Job REVIEW T-426 S1f.
+- IMPL lane 46007215 (sonnet): T-739 B S4 mutant tests (M1 M3-M7) -> T-723 S3b (7677) -> T-772 S1b (7719) -> T-772 S2 (7599).
 - BE INFRA 7c3ee28b (sonnet; T-610 r2 DONE c2246fb0) T-611 S0 7688: no H testable (placement never in Job log) -> decision 7694
-  (a): now T-611 S1 (headroom, log line, Secret error code) -> T-610 r3 -> T-611 S2 -> T-524 S3c (7360) -> T-612 S1.
-- BACKEND lane b2f0e95f (sonnet): T-781 S1+S2 DONE 1b46072d (7675, job ae47236a 119/0, 5 mutants; lead read diff) -> QA BE 2
-  after T-610; now T-781 S4 + #conflicts cleanup -> S3, S5 -> T-733. T-778 filed (bypass routes lack own requireCan; authz = person).
+  (a): now T-611 S1 -> T-426 S1g (7718, owner prio) -> T-610 r3 (7699) -> T-611 S2 -> T-524 S3c (7360) -> T-612 S1.
+- BACKEND lane b2f0e95f (sonnet): T-781 S4 DONE 6b767069 (7709, job fe36b99c 260/0, 4 mutants; lead read diff) -> QA Perf;
+  now T-781 S3 + G1-G4 (QA gaps, false 'every message' when truncated) -> S5 -> T-733. T-778 filed (authz = person).
 - HELD: T-426 S1e 2174eee1 QA PASS 6169, review CHANGES 7121 -> fix, re-QA, merge after T-401. T-578 51f6c153 review CHANGES 6168 -> owner. T-631 CHANGES 5850 -> coordinator.
 - 16:12 OWNER PRIORITY (coordinator, T-426 5538): T-401 then T-426 FIRST. T-401 gate GREEN gate-54ba328-6502; ff only on the person's ack.
 
