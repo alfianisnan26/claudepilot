@@ -305,18 +305,18 @@ async function runConfig(cookie, cfg) {
     if (OPEN_ONLY) return;
 
     // 5. A cut tool result opens whole.
-    const findShowAll = `(() => { const e = [...document.querySelectorAll('button')].find((x) => /Show all \\(/.test(x.innerText || x.textContent) && x.getBoundingClientRect().height > 0); if (!e) return null; e.scrollIntoView({ block: 'center' }); const r = e.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2, h: r.height, label: (e.innerText || e.textContent).trim() }; })()`;
+    const findShowAll = `(() => { const e = [...document.querySelectorAll('button')].find((x) => /Show all \\(/.test(x.innerText || x.textContent) && x.getBoundingClientRect().height > 0); if (!e) return null; e.scrollIntoView({ block: 'center', behavior: 'instant' }); const r = e.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2, h: r.height, label: (e.innerText || e.textContent).trim() }; })()`;
     let sa = await b.eval(findShowAll);
     // The newest result sits in a folded run ("n steps. Latest: Bash ...") and a closed Bash row: tap the LAST collapsed one, up to 4 times
     // (the run, then the row), until the cut Output shows its button. (The first "Bash" button is the oldest row, not the marker's.)
-    const lastCollapsed = `(() => { const s = ${SCROLLER}; const bs = [...document.querySelectorAll('button')].filter((x) => /(^|\\s)(\\d+ steps?\\.|Bash)/.test(x.innerText || '') && x.getAttribute('aria-expanded') !== 'true' && x.getBoundingClientRect().height > 0); const e = bs[bs.length - 1]; if (!e) return null; if (s) s.scrollTop = s.scrollHeight; e.scrollIntoView({ block: 'center' }); const r = e.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2, label: (e.innerText || '').trim().slice(0, 40) }; })()`;
-    for (let i = 0; i < 4 && !sa; i++) {
-      const t = await b.eval(lastCollapsed);
+    // The row is opened with a DOM click (a smooth scroll moves a coordinate under a tap); the Show all itself is a real tap below.
+    const openLast = `(() => { const bs = [...document.querySelectorAll('button[aria-expanded=false]')].filter((x) => /(^|\\s)(\\d+ steps?\\.|Bash)/.test(x.innerText || '') && x.getBoundingClientRect().height > 0); const e = bs[bs.length - 1]; if (!e) return null; const label = (e.innerText || '').trim().slice(0, 40); e.click(); return { label, left: bs.length - 1 }; })()`;
+    for (let i = 0; i < 6 && !sa; i++) {
+      const t = await b.eval(openLast);
       if (!t) break;
-      console.log(`     tap "${t.label}" to open the newest result`);
-      await b.clickAt(t.x, t.y);
-      await sleep(600);
+      await sleep(500);
       sa = await b.eval(findShowAll);
+      console.log(`     opened "${t.label}" (${t.left} collapsed left): Show all ${sa ? 'found' : 'not found'}, ${await b.eval(`document.querySelectorAll('section[aria-label=Output]').length`)} Output blocks`);
     }
     if (!sa) {
       // Diagnostics for a miss: what the newest page holds as its last tool results, and which Output blocks the page shows.
