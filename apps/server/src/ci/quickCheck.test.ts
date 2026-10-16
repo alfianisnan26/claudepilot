@@ -18,7 +18,11 @@ after(() => roots.forEach((r) => rmSync(r, { recursive: true, force: true })));
 /** The machine's git configuration (signing, hooks) stays out of the fixture. */
 const GIT_ENV = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
 const sh = (cwd: string, cmd: string) => {
-  const r = spawnSync('bash', ['-c', cmd], { cwd, encoding: 'utf8', env: { ...GIT_ENV, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' } });
+  const r = spawnSync('bash', ['-c', cmd], {
+    cwd,
+    encoding: 'utf8',
+    env: { ...GIT_ENV, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' },
+  });
   assert.equal(r.status, 0, r.stderr);
   return r.stdout.trim();
 };
