@@ -3,13 +3,13 @@
 Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-10-15 DONE batches 1-7: see 4fbab374). Hand-overs: ab99b45, bb58413, 639202e.
 
 ## DONE
-- GATING 9f5afa1 (batch 15): T-675 65d93dea + T-549 S2 5d97103d (QA BE 2 PASS WITH GAPS; T-723 follow-up).
-- MERGED de3a3515 (batch 14): T-376 S3 3ec8fa94 (QA UI 6797; open for S4 6798); gate GREEN gate-d0975fa.
+- MERGED be431d6a (batch 15): T-675 65d93dea + T-549 S2 5d97103d (QA BE 2 PASS WITH GAPS; T-723); gate GREEN gate-9f5afa1
+  (actions.test timer flaked in suite, passed alone: T-697's case).
+- MERGED de3a3515 (batch 14): T-376 S3 (QA UI 6797; open S4 6798), gate-d0975fa green.
 - MERGED c3cad1a6 (batch 13): T-524 S3 b68f043d (QA Perf PASS WITH GAPS 6623; open for S3b 6624) + T-681 1fbca960
   (QA UI 6633; CLOSED, gaps -> T-710); gate GREEN gate-7526daa.
 - MERGED 5f54dbcf (batch 12): T-574 S2 57bc14bf (QA BE 2 PASS WITH GAPS); gate GREEN gate-5a379d4 (6637). Open for S3 (6615).
-- MERGED 24570945 (batch 11): T-341 e4284315 + docfix 2ed9bc64 (QA BE 2 PASS); gate GREEN gate-ea46530. Open for D (person).
-  Lead can't comment on T-341 (unassigned): evidence here.
+- MERGED 24570945 (batch 11): T-341 e4284315 + 2ed9bc64 (QA BE 2 PASS), gate-ea46530 green; open for D (person).
 - Batches 8b-10 (2026-10-15/16): 38d6d3fb T-325 S1 (open S3, person), 7ff6561d T-416 S1 (open S2, T-675), 7569d582 T-633 CLOSED.
 - Earlier 2026-10-15: batches 1-7 (275cea5b .. 1a4a7933); T-546, T-636, T-576, T-638 CLOSED.
 
