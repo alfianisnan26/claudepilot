@@ -170,7 +170,8 @@ try {
       await b.shot(`runs-branch-${tag}`);
       const chipSeq = await tabPass(b, tag, 'branch chip keyboard', { max: 40 });
       const chip = chipSeq.find((f) => /^Clear branch/.test(f.name));
-      check(`${tag} branch chip: Tab reaches it and it shows a focus ring`, !!chip && chip.ring, JSON.stringify(chip));
+      // The explicit accent ring (a box-shadow) with the browser's default outline suppressed: the UA outline alone (what the chip had before) is not the design.
+      check(`${tag} branch chip: Tab reaches it and it shows the accent ring, not the browser outline`, !!chip && chip.ring && !chip.outline, JSON.stringify(chip));
       await open('/admin/ci?tab=runs', `document.querySelector('select')`);
       await tabPass(b, tag, 'runs tab keyboard', { max: 40 });
 
