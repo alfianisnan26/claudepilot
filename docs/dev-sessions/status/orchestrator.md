@@ -11,21 +11,21 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 
 ## IN FLIGHT (6 of 6, D-71)
   Lanes' ticket_comment refused on unassigned tickets (T-341, T-549, T-675): verdicts live in their replies + this file.
-- QA PERF 7e4879c7: T-376 S4b PASS WITH GAPS 7475 -> batch; now QA T-739 B S1+S2, then T-731 probes on a81e64af.
-- QA UI 8b13bb5a: REVIEW T-401 S2b APPROVE 7387 (N1 needs a real Job+gate); T-732 PASS WITH GAPS 7467 (job 5dae3457;
-  forced-colors gap -> T-772) -> now BLIND REVIEW T-723 S1+S2 (no Job).
-- QA BE 2 42e5408f: T-736 S2 FAIL 7452 -> S3 (7455); T-723 S1 PASS WITH GAPS 7473, S2 PASS WITH GAPS 7497 (job 7f29b94d;
-  G1 route tests -> S3) -> now RE-REVIEW T-731 a81e64af (no Job).
+- QA PERF 7e4879c7: T-376 S4b PASS WITH GAPS 7475 -> batch; T-739 B S1-S2 PASS WITH GAPS 7498 (job ba9ab470; gap 2 -> S3);
+  now T-731 probes on a81e64af.
+- QA UI 8b13bb5a: T-732 PASS WITH GAPS 7467 (-> T-772); REVIEW T-723 S1-S2 CHANGES 7513 (routes hardcode 'ui' -> S3, 7516)
+  -> now BLIND REVIEW T-739 B S1+S2 (no Job).
+- QA BE 2 42e5408f: T-723 S1/S2 PASS WITH GAPS 7473/7497; REVIEW T-731 r2 APPROVE (reply; N1-N3 -> BE Infra)
+  -> now REVIEW of the lead's merge e630964d (T-426 S1f base, no Job).
 - IMPL lane fce0c981 (sonnet; 2f4ee38f ended: T-376 S4b DONE 103520e7, 7436, job 92c6f13b, no mutants; 65dd09f6: T-732 DONE
   c9a032f7, item 5 -> coordinator 7407) T-739 B S1 DONE 65b821d7 (migration 383 partial index, lead read OK; 4/4, 3 mutants;
   7471) S2 DONE 262663d5 (job 86693c96: build 0.41 s/1M synthetic rows, 7487 for the coordinator) -> now S3 tests d,e,f,h + docs.
-- BE INFRA lane b11ecab1 (sonnet): T-731 DONE a81e64af (fixes of the CHANGES review, 7491) -> respawn on ticket/T-426-s1f
+- BE INFRA lane b11ecab1 (sonnet): T-731 DONE a81e64af (7491) -> now N1-N3 (key-named cleanup, .tmp, $work/n test) -> respawn on ticket/T-426-s1f
   e630964d (lead merged T-401 a4ad3052 into S1e; doc conflicts kept both) for fix 7121 -> T-610 7053 -> T-524 S3c (7360).
 - BACKEND lane 4123bb21 (sonnet; 1261b4f3 ended: T-736 S2 DONE 98c78a63, 7395, job 1493e0be 20/20, 5 mutants)
   T-723 S2 DONE be1e02a0 -> now S3: items 5, 8 + G3 callers (risk a, add) + G1 test + G2 actor cap (7489)
   -> T-736 S3 (respawn) -> T-733 S4, S6.
-- HELD: T-426 S1e 2174eee1 QA PASS 6169, review CHANGES 7121 -> fix, re-QA, merge after T-401. T-578 51f6c153 review CHANGES 6168 -> owner.
-  T-631 review CHANGES 5850: absolute-path entry (a) for the coordinator; F1 on job-run.sh -> T-635 (high).
+- HELD: T-426 S1e 2174eee1 QA PASS 6169, review CHANGES 7121 -> fix, re-QA, merge after T-401. T-578 51f6c153 review CHANGES 6168 -> owner. T-631 CHANGES 5850 -> coordinator.
 - 16:12 OWNER PRIORITY (coordinator, T-426 5538): T-401 then T-426 FIRST. T-401 gate GREEN gate-54ba328-6502; ff only on the person's ack.
 
 ## DECISIONS (binding)
