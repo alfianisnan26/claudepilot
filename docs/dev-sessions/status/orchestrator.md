@@ -17,7 +17,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   G3 failed in 7d87d90 which predates the wait at :773). Asked: 30x under load with/without fix. Lead quick-check PASS (job 12295a2b).
 - QA UI 8b13bb5a: T-376 S3 3ec8fa94 (6765: 14 MB was Vite dev mode; assetCompress gzips /assets (read: low risk), bundle
   1,264->387 KB; Show all existed; first row 645-708 ms built; oldest page 41-48 s by paging). Lead quick-check queued. QA BE 2 42e5408f: T-675 65d93dea (job 2f55f771: 837/840 chat+notify, typecheck 0;
-  id clip+hash '.', wake actor, lead [Portal note] N=max_workers|5, R2). Lead quick-check PASS (job 4e7f31dc). Then T-549 S2 (lead quick-check running).
+  id clip+hash '.', wake actor, lead [Portal note] N=max_workers|5, R2). Lead quick-check PASS (job 4e7f31dc). Then T-549 S2 (lead quick-check PASS job 4d5cb657, which
+  also showed T-524 S3 live: master >75%, Job kept off it; T-524 6775).
 - IMPL bccb756f (sonnet, rossi) T-710 on ticket/T-710-ci-sweep from wip/qa-t710-8bb9a2c: seeded run with jobs/steps/log,
   every control 390/1280 light/dark, Tab/focus pass, fixes in slice.
 - T-549 S2 DONE 5d97103d (job 773122d5: lab 81/81; ids kohi-event 48 / konfersi 47 only, D-67 Event dropped; budget pages
