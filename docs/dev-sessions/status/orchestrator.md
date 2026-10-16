@@ -13,13 +13,14 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 ## IN FLIGHT (6 of 6, D-71)
   Lanes' ticket_comment refused on unassigned tickets (T-341, T-549, T-675): verdicts live in their replies + this file.
 - QA PERF 7e4879c7: T-426 S1f r3 FAIL O1 (job a25088a9, newline name survives delete; O2-O5, P1-P3 hold; r1/r2 harness
-  defects) -> S1g 7718 for BE Infra -> now QA T-781 S4 6b767069 (redaction, 4M bound, size).
-- QA UI 8b13bb5a: T-772 S1 FAIL F1 7700 (RunsTab:99 glued class) -> S1b 7719 for Impl; T-736 S3 verdict MISSING -> asked.
+  defects) -> S1g 7718+7741 for BE Infra -> now QA T-781 S4 on lead-built wip/qa-t781-eb58615 (probes 240df23c).
+- QA UI 8b13bb5a: T-772 S1 FAIL F1 7700 -> S1b 7719. T-736 S3 PASS WITH GAPS 7717 -> S3b 7743. Now no-Job REVIEW T-610 c2246fb0.
 - FOR THE COORDINATOR, T-781 (D-76): lead cannot claim/comment it (unassigned); Backend lane b2f0e95f spawned on it (S1+S2),
   posts the estimate + D1-D7 there. Order S1, S2, S4, S3, S5 (the file must carry the chat before a hard move). T-731 is DONE.
 - QA BE 2 42e5408f: T-723 S3 PASS WITH GAPS 7665 -> S3b 7677 (Cf strip default). T-610 r2 PASS WITH GAPS 7695 -> r3 7699.
-  T-781 S1+S2 PASS WITH GAPS (reply; #conflicts reset untested, tick in retry window) -> Backend. Now no-Job REVIEW T-426 S1f.
-- IMPL lane 46007215 (sonnet): T-739 B S4 mutant tests (M1 M3-M7) -> T-723 S3b (7677) -> T-772 S1b (7719) -> T-772 S2 (7599).
+  T-781 S1+S2 PASS WITH GAPS (reply) -> Backend. REVIEW T-426 S1f CHANGES 7723 (C1-C3) -> S1g. Now QA T-739 S4 12a41c76.
+- IMPL lane fc05043b (sonnet; 46007215 ended: T-739 B S4 DONE 12a41c76, 7722, job 9d1b63e5 38/0, 6 mutants caught)
+  now T-736 S3b (7743) in ticket-t-736-rtk-guard -> T-723 S3b (7677) -> T-772 S1b (7719) -> T-772 S2 (7599).
 - BE INFRA 7c3ee28b (sonnet; T-610 r2 DONE c2246fb0) T-611 S0 7688: no H testable (placement never in Job log) -> decision 7694
   (a): now T-611 S1 -> T-426 S1g (7718, owner prio) -> T-610 r3 (7699) -> T-611 S2 -> T-524 S3c (7360) -> T-612 S1.
 - BACKEND lane b2f0e95f (sonnet): T-781 S4 DONE 6b767069 (7709, job fe36b99c 260/0, 4 mutants; lead read diff) -> QA Perf;
