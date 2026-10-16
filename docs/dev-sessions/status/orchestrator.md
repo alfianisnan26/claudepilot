@@ -1,8 +1,9 @@
-# orchestrator status (2026-10-16 01:55 UTC, session 355881a3, continuation of de232389)
+# orchestrator status (2026-10-16 04:02 UTC, session 355881a3, continuation of de232389)
 
 Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-10-15 DONE batches 1-7: see 4fbab374). Hand-overs: ab99b45, bb58413, 639202e.
 
 ## DONE
+- GATING d0975fa (batch 14): T-376 S3 3ec8fa94 (QA UI PASS WITH GAPS 6797; lead 6798: merge, gaps 1 wiring test + 2 done-when 4 -> S4).
 - MERGED c3cad1a6 (batch 13): T-524 S3 b68f043d (QA Perf PASS WITH GAPS 6623; open for S3b 6624) + T-681 1fbca960
   (QA UI 6633; CLOSED, gaps -> T-710); gate GREEN gate-7526daa.
 - MERGED 5f54dbcf (batch 12): T-574 S2 57bc14bf (QA BE 2 PASS WITH GAPS); gate GREEN gate-5a379d4 (6637). Open for S3 (6615).
@@ -16,10 +17,9 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - QA PERF 7e4879c7: T-697 29b4ce58 (test-only actions.test fix; limits + G3 not reproduced; 30x under load asked; lead
   quick-check PASS 12295a2b). Then T-524 S3b 23330c28 (test-only +25: name pin, no-patch-on-top-fail; src/ci 208/208 job
   54784775; mutants D,F killed f69b2de3). Live re-read patch NOT verified. 6775 was WRONG (rule set at creation, 78%): 6788.
-- QA UI 8b13bb5a: T-376 S3 3ec8fa94 (6765: 14 MB was Vite dev mode; assetCompress gzips /assets, read: low risk; bundle
-  1,264->387 KB; first row 645-708 ms built; oldest page 41-48 s). Lead quick-check PASS 92fd9942.
-- QA BE 2 42e5408f: T-675 65d93dea (job 2f55f771 837/840; quick-check PASS 4e7f31dc). Then T-549 S2 5d97103d (lab 81/81
-  job 773122d5; ids with a source only, D-67; budget drops M1 at 2 programs; quick-check PASS 4d5cb657; gap: 3-5 seeds small).
+- QA UI 8b13bb5a: standby; next T-710 re-sweep on bccb756f DONE (told 04:01).
+- QA BE 2 42e5408f: standby -> T-574 S3. Verdicts (lead can't comment): T-675 65d93dea PASS WITH GAPS (fff5b0e4 837/840,
+  53bf2863 9/10 mutants; gaps -> T-723, D-65 deviation on record). T-549 S2 5d97103d PASS WITH GAPS (bfad11ca). Both -> batch 15.
 - IMPL bccb756f (sonnet, rossi) T-710 on ticket/T-710-ci-sweep from wip/qa-t710-8bb9a2c: seeded run with jobs/steps/log,
   every control 390/1280 light/dark, Tab/focus pass, fixes in slice.
 - BE INFRA lane 4d010bea (sonnet, two.claude) T-251 (urgent rank-02d) on ticket/T-251-unknown-usage: audit 5 reqs vs code
@@ -70,6 +70,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 1. Merges: T-401 060aca4 (ack 4941) -> T-426 S1e -> T-379 S2 3f11b28 (PASS 4948, review 4938); deploys are the coordinator's.
 2. On PASS: T-697, T-549 S2, T-376 S3 -> gate, merge. BE Infra after T-549 S2: T-524 S3b.
    T-710 sweep PASS WITH GAPS 6737 (job abef017c); harness slice in flight, then QA UI re-sweep. Then T-376 S3, T-549 S2, T-697 -> QA.
+   T-376 S4 (6798: createApp wiring test; 4x CPU, long tasks, DOM/memory, older-page render) -> next implementer slot.
 3. T-675 (memory findings 4/5 + R2 test, Backend lane), T-574 S3 (6615), T-416 S2 (Bypass restore).
 4. RTK: T-340 (hook change landed by a person/coordinator) -> T-341 merge -> T-306 item 3 (lab A/B). 5. T-537. 6. T-513.
 7. T-472 live re-check (needs portal_status), T-422, T-147, T-438, T-425, T-436, T-437, T-432, T-382, T-377, T-386, T-409, T-402, T-398,
