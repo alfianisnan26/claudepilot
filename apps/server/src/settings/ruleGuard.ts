@@ -393,6 +393,8 @@ function lex(src) {
   const bodies = [];
   const pendingDocs = [];
   let awaitingDelim = null;
+  // Set when a quote is never closed or a backslash ends the text: the shell would not run it as written (T-860).
+  let bad = false;
   let cur = null;
   let i = 0;
   const n = src.length;
@@ -429,6 +431,7 @@ function lex(src) {
         continue;
       }
       const w = word();
+      if (i + 1 >= n) bad = true;
       w.text += src[i + 1] || '';
       w.quoted = true;
       i += 2;
@@ -436,6 +439,7 @@ function lex(src) {
     }
     if (c === "'") {
       const e = src.indexOf("'", i + 1);
+      if (e < 0) bad = true;
       const stop = e < 0 ? n : e;
       const w = word();
       w.text += src.slice(i + 1, stop);
@@ -488,6 +492,7 @@ function lex(src) {
         }
         w.text += src[j++];
       }
+      if (j >= n) bad = true;
       i = j + 1;
       continue;
     }
@@ -607,7 +612,7 @@ function lex(src) {
   }
   end();
   readBodies();
-  return { tokens: tokens, subs: subs, bodies: bodies };
+  return { tokens: tokens, subs: subs, bodies: bodies, bad: bad };
 }
 
 /** Simple commands: words and redirections between operators; whether stdin comes from a pipe. */
@@ -692,7 +697,12 @@ function analyzeBash(command, cwd) {
   st.fragments = st.mentions || FRAGMENT_WORDS.test(flat) || all.some((s) => s.length >= 3 && s.length <= 60 && /[.\/-]/.test(s) && !/\s/.test(s) && RULE_NAMES.some((nm) => nm.includes(s)));
   st.decoder = DECODER.test(flat);
   st.dotglob = /dotglob|GLOBIGNORE|globdots|GLOB_DOTS/.test(flat);
-  return analyze(command, st, cwd, 0);
+  const found = analyze(command, st, cwd, 0);
+  if (found) return found;
+  // A git -C in one command and a link, a move or a config change in another of the same line: the guard reads the path before the
+  // line runs, and (ln -sfn OUT lane/l, then git -C lane/l commit) points it somewhere else by then (T-860).
+  if (st.gitC && st.swap && st.swap.some((s) => st.gitC.some((g) => g !== s))) return hit('git -C in a command line that also changes links, folders or config', '');
+  return null;
 }
 
 function hit(form, p) {
@@ -1039,6 +1049,7 @@ function treeLandsOnRule(srcAbs, root) {
 function analyze(command, st, cwd, depth) {
   if (depth > 6) return st.fragments ? hit('nested commands too deep', '') : null;
   const l = lex(command);
+  if (l.bad && /(^|[^A-Za-z0-9_-])git([^A-Za-z0-9_-]|$)/.test(command) && gitCRoots().active) return hit('git in a command with an unclosed quote or a trailing backslash (a lane workspace)', '');
   for (const sub of l.subs) {
     const r = analyze(sub, st, cwd, depth + 1);
     if (r) return r;
@@ -1069,10 +1080,11 @@ function analyze(command, st, cwd, depth) {
         if (r) return r;
       }
     }
+    st.cmdN = (st.cmdN || 0) + 1;
     const u = unwrap(c.words);
     const ws = u.words;
     for (const a of u.assigns) {
-      const r = assignHit(a, st, ws.length > 0);
+      const r = assignHit(a, st, ws.length > 0) || gitEnvHit(a);
       if (r) return r;
     }
     if (u.unseen && (st.fragments || st.decoder)) return hit('env -S of a value the guard cannot see', '');
@@ -1092,15 +1104,18 @@ function analyze(command, st, cwd, depth) {
     }
     const name = path.basename(head.text);
     const args = ws.slice(1);
+    if (GITC_SWAPPERS.has(name)) (st.swap || (st.swap = [])).push(st.cmdN);
     // A for list is read; what the loop does with it is checked in its own commands (a write to $f is a variable).
     if (name === 'for' || name === 'select' || name === 'case' || name === 'esac' || name === 'function') continue;
     // export LESSOPEN='|rm %s': a variable that runs code, set for the commands after it.
     if (name === 'export' || name === 'declare' || name === 'typeset' || name === 'local' || name === 'readonly') {
       for (const a of args) {
-        const r = assignHit(a, st, false);
+        const r = assignHit(a, st, false) || gitEnvHit(a);
         if (r) return r;
       }
     }
+    // alias git='git -C ...' changes what a later plain git does; the lane allow rules match the text of that later command.
+    if (name === 'alias' && gitCRoots().active) return hit('alias in a lane workspace', '');
 
     if (name === 'cd' || name === 'pushd') {
       const a = nonOptions(args)[0];
@@ -1278,6 +1293,12 @@ function analyze(command, st, cwd, depth) {
       continue;
     }
     if (name === 'git') {
+      // env -C DIR git ..., sudo -D DIR git ...: the folder is read like a git -C folder.
+      if (u.chdir !== undefined && gitCRoots().active) {
+        (st.gitC || (st.gitC = [])).push(st.cmdN);
+        const step = gitCStep(u.chdir, restore ? restore.base : base);
+        if (step.hit) return step.hit;
+      }
       const r = git(args, st, base, stdinText, stdinFile, c.piped);
       if (r) return r;
       continue;
@@ -1286,6 +1307,13 @@ function analyze(command, st, cwd, depth) {
       const acts = args.filter((w) => /^-(delete|exec|execdir|ok|okdir|fprint0?|fprintf|fls)$|^(-x|--exec|-X|--exec-batch)$/.test(w.text));
       if (!acts.length) continue;
       const execAt = args.findIndex((w) => /^-(exec|execdir|ok|okdir)$|^(-x|--exec|-X|--exec-batch)$/.test(w.text));
+      // find ... -exec git ... {} ;: the words after -exec are a git command of their own (a lane workspace reads its -C and options).
+      if (execAt >= 0 && args[execAt + 1] && nameOf(args[execAt + 1]) === 'git' && gitCRoots().active) {
+        const inner = [];
+        for (let j = execAt + 2; j < args.length && args[j].text !== ';' && args[j].text !== '+'; j++) inner.push(args[j]);
+        const r = git(inner, st, null, '', null, false);
+        if (r) return r;
+      }
       let writes = acts.some((w) => w.text !== '-exec' && w.text !== '-execdir' && w.text !== '-ok' && w.text !== '-okdir' && !/^(-x|--exec|-X|--exec-batch)$/.test(w.text));
       if (execAt >= 0 && args[execAt + 1]) {
         const cmd = path.basename(args[execAt + 1].text);
@@ -1491,6 +1519,17 @@ function gitCRoots() {
   return { extra: extra, active: extra.length > 0 || isDir(GITC_DEFAULT_ROOT) };
 }
 
+/**
+ * A GIT_* variable that moves a folder, adds config or runs a program (GIT_DIR, GIT_WORK_TREE, GIT_COMMON_DIR, GIT_CONFIG_COUNT,
+ * GIT_EXEC_PATH, GIT_SSH_COMMAND, ...), set for a command, exported or declared: refused in a lane workspace, where the lane allow
+ * rules match the text of the command and not its environment. Author and committer names, tracing and the prompt switch are not refused.
+ */
+function gitEnvHit(w) {
+  const m = ASSIGN.exec(w.text);
+  if (!m || !/^GIT_/.test(m[1]) || !EXEC_ENV.test(m[1])) return null;
+  return gitCRoots().active ? hit('a GIT_ variable that moves a folder or runs a program, in a lane workspace', '') : null;
+}
+
 /** The folder a git -C path word names: { hit } when it is refused, else { base } (its real path), or { base: next } when the guard is off here. */
 function gitCStep(d, b) {
   const roots = gitCRoots();
@@ -1500,7 +1539,7 @@ function gitCStep(d, b) {
   if (d.dyn) return { hit: hit('git -C of a value the guard cannot see (a variable or a command substitution)', '') };
   if (d.glob) return { hit: hit('git -C of a pattern', '') };
   const t = expandHome(d.text);
-  if (!t || /[\u0000-\u001f]/.test(t)) return { hit: hit('git -C of a path the guard cannot read', '') };
+  if (!t || /[\u0000-\u001f$]/.test(t)) return { hit: hit('git -C of a path the guard cannot read', '') };
   if (b === null && !path.isAbsolute(t)) return { hit: hit('git -C of a folder relative to a folder the guard does not know', '') };
   let real;
   try {
@@ -1516,11 +1555,44 @@ function gitCStep(d, b) {
   return { base: real };
 }
 
+// Options git takes before the subcommand that move nothing: the only ones a lane workspace may use there (S2). Every other one is
+// refused: -c and --config-env set config (core.worktree, core.hooksPath, alias.x=!cmd), --exec-path runs a program from a folder,
+// --namespace and --bare change where refs go, and a glued -Cpath or an option a later git adds fails closed.
+const GITC_GLOBAL_OK = /^(--no-pager|-P|--paginate|-p|--no-optional-locks|--no-lazy-fetch|--literal-pathspecs|--glob-pathspecs|--noglob-pathspecs|--icase-pathspecs|--no-advice|--no-replace-objects|--version)$/;
+// Config keys that move the work tree or run a program, refused for git config in a lane workspace.
+const GITC_CONFIG_KEYS = /^(core\.(worktree|bare|hookspath|fsmonitor|sshcommand|gitproxy|askpass|editor|pager)|alias\.|include\.|includeif\.|credential\.|filter\.|diff\.[^=]*\.(command|textconv)|sequence\.editor|gpg\.[a-z.]*program)/i;
+// Programs that change links, folders or files in the same command line as a git -C (the path is read before they run).
+const GITC_SWAPPERS = new Set(['ln', 'mv', 'cp', 'rm', 'rmdir', 'mkdir', 'tar', 'unzip', 'install', 'rsync', 'bsdtar', 'cpio', '7z', '7za', 'unlink', 'truncate', 'mkfifo']);
+
 function git(args, st, base, stdinText, stdinFile, piped) {
   let k = 0;
   let b = base;
+  const lane = gitCRoots().active;
+  const mark = (list) => (st[list] || (st[list] = [])).push(st.cmdN);
   for (; k < args.length; k++) {
     const t = args[k].text;
+    if (lane) {
+      // A lane workspace: the folders before the subcommand are -C, --git-dir and --work-tree (each read as the shell does and
+      // kept below a lane root) and the options on the list above. The lane allow's * would let any of them through.
+      if (t === '-C') {
+        mark('gitC');
+        const step = gitCStep(args[++k], b);
+        if (step.hit) return step.hit;
+        b = step.base;
+        continue;
+      }
+      const dir = /^--(git-dir|work-tree)(?:=([\s\S]*))?$/.exec(t);
+      if (dir && !args[k].glob) {
+        mark('gitC');
+        const v = dir[2] !== undefined ? Object.assign({}, args[k], { text: dir[2] }) : args[++k];
+        const step = gitCStep(v, b);
+        if (step.hit) return step.hit;
+        continue;
+      }
+      if (GITC_GLOBAL_OK.test(t) && !args[k].dyn) continue;
+      if (t.startsWith('-') || args[k].dyn || args[k].glob) return hit('a git option before the subcommand that a lane workspace does not allow (-c, --exec-path, --namespace, a glued -C, a variable)', '');
+      break;
+    }
     if (t === '-C') {
       const step = gitCStep(args[++k], b);
       if (step.hit) return step.hit;
@@ -1555,6 +1627,12 @@ function git(args, st, base, stdinText, stdinFile, piped) {
   }
   const sub = args[k] ? args[k].text : '';
   const rest = args.slice(k + 1);
+  if (lane && (sub === 'worktree' || sub === 'config')) mark('swap');
+  // A lane workspace: git config of a key that moves the work tree or runs a program (core.worktree, core.hooksPath, alias.x, include.path).
+  if (lane && sub === 'config') {
+    const ops = nonOptions(rest);
+    if (ops.some((w) => GITC_CONFIG_KEYS.test(w.text)) || (ops.length >= 2 && ops[0].dyn)) return hit('git config of a key that moves the work tree or runs a program, in a lane workspace', '');
+  }
   // git config alias.x '!rm .mcp.json' (then git x): a key that runs something, set while a rule file is named.
   if (sub === 'config') {
     const ops = nonOptions(rest);
