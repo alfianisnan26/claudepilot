@@ -90,7 +90,7 @@ uc=; prev=
 for a in "$@"; do [ "$prev" = --userconfig ] && uc=$a; prev=$a; done
 [ -z "\${STUB_LEAK:-}" ] || cat "${tokfile}" >&2
 case "$*" in *--prefer-offline*) if [ -n "\${STUB_MISS:-}" ]; then echo "npm ERR! code ENOTCACHED" >&2; exit 1; fi ;; esac
-echo "npm $* pool=\${E2E_CF_ACCESS_CLIENT_ID:+set}" >> "${calls}.pool"
+echo "npm $* pool=\${E2E_CF_ACCESS_CLIENT_ID:+set}\${JR_POOL_E2E_CF_ACCESS_CLIENT_ID:+set}" >> "${calls}.pool"
 echo "npm $* ${probe}" >> "${calls}"
 mkdir -p node_modules
 `);
