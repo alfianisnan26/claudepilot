@@ -9,24 +9,28 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   T-732, T-610 r3, T-739 B (mig 383), T-723 S3c. Coordinator told on T-731.
 - DEPLOY 233 LIVE (coordinator, portal 2026.10.16-2 from b2d0a3d9 = batch 22; b23 NOT in it). NO Releases/ note for it (T-591
   still fails; 8158). Live checks: 8 UNAVAILABLE (QA UI, no live read) -> coordinator 8192; none closed. Deploy 191 = b<=18.
-- READY FOR BATCH 24: T-611 S1b+S1i+S1c+S2 80ffedea (QA S2 PWG 8186, review APPROVE 8141, probes 16/17 job 24b85442 read by
-  lead 8187, only red C5e-ii = known gap -> S2b; probes stay OFF integration). T-426 S1i review APPROVE 8157.
-  Waiting QA: T-736 S3e 1cd5047d (39/39 job 99dfcc3a, 8180), T-675 R2b 5d38ab69 (two guards; job bedbcb05), T-781 S8.
+- BATCH 24 GATING 0c86256e (wip/main-0c86256, worktree premerge-b24, log job-out/gate-b24.log; NO status push until done):
+  T-401 S2b a4ad3052 (ack 8027, review 7387; lead: docs conflict only, manifests read, 8205) + T-736 S3c-S3e 1cd5047d
+  (QA PWG 8198; review CHANGES -> S3f, decision 8200). On green: ff integration, tell coordinator on T-731.
+- T-611 S1b..S2 80ffedea: QA done (8186, 8187 16/17) but NOT mechanical onto integration (T-731 --reuse; 8202) -> BE Infra resolves
+  after S2b (lead starts the merge in its worktree; --reuse + --pool-env refused). QA UI pre-reads the merge risks.
+- T-675 R2b FAIL (QA UI: apostrophe at memoryBudget.test.ts:330 breaks compile) -> Backend R2c. T-781 S8 DONE 543240b8 -> QA BE 2
+  + review QA Perf.
 
 ## IN FLIGHT (6 of 6, D-71)
 - NONE gating. Lanes can't comment on unassigned tickets (T-341, T-549, T-675): verdicts in replies + this file.
-- QA PERF 8e8912fc (perf-tester/sonnet, respawned for Write; 8148): now blind REVIEW T-736 S3e 41daac15..1cd5047d (read only).
-- QA UI 8b13bb5a (no Write): reviews/QA so far 8006 8018 8049 8095 8131 8137 8141 8157; live 233 UNAVAILABLE.
-  Now QA T-675 R2b 5d38ab69 (M1, M3, both).
-- QA BE 2 42e5408f (no Write): QA T-611 S2 PWG 8186. Now QA T-736 S3e 1cd5047d.
+- QA PERF 8e8912fc (perf-tester/sonnet, respawned for Write; 8148): REVIEW T-736 S3e CHANGES 5. Now blind REVIEW T-781 S8.
+- QA UI 8b13bb5a (no Write): reviews/QA 8006 8018 8049 8095 8131 8137 8141 8157; live 233 UNAVAILABLE; T-675 R2b FAIL.
+  Now T-611 merge-risk read (read only) -> QA T-675 R2c.
+- QA BE 2 42e5408f (no Write): T-611 S2 PWG 8186, T-736 S3e PWG 8198. Now QA T-781 S8 543240b8.
 - IMPL 46632d91 (respawned, sonnet; old 7cc1b2f5 ended after T-675 R2b DONE 5d38ab69): T-772 S2 on ticket/T-772-s2 from
   1e1e0ba1 (7916 items 1-5 + 7599 sweep; QA plan 7963).
 - BE INFRA 16c2494f (respawned, sonnet; old fad38191 ended after T-736 S3e DONE 1cd5047d): T-611 S2b on ticket/T-611-s2b from
-  80ffedea (newline + non-ASCII refusal, C5e-ii log line, PLACEMENT avoid list, tests, docs) -> T-524 S3c + T-733 S5 -> T-612 S1.
-- BACKEND 3484bd4d: T-416 S2 DONE 8be917e6 (lead read: 'lost' takes the wake's lead gates; a person's stop not kept) -> QA UI.
-  Now T-781 S8 (S5-3c dead line, in-flight assertion) from 8eeef663 -> T-416 S2b (stale kept record) -> T-537 (docs).
-- HELD: T-401 S2b a4ad3052 (QA PASS, review APPROVE 7387): a person's OK on the gate change (charter wall; 8023), then merge + gate.
-  T-426 S1h/S1e after T-401; T-379 S2 3f11b28 behind it. T-578 -> owner. T-631 -> coordinator.
+  80ffedea (newline + non-ASCII refusal, C5e-ii log line, PLACEMENT avoid list, tests, docs) -> resolve integration merge (8202)
+  -> T-736 S3f (allow-list, 8200) -> T-524 S3c + T-733 S5 -> T-612 S1.
+- BACKEND 3484bd4d: T-781 S8 DONE 543240b8. Now T-416 S2b (worktree on ticket/T-416-s2b f5b96b25: supersede kept record) ->
+  T-675 R2c (`git switch -c` from 5d38ab69, fix the apostrophe) -> T-537 (docs).
+- AFTER T-401: T-426 S1h/S1e; T-379 S2 3f11b28 behind it. T-578 -> owner. T-631 -> coordinator (after this batch).
 
 ## DECISIONS (binding)
 - 13:45 D-75 AMENDED (coordinator, 1444d836, checked in DECISIONS.md): the lead runs the gate before a merge (gate-job.sh, one per
@@ -55,8 +59,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - T-578 (gate wall, via coordinator): owner picks same-tree gate reuse (a) portal CI store [lead default], (b) pipeline-only RBAC
   ConfigMap, (c) accept risk, (d) drop reuse; reuse also conflicts with "full gate on the exact commit" (charter). Lead can't comment (T-634).
 - T-666 (high, RBAC = a person's wall): workspace kohi-event can create/delete ConfigMaps in isnan-claudepilot (review 6168, can-i).
-- T-401 gate wall (via the coordinator): ack 4941 ON HOLD. Review 7103: exit-3 evidence can leak a token, the scan fails open,
-  the commit's .npmrc sees the token. Fix -> re-QA -> re-ask the ack with corrected text (scope: init cache, tw clock).
+- T-401 gate wall: RESOLVED, coordinator's ack 8027 (13:50, D-62), conditions met except the gate (batch 24 gating).
 - T-341 D (updatedInput) needs a real Claude Code session (person/coordinator). T-93 Konfersi production only. Coordinator items: T-422 (sudo), T-306 item 4 / T-340; D-row for T-417's Bypass across sleep;
   T-433's persona-wall question (2984).
 - For the coordinator, NOT the owner (not tagged owner-checklist): T-476 lead may START a deploy whose release waits for a person
@@ -67,7 +70,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 
 ## NEXT (in order, as slots free)
 1. Next batch (each after QA/review): T-611 S1b..S2b, T-736 S3c-S3e, T-675 R2b, T-781 S8; T-416 S2+S2b (after S2b QA + review).
-2. T-401 after a person's OK (8023) -> T-426 S1e -> T-379 S2 3f11b28; deploys are the coordinator's. ticket_list fails: use ticket_get.
+2. T-401 in b24 (ack 8027 sat unseen 13:50-15:15: re-read HELD tickets' last comments each hour) -> T-426 S1e -> T-379 S2 3f11b28; deploys are the coordinator's. ticket_list fails: use ticket_get.
 4. RTK: T-340 (person/coordinator) -> T-341 merge -> T-306 item 3. 5. T-537. 6. T-513. 7. T-472 live re-check (needs portal_status), T-422, T-147, T-438, T-425, T-436, T-437, T-432, T-382, T-377, T-386, T-409, T-402, T-398,
    T-399, T-370 HOLD, T-371..T-374, T-363, T-451, T-470, T-507, T-508, T-512, T-520; T-404 open till deployed.
 
