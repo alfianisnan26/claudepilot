@@ -600,3 +600,46 @@ for (const [op, args] of [
     }
   });
 }
+
+test('T-723 #2: models of an asleep session refused for memory names the actor that asked', async () => {
+  const s = await asleepShort();
+  try {
+    await assert.rejects(s.controller.models(s.id, { actor: 'ui' }), isBudget);
+    assert.deepEqual(actorsOf(s), ['ui']);
+  } finally {
+    await s.done();
+  }
+});
+
+/** A second session, asleep, with the Bypass policy open and the re-check fresh; memory then short. Only the audited actor is under test. */
+const asleepSecond = async (optIn: boolean) => {
+  const s = await liveSession({ idleSleepMs: 200 }, true);
+  s.controller.bypassAllowed = () => true;
+  s.controller.reauth = { fresh: (token) => token === 'tok' };
+  const b = await s.controller.create({ workspaceId: 'docker/ws1' }, optIn ? { bypassOptIn: true } : {});
+  await until(() => s.controller.get(b.id)?.process === 'asleep', 6000);
+  s.controller.memory = budget(ONE_FITS + 1).memory;
+  return { s, id: b.id };
+};
+const actorsOfId = (s: Awaited<ReturnType<typeof liveSession>>, id: string) => s.controller.audit({ kind: 'memory.refused', sessionId: id }).map((a) => a.actor);
+
+test('T-723 #3: enterBypass of an asleep capable session refused for memory names the actor that asked; the gate itself is unchanged', async () => {
+  const { s, id } = await asleepSecond(true);
+  try {
+    await assert.rejects(s.controller.enterBypass(id, { acknowledged: true, sessionToken: 'tok', actor: 'ui' }), isBudget);
+    assert.deepEqual(actorsOfId(s, id), ['ui']);
+    assert.notEqual(s.controller.get(id)!.mode, 'bypassPermissions', 'a refusal for memory never enters Bypass');
+  } finally {
+    await s.done();
+  }
+});
+
+test('T-723 #4: allowBypass of an asleep session refused for memory names the actor that asked', async () => {
+  const { s, id } = await asleepSecond(false);
+  try {
+    await assert.rejects(s.controller.allowBypass(id, { actor: 'ui' }), isBudget);
+    assert.deepEqual(actorsOfId(s, id), ['ui']);
+  } finally {
+    await s.done();
+  }
+});

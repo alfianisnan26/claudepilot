@@ -89,10 +89,10 @@ export function createChatRoutes(controller: ChatController): Hono {
   // POST /api/chat/sessions/:id/bypass — turn it on: the policy, the opt-in, the tick, and the server code checked again.
   chat.post('/:id/bypass', async (c) => {
     const req = await body<EnterBypassRequest>(c);
-    return c.json(success(await controller.enterBypass(c.req.param('id'), { acknowledged: req.acknowledged === true, sessionToken: tokenOf(c) })));
+    return c.json(success(await controller.enterBypass(c.req.param('id'), { acknowledged: req.acknowledged === true, sessionToken: tokenOf(c), actor: 'ui' })));
   });
   // POST /api/chat/sessions/:id/bypass/allow — restart it so it can enter Bypass (at a turn boundary); the policy must allow it.
-  chat.post('/:id/bypass/allow', async (c) => c.json(success(await controller.allowBypass(c.req.param('id')))));
+  chat.post('/:id/bypass/allow', async (c) => c.json(success(await controller.allowBypass(c.req.param('id'), { actor: 'ui' }))));
   // POST /api/chat/sessions/:id/restart — stop its process at a turn boundary and resume the same conversation (MCP servers reconnect).
   chat.post('/:id/restart', async (c) => {
     requireCan(actorOf(c), 'operate', sessionRef(c.req.param('id')));
@@ -181,7 +181,7 @@ export function createChatRoutes(controller: ChatController): Hono {
   });
 
   // GET /api/chat/sessions/:id/models — what the session can switch to (asks Claude Code; resumes it if needed).
-  chat.get('/:id/models', async (c) => c.json(success(await controller.models(c.req.param('id')))));
+  chat.get('/:id/models', async (c) => c.json(success(await controller.models(c.req.param('id'), { actor: 'ui' }))));
 
   // GET /api/chat/sessions/:id/tasks — sub-agents and background tasks.
   chat.get('/:id/tasks', (c) => c.json(success(controller.tasks(c.req.param('id')))));

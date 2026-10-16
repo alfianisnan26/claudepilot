@@ -1307,10 +1307,10 @@ export class ChatController {
   }
 
   /** The models this session can switch to (Claude Code's `list_models`); resumes the process if needed. */
-  async models(rawId: string): Promise<ChatModelOption[]> {
+  async models(rawId: string, opts: { actor?: string } = {}): Promise<ChatModelOption[]> {
     const id = this.#require(rawId).id;
     this.#notMoving(id);
-    await this.#live(id);
+    await this.#live(id, true, true, opts.actor); // T-723: a wake refused for memory names who asked
     const options = pickModels(await this.#request(id, 'list_models'));
     this.#learnModels(this.#chat.get(id)?.claudeId ?? null, options);
     return options;
@@ -2779,7 +2779,7 @@ export class ChatController {
    * a report of Bypass from Claude Code is accepted. Entering is a High audit event. Never over MCP: no other module
    * has a session token or the opt-in.
    */
-  async enterBypass(rawId: string, req: { acknowledged: boolean; sessionToken: string | undefined }): Promise<ChatSession> {
+  async enterBypass(rawId: string, req: { acknowledged: boolean; sessionToken: string | undefined; actor?: string }): Promise<ChatSession> {
     const sessionId = this.#chat.resolveId(rawId);
     const session = this.#require(sessionId);
     this.#notMoving(sessionId);
@@ -2793,7 +2793,7 @@ export class ChatController {
     if (session.mode === 'bypassPermissions') return session;
     if (req.acknowledged !== true) refuse('no_acknowledgement', new AppError('VALIDATION_FAILED', 'Tick the box to confirm.', { details: { acknowledged: 'Required.' } }));
     if (this.reauth?.fresh(req.sessionToken) !== true) refuse('no_reauth', new AppError(REAUTH_REQUIRED, 'Enter the server code again to turn this on.', { status: 403 }));
-    await this.#live(sessionId); // resumes it when it slept; the policy and the flag are checked again at that launch
+    await this.#live(sessionId, true, true, req.actor); // resumes it when it slept (T-723: a refusal for memory names who asked); the policy and the flag are checked again at that launch
     this.#bypassGrant.add(sessionId);
     try {
       const reply = await this.#request(sessionId, 'set_permission_mode', { mode: 'bypassPermissions' });
@@ -2827,7 +2827,7 @@ export class ChatController {
    * a turn boundary, with the flag. The policy must allow it; it doesn't turn Bypass on, and a session that is
    * working or waiting has to finish first.
    */
-  async allowBypass(rawId: string): Promise<ChatSession> {
+  async allowBypass(rawId: string, opts: { actor?: string } = {}): Promise<ChatSession> {
     const sessionId = this.#chat.resolveId(rawId);
     const session = this.#require(sessionId);
     this.#notMoving(sessionId);
@@ -2855,7 +2855,7 @@ export class ChatController {
       this.#chat.patchSession(sessionId, { process: 'asleep' });
       this.#emitSession(sessionId);
     }
-    await this.#live(sessionId);
+    await this.#live(sessionId, true, true, opts.actor);
     return this.#chat.get(sessionId)!;
   }
 
