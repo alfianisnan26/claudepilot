@@ -1469,14 +1469,62 @@ function gitConfigHit(kv, unseen, st) {
   return null;
 }
 
+/* ---------- git -C (T-860) ---------- */
+
+// The lane allow rules say git -C /home/node/work/agentic-worktrees/* ..., and the shell builds a ".." from forms with no two dots
+// in a row (.''. , .\. , .'.'), so a text rule cannot hold the path. The guard reads the path the way the shell does (the lexer
+// above removes quotes and backslashes), takes its real path and allows it only below a lane root. Roots: the lane folder, and
+// the lines of a root-owned file (CLAUDEPILOT_GUARD_GITC_ROOTS_FILE, for a test; else /etc/claudepilot/git-c-roots).
+const GITC_DEFAULT_ROOT = '/home/node/work/agentic-worktrees';
+const GITC_ROOTS_FILE = process.env.CLAUDEPILOT_GUARD_GITC_ROOTS_FILE || '/etc/claudepilot/git-c-roots';
+
+function gitCRoots() {
+  const extra = [];
+  try {
+    for (const line of fs.readFileSync(GITC_ROOTS_FILE, 'utf8').split('\n')) {
+      const t = line.trim();
+      if (t && !t.startsWith('#') && path.isAbsolute(t)) extra.push(path.resolve(t));
+    }
+  } catch (e) {
+    // no file: only the default root
+  }
+  return { extra: extra, active: extra.length > 0 || isDir(GITC_DEFAULT_ROOT) };
+}
+
+/** The folder a git -C path word names: { hit } when it is refused, else { base } (its real path), or { base: next } when the guard is off here. */
+function gitCStep(d, b) {
+  const roots = gitCRoots();
+  // Not a lane workspace (no lane folder, no configured root): there is no lane allow rule to guard, and the folder is tracked as before.
+  if (!roots.active) return { base: !d || d.dyn ? null : b === null ? null : path.resolve(b, expandHome(d.text)) };
+  if (!d) return { hit: hit('git -C without a folder', '') };
+  if (d.dyn) return { hit: hit('git -C of a value the guard cannot see (a variable or a command substitution)', '') };
+  if (d.glob) return { hit: hit('git -C of a pattern', '') };
+  const t = expandHome(d.text);
+  if (!t || /[\u0000-\u001f]/.test(t)) return { hit: hit('git -C of a path the guard cannot read', '') };
+  if (b === null && !path.isAbsolute(t)) return { hit: hit('git -C of a folder relative to a folder the guard does not know', '') };
+  let real;
+  try {
+    real = fs.realpathSync(path.resolve(b === null ? '/' : b, t));
+  } catch (e) {
+    return { hit: hit('git -C of a folder that does not exist', '') };
+  }
+  const under = [GITC_DEFAULT_ROOT].concat(roots.extra).some((r) => {
+    const rr = realish(r);
+    return real.startsWith(rr === '/' ? rr : rr + '/');
+  });
+  if (!under) return { hit: hit('git -C outside the lane worktrees', '') };
+  return { base: real };
+}
+
 function git(args, st, base, stdinText, stdinFile, piped) {
   let k = 0;
   let b = base;
   for (; k < args.length; k++) {
     const t = args[k].text;
     if (t === '-C') {
-      const d = args[++k];
-      b = !d || d.dyn ? null : b === null ? null : path.resolve(b, expandHome(d.text));
+      const step = gitCStep(args[++k], b);
+      if (step.hit) return step.hit;
+      b = step.base;
       continue;
     }
     // git -c alias.x='!cmd' x, git -c core.pager='tee FILE' log (review 2, item 1): a config value that names a rule file,

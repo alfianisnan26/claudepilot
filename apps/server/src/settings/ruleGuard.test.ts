@@ -639,3 +639,89 @@ test('review 9: the audit keeps a resolved path or a fixed label, never a comman
     store.close();
   }
 });
+
+// T-860: git -C. The lane allow rules are text (git -C /home/node/work/agentic-worktrees/* ...) and the shell builds ".." from forms with no
+// two dots in a row. The guard reads the path as the shell does, takes its real path and allows it only below a lane root.
+// A scratch lane root stands in for /home/node/work/agentic-worktrees (given to the guard by its roots file).
+function gitCRig() {
+  const g = rig();
+  const lanes = join(g.root, 'agentic-worktrees');
+  const wt = join(lanes, 'lane1');
+  const main = join(g.root, 'main-folder-MARK860');
+  for (const d of [join(wt, 'sub'), main, join(g.root, 'agentic-worktrees-evil', 'x')]) mkdirSync(d, { recursive: true });
+  symlinkSync(main, join(wt, 'out-link'));
+  const rootsFile = join(g.root, 'git-c-roots');
+  writeFileSync(rootsFile, `# lane roots\n${lanes}\n`);
+  const env = { CLAUDEPILOT_GUARD_GITC_ROOTS_FILE: rootsFile };
+  const sh = (command: string) => run(g, 'Bash', { command, description: 'x' }, { cwd: wt, env });
+  return { g, lanes, wt, main, env, sh };
+}
+
+test('T-860: git -C is refused for every spelling that leaves the lane worktrees, and allowed inside them', () => {
+  const { g, lanes, wt, sh } = gitCRig();
+  const up2 = (dots: string) => `${wt}/${dots}/${dots}/main-folder-MARK860`; // two levels up from the worktree: the scratch "main folder"
+  const REFUSED: [string, string][] = [
+    ['single quotes in the dots', `git -C ${up2(".''.")} status`],
+    ['double quotes in the dots', `git -C ${up2('."".')} status`],
+    ['a quoted dot', `git -C ${up2(".'.'")} status`],
+    ['a backslash', `git -C ${up2('.\\.')} status`],
+    // One level up is the lane root itself, which is refused; a guard that drops the backslash or the quotes reads the worktree and allows it.
+    ['a backslash dot to the root', `git -C ${wt}/.\\. status`],
+    ['a quoted dot to the root', `git -C ${wt}/.''. status`],
+    ['a plain ..',`git -C ${up2('..')} status`],
+    ['the whole path in quotes', `git -C '${up2('..')}' status`],
+    ['ANSI-C quoting', `git -C ${wt}/$'\\x2e\\x2e'/$'\\x2e\\x2e'/main-folder-MARK860 status`],
+    ['a symlink pointing out', `git -C ${wt}/out-link status`],
+    ['a symlink pointing out, with a write', `git -C ${wt}/out-link commit -m x`],
+    ['a sibling whose name starts like the root', `git -C ${lanes}-evil/x status`],
+    ['the root itself', `git -C ${lanes} status`],
+    ['a folder that does not exist', `git -C ${wt}/nope status`],
+    ['a variable', `git -C $PWD/.. status`],
+    ['a variable name alone', `git -C "$X" status`],
+    ['a command substitution', `git -C $(echo ${g.root}) status`],
+    ['backticks', 'git -C `pwd` status'],
+    ['a pattern', `git -C ${wt}/.? status`],
+    ['a bracket pattern', `git -C ${wt}/.[.] status`],
+    ['a brace pattern', `git -C ${wt}/{.,.}. status`],
+    ['a relative path out', 'git -C ../.. status'],
+    ['a relative path out in quotes', "git -C '..' status"],
+    ['no folder at all', 'git -C'],
+    ['a second -C that leaves', `git -C ${wt} -C ../.. status`],
+    ['after other options', `git -c color.ui=never --no-pager -C ${up2("'.'.")} status`],
+    ['after a cd and &&', `cd ${wt} && git -C ${up2('.\\.')} status`],
+    ['in a shell -c string', `bash -c "git -C ${up2('..')} status"`],
+    ['in a pipe', `echo x | git -C ${up2(".''.")} hash-object --stdin`],
+    ['a tilde user', 'git -C ~root status'],
+  ];
+  for (const [what, command] of REFUSED) refused(sh(command), `git -C ${what}: ${command}`);
+  // Inside: the lane worktree, its folders, quotes around it, a relative path, and a message with quotes and dots.
+  const ALLOWED: [string, string][] = [
+    ['status', `git -C ${wt} status`],
+    ['quoted', `git -C '${wt}' status`],
+    ['double quoted', `git -C "${wt}" status`],
+    ['a sub folder', `git -C ${wt}/sub log --oneline`],
+    ['dots inside the worktree', `git -C ${wt}/sub/.. status`],
+    ['a quoted dot that stays inside', `git -C ${wt}/sub/.''. status`],
+    ['relative to the cwd', 'git -C sub status'],
+    ['a commit message with quotes and ..', `git -C ${wt} commit -m "Fix 'a' and \\"b\\"... see ../x and ..'' here"`],
+    ['a commit message with single quotes', `git -C ${wt} commit -m 'Refuse .\\. and .''. in -C paths'`],
+    ['grep with a regex', `git -C ${wt} grep -n 'a\\|b' -- src`],
+    ['grep with a dotted regex', `git -C ${wt} grep -nE '\\.\\.|[.]+' -- .`],
+    ['a second -C that stays', `git -C ${wt} -C sub status`],
+    ['git without -C', 'git status'],
+  ];
+  for (const [what, command] of ALLOWED) allowed(sh(command), `git -C ${what}: ${command}`);
+});
+
+test('T-860: a refusal writes one outbox line with no path text, and the guard stays off in a workspace with no lane folder', () => {
+  const { g, wt, main, sh } = gitCRig();
+  refused(sh(`git -C ${wt}/out-link status`), 'out link');
+  const lines = readFileSync(join(g.home, '.claudepilot', 'outbox', `${GUARD_CHANNEL}.jsonl`), 'utf8').trim().split('\n');
+  assert.equal(lines.length, 1);
+  const line = JSON.parse(lines[0] as string) as Record<string, string>;
+  assert.match(line.form ?? '', /git -C outside the lane worktrees/);
+  assert.equal(line.path, '', 'no path of the command in the audit');
+  assert.ok(!lines[0]!.includes('MARK860') && !lines[0]!.includes(main), 'the line holds no path');
+  // No lane folder and no roots file: nothing to guard, so git -C works as it did (only when this machine has no lane folder either).
+  if (!existsSync('/home/node/work/agentic-worktrees')) allowed(run(g, 'Bash', { command: `git -C ${main} status` }, { cwd: g.repo, env: { CLAUDEPILOT_GUARD_GITC_ROOTS_FILE: join(g.root, 'none') } }), 'no lane workspace');
+});
