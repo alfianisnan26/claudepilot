@@ -7,6 +7,7 @@ import { isAppError } from '@isnanme/core';
 import { MIGRATIONS } from '../store/migrations.js';
 import { generateSecretKey, parseSecretKey } from '../store/secretBox.js';
 import { Store } from '../store/store.js';
+import { loadCrewFacts } from '../lab/scorecardData.js';
 import { SpendStore } from './store.js';
 import { DAY, HOUR, MIN, NOW, spendHarness } from './testkit.js';
 
@@ -419,6 +420,38 @@ test('a row marked suspect (T-610) is out of sessionWindow, claudeWindow and act
     assert.equal(c.costUsd, 0.5, 'claudeWindow total');
     assert.deepEqual(c.bySession, [{ sessionId: 'S', costUsd: 0.5 }], 'claudeWindow by session');
     assert.deepEqual(st.activePeriods('c1', NOW, NOW - 2 * HOUR, 2 * HOUR), [0.5], 'activePeriods');
+  } finally {
+    h.done();
+  }
+});
+
+test('a row marked suspect (T-610) is out of sum(), the Requests report’s own totals, for every scope', async () => {
+  const h = await spendHarness();
+  try {
+    h.seed.claude('c1', 'docker/api', 'Kresna');
+    h.seed.usage({ atMs: NOW - HOUR, session: 'S', costUsd: 0.5, input: 10, requests: 1 });
+    h.seed.usage({ atMs: NOW - HOUR + MIN, session: 'S', costUsd: 96.31, input: 900, requests: 1, kind: 'suspect' });
+    const st = new SpendStore(h.store);
+    for (const scope of [{ kind: 'all', id: null }, { kind: 'workspace', id: 'docker/api' }, { kind: 'claude', id: 'c1' }] as const) {
+      const t = st.sum(scope, NOW - 2 * HOUR, NOW);
+      assert.deepEqual([t.costUsd, t.input, t.requests], [0.5, 10, 1], scope.kind);
+    }
+  } finally {
+    h.done();
+  }
+});
+
+test('a session whose only row is suspect does not seed the scorecard’s sessions (T-610, lab/scorecardData.ts)', async () => {
+  const h = await spendHarness();
+  try {
+    for (const id of ['GOOD', 'GHOST']) {
+      h.seed.session(id, { claudeId: 'c1' });
+      h.db.prepare(`UPDATE chat_sessions SET state = 'ended' WHERE id = ?`).run(id);
+    }
+    h.seed.usage({ atMs: NOW - HOUR, session: 'GOOD', costUsd: 0.5 });
+    h.seed.usage({ atMs: NOW - HOUR, session: 'GHOST', costUsd: 96.31, kind: 'suspect' });
+    const facts = loadCrewFacts(h.store, NOW, NOW - DAY)!;
+    assert.deepEqual([...facts.sessions.keys()], ['GOOD'], 'the suspect-only session is not a seed');
   } finally {
     h.done();
   }

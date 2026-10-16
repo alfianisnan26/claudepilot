@@ -53,6 +53,15 @@ test('T-610: a turn cost of 0 caps model costs above the 0.05 margin to 0, and l
   assert.deepEqual(capped.map((r) => r.input), [1, 1], 'only the cost changes');
 });
 
+test('T-610: the cap boundary is 1.5 x the turn cost + $0.05: just under is untouched, just over is scaled to the turn cost', () => {
+  // Turn cost 2: the limit is 3.05.
+  const under = [m('x', 1, 1, 0, 0, 3.04)];
+  assert.equal(capToTurnCost(under, 2), under, 'just under: untouched');
+  const over = capToTurnCost([m('x', 1, 1, 0, 0, 3.06)], 2);
+  assert.notEqual(over[0]!.costUsd, 3.06);
+  near(over[0]!.costUsd, 2);
+});
+
 test('T-610: a suspect row is the kind readers leave out', () => {
   assert.equal(SUSPECT_USAGE_KIND, 'suspect');
   assert.equal(COUNTED_USAGE, `kind <> 'suspect'`);

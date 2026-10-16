@@ -99,7 +99,7 @@ export class SpendReader {
     const db = this.store.db;
     if (!db) return null;
     try {
-      const r = db.prepare('SELECT MIN(at_ms) AS at FROM chat_usage').get() as { at: number | null } | undefined;
+      const r = db.prepare(`SELECT MIN(at_ms) AS at FROM chat_usage WHERE ${COUNTED_USAGE}`).get() as { at: number | null } | undefined;
       return r?.at ?? null;
     } catch {
       return null;

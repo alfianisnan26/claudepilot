@@ -111,6 +111,20 @@ test('T-610: the reader leaves out a row marked suspect (a running total booked 
   }
 });
 
+test('T-610: a suspect row does not set the start of the history', async () => {
+  const h = await usageHarness();
+  try {
+    seedUsage(h.store, [
+      { at: at(8), claude: null, input: 8, cost: 96.31 },
+      { at: at(9), claude: null, input: 7, cost: 0.25 },
+    ]);
+    h.store.db!.exec(`UPDATE chat_usage SET kind = 'suspect' WHERE input_tokens = 8`);
+    assert.equal(new SpendReader(h.store).firstAtMs(), at(9));
+  } finally {
+    h.done();
+  }
+});
+
 test('the reader: rows in time order with a null Claude read as empty, the history starts at the first row, and a store without the table reads as nothing', async () => {
   const h = await usageHarness();
   try {
