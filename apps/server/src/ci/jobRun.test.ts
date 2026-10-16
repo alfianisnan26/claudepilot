@@ -70,7 +70,11 @@ else if (verb === 'get' && kind === 'job') { const j = job(name); if (!j || (fai
 else if (verb === 'get' && kind === 'pods' && a.includes('json')) { process.stdout.write(JSON.stringify(podOf(job(a[3].replace('job-name=', ''))))); }
 // The Secret is made by a client-side dry run (JSON on stdout, as kubectl prints it) and then created (never applied) with its ownerReference and label.
 else if (verb === 'create' && kind === 'secret' && a.includes('--dry-run=client') && failing('dry-run')) refuse();
-else if (verb === 'top' && kind === 'nodes') { const t = path.join(F, 'top.txt'); if (!fs.existsSync(t)) process.exit(1); const v = fs.readFileSync(t, 'utf8'); if (v === 'FAIL') process.exit(1); process.stdout.write(v); }
+else if (verb === 'top' && kind === 'nodes') { let t = path.join(F, 'top.txt'); if (!fs.existsSync(t)) process.exit(1);
+  // T-611 C5: the file "top2.txt" is what every reading AFTER the first prints (the master moves while the Job waits suspended).
+  const cnt = path.join(F, 'top.count'); const nth = (fs.existsSync(cnt) ? Number(fs.readFileSync(cnt, 'utf8')) : 0) + 1; fs.writeFileSync(cnt, String(nth));
+  if (nth > 1 && fs.existsSync(path.join(F, 'top2.txt'))) t = path.join(F, 'top2.txt');
+  const v = fs.readFileSync(t, 'utf8'); if (v === 'FAIL') process.exit(1); process.stdout.write(v); }
 // T-611: the file "secretfail" is the text a rejected Secret create prints to stderr (the category is read from it).
 else if (verb === 'create' && kind === '-f' && fs.existsSync(path.join(F, 'secretfail'))) { stdin(); process.stderr.write(fs.readFileSync(path.join(F, 'secretfail'), 'utf8')); process.exit(1); }
 else if (verb === 'create' && kind === '-f' && failing('create')) refuse();
@@ -85,7 +89,7 @@ else if (verb === 'apply') { const m = stdin();
   const n = m.match(/^ {2}name: (\S+)/m)[1]; fs.mkdirSync(path.join(F, 'applied'), { recursive: true }); fs.writeFileSync(path.join(F, 'applied', n + '.yaml'), m);
   const lab = (k) => m.match(new RegExp(k + ': ([^,}]+)'))[1].trim();
   lock((s) => { s.seq += 1; s.jobs.push({ name: n, chat: lab('job-run/chat'), role: lab('job-run/role'), program: lab('job-run/program'), owner: m.match(/job-run\/owner: "([^"]*)"/)[1], suspend: true, seq: s.seq }); }); }
-else if (verb === 'patch' && kind === 'job') { lock((s) => { const j = s.jobs.find((x) => x.name === name); if (j) j.suspend = false; }); }
+else if (verb === 'patch' && kind === 'job') { if (fs.existsSync(path.join(F, 'patchfail')) && args.join(' ').includes('affinity')) process.exit(1); lock((s) => { const j = s.jobs.find((x) => x.name === name); if (j) j.suspend = false; }); }
 else if (verb === 'patch' && kind === 'secret') { /* recorded in calls.log */ }
 else if (verb === 'delete' && kind === 'job') { lock((s) => { s.jobs = s.jobs.filter((j) => j.name !== name); }); }
 else if (verb === 'delete' && kind === 'secret') { lock((s) => { delete s.secrets[name]; }); }
@@ -1368,4 +1372,57 @@ test('T-611: a Secret that cannot be created logs the kubectl exit code and a fi
     assert.ok(!all.includes(w.npmToken), 'the token is nowhere either');
     assert.equal(w.state().jobs.length, 0, 'the Job made before the Secret is removed');
   }
+});
+
+// C5 (QA BE 2): the master is read before the Job is created, but the Job may wait suspended for minutes. Just before the release it is read again;
+// a changed answer patches the suspended Job's affinity first (merge patch of the required rule alone). The fake prints top.txt for the first
+// reading and top2.txt for every later one; "patchfail" makes an affinity patch fail.
+function moved(first: number | string, second: number | string, patchFails = false) {
+  const w = world([], { top: first });
+  writeFileSync(join(w.root, 'top2.txt'), typeof second === 'number' ? topLine('9000Mi', `${second}%`) : second);
+  if (patchFails) writeFileSync(join(w.root, 'patchfail'), '1');
+  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'true']);
+  return { w, r, patches: w.calls().split('\n').filter((l) => / patch job /.test(l)) };
+}
+const REQ = 'requiredDuringSchedulingIgnoredDuringExecution';
+test('T-611 C5: 50% at create and 80% at release adds the required rule to the suspended Job before the release; the reverse drops it', () => {
+  const up = moved(50, 80);
+  assert.equal(up.r.code, 0, up.r.out);
+  assert.equal(up.patches.length, 2, up.patches.join('\n'));
+  assert.match(up.patches[0] ?? '', new RegExp(`"affinity":\\{"nodeAffinity":\\{"${REQ}":\\{"nodeSelectorTerms":\\[\\{"matchExpressions":\\[\\{"key":"node-role.kubernetes.io/control-plane","operator":"DoesNotExist"\\}\\]\\}\\]\\}\\}\\}`));
+  assert.match(up.patches[1] ?? '', /\{"spec":\{"suspend":false\}\}/, 'the release comes after the affinity patch');
+  assert.match(up.r.out, /placement changed while queued: job-run: placement: the control-plane node is at 80%/);
+  assert.match(up.w.log(), /decision=required-away reason=over .*at=release changed-from=preferred/);
+  assert.match(up.w.log(), /PLACEMENT node=\S+ pct=80 decision=required-away queued=/, 'the final line carries the decision that was used');
+
+  const down = moved(80, 50);
+  assert.equal(down.r.code, 0, down.r.out);
+  assert.equal(down.patches.length, 2, down.patches.join('\n'));
+  assert.ok((down.patches[0] ?? '').includes(`"${REQ}":null}`), 'the required rule is set to null (the preferred rules stay)');
+  assert.match(down.patches[1] ?? '', /suspend":false/);
+  assert.match(down.w.log(), /changed-from=required-away/);
+  assert.match(down.w.log(), /PLACEMENT node=\S+ pct=50 decision=preferred queued=/);
+});
+
+test('T-611 C5: an unchanged answer, or a reading that fails at release, patches no affinity (the first decision stands)', () => {
+  for (const [first, second] of [[50, 50], [80, 80], [80, 'FAIL'], [50, 'FAIL'], [80, 'k3s-master <unknown> <unknown> <unknown> <unknown>\n']] as const) {
+    const p = moved(first, second);
+    assert.equal(p.r.code, 0, `${first} then ${second}: ${p.r.out}`);
+    assert.equal(p.patches.length, 1, `${first} then ${second}: only the release: ${p.patches.join('\n')}`);
+    assert.doesNotMatch(p.r.out, /placement changed while queued/);
+  }
+  assert.match(moved(80, 'FAIL').w.log(), /decision=required-away queued=/, 'a failed second reading keeps the rule');
+});
+
+test('T-611 C5: a required rule that cannot be added stops the run (rc 2) without the release; a rule that cannot be dropped is only kept', () => {
+  const up = moved(50, 80, true);
+  assert.equal(up.r.code, 2, up.r.out);
+  assert.match(up.r.out, /went over its line while claudepilot-job-[0-9a-f]{8} waited, and its rule could not be added: run it again/);
+  assert.ok(!up.patches.some((l) => l.includes('suspend')), 'the Job was never released');
+  assert.equal(up.w.state().jobs.length, 0, 'the suspended Job and its Secret are removed');
+  assert.match(up.w.log(), /PLACEMENT node=control-plane at=release outcome=patch-failed/);
+
+  const down = moved(80, 50, true);
+  assert.equal(down.r.code, 0, down.r.out);
+  assert.match(down.w.log(), /decision=required-away queued=/, 'the rule stays when it could not be dropped');
 });

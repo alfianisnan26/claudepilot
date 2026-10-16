@@ -249,31 +249,40 @@ plog() { echo "$*"; echo "$*" >> "$log"; } # a line that goes to the caller and 
 if [ -n "$big" ]; then peak_mi=8192; else peak_mi=${JOB_RUN_EXPECTED_PEAK_MI:-2300}; fi
 [[ $peak_mi =~ ^[0-9]{1,6}$ ]] || die "JOB_RUN_EXPECTED_PEAK_MI is a number of Mi (at most 6 digits)"
 peak_mi=$((10#$peak_mi))
-master_rule=; master_rule_why=; master_proj=
-read -r master_used master_pct < <(kubectl top nodes -l node-role.kubernetes.io/control-plane --no-headers 2>/dev/null | awk 'NR == 1 { gsub(/%/, "", $5); print $4, $5 }' || true) || true
-if [[ ${master_pct:-} =~ ^[0-9]{1,3}$ ]]; then
-  master_pct=$((10#$master_pct)); master_proj=$master_pct
-  used_mi=
-  if [[ ${master_used:-} =~ ^([0-9]{1,9})Mi$ ]]; then used_mi=$((10#${BASH_REMATCH[1]}))
-  elif [[ ${master_used:-} =~ ^([0-9]{1,6})Gi$ ]]; then used_mi=$(( 10#${BASH_REMATCH[1]} * 1024 )); fi
-  if [[ ${used_mi:-} =~ ^[0-9]+$ ]] && [ "$used_mi" -gt 0 ] && [ "$master_pct" -gt 0 ]; then
-    master_proj=$(( ( ( used_mi + peak_mi ) * master_pct + used_mi - 1 ) / used_mi )) # rounded UP, so "about N%, over M%" never reads N <= M
-    [ $(( ( used_mi + peak_mi ) * master_pct )) -le $(( master_max * used_mi )) ] || master_rule_why=headroom
-  fi
-  [ "$master_pct" -le "$master_max" ] || master_rule_why=over
-  if [ -n "$master_rule_why" ]; then
-    master_rule='requiredDuringSchedulingIgnoredDuringExecution: {nodeSelectorTerms: [{matchExpressions: [{key: node-role.kubernetes.io/control-plane, operator: DoesNotExist}]}]}'
-    if [ "$master_rule_why" = over ]; then echo "job-run: placement: the control-plane node is at ${master_pct}% of its memory (over ${master_max}%): this Job may not run there; it waits for k3s-node2 or for the master to have room" >&2
-    else echo "job-run: placement: the control-plane node is at ${master_pct}% of its memory and this Job may add ${peak_mi}Mi (about ${master_proj}%, over ${master_max}%): it may not run there; it waits for k3s-node2 or for the master to have room" >&2; fi
-    plog "=== JOB-RUN PLACEMENT node=control-plane pct=$master_pct projected=$master_proj max=$master_max peak_mi=$peak_mi decision=required-away reason=$master_rule_why" >/dev/null
+# The decision is a function: it is made at creation and made again just before the Job is released from the queue (C5: the Job may wait
+# suspended for minutes, and the master moves). It sets master_known (a usable reading), master_pct, master_proj, master_rule_why/master_rule and
+# the three texts the caller shows: place_msg (stderr), place_say (stdout and log), place_log (the log only).
+placement() {
+  master_rule=; master_rule_why=; master_proj=; master_known=; master_used=; master_pct=; place_msg=; place_say=; place_log=
+  read -r master_used master_pct < <(kubectl top nodes -l node-role.kubernetes.io/control-plane --no-headers 2>/dev/null | awk 'NR == 1 { gsub(/%/, "", $5); print $4, $5 }' || true) || true
+  if [[ ${master_pct:-} =~ ^[0-9]{1,3}$ ]]; then
+    master_known=1; master_pct=$((10#$master_pct)); master_proj=$master_pct
+    used_mi=
+    if [[ ${master_used:-} =~ ^([0-9]{1,9})Mi$ ]]; then used_mi=$((10#${BASH_REMATCH[1]}))
+    elif [[ ${master_used:-} =~ ^([0-9]{1,6})Gi$ ]]; then used_mi=$(( 10#${BASH_REMATCH[1]} * 1024 )); fi
+    if [[ ${used_mi:-} =~ ^[0-9]+$ ]] && [ "$used_mi" -gt 0 ] && [ "$master_pct" -gt 0 ]; then
+      master_proj=$(( ( ( used_mi + peak_mi ) * master_pct + used_mi - 1 ) / used_mi )) # rounded UP, so "about N%, over M%" never reads N <= M
+      [ $(( ( used_mi + peak_mi ) * master_pct )) -le $(( master_max * used_mi )) ] || master_rule_why=headroom
+    fi
+    [ "$master_pct" -le "$master_max" ] || master_rule_why=over
+    if [ -n "$master_rule_why" ]; then
+      master_rule='requiredDuringSchedulingIgnoredDuringExecution: {nodeSelectorTerms: [{matchExpressions: [{key: node-role.kubernetes.io/control-plane, operator: DoesNotExist}]}]}'
+      if [ "$master_rule_why" = over ]; then place_msg="job-run: placement: the control-plane node is at ${master_pct}% of its memory (over ${master_max}%): this Job may not run there; it waits for k3s-node2 or for the master to have room"
+      else place_msg="job-run: placement: the control-plane node is at ${master_pct}% of its memory and this Job may add ${peak_mi}Mi (about ${master_proj}%, over ${master_max}%): it may not run there; it waits for k3s-node2 or for the master to have room"; fi
+      place_log="=== JOB-RUN PLACEMENT node=control-plane pct=$master_pct projected=$master_proj max=$master_max peak_mi=$peak_mi decision=required-away reason=$master_rule_why"
+    else
+      place_say="job-run: placement: the control-plane node is at ${master_pct}% of its memory (about ${master_proj}% with this Job; limit ${master_max}%): preferred rules only"
+      place_log="=== JOB-RUN PLACEMENT node=control-plane pct=$master_pct projected=$master_proj max=$master_max peak_mi=$peak_mi decision=preferred"
+    fi
   else
-    plog "job-run: placement: the control-plane node is at ${master_pct}% of its memory (about ${master_proj}% with this Job; limit ${master_max}%): preferred rules only"
-    plog "=== JOB-RUN PLACEMENT node=control-plane pct=$master_pct projected=$master_proj max=$master_max peak_mi=$peak_mi decision=preferred" >/dev/null
+    place_msg="job-run: placement: the control-plane node's memory is unknown (metrics unavailable): preferred rules only"
+    place_log="=== JOB-RUN PLACEMENT node=control-plane pct=unknown max=$master_max peak_mi=$peak_mi decision=preferred-metrics-unavailable"
   fi
-else
-  echo "job-run: placement: the control-plane node's memory is unknown (metrics unavailable): preferred rules only" >&2
-  plog "=== JOB-RUN PLACEMENT node=control-plane pct=unknown max=$master_max peak_mi=$peak_mi decision=preferred-metrics-unavailable" >/dev/null
-fi
+}
+placement
+[ -z "$place_msg" ] || echo "$place_msg" >&2
+[ -z "$place_say" ] || plog "$place_say"
+plog "$place_log" >/dev/null
 
 # The credentials, into the Secret on stdin (printf is a builtin: no argument a process list would show).
 secret="job=$job"; mask=
@@ -378,6 +387,23 @@ while :; do
   [ $(( $(date +%s) - t0 )) -lt "$queue_wait" ] || { echo "job-run: still queued after ${queue_wait}s: giving up" >&2; exit 1; }
   sleep "$poll"
 done
+# C5: the master moves while this Job waits suspended (minutes), so the decision is made again just before the release. If the answer changed, the
+# suspended Job's affinity is patched first (a suspended Job's scheduling directives are mutable from Kubernetes 1.27; this cluster is 1.35), a merge
+# patch that touches only the required rule and keeps the preferred ones. A reading that fails changes nothing. A required rule that cannot be
+# added stops the run (the Job would land on a master over its line); a rule that cannot be dropped is only kept (harmless).
+was_why=$master_rule_why; was_rule=$master_rule
+placement
+if [ -z "$master_known" ]; then master_rule_why=$was_why; master_rule=$was_rule
+elif [ "${was_why:+r}" != "${master_rule_why:+r}" ]; then
+  if [ -n "$master_rule_why" ]; then aff='{"nodeSelectorTerms":[{"matchExpressions":[{"key":"node-role.kubernetes.io/control-plane","operator":"DoesNotExist"}]}]}'; else aff=null; fi
+  if kubectl -n "$ns" patch job "$job" --type merge -p '{"spec":{"template":{"spec":{"affinity":{"nodeAffinity":{"requiredDuringSchedulingIgnoredDuringExecution":'"$aff"'}}}}}}' >/dev/null 2>&1; then
+    echo "job-run: placement changed while queued: ${place_msg:-$place_say}" >&2
+    plog "$place_log at=release changed-from=$([ -n "$was_why" ] && echo required-away || echo preferred)" >/dev/null
+  elif [ -n "$master_rule_why" ]; then
+    plog "=== JOB-RUN PLACEMENT node=control-plane at=release outcome=patch-failed" >/dev/null
+    die "the control-plane node went over its line while $job waited, and its rule could not be added: run it again"
+  else master_rule_why=$was_why; master_rule=$was_rule; fi
+fi
 kubectl -n "$ns" patch job "$job" --type merge -p '{"spec":{"suspend":false}}' >/dev/null
 t1=$(date +%s); tw=$t1; phase=running
 job_state() { # Complete, Failed:<reason>, gone, or nothing while it runs
