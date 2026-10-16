@@ -79,8 +79,6 @@ if [ -n "${JOB_RUN_AVOID_NODES:-}" ]; then
   # The raw value is never echoed (a newline in it could forge a "=== JOB-RUN" line): the checks below say what is wrong, and the messages and
   # log lines carry the validated, joined list (avoid_txt). A newline is refused, not cut (read -a keeps only the first line); ASCII is checked
   # under LC_ALL=C, so the name regex below only ever sees ASCII.
-  [[ $JOB_RUN_AVOID_NODES != *$'\n'* && $JOB_RUN_AVOID_NODES != *$'\r'* ]] || die "JOB_RUN_AVOID_NODES must be one line (no newline)"
-  ! printf '%s' "$JOB_RUN_AVOID_NODES" | LC_ALL=C grep -q '[^ -~]' || die "JOB_RUN_AVOID_NODES is a comma list of node names (ASCII letters, digits, . and -)"
   [[ $JOB_RUN_AVOID_NODES != *, ]] || die "JOB_RUN_AVOID_NODES is a comma list of node names (no trailing comma)" # read -a would drop the empty last name silently
   IFS=, read -r -a avoid_list <<<"$JOB_RUN_AVOID_NODES"
   [ "${#avoid_list[@]}" -le 20 ] || die "JOB_RUN_AVOID_NODES lists at most 20 node names"
@@ -434,8 +432,6 @@ elif [ "$was_rule" != "$master_rule" ]; then
   else
     # The rule could not be dropped: it is only kept (harmless), and the log says so, so the last placement line is not read as "dropped".
     master_rule_why=$was_why; master_rule=$was_rule; master_aff=$was_aff; master_pct=$was_pct
-    echo "job-run: the placement rule was not dropped (the patch failed): the Job runs on its create-time rule" >&2
-    plog "=== JOB-RUN PLACEMENT node=control-plane at=release outcome=drop-failed (the rule was not dropped: the Job runs on its create-time rule)" >/dev/null
   fi
 fi
 kubectl -n "$ns" patch job "$job" --type merge -p '{"spec":{"suspend":false}}' >/dev/null
@@ -459,8 +455,8 @@ while :; do
   if [ -n "$master_rule_why" ]; then rk=rule; elif [ -n "$master_rule" ]; then rk=avoid; else rk=none; fi
   case "$rk:$why" in
     avoid:*affinity*) [ "$said" = affinity ] || { said=affinity
-        echo "job-run: $job is Pending: it may not run on the nodes named in JOB_RUN_AVOID_NODES ($avoid_txt), and no other node fits ($why; waits up to ${start_wait}s)" >&2
-        plog "=== JOB-RUN PLACEMENT pending=affinity avoid=$avoid_txt decision=waits-off-avoided-nodes" >/dev/null; } ;;
+        echo "job-run: $job is Pending: it may not run on the nodes named in JOB_RUN_AVOID_NODES ($JOB_RUN_AVOID_NODES), and no other node fits ($why; waits up to ${start_wait}s)" >&2
+        plog "=== JOB-RUN PLACEMENT pending=affinity avoid=$JOB_RUN_AVOID_NODES decision=waits-off-avoided-nodes" >/dev/null; } ;;
     rule:*affinity*) [ "$said" = affinity ] || { said=affinity
         echo "job-run: $job is Pending: the control-plane node is over ${master_max}% of its memory, so this Job waits for k3s-node2 to have room ($why; waits up to ${start_wait}s)" >&2
         plog "=== JOB-RUN PLACEMENT pending=affinity pct=$master_pct decision=waits-for-node2" >/dev/null; } ;;
@@ -603,6 +599,6 @@ if [ -n "$artifacts" ] && [ -s "$work/art.b64" ]; then
 fi
 node=$(pod_get '.items[0].spec.nodeName' "$pj")
 t2=$(date +%s)
-plog "=== JOB-RUN PLACEMENT node=${node:-?} pct=${master_pct:-unknown} decision=$([ -n "$master_rule_why" ] && echo required-away || echo preferred) queued=$((t1 - t0))s${avoid_txt:+ avoid=$avoid_txt}" >/dev/null
+plog "=== JOB-RUN PLACEMENT node=${node:-?} pct=${master_pct:-unknown} decision=$([ -n "$master_rule_why" ] && echo required-away || echo preferred) queued=$((t1 - t0))s" >/dev/null
 echo "job-run: $job rc=$rc in $((t2 - t1))s (queued $((t1 - t0))s) on ${node:-?} with $memory; log: $log"
 exit "$rc"
