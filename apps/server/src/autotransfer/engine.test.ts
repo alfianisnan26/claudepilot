@@ -695,22 +695,26 @@ test('T-781: a second evaluation while the stop still waits does not stop or mov
   (r.chat as { interrupt: unknown }).interrupt = () => (stops++, new Promise<void>(() => {}));
   const orig = console.error;
   console.error = () => {};
+  let first: Promise<unknown> | undefined;
   try {
-    const first = r.engine.evaluate('s1');
+    first = r.engine.evaluate('s1');
     await new Promise((res) => setImmediate(res));
-    const second = await r.engine.evaluate('s1'); // the stop is still waiting
+    // The stop is still waiting. Bounded (T-781 S8c): without the stop mark the second look runs the hard path and waits for a stop that only
+    // the clock settles, so an unbounded wait would hang here (and cancel every later test); the race turns that into an assertion failure.
+    const second = await Promise.race([r.engine.evaluate('s1'), new Promise((res) => setTimeout(() => res('still waiting'), 100))]);
     assert.equal(second, null, 'the chat is marked as moving');
     assert.equal(stops, 1);
     assert.equal(r.chat.moves.length, 0);
+  } finally {
+    // Whatever happened above: let every waiting stop time out, so nothing is left pending.
     r.clock.advance(0.51);
     await first;
     await r.engine.settled();
-  } finally {
+    r.engine.stop();
     console.error = orig;
   }
   assert.equal(stops, 1, 'one stop');
   assert.deepEqual(r.chat.moves, [{ id: 's1', to: 'home', handoff: 'skip' }], 'one move');
-  r.engine.stop();
 });
 
 test('T-781: a dry run stops nothing, even for a stuck exhausted chat', async () => {
