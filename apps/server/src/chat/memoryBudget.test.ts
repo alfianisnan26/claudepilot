@@ -327,7 +327,7 @@ test('T-416 review 6310 #1: a restart of an asleep session is a wake: refused wh
   }
 });
 
-test('T-675 R2: a message sent while a restart of an asleep session waits for its memory reading (two guards queue the send behind the restart: the shared in-flight reading and send()'s wait for #restarting) is not lost and its process is not stopped by the restart', async () => {
+test('T-675 R2: a message sent while a restart of an asleep session waits for its memory reading (two guards queue the send behind the restart: the shared in-flight reading and the send waiting for #restarting) is not lost and its process is not stopped by the restart', async () => {
   const s = await liveSession({ idleSleepMs: 200 }, true);
   try {
     await until(() => s.controller.get(s.id)!.process === 'asleep', 4000);
