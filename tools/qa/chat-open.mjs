@@ -15,6 +15,12 @@
 //   --out <dir> (default qa-shots/t376-chat-open)   --events <n> (10000)   --open-only (stop after step 3: an old build has no pages)
 //   --cfg 390px-light (one config: 390px|1280px - light|dark)   --keep (leave the seed)
 //   --budget-first-ms 2000  --budget-settled-ms 4000  --budget-kb 1024   (the open's pass/fail budget; every request over 500 KB is printed)
+//   T-376 S4 (done-when 4), on the same built app:
+//   8. a fresh open under a CPU throttle (CDP Emulation.setCPUThrottlingRate, --throttle 4) with a PerformanceObserver 'longtask' from the first
+//      script on: the longest task must stay within --budget-longtask-ms 200 (every task over 50 ms is listed);
+//   6b. DOM node count and JS heap (CDP Performance.getMetrics after a garbage collection) before and after the older pages load, recorded;
+//   6c. one older page, from the scroll that triggers its read (the page's fetch of "before=") to its rows painted (two animation frames after
+//      they land), must stay within --budget-page-ms 300 (the render alone, landing to painted, is printed too).
 // The whole log is also written to <out>/run.log (kept with the screenshots, so a lost Job output cannot hide the evidence).
 // Run it against the BUILT app (SCRATCH_PRODUCTION=1): a dev-mode scratch portal serves ~600 Vite modules (14 MB) per open, which is not what a user gets.
 // usage: scripts/job-run.sh --ref <branch> --out job-out/ -- 'SCRATCH_PRODUCTION=1 tools/qa/with-portal.sh 3476 node tools/qa/chat-open.mjs --out job-out/chat-open; exit $?'
@@ -34,6 +40,10 @@ const ONLY_CFG = opt('--cfg', null);
 const BUDGET_FIRST_MS = Number(opt('--budget-first-ms', 2000));
 const BUDGET_SETTLED_MS = Number(opt('--budget-settled-ms', 4000));
 const BUDGET_KB = Number(opt('--budget-kb', 1024));
+const THROTTLE = Number(opt('--throttle', 4));
+const PROFILE = args.includes('--profile');
+const BUDGET_LONGTASK_MS = Number(opt('--budget-longtask-ms', 200));
+const BUDGET_PAGE_MS = Number(opt('--budget-page-ms', 300));
 mkdirSync(OUT, { recursive: true });
 // Keep the log next to the screenshots: every console.log line is also appended to <out>/run.log.
 const LOG = join(OUT, 'run.log');
@@ -170,6 +180,9 @@ const PROBE = `(() => {
   };
   const top = (el) => el.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
   window.__prepends = [];
+  window.__fetchAt = [];
+  const f0 = window.fetch.bind(window);
+  window.fetch = (...a) => { const u = String(a[0] && a[0].url ? a[0].url : a[0]); if (/before=/.test(u)) window.__fetchAt.push(performance.now()); return f0(...a); };
   let ref = null; let pending = false; let lowest = Math.min(...rowOf().map((r) => r.n));
   const tick = () => {
     if (!pending) {
@@ -185,8 +198,9 @@ const PROBE = `(() => {
     const now = Math.min(...rowOf().map((r) => r.n));
     if (now >= lowest || !ref) return;
     lowest = now; pending = true; window.__pending = true;
-    const rec = { ref: ref.n, before: ref.top, after: at(ref.n), later: [], lowest: now };
+    const rec = { ref: ref.n, before: ref.top, after: at(ref.n), later: [], lowest: now, landed: performance.now(), trigger: window.__fetchAt.length ? window.__fetchAt[window.__fetchAt.length - 1] : null, painted: null };
     window.__prepends.push(rec);
+    requestAnimationFrame(() => requestAnimationFrame(() => { rec.painted = performance.now(); }));
     setTimeout(() => rec.later.push(at(ref.n)), 120);
     setTimeout(() => { rec.later.push(at(ref.n)); pending = false; window.__pending = false; }, 450);
   }).observe(scroller, { childList: true, subtree: true });
@@ -232,6 +246,13 @@ async function runConfig(cookie, cfg) {
       const file = join(OUT, `${name}-${what}.png`);
       writeFileSync(file, Buffer.from(r.data, 'base64'));
       console.log(`     shot ${file}`);
+    };
+    await b.send('Performance.enable').catch(() => {});
+    const metrics = async () => {
+      await b.send('HeapProfiler.collectGarbage').catch(() => {});
+      const r = await b.send('Performance.getMetrics');
+      const m = Object.fromEntries(r.metrics.map((x) => [x.name, x.value]));
+      return { nodes: m.Nodes, heapMB: Math.round((m.JSHeapUsedSize / 1048576) * 10) / 10 };
     };
     const wheel = (dy) => b.send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: width / 2, y: height / 2, deltaX: 0, deltaY: dy });
 
@@ -370,6 +391,7 @@ async function runConfig(cookie, cfg) {
     }
     // 6. Scroll up: the anchor holds still.
     await b.eval(PROBE);
+    const memBefore = await metrics();
     const readsBeforeUp = reads().length;
     let tries = 0;
     while (tries++ < 40 && (await b.eval('window.__prepends.length')) < 3) {
@@ -391,6 +413,16 @@ async function runConfig(cookie, cfg) {
     check(`${tag} one older read ("before=") per prepend`, olderReads.length === pre.length, `${olderReads.length} reads, ${pre.length} prepends (${reads().length - readsBeforeUp} events reads in all)`);
     check(`${tag} the row you read holds still when a page lands (<= 1 px)`, pre.length > 0 && worst !== null && worst <= 1, `worst ${worst === null ? 'n/a' : Math.round(worst * 10) / 10} px over ${pre.length} prepends ${JSON.stringify(pre.map((p) => ({ ref: p.ref, before: Math.round(p.before), after: p.after === null ? null : Math.round(p.after), later: p.later.map((v) => (v === null ? null : Math.round(v))) })))}`);
     await shot('older');
+    // 6b. DOM and heap, before and after the older pages; 6c. one older page, trigger to painted.
+    const memAfter = await metrics();
+    res.memory = { before: memBefore, after: memAfter, prepends: pre.length };
+    console.log(`     memory: DOM nodes ${memBefore.nodes} -> ${memAfter.nodes}, JS heap ${memBefore.heapMB} -> ${memAfter.heapMB} MB over ${pre.length} older pages`);
+    const pageMs = pre.filter((p) => p.trigger !== null && p.painted !== null).map((p) => Math.round(p.painted - p.trigger));
+    const renderMs = pre.filter((p) => p.painted !== null).map((p) => Math.round(p.painted - p.landed));
+    res.olderPageMs = pageMs;
+    res.olderRenderMs = renderMs;
+    console.log(`     older pages: trigger to painted ${JSON.stringify(pageMs)} ms, landed to painted ${JSON.stringify(renderMs)} ms`);
+    check(`${tag} an older page renders within ${BUDGET_PAGE_MS} ms (scroll trigger to painted)`, pageMs.length > 0 && Math.max(...pageMs) <= BUDGET_PAGE_MS, `worst ${pageMs.length ? Math.max(...pageMs) : 'n/a'} ms of ${JSON.stringify(pageMs)}`);
 
     // 7. The oldest.
     const tTop = Date.now();
@@ -419,6 +451,68 @@ async function runConfig(cookie, cfg) {
     const of2 = await b.eval(OVERFLOW);
     check(`${tag} no sideways scroll at the oldest`, of2.doc && of2.scroller && of2.wide.length === 0, of2.wide.length ? `wide: ${of2.wide.join('; ')}` : '');
     await shot('oldest');
+    // 8. A fresh open under a CPU throttle: no long task over the budget.
+    await b.eval(`localStorage.removeItem('claudepilot.chat-details')`);
+    const lt = await b.send('Page.addScriptToEvaluateOnNewDocument', { source: `window.__lt = []; try { new PerformanceObserver((l) => { for (const e of l.getEntries()) window.__lt.push({ s: Math.round(e.startTime), d: Math.round(e.duration) }); }).observe({ type: 'longtask', buffered: true }); } catch (e) { window.__ltErr = String(e); }
+      window.__loaf = []; try { new PerformanceObserver((l) => { for (const e of l.getEntries()) window.__loaf.push({ s: Math.round(e.startTime), d: Math.round(e.duration), block: Math.round(e.blockingDuration || 0), render: Math.round(e.renderStart ? e.startTime + e.duration - e.renderStart : 0), scripts: (e.scripts || []).map((x) => ({ src: String(x.sourceURL || '').replace(/^https?:\\/\\/[^/]+/, ''), fn: x.sourceFunctionName, inv: x.invoker, d: Math.round(x.duration), pos: x.sourceCharPosition })) }); }).observe({ type: 'long-animation-frame', buffered: true }); } catch (e) { window.__loafErr = String(e); }` });
+    await b.send('Emulation.setCPUThrottlingRate', { rate: THROTTLE });
+    // --profile: the CPU profile of the throttled open (self time by function, with the built source around it), to name what a long task is.
+    if (PROFILE) {
+      await b.send('Profiler.enable');
+      await b.send('Profiler.setSamplingInterval', { interval: 400 });
+      await b.send('Profiler.start');
+    }
+    try {
+      const tT = Date.now();
+      await b.send('Page.navigate', { url: `http://localhost:${PORT}/admin/sessions/${SID}` });
+      let throttledFirst = null;
+      while (Date.now() - tT < 90_000) {
+        if (await b.eval(`/Turn \\d+:/.test(document.body.innerText)`).catch(() => false)) { throttledFirst = Date.now() - tT; break; }
+        await sleep(100);
+      }
+      await sleep(3000);
+      const tasks = await b.eval('window.__lt').catch(() => null);
+      const supported = Array.isArray(tasks);
+      const longest = supported && tasks.length ? Math.max(...tasks.map((t) => t.d)) : 0;
+      if (PROFILE) {
+        const { profile } = await b.send('Profiler.stop');
+        const byId = new Map(profile.nodes.map((n) => [n.id, n]));
+        const self = new Map();
+        profile.samples.forEach((id, i) => self.set(id, (self.get(id) ?? 0) + (profile.timeDeltas[i] ?? 0)));
+        const agg = new Map();
+        for (const [id, us] of self) {
+          const cf = byId.get(id).callFrame;
+          const key = `${cf.functionName || '(anon)'} ${cf.url.replace(/^https?:\/\/[^/]+/, '')}:${cf.lineNumber}:${cf.columnNumber}`;
+          agg.set(key, (agg.get(key) ?? 0) + us);
+        }
+        const top = [...agg].sort((x, y) => y[1] - x[1]).slice(0, 14);
+        console.log(`     profile (self ms at ${THROTTLE}x, whole open):`);
+        for (const [key, us] of top) {
+          const m = /^(.*) (\S+):(\d+):(\d+)$/.exec(key);
+          let src = '';
+          if (m && m[2].startsWith('/assets/')) src = await b.eval(`fetch(${JSON.stringify(m[2])}).then((r) => r.text()).then((t) => { const l = t.split('\\n')[${Number(m[3])}] || ''; return l.slice(Math.max(0, ${Number(m[4])} - 40), ${Number(m[4])} + 140); })`).catch(() => '');
+          console.log(`       ${Math.round(us / 1000)} ms  ${key}  ${src ? JSON.stringify(src) : ''}`);
+        }
+      }
+      const loaf = await b.eval('window.__loaf').catch(() => null);
+      if (Array.isArray(loaf)) {
+        res.loaf = loaf.filter((x) => x.d > 100);
+        for (const x of res.loaf) {
+          const big = x.scripts.filter((y) => y.d >= 20);
+          // The built source at the entry point of each script of the frame (PROFILE: so a minified name can be read).
+          if (PROFILE) for (const y of big) if (y.src.startsWith('/assets/')) y.code = await b.eval(`fetch(${JSON.stringify(y.src)}).then((r) => r.text()).then((t) => t.slice(Math.max(0, ${Number(y.pos)} - 30), ${Number(y.pos)} + 260))`).catch(() => '');
+          console.log(`     loaf @${x.s} ${x.d} ms (blocking ${x.block}, render ${x.render}): ${JSON.stringify(big)}`);
+        }
+      }
+      res.throttled = { rate: THROTTLE, firstRow: throttledFirst, longtasks: supported ? tasks.length : null, longestMs: supported ? longest : null };
+      console.log(`     throttled ${THROTTLE}x open: first row ${throttledFirst} ms; ${supported ? tasks.length : '?'} long tasks (>50 ms), longest ${longest} ms: ${supported ? JSON.stringify(tasks.filter((t) => t.d > 50)) : 'observer unavailable'}`);
+      check(`${tag} ${THROTTLE}x CPU throttle: a first Turn row shows`, throttledFirst !== null, `${throttledFirst} ms`);
+      check(`${tag} ${THROTTLE}x CPU throttle: the observer ran`, supported);
+      check(`${tag} ${THROTTLE}x CPU throttle: no long task over ${BUDGET_LONGTASK_MS} ms at the open`, supported && longest <= BUDGET_LONGTASK_MS, `longest ${longest} ms of ${supported ? tasks.length : '?'} long tasks`);
+    } finally {
+      await b.send('Emulation.setCPUThrottlingRate', { rate: 1 }).catch(() => {});
+      await b.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: lt.identifier }).catch(() => {});
+    }
     if (b.errors.length) console.log(`     page errors: ${b.errors.slice(0, 3).join(' | ').slice(0, 300)}`);
   } catch (e) {
     check(`${tag} ran without an error`, false, String(e.message ?? e).slice(0, 300));

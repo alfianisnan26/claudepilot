@@ -22,5 +22,6 @@ export const ASSET_TYPE = /^\s*(?:text\/(?:javascript|css)|application\/(?:javas
  * Files are immutable and cached for a year, so the compressor runs once per client.
  */
 export function assetCompress(): MiddlewareHandler {
+  // Hono sets `Vary: Accept-Encoding` itself when it compresses; assetWiring.test.ts pins the single header.
   return compress({ encoding: 'gzip', contentTypeFilter: ASSET_TYPE });
 }

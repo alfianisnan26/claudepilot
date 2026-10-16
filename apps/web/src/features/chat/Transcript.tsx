@@ -364,6 +364,7 @@ export function Transcript({
           !(it.kind === 'row' && it.row.type === 'event' && it.row.event.kind === 'user' && !it.row.event.transfer && !it.row.event.actor) &&
           !(it.kind === 'row' && it.row.type === 'event' && adopted.has(it.row.event.seq));
         return (
+          // `content-visibility:auto` on this row was tried (T-376 S4) and removed: the row you read moved 160-430 px when a page landed.
           <motion.div key={it.key} data-anchor={anchorSeq(it)} {...RISE} initial={rise ? RISE.initial : false}>
             {it.kind === 'activity' ? (
               <ActivityBlock
