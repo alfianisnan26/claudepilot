@@ -2546,11 +2546,11 @@ export class ChatController {
       case 'end':
         return this.end(sessionId);
       case 'model':
-        return this.#setModel(sessionId, a.model);
+        return this.#setModel(sessionId, a.model, opts.actor);
       case 'effort':
-        return this.#setEffort(sessionId, a.effort);
+        return this.#setEffort(sessionId, a.effort, opts.actor);
       case 'ultracode':
-        return this.#setUltracode(sessionId, a.ultracode);
+        return this.#setUltracode(sessionId, a.ultracode, opts.actor);
       case 'mode':
         return this.#setMode(sessionId, a.mode, opts.actor);
       case 'cancel_queued':
@@ -4083,22 +4083,22 @@ export class ChatController {
 
   /* ---------- Controls ---------- */
 
-  async #setModel(sessionId: string, model: unknown): Promise<void> {
+  async #setModel(sessionId: string, model: unknown, actor?: string): Promise<void> {
     const value = typeof model === 'string' ? model.trim() : '';
     if (!MODEL_VALUE.test(value)) throw new AppError('VALIDATION_FAILED', 'Pick a model.');
     this.#require(sessionId);
-    await this.#live(sessionId);
+    await this.#live(sessionId, true, true, actor); // T-723: a wake refused for memory names who asked
     this.#modelAsked.set(sessionId, Date.now());
     await this.#request(sessionId, 'set_model', { model: value }); // Claude Code validates it with a tiny API call
     const applied = await this.#refreshApplied(sessionId).catch(() => null);
     this.#note(sessionId, `Model: ${applied?.model ?? value}`);
   }
 
-  async #setEffort(sessionId: string, effort: unknown): Promise<void> {
+  async #setEffort(sessionId: string, effort: unknown, actor?: string): Promise<void> {
     const level = typeof effort === 'string' ? effort.trim() : '';
     if (!EFFORT_LEVEL.test(level)) throw new AppError('VALIDATION_FAILED', 'Pick an effort level.');
     this.#require(sessionId);
-    await this.#live(sessionId);
+    await this.#live(sessionId, true, true, actor);
     await this.#request(sessionId, 'apply_flag_settings', { settings: flagSettings({ effort: level }) });
     const applied = await this.#refreshApplied(sessionId).catch(() => null);
     // Clamps are silent in Claude Code, so say what actually applies.
@@ -4107,10 +4107,10 @@ export class ChatController {
     else this.#note(sessionId, `Effort: ${level}`);
   }
 
-  async #setUltracode(sessionId: string, on: unknown): Promise<void> {
+  async #setUltracode(sessionId: string, on: unknown, actor?: string): Promise<void> {
     if (typeof on !== 'boolean') throw new AppError('VALIDATION_FAILED', 'Turn ultracode on or off.');
     this.#require(sessionId);
-    await this.#live(sessionId);
+    await this.#live(sessionId, true, true, actor);
     await this.#request(sessionId, 'apply_flag_settings', { settings: flagSettings({ ultracode: on }) });
     await this.#refreshApplied(sessionId).catch(() => null);
     this.#note(sessionId, on ? 'Ultracode on' : 'Ultracode off');
@@ -4140,7 +4140,7 @@ export class ChatController {
         );
       }
     }
-    await this.#live(sessionId);
+    await this.#live(sessionId, true, true, actor);
     const was = this.#chat.row(sessionId)?.mode;
     // The reply confirms the mode as it's read (see #acceptControlResponse), before any status line.
     const reply = await this.#request(sessionId, 'set_permission_mode', { mode });

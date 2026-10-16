@@ -561,3 +561,42 @@ test('T-675 (T-416 QA R2): a restart of an asleep session whose check passed but
     await s.done();
   }
 });
+
+/* ---------- T-723: which actor a memory.refused row names, per way of waking ---------- */
+
+const asleepShort = async () => {
+  const s = await liveSession({ idleSleepMs: 200 }, true);
+  await until(() => s.controller.get(s.id)!.process === 'asleep', 4000);
+  s.controller.memory = budget(ONE_FITS + 1).memory;
+  return s;
+};
+const actorsOf = (s: Awaited<ReturnType<typeof liveSession>>) => s.controller.audit({ kind: 'memory.refused', sessionId: s.id }).map((a) => a.actor);
+
+test('T-723 #1: a restart of an asleep session names who asked: `ui` by default, `portal` for the portal’s own restart', async () => {
+  const s = await asleepShort();
+  try {
+    await assert.rejects(s.controller.restart(s.id), isBudget);
+    assert.deepEqual(actorsOf(s), ['ui']);
+    await assert.rejects(s.controller.restart(s.id, { actor: 'portal' }), isBudget);
+    assert.deepEqual([...actorsOf(s)].sort(), ['portal', 'ui']);
+  } finally {
+    await s.done();
+  }
+});
+
+for (const [op, args] of [
+  ['model', { model: 'sonnet' }],
+  ['effort', { effort: 'high' }],
+  ['ultracode', { ultracode: true }],
+  ['mode', { mode: 'plan' }],
+] as const) {
+  test(`T-723 #6/#7: control ${op} on an asleep session refused for memory names the actor that asked`, async () => {
+    const s = await asleepShort();
+    try {
+      await assert.rejects(s.controller.control(s.id, op, args, { actor: 'ticket:T-12' }), isBudget, `${op} with an actor`);
+      assert.deepEqual(actorsOf(s), ['ticket:T-12'], `${op}: the row names the actor`);
+    } finally {
+      await s.done();
+    }
+  });
+}
