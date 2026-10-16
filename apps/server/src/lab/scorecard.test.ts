@@ -780,7 +780,7 @@ test('MCP crew_scorecard full: 2, 3, 4 and 5 programs stay under the result limi
         );
         for (let i = 0; i < 600; i++) {
           const id = `N${n}-${String(i).padStart(4, '0')}`;
-          ins.run(id, `title ${id}`, i === 599 ? 'idle' : 'ended', iso(at(20 - i / 100)), iso(at(20 - i / 100)), iso(at(20 - i / 100)), i === 0 ? null : `N${n}-${String(i - 1).padStart(4, '0')}`);
+          ins.run(id, `title ${id}`, i === 599 ? 'idle' : 'ended', iso(at(23 - i / 100)), iso(at(23 - i / 100)), iso(at(23 - i / 100)), i === 0 ? null : `N${n}-${String(i - 1).padStart(4, '0')}`);
         }
         // A program needs a worker: one under the last lead.
         h.db.prepare(
