@@ -109,7 +109,7 @@ export function envFileValue(text: string, key: string): string | null {
     const rest = (m[2] ?? '').trim();
     // A quoted value ends at its closing quote (a `# note` after it is dropped); an unquoted one ends at whitespace followed by `#`.
     const q = /^(["'])(.*?)\1(?:\s+#.*)?$/.exec(rest);
-    found = q ? (q[2] ?? '') : rest.replace(/\s+#.*$/, '');
+    found = q ? (q[2] ?? '') : rest.replace(/(^|\s+)#.*$/, '');
   }
   return found ? found : null;
 }
