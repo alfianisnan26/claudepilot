@@ -15,12 +15,13 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - QA PERF 7e4879c7: T-781 S4 FAIL (job 408dacb1) -> Backend. QA T-426 S1g PWG (job 4ae40f5d 8/0, O1 fixed; lead posted) -> S1h. Now QA T-611 S1 on wip/qa-t611-b06b62b. Was:
   on lead-built wip/qa-t426-1db0f53 (fc0f8be5 + probes e1dd7b69, e864da9d). T-611 S1 CONFLICTS with T-426 -> rebase after S1g.
 - QA UI 8b13bb5a: REVIEW T-781 S1-S4 CHANGES R1-R5 (reply: history loaded twice, opening needs a Read outside the folder,
-  4M stdin write timeout, no audit row on retry, herd test) -> Backend. QA T-736 S3b PWG 7783 (job da445312) -> S3c 7796. Idle.
+  4M stdin write timeout, no audit row on retry, herd test) -> Backend. QA T-736 S3b PWG 7783 (job da445312) -> S3c 7796. Now REVIEW T-723 whole.
 - FOR THE COORDINATOR, T-781 (D-76): lead cannot claim/comment it (unassigned); Backend lane b2f0e95f on it. Order S1, S2, S4, S3, S5.
 - QA BE 2 42e5408f: REVIEW T-611 S1 CHANGES 7762 (C1 octal 08/09 under set -e, C2 peak overflow cap 6 digits, C3 pin the
   -le boundary, C4 timeout line says run again) -> T-611 S1b. REVIEW T-426 S1g CHANGES 7773 (N1 SECURITY: raw artifact name in
-  stderr leaks a value-named file; N2 compressed-branch test; N3 refuse non-empty --out) -> S1h 7782. REVIEW T-736 CHANGES 7788 (C1 mutants script fails open) -> S3c 7796. Idle.
-- IMPL lane 3fc7326e (sonnet; fc05043b ended: T-736 S3b DONE 759e7e75) now T-723 S3b (7677) -> T-736 S3c (7796) -> T-772 S1b (7719) -> T-772 S2 (7599).
+  stderr leaks a value-named file; N2 compressed-branch test; N3 refuse non-empty --out) -> S1h 7782. REVIEW T-736 CHANGES 7788 (C1 mutants script fails open) -> S3c 7796. Now QA T-723 S3b 2255085e (7800, job 098262d3 86/0).
+- IMPL lane 88eec6be (sonnet; 3fc7326e ended: T-723 S3b DONE 2255085e 7800; raw U+2028 left, edit refused -> T-788 low)
+  now T-736 S3c (7796) -> T-772 S1b (7719) -> T-772 S2 (7599).
 - BE INFRA e1673dcb (sonnet; dd395048 ended: T-426 S1g DONE fc0f8be5 7764, job ed6dcc90 44/0+17/0, 3 mutants KILLED; wip
   9fc88b5b carries scratch mutant files, not merged) now T-610 r3 (7748) -> T-426 S1h (7782 + QA Perf) -> T-611 S1b (7762 C1-C4 + QA Perf, rebase on S1g) -> T-611 S2 -> T-524 S3c (7360) -> T-612 S1.
 - BACKEND b2f0e95f (sonnet): T-781 S3 + G1-G7 + R1-R5 (R2 default: opening works with no tool call) -> S5 -> T-733. T-778 = person.
