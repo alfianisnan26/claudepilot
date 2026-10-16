@@ -5,10 +5,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 ## DONE
 - BATCH 22 ON INTEGRATION 0d521d67 (ff origin+pilot from f4de2647; gate claudepilot-gate-0d521d6-7b1d GREEN, suite 637s): T-697,
   T-574 S3, T-731, r.txt drop, T-376 S4b, T-732, T-610 r3, T-739 B (mig 383), T-723 S3c. Coordinator told on T-731.
-- DEPLOY 191 LIVE (coordinator, 2026.10.16-1 from 12c68374 = batches <=18). T-404 CLOSED (live hook in managed 10-policy.json + D-60
-  refusal 7407). T-597 CLOSED (live 6208). Live checks: T-472 UNAVAILABLE with agent tokens (admin read, 7505); T-591 FAIL:
-  release_report setting unset = silent skip; a person's PUT + backfill steps in 7556; silent skips -> T-776. FOR THE COORDINATOR.
-- T-781, T-731, T-727 assigned to the lead (coordinator). Migration 383: 0.41 s/1M synthetic rows (T-739 7487), for the coordinator.
+- DEPLOY 191 LIVE (coordinator, from 12c68374 = batches <=18). T-404, T-597 CLOSED. T-472 UNAVAILABLE (7505); T-591 FAIL (7556,
+  T-776), FOR THE COORDINATOR. T-781/T-731/T-727 are the lead's. Migration 383: 0.41 s/1M synthetic rows (7487), coordinator's.
 
 ## IN FLIGHT (6 of 6, D-71)
 - GATE b23: wip/main-8eeef66 8eeef663 on bd548097 = T-781 S1-S7 0c73e71f (lead's mechanical resolution of autotransfer/index.ts:
@@ -78,4 +76,4 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
    T-399, T-370 HOLD, T-371..T-374, T-363, T-451, T-470, T-507, T-508, T-512, T-520; T-404 open till deployed.
 
 LESSONS: reply_of = LATEST reply only (verdict must be the last reply); node --test, never vitest; a gate-done notice needs action; dontAsk workers cannot read /tmp, merge, gate or wait, and Bash only in their spawn worktree (new branch = new worker); whole
-test folders (T-574 red 10-15); integration moved during a gate = merge + re-gate (pack goes stale); FULL hashes; trailers in one block; status via Edit/Write ONLY; ancestor check before ff.
+test folders (T-574 red 10-15); integration moved during a gate = merge + re-gate (pack goes stale); FULL hashes; trailers in one block; status via Edit/Write ONLY; ancestor check before ff; NO status push while a gate runs (b23).
