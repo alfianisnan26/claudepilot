@@ -30,7 +30,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   4dba5701 + release merge-back e6d403d9. Quick-check job-89646cfa green (on 3f591f5). First gate never ran (integration moved).
   After restart: merge integration (status) in, pack, push wip, gate-job. BATCH 30 (after QA): T-436+S2, T-382 S1, T-425, T-772 S2f, T-736 S3f+S3g, T-416 S2c,
   T-675 R2c/R2d, T-781 S8c, T-612 S1 fix.
-- BE INFRA 4ed98960 (new rules): NOW fix T-612 S1 per QA FAIL 9040 (eslint tseslint base spread; prettier quickCheck.test.ts; a real
+- BE INFRA 4ed98960 (new rules): PAUSED 9135 (FAIL item 2 fixed+pushed; item 3 real quick-check run left). Fix T-612 S1 per QA FAIL 9040 (eslint tseslint base spread; prettier quickCheck.test.ts; a real
   quick-check run) -> S2a baseline -> T-860 S2c after T-860 merges (gaps 8936 + 8845).
 - BACKEND 658bdc65 (new rules; was 1e80e003: T-881 S1b DONE 4dba5701). NOW T-382 S2 GET /api/chat/sessions cursor (ticket/T-382-s2-sessions
   from S1 88b663fe).
