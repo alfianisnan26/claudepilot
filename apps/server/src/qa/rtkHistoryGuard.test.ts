@@ -228,22 +228,23 @@ test('the three scripts source the shared guard before they write anything', () 
 test('each script cds into the guarded folder after the guard and before its first git call (what the rtk-guard.sh header says)', () => {
   for (const script of SCRIPTS) {
     const lines = readFileSync(join(ROOT, 'tools/qa', script), 'utf8').split('\n');
-    const code = (i: number) => !lines[i].trimStart().startsWith('#');
+    const at = (i: number) => lines[i] ?? ''; // noUncheckedIndexedAccess: an index is string | undefined
+    const code = (i: number) => !at(i).trimStart().startsWith('#');
     const guard = lines.findIndex((l, i) => code(i) && /rtk_guard rtk-/.test(l));
     // `git <cmd>` and the scripts' own helper `g <cmd>` (git with a scratch identity).
     const gitCall = /(\bgit|(^|[\s;&|(])g) (-c |ls-files|rev-|remote|fetch|status|reset|checkout|rm |mv |add |commit)/;
-    const cds = lines.map((l, i) => i).filter((i) => code(i) && /\bcd "\$(here|repo)"/.test(lines[i]));
-    const gits = lines.map((l, i) => i).filter((i) => code(i) && gitCall.test(lines[i]));
+    const cds = lines.map((l, i) => i).filter((i) => code(i) && /\bcd "\$(here|repo)"/.test(at(i)));
+    const gits = lines.map((l, i) => i).filter((i) => code(i) && gitCall.test(at(i)));
     assert.ok(guard >= 0 && cds.length > 0 && cds.every((i) => i > guard), `${script}: no cd into the guarded folder after the guard`);
     assert.ok(gits.length > 0, `${script}: no git call found (the check would test nothing)`);
     for (const g of gits) {
-      assert.ok(cds.some((c) => c < g), `${script}: a git call (line ${g + 1}) comes before the cd (line ${cds[0] + 1})`);
+      assert.ok(cds.some((c) => c < g), `${script}: a git call (line ${g + 1}) comes before the cd (line ${(cds[0] ?? -1) + 1})`);
     }
     // The cd must run: a plain statement, nothing like `[ x ] && cd` or `a || cd` in front of it on its line.
     for (const c of cds) {
-      const before = lines[c].slice(0, lines[c].search(/\bcd "\$(here|repo)"/));
+      const before = at(c).slice(0, at(c).search(/\bcd "\$(here|repo)"/));
       assert.doesNotMatch(before, /&&|\|\|/, `${script}: the cd on line ${c + 1} may not run (a && or || in front of it)`);
-      assert.match(lines[c], /\bcd "\$(here|repo)" \|\| exit\b/, `${script}: the cd on line ${c + 1} needs \`|| exit\` (SC2164): a failed cd must not run the rest elsewhere`);
+      assert.match(at(c), /\bcd "\$(here|repo)" \|\| exit\b/, `${script}: the cd on line ${c + 1} needs \`|| exit\` (SC2164): a failed cd must not run the rest elsewhere`);
     }
   }
 });
@@ -261,7 +262,7 @@ function heavyBranch(src: string) {
   const start = lines.findIndex((l) => isCode(l) && /^else\s*$/.test(l));
   let depth = 0, end = -1, first = -1, cd = -1, tag = '';
   for (let i = start + 1; start >= 0 && i < lines.length; i++) {
-    const l = lines[i];
+    const l = lines[i] ?? '';
     if (tag) { if (l.trim() === tag) tag = ''; continue; }
     if (!isCode(l)) continue;
     if (/^\s*(fi|done|esac)\b/.test(l)) { if (depth === 0 && /^\s*fi\b/.test(l)) { end = i; break; } depth--; continue; }
@@ -269,7 +270,7 @@ function heavyBranch(src: string) {
     if (first < 0 && WRITES.test(l)) first = i;
     if (cd < 0 && depth === 0 && /^\s*cd "\$here" \|\| exit\s*$/.test(l)) cd = i; // `|| exit`: a cd without it is not counted (SC2164)
     const h = /<<-?\s*['"]?(\w+)['"]?/.exec(l);
-    if (h) tag = h[1];
+    if (h) tag = h[1] ?? '';
   }
   return { start, end, first, cd };
 }
