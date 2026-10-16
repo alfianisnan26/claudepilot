@@ -21,8 +21,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   posts the estimate + D1-D7 there. Order S1, S2, S4, S3, S5 (the file must carry the chat before a hard move). T-731 is DONE.
 - QA BE 2 42e5408f: T-600 live UNAVAILABLE for the lane (7597); lead read crew_scorecard: LIVE PARTIAL, pace no_source (7610);
   PLAN T-776 4 slices (lead decisions 7608) -> now QA T-723 S3 b78d7f6b (builder job e178a510 101/0, 5/5 mutants).
-- IMPL lane 09fee945 (sonnet, sekar; fce0c981 ended: T-739 B S1-S3 + docs N1 9be41062) T-772 S1 on ticket/T-772-forced-colors
-  (base b7f02cad): ci outline-hidden + tools/qa forced-colors check.
+- IMPL lane 46007215 (sonnet; 09fee945 ended: T-772 S1 DONE c9ee2ba2, job 8f10b14d 16/16 combos, 7656 -> QA UI queued)
+  T-739 B S4 mutant-killing tests (M1 M3-M7) on ticket/T-739-scorecard-index -> T-772 S2 (sweep 7599).
 - BE INFRA lane 72bdc262 (sonnet, satria; 2dc2be75 ended: T-426 S1f DONE 4313670d, job 6c72bc7f 57/0, M1-M3 red) T-610 rework 2
   (7053 items 1-5, m6) -> T-611 S0 -> T-524 S3c (7360).
 - BACKEND lane b2f0e95f (sonnet; 4762d05d ended: T-736 S3 DONE 2d10b092, job 9911ef20 32/0, 9/9 mutants) T-781 S1+S2 on
