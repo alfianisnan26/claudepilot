@@ -3,34 +3,36 @@
 Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-10-15 DONE batches 1-7: see 4fbab374). Hand-overs: ab99b45, bb58413, 639202e.
 
 ## DONE
-- BATCH 23 ON INTEGRATION f2843f2e (gate claudepilot-gate-8eeef66-b31a GREEN on 8eeef663; f2843f2e = that + status only):
-  T-781 S1-S7 (lead's mechanical index.ts resolution; decision 8094), T-733 S1 S4 S6. Coordinator told 8123.
-- BATCH 22 ON INTEGRATION 0d521d67 (gate claudepilot-gate-0d521d6-7b1d GREEN): T-697, T-574 S3, T-731, r.txt drop, T-376 S4b,
-  T-732, T-610 r3, T-739 B (mig 383), T-723 S3c. Coordinator told on T-731.
-- DEPLOY 233 LIVE (portal 2026.10.16-2, b22). Its Releases/ note exists (coordinator: my search came early) -> QA UI re-reads 4
-  notes, close T-591 on PASS. Live checks: coordinator runs them ("Coordinator live check" comments), close each on PASS.
-  CLOSED on coordinator live PASS: T-697, T-739 (A split to T-812, coordinator), T-732, T-723. T-574 re-check after 10-17
-  15:00Z (8265). T-376 open for S5. T-733 kept open (S5 + gap items, 8277). Ack 8237, 8279.
+- Batches 22-23 and deploy 233: see git history of this file (e8b962f9). Live checks: coordinator ("Coordinator live check"),
+  close each on PASS. T-574 re-check after 10-17 15:00Z (8265). T-376 open for S5. T-733 open (S5 + gap items, 8277).
 - BATCH 24B b2932d0e (T-401 S2b+S2c, T-736 S3c-S3e): DEPLOY 257 LIVE from 7f83f13d. T-401 live check asked 8549 (close on PASS).
 - BATCH 25 ON INTEGRATION 7c3c1e44 (gate claudepilot-gate-7c3c1e4-c387 GREEN, re-gated after release merge-back f649e481):
   T-781 S8+S8b, T-623 S2, T-416 S2+S2b (lead's mechanical controller.ts resolution 056fe1a4). Coordinator told T-731 8617.
-  T-772 held out: quick-check red on RunsTab.tsx:112 (T-732 line, 8544) -> S2c/S2d, batch 26.
-- BATCH 26 CANDIDATES: T-591 S3 9861313b (QA 8534, rev 8535) READY; T-611 merge f722dca1 (rev APPROVE 8537; QA Perf QA pending);
-  T-772 S2 188cd077 + S2b 4b484431 (QA PWG 8599, rev 8568) + S2c 464be382 + S2d 03b635b5 (8627; QA UI QA now); T-610 b3e7e3a7 (rev 8611, QA PASS W/ GAPS 8637) READY:
-  tell coordinator: pre-deploy read-only prod count of the 2 rows is theirs. T-623 S2c QA PASS 8603, waits S2d.
+- BATCH 26 ON INTEGRATION 83b7213e (gate claudepilot-gate-83b7213-b968 GREEN, suite 672s; after 3 re-merges as integration moved):
+  T-591 S3, T-610 (mig 384; pre-deploy read-only prod count of the 2 rows is the coordinator's), T-772 S2b-S2d 03b635b5 + S2c
+  464be382. Main folder ff'd (165db813 in). Coordinator told T-731.
+- RESPAWN (coordinator, T-525/T-631 landed 165db813): respawn each lane BETWEEN tickets, brief: job-run.sh, k3s-status.sh etc.
+  ONLY by /home/node/work/claudepilot/scripts/..., never scripts/.... BLOCKED: spawn says FOLDER_UNTRUSTED ("an allow rule runs
+  any command or covers everything") -> coordinator T-525 8804. Impl ENDED; its T-425 brief is ready. 5 lanes left on old rules. If T-860 S2 is ready mid-gate: stop b26 gate, gate T-860 alone. T-611 (8537) -> batch 27; T-623 S2c (8603) waits S2d.
 
 ## IN FLIGHT (6 of 6, D-71)
-- QA PERF 8e8912fc (perf-tester/sonnet): T-426 S1h PASS 14/14 (8270). Now QA T-611 S2b 96d7c148 -> QA T-611 merge f722dca1.
+- QA PERF 8e8912fc (perf-tester/sonnet): T-611 merge PWG 8715 (READY, b27 with T-426); T-868 rev CHANGES 2 8724; T-537 APPROVE
+  (lead posted 8738). NOW QA T-623 S2d c288c0d5 -> QA T-772 S2e fc9158ed.
 - QA UI 8b13bb5a (no Write): today T-623 S2/T-781 S8/T-611 merge/T-610/T-623 S2c reviews APPROVE; T-591 S3 + T-772 S2b QA PWG;
-  T-860 attack list 8540/8541 (52 forms). NOW QA T-772 S2c+S2d; T-860 S2 blind REVIEW preempts when DONE.
+  T-860 attack list 8540/8541 (52 forms). T-772 S2d PWG 8692 (tsc pod-vs-Job not verified, 8696). T-860 S2 rev CHANGES 8740 (relative --git-dir after a later -C). T-525 diff PASS 8759 (to coordinator 8768).
+  NOW QA T-856 7d2acb8d -> re-review T-860 S2b.
 - QA BE 2 42e5408f (no Write): reviews APPROVE T-772 S2 8449, T-416 S2b 8450, T-591 S3 8535, T-772 S2b 8568.
-  T-623 S2c PASS 8603, T-610 PASS W/ GAPS 8637. T-860 QA plan 8650 (17 mutants). Idle, waits for T-860 S2.
-- IMPL 46632d91 (sonnet): T-772 S2b-S2d DONE (S2d 03b635b5, mutant red, 8627). NOW T-525+T-631 exact settings.json diff as a comment (coordinator 8671; lead plan 8674;
-  blind review QA UI; coordinator lands, lanes respawn once) -> T-856 key in pool editor. DEPLOY 261 (batch 25) running (coordinator).
+  T-623 S2c PASS 8603, T-610 PASS W/ GAPS 8637. T-860 QA plan 8650. NOW QA T-860 S2 068606f5 (URGENT) -> T-416 S2c -> T-675 R2d -> T-781 S8c.
+- IMPL 46632d91 ENDED for respawn: DONE T-525+T-631 diff 8678, T-772 S2e fc9158ed (8701), T-856 7d2acb8d, T-868 S2 0520dc29
+  (8790; QA Perf re-reviews it, incl. the SHOTS_TEST_MODE --hook). Next: T-425 (on respawn, after re-trust). Deploy 261 is the coordinator's.
 - BE INFRA 16c2494f (sonnet): DONE T-860 12deae78 (8553), T-623 S2c 6f4f6d56 (8569), T-610 b3e7e3a7 (8571; lead read mig 384,
-  free on all branches 8577). NOW T-860 S2 URGENT (--git-dir/--work-tree/-c core.worktree/GIT_DIR + attack list; 8575) ->
-  T-623 S2d (mask parity, 8613) -> T-736 S3g (parked) -> T-524 S3c + T-733 S5 -> T-612 S1. T-860 gates ALONE.
-- BACKEND 3484bd4d: NOW T-675 R2d -> T-781 S8c (+minPauseMin test) -> T-416 S2c -> T-868 shots-in.sh (coordinator, 8616) -> T-537.
+  free 8577), T-860 S2 068606f5 (8680; lead read 8737), T-623 S2d c288c0d5 (8725), T-860 S2b bd2a2b1f (8817; job-bb58079a, 6 mutants red;
+  -> QA BE 2 delta + QA UI re-review). NOW INCIDENT T-881 S1 (allowlist vs installed
+  plugin; rev 3 blocked browser 19:14-19:29; plan 8744; coordinator's, high) -> T-736 S3g -> T-612 S1. T-860 gates ALONE.
+- BACKEND 3484bd4d: DONE R2d b82cdcb9, S8c 8cb00f79, T-416 S2c dcdb6553 (lead read 8700), T-868 28d24ee3 (8697; roots guessed),
+  T-537 d6833850, T-524 S3c + T-733 S5 ee56bab9 (8815/8816; 8/8 mutants; -> QA Perf after T-868 S2). T-436 011de98b BUILT, NOT
+  RUN: job-run refused after the branch switch (old-rule lane vs new settings) -> its Jobs go to QA BE 2 after T-860. T-436 deploy
+  hazard: fail-closed vault list = agents reach no notes until set (decision on T-436).
 - AFTER T-401: T-426 S1h/S1e; T-379 S2 3f11b28 behind it. T-578 -> owner. T-631 -> coordinator (after this batch).
 
 ## DECISIONS (binding)
@@ -75,5 +77,5 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 4. RTK: T-340 (person/coordinator) -> T-341 merge -> T-306 item 3. 5. T-537. 6. T-513. 7. T-472 live re-check (needs portal_status), T-422, T-147, T-438, T-425, T-436, T-437, T-432, T-382, T-377, T-386, T-409, T-402, T-398,
    T-399, T-370 HOLD, T-371..T-374, T-363, T-451, T-470, T-507, T-508, T-512, T-520; T-404 open till deployed.
 
-LESSONS: reply_of = LATEST reply only (verdict must be the last reply); node --test, never vitest; a gate-done notice needs action; dontAsk workers cannot read /tmp, merge, gate or wait, and Bash only in their spawn worktree (new branch = new worker); whole
+LESSONS: reply_of = LATEST reply only (verdict must be the last reply; T-860 S2 sat 20 min unseen: check the urgent ticket's comments too); node --test, never vitest; a gate-done notice needs action; dontAsk workers cannot read /tmp, merge, gate or wait, and Bash only in their spawn worktree (new branch = new worker); whole
 test folders (T-574 red 10-15); integration moved during a gate = merge + re-gate (pack goes stale); FULL hashes; trailers in one block; status via Edit/Write ONLY; ancestor check before ff; NO status push while a gate runs (b23).
