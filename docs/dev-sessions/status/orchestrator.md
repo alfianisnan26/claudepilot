@@ -19,9 +19,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 ## IN FLIGHT (6 of 6, D-71)
 - QA PERF 8e8912fc (perf-tester/sonnet): T-611 merge PWG 8715 (READY, b27 with T-426); T-868 rev CHANGES 2 8724; T-537 APPROVE
   (lead posted 8738). NOW QA T-623 S2d c288c0d5 -> QA T-772 S2e fc9158ed.
-- QA UI 8b13bb5a (no Write): today T-623 S2/T-781 S8/T-611 merge/T-610/T-623 S2c reviews APPROVE; T-591 S3 + T-772 S2b QA PWG;
-  T-860 attack list 8540/8541 (52 forms). T-772 S2d PWG 8692 (tsc pod-vs-Job not verified, 8696). T-860 S2 rev CHANGES 8740 (relative --git-dir after a later -C). T-525 diff PASS 8759 (to coordinator 8768).
-  NOW QA T-856 7d2acb8d -> re-review T-860 S2b.
+- QA UI fcc8b8aa (respawned; was 8b13bb5a: T-856 QA PWG 8837, T-860 S2b rev APPROVE 8840, T-524 S3c rev APPROVE 8852).
+  NOW T-856 browser check 390/1280 (worktree qa/T-856-browser from 7d2acb8d = OLD rules, relative form) -> review T-436 web field.
 - QA BE 2 42e5408f (no Write): reviews APPROVE T-772 S2 8449, T-416 S2b 8450, T-591 S3 8535, T-772 S2b 8568.
   T-623 S2c PASS 8603, T-610 PASS W/ GAPS 8637. T-860 QA plan 8650. NOW QA T-860 S2 068606f5 (URGENT) -> T-416 S2c -> T-675 R2d -> T-781 S8c.
 - IMPL fe93b032 (respawned, new rules; was 46632d91: T-772 S2e fc9158ed, T-856 7d2acb8d QA PWG 8837 -> b27, T-868 S2 0520dc29 ->
@@ -79,5 +78,5 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 4. RTK: T-340 (person/coordinator) -> T-341 merge -> T-306 item 3. 5. T-537. 6. T-513. 7. T-472 live re-check (needs portal_status), T-422, T-147, T-438, T-425, T-436, T-437, T-432, T-382, T-377, T-386, T-409, T-402, T-398,
    T-399, T-370 HOLD, T-371..T-374, T-363, T-451, T-470, T-507, T-508, T-512, T-520; T-404 open till deployed.
 
-LESSONS: reply_of = LATEST reply only (verdict must be the last reply; T-860 S2 sat 20 min unseen: check the urgent ticket's comments too); node --test, never vitest; a gate-done notice needs action; dontAsk workers cannot read /tmp, merge, gate or wait, and Bash only in their spawn worktree (new branch = new worker); whole
+LESSONS: a lane's rules are its worktree's .claude/settings.json: cut worktrees from integration (>= 165db813) for the absolute form; reply_of = LATEST reply only (verdict must be the last reply; T-860 S2 sat 20 min unseen: check the urgent ticket's comments too); node --test, never vitest; a gate-done notice needs action; dontAsk workers cannot read /tmp, merge, gate or wait, and Bash only in their spawn worktree (new branch = new worker); whole
 test folders (T-574 red 10-15); integration moved during a gate = merge + re-gate (pack goes stale); FULL hashes; trailers in one block; status via Edit/Write ONLY; ancestor check before ff; NO status push while a gate runs (b23).
