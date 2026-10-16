@@ -1451,7 +1451,7 @@ export class ChatStore {
         : Array.from(entry.actor.replace(ACTOR_STRIPPED, ' ').trim())
             .slice(0, AUDIT_ACTOR_MAX)
             .join('') || null;
-      this.#writable()
+    this.#writable()
       .prepare('INSERT INTO chat_audit (at, severity, kind, session_id, workspace_id, actor, detail) VALUES (?, ?, ?, ?, ?, ?, ?)')
       .run(this.#stamp(), entry.severity, entry.kind, entry.sessionId ?? null, entry.workspaceId ?? null, actor, redact(JSON.stringify(detail ?? {})));
   }
