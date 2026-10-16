@@ -1110,7 +1110,22 @@ function analyze(command, st, cwd, depth) {
     // export LESSOPEN='|rm %s': a variable that runs code, set for the commands after it.
     if (name === 'export' || name === 'declare' || name === 'typeset' || name === 'local' || name === 'readonly') {
       for (const a of args) {
-        const r = assignHit(a, st, false) || gitEnvHit(a);
+        const r = assignHit(a, st, false) || gitEnvHit(a) || gitEnvNameHit(a);
+        if (r) return r;
+      }
+    }
+    // read GIT_DIR <<<x, printf -v GIT_DIR x: a refused GIT_ name filled from input, to be exported without a value.
+    if (name === 'read' || name === 'mapfile' || name === 'readarray') {
+      for (const a of args) {
+        const r = gitEnvNameHit(a);
+        if (r) return r;
+      }
+    }
+    if (name === 'printf') {
+      for (let i = 0; i < args.length; i++) {
+        const m = /^-v(.*)$/.exec(args[i].text);
+        const target = m ? (m[1] ? { text: m[1], dyn: args[i].dyn } : args[i + 1]) : null;
+        const r = target ? gitEnvNameHit(target) : null;
         if (r) return r;
       }
     }
@@ -1526,7 +1541,20 @@ function gitCRoots() {
  */
 function gitEnvHit(w) {
   const m = ASSIGN.exec(w.text);
-  if (!m || !/^GIT_/.test(m[1]) || !EXEC_ENV.test(m[1])) return null;
+  if (!m || !/^GIT_/.test(m[1])) return null;
+  // GIT_TRACE and GIT_TRACE2* append to the file they name: only a switch (0, 1, true, false) or a descriptor number is allowed.
+  if (/^GIT_TRACE/.test(m[1])) {
+    const value = w.text.slice(m[0].length);
+    return gitCRoots().active && (w.dyn || !/^(\d{1,3}|true|false)$/i.test(value)) ? hit('GIT_TRACE with a file, in a lane workspace', '') : null;
+  }
+  if (!EXEC_ENV.test(m[1])) return null;
+  return gitCRoots().active ? hit('a GIT_ variable that moves a folder or runs a program, in a lane workspace', '') : null;
+}
+
+/** export GIT_DIR (no value) after read GIT_DIR or printf -v GIT_DIR: the name alone, or read or printf -v into it, in a lane workspace. */
+function gitEnvNameHit(w) {
+  const m = /^(GIT_[A-Za-z0-9_]*)$/.exec(w.text);
+  if (!m || w.dyn || !(EXEC_ENV.test(m[1]) || /^GIT_TRACE/.test(m[1]))) return null;
   return gitCRoots().active ? hit('a GIT_ variable that moves a folder or runs a program, in a lane workspace', '') : null;
 }
 
@@ -1585,6 +1613,9 @@ function git(args, st, base, stdinText, stdinFile, piped) {
       if (dir && !args[k].glob) {
         mark('gitC');
         const v = dir[2] !== undefined ? Object.assign({}, args[k], { text: dir[2] }) : args[++k];
+        // Git keeps the value as a string and applies every -C first, so a relative value is read against the folder after the
+        // LAST -C, which the guard has not reached yet: refuse it (an absolute value is read as it is).
+        if (v && !v.dyn && !path.isAbsolute(expandHome(v.text))) return hit('a relative --git-dir or --work-tree in a lane workspace (git reads it after the last -C)', '');
         const step = gitCStep(v, b);
         if (step.hit) return step.hit;
         continue;
@@ -1631,6 +1662,8 @@ function git(args, st, base, stdinText, stdinFile, piped) {
   // A lane workspace: git config of a key that moves the work tree or runs a program (core.worktree, core.hooksPath, alias.x, include.path).
   if (lane && sub === 'config') {
     const ops = nonOptions(rest);
+    // Another file than the repository's own (--file, -f, --global, --system, --blob): a write or a read outside the lane.
+    if (rest.some((w) => /^(--file|--global|--system|--blob|-f)/.test(w.text))) return hit('git config of another file than the repository’s own, in a lane workspace', '');
     if (ops.some((w) => GITC_CONFIG_KEYS.test(w.text)) || (ops.length >= 2 && ops[0].dyn)) return hit('git config of a key that moves the work tree or runs a program, in a lane workspace', '');
   }
   // git config alias.x '!rm .mcp.json' (then git x): a key that runs something, set while a rule file is named.

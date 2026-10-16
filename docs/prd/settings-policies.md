@@ -1023,7 +1023,13 @@ working. A session takes the hook when it starts: one started before the guard l
   backslash next to `git` is refused; `git config` of `core.worktree`, `core.bare`, `core.hooksPath`, `core.fsmonitor`, `core.sshCommand`,
   `alias.*`, `include.*` and the like is refused; and a line that holds a `git -C` and, in another command, `ln`, `mv`, `cp`, `rm`, `mkdir`,
   `tar`, `unzip` or a `git config` or `git worktree` is refused (the path is read before the line runs, so a link swapped in the same line
-  would point elsewhere). Out of scope, named so they are not a surprise: a race between the check and the run (permissions close it);
+  would point elsewhere). **S2b (blind review, T-860 comment 8740):** a relative `--git-dir` or `--work-tree` is refused (git applies
+  every `-C` first, so it reads the value after the last `-C`; an absolute value is still checked like `-C`); the name of a refused
+  `GIT_*` variable with no value (`export GIT_DIR`, `declare -x`), `read` into it and `printf -v` into it are refused; `GIT_TRACE*` passes
+  only as a switch or a number (it appends to any file it names); and `git config --file`, `-f`, `--global`, `--system` and `--blob` are
+  refused. **Residual (item 22):** the swap guard is a name list (`ln`, `mv`, ...); `python3 -c`, `node -e`, `perl -e`, `link`, `dd`, a
+  redirect or `git checkout` of a tracked link swap a link the same way and are not on it. The real fix is permissions (the lane user
+  cannot write where the links resolve), not more names. Out of scope, named so they are not a surprise: a race between the check and the run (permissions close it);
   a `.git` file planted in a lane folder that points at the main repository; repository hooks; `cd M && git commit` (the cwd moves, not
   `-C`: a sibling rule); writes from inside the lane folder to other places (`worktree add /abs`, `archive -o`, `checkout-index --prefix`,
   `push M`), reads outside it, and `git -C <other-lane>` (a lane may reach a sibling lane: the ticket allows everything under the root).
