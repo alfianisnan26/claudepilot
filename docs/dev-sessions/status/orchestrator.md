@@ -16,14 +16,14 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 
 ## IN FLIGHT (6 of 6, D-71)
   Lanes' ticket_comment refused on unassigned tickets (T-341, T-549, T-675): verdicts live in their replies + this file.
-- QA PERF 7e4879c7: reviews T-610 CHANGES; T-251 S2, T-681, T-325 S1 APPROVE (-> T-733 7104); now T-379 S2 -> T-697.
-- QA UI 8b13bb5a: reviews T-710, T-675, T-416 S1 APPROVE; T-574 S2 CHANGES (7088); now T-341 -> T-376 S4.
-- QA BE 2 42e5408f: T-610 FAIL -> 7053; reviews T-524 S3b, T-376 S3 APPROVE; T-401 CHANGES (7103); now T-426 S1e -> T-574 S3.
+- QA PERF 7e4879c7: reviews T-610 CHANGES; T-251 S2, T-681, T-325 S1, T-379 S2 APPROVE; now review T-549 S2 -> verify T-697.
+- QA UI 8b13bb5a: reviews T-710, T-675, T-416 S1, T-341 APPROVE (destructive script -> T-736 high; gaps T-733 7122); now review T-524 S3 -> T-376 S4.
+- QA BE 2 42e5408f: T-610 FAIL -> 7053; T-401 CHANGES (7103); T-426 S1e CHANGES (7121: scan fail-open, pool env in install); now probe plan T-401/T-426 -> T-574 S3.
 - IMPL lane 0d799c90 (sonnet) T-376 S4 87144867: wiring proven (3fa76653); long task 207-273ms red 1-2/4 (a435d70e) -> one try content-visibility (6952); wiring
   test + 4x CPU, long-task, DOM/heap, older-page budgets; if still red -> QA UI as is, budget question -> coordinator.
-- BE INFRA lane a7d33a84 (sonnet, sekar; 87749649 ended after T-610 rework) T-697 rework (await scan, 30x load) -> T-401 fix 7103 (new ticket/T-401-s2 from T-401-job-env) -> T-610 rework 7053 -> T-524 S3c -> T-731.
+- BE INFRA lane a7d33a84 (sonnet, sekar; 87749649 ended after T-610 rework) T-697 rework (await scan, 30x load) -> T-401 fix 7103 (new ticket/T-401-s2 from T-401-job-env) -> T-426 S1e fix 7121 (rebase on T-401-s2) -> T-610 rework 7053 -> T-524 S3c -> T-731.
 - BACKEND lane 216dbe18 (sonnet, regitha) T-574 S3 (cross-lead NOT_FOUND test, size trim, bound 1.5k) -> T-723.
-- HELD: T-426 S1e 2174eee1 QA PASS 6169 -> merge on the T-401 ack (4941). T-578 51f6c153 review CHANGES 6168 -> owner decision.
+- HELD: T-426 S1e 2174eee1 QA PASS 6169, review CHANGES 7121 -> fix, re-QA, merge after T-401. T-736 (high) -> Backend lane after T-574 S3. T-578 51f6c153 review CHANGES 6168 -> owner decision.
   T-631 review CHANGES 5850: absolute-path entry (a) for the coordinator; F1 on job-run.sh -> T-635 (high).
 - 16:12 OWNER PRIORITY (coordinator, T-426 5538): T-401 then T-426 FIRST. T-401 gate GREEN gate-54ba328-6502; ff only on the person's ack.
 
