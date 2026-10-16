@@ -546,6 +546,49 @@ test('T-781: a person moves the chat while the stop is waited for: the move is n
   r.engine.stop();
 });
 
+test('T-781 S8b: a second evaluation during the stop is skipped by the stop mark: one stop call, answered at once (no hang without the mark)', async () => {
+  const r = await rig(AUTO, EXHAUSTED);
+  r.chat.sessions.set('s1', STUCK());
+  r.chat.stored('s1', [{ at: at(-4) }]);
+  const calls: string[] = [];
+  // A stop that records its calls and settles by itself after 150 ms.
+  (r.chat as { interrupt: unknown }).interrupt = (id: string) => (calls.push(id), new Promise<void>((res) => setTimeout(res, 150)));
+  const first = r.engine.evaluate('s1');
+  try {
+    for (let i = 0; i < 200 && calls.length < 1; i++) await new Promise((res) => setTimeout(res, 10));
+    assert.equal(calls.length, 1, 'the first stop has been called');
+    // With the mark the second look returns at once; without it the second look runs the hard path and waits for its own stop (150 ms),
+    // so a bounded 100 ms wait fails here by an assertion.
+    const second = await Promise.race([r.engine.evaluate('s1'), new Promise((res) => setTimeout(() => res('still waiting'), 100))]);
+    assert.equal(second, null, 'the chat is marked as moving during the stop');
+    assert.equal(calls.length, 1, 'one stop call');
+  } finally {
+    await first;
+    r.engine.stop();
+  }
+  await r.engine.settled();
+  assert.deepEqual(calls, ['s1']);
+  assert.equal(r.chat.moves.length, 1, 'one move');
+});
+
+test('T-781 S8b: when a person moved the chat during the stop, the stop mark is cleared: the next look is not skipped as moving', async () => {
+  const r = await rig(AUTO, EXHAUSTED);
+  r.chat.sessions.set('s1', STUCK());
+  r.chat.stored('s1', [{ at: at(-4) }]);
+  (r.chat as { interrupt: unknown }).interrupt = async () => {
+    r.chat.personMoves('s1', 'spare');
+  };
+  try {
+    await r.engine.evaluate('s1');
+    assert.equal(r.chat.moves.length, 0, 'the person\'s move is not overridden');
+    const again = await Promise.race([r.engine.evaluate('s1'), new Promise((res) => setTimeout(() => res('still waiting'), 100))]);
+    assert.notEqual(again, null, 'a stale stop mark would skip every later look as "moving"');
+    assert.notEqual(again, 'still waiting');
+  } finally {
+    r.engine.stop();
+  }
+});
+
 test('T-781: a stop that never settles is given 30 s, then the chat moves anyway', async () => {
   const r = await rig(AUTO, EXHAUSTED);
   r.chat.sessions.set('s1', STUCK());
@@ -615,6 +658,34 @@ function spyHistory(r: Awaited<ReturnType<typeof rig>>) {
   r.chat.history = (id: string, after?: number) => (calls.push({ id, after }), hist(id, after));
   return calls;
 }
+
+test('T-781 S8: a second evaluation while the move itself is in flight is skipped (one attempt, one move)', async () => {
+  const r = await rig(AUTO, EXHAUSTED);
+  let release!: () => void;
+  const held = new Promise<void>((res) => (release = res));
+  const real = r.chat.switchClaude.bind(r.chat);
+  let attempts = 0;
+  r.chat.switchClaude = async (...a: Parameters<typeof real>) => (attempts++, await held, real(...a));
+  const first = r.engine.evaluate('s1');
+  try {
+    // The first move reached the Move flow (the mark is set before it), bounded at 2 s.
+    for (let i = 0; i < 200 && attempts < 1; i++) await new Promise((res) => setTimeout(res, 10));
+    assert.equal(attempts, 1, 'the first move is in the Move flow');
+    // The move is still waiting inside the Move flow. Without the mark the second look would wait on the same hold: a bounded wait, so
+    // the missing mark fails here by an assertion and not by a hang.
+    const second = await Promise.race([r.engine.evaluate('s1'), new Promise((res) => setTimeout(() => res('still waiting'), 100))]);
+    assert.equal(second, null, 'the chat is marked as moving');
+    assert.equal(attempts, 1, 'one move attempt, however many looks');
+  } finally {
+    release();
+    await first;
+    r.engine.stop();
+  }
+  await r.engine.settled();
+  assert.equal(attempts, 1, 'still one attempt');
+  assert.equal(r.chat.moves.length, 1, 'one move');
+  assert.equal(r.chat.get('s1')!.claudeId, 'home');
+});
 
 test('T-781: a second evaluation while the stop still waits does not stop or move again (exactly one stop, one move)', async () => {
   const r = await rig(AUTO, EXHAUSTED);
