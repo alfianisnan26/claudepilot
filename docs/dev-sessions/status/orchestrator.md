@@ -16,9 +16,9 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 
 ## IN FLIGHT (6 of 6, D-71)
   Lanes' ticket_comment refused on unassigned tickets (T-341, T-549, T-675): verdicts live in their replies + this file.
-- QA PERF 7e4879c7: reviews T-610 CHANGES; T-251 S2, T-681, T-325 S1, T-379 S2 APPROVE; now review T-549 S2 -> verify T-697.
-- QA UI 8b13bb5a: reviews T-710, T-675, T-416 S1, T-341 APPROVE (destructive script -> T-736 high; gaps T-733 7122); now review T-524 S3 -> T-376 S4.
-- QA BE 2 42e5408f: T-610 FAIL -> 7053; T-401 CHANGES (7103); T-426 S1e CHANGES (7121: scan fail-open, pool env in install); now probe plan T-401/T-426 -> T-574 S3.
+- QA PERF 7e4879c7: reviews T-610 CHANGES; T-251 S2, T-681, T-325 S1, T-379 S2 APPROVE; T-549 S2 CHANGES -> T-739; now T-739 cost analysis -> verify T-697.
+- QA UI 8b13bb5a: T-710, T-675, T-416 S1, T-341 (-> T-736 high), T-524 S3 APPROVE; now pre-read T-376 S4 -> verify it.
+- QA BE 2 42e5408f: T-401 CHANGES (7103); T-426 S1e CHANGES (7121); probe plan on T-401 7147; now note "secret scans fail closed" -> T-574 S3.
 - IMPL lane 0d799c90 (sonnet) T-376 S4 87144867: wiring proven (3fa76653); long task 207-273ms red 1-2/4 (a435d70e) -> one try content-visibility (6952); wiring
   test + 4x CPU, long-task, DOM/heap, older-page budgets; if still red -> QA UI as is, budget question -> coordinator.
 - BE INFRA lane a7d33a84 (sonnet, sekar; 87749649 ended after T-610 rework) T-697 rework (await scan, 30x load) -> T-401 fix 7103 (new ticket/T-401-s2 from T-401-job-env) -> T-426 S1e fix 7121 (rebase on T-401-s2) -> T-610 rework 7053 -> T-524 S3c -> T-731.
@@ -65,7 +65,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   (3813); T-491 Event token scope until T-426 (3965); deploys #35/#36/#37 production approval showed "auto", not changed by an agent;
   T-509 kit republish; T-594 alfian.isnan signed out; T-525 session_get + scribe tools + QA UI browser tools (5505); T-595 lane Bash (5443);
   T-591 #40 backfill after deploy (5511); T-325 S3 push door vs charter "only the main chat merges integration" + its token (5549);
-  T-527 finding 4 (owner triggers tagging owner-checklist); T-657 reopen T-259/T-317/T-338.
+  T-527 finding 4 (owner triggers tagging owner-checklist); T-657 reopen T-259/T-317/T-338; T-739 A scoring defs (scoring = person's wall).
 
 ## NEXT (in order, as slots free)
 1. T-401 fix (7103) + re-QA, then ack 4941 -> T-426 S1e -> T-379 S2 3f11b28 (PASS 4948, review 4938); deploys are the coordinator's.
