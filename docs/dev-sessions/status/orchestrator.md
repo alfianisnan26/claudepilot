@@ -3,6 +3,7 @@
 Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-10-15 DONE batches 1-7: see 4fbab374). Hand-overs: ab99b45, bb58413, 639202e.
 
 ## DONE
+- MERGED 5f54dbcf (batch 12): T-574 S2 57bc14bf (QA BE 2 PASS WITH GAPS); gate GREEN gate-5a379d4 (6637). Open for S3 (6615).
 - MERGED 24570945 (batch 11): T-341 e4284315 + docfix 2ed9bc64 (QA BE 2 PASS); gate GREEN gate-ea46530. Open for D (person).
   Lead can't comment on T-341 (unassigned): evidence here.
 - MERGED ff 7569d582 (batch 10): T-633 S2 (QA Perf PASS 6523); gate GREEN c57ab11. T-633 CLOSED (S1 batch 7 1a4a7933).
@@ -16,8 +17,9 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - T-524 S3 b68f043d: QA Perf PASS WITH GAPS 6623 (jobs faca6593, c0e7bfc3; mutant `patch job "other"` survives; no live
   patch run). Decision 6624: merge in batch 13; S3b (pin job name, no-patch-on-top-fail test, live suspended-Job run) BE Infra.
 - IN QA: QA Perf idle (next T-697, T-524 S3b).
-- BATCH 12 wip/main-5a379d4 = T-574 S2 57bc14bf (QA BE 2 PASS WITH GAPS, jobs 27c4254d/513e541f): GATE RUNNING. Decision 6615:
-  merge, gaps -> S3 (cross-lead worker_id test, trim id8/size toward done-when 600 avg). QA BE 2 idle: next T-549 S2 / T-697.
+- BATCH 13 wip/main-7526daa = T-524 S3 b68f043d + T-681 1fbca960 (QA UI PASS WITH GAPS 6633): GATE RUNNING.
+- QA BE 2 idle: next T-549 S2. T-549 S2 dfa9dabe sent back: invented ids kubernetes/event (D-67) + kubernetes/claudepilot,
+  size test never pages (14-15k < 19k budget); lane 59ae451c fixing on the same branch.
   T-681 1fbca960 (CI controls size-11, tools/qa/ci-targets.mjs; typecheck/build were on 293f612) -> QA UI 8b13bb5a.
 - IMPL 0fd43a51 (sonnet) T-376 S3 on ticket/T-376-s3 from wip/qa-t376-2611d17: find+cut ~14 MB on open, Show all /
   oldest page, harness >500 KB log + open-time budget (FAIL 6542, decision 6543).
@@ -67,7 +69,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 
 ## NEXT (in order, as slots free)
 1. Merges: T-401 060aca4 (ack 4941) -> T-426 S1e -> T-379 S2 3f11b28 (PASS 4948, review 4938); deploys are the coordinator's.
-2. Batch 13: T-524 S3 + T-681 (on its PASS) -> gate, merge. BE Infra after T-549 S2: T-524 S3b. Then T-376 S3, T-549 S2, T-697 -> QA.
+2. Batch 13 merge on green. BE Infra after T-549 S2: T-524 S3b. QA UI: full A1-A9 sweep of both CI pages (T-681 6633). Then T-376 S3, T-549 S2, T-697 -> QA.
 3. T-675 (memory findings 4/5 + R2 test, Backend lane), T-574 S3 (6615), T-416 S2 (Bypass restore).
 4. RTK: T-340 (hook change landed by a person/coordinator) -> T-341 merge -> T-306 item 3 (lab A/B). 5. T-537. 6. T-513.
 7. T-472 live re-check (needs portal_status), T-422, T-147, T-438, T-425, T-436, T-437, T-432, T-382, T-377, T-386, T-409, T-402, T-398,
