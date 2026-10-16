@@ -1147,7 +1147,14 @@ export class ChatController {
    */
   #bypassOver(sessionId: string, how: 'sleep' | 'stopped' | 'ended', kept = false): void {
     const row = this.#chat.row(sessionId);
-    if (!row || row.mode !== 'bypassPermissions') return;
+    if (!row) return;
+    if (row.mode !== 'bypassPermissions') {
+      // T-416 S2b: the session is not in Bypass, but its newest Bypass record may still say a vanished process (or a sleep) kept it. A stop,
+      // an end or a restart that is not itself a vanishing supersedes that record: only `#markGone` (kept) may leave it standing.
+      if (!kept && this.#sleptInBypass(sessionId))
+        this.#chat.addAudit({ severity: 'info', kind: 'bypass.left', sessionId, workspaceId: row.workspace_id, actor: 'portal', detail: { why: how, superseded: true } });
+      return;
+    }
     this.#chat.patchSession(sessionId, { mode: START_MODE });
     // T-417: a lead's sleep keeps it (`kept`, the wake puts it back through `#keepBypass` and every gate it checks).
     const said =

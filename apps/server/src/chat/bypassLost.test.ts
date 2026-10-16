@@ -152,3 +152,74 @@ test('T-416 S2: a session that was not a lead when its process vanished is not m
     await s.done();
   }
 });
+
+// T-416 S2b: only a vanished process (`#markGone`) may leave the "kept" record as the newest Bypass record. A workspace stop, a person's
+// end and the Bypass restart that come after it supersede it, or a later message would count as a relaunch after a loss and put Bypass back.
+
+/** A lead running on the start mode whose newest Bypass record still says a vanished process kept it (as after a loss it was not resumed from). */
+async function liveWithStaleKept(s: Live) {
+  const { lead, state } = await leadLost(s);
+  state.allowed = false;
+  await resume(s, lead.id, 'stale-1', false); // runs again, the gates fail: out of Bypass, on the record
+  state.allowed = true;
+  const row = s.controller.get(lead.id)!;
+  s.store.db!.prepare('INSERT INTO chat_audit (at, severity, kind, session_id, workspace_id, actor, detail) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
+    new Date().toISOString(),
+    'info',
+    'bypass.left',
+    lead.id,
+    row.workspaceId,
+    'portal',
+    JSON.stringify({ why: 'stopped', kept: true }),
+  );
+  assert.equal(s.controller.audit({ kind: 'bypass', sessionId: lead.id })[0]!.detail.kept, true, 'set up: the kept record is the newest');
+  return { lead, workspaceId: row.workspaceId };
+}
+
+const newest = (s: Live, id: string) => s.controller.audit({ kind: 'bypass', sessionId: id })[0]!;
+
+test('T-416 S2b: a workspace stop supersedes the kept record, and a later message does not bring Bypass back', async () => {
+  const s = await liveSession({}, true);
+  try {
+    const { lead, workspaceId } = await liveWithStaleKept(s);
+    await s.controller.endWorkspaceSessions(workspaceId, 'workspace stopped');
+    assert.notEqual(newest(s, lead.id).detail.kept, true, 'no longer kept');
+    const { asked } = await resume(s, lead.id, 'stale-2', false);
+    assert.equal(s.controller.get(lead.id)!.process, 'live');
+    assert.equal(s.controller.get(lead.id)!.mode, 'default');
+    assert.equal(bypassAsks(s).length, asked, 'never asked to enter Bypass');
+    assert.equal(s.controller.audit({ kind: 'bypass.entered', sessionId: lead.id }).filter((a) => a.detail.how === 'lost').length, 0);
+  } finally {
+    await s.done();
+  }
+});
+
+test('T-416 S2b: a person ending the chat supersedes the kept record', async () => {
+  const s = await liveSession({}, true);
+  try {
+    const { lead } = await liveWithStaleKept(s);
+    await s.controller.end(lead.id);
+    assert.equal(s.controller.get(lead.id)!.state, 'ended');
+    assert.notEqual(newest(s, lead.id).detail.kept, true, 'no longer kept: nothing may restore Bypass for it');
+    assert.equal(s.controller.audit({ kind: 'bypass.entered', sessionId: lead.id }).filter((a) => a.detail.how === 'lost').length, 0);
+  } finally {
+    await s.done();
+  }
+});
+
+test('T-416 S2b: the Bypass restart supersedes the kept record, and the relaunch does not enter Bypass', async () => {
+  const s = await liveSession({}, true);
+  try {
+    const { lead } = await liveWithStaleKept(s);
+    s.store.db!.prepare('UPDATE chat_sessions SET bypass_capable = 0 WHERE id = ?').run(lead.id);
+    const asked = bypassAsks(s).length;
+    await s.controller.allowBypass(lead.id);
+    assert.equal(s.controller.get(lead.id)!.process, 'live');
+    assert.equal(s.controller.get(lead.id)!.mode, 'default');
+    assert.equal(bypassAsks(s).length, asked, 'never asked to enter Bypass');
+    assert.notEqual(newest(s, lead.id).detail.kept, true, 'no longer kept');
+    assert.equal(s.controller.audit({ kind: 'bypass.entered', sessionId: lead.id }).filter((a) => a.detail.how === 'wake' || a.detail.how === 'lost').length, 0);
+  } finally {
+    await s.done();
+  }
+});
