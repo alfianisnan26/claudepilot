@@ -76,6 +76,7 @@ master_max=$((10#$master_max))
 # when the other node is full, T-365/T-524, so it is the operator's choice). The names go into JSON: the shape is checked, nothing else passes.
 avoid_json=
 if [ -n "${JOB_RUN_AVOID_NODES:-}" ]; then
+  [[ $JOB_RUN_AVOID_NODES != *, ]] || die "JOB_RUN_AVOID_NODES is a comma list of node names (no trailing comma)" # read -a would drop the empty last name silently
   IFS=, read -r -a avoid_list <<<"$JOB_RUN_AVOID_NODES"
   [ "${#avoid_list[@]}" -le 20 ] || die "JOB_RUN_AVOID_NODES lists at most 20 node names"
   for n in "${avoid_list[@]}"; do
