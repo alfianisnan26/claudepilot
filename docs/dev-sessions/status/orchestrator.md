@@ -25,7 +25,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   T-860 attack list 8540/8541 (52 forms). NOW QA T-772 S2c+S2d; T-860 S2 blind REVIEW preempts when DONE.
 - QA BE 2 42e5408f (no Write): reviews APPROVE T-772 S2 8449, T-416 S2b 8450, T-591 S3 8535, T-772 S2b 8568.
   T-623 S2c PASS 8603, T-610 PASS W/ GAPS 8637. T-860 QA plan 8650 (17 mutants). Idle, waits for T-860 S2.
-- IMPL 46632d91 (sonnet): T-772 S2b-S2d DONE (S2d 03b635b5, mutant red, 8627). T-525 draft 8648 (coordinator 8652). NOW T-856 key in pool editor.
+- IMPL 46632d91 (sonnet): T-772 S2b-S2d DONE (S2d 03b635b5, mutant red, 8627). NOW T-525+T-631 exact settings.json diff as a comment (coordinator 8671; lead plan 8674;
+  blind review QA UI; coordinator lands, lanes respawn once) -> T-856 key in pool editor. DEPLOY 261 (batch 25) running (coordinator).
 - BE INFRA 16c2494f (sonnet): DONE T-860 12deae78 (8553), T-623 S2c 6f4f6d56 (8569), T-610 b3e7e3a7 (8571; lead read mig 384,
   free on all branches 8577). NOW T-860 S2 URGENT (--git-dir/--work-tree/-c core.worktree/GIT_DIR + attack list; 8575) ->
   T-623 S2d (mask parity, 8613) -> T-736 S3g (parked) -> T-524 S3c + T-733 S5 -> T-612 S1. T-860 gates ALONE.
