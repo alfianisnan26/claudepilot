@@ -208,7 +208,11 @@ test('the timer: the first look follows a workspace’s start, then every interv
   const clock = { t: Date.parse('2026-10-12T10:00:00Z') };
   const pool = buildPool();
   const h = await reposHarness({ files: pool.files, now: clock, config: { auto: true, intervalS: 60 } });
+  // `tick` starts a scan without waiting for it, and the scan registers as running only after `await #requireRunning`: reading `scan.running` at
+  // once can see "not yet running" and return before a scan that is about to run (T-697). One turn of the event loop lets every microtask
+  // of that start settle, so the scan is registered; then wait for it to end.
   const settled = async () => {
+    await new Promise<void>((r) => setImmediate(r));
     for (let i = 0; i < 100 && (await h.repos.workspace(WS)).scan.running; i++) await sleep(50);
   };
   try {
