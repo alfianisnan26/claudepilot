@@ -62,7 +62,17 @@ test('a data-focus-container marker sits only on an element with tabIndex={-1}, 
   const files = sourceFiles();
   assert.deepEqual(files.flatMap((f) => markerHits(f, lines(f))), []);
   const marked = files.filter((f) => lines(f).some((l) => MARKER.test(l)));
-  assert.equal(marked.length, 8, `marked files: ${marked.join(', ')}`);
+  // the exact list: a marker on a real control (KeyBar, ModelPicker, ...) or a container left unmarked changes it
+  assert.deepEqual(marked, [
+    'components/AccountMenu.tsx',
+    'components/AppShell.tsx',
+    'components/Workbench.tsx',
+    'features/chat/AgentsPanel.tsx',
+    'features/chat/FilesPanel.tsx',
+    'features/chat/ImageViewer.tsx',
+    'features/chat/artifacts/FileViewer.tsx',
+    'features/glance/Popover.tsx',
+  ]);
 });
 
 test('outline-none is only tolerated beside the data-focus-container marker', () => {
