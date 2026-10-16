@@ -67,7 +67,7 @@ const ROOT_AT_END = new RegExp(`(?:${ROOTS.join('|')})$`);
 function gluedVariant(line: string): boolean {
   // a colon inside brackets (`[&:hover]`, `data-[a:b]`) is not a variant separator
   const masked = line.replace(/\[[^\]]*\]/g, (m) => m.replaceAll(':', '\u0001'));
-  for (const token of masked.split(/[\s'"`{},;=<>]+/)) {
+  for (const token of masked.split(/[\s'"`{},;=]+/)) {
     const segs = token.split(':');
     if (segs.length < 2 || !segs[segs.length - 1]) continue;
     for (const seg of segs.slice(0, -1)) {
