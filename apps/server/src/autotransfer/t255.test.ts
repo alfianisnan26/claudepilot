@@ -168,6 +168,13 @@ test('T-251 S2: a limit answer in the MIDDLE of a turn (no turn boundary): the r
   const u = fakeUsage(claudes);
   const auto = new AutoStore(store, () => new Date(clock.now()));
   const engine = new AutoTransferEngine({ chat, usage: u, owner: fakeOwner({}, { fallback: 'u_a' }), clock, store: auto, settings: settingsMap({ [K.enabled]: true, [K.automatic]: true }), bus: null, audit: null, publish: () => {} });
+  // The Claude the chat is on at the moment each message is sent (the continuation must follow the move).
+  const onClaude: (string | null | undefined)[] = [];
+  const send = chat.send.bind(chat);
+  chat.send = async (...a: Parameters<typeof chat.send>) => {
+    onClaude.push(chat.get(a[0])?.claudeId);
+    return send(...a);
+  };
   engine.start();
 
   // Before the report: One reads 0 % with no reset time (unknown): no reason to move, nothing happens.
@@ -187,6 +194,10 @@ test('T-251 S2: a limit answer in the MIDDLE of a turn (no turn boundary): the r
   assert.equal(chat.moves.length, 0, 'never moved mid-turn (FR10a)');
   assert.equal(chat.sent.length, 1, 'told once to finish the step and stop');
   assert.equal(chat.sent[0]!.actor, 'portal:autotransfer');
+  assert.equal(chat.sent[0]!.id, 's1');
+  assert.equal(chat.sent[0]!.priority, 'next', 'the steer waits for the step, it does not interrupt');
+  // FR10a text: One is used up (0 % left); the move to Spare comes at the end of the turn (or in N minutes at the latest).
+  assert.match(chat.sent[0]!.text, /^Your Claude \(One\) is at 0% left: finish the current step, commit and push your work and every sub-agent's work in progress, put one line per role on your status ticket if you keep one, then stop\. The portal moves this chat to Spare (at the end of this turn|in about \d+ minutes? at the latest \(at the end of this turn\)); after the move, start again the sub-agents and roles it interrupted\.$/);
   assert.equal((await engine.state('s1', 'u_a')).pendingMove?.to.id, 'spare', 'the move to the measured Claude is announced');
 
   // The boundary: moved at once (the source is used up), handoff skipped, then the continuation.
@@ -195,6 +206,11 @@ test('T-251 S2: a limit answer in the MIDDLE of a turn (no turn boundary): the r
   assert.deepEqual(chat.moves, [{ id: 's1', to: 'spare', handoff: 'skip' }]);
   assert.equal(chat.get('s1')!.claudeId, 'spare');
   assert.equal(chat.sent.length, 2);
+  assert.equal(chat.sent[1]!.id, 's1');
+  assert.equal(chat.sent[1]!.priority, 'next');
+  assert.equal(chat.sent[1]!.actor, 'portal:autotransfer');
+  assert.equal(chat.sent[1]!.text, 'Moved to Spare by the portal (the Claude you were on ran out of quota). Continue where you stopped, and start again the sub-agents and roles the move interrupted.');
+  assert.deepEqual(onClaude, ['one', 'spare'], 'the steer went to the old Claude, the continuation only after the move');
   engine.stop();
 });
 

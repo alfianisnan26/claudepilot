@@ -43,14 +43,14 @@ const TOOLS_PER_TURN = 12;
  * session's own opening is carried as the earlier context it was. `maxChars` is the room it may take:
  * the newest whole messages that fit are kept.
  */
-export function transferConversation(events: ChatEvent[], maxChars: number = MIN_BUDGET_CHARS * 6): TransferConversation {
+export function transferConversation(events: ChatEvent[], maxChars: number = MIN_BUDGET_CHARS * 6, messageMax: number = MESSAGE_MAX_CHARS): TransferConversation {
   const sections: string[] = [];
   let tools = new Map<string, number>();
   const flushTools = () => {
     if (!tools.size) return;
     const shown = [...tools].slice(0, TOOLS_PER_TURN).map(([call, n]) => (n > 1 ? `${call} ×${n}` : call));
     if (tools.size > TOOLS_PER_TURN) shown.push(`and ${tools.size - TOOLS_PER_TURN} more`);
-    sections.push(`_Tools used: ${shown.join(', ')}_`);
+    sections.push(redact(`_Tools used: ${shown.join(', ')}_`));
     tools = new Map();
   };
   // The handoff exchange (the portal's request and the note it got) is carried as the note, not twice.
@@ -68,7 +68,8 @@ export function transferConversation(events: ChatEvent[], maxChars: number = MIN
     }
     if (ev.kind === 'tool_use' && ev.toolName) {
       // By name and the one-line summary the transcript shows (a command, a path): never the input or the output.
-      const what = ev.text?.replace(/\s+/g, ' ').trim();
+      // Redacted before the cut, as the messages are: a cut first can leave a prefix of a secret that no pattern matches.
+      const what = ev.text ? redact(ev.text.replace(/\s+/g, ' ').trim()) : undefined;
       const call = what ? `${ev.toolName} (${what.length > TOOL_SUMMARY_MAX ? `${what.slice(0, TOOL_SUMMARY_MAX - 1)}…` : what})` : ev.toolName;
       tools.set(call, (tools.get(call) ?? 0) + 1);
       continue;
@@ -76,9 +77,13 @@ export function transferConversation(events: ChatEvent[], maxChars: number = MIN
     const text = ev.text?.trim();
     if (!text || (ev.kind !== 'user' && ev.kind !== 'assistant')) continue;
     flushTools();
-    if (ev.kind === 'user' && ev.transfer) sections.push(`### Earlier context (transferred from ${ev.transfer.fromClaude})\n\n${clip(text, MESSAGE_MAX_CHARS)}`);
-    else if (ev.kind === 'user' && ev.actor) sections.push(`### Message from ${ev.actorLabel ? `${ev.actor} “${ev.actorLabel}”` : ev.actor}\n\n${clip(text, MESSAGE_MAX_CHARS)}`);
-    else sections.push(`### ${ev.kind === 'user' ? 'You' : 'Claude'}\n\n${clip(text, MESSAGE_MAX_CHARS)}`);
+    // Redacted per message (G5): an unterminated key header runs to the end of ITS message only, and shows as [redacted] there; the
+    // later messages are not swallowed.
+    // Redacted BEFORE the clip: a clip first can cut a secret in two, and the redactor cannot know the rest of a half left behind.
+    const body = clip(redact(text), messageMax);
+    if (ev.kind === 'user' && ev.transfer) sections.push(`### Earlier context (transferred from ${ev.transfer.fromClaude})\n\n${body}`);
+    else if (ev.kind === 'user' && ev.actor) sections.push(`### Message from ${ev.actorLabel ? `${ev.actor} “${ev.actorLabel}”` : ev.actor}\n\n${body}`);
+    else sections.push(`### ${ev.kind === 'user' ? 'You' : 'Claude'}\n\n${body}`);
   }
   flushTools();
 
@@ -101,12 +106,32 @@ export function transferConversation(events: ChatEvent[], maxChars: number = MIN
 }
 
 /**
+ * The shell that writes the context file (`sh -c SCRIPT sh DIR PATH BYTES`, the body on stdin): the file is 600 and its directory 700,
+ * whatever the umask of the exec or an older, wider directory (G6): the conversation is the owner's alone.
+ */
+export const TRANSFER_WRITE_SCRIPT = 'umask 077 && mkdir -p -- "$1" && chmod 700 -- "$1" && head -c "$3" > "$2" && chmod 600 -- "$2"';
+
+/** The context file's per-message clip (T-781, D5): a whole long answer, not the opening's 4,000. */
+export const FILE_MESSAGE_MAX_CHARS = 20_000;
+/**
+ * The context file's total bound (T-781): about 1 MB of text; past it the oldest whole messages are left out and the file says so.
+ * It goes over the workspace exec's stdin, so it stays small enough for a slow Connect or Kubernetes tunnel inside the exec timeout:
+ * a timeout there would count as a failed move (R3).
+ */
+export const FILE_MAX_CHARS = 1_000_000;
+
+/** The conversation for the context file: every stored message (redacted, tools summarised), bounded per message and in total; the opening keeps its own, smaller budget. */
+export function transferFileConversation(events: ChatEvent[]): TransferConversation {
+  return transferConversation(events, FILE_MAX_CHARS, FILE_MESSAGE_MAX_CHARS);
+}
+
+/**
  * How much conversation the opening can carry. The event store cuts a stored text at `limit`
  * (`EVENT_TEXT_MAX`), and the transcript shows what is stored, so the opening, framing included, has to
  * fit: a longer one would reach Claude whole but show without its newest messages.
  */
 export function conversationBudget(meta: TransferMeta, limit: number, note?: string): number {
-  const framing = transferOpening(meta, { text: '', messages: 0, truncated: true }, note).length;
+  const framing = transferOpening(meta, { text: '', messages: 0, truncated: true }, note, { messages: 999_999, truncated: true }).length;
   return Math.max(MIN_BUDGET_CHARS, limit - framing - 200);
 }
 
@@ -138,7 +163,7 @@ export function transferFile(meta: TransferMeta, convo: TransferConversation, ha
  * named Claude rather than a request. Claude is asked only to confirm where things stand, so the
  * first turn is short and the person sees that the context arrived.
  */
-export function transferOpening(meta: TransferMeta, convo: TransferConversation, handoffNote?: string): string {
+export function transferOpening(meta: TransferMeta, convo: TransferConversation, handoffNote?: string, file?: Pick<TransferConversation, 'messages' | 'truncated'>): string {
   const noteText = cleanNote(handoffNote);
   const lines = [
     `<transferred_context from="${attr(meta.fromClaude)}" to="${attr(meta.toClaude)}">`,
@@ -147,8 +172,13 @@ export function transferOpening(meta: TransferMeta, convo: TransferConversation,
     `- Working folder: ${meta.cwd}`,
     `- Context file: ${meta.path}`,
     ...(convo.truncated ? [`- Only the last ${convo.messages} messages are included; older ones were left out.`] : []),
+    // What the file holds is said as it is: when it hit its own bound the oldest messages are missing from it too (T-781).
+    file?.truncated
+      ? `- The context file also holds the last ${file.messages} messages of the conversation (older ones were left out of it too). Reading it is optional: use offset and limit for a long one, only if a later message needs more than is below.`
+      : '- The whole conversation, every message, is also in the context file. Reading it is optional: use offset and limit for a long one, only if a later message needs more than is below.',
     '',
-    'Read it as prior context. Do not run tools or change files. Reply with one short line saying you have it and what the next step is, then wait for my next message.',
+    // No tool is needed to answer (R2): a read outside the working folder can sit on an approval nobody is there to give.
+    'Read this as prior context. Do not run any tool or change any file to answer: what you need to reply is below. Reply with one short line saying you have it and what the next step is, then wait for my next message.',
     '',
     ...(noteText ? [`<handoff_note from="${attr(meta.fromClaude)}">`, 'Written by that Claude, with the whole conversation in view, when the portal asked for a handoff before moving it.', fence(noteText), '</handoff_note>', ''] : []),
     '<conversation>',
