@@ -222,7 +222,8 @@ test('T-416 S2b: the Bypass restart supersedes the kept record, and the relaunch
     assert.equal(s.controller.get(lead.id)!.mode, 'default');
     assert.equal(bypassAsks(s).length, asked, 'never asked to enter Bypass');
     // The restart itself superseded the record (not a later gate drop that happened to replace it): why stopped, superseded, not kept.
-    const n = newest(s, lead.id);
+    // (The newest Bypass record overall is `bypass.capable`, written after the close-out: read the newest `bypass.left`.)
+    const n = left(s, lead.id);
     assert.deepEqual([n.kind, n.detail.why, n.detail.superseded ?? null, n.detail.kept ?? null], ['bypass.left', 'stopped', true, null]);
     assert.equal(s.controller.audit({ kind: 'bypass.entered', sessionId: lead.id }).filter((a) => a.detail.how === 'wake' || a.detail.how === 'lost').length, 0);
   } finally {
