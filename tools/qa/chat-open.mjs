@@ -41,6 +41,7 @@ const BUDGET_FIRST_MS = Number(opt('--budget-first-ms', 2000));
 const BUDGET_SETTLED_MS = Number(opt('--budget-settled-ms', 4000));
 const BUDGET_KB = Number(opt('--budget-kb', 1024));
 const THROTTLE = Number(opt('--throttle', 4));
+const PROFILE = args.includes('--profile');
 const BUDGET_LONGTASK_MS = Number(opt('--budget-longtask-ms', 200));
 const BUDGET_PAGE_MS = Number(opt('--budget-page-ms', 300));
 mkdirSync(OUT, { recursive: true });
@@ -455,6 +456,12 @@ async function runConfig(cookie, cfg) {
     const lt = await b.send('Page.addScriptToEvaluateOnNewDocument', { source: `window.__lt = []; try { new PerformanceObserver((l) => { for (const e of l.getEntries()) window.__lt.push({ s: Math.round(e.startTime), d: Math.round(e.duration) }); }).observe({ type: 'longtask', buffered: true }); } catch (e) { window.__ltErr = String(e); }
       window.__loaf = []; try { new PerformanceObserver((l) => { for (const e of l.getEntries()) window.__loaf.push({ s: Math.round(e.startTime), d: Math.round(e.duration), block: Math.round(e.blockingDuration || 0), render: Math.round(e.renderStart ? e.startTime + e.duration - e.renderStart : 0), scripts: (e.scripts || []).map((x) => ({ src: String(x.sourceURL || '').replace(/^https?:\\/\\/[^/]+/, ''), fn: x.sourceFunctionName, inv: x.invoker, d: Math.round(x.duration), pos: x.sourceCharPosition })) }); }).observe({ type: 'long-animation-frame', buffered: true }); } catch (e) { window.__loafErr = String(e); }` });
     await b.send('Emulation.setCPUThrottlingRate', { rate: THROTTLE });
+    // --profile: the CPU profile of the throttled open (self time by function, with the built source around it), to name what a long task is.
+    if (PROFILE) {
+      await b.send('Profiler.enable');
+      await b.send('Profiler.setSamplingInterval', { interval: 400 });
+      await b.send('Profiler.start');
+    }
     try {
       const tT = Date.now();
       await b.send('Page.navigate', { url: `http://localhost:${PORT}/admin/sessions/${SID}` });
@@ -467,6 +474,26 @@ async function runConfig(cookie, cfg) {
       const tasks = await b.eval('window.__lt').catch(() => null);
       const supported = Array.isArray(tasks);
       const longest = supported && tasks.length ? Math.max(...tasks.map((t) => t.d)) : 0;
+      if (PROFILE) {
+        const { profile } = await b.send('Profiler.stop');
+        const byId = new Map(profile.nodes.map((n) => [n.id, n]));
+        const self = new Map();
+        profile.samples.forEach((id, i) => self.set(id, (self.get(id) ?? 0) + (profile.timeDeltas[i] ?? 0)));
+        const agg = new Map();
+        for (const [id, us] of self) {
+          const cf = byId.get(id).callFrame;
+          const key = `${cf.functionName || '(anon)'} ${cf.url.replace(/^https?:\/\/[^/]+/, '')}:${cf.lineNumber}:${cf.columnNumber}`;
+          agg.set(key, (agg.get(key) ?? 0) + us);
+        }
+        const top = [...agg].sort((x, y) => y[1] - x[1]).slice(0, 14);
+        console.log(`     profile (self ms at ${THROTTLE}x, whole open):`);
+        for (const [key, us] of top) {
+          const m = /^(.*) (\S+):(\d+):(\d+)$/.exec(key);
+          let src = '';
+          if (m && m[2].startsWith('/assets/')) src = await b.eval(`fetch(${JSON.stringify(m[2])}).then((r) => r.text()).then((t) => { const l = t.split('\\n')[${Number(m[3])}] || ''; return l.slice(Math.max(0, ${Number(m[4])} - 40), ${Number(m[4])} + 140); })`).catch(() => '');
+          console.log(`       ${Math.round(us / 1000)} ms  ${key}  ${src ? JSON.stringify(src) : ''}`);
+        }
+      }
       const loaf = await b.eval('window.__loaf').catch(() => null);
       if (Array.isArray(loaf)) {
         res.loaf = loaf.filter((x) => x.d > 100);
