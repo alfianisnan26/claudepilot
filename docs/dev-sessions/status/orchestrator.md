@@ -11,21 +11,20 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 
 ## IN FLIGHT (6 of 6, D-71)
   Lanes' ticket_comment refused on unassigned tickets (T-341, T-549, T-675): verdicts live in their replies + this file.
-- QA PERF 7e4879c7: T-611 S1 PWG 7865. T-426 S1h PWG 7880 (job 8107b57c; N1-N3 run-proven; QA BE 2 re-read dropped, 7888;
-  bug: redact() loops on a value "REDACTED" -> S1i). Now blind REVIEW T-781 S5 71f9dc76 (no Job).
-- QA UI 8b13bb5a: T-736 S3c PWG 7875 (rtk-measure pin open -> S3d, 7889). REVIEW T-781 S3 APPROVE (reply; follow-ups: F1 re-check
-  before interrupt, F2 lastEventAtMs only when exhausted -> Backend S6). Now re-read T-723 S3c items 1, 2, 4 (no Job).
-- QA BE 2 42e5408f: QA T-723 S3b PWG 7833 (job ba0960c9). T-610 r3 PASS 7844 (job a5bdc271) -> READY 7846. Now QA T-781 S3
-  6563633a (7839, job 56feb0b0 271/0; lead read: write script umask 077/700/600, path check holds; asked: hard move => handoff
-  skip?), then a re-read of T-736 C1. REVIEW T-611 S1 CHANGES 7762 (C1-C4) -> T-611 S1b.
-- FOR THE COORDINATOR, T-781 (D-76): lead cannot claim/comment it (unassigned); Backend lane b2f0e95f on it. Order S1, S2, S4, S3, S5.
-- IMPL lane c959661f (sonnet; 750a7327 ended: T-723 S3c fadee77e 7874, 4 of 5 items, tail cut the counts -> QA BE 2 re-QA,
-  lead 7877; item 3 U+2028/9 back to T-788, FOR THE COORDINATOR: a person's 1-min fix [default]). Now T-772 S1b -> T-736 S3d -> T-772 S2 (7599).
+- QA PERF 7e4879c7: T-426 S1h PWG 7880 (-> S1i redact loop). REVIEW T-781 S5 CHANGES (7905 -> S7). Now blind REVIEW
+  T-772 S1b 1e1e0ba1 (no Job).
+- QA UI 8b13bb5a: T-736 S3c PWG 7875 (-> S3d). REVIEW T-781 S3 APPROVE (F1' F2). REVIEW T-723 S3c APPROVE (7908 gaps).
+  Now QA T-772 S1b 1e1e0ba1 (7900, job deaa7d60 2/0, mutant red; browser ring check).
+- QA BE 2 42e5408f: QA T-781 S5 FAIL (F1: prod adapter index.ts has no interrupt; 7905). QA T-723 S3c PWG 7903 (39/0, m1 m3
+  killed, m2 broke the regex). Now T-736 C1 re-read, then a corrected T-723 m2 Job -> T-723 READY if KILLED.
+- T-781 (D-76) now assigned to the lead: verdicts posted 7905. S1-S5 built; S6 (QA FAIL F1) and S7 open.
+- IMPL lane 7cc1b2f5 (sonnet, satria; c959661f ended: T-772 S1b DONE 1e1e0ba1 7900). Now T-781 S6 (7905: a prod interrupt,
+  b re-check, c redact before clip, d tests; D-76 first) -> T-781 S7 (F2 + S5 items) -> T-736 S3d -> T-772 S2 (7599).
 - BE INFRA fad38191 (sonnet; 3958fe14 ended: T-426 S1h DONE 9573a085 7847, job 7a3a11e7 65/0, 4 mutants killed; lead read N1
   redact/safe_name/say: mask before cut, holds). Now T-611 S1b on ticket/T-611-s1b (from S1h; S1 re-applied by hand, conflicts)
   -> T-426 S1i (7888; lead merges it into T-611 S1b) -> T-611 S2 -> T-524 S3c + T-733 S5 (job-run.sh) -> T-612 S1.
 - BACKEND 3484bd4d (sonnet; b2f0e95f ended: T-781 S5 DONE 71f9dc76 7869, job f86ac5de 274/0, 4 mutants killed -> QA BE 2 queue).
-  Now T-733 S4 S6 S1 on ticket/T-733-test-gaps (S5 job-run -> BE Infra) -> T-781 S6 (F1, F2; D-76). T-778 = person.
+  Now T-733 S4 S6 S1 on ticket/T-733-test-gaps (S5 job-run -> BE Infra) (T-781 moved to Impl, D-76). T-778 = person.
 - HELD: T-426 S1e 2174eee1 QA PASS 6169, review CHANGES 7121 -> fix, re-QA, merge after T-401. T-578 51f6c153 review CHANGES 6168 -> owner. T-631 CHANGES 5850 -> coordinator.
 - 16:12 OWNER PRIORITY (coordinator, T-426 5538): T-401 then T-426 FIRST. T-401 gate GREEN gate-54ba328-6502; ff only on the person's ack.
 
