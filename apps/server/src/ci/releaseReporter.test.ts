@@ -6,7 +6,7 @@ import { CI_POLICIES } from './authz.js';
 import type { CiReply } from './host.js';
 import { parseSetting, ReleaseReporter, ReportRefused, type ReleaseNoteSink } from './releaseReporter.js';
 import { MANIFEST_FILE } from './releaseReport.js';
-import type { CiStore, DeploymentRow, RepoRow, RunRow } from './store.js';
+import { CiStore as RealCiStore, type CiStore, type DeploymentRow, RepoRow, RunRow } from './store.js';
 import type { CiTicketsPort } from './tickets.js';
 import { harness } from './testkit.js';
 
@@ -155,6 +155,7 @@ test('store.lastReleased with a bound: the backfill of an older release takes th
   const h = await harness();
   try {
     const db = h.store.db!;
+    const cs = new RealCiStore(h.store);
     const mk = (n: number, at: string) => {
       db.prepare(
         "INSERT INTO ci_runs (id, number, workspace_id, repo_id, repo, pipeline, trigger, ref, sha, status, actor, created_at) VALUES (?, ?, 'ws', 'repo1', 'claudepilot', 'deploy', 'manual', 'refs/heads/main', ?, 'passed', 'ui', ?)",
@@ -167,11 +168,11 @@ test('store.lastReleased with a bound: the backfill of an older release takes th
     mk(89, '2026-10-15T12:00:00.000Z');
     mk(191, '2026-10-16T08:00:00.000Z');
     // Unbounded (the live deploy of run 191, newest): the newest other release is run 89.
-    assert.equal(h.store.lastReleased('repo1', 'production', 'r191')?.run_number, 89);
+    assert.equal(cs.lastReleased('repo1', 'production', 'r191')?.run_number, 89);
     // The backfill of run 40 (nothing before it) and of run 89 (run 40 before it; run 191 is later and must not be the base).
-    assert.equal(h.store.lastReleased('repo1', 'production', 'r40', '2026-10-15T08:00:00.000Z'), undefined);
-    assert.equal(h.store.lastReleased('repo1', 'production', 'r89', '2026-10-15T12:00:00.000Z')?.run_number, 40);
-    assert.equal(h.store.lastReleased('repo1', 'production', 'r89')?.run_number, 191, 'without the bound a later release wins: the bug');
+    assert.equal(cs.lastReleased('repo1', 'production', 'r40','2026-10-15T08:00:00.000Z'), undefined);
+    assert.equal(cs.lastReleased('repo1', 'production', 'r89', '2026-10-15T12:00:00.000Z')?.run_number, 40);
+    assert.equal(cs.lastReleased('repo1', 'production', 'r89')?.run_number, 191, 'without the bound a later release wins: the bug');
   } finally {
     h.done();
   }
