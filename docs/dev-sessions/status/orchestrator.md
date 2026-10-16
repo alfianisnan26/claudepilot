@@ -19,8 +19,10 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   id clip+hash '.', wake actor, lead [Portal note] N=max_workers|5, R2). Lead quick-check running. Then T-549 S2.
 - IMPL 0fd43a51 (sonnet) T-376 S3 on ticket/T-376-s3 from wip/qa-t376-2611d17: find+cut ~14 MB on open, Show all /
   oldest page, harness >500 KB log + open-time budget (FAIL 6542, decision 6543).
-- BE INFRA lane 59ae451c (sonnet) T-549 S2 dfa9dabe SENT BACK: invented ids kubernetes/event (D-67) + kubernetes/claudepilot,
-  size test never pages (14-15k < 19k budget); fixing on ticket/T-549-s2. Then T-524 S3b.
+- T-549 S2 DONE 5d97103d (job 773122d5: lab 81/81; ids kohi-event 48 / konfersi 47 only, D-67 Event dropped; budget pages
+  M1 out at 2 programs, 19,209 unbudgeted) -> QA BE 2 after T-675. Gap: 3-5 seeds small; boundary mutants not rerun.
+- BE INFRA lane 07d4830c (sonnet, two.claude) T-524 S3b on ticket/T-524-s3b from integration: pin job name, no-patch-on-
+  top-fail test, test-only master-pct override + live suspended-Job patch, master re-measure.
 - BACKEND lane 216dbe18 (sonnet, regitha) T-574 S3 on ticket/T-574-s3 from integration: cross-lead NOT_FOUND test, size trim
   toward 600 avg, bound back toward 1.5k.
 - HELD: T-426 S1e 2174eee1 QA PASS 6169 -> merge on the T-401 ack (4941). T-578 51f6c153 review CHANGES 6168 -> owner decision.
