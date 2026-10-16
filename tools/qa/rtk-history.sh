@@ -8,11 +8,9 @@
 # Refuses (exit 2) unless JR_REPO_URL is set (job-run's Job env) and `git status --porcelain` is empty (T-736).
 # Outputs in <out>: cases.tsv, fidelity.tsv, classes.tsv, <case>.{plain,rtk}.txt, <case>.fid.json, history.txt (what the clone had).
 set -u
-# T-736 guard: this script rewrites tracked files and ends with git reset + checkout, which would wipe uncommitted work. It runs only in a
-# job-run Job (the Job container exports JR_REPO_URL, nothing else does) on a clean checkout. Runs before any file is touched.
+# T-736 guard (tools/qa/rtk-guard.sh, shared by the three rtk scripts): runs before any file is touched.
 here=$(cd "$(dirname "$0")/../.." && pwd)
-[ -n "${JR_REPO_URL:-}" ] || { echo "rtk-history.sh: refusing: it rewrites the checkout; run it through scripts/job-run.sh (JR_REPO_URL not set)" >&2; exit 2; }
-[ -z "$(git -C "$here" status --porcelain 2>/dev/null)" ] || { echo "rtk-history.sh: refusing: the checkout has uncommitted changes" >&2; exit 2; }
+. "$here/tools/qa/rtk-guard.sh"; rtk_guard rtk-history.sh "$here"
 out=$(readlink -f "$1"); mkdir -p "$out"
 RTK_TAG=v1.0.0; RTK_ASSET=rtk-x86_64-unknown-linux-musl.tar.gz
 RTK_SHA=b0b69fbed72f55d8eae18587c0b6bc140a8a8b39d5b7c6e6df33795249940926
@@ -25,7 +23,7 @@ R=$RTK_BIN
 H=$(mktemp -d); E=$(mktemp -d)
 cleanenv() { env -i PATH="$PATH" HOME="$H" LANG=C.UTF-8 NO_COLOR=1 CI=1 RTK_TELEMETRY_DISABLED=1 XDG_CONFIG_HOME="$H/c" XDG_DATA_HOME="$H/d" "$@"; }
 "$R" --version > "$out/rtk-version.txt" 2>&1
-cd "$here"
+cd "$here" || exit
 
 # --- history: the Job's clone is depth 1 AND has no `origin` (Job claudepilot-job-e9baa000: "fatal: 'origin' does not appear to be a git
 # repository"), so the history is whatever the clone holds (one real commit with a 7-line body and trailers). A deeper history needs a

@@ -4,12 +4,14 @@
 #   tools/qa/rtk-measure.sh heavy <outdir>                       node --test, tsc (run in a job-run Job, after npm ci; downloads and verifies rtk)
 # Both arms run with the SAME clean environment (env -i, empty HOME, no token), RTK_TELEMETRY_DISABLED=1. Outputs go to files, never to the terminal.
 set -u
+# T-736 guard (tools/qa/rtk-guard.sh): the light mode on the claudepilot label edits and checks out tracked files; job-run Job and clean checkout only.
+here=$(cd "$(dirname "$0")/../.." && pwd)
+. "$here/tools/qa/rtk-guard.sh"; rtk_guard rtk-measure.sh "$here"
 mode=$1; out=$(readlink -f "$2"); mkdir -p "$out"
 RTK_TAG=v1.0.0; RTK_ASSET=rtk-x86_64-unknown-linux-musl.tar.gz
 RTK_SHA=b0b69fbed72f55d8eae18587c0b6bc140a8a8b39d5b7c6e6df33795249940926
-here=$(cd "$(dirname "$0")/../.." && pwd)
 if [ "${RTK_BIN:-}" = "" ]; then
-  d=$(mktemp -d); curl -fsSL -o "$d/$RTK_ASSET" "https://github.com/rtk-ai/rtk/releases/download/$RTK_TAG/$RTK_ASSET"
+  d=$(mktemp -d); curl -fsSL --max-time 120 --retry 1 -o "$d/$RTK_ASSET" "https://github.com/rtk-ai/rtk/releases/download/$RTK_TAG/$RTK_ASSET"
   [ "$(sha256sum "$d/$RTK_ASSET" | cut -d' ' -f1)" = "$RTK_SHA" ] || { echo "CHECKSUM MISMATCH" >&2; exit 3; }
   mkdir "$d/x"; tar -xzf "$d/$RTK_ASSET" -C "$d/x"; RTK_BIN=$d/x/rtk
 fi
