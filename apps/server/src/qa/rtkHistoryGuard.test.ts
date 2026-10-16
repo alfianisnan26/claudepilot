@@ -224,3 +224,25 @@ test('the three scripts source the shared guard before they write anything', () 
     assert.ok(firstWrite < 0 || guard < firstWrite, `${script}: a write comes before the guard (line ${firstWrite + 1})`);
   }
 });
+
+test('each script cds into the guarded folder after the guard and before its first git call (what the rtk-guard.sh header says)', () => {
+  for (const script of SCRIPTS) {
+    const lines = readFileSync(join(ROOT, 'tools/qa', script), 'utf8').split('\n');
+    const code = (i: number) => !lines[i].trimStart().startsWith('#');
+    const guard = lines.findIndex((l, i) => code(i) && /rtk_guard rtk-/.test(l));
+    const cd = lines.findIndex((l, i) => code(i) && /\bcd "\$(here|repo)"/.test(l));
+    const git = lines.findIndex((l, i) => code(i) && /\bgit (-c |ls-files|rev-|remote|fetch|status|reset|checkout|rm |mv |add |commit)/.test(l));
+    assert.ok(guard >= 0 && cd > guard, `${script}: no cd into the guarded folder after the guard`);
+    assert.ok(git > cd, `${script}: a git call (line ${git + 1}) comes before the cd (line ${cd + 1})`);
+  }
+});
+
+test('rtk-classes.sh on a repo without docs/prd: no pathspec error on stderr', () => {
+  const { dir } = scratchRepo();
+  // An rtk that answers --version and declines every rewrite, so the script runs on to the end instead of stopping at the first call.
+  const bin = join(dir, '..', `${dir.split('/').pop()}-plain-rtk`);
+  writeFileSync(bin, '#!/bin/sh\n[ "$1" = --version ] && echo rtk-stub\nexit 1\n', { mode: 0o755 });
+  const r = run(dir, 'rtk-classes.sh', { marker: true, rtk: bin });
+  assert.doesNotMatch(r.stderr, /pathspec/, r.stderr);
+  assert.ok(existsSync(join(outOf(dir), 'tools.tsv')), `the script did not get past its set-up: ${r.stderr}`);
+});

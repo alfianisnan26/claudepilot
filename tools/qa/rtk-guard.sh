@@ -6,7 +6,10 @@
 # Usage: rtk_guard <script name> <checkout folder>   (call it before anything is written, created or reset)
 # Call it once for EVERY repo the script will reset or rewrite (rtk-measure.sh light claudepilot also rewrites its <repo-dir> argument).
 # Fail closed: the caller must stop when this file cannot be sourced or does not define rtk_guard (each script checks both).
-# Every git call uses -C <folder>, never the current directory.
+# Inside rtk_guard every git call uses -C <folder>. The scripts' own git calls use the current directory instead: each script cds into the
+# guarded folder (history, classes: "$here"; measure: "$here", or the <repo-dir> argument in light mode) right after the guard and before its
+# first git call (pinned by rtkHistoryGuard.test.ts).
+# JR_REPO_URL guards against accidents, not intent: anyone who sets it by hand passes the first check (by design; the clean-tree check still holds).
 rtk_guard() {
   local name=$1 root=$2 st
   [ -n "${JR_REPO_URL:-}" ] || { echo "$name: refusing: it rewrites the checkout; run it through scripts/job-run.sh (JR_REPO_URL not set)" >&2; exit 2; }

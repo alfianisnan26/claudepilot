@@ -34,7 +34,8 @@ for f in $(git ls-files 'apps/server/src/*/routes.ts' | head -n 10); do
   i=$((i + 1)); printf '\n// rtk-classes scratch %s\n' "$i" >> "$f"; g commit -q -am "scratch $i: touch $(dirname "$f")" -m "Why: body line $i of a scratch commit, kept by the fidelity check." -m "Ticket: T-$((900 + i))" || exit 4
 done
 for f in $(git ls-files 'apps/server/src/chat/*.ts' | head -n 30); do echo "// rtk-classes" >> "$f"; done
-git rm -q --cached "$(git ls-files 'docs/prd/*.md' | tail -n 1)" >/dev/null
+prd=$(git ls-files 'docs/prd/*.md' | tail -n 1)  # none in a repo without docs/prd: an empty pathspec is a git error
+[ -n "$prd" ] && git rm -q --cached "$prd" >/dev/null
 mkdir -p rtkc-new && echo x > rtkc-new/a.txt && echo y > rtkc-untracked.txt && g add rtkc-new/a.txt
 
 printf 'case\tclass\tplain\trewrite_exit\trtk\texit_plain\texit_rtk\tbytes_plain\tbytes_rtk\n' > "$out/cases.tsv"
