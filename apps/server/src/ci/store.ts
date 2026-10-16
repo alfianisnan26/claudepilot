@@ -614,7 +614,7 @@ export class CiStore {
       .prepare(
         `SELECT d.* FROM ci_deployments d JOIN ci_runs r ON r.id = d.run_id
          WHERE d.repo_id = ? AND d.environment = ? AND d.run_id <> ? AND d.approval IN ('approved', 'auto') AND d.outcome = 'passed' AND r.status = 'passed'
-           AND (? IS NULL OR d.created_at < ?)
+           AND (? IS NULL OR ? IS NOT NULL)
          ORDER BY d.created_at DESC, d.id DESC LIMIT 1`,
       )
       .get(repoId, environment, exceptRun, before ?? null, before ?? null) as unknown as DeploymentRow | undefined;
