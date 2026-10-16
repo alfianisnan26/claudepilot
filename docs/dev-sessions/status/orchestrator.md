@@ -14,9 +14,9 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - QA PERF 7e4879c7: T-426 S1h PWG 7880 (-> S1i redact loop). REVIEW T-781 S5 CHANGES (7905 -> S7). REVIEW T-772 S1b
   CHANGES (2xl: false positive, no self-test -> S2, 7916). PROBES S1b 2a494942+8c9e58fc+9be66b11, S1i 6c8a2392, S6 d478c8c0. Now S1b C5 probes.
 - QA UI 8b13bb5a: T-736 S3c PWG 7875 (-> S3d). REVIEW T-781 S3 APPROVE (F1' F2). REVIEW T-723 S3c APPROVE (7908 gaps).
-  PLAN QA T-781 S6 7918; no Write tool (7939, coordinator 7944). REVIEW S6 PRE APPROVE a-d 7945. T-733 PRE CHANGES 7950 (->Backend). Now PLAN QA T-772 S2.
+  PLAN QA T-781 S6 7918; no Write tool (7939, coordinator 7944). REVIEW S6 PRE APPROVE a-d 7945. T-733 PRE CHANGES 7950 (->Backend). PLAN QA T-772 S2 7963. Waits S6 delta / T-772 S2.
 - QA BE 2 42e5408f: QA T-781 S5 FAIL (F1: prod adapter index.ts has no interrupt; 7905). QA T-723 S3c PWG 7903 (39/0, m1 m3
-  killed). T-736 C1 holds 7907. T-723 m2 KILLED 7932 = PASS. No Write either (7946: 3 findings -> Impl S6). T-611 S1b PRE CHANGES C5 7949 (->BE Infra). Now PLAN QA T-733; then S6 QA Job.
+  killed). T-736 C1 holds 7907. T-723 m2 KILLED 7932 = PASS. No Write either (7946: 3 findings -> Impl S6). T-611 S1b PRE CHANGES C5 7949 (->BE Infra). PLAN QA T-733 7964. Waits S6 DONE (QA Job), then T-733.
 - T-781 (D-76) now assigned to the lead: verdicts posted 7905. S1-S5 built; S6 (QA FAIL F1) and S7 open.
 - IMPL lane 7cc1b2f5 (sonnet, satria; c959661f ended: T-772 S1b DONE 1e1e0ba1 7900). Now T-781 S6 (7905: a prod interrupt,
   b re-check, c redact before clip, d tests; + 7945/7946 items 1-5 sent) -> T-781 S7 (F2 + S5 items) -> T-736 S3d -> T-772 S2 (7599 + 7916).
