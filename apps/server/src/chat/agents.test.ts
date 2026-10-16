@@ -464,8 +464,8 @@ test('T-574 over MCP: a lead with 10 workers gets one line per worker under 1.5k
     }
     const res = (await r.h.call(a.secret, 'session_family', {})).result!;
     const whole = JSON.stringify(res.structuredContent) + res.content![0]!.text;
-    // The 1.5k of T-574 became 2.5k when workers stayed an array of {id} (36 characters a worker, counted twice here: structured and text); the 6,374 before is far away.
-    assert.ok(whole.length < 2500, `default result is ${whole.length} characters`);
+    // T-574 S3: rows carry no id (workers holds it once), so both copies together (structured and text) stay under 2.2k (they were 2.5k; the size test prints the sizes); the 6,374 before is far away.
+    assert.ok(whole.length < 2200, `default result is ${whole.length} characters`);
     const block = res.structuredContent.lines as { untrusted_text: string; source: string };
     assert.equal(block.source, 'agent', 'worker text stays labelled');
     const rows = block.untrusted_text.split('\n');
@@ -473,8 +473,9 @@ test('T-574 over MCP: a lead with 10 workers gets one line per worker under 1.5k
     // workers stays an array of objects with an id (readers of the detail view): the same sessions as the lines, in the same order.
     const listed = (res.structuredContent.workers as { id: string }[]).map((w) => w.id);
     assert.deepEqual([...listed].sort(), [...ids].sort());
-    assert.deepEqual(listed.map((id) => id.slice(0, 8)), rows.map((x) => x.slice(0, 8)));
-    for (const id of ids) assert.ok(rows.some((x) => x.startsWith(id.slice(0, 8) + ' ')), id);
+    assert.deepEqual(rows.map((x) => x.split(' ')[0]), listed.map((_, i) => String(i + 1)), 'row n is workers[n-1]');
+    assert.ok(rows.every((x) => !ids.some((id) => x.includes(id.slice(0, 8)))), 'no id in the rows');
+    assert.deepEqual(Object.keys(res.structuredContent.workers[0]), ['id'], 'workers carries only the id');
     assert.equal(res.structuredContent.cut, undefined);
     assert.equal(res.structuredContent.parent, undefined, 'no full rows in the lines view');
 
@@ -489,12 +490,41 @@ test('T-574 over MCP: a lead with 10 workers gets one line per worker under 1.5k
     const nobody = (await r.h.call(a.secret, 'session_family', { worker_id: 'no-such-session' })).result!;
     assert.deepEqual(stranger.structuredContent.error, nobody.structuredContent.error);
     assert.equal(stranger.isError, true);
+    // Another lead's worker (same workspace), by full id and by id8: the very same 404 as an unknown id.
+    const theirs = await child(r.s, r.stranger.id, 'Theirs');
+    for (const want of [theirs.id, theirs.id.slice(0, 8)]) {
+      const other = (await r.h.call(a.secret, 'session_family', { worker_id: want })).result!;
+      assert.equal(other.isError, true, want);
+      assert.deepEqual(other.structuredContent.error, nobody.structuredContent.error, `lead B's worker ${want.length === 8 ? 'id8' : 'id'} answers like an unknown id`);
+      assert.ok(!JSON.stringify(other).includes(theirs.id), 'its id is not echoed');
+    }
+    assert.equal((await r.h.call(a.secret, 'session_family', { worker_id: 'no-such-id8' })).result!.isError, true);
   } finally {
     await r.done();
   }
 });
 
-test('T-574 over MCP: 25 workers: the lines stop at 1,100 characters, workers lists only the lines shown, and cut says how many were left out', async () => {
+test('T-574 S3 over MCP: size of the default family result for 0, 1, 5, 10 and 25 workers (structured plus text), printed, and bounded', async () => {
+  const r = await rig();
+  try {
+    r.s.controller.agentCaps = () => ({ ...CAPS, maxChildren: 30, spawnsPerHour: 60 });
+    const a = await r.h.agentToken('docker/ws1', r.s.id);
+    const sizes: Record<number, number> = {};
+    let have = 0;
+    for (const n of [0, 1, 5, 10, 25]) {
+      while (have < n) await child(r.s, r.s.id, `Worker number ${have++} with a rather long title that goes on`);
+      const res = (await r.h.call(a.secret, 'session_family', {})).result!;
+      sizes[n] = JSON.stringify(res.structuredContent).length;
+      console.log(`T-574 S3 size: ${n} workers: structured ${sizes[n]}, text ${res.content![0]!.text.length}`);
+    }
+    // One copy; the full id of a worker is 46 characters of JSON by itself, so 10 workers cannot go far below 800.
+    assert.ok(sizes[1]! < 280 && sizes[5]! < 600 && sizes[10]! < 1100 && sizes[25]! < 2100, JSON.stringify(sizes));
+  } finally {
+    await r.done();
+  }
+});
+
+test('T-574 over MCP: 25 workers: the lines stop at 600 characters, workers lists only the lines shown, and cut says how many were left out', async () => {
   const r = await rig();
   try {
     r.s.controller.agentCaps = () => ({ ...CAPS, maxChildren: 30, spawnsPerHour: 60 });
@@ -503,7 +533,7 @@ test('T-574 over MCP: 25 workers: the lines stop at 1,100 characters, workers li
     const sc = (await r.h.call(a.secret, 'session_family', {})).result!.structuredContent;
     const text = (sc.lines as { untrusted_text: string }).untrusted_text;
     const rows = text.split('\n');
-    assert.ok(text.length <= 1_100, `lines are ${text.length} characters`);
+    assert.ok(text.length <= 600, `lines are ${text.length} characters`);
     assert.ok(rows.length > 0 && rows.length < 25, `${rows.length} rows listed`);
     assert.equal((sc.workers as { id: string }[]).length, rows.length, 'workers lists the rows shown');
     assert.deepEqual(sc.cut, [`${25 - rows.length} of 25 workers not listed (size cap): worker_id for one, view detail for all.`]);
