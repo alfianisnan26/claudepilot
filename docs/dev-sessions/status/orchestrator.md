@@ -15,7 +15,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 
 ## IN FLIGHT (6 of 6, D-71)
   Lanes' ticket_comment refused on unassigned tickets (T-341, T-549, T-675): verdicts live in their replies + this file.
-- QA PERF 7e4879c7: reviews T-610 CHANGES; T-251 S2, T-681, T-325 S1, T-379 S2 APPROVE; T-549 S2 CHANGES -> T-739 (cost 7161); now VERIFY T-697 a84a51b3.
+- QA PERF 7e4879c7: reviews T-610 CHANGES; T-251 S2, T-681, T-325 S1, T-379 S2 APPROVE; T-549 S2 CHANGES -> T-739 (cost 7161); T-697 PASS WITH GAPS (b33f46ad; gaps T-733 7310);
+  now GATE batch 19 = 71a2317f (wip/main-71a2317, worktree premerge-b19: T-697 + T-574 S3 + pack) -> ff integration on GREEN.
 - QA UI 8b13bb5a: T-710, T-675, T-416 S1, T-341 (-> T-736 high), T-524 S3 APPROVE; pre-read S4 (7162; B1 additive ok); T-732 plan 7210; now VERIFY T-376 S4 5b095822 (reads Job b966dee9, own probes only).
 - QA BE 2 42e5408f: T-401 CHANGES (7103); T-426 S1e CHANGES (7121); probe plan 7147; review T-697 APPROVE (gaps T-733 7172); T-574 S3 PASS WITH GAPS (gaps T-733 7255; gate+merge with T-697); T-401 fix 0fb6ef62 PASS WITH GAPS (job 53a231a0) -> S2b; now VERIFY T-736 5f4a7e4d.
 - IMPL lane 65dd09f6 (sonnet, satria; 0d799c90 ended: T-376 S4 BLOCKED 5b095822, long task red 11/12 207-466ms, older page red 7/12,
@@ -58,8 +59,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - T-666 (high, RBAC = a person's wall): workspace kohi-event can create/delete ConfigMaps in isnan-claudepilot (review 6168, can-i).
 - T-401 gate wall (via the coordinator): ack 4941 ON HOLD. Review 7103: exit-3 evidence can leak a token, the scan fails open,
   the commit's .npmrc sees the token. Fix -> re-QA -> re-ask the ack with corrected text (scope: init cache, tw clock).
-- T-341 D (updatedInput) needs a real Claude Code session: a person or the coordinator.
-- T-93 Konfersi production only. Coordinator items: T-422 (sudo), T-306 item 4 / T-340; D-row for T-417's Bypass across sleep;
+- T-341 D (updatedInput) needs a real Claude Code session (person/coordinator). T-93 Konfersi production only. Coordinator items: T-422 (sudo), T-306 item 4 / T-340; D-row for T-417's Bypass across sleep;
   T-433's persona-wall question (2984).
 - For the coordinator, NOT the owner (not tagged owner-checklist): T-476 lead may START a deploy whose release waits for a person
   (3813); T-491 Event token scope until T-426 (3965); deploys #35/#36/#37 production approval showed "auto", not changed by an agent;
