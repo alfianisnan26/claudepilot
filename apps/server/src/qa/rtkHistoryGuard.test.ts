@@ -243,6 +243,7 @@ test('each script cds into the guarded folder after the guard and before its fir
     for (const c of cds) {
       const before = lines[c].slice(0, lines[c].search(/\bcd "\$(here|repo)"/));
       assert.doesNotMatch(before, /&&|\|\|/, `${script}: the cd on line ${c + 1} may not run (a && or || in front of it)`);
+      assert.match(lines[c], /\bcd "\$(here|repo)" \|\| exit\b/, `${script}: the cd on line ${c + 1} needs \`|| exit\` (SC2164): a failed cd must not run the rest elsewhere`);
     }
   }
 });
@@ -266,7 +267,7 @@ function heavyBranch(src: string) {
     if (/^\s*(fi|done|esac)\b/.test(l)) { if (depth === 0 && /^\s*fi\b/.test(l)) { end = i; break; } depth--; continue; }
     if (/^\s*(if|for|while|until|case)\b/.test(l) && !/;\s*(fi|done|esac)\s*$/.test(l)) depth++;
     if (first < 0 && WRITES.test(l)) first = i;
-    if (cd < 0 && depth === 0 && /^\s*cd "\$here"\s*$/.test(l)) cd = i;
+    if (cd < 0 && depth === 0 && /^\s*cd "\$here" \|\| exit\s*$/.test(l)) cd = i; // `|| exit`: a cd without it is not counted (SC2164)
     const h = /<<-?\s*['"]?(\w+)['"]?/.exec(l);
     if (h) tag = h[1];
   }
@@ -282,7 +283,8 @@ test('rtk-measure.sh heavy mode (the else branch) cds into the guarded folder be
 });
 
 test('the heavy-branch walker (self-check): each write kind before the cd is seen, a cd in a nested block is not one, heredocs and later writes are fine', () => {
-  const branch = (body: string) => heavyBranch(`if x; then\n  y\nelse\n${body}\nfi\n`);
+  const branch = (body: string) => heavyBranch(`if x; then\n  y\nelse\n${body.replaceAll('cd "$here"', 'cd "$here" || exit')}\nfi\n`);
+  assert.equal(heavyBranch('if x; then\n  y\nelse\n  cd "$here"\n  touch f\nfi\n').cd, -1, 'a cd without `|| exit` is not counted (SC2164)');
   const ok = branch('  cd "$here"\n  cat > f <<\'EOT\'\ntouch inside-heredoc\nEOT\n  m a b c d e');
   assert.ok(ok.cd > 0 && ok.cd < ok.first, 'a clean branch passes');
   for (const w of ['touch f', 'sed -i s/a/b/ f', 'echo hi | tee f', 'mv a b', 'ln -s a b', 'node x.js', 'npx tsc', ': > f', 'echo x >> f', 'cp a b', 'git status', 'g add f', 'rm -f f', 'mkdir d', 'm a b c d e']) {

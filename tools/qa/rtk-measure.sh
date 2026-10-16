@@ -36,7 +36,8 @@ m() {
 }
 R="$RTK_BIN"
 if [ "$mode" = light ]; then
-  repo=$(readlink -f "$3"); L=$4; cd "$repo"
+  # The rewrite target <repo-dir> is guarded only when the label is claudepilot (the only one that edits it); JR_REPO_URL is an accident guard, not a security control.
+  repo=$(readlink -f "$3"); L=$4; cd "$repo" || exit
   if [ "$L" = claudepilot ]; then  # a dirty tree so that status and diff have something to say; restored at the end
     for f in $(git ls-files 'apps/server/src/chat/*.ts' | head -n 6); do echo "// rtk-measure" >> "$f"; done
     for i in 1 2 3; do echo x > "rtkm-untracked-$i.txt"; done
@@ -50,7 +51,7 @@ if [ "$mode" = light ]; then
   m grep-native "$L" "$repo" "grep -rn ${GSYM:-actorOf} ${GDIR:-apps/server/src}" "$R grep ${GSYM:-actorOf} ${GDIR:-apps/server/src}"
   if [ "$L" = claudepilot ]; then git checkout -q -- . ; rm -f rtkm-untracked-*.txt; fi
 else
-  cd "$here"
+  cd "$here" || exit
   tf="apps/server/src/chat/actors.test.ts apps/server/src/chat/agentAccess.test.ts apps/server/src/chat/agents.test.ts"
   nt="node --import tsx --disable-warning=ExperimentalWarning --test"
   m node-test pass "$here/apps/server" "$nt ${tf//apps\/server\//}" "$R test $nt ${tf//apps\/server\//}"
