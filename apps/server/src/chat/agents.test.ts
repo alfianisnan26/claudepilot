@@ -470,8 +470,10 @@ test('T-574 over MCP: a lead with 10 workers gets one line per worker under 1.5k
     assert.equal(block.source, 'agent', 'worker text stays labelled');
     const rows = block.untrusted_text.split('\n');
     assert.equal(rows.length, 10);
-    // workers stays an array of objects with an id (readers of the detail view), in the same order as the lines.
-    assert.deepEqual((res.structuredContent.workers as { id: string }[]).map((w) => w.id), ids);
+    // workers stays an array of objects with an id (readers of the detail view): the same sessions as the lines, in the same order.
+    const listed = (res.structuredContent.workers as { id: string }[]).map((w) => w.id);
+    assert.deepEqual([...listed].sort(), [...ids].sort());
+    assert.deepEqual(listed.map((id) => id.slice(0, 8)), rows.map((x) => x.slice(0, 8)));
     for (const id of ids) assert.ok(rows.some((x) => x.startsWith(id.slice(0, 8) + ' ')), id);
     assert.equal(res.structuredContent.cut, undefined);
     assert.equal(res.structuredContent.parent, undefined, 'no full rows in the lines view');
