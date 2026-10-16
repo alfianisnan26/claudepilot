@@ -1293,7 +1293,8 @@ test('T-611 C1: a reading or a setting with a leading zero is a decimal number (
 });
 
 test('T-611 C2: a number that could wrap in the arithmetic is refused (rc 2), never read as a negative that lets the Job on the master', () => {
-  for (const [name, val] of [['JOB_RUN_EXPECTED_PEAK_MI', '99999999999999999999'], ['JOB_RUN_EXPECTED_PEAK_MI', '1000000'], ['JOB_RUN_EXPECTED_PEAK_MI', 'garbage'], ['JOB_RUN_MASTER_MAX_PCT', '1000'], ['JOB_RUN_MASTER_MAX_PCT', '99999999999999999999']]) {
+  const bad: [string, string][] = [['JOB_RUN_EXPECTED_PEAK_MI', '99999999999999999999'], ['JOB_RUN_EXPECTED_PEAK_MI', '1000000'], ['JOB_RUN_EXPECTED_PEAK_MI', 'garbage'], ['JOB_RUN_MASTER_MAX_PCT', '1000'], ['JOB_RUN_MASTER_MAX_PCT', '99999999999999999999']];
+  for (const [name, val] of bad) {
     const p = placed(60, [], { [name]: val });
     assert.equal(p.r.code, 2, `${name}=${val}: ${p.r.out}`);
     assert.equal(p.w.applied().length, 0, `${name}=${val}: no Job was made`);
