@@ -15,13 +15,14 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   Lanes' ticket_comment refused on unassigned tickets (T-341, T-549, T-675): verdicts live in their replies + this file.
 - QA PERF 7e4879c7: T-697 29b4ce58 (test-only: actions.test settled() yields a turn; limits + crewMcp G3 not reproduced;
   G3 failed in 7d87d90 which predates the wait at :773). Asked: 30x under load with/without fix. Lead quick-check PASS (job 12295a2b).
-- QA UI 8b13bb5a: T-710 sweep now; T-376 S3 first when it is DONE. QA BE 2 42e5408f idle: next T-549 S2.
+- QA UI 8b13bb5a idle: next T-376 S3. QA BE 2 42e5408f: T-675 65d93dea (job 2f55f771: 837/840 chat+notify, typecheck 0;
+  id clip+hash '.', wake actor, lead [Portal note] N=max_workers|5, R2). Lead quick-check running. Then T-549 S2.
 - IMPL 0fd43a51 (sonnet) T-376 S3 on ticket/T-376-s3 from wip/qa-t376-2611d17: find+cut ~14 MB on open, Show all /
   oldest page, harness >500 KB log + open-time budget (FAIL 6542, decision 6543).
 - BE INFRA lane 59ae451c (sonnet) T-549 S2 dfa9dabe SENT BACK: invented ids kubernetes/event (D-67) + kubernetes/claudepilot,
   size test never pages (14-15k < 19k budget); fixing on ticket/T-549-s2. Then T-524 S3b.
-- BACKEND lane 045682c4 (sonnet, rossi) T-675 on ticket/T-675-t416-followups from integration: alert id cap, wake actor,
-  lead warning (N = max_workers, default 5) + R2.
+- BACKEND lane 216dbe18 (sonnet, regitha) T-574 S3 on ticket/T-574-s3 from integration: cross-lead NOT_FOUND test, size trim
+  toward 600 avg, bound back toward 1.5k.
 - HELD: T-426 S1e 2174eee1 QA PASS 6169 -> merge on the T-401 ack (4941). T-578 51f6c153 review CHANGES 6168 -> owner decision.
   T-631 review CHANGES 5850: absolute-path entry (a) for the coordinator; F1 on job-run.sh -> T-635 (high).
 - 16:12 OWNER PRIORITY (coordinator, T-426 5538): T-401 then T-426 FIRST. T-401 gate GREEN gate-54ba328-6502; ff only on the person's ack.
