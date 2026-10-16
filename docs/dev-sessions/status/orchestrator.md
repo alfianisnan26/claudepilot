@@ -13,8 +13,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   Then gate b21 wip/main-91da8de 91da8de3 (on b19r: T-731, r.txt drop, T-376 S4b, T-732, T-610 r3, T-739 B mig 383, T-723 S3c).
   Each green -> ff origin+pilot, rebase+push status, tell the coordinator (deploys at once). Old 35f917a9/71a2317f superseded.
   Lanes' ticket_comment refused on unassigned tickets (T-341, T-549, T-675; T-675 assign refused too): verdicts in replies + this file.
-- QA PERF 330855ba (respawned; 7e4879c7 ended: Bash refused twice). T-611 S1b: probe fix C5e (add-fail rc 2 + cleanup, drop-fail
-  keeps rule), then ONE Job on the rebuilt QA branch + mutants 1-3. Probes ready: S1i 6c8a2392, S6 d478c8c0 (in 8fac4ec1).
+- QA PERF 330855ba (respawned; 7e4879c7 ended: Bash refused twice; new one has no Write and heredocs refused). QA T-611 S1b Job on
+  f74638f1, C5e skipped as a probe defect (decided: no edit), mutants 1-3; add-fail cleanup by reading. Probes ready: S1i 6c8a2392, S6 d478c8c0 (in 8fac4ec1).
 - QA UI 8b13bb5a (no Write tool, 7939/7944/7947): REVIEW T-781 S6 APPROVE 8006; REVIEW T-611 S1b APPROVE 8018 (3 follow-ups -> S1c).
   Waits: T-772 S2 (plan 7963).
 - QA BE 2 42e5408f (no Write tool, 7946): QA T-733 Job at 1afaf8a6 (plan 7964); then QA T-781 S6 on wip/qa-t781s6-8fac4ec 8fac4ec1.
@@ -22,8 +22,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - IMPL 7cc1b2f5: T-781 S7 (F2 + S5 items 1-4 + sync-throw mutant + #inflight during stop 8006) -> T-736 S3d -> T-772 S2.
 - BE INFRA fad38191: T-426 S1i DONE b7fa0ba7 8019 (67/0, M1 M2 red). Lead merged S1i into S1b: ab91adf9 (union of appended tests,
   63; not run). Now T-611 S1c from ab91adf9 (8018 items 1-3 + one Job proving the merge) -> T-611 S2 -> T-524 S3c + T-733 S5 -> T-612 S1.
-- BACKEND 3484bd4d: T-733 DONE 1afaf8a6 -> QA BE 2. Now T-675 item 3 (lead warning, N=6 D-71, FR39b) + R2 restart test; items
-  1/2 only with a named test (item 2 = T-723 S3c in b21).
+- BACKEND 3484bd4d: T-733 DONE 1afaf8a6 -> QA BE 2. T-675 items 1-3 already on integration (actors.test 234/243, memory.test,
+  memoryBudget.test 520; N stays D-43's 5, lead's 6 was wrong). Now R2 option (a): test a turn starting during the memory read, fix if red.
 - HELD: T-401 S2b a4ad3052 (QA PASS, review APPROVE 7387): a person's OK on the gate change (charter wall; 8023), then merge + gate.
   T-426 S1h/S1e after T-401; T-379 S2 3f11b28 behind it. T-578 -> owner. T-631 -> coordinator.
 
