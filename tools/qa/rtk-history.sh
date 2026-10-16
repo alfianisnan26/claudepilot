@@ -5,14 +5,19 @@
 #   - the forms the allowlist was wider than the measurement: git status <paths>, git log <refs/paths>, --max-count=N;
 #   - the facts left out before: git log Date and author e-mail (class git-log-meta), ls owner/date/size (class ls-meta).
 #   scripts/job-run.sh --ref <full hash> --out job-out/t341 --artifacts job-out -- 'bash tools/qa/rtk-history.sh job-out; exit $?'
+# Refuses (exit 2) unless JR_REPO_URL is set (job-run's Job env) and `git status --porcelain` is empty (T-736).
 # Outputs in <out>: cases.tsv, fidelity.tsv, classes.tsv, <case>.{plain,rtk}.txt, <case>.fid.json, history.txt (what the clone had).
 set -u
+# T-736 guard: this script rewrites tracked files and ends with git reset + checkout, which would wipe uncommitted work. It runs only in a
+# job-run Job (the Job container exports JR_REPO_URL, nothing else does) on a clean checkout. Runs before any file is touched.
+here=$(cd "$(dirname "$0")/../.." && pwd)
+[ -n "${JR_REPO_URL:-}" ] || { echo "rtk-history.sh: refusing: it rewrites the checkout; run it through scripts/job-run.sh (JR_REPO_URL not set)" >&2; exit 2; }
+[ -z "$(git -C "$here" status --porcelain 2>/dev/null)" ] || { echo "rtk-history.sh: refusing: the checkout has uncommitted changes" >&2; exit 2; }
 out=$(readlink -f "$1"); mkdir -p "$out"
 RTK_TAG=v1.0.0; RTK_ASSET=rtk-x86_64-unknown-linux-musl.tar.gz
 RTK_SHA=b0b69fbed72f55d8eae18587c0b6bc140a8a8b39d5b7c6e6df33795249940926
-here=$(cd "$(dirname "$0")/../.." && pwd)
 if [ "${RTK_BIN:-}" = "" ]; then
-  d=$(mktemp -d); curl -fsSL -o "$d/$RTK_ASSET" "https://github.com/rtk-ai/rtk/releases/download/$RTK_TAG/$RTK_ASSET"
+  d=$(mktemp -d); curl -fsSL --max-time 120 --retry 1 -o "$d/$RTK_ASSET" "https://github.com/rtk-ai/rtk/releases/download/$RTK_TAG/$RTK_ASSET"
   [ "$(sha256sum "$d/$RTK_ASSET" | cut -d' ' -f1)" = "$RTK_SHA" ] || { echo "CHECKSUM MISMATCH" >&2; exit 3; }
   mkdir "$d/x"; tar -xzf "$d/$RTK_ASSET" -C "$d/x"; RTK_BIN=$d/x/rtk
 fi
