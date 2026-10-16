@@ -42,8 +42,8 @@ const RECHECK_MS = 60_000;
 /** T-781: a CONFLICT on an exhausted chat is tried again after this long, at most this many times, then the normal pause. */
 const CONFLICT_RETRY_MS = 30_000;
 /** A continuation message that failed is tried again, 15 s apart, up to 3 attempts in all (T-781 S5). */
-const CONTINUE_RETRY_MS = 15_000;
-const CONTINUE_TRIES = 3;
+export const CONTINUE_RETRY_MS = 15_000;
+export const CONTINUE_TRIES = 3;
 const CONFLICT_RETRIES = 5;
 /** Every chat at or under the threshold, waiting or working, is looked at again this often (T-105): the tick, jittered up to 20 s. */
 const TICK_MS = AUTO_CONSTANTS.waitRecheckMin * MIN;
@@ -830,7 +830,7 @@ export class AutoTransferEngine {
   /** The continuation after an automatic move (T-105 item 3): one short message on the new Claude, priority next; recorded as `continued`. */
   async #continue(s: ChatSession, ownerId: string, mode: AutoMode, to: AutoClaudeRef, why: 'exhausted' | 'steered', attempt = 1): Promise<void> {
     // A newer continuation (a move away and back inside the retry window) replaces an older pending retry, which would otherwise send a stale second one.
-    // Kept as a guard, not observable by a test today: only `#move` and the retry timer itself call this, and the minimum pause between moves (`minPauseMin`, 5 min) is longer than the retry window (2 × 15 s). It depends on that: shorten the pause below the window and a test must cover this line (T-781 S8).
+    // Kept as a guard, not observable by a test today: only `#move` and the retry timer itself call this, and the minimum pause between moves (`minPauseMin`, 5 min) is longer than the retry window (2 × 15 s). It depends on that: shorten the pause below the window and a test must cover this line (T-781 S8). A test fails when the pause's default or lowest value is not over the window (engine.test.ts, T-781 S8c).
     this.#contTimers.get(s.id)?.();
     this.#contTimers.delete(s.id);
     try {
