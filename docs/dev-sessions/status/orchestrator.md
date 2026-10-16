@@ -1,4 +1,4 @@
-# orchestrator status (2026-10-16 00:10 UTC, session 355881a3, continuation of de232389)
+# orchestrator status (2026-10-16 01:00 UTC, session 355881a3, continuation of de232389)
 
 Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-10-15 DONE batches 1-7: see 4fbab374). Hand-overs: ab99b45, bb58413, 639202e.
 
@@ -11,22 +11,17 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 
 ## IN FLIGHT (6 of 6, D-71)
   Lanes' ticket_comment refused on unassigned tickets (T-341, T-549, T-675): verdicts live in their replies + this file.
-- T-574: batch 8 gate RED (sessionStartParent.test.ts:71, family workers not an array; 6396) -> BACKEND lane 06e9ff5c (sonnet,
-  respawned) on ticket/T-574-s2 from 124ca45f: keep the array, cap/cut tests, whole src/chat + portalmcp in a Job.
-- BATCH 11 wip/main-ea46530 = T-341 e4284315 + docfix 2ed9bc64: GATE RUNNING. QA Perf idle: next T-524 S3.
-- T-549 70b081f8: QA BE 2 FAIL crit 2 (full form 18,539 chars at 2 programs, ~27k at 3; job 96771ba8), mutant B (exact ceiling)
-  survives, done_rate baseline regex gives kubernetes/kohi-event (ClaudePilot) Event's 12/day. QA UI PASS WITH GAPS (f7730a9b).
-  Lead refused on T-549 too (unassigned). S2 (size test 3-5 programs + shrink/page, boundary test, baseline by program id) ->
-  BE Infra lane after T-524 S3, fresh branch from 70b081f8.
-- T-341 docfix 2ed9bc64: QA BE 2 PASS (recount: author right, QA's 10/4/1 a miscount; ls 25.0% vs 26.1% = one root entry
-  differs between clones). Hook installed nowhere; D not verified stays a person's.
-- QA BE 2 idle: next T-574 S2. QA UI idle: next T-681.
-- T-524 measured FAIL 6488 (master peak 87% > 85%; ~1/3 of Jobs on master) -> decision 6489 (a): BE INFRA lane f5aded2f
-  (sonnet, respawned) on ticket/T-524-s3: Jobs off master over the T-611 line (required) + OOM-report test.
-- T-376 QA UI FAIL 6542 (job 1a3f4179 on 2611d173 = integration + harness 982c527f): open pulls ~14 MB (events read 4.7 KB),
-  first row 2.5-9.6 s, no "Show all (", oldest not reached in 120 s. Decision 6543: S3 app fix + harness logging, next impl slot.
-- IMPL d5c6f211 (sonnet) on ticket/T-681-ci-44px: CI Runs filter + back link to 44 px at 390.
-- T-675 (unassigned, lead refused): findings 4/5 on T-416 6385, R2 on 6420.
+- BATCH 11 wip/main-ea46530 = T-341 e4284315 + docfix 2ed9bc64 (QA BE 2 PASS): GATE RUNNING. Hook installed nowhere; D a person's.
+- IN QA: T-524 S3 b68f043d (Jobs off master over 75%; kubectl patch only its own Job, read) -> QA Perf 7e4879c7.
+  T-574 S2 57bc14bf (workers array again, lines key; bound 1.5k->2.5k to judge) -> QA BE 2 42e5408f.
+  T-681 1fbca960 (CI controls size-11, tools/qa/ci-targets.mjs; typecheck/build were on 293f612) -> QA UI 8b13bb5a.
+- IMPL 0fd43a51 (sonnet) T-376 S3 on ticket/T-376-s3 from wip/qa-t376-2611d17: find+cut ~14 MB on open, Show all /
+  oldest page, harness >500 KB log + open-time budget (FAIL 6542, decision 6543).
+- BE INFRA lane 59ae451c (sonnet) T-549 S2 on ticket/T-549-s2 from 70b081f8: size test 3-5 programs + shrink/page, ceiling
+  boundary test, baseline by program id (QA BE FAIL job 96771ba8; QA UI PASS WITH GAPS f7730a9b).
+- BACKEND lane fb33b27e (sonnet) T-697 on ticket/T-697-flakes from integration: repos/actions timer, chat/limits, crewMcp G3
+  (flaked in gate 7d87d90); 20x loop proof.
+- T-675 (unassigned, lead refused): findings 4/5 on T-416 6385, R2 on 6420 -> next Backend slot.
 - HELD: T-426 S1e 2174eee1 QA PASS 6169 -> merge on the T-401 ack (4941). T-578 51f6c153 review CHANGES 6168 -> owner decision.
   T-631 review CHANGES 5850: absolute-path entry (a) for the coordinator; F1 on job-run.sh -> T-635 (high).
 - 16:12 OWNER PRIORITY (coordinator, T-426 5538): T-401 then T-426 FIRST. T-401 gate GREEN gate-54ba328-6502; ff only on the person's ack.
@@ -68,8 +63,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 
 ## NEXT (in order, as slots free)
 1. Merges: T-401 060aca4 (ack 4941) -> T-426 S1e -> T-379 S2 3f11b28 (PASS 4948, review 4938); deploys are the coordinator's.
-2. On PASS: T-633 S2, T-549, T-574 S2, T-524 S3, T-681 -> gate, merge. T-376 app fix slice after the QA UI verdict.
-3. T-675 (memory findings 4/5 + R2 test, Backend lane), T-697 flake, T-416 S2 (Bypass restore).
+2. On PASS: T-524 S3, T-574 S2, T-681 -> gate, merge. Then T-376 S3, T-549 S2, T-697 -> QA.
+3. T-675 (memory findings 4/5 + R2 test, Backend lane), T-416 S2 (Bypass restore).
 4. RTK: T-340 (hook change landed by a person/coordinator) -> T-341 merge -> T-306 item 3 (lab A/B). 5. T-537. 6. T-513.
 7. T-472 live re-check (needs portal_status), T-422, T-147, T-438, T-425, T-436, T-437, T-432, T-382, T-377, T-386, T-409, T-402, T-398,
    T-399, T-370 HOLD, T-371..T-374, T-363, T-451, T-470, T-507, T-508, T-512, T-520; T-404 open till deployed.
