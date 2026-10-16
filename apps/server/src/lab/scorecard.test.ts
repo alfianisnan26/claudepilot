@@ -804,7 +804,7 @@ test('MCP crew_scorecard full: 2, 3, 4 and 5 programs stay under the result limi
         assert.ok(!refused(one) && where(one).programs[0].program === id, `omitted ${id} can be asked for alone`);
       }
       // A single program over the budget is still carried (the budget is a ceiling for the rest, not for the first).
-      if (n === 5) assert.equal((fitPrograms({}, [{ program: 'big', x: text }], 1000) as any).programs.length, 1);
+      if (n === 5) assert.equal((fitPrograms({}, [{ program: 'big', x: text } as { program: string }], 1000) as any).programs.length, 1);
     }
     console.log(`crew_scorecard full sizes at 2, 3, 4, 5 programs: ${sizes.join(', ')}`);
   } finally {
