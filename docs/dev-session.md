@@ -138,6 +138,8 @@ twice. `scripts/gate-job.sh <commit> [steps]` (T-37) runs `scripts/gate.sh` as a
 
 ## Heavy agent work in the cluster
 
+In the workspace pod, call it as `/home/node/work/claudepilot/scripts/job-run.sh` (the main checkout's copy): the allow list names only that path (T-631), so a dontAsk lane's relative `scripts/job-run.sh` from its worktree is refused. The examples below use the short form.
+
 `scripts/job-run.sh` (T-107) runs any heavy command of an agent as a Job like the gate's (`deploy/k3s-build/job-run.yaml`: the development
 image, a node without a workspace pod preferred, 1 CPU requested and 4 the limit, memory requested = limited (4Gi, `--big` 8Gi), `/tmp` and
 `/dev/shm` in memory, a deadline, gone 30 minutes
