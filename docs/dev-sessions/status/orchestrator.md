@@ -7,8 +7,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   refusal 7407). T-597 CLOSED (live 6208). Live checks: T-472 UNAVAILABLE with agent tokens (admin read, 7505); T-591 FAIL:
   release_report setting unset = silent skip; a person's PUT + backfill steps in 7556; silent skips -> T-776. FOR THE COORDINATOR.
 - FOR THE COORDINATOR, batch sooner: the T-401 merge (security; waits the ack + gate door T-595 7316). Hold migration 383 until
-  scaled by the real row count (0.41 s/1M synthetic, T-739 7487). Ready for the next batch (gate door): T-376 S4b, T-732 (7511),
-  T-731 31b1ad73 (r2 APPROVE QA BE 2; QA Perf PASS WITH GAPS job 15df1fc8, 10/10 probes; lead can't comment T-731).
+  scaled by the real row count (0.41 s/1M synthetic, T-739 7487). T-781, T-731, T-727 now assigned to the lead (coordinator).
 
 ## IN FLIGHT (6 of 6, D-71)
   Lanes' ticket_comment refused on unassigned tickets (T-341, T-549, T-675): verdicts live in their replies + this file.
@@ -70,7 +69,9 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 
 ## NEXT (in order, as slots free)
 1. T-401 fix (7103) + re-QA, then ack 4941 -> T-426 S1e -> T-379 S2 3f11b28 (PASS 4948, review 4938); deploys are the coordinator's.
-2. Batch at the gate door: T-376 S4b, T-732, T-731, T-739 B READY 7757 (mig 383 note), T-610 r3 READY 7846, T-723 after S3c, batch 19 rebuilt; T-736 after S3c QA.
+2. BATCH 20 BUILT wip/main-35f917a 35f917a9 (T-731 + r.txt drop, T-376 S4b, T-732, T-610 r3, pack a4c76eaa; worktree premerge-b20):
+   waits a gate (T-731 7902, coordinator asked to merge it for ~13:20 deploy; default (a) coordinator gates it, then lead ff).
+   Then: T-739 B (mig 383 note), T-723 after S3c, batch 19 rebuilt, T-736 after S3d.
 3. T-675 (memory findings 4/5 + R2 test, Backend lane), T-574 S3 (6615), T-416 S2 (Bypass restore).
 4. RTK: T-340 (person/coordinator) -> T-341 merge -> T-306 item 3. 5. T-537. 6. T-513. 7. T-472 live re-check (needs portal_status), T-422, T-147, T-438, T-425, T-436, T-437, T-432, T-382, T-377, T-386, T-409, T-402, T-398,
    T-399, T-370 HOLD, T-371..T-374, T-363, T-451, T-470, T-507, T-508, T-512, T-520; T-404 open till deployed.
