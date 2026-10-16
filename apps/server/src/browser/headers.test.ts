@@ -391,8 +391,9 @@ test('T-623 S2c envFileValue: an inline “# note” is dropped, a # without a s
   assert.equal(envFileValue(`K="${a} # kept"`, 'K'), `${a} # kept`);
   assert.equal(envFileValue(`K=${a}#${b}`, 'K'), `${a}#${b}`, 'a # inside a value is part of it');
   assert.equal(envFileValue('K= # only a note', 'K'), null);
-  assert.equal(envFileValue(`﻿FIRST=${a}\nSECOND=${b}`, 'FIRST'), a, 'a BOM does not hide the first key');
-  assert.equal(envFileValue(`﻿FIRST=${a}\nSECOND=${b}`, 'SECOND'), b);
+  const bom = String.fromCharCode(0xfeff); // written as an escape: the character itself is invisible in an editor
+  assert.equal(envFileValue(`${bom}FIRST=${a}\nSECOND=${b}`, 'FIRST'), a, 'a BOM does not hide the first key');
+  assert.equal(envFileValue(`${bom}FIRST=${a}\nSECOND=${b}`, 'SECOND'), b);
 });
 
 test('T-623 resolveHeaders: a key from an env entry reaches headers.json; a missing key is left out with a reason that holds no value', () => {
