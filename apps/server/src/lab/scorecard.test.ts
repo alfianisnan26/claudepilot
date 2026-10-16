@@ -399,7 +399,7 @@ test('T-739 (D-65): fullProgram: an unavailable D-65 figure names its reason', (
 test('T-739 (D-65): scoreShort: a flag carries the first five offenders only', () => {
   const figure = { value: 40, basis: 'measured' as const, source: 's' };
   const offenders = ['L1', 'L2', 'L3', 'L4', 'L5', 'L6'];
-  const p = { program: 'L1', title: 't', workspaceId: null, leads: offenders, workers: 1, current: {}, previous: null, targets: [{ id: 'lead_share', decision: 'D-65', rule: 'r', state: 'breach', figure, offenders }] } as unknown as CrewProgramScore;
+  const p = { program: 'L1', title: 't', workspaceId: null, leads: offenders, workers: 1, current: null, previous: null, targets: [{ id: 'lead_share', decision: 'D-65', rule: 'r', state: 'breach', figure, offenders }] } as unknown as CrewProgramScore;
   assert.deepEqual(scoreShort(p).flags[0]!.offenders, ['L1', 'L2', 'L3', 'L4', 'L5']);
 });
 
