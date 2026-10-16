@@ -119,7 +119,10 @@ twice. `scripts/gate-job.sh <commit> [steps]` (T-37) runs `scripts/gate.sh` as a
   control-plane node, not the portal's node, no workspace pod), no service account token, gone an hour after it ends. A name per call
   (`claudepilot-gate-<sha>-<4 hex>`), so gates for different commits run side by side.
 - **The token** for `npm ci` (the private `@isnanme` packages) is a Secret named like the Job, made from `gh auth token` on stdin, deleted on
-  exit; the log is searched for it and masked if it is there.
+  exit; the log is searched for it and masked if it is there. Only the init container `fetch` gets it (T-401): it clones the commit and
+  fills npm's cache with `npm ci --ignore-scripts` in a throwaway copy, then checks that the token is in no file under `/tmp`. The `gate`
+  container has no token; `gate.sh`'s `npm ci` installs from that cache (`npm_config_prefer_offline`), so no install script, test or build
+  can read it.
 - **Steps:** `typecheck,web-build,server-suite` by default; fewer for a heavy check without the suite, e.g. `typecheck,web-build`.
 - **The verdict:** the Job ends with one `GATE-VERDICT: green` or `GATE-VERDICT: red: <why>` line from `scripts/gate-verdict.sh` (the same
   reading the local gate uses: every step at rc=0, the last suite summary at 0 failing and 0 timed out). The script prints the summary and
@@ -151,6 +154,29 @@ scripts/job-run.sh --list ; scripts/job-run.sh --stop --chat <session id>
 - **The code:** `--repo` and `--ref` default to the current folder's origin and HEAD (it must be on the remote). ClaudePilot comes from GitHub
   (the npm token for `@isnanme` in the Job's Secret), Konfersi from Gitea (git's credential helper gives the token; in the Job a credential helper
   reads it from the environment, never a URL). The Secret belongs to the Job and is deleted on exit; the streamed log is masked for the token.
+- **Credentials (T-401):** only the init container `fetch` has them. It clones (`--also` and `--against` too) and runs
+  `npm ci --ignore-scripts`; its HOME (git's credential helper, the user `.npmrc`) is a volume the command's container never mounts. Then it
+  checks no credential value is in `/tmp` (file names only; `EXIT 3` when one is). The `run` container has no Secret and a fresh HOME: it
+  prints the fetch's log, runs `npm rebuild` and the package's own install scripts (`preinstall` to `postprepare`), then your command. So
+  your command, the tests and every install script see no token, no helper and no user `.npmrc`. A command that itself needs a credential
+  (a push, a private fetch) does not work in a Job: do that in the workspace. `--against` with another lockfile installs offline from the
+  cache the fetch filled. The log line `credentials: used for the fetch only` says the check passed.
+  - **The npm token reaches npm only through a trusted userconfig** (`--userconfig`, in the fetch HOME, for `npm.pkg.github.com` alone). The
+    fetch unsets `NODE_AUTH_TOKEN` and puts the commit's own `.npmrc` aside while `npm ci` runs (it is back for the `run` container), so a `.npmrc`
+    of the commit under test (another registry, an auth line with `${NODE_AUTH_TOKEN}`) never sees the token. The `run` and `gate` containers
+    set `NODE_AUTH_TOKEN` defined and empty, because ClaudePilot's own `.npmrc` has that auth line and npm refuses an unset variable there.
+  - **The check fails closed** and runs after the fetch, over everything in `/tmp` including `fetch.log`: grep exit 0 = found (red), 1 = clean,
+    2 or more = the scan failed (red, code 3). On red the tree is deleted and the log holds only the file names, grep's own messages and the
+    verdict, never a matched line (the cluster log is raw, so nothing prints a log that matched). It also reads inside `.gz` and `.tgz` files;
+    one holding a value is deleted and the Job is red. **Limits:** other encodings are not found: zip, bz2, xz, zstd, base64, URL-encoding,
+    JSON escapes, and a compressed file without a `.gz`/`.tgz` name. The token is not printed by npm normally; this is a net, not a mask.
+  - **What changed in how the Job runs (scope of T-401, beyond the split):** npm's cache lives on `/tmp` and the fetch container fills it
+    (`npm ci --ignore-scripts` in a throwaway copy for the gate, in the checkout for job-run, and for `--against` when its lockfile differs); the
+    `run` and `gate` containers install from it (`prefer-offline`) with no credential. A **cache miss** (a package the fetch did not cache)
+    therefore makes that `npm ci` fail, and the result is red with a message (`... is red, never skipped`), never green. `job-run.sh` has a
+    second clock, `tw`: the start wait counts from when the fetch container stops running, because the clone and the install
+    (several minutes) now happen before the `run` container starts and are no longer part of "the Job did not start"; the Job's own deadline still
+    ends everything. It also reads an OOMKill of the init container, so a fetch killed at the memory limit says so.
 - **Caps:** `JOB_RUN_MAX` (3) Jobs at once cluster-wide, `JOB_RUN_MAX_PER_CHAT` (2) per chat (`PILOT_SESSION_ID`) and `JOB_RUN_MAX_PER_PROGRAM`
   (2) per program (claudepilot, event, konfersi; T-524). A Job over a cap is created suspended and waits in creation order ("queued behind K").
   Jobs carry the labels `job-run/chat`, `job-run/role` (`PILOT_AGENT`), `job-run/repo`, `job-run/program`.
