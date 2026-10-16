@@ -100,8 +100,8 @@ export interface HeaderSkip {
  */
 export function envFileValue(text: string, key: string): string | null {
   let found: string | null = null;
-  // A leading byte-order mark (an editor's save) must not hide the first key.
-  for (const raw of text.replace(/^﻿/, '').split(/\r?\n/)) {
+  for (const raw of text.split(/\r?\n/)) {
+    // trim() also removes a leading byte-order mark (an editor's save), so it does not hide the first key (pinned by a test).
     const line = raw.trim();
     if (!line || line.startsWith('#')) continue;
     const m = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$/.exec(line);
