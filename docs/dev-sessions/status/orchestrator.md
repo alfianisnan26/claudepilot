@@ -16,8 +16,9 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 ## IN FLIGHT (6 of 6, D-71)
   Lanes' ticket_comment refused on unassigned tickets (T-341, T-549, T-675): verdicts live in their replies + this file.
 - QA PERF 7e4879c7: reviews T-610 CHANGES; T-251 S2, T-681, T-325 S1, T-379 S2 APPROVE; T-549 S2 CHANGES -> T-739 (cost 7161); T-697 PASS WITH GAPS (b33f46ad; gaps T-733 7310);
-  now GATE batch 19 = 71a2317f (wip/main-71a2317, worktree premerge-b19: T-697 + T-574 S3 + pack) -> ff integration on GREEN.
-- QA UI 8b13bb5a: T-710, T-675, T-416 S1, T-341 (-> T-736 high), T-524 S3 APPROVE; pre-read S4 (7162; B1 additive ok); T-732 plan 7210; now VERIFY T-376 S4 5b095822 (reads Job b966dee9, own probes only).
+  gate b19 BLOCKED (gate-job.sh not in allow list); now blind review T-736 5f4a7e4d (no Job).
+- QA UI 8b13bb5a: T-710, T-675, T-416 S1, T-341 (-> T-736 high), T-524 S3 APPROVE; pre-read S4 (7162; B1 additive ok); T-732 plan 7210; T-376 S4 PASS WITH GAPS (1025f2a0; red 203-209ms; S4b: dist deletion, drop Vary
+  wrapper, 7318); now no-Job plan for S5 windowed rows.
 - QA BE 2 42e5408f: T-401 CHANGES (7103); T-426 S1e CHANGES (7121); probe plan 7147; review T-697 APPROVE (gaps T-733 7172); T-574 S3 PASS WITH GAPS (gaps T-733 7255; gate+merge with T-697); T-401 fix 0fb6ef62 PASS WITH GAPS (job 53a231a0) -> S2b; now VERIFY T-736 5f4a7e4d.
 - IMPL lane 65dd09f6 (sonnet, satria; 0d799c90 ended: T-376 S4 BLOCKED 5b095822, long task red 11/12 207-466ms, older page red 7/12,
   content-visibility reverted; -> QA UI as is, budgets -> coordinator T-376 7264) T-732 items 1-5 (plan 7210) on ticket/T-732-ci-focus-ring.
@@ -29,11 +30,11 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - 16:12 OWNER PRIORITY (coordinator, T-426 5538): T-401 then T-426 FIRST. T-401 gate GREEN gate-54ba328-6502; ff only on the person's ack.
 
 ## DECISIONS (binding)
+- 09:38 MERGES HELD: D-75 (lead runs no Jobs) vs gate-job.sh absent from the allow list (lanes refused). Batch 19 71a2317f
+  (T-697 + T-574 S3) waits; coordinator picks (a) a person adds the allow entry [default], (b) gate exempt, (c) hold (T-595 7316).
 - 09:05 T-731 before the T-426 fix (coordinator). Conflict with owner order T-401 -> T-426 named: T-426 merge waits the T-401 ack anyway; swap if owner says.
 - 07:45 D-75 (coordinator): one Job per commit (checks chained), never the same command twice on a commit, QA reads the builder's log;
   the LEAD RUNS NO JOBS (quick-check and gate go to a lane); idle QA gets no-Job work (reviews, browser). T-731 -> BE Infra after T-697.
-- 06:50 T-251 S2 exhausted source with a running turn is steered once and moves at the boundary (FR10a, PRD default); QA asks
-  whether the owner wants a move mid-turn: product choice, not a defect; changing it means FR10a + t255 together.
 - 03:55 Lead false claim corrected: T-524 6775 said job 4d5cb657 proved the S3 patch; its log shows the rule at creation. 6788; incident T-721.
 - 20:14 PUSHBACK T-657: T-259 (QA FAIL 1773), T-317 (live run not done), T-338 (no QA pass) closed against the evidence -> reopen
   proposed; lead can't (T-634).
@@ -44,7 +45,6 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   each ticket's worktree+branch. 16:25 (T-595 5552/5553): QA Perf may `git merge --ff-only` a base the lead pushed; lane-backend may NOT.
   An implementing lane needing a new base is ended and respawned as the same lane on a fresh branch from that base.
 - BINDING: the coordinator runs deploys; I start NO deploy.
-- 12:50 Coordinator: it builds T-557 itself (owner's ask); no T-557 slices from me; T-426 stays mine.
 - 13:20 D-66: quick-check (format, lint, named tests) before the gate. Workers cannot git merge: the lead merges base heads in (4852).
 - 11:15 D-65 (coordinator): implementers sonnet by default (opus only with a written why); small QA/review findings fixed in the same
   slice; full report on the ticket, the lead reads line 1 and opens it only on FAIL; ready features over chores.
