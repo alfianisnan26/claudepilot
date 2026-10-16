@@ -301,6 +301,25 @@ test('Bypass after a recovery: kept through the grant while the policy allows it
   }
 });
 
+test('T-416 S2c: a session ended before T-136 stored its ending (no ended_for) still gets Bypass back when its last Bypass record is "left, ended"', async () => {
+  const s = await liveSession();
+  try {
+    s.controller.controlTimeoutMs = 150;
+    policy(s, true);
+    const id = await inBypass(s);
+    await endSuspicious(s, id);
+    // The ending record is stored with the ending since T-136; an older row has none: the fallback reads the last Bypass record instead.
+    assert.deepEqual(s.controller.audit({ kind: 'bypass', sessionId: id }).map((a) => [a.kind, a.detail.why]).slice(0, 1), [['bypass.left', 'ended']], 'set up: the last Bypass record is "left, ended"');
+    s.store.db!.prepare('UPDATE chat_sessions SET ended_for = NULL WHERE id = ?').run(id);
+    const back = await answered(s, s.controller.recover(id, { confirm: true }));
+    assert.ok(lastStart(s).includes(FLAG), 'relaunched with the flag');
+    assert.equal(back.mode, 'bypassPermissions');
+    assert.equal(s.controller.audit({ kind: 'session.recover.done' })[0]!.detail.bypass, 'kept');
+  } finally {
+    await s.done();
+  }
+});
+
 test('the route: operate on the session (another user: 404); a person’s sign-in with by:agent is an agent; only a person’s confirm counts', async () => {
   const s = await liveSession();
   try {
