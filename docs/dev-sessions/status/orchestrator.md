@@ -3,10 +3,10 @@
 Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-10-15 DONE batches 1-7: see 4fbab374). Hand-overs: ab99b45, bb58413, 639202e.
 
 ## DONE
+- DEPLOY 191 LIVE (coordinator, 2026.10.16-1 from 12c68374 = batches <=18). T-404 CLOSED (live hook in managed 10-policy.json + D-60
+  refusal 7407). Live checks queued for the next free QA lane: T-472 (restarts/h via portal_status), T-591 (release note for 191).
 - MERGED 98cdfb55 (batch 18): T-524 S3b 23330c28 (QA Perf PASS WITH GAPS 6934), gate GREEN gate-1c0290c (actions.test flake = T-697).
-- MERGED bf61c5ee (batch 17): T-251 S2 9adfeee2, gate GREEN gate-5965287. T-251 all 5 reqs + gaps closed; lead can't close (T-634).
-- MERGED 92900150 (batch 16): T-710 8107098a (QA UI PASS WITH GAPS ae9b7dae; mutant caught 5b304d1c; 24 px desktop -> T-724);
-  gate GREEN gate-2d10963. T-710 unassigned: lead can't close (T-634), evidence here.
+- FOR THE COORDINATOR, batch sooner: the T-401 merge (security; waits the ack + gate door T-595 7316). Hold migration 383 (T-739 7471).
 
 ## IN FLIGHT (6 of 6, D-71)
   Lanes' ticket_comment refused on unassigned tickets (T-341, T-549, T-675): verdicts live in their replies + this file.
