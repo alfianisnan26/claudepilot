@@ -15,15 +15,17 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 
 ## IN FLIGHT (6 of 6, D-71)
   Lanes' ticket_comment refused on unassigned tickets (T-341, T-549, T-675): verdicts live in their replies + this file.
-- QA PERF 7e4879c7: plan T-733 7361 (S1-S7; order S4,S6,S2,S1,S3,S5,S7); now probes for QA T-731, run on BE Infra's fix head.
-- QA UI 8b13bb5a: plan T-524 S3c 7360 (T1-T4; live patch not forced = default); now blind RE-REVIEW T-401 S2b vs 7103.
-- QA BE 2 42e5408f: T-401 S2b PASS (job 74bad246; T-401 7383, ack re-asked w/ corrected text); now blind REVIEW T-731.
-- IMPL lane 65dd09f6 (sonnet, satria; 0d799c90 ended: T-376 S4 BLOCKED 5b095822, long task red 11/12 207-466ms, older page red 7/12,
-  content-visibility reverted; -> QA UI as is, budgets -> coordinator T-376 7264) T-732 items 1-5 (plan 7210) on ticket/T-732-ci-focus-ring.
-- BE INFRA lane b11ecab1 (sonnet): T-731 DONE 2cfbc7e9 (7378, job 44e77141 214 pass; lead read: F1 job-out/ log committed -> fix,
-  F2 reuse store forgeable -> name origin Job; lead can't comment T-731) -> T-426 S1e fix 7121 -> T-610 7053 -> T-524 S3c (plan 7360).
-- BACKEND lane 1261b4f3 (sonnet, satria; 5a4e9c2d ended: T-401 S2b DONE a4ad3052, report 7337, author 39/39 not verified, lead read diff)
-  T-736 S2 (7336) on ticket/T-736-rtk-guard -> T-723 (plan from QA UI) -> T-733 items.
+- QA PERF 7e4879c7: plan T-733 7361 (order S4,S6,S2,S1,S3,S5,S7); T-731 probes held for the CHANGES head; now blind REVIEW T-732.
+- QA UI 8b13bb5a: plan T-524 S3c 7360; REVIEW T-401 S2b APPROVE 7387 (7103 closed; N1 gz-in-node_modules needs a real
+  Job+gate, N2 -> T-567, N4 -> T-733, N5 closed: activeDeadlineSeconds); now QA T-732 c9a032f7.
+- QA BE 2 42e5408f: T-401 S2b PASS (job 74bad246; ack re-asked 7383); REVIEW T-731 CHANGES; now QA T-736 S2 98c78a63 (7395).
+- IMPL lane 2f4ee38f (sonnet; 65dd09f6 ended: T-732 DONE c9a032f7, items 1-4, job a4b3205b; item 5 rule file -> coordinator 7407)
+  T-376 S4b (7318) in ticket-t-376-s4 from 5b095822.
+- BE INFRA lane b11ecab1 (sonnet): T-731 2cfbc7e9 review CHANGES -> fixing: 4Gi back (CPU binds), reuse opt-in --reuse, key +image
+  +big, cleanup own files only, leak check fail closed, 4 mutants, job-out/ removed (lead can't comment T-731)
+  -> T-426 S1e fix 7121 -> T-610 7053 -> T-524 S3c (plan 7360).
+- BACKEND lane 4123bb21 (sonnet; 1261b4f3 ended: T-736 S2 DONE 98c78a63, 7395, job 1493e0be 20/20, 5 mutants)
+  T-723 (plan 7348) on ticket/T-723-audit-actor-tests from 12c68374 -> T-733 S4, S6 (7361).
 - HELD: T-426 S1e 2174eee1 QA PASS 6169, review CHANGES 7121 -> fix, re-QA, merge after T-401. T-578 51f6c153 review CHANGES 6168 -> owner.
   T-631 review CHANGES 5850: absolute-path entry (a) for the coordinator; F1 on job-run.sh -> T-635 (high).
 - 16:12 OWNER PRIORITY (coordinator, T-426 5538): T-401 then T-426 FIRST. T-401 gate GREEN gate-54ba328-6502; ff only on the person's ack.
