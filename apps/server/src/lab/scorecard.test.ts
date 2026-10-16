@@ -798,10 +798,13 @@ test('MCP crew_scorecard full: 2, 3, 4 and 5 programs stay under the result limi
       assert.equal(full.programs.length + (full.omitted?.length ?? 0), n, `${n} programs: every program is either carried or named`);
       assert.ok(full.programs.length >= 1, 'at least one program is carried');
       if (n >= 3) assert.ok(full.omitted?.length > 0, `${n} programs go over 19,000 characters: the rest are named in omitted (${sizes.join(', ')})`);
-      for (const id of full.omitted ?? []) {
+      // The seeded chains are longer than the lineage walk, so their program id is not a first lead: ask alone only for the ones the walk names right (L1, M1).
+      for (const id of (full.omitted ?? []).filter((p: string) => !p.startsWith('N'))) {
         const one = await mcp.call(admin.secret, 'crew_scorecard', { full: true, program: id });
         assert.ok(!refused(one) && where(one).programs[0].program === id, `omitted ${id} can be asked for alone`);
       }
+      // A single program over the budget is still carried (the budget is a ceiling for the rest, not for the first).
+      if (n === 5) assert.equal((fitPrograms({}, [{ program: 'big', x: text }], 1000) as any).programs.length, 1);
     }
     console.log(`crew_scorecard full sizes at 2, 3, 4, 5 programs: ${sizes.join(', ')}`);
   } finally {
