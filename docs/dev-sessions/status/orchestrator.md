@@ -8,26 +8,21 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - BATCH 22 ON INTEGRATION 0d521d67 (gate claudepilot-gate-0d521d6-7b1d GREEN): T-697, T-574 S3, T-731, r.txt drop, T-376 S4b,
   T-732, T-610 r3, T-739 B (mig 383), T-723 S3c. Coordinator told on T-731.
 - DEPLOY 233 LIVE (coordinator, portal 2026.10.16-2 from b2d0a3d9 = batch 22; b23 NOT in it). NO Releases/ note for it (T-591
-  still fails; told 8158). Live checks of b22 tickets -> QA UI; close each on LIVE PASS. Deploy 191 = batches <=18.
+  still fails; 8158). Live checks: 8 UNAVAILABLE (QA UI, no live read) -> coordinator 8192; none closed. Deploy 191 = b<=18.
+- READY FOR BATCH 24: T-611 S1b+S1i+S1c+S2 80ffedea (QA S2 PWG 8186, review APPROVE 8141, probes 16/17 job 24b85442 read by
+  lead 8187, only red C5e-ii = known gap -> S2b; probes stay OFF integration). T-426 S1i review APPROVE 8157.
+  Waiting QA: T-736 S3e 1cd5047d (39/39 job 99dfcc3a, 8180), T-675 R2b 5d38ab69 (two guards; job bedbcb05), T-781 S8.
 
 ## IN FLIGHT (6 of 6, D-71)
 - NONE gating. Lanes can't comment on unassigned tickets (T-341, T-549, T-675): verdicts in replies + this file.
-- QA PERF 8e8912fc (respawned perf-tester/sonnet; old 330855ba had no Write, ended; decision 8148). T-426 S1i PASS WITH GAPS 8109.
-  T-611 S1c FAIL 8111 classified 8140: 0 PRODUCT, 6 PROBE. Now fixes its probes on qa/T-611-probes 780ffa57 (48d3230f + S2
-  80ffedea, lead merge) + C5e, one Job. Bash denied once (combined cmd) -> told Edit + plain git (8164: C5e-i fail-closed kept,
-  probe fixed; C5e-ii known red = product gap -> S2b).
-- QA UI 8b13bb5a (no Write tool, 7939/7944/7947): REVIEWS APPROVE: T-781 S6 8006, T-611 S1b 8018, T-781 S7 8049.
-  QA T-675 R2 PASS WITH GAPS (mutant `await #restarting` removed at controller.ts:2330 survives) -> R2b to Impl.
-  REVIEW T-611 S1c APPROVE 8095. QA T-416 S2 PASS WITH GAPS 8131 (gates red; GAP: workspace stop/person end/restart leave a stale
-  kept record -> Bypass could return; HELD for S2b). REVIEW T-736 S3c+S3d APPROVE 8137. REVIEW T-611 S2 APPROVE 8141; T-426 S1i APPROVE 8157. Now LIVE checks deploy 233.
-- QA BE 2 42e5408f (no Write tool, 7946): QA T-733 1afaf8a6 PASS 8007 (S1 S4 S6; S5 not delivered). QA T-781 S6 PASS WITH GAPS
-  8054; S7 PASS WITH GAPS 8083 (spaced clip probes 5/5: no leak). QA T-736 S3d PASS WITH GAPS 8130 (write list misses touch/sed -i/...;
-  S3c QA 7875/7907). Now QA T-611 S2 80ffedea.
-- IMPL 7cc1b2f5: T-736 S3d DONE 41daac15 8078 (job 68d3cd21 38/0, M5 M7 red). Now T-675 R2b on ticket/T-675-r2b from b4024e17
-  (kill the controller.ts:2330 mutant or prove the real guard) -> T-772 S2.
-- BE INFRA fad38191: T-611 S1c DONE 44c293ea 8052 (80/0, proves the S1i merge ab91adf9). T-611 S2 DONE 80ffedea 8129
-  (JOB_RUN_AVOID_NODES opt-in; 83/0, M1 M2 red). Now T-736 S3e (widen write list) from 41daac15 -> respawn on T-611 S2b from 80ffedea (8141 newline + tests)
-  -> T-524 S3c + T-733 S5 -> T-612 S1.
+- QA PERF 8e8912fc (perf-tester/sonnet, respawned for Write; 8148): now blind REVIEW T-736 S3e 41daac15..1cd5047d (read only).
+- QA UI 8b13bb5a (no Write): reviews/QA so far 8006 8018 8049 8095 8131 8137 8141 8157; live 233 UNAVAILABLE.
+  Now QA T-675 R2b 5d38ab69 (M1, M3, both).
+- QA BE 2 42e5408f (no Write): QA T-611 S2 PWG 8186. Now QA T-736 S3e 1cd5047d.
+- IMPL 46632d91 (respawned, sonnet; old 7cc1b2f5 ended after T-675 R2b DONE 5d38ab69): T-772 S2 on ticket/T-772-s2 from
+  1e1e0ba1 (7916 items 1-5 + 7599 sweep; QA plan 7963).
+- BE INFRA 16c2494f (respawned, sonnet; old fad38191 ended after T-736 S3e DONE 1cd5047d): T-611 S2b on ticket/T-611-s2b from
+  80ffedea (newline + non-ASCII refusal, C5e-ii log line, PLACEMENT avoid list, tests, docs) -> T-524 S3c + T-733 S5 -> T-612 S1.
 - BACKEND 3484bd4d: T-416 S2 DONE 8be917e6 (lead read: 'lost' takes the wake's lead gates; a person's stop not kept) -> QA UI.
   Now T-781 S8 (S5-3c dead line, in-flight assertion) from 8eeef663 -> T-416 S2b (stale kept record) -> T-537 (docs).
 - HELD: T-401 S2b a4ad3052 (QA PASS, review APPROVE 7387): a person's OK on the gate change (charter wall; 8023), then merge + gate.
