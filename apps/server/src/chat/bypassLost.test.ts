@@ -211,9 +211,13 @@ test('T-416 S2b: the Bypass restart supersedes the kept record, and the relaunch
   const s = await liveSession({}, true);
   try {
     const { lead } = await liveWithStaleKept(s);
-    s.store.db!.prepare('UPDATE chat_sessions SET bypass_capable = 0 WHERE id = ?').run(lead.id);
+    // The restart waits for a turn boundary: the message that relaunched it is taken as done, and the session is no longer capable.
+    s.store.db!.prepare("UPDATE chat_sessions SET bypass_capable = 0, state = 'idle' WHERE id = ?").run(lead.id);
     const asked = bypassAsks(s).length;
-    await s.controller.allowBypass(lead.id);
+    const tails = s.ws.tails.length;
+    const allowing = s.controller.allowBypass(lead.id);
+    await until(() => s.ws.tails.length > tails, 4000);
+    await allowing;
     assert.equal(s.controller.get(lead.id)!.process, 'live');
     assert.equal(s.controller.get(lead.id)!.mode, 'default');
     assert.equal(bypassAsks(s).length, asked, 'never asked to enter Bypass');
