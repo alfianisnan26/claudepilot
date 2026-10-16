@@ -1411,7 +1411,11 @@ test('T-611 C5: an unchanged answer, or a reading that fails at release, patches
     assert.equal(p.patches.length, 1, `${first} then ${second}: only the release: ${p.patches.join('\n')}`);
     assert.doesNotMatch(p.r.out, /placement changed while queued/);
   }
-  assert.match(moved(80, 'FAIL').w.log(), /decision=required-away queued=/, 'a failed second reading keeps the rule');
+  const failed = moved(80, 'FAIL').w.log();
+  assert.match(failed, /decision=required-away queued=/, 'a failed second reading keeps the rule');
+  assert.match(failed, /^=== JOB-RUN PLACEMENT node=control-plane at=release reading=failed kept=required-away pct=80 \(the create-time reading\)$/m, 'the log says the release reading failed');
+  assert.match(failed, /^=== JOB-RUN PLACEMENT node=\S+ pct=80 decision=required-away queued=/m, 'the last line keeps the create-time percentage, not unknown');
+  assert.doesNotMatch(failed, /pct=unknown/);
 });
 
 test('T-611 C5: a required rule that cannot be added stops the run (rc 2) without the release; a rule that cannot be dropped is only kept', () => {
@@ -1419,7 +1423,8 @@ test('T-611 C5: a required rule that cannot be added stops the run (rc 2) withou
   assert.equal(up.r.code, 2, up.r.out);
   assert.match(up.r.out, /went over its line while claudepilot-job-[0-9a-f]{8} waited, and its rule could not be added: run it again/);
   assert.ok(!up.patches.some((l) => l.includes('suspend')), 'the Job was never released');
-  assert.equal(up.w.state().jobs.length, 0, 'the suspended Job and its Secret are removed');
+  assert.equal(up.w.state().jobs.length, 0, 'the suspended Job is removed');
+  assert.deepEqual(up.w.state().secrets, {}, 'and its Secret is gone too (no credentials left behind)');
   assert.match(up.w.log(), /PLACEMENT node=control-plane at=release outcome=patch-failed/);
 
   const down = moved(80, 50, true);

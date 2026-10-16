@@ -391,9 +391,12 @@ done
 # suspended Job's affinity is patched first (a suspended Job's scheduling directives are mutable from Kubernetes 1.27; this cluster is 1.35), a merge
 # patch that touches only the required rule and keeps the preferred ones. A reading that fails changes nothing. A required rule that cannot be
 # added stops the run (the Job would land on a master over its line); a rule that cannot be dropped is only kept (harmless).
-was_why=$master_rule_why; was_rule=$master_rule
+was_why=$master_rule_why; was_rule=$master_rule; was_pct=$master_pct; was_known=$master_known
 placement
-if [ -z "$master_known" ]; then master_rule_why=$was_why; master_rule=$was_rule
+if [ -z "$master_known" ]; then
+  # The reading failed: the create-time decision, and its percentage, stand (and the log says so, so the last line is not read as "unknown").
+  master_rule_why=$was_why; master_rule=$was_rule; master_pct=$was_pct; master_known=$was_known
+  plog "=== JOB-RUN PLACEMENT node=control-plane at=release reading=failed kept=$([ -n "$was_why" ] && echo required-away || echo preferred) pct=${was_pct:-unknown} (the create-time reading)" >/dev/null
 elif [ "${was_why:+r}" != "${master_rule_why:+r}" ]; then
   if [ -n "$master_rule_why" ]; then aff='{"nodeSelectorTerms":[{"matchExpressions":[{"key":"node-role.kubernetes.io/control-plane","operator":"DoesNotExist"}]}]}'; else aff=null; fi
   if kubectl -n "$ns" patch job "$job" --type merge -p '{"spec":{"template":{"spec":{"affinity":{"nodeAffinity":{"requiredDuringSchedulingIgnoredDuringExecution":'"$aff"'}}}}}}' >/dev/null 2>&1; then
