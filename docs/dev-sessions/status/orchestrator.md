@@ -14,9 +14,9 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - QA PERF 7e4879c7: T-426 S1h PWG 7880 (-> S1i redact loop). REVIEW T-781 S5 CHANGES (7905 -> S7). REVIEW T-772 S1b
   CHANGES (2xl: false positive, no self-test -> S2, 7916). PROBES T-611 S1b 2a494942+8c9e58fc+9be66b11 (unrun). Now T-426 S1i probes.
 - QA UI 8b13bb5a: T-736 S3c PWG 7875 (-> S3d). REVIEW T-781 S3 APPROVE (F1' F2). REVIEW T-723 S3c APPROVE (7908 gaps).
-  QA T-772 S1b PWG 7909 (browser not run -> S2 QA). PLAN QA T-781 S6 7918. Now S6 probes in advance; runs the S6 QA.
+  QA T-772 S1b PWG 7909. PLAN QA T-781 S6 7918; probes BLOCKED (no Write/Edit tool, 7939; coordinator). Now REVIEW T-781 S6.
 - QA BE 2 42e5408f: QA T-781 S5 FAIL (F1: prod adapter index.ts has no interrupt; 7905). QA T-723 S3c PWG 7903 (39/0, m1 m3
-  killed, m2 broke the regex). Now T-736 C1 re-read, then a corrected T-723 m2 Job -> T-723 READY if KILLED.
+  killed). T-736 C1 holds 7907. T-723 m2 KILLED 7932 -> T-723 S3c PASS = READY. Now T-781 S6 probes (7939 list) + S6 QA.
 - T-781 (D-76) now assigned to the lead: verdicts posted 7905. S1-S5 built; S6 (QA FAIL F1) and S7 open.
 - IMPL lane 7cc1b2f5 (sonnet, satria; c959661f ended: T-772 S1b DONE 1e1e0ba1 7900). Now T-781 S6 (7905: a prod interrupt,
   b re-check, c redact before clip, d tests; D-76 first) -> T-781 S7 (F2 + S5 items) -> T-736 S3d -> T-772 S2 (7599 + 7916).
@@ -71,7 +71,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 1. T-401 fix (7103) + re-QA, then ack 4941 -> T-426 S1e -> T-379 S2 3f11b28 (PASS 4948, review 4938); deploys are the coordinator's.
 2. BATCH 20 BUILT wip/main-35f917a 35f917a9 (T-731 + r.txt drop, T-376 S4b, T-732, T-610 r3, pack a4c76eaa; worktree premerge-b20):
    waits a gate (T-731 7902, coordinator asked to merge it for ~13:20 deploy; default (a) coordinator gates it, then lead ff).
-   Then: T-739 B (mig 383 note), T-723 after S3c, batch 19 rebuilt, T-736 after S3d.
+   Then: T-739 B (mig 383 note), T-723 S3c fadee77e READY, batch 19 rebuilt, T-736 after S3d.
 3. T-675 (memory findings 4/5 + R2 test, Backend lane), T-574 S3 (6615), T-416 S2 (Bypass restore).
 4. RTK: T-340 (person/coordinator) -> T-341 merge -> T-306 item 3. 5. T-537. 6. T-513. 7. T-472 live re-check (needs portal_status), T-422, T-147, T-438, T-425, T-436, T-437, T-432, T-382, T-377, T-386, T-409, T-402, T-398,
    T-399, T-370 HOLD, T-371..T-374, T-363, T-451, T-470, T-507, T-508, T-512, T-520; T-404 open till deployed.
