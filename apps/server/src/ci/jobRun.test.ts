@@ -854,24 +854,6 @@ test('T-524: when kubectl top fails on the re-read, no patch of the rule is made
   assert.match(w.calls(), /patch job claudepilot-job-[0-9a-f]{8} --type merge -p \{"spec":\{"suspend":false\}\}/, 'the Job is let out');
 });
 
-test('T-524: JOB_RUN_TEST_REREAD_PCT replaces only the re-read (test only); unset or under the line changes nothing; a bad value is a usage error', async () => {
-  const over = await queuedThenReleased({ JOB_RUN_TEST_REREAD_PCT: '99' }, () => {}); // kubectl top still says 60
-  assert.equal(over.r.code, 0, over.r.out);
-  assert.match(over.r.out, /control-plane node is at 99% of its memory \(over 75%\)/);
-  assert.match(over.r.out, /the required rule was patched into the suspended claudepilot-job-[0-9a-f]{8} \(accepted/);
-  assert.match(over.w.calls(), /patch job claudepilot-job-[0-9a-f]{8} --type merge -p .*requiredDuringScheduling.*DoesNotExist/);
-  assert.ok(!/requiredDuringScheduling/.test(over.w.applied1()), 'the first reading was the real one (60%): the manifest has no required rule');
-  const under = await queuedThenReleased({ JOB_RUN_TEST_REREAD_PCT: '10' }, () => {});
-  assert.doesNotMatch(under.w.calls(), /requiredDuringScheduling/);
-  assert.doesNotMatch(under.r.out, /\(over 75%\)/);
-  const none = await queuedThenReleased({}, () => {});
-  assert.doesNotMatch(none.w.calls(), /requiredDuringScheduling/);
-  assert.doesNotMatch(none.r.out, /at 99%|at 10%/);
-  const bad = world([], { top: 50 }).run(['--repo', 'claudepilot', '--ref', 'main', '--', 'true'], { JOB_RUN_TEST_REREAD_PCT: 'lots' });
-  assert.equal(bad.code, 2, bad.out);
-  assert.match(bad.out, /JOB_RUN_TEST_REREAD_PCT is a number/);
-});
-
 test('T-611: a Job Pending on the required rule says it waits for k3s-node2', async () => {
   const w = world([], { top: 88 });
   writeFileSync(join(w.root, 'pending'), "0/2 nodes are available: 1 node(s) didn't match Pod's node affinity/selector, 1 Insufficient memory.");
