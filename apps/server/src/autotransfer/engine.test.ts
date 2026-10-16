@@ -3,12 +3,12 @@
 // off by default. Expected values are worked out by hand: Work at 92 % used is 8 % left, under the threshold of 10.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { AUTO_SETTING_KEYS as K, CHAT_FOLDER_UNTRUSTED, type NotifyEvent } from '@portal/contracts';
+import { AUTO_BOUNDS, AUTO_SETTING_KEYS as K, CHAT_FOLDER_UNTRUSTED, type NotifyEvent } from '@portal/contracts';
 import '../chat/trust.js'; // registers FOLDER_UNTRUSTED
 import { render } from '../notify/templates.js';
 import { PlatformAudit } from '../platform/audit.js';
 import { fakeOwner, freshStore } from '../notify/testkit.js';
-import { AutoTransferEngine } from './engine.js';
+import { AutoTransferEngine, CONTINUE_RETRY_MS, CONTINUE_TRIES } from './engine.js';
 import { AutoStore } from './store.js';
 import { MoveChat, T0, at, chatSession, fakeClock, fakeUsage, settingsMap, usage, win } from './testkit.js';
 
@@ -715,6 +715,14 @@ test('T-781: a second evaluation while the stop still waits does not stop or mov
   }
   assert.equal(stops, 1, 'one stop');
   assert.deepEqual(r.chat.moves, [{ id: 's1', to: 'home', handoff: 'skip' }], 'one move');
+});
+
+test('T-781 S8c: the minimum pause between moves (its default and its lowest value) stays longer than the continuation retry window', () => {
+  // `#continue` cancels an older retry timer only as a guard: it relies on the next move being further away than the last retry of the
+  // previous one, so no two continuation timers of one chat overlap. Shorten the pause to the window or below and that guard needs a test.
+  const windowMin = ((CONTINUE_TRIES - 1) * CONTINUE_RETRY_MS) / 60_000;
+  assert.ok(AUTO_BOUNDS.minPauseMin.default > windowMin, `default pause ${AUTO_BOUNDS.minPauseMin.default} min is over the retry window ${windowMin} min`);
+  assert.ok(AUTO_BOUNDS.minPauseMin.min > windowMin, `lowest pause ${AUTO_BOUNDS.minPauseMin.min} min is over the retry window ${windowMin} min`);
 });
 
 test('T-781: a dry run stops nothing, even for a stuck exhausted chat', async () => {
