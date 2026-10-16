@@ -2915,6 +2915,37 @@ test('usage (T-610): a process resumed with --resume carries Claude Code’s run
   }
 });
 
+test('usage (T-610): a restart whose tokens count again from zero but whose cost total is carried over books the change in cost, not the carried total', async () => {
+  const s = await liveSession();
+  try {
+    const M = 'claude-opus-5-5';
+    const turn = async (tail: { push(x: string): void }, total: number, input: number) => {
+      const modelUsage = { [M]: { inputTokens: input, outputTokens: 1, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, costUSD: total } };
+      tail.push(line({ type: 'result', subtype: 'success', total_cost_usd: total, duration_ms: 10, usage: { input_tokens: 1, output_tokens: 1 }, modelUsage, is_error: false, session_id: s.id }));
+      tail.push(ok((await s.take('get_usage')).id, USAGE_API_KEY));
+    };
+    s.tail.push(init(s.id));
+    await until(() => s.controller.history(s.id).some((e) => e.text === 'Ready'));
+    await s.answering(sleep(30));
+    await turn(s.tail, 96, 900_000);
+    await until(() => s.controller.history(s.id).filter((e) => e.kind === 'result').length === 1);
+    await vanish(s);
+    await s.answering(s.controller.control(s.id, 'resume'));
+    s.ws.tails[1]!.push(init(s.id));
+    await until(() => s.controller.history(s.id).filter((e) => e.text === 'Ready').length >= 1);
+    await s.answering(sleep(30));
+    // Tokens count from zero again (50 < 900000), the cost total is the carried 96.2.
+    await turn(s.ws.tails[1]!, 96.2, 50);
+    await until(() => s.controller.history(s.id).filter((e) => e.kind === 'result').length === 2);
+    const rows = s.store.db!.prepare('SELECT cost_usd AS c, input_tokens AS i FROM chat_usage ORDER BY id').all() as { c: number; i: number }[];
+    assert.equal(rows.length, 2);
+    assert.ok(Math.abs(rows[1]!.c - 0.2) < 1e-9, `the cost change, not the carried total: ${rows[1]!.c}`);
+    assert.equal(rows[1]!.i, 50, 'the tokens that started again are the turn’s');
+  } finally {
+    await s.done();
+  }
+});
+
 test('usage metrics: each turn is stored per model from the change in the running totals, sub-agents included, and charts add them up', async () => {
   const s = await liveSession();
   try {

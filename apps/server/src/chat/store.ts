@@ -31,6 +31,7 @@ import { fileRefs } from './artifacts/records.js';
 import { lineageOf, type Lineage } from './lineage.js';
 import { readEnding } from './integrity.js';
 import { redact, redactMaybe } from './redact.js';
+import { COUNTED_USAGE } from './usageDelta.js';
 
 /**
  * The folder a session runs in: its stored folder made absolute (from the home folder) and tidied, or
@@ -801,8 +802,8 @@ export class ChatStore {
       cache_read_tokens AS cacheRead, cache_write_tokens AS cacheWrite, cost_usd AS costUsd, requests, agents, duration_ms AS durationMs`;
     return (
       claudeId
-        ? this.#db().prepare(`SELECT ${cols} FROM chat_usage WHERE at_ms >= ? AND claude_id = ? ORDER BY at_ms`).all(fromMs, claudeId)
-        : this.#db().prepare(`SELECT ${cols} FROM chat_usage WHERE at_ms >= ? ORDER BY at_ms`).all(fromMs)
+        ? this.#db().prepare(`SELECT ${cols} FROM chat_usage WHERE at_ms >= ? AND claude_id = ? AND ${COUNTED_USAGE} ORDER BY at_ms`).all(fromMs, claudeId)
+        : this.#db().prepare(`SELECT ${cols} FROM chat_usage WHERE at_ms >= ? AND ${COUNTED_USAGE} ORDER BY at_ms`).all(fromMs)
     ) as unknown as UsageRecord[];
   }
 

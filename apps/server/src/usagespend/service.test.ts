@@ -383,6 +383,26 @@ test('a request far above the median, and a quarter hour far above the usual, ar
   }
 });
 
+test('a row marked suspect (T-610: a running total booked as one request) is in no sum, no baseline and no spike, and stays in the table', async () => {
+  const h = await spendHarness();
+  try {
+    h.seed.claude('c1', 'docker/api', 'Kresna');
+    for (let i = 1; i <= 20; i++) h.seed.usage({ atMs: NOW - 2 * DAY + i * HOUR, session: 'OLD', costUsd: i / 10 });
+    h.clock.t = NOW;
+    h.seed.session('S', { claudeId: 'c1', title: 'Big one' });
+    // A $96.31 "request" that was a carried total, marked suspect: the row is written, the module is told, and nothing trips.
+    h.seed.usage({ atMs: NOW, session: 'S', costUsd: 96.31, kind: 'suspect' });
+    h.spend.onTurn({ sessionId: 'S', workspaceId: 'docker/api', claudeId: 'c1', atMs: NOW }, [{ costUsd: 0 }]);
+    assert.equal(h.spend.spikes('1d').events.length, 0);
+    assert.equal(h.spend.attribution({ by: 'session', range: '1d' }).totals.costUsd, 0, 'attribution leaves it out');
+    assert.equal(h.store.requestCosts('c1', NOW - 3 * DAY, NOW + MIN).length, 20, 'and so does the baseline of requests');
+    assert.equal(h.store.usageRows(NOW - DAY, NOW + MIN).length, 0, 'and the rows the scorecard reads');
+    assert.equal((h.db.prepare('SELECT COUNT(*) AS n FROM chat_usage WHERE kind = ?').get('suspect') as { n: number }).n, 1, 'the row is kept as evidence');
+  } finally {
+    h.done();
+  }
+});
+
 // T-312: the orchestrator's chain split on 2026-10-13 (attribution.test.ts has the same ids): O1 fe3df8bc -> O2 fdb140be -> O3 5c9fcb5f.
 const chainId = (prefix: string) => `${prefix}-0000-4000-8000-${prefix}0000`;
 const [O1, O2, O3, K1] = [chainId('fe3df8bc'), chainId('fdb140be'), chainId('5c9fcb5f'), chainId('541948a5')];

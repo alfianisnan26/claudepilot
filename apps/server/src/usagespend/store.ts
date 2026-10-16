@@ -6,6 +6,7 @@
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
 import type { BudgetMode, BudgetPeriod, BudgetScope, BudgetScopeKind, ChatSessionState, ChatUsageTotals, SpendAuditEntry, SpikeEvidence, SpikeKind, UsageAlertLevel } from '@portal/contracts';
 import type { Store } from '../store/store.js';
+import { COUNTED_USAGE as COUNTED } from '../chat/usageDelta.js';
 import { OWNER_ACTOR } from './actor.js';
 import { zeroTotals, type PersonaRecord, type SessionInfo, type UsageRow } from './model.js';
 
@@ -175,7 +176,7 @@ export class SpendStore {
   usageRows(fromMs: number, toMs: number, f: { claudeId?: string; workspaceId?: string; sessionIds?: ReadonlySet<string> } = {}): UsageRow[] {
     return this.#read<UsageRow[]>([], (db) => {
       const defaults = this.defaultClaudes();
-      const where = ['at_ms >= ?', 'at_ms < ?'];
+      const where = ['at_ms >= ?', 'at_ms < ?', COUNTED];
       const args: SQLInputValue[] = [fromMs, toMs];
       if (f.workspaceId) (where.push('workspace_id = ?'), args.push(f.workspaceId));
       if (f.claudeId) {
@@ -234,7 +235,7 @@ export class SpendStore {
         .prepare(
           `SELECT COALESCE(SUM(cost_usd), 0) AS usd, COALESCE(SUM(input_tokens), 0) AS i, COALESCE(SUM(output_tokens), 0) AS o, COALESCE(SUM(cache_read_tokens), 0) AS cr,
                   COALESCE(SUM(cache_write_tokens), 0) AS cw, COALESCE(SUM(requests), 0) AS n, COALESCE(SUM(agents), 0) AS a
-           FROM chat_usage WHERE at_ms >= ? AND at_ms < ? AND ${s.sql}`,
+           FROM chat_usage WHERE at_ms >= ? AND at_ms < ? AND ${COUNTED} AND ${s.sql}`,
         )
         .get(fromMs, toMs, ...s.args) as unknown as { usd: number; i: number; o: number; cr: number; cw: number; n: number; a: number };
       return { costUsd: r.usd, input: r.i, output: r.o, cacheRead: r.cr, cacheWrite: r.cw, requests: r.n, agents: r.a };
@@ -246,7 +247,7 @@ export class SpendStore {
     return this.#read({ requests: 0, costUsd: 0 }, (db) => {
       const ids = sessionIds.slice(0, CHUNK);
       const r = db
-        .prepare(`SELECT COALESCE(SUM(requests), 0) AS n, COALESCE(SUM(cost_usd), 0) AS usd FROM chat_usage WHERE session_id IN ${inList(ids.length)} AND at_ms > ? AND at_ms <= ?`)
+        .prepare(`SELECT COALESCE(SUM(requests), 0) AS n, COALESCE(SUM(cost_usd), 0) AS usd FROM chat_usage WHERE session_id IN ${inList(ids.length)} AND at_ms > ? AND at_ms <= ? AND ${COUNTED}`)
         .get(...ids, fromMs, toMs) as unknown as { n: number; usd: number };
       return { requests: r.n, costUsd: r.usd };
     });
@@ -256,7 +257,7 @@ export class SpendStore {
   claudeWindow(claudeId: string, fromMs: number, toMs: number): { costUsd: number; bySession: { sessionId: string; costUsd: number }[] } {
     return this.#read<{ costUsd: number; bySession: { sessionId: string; costUsd: number }[] }>({ costUsd: 0, bySession: [] }, (db) => {
       const s = this.#scope({ kind: 'claude', id: claudeId }, this.defaultClaudes());
-      const rows = db.prepare(`SELECT session_id, SUM(cost_usd) AS usd FROM chat_usage WHERE at_ms >= ? AND at_ms < ? AND ${s.sql} GROUP BY session_id ORDER BY usd DESC`).all(fromMs, toMs, ...s.args) as unknown as { session_id: string; usd: number }[];
+      const rows = db.prepare(`SELECT session_id, SUM(cost_usd) AS usd FROM chat_usage WHERE at_ms >= ? AND at_ms < ? AND ${COUNTED} AND ${s.sql} GROUP BY session_id ORDER BY usd DESC`).all(fromMs, toMs, ...s.args) as unknown as { session_id: string; usd: number }[];
       const total = rows.reduce((t, r) => t + r.usd, 0);
       return { costUsd: total, bySession: rows.map((r) => ({ sessionId: r.session_id, costUsd: r.usd })) };
     });
@@ -269,7 +270,7 @@ export class SpendStore {
       const rows = db
         .prepare(
           `SELECT CAST((? - 1 - at_ms) / ? AS INTEGER) AS slot, SUM(cost_usd) AS usd FROM chat_usage
-           WHERE at_ms >= ? AND at_ms < ? AND ${s.sql} GROUP BY slot HAVING SUM(cost_usd) > 0`,
+           WHERE at_ms >= ? AND at_ms < ? AND ${COUNTED} AND ${s.sql} GROUP BY slot HAVING SUM(cost_usd) > 0`,
         )
         .all(windowStart, periodMs, fromMs, windowStart, ...s.args) as unknown as { usd: number }[];
       return rows.map((r) => r.usd);
@@ -281,7 +282,7 @@ export class SpendStore {
     return this.#read<number[]>([], (db) => {
       const s = this.#scope({ kind: 'claude', id: claudeId }, this.defaultClaudes());
       const rows = db
-        .prepare(`SELECT SUM(cost_usd) AS usd FROM chat_usage WHERE at_ms >= ? AND at_ms < ? AND ${s.sql} GROUP BY session_id, at_ms HAVING SUM(cost_usd) > 0`)
+        .prepare(`SELECT SUM(cost_usd) AS usd FROM chat_usage WHERE at_ms >= ? AND at_ms < ? AND ${COUNTED} AND ${s.sql} GROUP BY session_id, at_ms HAVING SUM(cost_usd) > 0`)
         .all(fromMs, toMs, ...s.args) as unknown as { usd: number }[];
       return rows.map((r) => r.usd);
     });
