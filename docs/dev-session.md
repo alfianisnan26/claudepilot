@@ -203,6 +203,20 @@ scripts/job-run.sh --list ; scripts/job-run.sh --stop --chat <session id>
 - **Caps:** `JOB_RUN_MAX` (3) Jobs at once cluster-wide, `JOB_RUN_MAX_PER_CHAT` (2) per chat (`PILOT_SESSION_ID`) and `JOB_RUN_MAX_PER_PROGRAM`
   (2) per program (claudepilot, event, konfersi; T-524). A Job over a cap is created suspended and waits in creation order ("queued behind K").
   Jobs carry the labels `job-run/chat`, `job-run/role` (`PILOT_AGENT`), `job-run/repo`, `job-run/program`.
+- **Placement (T-611):** the scheduler counts memory requests, but the control-plane node's own pods use far more for real. Before it creates a
+  Job, `job-run.sh` reads that node's real memory (`kubectl top nodes`). The test is on the node's use PLUS the Job's expected peak (use x pct /
+  used gives allocatable, no new verb): `JOB_RUN_EXPECTED_PEAK_MI` (default 2300 Mi, the measured p99 of Job peaks, 2270 Mi in the T-731 note;
+  no run in the 878 logs of 2026-10-16 reached 3000 Mi; at most 6 digits) and 8192 Mi for `--big` (a rerun after an OOM kill, so unknown: its
+  whole limit). Over `JOB_RUN_MASTER_MAX_PCT` (75, at most 3 digits) the Job gets a REQUIRED rule away from the control plane and waits for
+  k3s-node2 or for room ("placement:" line, and a Pending line that says so; a Job that never starts says "run it again", since the decision is
+  taken once, when the Job is created). A master at 74% therefore takes no 4 GiB Job (74% + 4 GiB is about 100%). The line is exact: use plus peak
+  AT the line stays, the projection printed is rounded up. An odd bytes column falls back to the percentage alone; under the line, or when the
+  metrics fail, only the preferred rules apply. Numbers are read in base 10 (`08` is eight). The decision, the Pending wait, the node it ran on,
+  and a Job that never started are also lines in the Job's log (`/tmp/job-run-<job>.log`; the `job-run:` lines go to the caller only):
+  `=== JOB-RUN PLACEMENT node=control-plane pct=... projected=... decision=required-away|preferred|preferred-metrics-unavailable [reason=over|headroom]`,
+  `... pending=affinity|memory|other ...`, and a last one with the node (`node=none ... outcome=did-not-start` when it never started).
+  A Secret that cannot be created ends the run (rc 2) with `kubectl exit N, category: <fixed>` and a `=== JOB-RUN SECRET-FAILED` line; kubectl's
+  own text is never shown or logged.
 - **Memory (T-524):** requested = limited, so the scheduler places a Job only where all of it fits (2Gi requested with 8Gi allowed let a
   4.1 GB Event Job take k3s-master, the 15 GB control-plane node that also runs the API server, to 92%, and the portal answered 503).
   4Gi by default with `/tmp` at most 2Gi; `--big` gives 8Gi with `/tmp` 4Gi (only k3s-node2 has that much free). The whole server suite peaked
