@@ -12,11 +12,12 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   (job-out/gate-033f0e2.log); comments 6244-6249. Deploy = coordinator's.
 - MERGED ff 1a4a7933 (batch 7): T-633 (6283) + T-638 (6284, CLOSED); gate GREEN 7d87d90 (claudepilot-gate-7d87d90-b744).
 - MERGED ff 38d6d3fb (batch 8b): T-325 S1+S1b+S1c (QA Perf 6357, migration 785 read); gate GREEN e5d2de3. Open for S3 (person).
+- MERGED ff 7ff6561d (batch 9): T-416 S1-S1e (QA Perf 6420); gate GREEN 1803cf2 + re-gate 15aece0 (6498). Open: S2, T-675.
+  Flake src/repos/actions.test.ts timer -> T-697 (new).
 - T-636 CLOSED done on QA PASS WITH GAPS 5962 (built by the coordinator, ad9f7ad8). T-576 CLOSED on QA UI PASS WITH GAPS 6268; 40 px -> T-681.
 
 ## IN FLIGHT (6 of 6, D-71)
   QA Perf's ticket_comment refused on unassigned tickets: lead posts its verdicts.
-- BATCH 9 wip/main-1803cf2 = T-416 S1-S1e (QA Perf PASS WITH GAPS 6420; R2 throw-path test -> T-675; no migration/authz files): gate GREEN 1803cf2; integration gained up.sh -> merged in, RE-GATE 15aece0 running.
 - T-574: batch 8 gate RED (sessionStartParent.test.ts:71, family workers not an array; 6396) -> BACKEND lane 06e9ff5c (sonnet,
   respawned; 8962fc38 ended) on ticket/T-574-s2 from 124ca45f: keep the array, cap/cut tests, whole src/chat + portalmcp in a Job.
 - T-633 S2 0a5b686a DONE (6400; G3 waits on the timer, H1/H2 tests; x20 under load 0 fails) -> QA Perf delta (+ whole src/chat).
