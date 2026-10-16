@@ -13,12 +13,12 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 
 ## IN FLIGHT (6 of 6, D-71)
   Lanes' ticket_comment refused on unassigned tickets (T-341, T-549, T-675): verdicts live in their replies + this file.
-- QA PERF 7e4879c7: plan T-733 7361 (order S4,S6,S2,S1,S3,S5,S7); T-731 probes held for the CHANGES head; now blind REVIEW T-732.
+- QA PERF 7e4879c7: plan T-733 7361; REVIEW T-732 APPROVE 7417 (3 minors -> T-733); T-731 probes held; now QA T-376 S4b 103520e7.
 - QA UI 8b13bb5a: plan T-524 S3c 7360; REVIEW T-401 S2b APPROVE 7387 (7103 closed; N1 gz-in-node_modules needs a real
   Job+gate, N2 -> T-567, N4 -> T-733, N5 closed: activeDeadlineSeconds); now QA T-732 c9a032f7.
 - QA BE 2 42e5408f: T-401 S2b PASS (job 74bad246; ack re-asked 7383); REVIEW T-731 CHANGES; now QA T-736 S2 98c78a63 (7395).
-- IMPL lane 2f4ee38f (sonnet; 65dd09f6 ended: T-732 DONE c9a032f7, items 1-4, job a4b3205b; item 5 rule file -> coordinator 7407)
-  T-376 S4b (7318) in ticket-t-376-s4 from 5b095822.
+- IMPL lane fce0c981 (sonnet; 2f4ee38f ended: T-376 S4b DONE 103520e7, 7436, job 92c6f13b, no mutants; 65dd09f6: T-732 DONE
+  c9a032f7, item 5 -> coordinator 7407) T-739 B (plan 7349, index migration: lead reads) on ticket/T-739-scorecard-index from c4cee694.
 - BE INFRA lane b11ecab1 (sonnet): T-731 2cfbc7e9 review CHANGES -> fixing: 4Gi back (CPU binds), reuse opt-in --reuse, key +image
   +big, cleanup own files only, leak check fail closed, 4 mutants, job-out/ removed (lead can't comment T-731)
   -> T-426 S1e fix 7121 -> T-610 7053 -> T-524 S3c (plan 7360).
