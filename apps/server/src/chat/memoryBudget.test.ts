@@ -5,9 +5,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { AppError } from '@isnanme/core';
+import { KEEPGOING_ACTOR } from '@portal/contracts';
+import { keepGoingChatPort } from '../keepgoing/index.js';
 import { parseMemoryProbe, type MemoryReading } from '../workspaces/memory.js';
 import { MEMORY_BUDGET, MEMORY_HEADROOM_BYTES, SESSION_MEMORY_ESTIMATE_BYTES, WorkspaceMemory } from './memory.js';
-import { ChatStore } from './store.js';
+import { AUDIT_ACTOR_MAX, ChatStore } from './store.js';
 import { firstTurn, liveSession, sleep, until, vanish } from './testkit.js';
 
 const GiB = 1024 ** 3;
@@ -557,6 +559,181 @@ test('T-675 (T-416 QA R2): a restart of an asleep session whose check passed but
     await until(() => s.controller.get(made.id)?.process === 'live', 4000);
     assert.equal(s.controller.audit({ kind: 'memory.refused' }).length, 0, 'no hold left behind');
     await sleep(300); // the ended session's own follow-up work settles before the store closes
+  } finally {
+    await s.done();
+  }
+});
+
+/* ---------- T-723: which actor a memory.refused row names, per way of waking ---------- */
+
+const asleepShort = async () => {
+  const s = await liveSession({ idleSleepMs: 200 }, true);
+  await until(() => s.controller.get(s.id)!.process === 'asleep', 4000);
+  s.controller.memory = budget(ONE_FITS + 1).memory;
+  return s;
+};
+const actorsOf = (s: Awaited<ReturnType<typeof liveSession>>) => s.controller.audit({ kind: 'memory.refused', sessionId: s.id }).map((a) => a.actor);
+
+test('T-723 #1: a restart of an asleep session names who asked: `ui` by default, `portal` for the portal’s own restart', async () => {
+  const s = await asleepShort();
+  try {
+    await assert.rejects(s.controller.restart(s.id), isBudget);
+    assert.deepEqual(actorsOf(s), ['ui']);
+    await assert.rejects(s.controller.restart(s.id, { actor: 'portal' }), isBudget);
+    assert.deepEqual([...actorsOf(s)].sort(), ['portal', 'ui']);
+  } finally {
+    await s.done();
+  }
+});
+
+for (const [op, args] of [
+  ['model', { model: 'sonnet' }],
+  ['effort', { effort: 'high' }],
+  ['ultracode', { ultracode: true }],
+  ['mode', { mode: 'plan' }],
+] as const) {
+  test(`T-723 #6/#7: control ${op} on an asleep session refused for memory names the actor that asked`, async () => {
+    const s = await asleepShort();
+    try {
+      await assert.rejects(s.controller.control(s.id, op, args, { actor: 'ticket:T-12' }), isBudget, `${op} with an actor`);
+      assert.deepEqual(actorsOf(s), ['ticket:T-12'], `${op}: the row names the actor`);
+    } finally {
+      await s.done();
+    }
+  });
+}
+
+test('T-723 #2: models of an asleep session refused for memory names the actor that asked', async () => {
+  const s = await asleepShort();
+  try {
+    await assert.rejects(s.controller.models(s.id, { actor: 'ui' }), isBudget);
+    assert.deepEqual(actorsOf(s), ['ui']);
+  } finally {
+    await s.done();
+  }
+});
+
+/** A second session, asleep, with the Bypass policy open and the re-check fresh; memory then short. Only the audited actor is under test. */
+const asleepSecond = async (optIn: boolean) => {
+  const s = await liveSession({ idleSleepMs: 200 }, true);
+  s.controller.bypassAllowed = () => true;
+  s.controller.reauth = { fresh: (token) => token === 'tok' };
+  const b = await s.controller.create({ workspaceId: 'docker/ws1' }, optIn ? { bypassOptIn: true } : {});
+  await until(() => s.controller.get(b.id)?.process === 'asleep', 6000);
+  s.controller.memory = budget(ONE_FITS + 1).memory;
+  return { s, id: b.id };
+};
+const actorsOfId = (s: Awaited<ReturnType<typeof liveSession>>, id: string) => s.controller.audit({ kind: 'memory.refused', sessionId: id }).map((a) => a.actor);
+
+test('T-723 #3: enterBypass of an asleep capable session refused for memory names the actor that asked; the gate itself is unchanged', async () => {
+  const { s, id } = await asleepSecond(true);
+  try {
+    await assert.rejects(s.controller.enterBypass(id, { acknowledged: true, sessionToken: 'tok', actor: 'ui' }), isBudget);
+    assert.deepEqual(actorsOfId(s, id), ['ui']);
+    assert.notEqual(s.controller.get(id)!.mode, 'bypassPermissions', 'a refusal for memory never enters Bypass');
+  } finally {
+    await s.done();
+  }
+});
+
+test('T-723 #4: allowBypass of an asleep session refused for memory names the actor that asked', async () => {
+  const { s, id } = await asleepSecond(false);
+  try {
+    await assert.rejects(s.controller.allowBypass(id, { actor: 'ui' }), isBudget);
+    assert.deepEqual(actorsOfId(s, id), ['ui']);
+  } finally {
+    await s.done();
+  }
+});
+
+test('T-723 G1: a control with no actor on an asleep session writes `portal`, not a person', async () => {
+  const s = await asleepShort();
+  try {
+    await assert.rejects(s.controller.control(s.id, 'model', { model: 'sonnet' }), isBudget);
+    await assert.rejects(s.controller.control(s.id, 'mode', { mode: 'plan' }), isBudget);
+    assert.deepEqual(actorsOf(s), ['portal', 'portal']);
+  } finally {
+    await s.done();
+  }
+});
+
+test('T-723 #8: a queued start refused for memory names who started it (`started_by`), not `portal`', async () => {
+  const s = await liveSession();
+  try {
+    const caps = queueing(s);
+    const b = budget(ONE_FITS);
+    s.controller.memory = b.memory;
+    const q = await s.controller.create({ workspaceId: 'docker/ws1' }, { actor: 'ticket:T-12' });
+    assert.ok(q.slotWait, 'q waits for a slot');
+    b.set(ONE_FITS + 1);
+    caps.perWorkspace = 10;
+    await until(() => s.controller.get(q.id)!.state === 'interrupted', 4000);
+    assert.deepEqual(actorsOfId(s, q.id), ['ticket:T-12']);
+  } finally {
+    await s.done();
+  }
+});
+
+test('T-723 #8 (F3): a queued start with no recorded starter is a system start: the refusal names `portal`', async () => {
+  const s = await liveSession();
+  try {
+    const caps = queueing(s);
+    const b = budget(ONE_FITS);
+    s.controller.memory = b.memory;
+    const q = await s.controller.create({ workspaceId: 'docker/ws1' });
+    assert.ok(q.slotWait, 'q waits for a slot');
+    s.store.db!.prepare('UPDATE chat_sessions SET started_by = NULL WHERE id = ?').run(q.id);
+    b.set(ONE_FITS + 1);
+    caps.perWorkspace = 10;
+    await until(() => s.controller.get(q.id)!.state === 'interrupted', 4000);
+    assert.deepEqual(actorsOfId(s, q.id), ['portal']);
+  } finally {
+    await s.done();
+  }
+});
+
+test('T-723: Keep going’s resume of an asleep session names its own actor, not `ui`', async () => {
+  const s = await asleepShort();
+  try {
+    await assert.rejects(keepGoingChatPort(s.controller)!.resume(s.id), isBudget);
+    assert.deepEqual(actorsOf(s), [KEEPGOING_ACTOR]);
+  } finally {
+    await s.done();
+  }
+});
+
+test('T-723 G2: an audit row keeps the actor on one line and cut: control characters and newlines become a space', async () => {
+  const s = await liveSession();
+  try {
+    const chat = new ChatStore(s.store);
+    chat.addAudit({ severity: 'info', kind: 'test.actor', sessionId: s.id, actor: `ui\nforged: bypass.entered\u0007\r\n${'x'.repeat(500)}` });
+    chat.addAudit({ severity: 'info', kind: 'test.actor', sessionId: s.id, actor: 'portal-mcp:ptk_1' });
+    const [plain = '', long = ''] = chat.audit({ kind: 'test.actor' }).map((a) => a.actor ?? '');
+    assert.equal(plain, 'portal-mcp:ptk_1', 'a normal actor is untouched');
+    assert.ok(long.startsWith('ui forged: bypass.entered x'), long.slice(0, 40));
+    assert.ok(!/[\p{Cc}]/u.test(long), 'no control character');
+    assert.equal(long.length, AUDIT_ACTOR_MAX);
+  } finally {
+    await s.done();
+  }
+});
+
+test('T-723 S3b: the audit actor loses line and paragraph separators, format characters (bidi override, zero width) and edge spaces', async () => {
+  const s = await liveSession();
+  try {
+    const chat = new ChatStore(s.store);
+    const [LS, PS, RLO, ZWSP, BOM] = [0x2028, 0x2029, 0x202e, 0x200b, 0xfeff].map((c) => String.fromCharCode(c)); // built at runtime
+    const stored = (actor: string) => {
+      chat.addAudit({ severity: 'info', kind: 'test.actor.s3b', sessionId: s.id, actor });
+      return chat.audit({ kind: 'test.actor.s3b' })[0]!.actor;
+    };
+    assert.equal(stored(`ui${LS}forged`), 'ui forged', 'U+2028 becomes a space');
+    assert.equal(stored(`ui${PS}forged`), 'ui forged', 'U+2029 becomes a space');
+    assert.equal(stored(`  ticket:T-1 \t `), 'ticket:T-1', 'edge spaces are trimmed');
+    assert.equal(stored(`${LS}ui${PS}`), 'ui', 'edge separators go too');
+    assert.equal(stored(`ui${RLO}nimda`), 'ui nimda', 'a bidi override cannot reverse what is shown');
+    assert.equal(stored(`${BOM}ui${ZWSP}x`), 'ui x', 'zero width characters cannot hide in the name');
+    assert.equal(stored('portal-mcp:ptk_1'), 'portal-mcp:ptk_1', 'a normal actor is untouched');
   } finally {
     await s.done();
   }

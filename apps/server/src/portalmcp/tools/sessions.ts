@@ -359,9 +359,9 @@ export function registerSessionTools(
         : null;
       // A control that fails after the limits changed says so (the limits stay changed and audited: they are not undone).
       try {
-        if (args.model) await chat.control(args.id, 'model', { model: args.model });
-        if (args.effort) await chat.control(args.id, 'effort', { effort: args.effort });
-        if (args.mode) await chat.control(args.id, 'mode', { mode: args.mode });
+        if (args.model) await chat.control(args.id, 'model', { model: args.model }, { actor: ctx.actor });
+        if (args.effort) await chat.control(args.id, 'effort', { effort: args.effort }, { actor: ctx.actor });
+        if (args.mode) await chat.control(args.id, 'mode', { mode: args.mode }, { actor: ctx.actor });
       } catch (e) {
         if (!changed) throw e;
         const why = e instanceof Error ? e.message : 'refused';

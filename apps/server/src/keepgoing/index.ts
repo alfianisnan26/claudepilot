@@ -22,7 +22,7 @@ interface ControllerLike {
   openRequests(id: string): ChatRequest[];
   send(id: string, uuid: string, text: string, opts: { priority?: 'next' | 'later'; actor?: string; actorLabel?: string }): Promise<void>;
   respond(id: string, requestId: string, decision: 'deny', opts: { note?: string; actor?: string }): Promise<void>;
-  control(id: string, op: 'resume'): Promise<void>;
+  control(id: string, op: 'resume', args: undefined, opts: { actor: string }): Promise<void>;
   /** T-136 recover in place (slice 2). */
   recover(id: string, opts: { by: 'agent'; actor: string }): Promise<unknown>;
   /** A new chat (slice 2: one that continues an ended one). */
@@ -48,7 +48,7 @@ export function keepGoingChatPort(raw: unknown): (KeepGoingChatPort & { controll
     openRequests: (id) => ctl.openRequests(id),
     send: (id, uuid, text, o) => ctl.send(id, uuid, text, o),
     respond: (id, requestId, decision, o) => ctl.respond(id, requestId, decision, o),
-    resume: (id) => ctl.control(id, 'resume'),
+    resume: (id) => ctl.control(id, 'resume', undefined, { actor: KEEPGOING_ACTOR }), // T-723: it was `ui` by the resume default
     recover: async (id) => void (await ctl.recover(id, { by: 'agent', actor: KEEPGOING_ACTOR })),
     // The same workspace, folder, Claude, title and ticket; no `allowBypass` (and a portal actor could not set it: FR20).
     continueChat: (s) =>

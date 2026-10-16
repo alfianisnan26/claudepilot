@@ -656,8 +656,8 @@ export class ChatController {
       await this.end(child.id).catch(() => undefined);
       throw new Error(`no free slot to start it (${child.slotWait})`);
     }
-    await this.control(child.id, 'mode', { mode: 'dontAsk' });
-    await this.control(child.id, 'model', { model: 'sonnet' });
+    await this.control(child.id, 'mode', { mode: 'dontAsk' }, { actor: HANDOFF_ACTOR });
+    await this.control(child.id, 'model', { model: 'sonnet' }, { actor: HANDOFF_ACTOR });
     const prompt =
       `[Your role: ${HANDOFF_QA}.] Verify ${a.ticket} at commit ${a.sha} (the implementer's branch ticket/${a.ticket}-*, fetched from origin). ` +
       `Read the ticket, check the diff against it, run its tests as the brief allows, never close the ticket. End your reply with line 1 exactly "PASS ${a.sha}" or "FAIL ${a.sha}: <short reasons>".`;
@@ -1308,10 +1308,10 @@ export class ChatController {
   }
 
   /** The models this session can switch to (Claude Code's `list_models`); resumes the process if needed. */
-  async models(rawId: string): Promise<ChatModelOption[]> {
+  async models(rawId: string, opts: { actor?: string } = {}): Promise<ChatModelOption[]> {
     const id = this.#require(rawId).id;
     this.#notMoving(id);
-    await this.#live(id);
+    await this.#live(id, true, true, opts.actor); // T-723: a wake refused for memory names who asked
     const options = pickModels(await this.#request(id, 'list_models'));
     this.#learnModels(this.#chat.get(id)?.claudeId ?? null, options);
     return options;
@@ -1790,7 +1790,7 @@ export class ChatController {
       // still held through the check, so a send meanwhile waits for this start instead of running a wake check of its own (review 6310).
       try {
         const now = this.#chat.row(id) ?? row;
-        await this.#memoryBudget(now.workspace_id, now, now.started_by ?? 'portal', id, 'queued');
+        await this.#memoryBudget(now.workspace_id, now, now.started_by ?? 'portal', id, 'queued'); // T-723: `portal` is true only for a start nobody recorded (a system start)
       } catch (e) {
         this.#granted.delete(id);
         const now = this.#chat.row(id);
@@ -2547,11 +2547,11 @@ export class ChatController {
       case 'end':
         return this.end(sessionId);
       case 'model':
-        return this.#setModel(sessionId, a.model);
+        return this.#setModel(sessionId, a.model, opts.actor);
       case 'effort':
-        return this.#setEffort(sessionId, a.effort);
+        return this.#setEffort(sessionId, a.effort, opts.actor);
       case 'ultracode':
-        return this.#setUltracode(sessionId, a.ultracode);
+        return this.#setUltracode(sessionId, a.ultracode, opts.actor);
       case 'mode':
         return this.#setMode(sessionId, a.mode, opts.actor);
       case 'cancel_queued':
@@ -2780,7 +2780,7 @@ export class ChatController {
    * a report of Bypass from Claude Code is accepted. Entering is a High audit event. Never over MCP: no other module
    * has a session token or the opt-in.
    */
-  async enterBypass(rawId: string, req: { acknowledged: boolean; sessionToken: string | undefined }): Promise<ChatSession> {
+  async enterBypass(rawId: string, req: { acknowledged: boolean; sessionToken: string | undefined; actor?: string }): Promise<ChatSession> {
     const sessionId = this.#chat.resolveId(rawId);
     const session = this.#require(sessionId);
     this.#notMoving(sessionId);
@@ -2794,7 +2794,7 @@ export class ChatController {
     if (session.mode === 'bypassPermissions') return session;
     if (req.acknowledged !== true) refuse('no_acknowledgement', new AppError('VALIDATION_FAILED', 'Tick the box to confirm.', { details: { acknowledged: 'Required.' } }));
     if (this.reauth?.fresh(req.sessionToken) !== true) refuse('no_reauth', new AppError(REAUTH_REQUIRED, 'Enter the server code again to turn this on.', { status: 403 }));
-    await this.#live(sessionId); // resumes it when it slept; the policy and the flag are checked again at that launch
+    await this.#live(sessionId, true, true, req.actor); // resumes it when it slept (T-723: a refusal for memory names who asked); the policy and the flag are checked again at that launch
     this.#bypassGrant.add(sessionId);
     try {
       const reply = await this.#request(sessionId, 'set_permission_mode', { mode: 'bypassPermissions' });
@@ -2828,7 +2828,7 @@ export class ChatController {
    * a turn boundary, with the flag. The policy must allow it; it doesn't turn Bypass on, and a session that is
    * working or waiting has to finish first.
    */
-  async allowBypass(rawId: string): Promise<ChatSession> {
+  async allowBypass(rawId: string, opts: { actor?: string } = {}): Promise<ChatSession> {
     const sessionId = this.#chat.resolveId(rawId);
     const session = this.#require(sessionId);
     this.#notMoving(sessionId);
@@ -2856,7 +2856,7 @@ export class ChatController {
       this.#chat.patchSession(sessionId, { process: 'asleep' });
       this.#emitSession(sessionId);
     }
-    await this.#live(sessionId);
+    await this.#live(sessionId, true, true, opts.actor);
     return this.#chat.get(sessionId)!;
   }
 
@@ -2871,7 +2871,7 @@ export class ChatController {
    * moves; a move is refused while it runs. Messages sent meanwhile wait for the new process, in order. Running background tasks stop with
    * the old process (the app lists them before asking). Audited (`session.restart`), and the transcript marks it.
    */
-  async restart(rawId: string, opts: { why?: unknown; when?: unknown; interrupt?: unknown; actor?: 'ui' | 'portal'; from?: 'queue' | 'auto' } = {}): Promise<ChatSession> {
+  async restart(rawId: string, opts: { why?: unknown; when?: unknown; interrupt?: unknown; actor?: string; from?: 'queue' | 'auto' } = {}): Promise<ChatSession> {
     const sessionId = this.#chat.resolveId(rawId);
     let session = this.#require(sessionId);
     this.#notMoving(sessionId);
@@ -3041,7 +3041,7 @@ export class ChatController {
     if (this.#chat.hasOpenInputs(session.id) || this.#sending.has(session.id)) throw new AppError('CONFLICT', 'A message is still on its way. Try again in a moment.');
   }
 
-  async #restart(sessionId: string, why: 'mcp' | 'manual', o: { interrupt: boolean; actor: 'ui' | 'portal'; how: 'now' | 'queue' | 'auto' | 'interrupt' } = { interrupt: false, actor: 'ui', how: 'now' }): Promise<ChatSession> {
+  async #restart(sessionId: string, why: 'mcp' | 'manual', o: { interrupt: boolean; actor: string; how: 'now' | 'queue' | 'auto' | 'interrupt' } = { interrupt: false, actor: 'ui', how: 'now' }): Promise<ChatSession> {
     await this.#busy.get(sessionId); // a launch or a sleep in flight settles first
     this.#restartable(this.#require(sessionId), o.interrupt); // and things may have moved on while it did
     const busy = () => {
@@ -3310,7 +3310,7 @@ export class ChatController {
   /** The one request that enters Bypass, under the grant (the policy and the capability checked by the caller, and again here). */
   async #setBypass(sessionId: string): Promise<void> {
     if (!this.#bypassAllowed()) throw new AppError(BYPASS_BLOCKED, 'Bypass is blocked by policy.', { status: 403 });
-    await this.#live(sessionId); // a process stopped for the retry comes back with the flag (capable, and the policy allows it)
+    await this.#live(sessionId, true, true, 'portal'); // T-723: the portal restores Bypass itself (#keepBypass), so `portal` is the true actor here; a process stopped for the retry comes back with the flag (capable, and the policy allows it)
     if (this.#chat.row(sessionId)?.bypass_capable !== 1) throw new AppError(BYPASS_NOT_CAPABLE, 'This session wasn’t started to allow Bypass.', { status: 409 });
     this.#bypassGrant.add(sessionId);
     try {
@@ -4084,22 +4084,22 @@ export class ChatController {
 
   /* ---------- Controls ---------- */
 
-  async #setModel(sessionId: string, model: unknown): Promise<void> {
+  async #setModel(sessionId: string, model: unknown, actor?: string): Promise<void> {
     const value = typeof model === 'string' ? model.trim() : '';
     if (!MODEL_VALUE.test(value)) throw new AppError('VALIDATION_FAILED', 'Pick a model.');
     this.#require(sessionId);
-    await this.#live(sessionId);
+    await this.#live(sessionId, true, true, actor); // T-723: a wake refused for memory names who asked
     this.#modelAsked.set(sessionId, Date.now());
     await this.#request(sessionId, 'set_model', { model: value }); // Claude Code validates it with a tiny API call
     const applied = await this.#refreshApplied(sessionId).catch(() => null);
     this.#note(sessionId, `Model: ${applied?.model ?? value}`);
   }
 
-  async #setEffort(sessionId: string, effort: unknown): Promise<void> {
+  async #setEffort(sessionId: string, effort: unknown, actor?: string): Promise<void> {
     const level = typeof effort === 'string' ? effort.trim() : '';
     if (!EFFORT_LEVEL.test(level)) throw new AppError('VALIDATION_FAILED', 'Pick an effort level.');
     this.#require(sessionId);
-    await this.#live(sessionId);
+    await this.#live(sessionId, true, true, actor);
     await this.#request(sessionId, 'apply_flag_settings', { settings: flagSettings({ effort: level }) });
     const applied = await this.#refreshApplied(sessionId).catch(() => null);
     // Clamps are silent in Claude Code, so say what actually applies.
@@ -4108,10 +4108,10 @@ export class ChatController {
     else this.#note(sessionId, `Effort: ${level}`);
   }
 
-  async #setUltracode(sessionId: string, on: unknown): Promise<void> {
+  async #setUltracode(sessionId: string, on: unknown, actor?: string): Promise<void> {
     if (typeof on !== 'boolean') throw new AppError('VALIDATION_FAILED', 'Turn ultracode on or off.');
     this.#require(sessionId);
-    await this.#live(sessionId);
+    await this.#live(sessionId, true, true, actor);
     await this.#request(sessionId, 'apply_flag_settings', { settings: flagSettings({ ultracode: on }) });
     await this.#refreshApplied(sessionId).catch(() => null);
     this.#note(sessionId, on ? 'Ultracode on' : 'Ultracode off');
@@ -4141,7 +4141,7 @@ export class ChatController {
         );
       }
     }
-    await this.#live(sessionId);
+    await this.#live(sessionId, true, true, actor);
     const was = this.#chat.row(sessionId)?.mode;
     // The reply confirms the mode as it's read (see #acceptControlResponse), before any status line.
     const reply = await this.#request(sessionId, 'set_permission_mode', { mode });
