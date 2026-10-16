@@ -187,6 +187,12 @@ function loadRefusals(db: DatabaseSync, sinceMs: number): CrewRefusal[] {
   });
 }
 
+// T-739: the literal `kind = 'tool_result'` must stay a literal. Migration 383's index is partial (WHERE kind = 'tool_result') and SQLite uses a
+// partial index only when the query's WHERE provably implies the index's; a bound parameter would not, and the scan would come back.
+export const toolResultCountSql = (l: string) => `SELECT session_id, COUNT(*) AS n FROM chat_events WHERE session_id IN ${l} AND kind = 'tool_result' AND at >= ? AND at < ? GROUP BY session_id`;
+export const toolResultErrorSql = (l: string) =>
+  `SELECT session_id, json_extract(payload, '$.toolName') AS tool, substr(json_extract(payload, '$.text'), 1, 400) AS text FROM chat_events WHERE session_id IN ${l} AND kind = 'tool_result' AND at >= ? AND at < ? AND json_extract(payload, '$.isError') = 1`;
+
 /**
  * T-549 (D-65): the tool results of these sessions in [fromMs, toMs), counted per session: all of them, and the error ones by kind (a
  * permission denial, an error of a portal tool, another failure). Read from `chat_events` (kind tool_result, payload isError); the error
@@ -198,14 +204,8 @@ export function loadToolResults(db: DatabaseSync, fromMs: number, toMs: number, 
   const by = new Map<string, ToolResultCount>();
   const of = (id: string) => by.get(id) ?? by.set(id, { sessionId: id, total: 0, denied: 0, portal: 0, failed: 0 }).get(id)!;
   const list = [...ids];
-  for (const r of chunked<{ session_id: string; n: number }>(db, list, (l) => `SELECT session_id, COUNT(*) AS n FROM chat_events WHERE session_id IN ${l} AND kind = 'tool_result' AND at >= ? AND at < ? GROUP BY session_id`, [from, to])) of(r.session_id).total += r.n;
-  const errors = chunked<{ session_id: string; tool: string | null; text: string | null }>(
-    db,
-    list,
-    (l) =>
-      `SELECT session_id, json_extract(payload, '$.toolName') AS tool, substr(json_extract(payload, '$.text'), 1, 400) AS text FROM chat_events WHERE session_id IN ${l} AND kind = 'tool_result' AND at >= ? AND at < ? AND json_extract(payload, '$.isError') = 1`,
-    [from, to],
-  );
+  for (const r of chunked<{ session_id: string; n: number }>(db, list, toolResultCountSql, [from, to])) of(r.session_id).total += r.n;
+  const errors = chunked<{ session_id: string; tool: string | null; text: string | null }>(db, list, toolResultErrorSql, [from, to]);
   for (const e of errors) of(e.session_id)[wasteKind(e.tool, e.text)]++;
   return [...by.values()].filter((r) => r.total > 0).sort((a, b) => a.sessionId.localeCompare(b.sessionId));
 }
