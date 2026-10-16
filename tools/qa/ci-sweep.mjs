@@ -68,18 +68,21 @@ const MEASURE = `(() => {
   return { n: controls.length, scroll: [doc.scrollWidth, doc.clientWidth], controls, over, text: scope.innerText.slice(0, 3000) };
 })()`;
 
-// Close buttons from the shared kit are 40 px (T-639, out of scope): listed, not failed.
-// The Bump note field is the kit's TextField (42 px, a border-colour focus): the same kit gap, listed here and not fixed.
-const kitGap = (c) => /^(Close|Anything it should know|Your question)$/i.test(c.t);
-async function measure(b, tag, label, { mobile }) {
+// Kit gap (T-639, out of scope): inside the Bump dialog the shared kit's Close button is 40 px and its note field (TextField) is 42 px.
+// An exact list, scoped to that dialog (a "Close" of our own anywhere else fails); at 390 px its count must be exactly 2.
+const BUMP_KIT_GAP = ['Close', 'Anything it should know'];
+async function measure(b, tag, label, { mobile, kitGapNames = [] }) {
+  const kitGap = (c) => kitGapNames.includes(c.t);
   const m = await b.eval(MEASURE);
   const small = m.controls.filter((c) => (c.w < 43.5 || c.h < 43.5) && !c.dis);
   const known = small.filter(kitGap);
   const real = small.filter((c) => !kitGap(c));
   info(`${label}: ${m.n} controls`);
   if (known.length) info(`${label}: kit gap (T-639, not fixed here): ${JSON.stringify(known)}`);
-  if (mobile) check(`${tag} ${label}: every control >= 44 px`, real.length === 0, JSON.stringify(real));
-  else {
+  if (mobile) {
+    check(`${tag} ${label}: every control >= 44 px`, real.length === 0, JSON.stringify(real));
+    if (kitGapNames.length) check(`${tag} ${label}: kit gap is exactly ${kitGapNames.length} controls`, known.length === kitGapNames.length && kitGapNames.every((n) => known.some((c) => c.t === n)), JSON.stringify(known));
+  } else {
     const tiny = m.controls.filter((c) => (c.w < 23.5 || c.h < 23.5) && !c.dis);
     check(`${tag} ${label}: every control >= 24 px at desktop (WCAG 2.2 minimum)`, tiny.length === 0, JSON.stringify(tiny));
   }
@@ -165,6 +168,9 @@ try {
       await open('/admin/ci?tab=runs&branch=main', `!!document.querySelector('button[aria-label^="Clear branch"]')`);
       await measure(b, tag, 'runs tab with a branch filter', { mobile });
       await b.shot(`runs-branch-${tag}`);
+      const chipSeq = await tabPass(b, tag, 'branch chip keyboard', { max: 40 });
+      const chip = chipSeq.find((f) => /^Clear branch/.test(f.name));
+      check(`${tag} branch chip: Tab reaches it and it shows a focus ring`, !!chip && chip.ring, JSON.stringify(chip));
       await open('/admin/ci?tab=runs', `document.querySelector('select')`);
       await tabPass(b, tag, 'runs tab keyboard', { max: 40 });
 
@@ -206,7 +212,7 @@ try {
       const dlg = await b.eval(`document.querySelectorAll('[role=dialog]').length`);
       check(`${tag} bump dialog opens`, dlg === 1, String(dlg));
       if (dlg) {
-        await measure(b, tag, 'bump dialog', { mobile });
+        await measure(b, tag, 'bump dialog', { mobile, kitGapNames: BUMP_KIT_GAP });
         await b.shot(`bump-${tag}`);
         await tabPass(b, tag, 'bump dialog keyboard', { max: 14, scopeSel: '[role=dialog]', modal: true }).catch((e) => console.log(`  warn ${e.message}`));
         await b.key('Escape');
