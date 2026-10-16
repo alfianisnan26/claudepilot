@@ -23,12 +23,13 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - QA PERF 8e8912fc (perf-tester/sonnet, respawned for Write; 8148): cherry-pick denied, stopped (correct). Lead built QA base
   wip/qa-t426-364c7ca 364c7ca4 (18a3dbb1 + -x db6b952a 155e334b). Now its one S1h probe Job.
 - QA UI 8b13bb5a (no Write): T-772 S2 188cd077 PASS WITH GAPS (Job 7fb8c3d0; lead posted 8336; gap 2 roving tabindex -> S2b).
-  T-611 S2b review APPROVE (lead posted 8349). Now blind review T-736 S3f -> QA T-675 R2c f7b4e34a (after Backend's Job).
+  T-611 S2b review APPROVE (8349); T-736 S3f review CHANGES 2 (8359: here= redirect, m before cd) -> S3g BE Infra.
+  Now pre-read T-675 R2c (no Job) -> QA T-675 R2c f7b4e34a (after Backend's Job).
 - QA BE 2 42e5408f (no Write): T-416 S2b FAIL (8289: Bypass-restart test survives closeOut mutant). Now QA T-736 S3f a44c7cf8.
 - IMPL 46632d91 (sonnet): T-772 S2 DONE 188cd077. Now T-591 S3 lastReleased fix (ticket/T-591-s3 from b2932d0e) -> T-772 S2b
   (container marker, not tabindex -1) -> T-525 proposal draft.
 - BE INFRA 16c2494f (sonnet): T-736 S3f DONE a44c7cf8 (Job b263ibbvh on 4e63057, 14 mutants). Now resolving the T-611 merge of
-  integration f9b836a1 that the lead started in its worktree (6 files UU; 8207 items; + review items 1-2 of 8349) -> T-610 (8267) -> T-524 S3c + T-733 S5 -> T-612 S1.
+  integration f9b836a1 that the lead started in its worktree (6 files UU; 8207 items; + review items 1-2 of 8349) -> T-736 S3g (8359) -> T-610 (8267) -> T-524 S3c + T-733 S5 -> T-612 S1.
 - BACKEND 3484bd4d: T-675 R2c f7b4e34a, T-781 S8b 0ed23dca Jobs pending (+ stop-mark test, B6) -> T-416 S2b fix -> T-537.
 - AFTER T-401: T-426 S1h/S1e; T-379 S2 3f11b28 behind it. T-578 -> owner. T-631 -> coordinator (after this batch).
 
