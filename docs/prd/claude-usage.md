@@ -1132,3 +1132,13 @@ tables the portal already keeps; nothing new is stored.
   `lab/portalTools.ts`; tests `lab/scorecard.test.ts` (a seeded crew: two programs, a continuation, workers on two Claudes, tickets of
   each kind, CI runs and deploys, usage rows; the numbers in each window, the targets, the previous window, unavailable, life cost,
   derived waits, a deleted continuation, efficiency, health, the route and the tool's scoping).
+- **Tool-result index (T-739 B, migration 383).** `chat_events_result_at (session_id, at) WHERE kind = 'tool_result'` serves `loadToolResults`
+  (the wasted-tool-calls target). The queries keep `kind = 'tool_result'` as a literal (a bound parameter would not match a partial index);
+  `lab/scorecardIndex.test.ts` checks the plan (the index named, no `SCAN chat_events`, the count query covered). **Measured, no budget set**
+  (Job `claudepilot-job-86693c96`, commit `fdd97a6`, node k3s-master, `lab/scorecardPerf.test.ts` with `CLAUDEPILOT_PERF=1`; synthetic
+  database, 1,000,000 events over 100 sessions and 14 days, 35 % tool results (an assumption: about one line in three of a transcript), 5 % of
+  all events error results (1 in 7, about 14 %, of the tool results); not a real portal database, so the real row count and share are unknown): index build 0.41 s for the 1M rows (350k results),
+  the index 13.0 MB on a 336 MB database (3.9 %); `loadToolResults` median of 5, before to after: 20 sessions 24 h 702.6 to 9.3 ms, 20 sessions
+  7 d 706.9 to 92.0 ms, 100 sessions 24 h 3399.7 to 44.2 ms, 100 sessions 7 d 3543.7 to 478.9 ms (the answers are identical); insert cost per
+  10k events 49.5 ms without and 67.3 ms with the index (1.36 times, the whole 1M: 5.09 s and 6.91 s); process RSS 207 MiB. The migration
+  runs in the startup transaction: scale 0.41 s per million events (this Job's disk) to the real count before a deploy.

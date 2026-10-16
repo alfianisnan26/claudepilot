@@ -20,10 +20,10 @@ import { burstEvidence, rateEvidence } from '../usagespend/spikes.js';
 import { SpendStore } from '../usagespend/store.js';
 import { LAB_POLICIES } from './authz.js';
 import { Lab } from './index.js';
-import { fitPrograms, registerLabTools, scoreShort } from './portalTools.js';
+import { fitPrograms, fullProgram, registerLabTools, scoreShort } from './portalTools.js';
 import { createLabRoutes } from './routes.js';
 import { paceBlock, type PaceClaude } from './headline.js';
-import { percentile, wasteKind } from './scorecard.js';
+import { SCORECARD_BASIS, SRC, percentile, wasteKind } from './scorecard.js';
 
 const H = 3_600_000;
 // Any fixed moment: the lab's clock is injected, nothing reads the real one.
@@ -345,6 +345,102 @@ test('T-549 (D-65): a permission denial, a portal tool error and a failed comman
   assert.equal(wasteKind('mcp__pilot__ticket_get', 'ticket not found'), 'portal');
   assert.equal(wasteKind('Bash', 'exit code 2'), 'failed');
   assert.equal(wasteKind(null, null), 'failed');
+});
+
+// T-739 B gap h (pins today's behaviour; part A may change it). Mutants: widen the denial pattern (a bare "denied" matches); drop the 400-character cut;
+// match the portal prefix loosely.
+test('T-739 (D-65): wasteKind table: what is a denial, what is not, the 400-character cut and the portal prefix', () => {
+  const cases: [string | null, string | null, 'denied' | 'portal' | 'failed'][] = [
+    ['Bash', 'Permission to use Bash has been denied.', 'denied'],
+    ['Bash', 'permission denied', 'denied'],
+    ['Bash', 'The user doesn’t want to proceed with this tool use.', 'denied'],
+    ['Bash', 'the request was denied', 'failed'], // "denied" alone is not a permission denial
+    ['Bash', 'cat: denied.txt: No such file', 'failed'],
+    ['Bash', `${'x'.repeat(400)} permission denied`, 'failed'], // the cut: only the first 400 characters are read
+    ['Bash', `${'x'.repeat(385)} permission denied`, 'failed'], // the pattern straddles the cut (403 characters): it is cut in half and does not match
+    ['Bash', `${'x'.repeat(380)} permission denied`, 'denied'], // it ends inside the first 400
+    ['Bash', `${'x'.repeat(382)} permission denied`, 'denied'], // exactly 400 characters: the last one is still read
+    ['Bash', `${'x'.repeat(383)} permission denied`, 'failed'], // 401 characters: the last one is cut
+    ['mcp__pilot__ticket_get', 'ticket not found', 'portal'],
+    ['mcp__pilot__ticket_get', null, 'portal'],
+    ['mcp__pilot_ticket_get', 'ticket not found', 'failed'],
+    ['xmcp__pilot__ticket_get', 'ticket not found', 'failed'],
+    ['mcp__pilot__ticket_get', 'Permission to use mcp__pilot__ticket_get has been denied.', 'denied'], // a denial wins over the portal
+    [null, 'exit code 1', 'failed'],
+    ['Bash', null, 'failed'],
+  ];
+  for (const [tool, text, want] of cases) assert.equal(wasteKind(tool, text), want, `${tool} / ${text?.slice(-30)}`);
+});
+
+// T-739 B gap f. Mutants: drop the offenders; keep the rule on a D-65 target; treat every target as D-65. (Plan 7349 said older targets keep
+// their rule: they do not, the code drops `rule` from every target; what differs is the row shape.)
+test('T-739 (D-65): fullProgram: a D-65 target is a short row with its offenders, an older target keeps its shape; neither carries its rule', () => {
+  const figure = { value: 7, basis: 'measured' as const, source: 'a source' };
+  const row = (id: CrewTarget['id'], decision: CrewTarget['decision'], offenders: string[]): CrewTarget => ({ id, decision, rule: `rule of ${id}`, state: 'breach', figure, offenders });
+  const p = { program: 'L1', title: 't', workspaceId: null, leads: ['L1'], workers: 1, current: {}, previous: null, targets: [row('lead_share', 'D-65', ['L1', 'L2']), row('done_rate', 'D-65', []), row('live_workers', 'D-61', ['W1'])] } as unknown as CrewProgramScore;
+  const [a, b, c] = fullProgram(p).targets as Record<string, unknown>[];
+  assert.deepEqual(a, { id: 'lead_share', state: 'breach', value: 7, offenders: ['L1', 'L2'] });
+  assert.deepEqual(b, { id: 'done_rate', state: 'breach', value: 7 }, 'no offenders: the key is absent, not empty');
+  // An older target keeps its whole shape (decision, figure, offenders) but, like every target, not its rule (`basis.targets` names it once).
+  assert.deepEqual(c, { id: 'live_workers', decision: 'D-61', state: 'breach', figure: { value: 7, basis: 'measured' }, offenders: ['W1'] }, 'figure sources are left out of the full form');
+});
+
+// T-739 B S4 (M6): an unavailable D-65 figure reads `unavailable:<reason>`, `no_source` without a reason. Mutant: `v = f => f.value`.
+test('T-739 (D-65): fullProgram: an unavailable D-65 figure names its reason', () => {
+  const gone = (reason?: string) => ({ value: null, basis: 'unavailable' as const, source: 'a source', ...(reason ? { reason } : {}) });
+  const q = (reason?: string) => ({ id: 'quota_unused', decision: 'D-65', rule: 'r', state: 'unavailable', figure: gone(reason), offenders: [] });
+  const p = { program: 'L1', title: 't', workspaceId: null, leads: ['L1'], workers: 1, current: {}, previous: null, targets: [q('no_samples'), q()] } as unknown as CrewProgramScore;
+  const [a, b] = fullProgram(p).targets as Record<string, unknown>[];
+  assert.equal(a!.value, 'unavailable:no_samples');
+  assert.equal(b!.value, 'unavailable:no_source');
+});
+
+// T-739 B S4 (M7): a short row lists at most five offenders. Mutant: `slice(0, 5)` -> `slice(0, 6)`.
+test('T-739 (D-65): scoreShort: a flag carries the first five offenders only', () => {
+  const figure = { value: 40, basis: 'measured' as const, source: 's' };
+  const offenders = ['L1', 'L2', 'L3', 'L4', 'L5', 'L6'];
+  const p = { program: 'L1', title: 't', workspaceId: null, leads: offenders, workers: 1, current: null, previous: null, targets: [{ id: 'lead_share', decision: 'D-65', rule: 'r', state: 'breach', figure, offenders }] } as unknown as CrewProgramScore;
+  assert.deepEqual(scoreShort(p).flags[0]!.offenders, ['L1', 'L2', 'L3', 'L4', 'L5']);
+});
+
+// T-739 B gap e. Mutants: an agent's own read gets the quota figure; a single-program read gets it.
+test('T-739 (D-65): quota is every Claude’s: an agent’s own read and a single-program read carry no quota figure, the whole read does', async () => {
+  const h = await seeded();
+  try {
+    h.db.prepare(`INSERT INTO claude_usage_samples (at_ms, claude_id, workspace_id, win, used_pct, resets_at_ms, level, source) VALUES (?, 'c1', 'docker/api', 'session', 40, ?, 'ok', 'probe')`).run(at(3) - 5 * 60_000, at(3));
+    const whole = h.lab.scorecard({ window: 'day' })!;
+    assert.equal(whole.quotaUnused?.[0]?.unusedPct.value, 60, 'the whole read has it (60 percent unused)');
+    assert.equal(target(prog(whole, 'L1'), 'quota_unused').figure.value, 60);
+    const own = h.lab.scorecard({ window: 'day', sessionId: 'W3' })!;
+    assert.equal(own.quotaUnused, undefined);
+    assert.equal(target(prog(own, 'L1'), 'quota_unused').figure.value, null);
+    const one = h.lab.scorecard({ window: 'day', program: 'L1' })!;
+    assert.equal(one.quotaUnused, undefined);
+    assert.equal(target(prog(one, 'L1'), 'quota_unused').figure.value, 60, 'a single-program read keeps the quota row');
+    // Another program asked for by an agent of L1 is not found, as a program that is not there.
+    assert.equal(h.lab.scorecard({ window: 'day', sessionId: 'W3', program: 'M1' }), null);
+    assert.equal(h.lab.scorecard({ window: 'day', program: 'nope' }), null);
+  } finally {
+    h.done();
+  }
+});
+
+// T-739 B docs test: the written definitions say what the code does. Mutant: change a number in the text.
+test('T-739 (D-65): the written basis and sources match the rules the code applies', async () => {
+  const h = await seeded();
+  try {
+    const d65 = SCORECARD_BASIS.d65!;
+    assert.match(d65, /no quota over 30 % unused at reset/);
+    assert.match(d65, /wasted tool calls \(error results\) under 3 %/);
+    assert.match(SCORECARD_BASIS.quotaUnused!, /within 30 minutes before the reset/);
+    assert.match(SRC.toolResults, /chat_events \(kind tool_result, is_error\)/);
+    // The same 30 in the rule the quota row states.
+    const whole = h.lab.scorecard({ window: 'day' })!;
+    assert.match(target(prog(whole, 'L1'), 'quota_unused').rule, /more than 30 percent unused/);
+    assert.match(target(prog(whole, 'L1'), 'wasted_tool_calls').rule, /under 3 percent/);
+  } finally {
+    h.done();
+  }
 });
 
 test('T-490 (D-63): the opus share of QA and review workers per program, with its workspace; a worker started with a why is no offender', async () => {
