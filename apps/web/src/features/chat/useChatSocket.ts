@@ -17,7 +17,7 @@ import {
   type ChatSubscribe,
   type ChatTask,
 } from '@portal/contracts';
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { chatApi } from './api';
 import { foldBtw, refusedBtw, type BtwState } from './btw/state';
 import { appendLive, EMPTY_HISTORY, expand, olderDone, olderFailed, olderStart, seed, seedAll, type History } from './history';
@@ -227,7 +227,8 @@ export function useChatSession(sessionId: string): ChatSessionApi {
         if (closed) return;
         seeded = true;
         for (const e of page.events) if (e.seq > seqRef.current) seqRef.current = e.seq;
-        setHist((h) => seed(h, page));
+        // A transition (T-376 S4): the page's rows render in slices the browser can interrupt, not as one 450 ms task at 4x CPU.
+        startTransition(() => setHist((h) => seed(h, page)));
         subscribe();
       },
       () => {
@@ -508,7 +509,7 @@ export function useChatSession(sessionId: string): ChatSessionApi {
     histRef.current = next; // a second call before the render sees it loading
     setHist((cur) => olderStart(cur) ?? cur);
     chatApi.page(sessionId, before).then(
-      (page) => gen === generation.current && setHist((cur) => olderDone(cur, before, page)),
+      (page) => gen === generation.current && startTransition(() => setHist((cur) => olderDone(cur, before, page))),
       () => gen === generation.current && setHist(olderFailed),
     );
   }, [sessionId]);
