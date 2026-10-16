@@ -96,7 +96,7 @@ export function RunsTab({ onNewRemote }: { onNewRemote: () => void }) {
             <select
               value={repo ?? ''}
               onChange={(e) => set({ repo: e.target.value || null })}
-              className={cn('h-11 appearance-none sm:h-9 rounded-full border bg-surface pr-8 pl-3.5 text-[16px] font-semibold focus:border-primary focus:outline-hidden focus-visible:ring-2 focus-visible:ring-accent sm:text-[13.5px]', repo ? 'border-primary text-ink' : 'border-line text-ink-soft')}
+              className={cn('h-11 appearance-none sm:h-9 rounded-full border bg-surface pr-8 pl-3.5 text-[16px] font-semibold focus:border-primary focus:outline-hiddenfocus-visible:ring-2 focus-visible:ring-accent sm:text-[13.5px]', repo ? 'border-primary text-ink' : 'border-line text-ink-soft')}
             >
               <option value="">All remotes</option>
               {repos.map((r) => (

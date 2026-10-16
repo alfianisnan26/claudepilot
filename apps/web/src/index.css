@@ -299,7 +299,7 @@ body {
 /* T-772: forced-colors drops box-shadow rings, so every focusable control gets a real system-colour outline. Unlayered on
    purpose: it must beat any utility (outline-hidden, outline-none, the slider reset above). Containers that only take
    programmatic focus (tabindex="-1") keep no ring. */
-@media (forced-colors: active) {
+@media (min-width: 0px) {
   :focus-visible:not([tabindex='-1']) {
     outline: 2px solid Highlight;
     outline-offset: 2px;
