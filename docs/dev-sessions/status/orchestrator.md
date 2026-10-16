@@ -10,32 +10,24 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - BATCH 26 ON INTEGRATION 83b7213e (gate claudepilot-gate-83b7213-b968 GREEN, suite 672s; after 3 re-merges as integration moved):
   T-591 S3, T-610 (mig 384; pre-deploy read-only prod count of the 2 rows is the coordinator's), T-772 S2b-S2d 03b635b5 + S2c
   464be382. Main folder ff'd (165db813 in). Coordinator told T-731.
-- RESPAWN (coordinator, T-525/T-631 landed 165db813): respawn each lane BETWEEN tickets, brief: job-run.sh, k3s-status.sh etc.
-  ONLY by /home/node/work/claudepilot/scripts/..., never scripts/.... FOLDER_UNTRUSTED 20:00-20:25 (T-525 8804), then trust back.
-  Done: Impl -> fe93b032 (T-425). Next between tickets: Backend (after T-436 c), BE Infra, QA Perf, QA BE 2, QA UI. Old-rule lanes
-  use their own form until respawned (20:21 correction). If T-860 S2 is ready mid-gate: stop b26 gate, gate T-860 alone. T-611 (8537) -> batch 27; T-623 S2c (8603) waits S2d.
-
-- BATCH 27 BUILT 0e5fabcd (wip/main-0e5fabc, worktree premerge-b27): T-611 merge f722dca1, T-537 d6833850, T-623 S2c+S2d c288c0d5,
-  T-856 7d2acb8d (lead's mechanical PRD resolution, both paragraphs kept), T-772 S2e fc9158ed. Quick-check running -> gate-job.
+- RESPAWN rule (coordinator, 165db813): respawn each lane BETWEEN tickets on a worktree cut from integration (or a head containing
+  165db813); brief: scripts ONLY by /home/node/work/claudepilot/scripts/.... Left on old rules: QA Perf 8e8912fc, Impl is new.
+- BATCH 27 ON INTEGRATION bda180d2 (gate claudepilot-gate-bda180d-3921 GREEN, suite 888s; quick-check job-5eb2f86f green):
+  T-611 merge f722dca1, T-537, T-623 S2c+S2d c288c0d5, T-856 7d2acb8d (lead's mechanical PRD resolution), T-772 S2e fc9158ed,
+  T-881 S1 0946106271 (S1b follow-up 8938; live proof coordinator's). Coordinator told T-731. NEXT: T-860 S2+S2b bd2a2b1f ALONE.
 ## IN FLIGHT (6 of 6, D-71)
-- QA PERF 8e8912fc (perf-tester/sonnet): T-611 merge PWG 8715 (READY, b27 with T-426); T-868 rev CHANGES 2 8724; T-537 APPROVE
-  (lead posted 8738). NOW QA T-623 S2d c288c0d5 -> QA T-772 S2e fc9158ed.
-- QA UI 66c13056 (respawned from integration, new rules; fcc8b8aa T-856 browser BLOCKED 8855: no node_modules for scratch portal
-  -> browser check stays open follow-up, 8860). NOW QA T-881 S1 09461062 (own Job + mutants) -> review T-772 S2e -> review T-436 web.
-- QA BE 2 42e5408f (no Write): reviews APPROVE T-772 S2 8449, T-416 S2b 8450, T-591 S3 8535, T-772 S2b 8568.
-  T-623 S2c PASS 8603, T-610 PASS W/ GAPS 8637. T-860 QA plan 8650. NOW QA T-860 S2 068606f5 (URGENT) -> T-416 S2c -> T-675 R2d -> T-781 S8c.
-- IMPL fe93b032 (respawned, new rules; was 46632d91: T-772 S2e fc9158ed, T-856 7d2acb8d QA PWG 8837 -> b27, T-868 S2 0520dc29 ->
-  QA Perf re-review incl. SHOTS_TEST_MODE --hook). NOW T-425 slotWait on ticket/T-425-slotwait.
-- T-860: S2b bd2a2b1f review APPROVE (QA UI 8840); QA BE 2 delta QA Jobs queued; then gate ALONE. S2c follow-up (8845). T-426 S1e, T-379 S2 3f11b28 queued.
-- BE INFRA 16c2494f (sonnet): DONE T-860 12deae78 (8553), T-623 S2c 6f4f6d56 (8569), T-610 b3e7e3a7 (8571; lead read mig 384,
-  free 8577), T-860 S2 068606f5 (8680; lead read 8737), T-623 S2d c288c0d5 (8725), T-860 S2b bd2a2b1f (8817; job-bb58079a, 6 mutants red;
-  -> QA BE 2 delta + QA UI re-review), T-881 S1 0946106271 (8857; lead read 8866, coordinator OK 8863, live proof theirs; heads b27).
-  Respawned as 4ed98960 (new rules): NOW T-612 S1 (lint devDeps; lockfile via Job or BLOCKED). T-860 S2c after T-860 merges.
-  T-736 S3g 4eb08f4e (8461) is BUILT: needs QA. T-772 S2e QA PWG 8838 -> b27; gaps -> S2f (Impl after T-425, 8858).
-- BACKEND 3484bd4d: DONE R2d b82cdcb9, S8c 8cb00f79, T-416 S2c dcdb6553 (lead read 8700), T-868 28d24ee3 (8697; roots guessed),
-  T-537 d6833850, T-524 S3c + T-733 S5 ee56bab9 (8815/8816), T-436 (c) 5be5699a (backend Job f79ecee3 green on 011de98b; web
-  not run) -> QA BE 2 Jobs + QA UI review. Deploy hazard: fail-closed vault list (coordinator sets lists). Respawned 0003c89f
-  (new rules): NOW T-382 S1 (CursorPage + keyset helper, one limit-only route; it posts the lead decision, I can't comment).
+- QA PERF 8e8912fc (old rules): T-623 S2d PWG 8825, T-772 S2e PWG 8838. NOW re-review T-868 S2 0520dc29 (SHOTS_TEST_MODE --hook)
+  -> QA T-524 S3c + T-733 S5 ee56bab9. Respawn between tickets.
+- QA UI 66c13056 (new rules): T-881 S1 QA PWG 8916, T-772 S2e rev APPROVE W/ NOTES 8867, T-436 rev APPROVE W/ NOTES (relayed 8941;
+  notes -> T-436 S2). T-856 browser check blocked (no node_modules, 8855) = open follow-up 8860. NOW QA T-736 S3g 4eb08f4e.
+- QA BE 2 b6579580 (new rules; was 42e5408f: T-860 PWG 8912). NOW QA T-436 5be5699a (own Job) -> QA T-382 S1 88b663fe
+  -> T-416 S2c dcdb6553 -> T-675 R2c f7b4e34a + R2d b82cdcb9 -> T-781 S8c 8cb00f79.
+- IMPL 5560f7f5 (new rules; was fe93b032: T-425 c22a76b3 DONE 8957, Job c7cb5080; "Queued" label kept (text diet); browser not
+  run -> QA UI after S3g). NOW T-772 S2f (ticket/T-772-s2f from bda180d2: calc0, narrower rule, !important).
+- BE INFRA 4ed98960 (new rules): T-612 S1 889071cd DONE 8955 (Job 54a72d98; -> QA Perf last). NOW T-612 S2a baseline (prettier
+  error on tools/rtk/hook.mjs, eslint crash; no gate step) -> T-860 S2c after T-860 merges.
+- BACKEND 1e80e003 (new rules; was 0003c89f: T-382 S1 88b663fe, Job a3a79bb1 green, 2 mutants red). NOW T-881 S1b tests
+  (ticket/T-881-s1b-tests from bda180d2) -> T-436 S2 (review notes).
 
 ## DECISIONS (binding)
 - 13:45 D-75 AMENDED (coordinator, 1444d836, in DECISIONS.md): the lead runs the gate before a merge (gate-job.sh, one per batch).
