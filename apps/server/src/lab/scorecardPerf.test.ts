@@ -4,7 +4,8 @@
 //
 // Shape (assumptions, not a measurement of any real database): 100 sessions, CLAUDEPILOT_PERF_ROWS events in all (default 1,000,000), spread
 // evenly over 14 days; 35 % of the events are tool results (a tool call is a tool_use plus a tool_result, and a turn also carries text,
-// thinking and system lines, so about one line in three is a result); 5 % of the results are errors with 450 characters of text.
+// thinking and system lines, so about one line in three is a result); 5 % of ALL events are error results with 450 characters of text (the
+// generator makes one event in 20 an error: 1 in 7, about 14 %, of the tool results).
 
 import assert from 'node:assert/strict';
 import { rmSync } from 'node:fs';
@@ -103,7 +104,7 @@ const SHAPES = [
 ] as const;
 
 test('T-739 B: measure migration 383 on a synthetic database', { skip: process.env.CLAUDEPILOT_PERF !== '1' }, async () => {
-  print('shape', { rows: PER_SESSION * SESSIONS, sessions: SESSIONS, toolResultShare: 0.35, errorShareOfResults: 0.05, days: 14 });
+  print('shape', { rows: PER_SESSION * SESSIONS, sessions: SESSIONS, toolResultShare: 0.35, errorShareOfEvents: 0.05, errorShareOfResults: 1 / 7, days: 14 });
 
   // A: no index. Insert cost, the query before, the migration's own SQL, the query after.
   const a = await open(false);
