@@ -627,10 +627,10 @@ Source: 518 `=== JOB-RUN MEMORY` peaks (ticket T-731, 2026-10-16): median 1133Mi
   `--role`, the chat.
 - **Only exact inputs have a key.** `--ref` (or HEAD), `--against` and every `--also` ref must be full commits: a branch or `stg` moves. A run with `--artifacts`
   has no key (the files are not saved). Such a run is never saved and never reused.
-- **Store:** `JOB_RUN_CACHE_DIR`, default `~/.cache/claudepilot-job-run` (mode 700), files `<key>.log` and `<key>.rc`. It is per user and host (a workspace's home), shared
+- **Store:** `JOB_RUN_CACHE_DIR`, default `~/.cache/claudepilot-job-run` (mode 700), files `<key>.log`, `<key>.job` (the name of the Job that passed, so a reused result still points at a real Job's evidence) and `<key>.rc`. It is per user and host (a workspace's home), shared
   by every chat in it; another workspace does not see it. Only exit 0 with the Job `Complete`, the command's own `=== JOB-RUN EXIT 0` line and no credential in the log is saved.
   The saved text is the log after the credential mask (the file `JOB_RUN_LOG` gets), never the raw stream; the artifacts block is not in it. The `.rc` is written last.
-- **Hit:** a result younger than `JOB_RUN_REUSE_MAX_AGE_DAYS` (7); the output starts with `job-run: reused a passed result … --fresh runs it again`, then the saved log; exit 0.
+- **Hit:** a result younger than `JOB_RUN_REUSE_MAX_AGE_DAYS` (7); the output starts with `job-run: reused a passed result … from Job <name> … --fresh runs it again`, then the saved log; exit 0.
   `--fresh` runs the Job and saves the new pass. Entries older than twice the age are removed when a result is saved.
 - **Not covered:** `scripts/gate-job.sh` is never reused (the charter wants the full gate on the exact commit; reuse of gate results is owner decision T-578).
   A pass that depended on something outside the key (the network, the clock, a registry) is reused too: use `--fresh` for such a check.

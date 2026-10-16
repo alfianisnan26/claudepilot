@@ -174,7 +174,7 @@ if [[ $ref =~ $hex40 && -z $artifacts ]] && [[ -z $against || $against =~ $hex40
 fi
 if [ -n "$key" ] && [ -z "$fresh" ] && [ -s "$cache/$key.log" ] && [ "$(cat "$cache/$key.rc" 2>/dev/null)" = 0 ] \
    && [ -n "$(find "$cache/$key.log" -mmin "-$((reuse_days * 1440))" 2>/dev/null)" ]; then
-  echo "job-run: reused a passed result for $repo@${ref:0:12} (saved $(date -u -r "$cache/$key.log" +%FT%TZ), key ${key:0:12}); --fresh runs it again"
+  echo "job-run: reused a passed result for $repo@${ref:0:12} from Job $(cat "$cache/$key.job" 2>/dev/null || echo unknown) (saved $(date -u -r "$cache/$key.log" +%FT%TZ), key ${key:0:12}); --fresh runs it again"
   cat "$cache/$key.log"
   [ -n "${JOB_RUN_LOG:-}" ] && cp "$cache/$key.log" "$JOB_RUN_LOG"
   exit 0
@@ -401,7 +401,7 @@ echo "job-run: $job rc=$rc in $((t2 - t1))s (queued $((t1 - t0))s) on ${node:-?}
 # Save a pass (T-731): the command's own exit line says 0, the Job itself ended Complete, and no credential showed up in the log. The log on disk
 # is the masked one. Written to a temporary name and moved, so a reader never sees half of it; the rc file goes last and decides.
 if [ -n "$key" ] && [ "$rc" = 0 ] && [ "${st:-}" = Complete ] && grep -qx '=== JOB-RUN EXIT 0' "$log" && ! grep -qx leak "$work/n" 2>/dev/null; then
-  if mkdir -p "$cache" && chmod 700 "$cache" && cp "$log" "$cache/$key.log.tmp" && mv "$cache/$key.log.tmp" "$cache/$key.log" && printf '0\n' > "$cache/$key.rc"; then
+  if mkdir -p "$cache" && chmod 700 "$cache" && cp "$log" "$cache/$key.log.tmp" && mv "$cache/$key.log.tmp" "$cache/$key.log" && printf '%s\n' "$job" > "$cache/$key.job" && printf '0\n' > "$cache/$key.rc"; then
     echo "job-run: result saved for reuse (key ${key:0:12}, ${reuse_days} days)"
     find "$cache" -type f -mtime "+$((reuse_days * 2))" -delete 2>/dev/null || true
   else echo "job-run: could not save the result for reuse (no harm done)" >&2; fi

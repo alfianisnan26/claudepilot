@@ -879,7 +879,10 @@ test('T-731 reuse: a pass is saved (masked log, exit 0); the same repo, commit a
   const calls = w.calls();
   const second = go(w, c, 'npm test');
   assert.equal(second.code, 0, second.out);
-  assert.match(second.out, /job-run: reused a passed result for claudepilot@[0-9a-f]{12} \(saved .*; --fresh runs it again/);
+  const origin = /^job-run: (claudepilot-job-[0-9a-f]{8}) rc=0/m.exec(first.out)?.[1];
+  assert.ok(origin, 'the first run names its Job');
+  assert.match(second.out, new RegExp(`job-run: reused a passed result for claudepilot@[0-9a-f]{12} from Job ${origin} \\(saved `));
+  assert.match(second.out, /job-run: reused a passed result for claudepilot@[0-9a-f]{12} from Job claudepilot-job-[0-9a-f]{8} \(saved.*; --fresh runs it again/);
   assert.match(second.out, /hello from the job/);
   assert.match(second.out, /=== JOB-RUN EXIT 0/);
   assert.ok(!second.out.includes(w.npmToken));
