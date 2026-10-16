@@ -13,18 +13,20 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 ## IN FLIGHT (6 of 6, D-71)
   Lanes' ticket_comment refused on unassigned tickets (T-341, T-549, T-675): verdicts live in their replies + this file.
 - QA PERF 7e4879c7: T-739 B S3 PASS WITH GAPS (job e9352e97; mutants M1 M3 M4 M5 M7 survived -> Impl after T-772 S1)
-  N1 PASS + killing tests (7613); PLAN T-611 (7621, lead order 7642) -> now RE-QA T-426 S1f 4313670d (lead read diff, 7640).
-- QA UI 8b13bb5a: T-772 sweep (7599), PLAN T-592 (7601), REVIEW T-723 S3 APPROVE 7609, PLAN T-733 (7630, 7633) -> now PLAN T-781.
-- FOR THE COORDINATOR, T-781 (D-76): the lead cannot claim or comment on it (unassigned; claim_next takes the queue top). The
-  Backend lane is spawned with ticket T-781 right after T-736 S3 (destructive-script fix, already running; not preempted). T-731 is DONE.
+  PLAN T-611 (7621, order 7642) -> now RE-QA T-426 S1f on lead-built wip/qa-t426-6b72191 (4313670d + probes e1dd7b69);
+  by reading: likely FAIL O1 (newline file name splits `hits`, leaking file survives; fix grep -Z + read -d '').
+- QA UI 8b13bb5a: REVIEW T-723 S3 APPROVE 7609, PLAN T-733 (7630, 7633), PLAN T-781 5 slices (reply; D1-D7 defaults taken)
+  -> now QA T-736 S3 2d10b092.
+- FOR THE COORDINATOR, T-781 (D-76): lead cannot claim/comment it (unassigned); Backend lane b2f0e95f spawned on it (S1+S2),
+  posts the estimate + D1-D7 there. Order S1, S2, S4, S3, S5 (the file must carry the chat before a hard move). T-731 is DONE.
 - QA BE 2 42e5408f: T-600 live UNAVAILABLE for the lane (7597); lead read crew_scorecard: LIVE PARTIAL, pace no_source (7610);
   PLAN T-776 4 slices (lead decisions 7608) -> now QA T-723 S3 b78d7f6b (builder job e178a510 101/0, 5/5 mutants).
 - IMPL lane 09fee945 (sonnet, sekar; fce0c981 ended: T-739 B S1-S3 + docs N1 9be41062) T-772 S1 on ticket/T-772-forced-colors
   (base b7f02cad): ci outline-hidden + tools/qa forced-colors check.
 - BE INFRA lane 72bdc262 (sonnet, satria; 2dc2be75 ended: T-426 S1f DONE 4313670d, job 6c72bc7f 57/0, M1-M3 red) T-610 rework 2
   (7053 items 1-5, m6) -> T-611 S0 -> T-524 S3c (7360).
-- BACKEND lane 4762d05d (sonnet; 4123bb21 ended: T-723 S3 DONE b78d7f6b, 7595) T-736 S3: QA FAIL 7452 F1 other-repo guard,
-  F2 fail closed on missing guard, cwd mutant -> T-733 S4, S6. T-778 filed (bypass routes lack own requireCan; authz = person, coordinator).
+- BACKEND lane b2f0e95f (sonnet; 4762d05d ended: T-736 S3 DONE 2d10b092, job 9911ef20 32/0, 9/9 mutants) T-781 S1+S2 on
+  ticket/T-781-hard-move (base 8b298c35) -> T-781 S4, S3, S5 -> T-733. T-778 filed (bypass routes lack own requireCan; authz = person).
 - HELD: T-426 S1e 2174eee1 QA PASS 6169, review CHANGES 7121 -> fix, re-QA, merge after T-401. T-578 51f6c153 review CHANGES 6168 -> owner. T-631 CHANGES 5850 -> coordinator.
 - 16:12 OWNER PRIORITY (coordinator, T-426 5538): T-401 then T-426 FIRST. T-401 gate GREEN gate-54ba328-6502; ff only on the person's ack.
 
@@ -37,8 +39,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - 07:45 D-75 (coordinator): one Job per commit (checks chained), never the same command twice on a commit, QA reads the builder's log;
   the LEAD RUNS NO JOBS (quick-check and gate go to a lane); idle QA gets no-Job work (reviews, browser). T-731 -> BE Infra after T-697.
 - 03:55 Lead false claim corrected: T-524 6775 said job 4d5cb657 proved the S3 patch; its log shows the rule at creation. 6788; incident T-721.
-- 20:14 PUSHBACK T-657: T-259 (QA FAIL 1773), T-317 (live run not done), T-338 (no QA pass) closed against the evidence -> reopen
-  proposed; lead can't (T-634).
+- 20:14 PUSHBACK T-657: T-259, T-317, T-338 closed against the evidence -> reopen proposed; lead can't (T-634).
 - 16:30 D-71 (coordinator): limit 6; 3rd build lane BE Infra (CI, runners, job-run, k3s, deploy, secrets delivery, usage, spend, quota):
   T-401, T-426, T-611, T-547, T-610. Backend: T-546, T-597, T-600 route, T-325. Spawn lanes with claude auto.
 - 14:56 D-70 LANES (DECISIONS.md; my decision T-595 5380): freed slots become lanes, spawned ONCE on sonnet and fed
@@ -72,8 +73,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 1. T-401 fix (7103) + re-QA, then ack 4941 -> T-426 S1e -> T-379 S2 3f11b28 (PASS 4948, review 4938); deploys are the coordinator's.
 2. Batch at the gate door: T-376 S4b, T-732, T-731, T-723 S1-S3, batch 19 rebuilt (T-697, T-574 S3); then T-739 B, T-736.
 3. T-675 (memory findings 4/5 + R2 test, Backend lane), T-574 S3 (6615), T-416 S2 (Bypass restore).
-4. RTK: T-340 (hook change landed by a person/coordinator) -> T-341 merge -> T-306 item 3 (lab A/B). 5. T-537. 6. T-513.
-7. T-472 live re-check (needs portal_status), T-422, T-147, T-438, T-425, T-436, T-437, T-432, T-382, T-377, T-386, T-409, T-402, T-398,
+4. RTK: T-340 (person/coordinator) -> T-341 merge -> T-306 item 3. 5. T-537. 6. T-513. 7. T-472 live re-check (needs portal_status), T-422, T-147, T-438, T-425, T-436, T-437, T-432, T-382, T-377, T-386, T-409, T-402, T-398,
    T-399, T-370 HOLD, T-371..T-374, T-363, T-451, T-470, T-507, T-508, T-512, T-520; T-404 open till deployed.
 
 LESSONS: reply_of = LATEST reply only (verdict must be the last reply); node --test, never vitest; a gate-done notice needs action; dontAsk workers cannot read /tmp, merge, gate or wait, and Bash only in their spawn worktree (new branch = new worker); whole
