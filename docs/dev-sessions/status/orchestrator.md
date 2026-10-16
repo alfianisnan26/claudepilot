@@ -3,8 +3,7 @@
 Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-10-15 DONE batches 1-7: see 4fbab374). Hand-overs: ab99b45, bb58413, 639202e.
 
 ## DONE
-- Batches 22-23: git history (e8b962f9). Close on "Coordinator live check" PASS. T-574 re-check after 10-17 15:00Z; T-376 S5; T-733 S5.
-- BATCH 24B b2932d0e (T-401 S2b+S2c, T-736 S3c-S3e): DEPLOY 257 LIVE from 7f83f13d. T-401 live check asked 8549 (close on PASS).
+- Batches 22-24B: git history (e8b962f9, 1e9737d5). Close on "Coordinator live check" PASS (T-401 8549). T-574 re-check after 10-17 15:00Z.
 - BATCH 25 ON INTEGRATION 7c3c1e44 (gate claudepilot-gate-7c3c1e4-c387 GREEN, re-gated after release merge-back f649e481):
   T-781 S8+S8b, T-623 S2, T-416 S2+S2b (lead's mechanical controller.ts resolution 056fe1a4). Coordinator told T-731 8617.
 - BATCH 26 ON INTEGRATION 83b7213e (gate claudepilot-gate-83b7213-b968 GREEN, suite 672s; after 3 re-merges as integration moved):
@@ -54,7 +53,6 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - 13:20 D-66: quick-check (format, lint, named tests) before the gate. Workers cannot git merge: the lead merges base heads in (4852).
 - 11:15 D-65 (coordinator): implementers sonnet by default (opus only with a written why); small QA/review findings fixed in the same
   slice; full report on the ticket, the lead reads line 1 and opens it only on FAIL; ready features over chores.
-- 15:29 Coordinator: job-run.sh caps and queues Jobs (2/program, 3 cluster); "one at a time" is PER AGENT. gate-job before each merge stays mine.
 - 09:00 Persona/role-tool/permission questions go to the coordinator, NEVER the owner; `owner-checklist` = production only.
 - D-63: QA/ux/reviewer on SONNET (opus needs a `why`: security, gate, rule or large slice); the lead never implements or commits code.
 - D-61: NO Agent-tool sub-agents, heavy work ONLY via scripts/job-run.sh or gate-job.sh, one at a time. Hand over before 250k.
