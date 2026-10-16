@@ -30,6 +30,8 @@
 # Placement (T-611): the scheduler counts memory REQUESTS, the master (control plane, Argo CD, Gitea...) uses far more for real. Before it creates a
 # Job this script reads the master's real memory (kubectl top nodes) and, over JOB_RUN_MASTER_MAX_PCT (default 75), makes the Job's rule away
 # from the control plane REQUIRED: it waits for k3s-node2 or for room. Under the line, or when the metrics fail, the preferred rules stay.
+# It reads again when the queue lets the Job out and patches the rule into the suspended Job. TEST ONLY: JOB_RUN_TEST_REREAD_PCT=<0-999> replaces
+# that second reading (not the first), to prove the patch live; unset, nothing changes.
 #   scripts/job-run.sh --list                        the Jobs, their chat, role and state
 #   scripts/job-run.sh --stop [<job> | --chat <id>]     stop Jobs (all, one, or a chat's) and delete their Secrets
 # Caps: JOB_RUN_MAX Jobs at once cluster-wide (default 3), JOB_RUN_MAX_PER_CHAT per chat (2) and JOB_RUN_MAX_PER_PROGRAM per program (2;
@@ -51,7 +53,9 @@ event_repo=isnanme/event # fixed on purpose (T-491): the door names one reposito
 mem_std=4Gi; tmp_std=2Gi; mem_big=8Gi; tmp_big=4Gi
 master_max=${JOB_RUN_MASTER_MAX_PCT:-75}
 die() { echo "job-run: $*" >&2; exit 2; }
+test_reread_pct=${JOB_RUN_TEST_REREAD_PCT:-} # TEST ONLY (T-524): forces the master's memory reading for the re-read before the Job is let out; unset = the real reading
 for n in "$max" "$per" "$pprog" "$art_max" "$master_max"; do [[ $n =~ ^[0-9]+$ ]] || die "the caps are numbers"; done
+[ -z "$test_reread_pct" ] || [[ $test_reread_pct =~ ^[0-9]{1,3}$ ]] || die "JOB_RUN_TEST_REREAD_PCT is a number"
 label() { local v; v=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9.-' '-' | cut -c1-63 | sed -E 's/^[^a-z0-9]+//; s/[^a-z0-9]+$//'); printf '%s' "${v:-none}"; }
 jobs_json() { kubectl -n "$ns" get jobs -l app=claudepilot-job-run -o json 2>/dev/null; }
 stop_one() {
@@ -190,7 +194,9 @@ trap 'exit 130' INT TERM HUP
 MASTER_RULE='requiredDuringSchedulingIgnoredDuringExecution: {nodeSelectorTerms: [{matchExpressions: [{key: node-role.kubernetes.io/control-plane, operator: DoesNotExist}]}]}'
 master_rule=
 master_check() { # sets master_rule and says what it read; called when the Job is made and again when the queue lets it out (T-524: a queued Job can wait an hour)
-  local pct; pct=$(kubectl top nodes -l node-role.kubernetes.io/control-plane --no-headers 2>/dev/null | awk 'NR == 1 { gsub(/%/, "", $5); print $5 }' || true)
+  local pct
+  if [ -n "${1:-}" ]; then pct=$1 # a forced reading (JOB_RUN_TEST_REREAD_PCT, see the top): no kubectl top
+  else pct=$(kubectl top nodes -l node-role.kubernetes.io/control-plane --no-headers 2>/dev/null | awk 'NR == 1 { gsub(/%/, "", $5); print $5 }' || true); fi
   if [[ $pct =~ ^[0-9]{1,3}$ ]]; then
     if [ "$pct" -gt "$master_max" ]; then
       master_rule=$MASTER_RULE
@@ -276,9 +282,10 @@ done
 # of the Jobs ran on a master at 87%). Read again now: over the line, the REQUIRED rule goes into the still suspended Job (its scheduling
 # directives may change while it is suspended) before it is let out. A rule once required stays.
 if [ -z "$master_rule" ]; then
-  master_check
+  master_check "$test_reread_pct"
   if [ -n "$master_rule" ]; then
     kubectl -n "$ns" patch job "$job" --type merge -p '{"spec":{"template":{"spec":{"affinity":{"nodeAffinity":{"requiredDuringSchedulingIgnoredDuringExecution":{"nodeSelectorTerms":[{"matchExpressions":[{"key":"node-role.kubernetes.io/control-plane","operator":"DoesNotExist"}]}]}}}}}}}' >/dev/null \
+      && echo "job-run: placement: the required rule was patched into the suspended $job (accepted by the API server)" >&2 \
       || { echo "job-run: could not add the placement rule to $job: it runs with the preferred rules only" >&2; master_rule=; }
   fi
 fi

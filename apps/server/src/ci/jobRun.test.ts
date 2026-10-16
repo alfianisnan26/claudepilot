@@ -820,6 +820,13 @@ test('T-524: a Job queued while the master was under the line is read again when
   const rule = calls.findIndex((c) => /patch job .*requiredDuringSchedulingIgnoredDuringExecution.*node-role\.kubernetes\.io\/control-plane.*DoesNotExist/.test(c));
   const go = calls.findIndex((c) => /patch job .*"suspend":false/.test(c));
   assert.ok(rule >= 0 && go > rule, `the rule is patched in before the Job is let out:\n${calls.join('\n')}`);
+  // The patch names this run's own Job (the one that is then let out), and that Job is the one that was created.
+  const ruleName = /^.*patch job (claudepilot-job-[0-9a-f]{8}) --type merge -p .*requiredDuringScheduling/.exec(calls[rule] ?? '')?.[1];
+  const goName = /patch job (claudepilot-job-[0-9a-f]{8}) --type merge -p \{"spec":\{"suspend":false\}\}/.exec(calls[go] ?? '')?.[1];
+  assert.ok(ruleName, `the rule patch names a claudepilot-job-<hex> Job:\n${calls[rule]}`);
+  assert.equal(ruleName, goName, 'the rule goes into the same Job that is let out');
+  assert.ok(w.applied1().includes(`name: ${ruleName}`), 'and that is the Job this run created');
+  assert.equal(calls.filter((c) => /patch job .*requiredDuringScheduling/.test(c)).length, 1, 'one rule patch, one object');
   // Still under the line when let out: no patch.
   const w2 = world(seeds, { top: 60 });
   const s2 = w2.start(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'true']);
@@ -827,6 +834,42 @@ test('T-524: a Job queued while the master was under the line is read again when
   w2.edit((st) => { Object.assign(st.jobs[0] ?? {}, { done: true, rc: 0 }); });
   assert.equal((await s2.done).code, 0);
   assert.doesNotMatch(w2.calls(), /requiredDuringScheduling/);
+});
+
+const QUEUED = [1, 2, 3].map((i) => ({ name: `claudepilot-job-0000000${i}`, chat: 'chat-x' }));
+async function queuedThenReleased(env: Record<string, string>, beforeRelease: (root: string) => void) {
+  const w = world(QUEUED, { top: 60 });
+  const s = w.start(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'true'], env);
+  await waitFor('queued', () => /queued behind 3/.test(s.out()));
+  beforeRelease(w.root);
+  w.edit((st) => { Object.assign(st.jobs[0] ?? {}, { done: true, rc: 0 }); });
+  return { w, r: await s.done };
+}
+
+test('T-524: when kubectl top fails on the re-read, no patch of the rule is made and the Job still runs', async () => {
+  const { w, r } = await queuedThenReleased({}, (root) => writeFileSync(join(root, 'top.txt'), 'FAIL')); // the first reading (60%) was fine
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /memory is unknown \(metrics unavailable\): preferred rules only/);
+  assert.doesNotMatch(w.calls(), /patch job .*requiredDuringScheduling/, 'no rule patch');
+  assert.match(w.calls(), /patch job claudepilot-job-[0-9a-f]{8} --type merge -p \{"spec":\{"suspend":false\}\}/, 'the Job is let out');
+});
+
+test('T-524: JOB_RUN_TEST_REREAD_PCT replaces only the re-read (test only); unset or under the line changes nothing; a bad value is a usage error', async () => {
+  const over = await queuedThenReleased({ JOB_RUN_TEST_REREAD_PCT: '99' }, () => {}); // kubectl top still says 60
+  assert.equal(over.r.code, 0, over.r.out);
+  assert.match(over.r.out, /control-plane node is at 99% of its memory \(over 75%\)/);
+  assert.match(over.r.out, /the required rule was patched into the suspended claudepilot-job-[0-9a-f]{8} \(accepted/);
+  assert.match(over.w.calls(), /patch job claudepilot-job-[0-9a-f]{8} --type merge -p .*requiredDuringScheduling.*DoesNotExist/);
+  assert.ok(!/requiredDuringScheduling/.test(over.w.applied1()), 'the first reading was the real one (60%): the manifest has no required rule');
+  const under = await queuedThenReleased({ JOB_RUN_TEST_REREAD_PCT: '10' }, () => {});
+  assert.doesNotMatch(under.w.calls(), /requiredDuringScheduling/);
+  assert.doesNotMatch(under.r.out, /\(over 75%\)/);
+  const none = await queuedThenReleased({}, () => {});
+  assert.doesNotMatch(none.w.calls(), /requiredDuringScheduling/);
+  assert.doesNotMatch(none.r.out, /at 99%|at 10%/);
+  const bad = world([], { top: 50 }).run(['--repo', 'claudepilot', '--ref', 'main', '--', 'true'], { JOB_RUN_TEST_REREAD_PCT: 'lots' });
+  assert.equal(bad.code, 2, bad.out);
+  assert.match(bad.out, /JOB_RUN_TEST_REREAD_PCT is a number/);
 });
 
 test('T-611: a Job Pending on the required rule says it waits for k3s-node2', async () => {
