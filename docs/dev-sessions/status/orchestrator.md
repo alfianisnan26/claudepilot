@@ -1,33 +1,27 @@
-# orchestrator status (2026-10-16 01:00 UTC, session 355881a3, continuation of de232389)
+# orchestrator status (2026-10-16 01:55 UTC, session 355881a3, continuation of de232389)
 
 Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-10-15 DONE batches 1-7: see 4fbab374). Hand-overs: ab99b45, bb58413, 639202e.
 
 ## DONE
+- MERGED c3cad1a6 (batch 13): T-524 S3 b68f043d (QA Perf PASS WITH GAPS 6623; open for S3b 6624) + T-681 1fbca960
+  (QA UI 6633; CLOSED, gaps -> T-710); gate GREEN gate-7526daa.
 - MERGED 5f54dbcf (batch 12): T-574 S2 57bc14bf (QA BE 2 PASS WITH GAPS); gate GREEN gate-5a379d4 (6637). Open for S3 (6615).
 - MERGED 24570945 (batch 11): T-341 e4284315 + docfix 2ed9bc64 (QA BE 2 PASS); gate GREEN gate-ea46530. Open for D (person).
   Lead can't comment on T-341 (unassigned): evidence here.
-- MERGED ff 7569d582 (batch 10): T-633 S2 (QA Perf PASS 6523); gate GREEN c57ab11. T-633 CLOSED (S1 batch 7 1a4a7933).
-- MERGED ff 38d6d3fb (batch 8b): T-325 S1+S1b+S1c (QA Perf 6357, migration 785 read); gate GREEN e5d2de3. Open for S3 (person).
-- MERGED ff 7ff6561d (batch 9): T-416 S1-S1e (QA Perf 6420); gate GREEN 1803cf2 + re-gate 15aece0 (6498). Open: S2, T-675.
-  Flakes repos/actions.test.ts timer + chat/limits.test.ts -> T-697 (high, 6551; 2 of the last 3 gates).
-- Earlier 2026-10-15: batches 1-7 (275cea5b, bcb27182, 1772d2d0, ce819bd0, ffd4bcdd, 8d9eab44, 1a4a7933); T-546, T-636, T-576, T-638 CLOSED.
+- Batches 8b-10 (2026-10-15/16): 38d6d3fb T-325 S1 (open S3, person), 7ff6561d T-416 S1 (open S2, T-675), 7569d582 T-633 CLOSED.
+- Earlier 2026-10-15: batches 1-7 (275cea5b .. 1a4a7933); T-546, T-636, T-576, T-638 CLOSED.
 
 ## IN FLIGHT (6 of 6, D-71)
   Lanes' ticket_comment refused on unassigned tickets (T-341, T-549, T-675): verdicts live in their replies + this file.
-- T-524 S3 b68f043d: QA Perf PASS WITH GAPS 6623 (jobs faca6593, c0e7bfc3; mutant `patch job "other"` survives; no live
-  patch run). Decision 6624: merge in batch 13; S3b (pin job name, no-patch-on-top-fail test, live suspended-Job run) BE Infra.
-- IN QA: QA Perf idle (next T-697, T-524 S3b).
-- BATCH 13 wip/main-7526daa = T-524 S3 b68f043d + T-681 1fbca960 (QA UI PASS WITH GAPS 6633): GATE RUNNING.
-- QA BE 2 idle: next T-549 S2. T-549 S2 dfa9dabe sent back: invented ids kubernetes/event (D-67) + kubernetes/claudepilot,
-  size test never pages (14-15k < 19k budget); lane 59ae451c fixing on the same branch.
-  T-681 1fbca960 (CI controls size-11, tools/qa/ci-targets.mjs; typecheck/build were on 293f612) -> QA UI 8b13bb5a.
+- QA PERF 7e4879c7: T-697 29b4ce58 (test-only: actions.test settled() yields a turn; limits + crewMcp G3 not reproduced;
+  G3 failed in 7d87d90 which predates the wait at :773). Asked: 30x under load with/without fix. Lead quick-check timed out (queue).
+- QA UI 8b13bb5a: T-710 sweep now; T-376 S3 first when it is DONE. QA BE 2 42e5408f idle: next T-549 S2.
 - IMPL 0fd43a51 (sonnet) T-376 S3 on ticket/T-376-s3 from wip/qa-t376-2611d17: find+cut ~14 MB on open, Show all /
   oldest page, harness >500 KB log + open-time budget (FAIL 6542, decision 6543).
-- BE INFRA lane 59ae451c (sonnet) T-549 S2 on ticket/T-549-s2 from 70b081f8: size test 3-5 programs + shrink/page, ceiling
-  boundary test, baseline by program id (QA BE FAIL job 96771ba8; QA UI PASS WITH GAPS f7730a9b).
-- BACKEND lane fb33b27e (sonnet) T-697 on ticket/T-697-flakes from integration: repos/actions timer, chat/limits, crewMcp G3
-  (flaked in gate 7d87d90); 20x loop proof.
-- T-675 (unassigned, lead refused): findings 4/5 on T-416 6385, R2 on 6420 -> next Backend slot.
+- BE INFRA lane 59ae451c (sonnet) T-549 S2 dfa9dabe SENT BACK: invented ids kubernetes/event (D-67) + kubernetes/claudepilot,
+  size test never pages (14-15k < 19k budget); fixing on ticket/T-549-s2. Then T-524 S3b.
+- BACKEND lane 045682c4 (sonnet, rossi) T-675 on ticket/T-675-t416-followups from integration: alert id cap, wake actor,
+  lead warning (N = max_workers, default 5) + R2.
 - HELD: T-426 S1e 2174eee1 QA PASS 6169 -> merge on the T-401 ack (4941). T-578 51f6c153 review CHANGES 6168 -> owner decision.
   T-631 review CHANGES 5850: absolute-path entry (a) for the coordinator; F1 on job-run.sh -> T-635 (high).
 - 16:12 OWNER PRIORITY (coordinator, T-426 5538): T-401 then T-426 FIRST. T-401 gate GREEN gate-54ba328-6502; ff only on the person's ack.
@@ -69,7 +63,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 
 ## NEXT (in order, as slots free)
 1. Merges: T-401 060aca4 (ack 4941) -> T-426 S1e -> T-379 S2 3f11b28 (PASS 4948, review 4938); deploys are the coordinator's.
-2. Batch 13 merge on green. BE Infra after T-549 S2: T-524 S3b. QA UI: full A1-A9 sweep of both CI pages (T-681 6633). Then T-376 S3, T-549 S2, T-697 -> QA.
+2. On PASS: T-697, T-549 S2, T-376 S3 -> gate, merge. BE Infra after T-549 S2: T-524 S3b. T-710 fixes after the sweep. Then T-376 S3, T-549 S2, T-697 -> QA.
 3. T-675 (memory findings 4/5 + R2 test, Backend lane), T-574 S3 (6615), T-416 S2 (Bypass restore).
 4. RTK: T-340 (hook change landed by a person/coordinator) -> T-341 merge -> T-306 item 3 (lab A/B). 5. T-537. 6. T-513.
 7. T-472 live re-check (needs portal_status), T-422, T-147, T-438, T-425, T-436, T-437, T-432, T-382, T-377, T-386, T-409, T-402, T-398,
