@@ -7,6 +7,7 @@ import { isAppError } from '@isnanme/core';
 import { MIGRATIONS } from '../store/migrations.js';
 import { generateSecretKey, parseSecretKey } from '../store/secretBox.js';
 import { Store } from '../store/store.js';
+import { SpendStore } from './store.js';
 import { DAY, HOUR, MIN, NOW, spendHarness } from './testkit.js';
 
 // NOW is 2026-10-12 15:00 UTC (a Monday). `at(h, m, day)` is a UTC clock time in October 2026 (the 12th unless said otherwise).
@@ -395,8 +396,9 @@ test('a row marked suspect (T-610: a running total booked as one request) is in 
     h.spend.onTurn({ sessionId: 'S', workspaceId: 'docker/api', claudeId: 'c1', atMs: NOW }, [{ costUsd: 0 }]);
     assert.equal(h.spend.spikes('1d').events.length, 0);
     assert.equal(h.spend.attribution({ by: 'session', range: '1d' }).totals.costUsd, 0, 'attribution leaves it out');
-    assert.equal(h.store.requestCosts('c1', NOW - 3 * DAY, NOW + MIN).length, 20, 'and so does the baseline of requests');
-    assert.equal(h.store.usageRows(NOW - DAY, NOW + MIN).length, 0, 'and the rows the scorecard reads');
+    const spendStore = new SpendStore(h.store);
+    assert.equal(spendStore.requestCosts('c1', NOW - 3 * DAY, NOW + MIN).length, 20, 'and so does the baseline of requests');
+    assert.equal(spendStore.usageRows(NOW - DAY, NOW + MIN).length, 0, 'and the rows the scorecard reads');
     assert.equal((h.db.prepare('SELECT COUNT(*) AS n FROM chat_usage WHERE kind = ?').get('suspect') as { n: number }).n, 1, 'the row is kept as evidence');
   } finally {
     h.done();
