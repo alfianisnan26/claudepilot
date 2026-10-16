@@ -357,9 +357,10 @@ function heavyBranch(src: string) {
     if (start < 0) { if (elseTop) start = i; return; }
     if (end >= 0 || !code) return;
     if (stack.length === 1 && stack[0] === 'if' && /^\s*fi\s*$/.test(lines[i] ?? '')) { end = i; return; }
+    // `|| exit`: a cd without it is not counted (SC2164). The cd line is the one line of the branch that is not "allowed" on purpose.
+    const plainCd = /^\s*cd "\$here" \|\| exit\s*$/.test(lines[i] ?? '');
+    if (plainCd) { if (cd < 0 && stack.length === 1 && stack[0] === 'if') cd = i; return; }
     if (bad < 0 && !allowed(lines[i] ?? '', 'branch')) bad = i;
-    // `|| exit`: a cd without it is not counted (SC2164)
-    if (cd < 0 && stack.length === 1 && stack[0] === 'if' && /^\s*cd "\$here" \|\| exit\s*$/.test(lines[i] ?? '')) cd = i;
   });
   return { start, end, bad, cd };
 }
