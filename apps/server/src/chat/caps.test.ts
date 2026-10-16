@@ -106,7 +106,10 @@ test('T-425: a send to a session waiting for a slot returns at once with the mes
     assert.equal(s.ws.sends.length, sends, 'nothing reached Claude yet');
     s.controller.liveCaps = () => ({ perWorkspace: 5, total: 10 }); // a slot comes
     await until(() => s.controller.get(s.id)!.process === 'live', 4000);
-    await until(() => s.ws.sends.slice(sends).some((x) => x.line.includes('hello after the wait')), 4000);
+    await until(() => s.ws.sends.slice(sends).some((x) => x.line.includes('hello after the wait')) || s.controller.history(s.id).some((e) => /wasn’t delivered/.test(e.text ?? '')), 4000).catch((e: unknown) => {
+      throw new Error(`${String(e)}; lines: ${JSON.stringify(s.ws.sends.slice(sends).map((x) => x.line.slice(0, 80)))}; notes: ${JSON.stringify(s.controller.history(s.id).filter((e2) => e2.kind === 'system').map((e2) => e2.text))}`);
+    });
+    assert.ok(s.ws.sends.slice(sends).some((x) => x.line.includes('hello after the wait')), 'the line reached Claude Code');
     assert.equal(s.controller.get(s.id)!.slotWait ?? null, null);
   } finally {
     await s.done();
