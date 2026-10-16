@@ -871,7 +871,6 @@ const go = (w: ReturnType<typeof world>, ref: string, cmd: string, extra: string
 
 test('T-731 reuse: a pass is saved (masked log, exit 0); the same repo, commit and command returns it at once with no Job; the log file is written', () => {
   const w = world();
-  writeFileSync(join(w.root, 'scenario.json'), JSON.stringify({ rc: 0, log: jobLog(w.root, 0, 'authorization {TOKEN}\n') }));
   const c = sha();
   const first = go(w, c, 'npm test');
   assert.equal(first.code, 0, first.out);
@@ -883,14 +882,28 @@ test('T-731 reuse: a pass is saved (masked log, exit 0); the same repo, commit a
   assert.match(second.out, /job-run: reused a passed result for claudepilot@[0-9a-f]{12} \(saved .*; --fresh runs it again/);
   assert.match(second.out, /hello from the job/);
   assert.match(second.out, /=== JOB-RUN EXIT 0/);
-  assert.match(second.out, /authorization \[redacted\]/);
-  assert.ok(!second.out.includes(w.npmToken), 'the saved log is the masked one');
+  assert.ok(!second.out.includes(w.npmToken));
   assert.equal(jobs(w), 1, 'no second Job');
   assert.equal(w.calls(), calls, 'no kubectl call at all on a hit');
   assert.match(w.log(), /hello from the job/);
   const saved = readdirSync(join(w.root, 'home/.cache/claudepilot-job-run')).map((f) => readFileSync(join(w.root, 'home/.cache/claudepilot-job-run', f), 'utf8')).join('');
   assert.ok(!saved.includes(w.npmToken), 'nothing unmasked is stored');
   assert.doesNotMatch(saved, /ARTIFACTS BEGIN/);
+});
+
+test('T-731 reuse: a pass whose log held the credential is masked in the output but never saved', () => {
+  const w = world();
+  writeFileSync(join(w.root, 'scenario.json'), JSON.stringify({ rc: 0, log: jobLog(w.root, 0, 'authorization {TOKEN}\n') }));
+  const c = sha();
+  for (let i = 1; i <= 2; i++) {
+    const r = go(w, c, 'npm test');
+    assert.equal(r.code, 0, r.out);
+    assert.match(r.out, /authorization \[redacted\]/);
+    assert.ok(!r.out.includes(w.npmToken));
+    assert.doesNotMatch(r.out, /reused|saved for reuse/);
+    assert.equal(jobs(w), i);
+  }
+  assert.ok(!existsSync(join(w.root, 'home/.cache/claudepilot-job-run')), 'nothing stored');
 });
 
 test('T-731 reuse: --fresh runs the Job again; a failed run is never saved or reused', () => {
