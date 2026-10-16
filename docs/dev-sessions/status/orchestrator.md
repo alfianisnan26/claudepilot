@@ -26,8 +26,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - IMPL lane 0d799c90 (sonnet, rossi; bccb756f ended after T-710) T-376 S4 on ticket/T-376-s4 from be431d6a: createApp wiring
   test + 4x CPU, long tasks, DOM/heap, older-page render budgets.
 - BE INFRA lane 5b9b7122 (sonnet, two.claude; c305a138 ended after T-610) T-251 S2 on ticket/T-251-s2 from 92900150: mid-turn limit test, :208.
-- BACKEND lane 216dbe18 (sonnet, regitha) T-574 S3 on ticket/T-574-s3 from integration: cross-lead NOT_FOUND test, size trim
-  toward 600 avg, bound back toward 1.5k.
+- BACKEND lane 216dbe18 (sonnet, regitha) T-574 S3 on ticket/T-574-s3: cross-lead NOT_FOUND test, size trim, bound 1.5k.
 - HELD: T-426 S1e 2174eee1 QA PASS 6169 -> merge on the T-401 ack (4941). T-578 51f6c153 review CHANGES 6168 -> owner decision.
   T-631 review CHANGES 5850: absolute-path entry (a) for the coordinator; F1 on job-run.sh -> T-635 (high).
 - 16:12 OWNER PRIORITY (coordinator, T-426 5538): T-401 then T-426 FIRST. T-401 gate GREEN gate-54ba328-6502; ff only on the person's ack.
