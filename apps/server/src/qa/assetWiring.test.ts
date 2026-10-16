@@ -36,6 +36,14 @@ test('createApp serves a built script and stylesheet gzip-compressed and immutab
     assert.equal(res.status, 200, f);
     assert.equal(res.headers.get('content-encoding'), 'gzip', f);
     assert.match(res.headers.get('cache-control') ?? '', /immutable/, f);
+    assert.match(res.headers.get('vary') ?? '', /accept-encoding/i, `${f}: a cache keys the copy by Accept-Encoding`);
     assert.equal(gunzipSync(Buffer.from(await res.arrayBuffer())).toString('utf8'), body, f);
   }
+});
+
+test('createApp answers a missing built asset with 404, no-store and no content-encoding', async () => {
+  const res = await app.request('http://localhost:3000/assets/missing-t376s4.js', { headers: { host: 'localhost:3000', 'Accept-Encoding': 'gzip' } });
+  assert.equal(res.status, 404);
+  assert.match(res.headers.get('cache-control') ?? '', /no-store/);
+  assert.equal(res.headers.get('content-encoding'), null);
 });
