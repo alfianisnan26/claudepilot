@@ -20,8 +20,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   6563633a (7839, job 56feb0b0 271/0; lead read: write script umask 077/700/600, path check holds; asked: hard move => handoff
   skip?), then a re-read of T-736 C1. REVIEW T-611 S1 CHANGES 7762 (C1-C4) -> T-611 S1b.
 - FOR THE COORDINATOR, T-781 (D-76): lead cannot claim/comment it (unassigned); Backend lane b2f0e95f on it. Order S1, S2, S4, S3, S5.
-- IMPL lane 750a7327 (sonnet; 88eec6be ended: T-736 S3c DONE fdc5636b) now T-723 S3c (7832 + 7833 stub, folds T-788)
-  -> T-772 S1b (7719) -> T-772 S2 (7599).
+- IMPL lane c959661f (sonnet; 750a7327 ended: T-723 S3c fadee77e 7874, 4 of 5 items, tail cut the counts -> QA BE 2 re-QA,
+  lead 7877; item 3 U+2028/9 back to T-788, FOR THE COORDINATOR: a person's 1-min fix [default]). Now T-772 S1b -> S2 (7599).
 - BE INFRA fad38191 (sonnet; 3958fe14 ended: T-426 S1h DONE 9573a085 7847, job 7a3a11e7 65/0, 4 mutants killed; lead read N1
   redact/safe_name/say: mask before cut, holds). Now T-611 S1b on ticket/T-611-s1b (from S1h; S1 re-applied by hand, conflicts)
   -> T-611 S2 -> T-524 S3c (7360, job-run.sh too: base on T-611) -> T-612 S1.
