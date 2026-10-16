@@ -78,25 +78,55 @@ spec:
               root=${JR_ROOT:-/tmp}; mkdir -p "$root/w"
               # Everything goes to fetch.log and its code to fetch.rc on the shared /tmp; this container always ends 0, so the run container
               # starts, prints the log and ends with that code (the streamed log and the EXIT line stay where job-run.sh reads them).
-              (
               say() { echo "=== JOB-RUN $*"; }
               # HOME (git config, the user .npmrc) is this container's own volume: the run container never sees it.
-              export HOME=${JR_FETCH_HOME:-/fetch-home} npm_config_cache=$root/npm-cache npm_config_update_notifier=false CI=1
+              export HOME=${JR_FETCH_HOME:-/fetch-home}
               mkdir -p "$HOME"
+              # credscan <root> <var>...: the check (T-401), run AFTER the fetch ended. Fail closed: grep exit 0 = found, 1 = clean, 2 or more = the
+              # scan failed (unchecked = red, never "clean"). It also looks inside .gz and .tgz files (grep cannot see a gzipped copy of a value); other
+              # encodings (zip, bz2, xz, zstd, base64, URL-encoding, renamed archives) are a known limit (docs/dev-session.md). Sets scan_hits (the names
+              # of the variables found) and scan_bad (1 when something could not be checked). File names go to $HOME/scan.names, grep's own messages
+              # (they name files, never a value) to $HOME/scan.err; $HOME is a volume outside <root>. The pattern goes to grep in a file there.
+              credscan() {
+                local croot=$1 v val g f st; shift
+                scan_hits=; scan_bad=; : > "$HOME/scan.names"; : > "$HOME/scan.err"
+                for v in "$@"; do
+                  val=${!v:-}; [ "${#val}" -ge 8 ] || continue
+                  (umask 077; printf '%s\n' "$val" > "$HOME/scan.pat")
+                  g=0; grep -rlF -f "$HOME/scan.pat" "$croot" >> "$HOME/scan.names" 2>> "$HOME/scan.err" || g=$?
+                  case $g in 0) scan_hits="$scan_hits $v" ;; 1) ;; *) scan_bad=1 ;; esac
+                  while IFS= read -r -d '' f; do
+                    gzip -dc -- "$f" 2>> "$HOME/scan.err" | grep -qF -f "$HOME/scan.pat" 2>> "$HOME/scan.err"; st=("${PIPESTATUS[@]}")
+                    if [ "${st[1]}" = 0 ]; then scan_hits="$scan_hits $v"; printf '%s\n' "$f" >> "$HOME/scan.names"; rm -f -- "$f"
+                    elif [ "${st[0]}" != 0 ] || [ "${st[1]}" != 1 ]; then scan_bad=1; printf '%s\n' "$f" >> "$HOME/scan.names"; rm -f -- "$f"; fi
+                  done < <(find "$croot" -type f \( -name '*.gz' -o -name '*.tgz' \) -print0 2>> "$HOME/scan.err")
+                  rm -f "$HOME/scan.pat"
+                done
+                [ -z "$scan_hits" ] && [ -z "$scan_bad" ]
+              }
+              # After a red scan nothing of the tree stays for the next container (only the log and its code, which are rewritten), and the log
+              # holds the file names and grep's messages (at most 5 lines), never a matched line.
+              credwipe() { find "$1" -mindepth 1 -maxdepth 1 ! -name fetch.log ! -name fetch.rc -exec rm -rf {} + 2>/dev/null; true; }
+              credreport() { sort -u "$HOME/scan.names" | head -n 20; if [ -s "$HOME/scan.err" ]; then echo "scan messages:"; head -n 5 "$HOME/scan.err"; fi; rm -f "$HOME/scan.names" "$HOME/scan.err"; }
+              (
+              export npm_config_cache=$root/npm-cache npm_config_update_notifier=false CI=1
               # Credentials only through a helper that reads the environment: the token is never on a command line or in a URL.
               helper='!f() { [ -n "${GIT_TOKEN:-}" ] || exit 0; echo "username=${GIT_USER:-git}"; echo "password=$GIT_TOKEN"; }; f'
               if [ "$JR_REPO_URL" = https://github.com/isnanme/event.git ]; then
                 # Event (T-491): the token is offered to that one URL and path only (useHttpPath), never to another host, an --also
-                # repository, an npm git dependency or any other https fetch. The .npmrc is written for Event alone, too.
+                # repository, an npm git dependency or any other https fetch.
                 git config --global credential."$JR_REPO_URL".helper "$helper"
                 git config --global credential."$JR_REPO_URL".useHttpPath true
-                # GitHub Packages for @isnanme: a repository without its own auth line (Event's) still installs. The file holds a
-                # reference that npm expands, never the token; a repository's own .npmrc still wins.
-                # shellcheck disable=SC2016 # the reference stays literal
-                [ -z "${NODE_AUTH_TOKEN:-}" ] || printf '%s\n' '@isnanme:registry=https://npm.pkg.github.com' '//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}' > "$HOME/.npmrc"
               else
                 git config --global credential.helper "$helper"
               fi
+              # The npm token goes to npm only through this trusted userconfig (GitHub Packages for @isnanme, the token for that one host, in this
+              # container's own HOME). npmci leaves the repository's own .npmrc out while it runs and the variable is unset, so a .npmrc of the
+              # commit under test (another registry, ${NODE_AUTH_TOKEN} in an auth line) never sees the token.
+              if [ -n "${NODE_AUTH_TOKEN:-}" ]; then
+                (umask 077; printf '%s\n' '@isnanme:registry=https://npm.pkg.github.com' "//npm.pkg.github.com/:_authToken=$NODE_AUTH_TOKEN" > "$HOME/.npmrc")
+              fi
+              unset NODE_AUTH_TOKEN
               t0=$(date +%s)
               fetch() { # <dir> <url> <ref>
                 git init -q "$root/w/$1" && git -C "$root/w/$1" fetch -q --depth 1 "$2" "$3" && git -C "$root/w/$1" checkout -q FETCH_HEAD \
@@ -113,10 +143,17 @@ spec:
               fi
               npmci() { # <dir> <name>: npm ci WITHOUT install scripts (the run container runs them), once more when it fails (a flake)
                 [ -f "$1/package-lock.json" ] || return 0
-                (cd "$1" && npm ci --ignore-scripts --no-audit --no-fund --loglevel=error) && return 0
+                npmrun "$1" && return 0
                 rc=$?; say "npm ci failed in $2 (rc=$rc); retrying once"
-                (cd "$1" && npm ci --ignore-scripts --no-audit --no-fund --loglevel=error) && { say "npm ci passed on the retry in $2"; return 0; }
+                npmrun "$1" && { say "npm ci passed on the retry in $2"; return 0; }
                 rc=$?; say "npm ci failed in $2 (rc=$rc)"; exit "$rc"
+              }
+              npmrun() { # <dir>: npm ci with the trusted userconfig, the repository's own .npmrc put aside while it runs
+                local r
+                [ ! -f "$1/.npmrc" ] || mv "$1/.npmrc" "$1/.npmrc.t401"
+                (cd "$1" && npm ci --ignore-scripts --no-audit --no-fund --loglevel=error --userconfig "$HOME/.npmrc"); r=$?
+                [ ! -f "$1/.npmrc.t401" ] || mv "$1/.npmrc.t401" "$1/.npmrc"
+                return $r
               }
               if [ "$JR_STEPS" = npm-ci ]; then
                 for d in $(for a in $JR_ALSO; do echo "${a%%=*}"; done) "$main"; do npmci "$root/w/$d" "$d"; done
@@ -129,17 +166,21 @@ spec:
                 fi
               fi
               echo "$t0 $t1" > "$root/fetch.times"
-              # The check (T-401): no credential VALUE in what the run container gets (the pattern goes to grep on a pipe, never as an argument;
-              # only file names are printed).
-              for v in NODE_AUTH_TOKEN GIT_TOKEN; do
-                val=${!v:-}; [ "${#val}" -ge 8 ] || continue
-                if printf '%s\n' "$val" | grep -rlF -f - "$root" 2>/dev/null | head -n 20 | grep .; then
-                  say "the credential $v is in the files above, which the command would see: stopping"; exit 3
-                fi
-              done
-              say "credentials: used for the fetch only; none is in the files the command gets ($root checked)"
               ) > "$root/fetch.log" 2>&1
-              echo $? > "$root/fetch.rc"
+              rc=$?
+              # The check (T-401): no credential VALUE in anything the run container gets, fetch.log included (it prints that log). File names only.
+              if ! credscan "$root" NODE_AUTH_TOKEN GIT_TOKEN; then
+                credwipe "$root"
+                {
+                  credreport
+                  if [ -n "$scan_hits" ]; then say "the credential${scan_hits} is in the files above, which the command would see: stopping"
+                  else say "the credential scan failed, so the files above could not be checked (they are deleted): stopping"; fi
+                } > "$root/fetch.log" 2>&1
+                rc=3
+              elif [ "$rc" = 0 ]; then
+                say "credentials: used for the fetch only; none is in the files the command gets ($root checked)" >> "$root/fetch.log"
+              fi
+              echo "$rc" > "$root/fetch.rc"
               # JOB-RUN-FETCH END
           volumeMounts:
             - {name: tmp, mountPath: /tmp}
@@ -172,6 +213,8 @@ spec:
               # A fresh HOME: no git credential helper, no user .npmrc (those were in the fetch container's own HOME).
               export HOME=$root/home npm_config_cache=$root/npm-cache npm_config_update_notifier=false CI=1
               mkdir -p "$HOME"
+              # Defined and empty: a repository's .npmrc with an auth line `${NODE_AUTH_TOKEN}` (ClaudePilot's) is refused by npm when it is not set.
+              export NODE_AUTH_TOKEN=
               cat "$root/fetch.log" 2>/dev/null
               frc=$(cat "$root/fetch.rc" 2>/dev/null || true)
               if [ "$frc" != 0 ]; then [ -n "$frc" ] || echo "job-run: the fetch left no exit code"; say "EXIT ${frc:-1}"; exit "${frc:-1}"; fi
@@ -216,7 +259,7 @@ spec:
                 if [ "$JR_STEPS" = npm-ci ] && ! git diff --quiet "$refsha" "$afull" -- package-lock.json; then
                   # Offline from npm's cache, which the fetch container filled for this lockfile: no credential is needed.
                   say "lockfile differs on $JR_AGAINST: npm ci again (offline, from the cache)"
-                  npm ci --ignore-scripts --prefer-offline --no-audit --no-fund --loglevel=error || { rc=$?; say "npm ci failed on $JR_AGAINST (rc=$rc)"; say "EXIT $rc"; exit "$rc"; }
+                  npm ci --ignore-scripts --prefer-offline --no-audit --no-fund --loglevel=error || { rc=$?; say "npm ci failed on $JR_AGAINST (rc=$rc): this container has no credential, so a package missing from npm's cache (the fetch container filled it) is red, never skipped"; say "EXIT $rc"; exit "$rc"; }
                   installscripts "$root/w/$main" "$main"
                 fi
                 tA=$(date +%s)

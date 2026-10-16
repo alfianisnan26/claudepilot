@@ -64,26 +64,67 @@ spec:
               # GATE-FETCH BEGIN
               set -u
               root=${GATE_ROOT:-/tmp}
-              (
-              export HOME=${GATE_FETCH_HOME:-/fetch-home} npm_config_cache=$root/npm-cache npm_config_update_notifier=false
+              export HOME=${GATE_FETCH_HOME:-/fetch-home}
               mkdir -p "$HOME"
+              # credscan <root> <var>...: the check (T-401), run AFTER the fetch ended. Fail closed: grep exit 0 = found, 1 = clean, 2 or more = the
+              # scan failed (unchecked = red, never "clean"). It also looks inside .gz and .tgz files (grep cannot see a gzipped copy of a value); other
+              # encodings (zip, bz2, xz, zstd, base64, URL-encoding, renamed archives) are a known limit (docs/dev-session.md). Sets scan_hits (the names
+              # of the variables found) and scan_bad (1 when something could not be checked). File names go to $HOME/scan.names, grep's own messages
+              # (they name files, never a value) to $HOME/scan.err; $HOME is a volume outside <root>. The pattern goes to grep in a file there.
+              credscan() {
+                local croot=$1 v val g f st; shift
+                scan_hits=; scan_bad=; : > "$HOME/scan.names"; : > "$HOME/scan.err"
+                for v in "$@"; do
+                  val=${!v:-}; [ "${#val}" -ge 8 ] || continue
+                  (umask 077; printf '%s\n' "$val" > "$HOME/scan.pat")
+                  g=0; grep -rlF -f "$HOME/scan.pat" "$croot" >> "$HOME/scan.names" 2>> "$HOME/scan.err" || g=$?
+                  case $g in 0) scan_hits="$scan_hits $v" ;; 1) ;; *) scan_bad=1 ;; esac
+                  while IFS= read -r -d '' f; do
+                    gzip -dc -- "$f" 2>> "$HOME/scan.err" | grep -qF -f "$HOME/scan.pat" 2>> "$HOME/scan.err"; st=("${PIPESTATUS[@]}")
+                    if [ "${st[1]}" = 0 ]; then scan_hits="$scan_hits $v"; printf '%s\n' "$f" >> "$HOME/scan.names"; rm -f -- "$f"
+                    elif [ "${st[0]}" != 0 ] || [ "${st[1]}" != 1 ]; then scan_bad=1; printf '%s\n' "$f" >> "$HOME/scan.names"; rm -f -- "$f"; fi
+                  done < <(find "$croot" -type f \( -name '*.gz' -o -name '*.tgz' \) -print0 2>> "$HOME/scan.err")
+                  rm -f "$HOME/scan.pat"
+                done
+                [ -z "$scan_hits" ] && [ -z "$scan_bad" ]
+              }
+              # After a red scan nothing of the tree stays for the next container (only the log and its code, which are rewritten), and the log
+              # holds the file names and grep's messages (at most 5 lines), never a matched line.
+              credwipe() { find "$1" -mindepth 1 -maxdepth 1 ! -name fetch.log ! -name fetch.rc -exec rm -rf {} + 2>/dev/null; true; }
+              credreport() { sort -u "$HOME/scan.names" | head -n 20; if [ -s "$HOME/scan.err" ]; then echo "scan messages:"; head -n 5 "$HOME/scan.err"; fi; rm -f "$HOME/scan.names" "$HOME/scan.err"; }
+              (
+              export npm_config_cache=$root/npm-cache npm_config_update_notifier=false
               cd "$root" && git init -q src && cd src || exit 1
               if ! git fetch -q --depth 1 "${GATE_REPO_URL:-https://github.com/alfianisnan26/claudepilot.git}" "$COMMIT" || ! git checkout -q FETCH_HEAD; then
                 echo "GATE-VERDICT: red: $COMMIT is not on GitHub (push it first)"; exit 1
               fi
+              # The token goes to npm only through this trusted userconfig (the registry host and its token, in this container's own HOME). The
+              # commit's own .npmrc is left out of the throwaway copy and the variable is unset, so a .npmrc of the commit under test (another
+              # registry, ${NODE_AUTH_TOKEN} in an auth line) never sees the token.
+              if [ -n "${NODE_AUTH_TOKEN:-}" ]; then
+                (umask 077; printf '%s\n' '@isnanme:registry=https://npm.pkg.github.com' "//npm.pkg.github.com/:_authToken=$NODE_AUTH_TOKEN" > "$HOME/.npmrc")
+              fi
+              unset NODE_AUTH_TOKEN
               rm -rf "$root/warm"; mkdir -p "$root/warm"
-              if ! { git archive HEAD | tar -x -C "$root/warm" && (cd "$root/warm" && npm ci --ignore-scripts --no-audit --no-fund --loglevel=error); }; then
+              if ! { git archive HEAD | tar -x -C "$root/warm" && rm -f "$root/warm/.npmrc" && (cd "$root/warm" && npm ci --ignore-scripts --no-audit --no-fund --loglevel=error --userconfig "$HOME/.npmrc"); }; then
                 echo "npm cache: filling it failed; gate.sh's npm ci says why"
               fi
               rm -rf "$root/warm"
-              # No token VALUE in what the gate container gets (the pattern goes to grep on a pipe; only file names are printed).
-              tok=${NODE_AUTH_TOKEN:-}
-              if [ "${#tok}" -ge 8 ] && printf '%s\n' "$tok" | grep -rlF -f - "$root" 2>/dev/null | head -n 20 | grep .; then
-                echo "GATE-VERDICT: red: the token is in the files above, which the gate would see"; exit 3
-              fi
-              echo "credentials: used for npm's cache only; none is in the files the gate gets"
               ) > "$root/fetch.log" 2>&1
-              echo $? > "$root/fetch.rc"
+              rc=$?
+              # No token VALUE in anything the gate container gets, fetch.log included (it prints that log).
+              if ! credscan "$root" NODE_AUTH_TOKEN; then
+                credwipe "$root"
+                {
+                  credreport
+                  if [ -n "$scan_hits" ]; then echo "GATE-VERDICT: red: the token is in the files above, which the gate would see"
+                  else echo "GATE-VERDICT: red: the credential scan failed, so the files above could not be checked (they are deleted); nothing ran"; fi
+                } > "$root/fetch.log" 2>&1
+                rc=3
+              elif [ "$rc" = 0 ]; then
+                echo "credentials: used for npm's cache only; none is in the files the gate gets" >> "$root/fetch.log"
+              fi
+              echo "$rc" > "$root/fetch.rc"
               # GATE-FETCH END
           volumeMounts:
             - {name: tmp, mountPath: /tmp}
@@ -112,7 +153,11 @@ spec:
               if [ "$frc" != 0 ]; then grep -q '^GATE-VERDICT: ' /tmp/fetch.log 2>/dev/null || echo "GATE-VERDICT: red: the fetch failed (rc=${frc:-none})"; exit 1; fi
               cd /tmp/src || exit 1
               [ -n "$GATE_FILES" ] || unset GATE_FILES
+              # Defined and empty: the repository's .npmrc has an auth line `${NODE_AUTH_TOKEN}`, which npm refuses when the variable is not set.
+              # There is no token here: a package missing from npm's cache (the fetch container filled it) makes npm ci fail, and the verdict is red.
+              export NODE_AUTH_TOKEN=
               GATE_DIR=/tmp/gate bash scripts/gate.sh HEAD
+              grep -q '^npm-ci rc=0 ' /tmp/gate.logs/SUMMARY.txt 2>/dev/null || echo "=== npm ci failed in the gate container: it has no credential and installs from the cache the fetch container filled; a package missing there (ENOTCACHED, 401, 404 in the log below) is red, never skipped"
               echo "=== SUMMARY"; cat /tmp/gate.logs/SUMMARY.txt 2>/dev/null
               # The Job's own memory (T-524): the cgroup's peak (in-memory /tmp included) against its limit, the number the limit is sized from.
               mib() { v=$(cat "/sys/fs/cgroup/$1" 2>/dev/null) && [[ $v =~ ^[0-9]+$ ]] && echo "$((v / 1048576))Mi" || echo "${v:-?}"; }

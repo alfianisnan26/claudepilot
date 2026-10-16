@@ -614,9 +614,11 @@ test('the Job\'s own script: checkout, the command\'s exit code, the artifacts b
   assert.equal(ev.r.status, 0, ev.r.stdout + ev.r.stderr);
   assert.match(ev.r.stdout, /no npmrc\nno helper\n0\n/, 'T-401: the command has no npmrc, no git helper, no password for the Event URL');
   const npmrc = readFileSync(join(ev.fetchHome, '.npmrc'), 'utf8');
-  assert.equal(npmrc, '@isnanme:registry=https://npm.pkg.github.com\n//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}\n');
+  // T-401 (review): the trusted userconfig holds the token for GitHub Packages only (the fetch container's own HOME, mode 600), not a reference
+  // that a .npmrc of the commit could expand; the git config holds no value.
+  assert.equal(npmrc, `@isnanme:registry=https://npm.pkg.github.com\n//npm.pkg.github.com/:_authToken=${token}\n`);
   const cfg = readFileSync(join(ev.fetchHome, '.gitconfig'), 'utf8');
-  assert.ok(!npmrc.includes(token) && !cfg.includes(token), 'the files hold references, not the value');
+  assert.ok(!cfg.includes(token), 'the git config holds a reference, not the value');
   assert.match(cfg, /\[credential "https:\/\/github\.com\/isnanme\/event\.git"\]/);
   assert.match(cfg, /useHttpPath = true/);
   assert.equal((cfg.match(/\[credential/g) ?? []).length, 1, 'one credential section, no global helper');
@@ -628,7 +630,7 @@ test('the Job\'s own script: checkout, the command\'s exit code, the artifacts b
   // sees neither.
   const cp = podEvent(`file://${join(root, 'claudepilot.git')}`, 'test ! -e "$HOME/.npmrc" && echo no npmrc; git config --global --get credential.helper >/dev/null || echo no helper', token);
   assert.match(cp.r.stdout, /no npmrc\nno helper\n/, 'the command: no npmrc, no helper');
-  assert.ok(!existsSync(join(cp.fetchHome, '.npmrc')), 'not Event: no npmrc');
+  assert.ok(existsSync(join(cp.fetchHome, '.npmrc')), 'with a token every repository gets the trusted userconfig (T-401), in the fetch HOME alone');
   assert.match(readFileSync(join(cp.fetchHome, '.gitconfig'), 'utf8'), /^\[credential\]\n\thelper = /m, 'not Event: the global helper, in the fetch HOME');
   const noToken = podEvent(eventUrl, 'true', undefined);
   assert.equal(noToken.r.status, 0, noToken.r.stdout + noToken.r.stderr);
