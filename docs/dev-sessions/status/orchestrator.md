@@ -9,7 +9,6 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   gate GREEN gate-2d10963. T-710 unassigned: lead can't close (T-634), evidence here.
 - MERGED be431d6a (batch 15): T-675 65d93dea + T-549 S2 5d97103d (QA BE 2 PASS WITH GAPS; T-723); gate GREEN gate-9f5afa1
   (actions.test timer flaked in suite, passed alone: T-697's case).
-- MERGED de3a3515 (batch 14): T-376 S3 (QA UI 6797; open S4 6798), gate-d0975fa green.
 - MERGED c3cad1a6 (batch 13): T-524 S3 (open S3b 6624) + T-681 (CLOSED; gaps -> T-710); gate-7526daa green.
 
 ## IN FLIGHT (6 of 6, D-71)
@@ -30,6 +29,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - 16:12 OWNER PRIORITY (coordinator, T-426 5538): T-401 then T-426 FIRST. T-401 gate GREEN gate-54ba328-6502; ff only on the person's ack.
 
 ## DECISIONS (binding)
+- 10:10 T-731 F1: lanes are refused rm/git rm, so the lead drops job-out/t731b/r.txt as its own traced commit in the premerge (a log, not code).
 - 09:38 MERGES HELD: D-75 (lead runs no Jobs) vs gate-job.sh absent from the allow list (lanes refused). Batch 19 71a2317f
   (T-697 + T-574 S3) waits; coordinator picks (a) a person adds the allow entry [default], (b) gate exempt, (c) hold (T-595 7316).
 - 09:05 T-731 before the T-426 fix (coordinator). Conflict with owner order T-401 -> T-426 named: T-426 merge waits the T-401 ack anyway; swap if owner says.
