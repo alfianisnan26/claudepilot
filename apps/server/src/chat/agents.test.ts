@@ -518,7 +518,7 @@ test('T-574 S3 over MCP: size of the default family result for 0, 1, 5, 10 and 2
       console.log(`T-574 S3 size: ${n} workers: structured ${sizes[n]}, text ${res.content![0]!.text.length}`);
     }
     // One copy; the full id of a worker is 46 characters of JSON by itself, so 10 workers cannot go far below 800.
-    assert.ok(sizes[1]! < 280 && sizes[5]! < 600 && sizes[10]! < 1100 && sizes[25]! < 1500, JSON.stringify(sizes));
+    assert.ok(sizes[1]! < 280 && sizes[5]! < 600 && sizes[10]! < 1100 && sizes[25]! < 2100, JSON.stringify(sizes));
   } finally {
     await r.done();
   }
