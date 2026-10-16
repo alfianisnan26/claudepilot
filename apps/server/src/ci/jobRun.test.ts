@@ -1391,7 +1391,8 @@ test('T-611 C5: 50% at create and 80% at release adds the required rule to the s
   assert.equal(up.patches.length, 2, up.patches.join('\n'));
   assert.match(up.patches[0] ?? '', new RegExp(`"affinity":\\{"nodeAffinity":\\{"${REQ}":\\{"nodeSelectorTerms":\\[\\{"matchExpressions":\\[\\{"key":"node-role.kubernetes.io/control-plane","operator":"DoesNotExist"\\}\\]\\}\\]\\}\\}\\}`));
   assert.match(up.patches[1] ?? '', /\{"spec":\{"suspend":false\}\}/, 'the release comes after the affinity patch');
-  assert.match(up.r.out, /placement changed while queued: job-run: placement: the control-plane node is at 80%/);
+  assert.match(up.r.out, /placement changed while queued: the rule away from the control-plane node was added: job-run: placement: the control-plane node is at 80%/);
+  assert.equal(up.r.out.split('\n').filter((l) => /placement changed while queued/.test(l)).length, 1, 'one line, once');
   assert.match(up.w.log(), /decision=required-away reason=over .*at=release changed-from=preferred/);
   assert.match(up.w.log(), /PLACEMENT node=\S+ pct=80 decision=required-away queued=/, 'the final line carries the decision that was used');
 
@@ -1400,6 +1401,7 @@ test('T-611 C5: 50% at create and 80% at release adds the required rule to the s
   assert.equal(down.patches.length, 2, down.patches.join('\n'));
   assert.ok((down.patches[0] ?? '').includes(`"${REQ}":null}`), 'the required rule is set to null (the preferred rules stay)');
   assert.match(down.patches[1] ?? '', /suspend":false/);
+  assert.match(down.r.out, /placement changed while queued: the rule away from the control-plane node was dropped: /);
   assert.match(down.w.log(), /changed-from=required-away/);
   assert.match(down.w.log(), /PLACEMENT node=\S+ pct=50 decision=preferred queued=/);
 });
@@ -1426,10 +1428,47 @@ test('T-611 C5: a required rule that cannot be added stops the run (rc 2) withou
   assert.equal(up.w.state().jobs.length, 0, 'the suspended Job is removed');
   assert.deepEqual(up.w.state().secrets, {}, 'and its Secret is gone too (no credentials left behind)');
   assert.match(up.w.log(), /PLACEMENT node=control-plane at=release outcome=patch-failed/);
+  assert.doesNotMatch(up.r.out, /placement changed while queued/, 'a refused patch never prints the line that says the rule was added');
 
   const down = moved(80, 50, true);
   assert.equal(down.r.code, 0, down.r.out);
+  assert.doesNotMatch(down.r.out, /placement changed while queued/, 'a refused drop never prints the line that says the rule was dropped');
+  assert.equal(down.r.out.split('\n').filter((l) => /the placement rule was not dropped/.test(l)).length, 1, 'the fall-back line, once');
   assert.match(down.w.log(), /decision=required-away queued=/, 'the rule stays when it could not be dropped');
+});
+
+// ---- T-733 S5 (review of T-524 S3b, QA BE 2): the release patch is built from the rule itself, and its shape is pinned whole.
+const body = (line: string | undefined) => {
+  const m = /--type merge -p (\{.*\})$/.exec(line ?? '');
+  assert.ok(m, `a merge patch with a JSON body: ${line}`);
+  return JSON.parse(m[1] as string) as unknown;
+};
+const manifestRule = (w: ReturnType<typeof world>) => ((yamlLoad(w.applied1()) as Manifest).spec.template.spec.affinity as { nodeAffinity: NodeAff }).nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution;
+const patchOf = (rule: unknown) => ({ spec: { template: { spec: { affinity: { nodeAffinity: { [REQ]: rule } } } } } });
+const AVOID_RULE = { nodeSelectorTerms: [{ matchExpressions: [{ key: 'node-role.kubernetes.io/control-plane', operator: 'DoesNotExist' }, { key: 'kubernetes.io/hostname', operator: 'NotIn', values: ['k3s-master'] }] }] };
+
+test('T-733 S5: the release patch is valid JSON, its whole shape is pinned, and it holds the same rule a Job made over the line holds', () => {
+  const up = moved(50, 80);
+  assert.deepEqual(body(up.patches[0]), patchOf(CP_RULE), 'the patch: the control-plane expression, nothing else');
+  assert.deepEqual(manifestRule(moved(80, 80).w), CP_RULE, 'a Job made over the line holds the same rule');
+  // With the avoid list the node expression and the avoid expression are ONE term (an AND), in the patch as in the manifest.
+  const avoid = moved(50, 80, false, { JOB_RUN_AVOID_NODES: 'k3s-master' });
+  assert.deepEqual(body(avoid.patches[0]), patchOf(AVOID_RULE), 'the patch with the avoid list: one term, two expressions');
+  assert.deepEqual(manifestRule(moved(80, 80, false, { JOB_RUN_AVOID_NODES: 'k3s-master' }).w), AVOID_RULE, 'and the manifest holds the same');
+});
+
+test('T-733 S5: a rule that was required at creation gets no second patch when the re-read still says over', () => {
+  const same = moved(80, 80);
+  assert.equal(same.r.code, 0, same.r.out);
+  assert.deepEqual(manifestRule(same.w), CP_RULE, 'the rule was already in the Job at creation');
+  assert.equal(same.patches.filter((l) => l.includes('affinity')).length, 0, `no affinity patch: ${same.patches.join('\n')}`);
+  assert.equal(same.patches.length, 1, 'only the release');
+  assert.doesNotMatch(same.r.out, /placement changed while queued/);
+});
+
+test('T-733 S5: scripts/job-run.sh has no syntax error (bash -n)', () => {
+  const r = spawnSync('bash', ['-n', SCRIPT], { encoding: 'utf8' });
+  assert.equal(r.status, 0, `bash -n: ${r.stderr}`);
 });
 
 // ---- T-611 S2: JOB_RUN_AVOID_NODES, a comma list of node names a Job may never run on (default none). A required hostname NotIn rule, in the same
