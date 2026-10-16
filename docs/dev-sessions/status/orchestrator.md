@@ -12,19 +12,19 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 
 ## IN FLIGHT (6 of 6, D-71)
   Lanes' ticket_comment refused on unassigned tickets (T-341, T-549, T-675): verdicts live in their replies + this file.
-- QA PERF 7e4879c7: T-739 B S3 PASS WITH GAPS (job e9352e97; mutants M1 M3 M4 M5 M7 survived -> Impl after T-772 S1)
-  PLAN T-611 (7621, order 7642) -> now RE-QA T-426 S1f on lead-built wip/qa-t426-6b72191 (4313670d + probes e1dd7b69);
-  by reading: likely FAIL O1 (newline file name splits `hits`, leaking file survives; fix grep -Z + read -d '').
+- QA PERF 7e4879c7: T-426 S1f PASS WITH GAPS (job 22f0cb1a): pool creds P1-P3 hold; --out scan O1-O3+O5 red incl. clean
+  control O5 = harness suspect; job-run.sh:47 comment stale (/proc) -> now 1 Job, new command, full assertions, on 6b721915.
 - QA UI 8b13bb5a: REVIEW T-723 S3 APPROVE 7609, PLAN T-733 (7630, 7633), PLAN T-781 5 slices (reply; D1-D7 defaults taken)
   -> now QA T-736 S3 2d10b092.
 - FOR THE COORDINATOR, T-781 (D-76): lead cannot claim/comment it (unassigned); Backend lane b2f0e95f spawned on it (S1+S2),
   posts the estimate + D1-D7 there. Order S1, S2, S4, S3, S5 (the file must carry the chat before a hard move). T-731 is DONE.
 - QA BE 2 42e5408f: T-600 live UNAVAILABLE for the lane (7597); lead read crew_scorecard: LIVE PARTIAL, pace no_source (7610);
-  PLAN T-776 4 slices (lead decisions 7608) -> now QA T-723 S3 b78d7f6b (builder job e178a510 101/0, 5/5 mutants).
+  T-723 S3 PASS WITH GAPS 7665 (4 actor mutants survive, strip/trim, bidi) -> S3b items 7677 (Cf strip default) for Impl
+  after T-739 S4 -> now RE-QA T-610 r2 c2246fb0 (builder 7674, job 3848b831 162/0, m6-m8 red; COUNTED mutants unrun).
 - IMPL lane 46007215 (sonnet; 09fee945 ended: T-772 S1 DONE c9ee2ba2, job 8f10b14d 16/16 combos, 7656 -> QA UI queued)
-  T-739 B S4 mutant-killing tests (M1 M3-M7) on ticket/T-739-scorecard-index -> T-772 S2 (sweep 7599).
-- BE INFRA lane 72bdc262 (sonnet, satria; 2dc2be75 ended: T-426 S1f DONE 4313670d, job 6c72bc7f 57/0, M1-M3 red) T-610 rework 2
-  (7053 items 1-5, m6) -> T-611 S0 -> T-524 S3c (7360).
+  T-739 B S4 mutant-killing tests (M1 M3-M7) on ticket/T-739-scorecard-index -> T-723 S3b (7677) -> T-772 S2 (sweep 7599).
+- BE INFRA lane 72bdc262 (sonnet, satria): T-610 r2 DONE c2246fb0 (7674) -> now T-611 S0 diagnosis (no commit)
+  -> T-611 S1/S3 per H -> T-524 S3c (7360) -> T-612 S1.
 - BACKEND lane b2f0e95f (sonnet; 4762d05d ended: T-736 S3 DONE 2d10b092, job 9911ef20 32/0, 9/9 mutants) T-781 S1+S2 on
   ticket/T-781-hard-move (base 8b298c35) -> T-781 S4, S3, S5 -> T-733. T-778 filed (bypass routes lack own requireCan; authz = person).
 - HELD: T-426 S1e 2174eee1 QA PASS 6169, review CHANGES 7121 -> fix, re-QA, merge after T-401. T-578 51f6c153 review CHANGES 6168 -> owner. T-631 CHANGES 5850 -> coordinator.
