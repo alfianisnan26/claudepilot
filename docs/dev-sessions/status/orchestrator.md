@@ -1,4 +1,4 @@
-# orchestrator status (2026-10-16 04:35 UTC, session 355881a3, continuation of de232389)
+# orchestrator status (2026-10-16 05:00 UTC, session 355881a3, continuation of de232389)
 
 Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-10-15 DONE batches 1-7: see 4fbab374). Hand-overs: ab99b45, bb58413, 639202e.
 
@@ -19,11 +19,10 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   quick-check PASS 12295a2b). Then T-524 S3b 23330c28 (test-only +25: name pin, no-patch-on-top-fail; src/ci 208/208 job
   54784775; mutants D,F killed f69b2de3). Live re-read patch NOT verified. 6775 was WRONG (rule set at creation, 78%): 6788.
 - QA UI 8b13bb5a: standby; next T-710 re-sweep on bccb756f DONE (told 04:01).
-- QA BE 2 42e5408f: standby -> T-574 S3 (lead can't comment on T-675/T-549: verdicts in batch 15 merge messages).
+- QA BE 2 42e5408f: T-251 verify at 7dcf19f8 (lane audit: all 5 reqs already built, no code, nothing run; mutants M1-M6), then T-574 S3.
 - IMPL bccb756f (sonnet, rossi) T-710 on ticket/T-710-ci-sweep from wip/qa-t710-8bb9a2c: seeded run with jobs/steps/log,
   every control 390/1280 light/dark, Tab/focus pass, fixes in slice.
-- BE INFRA lane 4d010bea (sonnet, two.claude) T-251 (urgent rank-02d) on ticket/T-251-unknown-usage: audit 5 reqs vs code
-  (T-255 limitMessage exists), build only gaps.
+- BE INFRA lane c305a138 (sonnet, satria; 4d010bea ended after T-251 audit) T-610 on ticket/T-610-cost-attribution from be431d6a.
 - BACKEND lane 216dbe18 (sonnet, regitha) T-574 S3 on ticket/T-574-s3 from integration: cross-lead NOT_FOUND test, size trim
   toward 600 avg, bound back toward 1.5k.
 - HELD: T-426 S1e 2174eee1 QA PASS 6169 -> merge on the T-401 ack (4941). T-578 51f6c153 review CHANGES 6168 -> owner decision.
