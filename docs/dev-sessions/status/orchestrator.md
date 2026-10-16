@@ -15,6 +15,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   Done: Impl -> fe93b032 (T-425). Next between tickets: Backend (after T-436 c), BE Infra, QA Perf, QA BE 2, QA UI. Old-rule lanes
   use their own form until respawned (20:21 correction). If T-860 S2 is ready mid-gate: stop b26 gate, gate T-860 alone. T-611 (8537) -> batch 27; T-623 S2c (8603) waits S2d.
 
+- BATCH 27 BUILT 0e5fabcd (wip/main-0e5fabc, worktree premerge-b27): T-611 merge f722dca1, T-537 d6833850, T-623 S2c+S2d c288c0d5,
+  T-856 7d2acb8d (lead's mechanical PRD resolution, both paragraphs kept), T-772 S2e fc9158ed. Quick-check running -> gate-job.
 ## IN FLIGHT (6 of 6, D-71)
 - QA PERF 8e8912fc (perf-tester/sonnet): T-611 merge PWG 8715 (READY, b27 with T-426); T-868 rev CHANGES 2 8724; T-537 APPROVE
   (lead posted 8738). NOW QA T-623 S2d c288c0d5 -> QA T-772 S2e fc9158ed.
@@ -24,7 +26,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   T-623 S2c PASS 8603, T-610 PASS W/ GAPS 8637. T-860 QA plan 8650. NOW QA T-860 S2 068606f5 (URGENT) -> T-416 S2c -> T-675 R2d -> T-781 S8c.
 - IMPL fe93b032 (respawned, new rules; was 46632d91: T-772 S2e fc9158ed, T-856 7d2acb8d QA PWG 8837 -> b27, T-868 S2 0520dc29 ->
   QA Perf re-review incl. SHOTS_TEST_MODE --hook). NOW T-425 slotWait on ticket/T-425-slotwait.
-- T-860: S2b bd2a2b1f review APPROVE (QA UI 8840); QA BE 2 delta QA Jobs queued; then gate ALONE. S2c follow-up (set -a etc., 8845).
+- T-860: S2b bd2a2b1f review APPROVE (QA UI 8840); QA BE 2 delta QA Jobs queued; then gate ALONE. S2c follow-up (8845). T-426 S1e, T-379 S2 3f11b28 queued.
 - BE INFRA 16c2494f (sonnet): DONE T-860 12deae78 (8553), T-623 S2c 6f4f6d56 (8569), T-610 b3e7e3a7 (8571; lead read mig 384,
   free 8577), T-860 S2 068606f5 (8680; lead read 8737), T-623 S2d c288c0d5 (8725), T-860 S2b bd2a2b1f (8817; job-bb58079a, 6 mutants red;
   -> QA BE 2 delta + QA UI re-review), T-881 S1 0946106271 (8857; lead read 8866, coordinator OK 8863, live proof theirs; heads b27).
@@ -34,7 +36,6 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   T-537 d6833850, T-524 S3c + T-733 S5 ee56bab9 (8815/8816), T-436 (c) 5be5699a (backend Job f79ecee3 green on 011de98b; web
   not run) -> QA BE 2 Jobs + QA UI review. Deploy hazard: fail-closed vault list (coordinator sets lists). Respawned 0003c89f
   (new rules): NOW T-382 S1 (CursorPage + keyset helper, one limit-only route; it posts the lead decision, I can't comment).
-- AFTER T-401: T-426 S1h/S1e; T-379 S2 3f11b28 behind it. T-578 -> owner. T-631 -> coordinator (after this batch).
 
 ## DECISIONS (binding)
 - 13:45 D-75 AMENDED (coordinator, 1444d836, in DECISIONS.md): the lead runs the gate before a merge (gate-job.sh, one per batch).
