@@ -14,20 +14,26 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   165db813); brief: scripts ONLY by /home/node/work/claudepilot/scripts/.... Left on old rules: QA Perf 8e8912fc, Impl is new.
 - BATCH 27 ON INTEGRATION bda180d2 (gate claudepilot-gate-bda180d-3921 GREEN, suite 888s; quick-check job-5eb2f86f green):
   T-611 merge f722dca1, T-537, T-623 S2c+S2d c288c0d5, T-856 7d2acb8d (lead's mechanical PRD resolution), T-772 S2e fc9158ed,
-  T-881 S1 0946106271 (S1b follow-up 8938; live proof coordinator's). Coordinator told T-731. NEXT: T-860 S2+S2b bd2a2b1f ALONE.
+  T-881 S1 0946106271 (S1b follow-up 8938; live proof coordinator's). Coordinator told T-731.
+- BATCH 28 ON INTEGRATION 63ff971c (gate 63ff971 GREEN; quick-check job-b8b7ca64): T-860 S2+S2b ALONE. Told T-731 9085, T-860 9086.
+  Flake boot.test.ts "newer portal" passed on rerun -> T-903.
 ## IN FLIGHT (6 of 6, D-71)
-- QA PERF 8e8912fc (old rules): T-623 S2d PWG 8825, T-772 S2e PWG 8838. NOW re-review T-868 S2 0520dc29 (SHOTS_TEST_MODE --hook)
-  -> QA T-524 S3c + T-733 S5 ee56bab9. Respawn between tickets.
+- QA PERF 82f006cf (new rules; was 8e8912fc: T-868 S2 re-review CHANGES 1 8803 (drop --hook from allowed script) -> Impl;
+  T-524 S3c PWG 8969; T-612 S1 FAIL 9040 -> BE Infra). T-881 S1b PWG 9046 (READY b28; S1c param test, 9065).
+  NOW QA T-781 S8c 8cb00f79 -> QA T-675 R2c f7b4e34a + R2d b82cdcb9 (moved from QA BE 2).
 - QA UI 66c13056 (new rules): T-881 S1 QA PWG 8916, T-772 S2e rev APPROVE W/ NOTES 8867, T-436 rev APPROVE W/ NOTES (relayed 8941;
   notes -> T-436 S2). T-856 browser check blocked (no node_modules, 8855) = open follow-up 8860. NOW QA T-736 S3g 4eb08f4e.
 - QA BE 2 b6579580 (new rules; was 42e5408f: T-860 PWG 8912). NOW QA T-436 5be5699a (own Job) -> QA T-382 S1 88b663fe
-  -> T-416 S2c dcdb6553 -> T-675 R2c f7b4e34a + R2d b82cdcb9 -> T-781 S8c 8cb00f79.
-- IMPL 5560f7f5 (new rules; was fe93b032: T-425 c22a76b3 DONE 8957, Job c7cb5080; "Queued" label kept (text diet); browser not
-  run -> QA UI after S3g). NOW T-772 S2f (ticket/T-772-s2f from bda180d2: calc0, narrower rule, !important).
-- BE INFRA 4ed98960 (new rules): T-612 S1 889071cd DONE 8955 (Job 54a72d98; -> QA Perf last). NOW T-612 S2a baseline (prettier
-  error on tools/rtk/hook.mjs, eslint crash; no gate step) -> T-860 S2c after T-860 merges.
-- BACKEND 1e80e003 (new rules; was 0003c89f: T-382 S1 88b663fe, Job a3a79bb1 green, 2 mutants red). NOW T-881 S1b tests
-  (ticket/T-881-s1b-tests from bda180d2) -> T-436 S2 (review notes).
+  -> T-416 S2c dcdb6553.
+- IMPL 89ca3bd2 (new rules): T-425 c22a76b3 (8957; "Queued" kept; -> QA UI), T-772 S2f b36f6a54 (9014, Job 4c8104e6; -> QA UI 3rd).
+  NOW T-436 S2 (review notes 8941: guarded rebind, audit names, VALIDATION_FAILED) on ticket/T-436-s2 from 5be5699a.
+- BATCH 29 (next, after QA): T-524 S3c+T-733 S5 ee56bab9 (READY), T-881 S1b 4dba5701 (READY), T-436+S2, T-382 S1, T-425, T-772 S2f,
+  T-736 S3f+S3g, T-416 S2c, T-675 R2c/R2d, T-781 S8c, T-612 S1 fix.
+- BE INFRA 4ed98960 (new rules): NOW fix T-612 S1 per QA FAIL 9040 (eslint tseslint base spread; prettier quickCheck.test.ts; a real
+  quick-check run) -> S2a baseline -> T-860 S2c after T-860 merges (gaps 8936 + 8845).
+- BACKEND 658bdc65 (new rules; was 1e80e003: T-881 S1b DONE 4dba5701). NOW T-382 S2 GET /api/chat/sessions cursor (ticket/T-382-s2-sessions
+  from S1 88b663fe).
+- QUEUE Impl after T-436 S2: T-868 S3 (CHANGES 8803: test-only copy with hook via sed; .gitignore .shots-in.*).
 
 ## DECISIONS (binding)
 - 13:45 D-75 AMENDED (coordinator, 1444d836, in DECISIONS.md): the lead runs the gate before a merge (gate-job.sh, one per batch).
