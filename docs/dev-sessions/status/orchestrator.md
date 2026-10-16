@@ -4,22 +4,20 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 
 ## DONE
 - DEPLOY 191 LIVE (coordinator, 2026.10.16-1 from 12c68374 = batches <=18). T-404 CLOSED (live hook in managed 10-policy.json + D-60
-  refusal 7407). Live checks: T-472 UNAVAILABLE with agent tokens (needs an admin read, 7505); T-591 FAIL, no Releases note for 191
-  (setting unset or writer bug? 7504). Both FOR THE COORDINATOR.
+  refusal 7407). T-597 CLOSED (live 6208). Live checks: T-472 UNAVAILABLE with agent tokens (admin read, 7505); T-591 FAIL:
+  release_report setting unset = silent skip; a person's PUT + backfill steps in 7556; silent skips -> T-776. FOR THE COORDINATOR.
 - FOR THE COORDINATOR, batch sooner: the T-401 merge (security; waits the ack + gate door T-595 7316). Hold migration 383 until
-  scaled by the real row count (0.41 s/1M synthetic, T-739 7487). Ready for the next batch (gate door): T-376 S4b, T-732 (7511).
+  scaled by the real row count (0.41 s/1M synthetic, T-739 7487). Ready for the next batch (gate door): T-376 S4b, T-732 (7511),
+  T-731 31b1ad73 (r2 APPROVE QA BE 2; QA Perf PASS WITH GAPS job 15df1fc8, 10/10 probes; lead can't comment T-731).
 
 ## IN FLIGHT (6 of 6, D-71)
   Lanes' ticket_comment refused on unassigned tickets (T-341, T-549, T-675): verdicts live in their replies + this file.
-- QA PERF 7e4879c7: T-376 S4b PASS WITH GAPS 7475 -> batch; T-739 B S1-S2 PASS WITH GAPS 7498 (job ba9ab470; gap 2 -> S3);
-  now T-731 probes on wip/qa-t731-81f87b2 (= head 31b1ad73 N1-N3, job d2c5bf88 + probe c4ad3105, lead-built).
-- QA UI 8b13bb5a: T-732 PASS WITH GAPS 7467 (-> T-772); REVIEW T-723 S1-S2 CHANGES 7513 (routes hardcode 'ui' -> S3, 7516)
-  REVIEW T-739 B S1-S2 APPROVE; PLAN T-772 (49 sites, 4 slices) -> now PLAN T-598 (no Job).
-- QA BE 2 42e5408f: T-723 S1/S2 PASS WITH GAPS 7473/7497; REVIEW T-731 r2 APPROVE (reply; N1-N3 -> BE Infra)
-  REVIEW of the lead's merge e630964d OK (7526); T-591 DIAG: setting unset = silent skip (7556, T-776) -> now PLAN T-597.
-- IMPL lane fce0c981 (sonnet; 2f4ee38f ended: T-376 S4b DONE 103520e7, 7436, job 92c6f13b, no mutants; 65dd09f6: T-732 DONE
-  c9a032f7, item 5 -> coordinator 7407) T-739 B S1 DONE 65b821d7 (migration 383 partial index, lead read OK; 4/4, 3 mutants;
-  7471) S2 DONE 262663d5 (job 86693c96: build 0.41 s/1M synthetic rows, 7487 for the coordinator) -> now S3 tests d,e,f,h + docs.
+- QA PERF 7e4879c7: T-739 B S1-S2 PASS WITH GAPS 7498; T-731 PASS WITH GAPS (job 15df1fc8) -> now QA T-739 B S3 390b7ce0.
+- QA UI 8b13bb5a: REVIEW T-723 S1-S2 CHANGES 7513 (-> S3); REVIEW T-739 B APPROVE 7522 (N1 doc -> Impl); PLAN T-772 (4 slices),
+  PLAN T-598 (4 slices, 7565) -> now PLAN repo settings UI (T-591 S2 release_report + T-556 hookSecret).
+- QA BE 2 42e5408f: REVIEW merge e630964d OK (7526); T-591 DIAG (7556); T-597 already done -> closed -> now PLAN T-612.
+- IMPL lane fce0c981 (sonnet): T-739 B S1 65b821d7, S2 262663d5, S3 DONE 390b7ce0 (job 863f50e6 40/40 + proof f322743f: two Jobs
+  on one commit, told D-75) -> now docs N1 (5 % vs 14 %) -> respawn for T-772 S1 (plan on T-772).
 - BE INFRA lane 2dc2be75 (sonnet; b11ecab1 ended: T-731 DONE 31b1ad73, N1-N3) T-426 S1e fix 7121 on ticket/T-426-s1f
   (base e630964d) -> T-610 7053 (respawn) -> T-524 S3c (7360).
 - BACKEND lane 4123bb21 (sonnet; 1261b4f3 ended: T-736 S2 DONE 98c78a63, 7395, job 1493e0be 20/20, 5 mutants)
