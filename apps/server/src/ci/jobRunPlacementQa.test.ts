@@ -40,9 +40,11 @@ else if (verb === 'get' && kind === 'pods') {
   else { const pf = path.join(F, 'pend'); const left = fs.existsSync(pf) ? Number(fs.readFileSync(pf, 'utf8')) : 0;
     if (left > 0) { fs.writeFileSync(pf, String(left - 1)); process.stdout.write(JSON.stringify({ items: [{ spec: {}, status: { phase: 'Pending', conditions: [{ type: 'PodScheduled', status: 'False', reason: 'Unschedulable', message: fs.readFileSync(path.join(F, 'pendmsg'), 'utf8') }] } }] })); }
     else process.stdout.write(JSON.stringify({ items: [{ spec: { nodeName: 'k3s-node2' }, status: { phase: j.done ? 'Succeeded' : 'Running' } }] })); } }
-else if (verb === 'create' && kind === 'secret') { const t = stdin(); const ef = path.join(F, 'kerr');
+// The client-side dry run (job-run.sh:346) always works; only the real create (job-run.sh:353, create -f -) fails when the file kerr exists.
+else if (verb === 'create' && kind === 'secret') { stdin(); process.stdout.write('{"metadata":{}}'); }
+else if (verb === 'create' && kind === '-f') { const t = stdin(); const ef = path.join(F, 'kerr');
   if (fs.existsSync(ef)) { process.stderr.write(fs.readFileSync(ef, 'utf8') + '\n' + t + '\n'); process.exit(1); }
-  lock((s) => { s.secrets[a[3]] = t; }); }
+  lock((s) => { s.secrets.created = t; }); }
 else if (verb === 'apply') { const m = stdin(); const n = m.match(/^ {2}name: (\S+)/m)[1]; fs.mkdirSync(path.join(F, 'applied'), { recursive: true }); fs.writeFileSync(path.join(F, 'applied', n + '.yaml'), m);
   const lab = (k) => m.match(new RegExp(k + ': ([^,}]+)'))[1].trim();
   lock((s) => { s.seq += 1; s.jobs.push({ name: n, chat: lab('job-run/chat'), role: lab('job-run/role'), program: lab('job-run/program'), owner: m.match(/job-run\/owner: "([^"]*)"/)[1], suspend: true, seq: s.seq }); }); }
@@ -138,8 +140,10 @@ test('QA-H2 (2) headroom edges: exactly at the line is preferred, one Mi less me
   const lead0 = read('9200Mi', '60%', { JOB_RUN_EXPECTED_PEAK_MI: '08' });
   assert.equal(lead0.r.code, 0, `a leading-zero peak (08) must not abort the run: ${lead0.r.out}`);
   assert.ok(lead0.l, 'and the placement line is written');
+  // S1b C2 refuses more than 6 digits (job-run.sh:262): a 20-digit peak is refused, never wrapped around into "fits".
   const huge = read('9200Mi', '60%', { JOB_RUN_EXPECTED_PEAK_MI: '99999999999999999999' });
-  assert.match(huge.l, /decision=required-away/, 'an enormous peak must not wrap around into "fits"');
+  assert.equal(huge.r.code, 2, `a 20-digit peak is refused: ${huge.r.out}`);
+  assert.match(huge.r.out, /JOB_RUN_EXPECTED_PEAK_MI is a number of Mi/);
 });
 
 test('QA-H3 (3) PLACEMENT lines hold only fixed keys: no token, no environment value; the node line is present once the Job started after a Pending wait', () => {
@@ -160,7 +164,7 @@ test('QA-H3 (3) PLACEMENT lines hold only fixed keys: no token, no environment v
   assert.match(r.out, /Pending: the control-plane node is over 75%/);
 });
 
-test('QA-H3b a Job that never leaves Pending: the Pending line is in the log; whether a node line exists is recorded', () => {
+test('QA-H3b a Job that never leaves Pending: the Pending line and the final did-not-start line are in the log', () => {
   const w = world();
   w.top('9000Mi', '50%');
   w.put('pend', '100000'); w.put('pendmsg', '0/2 nodes are available: Insufficient memory.');
@@ -169,11 +173,11 @@ test('QA-H3b a Job that never leaves Pending: the Pending line is in the log; wh
   const log = placement(w.log());
   console.log(`QA-H3b log lines: ${log.map((l) => l.replace('=== JOB-RUN PLACEMENT ', '')).join(' | ')}`);
   assert.ok(log.some((l) => /pending=memory/.test(l)), 'the Pending line is in the log');
-  // The FINAL line (a k3s node name and queued=), not the control-plane decision line. Expected to fail on 62c38599: a product gap.
-  assert.ok(log.some((l) => /PLACEMENT node=k3s-\S+ .*queued=/.test(l)), 'a final node/queued line is also written when the Job never started');
+  // The final line for a Job that never started (job-run.sh ~471): node=none, the decision, outcome=did-not-start.
+  assert.ok(log.some((l) => /PLACEMENT node=none .*decision=preferred .*outcome=did-not-start/.test(l)), `a final line is written when the Job never started: ${log.join(' | ')}`);
 });
 
-// ---- S1b (ticket/T-611-s1b, 6a925201): review 7762 C1-C4, coordinator 7806, 7865 gaps. Written before the run; not run when committed. ----
+// ---- S1b (ticket/T-611-s1b, 6a925201): review 7762 C1-C4, coordinator 7806, 7865 gaps. ----
 const ctl = (w: ReturnType<typeof world>) => placement(w.log()).find((x) => x.includes('node=control-plane')) ?? '';
 const go = (used: string, pct: string, over: Record<string, string> = {}, argv: string[] = []) => {
   const w = world();
@@ -315,7 +319,7 @@ test('QA-S1b-T kubectl top empty or odd: the run goes on, the line says metrics 
     assert.ok(ctl(w), `${what}: a control-plane line is written`);
     assert.ok(!r.out.includes(w.npm) && !w.log().includes(w.npm), `${what}: no secret`);
   }
-  const w1 = world(); w1.put('top.txt', '');
+  const w1 = world(); w1.put('top.txt', ''); w1.run();
   assert.match(ctl(w1), /pct=unknown.*decision=preferred-metrics-unavailable/);
   const w2 = world(); w2.put('top.txt', 'k3s-master   310m   7%   9200Mi   60%\nk3s-node2   310m   7%   9200Mi   99%\n');
   w2.run();
@@ -323,7 +327,7 @@ test('QA-S1b-T kubectl top empty or odd: the run goes on, the line says metrics 
 });
 
 // ---- S1b C5 (T-611 comment 7949): the master is read again right before a suspended Job is released; the affinity is patched when the decision changed.
-// Written before the run, NOT run when committed. The fake kubectl above answers the n-th `top` from top<n>.txt (a missing file = the read fails), records
+// The fake kubectl above answers the n-th `top` from top<n>.txt (a missing file = the read fails), records
 // every Job patch body in patches.log, and fails an affinity patch when the file patchfail exists (its text and the body are echoed to stderr).
 const LOW_NOW = '9300Mi   60%';   // (9300 + 2300) * 60 = 696000 <= 75 * 9300 = 697500: preferred
 const HIGH_NOW = '12000Mi   80%'; // over the line
@@ -333,7 +337,9 @@ const patches = (w: ReturnType<typeof world>) => w.file('patches.log').split('\n
 /** The Job's required-away rule as it stands at the end: the applied manifest, then each patch in order (read as a merge or a JSON patch). */
 function effective(w: ReturnType<typeof world>): boolean {
   const d = join(w.root, 'applied');
-  let cur = existsSync(d) ? readdirSync(d).map((f) => readFileSync(join(d, f), 'utf8')).join('\n').includes('DoesNotExist') : false;
+  // Start from the REQUIRED rule only: the preferred rule in job-run.yaml:54 carries the same key and DoesNotExist.
+  const applied = existsSync(d) ? readdirSync(d).map((f) => readFileSync(join(d, f), 'utf8')).join('\n') : '';
+  let cur = /requiredDuringSchedulingIgnoredDuringExecution:[^\n]*DoesNotExist/.test(applied);
   for (const b of patches(w)) {
     if (/DoesNotExist/.test(b)) cur = true;
     else if (/requiredDuringSchedulingIgnoredDuringExecution"?\s*:\s*null/.test(b) || /"(?:node)?[aA]ffinity"\s*:\s*null/.test(b) || /"op"\s*:\s*"remove"[^}]*requiredDuring/.test(b)) cur = false;
@@ -403,21 +409,32 @@ test('QA-S1b-C5d the metrics read fails (or is odd) at release: the create-time 
   }
 });
 
-test('QA-S1b-C5e the affinity patch fails: no hang, the Job still runs (create-time decision), the log says so, and kubectl\'s text is not shown', () => {
-  for (const [first, second] of [[LOW_NOW, HIGH_NOW], [HIGH_NOW, LOW_NOW]] as const) {
-    const w = world();
-    const marker = `mk${hex(12)}`;
-    seq(w, [first, second, second, second]);
-    w.put('patchfail', `Error from server (Forbidden): jobs is forbidden ${marker}`);
-    const r = w.run();
-    console.log(`QA-S1b-C5e ${first} -> ${second}: rc=${r.code} patches=${patches(w).join(' | ')}`);
-    assert.notEqual(r.code, null, 'the run hung (the timeout killed it): a failed patch must not leave the Job suspended');
-    assert.equal(r.code, 0, `the Job still runs on the create-time decision: ${r.out}`);
-    assert.ok(releaseIndex(w) >= 0, 'a plain release is sent after the failed patch');
-    const said = `${r.out}\n${w.log()}`;
-    assert.match(said, /(could not|failed|unable|did not|cannot).*(affinity|placement|patch|re-?read|master)|placement.*(failed|unchanged|stands)/i, `the log says the change did not happen: ${said.slice(-600)}`);
-    assert.ok(!said.includes(marker), 'kubectl text (the stderr echo) never reaches the output or the log');
-    assert.ok(!said.includes(w.npm) && !said.includes(w.extra), 'no secret');
-  }
+// C5e: the affinity patch fails. Lead decision on T-611: adding the rule fails CLOSED (rc 2, "run it again"); dropping it is only kept, and must be logged.
+function c5eWorld(first: string, second: string) {
+  const w = world();
+  const marker = `mk${hex(12)}`;
+  seq(w, [first, second, second, second]);
+  w.put('patchfail', `Error from server (Forbidden): jobs is forbidden ${marker}`);
+  const r = w.run();
+  console.log(`QA-S1b-C5e ${first} -> ${second}: rc=${r.code} patches=${patches(w).join(' | ')}`);
+  assert.notEqual(r.code, null, 'the run hung (the timeout killed it)');
+  const said = `${r.out}\n${w.log()}`;
+  assert.ok(!said.includes(marker), 'kubectl text (the stderr echo) never reaches the output or the log');
+  assert.ok(!said.includes(w.npm) && !said.includes(w.extra), 'no secret');
+  return { w, r, said };
+}
+
+test('QA-S1b-C5e-i the rule cannot be ADDED (60% then 80%, patch fails): fail closed, rc 2 and "run it again"; the Job never runs on a placement it did not ask for', () => {
+  const { w, r } = c5eWorld(LOW_NOW, HIGH_NOW);
+  assert.equal(r.code, 2, `fail closed: ${r.out}`);
+  assert.match(r.out, /its rule could not be added: run it again/);
+  assert.equal(releaseIndex(w), -1, 'the Job is not released after the failed add');
+  assert.ok(placement(w.log()).some((l) => /at=release outcome=patch-failed/.test(l)), `the log says the patch failed: ${placement(w.log()).join(' | ')}`);
 });
 
+test('QA-S1b-C5e-ii the rule cannot be DROPPED (80% then 60%, patch fails): no hang, the Job still runs on the create-time rule, and the log says the change did not happen', () => {
+  const { w, r, said } = c5eWorld(HIGH_NOW, LOW_NOW);
+  assert.equal(r.code, 0, `the Job still runs on the create-time decision: ${r.out}`);
+  assert.ok(releaseIndex(w) >= 0, 'a plain release is sent after the failed patch');
+  assert.match(said, /(could not|failed|unable|did not|cannot).*(affinity|placement|patch|re-?read|master)|placement.*(failed|unchanged|stands)/i, `the log says the change did not happen: ${said.slice(-600)}`);
+});
