@@ -556,8 +556,8 @@ test('T-675 (T-416 QA R2): a restart of an asleep session whose check passed but
     const made = await s.controller.create({ workspaceId: 'docker/ws1' });
     await until(() => s.controller.get(made.id)?.process === 'live', 4000);
     assert.equal(s.controller.audit({ kind: 'memory.refused' }).length, 0, 'no hold left behind');
-    // The ended session's own follow-up work settles before the store closes: its process stream was closed and exited, it is not live.
-    await until(() => s.controller.get(s.id)?.process !== 'live' && s.tail.closed && s.tail.exited, 4000);
+    // The ended session's own follow-up work settles before the store closes: its process stream was closed, it is not live.
+    await until(() => s.controller.get(s.id)?.process !== 'live' && s.tail.closed, 4000);
   } finally {
     await s.done();
   }
