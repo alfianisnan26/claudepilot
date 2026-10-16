@@ -29,7 +29,8 @@
 #                                                       only where it fits, says why it is Pending, and an OOMKilled Job says so with its limit.
 # Placement (T-611): the scheduler counts memory REQUESTS, the master (control plane, Argo CD, Gitea...) uses far more for real. Before it creates a
 # Job this script reads the master's real memory (kubectl top nodes) and, over JOB_RUN_MASTER_MAX_PCT (default 75), makes the Job's rule away
-# from the control plane REQUIRED: it waits for k3s-node2 or for room. Under the line, or when the metrics fail, the preferred rules stay.#   scripts/job-run.sh --list                        the Jobs, their chat, role and state
+# from the control plane REQUIRED: it waits for k3s-node2 or for room. Under the line, or when the metrics fail, the preferred rules stay.
+#   scripts/job-run.sh --list                        the Jobs, their chat, role and state
 #   scripts/job-run.sh --stop [<job> | --chat <id>]     stop Jobs (all, one, or a chat's) and delete their Secrets
 # Caps: JOB_RUN_MAX Jobs at once cluster-wide (default 3), JOB_RUN_MAX_PER_CHAT per chat (2) and JOB_RUN_MAX_PER_PROGRAM per program (2;
 # claudepilot, event, konfersi: T-524). A Job over a cap is created suspended and waits its turn (creation order), with "queued behind K". The Job stops when this script is interrupted or killed (the next run removes a Job whose
@@ -50,7 +51,8 @@ event_repo=isnanme/event # fixed on purpose (T-491): the door names one reposito
 mem_std=4Gi; tmp_std=2Gi; mem_big=8Gi; tmp_big=4Gi
 master_max=${JOB_RUN_MASTER_MAX_PCT:-75}
 die() { echo "job-run: $*" >&2; exit 2; }
-for n in "$max" "$per" "$pprog" "$art_max" "$master_max"; do [[ $n =~ ^[0-9]+$ ]] || die "the caps are numbers"; donelabel() { local v; v=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9.-' '-' | cut -c1-63 | sed -E 's/^[^a-z0-9]+//; s/[^a-z0-9]+$//'); printf '%s' "${v:-none}"; }
+for n in "$max" "$per" "$pprog" "$art_max" "$master_max"; do [[ $n =~ ^[0-9]+$ ]] || die "the caps are numbers"; done
+label() { local v; v=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9.-' '-' | cut -c1-63 | sed -E 's/^[^a-z0-9]+//; s/[^a-z0-9]+$//'); printf '%s' "${v:-none}"; }
 jobs_json() { kubectl -n "$ns" get jobs -l app=claudepilot-job-run -o json 2>/dev/null; }
 stop_one() {
   kubectl -n "$ns" delete job "$1" --ignore-not-found --wait=false >/dev/null 2>&1 || true
