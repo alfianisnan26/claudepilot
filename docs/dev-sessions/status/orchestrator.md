@@ -4,23 +4,23 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 
 ## DONE
 - DEPLOY 191 LIVE (coordinator, 2026.10.16-1 from 12c68374 = batches <=18). T-404 CLOSED (live hook in managed 10-policy.json + D-60
-  refusal 7407). Live checks queued for the next free QA lane: T-472 (restarts/h via portal_status), T-591 (release note for 191).
+  refusal 7407). Live checks: T-472 UNAVAILABLE with agent tokens (needs an admin read, 7505); T-591 FAIL, no Releases note for 191
+  (setting unset or writer bug? 7504). Both FOR THE COORDINATOR.
 - FOR THE COORDINATOR, batch sooner: the T-401 merge (security; waits the ack + gate door T-595 7316). Hold migration 383 until
-  scaled by the real row count (0.41 s/1M synthetic, T-739 7487). Ready for the next batch once the gate door exists: T-376 S4b.
+  scaled by the real row count (0.41 s/1M synthetic, T-739 7487). Ready for the next batch (gate door): T-376 S4b, T-732 (7511).
 
 ## IN FLIGHT (6 of 6, D-71)
   Lanes' ticket_comment refused on unassigned tickets (T-341, T-549, T-675): verdicts live in their replies + this file.
-- QA PERF 7e4879c7: T-376 S4b PASS WITH GAPS 7475 (job 386e2331; gaps -> S5) -> batch; now QA T-739 B S1+S2; T-731 probes first on its head.
-- QA UI 8b13bb5a: plan T-524 S3c 7360; REVIEW T-401 S2b APPROVE 7387 (7103 closed; N1 gz-in-node_modules needs a real
-  Job+gate, N2 -> T-567, N4 -> T-733, N5 closed: activeDeadlineSeconds); now QA T-732 c9a032f7.
-- QA BE 2 42e5408f: REVIEW T-731 CHANGES; QA T-736 S2 FAIL 7452 (light mode resets other repo; missing guard fails open)
-  -> S3 (7455); T-723 S1 PASS WITH GAPS 7473 (job 0d2afbe2) -> now LIVE T-472, T-591 (no Job), then QA T-723 S2 be1e02a0.
+- QA PERF 7e4879c7: T-376 S4b PASS WITH GAPS 7475 -> batch; now QA T-739 B S1+S2, then T-731 probes on a81e64af.
+- QA UI 8b13bb5a: REVIEW T-401 S2b APPROVE 7387 (N1 needs a real Job+gate); T-732 PASS WITH GAPS 7467 (job 5dae3457;
+  forced-colors gap -> T-772) -> now BLIND REVIEW T-723 S1+S2 (no Job).
+- QA BE 2 42e5408f: T-736 S2 FAIL 7452 -> S3 (7455); T-723 S1 PASS WITH GAPS 7473, S2 PASS WITH GAPS 7497 (job 7f29b94d;
+  G1 route tests -> S3) -> now RE-REVIEW T-731 a81e64af (no Job).
 - IMPL lane fce0c981 (sonnet; 2f4ee38f ended: T-376 S4b DONE 103520e7, 7436, job 92c6f13b, no mutants; 65dd09f6: T-732 DONE
   c9a032f7, item 5 -> coordinator 7407) T-739 B S1 DONE 65b821d7 (migration 383 partial index, lead read OK; 4/4, 3 mutants;
   7471) S2 DONE 262663d5 (job 86693c96: build 0.41 s/1M synthetic rows, 7487 for the coordinator) -> now S3 tests d,e,f,h + docs.
-- BE INFRA lane b11ecab1 (sonnet): T-731 2cfbc7e9 review CHANGES -> fixing: 4Gi back (CPU binds), reuse opt-in --reuse, key +image
-  +big, cleanup own files only, leak check fail closed, 4 mutants, job-out/ removed (lead can't comment T-731)
-  -> T-426 S1e fix 7121 -> T-610 7053 -> T-524 S3c (plan 7360).
+- BE INFRA lane b11ecab1 (sonnet): T-731 DONE a81e64af (fixes of the CHANGES review, 7491) -> respawn on ticket/T-426-s1f
+  e630964d (lead merged T-401 a4ad3052 into S1e; doc conflicts kept both) for fix 7121 -> T-610 7053 -> T-524 S3c (7360).
 - BACKEND lane 4123bb21 (sonnet; 1261b4f3 ended: T-736 S2 DONE 98c78a63, 7395, job 1493e0be 20/20, 5 mutants)
   T-723 S2 DONE be1e02a0 -> now S3: items 5, 8 + G3 callers (risk a, add) + G1 test + G2 actor cap (7489)
   -> T-736 S3 (respawn) -> T-733 S4, S6.
