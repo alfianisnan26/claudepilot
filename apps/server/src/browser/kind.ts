@@ -107,7 +107,15 @@ export class BrowserKind implements PoolKind<BrowserPoolContent> {
   forgotten: (workspaceId: string) => void = () => {};
   readonly #latest = new Map<string, AssignedPool<BrowserPoolContent>[]>();
 
+  /** The browser plugin's version folders (12 characters of the tree hash) the workspace still holds, as the last delivery reported them. */
+  readonly #folders = new Map<string, Set<string>>();
+
   constructor(private readonly deps: BrowserKindDeps) {}
+
+  /** The version folders of the browser plugin still in the workspace, or undefined before the first delivery report (after a restart). */
+  retainedFolders(workspaceId: string): ReadonlySet<string> | undefined {
+    return this.#folders.get(workspaceId);
+  }
 
   parse(input: unknown, prev: BrowserPoolContent | null, _ctx?: ParseContext): BrowserPoolContent {
     if (!isObject(input)) throw invalid('content', 'Describe the browser.');
@@ -162,7 +170,8 @@ export class BrowserKind implements PoolKind<BrowserPoolContent> {
   }
 
   /** The browser container and the servers' install follow the files the engine just wrote. */
-  delivered(workspaceId: string, ctx: { running: boolean; now: Date }): void {
+  delivered(workspaceId: string, ctx: { running: boolean; now: Date; pluginFolders?: Map<string, string[]> }): void {
+    if (ctx.pluginFolders) this.#folders.set(workspaceId, new Set(ctx.pluginFolders.get('cpb-browser') ?? []));
     this.afterDelivery(workspaceId, this.#latest.get(workspaceId) ?? [], ctx);
   }
 
@@ -187,6 +196,7 @@ export class BrowserKind implements PoolKind<BrowserPoolContent> {
 
   forgetWorkspace(workspaceId: string): void {
     this.#latest.delete(workspaceId);
+    this.#folders.delete(workspaceId);
     this.forgotten(workspaceId);
   }
 }
