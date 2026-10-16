@@ -12,8 +12,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 
 ## IN FLIGHT (6 of 6, D-71)
   Lanes' ticket_comment refused on unassigned tickets (T-341, T-549, T-675): verdicts live in their replies + this file.
-- QA PERF 7e4879c7: QA T-426 S1g PWG (job 4ae40f5d, O1 fixed; lead posted 7797). Now QA T-611 S1 on wip/qa-t611-b06b62b;
-  then adds an N1 probe on lane/cp-qa-perf for the S1h re-QA. T-611 S1 CONFLICTS with T-426 -> rebase after S1h.
+- QA PERF 7e4879c7: now re-QA T-426 S1h on wip/qa-t426-9573a08 18a3dbb1 (S1h + probes e1dd7b69 e864da9d aeae0ff9); asked to
+  post its T-611 S1 verdict on T-611 (none seen). Then QA BE 2 re-reads N1-N3.
 - QA UI 8b13bb5a: REVIEW T-723 CHANGES 7815 -> S3c 7832. Now re-QA T-736 S3c fdc5636b (7842, job 9e34bc35 37/0, 15 mutants),
   then a blind re-read of T-781 S3 R1-R5.
 - QA BE 2 42e5408f: QA T-723 S3b PWG 7833 (job ba0960c9). T-610 r3 PASS 7844 (job a5bdc271) -> READY 7846. Now QA T-781 S3
@@ -22,8 +22,9 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - FOR THE COORDINATOR, T-781 (D-76): lead cannot claim/comment it (unassigned); Backend lane b2f0e95f on it. Order S1, S2, S4, S3, S5.
 - IMPL lane 750a7327 (sonnet; 88eec6be ended: T-736 S3c DONE fdc5636b) now T-723 S3c (7832 + 7833 stub, folds T-788)
   -> T-772 S1b (7719) -> T-772 S2 (7599).
-- BE INFRA 3958fe14 (sonnet): T-426 S1h (7782: N1 security, N2, N3; worktree switched back to the ticket branch by the lead)
-  -> T-611 S1b (7762 C1-C4 + QA Perf, rebase on S1h) -> T-611 S2 -> T-524 S3c (7360) -> T-612 S1.
+- BE INFRA fad38191 (sonnet; 3958fe14 ended: T-426 S1h DONE 9573a085 7847, job 7a3a11e7 65/0, 4 mutants killed; lead read N1
+  redact/safe_name/say: mask before cut, holds). Now T-611 S1b on ticket/T-611-s1b (from S1h; S1 re-applied by hand, conflicts)
+  -> T-611 S2 -> T-524 S3c (7360, job-run.sh too: base on T-611) -> T-612 S1.
 - BACKEND b2f0e95f (sonnet): T-781 S3 DONE 6563633a (7839) -> QA; now T-781 S5 -> T-733 (7630, 7633). T-778 = person.
 - HELD: T-426 S1e 2174eee1 QA PASS 6169, review CHANGES 7121 -> fix, re-QA, merge after T-401. T-578 51f6c153 review CHANGES 6168 -> owner. T-631 CHANGES 5850 -> coordinator.
 - 16:12 OWNER PRIORITY (coordinator, T-426 5538): T-401 then T-426 FIRST. T-401 gate GREEN gate-54ba328-6502; ff only on the person's ack.
