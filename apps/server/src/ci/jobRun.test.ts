@@ -1471,6 +1471,75 @@ test('T-611 S2: at the release the patch keeps the avoid rule: 50 to 80 adds the
   assert.equal(same.patches.length, 1, 'an unchanged answer patches no affinity');
 });
 
+// T-611 S2b (review 8141, QA 8186/8187, decisions 8164).
+test('T-611 S2b: a newline in JOB_RUN_AVOID_NODES is refused (rc 2, nothing created) and the raw value is never echoed', () => {
+  for (const bad of ['k3s-master\nk3s-node2', 'a\n=== JOB-RUN PLACEMENT forged', 'a\r']) {
+    const p = placed(50, [], { JOB_RUN_AVOID_NODES: bad });
+    assert.equal(p.r.code, 2, `${JSON.stringify(bad)}: ${p.r.out}`);
+    assert.match(p.r.out, /JOB_RUN_AVOID_NODES must be one line/);
+    assert.ok(!p.r.out.includes('forged') && !p.w.log().includes('forged'), 'the value is not echoed');
+    assert.equal(p.w.state().jobs.length, 0, 'no Job was created');
+  }
+});
+
+test('T-611 S2b: a non-ASCII node name is refused (rc 2); the check is bytewise (LC_ALL=C), whatever the caller\'s locale', () => {
+  for (const bad of ['é', 'k3s-mastér', 'a,ñ']) {
+    for (const loc of ['C', 'en_US.UTF-8', 'C.UTF-8']) {
+      const p = placed(50, [], { JOB_RUN_AVOID_NODES: bad, LC_ALL: loc });
+      assert.equal(p.r.code, 2, `${JSON.stringify(bad)} under ${loc}: ${p.r.out}`);
+      assert.match(p.r.out, /ASCII/);
+      assert.equal(p.w.state().jobs.length, 0, 'no Job was created');
+    }
+  }
+});
+
+test('T-611 S2b: node names of 1 and 253 characters pass; 254 is refused', () => {
+  for (const ok of ['a', `a${'b'.repeat(251)}c`]) {
+    const p = placed(50, [], { JOB_RUN_AVOID_NODES: ok });
+    assert.equal(p.r.code, 0, `${ok.length} chars: ${p.r.out}`);
+    assert.deepEqual(p.required, rule(HOST(ok)));
+  }
+  const p = placed(50, [], { JOB_RUN_AVOID_NODES: `a${'b'.repeat(252)}c` });
+  assert.equal(p.r.code, 2, p.r.out);
+  assert.equal(p.w.state().jobs.length, 0, 'no Job was created');
+});
+
+test('T-611 S2b: the avoid-only Pending message and log line name the validated list; the final PLACEMENT line carries it', async () => {
+  const w = world([], { top: 50 });
+  writeFileSync(join(w.root, 'pending'), "0/2 nodes are available: 1 node(s) didn't match Pod's node affinity/selector, 1 Insufficient memory.");
+  const r = await w.start(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'true'], { JOB_RUN_START_WAIT_S: '1', JOB_RUN_AVOID_NODES: 'k3s-master,node-9.lan' }).done;
+  assert.match(r.out, /is Pending: it may not run on the nodes named in JOB_RUN_AVOID_NODES \(k3s-master,node-9\.lan\), and no other node fits/);
+  assert.match(w.log(), /^=== JOB-RUN PLACEMENT pending=affinity avoid=k3s-master,node-9\.lan decision=waits-off-avoided-nodes$/m);
+  const ok = placed(50, [], { JOB_RUN_AVOID_NODES: 'k3s-master,node-9.lan' });
+  assert.match(ok.w.log(), /^=== JOB-RUN PLACEMENT node=\S+ pct=50 decision=preferred queued=\d+s avoid=k3s-master,node-9\.lan$/m);
+  const none = placed(50);
+  assert.doesNotMatch(none.w.log(), /avoid=/);
+});
+
+test('T-611 S2b: with the avoid rule on, a failed add patch stops the run (rc 2), a failed drop patch is logged and the Job runs, a failed read keeps the create-time rule', () => {
+  const avoid = { JOB_RUN_AVOID_NODES: 'k3s-master' };
+  const add = moved(50, 80, true, avoid);
+  assert.equal(add.r.code, 2, add.r.out);
+  assert.match(add.r.out, /could not be added: run it again/);
+  assert.ok(!add.patches.some((l) => l.includes('suspend')), 'never released');
+  assert.equal(add.w.state().jobs.length, 0);
+
+  const drop = moved(80, 50, true, avoid);
+  assert.equal(drop.r.code, 0, drop.r.out);
+  assert.match(drop.r.out, /the placement rule was not dropped .*runs on its create-time rule/);
+  assert.match(drop.w.log(), /^=== JOB-RUN PLACEMENT node=control-plane at=release outcome=drop-failed \(the rule was not dropped: the Job runs on its create-time rule\)$/m);
+  assert.match(drop.w.log(), /PLACEMENT node=\S+ pct=80 decision=required-away queued=\d+s avoid=k3s-master$/m);
+  assert.ok(drop.patches.some((l) => l.includes('suspend')), 'the Job was released');
+  const plain = moved(80, 50, true);
+  assert.match(plain.w.log(), /outcome=drop-failed/);
+
+  const read = moved(50, 'FAIL', false, avoid);
+  assert.equal(read.r.code, 0, read.r.out);
+  assert.equal(read.patches.length, 1, 'a failed read patches no affinity');
+  assert.match(read.w.log(), /at=release reading=failed kept=preferred pct=50/);
+  assert.match(read.w.log(), /PLACEMENT node=\S+ pct=50 decision=preferred queued=\d+s avoid=k3s-master$/m);
+});
+
 // ---- T-426 S1i (review 7888): the mask loop. The old awk loop (index, cut, index again) never ended when a value was or held the replacement
 // text. The mask is now one pass over the original line (MASKFN in job-run.sh). Each test has a hard timeout: a hang is a failure (awk gets 5 s,
 // a whole run 30 s).

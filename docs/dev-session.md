@@ -190,7 +190,9 @@ scripts/job-run.sh --list ; scripts/job-run.sh --stop --chat <session id>
   `npm rebuild` and the lifecycle scripts, T-426 S1f), so the install steps do not inherit it. Limits: (1) the shell's own start-up environment
   (`/proc/1/environ`) still holds the value, so code that reads it still can (only scoped `E2E_CF_ACCESS_*` test credentials may be passed;
   `--steps none` when the dependencies are already installed); (2) the
-  raw Job log in the cluster is unmasked until the Job is cleaned up (TTL), only the streamed copy is masked; (3) after unpacking `--out`, the
+  raw Job log in the cluster is unmasked until the Job is cleaned up (TTL), only the streamed copy is masked; the mask is a plain text match of
+  the value, so it does NOT cover a line shorter than 8 characters inside a multi-line secret, nor an encoded form of a secret (base64, URL or
+  JSON escapes, split across lines; review 8157 on T-426); (3) after unpacking `--out`, the
   script scans the files for each value, deletes a file that holds one, names it (never the value) and exits 3 when the command had passed; the
   scan finds plain text only, so with `--pool-env` every compressed file of a known format is deleted the same way, rc 3, never read: by extension (`.zip .gz .tgz .bz2
   .xz .zst .br .7z .jar`) or by magic bytes (zip, gzip, bzip2, xz, zstd; a renamed file too), such as a Playwright `trace.zip` or the report's
@@ -215,9 +217,13 @@ scripts/job-run.sh --list ; scripts/job-run.sh --stop --chat <session id>
   `=== JOB-RUN PLACEMENT node=control-plane at=release reading=failed kept=<required-away|preferred> pct=<create-time pct> (the create-time reading)`
   (the last placement line then keeps that percentage, never "unknown"); a required rule that cannot be added stops the run (rc 2,
   "run it again"). `JOB_RUN_AVOID_NODES` (T-611 S2, default empty) is a comma list of node names (letters, digits, `.` and `-`, at most 20; anything
-  else stops the run, rc 2) that no Job may run on: a REQUIRED `kubernetes.io/hostname NotIn` rule, in the same term as the control-plane rule when
-  the memory decision adds it, and kept by the release patch. It is off by default on purpose: an always-on required rule left every Job Pending
-  when the other node was full (T-365, T-524). Known limits: the projected percentage is rounded, and `top` itself is a sample, so the line is good to about 0.5 points; the
+  else stops the run, rc 2: a newline, a non-ASCII byte (checked under `LC_ALL=C`), a name over 253 characters, an empty name) that no Job may run
+  on: a REQUIRED `kubernetes.io/hostname NotIn` rule, in the same term as the control-plane rule when
+  the memory decision adds it, and kept by the release patch. The raw value is never echoed; the Pending line, the log and the last placement
+  line (`... queued=Ns avoid=<list>`) carry the validated, joined list. It is off by default on purpose: an always-on required rule left every Job
+  Pending when the other node was full (T-365, T-524). With no avoid list, the default manifest is semantically equal to the one before S2 (same rules), not byte-identical,
+  when the memory rule is on. A rule that cannot be dropped at the release is kept and the log
+  says so (`at=release outcome=drop-failed`): the Job runs on its create-time rule. Known limits: the projected percentage is rounded, and `top` itself is a sample, so the line is good to about 0.5 points; the
   peak counted is the typical 2300 Mi, not the 4 Gi limit, so a rare larger Job can still land on a master that fit the typical one. A master at 74% therefore takes no 4 GiB Job (74% + 4 GiB is about 100%). The line is exact: use plus peak
   AT the line stays, the projection printed is rounded up. An odd bytes column falls back to the percentage alone; under the line, or when the
   metrics fail, only the preferred rules apply. Numbers are read in base 10 (`08` is eight). The decision, the Pending wait, the node it ran on,
