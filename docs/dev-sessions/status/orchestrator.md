@@ -16,9 +16,9 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 
 ## IN FLIGHT (6 of 6, D-71)
   Lanes' ticket_comment refused on unassigned tickets (T-341, T-549, T-675): verdicts live in their replies + this file.
-- QA PERF 7e4879c7: reviews T-610 CHANGES, T-251 S2 APPROVE 4/4 (gaps T-733); now review T-681 -> then T-697.
-- QA UI 8b13bb5a: reviews T-710 APPROVE (T-732), T-675 APPROVE 4/3 (T-733); now review T-574 S2 -> then T-376 S4.
-- QA BE 2 42e5408f: T-610 QA FAIL -> rework 7053; review T-524 S3b APPROVE 4/5/3 (T-733); now review T-376 S3 -> T-574 S3.
+- QA PERF 7e4879c7: reviews T-610 CHANGES, T-251 S2 + T-681 APPROVE (T-733, T-732 7089); now review T-325 S1 -> T-697.
+- QA UI 8b13bb5a: reviews T-710, T-675 APPROVE; T-574 S2 CHANGES (decision 7088: lines default stays); now T-416 S1 -> T-376 S4.
+- QA BE 2 42e5408f: T-610 FAIL -> rework 7053; reviews T-524 S3b, T-376 S3 APPROVE (Vary -> S4); now T-401 060aca4 -> T-574 S3.
 - IMPL lane 0d799c90 (sonnet) T-376 S4 87144867: wiring proven (3fa76653); long task 207-273ms red 1-2/4 (a435d70e) -> one try content-visibility (6952); wiring
   test + 4x CPU, long-task, DOM/heap, older-page budgets; if still red -> QA UI as is, budget question -> coordinator.
 - BE INFRA lane a7d33a84 (sonnet, sekar; 87749649 ended after T-610 rework) T-697 rework (await scan, 30x load) -> respawn in T-610 worktree for rework 7053 -> T-524 S3c -> T-731.
