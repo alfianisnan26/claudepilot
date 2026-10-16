@@ -359,6 +359,8 @@ test('T-739 (D-65): wasteKind table: what is a denial, what is not, the 400-char
     ['Bash', `${'x'.repeat(400)} permission denied`, 'failed'], // the cut: only the first 400 characters are read
     ['Bash', `${'x'.repeat(385)} permission denied`, 'failed'], // the pattern straddles the cut (403 characters): it is cut in half and does not match
     ['Bash', `${'x'.repeat(380)} permission denied`, 'denied'], // it ends inside the first 400
+    ['Bash', `${'x'.repeat(382)} permission denied`, 'denied'], // exactly 400 characters: the last one is still read
+    ['Bash', `${'x'.repeat(383)} permission denied`, 'failed'], // 401 characters: the last one is cut
     ['mcp__pilot__ticket_get', 'ticket not found', 'portal'],
     ['mcp__pilot__ticket_get', null, 'portal'],
     ['mcp__pilot_ticket_get', 'ticket not found', 'failed'],
@@ -383,6 +385,24 @@ test('T-739 (D-65): fullProgram: a D-65 target is a short row with its offenders
   assert.deepEqual(c, { id: 'live_workers', decision: 'D-61', state: 'breach', figure: { value: 7, basis: 'measured' }, offenders: ['W1'] }, 'figure sources are left out of the full form');
 });
 
+// T-739 B S4 (M6): an unavailable D-65 figure reads `unavailable:<reason>`, `no_source` without a reason. Mutant: `v = f => f.value`.
+test('T-739 (D-65): fullProgram: an unavailable D-65 figure names its reason', () => {
+  const gone = (reason?: string) => ({ value: null, basis: 'unavailable' as const, source: 'a source', ...(reason ? { reason } : {}) });
+  const q = (reason?: string) => ({ id: 'quota_unused', decision: 'D-65', rule: 'r', state: 'unavailable', figure: gone(reason), offenders: [] });
+  const p = { program: 'L1', title: 't', workspaceId: null, leads: ['L1'], workers: 1, current: {}, previous: null, targets: [q('no_samples'), q()] } as unknown as CrewProgramScore;
+  const [a, b] = fullProgram(p).targets as Record<string, unknown>[];
+  assert.equal(a!.value, 'unavailable:no_samples');
+  assert.equal(b!.value, 'unavailable:no_source');
+});
+
+// T-739 B S4 (M7): a short row lists at most five offenders. Mutant: `slice(0, 5)` -> `slice(0, 6)`.
+test('T-739 (D-65): scoreShort: a flag carries the first five offenders only', () => {
+  const figure = { value: 40, basis: 'measured' as const, source: 's' };
+  const offenders = ['L1', 'L2', 'L3', 'L4', 'L5', 'L6'];
+  const p = { program: 'L1', title: 't', workspaceId: null, leads: offenders, workers: 1, current: {}, previous: null, targets: [{ id: 'lead_share', decision: 'D-65', rule: 'r', state: 'breach', figure, offenders }] } as unknown as CrewProgramScore;
+  assert.deepEqual(scoreShort(p).flags[0]!.offenders, ['L1', 'L2', 'L3', 'L4', 'L5']);
+});
+
 // T-739 B gap e. Mutants: an agent's own read gets the quota figure; a single-program read gets it.
 test('T-739 (D-65): quota is every Claude’s: an agent’s own read and a single-program read carry no quota figure, the whole read does', async () => {
   const h = await seeded();
@@ -396,6 +416,7 @@ test('T-739 (D-65): quota is every Claude’s: an agent’s own read and a singl
     assert.equal(target(prog(own, 'L1'), 'quota_unused').figure.value, null);
     const one = h.lab.scorecard({ window: 'day', program: 'L1' })!;
     assert.equal(one.quotaUnused, undefined);
+    assert.equal(target(prog(one, 'L1'), 'quota_unused').figure.value, 60, 'a single-program read keeps the quota row');
     // Another program asked for by an agent of L1 is not found, as a program that is not there.
     assert.equal(h.lab.scorecard({ window: 'day', sessionId: 'W3', program: 'M1' }), null);
     assert.equal(h.lab.scorecard({ window: 'day', program: 'nope' }), null);

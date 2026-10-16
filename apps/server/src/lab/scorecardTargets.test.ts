@@ -32,6 +32,11 @@ test('quota_unused: exactly 30 is not a breach (it warns), 30.01 is', () => {
   const over = target(d65Targets(prog, facts({ quotaUnused: [row(30.01)] }), [], win), 'quota_unused');
   assert.deepEqual([over.state, over.figure.value], ['breach', 30.01]);
   assert.equal(target(d65Targets(prog, facts({ quotaUnused: [row(23.99)] }), [], win), 'quota_unused').state, 'ok', 'below 80 percent of the ceiling');
+  // The warn edge: 80 percent of 30 (exactly 24 in floating point, checked here) warns and names the Claude; just under it does not.
+  assert.equal(30 * 0.8, 24);
+  const at24 = target(d65Targets(prog, facts({ quotaUnused: [row(24)] }), [], win), 'quota_unused');
+  assert.deepEqual([at24.state, at24.figure.value, at24.offenders], ['warn', 24, ['c1']]);
+  assert.deepEqual(target(d65Targets(prog, facts({ quotaUnused: [row(23.99)] }), [], win), 'quota_unused').offenders, []);
 });
 
 // b. done_rate counts feature and task tickets only. Mutants: drop the type filter; count features only.
