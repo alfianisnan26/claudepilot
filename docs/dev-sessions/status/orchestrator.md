@@ -1,42 +1,35 @@
-# orchestrator status (2026-10-15 22:45 UTC, session 355881a3, continuation of de232389)
+# orchestrator status (2026-10-16 00:10 UTC, session 355881a3, continuation of de232389)
 
-Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-overs: ab99b45, bb58413, 639202e.
+Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-10-15 DONE batches 1-7: see 4fbab374). Hand-overs: ab99b45, bb58413, 639202e.
 
 ## DONE
-- MERGED ff 275cea5b: T-586, T-486 (S2d+S2e), T-547, T-611, T-548 (gate GREEN 4071aa5, claudepilot-gate-4071aa5-b4a2; 5795-5800).
-- MERGED ff bcb27182: T-561 S1c, T-546 (gate GREEN 36632f8; 5892/5893). T-546 CLOSED. T-561 waits-t640 (5898, live crew check).
-- MERGED ff 1772d2d0: T-576 (gate GREEN f63c5f9; 5991). Open until the phone check (QA UI 8b13bb5a).
-- MERGED ff ce819bd0: T-597 S1b (gate GREEN 2c53982) -> coordinator deploys with T-546.
-- MERGED ff ffd4bcdd: T-600 (BE QA 5864, FE QA UI 6128; gate GREEN 6bb628c, claudepilot-gate-6bb628c-3b2f; + portal tag -15 merged in).
-- MERGED ff 8d9eab44 (batch 6): T-623 S1b (6069), T-591 S1d (6107), T-558 S1b (6182), T-631 F2 (6195); gate GREEN 033f0e2
-  (job-out/gate-033f0e2.log); comments 6244-6249. Deploy = coordinator's.
 - MERGED ff 1a4a7933 (batch 7): T-633 (6283) + T-638 (6284, CLOSED); gate GREEN 7d87d90 (claudepilot-gate-7d87d90-b744).
 - MERGED ff 38d6d3fb (batch 8b): T-325 S1+S1b+S1c (QA Perf 6357, migration 785 read); gate GREEN e5d2de3. Open for S3 (person).
 - MERGED ff 7ff6561d (batch 9): T-416 S1-S1e (QA Perf 6420); gate GREEN 1803cf2 + re-gate 15aece0 (6498). Open: S2, T-675.
   Flake src/repos/actions.test.ts timer -> T-697 (new).
-- T-636 CLOSED done on QA PASS WITH GAPS 5962 (built by the coordinator, ad9f7ad8). T-576 CLOSED on QA UI PASS WITH GAPS 6268; 40 px -> T-681.
+- Earlier 2026-10-15: batches 1-6 (275cea5b, bcb27182, 1772d2d0, ce819bd0, ffd4bcdd, 8d9eab44); T-546, T-636, T-576, T-638 CLOSED.
 
 ## IN FLIGHT (6 of 6, D-71)
-  QA Perf's ticket_comment refused on unassigned tickets: lead posts its verdicts.
+  Lanes' ticket_comment refused on unassigned tickets (T-341, T-549, T-675): verdicts live in their replies + this file.
 - T-574: batch 8 gate RED (sessionStartParent.test.ts:71, family workers not an array; 6396) -> BACKEND lane 06e9ff5c (sonnet,
-  respawned; 8962fc38 ended) on ticket/T-574-s2 from 124ca45f: keep the array, cap/cut tests, whole src/chat + portalmcp in a Job.
-- T-633 S2 0a5b686a DONE (6400; G3 waits on the timer, H1/H2 tests; x20 under load 0 fails) -> QA Perf delta (+ whole src/chat).
-- T-549 70b081f8 (6378): QA BE 2 42e5408f backend check running; QA UI PASS WITH GAPS (job f7730a9b, reply only; long id wrap
+  respawned) on ticket/T-574-s2 from 124ca45f: keep the array, cap/cut tests, whole src/chat + portalmcp in a Job.
+- T-633 S2 0a5b686a DONE (6400; G3 waits on the timer, H1/H2 tests; x20 under load 0 fails) -> QA Perf 7e4879c7 delta (+ whole src/chat).
+- T-549 70b081f8 (6378): QA BE 2 42e5408f backend check running; QA UI PASS WITH GAPS (job f7730a9b; long id wrap
   + D-65 harness assertions not run). Then T-341 docfix 2ed9bc64 delta (counts differ from QA's) queued on QA BE 2.
 - T-524 measured FAIL 6488 (master peak 87% > 85%; ~1/3 of Jobs on master) -> decision 6489 (a): BE INFRA lane f5aded2f
-  (sonnet, respawned; 17a36fce ended) on ticket/T-524-s3: Jobs off master over the T-611 line (required) + OOM-report test.
-- IMPL ff009a65 (sonnet) on ticket/T-376-chat-open-harness: tools/qa/chat-open.mjs to design 6305; then T-681 by message.
-- QA UI 8b13bb5a: idle until the T-376 harness lands, then runs it. T-576 gap 4 = SLOW ONLY.
+  (sonnet, respawned) on ticket/T-524-s3: Jobs off master over the T-611 line (required) + OOM-report test.
+- T-376 harness tools/qa/chat-open.mjs 982c527f DONE (6474, 6490: FAIL on today's code: no "Show all (", oldest not reached in 120 s)
+  -> QA UI 8b13bb5a: QA the harness + T-376 verdict on the integration head. Impl ff009a65 ended.
+- IMPL d5c6f211 (sonnet) on ticket/T-681-ci-44px: CI Runs filter + back link to 44 px at 390.
 - T-675 (unassigned, lead refused): findings 4/5 on T-416 6385, R2 on 6420.
 - HELD: T-426 S1e 2174eee1 QA PASS 6169 -> merge on the T-401 ack (4941). T-578 51f6c153 review CHANGES 6168 -> owner decision.
   T-631 review CHANGES 5850: absolute-path entry (a) for the coordinator; F1 on job-run.sh -> T-635 (high).
 - 16:12 OWNER PRIORITY (coordinator, T-426 5538): T-401 then T-426 FIRST. T-401 gate GREEN gate-54ba328-6502; ff only on the person's ack.
 
 ## DECISIONS (binding)
-- 21:10 T-416 review 6187 CHANGES (5 sev-2) -> S1d on opus impl; lead merged integration into the S1c head (310 behind) as the base.
-  T-325 S1b on a separate opus impl (Backend busy on T-633; coordinator's next priority). T-578 HOLD: a gate wall + charter conflict.
-- 20:14 Coordinator closed all 9 sweep tickets done. 6 match evidence (T-109/280/282/285/287/136). PUSHBACK T-657: T-259 (QA FAIL 1773),
-  T-317 (live run not done), T-338 (no QA pass, only review 1846) closed against the evidence -> reopen proposed; lead can't (T-634).
+- 23:55 T-524 S3 (6489): Jobs off k3s-master over the T-611 line; re-measure after merge. 22:59 T-574 out of batch 8 (6396).
+- 20:14 PUSHBACK T-657: T-259 (QA FAIL 1773), T-317 (live run not done), T-338 (no QA pass) closed against the evidence -> reopen
+  proposed; lead can't (T-634).
 - 16:30 D-71 (coordinator): limit 6; 3rd build lane BE Infra (CI, runners, job-run, k3s, deploy, secrets delivery, usage, spend, quota):
   T-401, T-426, T-611, T-547, T-610. Backend: T-546, T-597, T-600 route, T-325. Spawn lanes with claude auto.
 - 14:56 D-70 LANES (DECISIONS.md; my decision T-595 5380): freed slots become lanes, spawned ONCE on sonnet and fed
@@ -59,6 +52,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - T-666 (high, RBAC = a person's wall): workspace kohi-event can create/delete ConfigMaps in isnan-claudepilot (review 6168, can-i).
 - T-401 gate wall (via the coordinator): the owner acks on T-401 that gate-job.yaml's change is credential plumbing plus one
   stricter red (exit 3 on a credential value in the gate's files); gate.sh's checks unchanged. Question text in 4941.
+- T-341 D (updatedInput) needs a real Claude Code session: a person or the coordinator.
 - T-93 Konfersi production only. Coordinator items: T-422 (sudo), T-306 item 4 / T-340; D-row for T-417's Bypass across sleep;
   T-433's persona-wall question (2984).
 - For the coordinator, NOT the owner (not tagged owner-checklist): T-476 lead may START a deploy whose release waits for a person
@@ -69,11 +63,11 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 
 ## NEXT (in order, as slots free)
 1. Merges: T-401 060aca4 (ack 4941) -> T-426 S1e -> T-379 S2 3f11b28 (PASS 4948, review 4938); deploys are the coordinator's.
-2. Backend lane after T-325 S1c: T-633 G3 deflake + H1/H2 tests (fresh branch). Implementer for T-681 (40 px). QA: T-325 S1c delta -> T-416 S1d (then a delta blind review for T-416, gate, merge; then S2 = Bypass restore).
-3. RTK (coordinator 14:55): T-340 (a hook change is landed by a person/coordinator) -> T-341 -> T-306 delivery (dev/t-306-1 has items 1-2);
-   T-549 (+ wasted-calls row, 4802); T-574 (session_family summary, 4801). 4. T-524 measurement with T-513. 5. T-537. 6. T-513.
-7. T-472 live re-check (4294), T-422, T-147, T-438, T-425, T-436, T-437, T-432, T-378 S1 verify, T-382, T-377, T-386, T-409, T-402, T-398, T-399, T-370 HOLD,
-   T-371..T-374, T-363, T-451, T-470, T-507, T-508, T-512, T-520; T-376 S2 0b0faf7 (merge integration in, ux, S3 perf); T-404 open till deployed.
+2. On PASS: T-633 S2, T-549, T-574 S2, T-524 S3, T-681 -> gate, merge. T-376 app fix slice after the QA UI verdict.
+3. T-675 (memory findings 4/5 + R2 test, Backend lane), T-697 flake, T-416 S2 (Bypass restore).
+4. RTK: T-340 (hook change landed by a person/coordinator) -> T-341 merge -> T-306 item 3 (lab A/B). 5. T-537. 6. T-513.
+7. T-472 live re-check (needs portal_status), T-422, T-147, T-438, T-425, T-436, T-437, T-432, T-382, T-377, T-386, T-409, T-402, T-398,
+   T-399, T-370 HOLD, T-371..T-374, T-363, T-451, T-470, T-507, T-508, T-512, T-520; T-404 open till deployed.
 
 LESSONS: node --test, never vitest; a gate-done notice needs action; dontAsk workers cannot read /tmp, merge, gate or wait, and Bash only in their spawn worktree (new branch = new worker); whole
-test folders; cite a comment id only after the post returns it (wrong twice); trailers in one block; FULL hashes; gate before every push; status via Edit/Write ONLY (broken twice 2026-10-15: python, sed -i); ancestor check before ff.
+test folders (T-574 red 10-15); integration moved during a gate = merge + re-gate (pack goes stale); FULL hashes; trailers in one block; status via Edit/Write ONLY; ancestor check before ff.
