@@ -89,6 +89,23 @@ test('all passed is exit 0 with one verdict line', () => {
   assert.match(r.stdout, /QUICK CHECK: all passed$/m);
 });
 
+test('a missing tool is SKIPPED, never passed: the last line names it and the exit is not 0', () => {
+  const f = fixture(0);
+  rmSync(join(f.work, 'node_modules/.bin/prettier'));
+  const r = run(f.work, f.fake, ['--test', 'pkg/x.test.mjs']);
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /::: format SKIPPED \(no prettier\)/);
+  assert.match(r.stdout, /::: lint ok/);
+  assert.doesNotMatch(r.stdout, /all passed/);
+  assert.match(r.stdout.trimEnd().split('\n').pop() ?? '', /^QUICK CHECK INCOMPLETE: SKIPPED format /);
+  // A failure and a skip together: both are named.
+  rmSync(join(f.work, 'node_modules/.bin/eslint'));
+  tool(join(f.work, 'pkg/node_modules/.bin/vitest'), 'exit 1');
+  const both = run(f.work, f.fake, ['--test', 'pkg/x.test.mjs']);
+  assert.equal(both.status, 1);
+  assert.match(both.stdout.trimEnd().split('\n').pop() ?? '', /^QUICK CHECK FAILED: test:pkg\/x\.test\.mjs \(also SKIPPED: format lint\)$/);
+});
+
 test('a branch with no changes and no tests needs no Job; a missing test file is a usage error', () => {
   const f = fixture(0);
   sh(f.work, 'git checkout -q stg');

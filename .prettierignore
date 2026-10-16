@@ -1,0 +1,8 @@
+node_modules
+dist
+build
+coverage
+job-out
+job-run-artifacts
+package-lock.json
+docs/context-pack.md
