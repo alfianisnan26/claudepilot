@@ -13,11 +13,10 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 ## IN FLIGHT (6 of 6, D-71)
   Lanes' ticket_comment refused on unassigned tickets (T-341, T-549, T-675): verdicts live in their replies + this file.
 - QA PERF 7e4879c7: T-739 B S1-S2 PASS WITH GAPS 7498; T-731 PASS WITH GAPS (job 15df1fc8) -> now QA T-739 B S3 390b7ce0.
-- QA UI 8b13bb5a: REVIEW T-723 S1-S2 CHANGES 7513 (-> S3); REVIEW T-739 B APPROVE 7522 (N1 doc -> Impl); PLAN T-772 (4 slices),
-  PLAN T-598 (4 slices, 7565) -> now PLAN repo settings UI (T-591 S2 release_report + T-556 hookSecret).
-- QA BE 2 42e5408f: REVIEW merge e630964d OK (7526); T-591 DIAG (7556); T-597 already done -> closed -> now PLAN T-612.
-- IMPL lane fce0c981 (sonnet): T-739 B S1 65b821d7, S2 262663d5, S3 DONE 390b7ce0 (job 863f50e6 40/40 + proof f322743f: two Jobs
-  on one commit, told D-75) -> now docs N1 (5 % vs 14 %) -> respawn for T-772 S1 (plan on T-772).
+- QA UI 8b13bb5a: PLAN T-598 (7565), PLAN repo settings UI 5 slices (T-556 7578) -> now T-772 sweep list S2-S4 + PLAN T-592.
+- QA BE 2 42e5408f: PLAN T-612 3 slices (lead decision A, 7592, D-66 wording -> coordinator) -> now LIVE CHECK T-600 + PLAN T-776.
+- IMPL lane 09fee945 (sonnet, sekar; fce0c981 ended: T-739 B S1-S3 + docs N1 9be41062) T-772 S1 on ticket/T-772-forced-colors
+  (base b7f02cad): ci outline-hidden + tools/qa forced-colors check.
 - BE INFRA lane 2dc2be75 (sonnet; b11ecab1 ended: T-731 DONE 31b1ad73, N1-N3) T-426 S1e fix 7121 on ticket/T-426-s1f
   (base e630964d) -> T-610 7053 (respawn) -> T-524 S3c (7360).
 - BACKEND lane 4123bb21 (sonnet; 1261b4f3 ended: T-736 S2 DONE 98c78a63, 7395, job 1493e0be 20/20, 5 mutants)
@@ -27,6 +26,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - 16:12 OWNER PRIORITY (coordinator, T-426 5538): T-401 then T-426 FIRST. T-401 gate GREEN gate-54ba328-6502; ff only on the person's ack.
 
 ## DECISIONS (binding)
+- 11:00 T-612 default A (pinned prettier/eslint devDeps, changed files only; quick-check must not say "passed" for a skipped step); FOR THE COORDINATOR 7592.
 - 10:10 T-731 F1: lanes are refused rm/git rm, so the lead drops job-out/t731b/r.txt as its own traced commit in the premerge (a log, not code).
 - 09:38 MERGES HELD: D-75 (lead runs no Jobs) vs gate-job.sh absent from the allow list (lanes refused). Batch 19 71a2317f
   (T-697 + T-574 S3) waits; coordinator picks (a) a person adds the allow entry [default], (b) gate exempt, (c) hold (T-595 7316).
