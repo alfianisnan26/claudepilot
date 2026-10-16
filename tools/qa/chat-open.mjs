@@ -237,6 +237,8 @@ async function runConfig(cookie, cfg) {
 
     // Sign in, open /, clear the stored detail choice and the network log, then navigate to the chat.
     await b.goto('/', 800);
+    // Warm the portal's database cache first (the first read of a 36 MB transcript is cold; a person opens a chat that was open before).
+    await b.eval(`fetch('/api/chat/sessions/${SID}/events?limit=200', { credentials: 'same-origin' }).then((r) => r.status)`).catch(() => {});
     await b.eval(`localStorage.removeItem('claudepilot.chat-details')`);
     net.clear();
     const t0 = Date.now();
@@ -315,6 +317,20 @@ async function runConfig(cookie, cfg) {
       await b.clickAt(t.x, t.y);
       await sleep(600);
       sa = await b.eval(findShowAll);
+    }
+    if (!sa) {
+      // Diagnostics for a miss: what the newest page holds as its last tool results, and which Output blocks the page shows.
+      const diag = await b.eval(`(async () => {
+        const r = await fetch('/api/chat/sessions/${SID}/events?limit=200', { credentials: 'same-origin' }).then((x) => x.json());
+        const page = r.data ?? r;
+        const evs = page.events ?? page;
+        const results = evs.filter((e) => e.kind === 'tool_result').slice(-3).map((e) => ({ seq: e.seq, id: e.toolUseId, len: (e.text || '').length, whole: e.textLength ?? null }));
+        const outs = [...document.querySelectorAll('section[aria-label=Output]')].map((s) => ({ chars: s.innerText.length, preview: /preview/.test(s.innerText.slice(0, 60)) }));
+        const last = evs.slice(-6).map((e) => e.kind + ':' + (e.toolUseId || ''));
+        return { more: page.more, lastKinds: last, results, outs };
+      })()`).catch((e) => String(e));
+      console.log(`     diag: ${JSON.stringify(diag)}`);
+      res.diag = diag;
     }
     check(`${tag} a "Show all (" button is in the DOM`, !!sa, sa ? `"${sa.label}"` : 'no Show all in the DOM');
     if (sa) {
