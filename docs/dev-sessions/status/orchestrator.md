@@ -3,15 +3,15 @@
 Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-10-15 DONE batches 1-7: see 4fbab374). Hand-overs: ab99b45, bb58413, 639202e.
 
 ## DONE
-- BATCH 22 ON INTEGRATION 0d521d67 (ff origin+pilot from f4de2647; gate claudepilot-gate-0d521d6-7b1d GREEN, suite 637s): T-697,
-  T-574 S3, T-731, r.txt drop, T-376 S4b, T-732, T-610 r3, T-739 B (mig 383), T-723 S3c. Coordinator told on T-731.
+- BATCH 23 ON INTEGRATION f2843f2e (gate claudepilot-gate-8eeef66-b31a GREEN on 8eeef663; f2843f2e = that + status only):
+  T-781 S1-S7 (lead's mechanical index.ts resolution; decision 8094), T-733 S1 S4 S6. Coordinator told 8123.
+- BATCH 22 ON INTEGRATION 0d521d67 (gate claudepilot-gate-0d521d6-7b1d GREEN): T-697, T-574 S3, T-731, r.txt drop, T-376 S4b,
+  T-732, T-610 r3, T-739 B (mig 383), T-723 S3c. Coordinator told on T-731.
 - DEPLOY 191 LIVE (coordinator, from 12c68374 = batches <=18). T-404, T-597 CLOSED. T-472 UNAVAILABLE (7505); T-591 FAIL (7556,
   T-776), FOR THE COORDINATOR. T-781/T-731/T-727 are the lead's. Migration 383: 0.41 s/1M synthetic rows (7487), coordinator's.
 
 ## IN FLIGHT (6 of 6, D-71)
-- GATE b23: wip/main-8eeef66 8eeef663 on bd548097 = T-781 S1-S7 0c73e71f (lead's mechanical resolution of autotransfer/index.ts:
-  T-723's ports()+actor + T-781's interrupt; t781ports.test imports ports) + T-733 1afaf8a6 + pack. Worktree premerge-b23, log
-  job-out/gate-b23.log. Decision (a) merge with follow-ups (S5-3c dead line, in-flight mark assertion): T-781 8094.
+- NONE gating.
   Lanes' ticket_comment refused on unassigned tickets (T-341, T-549, T-675; T-675 assign refused too): verdicts in replies + this file.
 - QA PERF 330855ba (respawned; 7e4879c7 ended: Bash refused twice; new one has no Write and heredocs refused). QA T-611 S1b Job on
   f74638f1, C5e skipped as a probe defect (decided: no edit), mutants 1-3; add-fail cleanup by reading. Queued (sent): QA T-611 S1c +
@@ -69,7 +69,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   T-527 finding 4 (owner triggers tagging owner-checklist); T-657 reopen T-259/T-317/T-338; T-739 A scoring defs (scoring = person's wall).
 
 ## NEXT (in order, as slots free)
-1. Gate b23 (IN FLIGHT). Then: T-611 S1b+S1i+S1c 44c293ea, T-736 S3c+S3d 41daac15, T-675 R2b (each after QA); T-781 follow-ups.
+1. Next batch: T-611 S1b+S1i+S1c 44c293ea, T-736 S3c+S3d 41daac15, T-675 R2b (each after QA); T-781 follow-ups.
 2. T-401 after a person's OK (8023) -> T-426 S1e -> T-379 S2 3f11b28; deploys are the coordinator's.
 3. T-416 S2 after QA (+ a blind review). ticket_list arg parse failed 4x: use ticket_get from this queue.
 4. RTK: T-340 (person/coordinator) -> T-341 merge -> T-306 item 3. 5. T-537. 6. T-513. 7. T-472 live re-check (needs portal_status), T-422, T-147, T-438, T-425, T-436, T-437, T-432, T-382, T-377, T-386, T-409, T-402, T-398,
