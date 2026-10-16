@@ -45,7 +45,23 @@ function stubRtk(dir: string) {
   return { bin, sentinel };
 }
 
-function run(dir: string, script: string, opts: { marker: boolean; rtk?: string }) {
+/** A second, independent repo with a committed file under apps/server/src/chat (what rtk-measure.sh light claudepilot rewrites). */
+function otherRepo() {
+  const dir = tempDirectory('rtk-guard-other-');
+  const git = (...a: string[]) => {
+    const r = spawnSync('git', ['-C', dir, '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', ...a], { encoding: 'utf8' });
+    assert.equal(r.status, 0, r.stderr);
+    return r.stdout;
+  };
+  git('init', '-q');
+  mkdirSync(join(dir, 'apps/server/src/chat'), { recursive: true });
+  writeFileSync(join(dir, 'apps/server/src/chat/a.ts'), 'export const a = 1;\n');
+  git('add', '-A');
+  git('commit', '-q', '-m', 'init');
+  return { dir, git, file: join(dir, 'apps/server/src/chat/a.ts') };
+}
+
+function run(dir: string, script: string, opts: { marker: boolean; rtk?: string; cwd?: string; args?: string[] }) {
   const env: Record<string, string> = {
     PATH: process.env.PATH ?? '',
     HOME: dir,
@@ -53,7 +69,7 @@ function run(dir: string, script: string, opts: { marker: boolean; rtk?: string 
     GIT_CEILING_DIRECTORIES: dirname(dir), // never find a repository above the scratch folder
   };
   if (opts.marker) env.JR_REPO_URL = 'https://example.invalid/repo.git';
-  return spawnSync('bash', [join(dir, 'tools/qa', script), ...args(script, dir)], { cwd: dir, env, encoding: 'utf8', timeout: 60_000 });
+  return spawnSync('bash', [join(dir, 'tools/qa', script), ...(opts.args ?? args(script, dir))], { cwd: opts.cwd ?? dir, env, encoding: 'utf8', timeout: 60_000 });
 }
 
 for (const script of SCRIPTS) {
@@ -108,6 +124,39 @@ for (const script of SCRIPTS) {
     assert.equal(existsSync(outOf(dir)), false);
   });
 
+  test(`${script}: run with the cwd OUTSIDE its tree (a clean other repo), a dirty own tree still refuses`, () => {
+    const { dir } = scratchRepo();
+    writeFileSync(join(dir, 'src/a.ts'), EDITED);
+    const clean = otherRepo(); // git status in the cwd would read clean
+    const r = run(dir, script, { marker: true, cwd: clean.dir });
+    assert.notEqual(r.status, 0, r.stdout + r.stderr);
+    assert.match(r.stderr, /uncommitted/);
+    assert.equal(readFileSync(join(dir, 'src/a.ts'), 'utf8'), EDITED);
+    assert.equal(existsSync(outOf(dir)), false);
+  });
+
+  test(`${script}: a missing guard file refuses (fail closed), nothing is written`, () => {
+    const { dir, git } = scratchRepo();
+    rmSync(join(dir, 'tools/qa/rtk-guard.sh'));
+    git('add', '-A');
+    git('commit', '-q', '-m', 'no guard');
+    const r = run(dir, script, { marker: true });
+    assert.notEqual(r.status, 0, r.stdout + r.stderr);
+    assert.match(r.stderr, /cannot load/);
+    assert.equal(existsSync(outOf(dir)), false);
+  });
+
+  test(`${script}: a guard file that does not define rtk_guard refuses`, () => {
+    const { dir, git } = scratchRepo();
+    writeFileSync(join(dir, 'tools/qa/rtk-guard.sh'), '# empty\n');
+    git('add', '-A');
+    git('commit', '-q', '-m', 'empty guard');
+    const r = run(dir, script, { marker: true });
+    assert.notEqual(r.status, 0, r.stdout + r.stderr);
+    assert.match(r.stderr, /rtk_guard is not defined/);
+    assert.equal(existsSync(outOf(dir)), false);
+  });
+
   test(`${script}: marker set and clean tree gets past the guard (the stub rtk runs)`, () => {
     const { dir } = scratchRepo();
     const { bin, sentinel } = stubRtk(dir);
@@ -117,6 +166,43 @@ for (const script of SCRIPTS) {
     assert.equal(existsSync(outOf(dir)), true);
   });
 }
+
+/** rtk-measure.sh light <out> <other repo> claudepilot resets the OTHER repo, so that one is guarded too. */
+const lightArgs = (dir: string, other: string) => ['light', outOf(dir), other, 'claudepilot'];
+
+test('rtk-measure.sh light claudepilot: a dirty OTHER repo refuses, its edit survives, no out folder', () => {
+  const { dir } = scratchRepo(); // clean own repo
+  const o = otherRepo();
+  writeFileSync(o.file, EDITED);
+  const { bin } = stubRtk(dir);
+  const r = run(dir, 'rtk-measure.sh', { marker: true, rtk: bin, args: lightArgs(dir, o.dir) });
+  assert.notEqual(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stderr, /uncommitted/);
+  assert.equal(readFileSync(o.file, 'utf8'), EDITED);
+  assert.equal(existsSync(outOf(dir)), false);
+});
+
+test('rtk-measure.sh light claudepilot: a dirty OTHER repo refuses with the cwd outside both repos', () => {
+  const { dir } = scratchRepo();
+  const o = otherRepo();
+  const elsewhere = otherRepo(); // a clean repo as the cwd: a status in the cwd would read clean
+  writeFileSync(o.file, EDITED);
+  const { bin } = stubRtk(dir);
+  const r = run(dir, 'rtk-measure.sh', { marker: true, rtk: bin, cwd: elsewhere.dir, args: lightArgs(dir, o.dir) });
+  assert.notEqual(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stderr, /uncommitted/);
+  assert.equal(readFileSync(o.file, 'utf8'), EDITED);
+  assert.equal(existsSync(outOf(dir)), false);
+});
+
+test('rtk-measure.sh light claudepilot: a clean other repo gets past the guard (the stub rtk runs)', () => {
+  const { dir } = scratchRepo();
+  const o = otherRepo();
+  const { bin, sentinel } = stubRtk(dir);
+  const r = run(dir, 'rtk-measure.sh', { marker: true, rtk: bin, args: lightArgs(dir, o.dir) });
+  assert.doesNotMatch(r.stderr, /refusing/, r.stderr);
+  assert.equal(existsSync(sentinel), true, `the stub never ran: ${r.stdout}${r.stderr}`);
+});
 
 test('every curl in the three scripts has --max-time and --retry', () => {
   for (const script of SCRIPTS) {

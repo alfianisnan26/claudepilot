@@ -4,6 +4,9 @@
 #   - in a job-run Job (the Job container exports JR_REPO_URL, nothing else does), and
 #   - on a clean checkout: `git status --porcelain` succeeds and prints nothing (staged and untracked files count as dirty).
 # Usage: rtk_guard <script name> <checkout folder>   (call it before anything is written, created or reset)
+# Call it once for EVERY repo the script will reset or rewrite (rtk-measure.sh light claudepilot also rewrites its <repo-dir> argument).
+# Fail closed: the caller must stop when this file cannot be sourced or does not define rtk_guard (each script checks both).
+# Every git call uses -C <folder>, never the current directory.
 rtk_guard() {
   local name=$1 root=$2 st
   [ -n "${JR_REPO_URL:-}" ] || { echo "$name: refusing: it rewrites the checkout; run it through scripts/job-run.sh (JR_REPO_URL not set)" >&2; exit 2; }

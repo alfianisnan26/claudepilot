@@ -4,9 +4,13 @@
 #   tools/qa/rtk-measure.sh heavy <outdir>                       node --test, tsc (run in a job-run Job, after npm ci; downloads and verifies rtk)
 # Both arms run with the SAME clean environment (env -i, empty HOME, no token), RTK_TELEMETRY_DISABLED=1. Outputs go to files, never to the terminal.
 set -u
-# T-736 guard (tools/qa/rtk-guard.sh): the light mode on the claudepilot label edits and checks out tracked files; job-run Job and clean checkout only.
+# T-736 guard (tools/qa/rtk-guard.sh): the light mode on the claudepilot label edits and checks out tracked files of <repo-dir>; job-run Job only,
+# and EVERY repo it will rewrite (this one, and <repo-dir> for that label) must be clean. Nothing is created before the guard has passed.
 here=$(cd "$(dirname "$0")/../.." && pwd)
-. "$here/tools/qa/rtk-guard.sh"; rtk_guard rtk-measure.sh "$here"
+. "$here/tools/qa/rtk-guard.sh" || { echo "rtk-measure.sh: refusing: cannot load tools/qa/rtk-guard.sh" >&2; exit 2; }
+declare -F rtk_guard >/dev/null || { echo "rtk-measure.sh: refusing: rtk_guard is not defined" >&2; exit 2; }
+rtk_guard rtk-measure.sh "$here"
+if [ "${1:-}" = light ] && [ "${4:-}" = claudepilot ]; then rtk_guard rtk-measure.sh "$(readlink -f "${3:-.}")"; fi
 mode=$1; out=$(readlink -f "$2"); mkdir -p "$out"
 RTK_TAG=v1.0.0; RTK_ASSET=rtk-x86_64-unknown-linux-musl.tar.gz
 RTK_SHA=b0b69fbed72f55d8eae18587c0b6bc140a8a8b39d5b7c6e6df33795249940926

@@ -24,4 +24,8 @@ mutant ME "ignore a failing git status" tools/qa/rtk-guard.sh -- 's/ || { echo "
 mutant MD "drop --max-time/--retry from every curl" tools/qa/rtk-history.sh tools/qa/rtk-classes.sh tools/qa/rtk-measure.sh -- 's/ --max-time 120 --retry 1//'
 mutant MF "drop the guard call from rtk-classes.sh" tools/qa/rtk-classes.sh -- '/rtk_guard rtk-classes.sh/d'
 mutant MG "drop the guard call from rtk-measure.sh" tools/qa/rtk-measure.sh -- '/rtk_guard rtk-measure.sh/d'
+mutant MH "git status in the cwd instead of -C root" tools/qa/rtk-guard.sh -- 's/git -C "\$root" status/git status/'
+mutant MI "do not fail when rtk-guard.sh cannot be sourced" tools/qa/rtk-history.sh tools/qa/rtk-classes.sh tools/qa/rtk-measure.sh -- 's/^\(\. "\$here\/tools\/qa\/rtk-guard.sh"\) || {.*$/\1/'
+mutant MJ "do not check that rtk_guard is defined" tools/qa/rtk-history.sh tools/qa/rtk-classes.sh tools/qa/rtk-measure.sh -- '/^declare -F rtk_guard/d'
+mutant MK "skip the other-repo check in rtk-measure.sh" tools/qa/rtk-measure.sh -- '/^if \[ "\${1:-}" = light \]/d'
 exit "$survived"

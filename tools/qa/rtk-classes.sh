@@ -9,7 +9,9 @@
 set -u
 # T-736 guard (tools/qa/rtk-guard.sh): this script commits, resets and checks out; job-run Job and clean checkout only, before anything is written.
 here=$(cd "$(dirname "$0")/../.." && pwd)
-. "$here/tools/qa/rtk-guard.sh"; rtk_guard rtk-classes.sh "$here"
+. "$here/tools/qa/rtk-guard.sh" || { echo "rtk-classes.sh: refusing: cannot load tools/qa/rtk-guard.sh" >&2; exit 2; }
+declare -F rtk_guard >/dev/null || { echo "rtk-classes.sh: refusing: rtk_guard is not defined" >&2; exit 2; }
+rtk_guard rtk-classes.sh "$here"
 out=$(readlink -f "$1"); mkdir -p "$out"
 RTK_TAG=v1.0.0; RTK_ASSET=rtk-x86_64-unknown-linux-musl.tar.gz
 RTK_SHA=b0b69fbed72f55d8eae18587c0b6bc140a8a8b39d5b7c6e6df33795249940926
