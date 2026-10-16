@@ -347,9 +347,26 @@ done
 
 # The log: streamed, masked for the credentials, the artifacts block set aside; NR is kept so a broken stream can be resumed.
 # shellcheck disable=SC2016 # awk's own variables
-FILTER='BEGIN { nt = split(ENVIRON["JR_MASK"], toks, "\n"); art = ENVIRON["JR_ART"]; lf = ENVIRON["JR_LOG"] }
-{ line = $0
-  for (k = 1; k <= nt; k++) { tok = toks[k]; if (length(tok) >= 8) while ((i = index(line, tok)) > 0) { line = substr(line, 1, i - 1) "[redacted]" substr(line, i + length(tok)); leak = 1 } }
+# S1i (review 7888): the mask is ONE pass over the ORIGINAL line, never over its own output. The old loop (index, cut, again) never ended when a mask
+# value held the replacement text ("REDACTED", "[redacted]"). Every hit of every value (overlapping, nested, any character: index() is a plain
+# substring search, no regex) becomes a span; the spans are sorted and merged; each merged run is replaced once. It always ends: each search
+# starts one character after the last hit. A value under 8 characters is not masked (too short to be a credential, and it would eat the log).
+MASKFN='function mask(line, nt, toks, repl,   k, tok, p, i, s, e, n, a, b, j, m, t1, t2, out, pos) {
+  n = 0
+  for (k = 1; k <= nt; k++) { tok = toks[k]; if (length(tok) < 8) continue
+    p = 1
+    while ((i = index(substr(line, p), tok)) > 0) { s = p + i - 1; n++; a[n] = s; b[n] = s + length(tok) - 1; p = s + 1 } }
+  if (n == 0) return line
+  hit = 1
+  for (j = 2; j <= n; j++) { t1 = a[j]; t2 = b[j]; m = j - 1; while (m >= 1 && a[m] > t1) { a[m + 1] = a[m]; b[m + 1] = b[m]; m-- } a[m + 1] = t1; b[m + 1] = t2 }
+  out = ""; pos = 1; j = 1
+  while (j <= n) { s = a[j]; e = b[j]; j++
+    while (j <= n && a[j] <= e + 1) { if (b[j] > e) e = b[j]; j++ }
+    out = out substr(line, pos, s - pos) repl; pos = e + 1 }
+  return out substr(line, pos) }'
+FILTER="$MASKFN"'
+BEGIN { nt = split(ENVIRON["JR_MASK"], toks, "\n"); art = ENVIRON["JR_ART"]; lf = ENVIRON["JR_LOG"] }
+{ hit = 0; line = mask($0, nt, toks, "[redacted]"); if (hit) leak = 1
   if (line == "=== JOB-RUN ARTIFACTS BEGIN") { inart = 1; next }
   if (line == "=== JOB-RUN ARTIFACTS END") { inart = 0; next }
   if (inart) { print line >> art; next }
@@ -408,8 +425,9 @@ if [ -n "$artifacts" ] && [ -s "$work/art.b64" ]; then
     # S1h N1 (review 7773): an artifact NAME is the command's to choose, so it may be the value, or hold a line break. Every message that names
     # one goes through the mask first (the value becomes REDACTED, whatever the characters), then the name is cut to a-z A-Z 0-9 . _ / - (anything
     # else, \n and \r too, becomes ?) and to 200 characters; the whole line goes through the mask again (defence in depth).
-    redact() { JR_MASK=$mask awk 'BEGIN { nt = split(ENVIRON["JR_MASK"], toks, "\n") }
-      { line = $0; for (k = 1; k <= nt; k++) { tok = toks[k]; if (length(tok) >= 8) while ((i = index(line, tok)) > 0) line = substr(line, 1, i - 1) "REDACTED" substr(line, i + length(tok)) } print line }'; }
+    redact() { JR_MASK=$mask awk "$MASKFN"'
+      BEGIN { nt = split(ENVIRON["JR_MASK"], toks, "\n") }
+      { print mask($0, nt, toks, "REDACTED") }'; }
     # (the X keeps a trailing line break in the name: a command substitution would drop it)
     safe_name() { local n; n=$(printf '%sX' "$1" | redact); n=${n%X}; printf '%s' "$n" | LC_ALL=C tr -c 'a-zA-Z0-9._/-' '?' | cut -c1-200; }
     say() { printf '%s\n' "$1" | redact >&2; }

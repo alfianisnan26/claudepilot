@@ -1204,3 +1204,47 @@ test('S1d the create failing (its stderr quotes the decoded value): a fixed mess
   assert.match(r.out, /could not create the Secret/);
   assertNoTrace(w, r, secret);
 });
+
+// ---- T-426 S1i (review 7888): the mask loop. The old awk loop (index, cut, index again) never ended when a value was or held the replacement
+// text. The mask is now one pass over the original line (MASKFN in job-run.sh). Each test has a hard timeout: a hang is a failure (awk gets 5 s,
+// a whole run 30 s).
+const maskFn = () => { const m = /^MASKFN='([^']*)'$/m.exec(readFileSync(SCRIPT, 'utf8')); assert.ok(m?.[1], 'MASKFN is in job-run.sh'); return m[1]; };
+function awkMask(masks: string[], line: string, repl = 'R') {
+  const prog = `${maskFn()}\nBEGIN { nt = split(ENVIRON["JR_MASK"], toks, "\\n") }\n{ print mask($0, nt, toks, ENVIRON["JR_REPL"]) }`;
+  const r = spawnSync('awk', [prog], { env: { PATH: process.env.PATH ?? '/usr/bin:/bin', JR_MASK: masks.join('\n'), JR_REPL: repl }, input: `${line}\n`, encoding: 'utf8', timeout: 5000 });
+  assert.equal(r.status, 0, `awk ended (a hang is a failure): ${r.error?.message ?? r.stderr}`);
+  return r.stdout.replace(/\n$/, '');
+}
+
+test('T-426 S1i the mask always ends and masks every hit: values that are or hold the replacement, overlapping, nested, adjacent, metacharacters', { timeout: 60_000 }, () => {
+  assert.equal(awkMask(['REDACTED'], 'a REDACTED b', 'REDACTED'), 'a REDACTED b', 'a value that IS the replacement');
+  assert.equal(awkMask(['xxREDACTEDxx'], 'p xxREDACTEDxx q xxREDACTEDxx', 'REDACTED'), 'p REDACTED q REDACTED', 'a value that holds it');
+  assert.equal(awkMask(['[redacted]'], 'v [redacted] w', '[redacted]'), 'v [redacted] w');
+  assert.equal(awkMask(['abcdefgh', 'efghijkl'], '<abcdefghijkl>'), '<R>', 'overlapping values leave no tail');
+  assert.equal(awkMask(['efghijkl', 'abcdefgh'], '<abcdefghijkl>'), '<R>', '... in either order');
+  assert.equal(awkMask(['abcdefghij', 'cdefghij'], 'x abcdefghij y'), 'x R y', 'one value inside another');
+  assert.equal(awkMask(['cdefghij', 'abcdefghij'], 'x abcdefghij y'), 'x R y');
+  assert.equal(awkMask(['aaaaaaaa'], 'aaaaaaaaaaaa'), 'R', 'a value that overlaps itself leaves no tail');
+  assert.equal(awkMask(['abcdefgh', 'ijklmnop'], 'abcdefghijklmnop'), 'R', 'adjacent values');
+  const meta = 'a.b*c+d?[e]\\f$g^h(i|j)&1', lookalike = 'aXb*c+d?[e]\\f$g^h(i|j)&1';
+  assert.equal(awkMask([meta, '(x|y)\\1&&&&'], `k ${meta} and ${lookalike} and (x|y)\\1&&&&`), 'k R and aXb*c+d?[e]\\f$g^h(i|j)&1 and R', 'regex and awk metacharacters are plain text; a lookalike stays');
+  assert.equal(awkMask(['abc', ''], 'abc abc'), 'abc abc', 'a value under 8 characters, or an empty one, masks nothing');
+  assert.equal(awkMask(['zzzzzzzz'], 'no hit here'), 'no hit here');
+  assert.equal(awkMask(['a&b\\&&&&c'], 'x a&b\\&&&&c y', '[redacted]'), 'x [redacted] y', 'an ampersand or a backslash in a value is not special in the replacement');
+});
+
+test('T-426 S1i a run whose --pool-env value holds REDACTED ends, and the value is nowhere (log stream, log file, artifact names)', { timeout: 120_000 }, () => {
+  for (const secret of [`REDACTED${hex(6)}`, `xx[redacted]${hex(6)}`]) {
+    const w = world();
+    writeFileSync(join(w.root, 'scenario.json'), JSON.stringify({ rc: 0, log: jobLog(w.root, 0, `header ${secret} end\n`) }));
+    const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--pool-env', POOL_SECRET, '--', 'npm run e2e'], { [POOL_SECRET]: secret });
+    assert.equal(r.code, 0, `ended (null = hung): ${r.out}`);
+    assert.ok(!r.out.includes(secret) && !w.log().includes(secret), 'the value is in neither the output nor the log');
+    assert.match(r.out, /header \S*redacted\S* end/i);
+  }
+  const secret = `REDACTED${hex(6)}`, w = world();
+  const gz = spawnSync('gzip', ['-c'], { input: 'nothing\n' }).stdout;
+  const { r } = poolArtifacts(w, secret, { [`${secret}.txt`]: `x ${secret}\n`, [`${secret}.gz`]: gz });
+  assert.equal(r.code, 3, `ended with the artifacts deleted (null = hung): ${r.out}`);
+  assert.ok(!r.out.includes(secret) && !w.log().includes(secret), 'the value is not shown in an artifact name either');
+});
