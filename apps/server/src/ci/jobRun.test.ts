@@ -61,7 +61,7 @@ const [verb, kind, name] = a;
 if (verb === 'get' && kind === 'jobs') { process.stdout.write(JSON.stringify({ items: read().jobs.map(k8s) })); }
 else if (verb === 'get' && kind === 'job') { const j = job(name); if (!j) process.exit(1); process.stdout.write(a.includes('json') ? JSON.stringify(k8s(j)) : 'uid-' + name); }
 else if (verb === 'get' && kind === 'pods' && a.includes('json')) { process.stdout.write(JSON.stringify(podOf(job(a[3].replace('job-name=', ''))))); }
-else if (verb === 'create' && kind === 'secret') { const t = stdin(); lock((s) => { s.secrets[a[3]] = t; }); }
+else if (verb === 'create' && kind === 'secret') { const t = stdin(); const sf = path.join(F, 'secretfail'); if (fs.existsSync(sf)) { process.stderr.write(fs.readFileSync(sf, 'utf8')); process.exit(1); } lock((s) => { s.secrets[a[3]] = t; }); }
 else if (verb === 'top' && kind === 'nodes') { const t = path.join(F, 'top.txt'); if (!fs.existsSync(t)) process.exit(1); const v = fs.readFileSync(t, 'utf8'); if (v === 'FAIL') process.exit(1); process.stdout.write(v); }
 else if (verb === 'apply') { const m = stdin(); const n = m.match(/^ {2}name: (\S+)/m)[1]; fs.mkdirSync(path.join(F, 'applied'), { recursive: true }); fs.writeFileSync(path.join(F, 'applied', n + '.yaml'), m);
   const lab = (k) => m.match(new RegExp(k + ': ([^,}]+)'))[1].trim();
@@ -780,7 +780,7 @@ test('T-611: over the line the Job gets a REQUIRED rule away from the control pl
 });
 
 test('T-611: at or under the line, or when the metrics fail, only the preferred rules apply (a metrics failure never blocks every Job)', () => {
-  const cases: [string, number | string | undefined][] = [['under', 60], ['at the line', 75], ['API missing', undefined], ['kubectl fails', 'FAIL'], ['not a number', 'k3s-master <unknown> <unknown> <unknown> <unknown>\n'], ['empty', '']];
+  const cases: [string, number | string | undefined][] = [['under', 50], ['API missing', undefined], ['kubectl fails', 'FAIL'], ['not a number', 'k3s-master <unknown> <unknown> <unknown> <unknown>\n'], ['empty', '']];
   for (const [what, top] of cases) {
     for (const extra of [[], ['--big']]) {
       const p = placed(top, extra);
@@ -789,7 +789,7 @@ test('T-611: at or under the line, or when the metrics fail, only the preferred 
       assert.ok(p.preferred, `${what}: preferred rules`);
     }
   }
-  assert.match(placed(60).r.out, /placement: the control-plane node is at 60% of its memory \(limit 75%\): preferred rules only/);
+  assert.match(placed(50).r.out, /placement: the control-plane node is at 50% of its memory \(about \d+% with this Job; limit 75%\): preferred rules only/);
   assert.match(placed(undefined).r.out, /placement: the control-plane node's memory is unknown \(metrics unavailable\): preferred rules only/);
   const bad = world([], { top: 50 }).run(['--repo', 'claudepilot', '--ref', 'main', '--', 'true'], { JOB_RUN_MASTER_MAX_PCT: 'lots' });
   assert.equal(bad.code, 2, 'a bad line is a usage error');
@@ -801,7 +801,7 @@ test('T-611 mutation: without the rule in the Job\'s clone of the template, or i
   assert.notDeepEqual(placed(90, [], {}, noTemplateMarker).required, CP_RULE, 'template without the marker: the required rule is missing, so the check catches it');
   const noScriptRule = mutant((y) => y, (s) => s.replace('-e "s#__MASTER_REQUIRED__#$master_rule#"', '-e "s#__MASTER_REQUIRED__##"'));
   assert.notDeepEqual(placed(90, [], {}, noScriptRule).required, CP_RULE, 'script that never fills the rule: caught');
-  const neverOver = mutant((y) => y, (s) => s.replace('[ "$master_pct" -gt "$master_max" ]', '[ "$master_pct" -gt 1000 ]'));
+  const neverOver = mutant((y) => y, (s) => s.replace('[ "$master_pct" -le "$master_max" ] || master_rule_why=over', 'true').replace('|| master_rule_why=headroom', '|| true'));
   assert.notDeepEqual(placed(90, [], {}, neverOver).required, CP_RULE, 'script that ignores the reading: caught');
 });
 
@@ -811,4 +811,93 @@ test('T-611: a Job Pending on the required rule says it waits for k3s-node2', as
   const j = w.start(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'true'], { JOB_RUN_START_WAIT_S: '1' });
   const r = await j.done;
   assert.match(r.out, /is Pending: the control-plane node is over 75% of its memory, so this Job waits for k3s-node2/);
+});
+
+// T-611 S1 (1): headroom. The Job adds up to its expected peak to the master's use, so the line applies to use PLUS peak.
+// The fake master prints 9000Mi at the given percentage (allocatable = 9000 * 100 / pct); the default expected peak is 2300 Mi, --big's is 8192 Mi.
+test('T-611: headroom: use plus the Job\'s expected peak over the line keeps it off the master, though the use alone is under', () => {
+  assert.deepEqual(placed(60).required, CP_RULE, '60% + 2300Mi of a 15000Mi node is about 75.4%: away');
+  assert.equal(placed(50).required, undefined, '50% + 2300Mi is about 63%: preferred');
+  assert.deepEqual(placed(50, ['--big']).required, CP_RULE, '--big counts its 8192Mi: 50% + 8192Mi is about 95%');
+  assert.equal(placed(60, [], { JOB_RUN_EXPECTED_PEAK_MI: '100' }).required, undefined, 'a small expected peak leaves 60% alone');
+  assert.deepEqual(placed(60, [], { JOB_RUN_EXPECTED_PEAK_MI: '3000' }).required, CP_RULE, 'a bigger one blocks');
+  assert.match(placed(60).r.out, /60% of its memory and this Job may add 2300Mi \(about 7\d%, over 75%\)/);
+  // An odd bytes column: the old test on the percentage alone, never a block of every Job.
+  assert.equal(placed('k3s-master   310m   7%   lots   60%\n').required, undefined, 'odd bytes at 60%: percentage alone');
+  assert.deepEqual(placed('k3s-master   310m   7%   lots   80%\n').required, CP_RULE, 'odd bytes at 80%: percentage alone, over');
+  assert.equal(placed('k3s-master   310m   7%   9Gi   50%\n').required, undefined, 'Gi is read too');
+  assert.deepEqual(placed('k3s-master   310m   7%   9Gi   65%\n').required, CP_RULE, 'Gi is read too, headroom');
+});
+
+test('T-611 mutation: without the peak term, the headroom, or --big\'s own peak, the headroom check fails', () => {
+  assert.deepEqual(placed(60).required, CP_RULE);
+  const noPeak = mutant((y) => y, (s) => s.replace('$(( ( used_mi + peak_mi ) * master_pct ))', '$(( used_mi * master_pct ))'));
+  assert.equal(placed(60, [], {}, noPeak).required, undefined, 'peak term dropped: 60% passes, so the check catches it');
+  const noHeadroom = mutant((y) => y, (s) => s.replace('|| master_rule_why=headroom', '|| true'));
+  assert.equal(placed(60, [], {}, noHeadroom).required, undefined, 'headroom dropped: caught');
+  const bigAsStd = mutant((y) => y, (s) => s.replace('peak_mi=8192', 'peak_mi=2300'));
+  assert.equal(placed(50, ['--big'], {}, bigAsStd).required, undefined, '--big with the normal peak: caught');
+});
+
+// T-611 S1 (2): the decision and the wait go into the Job's log, so a later diagnosis has data (the caller's own output is not kept).
+const PLACEMENT_LOG = /^=== JOB-RUN PLACEMENT node=control-plane pct=83 projected=\d+ max=75 peak_mi=2300 decision=required-away reason=over$/m;
+test('T-611: the placement decision, the node it ran on, and a Pending wait are lines in the Job log', async () => {
+  const w = world([], { top: 83 });
+  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'true']);
+  assert.equal(r.code, 0, r.out);
+  assert.match(w.log(), PLACEMENT_LOG);
+  assert.match(w.log(), /^=== JOB-RUN PLACEMENT node=k3s-master pct=83 decision=required-away queued=\d+s$/m, 'the node it ran on');
+  const ok = world([], { top: 40 });
+  ok.run(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'true']);
+  assert.match(ok.log(), /^=== JOB-RUN PLACEMENT node=control-plane pct=40 projected=\d+ max=75 peak_mi=2300 decision=preferred$/m);
+  const none = world([], {});
+  none.run(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'true']);
+  assert.match(none.log(), /^=== JOB-RUN PLACEMENT node=control-plane pct=unknown .* decision=preferred-metrics-unavailable$/m);
+  const p = world([], { top: 88 });
+  writeFileSync(join(p.root, 'pending'), "0/2 nodes are available: 1 node(s) didn't match Pod's node affinity/selector, 1 Insufficient memory.");
+  await p.start(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'true'], { JOB_RUN_START_WAIT_S: '1' }).done;
+  assert.match(p.log(), /^=== JOB-RUN PLACEMENT pending=affinity pct=88 decision=waits-for-node2$/m);
+});
+
+test('T-611 mutation: a script that does not write the placement lines into the log is caught', () => {
+  const noLog = mutant((y) => y, (s) => s.replace('echo "$*" >> "$log"; }', ': ; }'));
+  const w = world([], { top: 83 });
+  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'true'], {}, noLog);
+  assert.equal(r.code, 0, r.out);
+  assert.doesNotMatch(w.log(), PLACEMENT_LOG, 'mutant: the log has no placement line, so the check above fails on it');
+});
+
+// T-611 S1 (3): a Secret that cannot be created is reported by exit code and a fixed category, never by kubectl's own text.
+function secretFails(text: string, script = SCRIPT) {
+  const w = world([], { top: 40 });
+  writeFileSync(join(w.root, 'secretfail'), text);
+  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'true'], {}, script);
+  return { w, r, all: r.out + w.log() + w.calls() };
+}
+test('T-611: a Secret that cannot be created logs the kubectl exit code and a fixed category, not kubectl\'s text', () => {
+  const sentinel = `sv${hex(16)}`;
+  const cases: [string, string][] = [
+    [`Error from server (Forbidden): secrets is forbidden: cannot create ${sentinel}`, 'not-allowed'],
+    [`Error from server (AlreadyExists): secrets "x" already exists ${sentinel}`, 'already-exists'],
+    [`Unable to connect to the server: dial tcp: connection refused ${sentinel}`, 'cluster-unreachable'],
+    [`Error: something odd ${sentinel}`, 'other'],
+  ];
+  for (const [text, cat] of cases) {
+    const { w, r, all } = secretFails(text);
+    assert.equal(r.code, 1, r.out);
+    assert.match(r.out, new RegExp(`could not create the Secret for claudepilot-job-[0-9a-f]{8} \\(kubectl exit 1, category: ${cat}\\)`));
+    assert.match(w.log(), new RegExp(`^=== JOB-RUN SECRET-FAILED rc=1 category=${cat}$`, 'm'));
+    assert.ok(!all.includes(sentinel), `kubectl's text (${cat}) is nowhere in the output, the log or the calls`);
+    assert.ok(!all.includes(w.npmToken), 'the token is nowhere either');
+    assert.equal(w.applied().length, 0, 'no Job was created');
+  }
+});
+test('T-611 mutation: a script that prints kubectl\'s text, or reports no category, is caught', () => {
+  const sentinel = `sv${hex(16)}`;
+  const text = `Error from server (Forbidden): nope ${sentinel}`;
+  assert.ok(!secretFails(text).all.includes(sentinel));
+  const leaks = mutant((y) => y, (s) => s.replace("kubectl's message is not shown\" >&2", '$kerr" >&2').replace('unset kerr\n  echo', 'echo'));
+  assert.ok(secretFails(text, leaks).all.includes(sentinel), 'the leaking mutant shows the text, so the no-leak check fails on it');
+  const noCat = mutant((y) => y, (s) => s.replace('kcat=not-allowed', 'kcat=other'));
+  assert.doesNotMatch(secretFails(text, noCat).r.out, /category: not-allowed/, 'a wrong category is caught by the case table');
 });

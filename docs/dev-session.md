@@ -149,6 +149,13 @@ scripts/job-run.sh --list ; scripts/job-run.sh --stop --chat <session id>
   Job, `job-run.sh` reads that node's real memory (`kubectl top nodes`); over `JOB_RUN_MASTER_MAX_PCT` (75) the Job gets a REQUIRED rule away
   from the control plane and waits for k3s-node2 or for room ("placement:" line, and a Pending line that says so). Under the line, or when the
   metrics fail, only the preferred rules apply. The decision is taken when the Job is created; the run's last line names the node.
+  Headroom (T-611 S1): the test is on the master's use PLUS the Job's expected peak (use x pct / used gives allocatable, no new verb):
+  `JOB_RUN_EXPECTED_PEAK_MI` (default 2300 Mi, the measured p99 of Job peaks, 2270 Mi in the T-731 note; no run in the 878 logs of
+  2026-10-16 reached 3000 Mi), and 8192 Mi for `--big` (a rerun after an OOM kill, so unknown: its whole limit). An odd bytes column falls
+  back to the percentage alone. The decision, the Pending wait and the node it ran on are also lines in the Job's log (`/tmp/job-run-<job>.log`):
+  `=== JOB-RUN PLACEMENT node=... pct=... projected=... decision=...`, `... pending=affinity|memory|other ...`, and a last one with the node
+  (the `job-run:` lines go to the caller only). A Secret that cannot be created ends the run with `kubectl exit N, category: <fixed>` and a
+  `=== JOB-RUN SECRET-FAILED` line; kubectl's own text is never shown or logged.
 - **Memory (T-524):** requested = limited, so the scheduler places a Job only where all of it fits (2Gi requested with 8Gi allowed let a
   4.1 GB Event Job take k3s-master, the 15 GB control-plane node that also runs the API server, to 92%, and the portal answered 503).
   4Gi by default with `/tmp` at most 2Gi; `--big` gives 8Gi with `/tmp` 4Gi (only k3s-node2 has that much free). The whole server suite peaked
