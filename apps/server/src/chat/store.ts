@@ -144,7 +144,7 @@ type TaskRow = {
 
 /** T-723: the longest actor an audit row keeps. */
 export const AUDIT_ACTOR_MAX = 120;
-const TASK_COLUMNS ='task_id, tool_use_id, label, subagent_type, model, status, tokens, tool_uses, duration_ms, summary, started_at, ended_at';
+const TASK_COLUMNS = 'task_id, tool_use_id, label, subagent_type, model, status, tokens, tool_uses, duration_ms, summary, started_at, ended_at';
 
 function taskOut(r: TaskRow): ChatTask {
   return {
@@ -1441,10 +1441,9 @@ export class ChatStore {
   addAudit(entry: { severity: ChatAuditEntry['severity']; kind: string; sessionId?: string | null; workspaceId?: string | null; actor?: string | null; actorLabel?: string | null; detail?: Record<string, unknown> }): void {
     // A Portal MCP token's label as it was when it acted, kept in the row's detail (redacted with the rest) so a later rename changes nothing.
     const detail = entry.actorLabel ? { ...entry.detail, actorLabel: entry.actorLabel.replace(/\s+/g, ' ').trim().slice(0, 60) } : entry.detail;
-    // T-723: the actor is a short name; one from outside is stored on one line and cut (control characters and newlines become a space).
-    const actor = entry.actor == null ? null : entry.actor.replace(/[\p{Cc}\p{Zl}\p{Zp}]+/gu, ' ').trim().slice(0, AUDIT_ACTOR_MAX);
-    /* removed draft, ends at the next line: [\p{Cc}  ]+/gu, ' ').trim().slice(0, AUDIT_ACTOR_MAX); */
-    this.#writable()
+    // T-723: the actor is a short name; one from outside is stored on one line and cut (control and format characters, bidi overrides and zero width ones included, and newlines become a space).
+    const actor = entry.actor == null ? null : entry.actor.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]+/gu, ' ').trim().slice(0, AUDIT_ACTOR_MAX);
+      this.#writable()
       .prepare('INSERT INTO chat_audit (at, severity, kind, session_id, workspace_id, actor, detail) VALUES (?, ?, ?, ?, ?, ?, ?)')
       .run(this.#stamp(), entry.severity, entry.kind, entry.sessionId ?? null, entry.workspaceId ?? null, actor, redact(JSON.stringify(detail ?? {})));
   }

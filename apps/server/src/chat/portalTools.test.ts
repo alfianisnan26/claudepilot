@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import { ToolRegistry } from '../portalmcp/registry.js';
 import { portalMcpHarness } from '../portalmcp/testkit.js';
 import { registerChatTools } from './portalTools.js';
-import { liveSession } from './testkit.js';
+import { liveSession, until } from './testkit.js';
 
 async function rig() {
   const registry = new ToolRegistry();
@@ -88,6 +88,27 @@ test('what the chat writes is workspace text: hidden characters and credentials 
       if (res.result?.isError || res.error) limited++;
     }
     assert.ok(limited >= 2, `the rate limit held (${limited} refused)`);
+  } finally {
+    await r.done();
+  }
+});
+
+test('T-723 S3b (G4): session_spawn sets the worker’s mode, model and effort as the session that spawned it, not as `portal`', async () => {
+  const r = await rig();
+  try {
+    r.s.controller.agentCaps = () => ({ maxDepth: 1, maxChildren: 5, spawnsPerHour: 20, messagesPerHour: 40 });
+    const seen: { id: string; op: string; actor: string | undefined }[] = [];
+    r.s.controller.control = async (id, op, _args, opts) => {
+      seen.push({ id, op, actor: opts?.actor });
+    };
+    const a = await r.h.agentToken('docker/ws1', r.s.id);
+    const spawned = await r.h.call(a.secret, 'session_spawn', { prompt: 'Look around.', title: 'Scout', mode: 'plan', model: 'sonnet', effort: 'high' });
+    assert.equal(spawned.result?.isError, undefined, JSON.stringify(spawned.raw));
+    const id = spawned.result!.structuredContent.session.id as string;
+    await until(() => seen.length >= 3, 4000);
+    assert.deepEqual(seen.map((c) => c.op), ['mode', 'model', 'effort']);
+    assert.deepEqual(seen.map((c) => c.actor), Array(3).fill(`session:${r.s.id}`));
+    assert.deepEqual(new Set(seen.map((c) => c.id)), new Set([id]));
   } finally {
     await r.done();
   }

@@ -717,3 +717,24 @@ test('T-723 G2: an audit row keeps the actor on one line and cut: control charac
     await s.done();
   }
 });
+
+test('T-723 S3b: the audit actor loses line and paragraph separators, format characters (bidi override, zero width) and edge spaces', async () => {
+  const s = await liveSession();
+  try {
+    const chat = new ChatStore(s.store);
+    const [LS, PS, RLO, ZWSP, BOM] = [0x2028, 0x2029, 0x202e, 0x200b, 0xfeff].map((c) => String.fromCharCode(c)); // built at runtime
+    const stored = (actor: string) => {
+      chat.addAudit({ severity: 'info', kind: 'test.actor.s3b', sessionId: s.id, actor });
+      return chat.audit({ kind: 'test.actor.s3b' })[0]!.actor;
+    };
+    assert.equal(stored(`ui${LS}forged`), 'ui forged', 'U+2028 becomes a space');
+    assert.equal(stored(`ui${PS}forged`), 'ui forged', 'U+2029 becomes a space');
+    assert.equal(stored(`  ticket:T-1 \t `), 'ticket:T-1', 'edge spaces are trimmed');
+    assert.equal(stored(`${LS}ui${PS}`), 'ui', 'edge separators go too');
+    assert.equal(stored(`ui${RLO}nimda`), 'ui nimda', 'a bidi override cannot reverse what is shown');
+    assert.equal(stored(`${BOM}ui${ZWSP}x`), 'ui x', 'zero width characters cannot hide in the name');
+    assert.equal(stored('portal-mcp:ptk_1'), 'portal-mcp:ptk_1', 'a normal actor is untouched');
+  } finally {
+    await s.done();
+  }
+});

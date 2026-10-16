@@ -18,7 +18,7 @@ export { AutoTransferEngine } from './engine.js';
 export { AutoStore } from './store.js';
 
 /** The chat controller and the usage monitor as the engine needs them; null when what was handed over lacks them (some tests). */
-function ports(deps: Platform['deps']): { chat: ChatPort; usage: UsagePort } | null {
+export function ports(deps: Platform['deps']): { chat: ChatPort; usage: UsagePort } | null {
   const chat = deps.chat as unknown as Partial<ChatPort> | null;
   const usage = deps.claudeUsage as unknown as Partial<Pick<UsagePort, 'report' | 'onReading'>> | null;
   if (!chat || typeof chat.switchClaude !== 'function' || typeof chat.switchOptions !== 'function' || typeof chat.onEvent !== 'function' || typeof chat.history !== 'function' || typeof chat.list !== 'function' || typeof (chat as { send?: unknown }).send !== 'function') return null;

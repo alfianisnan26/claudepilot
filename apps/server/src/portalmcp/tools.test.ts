@@ -507,9 +507,9 @@ test('session_start and session_configure: the actor is the token, and a session
     const bypass = await h.call(admin.secret, 'session_configure', { id: 's1', mode: 'bypassPermissions' });
     assert.ok(bypass.result?.isError || bypass.error, 'bypass is not an option here');
     assert.equal(err(await h.call(admin.secret, 'session_configure', { id: 's1' })), 'VALIDATION_FAILED');
-    await h.call(admin.secret, 'session_configure', { id: 's1', mode: 'plan', effort: 'high' });
-    assert.deepEqual(calls, ['chat.control:s1:effort:{"effort":"high"}', 'chat.control:s1:mode:{"mode":"plan"}']);
-    assert.deepEqual(controlActors.slice(-2), [`portal-mcp:${admin.id}`, `portal-mcp:${admin.id}`], 'T-723: the audit names the token');
+    await h.call(admin.secret, 'session_configure', { id: 's1', model: 'sonnet', mode: 'plan', effort: 'high' });
+    assert.deepEqual(calls, ['chat.control:s1:model:{"model":"sonnet"}', 'chat.control:s1:effort:{"effort":"high"}', 'chat.control:s1:mode:{"mode":"plan"}']);
+    assert.deepEqual(controlActors.slice(-3), Array(3).fill(`portal-mcp:${admin.id}`), 'T-723: the audit names the token, for model, effort and mode');
   } finally {
     h.module.settings.update({ sessionControl: false });
   }
