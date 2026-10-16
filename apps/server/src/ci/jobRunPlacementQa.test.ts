@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, test } from 'node:test';
@@ -165,4 +165,153 @@ test('QA-H3b a Job that never leaves Pending: the Pending line is in the log; wh
   assert.ok(log.some((l) => /pending=memory/.test(l)), 'the Pending line is in the log');
   // The FINAL line (a k3s node name and queued=), not the control-plane decision line. Expected to fail on 62c38599: a product gap.
   assert.ok(log.some((l) => /PLACEMENT node=k3s-\S+ .*queued=/.test(l)), 'a final node/queued line is also written when the Job never started');
+});
+
+// ---- S1b (ticket/T-611-s1b, 6a925201): review 7762 C1-C4, coordinator 7806, 7865 gaps. Written before the run; not run when committed. ----
+const ctl = (w: ReturnType<typeof world>) => placement(w.log()).find((x) => x.includes('node=control-plane')) ?? '';
+const go = (used: string, pct: string, over: Record<string, string> = {}, argv: string[] = []) => {
+  const w = world();
+  w.top(used, pct);
+  const r = w.run(over, argv);
+  const l = ctl(w);
+  console.log(`QA-S1b used=${used} pct=${pct} env=${JSON.stringify(over)} argv=${argv.join(' ')} -> rc=${r.code} ${l.replace('=== JOB-RUN PLACEMENT ', '')}`);
+  return { w, r, l };
+};
+
+test('QA-S1b-C1 octal: leading zeros are decimal in the peak, the master line, the percentage and the bytes column; none aborts the run', () => {
+  for (const peak of ['08', '09', '0800', '000012']) {
+    const g = go('9200Mi', '60%', { JOB_RUN_EXPECTED_PEAK_MI: peak });
+    assert.equal(g.r.code, 0, `peak ${peak} aborted: ${g.r.out}`);
+    assert.match(g.l, new RegExp(`peak_mi=${Number(peak)} `), `peak ${peak} is read as decimal ${Number(peak)}`);
+  }
+  const m = go('9200Mi', '60%', { JOB_RUN_MASTER_MAX_PCT: '075' });
+  assert.equal(m.r.code, 0, `max 075: ${m.r.out}`);
+  assert.match(m.l, /max=75 /, 'a master line of 075 is 75, not an octal error');
+  assert.equal(go('9200Mi', '60%', { JOB_RUN_MASTER_MAX_PCT: '08' }).r.code, 0, 'max 08');
+  const p = go('09200Mi', '060%');
+  assert.equal(p.r.code, 0, `leading zeros in top: ${p.r.out}`);
+  assert.match(p.l, /pct=60 .*projected=75 /, 'pct 060 and 09200Mi read as decimal: the same line as 9200Mi, 60%');
+  assert.equal(go('09Gi', '08%').r.code, 0, '09Gi and 08%');
+});
+
+test('QA-S1b-C2 overflow: a peak or a master line of more than the digit cap is refused; the largest allowed one never wraps into "fits"', () => {
+  for (const big of ['1000000', '99999999999999999999', '-5', '1e3', ' 5', '5 ']) {
+    const g = go('9200Mi', '60%', { JOB_RUN_EXPECTED_PEAK_MI: big });
+    assert.equal(g.r.code, 2, `peak ${JSON.stringify(big)} must be refused, rc=${g.r.code}: ${g.r.out}`);
+    assert.match(g.r.out, /JOB_RUN_EXPECTED_PEAK_MI is a number of Mi/);
+  }
+  const top = go('9200Mi', '60%', { JOB_RUN_EXPECTED_PEAK_MI: '999999' });
+  assert.equal(top.r.code, 0, top.r.out);
+  assert.match(top.l, /decision=required-away.*reason=headroom/, 'six digits of peak is far over the line, never "preferred"');
+  assert.match(top.l, /projected=\d{3,}/, 'the projection is a large positive number');
+  const mx = go('9200Mi', '60%', { JOB_RUN_MASTER_MAX_PCT: '1000' });
+  assert.equal(mx.r.code, 2, `a four-digit master line is refused: ${mx.r.out}`);
+  assert.match(mx.r.out, /JOB_RUN_MASTER_MAX_PCT is a percentage/);
+  assert.equal(go('9200Mi', '60%', { JOB_RUN_MASTER_MAX_PCT: 'abc' }).r.code, 2);
+  // A giant bytes column is an odd column (percentage only), never an overflow.
+  for (const odd of ['1234567890Mi', '9999999999999999999999Mi', '9999999Gi']) {
+    const g = go(odd, '60%');
+    assert.equal(g.r.code, 0, `${odd}: ${g.r.out}`);
+    assert.match(g.l, /decision=(preferred|required-away)/, `${odd} gives a decision`);
+  }
+  // A leading-zero peak is cut by DIGITS, not by value: 7 characters are refused even when the value is small (recorded, not judged).
+  console.log(`QA-S1b-C2 peak 0000012 -> rc=${go('9200Mi', '60%', { JOB_RUN_EXPECTED_PEAK_MI: '0000012' }).r.code}`);
+});
+
+test('QA-S1b-C3 the line itself: percentage-only fallback at 75 is preferred, 76 is away; with bytes, exactly at the line is preferred and 1 Mi less is away; for --big too', () => {
+  for (const odd of ['abc', '9200Ki', '<unknown>']) {
+    assert.match(go(odd, '75%').l, /decision=preferred/, `odd ${JSON.stringify(odd)} at 75: not over`);
+    assert.match(go(odd, '76%').l, /decision=required-away.*reason=over/, `odd ${JSON.stringify(odd)} at 76`);
+    assert.match(go(odd, '74%').l, /decision=preferred/, `odd ${JSON.stringify(odd)} at 74`);
+  }
+  assert.match(go('9200Mi', '75%').l, /reason=(headroom|over)/, '75% real with bytes: the peak pushes it over');
+  // --big (peak 8192): (u + 8192) * 20 <= 75 * u  <=>  u >= 2978.9, so 2979 is on the line and 2978 is over it.
+  assert.match(go('2979Mi', '20%', {}, ['--big']).l, /decision=preferred/, '--big exactly at the line');
+  assert.match(go('2978Mi', '20%', {}, ['--big']).l, /decision=required-away.*reason=headroom/, '--big one Mi under');
+  // A different master line moves the boundary: max 50, normal Job (2300): (u + 2300) * 20 <= 50 * u  <=>  u >= 1533.3.
+  assert.match(go('1534Mi', '20%', { JOB_RUN_MASTER_MAX_PCT: '50' }).l, /decision=preferred/);
+  assert.match(go('1533Mi', '20%', { JOB_RUN_MASTER_MAX_PCT: '50' }).l, /decision=required-away.*reason=headroom/);
+});
+
+test('QA-S1b-C4 the Pending timeout says "run it again" only when the required rule was set, and the log gets a final line for the Job that never started', () => {
+  const away = world();
+  away.top('9199Mi', '80%');
+  away.put('pend', '100000'); away.put('pendmsg', `0/2 nodes are available: 1 node(s) didn't match Pod's node affinity/selector.`);
+  const a = away.run({ JOB_RUN_START_WAIT_S: '1' });
+  assert.equal(a.code, 1, a.out);
+  assert.match(a.out, /the Job did not start in 1s/);
+  assert.match(a.out, /run it again/, 'required rule set: the timeout line tells the person to run it again');
+  assert.ok(placement(away.log()).some((l) => /node=none .*decision=required-away .*outcome=did-not-start/.test(l)), `the final line is in the log: ${placement(away.log()).join(' | ')}`);
+  const fits = world();
+  fits.top('3000Mi', '20%');
+  fits.put('pend', '100000'); fits.put('pendmsg', '0/2 nodes are available: Insufficient memory.');
+  const f = fits.run({ JOB_RUN_START_WAIT_S: '1' });
+  assert.equal(f.code, 1, f.out);
+  assert.ok(!/run it again/.test(f.out), 'no required rule: the line does not suggest waiting for the master');
+  assert.ok(placement(fits.log()).some((l) => /node=none .*decision=preferred .*outcome=did-not-start/.test(l)), 'the final line names the preferred decision');
+  for (const l of [...placement(a.out), ...placement(away.log()), ...placement(fits.log())]) {
+    assert.ok(!l.includes(away.npm) && !l.includes(away.extra) && !l.includes(fits.npm), 'no secret in a PLACEMENT line');
+  }
+});
+
+test('QA-S1b-W1 coordinator 7806: the master at 74% with a 4Gi Job is NOT placed on the master (the required rule is in the applied manifest); same for 58-60% by the 85% idea and for --big', () => {
+  // 74% of 15000 Mi = 11100 Mi used, the real case: 11100 + 2300 over 75% of 15000.
+  const g = go('11100Mi', '74%');
+  assert.equal(g.r.code, 0, g.r.out);
+  assert.match(g.l, /decision=required-away.*reason=headroom/, 'the old guard (74 <= 75) let this Job on; the new one must not');
+  assert.match(g.r.out, /about (\d+)%, over 75%/);
+  const [, n] = /about (\d+)%, over (\d+)%/.exec(g.r.out) ?? [];
+  assert.ok(Number(n) > 75, `the message never reads "about ${n}%, over 75%" with N <= M`);
+  const yaml = (w: ReturnType<typeof world>) => {
+    const d = join(w.root, 'applied');
+    return existsSync(d) ? readdirSync(d).map((f) => readFileSync(join(d, f), 'utf8')).join('\n') : '';
+  };
+  const y = yaml(g.w);
+  assert.ok(y !== '', 'the fake kubectl recorded the applied Job manifest');
+  assert.match(y, /requiredDuringSchedulingIgnoredDuringExecution[\s\S]*node-role\.kubernetes\.io\/control-plane[\s\S]*DoesNotExist/, 'the applied manifest keeps the Job off the master');
+  const ok = go('3000Mi', '20%');
+  assert.ok(!/requiredDuringSchedulingIgnoredDuringExecution: \{nodeSelectorTerms/.test(yaml(ok.w)), 'a Job with room gets no required rule');
+  // 4Gi Job as the peak (the Job's whole request, not the 2300 median).
+  const four = go('11100Mi', '74%', { JOB_RUN_EXPECTED_PEAK_MI: '4096' });
+  assert.match(four.l, /peak_mi=4096 .*required-away/);
+  // The coordinator's formula: real <= 85% - request/allocatable. With max 85 and 4096 on 15000 Mi: real <= 57.7%, so 58% is away and 57% is not.
+  const env85 = { JOB_RUN_MASTER_MAX_PCT: '85', JOB_RUN_EXPECTED_PEAK_MI: '4096' };
+  assert.match(go('8550Mi', '57%', env85).l, /decision=preferred/, '57% + 4Gi stays under 85');
+  assert.match(go('8700Mi', '58%', env85).l, /decision=required-away.*reason=headroom/, '58% + 4Gi is over 85');
+  // --big near the line: even a quiet master (40%) may not take an 8Gi Job under the default line.
+  assert.match(go('6000Mi', '40%', {}, ['--big']).l, /decision=required-away.*reason=headroom/);
+  // The percentage-only case at 74% has no bytes: it cannot know the Job's share (a known limit; recorded, not judged).
+  console.log(`QA-S1b-W1 74% with no bytes column -> ${go('abc', '74%').l.replace('=== JOB-RUN PLACEMENT ', '')}`);
+});
+
+test('QA-S1b-T kubectl top empty or odd: the run goes on, the line says metrics unavailable, nothing crashes (no unbound variable, no syntax error), the Job is not blocked', () => {
+  const cases: [string, string | null][] = [
+    ['no top.txt (kubectl top exits 1)', null],
+    ['empty output', ''],
+    ['blank lines', '\n\n   \n'],
+    ['one column', 'k3s-master\n'],
+    ['two columns', 'k3s-master   310m\n'],
+    ['unknown columns', 'k3s-master   <unknown>   <unknown>   <unknown>   <unknown>\n'],
+    ['percentage 0', 'k3s-master   310m   7%   0Mi   0%\n'],
+    ['percentage over 100', 'k3s-master   310m   7%   9200Mi   250%\n'],
+    ['a negative number', 'k3s-master   310m   7%   -5Mi   -3%\n'],
+    ['non-ASCII', 'k3s-mästér   310m   7%   9200Mi   60%\n'],
+    ['a very long line', `k3s-master ${'x'.repeat(100_000)} 7% 9200Mi 60%\n`],
+    ['two nodes: the first line is read', 'k3s-master   310m   7%   9200Mi   60%\nk3s-node2   310m   7%   9200Mi   99%\n'],
+  ];
+  for (const [what, body] of cases) {
+    const w = world();
+    if (body !== null) w.put('top.txt', body);
+    const r = w.run();
+    console.log(`QA-S1b-T ${what} -> rc=${r.code} ${ctl(w).replace('=== JOB-RUN PLACEMENT ', '')}`);
+    assert.equal(r.code, 0, `${what}: the run must not fail: ${r.out}`);
+    assert.ok(!/unbound variable|syntax error|value too great|division by 0|integer expression/i.test(r.out), `${what}: a shell error leaked: ${r.out}`);
+    assert.ok(ctl(w), `${what}: a control-plane line is written`);
+    assert.ok(!r.out.includes(w.npm) && !w.log().includes(w.npm), `${what}: no secret`);
+  }
+  const w1 = world(); w1.put('top.txt', '');
+  assert.match(ctl(w1), /pct=unknown.*decision=preferred-metrics-unavailable/);
+  const w2 = world(); w2.put('top.txt', 'k3s-master   310m   7%   9200Mi   60%\nk3s-node2   310m   7%   9200Mi   99%\n');
+  w2.run();
+  assert.match(ctl(w2), /pct=60 /, 'the first node line is the one read');
 });
