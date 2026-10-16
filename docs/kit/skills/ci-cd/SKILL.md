@@ -23,7 +23,7 @@ Two lanes keep the integration branch shippable without slowing every slice: a q
 A workspace has a few CPUs shared by every agent in it. Heavy work runs as a Job on another node.
 
 1. Push what you want checked: `git push origin HEAD:wip/<name>`. The Job clones the remote; uncommitted changes are not in it.
-2. `scripts/job-run.sh [--repo <repo>] [--ref <branch or commit>] [--artifacts <paths> --out <dir>] [--timeout <s>] -- '<command>'`
+2. `/home/node/work/claudepilot/scripts/job-run.sh [--repo <repo>] [--ref <branch or commit>] [--artifacts <paths> --out <dir>] [--timeout <s>] -- '<command>'`
 3. The log streams back; the exit code is the command's. Artifacts (screenshots, junit, reports) come back capped in size.
 4. Caps: a few Jobs at once across the cluster and two per chat. A Job over a cap waits "queued behind K". Do not start more to jump the queue.
 5. `--list` shows Jobs; `--stop --chat <id>` stops yours. A Job stops when your chat ends.
