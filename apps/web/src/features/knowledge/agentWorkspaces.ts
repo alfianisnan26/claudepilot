@@ -1,5 +1,11 @@
 // T-436: the "Workspaces" field of a vault's settings: which workspaces' agents may reach the vault. Pure helpers, tested without a browser.
+import { WORKSPACE_KEY } from '@portal/contracts';
 import type { PortalAgentWorkspace, UpdateVaultRequest } from '@portal/contracts';
+
+/** The listed keys the server would refuse (not `<target>/<name>`), so the field can name them before Save. */
+export function invalidWorkspaceKeys(selected: readonly string[]): string[] {
+  return [...new Set(selected.filter((w) => !WORKSPACE_KEY.test(w)))];
+}
 
 /** One row of the field: a workspace key (`<target>/<name>`), its name, and whether the vault lists it. A listed key the portal no longer shows stays a row (so a save never drops it silently). */
 export interface WorkspaceChoice {
@@ -8,14 +14,16 @@ export interface WorkspaceChoice {
   checked: boolean;
   /** The portal does not list this workspace any more. */
   gone: boolean;
+  /** The key is not `<target>/<name>`: Save would be refused until it is cleared. */
+  invalid: boolean;
 }
 
 /** Every known workspace, then the listed ones that are not known, sorted by key. */
 export function workspaceChoices(known: readonly PortalAgentWorkspace[], selected: readonly string[]): WorkspaceChoice[] {
   const on = new Set(selected);
   const rows = new Map<string, WorkspaceChoice>();
-  for (const w of known) rows.set(w.workspaceId, { workspaceId: w.workspaceId, name: w.name, checked: on.has(w.workspaceId), gone: false });
-  for (const id of on) if (!rows.has(id)) rows.set(id, { workspaceId: id, name: id, checked: true, gone: true });
+  for (const w of known) rows.set(w.workspaceId, { workspaceId: w.workspaceId, name: w.name, checked: on.has(w.workspaceId), gone: false, invalid: false });
+  for (const id of on) if (!rows.has(id)) rows.set(id, { workspaceId: id, name: id, checked: true, gone: true, invalid: !WORKSPACE_KEY.test(id) });
   return [...rows.values()].sort((a, b) => a.workspaceId.localeCompare(b.workspaceId));
 }
 

@@ -413,6 +413,7 @@ portalMcp.agents.workspaceRefs = workspaces.identities;
 // T-436: a session's token is bound at mint to the vaults that name its workspace; a change of a vault's list rebinds the live tokens.
 portalMcp.agents.vaultsFor = (ws) => knowledge.vaultsForWorkspace(ws);
 knowledge.onAgentWorkspacesChange = () => void portalMcp.agents.rebindVaults();
+knowledge.onAgentWorkspacesFailClosed = () => void portalMcp.agents.closeVaults();
 chatController.agentAccess = portalMcp.agents;
 {
   // T-102: agent access turned on or off changes the portal tools a session's NEXT process gets: its "Tools changed" hint says so.

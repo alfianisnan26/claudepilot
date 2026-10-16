@@ -6,6 +6,7 @@ import { DEFAULT_LIMITS, PortalLimits } from '../portalmcp/limits.js';
 import { portalMcpHarness } from '../portalmcp/testkit.js';
 import { ToolRegistry } from '../portalmcp/registry.js';
 import { registerKnowledgeTools } from './portalTools.js';
+import { isKnowledgeError } from './errors.js';
 import { KnowledgeService } from './service.js';
 import { UI } from './testkit.js';
 
@@ -398,6 +399,62 @@ test('T-436: a token with no vault list reaches no vault (a token minted before 
     } finally {
       await admin.close();
     }
+  } finally {
+    r.done();
+  }
+});
+
+test('T-436 S2: a rebind that throws still saves the list, warns, audits, and shuts live tokens out (never wider than the list)', async () => {
+  const r = await bindRig();
+  try {
+    r.svc.update(r.alpha.id, { settings: { agentWorkspaces: ['docker/api', 'docker/web'] } });
+    const web = await r.h.agentToken('docker/web', 'sw-fail');
+    const c = await r.connect(web.secret);
+    try {
+      assert.match((await c.call('note_read', { vault: r.alpha.id, path: 'A.md' })).structuredContent.text.untrusted_text, /alpha secret/);
+      r.svc.onAgentWorkspacesChange = () => {
+        throw new Error('db is locked');
+      };
+      r.svc.onAgentWorkspacesFailClosed = () => void r.h.module.agents.closeVaults();
+      const out = r.svc.update(r.alpha.id, { settings: { agentWorkspaces: ['docker/api'] } });
+      assert.match(out.warning ?? '', /shut out/);
+      assert.deepEqual(out.settings.agentWorkspaces, ['docker/api'], 'the list is saved');
+      assert.deepEqual(r.svc.vaultsForWorkspace('docker/web'), [r.beta.id]);
+      assert.equal(error(await c.call('note_read', { vault: r.alpha.id, path: 'A.md' }))?.code, 'NOT_FOUND', 'the token lost the removed vault');
+      const rows = r.h.store.db!.prepare("SELECT outcome, detail FROM kg_audit WHERE op = 'vault.rebind'").all() as { outcome: string; detail: string }[];
+      assert.equal(rows.length, 1);
+      assert.equal(rows[0]!.outcome, 'error');
+    } finally {
+      await c.close();
+    }
+  } finally {
+    r.done();
+  }
+});
+
+test('T-436 S2: the audit row names the workspaces added and removed', () => {
+  return bindRig().then((r) => {
+    try {
+      r.svc.update(r.alpha.id, { settings: { agentWorkspaces: ['docker/api', 'docker/db'] } });
+      const rows = r.h.store.db!.prepare("SELECT detail FROM kg_audit WHERE op = 'vault.update' ORDER BY id DESC LIMIT 1").all() as { detail: string }[];
+      assert.match(rows[0]!.detail, /\+docker\/db/);
+      r.svc.update(r.alpha.id, { settings: { agentWorkspaces: ['docker/db'] } });
+      const next = r.h.store.db!.prepare("SELECT detail FROM kg_audit WHERE op = 'vault.update' ORDER BY id DESC LIMIT 1").all() as { detail: string }[];
+      assert.match(next[0]!.detail, /-docker\/api/);
+      assert.doesNotMatch(next[0]!.detail, /\+/);
+    } finally {
+      r.done();
+    }
+  });
+});
+
+test('T-436 S2: a bad workspace key is refused with a reason that names the key', async () => {
+  const r = await bindRig();
+  try {
+    assert.throws(
+      () => r.svc.update(r.alpha.id, { settings: { agentWorkspaces: ['docker/api', 'bad key!'] } }),
+      (e: unknown) => isKnowledgeError(e) && e.code === 'INVALID_INPUT' && /"bad key!"/.test(e.message) && !/docker\/api"/.test(e.message),
+    );
   } finally {
     r.done();
   }

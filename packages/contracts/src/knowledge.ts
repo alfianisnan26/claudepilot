@@ -57,7 +57,12 @@ export interface VaultSummary {
   location: string;
   createdAt: string;
   updatedAt: string;
+  /** Set by a save that worked but could not rebind live agent tokens: they are shut out of vaults until a rebind works. */
+  warning?: string;
 }
+
+/** A workspace key a vault may list for agents: `<target>/<name>`. */
+export const WORKSPACE_KEY = /^[A-Za-z0-9][A-Za-z0-9._-]{0,62}\/[A-Za-z0-9][A-Za-z0-9._-]{0,62}$/;
 
 export interface CreateVaultRequest {
   /** Required for a vault; a folder source is named for its folder when this is left out. */

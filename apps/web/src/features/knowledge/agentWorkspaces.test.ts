@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { PortalAgentWorkspace } from '@portal/contracts';
-import { settingsPayload, toggleWorkspace, workspaceChoices } from './agentWorkspaces';
+import { invalidWorkspaceKeys, settingsPayload, toggleWorkspace, workspaceChoices } from './agentWorkspaces';
 
 const ws = (workspaceId: string): PortalAgentWorkspace => ({ workspaceId, name: workspaceId.split('/')[1]!, enabled: true, liveTokens: 0 });
 
@@ -32,4 +32,11 @@ test('T-436: a listed workspace the portal no longer shows stays a ticked row, s
       ['kubernetes/web', false, false],
     ],
   );
+});
+
+test('T-436 S2: a listed key that is not <target>/<name> is named, and its row is flagged invalid', () => {
+  assert.deepEqual(invalidWorkspaceKeys(['docker/api', 'bad key', 'bad key']), ['bad key']);
+  assert.deepEqual(invalidWorkspaceKeys(['docker/api']), []);
+  const rows = workspaceChoices([ws('docker/api')], ['docker/api', 'bad key']);
+  assert.deepEqual(rows.map((r) => [r.workspaceId, r.invalid]), [['bad key', true], ['docker/api', false]]);
 });

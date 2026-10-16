@@ -251,6 +251,13 @@ export class AgentAccess implements AgentTokenMinter {
     return n;
   }
 
+  /** Shuts every live token out of the vaults at once (one statement): the fail-closed step when a rebind throws. Returns how many changed. */
+  closeVaults(): number {
+    const db = this.#writable;
+    if (!db) return 0;
+    return Number(db.prepare("UPDATE pmcp_agent_tokens SET vaults = '[]' WHERE revoked_at IS NULL AND (vaults IS NULL OR vaults != '[]')").run().changes);
+  }
+
   #revoke(where: string, args: string[], reason: string): number {
     const db = this.#writable;
     if (!db) return 0;

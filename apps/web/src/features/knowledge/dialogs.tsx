@@ -256,7 +256,7 @@ function WorkspacesField({ value, onChange }: { value: string[]; onChange: (v: s
             <label className="flex min-h-11 cursor-pointer items-center gap-3 px-3 py-2 text-[14px] text-ink">
               <input type="checkbox" className="size-5 shrink-0 accent-[var(--color-accent)]" checked={r.checked} onChange={(e) => onChange(toggleWorkspace(value, r.workspaceId, e.target.checked))} />
               <span className="min-w-0 break-all">{r.workspaceId}</span>
-              {r.gone && <span className="shrink-0 text-[12.5px] text-muted">gone</span>}
+              {r.invalid ? <span className="shrink-0 text-[12.5px] text-danger">not valid, untick it</span> : r.gone && <span className="shrink-0 text-[12.5px] text-muted">gone</span>}
             </label>
           </li>
         ))}
