@@ -19,17 +19,17 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 
 ## IN FLIGHT (6 of 6, D-71)
 - NONE gating. Lanes can't comment on unassigned tickets (T-341, T-549, T-675): verdicts in replies + this file.
-- QA PERF 8e8912fc (perf-tester/sonnet, respawned for Write; 8148): REVIEW T-736 S3e CHANGES 5. Now blind REVIEW T-781 S8.
-- QA UI 8b13bb5a (no Write): reviews/QA 8006 8018 8049 8095 8131 8137 8141 8157; live 233 UNAVAILABLE; T-675 R2b FAIL.
-  Now T-611 merge-risk read (read only) -> QA T-675 R2c.
+- QA PERF 8e8912fc (perf-tester/sonnet, respawned for Write; 8148): cherry-pick denied, stopped (correct). Lead built QA base
+  wip/qa-t426-364c7ca 364c7ca4 (18a3dbb1 + -x db6b952a 155e334b). Now its one S1h probe Job.
+- QA UI 8b13bb5a (no Write): T-611 merge risks 10 (8207). Now T-591 cause read (no Job) -> QA T-675 R2c f7b4e34a.
 - QA BE 2 42e5408f (no Write): T-611 S2 PWG 8186, T-736 S3e PWG 8198. Now QA T-781 S8 543240b8.
 - IMPL 46632d91 (respawned, sonnet; old 7cc1b2f5 ended after T-675 R2b DONE 5d38ab69): T-772 S2 on ticket/T-772-s2 from
   1e1e0ba1 (7916 items 1-5 + 7599 sweep; QA plan 7963).
 - BE INFRA 16c2494f (respawned, sonnet; old fad38191 ended after T-736 S3e DONE 1cd5047d): T-611 S2b on ticket/T-611-s2b from
   80ffedea (newline + non-ASCII refusal, C5e-ii log line, PLACEMENT avoid list, tests, docs) -> resolve integration merge (8202)
   -> T-736 S3f (allow-list, 8200) -> T-524 S3c + T-733 S5 -> T-612 S1.
-- BACKEND 3484bd4d: T-781 S8 DONE 543240b8. Now T-416 S2b (worktree on ticket/T-416-s2b f5b96b25: supersede kept record) ->
-  T-675 R2c (`git switch -c` from 5d38ab69, fix the apostrophe) -> T-537 (docs).
+- BACKEND 3484bd4d: built T-416 S2b f5b96b25, T-675 R2c f7b4e34a, T-781 S8b 0ed23dca; 3 Jobs at once (told: one per agent),
+  none reported, cluster queue long. Then T-537 (docs).
 - AFTER T-401: T-426 S1h/S1e; T-379 S2 3f11b28 behind it. T-578 -> owner. T-631 -> coordinator (after this batch).
 
 ## DECISIONS (binding)
