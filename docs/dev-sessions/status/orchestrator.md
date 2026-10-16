@@ -15,10 +15,11 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   Lanes' ticket_comment refused on unassigned tickets (T-341, T-549, T-675): verdicts live in their replies + this file.
 - QA PERF 7e4879c7: T-697 29b4ce58 (test-only: actions.test settled() yields a turn; limits + crewMcp G3 not reproduced;
   G3 failed in 7d87d90 which predates the wait at :773). Asked: 30x under load with/without fix. Lead quick-check PASS (job 12295a2b).
-- QA UI 8b13bb5a idle: next T-376 S3. QA BE 2 42e5408f: T-675 65d93dea (job 2f55f771: 837/840 chat+notify, typecheck 0;
-  id clip+hash '.', wake actor, lead [Portal note] N=max_workers|5, R2). Lead quick-check running. Then T-549 S2.
-- IMPL 0fd43a51 (sonnet) T-376 S3 on ticket/T-376-s3 from wip/qa-t376-2611d17: find+cut ~14 MB on open, Show all /
-  oldest page, harness >500 KB log + open-time budget (FAIL 6542, decision 6543).
+- QA UI 8b13bb5a: T-376 S3 3ec8fa94 (6765: 14 MB was Vite dev mode; assetCompress gzips /assets (read: low risk), bundle
+  1,264->387 KB; Show all existed; first row 645-708 ms built; oldest page 41-48 s by paging). Lead quick-check queued. QA BE 2 42e5408f: T-675 65d93dea (job 2f55f771: 837/840 chat+notify, typecheck 0;
+  id clip+hash '.', wake actor, lead [Portal note] N=max_workers|5, R2). Lead quick-check PASS (job 4e7f31dc). Then T-549 S2 (lead quick-check running).
+- IMPL bccb756f (sonnet, rossi) T-710 on ticket/T-710-ci-sweep from wip/qa-t710-8bb9a2c: seeded run with jobs/steps/log,
+  every control 390/1280 light/dark, Tab/focus pass, fixes in slice.
 - T-549 S2 DONE 5d97103d (job 773122d5: lab 81/81; ids kohi-event 48 / konfersi 47 only, D-67 Event dropped; budget pages
   M1 out at 2 programs, 19,209 unbudgeted) -> QA BE 2 after T-675. Gap: 3-5 seeds small; boundary mutants not rerun.
 - BE INFRA lane 07d4830c (sonnet, two.claude) T-524 S3b on ticket/T-524-s3b from integration: pin job name, no-patch-on-
@@ -67,8 +68,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 ## NEXT (in order, as slots free)
 1. Merges: T-401 060aca4 (ack 4941) -> T-426 S1e -> T-379 S2 3f11b28 (PASS 4948, review 4938); deploys are the coordinator's.
 2. On PASS: T-697, T-549 S2, T-376 S3 -> gate, merge. BE Infra after T-549 S2: T-524 S3b.
-   T-710 sweep PASS WITH GAPS 6737 (job abef017c on wip/qa-t710-8bb9a2c): next impl slot seeds a run with jobs/steps/log +
-   tab-order check (branch integration + fa201c8f runner-run.mjs), then QA UI re-sweep. Then T-376 S3, T-549 S2, T-697 -> QA.
+   T-710 sweep PASS WITH GAPS 6737 (job abef017c); harness slice in flight, then QA UI re-sweep. Then T-376 S3, T-549 S2, T-697 -> QA.
 3. T-675 (memory findings 4/5 + R2 test, Backend lane), T-574 S3 (6615), T-416 S2 (Bypass restore).
 4. RTK: T-340 (hook change landed by a person/coordinator) -> T-341 merge -> T-306 item 3 (lab A/B). 5. T-537. 6. T-513.
 7. T-472 live re-check (needs portal_status), T-422, T-147, T-438, T-425, T-436, T-437, T-432, T-382, T-377, T-386, T-409, T-402, T-398,
