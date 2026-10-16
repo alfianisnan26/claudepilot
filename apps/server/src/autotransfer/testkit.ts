@@ -76,8 +76,16 @@ export class MoveChat extends FakeChat {
   readonly models: { id: string; model: string }[] = [];
   /** What the engine said to a chat (the steer, the continuation), in order. */
   readonly sent: { id: string; text: string; priority: string; actor: string }[] = [];
+  /** `send` fails this many times (a CONFLICT), then works; `sendTries` counts every call (T-781 S5). */
+  sendFails = 0;
+  sendTries = 0;
   async send(id: string, text: string, opts: { priority: 'next' | 'later'; actor: string; actorLabel?: string }): Promise<void> {
     const s = this.get(id);
+    this.sendTries++;
+    if (this.sendFails > 0) {
+      this.sendFails--;
+      throw new AppError('CONFLICT', 'The session is restarting.');
+    }
     if (!s || s.state === 'ended') throw new AppError('CONFLICT', 'This session has ended.');
     this.sent.push({ id, text, priority: opts.priority, actor: opts.actor });
   }

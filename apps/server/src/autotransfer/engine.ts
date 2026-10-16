@@ -39,6 +39,9 @@ export const ENGINE_ACTOR = 'portal:autotransfer';
 const RECHECK_MS = 60_000;
 /** T-781: a CONFLICT on an exhausted chat is tried again after this long, at most this many times, then the normal pause. */
 const CONFLICT_RETRY_MS = 30_000;
+/** A continuation message that failed is tried again, 15 s apart, up to 3 attempts in all (T-781 S5). */
+const CONTINUE_RETRY_MS = 15_000;
+const CONTINUE_TRIES = 3;
 const CONFLICT_RETRIES = 5;
 /** Every chat at or under the threshold, waiting or working, is looked at again this often (T-105): the tick, jittered up to 20 s. */
 const TICK_MS = AUTO_CONSTANTS.waitRecheckMin * MIN;
@@ -130,6 +133,8 @@ export class AutoTransferEngine {
   readonly #conflicts = new Map<string, number>();
   /** Per chat: no evaluation before this time, while a CONFLICT retry is due (T-781): the tick and a boundary add no attempt inside it. */
   readonly #retryAt = new Map<string, number>();
+  /** The pending retry of a continuation message, per chat (T-781 S5). */
+  readonly #contTimers = new Map<string, () => void>();
   /** Chats with an open card: closed when the chat ends or moves. */
   readonly #cards = new Set<string>();
   /** The last evaluation of each chat, for tests and the state route. */
@@ -177,6 +182,8 @@ export class AutoTransferEngine {
     this.#refresh = null;
     for (const cancel of this.#timers.values()) cancel();
     this.#timers.clear();
+    for (const cancel of this.#contTimers.values()) cancel();
+    this.#contTimers.clear();
   }
 
   /** Resolves when no evaluation is queued or running (tests). */
@@ -222,6 +229,8 @@ export class AutoTransferEngine {
     this.#cards.delete(id);
     this.#conflicts.delete(id);
     this.#retryAt.delete(id);
+    this.#contTimers.get(id)?.();
+    this.#contTimers.delete(id);
   }
 
   /** Asks for an evaluation of a chat; a burst is one evaluation. */
@@ -766,12 +775,25 @@ export class AutoTransferEngine {
   }
 
   /** The continuation after an automatic move (T-105 item 3): one short message on the new Claude, priority next; recorded as `continued`. */
-  async #continue(s: ChatSession, ownerId: string, mode: AutoMode, to: AutoClaudeRef, why: 'exhausted' | 'steered'): Promise<void> {
+  async #continue(s: ChatSession, ownerId: string, mode: AutoMode, to: AutoClaudeRef, why: 'exhausted' | 'steered', attempt = 1): Promise<void> {
     try {
       await this.#d.chat.send(s.id, CONTINUE_TEXT(to.name, why), { priority: 'next', actor: ENGINE_ACTOR, actorLabel: 'Auto move' });
       this.#record({ ...this.#base(s, ownerId, mode), kind: 'continued', reason: why === 'exhausted' ? 'exhausted' : 'low', to, code: null }, 'info');
     } catch (e) {
-      console.error(`[autotransfer] could not continue a moved chat: ${(e as Error).message}`);
+      console.error(`[autotransfer] could not continue a moved chat (${attempt}/${CONTINUE_TRIES}): ${(e as Error).message}`);
+      // T-781 S5: a chat just restarted on the new Claude may not take a message yet; without the continuation the lane sits idle with nobody
+      // told. Try again a few times, only while the chat is still there and still on the Claude it was moved to.
+      if (attempt >= CONTINUE_TRIES) return;
+      this.#contTimers.get(s.id)?.();
+      this.#contTimers.set(
+        s.id,
+        this.#d.clock.timer(CONTINUE_RETRY_MS, () => {
+          this.#contTimers.delete(s.id);
+          const cur = this.#d.chat.get(s.id);
+          if (!cur || cur.state === 'ended' || cur.claudeId !== to.id) return;
+          void this.#continue(cur, ownerId, mode, to, why, attempt + 1);
+        }),
+      );
     }
   }
 

@@ -488,6 +488,74 @@ test('T-781 hard move: an exhausted chat that is idle moves as before, with no i
   r.engine.stop();
 });
 
+test('T-781 S5: a continuation that fails (the chat just restarted) is tried again after 15 s and arrives; the trail has one `continued` row', async () => {
+  const r = await rig(AUTO, EXHAUSTED);
+  r.chat.sendFails = 1;
+  const orig = console.error;
+  console.error = () => {};
+  try {
+    r.chat.turnEnds('s1');
+    await r.engine.settled();
+    assert.equal(r.chat.moves.length, 1);
+    assert.equal(r.chat.sent.length, 0, 'the first attempt failed');
+    r.clock.advance(0.2); // 12 s: not yet
+    await r.engine.settled();
+    assert.equal(r.chat.sendTries, 1);
+    r.clock.advance(0.1); // 18 s
+    await r.engine.settled();
+  } finally {
+    console.error = orig;
+  }
+  assert.equal(r.chat.sent.length, 1, 'the continuation arrived');
+  assert.equal(r.chat.sent[0]!.actor, 'portal:autotransfer');
+  assert.match(r.chat.sent[0]!.text, /Continue where you stopped/);
+  assert.equal(r.auto.events('u_a', { kinds: ['continued'] }).length, 1);
+  r.engine.stop();
+});
+
+test('T-781 S5: at most 3 attempts to continue, then it stops (no pause, no failed row)', async () => {
+  const r = await rig(AUTO, EXHAUSTED);
+  r.chat.sendFails = 99;
+  const orig = console.error;
+  console.error = () => {};
+  try {
+    r.chat.turnEnds('s1');
+    await r.engine.settled();
+    for (let i = 0; i < 6; i++) {
+      r.clock.advance(0.26);
+      await r.engine.settled();
+    }
+  } finally {
+    console.error = orig;
+  }
+  assert.equal(r.chat.sendTries, 3);
+  assert.equal(r.chat.sent.length, 0);
+  assert.equal(r.auto.events('u_a', { kinds: ['failed'] }).length, 0);
+  r.engine.stop();
+});
+
+test('T-781 S5: no retry of the continuation once the chat is on another Claude or has ended', async () => {
+  for (const how of ['moved', 'ended'] as const) {
+    const r = await rig(AUTO, EXHAUSTED);
+    r.chat.sendFails = 1;
+    const orig = console.error;
+    console.error = () => {};
+    try {
+      r.chat.turnEnds('s1');
+      await r.engine.settled();
+      if (how === 'moved') r.chat.personMoves('s1', 'spare');
+      else r.chat.ends('s1');
+      r.clock.advance(0.3);
+      await r.engine.settled();
+    } finally {
+      console.error = orig;
+    }
+    assert.equal(r.chat.sent.length, 0, `nothing sent after ${how}`);
+    assert.equal(r.chat.sendTries, 1, `no second attempt after ${how}`);
+    r.engine.stop();
+  }
+});
+
 test('T-781 R5: with no destination ceiling for an exhausted source, a herd still spreads (fewest chats on a tie)', async () => {
   const two = () => [usage('work', 'Work', [win('session', 100)]), usage('home', 'Home', [win('session', 60)]), usage('spare', 'Spare', [win('session', 60)])];
   const r = await rig({ ...AUTO, [K.maxPerDestination]: 1 }, two);
