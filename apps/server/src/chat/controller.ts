@@ -2859,7 +2859,6 @@ export class ChatController {
       throw new AppError('CONFLICT', 'Wait for the turn to end, then restart it for Bypass.');
     }
     this.#chat.patchSession(sessionId, { bypassCapable: true });
-    this.#chat.addAudit({ severity: 'medium', kind: 'bypass.capable', sessionId, workspaceId: session.workspaceId, actor: 'ui', detail: { how: 'restart' } });
     // The running process wasn't started with the flag: it stops and the next launch resumes the session with it.
     const row = this.#chat.row(sessionId)!;
     if (row.process === 'live') {
@@ -2871,6 +2870,8 @@ export class ChatController {
       this.#chat.patchSession(sessionId, { process: 'asleep' });
       this.#emitSession(sessionId);
     }
+    // After the close-out: `#sleptInBypass` reads the newest Bypass record, and this one would hide a kept record from the close-out that supersedes it.
+    this.#chat.addAudit({ severity: 'medium', kind: 'bypass.capable', sessionId, workspaceId: session.workspaceId, actor: 'ui', detail: { how: 'restart' } });
     await this.#live(sessionId);
     return this.#chat.get(sessionId)!;
   }
