@@ -1,9 +1,10 @@
-# orchestrator status (2026-10-16 04:02 UTC, session 355881a3, continuation of de232389)
+# orchestrator status (2026-10-16 04:35 UTC, session 355881a3, continuation of de232389)
 
 Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-10-15 DONE batches 1-7: see 4fbab374). Hand-overs: ab99b45, bb58413, 639202e.
 
 ## DONE
-- GATING d0975fa (batch 14): T-376 S3 3ec8fa94 (QA UI PASS WITH GAPS 6797; lead 6798: merge, gaps 1 wiring test + 2 done-when 4 -> S4).
+- GATING 9f5afa1 (batch 15): T-675 65d93dea + T-549 S2 5d97103d (QA BE 2 PASS WITH GAPS; T-723 follow-up).
+- MERGED de3a3515 (batch 14): T-376 S3 3ec8fa94 (QA UI 6797; open for S4 6798); gate GREEN gate-d0975fa.
 - MERGED c3cad1a6 (batch 13): T-524 S3 b68f043d (QA Perf PASS WITH GAPS 6623; open for S3b 6624) + T-681 1fbca960
   (QA UI 6633; CLOSED, gaps -> T-710); gate GREEN gate-7526daa.
 - MERGED 5f54dbcf (batch 12): T-574 S2 57bc14bf (QA BE 2 PASS WITH GAPS); gate GREEN gate-5a379d4 (6637). Open for S3 (6615).
@@ -18,8 +19,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   quick-check PASS 12295a2b). Then T-524 S3b 23330c28 (test-only +25: name pin, no-patch-on-top-fail; src/ci 208/208 job
   54784775; mutants D,F killed f69b2de3). Live re-read patch NOT verified. 6775 was WRONG (rule set at creation, 78%): 6788.
 - QA UI 8b13bb5a: standby; next T-710 re-sweep on bccb756f DONE (told 04:01).
-- QA BE 2 42e5408f: standby -> T-574 S3. Verdicts (lead can't comment): T-675 65d93dea PASS WITH GAPS (fff5b0e4 837/840,
-  53bf2863 9/10 mutants; gaps -> T-723, D-65 deviation on record). T-549 S2 5d97103d PASS WITH GAPS (bfad11ca). Both -> batch 15.
+- QA BE 2 42e5408f: standby -> T-574 S3 (lead can't comment on T-675/T-549: verdicts in batch 15 merge messages).
 - IMPL bccb756f (sonnet, rossi) T-710 on ticket/T-710-ci-sweep from wip/qa-t710-8bb9a2c: seeded run with jobs/steps/log,
   every control 390/1280 light/dark, Tab/focus pass, fixes in slice.
 - BE INFRA lane 4d010bea (sonnet, two.claude) T-251 (urgent rank-02d) on ticket/T-251-unknown-usage: audit 5 reqs vs code
