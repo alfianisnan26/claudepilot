@@ -247,6 +247,21 @@ test('each script cds into the guarded folder after the guard and before its fir
   }
 });
 
+test('rtk-measure.sh heavy mode (the else branch) cds into the guarded folder before its first write or git call (a cd of the light branch does not count)', () => {
+  const lines = readFileSync(join(ROOT, 'tools/qa/rtk-measure.sh'), 'utf8').split('\n');
+  const code = (i: number) => !lines[i].trimStart().startsWith('#');
+  const start = lines.findIndex((l, i) => code(i) && /^else\s*$/.test(l));
+  const end = lines.findIndex((l, i) => i > start && code(i) && /^fi\s*$/.test(l));
+  assert.ok(start >= 0 && end > start, 'rtk-measure.sh has no top-level else ... fi block (the check would test nothing)');
+  const gitCall = /(\bgit|(^|[\s;&|(])g) (-c |ls-files|rev-|remote|fetch|status|reset|checkout|rm |mv |add |commit|diff|log)/;
+  const act = /^\s*(cat >|cp |rm |mkdir |printf .*>>|echo .*>)|\bgit\b|^\s*m /;
+  const cd = lines.findIndex((l, i) => i > start && i < end && code(i) && /^\s*cd "\$here"\s*$/.test(l));
+  const first = lines.findIndex((l, i) => i > start && i < end && code(i) && (act.test(l) || gitCall.test(l)));
+  assert.ok(first > 0, 'no write or git call in the else branch (the check would test nothing)');
+  assert.ok(cd > 0, 'the else branch has no plain `cd "$here"` statement');
+  assert.ok(cd < first, `the else branch writes or calls git (line ${first + 1}) before its cd (line ${cd + 1})`);
+});
+
 test('the helper regex of the order test sees `g <cmd>` and the chained cd (self-check)', () => {
   const gitCall = /(\bgit|(^|[\s;&|(])g) (-c |ls-files|rev-|remote|fetch|status|reset|checkout|rm |mv |add |commit)/;
   assert.ok(gitCall.test('  g commit -q -m x'));
