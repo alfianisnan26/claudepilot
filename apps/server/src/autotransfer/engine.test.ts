@@ -625,8 +625,9 @@ test('T-781 S8: a second evaluation while the move itself is in flight is skippe
   r.chat.switchClaude = async (...a: Parameters<typeof real>) => (attempts++, await held, real(...a));
   const first = r.engine.evaluate('s1');
   try {
-    await new Promise((res) => setImmediate(res));
-    await new Promise((res) => setImmediate(res));
+    // The first move reached the Move flow (the mark is set before it), bounded at 2 s.
+    for (let i = 0; i < 200 && attempts < 1; i++) await new Promise((res) => setTimeout(res, 10));
+    assert.equal(attempts, 1, 'the first move is in the Move flow');
     // The move is still waiting inside the Move flow. Without the mark the second look would wait on the same hold: a bounded wait, so
     // the missing mark fails here by an assertion and not by a hang.
     const second = await Promise.race([r.engine.evaluate('s1'), new Promise((res) => setTimeout(() => res('still waiting'), 100))]);
@@ -634,13 +635,13 @@ test('T-781 S8: a second evaluation while the move itself is in flight is skippe
     assert.equal(attempts, 1, 'one move attempt, however many looks');
   } finally {
     release();
+    await first;
+    r.engine.stop();
   }
-  await first;
   await r.engine.settled();
   assert.equal(attempts, 1, 'still one attempt');
   assert.equal(r.chat.moves.length, 1, 'one move');
   assert.equal(r.chat.get('s1')!.claudeId, 'home');
-  r.engine.stop();
 });
 
 test('T-781: a second evaluation while the stop still waits does not stop or move again (exactly one stop, one move)', async () => {

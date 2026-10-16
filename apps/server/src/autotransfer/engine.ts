@@ -830,7 +830,7 @@ export class AutoTransferEngine {
   /** The continuation after an automatic move (T-105 item 3): one short message on the new Claude, priority next; recorded as `continued`. */
   async #continue(s: ChatSession, ownerId: string, mode: AutoMode, to: AutoClaudeRef, why: 'exhausted' | 'steered', attempt = 1): Promise<void> {
     // A newer continuation (a move away and back inside the retry window) replaces an older pending retry, which would otherwise send a stale second one.
-    // Kept as a guard, not observable by a test today: only `#move` and the retry timer itself call this, and the minimum pause between moves is longer than the retries (T-781 S8).
+    // Kept as a guard, not observable by a test today: only `#move` and the retry timer itself call this, and the minimum pause between moves (`minPauseMin`, 5 min) is longer than the retry window (2 × 15 s). It depends on that: shorten the pause below the window and a test must cover this line (T-781 S8).
     this.#contTimers.get(s.id)?.();
     this.#contTimers.delete(s.id);
     try {
