@@ -7,6 +7,8 @@ import { isAppError } from '@isnanme/core';
 import { MIGRATIONS } from '../store/migrations.js';
 import { generateSecretKey, parseSecretKey } from '../store/secretBox.js';
 import { Store } from '../store/store.js';
+import { loadCrewFacts } from '../lab/scorecardData.js';
+import { SpendStore } from './store.js';
 import { DAY, HOUR, MIN, NOW, spendHarness } from './testkit.js';
 
 // NOW is 2026-10-12 15:00 UTC (a Monday). `at(h, m, day)` is a UTC clock time in October 2026 (the 12th unless said otherwise).
@@ -378,6 +380,78 @@ test('a request far above the median, and a quarter hour far above the usual, ar
     h.clock.t = NOW + MIN;
     h.seed.turn({ atMs: NOW + MIN, session: 'S', costUsd: 11 });
     assert.equal(h.spend.spikes('1d').events.length, 2);
+  } finally {
+    h.done();
+  }
+});
+
+test('a row marked suspect (T-610: a running total booked as one request) is in no sum, no baseline and no spike, and stays in the table', async () => {
+  const h = await spendHarness();
+  try {
+    h.seed.claude('c1', 'docker/api', 'Kresna');
+    for (let i = 1; i <= 20; i++) h.seed.usage({ atMs: NOW - 2 * DAY + i * HOUR, session: 'OLD', costUsd: i / 10 });
+    h.clock.t = NOW;
+    h.seed.session('S', { claudeId: 'c1', title: 'Big one' });
+    // A $96.31 "request" that was a carried total, marked suspect: the row is written, the module is told, and nothing trips.
+    h.seed.usage({ atMs: NOW, session: 'S', costUsd: 96.31, kind: 'suspect' });
+    h.spend.onTurn({ sessionId: 'S', workspaceId: 'docker/api', claudeId: 'c1', atMs: NOW }, [{ costUsd: 0 }]);
+    assert.equal(h.spend.spikes('1d').events.length, 0);
+    assert.equal(h.spend.attribution({ by: 'session', range: '1d' }).totals.costUsd, 0, 'attribution leaves it out');
+    const spendStore = new SpendStore(h.store);
+    assert.equal(spendStore.requestCosts('c1', NOW - 3 * DAY, NOW + MIN).length, 20, 'and so does the baseline of requests');
+    assert.equal(spendStore.usageRows(NOW - DAY, NOW + MIN).length, 0, 'and the rows the scorecard reads');
+    assert.equal((h.db.prepare('SELECT COUNT(*) AS n FROM chat_usage WHERE kind = ?').get('suspect') as { n: number }).n, 1, 'the row is kept as evidence');
+  } finally {
+    h.done();
+  }
+});
+
+test('a row marked suspect (T-610) is out of sessionWindow, claudeWindow and activePeriods (one query each)', async () => {
+  const h = await spendHarness();
+  try {
+    h.seed.claude('c1', 'docker/api', 'Kresna');
+    h.seed.session('S', { claudeId: 'c1' });
+    h.seed.usage({ atMs: NOW - HOUR, session: 'S', costUsd: 0.5 });
+    h.seed.usage({ atMs: NOW - HOUR + MIN, session: 'S', costUsd: 96.31, kind: 'suspect' });
+    const st = new SpendStore(h.store);
+    const w = st.sessionWindow(['S'], NOW - 2 * HOUR, NOW);
+    assert.deepEqual([w.requests, w.costUsd], [1, 0.5], 'sessionWindow');
+    const c = st.claudeWindow('c1', NOW - 2 * HOUR, NOW);
+    assert.equal(c.costUsd, 0.5, 'claudeWindow total');
+    assert.deepEqual(c.bySession, [{ sessionId: 'S', costUsd: 0.5 }], 'claudeWindow by session');
+    assert.deepEqual(st.activePeriods('c1', NOW, NOW - 2 * HOUR, 2 * HOUR), [0.5], 'activePeriods');
+  } finally {
+    h.done();
+  }
+});
+
+test('a row marked suspect (T-610) is out of sum(), the Requests report’s own totals, for every scope', async () => {
+  const h = await spendHarness();
+  try {
+    h.seed.claude('c1', 'docker/api', 'Kresna');
+    h.seed.usage({ atMs: NOW - HOUR, session: 'S', costUsd: 0.5, input: 10, requests: 1 });
+    h.seed.usage({ atMs: NOW - HOUR + MIN, session: 'S', costUsd: 96.31, input: 900, requests: 1, kind: 'suspect' });
+    const st = new SpendStore(h.store);
+    for (const scope of [{ kind: 'all', id: null }, { kind: 'workspace', id: 'docker/api' }, { kind: 'claude', id: 'c1' }] as const) {
+      const t = st.sum(scope, NOW - 2 * HOUR, NOW);
+      assert.deepEqual([t.costUsd, t.input, t.requests], [0.5, 10, 1], scope.kind);
+    }
+  } finally {
+    h.done();
+  }
+});
+
+test('a session whose only row is suspect does not seed the scorecard’s sessions (T-610, lab/scorecardData.ts)', async () => {
+  const h = await spendHarness();
+  try {
+    for (const id of ['GOOD', 'GHOST']) {
+      h.seed.session(id, { claudeId: 'c1' });
+      h.db.prepare(`UPDATE chat_sessions SET state = 'ended' WHERE id = ?`).run(id);
+    }
+    h.seed.usage({ atMs: NOW - HOUR, session: 'GOOD', costUsd: 0.5 });
+    h.seed.usage({ atMs: NOW - HOUR, session: 'GHOST', costUsd: 96.31, kind: 'suspect' });
+    const facts = loadCrewFacts(h.store, NOW, NOW - DAY)!;
+    assert.deepEqual([...facts.sessions.keys()], ['GOOD'], 'the suspect-only session is not a seed');
   } finally {
     h.done();
   }

@@ -2,6 +2,7 @@
 // store does not have (or can not read) is `null`, which the scorecard shows as unavailable (no_source), never as 0.
 
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
+import { COUNTED_USAGE } from '../chat/usageDelta.js';
 import type { Store } from '../store/store.js';
 import { SpendStore } from '../usagespend/store.js';
 import { ticketReport } from '../usagespend/ticketReport.js';
@@ -41,7 +42,7 @@ function chunked<R>(db: DatabaseSync, ids: readonly (string | number)[], sql: (l
  */
 function loadSessions(db: DatabaseSync, spend: SpendStore, sinceMs: number): Map<string, SessionInfo> {
   const seed = new Set<string>();
-  for (const r of db.prepare('SELECT DISTINCT session_id FROM chat_usage WHERE at_ms >= ?').all(sinceMs) as unknown as { session_id: string }[]) seed.add(r.session_id);
+  for (const r of db.prepare(`SELECT DISTINCT session_id FROM chat_usage WHERE at_ms >= ? AND ${COUNTED_USAGE}`).all(sinceMs) as unknown as { session_id: string }[]) seed.add(r.session_id);
   for (const r of db.prepare(`SELECT id FROM chat_sessions WHERE state != 'ended'`).all() as unknown as { id: string }[]) seed.add(r.id);
   const up = spend.sessions(seed);
   restoreLinks(db, spend, up);
