@@ -13,7 +13,9 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 
 ## IN FLIGHT (6 of 6, D-71)
   Lanes' ticket_comment refused on unassigned tickets (T-341, T-549, T-675): verdicts live in their replies + this file.
-- IN QA: T-524 S3 b68f043d (Jobs off master over 75%; kubectl patch only its own Job, read) -> QA Perf 7e4879c7.
+- T-524 S3 b68f043d: QA Perf PASS WITH GAPS 6623 (jobs faca6593, c0e7bfc3; mutant `patch job "other"` survives; no live
+  patch run). Decision 6624: merge in batch 13; S3b (pin job name, no-patch-on-top-fail test, live suspended-Job run) BE Infra.
+- IN QA: QA Perf idle (next T-697, T-524 S3b).
 - BATCH 12 wip/main-5a379d4 = T-574 S2 57bc14bf (QA BE 2 PASS WITH GAPS, jobs 27c4254d/513e541f): GATE RUNNING. Decision 6615:
   merge, gaps -> S3 (cross-lead worker_id test, trim id8/size toward done-when 600 avg). QA BE 2 idle: next T-549 S2 / T-697.
   T-681 1fbca960 (CI controls size-11, tools/qa/ci-targets.mjs; typecheck/build were on 293f612) -> QA UI 8b13bb5a.
@@ -65,7 +67,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 
 ## NEXT (in order, as slots free)
 1. Merges: T-401 060aca4 (ack 4941) -> T-426 S1e -> T-379 S2 3f11b28 (PASS 4948, review 4938); deploys are the coordinator's.
-2. On PASS: T-524 S3, T-574 S2, T-681 -> gate, merge. Then T-376 S3, T-549 S2, T-697 -> QA.
+2. Batch 13: T-524 S3 + T-681 (on its PASS) -> gate, merge. BE Infra after T-549 S2: T-524 S3b. Then T-376 S3, T-549 S2, T-697 -> QA.
 3. T-675 (memory findings 4/5 + R2 test, Backend lane), T-574 S3 (6615), T-416 S2 (Bypass restore).
 4. RTK: T-340 (hook change landed by a person/coordinator) -> T-341 merge -> T-306 item 3 (lab A/B). 5. T-537. 6. T-513.
 7. T-472 live re-check (needs portal_status), T-422, T-147, T-438, T-425, T-436, T-437, T-432, T-382, T-377, T-386, T-409, T-402, T-398,
