@@ -218,8 +218,9 @@ test('every curl in the three scripts has --max-time and --retry', () => {
 /**
  * T-736 S3f (QA BE 2 8198, QA Perf, decision 8200): an ALLOW-list, not a list of writers. Before the guard (and, in rtk-measure.sh's heavy
  * branch, before the guarded cd) a line may only be: a comment or a blank, `set -u`, an assignment of ONE shell word with no command substitution,
- * no redirect and no chaining, `:` , `m <args>` (the measuring helper; heavy branch only) and, in the preamble, the exact lines that find the
- * folder, source the guard and check that it defined rtk_guard. Everything else is refused, so perl -pi, eval, find -delete, `2>`, `&>`, `<<<`,
+ * no redirect and no chaining (never one of FORBIDDEN_ASSIGN: here, PATH, IFS, BASH_ENV, ...; S3g), `:` and, in the preamble, the exact lines that find the
+ * folder, source the guard and check that it defined rtk_guard. `m` (the measuring helper, which runs two of its arguments with `sh -c`) is NOT on
+ * the list: the real scripts call it only after the cd (S3g). Everything else is refused, so perl -pi, eval, find -delete, `2>`, `&>`, `<<<`,
  * a function or a tool called through a variable, backticks, `x=1 cmd`, `x=$(cmd)` and loops all fail without being named.
  */
 const DANGER = /\$\(|`|[<>;&|]/;
@@ -237,6 +238,16 @@ function oneWord(s: string): boolean {
   }
   return q === '';
 }
+/**
+ * T-736 S3g (review of S3f, D-65): names an assignment may never set before the guard call or the heavy cd: `here` (the folder the guard checks
+ * and the cd enters: only the exact HERE_FORM line sets it), the lookup of every tool (PATH, CDPATH, ENV, BASH_ENV: a file sourced by the next
+ * shell), word splitting (IFS), HOME and the shell's own option variables. `repo` is not on the list: rtk-measure.sh light mode computes it from its
+ * argument right before its own cd, and the guard is called on it by name.
+ */
+const FORBIDDEN_ASSIGN = ['here', 'PATH', 'IFS', 'BASH_ENV', 'ENV', 'CDPATH', 'HOME', 'SHELLOPTS', 'BASHOPTS', 'PS4', 'PROMPT_COMMAND', 'BASH_XTRACEFD', 'LD_PRELOAD', 'LD_LIBRARY_PATH'];
+const FORBIDDEN_NAME = new RegExp(`^(${FORBIDDEN_ASSIGN.join('|')})$`);
+/** Whether a line sets one of FORBIDDEN_ASSIGN in command position: first on the line, after `;` `&&` `||` `{` `(` or a keyword, behind `export`/`declare`/`readonly`/`typeset` or other `x=1` prefixes. */
+const SETS_FORBIDDEN = new RegExp(`(^|;|&&|\\|\\||\\{|\\(|\\bthen\\b|\\bdo\\b|\\belse\\b)\\s*(\\w+=\\S*\\s+)*(export\\s+|declare\\s+(-\\w+\\s+)*|typeset\\s+(-\\w+\\s+)*|readonly\\s+|local\\s+)?(${FORBIDDEN_ASSIGN.join('|')})\\+?=`);
 function allowed(line: string, where: 'preamble' | 'branch'): boolean {
   const t = line.trim();
   if (t === '' || t.startsWith('#')) return true;
@@ -244,9 +255,10 @@ function allowed(line: string, where: 'preamble' | 'branch'): boolean {
   if (where === 'preamble' && (t === HERE_FORM || GUARD_SRC.test(t) || DECLARE.test(t))) return true;
   if (DANGER.test(t)) return false;
   if (/^set -[eu]+$/.test(t) || /^:(\s|$)/.test(t)) return true;
-  if (where === 'branch' && /^m\s/.test(t)) return true;
-  const a = /^[A-Za-z_][A-Za-z0-9_]*=(.*)$/.exec(t);
-  return a !== null && oneWord(a[1] ?? '');
+  // `m` (the measuring helper) is NOT on the list: it hands its 4th and 5th arguments to `sh -c`, so `m c l "$here" "touch f" "touch f"` runs a command.
+  // The real scripts call it only after the cd; a call before it is a line off the list (T-736 S3g, review of S3f).
+  const a = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(t);
+  return a !== null && !FORBIDDEN_NAME.test(a[1] ?? '') && oneWord(a[2] ?? '');
 }
 const GUARD_CALL = /^rtk_guard rtk-[a-z]+\.sh "\$here"$/;
 
@@ -259,7 +271,38 @@ test('the three scripts source the shared guard before they write anything: ever
     assert.equal(bad, -1, `${script}: line ${bad + 1} comes before the guard and is not on the allow-list: ${lines[bad]}`);
     assert.ok(lines.slice(0, guard).some((l) => GUARD_SRC.test(l.trim())), `${script}: the guard is not sourced before it is called`);
     assert.ok(lines.slice(0, guard).some((l) => DECLARE.test(l.trim())), `${script}: rtk_guard is not checked to be defined before it is called`);
+    // T-736 S3g: the folder the guard checks is the one the script cds into, so `here` has ONE definition, the exact HERE_FORM line, before the
+    // guard is sourced; nothing between the guard call and the first cd (or anywhere before the guard) sets here, PATH, IFS, BASH_ENV and the like.
+    const hereAt = lines.map((l, i) => (l.trim() === HERE_FORM ? i : -1)).filter((i) => i >= 0);
+    const srcAt = lines.findIndex((l) => GUARD_SRC.test(l.trim()));
+    assert.equal(hereAt.length, 1, `${script}: the exact line \`${HERE_FORM}\` must appear exactly once`);
+    assert.ok(hereAt[0]! < srcAt && srcAt < guard, `${script}: the folder line, then the sourcing of the guard, then the call`);
+    const firstCd = lines.findIndex((l, i) => i > guard && !l.trimStart().startsWith('#') && /\bcd "\$(here|repo)"/.test(l));
+    assert.ok(firstCd > guard, `${script}: no cd after the guard (the check would test nothing)`);
+    const sets = lines.findIndex((l, i) => i !== hereAt[0] && i < firstCd && !l.trimStart().startsWith('#') && SETS_FORBIDDEN.test(l));
+    assert.equal(sets, -1, `${script}: line ${sets + 1} sets here, PATH, IFS, BASH_ENV or the like before the guarded cd: ${lines[sets]}`);
   }
+});
+
+test('the allow-list (self-check, S3g): here, PATH, IFS, BASH_ENV and the like are never assigned before the guard or the cd; m is not an allowed pre-cd line', () => {
+  for (const name of FORBIDDEN_ASSIGN) {
+    for (const where of ['preamble', 'branch'] as const) {
+      assert.ok(!allowed(`${name}=/some/other/dir`, where), `refused: ${name}= in the ${where}`);
+      assert.ok(!allowed(`${name}=x`, where), `refused: ${name}=x in the ${where}`);
+    }
+    for (const form of [`${name}=/x`, `export ${name}=/x`, `x=1 ${name}=/x cmd`, `a; ${name}=/x`, `{ ${name}=/x; }`, `declare -x ${name}=/x`, `readonly ${name}=/x`, `if x; then ${name}=/x; fi`, `${name}+=/x`]) {
+      assert.match(form, SETS_FORBIDDEN, `the scan sees: ${form}`);
+    }
+  }
+  assert.ok(allowed('tf=a', 'branch') && allowed('nt=a', 'branch') && allowed('hereby=1', 'preamble') && allowed('repoX=1', 'preamble'), 'other names are still fine (a longer name is not here)');
+  for (const fine of ['cleanenv() { env -i PATH="$PATH" HOME="$H" LANG=C.UTF-8 "$@"; }', 'echo here=/x', 'local base="$out/$class.$label"', 'repo=$(readlink -f "$3"); L=$4; cd "$repo" || exit', '# here=/x', 'x=1 y=2 cmd']) {
+    assert.doesNotMatch(fine, SETS_FORBIDDEN, `not an assignment in command position: ${fine}`);
+  }
+  for (const m of ['m a b c', 'm c l "$here" "touch f" "touch f"', 'm c l "$here" "rm -rf x" "rm -rf x"']) {
+    assert.ok(!allowed(m, 'branch') && !allowed(m, 'preamble'), `refused before the cd: ${m}`);
+  }
+  // HERE_FORM stays the one way to set here in the preamble, and only there.
+  assert.ok(allowed(HERE_FORM, 'preamble') && !allowed('here=$(cd /x && pwd)', 'preamble') && !allowed(`${HERE_FORM} # x`, 'preamble'));
 });
 
 test('the allow-list (self-check): the preamble forms pass; each way to write, run a tool or hide a command before the guard is refused', () => {
@@ -267,7 +310,7 @@ test('the allow-list (self-check): the preamble forms pass; each way to write, r
     'declare -F rtk_guard >/dev/null || { echo "x: refusing: nope" >&2; exit 2; }', 'x=1', 'y="a b $z"', ': ', ':']) {
     assert.ok(allowed(ok, 'preamble'), `allowed: ${ok}`);
   }
-  assert.ok(allowed('m a b c', 'branch') && !allowed('m a b c', 'preamble'), 'm is the heavy branch helper only');
+  assert.ok(!allowed('m a b c', 'branch') && !allowed('m a b c', 'preamble'), 'm is off the list everywhere (S3g): the real scripts call it only after the cd');
   assert.ok(!allowed(HERE_FORM, 'branch'), 'the folder line is a preamble form only');
   for (const bad of ['mkdir -p "$out"', 'perl -pi -e s/a/b/ f', 'eval "touch f"', 'find . -delete', ': 2> f', 'echo x &> f', ': > f', 'cat <<< x', '$fn a', '"$R" x',
     'x=`touch f`', 'x=$(touch f)', 'x=1 touch f', 'x=1; touch f', 'x=1 && touch f', 'x="a" | tee f', 'while true; do :; done', 'until false; do :; done', 'for i in 1; do :; done',
@@ -382,8 +425,12 @@ test('the heavy-branch walker (self-check): anything off the allow-list before t
   const ok = branch('  cd "$here"\n  cat > f <<\'EOT\'\ntouch inside-heredoc\nEOT\n  m a b c d e');
   assert.ok(ok.cd > 0 && ok.cd < ok.bad, 'a clean branch passes');
   assert.equal(ok.bad, 4, 'the heredoc body is skipped: the cat line is the first line off the list');
-  const early = branch('  : \n  x=1\n  m a b c d e\n  cd "$here"\n  touch f');
-  assert.ok(early.cd > 0 && early.cd < early.bad, 'assignments, `:` and m may come before the cd');
+  const early = branch('  : \n  x=1\n  cd "$here"\n  m a b c d e\n  touch f');
+  assert.ok(early.cd > 0 && early.cd < early.bad, 'assignments and `:` may come before the cd; m comes after it');
+  for (const w of ['m a b c d e', 'm c l "$here" "touch f" "touch f"', 'm c l "$here" "rm -rf x" "rm -rf x"', 'here=/some/other/dir', 'PATH=/x', 'IFS=x', 'BASH_ENV=/x', 'CDPATH=/x', 'here="$PWD"']) {
+    const b = branch(`  ${w}\n  cd "$here"`);
+    assert.ok(b.bad === 3 && b.cd === 4, `S3g: ${w} before the cd is off the list (bad ${b.bad}, cd ${b.cd})`);
+  }
   for (const w of ['touch f', 'sed -i s/a/b/ f', 'echo hi | tee f', 'mv a b', 'ln -s a b', 'node x.js', 'npx tsc', ': > f', 'echo x >> f', 'cp a b', 'git status', 'g add f', 'rm -f f', 'mkdir d',
     'perl -pi -e s/a/b/ f', 'eval "touch f"', 'find . -delete', ': 2> f', 'echo x &> f', 'echo x 2>&1', '$fn a', '"$R" x', 'x=`touch f`', 'x=$(touch f)', 'x=1 touch f',
     'while true; do :; done', 'until true; do :; done', 'for i in 1; do :; done', 'cat <<< x', 'if true; then :; fi', 'm a b > f', 'm a b; touch f']) {
