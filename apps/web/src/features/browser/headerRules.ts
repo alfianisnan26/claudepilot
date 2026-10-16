@@ -21,7 +21,7 @@ export const parseHosts = (text: string): string[] => text.split(/[\s,]+/).filte
 export function editRule(rules: BrowserHeaderRule[], index: number, field: HeaderRuleField, text: string): BrowserHeaderRule[] {
   return rules.map((rule, i) => {
     if (i !== index) return rule;
-    const next: BrowserHeaderRule = { ...rule };
+    const next: BrowserHeaderRule = { hosts: rule.hosts, name: rule.name, secret: rule.secret };
     if (field === 'hosts') next.hosts = parseHosts(text);
     else if (field === 'key') {
       const key = text.trim();
