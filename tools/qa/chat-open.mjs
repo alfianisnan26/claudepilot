@@ -305,23 +305,11 @@ async function runConfig(cookie, cfg) {
     if (OPEN_ONLY) return;
 
     // 5. A cut tool result opens whole.
-    const findShowAll = `(() => { const e = [...document.querySelectorAll('button')].find((x) => /Show all \\(/.test(x.innerText || x.textContent) && x.getBoundingClientRect().height > 0); if (!e) return null; e.scrollIntoView({ block: 'center', behavior: 'instant' }); const r = e.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2, h: r.height, label: (e.innerText || e.textContent).trim() }; })()`;
+    const findShowAll = `(() => { const e = [...document.querySelectorAll('button')].filter((x) => /Show all \\(/.test(x.innerText || x.textContent) && x.getBoundingClientRect().height > 0).pop(); if (!e) return null; e.scrollIntoView({ block: 'center', behavior: 'instant' }); const r = e.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2, h: r.height, label: (e.innerText || e.textContent).trim() }; })()`;
     let sa = await b.eval(findShowAll);
-    // The newest result sits in a folded run ("n steps. Latest: Bash ...") and a closed Bash row: tap the LAST collapsed one, up to 4 times
-    // (the run, then the row), until the cut Output shows its button. (The first "Bash" button is the oldest row, not the marker's.)
-    // The row is opened with a DOM click (a smooth scroll moves a coordinate under a tap); the Show all itself is a real tap below.
-    const openLast = `(() => { const bs = [...document.querySelectorAll('button[aria-expanded=false]')].filter((x) => /(^|\\s)(\\d+ steps?\\.|Bash)/.test(x.innerText || '') && x.getBoundingClientRect().height > 0); const e = bs[bs.length - 1]; if (!e) return null; const label = (e.innerText || '').trim().slice(0, 40); e.click(); return { label, left: bs.length - 1 }; })()`;
-    for (let i = 0; i < 6 && !sa; i++) {
-      const t = await b.eval(openLast);
-      if (!t) break;
-      await sleep(500);
-      sa = await b.eval(findShowAll);
-      console.log(`     opened "${t.label}" (${t.left} collapsed left): Show all ${sa ? 'found' : 'not found'}, ${await b.eval(`document.querySelectorAll('section[aria-label=Output]').length`)} Output blocks`);
-    }
+    // The newest result is the LAST "Show all (" in the page (the first belongs to an older 600 KB result, not the marker's). Its row sits in a
+    // folded run ("n steps. Latest: ...") and a closed Bash row, so the way to it is the menu's own Show all details switch.
     if (!sa) {
-      // What the first tap left in the DOM (the row's wrapper, cut short), for the report.
-      res.afterTap = await b.eval(`(() => { const e = document.querySelector('button[aria-expanded=true]'); return e ? e.parentElement.outerHTML.replace(/\\s+/g, ' ').slice(0, 900) : 'no expanded button'; })()`).catch(() => 'n/a');
-      console.log(`     after the taps: ${res.afterTap}`);
       // Show all details (the menu's own switch, remembered in localStorage): every row open, so the cut result's Output is in the page.
       await b.eval(`localStorage.setItem('claudepilot.chat-details', '1')`);
       await b.send('Page.reload', {});
@@ -332,6 +320,7 @@ async function runConfig(cookie, cfg) {
       sa = await b.eval(findShowAll);
       console.log(`     with Show all details on: Show all ${sa ? 'found' : 'not found'}`);
       res.showAllVia = sa ? 'details' : null;
+      if (sa) console.log(`     the newest Show all reads "${sa.label}" (the marker result is 409,657 chars whole)`);
     }
     if (!sa) {
       // Diagnostics for a miss: what the newest page holds as its last tool results, and which Output blocks the page shows.
