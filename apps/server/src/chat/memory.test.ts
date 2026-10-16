@@ -216,3 +216,25 @@ test('T-675: memoryItemId keeps a short workspace id whole and clips and hashes 
   assert.ok(id.length < 150, String(id.length));
   assert.equal(id, memoryItemId(long, '2026-10-15T02:00:00.000Z'), 'stable');
 });
+
+test('T-733 S1 (T-675): the 100/101-character boundary of memoryItemId, and the push subject fits the bus for every length', async () => {
+  const { createHash } = await import('node:crypto');
+  const { validateEvent } = await import('../notify/bus.js');
+  const since = '2026-10-15T02:00:00.000Z';
+  const ws100 = 'k'.repeat(100);
+  assert.equal(memoryItemId(ws100, since), `${ws100}@${since}`, '100 characters are kept whole, no hash');
+  const ws101 = 'k'.repeat(101);
+  const id101 = memoryItemId(ws101, since);
+  const hash = createHash('sha256').update(ws101).digest('hex').slice(0, 10);
+  assert.equal(id101, `${'k'.repeat(100)}.${hash}@${since}`, '101 characters: clipped to 100, a dot, 10 hex of the whole id');
+  assert.equal(id101.indexOf('.'), 100);
+  assert.match(id101, /^k{100}\.[0-9a-f]{10}@/);
+  // The hash covers the whole id: two ids that differ only after the clip stay two items.
+  assert.notEqual(memoryItemId(`${'k'.repeat(100)}a`, since), memoryItemId(`${'k'.repeat(100)}b`, since));
+  // The bus drops a subject id it does not accept (bus.ts ID: 200 characters): the push subject is `attention:workspace_memory:<id>`.
+  for (const n of [100, 101, 300, 1000]) {
+    const w = 'k'.repeat(n);
+    const out = validateEvent({ kind: 'attention', subject: { type: 'portal', id: `attention:workspace_memory:${memoryItemId(w, since)}` }, facts: {} }, 'e1', since);
+    assert.equal(typeof out, 'object', `${n}-character workspace id: ${String(out)}`);
+  }
+});
