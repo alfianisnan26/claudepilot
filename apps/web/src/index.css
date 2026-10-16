@@ -298,9 +298,9 @@ body {
 
 /* T-772: forced-colors drops box-shadow rings, so every focusable control gets a real system-colour outline. Unlayered on
    purpose: it must beat any utility (outline-hidden, outline-none, the slider reset above). Containers that only take
-   programmatic focus (tabindex="-1") keep no ring. */
+   programmatic focus carry data-focus-container and keep no ring; a tabindex="-1" control (a real button) still gets one. */
 @media (forced-colors: active) {
-  :focus-visible:not([tabindex='-1']) {
+  :focus-visible:not([data-focus-container]) {
     outline: 2px solid Highlight;
     outline-offset: 2px;
   }

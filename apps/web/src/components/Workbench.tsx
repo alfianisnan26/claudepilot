@@ -119,6 +119,7 @@ export function Workbench({ panels, focus, pinAlone = false }: { panels: Panel[]
               ref={(el: HTMLElement | null) => void (el ? sections.current.set(p.id, el) : sections.current.delete(p.id))}
               aria-label={p.label}
               tabIndex={-1}
+              data-focus-container
               data-panel={p.id}
               data-state={at.state}
               initial={{ opacity: 0, y: 6 }}

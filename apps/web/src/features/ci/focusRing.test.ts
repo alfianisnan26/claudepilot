@@ -20,16 +20,32 @@ function lines(file: string): string[] {
   return readFileSync(join(srcDir, file), 'utf8').split('\n');
 }
 
-// `outline-none` is allowed only on a container that takes programmatic focus (`tabIndex={-1}`, on the same line or within the
-// 14 lines above it: dialogs, panels, popovers, <main>). Anything a person can tab to must use `outline-hidden`.
+// `outline-none` is allowed only on a container that takes programmatic focus and says so with an explicit marker: the attribute
+// `data-focus-container` (set where the container is made, on the same line or within the 14 lines above the class: dialogs,
+// panels, popovers, <main>). The marker is not a stand-in for `tabindex="-1"`: a real control that happens to have
+// `tabIndex={-1}` (a hidden submit, a KeyBar key) is not a container and must use `outline-hidden`. A marker is valid only
+// on an element that also has `tabIndex={-1}` (a container nobody can tab to). Anything a person can tab to uses `outline-hidden`.
 const OUTLINE_NONE = /(^|[\s'"`:\]])(?:[a-z-]+:)*outline-none(?=[\s'"`]|$)/;
+const MARKER = /(^|[\s<])data-focus-container(?=[\s/>=]|$)/;
 const PROGRAMMATIC_ONLY = /tabIndex=\{-1\}/;
+const LOOKBACK = 14;
 
 function outlineNoneHits(file: string, src: string[]): string[] {
   const hits: string[] = [];
   src.forEach((line, i) => {
     if (!OUTLINE_NONE.test(line)) return;
-    const near = src.slice(Math.max(0, i - 14), i + 1);
+    const near = src.slice(Math.max(0, i - LOOKBACK), i + 1);
+    if (!near.some((l) => MARKER.test(l))) hits.push(`${file}:${i + 1}`);
+  });
+  return hits;
+}
+
+/** A marker with no `tabIndex={-1}` beside it (up to the lookback, and a few lines after) would hide the ring of a tabbable element. */
+function markerHits(file: string, src: string[]): string[] {
+  const hits: string[] = [];
+  src.forEach((line, i) => {
+    if (!MARKER.test(line)) return;
+    const near = src.slice(Math.max(0, i - LOOKBACK), i + LOOKBACK + 1);
     if (!near.some((l) => PROGRAMMATIC_ONLY.test(l))) hits.push(`${file}:${i + 1}`);
   });
   return hits;
@@ -42,11 +58,25 @@ test('no focusable control uses outline-none (use outline-hidden)', () => {
   assert.deepEqual(hits, []);
 });
 
-test('outline-none is only tolerated beside tabIndex={-1}', () => {
+test('a data-focus-container marker sits only on an element with tabIndex={-1}, and the 8 containers are all marked', () => {
+  const files = sourceFiles();
+  assert.deepEqual(files.flatMap((f) => markerHits(f, lines(f))), []);
+  const marked = files.filter((f) => lines(f).some((l) => MARKER.test(l)));
+  assert.equal(marked.length, 8, `marked files: ${marked.join(', ')}`);
+});
+
+test('outline-none is only tolerated beside the data-focus-container marker', () => {
   assert.deepEqual(outlineNoneHits('x.tsx', ['<button className="outline-none focus-visible:ring-2">']), ['x.tsx:1']);
   assert.deepEqual(outlineNoneHits('x.tsx', ['<input className="focus:outline-none">']), ['x.tsx:1']);
-  assert.deepEqual(outlineNoneHits('x.tsx', ['<div tabIndex={-1}', 'className="outline-none">']), []);
+  assert.deepEqual(outlineNoneHits('x.tsx', ['<div tabIndex={-1}', 'data-focus-container', 'className="outline-none">']), []);
   assert.deepEqual(outlineNoneHits('x.tsx', ['<div className="outline-hidden">']), []);
+  // a REAL tabindex=-1 control (no marker) is not excluded: its outline-none is flagged
+  assert.deepEqual(outlineNoneHits('x.tsx', ['<button type="button" tabIndex={-1}', 'className="outline-none">']), ['x.tsx:2']);
+  // a marker is not matched inside another attribute name or a class string
+  assert.deepEqual(outlineNoneHits('x.tsx', ['<div data-focus-containers className="outline-none">']), ['x.tsx:1']);
+  // a marked container with no tabIndex={-1} is flagged: the marker would hide the ring of a tabbable element
+  assert.deepEqual(markerHits('x.tsx', ['<div data-focus-container className="outline-none">']), ['x.tsx:1']);
+  assert.deepEqual(markerHits('x.tsx', ['<div tabIndex={-1}', 'data-focus-container>']), []);
 });
 
 // Glued class names (`focus:outline-hiddenfocus-visible:ring-2`) are silently dead: neither utility applies. Two detectors:
@@ -150,6 +180,8 @@ test('index.css keeps a real outline for focusable controls under forced-colors'
   const css = readFileSync(join(srcDir, 'index.css'), 'utf8');
   assert.match(
     css,
-    /@media \(forced-colors: active\) \{\s*:focus-visible:not\(\[tabindex=['"]-1['"]\]\) \{[^}]*outline: [^;}]*solid[^;}]*;/,
+    /@media \(forced-colors: active\) \{\s*:focus-visible:not\(\[data-focus-container\]\) \{[^}]*outline: [^;}]*solid[^;}]*;/,
   );
+  // the exclusion is the marker, never tabindex=-1 (a real control with tabindex=-1 keeps its ring)
+  assert.doesNotMatch(css, /:focus-visible:not\(\[tabindex/);
 });
