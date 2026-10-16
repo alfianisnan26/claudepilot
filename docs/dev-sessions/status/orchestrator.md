@@ -18,16 +18,17 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   T-426 S1i on wip/qa-t611s1c-48d3230 48d3230f (44c293ea + all probes), M1 + 5fad547e-loop mutants.
 - QA UI 8b13bb5a (no Write tool, 7939/7944/7947): REVIEWS APPROVE: T-781 S6 8006, T-611 S1b 8018, T-781 S7 8049.
   QA T-675 R2 PASS WITH GAPS (mutant `await #restarting` removed at controller.ts:2330 survives) -> R2b to Impl.
-  REVIEW T-611 S1c APPROVE 8095 (all 3 follow-ups fixed). Now QA T-416 S2 8be917e6 (gates on 'lost', mutant per gate).
+  REVIEW T-611 S1c APPROVE 8095. QA T-416 S2 PASS WITH GAPS 8131 (gates red; GAP: workspace stop/person end/restart leave a stale
+  kept record -> Bypass could return; HELD for S2b). Now REVIEW T-736 S3c+S3d (read only).
 - QA BE 2 42e5408f (no Write tool, 7946): QA T-733 1afaf8a6 PASS 8007 (S1 S4 S6; S5 not delivered). QA T-781 S6 PASS WITH GAPS
-  8054; S7 PASS WITH GAPS 8083 (spaced clip probes 5/5: no leak; S5-3c dead code). Now QA T-736 S3d 41daac15 (+S3c if unverified).
+  8054; S7 PASS WITH GAPS 8083 (spaced clip probes 5/5: no leak). QA T-736 S3d PASS WITH GAPS 8130 (write list misses touch/sed -i/...;
+  S3c QA 7875/7907). Now QA T-611 S2 80ffedea.
 - IMPL 7cc1b2f5: T-736 S3d DONE 41daac15 8078 (job 68d3cd21 38/0, M5 M7 red). Now T-675 R2b on ticket/T-675-r2b from b4024e17
   (kill the controller.ts:2330 mutant or prove the real guard) -> T-772 S2.
-- BE INFRA fad38191: T-426 S1i DONE b7fa0ba7 8019 (67/0, M1 M2 red). Lead merged S1i into S1b: ab91adf9 (union of appended tests,
-  63). T-611 S1c DONE 44c293ea 8052 (job b22e7964 80/0 proves the merge). Now T-611 S2 from 44c293ea (+ `reading=failed` doc line)
-  -> T-524 S3c + T-733 S5 -> T-612 S1.
+- BE INFRA fad38191: T-611 S1c DONE 44c293ea 8052 (80/0, proves the S1i merge ab91adf9). T-611 S2 DONE 80ffedea 8129
+  (JOB_RUN_AVOID_NODES opt-in; 83/0, M1 M2 red). Now T-736 S3e (widen write list) from 41daac15 -> T-524 S3c + T-733 S5 -> T-612 S1.
 - BACKEND 3484bd4d: T-416 S2 DONE 8be917e6 (lead read: 'lost' takes the wake's lead gates; a person's stop not kept) -> QA UI.
-  Now T-781 S8 (S5-3c dead line, in-flight assertion) on ticket/T-781-s8 from 8eeef663 -> T-537 (2-line docs).
+  Now T-781 S8 (S5-3c dead line, in-flight assertion) from 8eeef663 -> T-416 S2b (stale kept record) -> T-537 (docs).
 - HELD: T-401 S2b a4ad3052 (QA PASS, review APPROVE 7387): a person's OK on the gate change (charter wall; 8023), then merge + gate.
   T-426 S1h/S1e after T-401; T-379 S2 3f11b28 behind it. T-578 -> owner. T-631 -> coordinator.
 
@@ -69,9 +70,9 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   T-527 finding 4 (owner triggers tagging owner-checklist); T-657 reopen T-259/T-317/T-338; T-739 A scoring defs (scoring = person's wall).
 
 ## NEXT (in order, as slots free)
-1. Next batch: T-611 S1b+S1i+S1c 44c293ea, T-736 S3c+S3d 41daac15, T-675 R2b (each after QA); T-781 follow-ups.
+1. Next batch: T-611 S1b+S1i+S1c+S2 80ffedea, T-736 S3c-S3e, T-675 R2b, T-781 S8 (each after QA/review).
 2. T-401 after a person's OK (8023) -> T-426 S1e -> T-379 S2 3f11b28; deploys are the coordinator's.
-3. T-416 S2 after QA (+ a blind review). ticket_list arg parse failed 4x: use ticket_get from this queue.
+3. T-416 S2+S2b after QA of S2b (+ a blind review). ticket_list arg parse failed 4x: use ticket_get from this queue.
 4. RTK: T-340 (person/coordinator) -> T-341 merge -> T-306 item 3. 5. T-537. 6. T-513. 7. T-472 live re-check (needs portal_status), T-422, T-147, T-438, T-425, T-436, T-437, T-432, T-382, T-377, T-386, T-409, T-402, T-398,
    T-399, T-370 HOLD, T-371..T-374, T-363, T-451, T-470, T-507, T-508, T-512, T-520; T-404 open till deployed.
 
