@@ -23,11 +23,11 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - QA PERF 8e8912fc (perf-tester/sonnet): T-426 S1h PASS 14/14 (8270). Now QA T-611 S2b 96d7c148 -> QA T-611 merge f722dca1.
 - QA UI 8b13bb5a (no Write): T-772 S2 PWG (8336); T-611 S2b review APPROVE (8349); T-736 S3f review CHANGES 2 (8359);
   T-675 R2c PWG (Job b3f31fbc: each guard alone untested -> R2d; T-675 refuses comments, posted on T-416 8423).
-  T-416 S2b 8382eb00 PWG (8445: :3218 untested -> S2c Backend; S2b to batch). Now blind review T-623 S2 (read only).
+  T-416 S2b PWG (8445 -> S2c). Reviews APPROVE: T-623 S2 (8468), T-781 S8+S8b (8469). Now QA T-591 S3 9861313b.
 - QA BE 2 42e5408f (no Write): T-736 S3f PWG (8412 -> S3g); T-781 S8b PWG (8429: cascade -> S8c; S8+S8b batch, 8439).
   Now QA T-623 S2 4869e756 (lead read secrets diff 8438; rev 3 via API not editor until T-856).
-- IMPL 46632d91 (sonnet): T-772 S2 DONE 188cd077. Now T-591 S3 lastReleased fix (ticket/T-591-s3 from b2932d0e) -> T-772 S2b
-  (container marker, not tabindex -1) -> T-525 proposal draft.
+- IMPL 46632d91 (sonnet): T-591 S3 DONE 9861313b (8451, Job 28/28, mutant 2 red). Now T-772 S2b (ticket/T-772-s2b from
+  188cd077, container marker) -> T-525 proposal draft.
 - BE INFRA 16c2494f (sonnet): T-736 S3f a44c7cf8; T-611 merge f722dca1 DONE (8411, Job 112/112; pack stale, lead regenerates);
   T-623 S2 DONE 4869e756 (8418, 48/48, 2 mutants). Now T-736 S3g -> T-610 (8267) -> T-524 S3c + T-733 S5 -> T-612 S1.
 - BACKEND 3484bd4d: DONE T-781 S8b e663b9e9 (Jobs 18d0360b, 02b167e7), T-675 R2c f7b4e34a (8ab9c4fa 22/22), T-416 S2b
