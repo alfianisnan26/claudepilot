@@ -44,7 +44,7 @@ export interface ChatToolHost {
   /** T-490 (D-63): the model a role runs on by the workspace persona's agent definition, or null. Unset: none known. */
   roleModel?: (workspaceId: string, role: string) => string | null;
   /** A model, effort or mode change (the controller's rules: never Bypass or Auto from here). */
-  control(id: string, op: ChatControl['op'], args?: ChatControl['args']): Promise<void>;
+  control(id: string, op: ChatControl['op'], args?: ChatControl['args'], opts?: { actor?: string }): Promise<void>;
   interrupt(id: string): Promise<void>;
   end(id: string): Promise<void>;
   /** The text of the session's latest reply, or null. */
@@ -198,7 +198,7 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
       const deliver = async () => {
         for (const [op, value, label] of asks) {
           try {
-            await chat.control(child.id, op, value);
+            await chat.control(child.id, op, value, { actor: ctx.actor });
             applied.push(label);
           } catch (e) {
             const why = e instanceof Error ? e.message.slice(0, 120) : 'refused';

@@ -655,8 +655,8 @@ export class ChatController {
       await this.end(child.id).catch(() => undefined);
       throw new Error(`no free slot to start it (${child.slotWait})`);
     }
-    await this.control(child.id, 'mode', { mode: 'dontAsk' });
-    await this.control(child.id, 'model', { model: 'sonnet' });
+    await this.control(child.id, 'mode', { mode: 'dontAsk' }, { actor: HANDOFF_ACTOR });
+    await this.control(child.id, 'model', { model: 'sonnet' }, { actor: HANDOFF_ACTOR });
     const prompt =
       `[Your role: ${HANDOFF_QA}.] Verify ${a.ticket} at commit ${a.sha} (the implementer's branch ticket/${a.ticket}-*, fetched from origin). ` +
       `Read the ticket, check the diff against it, run its tests as the brief allows, never close the ticket. End your reply with line 1 exactly "PASS ${a.sha}" or "FAIL ${a.sha}: <short reasons>".`;
@@ -3309,7 +3309,7 @@ export class ChatController {
   /** The one request that enters Bypass, under the grant (the policy and the capability checked by the caller, and again here). */
   async #setBypass(sessionId: string): Promise<void> {
     if (!this.#bypassAllowed()) throw new AppError(BYPASS_BLOCKED, 'Bypass is blocked by policy.', { status: 403 });
-    await this.#live(sessionId); // a process stopped for the retry comes back with the flag (capable, and the policy allows it)
+    await this.#live(sessionId, true, true, 'portal'); // T-723: the portal restores Bypass itself (#keepBypass), so `portal` is the true actor here; a process stopped for the retry comes back with the flag (capable, and the policy allows it)
     if (this.#chat.row(sessionId)?.bypass_capable !== 1) throw new AppError(BYPASS_NOT_CAPABLE, 'This session wasn’t started to allow Bypass.', { status: 409 });
     this.#bypassGrant.add(sessionId);
     try {

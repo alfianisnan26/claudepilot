@@ -7,7 +7,7 @@ import type { ChatSession } from '@portal/contracts';
 import { recommendMove } from '../claudeusage/recommend.js';
 import type { Platform, PlatformModule } from '../platform/index.js';
 import { declareAutoTransferPolicies } from './authz.js';
-import { AutoTransferEngine } from './engine.js';
+import { AutoTransferEngine, ENGINE_ACTOR } from './engine.js';
 import { realClock, type ChatPort, type ClockPort, type UsagePort } from './ports.js';
 import { createAutoTransferRoutes } from './routes.js';
 import { registerAutoTransferTools } from './portalTools.js';
@@ -32,7 +32,7 @@ function ports(deps: Platform['deps']): { chat: ChatPort; usage: UsagePort } | n
       switchOptions: (id) => c.switchOptions(id),
       switchClaude: (id, to, o) => c.switchClaude(id, to, o),
       ...(typeof (chat as { modelFamilies?: unknown }).modelFamilies === 'function' ? { modelFamilies: (claudeId: string) => (chat as unknown as { modelFamilies(id: string): string[] | null }).modelFamilies(claudeId) } : {}),
-      setModel: (id, model) => (chat as unknown as { control(id: string, op: 'model', args: { model: string }): Promise<void> }).control(id, 'model', { model }),
+      setModel: (id, model) => (chat as unknown as { control(id: string, op: 'model', args: { model: string }, opts: { actor: string }): Promise<void> }).control(id, 'model', { model }, { actor: ENGINE_ACTOR }),
       onEvent: (cb) => c.onEvent(cb),
       history: (id, after) => c.history(id, after),
       send: (id, text, o) => (chat as unknown as { send(id: string, uuid: string, text: string, opts: object): Promise<void> }).send(id, randomUUID(), text, o),

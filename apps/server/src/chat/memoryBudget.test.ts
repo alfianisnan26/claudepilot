@@ -5,9 +5,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { AppError } from '@isnanme/core';
+import { KEEPGOING_ACTOR } from '@portal/contracts';
+import { keepGoingChatPort } from '../keepgoing/index.js';
 import { parseMemoryProbe, type MemoryReading } from '../workspaces/memory.js';
 import { MEMORY_BUDGET, MEMORY_HEADROOM_BYTES, SESSION_MEMORY_ESTIMATE_BYTES, WorkspaceMemory } from './memory.js';
-import { ChatStore } from './store.js';
+import { AUDIT_ACTOR_MAX, ChatStore } from './store.js';
 import { firstTurn, liveSession, sleep, until, vanish } from './testkit.js';
 
 const GiB = 1024 ** 3;
@@ -639,6 +641,60 @@ test('T-723 #4: allowBypass of an asleep session refused for memory names the ac
   try {
     await assert.rejects(s.controller.allowBypass(id, { actor: 'ui' }), isBudget);
     assert.deepEqual(actorsOfId(s, id), ['ui']);
+  } finally {
+    await s.done();
+  }
+});
+
+test('T-723 G1: a control with no actor on an asleep session writes `portal`, not a person', async () => {
+  const s = await asleepShort();
+  try {
+    await assert.rejects(s.controller.control(s.id, 'model', { model: 'sonnet' }), isBudget);
+    await assert.rejects(s.controller.control(s.id, 'mode', { mode: 'plan' }), isBudget);
+    assert.deepEqual(actorsOf(s), ['portal', 'portal']);
+  } finally {
+    await s.done();
+  }
+});
+
+test('T-723 #8: a queued start refused for memory names who started it (`started_by`), not `portal`', async () => {
+  const s = await liveSession();
+  try {
+    const caps = queueing(s);
+    const b = budget(ONE_FITS);
+    s.controller.memory = b.memory;
+    const q = await s.controller.create({ workspaceId: 'docker/ws1' }, { actor: 'ticket:T-12' });
+    assert.ok(q.slotWait, 'q waits for a slot');
+    b.set(ONE_FITS + 1);
+    caps.perWorkspace = 10;
+    await until(() => s.controller.get(q.id)!.state === 'interrupted', 4000);
+    assert.deepEqual(actorsOfId(s, q.id), ['ticket:T-12']);
+  } finally {
+    await s.done();
+  }
+});
+
+test('T-723: Keep going’s resume of an asleep session names its own actor, not `ui`', async () => {
+  const s = await asleepShort();
+  try {
+    await assert.rejects(keepGoingChatPort(s.controller)!.resume(s.id), isBudget);
+    assert.deepEqual(actorsOf(s), [KEEPGOING_ACTOR]);
+  } finally {
+    await s.done();
+  }
+});
+
+test('T-723 G2: an audit row keeps the actor on one line and cut: control characters and newlines become a space', async () => {
+  const s = await liveSession();
+  try {
+    const chat = new ChatStore(s.store);
+    chat.addAudit({ severity: 'low', kind: 'test.actor', sessionId: s.id, actor: `ui\nforged: bypass.entered\u0007\r\n${'x'.repeat(500)}` });
+    chat.addAudit({ severity: 'low', kind: 'test.actor', sessionId: s.id, actor: 'portal-mcp:ptk_1' });
+    const [plain, long] = chat.audit({ kind: 'test.actor' }).map((a) => a.actor ?? '');
+    assert.equal(plain, 'portal-mcp:ptk_1', 'a normal actor is untouched');
+    assert.ok(long.startsWith('ui forged: bypass.entered x'), long.slice(0, 40));
+    assert.ok(!/[\p{Cc}]/u.test(long), 'no control character');
+    assert.equal(long.length, AUDIT_ACTOR_MAX);
   } finally {
     await s.done();
   }

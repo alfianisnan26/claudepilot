@@ -109,7 +109,7 @@ describe('a run (FR13 to FR19)', () => {
       assert.equal(s.bypassCapable, false);
       assert.equal(s.startedBy, `portal:trigger-${trigger.id}`, 'a ticket_session session carries the trigger as its starter');
       const ctl = h.chat.of('control').filter((c) => c.args[0] === r.sessionId);
-      assert.deepEqual(ctl.map((c) => c.args.slice(1)), [['mode', { mode: 'acceptEdits' }]]);
+      assert.deepEqual(ctl.map((c) => c.args.slice(1)), [['mode', { mode: 'acceptEdits' }, { actor: `portal:trigger-${trigger.id}` }]], 'T-723: the audit names the trigger');
     }
     for (const c of h.chat.of('create')) assert.ok(!Object.hasOwn(c.args[1] as object, 'bypassOptIn'));
   });
