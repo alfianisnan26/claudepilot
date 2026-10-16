@@ -12,17 +12,17 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 ## IN FLIGHT (6 of 6, D-71)
   Lanes' ticket_comment refused on unassigned tickets (T-341, T-549, T-675): verdicts live in their replies + this file.
 - QA PERF 7e4879c7: T-426 S1h PWG 7880 (-> S1i redact loop). REVIEW T-781 S5 CHANGES (7905 -> S7). REVIEW T-772 S1b
-  CHANGES (2xl: false positive, no self-test -> S2, 7916). PROBES S1b 2a494942+8c9e58fc+9be66b11, S1i 6c8a2392, S6 d478c8c0, C5 120f76bf (after 9be66b11). Waits S1b DONE (QA Job).
+  CHANGES (2xl: false positive, no self-test -> S2, 7916). PROBES S1b 2a494942+8c9e58fc+9be66b11, S1i 6c8a2392, S6 d478c8c0, C5 120f76bf. Now QA T-611 S1b Job on wip/qa-t611s1b-f74638f.
 - QA UI 8b13bb5a: T-736 S3c PWG 7875 (-> S3d). REVIEW T-781 S3 APPROVE (F1' F2). REVIEW T-723 S3c APPROVE (7908 gaps).
-  PLAN QA T-781 S6 7918; no Write tool (7939, coordinator 7944). REVIEW S6 PRE APPROVE a-d 7945. T-733 PRE CHANGES 7950 (->Backend). PLAN QA T-772 S2 7963. Waits S6 delta / T-772 S2.
+  PLAN QA T-781 S6 7918; no Write tool (7939, coordinator 7944). REVIEW S6 PRE APPROVE a-d 7945. T-733 PRE CHANGES 7950 (->Backend). PLAN QA T-772 S2 7963. Now REVIEW T-781 S6 final (delta to fb70258d).
 - QA BE 2 42e5408f: QA T-781 S5 FAIL (F1: prod adapter index.ts has no interrupt; 7905). QA T-723 S3c PWG 7903 (39/0, m1 m3
-  killed). T-736 C1 holds 7907. T-723 m2 KILLED 7932 = PASS. No Write either (7946: 3 findings -> Impl S6). T-611 S1b PRE CHANGES C5 7949 (->BE Infra). PLAN QA T-733 7964. Now QA T-733 Job at 1afaf8a6; then T-781 S6 QA.
-- T-781 (D-76) now assigned to the lead: verdicts posted 7905. S1-S5 built; S6 (QA FAIL F1) and S7 open.
-- IMPL lane 7cc1b2f5 (sonnet, satria; c959661f ended: T-772 S1b DONE 1e1e0ba1 7900). Now T-781 S6 (7905: a prod interrupt,
-  b re-check, c redact before clip, d tests; + 7945/7946 items 1-5 sent) -> T-781 S7 (F2 + S5 items) -> T-736 S3d -> T-772 S2 (7599 + 7916).
+  killed). T-736 C1 holds 7907. T-723 m2 KILLED 7932 = PASS. No Write either (7946: 3 findings -> Impl S6). T-611 S1b PRE CHANGES C5 7949 (->BE Infra). PLAN QA T-733 7964. Now QA T-733 Job at 1afaf8a6; then QA T-781 S6 on wip/qa-t781s6-8fac4ec.
+- T-781 (D-76) assigned to the lead: 7905, 7944, 7947. S6 DONE fb70258d -> QA + review; S7 open.
+- IMPL lane 7cc1b2f5 (sonnet, satria; c959661f ended: T-772 S1b DONE 1e1e0ba1 7900). T-781 S6 DONE fb70258d 7992 (job b38e850f 145/0). 
+  Now T-781 S7 (F2 + S5 items 1-4 + sync-throw mutant) -> T-736 S3d -> T-772 S2 (7599 + 7916).
 - BE INFRA fad38191 (sonnet; 3958fe14 ended: T-426 S1h DONE 9573a085 7847, job 7a3a11e7 65/0, 4 mutants killed; lead read N1
-  redact/safe_name/say: mask before cut, holds). Now T-611 S1b on ticket/T-611-s1b (from S1h; S1 re-applied by hand, conflicts)
-  (+C5 7949 stale placement) -> T-426 S1i (7888; lead merges it into T-611 S1b) -> T-611 S2 -> T-524 S3c + T-733 S5 (job-run.sh) -> T-612 S1.
+  redact/safe_name/say: mask before cut, holds). T-611 S1b DONE 16eb9975 7993 (job 6d364883 78/0; lead read C5 kubectl patch: own Job only). 
+  Now T-426 S1i from S1h (7888; lead merges it into T-611 S1b) -> T-611 S2 -> T-524 S3c + T-733 S5 (job-run.sh) -> T-612 S1.
 - BACKEND 3484bd4d (sonnet; b2f0e95f ended: T-781 S5 DONE 71f9dc76 7869, job f86ac5de 274/0, 4 mutants killed -> QA BE 2 queue).
   T-733 S4 S6 S1 DONE 1afaf8a6 (7950 fix in) -> QA BE 2. Now T-675 (findings 4/5 + R2) (S5 job-run -> BE Infra) (T-781 moved to Impl, D-76). T-778 = person.
 - HELD: T-426 S1e 2174eee1 QA PASS 6169, review CHANGES 7121 -> fix, re-QA, merge after T-401. T-578 51f6c153 review CHANGES 6168 -> owner. T-631 CHANGES 5850 -> coordinator.
