@@ -595,6 +595,13 @@ key's name, never a value. The audit, the spec hash input and the pool hold the 
 the value by the key's own variable name (`--redact-env <KEY>`), since the workspace has an env file's variables, not a variable called after the entry. Without
 `key` a rule behaves as before (the whole value).
 
+**The pool editor (T-856).** Under Advanced the editor lists the rules (`features/browser/BrowserEditor.tsx`): per rule the header name, the secret's name, the
+**Key** (an InfoTip explains it; empty means the entry's whole value, and the property is then omitted on save, since the server refuses an empty variable name) and
+the hosts, with Add and Remove (at most 10, the server's limit). Every edit goes through `headerRules.ts`, which copies the rule and changes one field, so a `key`
+(or any field the editor does not know) set through the API or MCP survives every edit and every save. Before T-856 the editor had no headers section: it kept the
+pool's `headers` unchanged on save (it spreads the content), so a rule set through the API was not lost, but it could not be seen or edited. The editor shows names
+only, never a value. Hosts commit when the field loses focus.
+
 **How it works** (no proxy: HTTPS would need a CA the browser trusts):
 
 | Step | What happens |
