@@ -367,3 +367,135 @@ test('QA-O5 a clean artifact set with --pool-env: rc 0, nothing deleted, and the
   assert.equal(r.code, 0, r.out);
   assert.deepEqual(tree(join(out, 'reports')).sort(), ['clean.xml', 'has space.txt', 'unicode-é.txt']);
 });
+
+// ---------- S1i (T-426): redact() must end when a mask value is, or contains, "REDACTED". Written before the run; NOT run when committed. ----------
+// Every run is under a hard `timeout -k 2 10`; rc 124 or 137 is a hang and a FAIL. Values are built at run time. A value that holds REDACTED
+// cannot be checked for absence as a whole word (REDACTED is the replacement), so those cases check the random parts around it instead.
+// Mutants (never committed): M1 the fix skips a mask that contains REDACTED (the value stays unmasked: the random-part checks in S1i-b/c kill it);
+// M2 `while` becomes `if` in redact() (only the first hit is masked: S1i-g kills it). Reverting the fix (the loop as in 5fad547e) must hang S1i-a.
+const SECOND_ID = 'E2E_CF_ACCESS_CLIENT_SECRET';
+function runT(w: { root: string; bin: string }, argv: string[], over: Record<string, string>) {
+  const t0 = Date.now();
+  const r = spawnSync('timeout', ['-k', '2', '10', 'bash', SCRIPT, ...argv], { cwd: w.root, encoding: 'utf8', timeout: 20_000, env: {
+    PATH: `${w.bin}:/usr/local/bin:/usr/bin:/bin`, HOME: join(w.root, 'home'), TMPDIR: w.root, FAKE: w.root, GIT_CONFIG_GLOBAL: join(w.root, 'gitconfig'), GIT_CONFIG_NOSYSTEM: '1',
+    JOB_RUN_IMAGE: 'registry.test/claudepilot/workspace:1-dev-1', JOB_RUN_POLL_S: '0.1', JOB_RUN_WATCH_PID: 'none', JOB_RUN_LOG: join(w.root, 'job.log'),
+    NODE_AUTH_TOKEN: `fx${hex(18)}`, PILOT_SESSION_ID: 'chat-a', PILOT_AGENT: 'qa', ...over } });
+  const hung = r.status === 124 || r.status === 137 || r.signal !== null;
+  return { code: r.status, out: `${r.stdout}${r.stderr}`, ms: Date.now() - t0, hung };
+}
+const ARGS2 = (out: string) => ['--repo', 'claudepilot', '--ref', 'main', '--pool-env', POOL_ID, '--pool-env', SECOND_ID, '--artifacts', 'reports', '--out', out, '--', 'true'];
+// One leaking file per value, named after it (the name goes through safe_name -> redact), body holds every value so the scan deletes it.
+function leak(values: string[], names: (v: string) => string[], pool: Record<string, string>, argv2 = false) {
+  const body = `x ${values.join(' ')}\n`;
+  const files: Record<string, string> = { 'clean.xml': '<testsuites/>' };
+  for (const v of values) for (const n of names(v)) files[n] = body;
+  const w = world(files);
+  const out = join(w.root, 'out');
+  const r = runT(w, argv2 ? ARGS2(out) : ARGS(out), pool);
+  return { w, out, r };
+}
+const noHang = (r: { hung: boolean; ms: number; code: number | null; out: string }, what: string) => {
+  assert.ok(!r.hung, `${what}: HANG (rc ${r.code}, ${r.ms} ms): redact() did not end`);
+  assert.ok(r.ms < 9_000, `${what}: took ${r.ms} ms`);
+};
+
+test('QA-S1i-a a mask that IS "REDACTED": the run ends, red (rc 3), the leaking file is deleted, the clean one stays', () => {
+  const { out, r } = leak(['REDACTED'], (v) => [`${v}.txt`, `pre${v}post.txt`], { [POOL_ID]: 'REDACTED' });
+  noHang(r, 'mask REDACTED');
+  assert.equal(r.code, 3, r.out);
+  assert.deepEqual(tree(join(out, 'reports')).sort(), ['clean.xml']);
+  assert.ok(!/job=|node-auth-token=|git-token=/.test(r.out));
+});
+
+test('QA-S1i-b a mask that CONTAINS REDACTED (middle, start, end, doubled): ends, and the random parts around it never reach the output', () => {
+  const cases = [[`${hex(5)}REDACTED${hex(5)}`], [`REDACTED${hex(8)}`], [`${hex(8)}REDACTED`], ['REDACTEDREDACTED'], [`REDACTED${hex(3)}REDACTED`]];
+  for (const [v] of cases) {
+    const parts = v.split('REDACTED').filter((p) => p.length > 0);
+    const { out, r } = leak([v], (x) => [`${x}.txt`, `a_${x}`], { [POOL_ID]: v });
+    noHang(r, `mask ${h16(v)}`);
+    assert.equal(r.code, 3, `${h16(v)}: ${r.out}`);
+    assert.ok(!r.out.includes(v), `${h16(v)}: the whole value reached the output`);
+    for (const p of parts) assert.ok(!r.out.includes(p), `${h16(v)}: the part ${h16(p)} of the value reached the output`);
+    assert.deepEqual(tree(join(out, 'reports')).sort(), ['clean.xml'], `${h16(v)}`);
+  }
+});
+
+test('QA-S1i-c a mask that overlaps REDACTED at its edge (a rotation of it, 8 and 9 characters): ends, deleted, the other characters never shown', () => {
+  const vals = ['EDACTEDR', 'DACTEDRE', 'EDACTED1', '1REDACTE', `REDACTED${hex(1)}`, `${hex(1)}REDACTED`, 'REDACTED_'];
+  for (const v of vals) {
+    const { r } = leak([v], (x) => [`${x}.txt`, `${x}${x}`, `${x}${x}${x}.log`], { [POOL_ID]: v });
+    noHang(r, `mask ${JSON.stringify(v)}`);
+    assert.equal(r.code, 3, `${JSON.stringify(v)}: ${r.out}`);
+    if (!v.includes('REDACTED')) assert.ok(!r.out.includes(v), `${JSON.stringify(v)} reached the output`);
+  }
+});
+
+test('QA-S1i-d an empty or short mask: refused before any kubectl call (rc 2, nothing shown), no hang; an empty NODE_AUTH_TOKEN leaves the pool mask working', () => {
+  for (const v of ['', 'abc', 'REDACT', 'REDACTE']) {
+    const w = world({ 'clean.xml': '<testsuites/>' });
+    const r = runT(w, ARGS(join(w.root, 'out')), { [POOL_ID]: v });
+    noHang(r, `short ${JSON.stringify(v)}`);
+    assert.equal(r.code, 2, `${JSON.stringify(v)}: ${r.out}`);
+    assert.equal(kubectlCalls(w), 0, 'a refused value makes no kubectl call');
+  }
+  const secret = `cs${hex(20)}`;
+  const { out, r } = leak([secret], (x) => [`${x}.txt`], { [POOL_ID]: secret, NODE_AUTH_TOKEN: '' });
+  noHang(r, 'empty npm token');
+  assert.equal(r.code, 3, r.out);
+  assert.ok(!r.out.includes(secret));
+  assert.deepEqual(tree(join(out, 'reports')).sort(), ['clean.xml']);
+});
+
+test('QA-S1i-e masks with regex and awk characters (. * & \\ / ^ $ [ ] ( ) | + ? { } # \' ") are literal: never shown, and the replacement is not expanded', () => {
+  const vals = [`a.*b&c\\d/e.${hex(3)}`, `^$[](){}|+?${hex(3)}`, `\\1&\\0&${hex(4)}`, `${hex(2)}&&&&${hex(2)}`, `.*.*.*.*${hex(3)}`, `a/b/c/d/${hex(3)}`, `x#y|z;w ${hex(3)}`, `"q'${hex(4)}"'`, `\\\\\\\\${hex(4)}`];
+  for (const v of vals) {
+    // a file name cannot hold "/": the slash-free vals have the name the value; the others get the value's slash-free part, and the body still holds the value
+    const { w, out, r } = leak([v], (x) => (x.includes('/') ? [`s${x.replace(/\//g, '_')}.txt`] : [`${x}.txt`, `k${x}`]), { [POOL_ID]: v });
+    noHang(r, `metachar ${h16(v)}`);
+    assert.ok(r.code === 3 || r.code === 2, `${h16(v)}: rc ${r.code}: ${r.out}`);
+    assert.ok(!r.out.includes(v), `${h16(v)}: reached the output`);
+    assert.ok(!logOf(w).includes(v), `${h16(v)}: reached the Job log`);
+    if (r.code === 3) assert.deepEqual(tree(join(out, 'reports')).sort().filter((n) => n !== 'clean.xml'), [], `${h16(v)}: a leaking file survived`);
+  }
+});
+
+test('QA-S1i-f two masks, one inside the other, in both pool orders and with the npm token as the short one: neither value nor the longer one\'s tail is shown', () => {
+  const a = `cs${hex(6)}`;               // short
+  const b = `${a}${hex(10)}`;            // long, starts with the short one
+  const c = `${hex(10)}${a}`;            // long, ends with the short one
+  const d = `${hex(5)}${a}${hex(5)}`;    // long, holds it in the middle
+  for (const long of [b, c, d]) {
+    for (const flip of [false, true]) {
+      const pool = flip ? { [POOL_ID]: long, [SECOND_ID]: a } : { [POOL_ID]: a, [SECOND_ID]: long };
+      const { out, r } = leak([a, long], (x) => [`${x}.txt`, `m${x}m`], pool, true);
+      noHang(r, `nested ${h16(long)} flip=${flip}`);
+      assert.equal(r.code, 3, r.out);
+      const rest = long.replace(a, '');
+      assert.ok(!r.out.includes(a) && !r.out.includes(long), `nested ${h16(long)} flip=${flip}: a value reached the output`);
+      assert.ok(!r.out.includes(rest), `nested ${h16(long)} flip=${flip}: the tail or head of the longer value (${h16(rest)}) is left after the shorter one was masked`);
+      assert.deepEqual(tree(join(out, 'reports')).sort(), ['clean.xml']);
+    }
+  }
+  // the npm token as the short mask, the pool value as the long one
+  const tok = `tk${hex(5)}`, big = `${tok}${hex(10)}`;
+  const { r } = leak([big], (x) => [`${x}.txt`], { [POOL_ID]: big, NODE_AUTH_TOKEN: tok });
+  noHang(r, 'npm token inside a pool value');
+  assert.ok(!r.out.includes(big) && !r.out.includes(tok) && !r.out.includes(big.slice(tok.length)), 'the npm token mask left the rest of the pool value visible');
+});
+
+test('QA-S1i-g a name with many hits (about 30 in 250 characters, and the same next to REDACTED): ends fast; every hit masked, not only the first', () => {
+  const v = `k${hex(4)}`.slice(0, 8);   // 8 characters
+  const name = `${v}-`.repeat(27).slice(0, 240);
+  const { out, r } = leak([v], () => [`${name}.txt`], { [POOL_ID]: v });
+  noHang(r, 'many hits');
+  assert.equal(r.code, 3, r.out);
+  assert.ok(!r.out.includes(v), `a hit was left: ${h16(v)}`);
+  assert.deepEqual(tree(join(out, 'reports')).sort(), ['clean.xml']);
+  const mixed = `${v}REDACTED`.repeat(15).slice(0, 240);
+  const m = leak([v], () => [`${mixed}.txt`], { [POOL_ID]: v });
+  noHang(m.r, 'many hits next to REDACTED');
+  assert.ok(!m.r.out.includes(v), 'a hit next to REDACTED was left');
+  // a value that is REDACTED itself on a long name must end too
+  const x = leak(['REDACTED'], () => [`${'REDACTED-'.repeat(27).slice(0, 240)}.txt`], { [POOL_ID]: 'REDACTED' });
+  noHang(x.r, 'REDACTED on a long name');
+});
