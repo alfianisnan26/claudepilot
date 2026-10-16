@@ -3,6 +3,8 @@
 Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-10-15 DONE batches 1-7: see 4fbab374). Hand-overs: ab99b45, bb58413, 639202e.
 
 ## DONE
+- MERGED 24570945 (batch 11): T-341 e4284315 + docfix 2ed9bc64 (QA BE 2 PASS); gate GREEN gate-ea46530. Open for D (person).
+  Lead can't comment on T-341 (unassigned): evidence here.
 - MERGED ff 7569d582 (batch 10): T-633 S2 (QA Perf PASS 6523); gate GREEN c57ab11. T-633 CLOSED (S1 batch 7 1a4a7933).
 - MERGED ff 38d6d3fb (batch 8b): T-325 S1+S1b+S1c (QA Perf 6357, migration 785 read); gate GREEN e5d2de3. Open for S3 (person).
 - MERGED ff 7ff6561d (batch 9): T-416 S1-S1e (QA Perf 6420); gate GREEN 1803cf2 + re-gate 15aece0 (6498). Open: S2, T-675.
@@ -11,7 +13,6 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 
 ## IN FLIGHT (6 of 6, D-71)
   Lanes' ticket_comment refused on unassigned tickets (T-341, T-549, T-675): verdicts live in their replies + this file.
-- BATCH 11 wip/main-ea46530 = T-341 e4284315 + docfix 2ed9bc64 (QA BE 2 PASS): GATE RUNNING. Hook installed nowhere; D a person's.
 - IN QA: T-524 S3 b68f043d (Jobs off master over 75%; kubectl patch only its own Job, read) -> QA Perf 7e4879c7.
   T-574 S2 57bc14bf (workers array again, lines key; bound 1.5k->2.5k to judge) -> QA BE 2 42e5408f.
   T-681 1fbca960 (CI controls size-11, tools/qa/ci-targets.mjs; typecheck/build were on 293f612) -> QA UI 8b13bb5a.
