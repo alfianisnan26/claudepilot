@@ -64,7 +64,7 @@ export function NotesPane({
 }
 
 export function Row({ entry: e, vault, active, showFolder, onFolder, onOpen }: { entry: VaultTreeEntry; vault: VaultSummary; active: boolean; showFolder: boolean; onFolder: (f: string) => void; onOpen: (p: string) => void }) {
-  const base = 'press flex w-full min-w-0 items-center gap-2.5 rounded-xl px-2.5 py-2.5 text-left hover:bg-surface-2/70 focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none';
+  const base = 'press flex w-full min-w-0 items-center gap-2.5 rounded-xl px-2.5 py-2.5 text-left hover:bg-surface-2/70 focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden';
   if (e.kind === 'folder')
     return (
       <li>

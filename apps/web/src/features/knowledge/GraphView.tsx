@@ -96,7 +96,7 @@ export const GraphView = forwardRef<
 
   return (
     <div ref={wrap} className={cn('relative size-full touch-none overflow-hidden select-none', className)}>
-      <canvas ref={canvas} role="img" aria-label={label} tabIndex={0} className="absolute inset-0 size-full cursor-grab rounded-[inherit] outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-inset active:cursor-grabbing" />
+      <canvas ref={canvas} role="img" aria-label={label} tabIndex={0} className="absolute inset-0 size-full cursor-grab rounded-[inherit] outline-hidden focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-inset active:cursor-grabbing" />
     </div>
   );
 });

@@ -109,7 +109,7 @@ export function ModelFamilies({
               title={f.hint ?? undefined}
               onClick={() => !on && !blocked && onPick(newest.value)}
               className={cn(
-                'flex min-h-12 w-full items-center gap-3 rounded-2xl px-3 py-2.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ink/40',
+                'flex min-h-12 w-full items-center gap-3 rounded-2xl px-3 py-2.5 text-left outline-hidden focus-visible:ring-2 focus-visible:ring-ink/40',
                 blocked && 'cursor-not-allowed opacity-50',
               )}
             >
@@ -183,7 +183,7 @@ export function ModelFamilies({
                         autoCapitalize="none"
                         autoCorrect="off"
                         spellCheck={false}
-                        className="h-9 min-w-0 flex-1 rounded-full bg-ink/[0.07] px-3.5 font-mono text-[13px] text-ink outline-none placeholder:font-sans placeholder:text-muted focus-visible:ring-2 focus-visible:ring-ink/40"
+                        className="h-9 min-w-0 flex-1 rounded-full bg-ink/[0.07] px-3.5 font-mono text-[13px] text-ink outline-hidden placeholder:font-sans placeholder:text-muted focus-visible:ring-2 focus-visible:ring-ink/40"
                       />
                       <button type="submit" disabled={!MODEL_VALUE.test(customValue) || blocked} className={cn(CHIP, 'bg-ink text-bg')}>
                         Use

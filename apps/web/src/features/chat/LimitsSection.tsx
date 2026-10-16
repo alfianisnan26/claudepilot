@@ -109,7 +109,7 @@ export function LimitsSection({ session, onRestart }: { session: ChatSession; on
 
   const stepClass = (can: boolean) =>
     cn(
-      'press flex size-11 shrink-0 items-center justify-center rounded-full border border-line bg-surface text-ink outline-none hover:bg-surface-2 focus-visible:ring-2 focus-visible:ring-ink/40',
+      'press flex size-11 shrink-0 items-center justify-center rounded-full border border-line bg-surface text-ink outline-hidden hover:bg-surface-2 focus-visible:ring-2 focus-visible:ring-ink/40',
       !can && 'cursor-not-allowed opacity-40 hover:bg-surface',
     );
   return (

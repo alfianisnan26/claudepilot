@@ -34,7 +34,7 @@ export function BtwSidePanel({ width, maxWidth, onResize, children }: { width: n
         onPointerMove={move}
         onPointerUp={() => (drag.current = null)}
         onKeyDown={key}
-        className="absolute inset-y-0 -left-1.5 z-10 w-3 cursor-col-resize touch-none outline-none after:absolute after:inset-y-0 after:left-1/2 after:w-0.5 after:-translate-x-1/2 hover:after:bg-line focus-visible:after:bg-accent"
+        className="absolute inset-y-0 -left-1.5 z-10 w-3 cursor-col-resize touch-none outline-hidden after:absolute after:inset-y-0 after:left-1/2 after:w-0.5 after:-translate-x-1/2 hover:after:bg-line focus-visible:after:bg-accent"
       />
       <div className="min-h-0 flex-1">{children}</div>
     </aside>
