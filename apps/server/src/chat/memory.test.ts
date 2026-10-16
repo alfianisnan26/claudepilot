@@ -7,7 +7,7 @@ import type { Actor } from '@portal/contracts';
 import { AttentionRegistry } from '../attention/registry.js';
 import { systemActor } from '../authz/seam.js';
 import { parseMemoryProbe, type MemoryReading } from '../workspaces/memory.js';
-import { budgetVerdict, MEMORY_BUDGET, MEMORY_HEADROOM_BYTES, memoryAttentionSource, memoryBudgetError, SESSION_MEMORY_ESTIMATE_BYTES, sessionEstimate, WorkspaceMemory } from './memory.js';
+import { budgetVerdict, MEMORY_BUDGET, MEMORY_HEADROOM_BYTES, memoryAttentionSource, memoryBudgetError, memoryItemId, SESSION_MEMORY_ESTIMATE_BYTES, sessionEstimate, WorkspaceMemory } from './memory.js';
 
 const GiB = 1024 ** 3;
 const MiB = 1024 ** 2;
@@ -177,4 +177,42 @@ test('T-416: the Needs you item reaches the push bridge with its kind in fixed w
   } finally {
     stop();
   }
+});
+
+test('T-675: an alert for a 190-character workspace id still reaches the push bridge (its subject id fits the bus); two long ids sharing a start stay two items', async () => {
+  const { bridgeAttentionNotify } = await import('../attention/notify.js');
+  const { createBus } = await import('../notify/bus.js');
+  let now = Date.parse('2026-10-15T02:00:00Z');
+  let next = reading(6 * GiB);
+  const mem = new WorkspaceMemory({ read: async () => next, now: () => now });
+  const registry = new AttentionRegistry({ now: () => now, tickMs: 0 });
+  registry.register(memoryAttentionSource(mem));
+  const bus = createBus();
+  const sent: { subject: { id: string } }[] = [];
+  bus.on('*', (e) => void sent.push(e as never));
+  const stop = bridgeAttentionNotify(registry, bus, () => ['u_owner']);
+  try {
+    registry.check(); // the baseline
+    const a = `kubernetes/${'w'.repeat(178)}a`; // 190 characters
+    const b = `kubernetes/${'w'.repeat(178)}b`;
+    assert.equal(a.length, 190);
+    now += 61_000;
+    next = reading(Math.round(7 * GiB), 8 * GiB, now);
+    await mem.look([a, b]);
+    const changed = registry.check();
+    assert.equal(changed?.added.length, 2, 'two items');
+    assert.equal(new Set(changed?.added.map((x) => x.id)).size, 2, 'different ids');
+    assert.equal(sent.length, 2, 'both pushes were emitted, none dropped by the bus');
+    for (const e of sent) assert.ok(e.subject.id.length <= 200, e.subject.id);
+  } finally {
+    stop();
+  }
+});
+
+test('T-675: memoryItemId keeps a short workspace id whole and clips and hashes a long one', () => {
+  assert.equal(memoryItemId('docker/ws1', '2026-10-15T02:00:00.000Z'), 'docker/ws1@2026-10-15T02:00:00.000Z');
+  const long = `kubernetes/${'x'.repeat(300)}`;
+  const id = memoryItemId(long, '2026-10-15T02:00:00.000Z');
+  assert.ok(id.length < 150, String(id.length));
+  assert.equal(id, memoryItemId(long, '2026-10-15T02:00:00.000Z'), 'stable');
 });

@@ -8,6 +8,7 @@
 // so a notification, attention/notify.ts) with its five largest processes by RSS, by name only. It clears below 80 percent; the next
 // crossing is a new item (a new notification).
 
+import { createHash } from 'node:crypto';
 import { CHAT_API, workspaceRef, type AttentionItem } from '@portal/contracts';
 import { AppError, defineErrorCodes } from '@isnanme/core';
 import { can } from '../authz/seam.js';
@@ -165,6 +166,18 @@ export class WorkspaceMemory {
   }
 }
 
+/** The workspace part kept whole in an item id (T-675); a longer id is clipped and hashed so two long ids never share an item. */
+const ITEM_ID_WORKSPACE_MAX = 100;
+
+/**
+ * T-675: the Web Push subject is `attention:workspace_memory:<id>` and the notify bus drops a subject id over 200 characters, so an item
+ * id with a long workspace id lost its push without a trace. A workspace id over 100 characters is clipped and given a hash of the whole.
+ */
+export function memoryItemId(workspaceId: string, since: string): string {
+  const ws = workspaceId.length > ITEM_ID_WORKSPACE_MAX ? `${workspaceId.slice(0, ITEM_ID_WORKSPACE_MAX)}.${createHash('sha256').update(workspaceId).digest('hex').slice(0, 10)}` : workspaceId;
+  return `${ws}@${since}`;
+}
+
 /** Needs you: a workspace near its memory limit. A person decides what to end or sleep; the item opens the sessions. */
 export function memoryAttentionSource(memory: Pick<WorkspaceMemory, 'alerts'>): AttentionSource {
   return {
@@ -180,7 +193,7 @@ export function memoryAttentionSource(memory: Pick<WorkspaceMemory, 'alerts'>): 
           const top = r.top.map((p) => `${p.name} ${p.mb} MB`).join(', ');
           return {
             kind: 'workspace_memory',
-            id: `${a.workspaceId}@${a.since}`,
+            id: memoryItemId(a.workspaceId, a.since),
             title: `${a.workspaceId}: memory ${pct}%${top ? ` (${top})` : ''}`,
             who: [],
             why: 'question',

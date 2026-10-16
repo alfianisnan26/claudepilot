@@ -514,3 +514,50 @@ test('T-416: the liveness round reads the memory of the workspaces it runs sessi
     await s.done();
   }
 });
+
+/* ---------- T-675: the wake's audit names who woke it; a restart's hold ends when #live skips ---------- */
+
+test('T-675: a wake refused for memory names the actor whose message (or Resume) woke the session; a person’s message is `ui`', async () => {
+  const s = await liveSession({ idleSleepMs: 200 }, true);
+  try {
+    await until(() => s.controller.get(s.id)!.process === 'asleep', 4000);
+    s.controller.memory = budget(ONE_FITS + 1).memory;
+    await assert.rejects(s.controller.send(s.id, 'w-1', 'wake up', { actor: 'ticket:T-12' }), isBudget);
+    await assert.rejects(s.controller.send(s.id, 'w-2', 'wake up', { actor: 'ui' }), isBudget);
+    await assert.rejects(s.controller.send(s.id, 'w-3', 'wake up'), isBudget);
+    await assert.rejects(s.controller.control(s.id, 'resume', undefined, { actor: 'portal-mcp:ptk_1' }), isBudget);
+    await assert.rejects(s.controller.control(s.id, 'resume'), isBudget);
+    const actors = s.controller.audit({ kind: 'memory.refused', sessionId: s.id }).map((a) => a.actor);
+    assert.deepEqual([...actors].sort(), ['portal-mcp:ptk_1', 'ticket:T-12', 'ui', 'ui', 'ui']);
+  } finally {
+    await s.done();
+  }
+});
+
+test('T-675 (T-416 QA R2): a restart of an asleep session whose check passed but whose launch #live skipped lets its hold go', async () => {
+  const s = await liveSession({ idleSleepMs: 200 }, true);
+  try {
+    await until(() => s.controller.get(s.id)!.process === 'asleep', 4000);
+    // The session ends while the restart's reading is taken: the check passes and holds, then the stop and #live find an ended row and
+    // do nothing, so only the restart's own `finally` lets the hold go.
+    const chat = new ChatStore(s.store);
+    const clock = 1_000_000;
+    s.controller.memory = new WorkspaceMemory({
+      read: async () => {
+        chat.patchSession(s.id, { state: 'ended' });
+        return reading(ONE_FITS, clock);
+      },
+      now: () => clock + 60_000,
+    });
+    await s.controller.restart(s.id).catch(() => undefined);
+    assert.equal(s.controller.get(s.id)!.state, 'ended');
+    // Room for exactly one: a create fits only when nothing is still held for the ended session.
+    s.controller.memory = budget(ONE_FITS).memory;
+    const made = await s.controller.create({ workspaceId: 'docker/ws1' });
+    await until(() => s.controller.get(made.id)?.process === 'live', 4000);
+    assert.equal(s.controller.audit({ kind: 'memory.refused' }).length, 0, 'no hold left behind');
+    await sleep(300); // the ended session's own follow-up work settles before the store closes
+  } finally {
+    await s.done();
+  }
+});

@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import { randomUUID } from 'node:crypto';
 import { isAppError } from '@isnanme/core';
 import { CHAT_ACTOR_PATTERN, isChatActor, isPortalActor } from '@portal/contracts';
-import { portalFrame } from './controller.js';
+import { leadSubagentWarning, portalFrame } from './controller.js';
 import { init, line, liveSession, ok, until, USAGE_API_KEY } from './testkit.js';
 
 /** The text Claude was sent for the line the host got last (a string, or the text blocks of an array). */
@@ -221,6 +221,52 @@ test('portalFrame: says who sent it and that the person did not, for every kind 
   assert.match(portalFrame('ticket:T-1', undefined, 'hi'), /^\[Portal message from a ticket \(ticket:T-1\)\./);
   assert.match(portalFrame('portal-mcp:t', undefined, 'hi'), /^\[Portal message from an MCP client \(portal-mcp:t\)\./);
   assert.ok(portalFrame('ticket:T-1', undefined, 'body').endsWith('\n\nbody'));
+});
+
+test('portalFrame (T-675): a warning goes between the header and the text; none, no line', () => {
+  const plain = portalFrame('ticket:T-1', undefined, 'body');
+  assert.equal(portalFrame('ticket:T-1', undefined, 'body', undefined, undefined), plain);
+  const warned = portalFrame('ticket:T-1', undefined, 'body', undefined, 'slow down');
+  assert.match(warned, /^\[Portal message from a ticket \(ticket:T-1\)\.[^\n]*\]\n\[Portal note: slow down\]\n\nbody$/);
+  assert.match(portalFrame('portal:crew', undefined, 'body', undefined, 'slow down'), /\n\[Portal note: slow down\]\n\nbody$/);
+});
+
+test('leadSubagentWarning (T-675): the limit is max_workers, else 5 (D-43); at the limit there is no warning, one over there is', () => {
+  assert.equal(leadSubagentWarning(5, null), undefined);
+  assert.equal(leadSubagentWarning(5, undefined), undefined);
+  assert.match(leadSubagentWarning(6, null)!, /6 sub-agents.*limit of 5/);
+  assert.equal(leadSubagentWarning(2, 2), undefined);
+  assert.match(leadSubagentWarning(3, 2)!, /3 sub-agents.*limit of 2/);
+  assert.match(leadSubagentWarning(1, 0)!, /limit of 0/);
+});
+
+test('send (T-675): a portal message to a lead running more sub-agents than its limit carries the warning in its frame; the person’s own message and a lead within the limit do not', async () => {
+  const s = await liveSession();
+  try {
+    const at = new Date().toISOString();
+    const addTasks = (n: number, from = 0) => {
+      for (let i = from; i < from + n; i++) s.store.db!.prepare(`INSERT INTO chat_tasks (session_id, task_id, label, status, started_at) VALUES (?, ?, 'Look around', 'running', ?)`).run(s.id, `t-${i}`, at);
+    };
+    const texts = () => s.ws.sends.filter((x) => x.line.includes('"type":"user"')).map((x) => sentText(x.line));
+    addTasks(5); // at the default limit of 5
+    await s.controller.send(s.id, 'w-1', 'status?', { actor: 'ticket:T-12' });
+    addTasks(1, 5); // six: over it
+    await s.controller.send(s.id, 'w-2', 'status again?', { actor: 'ticket:T-12' });
+    await s.controller.send(s.id, 'w-3', 'typed by the person', { actor: 'ui' });
+    await until(() => texts().length === 3);
+    const [within, over, person] = texts();
+    assert.ok(!within!.includes('Portal note'), 'five sub-agents: within the default limit');
+    assert.match(over!, /\n\[Portal note: you run 6 sub-agents at once, over your limit of 5\./);
+    assert.match(over!, /\n\nstatus again\?$/);
+    assert.equal(person, 'typed by the person', 'a person’s message is never framed');
+    // The lead's own limit wins over the default.
+    s.controller.setLimits(s.id, { maxWorkers: 2 }, { actor: 'ui' });
+    await s.controller.send(s.id, 'w-4', 'and now?', { actor: 'ticket:T-12' });
+    await until(() => texts().length === 4);
+    assert.match(texts()[3]!, /6 sub-agents at once, over your limit of 2\./);
+  } finally {
+    await s.done();
+  }
 });
 
 
