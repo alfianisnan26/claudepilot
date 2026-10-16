@@ -13,8 +13,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 ## IN FLIGHT (6 of 6, D-71)
   Lanes' ticket_comment refused on unassigned tickets (T-341, T-549, T-675): verdicts live in their replies + this file.
 - QA PERF 7e4879c7: T-739 B S3 PASS WITH GAPS (job e9352e97; mutants M1 M3 M4 M5 M7 survived -> Impl after T-772 S1)
-  -> now N1 doc check 9be41062 + exact killing tests (no Job).
-- QA UI 8b13bb5a: T-772 sweep 49 sites (7599), PLAN T-592 1 slice (7601) -> now REVIEW T-723 S3 b78d7f6b (+ confirm T-778 file:line).
+  N1 PASS + killing tests (T-739 record) -> now PLAN T-611 (no Job).
+- QA UI 8b13bb5a: T-772 sweep (7599), PLAN T-592 (7601), REVIEW T-723 S3 APPROVE 7609 (T-778 confirmed) -> now PLAN T-733.
 - QA BE 2 42e5408f: T-600 live UNAVAILABLE for the lane (7597); lead read crew_scorecard: LIVE PARTIAL, pace no_source (7610);
   PLAN T-776 4 slices (lead decisions 7608) -> now QA T-723 S3 b78d7f6b (builder job e178a510 101/0, 5/5 mutants).
 - IMPL lane 09fee945 (sonnet, sekar; fce0c981 ended: T-739 B S1-S3 + docs N1 9be41062) T-772 S1 on ticket/T-772-forced-colors
