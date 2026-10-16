@@ -286,6 +286,29 @@ describe('the gate', () => {
     }
   });
 
+  test('a variable that keeps its note or its KEY= is masked as the header carries it: the bare value too (T-623 S2d)', async () => {
+    fake.state.chrome = { state: 'up', bootId: 'boot-1' };
+    const flags = ['--redact-env', 'NOTED,QUOTED'];
+    const g = gate(flags, { NOTED: 'K=plainvalue-in-test-0001 # note', QUOTED: '"edgeval" # n' });
+    try {
+      await g.init();
+      const r = await g.call('browser_dump');
+      assert.ok(!r.text.includes('plainvalue-in-test-0001'), `bare value leaked: ${r.text}`);
+      assert.match(r.text, /short abc stays/);
+    } finally {
+      g.close();
+    }
+    // A parsed form under 8 characters is not masked either: it would hit ordinary words.
+    const short = gate(['--redact-env', 'TINY'], { TINY: 'T=abc # a long note here' });
+    try {
+      await short.init();
+      const r = await short.call('browser_dump');
+      assert.match(r.text, /short abc stays/);
+    } finally {
+      short.close();
+    }
+  });
+
   test('forward and reload are built on the pinned server’s own tools', async () => {
     fake.state.chrome = { state: 'up', bootId: 'boot-1' };
     const g = gate();

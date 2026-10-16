@@ -595,6 +595,22 @@ key's name, never a value. The audit, the spec hash input and the pool hold the 
 the value by the key's own variable name (`--redact-env <KEY>`), since the workspace has an env file's variables, not a variable called after the entry. Without
 `key` a rule behaves as before (the whole value).
 
+**S2c (T-623).**
+- A `key` that is blank or only whitespace is refused at save (`VALIDATION_FAILED`, the field `headers`, “A key can’t be blank”), never dropped: dropping it would
+  deliver the whole env-file entry, every variable in it, to the header's host. Leave `key` out for a plain single-value secret.
+- `envFileValue` drops a ` # note` after a value (whitespace, then `#`; a `#` inside a value, or inside quotes, stays), and ignores a leading byte-order mark. A key
+  that is a prefix of another variable (`CF_ID` against `CF_ID_2`) matches only its own line.
+- **How the workspace gets its variables (S2d).** The portal does not parse an env file into the workspace: `secrets/render.ts` writes one `export NAME=...` per
+  variable (`secrets/kind.ts`: a variable is one line), and `browser/compile.ts` hands the gate the NAME. `envFileValue` is the only env-file parser, and it
+  reads a value in memory for the header. A reader that keeps ` # note` (Docker's `--env-file`) can leave the variable longer than the header value. So the gate
+  masks the variable as is **and** its parsed form (after an optional `KEY=`, without quotes and without a trailing note, per line), so the real value is never
+  shorter than its mask. Test: `gate.test.ts` "keeps its note or its KEY=". The same ≥ 8 character floor applies.
+- **Key collision in masking.** The gate masks by the value of the workspace variable named `<KEY>`. If the key's name is also an unrelated variable of the
+  workspace, the gate masks that variable's value, and the header's value is masked only when the two are equal. Pick key names that are the env file's own.
+  No test covers a collision; not verified.
+- **Re-delivery on rotation.** The entry's value id is part of the delivered headers, so rotating any variable of the same entry re-delivers the headers of every
+  rule that names the entry, even one whose own key did not change, and may restart the browser. This is by design (one entry, one version).
+
 **How it works** (no proxy: HTTPS would need a CA the browser trusts):
 
 | Step | What happens |
