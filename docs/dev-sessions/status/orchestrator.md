@@ -12,16 +12,16 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 ## IN FLIGHT (6 of 6, D-71)
   Lanes' ticket_comment refused on unassigned tickets (T-341, T-549, T-675): verdicts live in their replies + this file.
 - QA PERF 7e4879c7: T-376 S4b PASS WITH GAPS 7475 -> batch; T-739 B S1-S2 PASS WITH GAPS 7498 (job ba9ab470; gap 2 -> S3);
-  T-731 probes BLOCKED (no merge in its allow list): lead builds wip = BE Infra's new head + probe c4ad3105, then its Job.
+  now T-731 probes on wip/qa-t731-81f87b2 (= head 31b1ad73 N1-N3, job d2c5bf88 + probe c4ad3105, lead-built).
 - QA UI 8b13bb5a: T-732 PASS WITH GAPS 7467 (-> T-772); REVIEW T-723 S1-S2 CHANGES 7513 (routes hardcode 'ui' -> S3, 7516)
-  REVIEW T-739 B S1-S2 APPROVE -> now PLAN T-772 (no Job).
+  REVIEW T-739 B S1-S2 APPROVE; PLAN T-772 (49 sites, 4 slices) -> now PLAN T-598 (no Job).
 - QA BE 2 42e5408f: T-723 S1/S2 PASS WITH GAPS 7473/7497; REVIEW T-731 r2 APPROVE (reply; N1-N3 -> BE Infra)
-  REVIEW of the lead's merge e630964d OK (7526) -> next T-591 DIAG (read-only; send retried after a chat move).
+  REVIEW of the lead's merge e630964d OK (7526); T-591 DIAG: setting unset = silent skip (7556, T-776) -> now PLAN T-597.
 - IMPL lane fce0c981 (sonnet; 2f4ee38f ended: T-376 S4b DONE 103520e7, 7436, job 92c6f13b, no mutants; 65dd09f6: T-732 DONE
   c9a032f7, item 5 -> coordinator 7407) T-739 B S1 DONE 65b821d7 (migration 383 partial index, lead read OK; 4/4, 3 mutants;
   7471) S2 DONE 262663d5 (job 86693c96: build 0.41 s/1M synthetic rows, 7487 for the coordinator) -> now S3 tests d,e,f,h + docs.
-- BE INFRA lane b11ecab1 (sonnet): T-731 DONE a81e64af (7491) -> now N1-N3 (key-named cleanup, .tmp, $work/n test) -> respawn on ticket/T-426-s1f
-  e630964d (lead merged T-401 a4ad3052 into S1e; doc conflicts kept both) for fix 7121 -> T-610 7053 -> T-524 S3c (7360).
+- BE INFRA lane 2dc2be75 (sonnet; b11ecab1 ended: T-731 DONE 31b1ad73, N1-N3) T-426 S1e fix 7121 on ticket/T-426-s1f
+  (base e630964d) -> T-610 7053 (respawn) -> T-524 S3c (7360).
 - BACKEND lane 4123bb21 (sonnet; 1261b4f3 ended: T-736 S2 DONE 98c78a63, 7395, job 1493e0be 20/20, 5 mutants)
   T-723 S2 DONE be1e02a0 -> now S3: items 5, 8 + G3 callers (risk a, add) + G1 test + G2 actor cap (7489)
   -> T-736 S3 (respawn) -> T-733 S4, S6.
