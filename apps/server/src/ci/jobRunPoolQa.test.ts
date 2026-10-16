@@ -209,7 +209,7 @@ test('QA-O1 (1) a leaking file whose NAME holds a line break is deleted (the hit
 
 test('QA-N1 (review 7773) an artifact whose NAME is the value: the value is in no stdout, stderr or the Job log (S1h re-QA)', () => {
   const secret = `cs${hex(20)}`;
-  const w = world({ [`${secret}.txt`]: `cf-access-client-secret: ${secret}\n`, [`x${secret}`]: 'plain\n', 'clean.xml': '<testsuites/>' });
+  const w = world({ [`${secret}.txt`]: `cf-access-client-secret: ${secret}\n`, [`x${secret}`]: `cf-access-client-secret: ${secret}\n`, 'clean.xml': '<testsuites/>' });
   const out = join(w.root, 'out');
   const r = w.run(ARGS(out), { [POOL_ID]: secret });
   assert.equal(r.code, 3, 'the run is red');
