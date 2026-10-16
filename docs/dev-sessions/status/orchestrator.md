@@ -12,16 +12,17 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 
 ## IN FLIGHT (6 of 6, D-71)
   Lanes' ticket_comment refused on unassigned tickets (T-341, T-549, T-675): verdicts live in their replies + this file.
-- QA PERF 7e4879c7: T-739 B S1-S2 PASS WITH GAPS 7498; T-731 PASS WITH GAPS (job 15df1fc8) -> now QA T-739 B S3 390b7ce0.
-- QA UI 8b13bb5a: PLAN T-598 (7565), PLAN repo settings UI 5 slices (T-556 7578) -> now T-772 sweep list S2-S4 + PLAN T-592.
-- QA BE 2 42e5408f: PLAN T-612 3 slices (lead decision A, 7592, D-66 wording -> coordinator) -> now LIVE CHECK T-600 + PLAN T-776.
+- QA PERF 7e4879c7: T-739 B S3 PASS WITH GAPS (job e9352e97; mutants M1 M3 M4 M5 M7 survived -> Impl after T-772 S1)
+  -> now N1 doc check 9be41062 + exact killing tests (no Job).
+- QA UI 8b13bb5a: T-772 sweep 49 sites (7599), PLAN T-592 1 slice (7601) -> now REVIEW T-723 S3 b78d7f6b (+ confirm T-778 file:line).
+- QA BE 2 42e5408f: T-600 live UNAVAILABLE for the lane (7597); lead read crew_scorecard: LIVE PARTIAL, pace no_source (7610);
+  PLAN T-776 4 slices (lead decisions 7608) -> now QA T-723 S3 b78d7f6b (builder job e178a510 101/0, 5/5 mutants).
 - IMPL lane 09fee945 (sonnet, sekar; fce0c981 ended: T-739 B S1-S3 + docs N1 9be41062) T-772 S1 on ticket/T-772-forced-colors
   (base b7f02cad): ci outline-hidden + tools/qa forced-colors check.
 - BE INFRA lane 2dc2be75 (sonnet; b11ecab1 ended: T-731 DONE 31b1ad73, N1-N3) T-426 S1e fix 7121 on ticket/T-426-s1f
   (base e630964d) -> T-610 7053 (respawn) -> T-524 S3c (7360).
-- BACKEND lane 4123bb21 (sonnet; 1261b4f3 ended: T-736 S2 DONE 98c78a63, 7395, job 1493e0be 20/20, 5 mutants)
-  T-723 S2 DONE be1e02a0 -> now S3: items 5, 8 + G3 callers (risk a, add) + G1 test + G2 actor cap (7489)
-  -> T-736 S3 (respawn) -> T-733 S4, S6.
+- BACKEND lane 4762d05d (sonnet; 4123bb21 ended: T-723 S3 DONE b78d7f6b, 7595) T-736 S3: QA FAIL 7452 F1 other-repo guard,
+  F2 fail closed on missing guard, cwd mutant -> T-733 S4, S6. T-778 filed (bypass routes lack own requireCan; authz = person, coordinator).
 - HELD: T-426 S1e 2174eee1 QA PASS 6169, review CHANGES 7121 -> fix, re-QA, merge after T-401. T-578 51f6c153 review CHANGES 6168 -> owner. T-631 CHANGES 5850 -> coordinator.
 - 16:12 OWNER PRIORITY (coordinator, T-426 5538): T-401 then T-426 FIRST. T-401 gate GREEN gate-54ba328-6502; ff only on the person's ack.
 
