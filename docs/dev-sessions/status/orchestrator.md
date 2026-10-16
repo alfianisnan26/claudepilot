@@ -20,12 +20,12 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   quick-check PASS 12295a2b). Then T-524 S3b 23330c28 (test-only +25: name pin, no-patch-on-top-fail; src/ci 208/208 job
   54784775; mutants D,F killed f69b2de3). Live re-read patch NOT verified. 6775 was WRONG (rule set at creation, 78%): 6788.
 - QA UI 8b13bb5a: standby -> T-376 S4.
-- QA BE 2 42e5408f: standby -> T-574 S3. T-610 26f8ba37 QA FAIL 6895 (job 3a5d9444: 4 mutants survive: controller mergeBase
-  + cap wiring, usageSince + spend.ts filters; cap can undercount) -> rework on same branch, next BE Infra slot after T-251 S2.
+- QA BE 2 42e5408f: T-251 S2 9adfeee2 (test-only: mid-turn = steer, move at boundary per FR10a vs T-105 R2 asked; :208 kept,
+  tested; mutants A-C killed 685814f2; qc-t251 running), then T-574 S3. T-610 26f8ba37 QA FAIL 6895 (3a5d9444: 4 mutants).
   T-251 (no code) PASS WITH GAPS (45e984db 255/255; M1-M6 killed 8870ab0c) -> S2 below.
 - IMPL lane 0d799c90 (sonnet, rossi; bccb756f ended after T-710) T-376 S4 on ticket/T-376-s4 from be431d6a: createApp wiring
   test + 4x CPU, long tasks, DOM/heap, older-page render budgets.
-- BE INFRA lane 5b9b7122 (sonnet, two.claude; c305a138 ended after T-610) T-251 S2 on ticket/T-251-s2 from 92900150: mid-turn limit test, :208.
+- BE INFRA lane 87749649 (sonnet, sekar; 5b9b7122 ended after T-251 S2) T-610 rework in its worktree: 4 mutants, undercount, resume.
 - BACKEND lane 216dbe18 (sonnet, regitha) T-574 S3 on ticket/T-574-s3: cross-lead NOT_FOUND test, size trim, bound 1.5k.
 - HELD: T-426 S1e 2174eee1 QA PASS 6169 -> merge on the T-401 ack (4941). T-578 51f6c153 review CHANGES 6168 -> owner decision.
   T-631 review CHANGES 5850: absolute-path entry (a) for the coordinator; F1 on job-run.sh -> T-635 (high).
