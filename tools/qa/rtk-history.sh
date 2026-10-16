@@ -5,14 +5,19 @@
 #   - the forms the allowlist was wider than the measurement: git status <paths>, git log <refs/paths>, --max-count=N;
 #   - the facts left out before: git log Date and author e-mail (class git-log-meta), ls owner/date/size (class ls-meta).
 #   scripts/job-run.sh --ref <full hash> --out job-out/t341 --artifacts job-out -- 'bash tools/qa/rtk-history.sh job-out; exit $?'
+# Refuses (exit 2) unless JR_REPO_URL is set (job-run's Job env) and `git status --porcelain` is empty (T-736).
 # Outputs in <out>: cases.tsv, fidelity.tsv, classes.tsv, <case>.{plain,rtk}.txt, <case>.fid.json, history.txt (what the clone had).
 set -u
+# T-736 guard (tools/qa/rtk-guard.sh, shared by the three rtk scripts): runs before any file is touched.
+here=$(cd "$(dirname "$0")/../.." && pwd)
+. "$here/tools/qa/rtk-guard.sh" || { echo "rtk-history.sh: refusing: cannot load tools/qa/rtk-guard.sh" >&2; exit 2; }
+declare -F rtk_guard >/dev/null || { echo "rtk-history.sh: refusing: rtk_guard is not defined" >&2; exit 2; }
+rtk_guard rtk-history.sh "$here"
 out=$(readlink -f "$1"); mkdir -p "$out"
 RTK_TAG=v1.0.0; RTK_ASSET=rtk-x86_64-unknown-linux-musl.tar.gz
 RTK_SHA=b0b69fbed72f55d8eae18587c0b6bc140a8a8b39d5b7c6e6df33795249940926
-here=$(cd "$(dirname "$0")/../.." && pwd)
 if [ "${RTK_BIN:-}" = "" ]; then
-  d=$(mktemp -d); curl -fsSL -o "$d/$RTK_ASSET" "https://github.com/rtk-ai/rtk/releases/download/$RTK_TAG/$RTK_ASSET"
+  d=$(mktemp -d); curl -fsSL --max-time 120 --retry 1 -o "$d/$RTK_ASSET" "https://github.com/rtk-ai/rtk/releases/download/$RTK_TAG/$RTK_ASSET"
   [ "$(sha256sum "$d/$RTK_ASSET" | cut -d' ' -f1)" = "$RTK_SHA" ] || { echo "CHECKSUM MISMATCH" >&2; exit 3; }
   mkdir "$d/x"; tar -xzf "$d/$RTK_ASSET" -C "$d/x"; RTK_BIN=$d/x/rtk
 fi
@@ -20,7 +25,7 @@ R=$RTK_BIN
 H=$(mktemp -d); E=$(mktemp -d)
 cleanenv() { env -i PATH="$PATH" HOME="$H" LANG=C.UTF-8 NO_COLOR=1 CI=1 RTK_TELEMETRY_DISABLED=1 XDG_CONFIG_HOME="$H/c" XDG_DATA_HOME="$H/d" "$@"; }
 "$R" --version > "$out/rtk-version.txt" 2>&1
-cd "$here"
+cd "$here" || exit
 
 # --- history: the Job's clone is depth 1 AND has no `origin` (Job claudepilot-job-e9baa000: "fatal: 'origin' does not appear to be a git
 # repository"), so the history is whatever the clone holds (one real commit with a 7-line body and trailers). A deeper history needs a

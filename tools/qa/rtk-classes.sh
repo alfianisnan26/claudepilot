@@ -7,12 +7,16 @@
 # History: the Job's clone has depth 1, so the script adds 10 small commits on top (a scratch identity, never pushed) and dirties the tree.
 # Outputs: <out>/cases.tsv (one row per case), <out>/fidelity.tsv (per case), <out>/classes.tsv (per class), <out>/<case>.{plain,rtk}.txt.
 set -u
+# T-736 guard (tools/qa/rtk-guard.sh): this script commits, resets and checks out; job-run Job and clean checkout only, before anything is written.
+here=$(cd "$(dirname "$0")/../.." && pwd)
+. "$here/tools/qa/rtk-guard.sh" || { echo "rtk-classes.sh: refusing: cannot load tools/qa/rtk-guard.sh" >&2; exit 2; }
+declare -F rtk_guard >/dev/null || { echo "rtk-classes.sh: refusing: rtk_guard is not defined" >&2; exit 2; }
+rtk_guard rtk-classes.sh "$here"
 out=$(readlink -f "$1"); mkdir -p "$out"
 RTK_TAG=v1.0.0; RTK_ASSET=rtk-x86_64-unknown-linux-musl.tar.gz
 RTK_SHA=b0b69fbed72f55d8eae18587c0b6bc140a8a8b39d5b7c6e6df33795249940926
-here=$(cd "$(dirname "$0")/../.." && pwd)
 if [ "${RTK_BIN:-}" = "" ]; then
-  d=$(mktemp -d); curl -fsSL -o "$d/$RTK_ASSET" "https://github.com/rtk-ai/rtk/releases/download/$RTK_TAG/$RTK_ASSET"
+  d=$(mktemp -d); curl -fsSL --max-time 120 --retry 1 -o "$d/$RTK_ASSET" "https://github.com/rtk-ai/rtk/releases/download/$RTK_TAG/$RTK_ASSET"
   [ "$(sha256sum "$d/$RTK_ASSET" | cut -d' ' -f1)" = "$RTK_SHA" ] || { echo "CHECKSUM MISMATCH" >&2; exit 3; }
   mkdir "$d/x"; tar -xzf "$d/$RTK_ASSET" -C "$d/x"; RTK_BIN=$d/x/rtk
 fi
@@ -22,7 +26,7 @@ cleanenv() { env -i PATH="$PATH" HOME="$H" LANG=C.UTF-8 NO_COLOR=1 CI=1 RTK_TELE
 "$R" --version > "$out/rtk-version.txt" 2>&1
 for t in tree rg git grep find ls npm; do printf '%s\t%s\n' "$t" "$(command -v "$t" || echo MISSING)"; done > "$out/tools.tsv"
 
-cd "$here"
+cd "$here" || exit
 # --- 10 commits on top of the shallow clone, then a dirty tree (modified, deleted, new, untracked) ---
 g() { git -c user.name=rtk-scratch -c user.email=rtk-scratch@example.invalid -c commit.gpgsign=false "$@"; }
 i=0
@@ -30,7 +34,8 @@ for f in $(git ls-files 'apps/server/src/*/routes.ts' | head -n 10); do
   i=$((i + 1)); printf '\n// rtk-classes scratch %s\n' "$i" >> "$f"; g commit -q -am "scratch $i: touch $(dirname "$f")" -m "Why: body line $i of a scratch commit, kept by the fidelity check." -m "Ticket: T-$((900 + i))" || exit 4
 done
 for f in $(git ls-files 'apps/server/src/chat/*.ts' | head -n 30); do echo "// rtk-classes" >> "$f"; done
-git rm -q --cached "$(git ls-files 'docs/prd/*.md' | tail -n 1)" >/dev/null
+prd=$(git ls-files 'docs/prd/*.md' | tail -n 1)  # none in a repo without docs/prd: an empty pathspec is a git error
+[ -n "$prd" ] && git rm -q --cached "$prd" >/dev/null
 mkdir -p rtkc-new && echo x > rtkc-new/a.txt && echo y > rtkc-untracked.txt && g add rtkc-new/a.txt
 
 printf 'case\tclass\tplain\trewrite_exit\trtk\texit_plain\texit_rtk\tbytes_plain\tbytes_rtk\n' > "$out/cases.tsv"

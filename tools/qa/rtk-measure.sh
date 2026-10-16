@@ -4,12 +4,18 @@
 #   tools/qa/rtk-measure.sh heavy <outdir>                       node --test, tsc (run in a job-run Job, after npm ci; downloads and verifies rtk)
 # Both arms run with the SAME clean environment (env -i, empty HOME, no token), RTK_TELEMETRY_DISABLED=1. Outputs go to files, never to the terminal.
 set -u
+# T-736 guard (tools/qa/rtk-guard.sh): the light mode on the claudepilot label edits and checks out tracked files of <repo-dir>; job-run Job only,
+# and EVERY repo it will rewrite (this one, and <repo-dir> for that label) must be clean. Nothing is created before the guard has passed.
+here=$(cd "$(dirname "$0")/../.." && pwd)
+. "$here/tools/qa/rtk-guard.sh" || { echo "rtk-measure.sh: refusing: cannot load tools/qa/rtk-guard.sh" >&2; exit 2; }
+declare -F rtk_guard >/dev/null || { echo "rtk-measure.sh: refusing: rtk_guard is not defined" >&2; exit 2; }
+rtk_guard rtk-measure.sh "$here"
+if [ "${1:-}" = light ] && [ "${4:-}" = claudepilot ]; then rtk_guard rtk-measure.sh "$(readlink -f "${3:-.}")"; fi
 mode=$1; out=$(readlink -f "$2"); mkdir -p "$out"
 RTK_TAG=v1.0.0; RTK_ASSET=rtk-x86_64-unknown-linux-musl.tar.gz
 RTK_SHA=b0b69fbed72f55d8eae18587c0b6bc140a8a8b39d5b7c6e6df33795249940926
-here=$(cd "$(dirname "$0")/../.." && pwd)
 if [ "${RTK_BIN:-}" = "" ]; then
-  d=$(mktemp -d); curl -fsSL -o "$d/$RTK_ASSET" "https://github.com/rtk-ai/rtk/releases/download/$RTK_TAG/$RTK_ASSET"
+  d=$(mktemp -d); curl -fsSL --max-time 120 --retry 1 -o "$d/$RTK_ASSET" "https://github.com/rtk-ai/rtk/releases/download/$RTK_TAG/$RTK_ASSET"
   [ "$(sha256sum "$d/$RTK_ASSET" | cut -d' ' -f1)" = "$RTK_SHA" ] || { echo "CHECKSUM MISMATCH" >&2; exit 3; }
   mkdir "$d/x"; tar -xzf "$d/$RTK_ASSET" -C "$d/x"; RTK_BIN=$d/x/rtk
 fi
@@ -30,7 +36,8 @@ m() {
 }
 R="$RTK_BIN"
 if [ "$mode" = light ]; then
-  repo=$(readlink -f "$3"); L=$4; cd "$repo"
+  # The rewrite target <repo-dir> is guarded only when the label is claudepilot (the only one that edits it); JR_REPO_URL is an accident guard, not a security control.
+  repo=$(readlink -f "$3"); L=$4; cd "$repo" || exit
   if [ "$L" = claudepilot ]; then  # a dirty tree so that status and diff have something to say; restored at the end
     for f in $(git ls-files 'apps/server/src/chat/*.ts' | head -n 6); do echo "// rtk-measure" >> "$f"; done
     for i in 1 2 3; do echo x > "rtkm-untracked-$i.txt"; done
@@ -44,7 +51,7 @@ if [ "$mode" = light ]; then
   m grep-native "$L" "$repo" "grep -rn ${GSYM:-actorOf} ${GDIR:-apps/server/src}" "$R grep ${GSYM:-actorOf} ${GDIR:-apps/server/src}"
   if [ "$L" = claudepilot ]; then git checkout -q -- . ; rm -f rtkm-untracked-*.txt; fi
 else
-  cd "$here"
+  cd "$here" || exit
   tf="apps/server/src/chat/actors.test.ts apps/server/src/chat/agentAccess.test.ts apps/server/src/chat/agents.test.ts"
   nt="node --import tsx --disable-warning=ExperimentalWarning --test"
   m node-test pass "$here/apps/server" "$nt ${tf//apps\/server\//}" "$R test $nt ${tf//apps\/server\//}"
