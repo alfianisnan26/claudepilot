@@ -31,9 +31,9 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   Respawned as 4ed98960 (new rules): NOW T-612 S1 (lint devDeps; lockfile via Job or BLOCKED). T-860 S2c after T-860 merges.
   T-736 S3g 4eb08f4e (8461) is BUILT: needs QA. T-772 S2e QA PWG 8838 -> b27; gaps -> S2f (Impl after T-425, 8858).
 - BACKEND 3484bd4d: DONE R2d b82cdcb9, S8c 8cb00f79, T-416 S2c dcdb6553 (lead read 8700), T-868 28d24ee3 (8697; roots guessed),
-  T-537 d6833850, T-524 S3c + T-733 S5 ee56bab9 (8815/8816; 8/8 mutants; -> QA Perf after T-868 S2). T-436 011de98b BUILT, NOT
-  RUN: job-run refused after the branch switch (old-rule lane vs new settings) -> its Jobs go to QA BE 2 after T-860. T-436 deploy
-  hazard: fail-closed vault list = agents reach no notes until set (decision on T-436).
+  T-537 d6833850, T-524 S3c + T-733 S5 ee56bab9 (8815/8816), T-436 (c) 5be5699a (backend Job f79ecee3 green on 011de98b; web
+  not run) -> QA BE 2 Jobs + QA UI review. Deploy hazard: fail-closed vault list (coordinator sets lists). Respawned 0003c89f
+  (new rules): NOW T-382 S1 (CursorPage + keyset helper, one limit-only route; it posts the lead decision, I can't comment).
 - AFTER T-401: T-426 S1h/S1e; T-379 S2 3f11b28 behind it. T-578 -> owner. T-631 -> coordinator (after this batch).
 
 ## DECISIONS (binding)
