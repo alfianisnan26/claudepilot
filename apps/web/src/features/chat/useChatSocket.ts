@@ -16,6 +16,7 @@ import {
   type ChatSession,
   type ChatSubscribe,
   type ChatTask,
+  type CursorPage,
 } from '@portal/contracts';
 import { startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { chatApi } from './api';
@@ -533,18 +534,31 @@ export function useChatSession(sessionId: string): ChatSessionApi {
 export interface ChatListApi {
   sessions: ChatSession[] | null;
   failed: boolean;
+  /** Reloads from the newest page (older pages already loaded are dropped). */
   reload: () => Promise<void>;
+  /** An older page is there to load (D-58). */
+  hasMore: boolean;
+  loadingMore: boolean;
+  loadMore: () => Promise<void>;
 }
 
-/** The session list with a slow 5 s poll; a failed poll keeps the last list on screen. */
+const LIST_PAGE = 50;
+
+/**
+ * The session list (D-58: pages): the newest page, a slow 5 s poll of that first page only, and `loadMore` for the older ones. The poll keeps
+ * the older pages already loaded; a failed poll keeps the last list on screen.
+ */
 export function useChatList(): ChatListApi {
-  const [sessions, setSessions] = useState<ChatSession[] | null>(null);
+  const [head, setHead] = useState<CursorPage<ChatSession> | null>(null);
+  const [older, setOlder] = useState<{ items: ChatSession[]; next: string | null } | null>(null);
   const [failed, setFailed] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
 
   const reload = useCallback(async () => {
     setFailed(false);
     try {
-      setSessions(await chatApi.list());
+      setHead(await chatApi.list({ limit: LIST_PAGE }));
+      setOlder(null);
     } catch {
       setFailed(true);
     }
@@ -552,9 +566,29 @@ export function useChatList(): ChatListApi {
 
   useEffect(() => {
     void reload();
-    const t = setInterval(() => void chatApi.list().then(setSessions, () => undefined), 5_000);
+    const t = setInterval(() => void chatApi.list({ limit: LIST_PAGE }).then(setHead, () => undefined), 5_000);
     return () => clearInterval(t);
   }, [reload]);
 
-  return { sessions, failed, reload };
+  const next = older ? older.next : (head?.next ?? null);
+  const loadMore = useCallback(async () => {
+    if (!next) return;
+    setLoadingMore(true);
+    try {
+      const page = await chatApi.list({ limit: LIST_PAGE, cursor: next });
+      setOlder((o) => ({ items: [...(o?.items ?? []), ...page.items], next: page.next }));
+    } catch {
+      /* the button stays; a tap tries again */
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [next]);
+
+  const sessions = useMemo(() => {
+    if (!head) return null;
+    const seen = new Set(head.items.map((s) => s.id));
+    return [...head.items, ...(older?.items ?? []).filter((s) => !seen.has(s.id))];
+  }, [head, older]);
+
+  return { sessions, failed, reload, hasMore: next !== null, loadingMore, loadMore };
 }

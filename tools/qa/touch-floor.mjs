@@ -7,7 +7,7 @@ import { api, login, sleep } from './lib.mjs';
 
 const prefix = process.argv[2] ?? 'floor';
 const call = api(await login());
-const sessions = (await call('GET', '/api/chat/sessions')).data ?? [];
+const sessions = (await call('GET', '/api/chat/sessions?limit=100')).data?.items ?? [];
 const ws = (await call('GET', '/api/workspaces')).data ?? [];
 const pages = [
   ['home', '/admin/home'],

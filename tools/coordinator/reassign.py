@@ -4,7 +4,7 @@ here=os.path.dirname(os.path.abspath(__file__))
 def ph(m,p,b=None):
     a=[os.path.join(here,'ph.sh'),m,p]+([json.dumps(b)] if b is not None else [])
     return json.loads(subprocess.run(a,capture_output=True,text=True).stdout)
-ss=ph('GET','/api/chat/sessions')['data']
+ss=ph('GET','/api/chat/sessions?limit=100')['data']['items']
 track=lambda s:(s.get('title') or '').split(':')[0]
 live={}
 for s in sorted(ss,key=lambda s:s['createdAt']):

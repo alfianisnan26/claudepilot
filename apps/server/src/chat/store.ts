@@ -21,9 +21,10 @@ import type {
   ChatTask,
   ChatWorktree,
 } from '@portal/contracts';
-import { CHAT_SPAWN_WHY_MAX, TASK_EVENTS_MAX } from '@portal/contracts';
+import { CHAT_SPAWN_WHY_MAX, CURSOR_MAX_LIMIT, TASK_EVENTS_MAX, type CursorPage } from '@portal/contracts';
 import { createHash, randomBytes } from 'node:crypto';
 import { posix } from 'node:path';
+import { clampLimit, cursorAfter, keysetPage } from '../store/keyset.js';
 import type { Store } from '../store/store.js';
 import { HOME } from '../workspaces/runtime.js';
 import { mapInputStrings, type ModelTotals, type StoredEvent, type TaskPatch } from './protocol.js';
@@ -492,6 +493,40 @@ export class ChatStore {
       .prepare(`SELECT * FROM chat_sessions ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY last_activity_at DESC, created_at DESC`)
       .all(...vals) as ChatSessionRow[];
     return rows.map((r) => this.toSession(this.#keyed(r)));
+  }
+
+  /**
+   * D-58: one page of {@link list} (same order: newest activity first, the id breaks ties), by keyset: a session started or touched while a
+   * client pages never repeats or skips a row. `keep` is the caller's authz filter (`view`): rows it refuses are not shown, and the cursor
+   * points at the last row SHOWN, so it never names a hidden session. A bad or foreign cursor is a 400.
+   */
+  listPage(filter: { workspaceId?: string; ticketId?: string; parentId?: string } = {}, args: { cursor?: string | undefined; limit?: unknown; keep?: (s: ChatSession) => boolean } = {}): CursorPage<ChatSession> {
+    const where: string[] = [];
+    const params: string[] = [];
+    if (filter.workspaceId) {
+      const one = this.#inWorkspace(filter.workspaceId);
+      where.push(one.sql);
+      params.push(...one.args);
+    }
+    if (filter.ticketId) (where.push('ticket_id = ?'), params.push(filter.ticketId));
+    if (filter.parentId) (where.push('parent_id = ?'), params.push(filter.parentId));
+    const limit = clampLimit(args.limit);
+    const scope = `chat.sessions|${filter.workspaceId ?? ''}|${filter.ticketId ?? ''}|${filter.parentId ?? ''}`;
+    const spec = { scope, table: 'chat_sessions', sortCol: 'last_activity_at', idCol: 'id', ...(where.length ? { where: where.join(' AND '), params } : {}) };
+    const shown: { s: ChatSession; sort: string; id: string }[] = [];
+    let cursor = args.cursor;
+    for (let guard = 0; guard < 10_000; guard++) {
+      const got = keysetPage<ChatSessionRow>(this.#db(), spec, { cursor, limit: CURSOR_MAX_LIMIT });
+      for (const r of got.rows) {
+        const s = this.toSession(this.#keyed(r));
+        if (!args.keep || args.keep(s)) shown.push({ s, sort: r.last_activity_at, id: r.id });
+      }
+      if (shown.length > limit || !got.next) break;
+      cursor = got.next;
+    }
+    const items = shown.slice(0, limit);
+    const last = items[items.length - 1];
+    return { items: items.map((x) => x.s), next: shown.length > limit && last ? cursorAfter(scope, last.sort, last.id) : null };
   }
 
   /** T-561: whether any session (live or ended) was started as a worker of `id`: one that ever had workers is a crew lead. */

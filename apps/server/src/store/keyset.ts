@@ -21,12 +21,13 @@ export function clampLimit(limit: unknown): number {
   return Math.min(Math.max(Math.trunc(n), 1), CURSOR_MAX_LIMIT);
 }
 
-function encode(scope: string, sort: string | number, id: number): string {
+/** A cursor that resumes just after the row with this sort key and id (for a route that filters rows and must point at the last row it SHOWED, never at a hidden one). */
+export function cursorAfter(scope: string, sort: string | number, id: string | number): string {
   const body = Buffer.from(JSON.stringify({ s: scope, k: sort, i: id })).toString('base64url');
   return `${body}.${mac(body)}`;
 }
 
-function decode(cursor: string, scope: string): { sort: string | number; id: number } {
+function decode(cursor: string, scope: string): { sort: string | number; id: string | number } {
   const [body, sig, ...rest] = cursor.split('.');
   if (!body || !sig || rest.length) throw bad();
   const want = Buffer.from(mac(body));
@@ -34,7 +35,7 @@ function decode(cursor: string, scope: string): { sort: string | number; id: num
   if (want.length !== got.length || !timingSafeEqual(want, got)) throw bad();
   try {
     const v = JSON.parse(Buffer.from(body, 'base64url').toString()) as { s?: unknown; k?: unknown; i?: unknown };
-    if (v.s !== scope || (typeof v.k !== 'string' && typeof v.k !== 'number') || typeof v.i !== 'number' || !Number.isInteger(v.i)) throw bad();
+    if (v.s !== scope || (typeof v.k !== 'string' && typeof v.k !== 'number') || !(typeof v.i === 'string' || (typeof v.i === 'number' && Number.isInteger(v.i)))) throw bad();
     return { sort: v.k, id: v.i };
   } catch (e) {
     throw e instanceof AppError ? e : bad();
@@ -47,7 +48,7 @@ export interface KeysetSpec {
   table: string;
   /** Column to sort by, newest (largest) first unless `dir` is `asc`. */
   sortCol: string;
-  /** Unique integer column that breaks ties. */
+  /** Unique column (integer or text) that breaks ties. */
   idCol: string;
   dir?: 'asc' | 'desc';
   /** A fixed SQL condition (from code, never from the request) and its parameters. */
@@ -76,7 +77,7 @@ export function keysetPage<R extends Record<string, unknown>>(db: DatabaseSync, 
   const got = db.prepare(sql).all(...params, limit + 1) as R[];
   const rows = got.slice(0, limit);
   const last = rows[rows.length - 1];
-  const next = got.length > limit && last ? encode(spec.scope, last[spec.sortCol] as string | number, last[spec.idCol] as number) : null;
+  const next = got.length > limit && last ? cursorAfter(spec.scope, last[spec.sortCol] as string | number, last[spec.idCol] as string | number) : null;
   return { rows, next };
 }
 

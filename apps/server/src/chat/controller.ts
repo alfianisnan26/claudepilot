@@ -65,6 +65,7 @@ import {
   type ChatWorktreeRequest,
   type ChatWorktreeStatus,
   type ChatSession,
+  type CursorPage,
   type ChatTask,
   type ChatTaskTranscript,
   type ChatSwitchOption,
@@ -1236,6 +1237,12 @@ export class ChatController {
   /** Sessions, newest activity first; optionally one workspace's, one ticket's, or one parent's children. */
   list(filter: { workspaceId?: string; ticketId?: string; parentId?: string } = {}): ChatSession[] {
     return this.#chat.list(filter).map((s) => this.#decorate(s));
+  }
+
+  /** D-58: one page of {@link list} for `GET /api/chat/sessions`; `keep` is the caller's `view` check, run before a row is shown. */
+  listPage(filter: { workspaceId?: string; ticketId?: string; parentId?: string }, args: { cursor?: string | undefined; limit?: unknown; keep?: (s: ChatSession) => boolean }): CursorPage<ChatSession> {
+    const page = this.#chat.listPage(filter, args);
+    return { items: page.items.map((s) => this.#decorate(s)), next: page.next };
   }
 
   /** One session by its id, or by the id of a session it took in (a move used to make a second one). */

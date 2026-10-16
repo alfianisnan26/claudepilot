@@ -559,6 +559,14 @@ no-op; a pin moves to the head, the head takes an earlier row's ticket link when
 chain are assigned to the head with an `assigned` entry (actor `system`) on each timeline. Sessions carry no tags today, so none move.
 Recovery in place (part B) is below; not yet: grouping usage and scores by lineage root (slice 3).
 
+**Paged list (D-58, T-382 S2).** `GET /api/chat/sessions?limit=&cursor=&parentId=` answers one page, `{ items, next }` ([README](README.md), List API rule):
+newest activity first, the session id breaking ties, 25 by default and at most 100. Each row is checked with `view` (`in:list(session)`) before it
+is shown and `next` points at the last row shown, so a cursor never names a session the caller may not view; a bad, forged or foreign cursor
+(another `parentId`) is a 400. The web loads the newest 50, has an Older button, and its 5 s refresh asks for that first page only (older pages
+already loaded stay until a reload). Callers that need the whole set (the palette, the ticket's assignee picker, a lead's workers) follow `next`
+up to five pages of 100 (`chatApi.listAll`). The in-process callers (`ChatController.list`, the portal MCP tools, tickets, repos, CI) never use the
+route and are unchanged. Scripts under `tools/` read `data.items` of `?limit=100`.
+
 **Continuation (T-270, 2026-10-14).** `POST /api/chat/sessions` takes `continuedFrom: <session id>`. The session named must exist (404),
 be in the same workspace and have ended (409 otherwise: a live or interrupted session keeps its work); this is checked before anything is
 made. The new row is written with `continued_from` and, in the same SQLite transaction, every unfinished ticket held by the predecessor

@@ -18,7 +18,7 @@ import {
   type UpdateRestartHintRequest,
 } from '@portal/contracts';
 import { Hono, type Context } from 'hono';
-import { actorOf, actorString, requireCan } from '../authz/seam.js';
+import { actorOf, actorString, requireCan, visible } from '../authz/seam.js';
 import { RateLimiter } from '../rateLimit.js';
 import { serveBlob } from './artifacts/index.js';
 import type { ChatController } from './controller.js';
@@ -61,8 +61,13 @@ function childrenMode(raw: string | undefined): 'end' | undefined {
 export function createChatRoutes(controller: ChatController): Hono {
   const chat = new Hono();
 
-  // GET /api/chat/sessions — sessions, newest activity first.
-  chat.get('/', (c) => c.json(success(controller.list({ parentId: c.req.query('parentId') || undefined }))));
+  // GET /api/chat/sessions?limit=&cursor=&parentId= — one page of sessions, newest activity first (D-58: `{ items, next }`, 25 by default, 100 at most).
+  // Each row is checked with `view` BEFORE it is shown, and `next` points at the last row shown, so a cursor never reveals a session the caller may not see. A bad cursor is a 400.
+  chat.get('/', (c) => {
+    const actor = actorOf(c);
+    const keep = (s: { id: string }) => visible(actor, 'session', [s], (x) => x.id).length > 0;
+    return c.json(success(controller.listPage({ ...(c.req.query('parentId') ? { parentId: c.req.query('parentId')! } : {}) }, { cursor: c.req.query('cursor') || undefined, limit: c.req.query('limit'), keep })));
+  });
 
   // POST /api/chat/sessions — create one (starts the host in the background); 409 FOLDER_UNTRUSTED with the scan first when the folder needs trusting.
   chat.post('/', async (c) => {

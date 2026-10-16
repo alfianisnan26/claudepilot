@@ -53,7 +53,7 @@ function savedView(): Pick<ViewState, 'groupBy'> {
 export function SessionsPage() {
   const toast = useToast();
   const navigate = useNavigate();
-  const { sessions, failed, reload } = useChatList();
+  const { sessions, failed, reload, hasMore, loadingMore, loadMore } = useChatList();
   const { factOf, loaded: workspacesLoaded } = useWorkspaceFacts();
   const personas = usePersonaIdentities();
   const [creating, setCreating] = useState(false);
@@ -300,6 +300,15 @@ export function SessionsPage() {
             ))}
           </div>
         ))}
+
+      {/* D-58: the list loads the newest page; the 5 s refresh asks for that page only. */}
+      {sessions && hasMore && (
+        <div className="mt-4 flex justify-center">
+          <Button variant="secondary" loading={loadingMore} onClick={() => void loadMore()}>
+            Older
+          </Button>
+        </div>
+      )}
 
       {selecting && (
         <BulkBar

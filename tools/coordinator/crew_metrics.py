@@ -22,7 +22,7 @@ def main():
     log = args[args.index('--log') + 1] if '--log' in args else LOG
     now = datetime.datetime.now(datetime.timezone.utc)
     snap = {'at': now.isoformat(timespec='seconds')}
-    sessions = api('/api/chat/sessions') or []
+    sessions = (api('/api/chat/sessions?limit=100') or {}).get('items', [])  # D-58: a page, the newest 100
     leads = [s for s in sessions if s.get('title') == LEAD_TITLE and s.get('state') != 'ended']
     lead = leads[0] if leads else None
     if lead:
