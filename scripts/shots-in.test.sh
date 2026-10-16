@@ -133,13 +133,19 @@ expect "exactly the 16 header bytes is accepted" 0 "" "$wt" exact.png
 
 # --- the copy is staged and verified (T-868 S2, finding 1): a hook swaps a file AFTER the checks, as a racing process would
 real_png=$outside/real.png; printf "${HDR}real" > "$real_png"
+# The shipped script has no hook. The race tests run a COPY made here: the two `# T:` marker lines become calls of $SHOTS_TEST_HOOK.
+hooked=$base/shots-in.hooked.sh
+sed -e 's|^# T:before-copy$|"$SHOTS_TEST_HOOK" before-copy "$stage"|' -e 's|^# T:before-move$|"$SHOTS_TEST_HOOK" before-move "$stage"|' "$script" > "$hooked"
+[ "$(grep -c SHOTS_TEST_HOOK "$hooked")" = 2 ] && ok "the test copy has both hook calls" || bad "the test copy has both hook calls"
+! grep -q SHOTS_TEST_HOOK "$script" && ok "the shipped script has no hook call" || bad "the shipped script has a hook call"
 mkhook() { printf '#!/usr/bin/env bash\n%s\nexit 0\n' "$1" > "$base/hook.sh"; chmod +x "$base/hook.sh"; }
+runh() { SHOTS_TEST_MODE=1 SHOTS_TEST_HOOK="$base/hook.sh" bash "$hooked" --src "$src" --root "$root" "$@"; }
 # refused_hook <name> <fragment> <hook body> <args...>: the hook runs at before-copy ($1) or before-move; nothing may be left behind
 refused_hook() {
   local name=$1 frag=$2 body=$3; shift 3
   reset; rm -rf "$src/ok.png"; png ok.png; mkhook "$body"
   local rc=0 err
-  err=$(SHOTS_TEST_MODE=1 bash "$script" --src "$src" --root "$root" --hook "$base/hook.sh" "$@" 2>&1 >/dev/null) || rc=$?
+  err=$(runh "$@" 2>&1 >/dev/null) || rc=$?
   if [ "$rc" = 2 ] && [[ $err == *"$frag"* ]]; then ok "$name"; else bad "$name (exit $rc: $err)"; fi
 }
 nothing_left() { if [ -z "$(ls -A "$wt/docs/screenshots" 2>/dev/null)" ]; then ok "$1: nothing left, staging removed"; else bad "$1: left behind: $(ls -A "$wt/docs/screenshots")"; fi; }
@@ -154,9 +160,9 @@ nothing_left "size swap"
 refused_hook "a source swapped for a folder is refused" "failed" "[ \"\$1\" = before-copy ] && rm -f '$src/ok.png' && mkdir '$src/ok.png'" "$wt" ok.png
 nothing_left "folder swap"
 reset; rm -rf "$src/ok.png"; png ok.png; rm -f "$base/hook-ran"; mkhook "touch '$base/hook-ran'"
-rc=0; SHOTS_TEST_MODE=1 bash "$script" --src "$src" --root "$root" --hook "$base/hook.sh" "$wt" text.png >/dev/null 2>&1 || rc=$?
+rc=0; runh "$wt" text.png >/dev/null 2>&1 || rc=$?
 { [ "$rc" = 2 ] && [ ! -e "$base/hook-ran" ] && [ ! -e "$wt/docs/screenshots" ]; } && ok "a bad source is refused before anything is staged" || bad "a bad source is refused before anything is staged (exit $rc)"
-rc=0; SHOTS_TEST_MODE=1 bash "$script" --src "$src" --root "$root" --hook "$base/hook.sh" "$wt" ok.png >/dev/null 2>&1 || rc=$?
+rc=0; runh "$wt" ok.png >/dev/null 2>&1 || rc=$?
 { [ "$rc" = 0 ] && [ -e "$base/hook-ran" ]; } && ok "the hook runs for a good copy (the swap tests rely on it)" || bad "the hook runs for a good copy (exit $rc)"
 printf 'old' > "$base/old.txt"
 refused_hook "a file that appears at the destination before the move is kept" "exists" "[ \"\$1\" = before-move ] && cp '$base/old.txt' \"\$2/../ok.png\"" "$wt" ok.png
@@ -166,15 +172,21 @@ printf 'secret' > "$outside/victim"
 refused_hook "a link that appears at the destination before the move is refused" "exists" "[ \"\$1\" = before-move ] && ln -s '$outside/victim' \"\$2/../ok.png\"" "$wt" ok.png
 [ "$(cat "$outside/victim")" = secret ] && ok "nothing written through the late link" || bad "nothing written through the late link"
 reset; rm -rf "$src/ok.png"; png ok.png; mkhook "[ \"\$1\" = before-move ] && ln -s '$outside/victim' \"\$2/../ok.png\""
-rc=0; SHOTS_TEST_MODE=1 bash "$script" --src "$src" --root "$root" --hook "$base/hook.sh" --force "$wt" ok.png >/dev/null 2>&1 || rc=$?
+rc=0; runh --force "$wt" ok.png >/dev/null 2>&1 || rc=$?
 { [ "$rc" = 0 ] && [ ! -L "$wt/docs/screenshots/ok.png" ] && [ -f "$wt/docs/screenshots/ok.png" ] && [ "$(cat "$outside/victim")" = secret ]; } && ok "--force replaces a late link itself, never writing through it" || bad "--force and a late link (exit $rc, victim: $(cat "$outside/victim"))"
 reset; rm -rf "$src/ok.png"; png ok.png
 expect "a clean copy through the staging folder still works" 0 "" "$wt" ok.png
 cmp -s "$src/ok.png" "$wt/docs/screenshots/ok.png" && [ -z "$(ls -A "$wt/docs/screenshots" | grep -v '^ok.png$' || true)" ] && ok "clean copy: bytes equal, no staging left" || bad "clean copy: bytes or leftovers"
 
 # --- the flags
-rc=0; err=$(env -u SHOTS_TEST_MODE bash "$script" --hook "$base/hook.sh" "$wt" ok.png 2>&1 >/dev/null) || rc=$?
-if [ "$rc" = 2 ] && [[ $err == *"--hook is for tests only"* ]]; then ok "--hook refused without SHOTS_TEST_MODE"; else bad "--hook refused without SHOTS_TEST_MODE (exit $rc: $err)"; fi
+# the shipped script has no --hook at all: an unknown flag even in test mode, and the program is never run
+reset; rm -rf "$src/ok.png"; png ok.png; rm -f "$base/hook-ran"; mkhook "touch '$base/hook-ran'"
+for mode in 1 0 unset; do
+  rc=0
+  if [ "$mode" = unset ]; then err=$(env -u SHOTS_TEST_MODE bash "$script" --hook "$base/hook.sh" "$wt" ok.png 2>&1 >/dev/null) || rc=$?
+  else err=$(SHOTS_TEST_MODE=$mode bash "$script" --hook "$base/hook.sh" "$wt" ok.png 2>&1 >/dev/null) || rc=$?; fi
+  if [ "$rc" = 2 ] && [[ $err == *"unknown flag --hook"* ]] && [ ! -e "$base/hook-ran" ] && [ ! -e "$wt/docs/screenshots" ]; then ok "--hook is refused as an unknown flag (SHOTS_TEST_MODE=$mode), nothing run"; else bad "--hook refused (mode $mode, exit $rc: $err)"; fi
+done
 for flag in --src --root; do
   rc=0; err=$(env -u SHOTS_TEST_MODE bash "$script" "$flag" "$base" "$wt" ok.png 2>&1 >/dev/null) || rc=$?
   if [ "$rc" = 2 ] && [[ $err == *"$flag is for tests only"* ]]; then ok "$flag refused without SHOTS_TEST_MODE"; else bad "$flag refused without SHOTS_TEST_MODE (exit $rc: $err)"; fi

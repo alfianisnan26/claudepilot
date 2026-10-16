@@ -15,3 +15,6 @@ dist/
 .pilot/out/
 job-run-artifacts/
 job-out/
+
+# shots-in.sh staging folder (T-868), left only if the script is killed
+.shots-in.*

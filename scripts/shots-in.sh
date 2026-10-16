@@ -10,24 +10,24 @@
 # NAMES: [A-Za-z0-9._-] only, no leading dot, no `..`. Paths: no quote, backslash, space, glob or `..`.
 # Every source and the destination are checked BEFORE anything is copied: one refusal copies nothing (exit 2, with the reason on stderr).
 # The copy is staged in a private folder inside the target and verified there (no check-then-copy race), then renamed with `mv -n`.
-# Deletes only that staging folder (the source stays). --src, --root and --hook are for the tests only: refused unless
-# SHOTS_TEST_MODE=1; --hook <program> runs before the copy and before the move, to swap files in a test.
+# Deletes only that staging folder (the source stays). --src and --root are for the tests only: refused unless SHOTS_TEST_MODE=1.
+# There is NO hook option and no code path that runs a caller-chosen program (`--hook` is an unknown flag). The race tests
+# (shots-in.test.sh) build a COPY of this script in their own temp folder, with calls inserted at the two `# T:` marker lines below.
 set -eu
 set -o pipefail
 refuse() { echo "refused: $*" >&2; exit 2; }
 src=/home/node/Downloads/.playwright
 roots=(/home/node/work/claudepilot.worktrees /home/node/work/tradingbot.worktrees /home/node/work/agentic-worktrees /home/node/work/konfersi.worktrees)
-max=5242880; magic=89504e470d0a1a0a; force=0; test_roots=(); stage=""; hookprog=""
+max=5242880; magic=89504e470d0a1a0a; force=0; test_roots=(); stage=""
 trap 'if [ -n "$stage" ]; then rm -rf -- "$stage"; fi' EXIT
 while [ $# -gt 0 ]; do
   case $1 in
     --force) force=1; shift ;;
-    --src|--root|--hook)
+    --src|--root)
       [ "${SHOTS_TEST_MODE:-}" = 1 ] || refuse "$1 is for tests only (set SHOTS_TEST_MODE=1); the defaults are the only reach" # G:testmode
       case $1 in
         --src) src=${2:?--src <dir>} ;;
-        --root) test_roots+=("${2:?--root <dir>}") ;;
-        *) hookprog=${2:?--hook <program>} ;;
+        *) test_roots+=("${2:?--root <dir>}") ;;
       esac
       shift 2 ;;
     --) shift; break ;;
@@ -91,8 +91,7 @@ done
 # it never overwrites, and it never follows a link at the destination). Any refusal removes the staging folder (the trap).
 mkdir -p -- "$out"
 stage=$(mktemp -d -- "$out/.shots-in.XXXXXX") || refuse "cannot make a staging folder in $out"
-hook() { if [ -n "$hookprog" ]; then "$hookprog" "$1" "$stage"; fi; }
-hook before-copy
+# T:before-copy
 for n in "${files[@]}"; do
   cp --no-dereference -T -- "$srcreal/$n" "$stage/$n" || refuse "copying $n failed" # G:cpfail
   [ -f "$stage/$n" ] && [ ! -L "$stage/$n" ] || refuse "the copy of $n is not a regular file (the source was swapped for a link?)" # G:copylink
@@ -100,7 +99,7 @@ for n in "${files[@]}"; do
   [ "$size" -le "$max" ] || refuse "the copy of $n is $size bytes (over $max)" # G:copysize
   check_png "$stage/$n" "$n" # G:copypng
 done
-hook before-move
+# T:before-move
 for n in "${files[@]}"; do
   if [ "$force" = 1 ]; then
     mv -f -T -- "$stage/$n" "$out/$n" || refuse "could not move $n into $out"
