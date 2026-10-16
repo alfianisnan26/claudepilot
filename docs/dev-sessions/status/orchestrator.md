@@ -16,7 +16,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - QA UI 8b13bb5a: T-736 S3c PWG 7875 (-> S3d). REVIEW T-781 S3 APPROVE (F1' F2). REVIEW T-723 S3c APPROVE (7908 gaps).
   PLAN QA T-781 S6 7918; no Write tool (7939, coordinator 7944). REVIEW S6 PRE APPROVE a-d 7945. T-733 PRE CHANGES 7950 (->Backend). PLAN QA T-772 S2 7963. Waits S6 delta / T-772 S2.
 - QA BE 2 42e5408f: QA T-781 S5 FAIL (F1: prod adapter index.ts has no interrupt; 7905). QA T-723 S3c PWG 7903 (39/0, m1 m3
-  killed). T-736 C1 holds 7907. T-723 m2 KILLED 7932 = PASS. No Write either (7946: 3 findings -> Impl S6). T-611 S1b PRE CHANGES C5 7949 (->BE Infra). PLAN QA T-733 7964. Waits S6 DONE (QA Job), then T-733.
+  killed). T-736 C1 holds 7907. T-723 m2 KILLED 7932 = PASS. No Write either (7946: 3 findings -> Impl S6). T-611 S1b PRE CHANGES C5 7949 (->BE Infra). PLAN QA T-733 7964. Now QA T-733 Job at 1afaf8a6; then T-781 S6 QA.
 - T-781 (D-76) now assigned to the lead: verdicts posted 7905. S1-S5 built; S6 (QA FAIL F1) and S7 open.
 - IMPL lane 7cc1b2f5 (sonnet, satria; c959661f ended: T-772 S1b DONE 1e1e0ba1 7900). Now T-781 S6 (7905: a prod interrupt,
   b re-check, c redact before clip, d tests; + 7945/7946 items 1-5 sent) -> T-781 S7 (F2 + S5 items) -> T-736 S3d -> T-772 S2 (7599 + 7916).
@@ -24,7 +24,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   redact/safe_name/say: mask before cut, holds). Now T-611 S1b on ticket/T-611-s1b (from S1h; S1 re-applied by hand, conflicts)
   (+C5 7949 stale placement) -> T-426 S1i (7888; lead merges it into T-611 S1b) -> T-611 S2 -> T-524 S3c + T-733 S5 (job-run.sh) -> T-612 S1.
 - BACKEND 3484bd4d (sonnet; b2f0e95f ended: T-781 S5 DONE 71f9dc76 7869, job f86ac5de 274/0, 4 mutants killed -> QA BE 2 queue).
-  Now T-733 S4 S6 S1 (+7950 memoryBudget wait) on ticket/T-733-test-gaps (S5 job-run -> BE Infra) (T-781 moved to Impl, D-76). T-778 = person.
+  T-733 S4 S6 S1 DONE 1afaf8a6 (7950 fix in) -> QA BE 2. Now T-675 (findings 4/5 + R2) (S5 job-run -> BE Infra) (T-781 moved to Impl, D-76). T-778 = person.
 - HELD: T-426 S1e 2174eee1 QA PASS 6169, review CHANGES 7121 -> fix, re-QA, merge after T-401. T-578 51f6c153 review CHANGES 6168 -> owner. T-631 CHANGES 5850 -> coordinator.
 - 16:12 OWNER PRIORITY (coordinator, T-426 5538): T-401 then T-426 FIRST. T-401 gate GREEN gate-54ba328-6502; ff only on the person's ack.
 
@@ -72,7 +72,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 2. BATCH 20 BUILT wip/main-35f917a 35f917a9 (T-731 + r.txt drop, T-376 S4b, T-732, T-610 r3, pack a4c76eaa; worktree premerge-b20):
    waits a gate (T-731 7902, coordinator asked to merge it for ~13:20 deploy; default (a) coordinator gates it, then lead ff).
    Then: T-739 B (mig 383 note), T-723 S3c fadee77e READY, batch 19 rebuilt, T-736 after S3d.
-3. T-675 (memory findings 4/5 + R2 test, Backend lane), T-574 S3 (6615), T-416 S2 (Bypass restore).
+3. T-574 S3 (6615), T-416 S2 (Bypass restore).
 4. RTK: T-340 (person/coordinator) -> T-341 merge -> T-306 item 3. 5. T-537. 6. T-513. 7. T-472 live re-check (needs portal_status), T-422, T-147, T-438, T-425, T-436, T-437, T-432, T-382, T-377, T-386, T-409, T-402, T-398,
    T-399, T-370 HOLD, T-371..T-374, T-363, T-451, T-470, T-507, T-508, T-512, T-520; T-404 open till deployed.
 
