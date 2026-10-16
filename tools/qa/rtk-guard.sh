@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # T-736: the one guard of the rtk measurement scripts (rtk-history.sh, rtk-classes.sh, rtk-measure.sh). Sourced, not run.
 # Those scripts rewrite tracked files and end with git reset / checkout, which would wipe uncommitted work. They run only
 #   - in a job-run Job (the Job container exports JR_REPO_URL, nothing else does), and

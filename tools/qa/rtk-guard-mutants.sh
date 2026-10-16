@@ -7,7 +7,6 @@ set -u
 cd "$(dirname "$0")/../.." || exit 2
 [ -n "${JR_REPO_URL:-}" ] || { echo "rtk-guard-mutants.sh: refusing: it edits tracked files; run it through scripts/job-run.sh" >&2; exit 2; }
 [ -z "$(git status --porcelain)" ] || { echo "rtk-guard-mutants.sh: refusing: the checkout has uncommitted changes" >&2; exit 2; }
-T=apps/server/src/qa/rtkHistoryGuard.test.ts
 survived=0
 mutant() { # <name> <what> <file...> -- <sed script>
   local name=$1 what=$2; shift 2
