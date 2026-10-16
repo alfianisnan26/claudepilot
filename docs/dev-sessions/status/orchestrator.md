@@ -13,7 +13,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 ## IN FLIGHT (6 of 6, D-71)
   Lanes' ticket_comment refused on unassigned tickets (T-341, T-549, T-675): verdicts live in their replies + this file.
 - QA PERF 7e4879c7: T-426 S1f PASS WITH GAPS (job 22f0cb1a): pool creds P1-P3 hold; --out scan O1-O3+O5 red incl. clean
-  control O5 = harness suspect; job-run.sh:47 comment stale (/proc) -> now 1 Job, new command, full assertions, on 6b721915.
+  control O5; r2 job d6cdbd7d: all 4 = HARNESS defect (stale fake kubectl), probe fix e864da9d -> now r3 on lead-built
+  wip/qa-t426b-fe97a4c (fe97a4ca). job-run.sh:47 comment stale (/proc): fix in the T-426 rework if r3 finds more.
 - QA UI 8b13bb5a: REVIEW T-723 S3 APPROVE 7609, PLAN T-733 (7630, 7633), PLAN T-781 5 slices (reply; D1-D7 defaults taken)
   -> now QA T-736 S3 2d10b092.
 - FOR THE COORDINATOR, T-781 (D-76): lead cannot claim/comment it (unassigned); Backend lane b2f0e95f spawned on it (S1+S2),
@@ -23,8 +24,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   after T-739 S4 -> now RE-QA T-610 r2 c2246fb0 (builder 7674, job 3848b831 162/0, m6-m8 red; COUNTED mutants unrun).
 - IMPL lane 46007215 (sonnet; 09fee945 ended: T-772 S1 DONE c9ee2ba2, job 8f10b14d 16/16 combos, 7656 -> QA UI queued)
   T-739 B S4 mutant-killing tests (M1 M3-M7) on ticket/T-739-scorecard-index -> T-723 S3b (7677) -> T-772 S2 (sweep 7599).
-- BE INFRA lane 7c3ee28b (sonnet; 72bdc262 ended: T-610 r2 DONE c2246fb0; T-611 S0 BLOCKED 7679, /tmp refused) respawned in
-  ticket-t-611-job-placement on lead-extracted job-out/t611-s0/jobrun-lines.txt (not to commit) -> S1/S3 per H -> T-524 S3c -> T-612 S1.
+- BE INFRA 7c3ee28b (sonnet; T-610 r2 DONE c2246fb0) T-611 S0 7688: no H testable (placement never in Job log) -> decision 7694
+  (a): now T-611 S1 (headroom, log line, Secret error code) -> S2 -> T-524 S3c (7360) -> T-612 S1.
 - BACKEND lane b2f0e95f (sonnet): T-781 S1+S2 DONE 1b46072d (7675, job ae47236a 119/0, 5 mutants; lead read diff) -> QA BE 2
   after T-610; now T-781 S4 + #conflicts cleanup -> S3, S5 -> T-733. T-778 filed (bypass routes lack own requireCan; authz = person).
 - HELD: T-426 S1e 2174eee1 QA PASS 6169, review CHANGES 7121 -> fix, re-QA, merge after T-401. T-578 51f6c153 review CHANGES 6168 -> owner. T-631 CHANGES 5850 -> coordinator.
@@ -39,7 +40,6 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - 07:45 D-75 (coordinator): one Job per commit (checks chained), never the same command twice on a commit, QA reads the builder's log;
   the LEAD RUNS NO JOBS (quick-check and gate go to a lane); idle QA gets no-Job work (reviews, browser). T-731 -> BE Infra after T-697.
 - 03:55 Lead false claim corrected: T-524 6775 said job 4d5cb657 proved the S3 patch; its log shows the rule at creation. 6788; incident T-721.
-- 20:14 PUSHBACK T-657: T-259, T-317, T-338 closed against the evidence -> reopen proposed; lead can't (T-634).
 - 16:30 D-71 (coordinator): limit 6; 3rd build lane BE Infra (CI, runners, job-run, k3s, deploy, secrets delivery, usage, spend, quota):
   T-401, T-426, T-611, T-547, T-610. Backend: T-546, T-597, T-600 route, T-325. Spawn lanes with claude auto.
 - 14:56 D-70 LANES (DECISIONS.md; my decision T-595 5380): freed slots become lanes, spawned ONCE on sonnet and fed
