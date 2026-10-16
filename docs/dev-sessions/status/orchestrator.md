@@ -7,8 +7,6 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - MERGED bf61c5ee (batch 17): T-251 S2 9adfeee2, gate GREEN gate-5965287. T-251 all 5 reqs + gaps closed; lead can't close (T-634).
 - MERGED 92900150 (batch 16): T-710 8107098a (QA UI PASS WITH GAPS ae9b7dae; mutant caught 5b304d1c; 24 px desktop -> T-724);
   gate GREEN gate-2d10963. T-710 unassigned: lead can't close (T-634), evidence here.
-- MERGED be431d6a (batch 15): T-675 65d93dea + T-549 S2 5d97103d (QA BE 2 PASS WITH GAPS; T-723); gate GREEN gate-9f5afa1
-  (actions.test timer flaked in suite, passed alone: T-697's case).
 
 ## IN FLIGHT (6 of 6, D-71)
   Lanes' ticket_comment refused on unassigned tickets (T-341, T-549, T-675): verdicts live in their replies + this file.
