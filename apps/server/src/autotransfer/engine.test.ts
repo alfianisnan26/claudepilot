@@ -616,6 +616,44 @@ function spyHistory(r: Awaited<ReturnType<typeof rig>>) {
   return calls;
 }
 
+test('T-781: a second evaluation while the stop still waits does not stop or move again (exactly one stop, one move)', async () => {
+  const r = await rig(AUTO, EXHAUSTED);
+  r.chat.sessions.set('s1', STUCK());
+  r.chat.stored('s1', [{ at: at(-4) }]);
+  let stops = 0;
+  (r.chat as { interrupt: unknown }).interrupt = () => (stops++, new Promise<void>(() => {}));
+  const orig = console.error;
+  console.error = () => {};
+  try {
+    const first = r.engine.evaluate('s1');
+    await new Promise((res) => setImmediate(res));
+    const second = await r.engine.evaluate('s1'); // the stop is still waiting
+    assert.equal(second, null, 'the chat is marked as moving');
+    assert.equal(stops, 1);
+    assert.equal(r.chat.moves.length, 0);
+    r.clock.advance(0.51);
+    await first;
+    await r.engine.settled();
+  } finally {
+    console.error = orig;
+  }
+  assert.equal(stops, 1, 'one stop');
+  assert.deepEqual(r.chat.moves, [{ id: 's1', to: 'home', handoff: 'skip' }], 'one move');
+  r.engine.stop();
+});
+
+test('T-781: a dry run stops nothing, even for a stuck exhausted chat', async () => {
+  const r = await rig({ ...AUTO, [K.dryRun]: true }, EXHAUSTED);
+  r.chat.sessions.set('s1', STUCK());
+  r.chat.stored('s1', [{ at: at(-4) }]);
+  await r.engine.evaluate('s1');
+  await r.engine.settled();
+  assert.equal(r.chat.interrupted.length, 0);
+  assert.equal(r.chat.moves.length, 0);
+  assert.equal(r.auto.events('u_a', { kinds: ['dry_run'] }).length >= 1, true);
+  r.engine.stop();
+});
+
 test('T-781 F2: a working chat on a source that is only low reads no history for the silence', async () => {
   const r = await rig(AUTO);
   r.chat.sessions.set('s1', STUCK());

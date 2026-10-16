@@ -581,17 +581,22 @@ export class AutoTransferEngine {
         // turn on a Claude that is nearly out; the stored conversation carries, then the continuation.
         const steered = row.steeredPeriod !== null;
         // T-781, the hard move: the turn is stuck on an exhausted Claude (no event for 3 minutes): stop the turn, not the chat, then move.
-        if (d.hard) {
+        // A dry run only says what it would do: it stops nothing.
+        if (d.hard && !settings.dryRun) {
           // Just before the stop: a person may have moved or restarted the chat since the decision was made; then nothing is done.
           if (!this.#stillStuck(s)) {
             console.info(`[autotransfer] hard move session=${id}: the chat changed since the decision, nothing done`);
             break;
           }
           console.info(`[autotransfer] hard move session=${id}: no event for ${AUTO_CONSTANTS.hardMoveIdleMin} minutes on an exhausted Claude, stopping the turn`);
+          // The chat counts as moving from here: a second evaluation during the stop (up to HARD_STOP_MS; `evaluate` is not serialised for
+          // a direct caller) must not run the hard path again. `#move` keeps the mark and clears it when it ends.
+          this.#inflight.set(id, d.to.id);
           await this.#stopTurn(id);
           // A person may have moved the chat while the stop was waited for: that move is not overridden.
           const now = this.#d.chat.get(id);
           if (!now || now.state === 'ended' || now.claudeId !== s.claudeId || now.switching) {
+            this.#inflight.delete(id);
             console.info(`[autotransfer] hard move session=${id}: the chat moved while its turn was being stopped, nothing more done`);
             break;
           }
