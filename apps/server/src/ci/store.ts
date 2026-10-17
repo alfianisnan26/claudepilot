@@ -2,7 +2,7 @@
 
 import { AppError } from '@isnanme/core';
 import { CURSOR_MAX_LIMIT } from '@portal/contracts';
-import { clampLimit, cursorAfter, keysetPage } from '../store/keyset.js';
+import { clampLimit, cursorAfter, keysetPage, SCAN_FACTOR } from '../store/keyset.js';
 import type { Store } from '../store/store.js';
 
 export interface RepoRow {
@@ -349,15 +349,21 @@ export class CiStore {
     const spec = { scope: args.scope, table: 'ci_runs', sortCol: 'created_at', idCol: 'id', ...(where.length ? { where: where.join(' AND '), params } : {}) };
     const shown: RunRow[] = [];
     let cursor = args.cursor;
-    for (let guard = 0; guard < 10_000; guard++) {
-      const got = keysetPage<RunRow & Record<string, unknown>>(this.#db, spec, { cursor, limit: CURSOR_MAX_LIMIT });
+    // Bounded scan: at most SCAN_FACTOR x limit rows per request; at the bound `next` rests on the last row scanned (the cursor is sealed).
+    const maxScan = limit * SCAN_FACTOR;
+    let scanned = 0;
+    let resume: string | null = null;
+    while (scanned < maxScan) {
+      const got = keysetPage<RunRow & Record<string, unknown>>(this.#db, spec, { cursor, limit: Math.min(CURSOR_MAX_LIMIT, maxScan - scanned) });
+      scanned += got.rows.length;
       for (const r of got.rows) if (!args.keep || args.keep(r)) shown.push(r);
+      resume = got.next;
       if (shown.length > limit || !got.next) break;
       cursor = got.next;
     }
     const rows = shown.slice(0, limit);
     const last = rows[rows.length - 1];
-    const next = shown.length > limit && last ? cursorAfter(args.scope, last.created_at, last.id) : null;
+    const next = shown.length > limit && last ? cursorAfter(args.scope, last.created_at, last.id) : shown.length > limit ? null : resume;
     if (args.cursor) return { rows, next };
     const sql = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const every = this.#db.prepare(`SELECT id, status FROM ci_runs ${sql}`).all(...params) as { id: string; status: string }[];

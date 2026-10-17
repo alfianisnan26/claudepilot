@@ -6,6 +6,7 @@ import { test } from 'node:test';
 import { AppError, isAppError } from '@isnanme/core';
 import { CURSOR_DEFAULT_LIMIT, CURSOR_MAX_LIMIT, type Actor, type CiRunPage } from '@portal/contracts';
 import { Hono } from 'hono';
+import { peekCursor } from '../store/keyset.js';
 import { registerCiAuthz } from './authz.js';
 import { createCiRoutes } from './routes.js';
 import { harness, remote, WS, type H } from './testkit.js';
@@ -169,7 +170,7 @@ test('authz: a run the caller may not view is in no page, no count and no cursor
     assert.equal(counts[0], seen.length, 'the total counts only what A may view');
     assert.ok(cursors.length > 0);
     for (const c of cursors) {
-      const named = (JSON.parse(Buffer.from(c.split('.')[0]!, 'base64url').toString()) as { i: string }).i;
+      const named = peekCursor(c).id as string;
       assert.ok(!hidden.has(named), 'a cursor points at a run that was shown, never at a hidden one');
     }
     assert.equal(mine.size + hidden.size, 12);

@@ -50,7 +50,7 @@ import {
 } from '@portal/contracts';
 import { assertBumpable, bumpMode, bumpNote, bumpTargets as targetsFor } from '../chat/bump.js';
 import { cleanText } from '../portalmcp/sanitize.js';
-import { clampLimit, cursorAfter, decodeCursor } from '../store/keyset.js';
+import { clampLimit, cursorAfter, decodeCursor, SCAN_FACTOR } from '../store/keyset.js';
 import type { Store } from '../store/store.js';
 import {
   AGENT_ASSIGN_USER_TAGS_DEFAULT,
@@ -684,7 +684,8 @@ export class Tickets {
    * D-58: one page of {@link list}, same order, by keyset on the sort key plus the ticket number (a ticket made or touched while a client pages
    * never repeats or skips a row), as SUMMARY rows: description and closing summary cut at {@link TICKET_LIST_TEXT} characters.
    * The cursor is bound to the caller and every filter value (a cursor from another filter is a 400). `keep` is the caller's `view` check: a
-   * row it refuses is not shown and the cursor points at the last row SHOWN, so it never names a hidden ticket. `total` and `counts` only on page 1.
+   * row it refuses is not shown. The cursor points at the last row SHOWN, or, when the scan bound (SCAN_FACTOR x limit rows read) ends the page, at
+   * the last row scanned; it is sealed, so it shows nothing of a hidden ticket. `total` and `counts` only on page 1.
    */
   listPage(caller: Caller, filter: TicketFilter = {}, args: { cursor?: string | undefined; limit?: unknown; keep?: (t: TicketItem) => boolean } = {}): TicketPage {
     const { sql, args: sqlArgs } = this.#where(caller, filter);
@@ -713,23 +714,32 @@ export class Tickets {
       resume = { key: at.sort, num: at.id };
     }
     const shown: { item: TicketItem; key: string; num: number }[] = [];
-    for (let guard = 0; guard < 10_000; guard++) {
+    // Bounded scan: at most SCAN_FACTOR x limit rows per request, however many `keep` hides. At the bound the page ends and `next` rests on the
+    // last row SCANNED (shown or not); the cursor is sealed (keyset.ts), so a hidden ticket is not readable in it.
+    const maxScan = limit * SCAN_FACTOR;
+    let scanned = 0;
+    let more: { key: string; num: number } | null = null;
+    while (scanned < maxScan) {
+      const room = Math.min(CURSOR_MAX_LIMIT, maxScan - scanned);
       const a = resume ? after(resume.key, resume.num) : null;
       const where = a ? (sql ? `${sql} AND ${a.sql}` : `WHERE ${a.sql}`) : sql;
-      const got = (this.#db.prepare(`SELECT t.* FROM tickets t ${where} ORDER BY ${order} LIMIT ?`).all(...sqlArgs, ...(a?.args ?? []), CURSOR_MAX_LIMIT + 1) as unknown as Row[]).map((r) => this.#keyed(r));
-      const batch = got.slice(0, CURSOR_MAX_LIMIT);
+      const got = (this.#db.prepare(`SELECT t.* FROM tickets t ${where} ORDER BY ${order} LIMIT ?`).all(...sqlArgs, ...(a?.args ?? []), room + 1) as unknown as Row[]).map((r) => this.#keyed(r));
+      const batch = got.slice(0, room);
       const items = this.#items(batch);
       batch.forEach((r, i) => {
         const item = this.#summary(items[i]!);
         if (!args.keep || args.keep(item)) shown.push({ item, key: keyOf(r), num: r.number });
       });
+      scanned += batch.length;
       const last = batch[batch.length - 1];
-      if (shown.length > limit || got.length <= CURSOR_MAX_LIMIT || !last) break;
-      resume = { key: keyOf(last), num: last.number };
+      more = got.length > room && last ? { key: keyOf(last), num: last.number } : null;
+      if (shown.length > limit || !more) break;
+      resume = more;
     }
     const page = shown.slice(0, limit);
     const last = page[page.length - 1];
-    const out: TicketPage = { items: page.map((x) => x.item), next: shown.length > limit && last ? cursorAfter(scope, last.key, last.num) : null };
+    const nextAt = shown.length > limit && last ? { key: last.key, num: last.num } : shown.length > limit ? null : more;
+    const out: TicketPage = { items: page.map((x) => x.item), next: nextAt ? cursorAfter(scope, nextAt.key, nextAt.num) : null };
     if (!args.cursor) {
       out.total = (this.#db.prepare(`SELECT count(*) AS n FROM tickets t ${sql}`).get(...sqlArgs) as { n: number }).n;
       out.counts = this.counts(caller);

@@ -7,6 +7,7 @@ import { AppError, isAppError } from '@isnanme/core';
 import { CURSOR_DEFAULT_LIMIT, CURSOR_MAX_LIMIT, type ChatAuditEntry, type CursorPage } from '@portal/contracts';
 import { Hono } from 'hono';
 import { clearResolvers } from '../authz/seam.js';
+import { peekCursor } from '../store/keyset.js';
 import { registerChatAuthz } from './authz.js';
 import { Reauth } from './reauth.js';
 import { createChatMetaRoutes } from './routes.js';
@@ -158,7 +159,7 @@ test('authz: an entry about a session the caller may not view is in no page and 
     assert.ok(cursors.length > 0);
     const shown = new Set(want);
     for (const c of cursors) {
-      const named = (JSON.parse(Buffer.from(c.split('.')[0]!, 'base64url').toString()) as { i: number }).i;
+      const named = peekCursor(c).id as number;
       assert.ok(shown.has(named), 'a cursor points at an entry that was shown, never at a hidden one');
     }
   } finally {

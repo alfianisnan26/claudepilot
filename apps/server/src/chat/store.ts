@@ -24,7 +24,7 @@ import type {
 import { CHAT_SPAWN_WHY_MAX, CURSOR_MAX_LIMIT, TASK_EVENTS_MAX, type CursorPage } from '@portal/contracts';
 import { createHash, randomBytes } from 'node:crypto';
 import { posix } from 'node:path';
-import { clampLimit, cursorAfter, keysetPage } from '../store/keyset.js';
+import { clampLimit, cursorAfter, keysetPage, SCAN_FACTOR } from '../store/keyset.js';
 import type { Store } from '../store/store.js';
 import { HOME } from '../workspaces/runtime.js';
 import { mapInputStrings, type ModelTotals, type StoredEvent, type TaskPatch } from './protocol.js';
@@ -519,8 +519,9 @@ export class ChatStore {
 
   /**
    * D-58: one page of {@link list} (same order: newest activity first, the id breaks ties), by keyset: a session started or touched while a
-   * client pages never repeats or skips a row. `keep` is the caller's authz filter (`view`): rows it refuses are not shown, and the cursor
-   * points at the last row SHOWN, so it never names a hidden session. A bad or foreign cursor is a 400.
+   * client pages never repeats or skips a row. `keep` is the caller's authz filter (`view`): rows it refuses are not shown. The cursor
+   * points at the last row SHOWN, except when the scan bound (SCAN_FACTOR x limit rows read) ends the page: then it rests on the last row scanned,
+   * and the cursor is sealed, so it shows nothing of a hidden session. A bad or foreign cursor is a 400.
    */
   listPage(filter: { workspaceId?: string; ticketId?: string; parentId?: string } = {}, args: { cursor?: string | undefined; limit?: unknown; keep?: (s: ChatSession) => boolean } = {}): CursorPage<ChatSession> {
     const where: string[] = [];
@@ -537,18 +538,26 @@ export class ChatStore {
     const spec = { scope, table: 'chat_sessions', sortCol: 'last_activity_at', idCol: 'id', ...(where.length ? { where: where.join(' AND '), params } : {}) };
     const shown: { s: ChatSession; sort: string; id: string }[] = [];
     let cursor = args.cursor;
-    for (let guard = 0; guard < 10_000; guard++) {
-      const got = keysetPage<ChatSessionRow>(this.#db(), spec, { cursor, limit: CURSOR_MAX_LIMIT });
+    // At most SCAN_FACTOR x limit rows are read per request, however many `keep` hides. When the bound is hit, the page ends there and `next`
+    // rests on the last row SCANNED (shown or not): the next request goes on from it. The cursor is sealed (keyset.ts), so a hidden row is not readable in it.
+    const maxScan = limit * SCAN_FACTOR;
+    let scanned = 0;
+    let resume: string | null = null;
+    while (scanned < maxScan) {
+      const got = keysetPage<ChatSessionRow>(this.#db(), spec, { cursor, limit: Math.min(CURSOR_MAX_LIMIT, maxScan - scanned) });
+      scanned += got.rows.length;
       for (const r of got.rows) {
         const s = this.toSession(this.#keyed(r));
         if (!args.keep || args.keep(s)) shown.push({ s, sort: r.last_activity_at, id: r.id });
       }
+      resume = got.next;
       if (shown.length > limit || !got.next) break;
       cursor = got.next;
     }
     const items = shown.slice(0, limit);
     const last = items[items.length - 1];
-    return { items: items.map((x) => x.s), next: shown.length > limit && last ? cursorAfter(scope, last.sort, last.id) : null };
+    const next = shown.length > limit && last ? cursorAfter(scope, last.sort, last.id) : shown.length > limit ? null : resume;
+    return { items: items.map((x) => x.s), next };
   }
 
   /** T-561: whether any session (live or ended) was started as a worker of `id`: one that ever had workers is a crew lead. */
@@ -1541,18 +1550,24 @@ export class ChatStore {
     const spec = { scope, table: 'chat_audit', sortCol: 'id', idCol: 'id', ...(where.length ? { where: where.join(' AND '), params } : {}) };
     const shown: ChatAuditEntry[] = [];
     let cursor = args.cursor;
-    for (let guard = 0; guard < 10_000; guard++) {
-      const got = keysetPage<AuditRow>(this.#db(), spec, { cursor, limit: CURSOR_MAX_LIMIT });
+    // Bounded scan, as in listPage: at most SCAN_FACTOR x limit rows per request; at the bound `next` rests on the last row scanned.
+    const maxScan = limit * SCAN_FACTOR;
+    let scanned = 0;
+    let resume: string | null = null;
+    while (scanned < maxScan) {
+      const got = keysetPage<AuditRow>(this.#db(), spec, { cursor, limit: Math.min(CURSOR_MAX_LIMIT, maxScan - scanned) });
+      scanned += got.rows.length;
       for (const r of got.rows) {
         const e = auditEntry(r);
         if (!args.keep || args.keep(e)) shown.push(e);
       }
+      resume = got.next;
       if (shown.length > limit || !got.next) break;
       cursor = got.next;
     }
     const items = shown.slice(0, limit);
     const last = items[items.length - 1];
-    return { items, next: shown.length > limit && last ? cursorAfter(scope, last.id, last.id) : null };
+    return { items, next: shown.length > limit && last ? cursorAfter(scope, last.id, last.id) : shown.length > limit ? null : resume };
   }
 
   saveHandoff(row: { id: string; workspaceId: string; sourceSessionId: string; sourceClaudeId: string; destClaudeId: string; path: string }): void {

@@ -8,6 +8,7 @@ import { AppError, isAppError } from '@isnanme/core';
 import { CURSOR_DEFAULT_LIMIT, CURSOR_MAX_LIMIT, TICKET_LIST_TEXT, TICKET_PRIORITIES, ticketRef, type TicketPage } from '@portal/contracts';
 import { Hono } from 'hono';
 import { clearResolvers, registerResolver } from '../authz/seam.js';
+import { peekCursor } from '../store/keyset.js';
 import { createTicketRoutes } from './routes.js';
 import { ticketsHarness, UI } from './testkit.js';
 
@@ -178,7 +179,7 @@ test('authz: a ticket the caller may not view is in no page and no cursor names 
     assert.deepEqual(seen, all.filter((id) => mine.has(id)), 'exactly the tickets u_a may view, in order, each once');
     assert.ok(cursors.length > 0);
     for (const c of cursors) {
-      const named = (JSON.parse(Buffer.from(c.split('.')[0]!, 'base64url').toString()) as { i: number }).i;
+      const named = peekCursor(c).id as number;
       assert.ok(mine.has(idOf(named)), 'a cursor points at a row that was shown, never at a hidden one');
     }
   } finally {
@@ -229,6 +230,48 @@ test('total and counts ride on the first page only', async () => {
     const second = await page(a, q(first.next!, 'limit=2'));
     assert.equal(second.total, undefined);
     assert.equal(second.counts, undefined);
+  } finally {
+    h.done();
+  }
+});
+
+test('bounded scan: when keep hides everything a request reads at most 10 x limit rows, and paging still reaches the end', async () => {
+  const h = await ticketsHarness();
+  try {
+    seeded(h, 60);
+    let calls = 0;
+    let cursor: string | undefined;
+    let requests = 0;
+    for (; requests < 50; requests++) {
+      calls = 0;
+      const p = h.tickets.listPage(UI, {}, { cursor, limit: 2, keep: () => (calls++, false) });
+      assert.ok(calls <= 20, `request ${requests} read ${calls} rows (bound is 20)`);
+      assert.equal(p.items.length, 0);
+      if (!p.next) break;
+      cursor = p.next;
+    }
+    assert.equal(requests, 2, '60 rows at 20 per request: two cursors, the third request ends');
+  } finally {
+    h.done();
+  }
+});
+
+test('bounded scan: a sparse keep still yields every kept row once across the bounded requests', async () => {
+  const h = await ticketsHarness();
+  try {
+    seeded(h, 60);
+    const all = inOrder(h, PRIORITY_ORDER);
+    const kept = new Set(all.filter((_, i) => i % 25 === 0));
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    for (let n = 0; n < 50; n++) {
+      const p = h.tickets.listPage(UI, {}, { cursor, limit: 1, keep: (t) => kept.has(t.id) });
+      seen.push(...p.items.map((i) => i.id));
+      if (!p.next) break;
+      assert.equal(typeof peekCursor(p.next).id, 'number');
+      cursor = p.next;
+    }
+    assert.deepEqual(seen, all.filter((id) => kept.has(id)));
   } finally {
     h.done();
   }

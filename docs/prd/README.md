@@ -67,4 +67,8 @@ Build order and dependencies are added once the research is in.
   seam's same 404. A list route needs a clamp-and-walk test. Done so far: `GET /api/settings/audit` (S1); `GET /api/chat/sessions` (S2: the tie-break
   id may be text; a filtered list points its cursor at the last row shown); `GET /api/tickets` (S3: a list order of more than one column
   keys the cursor on a composed sort value; the cursor scope holds every filter value; rows are summaries, text cut at 200 characters);
-  the other routes follow in slices. A list returns **summaries** (no long text); the one-item GET has the whole.
+  `GET /api/ci/runs`, `GET /api/chat/audit`, `GET /api/lab/slices` (S4). **Bounded scan and sealed cursor (S4):** a list that hides rows by
+  authz reads at most 10 x `limit` rows per request (`SCAN_FACTOR`); when the bound ends the page, `next` rests on the last row scanned, shown
+  or not, so a request that hides everything still ends and paging reaches the end (a page may then hold fewer rows than `limit`, even none,
+  with a `next`). The cursor body is encrypted and then signed, so it shows a client neither the sort key nor the id of the row it rests on.
+  `apps/server/src/perf/listPage.bench.ts` measures it (not in the suite). A list returns **summaries** (no long text); the one-item GET has the whole.
