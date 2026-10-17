@@ -1,4 +1,4 @@
-# orchestrator status (2026-10-17 23:40 UTC, session 355881a3; older entries: git history)
+# orchestrator status (2026-10-17 23:45 UTC, session 355881a3; older entries: git history)
 
 ## DONE
 - Batch 32 LANDED 22:54: integration 74599ece (gate claudepilot-gate-18d8e9d-f5f1 green on 18d8e9d0): T-382 S6, T-294 FIX1,
@@ -7,15 +7,15 @@
 - T-938 FIX2 73b8137c re-check PASS 10685 -> the coordinator lands it (T-938 10695). Older batches: git history.
 
 ## IN FLIGHT (6 of 6 workers, D-71; QA/review sonnet, D-63; ids in full in session_family)
-- T-425 S2b merge e2e4a2b6 (bvl4mr4k1 rc0, 851/851; PRD hunk taken from integration by lead 0d1afd3b) -> QA delta c691df71 -> b33.
+- T-425 S2b merge e2e4a2b6 QA PWG (U1 caught; relay T-595 10914; gap list asked) -> gaps 3753d3c2 -> b33.
 - T-974 FIX2 42b95954 BLIND PWG 10892 -> FIX3 test rows (prune/update allowed on record, set-url --add/--delete refused;
-  10902) a3554d40 -> re-check d9f18599 -> b33 -> FOR THE COORDINATOR: remove the text-matching `git -C` denies.
-- T-971 H1 FIX fade65c2 (a0d0b91a rc0, 11/11) -> delta d9f18599 -> b33.
+  10902) FIX3 f70d333c (Job queued) a3554d40 -> re-check d9f18599 -> b33 -> FOR THE COORDINATOR: remove the text-matching `git -C` denies.
+- T-971 H1 FIX fade65c2 BLIND PWG 10905 (C2, C3 survive: phrase in shape/proposed line) -> FIX2 a3554d40 -> re-check d9f18599.
 - T-971 H2 S1 11d5a5a1 QA PWG 10847 -> FIX 03bc42d6 (Job running) + deterministic race test (M11) by 3753d3c2 -> QA delta
   c691df71; blind d9f18599 on 11d5a5a1 running. No auto Bypass on resume stands (10736).
 - T-975 FIX 6650e8ff (e7750582 rc0 3x45/45; one unexplained links.test failure in bdwtltcfm, builder owns it if seen again)
   -> QA delta c691df71 -> blind d9f18599 (migration 788).
-- T-969 8144c5ce (c2159b27 rc0, 112/112) -> QA c691df71 -> blind d9f18599 (authz).
+- T-969 8144c5ce QA PWG 10886/10904 (T3 survives; copy-regex test; cross-ws test role) -> FIX a3554d40 -> blind d9f18599.
 - T-1043 S0a+S0b ONE unit (10790) on ticket/T-1043-s0b, 76845676: M14/M16 tests, app.all behind ALL /api/*, sockets via
   sessionToken; Job queued -> QA c691df71 + blind d9f18599. Denial = 404 (10605).
 - T-976 conflicted merge 130fb339 pushed by lead (ticket/T-976-merge, 4 markers in app.ts) -> 2a0edbd8 resolves -> QA + blind.
