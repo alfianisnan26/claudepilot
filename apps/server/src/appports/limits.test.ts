@@ -9,6 +9,8 @@ import { after, before, test } from 'node:test';
 import { WebSocket, WebSocketServer } from 'ws';
 import { FOUNDING_USER_ID, type Actor } from '@portal/contracts';
 import { config } from '../config.js';
+import { Portal } from '../portal.js';
+import { cutOnRevoke } from '../revoke.js';
 import { AppPortGrants } from './grants.js';
 import { AppPorts, routeAppHostUpgrades } from './index.js';
 import { appCookies, PORTAL_COOKIES, type ProxyLimits } from './proxy.js';
@@ -16,6 +18,7 @@ import { appCookies, PORTAL_COOKIES, type ProxyLimits } from './proxy.js';
 const SUFFIX = 'apps.test';
 const actor: Actor = { kind: 'user', userId: FOUNDING_USER_ID, loginSessionId: 'l1', via: 'ui' };
 const SESSION = `session-${process.pid}-${Date.now()}`;
+const CODE = '24681357';
 
 let appServer: Server;
 let appPort = 0;
@@ -60,7 +63,7 @@ after(async () => {
 });
 
 /** A portal server routing app hosts to a fresh AppPorts with these limits (as index.ts does). */
-async function setup(limits: ProxyLimits, grants = new AppPortGrants()) {
+async function setup(limits: ProxyLimits, grants = new AppPortGrants(), session = { token: SESSION, valid: (t: string) => sessionOk && t === SESSION }) {
   const server = createServer();
   portals.push(server);
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
@@ -69,7 +72,7 @@ async function setup(limits: ProxyLimits, grants = new AppPortGrants()) {
     suffix: SUFFIX,
     portalPort,
     workspaces: { list: async () => [{ id: 'docker/ws-1', name: 'ws-1' }], hooks: {}, resolve: () => null } as never,
-    sessionValid: (t) => sessionOk && t === SESSION,
+    sessionValid: session.valid,
     grants,
     limits,
     dial: (_ws, port) =>
@@ -84,7 +87,7 @@ async function setup(limits: ProxyLimits, grants = new AppPortGrants()) {
 
   /** Opens the app and swaps the code: a fresh app-host cookie (`__pilot_app=<value>`). */
   const signIn = async (): Promise<{ host: string; cookie: string }> => {
-    const { url, host } = await ports.open('docker', 'ws-1', { port: appPort }, { actor, actorString: 'x', userId: null, sessionToken: SESSION, portalOrigin: `http://pilot.${SUFFIX}:${portalPort}` });
+    const { url, host } = await ports.open('docker', 'ws-1', { port: appPort }, { actor, actorString: 'x', userId: null, sessionToken: session.token, portalOrigin: `http://pilot.${SUFFIX}:${portalPort}` });
     const u = new URL(url);
     const r = await send(`${u.pathname}${u.search}`, { host: u.host });
     assert.equal(r.status, 302);
@@ -222,6 +225,20 @@ test('signing out cuts the live sockets and requests of that session at once', {
   } finally {
     sessionOk = true;
   }
+});
+
+test('the server wiring (cutOnRevoke, as index.ts calls it): a real sign-out closes the app socket at once, not on the 15 s sweep', { timeout: 10_000 }, async () => {
+  const portal = new Portal(CODE, 60_000);
+  const token = portal.signIn(CODE);
+  const { ports, signIn, ws } = await setup({ sweepMs: 60_000 }, new AppPortGrants(), { token, valid: (t) => !!portal.session(t) });
+  let portalSweeps = 0;
+  cutOnRevoke(portal, { sweep: () => void portalSweeps++ }, ports);
+  const { host, cookie } = await signIn();
+  const w = await ws(host, cookie);
+  portal.signOut(token);
+  await until('the app socket to close', () => w.readyState === WebSocket.CLOSED, 1000);
+  assert.equal(portalSweeps, 1, 'the portal’s own sockets are swept too');
+  await until('the bridge to be released', () => ports.proxy.open === 0);
 });
 
 test('removing the workspace (grants.forgetWorkspace) closes its live sockets without waiting for the timer', { timeout: 10_000 }, async () => {

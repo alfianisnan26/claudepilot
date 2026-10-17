@@ -8,6 +8,7 @@ import { AccountsService } from './accounts/service.js';
 import { Outbox } from './delivery/outbox.js';
 import { LiveHub } from './live.js';
 import { SocketGuard } from './sockets.js';
+import { cutOnRevoke } from './revoke.js';
 import { workspaceView } from './workspaces/view.js';
 import { readWorkspaceMemory } from './workspaces/memory.js';
 import { runToEnd } from './workspaces/runToEnd.js';
@@ -625,7 +626,7 @@ const server = createServer();
 const sockets = new SocketGuard(portal, config.session.cookie);
 sockets.attach(server);
 // A sign-out or a new code also cuts the app hosts' live connections of the sessions that ended (T-948 review 10219).
-portal.onRevoked = () => (sockets.sweep(), appPorts.proxy.sweep());
+cutOnRevoke(portal, sockets, appPorts);
 // The agents' tunnel (`/connect/v1/tunnel`): no cookie, its own handshake; answers only its own path.
 connect.attach(server, portal);
 attachShell(server, portal, workspaces);
