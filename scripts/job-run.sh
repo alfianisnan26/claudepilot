@@ -40,7 +40,8 @@
 #                                                       so the Job expands it, not your shell
 # Placement (T-611): the scheduler counts memory REQUESTS, the master (control plane, Argo CD, Gitea...) uses far more for real. Before it creates a
 # Job this script reads the master's real memory (kubectl top nodes) and, when that use PLUS the Job's expected peak (JOB_RUN_EXPECTED_PEAK_MI,
-# default 2300 Mi; 8192 Mi for --big) is over JOB_RUN_MASTER_MAX_PCT (default 75), makes the Job's rule away from the control plane REQUIRED: it
+# default 2300 Mi; 8192 Mi for --big) is over JOB_RUN_MASTER_MAX_PCT (default 85; 75 until 2026-10-17, T-731: the master sat at 67% with 13% CPU while every Job queued for node2's CPU
+# requests, so one normal Job may use the master: 67% + 2300 Mi is about 82%), makes the Job's rule away from the control plane REQUIRED: it
 # waits for k3s-node2 or for room. Under the line, or when the metrics fail, the preferred rules stay. The decision, the wait and the node go
 # into the Job's log as "=== JOB-RUN PLACEMENT" lines. T-524: it reads again when the queue lets the suspended Job out.
 # Reuse (T-731), OPT-IN with --reuse: a run with it that PASSED (exit 0) is saved, masked log, exit code and the Job's name, under JOB_RUN_CACHE_DIR
@@ -78,7 +79,7 @@ event_repo=isnanme/event # fixed on purpose (T-491): the door names one reposito
 # T-731: stays 4Gi. 518 measured peaks: median 1133Mi, p90 1971Mi, p99 2270Mi, max 2536Mi, none OOMKilled, so 3Gi would fit; but on k3s-node2 the CPU
 # requests bind at 3 Jobs and the master takes 0 by real use, so a lower default only cuts the margin: it waits on a CPU-request measurement.
 mem_std=4Gi; tmp_std=2Gi; mem_big=8Gi; tmp_big=4Gi
-master_max=${JOB_RUN_MASTER_MAX_PCT:-75}
+master_max=${JOB_RUN_MASTER_MAX_PCT:-85}
 die() { echo "job-run: $*" >&2; exit 2; }
 for n in "$max" "$per" "$pprog" "$art_max"; do [[ $n =~ ^[0-9]+$ ]] || die "the caps are numbers"; done
 # The placement numbers are used in $(( )): at most 3 / 6 digits (no wrap-around to a negative), and base 10 (a leading 08 is not octal) (T-611 C1 C2).

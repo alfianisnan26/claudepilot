@@ -1215,7 +1215,7 @@ test('S1d the create failing (its stderr quotes the decoded value): a fixed mess
 });
 
 // ---- T-611: placement. The scheduler counts memory REQUESTS, the control-plane node's own pods use far more for real. job-run.sh reads its real
-// use (kubectl top) and, when use PLUS the Job's expected peak is over JOB_RUN_MASTER_MAX_PCT (75), makes the rule away from it REQUIRED.
+// use (kubectl top) and, when use PLUS the Job's expected peak is over JOB_RUN_MASTER_MAX_PCT (85; 75 before T-731's 2026-10-17 change), makes the rule away from it REQUIRED.
 // The fake master prints 9000Mi at the given percentage (allocatable = 9000 * 100 / pct); the default expected peak is 2300 Mi, --big's is 8192 Mi.
 const CP_RULE = { nodeSelectorTerms: [{ matchExpressions: [{ key: 'node-role.kubernetes.io/control-plane', operator: 'DoesNotExist' }] }] };
 type NodeAff = { requiredDuringSchedulingIgnoredDuringExecution?: unknown; preferredDuringSchedulingIgnoredDuringExecution?: unknown };
@@ -1231,18 +1231,18 @@ const kept = (p: ReturnType<typeof placed>, what: string) => { assert.equal(p.r.
 
 test('T-611: over the line the Job gets a REQUIRED rule away from the control plane, for a normal Job and --big', () => {
   for (const extra of [[], ['--big']]) {
-    const p = placed(83, extra);
-    away(p, `83% ${extra.join(' ')}`);
-    assert.match(p.r.out, /placement: the control-plane node is at 83% of its memory \(over 75%\).*waits for k3s-node2/);
+    const p = placed(90, extra);
+    away(p, `90% ${extra.join(' ')}`);
+    assert.match(p.r.out, /placement: the control-plane node is at 90% of its memory \(over 85%\).*waits for k3s-node2/);
     assert.match(p.r.out, /rc=0 in \d+s .* on k3s-master with/, 'the final line names the node');
   }
-  away(placed(76), '76%');
+  away(placed(86), '86%');
   away(placed(60, [], { JOB_RUN_MASTER_MAX_PCT: '50' }), 'the line is JOB_RUN_MASTER_MAX_PCT');
 });
 
 test('T-611: a normal Job well under the line, or when the metrics fail, keeps only the preferred rules (a metrics failure never blocks every Job)', () => {
   kept(placed(50), '50%');
-  assert.match(placed(50).r.out, /placement: the control-plane node is at 50% of its memory \(about \d+% with this Job; limit 75%\): preferred rules only/);
+  assert.match(placed(50).r.out, /placement: the control-plane node is at 50% of its memory \(about \d+% with this Job; limit 85%\): preferred rules only/);
   for (const [what, top] of [['API missing', undefined], ['kubectl fails', 'FAIL'], ['not a number', 'k3s-master <unknown> <unknown> <unknown> <unknown>\n'], ['empty', '']] as const) {
     for (const extra of [[], ['--big']]) kept(placed(top, extra), `${what} ${extra.join(' ')}`);
   }
@@ -1251,14 +1251,15 @@ test('T-611: a normal Job well under the line, or when the metrics fail, keeps o
 });
 
 test('T-611: headroom: use plus the Job\'s expected peak over the line keeps it off the master, though the use alone is under', () => {
-  away(placed(60), '60% + 2300Mi of a 15000Mi node is about 76%');
+  away(placed(70), '70% + 2300Mi of a 12857Mi node is about 88%');
+  kept(placed(60), '60% + 2300Mi of a 15000Mi node is about 75%, under 85%');
   kept(placed(50), '50% + 2300Mi is about 63%');
   away(placed(50, ['--big']), '--big counts its 8192Mi: 50% + 8192Mi is about 95%');
-  kept(placed(60, [], { JOB_RUN_EXPECTED_PEAK_MI: '100' }), 'a small expected peak leaves 60% alone');
-  away(placed(60, [], { JOB_RUN_EXPECTED_PEAK_MI: '3000' }), 'a bigger one blocks');
-  assert.match(placed(60).r.out, /60% of its memory and this Job may add 2300Mi \(about 76%, over 75%\)/);
+  kept(placed(70, [], { JOB_RUN_EXPECTED_PEAK_MI: '100' }), 'a small expected peak leaves 70% alone');
+  away(placed(70, [], { JOB_RUN_EXPECTED_PEAK_MI: '3000' }), 'a bigger one blocks');
+  assert.match(placed(70).r.out, /70% of its memory and this Job may add 2300Mi \(about 88%, over 85%\)/);
   kept(placed(topLine('9Gi', '50%')), 'Gi is read too');
-  away(placed(topLine('9Gi', '65%')), 'Gi is read too, headroom');
+  away(placed(topLine('9Gi', '75%')), 'Gi is read too, headroom');
 });
 
 test('T-611 (coordinator 7806): a master at 74% does not take a Job of 4 GiB: use plus the Job\'s peak is counted, not the use alone', () => {
@@ -1267,29 +1268,31 @@ test('T-611 (coordinator 7806): a master at 74% does not take a Job of 4 GiB: us
     ['a peak of 4 GiB (the request)', topLine('11100Mi', '74%'), [], { JOB_RUN_EXPECTED_PEAK_MI: '4096' }],
     ['--big', topLine('11100Mi', '74%'), ['--big'], {}],
   ] as const) {
-    const p = placed(top, [...extra], { ...over });
+    const p = placed(top, [...extra], { JOB_RUN_MASTER_MAX_PCT: '75', ...over });
     away(p, `74% ${what}`);
     assert.match(p.w.log(), /^=== JOB-RUN PLACEMENT node=control-plane pct=74 projected=\d+ max=75 peak_mi=\d+ decision=required-away reason=headroom$/m, what);
   }
-  assert.match(placed(topLine('11100Mi', '74%'), [], { JOB_RUN_EXPECTED_PEAK_MI: '4096' }).r.out, /about 10\d%, over 75%/, 'the Job would take the master to about 100%');
+  assert.match(placed(topLine('11100Mi', '74%'), [], { JOB_RUN_MASTER_MAX_PCT: '75', JOB_RUN_EXPECTED_PEAK_MI: '4096' }).r.out, /about 10\d%, over 75%/, 'the Job would take the master to about 100%');
 });
 
+// These pin the edge logic at an explicit line of 75 (the default is 85 since T-731, 2026-10-17).
+const M75 = { JOB_RUN_MASTER_MAX_PCT: '75' };
 test('T-611 C3: the line is exact: at 75 a Job stays, one MiB over it goes away; the percentage-only fallback has the same edge', () => {
   // 9200Mi at 60%: (9200 + 2300) * 60 = 75 * 9200 * 1: exactly the line. 9199Mi is one MiB less allocatable-use: over.
-  const at = placed(topLine('9200Mi', '60%')); kept(at, 'exactly at the line');
+  const at = placed(topLine('9200Mi', '60%'), [], M75); kept(at, 'exactly at the line');
   assert.match(at.w.log(), /projected=75 max=75/);
-  const over = placed(topLine('9199Mi', '60%')); away(over, 'just over the line');
+  const over = placed(topLine('9199Mi', '60%'), [], M75); away(over, 'just over the line');
   assert.match(over.r.out, /about 76%, over 75%/, 'the projection is rounded up: it never reads "about 75%, over 75%"');
-  kept(placed(topLine('lots', '75%')), 'odd bytes at 75%: the percentage alone, at the line');
-  away(placed(topLine('lots', '76%')), 'odd bytes at 76%: the percentage alone, over');
-  kept(placed(topLine('lots', '60%')), 'odd bytes at 60%');
-  away(placed(topLine('lots', '80%')), 'odd bytes at 80%');
+  kept(placed(topLine('lots', '75%'), [], M75), 'odd bytes at 75%: the percentage alone, at the line');
+  away(placed(topLine('lots', '76%'), [], M75), 'odd bytes at 76%: the percentage alone, over');
+  kept(placed(topLine('lots', '60%'), [], M75), 'odd bytes at 60%');
+  away(placed(topLine('lots', '80%'), [], M75), 'odd bytes at 80%');
 });
 
 test('T-611 C1: a reading or a setting with a leading zero is a decimal number (08 and 09 are not octal): the run does not abort', () => {
   kept(placed(topLine('9000Mi', '08%')), 'pct 08');
   kept(placed(topLine('9000Mi', '09%')), 'pct 09');
-  away(placed(topLine('09000Mi', '60%')), 'bytes 09000Mi at 60%');
+  away(placed(topLine('09000Mi', '60%'), [], M75), 'bytes 09000Mi at 60%');
   kept(placed(topLine('9000Mi', '50%'), [], { JOB_RUN_EXPECTED_PEAK_MI: '0100' }), 'peak 0100');
   kept(placed(topLine('9000Mi', '50%'), [], { JOB_RUN_EXPECTED_PEAK_MI: '08' }), 'peak 08');
   kept(placed(topLine('9000Mi', '50%'), [], { JOB_RUN_MASTER_MAX_PCT: '080' }), 'max 080');
@@ -1314,14 +1317,14 @@ test('T-611 C2: a number that could wrap in the arithmetic is refused (rc 2), ne
 });
 
 test('T-611: the placement decision, the node it ran on and a Pending wait are lines in the Job log', async () => {
-  const w = world([], { top: 83 });
+  const w = world([], { top: 90 });
   const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'true']);
   assert.equal(r.code, 0, r.out);
-  assert.match(w.log(), /^=== JOB-RUN PLACEMENT node=control-plane pct=83 projected=\d+ max=75 peak_mi=2300 decision=required-away reason=over$/m);
-  assert.match(w.log(), /^=== JOB-RUN PLACEMENT node=k3s-master pct=83 decision=required-away queued=\d+s$/m, 'the node it ran on');
+  assert.match(w.log(), /^=== JOB-RUN PLACEMENT node=control-plane pct=90 projected=\d+ max=85 peak_mi=2300 decision=required-away reason=over$/m);
+  assert.match(w.log(), /^=== JOB-RUN PLACEMENT node=k3s-master pct=90 decision=required-away queued=\d+s$/m, 'the node it ran on');
   const ok = world([], { top: 40 });
   ok.run(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'true']);
-  assert.match(ok.log(), /^=== JOB-RUN PLACEMENT node=control-plane pct=40 projected=\d+ max=75 peak_mi=2300 decision=preferred$/m);
+  assert.match(ok.log(), /^=== JOB-RUN PLACEMENT node=control-plane pct=40 projected=\d+ max=85 peak_mi=2300 decision=preferred$/m);
   const none = world([], {});
   none.run(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'true']);
   assert.match(none.log(), /^=== JOB-RUN PLACEMENT node=control-plane pct=unknown .* decision=preferred-metrics-unavailable$/m);
@@ -1385,18 +1388,18 @@ function moved(first: number | string, second: number | string, patchFails = fal
   return { w, r, patches: w.calls().split('\n').filter((l) => / patch job /.test(l)) };
 }
 const REQ = 'requiredDuringSchedulingIgnoredDuringExecution';
-test('T-611 C5: 50% at create and 80% at release adds the required rule to the suspended Job before the release; the reverse drops it', () => {
-  const up = moved(50, 80);
+test('T-611 C5: 50% at create and 90% at release adds the required rule to the suspended Job before the release; the reverse drops it', () => {
+  const up = moved(50, 90);
   assert.equal(up.r.code, 0, up.r.out);
   assert.equal(up.patches.length, 2, up.patches.join('\n'));
   assert.match(up.patches[0] ?? '', new RegExp(`"affinity":\\{"nodeAffinity":\\{"${REQ}":\\{"nodeSelectorTerms":\\[\\{"matchExpressions":\\[\\{"key":"node-role.kubernetes.io/control-plane","operator":"DoesNotExist"\\}\\]\\}\\]\\}\\}\\}`));
   assert.match(up.patches[1] ?? '', /\{"spec":\{"suspend":false\}\}/, 'the release comes after the affinity patch');
-  assert.match(up.r.out, /placement changed while queued: the rule away from the control-plane node was added: job-run: placement: the control-plane node is at 80%/);
+  assert.match(up.r.out, /placement changed while queued: the rule away from the control-plane node was added: job-run: placement: the control-plane node is at 90%/);
   assert.equal(up.r.out.split('\n').filter((l) => /placement changed while queued/.test(l)).length, 1, 'one line, once');
   assert.match(up.w.log(), /decision=required-away reason=over .*at=release changed-from=preferred/);
-  assert.match(up.w.log(), /PLACEMENT node=\S+ pct=80 decision=required-away queued=/, 'the final line carries the decision that was used');
+  assert.match(up.w.log(), /PLACEMENT node=\S+ pct=90 decision=required-away queued=/, 'the final line carries the decision that was used');
 
-  const down = moved(80, 50);
+  const down = moved(90, 50);
   assert.equal(down.r.code, 0, down.r.out);
   assert.equal(down.patches.length, 2, down.patches.join('\n'));
   assert.ok((down.patches[0] ?? '').includes(`"${REQ}":null}`), 'the required rule is set to null (the preferred rules stay)');
@@ -1480,7 +1483,7 @@ test('T-611 S2: JOB_RUN_AVOID_NODES gives a required hostname NotIn rule, alone 
   const alone = placed(50, [], { JOB_RUN_AVOID_NODES: 'k3s-master,node-9.lan' });
   assert.equal(alone.r.code, 0, alone.r.out);
   assert.deepEqual(alone.required, rule(HOST('k3s-master', 'node-9.lan')), 'one expression, both names');
-  const both = placed(83, [], { JOB_RUN_AVOID_NODES: 'k3s-master' });
+  const both = placed(90, [], { JOB_RUN_AVOID_NODES: 'k3s-master' });
   assert.equal(both.r.code, 0, both.r.out);
   assert.deepEqual(both.required, rule(CP_EXPR, HOST('k3s-master')), 'both expressions in ONE term (they are ANDed)');
   const unset = placed(50, [], { JOB_RUN_AVOID_NODES: '' });
@@ -1665,7 +1668,7 @@ test('T-524: a Job queued while the master was under the line is read again when
   w.edit((st) => { Object.assign(st.jobs[0] ?? {}, { done: true, rc: 0 }); });
   const r = await s.done;
   assert.equal(r.code, 0, r.out);
-  assert.match(r.out, /placement: the control-plane node is at 88% of its memory \(over 75%\)/);
+  assert.match(r.out, /placement: the control-plane node is at 88% of its memory \(over 85%\)/);
   const calls = w.calls().split('\n');
   const rule = calls.findIndex((c) => /patch job .*requiredDuringSchedulingIgnoredDuringExecution.*node-role\.kubernetes\.io\/control-plane.*DoesNotExist/.test(c));
   assert.ok(!/node-role[^\n]*kubernetes\.io\/hostname/.test(calls[rule] ?? ''), 'no avoid list: the patch holds the control-plane expression alone');
@@ -1710,7 +1713,7 @@ test('T-611: a Job Pending on the required rule says it waits for k3s-node2', as
   writeFileSync(join(w.root, 'pending'), "0/2 nodes are available: 1 node(s) didn't match Pod's node affinity/selector, 1 Insufficient memory.");
   const j = w.start(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'true'], { JOB_RUN_START_WAIT_S: '1' });
   const r = await j.done;
-  assert.match(r.out, /is Pending: the control-plane node is over 75% of its memory, so this Job waits for k3s-node2/);
+  assert.match(r.out, /is Pending: the control-plane node is over 85% of its memory, so this Job waits for k3s-node2/);
 });
 
 // T-731: with --reuse, a Job that passed is reused for the same repository, full commit and command (the key and the store: docs/prd/local-git-ci.md).
