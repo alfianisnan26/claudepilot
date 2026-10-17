@@ -197,7 +197,7 @@ spec:
             - {name: fetch-home, mountPath: /fetch-home}
           resources:
             # As the run container's (the pod requests the larger of the two, not the sum: T-524's sizing holds).
-            requests: {cpu: 1000m, memory: __MEMORY__}
+            requests: {cpu: 500m, memory: __MEMORY__}
             limits: {cpu: "4", memory: __MEMORY__}
       containers:
         # T-401: no git or npm credential here, no envFrom. The one exception (T-426): each --pool-env name (E2E_CF_ACCESS_* only, the
@@ -303,7 +303,9 @@ spec:
             # Memory request = limit (T-524): with 2Gi requested and 8Gi allowed a 4.1 GB Job fitted k3s-master "on paper" and took it to
             # 92% (portal 503s). job-run.sh fills in 4Gi, or 8Gi with --big, and says when a Job is OOMKilled or Pending for memory.
             # T-731: 518 measured peaks (p99 2270Mi, max 2536Mi) would fit 3Gi, but on k3s-node2 the 1 CPU requests bind at 3 Jobs: a lower default waits on a CPU-request measurement.
-            requests: {cpu: 1000m, memory: __MEMORY__}
+            # CPU 500m, not 1000m (coordinator, 2026-10-17 14:3x UTC): k3s-node2 had 87% of its CPU requested and 20% used, Jobs Pending for 'Insufficient cpu'
+            # with 980m free; measured Jobs use 0.5-2.5 cores in bursts, which the 4-core limit allows. Memory request stays = limit (T-524).
+            requests: {cpu: 500m, memory: __MEMORY__}
             limits: {cpu: "4", memory: __MEMORY__}
       volumes:
         - name: tmp
