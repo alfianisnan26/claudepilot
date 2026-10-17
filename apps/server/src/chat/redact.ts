@@ -15,7 +15,7 @@ const TAIL_WINDOW = 256;
 
 /* ---------- Shapes ---------- */
 
-type Kind = 'anthropic' | 'github' | 'aws' | 'slack' | 'portal' | 'webhook' | 'pem' | 'bearer' | 'assign';
+type Kind = 'anthropic' | 'github' | 'aws' | 'slack' | 'portal' | 'webhook' | 'pem' | 'bearer' | 'assign' | 'kv' | 'userinfo';
 
 interface Shape {
   kind: Kind;
@@ -30,7 +30,20 @@ interface Shape {
 const PEM_HEADER = '-----BEGIN [A-Z0-9 ]{0,24}PRIVATE KEY[A-Z ]{0,8}-----';
 const PEM_FOOTER = '-----END [A-Z0-9 ]{0,24}PRIVATE KEY[A-Z ]{0,8}-----';
 const VALUE = '[A-Za-z0-9+/=_.~-]';
-const NAME = '[A-Za-z0-9_.-]{0,40}(?:key|token|secret|password|passwd)[A-Za-z0-9_.-]{0,40}';
+const NAME = '[A-Za-z0-9_.-]{0,40}(?:key|token|secret|password|passwd|pwd)[A-Za-z0-9_.-]{0,40}';
+
+// T-1065: a name that ENDS in password, passwd, pwd, secret or token, then `=` or `:` (not `==`, `=>`): its value goes at any length.
+// `max_tokens: 1024` and `secretName: x` do not end in the word, so they stay.
+const KV_NAME = '(?<![A-Za-z0-9_.-])([A-Za-z0-9_.-]{0,40}(?:password|passwd|pwd|secret|token)["\']?[ \\t]{0,4}[:=](?![=>])[ \\t]{0,4}';
+// An unquoted value runs to a space, a quote or a delimiter (`&` ends a query value). Type names, `null`-like words and
+// environment references are code, not a value: `password: string`, `password: process.env.DB_PASSWORD` stay.
+const KV_UNQUOTED = '[^\\s"\'`&;,<>(){}\\[\\]]';
+const KV_CODE =
+  '(?!(?:string|number|boolean|null|undefined|true|false|any|unknown|never|none|nil)(?![A-Za-z0-9_$])|process\\.env\\.|import\\.meta\\.env\\.|os\\.environ|os\\.getenv\\()';
+// A quoted value runs to its closing quote (an escaped quote stays inside), or to the end of the line when it has none yet.
+const kvQuoted = (q: string) => `[^${q}\\\\\\n]|\\\\.?`;
+// `scheme://user:pass@host`: only the password goes (it may hold an `@`; the last one before the host ends it).
+const USERINFO_HEAD = '[a-z][a-z0-9+.-]{0,30}:\\/\\/[^\\s:@\\/?#]{0,128}:';
 
 const SHAPES: Shape[] = [
   // Anthropic: sk-ant-api03-…, sk-ant-oat01-…, sk-ant-admin01-…
@@ -60,10 +73,16 @@ const SHAPES: Shape[] = [
     group: 2,
     swallow: VALUE,
   },
+  // T-1065: `password=hunter2`, `pwd: x`, `"token":"v"`, `secret='a b'`: the value goes, at any length.
+  { kind: 'kv', re: new RegExp(`${KV_NAME})${KV_CODE}(${KV_UNQUOTED}+)`, 'dgi'), group: 2, swallow: KV_UNQUOTED },
+  { kind: 'kv', re: new RegExp(`${KV_NAME}")((?:${kvQuoted('"')})+)`, 'dgi'), group: 2, swallow: kvQuoted('"') },
+  { kind: 'kv', re: new RegExp(`${KV_NAME}')((?:${kvQuoted("'")})+)`, 'dgi'), group: 2, swallow: kvQuoted("'") },
+  // T-1065: the password of URL userinfo; the scheme, the user and the host stay. Never open at the end (it needs its `@`).
+  { kind: 'userinfo', re: new RegExp(`(${USERINFO_HEAD})([^\\s\\/?#]+)@`, 'dgi'), group: 2 },
 ];
 
 /** Cheap pre-check: text with none of these can't hold a complete match. */
-const TRIGGER = /sk-ant-|gh[pousr]_|github_pat_|AKIA|ASIA|xox[abprs]-|cp(?:at|oa|or|st|en|na|wh|ws|ns)_|webhooks\/|hooks\.slack|PRIVATE KEY|bearer|key|token|secret|passw/i;
+const TRIGGER = /sk-ant-|gh[pousr]_|github_pat_|AKIA|ASIA|xox[abprs]-|cp(?:at|oa|or|st|en|na|wh|ws|ns)_|webhooks\/|hooks\.slack|PRIVATE KEY|bearer|key|token|secret|passw|pwd|:\/\//i;
 
 interface RawSpan {
   start: number;
@@ -160,7 +179,9 @@ const PEM_END_MAX = 57;
 
 const BEARER_TAIL = /(?<![A-Za-z0-9])Bearer[ \t]+([A-Za-z0-9\-._~+/]*)$/di;
 const ASSIGN_TAIL = new RegExp(`(?<![A-Za-z0-9_.-])${NAME}(["']?[ \\t]{0,4}(?:[:=][ \\t]{0,4}["']?(${VALUE}*))?)$`, 'di');
-const ASSIGN_HINT = /key|token|secret|passw/i;
+const ASSIGN_HINT = /key|token|secret|passw|pwd/i;
+/** `scheme://user:pa` at the end: the password may still be growing, and only its `@` will tell (T-1065). */
+const USERINFO_TAIL = new RegExp(`${USERINFO_HEAD}([^\\s\\/?#]*)$`, 'di');
 
 /**
  * Where a credential might be starting at the end of `text` without being one yet: the index to hold
@@ -181,6 +202,8 @@ function maybeStart(text: string): number {
   }
   const pem = PEM_HEAD_TAIL.exec(win);
   if (pem) take(pem.index);
+  const userinfo = win.includes('://') ? USERINFO_TAIL.exec(win) : null;
+  if (userinfo) take(userinfo.indices![1]![0]);
   const bearer = BEARER_TAIL.exec(win);
   if (bearer?.[1] && bearer[1].length < 20) take(bearer.indices![1]![0]);
   if (ASSIGN_HINT.test(win.slice(-120))) {
