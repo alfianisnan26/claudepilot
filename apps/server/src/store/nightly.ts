@@ -82,14 +82,18 @@ export function pruneNightly(dir: string, retain: Retention = RETAIN): string[] 
   return removed;
 }
 
+/** SQLite answers a damaged page either with rows naming the damage or by throwing SQLITE_CORRUPT; both refuse the copy. */
 function quickCheck(file: string) {
   const db = new DatabaseSync(file, { readOnly: true });
+  let rows: Record<string, unknown>[];
   try {
-    const rows = db.prepare('PRAGMA quick_check').all();
-    if (rows.length !== 1 || Object.values(rows[0]!)[0] !== 'ok') throw new Error(`${file} failed its integrity check.`);
+    rows = db.prepare('PRAGMA quick_check').all();
+  } catch (e) {
+    throw new Error(`${file} failed its integrity check: ${(e as Error).message}`);
   } finally {
     db.close();
   }
+  if (rows.length !== 1 || Object.values(rows[0]!)[0] !== 'ok') throw new Error(`${file} failed its integrity check.`);
 }
 
 /**
