@@ -17,5 +17,10 @@
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
     "portal": "npm run portal -w @portal/server --"
+  },
+  "devDependencies": {
+    "eslint": "10.13.0",
+    "prettier": "3.9.10",
+    "typescript-eslint": "8.71.2"
   }
 }

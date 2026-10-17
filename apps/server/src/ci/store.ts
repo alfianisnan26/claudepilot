@@ -1,6 +1,8 @@
 // The CI tables (migration 80, PRD §12): thin typed reads and writes. All SQL for CI is here; the service decides what to do.
 
 import { AppError } from '@isnanme/core';
+import { CURSOR_MAX_LIMIT } from '@portal/contracts';
+import { clampLimit, cursorAfter, keysetPage, SCAN_FACTOR } from '../store/keyset.js';
 import type { Store } from '../store/store.js';
 
 export interface RepoRow {
@@ -189,19 +191,47 @@ export interface RunFilter {
   statuses?: string[];
   ticket?: string;
   session?: string;
-  before?: string;
   limit?: number;
 }
 
 const RUN_COLUMNS = [
-  'status', 'reason', 'plan', 'state', 'diagnostics', 'attempts', 'started_at', 'finished_at', 'duration_ms', 'archived', 'subject',
-  'ticket_id', 'ticket_source', 'session_id', 'concurrency_group', 'cancel_in_progress', 'cancelled_by', 'cancelled_by_label', 'cancel_note',
+  'status',
+  'reason',
+  'plan',
+  'state',
+  'diagnostics',
+  'attempts',
+  'started_at',
+  'finished_at',
+  'duration_ms',
+  'archived',
+  'subject',
+  'ticket_id',
+  'ticket_source',
+  'session_id',
+  'concurrency_group',
+  'cancel_in_progress',
+  'cancelled_by',
+  'cancelled_by_label',
+  'cancel_note',
   'runner_workspace_id',
 ] as const;
 type RunPatch = Partial<Pick<RunRow, (typeof RUN_COLUMNS)[number]>>;
 const REPO_COLUMNS = [
-  'default_branch', 'protected', 'required_checks', 'merge_only', 'connected', 'hook_state', 'removed_at', 'source_path',
-  'upstream_url', 'upstream_secret', 'upstream_every_s', 'upstream_state', 'upstream_hook_secret', 'release_report',
+  'default_branch',
+  'protected',
+  'required_checks',
+  'merge_only',
+  'connected',
+  'hook_state',
+  'removed_at',
+  'source_path',
+  'upstream_url',
+  'upstream_secret',
+  'upstream_every_s',
+  'upstream_state',
+  'upstream_hook_secret',
+  'release_report',
 ] as const;
 type RepoPatch = Partial<Pick<RepoRow, (typeof REPO_COLUMNS)[number]>>;
 
@@ -256,24 +286,45 @@ export class CiStore {
   }
 
   repoByName(workspaceId: string, name: string): RepoRow | undefined {
-    return this.#db.prepare('SELECT * FROM ci_repos WHERE workspace_id = ? AND name = ? AND removed_at IS NULL').get(workspaceId, name) as unknown as RepoRow | undefined;
+    return this.#db
+      .prepare('SELECT * FROM ci_repos WHERE workspace_id = ? AND name = ? AND removed_at IS NULL')
+      .get(workspaceId, name) as unknown as RepoRow | undefined;
   }
 
   insertRepo(r: Omit<RepoRow, 'removed_at'>): void {
     this.#writableDb
-      .prepare('INSERT INTO ci_repos (id, workspace_id, name, path, default_branch, protected, required_checks, merge_only, source_path, connected, hook_state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(r.id, r.workspace_id, r.name, r.path, r.default_branch, r.protected, r.required_checks, r.merge_only, r.source_path, r.connected, r.hook_state, r.created_at);
+      .prepare(
+        'INSERT INTO ci_repos (id, workspace_id, name, path, default_branch, protected, required_checks, merge_only, source_path, connected, hook_state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      )
+      .run(
+        r.id,
+        r.workspace_id,
+        r.name,
+        r.path,
+        r.default_branch,
+        r.protected,
+        r.required_checks,
+        r.merge_only,
+        r.source_path,
+        r.connected,
+        r.hook_state,
+        r.created_at,
+      );
   }
 
   updateRepo(id: string, patch: RepoPatch): void {
     const keys = Object.keys(patch) as (keyof RepoPatch)[];
     if (!keys.length) return;
-    this.#writableDb.prepare(`UPDATE ci_repos SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`).run(...keys.map((k) => patch[k] ?? null), id);
+    this.#writableDb
+      .prepare(`UPDATE ci_repos SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`)
+      .run(...keys.map((k) => patch[k] ?? null), id);
   }
 
   /** Workspaces that have at least one remote: the ones the portal polls. */
   workspacesWithRepos(): string[] {
-    return (this.#db.prepare('SELECT DISTINCT workspace_id FROM ci_repos WHERE removed_at IS NULL').all() as { workspace_id: string }[]).map((r) => r.workspace_id);
+    return (
+      this.#db.prepare('SELECT DISTINCT workspace_id FROM ci_repos WHERE removed_at IS NULL').all() as { workspace_id: string }[]
+    ).map((r) => r.workspace_id);
   }
 
   /* ---------- Events ---------- */
@@ -284,23 +335,31 @@ export class CiStore {
 
   insertEvent(e: EventRow): void {
     this.#writableDb
-      .prepare('INSERT OR IGNORE INTO ci_events (workspace_id, id, repo_id, repo, kind, ref, old_sha, new_sha, via, at, outcome, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .prepare(
+        'INSERT OR IGNORE INTO ci_events (workspace_id, id, repo_id, repo, kind, ref, old_sha, new_sha, via, at, outcome, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      )
       .run(e.workspace_id, e.id, e.repo_id, e.repo, e.kind, e.ref, e.old_sha, e.new_sha, e.via, e.at, e.outcome, e.note);
   }
 
   events(repoId: string, limit = 50): EventRow[] {
-    return this.#db.prepare('SELECT * FROM ci_events WHERE repo_id = ? ORDER BY at DESC, id DESC LIMIT ?').all(repoId, limit) as unknown as EventRow[];
+    return this.#db
+      .prepare('SELECT * FROM ci_events WHERE repo_id = ? ORDER BY at DESC, id DESC LIMIT ?')
+      .all(repoId, limit) as unknown as EventRow[];
   }
 
   /* ---------- Runs ---------- */
 
   nextNumber(repoId: string): number {
-    return Number((this.#db.prepare('SELECT COALESCE(MAX(number), 0) + 1 AS n FROM ci_runs WHERE repo_id = ?').get(repoId) as { n: number }).n);
+    return Number(
+      (this.#db.prepare('SELECT COALESCE(MAX(number), 0) + 1 AS n FROM ci_runs WHERE repo_id = ?').get(repoId) as { n: number }).n,
+    );
   }
 
   insertRun(r: RunRow): void {
     const keys = Object.keys(r) as (keyof RunRow)[];
-    this.#writableDb.prepare(`INSERT INTO ci_runs (${keys.join(', ')}) VALUES (${keys.map(() => '?').join(', ')})`).run(...keys.map((k) => r[k] ?? null));
+    this.#writableDb
+      .prepare(`INSERT INTO ci_runs (${keys.join(', ')}) VALUES (${keys.map(() => '?').join(', ')})`)
+      .run(...keys.map((k) => r[k] ?? null));
   }
 
   run(id: string): RunRow | undefined {
@@ -310,13 +369,14 @@ export class CiStore {
   updateRun(id: string, patch: RunPatch): void {
     const keys = Object.keys(patch) as (keyof RunPatch)[];
     if (!keys.length) return;
-    this.#writableDb.prepare(`UPDATE ci_runs SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`).run(...keys.map((k) => patch[k] ?? null), id);
+    this.#writableDb
+      .prepare(`UPDATE ci_runs SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`)
+      .run(...keys.map((k) => patch[k] ?? null), id);
   }
 
-  /** Runs matching the filters, newest first, with how many match and how many of those are not finished. */
-  listRuns(f: RunFilter): { rows: RunRow[]; total: number; active: number } {
+  #runWhere(f: RunFilter): { where: string[]; args: string[] } {
     const where: string[] = [];
-    const args: (string | number)[] = [];
+    const args: string[] = [];
     if (f.workspace) (where.push('workspace_id = ?'), args.push(f.workspace));
     if (f.repoId) (where.push('repo_id = ?'), args.push(f.repoId));
     if (f.pipeline) (where.push('pipeline = ?'), args.push(f.pipeline));
@@ -324,38 +384,101 @@ export class CiStore {
     if (f.ticket) (where.push('ticket_id = ?'), args.push(f.ticket));
     if (f.session) (where.push('session_id = ?'), args.push(f.session));
     if (f.statuses?.length) (where.push(`status IN (${f.statuses.map(() => '?').join(', ')})`), args.push(...f.statuses));
+    return { where, args };
+  }
+
+  /** Runs matching the filters, newest first, with how many match and how many of those are not finished. */
+  listRuns(f: RunFilter): { rows: RunRow[]; total: number; active: number } {
+    const { where, args } = this.#runWhere(f);
     const sql = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const total = Number((this.#db.prepare(`SELECT count(*) AS n FROM ci_runs ${sql}`).get(...args) as { n: number }).n);
-    const active = Number((this.#db.prepare(`SELECT count(*) AS n FROM ci_runs ${sql ? `${sql} AND` : 'WHERE'} status IN ('queued', 'running')`).get(...args) as { n: number }).n);
-    let page = sql;
-    const pageArgs = [...args];
-    if (f.before) {
-      const before = this.run(f.before);
-      if (before) {
-        page = `${sql ? `${sql} AND` : 'WHERE'} (created_at < ? OR (created_at = ? AND id < ?))`;
-        pageArgs.push(before.created_at, before.created_at, before.id);
-      }
-    }
-    const rows = this.#db.prepare(`SELECT * FROM ci_runs ${page} ORDER BY created_at DESC, id DESC LIMIT ?`).all(...pageArgs, Math.max(1, Math.min(f.limit ?? 50, 200))) as unknown as RunRow[];
+    const active = Number(
+      (
+        this.#db
+          .prepare(`SELECT count(*) AS n FROM ci_runs ${sql ? `${sql} AND` : 'WHERE'} status IN ('queued', 'running')`)
+          .get(...args) as { n: number }
+      ).n,
+    );
+    const rows = this.#db
+      .prepare(`SELECT * FROM ci_runs ${sql} ORDER BY created_at DESC, id DESC LIMIT ?`)
+      .all(...args, Math.max(1, Math.min(f.limit ?? 50, 200))) as unknown as RunRow[];
     return { rows, total, active };
+  }
+
+  /**
+   * D-58: one page of {@link listRuns}' order (newest first, the id breaking ties), by keyset, so a run started during a walk never repeats or
+   * skips a row. `scope` binds the cursor to the caller and the filters. `keep` is the caller's authz filter: refused runs are not shown, not
+   * counted, and the cursor points at the last run SHOWN. Without a cursor the page also carries `total` and `active` over what `keep` lets
+   * through. A bad or foreign cursor is a 400.
+   */
+  listRunsPage(
+    f: RunFilter,
+    args: { scope: string; cursor?: string | undefined; limit?: unknown; keep?: (r: { id: string }) => boolean },
+  ): { rows: RunRow[]; next: string | null; total?: number; active?: number } {
+    const { where, args: params } = this.#runWhere(f);
+    const limit = clampLimit(args.limit);
+    const spec = {
+      scope: args.scope,
+      table: 'ci_runs',
+      sortCol: 'created_at',
+      idCol: 'id',
+      ...(where.length ? { where: where.join(' AND '), params } : {}),
+    };
+    const shown: RunRow[] = [];
+    let cursor = args.cursor;
+    // Bounded scan: at most SCAN_FACTOR x limit rows per request; at the bound `next` rests on the last row scanned (the cursor is sealed).
+    const maxScan = limit * SCAN_FACTOR;
+    let scanned = 0;
+    let resume: string | null = null;
+    while (scanned < maxScan) {
+      const got = keysetPage<RunRow & Record<string, unknown>>(this.#db, spec, {
+        cursor,
+        limit: Math.min(CURSOR_MAX_LIMIT, maxScan - scanned),
+      });
+      scanned += got.rows.length;
+      for (const r of got.rows) if (!args.keep || args.keep(r)) shown.push(r);
+      resume = got.next;
+      if (shown.length > limit || !got.next) break;
+      cursor = got.next;
+    }
+    const rows = shown.slice(0, limit);
+    const last = rows[rows.length - 1];
+    const next = shown.length > limit && last ? cursorAfter(args.scope, last.created_at, last.id) : shown.length > limit ? null : resume;
+    if (args.cursor) return { rows, next };
+    const sql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    const every = this.#db.prepare(`SELECT id, status FROM ci_runs ${sql}`).all(...params) as { id: string; status: string }[];
+    const seen = args.keep ? every.filter((r) => args.keep!(r)) : every;
+    return { rows, next, total: seen.length, active: seen.filter((r) => r.status === 'queued' || r.status === 'running').length };
   }
 
   /** Runs executing in this workspace: its own, and those a runner took from other workspaces (T-557). */
   runningRuns(workspaceId: string): RunRow[] {
     const where = this.runnersReady ? 'COALESCE(runner_workspace_id, workspace_id) = ?' : 'workspace_id = ?';
-    return this.#db.prepare(`SELECT * FROM ci_runs WHERE ${where} AND status = 'running' ORDER BY created_at`).all(workspaceId) as unknown as RunRow[];
+    return this.#db
+      .prepare(`SELECT * FROM ci_runs WHERE ${where} AND status = 'running' ORDER BY created_at`)
+      .all(workspaceId) as unknown as RunRow[];
   }
 
   queuedRuns(workspaceId: string): RunRow[] {
-    return this.#db.prepare("SELECT * FROM ci_runs WHERE workspace_id = ? AND status = 'queued' ORDER BY created_at, id").all(workspaceId) as unknown as RunRow[];
+    return this.#db
+      .prepare("SELECT * FROM ci_runs WHERE workspace_id = ? AND status = 'queued' ORDER BY created_at, id")
+      .all(workspaceId) as unknown as RunRow[];
   }
 
   /** Workspaces with a run that is not finished: polled even when no remote is listed (a removed one still has runs to finish). */
   workspacesWithActiveRuns(): string[] {
-    const ids = (this.#db.prepare("SELECT DISTINCT workspace_id FROM ci_runs WHERE status IN ('queued', 'running')").all() as { workspace_id: string }[]).map((r) => r.workspace_id);
+    const ids = (
+      this.#db.prepare("SELECT DISTINCT workspace_id FROM ci_runs WHERE status IN ('queued', 'running')").all() as {
+        workspace_id: string;
+      }[]
+    ).map((r) => r.workspace_id);
     if (!this.runnersReady) return ids;
     // A runner executing another workspace's run is polled too (T-557).
-    const runners = (this.#db.prepare("SELECT DISTINCT runner_workspace_id AS id FROM ci_runs WHERE status = 'running' AND runner_workspace_id IS NOT NULL").all() as { id: string }[]).map((r) => r.id);
+    const runners = (
+      this.#db
+        .prepare("SELECT DISTINCT runner_workspace_id AS id FROM ci_runs WHERE status = 'running' AND runner_workspace_id IS NOT NULL")
+        .all() as { id: string }[]
+    ).map((r) => r.id);
     return [...new Set([...ids, ...runners])];
   }
 
@@ -400,12 +523,20 @@ export class CiStore {
 
   /** Runs of a concurrency group in a remote that are queued or running, other than `exceptId`. */
   activeInGroup(repoId: string, group: string, exceptId: string): RunRow[] {
-    return this.#db.prepare("SELECT * FROM ci_runs WHERE repo_id = ? AND concurrency_group = ? AND id <> ? AND status IN ('queued', 'running') ORDER BY created_at").all(repoId, group, exceptId) as unknown as RunRow[];
+    return this.#db
+      .prepare(
+        "SELECT * FROM ci_runs WHERE repo_id = ? AND concurrency_group = ? AND id <> ? AND status IN ('queued', 'running') ORDER BY created_at",
+      )
+      .all(repoId, group, exceptId) as unknown as RunRow[];
   }
 
   /** Finished runs whose logs the portal does not have yet. */
   unarchived(limit = 20): RunRow[] {
-    return this.#db.prepare("SELECT * FROM ci_runs WHERE archived = 0 AND status IN ('passed', 'failed', 'cancelled') AND state IS NOT NULL ORDER BY created_at DESC LIMIT ?").all(limit) as unknown as RunRow[];
+    return this.#db
+      .prepare(
+        "SELECT * FROM ci_runs WHERE archived = 0 AND status IN ('passed', 'failed', 'cancelled') AND state IS NOT NULL ORDER BY created_at DESC LIMIT ?",
+      )
+      .all(limit) as unknown as RunRow[];
   }
 
   /** The newest run of each branch and pipeline of a remote (what a branch row shows). */
@@ -419,7 +550,13 @@ export class CiStore {
   }
 
   activeCount(repoId: string): number {
-    return Number((this.#db.prepare("SELECT count(*) AS n FROM ci_runs WHERE repo_id = ? AND status IN ('queued', 'running')").get(repoId) as { n: number }).n);
+    return Number(
+      (
+        this.#db.prepare("SELECT count(*) AS n FROM ci_runs WHERE repo_id = ? AND status IN ('queued', 'running')").get(repoId) as {
+          n: number;
+        }
+      ).n,
+    );
   }
 
   /* ---------- Logs ---------- */
@@ -435,7 +572,8 @@ export class CiStore {
   }
 
   log(runId: string, job: string, step: number): LogRow | undefined {
-    return this.#db.prepare('SELECT * FROM ci_logs WHERE run_id = ? AND job = ? AND step = ?').get(runId, job, step) as unknown as LogRow | undefined;
+    return this.#db.prepare('SELECT * FROM ci_logs WHERE run_id = ? AND job = ? AND step = ?').get(runId, job, step) as unknown as
+      LogRow | undefined;
   }
 
   /* ---------- Flaky tests (T-95 item 4) ---------- */
@@ -451,29 +589,47 @@ export class CiStore {
 
   /** The test's latest sighting that has a ticket, and how many runs have seen it (this one included once it is stored). */
   flakyOf(repo: string, file: string, test: string): { ticketId: string | null; runs: number } {
-    const last = this.#db.prepare('SELECT ticket_id FROM ci_flaky WHERE repo = ? AND file = ? AND test = ? AND ticket_id IS NOT NULL ORDER BY at DESC, rowid DESC LIMIT 1').get(repo, file, test) as { ticket_id: string } | undefined;
-    const n = this.#db.prepare('SELECT count(*) AS n FROM ci_flaky WHERE repo = ? AND file = ? AND test = ?').get(repo, file, test) as { n: number };
+    const last = this.#db
+      .prepare(
+        'SELECT ticket_id FROM ci_flaky WHERE repo = ? AND file = ? AND test = ? AND ticket_id IS NOT NULL ORDER BY at DESC, rowid DESC LIMIT 1',
+      )
+      .get(repo, file, test) as { ticket_id: string } | undefined;
+    const n = this.#db.prepare('SELECT count(*) AS n FROM ci_flaky WHERE repo = ? AND file = ? AND test = ?').get(repo, file, test) as {
+      n: number;
+    };
     return { ticketId: last?.ticket_id ?? null, runs: Number(n.n) };
   }
 
   /** Records a sighting; false when this run already recorded that test. */
   insertFlaky(f: FlakyRow): boolean {
-    return Number(this.#writableDb.prepare('INSERT OR IGNORE INTO ci_flaky (run_id, repo, job, file, test, ticket_id, at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(f.run_id, f.repo, f.job, f.file, f.test, f.ticket_id, f.at).changes) > 0;
+    return (
+      Number(
+        this.#writableDb
+          .prepare('INSERT OR IGNORE INTO ci_flaky (run_id, repo, job, file, test, ticket_id, at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+          .run(f.run_id, f.repo, f.job, f.file, f.test, f.ticket_id, f.at).changes,
+      ) > 0
+    );
   }
 
   setFlakyTicket(runId: string, repo: string, file: string, test: string, ticketId: string): void {
-    this.#writableDb.prepare('UPDATE ci_flaky SET ticket_id = ? WHERE run_id = ? AND repo = ? AND file = ? AND test = ?').run(ticketId, runId, repo, file, test);
+    this.#writableDb
+      .prepare('UPDATE ci_flaky SET ticket_id = ? WHERE run_id = ? AND repo = ? AND file = ? AND test = ?')
+      .run(ticketId, runId, repo, file, test);
   }
 
   flakyOfRun(runId: string): FlakyRow[] {
     if (!this.flakyReady) return [];
-    return this.#db.prepare('SELECT run_id, repo, job, file, test, ticket_id, at FROM ci_flaky WHERE run_id = ? ORDER BY rowid').all(runId) as unknown as FlakyRow[];
+    return this.#db
+      .prepare('SELECT run_id, repo, job, file, test, ticket_id, at FROM ci_flaky WHERE run_id = ? ORDER BY rowid')
+      .all(runId) as unknown as FlakyRow[];
   }
 
   /* ---------- Messages to sessions (PRD FR37) ---------- */
 
   insertMessage(m: MessageRow): void {
-    this.#writableDb.prepare('INSERT INTO ci_messages (run_id, session_id, ticket_id, at, outcome, note, state) VALUES (?, ?, ?, ?, ?, ?, ?)').run(m.run_id, m.session_id, m.ticket_id, m.at, m.outcome, m.note, m.state);
+    this.#writableDb
+      .prepare('INSERT INTO ci_messages (run_id, session_id, ticket_id, at, outcome, note, state) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(m.run_id, m.session_id, m.ticket_id, m.at, m.outcome, m.note, m.state);
   }
 
   /** Whether this run's state was already reported (or decided not to be): each is said once. */
@@ -483,14 +639,20 @@ export class CiStore {
 
   /** What CI told a run's session, or why not, oldest first. */
   messagesOfRun(runId: string): MessageRow[] {
-    return this.#db.prepare('SELECT run_id, session_id, ticket_id, at, outcome, note, state FROM ci_messages WHERE run_id = ? ORDER BY id').all(runId) as unknown as MessageRow[];
+    return this.#db
+      .prepare('SELECT run_id, session_id, ticket_id, at, outcome, note, state FROM ci_messages WHERE run_id = ? ORDER BY id')
+      .all(runId) as unknown as MessageRow[];
   }
 
   /** Messages actually sent for a ticket (or, without one, a session) since a time. */
   sentSince(by: { ticketId: string | null; sessionId: string }, since: string): number {
     const row = by.ticketId
-      ? this.#db.prepare("SELECT count(*) AS n FROM ci_messages WHERE ticket_id = ? AND outcome = 'sent' AND at > ?").get(by.ticketId, since)
-      : this.#db.prepare("SELECT count(*) AS n FROM ci_messages WHERE ticket_id IS NULL AND session_id = ? AND outcome = 'sent' AND at > ?").get(by.sessionId, since);
+      ? this.#db
+          .prepare("SELECT count(*) AS n FROM ci_messages WHERE ticket_id = ? AND outcome = 'sent' AND at > ?")
+          .get(by.ticketId, since)
+      : this.#db
+          .prepare("SELECT count(*) AS n FROM ci_messages WHERE ticket_id IS NULL AND session_id = ? AND outcome = 'sent' AND at > ?")
+          .get(by.sessionId, since);
     return Number((row as { n: number }).n);
   }
 
@@ -499,7 +661,9 @@ export class CiStore {
     const row =
       'runId' in by
         ? this.#db.prepare("SELECT count(*) AS n FROM ci_messages WHERE run_id = ? AND state LIKE 'bump:%' AND at > ?").get(by.runId, since)
-        : this.#db.prepare("SELECT count(*) AS n FROM ci_messages WHERE session_id = ? AND state LIKE 'bump:%' AND at > ?").get(by.sessionId, since);
+        : this.#db
+            .prepare("SELECT count(*) AS n FROM ci_messages WHERE session_id = ? AND state LIKE 'bump:%' AND at > ?")
+            .get(by.sessionId, since);
     return Number((row as { n: number }).n);
   }
 
@@ -544,20 +708,25 @@ export class CiStore {
   }
 
   environment(repoId: string, name: string): EnvironmentRow | undefined {
-    return this.#db.prepare('SELECT * FROM ci_environments WHERE repo_id = ? AND name = ?').get(repoId, name) as unknown as EnvironmentRow | undefined;
+    return this.#db.prepare('SELECT * FROM ci_environments WHERE repo_id = ? AND name = ?').get(repoId, name) as unknown as
+      EnvironmentRow | undefined;
   }
 
   /** The environment, made protected when it does not exist yet (the safe default: a new name never deploys unattended). */
   ensureEnvironment(repoId: string, name: string, by: string, id: string): EnvironmentRow {
     const now = new Date().toISOString();
     this.#writableDb
-      .prepare('INSERT OR IGNORE INTO ci_environments (id, repo_id, name, protected, created_at, updated_at, updated_by) VALUES (?, ?, ?, 1, ?, ?, ?)')
+      .prepare(
+        'INSERT OR IGNORE INTO ci_environments (id, repo_id, name, protected, created_at, updated_at, updated_by) VALUES (?, ?, ?, 1, ?, ?, ?)',
+      )
       .run(id, repoId, name, now, now, by);
     return this.environment(repoId, name)!;
   }
 
   setProtected(id: string, value: boolean, by: string): void {
-    this.#writableDb.prepare('UPDATE ci_environments SET protected = ?, updated_at = ?, updated_by = ? WHERE id = ?').run(value ? 1 : 0, new Date().toISOString(), by, id);
+    this.#writableDb
+      .prepare('UPDATE ci_environments SET protected = ?, updated_at = ?, updated_by = ? WHERE id = ?')
+      .run(value ? 1 : 0, new Date().toISOString(), by, id);
   }
 
   /* ---------- The auto-approve rule (T-110, PRD FR41a) ---------- */
@@ -582,13 +751,25 @@ export class CiStore {
   /** Records the rule's verdict on a deployment, once: a second look at the same deployment writes nothing. */
   setAutoVerdict(id: string, verdict: 'would' | 'would_not', line: string, at: string, mode: 'dry' | 'on'): boolean {
     return (
-      Number(this.#writableDb.prepare('UPDATE ci_deployments SET auto_verdict = ?, auto_line = ?, auto_at = ?, auto_mode = ? WHERE id = ? AND auto_verdict IS NULL').run(verdict, line, at, mode, id).changes) > 0
+      Number(
+        this.#writableDb
+          .prepare(
+            'UPDATE ci_deployments SET auto_verdict = ?, auto_line = ?, auto_at = ?, auto_mode = ? WHERE id = ? AND auto_verdict IS NULL',
+          )
+          .run(verdict, line, at, mode, id).changes,
+      ) > 0
     );
   }
 
   /** Mode `on`: how the rule's claimed approval ended (approved, or not after all); only a verdict already claimed in mode `on` changes. */
   settleAutoVerdict(id: string, verdict: 'would' | 'would_not', line: string): boolean {
-    return Number(this.#writableDb.prepare("UPDATE ci_deployments SET auto_verdict = ?, auto_line = ? WHERE id = ? AND auto_mode = 'on'").run(verdict, line, id).changes) > 0;
+    return (
+      Number(
+        this.#writableDb
+          .prepare("UPDATE ci_deployments SET auto_verdict = ?, auto_line = ? WHERE id = ? AND auto_mode = 'on'")
+          .run(verdict, line, id).changes,
+      ) > 0
+    );
   }
 
   /**
@@ -633,35 +814,65 @@ export class CiStore {
 
   insertDeployment(d: DeploymentRow): void {
     const keys = Object.keys(d) as (keyof DeploymentRow)[];
-    this.#writableDb.prepare(`INSERT INTO ci_deployments (${keys.join(', ')}) VALUES (${keys.map(() => '?').join(', ')})`).run(...keys.map((k) => d[k] ?? null));
+    this.#writableDb
+      .prepare(`INSERT INTO ci_deployments (${keys.join(', ')}) VALUES (${keys.map(() => '?').join(', ')})`)
+      .run(...keys.map((k) => d[k] ?? null));
   }
 
   deploymentsOfRun(runId: string): DeploymentRow[] {
     if (!this.deploymentsReady) return [];
-    return this.#db.prepare('SELECT * FROM ci_deployments WHERE run_id = ? ORDER BY created_at, job').all(runId) as unknown as DeploymentRow[];
+    return this.#db
+      .prepare('SELECT * FROM ci_deployments WHERE run_id = ? ORDER BY created_at, job')
+      .all(runId) as unknown as DeploymentRow[];
   }
 
   deployment(runId: string, job: string): DeploymentRow | undefined {
-    return this.#db.prepare('SELECT * FROM ci_deployments WHERE run_id = ? AND job = ?').get(runId, job) as unknown as DeploymentRow | undefined;
+    return this.#db.prepare('SELECT * FROM ci_deployments WHERE run_id = ? AND job = ?').get(runId, job) as unknown as
+      DeploymentRow | undefined;
   }
 
   deploymentsOf(repoId: string, environment: string, limit = 20): DeploymentRow[] {
-    return this.#db.prepare('SELECT * FROM ci_deployments WHERE repo_id = ? AND environment = ? ORDER BY created_at DESC, id DESC LIMIT ?').all(repoId, environment, limit) as unknown as DeploymentRow[];
+    return this.#db
+      .prepare('SELECT * FROM ci_deployments WHERE repo_id = ? AND environment = ? ORDER BY created_at DESC, id DESC LIMIT ?')
+      .all(repoId, environment, limit) as unknown as DeploymentRow[];
   }
 
   /** Moves a deployment's approval; `from` makes it a compare-and-set, so two people deciding at once can not both win. */
-  updateDeployment(id: string, patch: Partial<Pick<DeploymentRow, 'approval' | 'gate_key' | 'decided_by' | 'decided_at' | 'outcome'>>, from?: DeploymentRow['approval'][]): boolean {
+  updateDeployment(
+    id: string,
+    patch: Partial<Pick<DeploymentRow, 'approval' | 'gate_key' | 'decided_by' | 'decided_at' | 'outcome'>>,
+    from?: DeploymentRow['approval'][],
+  ): boolean {
     const keys = Object.keys(patch) as (keyof typeof patch)[];
     if (!keys.length) return false;
     const guard = from?.length ? ` AND approval IN (${from.map(() => '?').join(', ')})` : '';
-    return Number(this.#writableDb.prepare(`UPDATE ci_deployments SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?${guard}`).run(...keys.map((k) => patch[k] ?? null), id, ...(from ?? [])).changes) > 0;
+    return (
+      Number(
+        this.#writableDb
+          .prepare(`UPDATE ci_deployments SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?${guard}`)
+          .run(...keys.map((k) => patch[k] ?? null), id, ...(from ?? [])).changes,
+      ) > 0
+    );
   }
 
   /* ---------- Merges ---------- */
 
-  insertMerge(m: { id: string; repo_id: string; source: string; target: string; strategy: string; result_sha: string | null; actor: string; at: string; outcome: string; note: string | null }): void {
+  insertMerge(m: {
+    id: string;
+    repo_id: string;
+    source: string;
+    target: string;
+    strategy: string;
+    result_sha: string | null;
+    actor: string;
+    at: string;
+    outcome: string;
+    note: string | null;
+  }): void {
     this.#writableDb
-      .prepare('INSERT INTO ci_merges (id, repo_id, source, target, strategy, result_sha, actor, at, outcome, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .prepare(
+        'INSERT INTO ci_merges (id, repo_id, source, target, strategy, result_sha, actor, at, outcome, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      )
       .run(m.id, m.repo_id, m.source, m.target, m.strategy, m.result_sha, m.actor, m.at, m.outcome, m.note);
   }
 
@@ -675,12 +886,17 @@ export class CiStore {
     db.prepare('DELETE FROM ci_events WHERE at < ?').run(eventCut);
     db.prepare('DELETE FROM ci_messages WHERE at < ?').run(new Date(Date.now() - 7 * 86_400_000).toISOString());
     // Deployments are the environments' history: kept a year, past their runs.
-    if (this.deploymentsReady) db.prepare('DELETE FROM ci_deployments WHERE created_at < ?').run(new Date(Date.now() - 365 * 86_400_000).toISOString());
-    let n = Number(db.prepare("DELETE FROM ci_runs WHERE status IN ('passed', 'failed', 'cancelled') AND created_at < ?").run(runCut).changes);
+    if (this.deploymentsReady)
+      db.prepare('DELETE FROM ci_deployments WHERE created_at < ?').run(new Date(Date.now() - 365 * 86_400_000).toISOString());
+    let n = Number(
+      db.prepare("DELETE FROM ci_runs WHERE status IN ('passed', 'failed', 'cancelled') AND created_at < ?").run(runCut).changes,
+    );
     for (const { workspace_id } of db.prepare('SELECT DISTINCT workspace_id FROM ci_runs').all() as { workspace_id: string }[]) {
       n += Number(
         db
-          .prepare("DELETE FROM ci_runs WHERE workspace_id = ? AND status IN ('passed', 'failed', 'cancelled') AND id NOT IN (SELECT id FROM ci_runs WHERE workspace_id = ? ORDER BY created_at DESC, id DESC LIMIT ?)")
+          .prepare(
+            "DELETE FROM ci_runs WHERE workspace_id = ? AND status IN ('passed', 'failed', 'cancelled') AND id NOT IN (SELECT id FROM ci_runs WHERE workspace_id = ? ORDER BY created_at DESC, id DESC LIMIT ?)",
+          )
           .run(workspace_id, workspace_id, opts.keepPerWorkspace).changes,
       );
     }

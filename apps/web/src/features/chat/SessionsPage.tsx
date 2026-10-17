@@ -53,7 +53,7 @@ function savedView(): Pick<ViewState, 'groupBy'> {
 export function SessionsPage() {
   const toast = useToast();
   const navigate = useNavigate();
-  const { sessions, failed, reload } = useChatList();
+  const { sessions, failed, reload, hasMore, loadingMore, loadMore } = useChatList();
   const { factOf, loaded: workspacesLoaded } = useWorkspaceFacts();
   const personas = usePersonaIdentities();
   const [creating, setCreating] = useState(false);
@@ -129,12 +129,16 @@ export function SessionsPage() {
     [shown, view, factOf, workspacesLoaded, byStatus],
   );
 
-  const toggle = useCallback((id: string) => setSelected((s) => (s.has(id) ? new Set([...s].filter((x) => x !== id)) : new Set(s).add(id))), []);
+  const toggle = useCallback(
+    (id: string) => setSelected((s) => (s.has(id) ? new Set([...s].filter((x) => x !== id)) : new Set(s).add(id))),
+    [],
+  );
   const stopSelecting = () => {
     setSelecting(false);
     setSelected(new Set());
   };
-  const flip = (set: ReadonlySet<string>, id: string): ReadonlySet<string> => (set.has(id) ? new Set([...set].filter((x) => x !== id)) : new Set(set).add(id));
+  const flip = (set: ReadonlySet<string>, id: string): ReadonlySet<string> =>
+    set.has(id) ? new Set([...set].filter((x) => x !== id)) : new Set(set).add(id);
 
   const archive = async (s: ChatSession) => {
     setBusy(true);
@@ -193,8 +197,18 @@ export function SessionsPage() {
   // avatars by the rows on screen.
   const factsByGroup: ReadonlyMap<string, RowFacts> = useMemo(() => {
     const groups = list ? list.groups : [];
-    const showAvatars = avatarsShown(listFacts(groups.flatMap((g) => g.rows), personas));
-    return new Map(groups.map((g) => [g.key, { showWorkspace: workspaceShown(listFacts(g.rows, personas), view.groupBy), showAvatars, usage: usageById, nowMs }]));
+    const showAvatars = avatarsShown(
+      listFacts(
+        groups.flatMap((g) => g.rows),
+        personas,
+      ),
+    );
+    return new Map(
+      groups.map((g) => [
+        g.key,
+        { showWorkspace: workspaceShown(listFacts(g.rows, personas), view.groupBy), showAvatars, usage: usageById, nowMs },
+      ]),
+    );
   }, [list, personas, view.groupBy, usageById, nowMs]);
 
   const byId = useMemo(() => new Map((sessions ?? []).map((s) => [s.id, s])), [sessions]);
@@ -212,7 +226,11 @@ export function SessionsPage() {
     setBulk(null);
     const verb = bulk === 'end' ? 'Ended' : bulk === 'archive' ? 'Archived' : 'Deleted';
     if (result.failed.length === 0) toast(`${verb} ${result.ok} ${result.ok === 1 ? 'session' : 'sessions'}`);
-    else toast(`${verb} ${result.ok}; ${result.failed.length} failed: ${errorText(result.failed[0]!.error, 'Something went wrong.')}`, 'error');
+    else
+      toast(
+        `${verb} ${result.ok}; ${result.failed.length} failed: ${errorText(result.failed[0]!.error, 'Something went wrong.')}`,
+        'error',
+      );
     stopSelecting();
     await reload();
   };
@@ -239,13 +257,24 @@ export function SessionsPage() {
       {!sessions && !failed && <RowsSkeleton rows={3} lines={1} trailing icon="rounded-2xl" />}
 
       {sessions && sessions.length > 0 && (
-        <SessionsToolbar view={view} counts={counts} programs={programs} onChange={change} selecting={selecting} onSelect={() => setSelecting(true)} />
+        <SessionsToolbar
+          view={view}
+          counts={counts}
+          programs={programs}
+          onChange={change}
+          selecting={selecting}
+          onSelect={() => setSelecting(true)}
+        />
       )}
 
       {/* What waits on you, on top of the other chips' lists (All has it as its first heading, Needs you is it). */}
-      {list && sessions && sessions.length > 0 && !view.archived && view.filter !== 'attention' && !byStatus && list.attention.length > 0 && (
-        <Queue rows={list.attention} />
-      )}
+      {list &&
+        sessions &&
+        sessions.length > 0 &&
+        !view.archived &&
+        view.filter !== 'attention' &&
+        !byStatus &&
+        list.attention.length > 0 && <Queue rows={list.attention} />}
 
       {list &&
         sessions &&
@@ -265,7 +294,11 @@ export function SessionsPage() {
           <EmptyState icon={<MessagesSquare className="size-6" />} title={view.archived ? 'Nothing archived' : 'No sessions match'}>
             {view.archived ? 'Archived sessions end and wait here, with their transcripts.' : 'Nothing fits this search and filter.'}{' '}
             {(view.query || view.filter !== 'all' || view.archived || view.program) && (
-              <button type="button" className="font-semibold text-ink underline underline-offset-2" onClick={() => change({ query: '', filter: 'all', archived: false, program: null })}>
+              <button
+                type="button"
+                className="font-semibold text-ink underline underline-offset-2"
+                onClick={() => change({ query: '', filter: 'all', archived: false, program: null })}
+              >
                 Show everything
               </button>
             )}
@@ -300,6 +333,15 @@ export function SessionsPage() {
             ))}
           </div>
         ))}
+
+      {/* D-58: the list loads the newest page; the 5 s refresh asks for that page only. */}
+      {sessions && hasMore && (
+        <div className="mt-4 flex justify-center">
+          <Button variant="secondary" loading={loadingMore} onClick={() => void loadMore()}>
+            Older
+          </Button>
+        </div>
+      )}
 
       {selecting && (
         <BulkBar
@@ -438,7 +480,11 @@ const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? o
 
 function bulkTitle(action: BulkAction | null, chosen: ChatSession[]): string {
   const n = chosen.length;
-  return action === 'end' ? `End ${plural(n, 'session')}?` : action === 'archive' ? `Archive ${plural(n, 'session')}?` : `Delete ${plural(n, 'session')}?`;
+  return action === 'end'
+    ? `End ${plural(n, 'session')}?`
+    : action === 'archive'
+      ? `Archive ${plural(n, 'session')}?`
+      : `Delete ${plural(n, 'session')}?`;
 }
 
 function bulkText(action: BulkAction | null, chosen: ChatSession[]): string {

@@ -22,6 +22,7 @@ import { chatApi } from './api';
 import { foldBtw, refusedBtw, type BtwState } from './btw/state';
 import { appendLive, EMPTY_HISTORY, expand, olderDone, olderFailed, olderStart, seed, seedAll, type History } from './history';
 import { createDeltaBatcher, foldLive, NO_LIVE, settleLive, type AgentLive, type LiveState } from './motion/deltas';
+import { ListPager } from './listPaging';
 import { sharedRead } from './sharedRead';
 
 /** The newest page, one read in flight per session: a remounted effect (StrictMode in dev) joins it instead of reading again. */
@@ -215,7 +216,10 @@ export function useChatSession(sessionId: string): ChatSessionApi {
 
     const loadTasks = () => {
       const version = tasksVersion;
-      chatApi.tasks(sessionId).then((list) => !closed && version === tasksVersion && setTasks(list), () => undefined);
+      chatApi.tasks(sessionId).then(
+        (list) => !closed && version === tasksVersion && setTasks(list),
+        () => undefined,
+      );
     };
 
     // Seed the newest page, the current state and tasks once; the socket keeps them fresh after that. The socket subscribes only once the
@@ -238,7 +242,10 @@ export function useChatSession(sessionId: string): ChatSessionApi {
         subscribe();
       },
     );
-    void chatApi.get(sessionId).then((s) => !closed && setSession(s), () => undefined);
+    void chatApi.get(sessionId).then(
+      (s) => !closed && setSession(s),
+      () => undefined,
+    );
     loadTasks();
 
     const settle = (uuid: string, w: Waiter, ok: boolean, error?: string, code?: string) => {
@@ -426,7 +433,9 @@ export function useChatSession(sessionId: string): ChatSessionApi {
         if (attachments.length) msg.attachments = attachments;
         waitersRef.current.set(uuid, { kind: 'send', resolve, reject });
         setInputs((m) => new Map(m).set(uuid, 'sending'));
-        const images = opts.shown?.images ?? attachments.flatMap((a) => ('dataBase64' in a ? [{ src: `data:${a.mediaType};base64,${a.dataBase64}`, name: a.name }] : []));
+        const images =
+          opts.shown?.images ??
+          attachments.flatMap((a) => ('dataBase64' in a ? [{ src: `data:${a.mediaType};base64,${a.dataBase64}`, name: a.name }] : []));
         setOutbox((o) => [...o, { uuid, text, images, files: opts.shown?.files ?? [] }]);
         ws.send(JSON.stringify(msg));
       }),
@@ -526,25 +535,69 @@ export function useChatSession(sessionId: string): ChatSessionApi {
   const stop = useCallback(() => void control('stop').catch(fail), [control, fail]);
   const end = useCallback(() => void control('end').catch(fail), [control, fail]);
 
-  const paging = useMemo<ChatPaging>(() => ({ seeded: hist.seeded, more: hist.more, older: hist.older }), [hist.seeded, hist.more, hist.older]);
-  return { connected, events: hist.events, paging, loadOlder, loadWhole, delta: live.main, agentLive: live.agents, session, removed, inputs, outbox, tasks, btw: btwState?.item ?? null, btwAsk, btwCancel, btwClose, btwPin, send, respond, control, stop, end };
+  const paging = useMemo<ChatPaging>(
+    () => ({ seeded: hist.seeded, more: hist.more, older: hist.older }),
+    [hist.seeded, hist.more, hist.older],
+  );
+  return {
+    connected,
+    events: hist.events,
+    paging,
+    loadOlder,
+    loadWhole,
+    delta: live.main,
+    agentLive: live.agents,
+    session,
+    removed,
+    inputs,
+    outbox,
+    tasks,
+    btw: btwState?.item ?? null,
+    btwAsk,
+    btwCancel,
+    btwClose,
+    btwPin,
+    send,
+    respond,
+    control,
+    stop,
+    end,
+  };
 }
 
 export interface ChatListApi {
   sessions: ChatSession[] | null;
   failed: boolean;
+  /** Reloads from the newest page (older pages already loaded are dropped). */
   reload: () => Promise<void>;
+  /** An older page is there to load (D-58). */
+  hasMore: boolean;
+  loadingMore: boolean;
+  loadMore: () => Promise<void>;
 }
 
-/** The session list with a slow 5 s poll; a failed poll keeps the last list on screen. */
+const LIST_PAGE = 50;
+
+/**
+ * The session list (D-58: pages): the newest page, a slow 5 s poll of that first page only, and `loadMore` for the older ones. The poll keeps
+ * the older pages already loaded only while the seam under page 1 holds (`keepsOlder`), else it drops them; a refused cursor starts over
+ * from page 1; a failed poll keeps the last list on screen.
+ */
 export function useChatList(): ChatListApi {
-  const [sessions, setSessions] = useState<ChatSession[] | null>(null);
+  // The paging rules live in ListPager (listPaging.ts, tested); the hook holds it and re-renders when it changes.
+  const pager = useRef(new ListPager<ChatSession>());
+  const [, setTick] = useState(0);
+  const render = () => setTick((n) => n + 1);
   const [failed, setFailed] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
 
   const reload = useCallback(async () => {
     setFailed(false);
     try {
-      setSessions(await chatApi.list());
+      const page = await chatApi.list({ limit: LIST_PAGE });
+      pager.current.restart();
+      pager.current.applyHead(page);
+      setTick((n) => n + 1);
     } catch {
       setFailed(true);
     }
@@ -552,9 +605,38 @@ export function useChatList(): ChatListApi {
 
   useEffect(() => {
     void reload();
-    const t = setInterval(() => void chatApi.list().then(setSessions, () => undefined), 5_000);
+    // The poll refreshes page 1. The older pages stay only while the seam under page 1 did not move (`keepsOlder`): else a row would be in neither list.
+    const t = setInterval(
+      () =>
+        void chatApi.list({ limit: LIST_PAGE }).then(
+          (page) => {
+            pager.current.applyHead(page);
+            setTick((n) => n + 1);
+          },
+          () => undefined,
+        ),
+      5_000,
+    );
     return () => clearInterval(t);
   }, [reload]);
 
-  return { sessions, failed, reload };
+  const loadMore = useCallback(async () => {
+    const ticket = pager.current.beginMore();
+    if (!ticket) return;
+    setLoadingMore(true);
+    try {
+      const page = await chatApi.list({ limit: LIST_PAGE, cursor: ticket.cursor });
+      // A page that lands after a poll dropped the older pages is stale: finishMore refuses it.
+      if (pager.current.finishMore(ticket, page)) render();
+    } catch (e) {
+      // A refused cursor (a restart ended it) never works again: start over from page 1. Any other failure leaves the button, and a tap tries again.
+      if (pager.current.failMore(ticket, e) === 'restart') await reload();
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [reload]);
+
+  const sessions = pager.current.items;
+
+  return { sessions, failed, reload, hasMore: pager.current.next !== null, loadingMore, loadMore };
 }

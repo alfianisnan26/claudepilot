@@ -7,6 +7,8 @@ import {
   ticketRef,
   TICKET_PRIORITIES,
   TICKET_STATUSES,
+  TICKET_ATTACHMENT_INLINE_TYPES,
+  TICKET_ATTACHMENT_LIMITS,
   TICKET_TYPES,
   type BumpRequest,
   type CloseTicketRequest,
@@ -21,7 +23,7 @@ import {
   type UpdateTicketRequest,
 } from '@portal/contracts';
 import { Hono, type Context } from 'hono';
-import { actorOf, can, requireCan } from '../authz/seam.js';
+import { actorOf, can, requireCan, visible } from '../authz/seam.js';
 import { declareTicketPolicies } from './authz.js';
 import type { Caller, Tickets } from './service.js';
 
@@ -41,18 +43,23 @@ const optionalBody = async <T>(c: Context): Promise<Partial<T>> => {
 
 const UI: Caller = { kind: 'ui' };
 
+const attachmentNumber = (c: Context): number => {
+  const n = Number(c.req.param('attachmentId'));
+  if (!Number.isInteger(n) || n <= 0) throw new AppError('NOT_FOUND', 'No such file.');
+  return n;
+};
+
 /** A comma-separated query value as a list of the names it may hold. */
 const names = <T extends string>(raw: string | undefined, all: readonly T[], field: string): T[] | undefined => {
   if (!raw) return undefined;
-  const items = raw.split(',').map((s) => s.trim()).filter(Boolean);
+  const items = raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
   const bad = items.find((s) => !(all as readonly string[]).includes(s));
-  if (bad) throw new AppError('VALIDATION_FAILED', `Unknown ${field} “${bad.slice(0, 30)}”.`, { details: { [field]: `Use: ${all.join(', ')}.` } });
+  if (bad)
+    throw new AppError('VALIDATION_FAILED', `Unknown ${field} “${bad.slice(0, 30)}”.`, { details: { [field]: `Use: ${all.join(', ')}.` } });
   return items as T[];
-};
-
-const int = (raw: string | undefined) => {
-  const n = Number(raw);
-  return raw !== undefined && Number.isFinite(n) ? n : undefined;
 };
 
 export function createTicketRoutes(tickets: Tickets): Hono {
@@ -63,7 +70,10 @@ export function createTicketRoutes(tickets: Tickets): Hono {
   app.get('/', (c) => {
     const q = c.req.query();
     const assignee = q.assignee;
-    if (assignee && !['any', 'unassigned', 'user'].includes(assignee) && !assignee.startsWith('session:')) throw new AppError('VALIDATION_FAILED', 'Unknown assignee filter.', { details: { assignee: 'Use any, unassigned, user or session:<id>.' } });
+    if (assignee && !['any', 'unassigned', 'user'].includes(assignee) && !assignee.startsWith('session:'))
+      throw new AppError('VALIDATION_FAILED', 'Unknown assignee filter.', {
+        details: { assignee: 'Use any, unassigned, user or session:<id>.' },
+      });
     const filter: TicketFilter = {
       status: names<TicketStatus>(q.status, TICKET_STATUSES, 'status'),
       priority: names<TicketPriority>(q.priority, TICKET_PRIORITIES, 'priority'),
@@ -75,10 +85,12 @@ export function createTicketRoutes(tickets: Tickets): Hono {
       includeClosed: q.includeClosed === '1' || q.includeClosed === 'true',
       orphan: q.orphan === '1' || q.orphan === 'true' || undefined,
       sort: q.sort === 'newest' ? 'newest' : undefined,
-      limit: int(q.limit),
-      offset: int(q.offset),
     };
-    return c.json(success(tickets.list(UI, filter)));
+    // D-58: `{ items, next }` (25 by default, 100 at most), summary rows, keyset. Each row passes `view` before it is shown and `next` points at
+    // the last row shown, so a cursor never names a hidden ticket. A bad cursor, or one made for another filter, is a 400.
+    const actor = actorOf(c);
+    const keep = (t: { id: string }) => visible(actor, 'ticket', [t], (x) => x.id).length > 0;
+    return c.json(success(tickets.listPage(UI, filter, { cursor: q.cursor || undefined, limit: q.limit, keep })));
   });
 
   app.post('/', async (c) => c.json(success(tickets.create(UI, await body<CreateTicketRequest>(c))), 201));
@@ -110,6 +122,45 @@ export function createTicketRoutes(tickets: Tickets): Hono {
     const { text } = await body<CommentTicketRequest>(c);
     return c.json(success(tickets.comment(UI, id(c), text)), 201);
   });
+  // Attachments (owner, 2026-10-17): the file is the raw body, its name in `x-file-name` (URI-encoded), its type in `x-file-type` (or `content-type`).
+  app.get('/:id/attachments', (c) => c.json(success(tickets.attachments(UI, id(c)))));
+  app.post('/:id/attachments', async (c) => {
+    const declared = Number(c.req.header('content-length') ?? '0');
+    if (declared > TICKET_ATTACHMENT_LIMITS.maxBytes)
+      throw new AppError('PAYLOAD_TOO_LARGE', `The file is larger than ${TICKET_ATTACHMENT_LIMITS.maxBytes / 1024 / 1024} MB.`);
+    let name = c.req.header('x-file-name') ?? '';
+    try {
+      name = decodeURIComponent(name);
+    } catch {
+      throw new AppError('VALIDATION_FAILED', 'The file name is not valid.', { details: { name: 'URI-encode it in x-file-name.' } });
+    }
+    const bytes = Buffer.from(await c.req.arrayBuffer());
+    // The real type in x-file-type (the body goes as application/octet-stream, so a .json file is not held to the JSON body limit).
+    return c.json(
+      success(tickets.attach(UI, id(c), { name, mediaType: c.req.header('x-file-type') ?? c.req.header('content-type'), bytes })),
+      201,
+    );
+  });
+  app.get('/:id/attachments/:attachmentId', (c) => {
+    const { attachment, bytes } = tickets.attachmentFile(UI, id(c), attachmentNumber(c));
+    const inline =
+      (TICKET_ATTACHMENT_INLINE_TYPES as readonly string[]).includes(attachment.mediaType) && c.req.query('download') === undefined;
+    const ascii = attachment.name.replace(/[^\x20-\x7e]|["\\]/g, '_');
+    return new Response(new Uint8Array(bytes), {
+      headers: {
+        'Content-Type': inline ? attachment.mediaType : 'application/octet-stream',
+        'Content-Length': String(bytes.length),
+        'Content-Disposition': `${inline ? 'inline' : 'attachment'}; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(attachment.name)}`,
+        'X-Content-Type-Options': 'nosniff',
+        'Content-Security-Policy': "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox",
+        'Cache-Control': 'private, max-age=300',
+      },
+    });
+  });
+  app.delete('/:id/attachments/:attachmentId', (c) => {
+    tickets.removeAttachment(UI, id(c), attachmentNumber(c));
+    return c.json(success({ removed: true }));
+  });
   app.post('/:id/close', async (c) => c.json(success(tickets.close(UI, id(c), await optionalBody<CloseTicketRequest>(c)))));
   app.delete('/:id/close', (c) => c.json(success(tickets.update(UI, id(c), { status: 'open' }))));
   // Bump (FR28): operate on the ticket, and on the session it goes into; the picker lists only the sessions the person may operate.
@@ -125,7 +176,9 @@ export function createTicketRoutes(tickets: Tickets): Hono {
     if (typeof req.sessionId === 'string' && req.sessionId.trim()) requireCan(actor, 'operate', sessionRef(req.sessionId.trim()));
     return c.json(success(await tickets.bump(UI, id(c), req)), 201);
   });
-  app.post('/:id/session', async (c) => c.json(success(await tickets.startSession(UI, id(c), await body<StartTicketSessionRequest>(c))), 201));
+  app.post('/:id/session', async (c) =>
+    c.json(success(await tickets.startSession(UI, id(c), await body<StartTicketSessionRequest>(c))), 201),
+  );
 
   return app;
 }

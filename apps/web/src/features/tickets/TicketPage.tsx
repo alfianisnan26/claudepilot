@@ -26,6 +26,7 @@ import { errorText } from '@/lib/api';
 import { formatDateTime, timeAgo } from '@/lib/format';
 import { useLive } from '@/lib/live';
 import { ticketsApi } from './api';
+import { Attachments, fileSize } from './Attachments';
 import { ORPHAN_TITLE, SESSION_STATE_LABEL, actorName, fallbackSentence } from './labels';
 import { AssigneeChip, CheckChips, PriorityMark, StatusBadge, TagList, TicketFlags, TypeBadge } from './parts';
 import { AssignDialog, CloseDialog, EditTicketDialog, StartSessionDialog, TagsDialog, TicketBumpDialog } from './TicketDialogs';
@@ -222,6 +223,8 @@ export function TicketPage() {
           )}
         </Card>
 
+        <Attachments ticketId={t.id} attachments={detail.attachments ?? []} onChanged={load} />
+
         {detail.sessions.length > 0 && (
           <Card className="p-4 sm:p-5">
             <h2 className="mb-2 text-[13px] font-semibold text-muted">Sessions</h2>
@@ -365,6 +368,8 @@ function sentence(e: TicketEvent): string {
       return `${who} bumped it into ${typeof d.sessionTitle === 'string' && d.sessionTitle ? `“${d.sessionTitle}”` : 'a session'} (${d.mode === 'prioritise' ? BUMP_MODE_LABEL.prioritise : BUMP_MODE_LABEL.ask})`;
     case 'session_ended':
       return `The session ended${typeof d.reason === 'string' && d.reason ? `: ${d.reason}` : ''}`;
+    case 'attachment':
+      return d.removed ? `${who} removed ${typeof d.name === 'string' ? d.name : 'a file'}` : `${who} attached ${typeof d.name === 'string' ? d.name : 'a file'}${typeof d.size === 'number' ? ` (${fileSize(d.size)})` : ''}`;
     case 'ci':
       return `${who}: ${typeof d.name === 'string' ? d.name : 'a check'} ${typeof d.state === 'string' ? d.state : 'changed'}`;
     default:

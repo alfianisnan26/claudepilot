@@ -10,6 +10,10 @@ import { PageHeader } from '@/components/PageHeader';
 import { ApiError, errorText } from '@/lib/api';
 import { formatDateTime, timeAgo } from '@/lib/format';
 import { settingsApi } from './api';
+import { AccessSection } from './AccessSection';
+import { AccountsSection } from './AccountsSection';
+import { SsoSection } from './SsoSection';
+import { TeamsSection } from './TeamsSection';
 
 const verb = (v: SettingValue) => (v === true ? 'Turn on' : v === false ? 'Turn off' : 'Change');
 const show = (v: SettingValue | null) => (v === null ? '' : typeof v === 'boolean' ? (v ? 'On' : 'Off') : String(v));
@@ -103,6 +107,18 @@ export function SettingsPage() {
           ))}
         </div>
       )}
+      <div className="mt-6">
+        <AccountsSection />
+      </div>
+      <div className="mt-6">
+        <TeamsSection />
+      </div>
+      <div className="mt-6">
+        <AccessSection />
+      </div>
+      <div className="mt-6">
+        <SsoSection />
+      </div>
       <div className="mt-6">
         <CanaryPanel />
       </div>

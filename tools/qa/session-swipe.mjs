@@ -16,7 +16,7 @@ const check = (name, ok, extra = '') => {
 };
 const cookie = await login();
 const call = api(cookie);
-const sessions = (await call('GET', '/api/chat/sessions')).data ?? [];
+const sessions = (await call('GET', '/api/chat/sessions?limit=100')).data?.items ?? [];
 if (sessions.length < 2) {
   console.error('needs at least two sessions on the portal');
   process.exit(2);
@@ -31,12 +31,17 @@ const shot = async (name) => {
   writeFileSync(join(shots, `${name}.png`), Buffer.from(r.data, 'base64'));
 };
 // The chips as [id, count], from their aria-label ("<name> <count>").
-const chips = () => b.eval(`[...document.querySelectorAll('[data-chip]')].map((e) => [e.dataset.chip, Number(e.getAttribute('aria-label').match(/(\\d+)$/)?.[1] ?? -1)])`);
+const chips = () =>
+  b.eval(
+    `[...document.querySelectorAll('[data-chip]')].map((e) => [e.dataset.chip, Number(e.getAttribute('aria-label').match(/(\\d+)$/)?.[1] ?? -1)])`,
+  );
 const pressed = () => b.eval(`document.querySelector('[data-chip][aria-pressed=true]')?.dataset.chip ?? null`);
 const firstFull = (c) => c.find(([id, n]) => id !== 'all' && id !== 'archived' && n > 0)?.[0] ?? 'all';
 const chip = (id) => b.eval(`document.querySelector('[data-chip=${id}]')?.click()`);
 const rowBox = (id) =>
-  b.eval(`(() => { const a = document.querySelector('ul a[href="/admin/sessions/${id}"]'); if (!a) return null; const r = a.getBoundingClientRect(); return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) }; })()`);
+  b.eval(
+    `(() => { const a = document.querySelector('ul a[href="/admin/sessions/${id}"]'); if (!a) return null; const r = a.getBoundingClientRect(); return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) }; })()`,
+  );
 const touch = async (type, x, y) => b.send('Input.dispatchTouchEvent', { type, touchPoints: type === 'touchEnd' ? [] : [{ x, y, id: 1 }] });
 const swipe = async (from, dx) => {
   await touch('touchStart', from.x, from.y);
@@ -50,8 +55,16 @@ const swipe = async (from, dx) => {
 await b.goto('/admin/sessions', 2500);
 await b.waitFor("document.querySelectorAll('[data-chip]').length > 0", 30000, 'the chips');
 const order = await chips();
-check('the list opens on the first chip with sessions', (await pressed()) === firstFull(order), JSON.stringify({ on: await pressed(), order }));
-check('the chips: Pinned there while nothing is pinned, All last', order.some(([id, n]) => id === 'pinned' && n === 0) && order.at(-1)?.[0] === 'all', JSON.stringify(order));
+check(
+  'the list opens on the first chip with sessions',
+  (await pressed()) === firstFull(order),
+  JSON.stringify({ on: await pressed(), order }),
+);
+check(
+  'the chips: Pinned there while nothing is pinned, All last',
+  order.some(([id, n]) => id === 'pinned' && n === 0) && order.at(-1)?.[0] === 'all',
+  JSON.stringify(order),
+);
 check('no sideways scroll', (await b.eval('document.scrollingElement.scrollWidth <= innerWidth')) === true);
 await shot('list-first');
 
@@ -63,7 +76,9 @@ await chip('idle');
 await b.waitFor(`document.querySelector('ul a[href^="/admin/sessions/"]')`, 30000, 'the rows');
 await sleep(500);
 const calmIds = sessions.filter(calm).map((x) => x.id);
-const rows = await b.eval(`[...document.querySelectorAll('ul a[href^="/admin/sessions/"]')].map((a) => a.getAttribute('href').split('/').pop())`);
+const rows = await b.eval(
+  `[...document.querySelectorAll('ul a[href^="/admin/sessions/"]')].map((a) => a.getAttribute('href').split('/').pop())`,
+);
 const target = sessions.find((x) => x.id === rows.find((id) => calmIds.includes(id))) ?? sessions[1];
 const box = await rowBox(target.id);
 check('the row is on screen', !!box && box.y < 800, JSON.stringify(box));
@@ -92,7 +107,11 @@ const box2 = await rowBox(target.id);
 await swipe(box2, -120);
 await sleep(1500);
 const archived = (await call('GET', `/api/chat/sessions/${target.id}`)).data;
-check('a swipe to the left archives it and unpins', !!archived?.archivedAt && !archived?.pinnedAt, JSON.stringify({ a: archived?.archivedAt, p: archived?.pinnedAt }));
+check(
+  'a swipe to the left archives it and unpins',
+  !!archived?.archivedAt && !archived?.pinnedAt,
+  JSON.stringify({ a: archived?.archivedAt, p: archived?.pinnedAt }),
+);
 await call('DELETE', `/api/chat/sessions/${target.id}/archive`);
 
 await b.close();

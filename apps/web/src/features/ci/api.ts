@@ -14,7 +14,7 @@ import {
   type CiRunner,
   type UpsertCiRunnerRequest,
   type CiRunFilter,
-  type CiRunList,
+  type CiRunPage,
   type ConnectCiRepoRequest,
   type CreateCiRepoRequest,
   type MergeCiRequest,
@@ -57,37 +57,43 @@ function query(f: CiRunFilter): string {
   if (f.status?.length) q.set('status', f.status.join(','));
   if (f.ticket) q.set('ticket', f.ticket);
   if (f.session) q.set('session', f.session);
-  if (f.before) q.set('before', f.before);
+  if (f.cursor) q.set('cursor', f.cursor);
   if (f.limit) q.set('limit', String(f.limit));
   return q.size ? `?${q}` : '';
 }
 
 export const ciApi = {
-  runs: (filter: CiRunFilter = {}) => request<CiRunList>('GET', `${CI_API.runs}${query(filter)}`),
+  runs: (filter: CiRunFilter = {}) => request<CiRunPage>('GET', `${CI_API.runs}${query(filter)}`),
   run: (id: string) => request<CiRun>('GET', CI_API.run(id)),
-  log: (id: string, job: string, step: number, offset: number) => request<CiLogChunk>('GET', `${CI_API.log(id)}?job=${encodeURIComponent(job)}&step=${step}&offset=${offset}`),
+  log: (id: string, job: string, step: number, offset: number) =>
+    request<CiLogChunk>('GET', `${CI_API.log(id)}?job=${encodeURIComponent(job)}&step=${step}&offset=${offset}`),
   cancel: (id: string) => request<CiRun>('POST', CI_API.cancel(id)),
   rerun: (id: string) => request<CiRun>('POST', CI_API.rerun(id)),
   bumpTargets: (id: string) => request<BumpTarget[]>('GET', CI_API.bump(id)),
   bump: (id: string, body: BumpRequest) => request<CiRun>('POST', CI_API.bump(id), body),
   start: (body: StartCiRunRequest) => request<CiRun>('POST', CI_API.runs, body),
-  repos: (workspace?: string) => request<CiRepo[]>('GET', `${CI_API.repos}${workspace ? `?workspace=${encodeURIComponent(workspace)}` : ''}`),
+  repos: (workspace?: string) =>
+    request<CiRepo[]>('GET', `${CI_API.repos}${workspace ? `?workspace=${encodeURIComponent(workspace)}` : ''}`),
   createRepo: (body: CreateCiRepoRequest) => request<CiRepo>('POST', CI_API.repos, body),
   updateRepo: (id: string, body: UpdateCiRepoRequest) => request<CiRepo>('PATCH', CI_API.repo(id), body),
   removeRepo: (id: string) => request<{ ok: true }>('DELETE', CI_API.repo(id)),
   connect: (id: string, body: ConnectCiRepoRequest) => request<CiRepo>('POST', CI_API.connect(id), body),
   branches: (id: string) => request<CiBranch[]>('GET', CI_API.branches(id)),
-  pipelines: (id: string, ref?: string) => request<CiPipelineInfo[]>('GET', `${CI_API.pipelines(id)}${ref ? `?ref=${encodeURIComponent(ref)}` : ''}`),
+  pipelines: (id: string, ref?: string) =>
+    request<CiPipelineInfo[]>('GET', `${CI_API.pipelines(id)}${ref ? `?ref=${encodeURIComponent(ref)}` : ''}`),
   merge: (id: string, body: MergeCiRequest) => request<MergeCiResult>('POST', CI_API.merge(id), body),
   validate: (body: ValidateCiRequest) => request<ValidateCiResult>('POST', CI_API.validate, body),
   approve: (id: string, job: string) => request<CiRun>('POST', CI_API.approve(id), { job }),
   reject: (id: string, job: string) => request<CiRun>('POST', CI_API.reject(id), { job }),
   environments: (repoId: string) => request<CiEnvironment[]>('GET', CI_API.environments(repoId)),
-  setEnvironment: (repoId: string, name: string, isProtected: boolean) => request<CiEnvironment>('PUT', CI_API.environment(repoId, name), { protected: isProtected }),
+  setEnvironment: (repoId: string, name: string, isProtected: boolean) =>
+    request<CiEnvironment>('PUT', CI_API.environment(repoId, name), { protected: isProtected }),
   /** Runners (T-557, T-576): GET is for anyone who can see the workspace; PUT and DELETE are a person with manage on it. The id is the workspace's, as one path segment. */
   runners: () => request<CiRunner[]>('GET', CI_API.runners),
-  upsertRunner: (body: UpsertCiRunnerRequest) => request<CiRunner>('PUT', `${CI_API.runners}/${encodeURIComponent(body.workspaceId)}`, body),
+  upsertRunner: (body: UpsertCiRunnerRequest) =>
+    request<CiRunner>('PUT', `${CI_API.runners}/${encodeURIComponent(body.workspaceId)}`, body),
   removeRunner: (workspaceId: string) => request<{ ok: true }>('DELETE', `${CI_API.runners}/${encodeURIComponent(workspaceId)}`),
   /** The auto-approve rule (T-110 FR41a): a person with manage; off, dry or on (on only for a protected environment). */
-  setAutoApprove: (repoId: string, name: string, body: UpdateCiAutoApproveRequest) => request<CiEnvironment>('PUT', CI_API.environmentAutoApprove(repoId, name), body),
+  setAutoApprove: (repoId: string, name: string, body: UpdateCiAutoApproveRequest) =>
+    request<CiEnvironment>('PUT', CI_API.environmentAutoApprove(repoId, name), body),
 };

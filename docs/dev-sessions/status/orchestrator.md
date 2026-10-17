@@ -1,33 +1,30 @@
-# orchestrator status (2026-10-17 13:20 UTC, session 355881a3, continuation of de232389; older: git history)
+# orchestrator status (2026-10-17 17:10 UTC, session 355881a3, continuation of de232389; older: git history)
 
 ## DONE
 - Batches 22-26: git history (to 83b7213e), gates green. Close on "Coordinator live check" PASS. T-574 re-check after 10-17 15:00Z.
 - RESPAWN rule (165db813 + D-78 4e101a59): respawn each lane BETWEEN tickets on a worktree cut from integration; scripts by abs path.
-- BATCHES 27 bda180d2 + 28 63ff971c (gates GREEN) deployed in 2026.10.17-1 (details: git history). Flake boot.test.ts -> T-903.
 - BATCH 29 edde2073 (T-524 S3c, T-733 S5, T-881 S1b, T-416 S2c, T-382 S1, T-781 S8c, T-675 R2c+R2d) RELEASED 2026.10.17-2: close on live checks.
 ## IN FLIGHT (6 of 6, D-71; lanes respawned per ticket, D-78; sonnet)
-- BATCH 30 premerge-b30 b9781ad6 (wip/main-b9781ad): T-772 S2f, T-736 S3g, T-612 S1, T-868 S1-S3, T-436 S1+S2 (deploy note),
-  T-379 S2, format fix 787932e2, integration (T-924), T-860 S2c a87d00b8 (PWG 9638), T-382 S2-S4 (PWG 9691; S5 fup).
-  Resolution trace T-595 9742. QC run 4 on e0f7a72d: tests ok, format 65 files + lint 3 -> lead format commits (Jobs b1a39c2d,
-  ec182931; token-equal check job-out/fmtcheck.mjs) + integration (master line 85) = e4e52fa0 (trace T-595 9916). QC on e4e52fa0:
-  tests + lint ok, format red on knowledge/service.ts. Merging integration 94105066 conflicts in quick-check.sh (T-612 S1 vs T-960):
-  merge ABORTED; T-612 S1b union on 2a0edbd8 (c10001) -> take its file whole, format service.ts, QC, gate, land, T-731.
-- T-938 lane a3554d40: 4th Job (3 lost: Pending, bg limit, session end).
-- URGENT T-948 port proxy (9810): S1 BE INFRA 2 2a0edbd8 OPUS (security), ticket/T-948-port-proxy; app-<ws>-<port> subdomain (9811).
-  S1 fix f70c72bd (Job 79cec835 rc0, 33/33, M6 killed; 10179) -> RE-CHECK c691df71. S2 fix d08465f9 (Job 1caf0599 rc0, 14/14)
-  -> d9f18599 read PASS 10097, confirming rc. Then premerge S1+S2, ux check by d9f18599 (390/1280, light/dark, scratch portal),
-  blind review S1 (security), QC, gate, land, coordinator deploys. Paused: T-921 0dfff348, T-379 S3 9dfecffb (resume after).
-- T-976 __Host- cookie (security; blind review + coord live check): 2a0edbd8 opus, ticket/T-976-host-cookie from integration.
-- T-612 S1b 37b86955 (Job 829d6994 rc0, 2 mutants killed): QA be63acc8 -> on PASS take its quick-check.sh whole into b30.
-- T-382 S5 test gaps 1,2,4 (9691): FE 3753d3c2 sonnet, ticket/T-382-s5 from wip/main-e4e52fa; gap 3 (unbounded total) Backend later.
-- T-425 S2b 357ff021: QA be63acc8 PWG 9970 (mutant B survives) -> test fix on next free Backend slot; same QA re-checks (T-595 10014).
-- Worker job-run commands: no `; echo RC=$?` suffix (allow list refuses it, T-612 10184); FOR THE COORDINATOR on T-595.
-- T-436 S3 + T-772 S2g fe676258: QA PWG (T-595 10003) -> batch 31; permissions class: coordinator live check before close (D-81).
-- T-294 PWG 9858: crew_post/read + idle-child reuse not built -> slice after T-948 (T-595 9871).
-- After T-948, planned together: T-968 General Manager (D-80, plan 9969; S0 scribe + S2 MCP tools incl. T-965 first),
-  T-971 self-healing (H1+H2 first; charter-wall conflict on healer landing rule lines FOR THE COORDINATOR 9988).
-  T-409 G3 ee75effd QA PWG 9820 -> merge in b31; G3b fup after T-425 S2b (T-595 9823).
-- Next builds as slots free: T-965 S1 (Backend respawn) + S2 (FE after T-948), T-382 S5. D-79: uat only on the owner's explicit request.
+- BATCH 30 LANDED 08feccc6 GATE GREEN (T-731 10494; deploy is the coordinator's): T-772 S2f, T-736 S3g, T-612 S1+S1b,
+  T-868 S1-S3, T-436 S1+S2, T-379 S2, T-860 S2c, T-382 S2-S4. Close on live checks. LESSON: format commits break tests that
+  read source with a regex: grep readFileSync(*.ts) tests and run them in the QC; re-run the pack check after each merge.
+- BATCH 31 premerge/b31 dfb58bdd: T-436 S3+T-772 S2g fe676258, T-409 G3 ee75effd, T-382 S5 472e9015 + lead traces (T-595
+  10495/10520: conflicts to ticket side; outline-hidden x3; supervisor.mjs left unformatted). GATE 4d25dc2 RED typecheck (premerge
+  only): vaultBinding.test.ts:27 TS2349 (T-436 S3 assert.equal narrows to never) -> 1-line fix to lane 3753d3c2 (send when the
+  portal is back; down since ~17:30) -> merge -> re-gate. LESSON: QA PASS without typecheck = "not verified: typecheck".
+- T-938 259935e8 blind review PWC 10348 -> doc Major back to a3554d40 (after T-974) -> coordinator lands (QA account, T-938 10430).
+- T-974 URGENT rule guard git argv: a3554d40, d8432f39 proof Job running; then blind review (rule class), coordinator removes deny lines.
+- URGENT T-948 port proxy: FIX2 ac36971c RECHECK PWG 10516 (G13 onRevoked->sweep untested) -> FIX3 by 2a0edbd8 (10526) -> c691df71.
+  Then premerge t948 (b2d62bfd + ac36971c + integration), QC appports+browser tests, gate, land, scratch-portal visual look; deploy
+  own apps only until T-976. T-976 lands AFTER T-948 and switches PORTAL_COOKIES to SESSION_COOKIE/LEGACY (2a0edbd8).
+- T-976 __Host- cookie 87d4a74f: QA PWG cabfb3d2 (10530), blind review PWC 0 blockers (10534): login clears old cookie + PORTAL_COOKIES
+  switch at the rebase after T-948 (2a0edbd8); T-1042 >= 10-31 + socket stale-cookie test (comment refused; noted on T-976).
+- T-382 S6 3753d3c2 70eac176 proof running (+ seesEverything fix) -> QA d9f18599 Job -> b31/b32. T-382 unassigned (10376).
+- URGENT T-1043 MU2 S0a (D-82, plan 10460 + 10519): 2a0edbd8 can't reach worktree t1043-s0a (423d269f) -> after FIX3 end it and
+  spawn an opus lane there (D-71 slot). S0b sockets,
+  S0c MCP next; QA + blind security review each. Ahead of T-968/T-965.
+- T-425 S2b 357ff021: mutant-B test fix on next free builder; be63acc8 re-checks. T-294 crew_post/read slice after T-948.
+- Then: T-968 General Manager (D-80, 9969; S0 scribe, S2 MCP incl. T-965), T-971 H1+H2 (healer only detects/tickets; 9988), T-565, T-975.
 
 ## DECISIONS (binding)
 - 12:10 D-81 (owner via coordinator): risk-based review. Same builder keeps a ticket through all fixes; one QA pass, same QA re-checks;

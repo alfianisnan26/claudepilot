@@ -2,7 +2,18 @@
 // Every rule file below lives in a temp folder this test makes; nothing in the repository is touched.
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  linkSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
@@ -13,7 +24,17 @@ import { mayWrite } from '../delivery/ownership.js';
 import { FOUNDATION } from '../delivery/reconciler.js';
 import { generateSecretKey, parseSecretKey } from '../store/secretBox.js';
 import { Store } from '../store/store.js';
-import { GITC_ROOTS_PATH, gitCRootsContent, RULE_GUARD_FILES, RULE_GUARD_HOOKS, RULE_GUARD_MATCHER, RULE_GUARD_MESSAGE, RULE_GUARD_PATH, RULE_GUARD_SCRIPT, RULE_GUARD_WRAPPER } from './ruleGuard.js';
+import {
+  GITC_ROOTS_PATH,
+  gitCRootsContent,
+  RULE_GUARD_FILES,
+  RULE_GUARD_HOOKS,
+  RULE_GUARD_MATCHER,
+  RULE_GUARD_MESSAGE,
+  RULE_GUARD_PATH,
+  RULE_GUARD_SCRIPT,
+  RULE_GUARD_WRAPPER,
+} from './ruleGuard.js';
 import { GUARD_CHANNEL, recordGuardRefusals } from './ruleGuardAudit.js';
 
 const SESSION = 'a1b2c3d4-0000-4000-8000-000000000001';
@@ -43,17 +64,23 @@ function rig() {
   writeFileSync(join(repo, '.claude', 'settings.local.json'), rules);
   writeFileSync(join(repo, '.mcp.json'), '{"mcpServers":{}}\n');
   // A checker that reads the settings: running it is a read, writing it is not.
-  writeFileSync(join(repo, 'scripts', 'check-allowlist.mjs'), "import { readFileSync } from 'node:fs';\nJSON.parse(readFileSync('.claude/settings.json', 'utf8'));\nconsole.log('ok');\n");
+  writeFileSync(
+    join(repo, 'scripts', 'check-allowlist.mjs'),
+    "import { readFileSync } from 'node:fs';\nJSON.parse(readFileSync('.claude/settings.json', 'utf8'));\nconsole.log('ok');\n",
+  );
   writeFileSync(join(repo, 'src', 'app.ts'), 'export const a = 1;\n');
   writeFileSync(join(repo, 'src', 'a.test.ts'), "import { test } from 'node:test';\ntest('a', () => {});\n");
   writeFileSync(join(repo, 'evil', 'settings.json'), '{"permissions":{"allow":["Bash"]}}\n');
   writeFileSync(join(repo, 'new.json'), '{}\n');
   writeFileSync(join(repo, 'fix.sh'), "#!/bin/sh\necho '{}' > .claude/settings.json\n", { mode: 0o755 });
-  writeFileSync(join(repo, 'build.sh'), "#!/bin/sh\n# writes nothing near .claude/settings.json\necho built > out.txt\n", { mode: 0o755 });
-  writeFileSync(join(repo, 'fix.patch'), 'diff --git a/.claude/settings.json b/.claude/settings.json\n--- a/.claude/settings.json\n+++ b/.claude/settings.json\n@@ -1 +1 @@\n-{}\n+{"x":1}\n');
+  writeFileSync(join(repo, 'build.sh'), '#!/bin/sh\n# writes nothing near .claude/settings.json\necho built > out.txt\n', { mode: 0o755 });
+  writeFileSync(
+    join(repo, 'fix.patch'),
+    'diff --git a/.claude/settings.json b/.claude/settings.json\n--- a/.claude/settings.json\n+++ b/.claude/settings.json\n@@ -1 +1 @@\n-{}\n+{"x":1}\n',
+  );
   writeFileSync(join(repo, 'ok.patch'), 'diff --git a/src/app.ts b/src/app.ts\n--- a/src/app.ts\n+++ b/src/app.ts\n@@ -1 +1 @@\n-a\n+b\n');
   // Code kept in files, read back by a command substitution (review item 6), and settings that turn hooks off (item 10).
-  writeFileSync(join(repo, 'cmd.txt'), "echo x > .claude/settings.json\n");
+  writeFileSync(join(repo, 'cmd.txt'), 'echo x > .claude/settings.json\n');
   writeFileSync(join(repo, 'ok-cmd.txt'), 'echo x > src/app.ts\n');
   writeFileSync(join(repo, 'off.json'), JSON.stringify({ disableAllHooks: true }));
   writeFileSync(join(repo, 'model.json'), JSON.stringify({ model: 'x' }));
@@ -69,7 +96,12 @@ function rig() {
 type Rig = ReturnType<typeof rig>;
 const R = rig();
 
-function run(r: Rig, tool: string, toolInput: Record<string, unknown>, opts: { cwd?: string; mode?: string; env?: Record<string, string> } = {}) {
+function run(
+  r: Rig,
+  tool: string,
+  toolInput: Record<string, unknown>,
+  opts: { cwd?: string; mode?: string; env?: Record<string, string> } = {},
+) {
   const res = spawnSync(process.execPath, [`${r.guard}.cjs`], {
     input: JSON.stringify({
       session_id: SESSION,
@@ -178,7 +210,7 @@ const REFUSED_BASH: string[] = [
   'D=.cla; echo x > "$D"ude/settings.json',
   `echo x > "$(printf '\\x2e\\x63\\x6c\\x61\\x75\\x64\\x65/settings.json')"`,
   'echo ZWNobyB4ID4gLmNsYXVkZS9zZXR0aW5ncy5qc29u | base64 -d | sh',
-  "eval \"$(echo ZWNobyB4 | base64 -d)\"",
+  'eval "$(echo ZWNobyB4 | base64 -d)"',
   "echo x > $'\\x2eclaude/settings.json'",
   `ec""ho x > .cl""aude/sett''ings.json`,
   'echo x > .claude/./settings.json',
@@ -222,7 +254,9 @@ const REFUSED_BASH: string[] = [
 
 /** Every case is run; the failure lists all that went the wrong way, not just the first. */
 function expectAll(commands: string[], code: 0 | 2) {
-  const wrong = commands.map((c) => ({ c, res: bash(c) })).filter(({ res }) => res.code !== code || (code === 2 && !res.stderr.startsWith(RULE_GUARD_MESSAGE)));
+  const wrong = commands
+    .map((c) => ({ c, res: bash(c) }))
+    .filter(({ res }) => res.code !== code || (code === 2 && !res.stderr.startsWith(RULE_GUARD_MESSAGE)));
   assert.deepEqual(
     wrong.map(({ c, res }) => `${JSON.stringify(c)} -> ${res.code} ${res.stderr.trim().slice(0, 200)}`),
     [],
@@ -277,9 +311,15 @@ test('reads, and writes of other files, go through', () => {
 
 test('Bypass is covered by construction: the guard reads no permission mode and refuses the same', () => {
   for (const mode of ['bypassPermissions', 'acceptEdits', 'dontAsk', 'plan', 'default']) {
-    refused(run(R, 'Edit', { file_path: join(R.repo, '.claude/settings.json'), old_string: 'a', new_string: 'b' }, { mode }), `Edit in ${mode}`);
+    refused(
+      run(R, 'Edit', { file_path: join(R.repo, '.claude/settings.json'), old_string: 'a', new_string: 'b' }, { mode }),
+      `Edit in ${mode}`,
+    );
     refused(bash(`node -e "require('fs').writeFileSync('.claude/settings.json','{}')"`, { mode }), `node -e in ${mode}`);
-    allowed(run(R, 'Edit', { file_path: join(R.repo, 'src/app.ts'), old_string: 'a', new_string: 'b' }, { mode }), `a source file in ${mode}`);
+    allowed(
+      run(R, 'Edit', { file_path: join(R.repo, 'src/app.ts'), old_string: 'a', new_string: 'b' }, { mode }),
+      `a source file in ${mode}`,
+    );
   }
 });
 
@@ -291,7 +331,11 @@ test('MCP tools: a path argument of a writing tool is refused; reads and ticket 
 });
 
 test('input it cannot read is refused, never let through', () => {
-  const res = spawnSync(process.execPath, [`${R.guard}.cjs`], { input: 'not json', env: { HOME: R.home, PATH: process.env.PATH ?? '' }, encoding: 'utf8' });
+  const res = spawnSync(process.execPath, [`${R.guard}.cjs`], {
+    input: 'not json',
+    env: { HOME: R.home, PATH: process.env.PATH ?? '' },
+    encoding: 'utf8',
+  });
   assert.equal(res.status, 2);
 });
 
@@ -325,13 +369,23 @@ test('each refusal leaves one outbox line (session, tool, form, path), never the
   try {
     const chat = new ChatStore(store);
     chat.create({ id: SESSION, workspaceId: 'docker/ws1', cwd: r.repo, title: 't', origin: 'ui' });
-    assert.equal(recordGuardRefusals(store, 'docker/ws1', parsed.events.map((e) => e.event)), 1);
+    assert.equal(
+      recordGuardRefusals(
+        store,
+        'docker/ws1',
+        parsed.events.map((e) => e.event),
+      ),
+      1,
+    );
     const rows = chat.audit({ kind: 'guard' });
     assert.equal(rows.length, 1);
     assert.equal(rows[0]!.kind, 'guard.refused');
     assert.equal(rows[0]!.sessionId, SESSION);
     assert.equal(rows[0]!.workspaceId, 'docker/ws1');
-    assert.deepEqual([rows[0]!.detail.tool, rows[0]!.detail.form, rows[0]!.detail.path], ['Bash', 'redirect', join(r.repo, '.claude/settings.json')]);
+    assert.deepEqual(
+      [rows[0]!.detail.tool, rows[0]!.detail.form, rows[0]!.detail.path],
+      ['Bash', 'redirect', join(r.repo, '.claude/settings.json')],
+    );
     assert.ok(!JSON.stringify(rows[0]).includes(marker));
   } finally {
     store.close();
@@ -371,7 +425,9 @@ test('delivery: the policy owner ships the guard root-owned outside every worksp
     assert.deepEqual([f.uid, f.gid], [0, 0]);
     assert.ok(path.startsWith('/etc/claudepilot/bin/'));
   }
-  const dropIn = JSON.parse(bundle.files.find((f) => f.path.endsWith('10-claudepilot-policy.json'))!.content) as { hooks: typeof RULE_GUARD_HOOKS };
+  const dropIn = JSON.parse(bundle.files.find((f) => f.path.endsWith('10-claudepilot-policy.json'))!.content) as {
+    hooks: typeof RULE_GUARD_HOOKS;
+  };
   assert.deepEqual(dropIn.hooks, RULE_GUARD_HOOKS);
   assert.equal(dropIn.hooks.PreToolUse[0]!.hooks[0]!.command, `${RULE_GUARD_PATH} || exit 2`);
   // The matcher covers the file tools, Bash and MCP tools; not reads.
@@ -382,18 +438,43 @@ test('delivery: the policy owner ships the guard root-owned outside every worksp
   assert.equal(mayWrite('mcpset', RULE_GUARD_PATH), false);
   assert.equal(mayWrite('foundation', RULE_GUARD_PATH), false);
   assert.throws(
-    () => compile({ portalId: 'p', generation: 1, claudeVersion: null, fragments: [{ owner: 'policy', settings: { hooks: { PreToolUse: [{ matcher: '*', hooks: [{ type: 'command', command: '/home/node/x.sh' }] }] } } }] }),
+    () =>
+      compile({
+        portalId: 'p',
+        generation: 1,
+        claudeVersion: null,
+        fragments: [
+          {
+            owner: 'policy',
+            settings: { hooks: { PreToolUse: [{ matcher: '*', hooks: [{ type: 'command', command: '/home/node/x.sh' }] }] } },
+          },
+        ],
+      }),
     /may only run the policy owner/,
   );
-  assert.throws(() => compile({ portalId: 'p', generation: 1, claudeVersion: null, fragments: [{ owner: 'policy', settings: { hooks: { SessionStart: [] } } }] }), /hooks\.PreToolUse/);
+  assert.throws(
+    () =>
+      compile({
+        portalId: 'p',
+        generation: 1,
+        claudeVersion: null,
+        fragments: [{ owner: 'policy', settings: { hooks: { SessionStart: [] } } }],
+      }),
+    /hooks\.PreToolUse/,
+  );
   // The Node half is a String.raw: no backtick or dollar-brace may hide in it.
   assert.ok(!RULE_GUARD_SCRIPT.includes('`') && !RULE_GUARD_SCRIPT.includes('$' + '{'));
 });
 
 /* ---------- the blind review's findings (T-404, SAFE AFTER FIXES) ---------- */
 
-test('B1: managed settings, their drop-ins and the guard\'s own files are rule files, whole folders included', () => {
-  for (const file of ['/etc/claude-code/managed-settings.json', '/etc/claude-code/managed-settings.d/99-off.json', `${RULE_GUARD_PATH}.cjs`, RULE_GUARD_PATH]) {
+test("B1: managed settings, their drop-ins and the guard's own files are rule files, whole folders included", () => {
+  for (const file of [
+    '/etc/claude-code/managed-settings.json',
+    '/etc/claude-code/managed-settings.d/99-off.json',
+    `${RULE_GUARD_PATH}.cjs`,
+    RULE_GUARD_PATH,
+  ]) {
     refused(run(R, 'Write', { file_path: file, content: '{}' }), `Write ${file}`);
     refused(run(R, 'Edit', { file_path: file, old_string: 'a', new_string: 'b' }), `Edit ${file}`);
   }
@@ -413,10 +494,13 @@ test('B1: managed settings, their drop-ins and the guard\'s own files are rule f
     ],
     2,
   );
-  expectAll(['cat /etc/claude-code/managed-settings.d/10-claudepilot-policy.json', 'ls -la /etc/claudepilot/bin', 'echo x > /tmp/claude-code.txt'], 0);
+  expectAll(
+    ['cat /etc/claude-code/managed-settings.d/10-claudepilot-policy.json', 'ls -la /etc/claudepilot/bin', 'echo x > /tmp/claude-code.txt'],
+    0,
+  );
 });
 
-test('B2: a check that runs past the guard\'s own deadline is refused by the guard, not left to the hook timeout', () => {
+test("B2: a check that runs past the guard's own deadline is refused by the guard, not left to the hook timeout", () => {
   const r = rig();
   // Every word is a file with two links: each costs the hard-link search, so the whole command takes seconds to check.
   writeFileSync(join(r.repo, 'twin'), 'x');
@@ -450,7 +534,18 @@ test('review 3 and 4: readers and git subcommands that write a file they are giv
     ],
     2,
   );
-  expectAll(['uniq .claude/settings.json', 'uniq new.json out.txt', 'yq . .claude/settings.json', 'tree .claude', 'git config user.name x', 'git archive -o out.tar HEAD', 'git bundle create repo.bundle HEAD'], 0);
+  expectAll(
+    [
+      'uniq .claude/settings.json',
+      'uniq new.json out.txt',
+      'yq . .claude/settings.json',
+      'tree .claude',
+      'git config user.name x',
+      'git archive -o out.tar HEAD',
+      'git bundle create repo.bundle HEAD',
+    ],
+    0,
+  );
 });
 
 test('review 5: an MCP tool with a write verb is a write, whatever read verb it has; to, from and name are path keys', () => {
@@ -516,7 +611,11 @@ test('review 8: the wrapper calls env by its full path and empties the environme
       env: { HOME: r.home, ...env },
       encoding: 'utf8',
     });
-  assert.equal(hook('echo x > .claude/settings.json', { PATH: `${fake}:/usr/bin:/bin` }).status, 2, 'a PATH with a fake env changes nothing');
+  assert.equal(
+    hook('echo x > .claude/settings.json', { PATH: `${fake}:/usr/bin:/bin` }).status,
+    2,
+    'a PATH with a fake env changes nothing',
+  );
   assert.equal(hook('echo x > src/app.ts', { PATH: `${fake}:/usr/bin:/bin` }).status, 0);
   // CLAUDE_CONFIG_DIR still reaches the guard: a config folder outside ~/.claudepilot/claudes is still protected.
   assert.equal(hook(`echo x > ${join(cfg, 'settings.json')}`, { PATH: '/usr/bin:/bin', CLAUDE_CONFIG_DIR: cfg }).status, 2);
@@ -598,7 +697,10 @@ test('review 2, item 6: nested claude settings are read as JSON (an escape does 
     ],
     2,
   );
-  expectAll([`claude --settings '{"model":"x"}' -p hi`, 'claude mcp list', 'claude config get theme', 'claude -p "list the mcp servers"'], 0);
+  expectAll(
+    [`claude --settings '{"model":"x"}' -p hi`, 'claude mcp list', 'claude config get theme', 'claude -p "list the mcp servers"'],
+    0,
+  );
 });
 
 test('review 2, item 7: camelCase MCP write tools, and the command of an MCP tool that runs one', () => {
@@ -620,8 +722,14 @@ test('review 9: the audit keeps a resolved path or a fixed label, never a comman
   refused(run(r, 'mcp__fs__write_file', { destination: `see .mcp.json ${marker}`, content: 'x' }), 'mcp text');
   const raw = readFileSync(join(r.home, '.claudepilot', 'outbox', `${GUARD_CHANNEL}.jsonl`), 'utf8');
   assert.ok(!raw.includes(marker), raw);
-  const lines = raw.trim().split('\n').map((l) => JSON.parse(l) as Record<string, string>);
-  assert.deepEqual(lines.map((l) => l.path), ['unresolved', 'unresolved']);
+  const lines = raw
+    .trim()
+    .split('\n')
+    .map((l) => JSON.parse(l) as Record<string, string>);
+  assert.deepEqual(
+    lines.map((l) => l.path),
+    ['unresolved', 'unresolved'],
+  );
   // The portal keeps only an absolute path or the label from a line (an older guard wrote command words).
   const dataDir = mkdtempSync(join(tmpdir(), 'cp-ruleguard-db-'));
   roots.push(dataDir);
@@ -648,7 +756,16 @@ function gitCRig() {
   const lanes = join(g.root, 'agentic-worktrees');
   const wt = join(lanes, 'lane1');
   const main = join(g.root, 'main-folder-MARK860');
-  for (const d of [join(wt, 'sub'), join(wt, 'my wt'), join(wt, 't-860.fix'), join(wt, '$..'), join(wt, 'harmless'), join(main, '.git'), join(g.root, 'agentic-worktrees-evil', 'x')]) mkdirSync(d, { recursive: true });
+  for (const d of [
+    join(wt, 'sub'),
+    join(wt, 'my wt'),
+    join(wt, 't-860.fix'),
+    join(wt, '$..'),
+    join(wt, 'harmless'),
+    join(main, '.git'),
+    join(g.root, 'agentic-worktrees-evil', 'x'),
+  ])
+    mkdirSync(d, { recursive: true });
   symlinkSync(main, join(wt, 'out-link'));
   const rootsFile = join(g.root, 'git-c-roots');
   writeFileSync(rootsFile, `# lane roots\n${lanes}\n`);
@@ -668,7 +785,7 @@ test('T-860: git -C is refused for every spelling that leaves the lane worktrees
     // One level up is the lane root itself, which is refused; a guard that drops the backslash or the quotes reads the worktree and allows it.
     ['a backslash dot to the root', `git -C ${wt}/.\\. status`],
     ['a quoted dot to the root', `git -C ${wt}/.''. status`],
-    ['a plain ..',`git -C ${up2('..')} status`],
+    ['a plain ..', `git -C ${up2('..')} status`],
     ['the whole path in quotes', `git -C '${up2('..')}' status`],
     ['ANSI-C quoting', `git -C ${wt}/$'\\x2e\\x2e'/$'\\x2e\\x2e'/main-folder-MARK860 status`],
     ['a symlink pointing out', `git -C ${wt}/out-link status`],
@@ -959,14 +1076,25 @@ test('T-860 S2: --git-dir, --work-tree, -c, other options, GIT_ variables, wrapp
 test('T-860: a refusal writes one outbox line with no path text, and the guard stays off in a workspace with no lane folder', () => {
   const { g, wt, main, sh } = gitCRig();
   refused(sh(`git -C ${wt}/out-link status`), 'out link');
-  const lines = readFileSync(join(g.home, '.claudepilot', 'outbox', `${GUARD_CHANNEL}.jsonl`), 'utf8').trim().split('\n');
+  const lines = readFileSync(join(g.home, '.claudepilot', 'outbox', `${GUARD_CHANNEL}.jsonl`), 'utf8')
+    .trim()
+    .split('\n');
   assert.equal(lines.length, 1);
   const line = JSON.parse(lines[0] as string) as Record<string, string>;
   assert.match(line.form ?? '', /git -C outside the lane worktrees/);
   assert.equal(line.path, '', 'no path of the command in the audit');
   assert.ok(!lines[0]!.includes('MARK860') && !lines[0]!.includes(main), 'the line holds no path');
   // No lane folder and no roots file: nothing to guard, so git -C works as it did (only when this machine has no lane folder either).
-  if (!existsSync('/home/node/work/agentic-worktrees')) allowed(run(g, 'Bash', { command: `git -C ${main} status` }, { cwd: g.repo, env: { CLAUDEPILOT_GUARD_GITC_ROOTS_FILE: join(g.root, 'none') } }), 'no lane workspace');
+  if (!existsSync('/home/node/work/agentic-worktrees'))
+    allowed(
+      run(
+        g,
+        'Bash',
+        { command: `git -C ${main} status` },
+        { cwd: g.repo, env: { CLAUDEPILOT_GUARD_GITC_ROOTS_FILE: join(g.root, 'none') } },
+      ),
+      'no lane workspace',
+    );
 });
 
 // T-924: the portal delivers /etc/claudepilot/git-c-roots, so the lanes of every track (claudepilot, tradingbot, konfersi-universe) pass.
@@ -978,7 +1106,8 @@ test('T-924: git -C with the delivered roots file: a track worktree passes, its 
   for (const d of [wt, join(main, '.git')]) mkdirSync(d, { recursive: true });
   const rootsFile = join(g.root, 'git-c-roots');
   writeFileSync(rootsFile, gitCRootsContent([wts]));
-  const sh = (command: string) => run(g, 'Bash', { command, description: 'x' }, { cwd: wt, env: { CLAUDEPILOT_GUARD_GITC_ROOTS_FILE: rootsFile } });
+  const sh = (command: string) =>
+    run(g, 'Bash', { command, description: 'x' }, { cwd: wt, env: { CLAUDEPILOT_GUARD_GITC_ROOTS_FILE: rootsFile } });
   allowed(sh(`git -C ${wt} status`), 'track worktree');
   refused(sh(`git -C ${main} status`), 'main folder');
   refused(sh(`git -C ${wts} status`), 'the root itself');
@@ -996,11 +1125,153 @@ test('T-924: the roots file is delivered root-owned 0644 with the default roots,
     '/home/node/work/tradingbot.worktrees',
     '/home/node/work/konfersi-universe.worktrees',
   ]);
-  const bundle = compile({ portalId: 'p', generation: 1, claudeVersion: null, fragments: [FOUNDATION, { owner: 'policy', files: RULE_GUARD_FILES, settings: { env: {}, hooks: RULE_GUARD_HOOKS } }] });
+  const bundle = compile({
+    portalId: 'p',
+    generation: 1,
+    claudeVersion: null,
+    fragments: [FOUNDATION, { owner: 'policy', files: RULE_GUARD_FILES, settings: { env: {}, hooks: RULE_GUARD_HOOKS } }],
+  });
   assert.equal(bundle.files.find((x) => x.path === GITC_ROOTS_PATH)?.content, f.content);
   assert.equal(mayWrite('policy', GITC_ROOTS_PATH), true);
   assert.equal(mayWrite('mcpset', GITC_ROOTS_PATH), false);
-  for (const bad of ['/home/node/work/tradingbot', '/home/node/work', '/', 'home/x.worktrees', '/home/node/work/../x.worktrees', '/home/node/work/a.worktrees/..', '/home/node/work/x.worktrees/', '/home/node/work/evil.worktrees\n/home/node/work/tradingbot', '/home/node/work/tradingbot.worktrees-evil']) {
+  for (const bad of [
+    '/home/node/work/tradingbot',
+    '/home/node/work',
+    '/',
+    'home/x.worktrees',
+    '/home/node/work/../x.worktrees',
+    '/home/node/work/a.worktrees/..',
+    '/home/node/work/x.worktrees/',
+    '/home/node/work/evil.worktrees\n/home/node/work/tradingbot',
+    '/home/node/work/tradingbot.worktrees-evil',
+  ]) {
     assert.throws(() => gitCRootsContent([bad]), /git -C root/, bad);
   }
+});
+
+// T-860 S2c (QA of S2 and S2b): more wrappers, more ways to set a GIT_ variable, and git config --blob. Each R form was allowed before this
+// slice (except where a comment says the older rule already caught it); each A form is the near miss that must stay allowed.
+test('T-860 S2c: setsid, taskset and script -c hide a git command, and the wrapped command is read like any other', () => {
+  const { wt, main, sh } = gitCRig();
+  const M = main;
+  const R: [string, string][] = [
+    ['setsid', `setsid git -C ${M} status`],
+    ['setsid -f', `setsid -f git -C ${M} commit -m y`],
+    ['setsid --wait', `setsid --wait git -C ${M} status`],
+    ['taskset with a mask', `taskset 0x1 git -C ${M} status`],
+    ['taskset -c (an older rule caught it too)', `taskset -c 0,1 git -C ${M} status`],
+    ['taskset --cpu-list', `taskset --cpu-list 0 git -C ${M} status`],
+    ['setsid then taskset', `setsid taskset 0x1 git -C ${M} status`],
+    ['setsid and a GIT_ variable', `GIT_DIR=${M}/.git setsid git -C ${wt} status`],
+    ['setsid and an option before the subcommand', `setsid git -C ${wt} -c core.worktree=${M} status`],
+    ['script -qc', `script -qc 'git -C ${M} status' /dev/null`],
+    ['script -c', `script -c "git -C ${M} commit -m y" /dev/null`],
+    ['script --command=', `script --command='git -C ${M} status' /dev/null`],
+    ['script -c glued', `script -qc'git -C ${M} status' /dev/null`],
+    ['script after setsid', `setsid script -qc 'git -C ${M} status' /dev/null`],
+    ['script with an option before -c', `script -q -c 'git -C ${M} status' /dev/null`],
+    ['script of a GIT_ variable inside', `script -qc 'GIT_DIR=${M}/.git git -C ${wt} status' /dev/null`],
+  ];
+  const A: [string, string][] = [
+    ['setsid of a lane git', `setsid git -C ${wt} status`],
+    ['setsid -f of another program', 'setsid -f echo hi'],
+    ['taskset mask of a lane git', `taskset 0x1 git -C ${wt} status`],
+    ['taskset -c of a lane git', `taskset -c 0 git -C ${wt} log -3`],
+    ['script of a lane git', `script -qc 'git -C ${wt} status' /dev/null`],
+    ['script of another program', "script -qc 'echo hi' /dev/null"],
+    ['script with no command', 'script -q /dev/null'],
+  ];
+  const misses: string[] = [];
+  for (const [what, command] of R) {
+    try {
+      refused(sh(command), `S2c ${what}: ${JSON.stringify(command)}`);
+    } catch (e) {
+      misses.push((e as Error).message.split('\n')[0] ?? 'failed');
+    }
+  }
+  for (const [what, command] of A) {
+    try {
+      allowed(sh(command), `S2c ${what}: ${JSON.stringify(command)}`);
+    } catch (e) {
+      misses.push((e as Error).message.split('\n')[0] ?? 'failed');
+    }
+  }
+  assert.deepEqual(misses, []);
+});
+
+// QA mutant D9a: dropping --blob from the refused list of git config options survived, because no test named it.
+test('T-860 S2c: git config --blob (and --blob=) is refused in a lane workspace, a plain read stays allowed', () => {
+  const { wt, sh } = gitCRig();
+  refused(sh(`git -C ${wt} config --blob HEAD:.gitmodules --get submodule.x.url`), 'config --blob REV:file');
+  refused(sh(`git -C ${wt} config --blob=HEAD:.gitmodules --get submodule.x.url`), 'config --blob=REV:file');
+  refused(sh(`git -C ${wt} config --get --blob HEAD:.gitmodules submodule.x.url`), 'config --get --blob');
+  allowed(sh(`git -C ${wt} config --get submodule.x.url`), 'config --get without --blob');
+  allowed(sh(`git -C ${wt} config --list`), 'config --list');
+});
+
+test('T-860 S2c: set -a, a for loop over a GIT_ name, GIT_ assigned by a parameter expansion, namerefs and dynamic export names are refused', () => {
+  const { wt, main, sh } = gitCRig();
+  const M = main;
+  const D = '$'; // keeps "dollar brace" out of the template literals below
+  const R: [string, string][] = [
+    ['set -a', `set -a; git -C ${wt} status`],
+    ['set -ea', `set -ea; git -C ${wt} status`],
+    ['set -o allexport', `set -o allexport; git -C ${wt} status`],
+    ['set -euo allexport (flags then -o)', `set -eo allexport; git -C ${wt} status`],
+    ['set of a variable (flags unknown)', `set "$F"; git -C ${wt} status`],
+    ['for GIT_DIR', `for GIT_DIR in ${M}/.git; do git -C ${wt} status; done`],
+    ['for GIT_WORK_TREE', `for GIT_WORK_TREE in ${M}; do git -C ${wt} add -A; done`],
+    ['select GIT_DIR', `select GIT_DIR in ${M}/.git; do git -C ${wt} status; done`],
+    ['GIT_DIR := in a colon command', `: "${D}{GIT_DIR:=${M}/.git}"; git -C ${wt} status`],
+    ['GIT_DIR = (no colon)', `: ${D}{GIT_DIR=${M}/.git}; git -C ${wt} status`],
+    ['GIT_WORK_TREE := inside an echo', `echo "${D}{GIT_WORK_TREE:=${M}}"; git -C ${wt} status`],
+    ['GIT_INDEX_FILE :=', `: "${D}{GIT_INDEX_FILE:=/tmp/i}"; git -C ${wt} status`],
+    ['GIT_TRACE := a file', `: "${D}{GIT_TRACE:=${M}/x}"; git -C ${wt} status`],
+    ['GIT_ := in a command substitution', `echo "$(: ${D}{GIT_DIR:=${M}/.git})"; git -C ${wt} status`],
+    ['declare -n', `declare -n ref=GIT_DIR; ref=${M}/.git; export ref; git -C ${wt} status`],
+    ['typeset -n', `typeset -n ref=GIT_DIR; git -C ${wt} status`],
+    ['local -n', `f(){ local -n ref=GIT_DIR; ref=x; }; f; git -C ${wt} status`],
+    ['declare -n of a name set later', `declare -n ref; ref=GIT_WORK_TREE; git -C ${wt} status`],
+    ['export "$x"=v', `x=GIT_DIR; export "$x"=${M}/.git; git -C ${wt} status`],
+    ['export "$x" with no value', `x=GIT_DIR; printf -v "$x" %s ${M}/.git; export "$x"; git -C ${wt} status`],
+    ['export a name with a variable inside', `n=DIR; export GIT_"$n"=${M}/.git; git -C ${wt} status`],
+    ['declare -x "$x"=v', `x=GIT_DIR; declare -x "$x"=${M}/.git; git -C ${wt} status`],
+    ['eval of export with a variable name', `x=GIT_DIR; eval "export $x=${M}/.git"; git -C ${wt} status`],
+  ];
+  const A: [string, string][] = [
+    ['set -e', `set -e; git -C ${wt} status`],
+    ['set -euo pipefail', `set -euo pipefail; git -C ${wt} status`],
+    ['set +a', `set +a; git -C ${wt} status`],
+    ['set -o pipefail', `set -o pipefail; git -C ${wt} status`],
+    ['set -- args', `set -- -a b; git -C ${wt} status`],
+    ['a message that says set -a', `git -C ${wt} commit -m "set -a and for GIT_DIR in x"`],
+    ['for over a plain name', `for d in a b; do echo "$d"; done; git -C ${wt} status`],
+    ['for over an author name', `for GIT_AUTHOR_NAME in a b; do git -C ${wt} commit -m y; done`],
+    ['GIT_DIR := in single quotes (never expanded)', `echo '${D}{GIT_DIR:=x}'; git -C ${wt} status`],
+    ['GIT_DIR :- (reads, never assigns)', `echo "${D}{GIT_DIR:-x}"; git -C ${wt} status`],
+    ['GIT_AUTHOR_NAME := (not a refused name)', `: "${D}{GIT_AUTHOR_NAME:=x}"; git -C ${wt} status`],
+    ['another name :=', `: "${D}{FOO:=x}"; git -C ${wt} status`],
+    ['export a plain name with a variable value', `v=1; export FOO="$v"; git -C ${wt} status`],
+    ['export PATH extended', `export PATH="$PATH:/x"; git -C ${wt} status`],
+    ['declare -x a plain name', `declare -x FOO=1; git -C ${wt} status`],
+    ['declare -i', `declare -i n=1; git -C ${wt} status`],
+    ['local -a', `f(){ local -a arr=(a b); }; f; git -C ${wt} status`],
+    ['printf -v a plain name', `printf -v out %s hi; git -C ${wt} status`],
+  ];
+  const misses: string[] = [];
+  for (const [what, command] of R) {
+    try {
+      refused(sh(command), `S2c ${what}: ${JSON.stringify(command)}`);
+    } catch (e) {
+      misses.push((e as Error).message.split('\n')[0] ?? 'failed');
+    }
+  }
+  for (const [what, command] of A) {
+    try {
+      allowed(sh(command), `S2c ${what}: ${JSON.stringify(command)}`);
+    } catch (e) {
+      misses.push((e as Error).message.split('\n')[0] ?? 'failed');
+    }
+  }
+  assert.deepEqual(misses, []);
 });

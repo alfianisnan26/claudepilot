@@ -5,7 +5,19 @@
 import assert from 'node:assert/strict';
 import { type ChildProcess, spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs';
 import { hostname, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, test } from 'node:test';
@@ -97,9 +109,26 @@ else if (verb === 'logs') { play(a.includes('-f') ? a[2].replace('job/', '') : a
 else { process.stderr.write('unexpected kubectl ' + args.join(' ') + '\n'); process.exit(9); }
 `;
 
-interface Seed { name: string; chat: string; suspend?: boolean; done?: boolean; rc?: number; owner?: string; program?: string; repo?: string }
+interface Seed {
+  name: string;
+  chat: string;
+  suspend?: boolean;
+  done?: boolean;
+  rc?: number;
+  owner?: string;
+  program?: string;
+  repo?: string;
+}
 /** What the fake "kubectl top nodes" prints for the control-plane node (T-611): a memory percentage, a raw text, or "FAIL"; none = the metrics API is missing (exit 1). */
-interface Scenario { top?: number | string; log?: string; rc?: number; hang?: boolean; oom?: boolean; evicted?: string; reason?: string }
+interface Scenario {
+  top?: number | string;
+  log?: string;
+  rc?: number;
+  hang?: boolean;
+  oom?: boolean;
+  evicted?: string;
+  reason?: string;
+}
 
 const hex = (n: number) => randomBytes(n).toString('hex');
 
@@ -115,28 +144,58 @@ function jobLog(root: string, rc: number, extra = '') {
 function world(seeds: Seed[] = [], scenario: Scenario = {}) {
   const root = mkdtempSync(join(tmpdir(), 'cp-jobrun-'));
   roots.push(root);
-  const bin = join(root, 'bin'), home = join(root, 'home');
-  mkdirSync(bin); mkdirSync(home);
-  writeFileSync(join(bin, 'kubectl'), FAKE_KUBECTL); chmodSync(join(bin, 'kubectl'), 0o755);
-  writeFileSync(join(bin, 'gh'), '#!/bin/sh\nexit 1\n'); chmodSync(join(bin, 'gh'), 0o755);
-  writeFileSync(join(root, 'state.json'), JSON.stringify({ seq: seeds.length, secrets: {}, jobs: seeds.map((s, i) => ({ suspend: false, ...s, seq: i })) }));
+  const bin = join(root, 'bin'),
+    home = join(root, 'home');
+  mkdirSync(bin);
+  mkdirSync(home);
+  writeFileSync(join(bin, 'kubectl'), FAKE_KUBECTL);
+  chmodSync(join(bin, 'kubectl'), 0o755);
+  writeFileSync(join(bin, 'gh'), '#!/bin/sh\nexit 1\n');
+  chmodSync(join(bin, 'gh'), 0o755);
+  writeFileSync(
+    join(root, 'state.json'),
+    JSON.stringify({ seq: seeds.length, secrets: {}, jobs: seeds.map((s, i) => ({ suspend: false, ...s, seq: i })) }),
+  );
   const rc = scenario.rc ?? 0;
-  if (scenario.top !== undefined) writeFileSync(join(root, 'top.txt'), typeof scenario.top === 'number' ? `k3s-master   310m   7%   9000Mi   ${scenario.top}%\n` : scenario.top);
-  writeFileSync(join(root, 'scenario.json'), JSON.stringify({ ...scenario, rc, hang: scenario.hang ?? false, log: scenario.log ?? jobLog(root, rc) }));
+  if (scenario.top !== undefined)
+    writeFileSync(
+      join(root, 'top.txt'),
+      typeof scenario.top === 'number' ? `k3s-master   310m   7%   9000Mi   ${scenario.top}%\n` : scenario.top,
+    );
+  writeFileSync(
+    join(root, 'scenario.json'),
+    JSON.stringify({ ...scenario, rc, hang: scenario.hang ?? false, log: scenario.log ?? jobLog(root, rc) }),
+  );
   // Runtime-made credentials (never literals): the npm token, and Gitea's through git's credential helper as the real script reads it.
-  const npmToken = `fx${hex(18)}`, giteaToken = `gt${hex(18)}`;
+  const npmToken = `fx${hex(18)}`,
+    giteaToken = `gt${hex(18)}`;
   const gitconfig = join(root, 'gitconfig');
-  writeFileSync(gitconfig, `[credential "https://git.konfersi.com"]\n\thelper = "!f() { echo username=bot; echo password=${giteaToken}; }; f"\n`);
+  writeFileSync(
+    gitconfig,
+    `[credential "https://git.konfersi.com"]\n\thelper = "!f() { echo username=bot; echo password=${giteaToken}; }; f"\n`,
+  );
   const env = (over: Record<string, string> = {}): NodeJS.ProcessEnv => ({
-    PATH: `${bin}:/usr/local/bin:/usr/bin:/bin`, HOME: home, TMPDIR: root, FAKE: root, GIT_CONFIG_GLOBAL: gitconfig, GIT_CONFIG_NOSYSTEM: '1',
-    JOB_RUN_IMAGE: 'registry.test/claudepilot/workspace:1-dev-1', JOB_RUN_POLL_S: '0.1', JOB_RUN_WATCH_PID: 'none',
-    JOB_RUN_LOG: join(root, 'job.log'), NODE_AUTH_TOKEN: npmToken, PILOT_SESSION_ID: 'chat-a', PILOT_AGENT: 't107', ...over,
+    PATH: `${bin}:/usr/local/bin:/usr/bin:/bin`,
+    HOME: home,
+    TMPDIR: root,
+    FAKE: root,
+    GIT_CONFIG_GLOBAL: gitconfig,
+    GIT_CONFIG_NOSYSTEM: '1',
+    JOB_RUN_IMAGE: 'registry.test/claudepilot/workspace:1-dev-1',
+    JOB_RUN_POLL_S: '0.1',
+    JOB_RUN_WATCH_PID: 'none',
+    JOB_RUN_LOG: join(root, 'job.log'),
+    NODE_AUTH_TOKEN: npmToken,
+    PILOT_SESSION_ID: 'chat-a',
+    PILOT_AGENT: 't107',
+    ...over,
   });
   const start = (argv: string[], over: Record<string, string> = {}) => {
     const p = spawn('bash', [SCRIPT, ...argv], { env: env(over), cwd: root });
     children.push(p);
     let out = '';
-    p.stdout.on('data', (d) => (out += d)); p.stderr.on('data', (d) => (out += d));
+    p.stdout.on('data', (d) => (out += d));
+    p.stderr.on('data', (d) => (out += d));
     const done = new Promise<{ code: number | null; out: string }>((res) => p.on('close', (code) => res({ code, out })));
     return { p, done, out: () => out };
   };
@@ -144,12 +203,39 @@ function world(seeds: Seed[] = [], scenario: Scenario = {}) {
     const r = spawnSync('bash', [script, ...argv], { env: env(over), cwd: root, encoding: 'utf8', timeout: 30_000 });
     return { code: r.status, out: r.stdout + r.stderr };
   };
-  const state = () => JSON.parse(readFileSync(join(root, 'state.json'), 'utf8')) as { secrets: Record<string, string>; jobs: (Seed & { suspend: boolean })[] };
-  const edit = (fn: (s: ReturnType<typeof state>) => void) => { const s = state(); fn(s); writeFileSync(join(root, 'state.json'), JSON.stringify(s)); };
+  const state = () =>
+    JSON.parse(readFileSync(join(root, 'state.json'), 'utf8')) as {
+      secrets: Record<string, string>;
+      jobs: (Seed & { suspend: boolean })[];
+    };
+  const edit = (fn: (s: ReturnType<typeof state>) => void) => {
+    const s = state();
+    fn(s);
+    writeFileSync(join(root, 'state.json'), JSON.stringify(s));
+  };
   const calls = () => (existsSync(join(root, 'calls.log')) ? readFileSync(join(root, 'calls.log'), 'utf8') : '');
-  const applied = () => { const d = join(root, 'applied'); return existsSync(d) ? readdirSync(d).map((f) => readFileSync(join(d, f), 'utf8')) : []; };
-  const applied1 = () => { const [m] = applied(); assert.ok(m, 'a manifest was applied'); return m; };
-  return { root, npmToken, giteaToken, start, run, state, edit, calls, applied, applied1, log: () => readFileSync(join(root, 'job.log'), 'utf8') };
+  const applied = () => {
+    const d = join(root, 'applied');
+    return existsSync(d) ? readdirSync(d).map((f) => readFileSync(join(d, f), 'utf8')) : [];
+  };
+  const applied1 = () => {
+    const [m] = applied();
+    assert.ok(m, 'a manifest was applied');
+    return m;
+  };
+  return {
+    root,
+    npmToken,
+    giteaToken,
+    start,
+    run,
+    state,
+    edit,
+    calls,
+    applied,
+    applied1,
+    log: () => readFileSync(join(root, 'job.log'), 'utf8'),
+  };
 }
 
 async function waitFor(what: string, cond: () => boolean, ms = 15_000) {
@@ -160,16 +246,51 @@ async function waitFor(what: string, cond: () => boolean, ms = 15_000) {
   }
 }
 
-type Container = { image: string; env: { name: string; value?: string; valueFrom?: { secretKeyRef?: { name: string; key: string } } }[]; resources: unknown; args: string[]; volumeMounts: unknown };
-type Manifest = { metadata: { name: string; labels: Record<string, string>; annotations: Record<string, string> }; spec: Record<string, unknown> & { template: { metadata: { labels: Record<string, string> }; spec: Record<string, unknown> & { initContainers?: Container[]; containers: Container[]; volumes: unknown } } } };
-const container = (m: Manifest) => { const c = m.spec.template.spec.containers[0]; assert.ok(c); return c; };
+type Container = {
+  image: string;
+  env: { name: string; value?: string; valueFrom?: { secretKeyRef?: { name: string; key: string } } }[];
+  resources: unknown;
+  args: string[];
+  volumeMounts: unknown;
+};
+type Manifest = {
+  metadata: { name: string; labels: Record<string, string>; annotations: Record<string, string> };
+  spec: Record<string, unknown> & {
+    template: {
+      metadata: { labels: Record<string, string> };
+      spec: Record<string, unknown> & { initContainers?: Container[]; containers: Container[]; volumes: unknown };
+    };
+  };
+};
+const container = (m: Manifest) => {
+  const c = m.spec.template.spec.containers[0];
+  assert.ok(c);
+  return c;
+};
 const envOf = (m: Manifest) => Object.fromEntries(container(m).env.map((e) => [e.name, e.value ?? e.valueFrom]));
 /** T-401: the credentials are in the init container `fetch` alone. */
-const fetchEnvOf = (m: Manifest) => { const c = m.spec.template.spec.initContainers?.[0]; assert.ok(c, 'the fetch init container'); return Object.fromEntries(c.env.map((e) => [e.name, e.value ?? e.valueFrom])); };
+const fetchEnvOf = (m: Manifest) => {
+  const c = m.spec.template.spec.initContainers?.[0];
+  assert.ok(c, 'the fetch init container');
+  return Object.fromEntries(c.env.map((e) => [e.name, e.value ?? e.valueFrom]));
+};
 
 test('a run: the suspended Job manifest, the stream, the exit code, the artifacts, the Secret gone and the Job kept for its TTL', () => {
   const w = world([], { rc: 3 });
-  const r = w.run(['--repo', 'claudepilot', '--ref', 'dev/t107-job-run', '--artifacts', 'reports', '--out', 'got', '--role', 'T107 Runner', '--', 'npm test -w @portal/server']);
+  const r = w.run([
+    '--repo',
+    'claudepilot',
+    '--ref',
+    'dev/t107-job-run',
+    '--artifacts',
+    'reports',
+    '--out',
+    'got',
+    '--role',
+    'T107 Runner',
+    '--',
+    'npm test -w @portal/server',
+  ]);
   assert.equal(r.code, 3, r.out);
   assert.match(r.out, /hello from the job/);
   assert.match(r.out, /=== JOB-RUN SUMMARY claudepilot@abc1234 .* rc=3/);
@@ -182,21 +303,43 @@ test('a run: the suspended Job manifest, the stream, the exit code, the artifact
   const text = w.applied1();
   const m = yamlLoad(text) as Manifest;
   assert.match(m.metadata.name, /^claudepilot-job-[0-9a-f]{8}$/);
-  assert.deepEqual(m.metadata.labels, { app: 'claudepilot-job-run', 'job-run/chat': 'chat-a', 'job-run/role': 't107-runner', 'job-run/repo': 'claudepilot', 'job-run/program': 'claudepilot' });
+  assert.deepEqual(m.metadata.labels, {
+    app: 'claudepilot-job-run',
+    'job-run/chat': 'chat-a',
+    'job-run/role': 't107-runner',
+    'job-run/repo': 'claudepilot',
+    'job-run/program': 'claudepilot',
+  });
   assert.match(m.metadata.annotations['job-run/owner'] ?? '', new RegExp(`^${hostname()}/\\d+/\\d+$`));
   assert.equal(m.spec.suspend, true, 'created suspended: the queue lets it out');
   assert.equal(m.spec.backoffLimit, 0);
   assert.equal(m.spec.activeDeadlineSeconds, 3600);
   assert.equal(m.spec.ttlSecondsAfterFinished, 1800);
-  const pod = m.spec.template.spec, c = container(m);
+  const pod = m.spec.template.spec,
+    c = container(m);
   assert.equal(pod.automountServiceAccountToken, false);
-  assert.match(JSON.stringify(pod.affinity), /"podAntiAffinity".*"namespaces":\["isnan-claudepilot-workspaces"\].*"claudepilot.managed":"true"/);
+  assert.match(
+    JSON.stringify(pod.affinity),
+    /"podAntiAffinity".*"namespaces":\["isnan-claudepilot-workspaces"\].*"claudepilot.managed":"true"/,
+  );
   // T-524: memory requested = limited, so the scheduler only places the Job where all of it fits; /tmp (in memory) inside that limit.
-  assert.deepEqual(c.resources, { requests: { cpu: '1000m', memory: '4Gi' }, limits: { cpu: '4', memory: '4Gi' } });
+  assert.deepEqual(c.resources, { requests: { cpu: '500m', memory: '4Gi' }, limits: { cpu: '4', memory: '4Gi' } });
   // T-401: fetch-home holds the fetch container's credential helper and .npmrc; the run container never mounts it.
-  assert.deepEqual(pod.volumes, [{ name: 'tmp', emptyDir: { medium: 'Memory', sizeLimit: '2Gi' } }, { name: 'shm', emptyDir: { medium: 'Memory', sizeLimit: '1Gi' } }, { name: 'fetch-home', emptyDir: { medium: 'Memory', sizeLimit: '64Mi' } }]);
+  assert.deepEqual(pod.volumes, [
+    { name: 'tmp', emptyDir: { medium: 'Memory', sizeLimit: '2Gi' } },
+    { name: 'shm', emptyDir: { medium: 'Memory', sizeLimit: '1Gi' } },
+    { name: 'fetch-home', emptyDir: { medium: 'Memory', sizeLimit: '64Mi' } },
+  ]);
   assert.ok(!JSON.stringify(c.volumeMounts).includes('fetch-home'), 'T-401: the run container does not mount the fetch home');
-  assert.ok(!/__[A-Z_]+__/.test(text.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n')), 'every placeholder is filled');
+  assert.ok(
+    !/__[A-Z_]+__/.test(
+      text
+        .split('\n')
+        .filter((l) => !/^\s*#/.test(l))
+        .join('\n'),
+    ),
+    'every placeholder is filled',
+  );
   assert.equal(c.image, 'registry.test/claudepilot/workspace:1-dev-1');
   const e = envOf(m);
   assert.equal(e.JR_REPO_URL, 'https://github.com/alfianisnan26/claudepilot.git');
@@ -214,10 +357,15 @@ test('a run: the suspended Job manifest, the stream, the exit code, the artifact
   // T-426: the Job exists (suspended) first; the Secret is applied in one call that already has the label and the ownerReference: no window.
   // S1d: the Secret is CREATED (`create -f -`), never applied: apply would keep the data a second time in a last-applied annotation.
   assert.equal(calls.split('\n').filter((l) => /apply -f -$/.test(l)).length, 1, 'apply is for the Job alone');
-  assert.ok(calls.indexOf('apply -f -') < calls.indexOf('create secret') && calls.indexOf('create secret') < calls.indexOf('create -f -'), 'Job (apply), then the Secret (create -f -)');
+  assert.ok(
+    calls.indexOf('apply -f -') < calls.indexOf('create secret') && calls.indexOf('create secret') < calls.indexOf('create -f -'),
+    'Job (apply), then the Secret (create -f -)',
+  );
   assert.deepEqual(JSON.parse(readFileSync(join(w.root, `secret-${m.metadata.name}.meta.json`), 'utf8')), {
-    name: m.metadata.name, labels: { app: 'claudepilot-job-run', 'job-run/chat': 'chat-a' },
-    ownerReferences: [{ apiVersion: 'batch/v1', kind: 'Job', name: m.metadata.name, uid: `uid-${m.metadata.name}` }] });
+    name: m.metadata.name,
+    labels: { app: 'claudepilot-job-run', 'job-run/chat': 'chat-a' },
+    ownerReferences: [{ apiVersion: 'batch/v1', kind: 'Job', name: m.metadata.name, uid: `uid-${m.metadata.name}` }],
+  });
   assert.match(calls, /patch job claudepilot-job-[0-9a-f]{8} --type merge -p \{"spec":\{"suspend":false\}\}/);
   assert.match(calls, /delete secret claudepilot-job-/);
   assert.doesNotMatch(calls, /delete job /, 'a finished Job stays for its TTL');
@@ -236,7 +384,10 @@ test('several words are one command, each quoted; the exit code 0 is passed on',
 
 test('the token never reaches the output or the log: a Job that prints it is masked, and the run warns', () => {
   const w = world([], {});
-  writeFileSync(join(w.root, 'scenario.json'), JSON.stringify({ rc: 0, log: jobLog(w.root, 0, 'npm http fetch authorization {TOKEN} and again {TOKEN}\n') }));
+  writeFileSync(
+    join(w.root, 'scenario.json'),
+    JSON.stringify({ rc: 0, log: jobLog(w.root, 0, 'npm http fetch authorization {TOKEN} and again {TOKEN}\n') }),
+  );
   const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--', 'npm ci']);
   assert.equal(r.code, 0, r.out);
   assert.ok(!r.out.includes(w.npmToken), 'not in the output');
@@ -246,10 +397,19 @@ test('the token never reaches the output or the log: a Job that prints it is mas
   assert.match(r.out, /WARNING: a credential was in the Job's log/);
 });
 
-test('Konfersi: from Gitea with the credential helper\'s token in the Secret (never on a command line), the shared repo next to it', () => {
+test("Konfersi: from Gitea with the credential helper's token in the Secret (never on a command line), the shared repo next to it", () => {
   const w = world();
   writeFileSync(join(w.root, 'scenario.json'), JSON.stringify({ rc: 0, log: jobLog(w.root, 0, 'git said {TOKEN}\n') }));
-  const r = w.run(['--repo', 'konfersi:platform/konfersi-backend', '--ref', 'work/x', '--also', 'platform/konfersi-shared', '--', 'npx vitest run src/a.test.ts']);
+  const r = w.run([
+    '--repo',
+    'konfersi:platform/konfersi-backend',
+    '--ref',
+    'work/x',
+    '--also',
+    'platform/konfersi-shared',
+    '--',
+    'npx vitest run src/a.test.ts',
+  ]);
   assert.equal(r.code, 0, r.out);
   const m = yamlLoad(w.applied1()) as Manifest;
   const e = envOf(m);
@@ -286,7 +446,10 @@ test('T-491 Event: exactly GitHub isnanme/event, the GitHub token as npm token a
 test('T-491 Event: the Secret holds the token for npm and for the clone; claudepilot keeps only the npm token', async () => {
   // Hold the Job in the queue so the Secret can be read before the script deletes it.
   const seeds = [1, 2, 3].map((i) => ({ name: `claudepilot-job-0000000${i}`, chat: 'chat-x' }));
-  for (const [repo, git] of [['event', true], ['claudepilot', false]] as const) {
+  for (const [repo, git] of [
+    ['event', true],
+    ['claudepilot', false],
+  ] as const) {
     const w = world(seeds);
     const s = w.start(['--repo', repo, '--ref', 'main', '--', 'true']);
     await waitFor('queued', () => /queued behind 3/.test(s.out()));
@@ -310,39 +473,55 @@ test('T-491 Event: without a GitHub token the run is refused before anything is 
 });
 
 test('the cluster-wide cap: three running Jobs, the fourth says "queued behind 3" and starts when one ends', async () => {
-  const w = world([{ name: 'claudepilot-job-00000001', chat: 'chat-x' }, { name: 'claudepilot-job-00000002', chat: 'chat-y' }, { name: 'claudepilot-job-00000003', chat: 'chat-z' }]);
+  const w = world([
+    { name: 'claudepilot-job-00000001', chat: 'chat-x' },
+    { name: 'claudepilot-job-00000002', chat: 'chat-y' },
+    { name: 'claudepilot-job-00000003', chat: 'chat-z' },
+  ]);
   const s = w.start(['--repo', 'claudepilot', '--ref', 'main', '--', 'true']);
   await waitFor('the queue line', () => /queued behind 3 \(at most 3 at once, 2 per chat, 2 per program\)/.test(s.out()));
   await new Promise((r) => setTimeout(r, 400));
   assert.ok(w.state().jobs.find((j) => j.name.startsWith('claudepilot-job-') && !/0000000\d$/.test(j.name))?.suspend, 'still suspended');
-  w.edit((st) => { Object.assign(st.jobs[0] ?? {}, { done: true, rc: 0 }); });
+  w.edit((st) => {
+    Object.assign(st.jobs[0] ?? {}, { done: true, rc: 0 });
+  });
   const r = await s.done;
   assert.equal(r.code, 0, r.out);
   assert.equal((r.out.match(/queued behind/g) ?? []).length, 1, 'said once, not every poll');
 });
 
 test('the per-chat cap: a chat with two running waits, another chat goes past it; the first goes when its own Job ends', async () => {
-  const w = world([{ name: 'claudepilot-job-0000000a', chat: 'chat-a' }, { name: 'claudepilot-job-0000000b', chat: 'chat-a' }]);
+  const w = world([
+    { name: 'claudepilot-job-0000000a', chat: 'chat-a' },
+    { name: 'claudepilot-job-0000000b', chat: 'chat-a' },
+  ]);
   const a = w.start(['--repo', 'claudepilot', '--ref', 'main', '--', 'true'], { PILOT_SESSION_ID: 'chat-a' });
   await waitFor('chat-a queued', () => /queued behind 2/.test(a.out()));
   const b = await w.start(['--repo', 'claudepilot', '--ref', 'main', '--', 'true'], { PILOT_SESSION_ID: 'chat-b' }).done;
   assert.equal(b.code, 0, b.out);
-  assert.doesNotMatch(b.out, /queued behind/, 'room cluster-wide: chat-b is not held up by chat-a\'s queued Job');
+  assert.doesNotMatch(b.out, /queued behind/, "room cluster-wide: chat-b is not held up by chat-a's queued Job");
   assert.doesNotMatch(a.out(), /rc=/, 'chat-a still waits');
-  w.edit((st) => { Object.assign(st.jobs[1] ?? {}, { done: true, rc: 0 }); });
+  w.edit((st) => {
+    Object.assign(st.jobs[1] ?? {}, { done: true, rc: 0 });
+  });
   const r = await a.done;
   assert.equal(r.code, 0, r.out);
 });
 
 test('T-524 the per-program cap: two Konfersi Jobs running (one from before the label, known by its repo), a third waits; ClaudePilot goes past it', async () => {
-  const w = world([{ name: 'claudepilot-job-0000000a', chat: 'chat-x', program: 'konfersi' }, { name: 'claudepilot-job-0000000b', chat: 'chat-y', repo: 'konfersi-backend' }]);
+  const w = world([
+    { name: 'claudepilot-job-0000000a', chat: 'chat-x', program: 'konfersi' },
+    { name: 'claudepilot-job-0000000b', chat: 'chat-y', repo: 'konfersi-backend' },
+  ]);
   const k = w.start(['--repo', 'konfersi:platform/konfersi-backend', '--ref', 'main', '--', 'true'], { PILOT_SESSION_ID: 'chat-a' });
   await waitFor('konfersi queued', () => /queued behind 2 \(at most 3 at once, 2 per chat, 2 per program\)/.test(k.out()));
   const c = await w.start(['--repo', 'claudepilot', '--ref', 'main', '--', 'true'], { PILOT_SESSION_ID: 'chat-b' }).done;
   assert.equal(c.code, 0, c.out);
   assert.doesNotMatch(c.out, /queued behind/, 'another program is not held up');
   assert.doesNotMatch(k.out(), /rc=/, 'konfersi still waits');
-  w.edit((st) => { Object.assign(st.jobs[0] ?? {}, { done: true, rc: 0 }); });
+  w.edit((st) => {
+    Object.assign(st.jobs[0] ?? {}, { done: true, rc: 0 });
+  });
   const r = await k.done;
   assert.equal(r.code, 0, r.out);
   assert.match(w.applied().find((m) => m.includes('konfersi-backend')) ?? '', /job-run\/program: konfersi\}/);
@@ -354,23 +533,37 @@ test('T-524 the per-program cap: two Konfersi Jobs running (one from before the 
 });
 
 test('T-524 --big: 8Gi requested = limited, /tmp 4Gi; the default is 4Gi with /tmp 2Gi; both prefer a node other than the control plane', () => {
-  for (const [argv, mem, tmp] of [[[], '4Gi', '2Gi'], [['--big'], '8Gi', '4Gi']] as const) {
+  for (const [argv, mem, tmp] of [
+    [[], '4Gi', '2Gi'],
+    [['--big'], '8Gi', '4Gi'],
+  ] as const) {
     const w = world();
     const r = w.run([...argv, '--repo', 'claudepilot', '--ref', 'main', '--', 'true']); // --big first: it takes no value
     assert.equal(r.code, 0, r.out);
     assert.match(r.out, new RegExp(`on k3s-master with ${mem}; log: `));
     const m = yamlLoad(w.applied1()) as Manifest;
-    assert.deepEqual(container(m).resources, { requests: { cpu: '1000m', memory: mem }, limits: { cpu: '4', memory: mem } });
-    assert.deepEqual((m.spec.template.spec.volumes as { name: string; emptyDir: unknown }[])[0], { name: 'tmp', emptyDir: { medium: 'Memory', sizeLimit: tmp } });
-    assert.deepEqual((m.spec.template.spec.affinity as { nodeAffinity: unknown }).nodeAffinity, { preferredDuringSchedulingIgnoredDuringExecution: [
-      { weight: 100, preference: { matchExpressions: [{ key: 'node-role.kubernetes.io/control-plane', operator: 'DoesNotExist' }] } }] });
+    assert.deepEqual(container(m).resources, { requests: { cpu: '500m', memory: mem }, limits: { cpu: '4', memory: mem } });
+    assert.deepEqual((m.spec.template.spec.volumes as { name: string; emptyDir: unknown }[])[0], {
+      name: 'tmp',
+      emptyDir: { medium: 'Memory', sizeLimit: tmp },
+    });
+    assert.deepEqual((m.spec.template.spec.affinity as { nodeAffinity: unknown }).nodeAffinity, {
+      preferredDuringSchedulingIgnoredDuringExecution: [
+        { weight: 100, preference: { matchExpressions: [{ key: 'node-role.kubernetes.io/control-plane', operator: 'DoesNotExist' }] } },
+      ],
+    });
   }
 });
 
 test('T-524 OOMKilled: the container killed at its limit says so with the limit and the hint --big (exit 137); with --big, split it', () => {
   const killed = '=== JOB-RUN checked out claudepilot at abc1234 in 1s\nrunning the suite\n'; // no exit line: bash itself was killed
-  for (const [argv, re] of [[[], /was OOMKilled: it reached its memory limit of 4Gi \(the in-memory \/tmp counts too\); rerun with --big \(8Gi, prefers k3s-node2\)/],
-    [['--big'], /was OOMKilled: it reached its memory limit of 8Gi .*; 8Gi is the most a Job gets: split the command/]] as const) {
+  for (const [argv, re] of [
+    [
+      [],
+      /was OOMKilled: it reached its memory limit of 4Gi \(the in-memory \/tmp counts too\); rerun with --big \(8Gi, prefers k3s-node2\)/,
+    ],
+    [['--big'], /was OOMKilled: it reached its memory limit of 8Gi .*; 8Gi is the most a Job gets: split the command/],
+  ] as const) {
     const w = world([], { oom: true, rc: 1, reason: 'BackoffLimitExceeded', log: killed });
     const r = w.run(['--repo', 'claudepilot', '--ref', 'main', ...argv, '--', 'npm test']);
     assert.equal(r.code, 137, r.out);
@@ -378,21 +571,37 @@ test('T-524 OOMKilled: the container killed at its limit says so with the limit 
     assert.doesNotMatch(r.out, /ended without an exit code/, 'the reason is named, not a generic failure');
   }
   // One process killed inside the container (the shell lives on): the memory line counts it, and the run says so.
-  const w = world([], { rc: 1, log: '=== JOB-RUN SUMMARY claudepilot@abc1234 checkout=1s steps=1s run=1s rc=1 node=k3s-node2\n=== JOB-RUN MEMORY peak=4095Mi limit=4096Mi oom_kills=2\n=== JOB-RUN EXIT 1\n' });
+  const w = world([], {
+    rc: 1,
+    log: '=== JOB-RUN SUMMARY claudepilot@abc1234 checkout=1s steps=1s run=1s rc=1 node=k3s-node2\n=== JOB-RUN MEMORY peak=4095Mi limit=4096Mi oom_kills=2\n=== JOB-RUN EXIT 1\n',
+  });
   const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--', 'npm test']);
   assert.equal(r.code, 1, r.out);
   assert.match(r.out, /2 process\(es\) were OOM-killed at the memory limit of 4Gi; rerun with --big/);
   // Evicted for /tmp over its sizeLimit.
-  const ev = world([], { rc: 1, reason: 'BackoffLimitExceeded', evicted: 'Usage of EmptyDir volume "tmp" exceeds the limit "2Gi".', log: killed });
+  const ev = world([], {
+    rc: 1,
+    reason: 'BackoffLimitExceeded',
+    evicted: 'Usage of EmptyDir volume "tmp" exceeds the limit "2Gi".',
+    log: killed,
+  });
   const e = ev.run(['--repo', 'claudepilot', '--ref', 'main', '--', 'npm test']);
-  assert.match(e.out, /was evicted: Usage of EmptyDir volume "tmp" exceeds the limit "2Gi"\. \(\/tmp holds at most 2Gi in memory; --big gives 4Gi\)/);
+  assert.match(
+    e.out,
+    /was evicted: Usage of EmptyDir volume "tmp" exceeds the limit "2Gi"\. \(\/tmp holds at most 2Gi in memory; --big gives 4Gi\)/,
+  );
 });
 
 test('T-524 Pending for memory: one clear line (not a silent wait), then the Job starts when room frees', async () => {
   const w = world();
-  writeFileSync(join(w.root, 'pending'), '0/2 nodes are available: 2 Insufficient memory. preemption: 0/2 nodes are available: 2 No preemption victims found for incoming pod.');
+  writeFileSync(
+    join(w.root, 'pending'),
+    '0/2 nodes are available: 2 Insufficient memory. preemption: 0/2 nodes are available: 2 No preemption victims found for incoming pod.',
+  );
   const s = w.start(['--repo', 'claudepilot', '--ref', 'main', '--', 'true']);
-  await waitFor('the Pending line', () => /is Pending: no node has 4Gi of memory free to request \(0\/2 nodes are available: 2 Insufficient memory\./.test(s.out()));
+  await waitFor('the Pending line', () =>
+    /is Pending: no node has 4Gi of memory free to request \(0\/2 nodes are available: 2 Insufficient memory\./.test(s.out()),
+  );
   assert.match(s.out(), /it starts when a Job ends and frees memory \(waits up to 900s\)/);
   await new Promise((r) => setTimeout(r, 400));
   rmSync(join(w.root, 'pending'));
@@ -410,8 +619,13 @@ test('T-524 Pending for memory: one clear line (not a silent wait), then the Job
 
 test('T-524 a full in-memory /tmp: "No space left on device" in a failed Job gives the --big hint (no eviction comes); a passing Job does not', () => {
   const full = 'npm error nospc ENOSPC: No space left on device, write\n';
-  for (const [argv, re] of [[[], /: No space left on device: \/tmp holds at most 2Gi in memory \(it and \/dev\/shm count against the 4Gi limit\); rerun with --big \(\/tmp 4Gi\)/],
-    [['--big'], /: No space left on device: \/tmp holds at most 4Gi in memory .*the 8Gi limit\); 4Gi is the most \/tmp gets/]] as const) {
+  for (const [argv, re] of [
+    [
+      [],
+      /: No space left on device: \/tmp holds at most 2Gi in memory \(it and \/dev\/shm count against the 4Gi limit\); rerun with --big \(\/tmp 4Gi\)/,
+    ],
+    [['--big'], /: No space left on device: \/tmp holds at most 4Gi in memory .*the 8Gi limit\); 4Gi is the most \/tmp gets/],
+  ] as const) {
     const w = world();
     writeFileSync(join(w.root, 'scenario.json'), JSON.stringify({ rc: 1, log: jobLog(w.root, 1, full) }));
     const r = w.run([...argv, '--repo', 'claudepilot', '--ref', 'main', '--', 'npm ci']);
@@ -442,32 +656,65 @@ esac
 function gateWorld() {
   const root = mkdtempSync(join(tmpdir(), 'cp-gatejob-'));
   roots.push(root);
-  const bin = join(root, 'bin'), repo = join(root, 'repo');
-  mkdirSync(bin); mkdirSync(join(repo, 'scripts'), { recursive: true }); mkdirSync(join(repo, 'deploy/k3s-build'), { recursive: true });
-  writeFileSync(join(bin, 'kubectl'), FAKE_GATE_KUBECTL); chmodSync(join(bin, 'kubectl'), 0o755);
+  const bin = join(root, 'bin'),
+    repo = join(root, 'repo');
+  mkdirSync(bin);
+  mkdirSync(join(repo, 'scripts'), { recursive: true });
+  mkdirSync(join(repo, 'deploy/k3s-build'), { recursive: true });
+  writeFileSync(join(bin, 'kubectl'), FAKE_GATE_KUBECTL);
+  chmodSync(join(bin, 'kubectl'), 0o755);
   writeFileSync(join(root, 'token'), `gx${hex(18)}`); // made at runtime, never a literal
-  writeFileSync(join(bin, 'gh'), '#!/bin/sh\n[ "$1 $2" = "auth token" ] && cat "$FAKE/token"\n'); chmodSync(join(bin, 'gh'), 0o755);
-  for (const f of ['scripts/gate-job.sh', 'scripts/gate-verdict.sh', 'deploy/k3s-build/gate-job.yaml']) writeFileSync(join(repo, f), readFileSync(join(REPO, f), 'utf8'));
-  const env = { PATH: `${bin}:/usr/local/bin:/usr/bin:/bin`, HOME: root, TMPDIR: root, FAKE: root, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
-  const git = (args: string[]) => spawnSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', ...args], { cwd: repo, env, encoding: 'utf8' });
-  git(['init', '-q']); git(['add', '.']); git(['commit', '-qm', 'gate']);
+  writeFileSync(join(bin, 'gh'), '#!/bin/sh\n[ "$1 $2" = "auth token" ] && cat "$FAKE/token"\n');
+  chmodSync(join(bin, 'gh'), 0o755);
+  for (const f of ['scripts/gate-job.sh', 'scripts/gate-verdict.sh', 'deploy/k3s-build/gate-job.yaml'])
+    writeFileSync(join(repo, f), readFileSync(join(REPO, f), 'utf8'));
+  const env = {
+    PATH: `${bin}:/usr/local/bin:/usr/bin:/bin`,
+    HOME: root,
+    TMPDIR: root,
+    FAKE: root,
+    GIT_CONFIG_GLOBAL: '/dev/null',
+    GIT_CONFIG_NOSYSTEM: '1',
+  };
+  const git = (args: string[]) =>
+    spawnSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', ...args], { cwd: repo, env, encoding: 'utf8' });
+  git(['init', '-q']);
+  git(['add', '.']);
+  git(['commit', '-qm', 'gate']);
   const start = (over: Record<string, string>) => {
-    const p = spawn('bash', ['scripts/gate-job.sh', 'HEAD', 'typecheck'], { cwd: repo, env: { ...env, GATE_IMAGE: 'registry.test/claudepilot/workspace:1-dev-1', GATE_JOB_LOG: join(root, 'gate.log'), GATE_JOB_POLL_S: '1', ...over } });
+    const p = spawn('bash', ['scripts/gate-job.sh', 'HEAD', 'typecheck'], {
+      cwd: repo,
+      env: {
+        ...env,
+        GATE_IMAGE: 'registry.test/claudepilot/workspace:1-dev-1',
+        GATE_JOB_LOG: join(root, 'gate.log'),
+        GATE_JOB_POLL_S: '1',
+        ...over,
+      },
+    });
     children.push(p);
     let out = '';
-    p.stdout.on('data', (d) => (out += d)); p.stderr.on('data', (d) => (out += d));
-    return { done: new Promise<{ code: number | null; out: string }>((res) => p.on('close', (code) => res({ code, out }))), out: () => out };
+    p.stdout.on('data', (d) => (out += d));
+    p.stderr.on('data', (d) => (out += d));
+    return {
+      done: new Promise<{ code: number | null; out: string }>((res) => p.on('close', (code) => res({ code, out }))),
+      out: () => out,
+    };
   };
   return { root, start };
 }
 
 test('T-524 gate-job.sh: a gate Pending for room says so with the reason; never scheduled ends red naming that, not "did not finish"', async () => {
-  const why = '0/2 nodes are available: 2 Insufficient memory. preemption: 0/2 nodes are available: 2 No preemption victims found for incoming pod.';
+  const why =
+    '0/2 nodes are available: 2 Insufficient memory. preemption: 0/2 nodes are available: 2 No preemption victims found for incoming pod.';
   const w = gateWorld();
   writeFileSync(join(w.root, 'pending'), why);
   const r = await w.start({ GATE_JOB_WAIT_S: '3' }).done;
   assert.equal(r.code, 1, r.out);
-  assert.match(r.out, /gate job claudepilot-gate-[0-9a-f]{7}-[0-9a-f]{4} is Pending: 0\/2 nodes are available: 2 Insufficient memory\. .*; it waits for a node with room \(a Job that ends frees memory\), up to 3s\n/);
+  assert.match(
+    r.out,
+    /gate job claudepilot-gate-[0-9a-f]{7}-[0-9a-f]{4} is Pending: 0\/2 nodes are available: 2 Insufficient memory\. .*; it waits for a node with room \(a Job that ends frees memory\), up to 3s\n/,
+  );
   assert.equal((r.out.match(/is Pending/g) ?? []).length, 1, 'said once, not every poll');
   assert.match(r.out, /\nGATE-VERDICT: red: not scheduled in \d+s: 0\/2 nodes are available: 2 Insufficient memory\./);
   assert.doesNotMatch(r.out, /did not finish/, 'the cause is named');
@@ -475,7 +722,10 @@ test('T-524 gate-job.sh: a gate Pending for room says so with the reason; never 
   // Pending, then room frees: it says so and the gate's own verdict stands (green, exit 0).
   const w2 = gateWorld();
   writeFileSync(join(w2.root, 'pending'), why);
-  writeFileSync(join(w2.root, 'joblog'), '=== SUMMARY\ntypecheck rc=0 1s\nmemory peak=5120Mi limit=8192Mi oom_kills=0\nGATE-VERDICT: green\n');
+  writeFileSync(
+    join(w2.root, 'joblog'),
+    '=== SUMMARY\ntypecheck rc=0 1s\nmemory peak=5120Mi limit=8192Mi oom_kills=0\nGATE-VERDICT: green\n',
+  );
   const s = w2.start({ GATE_JOB_WAIT_S: '60' });
   await waitFor('the Pending line', () => /is Pending/.test(s.out()));
   rmSync(join(w2.root, 'pending'));
@@ -484,7 +734,7 @@ test('T-524 gate-job.sh: a gate Pending for room says so with the reason; never 
   const r2 = await s.done;
   assert.equal(r2.code, 0, r2.out);
   assert.match(r2.out, /GATE-VERDICT: green\n$/);
-  assert.match(r2.out, /\ntypecheck rc=0 1s\nmemory peak=5120Mi limit=8192Mi oom_kills=0\nlog: /, 'the Job\'s memory peak in the summary');
+  assert.match(r2.out, /\ntypecheck rc=0 1s\nmemory peak=5120Mi limit=8192Mi oom_kills=0\nlog: /, "the Job's memory peak in the summary");
   assert.equal((r2.out.match(/memory peak=/g) ?? []).length, 1, 'one memory line');
 
   // A Job that printed no memory line (an older manifest): the summary says unavailable, never a guess; the verdict is unchanged.
@@ -492,7 +742,10 @@ test('T-524 gate-job.sh: a gate Pending for room says so with the reason; never 
   writeFileSync(join(w4.root, 'done'), '');
   const r4 = await w4.start({ GATE_JOB_WAIT_S: '10' }).done;
   assert.equal(r4.code, 0, r4.out);
-  assert.match(r4.out, /\ntypecheck rc=0 1s\nmemory peak=unavailable \(the gate Job printed no memory line\)\nlog: [^\n]+\nGATE-VERDICT: green\n$/);
+  assert.match(
+    r4.out,
+    /\ntypecheck rc=0 1s\nmemory peak=unavailable \(the gate Job printed no memory line\)\nlog: [^\n]+\nGATE-VERDICT: green\n$/,
+  );
 
   // Scheduled but not finished in time: the old message, unchanged.
   const w3 = gateWorld();
@@ -509,7 +762,13 @@ test('cleanup: interrupted while queued, the Job and its Secret are deleted', as
   s.p.kill('SIGTERM');
   const r = await s.done;
   assert.equal(r.code, 130, r.out);
-  assert.deepEqual(w.state().jobs.map((j) => j.name).sort(), ['claudepilot-job-00000001', 'claudepilot-job-00000002', 'claudepilot-job-00000003']);
+  assert.deepEqual(
+    w
+      .state()
+      .jobs.map((j) => j.name)
+      .sort(),
+    ['claudepilot-job-00000001', 'claudepilot-job-00000002', 'claudepilot-job-00000003'],
+  );
   assert.deepEqual(w.state().secrets, {});
 });
 
@@ -527,7 +786,7 @@ test('cleanup: the chat ends (its Claude process exits) while the Job runs: the 
   assert.deepEqual(w.state().secrets, {});
 });
 
-test('cleanup: a Job whose script is gone (killed before its trap) is removed by the next run; another host\'s is left alone', () => {
+test("cleanup: a Job whose script is gone (killed before its trap) is removed by the next run; another host's is left alone", () => {
   const w = world([
     { name: 'claudepilot-job-dead0001', chat: 'chat-a', owner: `${hostname()}/999999999/1` },
     { name: 'claudepilot-job-0be10002', chat: 'chat-a', owner: 'other-host/1/1' },
@@ -535,15 +794,27 @@ test('cleanup: a Job whose script is gone (killed before its trap) is removed by
   const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--', 'true']);
   assert.equal(r.code, 0, r.out);
   assert.match(r.out, /removed claudepilot-job-dead0001 \(its job-run\.sh is gone\)/);
-  assert.deepEqual(w.state().jobs.map((j) => j.name).filter((n) => /0001$|0002$/.test(n)), ['claudepilot-job-0be10002']);
+  assert.deepEqual(
+    w
+      .state()
+      .jobs.map((j) => j.name)
+      .filter((n) => /0001$|0002$/.test(n)),
+    ['claudepilot-job-0be10002'],
+  );
 });
 
-test('--list and --stop: a chat\'s Jobs stop, the others stay', () => {
-  const w = world([{ name: 'claudepilot-job-0000000a', chat: 'chat-a' }, { name: 'claudepilot-job-0000000b', chat: 'chat-b', suspend: true }]);
+test("--list and --stop: a chat's Jobs stop, the others stay", () => {
+  const w = world([
+    { name: 'claudepilot-job-0000000a', chat: 'chat-a' },
+    { name: 'claudepilot-job-0000000b', chat: 'chat-b', suspend: true },
+  ]);
   assert.match(w.run(['--list']).out, /claudepilot-job-0000000b\tchat-b\tagent\tqueued/);
   const r = w.run(['--stop', '--chat', 'chat-a']);
   assert.match(r.out, /stopped claudepilot-job-0000000a\n1 job\(s\) stopped/);
-  assert.deepEqual(w.state().jobs.map((j) => j.name), ['claudepilot-job-0000000b']);
+  assert.deepEqual(
+    w.state().jobs.map((j) => j.name),
+    ['claudepilot-job-0000000b'],
+  );
   assert.match(w.run(['--stop', 'nope; rm -rf /']).out, /usage/);
 });
 
@@ -580,24 +851,230 @@ test('usage errors: nothing is created', () => {
   assert.equal(w.calls(), '');
 });
 
-test('the Job\'s own script: checkout, the command\'s exit code, the artifacts block; a ref not on the remote says push it first', () => {
-  const root = mkdtempSync(join(tmpdir(), 'cp-jobrun-pod-'));
+test("T-379 --image: an allowed ref is the command container's image only; fetch keeps the workspace image; npm steps skipped; no --image changes nothing", () => {
+  const ws = 'registry.test/claudepilot/workspace:1-dev-1';
+  const digest = `sha256:${hex(32)}`;
+  const base = ['--repo', 'claudepilot', '--ref', 'main'];
+  const imagesOf = (text: string) => {
+    const m = yamlLoad(text) as Manifest;
+    return { fetch: m.spec.template.spec.initContainers?.[0]?.image, run: container(m).image, m };
+  };
+  const norm = (text: string) => text.replace(/claudepilot-job-[0-9a-f]{8}/g, 'JOB').replace(/job-run\/owner: ".*"/, 'OWNER');
+  // No --image: both containers on the workspace image, the manifest exactly as before (the only change in the template is the placeholder's name).
+  const w0 = world();
+  assert.equal(w0.run([...base, '--steps', 'none', '--', 'true']).code, 0);
+  const none = w0.applied1();
+  assert.deepEqual([imagesOf(none).fetch, imagesOf(none).run], [ws, ws]);
+  assert.ok(
+    !/__[A-Z_]+__/.test(
+      none
+        .split('\n')
+        .filter((l) => !/^\s*#/.test(l))
+        .join('\n'),
+    ),
+  );
+  // The manifest is as before T-379: the template gained no text (the placeholder was renamed), and the run image is the same text as the fetch image.
+  assert.ok(
+    !none
+      .split('\n')
+      .filter((l) => !/^\s*#/.test(l))
+      .join('\n')
+      .includes('--image'),
+    'the rendered manifest carries nothing of the option',
+  );
+  assert.equal(none.split(`image: ${ws}`).length, 3, 'exactly the two image lines, both the workspace image');
+  for (const ref of [
+    'registry.int.isnan.me/claudepilot/py-test:abc123',
+    'registry.int.isnan.me/konfersi/metocean/test-stage:req-9f2',
+    'registry.int.isnan.me/event/web-test:r1',
+    `registry.int.isnan.me/claudepilot/py-test@${digest}`,
+  ]) {
+    const w = world();
+    const r = w.run([...base, '--image', ref, '--', 'true']);
+    assert.equal(r.code, 0, r.out);
+    assert.match(r.out, /the npm steps are skipped/);
+    const text = w.applied1();
+    const { fetch, run, m } = imagesOf(text);
+    assert.equal(run, ref, 'the command container runs the image');
+    assert.equal(fetch, ws, 'the fetch container (the credentials) keeps the workspace image');
+    assert.equal(envOf(m).JR_STEPS, 'none');
+    assert.equal(envOf(m).NODE_AUTH_TOKEN, undefined);
+    assert.ok(!JSON.stringify(container(m)).includes('secretKeyRef'), 'no Secret in the command container');
+    // Against the same run without --image, only the run container's image line differs.
+    const a = norm(none).split('\n'),
+      b = norm(text).split('\n');
+    assert.equal(a.length, b.length);
+    const diff = a.map((l, i) => [l, b[i]]).filter(([x, y]) => x !== y);
+    assert.deepEqual(diff, [[`          image: ${ws}`, `          image: ${ref}`]]);
+  }
+  // The default step is skipped too; an explicit npm-ci is refused.
+  const w1 = world();
+  assert.equal(w1.run([...base, '--image', 'registry.int.isnan.me/claudepilot/py:1', '--steps', 'npm-ci', '--', 'true']).code, 2);
+  assert.equal(w1.calls(), '');
+});
+
+test('T-379 --image: another registry, a path outside the prefix, an untagged or odd reference, --against: refused before any kubectl call', () => {
+  const w = world();
+  const bad = [
+    'docker.io/library/python:3.11',
+    'registry.evil.example/claudepilot/x:1',
+    'registry.int.isnan.me.evil.example/claudepilot/x:1',
+    'registry.int.isnan.me/other/x:1',
+    'registry.int.isnan.me/claudepilot/x:latest',
+    'registry.int.isnan.me/event/x:latest',
+    'registry.int.isnan.me/claudepilot',
+    'registry.int.isnan.me/claudepilot/x',
+    'registry.int.isnan.me/claudepilot/x:latest;id',
+    'registry.int.isnan.me/claudepilot/x:1 --privileged',
+    'registry.int.isnan.me/claudepilot/x:$(id)',
+    'registry.int.isnan.me/claudepilot/../other/x:1',
+    'registry.int.isnan.me/claudepilot/X:1',
+    'registry.int.isnan.me/claudepilot/x@sha256:abc',
+    'registry.int.isnan.me/claudepilot/x:1\nimage: y',
+    'registry.int.isnan.me/claudepilot/x:1#y',
+    'http://registry.int.isnan.me/claudepilot/x:1',
+    'registry.int.isnan.me/konfersi//x:1',
+    '',
+    // A port, userinfo, a tag plus a digest (the digest built at runtime), an uppercase host.
+    'registry.int.isnan.me:5000/claudepilot/x:1',
+    'u@registry.int.isnan.me/claudepilot/x:1',
+    `registry.int.isnan.me/claudepilot/x:1@sha256:${hex(32)}`,
+    'Registry.Int.Isnan.Me/claudepilot/x:1',
+  ];
+  for (const ref of bad) {
+    const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--image', ref, '--', 'true']);
+    assert.equal(r.code, 2, `${JSON.stringify(ref)}: ${r.out}`);
+    assert.match(r.out, /--image: an image on registry\.int\.isnan\.me under claudepilot\/, konfersi\/ or event\//);
+  }
+  // DEPLOY_REGISTRY does not widen the allow-list: the host is the constant.
+  const widened = w.run(['--repo', 'claudepilot', '--ref', 'main', '--image', 'docker.io/claudepilot/x:1', '--', 'true'], {
+    DEPLOY_REGISTRY: 'docker.io',
+  });
+  assert.equal(widened.code, 2, widened.out);
+  assert.match(widened.out, /--image: an image on registry\.int\.isnan\.me under claudepilot\//);
+  const r = w.run([
+    '--repo',
+    'claudepilot',
+    '--ref',
+    'main',
+    '--image',
+    'registry.int.isnan.me/claudepilot/x:1',
+    '--against',
+    'abc1234',
+    '--',
+    'true',
+  ]);
+  assert.equal(r.code, 2, r.out);
+  assert.match(r.out, /--image cannot be used with --against/);
+  assert.equal(w.calls(), '', 'kubectl was never called');
+  assert.deepEqual(w.applied(), []);
+});
+
+test("T-379 --image: the header names the command's image next to the fetch image; none is named without --image", () => {
+  const w = world();
+  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--image', 'registry.int.isnan.me/claudepilot/py-test:abc123', '--', 'true']);
+  assert.equal(r.code, 0, r.out);
+  assert.match(
+    r.out,
+    /job-run: claudepilot-job-[0-9a-f]{8}: claudepilot@main \(none\) on registry\.test\/claudepilot\/workspace:1-dev-1; the command runs in registry\.int\.isnan\.me\/claudepilot\/py-test:abc123\n/,
+  );
+  const w0 = world();
+  const r0 = w0.run(['--repo', 'claudepilot', '--ref', 'main', '--', 'true']);
+  assert.match(r0.out, /\(npm-ci\) on registry\.test\/claudepilot\/workspace:1-dev-1\n/);
+  assert.doesNotMatch(r0.out, /the command runs in/);
+});
+
+test('T-379 the command container needs no git: the short sha comes from fetch (no "git: command not found", none empty in SUMMARY)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'cp-jobrun-nogit-'));
   roots.push(root);
-  const git = (args: string[], cwd: string) => spawnSync('git', args, { cwd, encoding: 'utf8', env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' } });
+  const git = (args: string[], cwd: string) =>
+    spawnSync('git', args, { cwd, encoding: 'utf8', env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' } });
   mkdirSync(join(root, 'src'));
   git(['init', '-q', '-b', 'main'], join(root, 'src'));
   writeFileSync(join(root, 'src/README'), 'x');
   git(['add', '.'], join(root, 'src'));
   git(['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'one'], join(root, 'src'));
   git(['clone', '-q', '--bare', join(root, 'src'), join(root, 'claudepilot.git')], root);
-  const pod = (ref: string, cmd: string) => runPod(TEMPLATE, {
-    PATH: process.env.PATH, JR_ROOT: join(root, `run-${hex(3)}`), JR_REPO_URL: `file://${join(root, 'claudepilot.git')}`, JR_REF: ref, JR_ALSO: '',
-    JR_STEPS: 'none', JR_ARTIFACTS: 'out', JR_ARTIFACT_MAX: '100000', JR_CMD: Buffer.from(cmd).toString('base64'), NODE_NAME: 'k3s-master' });
+  const sha = git(['rev-parse', '--short', 'HEAD'], join(root, 'src')).stdout.trim();
+  // A PATH of the tools a slim image has, without git.
+  const bin = join(root, 'nogit-bin');
+  mkdirSync(bin);
+  for (const t of [
+    'bash',
+    'cat',
+    'mkdir',
+    'basename',
+    'date',
+    'base64',
+    'sed',
+    'grep',
+    'stat',
+    'tar',
+    'tr',
+    'cut',
+    'rm',
+    'dirname',
+    'head',
+    'wc',
+  ]) {
+    const src = ['/usr/bin', '/bin'].map((d) => join(d, t)).find((p) => existsSync(p));
+    if (src) symlinkSync(src, join(bin, t));
+  }
+  assert.ok(!existsSync(join(bin, 'git')));
+  const r = runPod(
+    TEMPLATE,
+    {
+      PATH: process.env.PATH,
+      JR_ROOT: join(root, 'run'),
+      JR_REPO_URL: `file://${join(root, 'claudepilot.git')}`,
+      JR_REF: 'main',
+      JR_ALSO: '',
+      JR_STEPS: 'none',
+      JR_ARTIFACTS: '',
+      JR_ARTIFACT_MAX: '1',
+      JR_CMD: Buffer.from('echo hi').toString('base64'),
+      NODE_NAME: 'n',
+    },
+    {},
+    { PATH: bin },
+  );
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.doesNotMatch(r.stdout + r.stderr, /command not found/);
+  assert.match(r.stdout, new RegExp(`=== JOB-RUN SUMMARY claudepilot@${sha} checkout=`));
+});
+
+test("the Job's own script: checkout, the command's exit code, the artifacts block; a ref not on the remote says push it first", () => {
+  const root = mkdtempSync(join(tmpdir(), 'cp-jobrun-pod-'));
+  roots.push(root);
+  const git = (args: string[], cwd: string) =>
+    spawnSync('git', args, { cwd, encoding: 'utf8', env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' } });
+  mkdirSync(join(root, 'src'));
+  git(['init', '-q', '-b', 'main'], join(root, 'src'));
+  writeFileSync(join(root, 'src/README'), 'x');
+  git(['add', '.'], join(root, 'src'));
+  git(['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'one'], join(root, 'src'));
+  git(['clone', '-q', '--bare', join(root, 'src'), join(root, 'claudepilot.git')], root);
+  const pod = (ref: string, cmd: string) =>
+    runPod(TEMPLATE, {
+      PATH: process.env.PATH,
+      JR_ROOT: join(root, `run-${hex(3)}`),
+      JR_REPO_URL: `file://${join(root, 'claudepilot.git')}`,
+      JR_REF: ref,
+      JR_ALSO: '',
+      JR_STEPS: 'none',
+      JR_ARTIFACTS: 'out',
+      JR_ARTIFACT_MAX: '100000',
+      JR_CMD: Buffer.from(cmd).toString('base64'),
+      NODE_NAME: 'k3s-master',
+    });
   const r = pod('main', 'mkdir -p out && echo report > out/r.txt && echo ran in $(basename $PWD); exit 3');
   assert.equal(r.status, 3, r.stdout + r.stderr);
   assert.match(r.stdout, /ran in claudepilot\n/);
   assert.match(r.stdout, /=== JOB-RUN ARTIFACTS BEGIN\n[A-Za-z0-9+/=\n]+=== JOB-RUN ARTIFACTS END\n/);
-  assert.match(r.stdout, /=== JOB-RUN SUMMARY claudepilot@[0-9a-f]+ checkout=\d+s steps=\d+s run=\d+s rc=3 node=k3s-master\n=== JOB-RUN MEMORY peak=\S+ limit=\S+ oom_kills=\S+\n=== JOB-RUN EXIT 3\n$/);
+  assert.match(
+    r.stdout,
+    /=== JOB-RUN SUMMARY claudepilot@[0-9a-f]+ checkout=\d+s steps=\d+s run=\d+s rc=3 node=k3s-master\n=== JOB-RUN MEMORY peak=\S+ limit=\S+ oom_kills=\S+\n=== JOB-RUN EXIT 3\n$/,
+  );
   const b64 = (r.stdout.split('=== JOB-RUN ARTIFACTS BEGIN\n')[1] ?? '').split('=== JOB-RUN ARTIFACTS END')[0]?.replace(/\s/g, '') ?? '';
   const list = spawnSync('tar', ['-tzf', '-'], { input: Buffer.from(b64, 'base64'), encoding: 'utf8' }).stdout;
   assert.match(list, /out\/r\.txt/);
@@ -606,19 +1083,40 @@ test('the Job\'s own script: checkout, the command\'s exit code, the artifacts b
   assert.match(missing.stdout, /job-run: no-such-branch of .* is not on the remote \(push it first\)\n=== JOB-RUN EXIT 2\n$/);
 
   // T-524: the memory line reads the Job's own cgroup (peak, limit, OOM kills), the numbers the limit is sized from.
-  const cg = join(root, 'cgroup'); mkdirSync(cg);
+  const cg = join(root, 'cgroup');
+  mkdirSync(cg);
   writeFileSync(join(cg, 'memory.peak'), `${3 * 1024 * 1048576 + 5}\n`);
   writeFileSync(join(cg, 'memory.max'), `${4 * 1024 * 1048576}\n`);
   writeFileSync(join(cg, 'memory.events'), 'low 0\nhigh 0\nmax 2\noom 1\noom_kill 1\n');
   const mem = runPod(TEMPLATE, {
-    PATH: process.env.PATH, JR_ROOT: join(root, `run-${hex(3)}`), JR_REPO_URL: `file://${join(root, 'claudepilot.git')}`, JR_REF: 'main', JR_ALSO: '',
-    JR_STEPS: 'none', JR_ARTIFACTS: '', JR_ARTIFACT_MAX: '1', JR_CMD: Buffer.from('true').toString('base64'), JR_CGROUP: cg });
+    PATH: process.env.PATH,
+    JR_ROOT: join(root, `run-${hex(3)}`),
+    JR_REPO_URL: `file://${join(root, 'claudepilot.git')}`,
+    JR_REF: 'main',
+    JR_ALSO: '',
+    JR_STEPS: 'none',
+    JR_ARTIFACTS: '',
+    JR_ARTIFACT_MAX: '1',
+    JR_CMD: Buffer.from('true').toString('base64'),
+    JR_CGROUP: cg,
+  });
   assert.equal(mem.status, 0, mem.stdout + mem.stderr);
   assert.match(mem.stdout, /=== JOB-RUN MEMORY peak=3072Mi limit=4096Mi oom_kills=1\n=== JOB-RUN EXIT 0\n$/);
-  writeFileSync(join(cg, 'memory.max'), 'max\n'); rmSync(join(cg, 'memory.peak')); rmSync(join(cg, 'memory.events'));
+  writeFileSync(join(cg, 'memory.max'), 'max\n');
+  rmSync(join(cg, 'memory.peak'));
+  rmSync(join(cg, 'memory.events'));
   const unl = runPod(TEMPLATE, {
-    PATH: process.env.PATH, JR_ROOT: join(root, `run-${hex(3)}`), JR_REPO_URL: `file://${join(root, 'claudepilot.git')}`, JR_REF: 'main', JR_ALSO: '',
-    JR_STEPS: 'none', JR_ARTIFACTS: '', JR_ARTIFACT_MAX: '1', JR_CMD: Buffer.from('true').toString('base64'), JR_CGROUP: cg });
+    PATH: process.env.PATH,
+    JR_ROOT: join(root, `run-${hex(3)}`),
+    JR_REPO_URL: `file://${join(root, 'claudepilot.git')}`,
+    JR_REF: 'main',
+    JR_ALSO: '',
+    JR_STEPS: 'none',
+    JR_ARTIFACTS: '',
+    JR_ARTIFACT_MAX: '1',
+    JR_CMD: Buffer.from('true').toString('base64'),
+    JR_CGROUP: cg,
+  });
   assert.match(unl.stdout, /=== JOB-RUN MEMORY peak=\? limit=max oom_kills=\?\n/, 'a missing file is "?", never a guessed number');
 
   // T-491: for Event only, with a token, the user npmrc maps @isnanme to GitHub Packages through a reference npm expands (the value is
@@ -626,7 +1124,8 @@ test('the Job\'s own script: checkout, the command\'s exit code, the artifacts b
   // repository through an environment-level insteadOf (the credential lookup still sees the https URL).
   const token = `fx${hex(18)}`;
   const eventUrl = 'https://github.com/isnanme/event.git';
-  const asksFor = (url: string) => { // does `git credential fill` give a password for this URL?
+  const asksFor = (url: string) => {
+    // does `git credential fill` give a password for this URL?
     const m = /^https:\/\/([^/]+)\/(.*)$/.exec(url); // split by hand: new URL() would fold a "/../" away before git sees it
     return `printf 'protocol=https\\nhost=${m?.[1]}\\npath=${m?.[2]}\\n\\n' | GIT_TERMINAL_PROMPT=0 git credential fill 2>/dev/null | grep -c '^password=' || true`;
   };
@@ -634,15 +1133,50 @@ test('the Job\'s own script: checkout, the command\'s exit code, the artifacts b
   // finds neither file and no helper.
   const podEvent = (url: string, cmd: string, tok: string | undefined) => {
     const jr = join(root, `run-${hex(3)}`);
-    const insteadOf = { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: `url.file://${join(root, 'claudepilot.git')}.insteadOf`, GIT_CONFIG_VALUE_0: url };
-    const r = runPod(TEMPLATE, { PATH: process.env.PATH, JR_ROOT: jr, JR_FETCH_HOME: `${jr}-fh`, JR_REPO_URL: url, JR_REF: 'main', JR_ALSO: '', JR_STEPS: 'none', JR_ARTIFACTS: '',
-      JR_ARTIFACT_MAX: '100000', JR_CMD: Buffer.from(cmd).toString('base64'), ...insteadOf }, tok ? { NODE_AUTH_TOKEN: tok, GIT_TOKEN: tok, GIT_USER: 'x-access-token' } : {});
+    const insteadOf = {
+      GIT_CONFIG_COUNT: '1',
+      GIT_CONFIG_KEY_0: `url.file://${join(root, 'claudepilot.git')}.insteadOf`,
+      GIT_CONFIG_VALUE_0: url,
+    };
+    const r = runPod(
+      TEMPLATE,
+      {
+        PATH: process.env.PATH,
+        JR_ROOT: jr,
+        JR_FETCH_HOME: `${jr}-fh`,
+        JR_REPO_URL: url,
+        JR_REF: 'main',
+        JR_ALSO: '',
+        JR_STEPS: 'none',
+        JR_ARTIFACTS: '',
+        JR_ARTIFACT_MAX: '100000',
+        JR_CMD: Buffer.from(cmd).toString('base64'),
+        ...insteadOf,
+      },
+      tok ? { NODE_AUTH_TOKEN: tok, GIT_TOKEN: tok, GIT_USER: 'x-access-token' } : {},
+    );
     // What git would hand out from the fetch container's HOME, with its credential in the environment.
-    const ask = (urls: string[]) => spawnSync('bash', ['-c', urls.map(asksFor).join('\n')], { encoding: 'utf8',
-      env: { PATH: process.env.PATH, HOME: `${jr}-fh`, GIT_CONFIG_NOSYSTEM: '1', ...(tok ? { GIT_TOKEN: tok, GIT_USER: 'x-access-token' } : {}) } }).stdout;
+    const ask = (urls: string[]) =>
+      spawnSync('bash', ['-c', urls.map(asksFor).join('\n')], {
+        encoding: 'utf8',
+        env: {
+          PATH: process.env.PATH,
+          HOME: `${jr}-fh`,
+          GIT_CONFIG_NOSYSTEM: '1',
+          ...(tok ? { GIT_TOKEN: tok, GIT_USER: 'x-access-token' } : {}),
+        },
+      }).stdout;
     return { r, fetchHome: `${jr}-fh`, ask };
   };
-  const ev = podEvent(eventUrl, ['test ! -e "$HOME/.npmrc" && echo no npmrc', 'git config --global --get-regexp "^credential" || echo no helper', asksFor(eventUrl)].join('\n'), token);
+  const ev = podEvent(
+    eventUrl,
+    [
+      'test ! -e "$HOME/.npmrc" && echo no npmrc',
+      'git config --global --get-regexp "^credential" || echo no helper',
+      asksFor(eventUrl),
+    ].join('\n'),
+    token,
+  );
   assert.equal(ev.r.status, 0, ev.r.stdout + ev.r.stderr);
   assert.match(ev.r.stdout, /no npmrc\nno helper\n0\n/, 'T-401: the command has no npmrc, no git helper, no password for the Event URL');
   const npmrc = readFileSync(join(ev.fetchHome, '.npmrc'), 'utf8');
@@ -655,15 +1189,36 @@ test('the Job\'s own script: checkout, the command\'s exit code, the artifacts b
   assert.match(cfg, /useHttpPath = true/);
   assert.equal((cfg.match(/\[credential/g) ?? []).length, 1, 'one credential section, no global helper');
   assert.doesNotMatch(cfg, /^\[credential\]/m, 'no unscoped credential section');
-  assert.equal(ev.ask([eventUrl, 'https://github.com/isnanme/other.git', 'https://github.com/isnanme/event.git.evil/x', 'https://example.com/isnanme/event.git',
-    'https://github.com/isnanme/event', 'https://github.com/isnanme/event-x.git', 'https://github.com/isnanme/event.git/../other.git']), '1\n0\n0\n0\n0\n0\n0\n',
-  'a password for the Event URL only: not another path, a look-alike path, another host, the URL without .git, event-x.git or a /../ path');
+  assert.equal(
+    ev.ask([
+      eventUrl,
+      'https://github.com/isnanme/other.git',
+      'https://github.com/isnanme/event.git.evil/x',
+      'https://example.com/isnanme/event.git',
+      'https://github.com/isnanme/event',
+      'https://github.com/isnanme/event-x.git',
+      'https://github.com/isnanme/event.git/../other.git',
+    ]),
+    '1\n0\n0\n0\n0\n0\n0\n',
+    'a password for the Event URL only: not another path, a look-alike path, another host, the URL without .git, event-x.git or a /../ path',
+  );
   // claudepilot (its own URL, here the local bare repository): no npmrc and the global helper, in the fetch container's HOME; the command
   // sees neither.
-  const cp = podEvent(`file://${join(root, 'claudepilot.git')}`, 'test ! -e "$HOME/.npmrc" && echo no npmrc; git config --global --get credential.helper >/dev/null || echo no helper', token);
+  const cp = podEvent(
+    `file://${join(root, 'claudepilot.git')}`,
+    'test ! -e "$HOME/.npmrc" && echo no npmrc; git config --global --get credential.helper >/dev/null || echo no helper',
+    token,
+  );
   assert.match(cp.r.stdout, /no npmrc\nno helper\n/, 'the command: no npmrc, no helper');
-  assert.ok(existsSync(join(cp.fetchHome, '.npmrc')), 'with a token every repository gets the trusted userconfig (T-401), in the fetch HOME alone');
-  assert.match(readFileSync(join(cp.fetchHome, '.gitconfig'), 'utf8'), /^\[credential\]\n\thelper = /m, 'not Event: the global helper, in the fetch HOME');
+  assert.ok(
+    existsSync(join(cp.fetchHome, '.npmrc')),
+    'with a token every repository gets the trusted userconfig (T-401), in the fetch HOME alone',
+  );
+  assert.match(
+    readFileSync(join(cp.fetchHome, '.gitconfig'), 'utf8'),
+    /^\[credential\]\n\thelper = /m,
+    'not Event: the global helper, in the fetch HOME',
+  );
   const noToken = podEvent(eventUrl, 'true', undefined);
   assert.equal(noToken.r.status, 0, noToken.r.stdout + noToken.r.stderr);
   assert.ok(!existsSync(join(noToken.fetchHome, '.npmrc')), 'no token, no npmrc');
@@ -676,7 +1231,18 @@ test('--against and --keep-tests: parsed into the manifest, validated; absent, t
   assert.equal(none.JR_AGAINST, '');
   assert.equal(none.JR_KEEP, '');
   const w2 = world();
-  const r = w2.run(['--repo', 'claudepilot', '--ref', 'dev/x', '--against', 'abc1234def', '--keep-tests', 'a/x.test.ts,b/y.test.ts,.pilot/tests/test_x.py', '--', 'true']);
+  const r = w2.run([
+    '--repo',
+    'claudepilot',
+    '--ref',
+    'dev/x',
+    '--against',
+    'abc1234def',
+    '--keep-tests',
+    'a/x.test.ts,b/y.test.ts,.pilot/tests/test_x.py',
+    '--',
+    'true',
+  ]);
   assert.equal(r.code, 0, r.out);
   const e = envOf(yamlLoad(w2.applied1()) as Manifest);
   assert.equal(e.JR_AGAINST, 'abc1234def');
@@ -699,32 +1265,49 @@ test('--against and --keep-tests: parsed into the manifest, validated; absent, t
   assert.equal(w3.calls(), '');
 });
 
-test('the Job\'s own script: the proof (passes on the ref, fails on the other, kept test files), no proof, a missing ref; npm ci retried once', () => {
+test("the Job's own script: the proof (passes on the ref, fails on the other, kept test files), no proof, a missing ref; npm ci retried once", () => {
   const root = mkdtempSync(join(tmpdir(), 'cp-jobrun-proof-'));
   roots.push(root);
   const env0 = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
-  const git = (args: string[], cwd: string) => spawnSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', ...args], { cwd, encoding: 'utf8', env: env0 });
+  const git = (args: string[], cwd: string) =>
+    spawnSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', ...args], { cwd, encoding: 'utf8', env: env0 });
   const src = join(root, 'src');
   mkdirSync(src);
   git(['init', '-q', '-b', 'main'], src);
   writeFileSync(join(src, 'value.txt'), 'old');
   writeFileSync(join(src, 'package-lock.json'), '{}');
-  git(['add', '.'], src); git(['commit', '-qm', 'old'], src);
+  git(['add', '.'], src);
+  git(['commit', '-qm', 'old'], src);
   const oldSha = git(['rev-parse', 'HEAD'], src).stdout.trim();
   // The fix: the source changes, and the test file arrives with it.
   writeFileSync(join(src, 'value.txt'), 'new');
   writeFileSync(join(src, 'check.sh'), 'test "$(cat value.txt)" = new\n');
-  git(['add', '.'], src); git(['commit', '-qm', 'fix'], src);
+  git(['add', '.'], src);
+  git(['commit', '-qm', 'fix'], src);
   git(['clone', '-q', '--bare', src, join(root, 'claudepilot.git')], root);
   // A fake npm that fails until it has been called NPM_FAIL_UNTIL times (a flake), and counts its calls.
-  const bin = join(root, 'bin'); mkdirSync(bin);
-  writeFileSync(join(bin, 'npm'), `#!/bin/sh\necho x >> "${root}/npm.calls"\n[ "$(wc -l < "${root}/npm.calls")" -ge "\${NPM_FAIL_UNTIL:-2}" ] || exit 7\nmkdir -p node_modules\n`);
+  const bin = join(root, 'bin');
+  mkdirSync(bin);
+  writeFileSync(
+    join(bin, 'npm'),
+    `#!/bin/sh\necho x >> "${root}/npm.calls"\n[ "$(wc -l < "${root}/npm.calls")" -ge "\${NPM_FAIL_UNTIL:-2}" ] || exit 7\nmkdir -p node_modules\n`,
+  );
   chmodSync(join(bin, 'npm'), 0o755);
   const pod = (over: Record<string, string>) => {
     rmSync(join(root, 'npm.calls'), { force: true });
     return runPod(TEMPLATE, {
-      PATH: `${bin}:${process.env.PATH}`, JR_ROOT: join(root, `run-${hex(3)}`), JR_REPO_URL: `file://${join(root, 'claudepilot.git')}`, JR_REF: 'main', JR_ALSO: '',
-      JR_STEPS: 'none', JR_ARTIFACTS: '', JR_ARTIFACT_MAX: '1', JR_CMD: Buffer.from('bash check.sh').toString('base64'), NODE_NAME: 'k3s-master', ...over });
+      PATH: `${bin}:${process.env.PATH}`,
+      JR_ROOT: join(root, `run-${hex(3)}`),
+      JR_REPO_URL: `file://${join(root, 'claudepilot.git')}`,
+      JR_REF: 'main',
+      JR_ALSO: '',
+      JR_STEPS: 'none',
+      JR_ARTIFACTS: '',
+      JR_ARTIFACT_MAX: '1',
+      JR_CMD: Buffer.from('bash check.sh').toString('base64'),
+      NODE_NAME: 'k3s-master',
+      ...over,
+    });
   };
   const text = (r: ReturnType<typeof pod>) => r.stdout + r.stderr;
 
@@ -732,7 +1315,10 @@ test('the Job\'s own script: the proof (passes on the ref, fails on the other, k
   assert.equal(ok.status, 0, text(ok));
   assert.match(ok.stdout, /SUMMARY claudepilot@[0-9a-f]+ .* rc=0/);
   assert.match(ok.stdout, /SUMMARY-AGAINST claudepilot@[0-9a-f]+ tests-from=[0-9a-f]+ kept=check.sh run=\d+s rc=1/);
-  assert.match(ok.stdout, /=== JOB-RUN PROOF: passes on main \([0-9a-f]+\), fails on [0-9a-f]{40} \([0-9a-f]+\) \(rc=1\)\n=== JOB-RUN MEMORY [^\n]+\n=== JOB-RUN EXIT 0\n$/);
+  assert.match(
+    ok.stdout,
+    /=== JOB-RUN PROOF: passes on main \([0-9a-f]+\), fails on [0-9a-f]{40} \([0-9a-f]+\) \(rc=1\)\n=== JOB-RUN MEMORY [^\n]+\n=== JOB-RUN EXIT 0\n$/,
+  );
 
   const same = pod({ JR_AGAINST: 'main', JR_KEEP: 'check.sh' });
   assert.equal(same.status, 1, text(same));
@@ -764,13 +1350,30 @@ test('the Job\'s own script: the proof (passes on the ref, fails on the other, k
 
 test('T-365: job-run and gate Jobs prefer a node away from the portal (preferred: a required rule left every Job Pending)', () => {
   for (const name of ['job-run.yaml', 'gate-job.yaml']) {
-    const text = readFileSync(join(REPO, 'deploy/k3s-build', name), 'utf8').replace(/__MASTER_REQUIRED__/g, '').replace(/__[A-Z_]+__/g, 'x');
+    const text = readFileSync(join(REPO, 'deploy/k3s-build', name), 'utf8')
+      .replace(/__MASTER_REQUIRED__/g, '')
+      .replace(/__[A-Z_]+__/g, 'x');
     type Term = { weight: number; podAffinityTerm: { namespaces: string[]; labelSelector: { matchLabels: Record<string, string> } } };
-    const job = yamlLoad(text) as { spec: { template: { spec: { affinity?: { podAntiAffinity?: { requiredDuringSchedulingIgnoredDuringExecution?: unknown[]; preferredDuringSchedulingIgnoredDuringExecution?: Term[] } } } } } };
+    const job = yamlLoad(text) as {
+      spec: {
+        template: {
+          spec: {
+            affinity?: {
+              podAntiAffinity?: {
+                requiredDuringSchedulingIgnoredDuringExecution?: unknown[];
+                preferredDuringSchedulingIgnoredDuringExecution?: Term[];
+              };
+            };
+          };
+        };
+      };
+    };
     const anti = job.spec.template.spec.affinity?.podAntiAffinity;
     // Never required: k3s-master's memory requests were at 96% (2026-10-15) and a required rule kept the gate from scheduling at all.
     assert.equal(anti?.requiredDuringSchedulingIgnoredDuringExecution, undefined, `${name}: no required anti-affinity`);
-    const portal = (anti?.preferredDuringSchedulingIgnoredDuringExecution ?? []).find((t) => t.podAffinityTerm.labelSelector.matchLabels.app === 'claudepilot-portal');
+    const portal = (anti?.preferredDuringSchedulingIgnoredDuringExecution ?? []).find(
+      (t) => t.podAffinityTerm.labelSelector.matchLabels.app === 'claudepilot-portal',
+    );
     assert.ok(portal, `${name}: a preferred anti-affinity to the portal pod (label app=claudepilot-portal)`);
     assert.equal(portal.weight, 100);
     assert.deepEqual(portal.podAffinityTerm.namespaces, ['isnan-claudepilot']);
@@ -780,34 +1383,77 @@ test('T-365: job-run and gate Jobs prefer a node away from the portal (preferred
 });
 
 test('T-524: the heavy Jobs prefer a node other than the control plane (preferred only) and request all the memory they may use', () => {
-  type Pod = { affinity?: { nodeAffinity?: { requiredDuringSchedulingIgnoredDuringExecution?: unknown; preferredDuringSchedulingIgnoredDuringExecution?: unknown } };
-    containers: { resources: { requests: { memory: string }; limits: { memory: string } } }[]; initContainers?: { resources: { requests: { memory: string }; limits: { memory: string } } }[];
-    volumes?: { name: string; emptyDir?: { sizeLimit?: string } }[] };
-  const gi = (v: string) => { const m = /^(\d+)(Gi|Mi)$/.exec(v); assert.ok(m, v); return Number(m[1]) / (m[2] === 'Mi' ? 1024 : 1); };
+  type Pod = {
+    affinity?: {
+      nodeAffinity?: {
+        requiredDuringSchedulingIgnoredDuringExecution?: unknown;
+        preferredDuringSchedulingIgnoredDuringExecution?: unknown;
+      };
+    };
+    containers: { resources: { requests: { memory: string }; limits: { memory: string } } }[];
+    initContainers?: { resources: { requests: { memory: string }; limits: { memory: string } } }[];
+    volumes?: { name: string; emptyDir?: { sizeLimit?: string } }[];
+  };
+  const gi = (v: string) => {
+    const m = /^(\d+)(Gi|Mi)$/.exec(v);
+    assert.ok(m, v);
+    return Number(m[1]) / (m[2] === 'Mi' ? 1024 : 1);
+  };
   for (const name of ['job-run.yaml', 'gate-job.yaml', 'browser-job.yaml']) {
-    const text = readFileSync(join(REPO, 'deploy/k3s-build', name), 'utf8').replace(/__MASTER_REQUIRED__/g, '').replace(/__MEMORY__/g, '4Gi').replace(/__TMP_SIZE__/g, '2Gi').replace(/__[A-Z_]+__/g, 'x');
+    const text = readFileSync(join(REPO, 'deploy/k3s-build', name), 'utf8')
+      .replace(/__MASTER_REQUIRED__/g, '')
+      .replace(/__MEMORY__/g, '4Gi')
+      .replace(/__TMP_SIZE__/g, '2Gi')
+      .replace(/__[A-Z_]+__/g, 'x');
     const pod = (yamlLoad(text) as { spec: { template: { spec: Pod } } }).spec.template.spec;
     const na = pod.affinity?.nodeAffinity;
-    assert.equal(na?.requiredDuringSchedulingIgnoredDuringExecution, undefined, `${name}: never required (a required rule left every Job Pending)`);
-    assert.deepEqual(na?.preferredDuringSchedulingIgnoredDuringExecution, [{ weight: 100, preference: { matchExpressions: [{ key: 'node-role.kubernetes.io/control-plane', operator: 'DoesNotExist' }] } }], name);
-    for (const c of [...pod.containers, ...(pod.initContainers ?? [])]) assert.equal(c.resources.requests.memory, c.resources.limits.memory, `${name}: memory request = limit`);
+    assert.equal(
+      na?.requiredDuringSchedulingIgnoredDuringExecution,
+      undefined,
+      `${name}: never required (a required rule left every Job Pending)`,
+    );
+    assert.deepEqual(
+      na?.preferredDuringSchedulingIgnoredDuringExecution,
+      [{ weight: 100, preference: { matchExpressions: [{ key: 'node-role.kubernetes.io/control-plane', operator: 'DoesNotExist' }] } }],
+      name,
+    );
+    for (const c of [...pod.containers, ...(pod.initContainers ?? [])])
+      assert.equal(c.resources.requests.memory, c.resources.limits.memory, `${name}: memory request = limit`);
     const tmp = pod.volumes?.find((v) => v.name === 'tmp')?.emptyDir?.sizeLimit;
     const lim = pod.containers[0]?.resources.limits.memory ?? '';
-    if (tmp) assert.ok(gi(tmp) < gi(lim), `${name}: the in-memory /tmp (${tmp}) fits inside the limit (${lim}) with room for the processes`);
+    if (tmp)
+      assert.ok(gi(tmp) < gi(lim), `${name}: the in-memory /tmp (${tmp}) fits inside the limit (${lim}) with room for the processes`);
   }
   // The label the rule names is on k3s-master (kubectl get nodes --show-labels, 2026-10-15): node-role.kubernetes.io/control-plane=true.
 });
 
 // T-426: --pool-env NAME, the Secrets pool's scoped test credentials (E2E_CF_ACCESS_*) for the command. Values made at runtime, never literals.
-const POOL_SECRET = 'E2E_CF_ACCESS_CLIENT_SECRET', POOL_ID = 'E2E_CF_ACCESS_CLIENT_ID';
+const POOL_SECRET = 'E2E_CF_ACCESS_CLIENT_SECRET',
+  POOL_ID = 'E2E_CF_ACCESS_CLIENT_ID';
 
 test('T-426 --pool-env: the value goes on stdin into the Secret and reaches the run container by secretKeyRef; not fetch, argv, the spec or the log', () => {
   const w = world();
-  const secret = `cs${hex(20)}`, id = `ci${hex(12)}`;
+  const secret = `cs${hex(20)}`,
+    id = `ci${hex(12)}`;
   // The command prints both: the streamed output and the log file are masked for them.
   writeFileSync(join(w.root, 'scenario.json'), JSON.stringify({ rc: 0, log: jobLog(w.root, 0, `header ${secret} id ${id}\n`) }));
-  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--pool-env', POOL_SECRET, '--pool-env', POOL_ID, '--pool-env', POOL_SECRET, '--', 'npm run e2e'],
-    { [POOL_SECRET]: secret, [POOL_ID]: id });
+  const r = w.run(
+    [
+      '--repo',
+      'claudepilot',
+      '--ref',
+      'main',
+      '--pool-env',
+      POOL_SECRET,
+      '--pool-env',
+      POOL_ID,
+      '--pool-env',
+      POOL_SECRET,
+      '--',
+      'npm run e2e',
+    ],
+    { [POOL_SECRET]: secret, [POOL_ID]: id },
+  );
   assert.equal(r.code, 0, r.out);
   const text = w.applied1();
   const m = yamlLoad(text) as Manifest;
@@ -819,7 +1465,11 @@ test('T-426 --pool-env: the value goes on stdin into the Secret and reaches the 
     { name: `JR_POOL_${POOL_SECRET}`, valueFrom: { secretKeyRef: { name: job, key: POOL_SECRET } } },
     { name: `JR_POOL_${POOL_ID}`, valueFrom: { secretKeyRef: { name: job, key: POOL_ID } } },
   ]);
-  assert.deepEqual(Object.keys(fetchEnvOf(m)).filter((n) => n.startsWith('E2E_')), [], 'the fetch container does not get them');
+  assert.deepEqual(
+    Object.keys(fetchEnvOf(m)).filter((n) => n.startsWith('E2E_')),
+    [],
+    'the fetch container does not get them',
+  );
   // The Secret (on stdin) holds them; nothing else does.
   const sec = readFileSync(join(w.root, `secret-${job}.env`), 'utf8');
   assert.ok(sec.includes(`\n${POOL_SECRET}=${secret}\n`) && sec.includes(`\n${POOL_ID}=${id}\n`), 'both values are in the Secret');
@@ -840,8 +1490,16 @@ test('T-426 without --pool-env the run container has no secretKeyRef at all (T-4
   const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--', 'true'], { [POOL_SECRET]: `cs${hex(20)}` });
   assert.equal(r.code, 0, r.out);
   const m = yamlLoad(w.applied1()) as Manifest;
-  assert.deepEqual(container(m).env.filter((e) => e.valueFrom?.secretKeyRef).map((e) => e.name), []);
-  assert.ok(!readFileSync(join(w.root, `secret-${m.metadata.name}.env`), 'utf8').includes(POOL_SECRET), 'a pool variable is copied only when named');
+  assert.deepEqual(
+    container(m)
+      .env.filter((e) => e.valueFrom?.secretKeyRef)
+      .map((e) => e.name),
+    [],
+  );
+  assert.ok(
+    !readFileSync(join(w.root, `secret-${m.metadata.name}.env`), 'utf8').includes(POOL_SECRET),
+    'a pool variable is copied only when named',
+  );
 });
 
 test('T-426 --pool-env refusals, before any kubectl call: a name outside E2E_CF_ACCESS_*, a non-name (not echoed), an unset, empty or multi-line one', () => {
@@ -883,8 +1541,12 @@ test('T-426 --pool-env: a pasted value that looks like a variable name (lowercas
 test('T-426 --pool-env: refuses to run under xtrace, which would print the values', () => {
   const w = world();
   const secret = `cs${hex(20)}`;
-  const r = spawnSync('bash', ['-x', SCRIPT, '--repo', 'claudepilot', '--ref', 'main', '--pool-env', POOL_SECRET, '--', 'true'],
-    { env: { PATH: process.env.PATH ?? '', HOME: w.root, [POOL_SECRET]: secret }, cwd: w.root, encoding: 'utf8', timeout: 30_000 });
+  const r = spawnSync('bash', ['-x', SCRIPT, '--repo', 'claudepilot', '--ref', 'main', '--pool-env', POOL_SECRET, '--', 'true'], {
+    env: { PATH: process.env.PATH ?? '', HOME: w.root, [POOL_SECRET]: secret },
+    cwd: w.root,
+    encoding: 'utf8',
+    timeout: 30_000,
+  });
   assert.equal(r.status, 2);
   assert.match(r.stderr, /refuses to run under xtrace/);
   assert.ok(!(r.stdout + r.stderr).includes(secret));
@@ -902,7 +1564,10 @@ test('T-426 --pool-env: an artifact that holds a value is deleted after unpackin
   const log = `=== JOB-RUN ARTIFACTS BEGIN\n${tgz}\n\n=== JOB-RUN ARTIFACTS END\n=== JOB-RUN EXIT 0\n`;
   writeFileSync(join(w.root, 'scenario.json'), JSON.stringify({ rc: 0, log }));
   const out = join(w.root, 'out');
-  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--pool-env', POOL_SECRET, '--artifacts', 'reports', '--out', out, '--', 'true'], { [POOL_SECRET]: secret });
+  const r = w.run(
+    ['--repo', 'claudepilot', '--ref', 'main', '--pool-env', POOL_SECRET, '--artifacts', 'reports', '--out', out, '--', 'true'],
+    { [POOL_SECRET]: secret },
+  );
   assert.equal(r.code, 3, r.out);
   assert.match(r.out, /a --pool-env credential was in the artifact .*trace\.txt: deleted/);
   assert.ok(!r.out.includes(secret), 'the value is not shown');
@@ -920,7 +1585,12 @@ test('T-426 the option parser echoes only a plain option name: --pool-env=<value
   const w = world();
   const v = hex(32); // 64 hex characters, built at runtime
   assert.equal(v.length, 64);
-  const cases = [[`--pool-env=${v}`, '--', 'true'], ['--pool-env', POOL_SECRET, v, '--', 'true'], [`--${v}`, '--', 'true'], [v, '--', 'true']];
+  const cases = [
+    [`--pool-env=${v}`, '--', 'true'],
+    ['--pool-env', POOL_SECRET, v, '--', 'true'],
+    [`--${v}`, '--', 'true'],
+    [v, '--', 'true'],
+  ];
   for (const rest of cases) {
     const r = w.run(['--repo', 'claudepilot', '--ref', 'main', ...rest], { [POOL_SECRET]: v });
     assert.equal(r.code, 2, r.out);
@@ -935,7 +1605,7 @@ test('T-426 the option parser echoes only a plain option name: --pool-env=<value
   assert.match(r.out, /unknown option --bogus /);
 });
 
-test('T-426 --pool-env: a command that holds a value (expanded in the caller\'s shell) is refused, naming the variable only; a single-quoted variable passes', () => {
+test("T-426 --pool-env: a command that holds a value (expanded in the caller's shell) is refused, naming the variable only; a single-quoted variable passes", () => {
   const w = world();
   const secret = `cs${hex(20)}`;
   const over = { [POOL_SECRET]: secret };
@@ -967,10 +1637,16 @@ test('T-426 --pool-env: compressed artifacts cannot be scanned, so they are dele
   writeFileSync(join(art, 'reports/clean.xml'), '<testsuites tests="1"/>');
   writeFileSync(join(w.root, 'scenario.json'), JSON.stringify({ rc: 0, log: artifactLog(art) }));
   const out = join(w.root, 'out');
-  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--pool-env', POOL_SECRET, '--artifacts', 'reports', '--out', out, '--', 'true'], { [POOL_SECRET]: secret });
+  const r = w.run(
+    ['--repo', 'claudepilot', '--ref', 'main', '--pool-env', POOL_SECRET, '--artifacts', 'reports', '--out', out, '--', 'true'],
+    { [POOL_SECRET]: secret },
+  );
   assert.equal(r.code, 3, r.out);
   for (const f of ['trace.gz', 'data/trace.zip', 'renamed.bin']) {
-    assert.match(r.out, new RegExp(`a compressed artifact cannot be checked for the credentials: .*reports/${f.replace('.', '\\.')}: deleted`));
+    assert.match(
+      r.out,
+      new RegExp(`a compressed artifact cannot be checked for the credentials: .*reports/${f.replace('.', '\\.')}: deleted`),
+    );
     assert.ok(!existsSync(join(out, 'reports', f)), `${f} is deleted`);
   }
   assert.ok(existsSync(join(out, 'reports/clean.xml')), 'a clean plain file stays');
@@ -987,14 +1663,24 @@ test('T-426 --pool-env: a clean artifact set keeps rc 0, and the packed copy (ar
   const secret = `cs${hex(20)}`;
   // A grep shim that records, when the scan runs, whether the packed copy still exists in the script's work folder.
   const shim = join(w.root, 'bin/grep');
-  writeFileSync(shim, '#!/bin/bash\nif [ "$1" = -rlaFZ ]; then echo ran >> "$FAKE/scan-ran"; ls "$TMPDIR"/cp-job-run-*/art.b64 >> "$FAKE/art-seen" 2>/dev/null; fi\nexec /bin/grep "$@"\n');
+  writeFileSync(
+    shim,
+    '#!/bin/bash\nif [ "$1" = -rlaFZ ]; then echo ran >> "$FAKE/scan-ran"; ls "$TMPDIR"/cp-job-run-*/art.b64 >> "$FAKE/art-seen" 2>/dev/null; fi\nexec /bin/grep "$@"\n',
+  );
   chmodSync(shim, 0o755);
   const out = join(w.root, 'out');
-  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--pool-env', POOL_SECRET, '--artifacts', 'reports', '--out', out, '--', 'true'], { [POOL_SECRET]: secret });
+  const r = w.run(
+    ['--repo', 'claudepilot', '--ref', 'main', '--pool-env', POOL_SECRET, '--artifacts', 'reports', '--out', out, '--', 'true'],
+    { [POOL_SECRET]: secret },
+  );
   assert.equal(r.code, 0, r.out);
   assert.ok(existsSync(join(out, 'reports/junit.xml')), 'the clean artifact is kept');
   assert.ok(existsSync(join(w.root, 'scan-ran')), 'the scan ran (the shim saw it)');
-  assert.equal(readFileSync(join(w.root, 'art-seen'), 'utf8'), '', 'art.b64 was already deleted when the scan ran (the file is made empty by the redirect either way)');
+  assert.equal(
+    readFileSync(join(w.root, 'art-seen'), 'utf8'),
+    '',
+    'art.b64 was already deleted when the scan ran (the file is made empty by the redirect either way)',
+  );
 });
 
 // S1f (review 7121): the --out scan fails closed; an encoded copy is a known limit.
@@ -1005,7 +1691,10 @@ test('T-426 --pool-env: a scan that fails (grep exit 2) is red, rc 3, and every 
   writeFileSync(shim, '#!/bin/bash\nif [ "$1" = -rlaFZ ]; then echo "grep: scan stub failed" >&2; exit 2; fi\nexec /bin/grep "$@"\n');
   chmodSync(shim, 0o755);
   const out = join(w.root, 'out');
-  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--pool-env', POOL_SECRET, '--artifacts', 'reports', '--out', out, '--', 'true'], { [POOL_SECRET]: secret });
+  const r = w.run(
+    ['--repo', 'claudepilot', '--ref', 'main', '--pool-env', POOL_SECRET, '--artifacts', 'reports', '--out', out, '--', 'true'],
+    { [POOL_SECRET]: secret },
+  );
   assert.equal(r.code, 3, r.out);
   assert.match(r.out, /the artifacts could not be checked for the credentials \(the scan failed\): all deleted/);
   assert.ok(!existsSync(join(out, 'reports/junit.xml')), 'the unchecked artifact is deleted');
@@ -1022,7 +1711,10 @@ test('T-426 S1g O1 --pool-env: an artifact whose NAME holds a line break and who
   writeFileSync(join(art, 'reports/clean.xml'), '<testsuites tests="1"/>');
   writeFileSync(join(w.root, 'scenario.json'), JSON.stringify({ rc: 0, log: artifactLog(art) }));
   const out = join(w.root, 'out');
-  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--pool-env', POOL_SECRET, '--artifacts', 'reports', '--out', out, '--', 'true'], { [POOL_SECRET]: secret });
+  const r = w.run(
+    ['--repo', 'claudepilot', '--ref', 'main', '--pool-env', POOL_SECRET, '--artifacts', 'reports', '--out', out, '--', 'true'],
+    { [POOL_SECRET]: secret },
+  );
   assert.equal(r.code, 3, r.out);
   assert.ok(!existsSync(join(out, 'reports', 'a\nb.txt')), 'the file with the line break in its name is deleted');
   assert.ok(existsSync(join(out, 'reports/clean.xml')), 'a clean file stays');
@@ -1033,12 +1725,22 @@ test('T-426 S1g O1 --pool-env: an artifact whose NAME holds a line break and who
 test('T-426 S1g C3 --pool-env: scan failed AND find failed: every unpacked artifact is still deleted (rc 3)', () => {
   const w = world();
   const secret = `cs${hex(20)}`;
-  writeFileSync(join(w.root, 'bin/grep'), '#!/bin/bash\nif [ "$1" = -rlaFZ ]; then echo "grep: scan stub failed" >&2; exit 2; fi\nexec /bin/grep "$@"\n');
+  writeFileSync(
+    join(w.root, 'bin/grep'),
+    '#!/bin/bash\nif [ "$1" = -rlaFZ ]; then echo "grep: scan stub failed" >&2; exit 2; fi\nexec /bin/grep "$@"\n',
+  );
   const realFind = spawnSync('sh', ['-c', 'command -v find'], { encoding: 'utf8' }).stdout.trim();
-  writeFileSync(join(w.root, 'bin/find'), `#!/bin/bash\nfor a in "$@"; do [ "$a" = -print0 ] && { echo "find: stub failed" >&2; exit 1; }; done\nexec ${realFind} "$@"\n`);
-  chmodSync(join(w.root, 'bin/grep'), 0o755); chmodSync(join(w.root, 'bin/find'), 0o755);
+  writeFileSync(
+    join(w.root, 'bin/find'),
+    `#!/bin/bash\nfor a in "$@"; do [ "$a" = -print0 ] && { echo "find: stub failed" >&2; exit 1; }; done\nexec ${realFind} "$@"\n`,
+  );
+  chmodSync(join(w.root, 'bin/grep'), 0o755);
+  chmodSync(join(w.root, 'bin/find'), 0o755);
   const out = join(w.root, 'out');
-  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--pool-env', POOL_SECRET, '--artifacts', 'reports', '--out', out, '--', 'true'], { [POOL_SECRET]: secret });
+  const r = w.run(
+    ['--repo', 'claudepilot', '--ref', 'main', '--pool-env', POOL_SECRET, '--artifacts', 'reports', '--out', out, '--', 'true'],
+    { [POOL_SECRET]: secret },
+  );
   assert.equal(r.code, 3, r.out);
   assert.match(r.out, /all deleted/);
   assert.ok(!existsSync(join(out, 'reports/junit.xml')), 'nothing is left although find failed');
@@ -1051,7 +1753,24 @@ const poolArtifacts = (w: ReturnType<typeof world>, secret: string, files: Recor
   for (const [n, b] of Object.entries(files)) writeFileSync(join(art, 'reports', n), b);
   writeFileSync(join(w.root, 'scenario.json'), JSON.stringify({ rc: 0, log: artifactLog(art) }));
   const out = join(w.root, `out-${hex(3)}`);
-  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--pool-env', POOL_SECRET, '--artifacts', 'reports', '--out', out, ...extraArgs, '--', 'true'], { [POOL_SECRET]: secret });
+  const r = w.run(
+    [
+      '--repo',
+      'claudepilot',
+      '--ref',
+      'main',
+      '--pool-env',
+      POOL_SECRET,
+      '--artifacts',
+      'reports',
+      '--out',
+      out,
+      ...extraArgs,
+      '--',
+      'true',
+    ],
+    { [POOL_SECRET]: secret },
+  );
   return { r, out };
 };
 
@@ -1061,7 +1780,11 @@ test('T-426 S1h N1 --pool-env: an artifact named after the value leaks it nowher
   for (const secret of [`cs${hex(20)}`, `cs${hex(10)}+${hex(6)}=`]) {
     const w = world();
     const gz = spawnSync('gzip', ['-c'], { input: 'nothing\n' }).stdout;
-    const { r, out } = poolArtifacts(w, secret, { [`${secret}.txt`]: `x ${secret}\n`, [`${secret}.gz`]: gz, 'clean.xml': '<testsuites tests="1"/>' });
+    const { r, out } = poolArtifacts(w, secret, {
+      [`${secret}.txt`]: `x ${secret}\n`,
+      [`${secret}.gz`]: gz,
+      'clean.xml': '<testsuites tests="1"/>',
+    });
     assert.equal(r.code, 3, r.out);
     assert.ok(!r.out.includes(secret), 'the value is not in stdout or stderr');
     assert.ok(!w.log().includes(secret), 'the value is not in the log');
@@ -1077,7 +1800,12 @@ test('T-426 S1h N1 --pool-env: a name with a line break, a CR or a dash first is
   const secret = `cs${hex(20)}`;
   const gz = spawnSync('gzip', ['-c'], { input: 'nothing\n' }).stdout;
   const { r, out } = poolArtifacts(w, secret, {
-    'a\nFORGED job-run: ok.txt': `x ${secret}\n`, 'c\rd.gz': gz, '\n': `x ${secret}\n`, '-rf': `x ${secret}\n`, '--version.txt': `x ${secret}\n`, 'clean.xml': '<testsuites tests="1"/>',
+    'a\nFORGED job-run: ok.txt': `x ${secret}\n`,
+    'c\rd.gz': gz,
+    '\n': `x ${secret}\n`,
+    '-rf': `x ${secret}\n`,
+    '--version.txt': `x ${secret}\n`,
+    'clean.xml': '<testsuites tests="1"/>',
   });
   assert.equal(r.code, 3, r.out);
   assert.ok(!r.out.includes(secret));
@@ -1085,7 +1813,8 @@ test('T-426 S1h N1 --pool-env: a name with a line break, a CR or a dash first is
   assert.match(r.out, /cannot be checked for the credentials: \S*reports\/c\?d\.gz: deleted/);
   assert.match(r.out, /in the artifact \S*reports\/\?: deleted/);
   assert.ok(!/^FORGED/m.test(r.out) && !r.out.includes('\r'), 'no line of its own, no CR');
-  for (const l of r.out.split('\n').filter((x) => x.includes('artifact'))) assert.match(l, /^[A-Za-z0-9 .:_()/?*-]*$/, `a plain line: ${l}`);
+  for (const l of r.out.split('\n').filter((x) => x.includes('artifact')))
+    assert.match(l, /^[A-Za-z0-9 .:_()/?*-]*$/, `a plain line: ${l}`);
   for (const n of ['-rf', '--version.txt']) {
     assert.ok(r.out.includes(`reports/${n}: deleted`), `${n} is named and deleted`);
     assert.ok(!existsSync(join(out, 'reports', n)));
@@ -1102,8 +1831,12 @@ test('T-426 S1h N2 --pool-env: the scan is clean but find fails on -print0: fail
     const secret = `cs${hex(20)}`;
     writeFileSync(join(w.root, 'bin/grep'), `#!/bin/bash\nif [ "$1" = -rlaFZ ]; then exit ${grepExit}; fi\nexec /bin/grep "$@"\n`);
     const realFind = spawnSync('sh', ['-c', 'command -v find'], { encoding: 'utf8' }).stdout.trim();
-    writeFileSync(join(w.root, 'bin/find'), `#!/bin/bash\nfor a in "$@"; do [ "$a" = -print0 ] && { echo "find: stub failed" >&2; exit 1; }; done\nexec ${realFind} "$@"\n`);
-    chmodSync(join(w.root, 'bin/grep'), 0o755); chmodSync(join(w.root, 'bin/find'), 0o755);
+    writeFileSync(
+      join(w.root, 'bin/find'),
+      `#!/bin/bash\nfor a in "$@"; do [ "$a" = -print0 ] && { echo "find: stub failed" >&2; exit 1; }; done\nexec ${realFind} "$@"\n`,
+    );
+    chmodSync(join(w.root, 'bin/grep'), 0o755);
+    chmodSync(join(w.root, 'bin/find'), 0o755);
     const { r, out } = poolArtifacts(w, secret, { 'junit.xml': '<testsuites tests="1"/>', '.hidden': 'x' });
     assert.equal(r.code, 3, `grep exit ${grepExit}: ${r.out}`);
     assert.match(r.out, /could not be listed to check for compressed files: all deleted/);
@@ -1130,14 +1863,23 @@ test('T-426 S1h N3 --pool-env: a non-empty --out is refused in one plain line (r
   // A file in the place of the folder is refused too.
   const file = join(w.root, 'afile');
   writeFileSync(file, 'x');
-  assert.equal(w.run(args.map((a) => (a === out ? file : a)), { [POOL_SECRET]: secret }).code, 2);
+  assert.equal(
+    w.run(
+      args.map((a) => (a === out ? file : a)),
+      { [POOL_SECRET]: secret },
+    ).code,
+    2,
+  );
   // Without --pool-env nothing is deleted, so a used folder is allowed (as before).
   const plain = w.run(['--repo', 'claudepilot', '--ref', 'main', '--artifacts', 'reports', '--out', out, '--', 'true']);
   assert.equal(plain.code, 0, plain.out);
   // An empty existing folder is fine.
   const empty = join(w.root, 'empty');
   mkdirSync(empty);
-  const ok = w.run(args.map((a) => (a === out ? empty : a)), { [POOL_SECRET]: secret });
+  const ok = w.run(
+    args.map((a) => (a === out ? empty : a)),
+    { [POOL_SECRET]: secret },
+  );
   assert.equal(ok.code, 0, ok.out);
   assert.ok(existsSync(join(empty, 'reports/junit.xml')));
 });
@@ -1149,9 +1891,15 @@ test('T-426 --pool-env: a base64 copy of a value in an artifact is NOT caught (a
   mkdirSync(join(art, 'reports'), { recursive: true });
   writeFileSync(join(art, 'reports/encoded.txt'), `authorization: ${Buffer.from(secret).toString('base64')}\n`);
   const tgz = spawnSync('tar', ['-czf', '-', '-C', art, 'reports']).stdout.toString('base64');
-  writeFileSync(join(w.root, 'scenario.json'), JSON.stringify({ rc: 0, log: `=== JOB-RUN ARTIFACTS BEGIN\n${tgz}\n\n=== JOB-RUN ARTIFACTS END\n=== JOB-RUN EXIT 0\n` }));
+  writeFileSync(
+    join(w.root, 'scenario.json'),
+    JSON.stringify({ rc: 0, log: `=== JOB-RUN ARTIFACTS BEGIN\n${tgz}\n\n=== JOB-RUN ARTIFACTS END\n=== JOB-RUN EXIT 0\n` }),
+  );
   const out = join(w.root, 'out');
-  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--pool-env', POOL_SECRET, '--artifacts', 'reports', '--out', out, '--', 'true'], { [POOL_SECRET]: secret });
+  const r = w.run(
+    ['--repo', 'claudepilot', '--ref', 'main', '--pool-env', POOL_SECRET, '--artifacts', 'reports', '--out', out, '--', 'true'],
+    { [POOL_SECRET]: secret },
+  );
   assert.equal(r.code, 0, r.out);
   assert.ok(existsSync(join(out, 'reports/encoded.txt')), 'an encoded copy passes the scan: documented limit');
 });
@@ -1172,7 +1920,14 @@ test('S1d the Secret is created with `create -f -`, never `apply`: no last-appli
   const r = poolRun(w, secret);
   assert.equal(r.code, 0, r.out); // the fake exits 8 on an applied Secret and 7 on a created one that has an annotation
   assert.match(w.calls(), /^kubectl -n \S+ create -f -$/m);
-  assert.equal(w.calls().split('\n').filter((l) => / apply /.test(l)).length, 1, 'only the Job is applied');
+  assert.equal(
+    w
+      .calls()
+      .split('\n')
+      .filter((l) => / apply /.test(l)).length,
+    1,
+    'only the Job is applied',
+  );
 });
 
 test('S1d --pool-env: a value that is not printable ASCII is refused before any kubectl call, and shown nowhere', () => {
@@ -1186,7 +1941,7 @@ test('S1d --pool-env: a value that is not printable ASCII is refused before any 
   assert.equal(w.calls(), '');
 });
 
-test('S1d kubectl\'s env-file error can hold the value: the dry run failing shows nothing, says a fixed message, and leaves no orphan', () => {
+test("S1d kubectl's env-file error can hold the value: the dry run failing shows nothing, says a fixed message, and leaves no orphan", () => {
   const w = world();
   writeFileSync(join(w.root, 'fail'), JSON.stringify(['dry-run']));
   const secret = `cs${hex(20)}`;
@@ -1226,11 +1981,21 @@ const topLine = (used: string, pct: string) => `k3s-master   310m   7%   ${used}
 function placed(top: number | string | undefined, extra: string[] = [], over: Record<string, string> = {}, script = SCRIPT) {
   const w = world([], top === undefined ? {} : { top });
   const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', ...extra, '--', 'true'], over, script);
-  const required = r.code === 0 ? ((yamlLoad(w.applied1()) as Manifest).spec.template.spec.affinity as { nodeAffinity: NodeAff }).nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution : undefined;
+  const required =
+    r.code === 0
+      ? ((yamlLoad(w.applied1()) as Manifest).spec.template.spec.affinity as { nodeAffinity: NodeAff }).nodeAffinity
+          .requiredDuringSchedulingIgnoredDuringExecution
+      : undefined;
   return { r, w, required };
 }
-const away = (p: ReturnType<typeof placed>, what: string) => { assert.equal(p.r.code, 0, `${what}: ${p.r.out}`); assert.deepEqual(p.required, CP_RULE, `${what}: required rule`); };
-const kept = (p: ReturnType<typeof placed>, what: string) => { assert.equal(p.r.code, 0, `${what}: ${p.r.out}`); assert.equal(p.required, undefined, `${what}: no required rule`); };
+const away = (p: ReturnType<typeof placed>, what: string) => {
+  assert.equal(p.r.code, 0, `${what}: ${p.r.out}`);
+  assert.deepEqual(p.required, CP_RULE, `${what}: required rule`);
+};
+const kept = (p: ReturnType<typeof placed>, what: string) => {
+  assert.equal(p.r.code, 0, `${what}: ${p.r.out}`);
+  assert.equal(p.required, undefined, `${what}: no required rule`);
+};
 
 test('T-611: over the line the Job gets a REQUIRED rule away from the control plane, for a normal Job and --big', () => {
   for (const extra of [[], ['--big']]) {
@@ -1245,15 +2010,30 @@ test('T-611: over the line the Job gets a REQUIRED rule away from the control pl
 
 test('T-611: a normal Job well under the line, or when the metrics fail, keeps only the preferred rules (a metrics failure never blocks every Job)', () => {
   kept(placed(50), '50%');
-  assert.match(placed(50).r.out, /placement: the control-plane node is at 50% of its memory \(about \d+% with this Job; limit 85%\): preferred rules only/);
-  for (const [what, top] of [['API missing', undefined], ['kubectl fails', 'FAIL'], ['not a number', 'k3s-master <unknown> <unknown> <unknown> <unknown>\n'], ['empty', '']] as const) {
+  assert.match(
+    placed(50).r.out,
+    /placement: the control-plane node is at 50% of its memory \(about \d+% with this Job; limit 85%\): preferred rules only/,
+  );
+  for (const [what, top] of [
+    ['API missing', undefined],
+    ['kubectl fails', 'FAIL'],
+    ['not a number', 'k3s-master <unknown> <unknown> <unknown> <unknown>\n'],
+    ['empty', ''],
+  ] as const) {
     for (const extra of [[], ['--big']]) kept(placed(top, extra), `${what} ${extra.join(' ')}`);
   }
-  assert.match(placed(undefined).r.out, /placement: the control-plane node's memory is unknown \(metrics unavailable\): preferred rules only/);
-  assert.equal(world([], { top: 50 }).run(['--repo', 'claudepilot', '--ref', 'main', '--', 'true'], { JOB_RUN_MASTER_MAX_PCT: 'lots' }).code, 2, 'a bad line is a usage error');
+  assert.match(
+    placed(undefined).r.out,
+    /placement: the control-plane node's memory is unknown \(metrics unavailable\): preferred rules only/,
+  );
+  assert.equal(
+    world([], { top: 50 }).run(['--repo', 'claudepilot', '--ref', 'main', '--', 'true'], { JOB_RUN_MASTER_MAX_PCT: 'lots' }).code,
+    2,
+    'a bad line is a usage error',
+  );
 });
 
-test('T-611: headroom: use plus the Job\'s expected peak over the line keeps it off the master, though the use alone is under', () => {
+test("T-611: headroom: use plus the Job's expected peak over the line keeps it off the master, though the use alone is under", () => {
   away(placed(70), '70% + 2300Mi of a 12857Mi node is about 88%');
   kept(placed(60), '60% + 2300Mi of a 15000Mi node is about 75%, under 85%');
   kept(placed(50), '50% + 2300Mi is about 63%');
@@ -1265,7 +2045,7 @@ test('T-611: headroom: use plus the Job\'s expected peak over the line keeps it 
   away(placed(topLine('9Gi', '75%')), 'Gi is read too, headroom');
 });
 
-test('T-611 (coordinator 7806): a master at 74% does not take a Job of 4 GiB: use plus the Job\'s peak is counted, not the use alone', () => {
+test("T-611 (coordinator 7806): a master at 74% does not take a Job of 4 GiB: use plus the Job's peak is counted, not the use alone", () => {
   for (const [what, top, extra, over] of [
     ['default peak', topLine('11100Mi', '74%'), [], {}],
     ['a peak of 4 GiB (the request)', topLine('11100Mi', '74%'), [], { JOB_RUN_EXPECTED_PEAK_MI: '4096' }],
@@ -1273,18 +2053,28 @@ test('T-611 (coordinator 7806): a master at 74% does not take a Job of 4 GiB: us
   ] as const) {
     const p = placed(top, [...extra], { JOB_RUN_MASTER_MAX_PCT: '75', ...over });
     away(p, `74% ${what}`);
-    assert.match(p.w.log(), /^=== JOB-RUN PLACEMENT node=control-plane pct=74 projected=\d+ max=75 peak_mi=\d+ decision=required-away reason=headroom$/m, what);
+    assert.match(
+      p.w.log(),
+      /^=== JOB-RUN PLACEMENT node=control-plane pct=74 projected=\d+ max=75 peak_mi=\d+ decision=required-away reason=headroom$/m,
+      what,
+    );
   }
-  assert.match(placed(topLine('11100Mi', '74%'), [], { JOB_RUN_MASTER_MAX_PCT: '75', JOB_RUN_EXPECTED_PEAK_MI: '4096' }).r.out, /about 10\d%, over 75%/, 'the Job would take the master to about 100%');
+  assert.match(
+    placed(topLine('11100Mi', '74%'), [], { JOB_RUN_MASTER_MAX_PCT: '75', JOB_RUN_EXPECTED_PEAK_MI: '4096' }).r.out,
+    /about 10\d%, over 75%/,
+    'the Job would take the master to about 100%',
+  );
 });
 
 // These pin the edge logic at an explicit line of 75 (the default is 85 since T-731, 2026-10-17).
 const M75 = { JOB_RUN_MASTER_MAX_PCT: '75' };
 test('T-611 C3: the line is exact: at 75 a Job stays, one MiB over it goes away; the percentage-only fallback has the same edge', () => {
   // 9200Mi at 60%: (9200 + 2300) * 60 = 75 * 9200 * 1: exactly the line. 9199Mi is one MiB less allocatable-use: over.
-  const at = placed(topLine('9200Mi', '60%'), [], M75); kept(at, 'exactly at the line');
+  const at = placed(topLine('9200Mi', '60%'), [], M75);
+  kept(at, 'exactly at the line');
   assert.match(at.w.log(), /projected=75 max=75/);
-  const over = placed(topLine('9199Mi', '60%'), [], M75); away(over, 'just over the line');
+  const over = placed(topLine('9199Mi', '60%'), [], M75);
+  away(over, 'just over the line');
   assert.match(over.r.out, /about 76%, over 75%/, 'the projection is rounded up: it never reads "about 75%, over 75%"');
   kept(placed(topLine('lots', '75%'), [], M75), 'odd bytes at 75%: the percentage alone, at the line');
   away(placed(topLine('lots', '76%'), [], M75), 'odd bytes at 76%: the percentage alone, over');
@@ -1305,11 +2095,20 @@ test('T-611 C1: a reading or a setting with a leading zero is a decimal number (
   away(placed(topLine('9000Mi', '08%'), [], { JOB_RUN_EXPECTED_PEAK_MI: '99999' }), 'pct 08 with a big peak: headroom is still tested');
   away(placed(topLine('9000Mi', '50%'), [], { JOB_RUN_EXPECTED_PEAK_MI: '099999' }), 'peak 099999 is 99999');
   away(placed(topLine('09Gi', '70%'), []), 'bytes 09Gi at 70% is 9216 Mi: headroom over the line');
-  kept(placed(topLine('9000Mi', '05%'), [], { JOB_RUN_EXPECTED_PEAK_MI: '9000', JOB_RUN_MASTER_MAX_PCT: '011' }), 'max 011 is 11, not octal 9 (proj 10%)');
+  kept(
+    placed(topLine('9000Mi', '05%'), [], { JOB_RUN_EXPECTED_PEAK_MI: '9000', JOB_RUN_MASTER_MAX_PCT: '011' }),
+    'max 011 is 11, not octal 9 (proj 10%)',
+  );
 });
 
 test('T-611 C2: a number that could wrap in the arithmetic is refused (rc 2), never read as a negative that lets the Job on the master', () => {
-  const bad: [string, string][] = [['JOB_RUN_EXPECTED_PEAK_MI', '99999999999999999999'], ['JOB_RUN_EXPECTED_PEAK_MI', '1000000'], ['JOB_RUN_EXPECTED_PEAK_MI', 'garbage'], ['JOB_RUN_MASTER_MAX_PCT', '1000'], ['JOB_RUN_MASTER_MAX_PCT', '99999999999999999999']];
+  const bad: [string, string][] = [
+    ['JOB_RUN_EXPECTED_PEAK_MI', '99999999999999999999'],
+    ['JOB_RUN_EXPECTED_PEAK_MI', '1000000'],
+    ['JOB_RUN_EXPECTED_PEAK_MI', 'garbage'],
+    ['JOB_RUN_MASTER_MAX_PCT', '1000'],
+    ['JOB_RUN_MASTER_MAX_PCT', '99999999999999999999'],
+  ];
   for (const [name, val] of bad) {
     const p = placed(60, [], { [name]: val });
     assert.equal(p.r.code, 2, `${name}=${val}: ${p.r.out}`);
@@ -1323,7 +2122,10 @@ test('T-611: the placement decision, the node it ran on and a Pending wait are l
   const w = world([], { top: 90 });
   const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'true']);
   assert.equal(r.code, 0, r.out);
-  assert.match(w.log(), /^=== JOB-RUN PLACEMENT node=control-plane pct=90 projected=\d+ max=85 peak_mi=2300 decision=required-away reason=over$/m);
+  assert.match(
+    w.log(),
+    /^=== JOB-RUN PLACEMENT node=control-plane pct=90 projected=\d+ max=85 peak_mi=2300 decision=required-away reason=over$/m,
+  );
   assert.match(w.log(), /^=== JOB-RUN PLACEMENT node=k3s-master pct=90 decision=required-away queued=\d+s$/m, 'the node it ran on');
   const ok = world([], { top: 40 });
   ok.run(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'true']);
@@ -1332,14 +2134,20 @@ test('T-611: the placement decision, the node it ran on and a Pending wait are l
   none.run(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'true']);
   assert.match(none.log(), /^=== JOB-RUN PLACEMENT node=control-plane pct=unknown .* decision=preferred-metrics-unavailable$/m);
   const p = world([], { top: 88 });
-  writeFileSync(join(p.root, 'pending'), "0/2 nodes are available: 1 node(s) didn't match Pod's node affinity/selector, 1 Insufficient memory.");
+  writeFileSync(
+    join(p.root, 'pending'),
+    "0/2 nodes are available: 1 node(s) didn't match Pod's node affinity/selector, 1 Insufficient memory.",
+  );
   await p.start(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'true'], { JOB_RUN_START_WAIT_S: '1' }).done;
   assert.match(p.log(), /^=== JOB-RUN PLACEMENT pending=affinity pct=88 decision=waits-for-node2$/m);
 });
 
 test('T-611 C4 and QA Perf 7865: a Job that never starts on the required rule says "run it again" and leaves a final placement line', async () => {
   const w = world([], { top: 88 });
-  writeFileSync(join(w.root, 'pending'), "0/2 nodes are available: 1 node(s) didn't match Pod's node affinity/selector, 1 Insufficient memory.");
+  writeFileSync(
+    join(w.root, 'pending'),
+    "0/2 nodes are available: 1 node(s) didn't match Pod's node affinity/selector, 1 Insufficient memory.",
+  );
   const r = await w.start(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'true'], { JOB_RUN_START_WAIT_S: '1' }).done;
   assert.equal(r.code, 1, r.out);
   assert.match(r.out, /the Job did not start in 1s .*run it again, the master may have room now/);
@@ -1360,7 +2168,7 @@ function secretFails(text: string) {
   const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'true']);
   return { w, r, all: r.out + w.log() + w.calls() };
 }
-test('T-611: a Secret that cannot be created logs the kubectl exit code and a fixed category, not kubectl\'s text', () => {
+test("T-611: a Secret that cannot be created logs the kubectl exit code and a fixed category, not kubectl's text", () => {
   const sentinel = `sv${hex(16)}`;
   const cases: [string, string][] = [
     [`Error from server (Forbidden): secrets is forbidden: cannot create ${sentinel}`, 'not-allowed'],
@@ -1372,7 +2180,12 @@ test('T-611: a Secret that cannot be created logs the kubectl exit code and a fi
   for (const [text, cat] of cases) {
     const { w, r, all } = secretFails(text);
     assert.equal(r.code, 2, r.out);
-    assert.match(r.out, new RegExp(`could not create the Secret for claudepilot-job-[0-9a-f]{8} \\(kubectl exit 1, category: ${cat}; the reason is not shown\\)`));
+    assert.match(
+      r.out,
+      new RegExp(
+        `could not create the Secret for claudepilot-job-[0-9a-f]{8} \\(kubectl exit 1, category: ${cat}; the reason is not shown\\)`,
+      ),
+    );
     assert.match(w.log(), new RegExp(`^=== JOB-RUN SECRET-FAILED rc=1 category=${cat}$`, 'm'));
     assert.ok(!all.includes(sentinel), `kubectl's text (${cat}) is nowhere in the output, the log or the calls`);
     assert.ok(!all.includes(w.npmToken), 'the token is nowhere either');
@@ -1388,16 +2201,31 @@ function moved(first: number | string, second: number | string, patchFails = fal
   writeFileSync(join(w.root, 'top2.txt'), typeof second === 'number' ? topLine('9000Mi', `${second}%`) : second);
   if (patchFails) writeFileSync(join(w.root, 'patchfail'), '1');
   const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'true'], over);
-  return { w, r, patches: w.calls().split('\n').filter((l) => / patch job /.test(l)) };
+  return {
+    w,
+    r,
+    patches: w
+      .calls()
+      .split('\n')
+      .filter((l) => / patch job /.test(l)),
+  };
 }
 const REQ = 'requiredDuringSchedulingIgnoredDuringExecution';
 test('T-611 C5: 50% at create and 90% at release adds the required rule to the suspended Job before the release; the reverse drops it', () => {
   const up = moved(50, 90);
   assert.equal(up.r.code, 0, up.r.out);
   assert.equal(up.patches.length, 2, up.patches.join('\n'));
-  assert.match(up.patches[0] ?? '', new RegExp(`"affinity":\\{"nodeAffinity":\\{"${REQ}":\\{"nodeSelectorTerms":\\[\\{"matchExpressions":\\[\\{"key":"node-role.kubernetes.io/control-plane","operator":"DoesNotExist"\\}\\]\\}\\]\\}\\}\\}`));
+  assert.match(
+    up.patches[0] ?? '',
+    new RegExp(
+      `"affinity":\\{"nodeAffinity":\\{"${REQ}":\\{"nodeSelectorTerms":\\[\\{"matchExpressions":\\[\\{"key":"node-role.kubernetes.io/control-plane","operator":"DoesNotExist"\\}\\]\\}\\]\\}\\}\\}`,
+    ),
+  );
   assert.match(up.patches[1] ?? '', /\{"spec":\{"suspend":false\}\}/, 'the release comes after the affinity patch');
-  assert.match(up.r.out, /placement changed while queued: the rule away from the control-plane node was added: job-run: placement: the control-plane node is at 90%/);
+  assert.match(
+    up.r.out,
+    /placement changed while queued: the rule away from the control-plane node was added: job-run: placement: the control-plane node is at 90%/,
+  );
   assert.equal(up.r.out.split('\n').filter((l) => /placement changed while queued/.test(l)).length, 1, 'one line, once');
   assert.match(up.w.log(), /decision=required-away reason=over .*at=release changed-from=preferred/);
   assert.match(up.w.log(), /PLACEMENT node=\S+ pct=90 decision=required-away queued=/, 'the final line carries the decision that was used');
@@ -1413,7 +2241,13 @@ test('T-611 C5: 50% at create and 90% at release adds the required rule to the s
 });
 
 test('T-611 C5: an unchanged answer, or a reading that fails at release, patches no affinity (the first decision stands)', () => {
-  for (const [first, second] of [[50, 50], [80, 80], [80, 'FAIL'], [50, 'FAIL'], [80, 'k3s-master <unknown> <unknown> <unknown> <unknown>\n']] as const) {
+  for (const [first, second] of [
+    [50, 50],
+    [80, 80],
+    [80, 'FAIL'],
+    [50, 'FAIL'],
+    [80, 'k3s-master <unknown> <unknown> <unknown> <unknown>\n'],
+  ] as const) {
     const p = moved(first, second);
     assert.equal(p.r.code, 0, `${first} then ${second}: ${p.r.out}`);
     assert.equal(p.patches.length, 1, `${first} then ${second}: only the release: ${p.patches.join('\n')}`);
@@ -1421,8 +2255,16 @@ test('T-611 C5: an unchanged answer, or a reading that fails at release, patches
   }
   const failed = moved(80, 'FAIL').w.log();
   assert.match(failed, /decision=required-away queued=/, 'a failed second reading keeps the rule');
-  assert.match(failed, /^=== JOB-RUN PLACEMENT node=control-plane at=release reading=failed kept=required-away pct=80 \(the create-time reading\)$/m, 'the log says the release reading failed');
-  assert.match(failed, /^=== JOB-RUN PLACEMENT node=\S+ pct=80 decision=required-away queued=/m, 'the last line keeps the create-time percentage, not unknown');
+  assert.match(
+    failed,
+    /^=== JOB-RUN PLACEMENT node=control-plane at=release reading=failed kept=required-away pct=80 \(the create-time reading\)$/m,
+    'the log says the release reading failed',
+  );
+  assert.match(
+    failed,
+    /^=== JOB-RUN PLACEMENT node=\S+ pct=80 decision=required-away queued=/m,
+    'the last line keeps the create-time percentage, not unknown',
+  );
   assert.doesNotMatch(failed, /pct=unknown/);
 });
 
@@ -1449,9 +2291,20 @@ const body = (line: string | undefined) => {
   assert.ok(m, `a merge patch with a JSON body: ${line}`);
   return JSON.parse(m[1] as string) as unknown;
 };
-const manifestRule = (w: ReturnType<typeof world>) => ((yamlLoad(w.applied1()) as Manifest).spec.template.spec.affinity as { nodeAffinity: NodeAff }).nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution;
+const manifestRule = (w: ReturnType<typeof world>) =>
+  ((yamlLoad(w.applied1()) as Manifest).spec.template.spec.affinity as { nodeAffinity: NodeAff }).nodeAffinity
+    .requiredDuringSchedulingIgnoredDuringExecution;
 const patchOf = (rule: unknown) => ({ spec: { template: { spec: { affinity: { nodeAffinity: { [REQ]: rule } } } } } });
-const AVOID_RULE = { nodeSelectorTerms: [{ matchExpressions: [{ key: 'node-role.kubernetes.io/control-plane', operator: 'DoesNotExist' }, { key: 'kubernetes.io/hostname', operator: 'NotIn', values: ['k3s-master'] }] }] };
+const AVOID_RULE = {
+  nodeSelectorTerms: [
+    {
+      matchExpressions: [
+        { key: 'node-role.kubernetes.io/control-plane', operator: 'DoesNotExist' },
+        { key: 'kubernetes.io/hostname', operator: 'NotIn', values: ['k3s-master'] },
+      ],
+    },
+  ],
+};
 
 test('T-733 S5: the release patch is valid JSON, its whole shape is pinned, and it holds the same rule a Job made over the line holds', () => {
   const up = moved(50, 80);
@@ -1460,7 +2313,11 @@ test('T-733 S5: the release patch is valid JSON, its whole shape is pinned, and 
   // With the avoid list the node expression and the avoid expression are ONE term (an AND), in the patch as in the manifest.
   const avoid = moved(50, 80, false, { JOB_RUN_AVOID_NODES: 'k3s-master' });
   assert.deepEqual(body(avoid.patches[0]), patchOf(AVOID_RULE), 'the patch with the avoid list: one term, two expressions');
-  assert.deepEqual(manifestRule(moved(80, 80, false, { JOB_RUN_AVOID_NODES: 'k3s-master' }).w), AVOID_RULE, 'and the manifest holds the same');
+  assert.deepEqual(
+    manifestRule(moved(80, 80, false, { JOB_RUN_AVOID_NODES: 'k3s-master' }).w),
+    AVOID_RULE,
+    'and the manifest holds the same',
+  );
 });
 
 test('T-733 S5: a rule that was required at creation gets no second patch when the re-read still says over', () => {
@@ -1511,7 +2368,10 @@ test('T-611 S2: at the release the patch keeps the avoid rule: 50 to 80 adds the
   const down = moved(80, 50, false, avoid);
   assert.equal(down.r.code, 0, down.r.out);
   assert.equal(down.patches.length, 2, down.patches.join('\n'));
-  assert.ok((down.patches[0] ?? '').includes(`"${REQ}":${JSON.stringify(rule(HOST('k3s-master')))}`), `the avoid rule stays: ${down.patches[0]}`);
+  assert.ok(
+    (down.patches[0] ?? '').includes(`"${REQ}":${JSON.stringify(rule(HOST('k3s-master')))}`),
+    `the avoid rule stays: ${down.patches[0]}`,
+  );
   const same = moved(50, 50, false, avoid);
   assert.equal(same.patches.length, 1, 'an unchanged answer patches no affinity');
 });
@@ -1527,7 +2387,7 @@ test('T-611 S2b: a newline in JOB_RUN_AVOID_NODES is refused (rc 2, nothing crea
   }
 });
 
-test('T-611 S2b: a non-ASCII node name is refused (rc 2); the check is bytewise (LC_ALL=C), whatever the caller\'s locale', () => {
+test("T-611 S2b: a non-ASCII node name is refused (rc 2); the check is bytewise (LC_ALL=C), whatever the caller's locale", () => {
   for (const bad of ['é', 'k3s-mastér', 'a,ñ']) {
     for (const loc of ['C', 'en_US.UTF-8', 'C.UTF-8']) {
       const p = placed(50, [], { JOB_RUN_AVOID_NODES: bad, LC_ALL: loc });
@@ -1550,7 +2410,14 @@ test('T-611 S2b: node names of 1 and 253 characters pass; 254 is refused', () =>
 });
 
 test('T-611 S2b (D-65): a tab, DEL, a quote, a space and $ in JOB_RUN_AVOID_NODES are each refused (rc 2, no Job), and a name that holds one is not echoed', () => {
-  const cases: [string, string][] = [['a tab', 'k3s\tmaster'], ['DEL (0x7f)', 'k3s\x7fmaster'], ['a quote', 'k3s"master'], ['a single quote', "k3s'master"], ['a space', 'k3s master'], ['a dollar sign', 'k3s$master']];
+  const cases: [string, string][] = [
+    ['a tab', 'k3s\tmaster'],
+    ['DEL (0x7f)', 'k3s\x7fmaster'],
+    ['a quote', 'k3s"master'],
+    ['a single quote', "k3s'master"],
+    ['a space', 'k3s master'],
+    ['a dollar sign', 'k3s$master'],
+  ];
   for (const [what, bad] of cases) {
     const p = placed(50, [], { JOB_RUN_AVOID_NODES: bad });
     assert.equal(p.r.code, 2, `${what}: ${p.r.out}`);
@@ -1563,9 +2430,18 @@ test('T-611 S2b (D-65): a tab, DEL, a quote, a space and $ in JOB_RUN_AVOID_NODE
 
 test('T-611 S2b: the avoid-only Pending message and log line name the validated list; the final PLACEMENT line carries it', async () => {
   const w = world([], { top: 50 });
-  writeFileSync(join(w.root, 'pending'), "0/2 nodes are available: 1 node(s) didn't match Pod's node affinity/selector, 1 Insufficient memory.");
-  const r = await w.start(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'true'], { JOB_RUN_START_WAIT_S: '1', JOB_RUN_AVOID_NODES: 'k3s-master,node-9.lan' }).done;
-  assert.match(r.out, /is Pending: it may not run on the nodes named in JOB_RUN_AVOID_NODES \(k3s-master,node-9\.lan\), and no other node fits/);
+  writeFileSync(
+    join(w.root, 'pending'),
+    "0/2 nodes are available: 1 node(s) didn't match Pod's node affinity/selector, 1 Insufficient memory.",
+  );
+  const r = await w.start(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'true'], {
+    JOB_RUN_START_WAIT_S: '1',
+    JOB_RUN_AVOID_NODES: 'k3s-master,node-9.lan',
+  }).done;
+  assert.match(
+    r.out,
+    /is Pending: it may not run on the nodes named in JOB_RUN_AVOID_NODES \(k3s-master,node-9\.lan\), and no other node fits/,
+  );
   assert.match(w.log(), /^=== JOB-RUN PLACEMENT pending=affinity avoid=k3s-master,node-9\.lan decision=waits-off-avoided-nodes$/m);
   const ok = placed(50, [], { JOB_RUN_AVOID_NODES: 'k3s-master,node-9.lan' });
   assert.match(ok.w.log(), /^=== JOB-RUN PLACEMENT node=\S+ pct=50 decision=preferred queued=\d+s avoid=k3s-master,node-9\.lan$/m);
@@ -1584,9 +2460,15 @@ test('T-611 S2b: with the avoid rule on, a failed add patch stops the run (rc 2)
   const drop = moved(80, 50, true, avoid);
   assert.equal(drop.r.code, 0, drop.r.out);
   assert.match(drop.r.out, /the placement rule was not dropped .*runs on its create-time rule/);
-  assert.match(drop.w.log(), /^=== JOB-RUN PLACEMENT node=control-plane at=release outcome=drop-failed \(the rule was not dropped: the Job runs on its create-time rule\)$/m);
+  assert.match(
+    drop.w.log(),
+    /^=== JOB-RUN PLACEMENT node=control-plane at=release outcome=drop-failed \(the rule was not dropped: the Job runs on its create-time rule\)$/m,
+  );
   assert.match(drop.w.log(), /PLACEMENT node=\S+ pct=80 decision=required-away queued=\d+s avoid=k3s-master$/m);
-  assert.ok(drop.patches.some((l) => l.includes('suspend')), 'the Job was released');
+  assert.ok(
+    drop.patches.some((l) => l.includes('suspend')),
+    'the Job was released',
+  );
   const plain = moved(80, 50, true);
   assert.match(plain.w.log(), /outcome=drop-failed/);
 
@@ -1600,46 +2482,75 @@ test('T-611 S2b: with the avoid rule on, a failed add patch stops the run (rc 2)
 // ---- T-426 S1i (review 7888): the mask loop. The old awk loop (index, cut, index again) never ended when a value was or held the replacement
 // text. The mask is now one pass over the original line (MASKFN in job-run.sh). Each test has a hard timeout: a hang is a failure (awk gets 5 s,
 // a whole run 30 s).
-const maskFn = () => { const m = /^MASKFN='([^']*)'$/m.exec(readFileSync(SCRIPT, 'utf8')); assert.ok(m?.[1], 'MASKFN is in job-run.sh'); return m[1]; };
+const maskFn = () => {
+  const m = /^MASKFN='([^']*)'$/m.exec(readFileSync(SCRIPT, 'utf8'));
+  assert.ok(m?.[1], 'MASKFN is in job-run.sh');
+  return m[1];
+};
 function awkMask(masks: string[], line: string, repl = 'R') {
   const prog = `${maskFn()}\nBEGIN { nt = split(ENVIRON["JR_MASK"], toks, "\\n") }\n{ print mask($0, nt, toks, ENVIRON["JR_REPL"]) }`;
-  const r = spawnSync('awk', [prog], { env: { PATH: process.env.PATH ?? '/usr/bin:/bin', JR_MASK: masks.join('\n'), JR_REPL: repl }, input: `${line}\n`, encoding: 'utf8', timeout: 5000 });
+  const r = spawnSync('awk', [prog], {
+    env: { PATH: process.env.PATH ?? '/usr/bin:/bin', JR_MASK: masks.join('\n'), JR_REPL: repl },
+    input: `${line}\n`,
+    encoding: 'utf8',
+    timeout: 5000,
+  });
   assert.equal(r.status, 0, `awk ended (a hang is a failure): ${r.error?.message ?? r.stderr}`);
   return r.stdout.replace(/\n$/, '');
 }
 
-test('T-426 S1i the mask always ends and masks every hit: values that are or hold the replacement, overlapping, nested, adjacent, metacharacters', { timeout: 60_000 }, () => {
-  assert.equal(awkMask(['REDACTED'], 'a REDACTED b', 'REDACTED'), 'a REDACTED b', 'a value that IS the replacement');
-  assert.equal(awkMask(['xxREDACTEDxx'], 'p xxREDACTEDxx q xxREDACTEDxx', 'REDACTED'), 'p REDACTED q REDACTED', 'a value that holds it');
-  assert.equal(awkMask(['[redacted]'], 'v [redacted] w', '[redacted]'), 'v [redacted] w');
-  assert.equal(awkMask(['abcdefgh', 'efghijkl'], '<abcdefghijkl>'), '<R>', 'overlapping values leave no tail');
-  assert.equal(awkMask(['efghijkl', 'abcdefgh'], '<abcdefghijkl>'), '<R>', '... in either order');
-  assert.equal(awkMask(['abcdefghij', 'cdefghij'], 'x abcdefghij y'), 'x R y', 'one value inside another');
-  assert.equal(awkMask(['cdefghij', 'abcdefghij'], 'x abcdefghij y'), 'x R y');
-  assert.equal(awkMask(['aaaaaaaa'], 'aaaaaaaaaaaa'), 'R', 'a value that overlaps itself leaves no tail');
-  assert.equal(awkMask(['abcdefgh', 'ijklmnop'], 'abcdefghijklmnop'), 'R', 'adjacent values');
-  const meta = 'a.b*c+d?[e]\\f$g^h(i|j)&1', lookalike = 'aXb*c+d?[e]\\f$g^h(i|j)&1';
-  assert.equal(awkMask([meta, '(x|y)\\1&&&&'], `k ${meta} and ${lookalike} and (x|y)\\1&&&&`), 'k R and aXb*c+d?[e]\\f$g^h(i|j)&1 and R', 'regex and awk metacharacters are plain text; a lookalike stays');
-  assert.equal(awkMask(['abc', ''], 'abc abc'), 'abc abc', 'a value under 8 characters, or an empty one, masks nothing');
-  assert.equal(awkMask(['zzzzzzzz'], 'no hit here'), 'no hit here');
-  assert.equal(awkMask(['a&b\\&&&&c'], 'x a&b\\&&&&c y', '[redacted]'), 'x [redacted] y', 'an ampersand or a backslash in a value is not special in the replacement');
-});
+test(
+  'T-426 S1i the mask always ends and masks every hit: values that are or hold the replacement, overlapping, nested, adjacent, metacharacters',
+  { timeout: 60_000 },
+  () => {
+    assert.equal(awkMask(['REDACTED'], 'a REDACTED b', 'REDACTED'), 'a REDACTED b', 'a value that IS the replacement');
+    assert.equal(awkMask(['xxREDACTEDxx'], 'p xxREDACTEDxx q xxREDACTEDxx', 'REDACTED'), 'p REDACTED q REDACTED', 'a value that holds it');
+    assert.equal(awkMask(['[redacted]'], 'v [redacted] w', '[redacted]'), 'v [redacted] w');
+    assert.equal(awkMask(['abcdefgh', 'efghijkl'], '<abcdefghijkl>'), '<R>', 'overlapping values leave no tail');
+    assert.equal(awkMask(['efghijkl', 'abcdefgh'], '<abcdefghijkl>'), '<R>', '... in either order');
+    assert.equal(awkMask(['abcdefghij', 'cdefghij'], 'x abcdefghij y'), 'x R y', 'one value inside another');
+    assert.equal(awkMask(['cdefghij', 'abcdefghij'], 'x abcdefghij y'), 'x R y');
+    assert.equal(awkMask(['aaaaaaaa'], 'aaaaaaaaaaaa'), 'R', 'a value that overlaps itself leaves no tail');
+    assert.equal(awkMask(['abcdefgh', 'ijklmnop'], 'abcdefghijklmnop'), 'R', 'adjacent values');
+    const meta = 'a.b*c+d?[e]\\f$g^h(i|j)&1',
+      lookalike = 'aXb*c+d?[e]\\f$g^h(i|j)&1';
+    assert.equal(
+      awkMask([meta, '(x|y)\\1&&&&'], `k ${meta} and ${lookalike} and (x|y)\\1&&&&`),
+      'k R and aXb*c+d?[e]\\f$g^h(i|j)&1 and R',
+      'regex and awk metacharacters are plain text; a lookalike stays',
+    );
+    assert.equal(awkMask(['abc', ''], 'abc abc'), 'abc abc', 'a value under 8 characters, or an empty one, masks nothing');
+    assert.equal(awkMask(['zzzzzzzz'], 'no hit here'), 'no hit here');
+    assert.equal(
+      awkMask(['a&b\\&&&&c'], 'x a&b\\&&&&c y', '[redacted]'),
+      'x [redacted] y',
+      'an ampersand or a backslash in a value is not special in the replacement',
+    );
+  },
+);
 
-test('T-426 S1i a run whose --pool-env value holds REDACTED ends, and the value is nowhere (log stream, log file, artifact names)', { timeout: 120_000 }, () => {
-  for (const secret of [`REDACTED${hex(6)}`, `xx[redacted]${hex(6)}`]) {
-    const w = world();
-    writeFileSync(join(w.root, 'scenario.json'), JSON.stringify({ rc: 0, log: jobLog(w.root, 0, `header ${secret} end\n`) }));
-    const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--pool-env', POOL_SECRET, '--', 'npm run e2e'], { [POOL_SECRET]: secret });
-    assert.equal(r.code, 0, `ended (null = hung): ${r.out}`);
-    assert.ok(!r.out.includes(secret) && !w.log().includes(secret), 'the value is in neither the output nor the log');
-    assert.match(r.out, /header \S*redacted\S* end/i);
-  }
-  const secret = `REDACTED${hex(6)}`, w = world();
-  const gz = spawnSync('gzip', ['-c'], { input: 'nothing\n' }).stdout;
-  const { r } = poolArtifacts(w, secret, { [`${secret}.txt`]: `x ${secret}\n`, [`${secret}.gz`]: gz });
-  assert.equal(r.code, 3, `ended with the artifacts deleted (null = hung): ${r.out}`);
-  assert.ok(!r.out.includes(secret) && !w.log().includes(secret), 'the value is not shown in an artifact name either');
-});
+test(
+  'T-426 S1i a run whose --pool-env value holds REDACTED ends, and the value is nowhere (log stream, log file, artifact names)',
+  { timeout: 120_000 },
+  () => {
+    for (const secret of [`REDACTED${hex(6)}`, `xx[redacted]${hex(6)}`]) {
+      const w = world();
+      writeFileSync(join(w.root, 'scenario.json'), JSON.stringify({ rc: 0, log: jobLog(w.root, 0, `header ${secret} end\n`) }));
+      const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--pool-env', POOL_SECRET, '--', 'npm run e2e'], {
+        [POOL_SECRET]: secret,
+      });
+      assert.equal(r.code, 0, `ended (null = hung): ${r.out}`);
+      assert.ok(!r.out.includes(secret) && !w.log().includes(secret), 'the value is in neither the output nor the log');
+      assert.match(r.out, /header \S*redacted\S* end/i);
+    }
+    const secret = `REDACTED${hex(6)}`,
+      w = world();
+    const gz = spawnSync('gzip', ['-c'], { input: 'nothing\n' }).stdout;
+    const { r } = poolArtifacts(w, secret, { [`${secret}.txt`]: `x ${secret}\n`, [`${secret}.gz`]: gz });
+    assert.equal(r.code, 3, `ended with the artifacts deleted (null = hung): ${r.out}`);
+    assert.ok(!r.out.includes(secret) && !w.log().includes(secret), 'the value is not shown in an artifact name either');
+  },
+);
 
 // T-731 (merged with T-611 S2b, one lineage): the reuse tests below build scratch copies of the two files with one edit each (the mutation:
 // the same check must fail on the mutant).
@@ -1647,7 +2558,8 @@ test('T-426 S1i a run whose --pool-env value holds REDACTED ends, and the value 
 function mutant(editYaml: (s: string) => string, editScript: (s: string) => string) {
   const dir = mkdtempSync(join(tmpdir(), 'cp-jobrun-mut-'));
   roots.push(dir);
-  mkdirSync(join(dir, 'scripts')); mkdirSync(join(dir, 'deploy/k3s-build'), { recursive: true });
+  mkdirSync(join(dir, 'scripts'));
+  mkdirSync(join(dir, 'deploy/k3s-build'), { recursive: true });
   writeFileSync(join(dir, 'deploy/k3s-build/job-run.yaml'), editYaml(readFileSync(TEMPLATE, 'utf8')));
   writeFileSync(join(dir, 'scripts/job-run.sh'), editScript(readFileSync(SCRIPT, 'utf8')));
   return join(dir, 'scripts/job-run.sh');
@@ -1655,9 +2567,19 @@ function mutant(editYaml: (s: string) => string, editScript: (s: string) => stri
 
 test('T-611 mutation: without the marker in the template, or without the fill in the script, the over-the-line check fails', () => {
   assert.deepEqual(placed(90).required, CP_RULE, 'the real files pass the check');
-  const noTemplateMarker = mutant((y) => y.replace(/^ *__MASTER_REQUIRED__\n/m, ''), (s) => s);
-  assert.notDeepEqual(placed(90, [], {}, noTemplateMarker).required, CP_RULE, 'template without the marker: the required rule is missing, so the check catches it');
-  const noScriptRule = mutant((y) => y, (s) => s.replace('-e "s#__MASTER_REQUIRED__#$master_rule#"', '-e "s#__MASTER_REQUIRED__##"'));
+  const noTemplateMarker = mutant(
+    (y) => y.replace(/^ *__MASTER_REQUIRED__\n/m, ''),
+    (s) => s,
+  );
+  assert.notDeepEqual(
+    placed(90, [], {}, noTemplateMarker).required,
+    CP_RULE,
+    'template without the marker: the required rule is missing, so the check catches it',
+  );
+  const noScriptRule = mutant(
+    (y) => y,
+    (s) => s.replace('-e "s#__MASTER_REQUIRED__#$master_rule#"', '-e "s#__MASTER_REQUIRED__##"'),
+  );
   assert.notDeepEqual(placed(90, [], {}, noScriptRule).required, CP_RULE, 'script that never fills the rule: caught');
 });
 
@@ -1668,13 +2590,20 @@ test('T-524: a Job queued while the master was under the line is read again when
   await waitFor('queued', () => /queued behind 3/.test(s.out()));
   assert.ok(!/requiredDuringScheduling/.test(w.applied1()), 'made under the line: preferred only');
   writeFileSync(join(w.root, 'top.txt'), 'k3s-master   310m   7%   9000Mi   88%\n'); // the master fills while the Job waits
-  w.edit((st) => { Object.assign(st.jobs[0] ?? {}, { done: true, rc: 0 }); });
+  w.edit((st) => {
+    Object.assign(st.jobs[0] ?? {}, { done: true, rc: 0 });
+  });
   const r = await s.done;
   assert.equal(r.code, 0, r.out);
   assert.match(r.out, /placement: the control-plane node is at 88% of its memory \(over 85%\)/);
   const calls = w.calls().split('\n');
-  const rule = calls.findIndex((c) => /patch job .*requiredDuringSchedulingIgnoredDuringExecution.*node-role\.kubernetes\.io\/control-plane.*DoesNotExist/.test(c));
-  assert.ok(!/node-role[^\n]*kubernetes\.io\/hostname/.test(calls[rule] ?? ''), 'no avoid list: the patch holds the control-plane expression alone');
+  const rule = calls.findIndex((c) =>
+    /patch job .*requiredDuringSchedulingIgnoredDuringExecution.*node-role\.kubernetes\.io\/control-plane.*DoesNotExist/.test(c),
+  );
+  assert.ok(
+    !/node-role[^\n]*kubernetes\.io\/hostname/.test(calls[rule] ?? ''),
+    'no avoid list: the patch holds the control-plane expression alone',
+  );
   const go = calls.findIndex((c) => /patch job .*"suspend":false/.test(c));
   assert.ok(rule >= 0 && go > rule, `the rule is patched in before the Job is let out:\n${calls.join('\n')}`);
   // The patch names this run's own Job (the one that is then let out), and that Job is the one that was created.
@@ -1688,7 +2617,9 @@ test('T-524: a Job queued while the master was under the line is read again when
   const w2 = world(seeds, { top: 50 });
   const s2 = w2.start(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'true']);
   await waitFor('queued', () => /queued behind 3/.test(s2.out()));
-  w2.edit((st) => { Object.assign(st.jobs[0] ?? {}, { done: true, rc: 0 }); });
+  w2.edit((st) => {
+    Object.assign(st.jobs[0] ?? {}, { done: true, rc: 0 });
+  });
   assert.equal((await s2.done).code, 0);
   assert.doesNotMatch(w2.calls(), /requiredDuringScheduling/);
 });
@@ -1699,21 +2630,30 @@ async function queuedThenReleased(env: Record<string, string>, beforeRelease: (r
   const s = w.start(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'true'], env);
   await waitFor('queued', () => /queued behind 3/.test(s.out()));
   beforeRelease(w.root);
-  w.edit((st) => { Object.assign(st.jobs[0] ?? {}, { done: true, rc: 0 }); });
+  w.edit((st) => {
+    Object.assign(st.jobs[0] ?? {}, { done: true, rc: 0 });
+  });
   return { w, r: await s.done };
 }
 
 test('T-524: when kubectl top fails on the re-read, no patch of the rule is made and the Job still runs', async () => {
   const { w, r } = await queuedThenReleased({}, (root) => writeFileSync(join(root, 'top.txt'), 'FAIL')); // the first reading (50%) was fine
   assert.equal(r.code, 0, r.out);
-  assert.match(w.log(), /=== JOB-RUN PLACEMENT node=control-plane at=release reading=failed kept=preferred pct=50 /, 'the log says the create-time reading stands');
+  assert.match(
+    w.log(),
+    /=== JOB-RUN PLACEMENT node=control-plane at=release reading=failed kept=preferred pct=50 /,
+    'the log says the create-time reading stands',
+  );
   assert.doesNotMatch(w.calls(), /patch job .*requiredDuringScheduling/, 'no rule patch');
   assert.match(w.calls(), /patch job claudepilot-job-[0-9a-f]{8} --type merge -p \{"spec":\{"suspend":false\}\}/, 'the Job is let out');
 });
 
 test('T-611: a Job Pending on the required rule says it waits for k3s-node2', async () => {
   const w = world([], { top: 88 });
-  writeFileSync(join(w.root, 'pending'), "0/2 nodes are available: 1 node(s) didn't match Pod's node affinity/selector, 1 Insufficient memory.");
+  writeFileSync(
+    join(w.root, 'pending'),
+    "0/2 nodes are available: 1 node(s) didn't match Pod's node affinity/selector, 1 Insufficient memory.",
+  );
   const j = w.start(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'true'], { JOB_RUN_START_WAIT_S: '1' });
   const r = await j.done;
   assert.match(r.out, /is Pending: the control-plane node is over 85% of its memory, so this Job waits for k3s-node2/);
@@ -1723,8 +2663,14 @@ test('T-611: a Job Pending on the required rule says it waits for k3s-node2', as
 const sha = () => hex(20); // 40 hex characters, as a full commit
 const jobs = (w: ReturnType<typeof world>) => w.applied().length;
 /** Run `--reuse --ref <ref>` with its own options on the world's script; the whole thing is one Job unless it is reused. */
-const go = (w: ReturnType<typeof world>, ref: string, cmd: string, extra: string[] = [], script = SCRIPT, env: Record<string, string> = {}) =>
-  w.run(['--repo', 'claudepilot', '--reuse', '--ref', ref, ...extra, '--', cmd], env, script);
+const go = (
+  w: ReturnType<typeof world>,
+  ref: string,
+  cmd: string,
+  extra: string[] = [],
+  script = SCRIPT,
+  env: Record<string, string> = {},
+) => w.run(['--repo', 'claudepilot', '--reuse', '--ref', ref, ...extra, '--', cmd], env, script);
 const store = (w: ReturnType<typeof world>) => join(w.root, 'home/.cache/claudepilot-job-run');
 
 test('T-731 reuse is opt-in: without --reuse a saved entry is not used and nothing is written', () => {
@@ -1753,14 +2699,21 @@ test('T-731 reuse: a pass is saved (masked log, exit 0); the same repo, commit a
   assert.equal(second.code, 0, second.out);
   const origin = /^job-run: (claudepilot-job-[0-9a-f]{8}) rc=0/m.exec(first.out)?.[1];
   assert.ok(origin, 'the first run names its Job');
-  assert.match(second.out, new RegExp(`job-run: reused a passed result for claudepilot@[0-9a-f]{12} from Job ${origin} \\(passed \\d{4}-\\d\\d-\\d\\dT[\\d:]+Z, key [0-9a-f]{12}\\); drop --reuse to run it again`));
+  assert.match(
+    second.out,
+    new RegExp(
+      `job-run: reused a passed result for claudepilot@[0-9a-f]{12} from Job ${origin} \\(passed \\d{4}-\\d\\d-\\d\\dT[\\d:]+Z, key [0-9a-f]{12}\\); drop --reuse to run it again`,
+    ),
+  );
   assert.match(second.out, /hello from the job/);
   assert.match(second.out, /=== JOB-RUN EXIT 0/);
   assert.ok(!second.out.includes(w.npmToken));
   assert.equal(jobs(w), 1, 'no second Job');
   assert.equal(w.calls(), calls, 'no kubectl call at all on a hit');
   assert.match(w.log(), /hello from the job/);
-  const saved = readdirSync(join(w.root, 'home/.cache/claudepilot-job-run')).map((f) => readFileSync(join(w.root, 'home/.cache/claudepilot-job-run', f), 'utf8')).join('');
+  const saved = readdirSync(join(w.root, 'home/.cache/claudepilot-job-run'))
+    .map((f) => readFileSync(join(w.root, 'home/.cache/claudepilot-job-run', f), 'utf8'))
+    .join('');
   assert.ok(!saved.includes(w.npmToken), 'nothing unmasked is stored');
   assert.doesNotMatch(saved, /ARTIFACTS BEGIN/);
 });
@@ -1809,14 +2762,25 @@ test('T-731 reuse: a changed commit, command, steps, --against, --also, the hash
   miss('--against', go(w, c, 'npm test', ['--against', sha()]));
   miss('--keep-tests', go(w, c, 'npm test', ['--against', sha(), '--keep-tests', 'a.test.ts']));
   miss('--also at a commit', go(w, c, 'npm test', ['--also', `org/shared@${sha()}`]));
-  const upgraded = mutant((y) => `${y}# a newer runner\n`, (s) => s);
+  const upgraded = mutant(
+    (y) => `${y}# a newer runner\n`,
+    (s) => s,
+  );
   miss('another job-run.yaml', go(w, c, 'npm test', [], upgraded));
-  const newer = mutant((y) => y, (s) => `${s}# a newer runner\n`);
+  const newer = mutant(
+    (y) => y,
+    (s) => `${s}# a newer runner\n`,
+  );
   miss('another job-run.sh', go(w, c, 'npm test', [], newer));
   miss('another runner image tag', go(w, c, 'npm test', [], SCRIPT, { JOB_RUN_IMAGE: 'registry.test/claudepilot/workspace:2-dev-2' }));
   miss('--big', go(w, c, 'npm test', ['--big']));
   // Not keyed at all, so never saved and never reused: a branch moves, so does "stg", and the artifacts do not come back from a store.
-  for (const [what, extra, ref] of [['a branch', [], 'main'], ['--artifacts', ['--artifacts', 'reports'], c], ['--also on stg', ['--also', 'org/shared'], c], ['--against a branch', ['--against', 'main'], c]] as const) {
+  for (const [what, extra, ref] of [
+    ['a branch', [], 'main'],
+    ['--artifacts', ['--artifacts', 'reports'], c],
+    ['--also on stg', ['--also', 'org/shared'], c],
+    ['--against a branch', ['--against', 'main'], c],
+  ] as const) {
     miss(`${what} (1)`, go(w, ref, 'npm test', [...extra]));
     miss(`${what} (2)`, go(w, ref, 'npm test', [...extra]));
   }
@@ -1831,7 +2795,7 @@ const edit = (from: string, to: string) => (s: string) => {
   return t;
 };
 
-test('T-731 mutation: without the commit in the key a second commit would be served the first one\'s result; the check fails on that script', () => {
+test("T-731 mutation: without the commit in the key a second commit would be served the first one's result; the check fails on that script", () => {
   const differentCommitRuns = (script: string) => {
     const w = world();
     assert.equal(go(w, sha(), 'npm test', [], script).code, 0);
@@ -1839,11 +2803,16 @@ test('T-731 mutation: without the commit in the key a second commit would be ser
     return !/reused a passed result/.test(r.out) && jobs(w) === 2;
   };
   assert.equal(differentCommitRuns(SCRIPT), true, 'the real script runs the other commit');
-  assert.equal(differentCommitRuns(mutant((y) => y, edit('"$url" "$ref" "$cmd"', '"$url" "$cmd"'))), false, 'the mutant reuses it: the check catches it');
+  assert.equal(
+    differentCommitRuns(mutant((y) => y, edit('"$url" "$ref" "$cmd"', '"$url" "$cmd"'))),
+    false,
+    'the mutant reuses it: the check catches it',
+  );
 });
 
-test('T-731 mutation: without --keep-tests in the key, a run with other kept tests would be served the first one\'s result', () => {
-  const c = sha(), a = sha();
+test("T-731 mutation: without --keep-tests in the key, a run with other kept tests would be served the first one's result", () => {
+  const c = sha(),
+    a = sha();
   const keptTestsRun = (script: string) => {
     const w = world();
     assert.equal(go(w, c, 'npm test', ['--against', a, '--keep-tests', 'a.test.ts'], script).code, 0);
@@ -1851,7 +2820,11 @@ test('T-731 mutation: without --keep-tests in the key, a run with other kept tes
     return !/reused a passed result/.test(r.out) && jobs(w) === 2;
   };
   assert.equal(keptTestsRun(SCRIPT), true, 'the real script runs it again');
-  assert.equal(keptTestsRun(mutant((y) => y, edit('"$against" "$keep" "$steps"', '"$against" "$steps"'))), false, 'the mutant reuses it: the check catches it');
+  assert.equal(
+    keptTestsRun(mutant((y) => y, edit('"$against" "$keep" "$steps"', '"$against" "$steps"'))),
+    false,
+    'the mutant reuses it: the check catches it',
+  );
 });
 
 test('T-731 mutation: a Job that did not end Complete is not saved even if its log says EXIT 0; without the Complete condition it would be', () => {
@@ -1863,10 +2836,14 @@ test('T-731 mutation: a Job that did not end Complete is not saved even if its l
     return existsSync(store(w)) && readdirSync(store(w)).some((f) => f.endsWith('.rc'));
   };
   assert.equal(failedButExit0(SCRIPT), false, 'the real script saves nothing');
-  assert.equal(failedButExit0(mutant((y) => y, edit('&& [ "${st:-}" = Complete ]', ''))), true, 'the mutant saves it: the check catches it');
+  assert.equal(
+    failedButExit0(mutant((y) => y, edit('&& [ "${st:-}" = Complete ]', ''))),
+    true,
+    'the mutant saves it: the check catches it',
+  );
 });
 
-test('T-731 reuse: a failed mv leaves no .log.tmp behind and no entry; the run still ends with the Job\'s exit code', () => {
+test("T-731 reuse: a failed mv leaves no .log.tmp behind and no entry; the run still ends with the Job's exit code", () => {
   const w = world();
   // A mv that fails for the store's .log (the move of the temporary file), and is the real one otherwise.
   const fake = join(w.root, 'bin/mv');
@@ -1887,7 +2864,16 @@ test('T-731 reuse: no $work/n (the leak check did not run) is not saved (fail cl
     return existsSync(store(w)) && readdirSync(store(w)).some((f) => f.endsWith('.rc'));
   };
   assert.equal(saved(mutant((y) => y, noLeakFile)), false, 'the real check: a missing $work/n is not saved');
-  assert.equal(saved(mutant((y) => y, (s) => edit('&& [ -f "$work/n" ] ', '')(noLeakFile(s)))), true, 'without the -f condition it would be saved: the check catches it');
+  assert.equal(
+    saved(
+      mutant(
+        (y) => y,
+        (s) => edit('&& [ -f "$work/n" ] ', '')(noLeakFile(s)),
+      ),
+    ),
+    true,
+    'without the -f condition it would be saved: the check catches it',
+  );
   assert.equal(saved(SCRIPT), true, 'and a normal run is saved');
 });
 
@@ -1901,7 +2887,7 @@ test('T-731 reuse: a store that is /, the home folder or the repository is refus
   assert.equal(jobs(w), 0, 'no Job was made');
 });
 
-test('T-731 reuse: cleanup deletes only old files of the store\'s own form (64-hex key + .log/.rc/.job) directly in it; foreign files (even *.log), subfolders and an existing mode stay', () => {
+test("T-731 reuse: cleanup deletes only old files of the store's own form (64-hex key + .log/.rc/.job) directly in it; foreign files (even *.log), subfolders and an existing mode stay", () => {
   const w = world();
   const dir = join(w.root, 'own-store');
   mkdirSync(join(dir, 'sub'), { recursive: true });
@@ -1910,13 +2896,19 @@ test('T-731 reuse: cleanup deletes only old files of the store\'s own form (64-h
   const k = hex(32); // 64 hex characters, as a key
   const own = [`${k}.log`, `${k}.rc`, `${k}.job`];
   const foreign = ['notes.txt', 'sub/x.log', 'syslog.log', 'old.rc', 'old.job', `${k}.log.bak`, `${hex(31)}.log`];
-  for (const f of [...own, ...foreign]) { writeFileSync(join(dir, f), 'x'); utimesSync(join(dir, f), old, old); }
+  for (const f of [...own, ...foreign]) {
+    writeFileSync(join(dir, f), 'x');
+    utimesSync(join(dir, f), old, old);
+  }
   const r = go(w, sha(), 'npm test', [], SCRIPT, { JOB_RUN_CACHE_DIR: dir });
   assert.equal(r.code, 0, r.out);
   for (const f of foreign) assert.ok(existsSync(join(dir, f)), `${f} stays`);
   for (const f of own) assert.ok(!existsSync(join(dir, f)), `${f} is removed`);
   assert.equal(statSync(dir).mode & 0o777, 0o755, 'an existing folder keeps its mode');
-  assert.ok(readdirSync(dir).some((f) => f.endsWith('.rc')), 'and the new pass is saved');
+  assert.ok(
+    readdirSync(dir).some((f) => f.endsWith('.rc')),
+    'and the new pass is saved',
+  );
 });
 
 test('T-731 reuse: a saved result older than the age limit is a miss', () => {
@@ -1936,7 +2928,8 @@ const poolValue = () => `s${hex(8)}`; // at least 8 characters, made at runtime
 
 test('T-611 merge (8207 items 2, 4): --reuse together with --pool-env is refused (rc 2) before any kubectl call, and nothing is saved or reused', () => {
   const w = world();
-  const secret = poolValue(), c = sha();
+  const secret = poolValue(),
+    c = sha();
   const r = go(w, c, 'npm test', ['--pool-env', POOL_SECRET], SCRIPT, { [POOL_SECRET]: secret });
   assert.equal(r.code, 2, r.out);
   assert.match(r.out, /--reuse cannot be used with --pool-env/);
@@ -1969,7 +2962,8 @@ test('T-611 merge (8207 item 3): with a saved entry present, --reuse and a bad -
 
 test('T-611 merge (8207 item 2): without --reuse a --pool-env run is a Job every time and writes nothing in the store', () => {
   const w = world();
-  const secret = poolValue(), c = sha();
+  const secret = poolValue(),
+    c = sha();
   assert.equal(go(w, c, 'npm test').code, 0); // an entry exists for the same commit and command
   for (let i = 2; i <= 3; i++) {
     const r = w.run(['--repo', 'claudepilot', '--ref', c, '--pool-env', POOL_SECRET, '--', 'npm test'], { [POOL_SECRET]: secret });
@@ -1977,7 +2971,7 @@ test('T-611 merge (8207 item 2): without --reuse a --pool-env run is a Job every
     assert.doesNotMatch(r.out, /reused|saved for reuse/);
     assert.equal(jobs(w), i, 'a Job each time');
   }
-  assert.equal(readdirSync(store(w)).length, 3, 'only the first run\'s entry (log, rc, job) is in the store');
+  assert.equal(readdirSync(store(w)).length, 3, "only the first run's entry (log, rc, job) is in the store");
 });
 
 test('T-611 merge (8207 item 6): a --reuse hit makes no kubectl call and ignores JOB_RUN_AVOID_NODES; a bad avoid list still stops the run first', () => {
@@ -2000,7 +2994,11 @@ test('T-611 merge (8207 item 8): no __X__ placeholder is left in the applied man
     ['neither', [], {}],
     ['pool refs', ['--pool-env', POOL_SECRET, '--pool-env', POOL_ID], { [POOL_SECRET]: poolValue(), [POOL_ID]: poolValue() }],
     ['an avoid rule', [], { JOB_RUN_AVOID_NODES: 'k3s-master' }],
-    ['both, over the line', ['--pool-env', POOL_SECRET, '--big'], { [POOL_SECRET]: poolValue(), JOB_RUN_AVOID_NODES: 'k3s-master,node-9.lan' }],
+    [
+      'both, over the line',
+      ['--pool-env', POOL_SECRET, '--big'],
+      { [POOL_SECRET]: poolValue(), JOB_RUN_AVOID_NODES: 'k3s-master,node-9.lan' },
+    ],
   ] as const) {
     const w = world([], { top: what === 'both, over the line' ? 90 : 50 });
     const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', ...extra, '--', 'true'], env);
@@ -2015,16 +3013,31 @@ test('T-611 merge: the reuse key hashes job-run.sh AND job-run.yaml; the Secret 
   const w = world();
   const c = sha();
   assert.equal(go(w, c, 'npm test').code, 0);
-  const yamlEdited = mutant((y) => `${y}# edited\n`, (s) => s);
+  const yamlEdited = mutant(
+    (y) => `${y}# edited\n`,
+    (s) => s,
+  );
   assert.doesNotMatch(go(w, c, 'npm test', [], yamlEdited).out, /reused a passed result/, 'job-run.yaml is in the key');
-  const scriptEdited = mutant((y) => y, (s) => `${s}# edited\n`);
+  const scriptEdited = mutant(
+    (y) => y,
+    (s) => `${s}# edited\n`,
+  );
   assert.doesNotMatch(go(w, c, 'npm test', [], scriptEdited).out, /reused a passed result/, 'job-run.sh is in the key');
   const p = world();
   const secret = poolValue();
-  assert.equal(p.run(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--pool-env', POOL_SECRET, '--', 'true'], { [POOL_SECRET]: secret }).code, 0);
+  assert.equal(
+    p.run(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--pool-env', POOL_SECRET, '--', 'true'], { [POOL_SECRET]: secret })
+      .code,
+    0,
+  );
   const m = yamlLoad(p.applied1()) as Manifest;
-  const refs = (cs: Container[] | undefined) => (cs ?? []).flatMap((x) => x.env.filter((e) => e.valueFrom?.secretKeyRef).map((e) => e.name));
-  assert.deepEqual(refs(m.spec.template.spec.initContainers).filter((n) => n.startsWith('JR_POOL_')), [], 'no pool ref in fetch');
+  const refs = (cs: Container[] | undefined) =>
+    (cs ?? []).flatMap((x) => x.env.filter((e) => e.valueFrom?.secretKeyRef).map((e) => e.name));
+  assert.deepEqual(
+    refs(m.spec.template.spec.initContainers).filter((n) => n.startsWith('JR_POOL_')),
+    [],
+    'no pool ref in fetch',
+  );
   assert.deepEqual(refs(m.spec.template.spec.containers), [`JR_POOL_${POOL_SECRET}`], 'run: the scoped pool name only');
   assert.ok(!p.applied1().includes(secret), 'the value is never in the manifest');
 });

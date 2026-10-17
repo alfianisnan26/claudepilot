@@ -17,3 +17,6 @@ job-run-artifacts/
 job-out/
 # Skill reference files are part of the kit (published to the portal), so they are versioned (T-937).
 !docs/kit/skills/*/references/
+
+# shots-in.sh staging folder (T-868), left only if the script is killed
+.shots-in.*

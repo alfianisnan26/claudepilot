@@ -3,7 +3,7 @@
 Reads the portal as the owner through tools/coordinator/ph.sh (PORTAL_SERVER_CODE in the environment); aggregates only, no transcript text.
   PORTAL_SERVER_CODE=... python3 tools/coordinator/crew_metrics.py [--since ISO] [--log PATH]
 """
-import collections, datetime, json, os, subprocess, sys
+import collections, datetime, json, os, subprocess, sys, urllib.parse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 LOG = os.path.expanduser('~/.claudepilot/dev-sessions/crew-monitor.jsonl')
@@ -16,13 +16,25 @@ def api(path):
     except Exception:
         return None
 
+def audit_pages(kind, since=None, max_pages=20):
+    """D-58: the audit trail comes in pages of at most 100, newest first; follow `next` until an entry older than `since` (or the end)."""
+    out, cursor = [], ''
+    for _ in range(max_pages):
+        d = api(f'/api/chat/audit?kind={kind}&limit=100' + (f'&cursor={urllib.parse.quote(cursor)}' if cursor else '')) or {}
+        items = d.get('items', []) if isinstance(d, dict) else d
+        out.extend(items)
+        cursor = d.get('next') or '' if isinstance(d, dict) else ''
+        if not cursor or (since and items and items[-1]['at'] < since):
+            break
+    return out
+
 def main():
     args = sys.argv[1:]
     since = args[args.index('--since') + 1] if '--since' in args else None
     log = args[args.index('--log') + 1] if '--log' in args else LOG
     now = datetime.datetime.now(datetime.timezone.utc)
     snap = {'at': now.isoformat(timespec='seconds')}
-    sessions = api('/api/chat/sessions') or []
+    sessions = (api('/api/chat/sessions?limit=100') or {}).get('items', [])  # D-58: a page, the newest 100
     leads = [s for s in sessions if s.get('title') == LEAD_TITLE and s.get('state') != 'ended']
     lead = leads[0] if leads else None
     if lead:
@@ -41,8 +53,8 @@ def main():
         'cost': round(sum(s.get('costUsd') or 0 for s in kids), 2),
         'ended_reasons': dict(collections.Counter((s.get('endedReason') or '')[:40] for s in kids if s['state'] == 'ended')),
     }
-    spawned = api('/api/chat/audit?kind=agent.spawned&limit=200') or []
-    refused = api('/api/chat/audit?kind=agent.refused&limit=200') or []
+    spawned = audit_pages('agent.spawned', since)
+    refused = audit_pages('agent.refused', since)
     if since:
         spawned = [a for a in spawned if a['at'] >= since]
         refused = [a for a in refused if a['at'] >= since]

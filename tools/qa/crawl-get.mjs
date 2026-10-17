@@ -4,10 +4,26 @@ import { api, login } from './lib.mjs';
 const needle = process.argv[2];
 const cookie = await login();
 const call = api(cookie);
-const urls = new Set(['/api/session', '/api/admin/state', '/api/admin/system', '/api/workspaces', '/api/workspaces/targets', '/api/workspaces/usage', '/api/accounts', '/api/account-pools', '/api/pools', '/api/mcp/catalog', '/api/skills/library', '/api/chat/sessions', '/api/chat/usage', '/api/chat/usage?range=30d']);
+const urls = new Set([
+  '/api/session',
+  '/api/admin/state',
+  '/api/admin/system',
+  '/api/workspaces',
+  '/api/workspaces/targets',
+  '/api/workspaces/usage',
+  '/api/accounts',
+  '/api/account-pools',
+  '/api/pools',
+  '/api/mcp/catalog',
+  '/api/skills/library',
+  '/api/chat/sessions',
+  '/api/chat/usage',
+  '/api/chat/usage?range=30d',
+]);
 const ws = (await call('GET', '/api/workspaces')).data ?? [];
 for (const w of ws) {
-  for (const s of ['', '/claudes', '/terminals', '/pools', '/secrets', '/preflight', '/claude-login', '/account']) urls.add(`/api/workspaces/${w.id}${s}`);
+  for (const s of ['', '/claudes', '/terminals', '/pools', '/secrets', '/preflight', '/claude-login', '/account'])
+    urls.add(`/api/workspaces/${w.id}${s}`);
   urls.add(`/api/mcp/workspaces/${w.id}`);
   urls.add(`/api/mcp/workspaces/${w.id}/matchers`);
   urls.add(`/api/skills/workspaces/${w.id}`);
@@ -20,7 +36,7 @@ for (const t of types) {
   urls.add(`/api/pools/${type}`);
   for (const p of (await call('GET', `/api/pools/${type}`)).data ?? []) urls.add(`/api/pools/${type}/${p.id}`);
 }
-for (const s of (await call('GET', '/api/chat/sessions')).data ?? []) {
+for (const s of (await call('GET', '/api/chat/sessions?limit=100')).data?.items ?? []) {
   urls.add(`/api/chat/sessions/${s.id}`);
   if (!process.argv.includes('--skip-events')) urls.add(`/api/chat/sessions/${s.id}/events?after=0`);
   for (const p of ['tasks', 'files', 'diff']) urls.add(`/api/chat/sessions/${s.id}/${p}`);

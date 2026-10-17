@@ -85,6 +85,8 @@ export class AgentAccess implements AgentTokenMinter {
    * stored as given.
    */
   workspaceRefs?: WorkspaceRefs;
+  /** T-436: the vault ids a workspace's agents may reach (the knowledge service's `vaultsForWorkspace`). Unset: a token is bound to no vault. */
+  vaultsFor?: (workspaceId: string) => string[];
 
   constructor(
     private readonly store: Store,
@@ -143,7 +145,8 @@ export class AgentAccess implements AgentTokenMinter {
 
   /** Workspaces that opted in. */
   enabledWorkspaces(): string[] {
-    const rows = this.#db?.prepare('SELECT workspace_id FROM pmcp_agent_access ORDER BY workspace_id').all() as { workspace_id: string }[] | undefined;
+    const rows = this.#db?.prepare('SELECT workspace_id FROM pmcp_agent_access ORDER BY workspace_id').all() as
+      { workspace_id: string }[] | undefined;
     // Only live workspaces' opt-ins count (a removed one's stays on record as its id, which reads as no live workspace's key).
     return [...new Set((rows ?? []).filter((r) => this.#isLive(r.workspace_id)).map((r) => this.#key(r.workspace_id)))].sort();
   }
@@ -153,11 +156,16 @@ export class AgentAccess implements AgentTokenMinter {
     const db = this.#writable;
     if (!db) throw new AppError('SERVICE_UNAVAILABLE', 'The portal’s database is read-only right now.');
     // Plain names only, as for every workspace route: a name is never anything a path, a shell or a URL could read differently.
-    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,62}\/[A-Za-z0-9][A-Za-z0-9._-]{0,62}$/.test(workspaceId)) throw new AppError('VALIDATION_FAILED', 'A workspace is `<target>/<name>`.');
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,62}\/[A-Za-z0-9][A-Za-z0-9._-]{0,62}$/.test(workspaceId))
+      throw new AppError('VALIDATION_FAILED', 'A workspace is `<target>/<name>`.');
     let revoked = 0;
     const was = this.enabled(workspaceId);
     if (enabled) {
-      if (!was) db.prepare('INSERT INTO pmcp_agent_access (workspace_id, enabled_at) VALUES (?, ?) ON CONFLICT (workspace_id) DO NOTHING').run(this.#stored(workspaceId), this.#now.toISOString());
+      if (!was)
+        db.prepare('INSERT INTO pmcp_agent_access (workspace_id, enabled_at) VALUES (?, ?) ON CONFLICT (workspace_id) DO NOTHING').run(
+          this.#stored(workspaceId),
+          this.#now.toISOString(),
+        );
     } else {
       const mine = this.#forms(workspaceId);
       db.prepare(`DELETE FROM pmcp_agent_access WHERE ${mine.sql}`).run(...mine.args);
@@ -171,7 +179,9 @@ export class AgentAccess implements AgentTokenMinter {
   /** Live tokens per workspace, for the page. */
   liveCounts(): Map<string, number> {
     const rows = this.#db
-      ?.prepare('SELECT workspace_id, count(*) AS n FROM pmcp_agent_tokens WHERE revoked_at IS NULL AND expires_at > ? GROUP BY workspace_id')
+      ?.prepare(
+        'SELECT workspace_id, count(*) AS n FROM pmcp_agent_tokens WHERE revoked_at IS NULL AND expires_at > ? GROUP BY workspace_id',
+      )
       .all(this.#now.toISOString()) as { workspace_id: string; n: number }[] | undefined;
     const out = new Map<string, number>();
     for (const r of rows ?? []) {
@@ -203,7 +213,9 @@ export class AgentAccess implements AgentTokenMinter {
     if (!url) {
       if (!this.#warned.has(workspaceId)) {
         this.#warned.add(workspaceId);
-        console.warn(`[portal-mcp] agents in ${workspaceId} get no portal tools: the portal's address as that workspace reaches it is unknown (set PORTAL_INTERNAL_URL)`);
+        console.warn(
+          `[portal-mcp] agents in ${workspaceId} get no portal tools: the portal's address as that workspace reaches it is unknown (set PORTAL_INTERNAL_URL)`,
+        );
       }
       return null;
     }
@@ -211,22 +223,68 @@ export class AgentAccess implements AgentTokenMinter {
     const secret = `${PORTAL_AGENT_TOKEN_PREFIX}${randomBytes(32).toString('base64url')}`;
     const id = `agt_${randomBytes(6).toString('hex')}`;
     const now = this.#now;
-    db.prepare('INSERT INTO pmcp_agent_tokens (id, token_hash, workspace_id, session_id, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)').run(
+    // T-436: bound to its workspace's vaults at mint. No lookup wired, or a lookup that fails: bound to none (never to all).
+    const vaults = this.#vaultsOf(workspaceId);
+    db.prepare(
+      'INSERT INTO pmcp_agent_tokens (id, token_hash, workspace_id, session_id, created_at, expires_at, vaults) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    ).run(
       id,
       hashOf(secret),
       this.#stored(workspaceId),
       sessionId,
       now.toISOString(),
       new Date(now.getTime() + AGENT_TOKEN_TTL_MS).toISOString(),
+      JSON.stringify(vaults),
     );
     this.onChange?.();
-    return { tokenId: id, env: { PILOT_MCP_TOKEN: secret, PILOT_SESSION_ID: sessionId, PILOT_WORKSPACE_ID: workspaceId, PILOT_MCP_URL: url }, mcpConfig: AGENT_MCP_CONFIG };
+    return {
+      tokenId: id,
+      env: { PILOT_MCP_TOKEN: secret, PILOT_SESSION_ID: sessionId, PILOT_WORKSPACE_ID: workspaceId, PILOT_MCP_URL: url },
+      mcpConfig: AGENT_MCP_CONFIG,
+    };
+  }
+
+  #vaultsOf(workspaceId: string): string[] {
+    try {
+      return this.vaultsFor ? [...this.vaultsFor(workspaceId)] : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /** Binds every live token again to its workspace's vaults (a vault's list of agent workspaces changed). Returns how many tokens changed. */
+  rebindVaults(): number {
+    const db = this.#writable;
+    if (!db) return 0;
+    const rows = db
+      .prepare('SELECT id, workspace_id, vaults FROM pmcp_agent_tokens WHERE revoked_at IS NULL AND expires_at > ?')
+      .all(this.#now.toISOString()) as { id: string; workspace_id: string; vaults: string | null }[];
+    let n = 0;
+    for (const r of rows) {
+      const next = JSON.stringify(this.#vaultsOf(this.#key(r.workspace_id)));
+      if (next === r.vaults) continue;
+      this.setVaults(r.id, JSON.parse(next) as string[]);
+      n++;
+    }
+    return n;
+  }
+
+  /** Shuts every live token out of the vaults at once (one statement): the fail-closed step when a rebind throws. Returns how many changed. */
+  closeVaults(): number {
+    const db = this.#writable;
+    if (!db) return 0;
+    return Number(
+      db.prepare("UPDATE pmcp_agent_tokens SET vaults = '[]' WHERE revoked_at IS NULL AND (vaults IS NULL OR vaults != '[]')").run()
+        .changes,
+    );
   }
 
   #revoke(where: string, args: string[], reason: string): number {
     const db = this.#writable;
     if (!db) return 0;
-    const r = db.prepare(`UPDATE pmcp_agent_tokens SET revoked_at = ?, revoked_reason = ? WHERE ${where} AND revoked_at IS NULL`).run(this.#now.toISOString(), reason, ...args);
+    const r = db
+      .prepare(`UPDATE pmcp_agent_tokens SET revoked_at = ?, revoked_reason = ? WHERE ${where} AND revoked_at IS NULL`)
+      .run(this.#now.toISOString(), reason, ...args);
     if (r.changes > 0) this.onChange?.();
     return Number(r.changes);
   }
@@ -255,7 +313,9 @@ export class AgentAccess implements AgentTokenMinter {
    */
   verify(secret: string): AgentVerify {
     if (!secret.startsWith(PORTAL_AGENT_TOKEN_PREFIX) || secret.length < 20 || secret.length > 128) return { ok: false, reason: 'unknown' };
-    const row = this.#db?.prepare('SELECT id, workspace_id, session_id, vaults, expires_at, revoked_at FROM pmcp_agent_tokens WHERE token_hash = ?').get(hashOf(secret)) as TokenRow | undefined;
+    const row = this.#db
+      ?.prepare('SELECT id, workspace_id, session_id, vaults, expires_at, revoked_at FROM pmcp_agent_tokens WHERE token_hash = ?')
+      .get(hashOf(secret)) as TokenRow | undefined;
     if (!row) return { ok: false, reason: 'unknown' };
     // The token's workspace as stored decides (a removed workspace's token never passes as a new one's); the principal carries the key.
     const stored = row.workspace_id;
@@ -272,7 +332,8 @@ export class AgentAccess implements AgentTokenMinter {
       return { ok: false, reason: 'ended', tokenId: row.id };
     }
     this.#touch(row.id, now);
-    let vaults: string[] | null = null;
+    // T-436: an agent token is never unbound: no list (a token minted before the bind), or one that does not parse, reaches no vault.
+    let vaults: string[] = [];
     try {
       const parsed: unknown = row.vaults ? JSON.parse(row.vaults) : null;
       if (Array.isArray(parsed)) vaults = parsed.filter((v): v is string => typeof v === 'string');
@@ -305,7 +366,7 @@ export class AgentAccess implements AgentTokenMinter {
     }
   }
 
-  /** Narrows what one live token may reach in the knowledge vaults (null: whatever each vault's policy allows). */
+  /** Sets what one live token may reach in the knowledge vaults. An agent token reads no list (null) as none, never as all. */
   setVaults(tokenId: string, vaults: string[] | null): void {
     this.#writable?.prepare('UPDATE pmcp_agent_tokens SET vaults = ? WHERE id = ?').run(vaults ? JSON.stringify(vaults) : null, tokenId);
   }
