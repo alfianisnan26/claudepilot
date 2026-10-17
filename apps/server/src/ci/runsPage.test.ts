@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import { AppError, isAppError } from '@isnanme/core';
 import { CURSOR_DEFAULT_LIMIT, CURSOR_MAX_LIMIT, type Actor, type CiRunPage } from '@portal/contracts';
 import { Hono } from 'hono';
-import { ownerActor } from '../authz/seam.js';
+import { ownerActor, seesEverything, systemActor, visible } from '../authz/seam.js';
 import { peekCursor, SCAN_FACTOR } from '../store/keyset.js';
 import { registerCiAuthz } from './authz.js';
 import { createCiRoutes } from './routes.js';
@@ -177,7 +177,7 @@ test('authz: a run the caller may not view is in no page, no count and no cursor
     const seen: string[] = [];
     const cursors: string[] = [];
     let cursor = '';
-    let counts: [number | undefined, number | undefined] = [undefined, undefined];
+    let counts: [number | null | undefined, number | null | undefined] = [undefined, undefined];
     for (let n = 0; n < 40; n++) {
       const p = await t.page('a', `?status=passed,failed&limit=2${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`);
       if (n === 0) counts = [p.total, p.active];
@@ -307,6 +307,26 @@ test('counts with a keep that can hide runs: past the scan bound they are null, 
     assert.equal(later.total, undefined, 'later pages carry no counts at all');
   } finally {
     t.h.done();
+  }
+});
+
+// QA d9f18599 (Minor): `seesEverything` skips the ci_run resolver that `visible()` consults. They agree only while the portal's own resolver
+// leaves every run to the founding user. This pins that: if the resolver ever denies the founding user a run, this goes red, and the SQL count
+// path (which would then count runs the owner may not see) has to ask the resolver first.
+test('seesEverything agrees with visible(): with the portal’s own ci_run resolver the founding user sees every run', async () => {
+  const h = await harness();
+  try {
+    createCiRoutes(h.svc); // registers the portal's own ci_run resolver
+    await seed(h, 6);
+    const rows = h.store.db!.prepare('SELECT id FROM ci_runs').all() as { id: string }[];
+    assert.ok(rows.length >= 7);
+    const owner = ownerActor();
+    assert.equal(seesEverything(owner), true);
+    assert.equal(visible(owner, 'ci_run', rows, (r) => r.id).length, rows.length, 'the resolver hides no run from the founding user');
+    assert.equal(seesEverything(systemActor('test')), true);
+    assert.equal(seesEverything(user('u_a')), false, 'any other caller is checked run by run');
+  } finally {
+    h.done();
   }
 });
 

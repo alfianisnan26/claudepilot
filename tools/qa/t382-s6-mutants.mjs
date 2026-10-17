@@ -46,6 +46,13 @@ const mutants = [
     to: 'const maxScan = limit * 1000;',
     test: T_RUNS,
   },
+  {
+    name: 'f  seesEverything says yes to every caller',
+    file: 'apps/server/src/authz/seam.ts',
+    from: "return current.mode === 'single-owner' && actor.kind === 'user' && actorUserId(actor) === FOUNDING_USER_ID;",
+    to: 'return true;',
+    test: T_RUNS,
+  },
   { name: 'e  the glance card turns a null running count into zero', file: MODEL, from: 'active: list?.active ?? null,', to: 'active: list?.active ?? 0,', test: T_MODEL },
 ];
 

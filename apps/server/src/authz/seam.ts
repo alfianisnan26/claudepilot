@@ -309,6 +309,10 @@ export function visible<T>(actor: Actor, type: ObjectType, rows: readonly T[], i
 /**
  * True only when no policy can hide a row of any type from this actor: the portal itself, and the founding user (a signed-in person, never a
  * capped token or an agent) in the single-owner mode. A list uses it to count with SQL instead of checking every row; anything else is false.
+ * It does NOT ask the type's resolver, unlike `visible()` (which only takes its fast path when no resolver is registered for the type). It is
+ * sound because a resolver's owner defaults to the founding user, who is then the platform admin and holds `manage`. A resolver that denies
+ * the founding user would make the SQL count wrong: ci/runsPage.test.ts ("seesEverything agrees with visible()") fails then, and this
+ * function must take the resolver into account before the change lands.
  */
 export function seesEverything(actor: Actor): boolean {
   if (actor.kind === 'system') return true;
