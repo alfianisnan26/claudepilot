@@ -393,10 +393,14 @@ export interface CiRunList {
   active: number;
 }
 
-/** `GET CI_API.runs` (D-58): one page, newest first. `total` and `active` ride on the first page only (no `cursor`), over the runs the caller may view. */
+/**
+ * `GET CI_API.runs` (D-58): one page, newest first. `total` and `active` ride on the first page only (no `cursor`), over the runs the caller may
+ * view. They are `null` (unavailable) when the caller's runs have to be checked one by one and the list is longer than one bounded scan
+ * (10 x limit rows): never a guess.
+ */
 export interface CiRunPage extends CursorPage<CiRunSummary> {
-  total?: number;
-  active?: number;
+  total?: number | null;
+  active?: number | null;
 }
 
 export interface CiRunFilter {

@@ -26,7 +26,7 @@ import {
   type CiStatus,
 } from '@portal/contracts';
 import { Hono, type Context } from 'hono';
-import { actorOf, can, requireCan, visible } from '../authz/seam.js';
+import { actorOf, can, requireCan, seesEverything, visible } from '../authz/seam.js';
 import { declareCiPolicies, registerCiAuthz, requireVaultWrite } from './authz.js';
 import type { CiDecider, CiService } from './service.js';
 
@@ -73,7 +73,10 @@ export function createCiRoutes(ci: CiService): Hono {
     const actor = actorOf(c);
     // D-58: one page, `{ items, next }` (25 by default, 100 at most); every run is checked with `view` before it is shown, `next` points at the
     // last run shown, and the cursor is bound to the caller and every filter (a bad or foreign one is a 400). `total` and `active` ride on page 1.
-    const keep = (r: { id: string }) => visible(actor, 'ci_run', [r], (x) => x.id).length > 0;
+    // A caller no policy can hide a run from (the founding user) gets no `keep`: the counts come from SQL. Anyone else is checked run by run, and
+    // the counts of page 1 then come from a bounded scan (exact when the list fits in it, else null: unavailable).
+    const check = (r: { id: string }) => visible(actor, 'ci_run', [r], (x) => x.id).length > 0;
+    const keep = seesEverything(actor) ? undefined : check;
     return c.json(
       success(
         ci.listPage(

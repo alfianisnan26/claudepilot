@@ -71,4 +71,7 @@ Build order and dependencies are added once the research is in.
   authz reads at most 10 x `limit` rows per request (`SCAN_FACTOR`); when the bound ends the page, `next` rests on the last row scanned, shown
   or not, so a request that hides everything still ends and paging reaches the end (a page may then hold fewer rows than `limit`, even none,
   with a `next`). The cursor body is encrypted and then signed, so it shows a client neither the sort key nor the id of the row it rests on.
+  **Counts on page 1 (S6, CI runs):** `total` and `active` are SQL counts for a caller no policy can hide a run from (`seesEverything`: the
+  founding user in the single-owner mode, or the portal itself); for anyone else they come from the same bounded scan, exact when the list ends
+  inside it and `null` ("unavailable", never a guess) when it is longer; clients show null as unavailable, never zero.
   `apps/server/src/perf/listPage.bench.ts` measures it (not in the suite). A list returns **summaries** (no long text); the one-item GET has the whole.

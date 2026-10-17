@@ -409,12 +409,13 @@ export class CiStore {
    * D-58: one page of {@link listRuns}' order (newest first, the id breaking ties), by keyset, so a run started during a walk never repeats or
    * skips a row. `scope` binds the cursor to the caller and the filters. `keep` is the caller's authz filter: refused runs are not shown, not
    * counted, and the cursor points at the last run SHOWN. Without a cursor the page also carries `total` and `active` over what `keep` lets
-   * through. A bad or foreign cursor is a 400.
+   * through: SQL counts when there is no `keep`; with one, a scan of at most SCAN_FACTOR x limit rows, and `null` (unavailable) when the list
+   * is longer than that. A bad or foreign cursor is a 400.
    */
   listRunsPage(
     f: RunFilter,
     args: { scope: string; cursor?: string | undefined; limit?: unknown; keep?: (r: { id: string }) => boolean },
-  ): { rows: RunRow[]; next: string | null; total?: number; active?: number } {
+  ): { rows: RunRow[]; next: string | null; total?: number | null; active?: number | null } {
     const { where, args: params } = this.#runWhere(f);
     const limit = clampLimit(args.limit);
     const spec = {
@@ -446,8 +447,21 @@ export class CiStore {
     const next = shown.length > limit && last ? cursorAfter(args.scope, last.created_at, last.id) : shown.length > limit ? null : resume;
     if (args.cursor) return { rows, next };
     const sql = where.length ? `WHERE ${where.join(' AND ')}` : '';
-    const every = this.#db.prepare(`SELECT id, status FROM ci_runs ${sql}`).all(...params) as { id: string; status: string }[];
-    const seen = args.keep ? every.filter((r) => args.keep!(r)) : every;
+    const live = `status IN ('queued', 'running')`;
+    if (!args.keep) {
+      // Nothing can hide a run: one SQL count, no rows read.
+      const c = this.#db
+        .prepare(`SELECT count(*) AS n, COALESCE(SUM(${live}), 0) AS a FROM ci_runs ${sql}`)
+        .get(...params) as { n: number; a: number };
+      return { rows, next, total: Number(c.n), active: Number(c.a) };
+    }
+    // A policy can hide runs, so each one is checked, but never more than the scan bound: when the list ends inside it the counts are exact,
+    // else they are unavailable (null). Never a guess.
+    const every = this.#db
+      .prepare(`SELECT id, status FROM ci_runs ${sql} ORDER BY created_at DESC, id DESC LIMIT ?`)
+      .all(...params, maxScan + 1) as { id: string; status: string }[];
+    if (every.length > maxScan) return { rows, next, total: null, active: null };
+    const seen = every.filter((r) => args.keep!(r));
     return { rows, next, total: seen.length, active: seen.filter((r) => r.status === 'queued' || r.status === 'running').length };
   }
 

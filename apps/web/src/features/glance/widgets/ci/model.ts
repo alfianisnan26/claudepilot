@@ -12,8 +12,8 @@ export const holdsDeploy = (r: Pick<CiRunSummary, 'status' | 'jobs'>): boolean =
 export interface CiView {
   /** The newest runs, as the list gives them. */
   runs: CiRunSummary[];
-  /** Runs not finished, over every run. */
-  active: number;
+  /** Runs not finished, over every run: null when the server could not count them (unavailable, never zero). */
+  active: number | null;
   /** Failed runs that still stand, and deploys held for approval: null when the snapshot could not read them. */
   failing: number | null;
   deploys: number | null;
@@ -23,7 +23,7 @@ export function ciView(list: Pick<CiRunPage, 'items' | 'active'> | null, glance:
   const a = glance?.attention;
   return {
     runs: (list?.items ?? []).slice(0, max),
-    active: list?.active ?? 0,
+    active: list?.active ?? null,
     failing: a && a.ci.ok ? a.ci.count : null,
     deploys: a && a.deploys.ok ? a.deploys.count : null,
   };
@@ -35,11 +35,13 @@ export function ciCompact(v: CiView | null, failed: boolean): GlanceCompact {
     return failed
       ? { value: '-', level: 'unknown', title: 'CI: not available', stale: true }
       : { value: null, level: 'unknown', title: 'CI: loading', loading: true };
-  const level: GlanceLevel = v.deploys ? 'critical' : v.failing ? 'warn' : v.active ? 'ok' : v.failing === null ? 'unknown' : 'idle';
+  const level: GlanceLevel =
+    v.deploys ? 'critical' : v.failing ? 'warn' : v.active ? 'ok' : v.failing === null || v.active === null ? 'unknown' : 'idle';
   const parts = listWords([
     v.deploys ? `${plural(v.deploys, 'deploy')} to approve` : null,
     v.failing ? `${v.failing} failing` : null,
     v.active ? `${v.active} running` : null,
+    v.active === null ? 'running count not available' : null,
   ]);
   return {
     value: v.failing === null ? '-' : chipCount(v.failing),
