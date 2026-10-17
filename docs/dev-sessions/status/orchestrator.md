@@ -10,19 +10,20 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   after 44fba442 T-623 browser image): T-524 S3c+T-733 S5, T-881 S1b, T-416 S2c (lead's mechanical controller.ts resolution
   67198848, APPROVE 9219), T-382 S1, T-781 S8c, T-675 R2c+R2d. Coordinator told T-731 9271.
 ## IN FLIGHT (6 of 6, D-71; lanes respawned per ticket, D-78; sonnet)
-- T-924 GATE ALONE running: merge c7474004 (premerge-t924, wip/main-c747400; bg ba91nldwk). Quick-check a3cb8a9a green; QA PWG
-  9644 (mutants refused by the guard hook: not run). Green -> land, tell coordinator T-924 + T-731 (deploy at once).
-- BATCH 30 premerge-b30 25a1a36e (local): T-772 S2f, T-736 S3g, T-612 S1, T-868 S1-S3, T-436 S1+S2 (deploy note), T-379 S2
-  b9dd11fd, format fix 787932e2 (lead checked format-only). After T-924 lands: merge integration, + T-860 S2c e78d727b (PWG
-  9638; conflicts with T-924 in ruleGuard.ts), pack, quick-check, gate.
-- QA BE aca53d2d (regitha): T-382 S2-S4 0ad8db63 (57 files) incl. authz of CI runs page + listPage bench numbers.
-- BE INFRA 53c49384 (rossi): T-938 --pool-env names (exact line on ticket; blind review; coordinator lands).
-- BE INFRA 2 e0715d99 (hasyim): T-921 browser init EPERM + self-heal without headers (dev rig = coordinator's).
-- BACKEND 83bb50e6 (fadlilah): T-409 G3 supervisor adopts only its own chats.
-- IMPL 2 0ce74ec7 (two.claude): T-436 S3 + T-772 S2g, Job queued. IMPL c68578a8 (sekar): T-425 S2, Job queued.
-- Ended 02:3x between tickets (D-78): QA BE C, QA BE B, BE Infra 0f151084, Backend b367d0dd. New: T-939 job queue deadline.
+- T-924 RE-GATE on 4754b282 (premerge-t924 = merge c7474004 GREEN gate-c747400-369a + integration e703450d), log
+  job-out/gate-4754b28.log (first re-gate verdict lost in the ~07:00 restart). Green -> land, tell coordinator T-924 + T-731.
+- BATCH 30 premerge-b30 25a1a36e (wip/main-25a1a36): T-772 S2f, T-736 S3g, T-612 S1, T-868 S1-S3, T-436 S1+S2 (deploy note),
+  T-379 S2, format fix 787932e2 (format-only, checked). After T-924: merge integration + T-860 S2c e78d727b (PWG 9638; conflicts
+  in ruleGuard.ts) + T-382 S2-S4 0ad8db63 (PWG 9691; S5 follow-up, T-595 9694), pack, quick-check, gate.
+- Lanes (all hasyim, auto, sonnet; respawned 10:00 from pushed heads after the restart):
+  BE INFRA a3554d40 T-938 259935e8 (yaml case added; Job). BE INFRA 2 e2d8d27c T-921 0dfff348 (Job; dev rig = coordinator).
+  BACKEND a3f28904 T-409 G3 ee75effd (Job + mutant). QA c26f8fe5 T-425 S2 b5ebac0a. IMPL 2 3189279b T-436 S3 + T-772 S2g e4e2c4ff.
+  IMPL c6418f2a T-379 S3 (image in --reuse key) from b30.
+- Waiting for QA after build: T-938 (blind review; coordinator lands), T-921, T-409, T-436 S3, T-379 S3. Backend next: T-382 S5.
 
 ## DECISIONS (binding)
+- 10:00 Restart (~07:00 UTC, /tmp wiped; my Claude hit its session limit 03:xx): 6 lanes ended + respawned from pushed heads
+  (clean worktrees); lost Jobs re-run; T-924 re-gate re-run on the same commit (verdict unavailable). T-382 merges with gaps (9694).
 - 00:35 Coordinator: 2nd workspace RESTART 00:50 UTC (browser image t623-2026.10.16-1). All 6 lanes told: push WIP, no Job after
   00:45, end `PAUSED <sha> <job> <next>`. After it: end interrupted lanes, respawn from PAUSED shas, re-run cut Jobs.
   Release 2026.10.17-1 (42b186b4, from 44fba442) holds batches 27+28, NOT 29 (edde2073): await live checks.
