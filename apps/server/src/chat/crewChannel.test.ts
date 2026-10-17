@@ -39,7 +39,7 @@ async function rig() {
 type Rig = Awaited<ReturnType<typeof rig>>;
 
 const messages = (r: { result?: { structuredContent?: Record<string, unknown> } }) =>
-  (r.result!.structuredContent.messages as { id: number; from: string; own: boolean; text: { untrusted_text: string; source: string } }[]).map((m): [string, string, boolean] => [m.from, m.text.untrusted_text, m.own]);
+  (r.result!.structuredContent!.messages as { id: number; from: string; own: boolean; text: { untrusted_text: string; source: string } }[]).map((m): [string, string, boolean] => [m.from, m.text.untrusted_text, m.own]);
 
 const post = (r: Rig, who: keyof Rig['tokens'], text: string, extra: Record<string, unknown> = {}) => r.h.call(r.tokens[who], 'crew_post', { text, ...extra });
 const read = (r: Rig, who: keyof Rig['tokens'], args: Record<string, unknown> = {}) => r.h.call(r.tokens[who], 'crew_read', args);
