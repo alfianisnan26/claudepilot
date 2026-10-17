@@ -152,3 +152,96 @@ test('the spending limit is the setting (ten dollars when none), and a turn Clau
     await s.done();
   }
 });
+
+/** Resolves 'hung' when `p` has not settled within `ms`. */
+const within = <T>(p: Promise<T>, ms: number) => Promise.race([p.then(() => 'done' as const), sleep(ms).then(() => 'hung' as const)]);
+
+/** The cap full with two working sessions and `s.id` asleep, as the T-425 slot test sets it up; a send to `s.id` then waits for a slot. */
+async function asleepAtCap(s: Live) {
+  s.controller.liveCaps = () => ({ perWorkspace: 2, total: 10 });
+  const second = await idleSession(s);
+  const third = await idleSession(s); // s.id slept for it
+  assert.equal(s.controller.get(s.id)!.process, 'asleep');
+  for (const x of [second, third]) await s.controller.send(x.id, `w-${x.id.slice(0, 6)}`, 'work');
+  await until(() => [second.id, third.id].every((id) => s.controller.get(id)!.state === 'working'));
+  s.controller.slotWaitMs = 5000;
+  s.controller.slotPollMs = 20;
+  s.controller.controlTimeoutMs = 150;
+}
+
+test('T-425 S2b: a send refused before its write gives its turn back: the next send to the session is written', async () => {
+  const s = await liveSession();
+  try {
+    await assert.rejects(s.controller.send(s.id, 'refused-1', ''), /Type a message/);
+    const sends = s.ws.sends.length;
+    assert.equal(await within(s.controller.send(s.id, 'after-1', 'LINE-AFTER-REFUSAL'), 1500), 'done', 'not stuck behind the refused send');
+    assert.ok(s.ws.sends.slice(sends).some((x) => x.line.includes('LINE-AFTER-REFUSAL')));
+  } finally {
+    await s.done();
+  }
+});
+
+test('T-425 S2b: the line of sends is per session: a send to one session is not held behind another session’s write in the same workspace', async () => {
+  const s = await liveSession();
+  try {
+    const other = await idleSession(s);
+    s.controller.execTimeoutMs = 800;
+    s.ws.hangSends = true; // the first session's write takes the host's whole timeout
+    const slow = s.controller.send(s.id, 'slow-1', 'SLOW-LINE').catch(() => undefined);
+    await sleep(60);
+    s.ws.hangSends = false;
+    const sends = s.ws.sends.length;
+    assert.equal(await within(s.controller.send(other.id, 'fast-1', 'FAST-LINE'), 400), 'done', 'the other session’s send is not held');
+    assert.ok(s.ws.sends.slice(sends).some((x) => x.line.includes('FAST-LINE')));
+    await slow;
+  } finally {
+    await s.done();
+  }
+});
+
+test('T-425 S2b: a session’s place in line is dropped once its sends are written or refused (nothing left behind)', async () => {
+  const s = await liveSession();
+  try {
+    assert.equal(s.controller.openWriteLines, 0);
+    await s.controller.send(s.id, 'leak-1', 'one');
+    await assert.rejects(s.controller.send(s.id, 'leak-2', ''), /Type a message/);
+    await s.controller.send(s.id, 'leak-3', 'three');
+    await until(() => s.controller.openWriteLines === 0);
+  } finally {
+    await s.done();
+  }
+});
+
+test('T-425 S2b: a wake refused for a reason that is not an AppError (the launch fails) marks the stored send failed, and says so', async () => {
+  const s = await liveSession();
+  try {
+    await asleepAtCap(s);
+    await s.controller.send(s.id, 'launch-1', 'never delivered');
+    assert.match(s.controller.get(s.id)!.slotWait ?? '', /^Waiting for a slot/);
+    s.controller.liveCaps = () => {
+      throw new Error('the launch failed'); // a plain Error, as a launch failure is
+    };
+    await until(() => s.inputs('launch-1').includes('failed'), 3000);
+    assert.ok(s.controller.history(s.id).some((e) => e.kind === 'system' && /A message wasn’t delivered/.test(e.text ?? '')));
+  } finally {
+    await s.done();
+  }
+});
+
+test('T-425 S2b: a send after one that waits for a slot does not hang behind it: it is stored and returns at once, and both are written in order when the slot comes', async () => {
+  const s = await liveSession();
+  try {
+    await asleepAtCap(s);
+    const sends = s.ws.sends.length;
+    await s.controller.send(s.id, 'wait-a', 'FIRST-WAITER'); // detached: waits for its slot
+    assert.equal(await within(s.controller.send(s.id, 'wait-b', 'SECOND-WAITER'), 1500), 'done', 'the later send is not held for the slot');
+    assert.ok(s.controller.history(s.id).some((e) => e.kind === 'user' && e.text === 'SECOND-WAITER'), 'stored');
+    assert.equal(s.ws.sends.length, sends, 'nothing reached Claude yet');
+    s.controller.liveCaps = () => ({ perWorkspace: 5, total: 10 });
+    await until(() => ['FIRST-WAITER', 'SECOND-WAITER'].every((t) => s.ws.sends.slice(sends).some((x) => x.line.includes(t))), 5000);
+    const written = s.ws.sends.slice(sends).map((x) => x.line);
+    assert.ok(written.findIndex((l) => l.includes('FIRST-WAITER')) < written.findIndex((l) => l.includes('SECOND-WAITER')), 'in the order sent');
+  } finally {
+    await s.done();
+  }
+});

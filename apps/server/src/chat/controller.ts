@@ -532,6 +532,10 @@ export class ChatController {
   readonly #slotWatchers = new Map<string, Set<() => void>>();
   /** T-425 S2: per session, the end of the line of sends waiting to be written (see `#send`). */
   readonly #writeTail = new Map<string, Promise<void>>();
+  /** Test seam (T-425 S2b): how many sessions have a send line open; zero when every send is written or refused. */
+  get openWriteLines(): number {
+    return this.#writeTail.size;
+  }
   /**
    * T-417 review: the slots granted under the live cap whose session is not live yet (between its room and the end of its launch):
    * they count as running, so a second start can't take the same room.
