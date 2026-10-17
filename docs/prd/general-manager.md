@@ -232,6 +232,25 @@ S2 adds the following, in this order. Every new tool:
 | `deploy_status` | Deploy runs: the stage, the gate result, whether the release waits for the person's approval, and a link. | read |
 | `manager_status` | The manager's own state: runtime up, Claude, token expiry, cards open. | read |
 
+**Built (T-968 S2a).** The first five tools are on the Portal MCP. The wire types are in `packages/contracts/src/manager.ts`. Each tool
+lives in the module that owns its data and is declared in that module's `authz.ts`:
+
+- `settings_get`: `settings/portalTools.ts`.
+- `approvals_list` and `crew_limits_get`: `chat/managerTools.ts`.
+- `autotransfer_events`: `autotransfer/portalTools.ts`.
+- `deploy_status`: `ci/portalTools.ts`.
+
+All five are `read` scope, so an agent's token never reaches them. A session or settings area the caller may not view answers exactly
+like a missing one (NOT_FOUND). List rows go through `can()` one by one. Agent text comes back labelled untrusted, and a
+credential-shaped setting reads `[set]`.
+
+How the build differs from the table above:
+
+- "Needs re-auth" is `needs_confirmation`: a protective setting whose change asks for a person's confirmation.
+- `crew_limits_get` reads one lead session, given by `session_id`.
+- `queue` is `"unavailable"`: the portal keeps no queue of slices. A lead's queue is its status file.
+- `manager_status` waits for S1: there is no manager session or `cpmt_` token to report on yet.
+
 ### 9.2 Then the schedules API (T-965)
 
 | Tool | What it does | Tier |
