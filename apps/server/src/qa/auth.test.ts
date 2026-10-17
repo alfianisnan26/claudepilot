@@ -26,7 +26,8 @@ function build() {
 }
 
 /** Routes anyone may call: health, whether you are signed in, signing in and out. */
-const PUBLIC = new Set(['GET /healthz', 'GET /api/session', 'POST /api/login', 'POST /api/logout']);
+// The SSO door (owner, 2026-10-17) is public by design: the person is not signed in yet. Its own checks are in qa/teamsSso.test.ts.
+const PUBLIC = new Set(['GET /healthz', 'GET /api/session', 'POST /api/login', 'POST /api/logout', 'POST /api/auth/discover', 'GET /api/auth/sso/start', 'GET /api/auth/sso/callback']);
 const METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
 
 function registered(app: import('hono').Hono) {

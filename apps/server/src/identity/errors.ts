@@ -14,6 +14,7 @@ declare module '@isnanme/core' {
     LAST_ADMIN: true;
     PASSWORD_REJECTED: true;
     LOCKED_OUT: true;
+    BAD_GATEWAY: true;
   }
 }
 
@@ -26,6 +27,8 @@ defineErrorCodes({
   [IDENTITY_ERROR_CODES.LAST_ADMIN]: { status: 409, message: 'The last admin can’t be removed.' },
   [IDENTITY_ERROR_CODES.PASSWORD_REJECTED]: { status: 422, message: 'Choose another password.' },
   [IDENTITY_ERROR_CODES.LOCKED_OUT]: { status: 429, message: 'Too many tries. Try again later.' },
+  // SSO (oidc.ts): the identity provider did not answer, or answered something the portal can't use.
+  BAD_GATEWAY: { status: 502, message: 'The sign-in provider did not answer as expected.' },
 });
 
 /** The one text every failed sign-in gets (FR19): the page never learns which field was wrong. */

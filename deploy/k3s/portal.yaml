@@ -41,7 +41,7 @@ spec:
         kubernetes.io/hostname: k3s-node2
       containers:
         - name: portal
-          image: registry.int.isnan.me/claudepilot/portal:2026.10.17-9
+          image: registry.int.isnan.me/claudepilot/portal:2026.10.17-10
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
@@ -56,6 +56,9 @@ spec:
             # Traefik is the only way in: its X-Forwarded-For is the client address (sign-in rate limit).
             - name: PORTAL_TRUST_PROXY
               value: "true"
+            # The origin an SSO provider sends the browser back to (T-1052); never taken from a request's Host here.
+            - name: PORTAL_SSO_ORIGIN
+              value: "https://pilot.ai.isnan.me"
             # Workspaces are pods of this cluster (the portal's service account, in-cluster).
             - name: PORTAL_K8S_ENABLED
               value: "true"

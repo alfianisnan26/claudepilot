@@ -6,8 +6,8 @@ import { Markdown } from '@/features/chat/Markdown';
 import { api, errorText } from '@/lib/api';
 
 /**
- * A session delegated to this account (owner, 2026-10-17): read live at `view`; at `operate` also send, stop the turn and answer its
- * approvals. Polls every 2.5 s (a revoke shows on the next poll). Nothing else of the workspace is reachable from here.
+ * A session shared with this account (owner, 2026-10-17), directly or through a team: read live, and what the share allows on top (send,
+ * answer its approvals, stop the turn). Polls every 2.5 s (a revoke shows on the next poll). Nothing else of the workspace is reachable from here.
  */
 export function DelegatedSessionView({ id, onBack }: { id: string; onBack: () => void }) {
   const toast = useToast();
@@ -40,6 +40,7 @@ export function DelegatedSessionView({ id, onBack }: { id: string; onBack: () =>
 
   const resolved = useMemo(() => new Set(events.filter((e) => e.kind === 'resolved' && e.requestId).map((e) => e.requestId!)), [events]);
   const open = events.filter((e) => e.kind === 'request' && e.request && !resolved.has(e.request.requestId));
+  const can = (c: 'send' | 'respond' | 'stop') => !!session?.caps?.includes(c);
   const operate = session?.level === 'operate';
 
   const act = async (fn: () => Promise<unknown>) => {
@@ -81,7 +82,7 @@ export function DelegatedSessionView({ id, onBack }: { id: string; onBack: () =>
           <span className="block truncate text-[12.5px] text-muted">{session ? `${session.workspaceId} · ${session.state}` : ''}</span>
         </span>
         <Badge tone={operate ? 'warning' : 'neutral'}>{operate ? 'Operate' : 'View'}</Badge>
-        {operate && session?.state === 'working' && (
+        {can('stop') && session?.state === 'working' && (
           <button type="button" onClick={() => void act(() => api.delegatedStop(id))} disabled={busy} aria-label="Stop the turn" className="press inline-flex size-11 shrink-0 items-center justify-center rounded-full text-danger hover:bg-danger-soft">
             <Square className="size-4" />
           </button>
@@ -107,7 +108,7 @@ export function DelegatedSessionView({ id, onBack }: { id: string; onBack: () =>
             <li key={e.request!.requestId} className="rounded-2xl border border-line p-3">
               <p className="font-semibold [overflow-wrap:anywhere]">{e.request!.title}</p>
               {e.request!.detail && <p className="mt-0.5 text-[13px] text-muted [overflow-wrap:anywhere]">{e.request!.detail}</p>}
-              {operate ? (
+              {can('respond') ? (
                 <div className="mt-2 grid grid-cols-2 gap-2">
                   <Button variant="ghost" disabled={busy} onClick={() => void act(() => api.delegatedRespond(id, e.request!.requestId, 'deny'))}>
                     Deny
@@ -123,7 +124,7 @@ export function DelegatedSessionView({ id, onBack }: { id: string; onBack: () =>
           ))}
         </ul>
       )}
-      {operate && (
+      {can('send') && (
         <form onSubmit={send} className="flex items-end gap-2">
           <textarea value={text} onChange={(e) => setText(e.target.value)} rows={2} placeholder="Message" className="min-h-11 flex-1 resize-none rounded-2xl border border-line bg-surface px-3.5 py-2.5 text-[15px] outline-none focus-visible:ring-2 focus-visible:ring-accent" />
           <button type="submit" disabled={busy || !text.trim()} aria-label="Send" className="press inline-flex size-11 shrink-0 items-center justify-center rounded-full bg-accent text-white disabled:opacity-50">

@@ -3488,6 +3488,100 @@ export const MIGRATIONS: Migration[] = [
       db.exec('ALTER TABLE session_grants ADD COLUMN bypass_ack INTEGER NOT NULL DEFAULT 0');
     },
   },
+  {
+    version: 404,
+    name: 'identity: teams of accounts (owner and member roles)',
+    up(db) {
+      // Owner, 2026-10-17: "team based multiaccount". A team groups accounts; a session can be shared to it. Its owners manage its members.
+      db.exec(`
+        CREATE TABLE teams (
+          id TEXT PRIMARY KEY CHECK (id GLOB 'tm_*'),
+          name TEXT NOT NULL CHECK (length(name) BETWEEN 1 AND 40),
+          name_key TEXT NOT NULL,
+          description TEXT CHECK (description IS NULL OR length(description) <= 200),
+          created_by TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        ) STRICT;
+        CREATE UNIQUE INDEX teams_name_key ON teams (name_key);
+        CREATE TABLE team_members (
+          team_id TEXT NOT NULL REFERENCES teams (id) ON DELETE CASCADE,
+          user_id TEXT NOT NULL,
+          role TEXT NOT NULL CHECK (role IN ('owner', 'member')),
+          added_by TEXT NOT NULL,
+          added_at TEXT NOT NULL,
+          PRIMARY KEY (team_id, user_id)
+        ) STRICT;
+        CREATE INDEX team_members_user ON team_members (user_id);
+      `);
+    },
+  },
+  {
+    version: 405,
+    name: 'identity: session shares to an account or a team, with permissions and an end',
+    up(db) {
+      // Owner, 2026-10-17: "lebih granular dan controllable". A share names WHAT may be done (read, send, respond, stop), to WHOM (one
+      // account or a team) and UNTIL when. The view/operate grants of 402-403 become shares: view = read, operate = all four.
+      db.exec(`
+        CREATE TABLE session_shares (
+          id TEXT PRIMARY KEY CHECK (id GLOB 'sh_*'),
+          session_id TEXT NOT NULL,
+          subject_kind TEXT NOT NULL CHECK (subject_kind IN ('user', 'team')),
+          subject_id TEXT NOT NULL,
+          caps TEXT NOT NULL,
+          bypass_ack INTEGER NOT NULL DEFAULT 0 CHECK (bypass_ack IN (0, 1)),
+          expires_at TEXT,
+          note TEXT CHECK (note IS NULL OR length(note) <= 200),
+          granted_by TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          UNIQUE (session_id, subject_kind, subject_id)
+        ) STRICT;
+        CREATE INDEX session_shares_subject ON session_shares (subject_kind, subject_id);
+        INSERT INTO session_shares (id, session_id, subject_kind, subject_id, caps, bypass_ack, granted_by, created_at)
+          SELECT 'sh_' || lower(hex(randomblob(9))), session_id, 'user', user_id,
+                 CASE level WHEN 'operate' THEN 'read,send,respond,stop' ELSE 'read' END, bypass_ack, granted_by, created_at
+          FROM session_grants;
+        DROP TABLE session_grants;
+      `);
+    },
+  },
+  {
+    version: 406,
+    name: 'identity: SSO (OpenID Connect) providers, by email domain, and the identities they vouch for',
+    up(db) {
+      // Owner, 2026-10-17: "login by email, kalo kedetect domainnya di whitelist SSO, jadinya pake SSO". client_secret is SEALED
+      // (ENCRYPTED_COLUMNS). An identity links a provider's subject to one account, so a later email change at the IdP keeps the account.
+      db.exec(`
+        CREATE TABLE sso_providers (
+          id TEXT PRIMARY KEY CHECK (id GLOB 'sso_*'),
+          name TEXT NOT NULL CHECK (length(name) BETWEEN 1 AND 60),
+          issuer TEXT NOT NULL,
+          client_id TEXT NOT NULL,
+          client_secret TEXT,
+          domains TEXT NOT NULL,
+          scopes TEXT NOT NULL DEFAULT 'openid email profile',
+          default_role TEXT NOT NULL DEFAULT 'member' CHECK (default_role IN ('admin', 'member')),
+          default_team_id TEXT,
+          auto_create INTEGER NOT NULL DEFAULT 1 CHECK (auto_create IN (0, 1)),
+          trust_unverified_email INTEGER NOT NULL DEFAULT 0 CHECK (trust_unverified_email IN (0, 1)),
+          allow_private_network INTEGER NOT NULL DEFAULT 0 CHECK (allow_private_network IN (0, 1)),
+          enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+          created_by TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        ) STRICT;
+        CREATE TABLE sso_identities (
+          provider_id TEXT NOT NULL REFERENCES sso_providers (id) ON DELETE CASCADE,
+          subject TEXT NOT NULL,
+          user_id TEXT NOT NULL,
+          email TEXT NOT NULL,
+          linked_at TEXT NOT NULL,
+          last_login_at TEXT,
+          PRIMARY KEY (provider_id, subject)
+        ) STRICT;
+        CREATE INDEX sso_identities_user ON sso_identities (user_id);
+      `);
+    },
+  },
 ];
 
 /**
@@ -3502,4 +3596,5 @@ export const ENCRYPTED_COLUMNS: EncryptedColumn[] = [
   { table: 'notify_keys', column: 'value', idColumn: 'id' },
   { table: 'triggers', column: 'secret', idColumn: 'id' },
   { table: 'triggers', column: 'path_token', idColumn: 'id' },
+  { table: 'sso_providers', column: 'client_secret', idColumn: 'id' },
 ];
