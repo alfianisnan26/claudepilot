@@ -30,6 +30,7 @@ const sup = (await import(pathToFileURL(resolve(import.meta.dirname, '../../../.
   COMPACT_LANE: string;
   LANES: (prog: string) => string;
   worktreeTrustable: (scan: Record<string, unknown> | null, known: Set<string>) => boolean;
+  ownWorktrees: (repo: string, entries: { path?: unknown }[]) => string[];
 };
 
 const MIN = 60_000;
@@ -118,4 +119,21 @@ test('worktree trust: only rules, and only settings the portal already trusted h
   assert.equal(sup.worktreeTrustable(scan({ envNames: ['X'] }), known), false);
   assert.equal(sup.worktreeTrustable(scan({ trusted: true }), known), false, 'already trusted: nothing to do');
   assert.equal(sup.worktreeTrustable(null, known), false);
+});
+
+test('own worktrees: only folders strictly below <repo>.worktrees/ are trust candidates (T-927); main folders, siblings and odd paths are not', () => {
+  const repo = '/home/node/work/tradingbot';
+  const e = (path: unknown) => ({ path });
+  const got = sup.ownWorktrees(repo, [
+    e('/home/node/work/tradingbot.worktrees/T-927-strategies-group'),
+    e('/home/node/work/tradingbot.worktrees/T-927-strategies-group'), // listed twice
+    e('/home/node/work/tradingbot'), // the main folder itself
+    e('/home/node/work/tradingbot.worktrees/'), // the root
+    e('/home/node/work/tradingbot.worktreesX/evil'), // a sibling that only starts with the name
+    e('/home/node/work/tradingbot.worktrees/../konfersi-universe'),
+    e('/home/node/work/claudepilot.worktrees/other'),
+    e(42),
+  ]);
+  assert.deepEqual(got, ['/home/node/work/tradingbot.worktrees/T-927-strategies-group']);
+  assert.deepEqual(sup.ownWorktrees(`${repo}/`, [e('/home/node/work/tradingbot.worktrees/a')]), ['/home/node/work/tradingbot.worktrees/a'], 'a trailing slash on the repo');
 });

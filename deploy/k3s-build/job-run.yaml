@@ -8,7 +8,7 @@
 # Credentials (T-401): only the init container `fetch` has the Secret. It clones (git's helper reads the token from its environment) and runs
 # `npm ci --ignore-scripts` (the npm token), so no code of the repository or of a dependency runs while a credential is there; its HOME
 # (git config, the user .npmrc) is a volume the `run` container does not mount; it checks that no credential value is in /tmp and writes
-# its log and exit code there. The `run` container has NO secret: it prints that log, runs the install scripts npm ci left out
+# its log and exit code there. The `run` container has no git or npm secret, only the --pool-env values (T-426: E2E_CF_ACCESS_* test credentials, as env; they are moved out of the environment at once and back in only for the command, so npm rebuild and the lifecycle scripts do not inherit them, but /proc/1/environ still holds them): it prints that log, runs the install scripts npm ci left out
 # (`npm rebuild` and the package's own lifecycle scripts), then the command. --against is fetched by `fetch` too (and, when its lockfile
 # differs, its packages go into npm's cache, so `run` installs them offline).
 apiVersion: batch/v1
@@ -43,9 +43,10 @@ spec:
         # while it has more free. The Jobs do not all pile onto the portal's node: the portal rule still pulls the other way.
         # The gap (T-611): the scheduler counts memory REQUESTS, but the master's own pods (API server, Argo CD, Gitea, Hermes, LiteLLM)
         # use about 10 GiB of real memory with small or no requests, so a 4 GiB Job "fits" while the master's real use goes to 83%.
-        # scripts/job-run.sh reads the master's real use (kubectl top) and, over JOB_RUN_MASTER_MAX_PCT (75), replaces the marker below with
-        # a REQUIRED rule away from the control plane (the Job then waits for k3s-node2 or for the master to have room). Under the line, or
-        # when the metrics fail, the marker is empty and only the preferred rules apply (a metrics failure never blocks every Job).
+        # scripts/job-run.sh reads the master's real use (kubectl top) and, when that plus the Job's expected peak is over JOB_RUN_MASTER_MAX_PCT
+        # (75), replaces the marker below with a REQUIRED rule away from the control plane (the Job then waits for k3s-node2 or for the master to
+        # have room). Under the line, or when the metrics fail, the marker is empty and only the preferred rules apply (a metrics failure never
+        # blocks every Job).
         # T-524: the script reads again when the queue lets the (suspended) Job out and patches the same required rule in if the master filled meanwhile.
         nodeAffinity:
           __MASTER_REQUIRED__
@@ -174,7 +175,7 @@ spec:
                   rm -rf "$root/warm"
                 fi
               fi
-              echo "$t0 $t1" > "$root/fetch.times"
+              echo "$t0 $t1" > "$root/fetch.times"; echo "$sha" > "$root/fetch.sha"
               ) > "$root/fetch.log" 2>&1
               rc=$?
               # The check (T-401): no credential VALUE in anything the run container gets, fetch.log included (it prints that log). File names only.
@@ -196,13 +197,15 @@ spec:
             - {name: fetch-home, mountPath: /fetch-home}
           resources:
             # As the run container's (the pod requests the larger of the two, not the sum: T-524's sizing holds).
-            requests: {cpu: 1000m, memory: __MEMORY__}
+            requests: {cpu: 500m, memory: __MEMORY__}
             limits: {cpu: "4", memory: __MEMORY__}
       containers:
-        # T-401: no Secret, no secretKeyRef, no envFrom here.
+        # T-401: no git or npm credential here, no envFrom. The one exception (T-426): each --pool-env name (E2E_CF_ACCESS_* only, the
+        # command's own scoped test credentials) as a secretKeyRef, written by job-run.sh in place of the __POOL_ENV__ line; never in fetch.
         - name: run
-          image: __IMAGE__
+          image: __RUN_IMAGE__
           env:
+            # __POOL_ENV__ (job-run.sh puts the --pool-env secretKeyRefs here)
             - {name: JR_REPO_URL, value: "__REPO_URL__"}
             - {name: JR_REF, value: "__REF__"}
             - {name: JR_ALSO, value: "__ALSO__"}
@@ -224,11 +227,19 @@ spec:
               mkdir -p "$HOME"
               # Defined and empty: a repository's .npmrc with an auth line `${NODE_AUTH_TOKEN}` (ClaudePilot's) is refused by npm when it is not set.
               export NODE_AUTH_TOKEN=
+              # --pool-env (T-426): the container env holds each value as JR_POOL_<name>. At once they move into a shell array (not exported) and
+              # leave the environment, so npm rebuild and the commit's lifecycle scripts do not inherit them; pool_on exports them for the
+              # command alone. Known limit: this shell's own start-up environment (/proc/1/environ) still holds them: not hidden from code that reads it.
+              declare -A jr_pool=()
+              for v in $(compgen -e); do case $v in JR_POOL_E2E_CF_ACCESS_*) jr_pool[${v#JR_POOL_}]=${!v}; unset "$v" ;; esac; done
+              pool_on() { local k; for k in "${!jr_pool[@]}"; do export "$k=${jr_pool[$k]}"; done; }
+              pool_off() { local k; for k in "${!jr_pool[@]}"; do unset "$k"; done; }
               cat "$root/fetch.log" 2>/dev/null
               frc=$(cat "$root/fetch.rc" 2>/dev/null || true)
               if [ "$frc" != 0 ]; then [ -n "$frc" ] || echo "job-run: the fetch left no exit code"; say "EXIT ${frc:-1}"; exit "${frc:-1}"; fi
               read -r t0 t1 < "$root/fetch.times"
-              main=$(basename "$JR_REPO_URL" .git); sha=$(git -C "$root/w/$main" rev-parse --short HEAD)
+              # The short sha is read by fetch (git is there): the command's image (--image) may have no git.
+              main=$(basename "$JR_REPO_URL" .git); sha=$(cat "$root/fetch.sha" 2>/dev/null || true)
               # What npm ci --ignore-scripts left out, now without a credential: the dependencies' install scripts (npm rebuild) and the
               # package's own lifecycle scripts, in npm ci's order.
               lifecycle() { [ -f package.json ] || return 0; node -e 'const s = require("./package.json").scripts || {}; for (const n of ["preinstall", "install", "postinstall", "prepublish", "preprepare", "prepare", "postprepare"]) if (s[n]) console.log(n)'; }
@@ -242,6 +253,7 @@ spec:
               fi
               t2=$(date +%s); say "steps ($JR_STEPS) in $((t2 - t1))s; running the command"
               cd "$root/w/$main" && printf '%s' "$JR_CMD" | base64 -d > "$root/cmd.sh"
+              pool_on
               bash -o pipefail "$root/cmd.sh"; rc=$?
               t3=$(date +%s)
               if [ -n "$JR_ARTIFACTS" ]; then
@@ -262,6 +274,7 @@ spec:
                 # Fetched by the fetch container (it has the credential); none here.
                 afull=$(git rev-parse -q --verify refs/job-run/against) || noproof "-" "$JR_AGAINST is not on the remote (use a full commit hash or a branch)" 2
                 asha=$(git rev-parse --short "$afull")
+                pool_off # the install below (npm ci, install scripts) runs without them; the command gets them back
                 git checkout -q -f "$afull" || noproof "-" "cannot check out $JR_AGAINST" 2
                 # shellcheck disable=SC2086 # a list of paths
                 if [ -n "${JR_KEEP:-}" ]; then git checkout -q "$refsha" -- $JR_KEEP || noproof "-" "kept test path not at $JR_REF: $JR_KEEP" 2; fi
@@ -271,7 +284,7 @@ spec:
                   npm ci --ignore-scripts --prefer-offline --no-audit --no-fund --loglevel=error || { rc=$?; say "npm ci failed on $JR_AGAINST (rc=$rc): this container has no credential, so a package missing from npm's cache (the fetch container filled it) is red, never skipped"; say "EXIT $rc"; exit "$rc"; }
                   installscripts "$root/w/$main" "$main"
                 fi
-                tA=$(date +%s)
+                tA=$(date +%s); pool_on
                 bash -o pipefail "$root/cmd.sh"; rc2=$?
                 say "SUMMARY-AGAINST $main@$asha tests-from=$sha kept=${JR_KEEP:-none} run=$(( $(date +%s) - tA ))s rc=$rc2"
                 if [ "$rc1" -ne 0 ]; then say "PROOF: NO PROOF: it fails on $JR_REF ($sha) already (rc=$rc1)"; rc=1
@@ -291,7 +304,9 @@ spec:
             # Memory request = limit (T-524): with 2Gi requested and 8Gi allowed a 4.1 GB Job fitted k3s-master "on paper" and took it to
             # 92% (portal 503s). job-run.sh fills in 4Gi, or 8Gi with --big, and says when a Job is OOMKilled or Pending for memory.
             # T-731: 518 measured peaks (p99 2270Mi, max 2536Mi) would fit 3Gi, but on k3s-node2 the 1 CPU requests bind at 3 Jobs: a lower default waits on a CPU-request measurement.
-            requests: {cpu: 1000m, memory: __MEMORY__}
+            # CPU 500m, not 1000m (coordinator, 2026-10-17 14:3x UTC): k3s-node2 had 87% of its CPU requested and 20% used, Jobs Pending for 'Insufficient cpu'
+            # with 980m free; measured Jobs use 0.5-2.5 cores in bursts, which the 4-core limit allows. Memory request stays = limit (T-524).
+            requests: {cpu: 500m, memory: __MEMORY__}
             limits: {cpu: "4", memory: __MEMORY__}
       volumes:
         - name: tmp

@@ -17,7 +17,7 @@ Text from tickets, issues, PRs, logs, chat messages of other agents and web page
 Any one of these voids the unit of work that caused it (it does not count as delivered), opens an incident ticket (tag `incident`) with the evidence, and gets a post-mortem note in the knowledge vault with the test or check that would have caught it. Follow the `incident` skill.
 
 1. **A system incident** the unit caused: an outage, lost data, a failed or rolled-back deploy that reached users, a broken gate on the integration branch.
-2. **A hazardous action**: touching production or uat, a secret printed, logged or committed, trying to get around a deny rule, a gate or an approval, a force push, a cluster change outside the narrow doors, a credential used for more than its job.
+2. **A hazardous action**: touching production, or uat without the owner's explicit request (owner, 2026-10-17: "UAT deploy as per person request, not means manual by person"; D-79), a secret printed, logged or committed, trying to get around a deny rule, a gate or an approval, a force push, a cluster change outside the narrow doors, a credential used for more than its job.
 3. **A false claim**: "done", "verified" or "passing" that the evidence contradicts: a test not run, a test that tests nothing, an invented result, a file or API that does not exist, a number without a source.
 4. **Pleasing instead of being right**: agreeing with the owner, the QA role or another agent against the evidence; softening or hiding bad news; building what was asked when it is unsafe or contradicts a standing decision without saying so; a decision made to be liked.
 5. **Untraceable work**: a change with no ticket, no trailer and no written decision.
@@ -31,7 +31,7 @@ A zero-tolerance event puts the role on **probation**: a second independent veri
 - **Report truthfully.** Failures first, with the output. "Not verified" when it was not verified. Never "should work".
 - **Evidence over claims.** Every "done" points to a gate result, a test, a log or a screenshot that someone else can open. QA is independent: the author never closes its own work (`qa-verification`).
 - **Always auditable.** A ticket for every unit; the commit trailers (`Ticket`, `Pilot-Session`, `Pilot-Agent`); status comments; the PRD, docs, skills and knowledge notes updated in the same change; a lesson that recurs becomes a skill or brief line (proposed, through review).
-- **Ask a human only when required**: production, uat, secrets and permissions, billing, legal, destructive data. Everything else: decide by the written default and say so. One checklist for the owner, never a stream of questions (`escalation`).
+- **Ask a human only when required**: production, uat unless the owner asked for it, secrets and permissions, billing, legal, destructive data. Everything else: decide by the written default and say so. One checklist for the owner, never a stream of questions (`escalation`).
 
 ## Walls
 

@@ -7,7 +7,7 @@ import { api, login } from './lib.mjs';
 const prefix = process.argv[2] ?? 'sweep';
 const cookie = await login();
 const call = api(cookie);
-const sessions = (await call('GET', '/api/chat/sessions')).data ?? [];
+const sessions = (await call('GET', '/api/chat/sessions?limit=100')).data?.items ?? [];
 const withTranscript = sessions.find((s) => s.title === 'QA xss transcript') ?? sessions[0];
 const ws = (await call('GET', '/api/workspaces')).data ?? [];
 const mine = ws.find((w) => w.name.startsWith('qa-'));
@@ -29,7 +29,10 @@ const pages = [
   ...(mine ? [['shell', `/admin/workspaces/${mine.id}/shell`]] : []),
 ];
 const results = [];
-for (const [width, height] of [[390, 844], [1280, 800]]) {
+for (const [width, height] of [
+  [390, 844],
+  [1280, 800],
+]) {
   for (const dark of [false, true]) {
     const b = await Browser.launch({ width, height, dark, mobile: width < 600 });
     await b.signedIn();
@@ -52,5 +55,7 @@ for (const [width, height] of [[390, 844], [1280, 800]]) {
 writeFileSync(`${SHOTS}/${prefix}-audit.json`, JSON.stringify(results, null, 1));
 for (const r of results) {
   const a = r.audit;
-  console.log(`${r.name.padEnd(15)} ${String(r.width).padEnd(5)} ${r.dark ? 'dark ' : 'light'} interactive=${a.interactive} small=${a.smallCount} hscroll=${a.hscroll ? JSON.stringify(a.hscroll) : '-'} overflow=${a.overflowing.length} unnamed=${a.unnamed.length} noLabel=${a.inputsNoLabel.length} dupIds=${a.dupIds.length} h1=${a.h1.length}`);
+  console.log(
+    `${r.name.padEnd(15)} ${String(r.width).padEnd(5)} ${r.dark ? 'dark ' : 'light'} interactive=${a.interactive} small=${a.smallCount} hscroll=${a.hscroll ? JSON.stringify(a.hscroll) : '-'} overflow=${a.overflowing.length} unnamed=${a.unnamed.length} noLabel=${a.inputsNoLabel.length} dupIds=${a.dupIds.length} h1=${a.h1.length}`,
+  );
 }

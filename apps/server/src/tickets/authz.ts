@@ -14,6 +14,14 @@ export const TICKET_BUMP_POLICIES = {
   'POST /api/tickets/:id/bump': { kind: 'objects', checks: [ticket('operate'), { type: 'session', verb: 'operate', from: 'body', param: 'sessionId' }], audit: 'ticket.bumped' },
 } satisfies RoutePolicies;
 
+/** Attachments (owner, 2026-10-17): seeing them needs view on the ticket, adding or removing one needs operate. */
+export const TICKET_ATTACHMENT_POLICIES = {
+  'GET /api/tickets/:id/attachments': { kind: 'objects', checks: [ticket('view')] },
+  'POST /api/tickets/:id/attachments': { kind: 'objects', checks: [ticket('operate')], audit: 'ticket.attached' },
+  'GET /api/tickets/:id/attachments/:attachmentId': { kind: 'objects', checks: [ticket('view')] },
+  'DELETE /api/tickets/:id/attachments/:attachmentId': { kind: 'objects', checks: [ticket('operate')], audit: 'ticket.attachment_removed' },
+} satisfies RoutePolicies;
+
 export const TICKET_BUMP_TOOL_POLICIES = {
   ticket_bump: {
     kind: 'objects',
@@ -40,7 +48,7 @@ export const TICKET_VERDICT_TOOL_POLICIES = {
 } satisfies ToolPolicies;
 
 export function declareTicketPolicies(): void {
-  declarePolicies('tickets', TICKET_BUMP_POLICIES);
+  declarePolicies('tickets', { ...TICKET_BUMP_POLICIES, ...TICKET_ATTACHMENT_POLICIES });
   declareToolPolicies('tickets', { ...TICKET_BUMP_TOOL_POLICIES, ...TICKET_ADOPT_TOOL_POLICIES, ...TICKET_VERDICT_TOOL_POLICIES });
 }
 
@@ -157,8 +165,8 @@ export function canAgentTagChecklist(facts: {
 
 /* ---------- A crew worker reports on its work (T-294, T-397) ---------- */
 
-/** Why a worker may comment: the ticket its spawn named (`spawn_ticket`), or a ticket its lead holds (`lead_ticket`). */
-export type WorkerCommentReason = 'spawn_ticket' | 'lead_ticket';
+/** Why a worker may comment: the ticket its spawn named (`spawn_ticket`), a ticket its lead holds (`lead_ticket`), or one a crew mate holds (`crew_ticket`). */
+export type WorkerCommentReason = 'spawn_ticket' | 'lead_ticket' | 'crew_ticket';
 export type WorkerCommentDecision = { allow: true; why: WorkerCommentReason } | { allow: false };
 
 /**
@@ -166,6 +174,8 @@ export type WorkerCommentDecision = { allow: true; why: WorkerCommentReason } | 
  * comment only: never a change, a close, a claim or an adoption. The worker must be LIVE and have a lead (`parentId`). Then it may comment on:
  * - `lead_ticket`: a ticket a session holds that is its lead, or a session continuing its lead (`continued_from` back from the holder reaches
  *   the lead: a restarted lead's tickets move to its successor, FR18a). Its lead's own lead is not followed.
+ * - `crew_ticket`: a ticket a CREW MATE holds: a session with the same lead (QA and review lanes verify the build lanes' tickets and post their
+ *   evidence there; 2026-10-17 every Konfersi QA verdict comment was refused, T-969). A session outside the crew stays refused.
  * - `spawn_ticket`: the ticket its spawn named (the session's `ticketId`, set only by `session_spawn`) while NOBODY holds it (the lead started
  *   the worker before claiming). Held by a person or by another session, it is refused: a lead cannot open someone else's ticket by naming it.
  * Pure: the service gathers the facts, keeps today's refusal on a deny, and writes the audit row with `why`.
@@ -178,10 +188,13 @@ export function canWorkerComment(facts: {
   holderId: string | null;
   /** The holder session's predecessors, nearest first (`continued_from` back); empty when it is not a session. */
   holderAncestors: readonly string[];
+  /** The holder session's own lead (`parentId`), when it is a session with one. */
+  holderLead?: string | null;
 }): WorkerCommentDecision {
   const lead = facts.worker.parentId;
   if (!lead || facts.worker.state === 'ended') return { allow: false };
   if (facts.holderKind === 'session' && facts.holderId && (facts.holderId === lead || facts.holderAncestors.includes(lead))) return { allow: true, why: 'lead_ticket' };
+  if (facts.holderKind === 'session' && facts.holderId && facts.holderId !== facts.worker.id && facts.holderLead === lead) return { allow: true, why: 'crew_ticket' };
   if (facts.holderKind === null && facts.worker.ticketId === facts.ticketId) return { allow: true, why: 'spawn_ticket' };
   return { allow: false };
 }

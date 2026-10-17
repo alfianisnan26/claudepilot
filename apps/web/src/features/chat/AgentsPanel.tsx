@@ -416,7 +416,7 @@ function Toolbar({ counts, filter, onFilter, searching }: { counts: Counts; filt
             autoComplete="off"
             autoCapitalize="none"
             spellCheck={false}
-            className="h-11 w-full rounded-full border border-line bg-surface pr-3 pl-9 text-[16px] text-ink placeholder:text-muted focus:border-primary focus:outline-none sm:h-9 sm:text-[13.5px] [&::-webkit-search-cancel-button]:hidden"
+            className="h-11 w-full rounded-full border border-line bg-surface pr-3 pl-9 text-[16px] text-ink placeholder:text-muted focus:border-primary focus:outline-hidden sm:h-9 sm:text-[13.5px] [&::-webkit-search-cancel-button]:hidden"
           />
         </label>
       </div>
@@ -632,6 +632,7 @@ function Sheet({ onClose, ...props }: AgentsProps & { onClose: () => void }) {
         aria-modal="true"
         aria-labelledby={titleId}
         tabIndex={-1}
+        data-focus-container
         initial={{ x: '100%' }}
         animate={{ x: 0 }}
         exit={{ x: '100%', transition: { duration: 0.18, ease } }}

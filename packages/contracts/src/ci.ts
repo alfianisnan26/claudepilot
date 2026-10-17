@@ -3,6 +3,7 @@
 // Everything that came out of a workspace (logs, commit messages, diagnostics) is untrusted text.
 
 import type { BumpMode } from './bump.js';
+import type { CursorPage } from './page.js';
 
 /** A run's status. Jobs and steps add `pending` and `skipped`; a job held for a person's approval (FR41) is `waiting` (its run stays `running`). */
 export const CI_STATUSES = ['queued', 'running', 'passed', 'failed', 'cancelled'] as const;
@@ -13,7 +14,22 @@ export type CiUnitStatus = CiStatus | 'pending' | 'skipped' | 'waiting';
 export const isCiActive = (s: CiUnitStatus): boolean => s === 'queued' || s === 'running' || s === 'pending' || s === 'waiting';
 
 /** Why a run or a unit failed, when it isn't just "a step exited non-zero". */
-export const CI_REASONS = ['step_failed', 'timeout', 'invalid_pipeline', 'runner_lost', 'no_space', 'runner_error', 'cancelled', 'superseded', 'needs', 'condition', 'signal', 'fail_fast', 'rejected', 'no_runner'] as const;
+export const CI_REASONS = [
+  'step_failed',
+  'timeout',
+  'invalid_pipeline',
+  'runner_lost',
+  'no_space',
+  'runner_error',
+  'cancelled',
+  'superseded',
+  'needs',
+  'condition',
+  'signal',
+  'fail_fast',
+  'rejected',
+  'no_runner',
+] as const;
 export type CiReason = (typeof CI_REASONS)[number];
 
 /** What started a run. A rerun keeps the trigger it repeats in `rerunOf`. */
@@ -368,12 +384,19 @@ export interface CiApprovalRequest {
   job: string;
 }
 
+/** The in-process list (glance, the Portal MCP tools): everything up to a limit, with the counts. */
 export interface CiRunList {
   items: CiRunSummary[];
   /** Matching the filters. */
   total: number;
   /** Runs not finished, over everything the filters left in. */
   active: number;
+}
+
+/** `GET CI_API.runs` (D-58): one page, newest first. `total` and `active` ride on the first page only (no `cursor`), over the runs the caller may view. */
+export interface CiRunPage extends CursorPage<CiRunSummary> {
+  total?: number;
+  active?: number;
 }
 
 export interface CiRunFilter {
@@ -385,8 +408,8 @@ export interface CiRunFilter {
   ticket?: string;
   session?: string;
   limit?: number;
-  /** A run id: only runs before it. */
-  before?: string;
+  /** The `next` of the page before (`GET CI_API.runs` only). */
+  cursor?: string;
 }
 
 /** A piece of a step's log, redacted, with the offset to ask for next. */
@@ -550,7 +573,7 @@ export interface ValidateCiResult {
 export const CI_API = {
   /** GET: `CiRunner[]`. PUT `/<workspace id, encoded>` with `UpsertCiRunnerRequest`: the `CiRunner`. DELETE `/<workspace id, encoded>`: it is a runner no more (T-557; the routes take the id in the path, T-576). */
   runners: '/api/ci/runners',
-  /** GET `CiRunFilter` as a query string: `CiRunList`. POST `StartCiRunRequest`: the new `CiRun`. */
+  /** GET `CiRunFilter` as a query string (`limit` 25 by default and 100 at most, `cursor`): `CiRunPage`. POST `StartCiRunRequest`: the new `CiRun`. */
   runs: '/api/ci/runs',
   /** GET: `CiRun`. */
   run: (id: string) => `/api/ci/runs/${encodeURIComponent(id)}`,
@@ -587,7 +610,8 @@ export const CI_API = {
   /** PUT `UpdateCiEnvironmentRequest`: `CiEnvironment` (made when it does not exist yet). */
   environment: (repoId: string, name: string) => `/api/ci/repos/${encodeURIComponent(repoId)}/environments/${encodeURIComponent(name)}`,
   /** PUT `UpdateCiAutoApproveRequest`: `CiEnvironment` (FR41a; a person with manage only). */
-  environmentAutoApprove: (repoId: string, name: string) => `/api/ci/repos/${encodeURIComponent(repoId)}/environments/${encodeURIComponent(name)}/auto-approve`,
+  environmentAutoApprove: (repoId: string, name: string) =>
+    `/api/ci/repos/${encodeURIComponent(repoId)}/environments/${encodeURIComponent(name)}/auto-approve`,
   /** GET: the `CiReleaseReportSetting` of a remote or null. PUT `{ setting: CiReleaseReportSetting | null }`: set or clear it (a person with manage only; T-591). */
   releaseReport: (repoId: string) => `/api/ci/repos/${encodeURIComponent(repoId)}/release-report`,
   /** POST: write the release report of a past run (backfill) into the vault its remote's setting names; `CiReleaseReportResult` (a person with manage only; T-591). */

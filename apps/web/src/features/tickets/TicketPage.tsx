@@ -26,6 +26,7 @@ import { errorText } from '@/lib/api';
 import { formatDateTime, timeAgo } from '@/lib/format';
 import { useLive } from '@/lib/live';
 import { ticketsApi } from './api';
+import { Attachments, fileSize } from './Attachments';
 import { ORPHAN_TITLE, SESSION_STATE_LABEL, actorName, fallbackSentence } from './labels';
 import { AssigneeChip, CheckChips, PriorityMark, StatusBadge, TagList, TicketFlags, TypeBadge } from './parts';
 import { AssignDialog, CloseDialog, EditTicketDialog, StartSessionDialog, TagsDialog, TicketBumpDialog } from './TicketDialogs';
@@ -222,13 +223,15 @@ export function TicketPage() {
           )}
         </Card>
 
+        <Attachments ticketId={t.id} attachments={detail.attachments ?? []} onChanged={load} />
+
         {detail.sessions.length > 0 && (
           <Card className="p-4 sm:p-5">
             <h2 className="mb-2 text-[13px] font-semibold text-muted">Sessions</h2>
             <ul className="divide-y divide-line">
               {detail.sessions.map((s) => (
                 <li key={s.id}>
-                  <Link to={`/admin/sessions/${s.id}`} className="flex items-center gap-3 rounded-lg py-2.5 hover:text-accent focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none">
+                  <Link to={`/admin/sessions/${s.id}`} className="flex items-center gap-3 rounded-lg py-2.5 hover:text-accent focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden">
                     <Bot className="size-4 shrink-0 text-muted" />
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-sm font-semibold">{s.title}</span>
@@ -304,7 +307,7 @@ function Back() {
   if (split)
     return (
       <div className="sticky top-0 z-10 -mb-11 flex justify-end">
-        <Link to={to} aria-label="Close panel" title="Close panel" className="press flex size-11 items-center justify-center rounded-full bg-bg text-muted hover:bg-surface-2 hover:text-ink focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none">
+        <Link to={to} aria-label="Close panel" title="Close panel" className="press flex size-11 items-center justify-center rounded-full bg-bg text-muted hover:bg-surface-2 hover:text-ink focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden">
           <X className="size-5" />
         </Link>
       </div>
@@ -365,6 +368,8 @@ function sentence(e: TicketEvent): string {
       return `${who} bumped it into ${typeof d.sessionTitle === 'string' && d.sessionTitle ? `“${d.sessionTitle}”` : 'a session'} (${d.mode === 'prioritise' ? BUMP_MODE_LABEL.prioritise : BUMP_MODE_LABEL.ask})`;
     case 'session_ended':
       return `The session ended${typeof d.reason === 'string' && d.reason ? `: ${d.reason}` : ''}`;
+    case 'attachment':
+      return d.removed ? `${who} removed ${typeof d.name === 'string' ? d.name : 'a file'}` : `${who} attached ${typeof d.name === 'string' ? d.name : 'a file'}${typeof d.size === 'number' ? ` (${fileSize(d.size)})` : ''}`;
     case 'ci':
       return `${who}: ${typeof d.name === 'string' ? d.name : 'a check'} ${typeof d.state === 'string' ? d.state : 'changed'}`;
     default:
@@ -435,7 +440,7 @@ function Timeline({ events, ticketId, onChanged }: { events: TicketEvent[]; tick
           onKeyDown={(e) => {
             if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') void send();
           }}
-          className="w-full resize-y rounded-xl border border-line bg-surface px-3.5 py-2.5 text-base text-ink outline-none transition-[border-color,box-shadow] placeholder:text-muted/70 hover:border-line-strong focus:border-ink/40 focus:ring-4 focus:ring-[var(--ring)]"
+          className="w-full resize-y rounded-xl border border-line bg-surface px-3.5 py-2.5 text-base text-ink outline-hidden transition-[border-color,box-shadow] placeholder:text-muted/70 hover:border-line-strong focus:border-ink/40 focus:ring-4 focus:ring-[var(--ring)]"
         />
         <div className="flex justify-end">
           <Button icon={<MessageSquare className="size-4" />} loading={sending} disabled={!text.trim()} onClick={() => void send()}>

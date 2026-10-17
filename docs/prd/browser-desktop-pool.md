@@ -563,7 +563,7 @@ reads the title the person's click set; a second device is a viewer and its inpu
 | F3 | Q3: downloads land in `~/Downloads` with the policy `DownloadDirectory` ✅. Q5, Q6: the stdio gate starts from a plugin `.mcp.json`, answers `initialize` and `tools/list` from pinned lists without waking Chrome, and Claude Code 2.1.296 lists it connected and calls its tools ✅. |
 | F4 | Q7: restored tabs made Playwright drive a hidden tab ✅, so there is no `RestoreOnStartup`; the gate opens its own tab (or brings it forward) and the supervisor reports the tab count. Q9: `-nolisten local` removes the abstract socket ✅. Q4: the bridge works over `exec` with a helper (`cpb-vnc`) in place of socat ✅; throughput and latency are not measured. |
 | F5 | Other portals on the same Docker daemon reaped this portal's browser containers, so every container carries the creating portal's id and a portal only touches its own, and none when it does not trust its database. |
-| F6 | The MCP lockdown matches a plugin server by its command line with `${CLAUDE_PLUGIN_ROOT}` already replaced by the plugin's version folder ✅ (the unexpanded text is blocked). The browser reports that exact line (`BrowserService.matchers`), so "Pool MCP only" keeps the browser's tools. |
+| F6 | The MCP lockdown matches a plugin server by its command line with `${CLAUDE_PLUGIN_ROOT}` already replaced by the plugin's version folder ✅ (the unexpanded text is blocked). The browser reports that exact line (`BrowserService.matchers`), so "Pool MCP only" keeps the browser's tools. **T-881 (incident 2026-10-16):** Claude Code is never told to update a plugin (the marketplace has `autoUpdate` off), so a session keeps launching the version it installed after a revision moves the plugin to a new folder; a list of only the current command blocked every new session for 15 minutes. `matchers` therefore also reports the exact commands of the pool's earlier deliverable revisions (at most five, newest first) for as long as the reconciler still holds their version folder (`pluginFolders`, kept per workspace by `BrowserKind`; every one of the five before the first delivery report after a restart). Never a pattern, never a folder the pool did not compile; when the reconciler retires a folder its command leaves the list. Residual: a session older than five revisions, or older than the retention, is blocked until it restarts. Real-Claude test: `browser.integration.test.ts` (Docker only). |
 | D1 | noVNC 1.4.0, pinned exactly: later releases ship CommonJS with top-level await, which the web build can't bundle. It loads only when the Screen view is shown. |
 | D2 | The Desktop tier is not built (no panel, terminal or desktop MCP server): the editor doesn't offer it and the pool refuses it until B4. |
 | D3 | Decision for the owner: no per-view token on the preview socket. It uses the shell socket's checks (§22). Say if a one-time token is wanted anyway. |
@@ -595,6 +595,29 @@ key's name, never a value. The audit, the spec hash input and the pool hold the 
 the value by the key's own variable name (`--redact-env <KEY>`), since the workspace has an env file's variables, not a variable called after the entry. Without
 `key` a rule behaves as before (the whole value).
 
+**S2c (T-623).**
+- A `key` that is blank or only whitespace is refused at save (`VALIDATION_FAILED`, the field `headers`, “A key can’t be blank”), never dropped: dropping it would
+  deliver the whole env-file entry, every variable in it, to the header's host. Leave `key` out for a plain single-value secret.
+- `envFileValue` drops a ` # note` after a value (whitespace, then `#`; a `#` inside a value, or inside quotes, stays), and ignores a leading byte-order mark. A key
+  that is a prefix of another variable (`CF_ID` against `CF_ID_2`) matches only its own line.
+- **How the workspace gets its variables (S2d).** The portal does not parse an env file into the workspace: `secrets/render.ts` writes one `export NAME=...` per
+  variable (`secrets/kind.ts`: a variable is one line), and `browser/compile.ts` hands the gate the NAME. `envFileValue` is the only env-file parser, and it
+  reads a value in memory for the header. A reader that keeps ` # note` (Docker's `--env-file`) can leave the variable longer than the header value. So the gate
+  masks the variable as is **and** its parsed form (after an optional `KEY=`, without quotes and without a trailing note, per line), so the real value is never
+  shorter than its mask. Test: `gate.test.ts` "keeps its note or its KEY=". The same ≥ 8 character floor applies.
+- **Key collision in masking.** The gate masks by the value of the workspace variable named `<KEY>`. If the key's name is also an unrelated variable of the
+  workspace, the gate masks that variable's value, and the header's value is masked only when the two are equal. Pick key names that are the env file's own.
+  No test covers a collision; not verified.
+- **Re-delivery on rotation.** The entry's value id is part of the delivered headers, so rotating any variable of the same entry re-delivers the headers of every
+  rule that names the entry, even one whose own key did not change, and may restart the browser. This is by design (one entry, one version).
+
+**The pool editor (T-856).** Under Advanced the editor lists the rules (`features/browser/BrowserEditor.tsx`): per rule the header name, the secret's name, the
+**Key** (an InfoTip explains it; empty means the entry's whole value, and the property is then omitted on save, since the server refuses an empty variable name) and
+the hosts, with Add and Remove (at most 10, the server's limit). Every edit goes through `headerRules.ts`, which copies the rule and changes one field, so a `key`
+(or any field the editor does not know) set through the API or MCP survives every edit and every save. Before T-856 the editor had no headers section: it kept the
+pool's `headers` unchanged on save (it spreads the content), so a rule set through the API was not lost, but it could not be seen or edited. The editor shows names
+only, never a value. Hosts commit when the field loses focus.
+
 **How it works** (no proxy: HTTPS would need a CA the browser trusts):
 
 | Step | What happens |
@@ -621,3 +644,25 @@ the value by the key's own variable name (`--redact-env <KEY>`), since the works
 **Verified** (unit tests, `apps/server/src/browser/headers.test.ts`, `gate.test.ts`, the cluster Job runs on the ticket): a matching host gets the header and a non-matching one doesn't; the value is in no place but the headers file; a removed secret leaves the header out and recreates the container without it; the file modes (`0400` file in a `0700` folder, config world-readable); the extension id the policy allows equals the id the path gives; header redaction by name and by value. The Kubernetes delivery runs against the fake API server (`kube.headers.test.ts`): the value only on stdin and in no argv, template, audit or Secret request; rotation writes again and stops Chrome once idle; removal deletes the file; no pod restart; a failure is audited without the value; a new pod gets the file again. Each of the key tests fails without its fix (mutations run, listed on the ticket).
 
 **Not verified** (not testable in the pod): Chromium actually loading the extension under the managed policy and sending the header, and its `initiatorDomains` matching (needs the browser image and a real Chromium: the id, `--load-extension` and the newer-Chrome switch are from vendor behaviour 📄, not observed here 🔬); the two delivery scripts run by a real shell in a real browser container (the fake API server answers as they do; the scripts themselves are not executed in a test of this change); the memory `emptyDir` mount on the cluster. Check them in a rig namespace with a scratch portal and a header-echo site before relying on a real staging site.
+
+## 25. App mode
+
+*T-948, slice S2 (the Browser page). The route behind it and its isolation are in [App ports](app-ports.md); this section is what the page does.*
+
+**What it is.** A second mode on the workspace Browser page (`/admin/workspaces/<target>/<name>/browser`), next to the remote browser (Screen and Preview, §15 and §22), which is unchanged. A switch in the header chooses **Remote** or **App** and is remembered on the device. App is a browser inside the portal: it shows a web app that listens inside the workspace (for example a dashboard on `localhost:8765`) in a frame, on the app's own origin, not as a streamed screen. Remote's dock and key bar are hidden in App mode, and App mode does not wake a sleeping browser.
+
+**Addresses.** The address bar accepts `localhost:<port>/<path>`, `127.0.0.1:<port>/<path>`, either with `http://` in front, or a bare port (`8765`). Query and fragment are kept. It refuses, with one line under the bar: another host, a scheme other than http (https, file, javascript, data), no port, a port outside 1024 to 65535, and a path the server would refuse (`//`, a backslash, a control character; the same rule as `next` in App ports). The parser is `appAddress.ts`; the server checks again.
+
+**Ports.** A Ports button lists what the workspace is listening on (`GET …/ports`). A port the portal will not open (its own, an agent's) is shown greyed out. Choosing one opens it in a new tab.
+
+**Tabs.** Several apps are tabs, each labelled with its port. Opening a port adds a tab; typing an address in the bar loads it in the front tab. Closing the front tab brings up its right neighbour, else its left. All frames stay mounted, so switching keeps an app's state.
+
+**How a tab opens, and reload.** Each open calls `POST …/ports/open` and sets the frame's `src` to the URL it returns (a one-time code on the app host, valid 30 seconds, single use). So **reload, retry, back and forward through the typed history, and open in a new tab each call the route again**; the same URL is never loaded twice. Two opens that overlap (two quick reloads) cannot race: only the latest answer is applied. A URL that is not https is never loaded (the tab shows an error), and a 404 from "open in a new tab" shows the off state, not an error. The code is only in the frame's `src` or the new window, and the page never shows, stores or logs it. The frame has no `sandbox` (the app needs its own origin to work, and it is not the portal's), has `referrerpolicy="no-referrer"` and a narrow `allow` list (clipboard, fullscreen, autoplay; camera, microphone, geolocation and payment denied). "Open in a new tab" opens a window at once, then points it at a fresh URL, because a phone refuses a window opened after a wait.
+
+**Back and forward.** A frame on another origin can't be read. The page tries the frame's own history and, when that throws (it does for a cross-origin frame), steps its own list of what was typed in the bar (a new address drops the forward entries; the same address twice is one entry).
+
+**Off.** When the portal has no `PORT_PROXY_HOST_SUFFIX` (a 404 from either route, or `enabled: false` on the list), the page says "App mode is off" with an InfoTip that explains how it is turned on. It is a state, not an error.
+
+**Phone.** Full width; the address bar collapses to a search icon that opens it; back, reload, Ports, new tab and the tab controls are 44 px on touch screens; the page scrolls nowhere (the tab strip scrolls inside itself); safe areas are kept; titles are one or two words and the explanations sit in an InfoTip. The page's pinning to the viewport (`lib/viewport.ts`) is unchanged.
+
+**Built and checked.** `appAddress.test.ts` and `appTabs.test.ts` (parser, tab state, history fallback) pass in a cluster Job, with a parser mutant killed; typecheck and the web build are green. **Not verified:** the layout at 390 and 1280 px, light and dark, and the iOS PWA (a ux-checker's), and the whole path against a live server and the Tradingbot dashboard (after the server slice).

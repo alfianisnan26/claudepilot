@@ -287,7 +287,7 @@ function GraphList({ nodes, text, onText, onTap, dark }: { nodes: GraphNode[]; t
           onChange={(e) => onText(e.target.value)}
           placeholder="Filter"
           aria-label="Filter"
-          className="h-9 w-full rounded-xl border border-line bg-surface px-3 text-[14px] outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          className="h-9 w-full rounded-xl border border-line bg-surface px-3 text-[14px] outline-hidden focus-visible:ring-2 focus-visible:ring-accent"
         />
       </div>
       <ul className="min-h-0 flex-1 overflow-y-auto px-2 pb-6 [scrollbar-width:thin]">

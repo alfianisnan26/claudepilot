@@ -8,7 +8,7 @@ import {
   isTicketClosed,
   type TicketFilter,
   type TicketItem,
-  type TicketList,
+  type TicketPage as TicketPageData,
   type TicketPriority,
   type TicketStatus,
   type TicketTag,
@@ -106,7 +106,9 @@ function TicketQueue({ selected }: { selected: string | null }) {
   const [text, setText] = useState(params.get('q') ?? '');
   const q = params.get('q') ?? '';
 
-  const [data, setData] = useState<TicketList | null>(null);
+  // The rows loaded so far (page 1, then every "Load more"), the cursor of the next page, and the counts from page 1 (D-58).
+  const [data, setData] = useState<TicketPageData | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [tags, setTags] = useState<TicketTag[]>([]);
   const [failed, setFailed] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -122,7 +124,10 @@ function TicketQueue({ selected }: { selected: string | null }) {
       { replace: true },
     );
 
-  const filter = useMemo<TicketFilter>(() => pageFilter({ view, scope, needs, queue, orphans, priority, type, tag, q }), [view, scope, needs, queue, orphans, priority, type, tag, q]);
+  const filter = useMemo<TicketFilter>(
+    () => pageFilter({ view, scope, needs, queue, orphans, priority, type, tag, q }),
+    [view, scope, needs, queue, orphans, priority, type, tag, q],
+  );
 
   const seq = useRef(0);
   const load = useCallback(async () => {
@@ -138,14 +143,33 @@ function TicketQueue({ selected }: { selected: string | null }) {
     }
   }, [filter]);
   useEffect(() => void load(), [load]);
+  // A change anywhere reads page 1 again (the loaded older pages are dropped; "Load more" brings them back).
   useLive('tickets', () => void load());
+
+  // The next page, added under the rows. A filter change or a reload while it loads makes this answer stale: it is dropped.
+  const loadMore = async () => {
+    const cursor = data?.next;
+    if (!cursor || loadingMore) return;
+    const mine = seq.current;
+    setLoadingMore(true);
+    try {
+      const more = await ticketsApi.list({ ...filter, cursor });
+      if (mine !== seq.current) return;
+      setData((d) =>
+        d ? { ...d, items: [...d.items, ...more.items.filter((m) => !d.items.some((x) => x.id === m.id))], next: more.next } : d,
+      );
+    } catch (e) {
+      toast(errorText(e, 'Couldn’t load more.'), 'error');
+    } finally {
+      setLoadingMore(false);
+    }
+  };
 
   // The search box types freely and the list follows once typing pauses.
   useEffect(() => {
     if (text === q) return;
     const t = window.setTimeout(() => set({ q: text.trim() || null }), 250);
     return () => window.clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [text]);
 
   const setView = (v: View) => {
@@ -186,19 +210,36 @@ function TicketQueue({ selected }: { selected: string | null }) {
   // A ticket opens with the queue's address kept (its view and filters), so closing it, or Back, returns to the same queue.
   const open = (ticketId: string) => navigate({ pathname: `/admin/tickets/${ticketId}`, search });
 
+  const moreButton = data?.next ? (
+    <div className="flex justify-center py-3">
+      <Button variant="secondary" loading={loadingMore} onClick={() => void loadMore()}>
+        More
+      </Button>
+    </div>
+  ) : null;
   const body =
     data &&
     (data.items.length === 0 ? (
-      <EmptyState icon={<TicketIcon className="size-6" />} title={q || needs || queue || orphans || priority || type || tag ? 'No match' : 'No tickets'} action={q || needs || queue || orphans || priority || type || tag ? undefined : add} />
+      <EmptyState
+        icon={<TicketIcon className="size-6" />}
+        title={q || needs || queue || orphans || priority || type || tag ? 'No match' : 'No tickets'}
+        action={q || needs || queue || orphans || priority || type || tag ? undefined : add}
+      />
     ) : view === 'list' ? (
       // As many columns of rows as the panel has room for (one on a phone): a wide screen shows more tickets, not longer rows.
-      <ul className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,28rem),1fr))] gap-2">
-        {data.items.map((t) => (
-          <TicketRow key={t.id} ticket={t} selected={t.id === selected} onOpen={() => open(t.id)} onBump={() => setBumping(t)} />
-        ))}
-      </ul>
+      <>
+        <ul className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,28rem),1fr))] gap-2">
+          {data.items.map((t) => (
+            <TicketRow key={t.id} ticket={t} selected={t.id === selected} onOpen={() => open(t.id)} onBump={() => setBumping(t)} />
+          ))}
+        </ul>
+        {moreButton}
+      </>
     ) : (
-      <Board items={data.items} selected={selected} search={search} pinned={pinned} onMove={move} onBump={setBumping} />
+      <>
+        <Board items={data.items} selected={selected} search={search} pinned={pinned} onMove={move} onBump={setBumping} />
+        {moreButton}
+      </>
     ));
 
   return (
@@ -219,19 +260,30 @@ function TicketQueue({ selected }: { selected: string | null }) {
               autoComplete="off"
               autoCapitalize="none"
               spellCheck={false}
-              className="h-11 w-full rounded-full border border-line bg-surface pr-10 pl-10 text-[16px] text-ink placeholder:text-muted focus:border-primary focus:outline-none sm:text-[15px] [&::-webkit-search-cancel-button]:hidden"
+              className="h-11 w-full rounded-full border border-line bg-surface pr-10 pl-10 text-[16px] text-ink placeholder:text-muted focus:border-primary focus:outline-hidden sm:text-[15px] [&::-webkit-search-cancel-button]:hidden"
             />
             {text && (
-              <button type="button" aria-label="Clear search" onClick={() => (setText(''), set({ q: null }))} className="press absolute top-1/2 right-2 flex size-8 -translate-y-1/2 items-center justify-center rounded-full text-muted hover:bg-surface-2 hover:text-ink tap:right-0 tap:size-11">
+              <button
+                type="button"
+                aria-label="Clear search"
+                onClick={() => (setText(''), set({ q: null }))}
+                className="press absolute top-1/2 right-2 flex size-8 -translate-y-1/2 items-center justify-center rounded-full text-muted hover:bg-surface-2 hover:text-ink tap:right-0 tap:size-11"
+              >
                 <X className="size-4" />
               </button>
             )}
           </label>
-          <div role="group" aria-label="View" className="flex shrink-0 rounded-full border border-line bg-surface p-0.5 tap:border-0 tap:p-0 tap:ring-1 tap:ring-line tap:ring-inset">
-            {([
-              ['list', List, 'List'],
-              ['board', Columns3, 'Board'],
-            ] as const).map(([id, Icon, label]) => (
+          <div
+            role="group"
+            aria-label="View"
+            className="flex shrink-0 rounded-full border border-line bg-surface p-0.5 tap:border-0 tap:p-0 tap:ring-1 tap:ring-line tap:ring-inset"
+          >
+            {(
+              [
+                ['list', List, 'List'],
+                ['board', Columns3, 'Board'],
+              ] as const
+            ).map(([id, Icon, label]) => (
               <button
                 key={id}
                 type="button"
@@ -239,7 +291,10 @@ function TicketQueue({ selected }: { selected: string | null }) {
                 aria-label={label}
                 title={label}
                 onClick={() => setView(id)}
-                className={cn('press flex size-10 items-center justify-center rounded-full tap:size-11', view === id ? 'bg-primary text-primary-ink' : 'text-muted hover:text-ink')}
+                className={cn(
+                  'press flex size-10 items-center justify-center rounded-full tap:size-11',
+                  view === id ? 'bg-primary text-primary-ink' : 'text-muted hover:text-ink',
+                )}
               >
                 <Icon className="size-[18px]" />
               </button>
@@ -250,7 +305,13 @@ function TicketQueue({ selected }: { selected: string | null }) {
         <div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-0.5 [scrollbar-width:none] sm:mx-0 sm:flex-wrap sm:overflow-visible sm:px-0 [&::-webkit-scrollbar]:hidden">
           {/* First while there are any: on a phone the row scrolls sideways, and an orphan must be seen without that. */}
           {(orphans || !!counts?.orphans) && (
-            <Chip on={orphans} tone="danger" title="Their session ended: the portal moves them in a few minutes" onClick={() => set({ orphan: orphans ? null : '1', assignee: null, s: null })} count={counts?.orphans ?? null}>
+            <Chip
+              on={orphans}
+              tone="danger"
+              title="Their session ended: the portal moves them in a few minutes"
+              onClick={() => set({ orphan: orphans ? null : '1', assignee: null, s: null })}
+              count={counts?.orphans ?? null}
+            >
               Orphans
             </Chip>
           )}
@@ -259,23 +320,55 @@ function TicketQueue({ selected }: { selected: string | null }) {
               const on = scope === s.id && !needs && !queue && !orphans;
               const n = chipCount(s.id);
               return (
-                <Chip key={s.id} on={on} onClick={() => set({ s: s.id === 'active' ? null : s.id, assignee: null, orphan: null })} count={n}>
+                <Chip
+                  key={s.id}
+                  on={on}
+                  onClick={() => set({ s: s.id === 'active' ? null : s.id, assignee: null, orphan: null })}
+                  count={n}
+                >
                   {s.label}
                 </Chip>
               );
             })}
-          <Chip on={needs} tone="warning" onClick={() => set({ assignee: needs ? null : 'user', s: null, orphan: null })} count={counts?.needsYou ?? null}>
+          <Chip
+            on={needs}
+            tone="warning"
+            onClick={() => set({ assignee: needs ? null : 'user', s: null, orphan: null })}
+            count={counts?.needsYou ?? null}
+          >
             Needs you
           </Chip>
-          <Chip on={queue} title="Nobody has these: agents can take them" onClick={() => set({ assignee: queue ? null : 'unassigned', s: null, orphan: null })} count={counts?.unassigned ?? null}>
+          <Chip
+            on={queue}
+            title="Nobody has these: agents can take them"
+            onClick={() => set({ assignee: queue ? null : 'unassigned', s: null, orphan: null })}
+            count={counts?.unassigned ?? null}
+          >
             Unassigned
           </Chip>
         </div>
 
         <div className="-mx-4 flex gap-2 overflow-x-auto px-4 [scrollbar-width:none] sm:mx-0 sm:flex-wrap sm:overflow-visible sm:px-0 [&::-webkit-scrollbar]:hidden">
-          <FilterSelect label="Priority" value={priority ?? ''} onChange={(v) => set({ priority: v || null })} options={TICKET_PRIORITIES.map((p) => ({ value: p, label: TICKET_PRIORITY_LABEL[p] }))} />
-          <FilterSelect label="Type" value={type ?? ''} onChange={(v) => set({ type: v || null })} options={TICKET_TYPES.map((t) => ({ value: t, label: TICKET_TYPE_LABEL[t] }))} />
-          {(tags.length > 0 || tag) && <FilterSelect label="Tag" value={tag ?? ''} onChange={(v) => set({ tag: v || null })} options={tags.map((t) => ({ value: t.tag, label: `${t.tag} (${t.count})` }))} />}
+          <FilterSelect
+            label="Priority"
+            value={priority ?? ''}
+            onChange={(v) => set({ priority: v || null })}
+            options={TICKET_PRIORITIES.map((p) => ({ value: p, label: TICKET_PRIORITY_LABEL[p] }))}
+          />
+          <FilterSelect
+            label="Type"
+            value={type ?? ''}
+            onChange={(v) => set({ type: v || null })}
+            options={TICKET_TYPES.map((t) => ({ value: t, label: TICKET_TYPE_LABEL[t] }))}
+          />
+          {(tags.length > 0 || tag) && (
+            <FilterSelect
+              label="Tag"
+              value={tag ?? ''}
+              onChange={(v) => set({ tag: v || null })}
+              options={tags.map((t) => ({ value: t.tag, label: `${t.tag} (${t.count})` }))}
+            />
+          )}
         </div>
       </div>
 
@@ -313,7 +406,21 @@ function TicketQueue({ selected }: { selected: string | null }) {
   );
 }
 
-function Chip({ on, onClick, count, tone, title, children }: { on: boolean; onClick: () => void; count: number | null; tone?: 'warning' | 'danger'; title?: string; children: React.ReactNode }) {
+function Chip({
+  on,
+  onClick,
+  count,
+  tone,
+  title,
+  children,
+}: {
+  on: boolean;
+  onClick: () => void;
+  count: number | null;
+  tone?: 'warning' | 'danger';
+  title?: string;
+  children: React.ReactNode;
+}) {
   return (
     <button
       type="button"
@@ -337,7 +444,17 @@ function Chip({ on, onClick, count, tone, title, children }: { on: boolean; onCl
   );
 }
 
-function FilterSelect({ label, value, onChange, options }: { label: string; value: string; onChange: (v: string) => void; options: { value: string; label: string }[] }) {
+function FilterSelect({
+  label,
+  value,
+  onChange,
+  options,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  options: { value: string; label: string }[];
+}) {
   return (
     <label className="relative shrink-0">
       <span className="sr-only">{label}</span>
@@ -345,7 +462,7 @@ function FilterSelect({ label, value, onChange, options }: { label: string; valu
         value={value}
         onChange={(e) => onChange(e.target.value)}
         className={cn(
-          'h-9 appearance-none rounded-full border bg-surface pr-8 pl-3.5 text-[16px] font-semibold focus:border-primary focus:outline-none tap:h-11 sm:text-[13.5px]',
+          'h-9 appearance-none rounded-full border bg-surface pr-8 pl-3.5 text-[16px] font-semibold focus:border-primary focus:outline-hidden tap:h-11 sm:text-[13.5px]',
           value ? 'border-primary text-ink' : 'border-line text-ink-soft',
         )}
       >
@@ -365,7 +482,17 @@ function FilterSelect({ label, value, onChange, options }: { label: string; valu
  * A row opens the ticket; its ⋯ (outside the row's button, top right) has Bump for a ticket that isn't closed. The open ticket's row
  * is marked while it shows beside the queue.
  */
-function TicketRow({ ticket: t, selected, onOpen, onBump }: { ticket: TicketItem; selected: boolean; onOpen: () => void; onBump: () => void }) {
+function TicketRow({
+  ticket: t,
+  selected,
+  onOpen,
+  onBump,
+}: {
+  ticket: TicketItem;
+  selected: boolean;
+  onOpen: () => void;
+  onBump: () => void;
+}) {
   const open = !isTicketClosed(t.status);
   return (
     <li className="relative min-w-0">
@@ -374,7 +501,7 @@ function TicketRow({ ticket: t, selected, onOpen, onBump }: { ticket: TicketItem
         onClick={onOpen}
         aria-current={selected ? 'true' : undefined}
         className={cn(
-          'flex h-full w-full min-w-0 items-start gap-3 rounded-2xl border bg-surface px-3.5 py-3 text-left transition-colors hover:bg-surface-2/60 focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none',
+          'flex h-full w-full min-w-0 items-start gap-3 rounded-2xl border bg-surface px-3.5 py-3 text-left transition-colors hover:bg-surface-2/60 focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden',
           selected ? 'border-primary' : 'border-line',
           open && 'pr-12',
         )}
@@ -401,7 +528,11 @@ function TicketRow({ ticket: t, selected, onOpen, onBump }: { ticket: TicketItem
       </button>
       {open && (
         <div className={cn('absolute top-1.5 right-1.5', TAP_MENU)}>
-          <Menu label={`More for ${t.id}`} align="right" items={[{ label: 'Bump…', icon: <ChevronsUp className="size-4" />, onSelect: onBump }]} />
+          <Menu
+            label={`More for ${t.id}`}
+            align="right"
+            items={[{ label: 'Bump…', icon: <ChevronsUp className="size-4" />, onSelect: onBump }]}
+          />
         </div>
       )}
     </li>
@@ -440,7 +571,11 @@ function Board({
             .sort((a, b) => (b.closedAt ?? '').localeCompare(a.closedAt ?? ''))
             .slice(0, BOARD_CLOSED)
         : items.filter((t) => t.status === status);
-    return { status, cards, total: status === 'done' ? items.filter((t) => t.status === 'done' || t.status === 'wont_do').length : cards.length };
+    return {
+      status,
+      cards,
+      total: status === 'done' ? items.filter((t) => t.status === 'done' || t.status === 'wont_do').length : cards.length,
+    };
   });
   return (
     // `relative`: the board is the containing block of what is absolutely placed in its cards (a priority's screen-reader text), so it
@@ -458,7 +593,10 @@ function Board({
           key={status}
           aria-label={TICKET_STATUS_LABEL[status]}
           data-column={status}
-          className={cn('w-[17.5rem] shrink-0 snap-start sm:w-auto sm:max-w-[40rem] sm:min-w-0 sm:flex-[1_0_16rem]', pinned && 'flex min-h-0 flex-col')}
+          className={cn(
+            'w-[17.5rem] shrink-0 snap-start sm:w-auto sm:max-w-[40rem] sm:min-w-0 sm:flex-[1_0_16rem]',
+            pinned && 'flex min-h-0 flex-col',
+          )}
         >
           <h2 className="mb-2 flex shrink-0 items-center gap-2 px-1 text-[13px] font-semibold text-ink-soft">
             {status === 'done' ? 'Closed' : TICKET_STATUS_LABEL[status]}
@@ -467,12 +605,16 @@ function Board({
           <ul className={cn('flex flex-col gap-2 rounded-2xl bg-surface-2/50 p-2', pinned && 'min-h-0 overflow-y-auto overscroll-contain')}>
             {cards.length === 0 && <li className="px-2 py-4 text-center text-[13px] text-muted">None</li>}
             {cards.map((t) => (
-              <li key={t.id} aria-current={t.id === selected ? 'true' : undefined} className={cn('rounded-xl border bg-surface p-3', t.id === selected ? 'border-primary' : 'border-line')}>
+              <li
+                key={t.id}
+                aria-current={t.id === selected ? 'true' : undefined}
+                className={cn('rounded-xl border bg-surface p-3', t.id === selected ? 'border-primary' : 'border-line')}
+              >
                 <div className={cn('flex items-start gap-2', TAP_MENU)}>
                   <PriorityMark priority={t.priority} className="mt-px" />
                   <Link
                     to={{ pathname: `/admin/tickets/${t.id}`, search }}
-                    className="min-w-0 flex-1 rounded-md focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none tap:min-h-11"
+                    className="min-w-0 flex-1 rounded-md focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden tap:min-h-11"
                   >
                     <span className="text-[12px] font-semibold text-muted tabular-nums">{t.id}</span>
                     <span className="line-clamp-3 block text-[13.5px] font-semibold [overflow-wrap:anywhere]">{t.summary}</span>
@@ -480,7 +622,9 @@ function Board({
                   <Menu
                     label={`More for ${t.id}`}
                     items={[
-                      ...(isTicketClosed(t.status) ? [] : [{ label: 'Bump…', icon: <ChevronsUp className="size-4" />, onSelect: () => onBump(t) }]),
+                      ...(isTicketClosed(t.status)
+                        ? []
+                        : [{ label: 'Bump…', icon: <ChevronsUp className="size-4" />, onSelect: () => onBump(t) }]),
                       ...(['open', 'in_progress', 'blocked', 'in_review', 'done', 'wont_do'] as TicketStatus[])
                         .filter((s) => s !== t.status)
                         .map((s) => ({ label: `Move to ${TICKET_STATUS_LABEL[s]}`, onSelect: () => onMove(t, s) })),

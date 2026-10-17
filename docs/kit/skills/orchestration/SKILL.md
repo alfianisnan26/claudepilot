@@ -49,7 +49,7 @@ When a sub-agent returns:
 3. Merge into the integration branch (merge commits are kept; never discard somebody's lines), run the **quick gate** under the heavy lock (typecheck, the web build if the web changed, the touched areas' tests, not only the slice's own files), push. Fast-forward only; if refused: fetch, merge, check again.
 4. Integrate at least every 8 commits or every 2 hours, so nothing piles up unpushed.
 5. A slice that fails the quick gate goes back to its sub-agent with the failing output.
-6. Independent verification of the delivered ticket is a different role's (`qa-verification`): route it to a verifier. Integrating is not verifying; do not close a ticket on the strength of a sub-agent's report. Close it (`ticket_close`) only on the verifier's PASS, quoting it; a sub-agent never closes the ticket of its own slice.
+6. Independent verification of the delivered ticket is a different role's (`qa-verification`): route it to a verifier. **Review load (D-81, risk-based).** One builder keeps a ticket through all its fixes (QA findings go back to the SAME builder session, not a new one). One independent QA pass per ticket; after a fix, that same QA session re-checks the delta. A blind review, a second QA and a post-deploy check only when the change touches security or authentication, permissions or rule files (D-60), infrastructure or pipelines, a database migration, money or payments, or uat/production; everything else closes on the one QA pass. Never spawn a new session for a step an existing live session of the same ticket can do. Integrating is not verifying; do not close a ticket on the strength of a sub-agent's report. Close it (`ticket_close`) only on the verifier's PASS, quoting it; a sub-agent never closes the ticket of its own slice.
 
 ## 5. Release safe
 
@@ -76,5 +76,5 @@ Sub-agents stop when the chat restarts, moves to another account or ends; anythi
 
 - At most five sub-agents run; each brief was self-contained and named the model and the rules.
 - The integration branch is green on the quick gate; the full gate ran within two hours or before the last deploy.
-- The status file is current, under 80 lines, pushed; NEEDS A HUMAN holds required items only.
+- The status file is current, under 80 lines, pushed; NEEDS A HUMAN holds production and uat items only; everything else that is not yours is under FOR THE COORDINATOR.
 - No agent waits idle; no ticket is `in_progress` without a live worker.

@@ -16,7 +16,7 @@ What an agent never does, whatever its permission mode allows. Bypass removes pr
 1. Stop what you are doing.
 2. Do not copy, quote, summarise or repeat the value anywhere, your report included.
 3. Open an incident ticket: where the value is (file, transcript, log, commit), how it got there, who can read it. Never the value.
-4. Put the rotation on the owner's checklist: rotating a secret is a person's step.
+4. Put the rotation FOR THE COORDINATOR on the incident ticket (it rotates through the system that holds the secret); a production credential is the one case for the owner's checklist.
 5. Delete the copy only when the incident ticket says nobody needs it as evidence.
 
 ## Deny rules and gates
@@ -32,7 +32,7 @@ A change outside your own worktree goes through a narrow door: a script that doe
 
 ## Environments
 
-- Production and uat are never touched by an agent on its own: no deploy, no query, no config change, no credential use. They are required escalations.
+- Production and uat are never touched by an agent on its own: no deploy, no query, no config change, no credential use. They are required escalations. uat on the owner's explicit request is the crew's work through the normal path, dry run first, secrets by name only (D-79).
 - A shared service that hosts your own session (the portal, the workspace) is never stopped, restarted or reconfigured by you.
 - Work that needs a running service uses a scratch instance or a test environment you created, and you remove it when done.
 

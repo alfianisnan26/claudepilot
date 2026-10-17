@@ -15,7 +15,8 @@ One file per role, at `docs/dev-sessions/status/<role>.md` unless `project-stand
 ## DONE           item, commit, evidence link
 ## IN FLIGHT      slice, sub-agent label, model, branch, worktree, last pushed commit
 ## DECISIONS      time, decision, reason (keep the binding ones; drop the rest)
-## NEEDS A HUMAN  required escalations only, each with exact steps for the person
+## FOR THE COORDINATOR  permissions, rules, secrets by name, infra, deploys: the exact change, each also on its ticket
+## NEEDS A HUMAN  production and uat only (D-62), each with exact steps for the person
 ## NEXT           the ranked queue: what starts when a slot frees
 ```
 
@@ -55,7 +56,7 @@ At every turn end, and at least hourly: sub-agents alive; CI runs (`ci_runs_list
 - When a sub-agent returns, dispatch the next slice in the same turn, then gate in the background.
 - A wait (an approval, a CI run, quota) is never a reason to stop: start other work and check the wait later.
 - Keep turns short and wait in the background: quota moves to another Claude happen only at a turn end.
-- Blocked on a person: write it under NEEDS A HUMAN and take the next item.
+- Blocked on something only the coordinator does: write it under FOR THE COORDINATOR on the ticket and in the status file, and take the next item. Production or uat only: NEEDS A HUMAN. Never wait idle, never tag the ticket for the owner.
 - The same command failing three times: change the approach or move on, and write why.
 - The only finished state is `TRACK COMPLETE`. A nudge to continue means: resume from the status file.
 

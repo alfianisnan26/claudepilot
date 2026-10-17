@@ -41,7 +41,7 @@ spec:
         kubernetes.io/hostname: k3s-node2
       containers:
         - name: portal
-          image: registry.int.isnan.me/claudepilot/portal:2026.10.16-5
+          image: registry.int.isnan.me/claudepilot/portal:2026.10.17-11
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
@@ -56,6 +56,9 @@ spec:
             # Traefik is the only way in: its X-Forwarded-For is the client address (sign-in rate limit).
             - name: PORTAL_TRUST_PROXY
               value: "true"
+            # The origin an SSO provider sends the browser back to (T-1052); never taken from a request's Host here.
+            - name: PORTAL_SSO_ORIGIN
+              value: "https://pilot.ai.isnan.me"
             # Workspaces are pods of this cluster (the portal's service account, in-cluster).
             - name: PORTAL_K8S_ENABLED
               value: "true"
@@ -66,8 +69,10 @@ spec:
             # Browser pool on Kubernetes (browser-desktop-pool PRD §10, B3 verified on a rig): the image of the `browser` container a
             # workspace gets when a Browser pool is assigned. Unset: browsers are not offered on this target. Assigning one restarts the
             # workspace at its next start (the restart rule); egress stays isolated (the default).
+            # t623-2026.10.16-1: the first image with the headers builder (images/browser/cpb/headers-ext.mjs, T-623); built by hand with
+            # scripts/k3s-build.sh until the deploy pipeline builds it (T-911).
             - name: PORTAL_K8S_BROWSER_IMAGE
-              value: registry.int.isnan.me/claudepilot/browser:t97-2026.10.13-1
+              value: registry.int.isnan.me/claudepilot/browser:t623-2026.10.16-1
             # The browser's egress policy covers the WHOLE pod (one network namespace, browser/kube.ts egressPolicy): `isolate` would cut
             # the dev workspace's Claude Code and shell off the API server (job-run), the internal ingress (git.konfersi.com, the registry,
             # pilot) and the LAN (T-619, blind review F3). Off: the pod keeps the egress it has today; the browser is held instead by the
@@ -108,6 +113,10 @@ spec:
               value: "true"
             - name: PORTAL_CONNECT_URL
               value: https://pilot.ai.isnan.me
+            # T-948 app ports (docs/prd/app-ports.md): a workspace's web app on its own host app-<name>-<port>.ai.isnan.me (the
+            # IngressRoute claudepilot-app-ports below). Unset turns the feature off.
+            - name: PORT_PROXY_HOST_SUFFIX
+              value: ai.isnan.me
           # T-365: a 1 s timeout dropped a slow but alive portal from the Service and the liveness kill restarted it while the node's
           # disk was busy, which made the stall longer. Out of the Service after 3 slow checks (30 s), restarted only after 5 minutes.
           readinessProbe:
@@ -175,6 +184,28 @@ spec:
     - websecure
   routes:
     - match: Host(`pilot.ai.isnan.me`)
+      kind: Rule
+      services:
+        - name: claudepilot-portal
+          port: 3000
+  tls:
+    certResolver: cloudflare
+    domains:
+      - main: "*.ai.isnan.me"
+---
+# T-948 app ports: every app-<name>-<port>.ai.isnan.me host goes to the same portal Service, whose app-port proxy answers it (and only it).
+# One label under ai.isnan.me, so the existing *.ai.isnan.me certificate covers it. Its own route, so a mistake here can't take the
+# portal's host down. HostRegexp is Traefik v3 syntax (a Go regexp).
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: claudepilot-app-ports
+  namespace: isnan-claudepilot
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: HostRegexp(`^app-[a-z0-9-]+\.ai\.isnan\.me$`)
       kind: Rule
       services:
         - name: claudepilot-portal

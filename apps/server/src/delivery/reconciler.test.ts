@@ -244,6 +244,24 @@ test('a version folder changed by hand is rewritten whole at the next tree check
   }
 });
 
+test('T-924: the git -C roots file is written, and written again after someone removes or edits it', async () => {
+  const h = await harness();
+  const path = '/etc/claudepilot/git-c-roots';
+  try {
+    h.provider.list = [{ owner: 'policy', files: [{ path, content: 'a\n', mode: 0o644, uid: 0, gid: 0 }] }];
+    await h.run();
+    assert.equal(h.ws.files.get(path)?.content, 'a\n');
+    h.ws.files.delete(path);
+    await h.run();
+    assert.equal(h.ws.files.get(path)?.content, 'a\n', 'rewritten after removal');
+    h.ws.files.set(path, { content: '/home/node/work/tradingbot\n', mode: 0o644 });
+    await h.run();
+    assert.equal(h.ws.files.get(path)?.content, 'a\n', 'rewritten after an edit');
+  } finally {
+    h.done();
+  }
+});
+
 test('tombstones: kept while an older claude process runs, dropped once none does, never in a stopped workspace', async () => {
   const h = await harness();
   const ENV = '/etc/claude-code/managed-settings.d/20-claudepilot-env.json';

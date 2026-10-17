@@ -280,7 +280,7 @@ function RunnerSheet({ open, runner, existing, onClose, onSaved }: { open: boole
                     type="button"
                     aria-label={`Remove label ${l}`}
                     onClick={() => setLabels((x) => x.filter((y) => y !== l))}
-                    className="press inline-flex min-h-11 max-w-full items-center gap-1.5 rounded-full bg-surface-2 pr-2.5 pl-3 font-mono text-[13px] focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none"
+                    className="press inline-flex min-h-11 max-w-full items-center gap-1.5 rounded-full bg-surface-2 pr-2.5 pl-3 font-mono text-[13px] focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden"
                   >
                     <span className="truncate">{l}</span>
                     <X className="size-3.5 shrink-0 text-muted" aria-hidden="true" />

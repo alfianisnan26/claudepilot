@@ -391,6 +391,7 @@ async function startSession(t, tstate, again, reason, continuedFrom = null) {
   } catch (e) { log(`${t.key}: could not turn sub-agents off: ${e.message}`); }
   await sessionSend(s.id, t.kickoff ? t.kickoff(again, reason) : kickoff(t, again, reason));
   tstate.sessionId = s.id;
+  tstate.started = [...(tstate.started ?? []), s.id].slice(-50); // T-409 G3: only chats it started are adopted
   tstate.cwd = s.cwd;
   (tstate.starts ??= []).push(Date.now());
   log(`${t.key}: ${again ? 'started again' : 'started'} session ${s.id.slice(0, 8)} on ${claudeName} in ${s.cwd}${continuedFrom ? ` (continues ${continuedFrom.slice(0, 8)}: its tickets moved with it)` : ''}`);
@@ -572,6 +573,35 @@ async function ensureWorktreeTrust(sessions) {
   const folders = new Set(sessions.filter((s) => s.state !== 'ended' && leads.has(s.parentId) && s.cwd).map((s) => s.cwd));
   for (const folder of folders) await ensureTrustOfWorktree(folder);
 }
+/**
+ * A lane spawned INTO a new worktree is refused before any session runs there (FOLDER_UNTRUSTED, T-927 2026-10-17: Tradingbot's only remote
+ * is `pilot`, so the portal's identity trust does not apply), so the supervisor finds each program's worktrees itself: only folders strictly
+ * below `<repo>.worktrees/`, trusted by the same rule as above (rules only, a settings hash already trusted here).
+ */
+function ownWorktrees(repo, entries) {
+  const root = `${repo.replace(/\/+$/, '')}.worktrees/`;
+  return [...new Set((entries ?? []).map((e) => e?.path).filter((x) => typeof x === 'string' && x.startsWith(root) && x.length > root.length && !x.slice(root.length).includes('..')))];
+}
+// Hundreds of old worktrees exist (331 on 2026-10-17): a trusted folder is never scanned again in this process, one left untrusted only every
+// WORKTREE_RECHECK_MIN, and folders never seen before go first, so a new lane worktree is trusted within a round or two.
+const WORKTREE_RECHECK_MIN = Number(process.env.WORKTREE_RECHECK_MIN ?? 20);
+const worktreeSeen = new Map(); // folder -> { at, trusted }
+async function ensureRepoWorktreeTrust(now = Date.now()) {
+  const fresh = [], due = [];
+  for (const repo of [TRADINGBOT, KONFERSI, MAIN]) {
+    const r = await api('GET', `/api/chat/worktrees?workspaceId=${encodeURIComponent(WORKSPACE)}&folder=${encodeURIComponent(repo)}`);
+    const entries = Array.isArray(r.data) ? r.data : (r.data?.worktrees ?? []);
+    for (const folder of ownWorktrees(repo, entries)) {
+      const seen = worktreeSeen.get(folder);
+      if (!seen) fresh.push(folder);
+      else if (!seen.trusted && now - seen.at >= WORKTREE_RECHECK_MIN * 60_000) due.push(folder);
+    }
+  }
+  for (const folder of [...fresh, ...due]) {
+    const trusted = await ensureTrustOfWorktree(folder).then((t) => t === true).catch(() => false);
+    worktreeSeen.set(folder, { at: Date.now(), trusted });
+  }
+}
 /** Settings hashes seen trusted on this workspace, in a file of their own (the round's state is written back whole), so a restart remembers them. */
 const TRUSTED_FILE = join(STATE_DIR, 'trusted-hashes.json');
 const knownTrusted = new Set((() => {
@@ -595,7 +625,7 @@ function worktreeTrustable(scan, known) {
 async function ensureTrustOfWorktree(folder) {
   const scan = (await api('GET', `/api/chat/trust/scan?workspaceId=${encodeURIComponent(WORKSPACE)}&folder=${encodeURIComponent(folder)}`)).data;
   if (!scan) return;
-  if (scan.trusted) return rememberTrusted(scan.hash);
+  if (scan.trusted) return rememberTrusted(scan.hash), true;
   if (!worktreeTrustable(scan, knownTrusted)) {
     if (!scan.empty && !trustLogged.has(scan.hash)) log(`folder trust: ${folder} has settings never trusted here (or loads more than rules): left for the coordinator`), trustLogged.add(scan.hash);
     return;
@@ -603,6 +633,7 @@ async function ensureTrustOfWorktree(folder) {
   if (DRY) return log(`[dry] would trust the worktree ${folder} (settings already trusted elsewhere)`);
   const tr = await api('POST', '/api/chat/trust', { workspaceId: WORKSPACE, folder: scan.folder ?? folder, hash: scan.hash });
   log(tr.error ? `folder trust: refused: ${tr.error.message}` : `folder trust: the worktree ${folder} has settings already trusted here (${scan.allowRules} rules): trusted`);
+  return !tr.error;
 }
 async function ensureTrustOf(folder) {
   const scan = (await api('GET', `/api/chat/trust/scan?workspaceId=${encodeURIComponent(WORKSPACE)}&folder=${encodeURIComponent(folder)}`)).data;
@@ -688,11 +719,26 @@ const HEALTH_QUIET_MIN = Number(process.env.HEALTH_QUIET_MIN ?? 5);
  * NUDGE_GAP_MIN minutes, so a real one is far more recent than this.
  */
 const ADOPT_RECENT_H = Number(process.env.ADOPT_RECENT_H ?? 2);
-/** A chat of the track by its title; a worker a lead spawned (it has a parent) is never the track's chat. */
-const ofTrack = (t, x) => !x.parentId && String(x.title ?? '').startsWith(t.title.split(':')[0]);
-const liveChatOf = (t, sessions, sessionId = null) =>
+/**
+ * T-409 G3: the supervisor adopts ONLY chats it started: the ids it recorded when it started one (ts.started), the track's stored chat
+ * (ts.sessionId) and any chat that continues one of those (a successor: predecessorId, followed down the chain). A chat a person or another
+ * session started is never adopted, even when its title is the track's title. A worker a lead spawned (it has a parent) is never the track's chat.
+ */
+const ownedIds = (ts, sessions) => {
+  const ids = new Set([...(ts.started ?? []), ...(ts.sessionId ? [ts.sessionId] : [])]);
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const x of sessions) if (!ids.has(x.id) && x.predecessorId && ids.has(x.predecessorId)) (ids.add(x.id), (grew = true));
+  }
+  return ids;
+};
+const ofTrack = (ts, sessions) => {
+  const ids = ownedIds(ts, sessions);
+  return (x) => !x.parentId && ids.has(x.id);
+};
+const liveChatOf = (ts, sessions) =>
   sessions
-    .filter((x) => (x.id === sessionId || ofTrack(t, x)) && x.state !== 'ended' && !x.archivedAt)
+    .filter((x) => ofTrack(ts, sessions)(x) && x.state !== 'ended' && !x.archivedAt)
     .filter((x) => Date.now() - Date.parse(x.lastActivityAt ?? x.createdAt) < ADOPT_RECENT_H * 3_600_000)
     .sort((a, b) => String(b.lastActivityAt).localeCompare(String(a.lastActivityAt)))[0] ?? null;
 /** /healthz answers ok (one plain call, no retries: a failure is what this asks about). */
@@ -744,6 +790,7 @@ async function watch({ rounds = Infinity } = {}) {
     }
     goodRounds++;
     await ensureWorktreeTrust(list).catch((e) => log(`folder trust: could not check the worktrees: ${e.message}`));
+    await ensureRepoWorktreeTrust().catch((e) => log(`folder trust: could not list the programs' worktrees: ${e.message}`));
     const steady = badAt === null || (goodRounds >= STEADY_ROUNDS && Date.now() - badAt >= HEALTH_QUIET_MIN * 60_000);
     if (netDownSince) {
       const mins = Math.round((Date.now() - netDownSince) / 60_000);
@@ -764,7 +811,7 @@ async function watch({ rounds = Infinity } = {}) {
         // A live chat of this track (a continuation someone started after a hand-over, or T-400 item 3: the older lead still working after a
         // person ended a newer duplicate, which may be ts.sessionId itself) is adopted: the track is watched again. The chat that wrote TRACK
         // COMPLETE stays left alone.
-        const live = liveChatOf(t, sessions, ts.sessionId);
+        const live = liveChatOf(ts, sessions);
         if (!live || (live.id === ts.sessionId && statusSaysDone(ts))) continue;
         ts.done = false;
         ts.sessionId = live.id;
@@ -779,10 +826,10 @@ async function watch({ rounds = Infinity } = {}) {
       }
       ts.pausedLogged = false;
       // A track's sessions are found by their worktree folder (a session may rename itself), or by title.
-      const mine = sessions.filter((x) => x.id === ts.sessionId || ofTrack(t, x)).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+      const mine = sessions.filter(ofTrack(ts, sessions)).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
       // T-400 items 2 and 3: a live, recent chat of the track is its lead and is adopted, before the newest one: a new lead is never started
       // beside it, and a person ending a newer duplicate does not mark the track "closed by a person".
-      const cur = liveChatOf(t, sessions, ts.sessionId) ?? mine.find((x) => !x.archivedAt) ?? mine[0];
+      const cur = liveChatOf(ts, sessions) ?? mine.find((x) => !x.archivedAt) ?? mine[0];
       if (cur?.cwd) ts.cwd = cur.cwd;
       // Keep going is on for this track's chat: the portal watches and restarts it (T-259 slice 2). Only Bypass is still kept here.
       if (cur?.keepGoing?.enabled && !cur.keepGoing.paused) {
@@ -971,7 +1018,7 @@ async function watch({ rounds = Infinity } = {}) {
 
 /* ---------- Go ---------- */
 
-export { harmlessEnding, watch, STATE_FILE, bestClaude, compactDue, slotsFull, compactLanes, wakeStaleLanes, worktreeTrustable, COMPACT, COMPACT_LANE, LANES };
+export { harmlessEnding, watch, STATE_FILE, bestClaude, compactDue, slotsFull, compactLanes, wakeStaleLanes, worktreeTrustable, ownWorktrees, COMPACT, COMPACT_LANE, LANES };
 if (IS_MAIN) {
   process.on('SIGTERM', () => revokeMcpToken().finally(() => process.exit(0)));
   process.on('SIGINT', () => revokeMcpToken().finally(() => process.exit(0)));

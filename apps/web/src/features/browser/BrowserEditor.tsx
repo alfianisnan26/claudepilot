@@ -1,6 +1,7 @@
-import { ChipGroup, FieldGroup, Select, SwitchRow, TextArea } from '@isnanme/ui';
+import { Button, ChipGroup, FieldGroup, Select, SwitchRow, TextArea, TextField } from '@isnanme/ui';
 import { BROWSER_DISPLAYS, type BrowserPoolContent, type BrowserToolRule } from '@portal/contracts';
-import { ChevronDown } from 'lucide-react';
+import { ChevronDown, Plus, Trash2 } from 'lucide-react';
+import { addRule, editRule, MAX_HEADER_RULES, removeRule } from './headerRules';
 import { RULE_TOOLS } from './tools';
 import { InfoTip } from '@/components/InfoTip';
 import type { PoolContentEditorProps } from '@/features/pools/types';
@@ -132,6 +133,67 @@ export function BrowserEditor({ value: c, onChange, errors, disabled }: PoolCont
           {c.allowlistMode && (
             <TextArea label="Allowed sites" hint="One per line. Add localhost:<port> for dev servers." value={c.allowedSites.join('\n')} onChange={(e) => set('allowedSites', lines(e.target.value))} rows={3} error={errors.allowedSites} disabled={disabled} />
           )}
+          <FieldGroup
+            label={
+              <Tip label="Headers">
+                Headers the browser adds on its own to https requests for the listed hosts (each must be an allowed site). The value comes from a Secrets &amp; env entry at start; only its name is kept here, never the value.
+              </Tip>
+            }
+            error={errors.headers}
+          >
+            {() => (
+              <div className="flex flex-col gap-3">
+                {c.headers.map((rule, i) => (
+                  <div key={i} className="flex min-w-0 flex-col gap-3 rounded-2xl border border-line p-3">
+                    <div className="flex items-start gap-2">
+                      <div className="min-w-0 flex-1">
+                        <TextField label="Header" autoComplete="off" placeholder="CF-Access-Client-Id" value={rule.name} onChange={(e) => set('headers', editRule(c.headers, i, 'name', e.target.value))} disabled={disabled} />
+                      </div>
+                      <button
+                        type="button"
+                        aria-label={`Remove header ${rule.name || i + 1}`}
+                        onClick={() => set('headers', removeRule(c.headers, i))}
+                        disabled={disabled}
+                        className="press mt-6 inline-flex size-11 shrink-0 items-center justify-center rounded-full text-muted hover:text-ink focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden disabled:opacity-60"
+                      >
+                        <Trash2 aria-hidden className="size-4" />
+                      </button>
+                    </div>
+                    <TextField label="Secret" autoComplete="off" placeholder="Name of a Secrets & env entry" value={rule.secret} onChange={(e) => set('headers', editRule(c.headers, i, 'secret', e.target.value))} disabled={disabled} />
+                    <FieldGroup label={<Tip label="Key">The variable to read when the entry is an env file (KEY=VALUE lines). Leave empty to use the entry's whole value. If the variable is missing, the header is left out.</Tip>}>
+                      {() => (
+                        <input
+                          aria-label={`Key of ${rule.name || `header ${i + 1}`}`}
+                          autoComplete="off"
+                          autoCapitalize="none"
+                          spellCheck={false}
+                          placeholder="CF_ACCESS_ID"
+                          value={rule.key ?? ''}
+                          onChange={(e) => set('headers', editRule(c.headers, i, 'key', e.target.value))}
+                          disabled={disabled}
+                          className="h-11 w-full min-w-0 rounded-xl border border-line bg-surface px-3 font-mono text-[16px] focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden sm:text-[13.5px]"
+                        />
+                      )}
+                    </FieldGroup>
+                    <TextArea
+                      key={`${i}:${rule.hosts.join(',')}`}
+                      label="Hosts"
+                      hint="One per line: app.example.com, host:port or *.example.com"
+                      defaultValue={rule.hosts.join('\n')}
+                      onBlur={(e) => set('headers', editRule(c.headers, i, 'hosts', e.target.value))}
+                      rows={2}
+                      disabled={disabled}
+                    />
+                  </div>
+                ))}
+                {c.headers.length < MAX_HEADER_RULES && (
+                  <Button variant="secondary" icon={<Plus className="size-4" />} onClick={() => set('headers', addRule(c.headers))} disabled={disabled} className="self-start">
+                    Add header
+                  </Button>
+                )}
+              </div>
+            )}
+          </FieldGroup>
           <FieldGroup label={<Tip label="Tool rules">Ask: Claude asks before each call. Block: the tool is refused. Default follows Claude Code's own permissions.</Tip>} error={errors.toolRules}>
             {() => (
               <ul className="flex flex-col gap-2">

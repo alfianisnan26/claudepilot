@@ -35,7 +35,7 @@ test('an agent works the queue over MCP: claim, comment, block, close; ticket te
     const { client, close } = await r.h.client(a.secret, 'modern');
     try {
       const names = (await client.listTools()).tools.map((t) => t.name).filter((n) => n.startsWith('ticket_')).sort();
-      assert.deepEqual(names, ['ticket_adopt', 'ticket_claim_next', 'ticket_close', 'ticket_comment', 'ticket_create', 'ticket_get', 'ticket_list', 'ticket_update', 'ticket_verdict'], 'no start_session for agents');
+      assert.deepEqual(names, ['ticket_adopt', 'ticket_attach', 'ticket_attachment_get', 'ticket_attachment_remove', 'ticket_claim_next', 'ticket_close', 'ticket_comment', 'ticket_create', 'ticket_get', 'ticket_list', 'ticket_update', 'ticket_verdict'], 'no start_session for agents');
       const call = async (name: string, args: Record<string, unknown> = {}) => (await client.callTool({ name, arguments: args })) as { isError?: boolean; structuredContent?: any; content: { text: string }[] };
 
       const listed = (await call('ticket_list', { assignee: 'unassigned' })).structuredContent;
@@ -359,10 +359,13 @@ test('T-397: a worker comments on the ticket its spawn named and on its lead’s
     r.tickets.create(UI, { summary: 'held by the lead’s own lead', assignee: { kind: 'session', sessionId: 'boss' } }); // T-5
     r.tickets.create(UI, { summary: 'held by a peer', assignee: { kind: 'session', sessionId: 'peer' } }); // T-6
     r.tickets.create(UI, { summary: 'held by a person', assignee: { kind: 'user', name: 'Admin' } }); // T-7
+    await r.agent('docker/api', 'mate');
+    patch('mate', { parentId: 'lead' }); // a crew mate: the same lead (a build lane a QA lane verifies)
+    r.tickets.create(UI, { summary: 'held by a crew mate', assignee: { kind: 'session', sessionId: 'mate' } }); // T-8
     const err = async (t: { secret: string }, tool: string, args: Record<string, unknown>) => (await r.h.call(t.secret, tool, args)).result?.structuredContent?.error as { code: string; message: string } | undefined;
 
     // Allowed: a comment, written as the worker.
-    for (const [id, why] of [['T-1', 'spawn_ticket'], ['T-2', 'lead_ticket'], ['T-3', 'lead_ticket']] as const) {
+    for (const [id, why] of [['T-1', 'spawn_ticket'], ['T-2', 'lead_ticket'], ['T-3', 'lead_ticket'], ['T-8', 'crew_ticket']] as const) {
       assert.equal(await err(w, 'ticket_comment', { id, text: `report on ${id}` }), undefined, `${id}: ${why}`);
       const entry = r.tickets.get(UI, id).events.find((e) => e.kind === 'comment' && e.body === `report on ${id}`);
       assert.equal(entry?.actor, 'session:wk', `${id}: the timeline names the worker, not its lead`);
@@ -370,7 +373,7 @@ test('T-397: a worker comments on the ticket its spawn named and on its lead’s
       assert.deepEqual(row && { actor: row.actor, sessionId: row.detail!.sessionId, leadId: row.detail!.leadId, why: row.detail!.why }, { actor: 'session:wk', sessionId: 'wk', leadId: 'lead', why }, `${id}: the audit row`);
     }
     const mcpRows = r.h.module.audit.list({ limit: 100 }).filter((x) => x.tool === 'ticket_comment' && x.actor === 'session:wk');
-    assert.equal(mcpRows.length, 3, 'the tool call is audited as the worker too');
+    assert.equal(mcpRows.length, 4, 'the tool call is audited as the worker too');
 
     // Refused, with the very text a stranger gets.
     for (const id of ['T-4', 'T-5', 'T-6', 'T-7']) {
@@ -386,6 +389,10 @@ test('T-397: a worker comments on the ticket its spawn named and on its lead’s
     assert.equal((await err(w, 'ticket_comment', { id: 'T-1', text: 'x' }))?.code, 'FORBIDDEN', 'spawn ticket held by a person');
     r.tickets.update(UI, 'T-1', { assignee: null });
 
+    // A crew mate's ticket: a comment, never a change or a close (T-969).
+    assert.equal((await err(w, 'ticket_update', { id: 'T-8', priority: 'urgent' }))?.code, 'FORBIDDEN', 'crew mate: not an update');
+    assert.equal((await err(w, 'ticket_close', { id: 'T-8', summary: 'done' }))?.code, 'FORBIDDEN', 'crew mate: not a close');
+
     // A comment only: no change, close or claim of the lead's ticket.
     const before = r.tickets.get(UI, 'T-2').ticket;
     assert.equal((await err(w, 'ticket_update', { id: 'T-2', priority: 'urgent' }))?.code, 'FORBIDDEN', 'not an update');
@@ -400,7 +407,39 @@ test('T-397: a worker comments on the ticket its spawn named and on its lead’s
     patch('wk', { state: 'ended' });
     assert.equal((await err(w, 'ticket_comment', { id: 'T-1', text: 'late' }))?.code, 'FORBIDDEN', 'an ended worker, its spawn ticket');
     assert.equal((await err(w, 'ticket_comment', { id: 'T-2', text: 'late' }))?.code, 'FORBIDDEN', 'an ended worker, its lead’s ticket');
-    assert.equal(audits.filter((a) => a.kind === 'ticket.worker_commented').length, 3, 'only the three allowed comments are audited');
+    assert.equal(audits.filter((a) => a.kind === 'ticket.worker_commented').length, 4, 'only the four allowed comments are audited');
+  } finally {
+    r.done();
+  }
+});
+
+test('attachments over MCP: an agent attaches text and binary, sees them in ticket_get, reads them back, removes its own (owner, 2026-10-17)', async () => {
+  const r = await rig();
+  try {
+    const a = await r.agent('docker/api', 'sa');
+    const t = r.tickets.create(UI, { summary: 'needs evidence', assignee: { kind: 'session', sessionId: 'sa' } });
+    const call = async (tool: string, args: Record<string, unknown>) => r.out(await r.h.call(a.secret, tool, args));
+    const log = await call('ticket_attach', { id: t.id, name: 'suite.log', text: 'ok 1 - passes\n' });
+    assert.equal(log.attachment.media_type, 'text/plain');
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 9, 8, 7]);
+    const shot = await call('ticket_attach', { id: t.id, name: 'home-390.png', media_type: 'image/png', content_base64: png.toString('base64') });
+    assert.equal(shot.attachment.size, png.length);
+    assert.match((await r.h.call(a.secret, 'ticket_attach', { id: t.id, name: 'x' })).result?.structuredContent?.error?.code ?? '', /VALIDATION_FAILED/, 'one of text or content_base64');
+
+    const got = await call('ticket_get', { id: t.id });
+    assert.deepEqual(got.attachments.map((x: { id: number }) => x.id), [log.attachment.id, shot.attachment.id]);
+    assert.match(got.attachments[1].download, /\/api\/tickets\/T-1\/attachments\/\d+$/);
+
+    const text = await call('ticket_attachment_get', { id: t.id, attachment_id: log.attachment.id });
+    assert.match(JSON.stringify(text.text), /ok 1 - passes/, 'a text file comes back as (labelled) text');
+    const bin = await call('ticket_attachment_get', { id: t.id, attachment_id: shot.attachment.id });
+    assert.deepEqual(Buffer.from(bin.content_base64, 'base64'), png, 'a binary file comes back as base64, byte for byte');
+    const part = await call('ticket_attachment_get', { id: t.id, attachment_id: shot.attachment.id, offset: 2, length: 3 });
+    assert.deepEqual(Buffer.from(part.content_base64, 'base64'), png.subarray(2, 5));
+    assert.equal(part.more, true);
+
+    await call('ticket_attachment_remove', { id: t.id, attachment_id: log.attachment.id });
+    assert.deepEqual(r.tickets.attachments(UI, t.id).map((x) => x.name), ['home-390.png']);
   } finally {
     r.done();
   }

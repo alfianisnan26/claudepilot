@@ -39,7 +39,8 @@ const portal = {
   calls: [] as { method: string; path: string; body: unknown }[],
 };
 const listFor = () => (portal.sessions ? (portal.sessions.length > 1 ? portal.sessions.shift()! : portal.sessions[0]!) : [portal.session]);
-const json = (status: number, body: unknown, headers: Record<string, string> = {}) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', ...headers } });
+const json = (status: number, body: unknown, headers: Record<string, string> = {}) =>
+  new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', ...headers } });
 globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
   const url = new URL(String(input));
   const method = init?.method ?? 'GET';
@@ -49,14 +50,21 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
   if (path === '/api/login') return json(200, { data: {} }, { 'set-cookie': `s=${Math.random().toString(36).slice(2)}; Path=/` });
   if (path === '/mcp') return json(200, { jsonrpc: '2.0', id: body?.id, result: { content: [] } });
   if (path === '/api/portal-mcp' && method === 'GET') return json(200, { data: { tokens: [] } });
-  if (path === '/api/portal-mcp/tokens' && method === 'POST') return json(200, { data: { secret: `fake-${Math.random().toString(36).slice(2)}`, token: { id: 'tok1' } } });
+  if (path === '/api/portal-mcp/tokens' && method === 'POST')
+    return json(200, { data: { secret: `fake-${Math.random().toString(36).slice(2)}`, token: { id: 'tok1' } } });
   if (path.startsWith('/api/portal-mcp/tokens/')) return json(200, { data: {} });
   if (path === '/api/chat/trust/scan') return json(200, { data: { trusted: true } });
   if (path === '/api/keepgoing') return json(200, { data: { pauses: [] } });
   if (path === '/api/chat/claudes') return json(200, { data: [{ name: 'hasyim', id: 'c-hasyim' }] });
   if (path === '/api/claude-usage') return json(200, { data: { claudes: [] } });
-  if (path === '/healthz') return portal.healthDown-- > 0 ? json(503, { error: { code: 'UNAVAILABLE', message: 'fake portal: down' } }) : json(200, { ok: true, service: 'portal' });
-  if (path === '/api/chat/sessions' && method === 'GET') return portal.listDown-- > 0 ? json(503, { error: { code: 'UNAVAILABLE', message: 'fake portal: down' } }) : json(200, { data: listFor() });
+  if (path === '/healthz')
+    return portal.healthDown-- > 0
+      ? json(503, { error: { code: 'UNAVAILABLE', message: 'fake portal: down' } })
+      : json(200, { ok: true, service: 'portal' });
+  if (path === '/api/chat/sessions' && method === 'GET')
+    return portal.listDown-- > 0
+      ? json(503, { error: { code: 'UNAVAILABLE', message: 'fake portal: down' } })
+      : json(200, { data: listFor() });
   if (path === '/api/chat/sessions' && method === 'POST') return json(200, { data: { id: 'new-1', cwd: dir } });
   if (path === '/api/chat/sessions/new-1') return json(200, { data: { id: 'new-1', state: 'idle', mode: 'bypassPermissions' } });
   if (path === '/api/chat/reauth' || path.endsWith('/bypass')) return json(200, { data: {} });
@@ -91,7 +99,14 @@ const PEER = 'a message this portal didn’t send reached Claude Code (u-1a2b, o
 /** Starts already made in the last 24 h, `harmless` of them after harmless endings. */
 const seed = (starts: number, harmless = 0) => {
   const at = Array.from({ length: starts }, (_, i) => Date.now() - (starts - i) * H); // oldest first, as the script keeps them
-  writeFileSync(sup.STATE_FILE, JSON.stringify({ tracks: { orchestrator: { key: 'orchestrator', sessionId: 'old-1', starts: at, harmless: at.slice(0, harmless), nudges: [], wakes: [] } } }));
+  writeFileSync(
+    sup.STATE_FILE,
+    JSON.stringify({
+      tracks: {
+        orchestrator: { key: 'orchestrator', sessionId: 'old-1', starts: at, harmless: at.slice(0, harmless), nudges: [], wakes: [] },
+      },
+    }),
+  );
 };
 const track = () => JSON.parse(readFileSync(sup.STATE_FILE, 'utf8')).tracks.orchestrator;
 const created = () => portal.calls.filter((c) => c.method === 'POST' && c.path === '/api/chat/sessions');
@@ -115,7 +130,11 @@ test('the classification: the portal’s endedFor decides; a legacy row is harml
   assert.equal(sup.harmlessEnding(ended(PEER, { classified: 'suspicious', case: 'replay-peer-unknown' })), false);
   assert.equal(sup.harmlessEnding(ended(PEER)), false);
   assert.equal(sup.harmlessEnding(ended('a second, different control response for request r-1')), false);
-  assert.equal(sup.harmlessEnding(ended(DUPLICATE, { classified: 'suspicious', case: 'unknown' })), false, 'the portal’s word beats the reason');
+  assert.equal(
+    sup.harmlessEnding(ended(DUPLICATE, { classified: 'suspicious', case: 'unknown' })),
+    false,
+    'the portal’s word beats the reason',
+  );
   assert.equal(sup.harmlessEnding({ ...ended(DUPLICATE), endedReason: 'process exited (code 1)' }), false);
   assert.equal(sup.harmlessEnding(undefined), false);
 });
@@ -205,9 +224,17 @@ const live = (id: string, extra: Record<string, unknown> = {}) => ({
   ...extra,
 });
 /** The track's chat ended by a crash: on a steady portal with no live lead it is started again. */
-const crashed = (id = 'old-1', extra: Record<string, unknown> = {}) => ({ ...ended('x'), id, endedReason: 'process exited (code 1)', ...extra });
+const crashed = (id = 'old-1', extra: Record<string, unknown> = {}) => ({
+  ...ended('x'),
+  id,
+  endedReason: 'process exited (code 1)',
+  ...extra,
+});
 const seedTrack = (extra: Record<string, unknown>) =>
-  writeFileSync(sup.STATE_FILE, JSON.stringify({ tracks: { orchestrator: { key: 'orchestrator', starts: [], nudges: [], wakes: [], ...extra } } }));
+  writeFileSync(
+    sup.STATE_FILE,
+    JSON.stringify({ tracks: { orchestrator: { key: 'orchestrator', starts: [], nudges: [], wakes: [], ...extra } } }),
+  );
 const moved = () =>
   portal.calls.filter((c) => {
     const p = (c.body as { params?: { name?: string; arguments?: { text?: string } } } | undefined)?.params;
@@ -236,7 +263,7 @@ test('T-400 item 1: the portal down, then up: no new lead until it has answered 
 });
 
 test('T-400 item 2: a live chat of the track is adopted instead of starting a new lead beside it', async () => {
-  seedTrack({ sessionId: 'new-9' });
+  seedTrack({ sessionId: 'new-9', started: ['lead-1', 'new-9'] }); // T-409 G3: both are chats the supervisor started
   // The supervisor's last chat (newer) crashed; the real lead (older) is live and working.
   portal.sessions = [[crashed('new-9', { createdAt: new Date(Date.now() - H).toISOString() }), live('lead-1', { state: 'working' })]];
   await sup.watch({ rounds: 1 });
@@ -245,7 +272,7 @@ test('T-400 item 2: a live chat of the track is adopted instead of starting a ne
 
   // Negative twin: a live worker the lead spawned (it has a parent) is not the lead: the track is started again.
   portal.calls.length = 0;
-  seedTrack({ sessionId: 'new-9' });
+  seedTrack({ sessionId: 'new-9', started: ['new-9', 'w-1'] });
   portal.sessions = [[crashed('new-9', { createdAt: new Date(Date.now() - H).toISOString() }), live('w-1', { parentId: 'gone-1' })]];
   await sup.watch({ rounds: 1 });
   assert.equal(created().length, 1);
@@ -267,6 +294,41 @@ test('T-400 item 3: a person ending a newer duplicate keeps the older live lead 
   await sup.watch({ rounds: 1 });
   assert.ok(!track().done);
   assert.ok(logs.some((l) => /adopted the live chat lead-1/.test(l)));
+});
+
+test('T-409 G3: a chat the supervisor did not start is never adopted; one it started (or its successor) is', async () => {
+  const old = () => crashed('new-9', { createdAt: new Date(Date.now() - H).toISOString() });
+  // A person's own chat with the track's title, live and recent: not adopted, so the crashed lead is started again beside it.
+  seedTrack({ sessionId: 'new-9', started: ['new-9'] });
+  portal.sessions = [[old(), live('person-1', { state: 'working' })]];
+  await sup.watch({ rounds: 1 });
+  assert.equal(created().length, 1, "the person's chat is not the lead");
+  assert.notEqual(track().sessionId, 'person-1');
+  assert.ok(!logs.some((l) => /adopted the live chat person-1/.test(l)));
+
+  // Same for a track marked done: a person's live chat does not bring it back.
+  portal.calls.length = 0;
+  seedTrack({ sessionId: 'new-9', started: ['new-9'], done: true });
+  portal.sessions = [[old(), live('person-1')]];
+  await sup.watch({ rounds: 1 });
+  assert.ok(track().done);
+  assert.equal(track().sessionId, 'new-9');
+
+  // Twin: a chat the supervisor started (recorded in `started`) is adopted.
+  portal.calls.length = 0;
+  seedTrack({ sessionId: 'new-9', started: ['new-9', 'lead-1'] });
+  portal.sessions = [[old(), live('lead-1', { state: 'working' })]];
+  await sup.watch({ rounds: 1 });
+  assert.equal(created().length, 0);
+  assert.equal(track().sessionId, 'lead-1');
+
+  // Twin: the successor of a chat it started (a move or a continuation) is adopted too.
+  portal.calls.length = 0;
+  seedTrack({ sessionId: 'new-9', started: ['new-9'] });
+  portal.sessions = [[old(), live('next-1', { state: 'working', predecessorId: 'new-9' })]];
+  await sup.watch({ rounds: 1 });
+  assert.equal(created().length, 0);
+  assert.equal(track().sessionId, 'next-1');
 });
 
 test('T-400 item 4: no MOVED text on a stored-Claude mismatch at start; a move this process saw still gets it', async () => {

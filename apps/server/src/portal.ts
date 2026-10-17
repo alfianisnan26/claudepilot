@@ -12,7 +12,12 @@ import { AppError } from '@isnanme/core';
 export interface Session {
   createdAt: number;
   expiresAt: number;
+  /** The email account that signed in (T-118); absent for the server code. Its role decides what the session is (MU2 S1a). */
+  userId?: string | null;
 }
+
+/** What an email account is now, asked on every use so a role change or a disable takes effect at once. Null: gone. */
+export type AccountRole = (userId: string) => 'admin' | 'member' | 'disabled' | 'unavailable' | null;
 
 /** Keeps sessions across restarts, keyed by a hash of the token (the portal database). */
 export interface SessionStore {
@@ -46,6 +51,8 @@ export class Portal {
   readonly #sessions = new Map<string, Session>();
   #store: SessionStore | null = null;
   #storeFailed = false;
+  /** T-118 MU2 S1a: the role of an email account's session; until it is set every account session is refused. */
+  roleOf: AccountRole = () => null;
   /** Called after sessions end by sign-out or a new code, so what is tied to them (open sockets) can be cut. */
   onRevoked: () => void = () => {};
 
@@ -101,16 +108,33 @@ export class Portal {
   signIn(input: string): string {
     if (!this.#enabled) throw new AppError('FORBIDDEN', 'Sign-in is turned off on this server.');
     if (!this.matches(input)) throw new AppError('UNAUTHORIZED', 'That code is not right.');
+    return this.openSession();
+  }
+
+  /** A new session after a check done elsewhere (an email account, T-118). An admin account's is a full session; a member's is not. */
+  openSession(userId: string | null = null): string {
+    if (!this.#enabled) throw new AppError('FORBIDDEN', 'Sign-in is turned off on this server.');
     const token = randomBytes(32).toString('base64url');
     const now = Date.now();
     const hash = tokenHash(token);
-    const session = { createdAt: now, expiresAt: now + this.ttlMs };
+    const session: Session = { createdAt: now, expiresAt: now + this.ttlMs, ...(userId ? { userId } : {}) };
     this.#sessions.set(hash, session);
     this.#persist((st) => st.save(hash, session));
     return token;
   }
 
+  /**
+   * A FULL session: the server code's, or an admin account's (MU2 S1a). A member's session is NOT one, so every check that asks this (the
+   * HTTP guard, the chat, terminal and browser sockets, re-auth) refuses a member by itself; `anySession` is the member-aware door.
+   */
   session(token: string | undefined): Session | undefined {
+    const s = this.anySession(token);
+    if (!s || !s.userId) return s;
+    return this.roleOf(s.userId) === 'admin' ? s : undefined;
+  }
+
+  /** Any live session, a member's included; an account that is gone or disabled ends its sessions here. */
+  anySession(token: string | undefined): Session | undefined {
     if (!token) return undefined;
     const hash = tokenHash(token);
     const s = this.#sessions.get(hash);
@@ -119,7 +143,29 @@ export class Portal {
       this.#persist((st) => st.remove(hash));
       return undefined;
     }
+    if (s?.userId) {
+      const role = this.roleOf(s.userId);
+      // 'unavailable' (the database could not be read, review #10): kept, but not a full session until it can be read again.
+      if (role !== 'admin' && role !== 'member' && role !== 'unavailable') {
+        this.#sessions.delete(hash);
+        this.#persist((st) => st.remove(hash));
+        return undefined;
+      }
+    }
     return s;
+  }
+
+  /** Ends every session of one email account (a password change, a disable, a removal, a demotion), except `keepToken`'s; cuts its sockets. */
+  revokeUser(userId: string, keepToken?: string) {
+    const keep = keepToken ? tokenHash(keepToken) : null;
+    let any = false;
+    for (const [hash, s] of this.#sessions) {
+      if (s.userId !== userId || hash === keep) continue;
+      this.#sessions.delete(hash);
+      this.#persist((st) => st.remove(hash));
+      any = true;
+    }
+    if (any) this.onRevoked();
   }
 
   signOut(token: string) {

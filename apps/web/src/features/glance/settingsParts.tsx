@@ -32,7 +32,7 @@ export function Percent({ label, value, min, max, onCommit }: { label: string; v
         onChange={(e) => setText(e.target.value)}
         onBlur={commit}
         onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
-        className="h-10 w-20 rounded-xl border border-line bg-surface px-3 text-right text-base text-ink outline-none hover:border-line-strong focus:border-ink/40 focus:ring-4 focus:ring-[var(--ring)]"
+        className="h-10 w-20 rounded-xl border border-line bg-surface px-3 text-right text-base text-ink outline-hidden hover:border-line-strong focus:border-ink/40 focus:ring-4 focus:ring-[var(--ring)]"
       />
       <span className="text-muted">%</span>
     </span>

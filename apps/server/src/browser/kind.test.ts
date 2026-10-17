@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { isAppError } from '@isnanme/core';
-import { BROWSER_POOL_DEFAULTS, type BrowserPoolContent } from '@portal/contracts';
+import { BROWSER_POOL_DEFAULTS, SETTING_KEYS, type BrowserPoolContent } from '@portal/contracts';
+import { McpLockdown } from '../settings/lockdown.js';
+import type { Settings } from '../settings/store.js';
 import { compile, CompileError } from '../delivery/compile.js';
 import { dropInPath } from '../delivery/ownership.js';
 import { FOUNDATION } from '../delivery/reconciler.js';
@@ -77,6 +79,160 @@ test('lockdown matchers: each server’s command line with the plugin’s folder
     assert.equal(got.length, 1);
     const folder = (got[0] as { serverCommand: string[] }).serverCommand.find((a) => a.endsWith('/tools/playwright.json'))!;
     assert.match(folder, /^\/etc\/claudepilot\/marketplace\/plugins\/cpb-browser\/[0-9a-f]{12}\/tools\/playwright\.json$/);
+  } finally {
+    h.done();
+  }
+});
+
+test('T-881: after a revision changes the plugin, the old exact command stays allowed while its folder is retained, then goes; never anything else', async () => {
+  const h = await browserHarness();
+  try {
+    const p = h.create('Dev browser', {});
+    h.pools.setAssignments('docker/dev', 'browser', [{ poolId: p.id }]);
+    const [first] = h.service.matchers('docker/dev') as { serverCommand: string[] }[];
+    const dirOf = (m: { serverCommand: string[] }) => m.serverCommand.find((a) => a.endsWith('/tools/playwright.json'))!.replace(/\/tools\/playwright\.json$/, '');
+    const oldDir = dirOf(first!);
+    // Rev 2 changes what the plugin holds (isolated sessions: other servers arguments), so it lives in another folder.
+    h.pools.update(p.id, { content: { sessions: 'isolated' } });
+    const both = h.service.matchers('docker/dev') as { serverCommand: string[] }[];
+    const newDir = dirOf(both[0]!);
+    assert.notEqual(newDir, oldDir, 'the revision moved the plugin to a new folder');
+    assert.deepEqual(both.map(dirOf), [newDir, oldDir], 'before any delivery report: the new command and the old one, nothing else');
+    assert.ok(both[0]!.serverCommand.includes('--isolated') && !both[1]!.serverCommand.includes('--isolated'), 'each is the exact command of its own revision');
+    const folders = (...hashes: string[]) => new Map([['cpb-browser', hashes]]);
+    const report = (m: Map<string, string[]>) => h.kind.delivered('docker/dev', { running: true, now: new Date(), pluginFolders: m });
+    // The reconciler still holds both folders: both commands.
+    report(folders(newDir.slice(-12), oldDir.slice(-12)));
+    assert.deepEqual((h.service.matchers('docker/dev') as typeof both).map(dirOf), [newDir, oldDir]);
+    // The old folder is retired: only the new command.
+    report(folders(newDir.slice(-12)));
+    assert.deepEqual((h.service.matchers('docker/dev') as typeof both).map(dirOf), [newDir]);
+    // A folder that is not one of this pool's revisions never makes the list.
+    report(folders(newDir.slice(-12), 'f'.repeat(12)));
+    assert.deepEqual((h.service.matchers('docker/dev') as typeof both).map(dirOf), [newDir]);
+  } finally {
+    h.done();
+  }
+});
+
+type Cmd = { serverCommand: string[] };
+const dirOfCmd = (m: Cmd) => m.serverCommand.find((a) => a.endsWith('/tools/playwright.json'))!.replace(/\/tools\/playwright\.json$/, '');
+const dirsOf = (h: Awaited<ReturnType<typeof browserHarness>>) => (h.service.matchers('docker/dev') as Cmd[]).map(dirOfCmd);
+/** A new deliverable revision of the pool: the plugin folder carries the revision number, so every one has its own folder. */
+const bump = (h: Awaited<ReturnType<typeof browserHarness>>, id: string, n: number, draft = false) => h.pools.update(id, { content: { idleMinutes: 10 + n }, draft });
+
+test('T-881: exactly 5 earlier revisions stay admitted, the newest ones: a 6th and older are not', async () => {
+  const h = await browserHarness();
+  try {
+    const p = h.create('Dev browser', {});
+    h.pools.setAssignments('docker/dev', 'browser', [{ poolId: p.id }]);
+    const dirs = [dirsOf(h)[0]!]; // revision 1
+    for (let n = 2; n <= 8; n++) {
+      bump(h, p.id, n);
+      dirs.push(dirsOf(h)[0]!);
+    }
+    assert.equal(new Set(dirs).size, 8, 'eight revisions, eight folders');
+    const [r1, r2, r3, r4, r5, r6, r7, r8] = dirs;
+    // Current (r8) and the 5 before it, newest first; r2 and r1 are too old.
+    assert.deepEqual(dirsOf(h), [r8, r7, r6, r5, r4, r3]);
+    assert.ok(!dirsOf(h).includes(r2!) && !dirsOf(h).includes(r1!));
+  } finally {
+    h.done();
+  }
+});
+
+test('T-881: another pool’s revisions never reach this workspace’s allowlist', async () => {
+  const h = await browserHarness();
+  try {
+    const p = h.create('Dev browser', {});
+    const other = h.create('Other browser', { devtools: true, sessions: 'isolated' });
+    h.pools.update(other.id, { content: { idleMinutes: 33 } });
+    h.pools.setAssignments('docker/dev', 'browser', [{ poolId: p.id }]);
+    bump(h, p.id, 2);
+    bump(h, p.id, 3);
+    const got = h.service.matchers('docker/dev') as Cmd[];
+    assert.equal(got.length, 3, 'the current revision and p’s own two earlier ones: one server each, nothing from the other pool');
+    assert.ok(got.every((m) => !m.serverCommand.includes('--isolated')), 'the other pool’s content is isolated');
+  } finally {
+    h.done();
+  }
+});
+
+test('T-881: drafts and revisions waiting for review are never admitted', async () => {
+  const h = await browserHarness();
+  try {
+    const p = h.create('Dev browser', {});
+    h.pools.setAssignments('docker/dev', 'browser', [{ poolId: p.id }]);
+    const r1 = dirsOf(h)[0]!;
+    const sql = h.store.db!;
+    const copy = (revision: number, status: string, from: number) =>
+      sql.prepare(`INSERT INTO pool_revisions (pool_id, revision, content, note, created_at, status) SELECT pool_id, ?, content, note, created_at, ? FROM pool_revisions WHERE pool_id = ? AND revision = ?`).run(revision, status, p.id, from);
+    copy(2, 'draft', 1);
+    bump(h, p.id, 3); // revision 3: deliverable and current
+    const r3 = dirsOf(h)[0]!;
+    copy(4, 'draft', 1); // (the store has no 'rejected' status: a CHECK allows draft, waiting_review and deliverable)
+    copy(5, 'waiting_review', 1);
+    copy(6, 'deliverable', 3);
+    sql.prepare('UPDATE pools SET current_revision = 6 WHERE id = ?').run(p.id);
+    const got = dirsOf(h);
+    assert.equal(got.length, 3, `revision 6 and the deliverable r3 and r1: not the drafts (2, 4) or waiting (5); got ${JSON.stringify(got)}`);
+    assert.ok(got.includes(r1) && got.includes(r3));
+  } finally {
+    h.done();
+  }
+});
+
+test('T-881: the retained folders come from the cpb-browser entry of the delivery report, and a workspace’s are forgotten with it', async () => {
+  const h = await browserHarness();
+  try {
+    const p = h.create('Dev browser', {});
+    h.pools.setAssignments('docker/dev', 'browser', [{ poolId: p.id }]);
+    const oldDir = dirsOf(h)[0]!;
+    bump(h, p.id, 2);
+    const newDir = dirsOf(h)[0]!;
+    const report = (m: Map<string, string[]>) => h.kind.delivered('docker/dev', { running: true, now: new Date(), pluginFolders: m });
+    // The old folder listed under another plugin's name is not the browser plugin's folder.
+    report(new Map([['cpb-browser', [newDir.slice(-12)]], ['other-plugin', [oldDir.slice(-12)]]]));
+    assert.deepEqual(dirsOf(h), [newDir]);
+    report(new Map([['other-plugin', [oldDir.slice(-12)]]]));
+    assert.deepEqual(dirsOf(h), [newDir], 'no browser folders reported: none retained');
+    report(new Map([['cpb-browser', [newDir.slice(-12), oldDir.slice(-12)]]]));
+    assert.deepEqual(dirsOf(h), [newDir, oldDir]);
+    // Forgetting the workspace forgets what it held: back to "no report yet", which admits every earlier revision.
+    report(new Map([['cpb-browser', [newDir.slice(-12)]]]));
+    assert.deepEqual(dirsOf(h), [newDir]);
+    assert.ok(h.kind.retainedFolders('docker/dev'));
+    h.kind.forgetWorkspace('docker/dev');
+    assert.equal(h.kind.retainedFolders('docker/dev'), undefined);
+    assert.deepEqual(dirsOf(h), [newDir, oldDir]);
+    await new Promise((r) => setTimeout(r, 30)); // forgotten() starts an async removal
+  } finally {
+    h.done();
+  }
+});
+
+test('T-881: the lockdown drop-in is built from the matchers, so the old command leaves it when the retained set shrinks', async () => {
+  const h = await browserHarness();
+  try {
+    const lockdown = new McpLockdown(h.store, { get: (key: string) => key === SETTING_KEYS.mcpPoolOnly } as unknown as Settings);
+    lockdown.addMatcherSource((ws) => h.service.matchers(ws));
+    const p = h.create('Dev browser', {});
+    h.pools.setAssignments('docker/dev', 'browser', [{ poolId: p.id }]);
+    const oldDir = dirsOf(h)[0]!;
+    bump(h, p.id, 2);
+    const newDir = dirsOf(h)[0]!;
+    const allowed = () => {
+      const [frag] = lockdown.fragments('docker/dev');
+      return ((frag!.settings as { allowedMcpServers: Cmd[] }).allowedMcpServers).map(dirOfCmd).sort();
+    };
+    const report = (...hashes: string[]) => h.kind.delivered('docker/dev', { running: true, now: new Date(), pluginFolders: new Map([['cpb-browser', hashes]]) });
+    report(newDir.slice(-12), oldDir.slice(-12));
+    assert.deepEqual(allowed(), [newDir, oldDir].sort());
+    const before = JSON.stringify(lockdown.desired('docker/dev'));
+    report(newDir.slice(-12));
+    assert.deepEqual(allowed(), [newDir], 'the next compile of the drop-in no longer allows the old command');
+    assert.notEqual(JSON.stringify(lockdown.desired('docker/dev')), before, 'so the drop-in content changes');
+    await new Promise((r) => setTimeout(r, 30));
   } finally {
     h.done();
   }

@@ -213,7 +213,7 @@ export function ColumnChart({
                     e.preventDefault();
                     cells.current[next]?.focus();
                   }}
-                  className="cursor-pointer outline-none"
+                  className="cursor-pointer outline-hidden"
                 />
               </g>
             );

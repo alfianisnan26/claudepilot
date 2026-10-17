@@ -15,8 +15,9 @@ import {
   type TicketEvent,
   type TicketFilter,
   type TicketItem,
-  type TicketList,
+  type TicketPage,
   type TicketTag,
+  type TicketAttachment,
   type UpdateTicketRequest,
 } from '@portal/contracts';
 import { api, ApiError } from '@/lib/api';
@@ -57,12 +58,13 @@ function query(f: TicketFilter): string {
   if (f.orphan) q.set('orphan', '1');
   if (f.sort === 'newest') q.set('sort', 'newest');
   if (f.limit) q.set('limit', String(f.limit));
-  if (f.offset) q.set('offset', String(f.offset));
+  if (f.cursor) q.set('cursor', f.cursor);
   return q.size ? `?${q}` : '';
 }
 
 export const ticketsApi = {
-  list: (filter: TicketFilter = {}) => request<TicketList>('GET', `${TICKET_API.list}${query(filter)}`),
+  /** One page of summary rows (D-58): `next` goes back as `filter.cursor`; `total` and `counts` come with the first page only. */
+  list: (filter: TicketFilter = {}) => request<TicketPage>('GET', `${TICKET_API.list}${query(filter)}`),
   get: (id: string) => request<TicketDetail>('GET', TICKET_API.one(id)),
   create: (body: CreateTicketRequest) => request<TicketItem>('POST', TICKET_API.list, body),
   update: (id: string, body: UpdateTicketRequest) => request<TicketItem>('PATCH', TICKET_API.one(id), body),
@@ -77,4 +79,34 @@ export const ticketsApi = {
   bumpTargets: (id: string) => request<BumpTarget[]>('GET', TICKET_API.bump(id)),
   bump: (id: string, body: BumpRequest) => request<TicketBumpResult>('POST', TICKET_API.bump(id), body),
   bumped: (sessionId: string) => request<TicketBumped[]>('GET', TICKET_API.bumped(sessionId)),
+  /** Uploads one file as the raw body (any type; the type goes in x-file-type so a .json is not held to the JSON body limit). */
+  attach: async (id: string, file: File): Promise<TicketAttachment> => {
+    let res: Response;
+    try {
+      res = await track(
+        fetch(TICKET_API.attachments(id), {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: {
+            'Content-Type': 'application/octet-stream',
+            'x-file-name': encodeURIComponent(file.name),
+            'x-file-type': file.type || 'application/octet-stream',
+          },
+          body: file,
+        }),
+      );
+    } catch {
+      throw new ApiError('NETWORK_ERROR', 'Could not reach the server.', 0);
+    }
+    const json: unknown = await res.json().catch(() => null);
+    if (res.ok && isApiSuccess<TicketAttachment>(json)) return json.data;
+    if (res.status === 401) void api.adminState().catch(() => undefined);
+    if (isApiErrorBody(json)) throw new ApiError(json.error.code, json.error.message, res.status, json.error.details);
+    throw new ApiError(
+      res.status === 413 ? 'PAYLOAD_TOO_LARGE' : 'INTERNAL_ERROR',
+      res.status === 413 ? 'That file is too large.' : `Unexpected response (${res.status}).`,
+      res.status,
+    );
+  },
+  removeAttachment: (id: string, attachmentId: number) => request<{ removed: true }>('DELETE', TICKET_API.attachment(id, attachmentId)),
 };

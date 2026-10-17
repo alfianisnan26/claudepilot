@@ -5,9 +5,9 @@
 set -euo pipefail
 lead=${1:?lead session id prefix}; since=${2:?since, e.g. 2026-10-15T17:00}
 here=$(cd "$(dirname "$0")" && pwd)
-"$here/ph.sh" GET '/api/chat/sessions?limit=500' | LEAD="$lead" SINCE="$since" python3 -c '
+"$here/ph.sh" GET '/api/chat/sessions?limit=100'| LEAD="$lead" SINCE="$since" python3 -c '
 import json,os,sys
-for s in json.load(sys.stdin)["data"]:
+for s in json.load(sys.stdin)["data"]["items"]:
   if (s.get("parentId") or "").startswith(os.environ["LEAD"]) and (s.get("lastActivityAt") or "") >= os.environ["SINCE"]: print(s["id"])' |
 while read -r id; do
   "$here/ph.sh" GET "/api/chat/sessions/$id/events?tail=5000" | SID="$id" python3 -c '

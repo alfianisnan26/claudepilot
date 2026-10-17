@@ -1,7 +1,9 @@
 export * from './api.js';
+export * from './page.js';
 export * from './code.js';
 export * from './workspace.js';
 export * from './accounts.js';
+export * from './portalUsers.js';
 export * from './live.js';
 export * from './chat.js';
 export * from './chatBtw.js';
@@ -18,6 +20,7 @@ export * from './portalmcp.js';
 export * from './tickets.js';
 export * from './bump.js';
 export * from './browser.js';
+export * from './appPorts.js';
 export * from './knowledge.js';
 export * from './ci.js';
 export * from './claudeusage.js';

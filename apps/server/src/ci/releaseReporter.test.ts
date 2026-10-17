@@ -6,8 +6,9 @@ import { CI_POLICIES } from './authz.js';
 import type { CiReply } from './host.js';
 import { parseSetting, ReleaseReporter, ReportRefused, type ReleaseNoteSink } from './releaseReporter.js';
 import { MANIFEST_FILE } from './releaseReport.js';
-import type { CiStore, DeploymentRow, RepoRow, RunRow } from './store.js';
+import { CiStore as RealCiStore, type CiStore, type DeploymentRow, type RepoRow, type RunRow } from './store.js';
 import type { CiTicketsPort } from './tickets.js';
+import { harness } from './testkit.js';
 
 const SETTING = { pipeline: 'deploy', vaultId: 'vault1', folder: 'Releases' };
 const sha = (c: string) => c.repeat(40);
@@ -50,12 +51,17 @@ function make(o: Setup = {}) {
     release: o.releaseLog === undefined ? `release: ${sha('d')} (portal p-2, workspace w-2) to main` : (o.releaseLog ?? ''),
     gate: 'gate: typecheck ok\nSUMMARY 10 pass 0 fail',
   };
+  const released = { v: { sha: sha('a'), run_number: 40 } as unknown as DeploymentRow };
+  const lastReleasedArgs: unknown[][] = [];
   const cs = {
     run: (id: string) => (id === run.id ? run : undefined),
     repo: (id: string) => (id === repo.id ? repo : undefined),
     log: (_r: string, job: string) => (logs[job] ? { text: logs[job] } : undefined),
-    deploymentsOfRun: () => [{ job: 'release', environment: 'production', approval: 'approved', decided_by: 'user:me', decided_at: '2026-10-15T10:10:00.000Z' }] as unknown as DeploymentRow[],
-    lastReleased: () => ({ sha: sha('a'), run_number: 40 }) as unknown as DeploymentRow,
+    deploymentsOfRun: () => [{ job: 'release', environment: 'production', approval: 'approved', decided_by: 'user:me', decided_at: '2026-10-15T10:10:00.000Z', created_at: '2026-10-15T10:01:00.000Z' }] as unknown as DeploymentRow[],
+    lastReleased: (...args: unknown[]) => {
+      lastReleasedArgs.push(args);
+      return released.v;
+    },
   } as unknown as CiStore;
   const commits: Record<string, { message: string; parents: string[] }> = {
     [sha('c')]: { message: `${o.subject ?? 'Add the thing'}\n\nTicket: T-10\nPilot-Agent: x`, parents: [sha('b')] },
@@ -89,7 +95,7 @@ function make(o: Setup = {}) {
   const tickets = { info: (id: string) => (id === 'T-10' ? { summary: 'The thing', type: 'feature', status: 'closed' } : null) } as unknown as CiTicketsPort;
   const reporter = new ReleaseReporter({ cs, cp, tickets, sink, audit: (e) => void audits.push(e) });
   const deps = { cs, cp, tickets, audit: (e: (typeof audits)[number]) => void audits.push(e) };
-  return { reporter, vault, puts, audits, calls, deps };
+  return { reporter, vault, puts, audits, calls, deps, released, lastReleasedArgs };
 }
 
 const noteKeys = (vault: Map<string, string>) => [...vault.keys()].filter((k) => !k.endsWith('README.md'));
@@ -125,6 +131,51 @@ test('the same run twice: one note, one README line (idempotent)', async () => {
   assert.equal(second?.unchanged, true);
   const lines = t.vault.get('vault1:Releases/README.md')!.split('\n').filter((l) => l.startsWith('- [['));
   assert.equal(lines.length, 1);
+});
+
+test('the range base is asked for the release BEFORE this deployment, and a re-backfill rewrites the range line in the same note', async () => {
+  const t = make();
+  await t.reporter.report('run41', true);
+  assert.deepEqual(t.lastReleasedArgs[0], ['repo1', 'production', 'run41', '2026-10-15T10:01:00.000Z'], 'the base is bounded by the deployment created_at');
+  const path = 'vault1:Releases/2026-10-15 portal p-2 workspace w-2.md';
+  assert.match(t.vault.get(path)!, /Range from: aaaaaaa \(the release of run #40\)/);
+  // A wrong base was written once (a newer release): the backfill again rewrites that line, it adds no second note and no second README line.
+  t.released.v = { sha: sha('b'), run_number: 191 } as unknown as DeploymentRow;
+  await t.reporter.report('run41', true);
+  assert.match(t.vault.get(path)!, /Range from: bbbbbbb \(the release of run #191\)/);
+  t.released.v = { sha: sha('a'), run_number: 40 } as unknown as DeploymentRow;
+  const again = await t.reporter.report('run41', true);
+  assert.equal(again?.created, false);
+  assert.match(t.vault.get(path)!, /Range from: aaaaaaa \(the release of run #40\)/);
+  assert.equal(noteKeys(t.vault).length, 1);
+  assert.equal(t.vault.get('vault1:Releases/README.md')!.split('\n').filter((l) => l.startsWith('- [[')).length, 1);
+});
+
+test('store.lastReleased with a bound: the backfill of an older release takes the one before it, not the newest (T-591 QA 8250)', async () => {
+  const h = await harness();
+  try {
+    const db = h.store.db!;
+    const cs = new RealCiStore(h.store);
+    const mk = (n: number, at: string) => {
+      db.prepare(
+        "INSERT INTO ci_runs (id, number, workspace_id, repo_id, repo, pipeline, trigger, ref, sha, status, actor, created_at) VALUES (?, ?, 'ws', 'repo1', 'claudepilot', 'deploy', 'manual', 'refs/heads/main', ?, 'passed', 'ui', ?)",
+      ).run(`r${n}`, n, sha(String(n % 10)), at);
+      db.prepare(
+        "INSERT INTO ci_deployments (id, run_id, run_number, job, repo_id, environment, pipeline, sha, ref, actor, approval, outcome, created_at) VALUES (?, ?, ?, 'release', 'repo1', 'production', 'deploy', ?, 'refs/heads/main', 'ui', 'approved', 'passed', ?)",
+      ).run(`d${n}`, `r${n}`, n, sha(String(n % 10)), at);
+    };
+    mk(40, '2026-10-15T08:00:00.000Z');
+    mk(89, '2026-10-15T12:00:00.000Z');
+    mk(191, '2026-10-16T08:00:00.000Z');
+    // Unbounded (the live deploy of run 191, newest): the newest other release is run 89.
+    assert.equal(cs.lastReleased('repo1', 'production', 'r191')?.run_number, 89);
+    // The backfill of run 40 (nothing before it) and of run 89 (run 40 before it; run 191 is later and must not be the base).
+    assert.equal(cs.lastReleased('repo1', 'production', 'r40','2026-10-15T08:00:00.000Z'), undefined);
+    assert.equal(cs.lastReleased('repo1', 'production', 'r89', '2026-10-15T12:00:00.000Z')?.run_number, 40);
+    assert.equal(cs.lastReleased('repo1', 'production', 'r89')?.run_number, 191, 'without the bound a later release wins: the bug');
+  } finally {
+    h.done();
+  }
 });
 
 test('no report for a dry run, deploy=false, a release that did not pass, or one that pushed nothing', async () => {

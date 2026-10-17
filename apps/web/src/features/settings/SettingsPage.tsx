@@ -10,6 +10,10 @@ import { PageHeader } from '@/components/PageHeader';
 import { ApiError, errorText } from '@/lib/api';
 import { formatDateTime, timeAgo } from '@/lib/format';
 import { settingsApi } from './api';
+import { AccessSection } from './AccessSection';
+import { AccountsSection } from './AccountsSection';
+import { SsoSection } from './SsoSection';
+import { TeamsSection } from './TeamsSection';
 
 const verb = (v: SettingValue) => (v === true ? 'Turn on' : v === false ? 'Turn off' : 'Change');
 const show = (v: SettingValue | null) => (v === null ? '' : typeof v === 'boolean' ? (v ? 'On' : 'Off') : String(v));
@@ -104,6 +108,18 @@ export function SettingsPage() {
         </div>
       )}
       <div className="mt-6">
+        <AccountsSection />
+      </div>
+      <div className="mt-6">
+        <TeamsSection />
+      </div>
+      <div className="mt-6">
+        <AccessSection />
+      </div>
+      <div className="mt-6">
+        <SsoSection />
+      </div>
+      <div className="mt-6">
         <CanaryPanel />
       </div>
       {/* Glance widgets: a person's preferences kept on this device, so they show even when the portal's settings could not load. */}
@@ -171,7 +187,7 @@ function ValueField({ setting, busy, onCommit }: { setting: SettingView; busy: b
       onChange={(e) => setText(e.target.value)}
       onBlur={commit}
       onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
-      className={`h-11 rounded-xl border border-line bg-surface px-3 text-base text-ink outline-none hover:border-line-strong focus:border-ink/40 focus:ring-4 focus:ring-[var(--ring)] disabled:opacity-50 ${number ? 'w-24 text-right' : 'w-48'}`}
+      className={`h-11 rounded-xl border border-line bg-surface px-3 text-base text-ink outline-hidden hover:border-line-strong focus:border-ink/40 focus:ring-4 focus:ring-[var(--ring)] disabled:opacity-50 ${number ? 'w-24 text-right' : 'w-48'}`}
     />
   );
 }
@@ -180,12 +196,29 @@ function ValueField({ setting, busy, onCommit }: { setting: SettingView; busy: b
 function HistoryDialog({ open, labels, onClose }: { open: boolean; labels: Record<string, string>; onClose: () => void }) {
   const [rows, setRows] = useState<SettingChange[] | null>(null);
   const [failed, setFailed] = useState(false);
+  const [next, setNext] = useState<string | null>(null);
+  const [more, setMore] = useState(false);
   useEffect(() => {
     if (!open) return;
     setRows(null);
+    setNext(null);
     setFailed(false);
-    settingsApi.audit().then(setRows, () => setFailed(true));
+    settingsApi.audit().then(
+      (page) => (setRows(page.items), setNext(page.next)),
+      () => setFailed(true),
+    );
   }, [open]);
+  const loadMore = () => {
+    if (!next) return;
+    setMore(true);
+    settingsApi
+      .audit({ cursor: next })
+      .then(
+        (page) => (setRows((cur) => [...(cur ?? []), ...page.items]), setNext(page.next)),
+        () => setFailed(true),
+      )
+      .finally(() => setMore(false));
+  };
   return (
     <Dialog open={open} onClose={onClose} title="History">
       {failed && <p className="text-[13px] text-danger">Could not load.</p>}
@@ -207,6 +240,13 @@ function HistoryDialog({ open, labels, onClose }: { open: boolean; labels: Recor
             </li>
           ))}
         </ul>
+      )}
+      {next && (
+        <div className="mt-3 flex justify-center">
+          <Button variant="secondary" loading={more} onClick={loadMore}>
+            Older
+          </Button>
+        </div>
       )}
     </Dialog>
   );

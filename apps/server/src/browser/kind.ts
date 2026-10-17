@@ -60,7 +60,9 @@ function headerRules(v: unknown, allowedSites: string[], fallback: BrowserHeader
     if (typeof raw.name !== 'string' || typeof raw.secret !== 'string' || !Array.isArray(raw.hosts) || raw.hosts.some((h) => typeof h !== 'string'))
       throw invalid('headers', 'Each header needs hosts, a name and the name of a secret.');
     if (raw.key !== undefined && raw.key !== null && typeof raw.key !== 'string') throw invalid('headers', 'A key is the name of a variable in an env-file entry.');
-    const key = typeof raw.key === 'string' ? raw.key.trim() : '';
+    const key = typeof raw.key === 'string' ? raw.key.trim() : undefined;
+    // A blank key is refused, never dropped: dropping it would deliver the whole env-file entry (every variable in it) to the header's host.
+    if (key === '') throw invalid('headers', 'A key can’t be blank: name the variable in the entry, or leave key out.');
     const rule: BrowserHeaderRule = { hosts: [...new Set((raw.hosts as string[]).map((h) => h.trim().toLowerCase()).filter(Boolean))], name: raw.name.trim(), secret: raw.secret.trim(), ...(key ? { key } : {}) };
     const problem = headerProblem(rule, allowedSites);
     if (problem) throw invalid('headers', problem);
@@ -107,7 +109,15 @@ export class BrowserKind implements PoolKind<BrowserPoolContent> {
   forgotten: (workspaceId: string) => void = () => {};
   readonly #latest = new Map<string, AssignedPool<BrowserPoolContent>[]>();
 
+  /** The browser plugin's version folders (12 characters of the tree hash) the workspace still holds, as the last delivery reported them. */
+  readonly #folders = new Map<string, Set<string>>();
+
   constructor(private readonly deps: BrowserKindDeps) {}
+
+  /** The version folders of the browser plugin still in the workspace, or undefined before the first delivery report (after a restart). */
+  retainedFolders(workspaceId: string): ReadonlySet<string> | undefined {
+    return this.#folders.get(workspaceId);
+  }
 
   parse(input: unknown, prev: BrowserPoolContent | null, _ctx?: ParseContext): BrowserPoolContent {
     if (!isObject(input)) throw invalid('content', 'Describe the browser.');
@@ -162,7 +172,8 @@ export class BrowserKind implements PoolKind<BrowserPoolContent> {
   }
 
   /** The browser container and the servers' install follow the files the engine just wrote. */
-  delivered(workspaceId: string, ctx: { running: boolean; now: Date }): void {
+  delivered(workspaceId: string, ctx: { running: boolean; now: Date; pluginFolders?: Map<string, string[]> }): void {
+    if (ctx.pluginFolders) this.#folders.set(workspaceId, new Set(ctx.pluginFolders.get('cpb-browser') ?? []));
     this.afterDelivery(workspaceId, this.#latest.get(workspaceId) ?? [], ctx);
   }
 
@@ -187,6 +198,7 @@ export class BrowserKind implements PoolKind<BrowserPoolContent> {
 
   forgetWorkspace(workspaceId: string): void {
     this.#latest.delete(workspaceId);
+    this.#folders.delete(workspaceId);
     this.forgotten(workspaceId);
   }
 }

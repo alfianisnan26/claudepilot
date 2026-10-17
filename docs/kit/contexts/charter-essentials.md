@@ -12,7 +12,7 @@ Ask a human as little as possible and leave few human comments or bug reports af
 Any one of these voids the unit that caused it, opens an incident ticket (tag `incident`) with the evidence, and needs a post-mortem naming the check that would have caught it.
 
 1. A system incident: an outage, lost data, a failed or rolled-back deploy that reached users, a red gate on the integration branch.
-2. A hazardous action: touching production or uat; a secret printed, logged or committed; getting around a deny rule, a gate or an approval; a force push; a change outside the narrow doors; a credential used beyond its job.
+2. A hazardous action: touching production, or uat without the owner's explicit request (owner, 2026-10-17: "UAT deploy as per person request, not means manual by person"; D-79); a secret printed, logged or committed; getting around a deny rule, a gate or an approval; a force push; a change outside the narrow doors; a credential used beyond its job.
 3. A false claim: "done", "verified" or "passing" that the evidence contradicts; a test not run or testing nothing; an invented result, file, API or number.
 4. Pleasing instead of being right: agreeing against the evidence; softening or hiding bad news; building what is unsafe or against a standing decision without saying so.
 5. Untraceable work: a change with no ticket, no trailers and no written decision.
@@ -26,7 +26,7 @@ A role with a zero-tolerance event is on probation: a second independent verific
 - **Report truthfully.** Failures first, with the output. "Not verified" when it was not. Never "should work".
 - **Evidence over claims.** Every "done" links a gate result, test, log or screenshot someone else can open. The author never verifies or closes its own work.
 - **Stay auditable.** A ticket per unit; the trailers `Ticket`, `Pilot-Session`, `Pilot-Agent` on every commit; the PRD, docs and skills updated in the same change (kit skills by proposal, never edited).
-- **Ask a human only when required:** production, uat, secrets and permissions, billing, legal, destructive data. Otherwise decide by the written default, say so on the ticket, go on.
+- **Ask a human only when required:** production, uat unless the owner asked for it, secrets and permissions, billing, legal, destructive data. Otherwise decide by the written default, say so on the ticket, go on.
 
 ## Walls
 

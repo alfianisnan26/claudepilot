@@ -90,7 +90,7 @@ const sendJson = (method: string, url: string, body: unknown) =>
   app.request(`http://localhost:3000${url}`, { method, headers: { host: 'localhost:3000', origin: 'http://localhost:3000', cookie: `portal_session=${token}`, 'content-type': 'application/json' }, body: JSON.stringify(body) }, env);
 
 test('a workspace id that is not <target>/<name> of plain names is refused in any body or query, signed in, before a handler sees it', async () => {
-  const mutating = app.routes.filter((r) => ['POST', 'PUT', 'PATCH', 'DELETE'].includes(r.method) && r.path.startsWith('/api/') && !r.path.includes('*') && !/^\/api\/(login|logout)$/.test(r.path));
+  const mutating = app.routes.filter((r) => ['POST', 'PUT', 'PATCH', 'DELETE'].includes(r.method) && r.path.startsWith('/api/') && !r.path.includes('*') && !/^\/api\/(login|logout|auth\/discover)$/.test(r.path));
   assert.ok(mutating.length > 90, `only ${mutating.length} mutating routes found`);
   touched.length = 0;
   const failures: string[] = [];

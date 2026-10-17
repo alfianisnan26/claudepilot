@@ -5,14 +5,17 @@ import {
   type KnowledgeSource,
   type NoteHistoryEntry,
   type NoteVersion,
+  type PortalAgentWorkspace,
   type VaultImportPolicy,
   type VaultImportReport,
   type VaultSummary,
 } from '@portal/contracts';
 import { ArrowLeft, FileUp, RotateCcw } from 'lucide-react';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { InfoTip } from '@/components/InfoTip';
 import { formatBytes, timeAgo } from '@/lib/format';
+import { portalMcpApi } from '../portalmcp/api';
+import { settingsPayload, toastSaveWarning, toggleWorkspace, workspaceChoices } from './agentWorkspaces';
 import { errorText, knowledgeApi } from './api';
 import { DiffView } from './NoteEditor';
 import { useLoad } from './hooks';
@@ -40,7 +43,17 @@ function PolicyField({ value, onChange }: { value: AgentPolicy; onChange: (v: Ag
 }
 
 /** A new vault, or a folder source when the operator allowed any. */
-export function NewVaultDialog({ open, sources, onClose, onCreated }: { open: boolean; sources: KnowledgeSource[]; onClose: () => void; onCreated: (v: VaultSummary) => void }) {
+export function NewVaultDialog({
+  open,
+  sources,
+  onClose,
+  onCreated,
+}: {
+  open: boolean;
+  sources: KnowledgeSource[];
+  onClose: () => void;
+  onCreated: (v: VaultSummary) => void;
+}) {
   const [name, setName] = useState('');
   const [agents, setAgents] = useState<AgentPolicy>('write-own');
   const [mode, setMode] = useState<'new' | 'folder'>('new');
@@ -53,7 +66,11 @@ export function NewVaultDialog({ open, sources, onClose, onCreated }: { open: bo
     setSaving(true);
     setError(null);
     try {
-      const v = await knowledgeApi.createVault(mode === 'folder' ? { name: name.trim() || undefined, agents: 'read', source: { root, sub: sub.trim() || undefined } } : { name, agents });
+      const v = await knowledgeApi.createVault(
+        mode === 'folder'
+          ? { name: name.trim() || undefined, agents: 'read', source: { root, sub: sub.trim() || undefined } }
+          : { name, agents },
+      );
       setName('');
       setSub('');
       onCreated(v);
@@ -65,7 +82,17 @@ export function NewVaultDialog({ open, sources, onClose, onCreated }: { open: bo
   };
 
   return (
-    <FormDialog open={open} onClose={() => !saving && onClose()} size="sm" title={mode === 'folder' ? 'Folder source' : 'New vault'} onSubmit={submit} submitLabel="Create" saving={saving} error={error} submitDisabled={mode === 'new' && !name.trim()}>
+    <FormDialog
+      open={open}
+      onClose={() => !saving && onClose()}
+      size="sm"
+      title={mode === 'folder' ? 'Folder source' : 'New vault'}
+      onSubmit={submit}
+      submitLabel="Create"
+      saving={saving}
+      error={error}
+      submitDisabled={mode === 'new' && !name.trim()}
+    >
       {sources.length > 0 && (
         <Segmented
           label="Kind"
@@ -77,12 +104,24 @@ export function NewVaultDialog({ open, sources, onClose, onCreated }: { open: bo
           onChange={setMode}
         />
       )}
-      <TextField label="Name" value={name} onChange={(e) => setName(e.target.value)} maxLength={60} autoComplete="off" optional={mode === 'folder'} />
+      <TextField
+        label="Name"
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        maxLength={60}
+        autoComplete="off"
+        optional={mode === 'folder'}
+      />
       {mode === 'new' ? (
         <PolicyField value={agents} onChange={setAgents} />
       ) : (
         <>
-          <Select label="Folder" value={root} onChange={setRoot} options={sources.map((s) => ({ value: s.name, label: `${s.name}${s.writable ? '' : ' (read-only)'}` }))} />
+          <Select
+            label="Folder"
+            value={root}
+            onChange={setRoot}
+            options={sources.map((s) => ({ value: s.name, label: `${s.name}${s.writable ? '' : ' (read-only)'}` }))}
+          />
           <TextField label="Subfolder" value={sub} onChange={(e) => setSub(e.target.value)} autoComplete="off" optional />
         </>
       )}
@@ -102,7 +141,17 @@ const SKIP_LABEL: Record<string, string> = {
 };
 
 /** A zip into a new vault, or into `into`. The result stays on screen: what came in, what was skipped. */
-export function ImportDialog({ open, into, onClose, onDone }: { open: boolean; into?: VaultSummary | null; onClose: () => void; onDone: (r: VaultImportReport) => void }) {
+export function ImportDialog({
+  open,
+  into,
+  onClose,
+  onDone,
+}: {
+  open: boolean;
+  into?: VaultSummary | null;
+  onClose: () => void;
+  onDone: (r: VaultImportReport) => void;
+}) {
   const input = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
   const [name, setName] = useState('');
@@ -166,7 +215,13 @@ export function ImportDialog({ open, into, onClose, onDone }: { open: boolean; i
           </p>
           {(report.renamed > 0 || report.overwritten > 0 || report.skippedExisting > 0) && (
             <p className="text-muted">
-              {[report.renamed && `${report.renamed} renamed`, report.overwritten && `${report.overwritten} replaced`, report.skippedExisting && `${report.skippedExisting} already there`].filter(Boolean).join(' · ')}
+              {[
+                report.renamed && `${report.renamed} renamed`,
+                report.overwritten && `${report.overwritten} replaced`,
+                report.skippedExisting && `${report.skippedExisting} already there`,
+              ]
+                .filter(Boolean)
+                .join(' · ')}
             </p>
           )}
           {report.skipped.length > 0 && (
@@ -206,7 +261,14 @@ export function ImportDialog({ open, into, onClose, onDone }: { open: boolean; i
               ]}
             />
           ) : (
-            <TextField label="Name" value={name} onChange={(e) => setName(e.target.value)} placeholder={file ? file.name.replace(/\.zip$/i, '') : ''} optional autoComplete="off" />
+            <TextField
+              label="Name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder={file ? file.name.replace(/\.zip$/i, '') : ''}
+              optional
+              autoComplete="off"
+            />
           )}
           {error && (
             <p role="alert" className="text-[13.5px] text-danger">
@@ -219,32 +281,121 @@ export function ImportDialog({ open, into, onClose, onDone }: { open: boolean; i
   );
 }
 
+/**
+ * T-436: which workspaces' agents may reach this vault. A tick list (each row a 44 px target) of the workspaces the portal knows; a vault no
+ * workspace is ticked on is reached by no agent.
+ */
+function WorkspacesField({ value, onChange }: { value: string[]; onChange: (v: string[]) => void }) {
+  const [known, setKnown] = useState<PortalAgentWorkspace[] | null>(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    let live = true;
+    portalMcpApi.agents().then(
+      (w) => live && setKnown(w),
+      () => live && setFailed(true),
+    );
+    return () => {
+      live = false;
+    };
+  }, []);
+  const rows = workspaceChoices(known ?? [], value);
+  return (
+    <fieldset className="min-w-0">
+      <legend className="mb-1.5 flex items-center gap-1.5 text-[13px] font-medium text-ink-soft">
+        Workspaces
+        <InfoTip label="About workspaces">
+          Agents in a ticked workspace can read this vault, within the Agents setting above. A vault with none ticked is reached by no
+          agent. A workspace is the finest the list can tell apart: two programs that share one workspace share its notes.
+        </InfoTip>
+      </legend>
+      {known === null && !failed && <p className="text-[13px] text-muted">Loading…</p>}
+      {failed && <p className="text-[13px] text-danger">Couldn’t list workspaces.</p>}
+      <ul className="divide-y divide-line rounded-xl border border-line">
+        {rows.map((r) => (
+          <li key={r.workspaceId}>
+            <label className="flex min-h-11 cursor-pointer items-center gap-3 px-3 py-2 text-[14px] text-ink">
+              <input
+                type="checkbox"
+                className="size-5 shrink-0 accent-[var(--color-accent)]"
+                checked={r.checked}
+                onChange={(e) => onChange(toggleWorkspace(value, r.workspaceId, e.target.checked))}
+              />
+              <span className="min-w-0 break-all">{r.workspaceId}</span>
+              {r.invalid ? (
+                <span className="shrink-0 text-[12.5px] text-danger">not valid, untick it</span>
+              ) : (
+                r.gone && <span className="shrink-0 text-[12.5px] text-muted">gone</span>
+              )}
+            </label>
+          </li>
+        ))}
+      </ul>
+    </fieldset>
+  );
+}
+
 /** Name, agent access, daily notes, links and labels; deleting the vault is in here too. */
-export function VaultSettingsDialog({ vault, onClose, onSaved, onDelete }: { vault: VaultSummary | null; onClose: () => void; onSaved: (v: VaultSummary) => void; onDelete: () => void }) {
-  const [form, setForm] = useState<{ name: string; agents: AgentPolicy; dailyFolder: string; timezone: string; rewrite: boolean; labels: 'filename' | 'heading' } | null>(null);
+export function VaultSettingsDialog({
+  vault,
+  onClose,
+  onSaved,
+  onDelete,
+}: {
+  vault: VaultSummary | null;
+  onClose: () => void;
+  onSaved: (v: VaultSummary) => void;
+  onDelete: () => void;
+}) {
+  const toast = useToast();
+  const [form, setForm] = useState<{
+    name: string;
+    agents: AgentPolicy;
+    dailyFolder: string;
+    timezone: string;
+    rewrite: boolean;
+    labels: 'filename' | 'heading';
+    agentWorkspaces: string[];
+  } | null>(null);
   const [openFor, setOpenFor] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   if ((vault?.id ?? null) !== openFor) {
     setOpenFor(vault?.id ?? null);
     setError(null);
-    setForm(vault ? { name: vault.name, agents: vault.agents, dailyFolder: vault.dailyFolder, timezone: vault.timezone, rewrite: vault.settings.rewriteLinksOnRename, labels: vault.settings.labels } : null);
+    setForm(
+      vault
+        ? {
+            name: vault.name,
+            agents: vault.agents,
+            dailyFolder: vault.dailyFolder,
+            timezone: vault.timezone,
+            rewrite: vault.settings.rewriteLinksOnRename,
+            labels: vault.settings.labels,
+            agentWorkspaces: vault.settings.agentWorkspaces ?? [],
+          }
+        : null,
+    );
   }
-  if (!vault || !form) return <FormDialog open={false} onClose={onClose} title="Settings" onSubmit={() => undefined}>{null}</FormDialog>;
+  if (!vault || !form)
+    return (
+      <FormDialog open={false} onClose={onClose} title="Settings" onSubmit={() => undefined}>
+        {null}
+      </FormDialog>
+    );
 
   const submit = async () => {
     setSaving(true);
     setError(null);
     try {
-      onSaved(
-        await knowledgeApi.updateVault(vault.id, {
-          name: form.name,
-          agents: form.agents,
-          dailyFolder: form.dailyFolder,
-          timezone: form.timezone,
-          settings: { rewriteLinksOnRename: form.rewrite, labels: form.labels },
-        }),
-      );
+      const saved = await knowledgeApi.updateVault(vault.id, {
+        name: form.name,
+        agents: form.agents,
+        dailyFolder: form.dailyFolder,
+        timezone: form.timezone,
+        settings: settingsPayload(form),
+      });
+      onSaved(saved);
+      toastSaveWarning(saved, toast);
     } catch (e) {
       setError(errorText(e, 'Could not save.'));
     } finally {
@@ -271,6 +422,7 @@ export function VaultSettingsDialog({ vault, onClose, onSaved, onDelete }: { vau
     >
       <TextField label="Name" value={form.name} onChange={(e) => set('name', e.target.value)} maxLength={60} autoComplete="off" />
       <PolicyField value={form.agents} onChange={(v) => set('agents', v)} />
+      <WorkspacesField value={form.agentWorkspaces} onChange={(v) => set('agentWorkspaces', v)} />
       <div className="grid grid-cols-2 gap-3">
         <TextField label="Daily notes" value={form.dailyFolder} onChange={(e) => set('dailyFolder', e.target.value)} autoComplete="off" />
         <TextField label="Time zone" value={form.timezone} onChange={(e) => set('timezone', e.target.value)} autoComplete="off" />
@@ -291,7 +443,15 @@ export function VaultSettingsDialog({ vault, onClose, onSaved, onDelete }: { vau
 }
 
 /** Typing the name is the confirmation. A vault goes to a trash folder for 14 days; a folder source is only forgotten. */
-export function DeleteVaultDialog({ vault, onClose, onDeleted }: { vault: VaultSummary | null; onClose: () => void; onDeleted: () => void }) {
+export function DeleteVaultDialog({
+  vault,
+  onClose,
+  onDeleted,
+}: {
+  vault: VaultSummary | null;
+  onClose: () => void;
+  onDeleted: () => void;
+}) {
   const toast = useToast();
   const [typed, setTyped] = useState('');
   const [saving, setSaving] = useState(false);
@@ -322,7 +482,9 @@ export function DeleteVaultDialog({ vault, onClose, onDeleted }: { vault: VaultS
         }
       }}
     >
-      <p className="text-[14px] text-ink-soft">{vault?.kind === 'folder' ? 'The folder itself is not touched.' : 'Kept in a trash folder for 14 days.'}</p>
+      <p className="text-[14px] text-ink-soft">
+        {vault?.kind === 'folder' ? 'The folder itself is not touched.' : 'Kept in a trash folder for 14 days.'}
+      </p>
       <TextField label="Type the name" value={typed} onChange={(e) => setTyped(e.target.value)} autoComplete="off" />
     </FormDialog>
   );
@@ -377,18 +539,41 @@ export function NoteNameDialog({
         }
       }}
     >
-      <TextField label="Name" value={value} onChange={(e) => setValue(e.target.value)} autoComplete="off" autoCapitalize="off" spellCheck={false} suffix={<span className="text-muted">.md</span>} />
+      <TextField
+        label="Name"
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        autoComplete="off"
+        autoCapitalize="off"
+        spellCheck={false}
+        suffix={<span className="text-muted">.md</span>}
+      />
     </FormDialog>
   );
 }
 
 /** A note's versions: who and when; tap one for what it changed, with Restore. */
-export function HistoryDialog({ open, vaultId, path, onClose, onRestored }: { open: boolean; vaultId: string; path: string; onClose: () => void; onRestored: () => void }) {
+export function HistoryDialog({
+  open,
+  vaultId,
+  path,
+  onClose,
+  onRestored,
+}: {
+  open: boolean;
+  vaultId: string;
+  path: string;
+  onClose: () => void;
+  onRestored: () => void;
+}) {
   const toast = useToast();
   const [picked, setPicked] = useState<NoteHistoryEntry | null>(null);
   const [restoring, setRestoring] = useState(false);
   const history = useLoad(`${vaultId}|${path}|${open}`, () => knowledgeApi.history(vaultId, path), open);
-  const version = useLoad(`${vaultId}|${path}|${picked?.id}`, () => knowledgeApi.version(vaultId, path, picked!.id), open && !!picked) as { data: NoteVersion | null; loading: boolean };
+  const version = useLoad(`${vaultId}|${path}|${picked?.id}`, () => knowledgeApi.version(vaultId, path, picked!.id), open && !!picked) as {
+    data: NoteVersion | null;
+    loading: boolean;
+  };
 
   const restore = async () => {
     if (!picked) return;
@@ -413,13 +598,24 @@ export function HistoryDialog({ open, vaultId, path, onClose, onRestored }: { op
       title="History"
       leading={
         picked && (
-          <button type="button" aria-label="Back" onClick={() => setPicked(null)} className="press inline-flex size-9 items-center justify-center rounded-full hover:bg-surface-2">
+          <button
+            type="button"
+            aria-label="Back"
+            onClick={() => setPicked(null)}
+            className="press inline-flex size-9 items-center justify-center rounded-full hover:bg-surface-2"
+          >
             <ArrowLeft className="size-5" />
           </button>
         )
       }
       stepKey={picked ? String(picked.id) : 'list'}
-      footer={picked && picked.hasContent ? <Button icon={<RotateCcw className="size-4" />} onClick={restore} loading={restoring}>Restore</Button> : undefined}
+      footer={
+        picked && picked.hasContent ? (
+          <Button icon={<RotateCcw className="size-4" />} onClick={restore} loading={restoring}>
+            Restore
+          </Button>
+        ) : undefined
+      }
     >
       {!picked ? (
         history.loading && !history.data ? (
@@ -430,9 +626,15 @@ export function HistoryDialog({ open, vaultId, path, onClose, onRestored }: { op
           <ul className="-mx-1 flex flex-col">
             {entries.map((e) => (
               <li key={e.id}>
-                <button type="button" onClick={() => setPicked(e)} className="press flex w-full items-center gap-2 rounded-xl px-2 py-2.5 text-left hover:bg-surface-2/70">
+                <button
+                  type="button"
+                  onClick={() => setPicked(e)}
+                  className="press flex w-full items-center gap-2 rounded-xl px-2 py-2.5 text-left hover:bg-surface-2/70"
+                >
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[14.5px] font-medium">{e.note === 'original' ? 'Original' : `${OP_LABEL[e.op]} · ${actorLabel(e.actor)}`}</span>
+                    <span className="block truncate text-[14.5px] font-medium">
+                      {e.note === 'original' ? 'Original' : `${OP_LABEL[e.op]} · ${actorLabel(e.actor)}`}
+                    </span>
                     <span className="block truncate text-[12.5px] text-muted">
                       {timeAgo(e.at)}
                       {e.note && e.note !== 'original' ? ` · ${e.note}` : ''}
@@ -455,7 +657,10 @@ export function HistoryDialog({ open, vaultId, path, onClose, onRestored }: { op
           <DiffView before={version.data.previous ?? ''} after={version.data.content ?? ''} />
         </div>
       ) : (
-        <p className="text-[14px] text-muted">{OP_LABEL[picked.op]}{picked.fromPath ? ` from ${picked.fromPath}` : ''}.</p>
+        <p className="text-[14px] text-muted">
+          {OP_LABEL[picked.op]}
+          {picked.fromPath ? ` from ${picked.fromPath}` : ''}.
+        </p>
       )}
     </Dialog>
   );

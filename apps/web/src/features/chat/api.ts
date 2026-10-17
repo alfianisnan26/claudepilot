@@ -5,6 +5,7 @@ import {
   EVENT_PAGE_LIMIT,
   KEEPGOING_API,
   type ChatEventPage,
+  type CursorPage,
   type KeepGoingList,
   type ChatBypassState,
   type ChatDiff,
@@ -77,16 +78,41 @@ const query = (o: Record<string, string | undefined>) => {
 const childrenQuery = (children?: 'end') => query({ children });
 
 export const chatApi = {
-  list: () => request<ChatSession[]>('GET', CHAT_API.list),
+  /** One page of sessions, newest activity first (D-58): `next` goes back as `cursor`. */
+  list: (opts: { cursor?: string | null; limit?: number; parentId?: string } = {}) =>
+    request<CursorPage<ChatSession>>(
+      'GET',
+      CHAT_API.list +
+        query({ limit: opts.limit ? String(opts.limit) : undefined, cursor: opts.cursor ?? undefined, parentId: opts.parentId }),
+    ),
+  /** Every session, by following the pages (at most `maxPages` of 100): for a caller that needs the whole set (the palette, a picker, a lead's workers). */
+  listAll: async (opts: { parentId?: string; maxPages?: number } = {}): Promise<ChatSession[]> => {
+    const out: ChatSession[] = [];
+    let cursor: string | null = null;
+    for (let i = 0; i < (opts.maxPages ?? 5); i++) {
+      const page: CursorPage<ChatSession> = await chatApi.list({
+        limit: 100,
+        cursor,
+        ...(opts.parentId ? { parentId: opts.parentId } : {}),
+      });
+      out.push(...page.items);
+      if (!page.next) break;
+      cursor = page.next;
+    }
+    return out;
+  },
   create: (body: CreateChatSessionRequest) => request<ChatSession>('POST', CHAT_API.create, body),
   get: (id: string) => request<ChatSession>('GET', CHAT_API.one(id)),
   end: (id: string, children?: 'end') => request<{ ok: true }>('POST', CHAT_API.end(id) + childrenQuery(children)),
   /** The sessions a session started. */
-  children: (id: string) => request<ChatSession[]>('GET', `${CHAT_API.list}?parentId=${encodeURIComponent(id)}`),
+  children: (id: string) => chatApi.listAll({ parentId: id }),
   rename: (id: string, title: string) => request<ChatSession>('PATCH', CHAT_API.one(id), { title } satisfies UpdateChatSessionRequest),
   /** Deletes it, ending it first: the transcript and its files in the workspace go (FR4). */
   remove: (id: string, worktree?: ChatWorktreeRemoval, children?: 'end') =>
-    request<DeleteChatSessionResult>('DELETE', CHAT_API.one(id) + query({ worktree: worktree && worktree !== 'keep' ? worktree : undefined, children })),
+    request<DeleteChatSessionResult>(
+      'DELETE',
+      CHAT_API.one(id) + query({ worktree: worktree && worktree !== 'keep' ? worktree : undefined, children }),
+    ),
   /** Usage over a window, in buckets that line up with this device's clock; optionally one Claude's. */
   usage: (range: ChatUsageRange, claudeId?: string) =>
     request<ChatUsageReport>(
@@ -95,7 +121,10 @@ export const chatApi = {
     ),
   /** Archive (ending it first if it hasn't ended), or bring it back to the list. */
   archive: (id: string, worktree?: ChatWorktreeRemoval, children?: 'end') =>
-    request<ChatSession>('POST', CHAT_API.archive(id) + query({ worktree: worktree && worktree !== 'keep' ? worktree : undefined, children })),
+    request<ChatSession>(
+      'POST',
+      CHAT_API.archive(id) + query({ worktree: worktree && worktree !== 'keep' ? worktree : undefined, children }),
+    ),
   /** What removing the session's worktree would lose; null for a session in a plain folder. */
   worktreeStatus: (id: string) => request<ChatWorktreeStatus | null>('GET', CHAT_API.worktree(id)),
   unarchive: (id: string) => request<ChatSession>('DELETE', CHAT_API.archive(id)),
@@ -103,7 +132,10 @@ export const chatApi = {
   unpin: (id: string) => request<ChatSession>('DELETE', CHAT_API.pin(id)),
   /** One page of the transcript counted back from `before` (the newest without it; T-376). A portal from before T-376 answers the whole list. */
   page: (id: string, before?: number | null) =>
-    request<ChatEvent[] | ChatEventPage>('GET', CHAT_API.events(id) + query({ before: before ? String(before) : undefined, limit: String(EVENT_PAGE_LIMIT) })).then(asPage),
+    request<ChatEvent[] | ChatEventPage>(
+      'GET',
+      CHAT_API.events(id) + query({ before: before ? String(before) : undefined, limit: String(EVENT_PAGE_LIMIT) }),
+    ).then(asPage),
   /** One stored event whole: a `tool_result` a page cut to its preview. */
   event: (id: string, seq: number) => request<ChatEvent>('GET', CHAT_API.event(id, seq)),
   /** Models this session can switch to (Claude Code's own list). */
@@ -111,12 +143,12 @@ export const chatApi = {
   /** Sub-agents and background tasks, the full current list. */
   tasks: (id: string) => request<ChatTask[]>('GET', CHAT_API.tasks(id)),
   /** One sub-agent's own transcript after a seq (bounded): the detail view's lines. */
-  taskEvents: (id: string, taskId: string, after = 0) => request<ChatTaskTranscript>('GET', `${CHAT_API.taskEvents(id, taskId)}?after=${after}`),
+  taskEvents: (id: string, taskId: string, after = 0) =>
+    request<ChatTaskTranscript>('GET', `${CHAT_API.taskEvents(id, taskId)}?after=${after}`),
   /** Where an image's bytes are served (attachments and tool images); plain same-origin GET. */
   blobUrl: (id: string, blobId: string) => CHAT_API.blob(id, blobId),
   /** A folder in the session's workspace; without a path, the session's own folder. */
-  files: (id: string, path?: string) =>
-    request<ChatFolder>('GET', CHAT_API.files(id) + (path ? `?path=${encodeURIComponent(path)}` : '')),
+  files: (id: string, path?: string) => request<ChatFolder>('GET', CHAT_API.files(id) + (path ? `?path=${encodeURIComponent(path)}` : '')),
   /** Where a file downloads from (an attachment); plain same-origin GET, for `<a download>`. */
   downloadUrl: (id: string, path: string) => `${CHAT_API.download(id)}?path=${encodeURIComponent(path)}`,
   /** What changed in the session's folder (git status and the unified diff). */
@@ -141,7 +173,8 @@ export const chatApi = {
   /** Restarts the session so it can enter Bypass, at its next turn boundary. */
   allowBypass: (id: string) => request<ChatSession>('POST', CHAT_API.bypassAllow(id)),
   /** Restarts the session's Claude Code on the same conversation, at a turn boundary, so its MCP servers reconnect. */
-  restart: (id: string, why: 'mcp' | 'manual', opts: Omit<RestartChatRequest, 'why'> = {}) => request<ChatSession>('POST', CHAT_API.restart(id), { why, ...opts } satisfies RestartChatRequest),
+  restart: (id: string, why: 'mcp' | 'manual', opts: Omit<RestartChatRequest, 'why'> = {}) =>
+    request<ChatSession>('POST', CHAT_API.restart(id), { why, ...opts } satisfies RestartChatRequest),
   /** T-136: brings a session ended for integrity back in place (the same row); `confirm` after the sheet for a suspicious cause. */
   recover: (id: string, body: RecoverChatRequest = {}) => request<ChatSession>('POST', CHAT_API.recover(id), body),
   /** Cancels a restart that waits for the turn's end (T-102). */
@@ -157,7 +190,8 @@ export const chatApi = {
   /** Sets Keep going (a person only). */
   setKeepGoing: (id: string, body: UpdateKeepGoingRequest) => request<ChatKeepGoing>('PUT', CHAT_API.keepGoing(id), body),
   /** Pauses or resumes Keep going for a program, or all (a platform admin; T-259 slice 3). */
-  setKeepGoingPause: (body: SetKeepGoingPauseRequest) => request<{ pause: KeepGoingPause | null; changed: boolean }>('PUT', KEEPGOING_API.pauses, body),
+  setKeepGoingPause: (body: SetKeepGoingPauseRequest) =>
+    request<{ pause: KeepGoingPause | null; changed: boolean }>('PUT', KEEPGOING_API.pauses, body),
   /** Checks the server code again (what Bypass guards). */
   reauth: (code: string) => request<{ ok: true }>('POST', CHAT_API.reauth, { code } satisfies ReauthRequest),
   /** What the chat policy allows: whether a session can be started to allow Bypass. */

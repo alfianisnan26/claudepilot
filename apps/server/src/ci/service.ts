@@ -24,6 +24,7 @@ import {
   type CiRun,
   type CiRunFilter,
   type CiRunList,
+  type CiRunPage,
   type CiRunStateFile,
   type CiRunSummary,
   type CiStatus,
@@ -67,7 +68,18 @@ import type { CiTicketsPort } from './tickets.js';
 import { cleanLog, oneLine, redactSecrets } from './text.js';
 import { flakyComment, flakyDescription, flakyExcerpt, flakyTitle, parseFlaky, repoTag, type FlakySighting } from './flaky.js';
 import type { CiEventFile, Plan } from './plan.js';
-import { checkUpstream, defaultLookup, EMPTY_STATE, nextState, readState, upstreamPin, upstreamView, withoutUserinfo, type Lookup, type SyncReply } from './upstream.js';
+import {
+  checkUpstream,
+  defaultLookup,
+  EMPTY_STATE,
+  nextState,
+  readState,
+  upstreamPin,
+  upstreamView,
+  withoutUserinfo,
+  type Lookup,
+  type SyncReply,
+} from './upstream.js';
 
 /** The flaky rows of a run, per job: the count and the distinct tickets, in order. */
 function flakyOfJobs(rows: { job: string; ticket_id: string | null }[]): CiRunFlaky[] {
@@ -104,11 +116,20 @@ export function runsOnOf(r: Pick<RunRow, 'runs_on'>): string[] | null {
   }
 }
 /** The mirror a runner keeps of a workspace's remote (T-557): never the runner's own remote of the same name. */
-export const mirrorOf = (workspaceId: string, repo: string) => `m-${createHash('sha256').update(workspaceId).digest('hex').slice(0, 8)}-${repo}`;
+export const mirrorOf = (workspaceId: string, repo: string) =>
+  `m-${createHash('sha256').update(workspaceId).digest('hex').slice(0, 8)}-${repo}`;
 /** Base64 characters per chunk of a bundle on its way to a runner: under cp-ci's 4 MiB stdin and reply caps. */
 const BUNDLE_CHUNK = 1_048_576;
 
-const row0 = (r: RunRow) => ({ id: r.id, number: r.number, pipeline: r.pipeline, sha: r.sha, ref: r.ref, actor: r.actor, created_at: r.created_at });
+const row0 = (r: RunRow) => ({
+  id: r.id,
+  number: r.number,
+  pipeline: r.pipeline,
+  sha: r.sha,
+  ref: r.ref,
+  actor: r.actor,
+  created_at: r.created_at,
+});
 
 const newRunId = () => `r${Date.now().toString(36)}${randomBytes(3).toString('hex')}`;
 const newId = (prefix: string) => `${prefix}${Date.now().toString(36)}${randomBytes(4).toString('hex')}`;
@@ -135,7 +156,10 @@ const deploymentView = (d: DeploymentRow): CiDeployment => ({
   decidedAt: d.decided_at,
   outcome: (d.outcome as CiDeployment['outcome']) ?? null,
   createdAt: d.created_at,
-  autoApprove: d.auto_verdict && d.auto_line && d.auto_at ? { mode: d.auto_mode === 'on' ? 'on' : 'dry', verdict: d.auto_verdict, line: d.auto_line, at: d.auto_at } : null,
+  autoApprove:
+    d.auto_verdict && d.auto_line && d.auto_at
+      ? { mode: d.auto_mode === 'on' ? 'on' : 'dry', verdict: d.auto_verdict, line: d.auto_line, at: d.auto_at }
+      : null,
 });
 
 const invalid = (field: string, message: string) => new AppError('VALIDATION_FAILED', message, { details: { [field]: message } });
@@ -195,7 +219,14 @@ export interface CiServiceOptions {
    */
   secretValue?: (workspaceId: string, name: string) => string | null;
   /** The platform audit (approvals, protection changes). Names, ids and fixed codes only. */
-  audit?: (e: { kind: string; actor: string; userId: string | null; severity?: 'info' | 'medium' | 'high'; subject?: string; detail?: Record<string, unknown> }) => void;
+  audit?: (e: {
+    kind: string;
+    actor: string;
+    userId: string | null;
+    severity?: 'info' | 'medium' | 'high';
+    subject?: string;
+    detail?: Record<string, unknown>;
+  }) => void;
   /** The clock of the auto-approve rule (its daily cap and window, FR41a) and of the stg age (T-558); tests pass a fake one. */
   now?: () => Date;
   /** Upstream sync (FR8a): how a host name resolves for the SSRF guard (default: the system's resolver); tests pass a fake one. */
@@ -244,7 +275,9 @@ export class CiService {
   releaseNotes?: ReleaseNoteSink;
   readonly #reporter: ReleaseReporter;
   readonly #cs: CiStore;
-  readonly #opts: Required<Omit<CiServiceOptions, 'redactFor' | 'streamFor' | 'tickets' | 'sessions' | 'secrets' | 'secretValue' | 'audit' | 'upstreamHosts'>> &
+  readonly #opts: Required<
+    Omit<CiServiceOptions, 'redactFor' | 'streamFor' | 'tickets' | 'sessions' | 'secrets' | 'secretValue' | 'audit' | 'upstreamHosts'>
+  > &
     Pick<CiServiceOptions, 'redactFor' | 'streamFor' | 'secrets' | 'secretValue' | 'audit' | 'upstreamHosts'>;
   /** Runs a runner is being handed right now (T-557), so two workspaces' dispatches can not both fill its last slot. */
   readonly #handing = new Map<string, number>();
@@ -362,7 +395,11 @@ export class CiService {
       const ids = new Set([...this.#cs.workspacesWithRepos(), ...this.#cs.workspacesWithActiveRuns(), ...this.#kicked]);
       const now = Date.now();
       for (const id of ids) {
-        const busy = this.#kicked.has(id) || this.#cs.runningRuns(id).length > 0 || this.#cs.queuedRuns(id).length > 0 || (this.#acks.get(id)?.length ?? 0) > 0;
+        const busy =
+          this.#kicked.has(id) ||
+          this.#cs.runningRuns(id).length > 0 ||
+          this.#cs.queuedRuns(id).length > 0 ||
+          (this.#acks.get(id)?.length ?? 0) > 0;
         const every = busy ? this.#opts.pollActiveMs : this.#opts.pollIdleMs;
         if ((this.#lastPoll.get(id) ?? 0) + every <= now) void this.poll(id);
       }
@@ -409,7 +446,10 @@ export class CiService {
     if (following.length) args.push('--runs', following.map((r) => r.id).join(','));
     const reply = await this.host.cp(workspaceId, args, { timeoutMs: 20_000 });
     if (!reply.ok) throw new Error(`poll: ${reply.message ?? reply.error}`);
-    this.#acks.set(workspaceId, (this.#acks.get(workspaceId) ?? []).filter((id) => !acks.includes(id)));
+    this.#acks.set(
+      workspaceId,
+      (this.#acks.get(workspaceId) ?? []).filter((id) => !acks.includes(id)),
+    );
 
     await this.#repos(workspaceId, (reply.repos as { name: string; hook: string }[] | undefined) ?? []);
     for (const ev of (reply.events as CiEventFile[] | undefined) ?? []) {
@@ -574,7 +614,12 @@ export class CiService {
         actor: by?.actor ?? 'upstream',
         userId: by?.userId ?? null,
         subject: `ci_repo:${repo.id}`,
-        detail: { workspace: repo.workspace_id, repo: repo.name, moved: reply.moved.length, branches: reply.moved.slice(0, 20).map((m) => ({ branch: m.branch, old: m.old, new: m.new })) },
+        detail: {
+          workspace: repo.workspace_id,
+          repo: repo.name,
+          moved: reply.moved.length,
+          branches: reply.moved.slice(0, 20).map((m) => ({ branch: m.branch, old: m.old, new: m.new })),
+        },
       });
       this.kick(repo.workspace_id);
     }
@@ -602,35 +647,71 @@ export class CiService {
     if (this.#cs.eventSeen(workspaceId, ev.id)) return;
     const repo = this.#cs.repoByName(workspaceId, ev.repo);
     const record = (outcome: string, note: string | null = null) =>
-      this.#cs.insertEvent({ workspace_id: workspaceId, id: ev.id, repo_id: repo?.id ?? null, repo: ev.repo, kind: ev.kind, ref: ev.ref, old_sha: ev.old, new_sha: ev.new, via: ev.via, at: ev.at, outcome, note });
+      this.#cs.insertEvent({
+        workspace_id: workspaceId,
+        id: ev.id,
+        repo_id: repo?.id ?? null,
+        repo: ev.repo,
+        kind: ev.kind,
+        ref: ev.ref,
+        old_sha: ev.old,
+        new_sha: ev.new,
+        via: ev.via,
+        at: ev.at,
+        outcome,
+        note,
+      });
     if (!repo) return record('ignored', 'not one of the portal’s remotes');
     if (ev.kind === 'delete') return record('ignored', 'ref deleted');
     const branch = branchOf(ev.ref);
     const protectedBranch = !!branch && globMatches(json<string[]>(repo.protected, []), branch);
     const trigger: CiTrigger = protectedBranch ? 'merge' : 'push';
 
-    const snap = (await this.host.cp(workspaceId, ['snapshot', repo.name, ev.new], { timeoutMs: 30_000 })) as CiReply & { message?: string; subject?: string; hasPilot?: boolean; files?: SnapshotFile[]; contextPack?: SnapshotFile | null };
+    const snap = (await this.host.cp(workspaceId, ['snapshot', repo.name, ev.new], { timeoutMs: 30_000 })) as CiReply & {
+      message?: string;
+      subject?: string;
+      hasPilot?: boolean;
+      files?: SnapshotFile[];
+      contextPack?: SnapshotFile | null;
+    };
     if (!snap.ok) {
       if (snap.error === 'no_commit') return record('ignored', 'the commit is no longer in the remote');
       throw new Error(snap.message ?? snap.error ?? 'snapshot failed');
     }
     // The context pack follows the default branch, whatever the pipelines do with the push ([skip ci] included).
     const pack = snap.contextPack;
-    if (pack && branch === repo.default_branch) this.#hook(() => this.hooks.contextPack?.({ workspaceId, repo: repo.name, branch, sha: ev.new, file: pack }));
+    if (pack && branch === repo.default_branch)
+      this.#hook(() => this.hooks.contextPack?.({ workspaceId, repo: repo.name, branch, sha: ev.new, file: pack }));
     if (SKIP.test(snap.message ?? '')) return record('skipped', '[skip ci] in the commit message');
     if (!snap.hasPilot) return record('no_pipeline', 'no .pilot folder');
     const { pipelines } = validateFiles(snap.files ?? []);
     if (!pipelines.length) return record('no_pipeline', 'no pipeline file in .pilot');
-    if (this.#cs.queuedRuns(workspaceId).length >= CI_LIMITS.queuedPerWorkspace) return record('queue_full', `${CI_LIMITS.queuedPerWorkspace} runs are already waiting`);
+    if (this.#cs.queuedRuns(workspaceId).length >= CI_LIMITS.queuedPerWorkspace)
+      return record('queue_full', `${CI_LIMITS.queuedPerWorkspace} runs are already waiting`);
 
     const made: RunRow[] = [];
     this.#cs.tx(() => {
       for (const v of pipelines) {
         const wanted = !v.pipeline || matches(v.pipeline, { event: trigger, ref: ev.ref });
         if (!wanted) continue;
-        made.push(this.#insertRun(repo, v, { event: trigger, ref: ev.ref, sha: ev.new, base: ev.old === '0'.repeat(40) ? null : ev.old, actor: ev.via === 'portal' ? 'ui' : 'push', inputs: {}, eventId: ev.id, subject: snap.subject ?? null, trigger }));
+        made.push(
+          this.#insertRun(repo, v, {
+            event: trigger,
+            ref: ev.ref,
+            sha: ev.new,
+            base: ev.old === '0'.repeat(40) ? null : ev.old,
+            actor: ev.via === 'portal' ? 'ui' : 'push',
+            inputs: {},
+            eventId: ev.id,
+            subject: snap.subject ?? null,
+            trigger,
+          }),
+        );
       }
-      record(made.length ? 'runs' : 'no_match', made.length ? `${made.length} run${made.length === 1 ? '' : 's'}` : 'no pipeline matches this ref');
+      record(
+        made.length ? 'runs' : 'no_match',
+        made.length ? `${made.length} run${made.length === 1 ? '' : 's'}` : 'no pipeline matches this ref',
+      );
     });
     if (made.length) {
       for (const run of made) this.#born(run, snap.message ?? null);
@@ -642,7 +723,20 @@ export class CiService {
   #insertRun(
     repo: RepoRow,
     v: Validated,
-    o: { event: EventContext['event']; ref: string; sha: string; base: string | null; actor: string; inputs: Record<string, string | boolean>; eventId: string | null; subject: string | null; trigger: CiTrigger; rerunOf?: string; sessionId?: string | null; actorLabel?: string | null },
+    o: {
+      event: EventContext['event'];
+      ref: string;
+      sha: string;
+      base: string | null;
+      actor: string;
+      inputs: Record<string, string | boolean>;
+      eventId: string | null;
+      subject: string | null;
+      trigger: CiTrigger;
+      rerunOf?: string;
+      sessionId?: string | null;
+      actorLabel?: string | null;
+    },
   ): RunRow {
     const number = this.#cs.nextNumber(repo.id);
     const id = newRunId();
@@ -685,19 +779,75 @@ export class CiService {
     };
     let row: RunRow = base;
     if (!v.pipeline) {
-      row = { ...base, status: 'failed', reason: 'invalid_pipeline', diagnostics: JSON.stringify(v.info.diagnostics), finished_at: now, duration_ms: 0, archived: 1 };
+      row = {
+        ...base,
+        status: 'failed',
+        reason: 'invalid_pipeline',
+        diagnostics: JSON.stringify(v.info.diagnostics),
+        finished_at: now,
+        duration_ms: 0,
+        archived: 1,
+      };
     } else {
-      const ctx: EventContext = { event: o.event, ref: o.ref, sha: o.sha, base: o.base, actor: o.actor, repo: repo.name, ticket: null, inputs: o.inputs, workspace: repo.workspace_id, runId: id, runNumber: number };
+      const ctx: EventContext = {
+        event: o.event,
+        ref: o.ref,
+        sha: o.sha,
+        base: o.base,
+        actor: o.actor,
+        repo: repo.name,
+        ticket: null,
+        inputs: o.inputs,
+        workspace: repo.workspace_id,
+        runId: id,
+        runNumber: number,
+      };
       const c = compile(v.pipeline, ctx, { maxParallel: this.#opts.maxJobsParallel });
-      const missing = c.ok ? this.#missingSecrets(repo.workspace_id, c.plan.jobs.filter((j) => !j.skip), v.info.file) : [];
+      const missing = c.ok
+        ? this.#missingSecrets(
+            repo.workspace_id,
+            c.plan.jobs.filter((j) => !j.skip),
+            v.info.file,
+          )
+        : [];
       const gates = c.ok && !missing.length ? this.#gates(repo, c.plan, row0(base)) : null;
       row = !c.ok
-        ? { ...base, status: 'failed', reason: 'invalid_pipeline', diagnostics: JSON.stringify(c.diagnostics), finished_at: now, duration_ms: 0, archived: 1 }
+        ? {
+            ...base,
+            status: 'failed',
+            reason: 'invalid_pipeline',
+            diagnostics: JSON.stringify(c.diagnostics),
+            finished_at: now,
+            duration_ms: 0,
+            archived: 1,
+          }
         : missing.length
-          ? { ...base, status: 'failed', reason: 'invalid_pipeline', diagnostics: JSON.stringify(missing), finished_at: now, duration_ms: 0, archived: 1 }
+          ? {
+              ...base,
+              status: 'failed',
+              reason: 'invalid_pipeline',
+              diagnostics: JSON.stringify(missing),
+              finished_at: now,
+              duration_ms: 0,
+              archived: 1,
+            }
           : gates && 'problem' in gates
-            ? { ...base, status: 'failed', reason: 'invalid_pipeline', diagnostics: JSON.stringify([gates.problem]), finished_at: now, duration_ms: 0, archived: 1 }
-            : { ...base, plan: JSON.stringify(c.plan), concurrency_group: c.group, cancel_in_progress: c.cancelInProgress ? 1 : 0, ...(c.plan.runsOn && this.#cs.runnersReady ? { runs_on: JSON.stringify(c.plan.runsOn) } : {}) };
+            ? {
+                ...base,
+                status: 'failed',
+                reason: 'invalid_pipeline',
+                diagnostics: JSON.stringify([gates.problem]),
+                finished_at: now,
+                duration_ms: 0,
+                archived: 1,
+              }
+            : {
+                ...base,
+                plan: JSON.stringify(c.plan),
+                concurrency_group: c.group,
+                cancel_in_progress: c.cancelInProgress ? 1 : 0,
+                ...(c.plan.runsOn && this.#cs.runnersReady ? { runs_on: JSON.stringify(c.plan.runsOn) } : {}),
+              };
       this.#cs.insertRun(row);
       if (gates && 'deployments' in gates && row.status === 'queued') for (const d of gates.deployments) this.#cs.insertDeployment(d);
       return row;
@@ -711,12 +861,26 @@ export class CiService {
    * gets a gate: the SHA-256 of a fresh random key, which the portal keeps and hands to the runner only when a person approves. Changes the
    * plan in place and returns the deployment rows to store with the run. Fails closed: without the tables, a deployment can not run.
    */
-  #gates(repo: RepoRow, plan: Plan, run: Pick<RunRow, 'id' | 'number' | 'pipeline' | 'sha' | 'ref' | 'actor' | 'created_at'>): { deployments: DeploymentRow[] } | { problem: CiDiagnostic } {
+  #gates(
+    repo: RepoRow,
+    plan: Plan,
+    run: Pick<RunRow, 'id' | 'number' | 'pipeline' | 'sha' | 'ref' | 'actor' | 'created_at'>,
+  ): { deployments: DeploymentRow[] } | { problem: CiDiagnostic } {
     const jobs = plan.jobs.filter((j) => j.environment && !j.skip);
     for (const j of plan.jobs) j.approval = null;
     if (!jobs.length) return { deployments: [] };
     if (!this.#cs.deploymentsReady)
-      return { problem: { file: '', line: 0, column: 0, path: `jobs.${jobs[0]!.id}.environment`, severity: 'error', code: 'no-environments', message: 'This portal can not hold deployment approvals yet (its database is not up to date).' } };
+      return {
+        problem: {
+          file: '',
+          line: 0,
+          column: 0,
+          path: `jobs.${jobs[0]!.id}.environment`,
+          severity: 'error',
+          code: 'no-environments',
+          message: 'This portal can not hold deployment approvals yet (its database is not up to date).',
+        },
+      };
     const deployments: DeploymentRow[] = [];
     for (const j of jobs) {
       const env = this.#cs.ensureEnvironment(repo.id, j.environment!, 'system', newId('e'));
@@ -750,7 +914,12 @@ export class CiService {
   }
 
   /** The secrets jobs name that this workspace can't give them (a name not assigned, or one that reaches Claude Code only as a variable). */
-  #missingSecrets(workspaceId: string, jobs: { id: string; secrets: string[] }[], file: string, severity: 'error' | 'warning' = 'error'): CiDiagnostic[] {
+  #missingSecrets(
+    workspaceId: string,
+    jobs: { id: string; secrets: string[] }[],
+    file: string,
+    severity: 'error' | 'warning' = 'error',
+  ): CiDiagnostic[] {
     const check = this.#opts.secrets;
     if (!check) return [];
     const out: CiDiagnostic[] = [];
@@ -765,7 +934,9 @@ export class CiService {
           path: `jobs.${job.id}.secrets`,
           severity,
           code: 'secret-missing',
-          message: found ? `${name} reaches Claude Code as a variable only, so a job can't use it.` : `The secret ${name} is not available in this workspace.`,
+          message: found
+            ? `${name} reaches Claude Code as a variable only, so a job can't use it.`
+            : `The secret ${name} is not available in this workspace.`,
           hint: 'Assign it in Secrets & env as a secret or a tool login, then run again.',
         });
       }
@@ -786,7 +957,9 @@ export class CiService {
       if (run.concurrency_group) {
         const others = this.#cs.activeInGroup(run.repo_id, run.concurrency_group, run.id).filter((o) => o.created_at <= run.created_at);
         if (others.length) {
-          if (run.cancel_in_progress) for (const o of others) await this.#cancelRow(o, 'superseded', { actor: 'pipeline', note: `for #${run.number}` }).catch(() => undefined);
+          if (run.cancel_in_progress)
+            for (const o of others)
+              await this.#cancelRow(o, 'superseded', { actor: 'pipeline', note: `for #${run.number}` }).catch(() => undefined);
           // Either way this one waits for the group to be clear; the next look starts it.
           continue;
         }
@@ -807,7 +980,10 @@ export class CiService {
       const text = run.plan;
       let reply: CiReply;
       try {
-        reply = await this.host.cp(workspaceId, ['start', run.id, '--bytes', String(Buffer.byteLength(text))], { stdin: text, timeoutMs: 30_000 });
+        reply = await this.host.cp(workspaceId, ['start', run.id, '--bytes', String(Buffer.byteLength(text))], {
+          stdin: text,
+          timeoutMs: 30_000,
+        });
       } catch (e) {
         this.#retry(run, (e as Error).message);
         continue;
@@ -846,7 +1022,11 @@ export class CiService {
     });
     if (!fits.length) {
       if (fallback) return this.#startHere(run, `no runner has the labels ${labels.join(', ')}`);
-      return this.#finishFailed(run, 'no_runner', `No runner has the labels ${labels.join(', ')}. Add one in CI > Runners, or change runs-on.`);
+      return this.#finishFailed(
+        run,
+        'no_runner',
+        `No runner has the labels ${labels.join(', ')}. Add one in CI > Runners, or change runs-on.`,
+      );
     }
     const ready: { id: string; load: number }[] = [];
     for (const r of fits) {
@@ -859,7 +1039,11 @@ export class CiService {
     if (!ready.length) {
       if (fallback) return this.#startHere(run, `no runner with the labels ${labels.join(', ')} is online and free`);
       if (Date.now() - Date.parse(run.created_at) > CI_LIMITS.runnerWaitMs)
-        this.#finishFailed(run, 'no_runner', `No runner with the labels ${labels.join(', ')} was online and free for ${Math.round(CI_LIMITS.runnerWaitMs / 60_000)} minutes.`);
+        this.#finishFailed(
+          run,
+          'no_runner',
+          `No runner with the labels ${labels.join(', ')} was online and free for ${Math.round(CI_LIMITS.runnerWaitMs / 60_000)} minutes.`,
+        );
       return;
     }
     const runner = ready.sort((a, b) => a.load - b.load || a.id.localeCompare(b.id))[0]!.id;
@@ -879,30 +1063,52 @@ export class CiService {
           const values: Record<string, string> = {};
           for (const name of names) {
             const v = this.#opts.secretValue?.(run.workspace_id, name) ?? null;
-            if (v === null) return this.#finishFailed(run, 'invalid_pipeline', `The secret ${name} is not available in the repository's workspace, so it can not be handed to a runner.`);
+            if (v === null)
+              return this.#finishFailed(
+                run,
+                'invalid_pipeline',
+                `The secret ${name} is not available in the repository's workspace, so it can not be handed to a runner.`,
+              );
             values[name] = v;
           }
           const text = JSON.stringify(values);
-          const lease = await this.host.cp(runner, ['lease', run.id, '--bytes', String(Buffer.byteLength(text))], { stdin: text, timeoutMs: 30_000 });
+          const lease = await this.host.cp(runner, ['lease', run.id, '--bytes', String(Buffer.byteLength(text))], {
+            stdin: text,
+            timeoutMs: 30_000,
+          });
           if (!lease.ok) throw new Error(lease.message ?? lease.error ?? 'the lease was refused');
           plan.leased = true;
           leased = true;
         }
       }
       const text = JSON.stringify(plan);
-      const reply = await this.host.cp(runner, ['start', run.id, '--bytes', String(Buffer.byteLength(text))], { stdin: text, timeoutMs: 30_000 });
+      const reply = await this.host.cp(runner, ['start', run.id, '--bytes', String(Buffer.byteLength(text))], {
+        stdin: text,
+        timeoutMs: 30_000,
+      });
       if (!reply.ok) {
         if (reply.error === 'no_space') return this.#finishFailed(run, 'no_space', 'The runner is almost out of disk space.');
         if (reply.error === 'bad_plan') return this.#finishFailed(run, 'runner_error', reply.message ?? 'The runner refused the plan.');
         throw new Error(reply.message ?? reply.error ?? 'start failed');
       }
       leased = false;
-      this.#cs.updateRun(run.id, { status: 'running', started_at: new Date().toISOString(), attempts: 0, runner_workspace_id: local ? null : runner });
+      this.#cs.updateRun(run.id, {
+        status: 'running',
+        started_at: new Date().toISOString(),
+        attempts: 0,
+        runner_workspace_id: local ? null : runner,
+      });
       this.#changed();
       this.#moved(run.id, 'queued');
       this.kick(runner);
       console.log(`[ci] ${run.id} started ${run.pipeline} on ${run.repo}@${shortSha(run.sha)} on the runner ${runner}`);
-      this.#opts.audit?.({ kind: 'ci.run_on_runner', actor: run.actor, userId: null, subject: `ci_run:${run.id}`, detail: { workspace: run.workspace_id, runner, labels, secrets: names, repo: run.repo, run: run.number, sha: shortSha(run.sha) } });
+      this.#opts.audit?.({
+        kind: 'ci.run_on_runner',
+        actor: run.actor,
+        userId: null,
+        subject: `ci_run:${run.id}`,
+        detail: { workspace: run.workspace_id, runner, labels, secrets: names, repo: run.repo, run: run.number, sha: shortSha(run.sha) },
+      });
     } catch (e) {
       if (fallback) await this.#startHere(run, `the hand-off to the runner ${runner} failed: ${(e as Error).message}`);
       else this.#retry(run, `runner ${runner}: ${(e as Error).message}`);
@@ -927,7 +1133,10 @@ export class CiService {
     const text = live.plan!;
     let reply: CiReply;
     try {
-      reply = await this.host.cp(live.workspace_id, ['start', live.id, '--bytes', String(Buffer.byteLength(text))], { stdin: text, timeoutMs: 30_000 });
+      reply = await this.host.cp(live.workspace_id, ['start', live.id, '--bytes', String(Buffer.byteLength(text))], {
+        stdin: text,
+        timeoutMs: 30_000,
+      });
     } catch (e) {
       return this.#retry(live, (e as Error).message);
     }
@@ -936,13 +1145,33 @@ export class CiService {
       if (reply.error === 'bad_plan') return this.#finishFailed(live, 'runner_error', reply.message ?? 'The runner refused the plan.');
       return this.#retry(live, reply.message ?? reply.error ?? 'start failed');
     }
-    const note: CiDiagnostic = { file: '', line: 0, column: 0, path: 'runs-on', severity: 'warning', code: 'runner-fallback', message: `Ran in the repository's workspace: ${why}.` };
-    this.#cs.updateRun(live.id, { status: 'running', started_at: new Date().toISOString(), attempts: 0, runner_workspace_id: null, diagnostics: JSON.stringify([note]) });
+    const note: CiDiagnostic = {
+      file: '',
+      line: 0,
+      column: 0,
+      path: 'runs-on',
+      severity: 'warning',
+      code: 'runner-fallback',
+      message: `Ran in the repository's workspace: ${why}.`,
+    };
+    this.#cs.updateRun(live.id, {
+      status: 'running',
+      started_at: new Date().toISOString(),
+      attempts: 0,
+      runner_workspace_id: null,
+      diagnostics: JSON.stringify([note]),
+    });
     this.#changed();
     this.#moved(live.id, 'queued');
     this.kick(live.workspace_id);
     console.log(`[ci] ${live.id} started ${live.pipeline} on ${live.repo}@${shortSha(live.sha)} in its workspace (fallback: ${why})`);
-    this.#opts.audit?.({ kind: 'ci.run_fallback', actor: live.actor, userId: null, subject: `ci_run:${live.id}`, detail: { workspace: live.workspace_id, why, repo: live.repo, run: live.number } });
+    this.#opts.audit?.({
+      kind: 'ci.run_fallback',
+      actor: live.actor,
+      userId: null,
+      subject: `ci_run:${live.id}`,
+      detail: { workspace: live.workspace_id, why, repo: live.repo, run: live.number },
+    });
   }
 
   /** The commit into the runner's mirror (T-557): what the mirror already has is left out; nothing travels when it has the commit. */
@@ -951,16 +1180,39 @@ export class CiService {
     if (!heads.ok) throw new Error(heads.message ?? heads.error ?? 'the runner did not say what it has');
     if (heads.has === true) return;
     const haves = ((heads.heads as string[] | undefined) ?? []).slice(0, 50);
-    const made = await this.host.cp(run.workspace_id, ['repo', 'bundle', run.repo, run.sha, '--id', run.id, ...(haves.length ? ['--haves', haves.join(',')] : [])], { timeoutMs: 600_000 });
+    const made = await this.host.cp(
+      run.workspace_id,
+      ['repo', 'bundle', run.repo, run.sha, '--id', run.id, ...(haves.length ? ['--haves', haves.join(',')] : [])],
+      { timeoutMs: 600_000 },
+    );
     if (!made.ok) throw new Error(made.message ?? made.error ?? 'the bundle failed');
     if (made.empty === true) return;
     try {
       let offset = 0;
       for (let part = 0; ; part++) {
-        const chunk = await this.host.cp(run.workspace_id, ['repo', 'outbox', run.id, '--offset', String(offset), '--max', String(BUNDLE_CHUNK)], { timeoutMs: 60_000 });
+        const chunk = await this.host.cp(
+          run.workspace_id,
+          ['repo', 'outbox', run.id, '--offset', String(offset), '--max', String(BUNDLE_CHUNK)],
+          { timeoutMs: 60_000 },
+        );
         if (!chunk.ok || typeof chunk.data !== 'string') throw new Error(chunk.message ?? chunk.error ?? 'the bundle could not be read');
         const last = chunk.done === true;
-        const put = await this.host.cp(runner, ['mirror', 'put', mirror, run.id, run.sha, '--part', String(part), ...(last ? ['--last'] : []), '--bytes', String(Buffer.byteLength(chunk.data))], { stdin: chunk.data, timeoutMs: last ? 600_000 : 120_000 });
+        const put = await this.host.cp(
+          runner,
+          [
+            'mirror',
+            'put',
+            mirror,
+            run.id,
+            run.sha,
+            '--part',
+            String(part),
+            ...(last ? ['--last'] : []),
+            '--bytes',
+            String(Buffer.byteLength(chunk.data)),
+          ],
+          { stdin: chunk.data, timeoutMs: last ? 600_000 : 120_000 },
+        );
         if (!put.ok) throw new Error(put.message ?? put.error ?? 'the runner refused the bundle');
         if (last) return;
         offset = Number(chunk.next);
@@ -996,7 +1248,8 @@ export class CiService {
 
   /** Makes a workspace a runner, or changes one (a person's act, audited). Labels: lowercase, at most `runnerLabelsPerRunner`. */
   async upsertRunner(workspaceId: string, req: Partial<UpsertCiRunnerRequest>, by: CiDecider): Promise<CiRunner> {
-    if (!this.#cs.runnersReady) throw new AppError('SERVICE_UNAVAILABLE', 'This portal can not hold runners yet (its database is not up to date).');
+    if (!this.#cs.runnersReady)
+      throw new AppError('SERVICE_UNAVAILABLE', 'This portal can not hold runners yet (its database is not up to date).');
     if (!/^[^/]+\/[^/]+$/.test(workspaceId)) throw invalid('workspaceId', 'A workspace id is <target>/<name>.');
     if ((await this.host.state(workspaceId)) === 'gone') throw notFound('workspace');
     const was = this.#cs.runner(workspaceId);
@@ -1004,17 +1257,37 @@ export class CiService {
     const raw: unknown[] = Array.isArray(req.labels) ? req.labels : json<string[]>(was!.labels, []);
     const labels = [...new Set(raw.map((l) => (typeof l === 'string' ? l.trim().toLowerCase() : '')))].sort();
     if (!labels.length) throw invalid('labels', 'Give the runner at least one label.');
-    if (labels.length > CI_LIMITS.runnerLabelsPerRunner) throw invalid('labels', `A runner has at most ${CI_LIMITS.runnerLabelsPerRunner} labels.`);
+    if (labels.length > CI_LIMITS.runnerLabelsPerRunner)
+      throw invalid('labels', `A runner has at most ${CI_LIMITS.runnerLabelsPerRunner} labels.`);
     const bad: string | undefined = labels.find((l) => !RUNNER_LABEL.test(l) || l === 'self-hosted' || l === 'workspace');
-    if (bad !== undefined) throw invalid('labels', `"${bad.slice(0, 40)}" is not a runner label: lowercase letters, digits, ".", "-" and "_" (self-hosted and workspace are reserved).`);
+    if (bad !== undefined)
+      throw invalid(
+        'labels',
+        `"${bad.slice(0, 40)}" is not a runner label: lowercase letters, digits, ".", "-" and "_" (self-hosted and workspace are reserved).`,
+      );
     const maxRuns = req.maxRuns ?? was?.max_runs ?? 1;
-    if (!Number.isInteger(maxRuns) || maxRuns < 1 || maxRuns > CI_LIMITS.runnerMaxRuns) throw invalid('maxRuns', `A runner takes 1 to ${CI_LIMITS.runnerMaxRuns} runs at once.`);
+    if (!Number.isInteger(maxRuns) || maxRuns < 1 || maxRuns > CI_LIMITS.runnerMaxRuns)
+      throw invalid('maxRuns', `A runner takes 1 to ${CI_LIMITS.runnerMaxRuns} runs at once.`);
     const note = req.note === undefined ? (was?.note ?? null) : req.note === null ? null : String(req.note).slice(0, 200);
     const row = this.#cs.upsertRunner(
-      { workspace_id: workspaceId, labels: JSON.stringify(labels), max_runs: maxRuns, enabled: (req.enabled ?? (was ? was.enabled === 1 : true)) ? 1 : 0, drained: (req.drained ?? (was ? was.drained === 1 : false)) ? 1 : 0, note },
+      {
+        workspace_id: workspaceId,
+        labels: JSON.stringify(labels),
+        max_runs: maxRuns,
+        enabled: (req.enabled ?? (was ? was.enabled === 1 : true)) ? 1 : 0,
+        drained: (req.drained ?? (was ? was.drained === 1 : false)) ? 1 : 0,
+        note,
+      },
       by.actor,
     );
-    this.#opts.audit?.({ kind: 'ci.runner_changed', actor: by.actor, userId: by.userId, severity: 'medium', subject: `workspace:${workspaceId}`, detail: { workspace: workspaceId, labels, maxRuns, enabled: row.enabled === 1, drained: row.drained === 1, created: !was } });
+    this.#opts.audit?.({
+      kind: 'ci.runner_changed',
+      actor: by.actor,
+      userId: by.userId,
+      severity: 'medium',
+      subject: `workspace:${workspaceId}`,
+      detail: { workspace: workspaceId, labels, maxRuns, enabled: row.enabled === 1, drained: row.drained === 1, created: !was },
+    });
     this.#changed();
     return this.#runnerView(row, await this.host.states());
   }
@@ -1022,7 +1295,14 @@ export class CiService {
   /** A runner no more. Its running runs finish; queued runs that need its labels wait for another, or fail as `no_runner` later. */
   async removeRunner(workspaceId: string, by: CiDecider): Promise<void> {
     if (!this.#cs.removeRunner(workspaceId)) throw notFound('runner');
-    this.#opts.audit?.({ kind: 'ci.runner_changed', actor: by.actor, userId: by.userId, severity: 'medium', subject: `workspace:${workspaceId}`, detail: { workspace: workspaceId, removed: true } });
+    this.#opts.audit?.({
+      kind: 'ci.runner_changed',
+      actor: by.actor,
+      userId: by.userId,
+      severity: 'medium',
+      subject: `workspace:${workspaceId}`,
+      detail: { workspace: workspaceId, removed: true },
+    });
     this.#changed();
   }
 
@@ -1035,7 +1315,14 @@ export class CiService {
 
   #finishFailed(run: RunRow, reason: string, note: string): void {
     const now = new Date().toISOString();
-    this.#cs.updateRun(run.id, { status: 'failed', reason, finished_at: now, duration_ms: 0, archived: 1, diagnostics: JSON.stringify([{ file: '', line: 0, column: 0, path: '', severity: 'error', code: reason, message: note }]) });
+    this.#cs.updateRun(run.id, {
+      status: 'failed',
+      reason,
+      finished_at: now,
+      duration_ms: 0,
+      archived: 1,
+      diagnostics: JSON.stringify([{ file: '', line: 0, column: 0, path: '', severity: 'error', code: reason, message: note }]),
+    });
     this.#settleDeployments(run.id, null);
     this.#changed();
     this.#moved(run.id, run.status);
@@ -1071,7 +1358,9 @@ export class CiService {
       console.log(`[ci] ${row.id} ${d.job} waits for an approval to deploy to ${d.environment}`);
       this.#hook(() => this.hooks.waiting?.(row, d.job, d.environment));
       // The session hears it too, once per run (its own run, or the pipeline asked for it): it should not wait on a deploy nobody approved.
-      void this.#links.waiting(row, d.environment).catch((e: unknown) => console.error(`[ci] ${row.id}: reporting the wait failed: ${(e as Error).message}`));
+      void this.#links
+        .waiting(row, d.environment)
+        .catch((e: unknown) => console.error(`[ci] ${row.id}: reporting the wait failed: ${(e as Error).message}`));
       this.#rule(row.id, d.id);
     }
   }
@@ -1111,7 +1400,18 @@ export class CiService {
           actor,
           userId: null,
           subject: `ci_run:${run.id}`,
-          detail: { workspace: run.workspace_id, repo: run.repo, pipeline: run.pipeline, run: run.number, job: dep.job, environment: dep.environment, sha: shortSha(run.sha), mode, verdict: outcome, condition: code },
+          detail: {
+            workspace: run.workspace_id,
+            repo: run.repo,
+            pipeline: run.pipeline,
+            run: run.number,
+            job: dep.job,
+            environment: dep.environment,
+            sha: shortSha(run.sha),
+            mode,
+            verdict: outcome,
+            condition: code,
+          },
         });
       if (mode === 'dry' || v.verdict === 'would_not') {
         audit(mode === 'dry' ? v.verdict : 'refused', v.code);
@@ -1124,8 +1424,13 @@ export class CiService {
         audit('approved', v.code);
       } catch (e) {
         // Not approved after all (a person decided first, the run ended, the runner refused): say so; the job waits for a person as before.
-        const why = e instanceof AppError && e.code === 'CONFLICT' ? 'it was decided or ended meanwhile' : 'the runner did not take the approval';
-        this.#cs.settleAutoVerdict(dep.id, 'would_not', ruleLine('on', { verdict: 'would_not', why: `every condition held, but the approval did not go through (${why})`, line: '' }));
+        const why =
+          e instanceof AppError && e.code === 'CONFLICT' ? 'it was decided or ended meanwhile' : 'the runner did not take the approval';
+        this.#cs.settleAutoVerdict(
+          dep.id,
+          'would_not',
+          ruleLine('on', { verdict: 'would_not', why: `every condition held, but the approval did not go through (${why})`, line: '' }),
+        );
         audit('failed', 'approve');
         console.error(`[ci] ${run.id} ${dep.job}: the rule's approval did not go through: ${(e as Error).message}`);
       }
@@ -1151,7 +1456,13 @@ export class CiService {
     for (const d of this.#cs.deploymentsOfRun(runId)) {
       const job = s?.jobs.find((j) => j.id === d.job);
       const undecided = d.approval === 'pending' || d.approval === 'waiting';
-      const approval: DeploymentRow['approval'] = !undecided ? d.approval : job?.reason === 'rejected' ? 'rejected' : job?.status === 'skipped' ? 'skipped' : 'expired';
+      const approval: DeploymentRow['approval'] = !undecided
+        ? d.approval
+        : job?.reason === 'rejected'
+          ? 'rejected'
+          : job?.status === 'skipped'
+            ? 'skipped'
+            : 'expired';
       this.#cs.updateDeployment(d.id, { approval, gate_key: null, outcome: job?.status ?? 'cancelled' });
     }
   }
@@ -1159,13 +1470,22 @@ export class CiService {
   /** The supervisor is gone with the run still open (the workspace stopped, or it was killed): the run failed and can be run again. */
   async #lost(row: RunRow, last: CiRunStateFile | null): Promise<void> {
     // With no state file the jobs come from the plan, all still waiting.
-    const s: CiRunStateFile = last ?? { v: 1, runId: row.id, status: 'running', reason: null, startedAt: row.started_at, finishedAt: null, durationMs: null, jobs: this.get(row.id).detail };
+    const s: CiRunStateFile = last ?? {
+      v: 1,
+      runId: row.id,
+      status: 'running',
+      reason: null,
+      startedAt: row.started_at,
+      finishedAt: null,
+      durationMs: null,
+      jobs: this.get(row.id).detail,
+    };
     for (const j of s.jobs) {
-      if (j.status === 'running') (j.status = 'failed'), (j.reason = 'runner_lost');
-      else if (j.status === 'pending' || j.status === 'waiting') (j.status = 'cancelled'), (j.reason = 'runner_lost');
+      if (j.status === 'running') ((j.status = 'failed'), (j.reason = 'runner_lost'));
+      else if (j.status === 'pending' || j.status === 'waiting') ((j.status = 'cancelled'), (j.reason = 'runner_lost'));
       for (const st of j.steps) {
-        if (st.status === 'running') (st.status = 'failed'), (st.reason = 'runner_lost');
-        else if (st.status === 'pending') (st.status = 'cancelled'), (st.reason = 'runner_lost');
+        if (st.status === 'running') ((st.status = 'failed'), (st.reason = 'runner_lost'));
+        else if (st.status === 'pending') ((st.status = 'cancelled'), (st.reason = 'runner_lost'));
       }
     }
     s.status = 'failed';
@@ -1197,10 +1517,24 @@ export class CiService {
   async #archive(runId: string): Promise<void> {
     const row = this.#cs.run(runId);
     if (!row || row.archived) return;
-    const reply = await this.host.cp(execOf(row), ['archive', runId, '--head', String(CI_LIMITS.archiveHeadBytes), '--tail', String(CI_LIMITS.archiveTailBytes), '--total', String(CI_LIMITS.archiveRunBytes)], { timeoutMs: 30_000 });
+    const reply = await this.host.cp(
+      execOf(row),
+      [
+        'archive',
+        runId,
+        '--head',
+        String(CI_LIMITS.archiveHeadBytes),
+        '--tail',
+        String(CI_LIMITS.archiveTailBytes),
+        '--total',
+        String(CI_LIMITS.archiveRunBytes),
+      ],
+      { timeoutMs: 30_000 },
+    );
     if (!reply.ok) throw new Error(reply.message ?? reply.error ?? 'archive failed');
     const redact = this.#redactor(row.workspace_id);
-    const steps = (reply.steps as { job: string; step: number; size: number; head: string; tail: string | null; omitted: number }[] | undefined) ?? [];
+    const steps =
+      (reply.steps as { job: string; step: number; size: number; head: string; tail: string | null; omitted: number }[] | undefined) ?? [];
     this.#cs.saveLogs(
       runId,
       steps.map((s) => ({
@@ -1208,7 +1542,9 @@ export class CiService {
         step: s.step,
         bytes: s.size,
         omitted: s.omitted,
-        text: redact(cleanLog(s.tail === null ? s.head : `${s.head}${s.head.endsWith('\n') ? '' : '\n'}[… ${s.omitted} bytes omitted …]\n${s.tail}`)),
+        text: redact(
+          cleanLog(s.tail === null ? s.head : `${s.head}${s.head.endsWith('\n') ? '' : '\n'}[… ${s.omitted} bytes omitted …]\n${s.tail}`),
+        ),
       })),
     );
     this.#flaky(runId);
@@ -1233,7 +1569,8 @@ export class CiService {
           try {
             const at = new Date().toISOString();
             const before = this.#cs.flakyOf(row.repo, f.file, f.test);
-            if (!this.#cs.insertFlaky({ run_id: row.id, repo: row.repo, job: j.id, file: f.file, test: f.test, ticket_id: null, at })) continue;
+            if (!this.#cs.insertFlaky({ run_id: row.id, repo: row.repo, job: j.id, file: f.file, test: f.test, ticket_id: null, at }))
+              continue;
             const s = sighting(j.id);
             let ticketId = before.ticketId;
             const closed = ticketId ? tickets.closed(ticketId) : null;
@@ -1242,7 +1579,12 @@ export class CiService {
               tickets.note(ticketId, flakyComment(s, before.runs + 1, closed), { actor: `ci:${row.id}`, label: 'CI' });
             } else {
               const tags = ['flaky', 'area-qa', ...[repoTag(row.repo)].filter((t): t is string => !!t && t !== 'flaky' && t !== 'area-qa')];
-              ticketId = tickets.open({ summary: flakyTitle(f), description: flakyDescription(f, s, flakyExcerpt(log, f.test, redact)), tags, workspaceId: row.workspace_id });
+              ticketId = tickets.open({
+                summary: flakyTitle(f),
+                description: flakyDescription(f, s, flakyExcerpt(log, f.test, redact)),
+                tags,
+                workspaceId: row.workspace_id,
+              });
             }
             this.#cs.setFlakyTicket(row.id, row.repo, f.file, f.test, ticketId);
             console.log(`[ci] ${row.id} ${j.id}: flaky ${f.file} (${ticketId})`);
@@ -1265,7 +1607,11 @@ export class CiService {
     const now = Date.now();
     if (now - this.#lastPrune >= 60 * 60_000) {
       this.#lastPrune = now;
-      this.#cs.prune({ runDays: CI_LIMITS.runRecordDays, eventDays: CI_LIMITS.eventRecordDays, keepPerWorkspace: CI_LIMITS.runRecordsPerWorkspace });
+      this.#cs.prune({
+        runDays: CI_LIMITS.runRecordDays,
+        eventDays: CI_LIMITS.eventRecordDays,
+        keepPerWorkspace: CI_LIMITS.runRecordsPerWorkspace,
+      });
     }
     // The workspace's own cleanup: once an hour per workspace, and right after the portal first sees it.
     if (now - (this.#maintained.get(workspaceId) ?? 0) < 60 * 60_000) return;
@@ -1282,9 +1628,17 @@ export class CiService {
     return this.get(id);
   }
 
-  async #cancelRow(row: RunRow, reason: 'cancelled' | 'superseded', by: { actor: string; label?: string | null; note?: string | null }): Promise<void> {
+  async #cancelRow(
+    row: RunRow,
+    reason: 'cancelled' | 'superseded',
+    by: { actor: string; label?: string | null; note?: string | null },
+  ): Promise<void> {
     const now = new Date().toISOString();
-    const who = { cancelled_by: by.actor, cancelled_by_label: oneLine(by.label)?.slice(0, 60) ?? null, cancel_note: oneLine(by.note)?.slice(0, 120) ?? null };
+    const who = {
+      cancelled_by: by.actor,
+      cancelled_by_label: oneLine(by.label)?.slice(0, 60) ?? null,
+      cancel_note: oneLine(by.note)?.slice(0, 120) ?? null,
+    };
     if (row.status === 'queued') {
       this.#cs.updateRun(row.id, { status: 'cancelled', reason, finished_at: now, duration_ms: 0, archived: 1, ...who });
       this.#settleDeployments(row.id, null);
@@ -1311,7 +1665,29 @@ export class CiService {
       const newId2 = newRunId();
       const plan = row.plan ? replan(JSON.parse(row.plan) as Plan, newId2, number) : null;
       const now = new Date().toISOString();
-      const copy: RunRow = { ...row, id: newId2, number, trigger: 'rerun', event_id: null, status: plan ? 'queued' : 'failed', reason: plan ? null : row.reason, actor, actor_label: null, cancelled_by: null, cancelled_by_label: null, cancel_note: null, plan: plan ? JSON.stringify(plan) : null, state: null, attempts: 0, created_at: now, started_at: null, finished_at: plan ? null : now, duration_ms: plan ? null : 0, archived: plan ? 0 : 1, rerun_of: row.id };
+      const copy: RunRow = {
+        ...row,
+        id: newId2,
+        number,
+        trigger: 'rerun',
+        event_id: null,
+        status: plan ? 'queued' : 'failed',
+        reason: plan ? null : row.reason,
+        actor,
+        actor_label: null,
+        cancelled_by: null,
+        cancelled_by_label: null,
+        cancel_note: null,
+        plan: plan ? JSON.stringify(plan) : null,
+        state: null,
+        attempts: 0,
+        created_at: now,
+        started_at: null,
+        finished_at: plan ? null : now,
+        duration_ms: plan ? null : 0,
+        archived: plan ? 0 : 1,
+        rerun_of: row.id,
+      };
       // A rerun deploys again: fresh gates and its own approvals, never the old run's.
       const gates = plan ? this.#gates(repo, plan, row0(copy)) : null;
       if (gates && 'problem' in gates) throw new AppError('CONFLICT', gates.problem.message);
@@ -1350,32 +1726,56 @@ export class CiService {
    * took it, and one decision per run is made at a time, so two deciders (two people, or a person and the rule) can not approve and reject the
    * same job into a split state, nor approve it twice. Audited as `ci.deploy_approved` / `ci.deploy_rejected` with the decider as the actor.
    */
-  async #settle(row: RunRow, dep: DeploymentRow, decision: 'approve' | 'reject', by: CiDecider, extra: Record<string, unknown>): Promise<void> {
+  async #settle(
+    row: RunRow,
+    dep: DeploymentRow,
+    decision: 'approve' | 'reject',
+    by: CiDecider,
+    extra: Record<string, unknown>,
+  ): Promise<void> {
     const job = dep.job;
-    if (row.status !== 'running' || dep.approval !== 'waiting' || !dep.gate_key) throw new AppError('CONFLICT', dep.approval === 'pending' ? 'That job is not waiting yet.' : 'That job is not waiting for an approval.');
+    if (row.status !== 'running' || dep.approval !== 'waiting' || !dep.gate_key)
+      throw new AppError(
+        'CONFLICT',
+        dep.approval === 'pending' ? 'That job is not waiting yet.' : 'That job is not waiting for an approval.',
+      );
     if (this.#deciding.has(row.id)) throw new AppError('CONFLICT', 'Someone is deciding this right now.');
     this.#deciding.add(row.id);
     try {
       await this.#running(execOf(row));
       // Read again inside the lock: what the caller saw may have been decided meanwhile.
       const live = this.#cs.deployment(row.id, job);
-      if (!live || live.approval !== 'waiting' || !live.gate_key) throw new AppError('CONFLICT', 'That job is not waiting for an approval.');
+      if (!live || live.approval !== 'waiting' || !live.gate_key)
+        throw new AppError('CONFLICT', 'That job is not waiting for an approval.');
       const key = live.gate_key;
-      const reply = decision === 'approve' ? await this.#cp(execOf(row), ['approve', row.id, job, '--bytes', String(Buffer.byteLength(key))], { stdin: key }) : await this.#cp(execOf(row), ['approve', row.id, job, '--reject']);
+      const reply =
+        decision === 'approve'
+          ? await this.#cp(execOf(row), ['approve', row.id, job, '--bytes', String(Buffer.byteLength(key))], { stdin: key })
+          : await this.#cp(execOf(row), ['approve', row.id, job, '--reject']);
       if (!reply.ok) {
         if (reply.error === 'over' || reply.error === 'not_waiting') throw new AppError('CONFLICT', 'That job is not waiting any more.');
         throw fromReply(reply);
       }
       const at = new Date().toISOString();
       const state = decision === 'approve' ? 'approved' : 'rejected';
-      if (!this.#cs.updateDeployment(live.id, { approval: state, decided_by: by.actor, decided_at: at, gate_key: null }, ['waiting'])) throw new AppError('CONFLICT', 'That was decided already.');
+      if (!this.#cs.updateDeployment(live.id, { approval: state, decided_by: by.actor, decided_at: at, gate_key: null }, ['waiting']))
+        throw new AppError('CONFLICT', 'That was decided already.');
       this.#opts.audit?.({
         kind: decision === 'approve' ? 'ci.deploy_approved' : 'ci.deploy_rejected',
         severity: 'medium',
         actor: by.actor,
         userId: by.userId,
         subject: `ci_run:${row.id}`,
-        detail: { workspace: row.workspace_id, repo: row.repo, pipeline: row.pipeline, run: row.number, job, environment: live.environment, sha: shortSha(row.sha), ...extra },
+        detail: {
+          workspace: row.workspace_id,
+          repo: row.repo,
+          pipeline: row.pipeline,
+          run: row.number,
+          job,
+          environment: live.environment,
+          sha: shortSha(row.sha),
+          ...extra,
+        },
       });
       console.log(`[ci] ${row.id} ${job}: deployment to ${live.environment} ${state} by ${by.actor}`);
     } finally {
@@ -1413,11 +1813,19 @@ export class CiService {
     const repo = this.#needRepo(repoId);
     if (typeof name !== 'string' || !CI_ENVIRONMENT_NAME.test(name)) throw invalid('name', 'Lowercase letters, digits, . _ and -.');
     if (typeof req.protected !== 'boolean') throw invalid('protected', 'true or false.');
-    if (!this.#cs.deploymentsReady) throw new AppError('SERVICE_UNAVAILABLE', 'This portal’s database is not up to date.', { expose: true });
+    if (!this.#cs.deploymentsReady)
+      throw new AppError('SERVICE_UNAVAILABLE', 'This portal’s database is not up to date.', { expose: true });
     const env = this.#cs.ensureEnvironment(repo.id, name, by.actor, newId('e'));
     if ((env.protected === 1) !== req.protected) {
       this.#cs.setProtected(env.id, req.protected, by.actor);
-      this.#opts.audit?.({ kind: 'ci.environment_protection', severity: req.protected ? 'info' : 'high', actor: by.actor, userId: by.userId, subject: `ci_repo:${repo.id}`, detail: { workspace: repo.workspace_id, repo: repo.name, environment: name, protected: req.protected } });
+      this.#opts.audit?.({
+        kind: 'ci.environment_protection',
+        severity: req.protected ? 'info' : 'high',
+        actor: by.actor,
+        userId: by.userId,
+        subject: `ci_repo:${repo.id}`,
+        detail: { workspace: repo.workspace_id, repo: repo.name, environment: name, protected: req.protected },
+      });
       this.#changed();
     }
     return this.#envView(this.#cs.environment(repo.id, name)!);
@@ -1432,17 +1840,31 @@ export class CiService {
     const repo = this.#needRepo(repoId);
     if (typeof name !== 'string' || !CI_ENVIRONMENT_NAME.test(name)) throw invalid('name', 'Lowercase letters, digits, . _ and -.');
     if (req.mode !== 'off' && req.mode !== 'dry' && req.mode !== 'on') throw invalid('mode', 'off, dry or on.');
-    if (req.window !== undefined && req.window !== null && (typeof req.window !== 'string' || !WINDOW.test(req.window))) throw invalid('window', 'HH:MM-HH:MM in UTC, or null for always.');
-    if (req.needsPerson !== undefined && req.needsPerson !== null && (!Array.isArray(req.needsPerson) || req.needsPerson.length > 50 || req.needsPerson.some((g) => typeof g !== 'string' || !GLOB.test(g))))
+    if (req.window !== undefined && req.window !== null && (typeof req.window !== 'string' || !WINDOW.test(req.window)))
+      throw invalid('window', 'HH:MM-HH:MM in UTC, or null for always.');
+    if (
+      req.needsPerson !== undefined &&
+      req.needsPerson !== null &&
+      (!Array.isArray(req.needsPerson) ||
+        req.needsPerson.length > 50 ||
+        req.needsPerson.some((g) => typeof g !== 'string' || !GLOB.test(g)))
+    )
       throw invalid('needsPerson', 'Up to 50 path patterns, or null for the defaults.');
-    if (!this.#cs.deploymentsReady || !this.#cs.autoApproveReady) throw new AppError('SERVICE_UNAVAILABLE', 'This portal’s database is not up to date.', { expose: true });
+    if (!this.#cs.deploymentsReady || !this.#cs.autoApproveReady)
+      throw new AppError('SERVICE_UNAVAILABLE', 'This portal’s database is not up to date.', { expose: true });
     const env = this.#cs.environment(repo.id, name);
     if (!env) throw notFound('environment');
-    if (req.mode === 'on' && env.protected !== 1) throw invalid('mode', 'Turn the approval on first: the rule approves only what waits for one.');
+    if (req.mode === 'on' && env.protected !== 1)
+      throw invalid('mode', 'Turn the approval on first: the rule approves only what waits for one.');
     const next = {
       mode: req.mode,
       window: req.window === undefined ? (env.auto_window ?? null) : req.window,
-      paths: req.needsPerson === undefined ? (env.auto_paths ?? null) : req.needsPerson === null ? null : JSON.stringify([...new Set(req.needsPerson)]),
+      paths:
+        req.needsPerson === undefined
+          ? (env.auto_paths ?? null)
+          : req.needsPerson === null
+            ? null
+            : JSON.stringify([...new Set(req.needsPerson)]),
     };
     const was = { mode: env.auto_approve ?? 'off', window: env.auto_window ?? null, paths: env.auto_paths ?? null };
     if (was.mode !== next.mode || was.window !== next.window || was.paths !== next.paths) {
@@ -1453,7 +1875,15 @@ export class CiService {
         actor: by.actor,
         userId: by.userId,
         subject: `ci_repo:${repo.id}`,
-        detail: { workspace: repo.workspace_id, repo: repo.name, environment: name, mode: next.mode, was: was.mode, window: next.window, needsPerson: next.paths === null ? 'defaults' : 'own list' },
+        detail: {
+          workspace: repo.workspace_id,
+          repo: repo.name,
+          environment: name,
+          mode: next.mode,
+          was: was.mode,
+          window: next.window,
+          needsPerson: next.paths === null ? 'defaults' : 'own list',
+        },
       });
       this.#changed();
     }
@@ -1483,7 +1913,13 @@ export class CiService {
   async startRun(
     req: Partial<StartCiRunRequest>,
     actor = 'ui',
-    opts: { sessionId?: string | null; deploymentOnly?: string | AppError; stgOnly?: AppError; actorLabel?: string | null; rule?: string } = {},
+    opts: {
+      sessionId?: string | null;
+      deploymentOnly?: string | AppError;
+      stgOnly?: AppError;
+      actorLabel?: string | null;
+      rule?: string;
+    } = {},
   ): Promise<CiRun> {
     if (typeof req.repoId !== 'string') throw invalid('repoId', 'Pick a remote.');
     const repo = this.#needRepo(req.repoId);
@@ -1492,15 +1928,35 @@ export class CiService {
     await this.#running(repo.workspace_id);
     const ref = await this.#resolveRef(repo, req.ref.trim());
     const snap = await this.#snapshot(repo, ref.sha);
-    const found = validateFiles(snap.files ?? []).pipelines.find((p) => p.info.file.replace(/^\.pilot\//, '').replace(/\.ya?ml$/, '') === req.pipeline);
+    const found = validateFiles(snap.files ?? []).pipelines.find(
+      (p) => p.info.file.replace(/^\.pilot\//, '').replace(/\.ya?ml$/, '') === req.pipeline,
+    );
     if (!found) throw notFound('pipeline');
     if (opts.stgOnly && !(found.pipeline && deploysOnlyToStg(found.pipeline.jobs))) throw opts.stgOnly;
-    if (!found.pipeline) throw new AppError('CONFLICT', 'That pipeline has errors. Fix them and push first.', { details: { diagnostics: found.info.diagnostics } });
+    if (!found.pipeline)
+      throw new AppError('CONFLICT', 'That pipeline has errors. Fix them and push first.', {
+        details: { diagnostics: found.info.diagnostics },
+      });
     if (!found.pipeline.on.manual) throw new AppError('CONFLICT', 'That pipeline can not be started by hand: it has no manual trigger.');
-    if (opts.deploymentOnly && !found.pipeline.jobs.some((j) => !j.hidden && j.environment)) throw typeof opts.deploymentOnly === 'string' ? new AppError('FORBIDDEN', opts.deploymentOnly) : opts.deploymentOnly;
+    if (opts.deploymentOnly && !found.pipeline.jobs.some((j) => !j.hidden && j.environment))
+      throw typeof opts.deploymentOnly === 'string' ? new AppError('FORBIDDEN', opts.deploymentOnly) : opts.deploymentOnly;
     const { values, problems } = resolveInputs(found.pipeline.on.manual.inputs, req.inputs);
     if (Object.keys(problems).length) throw new AppError('VALIDATION_FAILED', 'Check the inputs.', { details: problems });
-    const row = this.#cs.tx(() => this.#insertRun(repo, found, { event: 'manual', ref: ref.ref, sha: ref.sha, base: null, actor, inputs: values, eventId: null, subject: snap.subject ?? null, trigger: 'manual', sessionId: opts.sessionId ?? null, actorLabel: opts.actorLabel ?? null }));
+    const row = this.#cs.tx(() =>
+      this.#insertRun(repo, found, {
+        event: 'manual',
+        ref: ref.ref,
+        sha: ref.sha,
+        base: null,
+        actor,
+        inputs: values,
+        eventId: null,
+        subject: snap.subject ?? null,
+        trigger: 'manual',
+        sessionId: opts.sessionId ?? null,
+        actorLabel: opts.actorLabel ?? null,
+      }),
+    );
     this.#born(row, snap.message ?? null);
     this.#changed();
     this.kick(repo.workspace_id);
@@ -1509,7 +1965,15 @@ export class CiService {
       actor,
       userId: null,
       subject: `ci_run:${row.id}`,
-      detail: { workspace: repo.workspace_id, repo: repo.name, run: row.number, pipeline: req.pipeline, ref: ref.ref, sessionId: opts.sessionId ?? null, rule: opts.rule ?? null },
+      detail: {
+        workspace: repo.workspace_id,
+        repo: repo.name,
+        run: row.number,
+        pipeline: req.pipeline,
+        ref: ref.ref,
+        sessionId: opts.sessionId ?? null,
+        rule: opts.rule ?? null,
+      },
     });
     return this.get(row.id);
   }
@@ -1535,7 +1999,12 @@ export class CiService {
   }
 
   async #snapshot(repo: RepoRow, sha: string) {
-    const r = (await this.#cp(repo.workspace_id, ['snapshot', repo.name, sha], { timeoutMs: 30_000 })) as CiReply & { subject?: string; files?: SnapshotFile[]; message?: string; hasPilot?: boolean };
+    const r = (await this.#cp(repo.workspace_id, ['snapshot', repo.name, sha], { timeoutMs: 30_000 })) as CiReply & {
+      subject?: string;
+      files?: SnapshotFile[];
+      message?: string;
+      hasPilot?: boolean;
+    };
     if (!r.ok) throw fromReply(r);
     return r;
   }
@@ -1557,7 +2026,9 @@ export class CiService {
   #summary(row: RunRow): CiRunSummary {
     const state = json<CiRunStateFile | null>(row.state, null);
     const plan = json<{ jobs?: { id: string; skip: string | null }[] }>(row.plan, {});
-    const jobs = state ? state.jobs.map((j) => ({ id: j.id, status: j.status })) : (plan.jobs ?? []).map((j) => ({ id: j.id, status: (j.skip ? 'skipped' : 'pending') as CiUnitStatus }));
+    const jobs = state
+      ? state.jobs.map((j) => ({ id: j.id, status: j.status }))
+      : (plan.jobs ?? []).map((j) => ({ id: j.id, status: (j.skip ? 'skipped' : 'pending') as CiUnitStatus }));
     return {
       id: row.id,
       number: row.number,
@@ -1592,8 +2063,41 @@ export class CiService {
   }
 
   list(f: CiRunFilter = {}): CiRunList {
-    const { rows, total, active } = this.#cs.listRuns({ workspace: f.workspace, repoId: f.repo, pipeline: f.pipeline, branch: f.branch, statuses: f.status, ticket: f.ticket, session: f.session, before: f.before, limit: f.limit });
+    const { rows, total, active } = this.#cs.listRuns({
+      workspace: f.workspace,
+      repoId: f.repo,
+      pipeline: f.pipeline,
+      branch: f.branch,
+      statuses: f.status,
+      ticket: f.ticket,
+      session: f.session,
+      limit: f.limit,
+    });
     return { items: rows.map((r) => this.#summary(r)), total, active };
+  }
+
+  /**
+   * D-58: one page of runs for `GET /api/ci/runs` (`{ items, next }`, plus `total` and `active` on the first page). `scope` names the caller;
+   * the cursor is bound to it and to every filter value. `keep` is the caller's authz check (`view`), run on every run before it is shown.
+   */
+  listPage(
+    f: CiRunFilter,
+    args: { caller: string; cursor?: string | undefined; limit?: unknown; keep?: (r: { id: string }) => boolean },
+  ): CiRunPage {
+    const scope = `ci.runs|${JSON.stringify([args.caller, f.workspace ?? '', f.repo ?? '', f.pipeline ?? '', f.branch ?? '', f.ticket ?? '', f.session ?? '', f.status ?? []])}`;
+    const { rows, next, total, active } = this.#cs.listRunsPage(
+      {
+        workspace: f.workspace,
+        repoId: f.repo,
+        pipeline: f.pipeline,
+        branch: f.branch,
+        statuses: f.status,
+        ticket: f.ticket,
+        session: f.session,
+      },
+      { scope, cursor: args.cursor, limit: args.limit, keep: args.keep },
+    );
+    return { items: rows.map((r) => this.#summary(r)), next, ...(total !== undefined ? { total, active } : {}) };
   }
 
   async runs(f: CiRunFilter = {}): Promise<CiRunList> {
@@ -1603,7 +2107,16 @@ export class CiService {
   get(id: string): CiRun {
     const row = this.#need(id);
     const state = json<CiRunStateFile | null>(row.state, null);
-    const plan = json<{ jobs?: { id: string; name: string; needs: string[]; skip: string | null; environment?: string | null; steps: { name: string; skip: string | null }[] }[] }>(row.plan, {});
+    const plan = json<{
+      jobs?: {
+        id: string;
+        name: string;
+        needs: string[];
+        skip: string | null;
+        environment?: string | null;
+        steps: { name: string; skip: string | null }[];
+      }[];
+    }>(row.plan, {});
     // A run that has not started has no state file yet: show its jobs and steps as the plan has them.
     const detail: CiJob[] = state
       ? state.jobs
@@ -1616,7 +2129,18 @@ export class CiService {
           durationMs: null,
           ignored: false,
           reason: j.skip ? ('condition' as const) : null,
-          steps: j.steps.map((s, idx) => ({ idx, name: s.name, status: (s.skip || j.skip ? 'skipped' : 'pending') as CiUnitStatus, startedAt: null, durationMs: null, exitCode: null, logBytes: 0, logTruncated: false, ignored: false, reason: s.skip || j.skip ? ('condition' as const) : null })),
+          steps: j.steps.map((s, idx) => ({
+            idx,
+            name: s.name,
+            status: (s.skip || j.skip ? 'skipped' : 'pending') as CiUnitStatus,
+            startedAt: null,
+            durationMs: null,
+            exitCode: null,
+            logBytes: 0,
+            logTruncated: false,
+            ignored: false,
+            reason: s.skip || j.skip ? ('condition' as const) : null,
+          })),
           artifacts: [],
           artifactsSkipped: 0,
           environment: j.environment ?? null,
@@ -1641,8 +2165,22 @@ export class CiService {
     const reports: CiRunReport[] = [];
     const bumps: CiRunBump[] = [];
     for (const m of this.#cs.messagesOfRun(runId)) {
-      if (m.state?.startsWith('bump:')) bumps.push({ sessionId: m.session_id, mode: m.state === 'bump:prioritise' ? 'prioritise' : 'ask', outcome: m.outcome === 'bumped' ? 'sent' : 'refused', at: m.at, note: m.note });
-      else reports.push({ state: (m.state ?? 'failed') as CiRunReport['state'], outcome: m.outcome as CiRunReport['outcome'], sessionId: m.session_id, at: m.at, note: m.note });
+      if (m.state?.startsWith('bump:'))
+        bumps.push({
+          sessionId: m.session_id,
+          mode: m.state === 'bump:prioritise' ? 'prioritise' : 'ask',
+          outcome: m.outcome === 'bumped' ? 'sent' : 'refused',
+          at: m.at,
+          note: m.note,
+        });
+      else
+        reports.push({
+          state: (m.state ?? 'failed') as CiRunReport['state'],
+          outcome: m.outcome as CiRunReport['outcome'],
+          sessionId: m.session_id,
+          at: m.at,
+          note: m.note,
+        });
     }
     return { reports, bumps };
   }
@@ -1662,7 +2200,21 @@ export class CiService {
     const row = this.#need(id);
     const waiting = this.#cs.deploymentsOfRun(row.id).find((d) => d.approval === 'waiting');
     const to = await this.#links.bump(row, req, by, waiting?.environment ?? null);
-    this.#opts.audit?.({ kind: 'ci.run_bumped', actor: by.actor, userId: by.userId, subject: `ci_run:${row.id}`, detail: { workspace: row.workspace_id, run: row.number, pipeline: row.pipeline, sessionId: to.sessionId, mode: req.mode ?? null, ticketId: row.ticket_id, note: typeof req.note === 'string' && req.note.trim().length > 0 } });
+    this.#opts.audit?.({
+      kind: 'ci.run_bumped',
+      actor: by.actor,
+      userId: by.userId,
+      subject: `ci_run:${row.id}`,
+      detail: {
+        workspace: row.workspace_id,
+        run: row.number,
+        pipeline: row.pipeline,
+        sessionId: to.sessionId,
+        mode: req.mode ?? null,
+        ticketId: row.ticket_id,
+        note: typeof req.note === 'string' && req.note.trim().length > 0,
+      },
+    });
     this.#changed();
     return this.get(id);
   }
@@ -1692,7 +2244,10 @@ export class CiService {
     if (row.status === 'queued') return { text: '', next: 0, done: false, truncated: false, source: 'workspace' };
     const key = `${id}/${job}/${n}`;
     const live = this.#live.get(key);
-    const stream = live && live.offset === from ? live : { stream: this.#opts.streamFor?.(row.workspace_id) ?? new SessionStream(NO_VALUES), offset: from };
+    const stream =
+      live && live.offset === from
+        ? live
+        : { stream: this.#opts.streamFor?.(row.workspace_id) ?? new SessionStream(NO_VALUES), offset: from };
     let reply: CiReply;
     try {
       reply = await this.host.cp(execOf(row), ['log', id, job, String(n), String(from)], { timeoutMs: 15_000 });
@@ -1762,11 +2317,19 @@ export class CiService {
   async createRepo(req: Partial<CreateCiRepoRequest>): Promise<CiRepo> {
     if (typeof req.workspaceId !== 'string' || !WORKSPACE_ID.test(req.workspaceId)) throw invalid('workspaceId', 'Pick a workspace.');
     const name = typeof req.name === 'string' ? req.name.trim() : '';
-    if (!CI_REPO_NAME.test(name) || name.endsWith('.git') || name.includes('..')) throw invalid('name', 'Lowercase letters, digits, . _ and -.');
-    if (req.source !== undefined && (typeof req.source !== 'string' || !req.source.startsWith('/') || req.source.length > 500)) throw invalid('source', 'An absolute folder.');
-    if (req.defaultBranch !== undefined && (typeof req.defaultBranch !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._/-]{0,100}$/.test(req.defaultBranch))) throw invalid('defaultBranch', 'A branch name.');
-    if (this.#cs.repoByName(req.workspaceId, name)) throw new AppError('CONFLICT', `There is already a remote named ${name} here.`, { details: { name: 'Taken.' } });
-    if (this.#cs.repos(req.workspaceId).length >= CI_LIMITS.reposPerWorkspace) throw new AppError('CONFLICT', `A workspace has at most ${CI_LIMITS.reposPerWorkspace} remotes.`);
+    if (!CI_REPO_NAME.test(name) || name.endsWith('.git') || name.includes('..'))
+      throw invalid('name', 'Lowercase letters, digits, . _ and -.');
+    if (req.source !== undefined && (typeof req.source !== 'string' || !req.source.startsWith('/') || req.source.length > 500))
+      throw invalid('source', 'An absolute folder.');
+    if (
+      req.defaultBranch !== undefined &&
+      (typeof req.defaultBranch !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._/-]{0,100}$/.test(req.defaultBranch))
+    )
+      throw invalid('defaultBranch', 'A branch name.');
+    if (this.#cs.repoByName(req.workspaceId, name))
+      throw new AppError('CONFLICT', `There is already a remote named ${name} here.`, { details: { name: 'Taken.' } });
+    if (this.#cs.repos(req.workspaceId).length >= CI_LIMITS.reposPerWorkspace)
+      throw new AppError('CONFLICT', `A workspace has at most ${CI_LIMITS.reposPerWorkspace} remotes.`);
     await this.#running(req.workspaceId);
     const args = ['repo', 'create', name];
     if (req.source) args.push('--from', req.source);
@@ -1805,7 +2368,13 @@ export class CiService {
       if (req.upstream === null) {
         // The old upstream's staging refs stay in the remote until the next sync clears them: remember that, even after the removal.
         const stale = repo.upstream_url || readState(repo.upstream_state).reset;
-        Object.assign(patch, { upstream_url: null, upstream_secret: null, upstream_every_s: null, upstream_hook_secret: null, upstream_state: stale ? JSON.stringify({ ...EMPTY_STATE, reset: true }) : null });
+        Object.assign(patch, {
+          upstream_url: null,
+          upstream_secret: null,
+          upstream_every_s: null,
+          upstream_hook_secret: null,
+          upstream_state: stale ? JSON.stringify({ ...EMPTY_STATE, reset: true }) : null,
+        });
         if (repo.upstream_url) audit = { kind: 'ci.upstream_cleared', detail: { repo: repo.name, url: repo.upstream_url } };
       } else {
         const u = checkUpstream(req.upstream);
@@ -1813,31 +2382,58 @@ export class CiService {
         await upstreamPin(u.url, this.#opts.lookup, this.#allowedHosts());
         if (u.secret && this.#opts.secrets) {
           const info = this.#opts.secrets(repo.workspace_id, u.secret);
-          if (!info?.asFile) throw invalid('upstream.secret', `${u.secret} does not reach this workspace as a file. Assign it in Secrets & env as a secret or a tool login.`);
+          if (!info?.asFile)
+            throw invalid(
+              'upstream.secret',
+              `${u.secret} does not reach this workspace as a file. Assign it in Secrets & env as a secret or a tool login.`,
+            );
         }
         // T-486 S2: the webhook's signing secret is checked by the portal itself, so it must be a secret the workspace's sets deliver.
         if (u.hookSecret && this.#opts.secrets) {
           const info = this.#opts.secrets(repo.workspace_id, u.hookSecret);
-          if (info?.kind !== 'secret') throw invalid('upstream.hookSecret', `${u.hookSecret} is not a secret assigned to this workspace. Add it in Secrets & env as a secret.`);
+          if (info?.kind !== 'secret')
+            throw invalid(
+              'upstream.hookSecret',
+              `${u.hookSecret} is not a secret assigned to this workspace. Add it in Secrets & env as a secret.`,
+            );
         }
         // A new URL is a new upstream (the same URL again is not): its sync starts from a clean staging area, so it is a baseline.
         const changed = u.url !== repo.upstream_url;
         const staged = changed && (repo.upstream_url || readState(repo.upstream_state).reset);
-        Object.assign(patch, { upstream_url: u.url, upstream_secret: u.secret, upstream_every_s: u.everyS, upstream_hook_secret: u.hookSecret, ...(changed ? { upstream_state: staged ? JSON.stringify({ ...EMPTY_STATE, reset: true }) : null } : {}) });
-        audit = { kind: 'ci.upstream_set', detail: { repo: repo.name, url: u.url, secret: u.secret, everyS: u.everyS, hookSecret: u.hookSecret } };
+        Object.assign(patch, {
+          upstream_url: u.url,
+          upstream_secret: u.secret,
+          upstream_every_s: u.everyS,
+          upstream_hook_secret: u.hookSecret,
+          ...(changed ? { upstream_state: staged ? JSON.stringify({ ...EMPTY_STATE, reset: true }) : null } : {}),
+        });
+        audit = {
+          kind: 'ci.upstream_set',
+          detail: { repo: repo.name, url: u.url, secret: u.secret, everyS: u.everyS, hookSecret: u.hookSecret },
+        };
       }
       this.#upstreamAt.delete(repo.id);
     }
     if (req.defaultBranch !== undefined) {
-      if (typeof req.defaultBranch !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._/-]{0,100}$/.test(req.defaultBranch)) throw invalid('defaultBranch', 'A branch name.');
+      if (typeof req.defaultBranch !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._/-]{0,100}$/.test(req.defaultBranch))
+        throw invalid('defaultBranch', 'A branch name.');
       patch.default_branch = req.defaultBranch;
     }
     if (req.protected !== undefined) {
-      if (!Array.isArray(req.protected) || req.protected.length > 20 || req.protected.some((g) => typeof g !== 'string' || !GLOB.test(g))) throw invalid('protected', 'Up to 20 branch names or patterns.');
+      if (!Array.isArray(req.protected) || req.protected.length > 20 || req.protected.some((g) => typeof g !== 'string' || !GLOB.test(g)))
+        throw invalid('protected', 'Up to 20 branch names or patterns.');
       patch.protected = JSON.stringify([...new Set(req.protected)]);
     }
     this.#cs.updateRepo(repo.id, patch);
-    if (audit && by) this.#opts.audit?.({ kind: audit.kind, actor: by.actor, userId: by.userId, severity: 'medium', subject: `ci_repo:${repo.id}`, detail: { workspace: repo.workspace_id, ...audit.detail } });
+    if (audit && by)
+      this.#opts.audit?.({
+        kind: audit.kind,
+        actor: by.actor,
+        userId: by.userId,
+        severity: 'medium',
+        subject: `ci_repo:${repo.id}`,
+        detail: { workspace: repo.workspace_id, ...audit.detail },
+      });
     this.#changed();
     if (req.upstream) this.kick(repo.workspace_id);
     return this.repo(repo.id);
@@ -1890,7 +2486,22 @@ export class CiService {
     const target = await this.#resolveRef(repo, ref?.trim() || repo.default_branch);
     const snap = await this.#snapshot(repo, target.sha);
     // What the workspace itself can't give a pipeline is shown as a warning here; a run would fail on it.
-    return validateFiles(snap.files ?? []).pipelines.map((p) => (p.pipeline ? { ...p.info, diagnostics: [...p.info.diagnostics, ...this.#missingSecrets(repo.workspace_id, p.pipeline.jobs.filter((j) => !j.hidden), p.info.file, 'warning')] } : p.info));
+    return validateFiles(snap.files ?? []).pipelines.map((p) =>
+      p.pipeline
+        ? {
+            ...p.info,
+            diagnostics: [
+              ...p.info.diagnostics,
+              ...this.#missingSecrets(
+                repo.workspace_id,
+                p.pipeline.jobs.filter((j) => !j.hidden),
+                p.info.file,
+                'warning',
+              ),
+            ],
+          }
+        : p.info,
+    );
   }
 
   async merge(id: string, req: Partial<MergeCiRequest>, actor = 'ui'): Promise<MergeCiResult> {
@@ -1903,8 +2514,23 @@ export class CiService {
     const ticket = parseTicketBranch(req.source);
     const message = `Merge branch '${req.source}' into ${req.target}${ticket ? `\n\nTicket: ${ticket}` : ''}`;
     const record = (outcome: string, sha: string | null, note: string | null) =>
-      this.#cs.insertMerge({ id: newId('m'), repo_id: repo.id, source: req.source!, target: req.target!, strategy, result_sha: sha, actor, at: new Date().toISOString(), outcome, note });
-    const r = await this.#cp(repo.workspace_id, ['merge', repo.name, req.source, req.target, '--strategy', strategy, '--message', message, '--author', 'Claudepilot'], { timeoutMs: 60_000 });
+      this.#cs.insertMerge({
+        id: newId('m'),
+        repo_id: repo.id,
+        source: req.source!,
+        target: req.target!,
+        strategy,
+        result_sha: sha,
+        actor,
+        at: new Date().toISOString(),
+        outcome,
+        note,
+      });
+    const r = await this.#cp(
+      repo.workspace_id,
+      ['merge', repo.name, req.source, req.target, '--strategy', strategy, '--message', message, '--author', 'Claudepilot'],
+      { timeoutMs: 60_000 },
+    );
     if (!r.ok) {
       record(r.error ?? 'failed', null, oneLine(r.message as string | undefined));
       throw fromReply(r);
@@ -1955,7 +2581,14 @@ export class CiService {
     this.#hook(() => this.hooks.changed?.(row, previous));
     void this.#links.changed(row, previous).catch((e: unknown) => console.error(`[ci] ${id}: linking failed: ${(e as Error).message}`));
     // T-591: a release pipeline that ended writes its report (only when the remote has the setting and its release job passed).
-    if (row.status === 'passed' || row.status === 'failed' || row.status === 'cancelled') void this.#reporter.report(id).catch((e: unknown) => console.error(`[ci] ${id}: release report failed: ${oneLine(this.#redact(row.workspace_id, (e as Error).message)) ?? 'unknown error'}`));
+    if (row.status === 'passed' || row.status === 'failed' || row.status === 'cancelled')
+      void this.#reporter
+        .report(id)
+        .catch((e: unknown) =>
+          console.error(
+            `[ci] ${id}: release report failed: ${oneLine(this.#redact(row.workspace_id, (e as Error).message)) ?? 'unknown error'}`,
+          ),
+        );
   }
 
   /* ---------- Release reports (T-591) ---------- */
@@ -1980,13 +2613,27 @@ export class CiService {
       const pipeline = typeof setting.pipeline === 'string' ? setting.pipeline.trim() : '';
       const vaultId = typeof setting.vaultId === 'string' ? setting.vaultId.trim() : '';
       const folder = typeof setting.folder === 'string' ? setting.folder.trim().replace(/^\/+|\/+$/g, '') : '';
-      if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(pipeline)) throw new AppError('VALIDATION_FAILED', 'Check the pipeline.', { details: { pipeline: 'A pipeline file name without .yml, e.g. deploy.' } });
-      if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(vaultId)) throw new AppError('VALIDATION_FAILED', 'Check the vault.', { details: { vaultId: 'A vault id.' } });
-      if (!validFolder(folder)) throw new AppError('VALIDATION_FAILED', 'Check the folder.', { details: { folder: 'A folder in the vault, e.g. Releases (no .., at most four levels).' } });
+      if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(pipeline))
+        throw new AppError('VALIDATION_FAILED', 'Check the pipeline.', {
+          details: { pipeline: 'A pipeline file name without .yml, e.g. deploy.' },
+        });
+      if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(vaultId))
+        throw new AppError('VALIDATION_FAILED', 'Check the vault.', { details: { vaultId: 'A vault id.' } });
+      if (!validFolder(folder))
+        throw new AppError('VALIDATION_FAILED', 'Check the folder.', {
+          details: { folder: 'A folder in the vault, e.g. Releases (no .., at most four levels).' },
+        });
       setting = { pipeline, vaultId, folder };
     }
     this.#cs.updateRepo(repoId, { release_report: setting ? JSON.stringify(setting) : null });
-    this.#opts.audit?.({ kind: 'ci.release_report_setting', actor: by.actor, userId: by.userId, severity: 'medium', subject: `ci_repo:${repoId}`, detail: { repo: repo.name, vault: setting?.vaultId ?? null, folder: setting?.folder ?? null, pipeline: setting?.pipeline ?? null } });
+    this.#opts.audit?.({
+      kind: 'ci.release_report_setting',
+      actor: by.actor,
+      userId: by.userId,
+      severity: 'medium',
+      subject: `ci_repo:${repoId}`,
+      detail: { repo: repo.name, vault: setting?.vaultId ?? null, folder: setting?.folder ?? null, pipeline: setting?.pipeline ?? null },
+    });
     this.#changed();
     return setting;
   }

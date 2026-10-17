@@ -1,8 +1,9 @@
 import { Button, cn, EmptyState, LoadError, Menu, RowsSkeleton, useToast } from '@isnanme/ui';
-import { isCiActive, type CiRunList, type CiRunSummary, type CiStatus } from '@portal/contracts';
+import { isCiActive, type CiRunPage, type CiRunSummary, type CiStatus } from '@portal/contracts';
 import { ChevronDown, ChevronsUp, CircleCheck, CircleX, List, LoaderCircle, Plus, Server, Workflow, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
+import { ListPager } from '@/features/chat/listPaging';
 import { timeAgo } from '@/lib/format';
 import { useLive } from '@/lib/live';
 import { ciApi } from './api';
@@ -27,7 +28,12 @@ export function RunsTab({ onNewRemote }: { onNewRemote: () => void }) {
   const scope = (SCOPES.find((s) => s.id === params.get('s'))?.id ?? 'all') as Scope;
   const repo = params.get('repo');
   const branch = params.get('branch');
-  const [data, setData] = useState<CiRunList | null>(null);
+  const [data, setData] = useState<CiRunPage | null>(null);
+  // Older pages loaded with "More" (D-58): the ListPager keeps them under a refreshed first page only while its last row did not move, and
+  // refuses a page that lands after they were dropped. `data` still carries the first page's total and active counts.
+  const pager = useRef(new ListPager<CiRunSummary>());
+  const [, setTick] = useState(0);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [repos, setRepos] = useState<{ id: string; name: string; workspaceId: string }[]>([]);
   const [failed, setFailed] = useState(false);
   const [now, setNow] = useState(Date.now());
@@ -48,20 +54,48 @@ export function RunsTab({ onNewRemote }: { onNewRemote: () => void }) {
   const load = useCallback(async () => {
     const mine = ++seq.current;
     try {
-      const [list, r] = await Promise.all([ciApi.runs({ status, repo: repo ?? undefined, branch: branch ?? undefined, limit: 100 }), ciApi.repos()]);
+      const [list, r] = await Promise.all([
+        ciApi.runs({ status, repo: repo ?? undefined, branch: branch ?? undefined, limit: 100 }),
+        ciApi.repos(),
+      ]);
       if (mine !== seq.current) return;
+      pager.current.applyHead(list);
       setData(list);
       setRepos(r.map((x) => ({ id: x.id, name: x.name, workspaceId: x.workspaceId })));
       setFailed(false);
     } catch {
       if (mine === seq.current) setFailed(true);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scope, repo, branch]);
-  useEffect(() => void load(), [load]);
+  useEffect(() => {
+    pager.current.restart();
+    void load();
+  }, [load]);
   useLive('ci', () => void load());
 
-  const anyActive = data?.items.some((r) => isCiActive(r.status)) ?? false;
+  const after = pager.current.next;
+  const loadMore = async () => {
+    const ticket = pager.current.beginMore();
+    if (!ticket || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const page = await ciApi.runs({ status, repo: repo ?? undefined, branch: branch ?? undefined, limit: 100, cursor: ticket.cursor });
+      // A page that lands after the older pages were dropped (a poll moved the seam, a filter changed) is stale: finishMore refuses it.
+      if (pager.current.finishMore(ticket, page)) setTick((n) => n + 1);
+    } catch (e) {
+      const what = pager.current.failMore(ticket, e);
+      // A refused cursor (it expired with a server restart): start again from the first page.
+      if (what === 'restart') {
+        pager.current.restart();
+        void load();
+      } else if (what === 'retry') toast('Could not load more');
+    } finally {
+      setLoadingMore(false);
+    }
+  };
+
+  const rows = pager.current.items ?? [];
+  const anyActive = rows.some((r) => isCiActive(r.status));
   useEffect(() => {
     if (!anyActive) return;
     const tick = window.setInterval(() => setNow(Date.now()), 1000);
@@ -84,7 +118,10 @@ export function RunsTab({ onNewRemote }: { onNewRemote: () => void }) {
               aria-label={label}
               title={label}
               onClick={() => set({ s: id === 'all' ? null : id })}
-              className={cn('press flex size-11 items-center justify-center sm:size-10 rounded-full', scope === id ? 'bg-primary text-primary-ink' : 'text-muted hover:text-ink')}
+              className={cn(
+                'press flex size-11 items-center justify-center sm:size-10 rounded-full',
+                scope === id ? 'bg-primary text-primary-ink' : 'text-muted hover:text-ink',
+              )}
             >
               <Icon className="size-[18px]" />
             </button>
@@ -96,7 +133,10 @@ export function RunsTab({ onNewRemote }: { onNewRemote: () => void }) {
             <select
               value={repo ?? ''}
               onChange={(e) => set({ repo: e.target.value || null })}
-              className={cn('h-11 appearance-none sm:h-9 rounded-full border bg-surface pr-8 pl-3.5 text-[16px] font-semibold focus:border-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-accent sm:text-[13.5px]', repo ? 'border-primary text-ink' : 'border-line text-ink-soft')}
+              className={cn(
+                'h-11 appearance-none sm:h-9 rounded-full border bg-surface pr-8 pl-3.5 text-[16px] font-semibold focus:border-primary focus:outline-hidden focus-visible:ring-2 focus-visible:ring-accent sm:text-[13.5px]',
+                repo ? 'border-primary text-ink' : 'border-line text-ink-soft',
+              )}
             >
               <option value="">All remotes</option>
               {repos.map((r) => (
@@ -109,7 +149,12 @@ export function RunsTab({ onNewRemote }: { onNewRemote: () => void }) {
           </label>
         )}
         {branch && (
-          <button type="button" onClick={() => set({ branch: null })} className="press inline-flex h-11 items-center sm:h-9 gap-1.5 rounded-full border border-primary bg-surface pr-2.5 pl-3.5 text-[13.5px] font-semibold focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none" aria-label={`Clear branch ${branch}`}>
+          <button
+            type="button"
+            onClick={() => set({ branch: null })}
+            className="press inline-flex h-11 items-center sm:h-9 gap-1.5 rounded-full border border-primary bg-surface pr-2.5 pl-3.5 text-[13.5px] font-semibold focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden"
+            aria-label={`Clear branch ${branch}`}
+          >
             <span className={cn(MONO, 'max-w-40 truncate')}>{branch}</span>
             <X className="size-3.5 text-muted" aria-hidden="true" />
           </button>
@@ -123,14 +168,36 @@ export function RunsTab({ onNewRemote }: { onNewRemote: () => void }) {
           <EmptyState
             icon={<Workflow className="size-6" />}
             title={filtered ? 'No match' : 'No runs yet'}
-            action={filtered ? undefined : repos.length === 0 ? <Button icon={<Plus className="size-4" />} onClick={onNewRemote}>New remote</Button> : undefined}
+            action={
+              filtered ? undefined : repos.length === 0 ? (
+                <Button icon={<Plus className="size-4" />} onClick={onNewRemote}>
+                  New remote
+                </Button>
+              ) : undefined
+            }
           />
         ) : (
-          <ul className="flex flex-col gap-2">
-            {data.items.map((r) => (
-              <RunRow key={r.id} run={r} now={now} remote={repos.length > 1 ? names.get(r.repoId) : undefined} onOpen={() => navigate(`/admin/ci/runs/${r.id}`)} onBump={() => setBumping(r)} />
-            ))}
-          </ul>
+          <>
+            <ul className="flex flex-col gap-2">
+              {rows.map((r) => (
+                <RunRow
+                  key={r.id}
+                  run={r}
+                  now={now}
+                  remote={repos.length > 1 ? names.get(r.repoId) : undefined}
+                  onOpen={() => navigate(`/admin/ci/runs/${r.id}`)}
+                  onBump={() => setBumping(r)}
+                />
+              ))}
+            </ul>
+            {after && (
+              <div className="mt-3 flex justify-center">
+                <Button variant="secondary" loading={loadingMore} onClick={() => void loadMore()}>
+                  More
+                </Button>
+              </div>
+            )}
+          </>
         ))}
       <RunBumpDialog
         run={bumping}
@@ -146,7 +213,19 @@ export function RunsTab({ onNewRemote }: { onNewRemote: () => void }) {
 }
 
 /** A row opens the run; its ⋯ (outside the row's button, on the right) has Bump (FR37a). */
-function RunRow({ run: r, now, remote, onOpen, onBump }: { run: CiRunSummary; now: number; remote?: string; onOpen: () => void; onBump: () => void }) {
+function RunRow({
+  run: r,
+  now,
+  remote,
+  onOpen,
+  onBump,
+}: {
+  run: CiRunSummary;
+  now: number;
+  remote?: string;
+  onOpen: () => void;
+  onBump: () => void;
+}) {
   const duration = r.durationMs ?? (isCiActive(r.status) ? elapsed(r.startedAt ?? r.createdAt, now) : null);
   const reason = r.status === 'failed' ? reasonLabel(r.reason) : null;
   const on = runnerLine(r);
@@ -155,7 +234,7 @@ function RunRow({ run: r, now, remote, onOpen, onBump }: { run: CiRunSummary; no
       <button
         type="button"
         onClick={onOpen}
-        className="flex w-full min-w-0 items-center gap-3 rounded-2xl border border-line bg-surface py-3 pr-12 pl-3.5 text-left transition-colors hover:bg-surface-2/60 focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none"
+        className="flex w-full min-w-0 items-center gap-3 rounded-2xl border border-line bg-surface py-3 pr-12 pl-3.5 text-left transition-colors hover:bg-surface-2/60 focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden"
       >
         <StatusIcon status={runLook(r)} className="[&_svg]:size-[22px]" />
         <span className="min-w-0 flex-1">
@@ -183,7 +262,11 @@ function RunRow({ run: r, now, remote, onOpen, onBump }: { run: CiRunSummary; no
         </span>
       </button>
       <div className="absolute top-1/2 right-1.5 -translate-y-1/2">
-        <Menu label={`More for #${r.number}`} align="right" items={[{ label: 'Bump…', icon: <ChevronsUp className="size-4" />, onSelect: onBump }]} />
+        <Menu
+          label={`More for #${r.number}`}
+          align="right"
+          items={[{ label: 'Bump…', icon: <ChevronsUp className="size-4" />, onSelect: onBump }]}
+        />
       </div>
     </li>
   );

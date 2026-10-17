@@ -54,7 +54,7 @@ export function AppShell() {
         </div>
       </header>
 
-      <main id="main" tabIndex={-1} className={cn('mx-auto px-4 pt-6 outline-none sm:px-6 sm:pt-10', !workbench && 'max-w-4xl')}>
+      <main id="main" tabIndex={-1} data-focus-container className={cn('mx-auto px-4 pt-6 outline-none sm:px-6 sm:pt-10', !workbench && 'max-w-4xl')}>
         {/* Enter-only page transition: navigation never waits for an exit animation. */}
         <motion.div
           key={workbench ?? pathname}
