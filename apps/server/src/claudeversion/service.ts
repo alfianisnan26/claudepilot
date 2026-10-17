@@ -45,6 +45,7 @@ import {
 import { actorString, actorUserId, can, ownerActor, systemActor, visible } from '../authz/seam.js';
 import type { Actor } from '@portal/contracts';
 import type { AuditInput } from '../platform/audit.js';
+import { defineLoop } from '../schedules/registry.js';
 import type { Settings } from '../settings/store.js';
 import type { Store } from '../store/store.js';
 import type { ImageInfo, Runtime } from '../workspaces/runtime.js';
@@ -65,6 +66,8 @@ const CANDIDATE_TTL_MS = 6 * 3_600_000;
 /** The scheduler looks this often whether a canary is due. */
 const SCHEDULE_TICK_MS = 15 * 60_000;
 const SCHEDULE_FIRST_DELAY_MS = 90_000;
+/** The scheduler's heartbeat in the schedules registry (T-968 S2b). */
+export const CANARY_LOOP = defineLoop({ name: 'version-canary', module: 'claudeversion', intervalMs: SCHEDULE_TICK_MS, description: 'Reads the Claude Code versions; runs the canary when it is due.' });
 const RUNNING_STATES: readonly string[] = ['starting', 'idle', 'working', 'waiting'];
 
 /** What the service needs of the workspace manager. */
@@ -819,9 +822,11 @@ export class ClaudeVersions {
     this.#first.unref();
     this.#timer = setInterval(() => void this.#tick(), SCHEDULE_TICK_MS);
     this.#timer.unref();
+    CANARY_LOOP.started();
   }
 
   stop(): void {
+    if (this.#timer) CANARY_LOOP.stopped();
     if (this.#timer) clearInterval(this.#timer);
     if (this.#first) clearTimeout(this.#first);
     this.#timer = undefined;
@@ -898,16 +903,21 @@ export class ClaudeVersions {
   }
 
   async #tick(): Promise<void> {
+    let failed: unknown = null;
     try {
       await this.refreshReadings();
     } catch (e) {
+      failed = e;
       console.error(`[claude-version] refreshing versions failed: ${(e as Error).message}`);
     }
     try {
       if (this.due()) await this.runScheduled();
     } catch (e) {
+      failed = e;
       console.error(`[claude-version] scheduled canary failed: ${(e as Error).message}`);
     }
+    if (failed) CANARY_LOOP.fail(failed);
+    else CANARY_LOOP.ok();
   }
 }
 

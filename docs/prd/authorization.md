@@ -550,6 +550,7 @@ Generated from the REAL app (`createApp` with stub services, `app.routes`: 261 r
 | `GET /api/settings/audit` | platform(settings,view) | admins |
 | `GET /api/settings/lockdown/:target/:name` | obj(workspace view path target+name) |  |
 | `PUT /api/settings/:key` | platform(settings,manage) | actor in setting_changes is the user |
+| `GET /api/schedules` | platform(system,view) | admins: every loop and every user's cron triggers (T-968 S2b) |
 | `GET /api/personas/workspaces/:target/:name` | obj(workspace view path target+name) |  |
 | `GET /api/personas/identities` | in:list(pool, poolType persona\|context) |  |
 | `GET /api/personas/pools` | in:list(pool, poolType persona\|context) |  |
@@ -816,6 +817,7 @@ The table above is the target. What is true today: 26 tools carry a declaration 
 | `crew_limits_get` (T-968) | session view `session_id` | yes ("No such session.") | nothing beyond scope read |
 | `settings_get` (T-968) | platform(settings, view) | yes | a credential-shaped value reads `[set]` (`settings/portalTools.ts`) |
 | `deploy_status` (T-968) | signed-in, filter ci_run | nothing | each run `can(view)` before it is opened (`ci/portalTools.ts`) |
+| `schedules_list` (T-968 S2b) | platform(system, view) | yes | a trigger's name is untrusted text, credentials cleaned (`schedules/portalTools.ts`) |
 | `session_keepgoing_set` | session operate `session_id`, confirm, audit | yes ("No such session.") | agents refused, `owner.can(view, operate)` (`keepgoing/portalTools.ts:44`) |
 | `ticket_bump` | ticket operate `id`; session operate `session_id`? (was required: corrected, the tool lists targets without it) | both | `requireCan` both (`tickets/portalTools.ts:425`, `:433`) |
 | `ci_run_get`, `ci_run_logs`, `ci_run_cancel` | ci_run view/view/operate `id` | yes (`NO_RUN`): the only ownership check for a person's token | an agent: its branch, ticket or session (`ci/portalTools.ts:24-36`) |

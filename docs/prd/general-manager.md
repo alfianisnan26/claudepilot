@@ -262,6 +262,31 @@ How the build differs from the table above:
 
 `POST /api/schedules/heartbeat` is for helpers with their own token, not for the manager.
 
+**Built (T-968 S2b).** `GET /api/schedules` and `schedules_list` read one list (`apps/server/src/schedules/`, wire type
+`ScheduleRow` in `packages/contracts/src/schedules.ts`):
+
+- **Loops.** Each portal loop defines itself in `schedules/registry.ts` (`defineLoop`) and calls its heartbeat: `started`, `stopped`,
+  and `ok` or `fail` after each pass. Six beat today: `orphan-sweep`, `triggers-cron`, `usage-probe`, `delivery-reconcile`,
+  `version-canary`, `notify-clock`. A row has the module, interval, last run, last result, last error (credentials cleaned, 200
+  characters at most) and next run. Kept in memory: a restart starts the loops again.
+- **States.** `ok`; `failing` (the last pass failed); `stale` (running, but no beat, or no start, for more than two intervals; stale
+  wins over failing); `stopped`; `disabled` (a trigger that is off or paused).
+- **Cron triggers.** Expression, last and next time, and how the last run ended. A trigger's name comes back to the tool as untrusted
+  text.
+- **Scheduled pipelines.** Not listed: CI refuses `on: schedule` as "not yet", so none exist.
+- **Who.** `view` on the platform's `system` area (admins), for the route and the tool. T-965 asked for a `schedules.read`
+  permission, but the platform areas are a closed list and `system` already covers how the portal runs. Anyone else gets NOT_FOUND
+  before the list is read.
+
+Next slices:
+
+1. `POST /api/schedules/heartbeat` with a helper's own token. The supervisor and other outside helpers appear once it exists.
+2. The Schedules page (S3).
+3. `schedule_get`, `schedule_set_enabled` and `schedule_run_now`.
+4. The T-971 refusal watcher calls `defineLoop` when it lands; it is not on `integration` yet.
+5. Loops without a heartbeat yet: secrets rotation, the delivery outbox, the account health check, the CI and repos timers, and the
+   nightly backup.
+
 ### 9.3 Writes, behind the S5 card design
 
 | Tool | What it does | Tier | Card (§6.1) |

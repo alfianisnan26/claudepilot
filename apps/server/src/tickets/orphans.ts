@@ -2,11 +2,15 @@
 // never overlaps the next), restart safe (the last pass is in `portal_meta`: a restart waits for the rest of that minute, the delay per
 // dead session survives too). The rules themselves are in the service.
 
+import { defineLoop } from '../schedules/registry.js';
 import './settings.js';
 import type { Tickets } from './service.js';
 
 export const ORPHAN_SWEEP_MS = 60_000;
 const JITTER_MS = 10_000;
+
+/** Its heartbeat in the schedules registry (T-968 S2b). */
+export const ORPHAN_LOOP = defineLoop({ name: 'orphan-sweep', module: 'tickets', intervalMs: ORPHAN_SWEEP_MS, description: 'Releases the tickets of sessions that died (T-270).' });
 
 type Timer = { unref?: () => void };
 
@@ -49,11 +53,13 @@ export class OrphanSweep {
   start(): void {
     if (!this.#stopped) return;
     this.#stopped = false;
+    ORPHAN_LOOP.started(this.#o.now());
     this.#schedule(this.firstDelay());
   }
 
   stop(): void {
     this.#stopped = true;
+    ORPHAN_LOOP.stopped();
     if (this.#timer) this.#o.clearTimer(this.#timer);
     this.#timer = null;
   }
@@ -68,7 +74,9 @@ export class OrphanSweep {
     if (this.#stopped) return;
     try {
       this.tickets.sweepOrphans();
+      ORPHAN_LOOP.ok(this.#o.now());
     } catch (e) {
+      ORPHAN_LOOP.fail(e, this.#o.now());
       console.error(`[tickets] the orphan sweep failed: ${(e as Error).message}`);
     } finally {
       if (!this.#stopped) this.#schedule(this.#o.intervalMs + Math.floor(this.#o.random() * this.#o.jitterMs));
