@@ -11,7 +11,8 @@
   COORDINATOR: shadowing nuisance until T-976 is live) -> QA delta + blind.
 - BATCH 32 LANDED 22:54: integration 74599ece (gate claudepilot-gate-18d8e9d-f5f1 green on 18d8e9d0; status-only merge on top):
   T-382 S6, T-294 FIX1, T-1049. Relayed T-731 10876 -> coordinator deploys. Format sweep stays T-1032 (10857).
-- T-425 S2b CONFLICT (controller.ts send path) -> 3753d3c2 resolves ticket/T-425-s2b-merge ac45f735 + test -> QA delta -> b33.
+- T-425 S2b merge: controller.ts resolved 571f0fba (3753d3c2, Job bvl4mr4k1); PRD hunk: lead took integration's file 0d1afd3b
+  (lane refused git restore) -> builder re-adds the FR39 As-built text -> QA delta -> b33.
 - T-1043 S0a FIX1 3c907e76 (badfb8da rc0, 274/274) -> delta c691df71 + blind d9f18599. S0b: lead merged S0a in, 789474e4
   (trace T-1043 10772) -> 76845676 continues. Denial = 404 (10605).
 - T-974 URGENT FIX 6abbf44f blind PWG 10774 (10 mutants killed) -> FIX2 `git remote set-url/add` + -c case row, a3554d40 first.
