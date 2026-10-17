@@ -313,13 +313,22 @@ test('T-971 H2 race: a session a person resumed during the spacing wait is skipp
   const s = await liveSession();
   try {
     fast(s, 5, 1);
+    // The spacing wait is the test's: held until released, so the person's resume lands inside it every time.
+    let release!: () => void;
+    let waiting = 0;
+    s.controller.restartPause = () => {
+      waiting++;
+      return new Promise<void>((resolve) => (release = resolve));
+    };
     const b = await made(s, 'B');
     const starts = s.ws.startArgs.length;
     await cutOff(s, [s.id, b.id]);
-    await until(() => recoveries(s).length === 1);
+    await until(() => recoveries(s).length === 1 && waiting === 1);
     const first = recoveries(s)[0]!.sessionId!;
     const other = first === s.id ? b.id : s.id;
+    assert.equal(s.controller.get(other)!.process, 'gone', 'it was still cut off when the portal began to wait for it');
     s.store.db!.prepare("UPDATE chat_sessions SET process = 'live', state = 'idle' WHERE id = ?").run(other); // a person resumed it during the wait
+    release();
     await until(() => recoveries(s).length === 2, 6000);
     const row = recoveries(s, other)[0]!;
     assert.equal(row.detail.result, 'skipped');

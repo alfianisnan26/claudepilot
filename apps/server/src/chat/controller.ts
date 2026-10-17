@@ -990,10 +990,8 @@ export class ChatController {
   keepGoingOf?: (sessionId: string) => ChatKeepGoing | null;
   /** Installed at start-up (T-136): reads a setting (the recover cap and pause, `recover.ts`); unset, the defaults. */
   recoverSettings?: (key: string) => unknown;
-  /**
-   * Installed by the tickets module (T-136): a session reached its recover cap for the day and stays ended; open ONE ticket (tag watchdog)
-   * for it. Called at most once per session per 24 hours. Facts only: the id, the workspace, the reason (fixed text), the counts.
-   */
+  /** The pause between two restart resumes (T-971 H2); tests hold it to act inside the wait. Default: a timer that `stop()` cuts short. */
+  restartPause?: (ms: number) => Promise<void>;
   /**
    * Installed at start-up (T-971 H2): one line per session the portal resumed (or could not) after a restart cut it off, for the platform audit
    * the General Manager reads. Facts and a short scrubbed title only.
@@ -1005,6 +1003,10 @@ export class ChatController {
     needsBypass: boolean;
     line: string;
   }) => void;
+  /**
+   * Installed by the tickets module (T-136): a session reached its recover cap for the day and stays ended; open ONE ticket (tag watchdog)
+   * for it. Called at most once per session per 24 hours. Facts only: the id, the workspace, the reason (fixed text), the counts.
+   */
   onRecoverCapped?: (info: {
     sessionId: string;
     workspaceId: string;
@@ -1299,13 +1301,12 @@ export class ChatController {
         const who = `${title ? `“${this.scrub(row!.workspace_id, title.replace(/\s+/g, ' ').trim()).slice(0, 60)}” ` : ''}(${shortId(next.sessionId)}${row ? `, ${row.workspace_id}` : ''})`;
         let result: 'resumed' | 'failed' | 'over_limit' | 'looping' | 'skipped';
         let why = '';
-        if (!row || row.state === 'ended') (result = 'skipped'), (why = 'it has ended');
-        else if (row.archived_at) (result = 'skipped'), (why = 'it is archived');
-        else if (row.process === 'live' || this.#busy.has(row.id) || this.#moving.has(row.id)) (result = 'skipped'), (why = 'it is running again');
+        const skip = this.#restartSkipWhy(next.sessionId);
+        if (!row || skip) (result = 'skipped'), (why = skip ?? 'it has ended');
         else if (this.#restartResumed >= config.max) (result = 'over_limit'), (why = `over the limit of ${config.max} per start: Resume it by hand`);
         else if (restartResumesToday(recoveries, next.sessionId, now) >= RESTART_RESUMES_PER_DAY) (result = 'looping'), (why = `already resumed ${RESTART_RESUMES_PER_DAY} times today: Resume it by hand`);
         else {
-          if (attempted > 0) await this.#wait(config.staggerMs);
+          if (attempted > 0) await (this.restartPause ?? ((ms: number) => this.#wait(ms)))(config.staggerMs);
           if (this.#closed) return;
           // The stagger can be long: a person may have resumed it, or ended it, meanwhile. Then nothing is sent and nothing is counted.
           const again = this.#restartSkipWhy(row.id);
