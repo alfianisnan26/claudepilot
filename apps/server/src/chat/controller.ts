@@ -2844,7 +2844,7 @@ export class ChatController {
     const seq = this.#chat.lastEvent(sessionId)?.seq;
     if (seq !== undefined) rec.link(seq);
     if (portal?.startsWith('session:')) this.#noteSent(portal.slice('session:'.length), session.title, text);
-<<<<<<< HEAD
+    // The optimistic Working and its undo (integration) are decided in `deliverInLine`, when the line is really written: after a slot wait, not before it.
     const deliver = async (): Promise<void> => {
       try {
         await deliverInLine();
@@ -2859,42 +2859,10 @@ export class ChatController {
         if (!report) this.#crewHeld.delete(sessionId);
       }
       await inLine; // the sends before this one are written first
-      const before =this.#chat.get(sessionId)?.state;
+      const before = this.#chat.get(sessionId)?.state;
       const woke = before !== undefined && before !== 'working' && before !== 'waiting';
       if (woke) {
         this.#chat.patchSession(sessionId, { state: 'working' });
-=======
-    const before = this.#chat.get(sessionId)?.state;
-    const woke = before !== undefined && before !== 'working' && before !== 'waiting';
-    if (woke) {
-      this.#chat.patchSession(sessionId, { state: 'working' });
-      this.#emitSession(sessionId);
-    }
-    try {
-      await this.#writeLine(
-        sessionId,
-        userLine(
-          att.withNote(
-            portal && !bare
-              ? portalFrame(
-                  portal,
-                  actorLabel,
-                  text,
-                  opts.relation,
-                  leadSubagentWarning(this.#chat.get(sessionId)?.agentsRunning ?? 0, this.#chat.row(sessionId)?.max_workers),
-                )
-              : text,
-          ),
-          { uuid, priority, images: att.inline(), imagesFirst: att.needsStaging },
-        ),
-      );
-      att.done();
-    } catch (e) {
-      this.#setInput(sessionId, uuid, 'failed');
-      // Nothing reached Claude Code: undo the optimistic Working, unless something else moved it since.
-      if (woke && before && this.#chat.get(sessionId)?.state === 'working') {
-        this.#chat.patchSession(sessionId, { state: before });
->>>>>>> 867873e02d14a28abfb8bfb5f27181468644ddad
         this.#emitSession(sessionId);
       }
       try {

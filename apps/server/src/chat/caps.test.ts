@@ -228,6 +228,26 @@ test('T-425 S2b: a wake refused for a reason that is not an AppError (the launch
   }
 });
 
+test('T-425 S2b + optimistic Working: a send that waited for a slot and then fails to write is marked failed, and the optimistic Working is undone', async () => {
+  const s = await liveSession();
+  try {
+    await asleepAtCap(s);
+    s.controller.execTimeoutMs = 400;
+    await s.controller.send(s.id, 'late-fail-1', 'LATE-FAIL-LINE');
+    assert.match(s.controller.get(s.id)!.slotWait ?? '', /^Waiting for a slot/);
+    s.ws.hangSends = true; // the slot comes, the wake works, then the write to Claude Code never completes
+    s.controller.liveCaps = () => ({ perWorkspace: 5, total: 10 });
+    await until(() => s.inputs('late-fail-1').includes('failed'), 6000);
+    s.ws.hangSends = false;
+    assert.ok(s.controller.history(s.id).some((e) => e.kind === 'system' && /A message wasn’t delivered/.test(e.text ?? '')));
+    await sleep(50);
+    assert.notEqual(s.controller.get(s.id)!.state, 'working', 'nothing reached Claude Code: the session is not left Working');
+    assert.ok(!s.ws.sends.some((x) => x.line.includes('LATE-FAIL-LINE')), 'the line was never delivered');
+  } finally {
+    await s.done();
+  }
+});
+
 test('T-425 S2b: a later send is not written while an earlier send to the same session is still being written (the chain’s ordering)', async () => {
   const s = await liveSession();
   try {
