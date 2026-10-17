@@ -11,6 +11,8 @@ on:
 timeout: 2h
 concurrency:
   group: check-claudepilot
+  # A push while a gate runs waits; a third push replaces the second (T-975): the queue holds only the newest run, the running gate is kept.
+  cancel-queued: true
 jobs:
   gate:
     name: Gate

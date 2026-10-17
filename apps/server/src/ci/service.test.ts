@@ -238,6 +238,46 @@ test('concurrency.group with cancel-in-progress: the newer run cancels the older
   }
 });
 
+test('concurrency.cancel-queued: three queued behind a running run leave only the newest queued and the running one (T-975)', async () => {
+  const h = await harness({ maxRunsPerWorkspace: 3 });
+  try {
+    const repo = await remote(h, { '.pilot/q.yml': 'on: manual\nconcurrency: { group: q-grp, cancel-queued: true }\njobs:\n  a:\n    steps: [{run: "sleep 20; echo done"}]\n' });
+    const running = await h.svc.startRun({ repoId: repo.id, pipeline: 'q', ref: 'main' });
+    await h.until('the first to start', () => h.svc.list().items.find((r) => r.id === running.id)!.status === 'running');
+    const q1 = await h.svc.startRun({ repoId: repo.id, pipeline: 'q', ref: 'main' });
+    const q2 = await h.svc.startRun({ repoId: repo.id, pipeline: 'q', ref: 'main' });
+    const q3 = await h.svc.startRun({ repoId: repo.id, pipeline: 'q', ref: 'main' });
+    await h.until('the two older queued runs to be superseded', () => [q1, q2].every((q) => h.svc.list().items.find((r) => r.id === q.id)!.status === 'cancelled'));
+    const by = (id: string) => h.svc.list().items.find((r) => r.id === id)!;
+    assert.deepEqual([by(q1.id).reason, by(q2.id).reason], ['superseded', 'superseded'], 'the cancelled runs say superseded');
+    assert.deepEqual([by(q1.id).cancelledBy, by(q1.id).cancelNote], ['pipeline', `for #${q3.number}`]);
+    assert.deepEqual([by(q2.id).cancelledBy, by(q2.id).cancelNote], ['pipeline', `for #${q3.number}`]);
+    assert.equal(by(running.id).status, 'running', 'the running one is kept (not cancel-in-progress)');
+    assert.equal(by(q3.id).status, 'queued', 'the newest queued run waits for the group');
+    await h.svc.cancel(running.id);
+    await h.svc.cancel(q3.id);
+  } finally {
+    h.done();
+  }
+});
+
+test('without cancel-queued, queued runs of a group are not superseded; cancel-in-progress alone is unchanged (T-975)', async () => {
+  const h = await harness({ maxRunsPerWorkspace: 3 });
+  try {
+    const repo = await remote(h, { '.pilot/n.yml': 'on: manual\nconcurrency: { group: n-grp }\njobs:\n  a:\n    steps: [{run: "sleep 20; echo done"}]\n' });
+    const running = await h.svc.startRun({ repoId: repo.id, pipeline: 'n', ref: 'main' });
+    await h.until('the first to start', () => h.svc.list().items.find((r) => r.id === running.id)!.status === 'running');
+    const q1 = await h.svc.startRun({ repoId: repo.id, pipeline: 'n', ref: 'main' });
+    const q2 = await h.svc.startRun({ repoId: repo.id, pipeline: 'n', ref: 'main' });
+    await sleep(1500);
+    const by = (id: string) => h.svc.list().items.find((r) => r.id === id)!;
+    assert.deepEqual([by(running.id).status, by(q1.id).status, by(q2.id).status], ['running', 'queued', 'queued']);
+    for (const r of [q1, q2, running]) await h.svc.cancel(r.id);
+  } finally {
+    h.done();
+  }
+});
+
 test('the portal restarting between storing an event and acknowledging it makes no second run; a run in flight is picked up', async () => {
   const h = await harness();
   try {

@@ -425,6 +425,19 @@ test('compile: the example becomes a plan with the contract variables, condition
   assert.equal(JSON.stringify(plan).includes('${{'), false, 'nothing dynamic is left in the plan');
 });
 
+test('concurrency.cancel-queued is a boolean beside cancel-in-progress, false by default (T-975)', () => {
+  const doc = (conc: string) => pipelineOf(['on: manual', `concurrency: ${conc}`, 'jobs:', '  a:', '    steps: [{run: echo}]', ''].join('\n'));
+  const on = compile(doc('{ group: g, cancel-queued: true }'), ctx({}), { maxParallel: 1 });
+  assert.ok(on.ok);
+  if (on.ok) assert.deepEqual([on.cancelQueued, on.cancelInProgress], [true, false]);
+  const plain = compile(doc('{ group: g, cancel-in-progress: true }'), ctx({}), { maxParallel: 1 });
+  assert.ok(plain.ok);
+  if (plain.ok) assert.deepEqual([plain.cancelQueued, plain.cancelInProgress], [false, true]);
+  const short = compile(doc('g'), ctx({}), { maxParallel: 1 });
+  assert.ok(short.ok);
+  if (short.ok) assert.equal(short.cancelQueued, false);
+});
+
 test('compile: status functions become `when`, env and names are substituted, branch names never reach shell text', () => {
   const p = pipelineOf(
     [

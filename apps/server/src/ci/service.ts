@@ -767,6 +767,7 @@ export class CiService {
       rerun_of: o.rerunOf ?? null,
       concurrency_group: null,
       cancel_in_progress: 0,
+      cancel_queued: 0,
       plan: null,
       state: null,
       diagnostics: null,
@@ -846,6 +847,7 @@ export class CiService {
                 plan: JSON.stringify(c.plan),
                 concurrency_group: c.group,
                 cancel_in_progress: c.cancelInProgress ? 1 : 0,
+                cancel_queued: c.cancelQueued ? 1 : 0,
                 ...(c.plan.runsOn && this.#cs.runnersReady ? { runs_on: JSON.stringify(c.plan.runsOn) } : {}),
               };
       this.#cs.insertRun(row);
@@ -947,6 +949,16 @@ export class CiService {
   /* ---------- Starting runs ---------- */
 
   async #dispatch(workspaceId: string): Promise<void> {
+    // `cancel-queued` (T-975): a newer queued run of the group settles the OLDER QUEUED runs as superseded; the running one is left alone.
+    // Before the free-slot check: a group whose run holds the last slot would otherwise pile its queue up behind it.
+    const waiting = this.#cs.queuedRuns(workspaceId);
+    for (const run of waiting) {
+      if (!run.cancel_queued || !run.concurrency_group) continue;
+      const older = this.#cs
+        .activeInGroup(run.repo_id, run.concurrency_group, run.id)
+        .filter((o) => o.status === 'queued' && (o.created_at < run.created_at || (o.created_at === run.created_at && o.number < run.number)));
+      for (const o of older) await this.#cancelRow(o, 'superseded', { actor: 'pipeline', note: `for #${run.number}` }).catch(() => undefined);
+    }
     let free = this.#opts.maxRunsPerWorkspace - this.#cs.runningRuns(workspaceId).length;
     for (const run of this.#cs.queuedRuns(workspaceId)) {
       if (free <= 0) break;

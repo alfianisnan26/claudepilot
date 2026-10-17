@@ -100,7 +100,7 @@ const lookupFor = (e: EventContext, env: Record<string, string>, pipeline: strin
   };
 };
 
-export type Compiled = { ok: true; plan: Plan; group: string | null; cancelInProgress: boolean } | { ok: false; diagnostics: CiDiagnostic[] };
+export type Compiled = { ok: true; plan: Plan; group: string | null; cancelInProgress: boolean; cancelQueued: boolean } | { ok: false; diagnostics: CiDiagnostic[] };
 
 /** The first non-empty line of a script, as a name for a step that has none. */
 function nameFromScript(run: string): string {
@@ -220,6 +220,7 @@ export function compile(p: Pipeline, e: EventContext, opts: { maxParallel: numbe
     ok: true,
     group,
     cancelInProgress: p.concurrency?.cancelInProgress ?? false,
+    cancelQueued: p.concurrency?.cancelQueued ?? false,
     plan: {
       v: 1,
       runId: e.runId,

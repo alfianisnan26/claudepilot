@@ -65,7 +65,7 @@ export interface Pipeline {
   };
   env: Record<string, Interp>;
   timeoutMs: number | null;
-  concurrency: { group: Interp; cancelInProgress: boolean } | null;
+  concurrency: { group: Interp; cancelInProgress: boolean; cancelQueued: boolean } | null;
   /** The runner labels every job shares (T-557: one runner per run for now); null: the repository's workspace. */
   runsOn: string[] | null;
   /** What every job shares of `fallback` (owner, 2026-10-15): `workspace` runs it here when no runner is ready; null waits or fails. */
@@ -798,10 +798,15 @@ export function validatePipeline(file: string, text: string): Validated {
   if (own(root, 'concurrency')) {
     const c = root.concurrency;
     if (typeof c === 'string' || (isObj(c) && typeof c.group === 'string')) {
-      if (isObj(c)) checkKeys(d, c, ['concurrency'], ['group', 'cancel-in-progress']);
+      if (isObj(c)) checkKeys(d, c, ['concurrency'], ['group', 'cancel-in-progress', 'cancel-queued']);
       const group = interp(d, typeof c === 'string' ? c : (c as Obj).group, isObj(c) ? ['concurrency', 'group'] : ['concurrency'], { inputs: inputNames, env: envNames, matrix: new Set() });
-      if (group) concurrency = { group, cancelInProgress: isObj(c) ? boolOf(d, c, 'cancel-in-progress', ['concurrency']) : false };
-    } else d.error(['concurrency'], 'bad-type', 'concurrency is a group name, or { group, cancel-in-progress }.');
+      if (group)
+        concurrency = {
+          group,
+          cancelInProgress: isObj(c) ? boolOf(d, c, 'cancel-in-progress', ['concurrency']) : false,
+          cancelQueued: isObj(c) ? boolOf(d, c, 'cancel-queued', ['concurrency']) : false,
+        };
+    } else d.error(['concurrency'], 'bad-type', 'concurrency is a group name, or { group, cancel-in-progress, cancel-queued }.');
   }
 
   const jobs: PJob[] = [];

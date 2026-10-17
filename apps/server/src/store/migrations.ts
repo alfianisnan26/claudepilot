@@ -3275,6 +3275,15 @@ export const MIGRATIONS: Migration[] = [
     },
   },
   {
+    version: 787,
+    name: 'ci runs: cancel-queued (T-975)',
+    up(db) {
+      // T-975 (local-git-ci PRD, concurrency): `cancel_queued` is 1 when the pipeline's concurrency says `cancel-queued: true`: a newer run of
+      // the group cancels the OLDER QUEUED runs of the group (reason superseded) and leaves the running one. 0 for every row so far.
+      db.exec(`ALTER TABLE ci_runs ADD COLUMN cancel_queued INTEGER NOT NULL DEFAULT 0;`);
+    },
+  },
+  {
     version: 773,
     name: 'chat sessions: the agent a session runs as (T-294)',
     up(db) {

@@ -90,6 +90,8 @@ export interface RunRow {
   rerun_of: string | null;
   concurrency_group: string | null;
   cancel_in_progress: number;
+  /** 1: a newer run of the group cancels the older QUEUED ones and leaves the running one (T-975). */
+  cancel_queued: number;
   plan: string | null;
   state: string | null;
   diagnostics: string | null;
