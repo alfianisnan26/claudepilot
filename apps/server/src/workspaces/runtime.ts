@@ -70,7 +70,8 @@ export interface ShellSession {
 
 /** A command running in a workspace without a terminal (stdout and stderr merged). */
 export interface ExecSession {
-  write(data: string): void;
+  /** Bytes as given (every runtime hands them to its stream as they are; the app-port bridge sends binary). */
+  write(data: string | Buffer): void;
   /** Drops the connection; the process itself may keep running. */
   close(): void;
   onData(fn: (data: Buffer) => void): void;

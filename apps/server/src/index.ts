@@ -91,6 +91,7 @@ import { createConnect } from './connect/index.js';
 import { agentBundle } from './connect/bundle.js';
 import { wireConnect } from './workspaces/connect/wire.js';
 import type { Runtime } from './workspaces/runtime.js';
+import { AppPorts, routeAppHostUpgrades } from './appports/index.js';
 
 // A background task that rejects (a module reading a table a frozen database doesn't have, a probe, a scan) must not
 // take the portal down with every open terminal: log it and carry on. Synchronous throws still stop the process.
@@ -607,7 +608,16 @@ live.onPresence = (connection, presence, req) => platform.presence(connection, p
 // A new Needs you item tells each person who may decide it, once, through the notification pipeline (its quiet hours and matrix).
 bridgeAttentionNotify(attention, platform.bus, () => platform.owner.ownersOf({ type: 'portal', id: 'attention' }));
 platform.start();
-const app = createApp(portal, workspaces, store, accounts, pools, reconciler, health, chatController, { serveWeb: !config.dev, notify, poolService, mcp: mcpSets, skills, personas, settings: settingsModule, secrets: secretRotations, portalMcp, knowledge, tickets, ci, browser, claudeUsage, usageSpend, lab, repos, glance, attention, codespaces, platform, claudeVersions, connect });
+// App ports (T-948, docs/prd/app-ports.md): a web app on a workspace's loopback at its own host `app-<name>-<port>.<PORT_PROXY_HOST_SUFFIX>`.
+// Its proxy answers those hosts before the portal's routes and socket modules (below); off when the suffix is unset.
+const appPorts = new AppPorts({
+  suffix: config.portProxy.hostSuffix,
+  portalPort: config.port,
+  denyPorts: config.portProxy.denyPorts,
+  workspaces,
+  sessionValid: (token) => !!portal.session(token),
+});
+const app = createApp(portal, workspaces, store, accounts, pools, reconciler, health, chatController, { serveWeb: !config.dev, notify, poolService, mcp: mcpSets, skills, personas, settings: settingsModule, secrets: secretRotations, portalMcp, knowledge, tickets, ci, browser, claudeUsage, usageSpend, lab, repos, glance, attention, codespaces, platform, claudeVersions, connect, appPorts });
 const handleApi = getRequestListener(app.fetch);
 const server = createServer();
 // Before the socket modules: ties their connections to the sign-in that opened them (QA-001) and drops unanswered upgrades.
@@ -632,12 +642,15 @@ if (config.dev) {
   });
   server.on('request', (req, res) => {
     const url = req.url ?? '/';
-    if (url.startsWith('/api/') || url === '/healthz' || url === '/mcp' || url.startsWith('/mcp?') || url.startsWith('/hooks/') || url.startsWith('/connect/')) void handleApi(req, res);
+    if (appPorts.proxy.owns(req.headers.host)) void appPorts.proxy.request(req, res);
+    else if (url.startsWith('/api/') || url === '/healthz' || url === '/mcp' || url.startsWith('/mcp?') || url.startsWith('/hooks/') || url.startsWith('/connect/')) void handleApi(req, res);
     else vite.middlewares(req, res);
   });
 } else {
-  server.on('request', (req, res) => void handleApi(req, res));
+  server.on('request', (req, res) => void (appPorts.proxy.owns(req.headers.host) ? appPorts.proxy.request(req, res) : handleApi(req, res)));
 }
+// After every module (and Vite's HMR) attached its `upgrade` listener: an app host's upgrade goes to the app-port proxy alone.
+routeAppHostUpgrades(server, appPorts.proxy);
 
 server.listen(config.port, config.host, () => {
   const where = `http://localhost:${config.port}`;

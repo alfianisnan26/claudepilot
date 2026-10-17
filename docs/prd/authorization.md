@@ -454,6 +454,8 @@ Generated from the REAL app (`createApp` with stub services, `app.routes`: 261 r
 | `POST /api/workspaces` | obj(target operate body target; team member of body ownerTeamId when set) in:create(workspace) | a new workspace is owned by the creator (or the team); `local` and host-level targets are admins only |
 | `PUT /api/workspaces/:target/:name/account` | obj(workspace manage path target+name; account_pool operate body poolId optional) consent: credential | an account pool delivers API keys into the workspace: readable by its operators (sharing rules) |
 | `GET /api/workspaces/:target/:name/preflight` | obj(workspace operate path target+name) | runs checks inside the workspace |
+| `GET /api/workspaces/:target/:name/ports` | obj(workspace operate path target+name) | app ports (T-948): runs a command inside the workspace to read its listening ports |
+| `POST /api/workspaces/:target/:name/ports/open` | obj(workspace operate path target+name) | app ports (T-948): a one-time code for the app host, audit workspace.port.open; the app host asks `operate` again on every request |
 | `POST /api/workspaces/:target/:name/adopt` | obj(workspace manage path target+name) |  |
 | `POST /api/workspaces/:target/:name/start` | obj(workspace operate path target+name) | ending running sessions of others: the system acts, it is audited |
 | `POST /api/workspaces/:target/:name/stop` | obj(workspace operate path target+name) | ending running sessions of others: the system acts, it is audited |
