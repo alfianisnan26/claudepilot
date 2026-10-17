@@ -8,7 +8,7 @@ import { api, errorText } from '@/lib/api';
 /**
  * Share ONE session with an account (owner, 2026-10-17: "delegate the session ... instead delegating full workspace"). View: read it live.
  * Operate: also send, stop and answer its approvals. Never the terminal, files, other sessions, Bypass, model or end. In Bypass, operate
- * means the person can make the agent run anything in the workspace: said in red.
+ * means the person can make the agent run anything in the workspace: the owner ticks that on the record (the server asks for it).
  */
 export function ShareSessionDialog({ sessionId, bypass, open, onClose }: { sessionId: string; bypass: boolean; open: boolean; onClose: () => void }) {
   const toast = useToast();
@@ -17,6 +17,8 @@ export function ShareSessionDialog({ sessionId, bypass, open, onClose }: { sessi
   const [pick, setPick] = useState('');
   const [level, setLevel] = useState<SessionGrantLevel>('view');
   const [busy, setBusy] = useState(false);
+  const [ack, setAck] = useState(false);
+  const needsAck = level === 'operate' && bypass;
 
   const load = useCallback(async () => {
     try {
@@ -35,9 +37,10 @@ export function ShareSessionDialog({ sessionId, bypass, open, onClose }: { sessi
     if (!pick) return;
     setBusy(true);
     try {
-      await api.grantSession(sessionId, pick, level);
+      await api.grantSession(sessionId, pick, level, needsAck && ack);
       toast('Shared');
       setPick('');
+      setAck(false);
       await load();
     } catch (e) {
       toast(errorText(e, 'Couldn’t share it.'), 'error');
@@ -98,13 +101,16 @@ export function ShareSessionDialog({ sessionId, bypass, open, onClose }: { sessi
             ))}
           </div>
         </fieldset>
-        {level === 'operate' && bypass && (
-          <p role="alert" className="flex items-start gap-2 rounded-xl bg-danger-soft px-3.5 py-2.5 text-sm font-medium text-danger">
-            <ShieldAlert className="mt-0.5 size-4 shrink-0" />
-            This session is in Bypass: whoever can message it can make the agent run any command in its workspace.
-          </p>
+        {needsAck && (
+          <label className="flex min-h-11 cursor-pointer items-start gap-2.5 rounded-xl bg-danger-soft px-3.5 py-2.5 text-sm font-medium text-danger">
+            <input type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} className="mt-0.5 size-5 shrink-0 accent-current" />
+            <span className="min-w-0 [overflow-wrap:anywhere]">
+              <ShieldAlert className="mr-1 inline size-4 align-[-3px]" aria-hidden="true" />
+              Bypass: this account can make the agent run any command in its workspace. I accept that.
+            </span>
+          </label>
         )}
-        <Button size="lg" loading={busy} disabled={!pick} onClick={() => void grant()} className="w-full">
+        <Button size="lg" loading={busy} disabled={!pick || (needsAck && !ack)} onClick={() => void grant()} className="w-full">
           Share
         </Button>
       </div>

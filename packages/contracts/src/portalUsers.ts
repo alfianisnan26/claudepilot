@@ -76,8 +76,20 @@ export interface DelegatedSession {
   level: SessionGrantLevel;
 }
 
+export interface SessionGrantRequest {
+  userId: string;
+  level: SessionGrantLevel;
+  acknowledgeBypass?: boolean;
+}
+
+/** The most events one delegate read returns (`?after=` or a page); past it, the newest. */
+export const DELEGATED_EVENTS_MAX = 200;
+
 export const SESSION_GRANT_API = {
-  /** Full session only. GET: `SessionGrant[]`. PUT `{ userId, level }`: the grant. */
+  /**
+   * Full session only. GET: `SessionGrant[]`. PUT `SessionGrantRequest`: the grant. Operate on a session in Bypass needs
+   * `acknowledgeBypass: true` (whoever can message it can make the agent run any command in its workspace).
+   */
   grants: (sessionId: string) => `/api/admin/session-grants/${encodeURIComponent(sessionId)}`,
   /** Full session only. DELETE: revoke one account's grant. */
   grant: (sessionId: string, userId: string) => `/api/admin/session-grants/${encodeURIComponent(sessionId)}/${encodeURIComponent(userId)}`,
@@ -85,7 +97,11 @@ export const SESSION_GRANT_API = {
   mine: '/api/me/sessions',
   /** An account session with a grant. GET: `DelegatedSession`. */
   one: (id: string) => `/api/me/sessions/${encodeURIComponent(id)}`,
-  /** GET `?after=<seq>`: the events after a seq (the chat's own history); `?before=&limit=`: an older page. */
+  /**
+   * GET `?after=<seq>`: `ChatEvent[]` after a seq, at most `DELEGATED_EVENTS_MAX` (the newest when more); otherwise a `ChatEventPage`
+   * (`?before=&limit=`). Only what the delegate's view shows: messages, tool names, approvals and errors of the main thread; no tool
+   * output, thinking, inputs or sub-agent lines.
+   */
   events: (id: string) => `/api/me/sessions/${encodeURIComponent(id)}/events`,
   /** POST `{ text, uuid }` (operate). */
   send: (id: string) => `/api/me/sessions/${encodeURIComponent(id)}/send`,

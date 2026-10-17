@@ -123,7 +123,8 @@ export const api = {
   me: () => request<SignedInAs>('GET', PORTAL_USER_API.me),
   // Session delegation (owner, 2026-10-17).
   sessionGrants: (sessionId: string) => request<SessionGrant[]>('GET', SESSION_GRANT_API.grants(sessionId)),
-  grantSession: (sessionId: string, userId: string, level: SessionGrantLevel) => request<SessionGrant>('PUT', SESSION_GRANT_API.grants(sessionId), { userId, level }),
+  grantSession: (sessionId: string, userId: string, level: SessionGrantLevel, acknowledgeBypass = false) =>
+    request<SessionGrant>('PUT', SESSION_GRANT_API.grants(sessionId), { userId, level, acknowledgeBypass }),
   revokeSession: (sessionId: string, userId: string) => request<{ removed: boolean }>('DELETE', SESSION_GRANT_API.grant(sessionId, userId)),
   delegated: () => request<DelegatedSession[]>('GET', SESSION_GRANT_API.mine),
   delegatedOne: (id: string) => request<DelegatedSession>('GET', SESSION_GRANT_API.one(id)),
