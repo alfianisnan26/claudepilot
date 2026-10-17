@@ -8,7 +8,7 @@
 // changes an environment's protection: those are routes a signed-in person calls, and an agent's token reaches no route.
 import { AppError } from '@isnanme/core';
 import { BUMP_NOTE_MAX, BUMP_PRIORITY, BUMP_REFUSAL_LABEL, CI_BUMP_MODE_LABEL, CI_STATUSES, objectRef, sessionRef, type BumpMode, type CiRepo, type CiRun, type CiRunSummary, type CiStatus } from '@portal/contracts';
-import { actorOfPrincipal, can, requireCan } from '../authz/seam.js';
+import { actorOfPrincipal, can, requireCan, seesEverything, visible } from '../authz/seam.js';
 import { bumpNote } from '../chat/bump.js';
 import { fullInput } from '../portalmcp/compact.js';
 import { portalTools, z, type PortalToolContext, type ToolRegistry } from '../portalmcp/registry.js';
@@ -116,7 +116,14 @@ export function registerCiTools(ci: CiService, sessions: CiSessionsPort | undefi
           .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
           .slice(0, limit);
       } else {
-        items = ci.list({ workspace: args.workspace_id, branch: args.branch, ticket: args.ticket, status, limit }).items;
+        const filter = { workspace: args.workspace_id, branch: args.branch, ticket: args.ticket, status };
+        const actor = actorOfPrincipal(ctx.principal);
+        // T-356: a person's token sees the runs the seam lets it view, as the route does (D-58): every run is checked with `view` before it
+        // is shown (`keep`), so a run of another person's workspace is absent, not refused. Only an actor no policy can hide a run from
+        // takes the unfiltered list.
+        items = seesEverything(actor)
+          ? ci.list({ ...filter, limit }).items
+          : ci.listPage(filter, { caller: ctx.actor, limit, keep: (r) => visible(actor, 'ci_run', [r], (x) => x.id).length > 0 }).items;
       }
       return {
         summary: `${items.length} run${items.length === 1 ? '' : 's'}`,

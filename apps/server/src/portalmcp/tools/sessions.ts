@@ -8,6 +8,7 @@ import { paginate, pageInput } from '../paging.js';
 import { PortalToolError, portalTools, type PortalToolContext, type ToolRegistry } from '../registry.js';
 import { cleanText } from '../sanitize.js';
 import { NO_PARENT } from '../authz.js';
+import { NO_WORKSPACE } from '../../workspaces/authz.js';
 import { assertCanChange, costFields, resolveWorkspace, uiLink } from './common.js';
 import type { PortalToolDeps } from './deps.js';
 
@@ -101,7 +102,7 @@ export function registerSessionTools(
     try {
       requireCan(actorOfPrincipal(ctx.principal), 'operate', workspaceRef(w.id));
     } catch {
-      throw new AppError('NOT_FOUND', `No workspace “${raw.trim()}”. List them with workspace_list.`);
+      throw new AppError('NOT_FOUND', NO_WORKSPACE);
     }
     return w.id;
   };

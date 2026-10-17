@@ -186,12 +186,29 @@ export const uiOnly = (what: string, where: string, details?: unknown) =>
 const NAME = /^[a-z][a-z0-9_]{2,47}$/;
 export const DESCRIPTION_MAX = 1_000;
 
+/**
+ * FR19 (T-356): with this set, the registry refuses a tool that has no declared access policy (`declareToolPolicies` in its module's `authz.ts`,
+ * declared BEFORE the tool is registered) unless it is in `exempt`, the closed list of tools that predate the rule (`undeclaredTools.ts`; it only
+ * ever shrinks). `isDeclared` is injected so the registry stays free of the seam.
+ */
+export interface RequireDeclared {
+  isDeclared(name: string): boolean;
+  exempt: ReadonlySet<string>;
+}
+
 /** The tools of this portal. One instance (`portalTools`) is the default; tests make their own. */
 export class ToolRegistry {
   readonly #tools = new Map<string, PortalToolDefinition>();
+  readonly #requireDeclared: RequireDeclared | undefined;
+
+  constructor(opts: { requireDeclared?: RequireDeclared } = {}) {
+    this.#requireDeclared = opts.requireDeclared;
+  }
 
   register<S extends z.ZodObject>(tool: PortalToolDefinition<S>): void {
     if (!NAME.test(tool.name)) throw new Error(`portal tool name "${tool.name}" must be snake_case, 3 to 48 characters`);
+    if (this.#requireDeclared && !this.#requireDeclared.isDeclared(tool.name) && !this.#requireDeclared.exempt.has(tool.name))
+      throw new Error(`portal tool "${tool.name}" declares no access policy (FR19): declare it with declareToolPolicies in its module's authz.ts before registering it`);
     if (this.#tools.has(tool.name)) throw new Error(`portal tool "${tool.name}" is already registered`);
     if (!tool.title.trim()) throw new Error(`portal tool "${tool.name}" needs a title`);
     if (!tool.description.trim() || tool.description.length > DESCRIPTION_MAX)

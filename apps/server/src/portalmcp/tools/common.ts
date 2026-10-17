@@ -1,6 +1,7 @@
 import { AppError } from '@isnanme/core';
 import { sessionCost, type ChatSession, type Workspace } from '@portal/contracts';
 import { config } from '../../config.js';
+import { NO_WORKSPACE } from '../../workspaces/authz.js';
 import { findWorkspace } from '../../workspaces/identity.js';
 import { PortalToolError, type PortalToolContext } from '../registry.js';
 import { cleanText, type UntrustedText } from '../sanitize.js';
@@ -61,7 +62,7 @@ export function resolveWorkspace(all: Workspace[], idOrName: string, resolve?: (
     if (named.length > 1)
       throw new PortalToolError('AMBIGUOUS', `${named.length} workspaces are named “${wanted}”. Use the full id.`, { matches: named.map((w) => w.id) });
   }
-  throw new AppError('NOT_FOUND', `No workspace “${wanted}”. List them with workspace_list.`);
+  throw new AppError('NOT_FOUND', NO_WORKSPACE);
 }
 
 /** The portal's database must be writable for any change; Locked and Frozen get the codes PRD §16 names. */

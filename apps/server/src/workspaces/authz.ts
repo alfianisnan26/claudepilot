@@ -11,9 +11,9 @@
 // There is no resolver of the `workspace` type yet, so nothing behaves differently: the seam answers the one owner, and an agent only its own.
 
 import { AppError } from '@isnanme/core';
-import { isStableWorkspaceId, objectRef, workspaceRef, type ObjectCheck, type RoutePolicies, type ToolPolicies, type Verb } from '@portal/contracts';
+import { FOUNDING_USER_ID, isStableWorkspaceId, objectRef, workspaceRef, type ObjectCheck, type RoutePolicies, type ToolPolicies, type UserId, type Verb } from '@portal/contracts';
 import { createMiddleware } from 'hono/factory';
-import { actorOf, declarePolicies, declareToolPolicies, requireCan } from '../authz/seam.js';
+import { actorOf, declarePolicies, declareToolPolicies, registerResolver, requireCan } from '../authz/seam.js';
 
 const on = (verb: Verb, param: string, audit?: string): { kind: 'objects'; checks: ObjectCheck[]; audit?: string } => ({
   kind: 'objects',
@@ -78,11 +78,17 @@ export const WORKSPACE_POLICIES: RoutePolicies = {
   [`DELETE ${WS}/claudes/:claude`]: { kind: 'objects', checks: [wsCheck('manage'), claudeCheck('manage')] },
 };
 
+/**
+ * T-356: the tools' one answer for a workspace that is missing, ambiguous by name, or not the caller's (the dispatch's check and
+ * `resolveWorkspace` say the same, byte for byte, and never echo what was asked).
+ */
+export const NO_WORKSPACE = 'No workspace found. List them with workspace_list.';
+
 /** `workspace_rename` is an admin token's tool (its scope); the seam is asked for `operate` on the workspace the id resolves to. */
 export const WORKSPACE_TOOL_POLICIES: ToolPolicies = {
-  workspace_rename: { kind: 'objects', checks: [{ type: 'workspace', verb: 'operate', arg: 'id' }] },
+  workspace_rename: { kind: 'objects', checks: [{ type: 'workspace', verb: 'operate', arg: 'id', notFound: NO_WORKSPACE }] },
   /** `workspace_resources` (T-98): an admin token's tool, `operate` on the workspace; a change is audited as `workspace.resources`. */
-  workspace_resources: { kind: 'objects', checks: [{ type: 'workspace', verb: 'operate', arg: 'id' }], confirm: true, audit: 'workspace.resources' },
+  workspace_resources: { kind: 'objects', checks: [{ type: 'workspace', verb: 'operate', arg: 'id', notFound: NO_WORKSPACE }], confirm: true, audit: 'workspace.resources' },
 };
 
 /**
@@ -143,6 +149,46 @@ export const targetBodyGuard = (verb: Verb) =>
     requireCan(actorOf(c), verb, objectRef('target', target));
     await next();
   });
+
+/** What the `workspace` resolver needs from the manager: its one resolver of a reference, and the workspaces that answer to a bare name or label. */
+export interface WorkspaceAuthzFacts {
+  /** A stable id (`ws_…`) or `<target>/<name>` alias (also a label the workspace had), to the `<target>/<name>` the seam knows; null when unknown. */
+  resolve(ref: string): { legacyId: string } | null;
+  /** The `<target>/<name>` of every workspace whose name or label is exactly `name`. */
+  named(name: string): string[];
+}
+
+/**
+ * T-356: the identity the seam asks about for any form a tool (or a route) may be given: the stable id, `<target>/<name>`, an old label, or the
+ * bare name when only one workspace has it (the forms `resolveWorkspace` accepts). null when none matches, or when a bare name is ambiguous: a
+ * name that could be two workspaces is refused like a missing one, never decided on one of them.
+ */
+export function canonicalWorkspaceId(facts: WorkspaceAuthzFacts, ref: string): string | null {
+  const wanted = typeof ref === 'string' ? ref.trim() : '';
+  if (!wanted) return null;
+  const known = facts.resolve(wanted);
+  if (known) return known.legacyId;
+  if (wanted.includes('/')) return null;
+  const named = facts.named(wanted);
+  return named.length === 1 ? named[0]! : null;
+}
+
+/**
+ * T-356: registers the `workspace` resolver of the seam, which resolves every form of a workspace reference (see `canonicalWorkspaceId`), so
+ * `workspace_rename` and `workspace_resources` (which take an id, an alias or a name) are decided on the workspace itself. `ownerOf` answers
+ * who owns one (the founding user until workspaces record an owner). Not wired in start-up yet: registering it turns every `workspace`
+ * decision from "the one owner holds it" into "its owner holds it", the switch of multi-user (PRD authorization §B.2); until then no
+ * resolver is registered and nothing behaves differently.
+ */
+export function registerWorkspaceAuthz(facts: WorkspaceAuthzFacts, ownerOf: (workspaceId: string) => UserId = () => FOUNDING_USER_ID): void {
+  registerResolver({
+    type: 'workspace',
+    resolve(id) {
+      const canonical = canonicalWorkspaceId(facts, id);
+      return canonical ? { ref: workspaceRef(canonical), owner: { kind: 'user', id: ownerOf(canonical) }, attrs: { workspaceId: canonical } } : null;
+    },
+  });
+}
 
 let declared = false;
 /** Declares the routes once (idempotent: modules load more than once in tests). */
