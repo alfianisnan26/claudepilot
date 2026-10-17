@@ -464,7 +464,7 @@ export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = p
     name: 'ticket_verdict',
     title: 'Record a QA or review verdict',
     description:
-      'Records a verdict (pass or fail) of role qa or review on ONE exact commit of a ticket’s work: the full 40-character sha you verified. Only a QA or review session of that role may: the author of the work, its lead and every other session are refused. A branch that moves afterwards is a different commit, so a pass on the old one no longer counts. With no verdict and no role it lists the ticket’s verdicts; with head (a full sha) it also says whether that head is passing.',
+      'Records a verdict (pass or fail) of role qa or review on ONE exact commit of a ticket’s work: the full 40-character sha you verified. Only a QA or review session of that role may (the agent it was spawned as, `session_spawn` role: its name has qa, verif or review in it, or is a tester or checker such as perf-tester or ux-checker; a session started on this ticket counts as an author): the author of the work, its lead and every other session are refused. A branch that moves afterwards is a different commit, so a pass on the old one no longer counts. With no verdict and no role it lists the ticket’s verdicts; with head (a full sha) it also says whether that head is passing.',
     scope: 'agent',
     input: z.object({
       id: z.string().max(20).describe('T-12'),

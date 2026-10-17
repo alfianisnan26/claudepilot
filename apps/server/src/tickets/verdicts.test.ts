@@ -22,6 +22,9 @@ test('normalizeSha and verdictRoleOfAgent: only a full sha, and only QA or revie
   assert.equal(verdictRoleOfAgent('qa-verifier'), 'qa');
   assert.equal(verdictRoleOfAgent('konfersi-qa'), 'qa');
   assert.equal(verdictRoleOfAgent('reviewer'), 'review');
+  // T-969: the persona's checking roles (perf-tester, ux-checker) and lanes built on them are QA; builders with look-alike names are not.
+  for (const a of ['perf-tester', 'ux-checker', 'konfersi-perf-tester', 'event-ux-checker', 'tester']) assert.equal(verdictRoleOfAgent(a), 'qa', a);
+  for (const a of ['test-writer', 'checkout-fixer', 'contester', 'spellchecker']) assert.equal(verdictRoleOfAgent(a), null, a);
   for (const a of ['implementer', 'orchestrator', 'scribe', '', null, undefined]) assert.equal(verdictRoleOfAgent(a), null, String(a));
 });
 
@@ -232,6 +235,35 @@ test('QA N5 (T-325 S1c): a lineage ancestor of a lead holder (the session it con
     assert.equal(v.actor, 'session:qaOldKid');
   } finally {
     h.done();
+  }
+});
+
+test('T-969: a lane spawned as perf-tester or ux-checker records a QA verdict; its builder, an implementer and a look-alike builder name are refused', async () => {
+  const r = await rig();
+  try {
+    r.sessions.add({ id: 'perf', workspaceId: WS, agent: 'konfersi-perf-tester', parentId: 'lead' });
+    r.sessions.add({ id: 'ux', workspaceId: WS, agent: 'ux-checker', parentId: 'lead' });
+    assert.equal(record(r, 'perf', 'qa', 'pass', A).actor, 'session:perf');
+    assert.equal(record(r, 'ux', 'qa', 'fail', A).actor, 'session:ux');
+    const refused = (who: string, why: RegExp) => assert.throws(() => record(r, who, 'qa', 'pass', A), (e: any) => e.code === 'FORBIDDEN' && why.test(e.message), who);
+    refused('impl', /author/); // the builder of the work
+    r.sessions.add({ id: 'writer', workspaceId: WS, agent: 'test-writer', parentId: 'lead' });
+    refused('writer', /Only a QA or review/); // an implementer role with a testing word in it
+    r.sessions.add({ id: 'perfKid', workspaceId: WS, agent: 'perf-tester', parentId: 'impl' });
+    refused('perfKid', /descends from/); // a tester the builder started
+    r.sessions.add({ id: 'perfOn', workspaceId: WS, agent: 'perf-tester', parentId: 'lead', ticketId: r.id });
+    refused('perfOn', /author/); // started on the ticket: an author, as for any QA name (M7)
+    assert.equal(r.tickets.verdicts(UI, r.id).length, 2);
+  } finally {
+    r.done();
+  }
+});
+
+test('MUTATION (T-969): with the checking words removed from the role pattern, perf-tester and ux-checker are no verifiers, so the test above would fail', () => {
+  const old = (agent: string) => (/review/.test(agent) ? 'review' : /(^|[-_])qa([-_]|$)|verif/.test(agent) ? 'qa' : null);
+  for (const a of ['perf-tester', 'ux-checker']) {
+    assert.equal(old(a), null, `${a}: the pattern before T-969`);
+    assert.equal(verdictRoleOfAgent(a), 'qa', `${a}: the pattern now`);
   }
 });
 

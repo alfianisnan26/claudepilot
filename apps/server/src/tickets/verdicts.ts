@@ -20,7 +20,9 @@ export const normalizeSha = (v: unknown): string | null => {
 export function verdictRoleOfAgent(agent: string | null | undefined): VerdictRole | null {
   const a = (agent ?? '').toLowerCase();
   if (/review/.test(a)) return 'review';
-  if (/(^|[-_])qa([-_]|$)|verif/.test(a)) return 'qa';
+  // T-969: the checking roles of the persona are agents too (`perf-tester`, `ux-checker`, and the program lanes built on them): a lane
+  // spawned as one is a QA session. Whole words only (`tester`, `checker`), so `test-writer` or `checkout-fixer` is no verifier.
+  if (/(^|[-_])qa([-_]|$)|verif|(^|[-_])(tester|checker)([-_]|$)/.test(a)) return 'qa';
   return null;
 }
 
