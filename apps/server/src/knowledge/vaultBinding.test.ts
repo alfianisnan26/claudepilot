@@ -22,7 +22,8 @@ function fakes() {
 
 test('T-436 S3: wireVaultBinding sets the lookup, the rebind and the fail-closed hooks', () => {
   const { calls, agents, knowledge } = fakes();
-  assert.equal(agents.vaultsFor, undefined);
+  // typeof, not `=== undefined`: a strict `assert.equal` narrows `vaultsFor` to undefined and the call below would not typecheck.
+  assert.equal(typeof agents.vaultsFor, 'undefined');
   wireVaultBinding(agents, knowledge);
   assert.deepEqual(agents.vaultsFor?.('docker/api'), ['v1']);
   knowledge.onAgentWorkspacesChange?.();
