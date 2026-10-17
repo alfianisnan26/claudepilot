@@ -10,7 +10,7 @@ import { Hono } from 'hono';
 import { clearResolvers } from '../authz/seam.js';
 import { registerChatAuthz } from './authz.js';
 import { createChatRoutes } from './routes.js';
-import { APPLIED, firstTurn, init, line, liveSession, ok, sleep, until, USAGE_API_KEY, type Live } from './testkit.js';
+import { firstTurn, init, line, liveSession, until, type Live } from './testkit.js';
 
 afterEach(() => clearResolvers());
 
@@ -22,37 +22,10 @@ const csidOf = (s: Live, id = s.id) => s.controller.get(id)!.claudeSessionId;
 const resultLine = (sessionId: string) =>
   line({ type: 'result', subtype: 'success', total_cost_usd: 0.01, duration_ms: 10, usage: { input_tokens: 1, output_tokens: 1 }, is_error: false, session_id: sessionId });
 
-function controlsOf(s: Live) {
-  return s.ws.sends.flatMap((x) => {
-    try {
-      const o = JSON.parse(x.line) as { type?: string; request_id?: string; request?: Record<string, unknown> };
-      return o.type === 'control_request' && o.request_id && o.request ? [{ id: o.request_id, request: o.request }] : [];
-    } catch {
-      return [];
-    }
-  });
-}
-
-/** The newest process answers every control request the portal asks (settings, modes, models) until `p` settles. */
-async function answered<T>(s: Live, p: Promise<T>): Promise<T> {
-  let settled = false;
-  p.then(
-    () => (settled = true),
-    () => (settled = true),
-  );
-  const seen = new Set<string>(controlsOf(s).map((c) => c.id));
-  while (!settled) {
-    for (const c of controlsOf(s)) {
-      if (seen.has(c.id)) continue;
-      seen.add(c.id);
-      const tail = s.ws.tails.at(-1)!;
-      if (c.request.subtype === 'get_settings') tail.push(ok(c.id, APPLIED));
-      else if (c.request.subtype === 'set_permission_mode') tail.push(ok(c.id, { mode: String(c.request.mode) }));
-      else tail.push(ok(c.id));
-    }
-    await sleep(5);
-  }
-  return p;
+/** T-1049: the fake host answers each control request in the tick it is written (no polling), and a generous timeout never fires under load. */
+function answering(s: Live) {
+  s.ws.autoRespond = true;
+  s.controller.controlTimeoutMs = 5000;
 }
 
 test('T-294: a session with an agent starts Claude Code with --agent <name> and shows it; one without has no --agent', async () => {
@@ -94,7 +67,7 @@ test('T-294: an agent name that is not a plain name is refused before anything r
 test('T-294: the agent comes back at every relaunch: a resume after the process went away, a restart, and a recovery', async () => {
   const s = await liveSession({}, false, { agent: 'qa-verifier' });
   try {
-    s.controller.controlTimeoutMs = 150;
+    answering(s);
     await firstTurn(s);
 
     // The process goes away; the next resume relaunches it.
@@ -105,13 +78,13 @@ test('T-294: the agent comes back at every relaunch: a resume after the process 
     const starts = s.ws.startArgs.length;
     const resuming = s.controller.control(s.id, 'resume');
     await until(() => s.controller.get(s.id)!.process === 'live' && s.ws.startArgs.length === starts + 1);
-    await answered(s, resuming).catch(() => undefined);
+    await resuming;
     assert.ok(lastStart(s).includes('--resume'), 'resumed');
     assert.equal(agentOf(lastStart(s)), 'qa-verifier', 'resume');
     await until(() => s.controller.get(s.id)!.state === 'idle');
 
     // A restart (a person's, or one that applies new tools).
-    await answered(s, s.controller.restart(s.id, { why: 'mcp' }));
+    await s.controller.restart(s.id, { why: 'mcp' });
     assert.equal(s.ws.startArgs.length, starts + 2);
     assert.equal(agentOf(lastStart(s)), 'qa-verifier', 'restart');
 
@@ -126,7 +99,7 @@ test('T-294: the agent comes back at every relaunch: a resume after the process 
       line({ type: 'user', message: { role: 'user', content: 'text the portal never sent' }, session_id: csidOf(s), parent_tool_use_id: null, uuid: randomUUID(), isReplay: true, isSynthetic: true, origin: { kind: 'peer', from: task, senderTaskId: task, name: 'general-purpose', body: 'hello' } }),
     );
     await until(() => s.controller.get(s.id)!.state === 'ended');
-    const back = await answered(s, s.controller.recover(s.id));
+    const back = await s.controller.recover(s.id);
     assert.notEqual(back.state, 'ended');
     assert.equal(s.ws.startArgs.length, starts + 3);
     assert.equal(agentOf(lastStart(s)), 'qa-verifier', 'recover');
@@ -139,13 +112,13 @@ test('T-294: the agent comes back at every relaunch: a resume after the process 
 test('T-294: a session woken from sleep starts as its agent again', async () => {
   const s = await liveSession({ idleSleepMs: 200 }, true, { agent: 'scribe' });
   try {
-    s.controller.controlTimeoutMs = 150;
+    answering(s);
     s.tail.push(init(s.id));
     await until(() => s.controller.get(s.id)!.process === 'asleep', 4000);
     const starts = s.ws.startArgs.length;
     const waking = s.controller.control(s.id, 'resume');
     await until(() => s.controller.get(s.id)!.process === 'live' && s.ws.startArgs.length === starts + 1);
-    await answered(s, waking).catch(() => undefined);
+    await waking;
     assert.equal(agentOf(lastStart(s)), 'scribe');
   } finally {
     await s.done();
@@ -155,7 +128,7 @@ test('T-294: a session woken from sleep starts as its agent again', async () => 
 test('T-294: a Move keeps the agent: the new Claude Code session on the other Claude starts as the same agent', async () => {
   const s = await liveSession({}, false, { agent: 'implementer' });
   try {
-    s.controller.controlTimeoutMs = 150;
+    answering(s);
     const work = await s.controller.createClaude('docker/ws1', 'Work');
     const moving = s.controller.switchClaude(s.id, work.id, { handoff: 'skip' });
     // The new Claude answers the opening (as switch.test.ts does).
@@ -166,8 +139,6 @@ test('T-294: a Move keeps the agent: the new Claude Code session on the other Cl
     tail.push(init(newId));
     tail.push(line({ type: 'assistant', message: { content: [{ type: 'text', text: 'Got it.' }] }, parent_tool_use_id: null, uuid: randomUUID() }));
     tail.push(resultLine(newId));
-    await until(() => controlsOf(s).some((c) => c.request.subtype === 'get_usage'));
-    tail.push(ok(controlsOf(s).findLast((c) => c.request.subtype === 'get_usage')!.id, USAGE_API_KEY));
     const moved = await moving;
     assert.equal(moved.claudeName, 'Work');
     assert.equal(moved.agent, 'implementer', 'the session keeps its agent');
