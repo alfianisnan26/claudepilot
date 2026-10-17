@@ -21,6 +21,9 @@ import {
   type EndpointRequest,
   type LoginRequest,
   type CreatePortalUserRequest,
+  type DelegatedSession,
+  type SessionGrantLevel,
+  SESSION_GRANT_API,
   type ChangeMyPasswordRequest,
   normalizeEmail,
   type SignedInAs,
@@ -45,6 +48,7 @@ import { Hono, type Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { bodyLimit } from 'hono/body-limit';
 import { PortalUsers } from './identity/users.js';
+import { SessionGrants } from './identity/grants.js';
 import { fingerprint } from './identity/throttle.js';
 import { csrf } from 'hono/csrf';
 import { createMiddleware } from 'hono/factory';
@@ -226,6 +230,8 @@ export function createApp(
   // T-118 MU1-min: email accounts beside the server code (identity/users.ts).
   // Review #10: reads (roleOf, verify) use the read handle, so a frozen store does not end every account session; writes stay guarded.
   const users = new PortalUsers(() => store.db, undefined, undefined, () => (store.writable ? store.db : null));
+  // Session delegation (owner, 2026-10-17): one session to one account at view or operate.
+  const grants = new SessionGrants(() => store.db, () => (store.writable ? store.db : null));
   // Review #5: the attempt counters are swept once an hour.
   const sweep = setInterval(() => {
     try {
@@ -375,6 +381,71 @@ export function createApp(
     return c.json(success({ ok: true }));
   });
 
+  // The delegate's door gets the same hostile workspace-id check every signed-in route gets (QA-029), before a handler sees the body.
+  app.use('/api/me/*', async (c, next) => {
+    const field = await hostileWorkspaceField(c);
+    if (field) throw new AppError('VALIDATION_FAILED', 'A workspace is `<target>/<name>`.', { details: { [field]: 'Not a workspace.' } });
+    await next();
+  });
+  // ---------- Session delegation: the delegate's door (an account session holding a grant; checked on EVERY request) ----------
+  const delegate = (c: Context<Env>, need: SessionGrantLevel) => {
+    const s = portal.anySession(getCookie(c, cookie));
+    if (!s) throw new AppError('UNAUTHORIZED', 'Sign in again.');
+    if (!s.userId) throw new AppError('NOT_FOUND', 'Not found.');
+    const id = chatController.resolve(c.req.param('id') ?? '');
+    const level = grants.levelOf(id, s.userId);
+    // The same not-found for a session that does not exist and one that is not yours: nothing is told.
+    if (!level) throw new AppError('NOT_FOUND', 'Not found.');
+    if (need === 'operate' && level !== 'operate') throw new AppError('FORBIDDEN', 'This session is shared with you to view only.');
+    return { id, userId: s.userId, level };
+  };
+  const delegated = (id: string, level: SessionGrantLevel): DelegatedSession | null => {
+    const x = chatController.get(id);
+    return x ? { id: x.id, title: x.title, state: x.state, workspaceId: x.workspaceId, waiting: x.waiting ?? 0, level } : null;
+  };
+  app.get(SESSION_GRANT_API.mine, (c) => {
+    const s = portal.anySession(getCookie(c, cookie));
+    if (!s?.userId) throw new AppError('UNAUTHORIZED', 'Sign in again.');
+    return c.json(success(grants.forUser(s.userId).map((g) => delegated(g.sessionId, g.level)).filter((x): x is DelegatedSession => !!x)));
+  });
+  app.get('/api/me/sessions/:id', (c) => {
+    const d = delegate(c, 'view');
+    const x = delegated(d.id, d.level);
+    if (!x) throw new AppError('NOT_FOUND', 'Not found.');
+    return c.json(success(x));
+  });
+  app.get('/api/me/sessions/:id/events', (c) => {
+    const d = delegate(c, 'view');
+    const after = c.req.query('after');
+    if (after !== undefined) return c.json(success(chatController.history(d.id, Math.max(0, Number(after) || 0))));
+    const before = c.req.query('before');
+    const limit = Math.min(200, Math.max(1, Number(c.req.query('limit') ?? 80) || 80));
+    return c.json(success(chatController.historyPage(d.id, before === undefined ? null : Number(before) || null, limit)));
+  });
+  app.post('/api/me/sessions/:id/send', async (c) => {
+    const d = delegate(c, 'operate');
+    const { text, uuid } = await body<{ text: string; uuid: string }>(c);
+    if (typeof text !== 'string' || !text.trim()) throw new AppError('VALIDATION_FAILED', 'Write a message.');
+    const id = typeof uuid === 'string' && /^[A-Za-z0-9-]{8,64}$/.test(uuid) ? uuid : crypto.randomUUID();
+    await chatController.send(d.id, id, text.slice(0, 50_000), { actor: `account:${d.userId}` });
+    audit('session.delegate_sent', d.userId, { sessionId: d.id, chars: text.length });
+    return c.json(success({ ok: true, uuid: id }));
+  });
+  app.post('/api/me/sessions/:id/respond', async (c) => {
+    const d = delegate(c, 'operate');
+    const { requestId, decision, note } = await body<{ requestId: string; decision: string; note?: string }>(c);
+    if (typeof requestId !== 'string' || (decision !== 'allow' && decision !== 'deny')) throw new AppError('VALIDATION_FAILED', 'Answer allow or deny.');
+    await chatController.respond(d.id, requestId, decision, { note: typeof note === 'string' ? note.slice(0, 2000) : undefined, actor: `account:${d.userId}` });
+    audit('session.delegate_answered', d.userId, { sessionId: d.id, requestId, decision });
+    return c.json(success({ ok: true }));
+  });
+  app.post('/api/me/sessions/:id/stop', async (c) => {
+    const d = delegate(c, 'operate');
+    await chatController.control(d.id, 'stop', undefined, { actor: `account:${d.userId}` });
+    audit('session.delegate_stopped', d.userId, { sessionId: d.id });
+    return c.json(success({ ok: true }));
+  });
+
   // MU2 S1a: who is signed in, answered to a member too (no code, no admin state).
   app.get(PORTAL_USER_API.me, (c) => {
     const s = portal.anySession(getCookie(c, cookie));
@@ -426,6 +497,24 @@ export function createApp(
   const state = (c: Context<Env>) => c.json(success<AdminState>(portal.adminState(c.get('token'))));
 
   admin.get('/state', state);
+  // Session delegation, the owner's side (a full session): who holds which session.
+  admin.get('/session-grants/:sid', (c) => c.json(success(grants.forSession(chatController.resolve(c.req.param('sid'))))));
+  admin.put('/session-grants/:sid', async (c) => {
+    const sid = chatController.resolve(c.req.param('sid'));
+    if (!chatController.get(sid)) throw new AppError('NOT_FOUND', 'No such session.');
+    const { userId, level } = await body<{ userId: string; level: SessionGrantLevel }>(c);
+    if (typeof userId !== 'string' || !users.roleOf(userId)) throw new AppError('VALIDATION_FAILED', 'Pick an account.', { details: { userId: 'An account.' } });
+    const g = grants.grant(sid, userId, level as SessionGrantLevel, 'ui');
+    audit('session.delegated', userId, { sessionId: sid, level: g.level });
+    return c.json(success(g));
+  });
+  admin.delete('/session-grants/:sid/:uid', (c) => {
+    const sid = chatController.resolve(c.req.param('sid'));
+    const removed = grants.revoke(sid, c.req.param('uid'));
+    if (removed) audit('session.delegation_revoked', c.req.param('uid'), { sessionId: sid });
+    return c.json(success({ removed }));
+  });
+
   // T-118 MU1-min: email accounts, managed by someone already signed in (the server code or another account).
   admin.get('/users', (c) => c.json(success(users.list())));
   admin.post('/users', async (c) => {
@@ -452,6 +541,7 @@ export function createApp(
     const id = c.req.param('id');
     const before = users.get(id);
     users.remove(id);
+    grants.removeUser(id);
     portal.revokeUser(id);
     audit('account.removed', id, { email: before.email, role: before.role });
     return c.json(success({ removed: true }));

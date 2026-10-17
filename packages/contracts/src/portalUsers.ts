@@ -52,3 +52,45 @@ export const PORTAL_USER_API = {
   /** PATCH `UpdatePortalUserRequest`: `PortalUser`. DELETE: remove it. Signed in only. */
   one: (id: string) => `/api/admin/users/${encodeURIComponent(id)}`,
 } as const;
+
+/* ---------- Session delegation (owner, 2026-10-17) ---------- */
+
+/** `view`: read the session live. `operate`: also send messages, stop a turn and answer its approvals. Nothing else of the workspace. */
+export type SessionGrantLevel = 'view' | 'operate';
+
+export interface SessionGrant {
+  sessionId: string;
+  userId: string;
+  level: SessionGrantLevel;
+  grantedBy: string;
+  createdAt: string;
+}
+
+/** A session delegated to the signed-in account, as its own page shows it (no workspace detail beyond its name). */
+export interface DelegatedSession {
+  id: string;
+  title: string;
+  state: string;
+  workspaceId: string;
+  waiting: number;
+  level: SessionGrantLevel;
+}
+
+export const SESSION_GRANT_API = {
+  /** Full session only. GET: `SessionGrant[]`. PUT `{ userId, level }`: the grant. */
+  grants: (sessionId: string) => `/api/admin/session-grants/${encodeURIComponent(sessionId)}`,
+  /** Full session only. DELETE: revoke one account's grant. */
+  grant: (sessionId: string, userId: string) => `/api/admin/session-grants/${encodeURIComponent(sessionId)}/${encodeURIComponent(userId)}`,
+  /** An account session. GET: `DelegatedSession[]` (what was delegated to me). */
+  mine: '/api/me/sessions',
+  /** An account session with a grant. GET: `DelegatedSession`. */
+  one: (id: string) => `/api/me/sessions/${encodeURIComponent(id)}`,
+  /** GET `?after=<seq>`: the events after a seq (the chat's own history); `?before=&limit=`: an older page. */
+  events: (id: string) => `/api/me/sessions/${encodeURIComponent(id)}/events`,
+  /** POST `{ text, uuid }` (operate). */
+  send: (id: string) => `/api/me/sessions/${encodeURIComponent(id)}/send`,
+  /** POST `{ requestId, decision: 'allow' | 'deny', note? }` (operate). */
+  respond: (id: string) => `/api/me/sessions/${encodeURIComponent(id)}/respond`,
+  /** POST (operate): stop the running turn. */
+  stop: (id: string) => `/api/me/sessions/${encodeURIComponent(id)}/stop`,
+} as const;

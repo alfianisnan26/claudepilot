@@ -1,6 +1,6 @@
 import { Badge, cn, ConfirmDialog, Menu, Spinner, useMediaQuery, useToast, type MenuItem } from '@isnanme/ui';
 import type { ChatRequest, ChatSession } from '@portal/contracts';
-import { Archive, ArchiveRestore, ArrowLeft, Bell, BellOff, Bot, CircleStop, FolderOpen, Gauge, Info, ListCollapse, ListTree, MoreHorizontal, Pencil, PanelRight, PanelRightClose, Pin, PinOff, RotateCw, ShieldAlert, Trash2, X } from 'lucide-react';
+import { UserPlus, Archive, ArchiveRestore, ArrowLeft, Bell, BellOff, Bot, CircleStop, FolderOpen, Gauge, Info, ListCollapse, ListTree, MoreHorizontal, Pencil, PanelRight, PanelRightClose, Pin, PinOff, RotateCw, ShieldAlert, Trash2, X } from 'lucide-react';
 import { type CSSProperties, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { BRAND_NAME } from '@/components/Logo';
@@ -27,6 +27,7 @@ import { Composer, type ComposerHandle } from './Composer';
 import { Controls, type ControlsHandle } from './Controls';
 import { aliasRedirect } from './aliasRedirect';
 import { CrewLine, crewShown, useCrew } from './CrewLine';
+import { ShareSessionDialog } from './ShareSessionDialog';
 import { FilesPanel, FilesSheet, INITIAL_FILES_VIEW, type FilesView } from './FilesPanel';
 import { KeepGoingChip } from './KeepGoing';
 import { RoleChip } from './RoleBadge';
@@ -393,6 +394,7 @@ export function SessionPage() {
   const agentsLabel = running ? `Agents, ${running} running` : 'Agents';
   const notifyDone = useNotifyWhenDone(id);
   const autoMenu = useAutoMoveMenu(id, auto.state, auto.platformMode, auto.setState, gone || ended);
+  const [sharing, setSharing] = useState(false);
   const menuItems: MenuItem[] = [
     // Bypass is one tap to leave (FR20): the header's red shield, and first here.
     ...(bypass ? [{ label: 'Turn off Bypass', icon: <ShieldAlert className="size-4" />, onSelect: fromMenu(() => void leaveBypass()), danger: true }] : []),
@@ -403,6 +405,7 @@ export function SessionPage() {
           ...(gone ? [] : [{ label: 'Files and changes', icon: <FolderOpen className="size-4" />, onSelect: fromMenu(toggleFiles) }]),
           { label: running ? `Agents · ${running} running` : 'Agents', icon: <Bot className="size-4" />, onSelect: fromMenu(toggleAgents) },
         ]),
+    { label: 'Share…', icon: <UserPlus className="size-4" />, onSelect: fromMenu(() => setSharing(true)), disabled: !session },
     { label: 'Rename…', icon: <Pencil className="size-4" />, onSelect: fromMenu(() => setRenaming(true)), disabled: !session },
     { label: 'Usage', icon: <Gauge className="size-4" />, onSelect: fromMenu(() => setUsageOpen(true)) },
     { label: notifyDone.done ? 'Don\u2019t notify when done' : 'Notify when done', icon: notifyDone.done ? <BellOff className="size-4" /> : <Bell className="size-4" />, onSelect: fromMenu(notifyDone.toggle), disabled: !session || ended },
@@ -582,6 +585,7 @@ export function SessionPage() {
               </div>
             </header>
             {session && <CrewLine session={session} crew={crew} roomy={roomy} />}
+            {session && <ShareSessionDialog sessionId={session.id} bypass={!!bypass} open={sharing} onClose={() => setSharing(false)} />}
           </div>
 
           <Transcript
