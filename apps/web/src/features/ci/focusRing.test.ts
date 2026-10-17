@@ -60,7 +60,10 @@ test('no focusable control uses outline-none (use outline-hidden)', () => {
 
 test('a data-focus-container marker sits only on an element with tabIndex={-1}, and the 9 containers are all marked', () => {
   const files = sourceFiles();
-  assert.deepEqual(files.flatMap((f) => markerHits(f, lines(f))), []);
+  assert.deepEqual(
+    files.flatMap((f) => markerHits(f, lines(f))),
+    [],
+  );
   const marked = files.filter((f) => lines(f).some((l) => MARKER.test(l)));
   // the exact list: a marker on a real control (KeyBar, ModelPicker, ...) or a container left unmarked changes it
   assert.deepEqual(marked, [
@@ -98,10 +101,45 @@ test('outline-none is only tolerated beside the data-focus-container marker', ()
 //    hyphenated utility (`outline-hidden|focus`). A root after `-` is a compound variant (`group-focus`, `max-md`). Plain words
 //    (`inactive:`, `cmd:`, `refocus:`) have no hyphen before the root, so they pass. `2xl` is a root, not `2` + `xl`.
 const ROOTS = [
-  'focus-visible', 'focus-within', 'focus', 'hover', 'active', 'disabled', 'enabled', 'checked', 'dark', 'forced-colors',
-  'motion-safe', 'motion-reduce', 'placeholder', 'file', 'selection', 'first', 'last', 'odd', 'even', 'open', 'read-only',
-  'empty', 'required', 'invalid', 'before', 'after', 'print', '2xl', 'xl', 'lg', 'md', 'sm',
-  'aria-\\[[^\\]]*\\]', 'aria-[a-z-]+', 'data-\\[[^\\]]*\\]', 'data-[a-z-]+', 'group-[a-z-]+', 'peer-[a-z-]+', '\\[&[^\\]]*\\]',
+  'focus-visible',
+  'focus-within',
+  'focus',
+  'hover',
+  'active',
+  'disabled',
+  'enabled',
+  'checked',
+  'dark',
+  'forced-colors',
+  'motion-safe',
+  'motion-reduce',
+  'placeholder',
+  'file',
+  'selection',
+  'first',
+  'last',
+  'odd',
+  'even',
+  'open',
+  'read-only',
+  'empty',
+  'required',
+  'invalid',
+  'before',
+  'after',
+  'print',
+  '2xl',
+  'xl',
+  'lg',
+  'md',
+  'sm',
+  'aria-\\[[^\\]]*\\]',
+  'aria-[a-z-]+',
+  'data-\\[[^\\]]*\\]',
+  'data-[a-z-]+',
+  'group-[a-z-]+',
+  'peer-[a-z-]+',
+  '\\[&[^\\]]*\\]',
 ];
 const ROOT_AT_END = new RegExp(`(?:${ROOTS.join('|')})$`);
 
@@ -190,7 +228,11 @@ test('no source file has glued class names', () => {
 // The EFFECTIVE outline of a declaration block (T-772 S2e): declarations apply in order, the `outline` shorthand resets style, width
 // and colour to their initial values (none, medium, currentcolor), and a later longhand overrides it. A first-match regex on the
 // shorthand would pass `outline: 2px solid Highlight; outline-width: 0`, which draws nothing.
-interface Outline { style: string; width: string; color: string }
+interface Outline {
+  style: string;
+  width: string;
+  color: string;
+}
 const STYLES = ['none', 'hidden', 'solid', 'dashed', 'dotted', 'double', 'groove', 'ridge', 'inset', 'outset', 'auto'];
 const WIDTH = /^(?:thin|medium|thick|[+-]?(?:\d+\.?\d*|\.\d+)(?:[a-z%]+)?|calc\(.*\))$/i;
 
@@ -209,7 +251,10 @@ export function effectiveOutline(body: string): Outline {
     if (at < 0) continue;
     const prop = decl.slice(0, at).trim().toLowerCase();
     const imp = /!\s*important/i.test(decl);
-    const value = decl.slice(at + 1).replace(/!\s*important/i, '').trim();
+    const value = decl
+      .slice(at + 1)
+      .replace(/!\s*important/i, '')
+      .trim();
     if (prop === 'outline') {
       // the shorthand resets all three longhands, each subject to the same importance rule
       let style = 'none';
@@ -230,7 +275,10 @@ export function effectiveOutline(body: string): Outline {
   return out;
 }
 
-interface Quantity { n: number; unit: string }
+interface Quantity {
+  n: number;
+  unit: string;
+}
 
 /** A tiny calc() evaluator: numbers with units, + - * / and parentheses. Null when it cannot be proven (mixed units, var(), a function). */
 function evalCalc(expr: string): Quantity | null {
@@ -306,7 +354,10 @@ export function outlineProblem(o: Outline): string | null {
   return null;
 }
 
-interface Rule { selector: string; body: string }
+interface Rule {
+  selector: string;
+  body: string;
+}
 
 /** Every `<selector> { ... }` rule inside the `@media (forced-colors: active)` blocks of a stylesheet, in order. */
 export function forcedColorsRules(css: string): Rule[] {
@@ -337,7 +388,11 @@ export function focusVisibleBodies(css: string): { generic: string[]; others: st
   const others: string[] = [];
   for (const { selector, body } of forcedColorsRules(css)) {
     if (selector === FC_SELECTOR) generic.push(body);
-    else if (/:focus-visible/.test(selector) && !(/data-focus-container/.test(selector) && !/:not\(\s*\[data-focus-container\]/.test(selector))) others.push(body);
+    else if (
+      /:focus-visible/.test(selector) &&
+      !(/data-focus-container/.test(selector) && !/:not\(\s*\[data-focus-container\]/.test(selector))
+    )
+      others.push(body);
   }
   return { generic, others };
 }
@@ -356,7 +411,10 @@ test('the effective outline reads shorthand then longhands in order', () => {
   // a longhand BEFORE the shorthand is reset by it, so it does not count
   assert.equal(outlineProblem(effectiveOutline('outline-width: 0; outline: 2px solid Highlight;')), null);
   // a later longhand that repairs an earlier break is fine
-  assert.equal(outlineProblem(effectiveOutline('outline: none; outline-style: solid; outline-width: 2px; outline-color: Highlight;')), null);
+  assert.equal(
+    outlineProblem(effectiveOutline('outline: none; outline-style: solid; outline-width: 2px; outline-color: Highlight;')),
+    null,
+  );
   assert.match(outlineProblem(effectiveOutline('outline: 2px solid red;'))!, /colour red/);
   // the valid control stays green
   assert.equal(outlineProblem(effectiveOutline('outline: 2px dotted Highlight;')), null);
@@ -364,10 +422,29 @@ test('the effective outline reads shorthand then longhands in order', () => {
 
 test('a calc() width counts only when it is proven above zero', () => {
   const base = 'outline: 2px solid Highlight;';
-  for (const w of ['calc(0px)', 'calc(1px - 1px)', 'calc(2px * 0)', 'calc(0 * 5px)', 'calc(1px - 2px)', 'calc(var(--w))', 'calc(1px + 1em)', 'calc(2px / 0)', 'calc(']) {
+  for (const w of [
+    'calc(0px)',
+    'calc(1px - 1px)',
+    'calc(2px * 0)',
+    'calc(0 * 5px)',
+    'calc(1px - 2px)',
+    'calc(var(--w))',
+    'calc(1px + 1em)',
+    'calc(2px / 0)',
+    'calc(',
+  ]) {
     assert.match(outlineProblem(effectiveOutline(`${base} outline-width: ${w};`))!, /width calc/, w);
   }
-  for (const w of ['calc(2px)', 'calc(1px + 1px)', 'calc(3px - 1px)', 'calc(1px * 2)', 'calc((1px + 1px) * 2)', 'calc(4px / 2)', 'thick', '2px']) {
+  for (const w of [
+    'calc(2px)',
+    'calc(1px + 1px)',
+    'calc(3px - 1px)',
+    'calc(1px * 2)',
+    'calc((1px + 1px) * 2)',
+    'calc(4px / 2)',
+    'thick',
+    '2px',
+  ]) {
     assert.equal(outlineProblem(effectiveOutline(`${base} outline-width: ${w};`)), null, w);
   }
 });
