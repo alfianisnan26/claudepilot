@@ -234,20 +234,9 @@ const HARNESS_COMMAND = (uuid: string) => `harness/${uuid}`;
 /** The claude flags cp-session runs after `--`; `--resume` or `--session-id` plus the id are spliced in. */
 /** The project settings file a trusted, rules-only folder passes to Claude Code (T-323). */
 const PROJECT_SETTINGS_FILE = '.claude/settings.json';
-const BASE_FLAGS = [
-  '-p',
-  '--input-format',
-  'stream-json',
-  '--output-format',
-  'stream-json',
-  '--verbose',
-  '--include-partial-messages',
-  '--replay-user-messages',
-  '--permission-prompt-tool',
-  'stdio',
-  '--permission-mode',
-  START_MODE,
-];
+// One line on purpose: claudeversion/claudeversion.test.ts reads BASE_FLAGS with a one-line pattern.
+// prettier-ignore
+const BASE_FLAGS = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--replay-user-messages', '--permission-prompt-tool', 'stdio', '--permission-mode', START_MODE];
 /** The tools of the portal's own MCP connector (named `pilot`), pre-allowed for a session that holds an agent token. */
 const PILOT_TOOLS = 'mcp__pilot__*';
 
