@@ -115,7 +115,8 @@ export function responseHeaders(headers: IncomingHttpHeaders, grant: Pick<AppGra
     } else if (k === 'location' && typeof v === 'string') out[k] = rewriteLocation(v, grant.port);
     else out[k] = v;
   }
-  out['content-security-policy'] = [...csp, `frame-ancestors ${grant.portalOrigin}`];
+  // One header line: comma-joined policies are the same as several CSP headers (each is enforced).
+  out['content-security-policy'] = [...csp, `frame-ancestors ${grant.portalOrigin}`].join(', ');
   return out;
 }
 

@@ -98,7 +98,7 @@ test('the owner opens a port: a URL on the app host with a one-time code, audite
 
 test('the list: the listening ports with their process, the portal’s own and low ports not openable', async () => {
   const r = await call(app, 'GET', LIST);
-  assert.equal(r.status, 200);
+  assert.equal(r.status, 200, JSON.stringify(r.json));
   assert.deepEqual(r.json.data, {
     enabled: true,
     ports: [

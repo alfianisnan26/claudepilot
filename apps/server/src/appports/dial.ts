@@ -9,11 +9,12 @@ import type { ExecSession, Runtime } from '../workspaces/runtime.js';
  * integer in range gets that far. There is no host or IP parameter anywhere, so nothing here can reach another machine (no SSRF).
  *
  * The bridge writes nothing but the socket's bytes (exec merges stderr into stdout on some runtimes); a failed connect exits 1 silently.
+ * When the app closes, it exits only after stdout has flushed (a pipe's stdout is asynchronous: an exit at once lost the last response).
  */
 export const BRIDGE =
   "const s=require('net').connect(Number(process.argv[1]),'127.0.0.1');" +
-  "s.on('error',()=>process.exit(1));s.on('close',()=>process.exit(0));" +
-  "process.stdin.on('end',()=>s.end());process.stdin.pipe(s);s.pipe(process.stdout);";
+  "s.on('error',()=>process.exit(1));s.on('close',()=>process.stdout.write('',()=>process.exit(0)));" +
+  "process.stdin.on('end',()=>s.end());process.stdin.pipe(s);s.pipe(process.stdout,{end:false});";
 
 /** The argv that runs the bridge for one port. Throws for anything that is not an integer port in range. */
 export function bridgeCommand(port: number): string[] {
