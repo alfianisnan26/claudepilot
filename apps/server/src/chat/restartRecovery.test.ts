@@ -52,7 +52,9 @@ test('T-971 H2: a session that was working when the portal started and lost its 
     await until(() => s.controller.get(s.id)!.process === 'live');
     assert.equal(recoveries(s, s.id)[0]!.detail.result, 'resumed');
     assert.equal(s.ws.startArgs.length, starts + 1, 'one new process');
-    assert.ok(s.ws.startArgs.at(-1)!.includes('--resume'), 'the same conversation, resumed');
+    // A session that never took a turn has no conversation on disk yet: the launch path then starts it under its own id instead of --resume.
+    assert.ok(s.ws.startArgs.at(-1)!.includes('--resume') || s.ws.startArgs.at(-1)!.includes('--session-id'), 'the same conversation, relaunched');
+    assert.ok(s.ws.startArgs.at(-1)!.includes(s.id), 'under its own id');
     await until(() => sent(s, s.id) === 1);
     await sleep(150);
     assert.equal(s.ws.startArgs.length, starts + 1, 'not resumed again');
