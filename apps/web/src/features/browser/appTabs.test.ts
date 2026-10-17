@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { canGoBack, canGoForward, closeTab, currentTarget, emptyTabs, nativeHistory, navigate, openTab, reload, setError, setSrc, step, switchTab } from './appTabs';
+import { beginLoad, canGoBack, canGoForward, closeTab, currentTarget, emptyTabs, nativeHistory, navigate, openTab, seqOf, setError, setSrc, step, switchTab } from './appTabs';
 
 const t = (port: number, path = '/') => ({ port, path });
 
@@ -83,14 +83,37 @@ test('native history: used when the frame allows it, false when it throws (cross
 
 test('reload and src: a new URL remounts the frame, an error is kept per tab', () => {
   let s = openTab(emptyTabs(), t(3000));
-  s = setSrc(s, 1, 'https://app-x-3000.example.test/__pilot/auth?code=c1');
+  s = beginLoad(s, 1);
+  s = setSrc(s, 1, seqOf(s, 1)!, 'https://app-x-3000.example.test/__pilot/auth?code=c1');
   assert.equal(s.tabs[0]!.state, 'ready');
   const n = s.tabs[0]!.nonce;
-  s = reload(s, 1);
+  s = beginLoad(s, 1);
   assert.equal(s.tabs[0]!.state, 'loading');
-  s = setSrc(s, 1, 'https://app-x-3000.example.test/__pilot/auth?code=c2');
+  s = setSrc(s, 1, seqOf(s, 1)!, 'https://app-x-3000.example.test/__pilot/auth?code=c2');
   assert.equal(s.tabs[0]!.nonce, n + 1);
-  s = setError(s, 1, 'No.');
+  s = beginLoad(s, 1);
+  s = setError(s, 1, seqOf(s, 1)!, 'No.');
   assert.equal(s.tabs[0]!.state, 'error');
   assert.equal(s.tabs[0]!.error, 'No.');
+});
+
+test('sequence guard: two quick opens, the last wins and the stale answer is dropped', () => {
+  let s = openTab(emptyTabs(), t(3000));
+  s = beginLoad(s, 1);
+  const first = seqOf(s, 1)!;
+  s = beginLoad(s, 1);
+  const second = seqOf(s, 1)!;
+  assert.notEqual(first, second);
+  // The second answers first, then the first (stale) arrives late.
+  s = setSrc(s, 1, second, 'https://app-x-3000.example.test/?code=second');
+  s = setSrc(s, 1, first, 'https://app-x-3000.example.test/?code=first');
+  assert.equal(s.tabs[0]!.src, 'https://app-x-3000.example.test/?code=second');
+  s = setError(s, 1, first, 'late error');
+  assert.equal(s.tabs[0]!.state, 'ready');
+  assert.equal(s.tabs[0]!.error, null);
+  // A stale answer while the latest is still loading changes nothing either.
+  s = beginLoad(s, 1);
+  const before = s;
+  assert.equal(setSrc(s, 1, second, 'https://app-x-3000.example.test/?code=old'), before);
+  assert.equal(seqOf(s, 99), null);
 });

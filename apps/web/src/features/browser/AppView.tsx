@@ -5,8 +5,9 @@ import { useEffect, useRef, useState } from 'react';
 import { InfoTip } from '@/components/InfoTip';
 import { errorText } from '@/lib/api';
 import { formatAppTarget, parseAppAddress, type AppTarget } from './appAddress';
-import { appProxy, isAppOff } from './appProxy';
-import { canGoBack, canGoForward, closeTab, currentTarget, emptyTabs, nativeHistory, navigate, openTab, reload, setError, setSrc, step, switchTab, type AppTab, type AppTabs } from './appTabs';
+import { runOpen } from './appOpen';
+import { appProxy } from './appProxy';
+import { beginLoad, canGoForward, closeTab, currentTarget, emptyTabs, nativeHistory, navigate, openTab, seqOf, setError, setSrc, step, switchTab, type AppTab, type AppTabs } from './appTabs';
 
 /** An icon button at 44 px on touch screens (`tap:`), 36 px elsewhere. */
 const iconBtn = 'flex size-9 shrink-0 items-center justify-center rounded-lg text-white/70 hover:bg-white/10 hover:text-white disabled:opacity-35 disabled:hover:bg-transparent tap:size-11';
@@ -51,14 +52,25 @@ export function AppView({ workspaceId }: { workspaceId: string }) {
   }, [active?.id, active?.index, active?.entries.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /** Opens a tab's current address through the route and points its frame at the one-time URL. */
+  // State changes go through the ref at once, so a second call in the same tick starts from the first one's result.
+  const apply = (f: (s: AppTabs) => AppTabs): AppTabs => {
+    const next = f(tabsRef.current);
+    tabsRef.current = next;
+    setTabs(next);
+    return next;
+  };
+
+  /**
+   * Opens a tab's address through the route and points its frame at the one-time URL. The tab's sequence moves on first: when two
+   * opens overlap (two quick reloads), only the latest answer is applied and the stale one is dropped.
+   */
   const load = async (id: number, target: AppTarget) => {
-    try {
-      const r = await appProxy.open(workspaceId, target);
-      setTabs((s) => setSrc(s, id, r.url));
-    } catch (e) {
-      if (isAppOff(e)) return setOff(true);
-      setTabs((s) => setError(s, id, errorText(e, 'Couldn’t open it.')));
-    }
+    const seq = seqOf(apply((s) => beginLoad(s, id)), id);
+    if (seq === null) return;
+    const out = await runOpen(() => appProxy.open(workspaceId, target));
+    if (out.kind === 'off') return setOff(true);
+    if (out.kind === 'url') return void apply((s) => setSrc(s, id, seq, out.url));
+    apply((s) => setError(s, id, seq, out.kind === 'unsafe' ? 'The portal gave an address that isn’t https.' : errorText(out.error, 'Couldn’t open it.')));
   };
 
   const go = (raw: string) => {
@@ -67,18 +79,13 @@ export function AppView({ workspaceId }: { workspaceId: string }) {
     setProblem(null);
     setBar(false);
     if (active) {
-      setTabs((s) => navigate(s, active.id, r.target));
+      apply((s) => navigate(s, active.id, r.target));
       void load(active.id, r.target);
-    } else {
-      const next = openTab(tabsRef.current, r.target);
-      setTabs(next);
-      void load(next.active!, r.target);
-    }
+    } else newTab(r.target);
   };
 
   const newTab = (target: AppTarget) => {
-    const next = openTab(tabsRef.current, target);
-    setTabs(next);
+    const next = apply((s) => openTab(s, target));
     void load(next.active!, target);
   };
 
@@ -90,10 +97,9 @@ export function AppView({ workspaceId }: { workspaceId: string }) {
 
   const stepOwn = (dir: 'back' | 'forward') => {
     if (!active) return;
-    const next = step(tabsRef.current, active.id, dir);
+    const next = apply((s) => step(s, active.id, dir));
     const tab = next.tabs.find((t) => t.id === active.id)!;
     if (tab.index === active.index) return;
-    setTabs(next);
     void load(active.id, currentTarget(tab));
   };
   // The frame's own history when its page allows it; a frame on another origin throws, and the typed history takes over.
@@ -110,7 +116,6 @@ export function AppView({ workspaceId }: { workspaceId: string }) {
 
   const doReload = () => {
     if (!active) return;
-    setTabs((s) => reload(s, active.id));
     void load(active.id, currentTarget(active));
   };
 
@@ -119,14 +124,17 @@ export function AppView({ workspaceId }: { workspaceId: string }) {
     // Opened at once (a phone refuses a window that is opened after a wait), then pointed at the one-time URL.
     const w = window.open('about:blank', '_blank');
     if (w) w.opener = null;
-    try {
-      const r = await appProxy.open(workspaceId, currentTarget(active));
-      if (w) w.location.href = r.url;
-      else window.location.assign(r.url);
-    } catch (e) {
-      w?.close();
-      toast(errorText(e, 'Couldn’t open it.'), 'error');
+    const target = currentTarget(active);
+    const out = await runOpen(() => appProxy.open(workspaceId, target));
+    if (out.kind === 'url') {
+      if (w) w.location.href = out.url;
+      else window.location.assign(out.url);
+      return;
     }
+    w?.close();
+    // The feature is off: the state, not a toast.
+    if (out.kind === 'off') return setOff(true);
+    toast(out.kind === 'unsafe' ? 'The portal gave an address that isn’t https.' : errorText(out.error, 'Couldn’t open it.'), 'error');
   };
 
   const close = (id: number) => {
@@ -255,7 +263,7 @@ export function AppView({ workspaceId }: { workspaceId: string }) {
                 ) : (
                   <>
                     <p className="max-w-xs [overflow-wrap:anywhere]">{t.error}</p>
-                    <button type="button" onClick={() => (setTabs((s) => reload(s, t.id)), void load(t.id, currentTarget(t)))} className="flex min-h-11 items-center gap-2 rounded-lg bg-white/10 px-4 text-white">
+                    <button type="button" onClick={() => void load(t.id, currentTarget(t))} className="flex min-h-11 items-center gap-2 rounded-lg bg-white/10 px-4 text-white">
                       <RotateCw className="size-4" /> Retry
                     </button>
                   </>

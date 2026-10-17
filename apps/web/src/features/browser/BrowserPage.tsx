@@ -216,7 +216,7 @@ export function BrowserPage() {
               aria-label={title}
               aria-pressed={mode === kind}
               onClick={() => setMode(kind)}
-              className={cn('flex h-7 min-w-7 items-center justify-center gap-1 rounded-md px-1.5 text-xs tap:h-10 tap:min-w-11', mode === kind ? 'bg-white/15 text-white' : 'text-white/50 hover:text-white')}
+              className={cn('flex h-7 min-w-7 items-center justify-center gap-1 rounded-md px-1.5 text-xs tap:h-11 tap:min-w-11', mode === kind ? 'bg-white/15 text-white' : 'text-white/50 hover:text-white')}
             >
               {icon}
               <span className="hidden sm:inline">{word}</span>
