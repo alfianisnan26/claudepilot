@@ -359,10 +359,11 @@ interface Rule {
   body: string;
 }
 
-/** Every `<selector> { ... }` rule inside the `@media (forced-colors: active)` blocks of a stylesheet, in order. */
+/** Every `<selector> { ... }` rule inside the `@media ... (forced-colors: active) ...` blocks of a stylesheet, in order. The query is
+ * matched by regex: no space after the colon, and `screen and (...)` forms count too (T-772 S2g). */
 export function forcedColorsRules(css: string): Rule[] {
   const rules: Rule[] = [];
-  const open = /@media \(forced-colors: active\) \{/g;
+  const open = /@media[^{}]*\(\s*forced-colors\s*:\s*active\s*\)[^{}]*\{/g;
   for (let m = open.exec(css); m; m = open.exec(css)) {
     let depth = 1;
     let i = open.lastIndex;
@@ -380,19 +381,41 @@ export function forcedColorsRules(css: string): Rule[] {
 
 const FC_SELECTOR = ':focus-visible:not([data-focus-container])';
 
+/** Splits at the commas that are not inside parentheses or brackets. */
+function topLevelParts(selector: string, sep: RegExp): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let cur = '';
+  for (const ch of selector) {
+    if (ch === '(' || ch === '[') depth++;
+    else if (ch === ')' || ch === ']') depth--;
+    if (depth === 0 && sep.test(ch)) {
+      parts.push(cur);
+      cur = '';
+    } else cur += ch;
+  }
+  parts.push(cur);
+  return parts.map((p) => p.trim()).filter(Boolean);
+}
+
+/** One comma part targets only the marked containers when its subject (the last compound, after any descendant or child combinator)
+ * names the marker outside `:not(`, and no `:is(`/`:where(` list in it mixes in another target. */
+function containerOnly(part: string): boolean {
+  const compounds = topLevelParts(part, /[\s>+~]/);
+  const subject = (compounds[compounds.length - 1] ?? '').replace(/:not\((?:[^()]|\([^()]*\))*\)/g, '');
+  if (!/\[data-focus-container\]/.test(subject)) return false;
+  return !/:(?:is|where)\([^)]*,/.test(subject);
+}
+
 /** The bodies that decide the ring of a focusable control: the generic rule first, then EVERY other `:focus-visible` rule (a narrower
- * `button:focus-visible { outline-style: none }` removes the ring from its target). A rule that names the container marker without
- * `:not(` targets only the marked containers, which keep no ring on purpose, so it is skipped. */
+ * `button:focus-visible { outline-style: none }` removes the ring from its target). A rule whose every comma part targets only the
+ * marked containers (they keep no ring on purpose) is skipped; one part that reaches another element counts. */
 export function focusVisibleBodies(css: string): { generic: string[]; others: string[] } {
   const generic: string[] = [];
   const others: string[] = [];
   for (const { selector, body } of forcedColorsRules(css)) {
     if (selector === FC_SELECTOR) generic.push(body);
-    else if (
-      /:focus-visible/.test(selector) &&
-      !(/data-focus-container/.test(selector) && !/:not\(\s*\[data-focus-container\]/.test(selector))
-    )
-      others.push(body);
+    else if (/:focus-visible/.test(selector) && !topLevelParts(selector, /,/).every(containerOnly)) others.push(body);
   }
   return { generic, others };
 }
@@ -476,6 +499,45 @@ test('every :focus-visible rule of the forced-colors block counts, not only the 
   // a rule for the marked containers only is the documented exception
   assert.equal(problem('[data-focus-container]:focus-visible { outline: none }'), null);
   assert.equal(problem('button:focus-visible { outline-offset: 4px }'), null);
+});
+
+test('T-772 S2g: comma selectors and every forced-colors media query form are scanned; a rule missing its ring is caught', () => {
+  const generic = `${FC_SELECTOR} {\n    outline: 2px solid Highlight;\n  }`;
+  const problemIn = (css: string): string | null => {
+    const { generic: g, others } = focusVisibleBodies(css);
+    return outlineProblem(effectiveOutline([...g, ...others].join(';')));
+  };
+  const inMedia = (query: string, extra: string): string => `@media ${query} {\n  ${generic}\n  ${extra}\n}`;
+  const bad = 'outline: none';
+  // a container part in a comma list does not hide the control part (negative: each is caught)
+  for (const sel of [
+    `[data-focus-container]:focus-visible, button:focus-visible`,
+    `[data-focus-container] button:focus-visible`,
+    `:where(button, [data-focus-container]):focus-visible`,
+    `a:focus-visible, button:focus-visible`,
+  ]) {
+    assert.match(problemIn(inMedia('(forced-colors: active)', `${sel} { ${bad} }`))!, /style none/, sel);
+  }
+  // positive controls: container-only lists stay the documented exception
+  for (const sel of [
+    `[data-focus-container]:focus-visible`,
+    `[data-focus-container]:focus-visible, div[data-focus-container]:focus-visible`,
+    `:is([data-focus-container]):focus-visible`,
+  ]) {
+    assert.equal(problemIn(inMedia('(forced-colors: active)', `${sel} { ${bad} }`)), null, sel);
+  }
+  // the media query is matched by regex: no space, and `screen and (...)` forms hold a rule that loses the ring
+  for (const q of [
+    '(forced-colors:active)',
+    '(forced-colors: active)',
+    'screen and (forced-colors: active)',
+    'screen and (forced-colors:active) and (min-width: 1px)',
+  ]) {
+    assert.equal(forcedColorsRules(inMedia(q, 'button:focus-visible { outline: none }')).length, 2, q);
+    assert.match(problemIn(inMedia(q, `button:focus-visible { ${bad} }`))!, /style none/, q);
+  }
+  // other media queries are not scanned
+  assert.equal(forcedColorsRules(inMedia('(min-width:1px)', 'button:focus-visible { outline: none }')).length, 0);
 });
 
 test('index.css keeps a real outline for focusable controls under forced-colors', () => {

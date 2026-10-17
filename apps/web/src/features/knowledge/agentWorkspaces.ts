@@ -51,3 +51,11 @@ export function saveWarning(saved: { warning?: string | null }): string | null {
   const w = typeof saved.warning === 'string' ? saved.warning.trim() : '';
   return w ? w : null;
 }
+
+/** Shows a save's warning as an error toast (what the settings dialog does after `onSaved`); nothing for a clean save. Returns whether it showed one. */
+export function toastSaveWarning(saved: { warning?: string | null }, toast: (text: string, tone?: 'error') => void): boolean {
+  const warning = saveWarning(saved);
+  if (!warning) return false;
+  toast(warning, 'error');
+  return true;
+}

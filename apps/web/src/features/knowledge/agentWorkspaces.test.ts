@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import type { PortalAgentWorkspace } from '@portal/contracts';
-import { invalidWorkspaceKeys, saveWarning, settingsPayload, toggleWorkspace, workspaceChoices } from './agentWorkspaces';
+import { invalidWorkspaceKeys, saveWarning, settingsPayload, toastSaveWarning, toggleWorkspace, workspaceChoices } from './agentWorkspaces';
 
 const ws = (workspaceId: string): PortalAgentWorkspace => ({ workspaceId, name: workspaceId.split('/')[1]!, enabled: true, liveTokens: 0 });
 
@@ -54,4 +55,19 @@ test('T-436 S2: a save that came back with a warning shows it; a clean save show
     saveWarning({ warning: 'Saved, but live agent sessions could not be updated.' }),
     'Saved, but live agent sessions could not be updated.',
   );
+});
+
+test('T-436 S3: the settings dialog toasts a save warning as an error, and a clean save toasts nothing', () => {
+  const shown: Array<[string, string | undefined]> = [];
+  const toast = (text: string, tone?: 'error') => void shown.push([text, tone]);
+  assert.equal(toastSaveWarning({}, toast), false);
+  assert.equal(toastSaveWarning({ warning: ' ' }, toast), false);
+  assert.deepEqual(shown, []);
+  assert.equal(toastSaveWarning({ warning: ' Saved, but live agent sessions could not be updated. ' }, toast), true);
+  assert.deepEqual(shown, [['Saved, but live agent sessions could not be updated.', 'error']]);
+});
+
+test('T-436 S3: dialogs.tsx shows the warning through toastSaveWarning after onSaved', () => {
+  const src = readFileSync(new URL('./dialogs.tsx', import.meta.url), 'utf8');
+  assert.match(src, /onSaved\(saved\);\s*toastSaveWarning\(saved, toast\);/);
 });
