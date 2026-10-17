@@ -24,6 +24,7 @@ import { vaultReleaseNotes } from './ci/releaseNotesVault.js';
 import { parseActor } from './knowledge/journal.js';
 import { createKnowledge } from './knowledge/module.js';
 import { registerKnowledgeTools } from './knowledge/portalTools.js';
+import { wireVaultBinding } from './knowledge/vaultBinding.js';
 import { createClaudeUsage } from './claudeusage/index.js';
 import { registerClaudeUsageTools } from './claudeusage/portalTools.js';
 import { ClaudeVersions, registerClaudeVersionTools } from './claudeversion/index.js';
@@ -411,9 +412,7 @@ portalMcp.start();
 // Agent access stores its workspace as the stable id and reads it as the key (T-42 slice 3).
 portalMcp.agents.workspaceRefs = workspaces.identities;
 // T-436: a session's token is bound at mint to the vaults that name its workspace; a change of a vault's list rebinds the live tokens.
-portalMcp.agents.vaultsFor = (ws) => knowledge.vaultsForWorkspace(ws);
-knowledge.onAgentWorkspacesChange = () => void portalMcp.agents.rebindVaults();
-knowledge.onAgentWorkspacesFailClosed = () => void portalMcp.agents.closeVaults();
+wireVaultBinding(portalMcp.agents, knowledge);
 chatController.agentAccess = portalMcp.agents;
 {
   // T-102: agent access turned on or off changes the portal tools a session's NEXT process gets: its "Tools changed" hint says so.

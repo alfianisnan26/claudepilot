@@ -15,7 +15,7 @@ import { useEffect, useRef, useState } from 'react';
 import { InfoTip } from '@/components/InfoTip';
 import { formatBytes, timeAgo } from '@/lib/format';
 import { portalMcpApi } from '../portalmcp/api';
-import { saveWarning, settingsPayload, toggleWorkspace, workspaceChoices } from './agentWorkspaces';
+import { settingsPayload, toastSaveWarning, toggleWorkspace, workspaceChoices } from './agentWorkspaces';
 import { errorText, knowledgeApi } from './api';
 import { DiffView } from './NoteEditor';
 import { useLoad } from './hooks';
@@ -291,8 +291,7 @@ export function VaultSettingsDialog({ vault, onClose, onSaved, onDelete }: { vau
         settings: settingsPayload(form),
       });
       onSaved(saved);
-      const warning = saveWarning(saved);
-      if (warning) toast(warning, 'error');
+      toastSaveWarning(saved, toast);
     } catch (e) {
       setError(errorText(e, 'Could not save.'));
     } finally {
