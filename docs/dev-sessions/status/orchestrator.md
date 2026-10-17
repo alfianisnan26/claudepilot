@@ -3,7 +3,6 @@
 ## DONE
 - Batches 22-26: git history (to 83b7213e), gates green. Close on "Coordinator live check" PASS. T-574 re-check after 10-17 15:00Z.
 - RESPAWN rule (165db813 + D-78 4e101a59): respawn each lane BETWEEN tickets on a worktree cut from integration; scripts by abs path.
-- BATCHES 27 bda180d2 + 28 63ff971c (gates GREEN) deployed in 2026.10.17-1 (details: git history). Flake boot.test.ts -> T-903.
 - BATCH 29 edde2073 (T-524 S3c, T-733 S5, T-881 S1b, T-416 S2c, T-382 S1, T-781 S8c, T-675 R2c+R2d) RELEASED 2026.10.17-2: close on live checks.
 ## IN FLIGHT (6 of 6, D-71; lanes respawned per ticket, D-78; sonnet)
 - BATCH 30 premerge-b30 b9781ad6 (wip/main-b9781ad): T-772 S2f, T-736 S3g, T-612 S1, T-868 S1-S3, T-436 S1+S2 (deploy note),
@@ -13,7 +12,8 @@
   tests + lint ok, format red on knowledge/service.ts. Merging integration 94105066 conflicts in quick-check.sh (T-612 S1 vs T-960):
   13:25 merged integration + T-612 S1b (QA PASS 10202; its 2 files whole; jobRun.test.ts union) = 5c05f72d (wip/main-5c05f72):
   QC rc124 (jobRun.test.ts filled /tmp, T-1032; format red quickCheck.test.ts + service.ts) -> fmt Job (2nd try, cluster full).
-- T-938 lane a3554d40: 4th Job (3 lost: Pending, bg limit, session end).
+- T-938 DONE 259935e8 (Job 6bd127a4 rc0) -> blind review d9f18599 -> coordinator lands. Lane a3554d40 -> T-974 URGENT
+  (rule guard git argv, ruleGuard.ts; rule class: blind review, coordinator removes deny lines after PASS).
 - URGENT T-948 port proxy (9810): S1 BE INFRA 2 2a0edbd8 OPUS (security), ticket/T-948-port-proxy; app-<ws>-<port> subdomain (9811).
   S1 fix f70c72bd (Job 79cec835 rc0) -> RE-CHECK c691df71. S2 d08465f9 RECHECK PASS 10189; UX code-read only (no browser in
   qa lane): visual look on the premerge scratch portal later. Blind review S1 (d9f18599) PWC 10219: 2 Majors (upstream timeout +
