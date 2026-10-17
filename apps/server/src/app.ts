@@ -233,6 +233,8 @@ export function createApp(
     }
   };
   const { cookie, ttlMs } = config.session;
+  /** The one place a request's session token is read: the route guard, the session guard and the sign-in routes all use it (T-976 renames the cookie here). */
+  const sessionToken = (c: Parameters<typeof getCookie>[0]): string | undefined => getCookie(c, cookie);
 
   // Served over plain HTTP: no HSTS.
   // The built app also gets a CSP (csp.ts); the dev server's pages come from Vite, not from here.
@@ -279,7 +281,7 @@ export function createApp(
     '*',
     createRouteGuard({
       signedIn: (c) => {
-        const token = getCookie(c, cookie);
+        const token = sessionToken(c);
         if (!token) return null;
         if (portal.session(token)) return { full: true };
         const s = portal.anySession(token);
@@ -304,9 +306,9 @@ export function createApp(
 
   app.get(API.session, (c) => {
     const status: SessionStatus = {
-      authenticated: !!portal.anySession(getCookie(c, cookie)),
+      authenticated: !!portal.anySession(sessionToken(c)),
       enabled: portal.enabled,
-      member: !!portal.anySession(getCookie(c, cookie)) && !portal.session(getCookie(c, cookie)),
+      member: !!portal.anySession(sessionToken(c)) && !portal.session(sessionToken(c)),
       emailSignIn: (() => {
         try {
           return users.any();
@@ -347,13 +349,13 @@ export function createApp(
 
   // MU2 S1a: who is signed in, answered to a member too (no code, no admin state).
   app.get(PORTAL_USER_API.me, (c) => {
-    const s = portal.anySession(getCookie(c, cookie));
+    const s = portal.anySession(sessionToken(c));
     if (!s) throw new AppError('UNAUTHORIZED', 'Sign in again.');
     return c.json(success<SignedInAs>(s.userId ? { kind: 'account', user: users.get(s.userId) } : { kind: 'code' }));
   });
 
   app.post(API.logout, (c) => {
-    const token = getCookie(c, cookie);
+    const token = sessionToken(c);
     if (token) portal.signOut(token);
     deleteCookie(c, cookie, { path: '/' });
     return c.json(success({ ok: true }));
@@ -379,7 +381,7 @@ export function createApp(
     return null;
   };
   const requireSession = createMiddleware<Env>(async (c, next) => {
-    const token = getCookie(c, cookie);
+    const token = sessionToken(c);
     if (!token || !portal.session(token)) {
       // MU2 S1a: a member is signed in but has no access to the admin app yet (default deny); everything else is "sign in again".
       // T-1043 S0a (review 10681 #5): the same 404 as a path nobody serves (the route guard's refusal), never a 403 that tells the route is there.

@@ -884,7 +884,11 @@ FR16 is built as `authz/routeGuard.ts`, mounted first thing in app.ts (`app.use(
 - a route, `app.all` endpoints included, has no declaration;
 - an endpoint is registered before the guard;
 - an open door whose last handler takes `next` is followed by a route that is not open;
-- for a member, a declared route is not what its policy says: the guard's allow, or exactly the unknown path's `404` with no handler run (the table runs every route).
+- for a member, a declared route is not what its policy says: the guard's allow, or exactly the unknown path's `404` with no handler run (the table runs every route);
+- a declared route has no route behind it (a stale row; the chat socket's row is named until S0b moves it to the socket table);
+- the guard does not read the session the way the session guard does: both go through app.ts's one `sessionToken(c)`, tested under T-976's `__Host-` cookie name.
+
+The serveWeb walk serves a temporary dist made by the test, so it never depends on a web build.
 
 It also checks the guard on its own:
 - a member is refused, with exactly the unknown path's `404`, on an undeclared route, an undeclared `app.all` endpoint, an admin area, an object it does not own, and a request every route hands on;

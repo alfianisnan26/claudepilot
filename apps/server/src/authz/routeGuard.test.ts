@@ -10,6 +10,9 @@
 //      the guard (A3); no open door hands on to a guarded route (#3); every route for a member is the guard's allow or the unknown path's 404
 //      (#2), never a 403 (#5), while the owner is not refused.
 import assert from 'node:assert/strict';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import { AppError, isAppError } from '@isnanme/core';
 import { FOUNDING_USER_ID, objectRef, type Actor, type RoutePolicies } from '@portal/contracts';
@@ -17,6 +20,7 @@ import { Hono, type Context } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { createApp } from '../app.js';
 import { createBrowserRoutes } from '../browser/routes.js';
+import { config } from '../config.js';
 import { realInstall } from '../connect/installPort.js';
 import { openModule } from '../connect/testkit.js';
 import { FakeChat, freshStore } from '../notify/testkit.js';
@@ -264,7 +268,35 @@ const spy = (what: string): object =>
     set: () => true,
   });
 
-async function realApp(serveWeb = false) {
+/**
+ * The real app. `serveWeb`: with the web app's static routes, served from a temporary dist made here (an `index.html` and one asset), so the
+ * walk never depends on a web build (QA 10733 #2). `cookie`: the session cookie's name for this app (QA 10733 #3: T-976's `__Host-` name).
+ */
+async function realApp(serveWeb = false, cookie = 'portal_session') {
+  const paths = config.paths as { webDist: string };
+  const session = config.session as { cookie: string };
+  const was = { webDist: paths.webDist, cookie: session.cookie };
+  let dist: string | null = null;
+  if (serveWeb) {
+    dist = mkdtempSync(join(tmpdir(), 'routeguard-dist-'));
+    mkdirSync(join(dist, 'assets'));
+    writeFileSync(join(dist, 'index.html'), '<!doctype html><title>pilot</title><div id="root"></div>');
+    writeFileSync(join(dist, 'assets', 'app.js'), 'export {};');
+    paths.webDist = dist;
+  }
+  session.cookie = cookie;
+  try {
+    return await buildRealApp(serveWeb, cookie, () => {
+      if (dist) rmSync(dist, { recursive: true, force: true });
+    });
+  } finally {
+    // createApp reads both when it is built; put them back for the next app.
+    paths.webDist = was.webDist;
+    session.cookie = was.cookie;
+  }
+}
+
+async function buildRealApp(serveWeb: boolean, cookie: string, cleanup: () => void) {
   const { store } = await freshStore();
   const platform = createPlatform({ store, settings: null, chat: new FakeChat(), uiUrl: null, pushContact: null, selfOrigin: 'http://localhost:3000', publish: () => undefined, socketAuthorized: () => true, tools: false });
   const cx = await openModule({ install: realInstall });
@@ -301,7 +333,7 @@ async function realApp(serveWeb = false) {
     method = method === 'ALL' ? 'POST' : method;
     const res = await app.request(
       `http://localhost:3000${path}`,
-      { method, headers: { host: 'localhost:3000', origin: 'http://localhost:3000', ...(token ? { cookie: `portal_session=${token}` } : {}) } },
+      { method, headers: { host: 'localhost:3000', origin: 'http://localhost:3000', ...(token ? { cookie: `${cookie}=${token}` } : {}) } },
       { incoming: { socket: { remoteAddress: '127.0.0.1' } } },
     );
     const text = await res.text();
@@ -313,7 +345,7 @@ async function realApp(serveWeb = false) {
     }
     return { status: res.status, message, text };
   };
-  return { app, portal, CODE, send, done: async () => (await cx.close(), cx.store.close(), store.close()) };
+  return { app, portal, CODE, send, done: async () => (await cx.close(), cx.store.close(), store.close(), cleanup()) };
 }
 
 type Listed = { method: string; path: string; handler: { name: string; length: number } };
@@ -446,6 +478,42 @@ test('review 10681 #5: a member on a route behind requireSession gets the unknow
   } finally {
     await done();
   }
+});
+
+test('QA 10733 #3: the guard reads the session the way the session guard does, whatever the cookie is called (T-976: `__Host-`)', async () => {
+  const name = ['__Host', 'portal_session'].join('-');
+  const { portal, CODE, send, done } = await realApp(false, name);
+  try {
+    const unknown = await send('GET', '/api/no-such-path', portal.openSession(MEMBER));
+    assert.equal(unknown.status, 404, 'a member under that name is signed in (a 404, not the 401 of nobody)');
+    assert.deepEqual(await send('GET', '/api/admin/users', portal.openSession(MEMBER)), unknown, 'and refused like the unknown path');
+    const owner = await send('GET', '/api/admin/users', portal.signIn(CODE));
+    assert.notEqual(owner.status, 401, 'the owner under that name is signed in for the guard and the session guard alike');
+    assert.notDeepEqual(owner, unknown);
+    assert.equal((await send('GET', '/api/me', portal.openSession(MEMBER))).status, 200, 'the sign-in routes read the same cookie');
+  } finally {
+    await done();
+  }
+});
+
+/** The sockets declared as routes until S0b gives them their own table: no HTTP route stands behind them. */
+const SOCKET_ROUTE_KEYS = new Set(['ALL /api/chat/live']);
+
+test('D-65 #6: every declared route has a route behind it in the real app (a declaration for nothing is a stale row)', async () => {
+  const keys = new Set<string>();
+  for (const serveWeb of [false, true]) {
+    const { app, done } = await realApp(serveWeb);
+    try {
+      for (const k of endpointKeys(listed(app))) keys.add(k);
+    } finally {
+      await done();
+    }
+  }
+  // This file's own small apps declare `/t/…` and `/g…/…` rows; nothing else here declares routes.
+  const own = /^[A-Z]+ \/(t|g\d[a-z]*)\//;
+  const stale = [...declaredPolicies().keys()].filter((k) => !keys.has(k) && !own.test(k) && !SOCKET_ROUTE_KEYS.has(k)).sort();
+  assert.deepEqual(stale, [], `declared, but no route answers it (remove the row or the route is missing):\n${stale.join('\n')}`);
+  for (const k of SOCKET_ROUTE_KEYS) assert.ok(declaredPolicies().has(k) && !keys.has(k), `${k}: still a socket's row, not a route`);
 });
 
 const OPEN = new Set(['public', 'bearer', 'handler']);
