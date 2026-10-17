@@ -216,3 +216,35 @@ test('a move to another Claude mints for the new process under the same portal i
     await s.done();
   }
 });
+
+test('a launch settles its token: a new process starts (the old ones go), or the host says one is already running (the new one goes, the live process keeps its own)', async () => {
+  // Konfersi lead, 2026-10-17 19:17: a start the host answered "already running" attached to the old process, but minting had already
+  // revoked that process's token, so every portal tool was refused until a person reconnected it.
+  const s = await liveSession();
+  try {
+    const settled: string[] = [];
+    let n = 0;
+    s.controller.agentAccess = {
+      async mint(req, opts) {
+        n++;
+        settled.push(`mint ${n} keepOthers=${opts?.keepOthers === true}`);
+        return { env: { PILOT_MCP_TOKEN: TOKEN, PILOT_SESSION_ID: req.sessionId, PILOT_WORKSPACE_ID: req.workspaceId, PILOT_MCP_URL: 'http://172.18.0.1:3105/mcp' }, mcpConfig: CONFIG, tokenId: `agt_${n}` };
+      },
+      settle(_sessionId, tokenId, started) {
+        settled.push(`settle ${tokenId} ${started ? 'started' : 'not started'}`);
+      },
+    };
+    const before = s.ws.tails.length;
+    const b = await s.controller.create({ workspaceId: 'docker/ws1' });
+    await until(() => s.ws.tails.length === before + 1);
+    await until(() => s.controller.get(b.id)?.state === 'idle');
+    assert.deepEqual(settled, ['mint 1 keepOthers=true', 'settle agt_1 started']);
+    // The host now answers "already running" (3): the portal attaches, and the token it minted for nothing is the one that goes.
+    s.ws.startCode = 3;
+    await s.controller.restart(b.id).catch(() => undefined);
+    await until(() => settled.length >= 4);
+    assert.deepEqual(settled.slice(2), ['mint 2 keepOthers=true', 'settle agt_2 not started']);
+  } finally {
+    await s.done();
+  }
+});

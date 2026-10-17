@@ -461,11 +461,15 @@ type SlotTurn = { workspaceId: string; full: SlotFull };
 export interface ChatAgentGrant {
   env: Record<string, string>;
   mcpConfig: string;
+  /** Which token, so the launch can settle it (`ChatAgentAccess.settle`). */
+  tokenId?: string;
 }
 
 /** Portal MCP's side of I8: a token minted for one session, null when the workspace hasn't opted in to portal tools. */
 export interface ChatAgentAccess {
-  mint(req: { workspaceId: string; sessionId: string }): Promise<ChatAgentGrant | null>;
+  mint(req: { workspaceId: string; sessionId: string }, opts?: { keepOthers?: boolean }): Promise<ChatAgentGrant | null>;
+  /** After the host answered: a new process started (the old tokens go) or not (the new one goes; a live process keeps its own). */
+  settle?(sessionId: string, tokenId: string, started: boolean): void;
 }
 
 export interface ChatControllerOptions {
@@ -5171,7 +5175,23 @@ export class ChatController {
           : []),
     ];
     const args = ['start', o.csid, String(o.seg), o.cwd, ...(lines.length ? ['--env', String(lines.length)] : []), '--', ...flags];
-    return this.#runOnce(workspaceId, args, lines.length ? `${lines.join('\n')}\n` : undefined, this.#chat.configDir(o.claudeId));
+    const settle = (started: boolean) => {
+      if (!grant?.tokenId) return;
+      try {
+        this.agentAccess?.settle?.(o.sessionId, grant.tokenId, started);
+      } catch {
+        // a token left unsettled still ends with its session
+      }
+    };
+    let r: { code: number | null; out: string };
+    try {
+      r = await this.#runOnce(workspaceId, args, lines.length ? `${lines.join('\n')}\n` : undefined, this.#chat.configDir(o.claudeId));
+    } catch (e) {
+      settle(false);
+      throw e;
+    }
+    settle(r.code === 0);
+    return r;
   }
 
   /** T-561: the sessions whose current process was launched with the lead rules; unknown after a portal restart. */
@@ -5221,7 +5241,9 @@ export class ChatController {
   async #grant(workspaceId: string, sessionId: string): Promise<ChatAgentGrant | null> {
     if (!this.agentAccess) return null;
     try {
-      const grant = await this.agentAccess.mint({ workspaceId, sessionId });
+      // The old token stays good until the host says a NEW process started (#hostStart settles it): an "already running" answer attaches
+      // to the process that holds it.
+      const grant = await this.agentAccess.mint({ workspaceId, sessionId }, { keepOthers: typeof this.agentAccess.settle === 'function' });
       return grant && grant.env && typeof grant.mcpConfig === 'string' && grant.mcpConfig ? grant : null;
     } catch {
       return null;
