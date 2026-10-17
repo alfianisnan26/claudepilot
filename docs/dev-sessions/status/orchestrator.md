@@ -62,4 +62,4 @@
 LESSONS: dontAsk lanes run Bash only in their spawn worktree and refuse git merge/restore: the lead pushes the merge (with
 markers) to a new branch, the lane does `git switch -C <br> origin/<br>` and resolves by Edit. Never prettier files tests read
 with readFileSync. Re-run `context-pack.sh --check HEAD` after every merge; integration moved during a gate = merge + re-gate.
-A mutant line must prove it was applied (diff non-empty). Full ids and full hashes only. gate-job.sh in the background, timeout 7200000.
+A mutant line must prove it was applied (diff non-empty). The status file: Edit/Write tools ONLY (23:47 slip, T-595). Full ids and full hashes only. gate-job.sh in the background, timeout 7200000.
