@@ -16,13 +16,15 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - Cluster queue ~14 Jobs (control-plane >75% memory): T-938 lane on a 3rd Job attempt (2-h limit).
 - URGENT T-948 S1 port proxy (owner waiting; coordinator 9810): BE INFRA 2 2a0edbd8 OPUS (why: security), ticket/T-948-port-proxy
   from d741a52d; contract first (~11:30). Subdomain app-<ws>-<port>.ai.isnan.me + one-time code + frame-ancestors (9811).
-  S2 PARALLEL: FRONTEND 3753d3c2 sonnet ticket/T-948-app-browser (Browser > App mode, iframe, tabs; 9812). ETA 9815: built
-  ~13:00, QA ~14:00, gated ~15:00. Paused for it: T-921 0dfff348, T-379 S3 9dfecffb (lanes ended; resume after, QA re-runs Jobs).
-- Lanes (all hasyim, auto, sonnet; respawned 10:00 from pushed heads after the restart):
-  BE INFRA a3554d40 T-938 259935e8 (yaml case added; Job). T-921 PAUSED at 0dfff348 (lane ended for T-948).
-  BACKEND 524bf92b (sekar) T-425 S2b: kill M1/M2a/M4/M5 + detached-send hang test (QA PWG 9770; decision T-595 9772).
-  QA 1c6fd27b (sekar) T-28 + T-294 on integration 28d84a99 (close on PASS); then T-948 QA.
-  T-409 G3 ee75effd QA PWG 9820 -> merge in b31; G3b fup (corrupt state.json, adopted -> started) after T-425 S2b (T-595 9823). IMPL 2 3189279b T-436 S3 + T-772 S2g e4e2c4ff.- Waiting for QA after build: T-938 (blind review; coordinator lands), T-921, T-436 S3, T-379 S3, T-425 S2b. Next build: T-382 S5.
+  Contract 7dc74eba pushed. S2 FRONTEND 3753d3c2 ticket/T-948-app-browser DONE 084c49d6 (9866; Job green) -> QA d9f18599
+  (qa-t948-s2); FE now writes the PRD App-mode section. ux-checker after S1 merges. ETA 9815: QA ~14:00, gated ~15:00.
+  Paused for it: T-921 0dfff348, T-379 S3 9dfecffb (lanes ended; resume after, QA re-runs Jobs).
+- Lanes: BE INFRA a3554d40 T-938 259935e8 (Job). BACKEND 524bf92b T-425 S2b 357ff021 (Job queued; QA PWG 9770, T-595 9772).
+  IMPL 2 3189279b T-436 S3 + T-772 S2g e4e2c4ff: tests green, prettier red on 5 files; the fmt.patch never reached the pod ->
+  told to copy prettier's output whole via a Job artifact + Write.
+- T-28 CLOSED (QA PASS 9857). T-294 PWG 9858: crew_post/read + idle-child reuse not built -> slice after T-948 (T-595 9871).
+  T-409 G3 ee75effd QA PWG 9820 -> merge in b31; G3b fup after T-425 S2b (T-595 9823).
+- Waiting for QA after build: T-938 (blind review; coordinator lands), T-921, T-436 S3, T-379 S3, T-425 S2b. Next build: T-382 S5.
 - D-79: uat on the owner's explicit request is crew work through the normal path (dry run, go/no-go); never on our own.
 
 ## DECISIONS (binding)
