@@ -132,6 +132,23 @@ test('slices page: a bad cursor, one from another filter, an unfiltered one and 
   assert.equal((await page(agent, `?cursor=${cur}`)).status, 400, 'the owner cursor on an agent');
 });
 
+// QA 9691 gap 4: the caller part of the cursor scope. The owner asking for `?session=s1` and agent s1 end up with the SAME session filter and the
+// same everything else, so only the caller tells their scopes apart: the cursor of one is a 400 for the other (drop the caller from the scope and
+// this goes red).
+test('slices page: with the same filters, a cursor is still the caller’s own (the caller is in the scope)', async () => {
+  const rows = many(30, 's1');
+  const owner = app(standIn(rows));
+  const agent = app(standIn(rows), agentOf('s1'));
+  const o1 = await page(owner, '?session=s1&limit=5');
+  const a1 = await page(agent, '?session=s1&limit=5');
+  assert.ok(o1.data.next && a1.data.next);
+  const own = (p: LabSlicePage) => encodeURIComponent(p.next!);
+  assert.equal((await page(owner, `?session=s1&limit=5&cursor=${own(o1.data)}`)).status, 200, 'the owner’s own cursor works');
+  assert.equal((await page(agent, `?session=s1&limit=5&cursor=${own(a1.data)}`)).status, 200, 'the agent’s own cursor works');
+  assert.equal((await page(agent, `?session=s1&limit=5&cursor=${own(o1.data)}`)).status, 400, 'the owner’s cursor on the agent');
+  assert.equal((await page(owner, `?session=s1&limit=5&cursor=${own(a1.data)}`)).status, 400, 'the agent’s cursor on the owner');
+});
+
 test('slices page: an agent sees its own session only, never a row of another one, and no cursor names one', async () => {
   clearResolvers();
   const rows = [...many(8, 's1'), ...many(8, 's2')];
