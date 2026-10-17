@@ -233,7 +233,7 @@ scripts/job-run.sh --repo konfersi:<org>/<repo> --ref <branch> --image registry.
   Job, `job-run.sh` reads that node's real memory (`kubectl top nodes`). The test is on the node's use PLUS the Job's expected peak (use x pct /
   used gives allocatable, no new verb): `JOB_RUN_EXPECTED_PEAK_MI` (default 2300 Mi, the measured p99 of Job peaks, 2270 Mi in the T-731 note;
   no run in the 878 logs of 2026-10-16 reached 3000 Mi; at most 6 digits) and 8192 Mi for `--big` (a rerun after an OOM kill, so unknown: its
-  whole limit). Over `JOB_RUN_MASTER_MAX_PCT` (75, at most 3 digits) the Job gets a REQUIRED rule away from the control plane and waits for
+  whole limit). Over `JOB_RUN_MASTER_MAX_PCT` (85 since 2026-10-17, was 75: T-731; at most 3 digits) the Job gets a REQUIRED rule away from the control plane and waits for
   k3s-node2 or for room ("placement:" line, and a Pending line that says so; a Job that never starts says "run it again"). The decision is made
   when the Job is created and AGAIN just before it leaves the queue (a Job can wait suspended for minutes): if the answer changed, the suspended
   Job's required rule is patched in or out first (a merge patch of that rule alone; scheduling directives of a suspended Job are mutable from
