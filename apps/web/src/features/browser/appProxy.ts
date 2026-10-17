@@ -13,7 +13,7 @@ export const appProxy = {
   ports: async (workspaceId: string): Promise<AppPortItem[] | null> => {
     try {
       const list = await request<AppPortList>('GET', APP_PORTS_API.list(workspaceId));
-      return list.enabled ? list.ports.filter((p) => p.openable) : null;
+      return list.enabled ? list.ports : null;
     } catch (e) {
       if (isAppOff(e)) return null;
       throw e;

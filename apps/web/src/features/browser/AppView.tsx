@@ -203,7 +203,7 @@ export function AppView({ workspaceId }: { workspaceId: string }) {
                 )}
                 {ports?.length === 0 && <p className="px-3 py-2.5 text-sm text-white/60">No ports.</p>}
                 {ports?.map((p) => (
-                  <button key={p.port} type="button" role="menuitem" onClick={() => pick(p)} className="flex min-h-11 w-full items-center gap-2 rounded-lg px-3 text-left text-sm text-white hover:bg-white/10">
+                  <button key={p.port} type="button" role="menuitem" disabled={!p.openable} onClick={() => pick(p)} className="flex min-h-11 w-full items-center gap-2 rounded-lg px-3 text-left text-sm text-white hover:bg-white/10 disabled:opacity-40 disabled:hover:bg-transparent">
                     <span className="font-mono">{p.port}</span>
                     {p.process && <span className="min-w-0 flex-1 truncate text-white/50 [overflow-wrap:anywhere]">{p.process}</span>}
                   </button>
@@ -271,7 +271,7 @@ export function AppView({ workspaceId }: { workspaceId: string }) {
               <InfoTip label="About App mode">Type localhost:&lt;port&gt; or pick a listening port. The app opens here, on its own address, apart from the portal. Back, forward and reload work on what you typed.</InfoTip>
             </p>
             <div className="flex max-w-full flex-wrap justify-center gap-2">
-              {ports?.slice(0, 6).map((p) => (
+              {ports?.filter((p) => p.openable).slice(0, 6).map((p) => (
                 <button key={p.port} type="button" onClick={() => pick(p)} className="min-h-11 rounded-lg bg-white/10 px-4 font-mono text-white hover:bg-white/15">
                   {p.port}
                 </button>
