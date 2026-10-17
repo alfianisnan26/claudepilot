@@ -6,11 +6,9 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - Batches 22-26: git history (to 83b7213e), gates green. Close on "Coordinator live check" PASS. T-574 re-check after 10-17 15:00Z.
 - RESPAWN rule (165db813 + D-78 4e101a59): respawn each lane BETWEEN tickets on a worktree cut from integration; scripts by abs path.
 - BATCHES 27 bda180d2 + 28 63ff971c (gates GREEN) deployed in 2026.10.17-1 (details: git history). Flake boot.test.ts -> T-903.
-- BATCH 29 ON INTEGRATION edde2073 (gate edde207 GREEN, suite 741s; quick-check 11 files green; first gate 4258f72 green, re-gated
-  after 44fba442 T-623 browser image): T-524 S3c+T-733 S5, T-881 S1b, T-416 S2c (lead's mechanical controller.ts resolution
-  67198848, APPROVE 9219), T-382 S1, T-781 S8c, T-675 R2c+R2d. Coordinator told T-731 9271.
+- BATCH 29 edde2073 (gate GREEN; T-524 S3c, T-733 S5, T-881 S1b, T-416 S2c, T-382 S1, T-781 S8c, T-675 R2c+R2d) + T-924 4754b282
+  (gate GREEN; told 9736/9737) RELEASED in 2026.10.17-2 (4e6e48ae). Close each on its "Coordinator live check" PASS.
 ## IN FLIGHT (6 of 6, D-71; lanes respawned per ticket, D-78; sonnet)
-- T-924 LANDED on integration 4754b282 (gate 4754b28 GREEN; coordinator told T-924 9736 + T-731 9737). Close on live check PASS.
 - BATCH 30 premerge-b30 b9781ad6 (wip/main-b9781ad): T-772 S2f, T-736 S3g, T-612 S1, T-868 S1-S3, T-436 S1+S2 (deploy note),
   T-379 S2, format fix 787932e2, integration (T-924), T-860 S2c a87d00b8 (PWG 9638), T-382 S2-S4 (PWG 9691; S5 fup).
   Resolution trace T-595 9742. + integration (release 2026.10.17-2, D-79) = e0f7a72d (wip/main-e0f7a72). QUICK-CHECK running
@@ -25,8 +23,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   QA 694614c4 (one.claude) T-409 G3 ee75effd (built, DONE 9758). IMPL 2 3189279b T-436 S3 + T-772 S2g e4e2c4ff.
   IMPL c6418f2a T-379 S3 (image in --reuse key) from b30.
 - Waiting for QA after build: T-938 (blind review; coordinator lands), T-921, T-436 S3, T-379 S3, T-425 S2b. Next build: T-382 S5.
-- Coordinator released portal 2026.10.17-2 (4e6e48ae, holds T-924 + batch 29); live checks pending. D-79: uat on the owner's
-  explicit request is crew work through the normal path (dry run, go/no-go); never on our own.
+- D-79: uat on the owner's explicit request is crew work through the normal path (dry run, go/no-go); never on our own.
 
 ## DECISIONS (binding)
 - 10:00 Restart (~07:00 UTC, /tmp wiped; my Claude hit its session limit 03:xx): 6 lanes ended + respawned from pushed heads
