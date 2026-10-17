@@ -21,7 +21,7 @@ import {
   type UpdateTicketRequest,
 } from '@portal/contracts';
 import { Hono, type Context } from 'hono';
-import { actorOf, can, requireCan } from '../authz/seam.js';
+import { actorOf, can, requireCan, visible } from '../authz/seam.js';
 import { declareTicketPolicies } from './authz.js';
 import type { Caller, Tickets } from './service.js';
 
@@ -50,11 +50,6 @@ const names = <T extends string>(raw: string | undefined, all: readonly T[], fie
   return items as T[];
 };
 
-const int = (raw: string | undefined) => {
-  const n = Number(raw);
-  return raw !== undefined && Number.isFinite(n) ? n : undefined;
-};
-
 export function createTicketRoutes(tickets: Tickets): Hono {
   declareTicketPolicies();
   const app = new Hono();
@@ -75,10 +70,12 @@ export function createTicketRoutes(tickets: Tickets): Hono {
       includeClosed: q.includeClosed === '1' || q.includeClosed === 'true',
       orphan: q.orphan === '1' || q.orphan === 'true' || undefined,
       sort: q.sort === 'newest' ? 'newest' : undefined,
-      limit: int(q.limit),
-      offset: int(q.offset),
     };
-    return c.json(success(tickets.list(UI, filter)));
+    // D-58: `{ items, next }` (25 by default, 100 at most), summary rows, keyset. Each row passes `view` before it is shown and `next` points at
+    // the last row shown, so a cursor never names a hidden ticket. A bad cursor, or one made for another filter, is a 400.
+    const actor = actorOf(c);
+    const keep = (t: { id: string }) => visible(actor, 'ticket', [t], (x) => x.id).length > 0;
+    return c.json(success(tickets.listPage(UI, filter, { cursor: q.cursor || undefined, limit: q.limit, keep })));
   });
 
   app.post('/', async (c) => c.json(success(tickets.create(UI, await body<CreateTicketRequest>(c))), 201));

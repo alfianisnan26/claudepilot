@@ -83,7 +83,7 @@ export function pageFilter(p: {
   tag: string | null;
   q: string;
 }): TicketFilter {
-  const f: TicketFilter = { limit: 300 };
+  const f: TicketFilter = { limit: 100 };
   if (p.view === 'board') f.includeClosed = true;
   else if (p.scope === 'closed') f.status = ['done', 'wont_do'];
   else if (p.scope !== 'active') f.status = [p.scope as TicketStatus];

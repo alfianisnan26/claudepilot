@@ -20,7 +20,7 @@ for (const t of types) {
   urls.add(`/api/pools/${type}`);
   for (const p of (await call('GET', `/api/pools/${type}`)).data ?? []) urls.add(`/api/pools/${type}/${p.id}`);
 }
-for (const s of (await call('GET', '/api/chat/sessions')).data ?? []) {
+for (const s of (await call('GET', '/api/chat/sessions?limit=100')).data?.items ?? []) {
   urls.add(`/api/chat/sessions/${s.id}`);
   if (!process.argv.includes('--skip-events')) urls.add(`/api/chat/sessions/${s.id}/events?after=0`);
   for (const p of ['tasks', 'files', 'diff']) urls.add(`/api/chat/sessions/${s.id}/${p}`);

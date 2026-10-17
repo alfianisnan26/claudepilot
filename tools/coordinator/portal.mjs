@@ -7,7 +7,7 @@ const PORTAL='https://pilot.ai.isnan.me', CODE=process.env.PORTAL_SERVER_CODE, [
 let cookie='';
 async function api(m,p,b){ if(!cookie){const l=await fetch(`${PORTAL}/api/login`,{method:'POST',headers:{'content-type':'application/json',origin:PORTAL},body:JSON.stringify({code:CODE})});cookie=(l.headers.getSetCookie?.()??[]).map(c=>c.split(';')[0]).join('; ');}
  const r=await fetch(`${PORTAL}${p}`,{method:m,headers:{'content-type':'application/json',origin:PORTAL,cookie},...(b===undefined?{}:{body:JSON.stringify(b)})}); const j=await r.json().catch(()=>null); return {data:j?.data,error:j?.error}; }
-const s=((await api('GET','/api/chat/sessions')).data??[]).find((x)=>x.id.startsWith(prefix)); if(!s){console.log('no session',prefix);process.exit(1);}
+const s=((await api('GET','/api/chat/sessions?limit=100')).data?.items??[]).find((x)=>x.id.startsWith(prefix)); if(!s){console.log('no session',prefix);process.exit(1);}
 const lease=tokenLease({api,label:'coordinator'}); let secret; try{secret=await lease.get();}catch(e){console.log(e.message);process.exit(1);}
 try {
 const h={authorization:`Bearer ${secret}`,'content-type':'application/json',accept:'application/json, text/event-stream'};

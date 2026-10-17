@@ -271,7 +271,7 @@ export function AssignDialog({ ticket, onClose, onSaved }: { ticket: TicketItem 
     setSessionId(ticket.assignee?.kind === 'session' ? ticket.assignee.sessionId : '');
     setError(null);
     let current = true;
-    chatApi.list().then(
+    chatApi.listAll().then(
       (list) => current && setSessions(list.filter((s) => s.state !== 'ended' && !s.archivedAt).map((s) => ({ id: s.id, title: s.title, workspaceId: s.workspaceId }))),
       () => undefined,
     );

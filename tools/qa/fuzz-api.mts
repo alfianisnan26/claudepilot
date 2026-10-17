@@ -52,7 +52,7 @@ if (made.endpoint) {
   if (made.account) await create('pool', '/api/account-pools', { name: 'qa-fuzz-pool', endpointId: made.endpoint, members: [made.account] });
 }
 await create('secrets', '/api/pools/secrets', { name: 'qa-fuzz-secrets', content: { entries: [{ kind: 'variable', name: 'QA_FUZZ', value: 'x' }] } });
-const sessions = (await call('GET', '/api/chat/sessions')).data as { id: string; title: string }[];
+const sessions = ((await call('GET', '/api/chat/sessions?limit=100')).data as { items: { id: string; title: string }[] }).items;
 made.session = sessions.find((s) => s.title.startsWith('QA bulk'))?.id ?? sessions[0]?.id ?? 'x';
 
 const FAKE = 'qa-fuzz-nothing';

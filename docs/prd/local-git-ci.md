@@ -444,7 +444,7 @@ Behind the session guard like every route, with the Origin check on mutations. `
 
 | Route | Does |
 | --- | --- |
-| `GET /api/ci/runs` | List: `workspace`, `repo`, `pipeline`, `branch`, `status`, `ticket`, `session`, `before`, `limit`; each row with its jobs' states as a short list. |
+| `GET /api/ci/runs` | The list, one page (D-58, T-382 S4): `workspace`, `repo`, `pipeline`, `branch`, `status`, `ticket`, `session`, `limit` (25 by default, 100 at most) and `cursor` (it replaces `before`); answers `{ items, next }`, newest first, the run id breaking ties, by keyset, so a run started during a walk never repeats or skips a row. The cursor is signed and bound to the caller and every filter value: a bad one, or one used with another filter or by another caller, is a 400. Each run is checked with `view` before it is shown and `next` points at the last run shown. The first page (no `cursor`) also carries `total` and `active` over the runs the caller may view; later pages leave them out. Each row has its jobs' states as a short list (no log text). The web loads the first 100, has a More button, and its refresh reads the first page again. The portal MCP `ci_runs_list` reads the service in process (its own `limit`), not this route. |
 | `GET /api/ci/runs/:id` | The run with jobs, steps, reasons, the plan's pipeline name, links to ticket and session. |
 | `GET /api/ci/runs/:id/log` | `job`, `step`, `offset`: `{ text, next, done, truncated }`. |
 | `POST /api/ci/runs` | Start by hand (FR13): `{ repoId, pipeline, ref, inputs }`. |

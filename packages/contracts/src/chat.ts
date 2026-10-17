@@ -922,7 +922,7 @@ export const CHAT_API = {
   reauth: '/api/chat/reauth',
   /** GET: the chat policy (`{ bypass: { allowed } }`). */
   policy: '/api/chat/policy',
-  /** GET `?kind=&sessionId=&limit=`: the audit trail (`ChatAuditEntry[]`). */
+  /** GET `?kind=&sessionId=&limit=&cursor=`: one page of the audit trail, newest first (`CursorPage<ChatAuditEntry>`, D-58: 25 by default, 100 at most). */
   audit: '/api/chat/audit',
   /** GET `?path=`: a file's bytes, as a download. */
   download: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/files/download`,

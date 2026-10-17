@@ -47,7 +47,7 @@ const LIST = [
 ];
 const listFake = `(() => { const rows = ${JSON.stringify(LIST)}; const real = window.fetch.bind(window);
   window.fetch = (input, init) => { const p = new URL(typeof input === 'string' ? input : input.url, location.origin).pathname;
-    if (p === '/api/chat/sessions' && (!init || !init.method || init.method === 'GET')) return Promise.resolve(new Response(JSON.stringify({ data: rows }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    if (p === '/api/chat/sessions' && (!init || !init.method || init.method === 'GET')) return Promise.resolve(new Response(JSON.stringify({ data: { items: rows, next: null } }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
     if (/^\\/api\\/chat\\/sessions\\/rc-[0-9]\\/recover$/.test(p)) { window.__recovered = (window.__recovered || []).concat(p); return Promise.resolve(new Response(JSON.stringify({ data: rows[0] }), { status: 200, headers: { 'Content-Type': 'application/json' } })); }
     return real(input, init); }; })();`;
 

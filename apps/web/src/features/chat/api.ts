@@ -5,6 +5,7 @@ import {
   EVENT_PAGE_LIMIT,
   KEEPGOING_API,
   type ChatEventPage,
+  type CursorPage,
   type KeepGoingList,
   type ChatBypassState,
   type ChatDiff,
@@ -77,12 +78,26 @@ const query = (o: Record<string, string | undefined>) => {
 const childrenQuery = (children?: 'end') => query({ children });
 
 export const chatApi = {
-  list: () => request<ChatSession[]>('GET', CHAT_API.list),
+  /** One page of sessions, newest activity first (D-58): `next` goes back as `cursor`. */
+  list: (opts: { cursor?: string | null; limit?: number; parentId?: string } = {}) =>
+    request<CursorPage<ChatSession>>('GET', CHAT_API.list + query({ limit: opts.limit ? String(opts.limit) : undefined, cursor: opts.cursor ?? undefined, parentId: opts.parentId })),
+  /** Every session, by following the pages (at most `maxPages` of 100): for a caller that needs the whole set (the palette, a picker, a lead's workers). */
+  listAll: async (opts: { parentId?: string; maxPages?: number } = {}): Promise<ChatSession[]> => {
+    const out: ChatSession[] = [];
+    let cursor: string | null = null;
+    for (let i = 0; i < (opts.maxPages ?? 5); i++) {
+      const page: CursorPage<ChatSession> = await chatApi.list({ limit: 100, cursor, ...(opts.parentId ? { parentId: opts.parentId } : {}) });
+      out.push(...page.items);
+      if (!page.next) break;
+      cursor = page.next;
+    }
+    return out;
+  },
   create: (body: CreateChatSessionRequest) => request<ChatSession>('POST', CHAT_API.create, body),
   get: (id: string) => request<ChatSession>('GET', CHAT_API.one(id)),
   end: (id: string, children?: 'end') => request<{ ok: true }>('POST', CHAT_API.end(id) + childrenQuery(children)),
   /** The sessions a session started. */
-  children: (id: string) => request<ChatSession[]>('GET', `${CHAT_API.list}?parentId=${encodeURIComponent(id)}`),
+  children: (id: string) => chatApi.listAll({ parentId: id }),
   rename: (id: string, title: string) => request<ChatSession>('PATCH', CHAT_API.one(id), { title } satisfies UpdateChatSessionRequest),
   /** Deletes it, ending it first: the transcript and its files in the workspace go (FR4). */
   remove: (id: string, worktree?: ChatWorktreeRemoval, children?: 'end') =>

@@ -65,6 +65,8 @@ import {
   type ChatWorktreeRequest,
   type ChatWorktreeStatus,
   type ChatSession,
+  type ChatAuditEntry,
+  type CursorPage,
   type ChatTask,
   type ChatTaskTranscript,
   type ChatSwitchOption,
@@ -1236,6 +1238,12 @@ export class ChatController {
   /** Sessions, newest activity first; optionally one workspace's, one ticket's, or one parent's children. */
   list(filter: { workspaceId?: string; ticketId?: string; parentId?: string } = {}): ChatSession[] {
     return this.#chat.list(filter).map((s) => this.#decorate(s));
+  }
+
+  /** D-58: one page of {@link list} for `GET /api/chat/sessions`; `keep` is the caller's `view` check, run before a row is shown. */
+  listPage(filter: { workspaceId?: string; ticketId?: string; parentId?: string }, args: { cursor?: string | undefined; limit?: unknown; keep?: (s: ChatSession) => boolean }): CursorPage<ChatSession> {
+    const page = this.#chat.listPage(filter, args);
+    return { items: page.items.map((s) => this.#decorate(s)), next: page.next };
   }
 
   /** One session by its id, or by the id of a session it took in (a move used to make a second one). */
@@ -3367,6 +3375,11 @@ export class ChatController {
   /** The audit trail, newest first: Bypass entered and left, and what was refused. */
   audit(filter: { kind?: string; sessionId?: string; limit?: number } = {}) {
     return this.#chat.audit(filter);
+  }
+
+  /** D-58: one page of the audit trail (`{ items, next }`); `keep` is the caller's authz filter. */
+  auditPage(filter: { kind?: string; sessionId?: string; scope?: string }, args: { cursor?: string | undefined; limit?: unknown; keep?: (e: ChatAuditEntry) => boolean }): CursorPage<ChatAuditEntry> {
+    return this.#chat.auditPage(filter, args);
   }
 
   /* ---------- Sessions starting and messaging sessions ---------- */

@@ -15,7 +15,7 @@ import {
   type TicketEvent,
   type TicketFilter,
   type TicketItem,
-  type TicketList,
+  type TicketPage,
   type TicketTag,
   type UpdateTicketRequest,
 } from '@portal/contracts';
@@ -57,12 +57,13 @@ function query(f: TicketFilter): string {
   if (f.orphan) q.set('orphan', '1');
   if (f.sort === 'newest') q.set('sort', 'newest');
   if (f.limit) q.set('limit', String(f.limit));
-  if (f.offset) q.set('offset', String(f.offset));
+  if (f.cursor) q.set('cursor', f.cursor);
   return q.size ? `?${q}` : '';
 }
 
 export const ticketsApi = {
-  list: (filter: TicketFilter = {}) => request<TicketList>('GET', `${TICKET_API.list}${query(filter)}`),
+  /** One page of summary rows (D-58): `next` goes back as `filter.cursor`; `total` and `counts` come with the first page only. */
+  list: (filter: TicketFilter = {}) => request<TicketPage>('GET', `${TICKET_API.list}${query(filter)}`),
   get: (id: string) => request<TicketDetail>('GET', TICKET_API.one(id)),
   create: (body: CreateTicketRequest) => request<TicketItem>('POST', TICKET_API.list, body),
   update: (id: string, body: UpdateTicketRequest) => request<TicketItem>('PATCH', TICKET_API.one(id), body),

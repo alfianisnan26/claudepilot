@@ -36,6 +36,9 @@ import {
   type TicketFilter,
   type TicketItem,
   type TicketList,
+  type TicketPage,
+  CURSOR_MAX_LIMIT,
+  TICKET_LIST_TEXT,
   type TicketOrphan,
   type TicketOrphanWhy,
   type TicketPriority,
@@ -47,6 +50,7 @@ import {
 } from '@portal/contracts';
 import { assertBumpable, bumpMode, bumpNote, bumpTargets as targetsFor } from '../chat/bump.js';
 import { cleanText } from '../portalmcp/sanitize.js';
+import { clampLimit, cursorAfter, decodeCursor, SCAN_FACTOR } from '../store/keyset.js';
 import type { Store } from '../store/store.js';
 import {
   AGENT_ASSIGN_USER_TAGS_DEFAULT,
@@ -674,6 +678,83 @@ export class Tickets {
     const rows = (this.#db.prepare(`SELECT t.* FROM tickets t ${sql} ORDER BY ${order} LIMIT ${limit} OFFSET ${offset}`).all(...args) as unknown as Row[]).map((r) => this.#keyed(r));
     const total = (this.#db.prepare(`SELECT count(*) AS n FROM tickets t ${sql}`).get(...args) as { n: number }).n;
     return { items: this.#items(rows), total, counts: this.counts(caller) };
+  }
+
+  /**
+   * D-58: one page of {@link list}, same order, by keyset on the sort key plus the ticket number (a ticket made or touched while a client pages
+   * never repeats or skips a row), as SUMMARY rows: description and closing summary cut at {@link TICKET_LIST_TEXT} characters.
+   * The cursor is bound to the caller and every filter value (a cursor from another filter is a 400). `keep` is the caller's `view` check: a
+   * row it refuses is not shown. The cursor points at the last row SHOWN, or, when the scan bound (SCAN_FACTOR x limit rows read) ends the page, at
+   * the last row scanned; it is sealed, so it shows nothing of a hidden ticket. `total` and `counts` only on page 1.
+   */
+  listPage(caller: Caller, filter: TicketFilter = {}, args: { cursor?: string | undefined; limit?: unknown; keep?: (t: TicketItem) => boolean } = {}): TicketPage {
+    const { sql, args: sqlArgs } = this.#where(caller, filter);
+    const limit = clampLimit(args.limit);
+    const closedOnly = !!filter.status?.length && filter.status.every((s) => isTicketClosed(s));
+    const kind = closedOnly ? 'closed' : filter.sort === 'newest' ? 'newest' : 'priority';
+    const scope = `tickets|${JSON.stringify([caller.kind === 'agent' ? `agent:${caller.workspaceId}` : caller.kind, kind, filter.status ?? null, filter.priority ?? null, filter.type ?? null, filter.tag ?? null, filter.assignee ?? null, filter.workspaceId ?? null, filter.query?.trim() ?? null, !!filter.includeClosed, !!filter.orphan])}`;
+    // The sort key of a row, as the cursor carries it, and the SQL that says "after the cursor" in the list's order.
+    const keyOf = (r: Row): string => (kind === 'closed' ? (r.closed_at ?? '') : kind === 'newest' ? r.created_at : `${r.priority_rank}|${r.updated_at}`);
+    const order = kind === 'closed' ? 'COALESCE(t.closed_at, \'\') DESC, t.number DESC' : kind === 'newest' ? 't.created_at DESC, t.number DESC' : 't.priority_rank ASC, t.updated_at DESC, t.number DESC';
+    const after = (key: string, num: number): { sql: string; args: (string | number)[] } => {
+      if (kind !== 'priority') {
+        const col = kind === 'closed' ? "COALESCE(t.closed_at, '')" : 't.created_at';
+        return { sql: `(${col} < ? OR (${col} = ? AND t.number < ?))`, args: [key, key, num] };
+      }
+      const cut = key.indexOf('|');
+      const rank = Number(key.slice(0, cut));
+      const upd = key.slice(cut + 1);
+      if (cut < 0 || !Number.isFinite(rank)) throw new AppError('BAD_REQUEST', 'That cursor is not valid for this list. Load the list again.');
+      return { sql: '(t.priority_rank > ? OR (t.priority_rank = ? AND t.updated_at < ?) OR (t.priority_rank = ? AND t.updated_at = ? AND t.number < ?))', args: [rank, rank, upd, rank, upd, num] };
+    };
+    let resume: { key: string; num: number } | null = null;
+    if (args.cursor) {
+      const at = decodeCursor(args.cursor, scope);
+      if (typeof at.sort !== 'string' || typeof at.id !== 'number') throw new AppError('BAD_REQUEST', 'That cursor is not valid for this list. Load the list again.');
+      resume = { key: at.sort, num: at.id };
+    }
+    const shown: { item: TicketItem; key: string; num: number }[] = [];
+    // Bounded scan: at most SCAN_FACTOR x limit rows per request, however many `keep` hides. At the bound the page ends and `next` rests on the
+    // last row SCANNED (shown or not); the cursor is sealed (keyset.ts), so a hidden ticket is not readable in it.
+    const maxScan = limit * SCAN_FACTOR;
+    let scanned = 0;
+    let more: { key: string; num: number } | null = null;
+    while (scanned < maxScan) {
+      const room = Math.min(CURSOR_MAX_LIMIT, maxScan - scanned);
+      const a = resume ? after(resume.key, resume.num) : null;
+      const where = a ? (sql ? `${sql} AND ${a.sql}` : `WHERE ${a.sql}`) : sql;
+      const got = (this.#db.prepare(`SELECT t.* FROM tickets t ${where} ORDER BY ${order} LIMIT ?`).all(...sqlArgs, ...(a?.args ?? []), room + 1) as unknown as Row[]).map((r) => this.#keyed(r));
+      const batch = got.slice(0, room);
+      const items = this.#items(batch);
+      batch.forEach((r, i) => {
+        const item = this.#summary(items[i]!);
+        if (!args.keep || args.keep(item)) shown.push({ item, key: keyOf(r), num: r.number });
+      });
+      scanned += batch.length;
+      const last = batch[batch.length - 1];
+      more = got.length > room && last ? { key: keyOf(last), num: last.number } : null;
+      if (shown.length > limit || !more) break;
+      resume = more;
+    }
+    const page = shown.slice(0, limit);
+    const last = page[page.length - 1];
+    const nextAt = shown.length > limit && last ? { key: last.key, num: last.num } : shown.length > limit ? null : more;
+    const out: TicketPage = { items: page.map((x) => x.item), next: nextAt ? cursorAfter(scope, nextAt.key, nextAt.num) : null };
+    if (!args.cursor) {
+      out.total = (this.#db.prepare(`SELECT count(*) AS n FROM tickets t ${sql}`).get(...sqlArgs) as { n: number }).n;
+      out.counts = this.counts(caller);
+    }
+    return out;
+  }
+
+  /** A list row: the long texts cut (D-58). The detail read has the whole. */
+  #summary(t: TicketItem): TicketItem {
+    const cut = (s: string | null): string | null => {
+      if (s === null || s.length <= TICKET_LIST_TEXT) return s;
+      const end = /[\uD800-\uDBFF]/.test(s[TICKET_LIST_TEXT - 1]!) ? TICKET_LIST_TEXT - 1 : TICKET_LIST_TEXT;
+      return s.slice(0, end);
+    };
+    return { ...t, description: cut(t.description) ?? '', closingSummary: cut(t.closingSummary), descriptionCut: t.description.length > TICKET_LIST_TEXT, closingSummaryCut: (t.closingSummary?.length ?? 0) > TICKET_LIST_TEXT };
   }
 
   #events(number: number, opts: { limit?: number } = {}): TicketEvent[] {

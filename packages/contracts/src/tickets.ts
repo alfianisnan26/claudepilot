@@ -3,6 +3,7 @@
 // person; every change is an entry on its timeline. The text of a ticket is untrusted input.
 
 import type { BumpMode } from './bump.js';
+import type { CursorPage } from './page.js';
 
 export const TICKET_TYPES = ['task', 'bug', 'feature', 'question', 'request', 'incident', 'approval', 'chore'] as const;
 export type TicketType = (typeof TICKET_TYPES)[number];
@@ -101,7 +102,16 @@ export interface TicketItem extends Ticket {
    * `tickets.orphanAfterMin` has passed since `since`. Null for every other ticket.
    */
   orphan: TicketOrphan | null;
+  /**
+   * D-58: set on a LIST row only. A list row holds `description` and `closingSummary` cut at {@link TICKET_LIST_TEXT} characters; these say a
+   * cut happened. The full text is `GET /api/tickets/:id`. Never write a cut text back: read the detail first.
+   */
+  descriptionCut?: boolean;
+  closingSummaryCut?: boolean;
 }
+
+/** D-58: the most characters of a ticket's description (and closing summary) a list row carries. */
+export const TICKET_LIST_TEXT = 200;
 
 /** Why the holder counts as dead: its state is `ended`, it was archived (ended and hidden), or the portal no longer has the session. */
 export type TicketOrphanWhy = 'ended' | 'archived' | 'missing';
@@ -203,6 +213,15 @@ export interface TicketList {
   counts: TicketCounts;
 }
 
+/**
+ * `GET /api/tickets` (D-58): one page of summary rows (descriptions cut, see `TicketItem.descriptionCut`), `next` the cursor of the following page.
+ * `total` and `counts` ride on the first page only (no `cursor`); a later page leaves them out.
+ */
+export interface TicketPage extends CursorPage<TicketItem> {
+  total?: number;
+  counts?: TicketCounts;
+}
+
 /** `me` is the caller's session; `user` a person; `session:<id>`; `unassigned`; `any`. */
 export type TicketAssigneeFilter = 'any' | 'unassigned' | 'user' | `session:${string}`;
 
@@ -221,8 +240,12 @@ export interface TicketFilter {
   includeClosed?: boolean;
   /** `priority` (the default): the most urgent first, then the latest update. `newest`: the latest made first (the Home page). */
   sort?: 'priority' | 'newest';
+  /** Rows per page: 25 when absent, at most 100 on the route. */
   limit?: number;
+  /** In-process only (the portal MCP's own paging); the HTTP route takes `cursor`. */
   offset?: number;
+  /** The route: the `next` of the page before. */
+  cursor?: string;
 }
 
 export interface CreateTicketRequest {

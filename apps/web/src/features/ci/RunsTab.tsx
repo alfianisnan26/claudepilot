@@ -1,8 +1,9 @@
 import { Button, cn, EmptyState, LoadError, Menu, RowsSkeleton, useToast } from '@isnanme/ui';
-import { isCiActive, type CiRunList, type CiRunSummary, type CiStatus } from '@portal/contracts';
+import { isCiActive, type CiRunPage, type CiRunSummary, type CiStatus } from '@portal/contracts';
 import { ChevronDown, ChevronsUp, CircleCheck, CircleX, List, LoaderCircle, Plus, Server, Workflow, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
+import { ListPager } from '@/features/chat/listPaging';
 import { timeAgo } from '@/lib/format';
 import { useLive } from '@/lib/live';
 import { ciApi } from './api';
@@ -27,7 +28,12 @@ export function RunsTab({ onNewRemote }: { onNewRemote: () => void }) {
   const scope = (SCOPES.find((s) => s.id === params.get('s'))?.id ?? 'all') as Scope;
   const repo = params.get('repo');
   const branch = params.get('branch');
-  const [data, setData] = useState<CiRunList | null>(null);
+  const [data, setData] = useState<CiRunPage | null>(null);
+  // Older pages loaded with "More" (D-58): the ListPager keeps them under a refreshed first page only while its last row did not move, and
+  // refuses a page that lands after they were dropped. `data` still carries the first page's total and active counts.
+  const pager = useRef(new ListPager<CiRunSummary>());
+  const [, setTick] = useState(0);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [repos, setRepos] = useState<{ id: string; name: string; workspaceId: string }[]>([]);
   const [failed, setFailed] = useState(false);
   const [now, setNow] = useState(Date.now());
@@ -50,6 +56,7 @@ export function RunsTab({ onNewRemote }: { onNewRemote: () => void }) {
     try {
       const [list, r] = await Promise.all([ciApi.runs({ status, repo: repo ?? undefined, branch: branch ?? undefined, limit: 100 }), ciApi.repos()]);
       if (mine !== seq.current) return;
+      pager.current.applyHead(list);
       setData(list);
       setRepos(r.map((x) => ({ id: x.id, name: x.name, workspaceId: x.workspaceId })));
       setFailed(false);
@@ -58,10 +65,35 @@ export function RunsTab({ onNewRemote }: { onNewRemote: () => void }) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scope, repo, branch]);
-  useEffect(() => void load(), [load]);
+  useEffect(() => {
+    pager.current.restart();
+    void load();
+  }, [load]);
   useLive('ci', () => void load());
 
-  const anyActive = data?.items.some((r) => isCiActive(r.status)) ?? false;
+  const after = pager.current.next;
+  const loadMore = async () => {
+    const ticket = pager.current.beginMore();
+    if (!ticket || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const page = await ciApi.runs({ status, repo: repo ?? undefined, branch: branch ?? undefined, limit: 100, cursor: ticket.cursor });
+      // A page that lands after the older pages were dropped (a poll moved the seam, a filter changed) is stale: finishMore refuses it.
+      if (pager.current.finishMore(ticket, page)) setTick((n) => n + 1);
+    } catch (e) {
+      const what = pager.current.failMore(ticket, e);
+      // A refused cursor (it expired with a server restart): start again from the first page.
+      if (what === 'restart') {
+        pager.current.restart();
+        void load();
+      } else if (what === 'retry') toast('Could not load more');
+    } finally {
+      setLoadingMore(false);
+    }
+  };
+
+  const rows = pager.current.items ?? [];
+  const anyActive = rows.some((r) => isCiActive(r.status));
   useEffect(() => {
     if (!anyActive) return;
     const tick = window.setInterval(() => setNow(Date.now()), 1000);
@@ -126,11 +158,20 @@ export function RunsTab({ onNewRemote }: { onNewRemote: () => void }) {
             action={filtered ? undefined : repos.length === 0 ? <Button icon={<Plus className="size-4" />} onClick={onNewRemote}>New remote</Button> : undefined}
           />
         ) : (
-          <ul className="flex flex-col gap-2">
-            {data.items.map((r) => (
-              <RunRow key={r.id} run={r} now={now} remote={repos.length > 1 ? names.get(r.repoId) : undefined} onOpen={() => navigate(`/admin/ci/runs/${r.id}`)} onBump={() => setBumping(r)} />
-            ))}
-          </ul>
+          <>
+            <ul className="flex flex-col gap-2">
+              {rows.map((r) => (
+                <RunRow key={r.id} run={r} now={now} remote={repos.length > 1 ? names.get(r.repoId) : undefined} onOpen={() => navigate(`/admin/ci/runs/${r.id}`)} onBump={() => setBumping(r)} />
+              ))}
+            </ul>
+            {after && (
+              <div className="mt-3 flex justify-center">
+                <Button variant="secondary" loading={loadingMore} onClick={() => void loadMore()}>
+                  More
+                </Button>
+              </div>
+            )}
+          </>
         ))}
       <RunBumpDialog
         run={bumping}

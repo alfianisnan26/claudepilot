@@ -16,7 +16,7 @@ const check = (name, ok, extra = '') => {
 };
 const cookie = await login();
 const call = api(cookie);
-const sessions = (await call('GET', '/api/chat/sessions')).data ?? [];
+const sessions = (await call('GET', '/api/chat/sessions?limit=100')).data?.items ?? [];
 if (sessions.length < 2) {
   console.error('needs at least two sessions on the portal');
   process.exit(2);

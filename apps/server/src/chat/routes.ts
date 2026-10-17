@@ -5,6 +5,7 @@ import { AppError, success } from '@isnanme/core';
 import { createHash } from 'node:crypto';
 import {
   sessionRef,
+  type ChatAuditEntry,
   type ChatWorktreeRemoval,
   type CreateChatSessionRequest,
   type CreateWorkspaceClaudeRequest,
@@ -18,7 +19,7 @@ import {
   type UpdateRestartHintRequest,
 } from '@portal/contracts';
 import { Hono, type Context } from 'hono';
-import { actorOf, actorString, requireCan } from '../authz/seam.js';
+import { actorOf, actorString, requireCan, visible } from '../authz/seam.js';
 import { RateLimiter } from '../rateLimit.js';
 import { serveBlob } from './artifacts/index.js';
 import type { ChatController } from './controller.js';
@@ -61,8 +62,13 @@ function childrenMode(raw: string | undefined): 'end' | undefined {
 export function createChatRoutes(controller: ChatController): Hono {
   const chat = new Hono();
 
-  // GET /api/chat/sessions — sessions, newest activity first.
-  chat.get('/', (c) => c.json(success(controller.list({ parentId: c.req.query('parentId') || undefined }))));
+  // GET /api/chat/sessions?limit=&cursor=&parentId= — one page of sessions, newest activity first (D-58: `{ items, next }`, 25 by default, 100 at most).
+  // Each row is checked with `view` BEFORE it is shown, and `next` points at the last row shown, so a cursor never reveals a session the caller may not see. A bad cursor is a 400.
+  chat.get('/', (c) => {
+    const actor = actorOf(c);
+    const keep = (s: { id: string }) => visible(actor, 'session', [s], (x) => x.id).length > 0;
+    return c.json(success(controller.listPage({ ...(c.req.query('parentId') ? { parentId: c.req.query('parentId')! } : {}) }, { cursor: c.req.query('cursor') || undefined, limit: c.req.query('limit'), keep })));
+  });
 
   // POST /api/chat/sessions — create one (starts the host in the background); 409 FOLDER_UNTRUSTED with the scan first when the folder needs trusting.
   chat.post('/', async (c) => {
@@ -233,9 +239,16 @@ export function createChatMetaRoutes(controller: ChatController, reauth: Reauth)
     return c.json(success(await controller.worktrees(workspaceId, c.req.query('folder')?.trim() || undefined)));
   });
   meta.get('/policy', (c) => c.json(success({ bypass: { allowed: controller.bypassAllowed?.() === true } })));
+  // GET /api/chat/audit?kind=&sessionId=&limit=&cursor= — one page of the audit trail, newest first (D-58: `{ items, next }`, 25 by default, 100 at most).
+  // An entry about a session is shown only when the caller may `view` that session (an entry with no session, or of a session since deleted, is the
+  // trail's own and shows as before); `next` points at the last entry shown; a bad cursor, or one made for another caller or filter, is a 400.
   meta.get('/audit', (c) => {
-    const limit = Number(c.req.query('limit'));
-    return c.json(success(controller.audit({ kind: c.req.query('kind') || undefined, sessionId: c.req.query('sessionId') || undefined, limit: Number.isFinite(limit) && limit > 0 ? limit : undefined })));
+    const actor = actorOf(c);
+    const keep = (e: ChatAuditEntry) => {
+      if (!e.sessionId || !controller.sessionFacts(e.sessionId)) return true;
+      return visible(actor, 'session', [e], (x) => x.sessionId!).length > 0;
+    };
+    return c.json(success(controller.auditPage({ kind: c.req.query('kind') || undefined, sessionId: c.req.query('sessionId') || undefined, scope: actorString(actor) }, { cursor: c.req.query('cursor') || undefined, limit: c.req.query('limit'), keep })));
   });
   return meta;
 }

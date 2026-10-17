@@ -1,4 +1,4 @@
-import type { CiRunList, CiRunSummary, GlanceSnapshot } from '@portal/contracts';
+import type { CiRunPage, CiRunSummary, GlanceSnapshot } from '@portal/contracts';
 import type { GlanceCompact, GlanceLevel } from '../../types';
 import { chipCount, listWords, plural } from '../shared/format';
 
@@ -18,7 +18,7 @@ export interface CiView {
   deploys: number | null;
 }
 
-export function ciView(list: Pick<CiRunList, 'items' | 'active'> | null, glance: GlanceSnapshot | null, max = 5): CiView {
+export function ciView(list: Pick<CiRunPage, 'items' | 'active'> | null, glance: GlanceSnapshot | null, max = 5): CiView {
   const a = glance?.attention;
   return {
     runs: (list?.items ?? []).slice(0, max),

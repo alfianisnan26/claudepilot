@@ -14,7 +14,7 @@ import {
   type CiRunner,
   type UpsertCiRunnerRequest,
   type CiRunFilter,
-  type CiRunList,
+  type CiRunPage,
   type ConnectCiRepoRequest,
   type CreateCiRepoRequest,
   type MergeCiRequest,
@@ -57,13 +57,13 @@ function query(f: CiRunFilter): string {
   if (f.status?.length) q.set('status', f.status.join(','));
   if (f.ticket) q.set('ticket', f.ticket);
   if (f.session) q.set('session', f.session);
-  if (f.before) q.set('before', f.before);
+  if (f.cursor) q.set('cursor', f.cursor);
   if (f.limit) q.set('limit', String(f.limit));
   return q.size ? `?${q}` : '';
 }
 
 export const ciApi = {
-  runs: (filter: CiRunFilter = {}) => request<CiRunList>('GET', `${CI_API.runs}${query(filter)}`),
+  runs: (filter: CiRunFilter = {}) => request<CiRunPage>('GET', `${CI_API.runs}${query(filter)}`),
   run: (id: string) => request<CiRun>('GET', CI_API.run(id)),
   log: (id: string, job: string, step: number, offset: number) => request<CiLogChunk>('GET', `${CI_API.log(id)}?job=${encodeURIComponent(job)}&step=${step}&offset=${offset}`),
   cancel: (id: string) => request<CiRun>('POST', CI_API.cancel(id)),

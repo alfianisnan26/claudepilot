@@ -48,7 +48,7 @@ async function main() {
   const sizes = widths.length ? widths : [390, 1280];
   const cookie = await login();
   const call = api(cookie);
-  const sessions = (await call('GET', '/api/chat/sessions')).data ?? [];
+  const sessions = (await call('GET', '/api/chat/sessions?limit=100')).data?.items ?? [];
   const pick = (re) => sessions.find((s) => re.test(s.title));
   // A live chat with a little history (the screens of the composer, model sheet and panels need one that can answer).
   let live = null;

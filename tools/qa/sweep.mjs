@@ -7,7 +7,7 @@ import { api, login } from './lib.mjs';
 const prefix = process.argv[2] ?? 'sweep';
 const cookie = await login();
 const call = api(cookie);
-const sessions = (await call('GET', '/api/chat/sessions')).data ?? [];
+const sessions = (await call('GET', '/api/chat/sessions?limit=100')).data?.items ?? [];
 const withTranscript = sessions.find((s) => s.title === 'QA xss transcript') ?? sessions[0];
 const ws = (await call('GET', '/api/workspaces')).data ?? [];
 const mine = ws.find((w) => w.name.startsWith('qa-'));

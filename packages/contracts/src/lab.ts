@@ -1,6 +1,8 @@
 // Efficiency lab (T-287, docs/prd/claude-usage.md §28): per-slice economy metrics from the session stream and experiments with arms.
 // Counts and ids only: no prompt, command, result or other transcript text ever reaches these shapes.
 
+import type { CursorPage } from './page.js';
+
 /** A slice: one sub-agent thread (`agent`, keyed by the Agent call's tool_use id) or one main-thread turn (`turn`, `turn:<n>`). */
 export type LabSliceKind = 'agent' | 'turn';
 
@@ -144,6 +146,11 @@ export interface LabSliceView extends LabSliceMetrics {
   arms: Record<string, string>;
 }
 
+/** `GET LAB_API.slices` (D-58): one page of slices. `total` (every slice the filters leave in) rides on the first page only. */
+export interface LabSlicePage extends CursorPage<LabSliceView> {
+  total?: number;
+}
+
 /** The median and the 90th percentile (index floor(0.9 n) of the sorted values) of a group; null with no value. */
 export interface LabStat {
   median: number | null;
@@ -240,7 +247,7 @@ export interface LabSliceFilter {
 }
 
 export const LAB_API = {
-  /** GET `?session=&ticket=&role=&model=&experiment=&arm=&since=&limit=`: `{ slices: LabSliceView[], total }`, newest first. */
+  /** GET `?session=&ticket=&role=&model=&experiment=&arm=&since=&limit=&cursor=`: one `LabSlicePage` (D-58: 25 by default, 100 at most), newest first. */
   slices: '/api/lab/slices',
   /** GET: `LabExperimentView[]`. */
   experiments: '/api/lab/experiments',
