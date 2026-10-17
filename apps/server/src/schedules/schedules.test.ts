@@ -153,7 +153,7 @@ test('schedules_list: a read token sees loops and triggers, a trigger\'s name as
     const rows = all.result!.structuredContent.schedules as { id: string; name: unknown }[];
     assert.deepEqual(rows.map((r) => r.id), ['loop:a-loop', 'trigger:trg_a', 'trigger:trg_b', 'trigger:trg_c']);
     assert.equal(rows[0]!.name, 'a-loop');
-    assert.deepEqual(rows[1]!.name, { untrusted_text: 'Nightly' });
+    assert.deepEqual(rows[1]!.name, { untrusted_text: 'Nightly', source: 'trigger' });
     assert.match(all.result!.structuredContent.summary, /4 schedules, 1 failing/);
     const attention = await h.call(read, 'schedules_list', { attention: true });
     assert.deepEqual((attention.result!.structuredContent.schedules as { id: string }[]).map((r) => r.id), ['trigger:trg_c']);
