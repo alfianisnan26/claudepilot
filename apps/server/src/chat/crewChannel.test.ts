@@ -38,8 +38,8 @@ async function rig() {
 }
 type Rig = Awaited<ReturnType<typeof rig>>;
 
-const messages = (r: { result?: { structuredContent: Record<string, unknown> } }) =>
-  (r.result!.structuredContent.messages as { id: number; from: string; own: boolean; text: { untrusted_text: string; source: string } }[]).map((m) => [m.from, m.text.untrusted_text, m.own]);
+const messages = (r: { result?: { structuredContent?: Record<string, unknown> } }) =>
+  (r.result!.structuredContent.messages as { id: number; from: string; own: boolean; text: { untrusted_text: string; source: string } }[]).map((m): [string, string, boolean] => [m.from, m.text.untrusted_text, m.own]);
 
 const post = (r: Rig, who: keyof Rig['tokens'], text: string, extra: Record<string, unknown> = {}) => r.h.call(r.tokens[who], 'crew_post', { text, ...extra });
 const read = (r: Rig, who: keyof Rig['tokens'], args: Record<string, unknown> = {}) => r.h.call(r.tokens[who], 'crew_read', args);
@@ -111,7 +111,7 @@ test('T-294 crew channel: another crew, a stranger lead and an admin token canno
     assert.deepEqual(messages(await read(r, 'stranger')).map((m) => m[1]), ['Their own news.']);
 
     // Asking for this crew's channel by its lead id, from outside: NOT_FOUND, the same as for an id that exists nowhere.
-    const code = (x: { result?: { structuredContent: { error?: { code: string; message: string } } } }) => [x.result!.structuredContent.error?.code, x.result!.structuredContent.error?.message];
+    const code = (x: { result?: { structuredContent?: { error?: { code: string; message: string } } } }) => [x.result!.structuredContent?.error?.code, x.result!.structuredContent?.error?.message];
     const mine = await read(r, 'lead', { lead: r.s.id });
     assert.equal(mine.result?.isError, undefined, 'its own channel by its own id is fine');
     const aimed = await read(r, 'sw', { lead: r.s.id });
