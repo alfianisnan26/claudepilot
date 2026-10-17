@@ -572,6 +572,22 @@ async function ensureWorktreeTrust(sessions) {
   const folders = new Set(sessions.filter((s) => s.state !== 'ended' && leads.has(s.parentId) && s.cwd).map((s) => s.cwd));
   for (const folder of folders) await ensureTrustOfWorktree(folder);
 }
+/**
+ * A lane spawned INTO a new worktree is refused before any session runs there (FOLDER_UNTRUSTED, T-927 2026-10-17: Tradingbot's only remote
+ * is `pilot`, so the portal's identity trust does not apply), so the supervisor finds each program's worktrees itself: only folders strictly
+ * below `<repo>.worktrees/`, trusted by the same rule as above (rules only, a settings hash already trusted here).
+ */
+function ownWorktrees(repo, entries) {
+  const root = `${repo.replace(/\/+$/, '')}.worktrees/`;
+  return [...new Set((entries ?? []).map((e) => e?.path).filter((x) => typeof x === 'string' && x.startsWith(root) && x.length > root.length && !x.slice(root.length).includes('..')))];
+}
+async function ensureRepoWorktreeTrust() {
+  for (const repo of [MAIN, KONFERSI, TRADINGBOT]) {
+    const r = await api('GET', `/api/chat/worktrees?workspaceId=${encodeURIComponent(WORKSPACE)}&folder=${encodeURIComponent(repo)}`);
+    const entries = Array.isArray(r.data) ? r.data : (r.data?.worktrees ?? []);
+    for (const folder of ownWorktrees(repo, entries)) await ensureTrustOfWorktree(folder);
+  }
+}
 /** Settings hashes seen trusted on this workspace, in a file of their own (the round's state is written back whole), so a restart remembers them. */
 const TRUSTED_FILE = join(STATE_DIR, 'trusted-hashes.json');
 const knownTrusted = new Set((() => {
@@ -744,6 +760,7 @@ async function watch({ rounds = Infinity } = {}) {
     }
     goodRounds++;
     await ensureWorktreeTrust(list).catch((e) => log(`folder trust: could not check the worktrees: ${e.message}`));
+    await ensureRepoWorktreeTrust().catch((e) => log(`folder trust: could not list the programs' worktrees: ${e.message}`));
     const steady = badAt === null || (goodRounds >= STEADY_ROUNDS && Date.now() - badAt >= HEALTH_QUIET_MIN * 60_000);
     if (netDownSince) {
       const mins = Math.round((Date.now() - netDownSince) / 60_000);
@@ -971,7 +988,7 @@ async function watch({ rounds = Infinity } = {}) {
 
 /* ---------- Go ---------- */
 
-export { harmlessEnding, watch, STATE_FILE, bestClaude, compactDue, slotsFull, compactLanes, wakeStaleLanes, worktreeTrustable, COMPACT, COMPACT_LANE, LANES };
+export { harmlessEnding, watch, STATE_FILE, bestClaude, compactDue, slotsFull, compactLanes, wakeStaleLanes, worktreeTrustable, ownWorktrees, COMPACT, COMPACT_LANE, LANES };
 if (IS_MAIN) {
   process.on('SIGTERM', () => revokeMcpToken().finally(() => process.exit(0)));
   process.on('SIGINT', () => revokeMcpToken().finally(() => process.exit(0)));
