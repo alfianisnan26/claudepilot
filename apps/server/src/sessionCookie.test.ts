@@ -29,7 +29,7 @@ const send = (app: import('hono').Hono, scheme: Scheme, method: string, path: st
     method,
     headers: { host: HOST, origin: `${scheme}://${HOST}`, 'content-type': 'application/json', ...extra },
     body: method === 'GET' ? undefined : method === 'POST' && path === '/api/login' ? JSON.stringify({ code: CODE }) : '{}',
-  });
+  }, { incoming: { socket: { remoteAddress: '127.0.0.1' } } }); // the Node env @hono/node-server gives (sign-in's rate limit reads it)
 const setCookies = (res: Response) => res.headers.getSetCookie();
 const named = (res: Response, name: string) => setCookies(res).filter((c) => c.startsWith(`${name}=`));
 
@@ -73,7 +73,7 @@ test('signing in over https sets __Host-portal_session: Secure, Path=/, HttpOnly
   assert.match(cookie, /;\s*SameSite=Strict/i);
   assert.doesNotMatch(cookie, /;\s*Domain=/i);
   assert.equal(named(res, LEGACY_SESSION_COOKIE).length, 0, 'no old-name cookie over https');
-  const token = decodeURIComponent(cookie.slice(SESSION_COOKIE.length + 1).split(';')[0]);
+  const token = decodeURIComponent(cookie.slice(SESSION_COOKIE.length + 1).split(';')[0]!);
   assert.ok(portal.session(token), 'the cookie carries a live session');
   const state = await send(app, 'https', 'GET', '/api/admin/state', { cookie: `${SESSION_COOKIE}=${token}` });
   assert.equal(state.status, 200);
@@ -88,7 +88,7 @@ test('signing in over plain http (dev, scratch portal) keeps portal_session with
   assert.ok(cookie);
   assert.doesNotMatch(cookie, /;\s*Secure/i);
   assert.match(cookie, /;\s*HttpOnly/i);
-  const token = decodeURIComponent(cookie.slice(LEGACY_SESSION_COOKIE.length + 1).split(';')[0]);
+  const token = decodeURIComponent(cookie.slice(LEGACY_SESSION_COOKIE.length + 1).split(';')[0]!);
   const state = await send(app, 'http', 'GET', '/api/admin/state', { cookie: `${LEGACY_SESSION_COOKIE}=${token}` });
   assert.equal(state.status, 200);
 });
@@ -101,7 +101,7 @@ test('behind a trusted proxy that says https, the cookie is the __Host- one', as
     const res = await send(app, 'http', 'POST', '/api/login', { 'x-forwarded-proto': 'https' });
     assert.equal(res.status, 200);
     assert.equal(named(res, SESSION_COOKIE).length, 1);
-    assert.match(named(res, SESSION_COOKIE)[0], /;\s*Secure/i);
+    assert.match(named(res, SESSION_COOKIE)[0]!, /;\s*Secure/i);
   } finally {
     config.trustProxy = was;
   }
@@ -146,7 +146,7 @@ test('migration: a signed-in browser with only the old cookie stays signed in ov
     assert.equal(res.status, 200, path);
     const [moved] = named(res, SESSION_COOKIE);
     assert.ok(moved, `${path}: the session is re-issued under the new name`);
-    assert.equal(decodeURIComponent(moved.slice(SESSION_COOKIE.length + 1).split(';')[0]), token, 'same session, no sign-out');
+    assert.equal(decodeURIComponent(moved.slice(SESSION_COOKIE.length + 1).split(';')[0]!), token, 'same session, no sign-out');
     assert.match(moved, /;\s*Secure/i);
     assert.match(moved, /;\s*Path=\/(;|$)/);
     assert.doesNotMatch(moved, /;\s*Domain=/i);
