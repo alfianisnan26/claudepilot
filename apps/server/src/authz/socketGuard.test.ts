@@ -17,7 +17,7 @@ import { attachChat } from '../chat/socket.js';
 import { openCore, openHub } from '../connect/testkit.js';
 import { LiveHub } from '../live.js';
 import { Portal } from '../portal.js';
-import { SocketGuard, signedInOf } from '../sockets.js';
+import { SocketGuard, fullSessionOf, signedInOf } from '../sockets.js';
 import { attachShell } from '../workspaces/shell.js';
 import { SHELL_SOCKET_PATH } from '../workspaces/authz.js';
 import type { SignedIn } from './routeGuard.js';
@@ -204,6 +204,36 @@ test('the real modules: a member gets the unknown path’s 404 from the terminal
   assert.equal(await handshake(port, LIVE_PATH, { who: 'member' }), unknown, 'the live socket is the platform’s until it filters per person');
   assert.deepEqual(touched.slice(before), [], 'no module touched anything for the member');
   assert.equal(status(await handshake(port, LIVE_PATH, { who: 'owner' })), 'HTTP/1.1 101 Switching Protocols', 'the owner still opens it');
+});
+
+test('T-976 `__Host-` cookie: the sockets read the session through the shared reader, the guard, the module and the tracker alike', async () => {
+  const name = ['__Host', 'portal_session'].join('-');
+  const portal = new Portal(CODE, 60_000);
+  portal.roleOf = (id) => (id === MEMBER ? 'member' : null);
+  const server = createServer();
+  const tracker = new SocketGuard(portal, name, 100);
+  tracker.attach(server);
+  attachShell(server, portal, spy('workspaces') as never, signedInOf(portal, name));
+  new LiveHub({ workspaces: async () => [], usage: async () => [] }, fullSessionOf(portal, name)).attach(server, signedInOf(portal, name));
+  const port = await listen(server);
+  const as = (token: string, cookie = name) => ({ headers: [`Cookie: theme=dark; ${cookie}=${token}`] });
+  const unknown = await handshake(port, '/api/no-such-socket');
+  const owner = portal.signIn(CODE);
+  const member = portal.openSession(MEMBER);
+  const before = touched.length;
+  assert.equal(await handshake(port, '/api/workspaces/docker/w1/shell', as(member)), unknown, 'a member under that name is signed in: the 404, never the 401 of nobody');
+  assert.equal(await handshake(port, LIVE_PATH, as(member)), unknown);
+  assert.deepEqual(touched.slice(before), []);
+  assert.match(status(await handshake(port, LIVE_PATH, as(owner, COOKIE))), /^HTTP\/1\.1 401 /, 'the old name is not the session any more');
+  const ws = new WebSocket(`ws://127.0.0.1:${port}${LIVE_PATH}`, { headers: { Origin: `http://127.0.0.1:${port}`, Cookie: `${name}=${owner}` } });
+  await new Promise((r, j) => (ws.once('open', r), ws.once('error', j)));
+  assert.equal(tracker.size, 1, 'the tracker ties the socket to the `__Host-` sign-in');
+  const gone = new Promise<void>((r) => ws.once('close', () => r()));
+  portal.signOut(owner);
+  tracker.sweep();
+  await gone;
+  assert.equal(tracker.size, 0);
+  tracker.close();
 });
 
 test('the chat socket: a member’s message on a session it may not see gets what a session that does not exist gets', async () => {

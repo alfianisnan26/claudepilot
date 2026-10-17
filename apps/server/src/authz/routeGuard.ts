@@ -5,7 +5,8 @@
 //     A path no endpoint answers is refused (404) for anyone but the founding owner: an `app.all(path, (c, next) => …)` endpoint looks like
 //     middleware and must not answer unchecked.
 //   - `public`, `bearer` and `handler` routes are their own door (sign-in, the bearer `/mcp`, signed webhooks, connector keys): they go on,
-//     but only as the first endpoint; reached after a route handed the request on, such a door is refused (it would open the route before it).
+//     but only as the first endpoint, and only when nothing that may answer runs before it (`doorAnswers`); reached after a route handed the
+//     request on, such a door is refused (it would open the route before it).
 //   - Not signed in: 401, as the session guard answers it.
 //   - The founding owner in single-owner mode goes on untouched: today's behaviour, so nothing in production changes; each route's own checks
 //     stay (the same fast path as `visible()`).
@@ -17,7 +18,7 @@
 //   - A request every matched route handed on is refused too: it never reaches a handler unchecked.
 // It only ever refuses: the handlers' own checks stay.
 
-import type { Context, MiddlewareHandler } from 'hono';
+import type { Context, Env, MiddlewareHandler } from 'hono';
 import { matchedRoutes } from 'hono/route';
 import { AppError } from '@isnanme/core';
 import { FOUNDING_USER_ID, objectRef, type Actor, type ObjectCheck, type ObjectRef, type PolicyKey, type RoutePolicy } from '@portal/contracts';
@@ -71,6 +72,34 @@ function routeMatchesOf(c: Context): RouteMatch[] {
   matchedRoutes(c).forEach((r, i) => isEndpoint(r) && add(keyOf(r), i));
   return out;
 }
+
+/**
+ * Whether the first endpoint is surely the one that answers (blind review gap 1). Hono runs every route it matched in order, so a route that
+ * looks like middleware but is an endpoint written `app.all('/api/x', (c, next) => answer)` answers before a catch-all door (`ALL /api/*`,
+ * `GET /*`) and would ride on the door's policy. Middleware that guards a part of the app is mounted on a wildcard (`/api/*`, `/assets/*`)
+ * or on the door's own path (`app.use(API.login, …)`), or is marked with `middleware()`; anything else on an exact path of its own, run
+ * before the door, may answer: the door does not count then, and the request is decided like any other. (Hono cannot tell a wildcard
+ * `app.all('/x/*', (c, next) => …)` endpoint from `app.use`; the real-app tests list the app's own routes so such an endpoint is seen.)
+ */
+function doorAnswers(c: Context, door: RouteMatch): boolean {
+  const matched = matchedRoutes(c);
+  const at = matched[door.index]!;
+  return !matched.slice(0, door.index).some((r) => !isEndpoint(r) && !r.path.endsWith('*') && !MARKED.has(r.handler) && normal(r.path) !== normal(at.path));
+}
+
+const MARKED = new WeakSet<object>();
+
+/**
+ * Marks a handler on an exact path as middleware that never answers (it sets headers around `next()`), so an open door after it still
+ * counts (`doorAnswers`): the web app's `/sw.js` and `/manifest.webmanifest` headers, before the `GET /*` shell.
+ */
+export function middleware<E extends Env = Env>(handler: MiddlewareHandler<E>): MiddlewareHandler<E> {
+  MARKED.add(handler);
+  return handler;
+}
+
+/** Whether a handler was marked with `middleware()` (the route-guard tests mirror the app's middleware with it). */
+export const isMarkedMiddleware = (handler: unknown): boolean => typeof handler === 'function' && MARKED.has(handler);
 
 /**
  * A path param of one matched route. In middleware `c.req.param()` reads the middleware's own route (`*`, no params), so the guard points
@@ -217,9 +246,10 @@ export const ROUTE_GUARD_NAME = 'routeGuard';
 export function createRouteGuard(deps: RouteGuardDeps): MiddlewareHandler {
   const guard: MiddlewareHandler = async (c, next) => {
     const matches = routeMatchesOf(c);
-    // Only the first endpoint Hono runs may be an open door; a declared middleware is never one (review 10681 #3).
+    // Only the first endpoint Hono runs may be an open door; a declared middleware is never one (review 10681 #3), and the door counts only
+    // when it is the endpoint that answers (blind gap 1: an `app.all(path, (c, next) => …)` before it would answer on the door's policy).
     const first = matches.length > 0 ? policyFor(matches[0]!.key) : undefined;
-    if (first && OPEN_KINDS.has(first.kind)) return next();
+    if (first && OPEN_KINDS.has(first.kind) && doorAnswers(c, matches[0]!)) return next();
     const actor = actorFor(c, deps);
     if (isFoundingOwner(actor)) return next();
     // No endpoint matched: only middleware would see the request, and one written `app.all(path, (c, next) => …)` answers like an endpoint

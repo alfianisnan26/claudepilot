@@ -16,7 +16,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { AppError, isAppError } from '@isnanme/core';
 import { FOUNDING_USER_ID, objectRef, type Actor, type RoutePolicies } from '@portal/contracts';
-import { Hono, type Context } from 'hono';
+import { Hono, type Context, type MiddlewareHandler } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { createApp } from '../app.js';
 import { createBrowserRoutes } from '../browser/routes.js';
@@ -26,8 +26,8 @@ import { openModule } from '../connect/testkit.js';
 import { FakeChat, freshStore } from '../notify/testkit.js';
 import { createPlatform } from '../platform/index.js';
 import { Portal } from '../portal.js';
-import { ROUTE_GUARD_NAME, createRouteGuard, isEndpoint, keyOf, type SignedIn } from './routeGuard.js';
-import { clearResolvers, declarePolicies, declaredPolicies, registerResolver } from './seam.js';
+import { ROUTE_GUARD_NAME, createRouteGuard, isEndpoint, isMarkedMiddleware, keyOf, middleware, type SignedIn } from './routeGuard.js';
+import { clearResolvers, declarePolicies, declaredPolicies, registerResolver, singleOwner, useAuthz } from './seam.js';
 
 /* ---------- 1. The guard on a small app ---------- */
 
@@ -150,6 +150,36 @@ test('a member is let through where the declaration allows: signed-in, self, pub
   }
 });
 
+test('QA c691df71 M16: an object the member sees but may not change keeps the seam’s 403, never the unknown path’s 404', async () => {
+  // Reachable today: an object every user may view (`publicLevel: view`, the reviewed library) that someone else owns. The real seam
+  // answers `no_right` for operate: 403, because the member can see it is there.
+  clearResolvers();
+  registerResolver({ type: 'ticket', resolve: (id) => (id === 'shared' ? { ref: objectRef('ticket', id), owner: { kind: 'user', id: OTHER as never }, publicLevel: 'view' } : null) });
+  try {
+    const { send, reached } = small(() => ({ full: false, userId: MEMBER }));
+    assert.equal((await send('GET', '/t/ticket/shared')).status, 200, 'it may view it');
+    const change = await send('POST', '/t/ticket', { ticketId: 'shared' });
+    assert.equal(change.status, 403);
+    assert.equal((change.body as { error?: { code?: string } }).error?.code, 'FORBIDDEN');
+    assert.notDeepEqual({ status: change.status, body: change.body }, UNKNOWN_PATH);
+    refusedLikeUnknownPath(await send('POST', '/t/ticket', { ticketId: 'nope' }), 'one it cannot see is still the unknown path');
+    assert.deepEqual(reached, ['GET /t/ticket/shared'], 'the refused change ran no handler');
+  } finally {
+    clearResolvers();
+  }
+  // A stub actor's layer that asks for a recent password: the seam's 403 REAUTH_REQUIRED goes out as it is.
+  const was = useAuthz({ ...singleOwner, can: () => ({ allow: false, reason: 'reauth', level: 'view' }) });
+  try {
+    const { send, reached } = small(() => ({ full: false, userId: MEMBER }));
+    const r = await send('GET', '/t/ticket/any');
+    assert.equal(r.status, 403);
+    assert.equal((r.body as { error?: { code?: string } }).error?.code, 'REAUTH_REQUIRED');
+    assert.deepEqual(reached, []);
+  } finally {
+    useAuthz(was);
+  }
+});
+
 test('the founding owner goes through every route as before (an undeclared one included); nobody signed in is 401 except at a public door', async () => {
   const owner = small(() => ({ full: true }));
   for (const path of ['/t/undeclared', '/t/admin', '/t/ticket/anything']) assert.equal((await owner.send('GET', path)).status, 200, path);
@@ -257,6 +287,31 @@ test('review 10681 #4: an endpoint written app.all(path, (c, next) => …) looks
   assert.equal((await owner.send('POST', '/g4o/answers')).status, 200, 'the founding owner keeps it, as before');
 });
 
+test('blind gap 1: an open catch-all door counts only when it answers; a marked header middleware on its own path keeps it open', async () => {
+  for (const [label, who, closed] of [
+    ['a member', () => ({ full: false, userId: MEMBER }), 404],
+    ['nobody signed in', () => null, 401],
+  ] as const) {
+    const { app, reached, send } = bare({ 'GET /g5/*': { kind: 'public', why: 'a test shell' } } as RoutePolicies, who as () => SignedIn);
+    app.use(
+      '/g5/sw.js',
+      middleware(async (c, next) => {
+        await next();
+        c.header('Cache-Control', 'no-cache');
+      }),
+    );
+    app.all('/g5/leak', async (c, _next) => (reached.push('leak'), c.json({ leaked: true })));
+    app.get('/g5/*', (c) => (reached.push('door'), c.json({ open: true })));
+    const leak = await send('GET', '/g5/leak');
+    assert.equal(leak.status, closed, `${label}: an unmarked exact-path route before the door may answer, so the door does not count`);
+    if (closed === 404) refusedLikeUnknownPath(leak, label);
+    assert.deepEqual(reached, [], `${label}: nothing ran`);
+    assert.equal((await send('GET', '/g5/sw.js')).status, 200, `${label}: a marked middleware keeps the door open`);
+    assert.equal((await send('GET', '/g5/anything')).status, 200, `${label}: the door alone is open`);
+    assert.deepEqual(reached, ['door', 'door']);
+  }
+});
+
 /* ---------- 2. The real app ---------- */
 
 const touched: string[] = [];
@@ -272,7 +327,7 @@ const spy = (what: string): object =>
  * The real app. `serveWeb`: with the web app's static routes, served from a temporary dist made here (an `index.html` and one asset), so the
  * walk never depends on a web build (QA 10733 #2). `cookie`: the session cookie's name for this app (QA 10733 #3: T-976's `__Host-` name).
  */
-async function realApp(serveWeb = false, cookie = 'portal_session') {
+async function realApp(serveWeb = false, cookie = 'portal_session', early?: (h: Hono) => void) {
   const paths = config.paths as { webDist: string };
   const session = config.session as { cookie: string };
   const was = { webDist: paths.webDist, cookie: session.cookie };
@@ -286,9 +341,14 @@ async function realApp(serveWeb = false, cookie = 'portal_session') {
   }
   session.cookie = cookie;
   try {
-    return await buildRealApp(serveWeb, cookie, () => {
-      if (dist) rmSync(dist, { recursive: true, force: true });
-    });
+    return await buildRealApp(
+      serveWeb,
+      cookie,
+      () => {
+        if (dist) rmSync(dist, { recursive: true, force: true });
+      },
+      early,
+    );
   } finally {
     // createApp reads both when it is built; put them back for the next app.
     paths.webDist = was.webDist;
@@ -296,7 +356,8 @@ async function realApp(serveWeb = false, cookie = 'portal_session') {
   }
 }
 
-async function buildRealApp(serveWeb: boolean, cookie: string, cleanup: () => void) {
+/** `early`: routes a module would register, mounted where app.ts mounts connect's public routes, so before the real `ALL /api/*`. */
+async function buildRealApp(serveWeb: boolean, cookie: string, cleanup: () => void, early?: (h: Hono) => void) {
   const { store } = await freshStore();
   // The chat and usage seams the server hands the platform: what FakeChat lacks is a stub, so autotransfer and keepgoing mount their
   // routes as they do in index.ts (their ports() refuse a seam without those functions, and then the module mounts nothing).
@@ -331,7 +392,19 @@ async function buildRealApp(serveWeb: boolean, cookie: string, cleanup: () => vo
     codespaces: spy('codespaces'),
     platform,
     claudeVersions: spy('claudeVersions'),
-    connect: cx.connect,
+    connect: early
+      ? new Proxy(cx.connect, {
+          get: (t, p, r) =>
+            p === 'publicRoutes'
+              ? () => {
+                  const h = new Hono();
+                  early(h);
+                  h.route('/', t.publicRoutes() as never);
+                  return h;
+                }
+              : bound(Reflect.get(t, p, r), t),
+        })
+      : cx.connect,
   });
   // A member account: what the users table answers for it (the real one is read in qa/emailLogin.test.ts).
   portal.roleOf = (id) => (id === MEMBER ? 'member' : null);
@@ -424,7 +497,8 @@ for (const serveWeb of [false, true]) {
       const routes = listed(app);
       const unknown = await send('GET', '/api/no-such-path', portal.openSession(MEMBER));
       if (serveWeb)
-        for (const path of ['/', '/sessions', '/assets/app.js'])
+        // `/sw.js` and `/manifest.webmanifest` have a header middleware on their own path (blind gap 1: it is marked, the door counts).
+        for (const path of ['/', '/sessions', '/assets/app.js', '/sw.js', '/manifest.webmanifest'])
           assert.notEqual((await send('GET', path)).status, 401, `${path}: the web app shell and its files are open to anyone (the sign-in page)`);
       const asOwner = table(routes, () => ({ full: true }));
       const asMember = table(routes, () => ({ full: false, userId: MEMBER }));
@@ -505,6 +579,35 @@ test('QA 10733 #3: the guard reads the session the way the session guard does, w
   }
 });
 
+test('blind gap 1: with the real `ALL /api/*` door mounted, an endpoint written app.all(path, (c, next) => …) never answers on that door', async () => {
+  const reached: string[] = [];
+  const { portal, CODE, send, done } = await realApp(false, 'portal_session', (h) => {
+    // Looks like middleware to Hono (it takes `next`), answers like an endpoint, declared nowhere: the only policy the guard would see for
+    // `/api/gap1/answers` is the catch-all's `public` door.
+    h.all('/api/gap1/answers', async (c, _next) => (reached.push('answers'), c.json({ leaked: true })));
+  });
+  try {
+    const member = portal.openSession(MEMBER);
+    const unknown = await send('GET', '/api/no-such-path', member);
+    assert.equal(declaredPolicies().get('ALL /api/*')?.kind, 'public', 'the real catch-all is the open door');
+    for (const method of ['GET', 'POST', 'DELETE']) assert.deepEqual(await send(method, '/api/gap1/answers', portal.openSession(MEMBER)), unknown, `${method}: a member gets the unknown path`);
+    const nobody = await send('GET', '/api/gap1/answers');
+    assert.equal(nobody.status, 401, 'nobody signed in: the 401 of a route that is not open');
+    assert.ok(!nobody.text.includes('leaked'));
+    assert.deepEqual(reached, [], 'the endpoint never ran for a member or nobody');
+    const owner = await send('GET', '/api/gap1/answers', portal.signIn(CODE));
+    assert.equal(owner.status, 200, 'the founding owner keeps it, as before');
+    assert.deepEqual(reached, ['answers']);
+    // The door itself is untouched: an unknown path is still the catch-all's 404 for nobody, and the sign-in door still opens.
+    assert.equal((await send('GET', '/api/no-such-path')).status, 404);
+    assert.notEqual((await send('GET', '/api/session')).status, 401);
+    // `POST /api/login` has a middleware on its own path (the body limit): the door still counts, the guard's 401 is not what answers.
+    assert.notEqual((await send('POST', '/api/login')).message, 'Sign in again.');
+  } finally {
+    await done();
+  }
+});
+
 /** The sockets declared as routes until S0b gives them their own table: no HTTP route stands behind them. */
 const SOCKET_ROUTE_KEYS = new Set(['ALL /api/chat/live']);
 
@@ -543,7 +646,13 @@ function table(routes: Listed[], who: () => SignedIn) {
   app.use('*', createRouteGuard({ signedIn: () => who() }));
   const seen = new Set<string>();
   for (const r of routes) {
-    if (!isEndpoint(r)) continue;
+    // The real middleware, as pass-throughs where the real app has them: the guard's `doorAnswers` reads where they sit (blind gap 1),
+    // so every open door must still answer here for nobody signed in.
+    if (!isEndpoint(r)) {
+      const pass: MiddlewareHandler = async (_c, next) => next();
+      if (r.handler.name !== ROUTE_GUARD_NAME) app.all(r.path, isMarkedMiddleware(r.handler) ? middleware(pass) : pass);
+      continue;
+    }
     const key = keyOf(r);
     if (seen.has(key)) continue;
     seen.add(key);

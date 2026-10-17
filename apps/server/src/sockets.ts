@@ -2,39 +2,27 @@ import type { IncomingMessage, Server } from 'node:http';
 import type { Duplex } from 'node:stream';
 import type { SignedIn } from './authz/routeGuard.js';
 import type { Portal } from './portal.js';
+import { sessionTokenOf, signedInFor } from './sessionToken.js';
 
 /** How often sessions are re-checked, for the ones that end by expiring (sign-out and a new code cut at once). */
 const SWEEP_MS = 15_000;
 /** An upgrade request nobody has answered by then is dropped (a path no module owns would otherwise hang for ever). */
 const UNANSWERED_MS = 5_000;
 
-const tokenOf = (req: IncomingMessage, name: string): string | undefined => {
-  for (const part of req.headers.cookie?.split(';') ?? []) {
-    const [k, ...v] = part.trim().split('=');
-    if (k === name) {
-      try {
-        return decodeURIComponent(v.join('='));
-      } catch {
-        return undefined;
-      }
-    }
-  }
-  return undefined;
-};
-
 /**
- * Who a handshake's cookie signs in, as the HTTP guard reads it (app.ts): a full session (the server code, an admin account), a member
- * account, or nobody. The socket guard (authz/socketGuard.ts, T-1043 S0b) decides for it; a module's own check still asks `session()`.
+ * Who a handshake's cookie signs in, exactly as the HTTP guard reads it (app.ts; both through sessionToken.ts): a full session (the server
+ * code, an admin account), a member account, or nobody. The socket guard (authz/socketGuard.ts, T-1043 S0b) decides for it.
  */
 export const signedInOf =
   (portal: Pick<Portal, 'session' | 'anySession'>, cookie: string) =>
-  (req: IncomingMessage): SignedIn => {
-    const token = tokenOf(req, cookie);
-    if (!token) return null;
-    if (portal.session(token)) return { full: true };
-    const s = portal.anySession(token);
-    return s?.userId ? { full: false, userId: s.userId } : null;
-  };
+  (req: IncomingMessage): SignedIn =>
+    signedInFor(portal, sessionTokenOf(req, cookie));
+
+/** Whether a handshake carries a full session (the server code, an admin account): a module's own check (the shell, the browser, chat). */
+export const fullSessionOf =
+  (portal: Pick<Portal, 'session'>, cookie: string) =>
+  (req: IncomingMessage): boolean =>
+    !!portal.session(sessionTokenOf(req, cookie));
 
 /**
  * Ties the sockets a signed-in tab opens (live updates, chat, terminals) to its session. Each module checks the
@@ -66,7 +54,7 @@ export class SocketGuard {
       unanswered.unref();
       socket.once('close', () => clearTimeout(unanswered));
 
-      const token = tokenOf(req, this.cookie);
+      const token = sessionTokenOf(req, this.cookie);
       if (!token) return; // the owner of the path answers 401
       const full = !!this.portal.session(token);
       if (!full && !this.portal.anySession?.(token)) return;

@@ -865,7 +865,7 @@ FR16 is built as `authz/routeGuard.ts`, mounted first thing in app.ts (`app.use(
 
 **Every refusal is the same `404` that an API path nobody serves answers** (`notFound()`, the lead's decision on T-1043). This covers an undeclared route, a platform area and an object the actor may not see. It replaces the earlier `403`s, including MU2 S1a's `403` for a member on an admin route; the session guard (`requireSession`) answers a member the same `404` (review 10681 #5). The answer never says that a route or an object is there. The only exception is an object the actor can see but not change, which keeps the seam's `403`.
 
-- **Open doors.** A `public`, `bearer` or `handler` route goes on when it is the first endpoint. These are sign-in, the bearer `/mcp`, signed webhooks under `/hooks`, and the agents' `/connect/` routes. Reached after a route handed the request on, such a door is refused (`404`): `GET /*` (the web app shell; Hono lists `app.get('*')` as `/*`) or `ALL /api/*` would otherwise let the request through to the route that handed it on.
+- **Open doors.** A `public`, `bearer` or `handler` route goes on when it is the first endpoint. These are sign-in, the bearer `/mcp`, signed webhooks under `/hooks`, and the agents' `/connect/` routes. Reached after a route handed the request on, such a door is refused (`404`): `GET /*` (the web app shell; Hono lists `app.get('*')` as `/*`) or `ALL /api/*` would otherwise let the request through to the route that handed it on. The door counts only when it is the endpoint that answers (`doorAnswers`). Hono lists an endpoint written `app.all(path, (c, next) => …)` like middleware, and it runs before a catch-all door. So a middleware-looking route on an exact path of its own, run before the door, closes the door, and the request is decided like any other. Middleware on a wildcard or on the door's own path still counts as middleware. So does a handler marked with `middleware()`: the web app's `/sw.js` and `/manifest.webmanifest` headers.
 - **Nobody signed in: 401.**
 - **The founding owner goes on untouched.** This also covers the server code and an admin account, which act as the owner (D-82). Today's behaviour stays: each route's own guards still run.
 - **Anyone else** (a member account, or an actor already set on the request):
@@ -886,25 +886,29 @@ FR16 is built as `authz/routeGuard.ts`, mounted first thing in app.ts (`app.use(
 - an open door whose last handler takes `next` is followed by a route that is not open;
 - for a member, a declared route is not what its policy says: the guard's allow, or exactly the unknown path's `404` with no handler run (the table runs every route);
 - a declared route has no route behind it (a stale row; the chat socket's row is named until S0b moves it to the socket table);
-- the guard does not read the session the way the session guard does: both go through app.ts's one `sessionToken(c)`, tested under T-976's `__Host-` cookie name.
+- the guard does not read the session the way the session guard does: both go through app.ts's one `sessionToken(c)`, tested under T-976's `__Host-` cookie name;
+- with the real `ALL /api/*` door mounted, an undeclared `app.all(path, (c, next) => …)` endpoint before it answers a member or nobody (it must be the unknown path's `404`, or `401`).
+
+The token reader and the sign-in live in one module, `sessionToken.ts`. `sessionTokenFrom` reads with Hono's own cookie parser. `signedInFor` makes only a full session the founding owner. The HTTP guard, the session guard, the sign-in routes and every socket (`signedInOf`, `fullSessionOf` in `sockets.ts`) use it. `sessionToken.test.ts` tests the guard's real `signedIn` (a member is `{ full: false }`, the code and an admin `{ full: true }`) and the reader under the plain, `__Host-` and `__Secure-` names, against Hono's `getCookie`.
 
 The serveWeb walk serves a temporary dist made by the test, so it never depends on a web build.
 
 It also checks the guard on its own:
 - a member is refused, with exactly the unknown path's `404`, on an undeclared route, an undeclared `app.all` endpoint, an admin area, an object it does not own, and a request every route hands on;
 - a member is let through on `signed-in`, `self`, `public` and an object it owns;
+- an object the member can see but not change (`publicLevel: view`, or a layer that asks for re-auth) keeps the seam's `403`;
 - the owner is unchanged;
 - nobody signed in gets 401.
 
 ## Appendix C. Sockets and other doors outside the route table
 
-**Built (T-1043 S0b).** Sockets have their own table, `declareSocketPolicies(module, { [path]: { connect, messages, frames? } })` in each module's `authz.ts` (`authz/socketGuard.ts`), because an upgrade request is not in `app.routes`. No module listens for `upgrade` itself: each calls `onSocket(server, path, { signedIn }, handler)`, and the guard decides with the HTTP guard's own `decidePolicy`, for the actor `signedInOf(portal, cookie)` reads from the handshake (`sockets.ts`):
+**Built (T-1043 S0b).** Sockets have their own table, `declareSocketPolicies(module, { [path]: { connect, messages, frames? } })` in each module's `authz.ts` (`authz/socketGuard.ts`), because an upgrade request is not in `app.routes`. No module listens for `upgrade` itself: each calls `onSocket(server, path, { signedIn }, handler)`, and the guard decides with the HTTP guard's own `decidePolicy`, for the actor `signedInOf(portal, cookie)` reads from the handshake (`sockets.ts`, through the shared `sessionToken.ts`; a module's own full-session check is `fullSessionOf`):
 - the handshake: a `public`, `bearer` or `handler` socket is its own door and goes on with no actor (the agents' tunnel). Any other needs this site's Origin (`403`) and someone signed in (`401`); the founding owner goes on untouched; anyone else is refused a socket with no declaration, or one whose `connect` does not allow it, with exactly the answer an upgrade nobody serves gets (`404 Not Found`, the module never runs);
 - each message: the module asks `grant.allows(type, message)` before acting; a type with no row, or one its row does not allow, is refused (the chat answers what a session that does not exist gets), the founding owner is let through;
 - each module's own checks stay (they still refuse a member until MU2 S1a/S1b);
 - revocation: the session tracker (`SocketGuard`) also tracks a member's sockets and cuts them when that sign-in ends; a socket opened with a full sign-in is cut when it is no longer full (an admin made a member).
 
-`authz/socketGuard.test.ts` fails when a source file other than the guard and the tracker listens for `upgrade` (the remote agent's own proxies excepted), when a server wired like `index.ts` (the hub included) has an `upgrade` listener that is not the guard's, when an attached socket has no declaration or a declaration has no socket, and on the handshake, message, module and revocation cases above. The chat socket's `ALL /api/chat/live` route row stays named in the route test until S1a moves its callers.
+`authz/socketGuard.test.ts` fails when a source file other than the guard and the tracker listens for `upgrade` (the remote agent's own proxies excepted), when a server wired like `index.ts` (the hub included) has an `upgrade` listener that is not the guard's, when an attached socket has no declaration or a declaration has no socket, and on the handshake, message, module and revocation cases above. It also fails when the guard, a module's own check and the tracker do not read a `__Host-` session cookie the same way. The chat socket's `ALL /api/chat/live` route row stays named in the route test until S1a moves its callers.
 
 | Door | Declared path | Handshake | What each message needs |
 | --- | --- | --- | --- |

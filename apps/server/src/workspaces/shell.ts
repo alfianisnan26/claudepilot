@@ -7,6 +7,7 @@ import type { SignedIn } from '../authz/routeGuard.js';
 import { UPGRADE_NOT_FOUND, declareSocketPolicies, onSocket } from '../authz/socketGuard.js';
 import { config } from '../config.js';
 import type { Portal } from '../portal.js';
+import { sessionTokenOf } from '../sessionToken.js';
 import { signedInOf } from '../sockets.js';
 import { SHELL_SOCKET_PATH, SHELL_SOCKET_POLICIES } from './authz.js';
 import { runtimeMessage, type Workspaces } from './manager.js';
@@ -14,15 +15,6 @@ import { attachCommand, TERMINAL_ID } from './terminals.js';
 
 const SHELL_PATH = /^\/api\/workspaces\/([a-z0-9-]+)\/([a-z0-9-]+)\/shell$/;
 const PING_MS = 25_000;
-
-/** One cookie from an upgrade request (WebSocket handshakes carry the session cookie). */
-export function cookie(req: IncomingMessage, name: string): string | undefined {
-  for (const part of req.headers.cookie?.split(';') ?? []) {
-    const [k, ...v] = part.trim().split('=');
-    if (k === name) return decodeURIComponent(v.join('='));
-  }
-  return undefined;
-}
 
 /** Browsers send cookies on cross-site WebSocket handshakes, so the origin must be this host. */
 function sameOrigin(req: IncomingMessage): boolean {
@@ -55,7 +47,7 @@ export function attachShell(server: Server, portal: Portal, workspaces: Workspac
     const match = url.pathname.match(SHELL_PATH);
     if (!match) return void socket.end(UPGRADE_NOT_FOUND); // a name no workspace can have
     if (!sameOrigin(req)) return refuse(socket, 403, 'Forbidden');
-    if (!portal.session(cookie(req, config.session.cookie))) return refuse(socket, 401, 'Unauthorized');
+    if (!portal.session(sessionTokenOf(req, config.session.cookie))) return refuse(socket, 401, 'Unauthorized');
 
     const [, target, name] = match as unknown as [string, string, string];
     const size = {

@@ -15,7 +15,7 @@ import { AccountPools } from './accounts/pools.js';
 import { AccountsService } from './accounts/service.js';
 import { Outbox } from './delivery/outbox.js';
 import { LiveHub } from './live.js';
-import { SocketGuard, signedInOf } from './sockets.js';
+import { SocketGuard, fullSessionOf, signedInOf } from './sockets.js';
 import { workspaceView } from './workspaces/view.js';
 import { readWorkspaceMemory } from './workspaces/memory.js';
 import { runToEnd } from './workspaces/runToEnd.js';
@@ -79,7 +79,7 @@ import { loadSecretKey, SecretKeyError } from './store/secretBox.js';
 import { sessionStore } from './store/sessions.js';
 import { Store } from './store/store.js';
 import { DockerRuntime } from './workspaces/docker.js';
-import { attachShell, cookie } from './workspaces/shell.js';
+import { attachShell } from './workspaces/shell.js';
 import { ChatController } from './chat/controller.js';
 import { BYPASS_SETTING } from './chat/bypass.js';
 import { LEAD_RULES_SETTING } from './chat/leadRules.js';
@@ -387,7 +387,7 @@ workspaces.hooks.audit = (e) => platform.audit.record(e);
 const view = workspaceView(pools, reconciler, claudeVersions.brief);
 const live = new LiveHub(
   { workspaces: async () => (await workspaces.list()).map(view), usage: () => workspaces.usage() },
-  (req) => !!portal.session(cookie(req, config.session.cookie)),
+  fullSessionOf(portal, config.session.cookie),
 );
 // Needs you (docs/prd/attention.md): what waits for a person, read from each module's own state. The topics of the modules it reads
 // (pools: MCP catalog and skills; tickets; CI) make it look again; the chat's events and a minute's tick are chained further down.
@@ -678,7 +678,7 @@ const platform = createPlatform({
   pushContact: config.notify.pushContact ?? null,
   selfOrigin: `http://localhost:${config.port}`,
   publish: (topic) => notify(topic),
-  socketAuthorized: (req) => !!portal.session(cookie(req, config.session.cookie)),
+  socketAuthorized: fullSessionOf(portal, config.session.cookie),
 });
 live.onPresence = (connection, presence, req) => platform.presence(connection, presence, req);
 // A new Needs you item tells each person who may decide it, once, through the notification pipeline (its quiet hours and matrix).
@@ -722,7 +722,7 @@ const signedIn = signedInOf(portal, config.session.cookie);
 attachShell(server, portal, workspaces, signedIn);
 browser.attach(server, portal, signedIn);
 live.attach(server, signedIn);
-attachChat(server, chatController, (req) => !!portal.session(cookie(req, config.session.cookie)), signedIn);
+attachChat(server, chatController, fullSessionOf(portal, config.session.cookie), signedIn);
 
 if (config.dev) {
   // One port for everything: the API through Hono, the rest through Vite (with HMR on this server).

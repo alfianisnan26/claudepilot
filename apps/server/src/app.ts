@@ -40,7 +40,8 @@ import {
   type WorkspaceTerminal,
 } from '@portal/contracts';
 import { Hono, type Context } from 'hono';
-import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
+import { deleteCookie, setCookie } from 'hono/cookie';
+import { sessionTokenFrom, signedInFor } from './sessionToken.js';
 import { bodyLimit } from 'hono/body-limit';
 import { PortalUsers } from './identity/users.js';
 import { csrf } from 'hono/csrf';
@@ -103,7 +104,7 @@ import { createClaudeVersionRoutes, createWorkspaceClaudeVersionRoutes, type Cla
 import { createCodespacesRoutes, type Codespaces } from './codespaces/index.js';
 import type { Platform } from './platform/index.js';
 import { actorOf, actorString, actorUserId, visible } from './authz/seam.js';
-import { createRouteGuard, notFound } from './authz/routeGuard.js';
+import { createRouteGuard, middleware, notFound } from './authz/routeGuard.js';
 import { declareAppPolicies } from './authz/appPolicies.js';
 import { assetCompress, jsonCompress } from './jsonCompress.js';
 
@@ -234,7 +235,8 @@ export function createApp(
   };
   const { cookie, ttlMs } = config.session;
   /** The one place a request's session token is read: the route guard, the session guard and the sign-in routes all use it (T-976 renames the cookie here). */
-  const sessionToken = (c: Parameters<typeof getCookie>[0]): string | undefined => getCookie(c, cookie);
+  // The sockets read it the same way (sessionToken.ts), so a renamed cookie is one name on every door.
+  const sessionToken = (c: Context): string | undefined => sessionTokenFrom(c.req.header('cookie'), cookie);
 
   // Served over plain HTTP: no HSTS.
   // The built app also gets a CSP (csp.ts); the dev server's pages come from Vite, not from here.
@@ -280,13 +282,8 @@ export function createApp(
   app.use(
     '*',
     createRouteGuard({
-      signedIn: (c) => {
-        const token = sessionToken(c);
-        if (!token) return null;
-        if (portal.session(token)) return { full: true };
-        const s = portal.anySession(token);
-        return s?.userId ? { full: false, userId: s.userId } : null;
-      },
+      // Only a full session is the founding owner; a member account is a member (sessionToken.ts, tested there).
+      signedIn: (c) => signedInFor(portal, sessionToken(c)),
       // A `/:ref…` workspace route asks about the `<target>/<name>` a stable id resolves to; anything else there is handed on (T-531 S2).
       idOf: (check, value) => (check.type === 'workspace' && check.param === 'ref' ? (isStableWorkspaceId(value) ? (workspaces.resolve(value)?.legacyId ?? value) : null) : undefined),
     }),
@@ -1018,15 +1015,22 @@ export function createApp(
       // Only a file that exists is immutable: a miss must never be kept for a year as if it were that file.
       if (c.res.status === 200) c.header('Cache-Control', 'public, max-age=31536000, immutable');
     });
-    // The worker and the manifest must always be re-checked, or an update can take days to reach installed copies.
-    app.use('/sw.js', async (c, next) => {
-      await next();
-      c.header('Cache-Control', 'no-cache');
-    });
-    app.use('/manifest.webmanifest', async (c, next) => {
-      await next();
-      c.header('Cache-Control', 'no-cache');
-    });
+    // The worker and the manifest must always be re-checked, or an update can take days to reach installed copies. Marked as middleware
+    // (it never answers), so the route guard still lets the `GET /*` shell's open door count for these paths (routeGuard.ts `doorAnswers`).
+    app.use(
+      '/sw.js',
+      middleware<Env>(async (c, next) => {
+        await next();
+        c.header('Cache-Control', 'no-cache');
+      }),
+    );
+    app.use(
+      '/manifest.webmanifest',
+      middleware<Env>(async (c, next) => {
+        await next();
+        c.header('Cache-Control', 'no-cache');
+      }),
+    );
     app.use('*', serveStatic({ root }));
     // A missing file is a 404, not the app shell: the shell served for a missing script fails with a MIME error and blanks the
     // page of a tab that stayed open across a deploy (the hashed chunks it still asks for are gone). Client-side routes
