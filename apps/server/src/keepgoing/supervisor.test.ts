@@ -236,7 +236,7 @@ test('T-400 item 1: the portal down, then up: no new lead until it has answered 
 });
 
 test('T-400 item 2: a live chat of the track is adopted instead of starting a new lead beside it', async () => {
-  seedTrack({ sessionId: 'new-9' });
+  seedTrack({ sessionId: 'new-9', started: ['lead-1', 'new-9'] }); // T-409 G3: both are chats the supervisor started
   // The supervisor's last chat (newer) crashed; the real lead (older) is live and working.
   portal.sessions = [[crashed('new-9', { createdAt: new Date(Date.now() - H).toISOString() }), live('lead-1', { state: 'working' })]];
   await sup.watch({ rounds: 1 });
@@ -245,7 +245,7 @@ test('T-400 item 2: a live chat of the track is adopted instead of starting a ne
 
   // Negative twin: a live worker the lead spawned (it has a parent) is not the lead: the track is started again.
   portal.calls.length = 0;
-  seedTrack({ sessionId: 'new-9' });
+  seedTrack({ sessionId: 'new-9', started: ['new-9', 'w-1'] });
   portal.sessions = [[crashed('new-9', { createdAt: new Date(Date.now() - H).toISOString() }), live('w-1', { parentId: 'gone-1' })]];
   await sup.watch({ rounds: 1 });
   assert.equal(created().length, 1);
@@ -267,6 +267,41 @@ test('T-400 item 3: a person ending a newer duplicate keeps the older live lead 
   await sup.watch({ rounds: 1 });
   assert.ok(!track().done);
   assert.ok(logs.some((l) => /adopted the live chat lead-1/.test(l)));
+});
+
+test('T-409 G3: a chat the supervisor did not start is never adopted; one it started (or its successor) is', async () => {
+  const old = () => crashed('new-9', { createdAt: new Date(Date.now() - H).toISOString() });
+  // A person's own chat with the track's title, live and recent: not adopted, so the crashed lead is started again beside it.
+  seedTrack({ sessionId: 'new-9', started: ['new-9'] });
+  portal.sessions = [[old(), live('person-1', { state: 'working' })]];
+  await sup.watch({ rounds: 1 });
+  assert.equal(created().length, 1, 'the person\'s chat is not the lead');
+  assert.notEqual(track().sessionId, 'person-1');
+  assert.ok(!logs.some((l) => /adopted the live chat person-1/.test(l)));
+
+  // Same for a track marked done: a person's live chat does not bring it back.
+  portal.calls.length = 0;
+  seedTrack({ sessionId: 'new-9', started: ['new-9'], done: true });
+  portal.sessions = [[old(), live('person-1')]];
+  await sup.watch({ rounds: 1 });
+  assert.ok(track().done);
+  assert.equal(track().sessionId, 'new-9');
+
+  // Twin: a chat the supervisor started (recorded in `started`) is adopted.
+  portal.calls.length = 0;
+  seedTrack({ sessionId: 'new-9', started: ['new-9', 'lead-1'] });
+  portal.sessions = [[old(), live('lead-1', { state: 'working' })]];
+  await sup.watch({ rounds: 1 });
+  assert.equal(created().length, 0);
+  assert.equal(track().sessionId, 'lead-1');
+
+  // Twin: the successor of a chat it started (a move or a continuation) is adopted too.
+  portal.calls.length = 0;
+  seedTrack({ sessionId: 'new-9', started: ['new-9'] });
+  portal.sessions = [[old(), live('next-1', { state: 'working', predecessorId: 'new-9' })]];
+  await sup.watch({ rounds: 1 });
+  assert.equal(created().length, 0);
+  assert.equal(track().sessionId, 'next-1');
 });
 
 test('T-400 item 4: no MOVED text on a stored-Claude mismatch at start; a move this process saw still gets it', async () => {

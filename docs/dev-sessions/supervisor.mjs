@@ -391,6 +391,7 @@ async function startSession(t, tstate, again, reason, continuedFrom = null) {
   } catch (e) { log(`${t.key}: could not turn sub-agents off: ${e.message}`); }
   await sessionSend(s.id, t.kickoff ? t.kickoff(again, reason) : kickoff(t, again, reason));
   tstate.sessionId = s.id;
+  tstate.started = [...(tstate.started ?? []), s.id].slice(-50); // T-409 G3: only chats it started are adopted
   tstate.cwd = s.cwd;
   (tstate.starts ??= []).push(Date.now());
   log(`${t.key}: ${again ? 'started again' : 'started'} session ${s.id.slice(0, 8)} on ${claudeName} in ${s.cwd}${continuedFrom ? ` (continues ${continuedFrom.slice(0, 8)}: its tickets moved with it)` : ''}`);
@@ -718,11 +719,26 @@ const HEALTH_QUIET_MIN = Number(process.env.HEALTH_QUIET_MIN ?? 5);
  * NUDGE_GAP_MIN minutes, so a real one is far more recent than this.
  */
 const ADOPT_RECENT_H = Number(process.env.ADOPT_RECENT_H ?? 2);
-/** A chat of the track by its title; a worker a lead spawned (it has a parent) is never the track's chat. */
-const ofTrack = (t, x) => !x.parentId && String(x.title ?? '').startsWith(t.title.split(':')[0]);
-const liveChatOf = (t, sessions, sessionId = null) =>
+/**
+ * T-409 G3: the supervisor adopts ONLY chats it started: the ids it recorded when it started one (ts.started), the track's stored chat
+ * (ts.sessionId) and any chat that continues one of those (a successor: predecessorId, followed down the chain). A chat a person or another
+ * session started is never adopted, even when its title is the track's title. A worker a lead spawned (it has a parent) is never the track's chat.
+ */
+const ownedIds = (ts, sessions) => {
+  const ids = new Set([...(ts.started ?? []), ...(ts.sessionId ? [ts.sessionId] : [])]);
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const x of sessions) if (!ids.has(x.id) && x.predecessorId && ids.has(x.predecessorId)) (ids.add(x.id), (grew = true));
+  }
+  return ids;
+};
+const ofTrack = (ts, sessions) => {
+  const ids = ownedIds(ts, sessions);
+  return (x) => !x.parentId && ids.has(x.id);
+};
+const liveChatOf = (ts, sessions) =>
   sessions
-    .filter((x) => (x.id === sessionId || ofTrack(t, x)) && x.state !== 'ended' && !x.archivedAt)
+    .filter((x) => ofTrack(ts, sessions)(x) && x.state !== 'ended' && !x.archivedAt)
     .filter((x) => Date.now() - Date.parse(x.lastActivityAt ?? x.createdAt) < ADOPT_RECENT_H * 3_600_000)
     .sort((a, b) => String(b.lastActivityAt).localeCompare(String(a.lastActivityAt)))[0] ?? null;
 /** /healthz answers ok (one plain call, no retries: a failure is what this asks about). */
@@ -795,7 +811,7 @@ async function watch({ rounds = Infinity } = {}) {
         // A live chat of this track (a continuation someone started after a hand-over, or T-400 item 3: the older lead still working after a
         // person ended a newer duplicate, which may be ts.sessionId itself) is adopted: the track is watched again. The chat that wrote TRACK
         // COMPLETE stays left alone.
-        const live = liveChatOf(t, sessions, ts.sessionId);
+        const live = liveChatOf(ts, sessions);
         if (!live || (live.id === ts.sessionId && statusSaysDone(ts))) continue;
         ts.done = false;
         ts.sessionId = live.id;
@@ -810,10 +826,10 @@ async function watch({ rounds = Infinity } = {}) {
       }
       ts.pausedLogged = false;
       // A track's sessions are found by their worktree folder (a session may rename itself), or by title.
-      const mine = sessions.filter((x) => x.id === ts.sessionId || ofTrack(t, x)).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+      const mine = sessions.filter(ofTrack(ts, sessions)).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
       // T-400 items 2 and 3: a live, recent chat of the track is its lead and is adopted, before the newest one: a new lead is never started
       // beside it, and a person ending a newer duplicate does not mark the track "closed by a person".
-      const cur = liveChatOf(t, sessions, ts.sessionId) ?? mine.find((x) => !x.archivedAt) ?? mine[0];
+      const cur = liveChatOf(ts, sessions) ?? mine.find((x) => !x.archivedAt) ?? mine[0];
       if (cur?.cwd) ts.cwd = cur.cwd;
       // Keep going is on for this track's chat: the portal watches and restarts it (T-259 slice 2). Only Bypass is still kept here.
       if (cur?.keepGoing?.enabled && !cur.keepGoing.paused) {
