@@ -86,7 +86,7 @@ export function TeamsSection() {
                 <button type="button" onClick={() => setOpenId(t.id)} className="press flex min-h-11 min-w-0 flex-1 items-center gap-2 text-left">
                   <Users className="size-4 shrink-0 text-muted" aria-hidden="true" />
                   <span className="min-w-0">
-                    <span className="block truncate font-medium">{t.name}</span>
+                    <span className="block font-medium [overflow-wrap:anywhere]">{t.name}</span>
                     <span className="block truncate text-[12.5px] text-muted">
                       {t.members} {t.members === 1 ? 'person' : 'people'}
                       {t.description ? ` · ${t.description}` : ''}

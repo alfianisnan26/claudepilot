@@ -81,7 +81,7 @@ export function MemberPage() {
               <li key={t.id}>
                 <button type="button" onClick={() => setTeamId(t.id)} className="press flex min-h-11 w-full items-center gap-3 rounded-2xl px-3 py-2 text-left hover:bg-surface-2">
                   <Users className="size-4 shrink-0 text-muted" aria-hidden="true" />
-                  <span className="min-w-0 flex-1 truncate font-semibold">{t.name}</span>
+                  <span className="min-w-0 flex-1 font-semibold [overflow-wrap:anywhere]">{t.name}</span>
                   <span className="shrink-0 text-[12.5px] text-muted">{t.myRole === 'owner' ? 'Owner' : 'Member'}</span>
                 </button>
               </li>

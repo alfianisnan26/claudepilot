@@ -53,7 +53,7 @@ export function AccessSection() {
                 <span className="min-w-0 flex-1">
                   <span className="flex min-w-0 items-center gap-1.5 font-medium">
                     <MessageSquare className="size-4 shrink-0 text-muted" aria-hidden="true" />
-                    <span className="truncate">{s.sessionTitle ?? 'A removed session'}</span>
+                    <span className="min-w-0 [overflow-wrap:anywhere]">{s.sessionTitle ?? 'A removed session'}</span>
                   </span>
                   <span className="flex min-w-0 flex-wrap items-center gap-1 pt-0.5 text-[12.5px] text-muted">
                     {s.subject.kind === 'team' ? <Users className="size-3.5 shrink-0" aria-hidden="true" /> : <UserRound className="size-3.5 shrink-0" aria-hidden="true" />}

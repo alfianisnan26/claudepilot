@@ -63,8 +63,8 @@ export function TeamDialog({ teamId, manage, meId, open, onClose, onChanged }: {
           {(team?.people ?? []).map((p) => (
             <li key={p.userId} className="flex min-h-11 items-center gap-2 px-3 py-1.5">
               <span className="min-w-0 flex-1">
-                <span className="block truncate text-sm font-medium">{p.displayName}</span>
-                <span className="block truncate text-[12.5px] text-muted">{p.email}</span>
+                <span className="block text-sm font-medium [overflow-wrap:anywhere]">{p.displayName}</span>
+                <span className="block text-[12.5px] text-muted [overflow-wrap:anywhere]">{p.email}</span>
               </span>
               {canManage ? (
                 <button
@@ -124,7 +124,7 @@ export function TeamDialog({ teamId, manage, meId, open, onClose, onChanged }: {
                 <li key={s.id} className="flex min-h-11 flex-col justify-center px-3 py-1.5">
                   <span className="flex min-w-0 items-center gap-1.5 text-sm font-medium">
                     <Users className="size-4 shrink-0 text-muted" aria-hidden="true" />
-                    <span className="truncate">{s.sessionTitle ?? 'A removed session'}</span>
+                    <span className="min-w-0 [overflow-wrap:anywhere]">{s.sessionTitle ?? 'A removed session'}</span>
                   </span>
                   <span className="flex flex-wrap items-center gap-1 pt-0.5">
                     {s.caps.map((c) => (

@@ -159,7 +159,7 @@ export function SsoSection() {
                 <button type="button" onClick={() => open(p)} className="press flex min-h-11 min-w-0 flex-1 items-center gap-2 text-left">
                   <KeyRound className="size-4 shrink-0 text-muted" aria-hidden="true" />
                   <span className="min-w-0">
-                    <span className="block truncate font-medium">{p.name}</span>
+                    <span className="block font-medium [overflow-wrap:anywhere]">{p.name}</span>
                     <span className="block text-[12.5px] text-muted [overflow-wrap:anywhere]">{p.domains.map((d) => `@${d}`).join(' ')}</span>
                   </span>
                 </button>
