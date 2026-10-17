@@ -18,7 +18,11 @@ after(() => roots.forEach((r) => rmSync(r, { recursive: true, force: true })));
 /** The machine's git configuration (signing, hooks) stays out of the fixture. */
 const GIT_ENV = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
 const sh = (cwd: string, cmd: string) => {
-  const r = spawnSync('bash', ['-c', cmd], { cwd, encoding: 'utf8', env: { ...GIT_ENV, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' } });
+  const r = spawnSync('bash', ['-c', cmd], {
+    cwd,
+    encoding: 'utf8',
+    env: { ...GIT_ENV, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' },
+  });
   assert.equal(r.status, 0, r.stderr);
   return r.stdout.trim();
 };
@@ -160,8 +164,14 @@ test('T-960: a Python test runs with unittest when the image has no pytest, and 
   const f = fixture(0);
   mkdirSync(join(f.work, 'py/tests'), { recursive: true });
   writeFileSync(join(f.work, 'py/package.json'), '{}\n');
-  writeFileSync(join(f.work, 'py/tests/test_ok.py'), 'import unittest\nclass T(unittest.TestCase):\n    def test_ok(self):\n        self.assertTrue(True)\n');
-  writeFileSync(join(f.work, 'py/tests/test_bad.py'), 'import unittest\nclass T(unittest.TestCase):\n    def test_bad(self):\n        self.assertEqual(1, 2)\n');
+  writeFileSync(
+    join(f.work, 'py/tests/test_ok.py'),
+    'import unittest\nclass T(unittest.TestCase):\n    def test_ok(self):\n        self.assertTrue(True)\n',
+  );
+  writeFileSync(
+    join(f.work, 'py/tests/test_bad.py'),
+    'import unittest\nclass T(unittest.TestCase):\n    def test_bad(self):\n        self.assertEqual(1, 2)\n',
+  );
   sh(f.work, 'git add -A && git commit -qm py');
   // PATH without pytest: python3 -m pytest fails, so the fallback is taken (a shim makes "python3 -m pytest" fail even where pytest exists).
   const shim = join(f.root, 'nopytest');

@@ -686,21 +686,19 @@ export class KnowledgeService {
   #view(row: VaultRow, vault: Vault, r: ReturnType<Vault['readNote']>): NoteView {
     const parsed = vault.parse(r.text);
     const file = r.file;
-    const links: NoteLink[] = vault.index
-      .outgoing(file.id)
-      .map((l) => ({
-        style: l.style,
-        embed: l.embed,
-        target: l.target,
-        heading: l.heading,
-        block: l.block,
-        alias: l.alias,
-        entity: l.entity,
-        line: l.line,
-        to: l.to,
-        ambiguous: l.ambiguous,
-        anchorMissing: l.anchorMissing,
-      }));
+    const links: NoteLink[] = vault.index.outgoing(file.id).map((l) => ({
+      style: l.style,
+      embed: l.embed,
+      target: l.target,
+      heading: l.heading,
+      block: l.block,
+      alias: l.alias,
+      entity: l.entity,
+      line: l.line,
+      to: l.to,
+      ambiguous: l.ambiguous,
+      anchorMissing: l.anchorMissing,
+    }));
     const { author, agentOnly } = this.#author(row.id, r.path);
     return {
       vaultId: row.id,
