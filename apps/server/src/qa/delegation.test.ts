@@ -39,6 +39,7 @@ function fakeChat() {
     });
   return {
     calls,
+    sessions,
     resolve: (id: string) => id,
     get: (id: string) => sessions[id] ?? null,
     history: (_id: string, after: number) => all(after),
@@ -118,6 +119,15 @@ test('a member sees only what is delegated; view reads; operate sends, answers a
     assert.equal((await call('PATCH', `/api/admin/users/${off.id}`, { state: 'disabled' }, admin)).status, 200);
     assert.equal((await call('PUT', '/api/admin/session-grants/lead', { userId: off.id, level: 'view' }, admin)).status, 422, 'not to a disabled account');
     assert.equal((await call('PUT', '/api/admin/session-grants/lead', { userId: u.id, level: 'owner' }, admin)).status, 422, 'a level is view or operate');
+
+    // Re-review: an operate grant made before Bypass does not act once the session is in Bypass; a re-share that accepts Bypass does.
+    chat.sessions.lead!.mode = 'bypassPermissions';
+    assert.equal((await call('POST', '/api/me/sessions/lead/send', { text: 'x' }, m)).status, 403, 'shared before Bypass');
+    assert.equal((await call('GET', '/api/me/sessions/lead', undefined, m)).status, 200, 'still readable');
+    assert.equal((await call('PUT', '/api/admin/session-grants/lead', { userId: u.id, level: 'operate', acknowledgeBypass: true }, admin)).status, 200);
+    assert.equal((await call('POST', '/api/me/sessions/lead/send', { text: 'go on' }, m)).status, 200, 'accepted on the record');
+    assert.equal(chat.calls.at(-1), `send lead go on account:${u.id}`);
+    chat.sessions.lead!.mode = 'default';
 
     // Revoke: the next request is refused.
     assert.equal((await call('DELETE', `/api/admin/session-grants/lead/${u.id}`, undefined, admin)).status, 200);

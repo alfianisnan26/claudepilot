@@ -3479,6 +3479,15 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 403,
+    name: 'identity: a delegate grant remembers that the owner accepted Bypass',
+    up(db) {
+      // Review 2026-10-17 (m6): operate acts on a Bypass session only when the owner said yes to that, at the grant; a session that enters
+      // Bypass after an operate grant is read-only to the delegate until the owner shares it again.
+      db.exec('ALTER TABLE session_grants ADD COLUMN bypass_ack INTEGER NOT NULL DEFAULT 0');
+    },
+  },
 ];
 
 /**

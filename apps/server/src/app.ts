@@ -400,17 +400,22 @@ export function createApp(
     if (delegateLimiter.blocked(s.userId)) throw new AppError('RATE_LIMITED', 'Too many requests. Wait a minute.');
     delegateLimiter.fail(s.userId);
     const id = chatController.resolve(c.req.param('id') ?? '');
-    const level = grants.levelOf(id, s.userId);
+    const held = grants.held(id, s.userId);
     // The same not-found for a session that does not exist and one that is not yours: nothing is told.
-    if (!level) throw new AppError('NOT_FOUND', 'Not found.');
+    if (!held) throw new AppError('NOT_FOUND', 'Not found.');
+    const level = held.level;
     if (need === 'operate' && level !== 'operate') throw new AppError('FORBIDDEN', 'This session is shared with you to view only.');
+    // Re-review: a session that went into Bypass after an operate grant is read-only to the delegate until the owner shares it again
+    // and accepts Bypass (checked on every act, not only at the grant).
+    if (need === 'operate' && !held.bypassAck && chatController.get(id)?.mode === 'bypassPermissions')
+      throw new AppError('FORBIDDEN', 'This session is in Bypass now. Ask the owner to share it again.');
     return { id, userId: s.userId, level };
   };
   // Review M2: a delegate gets what its view shows and nothing more: the main thread's messages, tool names, approvals and errors. No tool
   // output, thinking, tool inputs, files or sub-agent lines (they carry what the agent read in the workspace).
   const delegateView = (events: ChatEvent[]): ChatEvent[] =>
     events.flatMap((e): ChatEvent[] => {
-      if (e.parentToolUseId || e.agentLabel) return [];
+      if ((e.parentToolUseId || e.agentLabel) && e.kind !== 'request' && e.kind !== 'resolved') return []; // a sub-agent's approval still shows
       const base = { seq: e.seq, at: e.at, kind: e.kind };
       switch (e.kind) {
         case 'user':
@@ -461,7 +466,7 @@ export function createApp(
     const { text, uuid } = await body<{ text: string; uuid: string }>(c);
     if (typeof text !== 'string' || !text.trim()) throw new AppError('VALIDATION_FAILED', 'Write a message.');
     const id = typeof uuid === 'string' && /^[A-Za-z0-9-]{8,64}$/.test(uuid) ? uuid : crypto.randomUUID();
-    await chatController.send(d.id, id, text.slice(0, 50_000), { actor: `account:${d.userId}` });
+    await chatController.send(d.id, id, text.slice(0, 50_000), { actor: `account:${d.userId}`, actorLabel: users.get(d.userId).email });
     audit('session.delegate_sent', d.userId, { sessionId: d.id, chars: text.length });
     return c.json(success({ ok: true, uuid: id }));
   });
@@ -547,7 +552,7 @@ export function createApp(
       throw new AppError('VALIDATION_FAILED', 'This session is in Bypass: confirm that this account may make it run any command.', { details: { acknowledgeBypass: 'Required for operate in Bypass.' } });
     // Review m1: who granted it, on the row and on the audit.
     const by = portal.session(c.get('token'))?.userId ?? null;
-    const g = grants.grant(sid, userId, level, by ? `account:${by}` : 'ui');
+    const g = grants.grant(sid, userId, level, by ? `account:${by}` : 'ui', acknowledgeBypass === true);
     audit('session.delegated', userId, { sessionId: sid, level: g.level, bypass }, bypass && level === 'operate' ? 'medium' : 'info', by);
     return c.json(success(g));
   });

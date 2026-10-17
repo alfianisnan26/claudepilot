@@ -19,12 +19,13 @@ export class SessionGrants {
     return db;
   }
 
-  grant(sessionId: string, userId: string, level: SessionGrantLevel, by: string): SessionGrant {
+  /** `bypassAck`: the owner accepted that operate may drive this session in Bypass (operate only). */
+  grant(sessionId: string, userId: string, level: SessionGrantLevel, by: string, bypassAck = false): SessionGrant {
     if (level !== 'view' && level !== 'operate') throw new AppError('VALIDATION_FAILED', 'A level is view or operate.', { details: { level: 'view or operate' } });
     const at = this.now().toISOString();
     this.#w()
-      .prepare('INSERT INTO session_grants (session_id, user_id, level, granted_by, created_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT (session_id, user_id) DO UPDATE SET level = excluded.level, granted_by = excluded.granted_by, created_at = excluded.created_at')
-      .run(sessionId, userId, level, by, at);
+      .prepare('INSERT INTO session_grants (session_id, user_id, level, granted_by, created_at, bypass_ack) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (session_id, user_id) DO UPDATE SET level = excluded.level, granted_by = excluded.granted_by, created_at = excluded.created_at, bypass_ack = excluded.bypass_ack')
+      .run(sessionId, userId, level, by, at, level === 'operate' && bypassAck ? 1 : 0);
     return { sessionId, userId, level, grantedBy: by, createdAt: at };
   }
 
@@ -45,8 +46,15 @@ export class SessionGrants {
 
   /** The level an account holds on a session, or null. */
   levelOf(sessionId: string, userId: string): SessionGrantLevel | null {
-    const r = this.db()?.prepare('SELECT level FROM session_grants WHERE session_id = ? AND user_id = ?').get(sessionId, userId) as { level: SessionGrantLevel } | undefined;
-    return r?.level ?? null;
+    return this.held(sessionId, userId)?.level ?? null;
+  }
+
+  /** The grant an account holds on a session (its level, and whether operate covers Bypass), or null. */
+  held(sessionId: string, userId: string): { level: SessionGrantLevel; bypassAck: boolean } | null {
+    const r = this.db()?.prepare('SELECT level, bypass_ack FROM session_grants WHERE session_id = ? AND user_id = ?').get(sessionId, userId) as
+      | { level: SessionGrantLevel; bypass_ack: number }
+      | undefined;
+    return r ? { level: r.level, bypassAck: r.bypass_ack === 1 } : null;
   }
 
   #rows(sql: string, arg: string): SessionGrant[] {
