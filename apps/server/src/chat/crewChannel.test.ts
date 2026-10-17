@@ -198,6 +198,7 @@ test('T-294 crew channel (FIX1): an ended session cannot post', async () => {
 test('T-294 crew channel (FIX1): one level only: a worker with workers of its own is a member of its parent’s channel and cannot read or post on its workers’', async () => {
   const r = await rig();
   try {
+    r.s.controller.agentCaps = () => ({ ...CAPS, maxDepth: 2 }); // the default depth refuses a worker's worker; an owner can raise it
     const before = r.s.ws.tails.length;
     const gw = await r.s.controller.create({ workspaceId: 'docker/ws1', title: 'Grandchild' }, { actor: `session:${r.w1.id}`, parentId: r.w1.id });
     await until(() => r.s.ws.tails.length === before + 1);
