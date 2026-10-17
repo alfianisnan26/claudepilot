@@ -35,6 +35,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 ## DECISIONS (binding)
 - 00:35 Coordinator: 2nd workspace RESTART 00:50 UTC (browser image t623-2026.10.16-1). All 6 lanes told: push WIP, no Job after
   00:45, end `PAUSED <sha> <job> <next>`. After it: end interrupted lanes, respawn from PAUSED shas, re-run cut Jobs.
+  Release 2026.10.17-1 (42b186b4, from 44fba442) holds batches 27+28, NOT 29 (edde2073): await live checks.
 - 22:45 Coordinator: workspace RESTART 23:10 UTC (cpb-secrets volume for T-623). All 6 lanes told to push WIP, no Job after 23:05,
   end `PAUSED <hash>`. Batch 29 gate deferred to after the restart (a ~40 min queue+suite would be cut). Respawn ended lanes after.
 - 23:15 Resumed after restart: all 6 lanes interrupted -> ended and respawned from their pushed heads; cut Jobs re-run by their
