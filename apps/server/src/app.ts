@@ -36,7 +36,7 @@ import {
   type WorkspaceTerminal,
 } from '@portal/contracts';
 import { Hono, type Context } from 'hono';
-import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
+import { deleteCookie, setCookie } from 'hono/cookie';
 import { bodyLimit } from 'hono/body-limit';
 import { csrf } from 'hono/csrf';
 import { createMiddleware } from 'hono/factory';
@@ -99,6 +99,7 @@ import { createCodespacesRoutes, type Codespaces } from './codespaces/index.js';
 import type { Platform } from './platform/index.js';
 import { actorOf, actorString, actorUserId, visible } from './authz/seam.js';
 import { assetCompress, jsonCompress } from './jsonCompress.js';
+import { LEGACY_SESSION_COOKIE, SESSION_COOKIE, overHttps, sessionCookieSpec, sessionFromCookies } from './sessionCookie.js';
 
 type Env = { Bindings: HttpBindings; Variables: { token: string } };
 
@@ -215,7 +216,21 @@ export function createApp(
 ) {
   const app = new Hono<Env>();
   const limiter = new RateLimiter(config.loginLimit.attempts, config.loginLimit.windowMs);
-  const { cookie, ttlMs } = config.session;
+  const { ttlMs } = config.session;
+  const https = (c: Context<Env>) => overHttps(c.req.url, c.req.header('x-forwarded-proto'));
+  /**
+   * The session token of a request (sessionCookie.ts: the `__Host-` name wins, the old one only when it is absent). A valid session that came
+   * under the old name over https is moved to the new one (and the old cleared), so the change signs nobody out (T-976).
+   */
+  const sessionToken = (c: Context<Env>): string | undefined => {
+    const { token, legacy } = sessionFromCookies(c.req.header('cookie'));
+    if (token && legacy && https(c) && portal.session(token)) {
+      const spec = sessionCookieSpec(true, ttlMs);
+      setCookie(c, spec.name, token, spec.options);
+      deleteCookie(c, LEGACY_SESSION_COOKIE, { path: '/' });
+    }
+    return token;
+  };
 
   // Served over plain HTTP: no HSTS.
   // The built app also gets a CSP (csp.ts); the dev server's pages come from Vite, not from here.
@@ -270,7 +285,7 @@ export function createApp(
 
   app.get(API.session, (c) => {
     const status: SessionStatus = {
-      authenticated: !!portal.session(getCookie(c, cookie)),
+      authenticated: !!portal.session(sessionToken(c)),
       enabled: portal.enabled,
     };
     return c.json(success(status));
@@ -288,19 +303,16 @@ export function createApp(
       throw e;
     }
     limiter.reset(key);
-    setCookie(c, cookie, token, {
-      httpOnly: true,
-      sameSite: 'Strict',
-      path: '/',
-      maxAge: Math.floor(ttlMs / 1000),
-    });
+    const spec = sessionCookieSpec(https(c), ttlMs);
+    setCookie(c, spec.name, token, spec.options);
     return c.json(success(portal.adminState(token)));
   });
 
   app.post(API.logout, (c) => {
-    const token = getCookie(c, cookie);
+    const { token } = sessionFromCookies(c.req.header('cookie'));
     if (token) portal.signOut(token);
-    deleteCookie(c, cookie, { path: '/' });
+    if (https(c)) deleteCookie(c, SESSION_COOKIE, { path: '/', secure: true });
+    deleteCookie(c, LEGACY_SESSION_COOKIE, { path: '/' });
     return c.json(success({ ok: true }));
   });
 
@@ -324,7 +336,7 @@ export function createApp(
     return null;
   };
   const requireSession = createMiddleware<Env>(async (c, next) => {
-    const token = getCookie(c, cookie);
+    const token = sessionToken(c);
     if (!token || !portal.session(token)) throw new AppError('UNAUTHORIZED', 'Sign in again.');
     const field = await hostileWorkspaceField(c);
     if (field) throw new AppError('VALIDATION_FAILED', 'A workspace is `<target>/<name>`.', { details: { [field]: 'Not a workspace.' } });

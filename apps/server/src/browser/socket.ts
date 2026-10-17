@@ -1,9 +1,8 @@
 import type { IncomingMessage, Server } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { WebSocketServer, type WebSocket } from 'ws';
-import { config } from '../config.js';
 import type { Portal } from '../portal.js';
-import { cookie } from '../workspaces/shell.js';
+import { sessionOfRequest } from '../sessionCookie.js';
 import { DEVICE_ID, deviceLabel } from './control.js';
 import { secureContext } from './routes.js';
 import type { BrowserService } from './service.js';
@@ -45,7 +44,7 @@ export function attachBrowserSockets(server: Server, deps: { portal: Portal; ser
     const match = PATH.exec(url.pathname);
     if (!match) return; // not ours
     if (!sameOrigin(req)) return refuse(socket, 403, 'Forbidden');
-    if (!deps.portal.session(cookie(req, config.session.cookie))) return refuse(socket, 401, 'Unauthorized');
+    if (!deps.portal.session(sessionOfRequest(req))) return refuse(socket, 401, 'Unauthorized');
     const device = url.searchParams.get('device') ?? '';
     if (!DEVICE_ID.test(device)) return refuse(socket, 400, 'Bad Request');
     const workspaceId = `${match[1]}/${match[2]}`;

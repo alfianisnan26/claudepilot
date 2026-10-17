@@ -6,6 +6,7 @@ import { after, test } from 'node:test';
 import { WebSocketServer } from 'ws';
 import WebSocket from 'ws';
 import { Portal } from '../portal.js';
+import { sessionOfRequest } from '../sessionCookie.js';
 import { SocketGuard } from '../sockets.js';
 
 const CODE = '24681357';
@@ -22,7 +23,7 @@ after(() =>
 async function start(portal: Portal, unansweredMs = 150) {
   const server = createServer();
   servers.push(server);
-  const guard = new SocketGuard(portal, COOKIE, unansweredMs);
+  const guard = new SocketGuard(portal, sessionOfRequest, unansweredMs);
   guard.attach(server);
   portal.onRevoked = () => guard.sweep();
   const wss = new WebSocketServer({ noServer: true });

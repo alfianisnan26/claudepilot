@@ -3,22 +3,13 @@ import type { Duplex } from 'node:stream';
 import { isAppError } from '@isnanme/core';
 import type { ShellClientMessage, ShellServerMessage } from '@portal/contracts';
 import { WebSocketServer, type WebSocket } from 'ws';
-import { config } from '../config.js';
 import type { Portal } from '../portal.js';
+import { sessionOfRequest } from '../sessionCookie.js';
 import { runtimeMessage, type Workspaces } from './manager.js';
 import { attachCommand, TERMINAL_ID } from './terminals.js';
 
 const SHELL_PATH = /^\/api\/workspaces\/([a-z0-9-]+)\/([a-z0-9-]+)\/shell$/;
 const PING_MS = 25_000;
-
-/** One cookie from an upgrade request (WebSocket handshakes carry the session cookie). */
-export function cookie(req: IncomingMessage, name: string): string | undefined {
-  for (const part of req.headers.cookie?.split(';') ?? []) {
-    const [k, ...v] = part.trim().split('=');
-    if (k === name) return decodeURIComponent(v.join('='));
-  }
-  return undefined;
-}
 
 /** Browsers send cookies on cross-site WebSocket handshakes, so the origin must be this host. */
 function sameOrigin(req: IncomingMessage): boolean {
@@ -49,7 +40,7 @@ export function attachShell(server: Server, portal: Portal, workspaces: Workspac
     const match = url.pathname.match(SHELL_PATH);
     if (!match) return; // not ours (Vite's HMR socket in dev)
     if (!sameOrigin(req)) return refuse(socket, 403, 'Forbidden');
-    if (!portal.session(cookie(req, config.session.cookie))) return refuse(socket, 401, 'Unauthorized');
+    if (!portal.session(sessionOfRequest(req))) return refuse(socket, 401, 'Unauthorized');
 
     const [, target, name] = match as unknown as [string, string, string];
     const size = {
