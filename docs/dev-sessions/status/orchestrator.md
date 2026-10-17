@@ -19,26 +19,25 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - BATCH 29 ON INTEGRATION edde2073 (gate edde207 GREEN, suite 741s; quick-check 11 files green; first gate 4258f72 green, re-gated
   after 44fba442 T-623 browser image): T-524 S3c+T-733 S5, T-881 S1b, T-416 S2c (lead's mechanical controller.ts resolution
   67198848, APPROVE 9219), T-382 S1, T-781 S8c, T-675 R2c+R2d. Coordinator told T-731 9271.
-## IN FLIGHT (6 of 6, D-71; pausing for the 00:50 restart; PAUSED shas below)
-- BATCH 30 premerge-b30 4de61237 (wip/main-4de6123): T-772 S2f b36f6a54 (QA UI PWG 9301; S2g: comma selectors + media regex),
-  T-736 S3g 4eb08f4e (QA UI 9008), T-612 S1 a5207db0 (QA BE 2 PWG 9280; S2 = the 16 lint errors). AFTER RESTART: quick-check
-  (quickCheck, rtkHistoryGuard, focusRing tests) then gate. T-868 S3 0a818680 (DONE 9299, Job 9bb7f09d, 13 mutants) NEEDS QA. Pending QA: T-436 S1+S2 34a5b293, T-382 S2+fix+S3 fdb33268,
-  T-425 c22a76b3 (QA UI: NOT VERIFIED, read only).
-- QA BE 2 05c187ae PAUSED 4a838735: its T-436 S2 and T-382 re-check verdicts were in earlier replies, NOT its last ->
-  after restart: repost both as the LAST reply (relay via a lane spawned with that ticket).
-- IMPL fca8e37d PAUSED 0a818680 (T-868 S3 DONE). Next: a new ticket (new branch = new worker).
-- BACKEND 442e397a: T-382 S4 (ci/runs, chat/audit, lab/slices) on ticket/T-382-s3-tickets on top of fdb33268. PAUSED 0cdfa044 (audit 13/13; ci/runs + lab Jobs cut by a typecheck error since fixed -> re-run, mutants).
-- BE INFRA 711853b8: T-860 S2c DONE e78d727b (9331, Jobs e4b190f1 + 81ed8e6f 28/28; no mutants) -> QA after restart.
-- QA UI 0cf56a8e PAUSED b36f6a54: next QA T-425 c22a76b3 (one Job caps.test.ts + rowMeta.test.ts + mutants; badge 390/1280).
-- QA PERF bf2e403a PAUSED 8cb00f79: engine.test Job 7c22e2b1 never ran (Pending 900s, master >75% mem) -> re-run after
-  restart, then perf QA T-382 S2+S3 fdb33268.
+## IN FLIGHT (6 of 6, D-71; all respawned 00:55 after the 00:50 restart, sonnet, spawned with their ticket so they can post)
+- BATCH 30 premerge-b30 4de61237: T-772 S2f b36f6a54 (QA UI PWG 9301; S2g follow-up), T-736 S3g 4eb08f4e (9008), T-612 S1
+  a5207db0 (PWG 9280). QUICK-CHECK job-09bf4786 FAILED: format only (rtkHistoryGuard.test.ts, focusRing.test.ts; T-612 S1
+  made prettier real); lint + 3 tests ok. Fix -> BE Infra (FORMAT DONE <sha>), lead merges it in, re-quick-check, gate.
+- BE INFRA 0f151084 T-612: ticket/T-612-s2 156a15b7 (lead merged b30 in): 1) format the 2 files 2) S2 the 16 lint errors (9280).
+- BACKEND b367d0dd T-382 S4 (ci/runs, chat/audit, lab/slices) resumed at 0cdfa044 (audit 13/13; re-run ci/lab Jobs, mutants).
+- QA BE A 0a2c06aa (T-436): QA T-436 S1+S2 34a5b293 (verdict lost at restart, redo) -> QA T-860 S2c e78d727b (9331, no mutants).
+- QA BE B a8096dc9 (T-382): QA T-382 S2+fix+S3 fdb33268 (9277) -> QA T-868 S3 0a818680 (9299, Job 9bb7f09d, 13 mutants).
+- QA UI 11c8c19a (T-425): QA T-425 c22a76b3 (Job caps + rowMeta + mutants; badge 390/1280).
+- QA PERF 98e910e1 (T-781): re-run engine.test on integration (cut: Pending 900s) -> perf QA T-382 fdb33268 (p95, size).
+- Impl lane not respawned: its T-868 S3 is done and QA held the larger queue; next free slot -> Impl for T-772 S2g.
+- 01:00 Coordinator (quota spread): spawn the NEXT 3 lanes with claude sekar, one.claude, two.claude (one each; "no reset time").
 
 ## DECISIONS (binding)
 - 00:35 Coordinator: 2nd workspace RESTART 00:50 UTC (browser image t623-2026.10.16-1). All 6 lanes told: push WIP, no Job after
   00:45, end `PAUSED <sha> <job> <next>`. After it: end interrupted lanes, respawn from PAUSED shas, re-run cut Jobs.
   Release 2026.10.17-1 (42b186b4, from 44fba442) holds batches 27+28, NOT 29 (edde2073): await live checks.
-- 22:45 Coordinator: workspace RESTART 23:10 UTC (cpb-secrets volume for T-623). All 6 lanes told to push WIP, no Job after 23:05,
-  end `PAUSED <hash>`. Batch 29 gate deferred to after the restart (a ~40 min queue+suite would be cut). Respawn ended lanes after.
+- 00:55 Resumed after restart 2: 6 stopped lanes ended; 6 respawned (4 QA + Backend + BE Infra; Impl's slot -> 2nd QA BE since
+  QA held 6 items). QA lanes spawned with the ticket they report on (T-436, T-382, T-425, T-781) so their posts land (T-910).
 - 23:15 Resumed after restart: all 6 lanes interrupted -> ended and respawned from their pushed heads; cut Jobs re-run by their
   lanes (T-436 S2, T-382 S2, T-772 S2f QA, T-781 S8c). QA verdict relays go through lanes spawned with that ticket (T-910).
 - 13:45 D-75 AMENDED (coordinator, 1444d836, in DECISIONS.md): the lead runs the gate before a merge (gate-job.sh, one per batch).
