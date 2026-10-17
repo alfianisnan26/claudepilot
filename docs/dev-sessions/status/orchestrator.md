@@ -25,8 +25,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   --hook (ticket/T-868-s3 00b6e38a = S2 + integration merged by lead for new rules).
 - BACKEND 442e397a (was 7785fbf2: T-382 S2 DONE 13482b3f 9222, Job 61c9698c green, relay 9209). NOW T-382 S3 GET /api/tickets
   cursor + summary rows (ticket/T-382-s3-tickets from S2).
-- BE INFRA 07572c46 (was 4ed98960, PAUSED a5207db0 9135): T-612 S1 format/lint demo in a Job (quick-check.sh not in lane
-  allow list, T-586: the real run is the lead's at merge) -> S2a -> T-860 S2c (8936, 8845).
+- BE INFRA 711853b8 sonnet (was 07572c46: T-612 S1 DONE a5207db0 9272, Job 838b9585 prettier/eslint catch bad files; S2a = 9135
+  counts, no commit) NOW T-860 S2c (8936, 8845) on ticket/T-860-s2c from integration 7d49477f. T-612 S1 -> QA BE 2, lead quick-check.
 - QA UI 0cf56a8e (was 66c13056): QA T-772 S2f b36f6a54 (Job cut at 23:10) -> T-736 S3g 4eb08f4e, T-425 c22a76b3 (if not done).
 - QA BE 2 05c187ae (was b6579580: T-436 PWG, T-382 S1 PWG, T-416 S2c PWG 9173): b29 resolution APPROVE 9219; T-382 S2 FAIL.
   NOW QA T-436 S2 34a5b293 -> T-612 S1 as it lands -> T-382 S2+S3 re-check.
