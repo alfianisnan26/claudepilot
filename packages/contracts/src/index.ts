@@ -36,6 +36,7 @@ export * from './zonedTime.js';
 export * from './triggers.js';
 export * from './autotransfer.js';
 export * from './keepgoing.js';
+export * from './manager.js';
 export * from './models.js';
 export * from './claudeversion.js';
 export * from './authz.js';
