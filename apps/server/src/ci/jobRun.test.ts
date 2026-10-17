@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict';
 import { type ChildProcess, spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { hostname, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, test } from 'node:test';
@@ -578,6 +578,110 @@ test('usage errors: nothing is created', () => {
     assert.match(r.out, re);
   }
   assert.equal(w.calls(), '');
+});
+
+test('T-379 --image: an allowed ref is the command container\'s image only; fetch keeps the workspace image; npm steps skipped; no --image changes nothing', () => {
+  const ws = 'registry.test/claudepilot/workspace:1-dev-1';
+  const digest = `sha256:${hex(32)}`;
+  const base = ['--repo', 'claudepilot', '--ref', 'main'];
+  const imagesOf = (text: string) => { const m = yamlLoad(text) as Manifest; return { fetch: m.spec.template.spec.initContainers?.[0]?.image, run: container(m).image, m }; };
+  const norm = (text: string) => text.replace(/claudepilot-job-[0-9a-f]{8}/g, 'JOB').replace(/job-run\/owner: ".*"/, 'OWNER');
+  // No --image: both containers on the workspace image, the manifest exactly as before (the only change in the template is the placeholder's name).
+  const w0 = world();
+  assert.equal(w0.run([...base, '--steps', 'none', '--', 'true']).code, 0);
+  const none = w0.applied1();
+  assert.deepEqual([imagesOf(none).fetch, imagesOf(none).run], [ws, ws]);
+  assert.ok(!/__[A-Z_]+__/.test(none.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n')));
+  // The manifest is as before T-379: the template gained no text (the placeholder was renamed), and the run image is the same text as the fetch image.
+  assert.ok(!none.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n').includes('--image'), 'the rendered manifest carries nothing of the option');
+  assert.equal(none.split(`image: ${ws}`).length, 3, 'exactly the two image lines, both the workspace image');
+  for (const ref of ['registry.int.isnan.me/claudepilot/py-test:abc123', 'registry.int.isnan.me/konfersi/metocean/test-stage:req-9f2', 'registry.int.isnan.me/event/web-test:r1',`registry.int.isnan.me/claudepilot/py-test@${digest}`]) {
+    const w = world();
+    const r = w.run([...base, '--image', ref, '--', 'true']);
+    assert.equal(r.code, 0, r.out);
+    assert.match(r.out, /the npm steps are skipped/);
+    const text = w.applied1();
+    const { fetch, run, m } = imagesOf(text);
+    assert.equal(run, ref, 'the command container runs the image');
+    assert.equal(fetch, ws, 'the fetch container (the credentials) keeps the workspace image');
+    assert.equal(envOf(m).JR_STEPS, 'none');
+    assert.equal(envOf(m).NODE_AUTH_TOKEN, undefined);
+    assert.ok(!JSON.stringify(container(m)).includes('secretKeyRef'), 'no Secret in the command container');
+    // Against the same run without --image, only the run container's image line differs.
+    const a = norm(none).split('\n'), b = norm(text).split('\n');
+    assert.equal(a.length, b.length);
+    const diff = a.map((l, i) => [l, b[i]]).filter(([x, y]) => x !== y);
+    assert.deepEqual(diff, [[`          image: ${ws}`, `          image: ${ref}`]]);
+  }
+  // The default step is skipped too; an explicit npm-ci is refused.
+  const w1 = world();
+  assert.equal(w1.run([...base, '--image', 'registry.int.isnan.me/claudepilot/py:1', '--steps', 'npm-ci', '--', 'true']).code, 2);
+  assert.equal(w1.calls(), '');
+});
+
+test('T-379 --image: another registry, a path outside the prefix, an untagged or odd reference, --against: refused before any kubectl call', () => {
+  const w = world();
+  const bad = [
+    'docker.io/library/python:3.11', 'registry.evil.example/claudepilot/x:1', 'registry.int.isnan.me.evil.example/claudepilot/x:1',
+    'registry.int.isnan.me/other/x:1', 'registry.int.isnan.me/claudepilot/x:latest', 'registry.int.isnan.me/event/x:latest', 'registry.int.isnan.me/claudepilot', 'registry.int.isnan.me/claudepilot/x', 'registry.int.isnan.me/claudepilot/x:latest;id',
+    'registry.int.isnan.me/claudepilot/x:1 --privileged', 'registry.int.isnan.me/claudepilot/x:$(id)', 'registry.int.isnan.me/claudepilot/../other/x:1',
+    'registry.int.isnan.me/claudepilot/X:1', 'registry.int.isnan.me/claudepilot/x@sha256:abc', 'registry.int.isnan.me/claudepilot/x:1\nimage: y', 'registry.int.isnan.me/claudepilot/x:1#y',
+    'http://registry.int.isnan.me/claudepilot/x:1', 'registry.int.isnan.me/konfersi//x:1', '',
+    // A port, userinfo, a tag plus a digest (the digest built at runtime), an uppercase host.
+    'registry.int.isnan.me:5000/claudepilot/x:1', 'u@registry.int.isnan.me/claudepilot/x:1',
+    `registry.int.isnan.me/claudepilot/x:1@sha256:${hex(32)}`, 'Registry.Int.Isnan.Me/claudepilot/x:1',
+  ];
+  for (const ref of bad) {
+    const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--image', ref, '--', 'true']);
+    assert.equal(r.code, 2, `${JSON.stringify(ref)}: ${r.out}`);
+    assert.match(r.out, /--image: an image on registry\.int\.isnan\.me under claudepilot\/, konfersi\/ or event\//);
+  }
+  // DEPLOY_REGISTRY does not widen the allow-list: the host is the constant.
+  const widened = w.run(['--repo', 'claudepilot', '--ref', 'main', '--image', 'docker.io/claudepilot/x:1', '--', 'true'], { DEPLOY_REGISTRY: 'docker.io' });
+  assert.equal(widened.code, 2, widened.out);
+  assert.match(widened.out, /--image: an image on registry\.int\.isnan\.me under claudepilot\//);
+  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--image', 'registry.int.isnan.me/claudepilot/x:1', '--against', 'abc1234', '--', 'true']);
+  assert.equal(r.code, 2, r.out);
+  assert.match(r.out, /--image cannot be used with --against/);
+  assert.equal(w.calls(), '', 'kubectl was never called');
+  assert.deepEqual(w.applied(), []);
+});
+
+test('T-379 --image: the header names the command\'s image next to the fetch image; none is named without --image', () => {
+  const w = world();
+  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--image', 'registry.int.isnan.me/claudepilot/py-test:abc123', '--', 'true']);
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /job-run: claudepilot-job-[0-9a-f]{8}: claudepilot@main \(none\) on registry\.test\/claudepilot\/workspace:1-dev-1; the command runs in registry\.int\.isnan\.me\/claudepilot\/py-test:abc123\n/);
+  const w0 = world();
+  const r0 = w0.run(['--repo', 'claudepilot', '--ref', 'main', '--', 'true']);
+  assert.match(r0.out, /\(npm-ci\) on registry\.test\/claudepilot\/workspace:1-dev-1\n/);
+  assert.doesNotMatch(r0.out, /the command runs in/);
+});
+
+test('T-379 the command container needs no git: the short sha comes from fetch (no "git: command not found", none empty in SUMMARY)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'cp-jobrun-nogit-'));
+  roots.push(root);
+  const git = (args: string[], cwd: string) => spawnSync('git', args, { cwd, encoding: 'utf8', env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' } });
+  mkdirSync(join(root, 'src'));
+  git(['init', '-q', '-b', 'main'], join(root, 'src'));
+  writeFileSync(join(root, 'src/README'), 'x');
+  git(['add', '.'], join(root, 'src'));
+  git(['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'one'], join(root, 'src'));
+  git(['clone', '-q', '--bare', join(root, 'src'), join(root, 'claudepilot.git')], root);
+  const sha = git(['rev-parse', '--short', 'HEAD'], join(root, 'src')).stdout.trim();
+  // A PATH of the tools a slim image has, without git.
+  const bin = join(root, 'nogit-bin'); mkdirSync(bin);
+  for (const t of ['bash', 'cat', 'mkdir', 'basename', 'date', 'base64', 'sed', 'grep', 'stat', 'tar', 'tr', 'cut', 'rm', 'dirname', 'head', 'wc']) {
+    const src = ['/usr/bin', '/bin'].map((d) => join(d, t)).find((p) => existsSync(p));
+    if (src) symlinkSync(src, join(bin, t));
+  }
+  assert.ok(!existsSync(join(bin, 'git')));
+  const r = runPod(TEMPLATE, {
+    PATH: process.env.PATH, JR_ROOT: join(root, 'run'), JR_REPO_URL: `file://${join(root, 'claudepilot.git')}`, JR_REF: 'main', JR_ALSO: '',
+    JR_STEPS: 'none', JR_ARTIFACTS: '', JR_ARTIFACT_MAX: '1', JR_CMD: Buffer.from('echo hi').toString('base64'), NODE_NAME: 'n' }, {}, { PATH: bin });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.doesNotMatch(r.stdout + r.stderr, /command not found/);
+  assert.match(r.stdout, new RegExp(`=== JOB-RUN SUMMARY claudepilot@${sha} checkout=`));
 });
 
 test('the Job\'s own script: checkout, the command\'s exit code, the artifacts block; a ref not on the remote says push it first', () => {

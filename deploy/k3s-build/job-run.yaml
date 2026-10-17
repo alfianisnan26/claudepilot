@@ -175,7 +175,7 @@ spec:
                   rm -rf "$root/warm"
                 fi
               fi
-              echo "$t0 $t1" > "$root/fetch.times"
+              echo "$t0 $t1" > "$root/fetch.times"; echo "$sha" > "$root/fetch.sha"
               ) > "$root/fetch.log" 2>&1
               rc=$?
               # The check (T-401): no credential VALUE in anything the run container gets, fetch.log included (it prints that log). File names only.
@@ -203,7 +203,7 @@ spec:
         # T-401: no git or npm credential here, no envFrom. The one exception (T-426): each --pool-env name (E2E_CF_ACCESS_* only, the
         # command's own scoped test credentials) as a secretKeyRef, written by job-run.sh in place of the __POOL_ENV__ line; never in fetch.
         - name: run
-          image: __IMAGE__
+          image: __RUN_IMAGE__
           env:
             # __POOL_ENV__ (job-run.sh puts the --pool-env secretKeyRefs here)
             - {name: JR_REPO_URL, value: "__REPO_URL__"}
@@ -238,7 +238,8 @@ spec:
               frc=$(cat "$root/fetch.rc" 2>/dev/null || true)
               if [ "$frc" != 0 ]; then [ -n "$frc" ] || echo "job-run: the fetch left no exit code"; say "EXIT ${frc:-1}"; exit "${frc:-1}"; fi
               read -r t0 t1 < "$root/fetch.times"
-              main=$(basename "$JR_REPO_URL" .git); sha=$(git -C "$root/w/$main" rev-parse --short HEAD)
+              # The short sha is read by fetch (git is there): the command's image (--image) may have no git.
+              main=$(basename "$JR_REPO_URL" .git); sha=$(cat "$root/fetch.sha" 2>/dev/null || true)
               # What npm ci --ignore-scripts left out, now without a credential: the dependencies' install scripts (npm rebuild) and the
               # package's own lifecycle scripts, in npm ci's order.
               lifecycle() { [ -f package.json ] || return 0; node -e 'const s = require("./package.json").scripts || {}; for (const n of ["preinstall", "install", "postinstall", "prepublish", "preprepare", "prepare", "postprepare"]) if (s[n]) console.log(n)'; }

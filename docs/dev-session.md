@@ -152,7 +152,19 @@ scripts/job-run.sh --repo konfersi:platform/konfersi-backend --ref <branch> --al
 scripts/job-run.sh --artifacts test-results --out /tmp/cp-shots -- 'npx playwright test'   # files back, at most 4 MiB compressed
 # Scripts that rewrite the checkout (tools/qa/rtk-history.sh, rtk-classes.sh, rtk-measure.sh, and the mutant runner rtk-guard-mutants.sh; T-736) refuse unless the Job's own env var JR_REPO_URL is set and the tree is clean.
 scripts/job-run.sh --list ; scripts/job-run.sh --stop --chat <session id>
+# A test stage the workspace image lacks (Python, pytest): build it once, then run the command in it (T-379)
+scripts/image-build.sh --repo konfersi:<org>/<repo> --ref <branch> --dockerfile containers/compute/Dockerfile --destination registry.int.isnan.me/konfersi/<name>:<tag>
+scripts/job-run.sh --repo konfersi:<org>/<repo> --ref <branch> --image registry.int.isnan.me/konfersi/<name>:<tag> -- 'python -m pytest -q tests/'
 ```
+
+- **`--image <ref>` (T-379):** the image of the command container only. Allowed: `registry.int.isnan.me/claudepilot/<path>` or
+  `registry.int.isnan.me/konfersi/<path>` or `registry.int.isnan.me/event/<path>` (the paths `scripts/image-build.sh` pushes to), pinned by
+  `:<tag>` (never `:latest`) or `@sha256:<digest>`; any other
+  registry, path or odd character is refused (rc 2) before any kubectl call. The `fetch` container, the only one with the credentials, keeps the
+  workspace image, and the checkout reaches the command container on the shared `/tmp`, as without the option. The registry host is the fixed
+  `registry.int.isnan.me` (`DEPLOY_REGISTRY` does not change it). The image needs bash and coreutils (base64, tar, stat, date, sed), and no node,
+  npm or git: the checkout and its short sha come from `fetch` (the workspace image), so a Debian-based image such as `python:3.11-slim` plus pytest
+  runs as is; alpine or distroless images do not work (no bash) (T-379 live proof: `python -m pytest -q` rc 0). The npm steps are skipped with a note (`--steps npm-ci` is refused) and `--against` is refused. Without `--image` nothing changes.
 
 - **The code:** `--repo` and `--ref` default to the current folder's origin and HEAD (it must be on the remote). ClaudePilot comes from GitHub
   (the npm token for `@isnanme` in the Job's Secret), Konfersi from Gitea (git's credential helper gives the token; in the Job a credential helper
