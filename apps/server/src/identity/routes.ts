@@ -44,8 +44,10 @@ export interface IdentityRouteDeps {
   /** The chat sessions: id resolution (aliases), title and mode. */
   sessions: { resolve(id: string): string; get(id: string): { id: string; title: string; workspaceId: string; mode: string } | null };
   audit: (kind: string, subject: string | null, detail: Record<string, unknown>, severity?: 'info' | 'medium', by?: string | null) => void;
-  cookie: string;
-  ttlMs: number;
+  /** The session token of a request: app.ts, by the read rule of sessionCookie.ts (`__Host-portal_session` wins; T-976). */
+  sessionToken: (c: Context<Env>) => string | undefined;
+  /** Sets the session cookie after a sign-in: app.ts (`__Host-` and Secure over https, the old name on plain http; T-976). */
+  setSessionCookie: (c: Context<Env>, token: string) => void;
   trustProxy: boolean;
   /** PORTAL_SSO_ORIGIN when set (https://pilot.example.com): the origin the provider sends the browser back to. */
   publicUrl: string | null;
@@ -84,9 +86,10 @@ export function identityRoutes(d: IdentityRouteDeps) {
 
   /** The signed-in account (any role), or a refusal. */
   const account = (c: Context<Env>) => {
-    const s = portal.anySession(getCookie(c, d.cookie));
+    const token = d.sessionToken(c);
+    const s = portal.anySession(token);
     if (!s) throw new AppError('UNAUTHORIZED', 'Sign in again.');
-    return { userId: s.userId ?? null, full: !!portal.session(getCookie(c, d.cookie)) };
+    return { userId: s.userId ?? null, full: !!portal.session(token) };
   };
   /** Who did it, for the row and the audit: `account:<id>`, or `ui` for the server code. */
   const actorOfAdmin = (c: Context<Env>) => {
@@ -282,7 +285,7 @@ export function identityRoutes(d: IdentityRouteDeps) {
       try {
         const r = await sso.finish({ code: c.req.query('code'), state: c.req.query('state'), error: c.req.query('error') }, binding);
         const token = portal.openSession(r.user.id);
-        setCookie(c, d.cookie, token, { httpOnly: true, sameSite: 'Strict', path: '/', maxAge: Math.floor(d.ttlMs / 1000) });
+        d.setSessionCookie(c, token);
         audit('portal.signin', null, { method: 'sso', providerId: r.providerId, userId: r.user.id, role: r.user.role, created: r.created, linked: r.linked });
         if (r.created) audit('account.created', r.user.id, { email: r.user.email, role: r.user.role, via: `sso:${r.providerId}` }, 'info');
         console.log(`[portal] signed in with SSO (${r.user.id}, ${r.user.role}${r.created ? ', new' : ''})`);

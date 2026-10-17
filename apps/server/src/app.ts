@@ -246,23 +246,33 @@ export function createApp(
 ) {
   const app = new Hono<Env>();
   const limiter = new RateLimiter(config.loginLimit.attempts, config.loginLimit.windowMs);
-<<<<<<< HEAD
   const { ttlMs } = config.session;
   const https = (c: Context<Env>) => overHttps(c.req.url, c.req.header('x-forwarded-proto'));
   /**
-   * The session token of a request (sessionCookie.ts: the `__Host-` name wins, the old one only when it is absent). A valid session that came
-   * under the old name over https is moved to the new one (and the old cleared), so the change signs nobody out (T-976).
+   * The session token of a request (sessionCookie.ts: the `__Host-` name wins, the old one only when it is absent). A valid session (the
+   * server code's or an account's, a member's too) that came under the old name over https is moved to the new one (and the old cleared), so
+   * the change signs nobody out (T-976).
    */
   const sessionToken = (c: Context<Env>): string | undefined => {
     const { token, legacy } = sessionFromCookies(c.req.header('cookie'));
-    if (token && legacy && https(c) && portal.session(token)) {
+    if (token && legacy && https(c) && portal.anySession(token)) {
       const spec = sessionCookieSpec(true, ttlMs);
       setCookie(c, spec.name, token, spec.options);
       deleteCookie(c, LEGACY_SESSION_COOKIE, { path: '/' });
     }
     return token;
   };
-=======
+  /**
+   * Every sign-in sets the session cookie here (the server code, an email account, SSO in identity/routes.ts): `__Host-portal_session`,
+   * Secure, over https; the old name on plain http. Over https the old name is cleared too (T-976 review 10534): tidiness, not the
+   * protection. The delete has no Domain, so it only removes a host-only `portal_session` (this portal's own, from before T-976); one planted
+   * with Domain=<parent> by a sibling app host stays. What protects is the read rule (sessionCookie.ts): the `__Host-` cookie always wins.
+   */
+  const setSessionCookie = (c: Context<Env>, token: string) => {
+    const spec = sessionCookieSpec(https(c), ttlMs);
+    setCookie(c, spec.name, token, spec.options);
+    if (spec.name !== LEGACY_SESSION_COOKIE) deleteCookie(c, LEGACY_SESSION_COOKIE, { path: '/' });
+  };
   // T-118 MU1-min: email accounts beside the server code (identity/users.ts).
   // Review #10: reads (roleOf, verify) use the read handle, so a frozen store does not end every account session; writes stay guarded.
   const users = new PortalUsers(() => store.db, undefined, undefined, () => (store.writable ? store.db : null));
@@ -296,8 +306,6 @@ export function createApp(
       return 'unavailable';
     }
   };
-  const { cookie, ttlMs } = config.session;
->>>>>>> origin/integration
 
   // Served over plain HTTP: no HSTS.
   // The built app also gets a CSP (csp.ts); the dev server's pages come from Vite, not from here.
@@ -351,14 +359,11 @@ export function createApp(
   app.get('/healthz', (c) => c.json({ ok: true, service: 'portal' }));
 
   app.get(API.session, (c) => {
+    const token = sessionToken(c);
     const status: SessionStatus = {
-<<<<<<< HEAD
-      authenticated: !!portal.session(sessionToken(c)),
-=======
-      authenticated: !!portal.anySession(getCookie(c, cookie)),
->>>>>>> origin/integration
+      authenticated: !!portal.anySession(token),
       enabled: portal.enabled,
-      member: !!portal.anySession(getCookie(c, cookie)) && !portal.session(getCookie(c, cookie)),
+      member: !!portal.anySession(token) && !portal.session(token),
       emailSignIn: (() => {
         try {
           return users.any();
@@ -403,22 +408,7 @@ export function createApp(
       }
       limiter.reset(key);
     }
-<<<<<<< HEAD
-    limiter.reset(key);
-    const spec = sessionCookieSpec(https(c), ttlMs);
-    setCookie(c, spec.name, token, spec.options);
-    // Over https the old name is cleared too (T-976 review 10534): tidiness, not the protection. The delete has no Domain, so it only
-    // removes a host-only `portal_session` (this portal's own, from before T-976); one planted with Domain=<parent> by a sibling app host
-    // stays. What protects is the read rule (sessionCookie.ts): the `__Host-` cookie always wins over any `portal_session`.
-    if (spec.name !== LEGACY_SESSION_COOKIE) deleteCookie(c, LEGACY_SESSION_COOKIE, { path: '/' });
-    return c.json(success(portal.adminState(token)));
-=======
-    setCookie(c, cookie, token, {
-      httpOnly: true,
-      sameSite: 'Strict',
-      path: '/',
-      maxAge: Math.floor(ttlMs / 1000),
-    });
+    setSessionCookie(c, token);
     // A member's sign-in answers no admin state (it holds the server code): the web reads /api/me and shows the member page.
     return c.json(success(portal.session(token) ? portal.adminState(token) : { member: true }));
   });
@@ -426,7 +416,7 @@ export function createApp(
   // Gap 3 (owner, 2026-10-17): any account changes its own password with the current one (a member too); the other sessions of the
   // account end, this one stays.
   app.post(PORTAL_USER_API.myPassword, async (c) => {
-    const token = getCookie(c, cookie);
+    const token = sessionToken(c);
     const s = portal.anySession(token);
     if (!s || !token) throw new AppError('UNAUTHORIZED', 'Sign in again.');
     if (!s.userId) throw new AppError('VALIDATION_FAILED', 'The server code has no password to change.');
@@ -457,8 +447,8 @@ export function createApp(
     sso,
     sessions: chatController,
     audit,
-    cookie,
-    ttlMs,
+    sessionToken,
+    setSessionCookie,
     trustProxy: config.trustProxy,
     publicUrl: process.env.PORTAL_SSO_ORIGIN?.trim() || null,
     clientKey,
@@ -470,7 +460,7 @@ export function createApp(
   // Review M1: one account's reads and writes on the door are bounded (the view polls every 2.5 s: 24 a minute).
   const delegateLimiter = new RateLimiter(240, 60 * 1000);
   const delegate = (c: Context<Env>, need: SessionShareCap) => {
-    const s = portal.anySession(getCookie(c, cookie));
+    const s = portal.anySession(sessionToken(c));
     if (!s) throw new AppError('UNAUTHORIZED', 'Sign in again.');
     if (!s.userId) throw new AppError('NOT_FOUND', 'Not found.');
     if (delegateLimiter.blocked(s.userId)) throw new AppError('RATE_LIMITED', 'Too many requests. Wait a minute.');
@@ -515,7 +505,7 @@ export function createApp(
       : null;
   };
   app.get(SESSION_GRANT_API.mine, (c) => {
-    const s = portal.anySession(getCookie(c, cookie));
+    const s = portal.anySession(sessionToken(c));
     if (!s?.userId) throw new AppError('UNAUTHORIZED', 'Sign in again.');
     const held = grants.sessionsFor(s.userId, teams.idsOf(s.userId), (t) => teams.nameOf(t));
     return c.json(success([...held].map(([id, h]) => delegated(id, h)).filter((x): x is DelegatedSession => !!x)));
@@ -566,10 +556,9 @@ export function createApp(
 
   // MU2 S1a: who is signed in, answered to a member too (no code, no admin state).
   app.get(PORTAL_USER_API.me, (c) => {
-    const s = portal.anySession(getCookie(c, cookie));
+    const s = portal.anySession(sessionToken(c));
     if (!s) throw new AppError('UNAUTHORIZED', 'Sign in again.');
     return c.json(success<SignedInAs>(s.userId ? { kind: 'account', user: users.get(s.userId) } : { kind: 'code' }));
->>>>>>> origin/integration
   });
 
   app.post(API.logout, (c) => {
@@ -600,17 +589,12 @@ export function createApp(
     return null;
   };
   const requireSession = createMiddleware<Env>(async (c, next) => {
-<<<<<<< HEAD
     const token = sessionToken(c);
-    if (!token || !portal.session(token)) throw new AppError('UNAUTHORIZED', 'Sign in again.');
-=======
-    const token = getCookie(c, cookie);
     if (!token || !portal.session(token)) {
       // MU2 S1a: a member is signed in but has no access to the admin app yet (default deny); everything else is "sign in again".
       if (token && portal.anySession(token)) throw new AppError('FORBIDDEN', 'Your account has no access to this yet.');
       throw new AppError('UNAUTHORIZED', 'Sign in again.');
     }
->>>>>>> origin/integration
     const field = await hostileWorkspaceField(c);
     if (field) throw new AppError('VALIDATION_FAILED', 'A workspace is `<target>/<name>`.', { details: { [field]: 'Not a workspace.' } });
     c.set('token', token);

@@ -50,15 +50,17 @@ async function build() {
   const chat = fakeChat();
   const idp = fakeIdp();
   const app = make(portal, stub, store, stub, stub, stub, stub, chat, { serveWeb: false, poolService: stub, mcp: stub, skills: stub, oidc: idp.client });
-  const call = (method: string, path: string, body?: unknown, cookie?: string) =>
+  const callOver = (scheme: 'http' | 'https') => (method: string, path: string, body?: unknown, cookie?: string) =>
     app.request(
-      `http://pilot.example.com${path}`,
-      { method, headers: { ...H, ...(cookie ? { cookie } : {}) }, body: body === undefined ? undefined : JSON.stringify(body) },
+      `${scheme}://pilot.example.com${path}`,
+      { method, headers: { ...H, origin: `${scheme}://pilot.example.com`, ...(cookie ? { cookie } : {}) }, body: body === undefined ? undefined : JSON.stringify(body) },
       { incoming: { socket: { remoteAddress: '127.0.0.1' } } },
     );
-  const cookieOf = (r: Response, name = 'portal_session') => new RegExp(`${name}=[^;]+`).exec(r.headers.get('set-cookie') ?? '')?.[0];
+  const call = callOver('http');
+  // `(^|[\s,])` so `portal_session` never matches inside `__Host-portal_session`.
+  const cookieOf = (r: Response, name = 'portal_session') => new RegExp(`(?:^|[\\s,])(${name}=[^;]+)`).exec(r.headers.get('set-cookie') ?? '')?.[1];
   const data = async <T>(r: Response) => ((await r.json()) as { data: T }).data;
-  return { call, cookieOf, data, chat, idp, done: () => (store.close(), rmSync(dataDir, { recursive: true, force: true })) };
+  return { call, https: callOver('https'), cookieOf, data, chat, idp, done: () => (store.close(), rmSync(dataDir, { recursive: true, force: true })) };
 }
 
 test('SSO: the domain decides; a password is refused for it; a whole sign-in makes a member in the team; the secret never comes back', async () => {
@@ -107,6 +109,74 @@ test('SSO: the domain decides; a password is refused for it; a whole sign-in mak
     // A member reaches none of the admin's SSO or share routes.
     assert.equal((await call('GET', '/api/admin/sso', undefined, ana)).status, 403);
     assert.equal((await call('GET', '/api/admin/session-shares', undefined, ana)).status, 403);
+  } finally {
+    done();
+  }
+});
+
+test('T-976 over https: an email sign-in and an SSO sign-in both set __Host-portal_session (Secure, no Domain); an old cookie moves; sign-out clears both', async () => {
+  const { call, https, cookieOf, data, idp, done } = await build();
+  const HOST_COOKIE = '__Host-portal_session';
+  const sessionSet = (r: Response) => r.headers.getSetCookie().filter((c) => c.startsWith(`${HOST_COOKIE}=`) && !/Max-Age=0/i.test(c));
+  const assertHostCookie = (r: Response, what: string) => {
+    const [c, ...more] = sessionSet(r);
+    assert.ok(c, `${what}: ${r.headers.getSetCookie().map((x) => x.split('=')[0]).join(', ')}`);
+    assert.equal(more.length, 0, what);
+    assert.match(c, /;\s*Secure/i, what);
+    assert.match(c, /;\s*Path=\/(;|$)/, what);
+    assert.match(c, /;\s*HttpOnly/i, what);
+    assert.doesNotMatch(c, /;\s*Domain=/i, what);
+    assert.ok(!r.headers.getSetCookie().some((x) => x.startsWith('portal_session=') && !/Max-Age=0/i.test(x)), `${what}: the old name is only ever cleared over https`);
+    return `${HOST_COOKIE}=${c.slice(HOST_COOKIE.length + 1).split(';')[0]}`;
+  };
+  try {
+    const admin = cookieOf(await https('POST', '/api/login', { code: CODE }), HOST_COOKIE)!;
+    assert.ok(admin, 'the server code over https');
+    const team = await data<{ id: string }>(await https('POST', '/api/admin/teams', { name: 'Konfersi' }, admin));
+    assert.equal((await https('POST', '/api/admin/sso', { name: 'Example', issuer: ISSUER, clientId: CLIENT_ID, clientSecret: SECRET, domains: ['example.com'], defaultTeamId: team.id }, admin)).status, 201);
+    assert.ok((await data<{ id: string }>(await https('POST', '/api/admin/users', { email: 'pw@corp.test', password: PASSWORD }, admin))).id);
+
+    // An email account.
+    const pw = await https('POST', '/api/login', { email: 'pw@corp.test', password: PASSWORD });
+    assert.equal(pw.status, 200);
+    const pwCookie = assertHostCookie(pw, 'email sign-in');
+    assert.equal((await data<{ kind: string }>(await https('GET', '/api/me', undefined, pwCookie))).kind, 'account');
+
+    // SSO: start -> provider -> callback.
+    const m = await data<{ start: string }>(await https('POST', '/api/auth/discover', { email: 'ana@example.com' }));
+    const start = await https('GET', m.start);
+    const q = authorizeParams(start.headers.get('location')!);
+    idp.next = { nonce: q.nonce, email: 'ana@example.com', sub: 'ana-sub' };
+    const back = await https('GET', `/api/auth/sso/callback?code=c1&state=${q.state}`, undefined, cookieOf(start, 'portal_sso'));
+    assert.equal(back.headers.get('location'), '/');
+    const ana = assertHostCookie(back, 'SSO callback');
+    const me = await data<{ user: { email: string } }>(await https('GET', '/api/me', undefined, ana));
+    assert.equal(me.user.email, 'ana@example.com');
+    const session = await data<{ authenticated: boolean; member: boolean }>(await https('GET', '/api/session', undefined, ana));
+    assert.deepEqual([session.authenticated, session.member], [true, true]);
+
+    // A member signed in before T-976 (old name only) stays signed in and is moved to the __Host- name.
+    const oldName = `portal_session=${ana.slice(HOST_COOKIE.length + 1)}`;
+    const moved = await https('GET', '/api/me', undefined, oldName);
+    assert.equal(moved.status, 200);
+    assert.equal(assertHostCookie(moved, 'migration of a member'), ana, 'the same session under the new name');
+
+    // With both names the __Host- one is read (a planted old-name session is ignored), and sign-out ends it and clears both names.
+    const both = `portal_session=${pwCookie.slice(HOST_COOKIE.length + 1)}; ${ana}`;
+    assert.equal((await data<{ user: { email: string } }>(await https('GET', '/api/me', undefined, both))).user.email, 'ana@example.com');
+    const out = await https('POST', '/api/logout', {}, both);
+    assert.equal(out.status, 200);
+    const cleared = out.headers.getSetCookie();
+    assert.ok(cleared.some((c) => c.startsWith(`${HOST_COOKIE}=;`) && /Max-Age=0/i.test(c) && /;\s*Secure/i.test(c)), cleared.join(' | '));
+    assert.ok(cleared.some((c) => c.startsWith('portal_session=;') && /Max-Age=0/i.test(c)), cleared.join(' | '));
+    assert.equal((await https('GET', '/api/me', undefined, ana)).status, 401, 'the SSO session is ended');
+    assert.equal((await https('GET', '/api/me', undefined, pwCookie)).status, 200, 'the other session is not');
+
+    // Plain http keeps the old name for an email account (a dev or scratch portal).
+    const plain = await call('POST', '/api/login', { email: 'pw@corp.test', password: PASSWORD });
+    assert.equal(plain.status, 200);
+    assert.ok(cookieOf(plain), 'portal_session over http');
+    assert.equal(cookieOf(plain, HOST_COOKIE), undefined);
   } finally {
     done();
   }
