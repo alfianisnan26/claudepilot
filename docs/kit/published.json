@@ -1,6 +1,6 @@
 {
   "kit": "1.0.1",
-  "at": "2026-10-17T10:24:12.400Z",
+  "at": "2026-10-17T10:34:48.865Z",
   "portal": "https://pilot.ai.isnan.me",
   "contexts": {
     "charter-essentials": "01a13624-3b6c-7087-a61d-26730374d3a6",
@@ -14,7 +14,7 @@
   "skillset": "01a13625-3046-7434-8ec6-16e178eb9062",
   "skills": {
     "browser-testing": "01a13625-2718-7946-bf02-c5658d779b54",
-    "charter": "01a13625-2719-70bd-9ace-5f7762491de3",
+    "charter": "01a1496d-d8b0-7f1d-9809-61e9ecd68b3f",
     "ci-cd": "01a14964-288c-74d8-9368-03059444c45a",
     "decisions": "01a13625-2719-720d-8181-973400ac4431",
     "design-standard": "01a13625-2719-7347-ad33-6c232ed0e691",
