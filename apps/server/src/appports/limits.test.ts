@@ -184,7 +184,8 @@ test('an upgraded socket idle past its limit is closed; one that talks stays ope
   const talking = await ws(host, cookie);
   const quiet = await ws(host, cookie);
   const t0 = Date.now();
-  const chatter = setInterval(() => talking.send('hi'), 100);
+  // unref: when a broken limit leaves the socket open, the test times out and must not hold the process open (it hung proof Job b5537ad1).
+  const chatter = setInterval(() => talking.readyState === WebSocket.OPEN && talking.send('hi'), 100).unref();
   await closed(quiet);
   assert.ok(Date.now() - t0 >= 250, 'not before the limit');
   assert.equal(talking.readyState, WebSocket.OPEN, 'a socket that moves bytes is not idle');
@@ -199,7 +200,7 @@ test('an upgraded socket ends when its app-host cookie does, even while it talks
   const { host, cookie } = await signIn();
   const w = await ws(host, cookie);
   const t0 = Date.now();
-  const chatter = setInterval(() => w.readyState === WebSocket.OPEN && w.send('hi'), 100);
+  const chatter = setInterval(() => w.readyState === WebSocket.OPEN && w.send('hi'), 100).unref(); // unref: see the idle test
   await closed(w);
   clearInterval(chatter);
   const took = Date.now() - t0;
@@ -228,6 +229,15 @@ test('removing the workspace (grants.forgetWorkspace) closes its live sockets wi
   const { host, cookie } = await signIn();
   const w = await ws(host, cookie);
   ports.grants.forgetWorkspace('docker/ws-1');
+  await closed(w);
+  await until('the bridge to be released', () => ports.proxy.open === 0);
+});
+
+test('closing the proxy (server shutdown) cuts its live sockets, so no timer holds the process', { timeout: 10_000 }, async () => {
+  const { ports, signIn, ws } = await setup({});
+  const { host, cookie } = await signIn();
+  const w = await ws(host, cookie);
+  ports.proxy.close();
   await closed(w);
   await until('the bridge to be released', () => ports.proxy.open === 0);
 });

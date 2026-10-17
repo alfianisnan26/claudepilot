@@ -195,8 +195,10 @@ export class AppPortProxy {
     }
   }
 
+  /** Stops the sweep and cuts every live connection (an upgraded socket is not the server's to close, and its timers would hold the process). */
   close(): void {
     clearInterval(this.#timer);
+    for (const l of [...this.#live]) l.cut();
   }
 
   /** Open bridges, for tests and diagnostics. */
