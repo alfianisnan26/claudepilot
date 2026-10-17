@@ -561,7 +561,16 @@ function portalFrameBase(actor: string, label: string | undefined, text: string,
         : relation === 'crew'
           ? 'a peer worker of your parent (your crew)'
           : 'another session';
-  const from = kind === 'session' ? session : kind === 'ticket' ? 'a ticket' : kind === 'portal' ? 'the portal' : 'an MCP client';
+  const from =
+    kind === 'session'
+      ? session
+      : kind === 'ticket'
+        ? 'a ticket'
+        : kind === 'portal'
+          ? 'the portal'
+          : kind === 'account'
+            ? 'a person this session was shared with (not its owner)'
+            : 'an MCP client';
   const named = label ? ` “${label}”` : '';
   // T-294: a report on a worker is the portal's own (nobody asked for it); what it quotes is the worker's text.
   if (actor === CREW_REPORT_ACTOR)
@@ -1835,7 +1844,7 @@ export class ChatController {
     const actor = opts.actor ?? CHAT_ACTOR_UI;
     if (!isChatActor(actor))
       throw new AppError('VALIDATION_FAILED', 'Unknown actor.', {
-        details: { actor: 'Expected ui, ticket:<id>, session:<id> or portal-mcp:<id>.' },
+        details: { actor: 'Expected ui, ticket:<id>, session:<id>, portal-mcp:<id> or account:<id>.' },
       });
     const ticketId = this.#ticket(req.ticketId);
     const agent = this.#agent(req.agent);
@@ -2744,7 +2753,7 @@ export class ChatController {
     // framed for Claude so it never reads as something the person typed.
     if (opts.actor !== undefined && !isChatActor(opts.actor))
       throw new AppError('VALIDATION_FAILED', 'Unknown actor.', {
-        details: { actor: 'Expected ui, ticket:<id>, session:<id> or portal-mcp:<id>.' },
+        details: { actor: 'Expected ui, ticket:<id>, session:<id>, portal-mcp:<id> or account:<id>.' },
       });
     const portal = isPortalActor(opts.actor) ? opts.actor : null;
     if (portal === `session:${sessionId}`) throw new AppError('VALIDATION_FAILED', 'A session can’t send a message to itself.');

@@ -21,6 +21,12 @@ import {
   type EndpointRequest,
   type LoginRequest,
   type CreatePortalUserRequest,
+  type DelegatedSession,
+  type SessionGrantLevel,
+  type SessionGrantRequest,
+  type ChatEvent,
+  DELEGATED_EVENTS_MAX,
+  SESSION_GRANT_API,
   type ChangeMyPasswordRequest,
   normalizeEmail,
   type SignedInAs,
@@ -45,6 +51,7 @@ import { Hono, type Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { bodyLimit } from 'hono/body-limit';
 import { PortalUsers } from './identity/users.js';
+import { SessionGrants } from './identity/grants.js';
 import { fingerprint } from './identity/throttle.js';
 import { csrf } from 'hono/csrf';
 import { createMiddleware } from 'hono/factory';
@@ -226,6 +233,8 @@ export function createApp(
   // T-118 MU1-min: email accounts beside the server code (identity/users.ts).
   // Review #10: reads (roleOf, verify) use the read handle, so a frozen store does not end every account session; writes stay guarded.
   const users = new PortalUsers(() => store.db, undefined, undefined, () => (store.writable ? store.db : null));
+  // Session delegation (owner, 2026-10-17): one session to one account at view or operate.
+  const grants = new SessionGrants(() => store.db, () => (store.writable ? store.db : null));
   // Review #5: the attempt counters are swept once an hour.
   const sweep = setInterval(() => {
     try {
@@ -236,9 +245,9 @@ export function createApp(
   }, 60 * 60_000);
   sweep.unref?.();
   /** Gap 2 (owner, 2026-10-17): account and sign-in events in the platform audit (no password, an unknown email only as a fingerprint). */
-  const audit = (kind: string, subject: string | null, detail: Record<string, unknown>, severity: 'info' | 'medium' = 'info') => {
+  const audit = (kind: string, subject: string | null, detail: Record<string, unknown>, severity: 'info' | 'medium' = 'info', by: string | null = null) => {
     try {
-      platform?.audit.record({ kind, actor: 'ui', userId: null, subject: subject ? `user:${subject}` : null, detail, severity });
+      platform?.audit.record({ kind, actor: 'ui', userId: by, subject: subject ? `user:${subject}` : null, detail, severity });
     } catch {
       // the audit must never break a sign-in
     }
@@ -375,6 +384,107 @@ export function createApp(
     return c.json(success({ ok: true }));
   });
 
+  // The delegate's door gets the same hostile workspace-id check every signed-in route gets (QA-029), before a handler sees the body.
+  app.use('/api/me/*', async (c, next) => {
+    const field = await hostileWorkspaceField(c);
+    if (field) throw new AppError('VALIDATION_FAILED', 'A workspace is `<target>/<name>`.', { details: { [field]: 'Not a workspace.' } });
+    await next();
+  });
+  // ---------- Session delegation: the delegate's door (an account session holding a grant; checked on EVERY request) ----------
+  // Review M1: one account's reads and writes on the door are bounded (the view polls every 2.5 s: 24 a minute).
+  const delegateLimiter = new RateLimiter(240, 60 * 1000);
+  const delegate = (c: Context<Env>, need: SessionGrantLevel) => {
+    const s = portal.anySession(getCookie(c, cookie));
+    if (!s) throw new AppError('UNAUTHORIZED', 'Sign in again.');
+    if (!s.userId) throw new AppError('NOT_FOUND', 'Not found.');
+    if (delegateLimiter.blocked(s.userId)) throw new AppError('RATE_LIMITED', 'Too many requests. Wait a minute.');
+    delegateLimiter.fail(s.userId);
+    const id = chatController.resolve(c.req.param('id') ?? '');
+    const held = grants.held(id, s.userId);
+    // The same not-found for a session that does not exist and one that is not yours: nothing is told.
+    if (!held) throw new AppError('NOT_FOUND', 'Not found.');
+    const level = held.level;
+    if (need === 'operate' && level !== 'operate') throw new AppError('FORBIDDEN', 'This session is shared with you to view only.');
+    // Re-review: a session that went into Bypass after an operate grant is read-only to the delegate until the owner shares it again
+    // and accepts Bypass (checked on every act, not only at the grant).
+    if (need === 'operate' && !held.bypassAck && chatController.get(id)?.mode === 'bypassPermissions')
+      throw new AppError('FORBIDDEN', 'This session is in Bypass now. Ask the owner to share it again.');
+    return { id, userId: s.userId, level };
+  };
+  // Review M2: a delegate gets what its view shows and nothing more: the main thread's messages, tool names, approvals and errors. No tool
+  // output, thinking, tool inputs, files or sub-agent lines (they carry what the agent read in the workspace).
+  const delegateView = (events: ChatEvent[]): ChatEvent[] =>
+    events.flatMap((e): ChatEvent[] => {
+      if ((e.parentToolUseId || e.agentLabel) && e.kind !== 'request' && e.kind !== 'resolved') return []; // a sub-agent's approval still shows
+      const base = { seq: e.seq, at: e.at, kind: e.kind };
+      switch (e.kind) {
+        case 'user':
+        case 'assistant':
+        case 'error':
+          return [{ ...base, text: e.text, uuid: e.uuid }];
+        case 'tool_use':
+          return [{ ...base, toolName: e.toolName, toolUseId: e.toolUseId }];
+        case 'request':
+          return [{ ...base, requestId: e.requestId, request: e.request }];
+        case 'resolved':
+          return [{ ...base, requestId: e.requestId, outcome: e.outcome }];
+        default:
+          return [];
+      }
+    });
+  const delegated = (id: string, level: SessionGrantLevel): DelegatedSession | null => {
+    const x = chatController.get(id);
+    return x ? { id: x.id, title: x.title, state: x.state, workspaceId: x.workspaceId, waiting: x.waiting ?? 0, level } : null;
+  };
+  app.get(SESSION_GRANT_API.mine, (c) => {
+    const s = portal.anySession(getCookie(c, cookie));
+    if (!s?.userId) throw new AppError('UNAUTHORIZED', 'Sign in again.');
+    return c.json(success(grants.forUser(s.userId).map((g) => delegated(g.sessionId, g.level)).filter((x): x is DelegatedSession => !!x)));
+  });
+  app.get('/api/me/sessions/:id', (c) => {
+    const d = delegate(c, 'view');
+    const x = delegated(d.id, d.level);
+    if (!x) throw new AppError('NOT_FOUND', 'Not found.');
+    return c.json(success(x));
+  });
+  app.get('/api/me/sessions/:id/events', (c) => {
+    const d = delegate(c, 'view');
+    const after = c.req.query('after');
+    if (after !== undefined) {
+      // Review M1: bounded; a delegate far behind gets the newest DELEGATED_EVENTS_MAX, never the whole transcript.
+      const last = chatController.get(d.id)?.lastSeq ?? 0;
+      const from = Math.max(0, Number(after) || 0, last - DELEGATED_EVENTS_MAX);
+      return c.json(success(delegateView(chatController.history(d.id, from).slice(-DELEGATED_EVENTS_MAX))));
+    }
+    const before = c.req.query('before');
+    const limit = Math.min(DELEGATED_EVENTS_MAX, Math.max(1, Number(c.req.query('limit') ?? 80) || 80));
+    const page = chatController.historyPage(d.id, before === undefined ? null : Number(before) || null, limit);
+    return c.json(success({ ...page, events: delegateView(page.events) }));
+  });
+  app.post('/api/me/sessions/:id/send', async (c) => {
+    const d = delegate(c, 'operate');
+    const { text, uuid } = await body<{ text: string; uuid: string }>(c);
+    if (typeof text !== 'string' || !text.trim()) throw new AppError('VALIDATION_FAILED', 'Write a message.');
+    const id = typeof uuid === 'string' && /^[A-Za-z0-9-]{8,64}$/.test(uuid) ? uuid : crypto.randomUUID();
+    await chatController.send(d.id, id, text.slice(0, 50_000), { actor: `account:${d.userId}`, actorLabel: users.get(d.userId).email });
+    audit('session.delegate_sent', d.userId, { sessionId: d.id, chars: text.length });
+    return c.json(success({ ok: true, uuid: id }));
+  });
+  app.post('/api/me/sessions/:id/respond', async (c) => {
+    const d = delegate(c, 'operate');
+    const { requestId, decision, note } = await body<{ requestId: string; decision: string; note?: string }>(c);
+    if (typeof requestId !== 'string' || (decision !== 'allow' && decision !== 'deny')) throw new AppError('VALIDATION_FAILED', 'Answer allow or deny.');
+    await chatController.respond(d.id, requestId, decision, { note: typeof note === 'string' ? note.slice(0, 2000) : undefined, actor: `account:${d.userId}` });
+    audit('session.delegate_answered', d.userId, { sessionId: d.id, requestId, decision });
+    return c.json(success({ ok: true }));
+  });
+  app.post('/api/me/sessions/:id/stop', async (c) => {
+    const d = delegate(c, 'operate');
+    await chatController.control(d.id, 'stop', undefined, { actor: `account:${d.userId}` });
+    audit('session.delegate_stopped', d.userId, { sessionId: d.id });
+    return c.json(success({ ok: true }));
+  });
+
   // MU2 S1a: who is signed in, answered to a member too (no code, no admin state).
   app.get(PORTAL_USER_API.me, (c) => {
     const s = portal.anySession(getCookie(c, cookie));
@@ -426,6 +536,33 @@ export function createApp(
   const state = (c: Context<Env>) => c.json(success<AdminState>(portal.adminState(c.get('token'))));
 
   admin.get('/state', state);
+  // Session delegation, the owner's side (a full session): who holds which session.
+  admin.get('/session-grants/:sid', (c) => c.json(success(grants.forSession(chatController.resolve(c.req.param('sid'))))));
+  admin.put('/session-grants/:sid', async (c) => {
+    const sid = chatController.resolve(c.req.param('sid'));
+    if (!chatController.get(sid)) throw new AppError('NOT_FOUND', 'No such session.');
+    const { userId, level, acknowledgeBypass } = await body<SessionGrantRequest>(c);
+    const role = typeof userId === 'string' ? users.roleOf(userId) : null;
+    // Review m2: only an account that can sign in; a disabled one is refused like a missing one.
+    if (typeof userId !== 'string' || (role !== 'admin' && role !== 'member')) throw new AppError('VALIDATION_FAILED', 'Pick an account.', { details: { userId: 'An active account.' } });
+    if (level !== 'view' && level !== 'operate') throw new AppError('VALIDATION_FAILED', 'View or operate.', { details: { level: 'view or operate' } });
+    // Review m6: operate on a Bypass session is a decision the owner makes on the record, not a warning they scrolled past.
+    const bypass = chatController.get(sid)?.mode === 'bypassPermissions';
+    if (level === 'operate' && bypass && acknowledgeBypass !== true)
+      throw new AppError('VALIDATION_FAILED', 'This session is in Bypass: confirm that this account may make it run any command.', { details: { acknowledgeBypass: 'Required for operate in Bypass.' } });
+    // Review m1: who granted it, on the row and on the audit.
+    const by = portal.session(c.get('token'))?.userId ?? null;
+    const g = grants.grant(sid, userId, level, by ? `account:${by}` : 'ui', acknowledgeBypass === true);
+    audit('session.delegated', userId, { sessionId: sid, level: g.level, bypass }, bypass && level === 'operate' ? 'medium' : 'info', by);
+    return c.json(success(g));
+  });
+  admin.delete('/session-grants/:sid/:uid', (c) => {
+    const sid = chatController.resolve(c.req.param('sid'));
+    const removed = grants.revoke(sid, c.req.param('uid'));
+    if (removed) audit('session.delegation_revoked', c.req.param('uid'), { sessionId: sid }, 'info', portal.session(c.get('token'))?.userId ?? null);
+    return c.json(success({ removed }));
+  });
+
   // T-118 MU1-min: email accounts, managed by someone already signed in (the server code or another account).
   admin.get('/users', (c) => c.json(success(users.list())));
   admin.post('/users', async (c) => {
@@ -452,6 +589,7 @@ export function createApp(
     const id = c.req.param('id');
     const before = users.get(id);
     users.remove(id);
+    grants.removeUser(id);
     portal.revokeUser(id);
     audit('account.removed', id, { email: before.email, role: before.role });
     return c.json(success({ removed: true }));

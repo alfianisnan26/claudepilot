@@ -3460,6 +3460,34 @@ export const MIGRATIONS: Migration[] = [
       db.exec('ALTER TABLE web_sessions ADD COLUMN user_id TEXT');
     },
   },
+  {
+    version: 402,
+    name: 'identity: one session delegated to an account (view or operate)',
+    up(db) {
+      // Owner, 2026-10-17: "how can we delegate the session (orchestration session)? instead delegating full workspace". A grant gives ONE
+      // account ONE chat session at view (read it live) or operate (also send, stop, answer its approvals); nothing else of the workspace.
+      db.exec(`
+        CREATE TABLE session_grants (
+          session_id TEXT NOT NULL,
+          user_id TEXT NOT NULL,
+          level TEXT NOT NULL CHECK (level IN ('view', 'operate')),
+          granted_by TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          PRIMARY KEY (session_id, user_id)
+        ) STRICT;
+        CREATE INDEX session_grants_user ON session_grants (user_id);
+      `);
+    },
+  },
+  {
+    version: 403,
+    name: 'identity: a delegate grant remembers that the owner accepted Bypass',
+    up(db) {
+      // Review 2026-10-17 (m6): operate acts on a Bypass session only when the owner said yes to that, at the grant; a session that enters
+      // Bypass after an operate grant is read-only to the delegate until the owner shares it again.
+      db.exec('ALTER TABLE session_grants ADD COLUMN bypass_ack INTEGER NOT NULL DEFAULT 0');
+    },
+  },
 ];
 
 /**

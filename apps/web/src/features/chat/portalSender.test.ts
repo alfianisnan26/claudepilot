@@ -24,3 +24,8 @@ test('a session, a ticket and CI keep their words', () => {
 test('a crew report (T-294) is from the crew, not an MCP client', () => {
   assert.deepEqual(portalSender('portal:crew', 'Crew report'), { kind: 'crew', id: '', who: 'your crew' });
 });
+
+test('a delegate (account:<id>) is named by its email, not as an MCP client', () => {
+  assert.deepEqual(portalSender('account:u_1', 'alfian@example.com'), { kind: 'account', id: 'u_1', who: 'alfian@example.com' });
+  assert.equal(portalSender('account:u_1', undefined).who, 'a shared account');
+});
