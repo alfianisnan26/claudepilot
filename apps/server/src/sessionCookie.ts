@@ -9,8 +9,13 @@ import { config } from './config.js';
  *
  * The read rule, the same for the API and every socket: the `__Host-` name wins whenever it is there; the old name is read only when it is
  * absent. A `portal_session` planted with `Domain=<parent>` by a sibling host therefore never overrides the real session. The old name is
- * read on https for one release (a session from before the change is re-issued under the new name, so a deploy signs nobody out); a
- * follow-up ticket drops it there (T-976).
+ * read on https for one release (a session from before the change is re-issued under the new name, so a deploy signs nobody out). T-1042
+ * drops that https read, not before 2026-10-31 and one release after T-976's deploy: while it is accepted, a browser with no `__Host-`
+ * cookie can be fixed to a session a sibling app host planted. On plain http the old name stays (it is the only one there).
+ *
+ * Logout with both names ends only the session the read rule picked (the `__Host-` one) and clears both cookies in this browser; a
+ * different session under the old name is not ended on the server and lives out its 12 h. Accepted: that value came from somewhere
+ * else (a planter holds its own session anyway), and the browser no longer sends it.
  */
 export const SESSION_COOKIE = '__Host-portal_session';
 export const LEGACY_SESSION_COOKIE = 'portal_session';
