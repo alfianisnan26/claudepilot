@@ -37,7 +37,9 @@
   misses short passwords/URL userinfo) -> 76845676 while its Job queues. T-961 (deploy outage, PriorityClass) -> a3554d40 (10887).
 - Lanes: c691df71 QA (T-425 delta > T-969 > T-975 delta > S0a+S0b > S2b > T-565 > T-976 > H2 delta); d9f18599 blind
   (H2 S1 > T-974 FIX2 > T-971 H1 delta > T-969 > T-975 > PRD > S2b > S0b); a3554d40 T-961; 76845676 T-1043 S0a+S0b
-  (Job queued) + T-1065; 2a0edbd8 T-976 rebase > T-565 fix > T-968 PRD > S2b; 3753d3c2 T-971 H2 S1 fix > batch 33.
+  (Job queued) + T-1065; 2a0edbd8 T-976 merge > S2b rc1 > T-565 fix > T-968 PRD; 3753d3c2 T-971 H2 S1 fix > batch 33.
+- 23:15 T-976: lead pushed the conflicted merge 130fb339 (ticket/T-976-merge, 4 markers in app.ts) -> 2a0edbd8 resolves.
+  T-968 S2b be6b3adc Job bdeqeg7e5 rc1: 40/40 pass but TESTS=1; mutant lines "applied=0", so the kills are unproven (told builder).
 
 ## DECISIONS (binding)
 - D-81 risk-based review: same builder through all fixes; one QA, the same QA re-checks; blind review only for security, auth,
