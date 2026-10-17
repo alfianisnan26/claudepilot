@@ -10,11 +10,10 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   after 44fba442 T-623 browser image): T-524 S3c+T-733 S5, T-881 S1b, T-416 S2c (lead's mechanical controller.ts resolution
   67198848, APPROVE 9219), T-382 S1, T-781 S8c, T-675 R2c+R2d. Coordinator told T-731 9271.
 ## IN FLIGHT (6 of 6, D-71; lanes respawned per ticket, D-78; sonnet)
-- T-924 RE-GATE on 4754b282 (premerge-t924 = merge c7474004 GREEN gate-c747400-369a + integration e703450d), log
-  job-out/gate-4754b28.log (first re-gate verdict lost in the ~07:00 restart). Green -> land, tell coordinator T-924 + T-731.
-- BATCH 30 premerge-b30 25a1a36e (wip/main-25a1a36): T-772 S2f, T-736 S3g, T-612 S1, T-868 S1-S3, T-436 S1+S2 (deploy note),
-  T-379 S2, format fix 787932e2 (format-only, checked). After T-924: merge integration + T-860 S2c e78d727b (PWG 9638; conflicts
-  in ruleGuard.ts) + T-382 S2-S4 0ad8db63 (PWG 9691; S5 follow-up, T-595 9694), pack, quick-check, gate.
+- T-924 LANDED on integration 4754b282 (gate 4754b28 GREEN; coordinator told T-924 9736 + T-731 9737). Close on live check PASS.
+- BATCH 30 premerge-b30 b9781ad6 (wip/main-b9781ad): T-772 S2f, T-736 S3g, T-612 S1, T-868 S1-S3, T-436 S1+S2 (deploy note),
+  T-379 S2, format fix 787932e2, integration (T-924), T-860 S2c a87d00b8 (PWG 9638), T-382 S2-S4 (PWG 9691; S5 fup).
+  Resolution trace T-595 9742. QUICK-CHECK running (job-out/qc-b9781ad.log, 17 tests) -> gate-job -> land -> T-731.
 - Lanes (all hasyim, auto, sonnet; respawned 10:00 from pushed heads after the restart):
   BE INFRA a3554d40 T-938 259935e8 (yaml case added; Job). BE INFRA 2 e2d8d27c T-921 0dfff348 (Job; dev rig = coordinator).
   BACKEND a3f28904 T-409 G3 ee75effd (Job + mutant). QA c26f8fe5 T-425 S2 b5ebac0a. IMPL 2 3189279b T-436 S3 + T-772 S2g e4e2c4ff.
