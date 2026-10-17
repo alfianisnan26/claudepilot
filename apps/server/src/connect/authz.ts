@@ -6,7 +6,20 @@
 
 import { declarePolicies, registerResolver, type ResolvedObject } from '../authz/seam.js';
 import { CONNECT_PUBLIC, type ObjectRef } from '@portal/contracts';
+import type { SocketPolicies } from '../authz/socketGuard.js';
 import type { Registry } from './registry.js';
+
+/**
+ * T-1043 S0b: the agents' tunnel (hub.ts) behind the socket guard. It is its own door: no cookie and no Origin (a page must never act as an
+ * agent), the agent's signed challenge, its rate and pre-auth limits; its frames act on that node's streams only.
+ */
+export const CONNECT_SOCKET_POLICIES: SocketPolicies = {
+  [CONNECT_PUBLIC.tunnel]: {
+    connect: { kind: 'handler', checks: ['A signed challenge: the agent proves its Ed25519 key (no cookie, no Origin, no clock); one live connection per node.'] },
+    messages: {},
+    frames: 'the tunnel’s own frames (hello, challenge, streams), after the node proved its key; nothing of a user',
+  },
+};
 
 export function registerConnectResolvers(deps: { registry: Registry; scannedIds(): string[] }): void {
   registerResolver({

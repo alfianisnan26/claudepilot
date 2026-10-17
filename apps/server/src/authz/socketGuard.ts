@@ -120,9 +120,10 @@ async function allowed(read: PolicyReader, actor: Actor, policy: RoutePolicy | u
 
 /**
  * Attaches one socket module's path, behind the guard. `handler` runs only for a handshake the declaration allows, with the connection's
- * grant; for a path that is not this one it never runs (another module's, or Vite's).
+ * grant; for a path that is not this one it never runs (another module's, or Vite's). Returns what takes the listener off again (the
+ * agents' hub detaches when it closes).
  */
-export function onSocket(server: Server, path: string, deps: SocketDeps, handler: SocketHandler): void {
+export function onSocket(server: Server, path: string, deps: SocketDeps, handler: SocketHandler): () => void {
   const { re, names } = compile(path);
   attached.add(path);
   const listener = (req: IncomingMessage, socket: Duplex, head: Buffer) => {
@@ -155,4 +156,5 @@ export function onSocket(server: Server, path: string, deps: SocketDeps, handler
   };
   Object.defineProperty(listener, 'name', { value: SOCKET_GUARD_NAME });
   server.on('upgrade', listener);
+  return () => void server.off('upgrade', listener);
 }

@@ -2,6 +2,8 @@ import type { IncomingMessage, Server } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { LIVE_PATH, LIVE_TOPICS, type LiveMessage, type LivePresence, type LiveTopic, type Workspace, type WorkspaceUsage } from '@portal/contracts';
 import { WebSocketServer, type WebSocket } from 'ws';
+import type { SignedIn } from './authz/routeGuard.js';
+import { declareSocketPolicies, onSocket, type SocketGrant, type SocketPolicies } from './authz/socketGuard.js';
 
 const PING_MS = 25_000;
 /** While a page shows workspaces: how often they're listed again, for changes made outside the portal (Kubernetes). */
@@ -35,6 +37,18 @@ function refuse(socket: Duplex, status: number, text: string) {
 }
 
 /**
+ * T-1043 S0b: the live socket. What it pushes is not filtered per person (the whole workspace list, every workspace's usage, every topic),
+ * so until it is (MU2), the handshake is the platform's (`system`, view: an admin or the server code), like the modules with no authz.ts
+ * were in S0a. A member gets the unknown path's 404. Its two message types act on that connection only.
+ */
+export const LIVE_SOCKET_POLICIES: SocketPolicies = {
+  [LIVE_PATH]: {
+    connect: { kind: 'platform', area: 'system', verb: 'view' },
+    messages: { subscribe: { kind: 'signed-in' }, presence: { kind: 'signed-in' } },
+  },
+};
+
+/**
  * The live socket (`/api/live`, one per tab): pushes the workspace list and usage while a page shows
  * them, and tells pages when accounts, pools or the portal's storage state change, so nothing polls.
  * Listing runs once for all tabs, only while someone watches, and a list goes out only when it changed.
@@ -57,13 +71,14 @@ export class LiveHub {
     private readonly authorized: (req: IncomingMessage) => boolean,
   ) {}
 
-  attach(server: Server) {
+  /** Behind the socket guard (T-1043 S0b): `signedIn` is who the handshake's cookie signs in; the hub's own `authorized` check stays. */
+  attach(server: Server, signedIn: (req: IncomingMessage) => SignedIn = (req) => (this.authorized(req) ? { full: true } : null)) {
     const wss = new WebSocketServer({ noServer: true, maxPayload: 16 * 1024 });
-    server.on('upgrade', (req: IncomingMessage, socket: Duplex, head: Buffer) => {
-      if (new URL(req.url ?? '/', 'http://localhost').pathname !== LIVE_PATH) return; // the terminal's, or Vite's
+    declareSocketPolicies('live', LIVE_SOCKET_POLICIES);
+    onSocket(server, LIVE_PATH, { signedIn }, (req: IncomingMessage, socket: Duplex, head: Buffer, grant: SocketGrant) => {
       if (!sameOrigin(req)) return refuse(socket, 403, 'Forbidden');
       if (!this.authorized(req)) return refuse(socket, 401, 'Unauthorized');
-      wss.handleUpgrade(req, socket, head, (ws) => this.#join(ws, req));
+      wss.handleUpgrade(req, socket, head, (ws) => this.#join(ws, req, grant));
     });
   }
 
@@ -99,7 +114,7 @@ export class LiveHub {
     for (const t of this.#coalesce.values()) clearTimeout(t);
   }
 
-  #join(ws: WebSocket, req: IncomingMessage) {
+  #join(ws: WebSocket, req: IncomingMessage, grant: SocketGrant) {
     const client: Client = { topics: new Set(), seen: 0 };
     this.#clients.set(ws, client);
     let alive = true;
@@ -109,6 +124,8 @@ export class LiveHub {
       ws.ping();
     }, PING_MS);
     ws.on('pong', () => (alive = true));
+    // Messages are handled in the order they came, each after its declaration allowed it (the founding owner: at once).
+    let queue: Promise<void> = Promise.resolve();
     ws.on('message', (data, isBinary) => {
       if (isBinary) return;
       let msg: { type?: unknown; topics?: unknown };
@@ -117,6 +134,11 @@ export class LiveHub {
       } catch {
         return;
       }
+      queue = queue.then(async () => {
+        if (await grant.allows(String(msg.type), msg as Record<string, unknown>)) handle(msg);
+      });
+    });
+    const handle = (msg: { type?: unknown; topics?: unknown }) => {
       if (msg.type === 'presence') return this.#presence(ws, msg as Record<string, unknown>, req);
       if (msg.type !== 'subscribe' || !Array.isArray(msg.topics)) return;
       const before = client.topics;
@@ -131,7 +153,7 @@ export class LiveHub {
       if (client.topics.has('usage') && !before.has('usage') && this.#usage && Date.now() - this.#usage.at < USAGE_EVERY_MS)
         ws.send(this.#usage.json);
       this.#schedule();
-    });
+    };
     ws.on('close', () => {
       clearInterval(ping);
       this.#clients.delete(ws);

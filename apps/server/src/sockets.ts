@@ -44,11 +44,12 @@ export const signedInOf =
  * hold a connection open without signing in.
  */
 export class SocketGuard {
-  readonly #open = new Map<string, Set<Duplex>>();
+  /** By token: the sockets it opened, and whether it was a full sign-in then (T-1043 S0b: a member's sockets are tracked too). */
+  readonly #open = new Map<string, { full: boolean; sockets: Set<Duplex> }>();
   readonly #timer: NodeJS.Timeout;
 
   constructor(
-    private readonly portal: Pick<Portal, 'session'>,
+    private readonly portal: Pick<Portal, 'session'> & Partial<Pick<Portal, 'anySession'>>,
     private readonly cookie: string,
     private readonly unansweredMs = UNANSWERED_MS,
   ) {
@@ -66,21 +67,31 @@ export class SocketGuard {
       socket.once('close', () => clearTimeout(unanswered));
 
       const token = tokenOf(req, this.cookie);
-      if (!token || !this.portal.session(token)) return; // the owner of the path answers 401
-      let sockets = this.#open.get(token);
-      if (!sockets) this.#open.set(token, (sockets = new Set()));
-      sockets.add(socket);
+      if (!token) return; // the owner of the path answers 401
+      const full = !!this.portal.session(token);
+      if (!full && !this.portal.anySession?.(token)) return;
+      let entry = this.#open.get(token);
+      // Once any socket of this sign-in opened as a full one, all of them must stay full (the stricter mark: an admin made a member is cut).
+      if (!entry) this.#open.set(token, (entry = { full, sockets: new Set() }));
+      else entry.full ||= full;
+      const tracked = entry;
+      tracked.sockets.add(socket);
       socket.once('close', () => {
-        sockets.delete(socket);
-        if (sockets.size === 0 && this.#open.get(token) === sockets) this.#open.delete(token);
+        tracked.sockets.delete(socket);
+        if (tracked.sockets.size === 0 && this.#open.get(token) === tracked) this.#open.delete(token);
       });
     });
   }
 
-  /** Cuts every tracked socket whose session has ended. Called on sign-out, on a new code and on a timer. */
+  /** Whether the sign-in is still what it was: a full one must still be full (an admin made a member is cut), a member's still live. */
+  #live(token: string, full: boolean): boolean {
+    return full ? !!this.portal.session(token) : !!this.portal.anySession?.(token);
+  }
+
+  /** Cuts every tracked socket whose session has ended (or is no longer full). Called on sign-out, on a new code and on a timer. */
   sweep() {
-    for (const [token, sockets] of this.#open) {
-      if (this.portal.session(token)) continue;
+    for (const [token, { full, sockets }] of this.#open) {
+      if (this.#live(token, full)) continue;
       for (const socket of sockets) socket.destroy();
       this.#open.delete(token);
     }
@@ -89,7 +100,7 @@ export class SocketGuard {
   /** Open tracked sockets, for tests and diagnostics. */
   get size() {
     let n = 0;
-    for (const sockets of this.#open.values()) n += sockets.size;
+    for (const { sockets } of this.#open.values()) n += sockets.size;
     return n;
   }
 

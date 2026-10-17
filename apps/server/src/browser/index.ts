@@ -2,7 +2,8 @@ import type { WorkspaceSteps } from '../delivery/steps.js';
 import { config } from '../config.js';
 import type { PoolService } from '../pools/service.js';
 import type { Portal } from '../portal.js';
-import type { Server } from 'node:http';
+import type { IncomingMessage, Server } from 'node:http';
+import type { SignedIn } from '../authz/routeGuard.js';
 import type { Store } from '../store/store.js';
 import type { Runtime, RuntimeNames } from '../workspaces/runtime.js';
 import { Companions } from './companion.js';
@@ -89,8 +90,8 @@ export class BrowserModule {
   }
 
   /** The live-view sockets: call once the HTTP server exists, before it listens. */
-  attach(server: Server, portal: Portal) {
-    attachBrowserSockets(server, { portal, service: this.service });
+  attach(server: Server, portal: Portal, signedIn?: (req: IncomingMessage) => SignedIn) {
+    attachBrowserSockets(server, { portal, service: this.service, ...(signedIn ? { signedIn } : {}) });
   }
 
   start() {

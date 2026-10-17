@@ -15,7 +15,7 @@ import { AccountPools } from './accounts/pools.js';
 import { AccountsService } from './accounts/service.js';
 import { Outbox } from './delivery/outbox.js';
 import { LiveHub } from './live.js';
-import { SocketGuard } from './sockets.js';
+import { SocketGuard, signedInOf } from './sockets.js';
 import { workspaceView } from './workspaces/view.js';
 import { readWorkspaceMemory } from './workspaces/memory.js';
 import { runToEnd } from './workspaces/runToEnd.js';
@@ -717,10 +717,12 @@ sockets.attach(server);
 portal.onRevoked = () => sockets.sweep();
 // The agents' tunnel (`/connect/v1/tunnel`): no cookie, its own handshake; answers only its own path.
 connect.attach(server, portal);
-attachShell(server, portal, workspaces);
-browser.attach(server, portal);
-live.attach(server);
-attachChat(server, chatController, (req) => !!portal.session(cookie(req, config.session.cookie)));
+// T-1043 S0b: every socket module attaches through the socket guard (authz/socketGuard.ts), which decides for who this cookie signs in.
+const signedIn = signedInOf(portal, config.session.cookie);
+attachShell(server, portal, workspaces, signedIn);
+browser.attach(server, portal, signedIn);
+live.attach(server, signedIn);
+attachChat(server, chatController, (req) => !!portal.session(cookie(req, config.session.cookie)), signedIn);
 
 if (config.dev) {
   // One port for everything: the API through Hono, the rest through Vite (with HMR on this server).

@@ -390,7 +390,7 @@ To build (work packages A2, A9): the enumeration test (FR16, X19), the generated
 | A1 | identity core ([Identity](identity-onboarding.md)) | A0 | **Not built** |
 | A2 | the real layer: `can`, resolvers' registry, the policy middleware in shadow mode, `authz.denied` audit, the enumeration test | A0 | **Not built** |
 | A3 | ownership retrofit and the declarations of every module, list filtering | A1, A2; the module's owner reports done | **Not built** |
-| A4 | sockets, live hub, Portal MCP binding, jobs | A2 | **Not built** |
+| A4 | sockets, live hub, Portal MCP binding, jobs | A2 | **Partly built**: the socket guard and table (T-1043 S0b, Appendix C); per-person live frames, `onAccessChange`, the MCP binding and jobs not yet |
 | A5 | flip to `enforce`, remove the server-code login | A3, A4, the matrix green | **Not built** |
 
 (The full package list, with files, interfaces and quiescence conditions, is `COORD/p5-workbreakdown.md`, summarised in [the overview](multi-user.md) §14.)
@@ -898,15 +898,21 @@ It also checks the guard on its own:
 
 ## Appendix C. Sockets and other doors outside the route table
 
-Declared in the same table under `ALL <path>` (the chat socket already is: `chat/authz.ts` declares `ALL /api/chat/live`), because an upgrade request is not in `app.routes`. The enumeration test also checks that every upgrade handler path found by `server.on('upgrade')` has a declaration.
+**Built (T-1043 S0b).** Sockets have their own table, `declareSocketPolicies(module, { [path]: { connect, messages, frames? } })` in each module's `authz.ts` (`authz/socketGuard.ts`), because an upgrade request is not in `app.routes`. No module listens for `upgrade` itself: each calls `onSocket(server, path, { signedIn }, handler)`, and the guard decides with the HTTP guard's own `decidePolicy`, for the actor `signedInOf(portal, cookie)` reads from the handshake (`sockets.ts`):
+- the handshake: a `public`, `bearer` or `handler` socket is its own door and goes on with no actor (the agents' tunnel). Any other needs this site's Origin (`403`) and someone signed in (`401`); the founding owner goes on untouched; anyone else is refused a socket with no declaration, or one whose `connect` does not allow it, with exactly the answer an upgrade nobody serves gets (`404 Not Found`, the module never runs);
+- each message: the module asks `grant.allows(type, message)` before acting; a type with no row, or one its row does not allow, is refused (the chat answers what a session that does not exist gets), the founding owner is let through;
+- each module's own checks stay (they still refuse a member until MU2 S1a/S1b);
+- revocation: the session tracker (`SocketGuard`) also tracks a member's sockets and cuts them when that sign-in ends; a socket opened with a full sign-in is cut when it is no longer full (an admin made a member).
 
-| Door | Declared key | Handshake | What each message needs |
+`authz/socketGuard.test.ts` fails when a source file other than the guard and the tracker listens for `upgrade` (the remote agent's own proxies excepted), when a server wired like `index.ts` (the hub included) has an `upgrade` listener that is not the guard's, when an attached socket has no declaration or a declaration has no socket, and on the handshake, message, module and revocation cases above. The chat socket's `ALL /api/chat/live` route row stays named in the route test until S1a moves its callers.
+
+| Door | Declared path | Handshake | What each message needs |
 | --- | --- | --- | --- |
-| Live (`/api/live`) | `ALL /api/live` | signed in | `subscribe` to topics; `workspaces` and `usage` frames are built per client by `visible` and sent again when `onAccessChange` fires; the other topics are nudges (R2) |
+| Live (`/api/live`) | `live.ts` | `platform` `system` `view` until its frames are built per person (it pushes every workspace and every usage row today); a member gets the 404 | `subscribe`, `presence`: signed in. To come: `workspaces` and `usage` frames built per client by `visible` and sent again when `onAccessChange` fires; the other topics are nudges (R2) |
 | Chat (`/api/chat/live`) | `ALL /api/chat/live` | signed in | `subscribe`: `view` on the session; `send`, `respond`, `control` and the side-question messages (`btw_ask`, `btw_cancel`, `btw_pin`): `operate`; a mode change to Bypass is refused here (REST with a password check); a right that ends drops the subscription and the next message gets the same `ack` as for a missing session |
 | Shell (`/api/workspaces/:target/:name/shell`) | `ALL /api/workspaces/:target/:name/shell` | `operate` on the workspace; `?term=` also needs the terminal's owner (a `claude` terminal also `operate` on its Claude) | terminal bytes and `resize`; closed when the right ends |
 | Browser live view and preview (`.../browser/view`, `.../browser/preview`) | `ALL .../browser/view`, `ALL .../browser/preview` | `operate` on the workspace | the lease binds (user, device); viewers cannot take control |
 | Portal MCP (`/mcp`) | `ALL /mcp` | `bearer` (`cpat_`, `cpst_`; `cpoa_` if the portal becomes an authorization server) | each tool declares its access (Appendix B) |
-| Connect (`/connect/*`) | declared by `connect/authz.ts` | the node's signed challenge or an enrollment token: not a user | no user route is reachable through it |
+| Connect (`/connect/*`; the tunnel `/connect/v1/tunnel` in `CONNECT_SOCKET_POLICIES`, `handler`) | declared by `connect/authz.ts` | the node's signed challenge or an enrollment token: not a user (no cookie is read, an Origin is refused) | no user route is reachable through it |
 | Trigger receivers (`/hooks/<token>`) | `handler` | token and signature of the Git host | the trigger's owner is the actor; `can(owner, 'operate', workspace)` at run time |
 | Static app and `/healthz` | `public` | none | none |

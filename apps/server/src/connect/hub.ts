@@ -29,7 +29,9 @@ import {
   type ConnectStatusMessage,
   type ConnectWelcome,
 } from '@portal/contracts';
+import { declareSocketPolicies, onSocket } from '../authz/socketGuard.js';
 import { RateLimiter } from '../rateLimit.js';
+import { CONNECT_SOCKET_POLICIES } from './authz.js';
 import { cleanHello, cleanLog, cleanStatus, text } from './agentText.js';
 import type { ConnectConfig } from './config.js';
 import { agentActor, type ConnectEvents } from './events.js';
@@ -189,7 +191,7 @@ export class Hub implements LiveSource {
   readonly #now: () => Date;
   readonly #log: (line: string) => void;
   #server: Server | null = null;
-  #onUpgrade: ((req: IncomingMessage, socket: Duplex, head: Buffer) => void) | null = null;
+  #detach: (() => void) | null = null;
 
   constructor(private readonly d: HubDeps) {
     this.#now = d.now ?? (() => new Date());
@@ -256,8 +258,9 @@ export class Hub implements LiveSource {
 
   attach(server: Server): void {
     this.#server = server;
-    this.#onUpgrade = (req, socket, head) => this.#upgrade(req, socket, head);
-    server.on('upgrade', this.#onUpgrade);
+    // T-1043 S0b: behind the socket guard, declared as its own door (`handler`: no cookie is read, its handshake below is the check).
+    declareSocketPolicies('connect', CONNECT_SOCKET_POLICIES);
+    this.#detach = onSocket(server, CONNECT_PUBLIC.tunnel, { signedIn: () => null }, (req, socket, head) => this.#upgrade(req, socket, head));
   }
 
   #upgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
@@ -692,7 +695,8 @@ export class Hub implements LiveSource {
 
   /** Closes everything and stops listening (the portal is shutting down, or a test is over). */
   close(): void {
-    if (this.#server && this.#onUpgrade) this.#server.off('upgrade', this.#onUpgrade);
+    this.#detach?.();
+    this.#detach = null;
     for (const c of [...this.#conns.values()]) {
       c.ended = 'shutdown';
       c.session.destroy('shutdown');
