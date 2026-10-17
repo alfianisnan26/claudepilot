@@ -162,6 +162,13 @@ export function rowCounts(file: string): Record<string, number> {
   }
 }
 
+/** The tables whose row count differs, or that only one side has. */
+export function compareCounts(backup: Record<string, number>, restored: Record<string, number>): DrillResult['mismatches'] {
+  return [...new Set([...Object.keys(backup), ...Object.keys(restored)])]
+    .filter((t) => backup[t] !== restored[t])
+    .map((table) => ({ table, backup: backup[table] ?? null, restored: restored[table] ?? null }));
+}
+
 export interface DrillResult {
   /** Wall time of unzip plus restore, in milliseconds. */
   ms: number;
@@ -183,10 +190,7 @@ export async function restoreDrill(opts: { file: string; secretKey: Buffer | nul
     await restoreBackup({ dataDir: scratch, file: source, secretKey: opts.secretKey, migrations: opts.migrations });
     const ms = performance.now() - started;
     const want = rowCounts(source);
-    const got = rowCounts(join(scratch, 'portal.db'));
-    const mismatches = [...new Set([...Object.keys(want), ...Object.keys(got)])]
-      .filter((t) => want[t] !== got[t])
-      .map((table) => ({ table, backup: want[table] ?? null, restored: got[table] ?? null }));
+    const mismatches = compareCounts(want, rowCounts(join(scratch, 'portal.db')));
     return { ms, tables: Object.keys(want).length, rows: Object.values(want).reduce((a, b) => a + b, 0), mismatches };
   } finally {
     if (!opts.scratchDir) rmSync(scratch, { recursive: true, force: true });

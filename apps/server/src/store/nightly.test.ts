@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
 import { MIGRATIONS, type Migration } from './migrations.js';
-import { gunzipBackup, listNightly, nightlyBackup, nightlyDir, nightlyStatus, restoreAny, restoreDrill, rowCounts, toKeep } from './nightly.js';
+import { compareCounts, gunzipBackup, listNightly, nightlyBackup, nightlyDir, nightlyStatus, restoreAny, restoreDrill, rowCounts, toKeep } from './nightly.js';
 import { generateSecretKey, parseSecretKey } from './secretBox.js';
 import { Store } from './store.js';
 import { tempDirectory } from './testTmp.js';
@@ -109,6 +109,25 @@ test('restore drill: a nightly restores into a scratch folder, timed, with every
   // The live data dir is untouched by a drill.
   assert.equal(listNightly(nightlyDir(dir)).length, 1);
   assert.ok(!readdirSync(join(dir, 'backups')).some((n) => n.includes('replaced')), 'the drill never replaced the live database');
+});
+
+test('the drill reports a lost row, a lost table and an extra table', () => {
+  assert.deepEqual(compareCounts({ a: 1, b: 2 }, { a: 1, b: 2 }), []);
+  assert.deepEqual(compareCounts({ a: 1, b: 2, c: 0 }, { a: 0, b: 2, d: 3 }), [
+    { table: 'a', backup: 1, restored: 0 },
+    { table: 'c', backup: 0, restored: null },
+    { table: 'd', backup: null, restored: 3 },
+  ]);
+});
+
+test('rowCounts leaves out the frozen marker a restore adds, and nothing else', async () => {
+  const { store } = await filled(3);
+  const before = rowCounts(store.path);
+  store.db!.prepare("INSERT INTO portal_meta (key, value) VALUES ('frozen', '{}')").run();
+  assert.deepEqual(rowCounts(store.path), before);
+  store.db!.prepare("INSERT INTO portal_meta (key, value) VALUES ('other', 'x')").run();
+  assert.equal(rowCounts(store.path).portal_meta, before.portal_meta! + 1);
+  store.close();
 });
 
 test('the drill refuses a backup the key does not open, and a damaged file', async () => {
