@@ -25,6 +25,7 @@ import { BtwSidePanel } from './btw/BtwSidePanel';
 import { useBtwLayout } from './btw/layout';
 import { Composer, type ComposerHandle } from './Composer';
 import { Controls, type ControlsHandle } from './Controls';
+import { aliasRedirect } from './aliasRedirect';
 import { CrewLine, crewShown, useCrew } from './CrewLine';
 import { FilesPanel, FilesSheet, INITIAL_FILES_VIEW, type FilesView } from './FilesPanel';
 import { KeepGoingChip } from './KeepGoing';
@@ -299,9 +300,12 @@ export function SessionPage() {
   }, [session?.title]);
 
   // A moved chat is still this session. An old link to a session an earlier move had made (its id is an alias
-  // now) opens the chat under its own id.
+  // now) opens the chat under its own id; never on the render where the route itself changed (aliasRedirect).
+  const routedId = useRef(id);
   useEffect(() => {
-    if (session && session.id !== id) navigate(`/admin/sessions/${session.id}`, { replace: true });
+    const to = aliasRedirect(routedId.current, id, session?.id);
+    routedId.current = id;
+    if (to) navigate(to, { replace: true });
   }, [session, id, navigate]);
 
   const move = useMoveChat();

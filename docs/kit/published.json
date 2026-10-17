@@ -1,6 +1,6 @@
 {
   "kit": "1.0.1",
-  "at": "2026-10-17T10:34:48.865Z",
+  "at": "2026-10-17T12:04:48.223Z",
   "portal": "https://pilot.ai.isnan.me",
   "contexts": {
     "charter-essentials": "01a13624-3b6c-7087-a61d-26730374d3a6",
@@ -23,7 +23,7 @@
     "git-flow": "01a13625-271a-7548-a864-ccd6f6effc68",
     "incident": "01a13625-271a-7d55-9f57-8c9a3312f67b",
     "knowledge": "01a13625-271a-7f0e-a0cb-e5d4d9e51a6d",
-    "orchestration": "01a14787-0ce1-7a0c-96f2-d81e43b1d9a8",
+    "orchestration": "01a149c0-2780-791a-a1ee-448706168ea3",
     "peer-review": "01a13625-271a-7e0a-bde9-4c377256c122",
     "portal-mcp": "01a14643-596b-7e10-9134-be10af83966e",
     "qa-verification": "01a13625-271b-74fb-bdea-ead060e10b81",
