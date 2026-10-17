@@ -20,9 +20,9 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   after 44fba442 T-623 browser image): T-524 S3c+T-733 S5, T-881 S1b, T-416 S2c (lead's mechanical controller.ts resolution
   67198848, APPROVE 9219), T-382 S1, T-781 S8c, T-675 R2c+R2d. Coordinator told T-731 9271.
 ## IN FLIGHT (6 of 6, D-71; pausing for the 00:50 restart; PAUSED shas below)
-- BATCH 30 READY after lead quick-check: T-772 S2f b36f6a54 (QA UI PWG 9301; S2g follow-up: comma selectors + media regex),
-  T-736 S3g 4eb08f4e (QA UI 9008), T-612 S1 a5207db0 (QA BE 2 PWG 9280; S2 = fix/exclude the 16 lint errors), T-868 S3
-  0a818680 (DONE 9299, Job 9bb7f09d, 13 mutants red -> NEEDS QA). Pending QA: T-436 S1+S2 34a5b293, T-382 S2+fix+S3 fdb33268,
+- BATCH 30 premerge-b30 4de61237 (wip/main-4de6123): T-772 S2f b36f6a54 (QA UI PWG 9301; S2g: comma selectors + media regex),
+  T-736 S3g 4eb08f4e (QA UI 9008), T-612 S1 a5207db0 (QA BE 2 PWG 9280; S2 = the 16 lint errors). AFTER RESTART: quick-check
+  (quickCheck, rtkHistoryGuard, focusRing tests) then gate. T-868 S3 0a818680 (DONE 9299, Job 9bb7f09d, 13 mutants) NEEDS QA. Pending QA: T-436 S1+S2 34a5b293, T-382 S2+fix+S3 fdb33268,
   T-425 c22a76b3 (QA UI: NOT VERIFIED, read only).
 - QA BE 2 05c187ae PAUSED 4a838735: its T-436 S2 and T-382 re-check verdicts were in earlier replies, NOT its last ->
   after restart: repost both as the LAST reply (relay via a lane spawned with that ticket).
