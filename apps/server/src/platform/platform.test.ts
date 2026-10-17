@@ -3,6 +3,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createApp } from '../app.js';
+import { declarePolicies } from '../authz/seam.js';
 import { createBus } from '../notify/bus.js';
 import { FakeChat, freshStore } from '../notify/testkit.js';
 import { Portal } from '../portal.js';
@@ -105,6 +106,8 @@ test('platform: modules register once, routes mount behind the session guard, /h
   platform.register({ name: 'standin', routes: [{ path: '/api/standin', app: extra }] });
   assert.throws(() => platform.register({ name: 'standin' }));
   platform.hooks.post('/t/:token', (c) => c.json({ received: c.req.param('token') }));
+  // T-1043 S0a: a hook is its own door, and says so (an undeclared route is refused to anyone but the owner).
+  declarePolicies('standin', { 'POST /hooks/t/:token': { kind: 'handler', checks: ['the test hook answers anyone'] } });
   platform.start();
 
   const CODE = '13572468';

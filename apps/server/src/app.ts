@@ -103,6 +103,8 @@ import { createClaudeVersionRoutes, createWorkspaceClaudeVersionRoutes, type Cla
 import { createCodespacesRoutes, type Codespaces } from './codespaces/index.js';
 import type { Platform } from './platform/index.js';
 import { actorOf, actorString, actorUserId, visible } from './authz/seam.js';
+import { createRouteGuard } from './authz/routeGuard.js';
+import { declareAppPolicies } from './authz/appPolicies.js';
 import { assetCompress, jsonCompress } from './jsonCompress.js';
 
 type Env = { Bindings: HttpBindings; Variables: { token: string } };
@@ -270,6 +272,23 @@ export function createApp(
   const anyLimit = limit(256 * 1024 * 1024);
   app.use(API.login, loginLimit);
   app.use('/api/*', (c, next) => (/^application\/json/i.test(c.req.header('content-type') ?? '') ? jsonLimit(c, next) : anyLimit(c, next)));
+  // T-1043 S0a (D-82): every route's DECLARED policy, through the one `can()`, for the request's real actor, before any route runs
+  // (authz/routeGuard.ts). The founding owner goes on as before; anyone else is refused a route with no declaration.
+  declareAppPolicies();
+  app.use(
+    '*',
+    createRouteGuard({
+      signedIn: (c) => {
+        const token = getCookie(c, cookie);
+        if (!token) return null;
+        if (portal.session(token)) return { full: true };
+        const s = portal.anySession(token);
+        return s?.userId ? { full: false, userId: s.userId } : null;
+      },
+      // A `/:ref…` workspace route asks about the `<target>/<name>` a stable id resolves to; anything else there is handed on (T-531 S2).
+      idOf: (check, value) => (check.type === 'workspace' && check.param === 'ref' ? (isStableWorkspaceId(value) ? (workspaces.resolve(value)?.legacyId ?? value) : null) : undefined),
+    }),
+  );
 
   app.onError((e, c) => {
     const error = isAppError(e)
