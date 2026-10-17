@@ -138,7 +138,9 @@ export type TicketEventKind =
   | 'closed'
   | 'reopened'
   /** A person (or a script) pushed it into a running session (FR28): `data` `{ sessionId, sessionTitle, mode }`, `body` the note. */
-  | 'bumped';
+  | 'bumped'
+  /** A file was attached (`data` `{ attachmentId, name, size, mediaType }`) or removed (`data` adds `removed: true`). */
+  | 'attachment';
 
 /** One entry on a ticket's timeline: who did what, when. Never edited. */
 export interface TicketEvent {
@@ -166,7 +168,34 @@ export interface TicketDetail {
   sessions: TicketSession[];
   /** The checks CI attached (interface I10), one per name, by name. */
   checks: TicketCheck[];
+  /** Files attached to it, oldest first. Absent from an older server. */
+  attachments?: TicketAttachment[];
 }
+
+/** A file on a ticket (owner, 2026-10-17: "ticket support with attachment, all files"): any type, kept by the portal, served only to who may see the ticket. */
+export interface TicketAttachment {
+  /** A number, unique across tickets. */
+  id: number;
+  ticketId: string;
+  /** The file name as uploaded (no folders). */
+  name: string;
+  size: number;
+  /** The type the uploader gave (or `application/octet-stream`). Only a few image types are shown inline; everything else downloads. */
+  mediaType: string;
+  sha256: string;
+  at: string;
+  /** Who attached it: `ui`, `session:<id>`, `portal-mcp:<token id>`. */
+  actor: string;
+  actorLabel: string;
+  /** The actor attached it as an agent: the file is untrusted. */
+  fromAgent: boolean;
+}
+
+/** One file at most 50 MB, at most 100 files on a ticket; a name of at most 200 characters. */
+export const TICKET_ATTACHMENT_LIMITS = { maxBytes: 50 * 1024 * 1024, perTicket: 100, name: 200 } as const;
+
+/** The types shown inline (an image preview); every other type, SVG and HTML included, is served as a download. */
+export const TICKET_ATTACHMENT_INLINE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'] as const;
 
 /** The state of one pipeline check on a ticket. */
 export const TICKET_CHECK_STATES = ['queued', 'running', 'passed', 'failed', 'cancelled'] as const;
@@ -314,6 +343,11 @@ export const TICKET_API = {
   opening: (id: string) => `/api/tickets/${encodeURIComponent(id)}/opening`,
   /** GET: the sessions it can be bumped into, as `BumpTarget[]`. POST `BumpRequest`: `TicketBumpResult` (FR28). */
   bump: (id: string) => `/api/tickets/${encodeURIComponent(id)}/bump`,
+  /** GET: `TicketAttachment[]`. POST the file's bytes as the body (`content-type: application/octet-stream`), its name in the `x-file-name`
+   *  header (URI-encoded) and its type in `x-file-type`: the new `TicketAttachment`. */
+  attachments: (id: string) => `/api/tickets/${encodeURIComponent(id)}/attachments`,
+  /** GET: the file (inline for a preview image, else a download). DELETE: remove it. */
+  attachment: (id: string, attachmentId: number) => `/api/tickets/${encodeURIComponent(id)}/attachments/${attachmentId}`,
   /** GET: the tickets bumped into a session, as `TicketBumped[]` (FR31). */
   bumped: (sessionId: string) => `/api/tickets/bumped?session=${encodeURIComponent(sessionId)}`,
 } as const;
