@@ -528,6 +528,7 @@ export class Tickets {
       holderKind: row.assignee_kind,
       holderId: row.assignee_ref,
       holderAncestors: holder ? this.#ancestors(holder) : [],
+      holderLead: holder?.parentId ?? null,
     });
     return d.allow ? d.why : null;
   }
