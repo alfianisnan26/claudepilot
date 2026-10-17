@@ -955,6 +955,9 @@ test('T-860 S2: --git-dir, --work-tree, -c, other options, GIT_ variables, wrapp
     ['a # inside a word', `git -C ${wt} log a#b`],
     ['branch -a', `git -C ${wt} branch -a`],
     ['fetch origin', `git -C ${wt} fetch origin`],
+    // T-974 FIX3 (blind review 10892): allowed on the record; they change no push target.
+    ['remote prune origin', `git -C ${wt} remote prune origin`],
+    ['remote update', `git -C ${wt} remote update`],
     ['merge', `git -C ${wt} merge --no-ff ticket/T-1`],
     ['worktree list (same command)', `git -C ${wt} worktree list`],
     ['config of a harmless key', `git -C ${wt} config --get remote.origin.url`],
@@ -980,6 +983,9 @@ test('T-974: git -C is refused by subcommand and flags; messages, HEAD~1, grep -
     // T-974 (blind re-check 10774): git remote changes where a push goes, like the remote.*.url keys.
     ['remote set-url', `${c} remote set-url origin https://example.invalid/other.git`],
     ['remote set-url --push', `${c} remote set-url --push origin https://example.invalid/other.git`],
+    // T-974 FIX3 (blind review 10892): set-url has two more forms that change where a push goes.
+    ['remote set-url --add', `${c} remote set-url --add origin https://example.invalid/other.git`],
+    ['remote set-url --delete', `${c} remote set-url --delete origin https://example.invalid/other.git`],
     ['remote add', `${c} remote add other https://example.invalid/other.git`],
     ['remote add -f', `${c} remote add -f other https://example.invalid/other.git`],
     ['remote rename', `${c} remote rename origin old`],
