@@ -99,3 +99,33 @@ test('a branch with no changes and no tests needs no Job; a missing test file is
   assert.equal(bad.status, 2);
   assert.match(bad.stderr, /no test file nope\.test\.ts/);
 });
+
+test('T-960: a run where every check is skipped is a failure, never "all passed"', () => {
+  const f = fixture(0);
+  rmSync(join(f.work, 'node_modules'), { recursive: true, force: true }); // no prettier, no eslint
+  const r = run(f.work, f.fake, []);
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /::: format skipped/);
+  assert.match(r.stdout, /QUICK CHECK FAILED: nothing ran \(every check was skipped\)$/m);
+  assert.doesNotMatch(r.stdout, /all passed/);
+});
+
+test('T-960: a Python test runs with unittest when the image has no pytest, and its failure is a failure', () => {
+  const f = fixture(0);
+  mkdirSync(join(f.work, 'py/tests'), { recursive: true });
+  writeFileSync(join(f.work, 'py/package.json'), '{}\n');
+  writeFileSync(join(f.work, 'py/tests/test_ok.py'), 'import unittest\nclass T(unittest.TestCase):\n    def test_ok(self):\n        self.assertTrue(True)\n');
+  writeFileSync(join(f.work, 'py/tests/test_bad.py'), 'import unittest\nclass T(unittest.TestCase):\n    def test_bad(self):\n        self.assertEqual(1, 2)\n');
+  sh(f.work, 'git add -A && git commit -qm py');
+  // PATH without pytest: python3 -m pytest fails, so the fallback is taken (a shim makes "python3 -m pytest" fail even where pytest exists).
+  const shim = join(f.root, 'nopytest');
+  const python = spawnSync('bash', ['-c', 'command -v python3'], { encoding: 'utf8' }).stdout.trim();
+  assert.ok(python, 'python3 on PATH');
+  tool(join(shim, 'python3'), `if [ "$1 $2" = "-m pytest" ]; then exit 1; fi; exec ${python} "$@"`);
+  const env = { ...GIT_ENV, PATH: `${shim}:${process.env.PATH}` };
+  const ok = spawnSync('bash', [f.fake, '--test', 'py/tests/test_ok.py'], { cwd: f.work, encoding: 'utf8', env });
+  assert.match(ok.stdout, /::: test:py\/tests\/test_ok\.py \(unittest, no pytest in the Job image\) ok/, ok.stdout + ok.stderr);
+  const bad = spawnSync('bash', [f.fake, '--test', 'py/tests/test_bad.py'], { cwd: f.work, encoding: 'utf8', env });
+  assert.equal(bad.status, 1, bad.stdout + bad.stderr);
+  assert.match(bad.stdout, /test_bad\.py \(unittest, no pytest in the Job image\) FAILED/);
+});
