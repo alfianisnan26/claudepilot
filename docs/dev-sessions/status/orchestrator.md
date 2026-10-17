@@ -17,16 +17,14 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - T-938 lane a3554d40: 4th Job (3 lost: Pending, bg limit, session end).
 - URGENT T-948 S1 port proxy (owner waiting; coordinator 9810): BE INFRA 2 2a0edbd8 OPUS (why: security), ticket/T-948-port-proxy
   from d741a52d; contract first (~11:30). Subdomain app-<ws>-<port>.ai.isnan.me + one-time code + frame-ancestors (9811).
-  Contract 7dc74eba pushed. S2 FRONTEND 3753d3c2 ticket/T-948-app-browser 084c49d6 + docs 84fb5d15: QA d9f18599 PWG 9902
+  S1 DONE 603c5bc3 (9929, Job rc 0, 167 tests) -> QA c691df71 OPUS (why: security); author adds the flush test (mutant 3). S2 FRONTEND 3753d3c2 ticket/T-948-app-browser 084c49d6 + docs 84fb5d15: QA d9f18599 PWG 9902
   -> FE fixes 4 small findings + tests (D-65), QA re-checks. ux-checker after S1 merges. ETA 9815: QA ~14:00, gated ~15:00.
   Paused for it: T-921 0dfff348, T-379 S3 9dfecffb (lanes ended; resume after, QA re-runs Jobs).
 - T-425 S2b DONE 357ff021 (9904, Job rc 0, 4 mutants killed): Backend lane ended; QA be63acc8 (qa-t425-s2b). Backend respawns next.
-  IMPL 2 3189279b T-436 S3 + T-772 S2g e4e2c4ff: tests green, prettier red on 5 files; the fmt.patch never reached the pod ->
-  told to copy prettier's output whole via a Job artifact + Write.
-- T-28 CLOSED (QA PASS 9857). T-294 PWG 9858: crew_post/read + idle-child reuse not built -> slice after T-948 (T-595 9871).
+- T-436 S3 + T-772 S2g DONE fe676258 (9932/9933; Job rc 0): Impl 2 ended; QA by d9f18599 while T-948 S2 fixes build.
+- T-294 PWG 9858: crew_post/read + idle-child reuse not built -> slice after T-948 (T-595 9871). T-965 Schedules page: after T-948 (9943).
   T-409 G3 ee75effd QA PWG 9820 -> merge in b31; G3b fup after T-425 S2b (T-595 9823).
-- Waiting for QA after build: T-938 (blind review; coordinator lands), T-921, T-436 S3, T-379 S3, T-425 S2b. Next build: T-382 S5.
-- D-79: uat on the owner's explicit request is crew work through the normal path (dry run, go/no-go); never on our own.
+- Next builds as slots free: T-965 S1 (Backend respawn) + S2 (FE after T-948), T-382 S5. D-79: uat only on the owner's explicit request.
 
 ## DECISIONS (binding)
 - 10:00 Restart (~07:00 UTC, /tmp wiped; my Claude hit its session limit 03:xx): 6 lanes ended + respawned from pushed heads
