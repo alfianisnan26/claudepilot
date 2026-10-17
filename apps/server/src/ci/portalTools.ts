@@ -7,7 +7,7 @@
 // any pipeline on a dev/* or ticket/* branch of its program's remote, and a worker's folder branch counts as its own (ci/authz.ts, agentStart). No tool approves, rejects or
 // changes an environment's protection: those are routes a signed-in person calls, and an agent's token reaches no route.
 import { AppError } from '@isnanme/core';
-import { BUMP_NOTE_MAX, BUMP_PRIORITY, BUMP_REFUSAL_LABEL, CI_BUMP_MODE_LABEL, CI_STATUSES, objectRef, sessionRef, type BumpMode, type CiRepo, type CiRun, type CiRunSummary, type CiStatus } from '@portal/contracts';
+import { BUMP_NOTE_MAX, BUMP_PRIORITY, BUMP_REFUSAL_LABEL, CI_BUMP_MODE_LABEL, CI_STATUSES, objectRef, sessionRef, type BumpMode, type CiRepo, type CiRun, type CiRunSummary, type CiStatus, type ManagerDeployRow } from '@portal/contracts';
 import { actorOfPrincipal, can, requireCan } from '../authz/seam.js';
 import { bumpNote } from '../chat/bump.js';
 import { fullInput } from '../portalmcp/compact.js';
@@ -154,6 +154,49 @@ export function registerCiTools(ci: CiService, sessions: CiSessionsPort | undefi
         waiting_for_approval: run.deployments.filter((d) => d.approval === 'waiting').map((d) => `${d.job} → ${d.environment}`),
         link: runLink(run.id),
       };
+    },
+  });
+
+  registry.register({
+    name: 'deploy_status',
+    title: 'Deploy status',
+    description:
+      'The latest runs that deploy (a job tied to an environment), newest first, of the runs you may view: pipeline, branch, sha, status, the job running or held now (stage), ' +
+      'the status of the job named gate ("unavailable" when the run has none), and which environments wait for a person\'s approval. Read only: you can not approve; a person approves on the run page (link).',
+    scope: 'read',
+    hints: { readOnly: true, idempotent: true },
+    input: z.object({
+      pipeline: z.string().min(1).max(100).optional().describe('Only this pipeline\'s runs, e.g. deploy.'),
+      limit: z.number().int().min(1).max(20).optional(),
+    }),
+    async handler(ctx, args) {
+      const actor = actorOfPrincipal(ctx.principal);
+      const limit = args.limit ?? 5;
+      const rows: ManagerDeployRow[] = [];
+      // Newest first; a run is opened only when the caller may view it, and kept only when it deploys.
+      for (const r of ci.list({ pipeline: args.pipeline, limit: 50 }).items) {
+        if (rows.length >= limit) break;
+        if (!can(actor, 'view', objectRef('ci_run', r.id)).allow) continue;
+        const run = await ci.show(r.id).catch(() => null);
+        if (!run?.deployments.length) continue;
+        const now = run.detail.find((j) => j.status === 'running' || j.status === 'waiting');
+        const gate = run.detail.find((j) => j.id === 'gate');
+        rows.push({
+          id: run.id,
+          number: run.number,
+          pipeline: run.pipeline,
+          branch: run.branch,
+          sha: run.sha ? run.sha.slice(0, 12) : null,
+          status: run.status,
+          stage: now?.id ?? null,
+          gate: gate?.status ?? 'unavailable',
+          waiting_for_approval: run.deployments.filter((d) => d.approval === 'waiting').map((d) => d.environment),
+          created_at: run.createdAt,
+          link: runLink(run.id),
+        });
+      }
+      const waiting = rows.filter((r) => r.waiting_for_approval.length).length;
+      return { summary: `${rows.length} deploy run${rows.length === 1 ? '' : 's'}${waiting ? `, ${waiting} waiting for approval` : ''}`, deploys: rows };
     },
   });
 
