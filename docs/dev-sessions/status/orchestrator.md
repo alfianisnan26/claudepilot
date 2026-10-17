@@ -5,10 +5,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 ## DONE
 - Batches 22-26: git history (to 83b7213e), gates green. Close on "Coordinator live check" PASS. T-574 re-check after 10-17 15:00Z.
 - RESPAWN rule (165db813 + D-78 4e101a59): respawn each lane BETWEEN tickets on a worktree cut from integration; scripts by abs path.
-- BATCH 27 ON INTEGRATION bda180d2 (gate claudepilot-gate-bda180d-3921 GREEN, suite 888s; quick-check job-5eb2f86f green):
-  T-611 merge f722dca1, T-537, T-623 S2c+S2d c288c0d5, T-856 7d2acb8d (lead's mechanical PRD resolution), T-772 S2e fc9158ed,
-  T-881 S1 0946106271 (S1b follow-up 8938; live proof coordinator's). Coordinator told T-731 9271.
-- BATCH 28 63ff971c (gate GREEN): T-860 S2+S2b ALONE (9086). Flake boot.test.ts -> T-903. 27+28 deployed in 2026.10.17-1.
+- BATCHES 27 bda180d2 + 28 63ff971c (gates GREEN) deployed in 2026.10.17-1 (details: git history). Flake boot.test.ts -> T-903.
 - BATCH 29 ON INTEGRATION edde2073 (gate edde207 GREEN, suite 741s; quick-check 11 files green; first gate 4258f72 green, re-gated
   after 44fba442 T-623 browser image): T-524 S3c+T-733 S5, T-881 S1b, T-416 S2c (lead's mechanical controller.ts resolution
   67198848, APPROVE 9219), T-382 S1, T-781 S8c, T-675 R2c+R2d. Coordinator told T-731 9271.
@@ -20,10 +17,11 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   +self-heal 9391; order T-860 > T-921 > T-923 health-gated pool rollback > T-911 > T-612 S2 16 lint errors 9280).
 - BACKEND b367d0dd T-382 S4 (ci/runs, chat/audit, lab/slices) from 0cdfa044 + QA gaps: hook tests, stale loadMore, scan bound,
   committed listPage.bench.ts. T-382 S2+S3 fdb33268 = PWG 9369; merges WITH S4. Count leak -> T-922 (before multi-user).
-- QA BE A 0a2c06aa (T-436): QA T-436 S1+S2 34a5b293 only.
+- IMPL 2 0ce74ec7 (two.claude, T-436): ticket/T-436-s3 from b30 66910f56: T-436 S3 (wiring + toast tests) + T-772 S2g (focusRing
+  comma/media cases). QA BE A ended 01:45 after T-436 S1+S2 PWG 9383 (slot -> Impl 2).
 - QA BE B a8096dc9 (T-382): QA T-860 S2c e78d727b (urgent, 9331; moved from QA BE A).
 - IMPL c68578a8 (sekar, T-425): T-425 S2 on ticket/T-425-slotwait c22a76b3: QA UI FAIL 9359 (mutant "no failed mark" on
-  refused wake survives; two detached sends not ordered) -> test + per-session delivery chain. Then T-772 S2g. QA of it -> QA BE.
+  refused wake survives; two detached sends not ordered) -> test + per-session delivery chain; Job 3424b8b5 queued (ddc3d4ba).
 - BE INFRA 2 4001099e (one.claude, T-924 URGENT): deliver /etc/claudepilot/git-c-roots (T-860 guard blocks git -C in all
   program worktrees since deploy 286). ticket/T-924-gitc-roots from 803981f0. Lead reads diff, QA BE, gate ALONE, tell coordinator.
 - QA PERF 98e910e1 ENDED 01:35 (idle till S4; slot -> T-924). S8c PASS 56/56 (9372). Respawn for T-382 S4 bench.
@@ -37,10 +35,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   Release 2026.10.17-1 (42b186b4, from 44fba442) holds batches 27+28, NOT 29 (edde2073): await live checks.
 - 00:55 Resumed after restart 2: 6 stopped lanes ended; 6 respawned (4 QA + Backend + BE Infra; Impl's slot -> 2nd QA BE since
   QA held 6 items). QA lanes spawned with the ticket they report on (T-436, T-382, T-425, T-781) so their posts land (T-910).
-- 23:15 Restart 1: 6 lanes ended + respawned from pushed heads; cut Jobs re-run by lanes; QA relays via ticket-spawned lanes.
-- 13:45 D-75 AMENDED (coordinator, 1444d836, in DECISIONS.md): the lead runs the gate before a merge (gate-job.sh, one per batch).
-- 07:45 D-75 (coordinator): one Job per commit (checks chained), never the same command twice on a commit, QA reads the builder's log;
-  the lead runs no Jobs but the merge gate (13:45); idle QA gets no-Job work (reviews, browser). T-731 -> BE Infra after T-697.
+- D-75 (+amend 1444d836): one Job per commit; the lead runs only the merge gate (gate-job.sh, one per batch); idle QA gets no-Job work.
 - 16:30 D-71 (coordinator): limit 6; 3rd build lane BE Infra (CI, runners, job-run, k3s, deploy, secrets delivery, usage, spend, quota):
   T-401, T-426, T-611, T-547, T-610. Backend: T-546, T-597, T-600 route, T-325. Spawn lanes with claude auto.
 - 14:56 D-70 LANES (DECISIONS.md; my decision T-595 5380): freed slots become lanes, spawned ONCE on sonnet and fed
@@ -57,6 +52,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - D-61: NO Agent-tool sub-agents, heavy work ONLY via scripts/job-run.sh or gate-job.sh, one at a time. Hand over before 250k.
 
 ## FOR THE COORDINATOR (D-78; each also on its ticket)
+- T-938 job-run --pool-env adds E2E_QA_EMAIL/E2E_QA_PASSWORD (a loosening, T-384): BE Infra builds, blind review, coordinator lands.
+- T-436 deploy note (b30): after deploy agents reach only vaults whose agentWorkspaces list names their workspace.
 - T-924 deploy at once after its gate (urgent). T-921/T-923 image + pool rollout. Batch 29 edde2073 deploy + live checks.
 - T-578 gate reuse: (a) portal CI store [lead default] (b) pipeline-only RBAC ConfigMap (c) accept risk (d) drop reuse.
 - T-666 RBAC: workspace kohi-event can create/delete ConfigMaps in isnan-claudepilot (review 6168, can-i): narrow it.
@@ -72,7 +69,10 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - T-93 Konfersi production (owner checklist). T-610 pre-deploy read-only prod count of the 2 rows (through the coordinator).
 
 ## NEXT (in order, as slots free)
-1. b30 gate; T-924 gate ALONE; T-772 S2g (Impl); T-591 lastReleased fix; T-525 persona draft (8236). 2. T-401 in b24 (ack 8027 sat unseen 13:50-15:15: re-read HELD tickets' last comments each hour) -> T-426 S1e -> T-379 S2 3f11b28; deploys are the coordinator's. ticket_list fails: use ticket_get.
+0. 01:55 coordinator re-triage decided on the ticket (9542-9549): T-594 closed into T-598. BE Infra queue: T-924 > T-938 > T-860 fups > T-921 >
+   T-923 > T-911 > T-27 > T-598 > T-653 > T-654 > T-612 S2. Backend after T-382 S4: T-409 G3 > T-356 > T-30 (XL, 4 slices). Impl: T-379 S3 > T-33.
+   QA (sonnet), next free slot: verify T-28 (bump, built) then T-294 (crew, built), then close on PASS.
+1. b30 gate (+T-379 S2 merge b9dd11fd, trace 9534; T-436 deploy note: agents reach only vaults whose agentWorkspaces names them); T-924 gate ALONE; T-772 S2g (Impl); T-591 lastReleased fix; T-525 persona draft (8236). 2. T-401 in b24 (ack 8027 sat unseen 13:50-15:15: re-read HELD tickets' last comments each hour) -> T-426 S1e -> T-379 S2 3f11b28; deploys are the coordinator's. ticket_list fails: use ticket_get.
 4. RTK: T-340 (person/coordinator) -> T-341 merge -> T-306 item 3. 5. T-537. 6. T-513. 7. T-472 live re-check (needs portal_status), T-422, T-147, T-438, T-425, T-436, T-437, T-432, T-382, T-377, T-386, T-409, T-402, T-398,
    T-399, T-370 HOLD, T-371..T-374, T-363, T-451, T-470, T-507, T-508, T-512, T-520; T-404 open till deployed.
 
