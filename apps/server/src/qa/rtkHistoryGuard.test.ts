@@ -69,7 +69,12 @@ function run(dir: string, script: string, opts: { marker: boolean; rtk?: string;
     GIT_CEILING_DIRECTORIES: dirname(dir), // never find a repository above the scratch folder
   };
   if (opts.marker) env.JR_REPO_URL = 'https://example.invalid/repo.git';
-  return spawnSync('bash', [join(dir, 'tools/qa', script), ...(opts.args ?? args(script, dir))], { cwd: opts.cwd ?? dir, env, encoding: 'utf8', timeout: 60_000 });
+  return spawnSync('bash', [join(dir, 'tools/qa', script), ...(opts.args ?? args(script, dir))], {
+    cwd: opts.cwd ?? dir,
+    env,
+    encoding: 'utf8',
+    timeout: 60_000,
+  });
 }
 
 for (const script of SCRIPTS) {
@@ -206,7 +211,9 @@ test('rtk-measure.sh light claudepilot: a clean other repo gets past the guard (
 
 test('every curl in the three scripts has --max-time and --retry', () => {
   for (const script of SCRIPTS) {
-    const curls = readFileSync(join(ROOT, 'tools/qa', script), 'utf8').split('\n').filter((l) => !l.trimStart().startsWith('#') && /\bcurl\b/.test(l));
+    const curls = readFileSync(join(ROOT, 'tools/qa', script), 'utf8')
+      .split('\n')
+      .filter((l) => !l.trimStart().startsWith('#') && /\bcurl\b/.test(l));
     assert.ok(curls.length >= 1, `${script} has no curl line (the check would test nothing)`);
     for (const l of curls) {
       assert.match(l, /--max-time \d+/, `${script}: ${l}`);
@@ -232,9 +239,17 @@ function oneWord(s: string): boolean {
   let q = '';
   for (let i = 0; i < s.length; i++) {
     const c = s.charAt(i);
-    if (q) { if (c === q) q = ''; else if (q === '"' && c === '\\') i++; continue; }
-    if (c === '\\') { i++; continue; }
-    if (c === '"' || c === "'") q = c; else if (/\s/.test(c)) return false;
+    if (q) {
+      if (c === q) q = '';
+      else if (q === '"' && c === '\\') i++;
+      continue;
+    }
+    if (c === '\\') {
+      i++;
+      continue;
+    }
+    if (c === '"' || c === "'") q = c;
+    else if (/\s/.test(c)) return false;
   }
   return q === '';
 }
@@ -244,10 +259,27 @@ function oneWord(s: string): boolean {
  * shell), word splitting (IFS), HOME and the shell's own option variables. `repo` is not on the list: rtk-measure.sh light mode computes it from its
  * argument right before its own cd, and the guard is called on it by name.
  */
-const FORBIDDEN_ASSIGN = ['here', 'PATH', 'IFS', 'BASH_ENV', 'ENV', 'CDPATH', 'HOME', 'SHELLOPTS', 'BASHOPTS', 'PS4', 'PROMPT_COMMAND', 'BASH_XTRACEFD', 'LD_PRELOAD', 'LD_LIBRARY_PATH'];
+const FORBIDDEN_ASSIGN = [
+  'here',
+  'PATH',
+  'IFS',
+  'BASH_ENV',
+  'ENV',
+  'CDPATH',
+  'HOME',
+  'SHELLOPTS',
+  'BASHOPTS',
+  'PS4',
+  'PROMPT_COMMAND',
+  'BASH_XTRACEFD',
+  'LD_PRELOAD',
+  'LD_LIBRARY_PATH',
+];
 const FORBIDDEN_NAME = new RegExp(`^(${FORBIDDEN_ASSIGN.join('|')})$`);
 /** Whether a line sets one of FORBIDDEN_ASSIGN in command position: first on the line, after `;` `&&` `||` `{` `(` or a keyword, behind `export`/`declare`/`readonly`/`typeset` or other `x=1` prefixes. */
-const SETS_FORBIDDEN = new RegExp(`(^|;|&&|\\|\\||\\{|\\(|\\bthen\\b|\\bdo\\b|\\belse\\b)\\s*(\\w+=\\S*\\s+)*(export\\s+|declare\\s+(-\\w+\\s+)*|typeset\\s+(-\\w+\\s+)*|readonly\\s+|local\\s+)?(${FORBIDDEN_ASSIGN.join('|')})\\+?=`);
+const SETS_FORBIDDEN = new RegExp(
+  `(^|;|&&|\\|\\||\\{|\\(|\\bthen\\b|\\bdo\\b|\\belse\\b)\\s*(\\w+=\\S*\\s+)*(export\\s+|declare\\s+(-\\w+\\s+)*|typeset\\s+(-\\w+\\s+)*|readonly\\s+|local\\s+)?(${FORBIDDEN_ASSIGN.join('|')})\\+?=`,
+);
 function allowed(line: string, where: 'preamble' | 'branch'): boolean {
   const t = line.trim();
   if (t === '' || t.startsWith('#')) return true;
@@ -269,8 +301,14 @@ test('the three scripts source the shared guard before they write anything: ever
     assert.ok(guard > 0, `${script} does not call rtk_guard at the top level`);
     const bad = lines.slice(0, guard).findIndex((l) => !allowed(l, 'preamble'));
     assert.equal(bad, -1, `${script}: line ${bad + 1} comes before the guard and is not on the allow-list: ${lines[bad]}`);
-    assert.ok(lines.slice(0, guard).some((l) => GUARD_SRC.test(l.trim())), `${script}: the guard is not sourced before it is called`);
-    assert.ok(lines.slice(0, guard).some((l) => DECLARE.test(l.trim())), `${script}: rtk_guard is not checked to be defined before it is called`);
+    assert.ok(
+      lines.slice(0, guard).some((l) => GUARD_SRC.test(l.trim())),
+      `${script}: the guard is not sourced before it is called`,
+    );
+    assert.ok(
+      lines.slice(0, guard).some((l) => DECLARE.test(l.trim())),
+      `${script}: rtk_guard is not checked to be defined before it is called`,
+    );
     // T-736 S3g: the folder the guard checks is the one the script cds into, so `here` has ONE definition, the exact HERE_FORM line, before the
     // guard is sourced; nothing between the guard call and the first cd (or anywhere before the guard) sets here, PATH, IFS, BASH_ENV and the like.
     const hereAt = lines.map((l, i) => (l.trim() === HERE_FORM ? i : -1)).filter((i) => i >= 0);
@@ -290,12 +328,32 @@ test('the allow-list (self-check, S3g): here, PATH, IFS, BASH_ENV and the like a
       assert.ok(!allowed(`${name}=/some/other/dir`, where), `refused: ${name}= in the ${where}`);
       assert.ok(!allowed(`${name}=x`, where), `refused: ${name}=x in the ${where}`);
     }
-    for (const form of [`${name}=/x`, `export ${name}=/x`, `x=1 ${name}=/x cmd`, `a; ${name}=/x`, `{ ${name}=/x; }`, `declare -x ${name}=/x`, `readonly ${name}=/x`, `if x; then ${name}=/x; fi`, `${name}+=/x`]) {
+    for (const form of [
+      `${name}=/x`,
+      `export ${name}=/x`,
+      `x=1 ${name}=/x cmd`,
+      `a; ${name}=/x`,
+      `{ ${name}=/x; }`,
+      `declare -x ${name}=/x`,
+      `readonly ${name}=/x`,
+      `if x; then ${name}=/x; fi`,
+      `${name}+=/x`,
+    ]) {
       assert.match(form, SETS_FORBIDDEN, `the scan sees: ${form}`);
     }
   }
-  assert.ok(allowed('tf=a', 'branch') && allowed('nt=a', 'branch') && allowed('hereby=1', 'preamble') && allowed('repoX=1', 'preamble'), 'other names are still fine (a longer name is not here)');
-  for (const fine of ['cleanenv() { env -i PATH="$PATH" HOME="$H" LANG=C.UTF-8 "$@"; }', 'echo here=/x', 'local base="$out/$class.$label"', 'repo=$(readlink -f "$3"); L=$4; cd "$repo" || exit', '# here=/x', 'x=1 y=2 cmd']) {
+  assert.ok(
+    allowed('tf=a', 'branch') && allowed('nt=a', 'branch') && allowed('hereby=1', 'preamble') && allowed('repoX=1', 'preamble'),
+    'other names are still fine (a longer name is not here)',
+  );
+  for (const fine of [
+    'cleanenv() { env -i PATH="$PATH" HOME="$H" LANG=C.UTF-8 "$@"; }',
+    'echo here=/x',
+    'local base="$out/$class.$label"',
+    'repo=$(readlink -f "$3"); L=$4; cd "$repo" || exit',
+    '# here=/x',
+    'x=1 y=2 cmd',
+  ]) {
     assert.doesNotMatch(fine, SETS_FORBIDDEN, `not an assignment in command position: ${fine}`);
   }
   for (const m of ['m a b c', 'm c l "$here" "touch f" "touch f"', 'm c l "$here" "rm -rf x" "rm -rf x"']) {
@@ -306,16 +364,55 @@ test('the allow-list (self-check, S3g): here, PATH, IFS, BASH_ENV and the like a
 });
 
 test('the allow-list (self-check): the preamble forms pass; each way to write, run a tool or hide a command before the guard is refused', () => {
-  for (const ok of ['', '# note', 'set -u', 'set -eu', HERE_FORM, '. "$here/tools/qa/rtk-guard.sh" || { echo "x: refusing: cannot load" >&2; exit 2; }',
-    'declare -F rtk_guard >/dev/null || { echo "x: refusing: nope" >&2; exit 2; }', 'x=1', 'y="a b $z"', ': ', ':']) {
+  for (const ok of [
+    '',
+    '# note',
+    'set -u',
+    'set -eu',
+    HERE_FORM,
+    '. "$here/tools/qa/rtk-guard.sh" || { echo "x: refusing: cannot load" >&2; exit 2; }',
+    'declare -F rtk_guard >/dev/null || { echo "x: refusing: nope" >&2; exit 2; }',
+    'x=1',
+    'y="a b $z"',
+    ': ',
+    ':',
+  ]) {
     assert.ok(allowed(ok, 'preamble'), `allowed: ${ok}`);
   }
-  assert.ok(!allowed('m a b c', 'branch') && !allowed('m a b c', 'preamble'), 'm is off the list everywhere (S3g): the real scripts call it only after the cd');
+  assert.ok(
+    !allowed('m a b c', 'branch') && !allowed('m a b c', 'preamble'),
+    'm is off the list everywhere (S3g): the real scripts call it only after the cd',
+  );
   assert.ok(!allowed(HERE_FORM, 'branch'), 'the folder line is a preamble form only');
-  for (const bad of ['mkdir -p "$out"', 'perl -pi -e s/a/b/ f', 'eval "touch f"', 'find . -delete', ': 2> f', 'echo x &> f', ': > f', 'cat <<< x', '$fn a', '"$R" x',
-    'x=`touch f`', 'x=$(touch f)', 'x=1 touch f', 'x=1; touch f', 'x=1 && touch f', 'x="a" | tee f', 'while true; do :; done', 'until false; do :; done', 'for i in 1; do :; done',
-    'touch f', 'g reset --hard', 'git checkout -- .', 'sed -i s/a/b/ f', 'x=a\\', '. other.sh', 'declare -F rtk_guard >/dev/null || { touch f; exit 2; }',
-    '. "$here/tools/qa/rtk-guard.sh" || { touch f; exit 2; }']) {
+  for (const bad of [
+    'mkdir -p "$out"',
+    'perl -pi -e s/a/b/ f',
+    'eval "touch f"',
+    'find . -delete',
+    ': 2> f',
+    'echo x &> f',
+    ': > f',
+    'cat <<< x',
+    '$fn a',
+    '"$R" x',
+    'x=`touch f`',
+    'x=$(touch f)',
+    'x=1 touch f',
+    'x=1; touch f',
+    'x=1 && touch f',
+    'x="a" | tee f',
+    'while true; do :; done',
+    'until false; do :; done',
+    'for i in 1; do :; done',
+    'touch f',
+    'g reset --hard',
+    'git checkout -- .',
+    'sed -i s/a/b/ f',
+    'x=a\\',
+    '. other.sh',
+    'declare -F rtk_guard >/dev/null || { touch f; exit 2; }',
+    '. "$here/tools/qa/rtk-guard.sh" || { touch f; exit 2; }',
+  ]) {
     assert.ok(!allowed(bad, 'preamble'), `refused: ${bad}`);
     assert.ok(!allowed(bad, 'branch'), `refused in the branch too: ${bad}`);
   }
@@ -334,13 +431,20 @@ test('each script cds into the guarded folder after the guard and before its fir
     assert.ok(guard >= 0 && cds.length > 0 && cds.every((i) => i > guard), `${script}: no cd into the guarded folder after the guard`);
     assert.ok(gits.length > 0, `${script}: no git call found (the check would test nothing)`);
     for (const g of gits) {
-      assert.ok(cds.some((c) => c < g), `${script}: a git call (line ${g + 1}) comes before the cd (line ${(cds[0] ?? -1) + 1})`);
+      assert.ok(
+        cds.some((c) => c < g),
+        `${script}: a git call (line ${g + 1}) comes before the cd (line ${(cds[0] ?? -1) + 1})`,
+      );
     }
     // The cd must run: a plain statement, nothing like `[ x ] && cd` or `a || cd` in front of it on its line.
     for (const c of cds) {
       const before = at(c).slice(0, at(c).search(/\bcd "\$(here|repo)"/));
       assert.doesNotMatch(before, /&&|\|\|/, `${script}: the cd on line ${c + 1} may not run (a && or || in front of it)`);
-      assert.match(at(c), /\bcd "\$(here|repo)" \|\| exit\b/, `${script}: the cd on line ${c + 1} needs \`|| exit\` (SC2164): a failed cd must not run the rest elsewhere`);
+      assert.match(
+        at(c),
+        /\bcd "\$(here|repo)" \|\| exit\b/,
+        `${script}: the cd on line ${c + 1} needs \`|| exit\` (SC2164): a failed cd must not run the rest elsewhere`,
+      );
     }
   }
 });
@@ -355,7 +459,10 @@ test('each script cds into the guarded folder after the guard and before its fir
  */
 type Open = 'if' | 'loop' | 'case' | 'brace' | 'paren';
 function tokens(line: string): string[] {
-  let s = line.replace(/\\./g, ' ').replace(/'[^']*'/g, ' ').replace(/"[^"]*"/g, ' ');
+  let s = line
+    .replace(/\\./g, ' ')
+    .replace(/'[^']*'/g, ' ')
+    .replace(/"[^"]*"/g, ' ');
   for (let n = 0; n < 8 && /\$\([^()]*\)/.test(s); n++) s = s.replace(/\$\([^()]*\)/g, ' '); // $( ) and $(( ))
   s = s.replace(/(^|\s)#.*$/, ' ');
   return s.match(/&&|\|\||;;|[;|&(){}]|[^\s;|&(){}]+/g) ?? [];
@@ -363,46 +470,110 @@ function tokens(line: string): string[] {
 /** Walks `lines` from the top; calls `visit(i, stackBeforeTheLine, isCode)` for every line (heredoc bodies and blanks get isCode false). */
 function walk(lines: string[], visit: (i: number, stack: Open[], code: boolean, elseTop: boolean) => void) {
   const stack: Open[] = [];
-  let tag = '', dash = false;
+  let tag = '',
+    dash = false;
   for (let i = 0; i < lines.length; i++) {
     const l = lines[i] ?? '';
-    if (tag) { if ((dash ? l.replace(/^\t+/, '') : l) === tag) tag = ''; visit(i, [...stack], false, false); continue; }
-    if (l.trim() === '' || l.trimStart().startsWith('#')) { visit(i, [...stack], false, false); continue; }
+    if (tag) {
+      if ((dash ? l.replace(/^\t+/, '') : l) === tag) tag = '';
+      visit(i, [...stack], false, false);
+      continue;
+    }
+    if (l.trim() === '' || l.trimStart().startsWith('#')) {
+      visit(i, [...stack], false, false);
+      continue;
+    }
     const before = [...stack];
     const t = tokens(l);
-    let cmd = true, elseTop = false;
+    let cmd = true,
+      elseTop = false;
     for (let k = 0; k < t.length; k++) {
       const w = t[k] ?? '';
-      if ([';', '&&', '||', '|', '&', ';;'].includes(w)) { cmd = true; continue; }
+      if ([';', '&&', '||', '|', '&', ';;'].includes(w)) {
+        cmd = true;
+        continue;
+      }
       if (w === '!') continue;
       if (w === '(') {
-        if (t[k + 1] === ')') { k++; cmd = true; continue; } // `name()`: a function head, its `{` follows
-        stack.push('paren'); cmd = true; continue;
+        if (t[k + 1] === ')') {
+          k++;
+          cmd = true;
+          continue;
+        } // `name()`: a function head, its `{` follows
+        stack.push('paren');
+        cmd = true;
+        continue;
       }
-      if (w === ')') { if (stack[stack.length - 1] === 'paren') { stack.pop(); cmd = false; } else cmd = true; continue; } // otherwise a case pattern: a command follows
-      if (w === '{') { if (cmd) { stack.push('brace'); cmd = true; } continue; }
-      if (w === '}') { if (cmd && stack[stack.length - 1] === 'brace') stack.pop(); cmd = false; continue; }
-      if (cmd && ['if', 'while', 'until', 'for', 'select', 'case'].includes(w)) { stack.push(w === 'if' ? 'if' : w === 'case' ? 'case' : 'loop'); cmd = w === 'if' || w === 'while' || w === 'until'; continue; }
-      if (cmd && ['then', 'do', 'elif'].includes(w)) { cmd = true; continue; }
-      if (cmd && w === 'else') { if (stack.length === 1 && stack[0] === 'if') elseTop = true; cmd = true; continue; }
-      if (cmd && ['fi', 'done', 'esac'].includes(w)) { stack.pop(); cmd = false; continue; }
+      if (w === ')') {
+        if (stack[stack.length - 1] === 'paren') {
+          stack.pop();
+          cmd = false;
+        } else cmd = true;
+        continue;
+      } // otherwise a case pattern: a command follows
+      if (w === '{') {
+        if (cmd) {
+          stack.push('brace');
+          cmd = true;
+        }
+        continue;
+      }
+      if (w === '}') {
+        if (cmd && stack[stack.length - 1] === 'brace') stack.pop();
+        cmd = false;
+        continue;
+      }
+      if (cmd && ['if', 'while', 'until', 'for', 'select', 'case'].includes(w)) {
+        stack.push(w === 'if' ? 'if' : w === 'case' ? 'case' : 'loop');
+        cmd = w === 'if' || w === 'while' || w === 'until';
+        continue;
+      }
+      if (cmd && ['then', 'do', 'elif'].includes(w)) {
+        cmd = true;
+        continue;
+      }
+      if (cmd && w === 'else') {
+        if (stack.length === 1 && stack[0] === 'if') elseTop = true;
+        cmd = true;
+        continue;
+      }
+      if (cmd && ['fi', 'done', 'esac'].includes(w)) {
+        stack.pop();
+        cmd = false;
+        continue;
+      }
       cmd = false;
     }
     const h = /(?:^|[^<])<<(-?)\s*(['"]?)(\w+)\2/.exec(l); // `<<<` (a here-string) is not a heredoc
-    if (h) { tag = h[3] ?? ''; dash = h[1] === '-'; }
+    if (h) {
+      tag = h[3] ?? '';
+      dash = h[1] === '-';
+    }
     visit(i, before, true, elseTop);
   }
 }
 function heavyBranch(src: string) {
   const lines = src.split('\n');
-  let start = -1, end = -1, bad = -1, cd = -1;
+  let start = -1,
+    end = -1,
+    bad = -1,
+    cd = -1;
   walk(lines, (i, stack, code, elseTop) => {
-    if (start < 0) { if (elseTop) start = i; return; }
+    if (start < 0) {
+      if (elseTop) start = i;
+      return;
+    }
     if (end >= 0 || !code) return;
-    if (stack.length === 1 && stack[0] === 'if' && /^\s*fi\s*$/.test(lines[i] ?? '')) { end = i; return; }
+    if (stack.length === 1 && stack[0] === 'if' && /^\s*fi\s*$/.test(lines[i] ?? '')) {
+      end = i;
+      return;
+    }
     // `|| exit`: a cd without it is not counted (SC2164). The cd line is the one line of the branch that is not "allowed" on purpose.
     const plainCd = /^\s*cd "\$here" \|\| exit\s*$/.test(lines[i] ?? '');
-    if (plainCd) { if (cd < 0 && stack.length === 1 && stack[0] === 'if') cd = i; return; }
+    if (plainCd) {
+      if (cd < 0 && stack.length === 1 && stack[0] === 'if') cd = i;
+      return;
+    }
     if (bad < 0 && !allowed(lines[i] ?? '', 'branch')) bad = i;
   });
   return { start, end, bad, cd };
@@ -421,35 +592,101 @@ test('the heavy-branch walker (self-check): anything off the allow-list before t
   const wrap = (body: string) => `if x; then\n  y\nelse\n${body.replaceAll('cd "$here"', 'cd "$here" || exit')}\nfi\n`;
   const branch = (body: string) => heavyBranch(wrap(body));
   const lastFi = (body: string) => wrap(body).split('\n').length - 2;
-  assert.equal(heavyBranch('if x; then\n  y\nelse\n  cd "$here"\n  touch f\nfi\n').cd, -1, 'a cd without `|| exit` is not counted (SC2164)');
+  assert.equal(
+    heavyBranch('if x; then\n  y\nelse\n  cd "$here"\n  touch f\nfi\n').cd,
+    -1,
+    'a cd without `|| exit` is not counted (SC2164)',
+  );
   const ok = branch('  cd "$here"\n  cat > f <<\'EOT\'\ntouch inside-heredoc\nEOT\n  m a b c d e');
   assert.ok(ok.cd > 0 && ok.cd < ok.bad, 'a clean branch passes');
   assert.equal(ok.bad, 4, 'the heredoc body is skipped: the cat line is the first line off the list');
   const early = branch('  : \n  x=1\n  cd "$here"\n  m a b c d e\n  touch f');
   assert.ok(early.cd > 0 && early.cd < early.bad, 'assignments and `:` may come before the cd; m comes after it');
-  for (const w of ['m a b c d e', 'm c l "$here" "touch f" "touch f"', 'm c l "$here" "rm -rf x" "rm -rf x"', 'here=/some/other/dir', 'PATH=/x', 'IFS=x', 'BASH_ENV=/x', 'CDPATH=/x', 'here="$PWD"']) {
+  for (const w of [
+    'm a b c d e',
+    'm c l "$here" "touch f" "touch f"',
+    'm c l "$here" "rm -rf x" "rm -rf x"',
+    'here=/some/other/dir',
+    'PATH=/x',
+    'IFS=x',
+    'BASH_ENV=/x',
+    'CDPATH=/x',
+    'here="$PWD"',
+  ]) {
     const b = branch(`  ${w}\n  cd "$here"`);
     assert.ok(b.bad === 3 && b.cd === 4, `S3g: ${w} before the cd is off the list (bad ${b.bad}, cd ${b.cd})`);
   }
-  for (const w of ['touch f', 'sed -i s/a/b/ f', 'echo hi | tee f', 'mv a b', 'ln -s a b', 'node x.js', 'npx tsc', ': > f', 'echo x >> f', 'cp a b', 'git status', 'g add f', 'rm -f f', 'mkdir d',
-    'perl -pi -e s/a/b/ f', 'eval "touch f"', 'find . -delete', ': 2> f', 'echo x &> f', 'echo x 2>&1', '$fn a', '"$R" x', 'x=`touch f`', 'x=$(touch f)', 'x=1 touch f',
-    'while true; do :; done', 'until true; do :; done', 'for i in 1; do :; done', 'cat <<< x', 'if true; then :; fi', 'm a b > f', 'm a b; touch f']) {
+  for (const w of [
+    'touch f',
+    'sed -i s/a/b/ f',
+    'echo hi | tee f',
+    'mv a b',
+    'ln -s a b',
+    'node x.js',
+    'npx tsc',
+    ': > f',
+    'echo x >> f',
+    'cp a b',
+    'git status',
+    'g add f',
+    'rm -f f',
+    'mkdir d',
+    'perl -pi -e s/a/b/ f',
+    'eval "touch f"',
+    'find . -delete',
+    ': 2> f',
+    'echo x &> f',
+    'echo x 2>&1',
+    '$fn a',
+    '"$R" x',
+    'x=`touch f`',
+    'x=$(touch f)',
+    'x=1 touch f',
+    'while true; do :; done',
+    'until true; do :; done',
+    'for i in 1; do :; done',
+    'cat <<< x',
+    'if true; then :; fi',
+    'm a b > f',
+    'm a b; touch f',
+  ]) {
     const b = branch(`  ${w}\n  cd "$here"`);
     assert.ok(b.bad === 3 && b.cd === 4, `${w}: off the list before the cd (bad ${b.bad}, cd ${b.cd})`);
   }
-  for (const nested of ['if false; then\n  cd "$here"\nfi', 'for i in 1; do\n  cd "$here"\ndone', 'while read l; do\n  cd "$here"\ndone', 'until false; do\n  cd "$here"\ndone',
-    'case x in\n  y) true;;\nesac\nif false; then\n  cd "$here"\nfi', 'case x in\n  y) if z; then\n  cd "$here"\nfi;;\nesac', '(\n  cd "$here"\n)', 'f() {\n  cd "$here"\n}', '{\n  cd "$here"\n}',
-    '[ x ] && if y; then\n  cd "$here"\nfi', 'x || while y; do\n  cd "$here"\ndone', 'f()\n{\n  cd "$here"\n}']) {
+  for (const nested of [
+    'if false; then\n  cd "$here"\nfi',
+    'for i in 1; do\n  cd "$here"\ndone',
+    'while read l; do\n  cd "$here"\ndone',
+    'until false; do\n  cd "$here"\ndone',
+    'case x in\n  y) true;;\nesac\nif false; then\n  cd "$here"\nfi',
+    'case x in\n  y) if z; then\n  cd "$here"\nfi;;\nesac',
+    '(\n  cd "$here"\n)',
+    'f() {\n  cd "$here"\n}',
+    '{\n  cd "$here"\n}',
+    '[ x ] && if y; then\n  cd "$here"\nfi',
+    'x || while y; do\n  cd "$here"\ndone',
+    'f()\n{\n  cd "$here"\n}',
+  ]) {
     const b = branch(`${nested}\n  touch f`);
     assert.equal(b.cd, -1, `a cd that may not run does not count: ${nested}`);
     assert.equal(b.end, lastFi(`${nested}\n  touch f`), `the nested closer does not end the else branch: ${nested}`);
   }
   assert.ok(branch('if y; then\n  true\nfi\n  cd "$here"').cd > 0, 'after a nested block closes, a cd at the branch level counts again');
-  assert.ok(branch('  cd "$here"\n  cat <<< x\n  true').end === lastFi('  cd "$here"\n  cat <<< x\n  true'), 'a here-string (<<<) is not a heredoc: it does not swallow the fi');
-  assert.ok(branch('  cd "$here"\n  cat <<-EOT\n\tfi\n\tEOT\n  true').end === lastFi('  cd "$here"\n  cat <<-EOT\n\tfi\n\tEOT\n  true'), '<<- skips its body, tab-indented end tag included');
+  assert.ok(
+    branch('  cd "$here"\n  cat <<< x\n  true').end === lastFi('  cd "$here"\n  cat <<< x\n  true'),
+    'a here-string (<<<) is not a heredoc: it does not swallow the fi',
+  );
+  assert.ok(
+    branch('  cd "$here"\n  cat <<-EOT\n\tfi\n\tEOT\n  true').end === lastFi('  cd "$here"\n  cat <<-EOT\n\tfi\n\tEOT\n  true'),
+    '<<- skips its body, tab-indented end tag included',
+  );
   // The walk starts at the top-level else: a bare else of a nested if (column 0) is not the heavy branch.
   const nestedElse = heavyBranch('if a; then\n  if b; then\n    x\nelse\n  cd "$here" || exit\n  fi\nelse\n  y\nfi\n');
-  assert.deepEqual([nestedElse.start, nestedElse.cd, nestedElse.end], [6, -1, 8], 'start at the top-level else; the cd of the nested else is not the heavy branch\'s');
+  assert.deepEqual(
+    [nestedElse.start, nestedElse.cd, nestedElse.end],
+    [6, -1, 8],
+    "start at the top-level else; the cd of the nested else is not the heavy branch's",
+  );
   assert.equal(heavyBranch('if a; then\n  if b; then\n    x\n  else\n    y\n  fi\nfi\n').start, -1, 'only a nested else: no heavy branch');
   assert.equal(heavyBranch('if x; then\n  y\nfi\n').start, -1, 'no else: no heavy branch');
 });
@@ -470,8 +707,18 @@ function runMutants(failing: 'status' | 'diff', code: number) {
   git('commit', '-q', '-m', 'mutants');
   const stubDir = join(dir, '..', `${dir.split('/').pop()}-stub-git`);
   mkdirSync(stubDir, { recursive: true });
-  writeFileSync(join(stubDir, 'git'), `#!/bin/sh\nfor a in "$@"; do [ "$a" = ${failing} ] && exit ${code}; done\nPATH="$REAL_PATH" exec git "$@"\n`, { mode: 0o755 });
-  const env = { PATH: `${stubDir}:${process.env.PATH ?? ''}`, REAL_PATH: process.env.PATH ?? '', HOME: dir, JR_REPO_URL: 'https://example.invalid/repo.git', GIT_CEILING_DIRECTORIES: dirname(dir) };
+  writeFileSync(
+    join(stubDir, 'git'),
+    `#!/bin/sh\nfor a in "$@"; do [ "$a" = ${failing} ] && exit ${code}; done\nPATH="$REAL_PATH" exec git "$@"\n`,
+    { mode: 0o755 },
+  );
+  const env = {
+    PATH: `${stubDir}:${process.env.PATH ?? ''}`,
+    REAL_PATH: process.env.PATH ?? '',
+    HOME: dir,
+    JR_REPO_URL: 'https://example.invalid/repo.git',
+    GIT_CEILING_DIRECTORIES: dirname(dir),
+  };
   const r = spawnSync('bash', [join(dir, 'tools/qa/rtk-guard-mutants.sh')], { cwd: dir, env, encoding: 'utf8', timeout: 60_000 });
   return { r, dir, git };
 }
