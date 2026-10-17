@@ -126,7 +126,8 @@ export function createTicketRoutes(tickets: Tickets): Hono {
   app.get('/:id/attachments', (c) => c.json(success(tickets.attachments(UI, id(c)))));
   app.post('/:id/attachments', async (c) => {
     const declared = Number(c.req.header('content-length') ?? '0');
-    if (declared > TICKET_ATTACHMENT_LIMITS.maxBytes) throw new AppError('PAYLOAD_TOO_LARGE', `The file is larger than ${TICKET_ATTACHMENT_LIMITS.maxBytes / 1024 / 1024} MB.`);
+    if (declared > TICKET_ATTACHMENT_LIMITS.maxBytes)
+      throw new AppError('PAYLOAD_TOO_LARGE', `The file is larger than ${TICKET_ATTACHMENT_LIMITS.maxBytes / 1024 / 1024} MB.`);
     let name = c.req.header('x-file-name') ?? '';
     try {
       name = decodeURIComponent(name);
@@ -135,11 +136,15 @@ export function createTicketRoutes(tickets: Tickets): Hono {
     }
     const bytes = Buffer.from(await c.req.arrayBuffer());
     // The real type in x-file-type (the body goes as application/octet-stream, so a .json file is not held to the JSON body limit).
-    return c.json(success(tickets.attach(UI, id(c), { name, mediaType: c.req.header('x-file-type') ?? c.req.header('content-type'), bytes })), 201);
+    return c.json(
+      success(tickets.attach(UI, id(c), { name, mediaType: c.req.header('x-file-type') ?? c.req.header('content-type'), bytes })),
+      201,
+    );
   });
   app.get('/:id/attachments/:attachmentId', (c) => {
     const { attachment, bytes } = tickets.attachmentFile(UI, id(c), attachmentNumber(c));
-    const inline = (TICKET_ATTACHMENT_INLINE_TYPES as readonly string[]).includes(attachment.mediaType) && c.req.query('download') === undefined;
+    const inline =
+      (TICKET_ATTACHMENT_INLINE_TYPES as readonly string[]).includes(attachment.mediaType) && c.req.query('download') === undefined;
     const ascii = attachment.name.replace(/[^\x20-\x7e]|["\\]/g, '_');
     return new Response(new Uint8Array(bytes), {
       headers: {

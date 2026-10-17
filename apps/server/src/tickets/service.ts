@@ -900,15 +900,32 @@ export class Tickets {
       .filter((s) => caller.kind !== 'agent' || s.workspaceId === caller.workspaceId)
       .sort((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt))
       .map((s) => this.#sessionView(s));
-    return { ticket: ticket!, events: this.#events(row.number, { limit: opts.eventsLimit }), sessions, checks: this.#checks(row.number), attachments: this.#attachments(row.number) };
+    return {
+      ticket: ticket!,
+      events: this.#events(row.number, { limit: opts.eventsLimit }),
+      sessions,
+      checks: this.#checks(row.number),
+      attachments: this.#attachments(row.number),
+    };
   }
 
   /* ---------- Attachments (owner, 2026-10-17: "ticket support with attachment, all files") ---------- */
 
   #attachments(number: number): TicketAttachment[] {
     const rows = this.#db
-      .prepare('SELECT id, name, size, media_type, sha256, actor, actor_label, at FROM ticket_attachments WHERE ticket_number = ? ORDER BY id')
-      .all(number) as { id: number; name: string; size: number; media_type: string; sha256: string; actor: string; actor_label: string; at: string }[];
+      .prepare(
+        'SELECT id, name, size, media_type, sha256, actor, actor_label, at FROM ticket_attachments WHERE ticket_number = ? ORDER BY id',
+      )
+      .all(number) as {
+      id: number;
+      name: string;
+      size: number;
+      media_type: string;
+      sha256: string;
+      actor: string;
+      actor_label: string;
+      at: string;
+    }[];
     return rows.map((r) => ({
       id: r.id,
       ticketId: ticketIdOf(number),
@@ -932,30 +949,59 @@ export class Tickets {
    * Attaches a file: whoever may comment on the ticket may attach (FR29, FR9b), any type. The name loses its folders and control characters;
    * the type is kept only when it looks like one (else application/octet-stream). Limits: TICKET_ATTACHMENT_LIMITS. One timeline entry.
    */
-  attach(caller: Caller, id: string, file: { name: unknown; mediaType?: unknown; bytes: Buffer }, opts: { sessionId?: string | null } = {}): TicketAttachment {
+  attach(
+    caller: Caller,
+    id: string,
+    file: { name: unknown; mediaType?: unknown; bytes: Buffer },
+    opts: { sessionId?: string | null } = {},
+  ): TicketAttachment {
     const row = this.#need(caller, id);
     const w = this.#writer(caller, opts.sessionId);
     const grant = this.#assertCanComment(caller, row, w);
-    if (isTicketClosed(row.status) && caller.kind === 'agent') throw new AppError('FORBIDDEN', `${ticketIdOf(row.number)} is closed. A person can reopen it.`);
+    if (isTicketClosed(row.status) && caller.kind === 'agent')
+      throw new AppError('FORBIDDEN', `${ticketIdOf(row.number)} is closed. A person can reopen it.`);
     const raw = typeof file.name === 'string' ? file.name : '';
-    const name = raw.split(/[\\/]/).pop()!.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, TICKET_ATTACHMENT_LIMITS.name);
-    if (!name || name === '.' || name === '..') throw new AppError('VALIDATION_FAILED', 'Give the file a name.', { details: { name: 'A file name, without folders.' } });
-    if (!file.bytes.length) throw new AppError('VALIDATION_FAILED', 'The file is empty.', { details: { file: 'Attach a file with content.' } });
+    const name = raw
+      .split(/[\\/]/)
+      .pop()!
+      .replace(/[\u0000-\u001f\u007f]/g, '')
+      .trim()
+      .slice(0, TICKET_ATTACHMENT_LIMITS.name);
+    if (!name || name === '.' || name === '..')
+      throw new AppError('VALIDATION_FAILED', 'Give the file a name.', { details: { name: 'A file name, without folders.' } });
+    if (!file.bytes.length)
+      throw new AppError('VALIDATION_FAILED', 'The file is empty.', { details: { file: 'Attach a file with content.' } });
     if (file.bytes.length > TICKET_ATTACHMENT_LIMITS.maxBytes)
-      throw new AppError('PAYLOAD_TOO_LARGE', `The file is larger than ${TICKET_ATTACHMENT_LIMITS.maxBytes / 1024 / 1024} MB.`, { details: { file: 'Too large.' } });
-    const count = (this.#db.prepare('SELECT count(*) AS n FROM ticket_attachments WHERE ticket_number = ?').get(row.number) as { n: number }).n;
-    if (count >= TICKET_ATTACHMENT_LIMITS.perTicket) throw new AppError('CONFLICT', `${ticketIdOf(row.number)} already has ${TICKET_ATTACHMENT_LIMITS.perTicket} files. Remove one first.`);
+      throw new AppError('PAYLOAD_TOO_LARGE', `The file is larger than ${TICKET_ATTACHMENT_LIMITS.maxBytes / 1024 / 1024} MB.`, {
+        details: { file: 'Too large.' },
+      });
+    const count = (
+      this.#db.prepare('SELECT count(*) AS n FROM ticket_attachments WHERE ticket_number = ?').get(row.number) as { n: number }
+    ).n;
+    if (count >= TICKET_ATTACHMENT_LIMITS.perTicket)
+      throw new AppError(
+        'CONFLICT',
+        `${ticketIdOf(row.number)} already has ${TICKET_ATTACHMENT_LIMITS.perTicket} files. Remove one first.`,
+      );
     const type = typeof file.mediaType === 'string' ? file.mediaType.split(';')[0]!.trim().toLowerCase() : '';
     const mediaType = /^[a-z0-9][a-z0-9!#$&^_.+-]{0,63}\/[a-z0-9][a-z0-9!#$&^_.+-]{0,126}$/.test(type) ? type : 'application/octet-stream';
     const sha256 = putTicketFile(this.store.dataDir, file.bytes);
     const at = this.#now().toISOString();
     const attachmentId = this.#tx(() => {
       this.#db
-        .prepare('INSERT INTO ticket_attachments (ticket_number, name, size, media_type, sha256, actor, actor_label, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+        .prepare(
+          'INSERT INTO ticket_attachments (ticket_number, name, size, media_type, sha256, actor, actor_label, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        )
         .run(row.number, name, file.bytes.length, mediaType, sha256, w.actor, w.label, at);
       const newId = Number((this.#db.prepare('SELECT last_insert_rowid() AS id').get() as { id: number }).id);
       this.#db.prepare('UPDATE tickets SET updated_at = ? WHERE number = ?').run(at, row.number);
-      this.#addEvent(row.number, 'attachment', w, null, { attachmentId: newId, name, size: file.bytes.length, mediaType, ...(w.session ? { session: w.session.id } : {}) });
+      this.#addEvent(row.number, 'attachment', w, null, {
+        attachmentId: newId,
+        name,
+        size: file.bytes.length,
+        mediaType,
+        ...(w.session ? { session: w.session.id } : {}),
+      });
       return newId;
     });
     this.#auditForEnded(grant.ended, w, row, 'comment');
@@ -979,12 +1025,19 @@ export class Tickets {
     const w = this.#writer(caller, opts.sessionId);
     const attachment = this.#attachments(row.number).find((a) => a.id === attachmentId);
     if (!attachment) throw new AppError('NOT_FOUND', `${ticketIdOf(row.number)} has no file ${attachmentId}.`);
-    if (caller.kind === 'agent' && attachment.actor !== w.actor) throw new AppError('FORBIDDEN', 'Only a person or the session that attached a file can remove it.');
+    if (caller.kind === 'agent' && attachment.actor !== w.actor)
+      throw new AppError('FORBIDDEN', 'Only a person or the session that attached a file can remove it.');
     if (caller.kind === 'token') this.#assertWrites(caller);
     this.#tx(() => {
       this.#db.prepare('DELETE FROM ticket_attachments WHERE id = ?').run(attachmentId);
       this.#db.prepare('UPDATE tickets SET updated_at = ? WHERE number = ?').run(this.#now().toISOString(), row.number);
-      this.#addEvent(row.number, 'attachment', w, null, { attachmentId, name: attachment.name, size: attachment.size, mediaType: attachment.mediaType, removed: true });
+      this.#addEvent(row.number, 'attachment', w, null, {
+        attachmentId,
+        name: attachment.name,
+        size: attachment.size,
+        mediaType: attachment.mediaType,
+        removed: true,
+      });
     });
     const still = this.#db.prepare('SELECT 1 FROM ticket_attachments WHERE sha256 = ? LIMIT 1').get(attachment.sha256);
     if (!still) removeTicketFile(this.store.dataDir, attachment.sha256);
