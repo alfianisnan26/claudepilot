@@ -118,7 +118,7 @@ export function ShareSessionDialog({ sessionId, bypass, open, onClose }: { sessi
                 <button type="button" onClick={() => edit(s)} className="press flex min-h-11 min-w-0 flex-1 flex-col items-start justify-center text-left" aria-label={`Change ${s.subjectName}`}>
                   <span className="flex w-full min-w-0 items-center gap-1.5 text-sm font-medium">
                     {s.subject.kind === 'team' && <Users className="size-4 shrink-0 text-muted" aria-hidden="true" />}
-                    <span className="truncate">{s.subjectName}</span>
+                    <span className="min-w-0 [overflow-wrap:anywhere]">{s.subjectName}</span>
                   </span>
                   <span className="flex flex-wrap items-center gap-1 pt-0.5">
                     {s.caps.map((c) => (

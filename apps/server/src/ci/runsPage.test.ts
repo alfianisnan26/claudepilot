@@ -9,6 +9,7 @@ import { Hono } from 'hono';
 import { peekCursor } from '../store/keyset.js';
 import { registerCiAuthz } from './authz.js';
 import { createCiRoutes } from './routes.js';
+import { CiStore } from './store.js';
 import { harness, remote, WS, type H } from './testkit.js';
 
 const user = (id: string): Actor => ({ kind: 'user', userId: id, loginSessionId: 'l1', via: 'ui' });
@@ -199,6 +200,43 @@ test('authz: a run the caller may not view is in no page, no count and no cursor
     assert.equal(mine.size + hidden.size, 12);
     const b = await t.page('b');
     assert.deepEqual([b.items.length, b.total, b.active], [0, 0, 0], 'B sees nothing and counts nothing');
+  } finally {
+    t.h.done();
+  }
+});
+
+// QA 9691 gap 2: the scan bound (SCAN_FACTOR x limit rows read per request, however many `keep` hides) and the cursor it leaves.
+// 51 runs, the caller may see only the 3 oldest bulk ones: with limit 2 one request reads 20 rows, shows none and must hand back a cursor
+// resting on the 20th row scanned. Raise the bound (`limit * 1000`) and the first request reads everything: next is null, the check on the 20th
+// row goes red. Drop the resume (`resume = null`) and next is null at the bound: the walk ends with nothing shown.
+test('scan bound: a request reads at most 10 x limit rows, and ends on a cursor that resumes after the last row scanned', async () => {
+  const t = await build();
+  try {
+    await seed(t.h, 50);
+    const order = (t.h.store.db!.prepare('SELECT id FROM ci_runs ORDER BY created_at DESC, id DESC').all() as { id: string }[]).map(
+      (r) => r.id,
+    );
+    assert.equal(order.length, 51);
+    const visible = new Set(bulk(t.h).slice(-3));
+    const keep = (r: { id: string }) => visible.has(r.id);
+    const cs = new CiStore(t.h.store);
+    const scope = 'test.scan';
+    const first = cs.listRunsPage({}, { scope, limit: 2, keep });
+    assert.equal(first.rows.length, 0, 'nothing of the first 20 rows is the caller’s');
+    assert.ok(first.next, 'the bound ended the page: a cursor to go on from, not null');
+    assert.equal(peekCursor(first.next!).id, order[19], 'it rests on the 20th row scanned, not later');
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    let pages = 0;
+    for (let n = 0; n < 20; n++) {
+      const p = cs.listRunsPage({}, { scope, limit: 2, keep, ...(cursor ? { cursor } : {}) });
+      pages++;
+      seen.push(...p.rows.map((r) => r.id));
+      if (!p.next) break;
+      cursor = p.next;
+    }
+    assert.deepEqual(seen, bulk(t.h).slice(-3), 'the walk still reaches every run the caller may see');
+    assert.ok(pages >= 3, 'it took several bounded requests');
   } finally {
     t.h.done();
   }

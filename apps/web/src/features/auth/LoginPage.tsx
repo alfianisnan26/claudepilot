@@ -117,7 +117,7 @@ export function LoginPage() {
     else void signIn(code);
   };
 
-  const field = 'h-12 w-full rounded-2xl border border-line bg-surface px-4 text-[15px] outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-60';
+  const field = 'h-12 w-full rounded-2xl border border-line bg-surface px-4 text-[15px] outline-hidden focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-60';
 
   return (
     <AuthLayout title="Sign in">

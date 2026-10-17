@@ -4,7 +4,7 @@ import { useState, type FormEvent } from 'react';
 import { InfoTip } from '@/components/InfoTip';
 import { api, errorText } from '@/lib/api';
 
-const field = 'h-12 w-full rounded-2xl border border-line bg-surface px-4 text-[15px] outline-none focus-visible:ring-2 focus-visible:ring-accent';
+const field = 'h-12 w-full rounded-2xl border border-line bg-surface px-4 text-[15px] outline-hidden focus-visible:ring-2 focus-visible:ring-accent';
 
 /** Change your own password (owner, 2026-10-17, gap 3): the current one, then the new one; your other devices are signed out. */
 export function ChangePasswordDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
