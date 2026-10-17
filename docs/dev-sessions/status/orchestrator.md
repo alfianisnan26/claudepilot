@@ -12,16 +12,17 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - BATCH 30 premerge-b30 b9781ad6 (wip/main-b9781ad): T-772 S2f, T-736 S3g, T-612 S1, T-868 S1-S3, T-436 S1+S2 (deploy note),
   T-379 S2, format fix 787932e2, integration (T-924), T-860 S2c a87d00b8 (PWG 9638), T-382 S2-S4 (PWG 9691; S5 fup).
   Resolution trace T-595 9742. QC run 4 on e0f7a72d: tests ok, format 65 files + lint 3 -> lead format commits (Jobs b1a39c2d,
-  ec182931; token-equal check job-out/fmtcheck.mjs) + integration (master line 85) = e4e52fa0 (trace T-595 9916). QUICK-CHECK
-  (job-out/qc-e4e52fa.log) -> gate-job -> land -> T-731. Bg Jobs: timeout 7200000.
+  ec182931; token-equal check job-out/fmtcheck.mjs) + integration (master line 85) = e4e52fa0 (trace T-595 9916). QC on e4e52fa0:
+  tests + lint ok, format red on knowledge/service.ts. Merging integration 94105066 conflicts in quick-check.sh (T-612 S1 vs T-960):
+  merge ABORTED; T-612 S1b union on 2a0edbd8 (c10001) -> take its file whole, format service.ts, QC, gate, land, T-731.
 - T-938 lane a3554d40: 4th Job (3 lost: Pending, bg limit, session end).
 - URGENT T-948 S1 port proxy (owner waiting; coordinator 9810): BE INFRA 2 2a0edbd8 OPUS (why: security), ticket/T-948-port-proxy
   from d741a52d; contract first (~11:30). Subdomain app-<ws>-<port>.ai.isnan.me + one-time code + frame-ancestors (9811).
   S1 DONE 603c5bc3 (9929, Job rc 0, 167 tests) -> QA c691df71 OPUS (why: security); author adds the flush test (mutant 3). S2 FRONTEND 3753d3c2 ticket/T-948-app-browser 084c49d6 + docs 84fb5d15: QA d9f18599 PWG 9902
   -> FE fixes 4 small findings + tests (D-65), QA re-checks. ux-checker after S1 merges. ETA 9815: QA ~14:00, gated ~15:00.
   Paused for it: T-921 0dfff348, T-379 S3 9dfecffb (lanes ended; resume after, QA re-runs Jobs).
-- T-425 S2b DONE 357ff021 (9904, Job rc 0, 4 mutants killed): Backend lane ended; QA be63acc8 (qa-t425-s2b). Backend respawns next.
-- T-436 S3 + T-772 S2g DONE fe676258 (9932/9933; Job rc 0): Impl 2 ended; QA by d9f18599 while T-948 S2 fixes build.
+- T-425 S2b 357ff021: QA be63acc8 PWG 9970 (mutant B survives) -> test fix on next free Backend slot; same QA re-checks (T-595 10014).
+- T-436 S3 + T-772 S2g fe676258: QA PWG (T-595 10003) -> batch 31; permissions class: coordinator live check before close (D-81).
 - T-294 PWG 9858: crew_post/read + idle-child reuse not built -> slice after T-948 (T-595 9871).
 - After T-948, planned together: T-968 General Manager (D-80, plan 9969; S0 scribe + S2 MCP tools incl. T-965 first),
   T-971 self-healing (H1+H2 first; charter-wall conflict on healer landing rule lines FOR THE COORDINATOR 9988).
