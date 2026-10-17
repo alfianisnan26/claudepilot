@@ -246,7 +246,12 @@ test('T-969: a lane spawned as perf-tester or ux-checker records a QA verdict; i
     assert.equal(record(r, 'perf', 'qa', 'pass', A).actor, 'session:perf');
     assert.equal(record(r, 'ux', 'qa', 'fail', A).actor, 'session:ux');
     const refused = (who: string, why: RegExp) => assert.throws(() => record(r, who, 'qa', 'pass', A), (e: any) => e.code === 'FORBIDDEN' && why.test(e.message), who);
-    refused('impl', /author/); // the builder of the work
+    refused('impl', /Only a QA or review/); // the builder of the work: an implementer role
+    // The builder of the sha named like a tester is still the author: it held the ticket.
+    r.sessions.add({ id: 'perfHeld', workspaceId: WS, agent: 'perf-tester' });
+    r.tickets.update(UI, r.id, { assignee: { kind: 'session', sessionId: 'perfHeld' } });
+    r.tickets.update(UI, r.id, { assignee: { kind: 'session', sessionId: 'impl' } });
+    refused('perfHeld', /author/);
     r.sessions.add({ id: 'writer', workspaceId: WS, agent: 'test-writer', parentId: 'lead' });
     refused('writer', /Only a QA or review/); // an implementer role with a testing word in it
     r.sessions.add({ id: 'perfKid', workspaceId: WS, agent: 'perf-tester', parentId: 'impl' });
