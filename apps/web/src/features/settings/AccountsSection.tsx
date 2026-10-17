@@ -4,6 +4,7 @@ import { KeyRound, Plus, Trash2, UserRound } from 'lucide-react';
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { Card } from '@/components/Card';
 import { InfoTip } from '@/components/InfoTip';
+import { ChangePasswordDialog } from '@/features/auth/ChangePasswordDialog';
 import { api, errorText } from '@/lib/api';
 import { timeAgo } from '@/lib/format';
 
@@ -21,6 +22,8 @@ export function AccountsSection() {
   const [removing, setRemoving] = useState<PortalUser | null>(null);
   const [form, setForm] = useState<{ email: string; displayName: string; password: string; role: 'admin' | 'member' }>({ email: '', displayName: '', password: '', role: 'member' });
   const [busy, setBusy] = useState(false);
+  const [meId, setMeId] = useState<string | null>(null);
+  const [changingMine, setChangingMine] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -31,6 +34,9 @@ export function AccountsSection() {
     }
   }, [toast]);
   useEffect(() => void load(), [load]);
+  useEffect(() => {
+    void api.me().then((m) => setMeId(m.kind === 'account' ? m.user.id : null), () => undefined);
+  }, []);
 
   const save = async (e: FormEvent) => {
     e.preventDefault();
@@ -105,7 +111,10 @@ export function AccountsSection() {
               <li key={u.id} className="flex min-h-14 items-center gap-2 px-4 py-2 sm:px-5">
                 <UserRound className="size-4 shrink-0 text-muted" aria-hidden="true" />
                 <span className="min-w-0 flex-1">
-                  <span className="block font-semibold [overflow-wrap:anywhere]">{u.displayName}</span>
+                  <span className="block font-semibold [overflow-wrap:anywhere]">
+                    {u.displayName}
+                    {u.id === meId && <span className="ml-1.5 text-[12px] font-medium text-muted">(you)</span>}
+                  </span>
                   <span className="block text-[12.5px] text-muted [overflow-wrap:anywhere]">
                     {u.email}
                     {u.lastLoginAt ? ` · signed in ${timeAgo(u.lastLoginAt)}` : ' · never signed in'}
@@ -122,7 +131,7 @@ export function AccountsSection() {
                 <button type="button" onClick={() => void toggle(u)} className="press min-h-11 shrink-0 rounded-full px-2" aria-label={u.state === 'active' ? `Disable ${u.email}` : `Enable ${u.email}`}>
                   <Badge tone={u.state === 'active' ? 'success' : 'neutral'}>{u.state === 'active' ? 'Active' : 'Off'}</Badge>
                 </button>
-                <Button variant="ghost" size="icon" aria-label={`Change the password of ${u.email}`} onClick={() => (setResetting(u), setProblem(null))}>
+                <Button variant="ghost" size="icon" aria-label={`Change the password of ${u.email}`} onClick={() => (u.id === meId ? setChangingMine(true) : (setResetting(u), setProblem(null)))}>
                   <KeyRound className="size-[18px]" />
                 </Button>
                 <Button variant="ghost" size="icon" aria-label={`Remove ${u.email}`} onClick={() => setRemoving(u)}>
@@ -183,6 +192,7 @@ export function AccountsSection() {
           </Button>
         </form>
       </Dialog>
+      <ChangePasswordDialog open={changingMine} onClose={() => setChangingMine(false)} />
       <ConfirmDialog
         open={!!removing}
         title="Remove account?"

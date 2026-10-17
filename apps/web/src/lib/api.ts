@@ -49,6 +49,7 @@ import {
   PORTAL_USER_API,
   type CreatePortalUserRequest,
   type PortalUser,
+  type SignedInAs,
   type UpdatePortalUserRequest,
   type SystemStatus,
   type Workspace,
@@ -111,6 +112,9 @@ export const api = {
   createUser: (body: CreatePortalUserRequest) => request<PortalUser>('POST', PORTAL_USER_API.list, body),
   updateUser: (id: string, body: UpdatePortalUserRequest) => request<PortalUser>('PATCH', PORTAL_USER_API.one(id), body),
   removeUser: (id: string) => request<{ removed: true }>('DELETE', PORTAL_USER_API.one(id)),
+  /** Your own password (an account session, a member too): the other sessions of the account end. */
+  changeMyPassword: (current: string, next: string) => request<{ ok: true }>('POST', PORTAL_USER_API.myPassword, { current, next }),
+  me: () => request<SignedInAs>('GET', PORTAL_USER_API.me),
   logout: () => request<{ ok: true }>('POST', API.logout),
   adminState: () => request<AdminState>('GET', API.adminState),
   rotateCode: (body: RotateCodeRequest = {}) => request<AdminState>('POST', API.rotateCode, body),

@@ -44,7 +44,7 @@ test('code sign-in creates an email account; the email signs in; wrong cases are
     const byCode = await call('POST', '/api/login', { code: CODE });
     assert.equal(byCode.status, 200, 'the server code still signs in: ' + (await byCode.clone().text()));
     const admin = cookieOf(byCode)!;
-    const created = await call('POST', '/api/admin/users', { email: 'Owner@Example.com', displayName: 'Owner', password: PASSWORD }, admin);
+    const created = await call('POST', '/api/admin/users', { email: 'Owner@Example.com', displayName: 'Owner', password: PASSWORD, role: 'admin' }, admin);
     assert.equal(created.status, 201, await created.clone().text());
     const user = ((await created.json()) as { data: { id: string; email: string } }).data;
     assert.equal(user.email, 'owner@example.com');
@@ -101,6 +101,48 @@ test('MU2 S1a: a member account signs in but is refused the admin app (403) and 
     assert.equal((await call('PATCH', `/api/admin/users/${m.id}`, { state: 'disabled' }, admin)).status, 200);
     assert.equal(portal.anySession(token), undefined, 'disabled: its session ends');
     assert.equal((await call('GET', '/api/me', undefined, member)).status, 401);
+  } finally {
+    done();
+  }
+});
+
+test('review 2026-10-17: an account sign-in does not reset the server-code limiter; no role means member; a password reset or change ends the other sessions', async () => {
+  const { call, cookieOf, done, portal } = await build();
+  try {
+    const admin = cookieOf(await call('POST', '/api/login', { code: CODE }))!;
+    const u = ((await (await call('POST', '/api/admin/users', { email: 'nobody-said@example.com', password: PASSWORD }, admin)).json()) as { data: { id: string; role: string } }).data;
+    assert.equal(u.role, 'member', 'no role given: a member (default deny), never an admin');
+
+    // #1: wrong codes, then a GOOD email sign-in from the same address, then more wrong codes: the code limiter still blocks.
+    let limited = false;
+    for (let i = 0; i < 30 && !limited; i++) {
+      const wrong = await call('POST', '/api/login', { code: 'ZZZZZZZZ' });
+      if (wrong.status === 429) limited = true;
+      if (i === 3) assert.equal((await call('POST', '/api/login', { email: 'nobody-said@example.com', password: PASSWORD })).status, 200);
+    }
+    assert.ok(limited, 'the server-code limiter still locks after an account sign-in in between');
+
+    // #3: an admin's password reset ends the account's sessions.
+    const two = await build();
+    try {
+      const adm = two.cookieOf(await two.call('POST', '/api/login', { code: CODE }))!;
+      const acc = ((await (await two.call('POST', '/api/admin/users', { email: 'a2@example.com', password: PASSWORD, role: 'admin' }, adm)).json()) as { data: { id: string } }).data;
+      const s1 = two.cookieOf(await two.call('POST', '/api/login', { email: 'a2@example.com', password: PASSWORD }))!;
+      const s2 = two.cookieOf(await two.call('POST', '/api/login', { email: 'a2@example.com', password: PASSWORD }))!;
+      const next = ['brand', 'new', 'long', 'enough', 'phrase'].join('-');
+      // Gap 3: change your own password: the current one is needed; the OTHER sessions end, this one stays.
+      assert.equal((await two.call('POST', '/api/me/password', { current: 'not-it-at-all-really', next }, s1)).status, 401);
+      assert.equal((await two.call('POST', '/api/me/password', { current: PASSWORD, next }, s1)).status, 200);
+      assert.ok(two.portal.session(s1.split('=')[1]), 'the session that changed it stays');
+      assert.equal(two.portal.anySession(s2.split('=')[1]), undefined, 'the other session ended');
+      assert.equal((await two.call('POST', '/api/login', { email: 'a2@example.com', password: PASSWORD })).status, 401, 'the old password is gone');
+      // An admin's reset ends every session of the account.
+      assert.equal((await two.call('PATCH', `/api/admin/users/${acc.id}`, { password: PASSWORD }, adm)).status, 200);
+      assert.equal(two.portal.anySession(s1.split('=')[1]), undefined, 'reset by an admin: its sessions end');
+    } finally {
+      two.done();
+    }
+    assert.ok(portal);
   } finally {
     done();
   }

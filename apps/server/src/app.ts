@@ -21,6 +21,8 @@ import {
   type EndpointRequest,
   type LoginRequest,
   type CreatePortalUserRequest,
+  type ChangeMyPasswordRequest,
+  normalizeEmail,
   type SignedInAs,
   PORTAL_USER_API,
   type UpdatePortalUserRequest,
@@ -43,6 +45,7 @@ import { Hono, type Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { bodyLimit } from 'hono/body-limit';
 import { PortalUsers } from './identity/users.js';
+import { fingerprint } from './identity/throttle.js';
 import { csrf } from 'hono/csrf';
 import { createMiddleware } from 'hono/factory';
 import { HTTPException } from 'hono/http-exception';
@@ -221,13 +224,31 @@ export function createApp(
   const app = new Hono<Env>();
   const limiter = new RateLimiter(config.loginLimit.attempts, config.loginLimit.windowMs);
   // T-118 MU1-min: email accounts beside the server code (identity/users.ts).
-  const users = new PortalUsers(() => (store.writable ? store.db : null));
+  // Review #10: reads (roleOf, verify) use the read handle, so a frozen store does not end every account session; writes stay guarded.
+  const users = new PortalUsers(() => store.db, undefined, undefined, () => (store.writable ? store.db : null));
+  // Review #5: the attempt counters are swept once an hour.
+  const sweep = setInterval(() => {
+    try {
+      users.throttle.sweep();
+    } catch {
+      // the next hour tries again
+    }
+  }, 60 * 60_000);
+  sweep.unref?.();
+  /** Gap 2 (owner, 2026-10-17): account and sign-in events in the platform audit (no password, an unknown email only as a fingerprint). */
+  const audit = (kind: string, subject: string | null, detail: Record<string, unknown>, severity: 'info' | 'medium' = 'info') => {
+    try {
+      platform?.audit.record({ kind, actor: 'ui', userId: null, subject: subject ? `user:${subject}` : null, detail, severity });
+    } catch {
+      // the audit must never break a sign-in
+    }
+  };
   // MU2 S1a: an account's role is read on every use; a member's session is not a full one (portal.ts).
   portal.roleOf = (id) => {
     try {
-      return users.roleOf(id);
+      return store.db ? users.roleOf(id) : 'unavailable';
     } catch {
-      return null;
+      return 'unavailable';
     }
   };
   const { cookie, ttlMs } = config.session;
@@ -303,19 +324,31 @@ export function createApp(
     const key = clientKey(c);
     if (limiter.blocked(key)) throw new AppError('RATE_LIMITED', 'Too many tries. Wait a few minutes.');
     const { code, email, password } = await body<LoginRequest>(c);
+    // Review 2026-10-17 #4: sign-in off answers the same before any check, so a right password is not told apart from a wrong one.
+    if (!portal.enabled) throw new AppError('FORBIDDEN', 'Sign-in is turned off on this server.');
     let token: string;
-    try {
-      if (email !== undefined || password !== undefined) {
-        // T-118: an email account. Its own throttle (per email and per address) runs inside verify; a good one opens the same session.
+    if (email !== undefined || password !== undefined) {
+      // T-118: an email account. ITS OWN throttle (per email and per address, identity/throttle.ts) applies; the server-code limiter is
+      // neither counted nor reset here (review #1: an account holder could otherwise reset the code's limiter between guesses).
+      try {
         const user = await users.verify(email, password, key);
         token = portal.openSession(user.id);
+        audit('portal.signin', null, { method: 'email', userId: user.id, role: user.role });
         console.log(`[portal] signed in with an email account (${user.id}, ${user.role})`);
-      } else token = portal.signIn(typeof code === 'string' ? code : '');
-    } catch (e) {
-      if (isAppError(e) && e.is('UNAUTHORIZED')) limiter.fail(key);
-      throw e;
+      } catch (e) {
+        if (isAppError(e) && (e.is('UNAUTHORIZED') || e.is('LOCKED_OUT')))
+          audit('portal.signin_failed', null, { method: 'email', email: fingerprint(typeof email === 'string' ? normalizeEmail(email) : ''), code: e.code }, 'medium');
+        throw e;
+      }
+    } else {
+      try {
+        token = portal.signIn(typeof code === 'string' ? code : '');
+      } catch (e) {
+        if (isAppError(e) && e.is('UNAUTHORIZED')) limiter.fail(key);
+        throw e;
+      }
+      limiter.reset(key);
     }
-    limiter.reset(key);
     setCookie(c, cookie, token, {
       httpOnly: true,
       sameSite: 'Strict',
@@ -324,6 +357,22 @@ export function createApp(
     });
     // A member's sign-in answers no admin state (it holds the server code): the web reads /api/me and shows the member page.
     return c.json(success(portal.session(token) ? portal.adminState(token) : { member: true }));
+  });
+
+  // Gap 3 (owner, 2026-10-17): any account changes its own password with the current one (a member too); the other sessions of the
+  // account end, this one stays.
+  app.post(PORTAL_USER_API.myPassword, async (c) => {
+    const token = getCookie(c, cookie);
+    const s = portal.anySession(token);
+    if (!s || !token) throw new AppError('UNAUTHORIZED', 'Sign in again.');
+    if (!s.userId) throw new AppError('VALIDATION_FAILED', 'The server code has no password to change.');
+    const { current, next } = await body<ChangeMyPasswordRequest>(c);
+    const me = users.get(s.userId);
+    await users.verify(me.email, current, clientKey(c));
+    await users.update(s.userId, { password: next });
+    portal.revokeUser(s.userId, token);
+    audit('account.password_changed', s.userId, { by: 'self' });
+    return c.json(success({ ok: true }));
   });
 
   // MU2 S1a: who is signed in, answered to a member too (no code, no admin state).
@@ -379,10 +428,32 @@ export function createApp(
   admin.get('/state', state);
   // T-118 MU1-min: email accounts, managed by someone already signed in (the server code or another account).
   admin.get('/users', (c) => c.json(success(users.list())));
-  admin.post('/users', async (c) => c.json(success(await users.create(await body<CreatePortalUserRequest>(c), 'ui')), 201));
-  admin.patch('/users/:id', async (c) => c.json(success(await users.update(c.req.param('id'), await body<UpdatePortalUserRequest>(c)))));
+  admin.post('/users', async (c) => {
+    const u = await users.create(await body<CreatePortalUserRequest>(c), 'ui');
+    audit('account.created', u.id, { email: u.email, role: u.role });
+    return c.json(success(u), 201);
+  });
+  admin.patch('/users/:id', async (c) => {
+    const id = c.req.param('id');
+    const req = await body<UpdatePortalUserRequest>(c);
+    const before = users.get(id);
+    const u = await users.update(id, req);
+    // Review #3: a password reset or a disable ends the account's sessions now (and its sockets with them).
+    if (req.password !== undefined || u.state === 'disabled' || (before.role === 'admin' && u.role === 'member')) portal.revokeUser(id);
+    audit('account.updated', id, {
+      ...(req.role && req.role !== before.role ? { role: { from: before.role, to: u.role } } : {}),
+      ...(req.state && req.state !== before.state ? { state: { from: before.state, to: u.state } } : {}),
+      ...(req.password !== undefined ? { password: 'reset' } : {}),
+      ...(req.displayName !== undefined ? { name: true } : {}),
+    });
+    return c.json(success(u));
+  });
   admin.delete('/users/:id', (c) => {
-    users.remove(c.req.param('id'));
+    const id = c.req.param('id');
+    const before = users.get(id);
+    users.remove(id);
+    portal.revokeUser(id);
+    audit('account.removed', id, { email: before.email, role: before.role });
     return c.json(success({ removed: true }));
   });
   admin.post('/code', async (c) => {
