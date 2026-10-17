@@ -3,7 +3,7 @@ import { isCiActive, type CiRunPage, type CiRunSummary, type CiStatus } from '@p
 import { ChevronDown, ChevronsUp, CircleCheck, CircleX, List, LoaderCircle, Plus, Server, Workflow, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
-import { cursorExpired, keepsOlder } from '@/features/chat/listPaging';
+import { ListPager } from '@/features/chat/listPaging';
 import { timeAgo } from '@/lib/format';
 import { useLive } from '@/lib/live';
 import { ciApi } from './api';
@@ -29,10 +29,11 @@ export function RunsTab({ onNewRemote }: { onNewRemote: () => void }) {
   const repo = params.get('repo');
   const branch = params.get('branch');
   const [data, setData] = useState<CiRunPage | null>(null);
-  // Older pages loaded with "More" (D-58); they stay under a refreshed first page only while its last row did not move (keepsOlder).
-  const [older, setOlder] = useState<{ items: CiRunSummary[]; next: string | null } | null>(null);
+  // Older pages loaded with "More" (D-58): the ListPager keeps them under a refreshed first page only while its last row did not move, and
+  // refuses a page that lands after they were dropped. `data` still carries the first page's total and active counts.
+  const pager = useRef(new ListPager<CiRunSummary>());
+  const [, setTick] = useState(0);
   const [loadingMore, setLoadingMore] = useState(false);
-  const headNext = useRef<string | null | undefined>(undefined);
   const [repos, setRepos] = useState<{ id: string; name: string; workspaceId: string }[]>([]);
   const [failed, setFailed] = useState(false);
   const [now, setNow] = useState(Date.now());
@@ -55,8 +56,7 @@ export function RunsTab({ onNewRemote }: { onNewRemote: () => void }) {
     try {
       const [list, r] = await Promise.all([ciApi.runs({ status, repo: repo ?? undefined, branch: branch ?? undefined, limit: 100 }), ciApi.repos()]);
       if (mine !== seq.current) return;
-      if (!keepsOlder(headNext.current, list.next)) setOlder(null);
-      headNext.current = list.next;
+      pager.current.applyHead(list);
       setData(list);
       setRepos(r.map((x) => ({ id: x.id, name: x.name, workspaceId: x.workspaceId })));
       setFailed(false);
@@ -66,32 +66,33 @@ export function RunsTab({ onNewRemote }: { onNewRemote: () => void }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scope, repo, branch]);
   useEffect(() => {
-    headNext.current = undefined;
-    setOlder(null);
+    pager.current.restart();
     void load();
   }, [load]);
   useLive('ci', () => void load());
 
-  const after = older ? older.next : (data?.next ?? null);
+  const after = pager.current.next;
   const loadMore = async () => {
-    if (!after || loadingMore) return;
+    const ticket = pager.current.beginMore();
+    if (!ticket || loadingMore) return;
     setLoadingMore(true);
     try {
-      const page = await ciApi.runs({ status, repo: repo ?? undefined, branch: branch ?? undefined, limit: 100, cursor: after });
-      setOlder((o) => ({ items: [...(o?.items ?? []), ...page.items], next: page.next }));
+      const page = await ciApi.runs({ status, repo: repo ?? undefined, branch: branch ?? undefined, limit: 100, cursor: ticket.cursor });
+      // A page that lands after the older pages were dropped (a poll moved the seam, a filter changed) is stale: finishMore refuses it.
+      if (pager.current.finishMore(ticket, page)) setTick((n) => n + 1);
     } catch (e) {
+      const what = pager.current.failMore(ticket, e);
       // A refused cursor (it expired with a server restart): start again from the first page.
-      if (cursorExpired(e)) {
-        headNext.current = undefined;
-        setOlder(null);
+      if (what === 'restart') {
+        pager.current.restart();
         void load();
-      } else toast('Could not load more');
+      } else if (what === 'retry') toast('Could not load more');
     } finally {
       setLoadingMore(false);
     }
   };
 
-  const rows = useMemo(() => [...(data?.items ?? []), ...(older?.items ?? [])], [data, older]);
+  const rows = pager.current.items ?? [];
   const anyActive = rows.some((r) => isCiActive(r.status));
   useEffect(() => {
     if (!anyActive) return;

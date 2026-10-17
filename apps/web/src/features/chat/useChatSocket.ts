@@ -16,14 +16,13 @@ import {
   type ChatSession,
   type ChatSubscribe,
   type ChatTask,
-  type CursorPage,
 } from '@portal/contracts';
 import { startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { chatApi } from './api';
 import { foldBtw, refusedBtw, type BtwState } from './btw/state';
 import { appendLive, EMPTY_HISTORY, expand, olderDone, olderFailed, olderStart, seed, seedAll, type History } from './history';
 import { createDeltaBatcher, foldLive, NO_LIVE, settleLive, type AgentLive, type LiveState } from './motion/deltas';
-import { cursorExpired, keepsOlder } from './listPaging';
+import { ListPager } from './listPaging';
 import { sharedRead } from './sharedRead';
 
 /** The newest page, one read in flight per session: a remounted effect (StrictMode in dev) joins it instead of reading again. */
@@ -551,19 +550,20 @@ const LIST_PAGE = 50;
  * from page 1; a failed poll keeps the last list on screen.
  */
 export function useChatList(): ChatListApi {
-  const [head, setHead] = useState<CursorPage<ChatSession> | null>(null);
-  const [older, setOlder] = useState<{ items: ChatSession[]; next: string | null } | null>(null);
+  // The paging rules live in ListPager (listPaging.ts, tested); the hook holds it and re-renders when it changes.
+  const pager = useRef(new ListPager<ChatSession>());
+  const [, setTick] = useState(0);
+  const render = () => setTick((n) => n + 1);
   const [failed, setFailed] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
 
-  const headNext = useRef<string | null | undefined>(undefined);
   const reload = useCallback(async () => {
     setFailed(false);
     try {
       const page = await chatApi.list({ limit: LIST_PAGE });
-      headNext.current = page.next;
-      setHead(page);
-      setOlder(null);
+      pager.current.restart();
+      pager.current.applyHead(page);
+      setTick((n) => n + 1);
     } catch {
       setFailed(true);
     }
@@ -576,9 +576,8 @@ export function useChatList(): ChatListApi {
       () =>
         void chatApi.list({ limit: LIST_PAGE }).then(
           (page) => {
-            if (!keepsOlder(headNext.current, page.next)) setOlder(null);
-            headNext.current = page.next;
-            setHead(page);
+            pager.current.applyHead(page);
+            setTick((n) => n + 1);
           },
           () => undefined,
         ),
@@ -587,26 +586,24 @@ export function useChatList(): ChatListApi {
     return () => clearInterval(t);
   }, [reload]);
 
-  const next = older ? older.next : (head?.next ?? null);
   const loadMore = useCallback(async () => {
-    if (!next) return;
+    const ticket = pager.current.beginMore();
+    if (!ticket) return;
     setLoadingMore(true);
     try {
-      const page = await chatApi.list({ limit: LIST_PAGE, cursor: next });
-      setOlder((o) => ({ items: [...(o?.items ?? []), ...page.items], next: page.next }));
+      const page = await chatApi.list({ limit: LIST_PAGE, cursor: ticket.cursor });
+      // A page that lands after a poll dropped the older pages is stale: finishMore refuses it.
+      if (pager.current.finishMore(ticket, page)) render();
     } catch (e) {
       // A refused cursor (a restart ended it) never works again: start over from page 1. Any other failure leaves the button, and a tap tries again.
-      if (cursorExpired(e)) await reload();
+      if (pager.current.failMore(ticket, e) === 'restart') await reload();
     } finally {
       setLoadingMore(false);
     }
-  }, [next, reload]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reload]);
 
-  const sessions = useMemo(() => {
-    if (!head) return null;
-    const seen = new Set(head.items.map((s) => s.id));
-    return [...head.items, ...(older?.items ?? []).filter((s) => !seen.has(s.id))];
-  }, [head, older]);
+  const sessions = pager.current.items;
 
-  return { sessions, failed, reload, hasMore: next !== null, loadingMore, loadMore };
+  return { sessions, failed, reload, hasMore: pager.current.next !== null, loadingMore, loadMore };
 }
