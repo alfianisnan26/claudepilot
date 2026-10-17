@@ -9,25 +9,18 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - BATCH 29 ON INTEGRATION edde2073 (gate edde207 GREEN, suite 741s; quick-check 11 files green; first gate 4258f72 green, re-gated
   after 44fba442 T-623 browser image): T-524 S3c+T-733 S5, T-881 S1b, T-416 S2c (lead's mechanical controller.ts resolution
   67198848, APPROVE 9219), T-382 S1, T-781 S8c, T-675 R2c+R2d. Coordinator told T-731 9271.
-## IN FLIGHT (6 of 6, D-71; all respawned 00:55 after the 00:50 restart, sonnet, spawned with their ticket so they can post)
-- BATCH 30 premerge-b30 74147c99 (+T-868 S1-S3 0a818680, QA PASS 9381, lead read shots-in.sh): T-772 S2f b36f6a54 (QA UI PWG 9301; S2g follow-up), T-736 S3g 4eb08f4e (9008), T-612 S1
-  a5207db0 (PWG 9280). QUICK-CHECK job-09bf4786 FAILED: format only (rtkHistoryGuard.test.ts, focusRing.test.ts; T-612 S1
-  made prettier real); lint + 3 tests ok. Fix -> BE Infra (FORMAT DONE <sha>), lead merges it in, re-quick-check, gate.
-- BE INFRA 0f151084 T-612: ticket/T-612-s2 156a15b7: format the 2 b30 files ONLY, then respawn on T-921 (incident, plan 9377;
-  +self-heal 9391; order T-860 > T-921 > T-923 health-gated pool rollback > T-911 > T-612 S2 16 lint errors 9280).
-- BACKEND b367d0dd T-382 S4 (ci/runs, chat/audit, lab/slices) from 0cdfa044 + QA gaps: hook tests, stale loadMore, scan bound,
-  committed listPage.bench.ts. T-382 S2+S3 fdb33268 = PWG 9369; merges WITH S4. Count leak -> T-922 (before multi-user).
-- IMPL 2 0ce74ec7 (two.claude, T-436): ticket/T-436-s3 from b30 66910f56: T-436 S3 (wiring + toast tests) + T-772 S2g (focusRing
-  comma/media cases). QA BE A ended 01:45 after T-436 S1+S2 PWG 9383 (slot -> Impl 2).
-- QA BE B a8096dc9 (T-382): QA T-860 S2c e78d727b (urgent, 9331; moved from QA BE A).
-- IMPL c68578a8 (sekar, T-425): T-425 S2 on ticket/T-425-slotwait c22a76b3: QA UI FAIL 9359 (mutant "no failed mark" on
-  refused wake survives; two detached sends not ordered) -> test + per-session delivery chain; Job 3424b8b5 queued (ddc3d4ba).
-- T-924 DONE 25653dc0 (BE Infra 2 4001099e ended; lead read diff OK). QA BE C 715b517b (regitha) verifying; quick-check running
-  (bg bkinqkosb). Then gate ALONE, tell coordinator T-924 + T-731. Freed lane after QA -> BE Infra 2 respawn on T-938.
-- QA PERF 98e910e1 ENDED 01:35 (idle till S4; slot -> T-924). S8c PASS 56/56 (9372). Respawn for T-382 S4 bench.
-- Coordinator also gave BE Infra T-653 (TLS to exchange APIs) and T-654 (no pip in pod), normal, after T-911.
-- QA UI 11c8c19a ENDED 01:2x (queue empty after its T-425 FAIL; slot -> Impl). T-425 badge 390/1280 not verified (no browser tool).
-- 01:00 Coordinator quota spread: next spawns on one.claude, two.claude (sekar used by Impl).
+## IN FLIGHT (6 of 6, D-71; lanes respawned per ticket, D-78; sonnet)
+- T-924 GATE ALONE running: merge c7474004 (premerge-t924, wip/main-c747400; bg ba91nldwk). Quick-check a3cb8a9a green; QA PWG
+  9644 (mutants refused by the guard hook: not run). Green -> land, tell coordinator T-924 + T-731 (deploy at once).
+- BATCH 30 premerge-b30 25a1a36e (local): T-772 S2f, T-736 S3g, T-612 S1, T-868 S1-S3, T-436 S1+S2 (deploy note), T-379 S2
+  b9dd11fd, format fix 787932e2 (lead checked format-only). After T-924 lands: merge integration, + T-860 S2c e78d727b (PWG
+  9638; conflicts with T-924 in ruleGuard.ts), pack, quick-check, gate.
+- QA BE aca53d2d (regitha): T-382 S2-S4 0ad8db63 (57 files) incl. authz of CI runs page + listPage bench numbers.
+- BE INFRA 53c49384 (rossi): T-938 --pool-env names (exact line on ticket; blind review; coordinator lands).
+- BE INFRA 2 e0715d99 (hasyim): T-921 browser init EPERM + self-heal without headers (dev rig = coordinator's).
+- BACKEND 83bb50e6 (fadlilah): T-409 G3 supervisor adopts only its own chats.
+- IMPL 2 0ce74ec7 (two.claude): T-436 S3 + T-772 S2g, Job queued. IMPL c68578a8 (sekar): T-425 S2, Job queued.
+- Ended 02:3x between tickets (D-78): QA BE C, QA BE B, BE Infra 0f151084, Backend b367d0dd. New: T-939 job queue deadline.
 
 ## DECISIONS (binding)
 - 00:35 Coordinator: 2nd workspace RESTART 00:50 UTC (browser image t623-2026.10.16-1). All 6 lanes told: push WIP, no Job after
