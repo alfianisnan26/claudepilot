@@ -114,6 +114,6 @@ test('sequence guard: two quick opens, the last wins and the stale answer is dro
   // A stale answer while the latest is still loading changes nothing either.
   s = beginLoad(s, 1);
   const before = s;
-  assert.equal(setSrc(s, 1, second, 'https://app-x-3000.example.test/?code=old'), before);
+  assert.deepEqual(setSrc(s, 1, second, 'https://app-x-3000.example.test/?code=old'), before);
   assert.equal(seqOf(s, 99), null);
 });
