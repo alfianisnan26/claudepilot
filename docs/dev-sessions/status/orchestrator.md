@@ -5,10 +5,12 @@
 
 ## IN FLIGHT (6 of 6 workers, D-71; QA/review sonnet, D-63)
 - BATCH 31 RELEASED: c9cf3089 is in release bbca47f4 (portal 2026.10.17-11, merged d244f466). Close its tickets on the coordinator's live checks.
-- T-948 URGENT: gate b70da24 GREEN (claudepilot-gate-b70da24-35dc), but integration moved (949f37be) -> merged, pack fresh,
-  premerge/t948 867873e0 -> GATE RE-RUN (bzg8mw9fp) -> ff land -> visual -> coordinator deploys. QC: format only on 12 shared files (10722).
-- T-976 FIX 42772333 + doc 1b99696f (QA PWG 10664): re-merge the T-948 final head, land after T-948.
-- BATCH 32 ready: T-425 S2b, T-382 S6, T-294 FIX1 a30505db (PASS 10754), T-1049 6c30af2d (PWG 10771). Premerge after T-948.
+- T-948 RELEASED: 62a44a10 (gate claudepilot-gate-867873e-e9f4 green) is in portal 2026.10.17-12 (73ef53ca). Visual
+  off-state ok (10854); ON state = coordinator live check (10822). Close on that check.
+- T-976 1b99696f: auth conflict in app.ts with identity code (4 hunks) -> 2a0edbd8 rebases FIRST (10855; risk note FOR THE
+  COORDINATOR: shadowing nuisance until T-976 is live) -> QA delta + blind.
+- BATCH 32 premerge/b32 18d8e9d0 (+ integration 73ef53ca): T-382 S6, T-294 FIX1, T-1049. QC job ebc50c9c: lint ok, 4/4 tests ok,
+  format only (24 files, same rule as T-948 10722; T-595) -> GATE running (gate-18d8e9d.log) -> ff land. T-425 S2b CONFLICT (controller.ts send path) -> merge by 3753d3c2 after H2 -> QA delta -> b33.
 - T-1043 S0a FIX1 3c907e76 (badfb8da rc0, 274/274) -> delta c691df71 + blind d9f18599. S0b: lead merged S0a in, 789474e4
   (trace T-1043 10772) -> 76845676 continues. Denial = 404 (10605).
 - T-974 URGENT FIX 6abbf44f blind PWG 10774 (10 mutants killed) -> FIX2 `git remote set-url/add` + -c case row, a3554d40 first.
@@ -18,7 +20,8 @@
 - T-968 PRD PWG 10735 -> PRD fix 2a0edbd8 (decision 10779: cards for guarded classes) -> re-check d9f18599.
 - T-938 FIX2 73b8137c re-check PASS 10685 -> coordinator lands (T-938 10695).
 - T-971 H1 25d9d9b1 QA PWG 10737 -> FIX gaps 1+3 a3554d40 (10770) -> delta d9f18599 -> batch 32.
-- T-971 H2 S1 restart recovery -> 3753d3c2 (ticket/T-971-h2, decision T-971 10736: no auto Bypass).
+- T-971 H2 S1 DONE 11d5a5a1 (rc0 33/33) -> QA c691df71 + blind d9f18599 (no auto Bypass stands, 10736; contradiction noted).
+- T-425 S2b merge: lead pushed the conflicted merge ticket/T-425-s2b-merge ac45f735 (lane can't git merge) -> 3753d3c2 resolves.
 - T-565 S1 64f7c137 QA PWG (relay T-595 10773) -> FIX gaps 1+2 2a0edbd8 -> delta c691df71 -> blind (infra).
 - T-968 S0 PRD dce0e9f7 -> QA d9f18599 (doc). S2a 896daa98 (f6a9cc80 rc0, 105/105) -> QA + blind. S2b schedules -> 2a0edbd8.
 - T-975 eacf6074 QA FAIL 10793 (hand-off race: cancel-queued vs #toRunner; migration 787 clash with T-294) -> FIX a3554d40
@@ -53,7 +56,7 @@
 
 ## NEXT (in order, as slots free)
 1. Batch 32: T-425 S2b, T-382 S6, plus what passes (T-294, T-938, T-974, T-1049).
-2. T-948 land, then T-976. T-1043 S0b sockets, S0c MCP tools.
+2. T-976 after its rebase. T-1043 S0b sockets, S0c MCP tools.
 3. T-968 General Manager (S0 scribe, S2 MCP incl. T-965), T-971 H2, T-975.
 4. T-356, T-30 (XL), T-33, T-921, T-379 S3 (paused).
 
