@@ -54,7 +54,10 @@ export function RunsTab({ onNewRemote }: { onNewRemote: () => void }) {
   const load = useCallback(async () => {
     const mine = ++seq.current;
     try {
-      const [list, r] = await Promise.all([ciApi.runs({ status, repo: repo ?? undefined, branch: branch ?? undefined, limit: 100 }), ciApi.repos()]);
+      const [list, r] = await Promise.all([
+        ciApi.runs({ status, repo: repo ?? undefined, branch: branch ?? undefined, limit: 100 }),
+        ciApi.repos(),
+      ]);
       if (mine !== seq.current) return;
       pager.current.applyHead(list);
       setData(list);
@@ -63,7 +66,6 @@ export function RunsTab({ onNewRemote }: { onNewRemote: () => void }) {
     } catch {
       if (mine === seq.current) setFailed(true);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scope, repo, branch]);
   useEffect(() => {
     pager.current.restart();
@@ -116,7 +118,10 @@ export function RunsTab({ onNewRemote }: { onNewRemote: () => void }) {
               aria-label={label}
               title={label}
               onClick={() => set({ s: id === 'all' ? null : id })}
-              className={cn('press flex size-11 items-center justify-center sm:size-10 rounded-full', scope === id ? 'bg-primary text-primary-ink' : 'text-muted hover:text-ink')}
+              className={cn(
+                'press flex size-11 items-center justify-center sm:size-10 rounded-full',
+                scope === id ? 'bg-primary text-primary-ink' : 'text-muted hover:text-ink',
+              )}
             >
               <Icon className="size-[18px]" />
             </button>
@@ -128,7 +133,10 @@ export function RunsTab({ onNewRemote }: { onNewRemote: () => void }) {
             <select
               value={repo ?? ''}
               onChange={(e) => set({ repo: e.target.value || null })}
-              className={cn('h-11 appearance-none sm:h-9 rounded-full border bg-surface pr-8 pl-3.5 text-[16px] font-semibold focus:border-primary focus:outline-hidden focus-visible:ring-2 focus-visible:ring-accent sm:text-[13.5px]', repo ? 'border-primary text-ink' : 'border-line text-ink-soft')}
+              className={cn(
+                'h-11 appearance-none sm:h-9 rounded-full border bg-surface pr-8 pl-3.5 text-[16px] font-semibold focus:border-primary focus:outline-hidden focus-visible:ring-2 focus-visible:ring-accent sm:text-[13.5px]',
+                repo ? 'border-primary text-ink' : 'border-line text-ink-soft',
+              )}
             >
               <option value="">All remotes</option>
               {repos.map((r) => (
@@ -141,7 +149,12 @@ export function RunsTab({ onNewRemote }: { onNewRemote: () => void }) {
           </label>
         )}
         {branch && (
-          <button type="button" onClick={() => set({ branch: null })} className="press inline-flex h-11 items-center sm:h-9 gap-1.5 rounded-full border border-primary bg-surface pr-2.5 pl-3.5 text-[13.5px] font-semibold focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden" aria-label={`Clear branch ${branch}`}>
+          <button
+            type="button"
+            onClick={() => set({ branch: null })}
+            className="press inline-flex h-11 items-center sm:h-9 gap-1.5 rounded-full border border-primary bg-surface pr-2.5 pl-3.5 text-[13.5px] font-semibold focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden"
+            aria-label={`Clear branch ${branch}`}
+          >
             <span className={cn(MONO, 'max-w-40 truncate')}>{branch}</span>
             <X className="size-3.5 text-muted" aria-hidden="true" />
           </button>
@@ -155,13 +168,26 @@ export function RunsTab({ onNewRemote }: { onNewRemote: () => void }) {
           <EmptyState
             icon={<Workflow className="size-6" />}
             title={filtered ? 'No match' : 'No runs yet'}
-            action={filtered ? undefined : repos.length === 0 ? <Button icon={<Plus className="size-4" />} onClick={onNewRemote}>New remote</Button> : undefined}
+            action={
+              filtered ? undefined : repos.length === 0 ? (
+                <Button icon={<Plus className="size-4" />} onClick={onNewRemote}>
+                  New remote
+                </Button>
+              ) : undefined
+            }
           />
         ) : (
           <>
             <ul className="flex flex-col gap-2">
               {rows.map((r) => (
-                <RunRow key={r.id} run={r} now={now} remote={repos.length > 1 ? names.get(r.repoId) : undefined} onOpen={() => navigate(`/admin/ci/runs/${r.id}`)} onBump={() => setBumping(r)} />
+                <RunRow
+                  key={r.id}
+                  run={r}
+                  now={now}
+                  remote={repos.length > 1 ? names.get(r.repoId) : undefined}
+                  onOpen={() => navigate(`/admin/ci/runs/${r.id}`)}
+                  onBump={() => setBumping(r)}
+                />
               ))}
             </ul>
             {after && (
@@ -187,7 +213,19 @@ export function RunsTab({ onNewRemote }: { onNewRemote: () => void }) {
 }
 
 /** A row opens the run; its ⋯ (outside the row's button, on the right) has Bump (FR37a). */
-function RunRow({ run: r, now, remote, onOpen, onBump }: { run: CiRunSummary; now: number; remote?: string; onOpen: () => void; onBump: () => void }) {
+function RunRow({
+  run: r,
+  now,
+  remote,
+  onOpen,
+  onBump,
+}: {
+  run: CiRunSummary;
+  now: number;
+  remote?: string;
+  onOpen: () => void;
+  onBump: () => void;
+}) {
   const duration = r.durationMs ?? (isCiActive(r.status) ? elapsed(r.startedAt ?? r.createdAt, now) : null);
   const reason = r.status === 'failed' ? reasonLabel(r.reason) : null;
   const on = runnerLine(r);
@@ -224,7 +262,11 @@ function RunRow({ run: r, now, remote, onOpen, onBump }: { run: CiRunSummary; no
         </span>
       </button>
       <div className="absolute top-1/2 right-1.5 -translate-y-1/2">
-        <Menu label={`More for #${r.number}`} align="right" items={[{ label: 'Bump…', icon: <ChevronsUp className="size-4" />, onSelect: onBump }]} />
+        <Menu
+          label={`More for #${r.number}`}
+          align="right"
+          items={[{ label: 'Bump…', icon: <ChevronsUp className="size-4" />, onSelect: onBump }]}
+        />
       </div>
     </li>
   );

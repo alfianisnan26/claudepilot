@@ -67,13 +67,21 @@ export function createChatRoutes(controller: ChatController): Hono {
   chat.get('/', (c) => {
     const actor = actorOf(c);
     const keep = (s: { id: string }) => visible(actor, 'session', [s], (x) => x.id).length > 0;
-    return c.json(success(controller.listPage({ ...(c.req.query('parentId') ? { parentId: c.req.query('parentId')! } : {}) }, { cursor: c.req.query('cursor') || undefined, limit: c.req.query('limit'), keep })));
+    return c.json(
+      success(
+        controller.listPage(
+          { ...(c.req.query('parentId') ? { parentId: c.req.query('parentId')! } : {}) },
+          { cursor: c.req.query('cursor') || undefined, limit: c.req.query('limit'), keep },
+        ),
+      ),
+    );
   });
 
   // POST /api/chat/sessions — create one (starts the host in the background); 409 FOLDER_UNTRUSTED with the scan first when the folder needs trusting.
   chat.post('/', async (c) => {
     const req = await body<CreateChatSessionRequest>(c);
-    if (typeof req.workspaceId !== 'string' || !req.workspaceId.trim()) throw new AppError('VALIDATION_FAILED', 'Pick a workspace.', { details: { workspaceId: 'Required.' } });
+    if (typeof req.workspaceId !== 'string' || !req.workspaceId.trim())
+      throw new AppError('VALIDATION_FAILED', 'Pick a workspace.', { details: { workspaceId: 'Required.' } });
     // Only the person's own request can ask for Bypass to be allowed later in the session (FR20); the policy decides.
     return c.json(success(await controller.create(req, { bypassOptIn: req.allowBypass === true })), 201);
   });
@@ -88,9 +96,18 @@ export function createChatRoutes(controller: ChatController): Hono {
   // POST /api/chat/sessions/:id/switch — confirmed move of the chat to another Claude on the same workspace (the chat stays this session).
   chat.post('/:id/switch', async (c) => {
     const req = await body<SwitchChatRequest>(c);
-    if (typeof req.claudeId !== 'string' || !req.claudeId.trim()) throw new AppError('VALIDATION_FAILED', 'Pick a Claude.', { details: { claudeId: 'Required.' } });
-    if (req.model !== undefined && typeof req.model !== 'string') throw new AppError('VALIDATION_FAILED', 'Pick a model.', { details: { model: 'Expected a model name.' } });
-    return c.json(success(await controller.switchClaude(c.req.param('id'), req.claudeId, { handoff: req.handoff, ...(req.model ? { model: req.model } : {}) })));
+    if (typeof req.claudeId !== 'string' || !req.claudeId.trim())
+      throw new AppError('VALIDATION_FAILED', 'Pick a Claude.', { details: { claudeId: 'Required.' } });
+    if (req.model !== undefined && typeof req.model !== 'string')
+      throw new AppError('VALIDATION_FAILED', 'Pick a model.', { details: { model: 'Expected a model name.' } });
+    return c.json(
+      success(
+        await controller.switchClaude(c.req.param('id'), req.claudeId, {
+          handoff: req.handoff,
+          ...(req.model ? { model: req.model } : {}),
+        }),
+      ),
+    );
   });
 
   // GET /api/chat/sessions/:id/switch-options — where it can move and whether each Claude can take it now.
@@ -101,7 +118,15 @@ export function createChatRoutes(controller: ChatController): Hono {
   // POST /api/chat/sessions/:id/bypass — turn it on: the policy, the opt-in, the tick, and the server code checked again.
   chat.post('/:id/bypass', async (c) => {
     const req = await body<EnterBypassRequest>(c);
-    return c.json(success(await controller.enterBypass(c.req.param('id'), { acknowledged: req.acknowledged === true, sessionToken: tokenOf(c), actor: askerOf(c) })));
+    return c.json(
+      success(
+        await controller.enterBypass(c.req.param('id'), {
+          acknowledged: req.acknowledged === true,
+          sessionToken: tokenOf(c),
+          actor: askerOf(c),
+        }),
+      ),
+    );
   });
   // POST /api/chat/sessions/:id/bypass/allow — restart it so it can enter Bypass (at a turn boundary); the policy must allow it.
   chat.post('/:id/bypass/allow', async (c) => c.json(success(await controller.allowBypass(c.req.param('id'), { actor: askerOf(c) }))));
@@ -110,7 +135,11 @@ export function createChatRoutes(controller: ChatController): Hono {
     requireCan(actorOf(c), 'operate', sessionRef(c.req.param('id')));
     const req = await body<RestartChatRequest>(c);
     // T-102: `when: 'turn_end'` queues it for the next boundary; `interrupt` lets "Restart now" stop a running turn (the person confirmed it).
-    return c.json(success(await controller.restart(c.req.param('id'), { why: req.why, when: req.when, interrupt: req.interrupt === true, actor: askerOf(c) })));
+    return c.json(
+      success(
+        await controller.restart(c.req.param('id'), { why: req.why, when: req.when, interrupt: req.interrupt === true, actor: askerOf(c) }),
+      ),
+    );
   });
   // POST /api/chat/sessions/:id/recover — bring a session ended for integrity back in place (T-136): the same row, its conversation resumed.
   // A person's sign-in is a person unless the body says `by: 'agent'` (the dev supervisor), which only makes it stricter: an agent never
@@ -118,16 +147,31 @@ export function createChatRoutes(controller: ChatController): Hono {
   chat.post('/:id/recover', async (c) => {
     const actor = actorOf(c);
     requireCan(actor, 'operate', sessionRef(c.req.param('id')));
-    const req = c.req.header('content-length') === '0' ? {} : await body<RecoverChatRequest>(c).catch(() => ({}) as Partial<RecoverChatRequest>);
+    const req =
+      c.req.header('content-length') === '0' ? {} : await body<RecoverChatRequest>(c).catch(() => ({}) as Partial<RecoverChatRequest>);
     const by = req.by === 'agent' || actor.kind !== 'user' ? 'agent' : 'person';
-    return c.json(success(await controller.recover(c.req.param('id'), { by, confirm: by === 'person' && req.confirm === true, actor: actor.kind === 'user' ? 'ui' : actorString(actor) })));
+    return c.json(
+      success(
+        await controller.recover(c.req.param('id'), {
+          by,
+          confirm: by === 'person' && req.confirm === true,
+          actor: actor.kind === 'user' ? 'ui' : actorString(actor),
+        }),
+      ),
+    );
   });
   // POST /api/chat/sessions/:id/requests/:requestId/clear — clear a request no process can answer any more (T-284): resolved `stale` with
   // every other stale request of the chat, audited; refused (409) for a request of the live process, which is answered instead.
   chat.post('/:id/requests/:requestId/clear', async (c) => {
     const actor = actorOf(c);
     requireCan(actor, 'operate', sessionRef(c.req.param('id')));
-    return c.json(success(await controller.clearRequest(c.req.param('id'), c.req.param('requestId'), { actor: actor.kind === 'user' ? 'ui' : actorString(actor) })));
+    return c.json(
+      success(
+        await controller.clearRequest(c.req.param('id'), c.req.param('requestId'), {
+          actor: actor.kind === 'user' ? 'ui' : actorString(actor),
+        }),
+      ),
+    );
   });
   // DELETE /api/chat/sessions/:id/restart — cancel a restart that waits for the turn's end (T-102).
   chat.delete('/:id/restart', (c) => {
@@ -161,7 +205,16 @@ export function createChatRoutes(controller: ChatController): Hono {
   });
 
   // DELETE /api/chat/sessions/:id — delete it (ending it first): the transcript and its files go.
-  chat.delete('/:id', async (c) => c.json(success(await controller.delete(c.req.param('id'), { worktree: worktreeMode(c.req.query('worktree')), children: childrenMode(c.req.query('children')) }))));
+  chat.delete('/:id', async (c) =>
+    c.json(
+      success(
+        await controller.delete(c.req.param('id'), {
+          worktree: worktreeMode(c.req.query('worktree')),
+          children: childrenMode(c.req.query('children')),
+        }),
+      ),
+    ),
+  );
 
   // POST /api/chat/sessions/:id/end — end it.
   chat.post('/:id/end', async (c) => {
@@ -170,7 +223,16 @@ export function createChatRoutes(controller: ChatController): Hono {
   });
 
   // POST /api/chat/sessions/:id/archive — archive it (ends it first); DELETE unarchives.
-  chat.post('/:id/archive', async (c) => c.json(success(await controller.archive(c.req.param('id'), { worktree: worktreeMode(c.req.query('worktree')), children: childrenMode(c.req.query('children')) }))));
+  chat.post('/:id/archive', async (c) =>
+    c.json(
+      success(
+        await controller.archive(c.req.param('id'), {
+          worktree: worktreeMode(c.req.query('worktree')),
+          children: childrenMode(c.req.query('children')),
+        }),
+      ),
+    ),
+  );
   // GET /api/chat/sessions/:id/worktree — what removing the chat's worktree would lose (null when it has none).
   chat.get('/:id/worktree', async (c) => c.json(success(await controller.worktreeStatus(c.req.param('id')))));
   chat.delete('/:id/archive', (c) => c.json(success(controller.unarchive(c.req.param('id')))));
@@ -183,7 +245,11 @@ export function createChatRoutes(controller: ChatController): Hono {
   chat.get('/:id/events', (c) => {
     requireCan(actorOf(c), 'view', sessionRef(c.req.param('id')));
     const q = eventsQuery({ after: c.req.query('after'), before: c.req.query('before'), limit: c.req.query('limit') });
-    return c.json(success(q.kind === 'after' ? controller.history(c.req.param('id'), q.after) : controller.historyPage(c.req.param('id'), q.before, q.limit)));
+    return c.json(
+      success(
+        q.kind === 'after' ? controller.history(c.req.param('id'), q.after) : controller.historyPage(c.req.param('id'), q.before, q.limit),
+      ),
+    );
   });
   // GET /api/chat/sessions/:id/events/:seq — one stored event whole (a tool_result a page cut to its preview).
   chat.get('/:id/events/:seq', (c) => {
@@ -206,7 +272,9 @@ export function createChatRoutes(controller: ChatController): Hono {
 
   // GET /api/chat/sessions/:id/blobs/:blobId — a stored file's bytes (attachment, artifact, tool image), only when this
   // session links it: inline for the types a browser may show or play (Range answered), a download for the rest.
-  chat.get('/:id/blobs/:blobId', (c) => serveBlob(c.req.raw, controller.blobFile(c.req.param('id'), c.req.param('blobId')), { download: c.req.query('download') === '1' }));
+  chat.get('/:id/blobs/:blobId', (c) =>
+    serveBlob(c.req.raw, controller.blobFile(c.req.param('id'), c.req.param('blobId')), { download: c.req.query('download') === '1' }),
+  );
 
   return chat;
 }
@@ -221,7 +289,9 @@ export function createChatMetaRoutes(controller: ChatController, reauth: Reauth)
   const limiter = new RateLimiter(10, 10 * 60_000);
   meta.post('/reauth', async (c) => {
     const token = tokenOf(c);
-    const key = createHash('sha256').update(token ?? '').digest('hex');
+    const key = createHash('sha256')
+      .update(token ?? '')
+      .digest('hex');
     if (limiter.blocked(key)) throw new AppError('RATE_LIMITED', 'Too many tries. Wait a few minutes.');
     const req = await body<ReauthRequest>(c);
     if (!reauth.confirm(token, req.code)) {
@@ -248,7 +318,14 @@ export function createChatMetaRoutes(controller: ChatController, reauth: Reauth)
       if (!e.sessionId || !controller.sessionFacts(e.sessionId)) return true;
       return visible(actor, 'session', [e], (x) => x.sessionId!).length > 0;
     };
-    return c.json(success(controller.auditPage({ kind: c.req.query('kind') || undefined, sessionId: c.req.query('sessionId') || undefined, scope: actorString(actor) }, { cursor: c.req.query('cursor') || undefined, limit: c.req.query('limit'), keep })));
+    return c.json(
+      success(
+        controller.auditPage(
+          { kind: c.req.query('kind') || undefined, sessionId: c.req.query('sessionId') || undefined, scope: actorString(actor) },
+          { cursor: c.req.query('cursor') || undefined, limit: c.req.query('limit'), keep },
+        ),
+      ),
+    );
   });
   return meta;
 }
@@ -259,7 +336,14 @@ export function createUsageRoutes(controller: ChatController): Hono {
   const usage = new Hono();
   usage.get('/', (c) => {
     const tz = Number(c.req.query('tz'));
-    return c.json(success(controller.usage(c.req.query('range'), { claudeId: c.req.query('claudeId') || undefined, tzOffsetMin: Number.isFinite(tz) ? tz : 0 })));
+    return c.json(
+      success(
+        controller.usage(c.req.query('range'), {
+          claudeId: c.req.query('claudeId') || undefined,
+          tzOffsetMin: Number.isFinite(tz) ? tz : 0,
+        }),
+      ),
+    );
   });
   return usage;
 }
@@ -269,7 +353,8 @@ export function createClaudeRoutes(controller: ChatController): Hono {
   claudes.get('/', async (c) => c.json(success(await controller.claudesOf(c.req.query('workspaceId') ?? ''))));
   claudes.post('/', async (c) => {
     const req = await body<CreateWorkspaceClaudeRequest>(c);
-    if (typeof req.workspaceId !== 'string' || !req.workspaceId.trim()) throw new AppError('VALIDATION_FAILED', 'Pick a workspace.', { details: { workspaceId: 'Required.' } });
+    if (typeof req.workspaceId !== 'string' || !req.workspaceId.trim())
+      throw new AppError('VALIDATION_FAILED', 'Pick a workspace.', { details: { workspaceId: 'Required.' } });
     if (typeof req.name !== 'string') throw new AppError('VALIDATION_FAILED', 'Name the Claude.', { details: { name: 'Required.' } });
     return c.json(success(await controller.createClaude(req.workspaceId, req.name)), 201);
   });

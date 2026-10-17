@@ -346,20 +346,22 @@ export const KNOWLEDGE_API = {
   exportZip: (id: string) => `/api/knowledge/vaults/${encodeURIComponent(id)}/export`,
   tree: (id: string, folder = '') => `/api/knowledge/vaults/${encodeURIComponent(id)}/tree?folder=${encodeURIComponent(folder)}`,
   note: (id: string, path: string) => `/api/knowledge/vaults/${encodeURIComponent(id)}/note?path=${encodeURIComponent(path)}`,
-  noteAction: (id: string, action: string, path = '') => `/api/knowledge/vaults/${encodeURIComponent(id)}/note/${action}${path ? `?path=${encodeURIComponent(path)}` : ''}`,
+  noteAction: (id: string, action: string, path = '') =>
+    `/api/knowledge/vaults/${encodeURIComponent(id)}/note/${action}${path ? `?path=${encodeURIComponent(path)}` : ''}`,
   embed: (id: string, path: string, heading?: string | null, block?: string | null) =>
     `/api/knowledge/vaults/${encodeURIComponent(id)}/embed?path=${encodeURIComponent(path)}${heading ? `&heading=${encodeURIComponent(heading)}` : ''}${block ? `&block=${encodeURIComponent(block)}` : ''}`,
   file: (id: string, path: string) => `/api/knowledge/vaults/${encodeURIComponent(id)}/file?path=${encodeURIComponent(path)}`,
-  search: (id: string, q: string, extra = '') => `/api/knowledge/vaults/${encodeURIComponent(id)}/search?q=${encodeURIComponent(q)}${extra}`,
+  search: (id: string, q: string, extra = '') =>
+    `/api/knowledge/vaults/${encodeURIComponent(id)}/search?q=${encodeURIComponent(q)}${extra}`,
   quick: (id: string, q: string) => `/api/knowledge/vaults/${encodeURIComponent(id)}/quick?q=${encodeURIComponent(q)}`,
   tags: (id: string) => `/api/knowledge/vaults/${encodeURIComponent(id)}/tags`,
   health: (id: string) => `/api/knowledge/vaults/${encodeURIComponent(id)}/health`,
   recent: (id: string) => `/api/knowledge/vaults/${encodeURIComponent(id)}/recent`,
-  daily: (id: string, date = '') => `/api/knowledge/vaults/${encodeURIComponent(id)}/daily${date ? `?date=${encodeURIComponent(date)}` : ''}`,
+  daily: (id: string, date = '') =>
+    `/api/knowledge/vaults/${encodeURIComponent(id)}/daily${date ? `?date=${encodeURIComponent(date)}` : ''}`,
   activity: (id: string) => `/api/knowledge/vaults/${encodeURIComponent(id)}/activity`,
   rescan: (id: string) => `/api/knowledge/vaults/${encodeURIComponent(id)}/rescan`,
 } as const;
-
 
 /* ---------- Graphs (PRD §12): one node and edge model, three lenses ---------- */
 
@@ -384,7 +386,23 @@ export type GraphNodeKind =
   | 'actor'
   | 'cluster';
 
-export const GRAPH_NODE_KINDS: readonly GraphNodeKind[] = ['note', 'tag', 'attachment', 'unresolved', 'session', 'ticket', 'workspace', 'claude', 'persona', 'skillset', 'mcpset', 'context', 'worktree', 'actor', 'cluster'];
+export const GRAPH_NODE_KINDS: readonly GraphNodeKind[] = [
+  'note',
+  'tag',
+  'attachment',
+  'unresolved',
+  'session',
+  'ticket',
+  'workspace',
+  'claude',
+  'persona',
+  'skillset',
+  'mcpset',
+  'context',
+  'worktree',
+  'actor',
+  'cluster',
+];
 
 export type GraphEdgeKind =
   | 'links-to'

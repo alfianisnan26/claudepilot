@@ -67,7 +67,8 @@ async function seed(h: H, count: number, opts: { workspace?: (n: number) => stri
       number: 1000 + n,
       event_id: null,
       status: n % 2 ? 'failed' : 'passed',
-      created_at: createdAt ?? `2026-01-01T00:${String(Math.floor(n / 3) % 60).padStart(2, '0')}:${String(Math.floor(n / 180)).padStart(2, '0')}Z`,
+      created_at:
+        createdAt ?? `2026-01-01T00:${String(Math.floor(n / 3) % 60).padStart(2, '0')}:${String(Math.floor(n / 180)).padStart(2, '0')}Z`,
       workspace_id: opts.workspace ? opts.workspace(n) : base.workspace_id,
     };
     insert.run(...cols.map((c) => (row[c] ?? null) as never));
@@ -75,13 +76,21 @@ async function seed(h: H, count: number, opts: { workspace?: (n: number) => stri
   for (let n = 0; n < count; n++) add(n);
   return { first: first.id, add };
 }
-const bulk = (h: H, where = '1 = 1') => (h.store.db!.prepare(`SELECT id FROM ci_runs WHERE id LIKE 'bulk-%' AND ${where} ORDER BY created_at DESC, id DESC`).all() as { id: string }[]).map((r) => r.id);
+const bulk = (h: H, where = '1 = 1') =>
+  (
+    h.store.db!.prepare(`SELECT id FROM ci_runs WHERE id LIKE 'bulk-%' AND ${where} ORDER BY created_at DESC, id DESC`).all() as {
+      id: string;
+    }[]
+  ).map((r) => r.id);
 
 test('order: newest first, ties by id, every run once; the default page is 25; total and active on page 1 only', async () => {
   const t = await build();
   try {
     await seed(t.h, 30);
-    assert.deepEqual((await t.walk('a', 'status=passed,failed', 7)).filter((id) => id.startsWith('bulk-')), bulk(t.h));
+    assert.deepEqual(
+      (await t.walk('a', 'status=passed,failed', 7)).filter((id) => id.startsWith('bulk-')),
+      bulk(t.h),
+    );
     assert.equal(CURSOR_DEFAULT_LIMIT, 25);
     const first = await t.page('a');
     assert.equal(first.items.length, CURSOR_DEFAULT_LIMIT);
@@ -108,7 +117,11 @@ test('a run started between two pages causes no repeat and no skip', async () =>
     });
     assert.ok(wrote >= 3);
     assert.equal(new Set(ids).size, ids.length, 'no repeat');
-    assert.deepEqual(ids.filter((id) => original.includes(id)), original, 'every old run, in order, none skipped');
+    assert.deepEqual(
+      ids.filter((id) => original.includes(id)),
+      original,
+      'every old run, in order, none skipped',
+    );
   } finally {
     t.h.done();
   }
@@ -139,7 +152,11 @@ test('a bad cursor is a 400: garbage, a tampered one, one from another filter, o
     for (const cursor of ['garbage', 'a.b', `${body}`, flipped, `${next}.x`]) {
       assert.equal((await t.get('a', `?status=failed&cursor=${encodeURIComponent(cursor)}`)).status, 400, cursor);
     }
-    assert.equal((await t.get('a', `?status=passed&cursor=${encodeURIComponent(next)}`)).status, 400, 'a cursor of the failed runs does not open the passed ones');
+    assert.equal(
+      (await t.get('a', `?status=passed&cursor=${encodeURIComponent(next)}`)).status,
+      400,
+      'a cursor of the failed runs does not open the passed ones',
+    );
     assert.equal((await t.get('a', `?cursor=${encodeURIComponent(next)}`)).status, 400, 'nor the unfiltered list');
     assert.equal((await t.get('b', `?status=failed&cursor=${encodeURIComponent(next)}`)).status, 400, 'a cursor is the caller’s own');
     assert.equal((await t.get('a', `?status=failed&cursor=${encodeURIComponent(next)}`)).status, 200, 'the real one still works');
@@ -168,7 +185,11 @@ test('authz: a run the caller may not view is in no page, no count and no cursor
       cursors.push(p.next);
       cursor = p.next;
     }
-    assert.deepEqual(seen.filter((id) => id.startsWith('bulk-')), bulk(t.h, `workspace_id = '${WS}'`), 'exactly A’s runs, in order, each once');
+    assert.deepEqual(
+      seen.filter((id) => id.startsWith('bulk-')),
+      bulk(t.h, `workspace_id = '${WS}'`),
+      'exactly A’s runs, in order, each once',
+    );
     assert.equal(counts[0], seen.length, 'the total counts only what A may view');
     assert.ok(cursors.length > 0);
     for (const c of cursors) {

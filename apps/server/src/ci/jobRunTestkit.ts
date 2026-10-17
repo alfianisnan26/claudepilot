@@ -8,7 +8,8 @@ import { readFileSync } from 'node:fs';
 /** The text between two marker comments of a template's container script, without the YAML block indent. */
 export function scriptPart(template: string, begin: string, end: string): string {
   const tpl = readFileSync(template, 'utf8');
-  const a = tpl.indexOf(begin), b = tpl.indexOf(end);
+  const a = tpl.indexOf(begin),
+    b = tpl.indexOf(end);
   assert.ok(a >= 0 && b > a, `${template}: the markers ${begin} and ${end}`);
   return tpl.slice(a, b).replace(/^ {14}/gm, '');
 }
@@ -18,10 +19,21 @@ export function scriptPart(template: string, begin: string, end: string): string
  * JR_FETCH_HOME defaults to a folder next to it (the fetch container's own HOME volume). Returns the run part's result, which prints the
  * fetch part's log first, as the run container does. `runEnv` is added to the run part's environment only (a PATH without git: T-379).
  */
-export function runPod(template: string, env: NodeJS.ProcessEnv, creds: Record<string, string> = {}, runEnv: NodeJS.ProcessEnv = {}): SpawnSyncReturns<string> {
+export function runPod(
+  template: string,
+  env: NodeJS.ProcessEnv,
+  creds: Record<string, string> = {},
+  runEnv: NodeJS.ProcessEnv = {},
+): SpawnSyncReturns<string> {
   assert.ok(env.JR_ROOT, 'JR_ROOT');
   const fetchEnv = { JR_FETCH_HOME: `${env.JR_ROOT}-fetch-home`, ...env, ...creds };
-  const f = spawnSync('bash', ['-c', scriptPart(template, '# JOB-RUN-FETCH BEGIN', '# JOB-RUN-FETCH END')], { encoding: 'utf8', env: fetchEnv });
+  const f = spawnSync('bash', ['-c', scriptPart(template, '# JOB-RUN-FETCH BEGIN', '# JOB-RUN-FETCH END')], {
+    encoding: 'utf8',
+    env: fetchEnv,
+  });
   assert.equal(f.status, 0, `the fetch container always ends 0 (its code is in fetch.rc): ${f.stdout}${f.stderr}`);
-  return spawnSync('bash', ['-c', scriptPart(template, '# JOB-RUN-SCRIPT BEGIN', '# JOB-RUN-SCRIPT END')], { encoding: 'utf8', env: { ...env, ...runEnv } });
+  return spawnSync('bash', ['-c', scriptPart(template, '# JOB-RUN-SCRIPT BEGIN', '# JOB-RUN-SCRIPT END')], {
+    encoding: 'utf8',
+    env: { ...env, ...runEnv },
+  });
 }

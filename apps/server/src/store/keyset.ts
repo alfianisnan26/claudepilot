@@ -68,7 +68,12 @@ function decode(cursor: string, scope: string): { sort: string | number; id: str
   if (!body || !sig || rest.length) throw bad();
   try {
     const v = open(body, sig);
-    if (v.s !== scope || (typeof v.k !== 'string' && typeof v.k !== 'number') || !(typeof v.i === 'string' || (typeof v.i === 'number' && Number.isInteger(v.i)))) throw bad();
+    if (
+      v.s !== scope ||
+      (typeof v.k !== 'string' && typeof v.k !== 'number') ||
+      !(typeof v.i === 'string' || (typeof v.i === 'number' && Number.isInteger(v.i)))
+    )
+      throw bad();
     return { sort: v.k, id: v.i };
   } catch (e) {
     throw e instanceof AppError ? e : bad();
@@ -90,8 +95,13 @@ export interface KeysetSpec {
 }
 
 /** One page of rows, in order, and the cursor of the next page. Rows are inserted or removed during a walk without a skip or a repeat. */
-export function keysetPage<R extends Record<string, unknown>>(db: DatabaseSync, spec: KeysetSpec, args: { cursor?: string | undefined; limit?: unknown }): { rows: R[]; next: string | null } {
-  for (const name of [spec.table, spec.sortCol, spec.idCol]) if (!IDENT.test(name)) throw new Error(`keysetPage: unsafe identifier ${name}`);
+export function keysetPage<R extends Record<string, unknown>>(
+  db: DatabaseSync,
+  spec: KeysetSpec,
+  args: { cursor?: string | undefined; limit?: unknown },
+): { rows: R[]; next: string | null } {
+  for (const name of [spec.table, spec.sortCol, spec.idCol])
+    if (!IDENT.test(name)) throw new Error(`keysetPage: unsafe identifier ${name}`);
   const desc = spec.dir !== 'asc';
   const limit = clampLimit(args.limit);
   const conds: string[] = [];
@@ -110,7 +120,8 @@ export function keysetPage<R extends Record<string, unknown>>(db: DatabaseSync, 
   const got = db.prepare(sql).all(...params, limit + 1) as R[];
   const rows = got.slice(0, limit);
   const last = rows[rows.length - 1];
-  const next = got.length > limit && last ? cursorAfter(spec.scope, last[spec.sortCol] as string | number, last[spec.idCol] as string | number) : null;
+  const next =
+    got.length > limit && last ? cursorAfter(spec.scope, last[spec.sortCol] as string | number, last[spec.idCol] as string | number) : null;
   return { rows, next };
 }
 

@@ -1,5 +1,14 @@
 import type { BadgeTone } from '@isnanme/ui';
-import { TICKET_PRIORITIES, TICKET_TYPES, type TicketFilter, type TicketOrphanWhy, type TicketPriority, type TicketSessionState, type TicketStatus, type TicketType } from '@portal/contracts';
+import {
+  TICKET_PRIORITIES,
+  TICKET_TYPES,
+  type TicketFilter,
+  type TicketOrphanWhy,
+  type TicketPriority,
+  type TicketSessionState,
+  type TicketStatus,
+  type TicketType,
+} from '@portal/contracts';
 
 /** Status words and tones (tickets PRD §13). Done is quiet green, blocked is warm, the rest are neutral. */
 export const STATUS_TONE: Record<TicketStatus, BadgeTone> = {
@@ -37,7 +46,8 @@ export const SESSION_STATE_LABEL: Record<TicketSessionState, string> = {
 };
 
 /** A Portal MCP token, by the label its owner gave it: never anonymous when the label is known. */
-export const mcpClientName = (label: string | null | undefined): string => (label?.trim() ? `MCP client “${label.trim()}”` : 'An MCP client');
+export const mcpClientName = (label: string | null | undefined): string =>
+  label?.trim() ? `MCP client “${label.trim()}”` : 'An MCP client';
 
 /** How an actor string reads on a timeline: who, not an id. */
 export function actorName(actor: string, label: string): string {
@@ -62,8 +72,16 @@ export function ageShort(iso: string, now = Date.now()): string {
 }
 
 /** T-270: an orphan (its session is dead) on the ticket and its row. */
-export const ORPHAN_TITLE: Record<TicketOrphanWhy, string> = { ended: 'Its session ended', archived: 'Its session was archived', missing: 'Its session is gone' };
-export const ORPHAN_BADGE: Record<TicketOrphanWhy, string> = { ended: 'Session ended', archived: 'Session archived', missing: 'Session gone' };
+export const ORPHAN_TITLE: Record<TicketOrphanWhy, string> = {
+  ended: 'Its session ended',
+  archived: 'Its session was archived',
+  missing: 'Its session is gone',
+};
+export const ORPHAN_BADGE: Record<TicketOrphanWhy, string> = {
+  ended: 'Session ended',
+  archived: 'Session archived',
+  missing: 'Session gone',
+};
 
 /** The timeline sentence of a move the orphan sweep made (an `assigned` entry with `fallback: true`); its comment says why. */
 export function fallbackSentence(who: string, d: { to?: unknown; reason?: unknown }): string {

@@ -78,7 +78,14 @@ function toolbox() {
     input: z.object({ text: z.string().optional() }),
     handler: (ctx) => {
       calls.push(`note:${ctx.actor}`);
-      return { actor: ctx.actor, scope: ctx.scope, is_agent: ctx.isAgent, workspace: ctx.workspaceId, session: ctx.sessionId, vaults: ctx.vaults };
+      return {
+        actor: ctx.actor,
+        scope: ctx.scope,
+        is_agent: ctx.isAgent,
+        workspace: ctx.workspaceId,
+        session: ctx.sessionId,
+        vaults: ctx.vaults,
+      };
     },
   });
   registry.register({
@@ -198,10 +205,14 @@ test('MCP is 404 while off, and only POST is served', async () => {
     assert.equal((await h.rpc(t.secret, 'tools/list')).status, 404);
     h.module.settings.update({ enabled: true });
     assert.equal((await h.rpc(t.secret, 'tools/list')).status, 200);
-    const get = await h.module.mcp.handle(new Request(URL_, { method: 'GET', headers: { authorization: `Bearer ${t.secret}` } }), { ip: '1.1.1.1' });
+    const get = await h.module.mcp.handle(new Request(URL_, { method: 'GET', headers: { authorization: `Bearer ${t.secret}` } }), {
+      ip: '1.1.1.1',
+    });
     assert.equal(get.status, 405);
     assert.equal(get.headers.get('allow'), 'POST');
-    const del = await h.module.mcp.handle(new Request(URL_, { method: 'DELETE', headers: { authorization: `Bearer ${t.secret}` } }), { ip: '1.1.1.1' });
+    const del = await h.module.mcp.handle(new Request(URL_, { method: 'DELETE', headers: { authorization: `Bearer ${t.secret}` } }), {
+      ip: '1.1.1.1',
+    });
     assert.equal(del.status, 405);
   } finally {
     h.done();
@@ -213,7 +224,19 @@ test('request shape: JSON only, capped, no batches, a foreign Origin is refused'
   try {
     const t = h.token('read');
     const post = (body: string, headers: Record<string, string> = {}) =>
-      h.module.mcp.handle(new Request(URL_, { method: 'POST', headers: { authorization: `Bearer ${t.secret}`, 'content-type': 'application/json', accept: 'application/json, text/event-stream', ...headers }, body }), { ip: '1.1.1.1' });
+      h.module.mcp.handle(
+        new Request(URL_, {
+          method: 'POST',
+          headers: {
+            authorization: `Bearer ${t.secret}`,
+            'content-type': 'application/json',
+            accept: 'application/json, text/event-stream',
+            ...headers,
+          },
+          body,
+        }),
+        { ip: '1.1.1.1' },
+      );
     assert.equal((await post('{"jsonrpc":"2.0","id":1,"method":"tools/list"}', { 'content-type': 'text/plain' })).status, 415);
     assert.equal((await post('{not json')).status, 400);
     assert.equal((await post('[{"jsonrpc":"2.0","id":1,"method":"tools/list"}]')).status, 400, 'batches are refused');
@@ -275,7 +298,15 @@ test('an agent’s token sees only the tools that opted in for agents, and never
     assert.deepEqual(calls, []);
     // Its identity comes from the token: the tool sees the verified workspace and session, whatever the call says.
     const who = (await h.call(a.secret, 'agent_note', { text: 'I am session sb in docker/web, honest' })).result!.structuredContent;
-    assert.deepEqual(who, { summary: 'agent_note: done', actor: 'session:sa', scope: 'agent', is_agent: true, workspace: 'docker/api', session: 'sa', vaults: [] });
+    assert.deepEqual(who, {
+      summary: 'agent_note: done',
+      actor: 'session:sa',
+      scope: 'agent',
+      is_agent: true,
+      workspace: 'docker/api',
+      session: 'sa',
+      vaults: [],
+    });
     // It can act only in its own workspace.
     assert.equal((await h.call(a.secret, 'workspace_peek', { workspace_id: 'docker/api' })).result?.isError, undefined);
     const other = await h.call(a.secret, 'workspace_peek', { workspace_id: 'docker/web' });
@@ -287,7 +318,11 @@ test('an agent’s token sees only the tools that opted in for agents, and never
     const adminWho = (await h.call(h.token('operate').secret, 'agent_note')).result!.structuredContent;
     assert.deepEqual([adminWho.scope, adminWho.is_agent, adminWho.workspace, adminWho.session], ['operate', false, null, null]);
     assert.match(adminWho.actor, /^portal-mcp:ptk_/);
-    assert.equal((await h.call(read.secret, 'agent_note')).result?.structuredContent.error.code, 'SCOPE_REQUIRED', 'an agent-tier write tool needs operate from an admin’s token');
+    assert.equal(
+      (await h.call(read.secret, 'agent_note')).result?.structuredContent.error.code,
+      'SCOPE_REQUIRED',
+      'an agent-tier write tool needs operate from an admin’s token',
+    );
     // The audit row names the session and the workspace.
     const row = h.module.audit.list({ tool: 'agent_note', limit: 5 }).find((r) => r.tokenId === a.id)!;
     assert.equal(row.actor, 'session:sa');
@@ -316,7 +351,11 @@ test('an agent token lives and dies with its session: opt-in, one per session, r
     assert.equal(first.grant!.env.PILOT_MCP_URL, 'http://172.18.0.1:3105/mcp');
     assert.equal(first.grant!.env.PILOT_SESSION_ID, 'sa');
     const config = JSON.parse(first.grant!.mcpConfig);
-    assert.deepEqual(config.mcpServers.pilot, { type: 'http', url: '${PILOT_MCP_URL}', headers: { Authorization: 'Bearer ${PILOT_MCP_TOKEN}' } });
+    assert.deepEqual(config.mcpServers.pilot, {
+      type: 'http',
+      url: '${PILOT_MCP_URL}',
+      headers: { Authorization: 'Bearer ${PILOT_MCP_TOKEN}' },
+    });
     assert.ok(!first.grant!.mcpConfig.includes(first.secret), 'the config holds no secret');
     // Hashed at rest.
     const stored = JSON.stringify(h.store.db!.prepare('SELECT * FROM pmcp_agent_tokens').all());
@@ -332,7 +371,9 @@ test('an agent token lives and dies with its session: opt-in, one per session, r
     // The session ends without anyone revoking its token: the next call still fails, and revokes it.
     h.alive.delete('sa');
     assert.equal((await h.rpc(second.secret, 'tools/list')).status, 401, 'used after its session ended');
-    const row = h.store.db!.prepare('SELECT revoked_reason FROM pmcp_agent_tokens WHERE id = ?').get(second.id) as { revoked_reason: string };
+    const row = h.store.db!.prepare('SELECT revoked_reason FROM pmcp_agent_tokens WHERE id = ?').get(second.id) as {
+      revoked_reason: string;
+    };
     assert.equal(row.revoked_reason, 'its session ended');
 
     // Explicit revocation (end, archive, delete, switch-away).
@@ -371,7 +412,19 @@ test('an agent token lives and dies with its session: opt-in, one per session, r
 test('agent access is opted into by plain workspace names only', async () => {
   const h = await portalMcpHarness({ registry: toolbox().registry });
   try {
-    for (const bad of ['docker', 'docker/', '/api', 'docker/a/b', 'docker/..%2fetc', 'docker/a b', 'docker/a\nb', 'docker/-x', 'docker/.x', `docker/${'x'.repeat(64)}`, '😀/api'])
+    for (const bad of [
+      'docker',
+      'docker/',
+      '/api',
+      'docker/a/b',
+      'docker/..%2fetc',
+      'docker/a b',
+      'docker/a\nb',
+      'docker/-x',
+      'docker/.x',
+      `docker/${'x'.repeat(64)}`,
+      '😀/api',
+    ])
       assert.throws(() => h.module.agents.setEnabled(bad, true), /`<target>\/<name>`/, JSON.stringify(bad));
     assert.deepEqual(h.module.agents.enabledWorkspaces(), [], 'nothing hostile was stored');
     for (const good of ['docker/api', 'local/My-Laptop', 'k8s/a.b_c', `docker/${'x'.repeat(63)}`]) h.module.agents.setEnabled(good, true);
@@ -389,8 +442,14 @@ test('an agent token of another workspace or session can’t be used for it: ide
     const who = async (t: { secret: string }) => (await h.call(t.secret, 'agent_note')).result!.structuredContent;
     assert.deepEqual([(await who(api)).workspace, (await who(api)).session], ['docker/api', 'sa']);
     assert.deepEqual([(await who(web)).workspace, (await who(web)).session], ['docker/web', 'sw']);
-    assert.equal((await h.call(web.secret, 'workspace_peek', { workspace_id: 'docker/api' })).result?.structuredContent.error.code, 'FORBIDDEN');
-    assert.equal((await h.call(api.secret, 'workspace_peek', { workspace_id: 'docker/web' })).result?.structuredContent.error.code, 'FORBIDDEN');
+    assert.equal(
+      (await h.call(web.secret, 'workspace_peek', { workspace_id: 'docker/api' })).result?.structuredContent.error.code,
+      'FORBIDDEN',
+    );
+    assert.equal(
+      (await h.call(api.secret, 'workspace_peek', { workspace_id: 'docker/web' })).result?.structuredContent.error.code,
+      'FORBIDDEN',
+    );
     // Revoking one session leaves the other alone.
     h.module.agents.revokeSession('sa', 'ended');
     assert.equal((await h.rpc(api.secret, 'tools/list')).status, 401);
@@ -401,13 +460,24 @@ test('an agent token of another workspace or session can’t be used for it: ide
 });
 
 test('agents have their own lower limits, per-tool rates for proposals, and a cap on what a call may carry', async () => {
-  const limits = new PortalLimits({ unauthenticatedPerMinute: 100, readPerMinute: 100, writePerMinute: 100, destructivePer10Minutes: 10, agentReadPerMinute: 2, agentWritePerMinute: 3 });
+  const limits = new PortalLimits({
+    unauthenticatedPerMinute: 100,
+    readPerMinute: 100,
+    writePerMinute: 100,
+    destructivePer10Minutes: 10,
+    agentReadPerMinute: 2,
+    agentWritePerMinute: 3,
+  });
   const h = await portalMcpHarness({ registry: toolbox().registry, limits });
   try {
     const a = await h.agentToken('docker/api', 'sa');
     assert.equal((await h.call(a.secret, 'workspace_peek', { workspace_id: 'docker/api' })).result?.isError, undefined);
     assert.equal((await h.call(a.secret, 'workspace_peek', { workspace_id: 'docker/api' })).result?.isError, undefined);
-    assert.equal((await h.call(a.secret, 'workspace_peek', { workspace_id: 'docker/api' })).result?.structuredContent.error.code, 'RATE_LIMITED', 'reads: 2 a minute for this test');
+    assert.equal(
+      (await h.call(a.secret, 'workspace_peek', { workspace_id: 'docker/api' })).result?.structuredContent.error.code,
+      'RATE_LIMITED',
+      'reads: 2 a minute for this test',
+    );
     // A proposal tool: 2 an hour, and 200 bytes of arguments.
     assert.equal((await h.call(a.secret, 'propose_thing', { text: 'one' })).result?.structuredContent.by, 'session:sa');
     assert.equal((await h.call(a.secret, 'propose_thing', { text: 'two' })).result?.isError, undefined);
@@ -422,7 +492,8 @@ test('agents have their own lower limits, per-tool rates for proposals, and a ca
     assert.equal(huge.result?.structuredContent.error.code, 'ARGUMENTS_TOO_LARGE');
     // An admin's token isn't held to the agent allowance.
     const admin = h.token('operate');
-    for (let i = 0; i < 5; i++) assert.equal((await h.call(admin.secret, 'workspace_peek', { workspace_id: 'docker/api' })).result?.isError, undefined);
+    for (let i = 0; i < 5; i++)
+      assert.equal((await h.call(admin.secret, 'workspace_peek', { workspace_id: 'docker/api' })).result?.isError, undefined);
   } finally {
     h.done();
   }
@@ -448,26 +519,51 @@ test('the admin routes want the sign-in cookie, /mcp wants a bearer token, and n
     });
     admin.route('/', createPortalMcpRoutes(h.module, { workspaces: async () => [{ id: 'docker/api', name: 'api' }] }));
     app.route('/api/portal-mcp', admin);
-    const send = (path: string, init: RequestInit = {}) => app.request(`http://portal.test${path}`, { ...init, headers: { origin: 'http://portal.test', 'content-type': 'application/json', ...(init.headers as Record<string, string>) } });
+    const send = (path: string, init: RequestInit = {}) =>
+      app.request(`http://portal.test${path}`, {
+        ...init,
+        headers: { origin: 'http://portal.test', 'content-type': 'application/json', ...(init.headers as Record<string, string>) },
+      });
 
     const agent = await h.agentToken('docker/api', 'sa');
     const user = h.token('admin');
     for (const bearer of [agent.secret, user.secret]) {
-      for (const [method, path] of [['GET', '/api/portal-mcp'], ['GET', '/api/portal-mcp/agents'], ['PUT', '/api/portal-mcp/agents/docker/api'], ['POST', '/api/portal-mcp/tokens'], ['POST', '/api/portal-mcp/revoke-all'], ['GET', '/api/portal-mcp/audit']] as const) {
-        const r = await send(path, { method, headers: { authorization: `Bearer ${bearer}` }, ...(method === 'GET' ? {} : { body: JSON.stringify({ enabled: true, label: 'x', scope: 'admin' }) }) });
+      for (const [method, path] of [
+        ['GET', '/api/portal-mcp'],
+        ['GET', '/api/portal-mcp/agents'],
+        ['PUT', '/api/portal-mcp/agents/docker/api'],
+        ['POST', '/api/portal-mcp/tokens'],
+        ['POST', '/api/portal-mcp/revoke-all'],
+        ['GET', '/api/portal-mcp/audit'],
+      ] as const) {
+        const r = await send(path, {
+          method,
+          headers: { authorization: `Bearer ${bearer}` },
+          ...(method === 'GET' ? {} : { body: JSON.stringify({ enabled: true, label: 'x', scope: 'admin' }) }),
+        });
         assert.equal(r.status, 401, `${method} ${path} with a bearer token`);
       }
     }
     assert.equal((await send('/api/portal-mcp', { headers: { cookie: `portal_session=${cookie}` } })).status, 200, 'the signed-in admin');
     // The session cookie opens nothing at /mcp.
-    const viaCookie = await send('/mcp', { method: 'POST', headers: { cookie: `portal_session=${cookie}`, accept: 'application/json, text/event-stream' }, body: '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' });
+    const viaCookie = await send('/mcp', {
+      method: 'POST',
+      headers: { cookie: `portal_session=${cookie}`, accept: 'application/json, text/event-stream' },
+      body: '{"jsonrpc":"2.0","id":1,"method":"tools/list"}',
+    });
     assert.equal(viaCookie.status, 401);
     // The admin's switch for a workspace works, and revokes what that workspace's sessions hold.
-    const off = await send('/api/portal-mcp/agents/docker/api', { method: 'PUT', headers: { cookie: `portal_session=${cookie}` }, body: JSON.stringify({ enabled: false }) });
+    const off = await send('/api/portal-mcp/agents/docker/api', {
+      method: 'PUT',
+      headers: { cookie: `portal_session=${cookie}` },
+      body: JSON.stringify({ enabled: false }),
+    });
     assert.equal(off.status, 200);
-    assert.equal((await off.json() as { data: { revoked: number } }).data.revoked, 1);
+    assert.equal(((await off.json()) as { data: { revoked: number } }).data.revoked, 1);
     assert.equal((await h.rpc(agent.secret, 'tools/list')).status, 401);
-    const list = (await (await send('/api/portal-mcp/agents', { headers: { cookie: `portal_session=${cookie}` } })).json()) as { data: { workspaceId: string; enabled: boolean; liveTokens: number }[] };
+    const list = (await (await send('/api/portal-mcp/agents', { headers: { cookie: `portal_session=${cookie}` } })).json()) as {
+      data: { workspaceId: string; enabled: boolean; liveTokens: number }[];
+    };
     assert.deepEqual(list.data, [{ workspaceId: 'docker/api', name: 'api', enabled: false, liveTokens: 0 }]);
   } finally {
     h.done();
@@ -495,7 +591,14 @@ test('revoking a token ends it on the next request, and lockdown revokes them al
 });
 
 test('rate limits: per token and per class, as a tool error with retry_after_seconds', async () => {
-  const limits = new PortalLimits({ unauthenticatedPerMinute: 3, readPerMinute: 2, writePerMinute: 1, destructivePer10Minutes: 1, agentReadPerMinute: 2, agentWritePerMinute: 1 });
+  const limits = new PortalLimits({
+    unauthenticatedPerMinute: 3,
+    readPerMinute: 2,
+    writePerMinute: 1,
+    destructivePer10Minutes: 1,
+    agentReadPerMinute: 2,
+    agentWritePerMinute: 1,
+  });
   const h = await portalMcpHarness({ registry: toolbox().registry, limits });
   try {
     const admin = h.token('admin');
@@ -506,9 +609,17 @@ test('rate limits: per token and per class, as a tool error with retry_after_sec
     assert.equal(limited.result?.isError, true);
     assert.equal(limited.result?.structuredContent.error.code, 'RATE_LIMITED');
     assert.ok(limited.result?.structuredContent.error.details.retry_after_seconds >= 1);
-    assert.equal((await h.call(other.secret, 'echo_read', { text: 'x' })).result?.isError, undefined, 'another token has its own allowance');
+    assert.equal(
+      (await h.call(other.secret, 'echo_read', { text: 'x' })).result?.isError,
+      undefined,
+      'another token has its own allowance',
+    );
     assert.equal((await h.call(admin.secret, 'thing_change', { id: '1' })).result?.isError, undefined);
-    assert.equal((await h.call(admin.secret, 'thing_change', { id: '2' })).result?.structuredContent.error.code, 'RATE_LIMITED', 'writes are limited separately');
+    assert.equal(
+      (await h.call(admin.secret, 'thing_change', { id: '2' })).result?.structuredContent.error.code,
+      'RATE_LIMITED',
+      'writes are limited separately',
+    );
     assert.equal((await h.call(admin.secret, 'thing_destroy', { id: '1' })).result?.structuredContent.status, 'confirmation_required');
     assert.equal((await h.call(admin.secret, 'thing_destroy', { id: '2' })).result?.structuredContent.error.code, 'RATE_LIMITED');
     assert.ok(h.module.audit.list({ outcome: 'rate_limited' }).length >= 3);
@@ -558,7 +669,10 @@ test('text from workspaces is labelled, cleaned and capped; a handler that forge
     assert.ok(!out.forgot.includes(SECRET));
     assert.equal(out.forgot, 'key is [redacted] reversed');
     const whole = JSON.stringify(r.raw);
-    assert.ok(!whole.includes('\x1b') && !whole.includes('\u0007') && !whole.includes(TAGS) && !whole.includes('\u{202e}'), 'no escape sequences, tag or bidi characters anywhere');
+    assert.ok(
+      !whole.includes('\x1b') && !whole.includes('\u0007') && !whole.includes(TAGS) && !whole.includes('\u{202e}'),
+      'no escape sequences, tag or bidi characters anywhere',
+    );
     assert.ok(!whole.includes(SECRET));
   } finally {
     h.done();
@@ -577,7 +691,10 @@ test('failures: fixable ones are tool errors with a code, unexpected ones say no
     assert.equal(ui.result?.structuredContent.error.code, 'UI_ONLY');
     const boom = await h.call(t.secret, 'boom_read');
     assert.equal(boom.result?.structuredContent.error.code, 'INTERNAL_ERROR');
-    assert.ok(!JSON.stringify(boom.raw).includes('database exploded') && !JSON.stringify(boom.raw).includes(SECRET), 'internals stay inside');
+    assert.ok(
+      !JSON.stringify(boom.raw).includes('database exploded') && !JSON.stringify(boom.raw).includes(SECRET),
+      'internals stay inside',
+    );
     const big = await h.call(t.secret, 'big_read');
     assert.equal(big.result?.structuredContent.error.code, 'RESULT_TOO_LARGE');
     // Arguments that fail their schema are refused by the SDK; the audit trail still has the request.
@@ -590,7 +707,10 @@ test('failures: fixable ones are tool errors with a code, unexpected ones say no
     const invalid = await h.call(t.secret, 'echo_read', { text: 42 });
     assert.ok(invalid.result?.isError || invalid.error, 'invalid arguments are an error');
     const rows = h.module.audit.list({ limit: 100 });
-    assert.ok(rows.some((r) => r.tool === null || r.outcome === 'rejected'), 'the refused call is audited');
+    assert.ok(
+      rows.some((r) => r.tool === null || r.outcome === 'rejected'),
+      'the refused call is audited',
+    );
     assert.ok(rows.some((r) => r.tool === 'boom_read' && r.outcome === 'error' && r.errorCode === 'INTERNAL_ERROR'));
   } finally {
     h.done();
@@ -608,8 +728,14 @@ test('destructive tools confirm: a token is single use, bound to the caller, the
     assert.deepEqual(first.preview, { will_lose: ['thing 7'] });
     assert.match(first.confirm_token, /^cfm_/);
     // Another caller's token, another argument: nothing happens, a fresh confirmation is asked.
-    assert.equal((await h.call(b.secret, 'thing_destroy', { id: '7', confirm_token: first.confirm_token })).result?.structuredContent.status, 'confirmation_required');
-    assert.equal((await h.call(a.secret, 'thing_destroy', { id: '8', confirm_token: first.confirm_token })).result?.structuredContent.status, 'confirmation_required');
+    assert.equal(
+      (await h.call(b.secret, 'thing_destroy', { id: '7', confirm_token: first.confirm_token })).result?.structuredContent.status,
+      'confirmation_required',
+    );
+    assert.equal(
+      (await h.call(a.secret, 'thing_destroy', { id: '8', confirm_token: first.confirm_token })).result?.structuredContent.status,
+      'confirmation_required',
+    );
     assert.deepEqual(calls, []);
     // The right call with the right token goes through, once.
     const ok = await h.call(a.secret, 'thing_destroy', { id: '7', confirm_token: first.confirm_token });
@@ -619,7 +745,10 @@ test('destructive tools confirm: a token is single use, bound to the caller, the
     assert.equal(again.result?.structuredContent.status, 'confirmation_required', 'a token is single use');
     assert.deepEqual(calls, ['destroy:7']);
     // A garbage token is just a missing one.
-    assert.equal((await h.call(a.secret, 'thing_destroy', { id: '7', confirm_token: 'cfm_nonsense' })).result?.structuredContent.status, 'confirmation_required');
+    assert.equal(
+      (await h.call(a.secret, 'thing_destroy', { id: '7', confirm_token: 'cfm_nonsense' })).result?.structuredContent.status,
+      'confirmation_required',
+    );
   } finally {
     h.done();
   }
@@ -644,10 +773,20 @@ test('tools carry all four annotations, a title and their scope in the descripti
   const h = await portalMcpHarness({ registry: toolbox().registry });
   try {
     const t = h.token('admin');
-    const tools: { name: string; title: string; description: string; annotations: Record<string, boolean>; _meta?: Record<string, unknown> }[] = (await h.rpc(t.secret, 'tools/list')).body.result.tools;
+    const tools: {
+      name: string;
+      title: string;
+      description: string;
+      annotations: Record<string, boolean>;
+      _meta?: Record<string, unknown>;
+    }[] = (await h.rpc(t.secret, 'tools/list')).body.result.tools;
     for (const tool of tools) {
       assert.ok(tool.title, tool.name);
-      assert.deepEqual(Object.keys(tool.annotations).sort(), ['destructiveHint', 'idempotentHint', 'openWorldHint', 'readOnlyHint'], tool.name);
+      assert.deepEqual(
+        Object.keys(tool.annotations).sort(),
+        ['destructiveHint', 'idempotentHint', 'openWorldHint', 'readOnlyHint'],
+        tool.name,
+      );
     }
     const read = tools.find((x) => x.name === 'echo_read')!;
     assert.deepEqual(read.annotations, { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false });
@@ -681,9 +820,15 @@ for (const era of ['legacy', 'modern'] as const) {
         await close();
       }
       const rows = h.module.audit.list({ limit: 100 });
-      assert.ok(rows.some((r) => r.method === (era === 'legacy' ? 'initialize' : 'server/discover')), `the ${era} handshake was used`);
+      assert.ok(
+        rows.some((r) => r.method === (era === 'legacy' ? 'initialize' : 'server/discover')),
+        `the ${era} handshake was used`,
+      );
       assert.ok(rows.some((r) => r.method === 'tools/call' && r.tool === 'echo_read'));
-      assert.ok(rows.every((r) => r.tokenId === t.id), 'every request names its token');
+      assert.ok(
+        rows.every((r) => r.tokenId === t.id),
+        'every request names its token',
+      );
     } finally {
       h.done();
     }
@@ -706,7 +851,16 @@ test('the audit trail records every authenticated request and prunes by age', as
     assert.equal(h.module.audit.prune(90), 3);
     assert.equal(h.module.audit.list().length, 0);
     // The response of a revoked token's last request is still never an error body that names the token.
-    const body = await readRpc(await h.module.mcp.handle(new Request(URL_, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${t.secret}` }, body: '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' }), { ip: '1.1.1.1' }));
+    const body = await readRpc(
+      await h.module.mcp.handle(
+        new Request(URL_, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', authorization: `Bearer ${t.secret}` },
+          body: '{"jsonrpc":"2.0","id":1,"method":"tools/list"}',
+        }),
+        { ip: '1.1.1.1' },
+      ),
+    );
     assert.ok(!JSON.stringify(body.body).includes(t.secret));
   } finally {
     h.done();

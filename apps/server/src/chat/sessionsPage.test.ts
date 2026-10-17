@@ -54,10 +54,15 @@ async function seeded(count: number): Promise<Live> {
     await until(() => s.ws.tails.length === i + 1);
   }
   const ids = (s.store.db!.prepare('SELECT id FROM chat_sessions ORDER BY id').all() as { id: string }[]).map((r) => r.id);
-  ids.forEach((id, i) => s.store.db!.prepare('UPDATE chat_sessions SET last_activity_at = ? WHERE id = ?').run(`2026-01-01T00:00:${String(Math.floor(i / 3)).padStart(2, '0')}Z`, id));
+  ids.forEach((id, i) =>
+    s.store
+      .db!.prepare('UPDATE chat_sessions SET last_activity_at = ? WHERE id = ?')
+      .run(`2026-01-01T00:00:${String(Math.floor(i / 3)).padStart(2, '0')}Z`, id),
+  );
   return s;
 }
-const everything = (s: Live) => (s.store.db!.prepare('SELECT id FROM chat_sessions ORDER BY last_activity_at DESC, id DESC').all() as { id: string }[]).map((r) => r.id);
+const everything = (s: Live) =>
+  (s.store.db!.prepare('SELECT id FROM chat_sessions ORDER BY last_activity_at DESC, id DESC').all() as { id: string }[]).map((r) => r.id);
 
 test('order: newest activity first, ties by id, every session once; the default page is 25', async () => {
   const s = await seeded(8);
@@ -107,7 +112,9 @@ test('limit: above 100 is cut to 100, below 1 to 1, junk to the default', async 
     const db = s.store.db!;
     const cols = (db.prepare('PRAGMA table_info(chat_sessions)').all() as { name: string }[]).map((c) => c.name);
     const pick = cols.map((c) => (c === 'id' ? "'bulk-' || n" : c)).join(', ');
-    db.exec(`WITH RECURSIVE g(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM g WHERE n < 130) INSERT INTO chat_sessions (${cols.join(', ')}) SELECT ${pick} FROM chat_sessions, g WHERE chat_sessions.id = '${s.id}'`);
+    db.exec(
+      `WITH RECURSIVE g(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM g WHERE n < 130) INSERT INTO chat_sessions (${cols.join(', ')}) SELECT ${pick} FROM chat_sessions, g WHERE chat_sessions.id = '${s.id}'`,
+    );
     const a = app(s);
     const big = await page(a, '?limit=1000');
     assert.equal(big.items.length, CURSOR_MAX_LIMIT);
@@ -173,7 +180,10 @@ test('bounded scan: a sparse keep still yields every kept row once across the bo
       if (!p.next) break;
       cursor = p.next;
     }
-    assert.deepEqual(seen, all.filter((id) => kept.has(id)));
+    assert.deepEqual(
+      seen,
+      all.filter((id) => kept.has(id)),
+    );
   } finally {
     await s.done();
   }
@@ -199,7 +209,11 @@ test('authz: a session the caller may not view is in no page and no cursor names
       cursors.push(p.next);
       cursor = p.next;
     }
-    assert.deepEqual(seen, all.filter((id) => mine.has(id)), 'exactly the sessions u_a may view, in order, each once');
+    assert.deepEqual(
+      seen,
+      all.filter((id) => mine.has(id)),
+      'exactly the sessions u_a may view, in order, each once',
+    );
     assert.ok(cursors.length > 0);
     for (const c of cursors) {
       const named = peekCursor(c).id as string;

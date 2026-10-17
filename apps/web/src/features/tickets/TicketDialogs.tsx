@@ -31,12 +31,16 @@ function fieldErrors<K extends string>(e: unknown, keys: readonly K[]): { fields
   let found = false;
   for (const k of keys) {
     const v = details?.[k];
-    if (typeof v === 'string') (fields[k] = v, (found = true));
+    if (typeof v === 'string') ((fields[k] = v), (found = true));
   }
   return { fields, message: found ? null : errorText(e, 'That didn’t work.') };
 }
 
-const tagsOf = (raw: string) => raw.split(/[,\s]+/).map((t) => t.trim().toLowerCase()).filter(Boolean);
+const tagsOf = (raw: string) =>
+  raw
+    .split(/[,\s]+/)
+    .map((t) => t.trim().toLowerCase())
+    .filter(Boolean);
 
 /** Existing tags as quick picks under the tag field. */
 function TagPicks({ value, onPick }: { value: string; onPick: (tag: string) => void }) {
@@ -143,7 +147,15 @@ export function NewTicketDialog({ open, onClose, onCreated }: { open: boolean; o
       dirty={!!summary.trim() || !!description.trim()}
     >
       <div className="flex flex-col gap-4">
-        <TextField label="Summary" placeholder="Fix the login redirect" maxLength={TICKET_LIMITS.summary} autoComplete="off" value={summary} onChange={(e) => (setSummary(e.target.value), setErrors((x) => ({ ...x, summary: undefined })))} error={errors.summary} />
+        <TextField
+          label="Summary"
+          placeholder="Fix the login redirect"
+          maxLength={TICKET_LIMITS.summary}
+          autoComplete="off"
+          value={summary}
+          onChange={(e) => (setSummary(e.target.value), setErrors((x) => ({ ...x, summary: undefined })))}
+          error={errors.summary}
+        />
         <TextArea
           label="Description"
           optional
@@ -155,10 +167,30 @@ export function NewTicketDialog({ open, onClose, onCreated }: { open: boolean; o
           hint="No keys or passwords."
         />
         <div className="grid grid-cols-2 gap-3">
-          <Select label="Type" value={type} onChange={(v) => setType(v as TicketType)} options={TICKET_TYPES.map((t) => ({ value: t, label: TICKET_TYPE_LABEL[t] }))} />
-          <Select label="Priority" value={priority} onChange={(v) => setPriority(v as TicketPriority)} options={TICKET_PRIORITIES.map((p) => ({ value: p, label: TICKET_PRIORITY_LABEL[p] }))} />
+          <Select
+            label="Type"
+            value={type}
+            onChange={(v) => setType(v as TicketType)}
+            options={TICKET_TYPES.map((t) => ({ value: t, label: TICKET_TYPE_LABEL[t] }))}
+          />
+          <Select
+            label="Priority"
+            value={priority}
+            onChange={(v) => setPriority(v as TicketPriority)}
+            options={TICKET_PRIORITIES.map((p) => ({ value: p, label: TICKET_PRIORITY_LABEL[p] }))}
+          />
         </div>
-        <TextField label="Tags" optional placeholder="frontend, login" autoCapitalize="none" autoCorrect="off" spellCheck={false} value={tags} onChange={(e) => (setTags(e.target.value), setErrors((x) => ({ ...x, tags: undefined })))} error={errors.tags} />
+        <TextField
+          label="Tags"
+          optional
+          placeholder="frontend, login"
+          autoCapitalize="none"
+          autoCorrect="off"
+          spellCheck={false}
+          value={tags}
+          onChange={(e) => (setTags(e.target.value), setErrors((x) => ({ ...x, tags: undefined })))}
+          error={errors.tags}
+        />
         <TagPicks value={tags} onPick={(t) => setTags((v) => `${v.trim()}${v.trim() ? ', ' : ''}${t}`)} />
         <Segmented<'queue' | 'me'>
           label="Assign to"
@@ -169,14 +201,28 @@ export function NewTicketDialog({ open, onClose, onCreated }: { open: boolean; o
             { value: 'me', label: 'Me' },
           ]}
         />
-        <Select label="Workspace" optional value={workspaceId} onChange={setWorkspaceId} options={[{ value: NO_WORKSPACE, label: 'Any' }, ...workspaces.map((w) => ({ value: w.id, label: w.id }))]} />
+        <Select
+          label="Workspace"
+          optional
+          value={workspaceId}
+          onChange={setWorkspaceId}
+          options={[{ value: NO_WORKSPACE, label: 'Any' }, ...workspaces.map((w) => ({ value: w.id, label: w.id }))]}
+        />
       </div>
     </FormDialog>
   );
 }
 
 /** Retitles a ticket and rewrites its description. */
-export function EditTicketDialog({ ticket, onClose, onSaved }: { ticket: TicketItem | null; onClose: () => void; onSaved: (t: TicketItem) => void }) {
+export function EditTicketDialog({
+  ticket,
+  onClose,
+  onSaved,
+}: {
+  ticket: TicketItem | null;
+  onClose: () => void;
+  onSaved: (t: TicketItem) => void;
+}) {
   const [summary, setSummary] = useState('');
   const [description, setDescription] = useState('');
   const [saving, setSaving] = useState(false);
@@ -215,15 +261,37 @@ export function EditTicketDialog({ ticket, onClose, onSaved }: { ticket: TicketI
       dirty={!!ticket && (summary.trim() !== ticket.summary || description !== ticket.description)}
     >
       <div className="flex flex-col gap-4">
-        <TextField label="Summary" maxLength={TICKET_LIMITS.summary} autoComplete="off" value={summary} onChange={(e) => (setSummary(e.target.value), setErrors((x) => ({ ...x, summary: undefined })))} error={errors.summary} />
-        <TextArea label="Description" rows={8} maxLength={TICKET_LIMITS.description} value={description} onChange={(e) => (setDescription(e.target.value), setErrors((x) => ({ ...x, description: undefined })))} error={errors.description} />
+        <TextField
+          label="Summary"
+          maxLength={TICKET_LIMITS.summary}
+          autoComplete="off"
+          value={summary}
+          onChange={(e) => (setSummary(e.target.value), setErrors((x) => ({ ...x, summary: undefined })))}
+          error={errors.summary}
+        />
+        <TextArea
+          label="Description"
+          rows={8}
+          maxLength={TICKET_LIMITS.description}
+          value={description}
+          onChange={(e) => (setDescription(e.target.value), setErrors((x) => ({ ...x, description: undefined })))}
+          error={errors.description}
+        />
       </div>
     </FormDialog>
   );
 }
 
 /** Tags, as one comma-separated field with the ones already in use as quick picks. */
-export function TagsDialog({ ticket, onClose, onSaved }: { ticket: TicketItem | null; onClose: () => void; onSaved: (t: TicketItem) => void }) {
+export function TagsDialog({
+  ticket,
+  onClose,
+  onSaved,
+}: {
+  ticket: TicketItem | null;
+  onClose: () => void;
+  onSaved: (t: TicketItem) => void;
+}) {
   const [tags, setTags] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -247,7 +315,15 @@ export function TagsDialog({ ticket, onClose, onSaved }: { ticket: TicketItem | 
   return (
     <FormDialog open={!!ticket} onClose={onClose} size="sm" title="Tags" onSubmit={submit} saving={saving} error={error}>
       <div className="flex flex-col gap-4">
-        <TextField label="Tags" placeholder="frontend, login" autoCapitalize="none" autoCorrect="off" spellCheck={false} value={tags} onChange={(e) => setTags(e.target.value)} />
+        <TextField
+          label="Tags"
+          placeholder="frontend, login"
+          autoCapitalize="none"
+          autoCorrect="off"
+          spellCheck={false}
+          value={tags}
+          onChange={(e) => setTags(e.target.value)}
+        />
         <TagPicks value={tags} onPick={(t) => setTags((v) => `${v.trim()}${v.trim() ? ', ' : ''}${t}`)} />
       </div>
     </FormDialog>
@@ -257,7 +333,15 @@ export function TagsDialog({ ticket, onClose, onSaved }: { ticket: TicketItem | 
 type Who = 'queue' | 'user' | 'session';
 
 /** Who has the ticket: nobody (the agents' queue), a person, or a live session. */
-export function AssignDialog({ ticket, onClose, onSaved }: { ticket: TicketItem | null; onClose: () => void; onSaved: (t: TicketItem) => void }) {
+export function AssignDialog({
+  ticket,
+  onClose,
+  onSaved,
+}: {
+  ticket: TicketItem | null;
+  onClose: () => void;
+  onSaved: (t: TicketItem) => void;
+}) {
   const [who, setWho] = useState<Who>('queue');
   const [name, setName] = useState('');
   const [sessionId, setSessionId] = useState('');
@@ -272,7 +356,11 @@ export function AssignDialog({ ticket, onClose, onSaved }: { ticket: TicketItem 
     setError(null);
     let current = true;
     chatApi.listAll().then(
-      (list) => current && setSessions(list.filter((s) => s.state !== 'ended' && !s.archivedAt).map((s) => ({ id: s.id, title: s.title, workspaceId: s.workspaceId }))),
+      (list) =>
+        current &&
+        setSessions(
+          list.filter((s) => s.state !== 'ended' && !s.archivedAt).map((s) => ({ id: s.id, title: s.title, workspaceId: s.workspaceId })),
+        ),
       () => undefined,
     );
     return () => {
@@ -284,7 +372,8 @@ export function AssignDialog({ ticket, onClose, onSaved }: { ticket: TicketItem 
     setSaving(true);
     setError(null);
     try {
-      const assignee: TicketAssignee | null = who === 'queue' ? null : who === 'user' ? { kind: 'user', name: name.trim() || 'admin' } : { kind: 'session', sessionId };
+      const assignee: TicketAssignee | null =
+        who === 'queue' ? null : who === 'user' ? { kind: 'user', name: name.trim() || 'admin' } : { kind: 'session', sessionId };
       if (who === 'session' && !sessionId) return setError('Pick a session.');
       onSaved(await ticketsApi.update(ticket.id, { assignee }));
     } catch (e) {
@@ -294,7 +383,16 @@ export function AssignDialog({ ticket, onClose, onSaved }: { ticket: TicketItem 
     }
   };
   return (
-    <FormDialog open={!!ticket} onClose={onClose} size="sm" title="Assign" description={ticket ? ticket.id : undefined} onSubmit={submit} saving={saving} error={error}>
+    <FormDialog
+      open={!!ticket}
+      onClose={onClose}
+      size="sm"
+      title="Assign"
+      description={ticket ? ticket.id : undefined}
+      onSubmit={submit}
+      saving={saving}
+      error={error}
+    >
       <div className="flex flex-col gap-4">
         <Segmented<Who>
           label="Assign to"
@@ -322,7 +420,15 @@ export function AssignDialog({ ticket, onClose, onSaved }: { ticket: TicketItem 
 }
 
 /** Closes a ticket with a short summary of what came of it (tickets PRD FR6). */
-export function CloseDialog({ ticket, onClose, onClosed }: { ticket: TicketItem | null; onClose: () => void; onClosed: (t: TicketItem) => void }) {
+export function CloseDialog({
+  ticket,
+  onClose,
+  onClosed,
+}: {
+  ticket: TicketItem | null;
+  onClose: () => void;
+  onClosed: (t: TicketItem) => void;
+}) {
   const [outcome, setOutcome] = useState<'done' | 'wont_do'>('done');
   const [summary, setSummary] = useState('');
   const [saving, setSaving] = useState(false);
@@ -346,7 +452,17 @@ export function CloseDialog({ ticket, onClose, onClosed }: { ticket: TicketItem 
     }
   };
   return (
-    <FormDialog open={!!ticket} onClose={onClose} size="sm" title={ticket ? `Close ${ticket.id}` : 'Close ticket'} onSubmit={submit} submitLabel="Close ticket" saving={saving} error={error} dirty={!!summary.trim()}>
+    <FormDialog
+      open={!!ticket}
+      onClose={onClose}
+      size="sm"
+      title={ticket ? `Close ${ticket.id}` : 'Close ticket'}
+      onSubmit={submit}
+      submitLabel="Close ticket"
+      saving={saving}
+      error={error}
+      dirty={!!summary.trim()}
+    >
       <div className="flex flex-col gap-4">
         <Segmented<'done' | 'wont_do'>
           label="Outcome"
@@ -357,14 +473,30 @@ export function CloseDialog({ ticket, onClose, onClosed }: { ticket: TicketItem 
             { value: 'wont_do', label: 'Won’t do' },
           ]}
         />
-        <TextArea label="What came of it" optional rows={4} maxLength={TICKET_LIMITS.closing} placeholder="What was done, or why not." value={summary} onChange={(e) => setSummary(e.target.value)} />
+        <TextArea
+          label="What came of it"
+          optional
+          rows={4}
+          maxLength={TICKET_LIMITS.closing}
+          placeholder="What was done, or why not."
+          value={summary}
+          onChange={(e) => setSummary(e.target.value)}
+        />
       </div>
     </FormDialog>
   );
 }
 
 /** Starts a session for a ticket (tickets PRD FR15): where, as which Claude, whether in a worktree, and exactly what it is told. */
-export function StartSessionDialog({ ticket, onClose, onStarted }: { ticket: TicketItem | null; onClose: () => void; onStarted: (r: StartTicketSessionResult) => void }) {
+export function StartSessionDialog({
+  ticket,
+  onClose,
+  onStarted,
+}: {
+  ticket: TicketItem | null;
+  onClose: () => void;
+  onStarted: (r: StartTicketSessionResult) => void;
+}) {
   const [workspaces, setWorkspaces] = useState<Workspace[] | null>(null);
   const [workspaceId, setWorkspaceId] = useState('');
   const [claudes, setClaudes] = useState<{ id: string; name: string }[]>([]);
@@ -416,7 +548,9 @@ export function StartSessionDialog({ ticket, onClose, onStarted }: { ticket: Tic
     setSaving(true);
     setError(null);
     try {
-      onStarted(await ticketsApi.startSession(ticket.id, { workspaceId, claudeId: claudeId || undefined, worktree: worktree || undefined }));
+      onStarted(
+        await ticketsApi.startSession(ticket.id, { workspaceId, claudeId: claudeId || undefined, worktree: worktree || undefined }),
+      );
     } catch (e) {
       const code = (e as { code?: string }).code;
       const details = (e as { details?: { folder?: string } }).details;
@@ -444,7 +578,9 @@ export function StartSessionDialog({ ticket, onClose, onStarted }: { ticket: Tic
       error={error}
     >
       <div className="flex flex-col gap-4">
-        {fromAgent && <p className="rounded-xl bg-gold-soft px-3 py-2 text-[13px] text-ink-soft">Written by an agent: check the opening message.</p>}
+        {fromAgent && (
+          <p className="rounded-xl bg-gold-soft px-3 py-2 text-[13px] text-ink-soft">Written by an agent: check the opening message.</p>
+        )}
         <Select
           label="Workspace"
           value={workspaceId}
@@ -452,7 +588,14 @@ export function StartSessionDialog({ ticket, onClose, onStarted }: { ticket: Tic
           placeholder={workspaces === null ? 'Loading…' : workspaces.length ? undefined : 'No running workspace'}
           options={(workspaces ?? []).map((w) => ({ value: w.id, label: w.id }))}
         />
-        {claudes.length > 1 && <Select label="Claude" value={claudeId} onChange={setClaudeId} options={[{ value: '', label: 'Default' }, ...claudes.map((c) => ({ value: c.id, label: c.name }))]} />}
+        {claudes.length > 1 && (
+          <Select
+            label="Claude"
+            value={claudeId}
+            onChange={setClaudeId}
+            options={[{ value: '', label: 'Default' }, ...claudes.map((c) => ({ value: c.id, label: c.name }))]}
+          />
+        )}
         <div className="flex items-center gap-3">
           <p className="flex min-w-0 flex-1 items-center gap-1 text-sm font-semibold">
             Own git worktree
@@ -477,7 +620,15 @@ const BUMP_HELP: Record<BumpMode, string> = {
 };
 
 /** Bump (FR28): the shared Bump dialog over this ticket's sessions; its assigned session comes first. */
-export function TicketBumpDialog({ ticket, onClose, onBumped }: { ticket: TicketItem | null; onClose: () => void; onBumped: (r: TicketBumpResult) => void }) {
+export function TicketBumpDialog({
+  ticket,
+  onClose,
+  onBumped,
+}: {
+  ticket: TicketItem | null;
+  onClose: () => void;
+  onBumped: (r: TicketBumpResult) => void;
+}) {
   const id = ticket?.id ?? '';
   return (
     <BumpDialog

@@ -219,7 +219,10 @@ export type ChatConfigChange =
  * turn running), `estimate` (it includes the running turn's estimate) or `unavailable` (a turn runs whose model has no known price: `usd`
  * is the reported total only, the turn's part is not guessed).
  */
-export function sessionCost(s: Pick<ChatSession, 'costUsd' | 'turnCostEstimateUsd'>): { usd: number; basis: 'reported' | 'estimate' | 'unavailable' } {
+export function sessionCost(s: Pick<ChatSession, 'costUsd' | 'turnCostEstimateUsd'>): {
+  usd: number;
+  basis: 'reported' | 'estimate' | 'unavailable';
+} {
   const turn = s.turnCostEstimateUsd;
   if (turn === undefined) return { usd: s.costUsd, basis: 'reported' };
   if (turn === null) return { usd: s.costUsd, basis: 'unavailable' };
@@ -917,7 +920,8 @@ export const CHAT_API = {
    * a move, a restart, a crash, a resume). Every stale request of the chat is resolved `stale` with it, audited. Refused (409) for a
    * request of the live process: that one is answered. Returns `ClearChatRequestResult`.
    */
-  clearRequest: (id: string, requestId: string) => `/api/chat/sessions/${encodeURIComponent(id)}/requests/${encodeURIComponent(requestId)}/clear`,
+  clearRequest: (id: string, requestId: string) =>
+    `/api/chat/sessions/${encodeURIComponent(id)}/requests/${encodeURIComponent(requestId)}/clear`,
   /** POST `ReauthRequest`: check the server code again. */
   reauth: '/api/chat/reauth',
   /** GET: the chat policy (`{ bypass: { allowed } }`). */
@@ -1073,7 +1077,15 @@ export interface ChatControl {
   op: 'stop' | 'end' | 'model' | 'effort' | 'ultracode' | 'mode' | 'cancel_queued' | 'resume' | 'stop_task' | 'rename';
   /** Used to key the `ack`; any client-chosen string. */
   uuid?: string;
-  args?: { model?: string; effort?: string; ultracode?: boolean; mode?: ChatPermissionMode; inputUuid?: string; taskId?: string; title?: string };
+  args?: {
+    model?: string;
+    effort?: string;
+    ultracode?: boolean;
+    mode?: ChatPermissionMode;
+    inputUuid?: string;
+    taskId?: string;
+    title?: string;
+  };
 }
 export type ChatClientMessage = ChatSubscribe | ChatUnsubscribe | ChatSend | ChatRespond | ChatControl | BtwClientMessage;
 

@@ -14,12 +14,27 @@ import { createLabRoutes } from './routes.js';
 const T0 = Date.UTC(2026, 9, 14);
 
 function view(session: string, n: number, startMs: number | null, role = 'implementer'): LabSliceView {
-  return { sessionId: session, sliceId: `toolu_${String(n).padStart(4, '0')}`, kind: 'agent', ticket: 'T-1', role, startMs, outcome: 'unknown', arms: {} } as unknown as LabSliceView;
+  return {
+    sessionId: session,
+    sliceId: `toolu_${String(n).padStart(4, '0')}`,
+    kind: 'agent',
+    ticket: 'T-1',
+    role,
+    startMs,
+    outcome: 'unknown',
+    arms: {},
+  } as unknown as LabSliceView;
 }
 
 function standIn(rows: LabSliceView[]): Lab {
   return {
-    views: (f: ViewFilter = {}) => rows.filter((v) => (!f.sessionId || v.sessionId === f.sessionId) && (!f.role || v.role === f.role) && (f.fromMs === undefined || (v.startMs ?? 0) >= f.fromMs)),
+    views: (f: ViewFilter = {}) =>
+      rows.filter(
+        (v) =>
+          (!f.sessionId || v.sessionId === f.sessionId) &&
+          (!f.role || v.role === f.role) &&
+          (f.fromMs === undefined || (v.startMs ?? 0) >= f.fromMs),
+      ),
   } as unknown as Lab;
 }
 
@@ -30,7 +45,9 @@ function app(lab: Lab, actor?: Actor) {
     else c.set('token', 'signed-in');
     await next();
   });
-  a.onError((e, c) => (isAppError(e) ? c.json({ error: { code: e.code } }, e.status as 400) : c.json({ error: { code: 'INTERNAL', message: String(e) } }, 500)));
+  a.onError((e, c) =>
+    isAppError(e) ? c.json({ error: { code: e.code } }, e.status as 400) : c.json({ error: { code: 'INTERNAL', message: String(e) } }, 500),
+  );
   a.route('/api/lab', createLabRoutes(lab));
   return a;
 }
@@ -43,7 +60,8 @@ async function page(a: Api, qs: string): Promise<{ status: number; data: LabSlic
 const ids = (p: LabSlicePage) => p.items.map((v) => v.sliceId);
 const agentOf = (sessionId: string) => ({ kind: 'agent', userId: 'u_owner', tokenId: 't', sessionId, workspaceId: 'docker/api' }) as Actor;
 
-const many = (count: number, session = 's1', role = 'implementer') => Array.from({ length: count }, (_, i) => view(session, i, T0 + i * 1000, role));
+const many = (count: number, session = 's1', role = 'implementer') =>
+  Array.from({ length: count }, (_, i) => view(session, i, T0 + i * 1000, role));
 
 test('slices page: newest first, 25 by default with total on the first page only, then the rest', async () => {
   const a = app(standIn(many(30)));
@@ -71,7 +89,9 @@ test('slices page: a slice inserted between pages is neither a duplicate nor a s
     next = p.data.next;
   }
   assert.equal(new Set(seen).size, seen.length, 'no duplicate');
-  const expected = many(10).map((v) => v.sliceId).concat('toolu_0098');
+  const expected = many(10)
+    .map((v) => v.sliceId)
+    .concat('toolu_0098');
   for (const id of expected) assert.ok(seen.includes(id), `${id} not skipped`);
   assert.ok(!seen.includes('toolu_0099'), 'a newer slice belongs to the first page, not a later one');
 });

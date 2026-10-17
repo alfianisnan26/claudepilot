@@ -190,11 +190,14 @@ export class KnowledgeService {
 
   #rows(): VaultRow[] {
     if (!this.#ready()) return [];
-    return this.store.db!.prepare('SELECT * FROM kg_vaults WHERE deleted_at IS NULL ORDER BY name COLLATE NOCASE').all() as unknown as VaultRow[];
+    return this.store
+      .db!.prepare('SELECT * FROM kg_vaults WHERE deleted_at IS NULL ORDER BY name COLLATE NOCASE')
+      .all() as unknown as VaultRow[];
   }
 
   #row(id: string): VaultRow {
-    if (!this.#ready()) throw new KnowledgeError('UNAVAILABLE', 'The portal’s database isn’t ready for notes (it is frozen, or from a newer portal).');
+    if (!this.#ready())
+      throw new KnowledgeError('UNAVAILABLE', 'The portal’s database isn’t ready for notes (it is frozen, or from a newer portal).');
     const row = this.store.db!.prepare('SELECT * FROM kg_vaults WHERE id = ? AND deleted_at IS NULL').get(id) as VaultRow | undefined;
     if (!row) throw new KnowledgeError('NOT_FOUND', 'That vault doesn’t exist.');
     return row;
@@ -209,7 +212,8 @@ export class KnowledgeService {
       const raw = JSON.parse(row.settings) as Partial<VaultSettings>;
       return {
         attachmentsFolder: typeof raw.attachmentsFolder === 'string' ? raw.attachmentsFolder : DEFAULT_SETTINGS.attachmentsFolder,
-        rewriteLinksOnRename: typeof raw.rewriteLinksOnRename === 'boolean' ? raw.rewriteLinksOnRename : DEFAULT_SETTINGS.rewriteLinksOnRename,
+        rewriteLinksOnRename:
+          typeof raw.rewriteLinksOnRename === 'boolean' ? raw.rewriteLinksOnRename : DEFAULT_SETTINGS.rewriteLinksOnRename,
         labels: raw.labels === 'heading' ? 'heading' : 'filename',
         agentWorkspaces: Array.isArray(raw.agentWorkspaces) ? raw.agentWorkspaces.filter((w): w is string => typeof w === 'string') : [],
       };
@@ -225,7 +229,8 @@ export class KnowledgeService {
     const key = slash < 0 ? row.root : row.root.slice(0, slash);
     const sub = slash < 0 ? '' : row.root.slice(slash + 1);
     const root = this.#opts.roots?.[key];
-    if (!root) throw new KnowledgeError('UNAVAILABLE', `The folder “${key}” isn’t one the operator allows as a source (PORTAL_KNOWLEDGE_ROOTS).`);
+    if (!root)
+      throw new KnowledgeError('UNAVAILABLE', `The folder “${key}” isn’t one the operator allows as a source (PORTAL_KNOWLEDGE_ROOTS).`);
     let real: string;
     try {
       real = realpathSync(root.path);
@@ -239,7 +244,8 @@ export class KnowledgeService {
     } catch {
       throw new KnowledgeError('UNAVAILABLE', `The folder “${key}/${sub}” isn’t there.`);
     }
-    if (realTarget !== real && !realTarget.startsWith(`${real}/`)) throw new KnowledgeError('INVALID_PATH', 'That folder is outside the allowed folder.');
+    if (realTarget !== real && !realTarget.startsWith(`${real}/`))
+      throw new KnowledgeError('INVALID_PATH', 'That folder is outside the allowed folder.');
     return { path: realTarget, readOnly: row.read_only === 1 || !root.writable, fileMode: 0o644 };
   }
 
@@ -277,12 +283,16 @@ export class KnowledgeService {
 
   /** A vault by id or exact name, among those the caller may see. */
   resolve(ref: string | undefined | null, scope?: CallerScope | null): VaultRow {
-    if (!this.#ready()) throw new KnowledgeError('UNAVAILABLE', 'The portal’s database isn’t ready for notes (it is frozen, or from a newer portal).');
+    if (!this.#ready())
+      throw new KnowledgeError('UNAVAILABLE', 'The portal’s database isn’t ready for notes (it is frozen, or from a newer portal).');
     const rows = this.#rows().filter((r) => !scope?.vaults || scope.vaults.includes(r.id));
     const text = (ref ?? '').trim();
     if (!text) {
       if (rows.length === 1) return rows[0]!;
-      throw new KnowledgeError('INVALID_INPUT', rows.length ? `Name the vault: ${rows.map((r) => r.name).join(', ')}.` : 'There are no vaults yet.');
+      throw new KnowledgeError(
+        'INVALID_INPUT',
+        rows.length ? `Name the vault: ${rows.map((r) => r.name).join(', ')}.` : 'There are no vaults yet.',
+      );
     }
     const byId = rows.find((r) => r.id === text);
     if (byId) return byId;
@@ -343,7 +353,10 @@ export class KnowledgeService {
       indexState: state,
       problem,
       scannedAt,
-      source: row.kind === 'folder' ? { root: slash < 0 ? row.root : row.root.slice(0, slash), sub: slash < 0 ? '' : row.root.slice(slash + 1) } : null,
+      source:
+        row.kind === 'folder'
+          ? { root: slash < 0 ? row.root : row.root.slice(0, slash), sub: slash < 0 ? '' : row.root.slice(slash + 1) }
+          : null,
       location,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
@@ -354,13 +367,16 @@ export class KnowledgeService {
     if (typeof name !== 'string') throw new KnowledgeError('INVALID_INPUT', 'A vault needs a name.');
     const n = name.trim().replace(/\s+/g, ' ');
     // eslint-disable-next-line no-control-regex
-    if (!n || n.length > 60 || /[\u0000-\u001f\u007f]/.test(n)) throw new KnowledgeError('INVALID_INPUT', 'A vault’s name is 1 to 60 characters, with no control characters.');
-    if (this.#rows().some((r) => r.id !== exceptId && r.name.toLowerCase() === n.toLowerCase())) throw new KnowledgeError('EXISTS', 'Another vault has that name.');
+    if (!n || n.length > 60 || /[\u0000-\u001f\u007f]/.test(n))
+      throw new KnowledgeError('INVALID_INPUT', 'A vault’s name is 1 to 60 characters, with no control characters.');
+    if (this.#rows().some((r) => r.id !== exceptId && r.name.toLowerCase() === n.toLowerCase()))
+      throw new KnowledgeError('EXISTS', 'Another vault has that name.');
     return n;
   }
 
   #validPolicy(v: unknown): AgentPolicy {
-    if (typeof v !== 'string' || !(AGENT_POLICIES as readonly string[]).includes(v)) throw new KnowledgeError('INVALID_INPUT', `Agent access is one of ${AGENT_POLICIES.join(', ')}.`);
+    if (typeof v !== 'string' || !(AGENT_POLICIES as readonly string[]).includes(v))
+      throw new KnowledgeError('INVALID_INPUT', `Agent access is one of ${AGENT_POLICIES.join(', ')}.`);
     return v as AgentPolicy;
   }
 
@@ -370,13 +386,15 @@ export class KnowledgeService {
   }
 
   #validTz(v: unknown): string {
-    if (typeof v !== 'string' || !validTimezone(v)) throw new KnowledgeError('INVALID_INPUT', 'That isn’t a time zone name (for example Europe/Berlin).');
+    if (typeof v !== 'string' || !validTimezone(v))
+      throw new KnowledgeError('INVALID_INPUT', 'That isn’t a time zone name (for example Europe/Berlin).');
     return v;
   }
 
   create(req: Partial<CreateVaultRequest>, actor: Actor = UI_ACTOR): VaultSummary {
     const db = this.store.db;
-    if (!db || !this.#ready() || !this.store.writable) throw new KnowledgeError('UNAVAILABLE', 'The portal’s database isn’t available for changes.');
+    if (!db || !this.#ready() || !this.store.writable)
+      throw new KnowledgeError('UNAVAILABLE', 'The portal’s database isn’t available for changes.');
     this.#dirs();
     const at = this.#now().toISOString();
     let kind: 'vault' | 'folder' = 'vault';
@@ -399,25 +417,34 @@ export class KnowledgeService {
     const n = this.#validName(name);
     const daily = req.dailyFolder === undefined ? 'Daily' : this.#validDaily(req.dailyFolder);
     const tz = req.timezone === undefined ? serverTimezone() : this.#validTz(req.timezone);
-    const row: VaultRow = { id, name: n, kind, root, read_only: readOnly, agents, daily_folder: daily, timezone: tz, settings: JSON.stringify(kind === 'folder' ? { ...DEFAULT_SETTINGS, labels: 'heading' } : DEFAULT_SETTINGS), created_at: at, updated_at: at, deleted_at: null };
-    // A source must open before it is recorded: a typo shouldn't leave a vault that can never open.
-    if (kind === 'folder') this.#location(row);
-    db.prepare('INSERT INTO kg_vaults (id, name, kind, root, read_only, agents, daily_folder, timezone, settings, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(
+    const row: VaultRow = {
       id,
-      n,
+      name: n,
       kind,
       root,
-      readOnly,
+      read_only: readOnly,
       agents,
-      daily,
-      tz,
-      row.settings,
-      at,
-      at,
-    );
+      daily_folder: daily,
+      timezone: tz,
+      settings: JSON.stringify(kind === 'folder' ? { ...DEFAULT_SETTINGS, labels: 'heading' } : DEFAULT_SETTINGS),
+      created_at: at,
+      updated_at: at,
+      deleted_at: null,
+    };
+    // A source must open before it is recorded: a typo shouldn't leave a vault that can never open.
+    if (kind === 'folder') this.#location(row);
+    db.prepare(
+      'INSERT INTO kg_vaults (id, name, kind, root, read_only, agents, daily_folder, timezone, settings, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    ).run(id, n, kind, root, readOnly, agents, daily, tz, row.settings, at, at);
     const vault = this.#open(row);
     void vault.scan().catch((e: unknown) => this.#log(`[knowledge] ${n}: scan failed: ${(e as Error).message}`));
-    this.journal.audit({ vaultId: id, actor: actor.id, op: 'vault.create', outcome: 'ok', detail: kind === 'folder' ? `source ${root}` : '' });
+    this.journal.audit({
+      vaultId: id,
+      actor: actor.id,
+      op: 'vault.create',
+      outcome: 'ok',
+      detail: kind === 'folder' ? `source ${root}` : '',
+    });
     return this.#summary(row);
   }
 
@@ -448,13 +475,24 @@ export class KnowledgeService {
     if (req.settings) {
       const cur = this.#settings(row);
       const s = req.settings;
-      if (s.attachmentsFolder !== undefined) cur.attachmentsFolder = typeof s.attachmentsFolder === 'string' ? cleanPath(s.attachmentsFolder.trim(), { strict: true, folder: true }) : cur.attachmentsFolder;
+      if (s.attachmentsFolder !== undefined)
+        cur.attachmentsFolder =
+          typeof s.attachmentsFolder === 'string'
+            ? cleanPath(s.attachmentsFolder.trim(), { strict: true, folder: true })
+            : cur.attachmentsFolder;
       if (s.rewriteLinksOnRename !== undefined) cur.rewriteLinksOnRename = s.rewriteLinksOnRename === true;
       if (s.labels !== undefined) cur.labels = s.labels === 'heading' ? 'heading' : 'filename';
       if (s.agentWorkspaces !== undefined) {
-        if (!Array.isArray(s.agentWorkspaces)) throw new KnowledgeError('INVALID_INPUT', 'Agent workspaces are a list of `<target>/<name>`.');
-        const bad = [...new Set(s.agentWorkspaces.map((w) => (typeof w === 'string' ? w : String(w))).filter((w) => !WORKSPACE_KEY.test(w)))];
-        if (bad.length) throw new KnowledgeError('INVALID_INPUT', `Agent workspaces must look like \`<target>/<name>\`. Not valid: ${bad.map((w) => JSON.stringify(w.slice(0, 80))).join(', ')}.`);
+        if (!Array.isArray(s.agentWorkspaces))
+          throw new KnowledgeError('INVALID_INPUT', 'Agent workspaces are a list of `<target>/<name>`.');
+        const bad = [
+          ...new Set(s.agentWorkspaces.map((w) => (typeof w === 'string' ? w : String(w))).filter((w) => !WORKSPACE_KEY.test(w))),
+        ];
+        if (bad.length)
+          throw new KnowledgeError(
+            'INVALID_INPUT',
+            `Agent workspaces must look like \`<target>/<name>\`. Not valid: ${bad.map((w) => JSON.stringify(w.slice(0, 80))).join(', ')}.`,
+          );
         const before = new Set(cur.agentWorkspaces ?? []);
         cur.agentWorkspaces = [...new Set(s.agentWorkspaces)].sort();
         const now = new Set(cur.agentWorkspaces);
@@ -467,7 +505,15 @@ export class KnowledgeService {
       changes.push(wsChange ? `settings (${wsChange})` : 'settings');
     }
     next.updated_at = this.#now().toISOString();
-    db.prepare('UPDATE kg_vaults SET name = ?, agents = ?, daily_folder = ?, timezone = ?, settings = ?, updated_at = ? WHERE id = ?').run(next.name, next.agents, next.daily_folder, next.timezone, next.settings, next.updated_at, id);
+    db.prepare('UPDATE kg_vaults SET name = ?, agents = ?, daily_folder = ?, timezone = ?, settings = ?, updated_at = ? WHERE id = ?').run(
+      next.name,
+      next.agents,
+      next.daily_folder,
+      next.timezone,
+      next.settings,
+      next.updated_at,
+      id,
+    );
     if (changes.length) this.journal.audit({ vaultId: id, actor: actor.id, op: 'vault.update', outcome: 'ok', detail: changes.join(', ') });
     let warning: string | undefined;
     if (rebind) {
@@ -482,8 +528,16 @@ export class KnowledgeService {
         } catch {
           closed = false;
         }
-        this.#log(`[knowledge] rebind of agent tokens failed after saving vault ${id}: ${why}${closed ? '; live tokens are shut out of vaults' : '; closing them failed too'}`);
-        this.journal.audit({ vaultId: id, actor: actor.id, op: 'vault.rebind', outcome: 'error', detail: `${why}${closed ? ' (tokens closed)' : ' (closing failed)'}` });
+        this.#log(
+          `[knowledge] rebind of agent tokens failed after saving vault ${id}: ${why}${closed ? '; live tokens are shut out of vaults' : '; closing them failed too'}`,
+        );
+        this.journal.audit({
+          vaultId: id,
+          actor: actor.id,
+          op: 'vault.rebind',
+          outcome: 'error',
+          detail: `${why}${closed ? ' (tokens closed)' : ' (closing failed)'}`,
+        });
         warning = 'Saved, but live agent sessions could not be updated: they are shut out of the vaults until it is retried.';
       }
     }
@@ -504,7 +558,11 @@ export class KnowledgeService {
       if (existsSync(from)) renameSync(from, join(this.#opts.dir, 'trash', `${id}-${at.toISOString().replace(/[-:.]/g, '').slice(0, 15)}`));
     }
     for (const f of [`${id}.db`, `${id}.db-wal`, `${id}.db-shm`]) rmSync(join(this.#opts.dir, 'index', f), { force: true });
-    db.prepare('UPDATE kg_vaults SET deleted_at = ?, name = ? WHERE id = ?').run(at.toISOString(), `${row.name} (deleted ${at.toISOString().slice(0, 10)} ${id})`, id);
+    db.prepare('UPDATE kg_vaults SET deleted_at = ?, name = ? WHERE id = ?').run(
+      at.toISOString(),
+      `${row.name} (deleted ${at.toISOString().slice(0, 10)} ${id})`,
+      id,
+    );
     this.journal.audit({ vaultId: id, actor: actor.id, op: 'vault.delete', outcome: 'ok', detail: row.kind });
   }
 
@@ -518,7 +576,8 @@ export class KnowledgeService {
   #access(row: VaultRow, actor: Actor, need: 'read' | 'write'): void {
     if (!this.#asAgent(actor)) return;
     if (row.agents === 'off') throw new KnowledgeError('VAULT_UNAVAILABLE', 'This vault isn’t available to agents.');
-    if (need === 'write' && row.agents === 'read') throw new KnowledgeError('NOT_ALLOWED_BY_POLICY', 'This vault lets agents read, not write.');
+    if (need === 'write' && row.agents === 'read')
+      throw new KnowledgeError('NOT_ALLOWED_BY_POLICY', 'This vault lets agents read, not write.');
   }
 
   /** `write-own`: an agent may change only a note agents wrote; anything else is for a person. */
@@ -528,15 +587,24 @@ export class KnowledgeService {
     this.#access(row, actor, 'write');
     if (row.agents === 'write' || action === 'create' || action === 'daily') return;
     const a = this.journal.authorship(row.id, path);
-    if (!(a.count > 0 && a.agentOnly)) throw new KnowledgeError('NOT_ALLOWED_BY_POLICY', 'In this vault agents can change only notes that agents wrote. Create a new note instead, or ask the admin to allow edits.');
+    if (!(a.count > 0 && a.agentOnly))
+      throw new KnowledgeError(
+        'NOT_ALLOWED_BY_POLICY',
+        'In this vault agents can change only notes that agents wrote. Create a new note instead, or ask the admin to allow edits.',
+      );
   }
 
   #checkAgentText(actor: Actor, ...texts: (string | undefined)[]): void {
     if (!this.#asAgent(actor)) return;
     for (const t of texts) {
       if (t === undefined) continue;
-      if (Buffer.byteLength(t) > this.limits.agentWriteBytes) throw new KnowledgeError('TOO_LARGE', `An agent can write at most ${Math.round(this.limits.agentWriteBytes / 1024)} KB at a time.`);
-      if (Vault.looksSecret(t)) throw new KnowledgeError('SECRET_IN_CONTENT', 'This text looks like it contains a secret (an API key, token or private key). Notes can’t hold secrets: remove it, or keep it in Secrets & env.');
+      if (Buffer.byteLength(t) > this.limits.agentWriteBytes)
+        throw new KnowledgeError('TOO_LARGE', `An agent can write at most ${Math.round(this.limits.agentWriteBytes / 1024)} KB at a time.`);
+      if (Vault.looksSecret(t))
+        throw new KnowledgeError(
+          'SECRET_IN_CONTENT',
+          'This text looks like it contains a secret (an API key, token or private key). Notes can’t hold secrets: remove it, or keep it in Secrets & env.',
+        );
     }
   }
 
@@ -544,9 +612,15 @@ export class KnowledgeService {
   #run<T>(row: VaultRow, actor: Actor, op: string, path: string | null, fn: () => T): T {
     const audit = (e: unknown) => {
       if (!isKnowledgeError(e)) return;
-      const outcome = e.reason === 'CONFLICT' || e.reason === 'EXISTS' || e.reason === 'NOT_UNIQUE' ? 'conflict' : e.reason === 'NOT_ALLOWED_BY_POLICY' || e.reason === 'VAULT_UNAVAILABLE' || e.reason === 'READ_ONLY' ? 'denied' : 'refused';
+      const outcome =
+        e.reason === 'CONFLICT' || e.reason === 'EXISTS' || e.reason === 'NOT_UNIQUE'
+          ? 'conflict'
+          : e.reason === 'NOT_ALLOWED_BY_POLICY' || e.reason === 'VAULT_UNAVAILABLE' || e.reason === 'READ_ONLY'
+            ? 'denied'
+            : 'refused';
       // A person's conflicts and typos are ordinary; an agent's refusals are what the admin wants to see.
-      if (this.#asAgent(actor) || outcome === 'denied') this.journal.audit({ vaultId: row.id, actor: actor.id, op, path, outcome, detail: e.reason });
+      if (this.#asAgent(actor) || outcome === 'denied')
+        this.journal.audit({ vaultId: row.id, actor: actor.id, op, path, outcome, detail: e.reason });
     };
     try {
       const r = fn();
@@ -589,29 +663,44 @@ export class KnowledgeService {
     const agentOnly = this.journal.agentOnlyPaths(row.id, notePaths);
     const entries: VaultTreeEntry[] = [
       ...folders.map((d): VaultTreeEntry => ({ kind: 'folder', name: d.name, path: d.path, count: d.count })),
-      ...files.map(
-        (x): VaultTreeEntry => ({
-          kind: x.kind,
-          name: x.name,
-          path: x.path,
-          size: x.size,
-          mtime: new Date(x.mtimeMs).toISOString(),
-          ...(x.kind === 'note' ? { title: x.headingTitle, agent: agentOnly.has(x.path) } : {}),
-        }),
-      ),
+      ...files.map((x): VaultTreeEntry => ({
+        kind: x.kind,
+        name: x.name,
+        path: x.path,
+        size: x.size,
+        mtime: new Date(x.mtimeMs).toISOString(),
+        ...(x.kind === 'note' ? { title: x.headingTitle, agent: agentOnly.has(x.path) } : {}),
+      })),
     ];
     return { folder: f, entries };
   }
 
   #author(vaultId: string, path: string): { author: NoteAuthor | null; agentOnly: boolean } {
     const a = this.journal.authorship(vaultId, path);
-    return { author: a.lastActor && a.lastKind && a.lastAt ? { actor: a.lastActor, kind: a.lastKind, at: a.lastAt } : null, agentOnly: a.count > 0 && a.agentOnly };
+    return {
+      author: a.lastActor && a.lastKind && a.lastAt ? { actor: a.lastActor, kind: a.lastKind, at: a.lastAt } : null,
+      agentOnly: a.count > 0 && a.agentOnly,
+    };
   }
 
   #view(row: VaultRow, vault: Vault, r: ReturnType<Vault['readNote']>): NoteView {
     const parsed = vault.parse(r.text);
     const file = r.file;
-    const links: NoteLink[] = vault.index.outgoing(file.id).map((l) => ({ style: l.style, embed: l.embed, target: l.target, heading: l.heading, block: l.block, alias: l.alias, entity: l.entity, line: l.line, to: l.to, ambiguous: l.ambiguous, anchorMissing: l.anchorMissing }));
+    const links: NoteLink[] = vault.index
+      .outgoing(file.id)
+      .map((l) => ({
+        style: l.style,
+        embed: l.embed,
+        target: l.target,
+        heading: l.heading,
+        block: l.block,
+        alias: l.alias,
+        entity: l.entity,
+        line: l.line,
+        to: l.to,
+        ambiguous: l.ambiguous,
+        anchorMissing: l.anchorMissing,
+      }));
     const { author, agentOnly } = this.#author(row.id, r.path);
     return {
       vaultId: row.id,
@@ -623,7 +712,12 @@ export class KnowledgeService {
       version: r.version,
       size: r.size,
       mtime: new Date(r.mtimeMs).toISOString(),
-      frontmatter: { raw: parsed.frontmatterRaw, props: parsed.frontmatter, error: parsed.frontmatterError, bodyOffset: parsed.bodyStart - (r.text.startsWith('\uFEFF') ? 1 : 0) },
+      frontmatter: {
+        raw: parsed.frontmatterRaw,
+        props: parsed.frontmatter,
+        error: parsed.frontmatterError,
+        bodyOffset: parsed.bodyStart - (r.text.startsWith('\uFEFF') ? 1 : 0),
+      },
       tags: vault.index.tagsOf(file.id),
       aliases: vault.index.aliasesOf(file.id),
       headings: vault.index.headingsOf(file.id),
@@ -652,7 +746,14 @@ export class KnowledgeService {
   }
 
   /** The text under a heading or a block of a note, for rendering `![[Note#Heading]]`. */
-  embed(ref: string, path: string, heading: string | null, block: string | null, actor: Actor = UI_ACTOR, scope?: CallerScope | null): { path: string; text: string } {
+  embed(
+    ref: string,
+    path: string,
+    heading: string | null,
+    block: string | null,
+    actor: Actor = UI_ACTOR,
+    scope?: CallerScope | null,
+  ): { path: string; text: string } {
     const { row, vault } = this.#use(ref, actor, 'read', scope);
     const r = vault.readNote(path);
     this.#edge(row, r.path, actor, 'read');
@@ -669,7 +770,10 @@ export class KnowledgeService {
       if (i >= 0) {
         let start = i;
         while (start > 0 && lines[start - 1]!.trim() !== '') start--;
-        out = lines.slice(start, i + 1).join('\n').replace(/\s*\^[A-Za-z0-9-]+\s*$/, '');
+        out = lines
+          .slice(start, i + 1)
+          .join('\n')
+          .replace(/\s*\^[A-Za-z0-9-]+\s*$/, '');
       } else out = '';
     }
     return { path: r.path, text: out.slice(0, EMBED_CHARS) };
@@ -687,7 +791,13 @@ export class KnowledgeService {
     return vault.index.mentions(r.file.id, [r.file.name, ...vault.index.aliasesOf(r.file.id)]);
   }
 
-  search(ref: string, q: string, o: { limit?: number; offset?: number; tag?: string; folder?: string } = {}, actor: Actor = UI_ACTOR, scope?: CallerScope | null): NoteSearchResult {
+  search(
+    ref: string,
+    q: string,
+    o: { limit?: number; offset?: number; tag?: string; folder?: string } = {},
+    actor: Actor = UI_ACTOR,
+    scope?: CallerScope | null,
+  ): NoteSearchResult {
     const started = performance.now();
     const { row, vault } = this.#use(ref, actor, 'read', scope);
     vault.scanIfStale();
@@ -696,7 +806,10 @@ export class KnowledgeService {
     const limit = Math.max(1, Math.min(cap, Math.floor(o.limit ?? 20)));
     const parsed = parseQuery(`${text}${o.tag ? ` tag:${o.tag}` : ''}${o.folder ? ` folder:${o.folder}` : ''}`);
     const { rows, total } = vault.index.search(parsed, limit, Math.max(0, Math.floor(o.offset ?? 0)));
-    const agentOnly = this.journal.agentOnlyPaths(row.id, rows.map((r) => r.path));
+    const agentOnly = this.journal.agentOnlyPaths(
+      row.id,
+      rows.map((r) => r.path),
+    );
     const words = [...parsed.words, ...parsed.phrases.flat()];
     const hits: NoteSearchHit[] = rows.map((r) => {
       let snippet: NoteSearchHit['snippet'] = null;
@@ -708,7 +821,16 @@ export class KnowledgeService {
         // gone since the index looked
       }
       const file = vault.index.get(r.path);
-      return { path: r.path, name: r.name, title: r.headingTitle, folder: folderOf(r.path), tags: file ? vault.index.tagsOf(file.id) : [], snippet, mtime: new Date(r.mtimeMs).toISOString(), agent: agentOnly.has(r.path) };
+      return {
+        path: r.path,
+        name: r.name,
+        title: r.headingTitle,
+        folder: folderOf(r.path),
+        tags: file ? vault.index.tagsOf(file.id) : [],
+        snippet,
+        mtime: new Date(r.mtimeMs).toISOString(),
+        agent: agentOnly.has(r.path),
+      };
     });
     return { hits, total, tookMs: Math.round((performance.now() - started) * 10) / 10 };
   }
@@ -716,7 +838,9 @@ export class KnowledgeService {
   quick(ref: string, q: string, actor: Actor = UI_ACTOR, scope?: CallerScope | null): NoteQuickHit[] {
     const { vault } = this.#use(ref, actor, 'read', scope);
     vault.scanIfStale();
-    return vault.index.quick(String(q ?? '').slice(0, this.limits.queryChars), 12, 'all').map((h) => ({ path: h.path, name: h.name, kind: h.kind, alias: h.alias }));
+    return vault.index
+      .quick(String(q ?? '').slice(0, this.limits.queryChars), 12, 'all')
+      .map((h) => ({ path: h.path, name: h.name, kind: h.kind, alias: h.alias }));
   }
 
   tags(ref: string, prefix = '', actor: Actor = UI_ACTOR, scope?: CallerScope | null): VaultTagCount[] {
@@ -735,8 +859,19 @@ export class KnowledgeService {
     const { row, vault } = this.#use(ref, actor, 'read', scope);
     vault.scanIfStale();
     const files = vault.index.recent(Math.max(1, Math.min(100, limit)));
-    const agentOnly = this.journal.agentOnlyPaths(row.id, files.map((f) => f.path));
-    return files.map((x): VaultTreeEntry => ({ kind: 'note', name: x.name, path: x.path, size: x.size, mtime: new Date(x.mtimeMs).toISOString(), title: x.headingTitle, agent: agentOnly.has(x.path) }));
+    const agentOnly = this.journal.agentOnlyPaths(
+      row.id,
+      files.map((f) => f.path),
+    );
+    return files.map((x): VaultTreeEntry => ({
+      kind: 'note',
+      name: x.name,
+      path: x.path,
+      size: x.size,
+      mtime: new Date(x.mtimeMs).toISOString(),
+      title: x.headingTitle,
+      agent: agentOnly.has(x.path),
+    }));
   }
 
   /* ---------- Graphs ---------- */
@@ -764,10 +899,13 @@ export class KnowledgeService {
       const build = () => docsGraph({ vaultId: row.id, index: vault.index, labels, q });
       // A whole-vault graph is the costly one (a few hundred milliseconds at 10,000 notes): the same question about the same index is answered once.
       if (q.around) return build();
-      const key = [labels, q.folder, q.tag, q.tags, q.unresolved, q.attachments, q.hideOrphans, q.cap].map((x) => String(x ?? '')).join('|');
+      const key = [labels, q.folder, q.tag, q.tags, q.unresolved, q.attachments, q.hideOrphans, q.cap]
+        .map((x) => String(x ?? ''))
+        .join('|');
       return this.#cached(vault.index, key, build);
     }
-    if (actor.id.startsWith('session:') || actor.id.startsWith('ticket:')) throw new KnowledgeError('NOT_ALLOWED_BY_POLICY', 'Agents can use the docs graph.');
+    if (actor.id.startsWith('session:') || actor.id.startsWith('ticket:'))
+      throw new KnowledgeError('NOT_ALLOWED_BY_POLICY', 'Agents can use the docs graph.');
     const rows = this.#graphVaults(q.vault, actor, scope);
     if (q.lens === 'context') return this.#contextGraph(q, rows);
     return this.#agenticGraph(q, rows);
@@ -791,8 +929,15 @@ export class KnowledgeService {
 
   #contextGraph(q: GraphQuery, rows: VaultRow[]): GraphResponse {
     const since = new Date(this.#now().getTime() - parseSince(q.since));
-    const kinds = q.access === 'read' ? (['read'] as const) : q.access === 'write' ? (['created', 'edited', 'appended', 'deleted'] as const) : undefined;
-    const touches = this.#ready() ? this.journal.touches(since, { vaults: rows.map((r) => r.id), kinds: kinds ? [...kinds] : undefined, limit: 20_000 }) : [];
+    const kinds =
+      q.access === 'read'
+        ? (['read'] as const)
+        : q.access === 'write'
+          ? (['created', 'edited', 'appended', 'deleted'] as const)
+          : undefined;
+    const touches = this.#ready()
+      ? this.journal.touches(since, { vaults: rows.map((r) => r.id), kinds: kinds ? [...kinds] : undefined, limit: 20_000 })
+      : [];
     const of = (kind: string) => touches.filter((t) => t.sourceKind === kind).map((t) => t.sourceId);
     const sessions = this.directory.sessionsByIds(of('session'));
     const tickets = this.directory.ticketsByIds([...of('ticket'), ...[...sessions.values()].map((s) => s.ticketId ?? '')]);
@@ -821,14 +966,18 @@ export class KnowledgeService {
     for (const row of rows) {
       if (mentions.length >= 20_000) break;
       try {
-        for (const m of this.#open(row).index.graphEntities()) mentions.push({ vaultId: row.id, note: m, type: m.type, key: m.key, count: m.n });
+        for (const m of this.#open(row).index.graphEntities())
+          mentions.push({ vaultId: row.id, note: m, type: m.type, key: m.key, count: m.n });
       } catch {
         // a vault that can't be opened has nothing to add
       }
     }
     // What the recent things point at, from outside the window: a ticket's session, a session's parent and ticket, what notes mention.
     const have = new Set(tickets.map((t) => t.id));
-    const wantTickets = [...sessions.map((s) => s.ticketId ?? ''), ...mentions.filter((m) => m.type === 'ticket').map((m) => m.key)].filter(Boolean).map(ticketKey).filter((id) => !have.has(id));
+    const wantTickets = [...sessions.map((s) => s.ticketId ?? ''), ...mentions.filter((m) => m.type === 'ticket').map((m) => m.key)]
+      .filter(Boolean)
+      .map(ticketKey)
+      .filter((id) => !have.has(id));
     for (const t of this.directory.ticketsByIds(wantTickets.slice(0, 200)).values()) tickets.push(t);
     const wantSessions = [
       ...sessions.map((s) => s.parentId ?? ''),
@@ -842,7 +991,17 @@ export class KnowledgeService {
   /* ---------- History ---------- */
 
   #entry(r: VersionRow): NoteHistoryEntry {
-    return { id: r.id, at: r.at, op: r.op, actor: r.actor, actorKind: r.actorKind, size: r.size, note: r.note, fromPath: r.fromPath, hasContent: r.hasContent };
+    return {
+      id: r.id,
+      at: r.at,
+      op: r.op,
+      actor: r.actor,
+      actorKind: r.actorKind,
+      size: r.size,
+      note: r.note,
+      fromPath: r.fromPath,
+      hasContent: r.hasContent,
+    };
   }
 
   history(ref: string, path: string, actor: Actor = UI_ACTOR): NoteHistory {
@@ -867,7 +1026,13 @@ export class KnowledgeService {
 
   /* ---------- Writing ---------- */
 
-  putNote(ref: string, path: string, req: { content: string; baseVersion?: string | null; create?: boolean }, actor: Actor = UI_ACTOR, scope?: CallerScope | null): WriteNoteResult {
+  putNote(
+    ref: string,
+    path: string,
+    req: { content: string; baseVersion?: string | null; create?: boolean },
+    actor: Actor = UI_ACTOR,
+    scope?: CallerScope | null,
+  ): WriteNoteResult {
     const { row, vault } = this.#use(ref, actor, 'write', scope);
     return this.#run(row, actor, 'note.write', path, () => {
       const existing = vault.has(path);
@@ -875,12 +1040,25 @@ export class KnowledgeService {
       this.#checkAgentText(actor, req.content);
       const r = vault.writeNote(path, req.content, { actor, baseVersion: req.baseVersion ?? null, create: req.create });
       if (!r.unchanged) this.#edge(row, r.path, actor, r.created ? 'created' : 'edited');
-      const warnings = !this.#asAgent(actor) && Vault.looksSecret(req.content) ? ['This note contains something that looks like a secret (a key or token). Notes aren’t encrypted; keep real secrets in Secrets & env instead.'] : [];
+      const warnings =
+        !this.#asAgent(actor) && Vault.looksSecret(req.content)
+          ? [
+              'This note contains something that looks like a secret (a key or token). Notes aren’t encrypted; keep real secrets in Secrets & env instead.',
+            ]
+          : [];
       return { path: r.path, version: r.version, created: r.created, unchanged: r.unchanged, size: r.size, warnings };
     });
   }
 
-  editNote(ref: string, path: string, oldText: string, newText: string, baseVersion: string, actor: Actor = UI_ACTOR, scope?: CallerScope | null): WriteNoteResult {
+  editNote(
+    ref: string,
+    path: string,
+    oldText: string,
+    newText: string,
+    baseVersion: string,
+    actor: Actor = UI_ACTOR,
+    scope?: CallerScope | null,
+  ): WriteNoteResult {
     const { row, vault } = this.#use(ref, actor, 'write', scope);
     return this.#run(row, actor, 'note.edit', path, () => {
       const existing = vault.has(path);
@@ -892,7 +1070,14 @@ export class KnowledgeService {
     });
   }
 
-  appendNote(ref: string, path: string, text: string, heading: string | undefined, actor: Actor = UI_ACTOR, scope?: CallerScope | null): WriteNoteResult {
+  appendNote(
+    ref: string,
+    path: string,
+    text: string,
+    heading: string | undefined,
+    actor: Actor = UI_ACTOR,
+    scope?: CallerScope | null,
+  ): WriteNoteResult {
     const { row, vault } = this.#use(ref, actor, 'write', scope);
     return this.#run(row, actor, 'note.append', path, () => {
       const existing = vault.has(path);
@@ -900,16 +1085,25 @@ export class KnowledgeService {
       this.#checkAgentText(actor, text, heading);
       const r = vault.appendNote(path, text, { actor, heading: heading ?? null });
       if (!r.unchanged) this.#edge(row, r.path, actor, r.created ? 'created' : 'appended');
-      const warnings = !this.#asAgent(actor) && Vault.looksSecret(text) ? ['The text you added looks like it contains a secret (a key or token).'] : [];
+      const warnings =
+        !this.#asAgent(actor) && Vault.looksSecret(text) ? ['The text you added looks like it contains a secret (a key or token).'] : [];
       return { path: r.path, version: r.version, created: r.created, unchanged: r.unchanged, size: r.size, warnings };
     });
   }
 
-  renameNote(ref: string, from: string, to: string, o: { rewriteLinks?: boolean } = {}, actor: Actor = UI_ACTOR): Promise<RenameNoteResult> {
+  renameNote(
+    ref: string,
+    from: string,
+    to: string,
+    o: { rewriteLinks?: boolean } = {},
+    actor: Actor = UI_ACTOR,
+  ): Promise<RenameNoteResult> {
     const { row, vault } = this.#use(ref, actor, 'write');
     return this.#run(row, actor, 'note.rename', from, () => {
       if (this.#asAgent(actor)) throw new KnowledgeError('NOT_ALLOWED_BY_POLICY', 'Agents can’t rename notes.');
-      return vault.renameNote(from, to, { actor, rewriteLinks: o.rewriteLinks ?? this.#settings(row).rewriteLinksOnRename }).then((r) => ({ path: r.path, rewritten: r.rewritten }));
+      return vault
+        .renameNote(from, to, { actor, rewriteLinks: o.rewriteLinks ?? this.#settings(row).rewriteLinksOnRename })
+        .then((r) => ({ path: r.path, rewritten: r.rewritten }));
     });
   }
 
@@ -950,7 +1144,12 @@ export class KnowledgeService {
     return { date: d, path: r.path, exists: true, note: this.#view(row, vault, r) };
   }
 
-  appendDaily(ref: string, req: DailyAppendRequest, actor: Actor = UI_ACTOR, scope?: CallerScope | null): WriteNoteResult & { date: string } {
+  appendDaily(
+    ref: string,
+    req: DailyAppendRequest,
+    actor: Actor = UI_ACTOR,
+    scope?: CallerScope | null,
+  ): WriteNoteResult & { date: string } {
     const { row, vault } = this.#use(ref, actor, 'write', scope);
     const now = this.#now();
     const d = req.date && req.date.trim() ? req.date.trim() : todayIn(row.timezone, now);
@@ -962,7 +1161,10 @@ export class KnowledgeService {
       if (!body) throw new KnowledgeError('INVALID_INPUT', 'Say what to add.');
       const lines = body.split(/\r?\n/);
       const stamp = req.time === false ? '' : `${timeIn(row.timezone, now)} `;
-      const bullet = `- ${stamp}${lines[0]}${lines.slice(1).map((l) => `\n  ${l}`).join('')}`;
+      const bullet = `- ${stamp}${lines[0]}${lines
+        .slice(1)
+        .map((l) => `\n  ${l}`)
+        .join('')}`;
       const existing = vault.has(path);
       this.#mayChange(row, vault, actor, existing ?? path, 'daily');
       const r = vault.appendNote(path, bullet, { actor });
@@ -999,8 +1201,14 @@ export class KnowledgeService {
   activity(ref: string, limit = 60, actor: Actor = UI_ACTOR): VaultActivityEntry[] {
     const { row } = this.#use(ref, actor, 'read');
     // A note's "original" row is bookkeeping (the text before the portal first changed it), not an event.
-    const versions = this.journal.activity(row.id, limit * 2).filter((v) => v.note !== 'original').slice(0, limit).map((v): VaultActivityEntry => ({ at: v.at, actor: v.actor, op: v.op, path: v.path, outcome: 'ok', detail: v.note }));
-    const audits = this.journal.recentAudit(row.id, limit).map((a): VaultActivityEntry => ({ at: a.at, actor: a.actor, op: a.op, path: a.path, outcome: a.outcome, detail: a.detail }));
+    const versions = this.journal
+      .activity(row.id, limit * 2)
+      .filter((v) => v.note !== 'original')
+      .slice(0, limit)
+      .map((v): VaultActivityEntry => ({ at: v.at, actor: v.actor, op: v.op, path: v.path, outcome: 'ok', detail: v.note }));
+    const audits = this.journal
+      .recentAudit(row.id, limit)
+      .map((a): VaultActivityEntry => ({ at: a.at, actor: a.actor, op: a.op, path: a.path, outcome: a.outcome, detail: a.detail }));
     return [...versions, ...audits].sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0)).slice(0, limit);
   }
 
@@ -1013,11 +1221,21 @@ export class KnowledgeService {
   /** The vault as a zip: a download name and the stream of chunks, with one top-level folder named for the vault. */
   exportZip(ref: string, actor: Actor = UI_ACTOR): { filename: string; chunks: Generator<Buffer> } {
     const { row, vault } = this.#use(ref, actor, 'read');
-    const top = row.name.replace(/[\\/:*?"<>|\u0000-\u001f]/g, '-').replace(/^\.+/, '').trim() || 'vault';
+    const top =
+      row.name
+        .replace(/[\\/:*?"<>|\u0000-\u001f]/g, '-')
+        .replace(/^\.+/, '')
+        .trim() || 'vault';
     const entries = (function* () {
       for (const e of vault.exportEntries()) yield { ...e, name: `${top}/${e.name}` };
     })();
-    this.journal.audit({ vaultId: row.id, actor: actor.id, op: 'vault.export', outcome: 'ok', detail: `${vault.index.stats().notes} notes` });
+    this.journal.audit({
+      vaultId: row.id,
+      actor: actor.id,
+      op: 'vault.export',
+      outcome: 'ok',
+      detail: `${vault.index.stats().notes} notes`,
+    });
     return { filename: `${top}.zip`, chunks: zipChunks(entries) };
   }
 
@@ -1072,7 +1290,10 @@ export class KnowledgeService {
       const last = newest ? statSync(join(dir, newest)).mtimeMs : 0;
       const changed = vault.index.stats().lastChangeMs ?? 0;
       if (!changed || changed <= last) continue;
-      const stamp = this.#now().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
+      const stamp = this.#now()
+        .toISOString()
+        .replace(/[-:]/g, '')
+        .replace(/\.\d+Z$/, 'Z');
       const file = join(dir, `${prefix}${stamp}.zip`);
       const tmp = `${file}.tmp`;
       try {
@@ -1115,7 +1336,8 @@ export class KnowledgeService {
   }
 
   setDailyFolder(id: string, folder: string): void {
-    this.store.db!.prepare('UPDATE kg_vaults SET daily_folder = ?, updated_at = ? WHERE id = ?').run(this.#validDaily(folder), this.#now().toISOString(), id);
+    this.store
+      .db!.prepare('UPDATE kg_vaults SET daily_folder = ?, updated_at = ? WHERE id = ?')
+      .run(this.#validDaily(folder), this.#now().toISOString(), id);
   }
-
 }

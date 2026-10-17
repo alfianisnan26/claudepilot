@@ -10,7 +10,10 @@ const startOf = (v: LabSliceView): number => v.startMs ?? 0;
 const keyOf = (v: LabSliceView): string => `${v.sessionId}\u0000${v.sliceId}`;
 
 /** `rows` are the caller's own view of the slices (already filtered to what the caller may read); `scope` names the caller and the filters. */
-export function slicesPage(rows: readonly LabSliceView[], args: { scope: string; cursor?: string | undefined; limit?: unknown }): LabSlicePage {
+export function slicesPage(
+  rows: readonly LabSliceView[],
+  args: { scope: string; cursor?: string | undefined; limit?: unknown },
+): LabSlicePage {
   const limit = clampLimit(args.limit);
   const sorted = [...rows].sort((x, y) => startOf(y) - startOf(x) || (keyOf(x) < keyOf(y) ? -1 : keyOf(x) > keyOf(y) ? 1 : 0));
   let from = 0;

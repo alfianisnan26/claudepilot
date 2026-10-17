@@ -52,7 +52,8 @@ const walk = async (a: Hono, rest: string, between?: (n: number) => void) => {
 /** `count` tickets of mixed priorities; created and updated stamps come in runs of three equal values, so the number has to break ties. */
 function seeded(h: H, count: number): string[] {
   const ids: string[] = [];
-  for (let i = 0; i < count; i++) ids.push(h.tickets.create(UI, { summary: `Ticket ${i}`, priority: TICKET_PRIORITIES[i % TICKET_PRIORITIES.length]! }).id);
+  for (let i = 0; i < count; i++)
+    ids.push(h.tickets.create(UI, { summary: `Ticket ${i}`, priority: TICKET_PRIORITIES[i % TICKET_PRIORITIES.length]! }).id);
   const stamp = (i: number) => `2026-01-01T00:00:${String(Math.floor(i / 3)).padStart(2, '0')}Z`;
   const db = h.store.db!;
   const nums = (db.prepare('SELECT number FROM tickets ORDER BY number').all() as { number: number }[]).map((r) => r.number);
@@ -60,7 +61,12 @@ function seeded(h: H, count: number): string[] {
   return ids;
 }
 const idOf = (n: number) => `T-${n}`;
-const inOrder = (h: H, order: string) => (h.store.db!.prepare(`SELECT t.number FROM tickets t WHERE t.status NOT IN ('done','wont_do') ORDER BY ${order}`).all() as { number: number }[]).map((r) => idOf(r.number));
+const inOrder = (h: H, order: string) =>
+  (
+    h.store.db!.prepare(`SELECT t.number FROM tickets t WHERE t.status NOT IN ('done','wont_do') ORDER BY ${order}`).all() as {
+      number: number;
+    }[]
+  ).map((r) => idOf(r.number));
 const PRIORITY_ORDER = 't.priority_rank ASC, t.updated_at DESC, t.number DESC';
 const NEWEST_ORDER = 't.created_at DESC, t.number DESC';
 
@@ -73,7 +79,7 @@ test('order: priority, newest and closed-only lists page in the list order, ever
     assert.deepEqual(await walk(a, 'limit=3&sort=newest'), inOrder(h, NEWEST_ORDER));
     // The same walk agrees with the one-shot list the service answers (the order did not change).
     assert.deepEqual(
-      (await walk(a, 'limit=100')),
+      await walk(a, 'limit=100'),
       h.tickets.list(UI, { limit: 100 }).items.map((i) => i.id),
     );
     // Closed only: by closed_at, then number.
@@ -145,14 +151,28 @@ test('a bad cursor is a 400: garbage, a tampered one, one made for another filte
       const res = await a.request(`/?cursor=${encodeURIComponent(cursor)}`);
       assert.equal(res.status, 400, cursor);
     }
-    for (const other of ['status=open', 'tag=alpha', 'assignee=unassigned', 'workspace=docker%2Fws1', 'q=Ticket', 'priority=high', 'type=task', 'includeClosed=1', 'sort=newest', 'orphan=1']) {
+    for (const other of [
+      'status=open',
+      'tag=alpha',
+      'assignee=unassigned',
+      'workspace=docker%2Fws1',
+      'q=Ticket',
+      'priority=high',
+      'type=task',
+      'includeClosed=1',
+      'sort=newest',
+      'orphan=1',
+    ]) {
       const res = await a.request(`/?${other}&cursor=${encodeURIComponent(next)}`);
       assert.equal(res.status, 400, `a cursor of the plain list does not open ${other}`);
     }
     assert.equal((await a.request(`/?cursor=${encodeURIComponent(next)}`)).status, 200, 'the real one still works');
     // Another caller's cursor: an agent of a workspace gets a 400 on the person's cursor.
     const t = h.tickets;
-    assert.throws(() => t.listPage({ kind: 'agent', tokenId: 'agt_x', label: 'x', workspaceId: 'docker/ws1', sessionId: 'x' }, {}, { cursor: next }), /cursor is not valid/);
+    assert.throws(
+      () => t.listPage({ kind: 'agent', tokenId: 'agt_x', label: 'x', workspaceId: 'docker/ws1', sessionId: 'x' }, {}, { cursor: next }),
+      /cursor is not valid/,
+    );
   } finally {
     h.done();
   }
@@ -164,7 +184,10 @@ test('authz: a ticket the caller may not view is in no page and no cursor names 
     seeded(h, 12);
     const all = inOrder(h, PRIORITY_ORDER);
     const mine = new Set(all.filter((_, i) => i % 2 === 0));
-    registerResolver({ type: 'ticket', resolve: (id) => ({ ref: ticketRef(id), owner: mine.has(id) ? { kind: 'user', id: 'u_a' } : { kind: 'user', id: 'u_b' } }) });
+    registerResolver({
+      type: 'ticket',
+      resolve: (id) => ({ ref: ticketRef(id), owner: mine.has(id) ? { kind: 'user', id: 'u_a' } : { kind: 'user', id: 'u_b' } }),
+    });
     const them = app(h, { kind: 'user', userId: 'u_a', loginSessionId: 'l1', via: 'ui' });
     const seen: string[] = [];
     const cursors: string[] = [];
@@ -176,7 +199,11 @@ test('authz: a ticket the caller may not view is in no page and no cursor names 
       cursors.push(p.next);
       cursor = p.next;
     }
-    assert.deepEqual(seen, all.filter((id) => mine.has(id)), 'exactly the tickets u_a may view, in order, each once');
+    assert.deepEqual(
+      seen,
+      all.filter((id) => mine.has(id)),
+      'exactly the tickets u_a may view, in order, each once',
+    );
     assert.ok(cursors.length > 0);
     for (const c of cursors) {
       const named = peekCursor(c).id as number;
@@ -271,7 +298,10 @@ test('bounded scan: a sparse keep still yields every kept row once across the bo
       assert.equal(typeof peekCursor(p.next).id, 'number');
       cursor = p.next;
     }
-    assert.deepEqual(seen, all.filter((id) => kept.has(id)));
+    assert.deepEqual(
+      seen,
+      all.filter((id) => kept.has(id)),
+    );
   } finally {
     h.done();
   }

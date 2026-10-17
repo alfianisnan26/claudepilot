@@ -2076,8 +2076,16 @@ export const GITC_ROOTS: readonly string[] = [
 /** The file's content: one root a line. Throws for a root that is not absolute, has `..` or is not a worktrees folder. */
 export function gitCRootsContent(roots: readonly string[]): string {
   for (const r of roots) {
-    const ok = r.startsWith('/') && !r.split('/').includes('..') && !/[\s\u0000-\u001f]/.test(r) && !r.endsWith('/') && /(^|\/)(agentic-worktrees|[^/]+\.worktrees)$/.test(r);
-    if (!ok) throw new Error(`git -C root "${r}" must be an absolute path without "..", ending in .worktrees or agentic-worktrees (never a main checkout)`);
+    const ok =
+      r.startsWith('/') &&
+      !r.split('/').includes('..') &&
+      !/[\s\u0000-\u001f]/.test(r) &&
+      !r.endsWith('/') &&
+      /(^|\/)(agentic-worktrees|[^/]+\.worktrees)$/.test(r);
+    if (!ok)
+      throw new Error(
+        `git -C root "${r}" must be an absolute path without "..", ending in .worktrees or agentic-worktrees (never a main checkout)`,
+      );
   }
   return `# claudepilot: lane roots for the git -C check of policy-rule-guard (T-860, T-924). Root-owned; written by the portal.\n${roots.join('\n')}\n`;
 }

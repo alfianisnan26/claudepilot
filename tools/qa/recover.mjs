@@ -26,19 +26,65 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const SIZES = [
   { name: '390', w: 390, h: 844, mobile: true, insets: { top: 59, bottom: 34, left: 0, right: 0 } },
   { name: '1280', w: 1280, h: 800 },
-].flatMap((s) => [{ ...s, name: `${s.name}-light` }, { ...s, name: `${s.name}-dark`, dark: true }]);
+].flatMap((s) => [
+  { ...s, name: `${s.name}-light` },
+  { ...s, name: `${s.name}-dark`, dark: true },
+]);
 
 const now = new Date().toISOString();
 const base = (id, title, extra) => ({
-  id, workspaceId: 'bv-ws', cwd: '/work', title, state: 'idle', origin: 'ui', model: 'claude-opus-5-5', mode: 'default', effort: null, ultracode: false,
-  ultracodeAvailable: false, process: 'live', context: null, costUsd: 106.96, turns: 40, lastSeq: 0, waiting: 0, waitingFor: null, createdAt: now,
-  lastActivityAt: now, endedReason: null, endedFor: null, claudeId: '', claudeName: 'fadlilah', predecessorId: null, successorId: null, archivedAt: null,
-  pinnedAt: null, ticketId: null, parentId: null, worktree: null, startedBy: 'ui', bypassCapable: true, claudeSessionId: id, previousClaudes: [], switching: null, ...extra,
+  id,
+  workspaceId: 'bv-ws',
+  cwd: '/work',
+  title,
+  state: 'idle',
+  origin: 'ui',
+  model: 'claude-opus-5-5',
+  mode: 'default',
+  effort: null,
+  ultracode: false,
+  ultracodeAvailable: false,
+  process: 'live',
+  context: null,
+  costUsd: 106.96,
+  turns: 40,
+  lastSeq: 0,
+  waiting: 0,
+  waitingFor: null,
+  createdAt: now,
+  lastActivityAt: now,
+  endedReason: null,
+  endedFor: null,
+  claudeId: '',
+  claudeName: 'fadlilah',
+  predecessorId: null,
+  successorId: null,
+  archivedAt: null,
+  pinnedAt: null,
+  ticketId: null,
+  parentId: null,
+  worktree: null,
+  startedBy: 'ui',
+  bypassCapable: true,
+  claudeSessionId: id,
+  previousClaudes: [],
+  switching: null,
+  ...extra,
 });
 const HARMLESS_WHY = "a message this portal didn't send reached Claude Code (61cd4959, origin peer)";
 const SUSPICIOUS_WHY = "a message this portal didn't send reached Claude Code (3def4bde, origin channel)";
-const harmless = { state: 'ended', process: 'gone', endedReason: `integrity: ${HARMLESS_WHY}`, endedFor: { reason: HARMLESS_WHY, classified: 'harmless', case: 'replay-peer', origin: 'a sub-agent of this process' } };
-const suspicious = { state: 'ended', process: 'gone', endedReason: `integrity: ${SUSPICIOUS_WHY}`, endedFor: { reason: SUSPICIOUS_WHY, classified: 'suspicious', case: 'replay-unknown', origin: 'unknown origin: channel' } };
+const harmless = {
+  state: 'ended',
+  process: 'gone',
+  endedReason: `integrity: ${HARMLESS_WHY}`,
+  endedFor: { reason: HARMLESS_WHY, classified: 'harmless', case: 'replay-peer', origin: 'a sub-agent of this process' },
+};
+const suspicious = {
+  state: 'ended',
+  process: 'gone',
+  endedReason: `integrity: ${SUSPICIOUS_WHY}`,
+  endedFor: { reason: SUSPICIOUS_WHY, classified: 'suspicious', case: 'replay-unknown', origin: 'unknown origin: channel' },
+};
 const LIST = [
   base('rc-1', 'Orchestrator: ClaudePilot dev, a long title that has to wrap or cut on a phone', { ...harmless, pinnedAt: now }),
   base('rc-2', 'Konfersi: migration', suspicious),
@@ -52,23 +98,46 @@ const listFake = `(() => { const rows = ${JSON.stringify(LIST)}; const real = wi
     return real(input, init); }; })();`;
 
 const login = async () => {
-  const r = await fetch(`http://localhost:${PORT}/api/login`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: `http://localhost:${PORT}` }, body: JSON.stringify({ code: CODE }) });
+  const r = await fetch(`http://localhost:${PORT}/api/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Origin: `http://localhost:${PORT}` },
+    body: JSON.stringify({ code: CODE }),
+  });
   const m = /portal_session=([^;]+)/.exec(r.headers.get('set-cookie') ?? '');
   if (!m) throw new Error(`login failed ${r.status}`);
   return m[1];
 };
 
 const profile = mkdtempSync(join(tmpdir(), 'ux-rc-profile-'));
-const chrome = spawn('chromium', ['--headless=new', '--no-sandbox', '--disable-gpu', '--hide-scrollbars', `--remote-debugging-port=${CDP}`, `--user-data-dir=${profile}`, 'about:blank'], { stdio: 'ignore' });
+const chrome = spawn(
+  'chromium',
+  [
+    '--headless=new',
+    '--no-sandbox',
+    '--disable-gpu',
+    '--hide-scrollbars',
+    `--remote-debugging-port=${CDP}`,
+    `--user-data-dir=${profile}`,
+    'about:blank',
+  ],
+  { stdio: 'ignore' },
+);
 const cleanup = () => {
-  try { chrome.kill(); } catch {}
-  try { rmSync(profile, { recursive: true, force: true }); } catch {}
+  try {
+    chrome.kill();
+  } catch {}
+  try {
+    rmSync(profile, { recursive: true, force: true });
+  } catch {}
 };
 process.on('exit', cleanup);
 
 let targets;
 for (let i = 0; i < 60; i++) {
-  try { targets = await (await fetch(`http://127.0.0.1:${CDP}/json`)).json(); if (targets.some((t) => t.type === 'page')) break; } catch {}
+  try {
+    targets = await (await fetch(`http://127.0.0.1:${CDP}/json`)).json();
+    if (targets.some((t) => t.type === 'page')) break;
+  } catch {}
   await sleep(200);
 }
 const ws = new WebSocket(targets.find((t) => t.type === 'page').webSocketDebuggerUrl);
@@ -79,16 +148,33 @@ const errors = [];
 ws.on('message', (d) => {
   const m = JSON.parse(d);
   if (m.id && pending.has(m.id)) pending.get(m.id)(m);
-  if (m.method === 'Runtime.exceptionThrown') errors.push((m.params.exceptionDetails.exception?.description ?? m.params.exceptionDetails.text).slice(0, 300));
+  if (m.method === 'Runtime.exceptionThrown')
+    errors.push((m.params.exceptionDetails.exception?.description ?? m.params.exceptionDetails.text).slice(0, 300));
 });
-const send = (method, params = {}) => new Promise((r) => { const id = ++n; pending.set(id, r); ws.send(JSON.stringify({ id, method, params })); });
+const send = (method, params = {}) =>
+  new Promise((r) => {
+    const id = ++n;
+    pending.set(id, r);
+    ws.send(JSON.stringify({ id, method, params }));
+  });
 const ev = async (expr) => {
   const r = await send('Runtime.evaluate', { expression: expr, awaitPromise: true, returnByValue: true });
-  if (r.result?.exceptionDetails) throw new Error(`eval: ${r.result.exceptionDetails.exception?.description ?? r.result.exceptionDetails.text}`);
+  if (r.result?.exceptionDetails)
+    throw new Error(`eval: ${r.result.exceptionDetails.exception?.description ?? r.result.exceptionDetails.text}`);
   return r.result?.result?.value;
 };
-const shot = async (name) => { if (shots) writeFileSync(join(shots, `${name}.png`), Buffer.from((await send('Page.captureScreenshot', { format: 'png' })).result.data, 'base64')); };
-const waitFor = async (expr, ms = 8000) => { const t = Date.now(); while (Date.now() - t < ms) { if (await ev(expr).catch(() => false)) return true; await sleep(80); } return false; };
+const shot = async (name) => {
+  if (shots)
+    writeFileSync(join(shots, `${name}.png`), Buffer.from((await send('Page.captureScreenshot', { format: 'png' })).result.data, 'base64'));
+};
+const waitFor = async (expr, ms = 8000) => {
+  const t = Date.now();
+  while (Date.now() - t < ms) {
+    if (await ev(expr).catch(() => false)) return true;
+    await sleep(80);
+  }
+  return false;
+};
 
 const cookie = await login();
 await send('Page.enable');
@@ -108,7 +194,12 @@ for (const cfg of SIZES) {
   await send('Emulation.setDeviceMetricsOverride', { width: cfg.w, height: cfg.h, deviceScaleFactor: 1, mobile: !!cfg.mobile });
   await send('Emulation.setTouchEmulationEnabled', { enabled: !!cfg.mobile });
   await send('Emulation.setSafeAreaInsetsOverride', { insets: cfg.insets ?? { top: 0, bottom: 0, left: 0, right: 0 } });
-  await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: cfg.dark ? 'dark' : 'light' }, { name: 'prefers-reduced-motion', value: 'reduce' }] });
+  await send('Emulation.setEmulatedMedia', {
+    features: [
+      { name: 'prefers-color-scheme', value: cfg.dark ? 'dark' : 'light' },
+      { name: 'prefers-reduced-motion', value: 'reduce' },
+    ],
+  });
 
   // 1. The list.
   if (script) await send('Page.removeScriptToEvaluateOnNewDocument', { identifier: script });
@@ -117,7 +208,11 @@ for (const cfg of SIZES) {
   if (!(await waitFor(`document.body.innerText.includes('Konfersi: migration')`, 20000))) {
     // The list opens on Pinned when anything is pinned: the All chip shows every row.
     await ev(`[...document.querySelectorAll('button')].find((b) => /^All\\s*\\d/.test(b.innerText.trim()))?.click()`);
-    if (!(await waitFor(`document.body.innerText.includes('Konfersi: migration')`, 8000))) { fail(cfg, 'list did not show the sessions'); await shot(`${cfg.name}-list-missing`); continue; }
+    if (!(await waitFor(`document.body.innerText.includes('Konfersi: migration')`, 8000))) {
+      fail(cfg, 'list did not show the sessions');
+      await shot(`${cfg.name}-list-missing`);
+      continue;
+    }
   }
   await sleep(600);
   let b = await ev(BUTTONS);
@@ -130,28 +225,46 @@ for (const cfg of SIZES) {
   if (await ev(SIDEWAYS(cfg.w))) fail(cfg, 'list scrolls sideways');
   await shot(`${cfg.name}-list`);
   // A suspicious one asks first.
-  await ev(`[...document.querySelectorAll('li')].find((l) => l.innerText.includes('Konfersi: migration'))?.querySelector('button[aria-label="Resume"]')?.click()`);
+  await ev(
+    `[...document.querySelectorAll('li')].find((l) => l.innerText.includes('Konfersi: migration'))?.querySelector('button[aria-label="Resume"]')?.click()`,
+  );
   if (!(await waitFor(`!!document.querySelector('[role=dialog], [role=alertdialog]')`, 4000))) fail(cfg, 'suspicious: no sheet');
   else {
     await sleep(600); // the sheet slides up first
-    const sheet = await ev(`(() => { const d = document.querySelector('[role=dialog], [role=alertdialog]'); const r = d.getBoundingClientRect(); return { text: d.innerText, x: r.x, r: r.right, y: r.y, b: r.bottom }; })()`);
-    if (!/unknown origin: channel/.test(sheet.text) || !/suspicious/.test(sheet.text)) fail(cfg, `suspicious sheet text: ${sheet.text.slice(0, 120)}`);
-    if (sheet.x < -1 || sheet.r > cfg.w + 1 || sheet.y < -1 || sheet.b > cfg.h + 1) fail(cfg, `sheet outside the screen ${JSON.stringify(sheet)}`);
+    const sheet = await ev(
+      `(() => { const d = document.querySelector('[role=dialog], [role=alertdialog]'); const r = d.getBoundingClientRect(); return { text: d.innerText, x: r.x, r: r.right, y: r.y, b: r.bottom }; })()`,
+    );
+    if (!/unknown origin: channel/.test(sheet.text) || !/suspicious/.test(sheet.text))
+      fail(cfg, `suspicious sheet text: ${sheet.text.slice(0, 120)}`);
+    if (sheet.x < -1 || sheet.r > cfg.w + 1 || sheet.y < -1 || sheet.b > cfg.h + 1)
+      fail(cfg, `sheet outside the screen ${JSON.stringify(sheet)}`);
     await shot(`${cfg.name}-sheet`);
-    await ev(`[...document.querySelectorAll('[role=dialog] button, [role=alertdialog] button')].find((x) => x.innerText.trim() === 'Cancel')?.click()`);
+    await ev(
+      `[...document.querySelectorAll('[role=dialog] button, [role=alertdialog] button')].find((x) => x.innerText.trim() === 'Cancel')?.click()`,
+    );
     await sleep(300);
   }
   // A harmless one resumes at once: no sheet, one call.
-  await ev(`window.__recovered = []; [...document.querySelectorAll('li')].find((l) => l.innerText.includes('Orchestrator'))?.querySelector('button[aria-label="Resume"]')?.click()`);
+  await ev(
+    `window.__recovered = []; [...document.querySelectorAll('li')].find((l) => l.innerText.includes('Orchestrator'))?.querySelector('button[aria-label="Resume"]')?.click()`,
+  );
   await sleep(500);
   if (await ev(`!!document.querySelector('[role=dialog], [role=alertdialog]')`)) fail(cfg, 'harmless: a sheet opened');
   if ((await ev(`(window.__recovered || []).length`)) !== 1) fail(cfg, 'harmless: no recover call');
 
   // 2. The session page of an ended-for-integrity session (suspicious: the note and Resume).
   await send('Page.removeScriptToEvaluateOnNewDocument', { identifier: script });
-  script = (await send('Page.addScriptToEvaluateOnNewDocument', { source: `window.__FAKE_SESSION = ${JSON.stringify({ ...suspicious, title: 'Konfersi: migration', claudeName: 'fadlilah', costUsd: 106.96 })};\n${fake}` })).result.identifier;
+  script = (
+    await send('Page.addScriptToEvaluateOnNewDocument', {
+      source: `window.__FAKE_SESSION = ${JSON.stringify({ ...suspicious, title: 'Konfersi: migration', claudeName: 'fadlilah', costUsd: 106.96 })};\n${fake}`,
+    })
+  ).result.identifier;
   await send('Page.navigate', { url: `http://localhost:${PORT}/admin/sessions/bv-fake` });
-  if (!(await waitFor(`!!document.querySelector('button[aria-label="Resume"]')`, 20000))) { fail(cfg, 'page: no Resume'); await shot(`${cfg.name}-page-missing`); continue; }
+  if (!(await waitFor(`!!document.querySelector('button[aria-label="Resume"]')`, 20000))) {
+    fail(cfg, 'page: no Resume');
+    await shot(`${cfg.name}-page-missing`);
+    continue;
+  }
   await sleep(700);
   b = await ev(BUTTONS);
   if (b.length !== 1) fail(cfg, `page: ${b.length} Resume buttons`);

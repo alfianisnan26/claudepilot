@@ -111,7 +111,14 @@ export interface LabArmSummary {
   arm: string;
   n: number;
   /** Medians over the arm's slices (null with no slice). */
-  medians: { requests: number | null; ctxP50: number | null; costUsd: number | null; resultChars: number | null; resultTokens: number | null; minutes: number | null };
+  medians: {
+    requests: number | null;
+    ctxP50: number | null;
+    costUsd: number | null;
+    resultChars: number | null;
+    resultTokens: number | null;
+    minutes: number | null;
+  };
   /** Sum of rewrite tokens / sum of cache write tokens; null with no write. */
   rewriteShare: number | null;
   /** Inspection calls / Bash calls; null with no Bash call. */

@@ -66,7 +66,9 @@ try {
   // Sessions: raw rows (the controller's create needs a live workspace), activity stamps spread over time, runs of equal stamps.
   const db = store.db!;
   const day = Date.UTC(2026, 0, 1);
-  const insert = db.prepare('INSERT INTO chat_sessions (id, workspace_id, title, state, state_since, created_at, last_activity_at) VALUES (?, ?, ?, ?, ?, ?, ?)');
+  const insert = db.prepare(
+    'INSERT INTO chat_sessions (id, workspace_id, title, state, state_since, created_at, last_activity_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+  );
   db.exec('BEGIN');
   for (let i = 0; i < SESSIONS; i++) {
     const at = new Date(day + Math.floor(i / 3) * 60_000).toISOString();

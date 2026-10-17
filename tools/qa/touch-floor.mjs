@@ -52,7 +52,11 @@ const MENU = `(() => {
   return { l: Math.round(b.left), r: Math.round(b.right), t: Math.round(b.top), b: Math.round(b.bottom), vw: innerWidth, vh: innerHeight, items, scrollable: m.scrollHeight > m.clientHeight + 1 };
 })()`;
 let fails = 0;
-for (const [width, height, dark] of [[390, 844, false], [390, 844, true], [1280, 800, false]]) {
+for (const [width, height, dark] of [
+  [390, 844, false],
+  [390, 844, true],
+  [1280, 800, false],
+]) {
   const tag = `${width}-${dark ? 'dark' : 'light'}`;
   console.log(tag);
   const b = await Browser.launch({ width, height, dark, mobile: width < 600 });
@@ -78,7 +82,9 @@ for (const [width, height, dark] of [[390, 844, false], [390, 844, true], [1280,
     for (let i = 0; i < Math.min(m.menuBtns, 3); i++) {
       try {
         await b.eval(`document.querySelectorAll('button[aria-haspopup=menu]')[${i}]?.scrollIntoView({block:'center'})`);
-        await b.eval(`(() => { const e = [...document.querySelectorAll('button[aria-haspopup=menu]')].filter((x) => x.getBoundingClientRect().width > 0)[${i}]; e?.click(); })()`);
+        await b.eval(
+          `(() => { const e = [...document.querySelectorAll('button[aria-haspopup=menu]')].filter((x) => x.getBoundingClientRect().width > 0)[${i}]; e?.click(); })()`,
+        );
         await sleep(500);
         const mm = await b.eval(MENU);
         if (mm) {
@@ -95,7 +101,9 @@ for (const [width, height, dark] of [[390, 844, false], [390, 844, true], [1280,
       }
     }
     if (bad.length) fails++;
-    console.log(`  ${bad.length ? 'FAIL' : 'ok  '} ${name}: radios=${m.radios} menuBtns=${m.menuBtns} menus=${menus.length}${menus.length ? ' items=' + JSON.stringify(menus.map((x) => x.items.slice(0, 6))) : ''} ${bad.join(' | ')} ${file}`);
+    console.log(
+      `  ${bad.length ? 'FAIL' : 'ok  '} ${name}: radios=${m.radios} menuBtns=${m.menuBtns} menus=${menus.length}${menus.length ? ' items=' + JSON.stringify(menus.map((x) => x.items.slice(0, 6))) : ''} ${bad.join(' | ')} ${file}`,
+    );
   }
   await b.close();
 }

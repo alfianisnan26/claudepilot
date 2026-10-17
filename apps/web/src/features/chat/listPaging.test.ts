@@ -39,9 +39,16 @@ test('pager: a poll that moves the seam drops the older pages (removing the keep
   const t = p.beginMore()!;
   assert.equal(t.cursor, 'c1');
   assert.equal(p.finishMore(t, page(['c', 'd'], 'c2')), true);
-  assert.deepEqual(p.items!.map((x) => x.id), ['a', 'b', 'c', 'd']);
+  assert.deepEqual(
+    p.items!.map((x) => x.id),
+    ['a', 'b', 'c', 'd'],
+  );
   p.applyHead(page(['z', 'a'], 'c9')); // a new row arrived: the seam moved
-  assert.deepEqual(p.items!.map((x) => x.id), ['z', 'a'], 'the older rows are gone');
+  assert.deepEqual(
+    p.items!.map((x) => x.id),
+    ['z', 'a'],
+    'the older rows are gone',
+  );
   assert.equal(p.next, 'c9');
 });
 
@@ -50,7 +57,10 @@ test('pager: a poll that finds the same seam keeps the older pages', () => {
   p.applyHead(page(['a', 'b'], 'c1'));
   p.finishMore(p.beginMore()!, page(['c'], null));
   p.applyHead(page(['a', 'b'], 'c1'));
-  assert.deepEqual(p.items!.map((x) => x.id), ['a', 'b', 'c']);
+  assert.deepEqual(
+    p.items!.map((x) => x.id),
+    ['a', 'b', 'c'],
+  );
   assert.equal(p.next, null);
 });
 
@@ -69,7 +79,10 @@ test('pager: a load-more that lands after a poll dropped the older pages is not 
   const slow = p.beginMore()!; // in flight
   p.applyHead(page(['z', 'a'], 'c9')); // the poll moves the seam while it runs
   assert.equal(p.finishMore(slow, page(['c', 'd'], 'c2')), false);
-  assert.deepEqual(p.items!.map((x) => x.id), ['z', 'a']);
+  assert.deepEqual(
+    p.items!.map((x) => x.id),
+    ['z', 'a'],
+  );
   assert.equal(p.next, 'c9', 'the next cursor is still the new seam, not the stale page');
   assert.equal(p.failMore(slow, Object.assign(new Error('x'), { status: 400 })), 'stale', 'its error is ignored too');
 });
@@ -81,7 +94,10 @@ test('pager: a filter change (restart) drops the older pages and refuses a page 
   p.restart();
   p.applyHead(page(['x'], 'c1'));
   assert.equal(p.finishMore(slow, page(['c'], null)), false);
-  assert.deepEqual(p.items!.map((x) => x.id), ['x']);
+  assert.deepEqual(
+    p.items!.map((x) => x.id),
+    ['x'],
+  );
 });
 
 test('pager: at the end there is nothing to load', () => {

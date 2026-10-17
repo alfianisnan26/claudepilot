@@ -26,7 +26,10 @@ export function usePaletteData(query: string): PaletteData {
     let live = true;
     void Promise.allSettled([chatApi.listAll(), api.workspaces.list()]).then(([s, w]) => {
       if (!live) return;
-      seen = { sessions: s.status === 'fulfilled' ? s.value : seen.sessions, workspaces: w.status === 'fulfilled' ? w.value : seen.workspaces };
+      seen = {
+        sessions: s.status === 'fulfilled' ? s.value : seen.sessions,
+        workspaces: w.status === 'fulfilled' ? w.value : seen.workspaces,
+      };
       setBase(seen);
     });
     return () => {

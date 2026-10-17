@@ -22,8 +22,10 @@ export interface WorkspaceChoice {
 export function workspaceChoices(known: readonly PortalAgentWorkspace[], selected: readonly string[]): WorkspaceChoice[] {
   const on = new Set(selected);
   const rows = new Map<string, WorkspaceChoice>();
-  for (const w of known) rows.set(w.workspaceId, { workspaceId: w.workspaceId, name: w.name, checked: on.has(w.workspaceId), gone: false, invalid: false });
-  for (const id of on) if (!rows.has(id)) rows.set(id, { workspaceId: id, name: id, checked: true, gone: true, invalid: !WORKSPACE_KEY.test(id) });
+  for (const w of known)
+    rows.set(w.workspaceId, { workspaceId: w.workspaceId, name: w.name, checked: on.has(w.workspaceId), gone: false, invalid: false });
+  for (const id of on)
+    if (!rows.has(id)) rows.set(id, { workspaceId: id, name: id, checked: true, gone: true, invalid: !WORKSPACE_KEY.test(id) });
   return [...rows.values()].sort((a, b) => a.workspaceId.localeCompare(b.workspaceId));
 }
 
@@ -36,7 +38,11 @@ export function toggleWorkspace(selected: readonly string[], workspaceId: string
 }
 
 /** What Save sends for the vault's settings (the server keeps the settings it is not sent). */
-export function settingsPayload(form: { rewrite: boolean; labels: 'filename' | 'heading'; agentWorkspaces: readonly string[] }): NonNullable<UpdateVaultRequest['settings']> {
+export function settingsPayload(form: {
+  rewrite: boolean;
+  labels: 'filename' | 'heading';
+  agentWorkspaces: readonly string[];
+}): NonNullable<UpdateVaultRequest['settings']> {
   return { rewriteLinksOnRename: form.rewrite, labels: form.labels, agentWorkspaces: [...form.agentWorkspaces].sort() };
 }
 

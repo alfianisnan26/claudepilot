@@ -38,11 +38,20 @@ test('T-436 S2: a listed key that is not <target>/<name> is named, and its row i
   assert.deepEqual(invalidWorkspaceKeys(['docker/api', 'bad key', 'bad key']), ['bad key']);
   assert.deepEqual(invalidWorkspaceKeys(['docker/api']), []);
   const rows = workspaceChoices([ws('docker/api')], ['docker/api', 'bad key']);
-  assert.deepEqual(rows.map((r) => [r.workspaceId, r.invalid]), [['bad key', true], ['docker/api', false]]);
+  assert.deepEqual(
+    rows.map((r) => [r.workspaceId, r.invalid]),
+    [
+      ['bad key', true],
+      ['docker/api', false],
+    ],
+  );
 });
 
 test('T-436 S2: a save that came back with a warning shows it; a clean save shows none', () => {
   assert.equal(saveWarning({}), null);
   assert.equal(saveWarning({ warning: '  ' }), null);
-  assert.equal(saveWarning({ warning: 'Saved, but live agent sessions could not be updated.' }), 'Saved, but live agent sessions could not be updated.');
+  assert.equal(
+    saveWarning({ warning: 'Saved, but live agent sessions could not be updated.' }),
+    'Saved, but live agent sessions could not be updated.',
+  );
 });

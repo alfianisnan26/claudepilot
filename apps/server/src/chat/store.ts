@@ -148,7 +148,8 @@ type TaskRow = {
 export const AUDIT_ACTOR_MAX = 120;
 /** Control, format and line or paragraph separator characters, except U+200C to U+200F (ZWNJ, ZWJ, the RTL marks); written as escapes, no raw invisible character in the source. */
 const ACTOR_STRIPPED = /(?:(?!\u{200c}|\u{200d}|\u{200e}|\u{200f})[\p{Cc}\p{Cf}\p{Zl}\p{Zp}])+/gu;
-const TASK_COLUMNS = 'task_id, tool_use_id, label, subagent_type, model, status, tokens, tool_uses, duration_ms, summary, started_at, ended_at';
+const TASK_COLUMNS =
+  'task_id, tool_use_id, label, subagent_type, model, status, tokens, tool_uses, duration_ms, summary, started_at, ended_at';
 
 interface AuditRow extends Record<string, unknown> {
   id: number;
@@ -169,7 +170,16 @@ function auditEntry(r: AuditRow): ChatAuditEntry {
   } catch {
     // a row that can't be read shows without detail
   }
-  return { id: r.id, at: r.at, severity: r.severity as ChatAuditEntry['severity'], kind: r.kind, sessionId: r.session_id, workspaceId: r.workspace_id, actor: r.actor, detail };
+  return {
+    id: r.id,
+    at: r.at,
+    severity: r.severity as ChatAuditEntry['severity'],
+    kind: r.kind,
+    sessionId: r.session_id,
+    workspaceId: r.workspace_id,
+    actor: r.actor,
+    detail,
+  };
 }
 
 function taskOut(r: TaskRow): ChatTask {
@@ -301,7 +311,16 @@ function imageRef(v: unknown): ChatImage | null {
   const ref: ChatImage = { blobId: o.blobId, mediaType: o.mediaType };
   if (typeof o.name === 'string' && o.name) ref.name = o.name;
   // The picture's size (uploads), so its box is laid out before it loads.
-  if (typeof o.width === 'number' && typeof o.height === 'number' && Number.isInteger(o.width) && Number.isInteger(o.height) && o.width > 0 && o.height > 0 && o.width <= 100_000 && o.height <= 100_000) {
+  if (
+    typeof o.width === 'number' &&
+    typeof o.height === 'number' &&
+    Number.isInteger(o.width) &&
+    Number.isInteger(o.height) &&
+    o.width > 0 &&
+    o.height > 0 &&
+    o.width <= 100_000 &&
+    o.height <= 100_000
+  ) {
     ref.width = o.width;
     ref.height = o.height;
   }
@@ -310,7 +329,13 @@ function imageRef(v: unknown): ChatImage | null {
 
 /** A pinned side question as it is stored (chat PRD §20): its allow-listed fields, text redacted. */
 function pinnedBtwOut(b: ChatPinnedBtw): ChatPinnedBtw {
-  const out: ChatPinnedBtw = { id: b.id, question: redact(b.question), answer: redact(b.answer), askedAt: b.askedAt, askedBy: redact(b.askedBy) };
+  const out: ChatPinnedBtw = {
+    id: b.id,
+    question: redact(b.question),
+    answer: redact(b.answer),
+    askedAt: b.askedAt,
+    askedBy: redact(b.askedBy),
+  };
   if (b.model) out.model = b.model;
   if (b.usage) out.usage = b.usage;
   return out;
@@ -319,12 +344,28 @@ function pinnedBtwOut(b: ChatPinnedBtw): ChatPinnedBtw {
 /** The same read back, from JSON that may be anything: nothing but well-formed fields comes out. */
 function pinnedBtwIn(v: unknown): ChatPinnedBtw | null {
   const o = v && typeof v === 'object' ? (v as Record<string, unknown>) : null;
-  if (!o || typeof o.id !== 'string' || typeof o.question !== 'string' || typeof o.answer !== 'string' || typeof o.askedAt !== 'string') return null;
-  const out: ChatPinnedBtw = { id: o.id, question: o.question, answer: o.answer, askedAt: o.askedAt, askedBy: typeof o.askedBy === 'string' ? o.askedBy : '' };
+  if (!o || typeof o.id !== 'string' || typeof o.question !== 'string' || typeof o.answer !== 'string' || typeof o.askedAt !== 'string')
+    return null;
+  const out: ChatPinnedBtw = {
+    id: o.id,
+    question: o.question,
+    answer: o.answer,
+    askedAt: o.askedAt,
+    askedBy: typeof o.askedBy === 'string' ? o.askedBy : '',
+  };
   if (typeof o.model === 'string' && o.model) out.model = o.model;
   const u = o.usage && typeof o.usage === 'object' ? (o.usage as Record<string, unknown>) : null;
   const n = (x: unknown) => (typeof x === 'number' && Number.isFinite(x) && x > 0 ? x : 0);
-  if (u && (u.basis === 'reported' || u.basis === 'estimated')) out.usage = { input: n(u.input), output: n(u.output), cacheRead: n(u.cacheRead), cacheWrite: n(u.cacheWrite), costUsd: typeof u.costUsd === 'number' ? u.costUsd : null, estimate: true, basis: u.basis };
+  if (u && (u.basis === 'reported' || u.basis === 'estimated'))
+    out.usage = {
+      input: n(u.input),
+      output: n(u.output),
+      cacheRead: n(u.cacheRead),
+      cacheWrite: n(u.cacheWrite),
+      costUsd: typeof u.costUsd === 'number' ? u.costUsd : null,
+      estimate: true,
+      basis: u.basis,
+    };
   return out;
 }
 
@@ -442,42 +483,46 @@ export class ChatStore {
     const now = this.#stamp();
     const db = this.#writable();
     const why = opts.spawnWhy?.trim() ? redact(opts.spawnWhy.trim()).slice(0, CHAT_SPAWN_WHY_MAX) : null;
-    db
-      .prepare(
-        `INSERT INTO chat_sessions (id, workspace_id, cwd, title, origin, state, state_since, created_at, last_activity_at, claude_id, predecessor_id,
+    db.prepare(
+      `INSERT INTO chat_sessions (id, workspace_id, cwd, title, origin, state, state_since, created_at, last_activity_at, claude_id, predecessor_id,
            ticket_id, parent_id, started_by, worktree_path, worktree_branch, worktree_repo, claude_session_id, bypass_capable, continued_from, agent,
            max_workers, subagents, folder_branch, spawn_why, lead)
          VALUES (?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        opts.id,
-        this.#refs ? this.#refs.storedRef(opts.workspaceId) : opts.workspaceId,
-        opts.cwd,
-        opts.title,
-        opts.origin,
-        now,
-        now,
-        now,
-        opts.claudeId ?? '',
-        opts.predecessorId ?? null,
-        opts.ticketId ?? null,
-        opts.parentId ?? null,
-        opts.startedBy ?? null,
-        opts.worktree?.path ?? null,
-        opts.worktree?.branch ?? null,
-        opts.worktree?.repo ?? null,
-        opts.id,
-        opts.bypassCapable ? 1 : 0,
-        opts.continuedFrom ?? null,
-        opts.agent ?? null,
-        opts.maxWorkers ?? null,
-        opts.subagents === false ? 0 : 1,
-        opts.worktree ? null : (opts.folderBranch ?? null),
-        why,
-        opts.lead === true ? 1 : null,
-      );
+    ).run(
+      opts.id,
+      this.#refs ? this.#refs.storedRef(opts.workspaceId) : opts.workspaceId,
+      opts.cwd,
+      opts.title,
+      opts.origin,
+      now,
+      now,
+      now,
+      opts.claudeId ?? '',
+      opts.predecessorId ?? null,
+      opts.ticketId ?? null,
+      opts.parentId ?? null,
+      opts.startedBy ?? null,
+      opts.worktree?.path ?? null,
+      opts.worktree?.branch ?? null,
+      opts.worktree?.repo ?? null,
+      opts.id,
+      opts.bypassCapable ? 1 : 0,
+      opts.continuedFrom ?? null,
+      opts.agent ?? null,
+      opts.maxWorkers ?? null,
+      opts.subagents === false ? 0 : 1,
+      opts.worktree ? null : (opts.folderBranch ?? null),
+      why,
+      opts.lead === true ? 1 : null,
+    );
     // Its first run: on its Claude, under its own id.
-    db.prepare(`INSERT INTO chat_segments (session_id, n, claude_id, claude_session_id, cwd, started_at) VALUES (?, 1, ?, ?, ?, ?)`).run(opts.id, opts.claudeId ?? '', opts.id, opts.cwd, now);
+    db.prepare(`INSERT INTO chat_segments (session_id, n, claude_id, claude_session_id, cwd, started_at) VALUES (?, 1, ?, ?, ?, ?)`).run(
+      opts.id,
+      opts.claudeId ?? '',
+      opts.id,
+      opts.cwd,
+      now,
+    );
     return this.get(opts.id)!;
   }
 
@@ -486,18 +531,24 @@ export class ChatStore {
     if (typeof id !== 'string' || !id) return id;
     const own = this.#db().prepare('SELECT 1 FROM chat_sessions WHERE id = ?').get(id);
     if (own) return id;
-    const alias = this.#db().prepare('SELECT session_id FROM chat_session_aliases WHERE alias_id = ?').get(id) as { session_id: string } | undefined;
+    const alias = this.#db().prepare('SELECT session_id FROM chat_session_aliases WHERE alias_id = ?').get(id) as
+      { session_id: string } | undefined;
     return alias?.session_id ?? id;
   }
 
   get(id: string): ChatSession | null {
-    const row = this.#keyed(this.#db().prepare('SELECT * FROM chat_sessions WHERE id = ?').get(this.resolveId(id)) as ChatSessionRow | undefined);
+    const row = this.#keyed(
+      this.#db().prepare('SELECT * FROM chat_sessions WHERE id = ?').get(this.resolveId(id)) as ChatSessionRow | undefined,
+    );
     return row ? this.toSession(row) : null;
   }
 
   /** The raw session row (for the controller's segment/offset/cwd/process bookkeeping). */
   row(id: string): ChatSessionRow | null {
-    return this.#keyed(this.#db().prepare('SELECT * FROM chat_sessions WHERE id = ?').get(this.resolveId(id)) as ChatSessionRow | undefined) ?? null;
+    return (
+      this.#keyed(this.#db().prepare('SELECT * FROM chat_sessions WHERE id = ?').get(this.resolveId(id)) as ChatSessionRow | undefined) ??
+      null
+    );
   }
 
   /** Sessions, newest activity first; optionally one workspace's, one ticket's, or one parent's children. */
@@ -512,7 +563,9 @@ export class ChatStore {
     if (filter.ticketId) (where.push('ticket_id = ?'), vals.push(filter.ticketId));
     if (filter.parentId) (where.push('parent_id = ?'), vals.push(filter.parentId));
     const rows = this.#db()
-      .prepare(`SELECT * FROM chat_sessions ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY last_activity_at DESC, created_at DESC`)
+      .prepare(
+        `SELECT * FROM chat_sessions ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY last_activity_at DESC, created_at DESC`,
+      )
       .all(...vals) as ChatSessionRow[];
     return rows.map((r) => this.toSession(this.#keyed(r)));
   }
@@ -523,7 +576,10 @@ export class ChatStore {
    * points at the last row SHOWN, except when the scan bound (SCAN_FACTOR x limit rows read) ends the page: then it rests on the last row scanned,
    * and the cursor is sealed, so it shows nothing of a hidden session. A bad or foreign cursor is a 400.
    */
-  listPage(filter: { workspaceId?: string; ticketId?: string; parentId?: string } = {}, args: { cursor?: string | undefined; limit?: unknown; keep?: (s: ChatSession) => boolean } = {}): CursorPage<ChatSession> {
+  listPage(
+    filter: { workspaceId?: string; ticketId?: string; parentId?: string } = {},
+    args: { cursor?: string | undefined; limit?: unknown; keep?: (s: ChatSession) => boolean } = {},
+  ): CursorPage<ChatSession> {
     const where: string[] = [];
     const params: string[] = [];
     if (filter.workspaceId) {
@@ -535,7 +591,13 @@ export class ChatStore {
     if (filter.parentId) (where.push('parent_id = ?'), params.push(filter.parentId));
     const limit = clampLimit(args.limit);
     const scope = `chat.sessions|${filter.workspaceId ?? ''}|${filter.ticketId ?? ''}|${filter.parentId ?? ''}`;
-    const spec = { scope, table: 'chat_sessions', sortCol: 'last_activity_at', idCol: 'id', ...(where.length ? { where: where.join(' AND '), params } : {}) };
+    const spec = {
+      scope,
+      table: 'chat_sessions',
+      sortCol: 'last_activity_at',
+      idCol: 'id',
+      ...(where.length ? { where: where.join(' AND '), params } : {}),
+    };
     const shown: { s: ChatSession; sort: string; id: string }[] = [];
     let cursor = args.cursor;
     // At most SCAN_FACTOR x limit rows are read per request, however many `keep` hides. When the bound is hit, the page ends there and `next`
@@ -575,14 +637,18 @@ export class ChatStore {
    * ended ones stay where they were (history). Returns the ids moved.
    */
   adoptLiveChildren(from: string, to: string): string[] {
-    const ids = (this.#db().prepare(`SELECT id FROM chat_sessions WHERE parent_id = ? AND state != 'ended'`).all(from) as { id: string }[]).map((r) => r.id);
-    if (ids.length) this.#writable().prepare(`UPDATE chat_sessions SET parent_id = ? WHERE parent_id = ? AND state != 'ended'`).run(to, from);
+    const ids = (
+      this.#db().prepare(`SELECT id FROM chat_sessions WHERE parent_id = ? AND state != 'ended'`).all(from) as { id: string }[]
+    ).map((r) => r.id);
+    if (ids.length)
+      this.#writable().prepare(`UPDATE chat_sessions SET parent_id = ? WHERE parent_id = ? AND state != 'ended'`).run(to, from);
     return ids;
   }
 
   /** The newest session that continues `id` (its `continued_from`), or null. */
   continuationOf(id: string): string | null {
-    const row = this.#db().prepare('SELECT id FROM chat_sessions WHERE continued_from = ? ORDER BY created_at DESC LIMIT 1').get(id) as { id: string } | undefined;
+    const row = this.#db().prepare('SELECT id FROM chat_sessions WHERE continued_from = ? ORDER BY created_at DESC LIMIT 1').get(id) as
+      { id: string } | undefined;
     return row?.id ?? null;
   }
 
@@ -593,20 +659,32 @@ export class ChatStore {
 
   /** Sessions whose process should be running (for liveness checks and reattaching after a restart). */
   liveRows(): ChatSessionRow[] {
-    return (this.#db().prepare(`SELECT * FROM chat_sessions WHERE process = 'live' AND state != 'ended'`).all() as ChatSessionRow[]).map((r) => this.#keyed(r));
+    return (this.#db().prepare(`SELECT * FROM chat_sessions WHERE process = 'live' AND state != 'ended'`).all() as ChatSessionRow[]).map(
+      (r) => this.#keyed(r),
+    );
   }
 
   /** One workspace's sessions that haven't ended (whatever their process), oldest first. */
   workspaceRows(workspaceId: string): ChatSessionRow[] {
     const one = this.#inWorkspace(workspaceId);
-    return (this.#db().prepare(`SELECT * FROM chat_sessions WHERE ${one.sql} AND state != 'ended' ORDER BY created_at, id`).all(...one.args) as ChatSessionRow[]).map((r) => this.#keyed(r));
+    return (
+      this.#db()
+        .prepare(`SELECT * FROM chat_sessions WHERE ${one.sql} AND state != 'ended' ORDER BY created_at, id`)
+        .all(...one.args) as ChatSessionRow[]
+    ).map((r) => this.#keyed(r));
   }
 
   toSession(row: ChatSessionRow): ChatSession {
-    const waiting = (this.#db().prepare('SELECT count(*) AS n FROM chat_requests WHERE session_id = ? AND answered_at IS NULL').get(row.id) as { n: number }).n;
+    const waiting = (
+      this.#db().prepare('SELECT count(*) AS n FROM chat_requests WHERE session_id = ? AND answered_at IS NULL').get(row.id) as {
+        n: number;
+      }
+    ).n;
     let waitingFor: string | null = null;
     if (waiting > 0) {
-      const ask = this.#db().prepare('SELECT title, detail FROM chat_requests WHERE session_id = ? AND answered_at IS NULL ORDER BY created_at, rowid LIMIT 1').get(row.id) as { title: string; detail: string | null } | undefined;
+      const ask = this.#db()
+        .prepare('SELECT title, detail FROM chat_requests WHERE session_id = ? AND answered_at IS NULL ORDER BY created_at, rowid LIMIT 1')
+        .get(row.id) as { title: string; detail: string | null } | undefined;
       if (ask) {
         const detail = ask.detail?.replace(/\s+/g, ' ').trim();
         waitingFor = detail ? `${ask.title}: ${detail.length > 80 ? `${detail.slice(0, 79)}…` : detail}` : ask.title;
@@ -626,13 +704,20 @@ export class ChatStore {
       ultracode: row.ultracode === 1,
       ultracodeAvailable: row.ultracode_available === 1,
       process: PROCESS_STATES.has(row.process) ? (row.process as ChatSession['process']) : 'gone',
-      context: row.context_used === null || row.context_used === undefined ? null : { usedTokens: row.context_used, windowTokens: row.context_window ?? null },
+      context:
+        row.context_used === null || row.context_used === undefined
+          ? null
+          : { usedTokens: row.context_used, windowTokens: row.context_window ?? null },
       costUsd: row.cost_est_usd,
       turns: row.turns,
       lastSeq: row.last_seq,
       waiting,
       waitingFor,
-      agentsRunning: (this.#db().prepare(`SELECT count(*) AS n FROM chat_tasks WHERE session_id = ? AND (status IS NULL OR status = 'running')`).get(row.id) as { n: number }).n,
+      agentsRunning: (
+        this.#db()
+          .prepare(`SELECT count(*) AS n FROM chat_tasks WHERE session_id = ? AND (status IS NULL OR status = 'running')`)
+          .get(row.id) as { n: number }
+      ).n,
       createdAt: row.created_at,
       lastActivityAt: row.last_activity_at,
       endedReason: row.ended_reason ?? null,
@@ -668,7 +753,9 @@ export class ChatStore {
 
   /** The other Claudes this chat ran on before its current one, oldest first, each once. */
   #previousClaudes(row: ChatSessionRow): { claudeId: string; name: string }[] {
-    const rows = this.#db().prepare('SELECT DISTINCT claude_id FROM chat_segments WHERE session_id = ? AND claude_id != ? ORDER BY n').all(row.id, row.claude_id ?? '') as { claude_id: string }[];
+    const rows = this.#db()
+      .prepare('SELECT DISTINCT claude_id FROM chat_segments WHERE session_id = ? AND claude_id != ? ORDER BY n')
+      .all(row.id, row.claude_id ?? '') as { claude_id: string }[];
     const out: { claudeId: string; name: string }[] = [];
     for (const r of rows) {
       const name = this.claudeName(row.workspace_id, r.claude_id);
@@ -704,7 +791,9 @@ export class ChatStore {
   /** Every Claude Code session id this chat has used: each has its own host folder to clean up on delete. */
   claudeSessionIds(sessionId: string): string[] {
     const id = this.resolveId(sessionId);
-    const rows = this.#db().prepare('SELECT DISTINCT claude_session_id AS c FROM chat_segments WHERE session_id = ?').all(id) as { c: string }[];
+    const rows = this.#db().prepare('SELECT DISTINCT claude_session_id AS c FROM chat_segments WHERE session_id = ?').all(id) as {
+      c: string;
+    }[];
     return [...new Set([id, ...rows.map((r) => r.c)])];
   }
 
@@ -724,18 +813,35 @@ export class ChatStore {
     let n = 0;
     this.transaction(() => {
       const now = this.#stamp();
-      const open = db.prepare('SELECT n FROM chat_segments WHERE session_id = ? AND ended_at IS NULL ORDER BY n DESC LIMIT 1').get(before.id) as { n: number } | undefined;
-      const closedTurns = (db.prepare('SELECT coalesce(sum(turns), 0) AS t FROM chat_segments WHERE session_id = ? AND ended_at IS NOT NULL').get(before.id) as { t: number }).t;
+      const open = db
+        .prepare('SELECT n FROM chat_segments WHERE session_id = ? AND ended_at IS NULL ORDER BY n DESC LIMIT 1')
+        .get(before.id) as { n: number } | undefined;
+      const closedTurns = (
+        db
+          .prepare('SELECT coalesce(sum(turns), 0) AS t FROM chat_segments WHERE session_id = ? AND ended_at IS NOT NULL')
+          .get(before.id) as { t: number }
+      ).t;
       if (open)
-        db.prepare(`UPDATE chat_segments SET ended_at = ?, ended_reason = 'switched', cost_usd = ?, turns = ? WHERE session_id = ? AND n = ?`).run(
+        db.prepare(
+          `UPDATE chat_segments SET ended_at = ?, ended_reason = 'switched', cost_usd = ?, turns = ? WHERE session_id = ? AND n = ?`,
+        ).run(
           now,
           Math.max(0, before.cost_est_usd - (before.cost_base_usd ?? 0)),
           Math.max(0, before.turns - closedTurns),
           before.id,
           open.n,
         );
-      n = ((db.prepare('SELECT coalesce(max(n), 0) AS n FROM chat_segments WHERE session_id = ?').get(before.id) as { n: number }).n ?? 0) + 1;
-      db.prepare(`INSERT INTO chat_segments (session_id, n, claude_id, claude_session_id, cwd, started_at) VALUES (?, ?, ?, ?, ?, ?)`).run(before.id, n, next.claudeId, next.claudeSessionId, before.cwd, now);
+      n =
+        ((db.prepare('SELECT coalesce(max(n), 0) AS n FROM chat_segments WHERE session_id = ?').get(before.id) as { n: number }).n ?? 0) +
+        1;
+      db.prepare(`INSERT INTO chat_segments (session_id, n, claude_id, claude_session_id, cwd, started_at) VALUES (?, ?, ?, ?, ?, ?)`).run(
+        before.id,
+        n,
+        next.claudeId,
+        next.claudeSessionId,
+        before.cwd,
+        now,
+      );
       db.prepare(
         `UPDATE chat_sessions SET claude_id = ?, claude_session_id = ?, segment = 0, byte_offset = 0, parent_pid = ?, process_started_at = ?, process = 'live',
            cost_base_usd = cost_est_usd, segment_seq = last_seq, ended_reason = NULL WHERE id = ?`,
@@ -750,7 +856,10 @@ export class ChatStore {
     const b = undo.row;
     this.transaction(() => {
       db.prepare('DELETE FROM chat_segments WHERE session_id = ? AND n = ?').run(b.id, undo.segment);
-      db.prepare(`UPDATE chat_segments SET ended_at = NULL, ended_reason = NULL WHERE session_id = ? AND n = ?`).run(b.id, undo.segment - 1);
+      db.prepare(`UPDATE chat_segments SET ended_at = NULL, ended_reason = NULL WHERE session_id = ? AND n = ?`).run(
+        b.id,
+        undo.segment - 1,
+      );
       db.prepare(
         `UPDATE chat_sessions SET claude_id = ?, claude_session_id = ?, segment = ?, byte_offset = ?, parent_pid = ?, process_started_at = ?, process = ?, state = ?, state_since = ?,
            model = ?, mode = ?, effort = ?, ultracode = ?, ultracode_available = ?, context_used = ?, context_window = ?, cost_base_usd = ?, segment_seq = ?, ended_reason = ? WHERE id = ?`,
@@ -784,23 +893,29 @@ export class ChatStore {
     const db = this.#writable();
     const at = this.#stamp();
     const payload = JSON.stringify(this.#payload(ev));
-    const seq = ((db.prepare('SELECT max(seq) AS m FROM chat_events WHERE session_id = ?').get(sessionId) as { m: number | null }).m ?? 0) + 1;
-    db.prepare(`INSERT INTO chat_events (session_id, seq, at, kind, uuid, parent_tool_use_id, request_id, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(
-      sessionId,
+    const seq =
+      ((db.prepare('SELECT max(seq) AS m FROM chat_events WHERE session_id = ?').get(sessionId) as { m: number | null }).m ?? 0) + 1;
+    db.prepare(
+      `INSERT INTO chat_events (session_id, seq, at, kind, uuid, parent_tool_use_id, request_id, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(sessionId, seq, at, ev.kind, ev.uuid ?? null, ev.parentToolUseId ?? null, ev.requestId ?? null, payload);
+    db.prepare('UPDATE chat_sessions SET last_seq = ?, last_activity_at = ? WHERE id = ?').run(seq, at, sessionId);
+    return this.#toEvent({
       seq,
       at,
-      ev.kind,
-      ev.uuid ?? null,
-      ev.parentToolUseId ?? null,
-      ev.requestId ?? null,
+      kind: ev.kind,
+      uuid: ev.uuid ?? null,
+      parent_tool_use_id: ev.parentToolUseId ?? null,
+      request_id: ev.requestId ?? null,
       payload,
-    );
-    db.prepare('UPDATE chat_sessions SET last_seq = ?, last_activity_at = ? WHERE id = ?').run(seq, at, sessionId);
-    return this.#toEvent({ seq, at, kind: ev.kind, uuid: ev.uuid ?? null, parent_tool_use_id: ev.parentToolUseId ?? null, request_id: ev.requestId ?? null, payload });
+    });
   }
 
   history(sessionId: string, after = 0): ChatEvent[] {
-    const rows = this.#db().prepare('SELECT seq, at, kind, uuid, parent_tool_use_id, request_id, payload FROM chat_events WHERE session_id = ? AND seq > ? ORDER BY seq').all(sessionId, after) as EventRow[];
+    const rows = this.#db()
+      .prepare(
+        'SELECT seq, at, kind, uuid, parent_tool_use_id, request_id, payload FROM chat_events WHERE session_id = ? AND seq > ? ORDER BY seq',
+      )
+      .all(sessionId, after) as EventRow[];
     return rows.map((r) => this.#toEvent(r));
   }
 
@@ -810,16 +925,18 @@ export class ChatStore {
    */
   historyBefore(sessionId: string, before: number | null, count: number): ChatEvent[] {
     const rows = this.#db()
-      .prepare('SELECT seq, at, kind, uuid, parent_tool_use_id, request_id, payload FROM chat_events WHERE session_id = ? AND seq < ? ORDER BY seq DESC LIMIT ?')
+      .prepare(
+        'SELECT seq, at, kind, uuid, parent_tool_use_id, request_id, payload FROM chat_events WHERE session_id = ? AND seq < ? ORDER BY seq DESC LIMIT ?',
+      )
       .all(sessionId, before ?? Number.MAX_SAFE_INTEGER, count) as EventRow[];
     return rows.map((r) => this.#toEvent(r));
   }
 
   /** One stored event by its seq, whole, or null. */
   event(sessionId: string, seq: number): ChatEvent | null {
-    const row = this.#db().prepare('SELECT seq, at, kind, uuid, parent_tool_use_id, request_id, payload FROM chat_events WHERE session_id = ? AND seq = ?').get(sessionId, seq) as
-      | EventRow
-      | undefined;
+    const row = this.#db()
+      .prepare('SELECT seq, at, kind, uuid, parent_tool_use_id, request_id, payload FROM chat_events WHERE session_id = ? AND seq = ?')
+      .get(sessionId, seq) as EventRow | undefined;
     return row ? this.#toEvent(row) : null;
   }
 
@@ -862,7 +979,22 @@ export class ChatStore {
     );
     const at = new Date(turn.atMs).toISOString();
     for (const r of rows) {
-      insert.run(at, turn.atMs, turn.sessionId, turn.workspaceId, turn.claudeId, r.model, r.input, r.output, r.cacheRead, r.cacheWrite, r.costUsd, r.requests, r.agents, r.durationMs);
+      insert.run(
+        at,
+        turn.atMs,
+        turn.sessionId,
+        turn.workspaceId,
+        turn.claudeId,
+        r.model,
+        r.input,
+        r.output,
+        r.cacheRead,
+        r.cacheWrite,
+        r.costUsd,
+        r.requests,
+        r.agents,
+        r.durationMs,
+      );
     }
   }
 
@@ -870,18 +1002,22 @@ export class ChatStore {
   usageSince(fromMs: number, claudeId?: string): UsageRecord[] {
     const cols = `at_ms AS atMs, workspace_id AS workspaceId, claude_id AS claudeId, model, input_tokens AS input, output_tokens AS output,
       cache_read_tokens AS cacheRead, cache_write_tokens AS cacheWrite, cost_usd AS costUsd, requests, agents, duration_ms AS durationMs`;
-    return (
-      claudeId
-        ? this.#db().prepare(`SELECT ${cols} FROM chat_usage WHERE at_ms >= ? AND claude_id = ? AND ${COUNTED_USAGE} ORDER BY at_ms`).all(fromMs, claudeId)
-        : this.#db().prepare(`SELECT ${cols} FROM chat_usage WHERE at_ms >= ? AND ${COUNTED_USAGE} ORDER BY at_ms`).all(fromMs)
-    ) as unknown as UsageRecord[];
+    return (claudeId
+      ? this.#db()
+          .prepare(`SELECT ${cols} FROM chat_usage WHERE at_ms >= ? AND claude_id = ? AND ${COUNTED_USAGE} ORDER BY at_ms`)
+          .all(fromMs, claudeId)
+      : this.#db()
+          .prepare(`SELECT ${cols} FROM chat_usage WHERE at_ms >= ? AND ${COUNTED_USAGE} ORDER BY at_ms`)
+          .all(fromMs)) as unknown as UsageRecord[];
   }
 
   /** The session's newest stored event, or null before the first. */
   lastEvent(sessionId: string): ChatEvent | null {
-    const row = this.#db().prepare('SELECT seq, at, kind, uuid, parent_tool_use_id, request_id, payload FROM chat_events WHERE session_id = ? ORDER BY seq DESC LIMIT 1').get(sessionId) as
-      | EventRow
-      | undefined;
+    const row = this.#db()
+      .prepare(
+        'SELECT seq, at, kind, uuid, parent_tool_use_id, request_id, payload FROM chat_events WHERE session_id = ? ORDER BY seq DESC LIMIT 1',
+      )
+      .get(sessionId) as EventRow | undefined;
     return row ? this.#toEvent(row) : null;
   }
 
@@ -899,13 +1035,17 @@ export class ChatStore {
   /** Whether the one-time "Ready" note (from the first `system/init`) is stored; other system notes don't count. */
   hasReady(sessionId: string): boolean {
     return !!this.#db()
-      .prepare(`SELECT 1 FROM chat_events WHERE session_id = ? AND seq > ? AND kind = 'system' AND json_extract(payload, '$.text') = 'Ready' LIMIT 1`)
+      .prepare(
+        `SELECT 1 FROM chat_events WHERE session_id = ? AND seq > ? AND kind = 'system' AND json_extract(payload, '$.text') = 'Ready' LIMIT 1`,
+      )
       .get(sessionId, this.#segmentSeq(sessionId));
   }
 
   /** The seq the current run of Claude Code started after: what came before belongs to its earlier runs. */
   #segmentSeq(sessionId: string): number {
-    return (this.#db().prepare('SELECT segment_seq AS s FROM chat_sessions WHERE id = ?').get(sessionId) as { s: number } | undefined)?.s ?? 0;
+    return (
+      (this.#db().prepare('SELECT segment_seq AS s FROM chat_sessions WHERE id = ?').get(sessionId) as { s: number } | undefined)?.s ?? 0
+    );
   }
 
   patchSession(id: string, patch: ChatSessionPatch): void {
@@ -987,12 +1127,15 @@ export class ChatStore {
     const result =
       state === 'failed'
         ? db.prepare(`UPDATE chat_inputs SET state = 'failed' WHERE session_id = ? AND uuid = ? AND state = 'sending'`).run(sessionId, uuid)
-        : db.prepare(`UPDATE chat_inputs SET state = ? WHERE session_id = ? AND uuid = ? AND ${INPUT_RANK_SQL} < ?`).run(state, sessionId, uuid, inputRank(state));
+        : db
+            .prepare(`UPDATE chat_inputs SET state = ? WHERE session_id = ? AND uuid = ? AND ${INPUT_RANK_SQL} < ?`)
+            .run(state, sessionId, uuid, inputRank(state));
     return Number(result.changes) > 0;
   }
 
   inputState(sessionId: string, uuid: string): InputState | null {
-    const row = this.#db().prepare('SELECT state FROM chat_inputs WHERE session_id = ? AND uuid = ?').get(sessionId, uuid) as { state: string } | undefined;
+    const row = this.#db().prepare('SELECT state FROM chat_inputs WHERE session_id = ? AND uuid = ?').get(sessionId, uuid) as
+      { state: string } | undefined;
     return row ? (row.state as InputState) : null;
   }
 
@@ -1016,19 +1159,32 @@ export class ChatStore {
 
   /** How many sent messages Claude Code hasn't read yet (sending or queued). */
   queuedMessages(sessionId: string): number {
-    return (this.#db().prepare(`SELECT count(*) AS n FROM chat_inputs WHERE session_id = ? AND kind = 'message' AND state IN ('sending', 'queued')`).get(sessionId) as { n: number }).n;
+    return (
+      this.#db()
+        .prepare(`SELECT count(*) AS n FROM chat_inputs WHERE session_id = ? AND kind = 'message' AND state IN ('sending', 'queued')`)
+        .get(sessionId) as { n: number }
+    ).n;
   }
 
   /** Whether a sent message is still with Claude Code (sending, queued or started). */
   hasOpenInputs(sessionId: string): boolean {
-    return !!this.#db().prepare(`SELECT 1 FROM chat_inputs WHERE session_id = ? AND kind = 'message' AND state IN ${OPEN_INPUT_STATES} LIMIT 1`).get(sessionId);
+    return !!this.#db()
+      .prepare(`SELECT 1 FROM chat_inputs WHERE session_id = ? AND kind = 'message' AND state IN ${OPEN_INPUT_STATES} LIMIT 1`)
+      .get(sessionId);
   }
 
   /** Its process is gone: messages it never finished become `discarded`. Returns their uuids. */
   discardOpenInputs(sessionId: string): string[] {
     const db = this.#writable();
-    const rows = db.prepare(`SELECT uuid FROM chat_inputs WHERE session_id = ? AND kind = 'message' AND state IN ${OPEN_INPUT_STATES} ORDER BY created_at`).all(sessionId) as { uuid: string }[];
-    if (rows.length) db.prepare(`UPDATE chat_inputs SET state = 'discarded' WHERE session_id = ? AND kind = 'message' AND state IN ${OPEN_INPUT_STATES}`).run(sessionId);
+    const rows = db
+      .prepare(
+        `SELECT uuid FROM chat_inputs WHERE session_id = ? AND kind = 'message' AND state IN ${OPEN_INPUT_STATES} ORDER BY created_at`,
+      )
+      .all(sessionId) as { uuid: string }[];
+    if (rows.length)
+      db.prepare(
+        `UPDATE chat_inputs SET state = 'discarded' WHERE session_id = ? AND kind = 'message' AND state IN ${OPEN_INPUT_STATES}`,
+      ).run(sessionId);
     return rows.map((r) => r.uuid);
   }
 
@@ -1062,19 +1218,29 @@ export class ChatStore {
   }
 
   controlState(sessionId: string, key: string): ControlLineState | null {
-    const row = this.#db().prepare(`SELECT state FROM chat_inputs WHERE session_id = ? AND uuid = ? AND kind = 'control'`).get(sessionId, key) as { state: string } | undefined;
+    const row = this.#db()
+      .prepare(`SELECT state FROM chat_inputs WHERE session_id = ? AND uuid = ? AND kind = 'control'`)
+      .get(sessionId, key) as { state: string } | undefined;
     return row ? (row.state as ControlLineState) : null;
   }
 
   /** Sets a control line's state; `digest` (T-136) records the first response read for it, so a second copy can be told apart. */
   setControlState(sessionId: string, key: string, state: ControlLineState, digest?: string): void {
-    if (digest === undefined) this.#writable().prepare(`UPDATE chat_inputs SET state = ? WHERE session_id = ? AND uuid = ? AND kind = 'control'`).run(state, sessionId, key);
-    else this.#writable().prepare(`UPDATE chat_inputs SET state = ?, digest = ? WHERE session_id = ? AND uuid = ? AND kind = 'control'`).run(state, digest, sessionId, key);
+    if (digest === undefined)
+      this.#writable()
+        .prepare(`UPDATE chat_inputs SET state = ? WHERE session_id = ? AND uuid = ? AND kind = 'control'`)
+        .run(state, sessionId, key);
+    else
+      this.#writable()
+        .prepare(`UPDATE chat_inputs SET state = ?, digest = ? WHERE session_id = ? AND uuid = ? AND kind = 'control'`)
+        .run(state, digest, sessionId, key);
   }
 
   /** The digest of the first response read for a control line, or null (none read, or read before T-136). */
   controlDigest(sessionId: string, key: string): string | null {
-    const row = this.#db().prepare(`SELECT digest FROM chat_inputs WHERE session_id = ? AND uuid = ? AND kind = 'control'`).get(sessionId, key) as { digest: string | null } | undefined;
+    const row = this.#db()
+      .prepare(`SELECT digest FROM chat_inputs WHERE session_id = ? AND uuid = ? AND kind = 'control'`)
+      .get(sessionId, key) as { digest: string | null } | undefined;
     return row?.digest ?? null;
   }
 
@@ -1091,8 +1257,7 @@ export class ChatStore {
     const t: TaskPatch = { ...patch, description: redactMaybe(patch.description), summary: redactMaybe(patch.summary) };
     const status = t.status && TASK_STATUSES.has(t.status) ? t.status : undefined;
     const existing = db.prepare('SELECT status, ended_at FROM chat_tasks WHERE session_id = ? AND task_id = ?').get(sessionId, t.taskId) as
-      | { status: string | null; ended_at: string | null }
-      | undefined;
+      { status: string | null; ended_at: string | null } | undefined;
     if (!existing) {
       db.prepare(
         `INSERT INTO chat_tasks (session_id, task_id, tool_use_id, type, label, background, status, tokens, tool_uses, started_at, ended_at, subagent_type, summary, duration_ms)
@@ -1146,16 +1311,15 @@ export class ChatStore {
   /** The session's sub-agents and background tasks, oldest first. */
   tasks(sessionId: string): ChatTask[] {
     const rows = this.#db()
-      .prepare(
-        `SELECT ${TASK_COLUMNS} FROM chat_tasks WHERE session_id = ? ORDER BY started_at, task_id`,
-      )
+      .prepare(`SELECT ${TASK_COLUMNS} FROM chat_tasks WHERE session_id = ? ORDER BY started_at, task_id`)
       .all(sessionId) as TaskRow[];
     return rows.map(taskOut);
   }
 
   /** One sub-agent or background task, or null. */
   task(sessionId: string, taskId: string): ChatTask | null {
-    const row = this.#db().prepare(`SELECT ${TASK_COLUMNS} FROM chat_tasks WHERE session_id = ? AND task_id = ?`).get(sessionId, taskId) as TaskRow | undefined;
+    const row = this.#db().prepare(`SELECT ${TASK_COLUMNS} FROM chat_tasks WHERE session_id = ? AND task_id = ?`).get(sessionId, taskId) as
+      TaskRow | undefined;
     return row ? taskOut(row) : null;
   }
 
@@ -1176,10 +1340,18 @@ export class ChatStore {
    */
   taskEvents(sessionId: string, toolUseId: string, after = 0, limit = TASK_EVENTS_MAX): { events: ChatEvent[]; truncated: boolean } {
     const rows = this.#db()
-      .prepare('SELECT seq, at, kind, uuid, parent_tool_use_id, request_id, payload FROM chat_events WHERE session_id = ? AND parent_tool_use_id = ? AND seq > ? ORDER BY seq DESC LIMIT ?')
+      .prepare(
+        'SELECT seq, at, kind, uuid, parent_tool_use_id, request_id, payload FROM chat_events WHERE session_id = ? AND parent_tool_use_id = ? AND seq > ? ORDER BY seq DESC LIMIT ?',
+      )
       .all(sessionId, toolUseId, after, limit + 1) as EventRow[];
     const truncated = rows.length > limit;
-    return { events: rows.slice(0, limit).reverse().map((r) => this.#toEvent(r)), truncated };
+    return {
+      events: rows
+        .slice(0, limit)
+        .reverse()
+        .map((r) => this.#toEvent(r)),
+      truncated,
+    };
   }
 
   /** Whether a sub-agent or background task is still running. */
@@ -1190,20 +1362,27 @@ export class ChatStore {
   hasTaskActivitySince(sessionId: string, since: string | null): boolean {
     if (since === null) return !!this.#db().prepare('SELECT 1 FROM chat_tasks WHERE session_id = ? LIMIT 1').get(sessionId);
     return !!this.#db()
-      .prepare(`SELECT 1 FROM chat_tasks WHERE session_id = ? AND (status IS NULL OR status = 'running' OR started_at >= ? OR ended_at >= ?) LIMIT 1`)
+      .prepare(
+        `SELECT 1 FROM chat_tasks WHERE session_id = ? AND (status IS NULL OR status = 'running' OR started_at >= ? OR ended_at >= ?) LIMIT 1`,
+      )
       .get(sessionId, since, since);
   }
 
   /** Whether this one task ran in the session's current process (as {@link hasTaskActivitySince}, for one task id). T-136. */
   taskRanSince(sessionId: string, taskId: string, since: string | null): boolean {
-    if (since === null) return !!this.#db().prepare('SELECT 1 FROM chat_tasks WHERE session_id = ? AND task_id = ? LIMIT 1').get(sessionId, taskId);
+    if (since === null)
+      return !!this.#db().prepare('SELECT 1 FROM chat_tasks WHERE session_id = ? AND task_id = ? LIMIT 1').get(sessionId, taskId);
     return !!this.#db()
-      .prepare(`SELECT 1 FROM chat_tasks WHERE session_id = ? AND task_id = ? AND (status IS NULL OR status = 'running' OR started_at >= ? OR ended_at >= ?) LIMIT 1`)
+      .prepare(
+        `SELECT 1 FROM chat_tasks WHERE session_id = ? AND task_id = ? AND (status IS NULL OR status = 'running' OR started_at >= ? OR ended_at >= ?) LIMIT 1`,
+      )
       .get(sessionId, taskId, since, since);
   }
 
   hasRunningTasks(sessionId: string): boolean {
-    return !!this.#db().prepare(`SELECT 1 FROM chat_tasks WHERE session_id = ? AND (status IS NULL OR status = 'running') LIMIT 1`).get(sessionId);
+    return !!this.#db()
+      .prepare(`SELECT 1 FROM chat_tasks WHERE session_id = ? AND (status IS NULL OR status = 'running') LIMIT 1`)
+      .get(sessionId);
   }
 
   /**
@@ -1214,7 +1393,9 @@ export class ChatStore {
     if (only && !only.length) return false;
     const pick = only ? ` AND task_id IN (${only.map(() => '?').join(', ')})` : '';
     const result = this.#writable()
-      .prepare(`UPDATE chat_tasks SET status = 'killed', ended_at = coalesce(ended_at, ?) WHERE session_id = ? AND (status IS NULL OR status = 'running')${pick}`)
+      .prepare(
+        `UPDATE chat_tasks SET status = 'killed', ended_at = coalesce(ended_at, ?) WHERE session_id = ? AND (status IS NULL OR status = 'running')${pick}`,
+      )
       .run(this.#stamp(), sessionId, ...(only ?? []));
     return Number(result.changes) > 0;
   }
@@ -1222,7 +1403,9 @@ export class ChatStore {
   /** The tasks of a session still running, by id. */
   runningTaskIds(sessionId: string): string[] {
     return (
-      this.#db().prepare(`SELECT task_id FROM chat_tasks WHERE session_id = ? AND (status IS NULL OR status = 'running') ORDER BY task_id`).all(sessionId) as {
+      this.#db()
+        .prepare(`SELECT task_id FROM chat_tasks WHERE session_id = ? AND (status IS NULL OR status = 'running') ORDER BY task_id`)
+        .all(sessionId) as {
         task_id: string;
       }[]
     ).map((r) => r.task_id);
@@ -1235,16 +1418,19 @@ export class ChatStore {
   endOrphanTasks(): string[] {
     const db = this.#writable();
     const where = `(status IS NULL OR status = 'running') AND session_id IN (SELECT id FROM chat_sessions WHERE coalesce(process, '') != 'live' OR state = 'ended')`;
-    const ids = (db.prepare(`SELECT DISTINCT session_id FROM chat_tasks WHERE ${where}`).all() as { session_id: string }[]).map((r) => r.session_id);
-    if (ids.length) db.prepare(`UPDATE chat_tasks SET status = 'killed', ended_at = coalesce(ended_at, ?) WHERE ${where}`).run(this.#stamp());
+    const ids = (db.prepare(`SELECT DISTINCT session_id FROM chat_tasks WHERE ${where}`).all() as { session_id: string }[]).map(
+      (r) => r.session_id,
+    );
+    if (ids.length)
+      db.prepare(`UPDATE chat_tasks SET status = 'killed', ended_at = coalesce(ended_at, ?) WHERE ${where}`).run(this.#stamp());
     return ids;
   }
 
   /** The description of the task a `Task` tool_use started, to label its sub-agent's lines. */
   taskLabel(sessionId: string, toolUseId: string): string | null {
-    const row = this.#db().prepare('SELECT label FROM chat_tasks WHERE session_id = ? AND tool_use_id = ? AND label IS NOT NULL LIMIT 1').get(sessionId, toolUseId) as
-      | { label: string }
-      | undefined;
+    const row = this.#db()
+      .prepare('SELECT label FROM chat_tasks WHERE session_id = ? AND tool_use_id = ? AND label IS NOT NULL LIMIT 1')
+      .get(sessionId, toolUseId) as { label: string } | undefined;
     return row?.label ?? null;
   }
 
@@ -1259,13 +1445,40 @@ export class ChatStore {
       .prepare(
         `INSERT INTO chat_requests (session_id, request_id, tool_use_id, kind, tool_name, agent_label, title, detail, full, full_cut, created_at, proc) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(sessionId, req.requestId, req.toolUseId ?? null, req.kind, req.toolName ?? null, req.agentLabel ?? null, req.title, detail, full, fullCut ? 1 : 0, createdAt, proc);
-    return { requestId: req.requestId, kind: req.kind, toolName: req.toolName ?? null, agentLabel: req.agentLabel ?? null, title: req.title, detail, full, fullCut, createdAt };
+      .run(
+        sessionId,
+        req.requestId,
+        req.toolUseId ?? null,
+        req.kind,
+        req.toolName ?? null,
+        req.agentLabel ?? null,
+        req.title,
+        detail,
+        full,
+        fullCut ? 1 : 0,
+        createdAt,
+        proc,
+      );
+    return {
+      requestId: req.requestId,
+      kind: req.kind,
+      toolName: req.toolName ?? null,
+      agentLabel: req.agentLabel ?? null,
+      title: req.title,
+      detail,
+      full,
+      fullCut,
+      createdAt,
+    };
   }
 
   /** T-284: the open requests with the process that raised each (null: raised before migration 830) and when the portal read them. */
   openRequestOrigins(sessionId: string): { requestId: string; proc: string | null; createdAt: string }[] {
-    const rows = this.#db().prepare('SELECT request_id, proc, created_at FROM chat_requests WHERE session_id = ? AND answered_at IS NULL ORDER BY created_at, rowid').all(sessionId) as {
+    const rows = this.#db()
+      .prepare(
+        'SELECT request_id, proc, created_at FROM chat_requests WHERE session_id = ? AND answered_at IS NULL ORDER BY created_at, rowid',
+      )
+      .all(sessionId) as {
       request_id: string;
       proc: string | null;
       created_at: string;
@@ -1276,7 +1489,9 @@ export class ChatStore {
   /** T-284: the sessions (not ended) that have an open request, for the liveness round's stale sweep. */
   sessionsWithOpenRequests(): string[] {
     const rows = this.#db()
-      .prepare("SELECT DISTINCT r.session_id FROM chat_requests r JOIN chat_sessions s ON s.id = r.session_id WHERE r.answered_at IS NULL AND s.state != 'ended'")
+      .prepare(
+        "SELECT DISTINCT r.session_id FROM chat_requests r JOIN chat_sessions s ON s.id = r.session_id WHERE r.answered_at IS NULL AND s.state != 'ended'",
+      )
       .all() as { session_id: string }[];
     return rows.map((r) => r.session_id);
   }
@@ -1284,7 +1499,9 @@ export class ChatStore {
   /** T-284: an open request nobody can answer any more (its process is not the live one) reads `stale`. False when it was not open. */
   staleRequest(sessionId: string, requestId: string, actor: string | null): boolean {
     const r = this.#writable()
-      .prepare(`UPDATE chat_requests SET answered_at = ?, outcome = 'stale', actor = ? WHERE session_id = ? AND request_id = ? AND answered_at IS NULL`)
+      .prepare(
+        `UPDATE chat_requests SET answered_at = ?, outcome = 'stale', actor = ? WHERE session_id = ? AND request_id = ? AND answered_at IS NULL`,
+      )
       .run(this.#stamp(), actor, sessionId, requestId);
     return Number(r.changes) > 0;
   }
@@ -1292,8 +1509,14 @@ export class ChatStore {
   /** Its process is gone: requests nobody can answer any more read `expired`. Returns their ids. */
   expireOpenRequests(sessionId: string): string[] {
     const db = this.#writable();
-    const rows = db.prepare('SELECT request_id FROM chat_requests WHERE session_id = ? AND answered_at IS NULL ORDER BY created_at, rowid').all(sessionId) as { request_id: string }[];
-    if (rows.length) db.prepare(`UPDATE chat_requests SET answered_at = ?, outcome = 'expired' WHERE session_id = ? AND answered_at IS NULL`).run(this.#stamp(), sessionId);
+    const rows = db
+      .prepare('SELECT request_id FROM chat_requests WHERE session_id = ? AND answered_at IS NULL ORDER BY created_at, rowid')
+      .all(sessionId) as { request_id: string }[];
+    if (rows.length)
+      db.prepare(`UPDATE chat_requests SET answered_at = ?, outcome = 'expired' WHERE session_id = ? AND answered_at IS NULL`).run(
+        this.#stamp(),
+        sessionId,
+      );
     return rows.map((r) => r.request_id);
   }
 
@@ -1312,13 +1535,17 @@ export class ChatStore {
 
   /** How the portal answered a request Claude Code raised (allowed_once, allowed_session, denied, …), or null while open or unknown. */
   requestOutcome(sessionId: string, requestId: string): string | null {
-    const row = this.#db().prepare('SELECT outcome FROM chat_requests WHERE session_id = ? AND request_id = ?').get(sessionId, requestId) as { outcome: string | null } | undefined;
+    const row = this.#db()
+      .prepare('SELECT outcome FROM chat_requests WHERE session_id = ? AND request_id = ?')
+      .get(sessionId, requestId) as { outcome: string | null } | undefined;
     return row?.outcome ?? null;
   }
 
   openRequests(sessionId: string): ChatRequest[] {
     const rows = this.#db()
-      .prepare('SELECT request_id, tool_use_id, kind, tool_name, agent_label, title, detail, full, full_cut, created_at FROM chat_requests WHERE session_id = ? AND answered_at IS NULL ORDER BY created_at, rowid')
+      .prepare(
+        'SELECT request_id, tool_use_id, kind, tool_name, agent_label, title, detail, full, full_cut, created_at FROM chat_requests WHERE session_id = ? AND answered_at IS NULL ORDER BY created_at, rowid',
+      )
       .all(sessionId) as RequestRow[];
     return rows.map((r) => ({
       requestId: r.request_id,
@@ -1337,9 +1564,9 @@ export class ChatStore {
 
   /** The trust a person gave a folder: the scan hash it holds for, or null when the folder was never trusted. */
   folderTrust(workspaceId: string, folder: string): { hash: string | null; trustedAt: string } | null {
-    const row = this.#db().prepare('SELECT scan_hash, trusted_at FROM chat_folder_trust WHERE workspace_id = ? AND folder = ?').get(workspaceId, folder) as
-      | { scan_hash: string | null; trusted_at: string }
-      | undefined;
+    const row = this.#db()
+      .prepare('SELECT scan_hash, trusted_at FROM chat_folder_trust WHERE workspace_id = ? AND folder = ?')
+      .get(workspaceId, folder) as { scan_hash: string | null; trusted_at: string } | undefined;
     return row ? { hash: row.scan_hash, trustedAt: row.trusted_at } : null;
   }
 
@@ -1374,7 +1601,9 @@ export class ChatStore {
   }
 
   worktreeAt(workspaceId: string, path: string): WorktreeRow | null {
-    const row = this.#db().prepare(`SELECT * FROM chat_worktrees WHERE workspace_id = ? AND path = ? AND state != 'removed'`).get(workspaceId, path) as WorktreeRecord | undefined;
+    const row = this.#db()
+      .prepare(`SELECT * FROM chat_worktrees WHERE workspace_id = ? AND path = ? AND state != 'removed'`)
+      .get(workspaceId, path) as WorktreeRecord | undefined;
     return row ? toWorktree(row) : null;
   }
 
@@ -1388,7 +1617,9 @@ export class ChatStore {
 
   /** The chat now runs in it. */
   activateWorktree(workspaceId: string, path: string, sessionId: string): void {
-    this.#writable().prepare(`UPDATE chat_worktrees SET session_id = ?, state = 'active' WHERE workspace_id = ? AND path = ?`).run(sessionId, workspaceId, path);
+    this.#writable()
+      .prepare(`UPDATE chat_worktrees SET session_id = ?, state = 'active' WHERE workspace_id = ? AND path = ?`)
+      .run(sessionId, workspaceId, path);
   }
 
   /** Its chat is gone and the folder stays (`kept`), or the folder is gone (`removed`). */
@@ -1400,13 +1631,17 @@ export class ChatStore {
 
   /** The worktrees the portal made in a workspace, none of them removed, newest first. */
   worktrees(workspaceId: string): WorktreeRow[] {
-    const rows = this.#db().prepare(`SELECT * FROM chat_worktrees WHERE workspace_id = ? AND state != 'removed' ORDER BY created_at DESC`).all(workspaceId) as unknown as WorktreeRecord[];
+    const rows = this.#db()
+      .prepare(`SELECT * FROM chat_worktrees WHERE workspace_id = ? AND state != 'removed' ORDER BY created_at DESC`)
+      .all(workspaceId) as unknown as WorktreeRecord[];
     return rows.map(toWorktree);
   }
 
   /** Worktrees reserved for a start that never came through, made before `before`. */
   staleReservations(before: string): WorktreeRow[] {
-    const rows = this.#db().prepare(`SELECT * FROM chat_worktrees WHERE state = 'reserved' AND created_at < ?`).all(before) as unknown as WorktreeRecord[];
+    const rows = this.#db()
+      .prepare(`SELECT * FROM chat_worktrees WHERE state = 'reserved' AND created_at < ?`)
+      .all(before) as unknown as WorktreeRecord[];
     return rows.map(toWorktree);
   }
 
@@ -1419,16 +1654,21 @@ export class ChatStore {
 
   listClaudes(workspaceId: string): WorkspaceClaude[] {
     this.ensureDefault(workspaceId);
-    const rows = this.#db().prepare('SELECT * FROM workspace_claudes WHERE workspace_id = ? ORDER BY created_at, name').all(workspaceId) as ClaudeRow[];
+    const rows = this.#db()
+      .prepare('SELECT * FROM workspace_claudes WHERE workspace_id = ? ORDER BY created_at, name')
+      .all(workspaceId) as ClaudeRow[];
     return rows.map(toClaude);
   }
 
   ensureDefault(workspaceId: string): WorkspaceClaude {
-    const existing = this.#db().prepare(`SELECT * FROM workspace_claudes WHERE workspace_id = ? AND directory = ''`).get(workspaceId) as ClaudeRow | undefined;
+    const existing = this.#db().prepare(`SELECT * FROM workspace_claudes WHERE workspace_id = ? AND directory = ''`).get(workspaceId) as
+      ClaudeRow | undefined;
     if (existing) return toClaude(existing);
     const now = this.#stamp();
     const id = `d_${createHash('sha256').update(workspaceId).digest('hex').slice(0, 16)}`;
-    this.#writable().prepare(`INSERT INTO workspace_claudes (id, workspace_id, name, directory, created_at) VALUES (?, ?, 'Default', '', ?)`).run(id, workspaceId, now);
+    this.#writable()
+      .prepare(`INSERT INTO workspace_claudes (id, workspace_id, name, directory, created_at) VALUES (?, ?, 'Default', '', ?)`)
+      .run(id, workspaceId, now);
     return toClaude(this.#db().prepare('SELECT * FROM workspace_claudes WHERE id = ?').get(id) as ClaudeRow);
   }
 
@@ -1439,14 +1679,16 @@ export class ChatStore {
 
   claudeName(workspaceId: string, claudeId: string): string | null {
     if (!claudeId) return 'Default';
-    const row = this.#db().prepare('SELECT name FROM workspace_claudes WHERE id = ? AND workspace_id = ?').get(claudeId, workspaceId) as { name: string } | undefined;
+    const row = this.#db().prepare('SELECT name FROM workspace_claudes WHERE id = ? AND workspace_id = ?').get(claudeId, workspaceId) as
+      { name: string } | undefined;
     return row?.name ?? null;
   }
 
   /** Absolute config directory for a non-default Claude, or null to leave Claude Code on the workspace home. */
   configDir(claudeId: string): string | null {
     if (!claudeId) return null;
-    const row = this.#db().prepare('SELECT directory FROM workspace_claudes WHERE id = ?').get(claudeId) as { directory: string } | undefined;
+    const row = this.#db().prepare('SELECT directory FROM workspace_claudes WHERE id = ?').get(claudeId) as
+      { directory: string } | undefined;
     if (!row || !row.directory) return null;
     if (!/^claudes\/[a-f0-9]{16}$/.test(row.directory)) return null;
     return `${HOME}/.claudepilot/${row.directory}`;
@@ -1456,7 +1698,9 @@ export class ChatStore {
     const id = randomBytes(8).toString('hex');
     const directory = `claudes/${id}`;
     const now = this.#stamp();
-    this.#writable().prepare(`INSERT INTO workspace_claudes (id, workspace_id, name, directory, created_at) VALUES (?, ?, ?, ?, ?)`).run(id, workspaceId, name, directory, now);
+    this.#writable()
+      .prepare(`INSERT INTO workspace_claudes (id, workspace_id, name, directory, created_at) VALUES (?, ?, ?, ?, ?)`)
+      .run(id, workspaceId, name, directory, now);
     return { id, directory };
   }
 
@@ -1478,11 +1722,12 @@ export class ChatStore {
   openSessionsOnClaude(workspaceId: string, claudeId: string, isDefault: boolean): number {
     const one = this.#inWorkspace(workspaceId);
     const row = this.#db()
-      .prepare(`SELECT COUNT(*) AS n FROM chat_sessions WHERE ${one.sql} AND state != 'ended' AND (claude_id = ? OR (? AND claude_id = ''))`)
+      .prepare(
+        `SELECT COUNT(*) AS n FROM chat_sessions WHERE ${one.sql} AND state != 'ended' AND (claude_id = ? OR (? AND claude_id = ''))`,
+      )
       .get(...one.args, claudeId, isDefault ? 1 : 0) as { n: number };
     return row.n;
   }
-
 
   /**
    * Deletes a session (FR4): its row, and with it (cascade) its events, inputs, requests, tasks and file
@@ -1493,7 +1738,11 @@ export class ChatStore {
     const db = this.#writable();
     let blobs: string[] = [];
     this.transaction(() => {
-      blobs = (db.prepare('SELECT DISTINCT blob_sha256 AS b FROM chat_files WHERE session_id = ? AND blob_sha256 IS NOT NULL').all(id) as { b: string }[]).map((r) => r.b);
+      blobs = (
+        db.prepare('SELECT DISTINCT blob_sha256 AS b FROM chat_files WHERE session_id = ? AND blob_sha256 IS NOT NULL').all(id) as {
+          b: string;
+        }[]
+      ).map((r) => r.b);
       db.prepare('UPDATE chat_sessions SET successor_id = NULL WHERE successor_id = ?').run(id);
       db.prepare('UPDATE chat_sessions SET predecessor_id = NULL WHERE predecessor_id = ?').run(id);
       db.prepare('UPDATE chat_sessions SET parent_id = NULL WHERE parent_id = ?').run(id);
@@ -1507,20 +1756,35 @@ export class ChatStore {
   /* ---------- Audit ---------- */
 
   /** One entry of the audit trail. `detail` holds names and ids only, redacted: never a secret or a message. */
-  addAudit(entry: { severity: ChatAuditEntry['severity']; kind: string; sessionId?: string | null; workspaceId?: string | null; actor?: string | null; actorLabel?: string | null; detail?: Record<string, unknown> }): void {
+  addAudit(entry: {
+    severity: ChatAuditEntry['severity'];
+    kind: string;
+    sessionId?: string | null;
+    workspaceId?: string | null;
+    actor?: string | null;
+    actorLabel?: string | null;
+    detail?: Record<string, unknown>;
+  }): void {
     // A Portal MCP token's label as it was when it acted, kept in the row's detail (redacted with the rest) so a later rename changes nothing.
-    const detail = entry.actorLabel ? { ...entry.detail, actorLabel: entry.actorLabel.replace(/\s+/g, ' ').trim().slice(0, 60) } : entry.detail;
+    const detail = entry.actorLabel
+      ? { ...entry.detail, actorLabel: entry.actorLabel.replace(/\s+/g, ' ').trim().slice(0, 60) }
+      : entry.detail;
     // T-723: the actor is a short name; one from outside is stored on one line and cut (control and format characters, bidi overrides and zero width ones included, and newlines become a space).
     // ZWNJ, ZWJ and the RTL marks (U+200C to U+200F) stay: a Persian word or a ZWJ emoji needs them. Cut on code points; a name left empty is NULL.
     const actor =
-      entry.actor == null
-        ? null
-        : Array.from(entry.actor.replace(ACTOR_STRIPPED, ' ').trim())
-            .slice(0, AUDIT_ACTOR_MAX)
-            .join('') || null;
-      this.#writable()
+      entry.actor == null ? null : Array.from(entry.actor.replace(ACTOR_STRIPPED, ' ').trim()).slice(0, AUDIT_ACTOR_MAX).join('') || null;
+
+    this.#writable()
       .prepare('INSERT INTO chat_audit (at, severity, kind, session_id, workspace_id, actor, detail) VALUES (?, ?, ?, ?, ?, ?, ?)')
-      .run(this.#stamp(), entry.severity, entry.kind, entry.sessionId ?? null, entry.workspaceId ?? null, actor, redact(JSON.stringify(detail ?? {})));
+      .run(
+        this.#stamp(),
+        entry.severity,
+        entry.kind,
+        entry.sessionId ?? null,
+        entry.workspaceId ?? null,
+        actor,
+        redact(JSON.stringify(detail ?? {})),
+      );
   }
 
   /** The audit trail, newest first; optionally one kind (a prefix such as `bypass`) or one session's. */
@@ -1540,14 +1804,23 @@ export class ChatStore {
    * `scope` names the caller (the route adds it), so a cursor is good for that caller and these filters only. `keep` is the caller's authz
    * filter: refused rows are not shown and the cursor points at the last row SHOWN. A bad or foreign cursor is a 400.
    */
-  auditPage(filter: { kind?: string; sessionId?: string; scope?: string } = {}, args: { cursor?: string | undefined; limit?: unknown; keep?: (e: ChatAuditEntry) => boolean } = {}): CursorPage<ChatAuditEntry> {
+  auditPage(
+    filter: { kind?: string; sessionId?: string; scope?: string } = {},
+    args: { cursor?: string | undefined; limit?: unknown; keep?: (e: ChatAuditEntry) => boolean } = {},
+  ): CursorPage<ChatAuditEntry> {
     const where: string[] = [];
     const params: string[] = [];
     if (filter.kind) (where.push('(kind = ? OR kind LIKE ?)'), params.push(filter.kind, `${filter.kind}.%`));
     if (filter.sessionId) (where.push('session_id = ?'), params.push(this.resolveId(filter.sessionId)));
     const limit = clampLimit(args.limit);
     const scope = `chat.audit|${filter.scope ?? ''}|${filter.kind ?? ''}|${filter.sessionId ?? ''}`;
-    const spec = { scope, table: 'chat_audit', sortCol: 'id', idCol: 'id', ...(where.length ? { where: where.join(' AND '), params } : {}) };
+    const spec = {
+      scope,
+      table: 'chat_audit',
+      sortCol: 'id',
+      idCol: 'id',
+      ...(where.length ? { where: where.join(' AND '), params } : {}),
+    };
     const shown: ChatAuditEntry[] = [];
     let cursor = args.cursor;
     // Bounded scan, as in listPage: at most SCAN_FACTOR x limit rows per request; at the bound `next` rests on the last row scanned.
@@ -1570,7 +1843,14 @@ export class ChatStore {
     return { items, next: shown.length > limit && last ? cursorAfter(scope, last.id, last.id) : shown.length > limit ? null : resume };
   }
 
-  saveHandoff(row: { id: string; workspaceId: string; sourceSessionId: string; sourceClaudeId: string; destClaudeId: string; path: string }): void {
+  saveHandoff(row: {
+    id: string;
+    workspaceId: string;
+    sourceSessionId: string;
+    sourceClaudeId: string;
+    destClaudeId: string;
+    path: string;
+  }): void {
     this.#writable()
       .prepare(
         `INSERT INTO claude_handoffs (id, workspace_id, source_session_id, successor_session_id, source_claude_id, dest_claude_id, path, created_at)
@@ -1595,7 +1875,12 @@ export class ChatStore {
       p.text = text.length > EVENT_TEXT_MAX ? `${text.slice(0, EVENT_TEXT_MAX)}…` : text;
     }
     if (ev.toolName !== undefined) p.toolName = ev.toolName;
-    if (ev.request !== undefined) p.request = { ...ev.request, detail: redactMaybe(ev.request.detail), ...(ev.request.full ? { full: redactMaybe(ev.request.full) } : {}) };
+    if (ev.request !== undefined)
+      p.request = {
+        ...ev.request,
+        detail: redactMaybe(ev.request.detail),
+        ...(ev.request.full ? { full: redactMaybe(ev.request.full) } : {}),
+      };
     if (ev.outcome !== undefined) p.outcome = ev.outcome;
     if (ev.costUsd !== undefined) p.costUsd = ev.costUsd;
     // A call's id, on the call and its result: a result read after a restart can still be named, and the
@@ -1610,7 +1895,8 @@ export class ChatStore {
     if (ev.kind === 'result' && ev.tokens) p.tokens = ev.tokens;
     if (ev.kind === 'result' && ev.modelTotals?.length) p.modelTotals = ev.modelTotals;
     if (ev.handoffId) p.handoffId = ev.handoffId;
-    if ((ev.kind === 'user' || ev.kind === 'system') && ev.transfer) p.transfer = { ...ev.transfer, fromClaude: redact(ev.transfer.fromClaude), toClaude: redact(ev.transfer.toClaude) };
+    if ((ev.kind === 'user' || ev.kind === 'system') && ev.transfer)
+      p.transfer = { ...ev.transfer, fromClaude: redact(ev.transfer.fromClaude), toClaude: redact(ev.transfer.toClaude) };
     // A pinned side question (chat PRD §20): a `system` event with its card.
     if (ev.kind === 'system' && ev.btw) p.btw = pinnedBtwOut(ev.btw);
     // A Restart's divider (chat PRD, Restart).
@@ -1644,7 +1930,8 @@ export class ChatStore {
     if (typeof payload.outcome === 'string') ev.outcome = payload.outcome;
     if (typeof payload.costUsd === 'number') ev.costUsd = payload.costUsd;
     if (typeof payload.toolUseId === 'string') ev.toolUseId = payload.toolUseId;
-    if (payload.toolInput && typeof payload.toolInput === 'object' && !Array.isArray(payload.toolInput)) ev.toolInput = payload.toolInput as NonNullable<ChatEvent['toolInput']>;
+    if (payload.toolInput && typeof payload.toolInput === 'object' && !Array.isArray(payload.toolInput))
+      ev.toolInput = payload.toolInput as NonNullable<ChatEvent['toolInput']>;
     if (payload.toolInputCut === true) ev.toolInputCut = true;
     if (payload.isError === true) ev.isError = true;
     if (typeof payload.durationMs === 'number') ev.durationMs = payload.durationMs;
@@ -1774,5 +2061,7 @@ function toClaude(row: ClaudeRow): WorkspaceClaude {
 function endedForOf(row: ChatSessionRow): ChatEndedFor | null {
   if (row.state !== 'ended') return null;
   const e = readEnding(row.ended_reason, row.ended_for);
-  return e ? { reason: (row.ended_reason ?? '').slice('integrity: '.length), classified: e.classified, case: e.case, origin: e.origin } : null;
+  return e
+    ? { reason: (row.ended_reason ?? '').slice('integrity: '.length), classified: e.classified, case: e.case, origin: e.origin }
+    : null;
 }

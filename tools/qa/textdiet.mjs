@@ -57,8 +57,10 @@ async function main() {
     if (created.status === 201) {
       const chat = await openChat(cookie, created.data.id);
       await chat.until((c) => c.session?.state === 'idle', 40000, 'idle');
-      await chat.send('hello'); await chat.idle();
-      await chat.send('[[md]]'); await chat.idle();
+      await chat.send('hello');
+      await chat.idle();
+      await chat.send('[[md]]');
+      await chat.idle();
       chat.close();
       live = created.data;
     }
@@ -106,53 +108,220 @@ async function main() {
       await open('usage', '/admin/usage');
       for (const t of tabs) await open(`pools-${t}`, `/admin/pools?tab=${t}`);
       await open('access', '/admin/access');
-      await open('access-mcp', '/admin/access', async () => { await click('MCP', { selector: '[role=tab], button', exact: true }); });
+      await open('access-mcp', '/admin/access', async () => {
+        await click('MCP', { selector: '[role=tab], button', exact: true });
+      });
       if (talk) await open('session', `/admin/sessions/${talk.id}`, async () => {}, { wait: 3500 });
       if (mine) await open('shell', `/admin/workspaces/${mine.id}/shell`, async () => {}, { wait: 3500 });
       // ---- shell chrome
-      await open('account-menu', '/admin/usage', async () => { await b.eval(`[...document.querySelectorAll('button[aria-label="Account menu"]')].find((e) => e.offsetParent).click()`); });
-      if (phone) await open('more-sheet', '/admin/usage', async () => { await b.clickSel('button[aria-label="More"]'); });
+      await open('account-menu', '/admin/usage', async () => {
+        await b.eval(`[...document.querySelectorAll('button[aria-label="Account menu"]')].find((e) => e.offsetParent).click()`);
+      });
+      if (phone)
+        await open('more-sheet', '/admin/usage', async () => {
+          await b.clickSel('button[aria-label="More"]');
+        });
       // ---- workspaces
       const wsReady = { ready: `document.body.innerText.includes('qa-ws1')` };
-      await open('new-workspace', '/admin/workspaces', async () => { await click(phone ? 'New' : 'New workspace', { exact: phone }); }, wsReady);
-      await open('workspace-row-menu', '/admin/workspaces', async () => { await click('Actions for qa-ws1'); }, wsReady);
-      await open('workspace-details', '/admin/workspaces', async () => { await click('Details for qa-ws1'); }, wsReady);
-      await open('workspace-config', '/admin/workspaces', async () => { await click('Actions for qa-ws1'); await pause(400); await click('Configuration', { selector: '[role=menuitem]' }); }, { ...wsReady, wait: 3000 });
-      await open('workspace-remove', '/admin/workspaces', async () => { await click('Actions for qa-ws1'); await pause(400); await click('Remove', { selector: '[role=menuitem]' }); }, wsReady);
-      await open('bulk-assign', '/admin/workspaces', async () => { await click('Select', { exact: true }); await pause(400); await click('Select qa-ws1', { selector: '[role=checkbox]' }); await click('Assign pool'); }, wsReady);
+      await open(
+        'new-workspace',
+        '/admin/workspaces',
+        async () => {
+          await click(phone ? 'New' : 'New workspace', { exact: phone });
+        },
+        wsReady,
+      );
+      await open(
+        'workspace-row-menu',
+        '/admin/workspaces',
+        async () => {
+          await click('Actions for qa-ws1');
+        },
+        wsReady,
+      );
+      await open(
+        'workspace-details',
+        '/admin/workspaces',
+        async () => {
+          await click('Details for qa-ws1');
+        },
+        wsReady,
+      );
+      await open(
+        'workspace-config',
+        '/admin/workspaces',
+        async () => {
+          await click('Actions for qa-ws1');
+          await pause(400);
+          await click('Configuration', { selector: '[role=menuitem]' });
+        },
+        { ...wsReady, wait: 3000 },
+      );
+      await open(
+        'workspace-remove',
+        '/admin/workspaces',
+        async () => {
+          await click('Actions for qa-ws1');
+          await pause(400);
+          await click('Remove', { selector: '[role=menuitem]' });
+        },
+        wsReady,
+      );
+      await open(
+        'bulk-assign',
+        '/admin/workspaces',
+        async () => {
+          await click('Select', { exact: true });
+          await pause(400);
+          await click('Select qa-ws1', { selector: '[role=checkbox]' });
+          await click('Assign pool');
+        },
+        wsReady,
+      );
       // ---- sessions
-      await open('new-session', '/admin/sessions', async () => { await click(phone ? 'New' : 'New session', { exact: phone }); }, { ready: `document.body.innerText.includes('QA')`, wait: 3000 });
-      await open('session-row-menu', '/admin/sessions', async () => { await click('Actions for QA', { }); }, { ready: `document.body.innerText.includes('QA')` });
+      await open(
+        'new-session',
+        '/admin/sessions',
+        async () => {
+          await click(phone ? 'New' : 'New session', { exact: phone });
+        },
+        { ready: `document.body.innerText.includes('QA')`, wait: 3000 },
+      );
+      await open(
+        'session-row-menu',
+        '/admin/sessions',
+        async () => {
+          await click('Actions for QA', {});
+        },
+        { ready: `document.body.innerText.includes('QA')` },
+      );
       if (talk) {
         const page = `/admin/sessions/${talk.id}`;
-        await open('session-menu', page, async () => { await click('Session actions'); }, { wait: 3500 });
-        await open('session-rename', page, async () => { await click('Session actions'); await pause(400); await click('Rename', { selector: '[role=menuitem]' }); }, { wait: 3500 });
-        await open('session-delete', page, async () => { await click('Session actions'); await pause(400); await click('Delete', { selector: '[role=menuitem]' }); }, { wait: 3500 });
-        await open('session-move', page, async () => { await click('Session actions'); await pause(400); await click('Move to another Claude', { selector: '[role=menuitem]' }); await pause(1500); }, { wait: 3500 });
-        await open('session-model', page, async () => { await click('Model and effort'); }, { wait: 3500 });
-        await open('session-mode', page, async () => { await click('Permission mode'); }, { wait: 3500 });
-        await open('session-usage', page, async () => { await click('Session actions'); await pause(400); await click('Usage', { selector: '[role=menuitem]' }); }, { wait: 3500 });
-        await open('session-files', page, async () => { if (phone) { await click('Session actions'); await pause(400); await click('Files and changes', { selector: '[role=menuitem]' }); } else await click('Files', { exact: true }); await pause(1500); }, { wait: 3500 });
-        await open('session-attach', page, async () => { await click('Attach images'); }, { wait: 3500 });
+        await open(
+          'session-menu',
+          page,
+          async () => {
+            await click('Session actions');
+          },
+          { wait: 3500 },
+        );
+        await open(
+          'session-rename',
+          page,
+          async () => {
+            await click('Session actions');
+            await pause(400);
+            await click('Rename', { selector: '[role=menuitem]' });
+          },
+          { wait: 3500 },
+        );
+        await open(
+          'session-delete',
+          page,
+          async () => {
+            await click('Session actions');
+            await pause(400);
+            await click('Delete', { selector: '[role=menuitem]' });
+          },
+          { wait: 3500 },
+        );
+        await open(
+          'session-move',
+          page,
+          async () => {
+            await click('Session actions');
+            await pause(400);
+            await click('Move to another Claude', { selector: '[role=menuitem]' });
+            await pause(1500);
+          },
+          { wait: 3500 },
+        );
+        await open(
+          'session-model',
+          page,
+          async () => {
+            await click('Model and effort');
+          },
+          { wait: 3500 },
+        );
+        await open(
+          'session-mode',
+          page,
+          async () => {
+            await click('Permission mode');
+          },
+          { wait: 3500 },
+        );
+        await open(
+          'session-usage',
+          page,
+          async () => {
+            await click('Session actions');
+            await pause(400);
+            await click('Usage', { selector: '[role=menuitem]' });
+          },
+          { wait: 3500 },
+        );
+        await open(
+          'session-files',
+          page,
+          async () => {
+            if (phone) {
+              await click('Session actions');
+              await pause(400);
+              await click('Files and changes', { selector: '[role=menuitem]' });
+            } else await click('Files', { exact: true });
+            await pause(1500);
+          },
+          { wait: 3500 },
+        );
+        await open(
+          'session-attach',
+          page,
+          async () => {
+            await click('Attach images');
+          },
+          { wait: 3500 },
+        );
       }
       if (ended) await open('session-ended', `/admin/sessions/${ended.id}`, async () => {}, { wait: 3500 });
       // ---- pools
-      await open('add-key', '/admin/pools?tab=accounts', async () => { await click(phone ? 'Add' : 'Add key', { exact: phone }); });
-      await open('key-menu', '/admin/pools?tab=accounts', async () => { await click('Actions for qa-acct-1'); });
-      await open('new-pool', '/admin/pools?tab=accounts', async () => { await click('New', { selector: 'button', exact: true }); });
-      await open('custom-endpoint', '/admin/pools?tab=accounts', async () => { await click('Custom', { exact: true }); });
+      await open('add-key', '/admin/pools?tab=accounts', async () => {
+        await click(phone ? 'Add' : 'Add key', { exact: phone });
+      });
+      await open('key-menu', '/admin/pools?tab=accounts', async () => {
+        await click('Actions for qa-acct-1');
+      });
+      await open('new-pool', '/admin/pools?tab=accounts', async () => {
+        await click('New', { selector: 'button', exact: true });
+      });
+      await open('custom-endpoint', '/admin/pools?tab=accounts', async () => {
+        await click('Custom', { exact: true });
+      });
       await open('secret-editor', '/admin/pools/secrets/new', async () => {}, { wait: 3000 });
       await open('mcp-catalog', '/admin/pools/mcp/catalog', async () => {}, { wait: 3000 });
       // ---- access
-      await open('access-custom-code', '/admin/access', async () => { await click('Set a custom code'); });
-      await open('access-rotate', '/admin/access', async () => { await click('Rotate', { exact: true }); });
+      await open('access-custom-code', '/admin/access', async () => {
+        await click('Set a custom code');
+      });
+      await open('access-rotate', '/admin/access', async () => {
+        await click('Rotate', { exact: true });
+      });
     } finally {
       await b.close();
     }
     if (width === sizes.at(-1) && live) await call('POST', `/api/chat/sessions/${live.id}/end`, {});
     writeFileSync(`${SHOTS}/textdiet-${width}.json`, JSON.stringify(rows, null, 1));
-    const md = ['| Screen | Words (all / in view) | Paragraphs (count, words) | Info buttons | Badges | Nested cards | Dividers | Icons | Icon+word buttons | Fields |', '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |'];
-    for (const r of rows) md.push(r.notOpened ? `| ${r.name} | not opened: ${r.notOpened} | | | | | | | | |` : `| ${r.name} | ${r.total} / ${r.inView} | ${r.paragraphCount}, ${r.paragraphWords} | ${r.tips} | ${r.badges} | ${r.nestedCards} | ${r.dividers} | ${r.icons} | ${r.labelledIconButtons} | ${r.fields} |`);
+    const md = [
+      '| Screen | Words (all / in view) | Paragraphs (count, words) | Info buttons | Badges | Nested cards | Dividers | Icons | Icon+word buttons | Fields |',
+      '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+    ];
+    for (const r of rows)
+      md.push(
+        r.notOpened
+          ? `| ${r.name} | not opened: ${r.notOpened} | | | | | | | | |`
+          : `| ${r.name} | ${r.total} / ${r.inView} | ${r.paragraphCount}, ${r.paragraphWords} | ${r.tips} | ${r.badges} | ${r.nestedCards} | ${r.dividers} | ${r.icons} | ${r.labelledIconButtons} | ${r.fields} |`,
+      );
     writeFileSync(`${SHOTS}/textdiet-${width}.md`, md.join('\n'));
     console.log(`\n=== ${width}px\n${md.join('\n')}`);
   }

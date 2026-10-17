@@ -49,9 +49,11 @@ const walk = async (a: Hono, qs: string, limit: number, between?: (n: number) =>
 };
 const write = (s: Live, n: number, o: { kind?: string; sessionId?: string | null } = {}) => {
   const chat = new ChatStore(s.store);
-  for (let i = 0; i < n; i++) chat.addAudit({ severity: 'info', kind: o.kind ?? 'test.page', sessionId: o.sessionId ?? null, actor: 'portal', detail: { i } });
+  for (let i = 0; i < n; i++)
+    chat.addAudit({ severity: 'info', kind: o.kind ?? 'test.page', sessionId: o.sessionId ?? null, actor: 'portal', detail: { i } });
 };
-const all = (s: Live, kind = 'test.page') => (s.store.db!.prepare('SELECT id FROM chat_audit WHERE kind = ? ORDER BY id DESC').all(kind) as { id: number }[]).map((r) => r.id);
+const all = (s: Live, kind = 'test.page') =>
+  (s.store.db!.prepare('SELECT id FROM chat_audit WHERE kind = ? ORDER BY id DESC').all(kind) as { id: number }[]).map((r) => r.id);
 
 test('order: newest first, every entry once; the default page is 25', async () => {
   const s = await liveSession();
@@ -83,7 +85,11 @@ test('an entry written between two pages causes no repeat and no skip', async ()
     });
     assert.ok(wrote >= 3);
     assert.equal(new Set(ids).size, ids.length, 'no repeat');
-    assert.deepEqual(ids.filter((id) => original.includes(id)), original, 'every old entry, in order, none skipped');
+    assert.deepEqual(
+      ids.filter((id) => original.includes(id)),
+      original,
+      'every old entry, in order, none skipped',
+    );
   } finally {
     await s.done();
   }
@@ -118,7 +124,11 @@ test('a bad cursor is a 400: garbage, a tampered one, one from another filter, o
     for (const cursor of ['garbage', 'a.b', `${body}`, flipped, `${next}.x`]) {
       assert.equal((await a.request(`/audit?kind=test.page&cursor=${encodeURIComponent(cursor)}`)).status, 400, cursor);
     }
-    assert.equal((await a.request(`/audit?kind=other&cursor=${encodeURIComponent(next)}`)).status, 400, 'a cursor of one kind does not open another');
+    assert.equal(
+      (await a.request(`/audit?kind=other&cursor=${encodeURIComponent(next)}`)).status,
+      400,
+      'a cursor of one kind does not open another',
+    );
     assert.equal((await a.request(`/audit?cursor=${encodeURIComponent(next)}`)).status, 400, 'nor the unfiltered trail');
     const u = app(s, { kind: 'user', userId: 'u_a', loginSessionId: 'l1', via: 'ui' });
     assert.equal((await u.request(`/audit?kind=test.page&cursor=${encodeURIComponent(next)}`)).status, 400, 'a cursor is the caller’s own');
@@ -141,7 +151,10 @@ test('authz: an entry about a session the caller may not view is in no page and 
     });
     for (let i = 0; i < 8; i++) write(s, 1, { sessionId: i % 2 ? mine : theirs });
     write(s, 1, { sessionId: null });
-    const rows = s.store.db!.prepare('SELECT id, session_id FROM chat_audit WHERE kind = ? ORDER BY id DESC').all('test.page') as { id: number; session_id: string | null }[];
+    const rows = s.store.db!.prepare('SELECT id, session_id FROM chat_audit WHERE kind = ? ORDER BY id DESC').all('test.page') as {
+      id: number;
+      session_id: string | null;
+    }[];
     const want = rows.filter((r) => r.session_id !== theirs).map((r) => r.id);
     const them = app(s, { kind: 'user', userId: 'u_a', loginSessionId: 'l1', via: 'ui' });
     const seen: number[] = [];

@@ -14,7 +14,22 @@ export type CiUnitStatus = CiStatus | 'pending' | 'skipped' | 'waiting';
 export const isCiActive = (s: CiUnitStatus): boolean => s === 'queued' || s === 'running' || s === 'pending' || s === 'waiting';
 
 /** Why a run or a unit failed, when it isn't just "a step exited non-zero". */
-export const CI_REASONS = ['step_failed', 'timeout', 'invalid_pipeline', 'runner_lost', 'no_space', 'runner_error', 'cancelled', 'superseded', 'needs', 'condition', 'signal', 'fail_fast', 'rejected', 'no_runner'] as const;
+export const CI_REASONS = [
+  'step_failed',
+  'timeout',
+  'invalid_pipeline',
+  'runner_lost',
+  'no_space',
+  'runner_error',
+  'cancelled',
+  'superseded',
+  'needs',
+  'condition',
+  'signal',
+  'fail_fast',
+  'rejected',
+  'no_runner',
+] as const;
 export type CiReason = (typeof CI_REASONS)[number];
 
 /** What started a run. A rerun keeps the trigger it repeats in `rerunOf`. */
@@ -595,7 +610,8 @@ export const CI_API = {
   /** PUT `UpdateCiEnvironmentRequest`: `CiEnvironment` (made when it does not exist yet). */
   environment: (repoId: string, name: string) => `/api/ci/repos/${encodeURIComponent(repoId)}/environments/${encodeURIComponent(name)}`,
   /** PUT `UpdateCiAutoApproveRequest`: `CiEnvironment` (FR41a; a person with manage only). */
-  environmentAutoApprove: (repoId: string, name: string) => `/api/ci/repos/${encodeURIComponent(repoId)}/environments/${encodeURIComponent(name)}/auto-approve`,
+  environmentAutoApprove: (repoId: string, name: string) =>
+    `/api/ci/repos/${encodeURIComponent(repoId)}/environments/${encodeURIComponent(name)}/auto-approve`,
   /** GET: the `CiReleaseReportSetting` of a remote or null. PUT `{ setting: CiReleaseReportSetting | null }`: set or clear it (a person with manage only; T-591). */
   releaseReport: (repoId: string) => `/api/ci/repos/${encodeURIComponent(repoId)}/release-report`,
   /** POST: write the release report of a past run (backfill) into the vault its remote's setting names; `CiReleaseReportResult` (a person with manage only; T-591). */

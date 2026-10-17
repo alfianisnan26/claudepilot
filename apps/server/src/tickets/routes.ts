@@ -44,9 +44,13 @@ const UI: Caller = { kind: 'ui' };
 /** A comma-separated query value as a list of the names it may hold. */
 const names = <T extends string>(raw: string | undefined, all: readonly T[], field: string): T[] | undefined => {
   if (!raw) return undefined;
-  const items = raw.split(',').map((s) => s.trim()).filter(Boolean);
+  const items = raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
   const bad = items.find((s) => !(all as readonly string[]).includes(s));
-  if (bad) throw new AppError('VALIDATION_FAILED', `Unknown ${field} “${bad.slice(0, 30)}”.`, { details: { [field]: `Use: ${all.join(', ')}.` } });
+  if (bad)
+    throw new AppError('VALIDATION_FAILED', `Unknown ${field} “${bad.slice(0, 30)}”.`, { details: { [field]: `Use: ${all.join(', ')}.` } });
   return items as T[];
 };
 
@@ -58,7 +62,10 @@ export function createTicketRoutes(tickets: Tickets): Hono {
   app.get('/', (c) => {
     const q = c.req.query();
     const assignee = q.assignee;
-    if (assignee && !['any', 'unassigned', 'user'].includes(assignee) && !assignee.startsWith('session:')) throw new AppError('VALIDATION_FAILED', 'Unknown assignee filter.', { details: { assignee: 'Use any, unassigned, user or session:<id>.' } });
+    if (assignee && !['any', 'unassigned', 'user'].includes(assignee) && !assignee.startsWith('session:'))
+      throw new AppError('VALIDATION_FAILED', 'Unknown assignee filter.', {
+        details: { assignee: 'Use any, unassigned, user or session:<id>.' },
+      });
     const filter: TicketFilter = {
       status: names<TicketStatus>(q.status, TICKET_STATUSES, 'status'),
       priority: names<TicketPriority>(q.priority, TICKET_PRIORITIES, 'priority'),
@@ -122,7 +129,9 @@ export function createTicketRoutes(tickets: Tickets): Hono {
     if (typeof req.sessionId === 'string' && req.sessionId.trim()) requireCan(actor, 'operate', sessionRef(req.sessionId.trim()));
     return c.json(success(await tickets.bump(UI, id(c), req)), 201);
   });
-  app.post('/:id/session', async (c) => c.json(success(await tickets.startSession(UI, id(c), await body<StartTicketSessionRequest>(c))), 201));
+  app.post('/:id/session', async (c) =>
+    c.json(success(await tickets.startSession(UI, id(c), await body<StartTicketSessionRequest>(c))), 201),
+  );
 
   return app;
 }

@@ -216,7 +216,10 @@ export function useChatSession(sessionId: string): ChatSessionApi {
 
     const loadTasks = () => {
       const version = tasksVersion;
-      chatApi.tasks(sessionId).then((list) => !closed && version === tasksVersion && setTasks(list), () => undefined);
+      chatApi.tasks(sessionId).then(
+        (list) => !closed && version === tasksVersion && setTasks(list),
+        () => undefined,
+      );
     };
 
     // Seed the newest page, the current state and tasks once; the socket keeps them fresh after that. The socket subscribes only once the
@@ -239,7 +242,10 @@ export function useChatSession(sessionId: string): ChatSessionApi {
         subscribe();
       },
     );
-    void chatApi.get(sessionId).then((s) => !closed && setSession(s), () => undefined);
+    void chatApi.get(sessionId).then(
+      (s) => !closed && setSession(s),
+      () => undefined,
+    );
     loadTasks();
 
     const settle = (uuid: string, w: Waiter, ok: boolean, error?: string, code?: string) => {
@@ -427,7 +433,9 @@ export function useChatSession(sessionId: string): ChatSessionApi {
         if (attachments.length) msg.attachments = attachments;
         waitersRef.current.set(uuid, { kind: 'send', resolve, reject });
         setInputs((m) => new Map(m).set(uuid, 'sending'));
-        const images = opts.shown?.images ?? attachments.flatMap((a) => ('dataBase64' in a ? [{ src: `data:${a.mediaType};base64,${a.dataBase64}`, name: a.name }] : []));
+        const images =
+          opts.shown?.images ??
+          attachments.flatMap((a) => ('dataBase64' in a ? [{ src: `data:${a.mediaType};base64,${a.dataBase64}`, name: a.name }] : []));
         setOutbox((o) => [...o, { uuid, text, images, files: opts.shown?.files ?? [] }]);
         ws.send(JSON.stringify(msg));
       }),
@@ -527,8 +535,34 @@ export function useChatSession(sessionId: string): ChatSessionApi {
   const stop = useCallback(() => void control('stop').catch(fail), [control, fail]);
   const end = useCallback(() => void control('end').catch(fail), [control, fail]);
 
-  const paging = useMemo<ChatPaging>(() => ({ seeded: hist.seeded, more: hist.more, older: hist.older }), [hist.seeded, hist.more, hist.older]);
-  return { connected, events: hist.events, paging, loadOlder, loadWhole, delta: live.main, agentLive: live.agents, session, removed, inputs, outbox, tasks, btw: btwState?.item ?? null, btwAsk, btwCancel, btwClose, btwPin, send, respond, control, stop, end };
+  const paging = useMemo<ChatPaging>(
+    () => ({ seeded: hist.seeded, more: hist.more, older: hist.older }),
+    [hist.seeded, hist.more, hist.older],
+  );
+  return {
+    connected,
+    events: hist.events,
+    paging,
+    loadOlder,
+    loadWhole,
+    delta: live.main,
+    agentLive: live.agents,
+    session,
+    removed,
+    inputs,
+    outbox,
+    tasks,
+    btw: btwState?.item ?? null,
+    btwAsk,
+    btwCancel,
+    btwClose,
+    btwPin,
+    send,
+    respond,
+    control,
+    stop,
+    end,
+  };
 }
 
 export interface ChatListApi {
@@ -600,7 +634,6 @@ export function useChatList(): ChatListApi {
     } finally {
       setLoadingMore(false);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reload]);
 
   const sessions = pager.current.items;
