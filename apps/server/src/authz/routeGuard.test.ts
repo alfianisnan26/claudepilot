@@ -194,7 +194,7 @@ function bare(policies: RoutePolicies, who: () => SignedIn = () => ({ full: fals
   return { app, reached, send };
 }
 
-test('review 10681 #1: a route that hands on never falls through to a door open to anyone (`GET *`, `ALL /api/*`)', async () => {
+test('review 10681 #1: a route that hands on never falls through to a door open to anyone (`GET /*`, `ALL /api/*`)', async () => {
   for (const door of ['GET /g1/*', 'ALL /g1/*'] as const) {
     const { app, reached, send } = bare(
       { 'GET /g1/ws/:ref': { kind: 'objects', checks: [{ type: 'ticket', verb: 'view', from: 'path', param: 'ref' }] }, [door]: { kind: 'public', why: 'a test door' } } as RoutePolicies,
@@ -353,7 +353,7 @@ for (const serveWeb of [false, true]) {
       assert.ok(keys.length > 300, `the walk saw the whole app (${keys.length} routes)`);
       assert.ok(keys.includes('ALL /api/*'), 'the walk lists the app.all endpoints');
       // Review 10681 #6: the built app's static routes are walked too.
-      assert.equal(keys.includes('GET *'), serveWeb, 'the web app shell is there exactly when the app serves it');
+      assert.equal(keys.includes('GET /*'), serveWeb, 'the web app shell is there exactly when the app serves it');
       const undeclared = keys.filter((k) => !declaredPolicies().has(k as never)).sort();
       assert.deepEqual(undeclared, [], `routes with no declaration (declare each in its module's authz.ts or authz/appPolicies.ts):\n${undeclared.join('\n')}`);
     } finally {
@@ -384,8 +384,10 @@ for (const serveWeb of [false, true]) {
     clearResolvers();
     try {
       const routes = listed(app);
-      const member = portal.openSession(MEMBER);
-      const unknown = await send('GET', '/api/no-such-path', member);
+      const unknown = await send('GET', '/api/no-such-path', portal.openSession(MEMBER));
+      if (serveWeb)
+        for (const path of ['/', '/sessions', '/assets/app.js'])
+          assert.notEqual((await send('GET', path)).status, 401, `${path}: the web app shell and its files are open to anyone (the sign-in page)`);
       const asOwner = table(routes, () => ({ full: true }));
       const asMember = table(routes, () => ({ full: false, userId: MEMBER }));
       const asNobody = table(routes, () => null);
@@ -411,7 +413,8 @@ for (const serveWeb of [false, true]) {
         if (OPEN.has(policy.kind) ? n.key !== answers : n.status !== 401) wrong.push(`${key} (${answers}, ${policy.kind}): nobody signed in got ${n.status}`);
         // The real app: a refusal is exactly the unknown path's answer and runs no handler; nothing is ever a 403 or shows the code.
         const before = touched.length;
-        const real = await send(method, url, member);
+        // A session of its own per request: `POST /api/logout` is public and ends the cookie it is sent with.
+        const real = await send(method, url, portal.openSession(MEMBER));
         if (real.status === 403 || real.text.includes(CODE)) wrong.push(`${key}: the real app answered a member ${real.status}`);
         if (!expectAllow) {
           refused++;

@@ -195,7 +195,7 @@ export function createRouteGuard(deps: RouteGuardDeps): MiddlewareHandler {
       const policy = policyFor(key);
       // No declaration: refused for anyone but the founding owner, as a path nobody serves (the route stays out of the answer).
       if (!policy) throw notFound();
-      // After a route handed the request on, a door that is open to anyone is never the check (review 10681 #1): `GET *` or `ALL /api/*`
+      // After a route handed the request on, a door that is open to anyone is never the check (review 10681 #1): `GET /*` or `ALL /api/*`
       // would let it through to the route that handed on. Only the first endpoint may be an open door, and it went on above.
       if (OPEN_KINDS.has(policy.kind)) throw notFound();
       if ((await decide(c, index, actor, policy, deps)) === 'allow') return next();

@@ -865,7 +865,7 @@ FR16 is built as `authz/routeGuard.ts`, mounted first thing in app.ts (`app.use(
 
 **Every refusal is the same `404` that an API path nobody serves answers** (`notFound()`, the lead's decision on T-1043). This covers an undeclared route, a platform area and an object the actor may not see. It replaces the earlier `403`s, including MU2 S1a's `403` for a member on an admin route; the session guard (`requireSession`) answers a member the same `404` (review 10681 #5). The answer never says that a route or an object is there. The only exception is an object the actor can see but not change, which keeps the seam's `403`.
 
-- **Open doors.** A `public`, `bearer` or `handler` route goes on when it is the first endpoint. These are sign-in, the bearer `/mcp`, signed webhooks under `/hooks`, and the agents' `/connect/` routes. Reached after a route handed the request on, such a door is refused (`404`): `GET *` or `ALL /api/*` would otherwise let the request through to the route that handed it on.
+- **Open doors.** A `public`, `bearer` or `handler` route goes on when it is the first endpoint. These are sign-in, the bearer `/mcp`, signed webhooks under `/hooks`, and the agents' `/connect/` routes. Reached after a route handed the request on, such a door is refused (`404`): `GET /*` (the web app shell; Hono lists `app.get('*')` as `/*`) or `ALL /api/*` would otherwise let the request through to the route that handed it on.
 - **Nobody signed in: 401.**
 - **The founding owner goes on untouched.** This also covers the server code and an admin account, which act as the owner (D-82). Today's behaviour stays: each route's own guards still run.
 - **Anyone else** (a member account, or an actor already set on the request):
