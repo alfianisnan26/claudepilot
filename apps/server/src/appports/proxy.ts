@@ -194,8 +194,8 @@ export class AppPortProxy {
       method: req.method,
       path: req.url,
       headers: forwardHeaders(req.headers, { port, host, scheme: grant.scheme, upgrade: false }),
+      // No `agent` (not even `false`: that makes a fresh Agent, which ignores createConnection and dials localhost:80 itself).
       createConnection: () => upstream as never,
-      agent: false,
     });
     up.on('response', (r) => {
       res.writeHead(r.statusCode ?? 502, r.statusMessage, responseHeaders(r.headers, grant));
