@@ -12,17 +12,17 @@
   ec182931; token-equal check job-out/fmtcheck.mjs) + integration (master line 85) = e4e52fa0 (trace T-595 9916). QC on e4e52fa0:
   tests + lint ok, format red on knowledge/service.ts. Merging integration 94105066 conflicts in quick-check.sh (T-612 S1 vs T-960):
   13:25 merged integration + T-612 S1b (QA PASS 10202; its 2 files whole; jobRun.test.ts union) = 5c05f72d (wip/main-5c05f72):
-  QC (17 tests) running -> format service.ts if still red -> gate -> land -> T-731.
+  QC rc124 (jobRun.test.ts filled /tmp, T-1032; format red quickCheck.test.ts + service.ts) -> fmt Job (2nd try, cluster full).
 - T-938 lane a3554d40: 4th Job (3 lost: Pending, bg limit, session end).
 - URGENT T-948 port proxy (9810): S1 BE INFRA 2 2a0edbd8 OPUS (security), ticket/T-948-port-proxy; app-<ws>-<port> subdomain (9811).
   S1 fix f70c72bd (Job 79cec835 rc0) -> RE-CHECK c691df71. S2 d08465f9 RECHECK PASS 10189; UX code-read only (no browser in
   qa lane): visual look on the premerge scratch portal later. Blind review S1 (d9f18599) PWC 10219: 2 Majors (upstream timeout +
-  bridge caps; upgrade lifetime) + minors -> FIX2 by 2a0edbd8 (decision 10220); deploy before T-976 only for own apps.
+  bridge caps; upgrade lifetime) + minors -> FIX2 5d929014 by 2a0edbd8 (10220; Job queued); deploy before T-976 own apps only.
   Premerge t948 b2d62bfd (wip/t948-b2d62bf): QC running; then FIX2, gate, land. Paused: T-921 0dfff348, T-379 S3 9dfecffb.
-- T-976 __Host- cookie (security; blind review + coord live check): 2a0edbd8 opus, paused for T-948 FIX2.
+- T-976 __Host- cookie (security; blind review + coord live check): 2a0edbd8 opus, test fix a418de31, Job queued.
+  15:25 cluster full (node2 CPU 87% reserved): every Job queues ~1 h, several lost Pending; re-run once each (D-75).
 - T-382 S5 test gaps 1,2,4 (9691): FE 3753d3c2 sonnet, ticket/T-382-s5 from wip/main-e4e52fa; gap 3 (unbounded total) Backend later.
 - T-425 S2b 357ff021: QA be63acc8 PWG 9970 (mutant B survives) -> test fix on next free Backend slot; same QA re-checks (T-595 10014).
-- Worker job-run commands: no `; echo RC=$?` suffix (allow list refuses it, T-612 10184); FOR THE COORDINATOR on T-595.
 - T-436 S3 + T-772 S2g fe676258: QA PWG (T-595 10003) -> batch 31; permissions class: coordinator live check before close (D-81).
 - T-294 PWG 9858: crew_post/read + idle-child reuse not built -> slice after T-948 (T-595 9871).
 - After T-948, planned together: T-968 General Manager (D-80, plan 9969; S0 scribe + S2 MCP tools incl. T-965 first),
