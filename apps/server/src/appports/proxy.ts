@@ -21,7 +21,14 @@ export interface AppPortProxyDeps {
   sessionValid: (token: string) => boolean;
   /** Ports never opened (the portal's own, the browser's CDP and supervisor, PORT_PROXY_DENY_PORTS). */
   deniedPorts: ReadonlySet<number>;
+  /** How long an upgrade may wait for the app's first answer (dial included) before it is a 504; default 30 s. */
+  upgradeTimeoutMs?: number;
 }
+
+const UPGRADE_TIMEOUT_MS = 30_000;
+
+/** A path as a Location header can carry it: anything outside printable ASCII percent-encoded (isAppPortNext already refuses it; a 2nd guard). */
+export const asLocation =(path: string): string => path.replace(/[^!-~]+/gu, (run) => encodeURI(run));
 
 /** Hop-by-hop headers (RFC 9110 §7.6.1) and the ones the proxy sets itself: never copied either way. */
 const HOP = new Set(['connection', 'keep-alive', 'proxy-connection', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer', 'transfer-encoding', 'upgrade']);
@@ -164,8 +171,17 @@ export class AppPortProxy {
     return this.d.sessionValid(grant.sessionToken) && can(grant.actor, 'operate', workspaceRef(grant.workspaceId)).allow;
   }
 
-  /** An HTTP request on an app host. */
+  /** An HTTP request on an app host. Never rejects: an exception is a 502 (or a cut connection once headers went), never a hung request. */
   async request(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    try {
+      await this.#request(req, res);
+    } catch {
+      if (res.headersSent) res.destroy();
+      else res.writeHead(502, { 'content-type': 'text/plain', 'cache-control': 'no-store' }).end('The app isn’t answering.');
+    }
+  }
+
+  async #request(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const notFound = () => {
       if (res.headersSent) return void res.destroy();
       res.writeHead(404, { 'content-type': 'text/plain', 'cache-control': 'no-store' }).end('Not found.');
@@ -229,7 +245,7 @@ export class AppPortProxy {
     const attrs = [`${APP_COOKIE}=${cookie}`, 'Path=/', 'HttpOnly', 'SameSite=Lax', `Max-Age=${maxAgeS}`, ...(grant.scheme === 'https' ? ['Secure'] : [])];
     res
       .writeHead(302, {
-        location: next,
+        location: asLocation(next),
         'set-cookie': attrs.join('; '),
         'cache-control': 'no-store',
         'referrer-policy': 'no-referrer',
@@ -238,18 +254,32 @@ export class AppPortProxy {
       .end();
   }
 
-  /** A WebSocket (any upgrade) on an app host: the same checks, then the raw bytes both ways. */
+  /**
+   * A WebSocket (any upgrade) on an app host: the same checks, then the raw bytes both ways. The dial and the app's first answer are bounded
+   * (`upgradeTimeoutMs`): a workspace that never connects, or an app that never answers, is a 504, not a socket held open for ever.
+   */
   async upgrade(req: IncomingMessage, socket: Duplex, head: Buffer): Promise<void> {
     socket.on('error', () => undefined);
     const ok = this.#authorized(req);
     if (!ok || foreignOrigin(req, ok.host)) return void socket.end(NOT_FOUND);
-    let upstream: Duplex;
+    const fail = (status: string) => void socket.end(`HTTP/1.1 ${status}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
+    let upstream: Duplex | undefined;
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      upstream?.destroy();
+      fail('504 Gateway Timeout');
+    }, this.d.upgradeTimeoutMs ?? UPGRADE_TIMEOUT_MS);
+    socket.on('close', () => clearTimeout(timer));
     try {
       upstream = await this.d.dial(ok.grant.workspaceId, ok.port);
     } catch (e) {
-      const status = e instanceof NotOnThisTarget ? '501 Not Implemented' : '502 Bad Gateway';
-      return void socket.end(`HTTP/1.1 ${status}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
+      clearTimeout(timer);
+      if (!timedOut) fail(e instanceof NotOnThisTarget ? '501 Not Implemented' : '502 Bad Gateway');
+      return;
     }
+    if (timedOut) return void upstream.destroy();
+    upstream.once('data', () => clearTimeout(timer));
     upstream.on('error', () => socket.destroy());
     const headers = forwardHeaders(req.headers, { port: ok.port, host: ok.host, scheme: ok.grant.scheme, upgrade: true });
     const lines = [`${req.method ?? 'GET'} ${req.url ?? '/'} HTTP/1.1`];
@@ -259,7 +289,7 @@ export class AppPortProxy {
     upstream.pipe(socket);
     socket.pipe(upstream);
     socket.on('close', () => upstream.destroy());
-    upstream.on('close', () => socket.destroy());
+    upstream.on('close', () => (clearTimeout(timer), socket.destroy()));
   }
 }
 

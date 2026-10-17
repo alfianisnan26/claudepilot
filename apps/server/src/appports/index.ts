@@ -42,6 +42,8 @@ export interface AppPortsDeps {
   /** Tests: another way into the workspace. */
   dial?: Dial;
   grants?: AppPortGrants;
+  /** Tests: a shorter bound on an upgrade's dial and first answer. */
+  upgradeTimeoutMs?: number;
 }
 
 /** Runs a command in the workspace and collects its output (bounded in time and size). */
@@ -69,7 +71,7 @@ export class AppPorts {
   constructor(private readonly d: AppPortsDeps) {
     this.grants = d.grants ?? new AppPortGrants();
     this.denied = new Set([d.portalPort, CDP_PORT, SUPERVISOR_PORT, ...(d.denyPorts ?? [])]);
-    this.proxy = new AppPortProxy({ suffix: d.suffix, grants: this.grants, dial: d.dial ?? createDialer(d.workspaces), sessionValid: d.sessionValid, deniedPorts: this.denied });
+    this.proxy = new AppPortProxy({ suffix: d.suffix, grants: this.grants, dial: d.dial ?? createDialer(d.workspaces), sessionValid: d.sessionValid, deniedPorts: this.denied, upgradeTimeoutMs: d.upgradeTimeoutMs });
   }
 
   get enabled(): boolean {

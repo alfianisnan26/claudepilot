@@ -54,6 +54,9 @@ test('isAppPortNext: a path only; a scheme, // or a backslash is refused', () =>
     'javascript:alert(1)',
     '/a\tb',
     '/a\nb',
+    '/中', // above 0x7e: raw, it can't go in a Location header (QA T-948 c10015)
+    '/café',
+    '/a\u007fb',
     `/${'a'.repeat(2048)}`,
   ])
     assert.equal(isAppPortNext(bad), false, JSON.stringify(bad));

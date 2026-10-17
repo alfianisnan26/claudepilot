@@ -53,7 +53,8 @@ export function parseAppPortHost(host: string | undefined | null, suffix: string
 
 /**
  * `next` on the auth route: a path on the app host, never a URL. It starts with one `/`, has no `//` or backslash anywhere, no scheme, no
- * control character, and at most 2,048 characters. Anything else is refused (400).
+ * control character, only printable ASCII (a non-ASCII character is sent percent-encoded: raw, it can't go in a Location header), and at
+ * most 2,048 characters. Anything else is refused (400).
  */
 export function isAppPortNext(next: string): boolean {
   return (
@@ -62,7 +63,7 @@ export function isAppPortNext(next: string): boolean {
     next.startsWith('/') &&
     !next.includes('//') &&
     !next.includes('\\') &&
-    !/[\u0000-\u001f\u007f]/.test(next) &&
+    !/[^ -~]/.test(next) &&
     !/^\/[a-z][a-z0-9+.-]*:/i.test(next)
   );
 }

@@ -14,6 +14,7 @@ import type { ExecSession } from '../workspaces/runtime.js';
 import { ExecDuplex, bridgeCommand } from './dial.js';
 import { AppPortGrants } from './grants.js';
 import { AppPorts, routeAppHostUpgrades } from './index.js';
+import { asLocation } from './proxy.js';
 
 const SUFFIX = 'apps.test';
 const actor: Actor = { kind: 'user', userId: FOUNDING_USER_ID, loginSessionId: 'l1', via: 'ui' };
@@ -27,6 +28,8 @@ let wss: WebSocketServer;
 let ports: AppPorts;
 let sessionOk = true;
 let clockSkew = 0;
+/** A workspace that never connects: the dial never settles. */
+let hangDial = false;
 const dials: { workspaceId: string; port: number }[] = [];
 const seen: { url: string; headers: IncomingHttpHeaders; body: string }[] = [];
 let release: () => void = () => undefined;
@@ -92,8 +95,10 @@ before(async () => {
     workspaces,
     sessionValid: (t) => sessionOk && t === SESSION,
     grants: new AppPortGrants({ now: () => Date.now() + clockSkew }),
+    upgradeTimeoutMs: 2000,
     dial: async (workspaceId, port) => {
       dials.push({ workspaceId, port });
+      if (hangDial) return new Promise<never>(() => undefined);
       const [, ...args] = bridgeCommand(port);
       return new ExecDuplex(sessionOf(spawn(process.execPath, args, { stdio: ['pipe', 'pipe', 'ignore'] })));
     },
@@ -191,7 +196,8 @@ test('a code expires after 30 s', async () => {
 test('next must be a path: a scheme, // or a backslash is 400, and the code is not spent on it', async () => {
   const { url } = await open('ws-1', appPort);
   const u = new URL(url);
-  for (const next of ['https://evil.test/', '//evil.test/', '/\\evil.test', '/javascript:alert(1)', 'evil']) {
+  // '/中': it used to spend the code, then throw in writeHead (ERR_INVALID_CHAR) and hang the request (QA T-948 c10015).
+  for (const next of ['https://evil.test/', '//evil.test/', '/\\evil.test', '/javascript:alert(1)', 'evil', '/中']) {
     u.searchParams.set('next', next);
     const r = await send('GET', `${u.pathname}${u.search}`, { host: u.host });
     assert.equal(r.status, 400, next);
@@ -337,9 +343,61 @@ test('open refuses the portal’s own port, a bad path, and is off without a suf
   await assert.rejects(open('ws-1', portalPort), /port/i);
   await assert.rejects(open('ws-1', 80), /port/i);
   await assert.rejects(open('ws-1', appPort, '//evil.test'), /path/i);
+  await assert.rejects(open('ws-1', appPort, '/中'), /path/i);
   await assert.rejects(open('nope', appPort), /Not found/);
   const off = new AppPorts({ suffix: undefined, portalPort, workspaces: {} as never, sessionValid: () => true, dial: async () => assert.fail('off') });
   assert.equal(off.enabled, false);
   assert.deepEqual(await off.list('docker', 'ws-1'), { enabled: false, ports: [] });
   await assert.rejects(off.open('docker', 'ws-1', { port: 8080 }, { actor, actorString: 'x', userId: null, sessionToken: SESSION, portalOrigin: 'http://p' }), /Not found/);
+});
+
+test('an exception inside a request is a 502, never a hung request', { timeout: 15_000 }, async () => {
+  const { url } = await open('ws-1', appPort);
+  const u = new URL(url);
+  const redeem = ports.grants.redeem;
+  ports.grants.redeem = () => {
+    throw new Error('boom');
+  };
+  try {
+    const r = await send('GET', `${u.pathname}${u.search}`, { host: u.host });
+    assert.equal(r.status, 502);
+    assert.equal(r.headers['set-cookie'], undefined);
+  } finally {
+    ports.grants.redeem = redeem;
+  }
+});
+
+test('the Location is percent-encoded outside printable ASCII (a second guard behind isAppPortNext)', () => {
+  assert.equal(asLocation('/中?q=é#x'), '/%E4%B8%AD?q=%C3%A9#x');
+  assert.equal(asLocation('/a b'), '/a%20b');
+  assert.equal(asLocation('/a%20b?c=d'), '/a%20b?c=d', 'what is already encoded stays as it is');
+});
+
+test('an upgrade whose workspace never connects ends in 504 after the timeout, not a socket held for ever', { timeout: 15_000 }, async () => {
+  const { host, cookie } = await signIn();
+  hangDial = true;
+  try {
+    const t0 = Date.now();
+    assert.equal(await wsStatus({ host, cookie }, `http://${host}`), 504);
+    assert.ok(Date.now() - t0 >= 1900, 'not before the timeout');
+  } finally {
+    hangDial = false;
+  }
+});
+
+test('two workspaces with one name on different targets: CONFLICT, and no code is minted', async () => {
+  const grants = new AppPortGrants();
+  const twins = new AppPorts({
+    suffix: SUFFIX,
+    portalPort,
+    workspaces: { list: async () => [{ id: 'docker/twin', name: 'twin' }, { id: 'kubernetes/twin', name: 'Twin' }], hooks: {}, resolve: () => null } as never,
+    sessionValid: () => true,
+    grants,
+    dial: async () => assert.fail('no dial'),
+  });
+  await assert.rejects(
+    twins.open('docker', 'twin', { port: appPort }, { actor, actorString: 'x', userId: null, sessionToken: SESSION, portalOrigin: `http://pilot.${SUFFIX}` }),
+    (e: Error & { code?: string }) => e.code === 'CONFLICT' && /same name/.test(e.message),
+  );
+  assert.equal(grants.size.codes, 0);
 });

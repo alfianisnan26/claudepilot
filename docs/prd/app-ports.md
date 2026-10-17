@@ -34,7 +34,8 @@ an app host's page can never drive the portal.
 1. The open mints a one-time code: 32 random bytes, valid 30 s, once, bound to the actor, the portal session, the workspace, the port and the
    exact app host. Only its SHA-256 is kept (in memory). It is audited (workspace and port; never the code).
 2. The browser (a tab or the iframe) goes to `/__pilot/auth?code=&next=` on the app host. `next` must be a path: it starts with one `/`, has
-   no `//`, no backslash, no scheme, no control character, at most 2,048 characters; anything else is 400 and the code is not spent.
+   no `//`, no backslash, no scheme, only printable ASCII (a non-ASCII path is sent percent-encoded), at most 2,048 characters; anything
+   else is 400 (and the open refuses it) and the code is not spent. The 302 percent-encodes anything outside printable ASCII as a second guard.
 3. The code is burned on the first try, whatever the answer. A good one gives the cookie `__pilot_app`: `HttpOnly; SameSite=Lax; Path=/`,
    host-only (no `Domain`), `Secure` when the portal page was https, 12 h. Then a 302 to `next`.
 4. The cookie dies with the portal session (sign-out, server code change, expiry) and with a portal restart (in memory). Neither the code nor
@@ -59,6 +60,9 @@ The target is always `127.0.0.1:<port>` inside the workspace, over the channel e
 - From the app: bodies stream as they come. `X-Frame-Options` and any `frame-ancestors` are dropped; `frame-ancestors <portal origin>` is
   added, so the portal can frame it and nothing else can. `Set-Cookie` loses its `Domain`, and cookies named like the portal's are dropped. A
   redirect to the app's own loopback address becomes a path.
+- An exception while handling a request is a 502 (a cut connection once headers went out), never a hung request.
+- An upgrade waits at most 30 s for the workspace to connect and the app to answer; then it is a 504.
+- Two workspaces with the same name on different targets would share an app host: the open refuses it (409 CONFLICT) and mints no code.
 
 ## 7. Deploy
 
