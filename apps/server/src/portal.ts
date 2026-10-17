@@ -17,7 +17,7 @@ export interface Session {
 }
 
 /** What an email account is now, asked on every use so a role change or a disable takes effect at once. Null: gone. */
-export type AccountRole = (userId: string) => 'admin' | 'member' | 'disabled' | null;
+export type AccountRole = (userId: string) => 'admin' | 'member' | 'disabled' | 'unavailable' | null;
 
 /** Keeps sessions across restarts, keyed by a hash of the token (the portal database). */
 export interface SessionStore {
@@ -145,13 +145,27 @@ export class Portal {
     }
     if (s?.userId) {
       const role = this.roleOf(s.userId);
-      if (role !== 'admin' && role !== 'member') {
+      // 'unavailable' (the database could not be read, review #10): kept, but not a full session until it can be read again.
+      if (role !== 'admin' && role !== 'member' && role !== 'unavailable') {
         this.#sessions.delete(hash);
         this.#persist((st) => st.remove(hash));
         return undefined;
       }
     }
     return s;
+  }
+
+  /** Ends every session of one email account (a password change, a disable, a removal, a demotion), except `keepToken`'s; cuts its sockets. */
+  revokeUser(userId: string, keepToken?: string) {
+    const keep = keepToken ? tokenHash(keepToken) : null;
+    let any = false;
+    for (const [hash, s] of this.#sessions) {
+      if (s.userId !== userId || hash === keep) continue;
+      this.#sessions.delete(hash);
+      this.#persist((st) => st.remove(hash));
+      any = true;
+    }
+    if (any) this.onRevoked();
   }
 
   signOut(token: string) {

@@ -37,7 +37,7 @@ await cmd('Page.navigate', { url: `${P}/` });
 await sleep(4000);
 // 1. As the owner (server code), make the throwaway account; then sign this browser out again.
 const mk = await ev(`(async()=>{await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code:${JSON.stringify(CODE)}})});
-  const r=await fetch('/api/admin/users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:${JSON.stringify(email)},displayName:'QA email login',password:${JSON.stringify(password)}})});
+  const r=await fetch('/api/admin/users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:${JSON.stringify(email)},displayName:'QA email login',password:${JSON.stringify(password)},role:'admin'})});
   const j=await r.json(); await fetch('/api/logout',{method:'POST'}); return r.status+' '+(j.data?j.data.id:JSON.stringify(j.error))})()`);
 if (!/^201 u_/.test(mk ?? '')) done(false, `could not create the test account: ${mk}`);
 const userId = mk.split(' ')[1];

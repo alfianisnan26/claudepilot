@@ -17,7 +17,7 @@ export interface PortalUser {
 export interface CreatePortalUserRequest {
   email: string;
   displayName?: string;
-  /** `admin`: full access, like the server code. `member` (default in the UI): no access until something is shared with it (MU2). */
+  /** `admin`: full access, like the server code. `member` (the DEFAULT when omitted): no access until something is shared with it (MU2). */
   role?: 'admin' | 'member';
   /** At least 15 characters (PASSWORD); not a common password, not the email. */
   password: string;
@@ -38,8 +38,15 @@ export const normalizeEmail = (raw: string): string => raw.normalize('NFKC').tri
 /** `GET /api/me` (`SignedInAs`): who is signed in, for a member too: `{ kind: 'code' }` or `{ kind: 'account', user: PortalUser }`. */
 export type SignedInAs = { kind: 'code' } | { kind: 'account'; user: PortalUser };
 
+/** `POST /api/me/password`: change your own password; the other sessions of the account end. */
+export interface ChangeMyPasswordRequest {
+  current: string;
+  next: string;
+}
+
 export const PORTAL_USER_API = {
   me: '/api/me',
+  myPassword: '/api/me/password',
   /** GET: `PortalUser[]`. POST `CreatePortalUserRequest`: the new `PortalUser`. Signed in only. */
   list: '/api/admin/users',
   /** PATCH `UpdatePortalUserRequest`: `PortalUser`. DELETE: remove it. Signed in only. */

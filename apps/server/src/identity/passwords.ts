@@ -85,14 +85,15 @@ export class PasswordHasher {
   async #run<T>(fn: () => Promise<T>): Promise<T> {
     if (this.#inFlight >= this.limits.maxConcurrent) {
       if (this.#queue.length >= this.limits.maxQueue) throw new AppError('SERVICE_UNAVAILABLE', 'The server is busy. Try again in a moment.');
+      // The slot is handed over by the one that ends (review 2026-10-17 #8): #inFlight stays counted, so no newcomer slips in between.
       await new Promise<void>((resolve) => this.#queue.push(resolve));
-    }
-    this.#inFlight++;
+    } else this.#inFlight++;
     try {
       return await fn();
     } finally {
-      this.#inFlight--;
-      this.#queue.shift()?.();
+      const next = this.#queue.shift();
+      if (next) next();
+      else this.#inFlight--;
     }
   }
 
