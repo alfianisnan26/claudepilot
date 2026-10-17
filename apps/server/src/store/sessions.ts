@@ -16,18 +16,19 @@ export function sessionStore(store: Store): SessionStore {
       const db = store.db;
       if (!db) return sessions;
       writable()?.prepare('DELETE FROM web_sessions WHERE expires_at <= ?').run(iso(now));
-      const rows = db.prepare('SELECT token_hash, created_at, expires_at FROM web_sessions WHERE expires_at > ?').all(iso(now)) as {
+      const rows = db.prepare('SELECT token_hash, created_at, expires_at, user_id FROM web_sessions WHERE expires_at > ?').all(iso(now)) as {
         token_hash: string;
         created_at: string;
         expires_at: string;
+        user_id: string | null;
       }[];
-      for (const r of rows) sessions.set(r.token_hash, { createdAt: Date.parse(r.created_at), expiresAt: Date.parse(r.expires_at) });
+      for (const r of rows) sessions.set(r.token_hash, { createdAt: Date.parse(r.created_at), expiresAt: Date.parse(r.expires_at), ...(r.user_id ? { userId: r.user_id } : {}) });
       return sessions;
     },
     save(hash, s) {
       writable()
-        ?.prepare('INSERT INTO web_sessions (token_hash, created_at, expires_at) VALUES (?, ?, ?) ON CONFLICT (token_hash) DO UPDATE SET expires_at = excluded.expires_at')
-        .run(hash, iso(s.createdAt), iso(s.expiresAt));
+        ?.prepare('INSERT INTO web_sessions (token_hash, created_at, expires_at, user_id) VALUES (?, ?, ?, ?) ON CONFLICT (token_hash) DO UPDATE SET expires_at = excluded.expires_at')
+        .run(hash, iso(s.createdAt), iso(s.expiresAt), s.userId ?? null);
     },
     remove(hash) {
       writable()?.prepare('DELETE FROM web_sessions WHERE token_hash = ?').run(hash);

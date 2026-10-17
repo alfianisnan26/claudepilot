@@ -24,6 +24,7 @@ import { POOL_TABS } from '@/features/pools/registry';
 import { TargetsPage } from '@/features/targets';
 import { WorkspacesPage } from '@/features/workspaces/WorkspacesPage';
 import { useAppUpdate } from '@/lib/appUpdate';
+import { MemberPage } from '@/features/auth/MemberPage';
 import { AuthProvider, useAuth } from '@/lib/auth';
 import { LiveProvider } from '@/lib/live';
 import { HOME } from './nav';
@@ -197,6 +198,8 @@ function SignedInOnly({ children }: { children: ReactNode }) {
   if (state.status === 'loading') return <Splash />;
   if (state.status === 'unreachable') return <Unreachable />;
   if (state.status === 'out') return <Navigate to="/login" replace state={{ from: location.pathname + location.search }} />;
+  // MU2 S1a: a member account has no access to the admin app yet.
+  if (state.status === 'member') return <MemberPage />;
   return children;
 }
 
@@ -205,7 +208,7 @@ function SignedOutOnly({ children }: { children: ReactNode }) {
   const location = useLocation();
   if (state.status === 'loading') return <Splash />;
   if (state.status === 'unreachable') return <Unreachable />;
-  if (state.status === 'in') {
+  if (state.status === 'in' || state.status === 'member') {
     const from = (location.state as { from?: string } | null)?.from;
     return <Navigate to={from?.startsWith('/admin') ? from : HOME} replace />;
   }

@@ -78,11 +78,12 @@ export class PortalUsers {
     if (this.#db().prepare('SELECT 1 FROM users WHERE email_key = ?').get(email))
       throw new AppError('CONFLICT', 'An account with that email exists.', { details: { email: 'Already used.' } });
     const hash = await this.hasher.hash(password);
+    const role = req.role === 'member' ? 'member' : 'admin';
     const id = `u_${randomBytes(9).toString('base64url')}`;
     const at = this.now().toISOString();
     this.#db()
       .prepare('INSERT INTO users (id, email, email_key, display_name, role, state, password_hash, password_changed_at, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(id, email, email, displayName, 'admin', 'active', hash, at, at, by);
+      .run(id, email, email, displayName, role, 'active', hash, at, at, by);
     return view(this.#row(id));
   }
 
@@ -90,12 +91,25 @@ export class PortalUsers {
     const r = this.#row(id);
     if (typeof req.displayName === 'string' && req.displayName.trim())
       this.#db().prepare('UPDATE users SET display_name = ? WHERE id = ?').run(req.displayName.trim().slice(0, 60), id);
+    if (req.role === 'admin' || req.role === 'member') this.#db().prepare('UPDATE users SET role = ? WHERE id = ?').run(req.role, id);
     if (req.state === 'active' || req.state === 'disabled')
       this.#db().prepare('UPDATE users SET state = ?, disabled_at = ? WHERE id = ?').run(req.state, req.state === 'disabled' ? this.now().toISOString() : null, id);
     if (req.password !== undefined) {
       const password = acceptNewPassword(req.password, { username: r.email.split('@')[0], displayName: r.display_name });
       this.#db().prepare('UPDATE users SET password_hash = ?, password_changed_at = ? WHERE id = ?').run(await this.hasher.hash(password), this.now().toISOString(), id);
     }
+    return view(this.#row(id));
+  }
+
+  /** What the account is now (portal.roleOf): its role while active, 'disabled', or null when it is gone. Read on every request. */
+  roleOf(id: string): 'admin' | 'member' | 'disabled' | null {
+    const r = this.db()?.prepare('SELECT role, state FROM users WHERE id = ?').get(id) as { role: 'admin' | 'member'; state: string } | undefined;
+    if (!r) return null;
+    return r.state === 'active' ? r.role : 'disabled';
+  }
+
+  /** One account as its own holder sees it. */
+  get(id: string): PortalUser {
     return view(this.#row(id));
   }
 

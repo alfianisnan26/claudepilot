@@ -5,7 +5,7 @@ import { resetAttention } from '@/features/attention/store';
 import { api, onUnauthorized } from './api';
 
 /** `unreachable`: the server didn't answer, which says nothing about whether you are signed in. */
-type AuthState = { status: 'loading' } | { status: 'out'; enabled: boolean; emailSignIn: boolean } | { status: 'in' } | { status: 'unreachable' };
+type AuthState = { status: 'loading' } | { status: 'out'; enabled: boolean; emailSignIn: boolean } | { status: 'in' } | { status: 'member' } | { status: 'unreachable' };
 
 interface AuthContextValue {
   state: AuthState;
@@ -24,7 +24,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const refresh = useCallback(async () => {
     try {
       const s = await api.session();
-      setState(s.authenticated ? { status: 'in' } : { status: 'out', enabled: s.enabled, emailSignIn: !!s.emailSignIn });
+      setState(s.authenticated ? (s.member ? { status: 'member' } : { status: 'in' }) : { status: 'out', enabled: s.enabled, emailSignIn: !!s.emailSignIn });
     } catch {
       // Not "signed out": the server may be restarting or the network gone. Keep what we knew, or wait and retry.
       setState((prev) => (prev.status === 'in' ? prev : { status: 'unreachable' }));
@@ -44,8 +44,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const loginEmail = useCallback(async (email: string, password: string) => {
     await api.loginEmail(email, password);
-    setState({ status: 'in' });
-  }, []);
+    // A member account lands on the member page (MU2 S1a): the server says which.
+    await refresh();
+  }, [refresh]);
 
   const logout = useCallback(async () => {
     // This browser's push registration goes first, while the session can still remove it (PWA PRD 11.4).
