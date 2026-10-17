@@ -6,7 +6,8 @@ import { readFileSync, writeFileSync } from 'node:fs';
 const CTL = 'apps/server/src/chat/controller.ts';
 const REC = 'apps/server/src/chat/recover.ts';
 const mutants = [
-  ['M1 no resume', CTL, "await this.#live(row.id, true, true, 'portal:restart', false);", 'void 0;'],
+  // (Not the #live call alone: the continuation #send relaunches a gone process by the same path, so that is an equivalent mutant.)
+  ['M1 no resume', CTL, 'else if (this.#restartResumed >= config.max)', 'else if (true)'],
   ['M2 Bypass kept', CTL, 'keepBypass && // T-971 H2', 'true && // T-971 H2'],
   ['M3 no limit', CTL, 'this.#restartResumed >= config.max)', 'this.#restartResumed >= config.max + 99)'],
   ['M4 not idempotent', REC, 'newest.delete(r.sessionId!);', 'void cut;'],
