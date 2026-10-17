@@ -9,6 +9,11 @@ import { RESTART_RESUME_MAX, RESTART_RESUME_STAGGER_SEC } from './recover.js';
 import { controls, init, liveSession, ok, sleep, until, type Live } from './testkit.js';
 
 const settings = (max: number, staggerSec = 0) => (key: string) => (key === RESTART_RESUME_MAX ? max : key === RESTART_RESUME_STAGGER_SEC ? staggerSec : undefined);
+/** The restart settings, and a short wait for what a resumed fake process never answers (its control replies). */
+const fast = (s: Live, max: number, staggerSec = 0) => {
+  s.controller.controlTimeoutMs = 150;
+  s.controller.recoverSettings = settings(max, staggerSec);
+};
 const CONTINUATION = /The portal restarted while you were working/;
 
 const recoveries = (s: Live, id?: string) => s.controller.audit({ kind: 'session.restart_recovery', ...(id ? { sessionId: id } : {}) });
@@ -38,7 +43,7 @@ async function cutOff(s: Live, ids: string[]) {
 test('T-971 H2: a session that was working when the portal started and lost its process is resumed once, with the continuation, and one line says so', async () => {
   const s = await liveSession();
   try {
-    s.controller.recoverSettings = settings(5);
+    fast(s,5);
     const lines: { sessionId: string; result: string; needsBypass: boolean; line: string }[] = [];
     s.controller.onRestartRecovery = (i) => lines.push(i);
     const starts = s.ws.startArgs.length;
@@ -66,7 +71,7 @@ test('T-971 H2 Bypass: a session that was in Bypass resumes in its normal mode, 
   const s = await liveSession();
   try {
     s.controller.controlTimeoutMs = 150;
-    s.controller.recoverSettings = settings(5);
+    fast(s,5);
     s.controller.bypassAllowed = () => true;
     s.controller.reauth = { fresh: (token) => token === 'tok' };
     const lead = await made(s, 'Lead', true);
@@ -102,7 +107,7 @@ test('T-971 H2 Bypass: a session that was in Bypass resumes in its normal mode, 
 test('T-971 H2 limit: at most the setting per start are resumed, the rest stay Interrupted and are listed', async () => {
   const s = await liveSession();
   try {
-    s.controller.recoverSettings = settings(2);
+    fast(s,2);
     const b = await made(s, 'B');
     const c = await made(s, 'C');
     const ids = [s.id, b.id, c.id];
@@ -124,7 +129,7 @@ test('T-971 H2 limit: at most the setting per start are resumed, the rest stay I
 test('T-971 H2 stagger: the resumes of one start are spaced by the setting', async () => {
   const s = await liveSession();
   try {
-    s.controller.recoverSettings = settings(5, 1);
+    fast(s,5, 1);
     const b = await made(s, 'B');
     await cutOff(s, [s.id, b.id]);
     await until(() => recoveries(s).length === 2, 6000);
@@ -138,7 +143,7 @@ test('T-971 H2 stagger: the resumes of one start are spaced by the setting', asy
 test('T-971 H2 skips: an ended session, an archived one and one already running are not resumed, and the line says why', async () => {
   const s = await liveSession();
   try {
-    s.controller.recoverSettings = settings(5);
+    fast(s,5);
     const ended = await made(s, 'Ended');
     const archived = await made(s, 'Archived');
     const db = s.store.db!;
@@ -165,7 +170,7 @@ test('T-971 H2 skips: an ended session, an archived one and one already running 
 test('T-971 H2 once: a second start before the resume still finds the cut-off, and a third finds nothing left', async () => {
   const s = await liveSession();
   try {
-    s.controller.recoverSettings = settings(0); // the first start records the cut-off but resumes nothing
+    fast(s,0); // the first start records the cut-off but resumes nothing
     const starts = s.ws.startArgs.length;
     await cutOff(s, [s.id]);
     await sleep(100);
@@ -174,6 +179,7 @@ test('T-971 H2 once: a second start before the resume still finds the cut-off, a
     s.controller.stop();
     // The second start (a new controller on the same store).
     const second = new ChatController(s.store, s.ws as unknown as Workspaces, {});
+    second.controlTimeoutMs = 150;
     second.recoverSettings = settings(5);
     second.start();
     try {
@@ -186,6 +192,7 @@ test('T-971 H2 once: a second start before the resume still finds the cut-off, a
     // The third start: the session is cut off again by something else and the old cut-off is already answered.
     s.store.db!.prepare("UPDATE chat_sessions SET state = 'interrupted', process = 'gone' WHERE id = ?").run(s.id);
     const third = new ChatController(s.store, s.ws as unknown as Workspaces, {});
+    third.controlTimeoutMs = 150;
     third.recoverSettings = settings(5);
     third.start();
     try {
@@ -204,7 +211,7 @@ test('T-971 H2 what counts: a session that was idle, or whose process vanished l
   let now = Date.now();
   const s = await liveSession({ livenessMs: 20, clock: () => now });
   try {
-    s.controller.recoverSettings = settings(5);
+    fast(s,5);
     const b = await made(s, 'B');
     working(s, b.id);
     s.controller.start();
@@ -223,7 +230,7 @@ test('T-971 H2 what counts: a session that was idle, or whose process vanished l
 test('T-971 H2 what counts: an idle session found gone at the start is not resumed', async () => {
   const s = await liveSession();
   try {
-    s.controller.recoverSettings = settings(5);
+    fast(s,5);
     const starts = s.ws.startArgs.length;
     s.ws.alive = false;
     s.controller.start();
@@ -239,7 +246,7 @@ test('T-971 H2 what counts: an idle session found gone at the start is not resum
 test('T-971 H2 loop guard: a session a restart resumed three times today is not resumed a fourth time', async () => {
   const s = await liveSession();
   try {
-    s.controller.recoverSettings = settings(5);
+    fast(s,5);
     const db = s.store.db!;
     for (let i = 0; i < 3; i++)
       db.prepare('INSERT INTO chat_audit (at, severity, kind, session_id, workspace_id, actor, detail) VALUES (?, ?, ?, ?, ?, ?, ?)').run(new Date(Date.now() - 2 * 3_600_000 + i).toISOString(), 'info', 'session.restart_recovery', s.id, 'docker/ws1', 'portal', JSON.stringify({ result: 'resumed' }));
