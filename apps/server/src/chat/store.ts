@@ -150,6 +150,28 @@ export const AUDIT_ACTOR_MAX = 120;
 const ACTOR_STRIPPED = /(?:(?!\u{200c}|\u{200d}|\u{200e}|\u{200f})[\p{Cc}\p{Cf}\p{Zl}\p{Zp}])+/gu;
 const TASK_COLUMNS = 'task_id, tool_use_id, label, subagent_type, model, status, tokens, tool_uses, duration_ms, summary, started_at, ended_at';
 
+interface AuditRow extends Record<string, unknown> {
+  id: number;
+  at: string;
+  severity: string;
+  kind: string;
+  session_id: string | null;
+  workspace_id: string | null;
+  actor: string | null;
+  detail: string;
+}
+
+function auditEntry(r: AuditRow): ChatAuditEntry {
+  let detail: Record<string, unknown> = {};
+  try {
+    const v: unknown = JSON.parse(r.detail);
+    if (v && typeof v === 'object') detail = v as Record<string, unknown>;
+  } catch {
+    // a row that can't be read shows without detail
+  }
+  return { id: r.id, at: r.at, severity: r.severity as ChatAuditEntry['severity'], kind: r.kind, sessionId: r.session_id, workspaceId: r.workspace_id, actor: r.actor, detail };
+}
+
 function taskOut(r: TaskRow): ChatTask {
   return {
     taskId: r.task_id,
@@ -1500,17 +1522,37 @@ export class ChatStore {
     if (filter.sessionId) (where.push('session_id = ?'), vals.push(this.resolveId(filter.sessionId)));
     const rows = this.#db()
       .prepare(`SELECT * FROM chat_audit ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY id DESC LIMIT ?`)
-      .all(...vals, Math.min(Math.max(filter.limit ?? 100, 1), 500)) as { id: number; at: string; severity: string; kind: string; session_id: string | null; workspace_id: string | null; actor: string | null; detail: string }[];
-    return rows.map((r) => {
-      let detail: Record<string, unknown> = {};
-      try {
-        const v: unknown = JSON.parse(r.detail);
-        if (v && typeof v === 'object') detail = v as Record<string, unknown>;
-      } catch {
-        // a row that can't be read shows without detail
+      .all(...vals, Math.min(Math.max(filter.limit ?? 100, 1), 500)) as unknown as AuditRow[];
+    return rows.map((r) => auditEntry(r));
+  }
+
+  /**
+   * D-58: one page of {@link audit} (newest first), by keyset on the row id: an entry written while a client pages never repeats or skips a row.
+   * `scope` names the caller (the route adds it), so a cursor is good for that caller and these filters only. `keep` is the caller's authz
+   * filter: refused rows are not shown and the cursor points at the last row SHOWN. A bad or foreign cursor is a 400.
+   */
+  auditPage(filter: { kind?: string; sessionId?: string; scope?: string } = {}, args: { cursor?: string | undefined; limit?: unknown; keep?: (e: ChatAuditEntry) => boolean } = {}): CursorPage<ChatAuditEntry> {
+    const where: string[] = [];
+    const params: string[] = [];
+    if (filter.kind) (where.push('(kind = ? OR kind LIKE ?)'), params.push(filter.kind, `${filter.kind}.%`));
+    if (filter.sessionId) (where.push('session_id = ?'), params.push(this.resolveId(filter.sessionId)));
+    const limit = clampLimit(args.limit);
+    const scope = `chat.audit|${filter.scope ?? ''}|${filter.kind ?? ''}|${filter.sessionId ?? ''}`;
+    const spec = { scope, table: 'chat_audit', sortCol: 'id', idCol: 'id', ...(where.length ? { where: where.join(' AND '), params } : {}) };
+    const shown: ChatAuditEntry[] = [];
+    let cursor = args.cursor;
+    for (let guard = 0; guard < 10_000; guard++) {
+      const got = keysetPage<AuditRow>(this.#db(), spec, { cursor, limit: CURSOR_MAX_LIMIT });
+      for (const r of got.rows) {
+        const e = auditEntry(r);
+        if (!args.keep || args.keep(e)) shown.push(e);
       }
-      return { id: r.id, at: r.at, severity: r.severity as ChatAuditEntry['severity'], kind: r.kind, sessionId: r.session_id, workspaceId: r.workspace_id, actor: r.actor, detail };
-    });
+      if (shown.length > limit || !got.next) break;
+      cursor = got.next;
+    }
+    const items = shown.slice(0, limit);
+    const last = items[items.length - 1];
+    return { items, next: shown.length > limit && last ? cursorAfter(scope, last.id, last.id) : null };
   }
 
   saveHandoff(row: { id: string; workspaceId: string; sourceSessionId: string; sourceClaudeId: string; destClaudeId: string; path: string }): void {

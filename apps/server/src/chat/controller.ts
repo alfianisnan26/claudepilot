@@ -65,6 +65,7 @@ import {
   type ChatWorktreeRequest,
   type ChatWorktreeStatus,
   type ChatSession,
+  type ChatAuditEntry,
   type CursorPage,
   type ChatTask,
   type ChatTaskTranscript,
@@ -3370,6 +3371,11 @@ export class ChatController {
   /** The audit trail, newest first: Bypass entered and left, and what was refused. */
   audit(filter: { kind?: string; sessionId?: string; limit?: number } = {}) {
     return this.#chat.audit(filter);
+  }
+
+  /** D-58: one page of the audit trail (`{ items, next }`); `keep` is the caller's authz filter. */
+  auditPage(filter: { kind?: string; sessionId?: string; scope?: string }, args: { cursor?: string | undefined; limit?: unknown; keep?: (e: ChatAuditEntry) => boolean }): CursorPage<ChatAuditEntry> {
+    return this.#chat.auditPage(filter, args);
   }
 
   /* ---------- Sessions starting and messaging sessions ---------- */

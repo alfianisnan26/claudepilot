@@ -303,8 +303,17 @@ async function main() {
     return Array.isArray(d) ? d : (d?.events ?? d?.items ?? []);
   };
   const audit = async (kind, sessionId) => {
-    const d = await ok('GET', `/api/chat/audit?kind=${kind}${sessionId ? `&sessionId=${sessionId}` : ''}&limit=200`);
-    return Array.isArray(d) ? d : (d?.entries ?? d?.items ?? []);
+    // D-58: pages of at most 100; follow `next` (at most 20 pages).
+    const out = [];
+    let cursor = '';
+    for (let n = 0; n < 20; n++) {
+      const d = await ok('GET', `/api/chat/audit?kind=${kind}${sessionId ? `&sessionId=${sessionId}` : ''}&limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`);
+      if (Array.isArray(d)) return d;
+      out.push(...(d?.entries ?? d?.items ?? []));
+      cursor = d?.next ?? '';
+      if (!cursor) break;
+    }
+    return out;
   };
   const dbRow = (sql, ...p) => {
     const db = new DatabaseSync(join(scratch, 'data', 'portal.db'), { readOnly: true });

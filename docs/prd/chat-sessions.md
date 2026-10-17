@@ -567,6 +567,14 @@ already loaded stay until a reload). Callers that need the whole set (the palett
 up to five pages of 100 (`chatApi.listAll`). The in-process callers (`ChatController.list`, the portal MCP tools, tickets, repos, CI) never use the
 route and are unchanged. Scripts under `tools/` read `data.items` of `?limit=100`.
 
+**Paged audit trail (D-58, T-382 S4).** `GET /api/chat/audit?kind=&sessionId=&limit=&cursor=` answers one page, `{ items, next }`, newest first
+by entry id (so an entry written during a walk never repeats or skips a row), 25 by default and at most 100 (it was 100 by default and 500 at most).
+The cursor is signed and bound to the caller, `kind` and `sessionId`: a bad one, or one used with another filter or by another caller, is a 400.
+An entry about a session is shown only when the caller may `view` that session; an entry with no session, or of a session since deleted, shows as
+before, and `next` points at the last entry shown. The entries carry the same fields as before (`detail` is small by construction: ids, codes and
+the redactor's output; there is no separate detail route). Scripts read `data.items` and follow `next` (`tools/qa/crew-e2e.mjs`,
+`tools/coordinator/crew_metrics.py`). The in-process `ChatController.audit` is unchanged.
+
 **Continuation (T-270, 2026-10-14).** `POST /api/chat/sessions` takes `continuedFrom: <session id>`. The session named must exist (404),
 be in the same workspace and have ended (409 otherwise: a live or interrupted session keeps its work); this is checked before anything is
 made. The new row is written with `continued_from` and, in the same SQLite transaction, every unfinished ticket held by the predecessor
