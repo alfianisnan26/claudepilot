@@ -57,7 +57,7 @@ Inputs: `images`, `gate` (default true), `deploy` (false builds only), `dry_run`
 
 - A job that names `environment:` is a deployment. An environment is created **protected** the first time a pipeline names it; only a person switches protection off.
 - Agents deploy on their own only to environments the project's decisions allow, typically staging: unprotected, started by hand or by the orchestrator, grouped, never on every merge.
-- UAT and production are protected. An agent never deploys to them on its own, never runs a command against them, never reads their secrets. Where the project's decisions let an agent start a pipeline whose deploying job targets a protected environment, starting it and reporting the wait is the agent's whole part: a person approves. Where the decisions say nothing, an agent does not start it.
+- UAT and production are protected. An agent never deploys to them on its own (uat on the owner's request is the crew's work through the normal path, D-79), never runs a command against them, never reads their secrets. Where the project's decisions let an agent start a pipeline whose deploying job targets a protected environment, starting it and reporting the wait is the agent's whole part: a person approves. Where the decisions say nothing, an agent does not start it.
 - A production question is one line on the owner's checklist, not a new stream of questions.
 - Never change an environment's protection, its approval rule or its secrets.
 
