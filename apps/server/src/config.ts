@@ -132,6 +132,15 @@ export const config = {
     maxRunsPerWorkspace: Math.max(1, Number(env('PORTAL_CI_MAX_RUNS') ?? 2) || 2),
     maxJobsParallel: Math.max(1, Math.min(8, Number(env('PORTAL_CI_MAX_JOBS') ?? 2) || 2)),
   },
+  /**
+   * App ports (docs/prd/app-ports.md, T-948): a web app on a workspace's loopback opens at `app-<name>-<port>.<hostSuffix>`. Unset suffix: the
+   * feature is off (the ports list says `enabled: false`, opening is 404, no host is proxied). `denyPorts`: more ports that may never be opened
+   * (comma-separated), besides the portal's own and the browser's (CDP, supervisor).
+   */
+  portProxy: {
+    hostSuffix: env('PORT_PROXY_HOST_SUFFIX')?.toLowerCase().replace(/^\.+|\.+$/g, ''),
+    denyPorts: (env('PORT_PROXY_DENY_PORTS') ?? '').split(',').map((s) => Number(s.trim())).filter((n) => Number.isInteger(n) && n > 0),
+  },
   /** Connect (docs/prd/targets-connect.md §15): targets enrolled from the web, agents that dial out. `PORTAL_CONNECT_ENABLED=false` is the kill switch. */
   connect: {
     enabled: env('PORTAL_CONNECT_ENABLED') !== 'false',

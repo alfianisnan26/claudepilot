@@ -34,7 +34,11 @@ import {
   type CreateTerminalRequest,
   type WorkspaceClaudeState,
   type WorkspaceTerminal,
+  type AppPortList,
+  type OpenAppPortRequest,
+  type OpenAppPortResult,
 } from '@portal/contracts';
+import type { AppPorts } from './appports/index.js';
 import { Hono, type Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { bodyLimit } from 'hono/body-limit';
@@ -166,6 +170,7 @@ export function createApp(
     platform,
     claudeVersions,
     connect,
+    appPorts,
   }: {
     serveWeb: boolean;
     notify?: (...topics: LiveTopic[]) => void;
@@ -211,6 +216,8 @@ export function createApp(
     claudeVersions?: ClaudeVersions;
     /** Connect: targets and agents enrolled from the web (`/api/connect` behind the session; `/connect/` for agents, no cookie). */
     connect?: ConnectModule;
+    /** App ports (T-948): a workspace's listening ports and the open of one on its app host; the proxy itself runs before this app (index.ts). */
+    appPorts?: AppPorts;
   },
 ) {
   const app = new Hono<Env>();
@@ -675,6 +682,28 @@ export function createApp(
     settings?.agentEnv.forgetWorkspace(`${c.req.param('target')}/${c.req.param('name')}`);
     repos?.forgetWorkspace(`${c.req.param('target')}/${c.req.param('name')}`);
     return c.json(success({ ok: true }));
+  });
+  // App ports (T-948, docs/prd/app-ports.md): the ports listening in a workspace, and the open of one on its own app host (a one-time code, audited).
+  // Both `operate`: the list runs a command in the workspace, the open reaches into it. Off (no PORT_PROXY_HOST_SUFFIX): the list says so, the open is 404.
+  ws.get('/:target/:name/ports', toOperate, async (c) =>
+    c.json(success<AppPortList>(appPorts ? await appPorts.list(c.req.param('target'), c.req.param('name')) : { enabled: false, ports: [] })),
+  );
+  ws.post('/:target/:name/ports/open', toOperate, async (c) => {
+    if (!appPorts?.enabled) throw new AppError('NOT_FOUND', 'Not found.');
+    const req = await body<OpenAppPortRequest>(c);
+    const host = c.req.header('host') ?? '';
+    const origin = c.req.header('origin');
+    // The page that asked (the CSRF guard above already refused any other Origin); without one (not a browser), the host over https.
+    const portalOrigin = origin && sameHostOrigin(origin, host) ? origin : `https://${host}`;
+    const actor = actorOf(c);
+    const opened = await appPorts.open(c.req.param('target'), c.req.param('name'), req, {
+      actor,
+      actorString: actorString(actor),
+      userId: actorUserId(actor),
+      sessionToken: c.get('token'),
+      portalOrigin,
+    });
+    return c.json(success<OpenAppPortResult>(opened));
   });
   // A workspace's multi-assignment pools: GET …/pools, PUT …/pools/:type.
   ws.route('/', createWorkspacePoolRoutes({ service: poolService, reconciler }));
