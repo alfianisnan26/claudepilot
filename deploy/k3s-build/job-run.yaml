@@ -200,7 +200,7 @@ spec:
             requests: {cpu: 1000m, memory: __MEMORY__}
             limits: {cpu: "4", memory: __MEMORY__}
       containers:
-        # T-401: no git or npm credential here, no envFrom. The one exception (T-426): each --pool-env name (E2E_CF_ACCESS_* only, the
+        # T-401: no git or npm credential here, no envFrom. The one exception (T-426): each --pool-env name (E2E_CF_ACCESS_*, E2E_QA_EMAIL, E2E_QA_PASSWORD only, the
         # command's own scoped test credentials) as a secretKeyRef, written by job-run.sh in place of the __POOL_ENV__ line; never in fetch.
         - name: run
           image: __IMAGE__

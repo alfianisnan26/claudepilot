@@ -845,7 +845,7 @@ test('T-426 --pool-env refusals, before any kubectl call: a name outside E2E_CF_
   const w = world();
   const val = `cs${hex(20)}`;
   const cases: [string[], Record<string, string>, RegExp][] = [
-    [['--pool-env', 'GITHUB_TOKEN'], { GITHUB_TOKEN: val }, /--pool-env: refused: not an allowed name \(E2E_CF_ACCESS_\*\)/],
+    [['--pool-env', 'GITHUB_TOKEN'], { GITHUB_TOKEN: val }, /--pool-env: refused: not an allowed name \(E2E_CF_ACCESS_\*, E2E_QA_EMAIL, E2E_QA_PASSWORD\)/],
     [['--pool-env', 'E2E_CF_ACCESS_'], {}, /not an allowed name/],
     [['--pool-env', 'E2E_CF_ACCESS_id'], { E2E_CF_ACCESS_id: val }, /not an allowed name/],
     [['--pool-env', `E2E_CF_ACCESS_X=${val}`], {}, /not an allowed name/],
@@ -858,6 +858,33 @@ test('T-426 --pool-env refusals, before any kubectl call: a name outside E2E_CF_
     const r = w.run(['--repo', 'claudepilot', '--ref', 'main', ...opt, '--', 'true'], over);
     assert.equal(r.code, 2, `${opt.join(' ')}: ${r.out}`);
     assert.match(r.out, want);
+    assert.ok(!r.out.includes(val), 'a value is never shown');
+  }
+  assert.equal(w.calls(), '', 'refused before any kubectl call');
+  assert.deepEqual(w.applied(), []);
+});
+
+// T-938: exactly two more names, for the e2e login (T-384). Values made at runtime.
+test('T-938 --pool-env accepts exactly E2E_QA_EMAIL and E2E_QA_PASSWORD', () => {
+  const w = world();
+  const email = `qa${hex(12)}`, pw = `pw${hex(16)}`;
+  writeFileSync(join(w.root, 'scenario.json'), JSON.stringify({ rc: 0, log: jobLog(w.root, 0, 'ok\n') }));
+  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--pool-env', 'E2E_QA_EMAIL', '--pool-env', 'E2E_QA_PASSWORD', '--', 'npm run e2e'],
+    { E2E_QA_EMAIL: email, E2E_QA_PASSWORD: pw });
+  assert.equal(r.code, 0, r.out);
+  const m = yamlLoad(w.applied1()) as Manifest;
+  const refs = container(m).env.filter((e) => e.name.startsWith('JR_POOL_')).map((e) => e.name);
+  assert.deepEqual(refs, ['JR_POOL_E2E_QA_EMAIL', 'JR_POOL_E2E_QA_PASSWORD']);
+  for (const v of [email, pw]) assert.ok(!r.out.includes(v), 'a value is never shown');
+});
+
+test('T-938 --pool-env refuses near misses of the two names, before any kubectl call, and never shows the value', () => {
+  const w = world();
+  const val = `cs${hex(20)}`;
+  for (const name of ['E2E_QA_EMAILX', 'XE2E_QA_EMAIL', 'e2e_qa_email', 'E2E_QA_PASSWORD_2', 'E2E_QA', '']) {
+    const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--pool-env', name, '--', 'true'], name ? { [name]: val } : {});
+    assert.equal(r.code, 2, `${JSON.stringify(name)}: ${r.out}`);
+    assert.match(r.out, /--pool-env: refused: not an allowed name \(E2E_CF_ACCESS_\*, E2E_QA_EMAIL, E2E_QA_PASSWORD\)/);
     assert.ok(!r.out.includes(val), 'a value is never shown');
   }
   assert.equal(w.calls(), '', 'refused before any kubectl call');
