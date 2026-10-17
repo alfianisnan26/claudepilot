@@ -1,5 +1,6 @@
 import type { IncomingMessage, Server } from 'node:http';
 import type { Duplex } from 'node:stream';
+import type { SignedIn } from './authz/routeGuard.js';
 import type { Portal } from './portal.js';
 
 /** How often sessions are re-checked, for the ones that end by expiring (sign-out and a new code cut at once). */
@@ -20,6 +21,20 @@ const tokenOf = (req: IncomingMessage, name: string): string | undefined => {
   }
   return undefined;
 };
+
+/**
+ * Who a handshake's cookie signs in, as the HTTP guard reads it (app.ts): a full session (the server code, an admin account), a member
+ * account, or nobody. The socket guard (authz/socketGuard.ts, T-1043 S0b) decides for it; a module's own check still asks `session()`.
+ */
+export const signedInOf =
+  (portal: Pick<Portal, 'session' | 'anySession'>, cookie: string) =>
+  (req: IncomingMessage): SignedIn => {
+    const token = tokenOf(req, cookie);
+    if (!token) return null;
+    if (portal.session(token)) return { full: true };
+    const s = portal.anySession(token);
+    return s?.userId ? { full: false, userId: s.userId } : null;
+  };
 
 /**
  * Ties the sockets a signed-in tab opens (live updates, chat, terminals) to its session. Each module checks the

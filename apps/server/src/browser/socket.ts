@@ -1,8 +1,12 @@
 import type { IncomingMessage, Server } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { WebSocketServer, type WebSocket } from 'ws';
+import type { SignedIn } from '../authz/routeGuard.js';
+import { UPGRADE_NOT_FOUND, declareSocketPolicies, onSocket } from '../authz/socketGuard.js';
 import { config } from '../config.js';
 import type { Portal } from '../portal.js';
+import { signedInOf } from '../sockets.js';
+import { BROWSER_SOCKET_POLICIES } from './authz.js';
 import { cookie } from '../workspaces/shell.js';
 import { DEVICE_ID, deviceLabel } from './control.js';
 import { secureContext } from './routes.js';
@@ -35,15 +39,18 @@ function refuse(socket: Duplex, status: number, text: string) {
   socket.end(`HTTP/1.1 ${status} ${text}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
 }
 
-export function attachBrowserSockets(server: Server, deps: { portal: Portal; service: BrowserService }) {
+export function attachBrowserSockets(server: Server, deps: { portal: Portal; service: BrowserService; signedIn?: (req: IncomingMessage) => SignedIn }) {
   const vnc = new WebSocketServer({ noServer: true, maxPayload: 256 * 1024, perMessageDeflate: false });
   // The preview's messages from a page are small JSON (16 KB at most, validated again after); frames only go out.
   const preview = new WebSocketServer({ noServer: true, maxPayload: 32 * 1024, perMessageDeflate: false });
 
-  server.on('upgrade', (req: IncomingMessage, socket: Duplex, head: Buffer) => {
+  // T-1043 S0b: both behind the socket guard, with their declarations (`operate` on the workspace, as the browser's control route).
+  declareSocketPolicies('browser', BROWSER_SOCKET_POLICIES);
+  const guarded = { signedIn: deps.signedIn ?? signedInOf(deps.portal, config.session.cookie) };
+  const upgrade = (req: IncomingMessage, socket: Duplex, head: Buffer) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
     const match = PATH.exec(url.pathname);
-    if (!match) return; // not ours
+    if (!match) return void socket.end(UPGRADE_NOT_FOUND); // a name no workspace can have
     if (!sameOrigin(req)) return refuse(socket, 403, 'Forbidden');
     if (!deps.portal.session(cookie(req, config.session.cookie))) return refuse(socket, 401, 'Unauthorized');
     const device = url.searchParams.get('device') ?? '';
@@ -59,7 +66,8 @@ export function attachBrowserSockets(server: Server, deps: { portal: Portal; ser
     if (match[3] === 'preview')
       preview.handleUpgrade(req, socket, head, (ws) => void new PreviewSession({ ws, service: deps.service, workspaceId, device, secure }).run().catch(failed(ws)));
     else vnc.handleUpgrade(req, socket, head, (ws) => void new VncSession({ ws, service: deps.service, workspaceId, device, secure }).run().catch(failed(ws)));
-  });
+  };
+  for (const path of Object.keys(BROWSER_SOCKET_POLICIES)) onSocket(server, path, guarded, upgrade);
 
   return {
     close: () => {

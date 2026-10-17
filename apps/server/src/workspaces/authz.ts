@@ -14,6 +14,7 @@ import { AppError } from '@isnanme/core';
 import { isStableWorkspaceId, objectRef, workspaceRef, type ObjectCheck, type RoutePolicies, type ToolPolicies, type Verb } from '@portal/contracts';
 import { createMiddleware } from 'hono/factory';
 import { actorOf, declarePolicies, declareToolPolicies, requireCan } from '../authz/seam.js';
+import type { SocketPolicies } from '../authz/socketGuard.js';
 
 const on = (verb: Verb, param: string, audit?: string): { kind: 'objects'; checks: ObjectCheck[]; audit?: string } => ({
   kind: 'objects',
@@ -72,6 +73,22 @@ export const WORKSPACE_POLICIES: RoutePolicies = {
   [`GET ${WS}/claudes`]: tn('view'),
   [`PATCH ${WS}/claudes/:claude`]: { kind: 'objects', checks: [wsCheck('operate'), claudeCheck('manage')] },
   [`DELETE ${WS}/claudes/:claude`]: { kind: 'objects', checks: [wsCheck('manage'), claudeCheck('manage')] },
+};
+
+/** The terminal socket's path (shell.ts), as the socket guard matches it. */
+export const SHELL_SOCKET_PATH = `${WS}/shell`;
+
+/**
+ * T-1043 S0b: the terminal socket. A shell in the workspace is `operate` on it (as listing and opening terminals are); `?term=` attaches to a
+ * terminal that outlives the socket, so it is `operate` on that terminal (`<target>/<name>/<term>`) too. Its frames (keystrokes, output,
+ * resize) act on that shell only.
+ */
+export const SHELL_SOCKET_POLICIES: SocketPolicies = {
+  [SHELL_SOCKET_PATH]: {
+    connect: { kind: 'objects', checks: [wsCheck('operate'), { type: 'terminal', verb: 'operate', from: 'path', param: 'target+name+term', optional: true }] },
+    messages: {},
+    frames: 'terminal bytes both ways and resize, on the shell the handshake opened',
+  },
 };
 
 /** `workspace_rename` is an admin token's tool (its scope); the seam is asked for `operate` on the workspace the id resolves to. */

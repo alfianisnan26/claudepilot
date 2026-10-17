@@ -3,8 +3,9 @@
 // resolver says every session is the founding user's (until `chat_sessions` records an owner); the seam already refuses another user (`u_a`) on a
 // session that exists, which is how the tests run the abuse cases across users.
 
-import { CHAT_SOCKET_PATH, FOUNDING_USER_ID, sessionRef, workspaceRef, type RoutePolicies, type ToolPolicies } from '@portal/contracts';
+import { CHAT_SOCKET_PATH, FOUNDING_USER_ID, sessionRef, workspaceRef, type RoutePolicies, type RoutePolicy, type ToolPolicies } from '@portal/contracts';
 import { declarePolicies, declareToolPolicies, registerResolver, type ObjectResolver } from '../authz/seam.js';
+import type { SocketPolicies } from '../authz/socketGuard.js';
 
 /** What the resolver needs of a session; the controller answers it. */
 export interface SessionFacts {
@@ -80,3 +81,26 @@ export const CHAT_RECOVER_TOOL_POLICIES = {
 
 /** The key the socket is declared under: the contract's path, so a test can pin them together. */
 export const CHAT_SOCKET_POLICY_KEY = `ALL ${CHAT_SOCKET_PATH}`;
+
+const onSession = (verb: 'view' | 'operate'): RoutePolicy => ({ kind: 'objects', checks: [{ type: 'session', verb, from: 'body', param: 'session' }] });
+
+/**
+ * T-1043 S0b: the chat socket (socket.ts). The handshake needs someone signed in; each message names its session in `session`: watching it is
+ * `view`, anything that acts on it (a message, an answer, a control, a side question) `operate`, as its HTTP routes are.
+ */
+export const CHAT_SOCKET_POLICIES: SocketPolicies = {
+  [CHAT_SOCKET_PATH]: {
+    connect: { kind: 'signed-in' },
+    messages: {
+      subscribe: onSession('view'),
+      unsubscribe: { kind: 'signed-in' },
+      send: onSession('operate'),
+      respond: onSession('operate'),
+      control: onSession('operate'),
+      btw_ask: onSession('operate'),
+      btw_cancel: onSession('operate'),
+      btw_close: onSession('operate'),
+      btw_pin: onSession('operate'),
+    },
+  },
+};

@@ -5,6 +5,7 @@
 
 import type { RoutePolicies } from '@portal/contracts';
 import { declarePolicies } from '../authz/seam.js';
+import type { SocketPolicies } from '../authz/socketGuard.js';
 import { onWorkspacePath } from '../workspaces/authz.js';
 
 const WS = '/api/workspaces/:target/:name/browser';
@@ -16,6 +17,15 @@ export const BROWSER_POLICIES: RoutePolicies = {
   [`POST ${WS}/handoffs/:handoff`]: onWorkspacePath('operate'),
   [`POST ${WS}/install/retry`]: onWorkspacePath('manage'),
   [`POST ${WS}/:action`]: onWorkspacePath('operate'),
+};
+
+/**
+ * T-1043 S0b: the live-view sockets (socket.ts). The VNC bridge and the proxy view show the workspace's browser and take its input, so both
+ * are `operate` on the workspace, like the control route; their frames act on that browser only.
+ */
+export const BROWSER_SOCKET_POLICIES: SocketPolicies = {
+  [`${WS}/view`]: { connect: onWorkspacePath('operate'), messages: {}, frames: 'the screen out, pointer and keys in, on the browser the handshake opened' },
+  [`${WS}/preview`]: { connect: onWorkspacePath('operate'), messages: {}, frames: 'frames out, the page’s input in, on the browser the handshake opened' },
 };
 
 let declared = false;

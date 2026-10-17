@@ -92,22 +92,30 @@ export const notFound = (): AppError => new AppError('NOT_FOUND');
 
 const OPEN_KINDS = new Set<RoutePolicy['kind']>(['public', 'bearer', 'handler']);
 
+/**
+ * The actor a sign-in is: nobody, the founding owner (D-82: an admin account and the server code keep full access, as `actorOf` answers
+ * today), or a signed-in member. A member stays a member even when its id is not one the seam knows (identity/users.ts makes base64url ids,
+ * USER_ID_PATTERN takes lower case only): `can()` then grants it nothing, and a guard refuses with its 404, never the 401 of nobody signed in.
+ * The HTTP guard and the socket guard (`socketGuard.ts`, T-1043 S0b) both decide for this actor.
+ */
+export function actorOfSignedIn(s: SignedIn): Actor {
+  if (!s) return anonymous();
+  if (s.full) return ownerActor();
+  return { kind: 'user', userId: s.userId, loginSessionId: 'cookie', via: 'ui' } as Actor;
+}
+
 /** The actor the guard decides for: one set on the context (the real layer, a test), else the cookie's. A member is set on the context. */
 function actorFor(c: Context, deps: RouteGuardDeps): Actor {
   const set = (c as unknown as { get(k: string): unknown }).get('actor');
   if (set && typeof set === 'object' && 'kind' in set) return set as Actor;
   const s = deps.signedIn(c);
-  if (!s) return anonymous();
-  // D-82: an admin account and the server code keep full access: they act as the founding owner, as `actorOf` answers today.
-  if (s.full) return ownerActor();
-  // A member stays a signed-in member even when its id is not one the seam knows (identity/users.ts makes base64url ids, USER_ID_PATTERN
-  // takes lower case only): `can()` then grants it nothing, and the guard refuses with its 404, never the 401 of nobody signed in.
-  const member = { kind: 'user', userId: s.userId, loginSessionId: 'cookie', via: 'ui' } as Actor;
-  (c as unknown as { set(k: string, v: unknown): void }).set('actor', member);
-  return member;
+  const actor = actorOfSignedIn(s);
+  if (s && !s.full) (c as unknown as { set(k: string, v: unknown): void }).set('actor', actor);
+  return actor;
 }
 
-const isFoundingOwner = (a: Actor): boolean => a.kind === 'user' && a.userId === FOUNDING_USER_ID && authzMode() === 'single-owner';
+/** The founding owner in single-owner mode: every guard lets it through untouched (today's behaviour). */
+export const isFoundingOwner = (a: Actor): boolean => a.kind === 'user' && a.userId === FOUNDING_USER_ID && authzMode() === 'single-owner';
 
 /** The JSON body, read from a clone so the handler still gets the stream untouched (the avatar and file routes read it themselves). */
 async function jsonBody(c: Context): Promise<Record<string, unknown>> {
@@ -119,26 +127,40 @@ async function jsonBody(c: Context): Promise<Record<string, unknown>> {
   return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
 }
 
-type Outcome = 'allow' | 'pass-on';
+export type Outcome = 'allow' | 'pass-on';
 
-async function checkObjects(c: Context, at: number, actor: Actor, checks: ObjectCheck[], deps: RouteGuardDeps): Promise<Outcome> {
-  let body: Record<string, unknown> | null = null;
+/**
+ * Where a declared check reads the value it names: a path param (one route's own, `target+name` joined with `/`), a query param, a field of
+ * the JSON body. A socket reads its handshake's path and query, and a message's fields as its body (`socketGuard.ts`).
+ */
+export interface PolicyReader {
+  path(name: string): string | undefined;
+  query(name: string, many: boolean): string | string[] | undefined;
+  body(): Promise<Record<string, unknown>> | Record<string, unknown>;
+}
+
+/** The value a check names, read as it declares; `+` joins path params with `/` (`target+name`). */
+async function valueOf(read: PolicyReader, check: ObjectCheck): Promise<unknown> {
+  if (check.from === 'path') {
+    const parts = check.param.split('+').map((k) => read.path(k) ?? '');
+    return parts.some((p) => !p) ? undefined : parts.join('/');
+  }
+  if (check.from === 'query') return read.query(check.param, !!check.many);
+  return (await read.body())[check.param];
+}
+
+async function checkObjects(read: PolicyReader, actor: Actor, checks: ObjectCheck[], idOf: RouteGuardDeps['idOf']): Promise<Outcome> {
   for (const check of checks) {
-    let raw: unknown;
-    if (check.from === 'path') {
-      const parts = check.param.split('+').map((k) => paramOf(c, at, k) ?? '');
-      raw = parts.some((p) => !p) ? undefined : parts.join('/');
-    } else if (check.from === 'query') raw = check.many ? c.req.queries(check.param) : c.req.query(check.param);
-    else raw = (body ??= await jsonBody(c))[check.param];
+    const raw = await valueOf(read, check);
     const values = Array.isArray(raw) ? raw : raw === undefined || raw === null || raw === '' ? [] : [raw];
     if (values.length === 0) {
       if (check.optional) continue;
       throw notFound();
     }
-    const poolType = check.poolTypeParam ? paramOf(c, at, check.poolTypeParam) : undefined;
+    const poolType = check.poolTypeParam ? read.path(check.poolTypeParam) : undefined;
     for (const v of values) {
       if (typeof v !== 'string' || !v) throw notFound();
-      const id = deps.idOf?.(check, v);
+      const id = idOf?.(check, v);
       if (id === null) return 'pass-on';
       const ref: ObjectRef = objectRef(check.type, id ?? v, poolType ? (poolType as ObjectRef['poolType']) : undefined);
       const d = can(actor, check.verb, ref);
@@ -152,8 +174,11 @@ async function checkObjects(c: Context, at: number, actor: Actor, checks: Object
   return 'allow';
 }
 
-/** What one declared policy says for a non-owner actor who is signed in: go on, hand on to the next matched route, or a refusal (thrown). */
-async function decide(c: Context, at: number, actor: Actor, policy: RoutePolicy, deps: RouteGuardDeps): Promise<Outcome> {
+/**
+ * What one declared policy says for a non-owner actor who is signed in: go on, hand on to the next matched route, or a refusal (thrown: the
+ * 404 of `notFound()`, or the seam's 403 for an object the actor sees but may not change). The one decision of both guards.
+ */
+export async function decidePolicy(read: PolicyReader, actor: Actor, policy: RoutePolicy, idOf?: RouteGuardDeps['idOf']): Promise<Outcome> {
   switch (policy.kind) {
     case 'public':
     case 'bearer':
@@ -169,8 +194,18 @@ async function decide(c: Context, at: number, actor: Actor, policy: RoutePolicy,
       throw notFound();
     }
     case 'objects':
-      return checkObjects(c, at, actor, policy.checks, deps);
+      return checkObjects(read, actor, policy.checks, idOf);
   }
+}
+
+/** One matched route's reader: its own path params (`paramOf`), the request's query, its JSON body read once from a clone. */
+function httpReader(c: Context, at: number): PolicyReader {
+  let body: Promise<Record<string, unknown>> | null = null;
+  return {
+    path: (name) => paramOf(c, at, name),
+    query: (name, many) => (many ? c.req.queries(name) : c.req.query(name)),
+    body: () => (body ??= jsonBody(c)),
+  };
 }
 
 /** The guard's handler is named, so a test finds where it sits among the app's routes (nothing that answers may come before it). */
@@ -189,7 +224,7 @@ export function createRouteGuard(deps: RouteGuardDeps): MiddlewareHandler {
       const policy = policyFor(key);
       // No declaration: refused for anyone but the founding owner, as a path nobody serves (the route stays out of the answer).
       if (!policy) throw notFound();
-      if ((await decide(c, index, actor, policy, deps)) === 'allow') return next();
+      if ((await decidePolicy(httpReader(c, index), actor, policy, deps.idOf)) === 'allow') return next();
     }
     // Every matched route handed the request on (QA 10597 A1): nothing checked it, so it is refused, never let through unchecked.
     throw notFound();

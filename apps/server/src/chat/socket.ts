@@ -4,10 +4,12 @@
 
 import type { IncomingMessage, Server } from 'node:http';
 import type { Duplex } from 'node:stream';
-import { isAppError } from '@isnanme/core';
-import { CHAT_SOCKET_PATH, type Actor, type ChatClientMessage, type ChatServerMessage } from '@portal/contracts';
+import { AppError, isAppError } from '@isnanme/core';
+import { CHAT_SOCKET_PATH, actorUserId, type Actor, type ChatClientMessage, type ChatServerMessage } from '@portal/contracts';
 import { WebSocketServer, type WebSocket } from 'ws';
-import { actorOfSocket, actorUserId } from '../authz/seam.js';
+import type { SignedIn } from '../authz/routeGuard.js';
+import { declareSocketPolicies, onSocket, type SocketGrant } from '../authz/socketGuard.js';
+import { CHAT_SOCKET_POLICIES } from './authz.js';
 import type { ChatController } from './controller.js';
 
 const PING_MS = 25_000;
@@ -48,19 +50,25 @@ function refused(uuid: string, e: unknown): ChatServerMessage {
  * Attaches the chat socket to the HTTP server. `authorized` is checked after the same-origin check,
  * exactly like the shell socket (so pass the session-cookie check through it).
  */
-export function attachChat(server: Server, controller: ChatController, authorized: (req: IncomingMessage) => boolean) {
+export function attachChat(
+  server: Server,
+  controller: ChatController,
+  authorized: (req: IncomingMessage) => boolean,
+  signedIn: (req: IncomingMessage) => SignedIn = (req) => (authorized(req) ? { full: true } : null),
+) {
   const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_PAYLOAD });
 
-  server.on('upgrade', (req: IncomingMessage, socket: Duplex, head: Buffer) => {
-    if (new URL(req.url ?? '/', 'http://localhost').pathname !== CHAT_SOCKET_PATH) return; // not ours (shell, live, or Vite HMR)
+  // T-1043 S0b: behind the socket guard; the handshake and each message type are declared (chat/authz.ts).
+  declareSocketPolicies('chat', CHAT_SOCKET_POLICIES);
+  onSocket(server, CHAT_SOCKET_PATH, { signedIn }, (req: IncomingMessage, socket: Duplex, head: Buffer, grant: SocketGrant) => {
     if (!sameOrigin(req)) return refuse(socket, 403, 'Forbidden');
     if (!authorized(req)) return refuse(socket, 401, 'Unauthorized');
-    // Who is on this connection is fixed here, at the handshake; a message that names a session checks that person's right to it.
-    const actor = actorOfSocket(req, authorized);
-    wss.handleUpgrade(req, socket, head, (ws) => join(ws, actor));
+    // Who is on this connection is fixed here, at the handshake (the guard's actor); each message is checked for that actor (`grant.allows`).
+    wss.handleUpgrade(req, socket, head, (ws) => join(ws, grant));
   });
 
-  function join(ws: WebSocket, actor: Actor) {
+  function join(ws: WebSocket, grant: SocketGrant) {
+    const actor: Actor = grant.actor;
     const subscribed = new Set<string>();
     const send = (msg: ChatServerMessage) => ws.readyState === ws.OPEN && ws.send(JSON.stringify(msg));
     // Forward the controller's live updates (events, deltas, session, input states, tasks) for watched sessions.
@@ -100,6 +108,8 @@ export function attachChat(server: Server, controller: ChatController, authorize
     ws.on('error', () => ws.terminate());
 
     async function handle(msg: ChatClientMessage) {
+      // T-1043 S0b: a message its declaration does not allow this actor gets exactly what a session that does not exist gets.
+      if (!(await grant.allows(String(msg.type), msg as unknown as Record<string, unknown>))) return refuseLikeUnknown(msg);
       switch (msg.type) {
         case 'subscribe': {
           // A folded session's old id means the chat that took it in.
@@ -168,7 +178,7 @@ export function attachChat(server: Server, controller: ChatController, authorize
           }
           return;
         case 'control': {
-          const key = typeof msg.uuid === 'string' && msg.uuid ? msg.uuid : String(msg.op);
+          const key = controlKey(msg);
           try {
             // A person in the app: the one caller that may turn on Auto (for a session a person started).
             await controller.control(msg.session, msg.op, msg.args, { actor: 'ui' });
@@ -180,5 +190,28 @@ export function attachChat(server: Server, controller: ChatController, authorize
         }
       }
     }
+
+    /** What each message type answers for a session that does not exist (the controller's `No such session.`); unsubscribe and unknown types answer nothing. */
+    function refuseLikeUnknown(msg: ChatClientMessage) {
+      const missing = new AppError('NOT_FOUND', 'No such session.');
+      switch (msg.type) {
+        case 'subscribe':
+          return send({ type: 'removed', session: msg.session });
+        case 'send':
+          return send(refused(msg.uuid, missing));
+        case 'respond':
+          return send(refused(msg.requestId, missing));
+        case 'btw_ask':
+        case 'btw_cancel':
+        case 'btw_close':
+          return send(refused(String(msg.btw ?? ''), missing));
+        case 'btw_pin':
+          return send(refused(String(msg.uuid ?? msg.btw ?? ''), missing));
+        case 'control':
+          return send(refused(controlKey(msg), missing));
+      }
+    }
   }
 }
+
+const controlKey = (msg: Extract<ChatClientMessage, { type: 'control' }>): string => (typeof msg.uuid === 'string' && msg.uuid ? msg.uuid : String(msg.op));

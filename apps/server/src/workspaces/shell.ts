@@ -3,8 +3,12 @@ import type { Duplex } from 'node:stream';
 import { isAppError } from '@isnanme/core';
 import type { ShellClientMessage, ShellServerMessage } from '@portal/contracts';
 import { WebSocketServer, type WebSocket } from 'ws';
+import type { SignedIn } from '../authz/routeGuard.js';
+import { UPGRADE_NOT_FOUND, declareSocketPolicies, onSocket } from '../authz/socketGuard.js';
 import { config } from '../config.js';
 import type { Portal } from '../portal.js';
+import { signedInOf } from '../sockets.js';
+import { SHELL_SOCKET_PATH, SHELL_SOCKET_POLICIES } from './authz.js';
 import { runtimeMessage, type Workspaces } from './manager.js';
 import { attachCommand, TERMINAL_ID } from './terminals.js';
 
@@ -41,13 +45,15 @@ const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, M
  * `GET /api/workspaces/<target>/<name>/shell` upgrades to a WebSocket running a login shell in the
  * workspace. Binary frames are terminal bytes both ways; text frames are JSON control messages.
  */
-export function attachShell(server: Server, portal: Portal, workspaces: Workspaces) {
+export function attachShell(server: Server, portal: Portal, workspaces: Workspaces, signedIn: (req: IncomingMessage) => SignedIn = signedInOf(portal, config.session.cookie)) {
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
 
-  server.on('upgrade', (req: IncomingMessage, socket: Duplex, head: Buffer) => {
+  // T-1043 S0b: behind the socket guard, with its declaration (`operate` on the workspace, and on the terminal `?term=` names).
+  declareSocketPolicies('workspaces', SHELL_SOCKET_POLICIES);
+  onSocket(server, SHELL_SOCKET_PATH, { signedIn }, (req: IncomingMessage, socket: Duplex, head: Buffer) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
     const match = url.pathname.match(SHELL_PATH);
-    if (!match) return; // not ours (Vite's HMR socket in dev)
+    if (!match) return void socket.end(UPGRADE_NOT_FOUND); // a name no workspace can have
     if (!sameOrigin(req)) return refuse(socket, 403, 'Forbidden');
     if (!portal.session(cookie(req, config.session.cookie))) return refuse(socket, 401, 'Unauthorized');
 
