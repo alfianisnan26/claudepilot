@@ -3,6 +3,7 @@
 // Everything that came out of a workspace (logs, commit messages, diagnostics) is untrusted text.
 
 import type { BumpMode } from './bump.js';
+import type { CursorPage } from './page.js';
 
 /** A run's status. Jobs and steps add `pending` and `skipped`; a job held for a person's approval (FR41) is `waiting` (its run stays `running`). */
 export const CI_STATUSES = ['queued', 'running', 'passed', 'failed', 'cancelled'] as const;
@@ -368,12 +369,19 @@ export interface CiApprovalRequest {
   job: string;
 }
 
+/** The in-process list (glance, the Portal MCP tools): everything up to a limit, with the counts. */
 export interface CiRunList {
   items: CiRunSummary[];
   /** Matching the filters. */
   total: number;
   /** Runs not finished, over everything the filters left in. */
   active: number;
+}
+
+/** `GET CI_API.runs` (D-58): one page, newest first. `total` and `active` ride on the first page only (no `cursor`), over the runs the caller may view. */
+export interface CiRunPage extends CursorPage<CiRunSummary> {
+  total?: number;
+  active?: number;
 }
 
 export interface CiRunFilter {
@@ -385,8 +393,8 @@ export interface CiRunFilter {
   ticket?: string;
   session?: string;
   limit?: number;
-  /** A run id: only runs before it. */
-  before?: string;
+  /** The `next` of the page before (`GET CI_API.runs` only). */
+  cursor?: string;
 }
 
 /** A piece of a step's log, redacted, with the offset to ask for next. */
@@ -550,7 +558,7 @@ export interface ValidateCiResult {
 export const CI_API = {
   /** GET: `CiRunner[]`. PUT `/<workspace id, encoded>` with `UpsertCiRunnerRequest`: the `CiRunner`. DELETE `/<workspace id, encoded>`: it is a runner no more (T-557; the routes take the id in the path, T-576). */
   runners: '/api/ci/runners',
-  /** GET `CiRunFilter` as a query string: `CiRunList`. POST `StartCiRunRequest`: the new `CiRun`. */
+  /** GET `CiRunFilter` as a query string (`limit` 25 by default and 100 at most, `cursor`): `CiRunPage`. POST `StartCiRunRequest`: the new `CiRun`. */
   runs: '/api/ci/runs',
   /** GET: `CiRun`. */
   run: (id: string) => `/api/ci/runs/${encodeURIComponent(id)}`,

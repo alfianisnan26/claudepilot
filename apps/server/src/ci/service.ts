@@ -24,6 +24,7 @@ import {
   type CiRun,
   type CiRunFilter,
   type CiRunList,
+  type CiRunPage,
   type CiRunStateFile,
   type CiRunSummary,
   type CiStatus,
@@ -1592,8 +1593,21 @@ export class CiService {
   }
 
   list(f: CiRunFilter = {}): CiRunList {
-    const { rows, total, active } = this.#cs.listRuns({ workspace: f.workspace, repoId: f.repo, pipeline: f.pipeline, branch: f.branch, statuses: f.status, ticket: f.ticket, session: f.session, before: f.before, limit: f.limit });
+    const { rows, total, active } = this.#cs.listRuns({ workspace: f.workspace, repoId: f.repo, pipeline: f.pipeline, branch: f.branch, statuses: f.status, ticket: f.ticket, session: f.session, limit: f.limit });
     return { items: rows.map((r) => this.#summary(r)), total, active };
+  }
+
+  /**
+   * D-58: one page of runs for `GET /api/ci/runs` (`{ items, next }`, plus `total` and `active` on the first page). `scope` names the caller;
+   * the cursor is bound to it and to every filter value. `keep` is the caller's authz check (`view`), run on every run before it is shown.
+   */
+  listPage(f: CiRunFilter, args: { caller: string; cursor?: string | undefined; limit?: unknown; keep?: (r: { id: string }) => boolean }): CiRunPage {
+    const scope = `ci.runs|${JSON.stringify([args.caller, f.workspace ?? '', f.repo ?? '', f.pipeline ?? '', f.branch ?? '', f.ticket ?? '', f.session ?? '', f.status ?? []])}`;
+    const { rows, next, total, active } = this.#cs.listRunsPage(
+      { workspace: f.workspace, repoId: f.repo, pipeline: f.pipeline, branch: f.branch, statuses: f.status, ticket: f.ticket, session: f.session },
+      { scope, cursor: args.cursor, limit: args.limit, keep: args.keep },
+    );
+    return { items: rows.map((r) => this.#summary(r)), next, ...(total !== undefined ? { total, active } : {}) };
   }
 
   async runs(f: CiRunFilter = {}): Promise<CiRunList> {

@@ -39,11 +39,6 @@ async function body<T>(c: Context): Promise<Partial<T>> {
   }
 }
 
-const int = (raw: string | undefined): number | undefined => {
-  const n = Number(raw);
-  return raw !== undefined && Number.isFinite(n) ? n : undefined;
-};
-
 /** A person deciding: never a Portal MCP token, an agent's session or a job, whatever their scope. */
 function person(actor: Actor): CiDecider {
   if (actor.kind !== 'user') throw new AppError('FORBIDDEN', 'Only a person signed in to the portal can do this.');
@@ -73,9 +68,10 @@ export function createCiRoutes(ci: CiService): Hono {
         })
       : undefined;
     const actor = actorOf(c);
-    const list = await ci.runs({ workspace: q.workspace || undefined, repo: q.repo || undefined, pipeline: q.pipeline || undefined, branch: q.branch || undefined, status, ticket: q.ticket || undefined, session: q.session || undefined, before: q.before || undefined, limit: int(q.limit) });
-    const items = visible(actor, 'ci_run', list.items, (r) => r.id);
-    return c.json(success(items.length === list.items.length ? list : { ...list, items, total: items.length, active: items.filter((r) => r.status === 'queued' || r.status === 'running').length }));
+    // D-58: one page, `{ items, next }` (25 by default, 100 at most); every run is checked with `view` before it is shown, `next` points at the
+    // last run shown, and the cursor is bound to the caller and every filter (a bad or foreign one is a 400). `total` and `active` ride on page 1.
+    const keep = (r: { id: string }) => visible(actor, 'ci_run', [r], (x) => x.id).length > 0;
+    return c.json(success(ci.listPage({ workspace: q.workspace || undefined, repo: q.repo || undefined, pipeline: q.pipeline || undefined, branch: q.branch || undefined, status, ticket: q.ticket || undefined, session: q.session || undefined }, { caller: actorString(actor), cursor: q.cursor || undefined, limit: q.limit, keep })));
   });
   app.post('/runs', async (c) => {
     const req = await body<StartCiRunRequest>(c);

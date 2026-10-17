@@ -1,6 +1,8 @@
 // The CI tables (migration 80, PRD §12): thin typed reads and writes. All SQL for CI is here; the service decides what to do.
 
 import { AppError } from '@isnanme/core';
+import { CURSOR_MAX_LIMIT } from '@portal/contracts';
+import { clampLimit, cursorAfter, keysetPage } from '../store/keyset.js';
 import type { Store } from '../store/store.js';
 
 export interface RepoRow {
@@ -189,7 +191,6 @@ export interface RunFilter {
   statuses?: string[];
   ticket?: string;
   session?: string;
-  before?: string;
   limit?: number;
 }
 
@@ -313,10 +314,9 @@ export class CiStore {
     this.#writableDb.prepare(`UPDATE ci_runs SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`).run(...keys.map((k) => patch[k] ?? null), id);
   }
 
-  /** Runs matching the filters, newest first, with how many match and how many of those are not finished. */
-  listRuns(f: RunFilter): { rows: RunRow[]; total: number; active: number } {
+  #runWhere(f: RunFilter): { where: string[]; args: string[] } {
     const where: string[] = [];
-    const args: (string | number)[] = [];
+    const args: string[] = [];
     if (f.workspace) (where.push('workspace_id = ?'), args.push(f.workspace));
     if (f.repoId) (where.push('repo_id = ?'), args.push(f.repoId));
     if (f.pipeline) (where.push('pipeline = ?'), args.push(f.pipeline));
@@ -324,20 +324,45 @@ export class CiStore {
     if (f.ticket) (where.push('ticket_id = ?'), args.push(f.ticket));
     if (f.session) (where.push('session_id = ?'), args.push(f.session));
     if (f.statuses?.length) (where.push(`status IN (${f.statuses.map(() => '?').join(', ')})`), args.push(...f.statuses));
+    return { where, args };
+  }
+
+  /** Runs matching the filters, newest first, with how many match and how many of those are not finished. */
+  listRuns(f: RunFilter): { rows: RunRow[]; total: number; active: number } {
+    const { where, args } = this.#runWhere(f);
     const sql = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const total = Number((this.#db.prepare(`SELECT count(*) AS n FROM ci_runs ${sql}`).get(...args) as { n: number }).n);
     const active = Number((this.#db.prepare(`SELECT count(*) AS n FROM ci_runs ${sql ? `${sql} AND` : 'WHERE'} status IN ('queued', 'running')`).get(...args) as { n: number }).n);
-    let page = sql;
-    const pageArgs = [...args];
-    if (f.before) {
-      const before = this.run(f.before);
-      if (before) {
-        page = `${sql ? `${sql} AND` : 'WHERE'} (created_at < ? OR (created_at = ? AND id < ?))`;
-        pageArgs.push(before.created_at, before.created_at, before.id);
-      }
-    }
-    const rows = this.#db.prepare(`SELECT * FROM ci_runs ${page} ORDER BY created_at DESC, id DESC LIMIT ?`).all(...pageArgs, Math.max(1, Math.min(f.limit ?? 50, 200))) as unknown as RunRow[];
+    const rows = this.#db.prepare(`SELECT * FROM ci_runs ${sql} ORDER BY created_at DESC, id DESC LIMIT ?`).all(...args, Math.max(1, Math.min(f.limit ?? 50, 200))) as unknown as RunRow[];
     return { rows, total, active };
+  }
+
+  /**
+   * D-58: one page of {@link listRuns}' order (newest first, the id breaking ties), by keyset, so a run started during a walk never repeats or
+   * skips a row. `scope` binds the cursor to the caller and the filters. `keep` is the caller's authz filter: refused runs are not shown, not
+   * counted, and the cursor points at the last run SHOWN. Without a cursor the page also carries `total` and `active` over what `keep` lets
+   * through. A bad or foreign cursor is a 400.
+   */
+  listRunsPage(f: RunFilter, args: { scope: string; cursor?: string | undefined; limit?: unknown; keep?: (r: { id: string }) => boolean }): { rows: RunRow[]; next: string | null; total?: number; active?: number } {
+    const { where, args: params } = this.#runWhere(f);
+    const limit = clampLimit(args.limit);
+    const spec = { scope: args.scope, table: 'ci_runs', sortCol: 'created_at', idCol: 'id', ...(where.length ? { where: where.join(' AND '), params } : {}) };
+    const shown: RunRow[] = [];
+    let cursor = args.cursor;
+    for (let guard = 0; guard < 10_000; guard++) {
+      const got = keysetPage<RunRow & Record<string, unknown>>(this.#db, spec, { cursor, limit: CURSOR_MAX_LIMIT });
+      for (const r of got.rows) if (!args.keep || args.keep(r)) shown.push(r);
+      if (shown.length > limit || !got.next) break;
+      cursor = got.next;
+    }
+    const rows = shown.slice(0, limit);
+    const last = rows[rows.length - 1];
+    const next = shown.length > limit && last ? cursorAfter(args.scope, last.created_at, last.id) : null;
+    if (args.cursor) return { rows, next };
+    const sql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    const every = this.#db.prepare(`SELECT id, status FROM ci_runs ${sql}`).all(...params) as { id: string; status: string }[];
+    const seen = args.keep ? every.filter((r) => args.keep!(r)) : every;
+    return { rows, next, total: seen.length, active: seen.filter((r) => r.status === 'queued' || r.status === 'running').length };
   }
 
   /** Runs executing in this workspace: its own, and those a runner took from other workspaces (T-557). */
