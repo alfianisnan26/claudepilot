@@ -15,9 +15,12 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   T-379 S2, format fix 787932e2, integration (T-924), T-860 S2c a87d00b8 (PWG 9638), T-382 S2-S4 (PWG 9691; S5 fup).
   Resolution trace T-595 9742. + integration (release 2026.10.17-2, D-79) = e0f7a72d (wip/main-e0f7a72). QUICK-CHECK running
   (job-out/qc-e0f7a72.log; earlier runs cut: bg limit, then my session ended) -> gate-job -> land -> T-731. Bg Jobs: timeout 7200000.
-- Cluster queue ~14 Jobs (control-plane >75% memory): lanes T-921 and T-938 each on a 3rd Job attempt (2-h limit).
+- Cluster queue ~14 Jobs (control-plane >75% memory): T-938 lane on a 3rd Job attempt (2-h limit).
+- URGENT T-948 S1 port proxy (owner waiting; coordinator 9810): BE INFRA 2 2a0edbd8 OPUS (why: security), ticket/T-948-port-proxy
+  from d741a52d. Subdomain mode app-<ws>-<port>.ai.isnan.me + one-time code handoff (decision 9811). T-921 lane ended for it
+  (head 0dfff348 kept; re-run its Job later). Then QA, then Frontend "Ports" (S2).
 - Lanes (all hasyim, auto, sonnet; respawned 10:00 from pushed heads after the restart):
-  BE INFRA a3554d40 T-938 259935e8 (yaml case added; Job). BE INFRA 2 e2d8d27c T-921 0dfff348 (Job; dev rig = coordinator).
+  BE INFRA a3554d40 T-938 259935e8 (yaml case added; Job). T-921 PAUSED at 0dfff348 (lane ended for T-948).
   BACKEND 524bf92b (sekar) T-425 S2b: kill M1/M2a/M4/M5 + detached-send hang test (QA PWG 9770; decision T-595 9772).
   QA 694614c4 (one.claude) T-409 G3 ee75effd (built, DONE 9758). IMPL 2 3189279b T-436 S3 + T-772 S2g e4e2c4ff.
   IMPL c6418f2a T-379 S3 (image in --reuse key) from b30.
