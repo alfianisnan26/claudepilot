@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
-import { closeSync, openSync, readdirSync, statSync, writeFileSync, writeSync } from 'node:fs';
-import { join } from 'node:path';
+import { closeSync, openSync, readdirSync, readFileSync, statSync, writeFileSync, writeSync } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
 import { MIGRATIONS, type Migration } from './migrations.js';
-import { compareCounts, gunzipBackup, listNightly, nightlyBackup, nightlyDir, nightlyStatus, restoreAny, restoreDrill, rowCounts, toKeep } from './nightly.js';
+import { compareCounts, gunzipBackup, listNightly, nightlyBackup, nightlyDir, nightlyNames, nightlyStatus, restoreAny, restoreDrill, rowCounts, toKeep } from './nightly.js';
 import { generateSecretKey, parseSecretKey } from './secretBox.js';
-import { Store } from './store.js';
+import { restoreBackup, Store } from './store.js';
 import { tempDirectory } from './testTmp.js';
 
 const newKey = () => parseSecretKey(generateSecretKey());
@@ -127,6 +127,43 @@ test('restore drill: a nightly restores into a scratch folder, timed, with every
   // The live data dir is untouched by a drill.
   assert.equal(listNightly(nightlyDir(dir)).length, 1);
   assert.ok(!readdirSync(join(dir, 'backups')).some((n) => n.includes('replaced')), 'the drill never replaced the live database');
+});
+
+test('the drill compares the backup with the restored copy: a row or a table lost in the restore is reported', async () => {
+  // QA gap (T-565): a drill that compared the restored copy with itself passed every test. Here the restore loses data on purpose.
+  const { dir, key, store } = await filled(20);
+  const { file } = await nightlyBackup({ dataDir: dir });
+  store.close();
+  const lossy = (sql: string) => async (o: Parameters<typeof restoreBackup>[0]) => {
+    await restoreBackup(o);
+    const db = new DatabaseSync(join(o.dataDir, 'portal.db'));
+    try {
+      db.exec(sql);
+    } finally {
+      db.close();
+    }
+  };
+  const row = await restoreDrill({ file, secretKey: key, migrations: withNotes, restore: lossy('DELETE FROM notes WHERE id = 7') });
+  assert.deepEqual(row.mismatches, [{ table: 'notes', backup: 20, restored: 19 }]);
+  const table = await restoreDrill({ file, secretKey: key, migrations: withNotes, restore: lossy('DROP TABLE notes') });
+  assert.deepEqual(table.mismatches, [{ table: 'notes', backup: 20, restored: null }]);
+  // The same seam, restoring faithfully, is a pass: the check is in the comparison, not in the seam.
+  const same = await restoreDrill({ file, secretKey: key, migrations: withNotes, restore: lossy('SELECT 1') });
+  assert.deepEqual(same.mismatches, []);
+});
+
+test('the work files start with a dot and the finished file does not, so the off-site mirror (--exclude ".*") skips only work files', () => {
+  const dir = '/data/backups/nightly';
+  const n = nightlyNames(dir, new Date('2026-10-14T02:17:00Z'));
+  for (const f of [n.copy, n.part, n.file]) assert.equal(dirname(f), dir);
+  assert.ok(basename(n.copy).startsWith('.'), n.copy);
+  assert.ok(basename(n.part).startsWith('.'), n.part);
+  assert.equal(basename(n.file), 'portal-20261014T021700Z-nightly.db.gz');
+  assert.ok(!basename(n.file).startsWith('.'));
+  assert.equal(new Set([n.copy, n.part, n.file]).size, 3);
+  // The CronJob's mirror excludes exactly the dot names.
+  const yaml = readFileSync(new URL('../../../../deploy/k3s/backup/portal-backup.yaml', import.meta.url), 'utf8');
+  assert.match(yaml, /- --exclude\n\s+- "\.\*"\n/);
 });
 
 test('the drill reports a lost row, a lost table and an extra table', () => {

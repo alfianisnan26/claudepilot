@@ -97,6 +97,15 @@ function quickCheck(file: string) {
 }
 
 /**
+ * The paths of one nightly in `dir`: the finished `file`, and the two work files (`copy`, the plain copy; `part`, the gzip being
+ * written). The work files start with a dot: the CronJob's mirror runs with `--exclude ".*"`, so it never uploads half a file.
+ */
+export function nightlyNames(dir: string, at: Date): { copy: string; part: string; file: string } {
+  const name = `portal-${stamp(at)}-nightly.db.gz`;
+  return { copy: join(dir, `.${name}.db`), part: join(dir, `.${name}.part`), file: join(dir, name) };
+}
+
+/**
  * Takes the nightly backup: an online copy of `<dataDir>/portal.db` (no lock, no pause for the portal), integrity-checked,
  * gzipped to `portal-<UTC stamp>-nightly.db.gz` (mode 0600, written under a dot name and renamed, so a mirror never sees half
  * a file), then prunes to the retention.
@@ -106,10 +115,7 @@ export async function nightlyBackup(opts: { dataDir: string; dir?: string; now?:
   if (!existsSync(path)) throw new Error(`No database at ${path}.`);
   const dir = opts.dir ?? nightlyDir(opts.dataDir);
   ensurePrivateDir(dir);
-  const name = `portal-${stamp((opts.now ?? (() => new Date()))())}-nightly.db.gz`;
-  const copy = join(dir, `.${name}.db`);
-  const part = join(dir, `.${name}.part`);
-  const file = join(dir, name);
+  const { copy, part, file } = nightlyNames(dir, (opts.now ?? (() => new Date()))());
   try {
     const db = new DatabaseSync(path, { readOnly: true, timeout: 5000 });
     try {
@@ -190,12 +196,19 @@ export interface DrillResult {
  * The restore drill: restores `file` into a scratch data dir (never the live one), timed, and compares the row count of every
  * table in the backup with the restored database. Read-only for the live portal; safe while it runs.
  */
-export async function restoreDrill(opts: { file: string; secretKey: Buffer | null; scratchDir?: string; migrations?: Migration[] }): Promise<DrillResult> {
+export async function restoreDrill(opts: {
+  file: string;
+  secretKey: Buffer | null;
+  scratchDir?: string;
+  migrations?: Migration[];
+  /** Test seam: the restore itself (`restoreBackup` by default), so a test can make the restored copy differ from the backup. */
+  restore?: (o: Parameters<typeof restoreBackup>[0]) => Promise<unknown>;
+}): Promise<DrillResult> {
   const scratch = opts.scratchDir ?? mkdtempSync(join(tmpdir(), 'cp-drill-'));
   try {
     const started = performance.now();
     const source = opts.file.endsWith('.gz') ? await gunzipBackup(opts.file, join(scratch, '.source.db')) : opts.file;
-    await restoreBackup({ dataDir: scratch, file: source, secretKey: opts.secretKey, migrations: opts.migrations });
+    await (opts.restore ?? restoreBackup)({ dataDir: scratch, file: source, secretKey: opts.secretKey, migrations: opts.migrations });
     const ms = performance.now() - started;
     const want = rowCounts(source);
     const mismatches = compareCounts(want, rowCounts(join(scratch, 'portal.db')));
