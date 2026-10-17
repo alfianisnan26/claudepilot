@@ -1,4 +1,4 @@
-# orchestrator status (2026-10-17 19:55 UTC, session 355881a3; older entries: git history)
+# orchestrator status (2026-10-17 22:55 UTC, session 355881a3; older entries: git history)
 
 ## DONE
 - Batches 22-30: git history (b30 08feccc6 gate green). Batch 29 released 2026.10.17-2. Close each on the coordinator's live checks.
@@ -9,8 +9,9 @@
   off-state ok (10854); ON state = coordinator live check (10822). Close on that check.
 - T-976 1b99696f: auth conflict in app.ts with identity code (4 hunks) -> 2a0edbd8 rebases FIRST (10855; risk note FOR THE
   COORDINATOR: shadowing nuisance until T-976 is live) -> QA delta + blind.
-- BATCH 32 premerge/b32 18d8e9d0 (+ integration 73ef53ca): T-382 S6, T-294 FIX1, T-1049. QC job ebc50c9c: lint ok, 4/4 tests ok,
-  format only (24 files, same rule as T-948 10722; T-595) -> GATE running (gate-18d8e9d.log) -> ff land. T-425 S2b CONFLICT (controller.ts send path) -> merge by 3753d3c2 after H2 -> QA delta -> b33.
+- BATCH 32 LANDED 22:54: integration 74599ece (gate claudepilot-gate-18d8e9d-f5f1 green on 18d8e9d0; status-only merge on top):
+  T-382 S6, T-294 FIX1, T-1049. Relayed T-731 10876 -> coordinator deploys. Format sweep stays T-1032 (10857).
+- T-425 S2b CONFLICT (controller.ts send path) -> 3753d3c2 resolves ticket/T-425-s2b-merge ac45f735 + test -> QA delta -> b33.
 - T-1043 S0a FIX1 3c907e76 (badfb8da rc0, 274/274) -> delta c691df71 + blind d9f18599. S0b: lead merged S0a in, 789474e4
   (trace T-1043 10772) -> 76845676 continues. Denial = 404 (10605).
 - T-974 URGENT FIX 6abbf44f blind PWG 10774 (10 mutants killed) -> FIX2 `git remote set-url/add` + -c case row, a3554d40 first.
@@ -29,8 +30,9 @@
 - T-968 S2a 896daa98 PWG x2 (QA 10802, blind 10803 Job c04c05e7 12/13 killed) -> gaps fixed in S2b by 2a0edbd8 (10804);
   S2a+S2b land together after the c691df71 delta + d9f18599 blind.
 - 21:30 both QA lanes idle (every verdict waits on a builder fix; T-595 note). 20:45 third-QA-lane plan WITHDRAWN.
-- Lanes: c691df71 QA (S0a delta > T-565 delta > T-968 S2a); d9f18599 QA (T-974 > S0a blind > T-971 delta > PRD);
-  a3554d40 T-971 fix + T-969; 76845676 T-1043 S0b; 3753d3c2 T-971 H2; 2a0edbd8 T-565 fix + T-968 S2b.
+- Lanes: c691df71 QA (H2 S1 > T-975 delta > S0a+S0b > S2b > T-565 > T-976); d9f18599 QA/blind (H2 S1 blind > T-974 FIX2 >
+  T-971 H1 delta > PRD > S2b blind > S0b blind); a3554d40 T-974 FIX2 > T-975 FIX > T-971 H1 fix > T-969; 76845676 T-1043
+  S0a+S0b; 2a0edbd8 T-976 rebase > T-565 fix > T-968 PRD > S2b; 3753d3c2 T-425 S2b merge > batch 33.
 
 ## DECISIONS (binding)
 - D-81 risk-based review: same builder through all fixes; one QA, the same QA re-checks; blind review only for security, auth,
@@ -55,7 +57,7 @@
 - T-93 Konfersi production (owner checklist). T-610 pre-deploy read-only prod count (through the coordinator).
 
 ## NEXT (in order, as slots free)
-1. Batch 32: T-425 S2b, T-382 S6, plus what passes (T-294, T-938, T-974, T-1049).
+1. Batch 33: T-425 S2b, plus what passes (T-974, T-971 H1+H2 S1, T-975, T-968 S2a+S2b, T-1043 S0a+S0b, T-976).
 2. T-976 after its rebase. T-1043 S0b sockets, S0c MCP tools.
 3. T-968 General Manager (S0 scribe, S2 MCP incl. T-965), T-971 H2, T-975.
 4. T-356, T-30 (XL), T-33, T-921, T-379 S3 (paused).
