@@ -10,6 +10,7 @@ import { clearResolvers } from '../authz/seam.js';
 import { registerChatAuthz } from './authz.js';
 import { Reauth } from './reauth.js';
 import { createChatMetaRoutes } from './routes.js';
+import { ChatStore } from './store.js';
 import { liveSession, until, type Live } from './testkit.js';
 
 afterEach(() => clearResolvers());
@@ -46,7 +47,8 @@ const walk = async (a: Hono, qs: string, limit: number, between?: (n: number) =>
   throw new Error('the walk did not end');
 };
 const write = (s: Live, n: number, o: { kind?: string; sessionId?: string | null } = {}) => {
-  for (let i = 0; i < n; i++) s.store.addAudit({ severity: 'info', kind: o.kind ?? 'test.page', sessionId: o.sessionId ?? null, actor: 'portal', detail: { i } });
+  const chat = new ChatStore(s.store);
+  for (let i = 0; i < n; i++) chat.addAudit({ severity: 'info', kind: o.kind ?? 'test.page', sessionId: o.sessionId ?? null, actor: 'portal', detail: { i } });
 };
 const all = (s: Live, kind = 'test.page') => (s.store.db!.prepare('SELECT id FROM chat_audit WHERE kind = ? ORDER BY id DESC').all(kind) as { id: number }[]).map((r) => r.id);
 
