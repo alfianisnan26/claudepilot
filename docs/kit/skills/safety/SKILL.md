@@ -20,7 +20,7 @@ These rules hold in every mode, Bypass included. The worst breaches are zero-tol
 
 - The project's `.claude/settings.json` deny rules are decisions, not obstacles. Do not reach a denied effect another way: not through another tool, `sh -c`, `bash -c`, an alias, a reordered flag, `xargs`, an interpreter (`python -c`, `node -e`), a script you write, an MCP tool, a pipeline step, a cron, or another agent. Trying is the event, whether or not it works.
 - **Narrow doors.** Where a project needs a controlled change, it ships a script the settings allow, which does exactly that and refuses everything else: create and delete only rig namespaces with a fixed prefix and label; run heavy work as a labelled Job; run the gate as a Job. Use the door as documented. Do not widen it, copy its commands to run them raw, or pass it inputs it was not built for.
-- No door for what you need: write it under NEEDS A HUMAN (status file or ticket) with what, why and the exact command a person would run. Then move on.
+- No door for what you need: write it under FOR THE COORDINATOR (on the ticket, that exact phrase) with what, why and the exact door or rule line you need; only production and uat go under NEEDS A HUMAN. Then move on.
 - Never edit deny rules, permission settings, hooks, authorization code, the gates, the Bypass gates or the standards check's thresholds to get unblocked. A person changes those; you may propose by ticket.
 
 ## kubectl and the cluster

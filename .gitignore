@@ -15,3 +15,5 @@ dist/
 .pilot/out/
 job-run-artifacts/
 job-out/
+# Skill reference files are part of the kit (published to the portal), so they are versioned (T-937).
+!docs/kit/skills/*/references/

@@ -7,22 +7,29 @@ description: Use when you are about to ask a person anything - a question, an ap
 
 Human touch is a scored term in two classes that are never mixed. A **required** escalation is never penalised, and skipping one (acting without the person) voids the unit. An **avoidable** question (it had a written default, or the answer would have been "decide yourself" or "the default is fine") counts against the unit. Nobody answers in real time: an autonomous chat that waits for an answer is idle.
 
-## 1. Is it required?
+## 1. Who it goes to (D-62: the owner's only standing action is PRODUCTION)
 
-Required, and only these:
+**Needs a human, and only these two:**
 
 | Class | Examples |
 | --- | --- |
-| Production | any change, deploy, data read or credential that reaches production |
-| UAT | any change, deploy, data read or credential that reaches uat |
-| Secrets and permissions | a new secret or token, rotating or revoking one, a new permission, a role, an account added to a team, a deny rule or a protected setting |
-| Billing | anything that spends money beyond the set budgets: a plan, a paid key, a spend cap |
-| Legal | licences, terms, personal data, anything signed or published in someone's name |
-| Destructive data | deleting or overwriting data that is not a disposable scratch copy |
+| Production | any change, deploy, data read, credential or published text that reaches production |
+| UAT | any change, deploy, data read or credential that reaches uat, including a migration on a database that uat shares (D-77) |
 
-Also never an agent's to do, whatever the class: approving a deploy or a merge that a person must approve, changing the charter's walls (safety rules, deny rules, authz, gates, scoring). Those are written down for a person, never worked around.
+**For the coordinator, never a person** (the coordinator decides or lands it, D-60/D-62; write it under `FOR THE COORDINATOR:` on the ticket, that exact phrase, and the coordinator's watch reads it within minutes):
 
-A reassignment, a restart, a continuation, a mode change or a move is not required: the platform step is yours (`ticket_adopt` for the tickets of an ended session) and goes as one line on the status ticket. A ticket whose session ended is never a reason to ask the owner.
+| Class | Examples |
+| --- | --- |
+| Secrets and permissions | a new secret or token (by name, never the value), rotating one through a system the program already holds, a permission, an allow or deny line, a hook, folder trust, RBAC |
+| Rule files and walls | `.claude/settings*.json`, `.mcp.json`, an allow-list checker, the charter's safety rules, gates and scoring: tightenings land at once, loosenings after one blind reviewer's PASS on the ticket |
+| Infra | the cluster, images, pools, runners, deploys, a workspace restart, a door script |
+| Billing | spend inside the set budgets; anything beyond them stays undone (the default), and the coordinator says so |
+| Legal | drafts; publishing in production is the Production class |
+| Destructive data | outside production and uat (stg, dev, scratch): with a backup and an undo, decided by the coordinator |
+
+Never tag a ticket `owner-*`, `waits-owner` or `needs-person`, never mark it blocked on the owner, and never write "a person's step" for anything in the second table: that parks work for hours (2026-10-16: about 14 tickets sat blocked this way). Approving a deploy or a merge that a person must approve, and getting around a deny rule, a gate or an approval, stay forbidden for every agent: write it for the coordinator instead.
+
+A reassignment, a restart, a continuation, a mode change or a move is not an escalation: the platform step is yours (`ticket_adopt` for the tickets of an ended session) and goes as one line on the status ticket. A ticket whose session ended is never a reason to ask the owner.
 
 Everything else is **avoidable**: product choices, naming, UI text, test strategy, ordering, a stg question with a documented default, a library choice, a refactor's shape.
 
@@ -37,7 +44,7 @@ Do not use the interactive question tool in an autonomous chat. Do not open a ne
 
 ## 3. Required: one checklist per program
 
-Each program keeps **one** owner checklist ticket (assigned to a person) for everything only a person can do. Production-only questions are one line on it, never a new ticket. Optional checks (a real phone, a real browser on the owner's machine, polish, "please confirm it feels right") never go on it: they are the agents' work, verified in a harness or a scratch browser, and any limit ("not verified on a real device") is stated on the ticket, not turned into a task for the owner.
+Each program keeps **one** owner checklist ticket (assigned to a person) for the two human classes only: production and uat (Konfersi: T-93). Production-only questions are one line on it, never a new ticket. Optional checks (a real phone, a real browser on the owner's machine, polish, "please confirm it feels right") never go on it: they are the agents' work, verified in a harness or a scratch browser, and any limit ("not verified on a real device") is stated on the ticket, not turned into a task for the owner.
 
 1. Search for the checklist (`ticket_list`, assignee `user`, a query such as "checklist"). Add your item as a comment (`ticket_comment`). Create a ticket assigned to a person (`ticket_create`, assignee `user`, type `approval` or `question`) only when the item cannot wait for the checklist's next read, or when the program has no checklist yet: then create the checklist itself.
 2. The orchestrator also lists it under NEEDS A HUMAN in its status file, with exact steps.
@@ -49,7 +56,7 @@ When a person must decide, give them everything in one message; never a trickle 
 
 ```
 Needs: <the decision or action, one line>
-Class: <production | uat | secrets and permissions | billing | legal | destructive data>
+Class: <production | uat>   (anything else: write the same block under FOR THE COORDINATOR: on the ticket)
 Why: <the evidence, links>
 Options: A) ...  B) ...
 Recommendation: <A or B, and why>

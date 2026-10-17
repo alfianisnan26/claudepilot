@@ -106,7 +106,7 @@ A ticket is good when an agent that has not seen your chat can deliver it withou
 - **What to build, in order**: slices that are useful alone; the first one thin.
 - **Done criteria**: checkable by someone else (a test that fails before and passes after, a measured number, a screenshot at a named width, a PRD section updated).
 - **Priority and rank**: priority, a `rank-NN` tag if you own the ranking, the dependencies ("after T-n"), tags, type.
-- **Risks and walls**: what must not be touched, what needs a person (the required classes only).
+- **Risks and walls**: what must not be touched, what needs a human (production or uat only) and what goes FOR THE COORDINATOR (permissions, rules, secrets by name, infra).
 - **Never a secret**: describe where it lives by its name.
 - One problem per ticket. Search first (`ticket_list` with a query); name a duplicate on the existing ticket instead of creating a second one.
 
