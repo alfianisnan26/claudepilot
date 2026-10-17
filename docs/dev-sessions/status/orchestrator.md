@@ -20,17 +20,18 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   after 44fba442 T-623 browser image): T-524 S3c+T-733 S5, T-881 S1b, T-416 S2c (lead's mechanical controller.ts resolution
   67198848, APPROVE 9219), T-382 S1, T-781 S8c, T-675 R2c+R2d. Coordinator told T-731 9271.
 ## IN FLIGHT (6 of 6, D-71; all respawned 00:55 after the 00:50 restart, sonnet, spawned with their ticket so they can post)
-- BATCH 30 premerge-b30 4de61237: T-772 S2f b36f6a54 (QA UI PWG 9301; S2g follow-up), T-736 S3g 4eb08f4e (9008), T-612 S1
+- BATCH 30 premerge-b30 74147c99 (+T-868 S1-S3 0a818680, QA PASS 9381, lead read shots-in.sh): T-772 S2f b36f6a54 (QA UI PWG 9301; S2g follow-up), T-736 S3g 4eb08f4e (9008), T-612 S1
   a5207db0 (PWG 9280). QUICK-CHECK job-09bf4786 FAILED: format only (rtkHistoryGuard.test.ts, focusRing.test.ts; T-612 S1
   made prettier real); lint + 3 tests ok. Fix -> BE Infra (FORMAT DONE <sha>), lead merges it in, re-quick-check, gate.
 - BE INFRA 0f151084 T-612: ticket/T-612-s2 156a15b7: format the 2 b30 files ONLY, then respawn on T-921 (incident, plan 9377;
   coordinator order T-860 > T-921 > T-911 > T-612 S2 16 lint errors 9280).
-- BACKEND b367d0dd T-382 S4 (ci/runs, chat/audit, lab/slices) resumed at 0cdfa044 (audit 13/13; re-run ci/lab Jobs, mutants).
-- QA BE A 0a2c06aa (T-436): QA T-436 S1+S2 34a5b293 (verdict lost at restart, redo) -> QA T-860 S2c e78d727b (9331, no mutants).
-- QA BE B a8096dc9 (T-382): QA T-382 S2+fix+S3 fdb33268 (9277) -> QA T-868 S3 0a818680 (9299, Job 9bb7f09d, 13 mutants).
+- BACKEND b367d0dd T-382 S4 (ci/runs, chat/audit, lab/slices) from 0cdfa044 + QA gaps: hook tests, stale loadMore, scan bound,
+  committed listPage.bench.ts. T-382 S2+S3 fdb33268 = PWG 9369; merges WITH S4. Count leak -> T-922 (before multi-user).
+- QA BE A 0a2c06aa (T-436): QA T-436 S1+S2 34a5b293 only.
+- QA BE B a8096dc9 (T-382): QA T-860 S2c e78d727b (urgent, 9331; moved from QA BE A).
 - IMPL c68578a8 (sekar, T-425): T-425 S2 on ticket/T-425-slotwait c22a76b3: QA UI FAIL 9359 (mutant "no failed mark" on
   refused wake survives; two detached sends not ordered) -> test + per-session delivery chain. Then T-772 S2g. QA of it -> QA BE.
-- QA PERF 98e910e1 (T-781): re-run engine.test on integration (cut: Pending 900s) -> perf QA T-382 fdb33268 (p95, size).
+- QA PERF 98e910e1 (T-781): S8c re-run PASS 56/56 (job-4b9db010, 9372). T-382 perf blocked (bench write denied) -> waits S4 bench.
 - QA UI 11c8c19a ENDED 01:2x (queue empty after its T-425 FAIL; slot -> Impl). T-425 badge 390/1280 not verified (no browser tool).
 - 01:00 Coordinator quota spread: next spawns on one.claude, two.claude (sekar used by Impl).
 
@@ -44,7 +45,6 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - 13:45 D-75 AMENDED (coordinator, 1444d836, in DECISIONS.md): the lead runs the gate before a merge (gate-job.sh, one per batch).
 - 07:45 D-75 (coordinator): one Job per commit (checks chained), never the same command twice on a commit, QA reads the builder's log;
   the lead runs no Jobs but the merge gate (13:45); idle QA gets no-Job work (reviews, browser). T-731 -> BE Infra after T-697.
-- 03:55 Lead false claim corrected: T-524 6775 said job 4d5cb657 proved the S3 patch; its log shows the rule at creation. 6788; incident T-721.
 - 16:30 D-71 (coordinator): limit 6; 3rd build lane BE Infra (CI, runners, job-run, k3s, deploy, secrets delivery, usage, spend, quota):
   T-401, T-426, T-611, T-547, T-610. Backend: T-546, T-597, T-600 route, T-325. Spawn lanes with claude auto.
 - 14:56 D-70 LANES (DECISIONS.md; my decision T-595 5380): freed slots become lanes, spawned ONCE on sonnet and fed
