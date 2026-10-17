@@ -11,8 +11,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 ## IN FLIGHT (6 of 6, D-71; lanes respawned per ticket, D-78; sonnet)
 - BATCH 30 premerge-b30 b9781ad6 (wip/main-b9781ad): T-772 S2f, T-736 S3g, T-612 S1, T-868 S1-S3, T-436 S1+S2 (deploy note),
   T-379 S2, format fix 787932e2, integration (T-924), T-860 S2c a87d00b8 (PWG 9638), T-382 S2-S4 (PWG 9691; S5 fup).
-  Resolution trace T-595 9742. + integration (release 2026.10.17-2, D-79) = e0f7a72d (wip/main-e0f7a72). QUICK-CHECK running
-  (job-out/qc-e0f7a72.log; earlier runs cut: bg limit, then my session ended) -> gate-job -> land -> T-731. Bg Jobs: timeout 7200000.
+  Resolution trace T-595 9742. + integration (release 2026.10.17-2, D-79) = e0f7a72d (wip/main-e0f7a72). QUICK-CHECK run 4
+  (job-out/qc-e0f7a72-2.log; earlier: bg limit, session end, Job Pending 900 s on a full cluster) -> gate-job -> land -> T-731. Bg Jobs: timeout 7200000.
 - Cluster queue ~14 Jobs (control-plane >75% memory): T-938 lane on a 3rd Job attempt (2-h limit).
 - URGENT T-948 S1 port proxy (owner waiting; coordinator 9810): BE INFRA 2 2a0edbd8 OPUS (why: security), ticket/T-948-port-proxy
   from d741a52d; contract first (~11:30). Subdomain app-<ws>-<port>.ai.isnan.me + one-time code + frame-ancestors (9811).
@@ -75,4 +75,4 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
    T-399, T-370 HOLD, T-371..T-374, T-363, T-451, T-470, T-507, T-508, T-512, T-520; T-404 open till deployed.
 
 LESSONS: a lane's rules are its worktree's .claude/settings.json: cut worktrees from integration (>= 165db813) for the absolute form; reply_of = LATEST reply only (verdict must be the last reply; T-860 S2 sat 20 min unseen: check the urgent ticket's comments too); node --test, never vitest; a gate-done notice needs action; dontAsk workers cannot read /tmp, merge, gate or wait, and Bash only in their spawn worktree (new branch = new worker); whole
-test folders (T-574 red 10-15); integration moved during a gate = merge + re-gate (pack goes stale); FULL hashes; trailers in one block; status via Edit/Write ONLY; ancestor check before ff; NO status push while a gate runs (b23).
+test folders (T-574 red 10-15); integration moved during a gate = merge + re-gate (pack goes stale); FULL hashes; trailers in one block; a bg command's exit = its LAST command (tail!): append `echo RC=$?` to the log; status via Edit/Write ONLY; ancestor check before ff; NO status push while a gate runs (b23).
