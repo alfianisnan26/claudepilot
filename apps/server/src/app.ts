@@ -312,8 +312,9 @@ export function createApp(
     limiter.reset(key);
     const spec = sessionCookieSpec(https(c), ttlMs);
     setCookie(c, spec.name, token, spec.options);
-    // Over https the old name is cleared too (T-976 review 10534): a stale or planted `portal_session` would otherwise sit beside the new
-    // cookie and be read again the moment the `__Host-` one is gone (sessionCookie.ts read rule).
+    // Over https the old name is cleared too (T-976 review 10534): tidiness, not the protection. The delete has no Domain, so it only
+    // removes a host-only `portal_session` (this portal's own, from before T-976); one planted with Domain=<parent> by a sibling app host
+    // stays. What protects is the read rule (sessionCookie.ts): the `__Host-` cookie always wins over any `portal_session`.
     if (spec.name !== LEGACY_SESSION_COOKIE) deleteCookie(c, LEGACY_SESSION_COOKIE, { path: '/' });
     return c.json(success(portal.adminState(token)));
   });
