@@ -3452,6 +3452,14 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 401,
+    name: 'identity: a web session remembers which email account signed in (MU2 S1a)',
+    up(db) {
+      // NULL is the server code. The account's role is read on every use (portal.ts), so a role change or a disable applies at once.
+      db.exec('ALTER TABLE web_sessions ADD COLUMN user_id TEXT');
+    },
+  },
 ];
 
 /**

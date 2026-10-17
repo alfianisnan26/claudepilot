@@ -21,6 +21,8 @@ import {
   type EndpointRequest,
   type LoginRequest,
   type CreatePortalUserRequest,
+  type SignedInAs,
+  PORTAL_USER_API,
   type UpdatePortalUserRequest,
   type RotateCodeRequest,
   type SessionStatus,
@@ -220,6 +222,14 @@ export function createApp(
   const limiter = new RateLimiter(config.loginLimit.attempts, config.loginLimit.windowMs);
   // T-118 MU1-min: email accounts beside the server code (identity/users.ts).
   const users = new PortalUsers(() => (store.writable ? store.db : null));
+  // MU2 S1a: an account's role is read on every use; a member's session is not a full one (portal.ts).
+  portal.roleOf = (id) => {
+    try {
+      return users.roleOf(id);
+    } catch {
+      return null;
+    }
+  };
   const { cookie, ttlMs } = config.session;
 
   // Served over plain HTTP: no HSTS.
@@ -275,8 +285,9 @@ export function createApp(
 
   app.get(API.session, (c) => {
     const status: SessionStatus = {
-      authenticated: !!portal.session(getCookie(c, cookie)),
+      authenticated: !!portal.anySession(getCookie(c, cookie)),
       enabled: portal.enabled,
+      member: !!portal.anySession(getCookie(c, cookie)) && !portal.session(getCookie(c, cookie)),
       emailSignIn: (() => {
         try {
           return users.any();
@@ -297,8 +308,8 @@ export function createApp(
       if (email !== undefined || password !== undefined) {
         // T-118: an email account. Its own throttle (per email and per address) runs inside verify; a good one opens the same session.
         const user = await users.verify(email, password, key);
-        token = portal.openSession();
-        console.log(`[portal] signed in with an email account (${user.id})`);
+        token = portal.openSession(user.id);
+        console.log(`[portal] signed in with an email account (${user.id}, ${user.role})`);
       } else token = portal.signIn(typeof code === 'string' ? code : '');
     } catch (e) {
       if (isAppError(e) && e.is('UNAUTHORIZED')) limiter.fail(key);
@@ -311,7 +322,15 @@ export function createApp(
       path: '/',
       maxAge: Math.floor(ttlMs / 1000),
     });
-    return c.json(success(portal.adminState(token)));
+    // A member's sign-in answers no admin state (it holds the server code): the web reads /api/me and shows the member page.
+    return c.json(success(portal.session(token) ? portal.adminState(token) : { member: true }));
+  });
+
+  // MU2 S1a: who is signed in, answered to a member too (no code, no admin state).
+  app.get(PORTAL_USER_API.me, (c) => {
+    const s = portal.anySession(getCookie(c, cookie));
+    if (!s) throw new AppError('UNAUTHORIZED', 'Sign in again.');
+    return c.json(success<SignedInAs>(s.userId ? { kind: 'account', user: users.get(s.userId) } : { kind: 'code' }));
   });
 
   app.post(API.logout, (c) => {
@@ -342,7 +361,11 @@ export function createApp(
   };
   const requireSession = createMiddleware<Env>(async (c, next) => {
     const token = getCookie(c, cookie);
-    if (!token || !portal.session(token)) throw new AppError('UNAUTHORIZED', 'Sign in again.');
+    if (!token || !portal.session(token)) {
+      // MU2 S1a: a member is signed in but has no access to the admin app yet (default deny); everything else is "sign in again".
+      if (token && portal.anySession(token)) throw new AppError('FORBIDDEN', 'Your account has no access to this yet.');
+      throw new AppError('UNAUTHORIZED', 'Sign in again.');
+    }
     const field = await hostileWorkspaceField(c);
     if (field) throw new AppError('VALIDATION_FAILED', 'A workspace is `<target>/<name>`.', { details: { [field]: 'Not a workspace.' } });
     c.set('token', token);

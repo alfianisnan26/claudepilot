@@ -19,7 +19,7 @@ export function AccountsSection() {
   const [adding, setAdding] = useState(false);
   const [resetting, setResetting] = useState<PortalUser | null>(null);
   const [removing, setRemoving] = useState<PortalUser | null>(null);
-  const [form, setForm] = useState({ email: '', displayName: '', password: '' });
+  const [form, setForm] = useState<{ email: string; displayName: string; password: string; role: 'admin' | 'member' }>({ email: '', displayName: '', password: '', role: 'member' });
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
 
@@ -38,11 +38,11 @@ export function AccountsSection() {
     setProblem(null);
     try {
       if (resetting) await api.updateUser(resetting.id, { password: form.password });
-      else await api.createUser({ email: form.email.trim(), displayName: form.displayName.trim() || undefined, password: form.password });
+      else await api.createUser({ email: form.email.trim(), displayName: form.displayName.trim() || undefined, password: form.password, role: form.role });
       toast(resetting ? 'Password changed' : 'Account added');
       setAdding(false);
       setResetting(null);
-      setForm({ email: '', displayName: '', password: '' });
+      setForm({ email: '', displayName: '', password: '', role: 'member' });
       await load();
     } catch (err) {
       setProblem(errorText(err, 'Couldn’t save it.'));
@@ -54,6 +54,15 @@ export function AccountsSection() {
   const toggle = async (u: PortalUser) => {
     try {
       await api.updateUser(u.id, { state: u.state === 'active' ? 'disabled' : 'active' });
+      await load();
+    } catch (e) {
+      toast(errorText(e, 'Couldn’t change it.'), 'error');
+    }
+  };
+
+  const setRole = async (u: PortalUser) => {
+    try {
+      await api.updateUser(u.id, { role: u.role === 'admin' ? 'member' : 'admin' });
       await load();
     } catch (e) {
       toast(errorText(e, 'Couldn’t change it.'), 'error');
@@ -79,7 +88,7 @@ export function AccountsSection() {
       <div className="mb-2 flex items-center gap-1 px-1">
         <h2 id="settings-accounts" className="flex flex-1 items-center gap-1 text-[13px] font-semibold text-muted">
           Accounts
-          <InfoTip label="About accounts">Sign in with an email and a password. The server code keeps working. Every account has full access for now.</InfoTip>
+          <InfoTip label="About accounts">Sign in with an email and a password; the server code keeps working. Admin: full access. Member: nothing until a workspace is shared with them.</InfoTip>
         </h2>
         <Button variant="ghost" size="icon" aria-label="Add an account" onClick={() => (setAdding(true), setProblem(null))}>
           <Plus className="size-[18px]" />
@@ -102,6 +111,14 @@ export function AccountsSection() {
                     {u.lastLoginAt ? ` · signed in ${timeAgo(u.lastLoginAt)}` : ' · never signed in'}
                   </span>
                 </span>
+                <button
+                  type="button"
+                  onClick={() => void setRole(u)}
+                  className="press min-h-11 shrink-0 rounded-full px-2"
+                  aria-label={u.role === 'admin' ? `Make ${u.email} a member` : `Make ${u.email} an admin`}
+                >
+                  <Badge tone={u.role === 'admin' ? 'warning' : 'neutral'}>{u.role === 'admin' ? 'Admin' : 'Member'}</Badge>
+                </button>
                 <button type="button" onClick={() => void toggle(u)} className="press min-h-11 shrink-0 rounded-full px-2" aria-label={u.state === 'active' ? `Disable ${u.email}` : `Enable ${u.email}`}>
                   <Badge tone={u.state === 'active' ? 'success' : 'neutral'}>{u.state === 'active' ? 'Active' : 'Off'}</Badge>
                 </button>
@@ -124,6 +141,25 @@ export function AccountsSection() {
                 <span className="text-sm font-semibold text-ink-soft">Email</span>
                 <input type="email" autoComplete="off" inputMode="email" required value={form.email} onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))} className={field} />
               </label>
+              <fieldset className="flex flex-col gap-1.5">
+                <legend className="mb-1.5 flex items-center gap-1 text-sm font-semibold text-ink-soft">
+                  Role
+                  <InfoTip label="About roles">Member: no access until a workspace is shared with them. Admin: everything, like the server code.</InfoTip>
+                </legend>
+                <div className="grid grid-cols-2 gap-2">
+                  {(['member', 'admin'] as const).map((r) => (
+                    <button
+                      key={r}
+                      type="button"
+                      aria-pressed={form.role === r}
+                      onClick={() => setForm((f) => ({ ...f, role: r }))}
+                      className={`press min-h-11 rounded-2xl border px-3 text-sm font-semibold ${form.role === r ? 'border-accent bg-accent-soft text-ink' : 'border-line text-ink-soft'}`}
+                    >
+                      {r === 'member' ? 'Member' : 'Admin'}
+                    </button>
+                  ))}
+                </div>
+              </fieldset>
               <label className="flex flex-col gap-1.5">
                 <span className="text-sm font-semibold text-ink-soft">Name</span>
                 <input type="text" autoComplete="off" value={form.displayName} onChange={(e) => setForm((f) => ({ ...f, displayName: e.target.value }))} className={field} />
