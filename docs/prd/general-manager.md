@@ -1,6 +1,6 @@
 # The General Manager
 
-Draft v0.1 (T-968 S0, 2026-10-17). Source: the owner's request on T-968 and decision D-80 (`docs/dev-sessions/DECISIONS.md`).
+Draft v0.2 (T-968 S0, 2026-10-17; v0.2 answers the S0 QA gaps, T-968 comment 10735). Source: the owner's request on T-968 and decision D-80 (`docs/dev-sessions/DECISIONS.md`).
 Nothing is built. Defaults marked **(default)** are the writer's or the coordinator's; the owner may change them on T-968.
 
 ## 1. What it is
@@ -89,20 +89,26 @@ Auto move works between the person's Claudes in the runtime, as for any workspac
 - **A third token class, `cpmt_`** (manager), next to `cpat_` (a person's personal token) and `cpst_` (an agent's session
   token). The portal mints it for the manager session when its process starts and puts it only in that process's environment
   (`PILOT_MCP_TOKEN`). It is hashed at rest, lives as long as the session, at most 7 days (as `AGENT_TOKEN_TTL_MS`), and is
-  revoked on disable, on remove and when the person signs out of every device **(default)**.
+  revoked on disable, on remove and when the person signs out of every device (Q3). Nothing scheduled ever uses it (Q4).
 - **Principal:**
 
   ```ts
   { kind: 'manager', userId, sessionId, workspaceId: null }
   ```
 
-  - `ctx.actor` is `manager:<sessionId>` and `actorLabel` is "General Manager".
+  - `ctx.actor` is `manager:<sessionId>` and `actorLabel` is "General Manager". These two are **labels for audit and the
+    UI only**; no authorization decision reads them.
   - Audit rows carry the person and `agent=manager`.
 - **Authorization is the person's, resolved at use time.**
-  - Every call goes through the same `can(actor, verb, object)` with the actor being the person. The manager never sees or
-    does more than the person could in the browser right now. If the person loses a grant, the manager loses it on the next
-    call.
+  - `can(actor, verb, object)` receives **the person**: `{ kind: 'user', userId }`, the same actor the person's browser
+    session produces. It never receives `manager:<id>`, and there is no manager branch inside `can()`.
+  - The manager never sees or does more than the person could in the browser right now. If the person loses a grant, the
+    manager loses it on the next call.
   - A denial is the same not-found.
+  - **Where the seam change lands:** `apps/server/src/authz/seam.ts`, in `actorOfPrincipal` (today it takes
+    `kind: 'user' | 'agent'`). S1 adds `'manager'`, mapped to the person's user actor. That change is in the `authz` module and
+    goes through the S5 blind security review (D-60), with a test that a manager principal and the person's own principal get
+    the same `can()` answer for a sample of objects, and that `actorOf` on a web route never yields a manager.
 - **What the token reaches** (the tool tier, `registry.ts` `userTier`):
   - **Read tools** (`hints.readOnly`) at any tier the person holds: answered directly.
   - **Operate-tier writes** that are not in a guarded class: answered directly, audited, rate limited (§8).
@@ -134,13 +140,18 @@ Auto move works between the person's Claudes in the runtime, as for any workspac
 
 ## 6. What the manager may not decide alone
 
+**Cards are for the guarded classes only, not for every write (D-80 (5)).** The six classes below need the person's tap.
+Every other write runs directly, audited and within the §8 limits; the table in §9.4 names the class of each write tool. The
+owner may ask for a card on every write, on T-968 (Q6); until then this is the lead's decision, recorded on T-968.
+
 These stay the person's decision. The manager asks in the same chat, and the person answers there with a tap, never by typing
 "yes":
 
 1. Production, and uat. uat happens only on the owner's request (D-79), and then the request is the person's own message.
 2. A deploy **release approval**. The manager may start a deploy, but the release waits for the person's approval in the
    portal, as today. No Portal MCP tool can approve a release, whatever the token.
-3. Deleting data: a workspace, a pool, a vault, a note, a ticket's attachment, the manager itself.
+3. Deleting data: a workspace, a pool, a vault, a ticket's attachment, the manager itself; a note when a note delete tool
+   exists (none does today).
 4. Credentials: secrets, keys, tokens, Claude sign-ins, an account pool assignment.
 5. Anything a deny rule, a gate or an approval guards: the Bypass gates, the settings with re-auth (MCP lockdown, the Bypass
    policy, sign-in), allowing a tool request, and admin-tier writes.
@@ -249,13 +260,62 @@ S2 adds the following, in this order. Every new tool:
 | --- | --- | --- | --- |
 | `settings_set` | Changes one setting. | admin | always; plus re-auth for the guarded settings |
 | `approval_answer` | Answers an open tool approval. | operate (deny) / admin (allow) | allow: always; deny: no |
-| `deploy_start` | Starts `.pilot/deploy.yml` on a commit. | operate | yes (it leads to production). The release itself still waits for the portal approval. |
+| `deploy_start` | Starts the deploy pipeline on a commit. It is a thin wrapper over the existing `ci_run_trigger` path for `.pilot/deploy.yml` (same service call, same checks, same run row); there is **no second start path**. | operate | yes (it leads to production). The release itself still waits for the portal approval. |
 | `crew_limits_set` | Changes a cap. | admin | always |
 | `autotransfer_answer` | Move or Later on an auto-move card. | operate | no |
-| `note_write`, `note_edit`, `note_append` (exist) | Vault writes as the person. | operate | delete only |
+| `note_write`, `note_edit`, `note_append` (exist) | Vault writes as the person. | operate | no; a note delete gets a card when a note delete tool exists |
 | `session_end`, `session_stop_worker` (exist) | End sessions. | operate | over the mass limit (§8) |
 
 No tool approves a release or a proposal (MCP server, skill, persona): that remains a click in the portal (`registry.ts` rule).
+`ci_run_trigger` on `.pilot/deploy.yml` with a `cpmt_` token gets the same card as `deploy_start`, so the wrapper is not a way
+around it.
+
+### 9.4 Every write tool, its class and its card
+
+The classes are those of §6: **P** production or uat, **R** release approval, **D** deleting data, **C** credentials, **G** guarded
+by a deny rule, gate, approval or admin tier, **M** mass (§8). **—** means an ordinary operate write: no card, audited, rate
+limited. "Agent only" tools refuse a `cpmt_` token (§4). New tools are marked *(new)*.
+
+| Tool | Class | Card |
+| --- | --- | --- |
+| `workspace_delete` | D | yes |
+| `pool_delete` | D | yes |
+| `ticket_attachment_remove` | D | yes |
+| `usage_budget_delete` | D | yes |
+| `account_pool_assign` | C | yes |
+| `pool_create`, `pool_update` on a Secrets & env pool | C | yes |
+| `pool_create`, `pool_update` on any other pool | G (admin) | yes |
+| `pool_assign`, `pool_unassign` | G (admin; a Secrets pool is also C) | yes |
+| `mcp_lockdown` | G (re-auth setting) | yes, plus re-auth |
+| `settings_set` *(new)* | G (admin) | yes, plus re-auth for the guarded settings |
+| `approval_answer` *(new)* | G | allow: yes; deny: no |
+| `crew_limits_set` *(new)* | G (admin) | yes |
+| `deploy_start` *(new)*, `ci_run_trigger` on the deploy pipeline | P | yes |
+| `usage_budget_set` | G (admin) | yes |
+| `workspace_create` | G (admin) | yes |
+| `workspace_resources`, `workspace_rename` | G (admin) | yes |
+| `workspace_stop`, `workspace_start`, `workspace_sync` | M when over §8, else — | over the mass limit |
+| `session_start`, `session_spawn` | M when over §8, else — (also Q11) | over the mass limit or the Q11 caps |
+| `session_end`, `session_stop_worker`, `session_interrupt` | M when over §8, else — | over the mass limit |
+| `session_send`, `session_message` | M when over §8, else — | over the mass limit |
+| `session_respond` | G when it allows a tool request, else — | allow: yes; deny or answer: no |
+| `session_configure` | G when it sets Bypass or a permission mode; else — | Bypass or mode: yes; else no |
+| `session_recover` | — | no |
+| `ci_run_trigger` (other pipelines), `ci_run_cancel`, `ci_run_bump` | — | no |
+| `ticket_create`, `ticket_update`, `ticket_comment`, `ticket_attach`, `ticket_claim_next`, `ticket_adopt`, `ticket_bump`, `ticket_start_session` | — | no |
+| `ticket_close`, `ticket_verdict` | — | no |
+| `note_write`, `note_edit`, `note_append`, `daily_append` | — | no |
+| `session_keepgoing_set`, `keepgoing_pause_set` | — | no |
+| `lab_experiment_set`, `lab_arm_draw` | — | no |
+| `autotransfer_answer` *(new)* | — | no |
+| `schedule_set_enabled`, `schedule_run_now` *(new)* | — | no |
+| `skill_propose`, `mcp_propose_entry`, `mcp_proposal_withdraw` | — (a proposal; approving it stays a portal click) | no |
+| `artifact_publish` | — | no |
+| `session_rename_self`, `session_request_clear`, `persona_propose_update`, `persona_set_avatar_proposal`, `worktree_create` | agent only | refused |
+
+**A test keeps this table true** (a done criterion, §13): S2 adds a test that walks every tool in the registry without
+`hints.readOnly` and fails when one has no class here (in code: a `MANAGER_WRITE_CLASS` map next to the tool policies); S5
+extends it to assert that each class P, R, D, C and G answers a `cpmt_` call with `person_confirmation_required`.
 
 ## 10. Audit and observability
 
@@ -268,8 +328,9 @@ No tool approves a release or a proposal (MCP server, skill, persona): that rema
 
 1. **Token confinement.** `cpmt_` exists only in the runtime process's environment: never in a file, a log, the transcript,
    a response or an audit row. It is hashed at rest, revoked on disable, remove and sign-out, and expires after at most 7 days.
-2. **Identity at use time.** Each call resolves the person's rights through `can()` at that moment. There is no cached grant.
-   A person who loses access to an object has a manager that loses it too, and it gets the same not-found.
+2. **Identity at use time.** Each call resolves the person's rights through `can()` at that moment, with the person's user
+   actor (`manager:<id>` is an audit label only). There is no cached grant. A person who loses access to an object has a
+   manager that loses it too, and it gets the same not-found. Review the `actorOfPrincipal` change in `authz/seam.ts` (§4).
 3. **No browser authority.** `cpmt_` cannot reach a web route, and the cookie cannot reach `/mcp`. The confirm endpoint takes
    only the cookie session, with CSRF and the class's re-auth. Test: the manager posting its own approval is refused.
 4. **The card cannot be forged by the model.**
@@ -304,7 +365,7 @@ No tool approves a release or a proposal (MCP server, skill, persona): that rema
 | --- | --- | --- | --- |
 | S0 | This PRD | scribe / implementer | D-80 |
 | S1 | `kind` column and unique index (chat migration set), the hidden runtime, the `cpmt_` token and principal, Claude sign-in or key, auto move | BE Infra | S0; NetworkPolicy FOR THE COORDINATOR |
-| S2 | §9.1 reads, §9.2 schedules (with T-965), then §9.3 writes | Backend | S0; §9.3 waits on S5's card |
+| S2 | §9.1 reads, §9.2 schedules (with T-965), then §9.3 writes; the §9.4 classification test | Backend | S0; §9.3 waits on S5's card |
 | S3 | Home first, Dashboard / Manager switch, Manager mode | Frontend | S1 |
 | S4 | First-run card and Enable | Frontend + Backend | S1, S3 |
 | S5 | Confirmation cards, server limits, untrusted framing check, audit, blind security review (D-60) | Backend + reviewer | S1, S2 |
@@ -318,21 +379,33 @@ No tool approves a release or a proposal (MCP server, skill, persona): that rema
   - opens a ticket and messages a lead;
   - starts a deploy that waits for the person's release approval.
 - It cannot read a workspace file or run a shell command: tests, and a live refusal.
+- Every write tool in the registry has a class in §9.4: a test fails on an unclassified one (S2), and each guarded class
+  answers a `cpmt_` call with a card (S5).
+- `can()` gets the person's actor for a manager call, and the session start caps of Q11 hold: tests (S1, S5).
 - QA screenshots at 390 and 1280 px, light and dark. The blind security review passes.
 
 ## 14. Open questions, each with its default
 
 1. **Runtime volume and resources:** 1 Gi home; 100m and 256 Mi requested, 1 CPU and 1 Gi limit **(default)**.
 2. **Persona editable by the person?** No in v1. Only the built-in `general-manager` persona and the S6 skills **(default)**.
-3. **Token revoked on sign-out of every device?** Yes **(default)**. The manager stops; Home shows Resume at the next sign-in.
-4. **Does the manager run while nobody is signed in?** Yes, like any session, until idle sleep. S6 (monitoring) needs it
-   awake on a schedule, through T-965's loops **(default)**.
+3. **Token revoked on sign-out of every device?** Yes **(decided, v0.2)**. The manager stops; Home shows Resume at the next
+   sign-in.
+4. **Does the manager run while nobody is signed in?** No: after sign-out it has no token, so it cannot call the portal
+   **(decided, v0.2; this replaces v0.1's answer, which contradicted Q3)**. S6's routine work that must run on a clock
+   (monitoring sweeps, reminders) runs on a **separate scheduled path**: the triggers and the schedules registry (T-965,
+   §9.2), each run under its own system actor with its own narrow grant and its own audit rows. It never borrows the
+   manager's `cpmt_` token and never wakes the manager session to act. Its findings wait in tickets and attention items, and
+   the manager reads them at the next sign-in.
 5. **Admin-tier reads** (audit, settings): allowed when the person is an admin; no card **(default)**.
-6. **Operate-tier writes without a card**: allowed within the §8 limits **(default)**. The owner may ask for a card on every
-   write.
+6. **Operate-tier writes without a card**: allowed within the §8 limits; cards for the guarded classes only, per D-80 (5)
+   **(decided by the lead on T-968, v0.2)**. The owner may ask for a card on every write, on T-968.
 7. **Mass-action threshold:** 5 objects in 10 minutes **(default)**.
 8. **Docker target:** the runtime is built for k3s first, and Docker follows when someone asks **(default)**.
 9. **Multi-user:** one manager per account (`owner_id`). Today there is one owner (`u_owner`), so there is one manager
    **(default)**.
 10. **Coordinator overlap (D-80 (6)):** both run until S6 lands. The manager does not take the coordinator's jobs before then
     **(default)**.
+11. **Session start or spawn by the manager** (`session_start`, `session_spawn`): each starts a Claude process that spends
+    the person's quota. Default: at most **10 an hour and 50 a day** per manager, enforced on the server, on top of the §8
+    mass limit (more than 5 in 10 minutes needs a card) and the crew caps (D-43). Over a cap the call answers
+    `person_confirmation_required` **(default)**.
