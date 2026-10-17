@@ -1050,8 +1050,17 @@ working. A session takes the hook when it starts: one started before the guard l
   global `-c` (already refused before the subcommand). **Fail closed:** a value the guard cannot see (a variable, a command
   substitution, backticks) in any word that is not a message value, a pattern in a destructive subcommand, an unclosed quote or a
   trailing backslash next to `git` is refused. `;`, `&&` and `|` split the line into commands and each git command is read on its own.
-  A message from a substitution (`-m "$(cat <<EOF ...)"`) passes. Not read: a plain `git <sub>` with no `-C` (a prefix deny
-  still works there), `pull --rebase`, a bare `git push` (the branch it pushes is the current one), and subcommands off the list.
+  A message from a substitution (`-m "$(cat <<EOF ...)"`) passes. **Config that redirects a push (T-974 FIX, blind review PWG
+  10575):** `git -C <lane> config` that SETS `remote.<name>.push`, `remote.<name>.url`, `remote.<name>.pushurl`, `push.*`,
+  `url.<base>.insteadOf` (and `pushInsteadOf`) or `branch.<name>.pushRemote` is refused, because it would turn a later bare
+  `git push` into a push to a protected branch; reading them (`config --get remote.origin.url`) passes. `alias.*` was and stays
+  refused (set or read), as are `core.*` keys that run a program, `include.*`, `credential.*` and `filter.*`.
+  **What is not read.** A plain `git <sub>` with no `-C` is left to the allow and deny rules (a prefix deny still works there); the
+  guard reads only lines with `-C`, `--git-dir` or `--work-tree`. Also not read, `pull --rebase`, a bare `git push` (the branch it
+  pushes is the current one) and every subcommand off this list: `merge`, `cherry-pick`, `revert`, `stash`, `tag`, `remote`
+  (including `remote set-url`), `add`, `rm`, `mv`, `am`, `apply`, `reflog`, `gc`, `notes`. The policed ones are `reset`, `clean`,
+  `restore`, `checkout`, `switch`, `rebase`, `branch`, `push`, `commit`, `worktree`, `fetch`, `ls-remote`, `clone` and `pull`.
+  **`commit --amend` is allowed**: a commit that was pushed can only be replaced by a force push, and a force push is refused.
   Tests: `ruleGuard.test.ts` "T-974" (every refused form and the harmless shapes). The programs' text denies for these forms
   become removable after a blind PASS (D-60); that is the coordinator's step.
   Tests: `settings/ruleGuard.test.ts` (T-860), which build a scratch lane root and give it to the guard by `CLAUDEPILOT_GUARD_GITC_ROOTS_FILE`

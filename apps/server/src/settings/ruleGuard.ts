@@ -1589,6 +1589,8 @@ function gitCStep(d, b) {
 const GITC_GLOBAL_OK = /^(--no-pager|-P|--paginate|-p|--no-optional-locks|--no-lazy-fetch|--literal-pathspecs|--glob-pathspecs|--noglob-pathspecs|--icase-pathspecs|--no-advice|--no-replace-objects|--version)$/;
 // Config keys that move the work tree or run a program, refused for git config in a lane workspace.
 const GITC_CONFIG_KEYS = /^(core\.(worktree|bare|hookspath|fsmonitor|sshcommand|gitproxy|askpass|editor|pager)|alias\.|include\.|includeif\.|credential\.|filter\.|diff\.[^=]*\.(command|textconv)|sequence\.editor|gpg\.[a-z.]*program)/i;
+// Config keys that decide where a push goes (T-974 FIX), refused when set in a lane workspace. A remote's name may hold dots.
+const GITC_PUSH_KEYS = /^(remote\..*\.(push|url|pushurl)|push\.|url\..*\.(push)?insteadof|branch\..*\.pushremote)/i;
 // Programs that change links, folders or files in the same command line as a git -C (the path is read before they run).
 const GITC_SWAPPERS = new Set(['ln', 'mv', 'cp', 'rm', 'rmdir', 'mkdir', 'tar', 'unzip', 'install', 'rsync', 'bsdtar', 'cpio', '7z', '7za', 'unlink', 'truncate', 'mkfifo']);
 
@@ -1801,6 +1803,10 @@ function git(args, st, base, stdinText, stdinFile, piped) {
     // Another file than the repository's own (--file, -f, --global, --system, --blob): a write or a read outside the lane.
     if (rest.some((w) => /^(--file|--global|--system|--blob|-f)/.test(w.text))) return hit('git config of another file than the repository’s own, in a lane workspace', '');
     if (ops.some((w) => GITC_CONFIG_KEYS.test(w.text)) || (ops.length >= 2 && ops[0].dyn)) return hit('git config of a key that moves the work tree or runs a program, in a lane workspace', '');
+    // T-974 FIX: a key that redirects a push (remote.<n>.push, .url, .pushurl, push.*, url.<base>.insteadOf, branch.<n>.pushRemote) turns a later
+    // plain git push into a push to a protected branch: refused when SET (a read, git config --get remote.origin.url, stays allowed).
+    const setting = ops.length >= 2 || rest.some((w) => /^--(add|replace-all)$/.test(w.text));
+    if (setting && ops.some((w) => GITC_PUSH_KEYS.test(w.text))) return hit('git config of a key that redirects a push (remote.*.push, remote.*.url, push.*, url.*.insteadOf, branch.*.pushRemote), in a lane workspace', '');
   }
   // git config alias.x '!rm .mcp.json' (then git x): a key that runs something, set while a rule file is named.
   if (sub === 'config') {
