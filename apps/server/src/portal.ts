@@ -101,6 +101,12 @@ export class Portal {
   signIn(input: string): string {
     if (!this.#enabled) throw new AppError('FORBIDDEN', 'Sign-in is turned off on this server.');
     if (!this.matches(input)) throw new AppError('UNAUTHORIZED', 'That code is not right.');
+    return this.openSession();
+  }
+
+  /** A new session after a check done elsewhere (an email account, T-118): the same session the code gives. */
+  openSession(): string {
+    if (!this.#enabled) throw new AppError('FORBIDDEN', 'Sign-in is turned off on this server.');
     const token = randomBytes(32).toString('base64url');
     const now = Date.now();
     const hash = tokenHash(token);

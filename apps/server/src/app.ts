@@ -20,6 +20,8 @@ import {
   type KeyUnlockResult,
   type EndpointRequest,
   type LoginRequest,
+  type CreatePortalUserRequest,
+  type UpdatePortalUserRequest,
   type RotateCodeRequest,
   type SessionStatus,
   type SetEnabledRequest,
@@ -38,6 +40,7 @@ import {
 import { Hono, type Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { bodyLimit } from 'hono/body-limit';
+import { PortalUsers } from './identity/users.js';
 import { csrf } from 'hono/csrf';
 import { createMiddleware } from 'hono/factory';
 import { HTTPException } from 'hono/http-exception';
@@ -215,6 +218,8 @@ export function createApp(
 ) {
   const app = new Hono<Env>();
   const limiter = new RateLimiter(config.loginLimit.attempts, config.loginLimit.windowMs);
+  // T-118 MU1-min: email accounts beside the server code (identity/users.ts).
+  const users = new PortalUsers(() => (store.writable ? store.db : null));
   const { cookie, ttlMs } = config.session;
 
   // Served over plain HTTP: no HSTS.
@@ -272,6 +277,13 @@ export function createApp(
     const status: SessionStatus = {
       authenticated: !!portal.session(getCookie(c, cookie)),
       enabled: portal.enabled,
+      emailSignIn: (() => {
+        try {
+          return users.any();
+        } catch {
+          return false;
+        }
+      })(),
     };
     return c.json(success(status));
   });
@@ -279,10 +291,15 @@ export function createApp(
   app.post(API.login, async (c) => {
     const key = clientKey(c);
     if (limiter.blocked(key)) throw new AppError('RATE_LIMITED', 'Too many tries. Wait a few minutes.');
-    const { code } = await body<LoginRequest>(c);
+    const { code, email, password } = await body<LoginRequest>(c);
     let token: string;
     try {
-      token = portal.signIn(typeof code === 'string' ? code : '');
+      if (email !== undefined || password !== undefined) {
+        // T-118: an email account. Its own throttle (per email and per address) runs inside verify; a good one opens the same session.
+        const user = await users.verify(email, password, key);
+        token = portal.openSession();
+        console.log(`[portal] signed in with an email account (${user.id})`);
+      } else token = portal.signIn(typeof code === 'string' ? code : '');
     } catch (e) {
       if (isAppError(e) && e.is('UNAUTHORIZED')) limiter.fail(key);
       throw e;
@@ -337,6 +354,14 @@ export function createApp(
   const state = (c: Context<Env>) => c.json(success<AdminState>(portal.adminState(c.get('token'))));
 
   admin.get('/state', state);
+  // T-118 MU1-min: email accounts, managed by someone already signed in (the server code or another account).
+  admin.get('/users', (c) => c.json(success(users.list())));
+  admin.post('/users', async (c) => c.json(success(await users.create(await body<CreatePortalUserRequest>(c), 'ui')), 201));
+  admin.patch('/users/:id', async (c) => c.json(success(await users.update(c.req.param('id'), await body<UpdatePortalUserRequest>(c)))));
+  admin.delete('/users/:id', (c) => {
+    users.remove(c.req.param('id'));
+    return c.json(success({ removed: true }));
+  });
   admin.post('/code', async (c) => {
     const { code } = await body<RotateCodeRequest>(c);
     if (code !== undefined && typeof code !== 'string') throw new AppError('VALIDATION_FAILED', 'Code must be text.');
