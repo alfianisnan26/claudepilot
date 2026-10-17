@@ -86,6 +86,12 @@ event_repo=isnanme/event # fixed on purpose (T-491): the door names one reposito
 mem_std=4Gi; tmp_std=2Gi; mem_big=8Gi; tmp_big=4Gi
 master_max=${JOB_RUN_MASTER_MAX_PCT:-85}
 die() { echo "job-run: $*" >&2; exit 2; }
+# T-961: sched_preempted, sched_cpu_free_m, sched_cpu_short (pure functions of JSON, tested in apps/server/src/ci/schedLib.test.ts).
+# shellcheck source=scripts/sched-lib.sh
+. "$(dirname "$0")/sched-lib.sh"
+# CPU requests kept free on the portal's node (T-961): a Job is let out of the queue only while that node would still have this much free
+# AFTER the Job's own 500m request, or while no Job of ours runs (waiting would free nothing). 0 turns it off.
+portal_cpu_free_m=${JOB_RUN_PORTAL_CPU_FREE_M:-500}; job_cpu_m=500
 for n in "$max" "$per" "$pprog" "$art_max"; do [[ $n =~ ^[0-9]+$ ]] || die "the caps are numbers"; done
 # The placement numbers are used in $(( )): at most 3 / 6 digits (no wrap-around to a negative), and base 10 (a leading 08 is not octal) (T-611 C1 C2).
 [[ $master_max =~ ^[0-9]{1,3}$ ]] || die "JOB_RUN_MASTER_MAX_PCT is a percentage (at most 3 digits)"
@@ -480,12 +486,28 @@ gate_waiting() {
   running=$(jobs_json | jq '[.items[] | select(.metadata.deletionTimestamp == null and .spec.suspend != true and ((.status.succeeded // 0) == 0) and ((.status.failed // 0) == 0))] | length' 2>/dev/null)
   [ "${running:-0}" -gt 0 ]
 }
+# T-961 (the deploy outage: the portal stayed Pending on a full node2): count CPU REQUESTS, not only memory. The portal's node is the node of its
+# pod; the Job is let out only if that node keeps portal_cpu_free_m free after this Job's own request, or no Job of ours runs (no room to wait for).
+cpu_waiting() {
+  [ "$portal_cpu_free_m" -gt 0 ] || return 1
+  local pn nodes pods free running
+  pn=$(kubectl -n "$ns" get pods -l app=claudepilot-portal -o jsonpath='{.items[0].spec.nodeName}' 2>/dev/null || true)
+  [ -n "$pn" ] || return 1
+  nodes=$(kubectl get nodes -o json 2>/dev/null || true); pods=$(kubectl get pods -A -o json 2>/dev/null || true)
+  free=$(sched_cpu_free_m "$nodes" "$pods" "$pn")
+  sched_cpu_short "$free" $(( portal_cpu_free_m + job_cpu_m )) || return 1
+  running=$(jobs_json | jq '[.items[] | select(.metadata.deletionTimestamp == null and .spec.suspend != true and ((.status.succeeded // 0) == 0) and ((.status.failed // 0) == 0))] | length' 2>/dev/null)
+  [ "${running:-0}" -gt 0 ] && cpu_free_seen=$free
+}
+cpu_free_seen=
 last=
 while :; do
   d=$(jobs_json | jq -r --arg me "$job" --argjson max "$max" --argjson per "$per" --argjson pprog "$pprog" "$QUEUE_JQ" 2>/dev/null || true)
   if [ "$d" = go ] && gate_waiting; then d=gate; fi
+  if [ "$d" = go ] && cpu_waiting; then d=cpu; fi
   case "$d" in
     go) break ;;
+    cpu) [ "$d" = "$last" ] || echo "job-run: waits: the portal's node has ${cpu_free_seen}m of CPU requests free; a Job needs ${job_cpu_m}m and the portal keeps ${portal_cpu_free_m}m (JOB_RUN_PORTAL_CPU_FREE_M=0 turns it off)"; last=$d ;;
     gate) [ "$d" = "$last" ] || echo "job-run: waits: a gate Job is Pending for room, and gates go first (JOB_RUN_GATE_FIRST=0 turns it off)"; last=$d ;;
     gone) echo "job-run: $job was stopped while queued" >&2; exit 1 ;;
     wait\ *) [ "$d" = "$last" ] || echo "job-run: queued behind ${d#wait } (at most $max at once, $per per chat, $pprog per program)"; last=$d ;;
@@ -613,7 +635,11 @@ if [ "$(pod_get '[.items[0].status | (.initContainerStatuses // [])[], (.contain
 elif ooms=$(sed -n 's/^=== JOB-RUN MEMORY .* oom_kills=\([0-9]\{1,9\}\)$/\1/p' "$log" | tail -n 1) && [ "${ooms:-0}" -gt 0 ]; then
   echo "job-run: $job: $ooms process(es) were OOM-killed at the memory limit of $memory; $more" >&2
 fi
-if [ "$(pod_get '.items[0].status.reason' "$pj")" = Evicted ]; then
+if [ "$(sched_preempted "$pj")" = yes ]; then
+  # T-961: the portal's class took this Job's room. Not the command's failure: rerun it (D-75). Never an exit 0.
+  echo "job-run: $job was preempted (a higher-priority pod, the portal, needed its node): preempted, rerun" >&2
+  [ -n "$rc" ] && [ "$rc" != 0 ] || rc=1
+elif [ "$(pod_get '.items[0].status.reason' "$pj")" = Evicted ]; then
   echo "job-run: $job was evicted: $(pod_get '.items[0].status.message' "$pj") (/tmp holds at most $tmp_size in memory; --big gives $tmp_big)" >&2
 elif { [ -n "$rc" ] && [ "$rc" != 0 ]; } || [ "${st%%:*}" = Failed ]; then
   # A memory-backed /tmp is a tmpfs of its sizeLimit: when it fills, the command gets ENOSPC (no eviction), so the log is the only sign.

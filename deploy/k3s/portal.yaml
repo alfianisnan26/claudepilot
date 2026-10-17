@@ -37,6 +37,8 @@ spec:
         app: claudepilot-portal
     spec:
       serviceAccountName: claudepilot-portal
+      # T-961: above the Jobs (priorityclasses.yaml), so a new portal pod preempts a Job on a full node2 instead of staying Pending.
+      priorityClassName: claudepilot-portal
       nodeSelector:
         kubernetes.io/hostname: k3s-node2
       containers:

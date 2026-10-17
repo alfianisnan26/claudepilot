@@ -1,0 +1,23 @@
+# T-961: who gives way on a full node. PriorityClass is CLUSTER-scoped: if Argo CD (project isnan) may not manage it, the coordinator
+# applies this file once by hand (kubectl apply -f deploy/k3s/priorityclasses.yaml) BEFORE the first sync of portal.yaml, which names
+# claudepilot-portal (a pod naming a missing class is rejected).
+# claudepilot-portal: the portal preempts lower pods when node2 is full (the deploy outage: new portal Pending, old one already stopped).
+# claudepilot-jobs: every cluster Job (job-run, the gate, image builds). Never preempts (a Job must not evict a workspace); a Job
+# that is preempted fails, and job-run.sh / gate-job.sh print "preempted, rerun" (D-75: rerun it).
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: claudepilot-portal
+value: 1000000
+preemptionPolicy: PreemptLowerPriority
+globalDefault: false
+description: The ClaudePilot portal; may preempt cluster Jobs.
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: claudepilot-jobs
+value: -100
+preemptionPolicy: Never
+globalDefault: false
+description: ClaudePilot cluster Jobs (job-run, gate, image builds); first to give way, never preempt.

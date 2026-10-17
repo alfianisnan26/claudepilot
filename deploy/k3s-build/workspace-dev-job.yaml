@@ -12,6 +12,7 @@ spec:
   template:
     spec:
       restartPolicy: Never
+      priorityClassName: claudepilot-jobs # T-961
       nodeSelector:
         kubernetes.io/hostname: k3s-node2
       containers:

@@ -177,6 +177,57 @@ wait_synced() {
   done
 }
 
+# T-961: before the push to main (which stops the old portal: Recreate), prove the NEW pod can start, so a failure leaves the old portal up.
+# The outage: node2 was full, the new pod stayed Pending and then hit ImagePullBackOff, with the old portal already gone.
+#  1. it fits: the new pod's requests (the same as portal.yaml: DEPLOY_PORTAL_CPU_M and DEPLOY_PORTAL_MEM_MI, a test holds them equal) are free on
+#     the portal's node with the old portal's pod gone, or become free when the pods of the class claudepilot-jobs are preempted (sched_fit);
+#  2. the image is pullable ON THAT NODE: a short-lived pod pinned to it runs the new portal image (imagePullPolicy IfNotPresent, like the
+#     portal), deleted at the end whatever happens.
+# A list the pipeline can not read (no rights) is a warning, not an abort: the pre-pull still decides. Either check failing dies.
+DEPLOY_PORTAL_CPU_M=${DEPLOY_PORTAL_CPU_M:-100}
+DEPLOY_PORTAL_MEM_MI=${DEPLOY_PORTAL_MEM_MI:-384}
+DEPLOY_PREPULL_S=${DEPLOY_PREPULL_S:-180}
+# shellcheck source=scripts/sched-lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/../../scripts/sched-lib.sh"
+precheck_schedule() {
+  local tag=$1 node nodes pods fit name image deadline st waiting phase
+  node=$(awk '/^[[:space:]]*kubernetes\.io\/hostname:/ { print $2; exit }' "$DEPLOY_MANIFEST")
+  [ -n "$node" ] || die "pre-check: no nodeSelector (kubernetes.io/hostname) in $DEPLOY_MANIFEST: nothing was deployed"
+  nodes=$(kubectl get nodes -o json 2>/dev/null || true)
+  pods=$(kubectl get pods -A -o json 2>/dev/null || true)
+  if [ -z "$nodes" ] || [ -z "$pods" ]; then
+    log "WARNING: pre-check: the nodes or pods can not be read: whether the new portal pod fits on $node is NOT verified (the pre-pull still runs)"
+  else
+    fit=$(sched_fit "$nodes" "$pods" "$node" "$DEPLOY_PORTAL_CPU_M" "$DEPLOY_PORTAL_MEM_MI" "$DEPLOY_DEPLOYMENT")
+    case "$fit" in
+      fits) log "pre-check: the new portal pod fits on $node (${DEPLOY_PORTAL_CPU_M}m CPU, ${DEPLOY_PORTAL_MEM_MI}Mi requested)" ;;
+      preempt) log "pre-check: $node is full, but the new portal pod fits once cluster Jobs (class claudepilot-jobs) are preempted: it will preempt them" ;;
+      *) die "pre-check: the new portal pod (${DEPLOY_PORTAL_CPU_M}m CPU, ${DEPLOY_PORTAL_MEM_MI}Mi) does not fit on $node, not even by preempting Jobs: the old portal is still up, nothing was deployed" ;;
+    esac
+  fi
+  image="$DEPLOY_REGISTRY/claudepilot/portal:$tag"
+  name="pilot-prepull-$(printf '%s' "${PILOT_RUN_ID:-local}" | tr -c 'a-z0-9' '-' | cut -c1-12)-$$"
+  name=${name//--/-}
+  if dry; then
+    log "[dry-run] would run: kubectl -n $DEPLOY_NAMESPACE run $name --image=$image --restart=Never (pinned to $node), wait up to ${DEPLOY_PREPULL_S}s, delete it"
+    return 0
+  fi
+  log "pre-check: pulling $image on $node (pod $name)"
+  kubectl -n "$DEPLOY_NAMESPACE" run "$name" --image="$image" --restart=Never --labels=app=claudepilot-prepull \
+    --overrides="{\"spec\":{\"nodeSelector\":{\"kubernetes.io/hostname\":\"$node\"},\"priorityClassName\":\"claudepilot-jobs\"}}" \
+    --command -- node -e 0 >/dev/null || die "pre-check: the pre-pull pod could not be created: the old portal is still up, nothing was deployed"
+  deadline=$((SECONDS + DEPLOY_PREPULL_S)); st=timeout
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    read -r phase waiting <<<"$(kubectl -n "$DEPLOY_NAMESPACE" get pod "$name" -o jsonpath='{.status.phase} {.status.containerStatuses[0].state.waiting.reason}' 2>/dev/null || true)" || true
+    case "${waiting:-}" in ErrImagePull | ImagePullBackOff | InvalidImageName) st=$waiting; break ;; esac
+    case "${phase:-}" in Running | Succeeded | Failed) st=pulled; break ;; esac
+    sleep "$DEPLOY_POLL_S"
+  done
+  kubectl -n "$DEPLOY_NAMESPACE" delete pod "$name" --ignore-not-found --wait=false >/dev/null 2>&1 || true
+  [ "$st" = pulled ] || die "pre-check: $image is not pullable on $node ($st within ${DEPLOY_PREPULL_S}s): the old portal is still up, nothing was deployed"
+  log "pre-check: $image pulled on $node"
+}
+
 rollout() {
   kubectl -n "$DEPLOY_NAMESPACE" rollout status "deploy/$DEPLOY_DEPLOYMENT" --timeout=300s
 }

@@ -75,6 +75,20 @@ It is started by hand only: in the portal, or by a session over the Portal MCP (
 Input `dry_run: true` prints every action and changes nothing (no push, no cluster change; it still reads the cluster and waits for the
 approval).
 
+**The release proves the new pod can start (T-961).** The portal is `Recreate` on one volume, so the push to `main` stops the old pod before the new one
+exists. On 2026-10-17 node2 was full of Jobs, the new pod stayed Pending, then hit ImagePullBackOff, with nothing serving. So `release.sh` runs
+`precheck_schedule` (`.pilot/scripts/lib.sh`) BEFORE the push: (1) the new pod's requests (`DEPLOY_PORTAL_CPU_M` 100, `DEPLOY_PORTAL_MEM_MI` 384, a test
+holds them equal to `portal.yaml`) must fit on the portal's node with the old pod gone, or fit once pods of the class `claudepilot-jobs` are preempted
+(`sched_fit`, `scripts/sched-lib.sh`; other pods never count as room); (2) a short-lived pod `pilot-prepull-*` pinned to that node runs the new portal
+image (up to `DEPLOY_PREPULL_S`, 180) and is deleted. Either failing ends the release with `PUSHED=0`, `main` unmoved and the old portal up. Nodes or pods
+the pipeline can not read give a warning (the fit is "NOT verified"; the pre-pull still decides). The pipeline's kubectl needs `get` on nodes and pods
+(all namespaces) and `create`/`delete` of pods in `isnan-claudepilot`.
+
+**Priority classes.** `deploy/k3s/priorityclasses.yaml` (cluster-scoped): `claudepilot-portal` (1000000, may preempt) on the portal Deployment;
+`claudepilot-jobs` (-100, `preemptionPolicy: Never`) on every Job template in `deploy/k3s-build` (job-run, the gate, image builds). On a full node the portal
+takes a Job's room instead of staying Pending. If Argo CD may not create cluster-scoped objects, apply the file once by hand before the next sync
+(`kubectl apply -f deploy/k3s/priorityclasses.yaml`), or a pod naming a missing class is rejected.
+
 **How the steps learn about chats.** Steps hold no portal credential (local-git-ci PRD FR20), so the portal says it in its own log, which verify
 already reads with `kubectl logs`: while a job that deploys to an environment runs, the CI service writes `[deploy-chats] run=<id> job=<job>
 attached=<n> pending=<n|?> chats=<id8>:<claude>:<mode>:<tail8>:<open>:<workspace>,...` (again when the open count changes; ids and facts only,
@@ -139,6 +153,11 @@ memory), up to <GATE_JOB_WAIT_S>s`, and `gate job <name>: scheduled after Ns Pen
 ## Heavy agent work in the cluster
 
 In the workspace pod, call it as `/home/node/work/claudepilot/scripts/job-run.sh` (the main checkout's copy): the allow list names only that path (T-631), so a dontAsk lane's relative `scripts/job-run.sh` from its worktree is refused. The examples below use the short form.
+
+A Job the portal preempted (T-961: its class `claudepilot-jobs` is below the portal's) is not a failure of your command: `job-run.sh` prints `preempted,
+rerun` with a non-zero rc (1 when the log has none), `gate-job.sh` prints it and `GATE-VERDICT: red: preempted, rerun`; run it again (D-75). And a Job is let
+out of the queue only while the portal's node keeps 500m of CPU requests free after the Job's own 500m (`JOB_RUN_PORTAL_CPU_FREE_M`, 0 turns it off), or
+while no Job of ours runs (waiting would free nothing); it says `waits: the portal's node has Nm of CPU requests free ...`.
 
 `scripts/job-run.sh` (T-107) runs any heavy command of an agent as a Job like the gate's (`deploy/k3s-build/job-run.yaml`: the development
 image, a node without a workspace pod preferred, 1 CPU requested and 4 the limit, memory requested = limited (4Gi, `--big` 8Gi), `/tmp` and

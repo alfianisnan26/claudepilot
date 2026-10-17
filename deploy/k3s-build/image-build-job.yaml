@@ -23,6 +23,8 @@ spec:
       labels: {app: claudepilot-image-build, image-build/chat: __CHAT__}
     spec:
       restartPolicy: Never
+      # T-961: below the portal (deploy/k3s/priorityclasses.yaml); never preempts anything itself.
+      priorityClassName: claudepilot-jobs
       automountServiceAccountToken: false
       affinity:
         podAntiAffinity:

@@ -68,6 +68,7 @@ const podOf = (j) => {
   const status = { phase: j.done ? (j.rc === 0 ? 'Succeeded' : 'Failed') : 'Running' };
   if (j.done && sc.oom) status.containerStatuses = [{ name: 'run', state: { terminated: { reason: 'OOMKilled', exitCode: 137 } } }];
   if (j.done && sc.evicted) Object.assign(status, { reason: 'Evicted', message: sc.evicted });
+  if (j.done && sc.preempted) Object.assign(status, { conditions: [{ type: 'DisruptionTarget', status: 'True', reason: 'PreemptionByScheduler', message: 'preempted by pod x' }] });
   return { items: [{ spec: { nodeName: 'k3s-master' }, status }] };
 };
 const [verb, kind, name] = a;
@@ -79,6 +80,10 @@ const refuse = () => { const t = stdin(); let plain = ''; try { plain = Object.v
   process.stderr.write('error: ' + t + ' ' + plain + '\n'); process.exit(1); };
 if (verb === 'get' && kind === 'jobs') { process.stdout.write(JSON.stringify({ items: read().jobs.map(k8s) })); }
 else if (verb === 'get' && kind === 'job') { const j = job(name); if (!j || (failing('uid') && !a.includes('json'))) process.exit(1); process.stdout.write(a.includes('json') ? JSON.stringify(k8s(j)) : 'uid-' + name); }
+// T-961: the portal's node (file "portal-node"), the nodes' allocatable and every pod's requests (files nodes.json, pods.json) for the CPU headroom check; none = unreadable.
+else if (verb === 'get' && kind === 'pods' && a.includes('app=claudepilot-portal')) { const f = path.join(F, 'portal-node'); process.stdout.write(fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : ''); }
+else if (verb === 'get' && kind === 'nodes') { const f = path.join(F, 'nodes.json'); if (!fs.existsSync(f)) process.exit(1); process.stdout.write(fs.readFileSync(f, 'utf8')); }
+else if (verb === 'get' && kind === 'pods' && a.includes('-A')) { const f = path.join(F, 'pods.json'); if (!fs.existsSync(f)) process.exit(1); process.stdout.write(fs.readFileSync(f, 'utf8')); }
 else if (verb === 'get' && kind === 'pods' && a.includes('app=claudepilot-gate')) { const g = path.join(F, 'gates.txt'); process.stdout.write(fs.existsSync(g) ? fs.readFileSync(g, 'utf8') : ''); }
 else if (verb === 'get' && kind === 'pods' && a.includes('json')) { process.stdout.write(JSON.stringify(podOf(job(a[3].replace('job-name=', ''))))); }
 // The Secret is made by a client-side dry run (JSON on stdout, as kubectl prints it) and then created (never applied) with its ownerReference and label.
@@ -128,6 +133,7 @@ interface Scenario {
   hang?: boolean;
   oom?: boolean;
   evicted?: string;
+  preempted?: boolean;
   reason?: string;
 }
 
@@ -667,7 +673,7 @@ function gateWorld() {
   writeFileSync(join(root, 'token'), `gx${hex(18)}`); // made at runtime, never a literal
   writeFileSync(join(bin, 'gh'), '#!/bin/sh\n[ "$1 $2" = "auth token" ] && cat "$FAKE/token"\n');
   chmodSync(join(bin, 'gh'), 0o755);
-  for (const f of ['scripts/gate-job.sh', 'scripts/gate-verdict.sh', 'deploy/k3s-build/gate-job.yaml'])
+  for (const f of ['scripts/gate-job.sh', 'scripts/gate-verdict.sh', 'scripts/sched-lib.sh', 'deploy/k3s-build/gate-job.yaml'])
     writeFileSync(join(repo, f), readFileSync(join(REPO, f), 'utf8'));
   const env = {
     PATH: `${bin}:/usr/local/bin:/usr/bin:/bin`,
@@ -2563,6 +2569,7 @@ function mutant(editYaml: (s: string) => string, editScript: (s: string) => stri
   mkdirSync(join(dir, 'deploy/k3s-build'), { recursive: true });
   writeFileSync(join(dir, 'deploy/k3s-build/job-run.yaml'), editYaml(readFileSync(TEMPLATE, 'utf8')));
   writeFileSync(join(dir, 'scripts/job-run.sh'), editScript(readFileSync(SCRIPT, 'utf8')));
+  writeFileSync(join(dir, 'scripts/sched-lib.sh'), readFileSync(join(REPO, 'scripts/sched-lib.sh'), 'utf8')); // sourced by job-run.sh (T-961)
   return join(dir, 'scripts/job-run.sh');
 }
 
@@ -3061,4 +3068,51 @@ test('gates first: while a gate pod waits for a node and a Job of ours runs, a J
   const r2 = await w2.start(['--repo', 'claudepilot', '--ref', 'main', '--', 'true']).done;
   assert.equal(r2.code, 0, r2.out);
   assert.doesNotMatch(r2.out, /gates go first/);
+});
+
+test('T-961 headroom: a Job is held while the portal\'s node would keep less than 500m of CPU requests free after it and a Job of ours runs; it goes when room frees, and with none running it never waits', async () => {
+  const nodes = JSON.stringify({ items: [{ metadata: { name: 'k3s-node2' }, status: { allocatable: { cpu: '4', memory: '8Gi' } } }] });
+  const podsWith = (cpu: string) => JSON.stringify({ items: [{ spec: { nodeName: 'k3s-node2', containers: [{ resources: { requests: { cpu } } }] }, status: { phase: 'Running' } }] });
+  const put = (w: { root: string }, free: string) => {
+    writeFileSync(join(w.root, 'portal-node'), 'k3s-node2');
+    writeFileSync(join(w.root, 'nodes.json'), nodes);
+    writeFileSync(join(w.root, 'pods.json'), podsWith(free));
+  };
+  const w = world([{ name: 'claudepilot-job-00000001', chat: 'chat-x' }]);
+  put(w, '3600m'); // 400m free: below 500m kept + this Job's 500m
+  const s = w.start(['--repo', 'claudepilot', '--ref', 'main', '--', 'true'], { PILOT_SESSION_ID: 'chat-b' });
+  await waitFor('the headroom line', () => /the portal's node has 400m of CPU requests free; a Job needs 500m and the portal keeps 500m/.test(s.out()));
+  await new Promise((r) => setTimeout(r, 400));
+  assert.doesNotMatch(s.out(), /rc=/, 'still held');
+  put(w, '3000m'); // 1000m free: exactly 500m + 500m
+  const r = await s.done;
+  assert.equal(r.code, 0, r.out);
+  assert.equal((r.out.match(/the portal's node has/g) ?? []).length, 1, 'said once');
+  // Nothing of ours runs: waiting frees nothing, so it goes at once.
+  const w2 = world([]);
+  put(w2, '3900m');
+  const r2 = await w2.start(['--repo', 'claudepilot', '--ref', 'main', '--', 'true']).done;
+  assert.equal(r2.code, 0, r2.out);
+  assert.doesNotMatch(r2.out, /the portal's node has/);
+  // An unreadable node list never blocks, and JOB_RUN_PORTAL_CPU_FREE_M=0 turns the check off.
+  const w3 = world([{ name: 'claudepilot-job-00000001', chat: 'chat-x' }]);
+  writeFileSync(join(w3.root, 'portal-node'), 'k3s-node2');
+  const r3 = await w3.start(['--repo', 'claudepilot', '--ref', 'main', '--', 'true'], { PILOT_SESSION_ID: 'chat-b' }).done;
+  assert.equal(r3.code, 0, r3.out);
+  const w4 = world([{ name: 'claudepilot-job-00000001', chat: 'chat-x' }]);
+  put(w4, '3900m');
+  const r4 = await w4.start(['--repo', 'claudepilot', '--ref', 'main', '--', 'true'], { PILOT_SESSION_ID: 'chat-b', JOB_RUN_PORTAL_CPU_FREE_M: '0' }).done;
+  assert.equal(r4.code, 0, r4.out);
+  assert.doesNotMatch(r4.out, /the portal's node has/);
+});
+
+test('T-961 preempted: a Job the portal preempted says "preempted, rerun" and never exits 0, even when the log has no exit line; an ordinary failure does not say it', () => {
+  const w = world([], { rc: 1, reason: 'BackoffLimitExceeded', preempted: true, log: '=== JOB-RUN SUMMARY claudepilot@abc1234 checkout=1s steps=1s run=1s rc=1 node=k3s-node2\n' });
+  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--', 'npm test']);
+  assert.notEqual(r.code, 0, r.out);
+  assert.match(r.out, /job-run: claudepilot-job-[0-9a-f]{8} was preempted \(a higher-priority pod, the portal, needed its node\): preempted, rerun/);
+  const ordinary = world([], { rc: 1, reason: 'BackoffLimitExceeded' });
+  const o = ordinary.run(['--repo', 'claudepilot', '--ref', 'main', '--', 'npm test']);
+  assert.equal(o.code, 1, o.out);
+  assert.doesNotMatch(o.out, /preempted/);
 });

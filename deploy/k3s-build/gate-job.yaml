@@ -27,6 +27,8 @@ spec:
       annotations: {kubectl.kubernetes.io/default-container: gate}
     spec:
       restartPolicy: Never
+      # T-961: below the portal (deploy/k3s/priorityclasses.yaml); never preempts anything itself.
+      priorityClassName: claudepilot-jobs
       automountServiceAccountToken: false
       affinity:
         # Placement as in job-run.yaml (T-365, T-524; how the weights add up is explained there). All PREFERRED, never required: a required

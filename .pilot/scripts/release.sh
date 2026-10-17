@@ -53,6 +53,9 @@ bump=$(git rev-parse HEAD)
   echo "BASE_SHA=$sha"
   echo "PUSHED=0"
 } >"$rel"
+# -1. The new portal pod can start (T-961): it fits on its node (or preempts Jobs) and its image pulls there. Before anything stops the old
+#     portal; a failure dies here with PUSHED=0 and the old portal up.
+[ -z "$PORTAL_TAG" ] || precheck_schedule "$PORTAL_TAG"
 # 0. The chats this restarts (T-277 layer 4): which are attached to a live process, into chats.env and this log, and a bounded wait while one is
 #    answering a control request the portal asked (any change to the manifest restarts the portal: the workspace tag is its env too).
 record_chats

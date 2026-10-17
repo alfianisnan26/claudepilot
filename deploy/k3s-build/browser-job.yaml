@@ -11,6 +11,7 @@ spec:
   template:
     spec:
       restartPolicy: Never
+      priorityClassName: claudepilot-jobs # T-961
       # No node pinned: k3s-node2 had 0.19 CPU free by requests on 2026-10-13, so the scheduler picks the one with room. Preferred (never
       # required, T-524): not the control-plane node (k3s-master, 15 GB, also the API server); see job-run.yaml for how the weights add up.
       affinity:

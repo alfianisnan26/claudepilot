@@ -29,6 +29,8 @@ spec:
       annotations: {kubectl.kubernetes.io/default-container: run}
     spec:
       restartPolicy: Never
+      # T-961: below the portal (deploy/k3s/priorityclasses.yaml); never preempts anything itself.
+      priorityClassName: claudepilot-jobs
       automountServiceAccountToken: false
       affinity:
         # Placement (T-365, T-524, T-611). The rules are PREFERRED (a required rule left every Job Pending, 2026-10-15); the one required rule is added only while the master's real memory is over the line (see the marker).

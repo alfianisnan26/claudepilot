@@ -45,6 +45,7 @@ function templateFiles(): Record<string, string> {
     .replace(/(claudepilot\/workspace:)\S+/, (_m, head: string) => `${head}${FAKE_TAGS.workspace}`);
   add('scripts/k3s-build.sh');
   add('scripts/gate-job.sh');
+  add('scripts/sched-lib.sh');
   add('scripts/gate-verdict.sh');
   add('scripts/gate-job-stop.sh');
   add('images/workspace/Dockerfile');
@@ -81,6 +82,12 @@ case $args in
   *" get deploy/"*) manifest | grep -oE 'image: [^ ]*claudepilot/portal:[^ ]*' | sed 's/^image: //' ;;
   # The portal's log; a portal.log.next becomes the log after this read (the portal said something new in between).
   *" logs deploy/"*) cat "$FAKE/portal.log" 2>/dev/null || echo '[store] ready (portal 1234abcd, schema 610)'; [ -f "$FAKE/portal.log.next" ] && mv "$FAKE/portal.log.next" "$FAKE/portal.log"; true ;;
+  # T-961: the release's pre-check reads the nodes and all pods (files; none = unreadable), runs a pre-pull pod and polls it (a file: "<phase> <waiting reason>").
+  *" get nodes "*) cat "$FAKE/nodes.json" 2>/dev/null || true ;;
+  *" get pods -A "*) cat "$FAKE/pods.json" 2>/dev/null || true ;;
+  *" get pod pilot-prepull-"*) cat "$FAKE/prepull" 2>/dev/null || printf 'Succeeded ' ;;
+  # The pods of a gate Job (gate-job.sh looks for a preemption): a file, or none.
+  *" get pods -l job-name=claudepilot-gate-"*) cat "$FAKE/gate-pods.json" 2>/dev/null || true ;;
   # The new portal pod's start (the chats job's window, T-277 layer 4): a file, or now.
   *" get pods "*"startTime"*) cat "$FAKE/started" 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ ;;
   *" get pods "*) printf '0 ' ;;
@@ -160,6 +167,7 @@ function world(): World {
     DEPLOY_URL: 'http://portal.test:3000',
     DEPLOY_WAIT_S: '2',
     DEPLOY_POLL_S: '1',
+    DEPLOY_PREPULL_S: '3',
     // The gate here, with the stand-in gate.sh; the in-cluster path (the default) has a test of its own.
     DEPLOY_GATE_IN_CLUSTER: 'false',
     // The chats a release restarts (T-277 layer 4): seconds here, not the minutes of the cluster.
@@ -231,7 +239,7 @@ function world(): World {
 
 /** What a job leaves for the jobs that need it (the runner copies artifacts into their checkouts; here they share one). */
 const outFile = (w: World, name: string) => readFileSync(join(w.work, '.pilot/out', name), 'utf8');
-const MUTATING = /^kubectl .*\b(annotate|apply|create|delete|patch|scale|rollout (restart|undo))\b/m;
+const MUTATING = /^kubectl .*\b(annotate|apply|create|delete|patch|run|scale|rollout (restart|undo))\b/m;
 
 test('the pipeline file: manual only, the release deploys to production, rollback only on failure; it compiles with its defaults', () => {
   const v = validatePipeline('.pilot/deploy.yml', readFileSync(join(REPO, '.pilot/deploy.yml'), 'utf8'));
@@ -685,4 +693,111 @@ test('the whole pipeline through the CI service and the real runner: gate, build
     console.log = realLog;
     h.done();
   }
+});
+
+// ---- T-961: the release proves the new portal pod can start before it stops the old one; a Job preempted by the portal says so ----
+
+const node = (name: string, cpu: string, memory: string) => ({ metadata: { name }, status: { allocatable: { cpu, memory } } });
+const pod = (name: string, nodeName: string, cpu: string, memory: string, extra: Record<string, unknown> = {}, labels: Record<string, string> = {}) => ({
+  metadata: { name, labels },
+  spec: { nodeName, containers: [{ resources: { requests: { cpu, memory } } }], ...extra },
+  status: { phase: 'Running' },
+});
+const putJson = (w: World, name: string, value: unknown) => writeFileSync(join(w.root, name), JSON.stringify(value));
+/** A fake world whose release has the pre-check's inputs: node2 (4 CPU, 8Gi) and the pods on it. */
+function precheckWorld(pods: unknown[]): World {
+  const w = world();
+  assert.equal(w.run('gate').code, 0);
+  assert.equal(w.run('build', { images: 'portal' }).code, 0);
+  putJson(w, 'nodes.json', { items: [node('k3s-node2', '4', '8Gi'), node('k3s-master', '4', '8Gi')] });
+  putJson(w, 'pods.json', { items: pods });
+  return w;
+}
+
+test('T-961 pre-check: the new pod fits (the old portal pod does not count: Recreate stops it), the image is pulled on the portal\'s node by a short-lived pod, then the push', () => {
+  const w = precheckWorld([pod('portal-old', 'k3s-node2', '3900m', '7Gi', {}, { app: 'claudepilot-portal' }), pod('ws', 'k3s-node2', '3', '6Gi')]);
+  const r = w.run('release');
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /pre-check: the new portal pod fits on k3s-node2 \(100m CPU, 384Mi requested\)/);
+  assert.match(r.out, /pre-check: \S+claudepilot\/portal:\S+ pulled on k3s-node2/);
+  const calls = w.calls();
+  assert.match(calls, /kubectl -n isnan-claudepilot run pilot-prepull-\S+ --image=registry\.int\.isnan\.me\/claudepilot\/portal:\S+ --restart=Never/);
+  assert.match(calls, /"nodeSelector":\{"kubernetes\.io\/hostname":"k3s-node2"\}/, 'pinned to the portal\'s node');
+  assert.match(calls, /kubectl -n isnan-claudepilot delete pod pilot-prepull-/, 'the pre-pull pod is removed');
+  assert.notEqual(w.main(), w.base, 'pushed');
+  assert.match(outFile(w, 'release.env'), /PUSHED=1/);
+});
+
+test('T-961 pre-check: node2 is full, but Jobs (class claudepilot-jobs) can be preempted: it goes on and says so', () => {
+  const w = precheckWorld([pod('job', 'k3s-node2', '3950m', '7Gi', { priorityClassName: 'claudepilot-jobs' })]);
+  const r = w.run('release');
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /full, but the new portal pod fits once cluster Jobs \(class claudepilot-jobs\) are preempted/);
+});
+
+test('T-961 pre-check: node2 is full of pods that are not Jobs: the release aborts BEFORE the push, the old portal stays up (PUSHED=0, main unmoved, no pod made)', () => {
+  const w = precheckWorld([pod('ws', 'k3s-node2', '3950m', '7Gi')]);
+  const r = w.run('release');
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.out, /does not fit on k3s-node2, not even by preempting Jobs: the old portal is still up, nothing was deployed/);
+  assert.equal(w.main(), w.base, 'main did not move: no deploy');
+  assert.match(outFile(w, 'release.env'), /PUSHED=0/);
+  assert.doesNotMatch(w.calls(), /kubectl .* run pilot-prepull/, 'it stops before the pre-pull');
+});
+
+test('T-961 pre-check: an image that does not pull on the node (ImagePullBackOff, the outage of 2026-10-17) aborts before the push, and the pre-pull pod is deleted', () => {
+  const w = precheckWorld([]);
+  writeFileSync(join(w.root, 'prepull'), 'Pending ImagePullBackOff');
+  const r = w.run('release');
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.out, /is not pullable on k3s-node2 \(ImagePullBackOff within 3s\): the old portal is still up, nothing was deployed/);
+  assert.equal(w.main(), w.base);
+  assert.match(outFile(w, 'release.env'), /PUSHED=0/);
+  assert.match(w.calls(), /kubectl -n isnan-claudepilot delete pod pilot-prepull-/, 'cleaned up on failure too');
+  // A pod that never starts is a failure too, not a wait for ever.
+  writeFileSync(join(w.root, 'prepull'), 'Pending ');
+  const slow = w.run('release');
+  assert.equal(slow.code, 1, slow.out);
+  assert.match(slow.out, /not pullable on k3s-node2 \(timeout within 3s\)/);
+});
+
+test('T-961 pre-check: unreadable nodes or pods is a warning (the pre-pull still decides); a dry run reads, prints what it would run and changes nothing', () => {
+  const w = world();
+  assert.equal(w.run('gate').code, 0);
+  assert.equal(w.run('build', { images: 'portal' }).code, 0);
+  const before = w.calls().length;
+  const r = w.run('release', { dry_run: 'true' });
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /WARNING: pre-check: the nodes or pods can not be read: whether the new portal pod fits on k3s-node2 is NOT verified/);
+  assert.match(r.out, /\[dry-run\] would run: kubectl -n isnan-claudepilot run pilot-prepull-\S+ --image=\S+ --restart=Never \(pinned to k3s-node2\)/);
+  assert.doesNotMatch(w.calls().slice(before), MUTATING, 'a dry run makes no cluster change');
+  assert.equal(w.main(), w.base);
+});
+
+test('T-961: the pre-check\'s requests are the manifest\'s; the portal and every Job template have their priority class; the classes are as designed', () => {
+  const portal = readFileSync(join(REPO, 'deploy/k3s/portal.yaml'), 'utf8');
+  assert.match(portal, /priorityClassName: claudepilot-portal/);
+  const m = /requests:\n\s+cpu: (\d+)m\n\s+memory: (\d+)Mi/.exec(portal);
+  assert.ok(m, 'the portal requests cpu in m and memory in Mi');
+  const lib = readFileSync(join(REPO, '.pilot/scripts/lib.sh'), 'utf8');
+  assert.match(lib, new RegExp(`DEPLOY_PORTAL_CPU_M=\\$\\{DEPLOY_PORTAL_CPU_M:-${m![1]}\\}`), 'the pre-check asks what portal.yaml requests');
+  assert.match(lib, new RegExp(`DEPLOY_PORTAL_MEM_MI=\\$\\{DEPLOY_PORTAL_MEM_MI:-${m![2]}\\}`));
+  for (const f of readdirSync(join(REPO, 'deploy/k3s-build')).filter((n) => n.endsWith('-job.yaml') || n === 'job-run.yaml')) {
+    assert.match(readFileSync(join(REPO, 'deploy/k3s-build', f), 'utf8'), /priorityClassName: claudepilot-jobs/, f);
+  }
+  const classes = readFileSync(join(REPO, 'deploy/k3s/priorityclasses.yaml'), 'utf8');
+  assert.match(classes, /name: claudepilot-portal\nvalue: 1000000\npreemptionPolicy: PreemptLowerPriority/);
+  assert.match(classes, /name: claudepilot-jobs\nvalue: -100\npreemptionPolicy: Never/);
+});
+
+test('T-961: a gate Job the portal preempted says "preempted, rerun" and exits non-zero (never a verdict on the commit)', () => {
+  const w = world();
+  Object.assign(w.env, { DEPLOY_GATE_IN_CLUSTER: 'true', GATE_IMAGE: 'registry.test/claudepilot/workspace:dev-1', GATE_JOB_POLL_S: '1', GATE_JOB_WAIT_S: '5' });
+  writeFileSync(join(w.root, 'gate-mode'), 'red'); // the Job is Failed
+  putJson(w, 'gate-pods.json', { items: [{ status: { phase: 'Failed', conditions: [{ type: 'DisruptionTarget', status: 'True', reason: 'PreemptionByScheduler' }] } }] });
+  const r = w.run('gate');
+  assert.notEqual(r.code, 0, r.out);
+  assert.match(r.out, /was preempted \(a higher-priority pod, the portal, needed its node\): preempted, rerun/);
+  assert.match(r.out, /GATE-VERDICT: red: preempted, rerun/);
+  assert.doesNotMatch(r.out, /typecheck failed/, 'the log of the dead Job is not read as a verdict');
 });

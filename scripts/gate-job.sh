@@ -9,6 +9,9 @@
 # in GATE_JOB_LOG (default /tmp/gate-job-<sha>.log). GATE_IMAGE: the image (default: the newest development workspace image in the registry).
 # The GitHub Packages token goes into a Secret that lives as long as the Job's wait and is deleted on exit; the log is searched for it.
 set -eu
+# T-961: sched_preempted (a pure function of the pods' JSON, tested in apps/server/src/ci/schedLib.test.ts); read before the cd.
+# shellcheck source=scripts/sched-lib.sh
+. "$(dirname "$0")/sched-lib.sh"
 cd "$(git rev-parse --show-toplevel)"
 commit=$(git rev-parse --verify "${1:?usage: scripts/gate-job.sh <commit> [steps]}^{commit}") || exit 2
 steps=${2:-typecheck,web-build,server-suite}
@@ -53,6 +56,13 @@ for _ in $(seq 1 $(( wait_s / poll_s ))); do
   fi
   sleep "$poll_s"
 done
+# T-961: preempted by the portal's class (it needed this node): not a red gate, nothing of the commit was judged. Say so, rc non-zero.
+if [ "$(sched_preempted "$(kubectl -n "$ns" get pods -l "job-name=$job" -o json 2>/dev/null || true)")" = yes ]; then
+  kubectl -n "$ns" delete job "$job" --ignore-not-found >/dev/null 2>&1 || true
+  echo "gate job $job was preempted (a higher-priority pod, the portal, needed its node): preempted, rerun"
+  echo "GATE-VERDICT: red: preempted, rerun (not a verdict on the commit)"
+  exit 1
+fi
 kubectl -n "$ns" logs "job/$job" > "$out" 2>&1 || true
 t=$(gh auth token 2>/dev/null || true)
 if [ -n "$t" ] && grep -q -F -- "$t" "$out"; then

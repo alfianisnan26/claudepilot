@@ -647,3 +647,23 @@ session's result. With it, a Job that passed is saved, and the same work later r
 - **Not covered:** `scripts/gate-job.sh` is never reused (the charter wants the full gate on the exact commit; reuse of gate results is owner decision T-578).
   A pass that depended on something outside the key (the network, the clock, a registry) is reused too: leave `--reuse` off for such a check.
 - **Tests:** `apps/server/src/ci/jobRun.test.ts` (opt-in, hit, miss, failure, each changed key part, the age limit, the store's own files, and mutants that drop the commit, `--keep-tests` or the `Complete` condition).
+
+## 25. Who gives way on a full node (T-961)
+
+The outage of 2026-10-17: node2 was full of Jobs, the new portal pod (the portal is `Recreate`: the old pod stops first) stayed Pending, then hit
+ImagePullBackOff, and nothing served.
+
+- **FR25a, priority.** `deploy/k3s/priorityclasses.yaml`: `claudepilot-portal` (1000000, `PreemptLowerPriority`) on the portal Deployment; `claudepilot-jobs`
+  (-100, `preemptionPolicy: Never`) on every Job template of `deploy/k3s-build` (job-run, the gate, image builds). The classes are cluster-scoped: the
+  coordinator applies the file by hand if Argo CD may not.
+- **FR25b, a preempted Job says so.** A pod with condition `DisruptionTarget` reason `PreemptionByScheduler` (or status reason `Preempted`) is preempted
+  (`sched_preempted`, `scripts/sched-lib.sh`). `job-run.sh` prints `preempted, rerun` and exits non-zero (the command's rc when it has one, else 1); `gate-job.sh`
+  prints it and `GATE-VERDICT: red: preempted, rerun`, rc 1, without reading the dead Job's log as a verdict. D-75: rerun it.
+- **FR25c, headroom.** CPU requests, not only memory: the queue lets a `job-run` Job out only while the portal's node (the node of the pod `app=claudepilot-portal`)
+  keeps `JOB_RUN_PORTAL_CPU_FREE_M` (500m) free after the Job's own 500m request, or while no Job of ours runs (`sched_cpu_free_m`, `sched_cpu_short`). An
+  unreadable node list never blocks.
+- **FR25d, the release pre-check.** Before the push to `main`, `release.sh` checks the new pod fits on the portal's node (now, or by preempting pods of the class
+  `claudepilot-jobs`; `sched_fit`) and that its image pulls on that node (a pinned, short-lived pod, deleted at the end). A failure aborts with `PUSHED=0`, `main`
+  unmoved, the old portal up. Unreadable nodes or pods warn ("NOT verified"); the pre-pull still decides.
+- **Tests:** `schedLib.test.ts` (the pure functions), `jobRun.test.ts` (headroom wait, preempted output), `deployPipeline.test.ts` (fits, preempt, abort on no room,
+  abort on ImagePullBackOff and on a pod that never starts, warning and dry run, manifest and class checks, a preempted gate Job).
