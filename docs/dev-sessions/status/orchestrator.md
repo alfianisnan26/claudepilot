@@ -24,7 +24,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   a5207db0 (PWG 9280). QUICK-CHECK job-09bf4786 FAILED: format only (rtkHistoryGuard.test.ts, focusRing.test.ts; T-612 S1
   made prettier real); lint + 3 tests ok. Fix -> BE Infra (FORMAT DONE <sha>), lead merges it in, re-quick-check, gate.
 - BE INFRA 0f151084 T-612: ticket/T-612-s2 156a15b7: format the 2 b30 files ONLY, then respawn on T-921 (incident, plan 9377;
-  coordinator order T-860 > T-921 > T-911 > T-612 S2 16 lint errors 9280).
+  +self-heal 9391; order T-860 > T-921 > T-923 health-gated pool rollback > T-911 > T-612 S2 16 lint errors 9280).
 - BACKEND b367d0dd T-382 S4 (ci/runs, chat/audit, lab/slices) from 0cdfa044 + QA gaps: hook tests, stale loadMore, scan bound,
   committed listPage.bench.ts. T-382 S2+S3 fdb33268 = PWG 9369; merges WITH S4. Count leak -> T-922 (before multi-user).
 - QA BE A 0a2c06aa (T-436): QA T-436 S1+S2 34a5b293 only.
