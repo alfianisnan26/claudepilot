@@ -359,10 +359,13 @@ test('T-397: a worker comments on the ticket its spawn named and on its lead’s
     r.tickets.create(UI, { summary: 'held by the lead’s own lead', assignee: { kind: 'session', sessionId: 'boss' } }); // T-5
     r.tickets.create(UI, { summary: 'held by a peer', assignee: { kind: 'session', sessionId: 'peer' } }); // T-6
     r.tickets.create(UI, { summary: 'held by a person', assignee: { kind: 'user', name: 'Admin' } }); // T-7
+    await r.agent('docker/api', 'mate');
+    patch('mate', { parentId: 'lead' }); // a crew mate: the same lead (a build lane a QA lane verifies)
+    r.tickets.create(UI, { summary: 'held by a crew mate', assignee: { kind: 'session', sessionId: 'mate' } }); // T-8
     const err = async (t: { secret: string }, tool: string, args: Record<string, unknown>) => (await r.h.call(t.secret, tool, args)).result?.structuredContent?.error as { code: string; message: string } | undefined;
 
     // Allowed: a comment, written as the worker.
-    for (const [id, why] of [['T-1', 'spawn_ticket'], ['T-2', 'lead_ticket'], ['T-3', 'lead_ticket']] as const) {
+    for (const [id, why] of [['T-1', 'spawn_ticket'], ['T-2', 'lead_ticket'], ['T-3', 'lead_ticket'], ['T-8', 'crew_ticket']] as const) {
       assert.equal(await err(w, 'ticket_comment', { id, text: `report on ${id}` }), undefined, `${id}: ${why}`);
       const entry = r.tickets.get(UI, id).events.find((e) => e.kind === 'comment' && e.body === `report on ${id}`);
       assert.equal(entry?.actor, 'session:wk', `${id}: the timeline names the worker, not its lead`);
@@ -370,7 +373,7 @@ test('T-397: a worker comments on the ticket its spawn named and on its lead’s
       assert.deepEqual(row && { actor: row.actor, sessionId: row.detail!.sessionId, leadId: row.detail!.leadId, why: row.detail!.why }, { actor: 'session:wk', sessionId: 'wk', leadId: 'lead', why }, `${id}: the audit row`);
     }
     const mcpRows = r.h.module.audit.list({ limit: 100 }).filter((x) => x.tool === 'ticket_comment' && x.actor === 'session:wk');
-    assert.equal(mcpRows.length, 3, 'the tool call is audited as the worker too');
+    assert.equal(mcpRows.length, 4, 'the tool call is audited as the worker too');
 
     // Refused, with the very text a stranger gets.
     for (const id of ['T-4', 'T-5', 'T-6', 'T-7']) {
@@ -386,6 +389,10 @@ test('T-397: a worker comments on the ticket its spawn named and on its lead’s
     assert.equal((await err(w, 'ticket_comment', { id: 'T-1', text: 'x' }))?.code, 'FORBIDDEN', 'spawn ticket held by a person');
     r.tickets.update(UI, 'T-1', { assignee: null });
 
+    // A crew mate's ticket: a comment, never a change or a close (T-969).
+    assert.equal((await err(w, 'ticket_update', { id: 'T-8', priority: 'urgent' }))?.code, 'FORBIDDEN', 'crew mate: not an update');
+    assert.equal((await err(w, 'ticket_close', { id: 'T-8', summary: 'done' }))?.code, 'FORBIDDEN', 'crew mate: not a close');
+
     // A comment only: no change, close or claim of the lead's ticket.
     const before = r.tickets.get(UI, 'T-2').ticket;
     assert.equal((await err(w, 'ticket_update', { id: 'T-2', priority: 'urgent' }))?.code, 'FORBIDDEN', 'not an update');
@@ -400,7 +407,7 @@ test('T-397: a worker comments on the ticket its spawn named and on its lead’s
     patch('wk', { state: 'ended' });
     assert.equal((await err(w, 'ticket_comment', { id: 'T-1', text: 'late' }))?.code, 'FORBIDDEN', 'an ended worker, its spawn ticket');
     assert.equal((await err(w, 'ticket_comment', { id: 'T-2', text: 'late' }))?.code, 'FORBIDDEN', 'an ended worker, its lead’s ticket');
-    assert.equal(audits.filter((a) => a.kind === 'ticket.worker_commented').length, 3, 'only the three allowed comments are audited');
+    assert.equal(audits.filter((a) => a.kind === 'ticket.worker_commented').length, 4, 'only the four allowed comments are audited');
   } finally {
     r.done();
   }

@@ -176,7 +176,8 @@ fi
 for a in $artifacts; do [[ $a =~ ^[A-Za-z0-9_.][A-Za-z0-9_./*-]*$ && ! $a =~ (^|/)\.\.(/|$) ]] || die "--artifacts: paths inside the repository (got $a)"; done
 [[ -z $against || ( $against =~ ^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$ && ! $against =~ \.\. ) ]] || die "--against: a branch or commit name (got $against)"
 [ -z "$keep" ] || [ -n "$against" ] || die "--keep-tests needs --against"
-for a in $keep; do [[ $a =~ ^[A-Za-z0-9_][A-Za-z0-9_./-]*$ && ! $a =~ (^|/)\.\.(/|$) ]] || die "--keep-tests: file paths inside the repository (got $a)"; done
+# A leading dot is a path too (.pilot/tests/x.py: T-960, 2026-10-17, no test under .pilot/ could be proved); never `..`, `.` or `./` alone.
+for a in $keep; do [[ $a =~ ^[A-Za-z0-9_.][A-Za-z0-9_./-]*$ && ! $a =~ (^|/)\.\.(/|$) && ! $a =~ ^\.(/)?$ ]] || die "--keep-tests: file paths inside the repository (got $a)"; done
 # --pool-env (T-426): the scoped test credentials of the Secrets pool, by NAME, for the command. Checked here, before any kubectl call.
 # Only E2E_CF_ACCESS_* names. The --pool-env name check and the unknown-option branch never echo what they refuse (it may be a secret value
 # pasted by mistake, and a value can look like a name): the message says only that it was refused and why. Other options' messages still show

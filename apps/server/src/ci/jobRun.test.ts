@@ -1239,19 +1239,22 @@ test('--against and --keep-tests: parsed into the manifest, validated; absent, t
     '--against',
     'abc1234def',
     '--keep-tests',
-    'a/x.test.ts,b/y.test.ts',
+    'a/x.test.ts,b/y.test.ts,.pilot/tests/test_x.py',
     '--',
     'true',
   ]);
   assert.equal(r.code, 0, r.out);
   const e = envOf(yamlLoad(w2.applied1()) as Manifest);
   assert.equal(e.JR_AGAINST, 'abc1234def');
-  assert.equal(e.JR_KEEP, 'a/x.test.ts b/y.test.ts');
+  assert.equal(e.JR_KEEP, 'a/x.test.ts b/y.test.ts .pilot/tests/test_x.py', 'a leading dot is a path in the repository (T-960)');
   const bad: [string[], RegExp][] = [
     [['--against', 'a b'], /--against: a branch or commit/],
     [['--against', 'x..y'], /--against: a branch or commit/],
     [['--keep-tests', 'a.ts'], /--keep-tests needs --against/],
     [['--against', 'main', '--keep-tests', '../x'], /--keep-tests: file paths/],
+    [['--against', 'main', '--keep-tests', '.pilot/../../x'], /--keep-tests: file paths/],
+    [['--against', 'main', '--keep-tests', '.'], /--keep-tests: file paths/],
+    [['--against', 'main', '--keep-tests', './'], /--keep-tests: file paths/],
   ];
   const w3 = world();
   for (const [argv, re] of bad) {

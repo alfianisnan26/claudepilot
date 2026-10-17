@@ -7,8 +7,10 @@
 #   scripts/quick-check.sh [--base <ref>] [--test <path>]... [--repo <job-run --repo value>] [--no-format] [--no-lint]
 # Run it inside the worktree, after pushing HEAD (job-run runs a PUSHED commit: git push origin HEAD:<your work branch>). The base is the
 # merge base with --base, or with the first of origin/stg, origin/integration, origin/main, origin/master that exists. --test takes a test
-# file of the branch, run from its package's folder: vitest, jest, node --test (a *.test.ts with tsx), or pytest for a *.py.
-# Exit: 0 all passed; 1 a check failed or was SKIPPED (a missing tool: never reported as passed; the last line names it); 2 a usage error; anything else is job-run's own (it did not finish).
+# file of the branch, run from its package's folder: vitest, jest, node --test (a *.test.ts with tsx), or pytest for a *.py (unittest when the
+# image has no pytest). A missing tool is SKIPPED, never passed (T-612): the last line is FAILED (naming any skips too), FAILED: nothing ran
+# when every check was skipped (T-960), INCOMPLETE when only skips are left, or all passed.
+# Exit: 0 all passed; 1 a check failed, nothing ran or a step was SKIPPED (the last line names it); 2 a usage error; anything else is job-run's own.
 set -uo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -25,7 +27,7 @@ while [ $# -gt 0 ]; do
     --repo) repo="${2:?--repo needs a value}"; shift 2 ;;
     --no-format) fmt=0; shift ;;
     --no-lint) lint=0; shift ;;
-    -h | --help) sed -n '2,12p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,13p' "$0"; exit 0 ;;
     *) echo "quick-check: unknown argument $1" >&2; exit 2 ;;
   esac
 done
@@ -66,12 +68,13 @@ fi
 
 q() { printf '%q ' "$@"; }
 # The command the Job runs (in the clone, after npm ci): plain bash, every check, then one verdict line.
-cmd='set +e; fails=""; skips=""; bin="$PWD/node_modules/.bin";
+cmd='set +e; fails=""; skips=""; ran=0; bin="$PWD/node_modules/.bin";
 skip() { skips="$skips $1"; echo "::: $1 SKIPPED ($2)"; };
-check() { local name="$1"; shift; echo "::: $name"; "$@"; local rc=$?; if [ $rc -eq 0 ]; then echo "::: $name ok"; else fails="$fails $name"; echo "::: $name FAILED (exit $rc)"; fi; };
+check() { local name="$1"; shift; ran=$((ran+1)); echo "::: $name"; "$@"; local rc=$?; if [ $rc -eq 0 ]; then echo "::: $name ok"; else fails="$fails $name"; echo "::: $name FAILED (exit $rc)"; fi; };
 runtest() { local dir="$1" file="$2"; local b="$PWD/$dir/node_modules/.bin"; [ -x "$b/vitest" ] || b="$bin";
   case "$file" in
-    *.py) if python3 -m pytest --version >/dev/null 2>&1; then check "test:$dir/$file" sh -c "cd \"\$0\" && python3 -m pytest -q \"\$1\"" "$dir" "$file"; else skip "test:$dir/$file" "no pytest in the Job image"; fi ;;
+    *.py) if python3 -m pytest --version >/dev/null 2>&1; then check "test:$dir/$file" sh -c "cd \"\$0\" && python3 -m pytest -q \"\$1\"" "$dir" "$file";
+       else check "test:$dir/$file (unittest, no pytest in the Job image)" sh -c "cd \"\$0\" && python3 -m unittest discover -s \"\$(dirname \"\$1\")\" -p \"\$(basename \"\$1\")\"" "$dir" "$file"; fi ;;
     *) if [ -x "$b/vitest" ]; then check "test:$dir/$file" sh -c "cd \"\$0\" && \"\$1\" run \"\$2\"" "$dir" "$b/vitest" "$file";
        elif [ -x "$b/jest" ]; then check "test:$dir/$file" sh -c "cd \"\$0\" && \"\$1\" --runInBand \"\$2\"" "$dir" "$b/jest" "$file";
        elif [ -x "$bin/tsx" ] || [ -x "$b/tsx" ]; then check "test:$dir/$file" sh -c "cd \"\$0\" && node --import tsx --test \"\$1\"" "$dir" "$file";
@@ -85,8 +88,10 @@ if [ $lint = 1 ] && [ ${#lintable[@]} -gt 0 ]; then
   cmd+="if [ -x \"\$bin/eslint\" ]; then check lint \"\$bin/eslint\" $(q "${lintable[@]}"); else skip lint 'no eslint'; fi; "
 fi
 cmd+="$test_lines"
-# A step that did not run is never "passed": the last line names it (and the failures too, when there are some), and the exit is 1.
+# The verdict, in this order: a failure (naming the skips too); nothing ran (T-960, 2026-10-17: every check skipped printed "all passed", a
+# false green); a skip with the rest passed is INCOMPLETE (T-612: a missing tool is never reported as passed); else all passed.
 cmd+='echo; if [ -n "$fails" ]; then echo "QUICK CHECK FAILED:$fails${skips:+ (also SKIPPED:$skips)}"; exit 1; fi;
+if [ "$ran" -eq 0 ]; then echo "QUICK CHECK FAILED: nothing ran (every check was skipped)"; exit 1; fi;
 if [ -n "$skips" ]; then echo "QUICK CHECK INCOMPLETE: SKIPPED$skips (the other steps passed)"; exit 1; fi; echo "QUICK CHECK: all passed"; exit 0'
 
 echo "quick-check: ${#files[@]} changed file(s) against $base, ${#tests[@]} test file(s), commit ${head:0:12}, as a cluster Job"

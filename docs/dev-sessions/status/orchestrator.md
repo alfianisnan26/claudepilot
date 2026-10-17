@@ -1,40 +1,40 @@
-# orchestrator status (2026-10-16 15:00 UTC, session 355881a3, continuation of de232389)
-
-Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-10-15 DONE batches 1-7: see 4fbab374). Hand-overs: ab99b45, bb58413, 639202e.
+# orchestrator status (2026-10-17 13:20 UTC, session 355881a3, continuation of de232389; older: git history)
 
 ## DONE
 - Batches 22-26: git history (to 83b7213e), gates green. Close on "Coordinator live check" PASS. T-574 re-check after 10-17 15:00Z.
 - RESPAWN rule (165db813 + D-78 4e101a59): respawn each lane BETWEEN tickets on a worktree cut from integration; scripts by abs path.
 - BATCHES 27 bda180d2 + 28 63ff971c (gates GREEN) deployed in 2026.10.17-1 (details: git history). Flake boot.test.ts -> T-903.
-- BATCH 29 edde2073 (gate GREEN; T-524 S3c, T-733 S5, T-881 S1b, T-416 S2c, T-382 S1, T-781 S8c, T-675 R2c+R2d) + T-924 4754b282
-  (gate GREEN; told 9736/9737) RELEASED in 2026.10.17-2 (4e6e48ae). Close each on its "Coordinator live check" PASS.
+- BATCH 29 edde2073 (T-524 S3c, T-733 S5, T-881 S1b, T-416 S2c, T-382 S1, T-781 S8c, T-675 R2c+R2d) RELEASED 2026.10.17-2: close on live checks.
 ## IN FLIGHT (6 of 6, D-71; lanes respawned per ticket, D-78; sonnet)
 - BATCH 30 premerge-b30 b9781ad6 (wip/main-b9781ad): T-772 S2f, T-736 S3g, T-612 S1, T-868 S1-S3, T-436 S1+S2 (deploy note),
   T-379 S2, format fix 787932e2, integration (T-924), T-860 S2c a87d00b8 (PWG 9638), T-382 S2-S4 (PWG 9691; S5 fup).
-  Resolution trace T-595 9742. + integration (release 2026.10.17-2, D-79) = e0f7a72d (wip/main-e0f7a72). QUICK-CHECK run 4
-  (job-out/qc-e0f7a72-2.log; earlier: bg limit, session end, Job Pending 900 s on a full cluster) -> gate-job -> land -> T-731. Bg Jobs: timeout 7200000.
-- Cluster queue ~14 Jobs (control-plane >75% memory): T-938 lane on a 3rd Job attempt (2-h limit).
-- URGENT T-948 S1 port proxy (owner waiting; coordinator 9810): BE INFRA 2 2a0edbd8 OPUS (why: security), ticket/T-948-port-proxy
-  from d741a52d; contract first (~11:30). Subdomain app-<ws>-<port>.ai.isnan.me + one-time code + frame-ancestors (9811).
-  Contract 7dc74eba pushed. S2 FRONTEND 3753d3c2 ticket/T-948-app-browser DONE 084c49d6 (9866; Job green) -> QA d9f18599
-  (qa-t948-s2); FE now writes the PRD App-mode section. ux-checker after S1 merges. ETA 9815: QA ~14:00, gated ~15:00.
-  Paused for it: T-921 0dfff348, T-379 S3 9dfecffb (lanes ended; resume after, QA re-runs Jobs).
-- Lanes: BE INFRA a3554d40 T-938 259935e8 (Job). BACKEND 524bf92b T-425 S2b 357ff021 (Job queued; QA PWG 9770, T-595 9772).
-  IMPL 2 3189279b T-436 S3 + T-772 S2g e4e2c4ff: tests green, prettier red on 5 files; the fmt.patch never reached the pod ->
-  told to copy prettier's output whole via a Job artifact + Write.
-- T-28 CLOSED (QA PASS 9857). T-294 PWG 9858: crew_post/read + idle-child reuse not built -> slice after T-948 (T-595 9871).
+  Resolution trace T-595 9742. QC run 4 on e0f7a72d: tests ok, format 65 files + lint 3 -> lead format commits (Jobs b1a39c2d,
+  ec182931; token-equal check job-out/fmtcheck.mjs) + integration (master line 85) = e4e52fa0 (trace T-595 9916). QC on e4e52fa0:
+  tests + lint ok, format red on knowledge/service.ts. Merging integration 94105066 conflicts in quick-check.sh (T-612 S1 vs T-960):
+  merge ABORTED; T-612 S1b union on 2a0edbd8 (c10001) -> take its file whole, format service.ts, QC, gate, land, T-731.
+- T-938 lane a3554d40: 4th Job (3 lost: Pending, bg limit, session end).
+- URGENT T-948 port proxy (9810): S1 BE INFRA 2 2a0edbd8 OPUS (security), ticket/T-948-port-proxy; app-<ws>-<port> subdomain (9811).
+  S1 fix f70c72bd (Job 79cec835 rc0, 33/33, M6 killed; 10179) -> RE-CHECK c691df71. S2 fix d08465f9 (Job 1caf0599 rc0, 14/14)
+  -> d9f18599 read PASS 10097, confirming rc. Then premerge S1+S2, ux check by d9f18599 (390/1280, light/dark, scratch portal),
+  blind review S1 (security), QC, gate, land, coordinator deploys. Paused: T-921 0dfff348, T-379 S3 9dfecffb (resume after).
+- T-976 __Host- cookie (security; blind review + coord live check): 2a0edbd8 opus, ticket/T-976-host-cookie from integration.
+- T-612 S1b 37b86955 (Job 829d6994 rc0, 2 mutants killed): QA be63acc8 -> on PASS take its quick-check.sh whole into b30.
+- T-382 S5 test gaps 1,2,4 (9691): FE 3753d3c2 sonnet, ticket/T-382-s5 from wip/main-e4e52fa; gap 3 (unbounded total) Backend later.
+- T-425 S2b 357ff021: QA be63acc8 PWG 9970 (mutant B survives) -> test fix on next free Backend slot; same QA re-checks (T-595 10014).
+- Worker job-run commands: no `; echo RC=$?` suffix (allow list refuses it, T-612 10184); FOR THE COORDINATOR on T-595.
+- T-436 S3 + T-772 S2g fe676258: QA PWG (T-595 10003) -> batch 31; permissions class: coordinator live check before close (D-81).
+- T-294 PWG 9858: crew_post/read + idle-child reuse not built -> slice after T-948 (T-595 9871).
+- After T-948, planned together: T-968 General Manager (D-80, plan 9969; S0 scribe + S2 MCP tools incl. T-965 first),
+  T-971 self-healing (H1+H2 first; charter-wall conflict on healer landing rule lines FOR THE COORDINATOR 9988).
   T-409 G3 ee75effd QA PWG 9820 -> merge in b31; G3b fup after T-425 S2b (T-595 9823).
-- Waiting for QA after build: T-938 (blind review; coordinator lands), T-921, T-436 S3, T-379 S3, T-425 S2b. Next build: T-382 S5.
-- D-79: uat on the owner's explicit request is crew work through the normal path (dry run, go/no-go); never on our own.
+- Next builds as slots free: T-965 S1 (Backend respawn) + S2 (FE after T-948), T-382 S5. D-79: uat only on the owner's explicit request.
 
 ## DECISIONS (binding)
+- 12:10 D-81 (owner via coordinator): risk-based review. Same builder keeps a ticket through all fixes; one QA pass, same QA re-checks;
+  blind review / 2nd QA / post-deploy only for security, auth, permissions, rule files, infra, pipelines, migrations, money, uat/prod.
+  Builders push their own ticket branch (`git push -u <remote> ticket/...`, no -q). T-948 S1 (security) keeps blind review; T-425 S2b one QA.
 - 10:00 Restart (~07:00 UTC, /tmp wiped; my Claude hit its session limit 03:xx): 6 lanes ended + respawned from pushed heads
   (clean worktrees); lost Jobs re-run; T-924 re-gate re-run on the same commit (verdict unavailable). T-382 merges with gaps (9694).
-- 00:35 Coordinator: 2nd workspace RESTART 00:50 UTC (browser image t623-2026.10.16-1). All 6 lanes told: push WIP, no Job after
-  00:45, end `PAUSED <sha> <job> <next>`. After it: end interrupted lanes, respawn from PAUSED shas, re-run cut Jobs.
-  Release 2026.10.17-1 (42b186b4, from 44fba442) holds batches 27+28, NOT 29 (edde2073): await live checks.
-- 00:55 Resumed after restart 2: 6 stopped lanes ended; 6 respawned (4 QA + Backend + BE Infra; Impl's slot -> 2nd QA BE since
-  QA held 6 items). QA lanes spawned with the ticket they report on (T-436, T-382, T-425, T-781) so their posts land (T-910).
 - D-75 (+amend 1444d836): one Job per commit; the lead runs only the merge gate (gate-job.sh, one per batch); idle QA gets no-Job work.
 - 16:30 D-71 (coordinator): limit 6; 3rd build lane BE Infra (CI, runners, job-run, k3s, deploy, secrets delivery, usage, spend, quota):
   T-401, T-426, T-611, T-547, T-610. Backend: T-546, T-597, T-600 route, T-325. Spawn lanes with claude auto.
@@ -69,10 +69,9 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - T-93 Konfersi production (owner checklist). T-610 pre-deploy read-only prod count of the 2 rows (through the coordinator).
 
 ## NEXT (in order, as slots free)
-0. 01:55 coordinator re-triage decided on the ticket (9542-9549): T-594 closed into T-598. BE Infra queue: T-924 > T-938 > T-860 fups > T-921 >
-   T-923 > T-911 > T-27 > T-598 > T-653 > T-654 > T-612 S2. Backend after T-382 S4: T-409 G3 > T-356 > T-30 (XL, 4 slices). Impl: T-379 S3 > T-33.
-   QA (sonnet), next free slot: verify T-28 (bump, built) then T-294 (crew, built), then close on PASS.
-1. b30 gate (+T-379 S2 merge b9dd11fd, trace 9534; T-436 deploy note: agents reach only vaults whose agentWorkspaces names them); T-924 gate ALONE; T-772 S2g (Impl); T-591 lastReleased fix; T-525 persona draft (8236). 2. T-401 in b24 (ack 8027 sat unseen 13:50-15:15: re-read HELD tickets' last comments each hour) -> T-426 S1e -> T-379 S2 3f11b28; deploys are the coordinator's. ticket_list fails: use ticket_get.
+0. 12:15 audit (T-595 10033): T-924 CLOSED live; T-403 closed; after T-948 BE Infra: T-612 S1b > T-974 (T-971 H1) > T-565 portal backup >
+   T-975. Older order (9542): T-938 > T-860 fups > T-921 >
+   T-923 > T-911 > T-27 > T-598 > T-653 > T-654 > T-612 S2. Backend after T-382 S4: T-409 G3 > T-356 > T-30 (XL, 4 slices). Impl: T-379 S3 > T-33.1. b30 gate (+T-379 S2 merge b9dd11fd, trace 9534; T-436 deploy note: agents reach only vaults whose agentWorkspaces names them); T-924 gate ALONE; T-772 S2g (Impl); T-591 lastReleased fix; T-525 persona draft (8236). 2. T-401 in b24 (ack 8027 sat unseen 13:50-15:15: re-read HELD tickets' last comments each hour) -> T-426 S1e -> T-379 S2 3f11b28; deploys are the coordinator's. ticket_list fails: use ticket_get.
 4. RTK: T-340 (person/coordinator) -> T-341 merge -> T-306 item 3. 5. T-537. 6. T-513. 7. T-472 live re-check (needs portal_status), T-422, T-147, T-438, T-425, T-436, T-437, T-432, T-382, T-377, T-386, T-409, T-402, T-398,
    T-399, T-370 HOLD, T-371..T-374, T-363, T-451, T-470, T-507, T-508, T-512, T-520; T-404 open till deployed.
 
