@@ -11,8 +11,6 @@
   COORDINATOR: shadowing nuisance until T-976 is live) -> QA delta + blind.
 - BATCH 32 LANDED 22:54: integration 74599ece (gate claudepilot-gate-18d8e9d-f5f1 green on 18d8e9d0; status-only merge on top):
   T-382 S6, T-294 FIX1, T-1049. Relayed T-731 10876 -> coordinator deploys. Format sweep stays T-1032 (10857).
-- T-425 S2b merge: controller.ts resolved 571f0fba (3753d3c2, Job bvl4mr4k1); PRD hunk: lead took integration's file 0d1afd3b
-  (lane refused git restore) -> builder re-adds the FR39 As-built text -> QA delta -> b33.
 - T-1043 S0a FIX1 3c907e76 (badfb8da rc0, 274/274) -> delta c691df71 + blind d9f18599. S0b: lead merged S0a in, 789474e4
   (trace T-1043 10772) -> 76845676 continues. Denial = 404 (10605).
 - T-974 URGENT FIX 6abbf44f blind PWG 10774 (10 mutants killed) -> FIX2 `git remote set-url/add` + -c case row, a3554d40 first.
@@ -31,9 +29,12 @@
 - T-968 S2a 896daa98 PWG x2 (QA 10802, blind 10803 Job c04c05e7 12/13 killed) -> gaps fixed in S2b by 2a0edbd8 (10804);
   S2a+S2b land together after the c691df71 delta + d9f18599 blind.
 - 21:30 both QA lanes idle (every verdict waits on a builder fix; T-595 note). 20:45 third-QA-lane plan WITHDRAWN.
-- Lanes: c691df71 QA (H2 S1 > T-975 delta > S0a+S0b > S2b > T-565 > T-976); d9f18599 QA/blind (H2 S1 blind > T-974 FIX2 >
-  T-971 H1 delta > PRD > S2b blind > S0b blind); a3554d40 T-974 FIX2 > T-975 FIX > T-971 H1 fix > T-969; 76845676 T-1043
-  S0a+S0b; 2a0edbd8 T-976 rebase > T-565 fix > T-968 PRD > S2b; 3753d3c2 T-425 S2b merge > batch 33.
+- 23:10 returns: T-425 S2b merge e2e4a2b6 (bvl4mr4k1 rc0 on 571f0fba, 851/851) -> QA delta c691df71. T-971 H2 S1 QA PWG 10847
+  (4 gaps) -> fix 3753d3c2. T-974 FIX2 42b95954 (b01b54cd rc0) -> blind d9f18599. T-969 8144c5ce (c2159b27 rc0) -> QA c691df71
+  -> blind d9f18599. T-975 FIX 6650e8ff Job bdwtltcfm rc1 (ci/links.test cancel-running) -> re-run by7elpu9y; lead: likely the CAS, not flake.
+- Lanes: c691df71 QA (T-425 delta > T-969 > T-975 delta > S0a+S0b > S2b > T-565 > T-976 > H2 delta); d9f18599 blind
+  (H2 S1 > T-974 FIX2 > T-969 > T-971 H1 delta > PRD > S2b > S0b); a3554d40 T-975 FIX > T-971 H1 fix; 76845676 T-1043
+  S0a+S0b (Job queued); 2a0edbd8 T-976 rebase > T-565 fix > T-968 PRD > S2b; 3753d3c2 T-971 H2 S1 fix > batch 33.
 
 ## DECISIONS (binding)
 - D-81 risk-based review: same builder through all fixes; one QA, the same QA re-checks; blind review only for security, auth,
