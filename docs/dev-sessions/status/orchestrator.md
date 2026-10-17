@@ -21,7 +21,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - Lanes (all hasyim, auto, sonnet; respawned 10:00 from pushed heads after the restart):
   BE INFRA a3554d40 T-938 259935e8 (yaml case added; Job). T-921 PAUSED at 0dfff348 (lane ended for T-948).
   BACKEND 524bf92b (sekar) T-425 S2b: kill M1/M2a/M4/M5 + detached-send hang test (QA PWG 9770; decision T-595 9772).
-  QA 694614c4 (one.claude) T-409 G3 ee75effd (built, DONE 9758). IMPL 2 3189279b T-436 S3 + T-772 S2g e4e2c4ff.- Waiting for QA after build: T-938 (blind review; coordinator lands), T-921, T-436 S3, T-379 S3, T-425 S2b. Next build: T-382 S5.
+  QA 1c6fd27b (sekar) T-28 + T-294 on integration 28d84a99 (close on PASS); then T-948 QA.
+  T-409 G3 ee75effd QA PWG 9820 -> merge in b31; G3b fup (corrupt state.json, adopted -> started) after T-425 S2b (T-595 9823). IMPL 2 3189279b T-436 S3 + T-772 S2g e4e2c4ff.- Waiting for QA after build: T-938 (blind review; coordinator lands), T-921, T-436 S3, T-379 S3, T-425 S2b. Next build: T-382 S5.
 - D-79: uat on the owner's explicit request is crew work through the normal path (dry run, go/no-go); never on our own.
 
 ## DECISIONS (binding)
