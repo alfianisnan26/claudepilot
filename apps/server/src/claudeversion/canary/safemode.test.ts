@@ -80,7 +80,7 @@ function fakeBox(cli: { knowsFlag: boolean; envStopsHooks?: boolean; hooksRun?: 
       return {
         write: (line) => {
           if (flag && !cli.knowsFlag) return void setImmediate(() => (data(Buffer.from("error: unknown option '--safe-mode'\n")), exit(1)));
-          const id = (JSON.parse(line) as { request_id: string }).request_id;
+          const id = (JSON.parse(String(line)) as { request_id: string }).request_id;
           setImmediate(() => data(Buffer.from(`${JSON.stringify({ type: 'control_response', response: { request_id: id, subtype: 'success', response: reply() } })}\n`)));
         },
         close: () => {

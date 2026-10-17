@@ -110,6 +110,10 @@ spec:
               value: "true"
             - name: PORTAL_CONNECT_URL
               value: https://pilot.ai.isnan.me
+            # T-948 app ports (docs/prd/app-ports.md): a workspace's web app on its own host app-<name>-<port>.ai.isnan.me (the
+            # IngressRoute claudepilot-app-ports below). Unset turns the feature off.
+            - name: PORT_PROXY_HOST_SUFFIX
+              value: ai.isnan.me
           # T-365: a 1 s timeout dropped a slow but alive portal from the Service and the liveness kill restarted it while the node's
           # disk was busy, which made the stall longer. Out of the Service after 3 slow checks (30 s), restarted only after 5 minutes.
           readinessProbe:
@@ -177,6 +181,28 @@ spec:
     - websecure
   routes:
     - match: Host(`pilot.ai.isnan.me`)
+      kind: Rule
+      services:
+        - name: claudepilot-portal
+          port: 3000
+  tls:
+    certResolver: cloudflare
+    domains:
+      - main: "*.ai.isnan.me"
+---
+# T-948 app ports: every app-<name>-<port>.ai.isnan.me host goes to the same portal Service, whose app-port proxy answers it (and only it).
+# One label under ai.isnan.me, so the existing *.ai.isnan.me certificate covers it. Its own route, so a mistake here can't take the
+# portal's host down. HostRegexp is Traefik v3 syntax (a Go regexp).
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: claudepilot-app-ports
+  namespace: isnan-claudepilot
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: HostRegexp(`^app-[a-z0-9-]+\.ai\.isnan\.me$`)
       kind: Rule
       services:
         - name: claudepilot-portal
