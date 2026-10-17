@@ -24,8 +24,7 @@ beforeEach(() => {
     new Promise<Response>((resolve) => {
       calls.push({
         url: String(url),
-        reply: (status, body) =>
-          resolve(new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })),
+        reply: (status, body) => resolve(new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })),
       });
     })) as typeof fetch;
 });
@@ -95,11 +94,7 @@ test('another failure keeps the list and the button, and asks for nothing else',
   await tick();
   assert.deepEqual(ids(), ['a', 'b']);
   assert.equal(mounted!.current.hasMore, true);
-  assert.equal(
-    calls.filter((c) => !c.url.includes('cursor=')).length,
-    1,
-    'no second request for page 1',
-  );
+  assert.equal(calls.filter((c) => !c.url.includes('cursor=')).length, 1, 'no second request for page 1');
 });
 
 test('the poll that finds a moved seam drops the older pages (b: applyHead is the seam rule)', async () => {

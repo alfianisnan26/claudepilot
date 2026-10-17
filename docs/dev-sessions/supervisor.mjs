@@ -76,8 +76,10 @@ const TRACKS = [
     claudes: ['alfian.isnan', 'hasyim', 'satria', 'one.claude', 'two.claude', 'sekar'],
     kickoff: (again, reason) =>
       `You are the Konfersi lead, running in ClaudePilot${again ? ` (the earlier chat ended: ${reason}; its live function sessions are now yours: session_family)` : ''}, and the lead of its crew (D-52). You plan, route, merge and deploy to stg; you never implement or verify yourself. Nobody answers questions: decide by the written defaults, write it on the ticket, go on; the owner's ONLY standing action is Konfersi production (D-62): never assign a ticket to the owner or ask him anything else; permissions, secrets within the systems you already use, rule files and gate changes (propose text on a ticket assigned to yourself; a tightening is landed by the coordinator, a loosening after a blind reviewer's PASS, D-60) and stg merges (gated by konfersi-qa's PASS) are the harness's; a ticket assigned to the owner for any of these is a defect. Production questions go as one line on T-93. Read first: ~/work/claudepilot/docs/dev-sessions/CHARTER.md and DECISIONS.md (D-47, D-49, D-51, D-52, D-60, D-61, D-62 bind you), ~/work/claudepilot/docs/kit/skills/orchestration/SKILL.md (the crew rules), your pilot tickets (ticket_list, tag konfersi-migration; status ticket T-84), docs/agentic/OPERATING-MODEL.md and RULES.md in ~/work/agentic-worktrees/orch-charter, git worktree list in ~/work/agentic-worktrees. ${LANES('Konfersi')} Route by area: owner label 39 to FE Business, lab UI to FE Lab, d2 to BE Business, fb and metocean to BE Lab & AI, qp to QA Perf, b9 to QA UI. Live cap 14 in the workspace, at most 7 live workers for you (six lanes and the free slot; D-61, D-68, D-70); QA and review on sonnet (D-63). First, in order: (1) give ~/work/konfersi-universe a .claude/settings.json allow list in D-49's shape (Edit and Write under ~/work/konfersi-universe/**, ~/work/konfersi-universe.worktrees/** and ~/work/agentic-worktrees/**; git status, diff, log, add, commit, fetch, grep, worktree, push of work branches; the modules' test and build commands; deny pushes to stg and main, force pushes and anything production or uat), commit it to a work branch through the normal flow, and check that the portal trusts the folder; (2) prove the job once: one konfersi-qa worker reads a ticket, runs one module's tests and comments its verdict; fix what it could not do before you dispatch more; (3) refresh docs/agentic/OPERATING-MODEL.md so its roles name these sessions; (4) then dispatch by owner label. Heavy jobs only as cluster Jobs through ~/work/claudepilot/scripts/job-run.sh, never in the pod (D-61); stg only; secrets by name only, never printed; commits with Ticket, Pilot-Session and Pilot-Agent trailers; status on T-84 every ~2 h.`,
-    nudge: 'Nobody is here to answer. Continue now: look at your pilot tickets (ticket_list, tag konfersi-migration) and your crew (session_family): give each lane its next ticket (session_message), send every delivery to the QA lane of its side before you merge, keep the lanes alive (D-70) and end other workers with no work. If you asked a question, answer it yourself with the default written on the ticket and go on. Do not stop to summarise or wait.',
-    wake: (why) => `This chat was interrupted (${why}). Continue where you left off: your pilot tickets (tag konfersi-migration), your crew (session_family), git worktree list in ~/work/agentic-worktrees, and carry on. Nobody is here to answer questions.`,
+    nudge:
+      'Nobody is here to answer. Continue now: look at your pilot tickets (ticket_list, tag konfersi-migration) and your crew (session_family): give each lane its next ticket (session_message), send every delivery to the QA lane of its side before you merge, keep the lanes alive (D-70) and end other workers with no work. If you asked a question, answer it yourself with the default written on the ticket and go on. Do not stop to summarise or wait.',
+    wake: (why) =>
+      `This chat was interrupted (${why}). Continue where you left off: your pilot tickets (tag konfersi-migration), your crew (session_family), git worktree list in ~/work/agentic-worktrees, and carry on. Nobody is here to answer questions.`,
   },
   // The Event program left pilot on 2026-10-15 (owner, D-67): no track; its work goes on outside pilot.
   // Tradingbot (owner, 2026-10-15, D-74): a paper-trading lab, one lead and two lanes, no human in the loop.
@@ -88,8 +90,10 @@ const TRACKS = [
     claudes: ['satria', 'sekar', 'two.claude', 'hasyim', 'fadlilah', 'one.claude'],
     kickoff: (again, reason) =>
       `You are the Tradingbot lead, running in ClaudePilot${again ? ` (the earlier chat ended: ${reason}; its live lanes are now yours: session_family)` : ''}: the orchestrator of a paper-trading lab (D-74). You plan, decide, route and merge; you never implement or analyse yourself. No human is in the loop: nobody answers questions, so decide by the rules, write the decision on the ticket and go on; never assign a ticket to the owner or ask him anything (D-62). Read first: ~/work/tradingbot/README.md (the goals) and CLAUDE.md (the rules: PAPER ONLY, never a real order or a key that can trade or withdraw, public data within rate limits, never scrape TradingView's data, the pod limits for installs, tests and long-running processes), and ~/work/claudepilot/docs/dev-sessions/CHARTER.md. Your crew is two long-lived lanes you spawn once each (session_spawn, claude auto, mode dontAsk, report idle, model sonnet, folder ~/work/tradingbot) and keep, giving each its next ticket with session_message: 'Tradingbot Fullstack' (role lane-fullstack: the collectors' code, the paper-trading engine with fees, slippage and latency, the store, the API, the dashboard with TradingView Lightweight Charts, tests, and pilot-browser screenshots at 390 and 1280 px) and 'Tradingbot Analyst' (role lane-analyst: data on intervals from public exchange REST and WebSocket APIs and public sentiment, history, the live market, strategies, backtests out of sample, paper sessions, tooling, and knowledge notes in the vault folder Tradingbot/). At most 2 live workers; never end a lane for lack of work. Tickets: tag tradingbot; your status every ~2 h on T-641. First, in order: (1) write the plan as tickets (collector, paper engine, strategy framework and the first strategies, backtest harness, dashboard v1, sentiment, self-healing run scripts); (2) spawn both lanes with their first tickets at once; (3) reach a working vertical slice soon: live prices into a paper session into a dashboard chart, with screenshots; then (4) improve by measured results only (return, Sharpe or Sortino, drawdown, win rate, fees, exposure, out of sample), and keep the dashboard simple. Self-healing: a dead process is restarted by its script and its cause ticketed. Merge to main only with the evidence of a check by the other lane or you (tests, screenshots, numbers). Commits with Ticket, Pilot-Session and Pilot-Agent trailers.`,
-    nudge: 'Nobody is here to answer. Continue now: look at your tradingbot tickets and your two lanes (session_family): give each lane its next ticket, merge what is checked, restart what died, and post your status on T-641 when it is due. If you asked a question, answer it yourself by the rules in ~/work/tradingbot/CLAUDE.md and go on.',
-    wake: (why) => `This chat was interrupted (${why}). Continue where you left off: your tradingbot tickets, your lanes (session_family), git status in ~/work/tradingbot, and the run scripts (scripts/*.sh status). Nobody is here to answer questions.`,
+    nudge:
+      'Nobody is here to answer. Continue now: look at your tradingbot tickets and your two lanes (session_family): give each lane its next ticket, merge what is checked, restart what died, and post your status on T-641 when it is due. If you asked a question, answer it yourself by the rules in ~/work/tradingbot/CLAUDE.md and go on.',
+    wake: (why) =>
+      `This chat was interrupted (${why}). Continue where you left off: your tradingbot tickets, your lanes (session_family), git status in ~/work/tradingbot, and the run scripts (scripts/*.sh status). Nobody is here to answer questions.`,
   },
 ];
 
@@ -113,7 +117,11 @@ const saveState = (s) => writeFileSync(STATE_FILE, JSON.stringify(s, null, 2));
 
 let cookie = '';
 async function login() {
-  const res = await fetch(`${PORTAL}/api/login`, { method: 'POST', headers: { 'content-type': 'application/json', origin: PORTAL }, body: JSON.stringify({ code: CODE }) });
+  const res = await fetch(`${PORTAL}/api/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', origin: PORTAL },
+    body: JSON.stringify({ code: CODE }),
+  });
   if (!res.ok) throw new Error(`sign-in refused (${res.status})`);
   cookie = (res.headers.getSetCookie?.() ?? []).map((c) => c.split(';')[0]).join('; ');
   if (!cookie) throw new Error('sign-in gave no session');
@@ -123,7 +131,11 @@ async function api(method, path, body) {
   for (let attempt = 1; ; attempt++) {
     try {
       if (!cookie) await login();
-      const res = await fetch(`${PORTAL}${path}`, { method, headers: { 'content-type': 'application/json', origin: PORTAL, cookie }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+      const res = await fetch(`${PORTAL}${path}`, {
+        method,
+        headers: { 'content-type': 'application/json', origin: PORTAL, cookie },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      });
       if (res.status === 401) {
         cookie = '';
         if (attempt < 4) continue;
@@ -159,10 +171,23 @@ const revokeMcpToken = () => mcp.revoke();
 async function mcpCall(name, args) {
   const token = await mcpToken();
   const headers = { authorization: `Bearer ${token}`, 'content-type': 'application/json', accept: 'application/json, text/event-stream' };
-  const init = await fetch(`${PORTAL}/mcp`, { method: 'POST', headers, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'dev-sessions-supervisor', version: '1' } } }) });
+  const init = await fetch(`${PORTAL}/mcp`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'dev-sessions-supervisor', version: '1' } },
+    }),
+  });
   const sid = init.headers.get('mcp-session-id');
   await init.text();
-  const res = await fetch(`${PORTAL}/mcp`, { method: 'POST', headers: { ...headers, ...(sid ? { 'mcp-session-id': sid } : {}) }, body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name, arguments: args } }) });
+  const res = await fetch(`${PORTAL}/mcp`, {
+    method: 'POST',
+    headers: { ...headers, ...(sid ? { 'mcp-session-id': sid } : {}) },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name, arguments: args } }),
+  });
   const raw = await res.text();
   const line = raw.split('\n').find((l) => l.startsWith('data: '));
   const out = JSON.parse(line ? line.slice(6) : raw);
@@ -174,14 +199,28 @@ async function sessionSend(id, text) {
   if (DRY) return log(`[dry] would send to ${id.slice(0, 8)}: ${text.slice(0, 90)}...`);
   const token = await mcpToken();
   const headers = { authorization: `Bearer ${token}`, 'content-type': 'application/json', accept: 'application/json, text/event-stream' };
-  const init = await fetch(`${PORTAL}/mcp`, { method: 'POST', headers, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'dev-sessions-supervisor', version: '1' } } }) });
+  const init = await fetch(`${PORTAL}/mcp`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'dev-sessions-supervisor', version: '1' } },
+    }),
+  });
   const sid = init.headers.get('mcp-session-id');
   await init.text();
-  const res = await fetch(`${PORTAL}/mcp`, { method: 'POST', headers: { ...headers, ...(sid ? { 'mcp-session-id': sid } : {}) }, body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'session_send', arguments: { id, text } } }) });
+  const res = await fetch(`${PORTAL}/mcp`, {
+    method: 'POST',
+    headers: { ...headers, ...(sid ? { 'mcp-session-id': sid } : {}) },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'session_send', arguments: { id, text } } }),
+  });
   const raw = await res.text();
   const line = raw.split('\n').find((l) => l.startsWith('data: '));
   const out = JSON.parse(line ? line.slice(6) : raw);
-  if (out.error || out.result?.isError) throw new Error(`session_send: ${out.error?.message ?? out.result?.content?.[0]?.text ?? 'refused'}`);
+  if (out.error || out.result?.isError)
+    throw new Error(`session_send: ${out.error?.message ?? out.result?.content?.[0]?.text ?? 'refused'}`);
 }
 
 /* ---------- The deploy ---------- */
@@ -189,7 +228,14 @@ async function sessionSend(id, text) {
 async function runState(id) {
   const r = await api('GET', `/api/ci/runs/${encodeURIComponent(id)}`);
   const run = r.data;
-  return run ? { status: run.status, number: run.number, sha: String(run.sha ?? '').slice(0, 8), release: run.detail?.find((j) => j.id === 'release')?.status ?? null } : null;
+  return run
+    ? {
+        status: run.status,
+        number: run.number,
+        sha: String(run.sha ?? '').slice(0, 8),
+        release: run.detail?.find((j) => j.id === 'release')?.status ?? null,
+      }
+    : null;
 }
 
 async function deploy() {
@@ -217,7 +263,8 @@ async function deploy() {
   for (;;) {
     const s = await runState(DEPLOY_RUN);
     if (s?.status === 'passed') return log(`deploy: run #${s.number} passed (released and verified)`);
-    if (!s || ['failed', 'cancelled'].includes(s.status)) throw new Error(`deploy: run ${s?.number ?? '?'} ${s?.status ?? 'gone'} after the approval`);
+    if (!s || ['failed', 'cancelled'].includes(s.status))
+      throw new Error(`deploy: run ${s?.number ?? '?'} ${s?.status ?? 'gone'} after the approval`);
     if (Date.now() > end) throw new Error('deploy: the run did not finish in an hour');
     await sleep(15);
   }
@@ -241,7 +288,8 @@ async function claudeIdOf(name) {
  */
 async function leavingIds(model) {
   const r = await api('GET', `/api/autotransfer/leaving${model ? `?model=${encodeURIComponent(model)}` : ''}`);
-  if (r.error || !Array.isArray(r.data?.claudes)) return log(`could not read which Claudes auto move would leave (${r.error?.message ?? 'no answer'}): not filtering`), new Set();
+  if (r.error || !Array.isArray(r.data?.claudes))
+    return (log(`could not read which Claudes auto move would leave (${r.error?.message ?? 'no answer'}): not filtering`), new Set());
   return new Set(r.data.claudes.filter((c) => c.leaves).map((c) => c.claudeId));
 }
 /**
@@ -251,7 +299,12 @@ async function leavingIds(model) {
  */
 async function bestClaude(names) {
   const r = await api('GET', '/api/claude-usage');
-  const used = new Map((r.data?.claudes ?? []).map((c) => [c.claudeId ?? c.id, Math.max(0, ...(c.windows ?? []).map((w) => (typeof w.usedPct === 'number' ? w.usedPct : 0)))]));
+  const used = new Map(
+    (r.data?.claudes ?? []).map((c) => [
+      c.claudeId ?? c.id,
+      Math.max(0, ...(c.windows ?? []).map((w) => (typeof w.usedPct === 'number' ? w.usedPct : 0))),
+    ]),
+  );
   const leaving = await leavingIds(null);
   let best = null;
   let leaver = null;
@@ -270,7 +323,6 @@ async function bestClaude(names) {
   return best ?? leaver;
 }
 
-
 /**
  * Stopgap until the portal's auto move waits and resumes by itself (T-105): a chat that is idle on a Claude with 10% or less left (or a spent
  * session window) moves to the delegated Claude with the most room above 10%, handoff skipped when the source is spent; with none above the
@@ -280,13 +332,23 @@ async function bestClaude(names) {
 const LOW_USED_PCT = Number(process.env.LOW_USED_PCT ?? 90);
 async function moveIfLow(t, ts, cur) {
   const r = await api('GET', '/api/claude-usage');
-  const used = new Map((r.data?.claudes ?? []).map((c) => [c.claudeId ?? c.id, Math.max(0, ...(c.windows ?? []).map((w) => (typeof w.usedPct === 'number' ? w.usedPct : 0)))]));
+  const used = new Map(
+    (r.data?.claudes ?? []).map((c) => [
+      c.claudeId ?? c.id,
+      Math.max(0, ...(c.windows ?? []).map((w) => (typeof w.usedPct === 'number' ? w.usedPct : 0))),
+    ]),
+  );
   const mine = used.get(cur.claudeId);
   if (mine === undefined || mine < LOW_USED_PCT) return false;
   // A chat on a model only some Claudes have (Fable shows as its own window on those) goes to one that has it first; with none, to another
   // Claude with the model it should run there in the switch request (T-109: the portal applies it, verifies it and falls down the chain).
   const gated = /fable/i.exec(cur.model ?? '')?.[0]?.toLowerCase() ?? null;
-  const has = new Map((r.data?.claudes ?? []).map((c) => [c.claudeId ?? c.id, (c.windows ?? []).some((w) => `${w.key ?? ''} ${w.label ?? ''}`.toLowerCase().includes(gated ?? '\u0000'))]));
+  const has = new Map(
+    (r.data?.claudes ?? []).map((c) => [
+      c.claudeId ?? c.id,
+      (c.windows ?? []).some((w) => `${w.key ?? ''} ${w.label ?? ''}`.toLowerCase().includes(gated ?? '\u0000')),
+    ]),
+  );
   let best = null;
   let other = null;
   const leaving = await leavingIds(cur.model ?? null);
@@ -303,12 +365,21 @@ async function moveIfLow(t, ts, cur) {
   }
   best = best ?? other;
   if (!best) {
-    if (ts.lowLoggedAt === undefined || Date.now() - ts.lowLoggedAt > 30 * 60_000) log(`${t.key}: its Claude is at ${mine}% used and no delegated Claude has more than ${100 - LOW_USED_PCT}% left: waiting, looking again every round`), (ts.lowLoggedAt = Date.now());
+    if (ts.lowLoggedAt === undefined || Date.now() - ts.lowLoggedAt > 30 * 60_000)
+      (log(
+        `${t.key}: its Claude is at ${mine}% used and no delegated Claude has more than ${100 - LOW_USED_PCT}% left: waiting, looking again every round`,
+      ),
+        (ts.lowLoggedAt = Date.now()));
     return false;
   }
   const on = best.model ? ` on ${best.model}` : '';
-  if (DRY) return log(`[dry] ${t.key}: would move ${cur.id.slice(0, 8)} from ${mine}% used to ${best.name}${on} (${best.used}% used)`), false;
-  const res = await api('POST', `/api/chat/sessions/${cur.id}/switch`, { claudeId: best.id, handoff: mine >= 100 ? 'skip' : 'ask', ...(best.model ? { model: best.model } : {}) });
+  if (DRY)
+    return (log(`[dry] ${t.key}: would move ${cur.id.slice(0, 8)} from ${mine}% used to ${best.name}${on} (${best.used}% used)`), false);
+  const res = await api('POST', `/api/chat/sessions/${cur.id}/switch`, {
+    claudeId: best.id,
+    handoff: mine >= 100 ? 'skip' : 'ask',
+    ...(best.model ? { model: best.model } : {}),
+  });
   if (res.error) {
     log(`${t.key}: could not move to ${best.name}: ${res.error.message}`);
     ts.backoffUntil = Date.now() + 5 * 60_000;
@@ -331,9 +402,18 @@ const kickoff = (t, again, reason) =>
 /** What the supervisor sends to recover a chat in place: it is an agent to the portal (T-136), so only a person brings back a suspicious cause. */
 const recoverBody = () => ({ by: 'agent' });
 /** What a recover answer means: back in place; wait (the pause between recoveries, or the portal restarting); or a new session (absent, the cap, a suspicious cause, a person's close). */
-const recoverVerdict = (r) => (!r.error && r.status < 300 ? 'recovered' : r.error?.code === 'RECOVER_PAUSED' || r.status >= 500 ? 'wait' : 'new');
+const recoverVerdict = (r) =>
+  !r.error && r.status < 300 ? 'recovered' : r.error?.code === 'RECOVER_PAUSED' || r.status >= 500 ? 'wait' : 'new';
 // T-561: `lead: true` marks it a crew lead: with the portal's `sessions.leadRules` policy on, it launches with the lead rules (an older portal ignores it).
-const createBody = (t, claudeId, continuedFrom) => ({ workspaceId: WORKSPACE, title: t.title, claudeId, allowBypass: true, lead: true, cwd: t.folder ?? MAIN, ...(continuedFrom ? { continuedFrom } : {}) });
+const createBody = (t, claudeId, continuedFrom) => ({
+  workspaceId: WORKSPACE,
+  title: t.title,
+  claudeId,
+  allowBypass: true,
+  lead: true,
+  cwd: t.folder ?? MAIN,
+  ...(continuedFrom ? { continuedFrom } : {}),
+});
 
 async function startSession(t, tstate, again, reason, continuedFrom = null) {
   const pick = await bestClaude(t.claudes);
@@ -346,7 +426,8 @@ async function startSession(t, tstate, again, reason, continuedFrom = null) {
   if (r.error?.code === 'FOLDER_UNTRUSTED') {
     // The folder holds the repository's own .claude/settings.json (allow and deny rules only: no hooks, MCP servers, plugins or env).
     const scan = r.error.details ?? {};
-    if (scan.hooks?.length || scan.mcpServers?.length || scan.plugins?.length || scan.envNames?.length) throw new Error('the folder\'s project settings now load hooks, MCP servers, plugins or env: not trusting that unattended');
+    if (scan.hooks?.length || scan.mcpServers?.length || scan.plugins?.length || scan.envNames?.length)
+      throw new Error("the folder's project settings now load hooks, MCP servers, plugins or env: not trusting that unattended");
     const tr = await api('POST', '/api/chat/trust', { workspaceId: WORKSPACE, folder: scan.folder, hash: scan.hash });
     if (tr.error) throw new Error(`trust refused: ${tr.error.message}`);
     log(`${t.key}: trusted ${scan.folder} (${scan.allowRules} allow rules)`);
@@ -368,12 +449,15 @@ async function startSession(t, tstate, again, reason, continuedFrom = null) {
   const mode = (await api('GET', `/api/chat/sessions/${s.id}`)).data?.mode;
   if (mode !== 'bypassPermissions') throw new Error(`Bypass did not turn on (mode ${mode})`);
   // The model and effort are set on the record (D-46) before the kickoff, through the Portal MCP (session_configure); a refusal is logged, not fatal.
-  const model = t.model ?? ORCH_MODEL, effort = t.effort ?? ORCH_EFFORT;
+  const model = t.model ?? ORCH_MODEL,
+    effort = t.effort ?? ORCH_EFFORT;
   try {
     const out = await mcpCall('session_configure', { id: s.id, model, effort });
     if (out?.error || out?.result?.isError) throw new Error(out.error?.message ?? out.result?.content?.[0]?.text ?? 'refused');
     log(`${t.key}: model ${model}, effort ${effort}`);
-  } catch (e) { log(`${t.key}: could not set model ${model}: ${e.message}; it runs on the portal default`); }
+  } catch (e) {
+    log(`${t.key}: could not set model ${model}: ${e.message}; it runs on the portal default`);
+  }
   // D-61: a lead runs no Agent-tool sub-agents (they ran inside its process and on its Claude, and caused the 02:11 OOM) and at most a few
   // live workers. `subagents` applies at the process's next start: a fresh lead is restarted at once, before its kickoff (no context yet),
   // and must come back in Bypass. A refusal is logged, not fatal.
@@ -388,13 +472,17 @@ async function startSession(t, tstate, again, reason, continuedFrom = null) {
       if (after !== 'bypassPermissions') throw new Error(`not in Bypass after the restart (mode ${after})`);
     }
     log(`${t.key}: sub-agents off, at most ${LEAD_WORKERS[t.key] ?? 3} workers`);
-  } catch (e) { log(`${t.key}: could not turn sub-agents off: ${e.message}`); }
+  } catch (e) {
+    log(`${t.key}: could not turn sub-agents off: ${e.message}`);
+  }
   await sessionSend(s.id, t.kickoff ? t.kickoff(again, reason) : kickoff(t, again, reason));
   tstate.sessionId = s.id;
   tstate.started = [...(tstate.started ?? []), s.id].slice(-50); // T-409 G3: only chats it started are adopted
   tstate.cwd = s.cwd;
   (tstate.starts ??= []).push(Date.now());
-  log(`${t.key}: ${again ? 'started again' : 'started'} session ${s.id.slice(0, 8)} on ${claudeName} in ${s.cwd}${continuedFrom ? ` (continues ${continuedFrom.slice(0, 8)}: its tickets moved with it)` : ''}`);
+  log(
+    `${t.key}: ${again ? 'started again' : 'started'} session ${s.id.slice(0, 8)} on ${claudeName} in ${s.cwd}${continuedFrom ? ` (continues ${continuedFrom.slice(0, 8)}: its tickets moved with it)` : ''}`,
+  );
 }
 
 const statusSaysDone = (tstate) => {
@@ -407,9 +495,12 @@ const statusSaysDone = (tstate) => {
   }
 };
 
-const NUDGE = 'Nobody is here to answer. Continue now: integrate what finished sub-agents and worker sessions brought, give each lane its next ticket (session_message) and keep the lanes alive (D-70), within your worker limit (6 live workers, D-71; sub-agents are off; QA and review on sonnet, D-63; you never implement yourself), keep your status file current. If you asked a question, answer it yourself with the PRD default and go on. When the whole backlog is done, make TRACK COMPLETE the first line of your status file, commit and push it, and end with the final report. Do not stop to summarise or wait.';
-const WAKE = (why) => `This session was interrupted (${why}). Continue where you left off: read your status file docs/dev-sessions/status/orchestrator.md, look at git worktree list and git status in each worktree, and carry on. Nobody is here to answer questions.`;
-const MOVED = (to) => `This chat was moved to another Claude (${to}) and its process restarted: the sub-agents of the old process stopped. Continue now where you stopped: look at your tickets or status file, git worktree list and git status, restart the work that was in flight, commit and push WIP early. Nobody is here to answer questions.`;
+const NUDGE =
+  'Nobody is here to answer. Continue now: integrate what finished sub-agents and worker sessions brought, give each lane its next ticket (session_message) and keep the lanes alive (D-70), within your worker limit (6 live workers, D-71; sub-agents are off; QA and review on sonnet, D-63; you never implement yourself), keep your status file current. If you asked a question, answer it yourself with the PRD default and go on. When the whole backlog is done, make TRACK COMPLETE the first line of your status file, commit and push it, and end with the final report. Do not stop to summarise or wait.';
+const WAKE = (why) =>
+  `This session was interrupted (${why}). Continue where you left off: read your status file docs/dev-sessions/status/orchestrator.md, look at git worktree list and git status in each worktree, and carry on. Nobody is here to answer questions.`;
+const MOVED = (to) =>
+  `This chat was moved to another Claude (${to}) and its process restarted: the sub-agents of the old process stopped. Continue now where you stopped: look at your tickets or status file, git worktree list and git status, restart the work that was in flight, commit and push WIP early. Nobody is here to answer questions.`;
 const NUDGE_AFTER_MIN = Number(process.env.NUDGE_AFTER_MIN ?? 3);
 const NUDGE_GAP_MIN = Number(process.env.NUDGE_GAP_MIN ?? 10);
 const MAX_NUDGES = Number(process.env.MAX_NUDGES ?? 40);
@@ -435,7 +526,9 @@ async function compactLanes(t, ts, sessions, cur) {
     last[w.id] = Date.now();
     try {
       await sessionSend(w.id, COMPACT_LANE);
-      log(`${t.key}: lane ${String(w.title ?? w.id.slice(0, 8)).slice(0, 40)} at ${Math.round(w.context.usedTokens / 1000)}k: told to compact`);
+      log(
+        `${t.key}: lane ${String(w.title ?? w.id.slice(0, 8)).slice(0, 40)} at ${Math.round(w.context.usedTokens / 1000)}k: told to compact`,
+      );
     } catch (e) {
       log(`${t.key}: could not compact lane ${w.id.slice(0, 8)}: ${e.message}`);
     }
@@ -452,7 +545,11 @@ const STALE_LANE_GAP_MIN = Number(process.env.STALE_LANE_GAP_MIN ?? 60);
 const STALE_LANE = (min) =>
   `Supervisor: no event from you for ${min} min. If you are waiting on a background task (a job-run Job), its finish may not have reached you: read its output file now, act on the result and continue your ticket. If it is still running, say so in one line and keep waiting.`;
 function laneStale(w, wokenAt, now = Date.now()) {
-  return w.state === 'working' && now - Date.parse(w.lastActivityAt ?? 0) >= STALE_LANE_MIN * 60_000 && now - (wokenAt ?? 0) >= STALE_LANE_GAP_MIN * 60_000;
+  return (
+    w.state === 'working' &&
+    now - Date.parse(w.lastActivityAt ?? 0) >= STALE_LANE_MIN * 60_000 &&
+    now - (wokenAt ?? 0) >= STALE_LANE_GAP_MIN * 60_000
+  );
 }
 async function wakeStaleLanes(t, ts, sessions, cur, now = Date.now()) {
   const lanes = sessions.filter((x) => x.parentId === cur.id && /^lane-/.test(x.agent ?? '') && x.state !== 'ended');
@@ -463,7 +560,9 @@ async function wakeStaleLanes(t, ts, sessions, cur, now = Date.now()) {
     const min = Math.round((now - Date.parse(w.lastActivityAt)) / 60_000);
     try {
       await sessionSend(w.id, STALE_LANE(min));
-      log(`${t.key}: lane ${String(w.title ?? w.id.slice(0, 8)).slice(0, 40)} silent ${min} min while working: told to read its task output`);
+      log(
+        `${t.key}: lane ${String(w.title ?? w.id.slice(0, 8)).slice(0, 40)} silent ${min} min while working: told to read its task output`,
+      );
     } catch (e) {
       log(`${t.key}: could not wake lane ${w.id.slice(0, 8)}: ${e.message}`);
     }
@@ -480,7 +579,9 @@ function compactDue(cur, ts, now = Date.now()) {
  * min) is left alone: their reports wake it. With a free slot it is nudged, so idle workers and an open backlog never wait on one busy worker.
  */
 function slotsFull(sessions, cur, cap, now = Date.now()) {
-  const busy = sessions.filter((x) => x.parentId === cur.id && x.state === 'working' && now - Date.parse(x.lastActivityAt ?? 0) < 15 * 60_000).length;
+  const busy = sessions.filter(
+    (x) => x.parentId === cur.id && x.state === 'working' && now - Date.parse(x.lastActivityAt ?? 0) < 15 * 60_000,
+  ).length;
   return busy >= cap;
 }
 
@@ -503,14 +604,23 @@ async function answerWaiting(t, ts, cur) {
         continue;
       }
       try {
-        await mcpCall('session_respond', { id: cur.id, request_id: q.requestId, decision: 'deny', message: 'Nobody is here to answer. Decide yourself with the PRD default, write the decision in your status file, and go on.' });
+        await mcpCall('session_respond', {
+          id: cur.id,
+          request_id: q.requestId,
+          decision: 'deny',
+          message: 'Nobody is here to answer. Decide yourself with the PRD default, write the decision in your status file, and go on.',
+        });
         log(`${t.key}: a ${q.kind} was asked (${String(q.detail ?? '').slice(0, 80)}): answered "decide yourself"`);
       } catch (err) {
         log(`${t.key}: could not answer a ${q.kind}: ${err.message}`);
       }
     } else if (q.kind === 'tool' && !ts.toolWaitLogged.includes(q.requestId)) {
       ts.toolWaitLogged = [...ts.toolWaitLogged.slice(-20), q.requestId];
-      log(`${t.key}: a tool approval waits for a person: ${q.toolName}: ${String(q.detail ?? '').replace(/\s+/g, ' ').slice(0, 110)}`);
+      log(
+        `${t.key}: a tool approval waits for a person: ${q.toolName}: ${String(q.detail ?? '')
+          .replace(/\s+/g, ' ')
+          .slice(0, 110)}`,
+      );
     }
   }
 }
@@ -529,7 +639,9 @@ async function ensureBypass(t, ts, cur, wake = false) {
   if (!['idle', 'waiting', 'working', ...(wake ? ['interrupted'] : [])].includes(cur.state)) return;
   if (!wake && cur.process !== 'live') return; // asleep: re-asserted right before the next message wakes it
   if (!cur.bypassCapable) {
-    if (ts.bypassNotCapable !== cur.id) log(`${t.key}: in ${cur.mode}, not Bypass, and the session was not started to allow it: a person must restart it for Bypass`), (ts.bypassNotCapable = cur.id);
+    if (ts.bypassNotCapable !== cur.id)
+      (log(`${t.key}: in ${cur.mode}, not Bypass, and the session was not started to allow it: a person must restart it for Bypass`),
+        (ts.bypassNotCapable = cur.id));
     return;
   }
   if (ts.bypassAt && Date.now() - ts.bypassAt < BYPASS_GAP_MIN * 60_000) return;
@@ -539,9 +651,14 @@ async function ensureBypass(t, ts, cur, wake = false) {
   if (re.error) return log(`${t.key}: in ${cur.mode}, not Bypass: the server code was refused (${re.error.code ?? re.status})`);
   const bp = await api('POST', `/api/chat/sessions/${cur.id}/bypass`, { acknowledged: true });
   const mode = bp.error ? null : (await api('GET', `/api/chat/sessions/${cur.id}`)).data?.mode;
-  if (mode !== 'bypassPermissions') return log(`${t.key}: in ${cur.mode}, not Bypass: re-asserting it failed (${bp.error ? `${bp.error.code} ${bp.error.message}` : `mode ${mode}`})`);
+  if (mode !== 'bypassPermissions')
+    return log(
+      `${t.key}: in ${cur.mode}, not Bypass: re-asserting it failed (${bp.error ? `${bp.error.code} ${bp.error.message}` : `mode ${mode}`})`,
+    );
   const stale = await denyStaleToolApprovals(cur).catch(() => 0);
-  log(`${t.key}: was in ${cur.mode}, not Bypass: Bypass on again${stale ? ` (${stale} tool approval${stale === 1 ? '' : 's'} asked before it denied with "run it again")` : ''}`);
+  log(
+    `${t.key}: was in ${cur.mode}, not Bypass: Bypass on again${stale ? ` (${stale} tool approval${stale === 1 ? '' : 's'} asked before it denied with "run it again")` : ''}`,
+  );
 }
 
 /** Tool approvals still open on a chat that is in Bypass now: each was asked before it, and Claude Code does not ask them again by itself. */
@@ -551,7 +668,13 @@ async function denyStaleToolApprovals(cur) {
   const resolved = new Set(list.filter((e) => e.kind === 'resolved').map((e) => e.requestId));
   let n = 0;
   for (const e of list.filter((x) => x.kind === 'request' && x.request?.kind === 'tool' && !resolved.has(x.request.requestId))) {
-    await mcpCall('session_respond', { id: cur.id, request_id: e.request.requestId, decision: 'deny', message: 'This chat was out of Bypass by mistake and Bypass is on again: this approval is dropped. Run the same command again; it will not ask. Nobody is here to answer questions.' });
+    await mcpCall('session_respond', {
+      id: cur.id,
+      request_id: e.request.requestId,
+      decision: 'deny',
+      message:
+        'This chat was out of Bypass by mistake and Bypass is on again: this approval is dropped. Run the same command again; it will not ask. Nobody is here to answer questions.',
+    });
     n++;
   }
   return n;
@@ -580,14 +703,21 @@ async function ensureWorktreeTrust(sessions) {
  */
 function ownWorktrees(repo, entries) {
   const root = `${repo.replace(/\/+$/, '')}.worktrees/`;
-  return [...new Set((entries ?? []).map((e) => e?.path).filter((x) => typeof x === 'string' && x.startsWith(root) && x.length > root.length && !x.slice(root.length).includes('..')))];
+  return [
+    ...new Set(
+      (entries ?? [])
+        .map((e) => e?.path)
+        .filter((x) => typeof x === 'string' && x.startsWith(root) && x.length > root.length && !x.slice(root.length).includes('..')),
+    ),
+  ];
 }
 // Hundreds of old worktrees exist (331 on 2026-10-17): a trusted folder is never scanned again in this process, one left untrusted only every
 // WORKTREE_RECHECK_MIN, and folders never seen before go first, so a new lane worktree is trusted within a round or two.
 const WORKTREE_RECHECK_MIN = Number(process.env.WORKTREE_RECHECK_MIN ?? 20);
 const worktreeSeen = new Map(); // folder -> { at, trusted }
 async function ensureRepoWorktreeTrust(now = Date.now()) {
-  const fresh = [], due = [];
+  const fresh = [],
+    due = [];
   for (const repo of [TRADINGBOT, KONFERSI, MAIN]) {
     const r = await api('GET', `/api/chat/worktrees?workspaceId=${encodeURIComponent(WORKSPACE)}&folder=${encodeURIComponent(repo)}`);
     const entries = Array.isArray(r.data) ? r.data : (r.data?.worktrees ?? []);
@@ -598,19 +728,23 @@ async function ensureRepoWorktreeTrust(now = Date.now()) {
     }
   }
   for (const folder of [...fresh, ...due]) {
-    const trusted = await ensureTrustOfWorktree(folder).then((t) => t === true).catch(() => false);
+    const trusted = await ensureTrustOfWorktree(folder)
+      .then((t) => t === true)
+      .catch(() => false);
     worktreeSeen.set(folder, { at: Date.now(), trusted });
   }
 }
 /** Settings hashes seen trusted on this workspace, in a file of their own (the round's state is written back whole), so a restart remembers them. */
 const TRUSTED_FILE = join(STATE_DIR, 'trusted-hashes.json');
-const knownTrusted = new Set((() => {
-  try {
-    return existsSync(TRUSTED_FILE) ? JSON.parse(readFileSync(TRUSTED_FILE, 'utf8')) : [];
-  } catch {
-    return [];
-  }
-})());
+const knownTrusted = new Set(
+  (() => {
+    try {
+      return existsSync(TRUSTED_FILE) ? JSON.parse(readFileSync(TRUSTED_FILE, 'utf8')) : [];
+    } catch {
+      return [];
+    }
+  })(),
+);
 function rememberTrusted(hash) {
   if (!hash || knownTrusted.has(hash)) return;
   knownTrusted.add(hash);
@@ -623,29 +757,43 @@ function worktreeTrustable(scan, known) {
   return known.has(scan.hash);
 }
 async function ensureTrustOfWorktree(folder) {
-  const scan = (await api('GET', `/api/chat/trust/scan?workspaceId=${encodeURIComponent(WORKSPACE)}&folder=${encodeURIComponent(folder)}`)).data;
+  const scan = (await api('GET', `/api/chat/trust/scan?workspaceId=${encodeURIComponent(WORKSPACE)}&folder=${encodeURIComponent(folder)}`))
+    .data;
   if (!scan) return;
-  if (scan.trusted) return rememberTrusted(scan.hash), true;
+  if (scan.trusted) return (rememberTrusted(scan.hash), true);
   if (!worktreeTrustable(scan, knownTrusted)) {
-    if (!scan.empty && !trustLogged.has(scan.hash)) log(`folder trust: ${folder} has settings never trusted here (or loads more than rules): left for the coordinator`), trustLogged.add(scan.hash);
+    if (!scan.empty && !trustLogged.has(scan.hash))
+      (log(`folder trust: ${folder} has settings never trusted here (or loads more than rules): left for the coordinator`),
+        trustLogged.add(scan.hash));
     return;
   }
   if (DRY) return log(`[dry] would trust the worktree ${folder} (settings already trusted elsewhere)`);
   const tr = await api('POST', '/api/chat/trust', { workspaceId: WORKSPACE, folder: scan.folder ?? folder, hash: scan.hash });
-  log(tr.error ? `folder trust: refused: ${tr.error.message}` : `folder trust: the worktree ${folder} has settings already trusted here (${scan.allowRules} rules): trusted`);
+  log(
+    tr.error
+      ? `folder trust: refused: ${tr.error.message}`
+      : `folder trust: the worktree ${folder} has settings already trusted here (${scan.allowRules} rules): trusted`,
+  );
   return !tr.error;
 }
 async function ensureTrustOf(folder) {
-  const scan = (await api('GET', `/api/chat/trust/scan?workspaceId=${encodeURIComponent(WORKSPACE)}&folder=${encodeURIComponent(folder)}`)).data;
+  const scan = (await api('GET', `/api/chat/trust/scan?workspaceId=${encodeURIComponent(WORKSPACE)}&folder=${encodeURIComponent(folder)}`))
+    .data;
   if (scan?.trusted) rememberTrusted(scan.hash);
   if (!scan || scan.trusted || scan.empty) return;
   if (scan.hooks?.length || scan.mcpServers?.length || scan.plugins?.length || scan.envNames?.length) {
-    if (!trustLogged.has(scan.hash)) log(`folder trust: the project settings now load hooks, MCP servers, plugins or env: a person must look (${folder})`), trustLogged.add(scan.hash);
+    if (!trustLogged.has(scan.hash))
+      (log(`folder trust: the project settings now load hooks, MCP servers, plugins or env: a person must look (${folder})`),
+        trustLogged.add(scan.hash));
     return;
   }
   if (DRY) return log(`[dry] would trust ${folder} (${scan.allowRules} permission rules, nothing else)`);
   const tr = await api('POST', '/api/chat/trust', { workspaceId: WORKSPACE, folder: scan.folder ?? folder, hash: scan.hash });
-  log(tr.error ? `folder trust: refused: ${tr.error.message}` : `folder trust: the permission rules of ${folder} changed (${scan.allowRules} rules, no hooks, servers, plugins or env): trusted again`);
+  log(
+    tr.error
+      ? `folder trust: refused: ${tr.error.message}`
+      : `folder trust: the permission rules of ${folder} changed (${scan.allowRules} rules, no hooks, servers, plugins or env): trusted again`,
+  );
   if (!tr.error) rememberTrusted(scan.hash);
 }
 const trustLogged = new Set();
@@ -683,7 +831,9 @@ async function reportDown(t, ts, cause, detail) {
     `- Cause: ${cause}`,
     `- Since: ${at}`,
     `- Last session: ${ts.sessionId ?? 'none'}`,
-    `- Detail: ${String(detail ?? '').replace(/\s+/g, ' ').slice(0, 300)}`,
+    `- Detail: ${String(detail ?? '')
+      .replace(/\s+/g, ' ')
+      .slice(0, 300)}`,
     `- Starts in 24 h: ${within24h(ts.starts).length} (after harmless endings: ${within24h(ts.harmless).length})`,
     '',
     'A person (or the portal watchdog, T-259) starts it again. This ticket is not repeated while the cause stands.',
@@ -693,7 +843,14 @@ async function reportDown(t, ts, cause, detail) {
     return log(`[dry] ${t.key}: would open a watchdog ticket: ${summary}`);
   }
   try {
-    const r = await api('POST', '/api/tickets', { type: 'bug', priority: 'high', tags: ['watchdog'], summary, description, workspaceId: WORKSPACE });
+    const r = await api('POST', '/api/tickets', {
+      type: 'bug',
+      priority: 'high',
+      tags: ['watchdog'],
+      summary,
+      description,
+      workspaceId: WORKSPACE,
+    });
     if (r.error || !r.data?.id) throw new Error(r.error?.message ?? `status ${r.status}`);
     ts.downReported[cause] = { at, id: r.data.id };
     log(`${t.key}: left down (${cause}): opened ${r.data.id}`);
@@ -703,7 +860,13 @@ async function reportDown(t, ts, cause, detail) {
 }
 /** What a failed start says about why the track is left down. */
 const downCause = (msg) =>
-  /is a Claude on/.test(msg) ? 'missing_claude' : /fetch failed|ENOTFOUND|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|network/i.test(msg) ? 'network' : /refused|did not turn on|not trusting/i.test(msg) ? 'refused' : 'start_failed';
+  /is a Claude on/.test(msg)
+    ? 'missing_claude'
+    : /fetch failed|ENOTFOUND|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|network/i.test(msg)
+      ? 'network'
+      : /refused|did not turn on|not trusting/i.test(msg)
+        ? 'refused'
+        : 'start_failed';
 
 /**
  * T-400 item 1: during the portal outage of 2026-10-15 (T-365) the session list answered 502/503, read as an empty list, and a NEW lead was
@@ -726,7 +889,7 @@ const ADOPT_RECENT_H = Number(process.env.ADOPT_RECENT_H ?? 2);
  */
 const ownedIds = (ts, sessions) => {
   const ids = new Set([...(ts.started ?? []), ...(ts.sessionId ? [ts.sessionId] : [])]);
-  for (let grew = true; grew; ) {
+  for (let grew = true; grew;) {
     grew = false;
     for (const x of sessions) if (!ids.has(x.id) && x.predecessorId && ids.has(x.predecessorId)) (ids.add(x.id), (grew = true));
   }
@@ -773,7 +936,8 @@ async function watch({ rounds = Infinity } = {}) {
       try {
         const r = await api('GET', '/api/chat/sessions');
         list = Array.isArray(r.data) ? r.data : r.data?.items;
-        if (r.status >= 300 || !Array.isArray(list)) failed = `the session list answered ${r.status}${r.error?.code ? ` ${r.error.code}` : ''}`;
+        if (r.status >= 300 || !Array.isArray(list))
+          failed = `the session list answered ${r.status}${r.error?.code ? ` ${r.error.code}` : ''}`;
       } catch (e) {
         failed = e.message;
       }
@@ -795,7 +959,14 @@ async function watch({ rounds = Infinity } = {}) {
     if (netDownSince) {
       const mins = Math.round((Date.now() - netDownSince) / 60_000);
       netDownSince = null;
-      if (mins >= 15) for (const t of TRACKS) await reportDown(t, (state.tracks[t.key] ??= { key: t.key, starts: [], nudges: [], wakes: [] }), 'network', `the portal was unreachable from the supervisor for about ${mins} minutes`);
+      if (mins >= 15)
+        for (const t of TRACKS)
+          await reportDown(
+            t,
+            (state.tracks[t.key] ??= { key: t.key, starts: [], nudges: [], wakes: [] }),
+            'network',
+            `the portal was unreachable from the supervisor for about ${mins} minutes`,
+          );
     }
     const sessions = list;
     // The portal's pause switch (T-259 slice 3) is the source of truth: a pause of all, or of a track's key as the program, holds the track
@@ -821,7 +992,10 @@ async function watch({ rounds = Infinity } = {}) {
       // A paused program (the owner's order, 2026-10-14): `touch ~/.claudepilot/dev-sessions/PAUSE-<track key>` (orchestrator, konfersi); nothing is nudged, woken, moved or restarted until the file is removed.
       const held = portalPauses.find((p) => p.program === null || p.program === t.key);
       if (held || existsSync(join(STATE_DIR, `PAUSE-${t.key}`))) {
-        if (!ts.pausedLogged) { log(`${t.key}: PAUSED by the owner (${held ? `the portal: ${held.program ?? 'all'}` : `file PAUSE-${t.key}`}): left alone`); ts.pausedLogged = true; }
+        if (!ts.pausedLogged) {
+          log(`${t.key}: PAUSED by the owner (${held ? `the portal: ${held.program ?? 'all'}` : `file PAUSE-${t.key}`}): left alone`);
+          ts.pausedLogged = true;
+        }
         continue;
       }
       ts.pausedLogged = false;
@@ -833,9 +1007,12 @@ async function watch({ rounds = Infinity } = {}) {
       if (cur?.cwd) ts.cwd = cur.cwd;
       // Keep going is on for this track's chat: the portal watches and restarts it (T-259 slice 2). Only Bypass is still kept here.
       if (cur?.keepGoing?.enabled && !cur.keepGoing.paused) {
-        if (ts.keepGoingLogged !== cur.id) log(`${t.key}: Keep going is on for ${cur.id.slice(0, 8)}: the portal keeps it going; only Bypass is kept here`), (ts.keepGoingLogged = cur.id);
+        if (ts.keepGoingLogged !== cur.id)
+          (log(`${t.key}: Keep going is on for ${cur.id.slice(0, 8)}: the portal keeps it going; only Bypass is kept here`),
+            (ts.keepGoingLogged = cur.id));
         ts.sessionId = cur.id;
-        if (cur.state !== 'ended' && !cur.archivedAt) await ensureBypass(t, ts, cur).catch((e) => log(`${t.key}: could not check Bypass: ${e.message}`));
+        if (cur.state !== 'ended' && !cur.archivedAt)
+          await ensureBypass(t, ts, cur).catch((e) => log(`${t.key}: could not check Bypass: ${e.message}`));
         continue;
       }
       if (statusSaysDone(ts)) {
@@ -901,7 +1078,7 @@ async function watch({ rounds = Infinity } = {}) {
           const lastNudge = ts.nudges[ts.nudges.length - 1] ?? 0;
           if (Date.now() - since >= NUDGE_AFTER_MIN * 60_000 && Date.now() - lastNudge >= NUDGE_GAP_MIN * 60_000) {
             if (within24h(ts.nudges).length >= MAX_NUDGES) {
-              if (!ts.nudgeCapLogged) log(`${t.key}: ${MAX_NUDGES} nudges in 24 h: leaving it for a person`), (ts.nudgeCapLogged = true);
+              if (!ts.nudgeCapLogged) (log(`${t.key}: ${MAX_NUDGES} nudges in 24 h: leaving it for a person`), (ts.nudgeCapLogged = true));
             } else {
               try {
                 await ensureBypass(t, ts, cur, true);
@@ -917,7 +1094,8 @@ async function watch({ rounds = Infinity } = {}) {
           }
         } else {
           idleSince.delete(t.key);
-          if (cur.state === 'waiting') await answerWaiting(t, ts, cur).catch((e) => log(`${t.key}: could not look at what waits: ${e.message}`));
+          if (cur.state === 'waiting')
+            await answerWaiting(t, ts, cur).catch((e) => log(`${t.key}: could not look at what waits: ${e.message}`));
         }
         continue;
       }
@@ -942,7 +1120,9 @@ async function watch({ rounds = Infinity } = {}) {
 
       // T-400 item 1: no live lead seen, but the portal failed a round lately: what it shows is not trusted yet to say the lead is gone.
       if (!steady) {
-        log(`${t.key}: no live lead seen, but the portal failed a round ${Math.round((Date.now() - badAt) / 60_000)} min ago (${goodRounds} good rounds since): not deciding it is gone yet`);
+        log(
+          `${t.key}: no live lead seen, but the portal failed a round ${Math.round((Date.now() - badAt) / 60_000)} min ago (${goodRounds} good rounds since): not deciding it is gone yet`,
+        );
         continue;
       }
 
@@ -967,7 +1147,10 @@ async function watch({ rounds = Infinity } = {}) {
         const seen = ts.recovered[cur.id];
         const refusedThisEnding = seen && typeof seen === 'object' && seen.ending === cur.lastActivityAt && seen.verdict === 'new';
         if (!refusedThisEnding) {
-          if (DRY) { log(`${t.key}: would recover ${cur.id.slice(0, 8)} in place (dry run): ${String(cur.endedReason).slice(0, 80)}`); continue; }
+          if (DRY) {
+            log(`${t.key}: would recover ${cur.id.slice(0, 8)} in place (dry run): ${String(cur.endedReason).slice(0, 80)}`);
+            continue;
+          }
           const rec = await api('POST', `/api/chat/sessions/${cur.id}/recover`, recoverBody());
           const verdict = recoverVerdict(rec);
           ts.recovered[cur.id] = { at: Date.now(), ending: cur.lastActivityAt, verdict };
@@ -980,7 +1163,9 @@ async function watch({ rounds = Infinity } = {}) {
             log(`${t.key}: recover in place not now (${rec.error?.code ?? rec.status}): trying again next round`);
             continue;
           }
-          log(`${t.key}: recover in place refused (${rec.error?.code ?? rec.status}): ${rec.status === 404 ? 'not available (or no such session)' : String(rec.error?.message ?? '').slice(0, 80)}; a new session instead`);
+          log(
+            `${t.key}: recover in place refused (${rec.error?.code ?? rec.status}): ${rec.status === 404 ? 'not available (or no such session)' : String(rec.error?.message ?? '').slice(0, 80)}; a new session instead`,
+          );
         }
       }
       const recent = within24h(ts.starts);
@@ -989,10 +1174,21 @@ async function watch({ rounds = Infinity } = {}) {
       const harmless = harmlessEnding(cur);
       const counted = recent.filter((x) => !ts.harmless.includes(x));
       const integrityEnds = counted.length && /^integrity/.test(cur?.endedReason ?? '');
-      const capped = harmless ? ts.harmless.length >= MAX_HARMLESS_STARTS : counted.length >= MAX_STARTS || (integrityEnds && counted.length >= 3);
+      const capped = harmless
+        ? ts.harmless.length >= MAX_HARMLESS_STARTS
+        : counted.length >= MAX_STARTS || (integrityEnds && counted.length >= 3);
       if (capped) {
-        if (!ts.capLogged) log(`${t.key}: too many starts in 24 h (${counted.length}, ${ts.harmless.length} after harmless endings): leaving it for a person (${String(cur?.endedReason ?? '').slice(0, 120)})`), (ts.capLogged = true);
-        await reportDown(t, ts, 'start_cap', `${counted.length} starts in 24 h (${ts.harmless.length} after harmless endings); the last ending: ${cur?.endedReason ?? 'none'}`);
+        if (!ts.capLogged)
+          (log(
+            `${t.key}: too many starts in 24 h (${counted.length}, ${ts.harmless.length} after harmless endings): leaving it for a person (${String(cur?.endedReason ?? '').slice(0, 120)})`,
+          ),
+            (ts.capLogged = true));
+        await reportDown(
+          t,
+          ts,
+          'start_cap',
+          `${counted.length} starts in 24 h (${ts.harmless.length} after harmless endings); the last ending: ${cur?.endedReason ?? 'none'}`,
+        );
         saveState(state);
         continue;
       }
@@ -1018,7 +1214,21 @@ async function watch({ rounds = Infinity } = {}) {
 
 /* ---------- Go ---------- */
 
-export { harmlessEnding, watch, STATE_FILE, bestClaude, compactDue, slotsFull, compactLanes, wakeStaleLanes, worktreeTrustable, ownWorktrees, COMPACT, COMPACT_LANE, LANES };
+export {
+  harmlessEnding,
+  watch,
+  STATE_FILE,
+  bestClaude,
+  compactDue,
+  slotsFull,
+  compactLanes,
+  wakeStaleLanes,
+  worktreeTrustable,
+  ownWorktrees,
+  COMPACT,
+  COMPACT_LANE,
+  LANES,
+};
 if (IS_MAIN) {
   process.on('SIGTERM', () => revokeMcpToken().finally(() => process.exit(0)));
   process.on('SIGINT', () => revokeMcpToken().finally(() => process.exit(0)));
@@ -1030,7 +1240,11 @@ if (IS_MAIN) {
       log(`main folder at ${execFileSync('git', ['-C', MAIN, 'log', '--oneline', '-1'], { encoding: 'utf8' }).trim()}`);
     } catch (e) {
       // The orchestrator keeps its own commits in this folder until it integrates them, so it is ahead of GitHub and often diverged: not a reason to stop.
-      log(`main folder not pulled (it is ahead of or diverged from GitHub; the orchestrator integrates it): ${String(e.stderr ?? e.message).replace(/\s+/g, ' ').slice(0, 120)}`);
+      log(
+        `main folder not pulled (it is ahead of or diverged from GitHub; the orchestrator integrates it): ${String(e.stderr ?? e.message)
+          .replace(/\s+/g, ' ')
+          .slice(0, 120)}`,
+      );
     }
     await watch();
   } catch (e) {

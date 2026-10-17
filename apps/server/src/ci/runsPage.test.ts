@@ -213,9 +213,9 @@ test('scan bound: a request reads at most 10 x limit rows, and ends on a cursor 
   const t = await build();
   try {
     await seed(t.h, 50);
-    const order = (
-      t.h.store.db!.prepare('SELECT id FROM ci_runs ORDER BY created_at DESC, id DESC').all() as { id: string }[]
-    ).map((r) => r.id);
+    const order = (t.h.store.db!.prepare('SELECT id FROM ci_runs ORDER BY created_at DESC, id DESC').all() as { id: string }[]).map(
+      (r) => r.id,
+    );
     assert.equal(order.length, 51);
     const visible = new Set(bulk(t.h).slice(-3));
     const keep = (r: { id: string }) => visible.has(r.id);

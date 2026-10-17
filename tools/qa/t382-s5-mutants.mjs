@@ -23,7 +23,13 @@ const T_SLICES = server('src/lab/slicesPage.test.ts');
 
 /** `last`: change the last occurrence (the audit scan is the second one in chat/store.ts). */
 const mutants = [
-  { name: 'a  failMore restart -> reload removed', file: CHAT, from: "=== 'restart') await reload();", to: "=== 'restart') void 0;", test: T_LIST },
+  {
+    name: 'a  failMore restart -> reload removed',
+    file: CHAT,
+    from: "=== 'restart') await reload();",
+    to: "=== 'restart') void 0;",
+    test: T_LIST,
+  },
   {
     name: 'b  poll applyHead(page) -> head = page',
     file: CHAT,
@@ -38,8 +44,20 @@ const mutants = [
     to: '      pager.current.applyHead(page);',
     test: T_LIST,
   },
-  { name: 'd  RunsTab applyHead(list) -> head = list', file: RUNS, from: 'pager.current.applyHead(list);', to: 'pager.current.head = list;', test: T_RUNS },
-  { name: 'e  ci runs: maxScan = limit * 1000', file: CI_STORE, from: 'const maxScan = limit * SCAN_FACTOR;', to: 'const maxScan = limit * 1000;', test: T_CI },
+  {
+    name: 'd  RunsTab applyHead(list) -> head = list',
+    file: RUNS,
+    from: 'pager.current.applyHead(list);',
+    to: 'pager.current.head = list;',
+    test: T_RUNS,
+  },
+  {
+    name: 'e  ci runs: maxScan = limit * 1000',
+    file: CI_STORE,
+    from: 'const maxScan = limit * SCAN_FACTOR;',
+    to: 'const maxScan = limit * 1000;',
+    test: T_CI,
+  },
   { name: 'f  ci runs: resume = null', file: CI_STORE, from: 'resume = got.next;', to: 'resume = null;', test: T_CI },
   {
     name: 'g  chat audit: maxScan = limit * 1000',
