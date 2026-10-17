@@ -1,9 +1,11 @@
 // T-1043 S0a (D-82): the one route guard (routeGuard.ts) in front of every HTTP route.
-//   1. The guard on its own, on a small app: a non-owner is refused a route with no declaration (403), refused a declared route it may not
-//      use (a platform area: 403; an object it does not own: 404, the same as a missing one), and let through where the declaration allows
-//      (signed-in, self, an object it owns). The founding owner goes through everything, as before; nobody signed in is 401.
-//   2. The real app: every route it answers is declared (read off `app.routes`, so a route added later is covered without anyone adding it
-//      here), and a member account on the real app is refused by the guard, while the owner is not.
+//   1. The guard on its own, on a small app: a non-owner is refused a route with no declaration, refused a declared route it may not use (a
+//      platform area, an object it does not own), each with the same 404 a path nobody serves answers (the lead's decision on T-1043), and let
+//      through where the declaration allows (signed-in, self, an object it owns). A request every route hands on and an undeclared `app.all`
+//      endpoint are refused too (QA 10597 A1, A2). The founding owner goes through everything, as before; nobody signed in is 401.
+//   2. The real app: every route it answers is declared, `app.all` endpoints included (read off `app.routes`, so a route added later is
+//      covered without anyone adding it here); nothing that answers is registered before the guard (A3); a member account on the real app is
+//      refused by the guard with the unknown path's 404, while the owner is not.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { AppError, isAppError } from '@isnanme/core';
@@ -17,7 +19,7 @@ import { openModule } from '../connect/testkit.js';
 import { FakeChat, freshStore } from '../notify/testkit.js';
 import { createPlatform } from '../platform/index.js';
 import { Portal } from '../portal.js';
-import { NO_POLICY_MESSAGE, createRouteGuard, type SignedIn } from './routeGuard.js';
+import { ROUTE_GUARD_NAME, createRouteGuard, isEndpoint, keyOf, type SignedIn } from './routeGuard.js';
 import { clearResolvers, declarePolicies, declaredPolicies, registerResolver } from './seam.js';
 
 /* ---------- 1. The guard on a small app ---------- */
@@ -33,7 +35,12 @@ const TEST_POLICIES: RoutePolicies = {
   'GET /t/ticket/:id': { kind: 'objects', checks: [{ type: 'ticket', verb: 'view', from: 'path', param: 'id' }] },
   'POST /t/ticket': { kind: 'objects', checks: [{ type: 'ticket', verb: 'operate', from: 'body', param: 'ticketId' }] },
   'GET /t/search': { kind: 'objects', checks: [{ type: 'ticket', verb: 'view', from: 'query', param: 'ticket', optional: true }] },
+  // A `/:ref` route that hands on a value that is not its kind of id (as the workspace `/:ref…` routes do).
+  'GET /t/ws/:ref': { kind: 'objects', checks: [{ type: 'ticket', verb: 'view', from: 'path', param: 'ref' }] },
 };
+
+/** What a path nobody serves answers (app.ts's `app.all('/api/*')`): every refusal of the guard must read exactly like it. */
+const UNKNOWN_PATH = { status: 404, body: new AppError('NOT_FOUND').toJSON() };
 
 function small(who: () => SignedIn) {
   declarePolicies('routeGuard.test', TEST_POLICIES);
@@ -42,18 +49,23 @@ function small(who: () => SignedIn) {
     const error = isAppError(e) ? e : new AppError('INTERNAL_ERROR', undefined, { cause: e });
     return c.json(error.toJSON(), error.status as ContentfulStatusCode);
   });
-  app.use('*', createRouteGuard({ signedIn: () => who() }));
+  // Values named `legacy…` are not this route's kind of id: it hands them on (idOf null).
+  app.use('*', createRouteGuard({ signedIn: () => who(), idOf: (check, v) => (check.param === 'ref' && v.startsWith('legacy') ? null : undefined) }));
   const reached: string[] = [];
   const ok = (c: { req: { path: string; method: string }; json: (v: unknown) => Response }) => (reached.push(`${c.req.method} ${c.req.path}`), c.json({ ok: true }));
-  for (const p of ['/t/admin', '/t/list', '/t/me', '/t/open', '/t/ticket/:id', '/t/search', '/t/undeclared']) app.get(p, ok);
+  for (const p of ['/t/admin', '/t/list', '/t/me', '/t/open', '/t/ticket/:id', '/t/search', '/t/undeclared', '/t/ws/:ref']) app.get(p, ok);
   app.post('/t/ticket', ok);
+  // An undeclared endpoint written `app.all` (one argument: it answers, it does not hand on).
+  app.all('/t/any', (c) => ok(c));
   const send = async (method: string, path: string, body?: unknown) => {
     const res = await app.request(path, { method, ...(body === undefined ? {} : { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }) });
     const json = (await res.json()) as { error?: { code: string; message: string } };
-    return { status: res.status, message: json.error?.message };
+    return { status: res.status, message: json.error?.message, body: json };
   };
   return { send, reached };
 }
+
+const refusedLikeUnknownPath = (r: { status: number; body: unknown }, what: string) => assert.deepEqual({ status: r.status, body: r.body }, UNKNOWN_PATH, what);
 
 /** Tickets `mine` (the member's) and `theirs` (someone else's); anything else does not exist. */
 function ticketsOwned() {
@@ -64,33 +76,48 @@ function ticketsOwned() {
   });
 }
 
-test('a member is refused a route nobody declared (403), and the handler never runs', async () => {
+test('a member is refused a route nobody declared with the unknown path’s 404, and the handler never runs', async () => {
   const { send, reached } = small(() => ({ full: false, userId: MEMBER }));
-  const r = await send('GET', '/t/undeclared');
-  assert.deepEqual([r.status, r.message], [403, NO_POLICY_MESSAGE]);
+  refusedLikeUnknownPath(await send('GET', '/t/undeclared'), 'an undeclared route');
   assert.deepEqual(reached, []);
 });
 
-test('a member is refused a declared route it may not use: an admin area is 403, an object it does not own is the same 404 as a missing one', async () => {
+test('a member is refused a declared route it may not use, with the unknown path’s 404: an admin area, an object it does not own', async () => {
   ticketsOwned();
   try {
     const { send, reached } = small(() => ({ full: false, userId: MEMBER }));
-    const area = await send('GET', '/t/admin');
-    assert.deepEqual([area.status, area.message], [403, 'Only an admin can do this.']);
+    refusedLikeUnknownPath(await send('GET', '/t/admin'), 'an admin area');
     const theirs = await send('GET', '/t/ticket/theirs');
     const missing = await send('GET', '/t/ticket/nope');
-    assert.deepEqual([theirs.status, theirs.message], [404, 'Not found.']);
+    refusedLikeUnknownPath(theirs, 'someone else’s object');
     assert.deepEqual(theirs, missing, 'someone else’s object reads exactly like one that does not exist');
-    const body = await send('POST', '/t/ticket', { ticketId: 'theirs' });
-    assert.equal(body.status, 404, 'a body id is checked too');
-    const noId = await send('POST', '/t/ticket', {});
-    assert.equal(noId.status, 404, 'a required id that is missing is refused, not skipped');
-    const query = await send('GET', '/t/search?ticket=theirs');
-    assert.equal(query.status, 404, 'an optional query id that is given is checked');
+    refusedLikeUnknownPath(await send('POST', '/t/ticket', { ticketId: 'theirs' }), 'a body id is checked too');
+    refusedLikeUnknownPath(await send('POST', '/t/ticket', {}), 'a required id that is missing is refused, not skipped');
+    refusedLikeUnknownPath(await send('GET', '/t/search?ticket=theirs'), 'an optional query id that is given is checked');
     assert.deepEqual(reached, []);
   } finally {
     clearResolvers();
   }
+});
+
+test('QA A1: a request every matched route hands on is refused, it never reaches the handler unchecked', async () => {
+  ticketsOwned();
+  try {
+    const { send, reached } = small(() => ({ full: false, userId: MEMBER }));
+    refusedLikeUnknownPath(await send('GET', '/t/ws/legacy-theirs'), 'a value the route hands on');
+    assert.deepEqual(reached, []);
+    assert.equal((await send('GET', '/t/ws/mine')).status, 200, 'its own kind of id is checked and let through');
+  } finally {
+    clearResolvers();
+  }
+});
+
+test('QA A2: an undeclared endpoint written app.all is seen by the guard and refused, for every method', async () => {
+  const { send, reached } = small(() => ({ full: false, userId: MEMBER }));
+  for (const m of ['GET', 'POST', 'PUT', 'DELETE']) refusedLikeUnknownPath(await send(m, '/t/any'), `${m} /t/any`);
+  assert.deepEqual(reached, []);
+  const owner = small(() => ({ full: true }));
+  assert.equal((await owner.send('GET', '/t/any')).status, 200, 'the owner keeps it');
 });
 
 test('a member is let through where the declaration allows: signed-in, self, public, and an object it owns', async () => {
@@ -126,7 +153,7 @@ test('an actor already set on the request is the one decided for, not the cookie
   member.use('*', async (c, next) => (c.set('actor', { kind: 'user', userId: MEMBER, loginSessionId: 'x', via: 'ui' }), next()));
   member.use('*', createRouteGuard({ signedIn: () => ({ full: true }) }));
   member.get('/t/undeclared', (c) => c.json({}));
-  assert.equal((await member.request('/t/undeclared')).status, 403, 'a member set on the context is refused, whatever the cookie says');
+  assert.equal((await member.request('/t/undeclared')).status, 404, 'a member set on the context is refused, whatever the cookie says');
 });
 
 /* ---------- 2. The real app ---------- */
@@ -186,40 +213,77 @@ async function realApp() {
     } catch {
       /* not JSON */
     }
-    return { status: res.status, message };
+    return { status: res.status, message, text };
   };
   return { app, portal, CODE, send, done: async () => (await cx.close(), cx.store.close(), store.close()) };
 }
 
-const METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
+type Listed = { method: string; path: string; handler: { name: string; length: number } };
+const listed = (app: Hono): Listed[] => app.routes as unknown as Listed[];
 
-test('every route the real app answers has a declared policy', async () => {
+/** The keys of every endpoint an app lists: each method's routes and the `app.all` endpoints (middleware left out), each once. */
+function endpointKeys(routes: Listed[]): string[] {
+  return [...new Set(routes.filter(isEndpoint).map((r) => keyOf(r)))];
+}
+
+/** The endpoints registered before the guard: Hono runs them first, so they would answer unguarded (QA 10597 A3). */
+function endpointsBeforeGuard(routes: Listed[]): string[] {
+  const at = routes.findIndex((r) => r.handler.name === ROUTE_GUARD_NAME);
+  if (at < 0) return ['(the route guard is not mounted)'];
+  return routes.slice(0, at).filter(isEndpoint).map((r) => keyOf(r));
+}
+
+test('the walk sees an app.all endpoint and an endpoint registered before the guard (so the real-app checks below can fail)', () => {
+  const app = new Hono();
+  app.get('/early', (c) => c.json({}));
+  app.use('/mw/*', async (_c, next) => next());
+  app.use('*', createRouteGuard({ signedIn: () => null }));
+  app.all('/any', (c) => c.json({}));
+  app.get('/late', (c) => c.json({}));
+  assert.deepEqual(endpointKeys(listed(app)), ['GET /early', 'ALL /any', 'GET /late'], 'app.all is an endpoint, use() is not');
+  assert.deepEqual(endpointsBeforeGuard(listed(app)), ['GET /early']);
+  const bare = new Hono();
+  bare.get('/x', (c) => c.json({}));
+  assert.deepEqual(endpointsBeforeGuard(listed(bare)), ['(the route guard is not mounted)']);
+});
+
+test('every route the real app answers has a declared policy, app.all endpoints included', async () => {
   const { app, done } = await realApp();
   try {
-    const keys = new Set<string>();
-    for (const r of app.routes) if (METHODS.has(r.method)) keys.add(`${r.method} ${r.path.length > 1 ? r.path.replace(/\/+$/, '') : r.path}`);
-    assert.ok(keys.size > 300, `the walk saw the whole app (${keys.size} routes)`);
-    const undeclared = [...keys].filter((k) => !declaredPolicies().has(k)).sort();
+    const keys = endpointKeys(listed(app));
+    assert.ok(keys.length > 300, `the walk saw the whole app (${keys.length} routes)`);
+    assert.ok(keys.includes('ALL /api/*'), 'the walk lists the app.all endpoints');
+    const undeclared = keys.filter((k) => !declaredPolicies().has(k as never)).sort();
     assert.deepEqual(undeclared, [], `routes with no declaration (declare each in its module's authz.ts or authz/appPolicies.ts):\n${undeclared.join('\n')}`);
   } finally {
     await done();
   }
 });
 
-test('the real app: a member is refused by the guard, the owner is not, nobody signed in is 401', async () => {
+test('QA A3: the real app registers nothing that answers before the route guard', async () => {
+  const { app, done } = await realApp();
+  try {
+    assert.deepEqual(endpointsBeforeGuard(listed(app)), []);
+  } finally {
+    await done();
+  }
+});
+
+test('the real app: a member is refused by the guard with the unknown path’s 404, the owner is not, nobody signed in is 401', async () => {
   const { portal, CODE, send, done } = await realApp();
   try {
     const member = portal.openSession(MEMBER);
+    const unknown = await send('GET', '/api/no-such-path', member);
+    assert.equal(unknown.status, 404);
     const users = await send('GET', '/api/admin/users', member);
-    assert.deepEqual([users.status, users.message], [403, 'Only an admin can do this.'], 'an admin area: refused by its declaration');
+    assert.deepEqual(users, unknown, 'an admin area refused reads exactly like a path nobody serves');
     const accounts = await send('DELETE', '/api/accounts/x1', member);
-    assert.deepEqual([accounts.status, accounts.message], [403, 'Only an admin can do this.']);
+    assert.deepEqual(accounts, unknown, 'a change in an admin area too');
     assert.equal((await send('GET', '/api/admin/users')).status, 401);
     // The owner (the server code) reaches the handler: whatever it answers, it is not the guard's refusal.
     const owner = portal.signIn(CODE);
     const mine = await send('GET', '/api/admin/users', owner);
-    assert.notEqual(mine.message, 'Only an admin can do this.');
-    assert.notEqual(mine.message, NO_POLICY_MESSAGE);
+    assert.notDeepEqual(mine, unknown);
     assert.notEqual(mine.status, 401);
   } finally {
     await done();

@@ -296,7 +296,8 @@ export function statusForDeny(reason: DenyReason): 401 | 403 | 404 {
 
 /* ---------- Route declarations (default deny) ---------- */
 
-export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'ALL';
+/** OPTIONS: a route that answers it (a trigger's hook refuses it). HEAD has no key: the router answers a HEAD with the GET route (T-1043). */
+export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'OPTIONS' | 'ALL';
 /** `METHOD /full/path/with/:params`, exactly as the router lists it (`app.routes`). */
 export type PolicyKey = `${HttpMethod} ${string}`;
 

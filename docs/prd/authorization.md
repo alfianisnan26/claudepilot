@@ -861,22 +861,32 @@ Not compared by the test, and not built: `+reauth` on remove (T-540); `consent: 
 
 ### B.3 The route guard: every route, one middleware (T-1043 S0a, D-82)
 
-FR16 is built as `authz/routeGuard.ts`, mounted first thing in app.ts (`app.use('*')`, before every sub-app's session guard). For each request it takes the endpoints Hono matched (`matchedRoutes`, middleware left out), keys them `METHOD /full/path` and looks each up in the declared table.
+FR16 is built as `authz/routeGuard.ts`, mounted first thing in app.ts (`app.use('*')`, before every sub-app's session guard and every route). For each request it takes the endpoints Hono matched (`matchedRoutes`), keys them `METHOD /full/path` and looks each up in the declared table. Middleware is left out. An `app.all(…)` route counts as an endpoint when its handler does not take `next`, which is how Hono's own route inspector tells them apart.
+
+**Every refusal is the same `404` that an API path nobody serves answers** (`notFound()`, the lead's decision on T-1043). This covers an undeclared route, a platform area and an object the actor may not see. It replaces the earlier `403`s, including MU2 S1a's `403` for a member on an admin route. The answer never says that a route or an object is there. The only exception is an object the actor can see but not change, which keeps the seam's `403`.
 
 - **Open doors.** A `public`, `bearer` or `handler` route goes on. These are sign-in, the bearer `/mcp`, signed webhooks under `/hooks`, and the agents' `/connect/` routes.
 - **Nobody signed in: 401.**
 - **The founding owner goes on untouched.** This also covers the server code and an admin account, which act as the owner (D-82). Today's behaviour stays: each route's own guards still run.
 - **Anyone else** (a member account, or an actor already set on the request):
-  - **no declaration:** `403` "This route has no access rule yet.", with `details.route`. The PRD's `NO_POLICY` is this `FORBIDDEN`.
+  - **no declaration:** refused (`404`). The PRD's `NO_POLICY` is this refusal.
   - **`signed-in` and `self`:** go on.
-  - **`platform`:** asks `can()` on the area. A refusal is `403` "Only an admin can do this.".
-  - **`objects`:** asks `can()` for every check, in order. A path, a query or a JSON body read from a clone, as FR17 says. A refusal is the seam's answer, so an object the actor may not see is the same `404` as a missing one.
-  - **A `/:ref` route given something that is not a stable id** hands on to the next matched route, as its handler does.
+  - **`platform`:** asks `can()` on the area. A refusal is `404`.
+  - **`objects`:** asks `can()` for every check, in order. A path, a query or a JSON body read from a clone, as FR17 says. An object the actor may not see is the same `404` as a missing one.
+  - **A `/:ref` route given something that is not a stable id** hands on to the next matched route, as its handler does. If every matched route hands on, the request is refused (`404`). It never reaches a handler unchecked.
 - **`reauth` and `audit` stay the handlers'.**
 
 **Interim declarations.** A route whose module is not actor-aware yet (its handlers do not take the actor and filter) is declared `platform`: `view` for a GET, `manage` otherwise, with the closest area. A member is refused there until the module's own slice declares its Appendix A row and its handlers take the actor. These rows live in `authz/appPolicies.ts` with app.ts's own routes. The session guard still refuses a member after the route guard, until MU2 S1b opens routes to members.
 
-`authz/routeGuard.test.ts` builds the real app with every module mounted and walks `app.routes`. It fails on any route with no declaration. It also checks the guard on its own: a member refused an undeclared route, an admin area and an object it does not own; let through `signed-in`, `self`, `public` and an object it owns; the owner unchanged; and 401 for nobody.
+`authz/routeGuard.test.ts` builds the real app with every module mounted and walks `app.routes`. It fails in two cases:
+- a route, `app.all` endpoints included, has no declaration;
+- an endpoint is registered before the guard.
+
+It also checks the guard on its own:
+- a member is refused, with exactly the unknown path's `404`, on an undeclared route, an undeclared `app.all` endpoint, an admin area, an object it does not own, and a request every route hands on;
+- a member is let through on `signed-in`, `self`, `public` and an object it owns;
+- the owner is unchanged;
+- nobody signed in gets 401.
 
 ## Appendix C. Sockets and other doors outside the route table
 

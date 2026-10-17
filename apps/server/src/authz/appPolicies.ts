@@ -3,7 +3,7 @@
 // any route that is not declared, and `routePolicies.test.ts` fails on one, so every route the app answers is named somewhere.
 //
 // The interim rule for a module that is not actor-aware yet (its handlers do not take the actor and filter): `platform` (an admin's area),
-// `view` for a read and `manage` for a change. A member is refused there (403 "Only an admin can do this.") until the module's own slice
+// `view` for a read and `manage` for a change. A member is refused there (the unknown path's 404) until the module's own slice
 // declares the PRD's target row (docs/prd/authorization.md Appendix A) and its handlers take the actor. The founding owner, the server code and
 // an admin account are not changed by any of this (D-82: admins keep full access).
 
@@ -11,6 +11,7 @@ import type { PlatformArea, RoutePolicies, RoutePolicy, Verb } from '@portal/con
 import { declareAttentionPolicies } from '../attention/authz.js';
 import { declareAutoTransferPolicies } from '../autotransfer/authz.js';
 import { declareBrowserPolicies } from '../browser/authz.js';
+import { declareChatPolicies } from '../chat/authz.js';
 import { declareCiPolicies } from '../ci/authz.js';
 import { declareClaudeVersionPolicies } from '../claudeversion/authz.js';
 import { declareCodespacesPolicies } from '../codespaces/authz.js';
@@ -40,6 +41,8 @@ function area(a: PlatformArea, keys: string[]): RoutePolicies {
   for (const key of keys) out[key as keyof RoutePolicies] = key.startsWith('GET ') ? read(a) : change(a);
   return out;
 }
+
+const HOOK_OTHER_METHOD: RoutePolicy = { kind: 'public', why: 'answers 404 to anyone: a hook takes only POST' };
 
 export const APP_POLICIES: RoutePolicies = {
   // The doors before sign-in: the probe, the session check, signing in and out.
@@ -191,6 +194,119 @@ export const APP_POLICIES: RoutePolicies = {
     'PUT /api/usage-spend/spikes/snooze',
     'DELETE /api/usage-spend/spikes/snooze',
   ]),
+  // The built-in MCP catalogue and each workspace's MCP sign-ins (mcp/builtin/routes.ts, mcp/oauth/routes.ts). Interim: an admin's.
+  ...area('library', [
+    'GET /api/mcp/builtin',
+    'POST /api/mcp/builtin/:id/preview',
+    'POST /api/mcp/builtin/:id/add',
+    'GET /api/mcp/workspaces/:target/:name/auth',
+    'POST /api/mcp/workspaces/:target/:name/auth',
+    'POST /api/mcp/workspaces/:target/:name/signin',
+    'POST /api/mcp/workspaces/:target/:name/signin/:signInId/complete',
+    'DELETE /api/mcp/workspaces/:target/:name/signin/:signInId',
+    'POST /api/mcp/workspaces/:target/:name/signout',
+  ]),
+  // Pools (pools/routes.ts) and the secret rotations (secrets/adminRoutes.ts): the portal's configuration, an admin's. Each workspace's own
+  // pool and secret routes are declared by their modules (workspace checks).
+  ...area('settings', [
+    'GET /api/pools',
+    'GET /api/pools/:type',
+    'POST /api/pools/:type',
+    'POST /api/pools/:type/preview',
+    'GET /api/pools/:type/:id',
+    'PUT /api/pools/:type/:id',
+    'DELETE /api/pools/:type/:id',
+    'POST /api/pools/:type/:id/duplicate',
+    'POST /api/pools/:type/:id/revisions/:rev/approve',
+    'POST /api/pools/:type/:id/revisions/:rev/current',
+    'POST /api/pools/:type/:id/rollout',
+    'POST /api/pools/:type/:id/assign',
+    'POST /api/pools/:type/:id/preview',
+    'POST /api/secrets/:poolId/entries/:entryId/rotate',
+    'GET /api/secrets/:poolId/rotations',
+    'GET /api/secrets/:poolId/entries/:entryId/versions',
+    'POST /api/secrets/:poolId/values/:valueId/revoke',
+  ]),
+  // Repositories across workspaces (repos/routes.ts) and the ticket queue (tickets/routes.ts): the handlers act as the owner (`ACTOR`, `UI`),
+  // so both stay an admin's until they take the actor. Ticket bump and attachments are declared by tickets/authz.ts.
+  ...area('system', [
+    'GET /api/repos',
+    'GET /api/repos/events',
+    'GET /api/repos/:id',
+    'POST /api/repos/:id/scan',
+    'POST /api/repos/:id/worktrees',
+    'DELETE /api/repos/:id/worktree',
+    'PUT /api/repos/:id/sync',
+    'POST /api/repos/:id/sync',
+    'GET /api/tickets',
+    'POST /api/tickets',
+    'GET /api/tickets/tags',
+    'GET /api/tickets/:id',
+    'PATCH /api/tickets/:id',
+    'DELETE /api/tickets/:id',
+    'GET /api/tickets/:id/brief',
+    'GET /api/tickets/:id/opening',
+    'POST /api/tickets/:id/comments',
+    'POST /api/tickets/:id/close',
+    'DELETE /api/tickets/:id/close',
+    'POST /api/tickets/:id/session',
+  ]),
+  // A trigger's hook answers only POST (triggers/authz.ts); every other method is the same 404 for anyone (triggers/receiver.ts).
+  'GET /hooks/:token': HOOK_OTHER_METHOD,
+  'PUT /hooks/:token': HOOK_OTHER_METHOD,
+  'PATCH /hooks/:token': HOOK_OTHER_METHOD,
+  'DELETE /hooks/:token': HOOK_OTHER_METHOD,
+  'OPTIONS /hooks/:token': HOOK_OTHER_METHOD,
+};
+
+/** One chat session by the path's `:id`: the session resolver (chat/authz.ts) decides, so a session the actor may not see is a 404. */
+const session = (verb: Verb): RoutePolicy => ({ kind: 'objects', checks: [{ type: 'session', verb, from: 'path', param: 'id' }] });
+const S = '/api/chat/sessions/:id';
+
+/**
+ * The chat routes on one session, as Appendix A's rows say (the object checks only: `reauth` stays the handler's). The routes chat/authz.ts
+ * declares itself are not repeated here. The chat lists, Claudes, trust and the meta routes are an admin's until their handlers filter.
+ */
+export const CHAT_SESSION_POLICIES: RoutePolicies = {
+  [`GET ${S}`]: session('view'),
+  [`POST ${S}/switch`]: session('operate'),
+  [`GET ${S}/switch-options`]: session('operate'),
+  [`GET ${S}/bypass`]: session('view'),
+  [`POST ${S}/bypass`]: session('manage'),
+  [`POST ${S}/bypass/allow`]: session('manage'),
+  [`GET ${S}/segments`]: session('view'),
+  [`PATCH ${S}`]: session('manage'),
+  [`DELETE ${S}`]: session('manage'),
+  [`POST ${S}/end`]: session('operate'),
+  [`POST ${S}/archive`]: session('manage'),
+  [`GET ${S}/worktree`]: session('manage'),
+  [`DELETE ${S}/archive`]: session('manage'),
+  [`POST ${S}/pin`]: session('operate'),
+  [`DELETE ${S}/pin`]: session('operate'),
+  [`GET ${S}/models`]: session('operate'),
+  [`GET ${S}/tasks`]: session('view'),
+  [`GET ${S}/blobs/:blobId`]: session('view'),
+  [`GET ${S}/files`]: session('view'),
+  [`GET ${S}/files/download`]: session('view'),
+  [`GET ${S}/diff`]: session('view'),
+  [`POST ${S}/uploads`]: session('operate'),
+  [`DELETE ${S}/uploads/:uploadId`]: session('operate'),
+  [`GET ${S}/blobs/:blobId/preview`]: session('view'),
+  [`GET ${S}/artifacts.zip`]: session('view'),
+  ...area('system', [
+    'GET /api/chat/sessions',
+    'POST /api/chat/sessions',
+    'GET /api/chat/usage',
+    'GET /api/chat/claudes',
+    'POST /api/chat/claudes',
+    'GET /api/chat/trust/scan',
+    'POST /api/chat/trust',
+    'GET /api/chat/worktrees',
+    'GET /api/chat/policy',
+    'GET /api/chat/audit',
+  ]),
+  // Checking the server code again is the caller's own sign-in (Appendix A: self).
+  'POST /api/chat/reauth': { kind: 'self' },
 };
 
 let declared = false;
@@ -199,12 +315,14 @@ export function declareAppPolicies(): void {
   if (declared) return;
   declared = true;
   declarePolicies('app', APP_POLICIES);
+  declarePolicies('app.chat', CHAT_SESSION_POLICIES);
   // Each module's own table, declared here as well as where the module builds itself: the guard must know every route before the first
   // request, whichever modules this app was given (each declare is idempotent, or declares the same rows again).
   for (const declare of [
     declareAttentionPolicies,
     declareAutoTransferPolicies,
     declareBrowserPolicies,
+    declareChatPolicies,
     declareCiPolicies,
     declareClaudeVersionPolicies,
     declareCodespacesPolicies,

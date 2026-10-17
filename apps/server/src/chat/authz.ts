@@ -3,7 +3,7 @@
 // resolver says every session is the founding user's (until `chat_sessions` records an owner); the seam already refuses another user (`u_a`) on a
 // session that exists, which is how the tests run the abuse cases across users.
 
-import { CHAT_SOCKET_PATH, FOUNDING_USER_ID, sessionRef, workspaceRef, type ToolPolicies } from '@portal/contracts';
+import { CHAT_SOCKET_PATH, FOUNDING_USER_ID, sessionRef, workspaceRef, type RoutePolicies, type ToolPolicies } from '@portal/contracts';
 import { declarePolicies, declareToolPolicies, registerResolver, type ObjectResolver } from '../authz/seam.js';
 
 /** What the resolver needs of a session; the controller answers it. */
@@ -36,30 +36,37 @@ export function sessionResolver(facts: (id: string) => SessionFacts | null): Obj
  */
 export function registerChatAuthz(facts: (id: string) => SessionFacts | null): void {
   registerResolver(sessionResolver(facts));
-  declarePolicies('chat', {
-    'ALL /api/chat/live': { kind: 'signed-in' },
-    // The stored transcript (whole after a seq, or a page; T-376) and one event of it whole: whoever may view the session.
-    'GET /api/chat/sessions/:id/events': { kind: 'objects', checks: [{ type: 'session', verb: 'view', from: 'path', param: 'id' }] },
-    'GET /api/chat/sessions/:id/events/:seq': { kind: 'objects', checks: [{ type: 'session', verb: 'view', from: 'path', param: 'id' }] },
-    // A sub-agent's own transcript: whoever may view the session (the Agents panel's detail view).
-    'GET /api/chat/sessions/:id/tasks/:taskId/events': { kind: 'objects', checks: [{ type: 'session', verb: 'view', from: 'path', param: 'id' }] },
-    // T-102: a restart (now, queued, or interrupting the turn), cancelling a queued one and the restart hint's memory operate the session.
-    'POST /api/chat/sessions/:id/restart': { kind: 'objects', checks: [{ type: 'session', verb: 'operate', from: 'path', param: 'id' }] },
-    'DELETE /api/chat/sessions/:id/restart': { kind: 'objects', checks: [{ type: 'session', verb: 'operate', from: 'path', param: 'id' }] },
-    'PATCH /api/chat/sessions/:id/restart-hint': { kind: 'objects', checks: [{ type: 'session', verb: 'operate', from: 'path', param: 'id' }] },
-    // T-294: a session's limits (workers at once, sub-agents) widen or narrow what it may start: `manage` (a person, an admin's token), audited.
-    'PATCH /api/chat/sessions/:id/limits': { kind: 'objects', checks: [{ type: 'session', verb: 'manage', from: 'path', param: 'id' }], audit: 'session.limits' },
-    // T-136: recover in place (an ended-for-integrity session comes back as the same row): operates the session; audited by the controller.
-    'POST /api/chat/sessions/:id/recover': { kind: 'objects', checks: [{ type: 'session', verb: 'operate', from: 'path', param: 'id' }], audit: 'session.recover' },
-    // T-284: clearing a request no process can answer any more operates the session; the controller audits what it resolved (session.request_stale).
-    'POST /api/chat/sessions/:id/requests/:requestId/clear': {
-      kind: 'objects',
-      checks: [{ type: 'session', verb: 'operate', from: 'path', param: 'id' }],
-      audit: 'session.request_clear',
-    },
-  });
+  declareChatPolicies();
   declareToolPolicies('chat', CHAT_RECOVER_TOOL_POLICIES);
 }
+
+/** The chat routes' declarations alone (T-1043 S0a: the route guard needs them whichever way the app was built). */
+export function declareChatPolicies(): void {
+  declarePolicies('chat', CHAT_POLICIES);
+}
+
+export const CHAT_POLICIES: RoutePolicies = {
+  'ALL /api/chat/live': { kind: 'signed-in' },
+  // The stored transcript (whole after a seq, or a page; T-376) and one event of it whole: whoever may view the session.
+  'GET /api/chat/sessions/:id/events': { kind: 'objects', checks: [{ type: 'session', verb: 'view', from: 'path', param: 'id' }] },
+  'GET /api/chat/sessions/:id/events/:seq': { kind: 'objects', checks: [{ type: 'session', verb: 'view', from: 'path', param: 'id' }] },
+  // A sub-agent's own transcript: whoever may view the session (the Agents panel's detail view).
+  'GET /api/chat/sessions/:id/tasks/:taskId/events': { kind: 'objects', checks: [{ type: 'session', verb: 'view', from: 'path', param: 'id' }] },
+  // T-102: a restart (now, queued, or interrupting the turn), cancelling a queued one and the restart hint's memory operate the session.
+  'POST /api/chat/sessions/:id/restart': { kind: 'objects', checks: [{ type: 'session', verb: 'operate', from: 'path', param: 'id' }] },
+  'DELETE /api/chat/sessions/:id/restart': { kind: 'objects', checks: [{ type: 'session', verb: 'operate', from: 'path', param: 'id' }] },
+  'PATCH /api/chat/sessions/:id/restart-hint': { kind: 'objects', checks: [{ type: 'session', verb: 'operate', from: 'path', param: 'id' }] },
+  // T-294: a session's limits (workers at once, sub-agents) widen or narrow what it may start: `manage` (a person, an admin's token), audited.
+  'PATCH /api/chat/sessions/:id/limits': { kind: 'objects', checks: [{ type: 'session', verb: 'manage', from: 'path', param: 'id' }], audit: 'session.limits' },
+  // T-136: recover in place (an ended-for-integrity session comes back as the same row): operates the session; audited by the controller.
+  'POST /api/chat/sessions/:id/recover': { kind: 'objects', checks: [{ type: 'session', verb: 'operate', from: 'path', param: 'id' }], audit: 'session.recover' },
+  // T-284: clearing a request no process can answer any more operates the session; the controller audits what it resolved (session.request_stale).
+  'POST /api/chat/sessions/:id/requests/:requestId/clear': {
+    kind: 'objects',
+    checks: [{ type: 'session', verb: 'operate', from: 'path', param: 'id' }],
+    audit: 'session.request_clear',
+  },
+};
 
 /**
  * T-136: `session_recover` reaches an ended session of the agent's own workspace (another workspace's: not found); always confirmed; audited.

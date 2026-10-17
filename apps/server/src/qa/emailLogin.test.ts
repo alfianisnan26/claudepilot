@@ -85,7 +85,8 @@ test('MU2 S1a: a member account signs in but is refused the admin app (403) and 
     assert.deepEqual([session.authenticated, session.member], [true, true]);
     const me = ((await (await call('GET', '/api/me', undefined, member)).json()) as { data: { kind: string; user: { email: string } } }).data;
     assert.deepEqual([me.kind, me.user.email], ['account', 'member@example.com']);
-    assert.equal((await call('GET', '/api/admin/state', undefined, member)).status, 403, 'the admin state (it holds the code) is refused');
+    // T-1043 S0a: the route guard refuses it first, with the same 404 as a path nobody serves (the lead's decision on T-1043; was 403).
+    assert.equal((await call('GET', '/api/admin/state', undefined, member)).status, 404, 'the admin state (it holds the code) is refused');
     for (const path of ['/api/admin/state', '/api/admin/users', '/api/workspaces', '/api/tickets', '/api/chat/sessions']) {
       const res = await call('GET', path, undefined, member);
       assert.ok(res.status === 403 || res.status === 404, `${path}: a member gets no admin route (got ${res.status})`);
