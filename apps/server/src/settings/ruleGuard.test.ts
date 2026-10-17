@@ -1019,6 +1019,16 @@ test('T-860 S2c: setsid, taskset and script -c hide a git command, and the wrapp
   assert.deepEqual(misses, []);
 });
 
+// QA mutant D9a: dropping --blob from the refused list of git config options survived, because no test named it.
+test('T-860 S2c: git config --blob (and --blob=) is refused in a lane workspace, a plain read stays allowed', () => {
+  const { wt, sh } = gitCRig();
+  refused(sh(`git -C ${wt} config --blob HEAD:.gitmodules --get submodule.x.url`), 'config --blob REV:file');
+  refused(sh(`git -C ${wt} config --blob=HEAD:.gitmodules --get submodule.x.url`), 'config --blob=REV:file');
+  refused(sh(`git -C ${wt} config --get --blob HEAD:.gitmodules submodule.x.url`), 'config --get --blob');
+  allowed(sh(`git -C ${wt} config --get submodule.x.url`), 'config --get without --blob');
+  allowed(sh(`git -C ${wt} config --list`), 'config --list');
+});
+
 test('T-860 S2c: set -a, a for loop over a GIT_ name, GIT_ assigned by a parameter expansion, namerefs and dynamic export names are refused', () => {
   const { wt, main, sh } = gitCRig();
   const M = main;
