@@ -419,8 +419,9 @@ test('T-294 over MCP: a worker on auto runs on a Claude with room, as its role (
     assert.equal(second.result?.isError, undefined, JSON.stringify(second.raw));
     const s2 = second.result!.structuredContent.session as { id: string; claude: { why: string }; applied: string[]; unconfirmed: string[] };
     assert.deepEqual([s2.claude.why, s2.applied], ['parent', []]);
-    assert.match(s2.unconfirmed.join(' '), /^model sonnet: /);
-    assert.match(second.result!.content![0]!.text, /Not confirmed: model sonnet: /);
+    // No mode asked: dontAsk by default (D-62), and one that is not confirmed is said, never fatal (the worker keeps going).
+    assert.match(s2.unconfirmed.join(' '), /^mode dontAsk: .* model sonnet: /);
+    assert.match(second.result!.content![0]!.text, /Not confirmed: mode dontAsk: .*model sonnet: /);
     assert.ok(r.s.controller.history(s2.id).some((e) => e.kind === 'user' && e.text === 'Review the diff of T-7.'), 'its first instruction went in');
     await until(() => r.s.ws.startArgs.some((a) => a.includes(s2.id)));
     assert.equal(r.s.controller.get(s2.id)!.agent, null, 'no role, no agent');
@@ -598,7 +599,7 @@ test('T-490 (D-63) over MCP: a QA role starts on its role’s model; opus with n
     const qa = await spawnAs({ title: 'Verify T-7', role: 'qa-verifier' }, 'sonnet');
     assert.deepEqual(asked, ['docker/ws1 qa-verifier'], 'the role’s model is read for the parent’s workspace');
     assert.equal(qa.model, 'sonnet');
-    assert.match(qa.unconfirmed.join(' '), /^model sonnet \(the role’s\): /);
+    assert.match(qa.unconfirmed.join(' '), /^mode dontAsk: .* model sonnet \(the role’s\): /);
     assert.equal(qa.why, null);
     assert.deepEqual([spawnAudit(qa.id).model, spawnAudit(qa.id).modelWhy], ['sonnet', null]);
     assert.equal(r.s.controller.get(qa.id)!.spawnWhy, undefined);
@@ -623,7 +624,7 @@ test('T-490 (D-63) over MCP: a QA role starts on its role’s model; opus with n
     // A role with no model: the model asked, unchanged, and no why needed.
     const impl = await spawnAs({ title: 'Build T-7', role: 'implementer', model: 'opus' }, 'opus');
     assert.equal(impl.model, 'opus');
-    assert.match(impl.unconfirmed.join(' '), /^model opus: /);
+    assert.match(impl.unconfirmed.join(' '), /^mode dontAsk: .* model opus: /);
     assert.equal(r.s.controller.get(impl.id)!.spawnWhy, undefined);
   } finally {
     await r.done();

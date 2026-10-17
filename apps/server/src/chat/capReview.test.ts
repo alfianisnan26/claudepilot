@@ -226,7 +226,7 @@ test('T-417 review 3: settings a queued worker could not confirm reach its lead 
     r.caps.perWorkspace = 2;
     await until(() => r.s.controller.history(id).some((e) => e.kind === 'user' && e.text === 'Check the parser.'), 4000);
     await until(() => spawnReports(r.s).length > 0, 4000);
-    assert.match(spawnReports(r.s).join('\n'), new RegExp(`Worker ${id} started with your instruction\\. Not confirmed: model sonnet: `));
+    assert.match(spawnReports(r.s).join('\n'), new RegExp(`Worker ${id} started with your instruction\\. Not confirmed: mode dontAsk: .*model sonnet: `));
   } finally {
     await r.done();
   }
