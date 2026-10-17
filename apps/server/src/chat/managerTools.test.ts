@@ -41,11 +41,12 @@ async function build(sessions: ChatSession[] = []) {
   const db = h.store.db!;
   const row = (id: string, title = `Session ${id}`) =>
     db.prepare("INSERT INTO chat_sessions (id, workspace_id, title, state, state_since, created_at, last_activity_at) VALUES (?, 'docker/dev', ?, 'waiting', ?, ?, ?)").run(id, title, ago(60), ago(60), ago(1));
-  const live = () => db.exec("UPDATE chat_sessions SET process = 'live'");
-  const request = (s: string, id: string, min: number, o: { title?: string; agent?: string; answered?: boolean } = {}) =>
+  const live = (...ids: string[]) =>
+    ids.length ? ids.forEach((id) => db.prepare("UPDATE chat_sessions SET process = 'live' WHERE id = ?").run(id)) : db.exec("UPDATE chat_sessions SET process = 'live'");
+  const request = (s: string, id: string, min: number, o: { title?: string; agent?: string; answered?: boolean; kind?: string; tool?: string } = {}) =>
     db
       .prepare('INSERT INTO chat_requests (session_id, request_id, kind, tool_name, title, detail, agent_label, created_at, answered_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(s, id, 'tool', 'Bash', o.title ?? 'Run a command', 'ls', o.agent ?? null, ago(min), o.answered ? ago(0) : null);
+      .run(s, id, o.kind ?? 'tool', o.tool ?? 'Bash', o.title ?? 'Run a command', 'ls', o.agent ?? null, ago(min), o.answered ? ago(0) : null);
   return { h, row, live, request, reached };
 }
 
@@ -66,10 +67,11 @@ test('approvals_list: every open request of the caller\'s sessions, any age, old
     const read = h.token('read').secret;
     const r = await h.call(read, 'approvals_list', {});
     assert.equal(r.result?.isError, undefined, JSON.stringify(r.raw));
-    const rows = r.result!.structuredContent.approvals as { session_id: string; request_id: string; age_s: number; tool: string; link: string }[];
+    const rows = r.result!.structuredContent.approvals as { session_id: string; request_id: string; age_s: number; tool: unknown; kind: unknown; link: string }[];
     assert.deepEqual(rows.map((x) => `${x.session_id}/${x.request_id}`), ['s_mine/q_old', 's_mine/q_new'], 'a fresh one too, and nothing of another user');
     assert.equal(rows[1]!.age_s, 60);
-    assert.equal(rows[0]!.tool, 'Bash');
+    assert.deepEqual(rows[0]!.tool, { untrusted_text: 'Bash', source: 'agent' });
+    assert.deepEqual(rows[0]!.kind, { untrusted_text: 'tool', source: 'agent' });
     assert.equal(rows[0]!.link, '/admin/sessions/s_mine');
     assert.equal(r.result!.structuredContent.total, 2);
     const one = await h.call(read, 'approvals_list', { session_id: 's_mine', limit: 1 });
@@ -101,17 +103,57 @@ test('approvals_list denied: another user\'s session reads exactly like a missin
   }
 });
 
-test('approvals_list redaction: the summary, the session title and the agent label are untrusted and masked', async () => {
+test('approvals_list: a session whose process is not live is never listed (its request can not be answered)', async () => {
+  const { h, row, live, request } = await build();
+  try {
+    owners({ s_live: FOUNDING_USER_ID, s_idle: FOUNDING_USER_ID });
+    row('s_live');
+    row('s_idle');
+    live('s_live');
+    request('s_live', 'q_live', 2);
+    request('s_idle', 'q_idle', 3);
+    const r = await h.call(h.token('read').secret, 'approvals_list', {});
+    assert.deepEqual((r.result!.structuredContent.approvals as { request_id: string }[]).map((x) => x.request_id), ['q_live']);
+    assert.equal(r.result!.structuredContent.total, 1);
+  } finally {
+    h.done();
+    clearResolvers();
+  }
+});
+
+test('approvals_list: total counts what the caller may see after the can() filter, past any page, and the page holds only visible rows', async () => {
+  const { h, row, live, request } = await build();
+  try {
+    owners({ s_mine: FOUNDING_USER_ID, s_theirs: U_B });
+    row('s_mine');
+    row('s_theirs');
+    live();
+    // 1,000 requests of another user come first in time: the old SQL `LIMIT 1000` before the filter left the caller none of theirs.
+    h.store.db!.exec('BEGIN');
+    for (let i = 0; i < 1000; i++) request('s_theirs', `q_b${i}`, 2000 - i);
+    h.store.db!.exec('COMMIT');
+    for (let i = 0; i < 4; i++) request('s_mine', `q_m${i}`, 50 - i);
+    const r = await h.call(h.token('read').secret, 'approvals_list', { limit: 2 });
+    assert.deepEqual((r.result!.structuredContent.approvals as { request_id: string }[]).map((x) => x.request_id), ['q_m0', 'q_m1']);
+    assert.equal(r.result!.structuredContent.total, 4);
+    assert.match(r.result!.structuredContent.summary, /4 open requests, 2 shown/);
+  } finally {
+    h.done();
+    clearResolvers();
+  }
+});
+
+test('approvals_list redaction: the summary, the session title, the agent label, the kind and the tool name are untrusted and masked', async () => {
   const { h, row, live, request } = await build();
   try {
     owners({ s_mine: FOUNDING_USER_ID });
     const secret = fakeToken();
     row('s_mine', `deploy ${secret}`);
     live();
-    request('s_mine', 'q_1', 2, { title: `curl -H "x: ${secret}"`, agent: `qa ${secret}` });
+    request('s_mine', 'q_1', 2, { title: `curl -H "x: ${secret}"`, agent: `qa ${secret}`, kind: `tool ${secret}`, tool: `mcp__x ${secret}` });
     const r = await h.call(h.token('read').secret, 'approvals_list', {});
     const a = r.result!.structuredContent.approvals[0];
-    for (const f of [a.summary, a.session_title, a.agent]) {
+    for (const f of [a.summary, a.session_title, a.agent, a.kind, a.tool]) {
       assert.equal(f.source, 'agent');
       assert.match(f.untrusted_text, /\[redacted\]/);
     }
@@ -131,13 +173,30 @@ test('crew_limits_get: the lead\'s own limit under the global one, the slots in 
   ];
   const { h } = await build(sessions);
   try {
-    owners({ s_lead: FOUNDING_USER_ID });
+    owners({ s_lead: FOUNDING_USER_ID, w_1: FOUNDING_USER_ID, w_2: FOUNDING_USER_ID, w_x: FOUNDING_USER_ID });
     const r = await h.call(h.token('read').secret, 'crew_limits_get', { session_id: 's_lead' });
     assert.equal(r.result?.isError, undefined, JSON.stringify(r.raw));
     const c = r.result!.structuredContent;
     assert.deepEqual([c.own_max_workers, c.max_workers, c.in_use, c.free, c.subagents, c.queue], [3, 3, 1, 2, false, 'unavailable']);
     assert.deepEqual(c.global, { max_depth: 1, max_children: 5, spawns_per_hour: 20, messages_per_hour: 60 });
     assert.deepEqual(c.workers.map((w: { id: string; agent: string }) => [w.id, w.agent]), [['w_1', 'implementer']]);
+  } finally {
+    h.done();
+    clearResolvers();
+  }
+});
+
+test('crew_limits_get: a worker the caller may not view is neither listed nor counted (multi-user)', async () => {
+  const sessions = [session('s_lead', { maxWorkers: 3 }), session('w_mine', { parentId: 's_lead' }), session('w_theirs', { parentId: 's_lead', title: 'their worker' })];
+  const { h } = await build(sessions);
+  try {
+    owners({ s_lead: FOUNDING_USER_ID, w_mine: FOUNDING_USER_ID, w_theirs: U_B });
+    const r = await h.call(h.token('read').secret, 'crew_limits_get', { session_id: 's_lead' });
+    assert.equal(r.result?.isError, undefined, JSON.stringify(r.raw));
+    const c = r.result!.structuredContent;
+    assert.deepEqual(c.workers.map((w: { id: string }) => w.id), ['w_mine']);
+    assert.equal(c.in_use, 1);
+    assert.ok(!JSON.stringify(r.raw).includes('w_theirs') && !JSON.stringify(r.raw).includes('their worker'));
   } finally {
     h.done();
     clearResolvers();
@@ -165,7 +224,7 @@ test('crew_limits_get redaction: a worker\'s title is untrusted and masked', asy
   const secret = fakeToken();
   const { h } = await build([session('s_lead'), session('w_1', { parentId: 's_lead', title: `fix ${secret}` })]);
   try {
-    owners({ s_lead: FOUNDING_USER_ID });
+    owners({ s_lead: FOUNDING_USER_ID, w_1: FOUNDING_USER_ID });
     const r = await h.call(h.token('read').secret, 'crew_limits_get', { session_id: 's_lead' });
     assert.equal(r.result!.structuredContent.workers[0].title.source, 'agent');
     assert.match(r.result!.structuredContent.workers[0].title.untrusted_text, /\[redacted\]/);

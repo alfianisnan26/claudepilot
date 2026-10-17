@@ -19,6 +19,8 @@ export interface ManagerUntrusted {
 
 /** What a string setting that looks like a credential shows instead of its value. */
 export const SETTING_SECRET_SET = '[set]';
+/** What an empty string setting shows: "set or missing only" (general-manager PRD §9.1), never an empty value to guess at. */
+export const SETTING_MISSING = '[missing]';
 
 /** `settings_get`: one setting. */
 export interface ManagerSettingRow {
@@ -26,7 +28,7 @@ export interface ManagerSettingRow {
   group: string;
   label: string;
   type: 'boolean' | 'string' | 'number';
-  /** The effective value; a credential-shaped string is `[set]`, never the value. */
+  /** The effective value; a credential-shaped string is `[set]`, never the value; an empty string is `[missing]`. Same for `default`. */
   value: boolean | string | number;
   default: boolean | string | number;
   /** `default` when nobody changed it, else `changed`. */
@@ -43,8 +45,9 @@ export interface ManagerApprovalRow {
   session_id: string;
   session_title: ManagerUntrusted | null;
   request_id: string;
-  kind: string;
-  tool: string | null;
+  /** The request's kind and tool name as the controller reported them: labelled untrusted. */
+  kind: ManagerUntrusted | null;
+  tool: ManagerUntrusted | null;
   /** The controller's own short, redacted summary of what it asks. */
   summary: ManagerUntrusted | null;
   agent: ManagerUntrusted | null;
@@ -59,11 +62,12 @@ export interface ManagerAutoEventRow {
   at: string;
   session_id: string;
   kind: string;
-  reason: string | null;
-  from: string | null;
-  to: string | null;
-  code: string | null;
-  actor: string;
+  /** The reason, the Claude names, the code and the actor came from outside the portal or a person's naming: labelled untrusted. */
+  reason: ManagerUntrusted | null;
+  from: ManagerUntrusted | null;
+  to: ManagerUntrusted | null;
+  code: ManagerUntrusted | null;
+  actor: ManagerUntrusted | null;
   /** For a `moved` event: whether its Undo is open now; null for every other kind. */
   undoable: boolean | null;
 }
@@ -73,9 +77,9 @@ export interface ManagerAutoCardRow {
   id: string;
   session_id: string;
   at: string;
-  reason: string;
-  from: string;
-  to: string;
+  reason: ManagerUntrusted | null;
+  from: ManagerUntrusted | null;
+  to: ManagerUntrusted | null;
 }
 
 /** `crew_limits_get`: one worker of the lead. */
@@ -108,12 +112,13 @@ export interface ManagerCrewLimits {
 export interface ManagerDeployRow {
   id: string;
   number: number;
-  pipeline: string;
-  branch: string | null;
+  /** The pipeline, branch and stage names come from the repository's files and pushes: labelled untrusted. */
+  pipeline: ManagerUntrusted | null;
+  branch: ManagerUntrusted | null;
   sha: string | null;
   status: string;
   /** The job running or held now, or null when none is. */
-  stage: string | null;
+  stage: ManagerUntrusted | null;
   /** The status of the job named `gate`, or `unavailable` when the run has none. */
   gate: string;
   /** Environments whose release waits for a person's approval in the portal. */

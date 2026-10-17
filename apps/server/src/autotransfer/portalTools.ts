@@ -69,17 +69,24 @@ export function registerAutoTransferTools(d: { engine: Pick<AutoTransferEngine, 
         at: e.at,
         session_id: e.sessionId,
         kind: e.kind,
-        reason: e.reason,
-        from: e.from?.name ?? null,
-        to: e.to?.name ?? null,
-        code: e.code,
-        actor: e.actor,
+        reason: ctx.untrusted(e.reason, 'autotransfer', 300),
+        from: ctx.untrusted(e.from?.name, 'claude', 80),
+        to: ctx.untrusted(e.to?.name, 'claude', 80),
+        code: ctx.untrusted(e.code, 'autotransfer', 80),
+        actor: ctx.untrusted(e.actor, 'autotransfer', 80),
         undoable: e.kind === 'moved' ? undo.get(e.sessionId)?.eventId === e.id && undo.get(e.sessionId)!.ok : null,
       }));
       const cards: ManagerAutoCardRow[] = d.store
         .openSuggestions(userId)
         .filter((c) => (!args.session_id || c.sessionId === args.session_id) && mayView(c.sessionId))
-        .map((c) => ({ id: c.id, session_id: c.sessionId, at: c.at, reason: c.reason, from: c.from.name, to: c.to.name }));
+        .map((c) => ({
+          id: c.id,
+          session_id: c.sessionId,
+          at: c.at,
+          reason: ctx.untrusted(c.reason, 'autotransfer', 300),
+          from: ctx.untrusted(c.from.name, 'claude', 80),
+          to: ctx.untrusted(c.to.name, 'claude', 80),
+        }));
       return {
         summary: `${rows.length} event${rows.length === 1 ? '' : 's'}, ${cards.length} card${cards.length === 1 ? '' : 's'} waiting${rows.some((r) => r.undoable) ? ', a move can be undone' : ''}`,
         events: rows,

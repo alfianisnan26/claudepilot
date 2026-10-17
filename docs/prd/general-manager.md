@@ -241,8 +241,10 @@ lives in the module that owns its data and is declared in that module's `authz.t
 - `deploy_status`: `ci/portalTools.ts`.
 
 All five are `read` scope, so an agent's token never reaches them. A session or settings area the caller may not view answers exactly
-like a missing one (NOT_FOUND). List rows go through `can()` one by one. Agent text comes back labelled untrusted, and a
-credential-shaped setting reads `[set]`.
+like a missing one (NOT_FOUND). List rows go through `can()` one by one, a lead's workers included, and `approvals_list` counts
+`total` after that filter (no SQL limit before it). Text from outside comes back labelled untrusted: titles, summaries and agent
+labels, an approval's kind and tool name, an auto move's reason, code, actor and Claude names, and a deploy's pipeline, branch and
+stage. A credential-shaped setting value or default reads `[set]`, and an empty one reads `[missing]`.
 
 How the build differs from the table above:
 

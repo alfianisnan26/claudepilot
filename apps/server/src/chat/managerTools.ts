@@ -55,23 +55,29 @@ export function registerChatManagerTools(d: ChatManagerDeps, registry: ToolRegis
       if (!db) throw new AppError('SERVICE_UNAVAILABLE', 'The database is not available.');
       const actor = actorOfPrincipal(ctx.principal);
       // The same rule as Needs you: a request of a process that runs a turn (an idle or gone process can not be answered).
-      const rows = db
-        .prepare(
-          `SELECT r.session_id, r.request_id, r.kind, r.tool_name, r.agent_label, r.title, r.created_at, s.title AS session_title
-           FROM chat_requests r JOIN chat_sessions s ON s.id = r.session_id
-           WHERE r.answered_at IS NULL AND s.state IN ('waiting', 'working') AND s.process = 'live' ${args.session_id ? 'AND r.session_id = ?' : ''}
-           ORDER BY r.created_at, r.rowid LIMIT 1000`,
-        )
-        .all(...(args.session_id ? [args.session_id] : [])) as unknown as RequestRow[];
+      // No SQL LIMIT: the can() filter runs on every open row, then the page is cut, so `total` counts what the caller may see.
+      const stmt = db.prepare(
+        `SELECT r.session_id, r.request_id, r.kind, r.tool_name, r.agent_label, r.title, r.created_at, s.title AS session_title
+         FROM chat_requests r JOIN chat_sessions s ON s.id = r.session_id
+         WHERE r.answered_at IS NULL AND s.state IN ('waiting', 'working') AND s.process = 'live' ${args.session_id ? 'AND r.session_id = ?' : ''}
+         ORDER BY r.created_at, r.rowid`,
+      );
+      const limit = args.limit ?? 50;
+      const shown: RequestRow[] = [];
+      let total = 0;
+      for (const raw of stmt.iterate(...(args.session_id ? [args.session_id] : []))) {
+        const r = raw as unknown as RequestRow;
+        if (!can(actor, 'view', sessionRef(r.session_id)).allow) continue;
+        total++;
+        if (shown.length < limit) shown.push(r);
+      }
       const t = now();
-      const mine = rows.filter((r) => can(actor, 'view', sessionRef(r.session_id)).allow);
-      const shown = mine.slice(0, args.limit ?? 50);
       const approvals: ManagerApprovalRow[] = shown.map((r) => ({
         session_id: r.session_id,
         session_title: ctx.untrusted(r.session_title, 'agent', 120),
         request_id: r.request_id,
-        kind: r.kind,
-        tool: r.tool_name,
+        kind: ctx.untrusted(r.kind, 'agent', 40),
+        tool: ctx.untrusted(r.tool_name, 'agent', 120),
         summary: ctx.untrusted(r.title, 'agent', 200),
         agent: ctx.untrusted(r.agent_label, 'agent', 60),
         since: r.created_at,
@@ -79,8 +85,8 @@ export function registerChatManagerTools(d: ChatManagerDeps, registry: ToolRegis
         link: sessionLink(r.session_id),
       }));
       return {
-        summary: mine.length ? `${mine.length} open request${mine.length === 1 ? '' : 's'}${shown.length < mine.length ? `, ${shown.length} shown` : ''}` : 'No session waits on a request.',
-        total: mine.length,
+        summary: total ? `${total} open request${total === 1 ? '' : 's'}${shown.length < total ? `, ${shown.length} shown` : ''}` : 'No session waits on a request.',
+        total,
         approvals,
       };
     },
@@ -99,7 +105,11 @@ export function registerChatManagerTools(d: ChatManagerDeps, registry: ToolRegis
       const lead = d.chat.get(args.session_id);
       if (!lead) throw new AppError('NOT_FOUND', NO_SESSION);
       const caps = d.caps();
-      const workers = d.chat.list({ parentId: lead.id }).filter((s) => s.parentId === lead.id && s.state !== 'ended');
+      // Each worker passes can(view) on its own: with more than one user a lead's worker need not be the caller's (multi-user is planned).
+      const actor = actorOfPrincipal(ctx.principal);
+      const workers = d.chat
+        .list({ parentId: lead.id })
+        .filter((s) => s.parentId === lead.id && s.state !== 'ended' && can(actor, 'view', sessionRef(s.id)).allow);
       const max = effectiveMaxWorkers(caps, lead.maxWorkers);
       const result: ManagerCrewLimits = {
         session_id: lead.id,

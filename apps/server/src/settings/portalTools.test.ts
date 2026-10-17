@@ -3,7 +3,7 @@
 // gets (NOT_FOUND, same bytes) and the handler never runs; an agent's token never reaches it; a credential-shaped value reads `[set]`.
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
-import { objectRef, SETTING_SECRET_SET, type UserId } from '@portal/contracts';
+import { objectRef, SETTING_MISSING, SETTING_SECRET_SET, type UserId } from '@portal/contracts';
 import { clearResolvers, registerResolver } from '../authz/seam.js';
 import { ToolRegistry } from '../portalmcp/registry.js';
 import { portalMcpHarness } from '../portalmcp/testkit.js';
@@ -16,12 +16,15 @@ const FLAG = 't968.guard';
 const TEXT = 't968.note';
 defineSetting({ key: FLAG, type: 'boolean', default: true, protective: true, scope: 'global', group: 't968', order: 1, label: 'Guard', confirmText: 'Turns the guard off.' });
 defineSetting({ key: TEXT, type: 'string', default: '', scope: 'global', group: 't968', order: 2, label: 'Note', max: 200 });
+/** A credential-shaped value, built at run time (no token-shaped literal in the repository). */
+const fakeToken = () => ['cp', 'at_', 'Q7x'.repeat(10)].join('');
+// A setting whose DEFAULT is credential-shaped (mutant A10: the default was never masked by any test).
+const KEYED = 't968.keyed';
+const DEFAULT_SECRET = fakeToken();
+defineSetting({ key: KEYED, type: 'string', default: DEFAULT_SECRET, scope: 'global', group: 't968x', order: 1, label: 'Keyed', max: 200 });
 declareSettingsPolicies();
 
 after(() => clearResolvers());
-
-/** A credential-shaped value, built at run time (no token-shaped literal in the repository). */
-const fakeToken = () => ['cp', 'at_', 'Q7x'.repeat(10)].join('');
 
 async function build() {
   const registry = new ToolRegistry();
@@ -91,6 +94,38 @@ test('redaction: a credential-shaped value reads [set], in the list and alone, a
     const all = await h.call(read, 'settings_get', {});
     assert.equal((all.result!.structuredContent.settings as { key: string; value: unknown }[]).find((r) => r.key === TEXT)?.value, SETTING_SECRET_SET);
     for (const r of [one, all]) assert.ok(!JSON.stringify(r.raw).includes(secret), 'the value is in no part of the answer');
+  } finally {
+    h.done();
+  }
+});
+
+test('redaction: a credential-shaped DEFAULT reads [set], as the value and as the default, alone and in the list', async () => {
+  const { h } = await build();
+  try {
+    const read = h.token('read').secret;
+    const one = await h.call(read, 'settings_get', { key: KEYED });
+    assert.equal(one.result?.isError, undefined, JSON.stringify(one.raw));
+    assert.equal(one.result!.structuredContent.setting.default, SETTING_SECRET_SET);
+    assert.equal(one.result!.structuredContent.setting.value, SETTING_SECRET_SET);
+    const all = await h.call(read, 'settings_get', { group: 't968x' });
+    assert.equal(all.result!.structuredContent.settings[0].default, SETTING_SECRET_SET);
+    for (const r of [one, all]) assert.ok(!JSON.stringify(r.raw).includes(DEFAULT_SECRET), 'the default is in no part of the answer');
+  } finally {
+    h.done();
+  }
+});
+
+test('an empty value reads [missing], never an empty string (set or missing only)', async () => {
+  const { h, settings } = await build();
+  try {
+    const read = h.token('read').secret;
+    const one = await h.call(read, 'settings_get', { key: TEXT });
+    assert.equal(one.result!.structuredContent.setting.value, SETTING_MISSING);
+    assert.equal(one.result!.structuredContent.setting.default, SETTING_MISSING);
+    settings.set(TEXT, 'hello', { actor: 'Admin' });
+    const set = await h.call(read, 'settings_get', { key: TEXT });
+    assert.equal(set.result!.structuredContent.setting.value, 'hello');
+    assert.equal(set.result!.structuredContent.setting.default, SETTING_MISSING);
   } finally {
     h.done();
   }

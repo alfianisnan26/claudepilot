@@ -1,9 +1,10 @@
 // `settings_get` on the Portal MCP (general-manager PRD §9.1, T-968 S2a): the shared settings as the Settings page shows them, read only.
 // Declared in ./authz.ts (`view` on the platform's `settings` area): the dispatch refuses anyone else with NOT_FOUND before this runs, and a
-// key that does not exist answers the same bytes. A string value shaped like a credential is never returned: it reads `[set]`.
+// key that does not exist answers the same bytes. A string value shaped like a credential is never returned: it reads `[set]`; an empty
+// string reads `[missing]` ("set or missing only", PRD §9.1). Both the value and the default are masked.
 
 import { AppError } from '@isnanme/core';
-import { SETTING_SECRET_SET, type ManagerSettingRow, type SettingView } from '@portal/contracts';
+import { SETTING_MISSING, SETTING_SECRET_SET, type ManagerSettingRow, type SettingView } from '@portal/contracts';
 import { looksLikeSecret } from '../portalmcp/sanitize.js';
 import { portalTools, z, type ToolRegistry } from '../portalmcp/registry.js';
 import type { Settings } from './store.js';
@@ -11,7 +12,11 @@ import type { Settings } from './store.js';
 /** What a denial and a missing key both answer (the seam's platform refusal says the same). */
 export const NO_SETTING = 'Not found.';
 
-const masked = <T,>(v: T): T => (typeof v === 'string' && looksLikeSecret(v) ? (SETTING_SECRET_SET as T) : v);
+const masked = <T,>(v: T): T => {
+  if (typeof v !== 'string') return v;
+  if (v.trim() === '') return SETTING_MISSING as T;
+  return looksLikeSecret(v) ? (SETTING_SECRET_SET as T) : v;
+};
 
 export function settingRow(s: SettingView): ManagerSettingRow {
   return {
@@ -35,7 +40,7 @@ export function registerSettingsTools(settings: Pick<Settings, 'view'>, registry
     title: 'Read the settings',
     description:
       'The portal-wide settings as the Settings page shows them: key, group, label, the effective value and its default, whether it was changed and by whom, and whether changing it needs a person\'s confirmation (a security switch). ' +
-      '`key` returns one; `group` narrows the list. A value shaped like a credential reads "[set]". Read only: no tool changes a setting.',
+      '`key` returns one; `group` narrows the list. A value shaped like a credential reads "[set]", an empty one "[missing]". Read only: no tool changes a setting.',
     scope: 'read',
     hints: { readOnly: true, idempotent: true },
     input: z.object({
