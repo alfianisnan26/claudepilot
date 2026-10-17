@@ -46,6 +46,10 @@ import {
   type CreateWorkspaceRequest,
   type RotateCodeRequest,
   type SessionStatus,
+  PORTAL_USER_API,
+  type CreatePortalUserRequest,
+  type PortalUser,
+  type UpdatePortalUserRequest,
   type SystemStatus,
   type Workspace,
   type WorkspaceTarget,
@@ -101,6 +105,12 @@ const asClaude = (claudeId?: string) => (claudeId ? `?claude=${encodeURIComponen
 export const api = {
   session: () => request<SessionStatus>('GET', API.session),
   login: (code: string) => request<AdminState>('POST', API.login, { code }),
+  /** T-118: an email account's sign-in (the same session the code gives). */
+  loginEmail: (email: string, password: string) => request<AdminState>('POST', API.login, { email, password }),
+  users: () => request<PortalUser[]>('GET', PORTAL_USER_API.list),
+  createUser: (body: CreatePortalUserRequest) => request<PortalUser>('POST', PORTAL_USER_API.list, body),
+  updateUser: (id: string, body: UpdatePortalUserRequest) => request<PortalUser>('PATCH', PORTAL_USER_API.one(id), body),
+  removeUser: (id: string) => request<{ removed: true }>('DELETE', PORTAL_USER_API.one(id)),
   logout: () => request<{ ok: true }>('POST', API.logout),
   adminState: () => request<AdminState>('GET', API.adminState),
   rotateCode: (body: RotateCodeRequest = {}) => request<AdminState>('POST', API.rotateCode, body),

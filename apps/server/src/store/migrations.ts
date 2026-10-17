@@ -3417,6 +3417,41 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 400,
+    name: 'identity: email accounts and the login throttle (T-118 MU1-min)',
+    up(db) {
+      // Owner, 2026-10-17: "multi user feature login by email". MU1-min (identity block 400-409): an account is an email and a scrypt hash
+      // (PASSWORD_HASH); a sign-in gives the same portal session the server code gives (every account acts as the owner until MU2's
+      // per-person permissions). The server code keeps working beside it. auth_throttle is the identity PRD's (FR19): per email, per address.
+      db.exec(`
+        CREATE TABLE users (
+          id TEXT PRIMARY KEY CHECK (id GLOB 'u_*'),
+          email TEXT NOT NULL CHECK (length(email) BETWEEN 3 AND 254),
+          email_key TEXT NOT NULL,
+          display_name TEXT NOT NULL CHECK (length(display_name) BETWEEN 1 AND 60),
+          role TEXT NOT NULL CHECK (role IN ('admin', 'member')),
+          state TEXT NOT NULL CHECK (state IN ('active', 'disabled')),
+          password_hash TEXT NOT NULL,
+          password_changed_at TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          created_by TEXT NOT NULL,
+          last_login_at TEXT,
+          disabled_at TEXT
+        ) STRICT;
+        CREATE UNIQUE INDEX users_email_key ON users (email_key);
+        CREATE TABLE auth_throttle (
+          scope TEXT NOT NULL CHECK (scope IN ('user', 'ip', 'register', 'invitation', 'reauth', 'lookup', 'share', 'team_invite')),
+          key TEXT NOT NULL,
+          failures INTEGER NOT NULL DEFAULT 0,
+          window_start_ms INTEGER NOT NULL,
+          locked_until_ms INTEGER NOT NULL DEFAULT 0,
+          updated_ms INTEGER NOT NULL,
+          PRIMARY KEY (scope, key)
+        ) STRICT;
+      `);
+    },
+  },
 ];
 
 /**

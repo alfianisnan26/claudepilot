@@ -1,27 +1,26 @@
-# orchestrator status (2026-10-17 13:20 UTC, session 355881a3, continuation of de232389; older: git history)
+# orchestrator status (2026-10-17 15:55 UTC, session 355881a3, continuation of de232389; older: git history)
 
 ## DONE
 - Batches 22-26: git history (to 83b7213e), gates green. Close on "Coordinator live check" PASS. T-574 re-check after 10-17 15:00Z.
 - RESPAWN rule (165db813 + D-78 4e101a59): respawn each lane BETWEEN tickets on a worktree cut from integration; scripts by abs path.
 - BATCH 29 edde2073 (T-524 S3c, T-733 S5, T-881 S1b, T-416 S2c, T-382 S1, T-781 S8c, T-675 R2c+R2d) RELEASED 2026.10.17-2: close on live checks.
 ## IN FLIGHT (6 of 6, D-71; lanes respawned per ticket, D-78; sonnet)
-- BATCH 30 premerge-b30 b9781ad6 (wip/main-b9781ad): T-772 S2f, T-736 S3g, T-612 S1, T-868 S1-S3, T-436 S1+S2 (deploy note),
-  T-379 S2, format fix 787932e2, integration (T-924), T-860 S2c a87d00b8 (PWG 9638), T-382 S2-S4 (PWG 9691; S5 fup).
-  Resolution trace T-595 9742. QC run 4 on e0f7a72d: tests ok, format 65 files + lint 3 -> lead format commits (Jobs b1a39c2d,
-  ec182931; token-equal check job-out/fmtcheck.mjs) + integration (master line 85) = e4e52fa0 (trace T-595 9916). QC on e4e52fa0:
-  tests + lint ok, format red on knowledge/service.ts. Merging integration 94105066 conflicts in quick-check.sh (T-612 S1 vs T-960):
-  13:25 merged integration + T-612 S1b (QA PASS 10202; its 2 files whole; jobRun.test.ts union) = 5c05f72d (wip/main-5c05f72):
-  QC rc124 (jobRun.test.ts filled /tmp, T-1032; format red quickCheck.test.ts + service.ts) -> fmt Job (2nd try, cluster full).
+- BATCH 30 premerge-b30: T-772 S2f, T-736 S3g, T-612 S1+S1b, T-868 S1-S3, T-436 S1+S2 (deploy note), T-379 S2, T-860 S2c,
+  T-382 S2-S4, lead format commits (traces T-595 9742, 9916). QC 6259948c GREEN (16 tests; jobRun.test.ts to the gate, T-1032).
+  GATE 67a6e53 RED: claudeversion.test.ts reads BASE_FLAGS as one line; MY format commit 0dd31914 split it (premerge only, not
+  integration) -> e078b2f4 one line + prettier-ignore -> 2f5214f0 QC running -> re-gate. LESSON: format commits break tests that
+  read source with a regex; fmtcheck tokens can't see it: grep readFileSync(*.ts) tests and run them in the QC.
 - T-938 DONE 259935e8 (Job 6bd127a4 rc0) -> blind review d9f18599 -> coordinator lands. Lane a3554d40 -> T-974 URGENT
   (rule guard git argv, ruleGuard.ts; rule class: blind review, coordinator removes deny lines after PASS).
 - URGENT T-948 port proxy (9810): S1 BE INFRA 2 2a0edbd8 OPUS (security), ticket/T-948-port-proxy; app-<ws>-<port> subdomain (9811).
-  S1 fix f70c72bd (Job 79cec835 rc0) -> RE-CHECK c691df71. S2 d08465f9 RECHECK PASS 10189; UX code-read only (no browser in
+  S1 fix f70c72bd RECHECK PASS 10380 (c691df71 now reads FIX2). S2 d08465f9 RECHECK PASS 10189; UX code-read only (no browser in
   qa lane): visual look on the premerge scratch portal later. Blind review S1 (d9f18599) PWC 10219: 2 Majors (upstream timeout +
   bridge caps; upgrade lifetime) + minors -> FIX2 5d929014 by 2a0edbd8 (10220; Job queued); deploy before T-976 own apps only.
   Premerge t948 b2d62bfd (wip/t948-b2d62bf): QC running; then FIX2, gate, land. Paused: T-921 0dfff348, T-379 S3 9dfecffb.
 - T-976 __Host- cookie (security; blind review + coord live check): 2a0edbd8 opus, test fix a418de31, Job queued.
   15:25 cluster full (node2 CPU 87% reserved): every Job queues ~1 h, several lost Pending; re-run once each (D-75).
-- T-382 S5 test gaps 1,2,4 (9691): FE 3753d3c2 sonnet, ticket/T-382-s5 from wip/main-e4e52fa; gap 3 (unbounded total) Backend later.
+- T-382 S5 DONE 472e9015 (Job febbb579 rc0, 9 mutants killed; T-595 10376) -> QA be63acc8 -> batch 31. S6 gap 3 (unbounded
+  ci total) -> same builder 3753d3c2. T-382 unassigned: comments refused, assign asked FOR THE COORDINATOR (10376).
 - T-425 S2b 357ff021: QA be63acc8 PWG 9970 (mutant B survives) -> test fix on next free Backend slot; same QA re-checks (T-595 10014).
 - T-436 S3 + T-772 S2g fe676258: QA PWG (T-595 10003) -> batch 31; permissions class: coordinator live check before close (D-81).
 - T-294 PWG 9858: crew_post/read + idle-child reuse not built -> slice after T-948 (T-595 9871).

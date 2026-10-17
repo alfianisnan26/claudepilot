@@ -8,6 +8,8 @@ export interface SessionStatus {
   authenticated: boolean;
   /** Whether new sign-ins are accepted. */
   enabled: boolean;
+  /** Whether at least one email account exists (the sign-in page then offers email first). Absent from an older server. */
+  emailSignIn?: boolean;
 }
 
 /** Everything the admin view shows. */
@@ -66,8 +68,11 @@ export interface KeyUnlockResult {
   status: SystemStatus;
 }
 
+/** Sign in with the server code, or with an email account's email and password (T-118). */
 export interface LoginRequest {
-  code: string;
+  code?: string;
+  email?: string;
+  password?: string;
 }
 
 /** Omit `code` to generate a new one. */
