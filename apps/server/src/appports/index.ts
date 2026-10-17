@@ -5,7 +5,7 @@ import { CDP_PORT, SUPERVISOR_PORT } from '../browser/spec.js';
 import type { ExecSession, Runtime } from '../workspaces/runtime.js';
 import { createDialer, type Dial } from './dial.js';
 import { AppPortGrants } from './grants.js';
-import { AppPortProxy } from './proxy.js';
+import { AppPortProxy, type ProxyLimits } from './proxy.js';
 
 export { AppPortProxy, routeAppHostUpgrades } from './proxy.js';
 export { AppPortGrants, APP_COOKIE } from './grants.js';
@@ -44,6 +44,8 @@ export interface AppPortsDeps {
   grants?: AppPortGrants;
   /** Tests: a shorter bound on an upgrade's dial and first answer. */
   upgradeTimeoutMs?: number;
+  /** Idle timeouts and bridge caps (config.portProxy; defaults in proxy.ts). */
+  limits?: ProxyLimits;
 }
 
 /** Runs a command in the workspace and collects its output (bounded in time and size). */
@@ -71,7 +73,22 @@ export class AppPorts {
   constructor(private readonly d: AppPortsDeps) {
     this.grants = d.grants ?? new AppPortGrants();
     this.denied = new Set([d.portalPort, CDP_PORT, SUPERVISOR_PORT, ...(d.denyPorts ?? [])]);
-    this.proxy = new AppPortProxy({ suffix: d.suffix, grants: this.grants, dial: d.dial ?? createDialer(d.workspaces), sessionValid: d.sessionValid, deniedPorts: this.denied, upgradeTimeoutMs: d.upgradeTimeoutMs });
+    this.proxy = new AppPortProxy({
+      suffix: d.suffix,
+      grants: this.grants,
+      dial: d.dial ?? createDialer(d.workspaces),
+      sessionValid: d.sessionValid,
+      deniedPorts: this.denied,
+      upgradeTimeoutMs: d.upgradeTimeoutMs,
+      limits: d.limits,
+    });
+    // A removed workspace's cookies are gone: its open sockets and requests go with them.
+    this.grants.onForget = () => this.proxy.sweep();
+  }
+
+  /** Stops the proxy's sweep timer (tests, shutdown). */
+  close(): void {
+    this.proxy.close();
   }
 
   get enabled(): boolean {

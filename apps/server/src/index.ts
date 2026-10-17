@@ -616,6 +616,7 @@ const appPorts = new AppPorts({
   denyPorts: config.portProxy.denyPorts,
   workspaces,
   sessionValid: (token) => !!portal.session(token),
+  limits: { idleMs: config.portProxy.idleMs, socketIdleMs: config.portProxy.socketIdleMs, maxPerGrant: config.portProxy.maxPerGrant, maxPerWorkspace: config.portProxy.maxPerWorkspace },
 });
 const app = createApp(portal, workspaces, store, accounts, pools, reconciler, health, chatController, { serveWeb: !config.dev, notify, poolService, mcp: mcpSets, skills, personas, settings: settingsModule, secrets: secretRotations, portalMcp, knowledge, tickets, ci, browser, claudeUsage, usageSpend, lab, repos, glance, attention, codespaces, platform, claudeVersions, connect, appPorts });
 const handleApi = getRequestListener(app.fetch);
@@ -623,7 +624,8 @@ const server = createServer();
 // Before the socket modules: ties their connections to the sign-in that opened them (QA-001) and drops unanswered upgrades.
 const sockets = new SocketGuard(portal, config.session.cookie);
 sockets.attach(server);
-portal.onRevoked = () => sockets.sweep();
+// A sign-out or a new code also cuts the app hosts' live connections of the sessions that ended (T-948 review 10219).
+portal.onRevoked = () => (sockets.sweep(), appPorts.proxy.sweep());
 // The agents' tunnel (`/connect/v1/tunnel`): no cookie, its own handshake; answers only its own path.
 connect.attach(server, portal);
 attachShell(server, portal, workspaces);

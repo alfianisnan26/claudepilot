@@ -17,6 +17,9 @@ an iframe.
 - Parsing is strict (`parseAppPortHost`): one label, `app-<slug>-<port>`, port 1024 to 65535 without a leading zero. Ports never opened: the
   portal's own, the browser's CDP and supervisor ports, and `PORT_PROXY_DENY_PORTS` (comma-separated). A malformed `app-…` host under the
   suffix is still the proxy's, and gets its 404, never the portal.
+- Only those ports are denied by default. Any other loopback service in the workspace (an agent's own helper, a database console) can be
+  opened by whoever may `operate` the workspace. That is not an escalation, because `operate` already gives a terminal there. List such ports
+  in `PORT_PROXY_DENY_PORTS` to keep them shut.
 - A workspace whose name has a `.` or `_`, or whose name is shared with a workspace on another target, cannot have an app host (409 on open).
 
 ## 3. Portal routes
@@ -55,19 +58,35 @@ The target is always `127.0.0.1:<port>` inside the workspace, over the channel e
 - On every request: the host parses, the port is allowed, the cookie is for this exact host, the portal session is alive, and the seam still
   says `operate` on the workspace. Any failure is the same bare 404.
 - A request that changes state, and every upgrade, with a foreign Origin (or `Sec-Fetch-Site: cross-site`) is 404.
-- To the app: no hop-by-hop headers, no `Authorization`, no `Forwarded`/`X-Forwarded-*` from the browser, no `__pilot_app` or
-  `portal_session` cookie. `Host: 127.0.0.1:<port>`, `X-Forwarded-Host` (the app host) and `X-Forwarded-Proto` are set. `Connection: close`.
+- A `GET`, `HEAD` or `OPTIONS` has **no Origin check**. A top-level link from another site carries the `SameSite=Lax` cookie, so such a
+  request reaches the app signed in. An app that changes state on a `GET` is the app's own bug; the proxy does not guard against it.
+- To the app: no hop-by-hop headers, no `Authorization`, no `Forwarded`/`X-Forwarded-*` from the browser, no `__pilot_app` cookie, and no
+  portal session cookie (the name from `config.session.cookie`, and its `__Host-` form). `Host: 127.0.0.1:<port>`, `X-Forwarded-Host` (the app host) and `X-Forwarded-Proto` are set. `Connection: close`.
 - From the app: bodies stream as they come. `X-Frame-Options` and any `frame-ancestors` are dropped; `frame-ancestors <portal origin>` is
   added, so the portal can frame it and nothing else can. `Set-Cookie` loses its `Domain`, and cookies named like the portal's are dropped. A
   redirect to the app's own loopback address becomes a path.
 - An exception while handling a request is a 502 (a cut connection once headers went out), never a hung request.
 - An upgrade waits at most 30 s for the workspace to connect and the app to answer; then it is a 504.
+- **Bounds.** Each open connection is one exec into the workspace (one held exec API call on Kubernetes), so connections are bounded:
+  - A request whose dial, app or browser moves no byte for `PORT_PROXY_IDLE_MS` (default 60 s) is a 504. If the answer has already started,
+    it is cut instead. A stream that keeps moving is never cut.
+  - An upgraded socket with no byte either way for `PORT_PROXY_SOCKET_IDLE_MS` (default 10 min) is closed.
+  - An upgraded socket never outlives the `__pilot_app` cookie it was opened with.
+  - Live requests and sockets are re-checked every 15 s, and at once on sign-out, a new server code and `grants.forgetWorkspace` (workspace
+    removal). One whose cookie, portal session or `operate` right is gone is closed.
+  - At most `PORT_PROXY_MAX_PER_GRANT` (16) connections may be open per app-host cookie, and `PORT_PROXY_MAX_PER_WORKSPACE` (64) per
+    workspace, requests and sockets together. Past either cap the answer is 503 with `Retry-After: 5`.
 - Two workspaces with the same name on different targets would share an app host: the open refuses it (409 CONFLICT) and mints no code.
 
 ## 7. Deploy
 
 `deploy/k3s/portal.yaml`: `PORT_PROXY_HOST_SUFFIX=ai.isnan.me` and the IngressRoute `claudepilot-app-ports` (`HostRegexp` for
 `app-*.ai.isnan.me`, the same Service, the existing `*.ai.isnan.me` certificate).
+
+**Untrusted apps only after T-976.** An app host is a sibling of the portal host under `ai.isnan.me`. Its scripts can set a
+`Domain=ai.isnan.me` cookie that the portal host receives. That cannot read the portal session, but it can shadow it (a broken sign-in or
+fixation). The `__Host-` session cookie of T-976 closes this. Until T-976 is live, open only the owner's own apps (the Tradingbot)
+through app ports; never an app whose code is untrusted.
 
 ## 8. Not yet
 
