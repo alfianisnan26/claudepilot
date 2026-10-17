@@ -228,6 +228,27 @@ test('T-425 S2b: a wake refused for a reason that is not an AppError (the launch
   }
 });
 
+test('T-425 S2b: a later send is not written while an earlier send to the same session is still being written (the chain’s ordering)', async () => {
+  const s = await liveSession();
+  try {
+    s.controller.execTimeoutMs = 900;
+    s.ws.hangSends = true; // the first send's write is slow: it ends only at the host's timeout
+    const open = s.ws.sendExecs.length;
+    const first = s.controller.send(s.id, 'order-1', 'ORDER-FIRST').catch(() => undefined);
+    await until(() => s.ws.sendExecs.length > open);
+    s.ws.hangSends = false; // the second one's write would be instant
+    const sends = s.ws.sends.length;
+    const second = s.controller.send(s.id, 'order-2', 'ORDER-SECOND');
+    await sleep(300);
+    assert.equal(s.ws.sends.slice(sends).some((x) => x.line.includes('ORDER-SECOND')), false, 'held behind the first send, whose write is still open');
+    await first;
+    await second;
+    assert.ok(s.ws.sends.slice(sends).some((x) => x.line.includes('ORDER-SECOND')), 'written once the first is done');
+  } finally {
+    await s.done();
+  }
+});
+
 test('T-425 S2b: a send after one that waits for a slot does not hang behind it: it is stored and returns at once, and both are written in order when the slot comes', async () => {
   const s = await liveSession();
   try {
