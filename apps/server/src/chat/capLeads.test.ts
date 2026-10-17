@@ -162,15 +162,16 @@ test('T-425 S2: two sends to one session are written in call order, though the f
     s.controller.controlTimeoutMs = 150; // as the other lead tests: the sleep's own control request goes unanswered
     policy(s, true);
     const lead = await leadInBypassAsleep(s);
-    s.controller.controlTimeoutMs = 3000; // then the wake's Bypass request waits for the test's answer
     const asked = bypassAsks(s).length;
     const tails = s.ws.tails.length;
     const sends = s.ws.sends.length;
 
     const first = s.controller.send(lead.id, 'order-1', 'FIRST-LINE');
-    await until(() => s.ws.tails.length > tails && bypassAsks(s).length > asked, 4000); // the first is in its Bypass step: the process is live
+    await until(() => s.ws.tails.length > tails && bypassAsks(s).length > asked, 4000).catch((e: unknown) => {
+      throw new Error(`${String(e)}; tails ${s.ws.tails.length}/${tails}; sends: ${JSON.stringify(s.ws.sends.slice(sends).map((x) => x.line.slice(0, 90)))}; notes: ${JSON.stringify(notes(s, lead.id).slice(-4))}`);
+    }); // the first is in its Bypass step: the process is live
     const second = s.controller.send(lead.id, 'order-2', 'SECOND-LINE'); // finds the session live and would write at once
-    await sleep(100);
+    await sleep(30); // inside the 150 ms the Bypass request waits for the answer
     assert.ok(!s.ws.sends.slice(sends).some((x) => /FIRST-LINE|SECOND-LINE/.test(x.line)), 'no message is written before the first one’s turn (the control request is)');
     s.ws.tails.at(-1)!.push(ok(bypassAsks(s).at(-1)!.id, { mode: 'bypassPermissions' }));
     await Promise.all([first, second]);
