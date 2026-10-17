@@ -23,6 +23,7 @@ import { chatApi } from './api';
 import { foldBtw, refusedBtw, type BtwState } from './btw/state';
 import { appendLive, EMPTY_HISTORY, expand, olderDone, olderFailed, olderStart, seed, seedAll, type History } from './history';
 import { createDeltaBatcher, foldLive, NO_LIVE, settleLive, type AgentLive, type LiveState } from './motion/deltas';
+import { cursorExpired, keepsOlder } from './listPaging';
 import { sharedRead } from './sharedRead';
 
 /** The newest page, one read in flight per session: a remounted effect (StrictMode in dev) joins it instead of reading again. */
@@ -546,7 +547,8 @@ const LIST_PAGE = 50;
 
 /**
  * The session list (D-58: pages): the newest page, a slow 5 s poll of that first page only, and `loadMore` for the older ones. The poll keeps
- * the older pages already loaded; a failed poll keeps the last list on screen.
+ * the older pages already loaded only while the seam under page 1 holds (`keepsOlder`), else it drops them; a refused cursor starts over
+ * from page 1; a failed poll keeps the last list on screen.
  */
 export function useChatList(): ChatListApi {
   const [head, setHead] = useState<CursorPage<ChatSession> | null>(null);
@@ -554,10 +556,13 @@ export function useChatList(): ChatListApi {
   const [failed, setFailed] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
 
+  const headNext = useRef<string | null | undefined>(undefined);
   const reload = useCallback(async () => {
     setFailed(false);
     try {
-      setHead(await chatApi.list({ limit: LIST_PAGE }));
+      const page = await chatApi.list({ limit: LIST_PAGE });
+      headNext.current = page.next;
+      setHead(page);
       setOlder(null);
     } catch {
       setFailed(true);
@@ -566,7 +571,19 @@ export function useChatList(): ChatListApi {
 
   useEffect(() => {
     void reload();
-    const t = setInterval(() => void chatApi.list({ limit: LIST_PAGE }).then(setHead, () => undefined), 5_000);
+    // The poll refreshes page 1. The older pages stay only while the seam under page 1 did not move (`keepsOlder`): else a row would be in neither list.
+    const t = setInterval(
+      () =>
+        void chatApi.list({ limit: LIST_PAGE }).then(
+          (page) => {
+            if (!keepsOlder(headNext.current, page.next)) setOlder(null);
+            headNext.current = page.next;
+            setHead(page);
+          },
+          () => undefined,
+        ),
+      5_000,
+    );
     return () => clearInterval(t);
   }, [reload]);
 
@@ -577,12 +594,13 @@ export function useChatList(): ChatListApi {
     try {
       const page = await chatApi.list({ limit: LIST_PAGE, cursor: next });
       setOlder((o) => ({ items: [...(o?.items ?? []), ...page.items], next: page.next }));
-    } catch {
-      /* the button stays; a tap tries again */
+    } catch (e) {
+      // A refused cursor (a restart ended it) never works again: start over from page 1. Any other failure leaves the button, and a tap tries again.
+      if (cursorExpired(e)) await reload();
     } finally {
       setLoadingMore(false);
     }
-  }, [next]);
+  }, [next, reload]);
 
   const sessions = useMemo(() => {
     if (!head) return null;

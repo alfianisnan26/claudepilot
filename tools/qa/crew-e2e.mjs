@@ -285,8 +285,17 @@ async function main() {
     return d?.session ?? d;
   };
   const all = async () => {
-    const d = await ok('GET', '/api/chat/sessions');
-    return Array.isArray(d) ? d : (d?.sessions ?? d?.items ?? []);
+    // D-58: pages of at most 100; follow `next` (at most 20 pages).
+    const out = [];
+    let cursor = '';
+    for (let n = 0; n < 20; n++) {
+      const d = await ok('GET', `/api/chat/sessions?limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`);
+      if (Array.isArray(d)) return d;
+      out.push(...(d?.sessions ?? d?.items ?? []));
+      cursor = d?.next ?? '';
+      if (!cursor) break;
+    }
+    return out;
   };
   const childrenOf = async (id) => (await all()).filter((s) => s.parentId === id);
   const events = async (id) => {
