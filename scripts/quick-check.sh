@@ -8,7 +8,7 @@
 # Run it inside the worktree, after pushing HEAD (job-run runs a PUSHED commit: git push origin HEAD:<your work branch>). The base is the
 # merge base with --base, or with the first of origin/stg, origin/integration, origin/main, origin/master that exists. --test takes a test
 # file of the branch, run from its package's folder: vitest, jest, node --test (a *.test.ts with tsx), or pytest for a *.py.
-# Exit: 0 all passed; 1 a check failed (the summary says which); 2 a usage error; anything else is job-run's own (it did not finish).
+# Exit: 0 all passed; 1 a check failed or was SKIPPED (a missing tool: never reported as passed; the last line names it); 2 a usage error; anything else is job-run's own (it did not finish).
 set -uo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -66,11 +66,12 @@ fi
 
 q() { printf '%q ' "$@"; }
 # The command the Job runs (in the clone, after npm ci): plain bash, every check, then one verdict line.
-cmd='set +e; fails=""; bin="$PWD/node_modules/.bin";
+cmd='set +e; fails=""; skips=""; bin="$PWD/node_modules/.bin";
+skip() { skips="$skips $1"; echo "::: $1 SKIPPED ($2)"; };
 check() { local name="$1"; shift; echo "::: $name"; "$@"; local rc=$?; if [ $rc -eq 0 ]; then echo "::: $name ok"; else fails="$fails $name"; echo "::: $name FAILED (exit $rc)"; fi; };
 runtest() { local dir="$1" file="$2"; local b="$PWD/$dir/node_modules/.bin"; [ -x "$b/vitest" ] || b="$bin";
   case "$file" in
-    *.py) if python3 -m pytest --version >/dev/null 2>&1; then check "test:$dir/$file" sh -c "cd \"\$0\" && python3 -m pytest -q \"\$1\"" "$dir" "$file"; else echo "::: test:$dir/$file skipped (no pytest in the Job image)"; fi ;;
+    *.py) if python3 -m pytest --version >/dev/null 2>&1; then check "test:$dir/$file" sh -c "cd \"\$0\" && python3 -m pytest -q \"\$1\"" "$dir" "$file"; else skip "test:$dir/$file" "no pytest in the Job image"; fi ;;
     *) if [ -x "$b/vitest" ]; then check "test:$dir/$file" sh -c "cd \"\$0\" && \"\$1\" run \"\$2\"" "$dir" "$b/vitest" "$file";
        elif [ -x "$b/jest" ]; then check "test:$dir/$file" sh -c "cd \"\$0\" && \"\$1\" --runInBand \"\$2\"" "$dir" "$b/jest" "$file";
        elif [ -x "$bin/tsx" ] || [ -x "$b/tsx" ]; then check "test:$dir/$file" sh -c "cd \"\$0\" && node --import tsx --test \"\$1\"" "$dir" "$file";
@@ -78,13 +79,15 @@ runtest() { local dir="$1" file="$2"; local b="$PWD/$dir/node_modules/.bin"; [ -
   esac; };
 '
 if [ $fmt = 1 ] && [ ${#files[@]} -gt 0 ]; then
-  cmd+="if [ -x \"\$bin/prettier\" ]; then check format \"\$bin/prettier\" --check --ignore-unknown $(q "${files[@]}"); else echo '::: format skipped (no prettier)'; fi; "
+  cmd+="if [ -x \"\$bin/prettier\" ]; then check format \"\$bin/prettier\" --check --ignore-unknown $(q "${files[@]}"); else skip format 'no prettier'; fi; "
 fi
 if [ $lint = 1 ] && [ ${#lintable[@]} -gt 0 ]; then
-  cmd+="if [ -x \"\$bin/eslint\" ]; then check lint \"\$bin/eslint\" $(q "${lintable[@]}"); else echo '::: lint skipped (no eslint)'; fi; "
+  cmd+="if [ -x \"\$bin/eslint\" ]; then check lint \"\$bin/eslint\" $(q "${lintable[@]}"); else skip lint 'no eslint'; fi; "
 fi
 cmd+="$test_lines"
-cmd+='echo; if [ -z "$fails" ]; then echo "QUICK CHECK: all passed"; exit 0; fi; echo "QUICK CHECK FAILED:$fails"; exit 1'
+# A step that did not run is never "passed": the last line names it (and the failures too, when there are some), and the exit is 1.
+cmd+='echo; if [ -n "$fails" ]; then echo "QUICK CHECK FAILED:$fails${skips:+ (also SKIPPED:$skips)}"; exit 1; fi;
+if [ -n "$skips" ]; then echo "QUICK CHECK INCOMPLETE: SKIPPED$skips (the other steps passed)"; exit 1; fi; echo "QUICK CHECK: all passed"; exit 0'
 
 echo "quick-check: ${#files[@]} changed file(s) against $base, ${#tests[@]} test file(s), commit ${head:0:12}, as a cluster Job"
 args=(--ref "$head" --timeout 900 --role "${PILOT_AGENT:-agent}-quick")

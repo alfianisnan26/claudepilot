@@ -18,7 +18,11 @@ after(() => roots.forEach((r) => rmSync(r, { recursive: true, force: true })));
 /** The machine's git configuration (signing, hooks) stays out of the fixture. */
 const GIT_ENV = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
 const sh = (cwd: string, cmd: string) => {
-  const r = spawnSync('bash', ['-c', cmd], { cwd, encoding: 'utf8', env: { ...GIT_ENV, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' } });
+  const r = spawnSync('bash', ['-c', cmd], {
+    cwd,
+    encoding: 'utf8',
+    env: { ...GIT_ENV, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' },
+  });
   assert.equal(r.status, 0, r.stderr);
   return r.stdout.trim();
 };
@@ -87,6 +91,23 @@ test('all passed is exit 0 with one verdict line', () => {
   const r = run(f.work, f.fake, []);
   assert.equal(r.status, 0, r.stdout + r.stderr);
   assert.match(r.stdout, /QUICK CHECK: all passed$/m);
+});
+
+test('a missing tool is SKIPPED, never passed: the last line names it and the exit is not 0', () => {
+  const f = fixture(0);
+  rmSync(join(f.work, 'node_modules/.bin/prettier'));
+  const r = run(f.work, f.fake, ['--test', 'pkg/x.test.mjs']);
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /::: format SKIPPED \(no prettier\)/);
+  assert.match(r.stdout, /::: lint ok/);
+  assert.doesNotMatch(r.stdout, /all passed/);
+  assert.match(r.stdout.trimEnd().split('\n').pop() ?? '', /^QUICK CHECK INCOMPLETE: SKIPPED format /);
+  // A failure and a skip together: both are named.
+  rmSync(join(f.work, 'node_modules/.bin/eslint'));
+  tool(join(f.work, 'pkg/node_modules/.bin/vitest'), 'exit 1');
+  const both = run(f.work, f.fake, ['--test', 'pkg/x.test.mjs']);
+  assert.equal(both.status, 1);
+  assert.match(both.stdout.trimEnd().split('\n').pop() ?? '', /^QUICK CHECK FAILED: test:pkg\/x\.test\.mjs \(also SKIPPED: format lint\)$/);
 });
 
 test('a branch with no changes and no tests needs no Job; a missing test file is a usage error', () => {
