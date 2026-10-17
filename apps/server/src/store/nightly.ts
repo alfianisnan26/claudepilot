@@ -16,7 +16,11 @@ const DAY_MS = 24 * HOUR_MS;
 /** A nightly runs every 24 h; 2 h of slack for a slow or retried Job before the portal calls it stale. */
 export const STALE_AFTER_MS = 26 * HOUR_MS;
 /** The newest backup of each of the last 7 days that have one, and of each of the last 4 weeks (ISO, Monday first). */
-export const RETAIN = { daily: 7, weekly: 4 } as const;
+export interface Retention {
+  daily: number;
+  weekly: number;
+}
+export const RETAIN: Readonly<Retention> = { daily: 7, weekly: 4 };
 
 const NAME = /^portal-(\d{8}T\d{6}Z)-nightly\.db\.gz$/;
 const stamp = (d: Date) => d.toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
@@ -50,7 +54,7 @@ const dayKey = (d: Date) => d.toISOString().slice(0, 10);
 const weekKey = (d: Date) => dayKey(new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) - ((d.getUTCDay() + 6) % 7) * DAY_MS));
 
 /** Which of `list` (any order) to keep: the newest of each of the last `daily` days and of each of the last `weekly` weeks. */
-export function toKeep<T extends { at: Date }>(list: T[], retain: { daily: number; weekly: number } = RETAIN): Set<T> {
+export function toKeep<T extends { at: Date }>(list: T[], retain: Retention = RETAIN): Set<T> {
   const keep = new Set<T>();
   const days = new Set<string>();
   const weeks = new Set<string>();
@@ -70,7 +74,7 @@ export function toKeep<T extends { at: Date }>(list: T[], retain: { daily: numbe
 }
 
 /** Removes the nightly backups in `dir` that the retention doesn't keep; returns their paths. */
-export function pruneNightly(dir: string, retain = RETAIN): string[] {
+export function pruneNightly(dir: string, retain: Retention = RETAIN): string[] {
   const all = listNightly(dir);
   const keep = toKeep(all, retain);
   const removed = all.filter((b) => !keep.has(b)).map((b) => b.file);
@@ -93,7 +97,7 @@ function quickCheck(file: string) {
  * gzipped to `portal-<UTC stamp>-nightly.db.gz` (mode 0600, written under a dot name and renamed, so a mirror never sees half
  * a file), then prunes to the retention.
  */
-export async function nightlyBackup(opts: { dataDir: string; dir?: string; now?: () => Date; retain?: { daily: number; weekly: number } }) {
+export async function nightlyBackup(opts: { dataDir: string; dir?: string; now?: () => Date; retain?: Retention }) {
   const path = join(opts.dataDir, 'portal.db');
   if (!existsSync(path)) throw new Error(`No database at ${path}.`);
   const dir = opts.dir ?? nightlyDir(opts.dataDir);
