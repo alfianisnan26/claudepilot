@@ -72,7 +72,11 @@ test('signing in over https sets __Host-portal_session: Secure, Path=/, HttpOnly
   assert.match(cookie, /;\s*HttpOnly/i);
   assert.match(cookie, /;\s*SameSite=Strict/i);
   assert.doesNotMatch(cookie, /;\s*Domain=/i);
-  assert.equal(named(res, LEGACY_SESSION_COOKIE).length, 0, 'no old-name cookie over https');
+  const old = named(res, LEGACY_SESSION_COOKIE);
+  assert.equal(old.length, 1, 'over https the old name is only ever cleared');
+  assert.match(old[0]!, /^portal_session=;/);
+  assert.match(old[0]!, /Max-Age=0/i, 'a stale or planted portal_session is deleted at sign-in (review 10534)');
+  assert.match(old[0]!, /;\s*Path=\/(;|$)/);
   const token = decodeURIComponent(cookie.slice(SESSION_COOKIE.length + 1).split(';')[0]!);
   assert.ok(portal.session(token), 'the cookie carries a live session');
   const state = await send(app, 'https', 'GET', '/api/admin/state', { cookie: `${SESSION_COOKIE}=${token}` });
@@ -84,8 +88,10 @@ test('signing in over plain http (dev, scratch portal) keeps portal_session with
   const res = await send(app, 'http', 'POST', '/api/login');
   assert.equal(res.status, 200);
   assert.equal(named(res, SESSION_COOKIE).length, 0, 'a browser would drop a __Host- cookie on http');
-  const [cookie] = named(res, LEGACY_SESSION_COOKIE);
+  const [cookie, ...more] = named(res, LEGACY_SESSION_COOKIE);
   assert.ok(cookie);
+  assert.equal(more.length, 0, 'over http the old name is the session: set once, never cleared in the same answer');
+  assert.doesNotMatch(cookie, /Max-Age=0/i);
   assert.doesNotMatch(cookie, /;\s*Secure/i);
   assert.match(cookie, /;\s*HttpOnly/i);
   const token = decodeURIComponent(cookie.slice(LEGACY_SESSION_COOKIE.length + 1).split(';')[0]!);
