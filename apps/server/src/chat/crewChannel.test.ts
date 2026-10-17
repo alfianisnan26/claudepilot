@@ -3,6 +3,7 @@
 // same NOT_FOUND as one that exists nowhere.
 
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { test } from 'node:test';
 import { ToolRegistry } from '../portalmcp/registry.js';
 import { portalMcpHarness } from '../portalmcp/testkit.js';
@@ -154,6 +155,62 @@ test('T-294 crew channel: the text is redacted when stored and again when read, 
     // Slash commands are for people, as in session_message; an empty message is refused.
     assert.equal((await post(r, 'lead', '/compact')).result?.structuredContent.error.code, 'VALIDATION_FAILED');
     assert.throws(() => r.s.controller.crewPost(r.s.id, '​ ​'), /Type a message/);
+  } finally {
+    await r.done();
+  }
+});
+
+test('T-294 crew channel (FIX1): a workspace secret value of no known shape is scrubbed when stored and again when read', async () => {
+  const r = await rig();
+  try {
+    const value = `not-a-shape-${randomUUID().slice(0, 8)}`; // built at runtime: no token shape, only the workspace's own secret
+    r.s.controller.secretValues = (ws) => (ws === 'docker/ws1' ? [value] : []);
+    // Through the tool (the call carries no token shape, so it reaches the controller) and through the controller.
+    assert.equal((await post(r, 'w1', `the db password is ${value}, use it`)).result?.isError, undefined);
+    r.s.controller.crewPost(r.s.id, `again ${value}`);
+    const raw = (r.s.store.db!.prepare('SELECT text FROM crew_messages ORDER BY id').all() as { text: string }[]).map((m) => m.text);
+    assert.equal(raw.length, 2);
+    assert.ok(raw.every((t) => !t.includes(value)), `stored: ${JSON.stringify(raw)}`);
+    // A row stored before the secret existed in the workspace is scrubbed on the way out.
+    r.s.store.db!.prepare('INSERT INTO crew_messages (lead_id, from_id, text, at) VALUES (?, ?, ?, ?)').run(r.s.id, r.w1.id, `old ${value}`, new Date().toISOString());
+    const out = messages(await read(r, 'w2', { after: 0, limit: 100 })).map((m) => m[1]);
+    assert.equal(out.length, 3);
+    assert.ok(out.every((t) => !t.includes(value)), JSON.stringify(out));
+    assert.ok(!JSON.stringify(r.s.controller.crewRead(r.s.id, { after: 0, limit: 100, peek: true })).includes(value), 'the controller read too');
+  } finally {
+    await r.done();
+  }
+});
+
+test('T-294 crew channel (FIX1): an ended session cannot post', async () => {
+  const r = await rig();
+  try {
+    assert.equal((await post(r, 'w2', 'before the end')).result?.isError, undefined);
+    await r.s.controller.end(r.w2.id);
+    assert.equal(r.s.controller.get(r.w2.id)!.state, 'ended');
+    assert.throws(() => r.s.controller.crewPost(r.w2.id, 'after the end'), (e: unknown) => (e as { code?: string }).code === 'CONFLICT');
+    assert.deepEqual(r.s.controller.crewRead(r.s.id, { after: 0, limit: 100, peek: true }).items.map((m) => m.text), ['before the end']);
+  } finally {
+    await r.done();
+  }
+});
+
+test('T-294 crew channel (FIX1): one level only: a worker with workers of its own is a member of its parent’s channel and cannot read or post on its workers’', async () => {
+  const r = await rig();
+  try {
+    const before = r.s.ws.tails.length;
+    const gw = await r.s.controller.create({ workspaceId: 'docker/ws1', title: 'Grandchild' }, { actor: `session:${r.w1.id}`, parentId: r.w1.id });
+    await until(() => r.s.ws.tails.length === before + 1);
+    const gwToken = (await r.h.agentToken('docker/ws1', gw.id)).secret;
+    await r.h.call(gwToken, 'crew_post', { text: 'from the grandchild' });
+    await post(r, 'lead', 'for the lead’s crew');
+    const code = (x: { result?: { structuredContent?: { error?: { code: string } } } }) => x.result!.structuredContent?.error?.code;
+    // w1 asks for the channel its own worker posts on: the same NOT_FOUND as a missing id.
+    assert.equal(code(await read(r, 'w1', { lead: r.w1.id })), 'NOT_FOUND');
+    assert.equal(code(await post(r, 'w1', 'hello', { lead: r.w1.id })), 'NOT_FOUND');
+    // Its default channel is its parent's, with none of the grandchild's text.
+    assert.deepEqual(messages(await read(r, 'w1')).map((m) => m[1]), ['for the lead’s crew']);
+    assert.deepEqual(messages(await r.h.call(gwToken, 'crew_read', {})).map((m) => m[1]), ['from the grandchild']);
   } finally {
     await r.done();
   }

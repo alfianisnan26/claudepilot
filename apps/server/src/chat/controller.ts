@@ -4076,7 +4076,8 @@ export class ChatController {
   crewPost(fromId: string, text: string, opts: { lead?: string } = {}): { id: number; at: string; lead: string } {
     const { me, leadId } = this.#crewChannel(fromId, opts.lead);
     if (me.state === 'ended') throw new AppError('CONFLICT', 'This session has ended.');
-    const clean = redactSecrets(stripUnsafe(text)).trim();
+    // The workspace's secret values first (a value of no known shape), then the credential shapes.
+    const clean = redactSecrets(this.scrub(me.workspaceId, stripUnsafe(text))).trim();
     if (!clean) throw new AppError('VALIDATION_FAILED', 'Type a message.', { details: { text: 'Required.' } });
     const posted = this.#chat.crewPost(leadId, me.id, clean);
     return { ...posted, lead: leadId };
@@ -4093,7 +4094,8 @@ export class ChatController {
       ...(opts.after !== undefined ? { after: opts.after } : {}),
       ...(opts.peek ? { peek: true } : {}),
     });
-    return { lead: leadId, ...read };
+    // Again on the way out: a row stored before a secret was added to the workspace, or by an older build, is scrubbed too.
+    return { lead: leadId, ...read, items: read.items.map((m) => ({ ...m, text: this.scrub(me.workspaceId, m.text) })) };
   }
 
   /** Every session below this one that hasn't ended, deepest first (what ending the parent may end with it). */
