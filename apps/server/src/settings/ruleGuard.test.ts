@@ -942,7 +942,6 @@ test('T-860 S2: --git-dir, --work-tree, -c, other options, GIT_ variables, wrapp
     ['a # inside a word', `git -C ${wt} log a#b`],
     ['branch -a', `git -C ${wt} branch -a`],
     ['fetch origin', `git -C ${wt} fetch origin`],
-    ['rebase', `git -C ${wt} rebase origin/integration`],
     ['merge', `git -C ${wt} merge --no-ff ticket/T-1`],
     ['worktree list (same command)', `git -C ${wt} worktree list`],
     ['config of a harmless key', `git -C ${wt} config --get remote.origin.url`],
@@ -954,6 +953,152 @@ test('T-860 S2: --git-dir, --work-tree, -c, other options, GIT_ variables, wrapp
   ];
   for (const [what, command] of A) tryForm(() => allowed(sh(command), `S2 ${what}: ${JSON.stringify(command)}`));
   assert.deepEqual(misses, []);
+});
+
+// T-974: a git -C line is read as an argv and refused by subcommand and flags; the words of a -m, -F or --message value are never matched.
+test('T-974: git -C is refused by subcommand and flags; messages, HEAD~1, grep -o and .env.example stay allowed', () => {
+  const { wt, sh } = gitCRig();
+  const c = `git -C ${wt}`;
+  mkdirSync(join(wt, '.git'), { recursive: true }); // so --git-dir below names a folder that exists and the refusal is the policy's
+  const REFUSED: [string, string][] = [
+    ['reset --hard', `${c} reset --hard origin/integration`],
+    ['reset --hard abbreviated', `${c} reset --ha HEAD~1`],
+    ['reset --hard after a ref', `${c} reset HEAD~1 --hard`],
+    ['clean', `${c} clean -fd`],
+    ['clean dry run', `${c} clean -n`],
+    ['restore', `${c} restore src/app.ts`],
+    ['restore --worktree --staged', `${c} restore --staged --worktree src`],
+    ['restore --source', `${c} restore --source=HEAD~1 .`],
+    ['checkout main', `${c} checkout main`],
+    ['checkout stg', `${c} checkout stg`],
+    ['checkout refs/heads/uat', `${c} checkout refs/heads/uat`],
+    ['checkout -B main', `${c} checkout -B main origin/main`],
+    ['switch main', `${c} switch main`],
+    ['switch -C stg', `${c} switch -C stg`],
+    ['switch --force', `${c} switch --force x`],
+    ['checkout -- paths', `${c} checkout -- src/app.ts`],
+    ['checkout .', `${c} checkout .`],
+    ['checkout commit path', `${c} checkout HEAD~1 src/app.ts`],
+    ['checkout -f', `${c} checkout -f x`],
+    ['rebase', `${c} rebase origin/integration`],
+    ['rebase --onto', `${c} rebase --onto a b c`],
+    ['branch -D', `${c} branch -D feature`],
+    ['branch -d', `${c} branch -d feature`],
+    ['branch --delete', `${c} branch --delete feature`],
+    ['branch -fD cluster', `${c} branch -fD feature`],
+    ['branch -f main', `${c} branch -f main HEAD`],
+    ['push main', `${c} push origin main`],
+    ['push HEAD:main', `${c} push origin HEAD:main`],
+    ['push to refs/heads/stg', `${c} push origin x:refs/heads/stg`],
+    ['push uat', `${c} push -u origin uat`],
+    ['push --force', `${c} push --force origin x`],
+    ['push -f', `${c} push -f origin x`],
+    ['push -fu cluster', `${c} push -fu origin x`],
+    ['push --force-with-lease', `${c} push --force-with-lease origin x`],
+    ['push --forc', `${c} push --forc origin x`],
+    ['push +refspec', `${c} push origin +x`],
+    ['push +x:y', `${c} push origin +x:y`],
+    ['push delete refspec', `${c} push origin :feature`],
+    ['push --delete', `${c} push origin --delete feature`],
+    ['push --mirror', `${c} push --mirror origin`],
+    ['push --all', `${c} push --all origin`],
+    ['push --receive-pack', `${c} push --receive-pack=cmd origin x`],
+    ['push a pattern', `${c} push origin 'refs/heads/*:refs/heads/*'`],
+    ['commit -n', `${c} commit -n -m x`],
+    ['commit -an cluster', `${c} commit -an -m x`],
+    ['commit -m then -n', `${c} commit -m x -n`],
+    ['commit --no-verify', `${c} commit --no-verify -m x`],
+    ['commit --no-verify after the message', `${c} commit -m "restore clean" --no-verify`],
+    ['commit --no-ver', `${c} commit --no-ver -m x`],
+    ['commit -nm glued', `${c} commit -nm x`],
+    ['commit a variable flag', `${c} commit $FLAGS -m x`],
+    ['commit a substitution as a flag', `${c} commit $(echo -n) -m x`],
+    ['commit backticks as a flag', `${c} commit \`echo -n\` -m x`],
+    ['push a variable branch', `${c} push origin $B`],
+    ['-c config', `${c} -c core.hooksPath=/tmp/h commit -m x`],
+    ['fetch --upload-pack', `${c} fetch --upload-pack=cmd origin`],
+    ['fetch --upload-pack separate', `${c} fetch --upload-pack cmd origin`],
+    ['ls-remote --upload-pack', `${c} ls-remote --upload-pack=cmd origin`],
+    ['pull --upload-pack', `${c} pull --upload-pack=cmd`],
+    ['clone -u', `${c} clone -u cmd x y`],
+    ['worktree remove', `${c} worktree remove ../x`],
+    ['worktree remove --force', `${c} worktree remove --force ../x`],
+    ['--work-tree form too', `git -C ${wt} --work-tree ${wt} reset --hard`],
+    ['--git-dir form too', `git --git-dir=${wt}/.git -C ${wt} clean -f`],
+    ['after &&', `${c} status && ${c} clean -f`],
+    ['after a pipe', `echo x | ${c} rebase main`],
+    ['in a shell -c string', `bash -c "${c} reset --hard"`],
+    ['an unbalanced quote', `${c} commit -m "x`],
+    ['a trailing backslash', `${c} commit -m x \\`],
+  ];
+  const misses: string[] = [];
+  for (const [what, command] of REFUSED) {
+    const r = sh(command);
+    if (r.code !== 2) misses.push(`refused: ${what}: ${command} -> ${r.code}`);
+  }
+  assert.deepEqual(misses, []);
+  const ALLOWED: [string, string][] = [
+    ['a message with restore', `${c} commit -m "restore the file"`],
+    ['a message with clean', `${c} commit -m 'clean up the notes'`],
+    ['a message with reset --hard', `${c} commit -m "docs: never reset --hard or rebase"`],
+    ['a message with every word', `${c} commit -m "restore clean reset rebase checkout main push --force"`],
+    ['a message that is a flag', `${c} commit -m --no-verify`],
+    ['a message -n', `${c} commit -m -n`],
+    ['a glued message', `${c} commit -m"clean restore"`],
+    ['a message with =', `${c} commit --message="rebase main"`],
+    ['a long message', `${c} commit --message "reset --hard"`],
+    ['an abbreviated long message', `${c} commit --mess "-n"`],
+    ['-am cluster', `${c} commit -am "restore x"`],
+    ['a message from a file', `${c} commit -F msg.txt`],
+    ['a message from stdin', `${c} commit -F -`],
+    ['a message by substitution', `${c} commit -m "$(cat msg.txt)"`],
+    ['a heredoc substitution message', `${c} commit -m "$(cat <<'EOF'\nreset --hard and restore\nEOF\n)"`],
+    ['commit with trailers', `${c} commit -m "x" -m "Ticket: T-974"`],
+    ['commit -uno', `${c} commit -uno -m x`],
+    ['commit -a', `${c} commit -a -m x`],
+    ['commit --amend', `${c} commit --amend --no-edit`],
+    ['tag with a message', `${c} tag -a v1 -m "restore clean"`],
+    ['merge with a message', `${c} merge -m "rebase clean" x`],
+    ['stash with a message', `${c} stash push -m "reset --hard"`],
+    ['rev-parse HEAD HEAD~1', `${c} rev-parse HEAD HEAD~1`],
+    ['log with ~', `${c} log HEAD~3..HEAD~1`],
+    ['diff with ~', `${c} diff HEAD~1`],
+    ['grep -o', `${c} grep -o foo -- src`],
+    ['add .env.example', `${c} add .env.example`],
+    ['add a pattern', `${c} add 'src/*.ts'`],
+    ['add a shell pattern', `${c} add src/*.ts`],
+    ['diff .env.example', `${c} diff -- .env.example`],
+    ['restore --staged', `${c} restore --staged src/app.ts`],
+    ['checkout a work branch', `${c} checkout ticket/T-974-git-argv`],
+    ['checkout -b', `${c} checkout -b ticket/T-1-x origin/integration`],
+    ['switch a work branch', `${c} switch ticket/T-974-git-argv`],
+    ['switch -c', `${c} switch -c ticket/T-1-x origin/integration`],
+    ['branch list', `${c} branch -r --contains abc123`],
+    ['branch a name with main inside', `${c} branch ticket/T-1-main-fix`],
+    ['branch -m of a work branch', `${c} branch -m old new`],
+    ['push a work branch', `${c} push -u origin ticket/T-974-git-argv`],
+    ['push a wip branch', `${c} push -q origin wip/be-infra-abc123`],
+    ['push a branch that contains main', `${c} push origin ticket/T-1-main`],
+    ['push HEAD to a work branch', `${c} push origin HEAD:ticket/T-1-x`],
+    ['fetch', `${c} fetch origin`],
+    ['fetch --prune', `${c} fetch --prune origin`],
+    ['pull', `${c} pull --ff-only`],
+    ['ls-remote', `${c} ls-remote origin`],
+    ['worktree add', `${c} worktree add ../x -b ticket/T-1-x`],
+    ['worktree list', `${c} worktree list`],
+    ['reset a path', `${c} reset HEAD src/app.ts`],
+    ['reset --soft', `${c} reset --soft HEAD~1`],
+    ['reset --mixed', `${c} reset HEAD~1`],
+    ['status', `${c} status --short`],
+    ['no -C: not read by this policy', 'git status'],
+  ];
+  for (const [what, command] of ALLOWED) {
+    const r = sh(command);
+    if (r.code !== 0) misses.push(`allowed: ${what}: ${command} -> ${r.code} ${r.stderr}`);
+  }
+  assert.deepEqual(misses, []);
+  // Without -C the line is not read by this policy (a text deny with a plain prefix still works there), and outside a lane workspace nothing changes.
+  allowed(sh('git rebase origin/integration'), 'no -C: rebase');
 });
 
 test('T-860: a refusal writes one outbox line with no path text, and the guard stays off in a workspace with no lane folder', () => {

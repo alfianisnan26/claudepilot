@@ -1592,10 +1592,139 @@ const GITC_CONFIG_KEYS = /^(core\.(worktree|bare|hookspath|fsmonitor|sshcommand|
 // Programs that change links, folders or files in the same command line as a git -C (the path is read before they run).
 const GITC_SWAPPERS = new Set(['ln', 'mv', 'cp', 'rm', 'rmdir', 'mkdir', 'tar', 'unzip', 'install', 'rsync', 'bsdtar', 'cpio', '7z', '7za', 'unlink', 'truncate', 'mkfifo']);
 
+/* ---------- git by subcommand and flags (T-974) ---------- */
+
+// The lane allow rules are text (git -C <lane>/* commit*), and a text deny cannot tell a SUBCOMMAND from words in a -m value (a message
+// that says "restore" or "clean" was refused). So after the options before the subcommand, a git -C line is read as an argv: the
+// subcommand, its flags and its words, with the values of -m, -F and --message left out, and refused by subcommand and flags.
+const GIT_PROTECTED = ['stg', 'main', 'uat'];
+// Subcommands read by the policy; for every other one the earlier rules (rule files named, paths) are all that apply.
+const GIT_POLICED = new Set(['reset', 'clean', 'restore', 'checkout', 'switch', 'rebase', 'branch', 'push', 'commit', 'worktree', 'fetch', 'ls-remote', 'clone', 'pull']);
+// Where a pattern or a variable could hide a protected branch or a flag.
+const GIT_NO_GLOB = new Set(['reset', 'restore', 'checkout', 'switch', 'branch', 'push', 'worktree']);
+// Short flags that take a value (the rest of the cluster, else the next word) for the subcommands that carry a message.
+const GIT_VALUE_LETTERS = { commit: 'mFCct', tag: 'mFu', merge: 'mF', stash: 'm', notes: 'mF' };
+// Short flags whose value can only be glued on (commit -uno is -u no, not -n -o).
+const GIT_GLUED_LETTERS = { commit: 'uS' };
+const GIT_MESSAGE_SUBS = new Set(['commit', 'tag', 'merge', 'stash', 'notes']);
+
+/** Whether a long option is spelled in full or as an unambiguous start of it (git accepts --no-ver for --no-verify). */
+function gitLong(text, full, min) {
+  const eq = text.indexOf('=');
+  const name = eq < 0 ? text : text.slice(0, eq);
+  return name.length >= min && full.startsWith(name);
+}
+
+/** A branch name as git reads it: refs/heads/x, heads/x and x are one branch; a leading + is a forced refspec. */
+function gitProtected(text) {
+  const t = text.replace(/^\+/, '').replace(/^(refs\/)?heads\//, '');
+  return GIT_PROTECTED.includes(t);
+}
+
+/** The words of a git line without the values of -m, -F and --message; short flag clusters split into one flag each. */
+function gitArgv(sub, rest) {
+  const letters = GIT_VALUE_LETTERS[sub] || '';
+  const glued = GIT_GLUED_LETTERS[sub] || '';
+  const out = [];
+  let paths = false;
+  for (let i = 0; i < rest.length; i++) {
+    const w = rest[i];
+    const t = w.text;
+    if (paths) {
+      out.push(w);
+      continue;
+    }
+    if (t === '--') {
+      paths = true;
+      out.push(w);
+      continue;
+    }
+    if (t.startsWith('--')) {
+      if (GIT_MESSAGE_SUBS.has(sub) && (gitLong(t, '--message', 4) || gitLong(t, '--file', 4))) {
+        if (t.indexOf('=') < 0) i++;
+        continue;
+      }
+      out.push(w);
+      continue;
+    }
+    if (t.length > 1 && t[0] === '-') {
+      for (let j = 1; j < t.length; j++) {
+        const ch = t[j];
+        if (letters.includes(ch)) {
+          if (j === t.length - 1) i++;
+          break;
+        }
+        if (glued.includes(ch)) break;
+        out.push(Object.assign({}, w, { text: '-' + ch }));
+      }
+      continue;
+    }
+    out.push(w);
+  }
+  return out;
+}
+
+/** The refusal of a git subcommand or flag in a git -C line of a lane workspace (T-974), or null. */
+function gitPolicy(sub, rest) {
+  if (!GIT_POLICED.has(sub)) return null;
+  const argv = gitArgv(sub, rest);
+  const no = (what) => hit('git ' + sub + ' ' + what + ' (a lane workspace)', '');
+  // Fail closed: a value the guard cannot see could be a flag or a protected branch.
+  for (const w of argv) {
+    if (w.dyn) return no('with a value the guard cannot see (a variable or a command substitution)');
+    if (w.glob && GIT_NO_GLOB.has(sub)) return no('with a pattern');
+  }
+  const dd = argv.findIndex((w) => w.text === '--');
+  const before = dd < 0 ? argv : argv.slice(0, dd);
+  const flags = before.filter((w) => w.text.startsWith('-')).map((w) => w.text);
+  const pos = before.filter((w) => !w.text.startsWith('-')).map((w) => w.text);
+  const has = (...names) => flags.some((f) => names.includes(f));
+  const long = (full, min) => flags.some((f) => gitLong(f, full, min));
+  // A program git runs from an option: fetch, pull, ls-remote, push and clone take one.
+  if (long('--upload-pack', 5) || long('--receive-pack', 5) || long('--exec', 5)) return no('with --upload-pack, --receive-pack or --exec');
+  if (sub === 'reset') return long('--hard', 4) ? no('--hard') : null;
+  if (sub === 'clean') return no('(it deletes untracked files)');
+  if (sub === 'restore') return has('--staged', '-S') && !has('--worktree', '-W') ? null : no('of the work tree');
+  if (sub === 'rebase') return no('(it rewrites history)');
+  if (sub === 'checkout' || sub === 'switch') {
+    if (pos.some(gitProtected)) return no('of a protected branch (stg, main, uat)');
+    if (has('-f', '--force') || long('--force', 4) || long('--discard-changes', 4)) return no('--force (it discards changes)');
+    if (sub === 'checkout') {
+      if (dd >= 0) return no('of paths (it restores the work tree)');
+      if (pos.some((p) => p === '.' || p === ':/')) return no('of the whole work tree');
+      const creates = has('-b', '-B', '--orphan') || long('--orphan', 4);
+      if (!creates && pos.length >= 2) return no('of paths from a commit (it restores the work tree)');
+    }
+    return null;
+  }
+  if (sub === 'branch') {
+    if (has('-D', '-d') || long('--delete', 4)) return no('--delete');
+    if ((has('-f', '-m', '-M', '-c', '-C') || long('--force', 4) || long('--move', 4) || long('--copy', 4)) && pos.some(gitProtected)) return no('of a protected branch (stg, main, uat)');
+    return null;
+  }
+  if (sub === 'push') {
+    if (has('-f') || long('--force', 5) || long('--force-with-lease', 5) || long('--force-if-includes', 5)) return no('--force');
+    if (has('-d') || long('--delete', 5) || long('--mirror', 5) || long('--prune', 5) || long('--all', 5) || long('--branches', 5)) return no('with --delete, --mirror, --prune or --all');
+    for (const p of pos) {
+      if (/[*?[]/.test(p)) return no('with a pattern');
+      if (p.startsWith('+')) return no('of a forced refspec (+)');
+      if (p.startsWith(':')) return no('of a deletion refspec (:branch)');
+      const dst = p.slice(p.lastIndexOf(':') + 1);
+      if (gitProtected(p) || gitProtected(dst)) return no('to a protected branch (stg, main, uat)');
+    }
+    return null;
+  }
+  if (sub === 'commit') return has('-n') || long('--no-verify', 6) ? no('--no-verify') : null;
+  if (sub === 'worktree') return pos[0] === 'remove' ? no('remove') : null;
+  if (sub === 'clone') return has('-u', '-c') || long('--config', 5) || long('--template', 5) ? no('with --config, --template or -u') : null;
+  return null;
+}
+
 function git(args, st, base, stdinText, stdinFile, piped) {
   let k = 0;
   let b = base;
   const lane = gitCRoots().active;
+  let viaC = false;
   const mark = (list) => (st[list] || (st[list] = [])).push(st.cmdN);
   for (; k < args.length; k++) {
     const t = args[k].text;
@@ -1603,6 +1732,7 @@ function git(args, st, base, stdinText, stdinFile, piped) {
       // A lane workspace: the folders before the subcommand are -C, --git-dir and --work-tree (each read as the shell does and
       // kept below a lane root) and the options on the list above. The lane allow's * would let any of them through.
       if (t === '-C') {
+        viaC = true;
         mark('gitC');
         const step = gitCStep(args[++k], b);
         if (step.hit) return step.hit;
@@ -1611,6 +1741,7 @@ function git(args, st, base, stdinText, stdinFile, piped) {
       }
       const dir = /^--(git-dir|work-tree)(?:=([\s\S]*))?$/.exec(t);
       if (dir && !args[k].glob) {
+        viaC = true;
         mark('gitC');
         const v = dir[2] !== undefined ? Object.assign({}, args[k], { text: dir[2] }) : args[++k];
         // Git keeps the value as a string and applies every -C first, so a relative value is read against the folder after the
@@ -1659,6 +1790,11 @@ function git(args, st, base, stdinText, stdinFile, piped) {
   const sub = args[k] ? args[k].text : '';
   const rest = args.slice(k + 1);
   if (lane && (sub === 'worktree' || sub === 'config')) mark('swap');
+  // T-974: a git -C line (the form the lane allow matches by text) is refused by subcommand and flags.
+  if (lane && viaC) {
+    const pr = gitPolicy(sub, rest);
+    if (pr) return pr;
+  }
   // A lane workspace: git config of a key that moves the work tree or runs a program (core.worktree, core.hooksPath, alias.x, include.path).
   if (lane && sub === 'config') {
     const ops = nonOptions(rest);
