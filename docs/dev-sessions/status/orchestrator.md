@@ -22,8 +22,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - QA BE B a8096dc9 (T-382): QA T-860 S2c e78d727b (urgent, 9331; moved from QA BE A).
 - IMPL c68578a8 (sekar, T-425): T-425 S2 on ticket/T-425-slotwait c22a76b3: QA UI FAIL 9359 (mutant "no failed mark" on
   refused wake survives; two detached sends not ordered) -> test + per-session delivery chain; Job 3424b8b5 queued (ddc3d4ba).
-- BE INFRA 2 4001099e (one.claude, T-924 URGENT): deliver /etc/claudepilot/git-c-roots (T-860 guard blocks git -C in all
-  program worktrees since deploy 286). ticket/T-924-gitc-roots from 803981f0. Lead reads diff, QA BE, gate ALONE, tell coordinator.
+- T-924 DONE 25653dc0 (BE Infra 2 4001099e ended; lead read diff OK). QA BE C 715b517b (regitha) verifying; quick-check running
+  (bg bkinqkosb). Then gate ALONE, tell coordinator T-924 + T-731. Freed lane after QA -> BE Infra 2 respawn on T-938.
 - QA PERF 98e910e1 ENDED 01:35 (idle till S4; slot -> T-924). S8c PASS 56/56 (9372). Respawn for T-382 S4 bench.
 - Coordinator also gave BE Infra T-653 (TLS to exchange APIs) and T-654 (no pip in pod), normal, after T-911.
 - QA UI 11c8c19a ENDED 01:2x (queue empty after its T-425 FAIL; slot -> Impl). T-425 badge 390/1280 not verified (no browser tool).
