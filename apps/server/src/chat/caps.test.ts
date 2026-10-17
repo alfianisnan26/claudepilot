@@ -77,6 +77,7 @@ test('over the per-workspace cap a new session puts the longest-idle one to slee
     assert.match(s.controller.get(s.id)!.slotWait ?? '', /^Waiting for a slot · 2 of 2 running in docker\/ws1/);
     await until(() => s.controller.history(s.id).some((e) => /wasn’t delivered: .*2 sessions are already running in docker\/ws1/.test(e.text ?? '')));
     assert.equal(s.controller.get(s.id)!.slotWait ?? null, null);
+    assert.deepEqual(s.controller.inputStates(s.id).filter((x) => x.uuid === 'wake-1'), [{ uuid: 'wake-1', state: 'failed' }], 'the refused wake marks its input failed');
     assert.equal(s.controller.get(s.id)!.process, 'asleep');
     // Lowering a cap never stops a running session.
     s.controller.liveCaps = () => ({ perWorkspace: 1, total: 1 });

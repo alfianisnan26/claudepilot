@@ -156,6 +156,32 @@ test('T-417: a lead slept in Bypass wakes in Bypass, through the gated path a Re
   }
 });
 
+test('T-425 S2: two sends to one session are written in call order, though the first one’s wake (the Bypass put back) takes longer', async () => {
+  const s = await liveSession({ idleSleepMs: 200 }, true);
+  try {
+    s.controller.controlTimeoutMs = 3000;
+    policy(s, true);
+    const lead = await leadInBypassAsleep(s);
+    const asked = bypassAsks(s).length;
+    const tails = s.ws.tails.length;
+    const sends = s.ws.sends.length;
+
+    const first = s.controller.send(lead.id, 'order-1', 'FIRST-LINE');
+    await until(() => s.ws.tails.length > tails && bypassAsks(s).length > asked, 4000); // the first is in its Bypass step: the process is live
+    const second = s.controller.send(lead.id, 'order-2', 'SECOND-LINE'); // finds the session live and would write at once
+    await sleep(100);
+    assert.equal(s.ws.sends.length, sends, 'nothing is written before the first one’s turn');
+    s.ws.tails.at(-1)!.push(ok(bypassAsks(s).at(-1)!.id, { mode: 'bypassPermissions' }));
+    await Promise.all([first, second]);
+    const written = s.ws.sends.slice(sends).map((x) => x.line);
+    const at = (needle: string) => written.findIndex((l) => l.includes(needle));
+    assert.ok(at('FIRST-LINE') >= 0 && at('SECOND-LINE') >= 0, JSON.stringify(written.map((l) => l.slice(0, 80))));
+    assert.ok(at('FIRST-LINE') < at('SECOND-LINE'), 'written in the order sent');
+  } finally {
+    await s.done();
+  }
+});
+
 test('T-417: a lead slept in Bypass whose Bypass policy was turned off meanwhile wakes on the start mode, and says why', async () => {
   const s = await liveSession({ idleSleepMs: 200 }, true);
   try {

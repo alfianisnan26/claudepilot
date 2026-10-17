@@ -530,6 +530,8 @@ export class ChatController {
   readonly #slotQueue: SlotTurn[] = [];
   /** T-425: a send whose wake began to wait for a slot is told (it stores its message and returns; see `#send`). */
   readonly #slotWatchers = new Map<string, Set<() => void>>();
+  /** T-425 S2: per session, the end of the line of sends waiting to be written (see `#send`). */
+  readonly #writeTail = new Map<string, Promise<void>>();
   /**
    * T-417 review: the slots granted under the live cap whose session is not live yet (between its room and the end of its launch):
    * they count as running, so a second start can't take the same room.
@@ -2386,6 +2388,25 @@ export class ChatController {
 
   /** {@link send} without the moving check: the move's own messages (the handoff request, the opening) go through here. */
   async #send(sessionId: string, uuid: string, text: string, opts: ChatSendOptions = {}): Promise<void> {
+    // T-425 S2: sends to one session are written in call order, whatever their wake or Bypass restore costs. The place in line is taken
+    // here, before any await; `deliver` waits for the earlier sends' turn and gives its own back when its write is done or refused.
+    const before = this.#writeTail.get(sessionId) ?? Promise.resolve();
+    let release!: () => void;
+    const turn = new Promise<void>((r) => (release = r));
+    const tail = before.then(() => turn);
+    this.#writeTail.set(sessionId, tail);
+    void tail.then(() => {
+      if (this.#writeTail.get(sessionId) === tail) this.#writeTail.delete(sessionId);
+    });
+    try {
+      await this.#sendInLine(sessionId, uuid, text, opts, before, release);
+    } catch (e) {
+      release(); // refused before its write: the sends behind it go on
+      throw e;
+    }
+  }
+
+  async #sendInLine(sessionId: string, uuid: string, text: string, opts: ChatSendOptions, inLine: Promise<void>, release: () => void): Promise<void> {
     const session = this.#require(sessionId);
     if (session.state === 'ended') throw new AppError('CONFLICT', 'This session has ended.');
     if (typeof uuid !== 'string' || !CLIENT_ID.test(uuid)) throw new AppError('VALIDATION_FAILED', 'That message has no valid id.');
@@ -2451,12 +2472,20 @@ export class ChatController {
     if (seq !== undefined) rec.link(seq);
     if (portal?.startsWith('session:')) this.#noteSent(portal.slice('session:'.length), session.title, text);
     const deliver = async (): Promise<void> => {
+      try {
+        await deliverInLine();
+      } finally {
+        release();
+      }
+    };
+    const deliverInLine = async (): Promise<void> => {
       if (detached) {
         await woken; // the slot came (or it throws: refused, ended)
         held();
         if (!report) this.#crewHeld.delete(sessionId);
       }
-      const before = this.#chat.get(sessionId)?.state;
+      await inLine; // the sends before this one are written first
+      const before =this.#chat.get(sessionId)?.state;
       const woke = before !== undefined && before !== 'working' && before !== 'waiting';
       if (woke) {
         this.#chat.patchSession(sessionId, { state: 'working' });
