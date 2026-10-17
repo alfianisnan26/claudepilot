@@ -107,6 +107,94 @@ export function recoverRefusal(
   }
 }
 
+/* ---------- Restart recovery (T-971 H2): sessions that were working when a portal start found their process gone ---------- */
+
+export const RESTART_RESUME_MAX = 'chat.restartResume.max';
+export const RESTART_RESUME_STAGGER_SEC = 'chat.restartResume.staggerSec';
+
+defineSetting({
+  key: RESTART_RESUME_MAX,
+  type: 'number',
+  default: 5,
+  min: 0,
+  max: 50,
+  scope: 'global',
+  group: 'sessions',
+  order: 92,
+  label: 'Resumes per start',
+  help: 'How many sessions that were working when the portal restarted and lost their process are resumed by themselves after one portal start. The rest stay Interrupted and are listed in the summary. 0 turns it off.',
+});
+defineSetting({
+  key: RESTART_RESUME_STAGGER_SEC,
+  type: 'number',
+  default: 20,
+  min: 0,
+  max: 600,
+  scope: 'global',
+  group: 'sessions',
+  order: 93,
+  label: 'Resume spacing',
+  help: 'The seconds between two automatic resumes after a portal start, so a restart does not hit the Claude quota all at once.',
+});
+
+export interface RestartResumeConfig {
+  max: number;
+  staggerMs: number;
+}
+
+export function readRestartResumeConfig(get: ((key: string) => unknown) | undefined): RestartResumeConfig {
+  const read = (key: string) => {
+    try {
+      return get?.(key);
+    } catch {
+      return undefined;
+    }
+  };
+  return { max: Math.round(num(read(RESTART_RESUME_MAX), 5, 0, 50)), staggerMs: Math.round(num(read(RESTART_RESUME_STAGGER_SEC), 20, 0, 600)) * 1000 };
+}
+
+/** A process found gone counts as cut off by the restart only in this long after the portal started (a later vanishing is a crash, not this). */
+export const RESTART_WINDOW_MS = 10 * 60_000;
+/** A cut-off that was not resumed within this long is dropped: the work it stands for is too old to pick up by itself. */
+export const RESTART_PENDING_MS = 60 * 60_000;
+/** One session is resumed by a restart at most this many times in 24 hours (a session whose work takes the pod down is not looped). */
+export const RESTART_RESUMES_PER_DAY = 3;
+
+export interface CutOffAudit {
+  kind: string;
+  sessionId: string | null;
+  at: string;
+  detail: Record<string, unknown>;
+}
+
+/**
+ * The cut-offs still waiting: a `session.cutoff` row per session (its newest), not older than an hour, with no `session.restart_recovery`
+ * row after it. Oldest first. Idempotent across restarts: once a recovery row is written, a later start finds nothing for that cut-off.
+ */
+export function pendingCutOffs(cuts: readonly CutOffAudit[], recoveries: readonly CutOffAudit[], now: number): { sessionId: string; cutAt: number; bypass: boolean }[] {
+  const newest = new Map<string, { cutAt: number; bypass: boolean }>();
+  for (const c of cuts) {
+    const at = Date.parse(c.at);
+    if (!c.sessionId || !Number.isFinite(at) || now - at >= RESTART_PENDING_MS) continue;
+    const had = newest.get(c.sessionId);
+    if (!had || at >= had.cutAt) newest.set(c.sessionId, { cutAt: at, bypass: c.detail.bypass === true });
+  }
+  for (const r of recoveries) {
+    const at = Date.parse(r.at);
+    const cut = r.sessionId ? newest.get(r.sessionId) : undefined;
+    if (cut && Number.isFinite(at) && at >= cut.cutAt) newest.delete(r.sessionId!);
+  }
+  return [...newest].map(([sessionId, v]) => ({ sessionId, ...v })).sort((a, b) => a.cutAt - b.cutAt);
+}
+
+/** How many times a restart resumed this session in the last 24 hours, from its `session.restart_recovery` rows. */
+export const restartResumesToday = (recoveries: readonly CutOffAudit[], sessionId: string, now: number): number =>
+  recoveries.filter((r) => r.sessionId === sessionId && r.detail.result === 'resumed' && now - Date.parse(r.at) < DAY_MS).length;
+
+/** The line the portal sends to a session it resumed after a restart: what happened, and that Bypass is off. */
+export const restartContinuation = (bypass: boolean): string =>
+  `The portal restarted while you were working: your process was lost and this is the same conversation, resumed in a new process; the sub-agents and background tasks of the old process stopped.${bypass ? ' Bypass is off now: a person turns it on again if you need it.' : ''} Continue where you stopped: look at your tickets or status file, git worktree list and git status, restart the work that was in flight.`;
+
 /** The continuation the portal sends after a recovery: short (the supervisor's MOVED shape), the reason, no transcript. */
 export const recoverContinuation = (reason: string): string =>
   `This chat ended for integrity (${reason.slice(0, 160)}) and was recovered in place: the same conversation, a new Claude Code process; the sub-agents and background tasks of the old process stopped. Continue where you stopped: look at your tickets or status file, git worktree list and git status, restart the work that was in flight.`;

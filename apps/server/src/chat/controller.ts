@@ -192,7 +192,19 @@ import {
   type TaskStop,
 } from './integrity.js';
 import { crewReplyUrgent, crewWindowMs } from './crewReport.js';
-import { DAY_MS, readRecoverConfig, recoverContinuation, recoverRefusal, type RecoverBy } from './recover.js';
+import {
+  DAY_MS,
+  pendingCutOffs,
+  readRecoverConfig,
+  readRestartResumeConfig,
+  recoverContinuation,
+  recoverRefusal,
+  RESTART_RESUMES_PER_DAY,
+  RESTART_WINDOW_MS,
+  restartContinuation,
+  restartResumesToday,
+  type RecoverBy,
+} from './recover.js';
 
 /** T-102: the areas a hint may name (anything else a reader returns is left out). */
 const CONFIG_CHANGES: ReadonlySet<string> = new Set<ChatConfigChange>([
@@ -797,6 +809,11 @@ export class ChatController {
   #liveness?: NodeJS.Timeout;
   #started = false;
   #closed = false;
+  /** T-971 H2: when this portal started (its clock), the resumes it has made, whether a recovery pass is running, and the waits to cut short at stop. */
+  #startedAt = 0;
+  #restartResumed = 0;
+  #restartRecovering = false;
+  readonly #waits = new Set<() => void>();
   #ticking = false;
 
   /** Installed by the owner: writes `cp-session` into the workspace before each `start`. */
@@ -977,6 +994,17 @@ export class ChatController {
    * Installed by the tickets module (T-136): a session reached its recover cap for the day and stays ended; open ONE ticket (tag watchdog)
    * for it. Called at most once per session per 24 hours. Facts only: the id, the workspace, the reason (fixed text), the counts.
    */
+  /**
+   * Installed at start-up (T-971 H2): one line per session the portal resumed (or could not) after a restart cut it off, for the platform audit
+   * the General Manager reads. Facts and a short scrubbed title only.
+   */
+  onRestartRecovery?: (info: {
+    sessionId: string;
+    workspaceId: string;
+    result: 'resumed' | 'failed' | 'over_limit' | 'looping' | 'skipped';
+    needsBypass: boolean;
+    line: string;
+  }) => void;
   onRecoverCapped?: (info: {
     sessionId: string;
     workspaceId: string;
@@ -1073,6 +1101,7 @@ export class ChatController {
   start(): void {
     if (this.#started || this.#closed) return;
     this.#started = true;
+    this.#startedAt = this.#clock();
     // Tasks of a process that is no longer there are over (T-39): a portal stopped mid-move or mid-restart left them "running".
     try {
       for (const id of this.#chat.endOrphanTasks()) this.#emitTasks(id);
@@ -1141,6 +1170,7 @@ export class ChatController {
     this.#crewOut.clear();
     this.#crewSeen.clear();
     this.#crewHeld.clear();
+    for (const cut of [...this.#waits]) cut();
     for (const id of [...this.#readers.keys()]) this.#stopReader(id);
     for (const [id, pending] of this.#pending) {
       this.#pending.delete(id);
@@ -1165,6 +1195,8 @@ export class ChatController {
       // T-416: the memory alert, on this round (each workspace read at most once a minute; not awaited, a slow exec holds nothing up).
       if (this.memory) void this.memory.look(rows.map((r) => r.workspace_id)).catch(() => undefined);
       await Promise.allSettled(rows.map((row) => this.#check(row)));
+      // T-971 H2: what this round found cut off by the restart is resumed, a few at a time (not awaited: the rounds go on).
+      void this.#recoverCutOff();
       // T-284: a request of a process that is no longer the live one (a move, a restart, a crash, a resume) is resolved `stale`.
       if (!this.#closed) for (const id of this.#chat.sessionsWithOpenRequests()) this.#dropStale(id, 'sweep');
     } catch {
@@ -1192,9 +1224,123 @@ export class ChatController {
       claudeSessionOf(now) !== claudeSessionOf(row)
     )
       return;
-    if (status === 'gone') return this.#markGone(id);
+    if (status === 'gone') {
+      this.#noteCutOff(now);
+      return this.#markGone(id);
+    }
     this.#ensureReader(id);
     this.#armIdle(id);
+  }
+
+  /**
+   * T-971 H2: a session that was WORKING when this portal started and whose process is gone was cut off by the restart. The fact is stored
+   * (a `session.cutoff` audit row, with whether it was in Bypass) before `#markGone` loses the state, so a second restart before the resume
+   * still finds it. A vanishing later than the window is a crash (the OOM path), not this.
+   */
+  #noteCutOff(row: ChatSessionRow): void {
+    if (!this.#startedAt || this.#clock() - this.#startedAt > RESTART_WINDOW_MS || row.state !== 'working') return;
+    this.#chat.addAudit({
+      severity: 'info',
+      kind: 'session.cutoff',
+      sessionId: row.id,
+      workspaceId: row.workspace_id,
+      actor: 'portal',
+      detail: { state: row.state, bypass: row.mode === 'bypassPermissions' },
+    });
+  }
+
+  /** A pause that `stop()` cuts short. */
+  #wait(ms: number): Promise<void> {
+    return new Promise<void>((resolve) => {
+      if (ms <= 0 || this.#closed) return resolve();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const done = () => {
+        if (timer) clearTimeout(timer);
+        this.#waits.delete(done);
+        resolve();
+      };
+      timer = setTimeout(done, ms);
+      timer.unref?.();
+      this.#waits.add(done);
+    });
+  }
+
+  /**
+   * T-971 H2: resumes the sessions a portal start cut off while they were working, through the path every resume takes (`#live`, then the
+   * continuation message as `recover` sends one). At most `chat.restartResume.max` per start, `chat.restartResume.staggerSec` apart; an ended
+   * or archived session, one already running, and one a restart already resumed three times today are skipped. Bypass is never put back here:
+   * the session resumes in its start mode and its summary line says it needs Bypass again. One audit row per session (also what makes a second
+   * restart find nothing left to do) and one line to the platform audit. Never throws.
+   */
+  async #recoverCutOff(): Promise<void> {
+    if (this.#restartRecovering || this.#closed) return;
+    this.#restartRecovering = true;
+    try {
+      const config = readRestartResumeConfig(this.recoverSettings);
+      if (config.max === 0) return;
+      let attempted = 0;
+      for (;;) {
+        if (this.#closed) return;
+        const now = this.#clock();
+        const recoveries = this.#chat.audit({ kind: 'session.restart_recovery', limit: 500 });
+        const next = pendingCutOffs(this.#chat.audit({ kind: 'session.cutoff', limit: 200 }), recoveries, now)[0];
+        if (!next) return;
+        const row = this.#chat.row(next.sessionId);
+        const title = row ? this.#chat.get(row.id)?.title : undefined;
+        const who = `${title ? `“${this.scrub(row!.workspace_id, title.replace(/\s+/g, ' ').trim()).slice(0, 60)}” ` : ''}(${shortId(next.sessionId)}${row ? `, ${row.workspace_id}` : ''})`;
+        let result: 'resumed' | 'failed' | 'over_limit' | 'looping' | 'skipped';
+        let why = '';
+        if (!row || row.state === 'ended') (result = 'skipped'), (why = 'it has ended');
+        else if (row.archived_at) (result = 'skipped'), (why = 'it is archived');
+        else if (row.process === 'live' || this.#busy.has(row.id) || this.#moving.has(row.id)) (result = 'skipped'), (why = 'it is running again');
+        else if (this.#restartResumed >= config.max) (result = 'over_limit'), (why = `over the limit of ${config.max} per start: Resume it by hand`);
+        else if (restartResumesToday(recoveries, next.sessionId, now) >= RESTART_RESUMES_PER_DAY) (result = 'looping'), (why = `already resumed ${RESTART_RESUMES_PER_DAY} times today: Resume it by hand`);
+        else {
+          if (attempted > 0) await this.#wait(config.staggerMs);
+          if (this.#closed) return;
+          attempted++;
+          this.#restartResumed++;
+          try {
+            // `false`: Bypass is not put back (the gated paths are for a person's Restart, a move and a wake, not for this).
+            await this.#live(row.id, true, true, 'portal:restart', false);
+            result = 'resumed';
+            if (next.bypass) {
+              // The vanishing left a "kept" Bypass record that a later wake would act on: this resume supersedes it.
+              if (this.#sleptInBypass(row.id))
+                this.#chat.addAudit({ severity: 'info', kind: 'bypass.left', sessionId: row.id, workspaceId: row.workspace_id, actor: 'portal', detail: { why: 'stopped', superseded: true, restartResume: true } });
+              this.#note(row.id, 'Resumed after the portal restarted. It was in Bypass: Bypass is off now, turn it on again if it is needed.');
+            }
+            try {
+              await this.#send(row.id, randomUUID(), restartContinuation(next.bypass), { actor: 'portal:restart', actorLabel: 'Resumed' });
+            } catch (e) {
+              this.#note(row.id, `Couldn’t send the continuation: ${isAppError(e) ? e.message : this.#message(e)}`);
+            }
+          } catch (e) {
+            result = 'failed';
+            why = isAppError(e) ? e.message : this.#message(e);
+          }
+        }
+        const needsBypass = next.bypass && (result === 'resumed' || result === 'failed' || result === 'over_limit' || result === 'looping');
+        const line = `Restart recovery: ${who} ${result === 'resumed' ? 'resumed' : result === 'failed' ? `could not be resumed: ${why.slice(0, 160)}` : `not resumed, ${why}`}${needsBypass ? '; needs Bypass again' : ''}.`;
+        this.#chat.addAudit({
+          severity: result === 'failed' ? 'medium' : 'info',
+          kind: 'session.restart_recovery',
+          sessionId: next.sessionId,
+          workspaceId: row?.workspace_id ?? null,
+          actor: 'portal',
+          detail: { result, needsBypass, line },
+        });
+        try {
+          this.onRestartRecovery?.({ sessionId: next.sessionId, workspaceId: row?.workspace_id ?? '', result, needsBypass, line });
+        } catch (e) {
+          console.warn(`[chat] ${shortId(next.sessionId)}: the restart recovery line could not be recorded: ${this.#message(e)}`);
+        }
+      }
+    } catch (e) {
+      console.warn(`[chat] restart recovery stopped: ${this.#message(e)}`);
+    } finally {
+      this.#restartRecovering = false;
+    }
   }
 
   /** `cp-session status`: `live <pid>` or `gone`; anything else (unreachable, no host) is `unknown`. */
@@ -5437,7 +5583,7 @@ export class ChatController {
   }
 
   /** Makes sure there is a running process to talk to: waits out work in flight, resumes or wakes one that isn't running. */
-  async #live(sessionId: string, relaunchGone = true, budget = true, actor = 'portal'): Promise<void> {
+  async #live(sessionId: string, relaunchGone = true, budget = true, actor = 'portal', keepBypass = true): Promise<void> {
     await this.#busy.get(sessionId);
     let row = this.#chat.row(sessionId);
     if (row && row.state !== 'ended' && row.process !== 'live') {
@@ -5459,6 +5605,7 @@ export class ChatController {
       // T-417: a lead's sleep kept its Bypass: the wake puts it back the way a Restart does, every gate checked again (never twice at once).
       // T-416 S2: the same for a lead whose process vanished in Bypass: its relaunch asks every gate again (`how: 'lost'`).
       if (
+        keepBypass && // T-971 H2: a restart's resume never asks for Bypass again
         (slept || lost) &&
         row?.process === 'live' &&
         row.state !== 'ended' &&

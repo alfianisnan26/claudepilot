@@ -603,6 +603,21 @@ in 24 hours (default 4; 409 `RECOVER_CAPPED`: it stays ended, and ONE incident t
 within `chat.recover.pauseMin` of the last one (default 2; 409 `RECOVER_PAUSED` with `retryAfterS`). Both settings are in the registry,
 explained in their InfoTip. Every refusal and every recovery is audited (`session.recover.{done,failed,refused,capped}`).
 
+**Restart recovery (T-971 H2).** A portal restart kills the Claude Code processes it hosts; a session that was `working` is found gone at
+the first liveness rounds and becomes Interrupted. In the first 10 minutes after a portal start (`RESTART_WINDOW_MS`), such a session
+first gets a `session.cutoff` audit row (its state and whether it was in Bypass), then the portal resumes it through the same path every
+resume takes (`#live`, a new process with `--resume`) and sends it one continuation message ("The portal restarted while you were
+working …"). There is no second resume mechanism. Limits: at most `chat.restartResume.max` resumes per start (default 5; 0 turns it
+off), spaced by `chat.restartResume.staggerSec` (default 20) so a restart storm does not hit the Claude quota at once; the rest stay
+Interrupted and are listed as "over the limit … Resume it by hand". Skipped: ended and archived sessions, and one already running again.
+One session is resumed by restarts at most 3 times in 24 hours (`looping`). Idempotent: the cut-off is a persisted row, a
+`session.restart_recovery` row after it marks it answered, so two quick restarts resume a session once, and a cut-off older than an hour is dropped.
+**Bypass is never re-entered by this.** A session that was in Bypass resumes in its normal mode (the T-416 S2 relaunch that would put a
+lead back in Bypass through its gates is switched off for this path, and its kept record is superseded); its summary line ends
+"needs Bypass again" and a person turns it on. One line per recovery (who, what, result) goes to the chat audit
+(`session.restart_recovery`) and to the platform audit as `chat.restart_recovery`, which the General Manager reads. Not covered: a
+workspace pod that restarts while the portal keeps running (the process vanishes after the window: a crash, not this).
+
 **A suspicious cause.** An integrity ending now records what it was for (`chat_sessions.ended_for`, migration 805): its case
 (`ENDING_CASES` in `chat/integrity.ts`), the classification, the line's origin in words (never its text) and whether the session was in
 Bypass; the payload carries `endedFor: {reason, classified, case, origin}`. **Harmless** are only the near misses of an accepted case

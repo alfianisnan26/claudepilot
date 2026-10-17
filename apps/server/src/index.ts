@@ -513,6 +513,16 @@ chatController.crewTicketOf = (sessionId) => tickets.latestCommentOf(sessionId);
 chatController.continueTickets = (to, from) => tickets.continueFrom(to, from);
 // T-136: recover in place reads its cap and pause from the settings; past the cap, ONE watchdog ticket says so (facts, no transcript).
 chatController.recoverSettings = (key) => settingsModule.settings.get(key);
+// T-971 H2: one line per session a portal start cut off and the portal resumed (or could not): the platform audit, for the General Manager.
+chatController.onRestartRecovery = (i) =>
+  platform.audit.record({
+    severity: i.result === 'failed' ? 'medium' : 'info',
+    kind: 'chat.restart_recovery',
+    actor: 'portal',
+    userId: null,
+    subject: `session:${i.sessionId}`,
+    detail: { result: i.result, needsBypass: i.needsBypass, workspace: i.workspaceId, line: i.line },
+  });
 chatController.onRecoverCapped = (i) => {
   tickets.create(
     { kind: 'system' },
