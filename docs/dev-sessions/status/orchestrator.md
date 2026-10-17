@@ -27,7 +27,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - QA BE 2 05c187ae PAUSED 4a838735: its T-436 S2 and T-382 re-check verdicts were in earlier replies, NOT its last ->
   after restart: repost both as the LAST reply (relay via a lane spawned with that ticket).
 - IMPL fca8e37d PAUSED 0a818680 (T-868 S3 DONE). Next: a new ticket (new branch = new worker).
-- BACKEND 442e397a: T-382 S4 (ci/runs, chat/audit, lab/slices) on ticket/T-382-s3-tickets on top of fdb33268. PAUSED awaited.
+- BACKEND 442e397a: T-382 S4 (ci/runs, chat/audit, lab/slices) on ticket/T-382-s3-tickets on top of fdb33268. PAUSED 0cdfa044 (audit 13/13; ci/runs + lab Jobs cut by a typecheck error since fixed -> re-run, mutants).
 - BE INFRA 711853b8: T-860 S2c DONE e78d727b (9331, Jobs e4b190f1 + 81ed8e6f 28/28; no mutants) -> QA after restart.
 - QA UI 0cf56a8e PAUSED b36f6a54: next QA T-425 c22a76b3 (one Job caps.test.ts + rowMeta.test.ts + mutants; badge 390/1280).
 - QA PERF bf2e403a PAUSED 8cb00f79: engine.test Job 7c22e2b1 never ran (Pending 900s, master >75% mem) -> re-run after
