@@ -18,8 +18,7 @@
   S1 fix f70c72bd (Job 79cec835 rc0) -> RE-CHECK c691df71. S2 d08465f9 RECHECK PASS 10189; UX code-read only (no browser in
   qa lane): visual look on the premerge scratch portal later. Blind review S1 (d9f18599) PWC 10219: 2 Majors (upstream timeout +
   bridge caps; upgrade lifetime) + minors -> FIX2 by 2a0edbd8 (decision 10220); deploy before T-976 only for own apps.
-  Premerge premerge/t948 b2d62bfd (wip/t948-b2d62bf; PRD index union): QC running. Then FIX2 merge, gate, land.
-  Paused: T-921 0dfff348, T-379 S3 9dfecffb (resume after).
+  Premerge t948 b2d62bfd (wip/t948-b2d62bf): QC running; then FIX2, gate, land. Paused: T-921 0dfff348, T-379 S3 9dfecffb.
 - T-976 __Host- cookie (security; blind review + coord live check): 2a0edbd8 opus, paused for T-948 FIX2.
 - T-382 S5 test gaps 1,2,4 (9691): FE 3753d3c2 sonnet, ticket/T-382-s5 from wip/main-e4e52fa; gap 3 (unbounded total) Backend later.
 - T-425 S2b 357ff021: QA be63acc8 PWG 9970 (mutant B survives) -> test fix on next free Backend slot; same QA re-checks (T-595 10014).
