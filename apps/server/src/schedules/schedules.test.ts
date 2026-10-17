@@ -62,12 +62,12 @@ test('a heartbeat updates the last run, the result and the next run; a failure i
 });
 
 test('a real loop beats: the orphan sweep\'s pass moves its last run; stop marks it stopped', () => {
-  let pending: (() => void) | null = null;
+  const timer: { fn: (() => void) | null } = { fn: null };
   let now = at(0);
-  const sweep = new OrphanSweep({ sweepOrphans: () => 0 as never, orphanLastRun: () => null }, { now: () => now, random: () => 0, setTimer: (fn) => ((pending = fn), {}), clearTimer: () => undefined });
+  const sweep = new OrphanSweep({ sweepOrphans: () => 0 as never, orphanLastRun: () => null }, { now: () => now, random: () => 0, setTimer: (fn) => ((timer.fn = fn), {}), clearTimer: () => undefined });
   sweep.start();
   now = at(5);
-  pending!();
+  timer.fn!();
   const row = () => portalLoops.rows(now).find((r) => r.name === ORPHAN_LOOP.name)!;
   assert.deepEqual([row().last_run, row().last_result, row().state], [at(5).toISOString(), 'ok', 'ok']);
   sweep.stop();
