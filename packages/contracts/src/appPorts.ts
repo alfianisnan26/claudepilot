@@ -37,7 +37,10 @@ export function appPortHost(name: string, port: number, suffix: string): string 
  * suffix, a port of 1 to 5 digits without a leading zero in range. Anything else is null. The slug is a lowercase workspace name; which
  * workspace it is (exactly one across all targets) is the server's to decide.
  */
-export function parseAppPortHost(host: string | undefined | null, suffix: string | undefined | null): { slug: string; port: number } | null {
+export function parseAppPortHost(
+  host: string | undefined | null,
+  suffix: string | undefined | null,
+): { slug: string; port: number } | null {
   if (!host || !suffix) return null;
   const h = host.toLowerCase().replace(/:\d{1,5}$/, '');
   const tail = `.${suffix.toLowerCase()}`;

@@ -1,6 +1,14 @@
 import { isApiErrorBody, isApiSuccess } from '@isnanme/core';
 import { track } from '@isnanme/ui';
-import { BROWSER_API, type BrowserAction, type BrowserContainerState, type BrowserControl, type BrowserControlRequest, type BrowserHandoffAnswer, type BrowserStatus } from '@portal/contracts';
+import {
+  BROWSER_API,
+  type BrowserAction,
+  type BrowserContainerState,
+  type BrowserControl,
+  type BrowserControlRequest,
+  type BrowserHandoffAnswer,
+  type BrowserStatus,
+} from '@portal/contracts';
 import { api, ApiError } from '@/lib/api';
 
 /** The browser routes (`/api/workspaces/:target/:name/browser`): same contract as lib/api's client. */
@@ -33,10 +41,13 @@ export interface BrowserConfigurationStatus {
 }
 
 export const browserApi = {
-  status: (workspaceId: string, deviceId?: string) => request<BrowserStatus>('GET', `${BROWSER_API.workspace(workspaceId)}${deviceId ? `?deviceId=${encodeURIComponent(deviceId)}` : ''}`),
+  status: (workspaceId: string, deviceId?: string) =>
+    request<BrowserStatus>('GET', `${BROWSER_API.workspace(workspaceId)}${deviceId ? `?deviceId=${encodeURIComponent(deviceId)}` : ''}`),
   configuration: (workspaceId: string) => request<BrowserConfigurationStatus>('GET', `${BROWSER_API.workspace(workspaceId)}/configuration`),
   action: (workspaceId: string, action: BrowserAction) => request<{ ok: true }>('POST', `${BROWSER_API.workspace(workspaceId)}/${action}`),
-  control: (workspaceId: string, body: BrowserControlRequest) => request<BrowserControl>('PUT', `${BROWSER_API.workspace(workspaceId)}/control`, body),
-  answerHandoff: (workspaceId: string, handoffId: string, body: BrowserHandoffAnswer) => request<{ ok: true }>('POST', `${BROWSER_API.workspace(workspaceId)}/handoffs/${handoffId}`, body),
+  control: (workspaceId: string, body: BrowserControlRequest) =>
+    request<BrowserControl>('PUT', `${BROWSER_API.workspace(workspaceId)}/control`, body),
+  answerHandoff: (workspaceId: string, handoffId: string, body: BrowserHandoffAnswer) =>
+    request<{ ok: true }>('POST', `${BROWSER_API.workspace(workspaceId)}/handoffs/${handoffId}`, body),
   retryInstall: (workspaceId: string) => request<{ ok: true }>('POST', `${BROWSER_API.workspace(workspaceId)}/install/retry`),
 };

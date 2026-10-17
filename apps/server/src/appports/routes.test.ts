@@ -51,7 +51,14 @@ const wsDeps = {
   resolve: () => null,
 };
 const grants = new AppPortGrants();
-const appPorts = new AppPorts({ suffix: SUFFIX, portalPort: 3000, workspaces: wsDeps as never, sessionValid: () => true, grants, dial: async () => assert.fail('no dial here') });
+const appPorts = new AppPorts({
+  suffix: SUFFIX,
+  portalPort: 3000,
+  workspaces: wsDeps as never,
+  sessionValid: () => true,
+  grants,
+  dial: async () => assert.fail('no dial here'),
+});
 
 const portal = new Portal('24681357', 60_000);
 const token = portal.signIn('24681357');
@@ -82,7 +89,12 @@ const call = async (a: import('hono').Hono, method: string, path: string, opts: 
     `https://${PORTAL}${path}`,
     {
       method,
-      headers: { host: PORTAL, cookie: `portal_session=${token}`, ...(opts.origin ? { origin: opts.origin } : {}), ...(method === 'GET' ? {} : { 'content-type': 'application/json' }) },
+      headers: {
+        host: PORTAL,
+        cookie: `portal_session=${token}`,
+        ...(opts.origin ? { origin: opts.origin } : {}),
+        ...(method === 'GET' ? {} : { 'content-type': 'application/json' }),
+      },
       body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
     },
     env,
@@ -140,7 +152,10 @@ test('the list keeps output that lands just after the exit (a stream a tick behi
 test('a seam denial is the same 404 on the open and the list, and mints nothing', async () => {
   const before = grants.size.codes;
   const n = execs.length;
-  const was = useAuthz({ ...singleOwner, can: (a, v, o) => (o.type === 'workspace' ? { allow: false, reason: 'not_found', level: 'none' } : singleOwner.can(a, v, o)) });
+  const was = useAuthz({
+    ...singleOwner,
+    can: (a, v, o) => (o.type === 'workspace' ? { allow: false, reason: 'not_found', level: 'none' } : singleOwner.can(a, v, o)),
+  });
   try {
     const open = await call(app, 'POST', OPEN, { origin: `https://${PORTAL}`, body: { port: 8765 } });
     assert.equal(open.status, 404);

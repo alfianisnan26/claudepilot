@@ -70,7 +70,15 @@ export class AppPortGrants {
     this.#sweep();
     if (this.#cookies.size >= MAX_COOKIES) this.#cookies.delete(this.#cookies.keys().next().value!);
     const cookie = fresh();
-    const grant: AppGrant = { workspaceId: g.workspaceId, port: g.port, host: g.host, sessionToken: g.sessionToken, actor: g.actor, portalOrigin: g.portalOrigin, scheme: g.scheme };
+    const grant: AppGrant = {
+      workspaceId: g.workspaceId,
+      port: g.port,
+      host: g.host,
+      sessionToken: g.sessionToken,
+      actor: g.actor,
+      portalOrigin: g.portalOrigin,
+      scheme: g.scheme,
+    };
     this.#cookies.set(hash(cookie), { ...grant, expiresAt: this.#now() + this.cookieTtlMs });
     return { cookie, grant, maxAgeS: Math.floor(this.cookieTtlMs / 1000) };
   }

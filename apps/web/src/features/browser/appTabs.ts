@@ -39,7 +39,7 @@ export function closeTab(s: AppTabs, id: number): AppTabs {
   if (i < 0) return s;
   const tabs = s.tabs.filter((t) => t.id !== id);
   // The one that closes was in front: the neighbour on its right takes over, else the one on its left.
-  const active = s.active !== id ? s.active : (tabs[i] ?? tabs[i - 1])?.id ?? null;
+  const active = s.active !== id ? s.active : ((tabs[i] ?? tabs[i - 1])?.id ?? null);
   return { ...s, tabs, active };
 }
 
@@ -72,14 +72,17 @@ export function step(s: AppTabs, id: number, dir: 'back' | 'forward'): AppTabs {
  * A request to the open route starts (a reload, a retry, a new address): the tab's sequence moves on and the caller keeps the number.
  * Only the answer that carries the latest number is applied, so two quick opens can't race: the last wins, the stale result is dropped.
  */
-export const beginLoad = (s: AppTabs, id: number): AppTabs => patch(s, id, (t) => ({ ...t, seq: t.seq + 1, state: 'loading', error: null }));
+export const beginLoad = (s: AppTabs, id: number): AppTabs =>
+  patch(s, id, (t) => ({ ...t, seq: t.seq + 1, state: 'loading', error: null }));
 
 export const seqOf = (s: AppTabs, id: number): number | null => s.tabs.find((t) => t.id === id)?.seq ?? null;
 
 /** The route answered: the frame loads `src` (a new mount, so the same URL twice still loads). A stale answer changes nothing. */
-export const setSrc = (s: AppTabs, id: number, seq: number, src: string): AppTabs => patch(s, id, (t) => (t.seq !== seq ? t : { ...t, src, nonce: t.nonce + 1, state: 'ready', error: null }));
+export const setSrc = (s: AppTabs, id: number, seq: number, src: string): AppTabs =>
+  patch(s, id, (t) => (t.seq !== seq ? t : { ...t, src, nonce: t.nonce + 1, state: 'ready', error: null }));
 
-export const setError = (s: AppTabs, id: number, seq: number, error: string): AppTabs => patch(s, id, (t) => (t.seq !== seq ? t : { ...t, state: 'error', error }));
+export const setError = (s: AppTabs, id: number, seq: number, error: string): AppTabs =>
+  patch(s, id, (t) => (t.seq !== seq ? t : { ...t, state: 'error', error }));
 
 /** Where the frame's own history is tried first. A cross-origin frame throws on `history`: false, and the caller steps its own entries. */
 export function nativeHistory(win: { history: { back(): void; forward(): void } } | null | undefined, dir: 'back' | 'forward'): boolean {

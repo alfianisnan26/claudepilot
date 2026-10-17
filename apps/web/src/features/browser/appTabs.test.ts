@@ -1,13 +1,31 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { beginLoad, canGoBack, canGoForward, closeTab, currentTarget, emptyTabs, nativeHistory, navigate, openTab, seqOf, setError, setSrc, step, switchTab } from './appTabs';
+import {
+  beginLoad,
+  canGoBack,
+  canGoForward,
+  closeTab,
+  currentTarget,
+  emptyTabs,
+  nativeHistory,
+  navigate,
+  openTab,
+  seqOf,
+  setError,
+  setSrc,
+  step,
+  switchTab,
+} from './appTabs';
 
 const t = (port: number, path = '/') => ({ port, path });
 
 test('tabs: open makes the new one active, switch changes it, an unknown id changes nothing', () => {
   let s = openTab(emptyTabs(), t(3000));
   s = openTab(s, t(4000));
-  assert.deepEqual(s.tabs.map((x) => x.id), [1, 2]);
+  assert.deepEqual(
+    s.tabs.map((x) => x.id),
+    [1, 2],
+  );
   assert.equal(s.active, 2);
   s = switchTab(s, 1);
   assert.equal(s.active, 1);
@@ -23,7 +41,10 @@ test('tabs: closing the active one picks the right neighbour, else the left, els
   s = closeTab(s, 3);
   assert.equal(s.active, 1);
   s = closeTab(s, 99);
-  assert.deepEqual(s.tabs.map((x) => x.id), [1]);
+  assert.deepEqual(
+    s.tabs.map((x) => x.id),
+    [1],
+  );
   s = closeTab(s, 1);
   assert.equal(s.active, null);
   assert.equal(s.tabs.length, 0);

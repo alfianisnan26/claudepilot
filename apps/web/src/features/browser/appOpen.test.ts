@@ -28,7 +28,14 @@ test('re-open path: each call asks the route again and takes the new URL', async
 });
 
 test('a URL that is not https is never used', async () => {
-  for (const url of ['http://app-x-3000.example.test/', 'javascript:alert(1)', 'data:text/html,x', '//app-x.example.test/', 'not a url', '']) {
+  for (const url of [
+    'http://app-x-3000.example.test/',
+    'javascript:alert(1)',
+    'data:text/html,x',
+    '//app-x.example.test/',
+    'not a url',
+    '',
+  ]) {
     assert.deepEqual(await runOpen(() => Promise.resolve({ url })), { kind: 'unsafe' }, url);
     assert.equal(isHttpsUrl(url), false, url);
   }

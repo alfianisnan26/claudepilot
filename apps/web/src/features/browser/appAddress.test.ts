@@ -23,7 +23,24 @@ test('localhost, 127.0.0.1 and a bare port parse to a port and a path', () => {
 });
 
 test('another host, another scheme, no port, a bad port or a bad path is refused', () => {
-  for (const s of ['http://evil.com', 'evil.com:8765', 'localhost.evil.com:8765', 'localhost@evil.com:8765', 'https://localhost:8765', 'file:///etc/passwd', 'file:', 'javascript:alert(1)', 'data:text/html,x', 'localhost', 'localhost:', '', '   ', '0.0.0.0:8765', '[::1]:8765']) refused(s);
+  for (const s of [
+    'http://evil.com',
+    'evil.com:8765',
+    'localhost.evil.com:8765',
+    'localhost@evil.com:8765',
+    'https://localhost:8765',
+    'file:///etc/passwd',
+    'file:',
+    'javascript:alert(1)',
+    'data:text/html,x',
+    'localhost',
+    'localhost:',
+    '',
+    '   ',
+    '0.0.0.0:8765',
+    '[::1]:8765',
+  ])
+    refused(s);
   for (const s of ['localhost:80', '80', '1023', '65536', '99999', '999999999999', 'localhost:0']) refused(s);
   for (const s of ['localhost:8765//evil.com', 'localhost:8765/a\\b', 'localhost:8765/a\nb']) refused(s);
   assert.equal(ok('1024').port, 1024);

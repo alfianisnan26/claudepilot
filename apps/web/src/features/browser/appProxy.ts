@@ -5,7 +5,8 @@ import { isAppOff } from './appOpen';
 
 export const appProxy = {
   /** Mints a one-time code and returns the URL on the app host; the frame loads it within 30 seconds, once. */
-  open: (workspaceId: string, t: AppTarget) => request<OpenAppPortResult>('POST', APP_PORTS_API.open(workspaceId), { port: t.port, path: t.path }),
+  open: (workspaceId: string, t: AppTarget) =>
+    request<OpenAppPortResult>('POST', APP_PORTS_API.open(workspaceId), { port: t.port, path: t.path }),
   /** The listening ports; `null` when the feature is off. */
   ports: async (workspaceId: string): Promise<AppPortItem[] | null> => {
     try {

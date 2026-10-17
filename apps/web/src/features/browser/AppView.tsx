@@ -7,10 +7,27 @@ import { errorText } from '@/lib/api';
 import { formatAppTarget, parseAppAddress, type AppTarget } from './appAddress';
 import { runOpen } from './appOpen';
 import { appProxy } from './appProxy';
-import { beginLoad, canGoForward, closeTab, currentTarget, emptyTabs, nativeHistory, navigate, openTab, seqOf, setError, setSrc, step, switchTab, type AppTab, type AppTabs } from './appTabs';
+import {
+  beginLoad,
+  canGoForward,
+  closeTab,
+  currentTarget,
+  emptyTabs,
+  nativeHistory,
+  navigate,
+  openTab,
+  seqOf,
+  setError,
+  setSrc,
+  step,
+  switchTab,
+  type AppTab,
+  type AppTabs,
+} from './appTabs';
 
 /** An icon button at 44 px on touch screens (`tap:`), 36 px elsewhere. */
-const iconBtn = 'flex size-9 shrink-0 items-center justify-center rounded-lg text-white/70 hover:bg-white/10 hover:text-white disabled:opacity-35 disabled:hover:bg-transparent tap:size-11';
+const iconBtn =
+  'flex size-9 shrink-0 items-center justify-center rounded-lg text-white/70 hover:bg-white/10 hover:text-white disabled:opacity-35 disabled:hover:bg-transparent tap:size-11';
 
 /**
  * App mode (T-948): a browser in the browser. The address bar takes a port inside the workspace; the portal's "open" route returns a
@@ -64,12 +81,22 @@ export function AppView({ workspaceId }: { workspaceId: string }) {
    * opens overlap (two quick reloads), only the latest answer is applied and the stale one is dropped.
    */
   const load = async (id: number, target: AppTarget) => {
-    const seq = seqOf(apply((s) => beginLoad(s, id)), id);
+    const seq = seqOf(
+      apply((s) => beginLoad(s, id)),
+      id,
+    );
     if (seq === null) return;
     const out = await runOpen(() => appProxy.open(workspaceId, target));
     if (out.kind === 'off') return setOff(true);
     if (out.kind === 'url') return void apply((s) => setSrc(s, id, seq, out.url));
-    apply((s) => setError(s, id, seq, out.kind === 'unsafe' ? 'The portal gave an address that isn’t https.' : errorText(out.error, 'Couldn’t open it.')));
+    apply((s) =>
+      setError(
+        s,
+        id,
+        seq,
+        out.kind === 'unsafe' ? 'The portal gave an address that isn’t https.' : errorText(out.error, 'Couldn’t open it.'),
+      ),
+    );
   };
 
   const go = (raw: string) => {
@@ -145,7 +172,9 @@ export function AppView({ workspaceId }: { workspaceId: string }) {
     return (
       <div className="absolute inset-0 flex items-center justify-center gap-1 px-6 text-center text-sm text-white/70">
         <p>App mode is off</p>
-        <InfoTip label="About App mode">App mode is off on this portal. The portal’s administrator turns it on with PORT_PROXY_HOST_SUFFIX.</InfoTip>
+        <InfoTip label="About App mode">
+          App mode is off on this portal. The portal’s administrator turns it on with PORT_PROXY_HOST_SUFFIX.
+        </InfoTip>
       </div>
     );
 
@@ -155,7 +184,13 @@ export function AppView({ workspaceId }: { workspaceId: string }) {
         <button type="button" aria-label="Back" disabled={!active} onClick={() => move('back')} className={iconBtn}>
           <ArrowLeft className="size-[18px]" />
         </button>
-        <button type="button" aria-label="Forward" disabled={!active || !canGoForward(active)} onClick={() => move('forward')} className={cn(iconBtn, 'hidden sm:flex')}>
+        <button
+          type="button"
+          aria-label="Forward"
+          disabled={!active || !canGoForward(active)}
+          onClick={() => move('forward')}
+          className={cn(iconBtn, 'hidden sm:flex')}
+        >
           <ArrowRight className="size-[18px]" />
         </button>
         <button type="button" aria-label="Reload" disabled={!active} onClick={doReload} className={iconBtn}>
@@ -180,10 +215,19 @@ export function AppView({ workspaceId }: { workspaceId: string }) {
             autoCapitalize="none"
             autoCorrect="off"
             spellCheck={false}
-            className={cn('h-9 min-w-0 flex-1 rounded-lg border bg-white/5 px-3 font-mono text-[16px] text-white outline-hidden focus:border-white/40 sm:text-sm tap:h-11', problem ? 'border-red-400/70' : 'border-white/15')}
+            className={cn(
+              'h-9 min-w-0 flex-1 rounded-lg border bg-white/5 px-3 font-mono text-[16px] text-white outline-hidden focus:border-white/40 sm:text-sm tap:h-11',
+              problem ? 'border-red-400/70' : 'border-white/15',
+            )}
           />
         </form>
-        <button type="button" aria-label="Address" aria-pressed={bar} onClick={() => setBar((b) => !b)} className={cn(iconBtn, 'sm:hidden', bar && 'bg-white/10 text-white')}>
+        <button
+          type="button"
+          aria-label="Address"
+          aria-pressed={bar}
+          onClick={() => setBar((b) => !b)}
+          className={cn(iconBtn, 'sm:hidden', bar && 'bg-white/10 text-white')}
+        >
           <Search className="size-[18px]" />
         </button>
         <div className="relative">
@@ -201,8 +245,17 @@ export function AppView({ workspaceId }: { workspaceId: string }) {
           </button>
           {portsOpen && (
             <>
-              <button type="button" tabIndex={-1} aria-label="Close ports" className="fixed inset-0 z-20 cursor-default" onClick={() => setPortsOpen(false)} />
-              <div role="menu" className="absolute top-full right-0 z-30 mt-1 w-64 max-w-[calc(100vw-1rem)] rounded-xl border border-white/10 bg-[#1b1b1e] p-1 shadow-xl">
+              <button
+                type="button"
+                tabIndex={-1}
+                aria-label="Close ports"
+                className="fixed inset-0 z-20 cursor-default"
+                onClick={() => setPortsOpen(false)}
+              />
+              <div
+                role="menu"
+                className="absolute top-full right-0 z-30 mt-1 w-64 max-w-[calc(100vw-1rem)] rounded-xl border border-white/10 bg-[#1b1b1e] p-1 shadow-xl"
+              >
                 {ports === null && (
                   <div className="flex justify-center p-3">
                     <Spinner className="size-4" />
@@ -210,7 +263,14 @@ export function AppView({ workspaceId }: { workspaceId: string }) {
                 )}
                 {ports?.length === 0 && <p className="px-3 py-2.5 text-sm text-white/60">No ports.</p>}
                 {ports?.map((p) => (
-                  <button key={p.port} type="button" role="menuitem" disabled={!p.openable} onClick={() => pick(p)} className="flex min-h-11 w-full items-center gap-2 rounded-lg px-3 text-left text-sm text-white hover:bg-white/10 disabled:opacity-40 disabled:hover:bg-transparent">
+                  <button
+                    key={p.port}
+                    type="button"
+                    role="menuitem"
+                    disabled={!p.openable}
+                    onClick={() => pick(p)}
+                    className="flex min-h-11 w-full items-center gap-2 rounded-lg px-3 text-left text-sm text-white hover:bg-white/10 disabled:opacity-40 disabled:hover:bg-transparent"
+                  >
                     <span className="font-mono">{p.port}</span>
                     {p.process && <span className="min-w-0 flex-1 truncate text-white/50 [overflow-wrap:anywhere]">{p.process}</span>}
                   </button>
@@ -225,17 +285,35 @@ export function AppView({ workspaceId }: { workspaceId: string }) {
       </div>
 
       {problem && (
-        <p role="alert" className="shrink-0 border-b border-red-400/30 bg-red-400/10 px-3 py-1.5 text-[13px] text-red-300 [overflow-wrap:anywhere]">
+        <p
+          role="alert"
+          className="shrink-0 border-b border-red-400/30 bg-red-400/10 px-3 py-1.5 text-[13px] text-red-300 [overflow-wrap:anywhere]"
+        >
           {problem}
         </p>
       )}
 
       {tabs.tabs.length > 0 && (
-        <div role="tablist" aria-label="Apps" className="flex shrink-0 items-stretch overflow-x-auto border-b border-white/10 bg-[#101012] [scrollbar-width:none]">
+        <div
+          role="tablist"
+          aria-label="Apps"
+          className="flex shrink-0 items-stretch overflow-x-auto border-b border-white/10 bg-[#101012] [scrollbar-width:none]"
+        >
           {tabs.tabs.map((t) => (
-            <TabChip key={t.id} tab={t} active={t.id === tabs.active} onSwitch={() => setTabs((s) => switchTab(s, t.id))} onClose={() => close(t.id)} />
+            <TabChip
+              key={t.id}
+              tab={t}
+              active={t.id === tabs.active}
+              onSwitch={() => setTabs((s) => switchTab(s, t.id))}
+              onClose={() => close(t.id)}
+            />
           ))}
-          <button type="button" aria-label="New app" onClick={() => (setPortsOpen(true), void loadPorts())} className={cn(iconBtn, 'rounded-none')}>
+          <button
+            type="button"
+            aria-label="New app"
+            onClick={() => (setPortsOpen(true), void loadPorts())}
+            className={cn(iconBtn, 'rounded-none')}
+          >
             <Plus className="size-4" />
           </button>
         </div>
@@ -262,7 +340,11 @@ export function AppView({ workspaceId }: { workspaceId: string }) {
                 ) : (
                   <>
                     <p className="max-w-xs [overflow-wrap:anywhere]">{t.error}</p>
-                    <button type="button" onClick={() => void load(t.id, currentTarget(t))} className="flex min-h-11 items-center gap-2 rounded-lg bg-white/10 px-4 text-white">
+                    <button
+                      type="button"
+                      onClick={() => void load(t.id, currentTarget(t))}
+                      className="flex min-h-11 items-center gap-2 rounded-lg bg-white/10 px-4 text-white"
+                    >
                       <RotateCw className="size-4" /> Retry
                     </button>
                   </>
@@ -275,14 +357,25 @@ export function AppView({ workspaceId }: { workspaceId: string }) {
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-[#0b0b0c] px-6 text-center text-sm text-white/70">
             <p className="flex items-center gap-1">
               Pick a port
-              <InfoTip label="About App mode">Type localhost:&lt;port&gt; or pick a listening port. The app opens here, on its own address, apart from the portal. Back, forward and reload work on what you typed.</InfoTip>
+              <InfoTip label="About App mode">
+                Type localhost:&lt;port&gt; or pick a listening port. The app opens here, on its own address, apart from the portal. Back,
+                forward and reload work on what you typed.
+              </InfoTip>
             </p>
             <div className="flex max-w-full flex-wrap justify-center gap-2">
-              {ports?.filter((p) => p.openable).slice(0, 6).map((p) => (
-                <button key={p.port} type="button" onClick={() => pick(p)} className="min-h-11 rounded-lg bg-white/10 px-4 font-mono text-white hover:bg-white/15">
-                  {p.port}
-                </button>
-              ))}
+              {ports
+                ?.filter((p) => p.openable)
+                .slice(0, 6)
+                .map((p) => (
+                  <button
+                    key={p.port}
+                    type="button"
+                    onClick={() => pick(p)}
+                    className="min-h-11 rounded-lg bg-white/10 px-4 font-mono text-white hover:bg-white/15"
+                  >
+                    {p.port}
+                  </button>
+                ))}
             </div>
           </div>
         )}
@@ -294,11 +387,25 @@ export function AppView({ workspaceId }: { workspaceId: string }) {
 function TabChip({ tab, active, onSwitch, onClose }: { tab: AppTab; active: boolean; onSwitch: () => void; onClose: () => void }) {
   const label = String(currentTarget(tab).port);
   return (
-    <div role="presentation" className={cn('flex shrink-0 items-center border-r border-white/10', active ? 'bg-white/10 text-white' : 'text-white/60')}>
-      <button type="button" role="tab" aria-selected={active} onClick={onSwitch} className="flex h-9 min-w-16 items-center px-3 font-mono text-sm tap:h-11">
+    <div
+      role="presentation"
+      className={cn('flex shrink-0 items-center border-r border-white/10', active ? 'bg-white/10 text-white' : 'text-white/60')}
+    >
+      <button
+        type="button"
+        role="tab"
+        aria-selected={active}
+        onClick={onSwitch}
+        className="flex h-9 min-w-16 items-center px-3 font-mono text-sm tap:h-11"
+      >
         {label}
       </button>
-      <button type="button" aria-label={`Close ${label}`} onClick={onClose} className="flex size-9 items-center justify-center text-white/50 hover:text-white tap:size-11">
+      <button
+        type="button"
+        aria-label={`Close ${label}`}
+        onClick={onClose}
+        className="flex size-9 items-center justify-center text-white/50 hover:text-white tap:size-11"
+      >
         <X className="size-3.5" />
       </button>
     </div>
