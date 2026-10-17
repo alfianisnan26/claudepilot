@@ -1,4 +1,4 @@
-# orchestrator status (2026-10-17 15:55 UTC, session 355881a3, continuation of de232389; older: git history)
+# orchestrator status (2026-10-17 17:10 UTC, session 355881a3, continuation of de232389; older: git history)
 
 ## DONE
 - Batches 22-26: git history (to 83b7213e), gates green. Close on "Coordinator live check" PASS. T-574 re-check after 10-17 15:00Z.
@@ -8,24 +8,19 @@
 - BATCH 30 LANDED 08feccc6 GATE GREEN (T-731 10494; deploy is the coordinator's): T-772 S2f, T-736 S3g, T-612 S1+S1b,
   T-868 S1-S3, T-436 S1+S2, T-379 S2, T-860 S2c, T-382 S2-S4. Close on live checks. LESSON: format commits break tests that
   read source with a regex: grep readFileSync(*.ts) tests and run them in the QC; re-run the pack check after each merge.
-- T-938 DONE 259935e8 (Job 6bd127a4 rc0) -> blind review d9f18599 -> coordinator lands. Lane a3554d40 -> T-974 URGENT
-  (rule guard git argv, ruleGuard.ts; rule class: blind review, coordinator removes deny lines after PASS).
-- URGENT T-948 port proxy (9810): S1 BE INFRA 2 2a0edbd8 OPUS (security), ticket/T-948-port-proxy; app-<ws>-<port> subdomain (9811).
-  S1 fix f70c72bd RECHECK PASS 10380 (c691df71 now reads FIX2). S2 d08465f9 RECHECK PASS 10189; UX code-read only (no browser in
-  qa lane): visual look on the premerge scratch portal later. Blind review S1 (d9f18599) PWC 10219: 2 Majors (upstream timeout +
-  bridge caps; upgrade lifetime) + minors -> FIX2 5d929014 by 2a0edbd8 (10220; Job queued); deploy before T-976 own apps only.
-  Premerge t948 b2d62bfd (wip/t948-b2d62bf): QC running; then FIX2, gate, land. Paused: T-921 0dfff348, T-379 S3 9dfecffb.
-- T-976 __Host- cookie (security; blind review + coord live check): 2a0edbd8 opus, test fix a418de31, Job queued.
-  15:25 cluster full (node2 CPU 87% reserved): every Job queues ~1 h, several lost Pending; re-run once each (D-75).
-- T-382 S5 DONE 472e9015 QA PWG (877726a5, T-595 10427) -> batch 31. S6 gap 3 (unbounded ci total) 3753d3c2, proof Job running.
-  be63acc8 -> T-976 QA (code read; Job after builder rc). T-382 unassigned: comments refused, assign asked FOR THE COORDINATOR (10376).
-- T-425 S2b 357ff021: QA be63acc8 PWG 9970 (mutant B survives) -> test fix on next free Backend slot; same QA re-checks (T-595 10014).
-- T-436 S3 + T-772 S2g fe676258: QA PWG (T-595 10003) -> batch 31; permissions class: coordinator live check before close (D-81).
-- T-294 PWG 9858: crew_post/read + idle-child reuse not built -> slice after T-948 (T-595 9871).
-- URGENT T-1043 MU2 (D-82, plan 10460): S0a routes / S0b sockets / S0c MCP, opus builder (a3554d40 slot respawned), QA +
-  blind security review each; after T-948 ships, ahead of T-968/T-965. Then: T-968 General Manager (D-80, plan 9969; S0 scribe + S2 MCP tools incl. T-965 first),
-  T-971 self-healing (H1+H2 first; charter-wall conflict on healer landing rule lines FOR THE COORDINATOR 9988).
-  T-409 G3 ee75effd QA PWG 9820 -> merge in b31; G3b fup after T-425 S2b (T-595 9823).
+- BATCH 31 premerge/b31 e33f91d0: T-436 S3+T-772 S2g fe676258, T-409 G3 ee75effd, T-382 S5 472e9015 + lead traces (T-595
+  10495: conflicts to ticket side; outline-hidden in LoginPage/AccountsSection; prettier 6 files). QC running -> gate -> land. S6 joins later.
+- T-938 259935e8 blind review PWC 10348 -> doc Major back to a3554d40 (after T-974) -> coordinator lands (QA account, T-938 10430).
+- T-974 URGENT rule guard git argv: a3554d40, d8432f39 proof Job running; then blind review (rule class), coordinator removes deny lines.
+- URGENT T-948 port proxy: FIX2 ac36971c (Job 38bebb4d rc0, 43 tests, 5/5 mutants; 10500) -> RECHECK c691df71 (opus) Job.
+  Then premerge t948 (b2d62bfd + ac36971c + integration), QC appports+browser tests, gate, land, scratch-portal visual look; deploy
+  own apps only until T-976. T-976 lands AFTER T-948 and switches PORTAL_COOKIES to SESSION_COOKIE/LEGACY (2a0edbd8).
+- T-976 __Host- cookie FIX 87d4a74f (Job 7e5debc6 rc0; T-1042 drops old name >= 10-31) -> QA be63acc8 Job; then blind review.
+- T-382 S6 3753d3c2 70eac176 proof running (+ seesEverything fix) -> QA d9f18599 Job -> b31/b32. T-382 unassigned (10376).
+- URGENT T-1043 MU2 S0a (D-82, plan 10460 + 10519): 2a0edbd8 opus on ticket/T-1043-s0a (worktree t1043-s0a, 423d269f). S0b sockets,
+  S0c MCP next; QA + blind security review each. Ahead of T-968/T-965.
+- T-425 S2b 357ff021: mutant-B test fix on next free builder; be63acc8 re-checks. T-294 crew_post/read slice after T-948.
+- Then: T-968 General Manager (D-80, 9969; S0 scribe, S2 MCP incl. T-965), T-971 H1+H2 (healer only detects/tickets; 9988), T-565, T-975.
 
 ## DECISIONS (binding)
 - 12:10 D-81 (owner via coordinator): risk-based review. Same builder keeps a ticket through all fixes; one QA pass, same QA re-checks;
