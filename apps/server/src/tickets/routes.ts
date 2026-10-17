@@ -7,6 +7,8 @@ import {
   ticketRef,
   TICKET_PRIORITIES,
   TICKET_STATUSES,
+  TICKET_ATTACHMENT_INLINE_TYPES,
+  TICKET_ATTACHMENT_LIMITS,
   TICKET_TYPES,
   type BumpRequest,
   type CloseTicketRequest,
@@ -40,6 +42,12 @@ const optionalBody = async <T>(c: Context): Promise<Partial<T>> => {
 };
 
 const UI: Caller = { kind: 'ui' };
+
+const attachmentNumber = (c: Context): number => {
+  const n = Number(c.req.param('attachmentId'));
+  if (!Number.isInteger(n) || n <= 0) throw new AppError('NOT_FOUND', 'No such file.');
+  return n;
+};
 
 /** A comma-separated query value as a list of the names it may hold. */
 const names = <T extends string>(raw: string | undefined, all: readonly T[], field: string): T[] | undefined => {
@@ -113,6 +121,40 @@ export function createTicketRoutes(tickets: Tickets): Hono {
   app.post('/:id/comments', async (c) => {
     const { text } = await body<CommentTicketRequest>(c);
     return c.json(success(tickets.comment(UI, id(c), text)), 201);
+  });
+  // Attachments (owner, 2026-10-17): the file is the raw body, its name in `x-file-name` (URI-encoded), its type in `x-file-type` (or `content-type`).
+  app.get('/:id/attachments', (c) => c.json(success(tickets.attachments(UI, id(c)))));
+  app.post('/:id/attachments', async (c) => {
+    const declared = Number(c.req.header('content-length') ?? '0');
+    if (declared > TICKET_ATTACHMENT_LIMITS.maxBytes) throw new AppError('PAYLOAD_TOO_LARGE', `The file is larger than ${TICKET_ATTACHMENT_LIMITS.maxBytes / 1024 / 1024} MB.`);
+    let name = c.req.header('x-file-name') ?? '';
+    try {
+      name = decodeURIComponent(name);
+    } catch {
+      throw new AppError('VALIDATION_FAILED', 'The file name is not valid.', { details: { name: 'URI-encode it in x-file-name.' } });
+    }
+    const bytes = Buffer.from(await c.req.arrayBuffer());
+    // The real type in x-file-type (the body goes as application/octet-stream, so a .json file is not held to the JSON body limit).
+    return c.json(success(tickets.attach(UI, id(c), { name, mediaType: c.req.header('x-file-type') ?? c.req.header('content-type'), bytes })), 201);
+  });
+  app.get('/:id/attachments/:attachmentId', (c) => {
+    const { attachment, bytes } = tickets.attachmentFile(UI, id(c), attachmentNumber(c));
+    const inline = (TICKET_ATTACHMENT_INLINE_TYPES as readonly string[]).includes(attachment.mediaType) && c.req.query('download') === undefined;
+    const ascii = attachment.name.replace(/[^\x20-\x7e]|["\\]/g, '_');
+    return new Response(new Uint8Array(bytes), {
+      headers: {
+        'Content-Type': inline ? attachment.mediaType : 'application/octet-stream',
+        'Content-Length': String(bytes.length),
+        'Content-Disposition': `${inline ? 'inline' : 'attachment'}; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(attachment.name)}`,
+        'X-Content-Type-Options': 'nosniff',
+        'Content-Security-Policy': "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox",
+        'Cache-Control': 'private, max-age=300',
+      },
+    });
+  });
+  app.delete('/:id/attachments/:attachmentId', (c) => {
+    tickets.removeAttachment(UI, id(c), attachmentNumber(c));
+    return c.json(success({ removed: true }));
   });
   app.post('/:id/close', async (c) => c.json(success(tickets.close(UI, id(c), await optionalBody<CloseTicketRequest>(c)))));
   app.delete('/:id/close', (c) => c.json(success(tickets.update(UI, id(c), { status: 'open' }))));

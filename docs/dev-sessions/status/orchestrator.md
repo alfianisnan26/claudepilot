@@ -3,7 +3,6 @@
 ## DONE
 - Batches 22-26: git history (to 83b7213e), gates green. Close on "Coordinator live check" PASS. T-574 re-check after 10-17 15:00Z.
 - RESPAWN rule (165db813 + D-78 4e101a59): respawn each lane BETWEEN tickets on a worktree cut from integration; scripts by abs path.
-- BATCHES 27 bda180d2 + 28 63ff971c (gates GREEN) deployed in 2026.10.17-1 (details: git history). Flake boot.test.ts -> T-903.
 - BATCH 29 edde2073 (T-524 S3c, T-733 S5, T-881 S1b, T-416 S2c, T-382 S1, T-781 S8c, T-675 R2c+R2d) RELEASED 2026.10.17-2: close on live checks.
 ## IN FLIGHT (6 of 6, D-71; lanes respawned per ticket, D-78; sonnet)
 - BATCH 30 premerge-b30 b9781ad6 (wip/main-b9781ad): T-772 S2f, T-736 S3g, T-612 S1, T-868 S1-S3, T-436 S1+S2 (deploy note),
@@ -11,17 +10,19 @@
   Resolution trace T-595 9742. QC run 4 on e0f7a72d: tests ok, format 65 files + lint 3 -> lead format commits (Jobs b1a39c2d,
   ec182931; token-equal check job-out/fmtcheck.mjs) + integration (master line 85) = e4e52fa0 (trace T-595 9916). QC on e4e52fa0:
   tests + lint ok, format red on knowledge/service.ts. Merging integration 94105066 conflicts in quick-check.sh (T-612 S1 vs T-960):
-  merge ABORTED; T-612 S1b union on 2a0edbd8 (c10001) -> take its file whole, format service.ts, QC, gate, land, T-731.
-- T-938 lane a3554d40: 4th Job (3 lost: Pending, bg limit, session end).
+  13:25 merged integration + T-612 S1b (QA PASS 10202; its 2 files whole; jobRun.test.ts union) = 5c05f72d (wip/main-5c05f72):
+  QC rc124 (jobRun.test.ts filled /tmp, T-1032; format red quickCheck.test.ts + service.ts) -> fmt Job (2nd try, cluster full).
+- T-938 DONE 259935e8 (Job 6bd127a4 rc0) -> blind review d9f18599 -> coordinator lands. Lane a3554d40 -> T-974 URGENT
+  (rule guard git argv, ruleGuard.ts; rule class: blind review, coordinator removes deny lines after PASS).
 - URGENT T-948 port proxy (9810): S1 BE INFRA 2 2a0edbd8 OPUS (security), ticket/T-948-port-proxy; app-<ws>-<port> subdomain (9811).
-  S1 fix f70c72bd (Job 79cec835 rc0, 33/33, M6 killed; 10179) -> RE-CHECK c691df71. S2 fix d08465f9 (Job 1caf0599 rc0, 14/14)
-  -> d9f18599 read PASS 10097, confirming rc. Then premerge S1+S2, ux check by d9f18599 (390/1280, light/dark, scratch portal),
-  blind review S1 (security), QC, gate, land, coordinator deploys. Paused: T-921 0dfff348, T-379 S3 9dfecffb (resume after).
-- T-976 __Host- cookie (security; blind review + coord live check): 2a0edbd8 opus, ticket/T-976-host-cookie from integration.
-- T-612 S1b 37b86955 (Job 829d6994 rc0, 2 mutants killed): QA be63acc8 -> on PASS take its quick-check.sh whole into b30.
+  S1 fix f70c72bd (Job 79cec835 rc0) -> RE-CHECK c691df71. S2 d08465f9 RECHECK PASS 10189; UX code-read only (no browser in
+  qa lane): visual look on the premerge scratch portal later. Blind review S1 (d9f18599) PWC 10219: 2 Majors (upstream timeout +
+  bridge caps; upgrade lifetime) + minors -> FIX2 5d929014 by 2a0edbd8 (10220; Job queued); deploy before T-976 own apps only.
+  Premerge t948 b2d62bfd (wip/t948-b2d62bf): QC running; then FIX2, gate, land. Paused: T-921 0dfff348, T-379 S3 9dfecffb.
+- T-976 __Host- cookie (security; blind review + coord live check): 2a0edbd8 opus, test fix a418de31, Job queued.
+  15:25 cluster full (node2 CPU 87% reserved): every Job queues ~1 h, several lost Pending; re-run once each (D-75).
 - T-382 S5 test gaps 1,2,4 (9691): FE 3753d3c2 sonnet, ticket/T-382-s5 from wip/main-e4e52fa; gap 3 (unbounded total) Backend later.
 - T-425 S2b 357ff021: QA be63acc8 PWG 9970 (mutant B survives) -> test fix on next free Backend slot; same QA re-checks (T-595 10014).
-- Worker job-run commands: no `; echo RC=$?` suffix (allow list refuses it, T-612 10184); FOR THE COORDINATOR on T-595.
 - T-436 S3 + T-772 S2g fe676258: QA PWG (T-595 10003) -> batch 31; permissions class: coordinator live check before close (D-81).
 - T-294 PWG 9858: crew_post/read + idle-child reuse not built -> slice after T-948 (T-595 9871).
 - After T-948, planned together: T-968 General Manager (D-80, plan 9969; S0 scribe + S2 MCP tools incl. T-965 first),

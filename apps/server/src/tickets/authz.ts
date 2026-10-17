@@ -14,6 +14,14 @@ export const TICKET_BUMP_POLICIES = {
   'POST /api/tickets/:id/bump': { kind: 'objects', checks: [ticket('operate'), { type: 'session', verb: 'operate', from: 'body', param: 'sessionId' }], audit: 'ticket.bumped' },
 } satisfies RoutePolicies;
 
+/** Attachments (owner, 2026-10-17): seeing them needs view on the ticket, adding or removing one needs operate. */
+export const TICKET_ATTACHMENT_POLICIES = {
+  'GET /api/tickets/:id/attachments': { kind: 'objects', checks: [ticket('view')] },
+  'POST /api/tickets/:id/attachments': { kind: 'objects', checks: [ticket('operate')], audit: 'ticket.attached' },
+  'GET /api/tickets/:id/attachments/:attachmentId': { kind: 'objects', checks: [ticket('view')] },
+  'DELETE /api/tickets/:id/attachments/:attachmentId': { kind: 'objects', checks: [ticket('operate')], audit: 'ticket.attachment_removed' },
+} satisfies RoutePolicies;
+
 export const TICKET_BUMP_TOOL_POLICIES = {
   ticket_bump: {
     kind: 'objects',
@@ -40,7 +48,7 @@ export const TICKET_VERDICT_TOOL_POLICIES = {
 } satisfies ToolPolicies;
 
 export function declareTicketPolicies(): void {
-  declarePolicies('tickets', TICKET_BUMP_POLICIES);
+  declarePolicies('tickets', { ...TICKET_BUMP_POLICIES, ...TICKET_ATTACHMENT_POLICIES });
   declareToolPolicies('tickets', { ...TICKET_BUMP_TOOL_POLICIES, ...TICKET_ADOPT_TOOL_POLICIES, ...TICKET_VERDICT_TOOL_POLICIES });
 }
 

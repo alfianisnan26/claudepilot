@@ -3393,6 +3393,30 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 786,
+    name: 'tickets: attachments (any file, kept by the portal)',
+    up(db) {
+      // Owner, 2026-10-17: tickets carry files ("all files"). The bytes live under <dataDir>/ticket-files/<sha256> (0700 directory, 0600 files),
+      // apart from the chat blobs (chat retention removes blobs no chat row links). A row is one file on one ticket; removing the row
+      // keeps the file while another row (any ticket) still names its sha256. `actor` is `ui`, `session:<id>` or `portal-mcp:<token id>`.
+      db.exec(`
+        CREATE TABLE ticket_attachments (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          ticket_number INTEGER NOT NULL REFERENCES tickets (number) ON DELETE CASCADE,
+          name TEXT NOT NULL,
+          size INTEGER NOT NULL CHECK (size >= 0),
+          media_type TEXT NOT NULL,
+          sha256 TEXT NOT NULL CHECK (length(sha256) = 64),
+          actor TEXT NOT NULL,
+          actor_label TEXT NOT NULL,
+          at TEXT NOT NULL
+        ) STRICT;
+        CREATE INDEX ticket_attachments_ticket ON ticket_attachments (ticket_number, id);
+        CREATE INDEX ticket_attachments_sha ON ticket_attachments (sha256);
+      `);
+    },
+  },
 ];
 
 /**

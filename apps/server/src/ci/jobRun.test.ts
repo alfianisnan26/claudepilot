@@ -323,7 +323,7 @@ test('a run: the suspended Job manifest, the stream, the exit code, the artifact
     /"podAntiAffinity".*"namespaces":\["isnan-claudepilot-workspaces"\].*"claudepilot.managed":"true"/,
   );
   // T-524: memory requested = limited, so the scheduler only places the Job where all of it fits; /tmp (in memory) inside that limit.
-  assert.deepEqual(c.resources, { requests: { cpu: '1000m', memory: '4Gi' }, limits: { cpu: '4', memory: '4Gi' } });
+  assert.deepEqual(c.resources, { requests: { cpu: '500m', memory: '4Gi' }, limits: { cpu: '4', memory: '4Gi' } });
   // T-401: fetch-home holds the fetch container's credential helper and .npmrc; the run container never mounts it.
   assert.deepEqual(pod.volumes, [
     { name: 'tmp', emptyDir: { medium: 'Memory', sizeLimit: '2Gi' } },
@@ -542,7 +542,7 @@ test('T-524 --big: 8Gi requested = limited, /tmp 4Gi; the default is 4Gi with /t
     assert.equal(r.code, 0, r.out);
     assert.match(r.out, new RegExp(`on k3s-master with ${mem}; log: `));
     const m = yamlLoad(w.applied1()) as Manifest;
-    assert.deepEqual(container(m).resources, { requests: { cpu: '1000m', memory: mem }, limits: { cpu: '4', memory: mem } });
+    assert.deepEqual(container(m).resources, { requests: { cpu: '500m', memory: mem }, limits: { cpu: '4', memory: mem } });
     assert.deepEqual((m.spec.template.spec.volumes as { name: string; emptyDir: unknown }[])[0], {
       name: 'tmp',
       emptyDir: { medium: 'Memory', sizeLimit: tmp },
