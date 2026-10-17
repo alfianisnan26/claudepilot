@@ -1601,7 +1601,9 @@ const GITC_SWAPPERS = new Set(['ln', 'mv', 'cp', 'rm', 'rmdir', 'mkdir', 'tar', 
 // subcommand, its flags and its words, with the values of -m, -F and --message left out, and refused by subcommand and flags.
 const GIT_PROTECTED = ['stg', 'main', 'uat'];
 // Subcommands read by the policy; for every other one the earlier rules (rule files named, paths) are all that apply.
-const GIT_POLICED = new Set(['reset', 'clean', 'restore', 'checkout', 'switch', 'rebase', 'branch', 'push', 'commit', 'worktree', 'fetch', 'ls-remote', 'clone', 'pull']);
+const GIT_POLICED = new Set(['reset', 'clean', 'restore', 'checkout', 'switch', 'rebase', 'branch', 'push', 'commit', 'worktree', 'fetch', 'ls-remote', 'clone', 'pull', 'remote']);
+// git remote subcommands that change where a fetch or push goes (the same effect as the remote.*.url keys): refused. -v, show and get-url read.
+const GIT_REMOTE_WRITES = new Set(['add', 'set-url', 'rename', 'remove', 'rm', 'set-branches', 'set-head']);
 // Where a pattern or a variable could hide a protected branch or a flag.
 const GIT_NO_GLOB = new Set(['reset', 'restore', 'checkout', 'switch', 'branch', 'push', 'worktree']);
 // Short flags that take a value (the rest of the cluster, else the next word) for the subcommands that carry a message.
@@ -1716,6 +1718,7 @@ function gitPolicy(sub, rest) {
     }
     return null;
   }
+  if (sub === 'remote') return GIT_REMOTE_WRITES.has(pos[0]) ? no(pos[0] + ' (it changes where a push goes)') : null;
   if (sub === 'commit') return has('-n') || long('--no-verify', 6) ? no('--no-verify') : null;
   if (sub === 'worktree') return pos[0] === 'remove' ? no('remove') : null;
   if (sub === 'clone') return has('-u', '-c') || long('--config', 5) || long('--template', 5) ? no('with --config, --template or -u') : null;

@@ -1057,9 +1057,11 @@ working. A session takes the hook when it starts: one started before the guard l
   refused (set or read), as are `core.*` keys that run a program, `include.*`, `credential.*` and `filter.*`.
   **What is not read.** A plain `git <sub>` with no `-C` is left to the allow and deny rules (a prefix deny still works there); the
   guard reads only lines with `-C`, `--git-dir` or `--work-tree`. Also not read, `pull --rebase`, a bare `git push` (the branch it
-  pushes is the current one) and every subcommand off this list: `merge`, `cherry-pick`, `revert`, `stash`, `tag`, `remote`
-  (including `remote set-url`), `add`, `rm`, `mv`, `am`, `apply`, `reflog`, `gc`, `notes`. The policed ones are `reset`, `clean`,
-  `restore`, `checkout`, `switch`, `rebase`, `branch`, `push`, `commit`, `worktree`, `fetch`, `ls-remote`, `clone` and `pull`.
+  pushes is the current one) and every subcommand off this list: `merge`, `cherry-pick`, `revert`, `stash`, `tag`, `add`, `rm`, `mv`, `am`, `apply`, `reflog`, `gc`, `notes`. The policed ones are `reset`, `clean`,
+  `restore`, `checkout`, `switch`, `rebase`, `branch`, `push`, `commit`, `worktree`, `fetch`, `ls-remote`, `clone`, `pull` and,
+  from the blind re-check (10774), `remote`: `remote add`, `set-url`, `rename`, `remove`, `rm`, `set-branches` and `set-head` are refused (they
+  move where a push or fetch goes, like the `remote.*.url` keys), while `remote`, `remote -v`, `remote show` and `remote get-url` pass. The
+  tests also keep a mixed-case `-c Remote.origin.pushurl=…` row, so a later relaxation of the refusal of `-c` is caught.
   **`commit --amend` is allowed**: a commit that was pushed can only be replaced by a force push, and a force push is refused.
   Tests: `ruleGuard.test.ts` "T-974" (every refused form and the harmless shapes). The programs' text denies for these forms
   become removable after a blind PASS (D-60); that is the coordinator's step.

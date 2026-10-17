@@ -977,6 +977,21 @@ test('T-974: git -C is refused by subcommand and flags; messages, HEAD~1, grep -
   mkdirSync(join(wt, '.git'), { recursive: true }); // so --git-dir below names a folder that exists and the refusal is the policy's
   const REFUSED: [string, string][] = [
     ['reset --hard', `${c} reset --hard origin/integration`],
+    // T-974 (blind re-check 10774): git remote changes where a push goes, like the remote.*.url keys.
+    ['remote set-url', `${c} remote set-url origin https://example.invalid/other.git`],
+    ['remote set-url --push', `${c} remote set-url --push origin https://example.invalid/other.git`],
+    ['remote add', `${c} remote add other https://example.invalid/other.git`],
+    ['remote add -f', `${c} remote add -f other https://example.invalid/other.git`],
+    ['remote rename', `${c} remote rename origin old`],
+    ['remote remove', `${c} remote remove origin`],
+    ['remote rm', `${c} remote rm origin`],
+    ['remote set-branches', `${c} remote set-branches origin main`],
+    ['remote set-head', `${c} remote set-head origin -d`],
+    ['remote with a flag before the subcommand', `${c} remote -v add other https://example.invalid/o.git`],
+    ['remote of a variable subcommand', `${c} remote $S origin x`],
+    // A future relaxation of -c would reopen a push redirect: keep one mixed-case row for it.
+    ['-c Remote.origin.pushurl (mixed case)', `${c} -c Remote.origin.pushurl=https://example.invalid/other.git push origin HEAD`],
+    ['-c REMOTE.ORIGIN.URL (upper case)', `${c} -c REMOTE.ORIGIN.URL=https://example.invalid/other.git fetch`],
     ['reset --hard abbreviated', `${c} reset --ha HEAD~1`],
     ['reset --hard after a ref', `${c} reset HEAD~1 --hard`],
     ['clean', `${c} clean -fd`],
@@ -1053,6 +1068,10 @@ test('T-974: git -C is refused by subcommand and flags; messages, HEAD~1, grep -
   }
   assert.equal(misses.join('\n'), '');
   const ALLOWED: [string, string][] = [
+    ['remote', `${c} remote`],
+    ['remote -v', `${c} remote -v`],
+    ['remote show origin', `${c} remote show origin`],
+    ['remote get-url', `${c} remote get-url origin`],
     ['a message with restore', `${c} commit -m "restore the file"`],
     ['a message with clean', `${c} commit -m 'clean up the notes'`],
     ['a message with reset --hard', `${c} commit -m "docs: never reset --hard or rebase"`],
