@@ -19,18 +19,19 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - BATCH 29 ON INTEGRATION edde2073 (gate edde207 GREEN, suite 741s; quick-check 11 files green; first gate 4258f72 green, re-gated
   after 44fba442 T-623 browser image): T-524 S3c+T-733 S5, T-881 S1b, T-416 S2c (lead's mechanical controller.ts resolution
   67198848, APPROVE 9219), T-382 S1, T-781 S8c, T-675 R2c+R2d. Coordinator told T-731 9271.
-## IN FLIGHT (6 of 6, D-71; all respawned after the 23:10 workspace restart, coordinator's)
-- BATCH 30 (after QA): T-382 S2+fix+S3 fdb33268 (9277, Job d111cbd0; QA BE 2 re-check queued), T-436 S1 (QA PWG) + S2, T-425, T-772 S2f, T-736 S3f+S3g, T-612 S1 a5207db0.
-- IMPL fca8e37d (was 11db3b81: T-436 S2 DONE 34a5b293 9239, Job a0475f70, 3 mutants killed -> QA BE 2). NOW T-868 S3 drop
-  --hook (ticket/T-868-s3 00b6e38a = S2 + integration merged by lead for new rules).
-- BACKEND 442e397a: T-382 S2 fix + S3 DONE fdb33268 (9277; relay of QA FAIL 9261). NOW T-382 S4 cursor on ci/runs, chat/audit,
-  lab/slices, same branch on top of fdb33268.
-- BE INFRA 711853b8 sonnet (was 07572c46: T-612 S1 DONE a5207db0 9272, Job 838b9585 prettier/eslint catch bad files; S2a = 9135
-  counts, no commit) NOW T-860 S2c (8936, 8845) on ticket/T-860-s2c from integration 7d49477f. T-612 S1 -> QA BE 2, lead quick-check.
-- QA UI 0cf56a8e (was 66c13056): QA T-772 S2f b36f6a54 (Job cut at 23:10) -> T-736 S3g 4eb08f4e, T-425 c22a76b3 (if not done).
-- QA BE 2 05c187ae (was b6579580: T-436 PWG, T-382 S1 PWG, T-416 S2c PWG 9173): b29 resolution APPROVE 9219; T-382 S2 FAIL.
-  NOW QA T-436 S2 34a5b293 -> T-612 S1 as it lands -> T-382 S2+S3 re-check.
-- QA PERF bf2e403a (was 82f006cf: T-781 S8c PWG 9132, T-675 PWG): post T-675 verdict, T-781 engine.test Job -> perf QA T-382 S2.
+## IN FLIGHT (6 of 6, D-71; pausing for the 00:50 restart; PAUSED shas below)
+- BATCH 30 READY after lead quick-check: T-772 S2f b36f6a54 (QA UI PWG 9301; S2g follow-up: comma selectors + media regex),
+  T-736 S3g 4eb08f4e (QA UI 9008), T-612 S1 a5207db0 (QA BE 2 PWG 9280; S2 = fix/exclude the 16 lint errors), T-868 S3
+  0a818680 (DONE 9299, Job 9bb7f09d, 13 mutants red -> NEEDS QA). Pending QA: T-436 S1+S2 34a5b293, T-382 S2+fix+S3 fdb33268,
+  T-425 c22a76b3 (QA UI: NOT VERIFIED, read only).
+- QA BE 2 05c187ae PAUSED 4a838735: its T-436 S2 and T-382 re-check verdicts were in earlier replies, NOT its last ->
+  after restart: repost both as the LAST reply (relay via a lane spawned with that ticket).
+- IMPL fca8e37d PAUSED 0a818680 (T-868 S3 DONE). Next: a new ticket (new branch = new worker).
+- BACKEND 442e397a: T-382 S4 (ci/runs, chat/audit, lab/slices) on ticket/T-382-s3-tickets on top of fdb33268. PAUSED awaited.
+- BE INFRA 711853b8: T-860 S2c on ticket/T-860-s2c. PAUSED awaited.
+- QA UI 0cf56a8e PAUSED b36f6a54: next QA T-425 c22a76b3 (one Job caps.test.ts + rowMeta.test.ts + mutants; badge 390/1280).
+- QA PERF bf2e403a PAUSED 8cb00f79: engine.test Job 7c22e2b1 never ran (Pending 900s, master >75% mem) -> re-run after
+  restart, then perf QA T-382 S2+S3 fdb33268.
 
 ## DECISIONS (binding)
 - 00:35 Coordinator: 2nd workspace RESTART 00:50 UTC (browser image t623-2026.10.16-1). All 6 lanes told: push WIP, no Job after
