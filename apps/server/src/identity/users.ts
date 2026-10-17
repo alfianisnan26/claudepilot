@@ -123,6 +123,36 @@ export class PortalUsers {
     return view(this.#row(id));
   }
 
+  /** The account with this email, or null. */
+  byEmail(rawEmail: string): PortalUser | null {
+    const email = normalizeEmail(rawEmail);
+    const r = this.#db().prepare('SELECT * FROM users WHERE email_key = ?').get(email) as Row | undefined;
+    return r ? view(r) : null;
+  }
+
+  /**
+   * An account an SSO provider vouches for (identity/sso.ts): no password anyone knows (a hash of 32 random bytes, never shown), so it
+   * signs in only through its provider until an admin sets a password.
+   */
+  async createExternal(rawEmail: string, displayName: string, role: 'admin' | 'member', by: string): Promise<PortalUser> {
+    const email = normalizeEmail(rawEmail);
+    if (!EMAIL.test(email) || email.length > 254) throw new AppError('VALIDATION_FAILED', 'The provider gave no valid email address.');
+    if (this.#db().prepare('SELECT 1 FROM users WHERE email_key = ?').get(email)) throw new AppError('CONFLICT', 'An account with that email exists.');
+    const hash = await this.hasher.hash(randomBytes(32).toString('base64url'));
+    const id = `u_${randomBytes(9).toString('base64url')}`;
+    const at = this.now().toISOString();
+    const name = (displayName.replace(/[\u0000-\u001f\u007f]/g, '').trim() || email.split('@')[0]!).slice(0, 60);
+    this.#w()
+      .prepare('INSERT INTO users (id, email, email_key, display_name, role, state, password_hash, password_changed_at, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(id, email, email, name, role === 'admin' ? 'admin' : 'member', 'active', hash, at, at, by);
+    return view(this.#row(id));
+  }
+
+  /** A sign-in that did not go through `verify` (SSO): the last sign-in time. */
+  touchLogin(id: string): void {
+    this.writable()?.prepare('UPDATE users SET last_login_at = ? WHERE id = ?').run(this.now().toISOString(), id);
+  }
+
   /** What the account is now (portal.roleOf): its role while active, 'disabled', or null when it is gone. Read on every request. */
   roleOf(id: string): 'admin' | 'member' | 'disabled' | null {
     const r = this.db()?.prepare('SELECT role, state FROM users WHERE id = ?').get(id) as { role: 'admin' | 'member'; state: string } | undefined;

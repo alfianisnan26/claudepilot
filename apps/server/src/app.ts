@@ -22,8 +22,8 @@ import {
   type LoginRequest,
   type CreatePortalUserRequest,
   type DelegatedSession,
-  type SessionGrantLevel,
-  type SessionGrantRequest,
+  type SessionShareCap,
+  levelOfCaps,
   type ChatEvent,
   DELEGATED_EVENTS_MAX,
   SESSION_GRANT_API,
@@ -113,6 +113,11 @@ import { createClaudeVersionRoutes, createWorkspaceClaudeVersionRoutes, type Cla
 import { createCodespacesRoutes, type Codespaces } from './codespaces/index.js';
 import type { Platform } from './platform/index.js';
 import { actorOf, actorString, actorUserId, visible } from './authz/seam.js';
+import type { HeldShare } from './identity/grants.js';
+import type { OidcClient } from './identity/oidc.js';
+import { identityRoutes } from './identity/routes.js';
+import { SsoProviders } from './identity/sso.js';
+import { PortalTeams } from './identity/teams.js';
 import { assetCompress, jsonCompress } from './jsonCompress.js';
 
 type Env = { Bindings: HttpBindings; Variables: { token: string } };
@@ -181,6 +186,7 @@ export function createApp(
     platform,
     claudeVersions,
     connect,
+    oidc,
   }: {
     serveWeb: boolean;
     notify?: (...topics: LiveTopic[]) => void;
@@ -226,6 +232,8 @@ export function createApp(
     claudeVersions?: ClaudeVersions;
     /** Connect: targets and agents enrolled from the web (`/api/connect` behind the session; `/connect/` for agents, no cookie). */
     connect?: ConnectModule;
+    /** The OpenID Connect client SSO sign-in uses (tests give one that talks to a fake provider). */
+    oidc?: OidcClient;
   },
 ) {
   const app = new Hono<Env>();
@@ -235,6 +243,9 @@ export function createApp(
   const users = new PortalUsers(() => store.db, undefined, undefined, () => (store.writable ? store.db : null));
   // Session delegation (owner, 2026-10-17): one session to one account at view or operate.
   const grants = new SessionGrants(() => store.db, () => (store.writable ? store.db : null));
+  // Teams and SSO (owner, 2026-10-17): accounts in teams, sessions shared to a team, sign-in through an OpenID Connect provider by domain.
+  const teams = new PortalTeams(() => store.db, () => (store.writable ? store.db : null));
+  const sso = new SsoProviders(() => store.db, () => (store.writable ? store.db : null), () => store.secrets, users, teams, oidc);
   // Review #5: the attempt counters are swept once an hour.
   const sweep = setInterval(() => {
     try {
@@ -339,6 +350,10 @@ export function createApp(
     if (email !== undefined || password !== undefined) {
       // T-118: an email account. ITS OWN throttle (per email and per address, identity/throttle.ts) applies; the server-code limiter is
       // neither counted nor reset here (review #1: an account holder could otherwise reset the code's limiter between guesses).
+      // Owner, 2026-10-17: an email on a domain an SSO provider vouches for signs in there, never with a password (the same answer
+      // whether the account exists or not).
+      if (typeof email === 'string' && sso.forEmail(email))
+        throw new AppError('FORBIDDEN', 'This email signs in with SSO.', { details: { sso: 'Use the SSO button.' } });
       try {
         const user = await users.verify(email, password, key);
         token = portal.openSession(user.id);
@@ -385,31 +400,52 @@ export function createApp(
   });
 
   // The delegate's door gets the same hostile workspace-id check every signed-in route gets (QA-029), before a handler sees the body.
-  app.use('/api/me/*', async (c, next) => {
+  const refuseHostileIds = createMiddleware<Env>(async (c, next) => {
     const field = await hostileWorkspaceField(c);
     if (field) throw new AppError('VALIDATION_FAILED', 'A workspace is `<target>/<name>`.', { details: { [field]: 'Not a workspace.' } });
     await next();
   });
+  app.use('/api/me/*', refuseHostileIds);
+  app.use('/api/teams/*', refuseHostileIds);
+  // Teams (an account's side), session shares and SSO sign-in: identity/routes.ts. The SSO door needs no session; the team pages check
+  // the account themselves; the admin side is mounted on the admin router below.
+  const identity = identityRoutes({
+    portal,
+    users,
+    teams,
+    grants,
+    sso,
+    sessions: chatController,
+    audit,
+    cookie,
+    ttlMs,
+    trustProxy: config.trustProxy,
+    publicUrl: process.env.PORTAL_SSO_ORIGIN?.trim() || null,
+    clientKey,
+    body,
+  });
+  identity.mountPublic(app);
+
   // ---------- Session delegation: the delegate's door (an account session holding a grant; checked on EVERY request) ----------
   // Review M1: one account's reads and writes on the door are bounded (the view polls every 2.5 s: 24 a minute).
   const delegateLimiter = new RateLimiter(240, 60 * 1000);
-  const delegate = (c: Context<Env>, need: SessionGrantLevel) => {
+  const delegate = (c: Context<Env>, need: SessionShareCap) => {
     const s = portal.anySession(getCookie(c, cookie));
     if (!s) throw new AppError('UNAUTHORIZED', 'Sign in again.');
     if (!s.userId) throw new AppError('NOT_FOUND', 'Not found.');
     if (delegateLimiter.blocked(s.userId)) throw new AppError('RATE_LIMITED', 'Too many requests. Wait a minute.');
     delegateLimiter.fail(s.userId);
     const id = chatController.resolve(c.req.param('id') ?? '');
-    const held = grants.held(id, s.userId);
+    // Its own shares and its teams' shares, live ones only (an expiry or leaving a team ends it here, on the next request).
+    const held = grants.held(id, s.userId, teams.idsOf(s.userId), (t) => teams.nameOf(t));
     // The same not-found for a session that does not exist and one that is not yours: nothing is told.
     if (!held) throw new AppError('NOT_FOUND', 'Not found.');
-    const level = held.level;
-    if (need === 'operate' && level !== 'operate') throw new AppError('FORBIDDEN', 'This session is shared with you to view only.');
-    // Re-review: a session that went into Bypass after an operate grant is read-only to the delegate until the owner shares it again
-    // and accepts Bypass (checked on every act, not only at the grant).
-    if (need === 'operate' && !held.bypassAck && chatController.get(id)?.mode === 'bypassPermissions')
+    if (!held.caps.includes(need)) throw new AppError('FORBIDDEN', need === 'read' ? 'Not shared with you.' : `This share does not let you ${need === 'respond' ? 'answer approvals' : need}.`);
+    // A session that went into Bypass after the share is read-only to the delegate until the owner shares it again and accepts Bypass
+    // (checked on every act, not only at the share).
+    if ((need === 'send' || need === 'respond') && !held.bypassAck && chatController.get(id)?.mode === 'bypassPermissions')
       throw new AppError('FORBIDDEN', 'This session is in Bypass now. Ask the owner to share it again.');
-    return { id, userId: s.userId, level };
+    return { id, userId: s.userId, held };
   };
   // Review M2: a delegate gets what its view shows and nothing more: the main thread's messages, tool names, approvals and errors. No tool
   // output, thinking, tool inputs, files or sub-agent lines (they carry what the agent read in the workspace).
@@ -432,23 +468,26 @@ export function createApp(
           return [];
       }
     });
-  const delegated = (id: string, level: SessionGrantLevel): DelegatedSession | null => {
+  const delegated = (id: string, held: HeldShare): DelegatedSession | null => {
     const x = chatController.get(id);
-    return x ? { id: x.id, title: x.title, state: x.state, workspaceId: x.workspaceId, waiting: x.waiting ?? 0, level } : null;
+    return x
+      ? { id: x.id, title: x.title, state: x.state, workspaceId: x.workspaceId, waiting: x.waiting ?? 0, level: levelOfCaps(held.caps), caps: held.caps, expiresAt: held.expiresAt, via: held.via }
+      : null;
   };
   app.get(SESSION_GRANT_API.mine, (c) => {
     const s = portal.anySession(getCookie(c, cookie));
     if (!s?.userId) throw new AppError('UNAUTHORIZED', 'Sign in again.');
-    return c.json(success(grants.forUser(s.userId).map((g) => delegated(g.sessionId, g.level)).filter((x): x is DelegatedSession => !!x)));
+    const held = grants.sessionsFor(s.userId, teams.idsOf(s.userId), (t) => teams.nameOf(t));
+    return c.json(success([...held].map(([id, h]) => delegated(id, h)).filter((x): x is DelegatedSession => !!x)));
   });
   app.get('/api/me/sessions/:id', (c) => {
-    const d = delegate(c, 'view');
-    const x = delegated(d.id, d.level);
+    const d = delegate(c, 'read');
+    const x = delegated(d.id, d.held);
     if (!x) throw new AppError('NOT_FOUND', 'Not found.');
     return c.json(success(x));
   });
   app.get('/api/me/sessions/:id/events', (c) => {
-    const d = delegate(c, 'view');
+    const d = delegate(c, 'read');
     const after = c.req.query('after');
     if (after !== undefined) {
       // Review M1: bounded; a delegate far behind gets the newest DELEGATED_EVENTS_MAX, never the whole transcript.
@@ -462,7 +501,7 @@ export function createApp(
     return c.json(success({ ...page, events: delegateView(page.events) }));
   });
   app.post('/api/me/sessions/:id/send', async (c) => {
-    const d = delegate(c, 'operate');
+    const d = delegate(c, 'send');
     const { text, uuid } = await body<{ text: string; uuid: string }>(c);
     if (typeof text !== 'string' || !text.trim()) throw new AppError('VALIDATION_FAILED', 'Write a message.');
     const id = typeof uuid === 'string' && /^[A-Za-z0-9-]{8,64}$/.test(uuid) ? uuid : crypto.randomUUID();
@@ -471,7 +510,7 @@ export function createApp(
     return c.json(success({ ok: true, uuid: id }));
   });
   app.post('/api/me/sessions/:id/respond', async (c) => {
-    const d = delegate(c, 'operate');
+    const d = delegate(c, 'respond');
     const { requestId, decision, note } = await body<{ requestId: string; decision: string; note?: string }>(c);
     if (typeof requestId !== 'string' || (decision !== 'allow' && decision !== 'deny')) throw new AppError('VALIDATION_FAILED', 'Answer allow or deny.');
     await chatController.respond(d.id, requestId, decision, { note: typeof note === 'string' ? note.slice(0, 2000) : undefined, actor: `account:${d.userId}` });
@@ -479,7 +518,7 @@ export function createApp(
     return c.json(success({ ok: true }));
   });
   app.post('/api/me/sessions/:id/stop', async (c) => {
-    const d = delegate(c, 'operate');
+    const d = delegate(c, 'stop');
     await chatController.control(d.id, 'stop', undefined, { actor: `account:${d.userId}` });
     audit('session.delegate_stopped', d.userId, { sessionId: d.id });
     return c.json(success({ ok: true }));
@@ -536,32 +575,8 @@ export function createApp(
   const state = (c: Context<Env>) => c.json(success<AdminState>(portal.adminState(c.get('token'))));
 
   admin.get('/state', state);
-  // Session delegation, the owner's side (a full session): who holds which session.
-  admin.get('/session-grants/:sid', (c) => c.json(success(grants.forSession(chatController.resolve(c.req.param('sid'))))));
-  admin.put('/session-grants/:sid', async (c) => {
-    const sid = chatController.resolve(c.req.param('sid'));
-    if (!chatController.get(sid)) throw new AppError('NOT_FOUND', 'No such session.');
-    const { userId, level, acknowledgeBypass } = await body<SessionGrantRequest>(c);
-    const role = typeof userId === 'string' ? users.roleOf(userId) : null;
-    // Review m2: only an account that can sign in; a disabled one is refused like a missing one.
-    if (typeof userId !== 'string' || (role !== 'admin' && role !== 'member')) throw new AppError('VALIDATION_FAILED', 'Pick an account.', { details: { userId: 'An active account.' } });
-    if (level !== 'view' && level !== 'operate') throw new AppError('VALIDATION_FAILED', 'View or operate.', { details: { level: 'view or operate' } });
-    // Review m6: operate on a Bypass session is a decision the owner makes on the record, not a warning they scrolled past.
-    const bypass = chatController.get(sid)?.mode === 'bypassPermissions';
-    if (level === 'operate' && bypass && acknowledgeBypass !== true)
-      throw new AppError('VALIDATION_FAILED', 'This session is in Bypass: confirm that this account may make it run any command.', { details: { acknowledgeBypass: 'Required for operate in Bypass.' } });
-    // Review m1: who granted it, on the row and on the audit.
-    const by = portal.session(c.get('token'))?.userId ?? null;
-    const g = grants.grant(sid, userId, level, by ? `account:${by}` : 'ui', acknowledgeBypass === true);
-    audit('session.delegated', userId, { sessionId: sid, level: g.level, bypass }, bypass && level === 'operate' ? 'medium' : 'info', by);
-    return c.json(success(g));
-  });
-  admin.delete('/session-grants/:sid/:uid', (c) => {
-    const sid = chatController.resolve(c.req.param('sid'));
-    const removed = grants.revoke(sid, c.req.param('uid'));
-    if (removed) audit('session.delegation_revoked', c.req.param('uid'), { sessionId: sid }, 'info', portal.session(c.get('token'))?.userId ?? null);
-    return c.json(success({ removed }));
-  });
+  // Session shares, teams and SSO providers, the owner's side (a full session): identity/routes.ts.
+  identity.mountAdmin(admin);
 
   // T-118 MU1-min: email accounts, managed by someone already signed in (the server code or another account).
   admin.get('/users', (c) => c.json(success(users.list())));
@@ -590,6 +605,8 @@ export function createApp(
     const before = users.get(id);
     users.remove(id);
     grants.removeUser(id);
+    teams.removeUser(id);
+    sso.removeUser(id);
     portal.revokeUser(id);
     audit('account.removed', id, { email: before.email, role: before.role });
     return c.json(success({ removed: true }));

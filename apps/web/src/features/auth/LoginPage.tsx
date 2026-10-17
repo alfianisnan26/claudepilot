@@ -1,12 +1,29 @@
 import { Button } from '@isnanme/ui';
-import { CODE_LENGTH } from '@portal/contracts';
+import { CODE_LENGTH, type SsoErrorCode } from '@portal/contracts';
 import { CircleOff } from 'lucide-react';
 import { useRef, useState, type FormEvent } from 'react';
 import { AuthLayout } from '@/components/AuthLayout';
 import { InfoTip } from '@/components/InfoTip';
-import { ApiError, errorText } from '@/lib/api';
+import { api, ApiError, errorText } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { ServerCodeInput } from './ServerCodeInput';
+
+/** What an SSO sign-in that came back failed says (`/login?sso_error=<code>`). */
+const SSO_ERRORS: Record<SsoErrorCode, string> = {
+  state: 'That sign-in expired or was started in another browser. Try again.',
+  provider: 'The sign-in provider stopped the sign-in.',
+  token: 'The sign-in provider’s answer did not check out.',
+  email: 'The sign-in provider did not vouch for your email address.',
+  domain: 'Your email’s domain does not sign in through that provider.',
+  no_account: 'There is no account for your email yet. Ask an admin.',
+  disabled: 'This account is disabled.',
+  unavailable: 'Single sign-on is not available right now.',
+};
+
+const ssoErrorFromUrl = (): string | null => {
+  const code = new URLSearchParams(window.location.search).get('sso_error') as SsoErrorCode | null;
+  return code && Object.hasOwn(SSO_ERRORS, code) ? SSO_ERRORS[code] : null;
+};
 
 export function LoginPage() {
   const { state, login, loginEmail, refresh } = useAuth();
@@ -19,7 +36,10 @@ export function LoginPage() {
   const [password, setPassword] = useState('');
   const [code, setCode] = useState('');
   const [error, setError] = useState<string>();
-  const [formError, setFormError] = useState<string | null>(null);
+  const [formError, setFormError] = useState<string | null>(ssoErrorFromUrl);
+  // Owner, 2026-10-17: the email decides. Its domain on an SSO provider's list goes there; any other email asks for its password.
+  const [step, setStep] = useState<'email' | 'password'>('email');
+  const [sso, setSso] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const input = useRef<{ focus: () => void }>(null);
 
@@ -46,6 +66,30 @@ export function LoginPage() {
     }
   };
 
+  const nextStep = async () => {
+    if (loading) return;
+    setFormError(null);
+    if (!/^\S+@\S+\.\S+$/.test(email.trim())) {
+      setError('Enter your email.');
+      return;
+    }
+    setError(undefined);
+    setLoading(true);
+    try {
+      const m = await api.signInMethod(email.trim());
+      if (m.method === 'sso') {
+        setSso(m.name);
+        window.location.assign(m.start);
+        return;
+      }
+      setStep('password');
+    } catch (err) {
+      if (err instanceof ApiError && err.code === 'FORBIDDEN') void refresh();
+      else setFormError(errorText(err, 'Could not sign in.'));
+    }
+    setLoading(false);
+  };
+
   const signInEmail = async () => {
     if (loading) return;
     setFormError(null);
@@ -69,7 +113,7 @@ export function LoginPage() {
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    if (useEmail) void signInEmail();
+    if (useEmail) void (step === 'email' ? nextStep() : signInEmail());
     else void signIn(code);
   };
 
@@ -94,12 +138,29 @@ export function LoginPage() {
           <div className="flex flex-col gap-3">
             <label className="flex flex-col gap-1.5">
               <span className="text-sm font-semibold text-ink-soft">Email</span>
-              <input type="email" autoComplete="username" inputMode="email" value={email} onChange={(e) => (setEmail(e.target.value), setError(undefined))} disabled={!enabled || loading} autoFocus={enabled} className={field} aria-invalid={!!error} />
+              <input
+                type="email"
+                autoComplete="username"
+                inputMode="email"
+                value={email}
+                onChange={(e) => (setEmail(e.target.value), setError(undefined), step === 'password' && (setStep('email'), setPassword('')))}
+                disabled={!enabled || loading}
+                autoFocus={enabled}
+                className={field}
+                aria-invalid={!!error}
+              />
             </label>
-            <label className="flex flex-col gap-1.5">
-              <span className="text-sm font-semibold text-ink-soft">Password</span>
-              <input type="password" autoComplete="current-password" value={password} onChange={(e) => (setPassword(e.target.value), setError(undefined))} disabled={!enabled || loading} className={field} aria-invalid={!!error} aria-describedby={error ? 'code-error' : undefined} />
-            </label>
+            {step === 'password' && (
+              <label className="flex flex-col gap-1.5">
+                <span className="text-sm font-semibold text-ink-soft">Password</span>
+                <input type="password" autoComplete="current-password" value={password} onChange={(e) => (setPassword(e.target.value), setError(undefined))} disabled={!enabled || loading} autoFocus className={field} aria-invalid={!!error} aria-describedby={error ? 'code-error' : undefined} />
+              </label>
+            )}
+            {sso && (
+              <p role="status" className="text-sm text-ink-soft">
+                Going to {sso}…
+              </p>
+            )}
             {error && (
               <p id="code-error" role="alert" className="text-sm font-medium text-danger">
                 {error}
@@ -130,7 +191,7 @@ export function LoginPage() {
         </div>
         )}
         <Button type="submit" size="lg" loading={loading} disabled={!enabled} className="mt-2 w-full">
-          Sign in
+          {useEmail && step === 'email' ? 'Continue' : 'Sign in'}
         </Button>
         {(emailFirst || mode) && (
           <button
