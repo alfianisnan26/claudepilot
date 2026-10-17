@@ -17,6 +17,8 @@ const OTHER_WS = 'docker/other';
 
 async function build() {
   const h = await harness();
+  const routes = createCiRoutes(h.svc);
+  // After createCiRoutes: it registers the default resolver (the founding user) itself.
   registerCiAuthz(h.svc, (ws) => (ws === WS ? 'u_a' : 'u_owner'));
   const app = new Hono<{ Variables: { actor: Actor } }>();
   app.use('*', async (c, next) => {
@@ -24,7 +26,7 @@ async function build() {
     if (who) c.set('actor', ACTORS[who]!);
     await next();
   });
-  app.route('/api/ci', createCiRoutes(h.svc));
+  app.route('/api/ci', routes);
   app.onError((e, c) => {
     const err = isAppError(e) ? e : new AppError('INTERNAL_ERROR', (e as Error).message);
     return c.json(err.toJSON(), err.status as 500);
