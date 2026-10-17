@@ -669,6 +669,33 @@ test('the Job\'s own script: checkout, the command\'s exit code, the artifacts b
   assert.ok(!existsSync(join(noToken.fetchHome, '.npmrc')), 'no token, no npmrc');
 });
 
+// T-938: the Job's own script moves exactly the allowed JR_POOL_ names out of the environment and hands them to the command under their own names.
+test('T-938 the Job script: the command sees E2E_QA_EMAIL and E2E_QA_PASSWORD, JR_POOL_E2E_QA_* is not in the environment, and JR_POOL_E2E_QA_PASSWORDX is not moved', () => {
+  const root = mkdtempSync(join(tmpdir(), 'cp-jobrun-pool-'));
+  roots.push(root);
+  const git = (args: string[], cwd: string) => spawnSync('git', args, { cwd, encoding: 'utf8', env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' } });
+  mkdirSync(join(root, 'src'));
+  git(['init', '-q', '-b', 'main'], join(root, 'src'));
+  writeFileSync(join(root, 'src/README'), 'x');
+  git(['add', '.'], join(root, 'src'));
+  git(['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'one'], join(root, 'src'));
+  git(['clone', '-q', '--bare', join(root, 'src'), join(root, 'claudepilot.git')], root);
+  const email = `qa${hex(12)}`, pw = `pw${hex(16)}`, other = `ot${hex(12)}`;
+  // The command prints which of the names are in its environment: the plain names with their values, and every JR_POOL_ one by name.
+  const cmd = 'echo "email=$E2E_QA_EMAIL"; echo "pw=$E2E_QA_PASSWORD"; echo "pwx=${E2E_QA_PASSWORDX:-unset}"; compgen -e | grep "^JR_POOL_" | sed "s/^/left:/"; true';
+  const r = runPod(TEMPLATE, {
+    PATH: process.env.PATH, JR_ROOT: join(root, `run-${hex(3)}`), JR_REPO_URL: `file://${join(root, 'claudepilot.git')}`, JR_REF: 'main', JR_ALSO: '',
+    JR_STEPS: 'none', JR_ARTIFACTS: '', JR_ARTIFACT_MAX: '1', JR_CMD: Buffer.from(cmd).toString('base64'), NODE_NAME: 'k3s-master',
+    JR_POOL_E2E_QA_EMAIL: email, JR_POOL_E2E_QA_PASSWORD: pw, JR_POOL_E2E_QA_PASSWORDX: other });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, new RegExp(`email=${email}\\n`), 'the command sees E2E_QA_EMAIL');
+  assert.match(r.stdout, new RegExp(`pw=${pw}\\n`), 'the command sees E2E_QA_PASSWORD');
+  assert.match(r.stdout, /pwx=unset\n/, 'a longer name is not exported under its short name');
+  assert.doesNotMatch(r.stdout, /left:JR_POOL_E2E_QA_EMAIL\n/, 'JR_POOL_E2E_QA_EMAIL left the environment');
+  assert.doesNotMatch(r.stdout, /left:JR_POOL_E2E_QA_PASSWORD\n/, 'JR_POOL_E2E_QA_PASSWORD left the environment');
+  assert.match(r.stdout, /left:JR_POOL_E2E_QA_PASSWORDX\n/, 'the match is exact: PASSWORDX was not moved');
+});
+
 test('--against and --keep-tests: parsed into the manifest, validated; absent, the manifest carries nothing', () => {
   const w = world();
   assert.equal(w.run(['--repo', 'claudepilot', '--ref', 'main', '--', 'true']).code, 0);

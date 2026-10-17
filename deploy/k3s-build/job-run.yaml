@@ -227,11 +227,11 @@ spec:
               mkdir -p "$HOME"
               # Defined and empty: a repository's .npmrc with an auth line `${NODE_AUTH_TOKEN}` (ClaudePilot's) is refused by npm when it is not set.
               export NODE_AUTH_TOKEN=
-              # --pool-env (T-426): the container env holds each value as JR_POOL_<name>. At once they move into a shell array (not exported) and
+              # --pool-env (T-426; T-938: names E2E_CF_ACCESS_*, E2E_QA_EMAIL and E2E_QA_PASSWORD, matched exactly below): the container env holds each value as JR_POOL_<name>. At once they move into a shell array (not exported) and
               # leave the environment, so npm rebuild and the commit's lifecycle scripts do not inherit them; pool_on exports them for the
               # command alone. Known limit: this shell's own start-up environment (/proc/1/environ) still holds them: not hidden from code that reads it.
               declare -A jr_pool=()
-              for v in $(compgen -e); do case $v in JR_POOL_E2E_CF_ACCESS_*) jr_pool[${v#JR_POOL_}]=${!v}; unset "$v" ;; esac; done
+              for v in $(compgen -e); do case $v in JR_POOL_E2E_CF_ACCESS_*|JR_POOL_E2E_QA_EMAIL|JR_POOL_E2E_QA_PASSWORD) jr_pool[${v#JR_POOL_}]=${!v}; unset "$v" ;; esac; done
               pool_on() { local k; for k in "${!jr_pool[@]}"; do export "$k=${jr_pool[$k]}"; done; }
               pool_off() { local k; for k in "${!jr_pool[@]}"; do unset "$k"; done; }
               cat "$root/fetch.log" 2>/dev/null
