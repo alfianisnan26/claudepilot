@@ -8,7 +8,8 @@
 - BATCH 30 premerge-b30: T-772 S2f, T-736 S3g, T-612 S1+S1b, T-868 S1-S3, T-436 S1+S2 (deploy note), T-379 S2, T-860 S2c,
   T-382 S2-S4, lead format commits (traces T-595 9742, 9916). QC 6259948c GREEN (16 tests; jobRun.test.ts to the gate, T-1032).
   GATE 67a6e53 RED: claudeversion.test.ts reads BASE_FLAGS as one line; MY format commit 0dd31914 split it (premerge only, not
-  integration) -> e078b2f4 one line + prettier-ignore -> 2f5214f0 QC running -> re-gate. LESSON: format commits break tests that
+  integration) -> e078b2f4 one line + prettier-ignore -> 2f5214f0 QC 0201c1a2 RED format (3 tickets files from merge 60da86be)
+  -> merged integration again bc668213 -> prettier Job on the 3 files -> QC -> gate. LESSON: format commits break tests that
   read source with a regex; fmtcheck tokens can't see it: grep readFileSync(*.ts) tests and run them in the QC.
 - T-938 DONE 259935e8 (Job 6bd127a4 rc0) -> blind review d9f18599 -> coordinator lands. Lane a3554d40 -> T-974 URGENT
   (rule guard git argv, ruleGuard.ts; rule class: blind review, coordinator removes deny lines after PASS).
@@ -19,8 +20,8 @@
   Premerge t948 b2d62bfd (wip/t948-b2d62bf): QC running; then FIX2, gate, land. Paused: T-921 0dfff348, T-379 S3 9dfecffb.
 - T-976 __Host- cookie (security; blind review + coord live check): 2a0edbd8 opus, test fix a418de31, Job queued.
   15:25 cluster full (node2 CPU 87% reserved): every Job queues ~1 h, several lost Pending; re-run once each (D-75).
-- T-382 S5 DONE 472e9015 (Job febbb579 rc0, 9 mutants killed; T-595 10376) -> QA be63acc8 -> batch 31. S6 gap 3 (unbounded
-  ci total) -> same builder 3753d3c2. T-382 unassigned: comments refused, assign asked FOR THE COORDINATOR (10376).
+- T-382 S5 DONE 472e9015 QA PWG (877726a5, T-595 10427) -> batch 31. S6 gap 3 (unbounded ci total) 3753d3c2, proof Job running.
+  be63acc8 -> T-976 QA (code read; Job after builder rc). T-382 unassigned: comments refused, assign asked FOR THE COORDINATOR (10376).
 - T-425 S2b 357ff021: QA be63acc8 PWG 9970 (mutant B survives) -> test fix on next free Backend slot; same QA re-checks (T-595 10014).
 - T-436 S3 + T-772 S2g fe676258: QA PWG (T-595 10003) -> batch 31; permissions class: coordinator live check before close (D-81).
 - T-294 PWG 9858: crew_post/read + idle-child reuse not built -> slice after T-948 (T-595 9871).
