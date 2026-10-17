@@ -1036,7 +1036,7 @@ test('T-974: git -C is refused by subcommand and flags; messages, HEAD~1, grep -
     const r = sh(command);
     if (r.code !== 2) misses.push(`refused: ${what}: ${command} -> ${r.code}`);
   }
-  assert.deepEqual(misses, []);
+  assert.equal(misses.join('\n'), '');
   const ALLOWED: [string, string][] = [
     ['a message with restore', `${c} commit -m "restore the file"`],
     ['a message with clean', `${c} commit -m 'clean up the notes'`],
@@ -1096,7 +1096,7 @@ test('T-974: git -C is refused by subcommand and flags; messages, HEAD~1, grep -
     const r = sh(command);
     if (r.code !== 0) misses.push(`allowed: ${what}: ${command} -> ${r.code} ${r.stderr}`);
   }
-  assert.deepEqual(misses, []);
+  assert.equal(misses.join('\n'), '');
   // Without -C the line is not read by this policy (a text deny with a plain prefix still works there), and outside a lane workspace nothing changes.
   allowed(sh('git rebase origin/integration'), 'no -C: rebase');
 });
