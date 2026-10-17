@@ -298,7 +298,13 @@ async function realApp(serveWeb = false, cookie = 'portal_session') {
 
 async function buildRealApp(serveWeb: boolean, cookie: string, cleanup: () => void) {
   const { store } = await freshStore();
-  const platform = createPlatform({ store, settings: null, chat: new FakeChat(), uiUrl: null, pushContact: null, selfOrigin: 'http://localhost:3000', publish: () => undefined, socketAuthorized: () => true, tools: false });
+  // The chat and usage seams the server hands the platform: what FakeChat lacks is a stub, so autotransfer and keepgoing mount their
+  // routes as they do in index.ts (their ports() refuse a seam without those functions, and then the module mounts nothing).
+  const fake = new FakeChat();
+  // FakeChat keeps `#` fields: its methods run on the object itself, never on the proxy.
+  const bound = (v: unknown, t: object): unknown => (typeof v === 'function' ? (v as (...a: unknown[]) => unknown).bind(t) : v);
+  const chat = new Proxy(fake, { get: (t, p, r) => (p in t ? bound(Reflect.get(t, p, r), t) : spy(`platform.chat.${String(p)}`)) });
+  const platform = createPlatform({ store, settings: null, chat: chat as never, claudeUsage: spy('platform.claudeUsage') as never, uiUrl: null, pushContact: null, selfOrigin: 'http://localhost:3000', publish: () => undefined, socketAuthorized: () => true, tools: false });
   const cx = await openModule({ install: realInstall });
   const CODE = '24681357';
   const portal = new Portal(CODE, 60_000);
@@ -447,7 +453,10 @@ for (const serveWeb of [false, true]) {
         const before = touched.length;
         // A session of its own per request: `POST /api/logout` is public and ends the cookie it is sent with.
         const real = await send(method, url, portal.openSession(MEMBER));
-        if (real.status === 403 || real.text.includes(CODE)) wrong.push(`${key}: the real app answered a member ${real.status}`);
+        // An open door (public, bearer, handler) is not the guard's to decide: its own check answers (the connect enrollment's 403 for
+        // a missing token), so its 403 is not held against the guard. The server code shows nowhere, open door or not (the MCP
+        // endpoint's handler is a stub here: its answer is no string).
+        if ((!OPEN.has(policy.kind) && real.status === 403) || (typeof real.text === 'string' && real.text.includes(CODE))) wrong.push(`${key}: the real app answered a member ${real.status}`);
         if (!expectAllow) {
           refused++;
           if (JSON.stringify(real) !== JSON.stringify(unknown)) wrong.push(`${key}: the real app's refusal is not the unknown path's (${real.status} ${real.text.slice(0, 80)})`);
