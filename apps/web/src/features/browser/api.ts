@@ -4,7 +4,7 @@ import { BROWSER_API, type BrowserAction, type BrowserContainerState, type Brows
 import { api, ApiError } from '@/lib/api';
 
 /** The browser routes (`/api/workspaces/:target/:name/browser`): same contract as lib/api's client. */
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+export async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   let res: Response;
   try {
     res = await track(
