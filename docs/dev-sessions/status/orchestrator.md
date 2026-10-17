@@ -4,11 +4,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 
 ## DONE
 - Batches 22-24B: git history (e8b962f9, 1e9737d5). Close on "Coordinator live check" PASS (T-401 8549). T-574 re-check after 10-17 15:00Z.
-- BATCH 25 ON INTEGRATION 7c3c1e44 (gate claudepilot-gate-7c3c1e4-c387 GREEN, re-gated after release merge-back f649e481):
-  T-781 S8+S8b, T-623 S2, T-416 S2+S2b (lead's mechanical controller.ts resolution 056fe1a4). Coordinator told T-731 8617.
-- BATCH 26 ON INTEGRATION 83b7213e (gate claudepilot-gate-83b7213-b968 GREEN, suite 672s; after 3 re-merges as integration moved):
-  T-591 S3, T-610 (mig 384; pre-deploy read-only prod count of the 2 rows is the coordinator's), T-772 S2b-S2d 03b635b5 + S2c
-  464be382. Main folder ff'd (165db813 in). Coordinator told T-731 9271.
+- BATCHES 25 (7c3c1e44: T-781 S8, T-623 S2, T-416 S2) + 26 (83b7213e: T-591 S3, T-610, T-772 S2b-d): gates green; git history.
 - RESPAWN rule (coordinator, 165db813): respawn each lane BETWEEN tickets on a worktree cut from integration (or a head containing
   165db813); brief: scripts ONLY by /home/node/work/claudepilot/scripts/.... Left on old rules: QA Perf 8e8912fc, Impl is new.
 - BATCH 27 ON INTEGRATION bda180d2 (gate claudepilot-gate-bda180d-3921 GREEN, suite 888s; quick-check job-5eb2f86f green):
@@ -31,7 +27,10 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - QA BE B a8096dc9 (T-382): QA T-860 S2c e78d727b (urgent, 9331; moved from QA BE A).
 - IMPL c68578a8 (sekar, T-425): T-425 S2 on ticket/T-425-slotwait c22a76b3: QA UI FAIL 9359 (mutant "no failed mark" on
   refused wake survives; two detached sends not ordered) -> test + per-session delivery chain. Then T-772 S2g. QA of it -> QA BE.
-- QA PERF 98e910e1 (T-781): S8c re-run PASS 56/56 (job-4b9db010, 9372). T-382 perf blocked (bench write denied) -> waits S4 bench.
+- BE INFRA 2 4001099e (one.claude, T-924 URGENT): deliver /etc/claudepilot/git-c-roots (T-860 guard blocks git -C in all
+  program worktrees since deploy 286). ticket/T-924-gitc-roots from 803981f0. Lead reads diff, QA BE, gate ALONE, tell coordinator.
+- QA PERF 98e910e1 ENDED 01:35 (idle till S4; slot -> T-924). S8c PASS 56/56 (9372). Respawn for T-382 S4 bench.
+- Coordinator also gave BE Infra T-653 (TLS to exchange APIs) and T-654 (no pip in pod), normal, after T-911.
 - QA UI 11c8c19a ENDED 01:2x (queue empty after its T-425 FAIL; slot -> Impl). T-425 badge 390/1280 not verified (no browser tool).
 - 01:00 Coordinator quota spread: next spawns on one.claude, two.claude (sekar used by Impl).
 
