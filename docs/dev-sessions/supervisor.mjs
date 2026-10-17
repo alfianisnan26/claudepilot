@@ -572,6 +572,35 @@ async function ensureWorktreeTrust(sessions) {
   const folders = new Set(sessions.filter((s) => s.state !== 'ended' && leads.has(s.parentId) && s.cwd).map((s) => s.cwd));
   for (const folder of folders) await ensureTrustOfWorktree(folder);
 }
+/**
+ * A lane spawned INTO a new worktree is refused before any session runs there (FOLDER_UNTRUSTED, T-927 2026-10-17: Tradingbot's only remote
+ * is `pilot`, so the portal's identity trust does not apply), so the supervisor finds each program's worktrees itself: only folders strictly
+ * below `<repo>.worktrees/`, trusted by the same rule as above (rules only, a settings hash already trusted here).
+ */
+function ownWorktrees(repo, entries) {
+  const root = `${repo.replace(/\/+$/, '')}.worktrees/`;
+  return [...new Set((entries ?? []).map((e) => e?.path).filter((x) => typeof x === 'string' && x.startsWith(root) && x.length > root.length && !x.slice(root.length).includes('..')))];
+}
+// Hundreds of old worktrees exist (331 on 2026-10-17): a trusted folder is never scanned again in this process, one left untrusted only every
+// WORKTREE_RECHECK_MIN, and folders never seen before go first, so a new lane worktree is trusted within a round or two.
+const WORKTREE_RECHECK_MIN = Number(process.env.WORKTREE_RECHECK_MIN ?? 20);
+const worktreeSeen = new Map(); // folder -> { at, trusted }
+async function ensureRepoWorktreeTrust(now = Date.now()) {
+  const fresh = [], due = [];
+  for (const repo of [TRADINGBOT, KONFERSI, MAIN]) {
+    const r = await api('GET', `/api/chat/worktrees?workspaceId=${encodeURIComponent(WORKSPACE)}&folder=${encodeURIComponent(repo)}`);
+    const entries = Array.isArray(r.data) ? r.data : (r.data?.worktrees ?? []);
+    for (const folder of ownWorktrees(repo, entries)) {
+      const seen = worktreeSeen.get(folder);
+      if (!seen) fresh.push(folder);
+      else if (!seen.trusted && now - seen.at >= WORKTREE_RECHECK_MIN * 60_000) due.push(folder);
+    }
+  }
+  for (const folder of [...fresh, ...due]) {
+    const trusted = await ensureTrustOfWorktree(folder).then((t) => t === true).catch(() => false);
+    worktreeSeen.set(folder, { at: Date.now(), trusted });
+  }
+}
 /** Settings hashes seen trusted on this workspace, in a file of their own (the round's state is written back whole), so a restart remembers them. */
 const TRUSTED_FILE = join(STATE_DIR, 'trusted-hashes.json');
 const knownTrusted = new Set((() => {
@@ -595,7 +624,7 @@ function worktreeTrustable(scan, known) {
 async function ensureTrustOfWorktree(folder) {
   const scan = (await api('GET', `/api/chat/trust/scan?workspaceId=${encodeURIComponent(WORKSPACE)}&folder=${encodeURIComponent(folder)}`)).data;
   if (!scan) return;
-  if (scan.trusted) return rememberTrusted(scan.hash);
+  if (scan.trusted) return rememberTrusted(scan.hash), true;
   if (!worktreeTrustable(scan, knownTrusted)) {
     if (!scan.empty && !trustLogged.has(scan.hash)) log(`folder trust: ${folder} has settings never trusted here (or loads more than rules): left for the coordinator`), trustLogged.add(scan.hash);
     return;
@@ -603,6 +632,7 @@ async function ensureTrustOfWorktree(folder) {
   if (DRY) return log(`[dry] would trust the worktree ${folder} (settings already trusted elsewhere)`);
   const tr = await api('POST', '/api/chat/trust', { workspaceId: WORKSPACE, folder: scan.folder ?? folder, hash: scan.hash });
   log(tr.error ? `folder trust: refused: ${tr.error.message}` : `folder trust: the worktree ${folder} has settings already trusted here (${scan.allowRules} rules): trusted`);
+  return !tr.error;
 }
 async function ensureTrustOf(folder) {
   const scan = (await api('GET', `/api/chat/trust/scan?workspaceId=${encodeURIComponent(WORKSPACE)}&folder=${encodeURIComponent(folder)}`)).data;
@@ -744,6 +774,7 @@ async function watch({ rounds = Infinity } = {}) {
     }
     goodRounds++;
     await ensureWorktreeTrust(list).catch((e) => log(`folder trust: could not check the worktrees: ${e.message}`));
+    await ensureRepoWorktreeTrust().catch((e) => log(`folder trust: could not list the programs' worktrees: ${e.message}`));
     const steady = badAt === null || (goodRounds >= STEADY_ROUNDS && Date.now() - badAt >= HEALTH_QUIET_MIN * 60_000);
     if (netDownSince) {
       const mins = Math.round((Date.now() - netDownSince) / 60_000);
@@ -971,7 +1002,7 @@ async function watch({ rounds = Infinity } = {}) {
 
 /* ---------- Go ---------- */
 
-export { harmlessEnding, watch, STATE_FILE, bestClaude, compactDue, slotsFull, compactLanes, wakeStaleLanes, worktreeTrustable, COMPACT, COMPACT_LANE, LANES };
+export { harmlessEnding, watch, STATE_FILE, bestClaude, compactDue, slotsFull, compactLanes, wakeStaleLanes, worktreeTrustable, ownWorktrees, COMPACT, COMPACT_LANE, LANES };
 if (IS_MAIN) {
   process.on('SIGTERM', () => revokeMcpToken().finally(() => process.exit(0)));
   process.on('SIGINT', () => revokeMcpToken().finally(() => process.exit(0)));

@@ -120,8 +120,8 @@ const onlyTrue =
 export const OWNERSHIP: Record<Owner, Declaration> = {
   policy: {
     dropIn: '10-claudepilot-policy.json',
-    // Its own scripts: the rule-file guard (D-60, T-404, `settings/ruleGuard.ts`).
-    paths: ['/etc/claudepilot/bin/policy-'],
+    // Its own scripts: the rule-file guard (D-60, T-404, `settings/ruleGuard.ts`) and the roots its `git -C` check reads (T-924).
+    paths: ['/etc/claudepilot/bin/policy-', '/etc/claudepilot/git-c-roots'],
     settings: ['permissions', 'sandbox', 'availableModels', 'maxEffortLevel', 'deniedMcpServers', 'env', 'hooks'],
     // The agent policy (settings/agentEnv.ts, T-285): exact names, so no pool's catch-all can set them (`mayUseEnv`).
     env: [
