@@ -159,9 +159,10 @@ test('T-417: a lead slept in Bypass wakes in Bypass, through the gated path a Re
 test('T-425 S2: two sends to one session are written in call order, though the first one’s wake (the Bypass put back) takes longer', async () => {
   const s = await liveSession({ idleSleepMs: 200 }, true);
   try {
-    s.controller.controlTimeoutMs = 3000;
+    s.controller.controlTimeoutMs = 150; // as the other lead tests: the sleep's own control request goes unanswered
     policy(s, true);
     const lead = await leadInBypassAsleep(s);
+    s.controller.controlTimeoutMs = 3000; // then the wake's Bypass request waits for the test's answer
     const asked = bypassAsks(s).length;
     const tails = s.ws.tails.length;
     const sends = s.ws.sends.length;
