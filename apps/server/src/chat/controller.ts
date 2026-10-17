@@ -116,6 +116,7 @@ import { isLead, leadRulesSettings } from './leadRules.js';
 import { isStagedUpload } from './artifacts/records.js';
 import { redact } from './redact.js';
 import { TurnCost } from './turnCost.js';
+import { redactSecrets, stripUnsafe } from '../portalmcp/sanitize.js';
 import { crewQuote } from './crewQuote.js';
 import { NO_VALUES, SessionStream, ValueRedactor } from './valueRedact.js';
 import { HANDOFF_ACTOR, HANDOFF_QA, HandoffEngine } from './handoff.js';
@@ -4055,6 +4056,44 @@ export class ChatController {
   /** The sessions a session started, newest activity first. */
   children(rawId: string): ChatSession[] {
     return this.#chat.list({ parentId: this.#chat.resolveId(rawId) }).map((s) => this.#decorate(s));
+  }
+
+  /**
+   * T-294: the crew channel a session belongs to: its parent's (the parent and the parent's workers), or its own when it has no parent
+   * (a lead). `lead`, when given, must name that channel; any other id gets the same NOT_FOUND as one that exists nowhere, so the answer
+   * never tells a session which ids exist.
+   */
+  #crewChannel(rawId: string, lead?: string): { me: ChatSession; leadId: string } {
+    const me = this.#require(this.#chat.resolveId(rawId));
+    const leadId = me.parentId ?? me.id;
+    if (lead !== undefined && this.#chat.resolveId(lead) !== leadId) {
+      throw new AppError('NOT_FOUND', 'No such crew channel: yours is your parent’s (a lead’s own).');
+    }
+    return { me, leadId };
+  }
+
+  /** T-294: a member's message on its crew channel, stored redacted, with no slash command and no escape or invisible character in it. */
+  crewPost(fromId: string, text: string, opts: { lead?: string } = {}): { id: number; at: string; lead: string } {
+    const { me, leadId } = this.#crewChannel(fromId, opts.lead);
+    if (me.state === 'ended') throw new AppError('CONFLICT', 'This session has ended.');
+    const clean = redactSecrets(stripUnsafe(text)).trim();
+    if (!clean) throw new AppError('VALIDATION_FAILED', 'Type a message.', { details: { text: 'Required.' } });
+    const posted = this.#chat.crewPost(leadId, me.id, clean);
+    return { ...posted, lead: leadId };
+  }
+
+  /** T-294: what a member has not read on its crew channel (after its own cursor, or after `after`), and moves its cursor on unless `peek`. */
+  crewRead(
+    fromId: string,
+    opts: { lead?: string; after?: number; limit?: number; peek?: boolean } = {},
+  ): { lead: string; items: { id: number; from: string; text: string; at: string }[]; cursor: number; more: boolean } {
+    const { me, leadId } = this.#crewChannel(fromId, opts.lead);
+    const read = this.#chat.crewRead(leadId, me.id, {
+      limit: Math.min(Math.max(opts.limit ?? 20, 1), 100),
+      ...(opts.after !== undefined ? { after: opts.after } : {}),
+      ...(opts.peek ? { peek: true } : {}),
+    });
+    return { lead: leadId, ...read };
   }
 
   /** Every session below this one that hasn't ended, deepest first (what ending the parent may end with it). */

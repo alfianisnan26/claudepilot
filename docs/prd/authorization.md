@@ -768,6 +768,7 @@ Generated from the registered tool list (18 files) and checked for coverage. Sco
 | `session_spawn` | agent | agent: own session; creates a child owned by the root creator | caps and policy stay |
 | `session_message` | agent | agent: own session tree only |  |
 | `session_family` | agent R | agent: own session tree only |  |
+| `crew_post`, `crew_read` (T-294) | agent, `crew_read` R | agent: its own crew channel only (its parent's, a lead's own); the optional `lead` must name it, any other id is the same `NOT_FOUND` as a missing one; an admin token is `FORBIDDEN` | text redacted and stripped on write, `untrusted_text` on read; `chat/crewChannel.test.ts` |
 | `session_stop_worker` | agent | agent: own session tree only |  |
 | `session_request_clear` | agent | agent: a chat of its own workspace; admin: session operate session_id | never a request of the live process (409); T-284 |
 | `ci_runs_list` | agent R | list(ci_run) |  |
