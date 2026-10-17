@@ -681,6 +681,7 @@ export function createApp(
     settings?.lockdown.forgetWorkspace(`${c.req.param('target')}/${c.req.param('name')}`);
     settings?.agentEnv.forgetWorkspace(`${c.req.param('target')}/${c.req.param('name')}`);
     repos?.forgetWorkspace(`${c.req.param('target')}/${c.req.param('name')}`);
+    appPorts?.grants.forgetWorkspace(`${c.req.param('target')}/${c.req.param('name')}`);
     return c.json(success({ ok: true }));
   });
   // App ports (T-948, docs/prd/app-ports.md): the ports listening in a workspace, and the open of one on its own app host (a one-time code, audited).
