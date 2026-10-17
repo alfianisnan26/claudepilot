@@ -1,10 +1,12 @@
 import { AppError } from '@isnanme/core';
-import type { SettingChange, SettingValue, SettingView, SettingsView } from '@portal/contracts';
+import type { CursorPage, SettingChange, SettingValue, SettingView, SettingsView } from '@portal/contracts';
+import { keysetPage } from '../store/keyset.js';
 import type { Store } from '../store/store.js';
 import { settingDef, settingDefs, settingGroups, type SettingDef } from './registry.js';
 
 const invalid = (field: string, message: string) => new AppError('VALIDATION_FAILED', message, { details: { [field]: message } });
 const META = (key: string) => `setting:${key}`;
+type AuditRow = { id: number; at: string; key: string; old_value: string | null; new_value: string; actor: string };
 
 /**
  * The shared settings store: values in `portal_meta` as JSON under `setting:<key>`, defaults from the
@@ -112,15 +114,23 @@ export class Settings {
     return this.#view(def);
   }
 
-  /** The audit trail, newest first. */
-  audit(limit = 100): SettingChange[] {
+  /** The audit trail, newest first: one page (D-58: `limit` 25 by default, at most 100; `cursor` from the page before). A bad cursor is a 400. */
+  auditPage(args: { cursor?: string | undefined; limit?: unknown } = {}): CursorPage<SettingChange> {
+    const db = this.store.db;
+    if (!db) return { items: [], next: null };
+    let page: { rows: AuditRow[]; next: string | null };
     try {
-      const rows = this.store.db?.prepare('SELECT * FROM setting_changes ORDER BY id DESC LIMIT ?').all(Math.min(Math.max(limit, 1), 500)) as
-        | { id: number; at: string; key: string; old_value: string | null; new_value: string; actor: string }[]
-        | undefined;
-      return (rows ?? []).map((r) => ({ id: r.id, at: r.at, key: r.key, oldValue: r.old_value === null ? null : (JSON.parse(r.old_value) as SettingValue), newValue: JSON.parse(r.new_value) as SettingValue, actor: r.actor }));
-    } catch {
-      return [];
+      page = keysetPage<AuditRow>(db, { scope: 'settings.audit', table: 'setting_changes', sortCol: 'at', idCol: 'id' }, args);
+    } catch (e) {
+      if (e instanceof AppError) throw e;
+      return { items: [], next: null };
     }
+    const items = page.rows.map((r) => ({ id: r.id, at: r.at, key: r.key, oldValue: r.old_value === null ? null : (JSON.parse(r.old_value) as SettingValue), newValue: JSON.parse(r.new_value) as SettingValue, actor: r.actor }));
+    return { items, next: page.next };
+  }
+
+  /** The newest changes, for code that wants a plain list (at most 100). */
+  audit(limit = 100): SettingChange[] {
+    return this.auditPage({ limit }).items;
   }
 }

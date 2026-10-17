@@ -300,7 +300,7 @@ test('routes: every settings route asks the seam; what the asker may not see ans
     assert.equal((await put(owner, true)).status, 200);
     const trail = await owner.request('/api/settings/audit');
     assert.equal(trail.status, 200);
-    assert.equal(((await trail.json()) as { data: unknown[] }).data.length, 1);
+    assert.equal(((await trail.json()) as { data: { items: unknown[] } }).data.items.length, 1);
 
     // Each route is declared with the seam.
     const declared = declaredPolicies();

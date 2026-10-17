@@ -58,3 +58,11 @@ Build order and dependencies are added once the research is in.
 - **One web app, phone and desktop.** The portal is a single web frontend, installable as a PWA. Every
   screen uses the existing components and is designed for both phone and desktop widths: concise,
   consistent and fast.
+- **List API rule (D-58, T-382).** Every route that returns a list answers one page, `CursorPage<T>` in `packages/contracts/src/page.ts`:
+  `{ items, next }`, `next` an opaque cursor or null on the last page. The query is `cursor` and `limit`: 25 rows when absent, at most 100
+  (the server clamps; a value that is not a number falls back to 25). The cursor is a keyset over the sort key plus the id, signed and
+  bound to its list, never an offset (`apps/server/src/store/keyset.ts`): rows added or removed during a walk cause no repeat and no
+  skip. A bad, forged or foreign cursor is a 400 `BAD_REQUEST`, and a restart ends every cursor. A cursor only says where to resume: the
+  authz check and any visibility filter run before the query, so it never reveals a row the caller may not see, and a denial keeps the
+  seam's same 404. A list route needs a clamp-and-walk test. Done so far: `GET /api/settings/audit` (S1); the other routes follow in
+  slices.

@@ -563,7 +563,7 @@ reads the title the person's click set; a second device is a viewer and its inpu
 | F3 | Q3: downloads land in `~/Downloads` with the policy `DownloadDirectory` ✅. Q5, Q6: the stdio gate starts from a plugin `.mcp.json`, answers `initialize` and `tools/list` from pinned lists without waking Chrome, and Claude Code 2.1.296 lists it connected and calls its tools ✅. |
 | F4 | Q7: restored tabs made Playwright drive a hidden tab ✅, so there is no `RestoreOnStartup`; the gate opens its own tab (or brings it forward) and the supervisor reports the tab count. Q9: `-nolisten local` removes the abstract socket ✅. Q4: the bridge works over `exec` with a helper (`cpb-vnc`) in place of socat ✅; throughput and latency are not measured. |
 | F5 | Other portals on the same Docker daemon reaped this portal's browser containers, so every container carries the creating portal's id and a portal only touches its own, and none when it does not trust its database. |
-| F6 | The MCP lockdown matches a plugin server by its command line with `${CLAUDE_PLUGIN_ROOT}` already replaced by the plugin's version folder ✅ (the unexpanded text is blocked). The browser reports that exact line (`BrowserService.matchers`), so "Pool MCP only" keeps the browser's tools. |
+| F6 | The MCP lockdown matches a plugin server by its command line with `${CLAUDE_PLUGIN_ROOT}` already replaced by the plugin's version folder ✅ (the unexpanded text is blocked). The browser reports that exact line (`BrowserService.matchers`), so "Pool MCP only" keeps the browser's tools. **T-881 (incident 2026-10-16):** Claude Code is never told to update a plugin (the marketplace has `autoUpdate` off), so a session keeps launching the version it installed after a revision moves the plugin to a new folder; a list of only the current command blocked every new session for 15 minutes. `matchers` therefore also reports the exact commands of the pool's earlier deliverable revisions (at most five, newest first) for as long as the reconciler still holds their version folder (`pluginFolders`, kept per workspace by `BrowserKind`; every one of the five before the first delivery report after a restart). Never a pattern, never a folder the pool did not compile; when the reconciler retires a folder its command leaves the list. Residual: a session older than five revisions, or older than the retention, is blocked until it restarts. Real-Claude test: `browser.integration.test.ts` (Docker only). |
 | D1 | noVNC 1.4.0, pinned exactly: later releases ship CommonJS with top-level await, which the web build can't bundle. It loads only when the Screen view is shown. |
 | D2 | The Desktop tier is not built (no panel, terminal or desktop MCP server): the editor doesn't offer it and the pool refuses it until B4. |
 | D3 | Decision for the owner: no per-view token on the preview socket. It uses the shell socket's checks (§22). Say if a one-time token is wanted anyway. |
@@ -594,6 +594,29 @@ key's value goes to `headers.json`, never the other variables. A missing or empt
 key's name, never a value. The audit, the spec hash input and the pool hold the entry's name, the key's name and the entry's value id, never a value. The gate masks
 the value by the key's own variable name (`--redact-env <KEY>`), since the workspace has an env file's variables, not a variable called after the entry. Without
 `key` a rule behaves as before (the whole value).
+
+**S2c (T-623).**
+- A `key` that is blank or only whitespace is refused at save (`VALIDATION_FAILED`, the field `headers`, “A key can’t be blank”), never dropped: dropping it would
+  deliver the whole env-file entry, every variable in it, to the header's host. Leave `key` out for a plain single-value secret.
+- `envFileValue` drops a ` # note` after a value (whitespace, then `#`; a `#` inside a value, or inside quotes, stays), and ignores a leading byte-order mark. A key
+  that is a prefix of another variable (`CF_ID` against `CF_ID_2`) matches only its own line.
+- **How the workspace gets its variables (S2d).** The portal does not parse an env file into the workspace: `secrets/render.ts` writes one `export NAME=...` per
+  variable (`secrets/kind.ts`: a variable is one line), and `browser/compile.ts` hands the gate the NAME. `envFileValue` is the only env-file parser, and it
+  reads a value in memory for the header. A reader that keeps ` # note` (Docker's `--env-file`) can leave the variable longer than the header value. So the gate
+  masks the variable as is **and** its parsed form (after an optional `KEY=`, without quotes and without a trailing note, per line), so the real value is never
+  shorter than its mask. Test: `gate.test.ts` "keeps its note or its KEY=". The same ≥ 8 character floor applies.
+- **Key collision in masking.** The gate masks by the value of the workspace variable named `<KEY>`. If the key's name is also an unrelated variable of the
+  workspace, the gate masks that variable's value, and the header's value is masked only when the two are equal. Pick key names that are the env file's own.
+  No test covers a collision; not verified.
+- **Re-delivery on rotation.** The entry's value id is part of the delivered headers, so rotating any variable of the same entry re-delivers the headers of every
+  rule that names the entry, even one whose own key did not change, and may restart the browser. This is by design (one entry, one version).
+
+**The pool editor (T-856).** Under Advanced the editor lists the rules (`features/browser/BrowserEditor.tsx`): per rule the header name, the secret's name, the
+**Key** (an InfoTip explains it; empty means the entry's whole value, and the property is then omitted on save, since the server refuses an empty variable name) and
+the hosts, with Add and Remove (at most 10, the server's limit). Every edit goes through `headerRules.ts`, which copies the rule and changes one field, so a `key`
+(or any field the editor does not know) set through the API or MCP survives every edit and every save. Before T-856 the editor had no headers section: it kept the
+pool's `headers` unchanged on save (it spreads the content), so a rule set through the API was not lost, but it could not be seen or edited. The editor shows names
+only, never a value. Hosts commit when the field loses focus.
 
 **How it works** (no proxy: HTTPS would need a CA the browser trusts):
 

@@ -811,8 +811,8 @@ pool type, everything in §11.1 and §11.3–11.5.
 | --- | --- |
 | Registry | `defineSetting({ key, type, default, scope: 'global', group, label, help, confirmText, protective, order, min, max, integer, choices })` at import time. Areas define their own (A2's Bypass setting appeared in the list the day the store did). Keys look like `mcp.poolOnly`; a type is `boolean`, `number` or `string`. |
 | Values | `portal_meta` under `setting:<key>` (JSON with who and when); a setting never set reads as its default, and reads never fail (a Frozen portal answers with defaults). |
-| API | `GET /api/settings` (groups and settings), `PUT /api/settings/:key` (`{ value, confirm? }`), `GET /api/settings/audit`, `GET /api/settings/lockdown/:target/:name`, `GET /api/settings/agent-env/:target/:name` (§22.5). Behind the session guard and the Origin check, and every route asks the authz seam (declared in `settings/authz.ts`, T-309, T-329): the list is for every signed-in person; the lockdown and agent-env routes ask `view` on the workspace; the audit trail asks `view` and a change `manage` on the platform area `settings` (admins). What the asker may not see answers the same 404 as what does not exist. |
-| Audit | Every change: key, old and new value, actor, time (`setting_changes`). The page's History button lists them. A repeat of the current value is not a change. |
+| API | `GET /api/settings` (groups and settings), `PUT /api/settings/:key` (`{ value, confirm? }`), `GET /api/settings/audit` (a `CursorPage` of changes, newest first: `cursor` and `limit`, 25 by default and 100 at most; a bad cursor is a 400; the README's list API rule, D-58), `GET /api/settings/lockdown/:target/:name`, `GET /api/settings/agent-env/:target/:name` (§22.5). Behind the session guard and the Origin check, and every route asks the authz seam (declared in `settings/authz.ts`, T-309, T-329): the list is for every signed-in person; the lockdown and agent-env routes ask `view` on the workspace; the audit trail asks `view` and a change `manage` on the platform area `settings` (admins). What the asker may not see answers the same 404 as what does not exist. |
+| Audit | Every change: key, old and new value, actor, time (`setting_changes`). The page's History button lists them, 25 at a time with an Older button. A repeat of the current value is not a change. |
 | Confirmation | A setting with `protective: <value>` is a security switch. Moving away from that value (switching a protection off, or an agent permission on) is refused with `409 CONFIRMATION_REQUIRED` unless the request says `confirm: true`; the page asks first, in one line (`confirmText`). Turning a protection on never asks. |
 | Page | Settings, in the admin group of the navigation (phones: the More sheet). Sections by group (MCP, Agents, Sessions); a row is a label, an ⓘ with what it does, and a switch, a number field, or a segmented choice for a setting with `choices`. Nothing else is on the page. |
 
@@ -1001,6 +1001,41 @@ working. A session takes the hook when it starts: one started before the guard l
   `bash -c`, `sh` reading a heredoc, `eval`, `env`, `sudo`, `timeout`, decoded text piped into a shell or `eval`, a copy or
   move of a folder that would land a file on a rule file (`cp -r x/. .claude/`, `mv x .claude`), and a script file run
   directly (`bash fix.sh`, `./fix.sh`, `node fix.mjs`) whose code (comments left out) names a rule file and writes.
+- **`git -C <path>` outside the lane worktrees (T-860).** The lane allow rules are text (`git -C /home/node/work/agentic-worktrees/*
+  ...`), and the shell builds `..` from forms with no two dots in a row (`.''.`, `.""."`, `.'.'`, `.\.`), so a text deny cannot hold the
+  path (a write to the main folder checkout through the `commit` and merge allows). The guard reads the `-C` path as the shell does (the
+  same lexer: quotes, backslashes, ANSI-C quoting), resolves it against the command's folder (a `cd` before it counts), takes its real
+  path (symlinks followed) and allows it only strictly below a lane root: `/home/node/work/agentic-worktrees`, or a folder listed in the
+  root-owned `/etc/claudepilot/git-c-roots` (one absolute path a line, `#` comments). Refused: a path with a variable, a command
+  substitution or a backtick (`$X`, `$(...)`), a glob or brace pattern (`.?`, `.[.]`), a path that does not exist, a `-C` with no folder,
+  a relative path when the folder is unknown, a symlink that points out, the root itself and a sibling that only starts with its name.
+  Every `-C` of a command is checked (`git -C a -C b`), in a pipe, after `cd x &&`, in `bash -c`. The refusal's audit line carries the
+  form and no path (`path` is empty), never the command. The check is on only in a workspace that has the lane folder or a roots file;
+  elsewhere (no lane allow rule to guard) `git -C` is tracked as before, so it does not refuse a lead's `git -C` in its own repository.
+  **S2: the allow's `*` takes everything after the folder**, so in a lane workspace the rest of the command is read too:
+  `--git-dir` and `--work-tree` (both `=` and two-word forms) are read like `-C` and must stay below a lane root; before the subcommand
+  only `--no-pager`, `-P`, `-p`, `--paginate`, `--no-optional-locks`, `--no-lazy-fetch`, the pathspec switches, `--no-advice`,
+  `--no-replace-objects` and `--version` pass, so every `-c`, `--config-env`, `--exec-path`, `--namespace`, `--bare`, a glued `-Cpath`,
+  a `--` and a variable or pattern there are refused (after the subcommand `-c` and `-C` are git's own and pass). A `GIT_*` variable that
+  moves a folder or runs a program (`GIT_DIR`, `GIT_WORK_TREE`, `GIT_COMMON_DIR`, `GIT_CONFIG_*`, `GIT_EXEC_PATH`, `GIT_SSH_COMMAND`, ...) is
+  refused as a prefix, after `env`, `export` or `declare`; author, committer, trace and prompt variables pass. `env -C` and `sudo -D`
+  before git are read like `-C`; `find -exec git ...` is read as a git command; `alias` is refused; an unclosed quote or a trailing
+  backslash next to `git` is refused; `git config` of `core.worktree`, `core.bare`, `core.hooksPath`, `core.fsmonitor`, `core.sshCommand`,
+  `alias.*`, `include.*` and the like is refused; and a line that holds a `git -C` and, in another command, `ln`, `mv`, `cp`, `rm`, `mkdir`,
+  `tar`, `unzip` or a `git config` or `git worktree` is refused (the path is read before the line runs, so a link swapped in the same line
+  would point elsewhere). **S2b (blind review, T-860 comment 8740):** a relative `--git-dir` or `--work-tree` is refused (git applies
+  every `-C` first, so it reads the value after the last `-C`; an absolute value is still checked like `-C`); the name of a refused
+  `GIT_*` variable with no value (`export GIT_DIR`, `declare -x`), `read` into it and `printf -v` into it are refused; `GIT_TRACE*` passes
+  only as a switch or a number (it appends to any file it names); and `git config --file`, `-f`, `--global`, `--system` and `--blob` are
+  refused. **Residual (item 22):** the swap guard is a name list (`ln`, `mv`, ...); `python3 -c`, `node -e`, `perl -e`, `link`, `dd`, a
+  redirect or `git checkout` of a tracked link swap a link the same way and are not on it. The real fix is permissions (the lane user
+  cannot write where the links resolve), not more names. Out of scope, named so they are not a surprise: a race between the check and the run (permissions close it);
+  a `.git` file planted in a lane folder that points at the main repository; repository hooks; `cd M && git commit` (the cwd moves, not
+  `-C`: a sibling rule); writes from inside the lane folder to other places (`worktree add /abs`, `archive -o`, `checkout-index --prefix`,
+  `push M`), reads outside it, and `git -C <other-lane>` (a lane may reach a sibling lane: the ticket allows everything under the root).
+  Tests: `settings/ruleGuard.test.ts` (T-860), which build a scratch lane root and give it to the guard by `CLAUDEPILOT_GUARD_GITC_ROOTS_FILE`
+  (read only by the Node half, which the wrapper starts with an emptied environment, so a session cannot set it). Not yet observed in a
+  running Claude Code in a lane pod; the coordinator's deny lines (T-860 stopgap) stay as the first layer.
 
 Reads go through (`cat`, `jq`, `git diff`, `git show HEAD:.claude/settings.json > /tmp/x`), and so does every write of
 another file, `.claude/agents/*` and a `.vscode/settings.json` included.

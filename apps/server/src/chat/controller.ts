@@ -2864,17 +2864,21 @@ export class ChatController {
     this.#chat.patchSession(sessionId, { bypassCapable: true });
     // The running process wasn't started with the flag: it stops and the next launch resumes the session with it.
     const row = this.#chat.row(sessionId)!;
-    if (row.process === 'live') {
-      await this.#busy.get(sessionId);
-      this.#stopReader(sessionId);
-      this.#forget(sessionId, 'Restarting for Bypass.');
-      await this.#runOnce(row.workspace_id, ['stop', claudeSessionOf(row)]).catch(() => undefined);
-      this.#closeOut(sessionId);
-      this.#chat.patchSession(sessionId, { process: 'asleep' });
-      this.#emitSession(sessionId);
+    try {
+      if (row.process === 'live') {
+        await this.#busy.get(sessionId);
+        this.#stopReader(sessionId);
+        this.#forget(sessionId, 'Restarting for Bypass.');
+        await this.#runOnce(row.workspace_id, ['stop', claudeSessionOf(row)]).catch(() => undefined);
+        this.#closeOut(sessionId);
+        this.#chat.patchSession(sessionId, { process: 'asleep' });
+        this.#emitSession(sessionId);
+      }
+    } finally {
+      // After the close-out: `#sleptInBypass` reads the newest Bypass record, and this one would hide a kept record from the close-out that
+      // supersedes it. In a `finally`: the capability was set above, so the record of it is written even when the stop or the close-out fails.
+      this.#chat.addAudit({ severity: 'medium', kind: 'bypass.capable', sessionId, workspaceId: session.workspaceId, actor: 'ui', detail: { how: 'restart' } });
     }
-    // After the close-out: `#sleptInBypass` reads the newest Bypass record, and this one would hide a kept record from the close-out that supersedes it.
-    this.#chat.addAudit({ severity: 'medium', kind: 'bypass.capable', sessionId, workspaceId: session.workspaceId, actor: 'ui', detail: { how: 'restart' } });
     await this.#live(sessionId, true, true, opts.actor);
     return this.#chat.get(sessionId)!;
   }

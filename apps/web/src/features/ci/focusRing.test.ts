@@ -187,12 +187,228 @@ test('no source file has glued class names', () => {
   assert.deepEqual(hits, []);
 });
 
+// The EFFECTIVE outline of a declaration block (T-772 S2e): declarations apply in order, the `outline` shorthand resets style, width
+// and colour to their initial values (none, medium, currentcolor), and a later longhand overrides it. A first-match regex on the
+// shorthand would pass `outline: 2px solid Highlight; outline-width: 0`, which draws nothing.
+interface Outline { style: string; width: string; color: string }
+const STYLES = ['none', 'hidden', 'solid', 'dashed', 'dotted', 'double', 'groove', 'ridge', 'inset', 'outset', 'auto'];
+const WIDTH = /^(?:thin|medium|thick|[+-]?(?:\d+\.?\d*|\.\d+)(?:[a-z%]+)?|calc\(.*\))$/i;
+
+// CSS cascade order: an `!important` declaration beats every normal one, whatever the source order; among declarations of the same
+// importance the later one wins. `important` remembers, per longhand, whether the current value came from an important declaration.
+export function effectiveOutline(body: string): Outline {
+  const out: Outline = { style: 'none', width: 'medium', color: 'currentcolor' };
+  const important: Record<keyof Outline, boolean> = { style: false, width: false, color: false };
+  const set = (key: keyof Outline, value: string, imp: boolean): void => {
+    if (important[key] && !imp) return;
+    out[key] = value;
+    important[key] = imp;
+  };
+  for (const decl of body.split(';')) {
+    const at = decl.indexOf(':');
+    if (at < 0) continue;
+    const prop = decl.slice(0, at).trim().toLowerCase();
+    const imp = /!\s*important/i.test(decl);
+    const value = decl.slice(at + 1).replace(/!\s*important/i, '').trim();
+    if (prop === 'outline') {
+      // the shorthand resets all three longhands, each subject to the same importance rule
+      let style = 'none';
+      let width = 'medium';
+      let color = 'currentcolor';
+      for (const tok of value.split(/\s+(?![^(]*\))/).filter(Boolean)) {
+        if (STYLES.includes(tok.toLowerCase())) style = tok.toLowerCase();
+        else if (WIDTH.test(tok)) width = tok;
+        else color = tok;
+      }
+      set('style', style, imp);
+      set('width', width, imp);
+      set('color', color, imp);
+    } else if (prop === 'outline-style') set('style', value.toLowerCase(), imp);
+    else if (prop === 'outline-width') set('width', value, imp);
+    else if (prop === 'outline-color') set('color', value, imp);
+  }
+  return out;
+}
+
+interface Quantity { n: number; unit: string }
+
+/** A tiny calc() evaluator: numbers with units, + - * / and parentheses. Null when it cannot be proven (mixed units, var(), a function). */
+function evalCalc(expr: string): Quantity | null {
+  const tokens = expr.match(/[+-]?(?:\d+\.?\d*|\.\d+)(?:[a-z%]+)?|[()+\-*/]|\S/gi) ?? [];
+  let pos = 0;
+  const peek = (): string | undefined => tokens[pos];
+  const number = (t: string): Quantity | null => {
+    const m = /^([+-]?(?:\d+\.?\d*|\.\d+))([a-z%]*)$/i.exec(t);
+    return m ? { n: Number(m[1]), unit: m[2]!.toLowerCase() } : null;
+  };
+  const primary = (): Quantity | null => {
+    const t = tokens[pos++];
+    if (t === undefined) return null;
+    if (t === '(') {
+      const v = sum();
+      if (tokens[pos++] !== ')') return null;
+      return v;
+    }
+    return number(t);
+  };
+  const product = (): Quantity | null => {
+    let left = primary();
+    while (left && (peek() === '*' || peek() === '/')) {
+      const op = tokens[pos++];
+      const right = primary();
+      if (!right) return null;
+      if (op === '*') {
+        if (left.unit && right.unit) return null;
+        left = { n: left.n * right.n, unit: left.unit || right.unit };
+      } else {
+        if (right.unit || right.n === 0) return null;
+        left = { n: left.n / right.n, unit: left.unit };
+      }
+    }
+    return left;
+  };
+  const sum = (): Quantity | null => {
+    let left = product();
+    while (left && (peek() === '+' || peek() === '-' || /^[+-]\d/.test(peek() ?? ''))) {
+      const t = tokens[pos];
+      let sign = 1;
+      if (t === '+' || t === '-') {
+        sign = t === '-' ? -1 : 1;
+        pos++;
+      } else {
+        // a signed number token right after a term (`1px -1px` is invalid CSS without spaces around the operator): not provable
+        return null;
+      }
+      const right = product();
+      if (!right || right.unit !== left.unit) return null;
+      left = { n: left.n + sign * right.n, unit: left.unit };
+    }
+    return left;
+  };
+  const v = sum();
+  return v && pos === tokens.length ? v : null;
+}
+
+/** True only when the width is provably greater than zero: a keyword, a positive length, or a calc() the evaluator can prove. */
+function widthProvenPositive(width: string): boolean {
+  const w = width.trim().toLowerCase();
+  if (w === 'thin' || w === 'medium' || w === 'thick') return true;
+  const calc = /^calc\((.*)\)$/s.exec(w);
+  const q = calc ? evalCalc(calc[1]!) : evalCalc(w);
+  return q !== null && q.n > 0;
+}
+
+/** Why an outline draws nothing, or null when it is a visible system-colour outline. */
+export function outlineProblem(o: Outline): string | null {
+  if (o.style === 'none' || o.style === 'hidden') return `style ${o.style}`;
+  if (!widthProvenPositive(o.width)) return `width ${o.width}`;
+  if (!/^(?:Highlight|CanvasText)$/i.test(o.color)) return `colour ${o.color}`;
+  return null;
+}
+
+interface Rule { selector: string; body: string }
+
+/** Every `<selector> { ... }` rule inside the `@media (forced-colors: active)` blocks of a stylesheet, in order. */
+export function forcedColorsRules(css: string): Rule[] {
+  const rules: Rule[] = [];
+  const open = /@media \(forced-colors: active\) \{/g;
+  for (let m = open.exec(css); m; m = open.exec(css)) {
+    let depth = 1;
+    let i = open.lastIndex;
+    while (i < css.length && depth > 0) {
+      if (css[i] === '{') depth++;
+      else if (css[i] === '}') depth--;
+      i++;
+    }
+    const media = css.slice(open.lastIndex, i - 1);
+    const rule = /([^{}]+)\{([^{}]*)\}/g;
+    for (let r = rule.exec(media); r; r = rule.exec(media)) rules.push({ selector: r[1]!.trim(), body: r[2]! });
+  }
+  return rules;
+}
+
+const FC_SELECTOR = ':focus-visible:not([data-focus-container])';
+
+/** The bodies that decide the ring of a focusable control: the generic rule first, then EVERY other `:focus-visible` rule (a narrower
+ * `button:focus-visible { outline-style: none }` removes the ring from its target). A rule that names the container marker without
+ * `:not(` targets only the marked containers, which keep no ring on purpose, so it is skipped. */
+export function focusVisibleBodies(css: string): { generic: string[]; others: string[] } {
+  const generic: string[] = [];
+  const others: string[] = [];
+  for (const { selector, body } of forcedColorsRules(css)) {
+    if (selector === FC_SELECTOR) generic.push(body);
+    else if (/:focus-visible/.test(selector) && !(/data-focus-container/.test(selector) && !/:not\(\s*\[data-focus-container\]/.test(selector))) others.push(body);
+  }
+  return { generic, others };
+}
+
+test('the effective outline reads shorthand then longhands in order', () => {
+  const ok = 'outline: 2px solid Highlight; outline-offset: 2px;';
+  assert.equal(outlineProblem(effectiveOutline(ok)), null);
+  assert.equal(outlineProblem(effectiveOutline('outline: 2px solid CanvasText')), null);
+  // the mutants: each draws nothing although the shorthand alone looks right
+  assert.match(outlineProblem(effectiveOutline('outline: 2px solid Highlight; outline-color: transparent;'))!, /colour transparent/);
+  assert.match(outlineProblem(effectiveOutline('outline: 2px solid Highlight; outline-width: 0;'))!, /width 0/);
+  assert.match(outlineProblem(effectiveOutline('outline: 2px solid Highlight; outline-width: 0px !important;'))!, /width 0px/);
+  assert.match(outlineProblem(effectiveOutline('outline: 2px solid Highlight; outline-style: none;'))!, /style none/);
+  assert.match(outlineProblem(effectiveOutline('outline: 2px solid Highlight; outline: none;'))!, /style none/);
+  assert.match(outlineProblem(effectiveOutline('outline: 2px solid Highlight; outline: 0;'))!, /style none/);
+  // a longhand BEFORE the shorthand is reset by it, so it does not count
+  assert.equal(outlineProblem(effectiveOutline('outline-width: 0; outline: 2px solid Highlight;')), null);
+  // a later longhand that repairs an earlier break is fine
+  assert.equal(outlineProblem(effectiveOutline('outline: none; outline-style: solid; outline-width: 2px; outline-color: Highlight;')), null);
+  assert.match(outlineProblem(effectiveOutline('outline: 2px solid red;'))!, /colour red/);
+  // the valid control stays green
+  assert.equal(outlineProblem(effectiveOutline('outline: 2px dotted Highlight;')), null);
+});
+
+test('a calc() width counts only when it is proven above zero', () => {
+  const base = 'outline: 2px solid Highlight;';
+  for (const w of ['calc(0px)', 'calc(1px - 1px)', 'calc(2px * 0)', 'calc(0 * 5px)', 'calc(1px - 2px)', 'calc(var(--w))', 'calc(1px + 1em)', 'calc(2px / 0)', 'calc(']) {
+    assert.match(outlineProblem(effectiveOutline(`${base} outline-width: ${w};`))!, /width calc/, w);
+  }
+  for (const w of ['calc(2px)', 'calc(1px + 1px)', 'calc(3px - 1px)', 'calc(1px * 2)', 'calc((1px + 1px) * 2)', 'calc(4px / 2)', 'thick', '2px']) {
+    assert.equal(outlineProblem(effectiveOutline(`${base} outline-width: ${w};`)), null, w);
+  }
+});
+
+test('!important follows the cascade, not the source order', () => {
+  const base = 'outline: 2px solid Highlight;';
+  // an earlier important declaration beats a later normal one
+  assert.match(outlineProblem(effectiveOutline(`outline-style: none !important; ${base}`))!, /style none/);
+  assert.match(outlineProblem(effectiveOutline(`outline: 0 !important; ${base}`))!, /style none/);
+  assert.match(outlineProblem(effectiveOutline(`outline-width: 0px !important; ${base}`))!, /width 0px/);
+  // an important declaration also beats a later normal one that would repair it, and a later important one wins again
+  assert.match(outlineProblem(effectiveOutline(`${base} outline-color: red !important; outline-color: Highlight;`))!, /colour red/);
+  assert.equal(outlineProblem(effectiveOutline(`outline-style: none !important; outline-style: solid !important; ${base}`)), null);
+  // an important valid ring is not undone by a later normal break
+  assert.equal(outlineProblem(effectiveOutline(`outline: 2px solid Highlight !important; outline-style: none;`)), null);
+});
+
+test('every :focus-visible rule of the forced-colors block counts, not only the generic selector', () => {
+  const css = (extra: string): string =>
+    `@media (forced-colors: active) {\n  ${FC_SELECTOR} {\n    outline: 2px solid Highlight;\n  }\n  ${extra}\n}`;
+  const problem = (extra: string): string | null => {
+    const { generic, others } = focusVisibleBodies(css(extra));
+    return outlineProblem(effectiveOutline([...generic, ...others].join(';')));
+  };
+  assert.match(problem('button:focus-visible { outline-style: none }')!, /style none/);
+  assert.match(problem('a:focus-visible, button:focus-visible { outline-width: calc(0px) }')!, /width calc/);
+  assert.match(problem('input:focus-visible:not([data-focus-container]) { outline: none }')!, /style none/);
+  assert.equal(problem('button:hover { outline-style: none }'), null);
+  // a rule for the marked containers only is the documented exception
+  assert.equal(problem('[data-focus-container]:focus-visible { outline: none }'), null);
+  assert.equal(problem('button:focus-visible { outline-offset: 4px }'), null);
+});
+
 test('index.css keeps a real outline for focusable controls under forced-colors', () => {
   const css = readFileSync(join(srcDir, 'index.css'), 'utf8');
-  assert.match(
-    css,
-    /@media \(forced-colors: active\) \{\s*:focus-visible:not\(\[data-focus-container\]\) \{[^}]*outline: [^;}]*solid (?:Highlight|CanvasText)\b[^;}]*;/,
-  );
+  const { generic, others } = focusVisibleBodies(css);
+  assert.ok(generic.length >= 1, 'the forced-colors rule for focusable controls is missing');
+  // the effective outline (every declaration, in order, across every :focus-visible rule of the block): visible style, a width
+  // proven above zero, a system colour
+  const effective = effectiveOutline([...generic, ...others].join(';'));
+  assert.equal(outlineProblem(effective), null, `the forced-colors outline draws nothing: ${JSON.stringify(effective)}`);
   // a transparent outline is not a system colour: forced-colors would repaint it, but the rule must name the colour itself
   assert.doesNotMatch(css, /:focus-visible:not\(\[data-focus-container\]\) \{[^}]*outline: [^;}]*transparent/);
   // the exclusion is the marker, never tabindex=-1 (a real control with tabindex=-1 keeps its ring)

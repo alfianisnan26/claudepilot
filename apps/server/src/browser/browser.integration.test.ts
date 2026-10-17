@@ -526,6 +526,36 @@ describe('real Claude Code 2.1.296', opts, () => {
     for (let i = 0; i < 100 && !/exit 0/.test((await d.read(name, '/tmp/mock/claude.out')) ?? ''); i++) await sleep(300);
     await sh('pkill -f "node api.js" || true');
   });
+
+  // T-881 (the incident of 2026-10-16): a pool revision moved the plugin to a new folder and the lockdown allowlist followed it, but the
+  // sessions kept launching the plugin Claude Code had installed (the marketplace has autoUpdate off), so every new session was blocked.
+  // Last in this block: it leaves a revision 2 behind, and removes its own managed drop-in.
+  test('T-881: after a revision changes the plugin, the lockdown (current and retained commands) still lets the installed browser start; the new command alone does not', async () => {
+    const DROP_IN = '/etc/claude-code/managed-settings.d/05-claudepilot-settings.json';
+    const lockdown = (allowedMcpServers: unknown[]) =>
+      d.put(name, [{ path: DROP_IN, type: 'file', content: JSON.stringify({ allowManagedMcpServersOnly: true, allowedMcpServers }), mode: 0o644, uid: 0, gid: 0 }]);
+    const connected = async () => (await sh('cd /home/node && timeout 90 claude mcp list 2>&1', 'node')).stdout;
+    try {
+      const before = pools.assignedPools(WS, 'browser')[0]!;
+      pools.update(before.pool.id, { content: { sessions: 'isolated' } });
+      await reconciler.request(WS, 'test');
+      assert.equal(reconciler.row(WS)?.status, 'synced', reconciler.row(WS)?.reason ?? '');
+      const next = pools.assignedPools(WS, 'browser')[0]!;
+      const newDir = compileBrowser({ pool: next.pool, content: next.content as typeof BROWSER_POOL_DEFAULTS }).plugin.dir;
+      assert.notEqual(newDir, plugin.dir, 'revision 2 lives in another folder');
+      const all = mod.service.matchers(WS) as { serverCommand: string[] }[];
+      assert.ok(all.some((m) => m.serverCommand.some((a) => a.startsWith(plugin.dir))), 'the retained old folder’s command is on the list');
+      await lockdown(all);
+      const withBoth = await connected();
+      assert.match(withBoth, /cpb-browser[^\n]*(✓|Connected)/i, withBoth);
+      // The incident: only the new command is allowed, and the installed (old) plugin is blocked.
+      await lockdown(all.filter((m) => m.serverCommand.some((a) => a.startsWith(newDir))));
+      const onlyNew = await connected();
+      assert.doesNotMatch(onlyNew, /cpb-browser[^\n]*(✓|Connected)/i, `Claude Code launched the new folder by itself, so the premise of T-881 does not hold: ${onlyNew}`);
+    } finally {
+      await sh(`rm -f ${DROP_IN}`, 'root');
+    }
+  });
 });
 
 describe('removal', opts, () => {

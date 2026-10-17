@@ -215,13 +215,109 @@ test('every curl in the three scripts has --max-time and --retry', () => {
   }
 });
 
-test('the three scripts source the shared guard before they write anything', () => {
+/**
+ * T-736 S3f (QA BE 2 8198, QA Perf, decision 8200): an ALLOW-list, not a list of writers. Before the guard (and, in rtk-measure.sh's heavy
+ * branch, before the guarded cd) a line may only be: a comment or a blank, `set -u`, an assignment of ONE shell word with no command substitution,
+ * no redirect and no chaining (never one of FORBIDDEN_ASSIGN: here, PATH, IFS, BASH_ENV, ...; S3g), `:` and, in the preamble, the exact lines that find the
+ * folder, source the guard and check that it defined rtk_guard. `m` (the measuring helper, which runs two of its arguments with `sh -c`) is NOT on
+ * the list: the real scripts call it only after the cd (S3g). Everything else is refused, so perl -pi, eval, find -delete, `2>`, `&>`, `<<<`,
+ * a function or a tool called through a variable, backticks, `x=1 cmd`, `x=$(cmd)` and loops all fail without being named.
+ */
+const DANGER = /\$\(|`|[<>;&|]/;
+const HERE_FORM = 'here=$(cd "$(dirname "$0")/../.." && pwd)';
+const GUARD_SRC = /^\. "\$here\/tools\/qa\/rtk-guard\.sh" \|\| \{ echo "[^"$`]*" >&2; exit 2; \}$/;
+const DECLARE = /^declare -F rtk_guard >\/dev\/null \|\| \{ echo "[^"$`]*" >&2; exit 2; \}$/;
+/** True when `s` is ONE shell word (whitespace only inside quotes), so `x=1 touch f` is not an assignment. */
+function oneWord(s: string): boolean {
+  let q = '';
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charAt(i);
+    if (q) { if (c === q) q = ''; else if (q === '"' && c === '\\') i++; continue; }
+    if (c === '\\') { i++; continue; }
+    if (c === '"' || c === "'") q = c; else if (/\s/.test(c)) return false;
+  }
+  return q === '';
+}
+/**
+ * T-736 S3g (review of S3f, D-65): names an assignment may never set before the guard call or the heavy cd: `here` (the folder the guard checks
+ * and the cd enters: only the exact HERE_FORM line sets it), the lookup of every tool (PATH, CDPATH, ENV, BASH_ENV: a file sourced by the next
+ * shell), word splitting (IFS), HOME and the shell's own option variables. `repo` is not on the list: rtk-measure.sh light mode computes it from its
+ * argument right before its own cd, and the guard is called on it by name.
+ */
+const FORBIDDEN_ASSIGN = ['here', 'PATH', 'IFS', 'BASH_ENV', 'ENV', 'CDPATH', 'HOME', 'SHELLOPTS', 'BASHOPTS', 'PS4', 'PROMPT_COMMAND', 'BASH_XTRACEFD', 'LD_PRELOAD', 'LD_LIBRARY_PATH'];
+const FORBIDDEN_NAME = new RegExp(`^(${FORBIDDEN_ASSIGN.join('|')})$`);
+/** Whether a line sets one of FORBIDDEN_ASSIGN in command position: first on the line, after `;` `&&` `||` `{` `(` or a keyword, behind `export`/`declare`/`readonly`/`typeset` or other `x=1` prefixes. */
+const SETS_FORBIDDEN = new RegExp(`(^|;|&&|\\|\\||\\{|\\(|\\bthen\\b|\\bdo\\b|\\belse\\b)\\s*(\\w+=\\S*\\s+)*(export\\s+|declare\\s+(-\\w+\\s+)*|typeset\\s+(-\\w+\\s+)*|readonly\\s+|local\\s+)?(${FORBIDDEN_ASSIGN.join('|')})\\+?=`);
+function allowed(line: string, where: 'preamble' | 'branch'): boolean {
+  const t = line.trim();
+  if (t === '' || t.startsWith('#')) return true;
+  if (t.endsWith('\\')) return false; // a continued line: the next line would be part of this command
+  if (where === 'preamble' && (t === HERE_FORM || GUARD_SRC.test(t) || DECLARE.test(t))) return true;
+  if (DANGER.test(t)) return false;
+  if (/^set -[eu]+$/.test(t) || /^:(\s|$)/.test(t)) return true;
+  // `m` (the measuring helper) is NOT on the list: it hands its 4th and 5th arguments to `sh -c`, so `m c l "$here" "touch f" "touch f"` runs a command.
+  // The real scripts call it only after the cd; a call before it is a line off the list (T-736 S3g, review of S3f).
+  const a = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(t);
+  return a !== null && !FORBIDDEN_NAME.test(a[1] ?? '') && oneWord(a[2] ?? '');
+}
+const GUARD_CALL = /^rtk_guard rtk-[a-z]+\.sh "\$here"$/;
+
+test('the three scripts source the shared guard before they write anything: every line before it is on the allow-list', () => {
   for (const script of SCRIPTS) {
     const lines = readFileSync(join(ROOT, 'tools/qa', script), 'utf8').split('\n');
-    const guard = lines.findIndex((l) => /rtk_guard rtk-/.test(l));
-    assert.ok(guard >= 0, `${script} does not call rtk_guard`);
-    const firstWrite = lines.findIndex((l) => !l.trimStart().startsWith('#') && /mkdir|git (reset|checkout)|>>? *"/.test(l));
-    assert.ok(firstWrite < 0 || guard < firstWrite, `${script}: a write comes before the guard (line ${firstWrite + 1})`);
+    const guard = lines.findIndex((l) => GUARD_CALL.test(l));
+    assert.ok(guard > 0, `${script} does not call rtk_guard at the top level`);
+    const bad = lines.slice(0, guard).findIndex((l) => !allowed(l, 'preamble'));
+    assert.equal(bad, -1, `${script}: line ${bad + 1} comes before the guard and is not on the allow-list: ${lines[bad]}`);
+    assert.ok(lines.slice(0, guard).some((l) => GUARD_SRC.test(l.trim())), `${script}: the guard is not sourced before it is called`);
+    assert.ok(lines.slice(0, guard).some((l) => DECLARE.test(l.trim())), `${script}: rtk_guard is not checked to be defined before it is called`);
+    // T-736 S3g: the folder the guard checks is the one the script cds into, so `here` has ONE definition, the exact HERE_FORM line, before the
+    // guard is sourced; nothing between the guard call and the first cd (or anywhere before the guard) sets here, PATH, IFS, BASH_ENV and the like.
+    const hereAt = lines.map((l, i) => (l.trim() === HERE_FORM ? i : -1)).filter((i) => i >= 0);
+    const srcAt = lines.findIndex((l) => GUARD_SRC.test(l.trim()));
+    assert.equal(hereAt.length, 1, `${script}: the exact line \`${HERE_FORM}\` must appear exactly once`);
+    assert.ok(hereAt[0]! < srcAt && srcAt < guard, `${script}: the folder line, then the sourcing of the guard, then the call`);
+    const firstCd = lines.findIndex((l, i) => i > guard && !l.trimStart().startsWith('#') && /\bcd "\$(here|repo)"/.test(l));
+    assert.ok(firstCd > guard, `${script}: no cd after the guard (the check would test nothing)`);
+    const sets = lines.findIndex((l, i) => i !== hereAt[0] && i < firstCd && !l.trimStart().startsWith('#') && SETS_FORBIDDEN.test(l));
+    assert.equal(sets, -1, `${script}: line ${sets + 1} sets here, PATH, IFS, BASH_ENV or the like before the guarded cd: ${lines[sets]}`);
+  }
+});
+
+test('the allow-list (self-check, S3g): here, PATH, IFS, BASH_ENV and the like are never assigned before the guard or the cd; m is not an allowed pre-cd line', () => {
+  for (const name of FORBIDDEN_ASSIGN) {
+    for (const where of ['preamble', 'branch'] as const) {
+      assert.ok(!allowed(`${name}=/some/other/dir`, where), `refused: ${name}= in the ${where}`);
+      assert.ok(!allowed(`${name}=x`, where), `refused: ${name}=x in the ${where}`);
+    }
+    for (const form of [`${name}=/x`, `export ${name}=/x`, `x=1 ${name}=/x cmd`, `a; ${name}=/x`, `{ ${name}=/x; }`, `declare -x ${name}=/x`, `readonly ${name}=/x`, `if x; then ${name}=/x; fi`, `${name}+=/x`]) {
+      assert.match(form, SETS_FORBIDDEN, `the scan sees: ${form}`);
+    }
+  }
+  assert.ok(allowed('tf=a', 'branch') && allowed('nt=a', 'branch') && allowed('hereby=1', 'preamble') && allowed('repoX=1', 'preamble'), 'other names are still fine (a longer name is not here)');
+  for (const fine of ['cleanenv() { env -i PATH="$PATH" HOME="$H" LANG=C.UTF-8 "$@"; }', 'echo here=/x', 'local base="$out/$class.$label"', 'repo=$(readlink -f "$3"); L=$4; cd "$repo" || exit', '# here=/x', 'x=1 y=2 cmd']) {
+    assert.doesNotMatch(fine, SETS_FORBIDDEN, `not an assignment in command position: ${fine}`);
+  }
+  for (const m of ['m a b c', 'm c l "$here" "touch f" "touch f"', 'm c l "$here" "rm -rf x" "rm -rf x"']) {
+    assert.ok(!allowed(m, 'branch') && !allowed(m, 'preamble'), `refused before the cd: ${m}`);
+  }
+  // HERE_FORM stays the one way to set here in the preamble, and only there.
+  assert.ok(allowed(HERE_FORM, 'preamble') && !allowed('here=$(cd /x && pwd)', 'preamble') && !allowed(`${HERE_FORM} # x`, 'preamble'));
+});
+
+test('the allow-list (self-check): the preamble forms pass; each way to write, run a tool or hide a command before the guard is refused', () => {
+  for (const ok of ['', '# note', 'set -u', 'set -eu', HERE_FORM, '. "$here/tools/qa/rtk-guard.sh" || { echo "x: refusing: cannot load" >&2; exit 2; }',
+    'declare -F rtk_guard >/dev/null || { echo "x: refusing: nope" >&2; exit 2; }', 'x=1', 'y="a b $z"', ': ', ':']) {
+    assert.ok(allowed(ok, 'preamble'), `allowed: ${ok}`);
+  }
+  assert.ok(!allowed('m a b c', 'branch') && !allowed('m a b c', 'preamble'), 'm is off the list everywhere (S3g): the real scripts call it only after the cd');
+  assert.ok(!allowed(HERE_FORM, 'branch'), 'the folder line is a preamble form only');
+  for (const bad of ['mkdir -p "$out"', 'perl -pi -e s/a/b/ f', 'eval "touch f"', 'find . -delete', ': 2> f', 'echo x &> f', ': > f', 'cat <<< x', '$fn a', '"$R" x',
+    'x=`touch f`', 'x=$(touch f)', 'x=1 touch f', 'x=1; touch f', 'x=1 && touch f', 'x="a" | tee f', 'while true; do :; done', 'until false; do :; done', 'for i in 1; do :; done',
+    'touch f', 'g reset --hard', 'git checkout -- .', 'sed -i s/a/b/ f', 'x=a\\', '. other.sh', 'declare -F rtk_guard >/dev/null || { touch f; exit 2; }',
+    '. "$here/tools/qa/rtk-guard.sh" || { touch f; exit 2; }']) {
+    assert.ok(!allowed(bad, 'preamble'), `refused: ${bad}`);
+    assert.ok(!allowed(bad, 'branch'), `refused in the branch too: ${bad}`);
   }
 });
 
@@ -250,55 +346,112 @@ test('each script cds into the guarded folder after the guard and before its fir
 });
 
 /**
- * The top-level `else ... fi` of a script (the heavy mode of rtk-measure.sh), walked once with its nesting depth: the first line that writes, runs
- * a tool or calls git (at any depth, heredoc bodies skipped), and the first PLAIN `cd "$here"` at the else branch's OWN level (a cd inside a nested
- * if / for / while / case does not count: it may never run). T-736 S3e (QA BE 2 8130): the write list was short (no touch, sed -i, tee, mv, ln,
- * node, npx, a redirect) and a cd inside `if false; then ... fi` counted.
+ * The TOP-LEVEL `else ... fi` of a script (the heavy mode of rtk-measure.sh: the else of the first `if` that is not inside anything), walked once
+ * with a stack of what is open (if, loop, case, `{` group or function body, `(` subshell; keywords counted only in command position, strings and
+ * `$( )` removed, heredoc bodies skipped, `<<<` is not a heredoc). It returns the else line, its fi, the first line that is NOT on the allow-list
+ * (`bad`) and the first PLAIN `cd "$here" || exit` that sits at the else branch's own level: the stack there is exactly the else's `if`, so a cd in
+ * a nested if / loop / case, a `( )` subshell (also over several lines), a function body or a `cond && if ...; then` block does not count (it may
+ * never run, or runs elsewhere). T-736 S3e (QA BE 2 8130) and S3f (8198, decision 8200).
  */
-const WRITES = /(^|[;&|(]|\s)(touch|tee|mv|ln|sed|node|npx|npm|cat|cp|rm|mkdir|chmod|tar|curl|printf|echo|dd|truncate|install)(\s|$)|(^|[^0-9&<>])>|(^|[\s;&|(])(git|g) |^\s*m /;
+type Open = 'if' | 'loop' | 'case' | 'brace' | 'paren';
+function tokens(line: string): string[] {
+  let s = line.replace(/\\./g, ' ').replace(/'[^']*'/g, ' ').replace(/"[^"]*"/g, ' ');
+  for (let n = 0; n < 8 && /\$\([^()]*\)/.test(s); n++) s = s.replace(/\$\([^()]*\)/g, ' '); // $( ) and $(( ))
+  s = s.replace(/(^|\s)#.*$/, ' ');
+  return s.match(/&&|\|\||;;|[;|&(){}]|[^\s;|&(){}]+/g) ?? [];
+}
+/** Walks `lines` from the top; calls `visit(i, stackBeforeTheLine, isCode)` for every line (heredoc bodies and blanks get isCode false). */
+function walk(lines: string[], visit: (i: number, stack: Open[], code: boolean, elseTop: boolean) => void) {
+  const stack: Open[] = [];
+  let tag = '', dash = false;
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i] ?? '';
+    if (tag) { if ((dash ? l.replace(/^\t+/, '') : l) === tag) tag = ''; visit(i, [...stack], false, false); continue; }
+    if (l.trim() === '' || l.trimStart().startsWith('#')) { visit(i, [...stack], false, false); continue; }
+    const before = [...stack];
+    const t = tokens(l);
+    let cmd = true, elseTop = false;
+    for (let k = 0; k < t.length; k++) {
+      const w = t[k] ?? '';
+      if ([';', '&&', '||', '|', '&', ';;'].includes(w)) { cmd = true; continue; }
+      if (w === '!') continue;
+      if (w === '(') {
+        if (t[k + 1] === ')') { k++; cmd = true; continue; } // `name()`: a function head, its `{` follows
+        stack.push('paren'); cmd = true; continue;
+      }
+      if (w === ')') { if (stack[stack.length - 1] === 'paren') { stack.pop(); cmd = false; } else cmd = true; continue; } // otherwise a case pattern: a command follows
+      if (w === '{') { if (cmd) { stack.push('brace'); cmd = true; } continue; }
+      if (w === '}') { if (cmd && stack[stack.length - 1] === 'brace') stack.pop(); cmd = false; continue; }
+      if (cmd && ['if', 'while', 'until', 'for', 'select', 'case'].includes(w)) { stack.push(w === 'if' ? 'if' : w === 'case' ? 'case' : 'loop'); cmd = w === 'if' || w === 'while' || w === 'until'; continue; }
+      if (cmd && ['then', 'do', 'elif'].includes(w)) { cmd = true; continue; }
+      if (cmd && w === 'else') { if (stack.length === 1 && stack[0] === 'if') elseTop = true; cmd = true; continue; }
+      if (cmd && ['fi', 'done', 'esac'].includes(w)) { stack.pop(); cmd = false; continue; }
+      cmd = false;
+    }
+    const h = /(?:^|[^<])<<(-?)\s*(['"]?)(\w+)\2/.exec(l); // `<<<` (a here-string) is not a heredoc
+    if (h) { tag = h[3] ?? ''; dash = h[1] === '-'; }
+    visit(i, before, true, elseTop);
+  }
+}
 function heavyBranch(src: string) {
   const lines = src.split('\n');
-  const isCode = (l: string) => !l.trimStart().startsWith('#');
-  const start = lines.findIndex((l) => isCode(l) && /^else\s*$/.test(l));
-  let depth = 0, end = -1, first = -1, cd = -1, tag = '';
-  for (let i = start + 1; start >= 0 && i < lines.length; i++) {
-    const l = lines[i] ?? '';
-    if (tag) { if (l.trim() === tag) tag = ''; continue; }
-    if (!isCode(l)) continue;
-    if (/^\s*(fi|done|esac)\b/.test(l)) { if (depth === 0 && /^\s*fi\b/.test(l)) { end = i; break; } depth--; continue; }
-    if (/^\s*(if|for|while|until|case)\b/.test(l) && !/;\s*(fi|done|esac)\s*$/.test(l)) depth++;
-    if (first < 0 && WRITES.test(l)) first = i;
-    if (cd < 0 && depth === 0 && /^\s*cd "\$here" \|\| exit\s*$/.test(l)) cd = i; // `|| exit`: a cd without it is not counted (SC2164)
-    const h = /<<-?\s*['"]?(\w+)['"]?/.exec(l);
-    if (h) tag = h[1] ?? '';
-  }
-  return { start, end, first, cd };
+  let start = -1, end = -1, bad = -1, cd = -1;
+  walk(lines, (i, stack, code, elseTop) => {
+    if (start < 0) { if (elseTop) start = i; return; }
+    if (end >= 0 || !code) return;
+    if (stack.length === 1 && stack[0] === 'if' && /^\s*fi\s*$/.test(lines[i] ?? '')) { end = i; return; }
+    // `|| exit`: a cd without it is not counted (SC2164). The cd line is the one line of the branch that is not "allowed" on purpose.
+    const plainCd = /^\s*cd "\$here" \|\| exit\s*$/.test(lines[i] ?? '');
+    if (plainCd) { if (cd < 0 && stack.length === 1 && stack[0] === 'if') cd = i; return; }
+    if (bad < 0 && !allowed(lines[i] ?? '', 'branch')) bad = i;
+  });
+  return { start, end, bad, cd };
 }
 
-test('rtk-measure.sh heavy mode (the else branch) cds into the guarded folder before its first write, tool or git call (a cd of the light branch, or one in a nested block, does not count)', () => {
-  const b = heavyBranch(readFileSync(join(ROOT, 'tools/qa/rtk-measure.sh'), 'utf8'));
+test('rtk-measure.sh heavy mode (the top-level else branch) cds into the guarded folder before any line that is not on the allow-list (a cd of the light branch, or one in a nested block, subshell or function, does not count)', () => {
+  const lines = readFileSync(join(ROOT, 'tools/qa/rtk-measure.sh'), 'utf8').split('\n');
+  const b = heavyBranch(lines.join('\n'));
   assert.ok(b.start >= 0 && b.end > b.start, 'rtk-measure.sh has no top-level else ... fi block (the check would test nothing)');
-  assert.ok(b.first > 0, 'no write or git call in the else branch (the check would test nothing)');
-  assert.ok(b.cd > 0, 'the else branch has no plain `cd "$here"` statement at its own nesting level');
-  assert.ok(b.cd < b.first, `the else branch writes or calls git (line ${b.first + 1}) before its cd (line ${b.cd + 1})`);
+  assert.ok(b.bad > 0, 'every line of the else branch is allowed (the check would test nothing)');
+  assert.ok(b.cd > 0, 'the else branch has no plain `cd "$here" || exit` statement at its own nesting level');
+  assert.ok(b.cd < b.bad, `the else branch runs something (line ${b.bad + 1}: ${lines[b.bad]}) before its cd (line ${b.cd + 1})`);
 });
 
-test('the heavy-branch walker (self-check): each write kind before the cd is seen, a cd in a nested block is not one, heredocs and later writes are fine', () => {
-  const branch = (body: string) => heavyBranch(`if x; then\n  y\nelse\n${body.replaceAll('cd "$here"', 'cd "$here" || exit')}\nfi\n`);
+test('the heavy-branch walker (self-check): anything off the allow-list before the cd is seen, a cd that may not run is not one, the walk starts at the top-level else', () => {
+  const wrap = (body: string) => `if x; then\n  y\nelse\n${body.replaceAll('cd "$here"', 'cd "$here" || exit')}\nfi\n`;
+  const branch = (body: string) => heavyBranch(wrap(body));
+  const lastFi = (body: string) => wrap(body).split('\n').length - 2;
   assert.equal(heavyBranch('if x; then\n  y\nelse\n  cd "$here"\n  touch f\nfi\n').cd, -1, 'a cd without `|| exit` is not counted (SC2164)');
   const ok = branch('  cd "$here"\n  cat > f <<\'EOT\'\ntouch inside-heredoc\nEOT\n  m a b c d e');
-  assert.ok(ok.cd > 0 && ok.cd < ok.first, 'a clean branch passes');
-  for (const w of ['touch f', 'sed -i s/a/b/ f', 'echo hi | tee f', 'mv a b', 'ln -s a b', 'node x.js', 'npx tsc', ': > f', 'echo x >> f', 'cp a b', 'git status', 'g add f', 'rm -f f', 'mkdir d', 'm a b c d e']) {
+  assert.ok(ok.cd > 0 && ok.cd < ok.bad, 'a clean branch passes');
+  assert.equal(ok.bad, 4, 'the heredoc body is skipped: the cat line is the first line off the list');
+  const early = branch('  : \n  x=1\n  cd "$here"\n  m a b c d e\n  touch f');
+  assert.ok(early.cd > 0 && early.cd < early.bad, 'assignments and `:` may come before the cd; m comes after it');
+  for (const w of ['m a b c d e', 'm c l "$here" "touch f" "touch f"', 'm c l "$here" "rm -rf x" "rm -rf x"', 'here=/some/other/dir', 'PATH=/x', 'IFS=x', 'BASH_ENV=/x', 'CDPATH=/x', 'here="$PWD"']) {
     const b = branch(`  ${w}\n  cd "$here"`);
-    assert.ok(b.first >= 0 && b.first < b.cd, `${w}: seen before the cd`);
+    assert.ok(b.bad === 3 && b.cd === 4, `S3g: ${w} before the cd is off the list (bad ${b.bad}, cd ${b.cd})`);
   }
-  for (const nested of ['if false; then\n  cd "$here"\nfi', 'for i in 1; do\n  cd "$here"\ndone', 'case x in\n  y) true;;\nesac\nif false; then\n  cd "$here"\nfi']) {
+  for (const w of ['touch f', 'sed -i s/a/b/ f', 'echo hi | tee f', 'mv a b', 'ln -s a b', 'node x.js', 'npx tsc', ': > f', 'echo x >> f', 'cp a b', 'git status', 'g add f', 'rm -f f', 'mkdir d',
+    'perl -pi -e s/a/b/ f', 'eval "touch f"', 'find . -delete', ': 2> f', 'echo x &> f', 'echo x 2>&1', '$fn a', '"$R" x', 'x=`touch f`', 'x=$(touch f)', 'x=1 touch f',
+    'while true; do :; done', 'until true; do :; done', 'for i in 1; do :; done', 'cat <<< x', 'if true; then :; fi', 'm a b > f', 'm a b; touch f']) {
+    const b = branch(`  ${w}\n  cd "$here"`);
+    assert.ok(b.bad === 3 && b.cd === 4, `${w}: off the list before the cd (bad ${b.bad}, cd ${b.cd})`);
+  }
+  for (const nested of ['if false; then\n  cd "$here"\nfi', 'for i in 1; do\n  cd "$here"\ndone', 'while read l; do\n  cd "$here"\ndone', 'until false; do\n  cd "$here"\ndone',
+    'case x in\n  y) true;;\nesac\nif false; then\n  cd "$here"\nfi', 'case x in\n  y) if z; then\n  cd "$here"\nfi;;\nesac', '(\n  cd "$here"\n)', 'f() {\n  cd "$here"\n}', '{\n  cd "$here"\n}',
+    '[ x ] && if y; then\n  cd "$here"\nfi', 'x || while y; do\n  cd "$here"\ndone', 'f()\n{\n  cd "$here"\n}']) {
     const b = branch(`${nested}\n  touch f`);
-    assert.equal(b.cd, -1, `a cd inside a nested block does not count: ${nested}`);
-    assert.ok(b.end > b.start, 'the nested fi does not end the else branch');
+    assert.equal(b.cd, -1, `a cd that may not run does not count: ${nested}`);
+    assert.equal(b.end, lastFi(`${nested}\n  touch f`), `the nested closer does not end the else branch: ${nested}`);
   }
-  assert.equal(branch('  echo x 2>&1 || true\n  cd "$here"').first, 3, 'echo is a write kind (the first body line is line 3)');
-  assert.ok(branch('  cd "$here"\n  true').first < 0, 'no write: first is -1');
+  assert.ok(branch('if y; then\n  true\nfi\n  cd "$here"').cd > 0, 'after a nested block closes, a cd at the branch level counts again');
+  assert.ok(branch('  cd "$here"\n  cat <<< x\n  true').end === lastFi('  cd "$here"\n  cat <<< x\n  true'), 'a here-string (<<<) is not a heredoc: it does not swallow the fi');
+  assert.ok(branch('  cd "$here"\n  cat <<-EOT\n\tfi\n\tEOT\n  true').end === lastFi('  cd "$here"\n  cat <<-EOT\n\tfi\n\tEOT\n  true'), '<<- skips its body, tab-indented end tag included');
+  // The walk starts at the top-level else: a bare else of a nested if (column 0) is not the heavy branch.
+  const nestedElse = heavyBranch('if a; then\n  if b; then\n    x\nelse\n  cd "$here" || exit\n  fi\nelse\n  y\nfi\n');
+  assert.deepEqual([nestedElse.start, nestedElse.cd, nestedElse.end], [6, -1, 8], 'start at the top-level else; the cd of the nested else is not the heavy branch\'s');
+  assert.equal(heavyBranch('if a; then\n  if b; then\n    x\n  else\n    y\n  fi\nfi\n').start, -1, 'only a nested else: no heavy branch');
+  assert.equal(heavyBranch('if x; then\n  y\nfi\n').start, -1, 'no else: no heavy branch');
 });
 
 test('the helper regex of the order test sees `g <cmd>` and the chained cd (self-check)', () => {

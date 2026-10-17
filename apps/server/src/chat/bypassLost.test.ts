@@ -230,3 +230,59 @@ test('T-416 S2b: the Bypass restart supersedes the kept record, and the relaunch
     await s.done();
   }
 });
+
+// T-416 S2c (QA UI and QA BE 2 on S2b): the remaining close-outs, each pinned by its own mutant.
+
+test('T-416 S2c: a Restart of a live session (the stop for a restart) supersedes the kept record', async () => {
+  const s = await liveSession({}, true);
+  try {
+    const { lead } = await liveWithStaleKept(s);
+    s.store.db!.prepare("UPDATE chat_sessions SET state = 'idle' WHERE id = ?").run(lead.id); // a turn boundary: the restart is allowed
+    s.store.db!.prepare("UPDATE chat_inputs SET state = 'discarded' WHERE session_id = ? AND state IN ('sending', 'queued', 'started')").run(lead.id); // and nothing is on its way
+    const asked = bypassAsks(s).length;
+    const restarted = await s.answering(s.controller.restart(lead.id));
+    assert.equal(restarted.process, 'live');
+    assert.equal(restarted.mode, 'default');
+    assert.equal(bypassAsks(s).length, asked, 'never asked to enter Bypass');
+    // The stop for the restart is what superseded it (`#stopForRestart`, its own close-out): why stopped, superseded, not kept.
+    const n = left(s, lead.id);
+    assert.deepEqual([n.detail.why, n.detail.superseded ?? null, n.detail.kept ?? null], ['stopped', true, null]);
+  } finally {
+    await s.done();
+  }
+});
+
+test('T-416 S2c: the record that the Bypass restart made capable is written even when its stop or close-out fails', async () => {
+  const s = await liveSession({}, true);
+  try {
+    const { lead } = await liveWithStaleKept(s);
+    s.store.db!.prepare("UPDATE chat_sessions SET bypass_capable = 0, state = 'idle' WHERE id = ?").run(lead.id);
+    // The close-out supersedes the kept record with a `bypass.left` row: a trigger makes that insert fail, so the close-out throws.
+    s.store.db!.exec("CREATE TRIGGER fail_left BEFORE INSERT ON chat_audit WHEN NEW.kind = 'bypass.left' BEGIN SELECT RAISE(ABORT, 'audit store failed'); END");
+    await assert.rejects(s.controller.allowBypass(lead.id), /audit store failed/);
+    s.store.db!.exec('DROP TRIGGER fail_left');
+    assert.equal(s.controller.get(lead.id)!.bypassCapable, true, 'the session was made capable');
+    const rows = s.controller.audit({ kind: 'bypass.capable', sessionId: lead.id }).filter((a) => a.detail.how === 'restart');
+    assert.equal(rows.length, 1, 'and the record of it is there (the earlier `start` record is another row)');
+  } finally {
+    await s.done();
+  }
+});
+
+test('T-416 S2c: a lead that vanishes again while its kept record is the newest leaves that record standing (it may still restore Bypass)', async () => {
+  const s = await liveSession({}, true);
+  try {
+    const { lead } = await liveWithStaleKept(s);
+    const before = newest(s, lead.id);
+    assert.equal(before.detail.kept, true);
+    s.ws.alive = false;
+    s.ws.tails.at(-1)!.exit(0);
+    await until(() => s.controller.get(lead.id)!.state === 'interrupted');
+    s.ws.alive = true;
+    // `#markGone` is the one close-out that must not supersede: the vanished process is what the kept record is about.
+    const after = newest(s, lead.id);
+    assert.deepEqual([after.id, after.detail.kept ?? null, after.detail.superseded ?? null], [before.id, true, null], 'the kept record is still the newest, not superseded');
+  } finally {
+    await s.done();
+  }
+});
