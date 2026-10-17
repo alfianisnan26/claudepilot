@@ -3418,6 +3418,31 @@ export const MIGRATIONS: Migration[] = [
     },
   },
   {
+    version: 787,
+    name: 'chat sessions: the crew channel and each member\'s read cursor (T-294)',
+    up(db) {
+      // T-294 (chat-sessions PRD FR51, crew_post and crew_read): one channel per lead, named by the lead's session id; its members are the
+      // lead and the workers that report to it. A message is redacted text from one member (`from_id`); `id` is the channel's order and the
+      // cursor's unit. A member's cursor is the last message it read; a restarted session reads on from there. Deleting the lead drops both.
+      db.exec(`
+        CREATE TABLE crew_messages (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          lead_id TEXT NOT NULL REFERENCES chat_sessions (id) ON DELETE CASCADE,
+          from_id TEXT NOT NULL,
+          text TEXT NOT NULL,
+          at TEXT NOT NULL
+        ) STRICT;
+        CREATE INDEX crew_messages_lead ON crew_messages (lead_id, id);
+        CREATE TABLE crew_cursors (
+          lead_id TEXT NOT NULL REFERENCES chat_sessions (id) ON DELETE CASCADE,
+          session_id TEXT NOT NULL,
+          last_id INTEGER NOT NULL DEFAULT 0,
+          PRIMARY KEY (lead_id, session_id)
+        ) STRICT;
+      `);
+    },
+  },
+  {
     version: 400,
     name: 'identity: email accounts and the login throttle (T-118 MU1-min)',
     up(db) {
