@@ -10,21 +10,24 @@
 - T-425 S2b merge e2e4a2b6 QA PWG (U1 caught; relay T-595 10914; gap list asked) -> gaps 3753d3c2 -> b33.
 - T-974 FIX2 42b95954 BLIND PWG 10892 -> FIX3 test rows (prune/update allowed on record, set-url --add/--delete refused;
   10902) FIX3 f70d333c (Job queued) a3554d40 -> re-check d9f18599 -> b33 -> FOR THE COORDINATOR: remove the text-matching `git -C` denies.
-- T-971 H1 FIX fade65c2 BLIND PWG 10905 (C2, C3 survive: phrase in shape/proposed line) -> FIX2 a3554d40 -> re-check d9f18599.
+- T-971 H1 FIX fade65c2 BLIND PWG 10905 (C2, C3 survive) -> FIX2 fdd38c6b pushed, Job pending (a3554d40) -> re-check d9f18599.
+- T-969 FIX 065d3665 pushed (testers-bot etc., copy test dropped, perf/ux lanes), Job pending -> blind d9f18599.
+- T-961 S1 613139e3 Job bzd30x3vl queued; T-974 FIX3 Job bctygk2fn queued (pod memory tight; a3554d40 runs them in turn).
 - T-971 H2 S1 11d5a5a1 QA PWG 10847 -> FIX 03bc42d6 (Job running) + deterministic race test (M11) by 3753d3c2 -> QA delta
   c691df71; blind d9f18599 on 11d5a5a1 running. No auto Bypass on resume stands (10736).
 - T-975 FIX 6650e8ff (e7750582 rc0 3x45/45; one unexplained links.test failure in bdwtltcfm, builder owns it if seen again)
   -> QA delta c691df71 -> blind d9f18599 (migration 788).
-- T-969 8144c5ce QA PWG 10886/10904 (T3 survives; copy-regex test; cross-ws test role) -> FIX a3554d40 -> blind d9f18599.
 - T-1043 S0a+S0b ONE unit (10790) on ticket/T-1043-s0b, 76845676: M14/M16 tests, app.all behind ALL /api/*, sockets via
   sessionToken; Job queued -> QA c691df71 + blind d9f18599. Denial = 404 (10605).
 - T-976 conflicted merge 130fb339 pushed by lead (ticket/T-976-merge, 4 markers in app.ts) -> 2a0edbd8 resolves -> QA + blind.
 - T-968 S2a 896daa98 PWG x2 -> gaps in S2b be6b3adc by 2a0edbd8: Job bdeqeg7e5 rc1 (40/40 but TESTS=1; mutants
   "applied=0", kills unproven) -> per-file Job bp02vzvse -> fix -> QA c691df71 + blind. T-968 PRD fix 2a0edbd8 -> re-check d9f18599.
 - T-565 S1 64f7c137 QA PWG (T-595 10773) -> FIX 2a0edbd8 -> delta c691df71 -> blind (infra).
-- T-961 (deploy outage: PriorityClass, headroom, release pre-check; 10887) a3554d40 S1 pushed -> QA + blind (infra).
+- T-961 (deploy outage: PriorityClass, headroom, release pre-check; 10887) -> QA + blind (infra); PriorityClasses in
+  deploy/k3s/priorityclasses.yaml are FOR THE COORDINATOR if Argo can't create them.
 - T-1065 (new: redact.ts misses short passwords/URL userinfo; 10888) 76845676 while its Job queues -> QA + blind.
-- T-356 (MCP authz gaps 1-4; 10906) 3753d3c2 while its Job runs -> QA + blind; lead reads the authz diff.
+- T-356 S1 64b4effa (MCP authz gaps 1-4; 10906) by 3753d3c2, Jobs pending. 10922: workspace resolver NOT wired (that is
+  the multi-user switch); FR19 enforced by test + exemption list, not at start-up -> QA + blind; lead reads the authz diff.
 - Queues: c691df71 T-425 > T-969 > T-975 > S0a+S0b > S2b > T-565 > T-976 > H2 delta. d9f18599 H2 S1 > H1 delta > T-974
   FIX3 > T-969 > T-975 > PRD > S2b > S0b. a3554d40 T-961 + T-974 FIX3. 76845676 T-1043 + T-1065. 2a0edbd8 T-976 > S2b >
   T-565 > PRD. 3753d3c2 H2 fix > T-356.
