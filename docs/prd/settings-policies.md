@@ -1031,7 +1031,16 @@ working. A session takes the hook when it starts: one started before the guard l
   every `-C` first, so it reads the value after the last `-C`; an absolute value is still checked like `-C`); the name of a refused
   `GIT_*` variable with no value (`export GIT_DIR`, `declare -x`), `read` into it and `printf -v` into it are refused; `GIT_TRACE*` passes
   only as a switch or a number (it appends to any file it names); and `git config --file`, `-f`, `--global`, `--system` and `--blob` are
-  refused. **Residual (item 22):** the swap guard is a name list (`ln`, `mv`, ...); `python3 -c`, `node -e`, `perl -e`, `link`, `dd`, a
+  refused. **S2c (QA of S2 and S2b, T-860 comments 8845 and 8936):** `setsid` and `taskset` (with its mask or `-c` list) are unwrapped like
+  `nice`, and `script -c CMD`, `script -qc CMD` and `script --command=CMD` are read like `sh -c`, so the wrapped command gets every check
+  above. `set -a`, `set -o allexport` (and any `set` flag word the guard cannot read) are refused in a lane workspace, because every variable
+  set after them is exported without an `export` line; `set +a` and other flags pass. `for GIT_DIR in ...` (and `select`) over a refused
+  `GIT_*` name is refused, and so is a parameter expansion that assigns one (a refused `GIT_*` name in `:=` or `=` form; `:-` and
+  single-quoted text pass). The dynamic-name forms: `export "$x"=v`, `export "$x"` and `declare -x "$x"` (a name the guard cannot read)
+  are refused; `eval "export $x=v"` is read as the code it runs, so it is refused the same way; every nameref (`declare -n`, `typeset -n`,
+  `local -n`) is refused as unreadable, since the name it points to is not on the line. `printf -v "$x"` with a variable name is not refused
+  on its own (it sets a variable, nothing more): the export that would make it matter is. `git config --blob` is pinned in the refused
+  options by its own test (QA mutant D9a). **Residual (item 22):** the swap guard is a name list (`ln`, `mv`, ...); `python3 -c`, `node -e`, `perl -e`, `link`, `dd`, a
   redirect or `git checkout` of a tracked link swap a link the same way and are not on it. The real fix is permissions (the lane user
   cannot write where the links resolve), not more names. Out of scope, named so they are not a surprise: a race between the check and the run (permissions close it);
   a `.git` file planted in a lane folder that points at the main repository; repository hooks; `cd M && git commit` (the cwd moves, not

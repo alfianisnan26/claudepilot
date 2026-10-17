@@ -1004,3 +1004,130 @@ test('T-924: the roots file is delivered root-owned 0644 with the default roots,
     assert.throws(() => gitCRootsContent([bad]), /git -C root/, bad);
   }
 });
+
+// T-860 S2c (QA of S2 and S2b): more wrappers, more ways to set a GIT_ variable, and git config --blob. Each R form was allowed before this
+// slice (except where a comment says the older rule already caught it); each A form is the near miss that must stay allowed.
+test('T-860 S2c: setsid, taskset and script -c hide a git command, and the wrapped command is read like any other', () => {
+  const { wt, main, sh } = gitCRig();
+  const M = main;
+  const R: [string, string][] = [
+    ['setsid', `setsid git -C ${M} status`],
+    ['setsid -f', `setsid -f git -C ${M} commit -m y`],
+    ['setsid --wait', `setsid --wait git -C ${M} status`],
+    ['taskset with a mask', `taskset 0x1 git -C ${M} status`],
+    ['taskset -c (an older rule caught it too)', `taskset -c 0,1 git -C ${M} status`],
+    ['taskset --cpu-list', `taskset --cpu-list 0 git -C ${M} status`],
+    ['setsid then taskset', `setsid taskset 0x1 git -C ${M} status`],
+    ['setsid and a GIT_ variable', `GIT_DIR=${M}/.git setsid git -C ${wt} status`],
+    ['setsid and an option before the subcommand', `setsid git -C ${wt} -c core.worktree=${M} status`],
+    ['script -qc', `script -qc 'git -C ${M} status' /dev/null`],
+    ['script -c', `script -c "git -C ${M} commit -m y" /dev/null`],
+    ['script --command=', `script --command='git -C ${M} status' /dev/null`],
+    ['script -c glued', `script -qc'git -C ${M} status' /dev/null`],
+    ['script after setsid', `setsid script -qc 'git -C ${M} status' /dev/null`],
+    ['script with an option before -c', `script -q -c 'git -C ${M} status' /dev/null`],
+    ['script of a GIT_ variable inside', `script -qc 'GIT_DIR=${M}/.git git -C ${wt} status' /dev/null`],
+  ];
+  const A: [string, string][] = [
+    ['setsid of a lane git', `setsid git -C ${wt} status`],
+    ['setsid -f of another program', 'setsid -f echo hi'],
+    ['taskset mask of a lane git', `taskset 0x1 git -C ${wt} status`],
+    ['taskset -c of a lane git', `taskset -c 0 git -C ${wt} log -3`],
+    ['script of a lane git', `script -qc 'git -C ${wt} status' /dev/null`],
+    ['script of another program', "script -qc 'echo hi' /dev/null"],
+    ['script with no command', 'script -q /dev/null'],
+  ];
+  const misses: string[] = [];
+  for (const [what, command] of R) {
+    try {
+      refused(sh(command), `S2c ${what}: ${JSON.stringify(command)}`);
+    } catch (e) {
+      misses.push((e as Error).message.split('\n')[0] ?? 'failed');
+    }
+  }
+  for (const [what, command] of A) {
+    try {
+      allowed(sh(command), `S2c ${what}: ${JSON.stringify(command)}`);
+    } catch (e) {
+      misses.push((e as Error).message.split('\n')[0] ?? 'failed');
+    }
+  }
+  assert.deepEqual(misses, []);
+});
+
+// QA mutant D9a: dropping --blob from the refused list of git config options survived, because no test named it.
+test('T-860 S2c: git config --blob (and --blob=) is refused in a lane workspace, a plain read stays allowed', () => {
+  const { wt, sh } = gitCRig();
+  refused(sh(`git -C ${wt} config --blob HEAD:.gitmodules --get submodule.x.url`), 'config --blob REV:file');
+  refused(sh(`git -C ${wt} config --blob=HEAD:.gitmodules --get submodule.x.url`), 'config --blob=REV:file');
+  refused(sh(`git -C ${wt} config --get --blob HEAD:.gitmodules submodule.x.url`), 'config --get --blob');
+  allowed(sh(`git -C ${wt} config --get submodule.x.url`), 'config --get without --blob');
+  allowed(sh(`git -C ${wt} config --list`), 'config --list');
+});
+
+test('T-860 S2c: set -a, a for loop over a GIT_ name, GIT_ assigned by a parameter expansion, namerefs and dynamic export names are refused', () => {
+  const { wt, main, sh } = gitCRig();
+  const M = main;
+  const D = '$'; // keeps "dollar brace" out of the template literals below
+  const R: [string, string][] = [
+    ['set -a', `set -a; git -C ${wt} status`],
+    ['set -ea', `set -ea; git -C ${wt} status`],
+    ['set -o allexport', `set -o allexport; git -C ${wt} status`],
+    ['set -euo allexport (flags then -o)', `set -eo allexport; git -C ${wt} status`],
+    ['set of a variable (flags unknown)', `set "$F"; git -C ${wt} status`],
+    ['for GIT_DIR', `for GIT_DIR in ${M}/.git; do git -C ${wt} status; done`],
+    ['for GIT_WORK_TREE', `for GIT_WORK_TREE in ${M}; do git -C ${wt} add -A; done`],
+    ['select GIT_DIR', `select GIT_DIR in ${M}/.git; do git -C ${wt} status; done`],
+    ['GIT_DIR := in a colon command', `: "${D}{GIT_DIR:=${M}/.git}"; git -C ${wt} status`],
+    ['GIT_DIR = (no colon)', `: ${D}{GIT_DIR=${M}/.git}; git -C ${wt} status`],
+    ['GIT_WORK_TREE := inside an echo', `echo "${D}{GIT_WORK_TREE:=${M}}"; git -C ${wt} status`],
+    ['GIT_INDEX_FILE :=', `: "${D}{GIT_INDEX_FILE:=/tmp/i}"; git -C ${wt} status`],
+    ['GIT_TRACE := a file', `: "${D}{GIT_TRACE:=${M}/x}"; git -C ${wt} status`],
+    ['GIT_ := in a command substitution', `echo "$(: ${D}{GIT_DIR:=${M}/.git})"; git -C ${wt} status`],
+    ['declare -n', `declare -n ref=GIT_DIR; ref=${M}/.git; export ref; git -C ${wt} status`],
+    ['typeset -n', `typeset -n ref=GIT_DIR; git -C ${wt} status`],
+    ['local -n', `f(){ local -n ref=GIT_DIR; ref=x; }; f; git -C ${wt} status`],
+    ['declare -n of a name set later', `declare -n ref; ref=GIT_WORK_TREE; git -C ${wt} status`],
+    ['export "$x"=v', `x=GIT_DIR; export "$x"=${M}/.git; git -C ${wt} status`],
+    ['export "$x" with no value', `x=GIT_DIR; printf -v "$x" %s ${M}/.git; export "$x"; git -C ${wt} status`],
+    ['export a name with a variable inside', `n=DIR; export GIT_"$n"=${M}/.git; git -C ${wt} status`],
+    ['declare -x "$x"=v', `x=GIT_DIR; declare -x "$x"=${M}/.git; git -C ${wt} status`],
+    ['eval of export with a variable name', `x=GIT_DIR; eval "export $x=${M}/.git"; git -C ${wt} status`],
+  ];
+  const A: [string, string][] = [
+    ['set -e', `set -e; git -C ${wt} status`],
+    ['set -euo pipefail', `set -euo pipefail; git -C ${wt} status`],
+    ['set +a', `set +a; git -C ${wt} status`],
+    ['set -o pipefail', `set -o pipefail; git -C ${wt} status`],
+    ['set -- args', `set -- -a b; git -C ${wt} status`],
+    ['a message that says set -a', `git -C ${wt} commit -m "set -a and for GIT_DIR in x"`],
+    ['for over a plain name', `for d in a b; do echo "$d"; done; git -C ${wt} status`],
+    ['for over an author name', `for GIT_AUTHOR_NAME in a b; do git -C ${wt} commit -m y; done`],
+    ['GIT_DIR := in single quotes (never expanded)', `echo '${D}{GIT_DIR:=x}'; git -C ${wt} status`],
+    ['GIT_DIR :- (reads, never assigns)', `echo "${D}{GIT_DIR:-x}"; git -C ${wt} status`],
+    ['GIT_AUTHOR_NAME := (not a refused name)', `: "${D}{GIT_AUTHOR_NAME:=x}"; git -C ${wt} status`],
+    ['another name :=', `: "${D}{FOO:=x}"; git -C ${wt} status`],
+    ['export a plain name with a variable value', `v=1; export FOO="$v"; git -C ${wt} status`],
+    ['export PATH extended', `export PATH="$PATH:/x"; git -C ${wt} status`],
+    ['declare -x a plain name', `declare -x FOO=1; git -C ${wt} status`],
+    ['declare -i', `declare -i n=1; git -C ${wt} status`],
+    ['local -a', `f(){ local -a arr=(a b); }; f; git -C ${wt} status`],
+    ['printf -v a plain name', `printf -v out %s hi; git -C ${wt} status`],
+  ];
+  const misses: string[] = [];
+  for (const [what, command] of R) {
+    try {
+      refused(sh(command), `S2c ${what}: ${JSON.stringify(command)}`);
+    } catch (e) {
+      misses.push((e as Error).message.split('\n')[0] ?? 'failed');
+    }
+  }
+  for (const [what, command] of A) {
+    try {
+      allowed(sh(command), `S2c ${what}: ${JSON.stringify(command)}`);
+    } catch (e) {
+      misses.push((e as Error).message.split('\n')[0] ?? 'failed');
+    }
+  }
+  assert.deepEqual(misses, []);
+});
