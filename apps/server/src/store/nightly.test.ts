@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readdirSync, statSync, writeFileSync } from 'node:fs';
+import { closeSync, openSync, readdirSync, statSync, writeFileSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
@@ -52,6 +52,24 @@ test('the nightly backup is an online, checked, gzipped copy, mode 0600, with no
     writer.close();
     store.close();
   }
+});
+
+test('a damaged source database is refused: no nightly file is written, so a bad copy never goes off-site', async () => {
+  const { dir, store } = await filled(500);
+  const path = store.path;
+  store.close(); // checkpoints the WAL into portal.db
+  // The backup API copies pages without reading them, so a damaged b-tree page reaches the copy. Garble the type byte of the
+  // last pages: the notes rows, inserted last, live there.
+  const fd = openSync(path, 'r+');
+  try {
+    const pages = statSync(path).size / 4096;
+    for (let p = pages - 10; p < pages; p++) writeSync(fd, Buffer.alloc(16, 0xff), 0, 16, p * 4096);
+  } finally {
+    closeSync(fd);
+  }
+  await assert.rejects(nightlyBackup({ dataDir: dir }), /failed its integrity check/);
+  assert.deepEqual(readdirSync(nightlyDir(dir)), [], 'neither the finished file nor a work file is left');
+  assert.equal(nightlyStatus({ dataDir: dir }).stale, true, 'so the 26-hour signal stays on');
 });
 
 test('retention keeps the newest of the last 7 days and of the last 4 weeks', () => {
