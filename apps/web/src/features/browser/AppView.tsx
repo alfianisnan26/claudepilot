@@ -41,7 +41,6 @@ export function AppView({ workspaceId }: { workspaceId: string }) {
   };
   useEffect(() => {
     void loadPorts();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspaceId]);
 
   // The address bar shows the front tab's address.
@@ -49,7 +48,7 @@ export function AppView({ workspaceId }: { workspaceId: string }) {
     if (active) setText(formatAppTarget(currentTarget(active)));
     else setText('');
     setProblem(null);
-  }, [active?.id, active?.index, active?.entries.length]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [active?.id, active?.index, active?.entries.length]);
 
   /** Opens a tab's current address through the route and points its frame at the one-time URL. */
   // State changes go through the ref at once, so a second call in the same tick starts from the first one's result.
