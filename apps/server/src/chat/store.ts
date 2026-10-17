@@ -976,7 +976,7 @@ export class ChatStore {
     return rows.map(({ toolUseId, ...r }) => {
       const c = toolUseId ? (call.get(r.sessionId, r.seq, toolUseId) as { toolName: string | null; command: string | null } | undefined) : undefined;
       // the workspace as its key (`<target>/<name>`), whatever form the row stores
-      return { ...r, workspaceId: this.#refs ? this.#refs.keyOf(r.workspaceId) : r.workspaceId, text: r.text ?? '', toolName: c?.toolName ?? null, command: typeof c?.command === 'string' ? c.command : null };
+      return { ...r, workspaceId: (this.#refs ? this.#refs.keyOf(r.workspaceId) : null) ?? r.workspaceId, text: r.text ?? '', toolName: c?.toolName ?? null, command: typeof c?.command === 'string' ? c.command : null };
     });
   }
 
