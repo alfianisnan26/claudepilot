@@ -50,7 +50,7 @@ const parseStamp = (s: string) =>
   new Date(`${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}T${s.slice(9, 11)}:${s.slice(11, 13)}:${s.slice(13, 15)}Z`);
 
 /** Backups are single self-contained files: no WAL, mode 0600. */
-function finishBackup(file: string) {
+export function finishBackup(file: string) {
   const db = new DatabaseSync(file);
   try {
     db.exec('PRAGMA journal_mode = DELETE');
@@ -60,7 +60,7 @@ function finishBackup(file: string) {
   chmodSync(file, 0o600);
 }
 
-function ensurePrivateDir(dir: string) {
+export function ensurePrivateDir(dir: string) {
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   try {
     chmodSync(dir, 0o700);

@@ -78,6 +78,7 @@ import { deliveryState, workspaceView } from './workspaces/view.js';
 import { childGuard, declareWorkspacePolicies, targetBodyGuard, workspaceGuard, workspaceRefGuard } from './workspaces/authz.js';
 import { generateSecretKey, parseSecretKey, SecretKeyError } from './store/secretBox.js';
 import type { Store } from './store/store.js';
+import { nightlyStatus } from './store/nightly.js';
 import type { Workspaces } from './workspaces/manager.js';
 import { createPoolRoutes, createWorkspacePoolRoutes } from './pools/routes.js';
 import { createSecretsRoutes } from './secrets/routes.js';
@@ -641,6 +642,7 @@ export function createApp(
       resumable: store.resumable,
       lastBackupAt: backups[0]?.at.toISOString() ?? null,
       backups: backups.length,
+      nightlyBackup: nightlyStatus({ dataDir: store.dataDir }),
       secretKey: {
         source: store.keySource,
         canSetUp: locked && store.writable && !store.hasKeyCheck,
