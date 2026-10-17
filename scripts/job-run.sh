@@ -260,7 +260,7 @@ fi
 # Reuse (T-731), only with --reuse (every other run is a Job and neither reads nor writes the store): the same repository, full commit and command
 # that already passed on this runner returns its saved log and exit code, no Job. Only exact inputs make a key: a full 40-hex commit for the ref,
 # for --against and for every --also ref (a branch or "stg" moves), and no --artifacts (the files are not saved). The key holds the hash of this
-# script and of the YAML, the resolved runner image and --big, so a change to the runner is a miss.
+# script and of the YAML, the resolved runner image, the command container's image (--image, else the same) and --big, so a change to the runner is a miss.
 hex40='^[0-9a-f]{40}$'; reuse_days=${JOB_RUN_REUSE_MAX_AGE_DAYS:-7}; key=; cache=
 if [ -n "$reuse" ]; then
   # T-611 (QA UI 8207, items 2 and 4): a pass without a credential must never stand for a run with it, and a log made with one is never saved.
@@ -275,7 +275,7 @@ if [ -n "$reuse" ]; then
     exact=1
     for a in ${also[@]+"${also[@]}"}; do [[ ${a##*@} != "$a" && ${a##*@} =~ $hex40 ]] || exact=; done
     if [ -n "$exact" ]; then
-      key=$({ printf '%s\0' v2 "$(cat "$0" "$here/deploy/k3s-build/job-run.yaml" | sha256sum | cut -d' ' -f1)" "$image" "${big:+big}" "$url" "$ref" "$cmd" "$against" "$keep" "$steps" "$alsos"; } | sha256sum | cut -d' ' -f1)
+      key=$({ printf '%s\0' v2 "$(cat "$0" "$here/deploy/k3s-build/job-run.yaml" | sha256sum | cut -d' ' -f1)" "$image" "${run_image:-$image}" "${big:+big}" "$url" "$ref" "$cmd" "$against" "$keep" "$steps" "$alsos"; } | sha256sum | cut -d' ' -f1)
     fi
   fi
   [ -n "$key" ] || echo "job-run: --reuse: this run has no exact key (a full commit is needed for --ref, --against and --also; no --artifacts): it runs as a Job and is not saved" >&2

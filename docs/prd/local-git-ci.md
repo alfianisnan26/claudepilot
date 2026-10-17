@@ -628,7 +628,7 @@ CPU-request measurement.** An OOMKilled Job says so and names `--big`.
 session's result. With it, a Job that passed is saved, and the same work later returns the saved log and exit code with no Job and no kubectl call.
 
 - **Key:** the SHA-256 of these, NUL-separated, in order: key version `v2`; the hash of `scripts/job-run.sh` and `deploy/k3s-build/job-run.yaml` together (a change
-  to either, even a comment, is a miss); the resolved runner image reference (its tag); `--big`; the repository's clone URL; the full 40-hex commit; the exact
+  to either, even a comment, is a miss); the resolved runner image reference (its tag); the effective command image (`--image`, else the runner image again: a pass in one image never stands for a run in another, and a run with no `--image` shares a key with one that names the same ref as the default, with the same steps) (T-379 S3); `--big`; the repository's clone URL; the full 40-hex commit; the exact
   command (the single string, or the quoted words); `--against`; `--keep-tests`; the `--also` list with its refs; `--steps`. Not in it, because they do not change
   what a pass means: `--timeout`, `--role`, the chat.
 - **Trust boundary:** the store is one workspace home. Any session in that workspace can write an entry, and a `--reuse` run from any session there trusts it.

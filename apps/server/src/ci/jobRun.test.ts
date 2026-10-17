@@ -1923,6 +1923,31 @@ test('T-731 reuse: a changed commit, command, steps, --against, --also, the hash
   assert.equal(n(), seen);
 });
 
+test('T-379 S3 reuse: the command image is in the key: same image reused, another --image a miss, no --image equals an explicit default', () => {
+  const py = 'registry.int.isnan.me/claudepilot/py:1', other = 'registry.int.isnan.me/claudepilot/py:2';
+  const c = sha();
+  const w = world();
+  assert.equal(go(w, c, 'true', ['--image', py]).code, 0);
+  assert.equal(jobs(w), 1);
+  const same = go(w, c, 'true', ['--image', py]);
+  assert.match(same.out, /reused a passed result/, same.out);
+  assert.equal(jobs(w), 1, 'same command, same image: no Job');
+  const diff = go(w, c, 'true', ['--image', other]);
+  assert.equal(diff.code, 0, diff.out);
+  assert.doesNotMatch(diff.out, /reused a passed result/);
+  assert.equal(jobs(w), 2, 'another --image: a Job');
+  const plain = go(w, c, 'true', ['--steps', 'none']);
+  assert.doesNotMatch(plain.out, /reused a passed result/, 'no --image (workspace image) is not the py image');
+  assert.equal(jobs(w), 3);
+  // Defined behaviour: no --image and an explicit --image equal to the default image share a key (same effective image; --image forces --steps none).
+  const w2 = world();
+  const env = { JOB_RUN_IMAGE: py };
+  assert.equal(go(w2, c, 'true', ['--steps', 'none'], SCRIPT, env).code, 0);
+  const viaFlag = go(w2, c, 'true', ['--image', py], SCRIPT, env);
+  assert.match(viaFlag.out, /reused a passed result/, viaFlag.out);
+  assert.equal(jobs(w2), 1);
+});
+
 const edit = (from: string, to: string) => (s: string) => {
   const t = s.replace(from, to);
   assert.notEqual(t, s, `the mutation applies: ${from}`);
