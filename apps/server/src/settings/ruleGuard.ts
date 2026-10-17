@@ -2009,10 +2009,31 @@ else {
 }
 `;
 
-/** The guard's two files: root-owned, outside every workspace folder (policy owner, `/etc/claudepilot/bin/policy-*`). */
+/** The file the guard's `git -C` check reads for its lane roots (T-860, T-924). */
+export const GITC_ROOTS_PATH = '/etc/claudepilot/git-c-roots';
+
+/** The lane worktree roots of this workspace's tracks (T-924). Never a main checkout: the guard exists to keep lanes off those. */
+export const GITC_ROOTS: readonly string[] = [
+  '/home/node/work/agentic-worktrees',
+  '/home/node/work/claudepilot.worktrees',
+  '/home/node/work/tradingbot.worktrees',
+  '/home/node/work/konfersi-universe.worktrees',
+];
+
+/** The file's content: one root a line. Throws for a root that is not absolute, has `..` or is not a worktrees folder. */
+export function gitCRootsContent(roots: readonly string[]): string {
+  for (const r of roots) {
+    const ok = r.startsWith('/') && !r.split('/').includes('..') && !/[\s\u0000-\u001f]/.test(r) && !r.endsWith('/') && /(^|\/)(agentic-worktrees|[^/]+\.worktrees)$/.test(r);
+    if (!ok) throw new Error(`git -C root "${r}" must be an absolute path without "..", ending in .worktrees or agentic-worktrees (never a main checkout)`);
+  }
+  return `# claudepilot: lane roots for the git -C check of policy-rule-guard (T-860, T-924). Root-owned; written by the portal.\n${roots.join('\n')}\n`;
+}
+
+/** The guard's files: root-owned, outside every workspace folder (policy owner: `/etc/claudepilot/bin/policy-*` and the roots file). */
 export const RULE_GUARD_FILES: DeliveredFile[] = [
   { path: RULE_GUARD_PATH, content: RULE_GUARD_WRAPPER, mode: 0o755, uid: ROOT, gid: ROOT },
   { path: `${RULE_GUARD_PATH}.cjs`, content: RULE_GUARD_SCRIPT, mode: 0o644, uid: ROOT, gid: ROOT },
+  { path: GITC_ROOTS_PATH, content: gitCRootsContent(GITC_ROOTS), mode: 0o644, uid: ROOT, gid: ROOT },
 ];
 
 /** The tools it runs on: the file tools, Bash, and every MCP tool (a path argument of one that writes). */

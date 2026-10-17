@@ -1006,7 +1006,11 @@ working. A session takes the hook when it starts: one started before the guard l
   path (a write to the main folder checkout through the `commit` and merge allows). The guard reads the `-C` path as the shell does (the
   same lexer: quotes, backslashes, ANSI-C quoting), resolves it against the command's folder (a `cd` before it counts), takes its real
   path (symlinks followed) and allows it only strictly below a lane root: `/home/node/work/agentic-worktrees`, or a folder listed in the
-  root-owned `/etc/claudepilot/git-c-roots` (one absolute path a line, `#` comments). Refused: a path with a variable, a command
+  root-owned `/etc/claudepilot/git-c-roots` (one absolute path a line, `#` comments). **The portal delivers that file (T-924)** with the
+  policy owner's other guard files (root, 0644, rewritten by the reconciler's hash check when removed or edited), one root per track:
+  `/home/node/work/agentic-worktrees`, `.../claudepilot.worktrees`, `.../tradingbot.worktrees`, `.../konfersi-universe.worktrees`
+  (`GITC_ROOTS` in `settings/ruleGuard.ts`). Each root must be absolute, free of `..`, and end in `.worktrees` or `agentic-worktrees`;
+  anything else (a main checkout) makes the delivery throw, so a main folder can never be a root. Refused: a path with a variable, a command
   substitution or a backtick (`$X`, `$(...)`), a glob or brace pattern (`.?`, `.[.]`), a path that does not exist, a `-C` with no folder,
   a relative path when the folder is unknown, a symlink that points out, the root itself and a sibling that only starts with its name.
   Every `-C` of a command is checked (`git -C a -C b`), in a pipe, after `cd x &&`, in `bash -c`. The refusal's audit line carries the
