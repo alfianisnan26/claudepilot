@@ -382,6 +382,11 @@ function ansiC(src, i) {
 }
 
 const VAR_START = /[A-Za-z_{0-9@*#?$!-]/;
+// A parameter expansion that ASSIGNS a refused GIT_ name (dollar, brace, name, := or =): it sets the variable where no assignment word shows (T-860 S2c).
+function assignsGit(src, j) {
+  const m = /^\$\{(GIT_[A-Za-z0-9_]*):?=/.exec(src.slice(j, j + 80));
+  return !!m && (EXEC_ENV.test(m[1]) || /^GIT_TRACE/.test(m[1]));
+}
 
 /**
  * Splits a command line into words (quotes removed; NUL where a value is not known: a variable, $(...), backticks),
@@ -395,6 +400,7 @@ function lex(src) {
   let awaitingDelim = null;
   // Set when a quote is never closed or a backslash ends the text: the shell would not run it as written (T-860).
   let bad = false;
+  let gitAssign = false;
   let cur = null;
   let i = 0;
   const n = src.length;
@@ -485,6 +491,7 @@ function lex(src) {
           continue;
         }
         if (src[j] === '$' && VAR_START.test(src[j + 1] || '')) {
+          if (assignsGit(src, j)) gitAssign = true;
           w.dyn = true;
           w.text += '\u0000';
           j = skipVar(src, j);
@@ -520,6 +527,7 @@ function lex(src) {
       continue;
     }
     if (c === '$' && VAR_START.test(src[i + 1] || '')) {
+      if (assignsGit(src, i)) gitAssign = true;
       const w = word();
       w.dyn = true;
       w.text += '\u0000';
@@ -612,7 +620,7 @@ function lex(src) {
   }
   end();
   readBodies();
-  return { tokens: tokens, subs: subs, bodies: bodies, bad: bad };
+  return { tokens: tokens, subs: subs, bodies: bodies, bad: bad, gitAssign: gitAssign };
 }
 
 /** Simple commands: words and redirections between operators; whether stdin comes from a pipe. */
@@ -815,8 +823,14 @@ function unwrap(words) {
       }
       takeAssigns();
     } else if (name === 'command' || name === 'builtin' || name === 'nohup' || name === 'time' || name === 'chronic' || name === 'unbuffer' || name === 'exec') skipOpts(/^-a$/);
-    else if (name === 'nice' || name === 'ionice' || name === 'stdbuf' || name === 'chrt' || name === 'taskset') skipOpts(/^-[ncpoei]$/);
-    else if (name === 'timeout') {
+    else if (name === 'nice' || name === 'ionice' || name === 'stdbuf' || name === 'chrt') skipOpts(/^-[ncpoei]$/);
+    else if (name === 'setsid') skipOpts(/^$/);
+    else if (name === 'taskset') {
+      // taskset [-c] MASK|LIST command: one word (the mask, or the list after -c) comes between the options and the command.
+      ws.shift();
+      while (ws.length && ws[0].text.startsWith('-') && ws[0].text !== '-') if (ws.shift().text === '--') break;
+      ws.shift();
+    } else if (name === 'timeout') {
       skipOpts(/^-[sk]$|^--(signal|kill-after)$/);
       ws.shift();
     } else if (name === 'xargs') {
@@ -1050,6 +1064,7 @@ function analyze(command, st, cwd, depth) {
   if (depth > 6) return st.fragments ? hit('nested commands too deep', '') : null;
   const l = lex(command);
   if (l.bad && /(^|[^A-Za-z0-9_-])git([^A-Za-z0-9_-]|$)/.test(command) && gitCRoots().active) return hit('git in a command with an unclosed quote or a trailing backslash (a lane workspace)', '');
+  if (l.gitAssign && gitCRoots().active) return hit('a parameter expansion that assigns a GIT_ variable that moves a folder or runs a program, in a lane workspace', '');
   for (const sub of l.subs) {
     const r = analyze(sub, st, cwd, depth + 1);
     if (r) return r;
@@ -1105,6 +1120,37 @@ function analyze(command, st, cwd, depth) {
     const name = path.basename(head.text);
     const args = ws.slice(1);
     if (GITC_SWAPPERS.has(name)) (st.swap || (st.swap = [])).push(st.cmdN);
+    // for GIT_DIR in x y: the loop variable is set by the shell, then exported without a value (T-860 S2c).
+    if ((name === 'for' || name === 'select') && args[0] && !args[0].dyn) {
+      const r = gitEnvNameHit(args[0]);
+      if (r) return r;
+    }
+    // set -a / set -o allexport: every variable set after it is exported, so a GIT_ one set by read or printf -v needs no export (T-860 S2c).
+    if (name === 'set' && gitCRoots().active) {
+      for (let i = 0; i < args.length && args[i].text !== '--'; i++) {
+        const t = args[i].text;
+        if (args[i].dyn || /^-[A-Za-z]*a/.test(t) || (/^-[A-Za-z]*o$/.test(t) && args[i + 1] && args[i + 1].text === 'allexport') || t === '-oallexport') return hit('set -a or set -o allexport in a lane workspace', '');
+      }
+    }
+    // script -qc 'git ...' runs its command in a shell: read it like sh -c (a typescript file operand is only a file).
+    if (name === 'script') {
+      for (let i = 0; i < args.length; i++) {
+        const t = args[i].text;
+        const eq = /^--command=([\s\S]*)$/.exec(t);
+        let code = null;
+        if (eq) code = Object.assign({}, args[i], { text: eq[1] });
+        else if (!args[i].dyn && /^-[A-Za-z]*c$/.test(t)) code = args[i + 1];
+        else if (!args[i].dyn && /^-[A-Za-z]*c.+/.test(t) && !t.startsWith('--')) code = Object.assign({}, args[i], { text: t.replace(/^-[A-Za-z]*?c/, '') });
+        if (!code) continue;
+        const text = codeOf(code, base);
+        if (text === null) return hit('script -c of code the guard cannot see', '');
+        if (code.dyn && (st.fragments || st.decoder)) return hit('script -c with a value the guard cannot see', shown(code));
+        const r = analyze(text, st, base, depth + 1);
+        if (r) return r;
+        break;
+      }
+      // No continue: script FILE writes its typescript there, so the generic check below still reads the operands for a rule file.
+    }
     // A for list is read; what the loop does with it is checked in its own commands (a write to $f is a variable).
     if (name === 'for' || name === 'select' || name === 'case' || name === 'esac' || name === 'function') continue;
     // export LESSOPEN='|rm %s': a variable that runs code, set for the commands after it.
@@ -1112,6 +1158,13 @@ function analyze(command, st, cwd, depth) {
       for (const a of args) {
         const r = assignHit(a, st, false) || gitEnvHit(a) || gitEnvNameHit(a);
         if (r) return r;
+      }
+      if (gitCRoots().active) {
+        // declare -n ref=GIT_DIR (a nameref): what the name points to is not on the line, so every nameref is refused (T-860 S2c).
+        if (name !== 'export' && args.some((a) => !a.dyn && /^-[A-Za-z]*n/.test(a.text))) return hit('a nameref (declare -n) in a lane workspace', '');
+        // export "$x"=v, export "$x", declare -x "$x": a name the guard cannot read could be GIT_DIR.
+        const exports = name === 'export' || (name !== 'local' && name !== 'readonly' && args.some((a) => !a.dyn && /^-[A-Za-z]*x/.test(a.text)));
+        if (exports && args.some((a) => a.dyn && a.text.slice(0, a.text.indexOf('=') < 0 ? undefined : a.text.indexOf('=')).includes('\u0000'))) return hit('export of a variable name the guard cannot see, in a lane workspace', '');
       }
     }
     // read GIT_DIR <<<x, printf -v GIT_DIR x: a refused GIT_ name filled from input, to be exported without a value.
@@ -2023,8 +2076,16 @@ export const GITC_ROOTS: readonly string[] = [
 /** The file's content: one root a line. Throws for a root that is not absolute, has `..` or is not a worktrees folder. */
 export function gitCRootsContent(roots: readonly string[]): string {
   for (const r of roots) {
-    const ok = r.startsWith('/') && !r.split('/').includes('..') && !/[\s\u0000-\u001f]/.test(r) && !r.endsWith('/') && /(^|\/)(agentic-worktrees|[^/]+\.worktrees)$/.test(r);
-    if (!ok) throw new Error(`git -C root "${r}" must be an absolute path without "..", ending in .worktrees or agentic-worktrees (never a main checkout)`);
+    const ok =
+      r.startsWith('/') &&
+      !r.split('/').includes('..') &&
+      !/[\s\u0000-\u001f]/.test(r) &&
+      !r.endsWith('/') &&
+      /(^|\/)(agentic-worktrees|[^/]+\.worktrees)$/.test(r);
+    if (!ok)
+      throw new Error(
+        `git -C root "${r}" must be an absolute path without "..", ending in .worktrees or agentic-worktrees (never a main checkout)`,
+      );
   }
   return `# claudepilot: lane roots for the git -C check of policy-rule-guard (T-860, T-924). Root-owned; written by the portal.\n${roots.join('\n')}\n`;
 }

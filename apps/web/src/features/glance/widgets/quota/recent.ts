@@ -16,10 +16,10 @@ function load(minAgeMs: number) {
   if (inflight || Date.now() - loadedAt < minAgeMs) return;
   inflight = true;
   chatApi
-    .list()
+    .list({ limit: 50 }) // newest activity first: the first page holds the most recent Claude
     .then(
-      (sessions) => {
-        const next = recentClaudeOf(sessions);
+      (page) => {
+        const next = recentClaudeOf(page.items);
         loadedAt = Date.now();
         if (next !== recent) {
           recent = next;

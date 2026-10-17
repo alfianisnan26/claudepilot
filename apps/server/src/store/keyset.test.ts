@@ -3,14 +3,16 @@ import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
 import { isAppError } from '@isnanme/core';
 import { CURSOR_DEFAULT_LIMIT, CURSOR_MAX_LIMIT } from '@portal/contracts';
-import { clampLimit, keysetPage, type KeysetSpec } from './keyset.js';
+import { clampLimit, cursorAfter, keysetPage, peekCursor, type KeysetSpec } from './keyset.js';
 
 const spec: KeysetSpec = { scope: 'test.rows', table: 'rows', sortCol: 'at', idCol: 'id' };
 type Row = { id: number; at: string; tag: string };
 
 function open(count: number) {
   const db = new DatabaseSync(':memory:');
-  db.exec('CREATE TABLE rows (id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, tag TEXT NOT NULL) STRICT; CREATE INDEX rows_at ON rows (at)');
+  db.exec(
+    'CREATE TABLE rows (id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, tag TEXT NOT NULL) STRICT; CREATE INDEX rows_at ON rows (at)',
+  );
   const add = (at: string, tag: string) => Number(db.prepare('INSERT INTO rows (at, tag) VALUES (?, ?)').run(at, tag).lastInsertRowid);
   // Runs of equal sort keys that straddle every page boundary: the id is what keeps the order total.
   for (let i = 0; i < count; i++) add(`2026-01-01T00:00:${String(Math.floor(i / 7)).padStart(2, '0')}Z`, `r${i}`);
@@ -32,7 +34,10 @@ function walk(db: DatabaseSync, limit: number, between?: (page: number) => void,
 
 test('walk: every row once, newest first, with ties on the sort key; rows inserted during the walk cause no duplicate and no skip', () => {
   const { db, add } = open(60);
-  const original = db.prepare('SELECT id FROM rows ORDER BY at DESC, id DESC').all().map((r) => Number(r.id));
+  const original = db
+    .prepare('SELECT id FROM rows ORDER BY at DESC, id DESC')
+    .all()
+    .map((r) => Number(r.id));
   // New rows are newest, so they sort before the cursor: the walk must not see them again nor lose an old one.
   const seen = walk(db, 8, (page) => {
     add(`2027-01-01T00:00:${String(page).padStart(2, '0')}Z`, `new${page}`);
@@ -43,7 +48,10 @@ test('walk: every row once, newest first, with ties on the sort key; rows insert
 
 test('walk: a row removed during the walk leaves the rest in place', () => {
   const { db } = open(30);
-  const all = db.prepare('SELECT id FROM rows ORDER BY at DESC, id DESC').all().map((r) => Number(r.id));
+  const all = db
+    .prepare('SELECT id FROM rows ORDER BY at DESC, id DESC')
+    .all()
+    .map((r) => Number(r.id));
   const seen = walk(db, 5, (page) => {
     if (page === 1) db.prepare('DELETE FROM rows WHERE id = ?').run(all[5]!); // the last row of page 1 (already seen)
   });
@@ -78,7 +86,15 @@ test('a bad cursor is a 400: garbage, a forged body, a tampered signature and a 
   const [body] = good.split('.');
   const forgedBody = Buffer.from(JSON.stringify({ s: spec.scope, k: '9999', i: 1 })).toString('base64url');
   const other = keysetPage<Row>(db, { ...spec, scope: 'test.other' }, { limit: 5 }).next!;
-  for (const cursor of ['garbage', 'a.b', `${body}.`, `${forgedBody}.${good.split('.')[1]}`, `${body}.${'x'.repeat(43)}`, other, `${good}.extra`]) {
+  for (const cursor of [
+    'garbage',
+    'a.b',
+    `${body}.`,
+    `${forgedBody}.${good.split('.')[1]}`,
+    `${body}.${'x'.repeat(43)}`,
+    other,
+    `${good}.extra`,
+  ]) {
     assert.throws(
       () => keysetPage<Row>(db, spec, { cursor }),
       (e) => isAppError(e) && e.status === 400 && e.code === 'BAD_REQUEST',
@@ -87,6 +103,15 @@ test('a bad cursor is a 400: garbage, a forged body, a tampered signature and a 
   }
   // The good one still works.
   assert.equal(keysetPage<Row>(db, spec, { cursor: good, limit: 5 }).rows.length, 5);
+});
+
+test('a cursor is sealed: its body does not show the sort key or the id, and two cursors for one row differ', () => {
+  const sealedA = cursorAfter('test.rows', '2026-01-01T00:00:00Z', 'secret-row-id');
+  const sealedB = cursorAfter('test.rows', '2026-01-01T00:00:00Z', 'secret-row-id');
+  assert.notEqual(sealedA, sealedB);
+  const body = Buffer.from(sealedA.split('.')[0]!, 'base64url').toString('latin1');
+  assert.ok(!body.includes('secret-row-id') && !body.includes('2026-01-01'), 'the body is not readable');
+  assert.deepEqual(peekCursor(sealedA), { scope: 'test.rows', sort: '2026-01-01T00:00:00Z', id: 'secret-row-id' });
 });
 
 test('an unsafe identifier is refused before any SQL is built', () => {

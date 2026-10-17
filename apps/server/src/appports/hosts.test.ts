@@ -84,7 +84,10 @@ test('the dialer: Kubernetes, Docker and local get the bridge; a Connect target 
     calls.map((c) => c.at(-1)),
     ['8765', '8765', '8765'],
   );
-  const enrolled = createDialer({ runtimeFor: () => runtime('docker', 'enrolled'), exec: async () => assert.fail('no exec on a Connect target') });
+  const enrolled = createDialer({
+    runtimeFor: () => runtime('docker', 'enrolled'),
+    exec: async () => assert.fail('no exec on a Connect target'),
+  });
   await assert.rejects(enrolled('docker/ws-1', 8765), NotOnThisTarget);
   const none = createDialer({ runtimeFor: () => undefined, exec: async () => assert.fail('no exec') });
   await assert.rejects(none('gone/ws-1', 8765));
@@ -93,7 +96,12 @@ test('the dialer: Kubernetes, Docker and local get the bridge; a Connect target 
 });
 
 test('owns: the proxy takes app-* hosts under the suffix only, and nothing when the feature is off', () => {
-  const deps = { grants: new AppPortGrants(), dial: async () => assert.fail('no dial'), sessionValid: () => true, deniedPorts: new Set<number>() };
+  const deps = {
+    grants: new AppPortGrants(),
+    dial: async () => assert.fail('no dial'),
+    sessionValid: () => true,
+    deniedPorts: new Set<number>(),
+  };
   const on = new AppPortProxy({ ...deps, suffix: S });
   assert.equal(on.owns('app-ws-1-8080.apps.test'), true);
   assert.equal(on.owns('app-ws-1-8080.apps.test:3000'), true);

@@ -3393,6 +3393,220 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 786,
+    name: 'tickets: attachments (any file, kept by the portal)',
+    up(db) {
+      // Owner, 2026-10-17: tickets carry files ("all files"). The bytes live under <dataDir>/ticket-files/<sha256> (0700 directory, 0600 files),
+      // apart from the chat blobs (chat retention removes blobs no chat row links). A row is one file on one ticket; removing the row
+      // keeps the file while another row (any ticket) still names its sha256. `actor` is `ui`, `session:<id>` or `portal-mcp:<token id>`.
+      db.exec(`
+        CREATE TABLE ticket_attachments (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          ticket_number INTEGER NOT NULL REFERENCES tickets (number) ON DELETE CASCADE,
+          name TEXT NOT NULL,
+          size INTEGER NOT NULL CHECK (size >= 0),
+          media_type TEXT NOT NULL,
+          sha256 TEXT NOT NULL CHECK (length(sha256) = 64),
+          actor TEXT NOT NULL,
+          actor_label TEXT NOT NULL,
+          at TEXT NOT NULL
+        ) STRICT;
+        CREATE INDEX ticket_attachments_ticket ON ticket_attachments (ticket_number, id);
+        CREATE INDEX ticket_attachments_sha ON ticket_attachments (sha256);
+      `);
+    },
+  },
+  {
+    version: 787,
+    name: 'chat sessions: the crew channel and each member\'s read cursor (T-294)',
+    up(db) {
+      // T-294 (chat-sessions PRD FR51, crew_post and crew_read): one channel per lead, named by the lead's session id; its members are the
+      // lead and the workers that report to it. A message is redacted text from one member (`from_id`); `id` is the channel's order and the
+      // cursor's unit. A member's cursor is the last message it read; a restarted session reads on from there. Deleting the lead drops both.
+      db.exec(`
+        CREATE TABLE crew_messages (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          lead_id TEXT NOT NULL REFERENCES chat_sessions (id) ON DELETE CASCADE,
+          from_id TEXT NOT NULL,
+          text TEXT NOT NULL,
+          at TEXT NOT NULL
+        ) STRICT;
+        CREATE INDEX crew_messages_lead ON crew_messages (lead_id, id);
+        CREATE TABLE crew_cursors (
+          lead_id TEXT NOT NULL REFERENCES chat_sessions (id) ON DELETE CASCADE,
+          session_id TEXT NOT NULL,
+          last_id INTEGER NOT NULL DEFAULT 0,
+          PRIMARY KEY (lead_id, session_id)
+        ) STRICT;
+      `);
+    },
+  },
+  {
+    version: 400,
+    name: 'identity: email accounts and the login throttle (T-118 MU1-min)',
+    up(db) {
+      // Owner, 2026-10-17: "multi user feature login by email". MU1-min (identity block 400-409): an account is an email and a scrypt hash
+      // (PASSWORD_HASH); a sign-in gives the same portal session the server code gives (every account acts as the owner until MU2's
+      // per-person permissions). The server code keeps working beside it. auth_throttle is the identity PRD's (FR19): per email, per address.
+      db.exec(`
+        CREATE TABLE users (
+          id TEXT PRIMARY KEY CHECK (id GLOB 'u_*'),
+          email TEXT NOT NULL CHECK (length(email) BETWEEN 3 AND 254),
+          email_key TEXT NOT NULL,
+          display_name TEXT NOT NULL CHECK (length(display_name) BETWEEN 1 AND 60),
+          role TEXT NOT NULL CHECK (role IN ('admin', 'member')),
+          state TEXT NOT NULL CHECK (state IN ('active', 'disabled')),
+          password_hash TEXT NOT NULL,
+          password_changed_at TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          created_by TEXT NOT NULL,
+          last_login_at TEXT,
+          disabled_at TEXT
+        ) STRICT;
+        CREATE UNIQUE INDEX users_email_key ON users (email_key);
+        CREATE TABLE auth_throttle (
+          scope TEXT NOT NULL CHECK (scope IN ('user', 'ip', 'register', 'invitation', 'reauth', 'lookup', 'share', 'team_invite')),
+          key TEXT NOT NULL,
+          failures INTEGER NOT NULL DEFAULT 0,
+          window_start_ms INTEGER NOT NULL,
+          locked_until_ms INTEGER NOT NULL DEFAULT 0,
+          updated_ms INTEGER NOT NULL,
+          PRIMARY KEY (scope, key)
+        ) STRICT;
+      `);
+    },
+  },
+  {
+    version: 401,
+    name: 'identity: a web session remembers which email account signed in (MU2 S1a)',
+    up(db) {
+      // NULL is the server code. The account's role is read on every use (portal.ts), so a role change or a disable applies at once.
+      db.exec('ALTER TABLE web_sessions ADD COLUMN user_id TEXT');
+    },
+  },
+  {
+    version: 402,
+    name: 'identity: one session delegated to an account (view or operate)',
+    up(db) {
+      // Owner, 2026-10-17: "how can we delegate the session (orchestration session)? instead delegating full workspace". A grant gives ONE
+      // account ONE chat session at view (read it live) or operate (also send, stop, answer its approvals); nothing else of the workspace.
+      db.exec(`
+        CREATE TABLE session_grants (
+          session_id TEXT NOT NULL,
+          user_id TEXT NOT NULL,
+          level TEXT NOT NULL CHECK (level IN ('view', 'operate')),
+          granted_by TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          PRIMARY KEY (session_id, user_id)
+        ) STRICT;
+        CREATE INDEX session_grants_user ON session_grants (user_id);
+      `);
+    },
+  },
+  {
+    version: 403,
+    name: 'identity: a delegate grant remembers that the owner accepted Bypass',
+    up(db) {
+      // Review 2026-10-17 (m6): operate acts on a Bypass session only when the owner said yes to that, at the grant; a session that enters
+      // Bypass after an operate grant is read-only to the delegate until the owner shares it again.
+      db.exec('ALTER TABLE session_grants ADD COLUMN bypass_ack INTEGER NOT NULL DEFAULT 0');
+    },
+  },
+  {
+    version: 404,
+    name: 'identity: teams of accounts (owner and member roles)',
+    up(db) {
+      // Owner, 2026-10-17: "team based multiaccount". A team groups accounts; a session can be shared to it. Its owners manage its members.
+      db.exec(`
+        CREATE TABLE teams (
+          id TEXT PRIMARY KEY CHECK (id GLOB 'tm_*'),
+          name TEXT NOT NULL CHECK (length(name) BETWEEN 1 AND 40),
+          name_key TEXT NOT NULL,
+          description TEXT CHECK (description IS NULL OR length(description) <= 200),
+          created_by TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        ) STRICT;
+        CREATE UNIQUE INDEX teams_name_key ON teams (name_key);
+        CREATE TABLE team_members (
+          team_id TEXT NOT NULL REFERENCES teams (id) ON DELETE CASCADE,
+          user_id TEXT NOT NULL,
+          role TEXT NOT NULL CHECK (role IN ('owner', 'member')),
+          added_by TEXT NOT NULL,
+          added_at TEXT NOT NULL,
+          PRIMARY KEY (team_id, user_id)
+        ) STRICT;
+        CREATE INDEX team_members_user ON team_members (user_id);
+      `);
+    },
+  },
+  {
+    version: 405,
+    name: 'identity: session shares to an account or a team, with permissions and an end',
+    up(db) {
+      // Owner, 2026-10-17: "lebih granular dan controllable". A share names WHAT may be done (read, send, respond, stop), to WHOM (one
+      // account or a team) and UNTIL when. The view/operate grants of 402-403 become shares: view = read, operate = all four.
+      db.exec(`
+        CREATE TABLE session_shares (
+          id TEXT PRIMARY KEY CHECK (id GLOB 'sh_*'),
+          session_id TEXT NOT NULL,
+          subject_kind TEXT NOT NULL CHECK (subject_kind IN ('user', 'team')),
+          subject_id TEXT NOT NULL,
+          caps TEXT NOT NULL,
+          bypass_ack INTEGER NOT NULL DEFAULT 0 CHECK (bypass_ack IN (0, 1)),
+          expires_at TEXT,
+          note TEXT CHECK (note IS NULL OR length(note) <= 200),
+          granted_by TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          UNIQUE (session_id, subject_kind, subject_id)
+        ) STRICT;
+        CREATE INDEX session_shares_subject ON session_shares (subject_kind, subject_id);
+        INSERT INTO session_shares (id, session_id, subject_kind, subject_id, caps, bypass_ack, granted_by, created_at)
+          SELECT 'sh_' || lower(hex(randomblob(9))), session_id, 'user', user_id,
+                 CASE level WHEN 'operate' THEN 'read,send,respond,stop' ELSE 'read' END, bypass_ack, granted_by, created_at
+          FROM session_grants;
+        DROP TABLE session_grants;
+      `);
+    },
+  },
+  {
+    version: 406,
+    name: 'identity: SSO (OpenID Connect) providers, by email domain, and the identities they vouch for',
+    up(db) {
+      // Owner, 2026-10-17: "login by email, kalo kedetect domainnya di whitelist SSO, jadinya pake SSO". client_secret is SEALED
+      // (ENCRYPTED_COLUMNS). An identity links a provider's subject to one account, so a later email change at the IdP keeps the account.
+      db.exec(`
+        CREATE TABLE sso_providers (
+          id TEXT PRIMARY KEY CHECK (id GLOB 'sso_*'),
+          name TEXT NOT NULL CHECK (length(name) BETWEEN 1 AND 60),
+          issuer TEXT NOT NULL,
+          client_id TEXT NOT NULL,
+          client_secret TEXT,
+          domains TEXT NOT NULL,
+          scopes TEXT NOT NULL DEFAULT 'openid email profile',
+          default_role TEXT NOT NULL DEFAULT 'member' CHECK (default_role IN ('admin', 'member')),
+          default_team_id TEXT,
+          auto_create INTEGER NOT NULL DEFAULT 1 CHECK (auto_create IN (0, 1)),
+          trust_unverified_email INTEGER NOT NULL DEFAULT 0 CHECK (trust_unverified_email IN (0, 1)),
+          allow_private_network INTEGER NOT NULL DEFAULT 0 CHECK (allow_private_network IN (0, 1)),
+          enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+          created_by TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        ) STRICT;
+        CREATE TABLE sso_identities (
+          provider_id TEXT NOT NULL REFERENCES sso_providers (id) ON DELETE CASCADE,
+          subject TEXT NOT NULL,
+          user_id TEXT NOT NULL,
+          email TEXT NOT NULL,
+          linked_at TEXT NOT NULL,
+          last_login_at TEXT,
+          PRIMARY KEY (provider_id, subject)
+        ) STRICT;
+        CREATE INDEX sso_identities_user ON sso_identities (user_id);
+      `);
+    },
+  },
 ];
 
 /**
@@ -3407,4 +3621,5 @@ export const ENCRYPTED_COLUMNS: EncryptedColumn[] = [
   { table: 'notify_keys', column: 'value', idColumn: 'id' },
   { table: 'triggers', column: 'secret', idColumn: 'id' },
   { table: 'triggers', column: 'path_token', idColumn: 'id' },
+  { table: 'sso_providers', column: 'client_secret', idColumn: 'id' },
 ];

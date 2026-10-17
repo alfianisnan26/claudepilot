@@ -1,6 +1,6 @@
 import { cn, Spinner } from '@isnanme/ui';
 import { foldMoves, type ChatEvent, type ChatFile, type ChatImage, type ChatInputState, type ChatMove, type ChatTask } from '@portal/contracts';
-import { ArrowDown, ArrowRightLeft, Bot, ChevronDown, Clock3, ImageIcon, Plug, RotateCcw, RotateCw, Ticket, Users, Workflow, X, type LucideIcon } from 'lucide-react';
+import { ArrowDown, ArrowRightLeft, Bot, ChevronDown, Clock3, ImageIcon, Plug, RotateCcw, RotateCw, Ticket, UserRound, Users, Workflow, X, type LucideIcon } from 'lucide-react';
 import { AnimatePresence, motion, MotionConfig } from 'motion/react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
@@ -810,7 +810,7 @@ function MoveRow({ move, moveMark }: { move: ChatMove; moveMark?: (handoffId: st
  */
 function PortalMessage({ event: e }: { event: ChatEvent }) {
   const { kind, id, who } = portalSender(e.actor ?? '', e.actorLabel);
-  const Icon = kind === 'ticket' ? Ticket : kind === 'session' ? Bot : kind === 'ci' ? Workflow : kind === 'crew' ? Users : Plug;
+  const Icon = kind === 'ticket' ? Ticket : kind === 'session' ? Bot : kind === 'ci' ? Workflow : kind === 'crew' ? Users : kind === 'account' ? UserRound : Plug;
   return (
     <div className="flex flex-col items-start gap-1.5">
       <div className="max-w-[92%] rounded-2xl border border-line bg-surface px-3.5 py-2.5">

@@ -3,6 +3,7 @@ export * from './page.js';
 export * from './code.js';
 export * from './workspace.js';
 export * from './accounts.js';
+export * from './portalUsers.js';
 export * from './live.js';
 export * from './chat.js';
 export * from './chatBtw.js';

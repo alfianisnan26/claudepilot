@@ -219,7 +219,10 @@ export type ChatConfigChange =
  * turn running), `estimate` (it includes the running turn's estimate) or `unavailable` (a turn runs whose model has no known price: `usd`
  * is the reported total only, the turn's part is not guessed).
  */
-export function sessionCost(s: Pick<ChatSession, 'costUsd' | 'turnCostEstimateUsd'>): { usd: number; basis: 'reported' | 'estimate' | 'unavailable' } {
+export function sessionCost(s: Pick<ChatSession, 'costUsd' | 'turnCostEstimateUsd'>): {
+  usd: number;
+  basis: 'reported' | 'estimate' | 'unavailable';
+} {
   const turn = s.turnCostEstimateUsd;
   if (turn === undefined) return { usd: s.costUsd, basis: 'reported' };
   if (turn === null) return { usd: s.costUsd, basis: 'unavailable' };
@@ -293,10 +296,11 @@ export const WORKTREE_DIRTY = 'WORKTREE_DIRTY';
  * `ticket:<id>`, `session:<id>` and `portal-mcp:<token id>`, and `portal:<what>` for the portal acting on
  * its own after a person's click (`portal:handoff`: the request for a handoff when a chat moves to another Claude); a person
  * typing in the app is `ui`. Anything else is refused, so an actor can't be made up with characters that
- * would read as something else.
+ * would read as something else. `account:<user id>` is a person signed in with an account the session was shared with
+ * (session delegation): not the owner, so it is framed like any other sender.
  */
 export const CHAT_ACTOR_UI = 'ui';
-export const CHAT_ACTOR_PATTERN = /^(?:ticket|session|portal-mcp|portal|ci):[A-Za-z0-9._:-]{1,64}$/;
+export const CHAT_ACTOR_PATTERN = /^(?:ticket|session|portal-mcp|portal|ci|account):[A-Za-z0-9._:-]{1,64}$/;
 export const isChatActor = (v: unknown): v is string => typeof v === 'string' && (v === CHAT_ACTOR_UI || CHAT_ACTOR_PATTERN.test(v));
 /** A portal actor: anything an actor string can be except the person at the keyboard. */
 export const isPortalActor = (v: unknown): v is string => typeof v === 'string' && CHAT_ACTOR_PATTERN.test(v);
@@ -917,12 +921,13 @@ export const CHAT_API = {
    * a move, a restart, a crash, a resume). Every stale request of the chat is resolved `stale` with it, audited. Refused (409) for a
    * request of the live process: that one is answered. Returns `ClearChatRequestResult`.
    */
-  clearRequest: (id: string, requestId: string) => `/api/chat/sessions/${encodeURIComponent(id)}/requests/${encodeURIComponent(requestId)}/clear`,
+  clearRequest: (id: string, requestId: string) =>
+    `/api/chat/sessions/${encodeURIComponent(id)}/requests/${encodeURIComponent(requestId)}/clear`,
   /** POST `ReauthRequest`: check the server code again. */
   reauth: '/api/chat/reauth',
   /** GET: the chat policy (`{ bypass: { allowed } }`). */
   policy: '/api/chat/policy',
-  /** GET `?kind=&sessionId=&limit=`: the audit trail (`ChatAuditEntry[]`). */
+  /** GET `?kind=&sessionId=&limit=&cursor=`: one page of the audit trail, newest first (`CursorPage<ChatAuditEntry>`, D-58: 25 by default, 100 at most). */
   audit: '/api/chat/audit',
   /** GET `?path=`: a file's bytes, as a download. */
   download: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/files/download`,
@@ -1073,7 +1078,15 @@ export interface ChatControl {
   op: 'stop' | 'end' | 'model' | 'effort' | 'ultracode' | 'mode' | 'cancel_queued' | 'resume' | 'stop_task' | 'rename';
   /** Used to key the `ack`; any client-chosen string. */
   uuid?: string;
-  args?: { model?: string; effort?: string; ultracode?: boolean; mode?: ChatPermissionMode; inputUuid?: string; taskId?: string; title?: string };
+  args?: {
+    model?: string;
+    effort?: string;
+    ultracode?: boolean;
+    mode?: ChatPermissionMode;
+    inputUuid?: string;
+    taskId?: string;
+    title?: string;
+  };
 }
 export type ChatClientMessage = ChatSubscribe | ChatUnsubscribe | ChatSend | ChatRespond | ChatControl | BtwClientMessage;
 

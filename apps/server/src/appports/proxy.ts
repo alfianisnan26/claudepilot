@@ -1,4 +1,11 @@
-import { request as httpRequest, type IncomingHttpHeaders, type IncomingMessage, type OutgoingHttpHeaders, type Server, type ServerResponse } from 'node:http';
+import {
+  request as httpRequest,
+  type IncomingHttpHeaders,
+  type IncomingMessage,
+  type OutgoingHttpHeaders,
+  type Server,
+  type ServerResponse,
+} from 'node:http';
 import type { Duplex } from 'node:stream';
 import { APP_PORT_AUTH_PATH, isAppPortNext, parseAppPortHost, workspaceRef } from '@portal/contracts';
 import { can } from '../authz/seam.js';
@@ -59,12 +66,31 @@ interface Live {
 }
 
 /** A path as a Location header can carry it: anything outside printable ASCII percent-encoded (isAppPortNext already refuses it; a 2nd guard). */
-export const asLocation =(path: string): string => path.replace(/[^!-~]+/gu, (run) => encodeURI(run));
+export const asLocation = (path: string): string => path.replace(/[^!-~]+/gu, (run) => encodeURI(run));
 
 /** Hop-by-hop headers (RFC 9110 §7.6.1) and the ones the proxy sets itself: never copied either way. */
-const HOP = new Set(['connection', 'keep-alive', 'proxy-connection', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer', 'transfer-encoding', 'upgrade']);
+const HOP = new Set([
+  'connection',
+  'keep-alive',
+  'proxy-connection',
+  'proxy-authenticate',
+  'proxy-authorization',
+  'te',
+  'trailer',
+  'transfer-encoding',
+  'upgrade',
+]);
 /** Request headers never forwarded to the app: the portal's credentials and what the proxy itself vouches for. */
-const STRIP_REQUEST = new Set(['host', 'authorization', 'forwarded', 'x-forwarded-for', 'x-forwarded-host', 'x-forwarded-proto', 'x-forwarded-port', 'x-real-ip']);
+const STRIP_REQUEST = new Set([
+  'host',
+  'authorization',
+  'forwarded',
+  'x-forwarded-for',
+  'x-forwarded-host',
+  'x-forwarded-proto',
+  'x-forwarded-port',
+  'x-real-ip',
+]);
 /**
  * Cookies never forwarded, nor taken from an app's Set-Cookie: the app host's own and both names of the portal session (sessionCookie.ts,
  * T-976: `__Host-portal_session` over https, `portal_session` over http and for the migration window).
@@ -92,7 +118,10 @@ export function appCookies(header: string | undefined): string | undefined {
 }
 
 /** What goes to the app: the browser's headers less hop-by-hop, the portal's cookies and credentials, with the proxy's forwarding headers. */
-export function forwardHeaders(headers: IncomingHttpHeaders, opts: { port: number; host: string; scheme: string; upgrade: boolean }): OutgoingHttpHeaders {
+export function forwardHeaders(
+  headers: IncomingHttpHeaders,
+  opts: { port: number; host: string; scheme: string; upgrade: boolean },
+): OutgoingHttpHeaders {
   const out: OutgoingHttpHeaders = {};
   for (const [k, v] of Object.entries(headers)) {
     if (v === undefined || STRIP_REQUEST.has(k) || k === 'cookie') continue;
@@ -135,7 +164,10 @@ const hostOnlyCookie = (line: string): string | null => {
 const rewriteLocation = (location: string, port: number): string => {
   try {
     const u = new URL(location);
-    if ((u.hostname === '127.0.0.1' || u.hostname === 'localhost' || u.hostname === '[::1]') && Number(u.port || (u.protocol === 'https:' ? 443 : 80)) === port)
+    if (
+      (u.hostname === '127.0.0.1' || u.hostname === 'localhost' || u.hostname === '[::1]') &&
+      Number(u.port || (u.protocol === 'https:' ? 443 : 80)) === port
+    )
       return `${u.pathname}${u.search}${u.hash}`;
   } catch {
     /* relative: as it is */
@@ -308,7 +340,8 @@ export class AppPortProxy {
     };
     // Idle: no byte from the dial, the app or the browser for idleMs. Before the answer it is a 504, after it the response is cut.
     const idle = setTimeout(() => {
-      if (!res.headersSent) res.writeHead(504, { 'content-type': 'text/plain', 'cache-control': 'no-store' }).end('The app took too long to answer.');
+      if (!res.headersSent)
+        res.writeHead(504, { 'content-type': 'text/plain', 'cache-control': 'no-store' }).end('The app took too long to answer.');
       else res.destroy();
       end();
     }, this.#limits.idleMs);
@@ -322,7 +355,9 @@ export class AppPortProxy {
       if (ended) return;
       if (res.headersSent) return void res.destroy();
       const status = e instanceof NotOnThisTarget ? 501 : 502;
-      res.writeHead(status, { 'content-type': 'text/plain', 'cache-control': 'no-store' }).end(status === 501 ? 'Not available on this target yet.' : 'The app isn’t answering.');
+      res
+        .writeHead(status, { 'content-type': 'text/plain', 'cache-control': 'no-store' })
+        .end(status === 501 ? 'Not available on this target yet.' : 'The app isn’t answering.');
       return;
     }
     upstream.on('error', () => undefined);
@@ -347,7 +382,8 @@ export class AppPortProxy {
       r.on('error', () => res.destroy());
     });
     up.on('error', () => {
-      if (!res.headersSent) res.writeHead(502, { 'content-type': 'text/plain', 'cache-control': 'no-store' }).end('The app isn’t answering.');
+      if (!res.headersSent)
+        res.writeHead(502, { 'content-type': 'text/plain', 'cache-control': 'no-store' }).end('The app isn’t answering.');
       else res.destroy();
       conn.destroy();
     });
@@ -365,7 +401,14 @@ export class AppPortProxy {
     const redeemed = this.d.grants.redeem(url.searchParams.get('code') ?? '', host);
     if (!redeemed || !this.#allowed(redeemed.grant)) return notFound();
     const { cookie, grant, maxAgeS } = redeemed;
-    const attrs = [`${APP_COOKIE}=${cookie}`, 'Path=/', 'HttpOnly', 'SameSite=Lax', `Max-Age=${maxAgeS}`, ...(grant.scheme === 'https' ? ['Secure'] : [])];
+    const attrs = [
+      `${APP_COOKIE}=${cookie}`,
+      'Path=/',
+      'HttpOnly',
+      'SameSite=Lax',
+      `Max-Age=${maxAgeS}`,
+      ...(grant.scheme === 'https' ? ['Secure'] : []),
+    ];
     res
       .writeHead(302, {
         location: asLocation(next),
@@ -387,7 +430,10 @@ export class AppPortProxy {
     if (!ok || foreignOrigin(req, ok.host)) return void socket.end(NOT_FOUND);
     const fail = (status: string) => void socket.end(`HTTP/1.1 ${status}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
     const release = this.#acquire(ok.grant);
-    if (!release) return void socket.end(`HTTP/1.1 503 Service Unavailable\r\nRetry-After: ${RETRY_AFTER_S}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
+    if (!release)
+      return void socket.end(
+        `HTTP/1.1 503 Service Unavailable\r\nRetry-After: ${RETRY_AFTER_S}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`,
+      );
     socket.once('close', release);
     let upstream: Duplex | undefined;
     let timedOut = false;
@@ -397,7 +443,10 @@ export class AppPortProxy {
       fail('504 Gateway Timeout');
     }, this.d.upgradeTimeoutMs ?? UPGRADE_TIMEOUT_MS);
     // Never longer than the app-host cookie it was opened with; cut at once when the sweep finds the cookie, session or right gone.
-    const lifetime = setTimeout(() => (upstream?.destroy(), socket.destroy()), Math.min(MAX_TIMER_MS, Math.max(0, ok.grant.expiresAt - Date.now())));
+    const lifetime = setTimeout(
+      () => (upstream?.destroy(), socket.destroy()),
+      Math.min(MAX_TIMER_MS, Math.max(0, ok.grant.expiresAt - Date.now())),
+    );
     lifetime.unref();
     this.#track(ok.cookie, ok.host, () => (upstream?.destroy(), socket.destroy()), socket);
     socket.on('close', () => (clearTimeout(timer), clearTimeout(lifetime)));
@@ -420,7 +469,8 @@ export class AppPortProxy {
     socket.on('data', touch);
     const headers = forwardHeaders(req.headers, { port: ok.port, host: ok.host, scheme: ok.grant.scheme, upgrade: true });
     const lines = [`${req.method ?? 'GET'} ${req.url ?? '/'} HTTP/1.1`];
-    for (const [k, v] of Object.entries(headers)) for (const one of Array.isArray(v) ? v : [v]) if (one !== undefined) lines.push(`${k}: ${String(one)}`);
+    for (const [k, v] of Object.entries(headers))
+      for (const one of Array.isArray(v) ? v : [v]) if (one !== undefined) lines.push(`${k}: ${String(one)}`);
     upstream.write(`${lines.join('\r\n')}\r\n\r\n`);
     if (head.length) upstream.write(head);
     upstream.pipe(socket);

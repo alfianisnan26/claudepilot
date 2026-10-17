@@ -1,7 +1,15 @@
 import { existsSync, statSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { getRequestListener } from '@hono/node-server';
-import { AUTO_SETTING_KEYS, formatCode, isWindowOfFamily, PORTAL_TOKEN_CAP_SETTING, SETTING_KEYS, TICKET_SETTING_KEYS, type LiveTopic } from '@portal/contracts';
+import {
+  AUTO_SETTING_KEYS,
+  formatCode,
+  isWindowOfFamily,
+  PORTAL_TOKEN_CAP_SETTING,
+  SETTING_KEYS,
+  TICKET_SETTING_KEYS,
+  type LiveTopic,
+} from '@portal/contracts';
 import { AccountHealthService } from './accounts/health.js';
 import { AccountPools } from './accounts/pools.js';
 import { AccountsService } from './accounts/service.js';
@@ -25,6 +33,7 @@ import { vaultReleaseNotes } from './ci/releaseNotesVault.js';
 import { parseActor } from './knowledge/journal.js';
 import { createKnowledge } from './knowledge/module.js';
 import { registerKnowledgeTools } from './knowledge/portalTools.js';
+import { wireVaultBinding } from './knowledge/vaultBinding.js';
 import { createClaudeUsage } from './claudeusage/index.js';
 import { registerClaudeUsageTools } from './claudeusage/portalTools.js';
 import { ClaudeVersions, registerClaudeVersionTools } from './claudeversion/index.js';
@@ -100,7 +109,8 @@ import { AppPorts, routeAppHostUpgrades } from './appports/index.js';
 process.on('unhandledRejection', (reason) => console.error('[portal] unhandled rejection:', reason));
 // A client library that emits 'error' on a request nobody listens to (a Docker daemon that answers a redirect, a host that no
 // longer resolves) would end the process the same way. Network failures are logged and survived; anything else still stops it.
-const NETWORK_ERROR = /^(ENOTFOUND|ECONNRESET|ECONNREFUSED|ECONNABORTED|EPIPE|ETIMEDOUT|EAI_AGAIN|EHOSTUNREACH|ENETUNREACH|ERR_STREAM_PREMATURE_CLOSE|ERR_UNESCAPED_CHARACTERS)$/;
+const NETWORK_ERROR =
+  /^(ENOTFOUND|ECONNRESET|ECONNREFUSED|ECONNABORTED|EPIPE|ETIMEDOUT|EAI_AGAIN|EHOSTUNREACH|ENETUNREACH|ERR_STREAM_PREMATURE_CLOSE|ERR_UNESCAPED_CHARACTERS)$/;
 process.on('uncaughtException', (err) => {
   console.error('[portal] uncaught', err);
   if (!NETWORK_ERROR.test((err as NodeJS.ErrnoException)?.code ?? '')) process.exit(1);
@@ -115,7 +125,8 @@ await acquireLock(config.paths.data).catch((e: unknown) => {
 let secretKey: Buffer | null = null;
 let keyError: string | undefined;
 // A key file that doesn't exist yet (or is empty) just means "no key yet": the panel can set one up.
-const keyFileEmpty = !!config.secretKey.file && !config.secretKey.value && (!existsSync(config.secretKey.file) || statSync(config.secretKey.file).size === 0);
+const keyFileEmpty =
+  !!config.secretKey.file && !config.secretKey.value && (!existsSync(config.secretKey.file) || statSync(config.secretKey.file).size === 0);
 try {
   secretKey = keyFileEmpty ? null : loadSecretKey(config.secretKey);
 } catch (e) {
@@ -147,7 +158,13 @@ const portal = new Portal(config.serverCode, config.session.ttlMs);
 // Sign-ins survive restarts (12 hours each); only token hashes are stored.
 portal.useStore(sessionStore(store));
 const { workspaces: ws } = config;
-const runtimes: Runtime[] = ws.docker.map((d) => new DockerRuntime(d, ws.dockerImage, ws.imageContext, () => store.portalId, undefined, { canaryPrefix: ws.claude.canaryPrefix, alias: ws.claude.imageAlias }));
+const runtimes: Runtime[] = ws.docker.map(
+  (d) =>
+    new DockerRuntime(d, ws.dockerImage, ws.imageContext, () => store.portalId, undefined, {
+      canaryPrefix: ws.claude.canaryPrefix,
+      alias: ws.claude.imageAlias,
+    }),
+);
 if (ws.kubernetes.enabled) {
   try {
     runtimes.push(new KubernetesRuntime(ws.kubernetes));
@@ -159,7 +176,8 @@ if (ws.local.enabled && !PLAIN_NAME.test(ws.local.name)) {
   console.error(`[workspaces] PORTAL_LOCAL_NAME “${ws.local.name}” is not a plain name (letters, digits, . _ -, up to 63): using "local".`);
   ws.local.name = 'local';
 }
-if (ws.local.enabled) runtimes.push(new LocalRuntime({ name: ws.local.name, state: new JsonFile(`${config.paths.data}/local-workspace.json`, {}) }));
+if (ws.local.enabled)
+  runtimes.push(new LocalRuntime({ name: ws.local.name, state: new JsonFile(`${config.paths.data}/local-workspace.json`, {}) }));
 // Every workspace's stable id, its `<target>/<name>` alias and its stored runtime name (T-42), kept in the store. Each target's last good
 // list (T-515) is kept beside the pending creates, so a portal restarted while a target's API is down still lists its workspaces.
 const workspaces = new Workspaces(
@@ -213,7 +231,15 @@ const personas = registerPersonas({ store, pools: poolService });
 personas.agentSelfEdit = () => settingsModule.settings.get<boolean>(SETTING_KEYS.agentsSelfEdit);
 // Browser & desktop: a browser container beside each workspace, driven over MCP and watched in the portal. Its
 // container shares the workspace's namespace and volume, so the runtimes take it away before they stop or remove one.
-const browser = new BrowserModule({ store, pools: poolService, steps: mcpSets.steps, runtimes, notify: () => poolService.onChange(), names: workspaces.identities, secretByName: (name) => secretsKind.secretByName(name) });
+const browser = new BrowserModule({
+  store,
+  pools: poolService,
+  steps: mcpSets.steps,
+  runtimes,
+  notify: () => poolService.onChange(),
+  names: workspaces.identities,
+  secretByName: (name) => secretsKind.secretByName(name),
+});
 for (const r of runtimes) browser.guard(r);
 // With "pool MCP only" on, the browser's servers are admitted by their command lines (the folder of the plugin spelled out).
 settingsModule.lockdown.addMatcherSource((ws) => browser.service.matchers(ws));
@@ -222,7 +248,12 @@ const knowledge = createKnowledge(store, { dataDir: config.paths.data, repoRoot:
 // Tickets store their workspace as the stable id (T-42 slice 3); the graphs link by the key.
 knowledge.directory.workspaceKeyOf = (stored) => workspaces.identities.keyOf(stored);
 knowledge.start();
-const reconciler = new Reconciler(store, (t) => workspaces.runtimeFor(t), () => workspaces.runtimeList(), providers);
+const reconciler = new Reconciler(
+  store,
+  (t) => workspaces.runtimeFor(t),
+  () => workspaces.runtimeList(),
+  providers,
+);
 pools.reconciler = reconciler;
 // Sessions run on the workspace's Account Pool when it has one (active and synced), else on their Claude's
 // own sign-in (chat PRD §6); a pool change ends the workspace's sessions first. `signedIn` is set in app.ts.
@@ -241,7 +272,10 @@ chatController.bypassAllowed = () => settingsModule.settings.get<boolean>(BYPASS
 chatController.leadRulesOn = () => settingsModule.settings.get<boolean>(LEAD_RULES_SETTING);
 chatController.autoTrustRules = () => settingsModule.settings.get<boolean>(AUTO_TRUST_SETTING);
 // How many sessions may be awake (chat PRD FR39): per workspace and in total, from the shared settings.
-chatController.liveCaps = () => ({ perWorkspace: settingsModule.settings.get<number>(CAP_WORKSPACE_SETTING), total: settingsModule.settings.get<number>(CAP_TOTAL_SETTING) });
+chatController.liveCaps = () => ({
+  perWorkspace: settingsModule.settings.get<number>(CAP_WORKSPACE_SETTING),
+  total: settingsModule.settings.get<number>(CAP_TOTAL_SETTING),
+});
 // How deep, how wide and how often sessions may start sessions and message each other (multi-agent), from the shared settings.
 chatController.sessionBudgetUsd = () => settingsModule.settings.get<number>(BUDGET_SETTING);
 // Side questions (chat PRD §20): their limits and switches come from the shared settings, and a session is read through the one authorization resolver.
@@ -262,7 +296,10 @@ chatController.configChangeLog = (id, sinceMs) => reconciler.changeLogSince(id, 
 reconciler.onChange((id) => chatController.deliveryChanged(id));
 chatController.bypassFacts = (id) => ({
   internet: true,
-  credentials: [...(pools.stateFor(id) ? ['an account pool’s key'] : []), ...(poolService.assignmentsFor(id).some((a) => a.type === 'secrets' && a.state === 'assigned') ? ['Secrets & env values'] : [])],
+  credentials: [
+    ...(pools.stateFor(id) ? ['an account pool’s key'] : []),
+    ...(poolService.assignmentsFor(id).some((a) => a.type === 'secrets' && a.state === 'assigned') ? ['Secrets & env values'] : []),
+  ],
 });
 pools.onTransition = (id) => void chatController.endWorkspaceSessions(id, 'Pool change in progress');
 // Reattach readers to sessions still running in workspaces, and mark the ones that died Interrupted.
@@ -273,9 +310,17 @@ health.activeAccount = (workspaceId) => pools.activeAccount(workspaceId);
 health.onUnconfirmed = (ids) => ids.forEach((id) => void reconciler.request(id, 'unconfirmed signal'));
 // Failure signals from assigned workspaces: helper runs and StopFailure (Account Pool §11.5).
 const outbox = new Outbox(store, (t) => workspaces.runtimeFor(t));
-outbox.subscribe('account', (workspaceId, events) => health.onSignals(workspaceId, events), () => pools.assignedWorkspaces());
+outbox.subscribe(
+  'account',
+  (workspaceId, events) => health.onSignals(workspaceId, events),
+  () => pools.assignedWorkspaces(),
+);
 // MCP launcher and helper events: starts and failures, never values (MCP set §13.2).
-outbox.subscribe('mcp', (workspaceId, events) => mcpSets.onOutbox(workspaceId, events), () => mcpSets.assignedWorkspaces());
+outbox.subscribe(
+  'mcp',
+  (workspaceId, events) => mcpSets.onOutbox(workspaceId, events),
+  () => mcpSets.assignedWorkspaces(),
+);
 // The rule-file guard's refusals (D-60, T-404): the workspaces the policy (and the guard) landed in that are not removed;
 // the pull itself skips a stopped one, and the outbox caps how many pull at once.
 outbox.subscribe(
@@ -317,7 +362,10 @@ setTimeout(() => {
   void (async () => {
     await workspaces.list().catch(() => undefined);
     const results = await rewriteWorkspaceRefs(store, workspaces.identities, { signal: refRewrite.signal });
-    for (const r of results) console.log(`[workspaces] ${r.table}.${r.column}: ${r.rewritten} references moved to stable ids, ${r.kept} kept as they were${r.done ? '' : ' (stopped; continues next start)'}`);
+    for (const r of results)
+      console.log(
+        `[workspaces] ${r.table}.${r.column}: ${r.rewritten} references moved to stable ids, ${r.kept} kept as they were${r.done ? '' : ' (stopped; continues next start)'}`,
+      );
   })().catch((e: unknown) => console.error(`[workspaces] reference rewrite failed: ${(e as Error).message}`));
 }, 60_000).unref();
 browser.start();
@@ -401,19 +449,41 @@ const portalMcp = new PortalMcpModule(store, {
 // With "Pool MCP only" on, Claude Code admits only listed servers, and the portal's own endpoint (which an agent's session reaches
 // through --mcp-config) is one of them: its exact URL for each workspace that opted in. Compile again when that changes.
 settingsModule.lockdown.addMatcherSource((workspaceId) => portalMcp.agentMatchers(workspaceId));
-portalMcp.onAgentAddress = (workspaceId) => void reconciler.request(workspaceId, 'the portal MCP address for agents changed').catch(() => undefined);
+portalMcp.onAgentAddress = (workspaceId) =>
+  void reconciler.request(workspaceId, 'the portal MCP address for agents changed').catch(() => undefined);
 // A token never outlives its session, whatever else is wired: ended, archived and deleted sessions lose theirs here too.
 chatController.onEvent((id, msg) => {
-  if (msg.type === 'session' && (msg.session.state === 'ended' || msg.session.archivedAt)) portalMcp.agents.revokeSession(id, `session ${msg.session.state}`);
+  if (msg.type === 'session' && (msg.session.state === 'ended' || msg.session.archivedAt))
+    portalMcp.agents.revokeSession(id, `session ${msg.session.state}`);
   else if (msg.type === 'removed') portalMcp.agents.revokeSession(id, 'session deleted');
 });
-registerBuiltInPortalTools({ store, module: portalMcp, workspaces, chat: chatController, accounts, accountPools: pools, poolService, reconciler, mcp: mcpSets });
+registerBuiltInPortalTools({
+  store,
+  module: portalMcp,
+  workspaces,
+  chat: chatController,
+  accounts,
+  accountPools: pools,
+  poolService,
+  reconciler,
+  mcp: mcpSets,
+});
 portalMcp.start();
 // What each session's Claude Code process is launched with (I8 and the Secrets & env redactor): its token for the portal's tools, the
 // account-MCP switch (belt and braces next to the managed key), and the secret values a workspace was given, read to redact chat text.
 // Agent access stores its workspace as the stable id and reads it as the key (T-42 slice 3).
 portalMcp.agents.workspaceRefs = workspaces.identities;
+// T-436: a session's token is bound at mint to the vaults that name its workspace; a change of a vault's list rebinds the live tokens.
+wireVaultBinding(portalMcp.agents, knowledge);
 chatController.agentAccess = portalMcp.agents;
+// Self-heal (owner, 2026-10-17): a live session calling with a replaced or expired token gets a restart at its turn's end (the same
+// conversation, MCP reconnected), so its new process starts with a good token and nobody has to run /mcp by hand.
+portalMcp.agents.onStaleToken = (sessionId, reason) => {
+  console.log(`[portal-mcp] ${sessionId.slice(0, 8)}: its process holds a ${reason} token; restarting it at the turn's end`);
+  void chatController
+    .restart(sessionId, { why: 'mcp', when: 'turn_end', actor: 'portal:token-heal', from: 'auto' })
+    .catch((e: unknown) => console.warn(`[portal-mcp] ${sessionId.slice(0, 8)}: the token heal could not restart it: ${e instanceof Error ? e.message : String(e)}`));
+};
 {
   // T-102: agent access turned on or off changes the portal tools a session's NEXT process gets: its "Tools changed" hint says so.
   const accessChanged = portalMcp.agents.onAccessChange;
@@ -422,7 +492,8 @@ chatController.agentAccess = portalMcp.agents;
     chatController.portalToolsChanged(workspaceId);
   };
 }
-chatController.launchEnv = () => (settingsModule.settings.get<boolean>(SETTING_KEYS.mcpAccountOff) ? { ENABLE_CLAUDEAI_MCP_SERVERS: 'false' } : {});
+chatController.launchEnv = () =>
+  settingsModule.settings.get<boolean>(SETTING_KEYS.mcpAccountOff) ? { ENABLE_CLAUDEAI_MCP_SERVERS: 'false' } : {};
 chatController.secretValues = (id) => exposedSecretValues(poolService, id);
 // MCP OAuth (MCP set PRD §13.3): the guided sign-in runs Claude Code's login in a workspace terminal, for one of its Claudes, and a chat
 // session's `system/init` tells the MCP module which OAuth servers still need it.
@@ -519,7 +590,13 @@ ci.releaseNotes = vaultReleaseNotes(knowledge, portalActor);
 if (config.ci.enabled) ci.start();
 // Claude usage: the plan limits of each Claude, read from Claude Code itself (claude-usage PRD). Its probes run only for running
 // workspaces whose store the portal trusts; live sessions' rate-limit events arrive through `onRateLimit` (interface I12).
-const claudeUsage = createClaudeUsage({ store, workspaces, chat: chatController, pooled: (id) => !!pools.stateFor(id), notify: () => notify('claudeusage') });
+const claudeUsage = createClaudeUsage({
+  store,
+  workspaces,
+  chat: chatController,
+  pooled: (id) => !!pools.stateFor(id),
+  notify: () => notify('claudeusage'),
+});
 claudeUsage.start();
 registerClaudeUsageTools(claudeUsage);
 // The chat reader's hook: each rate_limit_info of a session on its Claude's own sign-in (the raw object, never stored as it came).
@@ -569,7 +646,14 @@ registerLabTools(lab);
 lab.start();
 // Workspace git: the repositories inside each running workspace, found by scanning and tracked each on its own, with worktrees, an audit
 // and a summary (workspace-git PRD). It reads through the chat's hardened session host; a scan never fetches.
-const repos = createRepos({ store, workspaces, installHost: (id) => chatController.installHost?.(id) ?? Promise.resolve(), sessions: chatController, scrub: (id, text) => chatController.scrub(id, text), notify: () => notify('repos') });
+const repos = createRepos({
+  store,
+  workspaces,
+  installHost: (id) => chatController.installHost?.(id) ?? Promise.resolve(),
+  sessions: chatController,
+  scrub: (id, text) => chatController.scrub(id, text),
+  notify: () => notify('repos'),
+});
 repos.start();
 registerRepoTools(repos);
 // Glance widgets: what waits on a person (approvals, tickets, failed CI) and who is working, counted once for every open page; the chat
@@ -620,7 +704,32 @@ const appPorts = new AppPorts({
   sessionValid: (token) => !!portal.session(token),
   limits: { idleMs: config.portProxy.idleMs, socketIdleMs: config.portProxy.socketIdleMs, maxPerGrant: config.portProxy.maxPerGrant, maxPerWorkspace: config.portProxy.maxPerWorkspace },
 });
-const app = createApp(portal, workspaces, store, accounts, pools, reconciler, health, chatController, { serveWeb: !config.dev, notify, poolService, mcp: mcpSets, skills, personas, settings: settingsModule, secrets: secretRotations, portalMcp, knowledge, tickets, ci, browser, claudeUsage, usageSpend, lab, repos, glance, attention, codespaces, platform, claudeVersions, connect, appPorts });
+const app = createApp(portal, workspaces, store, accounts, pools, reconciler, health, chatController, {
+  serveWeb: !config.dev,
+  notify,
+  poolService,
+  mcp: mcpSets,
+  skills,
+  personas,
+  settings: settingsModule,
+  secrets: secretRotations,
+  portalMcp,
+  knowledge,
+  tickets,
+  ci,
+  browser,
+  claudeUsage,
+  usageSpend,
+  lab,
+  repos,
+  glance,
+  attention,
+  codespaces,
+  platform,
+  claudeVersions,
+  connect,
+  appPorts,
+});
 const handleApi = getRequestListener(app.fetch);
 const server = createServer();
 // Before the socket modules: ties their connections to the sign-in that opened them (QA-001) and drops unanswered upgrades.
@@ -647,7 +756,15 @@ if (config.dev) {
   server.on('request', (req, res) => {
     const url = req.url ?? '/';
     if (appPorts.proxy.owns(req.headers.host)) void appPorts.proxy.request(req, res);
-    else if (url.startsWith('/api/') || url === '/healthz' || url === '/mcp' || url.startsWith('/mcp?') || url.startsWith('/hooks/') || url.startsWith('/connect/')) void handleApi(req, res);
+    else if (
+      url.startsWith('/api/') ||
+      url === '/healthz' ||
+      url === '/mcp' ||
+      url.startsWith('/mcp?') ||
+      url.startsWith('/hooks/') ||
+      url.startsWith('/connect/')
+    )
+      void handleApi(req, res);
     else vite.middlewares(req, res);
   });
 } else {
@@ -658,15 +775,9 @@ routeAppHostUpgrades(server, appPorts.proxy);
 
 server.listen(config.port, config.host, () => {
   const where = `http://localhost:${config.port}`;
-  const code =
-    portal.source === 'env' ? '(from PORTAL_SERVER_CODE)' : formatCode(portal.code);
+  const code = portal.source === 'env' ? '(from PORTAL_SERVER_CODE)' : formatCode(portal.code);
   console.log(
-    [
-      '',
-      `  portal ${config.dev ? 'dev' : 'production'} server on ${where}`,
-      `  server code: ${code}`,
-      '',
-    ]
+    ['', `  portal ${config.dev ? 'dev' : 'production'} server on ${where}`, `  server code: ${code}`, '']
       .filter((line, i, all) => line || i === 0 || i === all.length - 1)
       .join('\n'),
   );

@@ -26,7 +26,7 @@ import {
   type CiStatus,
 } from '@portal/contracts';
 import { Hono, type Context } from 'hono';
-import { actorOf, can, requireCan, visible } from '../authz/seam.js';
+import { actorOf, can, requireCan, seesEverything, visible } from '../authz/seam.js';
 import { declareCiPolicies, registerCiAuthz, requireVaultWrite } from './authz.js';
 import type { CiDecider, CiService } from './service.js';
 
@@ -38,11 +38,6 @@ async function body<T>(c: Context): Promise<Partial<T>> {
     throw new AppError('BAD_REQUEST', 'Expected a JSON body.');
   }
 }
-
-const int = (raw: string | undefined): number | undefined => {
-  const n = Number(raw);
-  return raw !== undefined && Number.isFinite(n) ? n : undefined;
-};
 
 /** A person deciding: never a Portal MCP token, an agent's session or a job, whatever their scope. */
 function person(actor: Actor): CiDecider {
@@ -68,14 +63,36 @@ export function createCiRoutes(ci: CiService): Hono {
     const q = c.req.query();
     const status = q.status
       ? q.status.split(',').map((s) => {
-          if (!(CI_STATUSES as readonly string[]).includes(s)) throw new AppError('VALIDATION_FAILED', `Unknown status “${s.slice(0, 20)}”.`, { details: { status: `Use: ${CI_STATUSES.join(', ')}.` } });
+          if (!(CI_STATUSES as readonly string[]).includes(s))
+            throw new AppError('VALIDATION_FAILED', `Unknown status “${s.slice(0, 20)}”.`, {
+              details: { status: `Use: ${CI_STATUSES.join(', ')}.` },
+            });
           return s as CiStatus;
         })
       : undefined;
     const actor = actorOf(c);
-    const list = await ci.runs({ workspace: q.workspace || undefined, repo: q.repo || undefined, pipeline: q.pipeline || undefined, branch: q.branch || undefined, status, ticket: q.ticket || undefined, session: q.session || undefined, before: q.before || undefined, limit: int(q.limit) });
-    const items = visible(actor, 'ci_run', list.items, (r) => r.id);
-    return c.json(success(items.length === list.items.length ? list : { ...list, items, total: items.length, active: items.filter((r) => r.status === 'queued' || r.status === 'running').length }));
+    // D-58: one page, `{ items, next }` (25 by default, 100 at most); every run is checked with `view` before it is shown, `next` points at the
+    // last run shown, and the cursor is bound to the caller and every filter (a bad or foreign one is a 400). `total` and `active` ride on page 1.
+    // A caller no policy can hide a run from (the founding user) gets no `keep`: the counts come from SQL. Anyone else is checked run by run, and
+    // the counts of page 1 then come from a bounded scan (exact when the list fits in it, else null: unavailable).
+    const check = (r: { id: string }) => visible(actor, 'ci_run', [r], (x) => x.id).length > 0;
+    const keep = seesEverything(actor) ? undefined : check;
+    return c.json(
+      success(
+        ci.listPage(
+          {
+            workspace: q.workspace || undefined,
+            repo: q.repo || undefined,
+            pipeline: q.pipeline || undefined,
+            branch: q.branch || undefined,
+            status,
+            ticket: q.ticket || undefined,
+            session: q.session || undefined,
+          },
+          { caller: actorString(actor), cursor: q.cursor || undefined, limit: q.limit, keep },
+        ),
+      ),
+    );
   });
   app.post('/runs', async (c) => {
     const req = await body<StartCiRunRequest>(c);
@@ -83,7 +100,13 @@ export function createCiRoutes(ci: CiService): Hono {
     return c.json(success(await ci.startRun(req)), 201);
   });
   app.get('/runs/:id', async (c) => (may(c, 'view', runRef), c.json(success(await ci.show(id(c))))));
-  app.get('/runs/:id/log', async (c) => (may(c, 'view', runRef), c.json(success(await ci.log(id(c), c.req.query('job'), c.req.query('step'), c.req.query('offset'))))));
+  app.get(
+    '/runs/:id/log',
+    async (c) => (
+      may(c, 'view', runRef),
+      c.json(success(await ci.log(id(c), c.req.query('job'), c.req.query('step'), c.req.query('offset'))))
+    ),
+  );
   // The UI is a person (runs they start say `ui`; a cancel says the same, T-95).
   app.post('/runs/:id/cancel', async (c) => (may(c, 'operate', runRef), c.json(success(await ci.cancel(id(c), { actor: 'ui' })))));
   app.post('/runs/:id/rerun', async (c) => (may(c, 'operate', runRef), c.json(success(await ci.rerun(id(c))), 201)));
@@ -150,10 +173,19 @@ export function createCiRoutes(ci: CiService): Hono {
     await ci.deleteRepo(id(c));
     return c.json(success({ ok: true }));
   });
-  app.post('/repos/:id/connect', async (c) => (may(c, 'operate', repoRef), c.json(success(await ci.connectRepo(id(c), await body<ConnectCiRepoRequest>(c))))));
+  app.post(
+    '/repos/:id/connect',
+    async (c) => (may(c, 'operate', repoRef), c.json(success(await ci.connectRepo(id(c), await body<ConnectCiRepoRequest>(c))))),
+  );
   app.get('/repos/:id/branches', async (c) => (may(c, 'view', repoRef), c.json(success(await ci.branches(id(c))))));
-  app.get('/repos/:id/pipelines', async (c) => (may(c, 'view', repoRef), c.json(success(await ci.pipelines(id(c), c.req.query('ref') || undefined)))));
-  app.post('/repos/:id/merge', async (c) => (may(c, 'operate', repoRef), c.json(success(await ci.merge(id(c), await body<MergeCiRequest>(c))))));
+  app.get(
+    '/repos/:id/pipelines',
+    async (c) => (may(c, 'view', repoRef), c.json(success(await ci.pipelines(id(c), c.req.query('ref') || undefined)))),
+  );
+  app.post(
+    '/repos/:id/merge',
+    async (c) => (may(c, 'operate', repoRef), c.json(success(await ci.merge(id(c), await body<MergeCiRequest>(c))))),
+  );
   app.get('/repos/:id/environments', (c) => (may(c, 'view', repoRef), c.json(success(ci.environments(id(c))))));
   app.put('/repos/:id/environments/:name', async (c) => {
     const by = person(may(c, 'manage', repoRef));
@@ -172,10 +204,12 @@ export function createCiRoutes(ci: CiService): Hono {
     const actor = may(c, 'manage', repoRef);
     const by = person(actor);
     const req = await body<{ setting: CiReleaseReportSetting | null }>(c);
-    if (req.setting !== null && (typeof req.setting !== 'object' || req.setting === undefined)) throw new AppError('VALIDATION_FAILED', 'Send { "setting": { pipeline, vaultId, folder } } or { "setting": null }.');
+    if (req.setting !== null && (typeof req.setting !== 'object' || req.setting === undefined))
+      throw new AppError('VALIDATION_FAILED', 'Send { "setting": { pipeline, vaultId, folder } } or { "setting": null }.');
     // The note is written as the portal later, so the person must be able to write that vault themselves (404 otherwise, as for one they cannot see).
     const vaultId = typeof req.setting?.vaultId === 'string' ? req.setting.vaultId.trim() : '';
-    if (req.setting && vaultId && /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(vaultId)) requireVaultWrite(actor, vaultId, (v) => ci.vaultExists(v));
+    if (req.setting && vaultId && /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(vaultId))
+      requireVaultWrite(actor, vaultId, (v) => ci.vaultExists(v));
     return c.json(success(ci.setReleaseReport(id(c), req.setting, by)));
   });
   app.post('/runs/:id/release-report', async (c) => {

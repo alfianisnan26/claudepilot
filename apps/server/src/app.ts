@@ -20,6 +20,18 @@ import {
   type KeyUnlockResult,
   type EndpointRequest,
   type LoginRequest,
+  type CreatePortalUserRequest,
+  type DelegatedSession,
+  type SessionShareCap,
+  levelOfCaps,
+  type ChatEvent,
+  DELEGATED_EVENTS_MAX,
+  SESSION_GRANT_API,
+  type ChangeMyPasswordRequest,
+  normalizeEmail,
+  type SignedInAs,
+  PORTAL_USER_API,
+  type UpdatePortalUserRequest,
   type RotateCodeRequest,
   type SessionStatus,
   type SetEnabledRequest,
@@ -42,6 +54,9 @@ import type { AppPorts } from './appports/index.js';
 import { Hono, type Context } from 'hono';
 import { deleteCookie, setCookie } from 'hono/cookie';
 import { bodyLimit } from 'hono/body-limit';
+import { PortalUsers } from './identity/users.js';
+import { SessionGrants } from './identity/grants.js';
+import { fingerprint } from './identity/throttle.js';
 import { csrf } from 'hono/csrf';
 import { createMiddleware } from 'hono/factory';
 import { HTTPException } from 'hono/http-exception';
@@ -102,6 +117,11 @@ import { createClaudeVersionRoutes, createWorkspaceClaudeVersionRoutes, type Cla
 import { createCodespacesRoutes, type Codespaces } from './codespaces/index.js';
 import type { Platform } from './platform/index.js';
 import { actorOf, actorString, actorUserId, visible } from './authz/seam.js';
+import type { HeldShare } from './identity/grants.js';
+import type { OidcClient } from './identity/oidc.js';
+import { identityRoutes } from './identity/routes.js';
+import { SsoProviders } from './identity/sso.js';
+import { PortalTeams } from './identity/teams.js';
 import { assetCompress, jsonCompress } from './jsonCompress.js';
 import { LEGACY_SESSION_COOKIE, SESSION_COOKIE, overHttps, sessionCookieSpec, sessionFromCookies } from './sessionCookie.js';
 
@@ -172,6 +192,7 @@ export function createApp(
     claudeVersions,
     connect,
     appPorts,
+    oidc,
   }: {
     serveWeb: boolean;
     notify?: (...topics: LiveTopic[]) => void;
@@ -219,10 +240,13 @@ export function createApp(
     connect?: ConnectModule;
     /** App ports (T-948): a workspace's listening ports and the open of one on its app host; the proxy itself runs before this app (index.ts). */
     appPorts?: AppPorts;
+    /** The OpenID Connect client SSO sign-in uses (tests give one that talks to a fake provider). */
+    oidc?: OidcClient;
   },
 ) {
   const app = new Hono<Env>();
   const limiter = new RateLimiter(config.loginLimit.attempts, config.loginLimit.windowMs);
+<<<<<<< HEAD
   const { ttlMs } = config.session;
   const https = (c: Context<Env>) => overHttps(c.req.url, c.req.header('x-forwarded-proto'));
   /**
@@ -238,6 +262,42 @@ export function createApp(
     }
     return token;
   };
+=======
+  // T-118 MU1-min: email accounts beside the server code (identity/users.ts).
+  // Review #10: reads (roleOf, verify) use the read handle, so a frozen store does not end every account session; writes stay guarded.
+  const users = new PortalUsers(() => store.db, undefined, undefined, () => (store.writable ? store.db : null));
+  // Session delegation (owner, 2026-10-17): one session to one account at view or operate.
+  const grants = new SessionGrants(() => store.db, () => (store.writable ? store.db : null));
+  // Teams and SSO (owner, 2026-10-17): accounts in teams, sessions shared to a team, sign-in through an OpenID Connect provider by domain.
+  const teams = new PortalTeams(() => store.db, () => (store.writable ? store.db : null));
+  const sso = new SsoProviders(() => store.db, () => (store.writable ? store.db : null), () => store.secrets, users, teams, oidc);
+  // Review #5: the attempt counters are swept once an hour.
+  const sweep = setInterval(() => {
+    try {
+      users.throttle.sweep();
+    } catch {
+      // the next hour tries again
+    }
+  }, 60 * 60_000);
+  sweep.unref?.();
+  /** Gap 2 (owner, 2026-10-17): account and sign-in events in the platform audit (no password, an unknown email only as a fingerprint). */
+  const audit = (kind: string, subject: string | null, detail: Record<string, unknown>, severity: 'info' | 'medium' = 'info', by: string | null = null) => {
+    try {
+      platform?.audit.record({ kind, actor: 'ui', userId: by, subject: subject ? `user:${subject}` : null, detail, severity });
+    } catch {
+      // the audit must never break a sign-in
+    }
+  };
+  // MU2 S1a: an account's role is read on every use; a member's session is not a full one (portal.ts).
+  portal.roleOf = (id) => {
+    try {
+      return store.db ? users.roleOf(id) : 'unavailable';
+    } catch {
+      return 'unavailable';
+    }
+  };
+  const { cookie, ttlMs } = config.session;
+>>>>>>> origin/integration
 
   // Served over plain HTTP: no HSTS.
   // The built app also gets a CSP (csp.ts); the dev server's pages come from Vite, not from here.
@@ -292,8 +352,20 @@ export function createApp(
 
   app.get(API.session, (c) => {
     const status: SessionStatus = {
+<<<<<<< HEAD
       authenticated: !!portal.session(sessionToken(c)),
+=======
+      authenticated: !!portal.anySession(getCookie(c, cookie)),
+>>>>>>> origin/integration
       enabled: portal.enabled,
+      member: !!portal.anySession(getCookie(c, cookie)) && !portal.session(getCookie(c, cookie)),
+      emailSignIn: (() => {
+        try {
+          return users.any();
+        } catch {
+          return false;
+        }
+      })(),
     };
     return c.json(success(status));
   });
@@ -301,14 +373,37 @@ export function createApp(
   app.post(API.login, async (c) => {
     const key = clientKey(c);
     if (limiter.blocked(key)) throw new AppError('RATE_LIMITED', 'Too many tries. Wait a few minutes.');
-    const { code } = await body<LoginRequest>(c);
+    const { code, email, password } = await body<LoginRequest>(c);
+    // Review 2026-10-17 #4: sign-in off answers the same before any check, so a right password is not told apart from a wrong one.
+    if (!portal.enabled) throw new AppError('FORBIDDEN', 'Sign-in is turned off on this server.');
     let token: string;
-    try {
-      token = portal.signIn(typeof code === 'string' ? code : '');
-    } catch (e) {
-      if (isAppError(e) && e.is('UNAUTHORIZED')) limiter.fail(key);
-      throw e;
+    if (email !== undefined || password !== undefined) {
+      // T-118: an email account. ITS OWN throttle (per email and per address, identity/throttle.ts) applies; the server-code limiter is
+      // neither counted nor reset here (review #1: an account holder could otherwise reset the code's limiter between guesses).
+      // Owner, 2026-10-17: an email on a domain an SSO provider vouches for signs in there, never with a password (the same answer
+      // whether the account exists or not).
+      if (typeof email === 'string' && sso.forEmail(email))
+        throw new AppError('FORBIDDEN', 'This email signs in with SSO.', { details: { sso: 'Use the SSO button.' } });
+      try {
+        const user = await users.verify(email, password, key);
+        token = portal.openSession(user.id);
+        audit('portal.signin', null, { method: 'email', userId: user.id, role: user.role });
+        console.log(`[portal] signed in with an email account (${user.id}, ${user.role})`);
+      } catch (e) {
+        if (isAppError(e) && (e.is('UNAUTHORIZED') || e.is('LOCKED_OUT')))
+          audit('portal.signin_failed', null, { method: 'email', email: fingerprint(typeof email === 'string' ? normalizeEmail(email) : ''), code: e.code }, 'medium');
+        throw e;
+      }
+    } else {
+      try {
+        token = portal.signIn(typeof code === 'string' ? code : '');
+      } catch (e) {
+        if (isAppError(e) && e.is('UNAUTHORIZED')) limiter.fail(key);
+        throw e;
+      }
+      limiter.reset(key);
     }
+<<<<<<< HEAD
     limiter.reset(key);
     const spec = sessionCookieSpec(https(c), ttlMs);
     setCookie(c, spec.name, token, spec.options);
@@ -317,6 +412,164 @@ export function createApp(
     // stays. What protects is the read rule (sessionCookie.ts): the `__Host-` cookie always wins over any `portal_session`.
     if (spec.name !== LEGACY_SESSION_COOKIE) deleteCookie(c, LEGACY_SESSION_COOKIE, { path: '/' });
     return c.json(success(portal.adminState(token)));
+=======
+    setCookie(c, cookie, token, {
+      httpOnly: true,
+      sameSite: 'Strict',
+      path: '/',
+      maxAge: Math.floor(ttlMs / 1000),
+    });
+    // A member's sign-in answers no admin state (it holds the server code): the web reads /api/me and shows the member page.
+    return c.json(success(portal.session(token) ? portal.adminState(token) : { member: true }));
+  });
+
+  // Gap 3 (owner, 2026-10-17): any account changes its own password with the current one (a member too); the other sessions of the
+  // account end, this one stays.
+  app.post(PORTAL_USER_API.myPassword, async (c) => {
+    const token = getCookie(c, cookie);
+    const s = portal.anySession(token);
+    if (!s || !token) throw new AppError('UNAUTHORIZED', 'Sign in again.');
+    if (!s.userId) throw new AppError('VALIDATION_FAILED', 'The server code has no password to change.');
+    const { current, next } = await body<ChangeMyPasswordRequest>(c);
+    const me = users.get(s.userId);
+    await users.verify(me.email, current, clientKey(c));
+    await users.update(s.userId, { password: next });
+    portal.revokeUser(s.userId, token);
+    audit('account.password_changed', s.userId, { by: 'self' });
+    return c.json(success({ ok: true }));
+  });
+
+  // The delegate's door gets the same hostile workspace-id check every signed-in route gets (QA-029), before a handler sees the body.
+  const refuseHostileIds = createMiddleware<Env>(async (c, next) => {
+    const field = await hostileWorkspaceField(c);
+    if (field) throw new AppError('VALIDATION_FAILED', 'A workspace is `<target>/<name>`.', { details: { [field]: 'Not a workspace.' } });
+    await next();
+  });
+  app.use('/api/me/*', refuseHostileIds);
+  app.use('/api/teams/*', refuseHostileIds);
+  // Teams (an account's side), session shares and SSO sign-in: identity/routes.ts. The SSO door needs no session; the team pages check
+  // the account themselves; the admin side is mounted on the admin router below.
+  const identity = identityRoutes({
+    portal,
+    users,
+    teams,
+    grants,
+    sso,
+    sessions: chatController,
+    audit,
+    cookie,
+    ttlMs,
+    trustProxy: config.trustProxy,
+    publicUrl: process.env.PORTAL_SSO_ORIGIN?.trim() || null,
+    clientKey,
+    body,
+  });
+  identity.mountPublic(app);
+
+  // ---------- Session delegation: the delegate's door (an account session holding a grant; checked on EVERY request) ----------
+  // Review M1: one account's reads and writes on the door are bounded (the view polls every 2.5 s: 24 a minute).
+  const delegateLimiter = new RateLimiter(240, 60 * 1000);
+  const delegate = (c: Context<Env>, need: SessionShareCap) => {
+    const s = portal.anySession(getCookie(c, cookie));
+    if (!s) throw new AppError('UNAUTHORIZED', 'Sign in again.');
+    if (!s.userId) throw new AppError('NOT_FOUND', 'Not found.');
+    if (delegateLimiter.blocked(s.userId)) throw new AppError('RATE_LIMITED', 'Too many requests. Wait a minute.');
+    delegateLimiter.fail(s.userId);
+    const id = chatController.resolve(c.req.param('id') ?? '');
+    // Its own shares and its teams' shares, live ones only (an expiry or leaving a team ends it here, on the next request).
+    const held = grants.held(id, s.userId, teams.idsOf(s.userId), (t) => teams.nameOf(t));
+    // The same not-found for a session that does not exist and one that is not yours: nothing is told.
+    if (!held) throw new AppError('NOT_FOUND', 'Not found.');
+    if (!held.caps.includes(need)) throw new AppError('FORBIDDEN', need === 'read' ? 'Not shared with you.' : `This share does not let you ${need === 'respond' ? 'answer approvals' : need}.`);
+    // A session that went into Bypass after the share is read-only to the delegate until the owner shares it again and accepts Bypass
+    // (checked on every act, not only at the share).
+    if ((need === 'send' || need === 'respond') && !held.bypassAck && chatController.get(id)?.mode === 'bypassPermissions')
+      throw new AppError('FORBIDDEN', 'This session is in Bypass now. Ask the owner to share it again.');
+    return { id, userId: s.userId, held };
+  };
+  // Review M2: a delegate gets what its view shows and nothing more: the main thread's messages, tool names, approvals and errors. No tool
+  // output, thinking, tool inputs, files or sub-agent lines (they carry what the agent read in the workspace).
+  const delegateView = (events: ChatEvent[]): ChatEvent[] =>
+    events.flatMap((e): ChatEvent[] => {
+      if ((e.parentToolUseId || e.agentLabel) && e.kind !== 'request' && e.kind !== 'resolved') return []; // a sub-agent's approval still shows
+      const base = { seq: e.seq, at: e.at, kind: e.kind };
+      switch (e.kind) {
+        case 'user':
+        case 'assistant':
+        case 'error':
+          return [{ ...base, text: e.text, uuid: e.uuid }];
+        case 'tool_use':
+          return [{ ...base, toolName: e.toolName, toolUseId: e.toolUseId }];
+        case 'request':
+          return [{ ...base, requestId: e.requestId, request: e.request }];
+        case 'resolved':
+          return [{ ...base, requestId: e.requestId, outcome: e.outcome }];
+        default:
+          return [];
+      }
+    });
+  const delegated = (id: string, held: HeldShare): DelegatedSession | null => {
+    const x = chatController.get(id);
+    return x
+      ? { id: x.id, title: x.title, state: x.state, workspaceId: x.workspaceId, waiting: x.waiting ?? 0, level: levelOfCaps(held.caps), caps: held.caps, expiresAt: held.expiresAt, via: held.via }
+      : null;
+  };
+  app.get(SESSION_GRANT_API.mine, (c) => {
+    const s = portal.anySession(getCookie(c, cookie));
+    if (!s?.userId) throw new AppError('UNAUTHORIZED', 'Sign in again.');
+    const held = grants.sessionsFor(s.userId, teams.idsOf(s.userId), (t) => teams.nameOf(t));
+    return c.json(success([...held].map(([id, h]) => delegated(id, h)).filter((x): x is DelegatedSession => !!x)));
+  });
+  app.get('/api/me/sessions/:id', (c) => {
+    const d = delegate(c, 'read');
+    const x = delegated(d.id, d.held);
+    if (!x) throw new AppError('NOT_FOUND', 'Not found.');
+    return c.json(success(x));
+  });
+  app.get('/api/me/sessions/:id/events', (c) => {
+    const d = delegate(c, 'read');
+    const after = c.req.query('after');
+    if (after !== undefined) {
+      // Review M1: bounded; a delegate far behind gets the newest DELEGATED_EVENTS_MAX, never the whole transcript.
+      const last = chatController.get(d.id)?.lastSeq ?? 0;
+      const from = Math.max(0, Number(after) || 0, last - DELEGATED_EVENTS_MAX);
+      return c.json(success(delegateView(chatController.history(d.id, from).slice(-DELEGATED_EVENTS_MAX))));
+    }
+    const before = c.req.query('before');
+    const limit = Math.min(DELEGATED_EVENTS_MAX, Math.max(1, Number(c.req.query('limit') ?? 80) || 80));
+    const page = chatController.historyPage(d.id, before === undefined ? null : Number(before) || null, limit);
+    return c.json(success({ ...page, events: delegateView(page.events) }));
+  });
+  app.post('/api/me/sessions/:id/send', async (c) => {
+    const d = delegate(c, 'send');
+    const { text, uuid } = await body<{ text: string; uuid: string }>(c);
+    if (typeof text !== 'string' || !text.trim()) throw new AppError('VALIDATION_FAILED', 'Write a message.');
+    const id = typeof uuid === 'string' && /^[A-Za-z0-9-]{8,64}$/.test(uuid) ? uuid : crypto.randomUUID();
+    await chatController.send(d.id, id, text.slice(0, 50_000), { actor: `account:${d.userId}`, actorLabel: users.get(d.userId).email });
+    audit('session.delegate_sent', d.userId, { sessionId: d.id, chars: text.length });
+    return c.json(success({ ok: true, uuid: id }));
+  });
+  app.post('/api/me/sessions/:id/respond', async (c) => {
+    const d = delegate(c, 'respond');
+    const { requestId, decision, note } = await body<{ requestId: string; decision: string; note?: string }>(c);
+    if (typeof requestId !== 'string' || (decision !== 'allow' && decision !== 'deny')) throw new AppError('VALIDATION_FAILED', 'Answer allow or deny.');
+    await chatController.respond(d.id, requestId, decision, { note: typeof note === 'string' ? note.slice(0, 2000) : undefined, actor: `account:${d.userId}` });
+    audit('session.delegate_answered', d.userId, { sessionId: d.id, requestId, decision });
+    return c.json(success({ ok: true }));
+  });
+  app.post('/api/me/sessions/:id/stop', async (c) => {
+    const d = delegate(c, 'stop');
+    await chatController.control(d.id, 'stop', undefined, { actor: `account:${d.userId}` });
+    audit('session.delegate_stopped', d.userId, { sessionId: d.id });
+    return c.json(success({ ok: true }));
+  });
+
+  // MU2 S1a: who is signed in, answered to a member too (no code, no admin state).
+  app.get(PORTAL_USER_API.me, (c) => {
+    const s = portal.anySession(getCookie(c, cookie));
+    if (!s) throw new AppError('UNAUTHORIZED', 'Sign in again.');
+    return c.json(success<SignedInAs>(s.userId ? { kind: 'account', user: users.get(s.userId) } : { kind: 'code' }));
+>>>>>>> origin/integration
   });
 
   app.post(API.logout, (c) => {
@@ -347,8 +600,17 @@ export function createApp(
     return null;
   };
   const requireSession = createMiddleware<Env>(async (c, next) => {
+<<<<<<< HEAD
     const token = sessionToken(c);
     if (!token || !portal.session(token)) throw new AppError('UNAUTHORIZED', 'Sign in again.');
+=======
+    const token = getCookie(c, cookie);
+    if (!token || !portal.session(token)) {
+      // MU2 S1a: a member is signed in but has no access to the admin app yet (default deny); everything else is "sign in again".
+      if (token && portal.anySession(token)) throw new AppError('FORBIDDEN', 'Your account has no access to this yet.');
+      throw new AppError('UNAUTHORIZED', 'Sign in again.');
+    }
+>>>>>>> origin/integration
     const field = await hostileWorkspaceField(c);
     if (field) throw new AppError('VALIDATION_FAILED', 'A workspace is `<target>/<name>`.', { details: { [field]: 'Not a workspace.' } });
     c.set('token', token);
@@ -360,6 +622,42 @@ export function createApp(
   const state = (c: Context<Env>) => c.json(success<AdminState>(portal.adminState(c.get('token'))));
 
   admin.get('/state', state);
+  // Session shares, teams and SSO providers, the owner's side (a full session): identity/routes.ts.
+  identity.mountAdmin(admin);
+
+  // T-118 MU1-min: email accounts, managed by someone already signed in (the server code or another account).
+  admin.get('/users', (c) => c.json(success(users.list())));
+  admin.post('/users', async (c) => {
+    const u = await users.create(await body<CreatePortalUserRequest>(c), 'ui');
+    audit('account.created', u.id, { email: u.email, role: u.role });
+    return c.json(success(u), 201);
+  });
+  admin.patch('/users/:id', async (c) => {
+    const id = c.req.param('id');
+    const req = await body<UpdatePortalUserRequest>(c);
+    const before = users.get(id);
+    const u = await users.update(id, req);
+    // Review #3: a password reset or a disable ends the account's sessions now (and its sockets with them).
+    if (req.password !== undefined || u.state === 'disabled' || (before.role === 'admin' && u.role === 'member')) portal.revokeUser(id);
+    audit('account.updated', id, {
+      ...(req.role && req.role !== before.role ? { role: { from: before.role, to: u.role } } : {}),
+      ...(req.state && req.state !== before.state ? { state: { from: before.state, to: u.state } } : {}),
+      ...(req.password !== undefined ? { password: 'reset' } : {}),
+      ...(req.displayName !== undefined ? { name: true } : {}),
+    });
+    return c.json(success(u));
+  });
+  admin.delete('/users/:id', (c) => {
+    const id = c.req.param('id');
+    const before = users.get(id);
+    users.remove(id);
+    grants.removeUser(id);
+    teams.removeUser(id);
+    sso.removeUser(id);
+    portal.revokeUser(id);
+    audit('account.removed', id, { email: before.email, role: before.role });
+    return c.json(success({ removed: true }));
+  });
   admin.post('/code', async (c) => {
     const { code } = await body<RotateCodeRequest>(c);
     if (code !== undefined && typeof code !== 'string') throw new AppError('VALIDATION_FAILED', 'Code must be text.');

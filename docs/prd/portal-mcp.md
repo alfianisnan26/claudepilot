@@ -560,6 +560,15 @@ ends, when it waits on a person and when it ends; `end`: only the end; `none`), 
 (`workers` or `crew`) instead of `session_id`, every recipient counted against the hourly limit, and
 `session_family` items carry `agent` and `mode`, with how many wait on a person in its summary.
 
+Crew channel (T-294, agent tokens only): `crew_post` `{text, lead?}` stores one message (at most 4,000 characters, no slash command, escapes and
+secrets removed) on the channel of the caller's crew: its parent's, or its own when it has no parent; the channel is the lead's session id, its
+members the lead and the workers that report to it. `crew_read` `{limit?, after?, peek?, lead?}` returns the messages after the caller's own
+cursor, oldest first (`limit` 20 by default, 100 at most), `cursor`, `more` and each message as `{id, from, at, own, text}` with `text` as
+`untrusted_text`; it moves the cursor on unless `peek`, and `after` reads from a message id instead. The cursor is stored (a restarted session
+reads on from it); the channel keeps the newest 500 messages; a continuation or a transfer of the crew moves the channel with it. `lead`, when
+given, must be the caller's own channel: any other id is the same `NOT_FOUND` as one that exists nowhere. Tables `crew_messages` and
+`crew_cursors` (migration 787). A message is stored, not delivered: steering one session now is still `session_message`.
+
 CI for a crew (T-476, [Local git & CI](local-git-ci.md) FR39): `ci_run_trigger` from an agent token lets a lead (a session with no
 parent that has started workers) start any pipeline on a `dev/*` or `ticket/*` branch of its program's remote (the remote whose
 folder is exactly the lead's folder), matched exactly (no `refs/`, `..`, tag or lookalike prefix; resolved as `refs/heads/<branch>`).

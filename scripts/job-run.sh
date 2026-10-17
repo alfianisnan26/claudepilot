@@ -19,6 +19,11 @@
 #     --keep-tests <paths>                              with --against: these files (comma separated) are taken from --ref onto the other ref
 #     --also <org>/<repo>[@<ref>]                     one more repository cloned next to it (Konfersi's file:../konfersi-shared), ref stg
 #     --steps npm-ci|none                               before the command (default npm-ci, at the root of the repository and of each --also clone that has a package-lock.json)
+#     --image <ref>                                     (T-379) the COMMAND container's image, for a test stage the workspace image lacks (Python, pytest):
+#                                                       registry.int.isnan.me/claudepilot|konfersi|event/<path>, as built by scripts/image-build.sh,
+#                                                       pinned by :<tag> (not :latest) or @sha256:<digest>; anything else is refused before any kubectl call. The fetch
+#                                                       container (the only one with credentials) keeps the workspace image. The image may have no
+#                                                       node, npm or git: the npm steps are skipped (--steps npm-ci is refused) and --against is refused
 #     --artifacts <paths>  --out <dir>                  files in the repository (comma separated) copied back into <dir> (default
 #                                                       ./job-run-artifacts/<job>); at most JOB_RUN_ARTIFACT_MAX bytes compressed (4 MiB)
 #     --timeout <s>                                     the Job's deadline once it runs (default 3600, at most 5400)
@@ -128,11 +133,12 @@ case "${1:-}" in
     echo "$n job(s) stopped"; exit 0 ;;
 esac
 
-repo=; ref=; against=; keep=; steps=npm-ci; artifacts=; out=; timeout=3600; role=${PILOT_AGENT:-agent}; also=(); big=; pool=(); reuse=
+repo=; ref=; against=; keep=; steps=npm-ci; steps_given=; artifacts=; out=; timeout=3600; role=${PILOT_AGENT:-agent}; also=(); big=; pool=(); reuse=; run_image=; image_given=
 while [ $# -gt 0 ]; do
   case "$1" in
-    --repo|--ref|--against|--keep-tests|--also|--steps|--artifacts|--out|--timeout|--role|--pool-env) [ $# -ge 2 ] || die "$1 needs a value" ;;&
+    --repo|--ref|--against|--keep-tests|--also|--steps|--artifacts|--out|--timeout|--role|--pool-env|--image) [ $# -ge 2 ] || die "$1 needs a value" ;;&
     --pool-env) pool+=("$2"); shift 2 ;;
+    --image) run_image=$2; image_given=1; shift 2 ;;
     --big) big=1; shift ;;
     --reuse) reuse=1; shift ;;
     --repo) repo=$2; shift 2 ;;
@@ -140,7 +146,7 @@ while [ $# -gt 0 ]; do
     --against) against=$2; shift 2 ;;
     --keep-tests) keep=${2//,/ }; shift 2 ;;
     --also) also+=("$2"); shift 2 ;;
-    --steps) steps=$2; shift 2 ;;
+    --steps) steps=$2; steps_given=1; shift 2 ;;
     --artifacts) artifacts=${2//,/ }; shift 2 ;;
     --out) out=$2; shift 2 ;;
     --timeout) timeout=$2; shift 2 ;;
@@ -154,6 +160,18 @@ done
 [ $# -gt 0 ] || die "usage: scripts/job-run.sh [--repo ...] [--ref ...] -- <command>"
 if [ $# -eq 1 ]; then cmd=$1; else cmd=$(printf '%q ' "$@"); fi
 [[ $steps =~ ^(npm-ci|none)$ ]] || die "--steps: npm-ci or none"
+# --image (T-379): the command container's image, from the internal registry only, under the paths scripts/image-build.sh pushes to
+# (claudepilot/, konfersi/ and event/, the three programs), pinned by a tag or a sha256 digest. Checked here, before any kubectl call. The fetch container (the only one
+# with the credentials) keeps the workspace image; the command's image never sees them.
+if [ -n "$image_given" ]; then
+  # The host is the literal constant, never $registry (DEPLOY_REGISTRY could widen the allow-list).
+  img_re="^registry\\.int\\.isnan\\.me/(claudepilot|konfersi|event)/[a-z0-9]+([._-][a-z0-9]+)*(/[a-z0-9]+([._-][a-z0-9]+)*)*(:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}|@sha256:[0-9a-f]{64})\$"
+  [[ $run_image =~ $img_re && $run_image != *:latest ]] || die "--image: an image on registry.int.isnan.me under claudepilot/, konfersi/ or event/ (as built by scripts/image-build.sh), pinned by a :tag (not :latest) or @sha256:<digest> (got $run_image)"
+  # No node, npm or git is assumed in a foreign image: the npm steps are skipped, and the proof (it needs git in the command container) is refused.
+  [ -z "$steps_given" ] || [ "$steps" = none ] || die "--image: the image may have no node or npm; use --steps none (or leave --steps out)"
+  [ -z "$against" ] || die "--image cannot be used with --against (the proof needs git in the command container)"
+  steps=none; echo "job-run: note: --image given: the npm steps are skipped (the image may have no node)" >&2
+fi
 { [[ $timeout =~ ^[0-9]+$ ]] && [ "$timeout" -ge 60 ] && [ "$timeout" -le 5400 ]; } || die "--timeout: 60 to 5400 seconds"
 for a in $artifacts; do [[ $a =~ ^[A-Za-z0-9_.][A-Za-z0-9_./*-]*$ && ! $a =~ (^|/)\.\.(/|$) ]] || die "--artifacts: paths inside the repository (got $a)"; done
 [[ -z $against || ( $against =~ ^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$ && ! $against =~ \.\. ) ]] || die "--against: a branch or commit name (got $against)"
@@ -386,7 +404,7 @@ pool_refs=${pool_refs#\\n}
 [ -n "$pool_refs" ] || pool_refs='            # no --pool-env'
 sed -e "s|^ *# __POOL_ENV__.*\$|$pool_refs|" -e "s#__MASTER_REQUIRED__#$master_rule#" -e "s#__NAME__#$job#g" -e "s#__CHAT__#$chat#g" -e "s#__ROLE__#$role#g" -e "s#__REPO__#$repo_label#g" -e "s#__PROGRAM__#$program#g" \
     -e "s#__MEMORY__#$memory#g" -e "s#__TMP_SIZE__#$tmp_size#" -e "s#__OWNER__#$host/$$/$(starttime $$)#" \
-    -e "s#__DEADLINE__#$timeout#" -e "s#__IMAGE__#$image#" -e "s#__REPO_URL__#$url#" -e "s#__REF__#$ref#" -e "s#__ALSO__#$alsos#" \
+    -e "s#__DEADLINE__#$timeout#" -e "s#__IMAGE__#$image#" -e "s#__RUN_IMAGE__#${run_image:-$image}#" -e "s#__REPO_URL__#$url#" -e "s#__REF__#$ref#" -e "s#__ALSO__#$alsos#" \
     -e "s#__AGAINST__#$against#" -e "s#__KEEP__#$keep#" -e "s#__STEPS__#$steps#" -e "s#__ARTIFACTS__#$artifacts#" -e "s#__ARTMAX__#$art_max#" -e "s#__CMD__#$(printf '%s' "$cmd" | base64 -w0)#" \
     "$here/deploy/k3s-build/job-run.yaml" | kubectl apply -f - >/dev/null
 # The Secret belongs to the Job from its first moment (T-426): the Job was applied suspended (no pod needs the Secret yet), and the Secret is
@@ -426,7 +444,7 @@ if [ -n "$watch" ] && [ "$watch" != none ] && kill -0 "$watch" 2>/dev/null; then
   wd=$!
 fi
 t0=$(date +%s)
-echo "job-run: $job: $repo@${ref:0:12} ($steps) on $image"
+echo "job-run: $job: $repo@${ref:0:12} ($steps) on $image${run_image:+; the command runs in $run_image}"
 
 # The queue: unfinished Jobs in creation order; the running ones count, then each suspended one is let in while the caps allow.
 # shellcheck disable=SC2016 # jq's own variables
@@ -450,11 +468,25 @@ def key: [.metadata.creationTimestamp, .metadata.name];
     | if $s.go then "go"
       else "wait \([$q[] | select(.metadata.name != $me and (.spec.suspend != true or (key < ($mine | key))))] | length)" end
   end'
+# Gates first (2026-10-17: deploy 361's gate, 8Gi, sat Pending for an hour while 4Gi lane Jobs took every bit of room it freed). While a gate pod
+# waits for a node and some Job of ours runs (its memory comes free), a Job about to be let out waits instead; with none running, waiting frees
+# nothing, so it goes. JOB_RUN_GATE_FIRST=0 turns it off.
+gate_first=${JOB_RUN_GATE_FIRST:-1}
+gate_waiting() {
+  [ "$gate_first" = 1 ] || return 1
+  local unplaced running
+  unplaced=$(kubectl -n "$ns" get pods -l app=claudepilot-gate --field-selector=status.phase=Pending -o jsonpath='{range .items[*]}{.metadata.name}={.spec.nodeName}{"\n"}{end}' 2>/dev/null | grep -c '=$')
+  [ "${unplaced:-0}" -gt 0 ] || return 1
+  running=$(jobs_json | jq '[.items[] | select(.metadata.deletionTimestamp == null and .spec.suspend != true and ((.status.succeeded // 0) == 0) and ((.status.failed // 0) == 0))] | length' 2>/dev/null)
+  [ "${running:-0}" -gt 0 ]
+}
 last=
 while :; do
   d=$(jobs_json | jq -r --arg me "$job" --argjson max "$max" --argjson per "$per" --argjson pprog "$pprog" "$QUEUE_JQ" 2>/dev/null || true)
+  if [ "$d" = go ] && gate_waiting; then d=gate; fi
   case "$d" in
     go) break ;;
+    gate) [ "$d" = "$last" ] || echo "job-run: waits: a gate Job is Pending for room, and gates go first (JOB_RUN_GATE_FIRST=0 turns it off)"; last=$d ;;
     gone) echo "job-run: $job was stopped while queued" >&2; exit 1 ;;
     wait\ *) [ "$d" = "$last" ] || echo "job-run: queued behind ${d#wait } (at most $max at once, $per per chat, $pprog per program)"; last=$d ;;
   esac

@@ -1,0 +1,10 @@
+node_modules
+dist
+build
+coverage
+job-out
+job-run-artifacts
+package-lock.json
+docs/context-pack.md
+# Not valid YAML: a template; scripts/job-run.sh replaces the __MASTER_REQUIRED__ line before kubectl reads it (prettier: SyntaxError).
+deploy/k3s-build/job-run.yaml

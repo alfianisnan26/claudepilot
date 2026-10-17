@@ -20,12 +20,28 @@ const spy = (): object =>
 const SUFFIX = 'apps.test';
 const audits: { kind: string; actor: string; subject?: string | null; detail?: Record<string, unknown> }[] = [];
 const execs: string[][] = [];
+/**
+ * The exec of the list. Its output and its exit come in one fixed order, never by timers racing (FIX4: a 5 ms exit timer beat the output
+ * on a loaded node, 4 of 7 runs). `late`: the exit is reported first and the output follows in the same turn, which collect() must still keep.
+ */
+let late = false;
 const wsDeps = {
   runtimeFor: () => undefined,
   exec: async (_t: string, _n: string, command: string[]) => {
     execs.push(command);
     const out = Buffer.from(JSON.stringify([{ port: 8765, process: 'python3' }, { port: 3000 }, { port: 22 }]));
-    return { write() {}, close() {}, onData: (fn: (d: Buffer) => void) => setImmediate(() => fn(out)), onExit: (fn: (c: number) => void) => setTimeout(() => fn(0), 5) };
+    let data: (d: Buffer) => void = () => undefined;
+    return {
+      write() {},
+      close() {},
+      onData: (fn: (d: Buffer) => void) => void (data = fn),
+      onExit: (fn: (c: number) => void) =>
+        void setImmediate(() => {
+          if (late) return void (fn(0), process.nextTick(() => data(out)));
+          data(out);
+          fn(0);
+        }),
+    };
   },
   list: async () => [
     { id: 'kubernetes/kohi-event', name: 'kohi-event' },
@@ -35,7 +51,14 @@ const wsDeps = {
   resolve: () => null,
 };
 const grants = new AppPortGrants();
-const appPorts = new AppPorts({ suffix: SUFFIX, portalPort: 3000, workspaces: wsDeps as never, sessionValid: () => true, grants, dial: async () => assert.fail('no dial here') });
+const appPorts = new AppPorts({
+  suffix: SUFFIX,
+  portalPort: 3000,
+  workspaces: wsDeps as never,
+  sessionValid: () => true,
+  grants,
+  dial: async () => assert.fail('no dial here'),
+});
 
 const portal = new Portal('24681357', 60_000);
 const token = portal.signIn('24681357');
@@ -66,7 +89,12 @@ const call = async (a: import('hono').Hono, method: string, path: string, opts: 
     `https://${PORTAL}${path}`,
     {
       method,
-      headers: { host: PORTAL, cookie: `portal_session=${token}`, ...(opts.origin ? { origin: opts.origin } : {}), ...(method === 'GET' ? {} : { 'content-type': 'application/json' }) },
+      headers: {
+        host: PORTAL,
+        cookie: `portal_session=${token}`,
+        ...(opts.origin ? { origin: opts.origin } : {}),
+        ...(method === 'GET' ? {} : { 'content-type': 'application/json' }),
+      },
       body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
     },
     env,
@@ -110,10 +138,24 @@ test('the list: the listening ports with their process, the portal’s own and l
   assert.equal(execs.at(-1)![0], 'node');
 });
 
+test('the list keeps output that lands just after the exit (a stream a tick behind)', async () => {
+  late = true;
+  try {
+    const r = await call(app, 'GET', LIST);
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    assert.equal((r.json.data?.ports as unknown[]).length, 3);
+  } finally {
+    late = false;
+  }
+});
+
 test('a seam denial is the same 404 on the open and the list, and mints nothing', async () => {
   const before = grants.size.codes;
   const n = execs.length;
-  const was = useAuthz({ ...singleOwner, can: (a, v, o) => (o.type === 'workspace' ? { allow: false, reason: 'not_found', level: 'none' } : singleOwner.can(a, v, o)) });
+  const was = useAuthz({
+    ...singleOwner,
+    can: (a, v, o) => (o.type === 'workspace' ? { allow: false, reason: 'not_found', level: 'none' } : singleOwner.can(a, v, o)),
+  });
   try {
     const open = await call(app, 'POST', OPEN, { origin: `https://${PORTAL}`, body: { port: 8765 } });
     assert.equal(open.status, 404);

@@ -3,6 +3,7 @@
 // person; every change is an entry on its timeline. The text of a ticket is untrusted input.
 
 import type { BumpMode } from './bump.js';
+import type { CursorPage } from './page.js';
 
 export const TICKET_TYPES = ['task', 'bug', 'feature', 'question', 'request', 'incident', 'approval', 'chore'] as const;
 export type TicketType = (typeof TICKET_TYPES)[number];
@@ -101,7 +102,16 @@ export interface TicketItem extends Ticket {
    * `tickets.orphanAfterMin` has passed since `since`. Null for every other ticket.
    */
   orphan: TicketOrphan | null;
+  /**
+   * D-58: set on a LIST row only. A list row holds `description` and `closingSummary` cut at {@link TICKET_LIST_TEXT} characters; these say a
+   * cut happened. The full text is `GET /api/tickets/:id`. Never write a cut text back: read the detail first.
+   */
+  descriptionCut?: boolean;
+  closingSummaryCut?: boolean;
 }
+
+/** D-58: the most characters of a ticket's description (and closing summary) a list row carries. */
+export const TICKET_LIST_TEXT = 200;
 
 /** Why the holder counts as dead: its state is `ended`, it was archived (ended and hidden), or the portal no longer has the session. */
 export type TicketOrphanWhy = 'ended' | 'archived' | 'missing';
@@ -138,7 +148,9 @@ export type TicketEventKind =
   | 'closed'
   | 'reopened'
   /** A person (or a script) pushed it into a running session (FR28): `data` `{ sessionId, sessionTitle, mode }`, `body` the note. */
-  | 'bumped';
+  | 'bumped'
+  /** A file was attached (`data` `{ attachmentId, name, size, mediaType }`) or removed (`data` adds `removed: true`). */
+  | 'attachment';
 
 /** One entry on a ticket's timeline: who did what, when. Never edited. */
 export interface TicketEvent {
@@ -166,7 +178,34 @@ export interface TicketDetail {
   sessions: TicketSession[];
   /** The checks CI attached (interface I10), one per name, by name. */
   checks: TicketCheck[];
+  /** Files attached to it, oldest first. Absent from an older server. */
+  attachments?: TicketAttachment[];
 }
+
+/** A file on a ticket (owner, 2026-10-17: "ticket support with attachment, all files"): any type, kept by the portal, served only to who may see the ticket. */
+export interface TicketAttachment {
+  /** A number, unique across tickets. */
+  id: number;
+  ticketId: string;
+  /** The file name as uploaded (no folders). */
+  name: string;
+  size: number;
+  /** The type the uploader gave (or `application/octet-stream`). Only a few image types are shown inline; everything else downloads. */
+  mediaType: string;
+  sha256: string;
+  at: string;
+  /** Who attached it: `ui`, `session:<id>`, `portal-mcp:<token id>`. */
+  actor: string;
+  actorLabel: string;
+  /** The actor attached it as an agent: the file is untrusted. */
+  fromAgent: boolean;
+}
+
+/** One file at most 50 MB, at most 100 files on a ticket; a name of at most 200 characters. */
+export const TICKET_ATTACHMENT_LIMITS = { maxBytes: 50 * 1024 * 1024, perTicket: 100, name: 200 } as const;
+
+/** The types shown inline (an image preview); every other type, SVG and HTML included, is served as a download. */
+export const TICKET_ATTACHMENT_INLINE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'] as const;
 
 /** The state of one pipeline check on a ticket. */
 export const TICKET_CHECK_STATES = ['queued', 'running', 'passed', 'failed', 'cancelled'] as const;
@@ -203,6 +242,15 @@ export interface TicketList {
   counts: TicketCounts;
 }
 
+/**
+ * `GET /api/tickets` (D-58): one page of summary rows (descriptions cut, see `TicketItem.descriptionCut`), `next` the cursor of the following page.
+ * `total` and `counts` ride on the first page only (no `cursor`); a later page leaves them out.
+ */
+export interface TicketPage extends CursorPage<TicketItem> {
+  total?: number;
+  counts?: TicketCounts;
+}
+
 /** `me` is the caller's session; `user` a person; `session:<id>`; `unassigned`; `any`. */
 export type TicketAssigneeFilter = 'any' | 'unassigned' | 'user' | `session:${string}`;
 
@@ -221,8 +269,12 @@ export interface TicketFilter {
   includeClosed?: boolean;
   /** `priority` (the default): the most urgent first, then the latest update. `newest`: the latest made first (the Home page). */
   sort?: 'priority' | 'newest';
+  /** Rows per page: 25 when absent, at most 100 on the route. */
   limit?: number;
+  /** In-process only (the portal MCP's own paging); the HTTP route takes `cursor`. */
   offset?: number;
+  /** The route: the `next` of the page before. */
+  cursor?: string;
 }
 
 export interface CreateTicketRequest {
@@ -314,6 +366,11 @@ export const TICKET_API = {
   opening: (id: string) => `/api/tickets/${encodeURIComponent(id)}/opening`,
   /** GET: the sessions it can be bumped into, as `BumpTarget[]`. POST `BumpRequest`: `TicketBumpResult` (FR28). */
   bump: (id: string) => `/api/tickets/${encodeURIComponent(id)}/bump`,
+  /** GET: `TicketAttachment[]`. POST the file's bytes as the body (`content-type: application/octet-stream`), its name in the `x-file-name`
+   *  header (URI-encoded) and its type in `x-file-type`: the new `TicketAttachment`. */
+  attachments: (id: string) => `/api/tickets/${encodeURIComponent(id)}/attachments`,
+  /** GET: the file (inline for a preview image, else a download). DELETE: remove it. */
+  attachment: (id: string, attachmentId: number) => `/api/tickets/${encodeURIComponent(id)}/attachments/${attachmentId}`,
   /** GET: the tickets bumped into a session, as `TicketBumped[]` (FR31). */
   bumped: (sessionId: string) => `/api/tickets/bumped?session=${encodeURIComponent(sessionId)}`,
 } as const;

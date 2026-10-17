@@ -1,5 +1,14 @@
 import { AppError } from '@isnanme/core';
-import { APP_PORT_AUTH_PATH, APP_PORT_MAX, APP_PORT_MIN, appPortHost, isAppPortNext, type AppPortItem, type AppPortList, type OpenAppPortResult } from '@portal/contracts';
+import {
+  APP_PORT_AUTH_PATH,
+  APP_PORT_MAX,
+  APP_PORT_MIN,
+  appPortHost,
+  isAppPortNext,
+  type AppPortItem,
+  type AppPortList,
+  type OpenAppPortResult,
+} from '@portal/contracts';
 import type { Actor, Workspace } from '@portal/contracts';
 import { CDP_PORT, SUPERVISOR_PORT } from '../browser/spec.js';
 import type { ExecSession, Runtime } from '../workspaces/runtime.js';
@@ -35,7 +44,15 @@ export interface AppPortsDeps {
     runtimeFor(target: string): Runtime | undefined;
     exec(target: string, name: string, command: string[]): Promise<ExecSession>;
     list(): Promise<Workspace[]>;
-    hooks: { audit?: (e: { kind: string; actor: string; userId: string | null; subject?: string | null; detail?: Record<string, unknown> }) => void };
+    hooks: {
+      audit?: (e: {
+        kind: string;
+        actor: string;
+        userId: string | null;
+        subject?: string | null;
+        detail?: Record<string, unknown>;
+      }) => void;
+    };
     resolve(ref: string): { id: string } | null;
   };
   sessionValid: (token: string) => boolean;
@@ -48,7 +65,12 @@ export interface AppPortsDeps {
   limits?: ProxyLimits;
 }
 
-/** Runs a command in the workspace and collects its output (bounded in time and size). */
+/**
+ * Runs a command in the workspace and collects its output (bounded in time and size). The runtimes report the exit after the last output
+ * (local: the child's `close`; Docker: the stream's end, then an inspect; Kubernetes: the socket's close after its frames; Connect: the result
+ * frame after the data frames), but output already on its way may still be a tick behind (a PassThrough), so the exit is acted on one turn
+ * later, as chat/files.ts does.
+ */
 async function collect(session: ExecSession, ms = 5000, max = 256 * 1024): Promise<{ code: number | null; out: string }> {
   return new Promise((resolve) => {
     const chunks: Buffer[] = [];
@@ -60,7 +82,7 @@ async function collect(session: ExecSession, ms = 5000, max = 256 * 1024): Promi
     });
     session.onExit((code) => {
       clearTimeout(timer);
-      resolve({ code, out: Buffer.concat(chunks).toString('utf8') });
+      setImmediate(() => resolve({ code, out: Buffer.concat(chunks).toString('utf8') }));
     });
   });
 }
@@ -133,9 +155,12 @@ export class AppPorts {
     if (!this.enabled) throw new AppError('NOT_FOUND', 'Not found.');
     const port = req.port;
     if (typeof port !== 'number' || !this.openable(port))
-      throw new AppError('VALIDATION_FAILED', `A port from ${APP_PORT_MIN} to ${APP_PORT_MAX} that isn’t the portal’s own.`, { details: { port: 'Not a port that may be opened.' } });
+      throw new AppError('VALIDATION_FAILED', `A port from ${APP_PORT_MIN} to ${APP_PORT_MAX} that isn’t the portal’s own.`, {
+        details: { port: 'Not a port that may be opened.' },
+      });
     const path = req.path === undefined ? '/' : req.path;
-    if (typeof path !== 'string' || !isAppPortNext(path)) throw new AppError('VALIDATION_FAILED', 'A path on the app, starting with /.', { details: { path: 'Not a path.' } });
+    if (typeof path !== 'string' || !isAppPortNext(path))
+      throw new AppError('VALIDATION_FAILED', 'A path on the app, starting with /.', { details: { path: 'Not a path.' } });
     const workspaceId = `${target}/${name}`;
     const all = await this.d.workspaces.list();
     if (!all.some((w) => w.id === workspaceId)) throw new AppError('NOT_FOUND', 'Not found.');
@@ -146,7 +171,15 @@ export class AppPorts {
     const bare = appPortHost(name, port, this.d.suffix!);
     if (!bare) throw new AppError('CONFLICT', 'This workspace’s name can’t be a host name (a dot or an underscore in it).');
     const host = origin.port ? `${bare}:${origin.port}` : bare;
-    const { code, expiresAt } = this.grants.mint({ workspaceId, port, host, sessionToken: who.sessionToken, actor: who.actor, portalOrigin: origin.origin, scheme });
+    const { code, expiresAt } = this.grants.mint({
+      workspaceId,
+      port,
+      host,
+      sessionToken: who.sessionToken,
+      actor: who.actor,
+      portalOrigin: origin.origin,
+      scheme,
+    });
     this.d.workspaces.hooks.audit?.({
       kind: 'workspace.port.open',
       actor: who.actorString,

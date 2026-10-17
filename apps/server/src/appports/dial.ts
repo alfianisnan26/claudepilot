@@ -114,7 +114,10 @@ export type Dial = (workspaceId: string, port: number) => Promise<Duplex>;
 const BRIDGED = new Set(['kubernetes', 'docker', 'local']);
 
 /** The dialer over the manager's runtimes. */
-export function createDialer(workspaces: { runtimeFor(target: string): Runtime | undefined; exec(target: string, name: string, command: string[]): Promise<ExecSession> }): Dial {
+export function createDialer(workspaces: {
+  runtimeFor(target: string): Runtime | undefined;
+  exec(target: string, name: string, command: string[]): Promise<ExecSession>;
+}): Dial {
   return async (workspaceId, port) => {
     const command = bridgeCommand(port);
     const slash = workspaceId.indexOf('/');

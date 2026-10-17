@@ -24,9 +24,9 @@ an iframe.
 
 ## 3. Portal routes
 
-| Route | Seam | What |
-| --- | --- | --- |
-| `GET /api/workspaces/:target/:name/ports` | `operate` | Listening TCP ports read from `/proc/net/tcp{,6}` in the workspace, with the process name when known and `openable`. |
+| Route                                           | Seam                                     | What                                                                                                                      |
+| ----------------------------------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `GET /api/workspaces/:target/:name/ports`       | `operate`                                | Listening TCP ports read from `/proc/net/tcp{,6}` in the workspace, with the process name when known and `openable`.      |
 | `POST /api/workspaces/:target/:name/ports/open` | `operate`, audited `workspace.port.open` | Body `{ port, path? }`. Answers `{ url, host, expiresAt }`; `url` is `<scheme>://<host>/__pilot/auth?code=…&next=<path>`. |
 
 A denial is the same 404 as a missing workspace. The portal's CSRF guard refuses every mutation whose Origin is not the portal's own host, so

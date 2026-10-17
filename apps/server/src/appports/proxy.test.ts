@@ -124,7 +124,12 @@ after(async () => {
 const hostFor = (name: string, port: number) => `app-${name}-${port}.${SUFFIX}:${portalPort}`;
 
 /** One request to the portal server, Host as given. */
-function send(method: string, path: string, headers: Record<string, string>, body?: string): Promise<{ status: number; headers: IncomingHttpHeaders; body: string }> {
+function send(
+  method: string,
+  path: string,
+  headers: Record<string, string>,
+  body?: string,
+): Promise<{ status: number; headers: IncomingHttpHeaders; body: string }> {
   return new Promise((resolve, reject) => {
     const r = request({ host: '127.0.0.1', port: portalPort, method, path, headers }, (res) => {
       const chunks: Buffer[] = [];
@@ -137,7 +142,12 @@ function send(method: string, path: string, headers: Record<string, string>, bod
 }
 
 const open = (name: string, port: number, path = '/', origin = `http://pilot.${SUFFIX}:${portalPort}`) =>
-  ports.open('docker', name, { port, path }, { actor, actorString: `user:${FOUNDING_USER_ID}`, userId: FOUNDING_USER_ID, sessionToken: SESSION, portalOrigin: origin });
+  ports.open(
+    'docker',
+    name,
+    { port, path },
+    { actor, actorString: `user:${FOUNDING_USER_ID}`, userId: FOUNDING_USER_ID, sessionToken: SESSION, portalOrigin: origin },
+  );
 
 /** Opens and swaps the code: the app host's cookie pair (`__pilot_app=<value>`). */
 async function signIn(name = 'ws-1', port = appPort): Promise<{ host: string; cookie: string }> {
@@ -212,7 +222,12 @@ test('next must be a path: a scheme, // or a backslash is 400, and the code is n
 test('proxied: the portal cookie and credentials never reach the app; the app cannot frame-deny, plant a portal cookie or a Domain cookie', async () => {
   const { host, cookie } = await signIn();
   seen.length = 0;
-  const r = await send('GET', '/echo', { host, cookie: `portal_session=${SESSION}; ${cookie}; theme=dark`, authorization: `Basic ${Buffer.from('user:pass').toString('base64')}`, 'x-forwarded-for': '6.6.6.6' });
+  const r = await send('GET', '/echo', {
+    host,
+    cookie: `portal_session=${SESSION}; ${cookie}; theme=dark`,
+    authorization: `Basic ${Buffer.from('user:pass').toString('base64')}`,
+    'x-forwarded-for': '6.6.6.6',
+  });
   assert.equal(r.status, 200);
   assert.deepEqual(JSON.parse(r.body), { ok: true });
   const got = seen.at(-1)!;
@@ -297,7 +312,10 @@ test('the seam is asked on every proxied request: a denial (or an ended portal s
   const { url } = await open('ws-1', appPort);
   const u = new URL(url);
   const before = dials.length;
-  const was = useAuthz({ ...singleOwner, can: (a, v, o) => (o.type === 'workspace' ? { allow: false, reason: 'not_found', level: 'none' } : singleOwner.can(a, v, o)) });
+  const was = useAuthz({
+    ...singleOwner,
+    can: (a, v, o) => (o.type === 'workspace' ? { allow: false, reason: 'not_found', level: 'none' } : singleOwner.can(a, v, o)),
+  });
   try {
     assert.equal((await send('GET', '/echo', { host, cookie })).status, 404);
     assert.equal(await wsStatus({ host, cookie }, `http://${host}`), 404);
@@ -345,10 +363,19 @@ test('open refuses the portal’s own port, a bad path, and is off without a suf
   await assert.rejects(open('ws-1', appPort, '//evil.test'), /path/i);
   await assert.rejects(open('ws-1', appPort, '/中'), /path/i);
   await assert.rejects(open('nope', appPort), /Not found/);
-  const off = new AppPorts({ suffix: undefined, portalPort, workspaces: {} as never, sessionValid: () => true, dial: async () => assert.fail('off') });
+  const off = new AppPorts({
+    suffix: undefined,
+    portalPort,
+    workspaces: {} as never,
+    sessionValid: () => true,
+    dial: async () => assert.fail('off'),
+  });
   assert.equal(off.enabled, false);
   assert.deepEqual(await off.list('docker', 'ws-1'), { enabled: false, ports: [] });
-  await assert.rejects(off.open('docker', 'ws-1', { port: 8080 }, { actor, actorString: 'x', userId: null, sessionToken: SESSION, portalOrigin: 'http://p' }), /Not found/);
+  await assert.rejects(
+    off.open('docker', 'ws-1', { port: 8080 }, { actor, actorString: 'x', userId: null, sessionToken: SESSION, portalOrigin: 'http://p' }),
+    /Not found/,
+  );
 });
 
 test('an exception inside a request is a 502, never a hung request', { timeout: 15_000 }, async () => {
@@ -373,30 +400,46 @@ test('the Location is percent-encoded outside printable ASCII (a second guard be
   assert.equal(asLocation('/a%20b?c=d'), '/a%20b?c=d', 'what is already encoded stays as it is');
 });
 
-test('an upgrade whose workspace never connects ends in 504 after the timeout, not a socket held for ever', { timeout: 15_000 }, async () => {
-  const { host, cookie } = await signIn();
-  hangDial = true;
-  try {
-    const t0 = Date.now();
-    assert.equal(await wsStatus({ host, cookie }, `http://${host}`), 504);
-    assert.ok(Date.now() - t0 >= 1900, 'not before the timeout');
-  } finally {
-    hangDial = false;
-  }
-});
+test(
+  'an upgrade whose workspace never connects ends in 504 after the timeout, not a socket held for ever',
+  { timeout: 15_000 },
+  async () => {
+    const { host, cookie } = await signIn();
+    hangDial = true;
+    try {
+      const t0 = Date.now();
+      assert.equal(await wsStatus({ host, cookie }, `http://${host}`), 504);
+      assert.ok(Date.now() - t0 >= 1900, 'not before the timeout');
+    } finally {
+      hangDial = false;
+    }
+  },
+);
 
 test('two workspaces with one name on different targets: CONFLICT, and no code is minted', async () => {
   const grants = new AppPortGrants();
   const twins = new AppPorts({
     suffix: SUFFIX,
     portalPort,
-    workspaces: { list: async () => [{ id: 'docker/twin', name: 'twin' }, { id: 'kubernetes/twin', name: 'Twin' }], hooks: {}, resolve: () => null } as never,
+    workspaces: {
+      list: async () => [
+        { id: 'docker/twin', name: 'twin' },
+        { id: 'kubernetes/twin', name: 'Twin' },
+      ],
+      hooks: {},
+      resolve: () => null,
+    } as never,
     sessionValid: () => true,
     grants,
     dial: async () => assert.fail('no dial'),
   });
   await assert.rejects(
-    twins.open('docker', 'twin', { port: appPort }, { actor, actorString: 'x', userId: null, sessionToken: SESSION, portalOrigin: `http://pilot.${SUFFIX}` }),
+    twins.open(
+      'docker',
+      'twin',
+      { port: appPort },
+      { actor, actorString: 'x', userId: null, sessionToken: SESSION, portalOrigin: `http://pilot.${SUFFIX}` },
+    ),
     (e: Error & { code?: string }) => e.code === 'CONFLICT' && /same name/.test(e.message),
   );
   assert.equal(grants.size.codes, 0);

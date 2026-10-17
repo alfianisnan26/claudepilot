@@ -289,3 +289,18 @@ test('send: an MCP token’s label reaches the transcript event and the frame Cl
     await s.done();
   }
 });
+
+test('send: a delegate (account:<id>) is a real sender through the real controller, framed as not the owner (session delegation, review B1)', async () => {
+  const s = await liveSession();
+  try {
+    assert.ok(isChatActor('account:u_1') && isPortalActor('account:u_1'));
+    await s.controller.send(s.id, 'm-delegate', 'please continue', { actor: 'account:u_1' });
+    await until(() => s.ws.sends.some((x) => x.line.includes('"type":"user"')));
+    const sent = sentText(s.ws.sends.filter((x) => x.line.includes('"type":"user"')).at(-1)!.line);
+    assert.match(sent, /a person this session was shared with \(not its owner\)/);
+    assert.match(sent, /\(account:u_1\)/);
+    assert.equal(s.controller.history(s.id).findLast((e) => e.kind === 'user')?.actor, 'account:u_1');
+  } finally {
+    await s.done();
+  }
+});

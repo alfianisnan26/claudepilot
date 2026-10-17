@@ -15,6 +15,11 @@ export interface VaultSettings {
   rewriteLinksOnRename: boolean;
   /** What notes are called in lists and the graph: their file name, or their first heading. */
   labels: 'filename' | 'heading';
+  /**
+   * T-436: the workspaces (`<target>/<name>`) whose agents may reach this vault. A session's agent token is bound at mint to the vaults that list
+   * its workspace; a vault with no list is reached by no agent. Absent on the wire reads as none.
+   */
+  agentWorkspaces?: string[];
 }
 
 export interface VaultCounts {
@@ -52,7 +57,12 @@ export interface VaultSummary {
   location: string;
   createdAt: string;
   updatedAt: string;
+  /** Set by a save that worked but could not rebind live agent tokens: they are shut out of vaults until a rebind works. */
+  warning?: string;
 }
+
+/** A workspace key a vault may list for agents: `<target>/<name>`. */
+export const WORKSPACE_KEY = /^[A-Za-z0-9][A-Za-z0-9._-]{0,62}\/[A-Za-z0-9][A-Za-z0-9._-]{0,62}$/;
 
 export interface CreateVaultRequest {
   /** Required for a vault; a folder source is named for its folder when this is left out. */
@@ -336,20 +346,22 @@ export const KNOWLEDGE_API = {
   exportZip: (id: string) => `/api/knowledge/vaults/${encodeURIComponent(id)}/export`,
   tree: (id: string, folder = '') => `/api/knowledge/vaults/${encodeURIComponent(id)}/tree?folder=${encodeURIComponent(folder)}`,
   note: (id: string, path: string) => `/api/knowledge/vaults/${encodeURIComponent(id)}/note?path=${encodeURIComponent(path)}`,
-  noteAction: (id: string, action: string, path = '') => `/api/knowledge/vaults/${encodeURIComponent(id)}/note/${action}${path ? `?path=${encodeURIComponent(path)}` : ''}`,
+  noteAction: (id: string, action: string, path = '') =>
+    `/api/knowledge/vaults/${encodeURIComponent(id)}/note/${action}${path ? `?path=${encodeURIComponent(path)}` : ''}`,
   embed: (id: string, path: string, heading?: string | null, block?: string | null) =>
     `/api/knowledge/vaults/${encodeURIComponent(id)}/embed?path=${encodeURIComponent(path)}${heading ? `&heading=${encodeURIComponent(heading)}` : ''}${block ? `&block=${encodeURIComponent(block)}` : ''}`,
   file: (id: string, path: string) => `/api/knowledge/vaults/${encodeURIComponent(id)}/file?path=${encodeURIComponent(path)}`,
-  search: (id: string, q: string, extra = '') => `/api/knowledge/vaults/${encodeURIComponent(id)}/search?q=${encodeURIComponent(q)}${extra}`,
+  search: (id: string, q: string, extra = '') =>
+    `/api/knowledge/vaults/${encodeURIComponent(id)}/search?q=${encodeURIComponent(q)}${extra}`,
   quick: (id: string, q: string) => `/api/knowledge/vaults/${encodeURIComponent(id)}/quick?q=${encodeURIComponent(q)}`,
   tags: (id: string) => `/api/knowledge/vaults/${encodeURIComponent(id)}/tags`,
   health: (id: string) => `/api/knowledge/vaults/${encodeURIComponent(id)}/health`,
   recent: (id: string) => `/api/knowledge/vaults/${encodeURIComponent(id)}/recent`,
-  daily: (id: string, date = '') => `/api/knowledge/vaults/${encodeURIComponent(id)}/daily${date ? `?date=${encodeURIComponent(date)}` : ''}`,
+  daily: (id: string, date = '') =>
+    `/api/knowledge/vaults/${encodeURIComponent(id)}/daily${date ? `?date=${encodeURIComponent(date)}` : ''}`,
   activity: (id: string) => `/api/knowledge/vaults/${encodeURIComponent(id)}/activity`,
   rescan: (id: string) => `/api/knowledge/vaults/${encodeURIComponent(id)}/rescan`,
 } as const;
-
 
 /* ---------- Graphs (PRD §12): one node and edge model, three lenses ---------- */
 
@@ -374,7 +386,23 @@ export type GraphNodeKind =
   | 'actor'
   | 'cluster';
 
-export const GRAPH_NODE_KINDS: readonly GraphNodeKind[] = ['note', 'tag', 'attachment', 'unresolved', 'session', 'ticket', 'workspace', 'claude', 'persona', 'skillset', 'mcpset', 'context', 'worktree', 'actor', 'cluster'];
+export const GRAPH_NODE_KINDS: readonly GraphNodeKind[] = [
+  'note',
+  'tag',
+  'attachment',
+  'unresolved',
+  'session',
+  'ticket',
+  'workspace',
+  'claude',
+  'persona',
+  'skillset',
+  'mcpset',
+  'context',
+  'worktree',
+  'actor',
+  'cluster',
+];
 
 export type GraphEdgeKind =
   | 'links-to'
