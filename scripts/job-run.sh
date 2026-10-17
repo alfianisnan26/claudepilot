@@ -61,7 +61,7 @@
 # the Job and is deleted on exit; they are never on a command line, and the streamed log is masked for them. Only the Job's init container
 # `fetch` reads that Secret (T-401): it clones and runs `npm ci --ignore-scripts`, and no code of the repository or a dependency runs there;
 # the install scripts and the command run in the `run` container, which has no git or npm credential in its environment, git config or files, and gets
-# only the --pool-env values (T-426) as env. They are kept out of the environment of npm rebuild and the lifecycle scripts, but a lifecycle script of the same user can still read /proc/<ppid>/environ (the shell's start-up environment); the real boundary is that only E2E_CF_ACCESS_* test credentials may go in. The raw
+# only the --pool-env values (T-426) as env. They are kept out of the environment of npm rebuild and the lifecycle scripts, but a lifecycle script of the same user can still read /proc/<ppid>/environ (the shell's start-up environment); the real boundary is that only E2E_CF_ACCESS_* test credentials and the stg-only, low-privilege E2E_QA_EMAIL and E2E_QA_PASSWORD may go in. The raw
 # log in the cluster is unmasked until the Job is cleaned up (TTL); only the streamed copy is masked. The whole log: JOB_RUN_LOG
 # (default /tmp/job-run-<job>.log). Exit: the command's code; 1 when the Job did not finish, 2 for a usage error, 124 past the deadline.
 set -eu

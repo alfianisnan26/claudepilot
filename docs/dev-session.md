@@ -183,7 +183,8 @@ scripts/job-run.sh --list ; scripts/job-run.sh --stop --chat <session id>
 - **Test credentials for the command (`--pool-env NAME`, T-426):** repeatable, for a command that needs a scoped test credential from the
   workspace's Secrets pool, today Konfersi's stg e2e and Lighthouse behind Cloudflare Access:
   `scripts/job-run.sh --pool-env E2E_CF_ACCESS_CLIENT_ID --pool-env E2E_CF_ACCESS_CLIENT_SECRET -- 'scripts/e2e-stg.sh'`. Only
-  `E2E_CF_ACCESS_*` names are accepted, and the variable must be set in the workspace; anything else is refused (exit 2) before a Job is made.
+  `E2E_CF_ACCESS_*` names and exactly `E2E_QA_EMAIL` and `E2E_QA_PASSWORD` (the e2e login, T-938) are accepted, and the variable must be set in the workspace; anything else is refused (exit 2) before a Job is made.
+  The QA account must be a stg-only, low-privilege user: its value is visible in the Job container's environment.
   An unknown option now gets a quieter message than before (T-426: it names the argument only when it is a plain `--option`, otherwise it says
   an option is not known and shows nothing of it). The unknown-option branch and the `--pool-env` name check never show what they refuse (it may be a pasted value; an argument is named only
   when it is a plain `--option`), but other options' messages still show their own value (`--ref ... (got X)`): never paste a value into any
@@ -200,7 +201,7 @@ scripts/job-run.sh --list ; scripts/job-run.sh --stop --chat <session id>
   not; this is the reverse of the git and npm tokens, on purpose. It is never on a command line or in the manifest, and the streamed log is masked
   for it. The run script moves each value out of the environment into a shell array at start, and exports `<name>` only for the command (after
   `npm rebuild` and the lifecycle scripts, T-426 S1f), so the install steps do not inherit it. Limits: (1) the shell's own start-up environment
-  (`/proc/1/environ`) still holds the value, so code that reads it still can (only scoped `E2E_CF_ACCESS_*` test credentials may be passed;
+  (`/proc/1/environ`) still holds the value, so code that reads it still can (only scoped `E2E_CF_ACCESS_*` test credentials and the stg-only `E2E_QA_EMAIL` / `E2E_QA_PASSWORD` login may be passed;
   `--steps none` when the dependencies are already installed); (2) the
   raw Job log in the cluster is unmasked until the Job is cleaned up (TTL), only the streamed copy is masked; the mask is a plain text match of
   the value, so it does NOT cover a line shorter than 8 characters inside a multi-line secret, nor an encoded form of a secret (base64, URL or
