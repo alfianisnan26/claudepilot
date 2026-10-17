@@ -140,6 +140,13 @@ export const config = {
   portProxy: {
     hostSuffix: env('PORT_PROXY_HOST_SUFFIX')?.toLowerCase().replace(/^\.+|\.+$/g, ''),
     denyPorts: (env('PORT_PROXY_DENY_PORTS') ?? '').split(',').map((s) => Number(s.trim())).filter((n) => Number.isInteger(n) && n > 0),
+    /** An HTTP request whose app connection moves no byte for this long is cut (504 before the answer started). */
+    idleMs: Math.max(1000, Number(env('PORT_PROXY_IDLE_MS') ?? 60_000) || 60_000),
+    /** An upgraded socket (WebSocket) that moves no byte for this long is closed. */
+    socketIdleMs: Math.max(1000, Number(env('PORT_PROXY_SOCKET_IDLE_MS') ?? 600_000) || 600_000),
+    /** Open bridges into workspaces (requests and sockets together) per app-host cookie and per workspace; past it a 503 with Retry-After. */
+    maxPerGrant: Math.max(1, Number(env('PORT_PROXY_MAX_PER_GRANT') ?? 16) || 16),
+    maxPerWorkspace: Math.max(1, Number(env('PORT_PROXY_MAX_PER_WORKSPACE') ?? 64) || 64),
   },
   /** Connect (docs/prd/targets-connect.md §15): targets enrolled from the web, agents that dial out. `PORTAL_CONNECT_ENABLED=false` is the kill switch. */
   connect: {

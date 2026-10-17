@@ -75,8 +75,14 @@ export class AppPortGrants {
     return { cookie, grant, maxAgeS: Math.floor(this.cookieTtlMs / 1000) };
   }
 
-  /** The grant a cookie value holds on this host; null when unknown, expired or minted for another host. */
-  lookup(cookie: string | undefined, host: string): AppGrant | null {
+  /** Called after forgetWorkspace (the proxy cuts that workspace's live connections). */
+  onForget: ((workspaceId: string) => void) | undefined;
+
+  /**
+   * The grant a cookie value holds on this host, with when the cookie ends (the longest a socket opened with it may live); null when unknown,
+   * expired or minted for another host. The same object for the same cookie while it lives (the proxy counts bridges per grant by it).
+   */
+  lookup(cookie: string | undefined, host: string): Readonly<AppGrant & { expiresAt: number }> | null {
     if (!cookie) return null;
     const g = this.#cookies.get(hash(cookie));
     if (!g) return null;
@@ -90,6 +96,7 @@ export class AppPortGrants {
   /** Drops every cookie of a workspace (it was removed or renamed). */
   forgetWorkspace(workspaceId: string): void {
     for (const [k, g] of this.#cookies) if (g.workspaceId === workspaceId) this.#cookies.delete(k);
+    this.onForget?.(workspaceId);
   }
 
   get size(): { codes: number; cookies: number } {
