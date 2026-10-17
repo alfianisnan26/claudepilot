@@ -1249,6 +1249,15 @@ export class ChatController {
     });
   }
 
+  /** Why a restart recovery must not resume this session now (read fresh), or undefined when it may. */
+  #restartSkipWhy(sessionId: string): string | undefined {
+    const row = this.#chat.row(sessionId);
+    if (!row || row.state === 'ended') return 'it has ended';
+    if (row.archived_at) return 'it is archived';
+    if (row.process === 'live' || this.#busy.has(sessionId) || this.#moving.has(sessionId)) return 'it is running again';
+    return undefined;
+  }
+
   /** A pause that `stop()` cuts short. */
   #wait(ms: number): Promise<void> {
     return new Promise<void>((resolve) => {
@@ -1298,26 +1307,33 @@ export class ChatController {
         else {
           if (attempted > 0) await this.#wait(config.staggerMs);
           if (this.#closed) return;
-          attempted++;
-          this.#restartResumed++;
-          try {
-            // `false`: Bypass is not put back (the gated paths are for a person's Restart, a move and a wake, not for this).
-            await this.#live(row.id, true, true, 'portal:restart', false);
-            result = 'resumed';
-            if (next.bypass) {
-              // The vanishing left a "kept" Bypass record that a later wake would act on: this resume supersedes it.
-              if (this.#sleptInBypass(row.id))
-                this.#chat.addAudit({ severity: 'info', kind: 'bypass.left', sessionId: row.id, workspaceId: row.workspace_id, actor: 'portal', detail: { why: 'stopped', superseded: true, restartResume: true } });
-              this.#note(row.id, 'Resumed after the portal restarted. It was in Bypass: Bypass is off now, turn it on again if it is needed.');
-            }
+          // The stagger can be long: a person may have resumed it, or ended it, meanwhile. Then nothing is sent and nothing is counted.
+          const again = this.#restartSkipWhy(row.id);
+          if (again) {
+            result = 'skipped';
+            why = again;
+          } else {
             try {
-              await this.#send(row.id, randomUUID(), restartContinuation(next.bypass), { actor: 'portal:restart', actorLabel: 'Resumed' });
+              attempted++;
+              this.#restartResumed++;
+              // `false`: Bypass is not put back (the gated paths are for a person's Restart, a move and a wake, not for this).
+              await this.#live(row.id, true, true, 'portal:restart', false);
+              result = 'resumed';
+              if (next.bypass) {
+                // The vanishing left a "kept" Bypass record that a later wake would act on: this resume supersedes it.
+                if (this.#sleptInBypass(row.id))
+                  this.#chat.addAudit({ severity: 'info', kind: 'bypass.left', sessionId: row.id, workspaceId: row.workspace_id, actor: 'portal', detail: { why: 'stopped', superseded: true, restartResume: true } });
+                this.#note(row.id, 'Resumed after the portal restarted. It was in Bypass: Bypass is off now, turn it on again if it is needed.');
+              }
+              try {
+                await this.#send(row.id, randomUUID(), restartContinuation(next.bypass), { actor: 'portal:restart', actorLabel: 'Resumed' });
+              } catch (e) {
+                this.#note(row.id, `Couldn’t send the continuation: ${isAppError(e) ? e.message : this.#message(e)}`);
+              }
             } catch (e) {
-              this.#note(row.id, `Couldn’t send the continuation: ${isAppError(e) ? e.message : this.#message(e)}`);
+              result = 'failed';
+              why = isAppError(e) ? e.message : this.#message(e);
             }
-          } catch (e) {
-            result = 'failed';
-            why = isAppError(e) ? e.message : this.#message(e);
           }
         }
         const needsBypass = next.bypass && (result === 'resumed' || result === 'failed' || result === 'over_limit' || result === 'looping');

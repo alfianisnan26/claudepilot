@@ -17,10 +17,14 @@ const mutants = [
   ['M8 idle counts', CTL, "|| row.state !== 'working') return;", ') return;'],
   ['M9 no stagger', CTL, 'if (attempted > 0) await this.#wait(config.staggerMs);', ''],
   ['M10 no loop guard', CTL, 'restartResumesToday(recoveries, next.sessionId, now) >= RESTART_RESUMES_PER_DAY)', 'false)'],
+  ['M11 no re-read after the stagger', CTL, 'const again = this.#restartSkipWhy(row.id);', 'const again = undefined;'],
+  ['M12 loop guard window too long', REC, 'r.detail.result === \'resumed\' && now - Date.parse(r.at) < DAY_MS)', 'r.detail.result === \'resumed\' && now - Date.parse(r.at) < DAY_MS * 2)'],
+  ['M13 old cut-off kept', REC, 'now - at >= RESTART_PENDING_MS', 'now - at >= RESTART_PENDING_MS * 99'],
+  ['M14 no platform audit row', 'apps/server/src/chat/restartAudit.ts', '    record({', '    void ({'],
 ];
 const run = () => {
   try {
-    execFileSync('node', ['--import', 'tsx', '--test', 'src/chat/restartRecovery.test.ts'], { cwd: 'apps/server', stdio: 'pipe', timeout: 240_000 });
+    execFileSync('node', ['--import', 'tsx', '--test', 'src/chat/restartRecovery.test.ts', 'src/chat/restartAudit.test.ts'], { cwd: 'apps/server', stdio: 'pipe', timeout: 240_000 });
     return true;
   } catch {
     return false;

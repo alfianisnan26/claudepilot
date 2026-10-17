@@ -43,7 +43,7 @@ async function cutOff(s: Live, ids: string[]) {
 test('T-971 H2: a session that was working when the portal started and lost its process is resumed once, with the continuation, and one line says so', async () => {
   const s = await liveSession();
   try {
-    fast(s,5);
+    fast(s, 5);
     const lines: { sessionId: string; result: string; needsBypass: boolean; line: string }[] = [];
     s.controller.onRestartRecovery = (i) => lines.push(i);
     const starts = s.ws.startArgs.length;
@@ -73,7 +73,7 @@ test('T-971 H2 Bypass: a session that was in Bypass resumes in its normal mode, 
   const s = await liveSession();
   try {
     s.controller.controlTimeoutMs = 150;
-    fast(s,5);
+    fast(s, 5);
     s.controller.bypassAllowed = () => true;
     s.controller.reauth = { fresh: (token) => token === 'tok' };
     const lead = await made(s, 'Lead', true);
@@ -109,7 +109,7 @@ test('T-971 H2 Bypass: a session that was in Bypass resumes in its normal mode, 
 test('T-971 H2 limit: at most the setting per start are resumed, the rest stay Interrupted and are listed', async () => {
   const s = await liveSession();
   try {
-    fast(s,2);
+    fast(s, 2);
     const b = await made(s, 'B');
     const c = await made(s, 'C');
     const ids = [s.id, b.id, c.id];
@@ -131,7 +131,7 @@ test('T-971 H2 limit: at most the setting per start are resumed, the rest stay I
 test('T-971 H2 stagger: the resumes of one start are spaced by the setting', async () => {
   const s = await liveSession();
   try {
-    fast(s,5, 1);
+    fast(s, 5, 1);
     const b = await made(s, 'B');
     await cutOff(s, [s.id, b.id]);
     await until(() => recoveries(s).length === 2, 6000);
@@ -145,7 +145,7 @@ test('T-971 H2 stagger: the resumes of one start are spaced by the setting', asy
 test('T-971 H2 skips: an ended session, an archived one and one already running are not resumed, and the line says why', async () => {
   const s = await liveSession();
   try {
-    fast(s,5);
+    fast(s, 5);
     const ended = await made(s, 'Ended');
     const archived = await made(s, 'Archived');
     const db = s.store.db!;
@@ -172,7 +172,7 @@ test('T-971 H2 skips: an ended session, an archived one and one already running 
 test('T-971 H2 once: a second start before the resume still finds the cut-off, and a third finds nothing left', async () => {
   const s = await liveSession();
   try {
-    fast(s,0); // the first start records the cut-off but resumes nothing
+    fast(s, 0); // the first start records the cut-off but resumes nothing
     const starts = s.ws.startArgs.length;
     await cutOff(s, [s.id]);
     await sleep(100);
@@ -213,7 +213,7 @@ test('T-971 H2 what counts: a session that was idle, or whose process vanished l
   let now = Date.now();
   const s = await liveSession({ livenessMs: 20, clock: () => now });
   try {
-    fast(s,5);
+    fast(s, 5);
     const b = await made(s, 'B');
     working(s, b.id);
     s.controller.start();
@@ -232,7 +232,7 @@ test('T-971 H2 what counts: a session that was idle, or whose process vanished l
 test('T-971 H2 what counts: an idle session found gone at the start is not resumed', async () => {
   const s = await liveSession();
   try {
-    fast(s,5);
+    fast(s, 5);
     const starts = s.ws.startArgs.length;
     s.ws.alive = false;
     s.controller.start();
@@ -248,7 +248,7 @@ test('T-971 H2 what counts: an idle session found gone at the start is not resum
 test('T-971 H2 loop guard: a session a restart resumed three times today is not resumed a fourth time', async () => {
   const s = await liveSession();
   try {
-    fast(s,5);
+    fast(s, 5);
     const db = s.store.db!;
     for (let i = 0; i < 3; i++)
       db.prepare('INSERT INTO chat_audit (at, severity, kind, session_id, workspace_id, actor, detail) VALUES (?, ?, ?, ?, ?, ?, ?)').run(new Date(Date.now() - 2 * 3_600_000 + i).toISOString(), 'info', 'session.restart_recovery', s.id, 'docker/ws1', 'portal', JSON.stringify({ result: 'resumed' }));
@@ -258,6 +258,75 @@ test('T-971 H2 loop guard: a session a restart resumed three times today is not 
     assert.equal(recoveries(s, s.id)[0]!.detail.result, 'looping');
     assert.equal(s.ws.startArgs.length, starts);
     assert.match(String(recoveries(s, s.id)[0]!.detail.line), /already resumed 3 times today: Resume it by hand/);
+  } finally {
+    await s.done();
+  }
+});
+
+const HOUR = 3_600_000;
+const plant = (s: Live, id: string, kind: string, at: number, detail: Record<string, unknown>) =>
+  s.store.db!.prepare('INSERT INTO chat_audit (at, severity, kind, session_id, workspace_id, actor, detail) VALUES (?, ?, ?, ?, ?, ?, ?)').run(new Date(at).toISOString(), 'info', kind, id, 'docker/ws1', 'portal', JSON.stringify(detail));
+const gone = (s: Live, id: string) => s.store.db!.prepare("UPDATE chat_sessions SET state = 'interrupted', process = 'gone' WHERE id = ?").run(id);
+
+test('T-971 H2 loop guard edge (injected clock): three resumes just inside 24 hours stop a fourth, three just outside do not count', async () => {
+  const now = Date.now();
+  const s = await liveSession({ clock: () => now });
+  try {
+    fast(s, 5);
+    const b = await made(s, 'B');
+    for (let i = 0; i < 3; i++) {
+      plant(s, s.id, 'session.restart_recovery', now - 24 * HOUR + 60_000 + i, { result: 'resumed' }); // 1 minute inside
+      plant(s, b.id, 'session.restart_recovery', now - 24 * HOUR - 60_000 + i, { result: 'resumed' }); // 1 minute outside
+    }
+    await cutOff(s, [s.id, b.id]);
+    await until(() => recoveries(s, s.id).length === 4 && recoveries(s, b.id).length === 4);
+    assert.equal(recoveries(s, s.id)[0]!.detail.result, 'looping', 'inside the 24 hours: counted');
+    assert.equal(recoveries(s, b.id)[0]!.detail.result, 'resumed', 'outside the 24 hours: not counted');
+  } finally {
+    await s.done();
+  }
+});
+
+test('T-971 H2 pending age (injected clock): a cut-off older than an hour is dropped, one just inside is resumed', async () => {
+  const now = Date.now();
+  const s = await liveSession({ clock: () => now });
+  try {
+    fast(s, 5);
+    const b = await made(s, 'B');
+    for (const id of [s.id, b.id]) gone(s, id);
+    plant(s, s.id, 'session.cutoff', now - HOUR - 60_000, { state: 'working', bypass: false }); // 1 minute too old
+    plant(s, b.id, 'session.cutoff', now - HOUR + 60_000, { state: 'working', bypass: false }); // 1 minute inside
+    const starts = s.ws.startArgs.length;
+    s.controller.start();
+    await until(() => recoveries(s, b.id).length === 1);
+    await sleep(150);
+    assert.equal(recoveries(s, b.id)[0]!.detail.result, 'resumed');
+    assert.equal(recoveries(s, s.id).length, 0, 'the old cut-off is dropped without a line');
+    assert.equal(s.ws.startArgs.length, starts + 1, 'only one process started');
+    assert.equal(sent(s, s.id), 0);
+  } finally {
+    await s.done();
+  }
+});
+
+test('T-971 H2 race: a session a person resumed during the spacing wait is skipped: no message, and it does not count against the loop guard', async () => {
+  const s = await liveSession();
+  try {
+    fast(s, 5, 1);
+    const b = await made(s, 'B');
+    const starts = s.ws.startArgs.length;
+    await cutOff(s, [s.id, b.id]);
+    await until(() => recoveries(s).length === 1);
+    const first = recoveries(s)[0]!.sessionId!;
+    const other = first === s.id ? b.id : s.id;
+    s.store.db!.prepare("UPDATE chat_sessions SET process = 'live', state = 'idle' WHERE id = ?").run(other); // a person resumed it during the wait
+    await until(() => recoveries(s).length === 2, 6000);
+    const row = recoveries(s, other)[0]!;
+    assert.equal(row.detail.result, 'skipped');
+    assert.match(String(row.detail.line), /it is running again/);
+    assert.equal(sent(s, other), 0, 'no "portal restarted" message');
+    assert.equal(s.ws.startArgs.length, starts + 1, 'one process started, for the first only');
+    assert.equal(recoveries(s).filter((r) => r.detail.result === 'resumed').length, 1, 'only one counts toward the loop guard');
   } finally {
     await s.done();
   }

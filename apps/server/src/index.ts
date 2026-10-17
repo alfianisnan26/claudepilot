@@ -82,6 +82,7 @@ import { Store } from './store/store.js';
 import { DockerRuntime } from './workspaces/docker.js';
 import { attachShell, cookie } from './workspaces/shell.js';
 import { ChatController } from './chat/controller.js';
+import { restartRecoveryAudit } from './chat/restartAudit.js';
 import { BYPASS_SETTING } from './chat/bypass.js';
 import { LEAD_RULES_SETTING } from './chat/leadRules.js';
 import { AUTO_TRUST_SETTING } from './chat/trust.js';
@@ -514,15 +515,7 @@ chatController.continueTickets = (to, from) => tickets.continueFrom(to, from);
 // T-136: recover in place reads its cap and pause from the settings; past the cap, ONE watchdog ticket says so (facts, no transcript).
 chatController.recoverSettings = (key) => settingsModule.settings.get(key);
 // T-971 H2: one line per session a portal start cut off and the portal resumed (or could not): the platform audit, for the General Manager.
-chatController.onRestartRecovery = (i) =>
-  platform.audit.record({
-    severity: i.result === 'failed' ? 'medium' : 'info',
-    kind: 'chat.restart_recovery',
-    actor: 'portal',
-    userId: null,
-    subject: `session:${i.sessionId}`,
-    detail: { result: i.result, needsBypass: i.needsBypass, workspace: i.workspaceId, line: i.line },
-  });
+chatController.onRestartRecovery = restartRecoveryAudit((entry) => platform.audit.record(entry));
 chatController.onRecoverCapped = (i) => {
   tickets.create(
     { kind: 'system' },
