@@ -628,6 +628,22 @@ only, never a value. Hosts commit when the field loses focus.
 | Load | Chromium runs with `--load-extension` and `--disable-extensions-except` for that folder; `DisableLoadExtensionCommandLineSwitch` is added to the one `--disable-features` flag. Policy then allows exactly that extension id (`ExtensionInstallAllowlist`, the id derived from the fixed path, the same function in the portal and the image, tested equal) beside `ExtensionInstallBlocklist ["*"]`, and `URLBlocklist` gains `chrome-extension://*` so pages can't open it. Only when the pool has headers. |
 | Follow | **Docker:** the container's spec hash includes each header's name, hosts, secret NAME and the value's version id, never the value; a rotated or removed secret changes it, and the container is recreated at the next idle recreate. **Kubernetes:** the headers are not in the pod's spec hash, so a change never restarts the pod: the portal delivers again on the next pass (the pool or Secrets change triggers one) and, when the file changed, stops Chrome as soon as nothing is using it (no control, handoff, viewer or tool call for a minute; otherwise on a later pass); the next call wakes Chrome, which rebuilds its extension from the new file. A removed secret deletes the file, so its header stops without a workspace restart. A delivery that fails is audited (`headers_failed`, a fixed message) and tried again. A pool without headers hashes as before. |
 
+**Never die, degrade (T-921).** The image `t623` with headers crashed Chrome in a rig: the init (root, every capability dropped but SETUID and SETGID, so no
+CAP_KILL) signalled Chrome (uid 1000); Node reports a refused signal (`EPERM`) as an `error` event on the child, and the child had no listener left, so the
+event was uncaught and the init died. Now (`cpb/heal.mjs`, `cpb/init.mjs`, `cpb/supervisor.mjs`):
+- Every child of the init has a persistent `error` listener. A refused signal (`EPERM`, `ESRCH`) is logged as one line (`signal to chrome refused (EPERM)`) and the init
+  goes on; on `EPERM` the signal is sent again by a helper (`node -e process.kill`) running as Chrome's uid. `safeKill` also catches a throw. The supervisor's own
+  children have the same listener.
+- **Self-heal.** When Chrome started with the extension does not answer on CDP within 30 s, the supervisor ends it and asks the init for one more start without the
+  headers (`chrome-start` with `headers: false`; the init clears the extension and logs `headers disabled: Chrome did not start with them`, no names, no values). The
+  status the portal reads (`cpb-ctl status` → `chrome.headers`: `on`, `off` or `degraded`; `service.ts` shows `detail: "Running without headers"` while `degraded`) says
+  so, and the browser stays usable. For ten minutes after a degrade a wake starts without headers at once (no 30 s wait); after that the headers are tried again.
+  The worst case of a wake that degrades is two CDP waits (about 60 s plus the stop).
+- Tests: `images/browser/cpb/heal.test.mjs` (`node --test`): the kill throw path, the retry-without-headers path with a fake Chrome that never answers with the
+  extension, the cooldown, and that no header value (built at runtime) reaches a log line, a result or an error.
+- Not verified (needs the image in a rig): the init surviving a real refused signal; the helper really killing Chrome as uid 1000; a real Chromium that fails with
+  the extension and then starts without; `browser_navigate` to a stg host with headers and an unchanged restart count.
+
 **Who can read the value.**
 
 | Reader | Can read it? |

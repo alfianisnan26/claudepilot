@@ -72,7 +72,7 @@ export interface SupervisorStatus {
   tier: string;
   display: { width: number; height: number };
   sandbox: 'on' | 'off';
-  chrome: { state: BrowserChromeState; pid: number | null; since: number; bootId: string | null; starts: number; crashes: number; error: string | null };
+  chrome: { state: BrowserChromeState; pid: number | null; since: number; bootId: string | null; starts: number; crashes: number; error: string | null; headers?: 'on' | 'off' | 'degraded' | null };
   vnc: { up: boolean; enabled: boolean };
   control: { held: boolean; holder?: string; label?: string; since?: number; leaseUntil?: number; private?: boolean };
   viewers: number;
@@ -754,7 +754,8 @@ export class BrowserService {
     return {
       ...base,
       state,
-      detail: sup.chrome.error ?? this.#kubePending.get(workspaceId) ?? null,
+      // T-921: Chrome did not start with the request headers, so the supervisor started it without; the state stays "ready".
+      detail: sup.chrome.error ?? (sup.chrome.headers === 'degraded' ? 'Running without headers' : null) ?? this.#kubePending.get(workspaceId) ?? null,
       chrome: sup.chrome.state,
       sandbox: sup.sandbox,
       display: sup.display,

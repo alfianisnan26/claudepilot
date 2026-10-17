@@ -7,6 +7,7 @@
 import { fork, spawn, spawnSync } from 'node:child_process';
 import { chmodSync, mkdirSync, readFileSync } from 'node:fs';
 import { EXT_DIR } from './headers-ext.mjs';
+import { safeKill } from './heal.mjs';
 import { chromeArgs, limitedRelay, loadConfig, log, UID_CHROME, UID_CPB } from './lib.mjs';
 
 const cfg = loadConfig();
@@ -97,8 +98,14 @@ function prepareProfile() {
  * removed header is gone at the next start). Returns the extension's folder, or null when there are no headers. Only names and counts are
  * logged, never a value, and a bad file only costs the headers: Chromium starts without them.
  */
-function prepareHeaders() {
+function prepareHeaders({ skip = false } = {}) {
   let entries;
+  if (skip) {
+    // The supervisor asked for a start without headers (T-921 self-heal): clear the extension and say so.
+    log('headers disabled: Chrome did not start with them');
+    spawnSync(process.execPath, [HEADERS_EXT, 'write', EXT_DIR], { ...as(UID_CHROME), input: '[]', encoding: 'utf8' });
+    return null;
+  }
   try {
     entries = JSON.parse(readFileSync(HEADERS_FILE, 'utf8'));
   } catch (e) {
@@ -116,12 +123,12 @@ function prepareHeaders() {
   return out.count ? EXT_DIR : null;
 }
 
-function startChrome(id) {
+function startChrome(id, { headers = true } = {}) {
   if (chrome) return tellSupervisor({ event: 'chrome-started', id, pid: chrome.pid, already: true });
   try {
     settleSandbox();
     prepareProfile();
-    const extensionDir = prepareHeaders();
+    const extensionDir = prepareHeaders({ skip: !headers });
     const env = {
       PATH: '/usr/local/bin:/usr/bin:/bin',
       HOME: '/home/node',
@@ -134,7 +141,14 @@ function startChrome(id) {
     child.stderr.on('data', relay);
     const me = { child, pid: child.pid, stopping: false, timer: null };
     chrome = me;
-    child.once('error', (e) => {
+    // Node reports a refused signal (EPERM) as an 'error' event on the child, not a throw: with no listener left it took the init down
+    // (T-921). A persistent listener: a signal error is logged and retried as Chrome's uid, only a spawn error fails the start.
+    child.on('error', (e) => {
+      if (e?.syscall === 'kill' || e?.code === 'EPERM' || e?.code === 'ESRCH') {
+        log(`signal to chrome refused (${e.code})`);
+        if (e.code === 'EPERM' && me.signal && child.pid) killAsChrome(child.pid, me.signal);
+        return;
+      }
       chrome = null;
       tellSupervisor({ event: 'chrome-failed', id, error: e.message });
     });
@@ -144,7 +158,7 @@ function startChrome(id) {
       log(`chrome exited (${signal ?? code})`);
       tellSupervisor({ event: 'chrome-exit', code, signal, expected: me.stopping });
     });
-    child.once('spawn', () => tellSupervisor({ event: 'chrome-started', id, pid: child.pid, sandbox: cfg.sandbox }));
+    child.once('spawn', () => tellSupervisor({ event: 'chrome-started', id, pid: child.pid, sandbox: cfg.sandbox, headers: extensionDir !== null }));
   } catch (e) {
     chrome = null;
     log('chrome start failed:', e.message);
@@ -152,13 +166,24 @@ function startChrome(id) {
   }
 }
 
+/** The init has no CAP_KILL: a signal to uid 1000 can be refused (EPERM). A helper running as Chrome's own uid can always send it. */
+function killAsChrome(pid, signal) {
+  const r = spawnSync(process.execPath, ['-e', 'process.kill(Number(process.argv[1]), process.argv[2])', String(pid), signal], { ...as(UID_CHROME), timeout: 5000 });
+  return r.status === 0;
+}
+const killer = { log, asChrome: killAsChrome };
+
 function stopChrome({ force } = {}) {
   const me = chrome;
   if (!me) return;
   me.stopping = true;
-  me.child.kill(force ? 'SIGKILL' : 'SIGTERM');
+  me.signal = force ? 'SIGKILL' : 'SIGTERM';
+  safeKill(me.child, me.signal, killer);
   clearTimeout(me.timer);
-  me.timer = setTimeout(() => me.child.kill('SIGKILL'), 5000);
+  me.timer = setTimeout(() => {
+    me.signal = 'SIGKILL';
+    safeKill(me.child, 'SIGKILL', killer);
+  }, 5000);
   me.timer.unref();
 }
 
@@ -169,10 +194,11 @@ function startSupervisor() {
     stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
   });
   supervisor = child;
+  child.on('error', (e) => log(`supervisor process error (${e?.code ?? 'unknown'})`));
   const startedAt = Date.now();
   child.on('message', (m) => {
     if (!m || typeof m !== 'object') return;
-    if (m.op === 'chrome-start') startChrome(m.id);
+    if (m.op === 'chrome-start') startChrome(m.id, { headers: m.headers !== false });
     else if (m.op === 'chrome-stop') stopChrome({ force: m.force === true });
   });
   child.once('exit', (code, signal) => {
@@ -193,7 +219,7 @@ function shutdown(signal) {
   shuttingDown = true;
   log(`${signal}: closing`);
   // The supervisor closes Chrome through CDP so cookies flush; ours is the backstop.
-  if (supervisor) supervisor.kill('SIGTERM');
+  if (supervisor) safeKill(supervisor, 'SIGTERM', { log });
   setTimeout(() => stopChrome(), 3000).unref();
   const done = setInterval(() => {
     if (!chrome && !supervisor) process.exit(0);

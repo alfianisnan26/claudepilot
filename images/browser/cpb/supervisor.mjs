@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
 import { vncObfuscate } from './des.mjs';
+import { startWithHeal } from './heal.mjs';
 import { CDP_PORT, chromeArgs, limitedRelay, loadConfig, log, PROTOCOL, SUPERVISOR_PORT } from './lib.mjs';
 
 const cfg = loadConfig();
@@ -26,7 +27,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const bootId = randomUUID();
 const S = {
-  chrome: { state: 'asleep', pid: null, since: Date.now(), bootId: null, starts: 0, crashes: [], error: null, expectStop: false },
+  chrome: { state: 'asleep', pid: null, since: Date.now(), bootId: null, starts: 0, crashes: [], error: null, expectStop: false, headers: null },
   display: { up: false },
   /** The control lease (§12.3): { holder, label, since, leaseUntil, private }. */
   control: null,
@@ -53,7 +54,7 @@ function supervise(name, cmd, args, { env = {}, wanted = () => true, onUp } = {}
     const relay = limitedRelay(`[${name}]`, 60);
     c.stdout.on('data', relay);
     c.stderr.on('data', relay);
-    c.once('error', (e) => log(`${name} failed to start: ${e.message}`));
+    c.on('error', (e) => log(`${name} process error: ${e.message}`));
     c.once('spawn', () => onUp?.(c));
     c.once('exit', (code, signal) => {
       if (child === c) child = null;
@@ -175,11 +176,11 @@ async function cdpBrowserCall(method, params = {}, ms = 3000) {
 const waiting = new Map(); // IPC request id → { resolve, reject }
 let directChild = null;
 
-function chromeStartViaInit() {
+function chromeStartViaInit({ headers = true } = {}) {
   return new Promise((resolve, reject) => {
     const id = randomUUID();
     waiting.set(id, { resolve, reject });
-    process.send({ op: 'chrome-start', id });
+    process.send({ op: 'chrome-start', id, headers });
     setTimeout(() => waiting.delete(id) && reject(new Error('The init did not answer')), 15_000).unref();
   });
 }
@@ -246,6 +247,8 @@ async function waitForCdp(ms) {
   throw new Error(`The browser did not answer on CDP within ${Math.round(ms / 1000)} s.`);
 }
 
+/** When the last start fell back to no headers (0: never); `startWithHeal` tries the headers again after ten minutes. */
+const heal = { degradedAt: 0 };
 let wakePromise = null;
 /** Starts Chromium if it is not running and waits until CDP answers (§14.2 "first tool call or viewer"). */
 function wake() {
@@ -258,9 +261,22 @@ function wake() {
     c.error = null;
     try {
       if (hasDisplay && !S.display.up) throw new Error('The display is not up yet.');
-      const started = DIRECT ? await chromeStartDirect() : await chromeStartViaInit();
-      c.pid = started.pid ?? null;
-      await waitForCdp(30_000);
+      const r = await startWithHeal({
+        start: ({ headers }) => (DIRECT ? chromeStartDirect() : chromeStartViaInit({ headers })),
+        waitReady: async (started) => {
+          c.pid = started.pid ?? null;
+          await waitForCdp(30_000);
+        },
+        // The failed start is ended (through CDP or the init), then the state goes back to "starting" for the second try.
+        stop: async () => {
+          await stopChrome('headers failed');
+          c.state = 'starting';
+          c.since = Date.now();
+        },
+        state: heal,
+        log,
+      });
+      c.headers = r.headers;
       c.state = 'up';
       c.since = Date.now();
       c.bootId = randomUUID();
@@ -318,7 +334,7 @@ if (!DIRECT) {
       waiting.delete(m.id);
       // The init settles `sandbox: auto` at the first start (Kubernetes): what it found is what the status reports.
       if (m.event === 'chrome-started' && typeof m.sandbox === 'boolean') cfg.sandbox = m.sandbox;
-      if (m.event === 'chrome-started') w.resolve({ pid: m.pid });
+      if (m.event === 'chrome-started') w.resolve({ pid: m.pid, headers: m.headers === true });
       else w.reject(new Error(m.error || 'Chrome did not start'));
     } else if (m.event === 'chrome-exit') onChromeExit(m);
     else if (m.event === 'hello' && m.chrome?.running) {
@@ -469,7 +485,7 @@ function status() {
     tier: cfg.tier,
     display: cfg.display,
     sandbox: cfg.sandbox ? 'on' : 'off',
-    chrome: { state: c.state, pid: c.pid, since: c.since, bootId: c.bootId, starts: c.starts, crashes: c.crashes.length, error: c.error },
+    chrome: { state: c.state, pid: c.pid, since: c.since, bootId: c.bootId, starts: c.starts, crashes: c.crashes.length, error: c.error, headers: c.headers },
     vnc: { up: S.display.up, enabled: hasDisplay && cfg.liveView },
     control: controlView(),
     viewers: S.viewers,
