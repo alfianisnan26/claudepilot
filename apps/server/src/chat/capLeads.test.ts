@@ -170,7 +170,7 @@ test('T-425 S2: two sends to one session are written in call order, though the f
     await until(() => s.ws.tails.length > tails && bypassAsks(s).length > asked, 4000); // the first is in its Bypass step: the process is live
     const second = s.controller.send(lead.id, 'order-2', 'SECOND-LINE'); // finds the session live and would write at once
     await sleep(100);
-    assert.equal(s.ws.sends.length, sends, 'nothing is written before the first one’s turn');
+    assert.ok(!s.ws.sends.slice(sends).some((x) => /FIRST-LINE|SECOND-LINE/.test(x.line)), 'no message is written before the first one’s turn (the control request is)');
     s.ws.tails.at(-1)!.push(ok(bypassAsks(s).at(-1)!.id, { mode: 'bypassPermissions' }));
     await Promise.all([first, second]);
     const written = s.ws.sends.slice(sends).map((x) => x.line);
