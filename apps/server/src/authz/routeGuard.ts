@@ -17,7 +17,7 @@
 import type { Context, MiddlewareHandler } from 'hono';
 import { matchedRoutes } from 'hono/route';
 import { AppError } from '@isnanme/core';
-import { FOUNDING_USER_ID, isUserId, objectRef, type Actor, type ObjectCheck, type ObjectRef, type PolicyKey, type RoutePolicy } from '@portal/contracts';
+import { FOUNDING_USER_ID, objectRef, type Actor, type ObjectCheck, type ObjectRef, type PolicyKey, type RoutePolicy } from '@portal/contracts';
 import { anonymous, authzMode, can, ownerActor, policyFor, refusal } from './seam.js';
 
 /** Who the request's cookie signs in: a full session (the server code or an admin account), a member account, or nobody. */
@@ -51,12 +51,37 @@ export const keyOf = (r: { method: string; path: string }): PolicyKey => `${(r.m
  * (`ALL /api/chat/live`); an `app.all(…)` endpoint is always in, so an undeclared one is refused like any other route.
  */
 export function routeKeysOf(c: Context): PolicyKey[] {
-  const keys: PolicyKey[] = [];
-  const add = (k: PolicyKey) => void (keys.includes(k) || keys.push(k));
+  return routeMatchesOf(c).map((m) => m.key);
+}
+
+/** One matched endpoint: its key and its place in Hono's match (where its own path params are). */
+interface RouteMatch {
+  key: PolicyKey;
+  index: number;
+}
+
+function routeMatchesOf(c: Context): RouteMatch[] {
+  const out: RouteMatch[] = [];
+  const add = (key: PolicyKey, index: number) => void (out.some((m) => m.key === key) || out.push({ key, index }));
   const all = matchedRoutes(c);
-  for (const r of all) if (r.method !== 'ALL') add(keyOf(r));
-  for (const r of all) if (r.method === 'ALL' && (isEndpoint(r) || policyFor(keyOf(r)))) add(keyOf(r));
-  return keys;
+  all.forEach((r, i) => r.method !== 'ALL' && add(keyOf(r), i));
+  all.forEach((r, i) => r.method === 'ALL' && (isEndpoint(r) || policyFor(keyOf(r))) && add(keyOf(r), i));
+  return out;
+}
+
+/**
+ * A path param of one matched route. In middleware `c.req.param()` reads the middleware's own route (`*`, no params), so the guard points
+ * Hono's request at the route it checks (`routeIndex`, the index `matchedRoutes` lists it at) for the read, and puts it back.
+ */
+function paramOf(c: Context, index: number, name: string): string | undefined {
+  const req = c.req as unknown as { routeIndex: number };
+  const was = req.routeIndex;
+  req.routeIndex = index;
+  try {
+    return c.req.param(name);
+  } finally {
+    req.routeIndex = was;
+  }
 }
 
 /**
@@ -75,8 +100,9 @@ function actorFor(c: Context, deps: RouteGuardDeps): Actor {
   if (!s) return anonymous();
   // D-82: an admin account and the server code keep full access: they act as the founding owner, as `actorOf` answers today.
   if (s.full) return ownerActor();
-  if (!isUserId(s.userId)) return anonymous();
-  const member: Actor = { kind: 'user', userId: s.userId, loginSessionId: 'cookie', via: 'ui' };
+  // A member stays a signed-in member even when its id is not one the seam knows (identity/users.ts makes base64url ids, USER_ID_PATTERN
+  // takes lower case only): `can()` then grants it nothing, and the guard refuses with its 404, never the 401 of nobody signed in.
+  const member = { kind: 'user', userId: s.userId, loginSessionId: 'cookie', via: 'ui' } as Actor;
   (c as unknown as { set(k: string, v: unknown): void }).set('actor', member);
   return member;
 }
@@ -95,12 +121,12 @@ async function jsonBody(c: Context): Promise<Record<string, unknown>> {
 
 type Outcome = 'allow' | 'pass-on';
 
-async function checkObjects(c: Context, actor: Actor, checks: ObjectCheck[], deps: RouteGuardDeps): Promise<Outcome> {
+async function checkObjects(c: Context, at: number, actor: Actor, checks: ObjectCheck[], deps: RouteGuardDeps): Promise<Outcome> {
   let body: Record<string, unknown> | null = null;
   for (const check of checks) {
     let raw: unknown;
     if (check.from === 'path') {
-      const parts = check.param.split('+').map((k) => c.req.param(k) ?? '');
+      const parts = check.param.split('+').map((k) => paramOf(c, at, k) ?? '');
       raw = parts.some((p) => !p) ? undefined : parts.join('/');
     } else if (check.from === 'query') raw = check.many ? c.req.queries(check.param) : c.req.query(check.param);
     else raw = (body ??= await jsonBody(c))[check.param];
@@ -109,7 +135,7 @@ async function checkObjects(c: Context, actor: Actor, checks: ObjectCheck[], dep
       if (check.optional) continue;
       throw notFound();
     }
-    const poolType = check.poolTypeParam ? c.req.param(check.poolTypeParam) : undefined;
+    const poolType = check.poolTypeParam ? paramOf(c, at, check.poolTypeParam) : undefined;
     for (const v of values) {
       if (typeof v !== 'string' || !v) throw notFound();
       const id = deps.idOf?.(check, v);
@@ -119,7 +145,7 @@ async function checkObjects(c: Context, actor: Actor, checks: ObjectCheck[], dep
       if (!d.allow) {
         const e = refusal(d, check.verb, ref);
         // An object the actor may not see reads like a path nobody serves; one it sees but may not change keeps the seam's 403 (or reauth).
-        throw e.status === 404 ? notFound() : e;
+        throw e.status === 403 ? e : notFound();
       }
     }
   }
@@ -127,7 +153,7 @@ async function checkObjects(c: Context, actor: Actor, checks: ObjectCheck[], dep
 }
 
 /** What one declared policy says for a non-owner actor who is signed in: go on, hand on to the next matched route, or a refusal (thrown). */
-async function decide(c: Context, actor: Actor, policy: RoutePolicy, deps: RouteGuardDeps): Promise<Outcome> {
+async function decide(c: Context, at: number, actor: Actor, policy: RoutePolicy, deps: RouteGuardDeps): Promise<Outcome> {
   switch (policy.kind) {
     case 'public':
     case 'bearer':
@@ -139,12 +165,11 @@ async function decide(c: Context, actor: Actor, policy: RoutePolicy, deps: Route
       const object = objectRef('platform', policy.area);
       const d = can(actor, policy.verb, object);
       if (d.allow) return 'allow';
-      if (d.reason === 'unauthenticated' || d.reason === 'actor_disabled') throw refusal(d, policy.verb, object);
       // An admin route refused reads like a path nobody serves (lead's decision on T-1043).
       throw notFound();
     }
     case 'objects':
-      return checkObjects(c, actor, policy.checks, deps);
+      return checkObjects(c, at, actor, policy.checks, deps);
   }
 }
 
@@ -153,18 +178,18 @@ export const ROUTE_GUARD_NAME = 'routeGuard';
 
 export function createRouteGuard(deps: RouteGuardDeps): MiddlewareHandler {
   const guard: MiddlewareHandler = async (c, next) => {
-    const keys = routeKeysOf(c);
-    if (keys.length === 0) return next();
-    const first = policyFor(keys[0]!);
+    const matches = routeMatchesOf(c);
+    if (matches.length === 0) return next();
+    const first = policyFor(matches[0]!.key);
     if (first && OPEN_KINDS.has(first.kind)) return next();
     const actor = actorFor(c, deps);
     if (actor.kind === 'anonymous') throw new AppError('UNAUTHORIZED', 'Sign in again.');
     if (isFoundingOwner(actor)) return next();
-    for (const key of keys) {
+    for (const { key, index } of matches) {
       const policy = policyFor(key);
       // No declaration: refused for anyone but the founding owner, as a path nobody serves (the route stays out of the answer).
       if (!policy) throw notFound();
-      if ((await decide(c, actor, policy, deps)) === 'allow') return next();
+      if ((await decide(c, index, actor, policy, deps)) === 'allow') return next();
     }
     // Every matched route handed the request on (QA 10597 A1): nothing checked it, so it is refused, never let through unchecked.
     throw notFound();

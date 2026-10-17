@@ -112,6 +112,17 @@ test('QA A1: a request every matched route hands on is refused, it never reaches
   }
 });
 
+test('a member whose id is not one the seam knows (a real account: base64url) is a signed-in member, refused with the 404, never 401', async () => {
+  // identity/users.ts makes `u_` + base64url; USER_ID_PATTERN takes lower case only. Built at runtime: upper case, `-` and `_`.
+  const realShaped = ['u', 'Ab', 'c-D', 'e'].join('_');
+  const { send, reached } = small(() => ({ full: false, userId: realShaped }));
+  assert.equal((await send('GET', '/t/list')).status, 200, 'signed-in goes on: the handler scopes it');
+  assert.equal((await send('GET', '/t/me')).status, 200);
+  refusedLikeUnknownPath(await send('GET', '/t/admin'), 'an admin area');
+  refusedLikeUnknownPath(await send('GET', '/t/undeclared'), 'an undeclared route');
+  assert.deepEqual(reached, ['GET /t/list', 'GET /t/me']);
+});
+
 test('QA A2: an undeclared endpoint written app.all is seen by the guard and refused, for every method', async () => {
   const { send, reached } = small(() => ({ full: false, userId: MEMBER }));
   for (const m of ['GET', 'POST', 'PUT', 'DELETE']) refusedLikeUnknownPath(await send(m, '/t/any'), `${m} /t/any`);

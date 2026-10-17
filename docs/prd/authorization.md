@@ -875,6 +875,8 @@ FR16 is built as `authz/routeGuard.ts`, mounted first thing in app.ts (`app.use(
   - **`objects`:** asks `can()` for every check, in order. A path, a query or a JSON body read from a clone, as FR17 says. An object the actor may not see is the same `404` as a missing one.
   - **A `/:ref` route given something that is not a stable id** hands on to the next matched route, as its handler does. If every matched route hands on, the request is refused (`404`). It never reaches a handler unchecked.
 - **`reauth` and `audit` stay the handlers'.**
+- **Path params are the checked route's own.** In middleware, Hono's `c.req.param()` reads the middleware's route (`*`), so the guard points the request at the matched route it checks (`routeIndex`) while it reads.
+- **A member's id the seam does not know** stays a signed-in member. identity/users.ts makes `u_` + base64url ids; `USER_ID_PATTERN` takes lower case only. `can()` grants such a member nothing, and the guard refuses it with the `404`, never `401`. The pattern itself is S1b's to settle.
 
 **Interim declarations.** A route whose module is not actor-aware yet (its handlers do not take the actor and filter) is declared `platform`: `view` for a GET, `manage` otherwise, with the closest area. A member is refused there until the module's own slice declares its Appendix A row and its handlers take the actor. These rows live in `authz/appPolicies.ts` with app.ts's own routes. The session guard still refuses a member after the route guard, until MU2 S1b opens routes to members.
 
