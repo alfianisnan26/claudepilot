@@ -376,6 +376,16 @@ export class CiStore {
       .run(...keys.map((k) => patch[k] ?? null), id);
   }
 
+  /** Compare-and-set (T-975): writes only while the run is still in `expected`; false when another path got there first. */
+  updateRunIf(id: string, expected: RunRow['status'], patch: RunPatch): boolean {
+    const keys = Object.keys(patch) as (keyof RunPatch)[];
+    if (!keys.length) return this.run(id)?.status === expected;
+    const res = this.#writableDb
+      .prepare(`UPDATE ci_runs SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ? AND status = ?`)
+      .run(...keys.map((k) => patch[k] ?? null), id, expected);
+    return Number(res.changes) > 0;
+  }
+
   #runWhere(f: RunFilter): { where: string[]; args: string[] } {
     const where: string[] = [];
     const args: string[] = [];

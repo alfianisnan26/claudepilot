@@ -40,8 +40,20 @@ class Homes implements CiHost {
   async states() {
     return new Map([...this.homes.keys()].map((id) => [id, this.down.has(id) ? ('stopped' as const) : ('running' as const)]));
   }
+  /** T-975: a `start` to this workspace waits here (after it is noted as reached) until `open()`: a hand-off held half way. */
+  holdStart: { ws: string; reached: boolean; gate: Promise<void>; open: () => void } | null = null;
+  holdStartOn(ws: string) {
+    let open = () => {};
+    const gate = new Promise<void>((r) => (open = r));
+    this.holdStart = { ws, reached: false, gate, open };
+    return this.holdStart;
+  }
   async cp(id: string, args: string[], opts?: { stdin?: string }): Promise<CiReply> {
     this.calls.push({ ws: id, args });
+    if (this.holdStart && this.holdStart.ws === id && args[0] === 'start') {
+      this.holdStart.reached = true;
+      await this.holdStart.gate;
+    }
     if (this.hang.has(id)) return new Promise<CiReply>(() => undefined);
     if (this.broken.has(id)) throw new Error('The stream was reset by the other end.');
     const h = this.homes.get(id);
@@ -172,6 +184,61 @@ test('a stalled runner never holds the source workspace\'s poll, and a run is ha
   }
   assert.equal((await s.svc.show(run.id)).status, 'queued');
   assert.equal(s.host.calls.filter((c) => c.ws === RUNNER && c.args[0] === 'mirror').length, 1, 'one hand-off in flight, not one per poll');
+});
+
+const GROUPED = `on:
+  manual: {}
+concurrency: { group: race-grp, cancel-queued: true }
+jobs:
+  test:
+    runs-on: [big, python]
+    steps:
+      - run: sleep 5
+`;
+
+async function untilTrue(what: string, f: () => boolean | Promise<boolean>, ms = 20_000) {
+  const stop = Date.now() + ms;
+  while (!(await f())) {
+    if (Date.now() > stop) throw new Error(`timed out waiting for ${what}`);
+    await sleep(25);
+  }
+}
+
+test('T-975 race: a newer queued run does not supersede a run whose hand-off is half way; its start settles it once', async () => {
+  const s = await setup(GROUPED);
+  await s.svc.upsertRunner(RUNNER, { labels: ['big', 'python'], maxRuns: 2 }, PERSON);
+  const hold = s.host.holdStartOn(RUNNER);
+  const a = await s.svc.startRun({ repoId: s.repo.id, pipeline: 'ci', ref: 'main' });
+  await s.svc.poll(SRC);
+  await untilTrue('the start to reach the runner', () => hold.reached);
+  const b = await s.svc.startRun({ repoId: s.repo.id, pipeline: 'ci', ref: 'main' });
+  await s.svc.poll(SRC);
+  await s.svc.poll(SRC);
+  assert.equal((await s.svc.show(a.id)).status, 'queued', 'a run mid hand-off is not superseded');
+  hold.open();
+  await untilTrue('the first run to start', async () => (await s.svc.show(a.id)).status === 'running');
+  const ra = await s.svc.show(a.id);
+  assert.deepEqual([ra.status, ra.reason, ra.cancelledBy], ['running', null, null], 'one state: running, not cancelled');
+  assert.ok(!s.host.calls.some((c) => c.ws === RUNNER && c.args[0] === 'cancel'), 'nothing was cancelled on the runner');
+  await s.svc.cancel(a.id);
+  await s.svc.cancel(b.id);
+});
+
+test('T-975 race: a run cancelled while its start is on the way ends cancelled, and the runner is told to stop it', async () => {
+  const s = await setup(GROUPED);
+  await s.svc.upsertRunner(RUNNER, { labels: ['big', 'python'], maxRuns: 2 }, PERSON);
+  const hold = s.host.holdStartOn(RUNNER);
+  const a = await s.svc.startRun({ repoId: s.repo.id, pipeline: 'ci', ref: 'main' });
+  await s.svc.poll(SRC);
+  await untilTrue('the start to reach the runner', () => hold.reached);
+  await s.svc.cancel(a.id);
+  assert.equal((await s.svc.show(a.id)).status, 'cancelled');
+  hold.open();
+  await untilTrue('the runner to be told to cancel', () => s.host.calls.some((c) => c.ws === RUNNER && c.args[0] === 'cancel' && c.args[1] === a.id));
+  await sleep(200);
+  const ra = await s.svc.show(a.id);
+  assert.equal(ra.status, 'cancelled', 'the late start did not turn it back into running');
+  assert.equal(ra.runnerWorkspaceId, null);
 });
 
 test('runner settings: labels are checked, and a runner that is gone is refused', async () => {

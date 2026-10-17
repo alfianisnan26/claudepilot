@@ -250,7 +250,9 @@ test('concurrency.cancel-queued: three queued behind a running run leave only th
     await h.until('the two older queued runs to be superseded', () => [q1, q2].every((q) => h.svc.list().items.find((r) => r.id === q.id)!.status === 'cancelled'));
     const by = (id: string) => h.svc.list().items.find((r) => r.id === id)!;
     assert.deepEqual([by(q1.id).reason, by(q2.id).reason], ['superseded', 'superseded'], 'the cancelled runs say superseded');
-    assert.deepEqual([by(q1.id).cancelledBy, by(q1.id).cancelNote], ['pipeline', `for #${q3.number}`]);
+    // Each is superseded by a newer queued run: q1 by q2 or q3 (whichever the look saw), q2 by q3.
+    assert.equal(by(q1.id).cancelledBy, 'pipeline');
+    assert.ok([`for #${q2.number}`, `for #${q3.number}`].includes(by(q1.id).cancelNote ?? ''), `q1 note: ${by(q1.id).cancelNote}`);
     assert.deepEqual([by(q2.id).cancelledBy, by(q2.id).cancelNote], ['pipeline', `for #${q3.number}`]);
     assert.equal(by(running.id).status, 'running', 'the running one is kept (not cancel-in-progress)');
     assert.equal(by(q3.id).status, 'queued', 'the newest queued run waits for the group');
@@ -261,7 +263,7 @@ test('concurrency.cancel-queued: three queued behind a running run leave only th
   }
 });
 
-test('without cancel-queued, queued runs of a group are not superseded; cancel-in-progress alone is unchanged (T-975)', async () => {
+test('without cancel-queued, queued runs of a group are not superseded (T-975)', async () => {
   const h = await harness({ maxRunsPerWorkspace: 3 });
   try {
     const repo = await remote(h, { '.pilot/n.yml': 'on: manual\nconcurrency: { group: n-grp }\njobs:\n  a:\n    steps: [{run: "sleep 20; echo done"}]\n' });

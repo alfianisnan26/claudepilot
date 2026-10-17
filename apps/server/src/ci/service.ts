@@ -957,7 +957,8 @@ export class CiService {
       const older = this.#cs
         .activeInGroup(run.repo_id, run.concurrency_group, run.id)
         .filter((o) => o.status === 'queued' && (o.created_at < run.created_at || (o.created_at === run.created_at && o.number < run.number)));
-      for (const o of older) await this.#cancelRow(o, 'superseded', { actor: 'pipeline', note: `for #${run.number}` }).catch(() => undefined);
+      // A run being handed to a runner is mid-start: it is not superseded here (its start write decides, compare-and-set).
+      for (const o of older.filter((x) => !this.#handingRuns.has(x.id))) await this.#cancelRow(o, 'superseded', { actor: 'pipeline', note: `for #${run.number}` }).catch(() => undefined);
     }
     let free = this.#opts.maxRunsPerWorkspace - this.#cs.runningRuns(workspaceId).length;
     for (const run of this.#cs.queuedRuns(workspaceId)) {
@@ -1001,7 +1002,11 @@ export class CiService {
         continue;
       }
       if (reply.ok) {
-        this.#cs.updateRun(run.id, { status: 'running', started_at: new Date().toISOString(), attempts: 0 });
+        if (!this.#cs.updateRunIf(run.id, 'queued', { status: 'running', started_at: new Date().toISOString(), attempts: 0 })) {
+          // Cancelled while the start was on its way: stop what started.
+          await this.host.cp(workspaceId, ['cancel', run.id]).catch(() => undefined);
+          continue;
+        }
         this.#changed();
         this.#moved(run.id, 'queued');
         console.log(`[ci] ${run.id} started ${run.pipeline} on ${run.repo}@${shortSha(run.sha)}`);
@@ -1104,12 +1109,17 @@ export class CiService {
         throw new Error(reply.message ?? reply.error ?? 'start failed');
       }
       leased = false;
-      this.#cs.updateRun(run.id, {
+      const won = this.#cs.updateRunIf(run.id, 'queued', {
         status: 'running',
         started_at: new Date().toISOString(),
         attempts: 0,
         runner_workspace_id: local ? null : runner,
       });
+      if (!won) {
+        // Cancelled or superseded while the hand-off was on its way: nothing may keep running on the runner.
+        await this.host.cp(runner, ['cancel', run.id]).catch(() => undefined);
+        return;
+      }
       this.#changed();
       this.#moved(run.id, 'queued');
       this.kick(runner);
@@ -1166,13 +1176,17 @@ export class CiService {
       code: 'runner-fallback',
       message: `Ran in the repository's workspace: ${why}.`,
     };
-    this.#cs.updateRun(live.id, {
+    const won = this.#cs.updateRunIf(live.id, 'queued', {
       status: 'running',
       started_at: new Date().toISOString(),
       attempts: 0,
       runner_workspace_id: null,
       diagnostics: JSON.stringify([note]),
     });
+    if (!won) {
+      await this.host.cp(live.workspace_id, ['cancel', live.id]).catch(() => undefined);
+      return;
+    }
     this.#changed();
     this.#moved(live.id, 'queued');
     this.kick(live.workspace_id);
@@ -1652,7 +1666,12 @@ export class CiService {
       cancel_note: oneLine(by.note)?.slice(0, 120) ?? null,
     };
     if (row.status === 'queued') {
-      this.#cs.updateRun(row.id, { status: 'cancelled', reason, finished_at: now, duration_ms: 0, archived: 1, ...who });
+      // Compare-and-set (T-975): a start may have won since the row was read; then this is a cancel of a running run.
+      if (!this.#cs.updateRunIf(row.id, 'queued', { status: 'cancelled', reason, finished_at: now, duration_ms: 0, archived: 1, ...who })) {
+        const cur = this.#cs.run(row.id);
+        if (cur?.status === 'running') return this.#cancelRow(cur, reason, by);
+        throw new AppError('CONFLICT', 'That run is already over.');
+      }
       this.#settleDeployments(row.id, null);
       this.#changed();
       this.#moved(row.id, 'queued');

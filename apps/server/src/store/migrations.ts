@@ -3275,7 +3275,7 @@ export const MIGRATIONS: Migration[] = [
     },
   },
   {
-    version: 787,
+    version: 788,
     name: 'ci runs: cancel-queued (T-975)',
     up(db) {
       // T-975 (local-git-ci PRD, concurrency): `cancel_queued` is 1 when the pipeline's concurrency says `cancel-queued: true`: a newer run of
