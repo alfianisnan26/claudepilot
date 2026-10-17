@@ -1,6 +1,6 @@
 import { Button, cn, ConfirmDialog, Menu, Spinner, useToast } from '@isnanme/ui';
 import type { BrowserHandoff, BrowserStatus } from '@portal/contracts';
-import { ArrowLeft, Eye, EyeOff, Globe, Hand, Keyboard, Monitor, Moon, RotateCw, Send } from 'lucide-react';
+import { AppWindow, ArrowLeft, Eye, EyeOff, Globe, Hand, Keyboard, Monitor, Moon, RotateCw, Send } from 'lucide-react';
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router';
 import { KeyBar, type KeyDef, type Modifier, type ModState } from '@/components/KeyBar';
@@ -9,6 +9,7 @@ import { errorText } from '@/lib/api';
 import { timeAgo } from '@/lib/format';
 import { pinnedToViewport, useVisualViewport } from '@/lib/viewport';
 import { browserApi } from './api';
+import { AppView } from './AppView';
 import { deviceId, deviceName } from './device';
 import { STATE } from './labels';
 import { useBrowserStatus } from './useBrowserStatus';
@@ -45,6 +46,16 @@ const KEYS: KeyDef[] = [
 /** The preview has no browser chrome to reach with Ctrl+L or Ctrl+W (it has its own address bar and tabs): select-all and delete instead. */
 const PREVIEW_KEYS: KeyDef[] = [...KEYS.filter((k) => k.send !== 'ctrl:l' && k.send !== 'ctrl:w'), { label: '^A', name: 'Select all (Ctrl+A)', send: 'ctrl:a' }, { label: 'Del', name: 'Delete', send: 'key:Delete' }];
 
+type Mode = 'remote' | 'app';
+const MODE_KEY = 'pilot.browser.mode';
+const readMode = (): Mode => {
+  try {
+    return localStorage.getItem(MODE_KEY) === 'app' ? 'app' : 'remote';
+  } catch {
+    return 'remote';
+  }
+};
+
 type ViewKind = 'screen' | 'preview';
 const VIEW_KEY = 'pilot.browser.view';
 const readView = (): ViewKind | null => {
@@ -80,6 +91,16 @@ export function BrowserPage() {
   const preview = useRef<PreviewHandle>(null);
   const [phase, setPhase] = useState<ViewPhase>({ kind: 'connecting' });
   const [pref, setPref] = useState<ViewKind | null>(readView);
+  const [mode, setModeState] = useState<Mode>(readMode);
+  const setMode = (m: Mode) => {
+    setModeState(m);
+    try {
+      localStorage.setItem(MODE_KEY, m);
+    } catch {
+      // not remembered
+    }
+  };
+  const appMode = mode === 'app';
   const [attempt, setAttempt] = useState(0);
   const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState<null | 'take' | 'over'>(null);
@@ -102,11 +123,11 @@ export function BrowserPage() {
   // Opening the live view wakes a sleeping browser (PRD §14.2), once.
   const woke = useRef(false);
   useEffect(() => {
-    if (running && status?.chrome === 'asleep' && !woke.current) {
+    if (running && !appMode && status?.chrome === 'asleep' && !woke.current) {
       woke.current = true;
       void browserApi.action(workspaceId, 'wake').catch(() => undefined);
     }
-  }, [running, status?.chrome, workspaceId]);
+  }, [running, appMode, status?.chrome, workspaceId]);
 
   // The cover comes off when control stops being private: connect again.
   const wasPrivate = useRef(false);
@@ -181,7 +202,28 @@ export function BrowserPage() {
           <p className="truncate font-mono text-sm font-semibold">{name}</p>
           <p className="truncate text-[11px] text-white/50">{front || 'browser'}</p>
         </div>
-        {views.screen && views.preview && (
+        <div role="group" aria-label="Mode" className="flex shrink-0 rounded-lg bg-white/5 p-0.5">
+          {(
+            [
+              ['remote', 'Remote', 'Remote: the workspace’s own browser', <Monitor key="r" className="size-4" />],
+              ['app', 'App', 'App: an app of this workspace, opened here', <AppWindow key="a" className="size-4" />],
+            ] as const
+          ).map(([kind, word, title, icon]) => (
+            <button
+              key={kind}
+              type="button"
+              title={title}
+              aria-label={title}
+              aria-pressed={mode === kind}
+              onClick={() => setMode(kind)}
+              className={cn('flex h-7 min-w-7 items-center justify-center gap-1 rounded-md px-1.5 text-xs tap:h-10 tap:min-w-11', mode === kind ? 'bg-white/15 text-white' : 'text-white/50 hover:text-white')}
+            >
+              {icon}
+              <span className="hidden sm:inline">{word}</span>
+            </button>
+          ))}
+        </div>
+        {!appMode && views.screen && views.preview && (
           <div role="group" aria-label="View" className="flex shrink-0 rounded-lg bg-white/5 p-0.5">
             {(
               [
@@ -203,7 +245,7 @@ export function BrowserPage() {
             ))}
           </div>
         )}
-        {state && (
+        {state && !appMode && (
           <span className="flex items-center gap-1.5 text-xs text-white/70" title={status?.detail ?? undefined}>
             <span className={cn('size-2 rounded-full', status!.state === 'error' ? 'bg-red-400' : status!.state === 'needs_input' || status!.state === 'in_control' ? 'bg-amber-400' : status!.state === 'working' || status!.state === 'ready' ? 'bg-emerald-400' : 'bg-white/40', status!.state === 'working' && 'animate-pulse')} />
             <span className="hidden sm:inline">{state.label}</span>
@@ -226,19 +268,25 @@ export function BrowserPage() {
         </span>
       </header>
 
-      <div className="relative min-h-0 flex-1">
-        {showView && view === 'screen' && (
+      {appMode && (
+        <div className="relative min-h-0 flex-1">
+          <AppView workspaceId={workspaceId} />
+        </div>
+      )}
+      <div className={cn('relative min-h-0 flex-1', appMode && 'hidden')}>
+        {!appMode && showView && view === 'screen' && (
           <Suspense fallback={null}>
             <VncView ref={vnc} key="screen" workspaceId={workspaceId} device={device} controller={mine} paused={priv} attempt={attempt} onPhase={setPhase} className="absolute inset-0" />
           </Suspense>
         )}
-        {showView && view === 'preview' && (
+        {!appMode && showView && view === 'preview' && (
           <PreviewView ref={preview} key="preview" workspaceId={workspaceId} device={device} controller={mine} paused={priv} attempt={attempt} onPhase={setPhase} className="absolute inset-0" />
         )}
         {showView && mine && <ControlFrame />}
         <Cover status={status} error={error} phase={phase} priv={priv} running={running} view={view} showView={showView} onRetry={() => setAttempt((n) => n + 1)} />
       </div>
 
+      {!appMode && (
       <Dock
         status={status}
         mine={mine}
@@ -253,7 +301,8 @@ export function BrowserPage() {
         onTakeHandoff={(h) => void take(h)}
         onText={(t, enter) => handle()?.sendText(t, enter)}
       />
-      {mine && typing && (
+      )}
+      {!appMode && mine && typing && (
         <KeyBar
           keys={view === 'preview' ? PREVIEW_KEYS : KEYS}
           mods={mods}
