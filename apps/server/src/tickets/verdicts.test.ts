@@ -24,7 +24,7 @@ test('normalizeSha and verdictRoleOfAgent: only a full sha, and only QA or revie
   assert.equal(verdictRoleOfAgent('reviewer'), 'review');
   // T-969: the persona's checking roles (perf-tester, ux-checker) and lanes built on them are QA; builders with look-alike names are not.
   for (const a of ['perf-tester', 'ux-checker', 'konfersi-perf-tester', 'event-ux-checker', 'tester']) assert.equal(verdictRoleOfAgent(a), 'qa', a);
-  for (const a of ['test-writer', 'checkout-fixer', 'contester', 'spellchecker']) assert.equal(verdictRoleOfAgent(a), null, a);
+  for (const a of ['test-writer', 'checkout-fixer', 'contester', 'spellchecker', 'testers-bot', 'checkers_bot', 'tester2']) assert.equal(verdictRoleOfAgent(a), null, a);
   for (const a of ['implementer', 'orchestrator', 'scribe', '', null, undefined]) assert.equal(verdictRoleOfAgent(a), null, String(a));
 });
 
@@ -264,14 +264,6 @@ test('T-969: a lane spawned as perf-tester or ux-checker records a QA verdict; i
   }
 });
 
-test('MUTATION (T-969): with the checking words removed from the role pattern, perf-tester and ux-checker are no verifiers, so the test above would fail', () => {
-  const old = (agent: string) => (/review/.test(agent) ? 'review' : /(^|[-_])qa([-_]|$)|verif/.test(agent) ? 'qa' : null);
-  for (const a of ['perf-tester', 'ux-checker']) {
-    assert.equal(old(a), null, `${a}: the pattern before T-969`);
-    assert.equal(verdictRoleOfAgent(a), 'qa', `${a}: the pattern now`);
-  }
-});
-
 test('QA M7 (T-325 S1b): a QA-named session started with this ticket_id is an author', async () => {
   const r = await rig();
   try {
@@ -289,6 +281,12 @@ test('another workspace’s agent gets the same not found as for a missing ticke
     const seen = (fn: () => unknown) => assert.throws(fn, (e: any) => e.code === 'NOT_FOUND');
     seen(() => record(r, 'qaX', 'qa', 'pass', A));
     seen(() => r.tickets.verdicts(agent('docker/other', 'qaX'), r.id));
+    // T-969: a perf-tester or ux-checker lane of another workspace is a verifier by role, yet sees nothing here.
+    r.sessions.add({ id: 'perfX', workspaceId: 'docker/other', agent: 'perf-tester' });
+    r.sessions.add({ id: 'uxX', workspaceId: 'docker/other', agent: 'ux-checker' });
+    seen(() => record(r, 'perfX', 'qa', 'pass', A));
+    seen(() => record(r, 'uxX', 'qa', 'fail', A));
+    seen(() => r.tickets.verdicts(agent('docker/other', 'perfX'), r.id));
     seen(() => r.tickets.recordVerdict(agent(WS, 'qa1'), 'T-9999', { role: 'qa', verdict: 'pass', commit: A }));
     assert.equal(r.tickets.verdicts(UI, r.id).length, 0);
   } finally {
