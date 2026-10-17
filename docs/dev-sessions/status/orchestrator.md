@@ -16,9 +16,11 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   Resolution trace T-595 9742. QUICK-CHECK running (job-out/qc-b9781ad.log, 17 tests) -> gate-job -> land -> T-731.
 - Lanes (all hasyim, auto, sonnet; respawned 10:00 from pushed heads after the restart):
   BE INFRA a3554d40 T-938 259935e8 (yaml case added; Job). BE INFRA 2 e2d8d27c T-921 0dfff348 (Job; dev rig = coordinator).
-  BACKEND a3f28904 T-409 G3 ee75effd (Job + mutant). QA c26f8fe5 T-425 S2 b5ebac0a. IMPL 2 3189279b T-436 S3 + T-772 S2g e4e2c4ff.
+  BACKEND 524bf92b (sekar) T-425 S2b: kill M1/M2a/M4/M5 + detached-send hang test (QA PWG 9770; decision T-595 9772).
+  QA 694614c4 (one.claude) T-409 G3 ee75effd (built, DONE 9758). IMPL 2 3189279b T-436 S3 + T-772 S2g e4e2c4ff.
   IMPL c6418f2a T-379 S3 (image in --reuse key) from b30.
-- Waiting for QA after build: T-938 (blind review; coordinator lands), T-921, T-409, T-436 S3, T-379 S3. Backend next: T-382 S5.
+- Waiting for QA after build: T-938 (blind review; coordinator lands), T-921, T-436 S3, T-379 S3, T-425 S2b. Next build: T-382 S5.
+- Coordinator deploy run rmvc8ugfx3c529e running on 2c137efd (T-924); not mine.
 
 ## DECISIONS (binding)
 - 10:00 Restart (~07:00 UTC, /tmp wiped; my Claude hit its session limit 03:xx): 6 lanes ended + respawned from pushed heads
