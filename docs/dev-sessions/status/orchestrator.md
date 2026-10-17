@@ -15,11 +15,11 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   tests + lint ok, format red on knowledge/service.ts. Merging integration 94105066 conflicts in quick-check.sh (T-612 S1 vs T-960):
   merge ABORTED; T-612 S1b union on 2a0edbd8 (c10001) -> take its file whole, format service.ts, QC, gate, land, T-731.
 - T-938 lane a3554d40: 4th Job (3 lost: Pending, bg limit, session end).
-- URGENT T-948 S1 port proxy (owner waiting; coordinator 9810): BE INFRA 2 2a0edbd8 OPUS (why: security), ticket/T-948-port-proxy
-  from d741a52d; contract first (~11:30). Subdomain app-<ws>-<port>.ai.isnan.me + one-time code + frame-ancestors (9811).
-  S1 DONE 603c5bc3 (9929, Job rc 0, 167 tests) -> QA c691df71 OPUS (why: security); author adds the flush test (mutant 3). S2 FRONTEND 3753d3c2 ticket/T-948-app-browser 084c49d6 + docs 84fb5d15: QA d9f18599 PWG 9902
-  -> FE fixes 4 small findings + tests (D-65), QA re-checks. ux-checker after S1 merges. ETA 9815: QA ~14:00, gated ~15:00.
-  Paused for it: T-921 0dfff348, T-379 S3 9dfecffb (lanes ended; resume after, QA re-runs Jobs).
+- URGENT T-948 port proxy (9810): S1 BE INFRA 2 2a0edbd8 OPUS (security), ticket/T-948-port-proxy; app-<ws>-<port> subdomain (9811).
+  S1 603c5bc3+26c99397: QA c691df71 PWG 10015 -> same builder fixes collision test (M6), non-ASCII next (502), upgrade timeout
+  (decisions 10039); gap 3 cookie -> T-976 (high, security, next release). S2 3753d3c2 084c49d6+84fb5d15: QA d9f18599 PWG 9902
+  -> FE fix d08465f9 (Job 2). Same QA re-checks each delta (D-81). Then merge S1+S2, ux-checker, blind review S1, gate. ETA 9815.
+  Paused for it: T-921 0dfff348, T-379 S3 9dfecffb (resume after). T-976 cookie hardening (gap 3) next BE slot after T-948.
 - T-425 S2b 357ff021: QA be63acc8 PWG 9970 (mutant B survives) -> test fix on next free Backend slot; same QA re-checks (T-595 10014).
 - T-436 S3 + T-772 S2g fe676258: QA PWG (T-595 10003) -> batch 31; permissions class: coordinator live check before close (D-81).
 - T-294 PWG 9858: crew_post/read + idle-child reuse not built -> slice after T-948 (T-595 9871).
