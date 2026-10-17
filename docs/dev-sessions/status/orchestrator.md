@@ -8,38 +8,35 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   T-781 S8+S8b, T-623 S2, T-416 S2+S2b (lead's mechanical controller.ts resolution 056fe1a4). Coordinator told T-731 8617.
 - BATCH 26 ON INTEGRATION 83b7213e (gate claudepilot-gate-83b7213-b968 GREEN, suite 672s; after 3 re-merges as integration moved):
   T-591 S3, T-610 (mig 384; pre-deploy read-only prod count of the 2 rows is the coordinator's), T-772 S2b-S2d 03b635b5 + S2c
-  464be382. Main folder ff'd (165db813 in). Coordinator told T-731.
+  464be382. Main folder ff'd (165db813 in). Coordinator told T-731 9271.
 - RESPAWN rule (coordinator, 165db813): respawn each lane BETWEEN tickets on a worktree cut from integration (or a head containing
   165db813); brief: scripts ONLY by /home/node/work/claudepilot/scripts/.... Left on old rules: QA Perf 8e8912fc, Impl is new.
 - BATCH 27 ON INTEGRATION bda180d2 (gate claudepilot-gate-bda180d-3921 GREEN, suite 888s; quick-check job-5eb2f86f green):
   T-611 merge f722dca1, T-537, T-623 S2c+S2d c288c0d5, T-856 7d2acb8d (lead's mechanical PRD resolution), T-772 S2e fc9158ed,
-  T-881 S1 0946106271 (S1b follow-up 8938; live proof coordinator's). Coordinator told T-731.
+  T-881 S1 0946106271 (S1b follow-up 8938; live proof coordinator's). Coordinator told T-731 9271.
 - BATCH 28 ON INTEGRATION 63ff971c (gate 63ff971 GREEN; quick-check job-b8b7ca64): T-860 S2+S2b ALONE. Told T-731 9085, T-860 9086.
   Flake boot.test.ts "newer portal" passed on rerun -> T-903.
-## IN FLIGHT (6 of 6, D-71)
-- QA PERF 82f006cf (new rules; was 8e8912fc: T-868 S2 re-review CHANGES 1 8803 (drop --hook from allowed script) -> Impl;
-  T-524 S3c PWG 8969; T-612 S1 FAIL 9040 -> BE Infra). T-881 S1b PWG 9046 (READY b28; S1c param test, 9065).
-  NOW QA T-781 S8c 8cb00f79 -> QA T-675 R2c f7b4e34a + R2d b82cdcb9 (moved from QA BE 2).
-- QA UI 66c13056 (new rules): T-881 S1 QA PWG 8916, T-772 S2e rev APPROVE W/ NOTES 8867, T-436 rev APPROVE W/ NOTES (relayed 8941;
-  notes -> T-436 S2). T-856 browser check blocked (no node_modules, 8855) = open follow-up 8860. NOW QA T-736 S3g 4eb08f4e.
-- QA BE 2 b6579580 (new rules; was 42e5408f: T-860 PWG 8912). NOW QA T-436 5be5699a (own Job) -> QA T-382 S1 88b663fe
-  -> T-416 S2c dcdb6553.
-- IMPL 89ca3bd2 (new rules): T-425 c22a76b3 (8957; "Queued" kept; -> QA UI), T-772 S2f b36f6a54 (9014, Job 4c8104e6; -> QA UI 3rd).
-  NOW T-436 S2 (review notes 8941: guarded rebind, audit names, VALIDATION_FAILED) on ticket/T-436-s2 from 5be5699a.
-- BATCH 29 READY TO GATE after restart: premerge-b29 96757f79 (wip/main-96757f7) = T-524 S3c+T-733 S5 ee56bab9, T-881 S1b
-  4dba5701, T-416 S2c dcdb6553 (lead's mechanical controller.ts resolution), T-382 S1 88b663fe, T-781 S8c 8cb00f79, T-675 R2c+R2d
-  b82cdcb9. Quick-check job-89646cfa green for the first two only. After restart: merge integration in, pack, push wip, quick-check
-  --test bypassLost/recover/bypass/keyset/settings/agentEnv/engine/memory/memoryBudget/restart tests, then gate-job.
-  QA verdicts for T-382 S1, T-436, T-675 sit only in worker reports (lead's ticket_comment FORBIDDEN on unassigned tickets). BATCH 30 (after QA): T-436 (QA PWG) + S2, T-425, T-772 S2f, T-736 S3f+S3g, T-612 S1 fix.
-- BE INFRA 4ed98960 (new rules): PAUSED 9135 (FAIL item 2 fixed+pushed; item 3 real quick-check run left). Fix T-612 S1 per QA FAIL 9040 (eslint tseslint base spread; prettier quickCheck.test.ts; a real
-  quick-check run) -> S2a baseline -> T-860 S2c after T-860 merges (gaps 8936 + 8845).
-- BACKEND 658bdc65 (new rules; was 1e80e003: T-881 S1b DONE 4dba5701). NOW T-382 S2 GET /api/chat/sessions cursor (ticket/T-382-s2-sessions
-  from S1 88b663fe).
-- QUEUE Impl after T-436 S2: T-868 S3 (CHANGES 8803: test-only copy with hook via sed; .gitignore .shots-in.*).
+- BATCH 29 ON INTEGRATION edde2073 (gate edde207 GREEN, suite 741s; quick-check 11 files green; first gate 4258f72 green, re-gated
+  after 44fba442 T-623 browser image): T-524 S3c+T-733 S5, T-881 S1b, T-416 S2c (lead's mechanical controller.ts resolution
+  67198848, APPROVE 9219), T-382 S1, T-781 S8c, T-675 R2c+R2d. Coordinator told T-731 9271.
+## IN FLIGHT (6 of 6, D-71; all respawned after the 23:10 workspace restart, coordinator's)
+- BATCH 30 (after QA): T-382 S2 (QA FAIL 05c187ae: web list drops a row / stale cursor -> fix in S3 by Backend), T-436 S1 (QA PWG) + S2, T-425, T-772 S2f, T-736 S3f+S3g, T-612 S1 fix.
+- IMPL fca8e37d (was 11db3b81: T-436 S2 DONE 34a5b293 9239, Job a0475f70, 3 mutants killed -> QA BE 2). NOW T-868 S3 drop
+  --hook (ticket/T-868-s3 00b6e38a = S2 + integration merged by lead for new rules).
+- BACKEND 442e397a (was 7785fbf2: T-382 S2 DONE 13482b3f 9222, Job 61c9698c green, relay 9209). NOW T-382 S3 GET /api/tickets
+  cursor + summary rows (ticket/T-382-s3-tickets from S2).
+- BE INFRA 07572c46 (was 4ed98960, PAUSED a5207db0 9135): T-612 S1 format/lint demo in a Job (quick-check.sh not in lane
+  allow list, T-586: the real run is the lead's at merge) -> S2a -> T-860 S2c (8936, 8845).
+- QA UI 0cf56a8e (was 66c13056): QA T-772 S2f b36f6a54 (Job cut at 23:10) -> T-736 S3g 4eb08f4e, T-425 c22a76b3 (if not done).
+- QA BE 2 05c187ae (was b6579580: T-436 PWG, T-382 S1 PWG, T-416 S2c PWG 9173): b29 resolution APPROVE 9219; T-382 S2 FAIL.
+  NOW QA T-436 S2 34a5b293 -> T-612 S1 as it lands -> T-382 S2+S3 re-check.
+- QA PERF bf2e403a (was 82f006cf: T-781 S8c PWG 9132, T-675 PWG): post T-675 verdict, T-781 engine.test Job -> perf QA T-382 S2.
 
 ## DECISIONS (binding)
 - 22:45 Coordinator: workspace RESTART 23:10 UTC (cpb-secrets volume for T-623). All 6 lanes told to push WIP, no Job after 23:05,
   end `PAUSED <hash>`. Batch 29 gate deferred to after the restart (a ~40 min queue+suite would be cut). Respawn ended lanes after.
+- 23:15 Resumed after restart: all 6 lanes interrupted -> ended and respawned from their pushed heads; cut Jobs re-run by their
+  lanes (T-436 S2, T-382 S2, T-772 S2f QA, T-781 S8c). QA verdict relays go through lanes spawned with that ticket (T-910).
 - 13:45 D-75 AMENDED (coordinator, 1444d836, in DECISIONS.md): the lead runs the gate before a merge (gate-job.sh, one per batch).
 - 07:45 D-75 (coordinator): one Job per commit (checks chained), never the same command twice on a commit, QA reads the builder's log;
   the lead runs no Jobs but the merge gate (13:45); idle QA gets no-Job work (reviews, browser). T-731 -> BE Infra after T-697.
