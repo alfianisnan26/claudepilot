@@ -34,10 +34,16 @@ for (const [name, file, from, to, test] of mutants) {
     bad++;
     continue;
   }
-  writeFileSync(file, src.replace(from, to));
+  const mutated = src.replace(from, to);
+  if (mutated === src) {
+    console.log(`T356-MUTANT ${name}: EMPTY DIFF`);
+    bad++;
+    continue;
+  }
+  writeFileSync(file, mutated);
   const passed = run(test);
   writeFileSync(file, src);
-  console.log(`T356-MUTANT ${name}: ${passed ? 'SURVIVED' : 'KILLED'}`);
+  console.log(`T356-MUTANT ${name}: applied (${from.length} -> ${to.length} chars) ${passed ? 'SURVIVED' : 'KILLED'}`);
   if (passed) bad++;
 }
 console.log(`T356-MUTANTS ${mutants.length - bad}/${mutants.length} killed`);
