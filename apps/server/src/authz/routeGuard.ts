@@ -1,8 +1,11 @@
 // THE ROUTE GUARD (T-1043 S0a, D-82): one middleware in front of every HTTP route that runs the route's DECLARED policy (`declarePolicies` in
 // each module's `authz.ts`) through the one `can()`, for the request's real actor, before any route middleware or handler runs.
 //
-//   - The route is the first endpoint Hono matched (`METHOD /full/path`, as `app.routes` lists it). A path no route answers goes on.
-//   - `public`, `bearer` and `handler` routes are their own door (sign-in, the bearer `/mcp`, signed webhooks, connector keys): they go on.
+//   - The route is the first endpoint Hono matched (`METHOD /full/path`, as `app.routes` lists it); middleware never counts, declared or not.
+//     A path no endpoint answers is refused (404) for anyone but the founding owner: an `app.all(path, (c, next) => …)` endpoint looks like
+//     middleware and must not answer unchecked.
+//   - `public`, `bearer` and `handler` routes are their own door (sign-in, the bearer `/mcp`, signed webhooks, connector keys): they go on,
+//     but only as the first endpoint; reached after a route handed the request on, such a door is refused (it would open the route before it).
 //   - Not signed in: 401, as the session guard answers it.
 //   - The founding owner in single-owner mode goes on untouched: today's behaviour, so nothing in production changes; each route's own checks
 //     stay (the same fast path as `visible()`).
@@ -47,8 +50,9 @@ export function isEndpoint(r: { method: string; handler: { length: number } }): 
 export const keyOf = (r: { method: string; path: string }): PolicyKey => `${(r.method === 'HEAD' ? 'GET' : r.method) as 'GET'} ${normal(r.path)}`;
 
 /**
- * The keys of the endpoints Hono matched for this request, in the order it runs them, each once. Middleware is left out unless declared
- * (`ALL /api/chat/live`); an `app.all(…)` endpoint is always in, so an undeclared one is refused like any other route.
+ * The keys of the endpoints Hono matched for this request, in the order it runs them, each once. Middleware is left out, declared or not
+ * (review 10681 #3: a middleware's policy never opens the endpoints after it); an `app.all(…)` endpoint is always in, so an undeclared one is
+ * refused like any other route.
  */
 export function routeKeysOf(c: Context): PolicyKey[] {
   return routeMatchesOf(c).map((m) => m.key);
@@ -63,9 +67,8 @@ interface RouteMatch {
 function routeMatchesOf(c: Context): RouteMatch[] {
   const out: RouteMatch[] = [];
   const add = (key: PolicyKey, index: number) => void (out.some((m) => m.key === key) || out.push({ key, index }));
-  const all = matchedRoutes(c);
-  all.forEach((r, i) => r.method !== 'ALL' && add(keyOf(r), i));
-  all.forEach((r, i) => r.method === 'ALL' && (isEndpoint(r) || policyFor(keyOf(r))) && add(keyOf(r), i));
+  // In the order Hono runs them (review 10681 #3): the first endpoint is the one that answers, unless it hands on with `next()`.
+  matchedRoutes(c).forEach((r, i) => isEndpoint(r) && add(keyOf(r), i));
   return out;
 }
 
@@ -179,16 +182,22 @@ export const ROUTE_GUARD_NAME = 'routeGuard';
 export function createRouteGuard(deps: RouteGuardDeps): MiddlewareHandler {
   const guard: MiddlewareHandler = async (c, next) => {
     const matches = routeMatchesOf(c);
-    if (matches.length === 0) return next();
-    const first = policyFor(matches[0]!.key);
+    // Only the first endpoint Hono runs may be an open door; a declared middleware is never one (review 10681 #3).
+    const first = matches.length > 0 ? policyFor(matches[0]!.key) : undefined;
     if (first && OPEN_KINDS.has(first.kind)) return next();
     const actor = actorFor(c, deps);
-    if (actor.kind === 'anonymous') throw new AppError('UNAUTHORIZED', 'Sign in again.');
     if (isFoundingOwner(actor)) return next();
+    // No endpoint matched: only middleware would see the request, and one written `app.all(path, (c, next) => …)` answers like an endpoint
+    // the guard cannot tell apart (review 10681 #4). Refused, as the path nobody serves it is, for anyone but the founding owner.
+    if (matches.length === 0) throw notFound();
+    if (actor.kind === 'anonymous') throw new AppError('UNAUTHORIZED', 'Sign in again.');
     for (const { key, index } of matches) {
       const policy = policyFor(key);
       // No declaration: refused for anyone but the founding owner, as a path nobody serves (the route stays out of the answer).
       if (!policy) throw notFound();
+      // After a route handed the request on, a door that is open to anyone is never the check (review 10681 #1): `GET *` or `ALL /api/*`
+      // would let it through to the route that handed on. Only the first endpoint may be an open door, and it went on above.
+      if (OPEN_KINDS.has(policy.kind)) throw notFound();
       if ((await decide(c, index, actor, policy, deps)) === 'allow') return next();
     }
     // Every matched route handed the request on (QA 10597 A1): nothing checked it, so it is refused, never let through unchecked.

@@ -103,7 +103,7 @@ import { createClaudeVersionRoutes, createWorkspaceClaudeVersionRoutes, type Cla
 import { createCodespacesRoutes, type Codespaces } from './codespaces/index.js';
 import type { Platform } from './platform/index.js';
 import { actorOf, actorString, actorUserId, visible } from './authz/seam.js';
-import { createRouteGuard } from './authz/routeGuard.js';
+import { createRouteGuard, notFound } from './authz/routeGuard.js';
 import { declareAppPolicies } from './authz/appPolicies.js';
 import { assetCompress, jsonCompress } from './jsonCompress.js';
 
@@ -382,7 +382,8 @@ export function createApp(
     const token = getCookie(c, cookie);
     if (!token || !portal.session(token)) {
       // MU2 S1a: a member is signed in but has no access to the admin app yet (default deny); everything else is "sign in again".
-      if (token && portal.anySession(token)) throw new AppError('FORBIDDEN', 'Your account has no access to this yet.');
+      // T-1043 S0a (review 10681 #5): the same 404 as a path nobody serves (the route guard's refusal), never a 403 that tells the route is there.
+      if (token && portal.anySession(token)) throw notFound();
       throw new AppError('UNAUTHORIZED', 'Sign in again.');
     }
     const field = await hostileWorkspaceField(c);
