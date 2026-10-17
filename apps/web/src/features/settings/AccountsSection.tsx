@@ -7,7 +7,7 @@ import { InfoTip } from '@/components/InfoTip';
 import { api, errorText } from '@/lib/api';
 import { timeAgo } from '@/lib/format';
 
-const field = 'h-12 w-full rounded-2xl border border-line bg-surface px-4 text-[15px] outline-none focus-visible:ring-2 focus-visible:ring-accent';
+const field = 'h-12 w-full rounded-2xl border border-line bg-surface px-4 text-[15px] outline-hidden focus-visible:ring-2 focus-visible:ring-accent';
 
 /**
  * Sign-in accounts (T-118 MU1-min, owner 2026-10-17: "multi user feature login by email"): an email and a password that sign in to this
