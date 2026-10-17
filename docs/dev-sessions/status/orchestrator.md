@@ -23,7 +23,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - BATCH 30 premerge-b30 4de61237: T-772 S2f b36f6a54 (QA UI PWG 9301; S2g follow-up), T-736 S3g 4eb08f4e (9008), T-612 S1
   a5207db0 (PWG 9280). QUICK-CHECK job-09bf4786 FAILED: format only (rtkHistoryGuard.test.ts, focusRing.test.ts; T-612 S1
   made prettier real); lint + 3 tests ok. Fix -> BE Infra (FORMAT DONE <sha>), lead merges it in, re-quick-check, gate.
-- BE INFRA 0f151084 T-612: ticket/T-612-s2 156a15b7 (lead merged b30 in): 1) format the 2 files 2) S2 the 16 lint errors (9280).
+- BE INFRA 0f151084 T-612: ticket/T-612-s2 156a15b7: format the 2 b30 files ONLY, then respawn on T-921 (incident, plan 9377;
+  coordinator order T-860 > T-921 > T-911 > T-612 S2 16 lint errors 9280).
 - BACKEND b367d0dd T-382 S4 (ci/runs, chat/audit, lab/slices) resumed at 0cdfa044 (audit 13/13; re-run ci/lab Jobs, mutants).
 - QA BE A 0a2c06aa (T-436): QA T-436 S1+S2 34a5b293 (verdict lost at restart, redo) -> QA T-860 S2c e78d727b (9331, no mutants).
 - QA BE B a8096dc9 (T-382): QA T-382 S2+fix+S3 fdb33268 (9277) -> QA T-868 S3 0a818680 (9299, Job 9bb7f09d, 13 mutants).
@@ -31,7 +32,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   refused wake survives; two detached sends not ordered) -> test + per-session delivery chain. Then T-772 S2g. QA of it -> QA BE.
 - QA PERF 98e910e1 (T-781): re-run engine.test on integration (cut: Pending 900s) -> perf QA T-382 fdb33268 (p95, size).
 - QA UI 11c8c19a ENDED 01:2x (queue empty after its T-425 FAIL; slot -> Impl). T-425 badge 390/1280 not verified (no browser tool).
-- 01:00 Coordinator (quota spread): spawn the NEXT 3 lanes with claude sekar, one.claude, two.claude (one each; "no reset time").
+- 01:00 Coordinator quota spread: next spawns on one.claude, two.claude (sekar used by Impl).
 
 ## DECISIONS (binding)
 - 00:35 Coordinator: 2nd workspace RESTART 00:50 UTC (browser image t623-2026.10.16-1). All 6 lanes told: push WIP, no Job after
@@ -39,8 +40,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
   Release 2026.10.17-1 (42b186b4, from 44fba442) holds batches 27+28, NOT 29 (edde2073): await live checks.
 - 00:55 Resumed after restart 2: 6 stopped lanes ended; 6 respawned (4 QA + Backend + BE Infra; Impl's slot -> 2nd QA BE since
   QA held 6 items). QA lanes spawned with the ticket they report on (T-436, T-382, T-425, T-781) so their posts land (T-910).
-- 23:15 Resumed after restart: all 6 lanes interrupted -> ended and respawned from their pushed heads; cut Jobs re-run by their
-  lanes (T-436 S2, T-382 S2, T-772 S2f QA, T-781 S8c). QA verdict relays go through lanes spawned with that ticket (T-910).
+- 23:15 Restart 1: 6 lanes ended + respawned from pushed heads; cut Jobs re-run by lanes; QA relays via ticket-spawned lanes.
 - 13:45 D-75 AMENDED (coordinator, 1444d836, in DECISIONS.md): the lead runs the gate before a merge (gate-job.sh, one per batch).
 - 07:45 D-75 (coordinator): one Job per commit (checks chained), never the same command twice on a commit, QA reads the builder's log;
   the lead runs no Jobs but the merge gate (13:45); idle QA gets no-Job work (reviews, browser). T-731 -> BE Infra after T-697.
