@@ -89,6 +89,52 @@ test('all passed is exit 0 with one verdict line', () => {
   assert.match(r.stdout, /QUICK CHECK: all passed$/m);
 });
 
+/** The verdict is the last line of the output. */
+const last = (out: string) => out.trimEnd().split('\n').pop() ?? '';
+
+test('T-612: a missing tool is SKIPPED, never passed: the last line names it and the exit is not 0', () => {
+  const f = fixture(0);
+  rmSync(join(f.work, 'node_modules/.bin/prettier'));
+  const r = run(f.work, f.fake, ['--test', 'pkg/x.test.mjs']);
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /::: format SKIPPED \(no prettier\)/);
+  assert.match(r.stdout, /::: lint ok/);
+  assert.doesNotMatch(r.stdout, /all passed/);
+  assert.equal(last(r.stdout), 'QUICK CHECK INCOMPLETE: SKIPPED format (the other steps passed)');
+  // A failure and a skip together: both are named.
+  rmSync(join(f.work, 'node_modules/.bin/eslint'));
+  tool(join(f.work, 'pkg/node_modules/.bin/vitest'), 'exit 1');
+  const both = run(f.work, f.fake, ['--test', 'pkg/x.test.mjs']);
+  assert.equal(both.status, 1);
+  assert.equal(last(both.stdout), 'QUICK CHECK FAILED: test:pkg/x.test.mjs (also SKIPPED: format lint)');
+});
+
+test('each verdict branch: FAILED, FAILED nothing ran, INCOMPLETE, all passed (one exact last line each)', () => {
+  const f = fixture(1);
+  const failed = run(f.work, f.fake, []);
+  assert.equal(failed.status, 1);
+  assert.equal(last(failed.stdout), 'QUICK CHECK FAILED: format');
+  // Checks turned off and no test: nothing ran, with no skip to name, is still a failure.
+  const off = run(f.work, f.fake, ['--no-format', '--no-lint']);
+  assert.equal(off.status, 1, off.stdout + off.stderr);
+  assert.equal(last(off.stdout), 'QUICK CHECK FAILED: nothing ran (every check was skipped)');
+  tool(join(f.work, 'node_modules/.bin/prettier'), 'exit 0');
+  rmSync(join(f.work, 'node_modules/.bin/eslint'));
+  const incomplete = run(f.work, f.fake, []);
+  assert.equal(incomplete.status, 1);
+  assert.equal(last(incomplete.stdout), 'QUICK CHECK INCOMPLETE: SKIPPED lint (the other steps passed)');
+  const passed = run(f.work, f.fake, ['--no-lint']);
+  assert.equal(passed.status, 0, passed.stdout + passed.stderr);
+  assert.equal(last(passed.stdout), 'QUICK CHECK: all passed');
+});
+
+test('--help prints the whole header and nothing of the code', () => {
+  const r = spawnSync('bash', [SCRIPT, '--help'], { encoding: 'utf8' });
+  assert.equal(r.status, 0);
+  assert.match(r.stdout, /^# The light checks BEFORE/);
+  assert.match(last(r.stdout), /^# Exit: 0 all passed;/);
+});
+
 test('a branch with no changes and no tests needs no Job; a missing test file is a usage error', () => {
   const f = fixture(0);
   sh(f.work, 'git checkout -q stg');
@@ -105,8 +151,8 @@ test('T-960: a run where every check is skipped is a failure, never "all passed"
   rmSync(join(f.work, 'node_modules'), { recursive: true, force: true }); // no prettier, no eslint
   const r = run(f.work, f.fake, []);
   assert.equal(r.status, 1, r.stdout + r.stderr);
-  assert.match(r.stdout, /::: format skipped/);
-  assert.match(r.stdout, /QUICK CHECK FAILED: nothing ran \(every check was skipped\)$/m);
+  assert.match(r.stdout, /::: format SKIPPED \(no prettier\)/);
+  assert.equal(last(r.stdout), 'QUICK CHECK FAILED: nothing ran (every check was skipped)');
   assert.doesNotMatch(r.stdout, /all passed/);
 });
 
