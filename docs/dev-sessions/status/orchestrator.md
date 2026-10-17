@@ -27,9 +27,10 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - BACKEND b367d0dd T-382 S4 (ci/runs, chat/audit, lab/slices) resumed at 0cdfa044 (audit 13/13; re-run ci/lab Jobs, mutants).
 - QA BE A 0a2c06aa (T-436): QA T-436 S1+S2 34a5b293 (verdict lost at restart, redo) -> QA T-860 S2c e78d727b (9331, no mutants).
 - QA BE B a8096dc9 (T-382): QA T-382 S2+fix+S3 fdb33268 (9277) -> QA T-868 S3 0a818680 (9299, Job 9bb7f09d, 13 mutants).
-- QA UI 11c8c19a (T-425): QA T-425 c22a76b3 (Job caps + rowMeta + mutants; badge 390/1280).
+- IMPL c68578a8 (sekar, T-425): T-425 S2 on ticket/T-425-slotwait c22a76b3: QA UI FAIL 9359 (mutant "no failed mark" on
+  refused wake survives; two detached sends not ordered) -> test + per-session delivery chain. Then T-772 S2g. QA of it -> QA BE.
 - QA PERF 98e910e1 (T-781): re-run engine.test on integration (cut: Pending 900s) -> perf QA T-382 fdb33268 (p95, size).
-- Impl lane not respawned: its T-868 S3 is done and QA held the larger queue; next free slot -> Impl for T-772 S2g.
+- QA UI 11c8c19a ENDED 01:2x (queue empty after its T-425 FAIL; slot -> Impl). T-425 badge 390/1280 not verified (no browser tool).
 - 01:00 Coordinator (quota spread): spawn the NEXT 3 lanes with claude sekar, one.claude, two.claude (one each; "no reset time").
 
 ## DECISIONS (binding)
