@@ -76,5 +76,5 @@ Sub-agents stop when the chat restarts, moves to another account or ends; anythi
 
 - At most five sub-agents run; each brief was self-contained and named the model and the rules.
 - The integration branch is green on the quick gate; the full gate ran within two hours or before the last deploy.
-- The status file is current, under 80 lines, pushed; NEEDS A HUMAN holds required items only.
+- The status file is current, under 80 lines, pushed; NEEDS A HUMAN holds production and uat items only; everything else that is not yours is under FOR THE COORDINATOR.
 - No agent waits idle; no ticket is `in_progress` without a live worker.

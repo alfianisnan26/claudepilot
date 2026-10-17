@@ -15,6 +15,8 @@ jobs:
   gate:
     name: Gate
     runs-on: { labels: [mac], fallback: workspace }
+    # The private @isnanme packages (npm): leased to the Mac runner for this run only, masked in the log (owner, 2026-10-17).
+    secrets: [NODE_AUTH_TOKEN]
     timeout: 110m
     steps:
       - name: Typecheck, web build, server suite

@@ -13,7 +13,7 @@ import { mayWrite } from '../delivery/ownership.js';
 import { FOUNDATION } from '../delivery/reconciler.js';
 import { generateSecretKey, parseSecretKey } from '../store/secretBox.js';
 import { Store } from '../store/store.js';
-import { RULE_GUARD_FILES, RULE_GUARD_HOOKS, RULE_GUARD_MATCHER, RULE_GUARD_MESSAGE, RULE_GUARD_PATH, RULE_GUARD_SCRIPT, RULE_GUARD_WRAPPER } from './ruleGuard.js';
+import { GITC_ROOTS_PATH, gitCRootsContent, RULE_GUARD_FILES, RULE_GUARD_HOOKS, RULE_GUARD_MATCHER, RULE_GUARD_MESSAGE, RULE_GUARD_PATH, RULE_GUARD_SCRIPT, RULE_GUARD_WRAPPER } from './ruleGuard.js';
 import { GUARD_CHANNEL, recordGuardRefusals } from './ruleGuardAudit.js';
 
 const SESSION = 'a1b2c3d4-0000-4000-8000-000000000001';
@@ -967,4 +967,40 @@ test('T-860: a refusal writes one outbox line with no path text, and the guard s
   assert.ok(!lines[0]!.includes('MARK860') && !lines[0]!.includes(main), 'the line holds no path');
   // No lane folder and no roots file: nothing to guard, so git -C works as it did (only when this machine has no lane folder either).
   if (!existsSync('/home/node/work/agentic-worktrees')) allowed(run(g, 'Bash', { command: `git -C ${main} status` }, { cwd: g.repo, env: { CLAUDEPILOT_GUARD_GITC_ROOTS_FILE: join(g.root, 'none') } }), 'no lane workspace');
+});
+
+// T-924: the portal delivers /etc/claudepilot/git-c-roots, so the lanes of every track (claudepilot, tradingbot, konfersi-universe) pass.
+test('T-924: git -C with the delivered roots file: a track worktree passes, its main folder is refused', () => {
+  const g = rig();
+  const wts = join(g.root, 'tradingbot.worktrees');
+  const wt = join(wts, 'x');
+  const main = join(g.root, 'tradingbot');
+  for (const d of [wt, join(main, '.git')]) mkdirSync(d, { recursive: true });
+  const rootsFile = join(g.root, 'git-c-roots');
+  writeFileSync(rootsFile, gitCRootsContent([wts]));
+  const sh = (command: string) => run(g, 'Bash', { command, description: 'x' }, { cwd: wt, env: { CLAUDEPILOT_GUARD_GITC_ROOTS_FILE: rootsFile } });
+  allowed(sh(`git -C ${wt} status`), 'track worktree');
+  refused(sh(`git -C ${main} status`), 'main folder');
+  refused(sh(`git -C ${wts} status`), 'the root itself');
+  refused(sh(`git -C ${wt}/../../tradingbot status`), 'dots to the main folder');
+});
+
+test('T-924: the roots file is delivered root-owned 0644 with the default roots, and a bad root is refused', () => {
+  const f = RULE_GUARD_FILES.find((x) => x.path === GITC_ROOTS_PATH);
+  assert.ok(f);
+  assert.deepEqual([f.uid, f.gid, f.mode], [0, 0, 0o644]);
+  const lines = f.content.split('\n').filter((l) => l && !l.startsWith('#'));
+  assert.deepEqual(lines, [
+    '/home/node/work/agentic-worktrees',
+    '/home/node/work/claudepilot.worktrees',
+    '/home/node/work/tradingbot.worktrees',
+    '/home/node/work/konfersi-universe.worktrees',
+  ]);
+  const bundle = compile({ portalId: 'p', generation: 1, claudeVersion: null, fragments: [FOUNDATION, { owner: 'policy', files: RULE_GUARD_FILES, settings: { env: {}, hooks: RULE_GUARD_HOOKS } }] });
+  assert.equal(bundle.files.find((x) => x.path === GITC_ROOTS_PATH)?.content, f.content);
+  assert.equal(mayWrite('policy', GITC_ROOTS_PATH), true);
+  assert.equal(mayWrite('mcpset', GITC_ROOTS_PATH), false);
+  for (const bad of ['/home/node/work/tradingbot', '/home/node/work', '/', 'home/x.worktrees', '/home/node/work/../x.worktrees', '/home/node/work/a.worktrees/..', '/home/node/work/x.worktrees/', '/home/node/work/evil.worktrees\n/home/node/work/tradingbot', '/home/node/work/tradingbot.worktrees-evil']) {
+    assert.throws(() => gitCRootsContent([bad]), /git -C root/, bad);
+  }
 });
