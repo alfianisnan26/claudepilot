@@ -13,7 +13,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file (2026-1
 - T-924 LANDED on integration 4754b282 (gate 4754b28 GREEN; coordinator told T-924 9736 + T-731 9737). Close on live check PASS.
 - BATCH 30 premerge-b30 b9781ad6 (wip/main-b9781ad): T-772 S2f, T-736 S3g, T-612 S1, T-868 S1-S3, T-436 S1+S2 (deploy note),
   T-379 S2, format fix 787932e2, integration (T-924), T-860 S2c a87d00b8 (PWG 9638), T-382 S2-S4 (PWG 9691; S5 fup).
-  Resolution trace T-595 9742. QUICK-CHECK running (job-out/qc-b9781ad.log, 17 tests) -> gate-job -> land -> T-731.
+  Resolution trace T-595 9742. QUICK-CHECK re-run (job-out/qc-b9781ad-2.log; 1st cut by my 30-min bg limit while the cluster was
+  full, 0 failures before the cut) -> gate-job -> land -> T-731. Quick-check in bg always gets timeout 7200000.
 - Lanes (all hasyim, auto, sonnet; respawned 10:00 from pushed heads after the restart):
   BE INFRA a3554d40 T-938 259935e8 (yaml case added; Job). BE INFRA 2 e2d8d27c T-921 0dfff348 (Job; dev rig = coordinator).
   BACKEND 524bf92b (sekar) T-425 S2b: kill M1/M2a/M4/M5 + detached-send hang test (QA PWG 9770; decision T-595 9772).
