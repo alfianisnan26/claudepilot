@@ -53,7 +53,8 @@ export const APP_POLICIES: RoutePolicies = {
   'GET /api/me': { kind: 'self' },
   // The catch-all of the API answers 404 for a path nobody serves; the web app's shell is the same page for every path.
   'ALL /api/*': { kind: 'public', why: 'answers 404 for an unknown API path' },
-  'GET *': { kind: 'public', why: 'the web app shell and its static files' },
+  // Hono lists `app.get('*')` as `/*` (mergePath): the key is what `app.routes` says (review 10681 #6 found `GET *` matched nothing).
+  'GET /*': { kind: 'public', why: 'the web app shell and its static files' },
   // The portal's MCP endpoint (portalmcp/routes.ts, `app.all('/mcp')`): its own bearer tokens, every tool declares its access (Appendix C).
   'ALL /mcp': { kind: 'bearer', why: 'portal MCP tokens (cpat_, cpst_), checked by the MCP server; each tool declares its access' },
   // The admin page (Access): accounts and roles, the server code, sign-ups, the secret key and the database.
