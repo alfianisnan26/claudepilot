@@ -6,6 +6,7 @@ import { DEFAULT_LIMITS, PortalLimits } from '../portalmcp/limits.js';
 import { portalMcpHarness } from '../portalmcp/testkit.js';
 import { ToolRegistry } from '../portalmcp/registry.js';
 import { registerKnowledgeTools } from './portalTools.js';
+import { isKnowledgeError } from './errors.js';
 import { KnowledgeService } from './service.js';
 import { UI } from './testkit.js';
 
@@ -24,6 +25,8 @@ async function rig(o: { limits?: PortalLimits } = {}) {
   writeFileSync(join(docs, 'Readme.md'), '# Readme\nA mirror.\n');
   const svc = new KnowledgeService(h.store, { dir: join(h.dataDir, 'knowledge'), backupsDir: join(h.dataDir, 'backups'), roots: { docs: { path: docs, writable: false } } });
   registerKnowledgeTools(svc, registry);
+  // T-436: a session token is bound at mint. The tests below that are not about the bind give every workspace every vault that exists then.
+  h.module.agents.vaultsFor = () => svc.list().map((x) => x.id);
   const vault = svc.create({ name: 'Brain' });
   const v = svc.vault(vault.id);
   const session = (id: string, title = `Session ${id}`, ticket: string | null = null) =>
@@ -276,6 +279,7 @@ test('the vault’s own setting decides: off hides it, read refuses writes, writ
       r.svc.update(r.vault.id, { agents: 'write' });
       const mirror = r.svc.create({ source: { root: 'docs' } });
       assert.equal(mirror.readOnly, true);
+      r.h.module.agents.rebindVaults();
       assert.equal(error(await c.call('note_write', { vault: mirror.id, path: 'x.md', content: 'x', create: true }))?.code, 'READ_ONLY');
       assert.equal(error(await c.call('daily_append', { vault: mirror.id, text: 'x' }))?.code, 'READ_ONLY');
       assert.match((await c.call('note_read', { vault: mirror.id, path: 'Readme.md' })).structuredContent.text.untrusted_text, /A mirror/, 'but it reads');
@@ -313,6 +317,183 @@ test('which vault: omitted when there is one, named when there are several, and 
     } finally {
       await c.close();
     }
+  } finally {
+    r.done();
+  }
+});
+
+/** T-436: two vaults, one granted to each of two workspaces, and the portal's own wiring (the lookup and the rebind). */
+async function bindRig() {
+  const r = await rig();
+  r.h.module.agents.vaultsFor = (ws) => r.svc.vaultsForWorkspace(ws);
+  r.svc.onAgentWorkspacesChange = () => void r.h.module.agents.rebindVaults();
+  const alpha = r.svc.create({ name: 'Alpha' });
+  const beta = r.svc.create({ name: 'Beta' });
+  r.svc.vault(alpha.id).writeNote('A.md', 'alpha secret plan', { actor: UI, create: true });
+  r.svc.vault(beta.id).writeNote('B.md', 'beta secret plan', { actor: UI, create: true });
+  r.svc.update(alpha.id, { settings: { agentWorkspaces: ['docker/api'] } });
+  r.svc.update(beta.id, { settings: { agentWorkspaces: ['docker/web'] } });
+  return { ...r, alpha, beta };
+}
+
+test('T-436: a session token of workspace A cannot read or search a vault of B, lead or worker, and sees the same not-found as for a missing vault', async () => {
+  const r = await bindRig();
+  try {
+    // A lead and a worker of workspace A, and a worker of workspace B: the same mint.
+    const lead = await r.connect((await r.h.agentToken('docker/api', 'lead-a')).secret);
+    const worker = await r.connect((await r.h.agentToken('docker/api', 'worker-a')).secret);
+    const other = await r.connect((await r.h.agentToken('docker/web', 'worker-b')).secret);
+    try {
+      for (const c of [lead, worker]) {
+        assert.deepEqual((await c.call('vault_list')).structuredContent.vaults.map((v: { name: string }) => v.name), ['Alpha'], 'a vault no list names (Brain) and B’s are not listed');
+        assert.match((await c.call('note_read', { path: 'A.md' })).structuredContent.text.untrusted_text, /alpha secret/, 'its own vault reads');
+        const missing = error(await c.call('note_read', { vault: 'Nothing', path: 'B.md' }))!;
+        assert.equal(missing.code, 'NOT_FOUND');
+        for (const ref of [r.beta.id, 'Beta', 'beta']) {
+          const denied = error(await c.call('note_read', { vault: ref, path: 'B.md' }))!;
+          assert.deepEqual([denied.code, denied.message], [missing.code, missing.message], `note_read of B by ${ref} is the same not-found`);
+        }
+        const missingSearch = error(await c.call('note_search', { vault: 'Nothing', query: 'secret' }))!;
+        for (const ref of [r.beta.id, 'Beta']) {
+          const denied = error(await c.call('note_search', { vault: ref, query: 'secret' }))!;
+          assert.deepEqual([denied.code, denied.message], [missingSearch.code, missingSearch.message], `note_search of B by ${ref} is the same not-found`);
+        }
+        // No vault named: only A's is visible, so the search never reaches B's text.
+        const found = (await c.call('note_search', { query: 'secret' })).structuredContent;
+        assert.deepEqual(found.notes.map((n: { path: string }) => n.path), ['A.md']);
+        assert.equal(error(await c.call('graph_query', { lens: 'docs', vault: r.beta.id }))?.code, 'NOT_FOUND');
+      }
+      assert.deepEqual((await other.call('vault_list')).structuredContent.vaults.map((v: { name: string }) => v.name), ['Beta']);
+      assert.match((await other.call('note_read', { path: 'B.md' })).structuredContent.text.untrusted_text, /beta secret/);
+      assert.equal(error(await other.call('note_read', { vault: r.alpha.id, path: 'A.md' }))?.code, 'NOT_FOUND');
+    } finally {
+      await lead.close();
+      await worker.close();
+      await other.close();
+    }
+  } finally {
+    r.done();
+  }
+});
+
+test('T-436: a token with no vault list reaches no vault (a token minted before the bind, or a workspace no vault names)', async () => {
+  const r = await bindRig();
+  try {
+    const stranger = await r.h.agentToken('docker/none', 'sn');
+    const legacy = await r.h.agentToken('docker/api', 'sl');
+    r.h.store.db!.prepare('UPDATE pmcp_agent_tokens SET vaults = NULL WHERE id = ?').run(legacy.id);
+    for (const t of [stranger, legacy]) {
+      const c = await r.connect(t.secret);
+      try {
+        assert.deepEqual((await c.call('vault_list')).structuredContent.vaults, []);
+        assert.equal(error(await c.call('note_read', { vault: r.alpha.id, path: 'A.md' }))?.code, 'NOT_FOUND');
+        assert.equal(error(await c.call('note_search', { vault: 'Alpha', query: 'secret' }))?.code, 'NOT_FOUND');
+      } finally {
+        await c.close();
+      }
+    }
+    // An admin's token is not bound: it still sees every vault.
+    const admin = await r.connect(r.h.token('read').secret);
+    try {
+      assert.equal((await admin.call('vault_list')).structuredContent.vaults.length, 3);
+    } finally {
+      await admin.close();
+    }
+  } finally {
+    r.done();
+  }
+});
+
+test('T-436 S2: a rebind that throws still saves the list, warns, audits, and shuts live tokens out (never wider than the list)', async () => {
+  const r = await bindRig();
+  try {
+    r.svc.update(r.alpha.id, { settings: { agentWorkspaces: ['docker/api', 'docker/web'] } });
+    const web = await r.h.agentToken('docker/web', 'sw-fail');
+    const c = await r.connect(web.secret);
+    try {
+      assert.match((await c.call('note_read', { vault: r.alpha.id, path: 'A.md' })).structuredContent.text.untrusted_text, /alpha secret/);
+      r.svc.onAgentWorkspacesChange = () => {
+        throw new Error('db is locked');
+      };
+      r.svc.onAgentWorkspacesFailClosed = () => void r.h.module.agents.closeVaults();
+      const out = r.svc.update(r.alpha.id, { settings: { agentWorkspaces: ['docker/api'] } });
+      assert.match(out.warning ?? '', /shut out/);
+      assert.deepEqual(out.settings.agentWorkspaces, ['docker/api'], 'the list is saved');
+      assert.deepEqual(r.svc.vaultsForWorkspace('docker/web'), [r.beta.id]);
+      assert.equal(error(await c.call('note_read', { vault: r.alpha.id, path: 'A.md' }))?.code, 'NOT_FOUND', 'the token lost the removed vault');
+      const rows = r.h.store.db!.prepare("SELECT outcome, detail FROM kg_audit WHERE op = 'vault.rebind'").all() as { outcome: string; detail: string }[];
+      assert.equal(rows.length, 1);
+      assert.equal(rows[0]!.outcome, 'error');
+    } finally {
+      await c.close();
+    }
+  } finally {
+    r.done();
+  }
+});
+
+test('T-436 S2: a corrupt stored list fails closed (no vaults), and does not touch the other vaults', async () => {
+  const r = await bindRig();
+  try {
+    const set = (id: string, raw: string) => r.h.store.db!.prepare('UPDATE kg_vaults SET settings = ? WHERE id = ?').run(raw, id);
+    // Not JSON at all, a string instead of a list, an object, null, and a list of non-strings: none admits a workspace.
+    for (const raw of ['{not json', '{"agentWorkspaces":"docker/api"}', '{"agentWorkspaces":{"0":"docker/api"}}', '{"agentWorkspaces":null}', '{"agentWorkspaces":[1,null,{"a":"docker/api"}]}']) {
+      set(r.alpha.id, raw);
+      assert.deepEqual(r.svc.vaultsForWorkspace('docker/api'), [], `corrupt list ${raw} admits nobody`);
+      assert.deepEqual(r.svc.vaultsForWorkspace('docker/web'), [r.beta.id], 'the other vault keeps its own list');
+    }
+    // A list with a stray non-string keeps only its real keys.
+    set(r.alpha.id, '{"agentWorkspaces":[7,"docker/api"]}');
+    assert.deepEqual(r.svc.vaultsForWorkspace('docker/api'), [r.alpha.id]);
+  } finally {
+    r.done();
+  }
+});
+
+test('T-436 S2: the audit row names the workspaces added and removed', () => {
+  return bindRig().then((r) => {
+    try {
+      r.svc.update(r.alpha.id, { settings: { agentWorkspaces: ['docker/api', 'docker/db'] } });
+      const rows = r.h.store.db!.prepare("SELECT detail FROM kg_audit WHERE op = 'vault.update' ORDER BY id DESC LIMIT 1").all() as { detail: string }[];
+      assert.match(rows[0]!.detail, /\+docker\/db/);
+      r.svc.update(r.alpha.id, { settings: { agentWorkspaces: ['docker/db'] } });
+      const next = r.h.store.db!.prepare("SELECT detail FROM kg_audit WHERE op = 'vault.update' ORDER BY id DESC LIMIT 1").all() as { detail: string }[];
+      assert.match(next[0]!.detail, /-docker\/api/);
+      assert.doesNotMatch(next[0]!.detail, /\+/);
+    } finally {
+      r.done();
+    }
+  });
+});
+
+test('T-436 S2: a bad workspace key is refused with a reason that names the key', async () => {
+  const r = await bindRig();
+  try {
+    assert.throws(
+      () => r.svc.update(r.alpha.id, { settings: { agentWorkspaces: ['docker/api', 'bad key!'] } }),
+      (e: unknown) => isKnowledgeError(e) && e.code === 'VALIDATION_FAILED' && /"bad key!"/.test(e.message) && !/docker\/api"/.test(e.message),
+    );
+  } finally {
+    r.done();
+  }
+});
+
+test('T-436: a change of a vault’s agent workspaces rebinds the live tokens, and a bad list is refused', async () => {
+  const r = await bindRig();
+  try {
+    const web = await r.h.agentToken('docker/web', 'sw');
+    const c = await r.connect(web.secret);
+    try {
+      assert.equal(error(await c.call('note_read', { vault: r.alpha.id, path: 'A.md' }))?.code, 'NOT_FOUND');
+      r.svc.update(r.alpha.id, { settings: { agentWorkspaces: ['docker/api', 'docker/web'] } });
+      assert.match((await c.call('note_read', { vault: r.alpha.id, path: 'A.md' })).structuredContent.text.untrusted_text, /alpha secret/, 'granted, no new token needed');
+      r.svc.update(r.alpha.id, { settings: { agentWorkspaces: ['docker/api'] } });
+      assert.equal(error(await c.call('note_read', { vault: r.alpha.id, path: 'A.md' }))?.code, 'NOT_FOUND', 'revoked again');
+    } finally {
+      await c.close();
+    }
+    assert.throws(() => r.svc.update(r.alpha.id, { settings: { agentWorkspaces: ['not a workspace'] } }), /<target>\/<name>/);
+    assert.deepEqual(r.svc.vaultsForWorkspace('docker/api'), [r.alpha.id]);
   } finally {
     r.done();
   }

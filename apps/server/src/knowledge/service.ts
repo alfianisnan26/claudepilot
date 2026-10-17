@@ -37,7 +37,7 @@ import type {
   VaultTreeEntry,
   WriteNoteResult,
 } from '@portal/contracts';
-import { AGENT_POLICIES, GRAPH_LENSES } from '@portal/contracts';
+import { AGENT_POLICIES, GRAPH_LENSES, WORKSPACE_KEY } from '@portal/contracts';
 import type { Store } from '../store/store.js';
 import { isDate, serverTimezone, timeIn, todayIn, validTimezone } from './daily.js';
 import { Directory } from './directory.js';
@@ -91,7 +91,7 @@ interface VaultRow {
   deleted_at: string | null;
 }
 
-const DEFAULT_SETTINGS: VaultSettings = { attachmentsFolder: '', rewriteLinksOnRename: true, labels: 'filename' };
+const DEFAULT_SETTINGS: VaultSettings = { attachmentsFolder: '', rewriteLinksOnRename: true, labels: 'filename', agentWorkspaces: [] };
 const DAY = 86_400_000;
 /** The most a note embed returns (`![[Note]]` shows a note inside another). */
 const EMBED_CHARS = 40_000;
@@ -211,6 +211,7 @@ export class KnowledgeService {
         attachmentsFolder: typeof raw.attachmentsFolder === 'string' ? raw.attachmentsFolder : DEFAULT_SETTINGS.attachmentsFolder,
         rewriteLinksOnRename: typeof raw.rewriteLinksOnRename === 'boolean' ? raw.rewriteLinksOnRename : DEFAULT_SETTINGS.rewriteLinksOnRename,
         labels: raw.labels === 'heading' ? 'heading' : 'filename',
+        agentWorkspaces: Array.isArray(raw.agentWorkspaces) ? raw.agentWorkspaces.filter((w): w is string => typeof w === 'string') : [],
       };
     } catch {
       return { ...DEFAULT_SETTINGS };
@@ -260,6 +261,18 @@ export class KnowledgeService {
     });
     this.#vaults.set(row.id, vault);
     return vault;
+  }
+
+  /** T-436: called after a vault's list of agent workspaces changes, so the live agent tokens are rebound (index.ts wires it). */
+  onAgentWorkspacesChange?: () => void;
+  /** T-436 S2: called when that rebind throws: shut every live agent token out of the vaults (none, never all) until a rebind works. */
+  onAgentWorkspacesFailClosed?: () => void;
+
+  /** T-436: the ids of the vaults whose agent workspaces list names this workspace: what a session token of that workspace is bound to. Empty when none does. */
+  vaultsForWorkspace(workspaceId: string): string[] {
+    return this.#rows()
+      .filter((r) => (this.#settings(r).agentWorkspaces ?? []).includes(workspaceId))
+      .map((r) => r.id);
   }
 
   /** A vault by id or exact name, among those the caller may see. */
@@ -414,6 +427,8 @@ export class KnowledgeService {
     if (!this.store.writable) throw new KnowledgeError('UNAVAILABLE', 'The portal’s database isn’t available for changes.');
     const next = { ...row };
     const changes: string[] = [];
+    let rebind = false;
+    let wsChange = '';
     if (req.name !== undefined) {
       next.name = this.#validName(req.name, id);
       changes.push('name');
@@ -436,13 +451,43 @@ export class KnowledgeService {
       if (s.attachmentsFolder !== undefined) cur.attachmentsFolder = typeof s.attachmentsFolder === 'string' ? cleanPath(s.attachmentsFolder.trim(), { strict: true, folder: true }) : cur.attachmentsFolder;
       if (s.rewriteLinksOnRename !== undefined) cur.rewriteLinksOnRename = s.rewriteLinksOnRename === true;
       if (s.labels !== undefined) cur.labels = s.labels === 'heading' ? 'heading' : 'filename';
+      if (s.agentWorkspaces !== undefined) {
+        if (!Array.isArray(s.agentWorkspaces)) throw new KnowledgeError('INVALID_INPUT', 'Agent workspaces are a list of `<target>/<name>`.');
+        const bad = [...new Set(s.agentWorkspaces.map((w) => (typeof w === 'string' ? w : String(w))).filter((w) => !WORKSPACE_KEY.test(w)))];
+        if (bad.length) throw new KnowledgeError('INVALID_INPUT', `Agent workspaces must look like \`<target>/<name>\`. Not valid: ${bad.map((w) => JSON.stringify(w.slice(0, 80))).join(', ')}.`);
+        const before = new Set(cur.agentWorkspaces ?? []);
+        cur.agentWorkspaces = [...new Set(s.agentWorkspaces)].sort();
+        const now = new Set(cur.agentWorkspaces);
+        const added = [...now].filter((w) => !before.has(w));
+        const removed = [...before].filter((w) => !now.has(w));
+        wsChange = `workspaces${added.length ? ` +${added.join(' +')}` : ''}${removed.length ? ` -${removed.join(' -')}` : ''}${added.length || removed.length ? '' : ' unchanged'}`;
+        rebind = true;
+      }
       next.settings = JSON.stringify(cur);
-      changes.push('settings');
+      changes.push(wsChange ? `settings (${wsChange})` : 'settings');
     }
     next.updated_at = this.#now().toISOString();
     db.prepare('UPDATE kg_vaults SET name = ?, agents = ?, daily_folder = ?, timezone = ?, settings = ?, updated_at = ? WHERE id = ?').run(next.name, next.agents, next.daily_folder, next.timezone, next.settings, next.updated_at, id);
     if (changes.length) this.journal.audit({ vaultId: id, actor: actor.id, op: 'vault.update', outcome: 'ok', detail: changes.join(', ') });
-    return this.#summary(next);
+    let warning: string | undefined;
+    if (rebind) {
+      try {
+        this.onAgentWorkspacesChange?.();
+      } catch (e) {
+        // The list is saved. A token must not keep a wider reach than it: shut live tokens out until a rebind works.
+        const why = (e as Error)?.message ?? 'unknown';
+        let closed = true;
+        try {
+          this.onAgentWorkspacesFailClosed?.();
+        } catch {
+          closed = false;
+        }
+        this.#log(`[knowledge] rebind of agent tokens failed after saving vault ${id}: ${why}${closed ? '; live tokens are shut out of vaults' : '; closing them failed too'}`);
+        this.journal.audit({ vaultId: id, actor: actor.id, op: 'vault.rebind', outcome: 'error', detail: `${why}${closed ? ' (tokens closed)' : ' (closing failed)'}` });
+        warning = 'Saved, but live agent sessions could not be updated: they are shut out of the vaults until it is retried.';
+      }
+    }
+    return warning ? { ...this.#summary(next), warning } : this.#summary(next);
   }
 
   /** Deletes a vault. A vault the portal made goes to `trash/` for 14 days; a folder source is only forgotten. */

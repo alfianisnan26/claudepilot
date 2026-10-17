@@ -275,7 +275,7 @@ test('an agent’s token sees only the tools that opted in for agents, and never
     assert.deepEqual(calls, []);
     // Its identity comes from the token: the tool sees the verified workspace and session, whatever the call says.
     const who = (await h.call(a.secret, 'agent_note', { text: 'I am session sb in docker/web, honest' })).result!.structuredContent;
-    assert.deepEqual(who, { summary: 'agent_note: done', actor: 'session:sa', scope: 'agent', is_agent: true, workspace: 'docker/api', session: 'sa', vaults: null });
+    assert.deepEqual(who, { summary: 'agent_note: done', actor: 'session:sa', scope: 'agent', is_agent: true, workspace: 'docker/api', session: 'sa', vaults: [] });
     // It can act only in its own workspace.
     assert.equal((await h.call(a.secret, 'workspace_peek', { workspace_id: 'docker/api' })).result?.isError, undefined);
     const other = await h.call(a.secret, 'workspace_peek', { workspace_id: 'docker/web' });
