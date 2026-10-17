@@ -98,7 +98,13 @@ export function groupTag(workspaceId: string, r: Refusal): string {
   return `refusal-${createHash('sha256').update(`${workspaceId}\0${r.kind}\0${r.shape}`).digest('hex').slice(0, 8)}`;
 }
 
-const clean = (s: string) => redact(s).replace(/[`\r\n\u0000-\u001f]+/g, ' ').trim().slice(0, SAMPLE_MAX);
+/**
+ * The coordinator's watch reads the phrase `FOR THE COORDINATOR:`. A refusal's text and command are written by an agent, so the phrase inside
+ * them is broken (`FOR THE COORDINATOR (quoted)`): only the marker this module writes on a ticket's first line is real.
+ */
+export const defang = (s: string) => s.replace(/FOR[\s ​-‍]+THE[\s ​-‍]+COORDINATOR[\s​-‍]*:?/gi, 'FOR THE COORDINATOR (quoted)');
+
+const clean = (s: string) => defang(redact(s).replace(/[`\r\n\u0000-\u001f]+/g, ' ')).trim().slice(0, SAMPLE_MAX);
 
 /** Groups refusals by (workspace, rule shape), counting each. `into` merges a later batch into an earlier one. */
 export function groupRefusals(events: RefusalEventRow[], into: Map<string, RefusalGroup> = new Map()): Map<string, RefusalGroup> {
@@ -125,14 +131,16 @@ export function groupRefusals(events: RefusalEventRow[], into: Map<string, Refus
 
 /** The ticket for one group. The phrase `FOR THE COORDINATOR:` is what the coordinator's watch reads. */
 export function ticketFor(g: RefusalGroup): { summary: string; description: string; tags: string[] } {
-  const what = g.refusal.kind === 'permission' ? `${g.refusal.shape} refused` : g.refusal.kind === 'portal_forbidden' ? `${g.refusal.shape} forbidden` : 'folder untrusted';
+  const shape = defang(g.refusal.shape);
+  const proposed = defang(g.refusal.proposed);
+  const what = g.refusal.kind === 'permission' ? `${shape} refused` : g.refusal.kind === 'portal_forbidden' ? `${shape} forbidden` : 'folder untrusted';
   const description = [
-    `FOR THE COORDINATOR: ${g.refusal.proposed}`,
+    `FOR THE COORDINATOR: ${proposed}`,
     '',
     `The watcher saw agents refused ${g.count} time${g.count === 1 ? '' : 's'} (${g.refusal.kind}) in \`${g.workspaceId}\`, between ${g.firstAt} and ${g.lastAt}, in ${g.sessions.length} session${g.sessions.length === 1 ? '' : 's'}.`,
     '',
-    `- Rule shape: \`${g.refusal.shape}\``,
-    `- Proposed line: \`${g.refusal.proposed.replace(/`/g, "'")}\``,
+    `- Rule shape: \`${shape}\``,
+    `- Proposed line: \`${proposed.replace(/`/g, "'")}\``,
     ...(g.command ? [`- Latest command (redacted): \`${g.command}\``] : []),
     `- Latest refusal (redacted): ${g.sample}`,
     `- Sessions: ${g.sessions.map((s) => `\`${s}\``).join(', ')}`,
