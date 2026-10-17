@@ -4,8 +4,8 @@
 # credentials). Every check runs even when one fails, and the last line names all failures, so one quick check (about a minute) replaces the
 # two or three CI runs a first failure (Prettier stopping the tests) used to cost. The heavy checks (the whole suite, typecheck, build) stay
 # with the gate.
-#   scripts/quick-check.sh [--base <ref>] [--test <path>]... [--repo <job-run --repo value>] [--no-format] [--no-lint]
-# Run it inside the worktree, after pushing HEAD (job-run runs a PUSHED commit: git push origin HEAD:<your work branch>). The base is the
+#   scripts/quick-check.sh [--dir <worktree>] [--base <ref>] [--test <path>]... [--repo <job-run --repo value>] [--no-format] [--no-lint]
+# Run it inside the worktree (or name it with --dir: a lane's shell may be back in another folder, T-1053), after pushing HEAD (job-run runs a PUSHED commit: git push origin HEAD:<your work branch>). The base is the
 # merge base with --base, or with the first of origin/stg, origin/integration, origin/main, origin/master that exists. --test takes a test
 # file of the branch, run from its package's folder: vitest, jest, node --test (a *.test.ts with tsx), or pytest for a *.py (unittest when the
 # image has no pytest). A missing tool is SKIPPED, never passed (T-612): the last line is FAILED (naming any skips too), FAILED: nothing ran
@@ -18,10 +18,12 @@ job_run="$here/job-run.sh"
 base=""
 repo=""
 tests=()
+dir_arg=""
 fmt=1
 lint=1
 while [ $# -gt 0 ]; do
   case "$1" in
+    --dir) dir_arg="${2:?--dir needs a folder}"; shift 2 ;;
     --base) base="${2:?--base needs a ref}"; shift 2 ;;
     --test) tests+=("${2:?--test needs a file}"); shift 2 ;;
     --repo) repo="${2:?--repo needs a value}"; shift 2 ;;
@@ -32,6 +34,8 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# --dir: the worktree to check; a relative --test then reads from it too.
+if [ -n "$dir_arg" ]; then cd "$dir_arg" 2>/dev/null || { echo "quick-check: no folder $dir_arg" >&2; exit 2; }; fi
 top="$(git rev-parse --show-toplevel 2>/dev/null)" || { echo "quick-check: run it inside a git worktree" >&2; exit 2; }
 cd "$top" || exit 2
 head="$(git rev-parse HEAD)"

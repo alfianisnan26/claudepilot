@@ -146,7 +146,7 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
       model: z.string().min(1).max(80).optional().describe('Its model (sonnet, opus, haiku or a full id), set before its first instruction. Default: its role’s model, if the persona gives one. Opus or fable for a role on sonnet needs why (D-63).'),
       why: z.string().min(1).max(CHAT_SPAWN_WHY_MAX).optional().describe('D-63: why this worker needs a model above its role’s (e.g. opus for a QA or review role): a gate, release or security check, or a slice too large for sonnet. Kept on the worker; the crew scorecard counts it.'),
       effort: z.string().min(1).max(20).optional().describe('Its effort level (low, medium, high), set before its first instruction.'),
-      mode: z.enum(WORKER_MODES).optional().describe('Its permission mode: dontAsk runs only what the folder allows and refuses the rest without waiting; plan changes no file; default (as before) asks a person.'),
+      mode: z.enum(WORKER_MODES).optional().describe('Its permission mode. Default dontAsk: it runs only what the folder allows and refuses the rest at once, with the reason, so it never waits on a person (D-62). plan changes no file; default asks a person (only when one is there to answer).'),
       // T-294: the worker's own limits, never wider than yours (absent: yours).
       max_workers: z.number().int().min(0).max(CHAT_MAX_WORKERS_MAX).optional().describe('How many workers it may run at once (0: none), at most your own limit. Default: your limit.'),
       subagents: z.boolean().optional().describe('Whether it may start Claude Code sub-agents (the Agent tool). Default: as you; on only if yours are on.'),
@@ -162,6 +162,9 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
       plainText(args.prompt);
       // T-490 (D-63): its model: the one asked, else its role's (the persona's agent); opus for a role on sonnet with no why is refused here.
       const roleModel = args.role ? (chat.roleModel?.(parent.workspaceId, args.role) ?? null) : null;
+      // Owner, 2026-10-17 ("fix this agent unexpected ask human"): a worker the lead starts without naming a mode never waits on a person: it
+      // runs in dontAsk (what the folder allows runs, the rest is refused at once with the reason), D-62.
+      const mode = args.mode ?? 'dontAsk';
       const pick = spawnModel(args.role ?? null, roleModel, args.model ?? null, args.why ?? null);
       // T-294: the Claude first (an unknown name, or a Claude billed per use, is refused before anything starts).
       const on = await chat.spawnClaude(parentId, args.claude, pick.model);
@@ -179,7 +182,7 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
         {
           actor: ctx.actor,
           parentId,
-          spawn: { claude: on.claudeId, why: on.why, role: args.role ?? null, model: pick.model, effort: args.effort ?? null, mode: args.mode ?? null, modelWhy: args.why ?? null },
+          spawn: { claude: on.claudeId, why: on.why, role: args.role ?? null, model: pick.model, effort: args.effort ?? null, mode, modelWhy: args.why ?? null },
           ...(args.max_workers !== undefined || args.subagents !== undefined
             ? { limits: { ...(args.max_workers !== undefined ? { maxWorkers: args.max_workers } : {}), ...(args.subagents !== undefined ? { subagents: args.subagents } : {}) } }
             : {}),
@@ -192,7 +195,7 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
       const applied: string[] = [];
       const unconfirmed: string[] = [];
       const asks: [ChatControl['op'], ChatControl['args'], string][] = [];
-      if (args.mode) asks.push(['mode', { mode: args.mode }, `mode ${args.mode}`]);
+      asks.push(['mode', { mode }, `mode ${mode}`]);
       if (pick.model) asks.push(['model', { model: pick.model }, `model ${pick.model}${pick.fromRole ? ' (the role’s)' : ''}`]);
       if (args.effort) asks.push(['effort', { effort: args.effort }, `effort ${args.effort}`]);
       const deliver = async () => {

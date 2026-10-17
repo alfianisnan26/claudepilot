@@ -80,6 +80,8 @@ export class FakeWorkspaces {
   readonly ops: string[] = [];
   starts = 0;
   stops = 0;
+  /** The exit code of `start` (3: a process is already running, the portal attaches to it). */
+  startCode = 0;
   /** What `status` reports (per session when set there), and the exit code `send` returns. */
   alive = true;
   readonly status = new Map<string, boolean>();
@@ -165,8 +167,8 @@ export class FakeWorkspaces {
       const gate = this.startGate ?? Promise.resolve();
       void gate.then(() =>
         setTimeout(() => {
-          exec.push('4242 2026-10-10T12:00:00Z\n');
-          exec.exit(0);
+          if (this.startCode === 0) exec.push('4242 2026-10-10T12:00:00Z\n');
+          exec.exit(this.startCode);
         }, 0),
       );
     } else if (cmd === 'tail') {

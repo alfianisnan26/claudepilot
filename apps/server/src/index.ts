@@ -475,6 +475,14 @@ portalMcp.agents.workspaceRefs = workspaces.identities;
 // T-436: a session's token is bound at mint to the vaults that name its workspace; a change of a vault's list rebinds the live tokens.
 wireVaultBinding(portalMcp.agents, knowledge);
 chatController.agentAccess = portalMcp.agents;
+// Self-heal (owner, 2026-10-17): a live session calling with a replaced or expired token gets a restart at its turn's end (the same
+// conversation, MCP reconnected), so its new process starts with a good token and nobody has to run /mcp by hand.
+portalMcp.agents.onStaleToken = (sessionId, reason) => {
+  console.log(`[portal-mcp] ${sessionId.slice(0, 8)}: its process holds a ${reason} token; restarting it at the turn's end`);
+  void chatController
+    .restart(sessionId, { why: 'mcp', when: 'turn_end', actor: 'portal:token-heal', from: 'auto' })
+    .catch((e: unknown) => console.warn(`[portal-mcp] ${sessionId.slice(0, 8)}: the token heal could not restart it: ${e instanceof Error ? e.message : String(e)}`));
+};
 {
   // T-102: agent access turned on or off changes the portal tools a session's NEXT process gets: its "Tools changed" hint says so.
   const accessChanged = portalMcp.agents.onAccessChange;
