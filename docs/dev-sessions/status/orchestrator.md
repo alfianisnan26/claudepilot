@@ -5,12 +5,9 @@
 - RESPAWN rule (165db813 + D-78 4e101a59): respawn each lane BETWEEN tickets on a worktree cut from integration; scripts by abs path.
 - BATCH 29 edde2073 (T-524 S3c, T-733 S5, T-881 S1b, T-416 S2c, T-382 S1, T-781 S8c, T-675 R2c+R2d) RELEASED 2026.10.17-2: close on live checks.
 ## IN FLIGHT (6 of 6, D-71; lanes respawned per ticket, D-78; sonnet)
-- BATCH 30 premerge-b30: T-772 S2f, T-736 S3g, T-612 S1+S1b, T-868 S1-S3, T-436 S1+S2 (deploy note), T-379 S2, T-860 S2c,
-  T-382 S2-S4, lead format commits (traces T-595 9742, 9916). QC 6259948c GREEN (16 tests; jobRun.test.ts to the gate, T-1032).
-  GATE 67a6e53 RED: claudeversion.test.ts reads BASE_FLAGS as one line; MY format commit 0dd31914 split it (premerge only, not
-  integration) -> e078b2f4 one line + prettier-ignore -> 2f5214f0 QC 0201c1a2 RED format (3 tickets files from merge 60da86be)
-  -> merged integration again bc668213 -> prettier Job on the 3 files -> QC -> gate. LESSON: format commits break tests that
-  read source with a regex; fmtcheck tokens can't see it: grep readFileSync(*.ts) tests and run them in the QC.
+- BATCH 30 LANDED 08feccc6 GATE GREEN (T-731 10494; deploy is the coordinator's): T-772 S2f, T-736 S3g, T-612 S1+S1b,
+  T-868 S1-S3, T-436 S1+S2, T-379 S2, T-860 S2c, T-382 S2-S4. Close on live checks. LESSON: format commits break tests that
+  read source with a regex: grep readFileSync(*.ts) tests and run them in the QC; re-run the pack check after each merge.
 - T-938 DONE 259935e8 (Job 6bd127a4 rc0) -> blind review d9f18599 -> coordinator lands. Lane a3554d40 -> T-974 URGENT
   (rule guard git argv, ruleGuard.ts; rule class: blind review, coordinator removes deny lines after PASS).
 - URGENT T-948 port proxy (9810): S1 BE INFRA 2 2a0edbd8 OPUS (security), ticket/T-948-port-proxy; app-<ws>-<port> subdomain (9811).
@@ -25,10 +22,10 @@
 - T-425 S2b 357ff021: QA be63acc8 PWG 9970 (mutant B survives) -> test fix on next free Backend slot; same QA re-checks (T-595 10014).
 - T-436 S3 + T-772 S2g fe676258: QA PWG (T-595 10003) -> batch 31; permissions class: coordinator live check before close (D-81).
 - T-294 PWG 9858: crew_post/read + idle-child reuse not built -> slice after T-948 (T-595 9871).
-- After T-948, planned together: T-968 General Manager (D-80, plan 9969; S0 scribe + S2 MCP tools incl. T-965 first),
+- URGENT T-1043 MU2 (D-82, plan 10460): S0a routes / S0b sockets / S0c MCP, opus builder (a3554d40 slot respawned), QA +
+  blind security review each; after T-948 ships, ahead of T-968/T-965. Then: T-968 General Manager (D-80, plan 9969; S0 scribe + S2 MCP tools incl. T-965 first),
   T-971 self-healing (H1+H2 first; charter-wall conflict on healer landing rule lines FOR THE COORDINATOR 9988).
   T-409 G3 ee75effd QA PWG 9820 -> merge in b31; G3b fup after T-425 S2b (T-595 9823).
-- Next builds as slots free: T-965 S1 (Backend respawn) + S2 (FE after T-948), T-382 S5. D-79: uat only on the owner's explicit request.
 
 ## DECISIONS (binding)
 - 12:10 D-81 (owner via coordinator): risk-based review. Same builder keeps a ticket through all fixes; one QA pass, same QA re-checks;
