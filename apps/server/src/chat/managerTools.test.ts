@@ -110,6 +110,8 @@ test('approvals_list: a session whose process is not live is never listed (its r
     row('s_live');
     row('s_idle');
     live('s_live');
+    // The column defaults to 'live': a process that is gone (the session still says waiting) can not answer.
+    h.store.db!.prepare("UPDATE chat_sessions SET process = 'gone' WHERE id = ?").run('s_idle');
     request('s_live', 'q_live', 2);
     request('s_idle', 'q_idle', 3);
     const r = await h.call(h.token('read').secret, 'approvals_list', {});
