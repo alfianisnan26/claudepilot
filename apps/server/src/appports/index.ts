@@ -48,7 +48,12 @@ export interface AppPortsDeps {
   limits?: ProxyLimits;
 }
 
-/** Runs a command in the workspace and collects its output (bounded in time and size). */
+/**
+ * Runs a command in the workspace and collects its output (bounded in time and size). The runtimes report the exit after the last output
+ * (local: the child's `close`; Docker: the stream's end, then an inspect; Kubernetes: the socket's close after its frames; Connect: the result
+ * frame after the data frames), but output already on its way may still be a tick behind (a PassThrough), so the exit is acted on one turn
+ * later, as chat/files.ts does.
+ */
 async function collect(session: ExecSession, ms = 5000, max = 256 * 1024): Promise<{ code: number | null; out: string }> {
   return new Promise((resolve) => {
     const chunks: Buffer[] = [];
@@ -60,7 +65,7 @@ async function collect(session: ExecSession, ms = 5000, max = 256 * 1024): Promi
     });
     session.onExit((code) => {
       clearTimeout(timer);
-      resolve({ code, out: Buffer.concat(chunks).toString('utf8') });
+      setImmediate(() => resolve({ code, out: Buffer.concat(chunks).toString('utf8') }));
     });
   });
 }
