@@ -159,6 +159,12 @@ The tickets module owns its tables, rules, REST routes and MCP tools. It reaches
 - **FR26** CI ([Local git and CI/CD](local-git-ci.md)) attaches the state of a pipeline to a ticket: one **check** per pipeline name holding its latest state (`queued`, `running`, `passed`, `failed`, `cancelled`), the run id, the commit and a link (an http(s) address, or a portal page such as `/admin/ci/runs/<id>`). A change of state adds a timeline entry of kind `ci`, actor `ci:<run id>`; a new run of the same pipeline replaces the row and the timeline keeps the history. The ticket page shows the checks as chips that open the run.
 - **FR27** Tickets are found from a git branch (`ticket/<n>-slug` or `ticket/T-<n>-slug`) and from a commit trailer (`Ticket: T-<n>`). The service offers `find`, `checks`, `attachCheck` and `note` (a comment from the run, marked as not human); an unknown ticket is a null, never an error. Check names and notes are cleaned like any ticket text and credential-shaped values are refused.
 
+### Refusal watcher (T-971 H1)
+
+- **FR-R1** `tickets/refusals.ts` reads failed tool results that are refusals from the chat store (a permission denied by the folder's rules, a Portal MCP `FORBIDDEN`, `FOLDER_UNTRUSTED`), every 5 minutes, and groups them by (workspace, rule shape): `git push` for a Bash call, the tool's name otherwise. It **detects and files only**: it changes no rule, setting or allow list.
+- **FR-R2** One ticket per group, source `system`, tags `refusal` and `refusal-<8 hex>` (the group's key), summary and first line `FOR THE COORDINATOR:`. The body has the count, the sessions, the latest command and refusal (both through `chat/redact.ts`, cut at 300 characters) and the proposed line (`Bash(git push:*)`; none when the command cannot be read as a plain program).
+- **FR-R3** De-dupe: a group with an open ticket of its tag is not filed again (so a restart files nothing new); a group this process filed is not filed again before a restart. Rate limit: at most 5 tickets an hour; groups over it wait for the next pass.
+
 ## 9. Data model
 
 Stored in the portal's database. Tickets are not secrets: nothing here is encrypted. Text is cleaned before it is stored (§11).

@@ -262,6 +262,17 @@ export interface ChatSessionPatch {
 }
 
 /** One model's share of a finished turn, as recorded. */
+/** One failed tool result that reads as a refusal (T-971 H1), with the call it answers. */
+export interface RefusalEventRow {
+  sessionId: string;
+  seq: number;
+  at: string;
+  workspaceId: string;
+  text: string;
+  toolName: string | null;
+  command: string | null;
+}
+
 export interface UsageRow extends ModelTotals {
   requests: number;
   agents: number;
@@ -938,6 +949,35 @@ export class ChatStore {
       .prepare('SELECT seq, at, kind, uuid, parent_tool_use_id, request_id, payload FROM chat_events WHERE session_id = ? AND seq = ?')
       .get(sessionId, seq) as EventRow | undefined;
     return row ? this.#toEvent(row) : null;
+  }
+
+  /**
+   * T-971 H1: failed tool results that read as a refusal (permission denied, Portal MCP FORBIDDEN, FOLDER_UNTRUSTED), from `sinceAt` on,
+   * oldest first, each with the workspace of its session and the call it answers (tool name and command). Text as stored (redacted).
+   */
+  refusalEvents(sinceAt: string, limit: number): RefusalEventRow[] {
+    const db = this.#db();
+    const rows = db
+      .prepare(
+        `SELECT e.session_id AS sessionId, e.seq AS seq, e.at AS at, s.workspace_id AS workspaceId,
+                json_extract(e.payload, '$.text') AS text, json_extract(e.payload, '$.toolUseId') AS toolUseId
+           FROM chat_events e JOIN chat_sessions s ON s.id = e.session_id
+          WHERE e.kind = 'tool_result' AND e.at >= ? AND json_extract(e.payload, '$.isError') = 1
+            AND (json_extract(e.payload, '$.text') LIKE '%has been denied%' OR json_extract(e.payload, '$.text') LIKE '%FORBIDDEN%'
+                 OR json_extract(e.payload, '$.text') LIKE '%FOLDER_UNTRUSTED%')
+          ORDER BY e.at, e.session_id, e.seq LIMIT ?`,
+      )
+      .all(sinceAt, limit) as unknown as (Omit<RefusalEventRow, 'toolName' | 'command'> & { toolUseId: string | null })[];
+    const call = db.prepare(
+      `SELECT json_extract(payload, '$.toolName') AS toolName, json_extract(payload, '$.toolInput.command') AS command
+         FROM chat_events WHERE session_id = ? AND kind = 'tool_use' AND seq < ? AND json_extract(payload, '$.toolUseId') = ?
+        ORDER BY seq DESC LIMIT 1`,
+    );
+    return rows.map(({ toolUseId, ...r }) => {
+      const c = toolUseId ? (call.get(r.sessionId, r.seq, toolUseId) as { toolName: string | null; command: string | null } | undefined) : undefined;
+      // the workspace as its key (`<target>/<name>`), whatever form the row stores
+      return { ...r, workspaceId: this.#refs ? this.#refs.keyOf(r.workspaceId) : r.workspaceId, text: r.text ?? '', toolName: c?.toolName ?? null, command: typeof c?.command === 'string' ? c.command : null };
+    });
   }
 
   /** The running cost the session's newest `result` reported, or null before the first. */

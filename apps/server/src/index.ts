@@ -55,6 +55,7 @@ import { PortalMcpModule } from './portalmcp/module.js';
 import { registerBuiltInPortalTools } from './portalmcp/tools/index.js';
 import { internalUrlResolver } from './portalmcp/internalUrl.js';
 import { OrphanSweep } from './tickets/orphans.js';
+import { RefusalSweep, RefusalWatcher } from './tickets/refusals.js';
 import { Tickets } from './tickets/service.js';
 import { CiService } from './ci/service.js';
 import { upstreamHostsFrom } from './ci/settings.js';
@@ -506,6 +507,9 @@ tickets.start();
 // T-270: tickets of a dead session move by themselves (to the track's live successor, else back to the queue), once a minute.
 const orphanSweep = new OrphanSweep(tickets);
 orphanSweep.start();
+// T-971 H1: refusals agents ran into become one FOR THE COORDINATOR ticket per (workspace, rule shape). It files only; it changes no rule.
+const refusalSweep = new RefusalSweep(new RefusalWatcher({ source: (at, n) => chatController.refusalEvents(at, n), tickets }));
+refusalSweep.start();
 chatController.ticketExists = (id) => tickets.exists(id);
 // T-546: the crew digest's window is a setting, and each worker's line points to its latest ticket comment.
 chatController.crewSettings = (key) => settingsModule.settings.get(key);
@@ -773,6 +777,7 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const)
     chatController.stop();
     portalMcp.stop();
     orphanSweep.stop();
+    refusalSweep.stop();
     tickets.stop();
     ci.stop();
     claudeUsage.stop();
