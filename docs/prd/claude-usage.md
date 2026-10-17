@@ -907,7 +907,11 @@ summaries and experiments are kept; a frozen slice reads the same as before (tes
 
 ### 28.10 Read API and Portal MCP (authz: `lab/authz.ts`)
 
-`GET /api/lab/slices` (filters session, ticket, role, model, experiment, arm, since, limit; newest first), `GET /api/lab/experiments`,
+`GET /api/lab/slices` (filters session, ticket, role, model, experiment, arm, since, limit, cursor; newest start first) is a cursor page
+(D-58, T-382 S4): `{ items, next }`, 25 by default and 100 at most, `total` on the first page only. The slices are derived in memory, so the
+keyset (start time, then session and slice id) is applied over the derived list; the cursor is signed and bound to the caller and every filter
+value, so a bad cursor, one from another filter and one from another caller are a 400. An agent actor is held to its own session before the
+page is cut, so no row of another session is shown and no cursor names one. `GET /api/lab/experiments`,
 `GET /api/lab/summary?period=day|week&since=`. Each needs `view` on the platform area `usage` (the owner, an admin); an agent actor reads
 its own session only and no experiments; every denial is the same 404 as a route that is not there. Portal MCP: `lab_summary` (agent
 reach `session`: an agent's token reads its own session; an admin's token the portal) answers short rows by default (period, role, model,

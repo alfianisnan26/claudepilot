@@ -211,8 +211,8 @@ test('routes: declared with the seam; the owner reads; another user and an agent
     assert.equal(declaredToolPolicies().get('lab_experiment_set')?.kind, 'platform');
     assert.deepEqual(Object.keys(LAB_TOOL_POLICIES).sort(), ['crew_scorecard', 'lab_arm_draw', 'lab_experiment_set', 'lab_summary']);
 
-    const sl = (await (await owner.request('/api/lab/slices?role=implementer')).json()) as { data: { slices: LabSliceView[]; total: number } };
-    assert.deepEqual([sl.data.total, sl.data.slices[0]!.ticket], [1, 'T-287']);
+    const sl = (await (await owner.request('/api/lab/slices?role=implementer')).json()) as { data: { items: LabSliceView[]; next: string | null; total: number } };
+    assert.deepEqual([sl.data.total, sl.data.items[0]!.ticket, sl.data.next], [1, 'T-287', null]);
     assert.equal((await owner.request('/api/lab/summary?period=week')).status, 200);
     assert.equal((await owner.request('/api/lab/experiments')).status, 200);
     assert.equal((await owner.request("/api/lab/summary?period=year")).status, 422);
@@ -232,7 +232,8 @@ test('routes: declared with the seam; the owner reads; another user and an agent
     assert.equal((await agent.request('/api/lab/slices?session=someone-else')).status, 404);
     assert.equal((await agent.request('/api/lab/experiments')).status, 404);
     const other = app(h.lab, { kind: 'agent', userId: 'u_owner', tokenId: 't', sessionId: 'another', workspaceId: 'docker/api' } as Actor);
-    assert.equal(((await (await other.request('/api/lab/slices')).json()) as { data: { total: number } }).data.total, 0, 'another session sees none of these');
+    const none = ((await (await other.request('/api/lab/slices')).json()) as { data: { total: number; items: unknown[] } }).data;
+    assert.deepEqual([none.total, none.items.length], [0, 0], 'another session sees none of these');
   } finally {
     h.done();
   }

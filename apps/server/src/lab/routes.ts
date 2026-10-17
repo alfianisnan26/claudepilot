@@ -5,9 +5,10 @@
 import { AppError, success } from '@isnanme/core';
 import { Hono, type Context } from 'hono';
 import { CREW_WINDOWS, platformRef, type Actor, type CrewWindow, type LabPeriod } from '@portal/contracts';
-import { actorOf, can } from '../authz/seam.js';
+import { actorOf, actorString, can } from '../authz/seam.js';
 import { declareLabPolicies } from './authz.js';
 import type { Lab, ViewFilter } from './index.js';
+import { slicesPage } from './slicesPage.js';
 
 declareLabPolicies();
 
@@ -40,7 +41,7 @@ const param = (c: Context, name: string): string | undefined => {
 export function createLabRoutes(lab: Lab): Hono {
   const r = new Hono();
 
-  // GET /api/lab/slices?session=&ticket=&role=&model=&experiment=&arm=&since=&limit=: newest first, at most `limit` (default 100, max 500).
+  // GET /api/lab/slices?session=&ticket=&role=&model=&experiment=&arm=&since=&limit=&cursor=: newest first, one page.
   r.get('/slices', (c) => {
     const who = labReader(actorOf(c));
     const asked = param(c, 'session');
@@ -57,9 +58,9 @@ export function createLabRoutes(lab: Lab): Hono {
       ...(arm ? { arm } : {}),
       ...(since !== undefined ? { fromMs: since } : {}),
     };
-    const limit = Math.min(500, Math.max(1, Number(c.req.query('limit')) || 100));
-    const all = lab.views(filter);
-    return c.json(success({ slices: all.slice(0, limit), total: all.length }));
+    // D-58: one page, `{ items, next }` (25 by default, 100 at most; `total` on the first page). The cursor is bound to the caller and every filter.
+    const scope = `lab.slices|${JSON.stringify([actorString(actorOf(c)), session ?? '', ticket ?? '', role ?? '', model ?? '', experiment ?? '', arm ?? '', since ?? ''])}`;
+    return c.json(success(slicesPage(lab.views(filter), { scope, cursor: c.req.query('cursor') || undefined, limit: c.req.query('limit') })));
   });
 
   // GET /api/lab/experiments: every experiment with its arms' counts and the primary with its interval. Not for an agent's own view.
