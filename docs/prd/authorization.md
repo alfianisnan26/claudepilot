@@ -859,6 +859,25 @@ The `/:ref…` routes (a stable id `ws_…`) run `workspaceRefGuard(verb)` befor
 
 Not compared by the test, and not built: `+reauth` on remove (T-540); `consent: credential` on `PUT …/account` and `PUT …/pools/:type`; the per-person `filter` of terminals and Claudes in `GET …/terminals` and `GET …/claudes` (there are no per-person terminals or Claudes yet); the team clause of `POST /api/workspaces` (no teams yet). The `/api/pools…`, `/api/repos…`, `/api/accounts…` and `/api/endpoints…` routes are not declared yet (T-539).
 
+### B.3 The route guard: every route, one middleware (T-1043 S0a, D-82)
+
+FR16 is built as `authz/routeGuard.ts`, mounted first thing in app.ts (`app.use('*')`, before every sub-app's session guard). For each request it takes the endpoints Hono matched (`matchedRoutes`, middleware left out), keys them `METHOD /full/path` and looks each up in the declared table.
+
+- **Open doors.** A `public`, `bearer` or `handler` route goes on. These are sign-in, the bearer `/mcp`, signed webhooks under `/hooks`, and the agents' `/connect/` routes.
+- **Nobody signed in: 401.**
+- **The founding owner goes on untouched.** This also covers the server code and an admin account, which act as the owner (D-82). Today's behaviour stays: each route's own guards still run.
+- **Anyone else** (a member account, or an actor already set on the request):
+  - **no declaration:** `403` "This route has no access rule yet.", with `details.route`. The PRD's `NO_POLICY` is this `FORBIDDEN`.
+  - **`signed-in` and `self`:** go on.
+  - **`platform`:** asks `can()` on the area. A refusal is `403` "Only an admin can do this.".
+  - **`objects`:** asks `can()` for every check, in order. A path, a query or a JSON body read from a clone, as FR17 says. A refusal is the seam's answer, so an object the actor may not see is the same `404` as a missing one.
+  - **A `/:ref` route given something that is not a stable id** hands on to the next matched route, as its handler does.
+- **`reauth` and `audit` stay the handlers'.**
+
+**Interim declarations.** A route whose module is not actor-aware yet (its handlers do not take the actor and filter) is declared `platform`: `view` for a GET, `manage` otherwise, with the closest area. A member is refused there until the module's own slice declares its Appendix A row and its handlers take the actor. These rows live in `authz/appPolicies.ts` with app.ts's own routes. The session guard still refuses a member after the route guard, until MU2 S1b opens routes to members.
+
+`authz/routeGuard.test.ts` builds the real app with every module mounted and walks `app.routes`. It fails on any route with no declaration. It also checks the guard on its own: a member refused an undeclared route, an admin area and an object it does not own; let through `signed-in`, `self`, `public` and an object it owns; the owner unchanged; and 401 for nobody.
+
 ## Appendix C. Sockets and other doors outside the route table
 
 Declared in the same table under `ALL <path>` (the chat socket already is: `chat/authz.ts` declares `ALL /api/chat/live`), because an upgrade request is not in `app.routes`. The enumeration test also checks that every upgrade handler path found by `server.on('upgrade')` has a declaration.
