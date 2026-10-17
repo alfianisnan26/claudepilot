@@ -8,16 +8,20 @@
 - BATCH 30 LANDED 08feccc6 GATE GREEN (T-731 10494; deploy is the coordinator's): T-772 S2f, T-736 S3g, T-612 S1+S1b,
   T-868 S1-S3, T-436 S1+S2, T-379 S2, T-860 S2c, T-382 S2-S4. Close on live checks. LESSON: format commits break tests that
   read source with a regex: grep readFileSync(*.ts) tests and run them in the QC; re-run the pack check after each merge.
-- BATCH 31 premerge/b31 e33f91d0: T-436 S3+T-772 S2g fe676258, T-409 G3 ee75effd, T-382 S5 472e9015 + lead traces (T-595
-  10495: conflicts to ticket side; outline-hidden in LoginPage/AccountsSection; prettier 6 files). QC running -> gate -> land. S6 joins later.
+- BATCH 31 premerge/b31 dfb58bdd: T-436 S3+T-772 S2g fe676258, T-409 G3 ee75effd, T-382 S5 472e9015 + lead traces (T-595
+  10495/10520: conflicts to ticket side; outline-hidden x3; supervisor.mjs left unformatted). GATE 4d25dc2 RED typecheck (premerge
+  only): vaultBinding.test.ts:27 TS2349 (T-436 S3 assert.equal narrows to never) -> 1-line fix to lane 3753d3c2 (send when the
+  portal is back; down since ~17:30) -> merge -> re-gate. LESSON: QA PASS without typecheck = "not verified: typecheck".
 - T-938 259935e8 blind review PWC 10348 -> doc Major back to a3554d40 (after T-974) -> coordinator lands (QA account, T-938 10430).
 - T-974 URGENT rule guard git argv: a3554d40, d8432f39 proof Job running; then blind review (rule class), coordinator removes deny lines.
-- URGENT T-948 port proxy: FIX2 ac36971c (Job 38bebb4d rc0, 43 tests, 5/5 mutants; 10500) -> RECHECK c691df71 (opus) Job.
+- URGENT T-948 port proxy: FIX2 ac36971c RECHECK PWG 10516 (G13 onRevoked->sweep untested) -> FIX3 by 2a0edbd8 (10526) -> c691df71.
   Then premerge t948 (b2d62bfd + ac36971c + integration), QC appports+browser tests, gate, land, scratch-portal visual look; deploy
   own apps only until T-976. T-976 lands AFTER T-948 and switches PORTAL_COOKIES to SESSION_COOKIE/LEGACY (2a0edbd8).
-- T-976 __Host- cookie FIX 87d4a74f (Job 7e5debc6 rc0; T-1042 drops old name >= 10-31) -> QA be63acc8 Job; then blind review.
+- T-976 __Host- cookie 87d4a74f: QA PWG cabfb3d2 (10530), blind review PWC 0 blockers (10534): login clears old cookie + PORTAL_COOKIES
+  switch at the rebase after T-948 (2a0edbd8); T-1042 >= 10-31 + socket stale-cookie test (comment refused; noted on T-976).
 - T-382 S6 3753d3c2 70eac176 proof running (+ seesEverything fix) -> QA d9f18599 Job -> b31/b32. T-382 unassigned (10376).
-- URGENT T-1043 MU2 S0a (D-82, plan 10460 + 10519): 2a0edbd8 opus on ticket/T-1043-s0a (worktree t1043-s0a, 423d269f). S0b sockets,
+- URGENT T-1043 MU2 S0a (D-82, plan 10460 + 10519): 2a0edbd8 can't reach worktree t1043-s0a (423d269f) -> after FIX3 end it and
+  spawn an opus lane there (D-71 slot). S0b sockets,
   S0c MCP next; QA + blind security review each. Ahead of T-968/T-965.
 - T-425 S2b 357ff021: mutant-B test fix on next free builder; be63acc8 re-checks. T-294 crew_post/read slice after T-948.
 - Then: T-968 General Manager (D-80, 9969; S0 scribe, S2 MCP incl. T-965), T-971 H1+H2 (healer only detects/tickets; 9988), T-565, T-975.
