@@ -32,9 +32,12 @@
 - 23:10 returns: T-425 S2b merge e2e4a2b6 (bvl4mr4k1 rc0 on 571f0fba, 851/851) -> QA delta c691df71. T-971 H2 S1 QA PWG 10847
   (4 gaps) -> fix 3753d3c2. T-974 FIX2 42b95954 (b01b54cd rc0) -> blind d9f18599. T-969 8144c5ce (c2159b27 rc0) -> QA c691df71
   -> blind d9f18599. T-975 FIX 6650e8ff Job bdwtltcfm rc1 (ci/links.test cancel-running) -> re-run by7elpu9y; lead: likely the CAS, not flake.
+- 23:05: T-975 FIX 6650e8ff e7750582 rc0 (3x45/45; the bdwtltcfm links.test failure unexplained, builder owns it if seen
+  again) -> QA delta c691df71 -> blind. T-971 H1 FIX fade65c2 (a0d0b91a rc0) -> delta d9f18599. New T-1065 (redact.ts
+  misses short passwords/URL userinfo) -> 76845676 while its Job queues. T-961 (deploy outage, PriorityClass) -> a3554d40 (10887).
 - Lanes: c691df71 QA (T-425 delta > T-969 > T-975 delta > S0a+S0b > S2b > T-565 > T-976 > H2 delta); d9f18599 blind
-  (H2 S1 > T-974 FIX2 > T-969 > T-971 H1 delta > PRD > S2b > S0b); a3554d40 T-975 FIX > T-971 H1 fix; 76845676 T-1043
-  S0a+S0b (Job queued); 2a0edbd8 T-976 rebase > T-565 fix > T-968 PRD > S2b; 3753d3c2 T-971 H2 S1 fix > batch 33.
+  (H2 S1 > T-974 FIX2 > T-971 H1 delta > T-969 > T-975 > PRD > S2b > S0b); a3554d40 T-961; 76845676 T-1043 S0a+S0b
+  (Job queued) + T-1065; 2a0edbd8 T-976 rebase > T-565 fix > T-968 PRD > S2b; 3753d3c2 T-971 H2 S1 fix > batch 33.
 
 ## DECISIONS (binding)
 - D-81 risk-based review: same builder through all fixes; one QA, the same QA re-checks; blind review only for security, auth,
