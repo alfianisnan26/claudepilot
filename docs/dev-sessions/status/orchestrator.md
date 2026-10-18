@@ -23,7 +23,7 @@
 - T-1043 S0a+S0b (10790) head f5ae317e, 76845676: QA PWG #10965 (M14a/b, M16, G1, G2 killed). Gap: two cookie readers vs
   T-976 -> after T-976 QA the lead pushes a merge with markers, 76845676 makes ONE reader. Blind d9f18599 next. Denial = 404.
 - T-976 a2da98cb QA PWG #11040 (C6 browser socket survived) -> gap fix d68ab35c (2a0edbd8: socket.test.ts handshakes,
-  decode-fallback pin; index.ts wiring left as written gap), Job bplwz9ct5 -> delta c691df71 + blind d9f18599 on d68ab35c.
+  decode-fallback pin; index.ts wiring left as written gap), Job bplwz9ct5 rc0 (C6, D1 killed) -> delta c691df71 + blind d9f18599 on d68ab35c.
   T-1042 audit only (2a0edbd8), build after T-976 is live.
 - T-968 S2b be6b3adc FINAL: Job 74b74e97 rc0, 18 mutants applied and killed -> QA c691df71 + blind d9f18599. PRD fix 2a0edbd8.
 - T-565 FIX 103c4d80 QA PWG (T-595 10968) -> gap 1 e309aacc Job rc1 (TS2353 js-yaml 5 option name) -> 9d1d1203, Job b3pik9awy; N11/N14 dropped
