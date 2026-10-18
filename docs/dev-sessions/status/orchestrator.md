@@ -10,8 +10,9 @@
 - DEPLOY #365 (rmvcyeslw4a7ecb, 62a44a10, prod, actor "ui") ran with gate=false (the tree was gated by gate-job, 10823):
   reported on T-731 11343; the coordinator opened incident T-1082. Its post-mortem is the coordinator's.
 - BATCH 34: premerge/b34 037f7e4b (pushed) = integration 5e84f4d7 + T-971 H1 (+fmt f6983797) + T-976 (+fmt 99f8bb69) + T-425
-  2b57efce + T-565 55f5aa8e; app.ts conflict (T-976 setSessionCookie vs T-968 healManager): kept both; pack fresh. QC#1 expired in queue (3600 s, ran nothing); QC#2 b5hktzwx1 + gate bt2ojpq8p (Pending: memory). Then add T-425 2b57efce
-  (rc0), T-969 after V5 -> merge integration -> context-pack check -> QC -> gate -> two-step landing -> T-731.
+  2b57efce + T-565 55f5aa8e; app.ts conflict (T-976 setSessionCookie vs T-968 healManager): kept both; pack fresh. QC#1 expired in queue
+  (3600 s, ran nothing); QC#2 + gate#1 killed by the 05:3x integrity recovery -> QC#3 bau88mbxq + gate#2 bg1xhlemz on 037f7e4b running.
+  Then two-step landing -> T-731. T-969 joins the next batch after V5. Rule until the queue drains: ONE Job per lane.
 - T-968 (coordinator builds S1 runtime/S3/S4/S6; this crew lands S1-token + S2 only). S1-token 5ccfb52c rc0, QA PWG #11312
   -> fix a8fca5a3 (2a0edbd8, Job b1gahci5o) -> re-check c691df71; blind PWG 11365 (K8 -> test ccef3ef4, own Job;
   K12 = a8fca5a3). S2 e605c835 Job bno2lrpwq. S2b blind PWG 11302 -> last_error
@@ -26,7 +27,7 @@
   T-976 fmt re-run baov0fphs (patch lost to $OUT), T-968 a8fca5a3 b1gahci5o, T-565 bzq96a9ey on 59451a5f running.
 - T-1033 53527bfa QA mutants #11449: D1, D2 SURVIVED -> same builder 2a0edbd8 (tests + default 3600 s, decision #11467).
 - T-119 S1a 11e16382, S2a bd1a5c90 (Jobs queued) -> S1b API (blind: authz route), 3753d3c2, sonnet. S1b-2 = option A. T-980 dbb1bd76 rc0 8/8, 4 killed -> QA.
-- T-968 S1 delta a8fca5a3 QA PASS #11509 (K7, W1 killed) -> blind delta after K8 Job. T-523 + T-402 audits -> a3554d40.
+- T-968 S1 delta a8fca5a3 QA PASS #11509; K8 ccef3ef4 rc0 7/7 (#11646); S1 fmt 79c2d25c check bsrlhcxps; S2 needs fmt (#11732). T-523 + T-402 audits -> a3554d40.
 - 76845676: S0b x T-976 aaa9169f Job bk7jaaj34 -> S0c-on-s0b 78b0e668 (6 mutants) -> T-1065 641b45cf + T-1084 229fc44f
   (no issued-token match: no incident) one Job -> blind d9f18599.
 - a3554d40: H1 fmt Job b9xx1x0um, T-980 bpc5x0blu, T-961 7684391b b44zf2p1l (QA PWG #11433); worked: T-1076 (flaky
@@ -40,7 +41,7 @@
 - T-1065 3258ec46 QA PWG #11410 (prose colon over-cut, PRD line) + T-1084 (token-shaped literal valueRedact.test.ts:9)
   -> 76845676 -> blind d9f18599. T-980 fix dbb1bd76 (bpc5x0blu) -> QA c691df71.
 - T-356 S1 e03d7f21 QA PWG #11120 (N7 `/` guard authz.ts:171 survived) -> N7 test 3753d3c2 (11380) -> delta -> blind; lead reads authz.
-- T-1043 S0b blind PWG #11081 (D5, D7): Job 19e76665 Pending OOM, re-queued besujkveh. 3753d3c2 interrupted 05:27, resumed.
+- T-1043 S0b blind PWG #11081 (D5, D7): Job 19e76665 Pending OOM, re-queued besujkveh. Recovery: tickets re-claimed, all 6 lanes resumed.
 
 ## DECISIONS (binding)
 - D-81 risk-based review: same builder through all fixes; one QA, the same QA re-checks; blind review only for security, auth,
