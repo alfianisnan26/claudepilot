@@ -150,6 +150,7 @@ import {
   type ChatSessionPatch,
   type ChatSessionRow,
   type InputState,
+  type RefusalEventRow,
 } from './store.js';
 import { BtwEngine, readBtwConfig, type BtwHost } from './btw.js';
 import { BtwStore } from './btwStore.js';
@@ -1441,6 +1442,11 @@ export class ChatController {
   }
 
   /* ---------- Reads (delegated to the store) ---------- */
+
+  /** T-971 H1: refusals in stored tool results from `sinceAt` on (the refusal watcher's source). */
+  refusalEvents(sinceAt: string, limit: number): RefusalEventRow[] {
+    return this.#chat.refusalEvents(sinceAt, limit);
+  }
 
   /** Sessions, newest activity first; optionally one workspace's, one ticket's, or one parent's children. */
   list(filter: { workspaceId?: string; ticketId?: string; parentId?: string } = {}): ChatSession[] {
