@@ -16,7 +16,7 @@
   untrusted fix e605c835 (Job after a8fca5a3) -> delta c691df71 + blind d9f18599. Integration holds c6c4a589 (FAILED security
   review; fixes on coord/T-968-gm): no deploy until T-731 says so.
 - T-1079 (owner: Konfersi stg release docs per module into vault 98af7d16def1, reuse releaseReport.ts) 2a0edbd8, S1+S2 16fee55e.
-- 2a0edbd8 Jobs: T-921 db1d8d19 rc0 -> QA c691df71; T-257 d34f47b2 rc1 (test bug) -> fix e22ae23d, Job after T-968's two;
+- 2a0edbd8 Jobs: T-921 db1d8d19 rc0, QA PWG #11350 (J1, J4 survive) -> tests (11368) -> delta c691df71 -> blind; T-257 d34f47b2 rc1 (test bug) -> fix e22ae23d, Job after T-968's two;
   T-976 fmt re-run baov0fphs (patch lost to $OUT), T-968 a8fca5a3 b1gahci5o, T-565 bzq96a9ey on 59451a5f running.
 - 3753d3c2: T-971 H2 head bbfd0ae3 Job b2rxfgopr (21 mutants); T-634 test 0f4ffde6 (Job after b2rxfgopr); T-251 QA PWG
   #11340 (citation only) -> reassign to me -> close.
@@ -27,7 +27,7 @@
 - d9f18599 (QA/blind): T-968 S2b H4/H5/H12 (bq9f0174k), S1-token blind; then T-969 V5, T-975, T-970 QA.
 - T-975 FIX2 tests (a3554d40) -> delta c691df71 -> blind (mig 788). T-970 5a0fa697 rc0 -> QA; image build FOR THE COORDINATOR.
 - T-565 gap 1 9d1d1203 rc0 -> delta c691df71 -> blind (infra). T-356 S1 64b4effa (3753d3c2) -> QA + blind; lead reads authz.
-- T-921 515bb0c1 rc0 -> QA c691df71 -> blind. T-1043 S0b blind PWG #11081 (D5, D7) with 76845676 PRIORITY.
+- 04:38 a3554d40 and c691df71 processes died, then resumed; c691df71's Jobs were still alive. T-1043 S0b blind PWG #11081 (D5, D7) with 76845676 PRIORITY.
 
 ## DECISIONS (binding)
 - D-81 risk-based review: same builder through all fixes; one QA, the same QA re-checks; blind review only for security, auth,
