@@ -589,3 +589,26 @@ test('T-1069: a lead claims a delivered ticket nobody holds by naming it (status
     h.done();
   }
 });
+
+test('T-634: a lead claims an unassigned in_review ticket by id and then closes it; a session that does not hold it still cannot', async () => {
+  // The original report: ticket_close answered FORBIDDEN on delivered tickets nobody held, so QA-passed work sat in review for days.
+  const h = await ticketsHarness();
+  try {
+    const lead = h.sessions.add({ workspaceId: 'docker/api', id: 'lead' });
+    const peer = h.sessions.add({ workspaceId: 'docker/api', id: 'peer' });
+    const me = agent('docker/api', lead.id);
+    const other = agent('docker/api', peer.id);
+    const t = h.tickets.create(UI, { summary: 'delivered work', workspaceId: 'docker/api' });
+    h.tickets.update(UI, t.id, { status: 'in_review' });
+    assert.equal(code(() => h.tickets.close(me, t.id, { summary: 'QA passed' })), 'FORBIDDEN', 'before the claim: not assigned to the lead');
+    h.tickets.claimNext(me, { id: t.id });
+    assert.equal(code(() => h.tickets.close(other, t.id, { summary: 'not mine' })), 'FORBIDDEN', 'another live session, not the holder');
+    assert.equal(h.tickets.get(UI, t.id).ticket.status, 'in_review', 'the refused close changed nothing');
+    const closed = h.tickets.close(me, t.id, { summary: 'QA passed, merged' });
+    assert.equal(closed.status, 'done');
+    assert.equal(closed.closingSummary, 'QA passed, merged');
+    assert.equal(h.tickets.get(UI, t.id).ticket.status, 'done');
+  } finally {
+    h.done();
+  }
+});

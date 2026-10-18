@@ -512,3 +512,24 @@ test('attachments over MCP: an agent attaches text and binary, sees them in tick
     r.done();
   }
 });
+
+test('T-634: over MCP a lead claims an unassigned in_review ticket by id and closes it; before the claim and for another session the close is FORBIDDEN', async () => {
+  const r = await rig();
+  try {
+    const lead = await r.agent('docker/api', 'lead');
+    const peer = await r.agent('docker/api', 'peer');
+    const t = r.tickets.create(UI, { summary: 'delivered work', workspaceId: 'docker/api' });
+    r.tickets.update(UI, t.id, { status: 'in_review' });
+    const code = async (who: { secret: string }, tool: string, args: Record<string, unknown>) => (await r.h.call(who.secret, tool, args)).result?.structuredContent?.error?.code;
+    assert.equal(await code(lead, 'ticket_close', { id: t.id, summary: 'QA passed' }), 'FORBIDDEN', 'before the claim');
+    const claimed = r.out(await r.h.call(lead.secret, 'ticket_claim_next', { id: t.id }));
+    assert.equal(claimed.ticket.id, t.id);
+    assert.equal(r.tickets.get(UI, t.id).ticket.status, 'in_review', 'a claim keeps the status');
+    assert.equal(await code(peer, 'ticket_close', { id: t.id, summary: 'not mine' }), 'FORBIDDEN', 'another live session');
+    const closed = r.out(await r.h.call(lead.secret, 'ticket_close', { id: t.id, summary: 'QA passed, merged' }));
+    assert.equal(closed.ticket.status, 'done');
+    assert.equal(r.tickets.get(UI, t.id).ticket.status, 'done');
+  } finally {
+    r.done();
+  }
+});
