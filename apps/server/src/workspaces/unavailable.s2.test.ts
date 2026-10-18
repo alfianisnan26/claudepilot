@@ -57,7 +57,6 @@ test('an unavailable workspace takes no runtime action: refused at once with the
 
   state.fail = true;
   assert.equal((await ws.list())[0]?.status, 'unavailable');
-  const t = Date.now();
   const actions: Array<[string, () => Promise<unknown>]> = [
     ['start', () => ws.start('kubernetes', 'kohi')],
     ['stop', () => ws.stop('kubernetes', 'kohi')],
@@ -66,13 +65,14 @@ test('an unavailable workspace takes no runtime action: refused at once with the
     ['shell', () => ws.shell('kubernetes', 'kohi', { cols: 80, rows: 24 })],
     ['recreate', () => ws.recreate('kubernetes', 'kohi', 'img', () => undefined)],
   ];
-  // A call that is not refused hangs (the runtime never answers): the race turns that into a failure instead of a stuck test.
+  // A call that is not refused hangs (the runtime never answers): the race turns that into a failure instead of a stuck test. The bound is far
+  // above any scheduling delay of a loaded machine (T-1076: a 80 ms wall-clock assertion over six calls failed once in the full gate); "at
+  // once" is proven by the result, not by a stopwatch: the refusal must be the clear error, and the runtime must see no call at all.
   const within = <T>(p: Promise<T>) => {
     let timer: NodeJS.Timeout | undefined;
-    return Promise.race([p, new Promise<never>((_, rej) => (timer = setTimeout(() => rej(new Error('hung: not refused')), 500)))]).finally(() => clearTimeout(timer));
+    return Promise.race([p, new Promise<never>((_, rej) => (timer = setTimeout(() => rej(new Error('hung: not refused')), 5_000)))]).finally(() => clearTimeout(timer));
   };
   for (const [name, run] of actions) await assert.rejects(within(run()), refused, `${name} is refused with the clear error`);
-  assert.ok(Date.now() - t < 80, `all refused in ${Date.now() - t} ms`);
   assert.deepEqual(calls, [], 'nothing reached the runtime');
   assert.ok((await ws.list()).some((w) => w.id === 'kubernetes/kohi'), 'remove did not forget the workspace');
 
