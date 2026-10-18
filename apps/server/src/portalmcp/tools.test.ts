@@ -928,7 +928,11 @@ test('T-1043 S0c: a member reaches only its own workspaces and sessions; a refus
     assert.equal(actor.kind === 'token' && actor.userId, MEMBER, 'the principal’s user is the actor');
     assert.equal(resolveWorkspaceFor(actor, 'view', world.workspaces as never, 'api').id, 'k8s/api', 'docker/api is not its: “api” is its one');
     assert.throws(() => resolveWorkspaceFor(actor, 'view', world.workspaces as never, 'web'), /No workspace “web”/);
-    assert.throws(() => resolveWorkspaceFor(ownerActor(), 'view', world.workspaces as never, 'api'), /workspaces are named “api”/, 'the owner still sees both');
+    // With the resolvers decided by owner, the founding owner's “api” is its own docker/api; with no workspace resolver (production until
+    // one is registered) it holds every workspace, so it still sees both and gets AMBIGUOUS, as before S0c.
+    assert.equal(resolveWorkspaceFor(ownerActor(), 'view', world.workspaces as never, 'api').id, 'docker/api', 'by owner: the founding owner’s own');
+    clearResolvers();
+    assert.throws(() => resolveWorkspaceFor(ownerActor(), 'view', world.workspaces as never, 'api'), /workspaces are named “api”/, 'with no resolver the owner still sees both');
   } finally {
     world.sessions.splice(world.sessions.length - extra.length, extra.length);
     clearResolvers();
