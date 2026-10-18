@@ -241,6 +241,50 @@ test('T-975 race: a run cancelled while its start is on the way ends cancelled, 
   assert.equal(ra.runnerWorkspaceId, null);
 });
 
+test('T-975 race, fallback: a run cancelled while its start in the workspace is on the way ends cancelled, and the workspace is told to stop it', async () => {
+  // `fallback: workspace` (what check.yml uses): no runner has the labels, so the run is started in the repository's own workspace (#startHere).
+  const s = await setup(FALLBACK);
+  const hold = s.host.holdStartOn(SRC);
+  const a = await s.svc.startRun({ repoId: s.repo.id, pipeline: 'ci', ref: 'main' });
+  await s.svc.poll(SRC);
+  await untilTrue('the fallback start to reach the workspace', () => hold.reached);
+  const before = s.host.calls.filter((c) => c.ws === SRC && c.args[0] === 'cancel' && c.args[1] === a.id).length;
+  await s.svc.cancel(a.id);
+  assert.equal((await s.svc.show(a.id)).status, 'cancelled');
+  hold.open();
+  await untilTrue('the workspace to be told to cancel', () => s.host.calls.filter((c) => c.ws === SRC && c.args[0] === 'cancel' && c.args[1] === a.id).length > before);
+  await sleep(200);
+  const ra = await s.svc.show(a.id);
+  assert.equal(ra.status, 'cancelled', 'the late start did not turn it back into running');
+  assert.ok(!ra.diagnostics.some((x) => x.code === 'runner-fallback'), 'and no "ran in the workspace" note was written for a run that did not');
+});
+
+test('T-975 race: a run cancelled while its third start try fails stays cancelled (retry and finishFailed compare the status)', async () => {
+  const s = await setup();
+  await s.svc.upsertRunner(RUNNER, { labels: ['big', 'python'] }, PERSON);
+  const mirrors = () => s.host.calls.filter((c) => c.ws === RUNNER && c.args[0] === 'mirror').length;
+  s.host.broken.add(RUNNER);
+  const run = await s.svc.startRun({ repoId: s.repo.id, pipeline: 'ci', ref: 'main' });
+  for (let n = 1; n <= 2; n++) {
+    await s.svc.poll(SRC);
+    await untilTrue(`hand-off try ${n}`, () => mirrors() === n);
+    await sleep(150); // its failure is written (attempts n)
+  }
+  assert.equal((await s.svc.show(run.id)).status, 'queued', 'two failures: still waiting');
+  // The third try gets as far as its start, is cancelled there, and then fails: it would be the third failure.
+  s.host.broken.delete(RUNNER);
+  const hold = s.host.holdStartOn(RUNNER);
+  await s.svc.poll(SRC);
+  await untilTrue('the third start to reach the runner', () => hold.reached);
+  await s.svc.cancel(run.id);
+  s.host.broken.add(RUNNER);
+  hold.open();
+  await sleep(500);
+  const done = await s.svc.show(run.id);
+  assert.equal(done.status, 'cancelled', 'a late failure does not rewrite a cancelled run to failed');
+  assert.ok(!done.diagnostics.some((x) => x.code === 'runner_error'), 'and writes no failure note on it');
+});
+
 test('runner settings: labels are checked, and a runner that is gone is refused', async () => {
   const s = await setup();
   assert.equal(await codeOf(() => s.svc.upsertRunner(RUNNER, { labels: [] }, PERSON)), 'VALIDATION_FAILED');

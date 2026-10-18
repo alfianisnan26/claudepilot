@@ -1335,13 +1335,15 @@ export class CiService {
   #retry(run: RunRow, why: string): void {
     const attempts = run.attempts + 1;
     if (attempts >= 3) return this.#finishFailed(run, 'runner_error', why);
-    this.#cs.updateRun(run.id, { attempts });
+    // Compare-and-set like the start path (T-975): a run cancelled while its start was on the way keeps its cancel.
+    if (!this.#cs.updateRunIf(run.id, 'queued', { attempts })) return;
     console.error(`[ci] ${run.id}: could not start (${attempts}/3): ${why}`);
   }
 
   #finishFailed(run: RunRow, reason: string, note: string): void {
     const now = new Date().toISOString();
-    this.#cs.updateRun(run.id, {
+    // Compare-and-set like the start path (T-975): only a run still queued fails here; a cancelled one stays cancelled.
+    const failed = this.#cs.updateRunIf(run.id, 'queued', {
       status: 'failed',
       reason,
       finished_at: now,
@@ -1349,6 +1351,7 @@ export class CiService {
       archived: 1,
       diagnostics: JSON.stringify([{ file: '', line: 0, column: 0, path: '', severity: 'error', code: reason, message: note }]),
     });
+    if (!failed) return;
     this.#settleDeployments(run.id, null);
     this.#changed();
     this.#moved(run.id, run.status);

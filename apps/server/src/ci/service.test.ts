@@ -255,6 +255,9 @@ test('concurrency.cancel-queued: three queued behind a running run leave only th
     assert.ok([`for #${q2.number}`, `for #${q3.number}`].includes(by(q1.id).cancelNote ?? ''), `q1 note: ${by(q1.id).cancelNote}`);
     assert.deepEqual([by(q2.id).cancelledBy, by(q2.id).cancelNote], ['pipeline', `for #${q3.number}`]);
     assert.equal(by(running.id).status, 'running', 'the running one is kept (not cancel-in-progress)');
+    // QA Q1: left alone means no cancel mark and nothing sent to the workspace for it, not only a status that reads running.
+    assert.deepEqual([by(running.id).cancelledBy, by(running.id).cancelNote, by(running.id).reason], [null, null, null], 'no cancel recorded on the running run');
+    assert.deepEqual(h.host.calls.filter((c) => c[0] === 'cancel' && c[1] === running.id), [], 'no cancel was sent to the workspace for the running run');
     assert.equal(by(q3.id).status, 'queued', 'the newest queued run waits for the group');
     await h.svc.cancel(running.id);
     await h.svc.cancel(q3.id);
@@ -271,9 +274,13 @@ test('without cancel-queued, queued runs of a group are not superseded (T-975)',
     await h.until('the first to start', () => h.svc.list().items.find((r) => r.id === running.id)!.status === 'running');
     const q1 = await h.svc.startRun({ repoId: repo.id, pipeline: 'n', ref: 'main' });
     const q2 = await h.svc.startRun({ repoId: repo.id, pipeline: 'n', ref: 'main' });
-    await sleep(1500);
+    // QA Q2: not a sleep: the portal takes its decision, twice (each poll runs the dispatch), and the queue is still whole.
+    await h.svc.poll(WS);
+    await h.svc.poll(WS);
     const by = (id: string) => h.svc.list().items.find((r) => r.id === id)!;
     assert.deepEqual([by(running.id).status, by(q1.id).status, by(q2.id).status], ['running', 'queued', 'queued']);
+    assert.deepEqual([by(q1.id).cancelledBy, by(q2.id).cancelledBy], [null, null], 'nobody cancelled them');
+    assert.deepEqual(h.host.calls.filter((c) => c[0] === 'cancel'), [], 'nothing was cancelled in the workspace');
     for (const r of [q1, q2, running]) await h.svc.cancel(r.id);
   } finally {
     h.done();
