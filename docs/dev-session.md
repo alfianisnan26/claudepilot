@@ -246,7 +246,9 @@ scripts/job-run.sh --repo konfersi:<org>/<repo> --ref <branch> --image registry.
   on: a REQUIRED `kubernetes.io/hostname NotIn` rule, in the same term as the control-plane rule when
   the memory decision adds it, and kept by the release patch. The raw value is never echoed; the Pending line, the log and the last placement
   line (`... queued=Ns avoid=<list>`) carry the validated, joined list. It is off by default on purpose: an always-on required rule left every Job
-  Pending when the other node was full (T-365, T-524). With no avoid list, the default manifest is semantically equal to the one before S2 (same rules), not byte-identical,
+  Pending when the other node was full (T-365, T-524). One exception (T-402): a command with `--hogs N` (N above 0, or `cpus`; `scripts/test-repeat.sh`
+  loads every CPU of its node) adds the node of the running portal pod (label `app=claudepilot-portal`) to this list, so the Job never shares a node with the
+  portal; when that node cannot be read the run is refused (rc 2) instead of started beside it. With no avoid list, the default manifest is semantically equal to the one before S2 (same rules), not byte-identical,
   when the memory rule is on. A rule that cannot be dropped at the release is kept and the log
   says so (`at=release outcome=drop-failed`): the Job runs on its create-time rule. Known limits: the projected percentage is rounded, and `top` itself is a sample, so the line is good to about 0.5 points; the
   peak counted is the typical 2300 Mi, not the 4 Gi limit, so a rare larger Job can still land on a master that fit the typical one. A master at 74% therefore takes no 4 GiB Job (74% + 4 GiB is about 100%). The line is exact: use plus peak
