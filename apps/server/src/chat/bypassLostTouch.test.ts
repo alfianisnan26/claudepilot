@@ -7,6 +7,7 @@
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { controlProc, readControl } from './integrity.js';
 import { APPLIED, controls, init, liveSession, ok, sleep, until, type Live } from './testkit.js';
 
 async function started(s: Live) {
@@ -53,28 +54,42 @@ async function answering<T>(s: Live, p: Promise<T>): Promise<T> {
   return p;
 }
 
+/** The host stops answering: every re-follow drops, the status is unknown, and the retries run out ("Lost touch", unconfirmed). */
+async function loseTouch(s: Live, lead: { id: string; tail: Live['tail'] }) {
+  s.ws.statusUnreachable = true;
+  let dropped = 0;
+  await until(() => {
+    for (const t of s.ws.tails.slice(s.ws.tails.indexOf(lead.tail)))
+      if (!t.exited) {
+        t.exit(0);
+        dropped++;
+      }
+    return s.controller.get(lead.id)!.state === 'interrupted';
+  }, 15_000);
+  s.ws.statusUnreachable = false;
+  return dropped;
+}
+
+/** The stored control state of a chat, and the process the row names now. */
+function control(s: Live, id: string) {
+  const row = s.store.db!.prepare('SELECT * FROM chat_sessions WHERE id = ?').get(id) as Parameters<typeof controlProc>[0] & {
+    control_state: string | null;
+  };
+  const raw = row.control_state ? (JSON.parse(row.control_state) as { proc: string; mode: { expected: string } }) : null;
+  return { raw, proc: controlProc(row), read: readControl(row.control_state, controlProc(row)) };
+}
+
 const notes = (s: Live, id: string) => s.controller.history(id).flatMap((e) => (e.kind === 'system' && e.text ? [e.text] : []));
 
 test('T-1094: lost touch, a failed resume, then an attach to the same process still in Bypass: the lead lives, Bypass back through the gates', async () => {
   const s = await liveSession({}, true);
   try {
     const lead = await inBypass(s);
-    // The host stops answering: every re-follow drops, the status is unknown, and the retries run out.
-    s.ws.statusUnreachable = true;
-    let dropped = 0;
-    await until(() => {
-      for (const t of s.ws.tails.slice(s.ws.tails.indexOf(lead.tail)))
-        if (!t.exited) {
-          t.exit(0);
-          dropped++;
-        }
-      return s.controller.get(lead.id)!.state === 'interrupted';
-    }, 15_000);
+    const dropped = await loseTouch(s, lead);
     assert.ok(dropped > 1, `the follower was dropped again on each retry (${dropped})`);
     assert.equal(s.controller.get(lead.id)!.mode, 'default', 'the row says Bypass is paused');
 
     // The resume fails before any process is up.
-    s.ws.statusUnreachable = false;
     const starts = s.ws.starts;
     s.ws.startCode = 1;
     await assert.rejects(s.controller.send(lead.id, 'lt-1', 'go on'), /Couldn.t resume the session/);
@@ -168,6 +183,74 @@ test('T-1094: the host said gone, so nothing is kept: even an attach (exit 3) th
       s.controller.get(lead.id)!.endedReason ?? '',
       /^integrity: the agent reported Bypass permissions, which chat sessions never allow$/,
     );
+  } finally {
+    await s.done();
+  }
+});
+
+test('T-1094: lost touch keeps the state for THAT process only: a new process (exit 0) reporting Bypass without an entry still ends', async () => {
+  const s = await liveSession({}, true);
+  try {
+    const lead = await inBypass(s, { lead: false }); // not a lead: nothing puts Bypass back, so the report has no entry behind it
+    await loseTouch(s, lead);
+    const kept = control(s, lead.id);
+    assert.equal(kept.read?.mode.expected, 'bypassPermissions', 'the loss kept the state of the process that may still run');
+
+    // The host answers again and the process had stopped after all: the resume starts a new one (exit 0, the next segment).
+    const tails = s.ws.tails.length;
+    await answering(s, s.controller.send(lead.id, 'new-1', 'go on'));
+    await until(() => s.ws.tails.length > tails);
+    assert.equal(s.controller.get(lead.id)!.process, 'live', 'a new process (exit 0)');
+    const fresh = control(s, lead.id);
+    assert.notEqual(fresh.proc, kept.proc, 'another process');
+    assert.equal(fresh.raw?.proc, fresh.proc, 'the stored state is the new process’s own');
+    assert.equal(fresh.read?.mode.expected, 'default', 'nothing of the kept state carried over');
+    assert.equal(readControl(JSON.stringify(kept.raw), fresh.proc), null, 'the kept state never reads for the new process');
+
+    s.ws.tails.at(-1)!.push(init(lead.id, 'bypassPermissions'));
+    await until(() => s.controller.get(lead.id)!.state === 'ended');
+    assert.match(
+      s.controller.get(lead.id)!.endedReason ?? '',
+      /^integrity: the agent reported Bypass permissions, which chat sessions never allow$/,
+    );
+  } finally {
+    await s.done();
+  }
+});
+
+test('T-1094: lost touch, then an attach (exit 3) to the same process in Bypass for a chat that is not a lead: out of Bypass, not back in', async () => {
+  const s = await liveSession({}, true);
+  try {
+    const lead = await inBypass(s, { lead: false });
+    await loseTouch(s, lead);
+    const entries = s.controller.audit({ kind: 'bypass.entered', sessionId: lead.id }).length;
+    const before = controls(s.ws).length;
+
+    s.ws.startCode = 3;
+    const tails = s.ws.tails.length;
+    const sending = s.controller.send(lead.id, 'att-1', 'go on');
+    await until(() => s.ws.tails.length > tails, 4000);
+    s.ws.tails.at(-1)!.push(init(lead.id, 'bypassPermissions'));
+    // A non-lead's resume does not wait for the switch out of Bypass: keep answering until it was asked, and a while after.
+    const asks = () =>
+      controls(s.ws)
+        .slice(before)
+        .filter((c) => c.request.subtype === 'set_permission_mode')
+        .map((c) => c.request.mode);
+    await answering(
+      s,
+      sending.then(() => until(() => asks().length > 0)).then(() => sleep(100)),
+    );
+
+    const row = s.controller.get(lead.id)!;
+    assert.notEqual(row.state, 'ended', `not ended for its own Bypass: ${row.endedReason ?? ''}`);
+    assert.equal(row.process, 'live');
+    assert.equal(row.mode, 'default');
+    assert.deepEqual(asks(), ['default'], 'taken out of Bypass once, never put back');
+    assert.equal(s.controller.audit({ kind: 'bypass.entered', sessionId: lead.id }).length, entries, 'no new entry');
+    const left = s.controller.audit({ kind: 'bypass.left', sessionId: lead.id }).map((a) => [a.detail.why, a.detail.kept ?? null]);
+    assert.deepEqual(left[0], ['lost_touch', false], 'the attach left Bypass, and not a lead: nothing kept for a resume');
+    assert.ok(!notes(s, lead.id).some((n) => n.startsWith('Bypass kept')), notes(s, lead.id).join(' | '));
   } finally {
     await s.done();
   }
