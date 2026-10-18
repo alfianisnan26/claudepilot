@@ -91,6 +91,8 @@ function useColumnCount(): number {
 
 /** A height change re-packs after the cards have been still this long (a list that grows row by row moves the layout once). */
 const SETTLE_MS = 1500;
+/** How long after the page opens (or the cards or column count change) the best packing is always taken: skeletons, then data. */
+const FRESH_MS = 3000;
 
 /**
  * The cards in independent column stacks (masonry.ts): no row makes a short card leave a hole. Each card's height is watched. The packing
@@ -103,18 +105,20 @@ function Columns({ ids, children }: { ids: string[]; children: (i: number) => Re
   const nodes = useRef(new Map<string, HTMLElement>());
   const key = `${n}|${ids.join(',')}`;
   const [packing, setPacking] = useState<{ key: string; cols: number[][] }>(() => ({ key, cols: packColumns(ids.map(() => 0), n) }));
-  const repack = () => {
+  // fresh: the cards are still loading, so the best packing, not the closest to the current one.
+  const repack = (fresh: boolean) => {
     const h = ids.map((id) => heights.current.get(id) ?? 0);
     setPacking((cur) => {
-      const next = packColumns(h, n, 16, cur.key === key ? cur.cols : undefined);
+      const next = packColumns(h, n, 16, !fresh && cur.key === key ? cur.cols : undefined);
       return cur.key === key && JSON.stringify(cur.cols) === JSON.stringify(next) ? cur : { key, cols: next };
     });
   };
   const repackRef = useRef(repack);
   repackRef.current = repack;
-  // The key whose heights have all been measured once (its first full packing is taken at once, later ones after SETTLE_MS).
-  const settled = useRef('');
+  // Until when the cards count as still loading (FRESH_MS after the cards or the column count change).
+  const freshUntil = useRef(0);
   useLayoutEffect(() => {
+    freshUntil.current = Date.now() + FRESH_MS;
     setPacking({ key, cols: packColumns(ids.map((id) => heights.current.get(id) ?? 0), n) });
   }, [key]); // ids and n are in key
   useEffect(() => {
@@ -129,9 +133,10 @@ function Columns({ ids, children }: { ids: string[]; children: (i: number) => Re
       if (!changed) return;
       clearTimeout(timer);
       // The first time every height is known, at once (the first paint was round robin); later, once they settle.
-      const known = ids.every((id) => (heights.current.get(id) ?? 0) > 0);
-      timer = setTimeout(() => repackRef.current(), known && settled.current === key ? SETTLE_MS : 0);
-      if (known) settled.current = key;
+      // While the cards first load (skeletons, then data) the best packing is taken at once; after that, the closest good one, once
+      // heights have been still for SETTLE_MS.
+      const fresh = Date.now() < freshUntil.current;
+      timer = setTimeout(() => repackRef.current(fresh), fresh ? 0 : SETTLE_MS);
     });
     nodes.current.forEach((el) => ro.observe(el));
     return () => (clearTimeout(timer), ro.disconnect());
