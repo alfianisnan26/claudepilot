@@ -131,6 +131,44 @@ test('an empty value reads [missing], never an empty string (set or missing only
   }
 });
 
+test('redaction at depth (QA #11080 gap 1): a credential inside an array or an object value, or as an object key, never leaves; too deep reads [set]', async () => {
+  // SettingValue is a scalar today, so this row is injected through the view: the mask must hold when a setting type grows a list or a map.
+  const registry = new ToolRegistry();
+  const h = await portalMcpHarness({ registry });
+  const settings = new Settings(h.store);
+  const secret = fakeToken();
+  const keySecret = fakeToken().replace('Q7x', 'K9w');
+  let deep: unknown = `deep ${secret}`;
+  for (let i = 0; i < 12; i++) deep = [deep];
+  const value = { hosts: ['a.example', `b ${secret}`, ''], nested: { plain: 'ok', token: secret, list: [{ inner: secret }] }, [keySecret]: 'x', deep };
+  const row = { key: 't968.nested', group: 't968n', label: 'Nested', help: null, confirmText: null, type: 'string', value, default: [secret], updatedAt: null, updatedBy: null };
+  const view = () => {
+    const v = settings.view();
+    return { ...v, settings: [...v.settings, row as unknown as (typeof v.settings)[number]] };
+  };
+  registerSettingsTools({ view }, registry);
+  try {
+    const read = h.token('read').secret;
+    const one = await h.call(read, 'settings_get', { key: 't968.nested' });
+    assert.equal(one.result?.isError, undefined, JSON.stringify(one.raw));
+    const got = one.result!.structuredContent.setting;
+    assert.deepEqual(got.value.hosts, ['a.example', SETTING_SECRET_SET, SETTING_MISSING], 'inside an array');
+    assert.deepEqual(got.value.nested, { plain: 'ok', token: SETTING_SECRET_SET, list: [{ inner: SETTING_SECRET_SET }] }, 'inside an object, and an object in an array');
+    assert.equal(got.value[SETTING_SECRET_SET], 'x', 'a credential-shaped key is replaced');
+    assert.deepEqual(got.default, [SETTING_SECRET_SET], 'the default too');
+    let d: unknown = got.value.deep;
+    while (Array.isArray(d)) d = d[0];
+    assert.equal(d, SETTING_SECRET_SET, 'past the depth bound it reads [set], never the string');
+    const all = await h.call(read, 'settings_get', { group: 't968n' });
+    for (const r of [one, all]) {
+      const text = JSON.stringify(r.raw);
+      assert.ok(!text.includes(secret) && !text.includes(keySecret), 'the credential is in no part of the answer');
+    }
+  } finally {
+    h.done();
+  }
+});
+
 test('declared through the seam: view on the platform\'s settings area', () => {
   assert.deepEqual(SETTINGS_TOOL_POLICIES, { settings_get: { kind: 'platform', area: 'settings', verb: 'view' } });
 });

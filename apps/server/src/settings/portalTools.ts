@@ -1,7 +1,7 @@
 // `settings_get` on the Portal MCP (general-manager PRD §9.1, T-968 S2a): the shared settings as the Settings page shows them, read only.
 // Declared in ./authz.ts (`view` on the platform's `settings` area): the dispatch refuses anyone else with NOT_FOUND before this runs, and a
 // key that does not exist answers the same bytes. A string value shaped like a credential is never returned: it reads `[set]`; an empty
-// string reads `[missing]` ("set or missing only", PRD §9.1). Both the value and the default are masked.
+// string reads `[missing]` ("set or missing only", PRD §9.1). Both the value and the default are masked, at every depth (arrays, objects).
 
 import { AppError } from '@isnanme/core';
 import { SETTING_MISSING, SETTING_SECRET_SET, type ManagerSettingRow, type SettingView } from '@portal/contracts';
@@ -12,10 +12,29 @@ import type { Settings } from './store.js';
 /** What a denial and a missing key both answer (the seam's platform refusal says the same). */
 export const NO_SETTING = 'Not found.';
 
-const masked = <T,>(v: T): T => {
-  if (typeof v !== 'string') return v;
-  if (v.trim() === '') return SETTING_MISSING as T;
-  return looksLikeSecret(v) ? (SETTING_SECRET_SET as T) : v;
+/** How deep `masked` walks into an array or object value; anything deeper is not shown at all (it reads `[set]`). */
+export const MASK_DEPTH = 8;
+
+/**
+ * Every string in the value, at any depth up to MASK_DEPTH, through arrays and objects (T-968 S2b, QA #11080 gap 1): a credential-shaped
+ * one reads `[set]`, an empty one `[missing]`. An object key shaped like a credential is replaced too (`[set]`, then `[set] 2` …). A
+ * value nested deeper than MASK_DEPTH is not walked further and reads `[set]`, so depth never lets a string through unmasked.
+ */
+const masked = <T,>(v: T, depth = 0): T => {
+  if (typeof v === 'string') {
+    if (v.trim() === '') return SETTING_MISSING as T;
+    return looksLikeSecret(v) ? (SETTING_SECRET_SET as T) : v;
+  }
+  if (v === null || typeof v !== 'object') return v;
+  if (depth >= MASK_DEPTH) return SETTING_SECRET_SET as T;
+  if (Array.isArray(v)) return v.map((x) => masked(x, depth + 1)) as T;
+  const out: Record<string, unknown> = {};
+  let hidden = 0;
+  for (const [k, x] of Object.entries(v)) {
+    const key = looksLikeSecret(k) ? `${SETTING_SECRET_SET}${++hidden > 1 ? ` ${hidden}` : ''}` : k;
+    out[key] = masked(x, depth + 1);
+  }
+  return out as T;
 };
 
 export function settingRow(s: SettingView): ManagerSettingRow {
