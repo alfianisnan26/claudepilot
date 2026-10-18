@@ -159,6 +159,10 @@ test('T-1613: no wake for a lead that waits on a person, is busy, or when the se
     await s.controller.send(s.id, randomUUID(), 'Plan the next batch.');
     assert.equal(s.controller.get(s.id)!.state, 'working');
     assert.deepEqual(await s.controller.wakeLeads(), [], 'busy');
+    // Fail closed: the message still on its way blocks the wake even when the row reads idle (state and input out of step on purpose).
+    new ChatStore(s.store).patchSession(s.id, { state: 'idle' });
+    assert.deepEqual(await s.controller.wakeLeads(), [], 'a message on its way');
+    new ChatStore(s.store).patchSession(s.id, { state: 'working' });
     await leadTurn(s);
 
     // Waits on a person: an approval is open.
@@ -215,6 +219,7 @@ test('T-1613 QA: no wake for a lead that is ended or interrupted (for integrity 
     await s.controller.end(s.id); // its worker keeps running (the default)
     assert.equal(s.controller.get(s.id)!.state, 'ended');
     assert.deepEqual(await s.controller.wakeLeads(), [], 'ended');
+    assert.deepEqual(lead.leadsWithLiveWorkers(), [], 'the query leaves an ended lead out (its worker still runs)');
     assert.equal(s.wakes().length, 0);
   } finally {
     await s.done();
@@ -263,6 +268,8 @@ test('T-1613 QA: no wake for a lead whose wake waits for a slot under the cap', 
     await until(() => s.controller.get(w.id)!.state === 'working');
     new ChatStore(s.store).patchSession(s.id, { process: 'asleep' });
     s.controller.liveCaps = () => ({ perWorkspace: 1, total: 10 });
+    s.controller.slotWaitMs = 3000; // a wake let through would wait this long for the same slot, then fail
+    s.controller.slotPollMs = 20;
     send = s.controller.send(s.id, randomUUID(), 'Plan the next batch.').catch(() => undefined);
     await until(() => !!s.controller.get(s.id)!.slotWait);
     assert.equal(s.controller.get(s.id)!.state, 'idle', 'still idle: only the slot wait holds it');
