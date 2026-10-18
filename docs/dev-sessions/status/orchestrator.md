@@ -26,8 +26,8 @@
 - T-968 S2b be6b3adc FINAL: Job 74b74e97 rc0, 18 mutants applied and killed -> QA c691df71 + blind d9f18599. PRD fix 2a0edbd8.
 - T-565 FIX 103c4d80 QA PWG (T-595 10968) -> gap 1 e309aacc (parsed yaml + 3 mutants), Job bt7ea72qt; N11/N14 dropped
   (labels exist nowhere, 10973) -> delta c691df71 -> blind (infra).
-- T-968 PRD fix a32754c3 (gaps 2-7) -> re-check d9f18599. T-968 S1 9f901a5f (2a0edbd8; seam, cpmt_, revoke)
-  used migration 788 = T-975's -> renumber to 793 (11017/11019) -> Job -> QA c691df71 + blind d9f18599; lead reads seam/migration.
+- T-968 PRD fix a32754c3 (gaps 2-7) -> re-check d9f18599. T-968 S1 03fcd4c4 (2a0edbd8; seam, cpmt_, revoke,
+  migration 793), Job b7sajor81 queued -> QA c691df71 + blind d9f18599; lead reads seam/migration. T-1033 S1 (queue deadline) 2a0edbd8.
 - T-251 (unknown usage) 3753d3c2: audit vs integration (decide.ts unknownUsage, t255.test), build only what is missing.
 - T-1043 S0c (MCP tools through can()) 76845676 on ticket/T-1043-s0c, beside T-1065.
 - T-961 (deploy outage: PriorityClass, headroom, release pre-check; 10887) -> QA + blind (infra); PriorityClasses in
