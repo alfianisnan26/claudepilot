@@ -3,7 +3,6 @@
 ## DONE
 - CLOSED 07:00 (stale since the 06:4x session end put them back in the queue): T-611 (ff4eaf47, QA PWG #8715, blind APPROVE
   #8537), T-1049 (6c30af2d in b32, QA PWG #10771); T-524 08:05 (OOM pinned, master max 74% over a busy hour).
-- Batch 33 LANDED: T-974 f70d333c (slip closed, re-gate GREEN 03:00, T-731 11206).
 
 ## IN FLIGHT (6 of 6 workers, D-71; QA/review sonnet, D-63; ids in full in session_family)
 - DEPLOY #365 (62a44a10, prod) ran with gate=false: on T-731 11343; incident T-1082 and its post-mortem are the coordinator's.
