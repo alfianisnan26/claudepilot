@@ -11,7 +11,8 @@
 - BATCH 34: premerge/b34 037f7e4b (pushed) = integration 5e84f4d7 + T-971 H1 (+fmt f6983797) + T-976 (+fmt 99f8bb69) + T-425
   2b57efce + T-565 55f5aa8e; app.ts conflict (T-976 setSessionCookie vs T-968 healManager): kept both; pack fresh. QC#1 expired in queue
   (3600 s, ran nothing); gate#2 on 037f7e4b GREEN; QC#3 FAILED format (26 batch files) + lint (old lines). Merged integration ->
-  d7ade65b (pack fresh); fmt Job by7mvgwx1 (prettier/eslint --fix, decision T-595 12101) -> fmt commit -> QC -> gate -> land -> T-731. T-969 joins the next batch after V5. Rule until the queue drains: ONE Job per lane.
+  d7ade65b; fmt Job 27bb3c76 rc0 -> 3896f232 (tool output, T-595 12101; pack fresh) -> QC#4 bo9fg2qj5 (+6 tests that read
+  reformatted files) -> gate -> two-step landing -> T-731. T-969 joins the next batch after V5. Rule until the queue drains: ONE Job per lane.
 - T-968 (coordinator builds S1 runtime/S3/S4/S6; this crew lands S1-token + S2 only). S1-token 5ccfb52c rc0, QA PWG #11312
   -> fix a8fca5a3 (2a0edbd8, Job b1gahci5o) -> re-check c691df71; blind PWG 11365 (K8 -> test ccef3ef4, own Job;
   K12 = a8fca5a3). S2 e605c835 Job bno2lrpwq. S2b blind PWG 11302 -> last_error
@@ -21,7 +22,7 @@
   S1a 9c7022c4 (Job after K8; QA PWG by read #11426; blind d9f18599). S1b design rev2 #11493 accepted: door /jobrun/mac/*,
   own jobrun_tokens table (migration block 880-889, decided 05:25), admin-only mint; S1b-1 token+authz, S1b-2 Mac exec,
   S1b-3 placement; blind per slice. agent.json volumes, JOB_RUN_MAC_TOKEN, deploy FOR THE COORDINATOR (T-731 11389).
-- T-1079 (after T-1083 S1 is in QA; owner: Konfersi stg release docs per module into vault 98af7d16def1, reuse releaseReport.ts) 2a0edbd8, S1+S2 16fee55e.
+- T-1079 (Konfersi stg release docs per module, vault 98af7d16def1, reuse releaseReport.ts) 2a0edbd8 building now, Job last.
 - 2a0edbd8 Jobs: T-921 db1d8d19 rc0, QA PWG #11350 (J1, J4 survive) -> tests (11368) -> delta c691df71 -> blind; T-257 d34f47b2 rc1 (test bug) -> fix e22ae23d, Job after T-968's two;
   T-976 fmt re-run baov0fphs (patch lost to $OUT), T-968 a8fca5a3 b1gahci5o, T-565 bzq96a9ey on 59451a5f running.
 - T-1033 53527bfa QA mutants #11449: D1, D2 SURVIVED -> same builder 2a0edbd8 (tests + default 3600 s, decision #11467).
@@ -33,7 +34,7 @@
   T-1033; now T-524 open done-items (OOM message plus test, master under 85% for a busy hour, measured).
   T-961 green 128/128; T-1076 fix cae18cd6 proof bdo9erb2x queued. T-975 FIX2 3a21e02a delta QA PWG #11446 -> blind d9f18599.
 - 3753d3c2: T-971 d8189e5f Job bpwzt2g06 (B10, M11 fixed); T-634 0f4ffde6 QA PWG #11432 -> C2 test; T-356 N8 Job.
-- c691df71 (QA): T-968 first; T-1033 53527bfa (rc0, 8 killed) -> blind; T-277 spot-check; T-1058 PWG (already closed).
+- c691df71 (QA): T-968 first; T-1033 53527bfa (rc0, 8 killed) -> blind; T-277 spot-check. S1a now d01b5949 (regex fix) for d9f18599.
 - d9f18599 (QA/blind): T-968 S2b H4/H5/H12 (bq9f0174k), S1-token blind; then T-969 V5, T-975, T-970 QA.
 - T-975 FIX2 tests (a3554d40) -> delta c691df71 -> blind (mig 788). T-970 5a0fa697 rc0 -> QA; image build FOR THE COORDINATOR.
 - T-565 9d1d1203 QA PWG (cfbdbfb0, T5 survived) -> T5 fix 59451a5f Job b7aafa4e rc0, QA PWG; blind PWG (T-595) -> README 55f5aa8e -> READY, into batch 34;
@@ -43,8 +44,7 @@
 - T-356 S1 e03d7f21 QA PWG #11120 (N7 `/` guard authz.ts:171 survived) -> N7 test 3753d3c2 (11380) -> delta -> blind; lead reads authz.
 
 ## DECISIONS (binding)
-- D-81 risk-based review: same builder through all fixes; one QA, the same QA re-checks; blind review only for security, auth,
-  permissions, rule files, infra, pipelines, migrations, money, uat/prod.
+- D-81: same builder through all fixes; one QA re-checks; blind only for security/auth/rules/infra/migrations/money/uat/prod.
 - Coordinator order: T-948 > T-1043 MU2 S0 (D-82, blind review per slice) > T-968 (D-80) > T-971 H1+H2, T-974, T-975, T-565.
 - The coordinator runs all deploys; I start none. I gate with gate-job.sh before every merge and tell T-731 when a batch lands.
 - Owner order 2026-10-18: WIP 2 per lane (one slice on a Job, one worked); never hold lanes. At most 3 Jobs at once, gates first.
