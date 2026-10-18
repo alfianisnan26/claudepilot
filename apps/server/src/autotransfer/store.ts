@@ -201,6 +201,12 @@ export class AutoStore {
     return r ? this.#suggestion(r) : null;
   }
 
+  /** An owner's open cards, newest first (one per chat at most; T-968 S2a). */
+  openSuggestions(ownerId: string, limit = 50): StoredSuggestion[] {
+    const rows = (this.#db?.prepare(`SELECT * FROM autotransfer_suggestions WHERE owner_id = ? AND state = 'open' ORDER BY at DESC, id LIMIT ?`).all(ownerId, limit) ?? []) as Record<string, unknown>[];
+    return rows.map((r) => this.#suggestion(r));
+  }
+
   addSuggestion(s: Omit<StoredSuggestion, 'id' | 'at' | 'state'>): StoredSuggestion {
     const id = newSuggestionId();
     this.#w

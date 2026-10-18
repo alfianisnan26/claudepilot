@@ -1,4 +1,5 @@
 import { isWorkspaceId } from '../names.js';
+import { defineLoop } from '../schedules/registry.js';
 import type { Store } from '../store/store.js';
 import { foreignPortal, isTargetUnreachable, type Runtime } from '../workspaces/runtime.js';
 import { changedAreas } from './changes.js';
@@ -19,6 +20,9 @@ const STOPPED_EVERY_MS = 10 * 60_000;
 const MAX_BACKOFF_MS = 5 * 60_000;
 /** Version folders are checked by tree hash at each start and this often (skillset §10.5). */
 const TREES_EVERY_MS = 10 * 60_000;
+const TICK_MS = 15_000;
+/** The timer's heartbeat in the schedules registry (T-968 S2b): the pass that asks which workspaces are due a check. */
+export const DELIVERY_LOOP = defineLoop({ name: 'delivery-reconcile', module: 'delivery', intervalMs: TICK_MS, description: 'Asks each workspace that is due (or retrying) to check its delivered pools.' });
 
 export type DeliveryStatus = 'synced' | 'pending' | 'drifted' | 'failed' | 'locked' | 'frozen' | 'unsupported' | 'none';
 
@@ -122,12 +126,14 @@ export class Reconciler {
     for (const r of this.allRuntimes()) {
       if (r.delivery) this.#stopWatchers.push(r.delivery.watchStarts((name) => this.request(`${r.target.id}/${name}`, 'started')));
     }
-    this.#timer = setInterval(() => this.#tick(), 15_000);
+    this.#timer = setInterval(() => this.#tick(), TICK_MS);
     this.#timer.unref();
+    DELIVERY_LOOP.started();
     for (const id of this.knownWorkspaces()) this.request(id, 'portal start');
   }
 
   stop() {
+    DELIVERY_LOOP.stopped();
     clearInterval(this.#timer);
     for (const s of this.#stopWatchers) s();
     this.#stopWatchers = [];
@@ -197,14 +203,21 @@ export class Reconciler {
 
   #tick() {
     const now = Date.now();
-    for (const id of this.knownWorkspaces()) {
-      const last = this.#lastCheck.get(id) ?? 0;
-      const failures = this.#failures.get(id) ?? 0;
-      const backoff = failures ? Math.min(MAX_BACKOFF_MS, 5000 * 2 ** (failures - 1)) : 0;
-      const row = this.row(id);
-      const due = row?.status === 'synced' || row?.status === 'none' ? RUNNING_EVERY_MS : 0;
-      if (now - last >= Math.max(due, backoff)) void this.request(id, failures ? 'retry' : 'timer');
+    try {
+      for (const id of this.knownWorkspaces()) {
+        const last = this.#lastCheck.get(id) ?? 0;
+        const failures = this.#failures.get(id) ?? 0;
+        const backoff = failures ? Math.min(MAX_BACKOFF_MS, 5000 * 2 ** (failures - 1)) : 0;
+        const row = this.row(id);
+        const due = row?.status === 'synced' || row?.status === 'none' ? RUNNING_EVERY_MS : 0;
+        if (now - last >= Math.max(due, backoff)) void this.request(id, failures ? 'retry' : 'timer');
+      }
+    } catch (e) {
+      // Marked failing, then thrown on as before: the beat records it, it changes nothing else.
+      DELIVERY_LOOP.fail(e);
+      throw e;
     }
+    DELIVERY_LOOP.ok();
   }
 
   #save(workspaceId: string, patch: Partial<DeliveryRow>) {

@@ -244,6 +244,27 @@ S2 adds the following, in this order. Every new tool:
 | `deploy_status` | Deploy runs: the stage, the gate result, whether the release waits for the person's approval, and a link. | read |
 | `manager_status` | The manager's own state: runtime up, Claude, token expiry, cards open. | read |
 
+**Built (T-968 S2a).** The first five tools are on the Portal MCP. The wire types are in `packages/contracts/src/manager.ts`. Each tool
+lives in the module that owns its data and is declared in that module's `authz.ts`:
+
+- `settings_get`: `settings/portalTools.ts`.
+- `approvals_list` and `crew_limits_get`: `chat/managerTools.ts`.
+- `autotransfer_events`: `autotransfer/portalTools.ts`.
+- `deploy_status`: `ci/portalTools.ts`.
+
+All five are `read` scope, so an agent's token never reaches them. A session or settings area the caller may not view answers exactly
+like a missing one (NOT_FOUND). List rows go through `can()` one by one, a lead's workers included, and `approvals_list` counts
+`total` after that filter (no SQL limit before it). Text from outside comes back labelled untrusted: titles, summaries and agent
+labels, an approval's kind and tool name, an auto move's reason, code, actor and Claude names, and a deploy's pipeline, branch and
+stage. A credential-shaped setting value or default reads `[set]`, and an empty one reads `[missing]`.
+
+How the build differs from the table above:
+
+- "Needs re-auth" is `needs_confirmation`: a protective setting whose change asks for a person's confirmation.
+- `crew_limits_get` reads one lead session, given by `session_id`.
+- `queue` is `"unavailable"`: the portal keeps no queue of slices. A lead's queue is its status file.
+- `manager_status` waits for S1: there is no manager session or `cpmt_` token to report on yet.
+
 ### 9.2 Then the schedules API (T-965)
 
 | Tool | What it does | Tier |
@@ -254,6 +275,31 @@ S2 adds the following, in this order. Every new tool:
 | `schedule_run_now` | Runs one now (the trigger's own limits apply). | operate |
 
 `POST /api/schedules/heartbeat` is for helpers with their own token, not for the manager.
+
+**Built (T-968 S2b).** `GET /api/schedules` and `schedules_list` read one list (`apps/server/src/schedules/`, wire type
+`ScheduleRow` in `packages/contracts/src/schedules.ts`):
+
+- **Loops.** Each portal loop defines itself in `schedules/registry.ts` (`defineLoop`) and calls its heartbeat: `started`, `stopped`,
+  and `ok` or `fail` after each pass. Six beat today: `orphan-sweep`, `triggers-cron`, `usage-probe`, `delivery-reconcile`,
+  `version-canary`, `notify-clock`. A row has the module, interval, last run, last result, last error (credentials cleaned, 200
+  characters at most) and next run. Kept in memory: a restart starts the loops again.
+- **States.** `ok`; `failing` (the last pass failed); `stale` (running, but no beat, or no start, for more than two intervals; stale
+  wins over failing); `stopped`; `disabled` (a trigger that is off or paused).
+- **Cron triggers.** Expression, last and next time, and how the last run ended. A trigger's name comes back to the tool as untrusted
+  text.
+- **Scheduled pipelines.** Not listed: CI refuses `on: schedule` as "not yet", so none exist.
+- **Who.** `view` on the platform's `system` area (admins), for the route and the tool. T-965 asked for a `schedules.read`
+  permission, but the platform areas are a closed list and `system` already covers how the portal runs. Anyone else gets NOT_FOUND
+  before the list is read.
+
+Next slices:
+
+1. `POST /api/schedules/heartbeat` with a helper's own token. The supervisor and other outside helpers appear once it exists.
+2. The Schedules page (S3).
+3. `schedule_get`, `schedule_set_enabled` and `schedule_run_now`.
+4. The T-971 refusal watcher calls `defineLoop` when it lands; it is not on `integration` yet.
+5. Loops without a heartbeat yet: secrets rotation, the delivery outbox, the account health check, the CI and repos timers, and the
+   nightly backup.
 
 ### 9.3 Writes, behind the S5 card design
 

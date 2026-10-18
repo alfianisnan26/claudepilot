@@ -51,6 +51,8 @@ import { registerPersonaTools } from './personas/portalTools.js';
 import { readSessionBlob } from './personas/sessionBlobs.js';
 import { readWorkspaceFile } from './personas/workspaceFiles.js';
 import { registerSettings } from './settings/index.js';
+import { registerSettingsTools } from './settings/portalTools.js';
+import { registerChatManagerTools } from './chat/managerTools.js';
 import { GUARD_CHANNEL, recordGuardRefusals } from './settings/ruleGuardAudit.js';
 import { BrowserModule } from './browser/index.js';
 import { PortalMcpModule } from './portalmcp/module.js';
@@ -676,6 +678,9 @@ for (const source of [tickets, ci]) {
 chatController.onEvent((_id, msg) => changesGlance(msg) && attention.changed());
 attention.start();
 registerAttentionTools(attention);
+// T-968 S2a: the General Manager's reads (general-manager PRD §9.1), each declared in its module's authz.ts.
+registerSettingsTools(settingsModule.settings);
+registerChatManagerTools({ db: () => store.db, chat: chatController, caps: () => chatController.agentCaps?.() ?? null });
 // GitHub Codespaces POC: GitHub connections (token or device flow with a client ID only; the token is a sealed secret) and the codespace
 // lifecycle through GitHub's REST API (docs/prd/codespaces-poc.md).
 const codespaces = createCodespaces({ store, pools: poolService, values: secretsKind.values, dataDir: config.paths.data });
