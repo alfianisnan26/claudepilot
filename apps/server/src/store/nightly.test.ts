@@ -202,6 +202,12 @@ test('the mirror check reads the parsed yaml: a reformat passes, a second mirror
   const second = structuredClone(docs) as { spec: { jobTemplate: { spec: { template: { spec: { containers: unknown[] } } } } } }[];
   second[0]!.spec.jobTemplate.spec.template.spec.containers.push({ name: 'offsite-2', image: 'x', command: ['aws', 's3', 'sync', '/data/backups/nightly', 's3://b/p', '--delete'] });
   assert.deepEqual(mirrorsWithoutExclude(second), { mirrors: 2, missing: ['offsite-2'] });
+  // Another exclude is not the dot-name one (QA mutant T5: any `--exclude <pattern>` passed): it is still missing, in both spellings.
+  const other = structuredClone(second);
+  (other[0]!.spec.jobTemplate.spec.template.spec.containers[1] as { command: string[] }).command.push('--exclude', '*.tmp');
+  assert.deepEqual(mirrorsWithoutExclude(other), { mirrors: 2, missing: ['offsite-2'] }, '--exclude "*.tmp"');
+  (other[0]!.spec.jobTemplate.spec.template.spec.containers[1] as { command: string[] }).command.splice(-2, 2, '--exclude=*.tmp');
+  assert.deepEqual(mirrorsWithoutExclude(other), { mirrors: 2, missing: ['offsite-2'] }, '--exclude=*.tmp');
   // The same step hidden in a shell script is still seen; with `--exclude=.*` it passes.
   const shell = { spec: { template: { spec: { containers: [{ name: 'sh', command: ['sh', '-c', 'aws s3 sync /data/backups/nightly s3://b/p --delete'] }] } } } };
   assert.deepEqual(mirrorsWithoutExclude([shell]), { mirrors: 1, missing: ['sh'] });
