@@ -28,13 +28,19 @@ export interface TestTls {
   cert: string;
 }
 
+/** A positive serial in minimal DER: the first byte is never 0 (a leading 0x00 before a byte under 0x80 is padding OpenSSL refuses, T-1600). */
+export function certSerial(random: Buffer): Buffer {
+  const serial = Buffer.from(random);
+  serial[0] = (serial[0]! & 0x7f) | 0x40;
+  return serial;
+}
+
 function makeTestTls(host = 'pilot.example.test'): TestTls {
   const { publicKey, privateKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' });
   const name = seq(set(seq(COMMON_NAME, tlv(0x0c, Buffer.from(host)))));
   const now = new Date();
   const validity = seq(utcTime(new Date(now.getTime() - 86_400_000)), utcTime(new Date(now.getTime() + 10 * 365 * 86_400_000)));
-  const serial = randomBytes(8);
-  serial[0]! &= 0x7f;
+  const serial = certSerial(randomBytes(8));
   const extensions = tlv(
     0xa3,
     seq(
