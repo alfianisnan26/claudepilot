@@ -830,6 +830,8 @@ test('T-1083 S1a: where. With no Mac door every Job runs in the cluster as befor
     [['--big'], {}, 'where=cluster pinned=big'],
     [['--pool-env', pool], { [pool]: `p${hex(8)}` }, 'where=cluster pinned=pool-env'],
     [['--image', 'registry.int.isnan.me/claudepilot/py-test:abc123'], {}, 'where=cluster pinned=image'],
+    // Two pins at once (QA #11426): still one where line, the cluster, naming the first pin in the order big, pool-env, image.
+    [['--big', '--pool-env', pool], { [pool]: `p${hex(8)}` }, 'where=cluster pinned=big'],
   ];
   for (const [argv, over, line] of cases) {
     const w = world([], { top: 40 });
