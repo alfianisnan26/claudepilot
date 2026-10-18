@@ -357,6 +357,9 @@ async function realApp(serveWeb = false, cookie = 'portal_session', early?: (h: 
 /** `early`: routes a module would register, mounted where app.ts mounts connect's public routes, so before the real `ALL /api/*`. */
 async function buildRealApp(serveWeb: boolean, cookie: string, cleanup: () => void, early?: (h: Hono) => void) {
   const { store } = await freshStore();
+  // The member the tests sign in is an account in that database (the real `users` reads it: `/api/me` names it, a 404 for an unknown id).
+  const now = new Date().toISOString();
+  store.db!.prepare("INSERT INTO users (id, email, email_key, display_name, role, state, password_hash, password_changed_at, created_at, created_by) VALUES (?, ?, ?, 'Member', 'member', 'active', 'h', ?, ?, 'ui')").run(MEMBER, 'member@example.com', 'member@example.com', now, now);
   // The chat and usage seams the server hands the platform: what FakeChat lacks is a stub, so autotransfer and keepgoing mount their
   // routes as they do in index.ts (their ports() refuse a seam without those functions, and then the module mounts nothing).
   const fake = new FakeChat();
