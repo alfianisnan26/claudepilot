@@ -6,8 +6,8 @@
 - Batch 32 LANDED 22:54 (74599ece): T-382 S6, T-294 FIX1, T-1049. Older batches: git history.
 
 ## IN FLIGHT (6 of 6 workers, D-71; QA/review sonnet, D-63; ids in full in session_family)
-- DEPLOY #365 (rmvcyeslw4a7ecb, 62a44a10, prod, actor "ui"): gate step `skipped (input gate=false)`. The tree was gated by
-  gate-job (10823), but the pipeline gate was off. Asked the coordinator for the owner's word (T-731 11343); if there is none, an incident.
+- DEPLOY #365 (rmvcyeslw4a7ecb, 62a44a10, prod, actor "ui") ran with gate=false (the tree was gated by gate-job, 10823):
+  reported on T-731 11343; the coordinator opened incident T-1082. Its post-mortem is the coordinator's.
 - BATCH 34: premerge/b34 0a9685ea = integration + T-971 H1 fdd38c6b + T-976 d68ab35c; gate GREEN at aa58499a; QC format FAIL
   (7 batch files -> format commits a3554d40 (H1), 2a0edbd8 (T-976, Job bdlp8stxq); 8 older -> T-1080). Then add T-425 2b57efce
   (rc0), T-969 after V5 -> merge integration -> context-pack check -> QC -> gate -> two-step landing -> T-731.
@@ -22,11 +22,12 @@
 - T-1079 (after T-1083 S1 is in QA; owner: Konfersi stg release docs per module into vault 98af7d16def1, reuse releaseReport.ts) 2a0edbd8, S1+S2 16fee55e.
 - 2a0edbd8 Jobs: T-921 db1d8d19 rc0, QA PWG #11350 (J1, J4 survive) -> tests (11368) -> delta c691df71 -> blind; T-257 d34f47b2 rc1 (test bug) -> fix e22ae23d, Job after T-968's two;
   T-976 fmt re-run baov0fphs (patch lost to $OUT), T-968 a8fca5a3 b1gahci5o, T-565 bzq96a9ey on 59451a5f running.
-- 3753d3c2: T-971 H2 head bbfd0ae3 Job b2rxfgopr (21 mutants); T-634 test 0f4ffde6 (Job after b2rxfgopr); T-251 QA PWG
-  #11340 (citation only) -> reassign to me -> close.
-- 76845676: T-1043 S0c 558c74ed rc0 (66/66; mutants next, redo on ticket/T-1043-s0c-on-s0b after S0b); S0b x T-976 4a57abe6
-  Job b9829len2; T-1065 redact.ts worked -> QA + blind.
-- a3554d40: H1 format patch, then T-961 sched-lib.sh (T-961 S1 613139e3 proof Job rerun), T-980 -> QA + blind.
+- T-251 QA PWG #11340 (citation only) -> 3753d3c2 reassigns to me -> close.
+- 76845676: S0b x T-976 aaa9169f Job bk7jaaj34 -> S0c-on-s0b 78b0e668 (6 mutants) -> T-1065 641b45cf + T-1084 229fc44f
+  (no issued-token match: no incident) one Job -> blind d9f18599.
+- a3554d40: H1 fmt Job b9xx1x0um, T-980 bpc5x0blu, T-961 7684391b b44zf2p1l (QA PWG #11433); worked: T-1076 (flaky
+  wall-clock bound at :75, 124 ms). T-975 FIX2 3a21e02a rc0 (9eb40516) -> delta c691df71 -> blind d9f18599.
+- 3753d3c2: T-971 d8189e5f Job bpwzt2g06 (B10, M11 fixed); T-634 0f4ffde6 QA PWG #11432 -> C2 test; T-356 N8 Job.
 - c691df71 (QA): T-968 first; T-1033 53527bfa (rc0, 8 killed) -> blind; T-277 spot-check; T-1058 PWG (already closed).
 - d9f18599 (QA/blind): T-968 S2b H4/H5/H12 (bq9f0174k), S1-token blind; then T-969 V5, T-975, T-970 QA.
 - T-975 FIX2 tests (a3554d40) -> delta c691df71 -> blind (mig 788). T-970 5a0fa697 rc0 -> QA; image build FOR THE COORDINATOR.
@@ -51,7 +52,7 @@
 - 03:15 owner order (T-968 11240): coordinator builds T-968 S1 runtime/S3/S4/S6; this crew lands S1-token + S2 only.
 
 ## FOR THE COORDINATOR (D-78; each also on its ticket)
-- Deploy #365's gate=false: the owner's word or an incident (T-731 11343).
+- Incident T-1082 (deploy #365 gate=false): its post-mortem and the check that refuses gate=false without the owner.
 - Job capacity: queue timeouts and Pending on memory (T-595 10932, 11197, 11282, 11285).
 - T-961 PriorityClasses if Argo can't create them; T-974 remove the text-matching `git -C` denies (after T-425 lands).
 - T-565: assign to session 355881a3; name the backup bucket and its secret (BACKUP_S3_*). T-257 DECISIONS row (11198).
