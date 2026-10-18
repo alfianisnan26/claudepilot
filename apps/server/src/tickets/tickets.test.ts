@@ -608,6 +608,13 @@ test('T-634: a lead claims an unassigned in_review ticket by id and then closes 
     assert.equal(closed.status, 'done');
     assert.equal(closed.closingSummary, 'QA passed, merged');
     assert.equal(h.tickets.get(UI, t.id).ticket.status, 'done');
+    // C2: a claim by id never takes a ticket a live session already holds: nothing comes back, the holder stays, and the claimant still cannot close it.
+    const held = h.tickets.create(UI, { summary: 'held by the peer', workspaceId: 'docker/api', assignee: { kind: 'session', sessionId: peer.id } });
+    h.tickets.update(UI, held.id, { status: 'in_review' });
+    assert.equal(h.tickets.claimNext(me, { id: held.id }), null, 'a held ticket is not claimed by id');
+    assert.deepEqual(h.tickets.get(UI, held.id).ticket.assignee, { kind: 'session', sessionId: 'peer' }, 'the holder is unchanged');
+    assert.equal(code(() => h.tickets.close(me, held.id, { summary: 'taking over' })), 'FORBIDDEN', 'and the claimant cannot close it');
+    assert.equal(h.tickets.get(UI, held.id).ticket.status, 'in_review');
   } finally {
     h.done();
   }

@@ -529,6 +529,11 @@ test('T-634: over MCP a lead claims an unassigned in_review ticket by id and clo
     const closed = r.out(await r.h.call(lead.secret, 'ticket_close', { id: t.id, summary: 'QA passed, merged' }));
     assert.equal(closed.ticket.status, 'done');
     assert.equal(r.tickets.get(UI, t.id).ticket.status, 'done');
+    // C2: a ticket a live session holds is not claimed by id over MCP either: nothing comes back and the holder stays.
+    const held = r.tickets.create(UI, { summary: 'held by the peer', workspaceId: 'docker/api', assignee: { kind: 'session', sessionId: 'peer' } });
+    r.tickets.update(UI, held.id, { status: 'in_review' });
+    assert.equal(r.out(await r.h.call(lead.secret, 'ticket_claim_next', { id: held.id })).ticket, null, 'a held ticket is not claimed by id');
+    assert.deepEqual(r.tickets.get(UI, held.id).ticket.assignee, { kind: 'session', sessionId: 'peer' }, 'the holder is unchanged');
   } finally {
     r.done();
   }

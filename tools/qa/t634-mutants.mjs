@@ -11,6 +11,9 @@ const mutants = [
   ['C2 held ticket claimable', SVC, `'t.assignee_kind IS NULL',`, `'1 = 1',`],
   // The claim assigns the ticket to nobody the caller knows: the lead is still FORBIDDEN on close.
   ['C3 claim assigns another session', SVC, `.run('session', session.id, status,`, `.run('session', 'nobody', status,`],
+  // QA #11432: the two checks `close` relies on. K2: a session that does not hold the ticket may change it. K3: nobody-held tickets may be changed by anyone.
+  ['K2 not the assignee may change it', SVC, 'if (row.assignee_ref === w.session!.id) return null;', 'return null;'],
+  ['K3 reporter check dropped', SVC, "if (!(row.reporter_kind === 'token' && row.reporter_ref === reporterRef(caller)))", 'if (false)'],
 ];
 const run = () => {
   try {
