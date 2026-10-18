@@ -230,10 +230,11 @@ scripts/job-run.sh --repo konfersi:<org>/<repo> --ref <branch> --image registry.
   (2) per program (claudepilot, event, konfersi; T-524). A Job over a cap is created suspended and waits in creation order ("queued behind K").
   **The queue has a deadline (T-1033):** `JOB_RUN_QUEUE_WAIT_S` (default 1800, 30 minutes; 1 to 7200, was 3600 and exit 1). Past it the Job is
   deleted without having run, the script says `job-run: queue deadline: ... the command never ran ... rerun it`, the log gets
-  `=== JOB-RUN QUEUE-EXPIRED`, and the exit is 3 (a rerun is safe, D-75; `--pool-env`'s deleted artifact is also 3, after a run: the line says
-  which). The start wait (`JOB_RUN_START_WAIT_S`, 900) and the Job's deadline count only once it is let out. **A Job deleted under the script**
-  (`--stop`, a person, the cluster) ends it at once: queued, "was stopped while queued"; starting or running, "vanished while it was starting /
-  running ... rerun it" and `=== JOB-RUN VANISHED` (exit 1). Before, a Job deleted after its release kept the script waiting up to its whole
+  `=== JOB-RUN QUEUE-EXPIRED`, and the exit is **75** (EX_TEMPFAIL: the command never ran, a rerun is safe, D-75; job-run uses 75 for nothing
+  else). The start wait (`JOB_RUN_START_WAIT_S`, 900) and the Job's deadline count only once it is let out. **A Job deleted under the script**
+  (`--stop`, a person, the cluster) ends it at once with `=== JOB-RUN VANISHED` in the log: queued ("was stopped while queued; the command never
+  ran") or starting (Pending or fetching: "vanished while it was starting ... the command never ran"), exit 75; running ("vanished while it was
+  running ... no exit code"), exit 1, because it may have run in part. Before, a Job deleted after its release kept the script waiting up to its whole
   deadline, because a missing Job read as "still running"; an API error still reads that way (a blip is not a vanish).
   Jobs carry the labels `job-run/chat`, `job-run/role` (`PILOT_AGENT`), `job-run/repo`, `job-run/program`.
 - **Placement (T-611):** the scheduler counts memory requests, but the control-plane node's own pods use far more for real. Before it creates a

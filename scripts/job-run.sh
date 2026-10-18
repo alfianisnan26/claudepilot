@@ -62,8 +62,9 @@
 # Caps: JOB_RUN_MAX Jobs at once cluster-wide (default 3), JOB_RUN_MAX_PER_CHAT per chat (2) and JOB_RUN_MAX_PER_PROGRAM per program (2;
 # claudepilot, event, konfersi: T-524). A Job over a cap is created suspended and waits its turn (creation order), with "queued behind K".
 # The queue has its own deadline (T-1033): JOB_RUN_QUEUE_WAIT_S (default 1800, 30 min; 1 to 7200). Past it the Job is deleted, never having run,
-# with "job-run: queue deadline: ..." and "=== JOB-RUN QUEUE-EXPIRED" in the log, exit 3: rerun it (D-75). A Job deleted under the script
-# (--stop, a person, the cluster) ends it at once, queued (exit 1) or starting or running (exit 1, "vanished"). The Job stops when this script is interrupted or killed (the next run removes a Job whose
+# with "job-run: queue deadline: ..." and "=== JOB-RUN QUEUE-EXPIRED" in the log, exit 75 (EX_TEMPFAIL: never ran, rerun it; D-75). A Job deleted
+# under the script (--stop, a person, the cluster) ends it at once with "=== JOB-RUN VANISHED": queued ("stopped while queued") or starting
+# (Pending or fetching; "vanished") exit 75, the command never ran; running ("vanished") exit 1, it may have run in part. The Job stops when this script is interrupted or killed (the next run removes a Job whose
 # script is gone), and when the chat ends (the Claude process, CLAUDE_PID or JOB_RUN_WATCH_PID, exits).
 # A failed `npm ci` in the Job is tried once more (it says so in the log). Exit 0 of a proof means the proof held, not only the command.
 # Credentials (the npm token for GitHub Packages, Gitea's from git's credential helper) go to kubectl on stdin into a Secret that belongs to
@@ -72,8 +73,8 @@
 # the install scripts and the command run in the `run` container, which has no git or npm credential in its environment, git config or files, and gets
 # only the --pool-env values (T-426) as env. They are kept out of the environment of npm rebuild and the lifecycle scripts, but a lifecycle script of the same user can still read /proc/<ppid>/environ (the shell's start-up environment); the real boundary is that only E2E_CF_ACCESS_* test credentials may go in. The raw
 # log in the cluster is unmasked until the Job is cleaned up (TTL); only the streamed copy is masked. The whole log: JOB_RUN_LOG
-# (default /tmp/job-run-<job>.log). Exit: the command's code; 1 when the Job did not finish or vanished, 2 for a usage error, 3 past the queue
-# deadline (the command never ran; 3 is also --pool-env's deleted artifact: the line says which), 124 past the run deadline.
+# (default /tmp/job-run-<job>.log). Exit: the command's code; 1 when the Job did not finish or vanished while running, 2 for a usage error,
+# 75 when the command never ran (the queue deadline, or the Job deleted before it ran: rerun it), 124 past the run deadline.
 set -eu
 # Under xtrace (bash -x, SHELLOPTS) the trace would print the credentials this script handles: refuse (T-426).
 case $- in *x*) echo "job-run: refuses to run under xtrace (set -x / bash -x would print the credentials)" >&2; exit 2 ;; esac
@@ -494,15 +495,15 @@ while :; do
   case "$d" in
     go) break ;;
     gate) [ "$d" = "$last" ] || echo "job-run: waits: a gate Job is Pending for room, and gates go first (JOB_RUN_GATE_FIRST=0 turns it off)"; last=$d ;;
-    gone) echo "job-run: $job was stopped while queued" >&2; exit 1 ;;
+    gone) echo "job-run: $job was stopped while queued; the command never ran" >&2; plog "=== JOB-RUN VANISHED while=queued job=$job" >/dev/null; exit 75 ;;
     wait\ *) [ "$d" = "$last" ] || echo "job-run: queued behind ${d#wait } (at most $max at once, $per per chat, $pprog per program)"; last=$d ;;
   esac
   # T-1033: the queue's own deadline (the start wait and the Job's deadline count only once it is let out). The Job is deleted on exit (the
-  # trap), unrun; exit 3 and the log line tell the caller the command never ran, so a rerun is safe (D-75).
+  # trap), unrun; exit 75 (EX_TEMPFAIL, used for nothing else here) and the log line tell the caller the command never ran, so a rerun is safe (D-75).
   if [ $(( $(date +%s) - t0 )) -ge "$queue_wait" ]; then
     plog "=== JOB-RUN QUEUE-EXPIRED after=${queue_wait}s job=$job" >/dev/null
     echo "job-run: queue deadline: $job was still queued after ${queue_wait}s (JOB_RUN_QUEUE_WAIT_S); the command never ran; the Job is deleted: rerun it" >&2
-    exit 3
+    exit 75
   fi
   sleep "$poll"
 done
@@ -545,9 +546,11 @@ job_state() { # Complete, Failed:<reason>, gone, or nothing while it runs (or wh
     ([(.status.conditions // [])[] | select((.type == "Complete" or .type == "Failed") and .status == "True") | if .type == "Failed" then "Failed:\(.reason // "")" else .type end] | first // "") end' <<<"$j" 2>/dev/null || true
 }
 vanished() { # T-1033: the Job was deleted under this script (--stop, a person, the cluster): say so once and end now
-  echo "job-run: $job vanished while it was $1 (deleted: job-run.sh --stop, a person or the cluster); no exit code: rerun it" >&2
+  # starting (Pending, or the fetch container cloning): the command never ran, 75; running: it may have run in part, 1.
+  local rc=1; [ "$1" != starting ] || rc=75
+  echo "job-run: $job vanished while it was $1 (deleted: job-run.sh --stop, a person or the cluster); $([ "$rc" = 75 ] && echo "the command never ran" || echo "no exit code"): rerun it" >&2
   plog "=== JOB-RUN VANISHED while=$1 job=$job" >/dev/null
-  exit 1
+  exit "$rc"
 }
 pod_json() { kubectl -n "$ns" get pods -l "job-name=$job" -o json 2>/dev/null || true; }
 pod_get() { jq -r "$1"' // ""' <<<"$2" 2>/dev/null || true; }

@@ -795,11 +795,11 @@ const within = <T>(p: Promise<T>, ms: number, what: string) =>
   Promise.race([p, new Promise<never>((_, rej) => setTimeout(() => rej(new Error(`${what}: still waiting after ${ms} ms`)), ms).unref())]);
 const ourJob = (w: ReturnType<typeof world>) => w.state().jobs.find((j) => !/^claudepilot-job-0000000\d$/.test(j.name));
 
-test('T-1033 the queue deadline: a Job still queued past JOB_RUN_QUEUE_WAIT_S is deleted unrun, exit 3, with the line and the log mark', async () => {
+test('T-1033 the queue deadline: a Job still queued past JOB_RUN_QUEUE_WAIT_S is deleted unrun, exit 75, with the line and the log mark', async () => {
   const w = world([1, 2, 3].map((i) => ({ name: `claudepilot-job-0000000${i}`, chat: 'chat-x' })));
   const t = Date.now();
   const r = await within(w.start(['--repo', 'claudepilot', '--ref', 'main', '--', 'true'], { JOB_RUN_QUEUE_WAIT_S: '1' }).done, 15_000, 'queue deadline');
-  assert.equal(r.code, 3, r.out);
+  assert.equal(r.code, 75, `EX_TEMPFAIL: the command never ran; ${r.out}`);
   assert.match(r.out, /queued behind 3/);
   assert.match(r.out, /job-run: queue deadline: claudepilot-job-[0-9a-f]{8} was still queued after 1s \(JOB_RUN_QUEUE_WAIT_S\); the command never ran; the Job is deleted: rerun it/);
   assert.doesNotMatch(r.out, /giving up|rc=/);
@@ -824,7 +824,7 @@ test('T-1033 the queue deadline: 30 minutes by default; a value outside 1 to 720
   assert.equal(w.run(['--repo', 'claudepilot', '--ref', 'main', '--', 'true'], { JOB_RUN_QUEUE_WAIT_S: '0090' }).code, 0);
 });
 
-test('T-1033 a Job deleted while queued ends job-run at once (exit 1, "stopped while queued"), well before the queue deadline', async () => {
+test('T-1033 a Job deleted while queued ends job-run at once (exit 75, "stopped while queued"), well before the queue deadline', async () => {
   const w = world([1, 2, 3].map((i) => ({ name: `claudepilot-job-0000000${i}`, chat: 'chat-x' })));
   const s = w.start(['--repo', 'claudepilot', '--ref', 'main', '--', 'true'], { JOB_RUN_MAX_PER_CHAT: '5' });
   await waitFor('queued', () => /queued behind 3/.test(s.out()));
@@ -833,11 +833,12 @@ test('T-1033 a Job deleted while queued ends job-run at once (exit 1, "stopped w
     st.jobs = st.jobs.filter((j) => j.name !== name);
   });
   const r = await within(s.done, 10_000, 'deleted while queued');
-  assert.equal(r.code, 1, r.out);
-  assert.match(r.out, new RegExp(`job-run: ${name} was stopped while queued`));
+  assert.equal(r.code, 75, r.out);
+  assert.match(r.out, new RegExp(`job-run: ${name} was stopped while queued; the command never ran`));
+  assert.match(w.log(), /^=== JOB-RUN VANISHED while=queued /m);
 });
 
-test('T-1033 a Job deleted while starting (Pending) ends job-run at once with "vanished", not after the start wait', async () => {
+test('T-1033 a Job deleted while starting (Pending) ends job-run at once with "vanished" (exit 75, never ran), not after the start wait', async () => {
   const w = world();
   writeFileSync(join(w.root, 'pending'), '0/2 nodes are available: 2 Insufficient memory.');
   const s = w.start(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'true'], { JOB_RUN_START_WAIT_S: '900' });
@@ -848,8 +849,8 @@ test('T-1033 a Job deleted while starting (Pending) ends job-run at once with "v
     st.jobs = st.jobs.filter((j) => j.name !== name);
   });
   const r = await within(s.done, 10_000, 'deleted while starting');
-  assert.equal(r.code, 1, r.out);
-  assert.match(r.out, new RegExp(`job-run: ${name} vanished while it was starting \\(deleted: job-run\\.sh --stop, a person or the cluster\\); no exit code: rerun it`));
+  assert.equal(r.code, 75, r.out);
+  assert.match(r.out, new RegExp(`job-run: ${name} vanished while it was starting \\(deleted: job-run\\.sh --stop, a person or the cluster\\); the command never ran: rerun it`));
   assert.match(w.log(), /^=== JOB-RUN VANISHED while=starting /m);
 });
 
@@ -864,7 +865,7 @@ test('T-1033 a Job deleted while running ends job-run at once with "vanished" (e
   });
   const r = await within(s.done, 10_000, 'deleted while running');
   assert.equal(r.code, 1, r.out);
-  assert.match(r.out, new RegExp(`job-run: ${name} vanished while it was running \\(deleted`));
+  assert.match(r.out, new RegExp(`job-run: ${name} vanished while it was running \\(deleted: job-run\\.sh --stop, a person or the cluster\\); no exit code: rerun it`));
   assert.doesNotMatch(r.out, /did not finish|without an exit code/);
   assert.match(w.log(), /^=== JOB-RUN VANISHED while=running /m);
 });
