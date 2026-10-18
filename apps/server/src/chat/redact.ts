@@ -25,6 +25,18 @@ interface Shape {
   group?: number;
   /** Characters that continue a credential already replaced; `pem` runs to the END line. */
   swallow?: string;
+  /** A match this says is not a credential after all (it sees the whole text): left as it is. */
+  keep?: (text: string, start: number, end: number) => boolean;
+}
+
+/**
+ * T-1065 (QA #11410): after a colon and a space, a value of letters only that more text follows on its line is prose, not a value:
+ * `Enter your password: then press enter` stays. A value with a digit or a sign, or one that ends its line (`password: sesame`), still goes.
+ * A stream holds such a word until what follows it decides (`ASSIGN_TAIL`), so a split text comes out the same.
+ */
+function proseAfterColon(text: string, start: number, end: number): boolean {
+  if (end >= text.length || text[end] === '\n' || text[end] === '\r') return false;
+  return /^[A-Za-z]+$/.test(text.slice(start, end)) && /:[ \t]+$/.test(text.slice(Math.max(0, start - 6), start));
 }
 
 const PEM_HEADER = '-----BEGIN [A-Z0-9 ]{0,24}PRIVATE KEY[A-Z ]{0,8}-----';
@@ -91,7 +103,7 @@ const SHAPES: Shape[] = [
     swallow: VALUE,
   },
   // T-1065: `password=hunter2`, `pwd: x`, `"token":"v"`, `secret='a b'`: the value goes, at any length.
-  { kind: 'kv', re: new RegExp(`${KV_NAME})${KV_CODE}(${KV_UNQUOTED}+)`, 'dgi'), group: 2, swallow: KV_UNQUOTED },
+  { kind: 'kv', re: new RegExp(`${KV_NAME})${KV_CODE}(${KV_UNQUOTED}+)`, 'dgi'), group: 2, swallow: KV_UNQUOTED, keep: proseAfterColon },
   { kind: 'kv', re: new RegExp(`${KV_NAME}")((?:${kvQuoted('"')})+)`, 'dgi'), group: 2, swallow: kvQuoted('"') },
   { kind: 'kv', re: new RegExp(`${KV_NAME}')((?:${kvQuoted("'")})+)`, 'dgi'), group: 2, swallow: kvQuoted("'") },
   // T-1065: the password of URL userinfo; the scheme, the user and the host stay. Never open at the end (it needs its `@`).
@@ -113,7 +125,7 @@ function rawSpans(text: string): RawSpan[] {
   for (const shape of SHAPES) {
     for (const m of text.matchAll(shape.re)) {
       const at: readonly [number, number] | undefined = shape.group ? m.indices?.[shape.group] : [m.index, m.index + m[0].length];
-      if (at && at[1] > at[0]) out.push({ start: at[0], end: at[1], shape });
+      if (at && at[1] > at[0] && !shape.keep?.(text, at[0], at[1])) out.push({ start: at[0], end: at[1], shape });
     }
   }
   return out;
