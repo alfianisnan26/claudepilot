@@ -9,8 +9,8 @@
 ## IN FLIGHT (6 of 6 workers, D-71; QA/review sonnet, D-63; ids in full in session_family)
 - DEPLOY #365 (rmvcyeslw4a7ecb, 62a44a10, prod, actor "ui") ran with gate=false (the tree was gated by gate-job, 10823):
   reported on T-731 11343; the coordinator opened incident T-1082. Its post-mortem is the coordinator's.
-- BATCH 34: premerge/b34 977cd562 (local) = integration + T-971 H1 fdd38c6b + H1 fmt f6983797 + T-976 d68ab35c; QC format
-  FAIL before fmt; waits T-976 fmt (2a0edbd8, baov0fphs); 8 older files -> T-1080. Cluster: Pending "Insufficient memory" (T-595 11518). Then add T-425 2b57efce
+- BATCH 34: premerge/b34 037f7e4b (pushed) = integration 5e84f4d7 + T-971 H1 (+fmt f6983797) + T-976 (+fmt 99f8bb69) + T-425
+  2b57efce + T-565 55f5aa8e; app.ts conflict (T-976 setSessionCookie vs T-968 healManager): kept both; pack fresh. QC bx8tqf3or -> gate. Then add T-425 2b57efce
   (rc0), T-969 after V5 -> merge integration -> context-pack check -> QC -> gate -> two-step landing -> T-731.
 - T-968 (coordinator builds S1 runtime/S3/S4/S6; this crew lands S1-token + S2 only). S1-token 5ccfb52c rc0, QA PWG #11312
   -> fix a8fca5a3 (2a0edbd8, Job b1gahci5o) -> re-check c691df71; blind PWG 11365 (K8 -> test ccef3ef4, own Job;
