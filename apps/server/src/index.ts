@@ -51,6 +51,8 @@ import { registerPersonaTools } from './personas/portalTools.js';
 import { readSessionBlob } from './personas/sessionBlobs.js';
 import { readWorkspaceFile } from './personas/workspaceFiles.js';
 import { registerSettings } from './settings/index.js';
+import { registerSettingsTools } from './settings/portalTools.js';
+import { registerChatManagerTools } from './chat/managerTools.js';
 import { GUARD_CHANNEL, recordGuardRefusals } from './settings/ruleGuardAudit.js';
 import { BrowserModule } from './browser/index.js';
 import { PortalMcpModule } from './portalmcp/module.js';
@@ -103,6 +105,8 @@ import { wireConnect } from './workspaces/connect/wire.js';
 import type { Runtime } from './workspaces/runtime.js';
 import { AppPorts, routeAppHostUpgrades } from './appports/index.js';
 import { loop } from './platform/loops.js';
+import { AGENT_MCP_CONFIG } from './portalmcp/agents.js';
+import { MANAGER_BRIEF } from './manager/service.js';
 
 // A background task that rejects (a module reading a table a frozen database doesn't have, a probe, a scan) must not
 // take the portal down with every open terminal: log it and carry on. Synchronous throws still stop the process.
@@ -445,7 +449,14 @@ const portalMcp = new PortalMcpModule(store, {
     url: agentUrls,
     known: agentUrls.known,
   },
+  // T-968 S1: the General Manager's token, alive while its session is (the runtime that starts it lands in a later slice).
+  managerAlive: (id) => {
+    const s = chatController.get(id);
+    return !!s && s.state !== 'ended' && !s.archivedAt;
+  },
 });
+// Q3 (general-manager PRD, #11136): any sign-out of the person, on any device, stops their manager; it gets a new token at the next sign-in.
+portal.onSignedOut = (userId) => void portalMcp.managers.revokeUser(userId, 'signed out');
 // With "Pool MCP only" on, Claude Code admits only listed servers, and the portal's own endpoint (which an agent's session reaches
 // through --mcp-config) is one of them: its exact URL for each workspace that opted in. Compile again when that changes.
 settingsModule.lockdown.addMatcherSource((workspaceId) => portalMcp.agentMatchers(workspaceId));
@@ -453,9 +464,11 @@ portalMcp.onAgentAddress = (workspaceId) =>
   void reconciler.request(workspaceId, 'the portal MCP address for agents changed').catch(() => undefined);
 // A token never outlives its session, whatever else is wired: ended, archived and deleted sessions lose theirs here too.
 chatController.onEvent((id, msg) => {
-  if (msg.type === 'session' && (msg.session.state === 'ended' || msg.session.archivedAt))
-    portalMcp.agents.revokeSession(id, `session ${msg.session.state}`);
-  else if (msg.type === 'removed') portalMcp.agents.revokeSession(id, 'session deleted');
+  const reason =
+    msg.type === 'session' && (msg.session.state === 'ended' || msg.session.archivedAt) ? `session ${msg.session.state}` : msg.type === 'removed' ? 'session deleted' : null;
+  if (!reason) return;
+  portalMcp.agents.revokeSession(id, reason);
+  portalMcp.managers.revokeSession(id, reason);
 });
 registerBuiltInPortalTools({
   store,
@@ -476,6 +489,19 @@ portalMcp.agents.workspaceRefs = workspaces.identities;
 // T-436: a session's token is bound at mint to the vaults that name its workspace; a change of a vault's list rebinds the live tokens.
 wireVaultBinding(portalMcp.agents, knowledge);
 chatController.agentAccess = portalMcp.agents;
+// T-968: the General Manager's process gets the person's manager token (it acts as them) and its brief; the URL is the portal as its
+// workspace reaches it, the same as an agent's.
+chatController.managerAccess = {
+  mint: async ({ workspaceId, sessionId, ownerId }) => {
+    const url = await agentUrls(workspaceId);
+    const t = url ? portalMcp.managers.mint({ userId: ownerId, sessionId }, { keepOthers: true }) : null;
+    return t && url
+      ? { env: { PILOT_MCP_TOKEN: t.secret, PILOT_MCP_URL: url, PILOT_SESSION_ID: sessionId, PILOT_WORKSPACE_ID: workspaceId }, mcpConfig: AGENT_MCP_CONFIG, tokenId: t.tokenId }
+      : null;
+  },
+  settle: (sessionId, tokenId, started) => portalMcp.managers.settle(sessionId, tokenId, started),
+  brief: () => MANAGER_BRIEF,
+};
 // Self-heal (owner, 2026-10-17): a live session calling with a replaced or expired token gets a restart at its turn's end (the same
 // conversation, MCP reconnected), so its new process starts with a good token and nobody has to run /mcp by hand.
 portalMcp.agents.onStaleToken = (sessionId, reason) => {
@@ -667,6 +693,9 @@ for (const source of [tickets, ci]) {
 chatController.onEvent((_id, msg) => changesGlance(msg) && attention.changed());
 attention.start();
 registerAttentionTools(attention);
+// T-968 S2a: the General Manager's reads (general-manager PRD §9.1), each declared in its module's authz.ts.
+registerSettingsTools(settingsModule.settings);
+registerChatManagerTools({ db: () => store.db, chat: chatController, caps: () => chatController.agentCaps?.() ?? null });
 // GitHub Codespaces POC: GitHub connections (token or device flow with a client ID only; the token is a sealed secret) and the codespace
 // lifecycle through GitHub's REST API (docs/prd/codespaces-poc.md).
 const codespaces = createCodespaces({ store, pools: poolService, values: secretsKind.values, dataDir: config.paths.data });

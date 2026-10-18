@@ -123,6 +123,7 @@ import type { HeldShare } from './identity/grants.js';
 import type { OidcClient } from './identity/oidc.js';
 import { identityRoutes } from './identity/routes.js';
 import { listLoops } from './platform/loops.js';
+import { ManagerService } from './manager/service.js';
 import { SsoProviders } from './identity/sso.js';
 import { PortalTeams } from './identity/teams.js';
 import { assetCompress, jsonCompress } from './jsonCompress.js';
@@ -609,6 +610,22 @@ export function createApp(
     return c.json(success({ removed }));
   });
   admin.get('/loops', (c) => c.json(success<PortalLoop[]>(listLoops())));
+
+  // T-968: the person's General Manager (one per person): its state, Enable (makes and starts it), Disable (ends it).
+  const managers = new ManagerService(chatController, workspaces);
+  const managerOwner = (c: Context<Env>) => portal.session(c.get('token'))?.userId ?? 'u_owner';
+  admin.get('/manager', async (c) => c.json(success(await managers.status(managerOwner(c)))));
+  admin.post('/manager/enable', async (c) => {
+    const req = await body<{ workspaceId: string }>(c);
+    const st = await managers.enable(managerOwner(c), req);
+    audit('manager.enabled', null, { sessionId: st.sessionId, workspaceId: st.workspaceId }, 'medium', portal.session(c.get('token'))?.userId ?? null);
+    return c.json(success(st));
+  });
+  admin.post('/manager/disable', async (c) => {
+    const st = await managers.disable(managerOwner(c));
+    audit('manager.disabled', null, {}, 'info', portal.session(c.get('token'))?.userId ?? null);
+    return c.json(success(st));
+  });
 
   // Session shares, teams and SSO providers, the owner's side (a full session): identity/routes.ts.
   identity.mountAdmin(admin);

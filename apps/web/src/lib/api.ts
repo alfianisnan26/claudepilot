@@ -68,6 +68,8 @@ import {
   type SsoProviderRequest,
   SSO_API,
   SCHEDULES_API,
+  MANAGER_API,
+  type ManagerStatus,
   type PortalLoop,
   TRIGGER_API,
   type Trigger,
@@ -156,6 +158,10 @@ export const api = {
   addTeamMember: (id: string, req: AddPortalTeamMemberRequest) => request<PortalTeamDetail>('POST', PORTAL_TEAM_API.members(id), req),
   setTeamRole: (id: string, userId: string, role: PortalTeamRole) => request<PortalTeamDetail>('PATCH', PORTAL_TEAM_API.member(id, userId), { role }),
   removeTeamMember: (id: string, userId: string) => request<{ removed: boolean }>('DELETE', PORTAL_TEAM_API.member(id, userId)),
+  // The General Manager (T-968).
+  managerStatus: () => request<ManagerStatus>('GET', MANAGER_API.status),
+  enableManager: (workspaceId?: string) => request<ManagerStatus>('POST', MANAGER_API.enable, workspaceId ? { workspaceId } : {}),
+  disableManager: () => request<ManagerStatus>('POST', MANAGER_API.disable, {}),
   // Schedules and open apps (owner, 2026-10-18).
   portalLoops: () => request<PortalLoop[]>('GET', SCHEDULES_API.loops),
   triggers: () => request<Trigger[] | { items: Trigger[] }>('GET', TRIGGER_API.list).then((d) => (Array.isArray(d) ? d : (d.items ?? []))),

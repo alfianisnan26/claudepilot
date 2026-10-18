@@ -73,8 +73,8 @@ export interface CompileInput {
  * drop-in that registers the marketplace (F6); `env` names an owner stops delivering become tombstones
  * when it asked for them (secrets A6). A fragment that uses neither compiles exactly as it always has.
  */
-/** The portal's token classes: admin access (`cpat_`), OAuth access and refresh (`cpoa_`, `cpor_`) and per-session agent tokens (`cpst_`). */
-const PORTAL_TOKEN = /(?<![A-Za-z0-9])cp(?:at|oa|or|st)_[A-Za-z0-9_-]{20,}/;
+/** The portal's token classes: admin access (`cpat_`), OAuth access and refresh (`cpoa_`, `cpor_`), per-session agent tokens (`cpst_`) and the manager's (`cpmt_`). */
+const PORTAL_TOKEN = /(?<![A-Za-z0-9])cp(?:at|oa|or|st|mt)_[A-Za-z0-9_-]{20,}/;
 
 export function compile(input: CompileInput): Bundle {
   const now = input.now ?? new Date();

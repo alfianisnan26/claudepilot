@@ -2,6 +2,7 @@
 // settings, the cards and the trail are the caller's own (`self`; the routes filter by the caller and check `can` on the Claude); a chat's
 // state needs `view` on it and its mode `operate`.
 
+import type { ToolPolicies } from '@portal/contracts';
 import { declarePolicies, declareToolPolicies } from '../authz/seam.js';
 
 export function declareAutoTransferPolicies(): void {
@@ -19,6 +20,15 @@ export function declareAutoTransferPolicies(): void {
     // T-460: which of the caller's own Claudes auto move would leave now (the usage report is already filtered to what the caller may use).
     'GET /api/autotransfer/leaving': { kind: 'self' },
   });
-  // The one Portal MCP tool: a chat's state and recent events, read only. Nothing changes a mode or moves a chat over MCP.
-  declareToolPolicies('autotransfer', { autotransfer_status: { kind: 'objects', checks: [{ type: 'session', verb: 'view', arg: 'session_id', notFound: 'No such session.' }] } });
+  declareToolPolicies('autotransfer', AUTOTRANSFER_TOOL_POLICIES);
 }
+
+/**
+ * The Portal MCP tools, read only; nothing changes a mode or moves a chat over MCP. `autotransfer_status`: one chat's state and recent
+ * events. `autotransfer_events` (T-968 S2a, general-manager PRD §9.1): the caller's trail and open cards, each row filtered through can()
+ * by its session; a `session_id` it names is checked here first. Both answer a session the caller may not view like a missing one.
+ */
+export const AUTOTRANSFER_TOOL_POLICIES = {
+  autotransfer_status: { kind: 'objects', checks: [{ type: 'session', verb: 'view', arg: 'session_id', notFound: 'No such session.' }] },
+  autotransfer_events: { kind: 'objects', checks: [{ type: 'session', verb: 'view', arg: 'session_id', optional: true, notFound: 'No such session.' }], filter: 'session' },
+} satisfies ToolPolicies;

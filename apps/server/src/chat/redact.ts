@@ -41,7 +41,7 @@ const SHAPES: Shape[] = [
   { kind: 'aws', re: /(?<![A-Za-z0-9])(?:AKIA|ASIA)[A-Z0-9]{16}(?![A-Za-z0-9])/dg },
   { kind: 'slack', re: /(?<![A-Za-z0-9])xox[abprs]-[A-Za-z0-9-]{10,}/dg, swallow: '[A-Za-z0-9-]' },
   // The portal's own tokens: admin access (cpat_), OAuth access and refresh (cpoa_, cpor_), an enrollment token (cpen_, Connect) and a session's agent token
-  // (cpst_), which sits in the environment of that session's Claude Code process and so can be printed by a tool.
+  // (cpst_), which sits in the environment of that session's Claude Code process and so can be printed by a tool; the General Manager's (cpmt_, T-968) likewise.
   // Notifications and triggers (platform track): an answer token (cpna_), a trigger's webhook secret (cpwh_), a channel's signing secret
   // (cpws_) and a notification secret (cpns_).
   { kind: 'portal', re: /(?<![A-Za-z0-9])cp(?:at|oa|or|st|en|na|wh|ws|ns)_[A-Za-z0-9_-]{20,}/dg, swallow: '[A-Za-z0-9_-]' },
@@ -147,7 +147,7 @@ const LITERAL_TAILS: LiteralTail[] = [
   literalTail(['ghp_', 'gho_', 'ghu_', 'ghs_', 'ghr_'], '[A-Za-z0-9]', 20, true),
   literalTail(['github_pat_'], '[A-Za-z0-9_]', 20, true),
   literalTail(['xoxa-', 'xoxb-', 'xoxp-', 'xoxr-', 'xoxs-'], '[A-Za-z0-9-]', 10, true),
-  literalTail(['cpat_', 'cpoa_', 'cpor_', 'cpst_', 'cpen_', 'cpna_', 'cpwh_', 'cpws_', 'cpns_'], '[A-Za-z0-9_-]', 20, true),
+  literalTail(['cpat_', 'cpoa_', 'cpor_', 'cpst_', 'cpmt_', 'cpen_', 'cpna_', 'cpwh_', 'cpws_', 'cpns_'], '[A-Za-z0-9_-]', 20, true),
   literalTail(['AKIA', 'ASIA'], '[A-Z0-9]', 16, true),
 ];
 

@@ -297,10 +297,11 @@ export const WORKTREE_DIRTY = 'WORKTREE_DIRTY';
  * its own after a person's click (`portal:handoff`: the request for a handoff when a chat moves to another Claude); a person
  * typing in the app is `ui`. Anything else is refused, so an actor can't be made up with characters that
  * would read as something else. `account:<user id>` is a person signed in with an account the session was shared with
- * (session delegation): not the owner, so it is framed like any other sender.
+ * (session delegation): not the owner, so it is framed like any other sender. `manager:<session id>` is the person's General Manager
+ * (T-968): it speaks for the person, and is framed as such.
  */
 export const CHAT_ACTOR_UI = 'ui';
-export const CHAT_ACTOR_PATTERN = /^(?:ticket|session|portal-mcp|portal|ci|account):[A-Za-z0-9._:-]{1,64}$/;
+export const CHAT_ACTOR_PATTERN = /^(?:ticket|session|portal-mcp|portal|ci|account|manager):[A-Za-z0-9._:-]{1,64}$/;
 export const isChatActor = (v: unknown): v is string => typeof v === 'string' && (v === CHAT_ACTOR_UI || CHAT_ACTOR_PATTERN.test(v));
 /** A portal actor: anything an actor string can be except the person at the keyboard. */
 export const isPortalActor = (v: unknown): v is string => typeof v === 'string' && CHAT_ACTOR_PATTERN.test(v);

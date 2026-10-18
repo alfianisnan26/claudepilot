@@ -203,6 +203,8 @@ test('every real tool\'s object checks name arguments of its input, optional exa
   registerLabTools(stub);
   registerTicketTools(stub);
   registerAutoTransferTools(stub);
+  const { registerChatManagerTools } = await import('../chat/managerTools.js');
+  registerChatManagerTools(stub);
   declarePortalMcpPolicies();
   registerChatAuthz(() => null);
   declareClaudeVersionPolicies();
@@ -223,5 +225,5 @@ test('every real tool\'s object checks name arguments of its input, optional exa
     }
     checked.push(name);
   }
-  assert.deepEqual(checked.sort(), ['autotransfer_status', 'ci_run_bump', 'ci_run_cancel', 'ci_run_get', 'ci_run_logs', 'session_keepgoing_set', 'session_start', 'ticket_bump', 'workspace_rename', 'workspace_resources']);
+  assert.deepEqual(checked.sort(), ['approvals_list', 'autotransfer_events', 'autotransfer_status', 'ci_run_bump', 'ci_run_cancel', 'ci_run_get', 'ci_run_logs', 'crew_limits_get', 'session_keepgoing_set', 'session_start', 'ticket_bump', 'workspace_rename', 'workspace_resources']);
 });
