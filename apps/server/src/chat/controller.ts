@@ -442,8 +442,11 @@ export interface ChatCreateOptions {
   manager?: { ownerId: string };
 }
 
-/** T-968: the built-in tools a General Manager never has (PRD §3: tools off, three layers deep). */
-export const MANAGER_DENIED_TOOLS = ['Read', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Bash', 'BashOutput', 'KillShell', 'Glob', 'Grep', 'WebFetch', 'WebSearch', 'Task', 'Agent', 'TodoWrite'];
+/**
+ * T-968 (review 2026-10-18, blocker 1): the General Manager's own runtime. Only a manager session may start there, so no other session's
+ * process shares the place where its pilot token lives (a process environment is readable by the same user).
+ */
+export const MANAGER_RUNTIME_ID = 'kubernetes/general-manager';
 
 /** T-968: what grants a General Manager's process its portal tools (the person's manager token); index.ts wires it to Portal MCP. */
 export interface ChatManagerAccess {
@@ -1827,6 +1830,11 @@ export class ChatController {
     return s ? this.#decorate(s) : null;
   }
 
+  /** T-968: whether a session is a General Manager (its own or another person's). */
+  isManager(id: string): boolean {
+    return this.#chat.isManager(id);
+  }
+
   /** Registers a dispatcher for live `events`, `delta`, `session`, `input` and `tasks` messages. Returns an unsubscribe. */
   onEvent(cb: Dispatch): () => void {
     this.#dispatchers.add(cb);
@@ -1906,6 +1914,9 @@ export class ChatController {
     const wtReq = this.#worktreeRequest(req.worktree);
     const workspaceId = typeof req.workspaceId === 'string' ? req.workspaceId.trim() : '';
     if (!workspaceId) throw new AppError('VALIDATION_FAILED', 'Pick a workspace.', { details: { workspaceId: 'Required.' } });
+    // T-968: the manager's runtime takes only the manager, checked on the id as it will be used (review 2026-10-18 M1: " id" got past).
+    if (workspaceId.toLowerCase() === MANAGER_RUNTIME_ID && !opts.manager)
+      throw ineligibleError('This workspace is the General Manager’s own runtime: no other session runs there.');
     const [target] = this.#split(workspaceId);
     if (!this.#workspaces.runtimeFor(target))
       throw new AppError('VALIDATION_FAILED', `No target “${target}”.`, { details: { workspaceId: 'Unknown target.' } });
@@ -5295,15 +5306,22 @@ export class ChatController {
       // The portal's own tools, for a workspace that opted in: the agent scope is rate-limited, labelled and never destructive, deny rules
       // still win, and without this the first call of each tool waits for a tap in Manual mode.
       ...(grant ? ['--mcp-config', grant.mcpConfig, '--allowedTools', PILOT_TOOLS] : []),
-      // T-968: the manager has the pilot MCP alone (no other server the folder or the user config names) and no built-in tool at all.
-      ...(manager ? ['--strict-mcp-config', '--append-system-prompt', this.managerAccess?.brief() ?? '', '--disallowedTools', ...MANAGER_DENIED_TOOLS] : []),
+      // T-968 (review 2026-10-18, measured on Claude Code 2.1.296 in docs/prd/evidence/t968-manager-flags.md): `--tools ""` leaves NO
+      // built-in tool (an allowlist, not a deny list) while the pilot MCP stays connected; `--setting-sources ""` loads no settings file, so
+      // no hook runs (a project SessionStart hook did not); `--strict-mcp-config` admits the pilot server alone; no slash commands.
+      // (`--safe-mode` would also drop the MCP server, so it is not used.)
+      ...(manager
+        ? ['--tools', '', '--setting-sources', '', '--strict-mcp-config', '--disable-slash-commands', '--append-system-prompt', this.managerAccess?.brief() ?? '']
+        : []),
       o.resume ? '--resume' : '--session-id',
       o.csid,
       ...(this.#viaPool(workspaceId) ? ['--max-budget-usd', String(this.#budgetUsd())] : []),
       ...(o.bypass ? ['--allow-dangerously-skip-permissions'] : []),
       // T-323: the project's permission rules the portal trusts, as flag settings (Claude Code ignores them in a folder it doesn't trust).
       // T-561: for a lead under the policy, ONE inline value: those rules merged with the lead rules (never two --settings flags).
-      ...(leadSettings !== null
+      ...(manager
+        ? []
+        : leadSettings !== null
         ? ['--settings', leadSettings]
         : this.#projectSettings.has(`${workspaceId}\u0000${sessionCwd(o.cwd)}`)
           ? ['--settings', this.#projectSettings.get(`${workspaceId}\u0000${sessionCwd(o.cwd)}`)!]

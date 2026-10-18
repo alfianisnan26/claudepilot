@@ -1507,7 +1507,11 @@ test('T-426 --pool-env refusals, before any kubectl call: a name outside E2E_CF_
   const w = world();
   const val = `cs${hex(20)}`;
   const cases: [string[], Record<string, string>, RegExp][] = [
-    [['--pool-env', 'GITHUB_TOKEN'], { GITHUB_TOKEN: val }, /--pool-env: refused: not an allowed name \(E2E_CF_ACCESS_\*\)/],
+    [['--pool-env', 'GITHUB_TOKEN'], { GITHUB_TOKEN: val }, /--pool-env: refused: not an allowed name \(E2E_CF_ACCESS_\*, E2E_QA_EMAIL, E2E_QA_PASSWORD\)/],
+    // T-384: exactly the QA account's two names, nothing near them.
+    [['--pool-env', 'E2E_QA_TOKEN'], { E2E_QA_TOKEN: val }, /not an allowed name/],
+    [['--pool-env', 'E2E_QA_EMAIL_X'], { E2E_QA_EMAIL_X: val }, /not an allowed name/],
+    [['--pool-env', 'E2E_QA_EMAIL'], {}, /--pool-env: E2E_QA_EMAIL is not set in this workspace/],
     [['--pool-env', 'E2E_CF_ACCESS_'], {}, /not an allowed name/],
     [['--pool-env', 'E2E_CF_ACCESS_id'], { E2E_CF_ACCESS_id: val }, /not an allowed name/],
     [['--pool-env', `E2E_CF_ACCESS_X=${val}`], {}, /not an allowed name/],

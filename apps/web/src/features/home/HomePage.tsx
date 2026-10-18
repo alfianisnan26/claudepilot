@@ -1,6 +1,6 @@
 import { Button, Dialog, EmptyState, Switch } from '@isnanme/ui';
 import { ArrowDown, ArrowUp, House, RotateCcw, SlidersHorizontal } from 'lucide-react';
-import { Suspense, useId, useState, type ReactNode } from 'react';
+import { Suspense, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { InfoTip } from '@/components/InfoTip';
 import { PageHeader } from '@/components/PageHeader';
 import { Quiet } from '@/features/glance/Quiet';
@@ -9,6 +9,7 @@ import { moveInOrder } from '@/features/glance/settings';
 import type { GlanceWidget } from '@/features/glance/types';
 import { GlanceSkeleton } from '@/features/glance/widgets/shared/states';
 import { HomeModeSwitch, ManagerMode, readHomeMode, saveHomeMode, type HomeMode } from './ManagerMode';
+import { packColumns } from './masonry';
 import { DEFAULT_HOME, orderCards, resetHomeSettings, updateHomeSettings, useHomeSettings } from './settings';
 
 /** The widgets that have a Home card. */
@@ -68,14 +69,92 @@ export function HomePage() {
           }
         />
       ) : (
-        <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2 min-[1700px]:grid-cols-3">
-          {cards.map((w) => (
-            <HomeCard key={w.id} widget={w} />
-          ))}
-        </div>
+        <Columns ids={cards.map((w) => w.id)}>{(i) => <HomeCard widget={cards[i]!} />}</Columns>
       )}
       <ArrangeDialog open={arranging} onClose={() => setArranging(false)} />
     </>
+  );
+}
+
+/** 1 column on a phone, 2 from 1024 px, 3 from 1700 px (as the grid was). */
+function useColumnCount(): number {
+  const read = () => (typeof window === 'undefined' ? 1 : window.matchMedia('(min-width: 1700px)').matches ? 3 : window.matchMedia('(min-width: 1024px)').matches ? 2 : 1);
+  const [n, setN] = useState(read);
+  useEffect(() => {
+    const qs = ['(min-width: 1024px)', '(min-width: 1700px)'].map((q) => window.matchMedia(q));
+    const on = () => setN(read());
+    qs.forEach((q) => q.addEventListener('change', on));
+    return () => qs.forEach((q) => q.removeEventListener('change', on));
+  }, []);
+  return n;
+}
+
+/** A height change re-packs after the cards have been still this long (a list that grows row by row moves the layout once). */
+const SETTLE_MS = 1500;
+/** How long after the page opens (or the cards or column count change) the best packing is always taken: skeletons, then data. */
+const FRESH_MS = 3000;
+
+/**
+ * The cards in independent column stacks (masonry.ts): no row makes a short card leave a hole. Each card's height is watched. The packing
+ * is made fresh when the cards or the column count change; on a height change, once heights settle, the good packing that moves the
+ * fewest cards is taken (masonry.ts SETTLE_PX), so a packing that is still good stays as it is.
+ */
+function Columns({ ids, children }: { ids: string[]; children: (i: number) => ReactNode }) {
+  const n = useColumnCount();
+  const heights = useRef(new Map<string, number>());
+  const nodes = useRef(new Map<string, HTMLElement>());
+  const key = `${n}|${ids.join(',')}`;
+  const [packing, setPacking] = useState<{ key: string; cols: number[][] }>(() => ({ key, cols: packColumns(ids.map(() => 0), n) }));
+  // fresh: the cards are still loading, so the best packing, not the closest to the current one.
+  const repack = (fresh: boolean) => {
+    const h = ids.map((id) => heights.current.get(id) ?? 0);
+    setPacking((cur) => {
+      const next = packColumns(h, n, 16, !fresh && cur.key === key ? cur.cols : undefined);
+      return cur.key === key && JSON.stringify(cur.cols) === JSON.stringify(next) ? cur : { key, cols: next };
+    });
+  };
+  const repackRef = useRef(repack);
+  repackRef.current = repack;
+  // Until when the cards count as still loading (FRESH_MS after the cards or the column count change).
+  const freshUntil = useRef(0);
+  useLayoutEffect(() => {
+    freshUntil.current = Date.now() + FRESH_MS;
+    setPacking({ key, cols: packColumns(ids.map((id) => heights.current.get(id) ?? 0), n) });
+  }, [key]); // ids and n are in key
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const ro = new ResizeObserver((entries) => {
+      let changed = false;
+      for (const e of entries) {
+        const id = (e.target as HTMLElement).dataset.col ?? '';
+        const h = Math.round(e.contentRect.height);
+        if (heights.current.get(id) !== h) (heights.current.set(id, h), (changed = true));
+      }
+      if (!changed) return;
+      clearTimeout(timer);
+      // The first time every height is known, at once (the first paint was round robin); later, once they settle.
+      // While the cards first load (skeletons, then data) the best packing is taken at once; after that, the closest good one, once
+      // heights have been still for SETTLE_MS.
+      const fresh = Date.now() < freshUntil.current;
+      timer = setTimeout(() => repackRef.current(fresh), fresh ? 0 : SETTLE_MS);
+    });
+    nodes.current.forEach((el) => ro.observe(el));
+    return () => (clearTimeout(timer), ro.disconnect());
+  }, [key, packing]);
+  const cols = packing.key === key ? packing.cols : packColumns(ids.map(() => 0), n);
+  const ref = (id: string) => (el: HTMLElement | null) => void (el ? nodes.current.set(id, el) : nodes.current.delete(id));
+  return (
+    <div className="flex items-start gap-4" data-home-columns={cols.length}>
+      {cols.map((col, c) => (
+        <div key={c} className="flex min-w-0 flex-1 flex-col gap-4">
+          {col.map((i) => (
+            <div key={ids[i]} ref={ref(ids[i]!)} data-col={ids[i]} className="min-w-0">
+              {children(i)}
+            </div>
+          ))}
+        </div>
+      ))}
+    </div>
   );
 }
 

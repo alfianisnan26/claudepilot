@@ -8,6 +8,7 @@ import { z } from 'zod';
 import { workspaceRef, type Actor, type ObjectRef, type UserId, type Verb } from '@portal/contracts';
 import { actorOfPrincipal, can, clearResolvers, registerResolver, requireCan } from '../authz/seam.js';
 import { Portal } from '../portal.js';
+import { ManagerTokens } from './managers.js';
 import { ToolRegistry, type PortalPrincipal } from './registry.js';
 import { portalMcpHarness } from './testkit.js';
 
@@ -228,7 +229,62 @@ test('migration 793: every session is a workspace session of the founding user, 
     add('gm3', 'manager', ALICE);
     assert.throws(() => add('gm4', 'manager', ALICE), /UNIQUE/);
     assert.throws(() => add('x1', 'robot'), /CHECK/);
+    // The index holds live rows only (review 2026-10-18): Disable ends the manager and its transcript stays; Enable again makes a new one.
+    const end = (id: string) => db.prepare("UPDATE chat_sessions SET state = 'ended' WHERE id = ?").run(id);
+    end('gm3');
+    add('gm5', 'manager', ALICE);
+    end('gm5');
+    add('gm6', 'manager', ALICE);
+    assert.throws(() => add('gm7', 'manager', ALICE), /UNIQUE/, 'still one live manager per person');
+    const rows = db.prepare("SELECT id, state FROM chat_sessions WHERE kind = 'manager' AND owner_id = ? ORDER BY id").all(ALICE) as { id: string; state: string }[];
+    assert.deepEqual(rows.map((r) => r.id), ['gm3', 'gm5', 'gm6'], 'the ended ones stay');
+    assert.deepEqual(rows.filter((r) => r.state !== 'ended').map((r) => r.id), ['gm6']);
+    // Bringing an ended manager back while another is live is refused as well.
+    assert.throws(() => db.prepare("UPDATE chat_sessions SET state = 'idle' WHERE id = 'gm5'").run(), /UNIQUE/);
   } finally {
     h.done();
   }
+});
+
+test('review 2026-10-18 M4: a token passes only while its person is signed in; a check that says no revokes it', async () => {
+  const h = await portalMcpHarness({ registry: registry() });
+  try {
+    let signedIn = true;
+    const tokens = new ManagerTokens(h.store, { alive: () => true, signedIn: () => signedIn });
+    const t = tokens.mint({ userId: ALICE, sessionId: 'gm1' })!;
+    assert.equal(tokens.verify(t.secret).ok, true);
+    signedIn = false;
+    assert.deepEqual(tokens.verify(t.secret), { ok: false, reason: 'revoked', tokenId: t.tokenId });
+    signedIn = true;
+    assert.equal(tokens.verify(t.secret).ok, false, 'revoked stays revoked: the next sign-in mints a new one');
+  } finally {
+    h.done();
+  }
+});
+
+test('review 2026-10-18 M4: an expired login signs the person out (their manager stops), like a sign-out', () => {
+  const portal = new Portal(undefined, 50);
+  const out: string[] = [];
+  portal.onSignedOut = (u) => void out.push(u);
+  const token = portal.openSession(ALICE);
+  const start = Date.now();
+  while (Date.now() - start < 80) {
+    // wait past the 50 ms login lifetime
+  }
+  assert.equal(portal.anySession(token), undefined);
+  assert.deepEqual(out, [ALICE]);
+});
+
+test('review N1: an expired login with another device still signed in leaves the manager running', () => {
+  const portal = new Portal(undefined, 50);
+  const out: string[] = [];
+  portal.onSignedOut = (u) => void out.push(u);
+  const old = portal.openSession(ALICE);
+  const start = Date.now();
+  while (Date.now() - start < 80) {
+    // the first login ages past its 50 ms
+  }
+  portal.openSession(ALICE);
+  assert.equal(portal.anySession(old), undefined);
+  assert.deepEqual(out, [], 'the phone is still signed in');
 });

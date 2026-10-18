@@ -15,7 +15,14 @@ import { declareChatManagerPolicies, NO_SESSION } from './authz.js';
 
 export interface ChatManagerDeps {
   db: () => DatabaseSync | null;
-  chat: { get(id: string): ChatSession | null; list(filter?: { parentId?: string }): ChatSession[] };
+  chat: {
+    get(id: string): ChatSession | null;
+    list(filter?: { parentId?: string }): ChatSession[];
+    /** T-968: a message from the manager into a session (framed as the person's General Manager). */
+    send?(sessionId: string, uuid: string, text: string, opts: { actor?: string; actorLabel?: string; priority?: 'next' | 'later' }): Promise<void>;
+    /** T-968: a General Manager is never a target of another manager's message. */
+    isManager?(id: string): boolean;
+  };
   /** The global caps (Settings › Sessions); null when none are installed. */
   caps: () => AgentCaps | null;
   now?: () => number;
@@ -37,6 +44,41 @@ const sessionLink = (id: string) => `/admin/sessions/${encodeURIComponent(id)}`;
 export function registerChatManagerTools(d: ChatManagerDeps, registry: ToolRegistry = portalTools): void {
   declareChatManagerPolicies();
   const now = d.now ?? Date.now;
+
+  // T-968 (review 2026-10-18): the manager's one way to steer: a message into a session the person may operate (a lead, a lane). It shows in
+  // that transcript as from "your General Manager"; the receiver reads it framed (controller.ts portalFrameBase). Only a manager may call it.
+  registry.register({
+    name: 'manager_message',
+    title: 'Message a session (lead, lane) as the General Manager',
+    description:
+      'Sends a message into a session you may operate: a crew lead (to dispatch, unblock, reprioritise) or one of its lanes. It arrives as from the person\'s General Manager. ' +
+      'You manage: tell the lead what to get done and why, never do the work yourself. priority next steers the turn now running; later (default) waits for it to end.',
+    scope: 'operate',
+    hints: { openWorld: true },
+    rate: { perMinute: 20, perHour: 200 },
+    maxArgsBytes: 10_000,
+    input: z.object({
+      session_id: z.string().max(100).describe('The session (session_list, session_get).'),
+      text: z.string().min(1).max(8000),
+      priority: z.enum(['next', 'later']).optional(),
+    }),
+    async handler(ctx, args) {
+      if (ctx.principal.kind !== 'manager') throw new AppError('FORBIDDEN', 'Only the General Manager sends with this tool.');
+      const target = d.chat.get(args.session_id);
+      if (!target || !can(actorOfPrincipal(ctx.principal), 'operate', sessionRef(target.id)).allow) throw new AppError('NOT_FOUND', NO_SESSION);
+      if (target.id === ctx.principal.sessionId) throw new AppError('VALIDATION_FAILED', 'Not to yourself.');
+      // Review 2026-10-18 m2: never into a manager (another person's included), and the same 404 as a session you may not see.
+      if (d.chat.isManager?.(target.id) ?? true) throw new AppError('NOT_FOUND', NO_SESSION);
+      if (!d.chat.send) throw new AppError('SERVICE_UNAVAILABLE', 'Sending is not available.');
+      await d.chat.send(target.id, crypto.randomUUID(), args.text.replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, ''), {
+        actor: ctx.actor,
+        actorLabel: 'General Manager',
+        ...(args.priority ? { priority: args.priority } : {}),
+      });
+      ctx.affected(`session:${target.id}`);
+      return { summary: `Sent to ${target.id}.` };
+    },
+  });
 
   registry.register({
     name: 'approvals_list',

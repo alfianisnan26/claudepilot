@@ -3452,7 +3452,7 @@ export const MIGRATIONS: Migration[] = [
       db.exec(`
         ALTER TABLE chat_sessions ADD COLUMN kind TEXT NOT NULL DEFAULT 'workspace' CHECK (kind IN ('workspace', 'manager'));
         ALTER TABLE chat_sessions ADD COLUMN owner_id TEXT NOT NULL DEFAULT 'u_owner';
-        CREATE UNIQUE INDEX chat_sessions_one_manager ON chat_sessions (owner_id) WHERE kind = 'manager';
+        CREATE UNIQUE INDEX chat_sessions_one_manager ON chat_sessions (owner_id) WHERE kind = 'manager' AND state != 'ended';
         CREATE TABLE pmcp_manager_tokens (
           id TEXT PRIMARY KEY,
           token_hash TEXT NOT NULL UNIQUE,

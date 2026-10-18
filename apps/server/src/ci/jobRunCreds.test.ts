@@ -91,7 +91,7 @@ uc=; prev=
 for a in "$@"; do [ "$prev" = --userconfig ] && uc=$a; prev=$a; done
 [ -z "\${STUB_LEAK:-}" ] || cat "${tokfile}" >&2
 case "$*" in *--prefer-offline*) if [ -n "\${STUB_MISS:-}" ]; then echo "npm ERR! code ENOTCACHED" >&2; exit 1; fi ;; esac
-echo "npm $* pool=\${E2E_CF_ACCESS_CLIENT_ID:+set}\${JR_POOL_E2E_CF_ACCESS_CLIENT_ID:+set}" >> "${calls}.pool"
+echo "npm $* pool=\${E2E_CF_ACCESS_CLIENT_ID:+set}\${JR_POOL_E2E_CF_ACCESS_CLIENT_ID:+set}\${E2E_QA_EMAIL:+set}\${JR_POOL_E2E_QA_EMAIL:+set}\${E2E_QA_PASSWORD:+set}\${JR_POOL_E2E_QA_PASSWORD:+set}" >> "${calls}.pool"
 echo "npm $* ${probe}" >> "${calls}"
 mkdir -p node_modules
 `);
@@ -354,6 +354,21 @@ test('T-426 S1g the run script\'s `declare -A` and "${!jr_pool[@]}" work under s
   const { r } = w.pod({ JR_CMD: Buffer.from('true').toString('base64') });
   assert.equal(r.status, 0, r.stdout + r.stderr);
   assert.ok(!/unbound variable|bad array subscript/.test(r.stdout + r.stderr));
+});
+
+test('T-384 --pool-env: the stg QA account (E2E_QA_EMAIL, E2E_QA_PASSWORD) is kept from the install steps like the Access names; the command gets both', () => {
+  const w = world();
+  const mail = `qa${hex(6)}@stg.example.test`;
+  const pass = `p${hex(14)}`;
+  const pool = `${w.root}/calls.pool`;
+  const cmd = Buffer.from(`echo "cmd mail=$E2E_QA_EMAIL pass=$E2E_QA_PASSWORD" >> "${pool}"`).toString('base64');
+  const { r } = w.pod({ JR_POOL_E2E_QA_EMAIL: mail, JR_POOL_E2E_QA_PASSWORD: pass, JR_CMD: cmd });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  const lines = readFileSync(pool, 'utf8').trim().split('\n').map(noUc);
+  assert.ok(lines.some((l) => l.startsWith('npm rebuild')), lines.join('\n'));
+  for (const l of lines.filter((x) => x.startsWith('npm rebuild') || x.startsWith('npm run'))) assert.ok(l.endsWith('pool='), `no pool variable during install: ${l}`);
+  assert.equal(lines[lines.length - 1], `cmd mail=${mail} pass=${pass}`, 'the command step gets both');
+  assert.ok(!(r.stdout + r.stderr).includes(pass));
 });
 
 test('T-426 S1f --pool-env: the install steps (npm rebuild, lifecycle scripts) see no pool variable; only the command does', () => {

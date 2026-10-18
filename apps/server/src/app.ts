@@ -124,6 +124,7 @@ import type { HeldShare } from './identity/grants.js';
 import type { OidcClient } from './identity/oidc.js';
 import { identityRoutes } from './identity/routes.js';
 import { listLoops } from './platform/loops.js';
+import { managerHealer } from './manager/access.js';
 import { ManagerService } from './manager/service.js';
 import { SsoProviders } from './identity/sso.js';
 import { PortalTeams } from './identity/teams.js';
@@ -380,6 +381,11 @@ export function createApp(
     return c.json(success(status));
   });
 
+  const healManager = managerHealer({
+    managerOf: (ownerId) => chatController.managerOf(ownerId),
+    hasLive: portalMcp?.managers ? (id) => portalMcp.managers.hasLive(id) : undefined,
+    restart: (id, opts) => chatController.restart(id, opts),
+  });
   app.post(API.login, async (c) => {
     const key = clientKey(c);
     if (limiter.blocked(key)) throw new AppError('RATE_LIMITED', 'Too many tries. Wait a few minutes.');
@@ -414,6 +420,8 @@ export function createApp(
       limiter.reset(key);
     }
     setSessionCookie(c, token);
+    // T-968: a sign-in brings the person's General Manager back when a sign-out had revoked its token (it gets a new one at its restart).
+    healManager(portal.anySession(token)?.userId ?? 'u_owner');
     // A member's sign-in answers no admin state (it holds the server code): the web reads /api/me and shows the member page.
     return c.json(success(portal.session(token) ? portal.adminState(token) : { member: true }));
   });
@@ -640,9 +648,13 @@ export function createApp(
   const managers = new ManagerService(chatController, workspaces);
   const managerOwner = (c: Context<Env>) => portal.session(c.get('token'))?.userId ?? 'u_owner';
   admin.get('/manager', async (c) => c.json(success(await managers.status(managerOwner(c)))));
+  admin.post('/manager/prepare', async (c) => {
+    const st = await managers.prepare(managerOwner(c));
+    audit('manager.prepared', null, { workspaceId: st.runtime?.workspaceId ?? null }, 'medium', portal.session(c.get('token'))?.userId ?? null);
+    return c.json(success(st));
+  });
   admin.post('/manager/enable', async (c) => {
-    const req = await body<{ workspaceId: string }>(c);
-    const st = await managers.enable(managerOwner(c), req);
+    const st = await managers.enable(managerOwner(c));
     audit('manager.enabled', null, { sessionId: st.sessionId, workspaceId: st.workspaceId }, 'medium', portal.session(c.get('token'))?.userId ?? null);
     return c.json(success(st));
   });

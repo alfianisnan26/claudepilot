@@ -82,6 +82,7 @@ export const NO_SESSION = 'No such session.';
 export const CHAT_MANAGER_TOOL_POLICIES = {
   approvals_list: { kind: 'objects', checks: [{ type: 'session', verb: 'view', arg: 'session_id', optional: true, notFound: NO_SESSION }], filter: 'session' },
   crew_limits_get: { kind: 'objects', checks: [{ type: 'session', verb: 'view', arg: 'session_id', notFound: NO_SESSION }] },
+  manager_message: { kind: 'objects', checks: [{ type: 'session', verb: 'operate', arg: 'session_id', notFound: NO_SESSION }] },
 } satisfies ToolPolicies;
 
 export function declareChatManagerPolicies(): void {
