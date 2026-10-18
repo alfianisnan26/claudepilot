@@ -99,6 +99,56 @@ tag_var() {
   esac
 }
 
+# Pre-pull (2026-10-18: three deploys in a row took the portal down for 2-3 min, ImagePullBackOff, because k3s-node2's own resolver failed
+# for the registry while the old pod was already stopped; the Deployment is Recreate on one SQLite volume, so it can't roll). A tiny Job pulls
+# the new image onto the portal's node FIRST, with the kubelet's retries; only when it succeeded does the release push. A pull that keeps
+# failing stops the release with nothing deployed (the old portal keeps running). A Job that can't be made (no rights on this runner, an
+# unknown node) only warns: the release goes on as before.
+prepull() {
+  local image=$1 node name s i
+  dry && return 0
+  node=$(kubectl -n "$DEPLOY_NAMESPACE" get pods -l "app=$DEPLOY_DEPLOYMENT" -o jsonpath='{.items[0].spec.nodeName}' 2>/dev/null || true)
+  if ! [[ $node =~ ^[a-z0-9][a-z0-9.-]{0,62}$ ]]; then log "release: pre-pull skipped (the portal's node is not known)"; return 0; fi
+  name="claudepilot-prepull-$(date +%s)"
+  if ! kubectl create -f - >/dev/null 2>&1 <<YAML
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: $name
+  namespace: $DEPLOY_NAMESPACE
+  labels: { app: claudepilot-prepull }
+spec:
+  backoffLimit: 8
+  activeDeadlineSeconds: 600
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels: { app: claudepilot-prepull }
+    spec:
+      restartPolicy: Never
+      nodeName: $node
+      containers:
+        - name: pull
+          image: $image
+          command: ["node", "-e", "0"]
+          resources: { requests: { cpu: 10m, memory: 32Mi }, limits: { cpu: 200m, memory: 128Mi } }
+YAML
+  then
+    log "release: pre-pull skipped (the Job could not be made on this runner)"
+    return 0
+  fi
+  log "release: pre-pulling $image on $node ($name)"
+  for i in $(seq 1 60); do
+    s=$(kubectl -n "$DEPLOY_NAMESPACE" get job "$name" -o jsonpath='{.status.succeeded}/{.status.failed}' 2>/dev/null || true)
+    case $s in
+      [1-9]*/*) log "release: the new image is on $node"; return 0 ;;
+      */9) die "the new image could not be pulled onto $node (9 tries): nothing was deployed, the portal keeps running" ;;
+    esac
+    sleep "${PREPULL_POLL_S:-10}"
+  done
+  die "the new image did not reach $node in 10 minutes: nothing was deployed, the portal keeps running"
+}
+
 # Where an image lives in the registry.
 registry_repo() { if [ "$1" = portal ]; then printf claudepilot/portal; else printf claudepilot/workspace; fi; }
 
