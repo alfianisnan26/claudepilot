@@ -16,7 +16,8 @@
   untrusted fix e605c835 (Job after a8fca5a3) -> delta c691df71 + blind d9f18599. Integration holds c6c4a589 (FAILED security
   review; fixes on coord/T-968-gm): no deploy until T-731 says so.
 - T-1083 URGENT (D-84: job-run places Jobs on the cluster or the owner's Mac) -> 2a0edbd8, ahead of T-1079. Plan 11383:
-  S1 placement + Mac runtime, S2 fail-safe/caps, S3 measure; door to the Mac's Docker first; QA + blind per slice.
+  No door from the pod to the Mac's Docker -> S1a job-run placement ("no slot" stub), S1b portal door (authz, scoped
+  token); agent.json volume policy, token, deploy FOR THE COORDINATOR (T-731 11389). Then S2 fail-safe, S3 measure.
 - T-1079 (after T-1083 S1 is in QA; owner: Konfersi stg release docs per module into vault 98af7d16def1, reuse releaseReport.ts) 2a0edbd8, S1+S2 16fee55e.
 - 2a0edbd8 Jobs: T-921 db1d8d19 rc0, QA PWG #11350 (J1, J4 survive) -> tests (11368) -> delta c691df71 -> blind; T-257 d34f47b2 rc1 (test bug) -> fix e22ae23d, Job after T-968's two;
   T-976 fmt re-run baov0fphs (patch lost to $OUT), T-968 a8fca5a3 b1gahci5o, T-565 bzq96a9ey on 59451a5f running.
