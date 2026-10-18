@@ -905,7 +905,7 @@ test('T-1043 S0c: a member reaches only its own workspaces and sessions; a refus
     for (const tool of ['workspace_start', 'workspace_stop', 'workspace_sync', 'workspace_delete', 'workspace_rename', 'workspace_resources'])
       assert.equal(err(await h.call(m, tool, { id: 'docker/web', label: 'x', apply: 'next_restart' })), 'NOT_FOUND', tool);
     assert.equal(err(await h.call(m, 'workspace_create', { name: 'mine', target: 'docker' })), 'NOT_FOUND', 'a target it holds nothing on');
-    assert.deepEqual(calls, [], 'no refused call reached a service');
+    assert.equal(calls.length, 0, `no refused call reached a service: ${calls.join(', ')}`);
     assert.equal(where(await h.call(m, 'workspace_stop', { id: 'docker/old' })).summary, 'docker/old is already stopped.');
     assert.equal(where(await h.call(m, 'workspace_sync', { id: 'docker/old' })).id, 'docker/old');
     assert.ok(calls.some((c) => c.startsWith('reconciler.request:docker/old')), 'its own workspace is reached');
