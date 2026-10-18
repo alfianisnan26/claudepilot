@@ -425,6 +425,12 @@ test('crew_queue (2026-10-18): a crew lane comments on an UNASSIGNED ticket of i
     assert.equal(await code(lane, 'T-2'), 'NOT_FOUND', 'another workspace: not even seen');
     for (const id of ['T-3', 'T-4']) assert.equal(await code(lane, id), 'FORBIDDEN', id);
     assert.equal(await code(solo, 'T-1'), 'FORBIDDEN', 'a session with no lead is not a crew lane');
+    // A comment only: no attachment through crew_queue.
+    const att = await r.h.call(lane.secret, 'ticket_attach', { id: 'T-1', name: 'x.txt', content_base64: Buffer.from('hello').toString('base64') });
+    assert.equal(att.result?.structuredContent?.error?.code, 'FORBIDDEN', JSON.stringify(att.result?.structuredContent));
+    // An ended lane gets nothing.
+    r.sessions.sessions.set('lane', { ...r.sessions.sessions.get('lane')!, state: 'ended' });
+    assert.equal(await code(lane, 'T-1'), 'FORBIDDEN', 'an ended lane');
   } finally {
     r.done();
   }

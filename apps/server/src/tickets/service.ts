@@ -544,7 +544,7 @@ export class Tickets {
    * FR29: commenting is what FR9 allows, and also the answer of a session a person asked about the ticket (Ask) in the last day. FR9b
    * (T-294, T-397): a crew worker's comment on its spawn's ticket or its lead's (authz.ts `canWorkerComment`). A refusal keeps FR9's text.
    */
-  #assertCanComment(caller: Caller, row: Row, w: Writer): { ended: EndedGrant | null; worker: WorkerCommentReason | null } {
+  #assertCanComment(caller: Caller, row: Row, w: Writer, opts: { attach?: boolean } = {}): { ended: EndedGrant | null; worker: WorkerCommentReason | null } {
     try {
       return { ended: this.#assertCanModify(caller, row, w), worker: null };
     } catch (e) {
@@ -552,7 +552,8 @@ export class Tickets {
         return { ended: null, worker: null };
       if (caller.kind === 'agent' && !isTicketClosed(row.status)) {
         const why = this.#workerComment(w.session!, row);
-        if (why) return { ended: null, worker: why };
+        // crew_queue is the widest grant (any unassigned ticket of the workspace): a comment only, never an attachment (review 2026-10-18).
+        if (why && !(opts.attach && why === 'crew_queue')) return { ended: null, worker: why };
       }
       throw e;
     }
@@ -961,7 +962,7 @@ export class Tickets {
   ): TicketAttachment {
     const row = this.#need(caller, id);
     const w = this.#writer(caller, opts.sessionId);
-    const grant = this.#assertCanComment(caller, row, w);
+    const grant = this.#assertCanComment(caller, row, w, { attach: true });
     if (isTicketClosed(row.status) && caller.kind === 'agent')
       throw new AppError('FORBIDDEN', `${ticketIdOf(row.number)} is closed. A person can reopen it.`);
     const raw = typeof file.name === 'string' ? file.name : '';
