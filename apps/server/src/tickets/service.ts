@@ -2198,6 +2198,22 @@ export class Tickets {
       .map((r) => ({ id: r.id, ticket: ticketIdOf(r.number), role: r.role, verdict: r.verdict }));
   }
 
+  /**
+   * T-1616: the tickets `sessionId` holds that are in review and whose LATEST verdict (any role, any commit) is a pass, lowest number first
+   * (at most 100): what the crew wake lists as ready to close or merge. A later fail of any role takes a ticket off. `evaluateVerdicts` does
+   * not fit here: it needs the head commit, which the portal does not know for a ticket. A PASS WITH GAPS is recorded as a pass.
+   */
+  readyToCloseHeldBy(sessionId: string): { ticket: string; role: string }[] {
+    const rows = this.#db
+      .prepare(
+        `SELECT t.number AS number, v.role AS role, v.verdict AS verdict FROM tickets t
+         JOIN ticket_verdicts v ON v.id = (SELECT max(id) FROM ticket_verdicts WHERE ticket_number = t.number)
+         WHERE t.assignee_kind = 'session' AND t.assignee_ref = ? AND t.status = 'in_review' ORDER BY t.number LIMIT 100`,
+      )
+      .all(sessionId) as { number: number; role: string; verdict: string }[];
+    return rows.filter((r) => r.verdict === 'pass').map((r) => ({ ticket: ticketIdOf(r.number), role: r.role }));
+  }
+
   /** FR31: the tickets bumped into a session, the latest bump of each, newest first (the session page's chips). */
   bumpedInto(caller: Caller, sessionId: string): TicketBumped[] {
     const rows = this.#db
