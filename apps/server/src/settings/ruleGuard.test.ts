@@ -1460,3 +1460,112 @@ test('T-860 S2c: set -a, a for loop over a GIT_ name, GIT_ assigned by a paramet
   }
   assert.deepEqual(misses, []);
 });
+
+// T-1092: a lead's python3 heredoc writing its own status file was refused as "a rule file is named": WRITE_API matched
+// open(p,'w') and the bare word "claude" matched "claudepilot-job-..." in the note's data. Resolved by guidance, not by
+// loosening (every exemption tried was a write path to a rule file): still refused, and the message says to use Edit or Write.
+test('T-1092: the 04:33 status-file heredoc is refused with guidance to use the Edit or Write tool, never "a rule file is named"', () => {
+  const notes = join(R.root, 'scratch', 'lead', 'notes');
+  mkdirSync(notes, { recursive: true });
+  const file = join(notes, 'status-lead.md');
+  const command = [
+    "python3 - <<'EOF'",
+    `p = '${file}'`,
+    "txt = '''# Status lead",
+    '- job claudepilot-job-b224b7d0 finished; claudepilot-job-x queued',
+    '- logs in ~/.claudepilot/outbox; the run moved to claudes/c2',
+    '- CLAUDEPILOT lane is green',
+    "'''",
+    "open(p, 'w').write(txt)",
+    'EOF',
+  ].join('\n');
+  const res = bash(command);
+  refused(res, 'the 04:33 status-file heredoc');
+  assert.match(
+    res.stderr,
+    /names something like a rule file: claude\. To edit a notes or status file, use the Edit or Write tool, not inline code/,
+  );
+  assert.doesNotMatch(res.stderr, /rule file is named/);
+});
+
+// The way the guidance points: the Edit and Write tools on a notes file never reach inlineReason (only Bash code does), so
+// a note whose text says claude, settings, claudepilot-job-x or .claude/settings.json is written.
+test('T-1092: Edit and Write of a notes or status file go through whatever its text says', () => {
+  const file = join(R.root, 'scratch', 'lead', 'notes', 'status-lead.md');
+  mkdirSync(join(R.root, 'scratch', 'lead', 'notes'), { recursive: true });
+  const content = '# Status lead\n- claudepilot-job-x done; one.claude moved; the settings page; see .claude/settings.json\n';
+  allowed(run(R, 'Write', { file_path: file, content }), 'Write of the status file');
+  allowed(run(R, 'Edit', { file_path: file, old_string: 'done', new_string: 'claude settings allowlist' }), 'Edit of the status file');
+});
+
+test('T-1092: a heredoc that writes or names a rule file is still refused; a fragment hit says so in its own words', () => {
+  refused(bash("python3 - <<'EOF'\nopen('.claude/settings.json', 'w').write('{}')\nEOF"), 'heredoc writing .claude/settings.json');
+  refused(
+    bash("python3 - <<'EOF'\nimport os\np = 'notes.md'\nopen(p, 'w').write('see .claude/settings.local.json')\nEOF"),
+    'heredoc whose text names .claude/settings.local.json',
+  );
+  // A fragment, not a named rule file: refused with the heuristic's message, which must not say a rule file is named.
+  const frag = bash("python3 - <<'EOF'\nimport os\nopen(os.path.join(os.environ['D'], 'settings.json'), 'w').write('{}')\nEOF");
+  refused(frag, 'heredoc writing a settings.json under a variable folder');
+  assert.match(frag.stderr, /the command writes a file and its text names something like a rule file: settings\.json/);
+  assert.doesNotMatch(frag.stderr, /rule file is named|rule file named/);
+  const piece = bash("python3 - <<'EOF'\nimport os\nopen(os.path.join('.cla' + 'ude', 'x'), 'w').write('{}')\nEOF");
+  refused(piece, 'a quoted piece of a rule file name');
+  assert.match(piece.stderr, /something like a rule file: a piece of \.claude\/settings\.json/);
+  // Shell values the guard cannot see keep the loose words: only "claude" and "settings" show here.
+  refused(bash('A=claude; B=settings; echo x > ~/.$A/$B.json'), 'a target built from variables');
+});
+
+// T-1092 blind review of 810ab250: code that writes and reaches a rule file by a glob, a folder listing, a bare word cut
+// out of a longer string, or a protected path split in two. Each was let through by 810ab250; the narrow net refuses it.
+const py = (body: string) => `python3 - <<'EOF'\n${body}\nEOF`;
+const T1092_BYPASSES: [string, string][] = [
+  ['glob .claude*/settings*.json', py("import glob\nfor p in glob.glob('.claude*/settings*.json'): open(p,'w').write('{}')")],
+  ['glob .cla*/settings*', py("import glob\nfor p in glob.glob('.cla*/settings*'): open(p,'w').write('{}')")],
+  ['glob */settings*.json', py("import glob\nfor p in glob.glob('*/settings*.json'): open(p,'w').write('{}')")],
+  ['glob */settings.*', py("import glob\nfor p in glob.glob('*/settings.*'): open(p,'w').write('{}')")],
+  ['Path.glob .cl*/settings*.json', py("from pathlib import Path\nfor p in Path('.').glob('.cl*/settings*.json'): p.write_text('{}')")],
+  [
+    'node readdir with startsWith .cl and settings',
+    `node -e "const fs=require('fs');for(const d of fs.readdirSync('.'))if(d.startsWith('.cl'))for(const f of fs.readdirSync(d))if(f.startsWith('settings'))fs.writeFileSync(d+'/'+f,'{}')"`,
+  ],
+  ['node readdir with a two-letter start', `node -e "const fs=require('fs');for(const d of fs.readdirSync('.'))if(d.startsWith('.c'))fs.writeFileSync(d+'/x','{}')"`],
+  ['node slice of x.claude', `node -e "require('fs').writeFileSync('x.claude'.slice(1)+'/'+'Xsettings'.slice(1)+'Y.json'.slice(1),'{\\"w\\":1}')"`],
+  ['python slice of x.claude', py("p = 'x.claude'[1:] + '/' + 'Xsettings'[1:] + 'Y.json'[1:]\nopen(p,'w').write('{}')")],
+  ['CLAUDE_ + CONFIG_DIR', py("import os\nopen(os.environ['CLAUDE_'+'CONFIG_DIR']+'/x','w').write('{}')")],
+  ['/etc/ + claudepilot/...', py("open('/etc/'+'claudepilot/bin/policy-rule-guard.cjs','w').write('x')")],
+  ['/etc/claudep + ilot/...', py("open('/etc/claudep'+'ilot/bin/policy-rule-guard.cjs','w').write('x')")],
+  // Re-review of f60cc9b7: words padded with letters and cut out again. The restored loose words refuse them.
+  ['python letter-padded words', py("p = '.'+'zclaudez'[1:-1]+'/'+'zsettingsz'[1:-1]+'z.jsonz'[1:-1]\nopen(p,'w').write('{}')")],
+  ["python 'claudeX'[:6]", py("p = '.' + 'claudeX'[:6] + '/x'\nopen(p,'w').write('{}')")],
+  ["python 'claude-x'[:6]", py("p = '.' + 'claude-x'[:6] + '/x'\nopen(p,'w').write('{}')")],
+  ['node slice(1,-1)', `node -e "require('fs').writeFileSync('.'+'zclaudez'.slice(1,-1)+'/x','{}')"`],
+  ['ruby [1..6]', `ruby -e 'File.write("." + "zclaudez"[1..6] + "/x", "{}")'`],
+  // Re-review of afae35b2: the claudepilot / claudes/ exemption was itself a write path (~/.claude.json and the like).
+  ["python 'claudepilot'[:6] to .claude.json", py("p = '.'+'claudepilot'[:6]+'.'+'js'+'on'\nopen(p,'w').write('{}')")],
+  ["python .replace('pilot','')", py("p = '.claudepilot'.replace('pilot','') + '.' + 'js' + 'on'\nopen(p,'w').write('{}')")],
+  ["python 'claudes/'[:6]", py("p = '.' + 'claudes/'[:6] + '/x'\nopen(p,'w').write('{}')")],
+  ['node slice(0,6)', `node -e "require('fs').writeFileSync('.'+'claudepilot'.slice(0,6)+'.'+'js'+'on','{}')"`],
+  ["node .replace('pilot','')", `node -e "require('fs').writeFileSync('.claudepilot'.replace('pilot','')+'.'+'js'+'on','{}')"`],
+  ['ruby [0,6]', `ruby -e 'File.write("." + "claudepilot"[0,6] + "." + "js" + "on", "{}")'`],
+  ["ruby .sub('pilot','')", `ruby -e 'File.write(".claudepilot".sub("pilot", "") + "." + "js" + "on", "{}")'`],
+  ["glob('.claudepilot*')", py("import glob\nfor p in glob.glob('.claudepilot*'): open(p + '/x','w').write('{}')")],
+  ["os.chdir('claudes/c1/..')", py("import os\nos.chdir('claudes/c1/..')\nopen('x','w').write('{}')")],
+];
+// The documented trade-off (coordinator decision): no word is exempt; any claude or settings in the data of code that
+// writes keeps it refused. Such notes go through the Edit or Write tool.
+test('T-1092: "one.claude" or "settings" in the data of a heredoc that writes is still refused', () => {
+  for (const line of ['- one.claude run moved', '- the settings page is fine']) {
+    const res = bash(py(`txt = '''${line}'''\nopen('notes.md', 'w').write(txt)`));
+    refused(res, line);
+    assert.match(res.stderr, /something like a rule file: (claude|settings)/);
+  }
+});
+
+for (const [what, command] of T1092_BYPASSES) {
+  test(`T-1092 review: refused, ${what}`, () => {
+    const res = bash(command);
+    refused(res, what);
+    assert.doesNotMatch(res.stderr, /rule file is named/);
+  });
+}

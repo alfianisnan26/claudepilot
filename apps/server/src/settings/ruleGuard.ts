@@ -50,9 +50,24 @@ const CHECKER_BASE = /^check-allowlist(\.[A-Za-z0-9]+)?$/;
 const ANY_RULE_BASE = /^(settings(\.local)?\.json|\.mcp\.json|\.claude\.json|check-allowlist(\.[A-Za-z0-9]+)?)$/;
 // A rule file named in text: the literal paths, a config folder's settings, or the variable that names one.
 const MENTION = /\.mcp\.json|\.claude\.json|check-allowlist|\/etc\/+claude-code|\/etc\/+claudepilot|\.claude\/+(\.\/+)*settings(\.local)?\.json|claudes\/[^\s\/'"]+\/+settings(\.local)?\.json|CLAUDE_CONFIG_DIR/;
-// Words that could be part of a rule file's name, for values the hook cannot see (a variable, a pipe).
-const FRAGMENT_WORDS = /claude|settings|\.mcp|mcp\.json|allowlist/i;
+// Words that could be part of a rule file's name, for shell values the hook cannot see (a variable, a pipe): loose on
+// purpose, since A=claude; B=settings; echo x > ~/.$A/$B.json shows no more than these words.
+const DYNAMIC_WORDS = /claude|settings|\.mcp|mcp\.json|allowlist/i;
+// Rule-file path fragments, for the text of code that writes a file: shown first in the message, as the clearest word.
+const FRAGMENT_WORDS = /\.claude\/|\.claude\.json|settings(\.local)?\.json|\.mcp\.json|managed-settings|check-allowlist|\/etc\/+claude-code|\/etc\/+claudepilot|CLAUDE_CONFIG_DIR/i;
+// The bare words for the text of code that writes a file: the original loose set, with no exemption (T-1092). A word cut
+// from a longer string ('zclaudez'[1:-1], 'claudepilot'[:6], 'claudes/'[:6]) shows nothing more, so every exemption tried
+// was a write path to a rule file. A refusal tells the agent to use the Edit or Write tool for a notes file instead.
+const INLINE_WORDS = /claude|settings|\.mcp|mcp\.json|allowlist/i;
+// The narrow net of bare words for code that writes (T-1092 review): a word glued to a path, glob or quote edge
+// ('x.claude'.slice(1), '.claude*/settings*.json', 'CLAUDE_' + 'CONFIG_DIR'). Inside INLINE_WORDS today; kept because
+// it only refuses more, and it gives a clearer word in the message.
+const BARE_NET = /claude(?:[\/*?\[\]'"\x60]|\.(?=[\w*?\[]))|settings(?:[\/*?\[\]'"\x60_]|\.(?=[\w*?\[]))|allowlist|CLAUDE_['"\x60+]/i;
+// Code that lists a folder: with a quoted two-letter start of a rule file's name ('.c', '.m') it can find one.
+const LISTING = /glob|readdir|listdir|scandir|iterdir|os\.walk|opendir|Dir\.(children|entries|each|glob)/i;
 const RULE_NAMES = ['.claude/settings.json', '.claude/settings.local.json', '.mcp.json', '.claude.json', 'check-allowlist.mjs'];
+// Protected paths, matched as quoted pieces only when the piece carries a slash or underscore ('/etc/' + 'claudepilot/...').
+const RULE_PATHS = ['/etc/claude-code/managed-settings.json', '/etc/claudepilot/bin/policy-rule-guard.cjs', 'CLAUDE_CONFIG_DIR/settings.json'];
 // Path patterns compared segment by segment with a glob (the last one is the .claude folder itself).
 const CANDIDATES = [['.mcp.json'], ['.claude.json'], ['.claude', 'settings.json'], ['.claude', 'settings.local.json'], ['check-allowlist.mjs'], ['.claude']];
 
@@ -258,25 +273,59 @@ function couldMatch(pattern, baseDir, dotglob) {
   return false;
 }
 
-/** Whether a quoted string in code is a piece (3+ characters) of a rule file's name: '.cla' + 'ude/settings.json'. */
-function hasFragmentString(code) {
-  const re = /(['"\x60])((?:\\.|(?!\1)[^\\\n]){3,200})\1/g;
-  let m;
-  while ((m = re.exec(code))) {
-    const s = m[2];
-    if (FRAGMENT_WORDS.test(s)) return true;
-    for (const name of RULE_NAMES) if (name.includes(s)) return true;
+/** The quoted strings in code, short ones included so that a '.' does not throw the pairing of the quotes after it. */
+function quotedStrings(code) {
+  const out = [];
+  // Both pairings: from length 0 (the right one) and the original 3+ one, so nothing the guard found before is lost.
+  for (const re of [/(['"\x60])((?:\\.|(?!\1)[^\\\n]){0,200})\1/g, /(['"\x60])((?:\\.|(?!\1)[^\\\n]){3,200})\1/g]) {
+    let m;
+    while ((m = re.exec(code)) && out.length < 4000) out.push(m[2]);
   }
-  return false;
+  return out;
+}
+
+/** The rule file a quoted string in code is a piece (3+ characters) of ('.cla' + 'ude/settings.json'), or null. A fixed name, never the code's text. */
+function fragmentString(code) {
+  for (const s of quotedStrings(code)) {
+    if (s.length < 3) continue;
+    const w = FRAGMENT_WORDS.exec(s);
+    if (w) return w[0].toLowerCase();
+    for (const name of RULE_NAMES) if (name.includes(s)) return 'a piece of ' + name;
+  }
+  return null;
+}
+
+/** The narrow net (T-1092 review): a bare word at a path, glob or quote edge, a glob that could match a rule file, a piece of a protected path, a folder listing with a two-letter start. */
+function bareNet(code) {
+  const w = BARE_NET.exec(code);
+  if (w) return w[0].toLowerCase();
+  const strings = quotedStrings(code);
+  for (const s of strings) {
+    if (/[*?[]/.test(s) && /[A-Za-z]/.test(s) && couldMatch(s, null, true)) return 'a pattern that could match a rule file';
+    if (s.length >= 3 && /[\/_]/.test(s)) for (const p of RULE_PATHS) if (p.includes(s)) return 'a piece of ' + p;
+  }
+  if (LISTING.test(code) && strings.some((s) => s.length === 2 && ['.claude', '.mcp.json', 'settings', 'check-allowlist'].some((n) => n.startsWith(s)))) return 'a folder listing that looks for a rule file';
+  return null;
 }
 
 // Code that writes a file or runs a command (which could).
 const WRITE_API = /writeFile|appendFile|createWriteStream|copyFile|\bcp(Sync)?\(|rename|unlink|\brm(Sync)?\(|rmdir|symlink|\blink(Sync)?\(|truncate|chmod|open(Sync)?\([^)]*['"][wax+]|['"](w|a|x|wb|ab|w\+|a\+|r\+)['"]|\.write(_text|_bytes)?\(|shutil\.|os\.(replace|remove)|\bFile\.(write|open)|IO\.write|child_process|exec(Sync|File)?\(|spawn|system\(|subprocess|popen|Deno\.write|Bun\.write|print\s*>|printf[^;\n]*>|>\s*['"]?[\w.~\/$]|\btee\b|sed\s+-i|\bmv\s|\bcp\s/i;
 const OBFUSCATION = /fromCharCode|atob\(|base64|b64decode|\\x[0-9a-f]{2}|\\u00[0-9a-f]{2}|\bchr\(|unhexlify|codecs\.|rot13|reverse\(\)|\[::-1\]|String\.raw|decodeURIComponent|unescape\(|\bpack\(/i;
 
-function inlineSuspicious(code) {
-  if (!WRITE_API.test(code)) return false;
-  return MENTION.test(code) || FRAGMENT_WORDS.test(code) || hasFragmentString(code) || OBFUSCATION.test(code);
+/**
+ * Why code that writes a file is refused, or null: 'mention' when it names a rule file, else the heuristic's own message
+ * (T-1092: a fragment or a decoding call is not a named rule file, and the message must not say it is). The word shown is
+ * one of the guard's fixed fragments, never the code's text.
+ */
+function inlineReason(code) {
+  if (!WRITE_API.test(code)) return null;
+  if (MENTION.test(code)) return 'mention';
+  const w = FRAGMENT_WORDS.exec(code) || INLINE_WORDS.exec(code);
+  const word = w ? w[0].toLowerCase() : fragmentString(code) || bareNet(code);
+  if (word) return 'the command writes a file and its text names something like a rule file: ' + word + '. To edit a notes or status file, use the Edit or Write tool, not inline code';
+  const d = OBFUSCATION.exec(code);
+  if (d) return 'the command writes a file and its text decodes or hides a name: ' + d[0].toLowerCase();
+  return null;
 }
 
 /** A script file run directly: comments dropped, refused when its code names a rule file and writes. */
@@ -702,7 +751,7 @@ function analyzeBash(command, cwd) {
   const flat = all.join(' ');
   st.mentions = MENTION.test(flat) || all.some((s) => typeof s === 'string' && s.length < 400 && MENTION.test(s));
   // A piece of a rule file's name: one of its words, or a word with a dot, slash or dash inside a name ('.cla', 'ude/s').
-  st.fragments = st.mentions || FRAGMENT_WORDS.test(flat) || all.some((s) => s.length >= 3 && s.length <= 60 && /[.\/-]/.test(s) && !/\s/.test(s) && RULE_NAMES.some((nm) => nm.includes(s)));
+  st.fragments = st.mentions || DYNAMIC_WORDS.test(flat) || all.some((s) => s.length >= 3 && s.length <= 60 && /[.\/-]/.test(s) && !/\s/.test(s) && RULE_NAMES.some((nm) => nm.includes(s)));
   st.decoder = DECODER.test(flat);
   st.dotglob = /dotglob|GLOBIGNORE|globdots|GLOB_DOTS/.test(flat);
   const found = analyze(command, st, cwd, 0);
@@ -2006,7 +2055,8 @@ function interpreter(name, args, st, base, command, stdinText, stdinFile, piped)
   if (checker ? MENTION.test(command.split(script.text).join(' ')) : st.mentions) return hit(name + ' in a command that names a rule file', name);
   if (code !== null) {
     if (MENTION.test(code)) return hit(name + ' with a rule file named', name);
-    if (inlineSuspicious(code)) return hit(name + ' code that could write a rule file', name);
+    const why = inlineReason(code);
+    if (why) return hit(why === 'mention' ? name + ' code that could write a rule file' : why, name);
     return null;
   }
   if (script && !fromStdin) {
@@ -2017,7 +2067,8 @@ function interpreter(name, args, st, base, command, stdinText, stdinFile, piped)
   if (name === 'claude') return null;
   // The program comes from stdin: a heredoc, a file, or a pipe.
   if (stdinText) {
-    if (st.mentions || inlineSuspicious(stdinText)) return hit(name + ' reading code from stdin while a rule file is named', name);
+    const why = st.mentions ? 'mention' : inlineReason(stdinText);
+    if (why) return hit(why === 'mention' ? name + ' reading code from stdin while a rule file is named' : why, name);
     return null;
   }
   if (stdinFile && !stdinFile.target.dyn) {
@@ -2025,7 +2076,8 @@ function interpreter(name, args, st, base, command, stdinText, stdinFile, piped)
     return null;
   }
   if (piped || fromStdin) {
-    if (st.mentions || inlineSuspicious(command) || st.decoder) return hit(name + ' reading code from stdin while a rule file is named', name);
+    const why = st.mentions ? 'mention' : inlineReason(command) || (st.decoder ? name + ' reading decoded code from a pipe' : null);
+    if (why) return hit(why === 'mention' ? name + ' reading code from stdin while a rule file is named' : why, name);
   }
   return null;
 }
