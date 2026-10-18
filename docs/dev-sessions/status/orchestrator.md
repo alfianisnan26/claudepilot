@@ -31,7 +31,7 @@
   (labels exist nowhere, 10973) -> delta c691df71 -> blind (infra).
 - T-968 PRD fix a32754c3 (gaps 2-7) -> re-check d9f18599. T-968 S1 03fcd4c4 (2a0edbd8; seam, cpmt_, revoke,
   migration 793), fix 352194df (test was wrong, #11127), Job bcf1333pr -> QA c691df71 + blind d9f18599; lead reads seam/migration. T-1033 S1 rc 75 (11035) head
-  53527bfa, Job blfnye6go rc1 (jobRun.test file timeout, a leftover process?) -> diagnosis Job -> fix -> QA + blind. T-921 4511c7be Job rc0 VOID (base test red) -> 515bb0c1, Job bl8pu6oc6 (green base first).
+  53527bfa, Job blfnye6go rc1 (jobRun.test file timeout, a leftover process?) -> diagnosis Job -> fix -> QA + blind. T-921 515bb0c1 Job bl8pu6oc6 rc0 (12/12, 4 killed; #11142) -> QA c691df71 -> blind.
 - T-251 (unknown usage) 3753d3c2: audit vs integration (decide.ts unknownUsage, t255.test), build only what is missing.
 - T-1043 S0c (MCP tools through can()) 76845676 on ticket/T-1043-s0c, beside T-1065.
 - T-961 (deploy outage: PriorityClass, headroom, release pre-check; 10887) -> QA + blind (infra); PriorityClasses in
@@ -62,9 +62,8 @@
 - T-961: the cluster-scoped PriorityClass objects, if Argo cannot create them (the builder names them).
 - T-974 after the FIX3 re-check: remove the text-matching `git -C` deny lines.
 - T-565: assign it to session 355881a3; name the backup bucket and its secret (BACKUP_S3_*).
-- T-382: pick a DOM test library. T-1032: QC format must skip files tests read with readFileSync.
-- T-938: confirm the QA account is stg-only, low-privilege; job-run --pool-env loosening (T-384).
-- T-666 RBAC narrowing; T-578 gate reuse; T-868 no SHOTS_TEST_MODE=1 prefix allow; T-921 rig door (11060); T-970 image build.
+- T-382 DOM test library; T-1032 QC format skips readFileSync files; T-938 QA account stg-only, --pool-env (T-384).
+- T-666, T-578, T-868 (older, see git history); T-921 rig door (11060); T-970 image build.
 
 ## NEEDS A HUMAN (production and uat only, D-62/D-78)
 - T-93 Konfersi production (owner checklist). T-610 pre-deploy read-only prod count (through the coordinator).
