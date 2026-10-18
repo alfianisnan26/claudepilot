@@ -79,7 +79,7 @@ test('events out of clock order are read in time order; ties keep their given or
   assert.deepEqual(brief(flow(shuffled)), ['open 00:00-00:10', 'in_progress 00:10-00:20', 'blocked 00:20-00:30', 'in_review 00:30 ..']);
   // Two moves at the same instant: the later in the list wins the state, the earlier one is a zero-length span.
   const tie = flow([ev(0, 'created'), ev(5, 'status', { from: 'open', to: 'blocked' }), ev(5, 'status', { from: 'blocked', to: 'in_progress' })]);
-  assert.deepEqual(brief(tie), ['open 00:00-00:05', 'blocked 00:05-00:05', 'in_progress 00:05 ..']);
+  assert.deepEqual(brief(tie), ['open 00:00-00:05', 'blocked at 00:05', 'in_progress 00:05 ..']);
   const odd = flow([ev(0, 'created'), { ...ev(5, 'status', { from: 'open', to: 'in_progress' }), at: 'not a time' }, ev(6, 'status', { from: 'open', to: 'sleeping' })]);
   assert.deepEqual(brief(odd), ['open 00:00 ..']);
   // An event earlier than the created time pulls the start back to it (the span never starts after its own first event).
