@@ -1238,10 +1238,18 @@ export class ChatController {
     }
   }
 
-  /** The process vanished: the session is Interrupted (resumable) and what it was doing is over. */
-  #markGone(sessionId: string, why = 'Claude Code stopped before it answered.'): void {
+  /**
+   * The process vanished: the session is Interrupted (resumable) and what it was doing is over. `confirmed` false: the portal only lost
+   * touch with it (the host did not answer); the process may still run, so the control state stored for THAT process stays (T-1094). A
+   * later start that attaches to it (run.lock held) then reloads what it expects (Bypass included) instead of ending it for its own mode,
+   * and the reload takes it out of a Bypass the row no longer shows (`#bypassUnfinished`), fail closed. A new process never reads it.
+   */
+  #markGone(sessionId: string, why = 'Claude Code stopped before it answered.', confirmed = true): void {
     this.#stopReader(sessionId);
+    if (!confirmed) this.#saveControl(sessionId);
+    const kept = confirmed ? null : (this.#chat.row(sessionId)?.control_state ?? null);
     this.#forget(sessionId, why);
+    if (kept) this.#chat.patchSession(sessionId, { controlState: kept });
     // T-416 S2: a lead that vanished in Bypass (an OOM kill) has it put back at its relaunch, every gate checked again (`#live`).
     const lead = this.#chat.row(sessionId);
     this.#closeOut(sessionId, 'stopped', !!lead && this.#keptLead(lead));
@@ -3886,7 +3894,8 @@ export class ChatController {
   /** T-417: the newest Bypass record of this chat is its sleep that kept it (a lead's), so its wake puts it back through `#keepBypass`. */
   #sleptInBypass(sessionId: string): boolean {
     const last = this.#chat.audit({ kind: 'bypass', sessionId, limit: 1 })[0];
-    return last?.kind === 'bypass.left' && (last.detail.why === 'sleep' || last.detail.why === 'stopped') && last.detail.kept === true;
+    const why = last?.detail.why;
+    return last?.kind === 'bypass.left' && (why === 'sleep' || why === 'stopped' || why === 'lost_touch') && last.detail.kept === true;
   }
 
   /** The one request that enters Bypass, under the grant (the policy and the capability checked by the caller, and again here). */
@@ -5774,7 +5783,7 @@ export class ChatController {
       reader.parked = true;
       return;
     }
-    if (reader.retries >= MAX_IMMEDIATE_RETRIES) return this.#markGone(reader.sessionId, 'Lost touch with Claude Code before it answered.');
+    if (reader.retries >= MAX_IMMEDIATE_RETRIES) return this.#markGone(reader.sessionId, 'Lost touch with Claude Code before it answered.', false);
     reader.retries++;
     reader.timer = setTimeout(() => {
       reader.timer = undefined;
@@ -6406,17 +6415,29 @@ export class ChatController {
     m.bypassPending = null;
     const row = this.#chat.row(sessionId);
     if (!row || row.state === 'ended') return;
+    // T-1094: the portal lost touch with this process in Bypass and paused it on the row; the process ran on. Out of it first (fail
+    // closed), then a lead's resume puts it back through every gate (`#keepBypass('lost')`). Not a portal restart.
+    const last = how === 'stored' ? this.#chat.audit({ kind: 'bypass', sessionId, limit: 1 })[0] : undefined;
+    const lost = last?.kind === 'bypass.left' && (last.detail.why === 'stopped' || last.detail.why === 'lost_touch');
+    const kept = lost && last?.detail.kept === true; // a lead's: its resume still asks every gate to put it back (#sleptInBypass)
     console.warn(
-      `[chat] ${shortId(sessionId)}: a Bypass entry the portal began before it restarted was not finished (${how}): taking the process out of it`,
+      lost
+        ? `[chat] ${shortId(sessionId)}: attached to the process the portal lost touch with, still in Bypass: taking it out of it`
+        : `[chat] ${shortId(sessionId)}: a Bypass entry the portal began before it restarted was not finished (${how}): taking the process out of it`,
     );
-    this.#note(sessionId, 'Bypass is off in this chat: the portal restarted while turning it on.');
+    this.#note(
+      sessionId,
+      lost
+        ? 'Bypass paused: the portal lost touch with Claude Code while it ran in Bypass.'
+        : 'Bypass is off in this chat: the portal restarted while turning it on.',
+    );
     this.#chat.addAudit({
       severity: 'medium',
       kind: 'bypass.left',
       sessionId,
       workspaceId: row.workspace_id,
       actor: 'portal',
-      detail: { why: 'restart_unfinished', how },
+      detail: lost ? { why: 'lost_touch', how, kept } : { why: 'restart_unfinished', how },
     });
     this.#saveControl(sessionId);
     void Promise.resolve().then(() => this.#leaveBypass(sessionId, 'Bypass was not finished before the portal restarted.'));
