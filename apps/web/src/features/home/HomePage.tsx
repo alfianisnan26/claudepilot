@@ -1,6 +1,6 @@
 import { Button, Dialog, EmptyState, Switch } from '@isnanme/ui';
 import { ArrowDown, ArrowUp, House, RotateCcw, SlidersHorizontal } from 'lucide-react';
-import { Suspense, useId, useState, type ReactNode } from 'react';
+import { Suspense, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { InfoTip } from '@/components/InfoTip';
 import { PageHeader } from '@/components/PageHeader';
 import { Quiet } from '@/features/glance/Quiet';
@@ -9,6 +9,7 @@ import { moveInOrder } from '@/features/glance/settings';
 import type { GlanceWidget } from '@/features/glance/types';
 import { GlanceSkeleton } from '@/features/glance/widgets/shared/states';
 import { HomeModeSwitch, ManagerMode, readHomeMode, saveHomeMode, type HomeMode } from './ManagerMode';
+import { packColumns, spread } from './masonry';
 import { DEFAULT_HOME, orderCards, resetHomeSettings, updateHomeSettings, useHomeSettings } from './settings';
 
 /** The widgets that have a Home card. */
@@ -68,14 +69,78 @@ export function HomePage() {
           }
         />
       ) : (
-        <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2 min-[1700px]:grid-cols-3">
-          {cards.map((w) => (
-            <HomeCard key={w.id} widget={w} />
-          ))}
-        </div>
+        <Columns ids={cards.map((w) => w.id)}>{(i) => <HomeCard widget={cards[i]!} />}</Columns>
       )}
       <ArrangeDialog open={arranging} onClose={() => setArranging(false)} />
     </>
+  );
+}
+
+/** 1 column on a phone, 2 from 1024 px, 3 from 1700 px (as the grid was). */
+function useColumnCount(): number {
+  const read = () => (typeof window === 'undefined' ? 1 : window.matchMedia('(min-width: 1700px)').matches ? 3 : window.matchMedia('(min-width: 1024px)').matches ? 2 : 1);
+  const [n, setN] = useState(read);
+  useEffect(() => {
+    const qs = ['(min-width: 1024px)', '(min-width: 1700px)'].map((q) => window.matchMedia(q));
+    const on = () => setN(read());
+    qs.forEach((q) => q.addEventListener('change', on));
+    return () => qs.forEach((q) => q.removeEventListener('change', on));
+  }, []);
+  return n;
+}
+
+/** A card moves to another column only when that closes a real hole (QA A4: lists hold still while a card grows a line). */
+const REPACK_GAIN_PX = 160;
+
+/**
+ * The cards in independent column stacks (masonry.ts): no row makes a short card leave a hole. Each card's height is watched; the
+ * packing is redone when the cards or the column count change, and on a height change only when it closes a hole of REPACK_GAIN_PX.
+ */
+function Columns({ ids, children }: { ids: string[]; children: (i: number) => ReactNode }) {
+  const n = useColumnCount();
+  const heights = useRef(new Map<string, number>());
+  const nodes = useRef(new Map<string, HTMLElement>());
+  const key = `${n}|${ids.join(',')}`;
+  const [packing, setPacking] = useState<{ key: string; cols: number[][] }>(() => ({ key, cols: packColumns(ids.map(() => 0), n) }));
+  const repack = (force: boolean) => {
+    const h = ids.map((id) => heights.current.get(id) ?? 0);
+    const next = packColumns(h, n);
+    setPacking((cur) => {
+      if (!force && cur.key === key && JSON.stringify(cur.cols) === JSON.stringify(next)) return cur;
+      if (!force && cur.key === key && cur.cols.flat().length === ids.length && spread(h, cur.cols) - spread(h, next) < REPACK_GAIN_PX) return cur;
+      return { key, cols: next };
+    });
+  };
+  const repackRef = useRef(repack);
+  repackRef.current = repack;
+  useLayoutEffect(() => repackRef.current(true), [key]);
+  useEffect(() => {
+    const ro = new ResizeObserver((entries) => {
+      let changed = false;
+      for (const e of entries) {
+        const id = (e.target as HTMLElement).dataset.col ?? '';
+        const h = Math.round(e.contentRect.height);
+        if (heights.current.get(id) !== h) (heights.current.set(id, h), (changed = true));
+      }
+      if (changed) repackRef.current(false);
+    });
+    nodes.current.forEach((el) => ro.observe(el));
+    return () => ro.disconnect();
+  }, [key, packing]);
+  const cols = packing.key === key ? packing.cols : packColumns(ids.map(() => 0), n);
+  const ref = (id: string) => (el: HTMLElement | null) => void (el ? nodes.current.set(id, el) : nodes.current.delete(id));
+  return (
+    <div className="flex items-start gap-4" data-home-columns={cols.length}>
+      {cols.map((col, c) => (
+        <div key={c} className="flex min-w-0 flex-1 flex-col gap-4">
+          {col.map((i) => (
+            <div key={ids[i]} ref={ref(ids[i]!)} data-col={ids[i]} className="min-w-0">
+              {children(i)}
+            </div>
+          ))}
+        </div>
+      ))}
+    </div>
   );
 }
 
