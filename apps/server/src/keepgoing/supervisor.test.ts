@@ -36,6 +36,8 @@ const portal = {
   healthDown: 0,
   listDown: 0,
   recover: { status: 404, body: { error: { code: 'NOT_FOUND', message: 'no such route' } } } as { status: number; body: unknown },
+  /** The portal's setting `keepgoing.statusTicket` (T-257 A). */
+  statusTicket: '',
   calls: [] as { method: string; path: string; body: unknown }[],
 };
 const listFor = () => (portal.sessions ? (portal.sessions.length > 1 ? portal.sessions.shift()! : portal.sessions[0]!) : [portal.session]);
@@ -70,6 +72,8 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
   if (path === '/api/chat/reauth' || path.endsWith('/bypass')) return json(200, { data: {} });
   if (path.endsWith('/recover')) return json(portal.recover.status, portal.recover.body);
   if (path === '/api/tickets' && method === 'POST') return json(200, { data: { id: 'T-900' } });
+  if (path === '/api/settings' && method === 'GET') return json(200, { data: { groups: [], settings: [{ key: 'keepgoing.statusTicket', value: portal.statusTicket }] } });
+  if (/^\/api\/tickets\/T-\d+\/comments$/.test(path) && method === 'POST') return json(201, { data: { id: 1 } });
   return json(404, { error: { code: 'NOT_FOUND', message: `fake portal: no ${method} ${path}` } });
 }) as typeof fetch;
 
@@ -120,6 +124,7 @@ beforeEach(() => {
   portal.sessions = null;
   portal.healthDown = 0;
   portal.listDown = 0;
+  portal.statusTicket = '';
 });
 after(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -186,6 +191,50 @@ test('negative twin: the same cap reached for a real root cause still stops AND 
   assert.equal(created().length, 0);
   assert.equal(tickets().length, 0, 'the same cause is not reported again while it stands');
   assert.equal(recovers().length, 0, 'a refused recover of the same ending is not asked again');
+});
+
+const statusComments = () => portal.calls.filter((c) => c.method === 'POST' && /^\/api\/tickets\/T-\d+\/comments$/.test(c.path));
+const capped = () => {
+  seed(3);
+  portal.session = ended(PEER, { classified: 'suspicious', case: 'replay-peer-unknown' });
+  portal.recover = { status: 409, body: { error: { code: 'RECOVER_SUSPICIOUS', message: 'a person must look' } } };
+};
+
+test('T-257 A: a track left down is written once on the status ticket (the portal setting for the orchestrator track); unset, nothing', async () => {
+  capped();
+  portal.statusTicket = ' t-60 ';
+  await sup.watch({ rounds: 1 });
+  assert.equal(tickets().length, 1);
+  assert.equal(statusComments().length, 1);
+  const c = statusComments()[0]!;
+  assert.equal(c.path, '/api/tickets/T-60/comments');
+  assert.match((c.body as { text: string }).text, /^The supervisor left the track `orchestrator` down \(start_cap\) since \S+; the ticket is T-900\.$/);
+  assert.ok(logs.some((l) => /left down \(start_cap\): commented T-60/.test(l)));
+  portal.calls.length = 0;
+  await sup.watch({ rounds: 1 });
+  assert.equal(statusComments().length, 0, 'not again while the cause stands');
+
+  // The twin: no setting, the same report, no comment.
+  portal.calls.length = 0;
+  capped();
+  await sup.watch({ rounds: 1 });
+  assert.equal(tickets().length, 1);
+  assert.equal(statusComments().length, 0);
+});
+
+test('T-257 A, the dry-run twin: DRY_RUN=1 says it would comment the status ticket and writes nothing', async () => {
+  process.env.DRY_RUN = '1';
+  const dry = (await import(`${pathToFileURL(resolve(import.meta.dirname, '../../../../docs/dev-sessions/supervisor.mjs')).href}?dry`)) as typeof sup;
+  process.env.DRY_RUN = '0';
+  // A plain ending (not integrity, which a dry run only says it would recover) at the start cap.
+  seed(6);
+  portal.session = { ...ended(DUPLICATE), endedReason: 'process exited (code 1)' };
+  portal.statusTicket = 'T-60';
+  await dry.watch({ rounds: 1 });
+  assert.ok(logs.some((l) => /\[dry\] orchestrator: would open a watchdog ticket/.test(l)), logs.join('\n'));
+  assert.ok(logs.some((l) => /\[dry\] orchestrator: would comment the status ticket T-60/.test(l)));
+  assert.equal(tickets().length, 0);
+  assert.equal(statusComments().length, 0);
 });
 
 test('harmless starts do not count against the chat’s cap, but have a ceiling of their own that stops and reports', async () => {

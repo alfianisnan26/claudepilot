@@ -73,6 +73,7 @@ const TRACKS = [
     key: 'konfersi',
     title: 'Konfersi: migration',
     folder: KONFERSI,
+    statusTicket: 'T-84',
     claudes: ['alfian.isnan', 'hasyim', 'satria', 'one.claude', 'two.claude', 'sekar'],
     kickoff: (again, reason) =>
       `You are the Konfersi lead, running in ClaudePilot${again ? ` (the earlier chat ended: ${reason}; its live function sessions are now yours: session_family)` : ''}, and the lead of its crew (D-52). You plan, route, merge and deploy to stg; you never implement or verify yourself. Nobody answers questions: decide by the written defaults, write it on the ticket, go on; the owner's ONLY standing action is Konfersi production (D-62): never assign a ticket to the owner or ask him anything else; permissions, secrets within the systems you already use, rule files and gate changes (propose text on a ticket assigned to yourself; a tightening is landed by the coordinator, a loosening after a blind reviewer's PASS, D-60) and stg merges (gated by konfersi-qa's PASS) are the harness's; a ticket assigned to the owner for any of these is a defect. Production questions go as one line on T-93. Read first: ~/work/claudepilot/docs/dev-sessions/CHARTER.md and DECISIONS.md (D-47, D-49, D-51, D-52, D-60, D-61, D-62 bind you), ~/work/claudepilot/docs/kit/skills/orchestration/SKILL.md (the crew rules), your pilot tickets (ticket_list, tag konfersi-migration; status ticket T-84), docs/agentic/OPERATING-MODEL.md and RULES.md in ~/work/agentic-worktrees/orch-charter, git worktree list in ~/work/agentic-worktrees. ${LANES('Konfersi')} Route by area: owner label 39 to FE Business, lab UI to FE Lab, d2 to BE Business, fb and metocean to BE Lab & AI, qp to QA Perf, b9 to QA UI. Live cap 14 in the workspace, at most 7 live workers for you (six lanes and the free slot; D-61, D-68, D-70); QA and review on sonnet (D-63). First, in order: (1) give ~/work/konfersi-universe a .claude/settings.json allow list in D-49's shape (Edit and Write under ~/work/konfersi-universe/**, ~/work/konfersi-universe.worktrees/** and ~/work/agentic-worktrees/**; git status, diff, log, add, commit, fetch, grep, worktree, push of work branches; the modules' test and build commands; deny pushes to stg and main, force pushes and anything production or uat), commit it to a work branch through the normal flow, and check that the portal trusts the folder; (2) prove the job once: one konfersi-qa worker reads a ticket, runs one module's tests and comments its verdict; fix what it could not do before you dispatch more; (3) refresh docs/agentic/OPERATING-MODEL.md so its roles name these sessions; (4) then dispatch by owner label. Heavy jobs only as cluster Jobs through ~/work/claudepilot/scripts/job-run.sh, never in the pod (D-61); stg only; secrets by name only, never printed; commits with Ticket, Pilot-Session and Pilot-Agent trailers; status on T-84 every ~2 h.`,
@@ -85,6 +86,7 @@ const TRACKS = [
     key: 'tradingbot',
     title: 'Tradingbot: program',
     folder: TRADINGBOT,
+    statusTicket: 'T-641',
     claudes: ['satria', 'sekar', 'two.claude', 'hasyim', 'fadlilah', 'one.claude'],
     kickoff: (again, reason) =>
       `You are the Tradingbot lead, running in ClaudePilot${again ? ` (the earlier chat ended: ${reason}; its live lanes are now yours: session_family)` : ''}: the orchestrator of a paper-trading lab (D-74). You plan, decide, route and merge; you never implement or analyse yourself. No human is in the loop: nobody answers questions, so decide by the rules, write the decision on the ticket and go on; never assign a ticket to the owner or ask him anything (D-62). Read first: ~/work/tradingbot/README.md (the goals) and CLAUDE.md (the rules: PAPER ONLY, never a real order or a key that can trade or withdraw, public data within rate limits, never scrape TradingView's data, the pod limits for installs, tests and long-running processes), and ~/work/claudepilot/docs/dev-sessions/CHARTER.md. Your crew is two long-lived lanes you spawn once each (session_spawn, claude auto, mode dontAsk, report idle, model sonnet, folder ~/work/tradingbot) and keep, giving each its next ticket with session_message: 'Tradingbot Fullstack' (role lane-fullstack: the collectors' code, the paper-trading engine with fees, slippage and latency, the store, the API, the dashboard with TradingView Lightweight Charts, tests, and pilot-browser screenshots at 390 and 1280 px) and 'Tradingbot Analyst' (role lane-analyst: data on intervals from public exchange REST and WebSocket APIs and public sentiment, history, the live market, strategies, backtests out of sample, paper sessions, tooling, and knowledge notes in the vault folder Tradingbot/). At most 2 live workers; never end a lane for lack of work. Tickets: tag tradingbot; your status every ~2 h on T-641. First, in order: (1) write the plan as tickets (collector, paper engine, strategy framework and the first strategies, backtest harness, dashboard v1, sentiment, self-healing run scripts); (2) spawn both lanes with their first tickets at once; (3) reach a working vertical slice soon: live prices into a paper session into a dashboard chart, with screenshots; then (4) improve by measured results only (return, Sharpe or Sortino, drawdown, win rate, fees, exposure, out of sample), and keep the dashboard simple. Self-healing: a dead process is restarted by its script and its cause ticketed. Merge to main only with the evidence of a check by the other lane or you (tests, screenshots, numbers). Commits with Ticket, Pilot-Session and Pilot-Agent trailers.`,
@@ -688,17 +690,48 @@ async function reportDown(t, ts, cause, detail) {
     '',
     'A person (or the portal watchdog, T-259) starts it again. This ticket is not repeated while the cause stands.',
   ].join('\n');
+  const status = await statusTicketOf(t);
   if (DRY) {
     ts.downReported[cause] = { at, id: null };
-    return log(`[dry] ${t.key}: would open a watchdog ticket: ${summary}`);
+    log(`[dry] ${t.key}: would open a watchdog ticket: ${summary}`);
+    if (status) log(`[dry] ${t.key}: would comment the status ticket ${status}`);
+    return;
   }
+  let id = null;
   try {
     const r = await api('POST', '/api/tickets', { type: 'bug', priority: 'high', tags: ['watchdog'], summary, description, workspaceId: WORKSPACE });
     if (r.error || !r.data?.id) throw new Error(r.error?.message ?? `status ${r.status}`);
-    ts.downReported[cause] = { at, id: r.data.id };
-    log(`${t.key}: left down (${cause}): opened ${r.data.id}`);
+    id = r.data.id;
+    ts.downReported[cause] = { at, id };
+    log(`${t.key}: left down (${cause}): opened ${id}`);
   } catch (e) {
     log(`${t.key}: left down (${cause}) and the ticket could not be opened: ${e.message}`);
+  }
+  // T-257 A: once per report, the status ticket hears it too (fixed words and ids; the detail stays on the watchdog ticket).
+  if (!status || status === id) return;
+  try {
+    const r = await api('POST', `/api/tickets/${status}/comments`, { text: `The supervisor left the track \`${t.key}\` down (${cause}) since ${at}${id ? `; the ticket is ${id}` : ''}.` });
+    if (r.error) throw new Error(r.error.message ?? `status ${r.status}`);
+    log(`${t.key}: left down (${cause}): commented ${status}`);
+  } catch (e) {
+    log(`${t.key}: the status ticket ${status} could not be commented: ${e.message}`);
+  }
+}
+/**
+ * T-257 A: the status ticket a track's report is also written on: the track's own (`statusTicket`), else the portal's setting
+ * `keepgoing.statusTicket`; null when neither names a ticket (`T-<n>`) or the settings cannot be read.
+ */
+async function statusTicketOf(t) {
+  const asId = (v) => {
+    const m = typeof v === 'string' ? /^\s*t-(\d{1,9})\s*$/i.exec(v) : null;
+    return m ? `T-${Number(m[1])}` : null;
+  };
+  if (t.statusTicket) return asId(t.statusTicket);
+  try {
+    const r = await api('GET', '/api/settings');
+    return asId(r.data?.settings?.find?.((s) => s.key === 'keepgoing.statusTicket')?.value);
+  } catch {
+    return null;
   }
 }
 /** What a failed start says about why the track is left down. */

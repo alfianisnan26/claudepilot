@@ -40,7 +40,7 @@ import type { ClockPort, OwnerPort } from '../autotransfer/ports.js';
 import { cleanDetail, type NotifyBus } from '../notify/bus.js';
 import type { AuditInput } from '../platform/audit.js';
 import { closedByPerson, decide, restartClass, type Decision } from './decide.js';
-import { keepGoingCoordinator, keepGoingOn, type KeepGoingSettingsReader } from './settings.js';
+import { keepGoingCoordinator, keepGoingOn, keepGoingStatusTicket, type KeepGoingSettingsReader } from './settings.js';
 import type { KeepGoingStore, PolicyRow } from './store.js';
 
 const MIN = 60_000;
@@ -447,8 +447,24 @@ export class KeepGoingEngine {
       detail: cleanDetail(s.title || 'Untitled chat', 120),
       audience: [ownerId],
     });
+    this.#toStatusTicket(s, what, since, ticketId);
     if (cause === 'down') await this.#escalate(s, ownerId, ticketId);
     this.#changed(s.id);
+  }
+
+  /**
+   * T-257 A: the report is written once on the status ticket too (the setting `keepgoing.statusTicket`), as the portal: fixed words and ids
+   * only (the chat's title is agent text). Not on a closed status ticket, not when the report's own ticket is that one. Never throws.
+   */
+  #toStatusTicket(s: ChatSession, what: string, since: string, ticketId: string | null): void {
+    const status = keepGoingStatusTicket(this.#d.settings);
+    const t = this.#d.tickets;
+    if (!status || !t || status === ticketId || t.isClosed?.(status)) return;
+    try {
+      t.comment(status, `Keep going reported the chat ${s.id} in ${s.workspaceId}: ${what} since ${since}${ticketId ? `; the ticket is ${ticketId}` : ''}. Open it: ${notifyPath.session(s.id)}`);
+    } catch (e) {
+      console.error(`[keepgoing] the status ticket ${status} could not be commented: ${(e as Error).message}`);
+    }
   }
 
   /**

@@ -33,6 +33,29 @@ defineSetting({
   help: 'The chat (its session id) that is told when a watched chat is left down (the cap, a start refused, still ended 15 minutes on), next to the notification, the Needs you item and the ticket. Empty: the chat that started it, if any.',
 });
 
+defineSetting({
+  key: K.statusTicket,
+  type: 'string',
+  default: '',
+  scope: 'global',
+  group: 'keepgoing',
+  order: 30,
+  max: 20,
+  label: 'Status ticket',
+  help: 'A ticket id (T-123) that gets one short comment each time Keep going reports a chat (left down, a tool approval waiting, out of Bypass), next to the report’s own ticket. Empty: no comment.',
+});
+
+/** T-257 A: the status ticket a report is also written on, as `T-<n>`; null when none is set, it is not a ticket id, or the store cannot be read. */
+export function keepGoingStatusTicket(r: KeepGoingSettingsReader | null): string | null {
+  try {
+    const v = r?.get(K.statusTicket);
+    const m = typeof v === 'string' ? /^\s*t-(\d{1,9})\s*$/i.exec(v) : null;
+    return m ? `T-${Number(m[1])}` : null;
+  } catch {
+    return null;
+  }
+}
+
 /** The coordinator's chat a chat left down is told to (T-257 item 4); null when none is set or the store cannot be read. */
 export function keepGoingCoordinator(r: KeepGoingSettingsReader | null): string | null {
   try {

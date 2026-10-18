@@ -9,6 +9,8 @@ export const KEEPGOING_SETTING_KEYS = {
   enabled: 'keepgoing.enabled',
   /** T-257 item 4: the coordinator's chat (a session id) that hears of a chat left down; empty: the chat's parent, if it has one. */
   coordinator: 'keepgoing.coordinator',
+  /** T-257 A: the status ticket (`T-<n>`) that gets one comment per report; empty: none. */
+  statusTicket: 'keepgoing.statusTicket',
 } as const;
 
 /** Bounds and defaults of a policy. The defaults are the supervisor's (docs/dev-sessions/supervisor.mjs), not measurements. */

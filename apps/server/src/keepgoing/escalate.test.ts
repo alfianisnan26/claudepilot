@@ -105,6 +105,38 @@ test('the coordinator setting wins over the parent; an ended coordinator, or non
   assert.equal(needsYou(r3).length, 1);
 });
 
+test('T-257 A: a report is written once on the status ticket (keepgoing.statusTicket), ids and fixed words only; without the setting, or on a closed one, nothing', async () => {
+  const r = await rig({ settings: settingsMap({ [KEEPGOING_SETTING_KEYS.statusTicket]: ' t-50 ' }) });
+  await leftDown(r);
+  const onStatus = () => r.tickets.comments.filter((c) => c.id === 'T-50');
+  assert.equal(onStatus().length, 0, 'not before the report');
+  await r.after(1);
+  assert.equal(r.tickets.made.length, 1);
+  assert.equal(onStatus().length, 1, 'one comment with the report');
+  assert.match(onStatus()[0]!.text, /the chat s1 in docker\/api-dev: .* since .*; the ticket is T-1\. Open it: \/admin\/sessions\/s1/);
+  assert.doesNotMatch(onStatus()[0]!.text, /CANARY-TITLE/);
+  for (let i = 0; i < 5; i++) await r.after(1);
+  assert.equal(onStatus().length, 1, 'not repeated while the cause stands');
+
+  // The twin: no setting, the same report, no status comment (and nothing else changes).
+  const plain = await rig();
+  await leftDown(plain);
+  await plain.after(1);
+  assert.equal(plain.tickets.made.length, 1);
+  assert.equal(plain.emitted.length, 1);
+  assert.deepEqual(plain.tickets.comments, []);
+
+  // A closed status ticket gets nothing; a value that is not a ticket id is ignored.
+  for (const [value, closed] of [['T-50', true], ['status', false]] as const) {
+    const x = await rig({ settings: settingsMap({ [KEEPGOING_SETTING_KEYS.statusTicket]: value }) });
+    if (closed) x.tickets.close('T-50');
+    await leftDown(x);
+    await x.after(1);
+    assert.equal(x.tickets.made.length, 1, value);
+    assert.deepEqual(x.tickets.comments, [], value);
+  }
+});
+
 test('a harmless ending does not count against the cap: after the integrity cap left the chat down, a harmless ending is still recovered in place', async () => {
   const r = await rig();
   r.chat.put('s1');
