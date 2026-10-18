@@ -128,3 +128,25 @@ test('T-1094: a process that really stopped: a new one reporting Bypass without 
     await s.done();
   }
 });
+
+test('T-1094: the host said gone, so nothing is kept: even an attach (exit 3) that reports Bypass ends the session', async () => {
+  const s = await liveSession({}, true);
+  try {
+    const lead = await inBypass(s, { lead: false }); // not a lead: no gated re-entry races the report
+    s.ws.alive = false;
+    lead.tail.exit(0);
+    await until(() => s.controller.get(lead.id)!.state === 'interrupted');
+    s.ws.alive = true;
+
+    s.ws.startCode = 3;
+    const tails = s.ws.tails.length;
+    const sending = s.controller.send(lead.id, 'gone-2', 'go on').catch(() => undefined);
+    await until(() => s.ws.tails.length > tails, 4000);
+    s.ws.tails.at(-1)!.push(init(lead.id, 'bypassPermissions'));
+    await until(() => s.controller.get(lead.id)!.state === 'ended');
+    await sending;
+    assert.match(s.controller.get(lead.id)!.endedReason ?? '', /^integrity: the agent reported Bypass permissions, which chat sessions never allow$/);
+  } finally {
+    await s.done();
+  }
+});
