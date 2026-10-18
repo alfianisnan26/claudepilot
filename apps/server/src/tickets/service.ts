@@ -97,7 +97,8 @@ import {
 export type Caller =
   | { kind: 'ui' }
   | { kind: 'system' }
-  | { kind: 'token'; tokenId: string; label: string; scope: PortalScope }
+  /** `manager`: the General Manager's `cpmt_` token (T-968): it may not close a ticket nor record a verdict (#11136 b, PRD §9.4). */
+  | { kind: 'token'; tokenId: string; label: string; scope: PortalScope; manager?: true }
   | { kind: 'agent'; tokenId: string; label: string; workspaceId: string; sessionId: string }
   /**
    * A trigger a person made (triggers PRD FR17, owner decision O8): no more rights than `system` plus starting a session; recorded as
@@ -1537,6 +1538,8 @@ export class Tickets {
 
   close(caller: Caller, id: string, req: Partial<CloseTicketRequest> = {}, opts: { sessionId?: string | null } = {}): TicketItem {
     const row = this.#need(caller, id);
+    // A manager is not a QA session: QA closes on its pass (general-manager PRD §9.4, #11136 b). After #need, so a missing ticket stays NOT_FOUND.
+    if (caller.kind === 'token' && caller.manager) throw new AppError('FORBIDDEN', 'The General Manager does not close tickets: QA closes a ticket on its pass.');
     const w = this.#writer(caller, opts.sessionId);
     const grant = this.#assertCanModify(caller, row, w);
     if (isTicketClosed(row.status)) throw new AppError('CONFLICT', `${ticketIdOf(row.number)} is already closed.`);

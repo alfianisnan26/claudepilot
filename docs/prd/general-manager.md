@@ -304,7 +304,7 @@ limited. "Agent only" tools refuse a `cpmt_` token (§4). New tools are marked *
 | `session_recover` | — | no |
 | `ci_run_trigger` (other pipelines), `ci_run_cancel`, `ci_run_bump` | — | no |
 | `ticket_create`, `ticket_update`, `ticket_comment`, `ticket_attach`, `ticket_claim_next`, `ticket_adopt`, `ticket_bump`, `ticket_start_session` | — | no |
-| `ticket_close`, `ticket_verdict` | — | no |
+| `ticket_close`, `ticket_verdict` | refused (#11136 b) | no: a manager is not a QA session, so `canRecordVerdict` refuses its verdict and the service refuses its close (`FORBIDDEN`); a ticket it cannot see stays the same `NOT_FOUND` |
 | `note_write`, `note_edit`, `note_append`, `daily_append` | — | no |
 | `session_keepgoing_set`, `keepgoing_pause_set` | — | no |
 | `lab_experiment_set`, `lab_arm_draw` | — | no |

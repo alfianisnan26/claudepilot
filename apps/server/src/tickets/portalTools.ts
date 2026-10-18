@@ -34,7 +34,13 @@ import { VERDICT_ROLES, VERDICTS } from './verdicts.js';
 const callerOf = (ctx: PortalToolContext): Caller =>
   ctx.isAgent
     ? { kind: 'agent', tokenId: ctx.principal.tokenId, label: ctx.principal.label, workspaceId: ctx.workspaceId!, sessionId: ctx.sessionId! }
-    : { kind: 'token', tokenId: ctx.principal.tokenId, label: ctx.principal.label, scope: ctx.scope as PortalScope };
+    : {
+        kind: 'token',
+        tokenId: ctx.principal.tokenId,
+        label: ctx.principal.label,
+        scope: ctx.scope as PortalScope,
+        ...(ctx.principal.kind === 'manager' ? { manager: true as const } : {}),
+      };
 
 /** Where ticket text came from, for the label the model sees. */
 const sourceOf = (t: Pick<TicketItem, 'source'>) => `ticket:${t.source}`;
