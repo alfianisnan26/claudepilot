@@ -371,8 +371,8 @@ a workspace's crew lead can't hand them out (tickets FR9f) and its lanes can't c
   token (409), a read token (422: it makes no tickets), a workspace that is not there (404), one the person may not operate (404) or the
   token may not operate (403). Each change leaves a `token_default_workspace` audit row (`workspace`, `from`, `by`).
 - **What it does:** `ticket_create` from that token with no `workspace_id` puts the ticket in the default workspace. An explicit
-  `workspace_id` wins (an empty one is the shared queue). At call time the token must still be allowed to operate it (the seam's `can`);
-  otherwise the ticket goes to the shared queue as before. Agents' per-session tokens never use it (their tickets are always in their own
+  `workspace_id` wins (an empty one is the shared queue). At call time the workspace must still exist (`Workspaces.resolve`: a removed one is
+  retired) and the token must still be allowed to operate it (the seam's `can`); otherwise the ticket goes to the shared queue as before. Agents' per-session tokens never use it (their tickets are always in their own
   workspace), nor does the General Manager's token. A session assignee still moves the ticket to that session's workspace.
 
 ### 12.1a The client's name: every token has a label (T-6, built)

@@ -11,6 +11,7 @@ import { tempDirectory } from '../store/testTmp.js';
 import { registerTicketTools, ticketWorkspaceOf } from '../tickets/portalTools.js';
 import { Tickets } from '../tickets/service.js';
 import { FakeSessions, UI } from '../tickets/testkit.js';
+import { WorkspaceIdentities } from '../workspaces/identity.js';
 import { ToolRegistry, type PortalToolContext } from './registry.js';
 import { createPortalMcpRoutes } from './routes.js';
 import { portalMcpHarness, URL_ } from './testkit.js';
@@ -43,7 +44,10 @@ async function rig() {
   const sessions = new FakeSessions();
   const tickets = new Tickets(h.store, sessions);
   tickets.start();
-  registerTicketTools(tickets, registry);
+  // The workspaces the portal knows, as index.ts asks them (`Workspaces.resolve`): a removed one is retired and resolves to nothing.
+  const identities = WorkspaceIdentities.memory();
+  for (const w of WORKSPACES) identities.adopt(w.id.split('/')[0]!, w.name);
+  registerTicketTools(tickets, registry, { workspaceExists: (id) => identities.resolve(id) !== null });
   const app = new Hono<{ Variables: { actor: Actor } }>();
   app.use('*', async (c, next) => {
     c.set('actor', OWNER);
@@ -66,7 +70,7 @@ async function rig() {
     assert.ok(id, JSON.stringify(r.result?.structuredContent));
     return tickets.get(UI, id).ticket.workspaceId;
   };
-  return { h, tickets, sessions, patch, create, done: () => (tickets.stop(), h.done()) };
+  return { h, tickets, sessions, identities, patch, create, done: () => (tickets.stop(), h.done()) };
 }
 
 test('a token’s default workspace: a ticket with no workspace_id goes there, an explicit one wins, an empty one is the shared queue', async () => {
@@ -170,6 +174,21 @@ test('a default the token may no longer operate is not used: the ticket goes to 
       useAuthz(was);
     }
     assert.equal(await r.create(t.secret), 'kubernetes/konfersi', 'allowed again: used again');
+  } finally {
+    r.done();
+  }
+});
+
+test('a default whose workspace was removed is not used: the ticket goes to the shared queue', async () => {
+  const r = await rig();
+  try {
+    const t = r.h.token('admin', 'hermes-konfersi-admin');
+    assert.equal((await r.patch(t.id, { defaultWorkspaceId: 'kubernetes/konfersi' })).status, 200);
+    assert.equal(await r.create(t.secret), 'kubernetes/konfersi');
+    r.identities.retire('kubernetes', 'konfersi');
+    assert.equal(await r.create(t.secret), null, 'gone: the shared queue, though the single-owner seam would still allow the id');
+    r.identities.allocate('kubernetes', 'konfersi');
+    assert.equal(await r.create(t.secret), 'kubernetes/konfersi', 'a workspace by that name again: used again');
   } finally {
     r.done();
   }
