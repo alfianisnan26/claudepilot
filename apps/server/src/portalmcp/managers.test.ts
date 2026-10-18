@@ -203,7 +203,8 @@ test('migration 793: every session is a workspace session of the founding user, 
         .run(id, at, at, at, ...(kind ? [kind] : []), ...(owner ? [owner] : []));
     add('w1');
     add('w2');
-    assert.deepEqual(db.prepare("SELECT kind, owner_id FROM chat_sessions WHERE id = 'w1'").get(), { kind: 'workspace', owner_id: 'u_owner' });
+    // node:sqlite rows have a null prototype: copy into a plain object before the strict compare.
+    assert.deepEqual({ ...db.prepare("SELECT kind, owner_id FROM chat_sessions WHERE id = 'w1'").get() }, { kind: 'workspace', owner_id: 'u_owner' });
     add('gm1', 'manager');
     assert.throws(() => add('gm2', 'manager'), /UNIQUE/, 'one manager per person, in the database');
     add('gm3', 'manager', ALICE);
