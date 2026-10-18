@@ -235,6 +235,35 @@ test('QA N5 (T-325 S1c): a lineage ancestor of a lead holder (the session it con
   }
 });
 
+test('T-1603: a continued lead leads the workers its predecessor started: its QA worker verifies; a continued implementer still does not', async () => {
+  const h = await ticketsHarness();
+  try {
+    const s = h.sessions;
+    s.add({ id: 'leadOld', workspaceId: WS, agent: null });
+    const t = h.tickets.create(UI, { summary: 'built under the ended lead', workspaceId: WS });
+    h.tickets.update(UI, t.id, { assignee: { kind: 'session', sessionId: 'leadOld' }, status: 'in_progress' });
+    s.add({ id: 'impl', workspaceId: WS, agent: 'implementer', parentId: 'leadOld', ticketId: t.id });
+    s.sessions.get('leadOld')!.state = 'ended';
+    s.add({ id: 'lead', workspaceId: WS, agent: null, continuedFrom: 'leadOld' });
+    h.tickets.update(UI, t.id, { assignee: { kind: 'session', sessionId: 'lead' } });
+    s.add({ id: 'qaNew', workspaceId: WS, agent: 'qa-verifier', parentId: 'lead' });
+    const v = h.tickets.recordVerdict(agent(WS, 'qaNew'), t.id, { role: 'qa', verdict: 'pass', commit: A });
+    assert.equal(v.actor, 'session:qaNew', 'the continuation leads its predecessor’s implementer');
+    s.add({ id: 'implQa', workspaceId: WS, agent: 'qa-verifier', parentId: 'impl' });
+    assert.throws(() => h.tickets.recordVerdict(agent(WS, 'implQa'), t.id, { role: 'qa', verdict: 'pass', commit: A }), (e: any) => e.code === 'FORBIDDEN');
+
+    // A session started on the ticket, continued: its continuation holds it and its QA child is still refused (it is the author's line).
+    s.add({ id: 'workerOld', workspaceId: WS, agent: 'implementer', state: 'ended', ticketId: t.id }); // never held it: started on it
+    s.add({ id: 'worker', workspaceId: WS, agent: 'implementer', continuedFrom: 'workerOld' });
+    s.add({ id: 'helper', workspaceId: WS, agent: 'implementer', parentId: 'workerOld', ticketId: t.id });
+    h.tickets.update(UI, t.id, { assignee: { kind: 'session', sessionId: 'worker' } });
+    s.add({ id: 'workerQa', workspaceId: WS, agent: 'qa-verifier', parentId: 'worker' });
+    assert.throws(() => h.tickets.recordVerdict(agent(WS, 'workerQa'), t.id, { role: 'qa', verdict: 'pass', commit: A }), (e: any) => e.code === 'FORBIDDEN' && /descends from/.test(e.message));
+  } finally {
+    h.done();
+  }
+});
+
 test('QA M7 (T-325 S1b): a QA-named session started with this ticket_id is an author', async () => {
   const r = await rig();
   try {

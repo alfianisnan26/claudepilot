@@ -1804,9 +1804,15 @@ export class Tickets {
       const p = this.sessions.get(id)?.parentId;
       if (p) leads.add(p);
     }
-    // T-325 S1b: the holder (with its lineage) may be a verifier's ancestor only when it leads the work: it is the parent of another author
-    // and was not itself started on this ticket. An implementer holding the ticket leads nobody, so a QA it spawns is refused.
-    const leadsWork = !!row.assignee_ref && leads.has(row.assignee_ref) && holder?.ticketId !== ticketIdOf(row.number);
+    // T-325 S1b: the holder (with its lineage) may be a verifier's ancestor only when it leads the work: it, or a session it continues, is
+    // the parent of another author, and none of them was started on this ticket. An implementer holding the ticket leads nobody, so a QA it
+    // spawns is refused. T-1603: a lead's continuation leads the workers its predecessor started (Konfersi, 2026-10-18: every Lab QA verdict
+    // was refused after the lead was continued, because the builders' parent was the ended session).
+    const ticket = ticketIdOf(row.number);
+    const leadsWork =
+      !!row.assignee_ref &&
+      holderLine.some((id) => leads.has(id)) &&
+      holderLine.every((id) => (id === row.assignee_ref ? holder : this.sessions.get(id))?.ticketId !== ticket);
     return { authors, leads, leadHolders: new Set(leadsWork ? holderLine : []) };
   }
 
