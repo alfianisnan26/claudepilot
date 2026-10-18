@@ -29,3 +29,28 @@ test('the result depends on the heights only (the same input packs the same way)
   const h = [200, 570, 1400, 480, 300, 260];
   assert.deepEqual(packColumns(h, 3), packColumns([...h], 3));
 });
+
+test('QA pass 2: a big swing of one card does not flip the layout back and forth; a packing still good is kept', () => {
+  const base = [200, 570, 1100, 480, 300, 260, 420, 380, 240, 500];
+  let cur = packColumns(base, 3);
+  let moved = 0;
+  for (const sessions of [570, 180, 570, 180, 570, 300, 570]) {
+    const h = base.slice();
+    h[1] = sessions;
+    const next = packColumns(h, 3, 16, cur);
+    const was = new Map(cur.flatMap((c, ci) => c.map((i) => [i, ci] as const)));
+    moved += next.flatMap((c, ci) => c.filter((i) => was.get(i) !== ci)).length;
+    // Never far from the best for these heights.
+    const best = packColumns(h, 3);
+    const tallest = (cols: number[][]) => Math.max(...cols.map((c) => c.reduce((a, i) => a + h[i]! + 16, 0)));
+    assert.ok(tallest(next) <= tallest(best) + 120, `within 120 px of the best`);
+    cur = next;
+  }
+  assert.ok(moved <= 10, `cards moved over 7 swings: ${moved}`); // the bare optimum moves 24 here
+});
+
+test('a previous packing that is still good comes back unchanged', () => {
+  const h = [200, 570, 1400, 480];
+  const cur = packColumns(h, 2);
+  assert.deepEqual(packColumns(h.map((x) => x + 3), 2, 16, cur), cur);
+});

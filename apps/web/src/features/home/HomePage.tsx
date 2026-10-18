@@ -9,7 +9,7 @@ import { moveInOrder } from '@/features/glance/settings';
 import type { GlanceWidget } from '@/features/glance/types';
 import { GlanceSkeleton } from '@/features/glance/widgets/shared/states';
 import { HomeModeSwitch, ManagerMode, readHomeMode, saveHomeMode, type HomeMode } from './ManagerMode';
-import { packColumns, spread } from './masonry';
+import { packColumns } from './masonry';
 import { DEFAULT_HOME, orderCards, resetHomeSettings, updateHomeSettings, useHomeSettings } from './settings';
 
 /** The widgets that have a Home card. */
@@ -89,12 +89,13 @@ function useColumnCount(): number {
   return n;
 }
 
-/** A card moves to another column only when that closes a real hole (QA A4: lists hold still while a card grows a line). */
-const REPACK_GAIN_PX = 160;
+/** A height change re-packs after the cards have been still this long (a list that grows row by row moves the layout once). */
+const SETTLE_MS = 1500;
 
 /**
- * The cards in independent column stacks (masonry.ts): no row makes a short card leave a hole. Each card's height is watched; the
- * packing is redone when the cards or the column count change, and on a height change only when it closes a hole of REPACK_GAIN_PX.
+ * The cards in independent column stacks (masonry.ts): no row makes a short card leave a hole. Each card's height is watched. The packing
+ * is made fresh when the cards or the column count change; on a height change, once heights settle, the good packing that moves the
+ * fewest cards is taken (masonry.ts SETTLE_PX), so a packing that is still good stays as it is.
  */
 function Columns({ ids, children }: { ids: string[]; children: (i: number) => ReactNode }) {
   const n = useColumnCount();
@@ -102,22 +103,22 @@ function Columns({ ids, children }: { ids: string[]; children: (i: number) => Re
   const nodes = useRef(new Map<string, HTMLElement>());
   const key = `${n}|${ids.join(',')}`;
   const [packing, setPacking] = useState<{ key: string; cols: number[][] }>(() => ({ key, cols: packColumns(ids.map(() => 0), n) }));
-  // The first packing with every height known is taken as it is (the first paint was round robin); later ones follow the hysteresis.
-  const settled = useRef('');
-  const repack = (force: boolean) => {
+  const repack = () => {
     const h = ids.map((id) => heights.current.get(id) ?? 0);
-    const next = packColumns(h, n);
-    if (settled.current !== key && h.every((x) => x > 0)) ((settled.current = key), (force = true));
     setPacking((cur) => {
-      if (!force && cur.key === key && JSON.stringify(cur.cols) === JSON.stringify(next)) return cur;
-      if (!force && cur.key === key && cur.cols.flat().length === ids.length && spread(h, cur.cols) - spread(h, next) < REPACK_GAIN_PX) return cur;
-      return { key, cols: next };
+      const next = packColumns(h, n, 16, cur.key === key ? cur.cols : undefined);
+      return cur.key === key && JSON.stringify(cur.cols) === JSON.stringify(next) ? cur : { key, cols: next };
     });
   };
   const repackRef = useRef(repack);
   repackRef.current = repack;
-  useLayoutEffect(() => repackRef.current(true), [key]);
+  // The key whose heights have all been measured once (its first full packing is taken at once, later ones after SETTLE_MS).
+  const settled = useRef('');
+  useLayoutEffect(() => {
+    setPacking({ key, cols: packColumns(ids.map((id) => heights.current.get(id) ?? 0), n) });
+  }, [key]); // ids and n are in key
   useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const ro = new ResizeObserver((entries) => {
       let changed = false;
       for (const e of entries) {
@@ -125,10 +126,15 @@ function Columns({ ids, children }: { ids: string[]; children: (i: number) => Re
         const h = Math.round(e.contentRect.height);
         if (heights.current.get(id) !== h) (heights.current.set(id, h), (changed = true));
       }
-      if (changed) repackRef.current(false);
+      if (!changed) return;
+      clearTimeout(timer);
+      // The first time every height is known, at once (the first paint was round robin); later, once they settle.
+      const known = ids.every((id) => (heights.current.get(id) ?? 0) > 0);
+      timer = setTimeout(() => repackRef.current(), known && settled.current === key ? SETTLE_MS : 0);
+      if (known) settled.current = key;
     });
     nodes.current.forEach((el) => ro.observe(el));
-    return () => ro.disconnect();
+    return () => (clearTimeout(timer), ro.disconnect());
   }, [key, packing]);
   const cols = packing.key === key ? packing.cols : packColumns(ids.map(() => 0), n);
   const ref = (id: string) => (el: HTMLElement | null) => void (el ? nodes.current.set(id, el) : nodes.current.delete(id));
