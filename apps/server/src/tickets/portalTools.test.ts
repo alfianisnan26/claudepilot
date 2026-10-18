@@ -167,6 +167,11 @@ test('a General Manager token (T-968, QA c691df71): ticket_update to done or won
       assert.equal(await err(operate, { id, status: to }), undefined, `${id} → ${to} by an operate token`);
       assert.equal(status(id), to, `${id} changed by the operate token`);
     }
+    // A closed ticket set to the status it already has is no change: not refused, nothing written (QA follow-up, 11202).
+    const events = r.tickets.get(UI, 'T-1').events.length;
+    assert.equal(await err(m, { id: 'T-1', status: 'done' }), undefined, 'the same status is a no-op');
+    assert.equal(status('T-1'), 'done');
+    assert.equal(r.tickets.get(UI, 'T-1').events.length, events, 'no event');
     // A status that neither closes nor reopens stays open to it.
     assert.equal(await err(m, { id: 'T-4', status: 'blocked' }), undefined);
     assert.equal(status('T-4'), 'blocked');
