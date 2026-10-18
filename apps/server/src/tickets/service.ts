@@ -79,6 +79,7 @@ import {
   VERDICT_REFUSAL_TEXT,
   VERDICT_ROLES,
   VERDICTS,
+  verdictRoleOfAgent,
   type StoredVerdict,
   type Verdict,
   type VerdictEvaluation,
@@ -105,6 +106,17 @@ export type Caller =
    * actor `trigger:<id>`, and its text (an event's words) is untrusted. The session it starts carries `portal:trigger-<id>`.
    */
   | { kind: 'trigger'; triggerId: string; ownerId: string; label: string };
+
+/**
+ * FR36c (T-1608): every session ever assigned a ticket is an author of its work (FR36a), so a QA or review session that held one could never
+ * record its verdict. An agent is refused putting a ticket on one (itself included); a person in the portal is not.
+ */
+function verdictLaneRefusal(session: TicketSessionInfo): AppError {
+  return new AppError(
+    'CONFLICT',
+    `${session.id} is a QA/review session: holding a ticket makes it an author, so it could never record a verdict on it. Keep the ticket and brief the lane by ticket id.`,
+  );
+}
 
 /** FR9a (T-270): an agent acts on a ticket an ENDED session holds, and why it may. */
 interface EndedGrant {
@@ -1177,6 +1189,7 @@ export class Tickets {
     if (s.state === 'ended') throw invalid('assignee', 'That session has ended.');
     if (caller.kind === 'agent' && s.workspaceId !== caller.workspaceId)
       throw new AppError('FORBIDDEN', `That session is not in workspace ${caller.workspaceId}.`);
+    if (caller.kind === 'agent' && verdictRoleOfAgent(s.agent)) throw verdictLaneRefusal(s);
     return { kind: 'session', session: s };
   }
 
@@ -1633,6 +1646,7 @@ export class Tickets {
     const w = this.#writer(caller, req.sessionId);
     const session = this.#needSession(w, 'To claim a ticket');
     if (session.state === 'ended') throw invalid('session_id', 'That session has ended.');
+    if (caller.kind === 'agent' && verdictRoleOfAgent(session.agent)) throw verdictLaneRefusal(session);
     const tags = cleanTags(req.tags);
     const types = Array.isArray(req.types) ? req.types.map((t) => oneOf(t, TICKET_TYPES, 'types')) : [];
     let wantedNumber: number | null = null;

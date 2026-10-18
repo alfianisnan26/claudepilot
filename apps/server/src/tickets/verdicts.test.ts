@@ -310,6 +310,33 @@ test('another workspace’s agent gets the same not found as for a missing ticke
   }
 });
 
+test('FR36c (T-1608): an agent never puts a ticket on a QA or review session, itself included; a person may; an implementer still takes one', async () => {
+  const r = await rig();
+  try {
+    const lead = agent(WS, 'lead');
+    const lane = (fn: () => unknown, who: string) =>
+      assert.throws(fn, (e: any) => e.code === 'CONFLICT' && e.message.startsWith(`${who} is a QA/review session`) && /brief the lane by ticket id/.test(e.message));
+    // The lead hands the ticket on (FR9d): to its QA lane and to its review lane it is refused, the ticket stays where it was.
+    lane(() => r.tickets.update(lead, r.id, { assignee: { kind: 'session', sessionId: 'qa1' } }), 'qa1');
+    lane(() => r.tickets.update(lead, r.id, { assignee: { kind: 'session', sessionId: 'rev1' } }), 'rev1');
+    lane(() => r.tickets.create(lead, { summary: 'for QA', assignee: { kind: 'session', sessionId: 'qa1' } }), 'qa1');
+    assert.deepEqual(r.tickets.get(UI, r.id).ticket.assignee, { kind: 'session', sessionId: 'impl' });
+    // A QA or review session claiming a ticket for itself.
+    const open = r.tickets.create(UI, { summary: 'queue work', workspaceId: WS });
+    lane(() => r.tickets.claimNext(agent(WS, 'qa1'), { id: open.id }), 'qa1');
+    lane(() => r.tickets.claimNext(agent(WS, 'rev1'), {}), 'rev1');
+    assert.equal(r.tickets.get(UI, open.id).ticket.assignee, null, 'still in the queue');
+    // The lane can still record its verdict: it never became an author.
+    assert.equal(record(r, 'qa1', 'qa', 'pass', A).verdict, 'pass');
+    // An implementer still takes work from the lead; a person may still put a ticket on a QA session (the portal is the owner).
+    r.sessions.add({ id: 'impl2', workspaceId: WS, agent: 'implementer', parentId: 'lead' });
+    assert.equal((r.tickets.update(lead, r.id, { assignee: { kind: 'session', sessionId: 'impl2' } }).assignee as any).sessionId, 'impl2');
+    assert.equal((r.tickets.update(UI, open.id, { assignee: { kind: 'session', sessionId: 'qa1' } }).assignee as any).sessionId, 'qa1');
+  } finally {
+    r.done();
+  }
+});
+
 test('the stale-PASS guard on the stored rows: a PASS on the old head does not make the moved head pass', async () => {
   const r = await rig();
   try {
