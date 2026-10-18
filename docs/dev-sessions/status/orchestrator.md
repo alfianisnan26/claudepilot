@@ -66,14 +66,16 @@
 ## NEEDS A HUMAN (production and uat only, D-62/D-78)
 - T-93 Konfersi production (owner checklist). T-610 pre-deploy read-only prod count (through the coordinator).
 
-## NEXT (in order, as slots free)
-1. Batch 34 (format commits, + T-425, T-969); then T-1043 S0b, T-968 S1-token/S2 landing, T-975, T-565.
-2. T-1042 (after T-976 is live), T-30 (XL), T-33, T-379 S3 (paused), T-105, T-1031.
-
-LESSONS: dontAsk lanes run Bash only in their spawn worktree and refuse git merge/restore: the lead pushes the merge (with
-markers) to a new branch; the lane resolves it by Edit. Never run prettier on files tests read with readFileSync. Run
-`context-pack.sh --check HEAD` after every merge. Landing is two commands: (1) `git diff --stat <gated> origin/integration --
-. ':!docs/dev-sessions/status'` and read it, (2) push only if it is empty. A mutant line must prove it was applied, on a
-GREEN base. The status file: Edit/Write ONLY. Full ids and hashes. Migration numbers: check integration AND lane branches.
-gate-job.sh runs in the background (timeout 7200000). `git -C` is refused by the guard: cd instead. A Job has no $OUT:
-write a patch to the repo root and name it with `--artifacts fmt.patch --out job-out/` (job-run.sh:27; lost 74feba75).
+## Handover to the coordinator 2026-10-18 (D-85 stop; crew stopped; lanes post per-ticket HANDOVER with full shas)
+- INTEGRATION: head = status-only commits on the last landed content. Batch 34 NOT merged. premerge/b34
+  20a93647d0e09994285bdc06ce8c4a95915d758c (pushed): QC#5 GREEN (job fda5861a); gate#3 claudepilot-gate-20a9364-e1a8
+  RUNNING at the handover (gate#2 on 037f7e4b green). Land: two-step diff check, ff, context-pack --check, tell T-731.
+- No deploy pending from this crew. Integration holds c6c4a589 (T-968, FAILED security review): no deploy until T-731 says so.
+- Open branches/unmerged heads (tested state in IN FLIGHT above): T-1043 S0b f30675f5 (green, blind delta pending), S0c
+  ticket/T-1043-s0c-v2 1abba511 (Job running, RESOLVEFORBIDDEN); T-1094 17734c89 (blind needed); T-1083 S1a d01b5949 (fmt
+  fails jobRun.test.ts), S1b-1 ticket/T-1083-s1b1-verify 4850a1c8 (Job + blind); T-1079 S3a 19607058, S3b c698758c, S4
+  6160825c (unrun); T-968 S1-token 2ce4d72e, S1 fmt 79c2d25c, S2 e605c835 (needs fmt); T-980 dbb1bd76 + a3554d40 WIP (gaps
+  #12376); T-1076 cae18cd6; T-356 06ab937c; T-119 S1a 11e16382, S2a bd1a5c90; T-634 0f4ffde6; T-1033 576ad450; T-975 3a21e02a;
+  T-970 5a0fa697; T-257 e22ae23d; T-921 db1d8d19; T-1065 3258ec46. Merge order: b34 first; T-1043 S0b -> S0c; T-1083 S1a -> S1b.
+- Lessons: no prettier on files tests read as text (.prettierignore); `context-pack.sh --check HEAD` after merges; Job
+  checkouts are shallow; status file by Edit/Write only.
