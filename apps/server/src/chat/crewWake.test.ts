@@ -311,6 +311,9 @@ test('T-1616: held tickets ready to close or merge are listed, and the list alon
     assert.deepEqual(await s.controller.wakeLeads(), [s.id], 'a changed list is news');
     await until(() => s.wakes().length === 2);
     assert.match(s.wakes()[1]!, /\nReady to close or merge:\n- T-21: review PASS\nClose/);
+    await leadTurn(s);
+    s.ready.push({ ticket: 'T-22', role: 'qa' });
+    assert.deepEqual(await s.controller.wakeLeads(), [], 'changed again, but inside the window since the last wake');
   } finally {
     await s.done();
   }
