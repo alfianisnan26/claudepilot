@@ -214,33 +214,34 @@ const capped = () => {
 
 test('T-257 A: a track left down is written once on the status ticket (the portal setting, for a track with none of its own); unset, nothing', () =>
   withoutOwnStatus(async () => {
-  capped();
-  portal.statusTicket = ' t-60 ';
-  await sup.watch({ rounds: 1 });
-  assert.equal(tickets().length, 1);
-  assert.equal(statusComments().length, 1);
-  const c = statusComments()[0]!;
-  assert.equal(c.path, '/api/tickets/T-60/comments');
-  assert.match((c.body as { text: string }).text, /^The supervisor left the track `orchestrator` down \(start_cap\) since \S+; the ticket is T-900\.$/);
-  assert.ok(logs.some((l) => /left down \(start_cap\): commented T-60/.test(l)));
-  portal.calls.length = 0;
-  await sup.watch({ rounds: 1 });
-  assert.equal(statusComments().length, 0, 'not again while the cause stands');
+    capped();
+    portal.statusTicket = ' t-60 ';
+    await sup.watch({ rounds: 1 });
+    assert.equal(tickets().length, 1);
+    assert.equal(statusComments().length, 1);
+    const c = statusComments()[0]!;
+    assert.equal(c.path, '/api/tickets/T-60/comments');
+    assert.match((c.body as { text: string }).text, /^The supervisor left the track `orchestrator` down \(start_cap\) since \S+; the ticket is T-900\.$/);
+    assert.ok(logs.some((l) => /left down \(start_cap\): commented T-60/.test(l)));
+    portal.calls.length = 0;
+    await sup.watch({ rounds: 1 });
+    assert.equal(statusComments().length, 0, 'not again while the cause stands');
 
-  // The twin: no setting, the same report, no comment.
-  portal.calls.length = 0;
-  capped();
-  await sup.watch({ rounds: 1 });
-  assert.equal(tickets().length, 1);
-  assert.equal(statusComments().length, 0);
+    // The twin: no setting, the same report, no comment. The setting is cleared here: beforeEach only clears it between tests.
+    portal.calls.length = 0;
+    portal.statusTicket = '';
+    capped();
+    await sup.watch({ rounds: 1 });
+    assert.equal(tickets().length, 1);
+    assert.equal(statusComments().length, 0, 'no setting: no comment');
 
-  // The status ticket is the watchdog ticket itself (the fake portal opens T-900): it is not commented about itself.
-  portal.calls.length = 0;
-  capped();
-  portal.statusTicket = 'T-900';
-  await sup.watch({ rounds: 1 });
-  assert.equal(tickets().length, 1);
-  assert.equal(statusComments().length, 0);
+    // The status ticket is the watchdog ticket itself (the fake portal opens T-900): it is not commented about itself.
+    portal.calls.length = 0;
+    capped();
+    portal.statusTicket = 'T-900';
+    await sup.watch({ rounds: 1 });
+    assert.equal(tickets().length, 1);
+    assert.equal(statusComments().length, 0, 'not on the watchdog ticket itself');
   }));
 
 test('T-257 A: the track’s own status ticket (the orchestrator’s T-595) wins over the portal setting, which is not read', async () => {
