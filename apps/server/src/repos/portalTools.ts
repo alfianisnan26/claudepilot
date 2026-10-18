@@ -43,7 +43,8 @@ function repoIdOfArgs(ctx: PortalToolContext, args: { repo_id?: string | undefin
   try {
     ws = workspaceArg(ctx, args.workspace_id);
   } catch (e) {
-    if (e instanceof AppError && e.code === 'FORBIDDEN') throw new AppError('NOT_FOUND', 'No such repository.');
+    // ctx.assertWorkspace throws a PortalToolError, workspaceOf an AppError: both carry a code
+    if ((e as { code?: unknown } | null)?.code === 'FORBIDDEN') throw new AppError('NOT_FOUND', 'No such repository.');
     throw e;
   }
   if (!ws) throw new AppError('VALIDATION_FAILED', 'A path needs a workspace_id.', { details: { workspace_id: 'Give the workspace the path is in.' } });
