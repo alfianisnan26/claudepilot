@@ -1,0 +1,111 @@
+# T-565: the nightly backup of the portal database, mirrored off-site. NOT APPLIED: Argo CD syncs deploy/k3s without
+# recursing, so this subfolder is outside the app until the coordinator moves it up (README.md in this folder).
+#
+# 1. `backup` (the portal image, beside the running portal on the same ReadWriteOnce volume and node): `portal backup --nightly`
+#    takes an online copy through SQLite's backup API (no pause for the portal), checks it, gzips it, and keeps 7 daily plus
+#    4 weekly in /data/backups/nightly.
+# 2. `offsite`: mirrors that folder to the off-site bucket. Work files start with a dot and are skipped.
+#
+# Placeholders the coordinator replaces (never a value in git; the credentials are a Secret, referred to by NAME only):
+#   BACKUP_S3_SECRET        the Secret holding the keys `access-key-id` and `secret-access-key`
+#   BACKUP_S3_ENDPOINT      the S3 endpoint URL
+#   BACKUP_S3_BUCKET        the bucket
+#   BACKUP_S3_PREFIX        the folder in it, for example claudepilot/portal
+#   BACKUP_S3_UPLOAD_IMAGE  an image with the AWS CLI v2, pinned by tag or digest
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: claudepilot-portal-backup
+  namespace: isnan-claudepilot
+spec:
+  schedule: "17 2 * * *"
+  timeZone: Etc/UTC
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 3600
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            app: claudepilot-portal-backup
+        spec:
+          restartPolicy: Never
+          # The volume is ReadWriteOnce on local-path: the Job must run on the portal's node.
+          nodeSelector:
+            kubernetes.io/hostname: k3s-node2
+          automountServiceAccountToken: false
+          initContainers:
+            - name: backup
+              # Keep this tag the same as the portal Deployment's (portal.yaml); the deploy pipeline bumps both once applied.
+              image: registry.int.isnan.me/claudepilot/portal:2026.10.17-10
+              imagePullPolicy: IfNotPresent
+              command: ["node", "--disable-warning=ExperimentalWarning", "apps/server/dist/cli.js", "backup", "--nightly"]
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 128Mi
+                limits:
+                  memory: 512Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+              volumeMounts:
+                - name: state
+                  mountPath: /data
+                  subPath: data
+          containers:
+            - name: offsite
+              image: BACKUP_S3_UPLOAD_IMAGE
+              imagePullPolicy: IfNotPresent
+              # A mirror, so the off-site copy has the same 7 daily plus 4 weekly. The bucket keeps versioning on with a
+              # noncurrent-version expiry, so an emptied or damaged local folder can't erase the off-site history.
+              command:
+                - aws
+                - s3
+                - sync
+                - /data/backups/nightly
+                - s3://BACKUP_S3_BUCKET/BACKUP_S3_PREFIX
+                - --endpoint-url
+                - BACKUP_S3_ENDPOINT
+                - --exclude
+                - ".*"
+                - --delete
+                - --only-show-errors
+              env:
+                - name: AWS_ACCESS_KEY_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: BACKUP_S3_SECRET
+                      key: access-key-id
+                - name: AWS_SECRET_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: BACKUP_S3_SECRET
+                      key: secret-access-key
+                - name: AWS_DEFAULT_REGION
+                  value: us-east-1
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  memory: 256Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+              volumeMounts:
+                - name: state
+                  mountPath: /data
+                  subPath: data
+                  readOnly: true
+          volumes:
+            - name: state
+              persistentVolumeClaim:
+                claimName: claudepilot-data

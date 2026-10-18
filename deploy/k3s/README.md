@@ -46,6 +46,7 @@ The commit must be on `main` of the repository. To update: build, change the two
 ## What is configured
 
 - State is one 10 Gi `local-path` volume (database, backups, knowledge) on `k3s-node2`; the key that seals stored secrets is the Secret `claudepilot-secret-key`; it is never pruned or deleted by Argo CD.
+- Nightly off-site backup (T-565): `backup/portal-backup.yaml`, **not applied yet** (Argo CD does not recurse into `backup/`); see `backup/README.md`.
 - Workspaces are Deployments in `isnan-claudepilot-workspaces` made with the portal's service account (`PORTAL_K8S_*`); `PORTAL_K8S_NODE_SELECTOR` keeps them on `k3s-node2`.
 - `PORTAL_INTERNAL_URL` is the in-cluster address workspaces use for the Portal MCP tools; Connect is on (`PORTAL_CONNECT_URL`).
 - Not enabled: the "This machine" target (`PORTAL_LOCAL_ENABLED`): it would give a shell inside the portal pod, which holds the cluster credentials; and Docker targets (there is no Docker socket in k3s).

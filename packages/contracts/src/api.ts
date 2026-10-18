@@ -40,6 +40,11 @@ export interface SystemStatus {
   /** ISO time of the newest backup, any kind. */
   lastBackupAt: string | null;
   backups: number;
+  /**
+   * The nightly off-site backup (`portal backup --nightly`, a CronJob; T-565). `stale` is true when there is none or the
+   * newest is older than 26 hours: the Job is not running or failing.
+   */
+  nightlyBackup: { lastAt: string | null; stale: boolean; count: number };
   secretKey: {
     /** Where the key in use came from; null while Locked. */
     source: 'env' | 'file' | 'panel' | null;

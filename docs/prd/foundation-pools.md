@@ -58,6 +58,14 @@ the parts they share, so each pool PRD only describes its own content:
 - **Backups:** SQLite's backup API, before each migration (keep 3) and daily (keep 7), plus
   `portal backup` / `portal restore` (§6.5). Backups contain secret columns still encrypted, so a
   restore needs the key the backup was made with.
+- **Nightly off-site backup (T-565, built; the CronJob is not applied yet):** `portal backup --nightly`, run by
+  the CronJob `deploy/k3s/backup/portal-backup.yaml`, takes an online copy (the backup API, safe while the
+  portal writes), checks it (`quick_check`), gzips it into `<data dir>/backups/nightly`, keeps the newest of
+  each of the last 7 days plus each of the last 4 weeks, and the Job mirrors the folder off-site (credentials
+  by Secret name only). `GET /api/admin/system` returns `nightlyBackup { lastAt, stale, count }`: `stale` when
+  there is none or the newest is older than 26 hours; `portal status` prints it. `portal restore` takes a
+  `.db.gz`; `portal drill <file>` restores into a scratch folder, times it, and fails on any table whose row
+  count differs (the drill test, `store/nightly.test.ts`, does the same on a 5,000-row copy).
 - **Data dir:** `PORTAL_DATA_DIR` (exists today, default `<repo>/.data`). Created with mode `0700`, and
   files written with fsync then rename.
 - **The existing JSON file** for pending workspace creates stays as it is. Secrets and assignments
@@ -253,8 +261,10 @@ to remove something.
 
 **Restore**
 
-- `portal restore <file>` checks the backup's integrity and that the current key opens its key check,
+- `portal restore <file>` (`.db` or `.db.gz`) checks the backup's integrity and that the current key opens its key check,
   keeps the replaced database as a backup, and starts Frozen until an admin resumes delivery.
+- `portal drill <file>` proves a backup restores without touching the live database: restore into a scratch
+  folder, the time taken, and every table's row count against the backup.
 - Backup but no key: `portal forget-secrets` deletes every encrypted value and writes a new key check
   under a new key. Pools, assignments and history stay, every secret shows "Re-enter", and
   workspaces keep their last files until their pools compile again. The portal never reads secrets

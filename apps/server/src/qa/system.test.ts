@@ -7,6 +7,7 @@ import type { SystemStatus } from '@portal/contracts';
 import { createApp } from '../app.js';
 import { Portal } from '../portal.js';
 import { MIGRATIONS } from '../store/migrations.js';
+import { nightlyBackup } from '../store/nightly.js';
 import { generateSecretKey, parseSecretKey } from '../store/secretBox.js';
 import { Store } from '../store/store.js';
 import { tempDirectory } from '../store/testTmp.js';
@@ -67,6 +68,26 @@ test('a missing or wrong key is still a lock with its key actions', async () => 
   assert.equal(f.trust.state, 'locked');
   assert.equal(f.secretKey.canSetUp, true, 'a database that never had a key offers Set up');
   fresh.close();
+});
+
+test('T-565: the nightly backup is stale when there is none, fresh after one, stale again past 26 hours', async () => {
+  const dir = tempDirectory('cp-qa-sys-');
+  const store = await Store.open({ dataDir: dir, secretKey: parseSecretKey(generateSecretKey()) });
+  assert.deepEqual((await status(store)).nightlyBackup, { lastAt: null, stale: true, count: 0 }, 'no nightly yet: the signal is on');
+  const at = new Date(Date.now() - 25 * 60 * 60 * 1000);
+  await nightlyBackup({ dataDir: dir, now: () => at });
+  const fresh = (await status(store)).nightlyBackup;
+  assert.equal(fresh.stale, false, '25 hours old is still fresh');
+  assert.equal(fresh.count, 1);
+  assert.equal(fresh.lastAt, new Date(Math.floor(at.getTime() / 1000) * 1000).toISOString());
+  await nightlyBackup({ dataDir: dir, now: () => new Date(Date.now() - 50 * 60 * 60 * 1000) });
+  assert.equal((await status(store)).nightlyBackup.stale, false, 'an older one does not hide the newest');
+  store.close();
+  const old = tempDirectory('cp-qa-sys-');
+  const s2 = await Store.open({ dataDir: old, secretKey: parseSecretKey(generateSecretKey()) });
+  await nightlyBackup({ dataDir: old, now: () => new Date(Date.now() - 27 * 60 * 60 * 1000) });
+  assert.equal((await status(s2)).nightlyBackup.stale, true, '27 hours old is stale');
+  s2.close();
 });
 
 test('a healthy database offers nothing', async () => {
