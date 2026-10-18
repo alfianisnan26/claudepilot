@@ -23,7 +23,9 @@ after(() =>
 async function start(portal: Portal) {
   const server = createServer();
   servers.push(server);
-  const service = { configuration: () => ({ container: 'stopped', error: null, sandbox: null, install: null }) } as unknown as BrowserService;
+  const service = {
+    configuration: () => ({ container: 'stopped', error: null, sandbox: null, install: null }),
+  } as unknown as BrowserService;
   attachBrowserSockets(server, { portal, service });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const host = `127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -64,7 +66,19 @@ test('T-976 browser socket: a planted old-name session next to a stale __Host- o
   const planted = portal.signIn(CODE);
   portal.signOut(stale);
   const { status } = await start(portal);
-  assert.equal(await status(`${LEGACY_SESSION_COOKIE}=${encodeURIComponent(planted)}; ${SESSION_COOKIE}=${encodeURIComponent(stale)}`), 401, 'the stale __Host- cookie decides');
-  assert.equal(await status(`${SESSION_COOKIE}=${encodeURIComponent(stale)}; ${LEGACY_SESSION_COOKIE}=${encodeURIComponent(planted)}`), 401, 'order does not matter');
-  assert.equal(await status(`${LEGACY_SESSION_COOKIE}=${encodeURIComponent(planted)}`), 409, 'until the old name is dropped, a browser with only it stays signed in');
+  assert.equal(
+    await status(`${LEGACY_SESSION_COOKIE}=${encodeURIComponent(planted)}; ${SESSION_COOKIE}=${encodeURIComponent(stale)}`),
+    401,
+    'the stale __Host- cookie decides',
+  );
+  assert.equal(
+    await status(`${SESSION_COOKIE}=${encodeURIComponent(stale)}; ${LEGACY_SESSION_COOKIE}=${encodeURIComponent(planted)}`),
+    401,
+    'order does not matter',
+  );
+  assert.equal(
+    await status(`${LEGACY_SESSION_COOKIE}=${encodeURIComponent(planted)}`),
+    409,
+    'until the old name is dropped, a browser with only it stays signed in',
+  );
 });
