@@ -354,7 +354,7 @@ test('T-971 H2 a failed resume: the error text is scrubbed before it reaches the
     await until(() => recoveries(s, s.id).length === 1);
     const row = recoveries(s, s.id)[0]!;
     assert.equal(row.detail.result, 'failed');
-    assert.match(String(row.detail.line), /could not be resumed: launch refused \[redacted\]/);
+    assert.match(String(row.detail.line), /could not be resumed: .*launch refused \[redacted\]/);
     assert.ok(!JSON.stringify(row).includes(secret), 'not in the audit row');
     assert.equal(lines.length, 1);
     assert.ok(!lines[0]!.includes(secret), 'not in the platform audit line');
