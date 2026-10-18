@@ -20,6 +20,8 @@ export type ManagerVerify =
 export interface ManagerTokensOptions {
   /** Whether the manager session is still running (exists, not ended, not archived). Default: no session is, so no token passes. */
   alive?: (sessionId: string) => boolean;
+  /** Review 2026-10-18 M4: whether the person is signed in now; a token passes only while they are (a login that just expired included). */
+  signedIn?: (userId: string) => boolean;
   now?: () => Date;
 }
 
@@ -122,6 +124,10 @@ export class ManagerTokens {
     if (!(this.o.alive ?? (() => false))(row.session_id)) {
       this.#revoke('id = ?', [row.id], 'its session ended');
       return { ok: false, reason: 'ended', tokenId: row.id };
+    }
+    if (this.o.signedIn && !this.o.signedIn(row.user_id)) {
+      this.#revoke('id = ?', [row.id], 'signed out');
+      return { ok: false, reason: 'revoked', tokenId: row.id };
     }
     this.#touch(row.id, now);
     return {

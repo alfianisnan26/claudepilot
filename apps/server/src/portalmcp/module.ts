@@ -35,6 +35,8 @@ export interface PortalMcpModuleOptions {
   };
   /** Whether a General Manager session still runs (T-968); unset, no manager token passes. */
   managerAlive?: (sessionId: string) => boolean;
+  /** T-968 review M4: whether a person is signed in now (their manager's token passes only while they are). */
+  managerSignedIn?: (userId: string) => boolean;
   /** Rate limits (tests use small ones). */
   limits?: PortalLimits;
   version?: string;
@@ -85,7 +87,7 @@ export class PortalMcpModule {
       mcpEnabled: () => this.settings.get().enabled,
       now,
     });
-    this.managers = new ManagerTokens(store, { alive: opts.managerAlive, now });
+    this.managers = new ManagerTokens(store, { alive: opts.managerAlive, signedIn: opts.managerSignedIn, now });
     this.mcp = new PortalMcp({
       registry: this.registry,
       settings: this.settings,

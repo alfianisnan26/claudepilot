@@ -159,6 +159,7 @@ export class Portal {
     if (s && s.expiresAt <= Date.now()) {
       this.#sessions.delete(hash);
       this.#persist((st) => st.remove(hash));
+      this.#signedOut([s.userId ?? FOUNDING_USER_ID]);
       return undefined;
     }
     if (s?.userId) {
@@ -233,11 +234,15 @@ export class Portal {
 
   #prune() {
     const now = Date.now();
+    const ended: string[] = [];
     for (const [hash, s] of this.#sessions) {
       if (s.expiresAt > now) continue;
       this.#sessions.delete(hash);
       this.#persist((st) => st.remove(hash));
+      ended.push(s.userId ?? FOUNDING_USER_ID);
     }
+    // T-968 review M4: an expired login stops the person's manager like a sign-out.
+    this.#signedOut(ended);
   }
 
   adminState(token: string): AdminState {

@@ -1816,6 +1816,11 @@ export class ChatController {
     return s ? this.#decorate(s) : null;
   }
 
+  /** T-968: whether a session is a General Manager (its own or another person's). */
+  isManager(id: string): boolean {
+    return this.#chat.isManager(id);
+  }
+
   /** Registers a dispatcher for live `events`, `delta`, `session`, `input` and `tasks` messages. Returns an unsubscribe. */
   onEvent(cb: Dispatch): () => void {
     this.#dispatchers.add(cb);
@@ -1861,8 +1866,6 @@ export class ChatController {
    * then; the queue checks and holds again when its slot comes); when its launch settles, `#releaseMemory`.
    */
   async #create(req: Partial<CreateChatSessionRequest>, opts: ChatCreateOptions, spawnChecked = false): Promise<ChatSession> {
-    if (req.workspaceId === MANAGER_RUNTIME_ID && !opts.manager)
-      throw ineligibleError('This workspace is the General Manager’s own runtime: no other session runs there.');
     const id = randomUUID();
     try {
       return await this.#createBody(id, req, opts, spawnChecked);
@@ -1897,6 +1900,9 @@ export class ChatController {
     const wtReq = this.#worktreeRequest(req.worktree);
     const workspaceId = typeof req.workspaceId === 'string' ? req.workspaceId.trim() : '';
     if (!workspaceId) throw new AppError('VALIDATION_FAILED', 'Pick a workspace.', { details: { workspaceId: 'Required.' } });
+    // T-968: the manager's runtime takes only the manager, checked on the id as it will be used (review 2026-10-18 M1: " id" got past).
+    if (workspaceId.toLowerCase() === MANAGER_RUNTIME_ID && !opts.manager)
+      throw ineligibleError('This workspace is the General Manager’s own runtime: no other session runs there.');
     const [target] = this.#split(workspaceId);
     if (!this.#workspaces.runtimeFor(target))
       throw new AppError('VALIDATION_FAILED', `No target “${target}”.`, { details: { workspaceId: 'Unknown target.' } });

@@ -20,6 +20,8 @@ export interface ChatManagerDeps {
     list(filter?: { parentId?: string }): ChatSession[];
     /** T-968: a message from the manager into a session (framed as the person's General Manager). */
     send?(sessionId: string, uuid: string, text: string, opts: { actor?: string; actorLabel?: string; priority?: 'next' | 'later' }): Promise<void>;
+    /** T-968: a General Manager is never a target of another manager's message. */
+    isManager?(id: string): boolean;
   };
   /** The global caps (Settings › Sessions); null when none are installed. */
   caps: () => AgentCaps | null;
@@ -65,6 +67,8 @@ export function registerChatManagerTools(d: ChatManagerDeps, registry: ToolRegis
       const target = d.chat.get(args.session_id);
       if (!target || !can(actorOfPrincipal(ctx.principal), 'operate', sessionRef(target.id)).allow) throw new AppError('NOT_FOUND', NO_SESSION);
       if (target.id === ctx.principal.sessionId) throw new AppError('VALIDATION_FAILED', 'Not to yourself.');
+      // Review 2026-10-18 m2: never into a manager (another person's included), and the same 404 as a session you may not see.
+      if (d.chat.isManager?.(target.id) ?? true) throw new AppError('NOT_FOUND', NO_SESSION);
       if (!d.chat.send) throw new AppError('SERVICE_UNAVAILABLE', 'Sending is not available.');
       await d.chat.send(target.id, crypto.randomUUID(), args.text.replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, ''), {
         actor: ctx.actor,

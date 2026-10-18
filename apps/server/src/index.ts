@@ -454,6 +454,7 @@ const portalMcp = new PortalMcpModule(store, {
     const s = chatController.get(id);
     return !!s && s.state !== 'ended' && !s.archivedAt;
   },
+  managerSignedIn: (userId) => portal.signedIn(userId),
 });
 // Q3 (general-manager PRD, #11136): any sign-out of the person, on any device, stops their manager; it gets a new token at the next sign-in.
 portal.onSignedOut = (userId) => void portalMcp.managers.revokeUser(userId, 'signed out');

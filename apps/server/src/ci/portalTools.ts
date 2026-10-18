@@ -280,10 +280,16 @@ export function registerCiTools(ci: CiService, sessions: CiSessionsPort | undefi
       const start = ctx.isAgent ? agentStart(ctx.sessionId ? (sessions?.get(ctx.sessionId) ?? null) : null, repo, args.ref) : null;
       // T-968 review: the General Manager starts DEPLOYMENT pipelines only (their deploying job waits for the person); never an arbitrary
       // pipeline on any ref, which would run any branch's code as a shell.
+      // Review 2026-10-18 M2: the file's own jobs are not enough (a job without an environment runs before the deploying one waits), so
+      // also only on a trusted ref: `integration` (where crews land reviewed work) or the remote's default branch, never a feature branch.
       const managerRule =
         ctx.principal.kind === 'manager'
-          ? ({ rule: 'deployment', refusal: 'The General Manager starts deployment pipelines only (a job that names an environment and waits for you).' } as const)
+          ? ({ rule: 'deployment', refusal: 'The General Manager starts deployment pipelines only, on integration or the default branch.' } as const)
           : null;
+      if (managerRule) {
+        const ref = String(args.ref ?? '').replace(/^refs\/heads\//, '');
+        if (ref !== 'integration' && ref !== repo.defaultBranch) throw new AppError('FORBIDDEN', managerRule.refusal);
+      }
       const run = await ci.startRun({ repoId: repo.id, pipeline: args.pipeline, ref: start?.ref ?? args.ref, inputs: args.inputs }, ctx.actor, {
         sessionId: ctx.isAgent ? ctx.sessionId : null,
         deploymentOnly: managerRule ? managerRule.refusal : start?.rule === 'deployment' ? start.refusal : undefined,

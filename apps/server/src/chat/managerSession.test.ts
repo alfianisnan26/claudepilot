@@ -51,7 +51,8 @@ test('a manager session: not listed, the pilot MCP alone with the manager token,
 test('the manager runtime takes only a manager session', async () => {
   const s = await liveSession();
   try {
-    await assert.rejects(s.controller.create({ workspaceId: MANAGER_RUNTIME_ID }), (e: { code?: string }) => e.code === 'CHAT_INELIGIBLE');
+    for (const id of [MANAGER_RUNTIME_ID, ` ${MANAGER_RUNTIME_ID}`, `${MANAGER_RUNTIME_ID}\t`, MANAGER_RUNTIME_ID.toUpperCase()])
+      await assert.rejects(s.controller.create({ workspaceId: id }), (e: { code?: string }) => e.code === 'CHAT_INELIGIBLE', JSON.stringify(id));
   } finally {
     await s.done();
   }
