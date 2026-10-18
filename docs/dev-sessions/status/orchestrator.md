@@ -17,7 +17,7 @@
   review; fixes on coord/T-968-gm): no deploy until T-731 says so.
 - T-1079 (owner: Konfersi stg release docs per module into vault 98af7d16def1, reuse releaseReport.ts) 2a0edbd8, S1+S2 16fee55e.
 - 2a0edbd8 Jobs: T-921 db1d8d19 rc0 -> QA c691df71; T-257 d34f47b2 rc1 (test bug) -> fix e22ae23d, Job after T-968's two;
-  T-976 fmt bdlp8stxq, T-565 bzq96a9ey on 59451a5f running.
+  T-976 fmt re-run baov0fphs (patch lost to $OUT), T-968 a8fca5a3 b1gahci5o, T-565 bzq96a9ey on 59451a5f running.
 - 3753d3c2: T-971 H2 head bbfd0ae3 Job b2rxfgopr (21 mutants); T-634 test 0f4ffde6 (Job after b2rxfgopr); T-251 QA PWG
   #11340 (citation only) -> reassign to me -> close.
 - 76845676: T-1043 S0c 558c74ed rc0 (66/66; mutants next, redo on ticket/T-1043-s0c-on-s0b after S0b); S0b x T-976 4a57abe6
@@ -62,4 +62,5 @@ markers) to a new branch; the lane resolves it by Edit. Never run prettier on fi
 `context-pack.sh --check HEAD` after every merge. Landing is two commands: (1) `git diff --stat <gated> origin/integration --
 . ':!docs/dev-sessions/status'` and read it, (2) push only if it is empty. A mutant line must prove it was applied, on a
 GREEN base. The status file: Edit/Write ONLY. Full ids and hashes. Migration numbers: check integration AND lane branches.
-gate-job.sh runs in the background (timeout 7200000). `git -C` is refused by the guard: cd instead.
+gate-job.sh runs in the background (timeout 7200000). `git -C` is refused by the guard: cd instead. A Job has no $OUT:
+write a patch to the repo root and name it with `--artifacts fmt.patch --out job-out/` (job-run.sh:27; lost 74feba75).
