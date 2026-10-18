@@ -190,7 +190,7 @@ test('the token: hashed at rest, at most 7 days, replaced on a new mint, refused
   }
 });
 
-test('migration 788: every session is a workspace session of the founding user, and a second manager per person is refused', async () => {
+test('migration 793: every session is a workspace session of the founding user, and a second manager per person is refused', async () => {
   const h = await portalMcpHarness();
   try {
     const db = h.store.db!;

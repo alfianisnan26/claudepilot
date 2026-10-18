@@ -372,7 +372,7 @@ extends it to assert that each class P, R, D, C and G answers a `cpmt_` call wit
 | S6 | The coordinator's routine as the manager's skills | Orchestrator | S2, S5 |
 
 **Built (T-968 S1, identity part).**
-- Migration 788 (chat set) adds `chat_sessions.kind` (`'workspace'` or `'manager'`, CHECK), `owner_id` (default `'u_owner'`), the unique
+- Migration 793 (chat set) adds `chat_sessions.kind` (`'workspace'` or `'manager'`, CHECK), `owner_id` (default `'u_owner'`), the unique
   index `chat_sessions_one_manager` on `(owner_id) WHERE kind = 'manager'`, and the `pmcp_manager_tokens` table.
 - `cpmt_` tokens live in `portalmcp/managers.ts` (`ManagerTokens`): minted per manager session (a new mint revokes the older ones), sha256
   at rest, 7 days (`AGENT_TOKEN_TTL_MS`), refused once the session ended.

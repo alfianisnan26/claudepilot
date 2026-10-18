@@ -3443,7 +3443,7 @@ export const MIGRATIONS: Migration[] = [
     },
   },
   {
-    version: 788,
+    version: 793,
     name: 'chat sessions: the General Manager kind, its owner, one per person, and its cpmt_ tokens (T-968 S1)',
     up(db) {
       // T-968 S1 (general-manager PRD §2, §4). Every existing row is a workspace session owned by the founding user (multi-user adoption
