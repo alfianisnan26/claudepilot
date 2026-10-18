@@ -528,11 +528,12 @@ test('T-524 the per-program cap: two Konfersi Jobs running (one from before the 
   });
   const r = await k.done;
   assert.equal(r.code, 0, r.out);
-  assert.match(w.applied().find((m) => m.includes('konfersi-backend')) ?? '', /job-run\/program: konfersi\}/);
+  // The label value ends at a comma or the brace: job-run/where follows it since T-1083 S1a.
+  assert.match(w.applied().find((m) => m.includes('konfersi-backend')) ?? '', /job-run\/program: konfersi[,}]/);
   // An event Job is its own program.
   const e = w.run(['--repo', 'event', '--ref', 'main', '--', 'true'], { PILOT_SESSION_ID: 'chat-c' });
   assert.equal(e.code, 0, e.out);
-  assert.ok(w.applied().some((m) => /job-run\/program: event\}/.test(m)));
+  assert.ok(w.applied().some((m) => /job-run\/program: event[,}]/.test(m)));
   assert.equal(w.run(['--list'], { JOB_RUN_MAX_PER_PROGRAM: 'x' }).code, 2, 'the cap is a number');
 });
 
