@@ -61,7 +61,7 @@ import {
   canAgentAssignUser,
   canAgentTagChecklist,
   OWNER_CHECKLIST_TAG,
-  canPeerLeadComment, canWorkerComment,
+  canPeerLeadComment, canWorkerComment, parseLeadPeerGroups,
   D62_ASSIGN_REFUSAL,
   D62_CHECKLIST_REFUSAL,
   type EndedGrantReason,
@@ -229,6 +229,8 @@ export interface TicketsOptions {
   agentOpenPerWorkspace?: () => number;
   /** FR9c (D-62, T-483): the tags that let an agent put a ticket on a person (`tickets.agentAssignUserTags`). Default `production`. */
   agentAssignUserTags?: () => string;
+  /** FR9e (D-85): `tickets.leadPeerGroups`, the owner's list of peer lead sessions. */
+  leadPeerGroups?: () => unknown;
 }
 
 /** One move the orphan sweep made (T-270 layer 3): where the ticket went and why. `to` null: back in the agents' queue. */
@@ -298,6 +300,7 @@ export class Tickets {
   readonly #orphanAfterMin: () => number;
   readonly #agentOpenPerWorkspace: () => number;
   readonly #agentAssignUserTags: () => string;
+  readonly #leadPeerGroups: () => unknown;
   #orphans: { lastRunAt: string | null; dead: Record<string, string> } | null = null;
 
   constructor(
@@ -311,6 +314,7 @@ export class Tickets {
     this.#orphanAfterMin = opts.orphanAfterMin ?? (() => ORPHAN_DEFAULT_MIN);
     this.#agentOpenPerWorkspace = opts.agentOpenPerWorkspace ?? (() => OPEN_PER_WORKSPACE);
     this.#agentAssignUserTags = opts.agentAssignUserTags ?? (() => AGENT_ASSIGN_USER_TAGS_DEFAULT);
+    this.#leadPeerGroups = opts.leadPeerGroups ?? (() => '');
   }
 
   /* ---------- The workspace column (T-42 slice 3): written as the stable id, read as the key, matched in either form ---------- */
@@ -597,7 +601,10 @@ export class Tickets {
       ticketWorkspace: row.workspace_id,
     });
     if (d.allow) return d.why;
-    return canPeerLeadComment({ actor: s, holder, track: titlePrefix }) ? 'lead_peer' : null;
+    const groups = parseLeadPeerGroups(this.#leadPeerGroups());
+    if (!groups.length || !holder) return null;
+    const lineage = (x: TicketSessionInfo) => [x.id, ...this.#ancestors(x)];
+    return canPeerLeadComment({ actor: s, holder, actorLineage: lineage(s), holderLineage: lineage(holder), groups }) ? 'lead_peer' : null;
   }
 
   /** The audit row of a worker's comment under FR9b: the worker that wrote it, its lead and why. */

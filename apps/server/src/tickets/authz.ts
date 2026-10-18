@@ -209,19 +209,29 @@ export function canWorkerComment(facts: {
 }
 
 /**
- * D-85 (2026-10-18): the leads of ONE program talk on each other's tickets. A live top-level session (no lead of its own) may COMMENT on a
- * ticket held by another live top-level session in the same workspace whose title has the same track (the text before its first ":",
- * e.g. "Konfersi"). The main lead and the unit leads read and answer each other's status threads; nothing else is granted (no change, close,
- * claim or attachment). A title without a track, another workspace, a worker or an ended holder gets nothing.
+ * D-85 (2026-10-18): the leads of ONE program talk on each other's tickets. A live top-level session may COMMENT on a ticket held by another
+ * live top-level session in the same workspace when both are in one group of `tickets.leadPeerGroups` (an owner-only setting: ids, never a
+ * title an agent could rename; review 2026-10-18). `lineage` is each session's own id plus its predecessors (continued_from back), so a
+ * continuation of a listed lead counts as it. Nothing else is granted (no change, close, claim or attachment).
  */
 export function canPeerLeadComment(facts: {
-  actor: RuleSession & { parentId?: string | null; title?: string | null };
-  holder: (RuleSession & { parentId?: string | null; title?: string | null; archivedAt?: string | null }) | null;
-  track: (title: string | null | undefined) => string | null;
+  actor: RuleSession & { parentId?: string | null };
+  holder: (RuleSession & { parentId?: string | null; archivedAt?: string | null }) | null;
+  actorLineage: readonly string[];
+  holderLineage: readonly string[];
+  groups: readonly (readonly string[])[];
 }): boolean {
   const { actor, holder } = facts;
   if (!holder || actor.id === holder.id || actor.parentId || holder.parentId) return false;
   if (actor.state === 'ended' || holder.state === 'ended' || holder.archivedAt || actor.workspaceId !== holder.workspaceId) return false;
-  const a = facts.track(actor.title);
-  return a !== null && a === facts.track(holder.title);
+  return facts.groups.some((g) => facts.actorLineage.some((id) => g.includes(id)) && facts.holderLineage.some((id) => g.includes(id)));
+}
+
+/** `tickets.leadPeerGroups` parsed: groups by ";", ids by ","; anything not a plain id is dropped (fail closed). */
+export function parseLeadPeerGroups(raw: unknown): string[][] {
+  if (typeof raw !== 'string') return [];
+  return raw
+    .split(';')
+    .map((g) => g.split(',').map((x) => x.trim()).filter((x) => /^[0-9a-f-]{8,64}$/.test(x)))
+    .filter((g) => g.length > 1);
 }

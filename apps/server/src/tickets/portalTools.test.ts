@@ -9,11 +9,11 @@ import { FakeSessions, UI } from './testkit.js';
 const TAGS = String.fromCodePoint(0xe0049, 0xe0067, 0xe006e);
 
 /** The endpoint, the ticket tools and the service around a fake of the chat side. */
-async function rig(opts: { limits?: import('../portalmcp/limits.js').PortalLimits } = {}) {
+async function rig(opts: { limits?: import('../portalmcp/limits.js').PortalLimits; leadPeerGroups?: () => string } = {}) {
   const registry = new ToolRegistry();
   const h = await portalMcpHarness({ registry, limits: opts.limits });
   const sessions = new FakeSessions();
-  const tickets = new Tickets(h.store, sessions);
+  const tickets = new Tickets(h.store, sessions, { leadPeerGroups: opts.leadPeerGroups });
   tickets.start();
   registerTicketTools(tickets, registry);
   /** A running chat session in a workspace, and the per-session token minted for it. */
@@ -489,47 +489,41 @@ test('lead assigns (2026-10-18): a lead hands its workspace\'s tickets to its ow
   }
 });
 
-test("lead_peer (D-85): the leads of one program comment on each other's tickets; not another program, a worker, an ended lead, or a change", async () => {
-  const r = await rig();
+test('lead_peer (D-85): the leads in one owner-set group comment on each other\'s tickets; a renamed session, a worker, another group or a change get nothing', async () => {
+  const MAIN = 'aaaaaaaa-0001', BIZ = 'aaaaaaaa-0002', LAB = 'aaaaaaaa-0003', BIZ2 = 'aaaaaaaa-0004', OTHER = 'bbbbbbbb-0001', WK = 'aaaaaaaa-0009';
+  let groups = `${MAIN},${BIZ},${LAB}`;
+  const r = await rig({ leadPeerGroups: () => groups });
   const audits: { kind: string; detail?: Record<string, unknown> }[] = [];
   r.tickets.onAudit = (e) => void audits.push(e);
   try {
-    const main = await r.agent('docker/api', 'main');
-    const biz = await r.agent('docker/api', 'biz');
-    await r.agent('docker/api', 'lab');
-    await r.agent('docker/api', 'other');
-    const wk = await r.agent('docker/api', 'wk');
+    const main = await r.agent('docker/api', MAIN, 'Konfersi: migration');
+    const biz = await r.agent('docker/api', BIZ, 'Konfersi: Business');
+    await r.agent('docker/api', LAB, 'Konfersi: Lab');
+    const other = await r.agent('docker/api', OTHER, 'Konfersi: impostor'); // renamed itself into the track: not in the group
+    const wk = await r.agent('docker/api', WK, 'Konfersi: lane');
     const patch = (id: string, over: Record<string, unknown>) => r.sessions.sessions.set(id, { ...r.sessions.sessions.get(id)!, ...over });
-    patch('main', { title: 'Konfersi: migration' });
-    patch('biz', { title: 'Konfersi: Business' });
-    patch('lab', { title: 'Konfersi: Lab' });
-    patch('other', { title: 'Tradingbot: program' });
-    patch('wk', { title: 'Konfersi: lane', parentId: 'biz' });
-    r.tickets.create(UI, { summary: 'Business status', workspaceId: 'docker/api', assignee: { kind: 'session', sessionId: 'biz' } }); // T-1
-    r.tickets.create(UI, { summary: 'main status', workspaceId: 'docker/api', assignee: { kind: 'session', sessionId: 'main' } }); // T-2
-    r.tickets.create(UI, { summary: 'tradingbot status', workspaceId: 'docker/api', assignee: { kind: 'session', sessionId: 'other' } }); // T-3
-    r.tickets.create(UI, { summary: 'lab status', workspaceId: 'docker/api', assignee: { kind: 'session', sessionId: 'lab' } }); // T-4
-    const code = async (t: { secret: string }, id: string) =>
-      (await r.h.call(t.secret, 'ticket_comment', { id, text: `peer note on ${id}` })).result?.structuredContent?.error?.code;
+    patch(WK, { parentId: BIZ });
+    r.tickets.create(UI, { summary: 'Business status', workspaceId: 'docker/api', assignee: { kind: 'session', sessionId: BIZ } }); // T-1
+    r.tickets.create(UI, { summary: 'main status', workspaceId: 'docker/api', assignee: { kind: 'session', sessionId: MAIN } }); // T-2
+    r.tickets.create(UI, { summary: 'lab status', workspaceId: 'docker/api', assignee: { kind: 'session', sessionId: LAB } }); // T-3
+    const code = async (t: { secret: string }, id: string) => (await r.h.call(t.secret, 'ticket_comment', { id, text: `peer note on ${id}` })).result?.structuredContent?.error?.code;
     assert.equal(await code(main, 'T-1'), undefined, 'the main lead answers on the Business status thread');
-    assert.equal(await code(biz, 'T-2'), undefined, "and Business on the main lead's");
-    assert.equal(
-      audits.filter((a) => a.kind === 'ticket.worker_commented' && a.detail?.why === 'lead_peer').length,
-      2,
-      'audited as lead_peer',
-    );
-    assert.equal(await code(main, 'T-3'), 'FORBIDDEN', "another program's lead");
-    assert.equal(
-      (await r.h.call(main.secret, 'ticket_update', { id: 'T-1', priority: 'low' })).result?.structuredContent?.error?.code,
-      'FORBIDDEN',
-      'a comment only',
-    );
-    assert.equal(await code(wk, 'T-4'), 'FORBIDDEN', 'a worker is not a peer lead');
-    // An ended lead's ticket is FR9a's (the ended-session rule), never a lead_peer comment.
-    patch('lab', { state: 'ended' });
-    const before = audits.filter((a) => a.detail?.why === 'lead_peer').length;
-    await code(main, 'T-4');
-    assert.equal(audits.filter((a) => a.detail?.why === 'lead_peer').length, before, 'no lead_peer grant on an ended holder');
+    assert.equal(await code(biz, 'T-2'), undefined, 'and Business on the main lead\'s');
+    assert.equal(audits.filter((a) => a.kind === 'ticket.worker_commented' && a.detail?.why === 'lead_peer').length, 2, 'audited as lead_peer');
+    assert.equal(await code(other, 'T-1'), 'FORBIDDEN', 'a session that titled itself "Konfersi:" but is not in the owner\'s group');
+    assert.equal(await code(wk, 'T-3'), 'FORBIDDEN', 'a worker is not a peer lead');
+    assert.equal((await r.h.call(main.secret, 'ticket_update', { id: 'T-1', priority: 'low' })).result?.structuredContent?.error?.code, 'FORBIDDEN', 'a comment only');
+    assert.equal((await r.h.call(main.secret, 'ticket_close', { id: 'T-1', summary: 'x' })).result?.structuredContent?.error?.code, 'FORBIDDEN', 'never a close');
+    const att = await r.h.call(main.secret, 'ticket_attach', { id: 'T-1', name: 'x.txt', content_base64: Buffer.from('hello').toString('base64') });
+    assert.equal(att.result?.structuredContent?.error?.code, 'FORBIDDEN', 'never an attachment');
+    // A continuation of a listed lead counts as it (its lineage).
+    await r.agent('docker/api', BIZ2, 'Konfersi: Business');
+    patch(BIZ2, { continuedFrom: BIZ });
+    r.tickets.create(UI, { summary: 'held by the continuation', workspaceId: 'docker/api', assignee: { kind: 'session', sessionId: BIZ2 } }); // T-4
+    assert.equal(await code(main, 'T-4'), undefined, 'the continued Business lead is still a peer');
+    // The owner empties the setting: nobody is a peer.
+    groups = '';
+    assert.equal(await code(main, 'T-1'), 'FORBIDDEN', 'no group, no grant');
   } finally {
     r.done();
   }
