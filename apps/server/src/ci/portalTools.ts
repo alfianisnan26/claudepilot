@@ -278,13 +278,19 @@ export function registerCiTools(ci: CiService, sessions: CiSessionsPort | undefi
       // An agent (ci/authz.ts, agentStart): its own branch, a lead's dev/* or ticket/* branch of its program's remote, else deployments only
       // (the service checks the file it reads: their deploying jobs wait for a person).
       const start = ctx.isAgent ? agentStart(ctx.sessionId ? (sessions?.get(ctx.sessionId) ?? null) : null, repo, args.ref) : null;
+      // T-968 review: the General Manager starts DEPLOYMENT pipelines only (their deploying job waits for the person); never an arbitrary
+      // pipeline on any ref, which would run any branch's code as a shell.
+      const managerRule =
+        ctx.principal.kind === 'manager'
+          ? ({ rule: 'deployment', refusal: 'The General Manager starts deployment pipelines only (a job that names an environment and waits for you).' } as const)
+          : null;
       const run = await ci.startRun({ repoId: repo.id, pipeline: args.pipeline, ref: start?.ref ?? args.ref, inputs: args.inputs }, ctx.actor, {
         sessionId: ctx.isAgent ? ctx.sessionId : null,
-        deploymentOnly: start?.rule === 'deployment' ? start.refusal : undefined,
+        deploymentOnly: managerRule ? managerRule.refusal : start?.rule === 'deployment' ? start.refusal : undefined,
         // T-558: a lead on `stg` of its program's remote: only a pipeline that deploys to exactly stg (its file decides), else a missing remote.
         stgOnly: start?.rule === 'program_stg' ? start.refusal : undefined,
         actorLabel: ctx.actorLabel ?? null,
-        rule: start?.rule ?? 'token',
+        rule: managerRule?.rule ?? start?.rule ?? 'token',
       });
       ctx.affected(`ci-run:${run.id}`);
       const held = run.deployments.filter((d) => d.approval === 'pending').map((d) => d.environment);

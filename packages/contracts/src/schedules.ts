@@ -65,14 +65,16 @@ export interface ManagerStatus {
   sessionId: string | null;
   state: string | null;
   workspaceId: string | null;
-  /** Running workspaces it can run in, for Enable. */
-  candidates: { id: string; label: string }[];
+  /** Its dedicated runtime (`kubernetes/general-manager`, no other session may run there), or null before Prepare. */
+  runtime: { workspaceId: string; status: string } | null;
 }
 
 export const MANAGER_API = {
   /** Full session. GET: `ManagerStatus`. */
   status: '/api/admin/manager',
-  /** Full session. POST `{ workspaceId? }`: makes and starts the person's one manager; `ManagerStatus`. */
+  /** Full session. POST: makes the dedicated runtime workspace when it is missing; `ManagerStatus`. */
+  prepare: '/api/admin/manager/prepare',
+  /** Full session. POST: makes and starts the person's one manager in its runtime; `ManagerStatus`. */
   enable: '/api/admin/manager/enable',
   /** Full session. POST: ends it (the transcript stays); `ManagerStatus`. */
   disable: '/api/admin/manager/disable',

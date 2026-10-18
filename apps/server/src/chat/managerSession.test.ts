@@ -2,7 +2,7 @@
 // person's manager token, not an agent token), every built-in tool off, its brief appended, and never bypass-capable.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { MANAGER_DENIED_TOOLS } from './controller.js';
+import { MANAGER_RUNTIME_ID } from './controller.js';
 import { liveSession, until } from './testkit.js';
 
 const CONFIG = JSON.stringify({ mcpServers: { pilot: { type: 'http', url: '${PILOT_MCP_URL}', headers: { Authorization: 'Bearer ${PILOT_MCP_TOKEN}' } } } });
@@ -25,9 +25,11 @@ test('a manager session: not listed, the pilot MCP alone with the manager token,
     assert.deepEqual(asked, ['manager u_owner'], 'the manager token, never an agent token');
     const args = s.ws.startArgs.at(-1)!;
     assert.ok(args.includes('--strict-mcp-config'), 'no other MCP server than the pilot');
-    const i = args.indexOf('--disallowedTools');
-    assert.ok(i > 0);
-    for (const t of ['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep', 'WebFetch', 'WebSearch', 'Task']) assert.ok(MANAGER_DENIED_TOOLS.includes(t) && args.slice(i).includes(t), `${t} off`);
+    // Every built-in tool off (`--tools ""`), no project or user settings (so no hooks or plugins), no slash commands; measured on 2.1.296.
+    assert.equal(args[args.indexOf('--tools') + 1], '', 'no built-in tools');
+    assert.equal(args[args.indexOf('--setting-sources') + 1], '', 'no settings sources: no hooks');
+    assert.ok(args.includes('--disable-slash-commands'));
+    assert.ok(!args.includes('--settings') && !args.includes('--safe-mode'), 'no agent settings; safe mode would drop the MCP too');
     assert.equal(args[args.indexOf('--append-system-prompt') + 1], 'You are the general manager.');
     assert.ok(s.ws.startExecs.at(-1)!.written.includes('PILOT_MCP_TOKEN=mgr'), 'the manager token on stdin');
     assert.equal(s.controller.get(m.id)!.bypassCapable, false);
@@ -41,6 +43,15 @@ test('a manager session: not listed, the pilot MCP alone with the manager token,
     assert.equal(asked.at(-1), 'agent');
     assert.ok(!s.ws.startArgs.at(-1)!.includes('--strict-mcp-config'));
     assert.ok(s.controller.list().some((x) => x.id === w.id));
+  } finally {
+    await s.done();
+  }
+});
+
+test('the manager runtime takes only a manager session', async () => {
+  const s = await liveSession();
+  try {
+    await assert.rejects(s.controller.create({ workspaceId: MANAGER_RUNTIME_ID }), (e: { code?: string }) => e.code === 'CHAT_INELIGIBLE');
   } finally {
     await s.done();
   }

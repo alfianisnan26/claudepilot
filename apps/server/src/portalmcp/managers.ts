@@ -87,6 +87,13 @@ export class ManagerTokens {
     else this.#revoke('id = ?', [tokenId], 'its launch started no new process');
   }
 
+  /** Whether the manager session holds a token that still works (not revoked, not expired). */
+  hasLive(sessionId: string): boolean {
+    return !!this.store.db
+      ?.prepare('SELECT 1 FROM pmcp_manager_tokens WHERE session_id = ? AND revoked_at IS NULL AND expires_at > ? LIMIT 1')
+      .get(sessionId, this.#now.toISOString());
+  }
+
   /** The manager was disabled or removed, or its process was replaced. */
   revokeSession(sessionId: string, reason: string): number {
     return this.#revoke('session_id = ?', [sessionId], reason);

@@ -493,10 +493,17 @@ chatController.agentAccess = portalMcp.agents;
 // workspace reaches it, the same as an agent's.
 chatController.managerAccess = {
   mint: async ({ workspaceId, sessionId, ownerId }) => {
+    // Only while the person is signed in somewhere (a sign-out revokes it, Q3; a later wake must not mint it again: review 2026-10-18).
+    if (!portal.signedIn(ownerId)) return null;
     const url = await agentUrls(workspaceId);
     const t = url ? portalMcp.managers.mint({ userId: ownerId, sessionId }, { keepOthers: true }) : null;
     return t && url
-      ? { env: { PILOT_MCP_TOKEN: t.secret, PILOT_MCP_URL: url, PILOT_SESSION_ID: sessionId, PILOT_WORKSPACE_ID: workspaceId }, mcpConfig: AGENT_MCP_CONFIG, tokenId: t.tokenId }
+      ? {
+          // claude.ai's own connectors stay out of the manager's process whatever the global setting (review 2026-10-18).
+          env: { PILOT_MCP_TOKEN: t.secret, PILOT_MCP_URL: url, PILOT_SESSION_ID: sessionId, PILOT_WORKSPACE_ID: workspaceId, ENABLE_CLAUDEAI_MCP_SERVERS: 'false' },
+          mcpConfig: AGENT_MCP_CONFIG,
+          tokenId: t.tokenId,
+        }
       : null;
   },
   settle: (sessionId, tokenId, started) => portalMcp.managers.settle(sessionId, tokenId, started),
