@@ -80,8 +80,10 @@ function savedDetails(): boolean {
  * socket for as long as it's mounted. A send, resume or change refused because the session's folder
  * needs trust asks first ("Trust this folder?") and runs again once trusted.
  */
-export function SessionPage() {
-  const { id = '' } = useParams();
+export function SessionPage({ sessionId, onBack }: { sessionId?: string; onBack?: () => void } = {}) {
+  // Home's Manager mode (T-968 S3) shows a session in place: its id comes in, and Back goes to the dashboard.
+  const params = useParams();
+  const id = sessionId ?? params.id ?? '';
   const navigate = useNavigate();
   const toast = useToast();
   const { connected, events, paging, loadOlder, loadWhole, delta, agentLive, session, removed, inputs, outbox, tasks, btw, btwAsk, btwCancel, btwClose, btwPin, send, respond, control, stop, end } =
@@ -472,13 +474,24 @@ export function SessionPage() {
             >
               {/* Bypass is on: the whole bar is tinted until it's off. */}
               {bypass && <span aria-hidden="true" className="pointer-events-none absolute inset-0 -z-10 rounded-full bg-danger/10" />}
-              <Link
-                to="/admin/sessions"
-                aria-label="Back to sessions"
-                className="press flex size-11 shrink-0 items-center justify-center rounded-full text-ink-soft hover:bg-ink/[0.07] hover:text-ink"
-              >
-                <ArrowLeft className="size-[18px]" />
-              </Link>
+              {onBack ? (
+                <button
+                  type="button"
+                  onClick={onBack}
+                  aria-label="Back to the dashboard"
+                  className="press flex size-11 shrink-0 items-center justify-center rounded-full text-ink-soft hover:bg-ink/[0.07] hover:text-ink"
+                >
+                  <ArrowLeft className="size-[18px]" />
+                </button>
+              ) : (
+                <Link
+                  to="/admin/sessions"
+                  aria-label="Back to sessions"
+                  className="press flex size-11 shrink-0 items-center justify-center rounded-full text-ink-soft hover:bg-ink/[0.07] hover:text-ink"
+                >
+                  <ArrowLeft className="size-[18px]" />
+                </Link>
+              )}
               <button
                 type="button"
                 onClick={() => setInfoOpen(true)}
