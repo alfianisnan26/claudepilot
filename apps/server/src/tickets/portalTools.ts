@@ -300,7 +300,7 @@ export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = p
     name: 'ticket_update',
     title: 'Change a ticket',
     description:
-      'Changes fields of a ticket assigned to you (or one you made that nobody holds, or one an ended session of your track holds): summary, description, type, priority, tags, status (in_progress, blocked, in_review, open) or assignee. To finish a ticket use ticket_close. Unassigning (assignee none) returns it to the queue.',
+      'Changes fields of a ticket assigned to you (or one you made that nobody holds, or one an ended session of your track holds): summary, description, type, priority, tags, status (in_progress, blocked, in_review, open) or assignee. A crew lead may also hand a ticket of its workspace (held by nobody, itself or one of its workers) to itself, one of its workers or the queue (assignee, status, priority only). To finish a ticket use ticket_close. Unassigning (assignee none) returns it to the queue.',
     scope: 'agent',
     hints: { idempotent: true },
     input: z.object({
@@ -325,8 +325,10 @@ export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = p
   registerPortalTool({
     name: 'ticket_comment',
     title: 'Comment on a ticket',
-    description: 'Adds a comment to a ticket assigned to you (or one you made that nobody holds, or one an ended session of your track holds; a worker also on its lead’s tickets and on the ticket its spawn named while nobody holds it). Use it to report progress, ask for what you need, or record what you found.',
+    description: 'Adds a comment to a ticket assigned to you (or one you made that nobody holds, or one an ended session of your track holds; a worker also on its lead’s and its crew mates’ tickets, on the ticket its spawn named while nobody holds it, and on any unassigned ticket of its own workspace). Use it to report progress, ask for what you need, or record what you found.',
     scope: 'agent',
+    // Review 2026-10-18: crew_queue widened who may comment, so a flood stops here (a QA lane posts a few verdicts an hour).
+    rate: { perHour: 120 },
     input: z.object({ id: z.string().max(20), text: z.string().min(1).max(8_000).describe('Markdown.'), session_id: sessionIdArg }),
     handler(ctx, args) {
       const e = tickets.comment(callerOf(ctx), args.id, args.text, { sessionId: args.session_id });
@@ -339,7 +341,7 @@ export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = p
     name: 'ticket_attach',
     title: 'Attach a file to a ticket',
     description:
-      'Attaches a file (any type: a screenshot, a log, a report, a PDF) to a ticket you may comment on (the same rule as ticket_comment, a crew mate’s ticket included). Give the content as base64 in `content_base64`, or plain text in `text`. At most 50 MB decoded, 100 files a ticket. Never attach a secret, a credential or a file that holds one (a .env, a token, a key). Returns the file’s id; people see it on the ticket and can download it.',
+      'Attaches a file (any type: a screenshot, a log, a report, a PDF) to a ticket you may comment on (the same rule as ticket_comment, a crew mate’s ticket included; not an unassigned ticket you reach only as a crew lane). Give the content as base64 in `content_base64`, or plain text in `text`. At most 50 MB decoded, 100 files a ticket. Never attach a secret, a credential or a file that holds one (a .env, a token, a key). Returns the file’s id; people see it on the ticket and can download it.',
     scope: 'agent',
     input: z.object({
       id: z.string().max(20),

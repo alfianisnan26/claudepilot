@@ -488,6 +488,31 @@ export class Tickets {
     return null;
   }
 
+  /**
+   * A crew LEAD (a live agent session with at least one live worker of its own) may hand a ticket of its own workspace to one of its workers,
+   * take it itself, or put it back in the queue: the ticket is open and held by nobody, by the lead, or by one of its workers; the new holder is
+   * the lead or one of its live, unarchived workers; and only assignee, status and priority change. An ended holder's ticket keeps FR9a (adopt).
+   * Anything else keeps the usual refusal. The hand-off is audited (`ticket.lead_assigned`) by update() once the change is stored.
+   */
+  #leadMayAssign(caller: Caller, row: Row, w: Writer, req: Partial<UpdateTicketRequest>): { lead: string; from: string | null; to: string | null } | null {
+    if (caller.kind !== 'agent' || !w.session || isTicketClosed(row.status) || req.assignee === undefined) return null;
+    const extra = Object.keys(req).filter((k) => (req as Record<string, unknown>)[k] !== undefined && !['assignee', 'status', 'priority'].includes(k));
+    if (extra.length) return null;
+    const lead = w.session;
+    const live = (x: TicketSessionInfo | null) => !!x && x.state !== 'ended' && !x.archivedAt;
+    const workers = this.sessions.list({ workspaceId: lead.workspaceId }).filter((x) => x.parentId === lead.id && live(x));
+    if (!workers.length) return null; // not a lead
+    if (!this.#isIn(row, lead.workspaceId)) return null;
+    if (row.assignee_kind === 'user') return null;
+    if (row.assignee_kind === 'session' && row.assignee_ref && row.assignee_ref !== lead.id && !workers.some((x) => x.id === row.assignee_ref)) return null;
+    const to = req.assignee;
+    if (to !== null) {
+      if (to.kind !== 'session' || typeof to.sessionId !== 'string') return null;
+      if (to.sessionId !== lead.id && !workers.some((x) => x.id === to.sessionId)) return null;
+    }
+    return { lead: lead.id, from: row.assignee_ref ?? null, to: to ? to.sessionId : null };
+  }
+
   /** The actor's predecessors, nearest first (`continued_from` back; bounded, cycle safe). */
   #ancestors(s: TicketSessionInfo): string[] {
     const out: string[] = [];
@@ -544,7 +569,7 @@ export class Tickets {
    * FR29: commenting is what FR9 allows, and also the answer of a session a person asked about the ticket (Ask) in the last day. FR9b
    * (T-294, T-397): a crew worker's comment on its spawn's ticket or its lead's (authz.ts `canWorkerComment`). A refusal keeps FR9's text.
    */
-  #assertCanComment(caller: Caller, row: Row, w: Writer): { ended: EndedGrant | null; worker: WorkerCommentReason | null } {
+  #assertCanComment(caller: Caller, row: Row, w: Writer, opts: { attach?: boolean } = {}): { ended: EndedGrant | null; worker: WorkerCommentReason | null } {
     try {
       return { ended: this.#assertCanModify(caller, row, w), worker: null };
     } catch (e) {
@@ -552,7 +577,8 @@ export class Tickets {
         return { ended: null, worker: null };
       if (caller.kind === 'agent' && !isTicketClosed(row.status)) {
         const why = this.#workerComment(w.session!, row);
-        if (why) return { ended: null, worker: why };
+        // crew_queue is the widest grant (any unassigned ticket of the workspace): a comment only, never an attachment (review 2026-10-18).
+        if (why && !(opts.attach && why === 'crew_queue')) return { ended: null, worker: why };
       }
       throw e;
     }
@@ -568,6 +594,7 @@ export class Tickets {
       holderId: row.assignee_ref,
       holderAncestors: holder ? this.#ancestors(holder) : [],
       holderLead: holder?.parentId ?? null,
+      ticketWorkspace: row.workspace_id,
     });
     return d.allow ? d.why : null;
   }
@@ -960,7 +987,7 @@ export class Tickets {
   ): TicketAttachment {
     const row = this.#need(caller, id);
     const w = this.#writer(caller, opts.sessionId);
-    const grant = this.#assertCanComment(caller, row, w);
+    const grant = this.#assertCanComment(caller, row, w, { attach: true });
     if (isTicketClosed(row.status) && caller.kind === 'agent')
       throw new AppError('FORBIDDEN', `${ticketIdOf(row.number)} is closed. A person can reopen it.`);
     const raw = typeof file.name === 'string' ? file.name : '';
@@ -1395,7 +1422,16 @@ export class Tickets {
   update(caller: Caller, id: string, req: Partial<UpdateTicketRequest>, opts: { sessionId?: string | null } = {}): TicketItem {
     const row = this.#need(caller, id); // visibility first: a ticket it can't see doesn't exist for it
     const w = this.#writer(caller, opts.sessionId);
-    const grant = this.#assertCanModify(caller, row, w);
+    let grant: EndedGrant | null;
+    let handoff: { lead: string; from: string | null; to: string | null } | null = null;
+    try {
+      grant = this.#assertCanModify(caller, row, w);
+    } catch (e) {
+      // 2026-10-18: a lead routes its crew's work (T-84 c11534: every hand-off of an unassigned ticket went through the coordinator).
+      handoff = this.#leadMayAssign(caller, row, w, req);
+      if (!handoff) throw e;
+      grant = null;
+    }
     const agent = caller.kind === 'agent';
     const tags = this.#tagsOf([row.number]).get(row.number) ?? [];
     const sets: Record<string, string | number | null> = {};
@@ -1519,6 +1555,15 @@ export class Tickets {
       for (const e of entries) this.#addEvent(row.number, e.kind, w, e.body ?? null, e.data);
     });
     this.#auditForEnded(grant, w, row, 'update');
+    if (handoff)
+      this.onAudit?.({
+        kind: 'ticket.lead_assigned',
+        actor: w.actor,
+        actorLabel: null,
+        userId: FOUNDING_USER_ID,
+        subject: `ticket:${ticketIdOf(row.number)}`,
+        detail: { ticketId: ticketIdOf(row.number), ...handoff },
+      });
     this.#auditAssignedPerson(assignedAudit, ticketIdOf(row.number));
     this.#auditChecklistTagged(checklistAudit, ticketIdOf(row.number));
     this.onChange?.();
