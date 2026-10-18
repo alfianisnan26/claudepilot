@@ -274,3 +274,17 @@ test('review 2026-10-18 M4: an expired login signs the person out (their manager
   assert.equal(portal.anySession(token), undefined);
   assert.deepEqual(out, [ALICE]);
 });
+
+test('review N1: an expired login with another device still signed in leaves the manager running', () => {
+  const portal = new Portal(undefined, 50);
+  const out: string[] = [];
+  portal.onSignedOut = (u) => void out.push(u);
+  const old = portal.openSession(ALICE);
+  const start = Date.now();
+  while (Date.now() - start < 80) {
+    // the first login ages past its 50 ms
+  }
+  portal.openSession(ALICE);
+  assert.equal(portal.anySession(old), undefined);
+  assert.deepEqual(out, [], 'the phone is still signed in');
+});

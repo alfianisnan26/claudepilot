@@ -159,7 +159,7 @@ export class Portal {
     if (s && s.expiresAt <= Date.now()) {
       this.#sessions.delete(hash);
       this.#persist((st) => st.remove(hash));
-      this.#signedOut([s.userId ?? FOUNDING_USER_ID]);
+      this.#expired([s.userId ?? FOUNDING_USER_ID]);
       return undefined;
     }
     if (s?.userId) {
@@ -241,8 +241,15 @@ export class Portal {
       this.#persist((st) => st.remove(hash));
       ended.push(s.userId ?? FOUNDING_USER_ID);
     }
-    // T-968 review M4: an expired login stops the person's manager like a sign-out.
-    this.#signedOut(ended);
+    this.#expired(ended);
+  }
+
+  /**
+   * T-968 review M4 and N1: an expired login stops the person's manager only when it was their LAST live one (a sign-out stops it on any
+   * device, Q3; an expiry on the laptop while the phone is signed in does not).
+   */
+  #expired(people: string[]) {
+    this.#signedOut(people.filter((u) => !this.signedIn(u)));
   }
 
   adminState(token: string): AdminState {
