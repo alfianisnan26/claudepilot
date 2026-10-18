@@ -5,7 +5,9 @@ import {
   type BumpRequest,
   type BumpTarget,
   type CiBranch,
+  type CiBranchBackfillResult,
   type CiEnvironment,
+  type CiReleaseReportSetting,
   type UpdateCiAutoApproveRequest,
   type CiLogChunk,
   type CiPipelineInfo,
@@ -96,4 +98,10 @@ export const ciApi = {
   /** The auto-approve rule (T-110 FR41a): a person with manage; off, dry or on (on only for a protected environment). */
   setAutoApprove: (repoId: string, name: string, body: UpdateCiAutoApproveRequest) =>
     request<CiEnvironment>('PUT', CI_API.environmentAutoApprove(repoId, name), body),
+  /** Release reports (T-591, T-1079): the remote's setting (null: off); set by a person with manage; the branch backfill takes a count only. */
+  releaseReport: (repoId: string) => request<CiReleaseReportSetting | null>('GET', CI_API.releaseReport(repoId)),
+  setReleaseReport: (repoId: string, setting: CiReleaseReportSetting | null) =>
+    request<CiReleaseReportSetting | null>('PUT', CI_API.releaseReport(repoId), { setting }),
+  backfillReleaseReport: (repoId: string, count: number) =>
+    request<CiBranchBackfillResult>('POST', CI_API.releaseReportBackfill(repoId), { count }),
 };

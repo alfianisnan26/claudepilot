@@ -1,9 +1,22 @@
-import { cn, Dialog, FormDialog, Segmented, Select, Switch, TextArea, TextField } from '@isnanme/ui';
-import { type CiAutoApproveMode, type CiBranch, type CiEnvironment, type CiInput, type CiPipelineInfo, type CiRepo, type CiRun, type Workspace } from '@portal/contracts';
+import { Button, cn, Dialog, FormDialog, Segmented, Select, Switch, TextArea, TextField, useToast } from '@isnanme/ui';
+import {
+  type CiAutoApproveMode,
+  type CiBranch,
+  type CiEnvironment,
+  type CiInput,
+  type CiPipelineInfo,
+  type CiReleaseReportSetting,
+  type CiRepo,
+  type CiRun,
+  type VaultSummary,
+  type Workspace,
+} from '@portal/contracts';
 import { type KeyboardEvent, useEffect, useMemo, useState } from 'react';
 import { InfoTip } from '@/components/InfoTip';
 import { api, errorText } from '@/lib/api';
+import { knowledgeApi } from '../knowledge/api';
 import { ciApi } from './api';
+import { backfillCount, canSave, formOf, settingOf, type ReportForm, type ReportKind } from './releaseReportForm';
 import { Diagnostics } from './RunPage';
 
 /** Field errors the server names (`details: { name: '…' }`) and what is left over for the form. */
@@ -270,6 +283,161 @@ export function AutoApproveDialog({ repoId, env, onClose, onSaved }: { repoId: s
     </FormDialog>
   );
 }
+
+const KINDS: { value: ReportKind; label: string }[] = [
+  { value: 'off', label: 'Off' },
+  { value: 'pipeline', label: 'Pipeline' },
+  { value: 'branch', label: 'Branch' },
+];
+
+/**
+ * Where a remote's release notes go (T-591, T-1079 S3b; local-git-ci PRD FR41b, FR41c): off; a pipeline whose passed release writes one; or
+ * a branch of the upstream, one note per move (a Konfersi stg deploy). Only a person with manage reaches it. Backfill writes the notes of the
+ * branch's last heads into the saved setting's vault.
+ */
+export function ReleaseReportDialog({ repo, onClose, onSaved }: { repo: CiRepo | null; onClose: () => void; onSaved: () => void }) {
+  const toast = useToast();
+  const [saved, setSaved] = useState<CiReleaseReportSetting | null>(null);
+  const [form, setForm] = useState<ReportForm>(formOf(null));
+  const [vaults, setVaults] = useState<VaultSummary[]>([]);
+  const [count, setCount] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [filling, setFilling] = useState(false);
+  const [errors, setErrors] = useState<{ fields: Partial<Record<'kind' | 'pipeline' | 'branch' | 'vaultId' | 'folder', string>>; message: string | null }>({ fields: {}, message: null });
+
+  useEffect(() => {
+    if (!repo) return;
+    let current = true;
+    setLoading(true);
+    setErrors({ fields: {}, message: null });
+    setCount('');
+    Promise.all([ciApi.releaseReport(repo.id), knowledgeApi.vaults().catch(() => [] as VaultSummary[])]).then(
+      ([s, v]) => {
+        if (!current) return;
+        setSaved(s);
+        setForm(formOf(s));
+        setVaults(v.filter((x) => !x.readOnly));
+        setLoading(false);
+      },
+      (e) => current && (setErrors({ fields: {}, message: errorText(e, 'Could not load it.') }), setLoading(false)),
+    );
+    return () => {
+      current = false;
+    };
+  }, [repo]);
+
+  const set = (patch: Partial<ReportForm>) => setForm((f) => ({ ...f, ...patch }));
+  const hasUpstream = !!repo?.upstream;
+  const dirty = JSON.stringify(settingOf(form)) !== JSON.stringify(saved);
+  const n = backfillCount(count);
+  const submit = async () => {
+    if (!repo) return;
+    setSaving(true);
+    setErrors({ fields: {}, message: null });
+    try {
+      setSaved(await ciApi.setReleaseReport(repo.id, settingOf(form)));
+      onSaved();
+    } catch (e) {
+      setErrors(fieldErrors(e, ['kind', 'pipeline', 'branch', 'vaultId', 'folder'] as const));
+    } finally {
+      setSaving(false);
+    }
+  };
+  const backfill = async () => {
+    if (!repo || n === null) return;
+    setFilling(true);
+    try {
+      const r = await ciApi.backfillReleaseReport(repo.id, n);
+      toast(r.written.length === 1 ? '1 note written' : `${r.written.length} notes written`);
+    } catch (e) {
+      toast(errorText(e, 'Could not write the notes.'), 'error');
+    } finally {
+      setFilling(false);
+    }
+  };
+
+  return (
+    <FormDialog
+      open={!!repo}
+      onClose={onClose}
+      title="Release report"
+      onSubmit={submit}
+      submitLabel="Save"
+      saving={saving}
+      error={errors.message ?? errors.fields.kind ?? null}
+      dirty={dirty}
+      submitDisabled={loading || !dirty || !canSave(form, hasUpstream)}
+    >
+      <div className="flex flex-col gap-4">
+        <Select
+          label="Kind"
+          value={form.kind}
+          onChange={(v) => set({ kind: v as ReportKind })}
+          options={KINDS.map((k) => ({ ...k, disabled: k.value === 'branch' && !hasUpstream && form.kind !== 'branch' }))}
+          disabled={loading}
+          hint={form.kind === 'branch' && !hasUpstream ? 'Needs a remote that follows an upstream.' : undefined}
+        />
+        {form.kind === 'pipeline' && (
+          <TextField
+            label="Pipeline"
+            placeholder="deploy"
+            {...PLAIN}
+            value={form.pipeline}
+            onChange={(e) => set({ pipeline: e.target.value })}
+            error={errors.fields.pipeline}
+            hint={<InfoTip label="About the pipeline">Its passed release job writes one note. The file name in .pilot without .yml.</InfoTip>}
+          />
+        )}
+        {form.kind === 'branch' && (
+          <TextField
+            label="Branch"
+            placeholder="stg"
+            {...PLAIN}
+            value={form.branch}
+            onChange={(e) => set({ branch: e.target.value })}
+            error={errors.fields.branch}
+            hint={<InfoTip label="About the branch">Each time the upstream sync moves it (a merged pull request), one note for what it gained. The first sync writes nothing.</InfoTip>}
+          />
+        )}
+        {form.kind !== 'off' && (
+          <>
+            <Select
+              label="Vault"
+              value={form.vaultId}
+              onChange={(v) => set({ vaultId: v })}
+              options={vaults.map((v) => ({ value: v.id, label: v.name }))}
+              placeholder={vaults.length ? 'Choose a vault' : 'No vault you can write'}
+              error={errors.fields.vaultId}
+            />
+            <TextField label="Folder" placeholder="Releases" {...PLAIN} value={form.folder} onChange={(e) => set({ folder: e.target.value })} error={errors.fields.folder} />
+          </>
+        )}
+        {saved?.kind === 'branch' && !dirty && (
+          <div className="flex items-end gap-2">
+            <div className="min-w-0 flex-1">
+              <TextField
+                label="Backfill"
+                placeholder="5"
+                inputMode="numeric"
+                {...PLAIN}
+                value={count}
+                onChange={(e) => setCount(e.target.value)}
+                error={n === null ? '1 to 20' : undefined}
+                hint={<InfoTip label="About the backfill">Writes the notes of the branch's last heads, one each, into this vault. A note already there is replaced, not doubled.</InfoTip>}
+              />
+            </div>
+            <Button variant="secondary" loading={filling} disabled={n === null || filling} onClick={() => void backfill()}>
+              Write
+            </Button>
+          </div>
+        )}
+      </div>
+    </FormDialog>
+  );
+}
+
+const PLAIN = { autoComplete: 'off', autoCapitalize: 'none', autoCorrect: 'off', spellCheck: false } as const;
 
 export function ConnectDialog({ repo, onClose, onSaved }: { repo: CiRepo | null; onClose: () => void; onSaved: (r: CiRepo) => void }) {
   const [path, setPath] = useState('');

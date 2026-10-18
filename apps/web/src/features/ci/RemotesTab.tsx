@@ -9,7 +9,7 @@ import { timeAgo } from '@/lib/format';
 import { useLive } from '@/lib/live';
 import { ciApi } from './api';
 import { MONO, StatusIcon } from './parts';
-import { AutoApproveDialog, ConnectDialog, MergeDialog, NewRemoteDialog, PipelineDialog, ProtectedDialog, RunDialog } from './RemoteDialogs';
+import { AutoApproveDialog, ConnectDialog, MergeDialog, NewRemoteDialog, PipelineDialog, ProtectedDialog, ReleaseReportDialog, RunDialog } from './RemoteDialogs';
 
 /** The remotes workspaces host: their branches with where the checks stand, and the pipelines in them (local-git-ci PRD §15). */
 export function RemotesTab({ creating, onCloseCreate, onNew }: { creating: boolean; onCloseCreate: () => void; onNew: () => void }) {
@@ -18,6 +18,7 @@ export function RemotesTab({ creating, onCloseCreate, onNew }: { creating: boole
   const [failed, setFailed] = useState(false);
   const [open, setOpen] = useState<string | null>(null);
   const [protectedFor, setProtectedFor] = useState<CiRepo | null>(null);
+  const [reportFor, setReportFor] = useState<CiRepo | null>(null);
   const [connectFor, setConnectFor] = useState<CiRepo | null>(null);
   const [removeFor, setRemoveFor] = useState<CiRepo | null>(null);
   const [removing, setRemoving] = useState(false);
@@ -69,6 +70,7 @@ export function RemotesTab({ creating, onCloseCreate, onNew }: { creating: boole
                 open={open === r.id}
                 onToggle={() => setOpen((o) => (o === r.id ? null : r.id))}
                 onProtected={() => setProtectedFor(r)}
+                onReport={() => setReportFor(r)}
                 onConnect={() => setConnectFor(r)}
                 onRemove={() => setRemoveFor(r)}
               />
@@ -87,6 +89,7 @@ export function RemotesTab({ creating, onCloseCreate, onNew }: { creating: boole
         }}
       />
       <ProtectedDialog repo={protectedFor} onClose={() => setProtectedFor(null)} onSaved={() => (setProtectedFor(null), void load())} />
+      <ReleaseReportDialog repo={reportFor} onClose={() => setReportFor(null)} onSaved={() => (setReportFor(null), toast('Saved'))} />
       <ConnectDialog repo={connectFor} onClose={() => setConnectFor(null)} onSaved={() => (setConnectFor(null), toast('Connected'), void load())} />
       <ConfirmDialog
         open={!!removeFor}
@@ -101,7 +104,23 @@ export function RemotesTab({ creating, onCloseCreate, onNew }: { creating: boole
   );
 }
 
-function RemoteRow({ repo, open, onToggle, onProtected, onConnect, onRemove }: { repo: CiRepo; open: boolean; onToggle: () => void; onProtected: () => void; onConnect: () => void; onRemove: () => void }) {
+function RemoteRow({
+  repo,
+  open,
+  onToggle,
+  onProtected,
+  onReport,
+  onConnect,
+  onRemove,
+}: {
+  repo: CiRepo;
+  open: boolean;
+  onToggle: () => void;
+  onProtected: () => void;
+  onReport: () => void;
+  onConnect: () => void;
+  onRemove: () => void;
+}) {
   const stopped = repo.workspaceState !== 'running';
   return (
     <li className="rounded-2xl border border-line bg-surface">
@@ -137,6 +156,7 @@ function RemoteRow({ repo, open, onToggle, onProtected, onConnect, onRemove }: {
           label={`${repo.name} actions`}
           items={[
             { label: 'Protected branches', onSelect: onProtected },
+            { label: 'Release report', onSelect: onReport },
             { label: 'Connect folder', onSelect: onConnect, disabled: stopped },
             { label: 'Remove', onSelect: onRemove, danger: true },
           ]}
