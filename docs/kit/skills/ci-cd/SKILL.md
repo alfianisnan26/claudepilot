@@ -27,6 +27,7 @@ A workspace has a few CPUs shared by every agent in it. Heavy work runs as a Job
 3. The log streams back; the exit code is the command's. Artifacts (screenshots, junit, reports) come back capped in size.
 4. Caps: a few Jobs at once across the cluster and two per chat. A Job over a cap waits "queued behind K". Do not start more to jump the queue.
 5. `--list` shows Jobs; `--stop --chat <id>` stops yours. A Job stops when your chat ends.
+6. **Never wait idle on a Job** (owner, 2026-10-18: "kenapa harness selalu nunggu terus instead of paralel pickup yang lain dlu"). Start it in the background, then work on your next ready slice while it is queued or runs (the queue is often 10 deep, so the wait is real). Pick the result up when it arrives. When you have no next slice, ask your lead for one in the same message that says the Job is queued.
 
 What must run inside the workspace (a throwaway app instance, a browser check against it, a dependency install) runs one at a time under the heavy lock: `flock /tmp/heavy.lock nice -n 10 <command>`. A single targeted test file may run directly. Where a project has no job-run yet, every heavy command goes through the lock. Clean up temporary gate and run folders afterwards: a full `/tmp` makes other tests fail.
 
