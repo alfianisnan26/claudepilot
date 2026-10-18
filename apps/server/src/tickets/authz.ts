@@ -169,7 +169,7 @@ export function canAgentTagChecklist(facts: {
  * Why a worker may comment: the ticket its spawn named (`spawn_ticket`), a ticket its lead holds (`lead_ticket`), one a crew mate holds
  * (`crew_ticket`), or an unassigned ticket of its own workspace (`crew_queue`).
  */
-export type WorkerCommentReason = 'spawn_ticket' | 'lead_ticket' | 'crew_ticket' | 'crew_queue';
+export type WorkerCommentReason = 'spawn_ticket' | 'lead_ticket' | 'crew_ticket' | 'crew_queue' | 'lead_peer';
 export type WorkerCommentDecision = { allow: true; why: WorkerCommentReason } | { allow: false };
 
 /**
@@ -206,4 +206,22 @@ export function canWorkerComment(facts: {
   if (facts.holderKind === null && facts.worker.ticketId === facts.ticketId) return { allow: true, why: 'spawn_ticket' };
   if (facts.holderKind === null && facts.ticketWorkspace && facts.ticketWorkspace === facts.worker.workspaceId) return { allow: true, why: 'crew_queue' };
   return { allow: false };
+}
+
+/**
+ * D-85 (2026-10-18): the leads of ONE program talk on each other's tickets. A live top-level session (no lead of its own) may COMMENT on a
+ * ticket held by another live top-level session in the same workspace whose title has the same track (the text before its first ":",
+ * e.g. "Konfersi"). The main lead and the unit leads read and answer each other's status threads; nothing else is granted (no change, close,
+ * claim or attachment). A title without a track, another workspace, a worker or an ended holder gets nothing.
+ */
+export function canPeerLeadComment(facts: {
+  actor: RuleSession & { parentId?: string | null; title?: string | null };
+  holder: (RuleSession & { parentId?: string | null; title?: string | null; archivedAt?: string | null }) | null;
+  track: (title: string | null | undefined) => string | null;
+}): boolean {
+  const { actor, holder } = facts;
+  if (!holder || actor.id === holder.id || actor.parentId || holder.parentId) return false;
+  if (actor.state === 'ended' || holder.state === 'ended' || holder.archivedAt || actor.workspaceId !== holder.workspaceId) return false;
+  const a = facts.track(actor.title);
+  return a !== null && a === facts.track(holder.title);
 }

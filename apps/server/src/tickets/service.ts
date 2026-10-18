@@ -61,7 +61,7 @@ import {
   canAgentAssignUser,
   canAgentTagChecklist,
   OWNER_CHECKLIST_TAG,
-  canWorkerComment,
+  canPeerLeadComment, canWorkerComment,
   D62_ASSIGN_REFUSAL,
   D62_CHECKLIST_REFUSAL,
   type EndedGrantReason,
@@ -578,7 +578,7 @@ export class Tickets {
       if (caller.kind === 'agent' && !isTicketClosed(row.status)) {
         const why = this.#workerComment(w.session!, row);
         // crew_queue is the widest grant (any unassigned ticket of the workspace): a comment only, never an attachment (review 2026-10-18).
-        if (why && !(opts.attach && why === 'crew_queue')) return { ended: null, worker: why };
+        if (why && !(opts.attach && (why === 'crew_queue' || why === 'lead_peer'))) return { ended: null, worker: why };
       }
       throw e;
     }
@@ -596,7 +596,8 @@ export class Tickets {
       holderLead: holder?.parentId ?? null,
       ticketWorkspace: row.workspace_id,
     });
-    return d.allow ? d.why : null;
+    if (d.allow) return d.why;
+    return canPeerLeadComment({ actor: s, holder, track: titlePrefix }) ? 'lead_peer' : null;
   }
 
   /** The audit row of a worker's comment under FR9b: the worker that wrote it, its lead and why. */

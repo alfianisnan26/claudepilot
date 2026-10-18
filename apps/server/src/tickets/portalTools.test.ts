@@ -489,6 +489,52 @@ test('lead assigns (2026-10-18): a lead hands its workspace\'s tickets to its ow
   }
 });
 
+test("lead_peer (D-85): the leads of one program comment on each other's tickets; not another program, a worker, an ended lead, or a change", async () => {
+  const r = await rig();
+  const audits: { kind: string; detail?: Record<string, unknown> }[] = [];
+  r.tickets.onAudit = (e) => void audits.push(e);
+  try {
+    const main = await r.agent('docker/api', 'main');
+    const biz = await r.agent('docker/api', 'biz');
+    await r.agent('docker/api', 'lab');
+    await r.agent('docker/api', 'other');
+    const wk = await r.agent('docker/api', 'wk');
+    const patch = (id: string, over: Record<string, unknown>) => r.sessions.sessions.set(id, { ...r.sessions.sessions.get(id)!, ...over });
+    patch('main', { title: 'Konfersi: migration' });
+    patch('biz', { title: 'Konfersi: Business' });
+    patch('lab', { title: 'Konfersi: Lab' });
+    patch('other', { title: 'Tradingbot: program' });
+    patch('wk', { title: 'Konfersi: lane', parentId: 'biz' });
+    r.tickets.create(UI, { summary: 'Business status', workspaceId: 'docker/api', assignee: { kind: 'session', sessionId: 'biz' } }); // T-1
+    r.tickets.create(UI, { summary: 'main status', workspaceId: 'docker/api', assignee: { kind: 'session', sessionId: 'main' } }); // T-2
+    r.tickets.create(UI, { summary: 'tradingbot status', workspaceId: 'docker/api', assignee: { kind: 'session', sessionId: 'other' } }); // T-3
+    r.tickets.create(UI, { summary: 'lab status', workspaceId: 'docker/api', assignee: { kind: 'session', sessionId: 'lab' } }); // T-4
+    const code = async (t: { secret: string }, id: string) =>
+      (await r.h.call(t.secret, 'ticket_comment', { id, text: `peer note on ${id}` })).result?.structuredContent?.error?.code;
+    assert.equal(await code(main, 'T-1'), undefined, 'the main lead answers on the Business status thread');
+    assert.equal(await code(biz, 'T-2'), undefined, "and Business on the main lead's");
+    assert.equal(
+      audits.filter((a) => a.kind === 'ticket.worker_commented' && a.detail?.why === 'lead_peer').length,
+      2,
+      'audited as lead_peer',
+    );
+    assert.equal(await code(main, 'T-3'), 'FORBIDDEN', "another program's lead");
+    assert.equal(
+      (await r.h.call(main.secret, 'ticket_update', { id: 'T-1', priority: 'low' })).result?.structuredContent?.error?.code,
+      'FORBIDDEN',
+      'a comment only',
+    );
+    assert.equal(await code(wk, 'T-4'), 'FORBIDDEN', 'a worker is not a peer lead');
+    // An ended lead's ticket is FR9a's (the ended-session rule), never a lead_peer comment.
+    patch('lab', { state: 'ended' });
+    const before = audits.filter((a) => a.detail?.why === 'lead_peer').length;
+    await code(main, 'T-4');
+    assert.equal(audits.filter((a) => a.detail?.why === 'lead_peer').length, before, 'no lead_peer grant on an ended holder');
+  } finally {
+    r.done();
+  }
+});
+
 test('T-397: a worker comments on the ticket its spawn named and on its lead’s (or its lead’s successor’s) tickets, audited as itself; nothing else', async () => {
   const r = await rig();
   const audits: { kind: string; actor: string; detail?: Record<string, unknown> }[] = [];
