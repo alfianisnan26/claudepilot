@@ -40,9 +40,8 @@
 - T-1065 (new: redact.ts misses short passwords/URL userinfo; 10888) 76845676 while its Job queues -> QA + blind.
 - T-356 S1 64b4effa (MCP authz gaps 1-4; 10906) by 3753d3c2, Jobs pending. 10922: workspace resolver NOT wired (that is
   the multi-user switch); FR19 enforced by test + exemption list, not at start-up -> QA + blind; lead reads the authz diff.
-- Queues: c691df71 S2b > T-976 > H2 delta > T-975 FIX2 > T-356 > T-425 gaps > T-565 delta. d9f18599 H2 S1 > S0b f5ae317e >
-  H1 FIX2 > T-969 > T-974 FIX3 > T-565 > T-975 > PRD > S2b. a3554d40 T-974 > T-969 > H1 > T-961 rerun > T-975 FIX2.
-  76845676 T-1065 + S0c (then the T-976 reader merge). 2a0edbd8 T-565 gap 1 + T-968 S1. 3753d3c2 H2 fix, T-356, T-425 gaps + T-251.
+- T-968 (a) bdd1a3ce any sign-out revokes cpmt_ (Job bes6vu30j), (b) c6cc0ffe manager refused ticket_close (was ALLOWED
+  before; Job bohgvhpk1) -> QA c691df71. 2a0edbd8 worked slice: T-277 + T-257 remainder audit (read only).
 
 ## DECISIONS (binding)
 - D-81 risk-based review: same builder through all fixes; one QA, the same QA re-checks; blind review only for security, auth,
