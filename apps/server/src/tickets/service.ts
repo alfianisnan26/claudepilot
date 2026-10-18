@@ -79,6 +79,7 @@ import {
   VERDICT_REFUSAL_TEXT,
   VERDICT_ROLES,
   VERDICTS,
+  verdictLaneWarning,
   type StoredVerdict,
   type Verdict,
   type VerdictEvaluation,
@@ -1158,6 +1159,17 @@ export class Tickets {
       .run(number, this.#now().toISOString(), kind, w.actor, w.label, body, data ? JSON.stringify(data) : null);
   }
 
+  /** FR36c (T-1608): an agent put the ticket on a QA or review session: one Portal note on the timeline, so the lead sees the consequence. */
+  #laneNote(number: number, caller: Caller, session: TicketSessionInfo) {
+    const warning = caller.kind === 'agent' ? verdictLaneWarning(session) : null;
+    if (warning) this.#addEvent(number, 'comment', { actor: 'system', label: 'Portal' }, warning, { verdictLane: session.id });
+  }
+
+  /** FR36c (T-1608): the warning a tool result carries when the ticket's holder is a QA or review session; null otherwise. */
+  holderWarning(t: TicketItem): string | null {
+    return t.assignee?.kind === 'session' ? verdictLaneWarning(this.sessions.get(t.assignee.sessionId)) : null;
+  }
+
   #setTags(number: number, tags: string[]) {
     this.#db.prepare('DELETE FROM ticket_tags WHERE ticket_number = ?').run(number);
     const add = this.#db.prepare('INSERT INTO ticket_tags (ticket_number, tag) VALUES (?, ?)');
@@ -1419,6 +1431,7 @@ export class Tickets {
           from: null,
           to: assignee.kind === 'session' ? { kind: 'session', sessionId: assignee.session.id } : { kind: 'user', name: assignee.name },
         });
+      if (assignee?.kind === 'session') this.#laneNote(n, caller, assignee.session);
       return n;
     });
     this.#auditAssignedPerson(assignedAudit, ticketIdOf(number));
@@ -1481,6 +1494,7 @@ export class Tickets {
     let status = row.status;
     let assigneeAfter = row.assignee_kind;
     let assignsUser = false;
+    let laneTo: TicketSessionInfo | null = null;
     if (req.assignee !== undefined) {
       const a = this.#assignee(caller, req.assignee);
       const before = row.assignee_kind ? `${row.assignee_kind}:${row.assignee_ref}` : null;
@@ -1506,6 +1520,7 @@ export class Tickets {
           ((sets.workspace_id = a.session.workspaceId),
             entries.push({ kind: 'workspace', data: { from: row.workspace_id, to: a.session.workspaceId } }));
         if (!a && status === 'in_progress') status = 'open';
+        if (a?.kind === 'session') laneTo = a.session;
       }
     }
     const assignedAudit = this.#assertAgentAssign(caller, w, {
@@ -1561,6 +1576,7 @@ export class Tickets {
         .run(...cols.map((c) => sets[c]!), row.number);
       if (newTags) this.#setTags(row.number, newTags);
       for (const e of entries) this.#addEvent(row.number, e.kind, w, e.body ?? null, e.data);
+      if (laneTo) this.#laneNote(row.number, caller, laneTo);
     });
     this.#auditForEnded(grant, w, row, 'update');
     if (handoff)
@@ -1668,6 +1684,7 @@ export class Tickets {
         .prepare('UPDATE tickets SET assignee_kind = ?, assignee_ref = ?, status = ?, workspace_id = ?, updated_at = ? WHERE number = ?')
         .run('session', session.id, status, this.#stored(session.workspaceId), at, row.number);
       this.#addEvent(row.number, 'assigned', w, null, { from: null, to: { kind: 'session', sessionId: session.id }, claimed: true });
+      this.#laneNote(row.number, caller, session);
       if (status !== row.status) this.#addEvent(row.number, 'status', w, null, { from: row.status, to: status });
       if (!this.#isIn(row, session.workspaceId))
         this.#addEvent(row.number, 'workspace', w, null, { from: row.workspace_id, to: session.workspaceId });
