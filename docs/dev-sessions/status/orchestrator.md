@@ -30,7 +30,7 @@
   (labels exist nowhere, 10973) -> delta c691df71 -> blind (infra).
 - T-968 PRD fix a32754c3 (gaps 2-7) -> re-check d9f18599. T-968 S1 03fcd4c4 (2a0edbd8; seam, cpmt_, revoke,
   migration 793), Job b7sajor81 rc1 (typecheck; managers.test 3+6) -> 89e5aba6 + diagnosis Job bfzybcl0u -> QA c691df71 + blind d9f18599; lead reads seam/migration. T-1033 S1 rc 75 (11035) head
-  53527bfa, Job blfnye6go (8 mutants) -> QA + blind (pipeline). T-921 (browser init, paused) audit 0dfff348 + build gaps: 2a0edbd8.
+  53527bfa, Job blfnye6go (8 mutants) -> QA + blind (pipeline). T-921 4511c7be Job rc0 VOID (base test red) -> 515bb0c1, rerun on green base.
 - T-251 (unknown usage) 3753d3c2: audit vs integration (decide.ts unknownUsage, t255.test), build only what is missing.
 - T-1043 S0c (MCP tools through can()) 76845676 on ticket/T-1043-s0c, beside T-1065.
 - T-961 (deploy outage: PriorityClass, headroom, release pre-check; 10887) -> QA + blind (infra); PriorityClasses in
@@ -76,4 +76,4 @@
 LESSONS: dontAsk lanes run Bash only in their spawn worktree and refuse git merge/restore: the lead pushes the merge (with
 markers) to a new branch, the lane does `git switch -C <br> origin/<br>` and resolves by Edit. Never prettier files tests read
 with readFileSync. Re-run `context-pack.sh --check HEAD` after every merge; integration moved during a gate = merge + re-gate.
-A mutant line must prove it was applied (diff non-empty). The status file: Edit/Write tools ONLY (23:47 slip, T-595). Full ids and full hashes only. Migration numbers: sorted versions on integration AND lane branches (file is by area). gate-job.sh in the background, timeout 7200000.
+A mutant line must prove it was applied (diff non-empty), on a GREEN base; a Job exits on its base rc. The status file: Edit/Write tools ONLY (23:47 slip, T-595). Full ids and full hashes only. Migration numbers: sorted versions on integration AND lane branches (file is by area). gate-job.sh in the background, timeout 7200000.
