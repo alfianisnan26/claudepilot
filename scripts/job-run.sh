@@ -60,7 +60,10 @@
 #   scripts/job-run.sh --list                           the Jobs, their chat, role and state
 #   scripts/job-run.sh --stop [<job> | --chat <id>]     stop Jobs (all, one, or a chat's) and delete their Secrets
 # Caps: JOB_RUN_MAX Jobs at once cluster-wide (default 3), JOB_RUN_MAX_PER_CHAT per chat (2) and JOB_RUN_MAX_PER_PROGRAM per program (2;
-# claudepilot, event, konfersi: T-524). A Job over a cap is created suspended and waits its turn (creation order), with "queued behind K". The Job stops when this script is interrupted or killed (the next run removes a Job whose
+# claudepilot, event, konfersi: T-524). A Job over a cap is created suspended and waits its turn (creation order), with "queued behind K".
+# The queue has its own deadline (T-1033): JOB_RUN_QUEUE_WAIT_S (default 1800, 30 min; 1 to 7200). Past it the Job is deleted, never having run,
+# with "job-run: queue deadline: ..." and "=== JOB-RUN QUEUE-EXPIRED" in the log, exit 3: rerun it (D-75). A Job deleted under the script
+# (--stop, a person, the cluster) ends it at once, queued (exit 1) or starting or running (exit 1, "vanished"). The Job stops when this script is interrupted or killed (the next run removes a Job whose
 # script is gone), and when the chat ends (the Claude process, CLAUDE_PID or JOB_RUN_WATCH_PID, exits).
 # A failed `npm ci` in the Job is tried once more (it says so in the log). Exit 0 of a proof means the proof held, not only the command.
 # Credentials (the npm token for GitHub Packages, Gitea's from git's credential helper) go to kubectl on stdin into a Secret that belongs to
@@ -69,14 +72,15 @@
 # the install scripts and the command run in the `run` container, which has no git or npm credential in its environment, git config or files, and gets
 # only the --pool-env values (T-426) as env. They are kept out of the environment of npm rebuild and the lifecycle scripts, but a lifecycle script of the same user can still read /proc/<ppid>/environ (the shell's start-up environment); the real boundary is that only E2E_CF_ACCESS_* test credentials may go in. The raw
 # log in the cluster is unmasked until the Job is cleaned up (TTL); only the streamed copy is masked. The whole log: JOB_RUN_LOG
-# (default /tmp/job-run-<job>.log). Exit: the command's code; 1 when the Job did not finish, 2 for a usage error, 124 past the deadline.
+# (default /tmp/job-run-<job>.log). Exit: the command's code; 1 when the Job did not finish or vanished, 2 for a usage error, 3 past the queue
+# deadline (the command never ran; 3 is also --pool-env's deleted artifact: the line says which), 124 past the run deadline.
 set -eu
 # Under xtrace (bash -x, SHELLOPTS) the trace would print the credentials this script handles: refuse (T-426).
 case $- in *x*) echo "job-run: refuses to run under xtrace (set -x / bash -x would print the credentials)" >&2; exit 2 ;; esac
 here=$(cd "$(dirname "$0")/.." && pwd)
 ns=${JOB_RUN_NAMESPACE:-isnan-claudepilot}; registry=${DEPLOY_REGISTRY:-registry.int.isnan.me}
 max=${JOB_RUN_MAX:-3}; per=${JOB_RUN_MAX_PER_CHAT:-2}; pprog=${JOB_RUN_MAX_PER_PROGRAM:-2}; poll=${JOB_RUN_POLL_S:-5}
-queue_wait=${JOB_RUN_QUEUE_WAIT_S:-3600}; start_wait=${JOB_RUN_START_WAIT_S:-900}; art_max=${JOB_RUN_ARTIFACT_MAX:-4194304}
+queue_wait=${JOB_RUN_QUEUE_WAIT_S:-1800}; start_wait=${JOB_RUN_START_WAIT_S:-900}; art_max=${JOB_RUN_ARTIFACT_MAX:-4194304}
 gitea=${JOB_RUN_GITEA:-git.konfersi.com}; github_repo=${JOB_RUN_GITHUB_REPO:-alfianisnan26/claudepilot}
 event_repo=isnanme/event # fixed on purpose (T-491): the door names one repository, no override
 # Memory per Job (T-524), request = limit, sized from measured cgroup peaks (docs/dev-session.md, "Heavy agent work in the cluster"); fixed here,
@@ -87,6 +91,9 @@ mem_std=4Gi; tmp_std=2Gi; mem_big=8Gi; tmp_big=4Gi
 master_max=${JOB_RUN_MASTER_MAX_PCT:-85}
 die() { echo "job-run: $*" >&2; exit 2; }
 for n in "$max" "$per" "$pprog" "$art_max"; do [[ $n =~ ^[0-9]+$ ]] || die "the caps are numbers"; done
+# T-1033: the queue deadline in whole seconds, 1 to 7200 (the ceiling keeps a lane from waiting hours on a Job that never starts). Base 10.
+{ [[ $queue_wait =~ ^[0-9]{1,4}$ ]] && [ $((10#$queue_wait)) -ge 1 ] && [ $((10#$queue_wait)) -le 7200 ]; } || die "JOB_RUN_QUEUE_WAIT_S: 1 to 7200 seconds"
+queue_wait=$((10#$queue_wait))
 # The placement numbers are used in $(( )): at most 3 / 6 digits (no wrap-around to a negative), and base 10 (a leading 08 is not octal) (T-611 C1 C2).
 [[ $master_max =~ ^[0-9]{1,3}$ ]] || die "JOB_RUN_MASTER_MAX_PCT is a percentage (at most 3 digits)"
 master_max=$((10#$master_max))
@@ -490,7 +497,13 @@ while :; do
     gone) echo "job-run: $job was stopped while queued" >&2; exit 1 ;;
     wait\ *) [ "$d" = "$last" ] || echo "job-run: queued behind ${d#wait } (at most $max at once, $per per chat, $pprog per program)"; last=$d ;;
   esac
-  [ $(( $(date +%s) - t0 )) -lt "$queue_wait" ] || { echo "job-run: still queued after ${queue_wait}s: giving up" >&2; exit 1; }
+  # T-1033: the queue's own deadline (the start wait and the Job's deadline count only once it is let out). The Job is deleted on exit (the
+  # trap), unrun; exit 3 and the log line tell the caller the command never ran, so a rerun is safe (D-75).
+  if [ $(( $(date +%s) - t0 )) -ge "$queue_wait" ]; then
+    plog "=== JOB-RUN QUEUE-EXPIRED after=${queue_wait}s job=$job" >/dev/null
+    echo "job-run: queue deadline: $job was still queued after ${queue_wait}s (JOB_RUN_QUEUE_WAIT_S); the command never ran; the Job is deleted: rerun it" >&2
+    exit 3
+  fi
   sleep "$poll"
 done
 # C5: the master moves while this Job waits suspended (minutes), so the decision is made again just before the release. If the answer changed, the
@@ -522,8 +535,19 @@ elif [ "$was_rule" != "$master_rule" ]; then
 fi
 kubectl -n "$ns" patch job "$job" --type merge -p '{"spec":{"suspend":false}}' >/dev/null
 t1=$(date +%s); tw=$t1; phase=running
-job_state() { # Complete, Failed:<reason>, gone, or nothing while it runs
-  kubectl -n "$ns" get job "$job" -o json 2>/dev/null | jq -r '[(.status.conditions // [])[] | select((.type == "Complete" or .type == "Failed") and .status == "True") | if .type == "Failed" then "Failed:\(.reason // "")" else .type end] | first // ""' 2>/dev/null || echo gone
+job_state() { # Complete, Failed:<reason>, gone, or nothing while it runs (or when the API did not answer: a blip is not a vanish)
+  # T-1033: --ignore-not-found answers a deleted Job with nothing and exit 0, an API error with a non-zero exit. Before, both piped nothing
+  # into jq, which said "" (still running): a deleted Job kept this script waiting up to its whole deadline. A Job being deleted is gone too.
+  local j
+  j=$(kubectl -n "$ns" get job "$job" --ignore-not-found -o json 2>/dev/null) || return 0
+  [ -n "$j" ] || { echo gone; return 0; }
+  jq -r 'if .metadata.deletionTimestamp != null then "gone" else
+    ([(.status.conditions // [])[] | select((.type == "Complete" or .type == "Failed") and .status == "True") | if .type == "Failed" then "Failed:\(.reason // "")" else .type end] | first // "") end' <<<"$j" 2>/dev/null || true
+}
+vanished() { # T-1033: the Job was deleted under this script (--stop, a person, the cluster): say so once and end now
+  echo "job-run: $job vanished while it was $1 (deleted: job-run.sh --stop, a person or the cluster); no exit code: rerun it" >&2
+  plog "=== JOB-RUN VANISHED while=$1 job=$job" >/dev/null
+  exit 1
 }
 pod_json() { kubectl -n "$ns" get pods -l "job-name=$job" -o json 2>/dev/null || true; }
 pod_get() { jq -r "$1"' // ""' <<<"$2" 2>/dev/null || true; }
@@ -531,7 +555,8 @@ said=; why=
 while :; do
   pj=$(pod_json); ph=$(pod_get '.items[0].status.phase' "$pj")
   case "$ph" in Running|Succeeded|Failed) break ;; esac
-  [ -z "$(job_state)" ] || break
+  js=$(job_state)
+  case "$js" in '') ;; gone) vanished starting ;; *) break ;; esac
   # The fetch container (T-401: the clone and npm ci, with the credentials) is running: started, so the start wait does not apply (the
   # Job's deadline does); its log comes out of the run container.
   if [ -n "$(pod_get '.items[0].status.initContainerStatuses[0].state.running.startedAt' "$pj")" ]; then tw=$(date +%s); sleep "$poll"; continue; fi
@@ -625,6 +650,7 @@ fi
 if [ -z "$rc" ]; then
   case "$st" in
     Failed:DeadlineExceeded) rc=124; echo "job-run: past the deadline (${timeout}s)" >&2 ;;
+    gone) vanished running ;;
     '') rc=1; echo "job-run: the Job did not finish" >&2; phase=setup ;;
     *) rc=1; echo "job-run: the Job ended without an exit code ($st)" >&2 ;;
   esac

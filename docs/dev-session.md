@@ -228,6 +228,13 @@ scripts/job-run.sh --repo konfersi:<org>/<repo> --ref <branch> --image registry.
   `bash -x` / xtrace, which would print the values.
 - **Caps:** `JOB_RUN_MAX` (3) Jobs at once cluster-wide, `JOB_RUN_MAX_PER_CHAT` (2) per chat (`PILOT_SESSION_ID`) and `JOB_RUN_MAX_PER_PROGRAM`
   (2) per program (claudepilot, event, konfersi; T-524). A Job over a cap is created suspended and waits in creation order ("queued behind K").
+  **The queue has a deadline (T-1033):** `JOB_RUN_QUEUE_WAIT_S` (default 1800, 30 minutes; 1 to 7200, was 3600 and exit 1). Past it the Job is
+  deleted without having run, the script says `job-run: queue deadline: ... the command never ran ... rerun it`, the log gets
+  `=== JOB-RUN QUEUE-EXPIRED`, and the exit is 3 (a rerun is safe, D-75; `--pool-env`'s deleted artifact is also 3, after a run: the line says
+  which). The start wait (`JOB_RUN_START_WAIT_S`, 900) and the Job's deadline count only once it is let out. **A Job deleted under the script**
+  (`--stop`, a person, the cluster) ends it at once: queued, "was stopped while queued"; starting or running, "vanished while it was starting /
+  running ... rerun it" and `=== JOB-RUN VANISHED` (exit 1). Before, a Job deleted after its release kept the script waiting up to its whole
+  deadline, because a missing Job read as "still running"; an API error still reads that way (a blip is not a vanish).
   Jobs carry the labels `job-run/chat`, `job-run/role` (`PILOT_AGENT`), `job-run/repo`, `job-run/program`.
 - **Placement (T-611):** the scheduler counts memory requests, but the control-plane node's own pods use far more for real. Before it creates a
   Job, `job-run.sh` reads that node's real memory (`kubectl top nodes`). The test is on the node's use PLUS the Job's expected peak (use x pct /

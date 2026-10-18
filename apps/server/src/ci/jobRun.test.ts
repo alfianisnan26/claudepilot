@@ -78,7 +78,8 @@ const failing = (w) => { const f = path.join(F, 'fail'); return fs.existsSync(f)
 const refuse = () => { const t = stdin(); let plain = ''; try { plain = Object.values(JSON.parse(t).data || {}).map((v) => Buffer.from(v, 'base64').toString()).join(' '); } catch {}
   process.stderr.write('error: ' + t + ' ' + plain + '\n'); process.exit(1); };
 if (verb === 'get' && kind === 'jobs') { process.stdout.write(JSON.stringify({ items: read().jobs.map(k8s) })); }
-else if (verb === 'get' && kind === 'job') { const j = job(name); if (!j || (failing('uid') && !a.includes('json'))) process.exit(1); process.stdout.write(a.includes('json') ? JSON.stringify(k8s(j)) : 'uid-' + name); }
+// T-1033: with --ignore-not-found a missing Job is no output and exit 0, as kubectl does; without it, exit 1.
+else if (verb === 'get' && kind === 'job') { const j = job(name); if (!j && a.includes('--ignore-not-found')) process.exit(0); if (!j || (failing('uid') && !a.includes('json'))) process.exit(1); process.stdout.write(a.includes('json') ? JSON.stringify(k8s(j)) : 'uid-' + name); }
 else if (verb === 'get' && kind === 'pods' && a.includes('app=claudepilot-gate')) { const g = path.join(F, 'gates.txt'); process.stdout.write(fs.existsSync(g) ? fs.readFileSync(g, 'utf8') : ''); }
 else if (verb === 'get' && kind === 'pods' && a.includes('json')) { process.stdout.write(JSON.stringify(podOf(job(a[3].replace('job-name=', ''))))); }
 // The Secret is made by a client-side dry run (JSON on stdout, as kubectl prints it) and then created (never applied) with its ownerReference and label.
@@ -106,6 +107,8 @@ else if (verb === 'patch' && kind === 'job') { if (fs.existsSync(path.join(F, 'p
 else if (verb === 'patch' && kind === 'secret') { /* recorded in calls.log */ }
 else if (verb === 'delete' && kind === 'job') { lock((s) => { s.jobs = s.jobs.filter((j) => j.name !== name); }); }
 else if (verb === 'delete' && kind === 'secret') { lock((s) => { delete s.secrets[name]; }); }
+// A deleted Job has no log to read (kubectl: not found, exit 1); a follow on one that goes away ends (in play).
+else if (verb === 'logs' && !a.includes('-f') && !job(a[1].replace('job/', ''))) { process.stderr.write('Error from server (NotFound)\n'); process.exit(1); }
 else if (verb === 'logs') { play(a.includes('-f') ? a[2].replace('job/', '') : a[1].replace('job/', ''), a.includes('-f')); }
 else { process.stderr.write('unexpected kubectl ' + args.join(' ') + '\n'); process.exit(9); }
 `;
@@ -785,6 +788,85 @@ test('cleanup: the chat ends (its Claude process exits) while the Job runs: the 
   assert.match(r.out, /the chat ended \(process \d+\): stopping claudepilot-job-/);
   assert.deepEqual(w.state().jobs, []);
   assert.deepEqual(w.state().secrets, {});
+});
+
+/** T-1033: a promise that fails after `ms`, so a script that waits out a long deadline fails the test instead of hanging it. */
+const within = <T>(p: Promise<T>, ms: number, what: string) =>
+  Promise.race([p, new Promise<never>((_, rej) => setTimeout(() => rej(new Error(`${what}: still waiting after ${ms} ms`)), ms).unref())]);
+const ourJob = (w: ReturnType<typeof world>) => w.state().jobs.find((j) => !/^claudepilot-job-0000000\d$/.test(j.name));
+
+test('T-1033 the queue deadline: a Job still queued past JOB_RUN_QUEUE_WAIT_S is deleted unrun, exit 3, with the line and the log mark', async () => {
+  const w = world([1, 2, 3].map((i) => ({ name: `claudepilot-job-0000000${i}`, chat: 'chat-x' })));
+  const t = Date.now();
+  const r = await within(w.start(['--repo', 'claudepilot', '--ref', 'main', '--', 'true'], { JOB_RUN_QUEUE_WAIT_S: '1' }).done, 15_000, 'queue deadline');
+  assert.equal(r.code, 3, r.out);
+  assert.match(r.out, /queued behind 3/);
+  assert.match(r.out, /job-run: queue deadline: claudepilot-job-[0-9a-f]{8} was still queued after 1s \(JOB_RUN_QUEUE_WAIT_S\); the command never ran; the Job is deleted: rerun it/);
+  assert.doesNotMatch(r.out, /giving up|rc=/);
+  assert.match(w.log(), /^=== JOB-RUN QUEUE-EXPIRED after=1s job=claudepilot-job-[0-9a-f]{8}$/m);
+  assert.ok(Date.now() - t < 10_000, 'it ends near its deadline');
+  assert.equal(ourJob(w), undefined, 'the queued Job is deleted');
+  assert.equal(w.state().jobs.length, 3, 'the running ones stay');
+  assert.deepEqual(w.state().secrets, {});
+});
+
+test('T-1033 the queue deadline: 30 minutes by default; a value outside 1 to 7200 seconds is refused before any kubectl call', () => {
+  assert.match(readFileSync(SCRIPT, 'utf8'), /^queue_wait=\$\{JOB_RUN_QUEUE_WAIT_S:-1800\}; /m);
+  for (const v of ['0', '7201', 'abc', '-5', '1e3', '99999']) {
+    const w = world();
+    const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--', 'true'], { JOB_RUN_QUEUE_WAIT_S: v });
+    assert.equal(r.code, 2, `${v}: ${r.out}`);
+    assert.match(r.out, /JOB_RUN_QUEUE_WAIT_S: 1 to 7200 seconds/);
+    assert.equal(w.calls(), '', `${v}: no kubectl call`);
+  }
+  // A leading zero is base 10, not octal (08 would be an error in $(( ))).
+  const w = world();
+  assert.equal(w.run(['--repo', 'claudepilot', '--ref', 'main', '--', 'true'], { JOB_RUN_QUEUE_WAIT_S: '0090' }).code, 0);
+});
+
+test('T-1033 a Job deleted while queued ends job-run at once (exit 1, "stopped while queued"), well before the queue deadline', async () => {
+  const w = world([1, 2, 3].map((i) => ({ name: `claudepilot-job-0000000${i}`, chat: 'chat-x' })));
+  const s = w.start(['--repo', 'claudepilot', '--ref', 'main', '--', 'true'], { JOB_RUN_MAX_PER_CHAT: '5' });
+  await waitFor('queued', () => /queued behind 3/.test(s.out()));
+  const name = ourJob(w)?.name;
+  w.edit((st) => {
+    st.jobs = st.jobs.filter((j) => j.name !== name);
+  });
+  const r = await within(s.done, 10_000, 'deleted while queued');
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.out, new RegExp(`job-run: ${name} was stopped while queued`));
+});
+
+test('T-1033 a Job deleted while starting (Pending) ends job-run at once with "vanished", not after the start wait', async () => {
+  const w = world();
+  writeFileSync(join(w.root, 'pending'), '0/2 nodes are available: 2 Insufficient memory.');
+  const s = w.start(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'true'], { JOB_RUN_START_WAIT_S: '900' });
+  await waitFor('Pending', () => /is Pending/.test(s.out()));
+  const name = ourJob(w)?.name;
+  assert.ok(name);
+  w.edit((st) => {
+    st.jobs = st.jobs.filter((j) => j.name !== name);
+  });
+  const r = await within(s.done, 10_000, 'deleted while starting');
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.out, new RegExp(`job-run: ${name} vanished while it was starting \\(deleted: job-run\\.sh --stop, a person or the cluster\\); no exit code: rerun it`));
+  assert.match(w.log(), /^=== JOB-RUN VANISHED while=starting /m);
+});
+
+test('T-1033 a Job deleted while running ends job-run at once with "vanished" (exit 1), not after its deadline', async () => {
+  const w = world([], { hang: true });
+  const s = w.start(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'sleep 1000']);
+  await waitFor('the Job running', () => w.state().jobs.some((j) => !j.suspend));
+  await new Promise((r) => setTimeout(r, 300)); // the log stream is open
+  const name = ourJob(w)?.name;
+  w.edit((st) => {
+    st.jobs = st.jobs.filter((j) => j.name !== name);
+  });
+  const r = await within(s.done, 10_000, 'deleted while running');
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.out, new RegExp(`job-run: ${name} vanished while it was running \\(deleted`));
+  assert.doesNotMatch(r.out, /did not finish|without an exit code/);
+  assert.match(w.log(), /^=== JOB-RUN VANISHED while=running /m);
 });
 
 test("cleanup: a Job whose script is gone (killed before its trap) is removed by the next run; another host's is left alone", () => {
