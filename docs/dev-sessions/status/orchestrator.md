@@ -63,9 +63,7 @@
 - T-565: assign it to session 355881a3; name the backup bucket and its secret (BACKUP_S3_*).
 - T-382: pick a DOM test library. T-1032: QC format must skip files tests read with readFileSync.
 - T-938: confirm the QA account is stg-only, low-privilege; job-run --pool-env loosening (T-384).
-- T-436 deploy note: agents reach only vaults whose agentWorkspaces names their workspace.
-- T-666 RBAC narrowing; T-578 gate reuse choice; T-868 allow line must not allow a SHOTS_TEST_MODE=1 prefix.
-- Older items: git history of this file.
+- T-666 RBAC narrowing; T-578 gate reuse; T-868 no SHOTS_TEST_MODE=1 prefix allow; T-921 rig door (11060); T-970 image build.
 
 ## NEEDS A HUMAN (production and uat only, D-62/D-78)
 - T-93 Konfersi production (owner checklist). T-610 pre-deploy read-only prod count (through the coordinator).
