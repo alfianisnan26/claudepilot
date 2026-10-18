@@ -23,6 +23,8 @@ import {
   type CreatePortalUserRequest,
   type DelegatedSession,
   type SessionShareCap,
+  type AppPortSession,
+  type PortalLoop,
   levelOfCaps,
   type ChatEvent,
   DELEGATED_EVENTS_MAX,
@@ -120,6 +122,7 @@ import { actorOf, actorString, actorUserId, visible } from './authz/seam.js';
 import type { HeldShare } from './identity/grants.js';
 import type { OidcClient } from './identity/oidc.js';
 import { identityRoutes } from './identity/routes.js';
+import { listLoops } from './platform/loops.js';
 import { SsoProviders } from './identity/sso.js';
 import { PortalTeams } from './identity/teams.js';
 import { assetCompress, jsonCompress } from './jsonCompress.js';
@@ -582,6 +585,31 @@ export function createApp(
   const state = (c: Context<Env>) => c.json(success<AdminState>(portal.adminState(c.get('token'))));
 
   admin.get('/state', state);
+  // Open app sessions (T-948 app hosts) and the portal's own loops (owner, 2026-10-18), a full session only.
+  admin.get('/app-sessions', (c) => {
+    const rows = appPorts?.grants.list() ?? [];
+    return c.json(
+      success<AppPortSession[]>(
+        rows.map((r) => ({
+          id: r.id,
+          workspaceId: r.workspaceId,
+          port: r.port,
+          host: r.host,
+          openedBy: actorString(r.actor),
+          createdAt: r.createdAt ? new Date(r.createdAt).toISOString() : null,
+          lastUsedAt: r.lastUsedAt ? new Date(r.lastUsedAt).toISOString() : null,
+          expiresAt: new Date(r.expiresAt).toISOString(),
+        })),
+      ),
+    );
+  });
+  admin.delete('/app-sessions/:id', (c) => {
+    const removed = appPorts?.grants.revoke(c.req.param('id')) ?? false;
+    if (removed) audit('workspace.port.closed', null, { session: c.req.param('id') }, 'info', portal.session(c.get('token'))?.userId ?? null);
+    return c.json(success({ removed }));
+  });
+  admin.get('/loops', (c) => c.json(success<PortalLoop[]>(listLoops())));
+
   // Session shares, teams and SSO providers, the owner's side (a full session): identity/routes.ts.
   identity.mountAdmin(admin);
 

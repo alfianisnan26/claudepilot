@@ -15,6 +15,7 @@ import { agentCallable, portalTools, type PortalToolDefinition, type ToolRegistr
 import { PortalMcp } from './server.js';
 import { PortalMcpSettingsStore } from './settings.js';
 import { PortalTokens } from './tokens.js';
+import { loop } from '../platform/loops.js';
 
 const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
 
@@ -118,7 +119,7 @@ export class PortalMcpModule {
   start(): void {
     if (!this.store.writable || !this.store.deliveryAllowed) return;
     this.#prune();
-    this.#timer = setInterval(() => this.#prune(), SIX_HOURS_MS);
+    this.#timer = setInterval(loop('portalmcp.prune', SIX_HOURS_MS, 'Portal MCP: prune expired tokens and old audit rows').wrap(() => this.#prune()), SIX_HOURS_MS);
     this.#timer.unref();
   }
 

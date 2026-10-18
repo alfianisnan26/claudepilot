@@ -7,29 +7,31 @@
 - T-860 S2c on integration (a87d00b8); the realpath guard side is the coordinator's. Older batches: git history.
 
 ## IN FLIGHT (6 of 6 workers, D-71; QA/review sonnet, D-63; ids in full in session_family)
-- BATCH 33: premerge/b33 d6a91e49 = integration 4616b878 + T-974 f70d333c (FIX3 PASS 10994; lead read ruleGuard diff:
-  refusals only, fail closed). QC bfrn7d9kh running. T-425 S2b+gaps 12acb9ed PASS (T-595 11065) but conflicts in
-  chat/testkit.ts: marker branch ticket/T-425-s2b-int a3f79dd5 -> 3753d3c2 resolves + Job -> into b33 -> gate.
+- BATCH 33 GATING: premerge/b33 dc259a25 = integration + T-974 f70d333c (FIX3 PASS 10994; lead read ruleGuard diff:
+  refusals only, fail closed). QC job-1fe3489c rc0 (31/31). Gate b0zeb5215 running. T-425 S2b+gaps 12acb9ed PASS
+  (T-595 11065), testkit.ts conflict: marker branch ticket/T-425-s2b-int a3f79dd5 -> 3753d3c2 resolves -> batch 34.
   After landing: FOR THE COORDINATOR remove the text-matching `git -C` denies (T-974).
 - T-980 (repos_list filter; worktree_create by path through can()) a3554d40, worked slice -> QA + blind.
-- T-971 H1 FIX fade65c2 BLIND PWG 10905 (C2, C3 survive) -> FIX2 fdd38c6b pushed, Job pending (a3554d40) -> re-check d9f18599.
-- T-969 FIX 065d3665 pushed (testers-bot etc., copy test dropped, perf/ux lanes), Job pending -> blind d9f18599.
+- BATCH 34: premerge/b34 1b8482cf = b33 + T-971 H1 fdd38c6b (PASS #10967) + T-976 d68ab35c (blind PWG #11125, 11135;
+  lead read sessionCookie.ts). QC bx4ymzpso running; gate after b33 lands.
+  Next in: T-425 (conflict), T-969 (blind PWG 10969; V5 cross-workspace mutant rerun by d9f18599).
+- T-971 H2: blind #10978 (a) resumes a stopped session, (b) B13, (c) unscrubbed `why`, (d) B7 + QA edges -> one fix 3753d3c2 (11134).
+- T-1043 S0b blind PWG #11081 (D5 live per-message check untested, D7) + T-976 merge with markers ticket/T-1043-s0b-976
+  0d71c9fb -> 76845676 (one reader = T-976 sessionCookie.ts) PRIORITY. T-968 PRD gaps (a)(b) decided 11136 -> 2a0edbd8.
 - T-961 S1 613139e3: its proof Job timed out in the queue (feea6e9e, 3600 s), rerun later. T-974 FIX3 Job bctygk2fn queued.
   a3554d40 then runs T-969 > T-971 H1 > T-975 > T-961, one at a time. The job-run queue is ~14 deep, 2 per chat (T-595 coordinator note).
 - T-975 FIX 6650e8ff QA FAIL 10926, tests only (Q1, Q2 survive; R5 gap; #retry/#finishFailed rewrite a cancelled run;
   links.test 12/12 x3, not this change) -> FIX2 a3554d40 (after T-969/H1 Jobs) -> delta c691df71 -> blind d9f18599 (mig 788).
-- T-1043 S0a+S0b (10790) head f5ae317e, 76845676: QA PWG #10965 (M14a/b, M16, G1, G2 killed). Gap: two cookie readers vs
-  T-976 -> after T-976 QA the lead pushes a merge with markers, 76845676 makes ONE reader. Blind d9f18599 next. Denial = 404.
 - T-976 a2da98cb QA PWG #11040 (C6 browser socket survived) -> gap fix d68ab35c (2a0edbd8: socket.test.ts handshakes,
   decode-fallback pin; index.ts wiring left as written gap), Job bplwz9ct5 rc0 (C6, D1 killed) -> delta PWG #11066 -> blind d9f18599 on d68ab35c.
   T-1042 audit only (2a0edbd8), build after T-976 is live.
-- T-968 S2b be6b3adc QA PWG #11080 (15/15 killed) -> nested settings mask fix in slice (11109, 2a0edbd8) -> delta + blind.
+- T-968 S2b be6b3adc QA PWG #11080 (15/15 killed) -> nested mask fix 5688811c (11109), Job bj718gl5c -> delta + blind.
 - T-971 H2 delta 03bc42d6 QA PWG #11062 (H5, H9 edges survive) -> edge tests 3753d3c2 (11110) -> re-check; blind on S1.
-- T-565 FIX 103c4d80 QA PWG (T-595 10968) -> gap 1 e309aacc Job rc1 (TS2353 js-yaml 5 option name) -> 9d1d1203, Job b3pik9awy; N11/N14 dropped
+- T-565 FIX 103c4d80 QA PWG (T-595 10968) -> gap 1 9d1d1203 Job b3pik9awy rc0 (Y1-3 killed; T-595 11123); N11/N14 dropped
   (labels exist nowhere, 10973) -> delta c691df71 -> blind (infra).
 - T-968 PRD fix a32754c3 (gaps 2-7) -> re-check d9f18599. T-968 S1 03fcd4c4 (2a0edbd8; seam, cpmt_, revoke,
-  migration 793), Job b7sajor81 rc1 (typecheck; managers.test 3+6) -> 89e5aba6 + diagnosis Job bfzybcl0u -> QA c691df71 + blind d9f18599; lead reads seam/migration. T-1033 S1 rc 75 (11035) head
-  53527bfa, Job blfnye6go rc1 (jobRun.test file timeout, a leftover process?) -> diagnosis Job -> fix -> QA + blind. T-921 4511c7be Job rc0 VOID (base test red) -> 515bb0c1, Job bl8pu6oc6 (green base first).
+  migration 793), fix 352194df (test was wrong, #11127), Job bcf1333pr -> QA c691df71 + blind d9f18599; lead reads seam/migration. T-1033 S1 rc 75 (11035) head
+  53527bfa, Job blfnye6go rc1 (jobRun.test file timeout, a leftover process?) -> diagnosis Job -> fix -> QA + blind. T-921 515bb0c1 Job bl8pu6oc6 rc0 (12/12, 4 killed; #11142) -> QA c691df71 -> blind.
 - T-251 (unknown usage) 3753d3c2: audit vs integration (decide.ts unknownUsage, t255.test), build only what is missing.
 - T-1043 S0c (MCP tools through can()) 76845676 on ticket/T-1043-s0c, beside T-1065.
 - T-961 (deploy outage: PriorityClass, headroom, release pre-check; 10887) -> QA + blind (infra); PriorityClasses in
@@ -60,9 +62,8 @@
 - T-961: the cluster-scoped PriorityClass objects, if Argo cannot create them (the builder names them).
 - T-974 after the FIX3 re-check: remove the text-matching `git -C` deny lines.
 - T-565: assign it to session 355881a3; name the backup bucket and its secret (BACKUP_S3_*).
-- T-382: pick a DOM test library. T-1032: QC format must skip files tests read with readFileSync.
-- T-938: confirm the QA account is stg-only, low-privilege; job-run --pool-env loosening (T-384).
-- T-666 RBAC narrowing; T-578 gate reuse; T-868 no SHOTS_TEST_MODE=1 prefix allow; T-921 rig door (11060); T-970 image build.
+- T-382 DOM test library; T-1032 QC format skips readFileSync files; T-938 QA account stg-only, --pool-env (T-384).
+- T-666, T-578, T-868 (older, see git history); T-921 rig door (11060); T-970 image build.
 
 ## NEEDS A HUMAN (production and uat only, D-62/D-78)
 - T-93 Konfersi production (owner checklist). T-610 pre-deploy read-only prod count (through the coordinator).

@@ -1,12 +1,12 @@
 import { cn, Spinner, useToast } from '@isnanme/ui';
 import type { AppPortItem } from '@portal/contracts';
-import { ArrowLeft, ArrowRight, ExternalLink, ListTree, Plus, RotateCw, Search, X } from 'lucide-react';
+import { ArrowLeft, ArrowRight, ExternalLink, ListTree, Plus, RotateCw, Search, Tag, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { InfoTip } from '@/components/InfoTip';
 import { errorText } from '@/lib/api';
 import { formatAppTarget, parseAppAddress, type AppTarget } from './appAddress';
 import { runOpen } from './appOpen';
-import { appProxy } from './appProxy';
+import { appNames, appProxy, setAppName } from './appProxy';
 import {
   beginLoad,
   canGoForward,
@@ -145,6 +145,17 @@ export function AppView({ workspaceId }: { workspaceId: string }) {
     void load(active.id, currentTarget(active));
   };
 
+  // Owner, 2026-10-18: a name for the port goes in its address (8765-tradingbot-isnan-pod…); kept on this device, per workspace and port.
+  const doName = () => {
+    if (!active) return;
+    const t = currentTarget(active);
+    const now = appNames(workspaceId)[String(t.port)] ?? '';
+    const next = window.prompt(`Name for port ${t.port} (letters, digits, dashes; empty for none)`, now);
+    if (next === null || next.trim() === now) return;
+    setAppName(workspaceId, t.port, next);
+    void load(active.id, t);
+  };
+
   const openOutside = async () => {
     if (!active) return;
     // Opened at once (a phone refuses a window that is opened after a wait), then pointed at the one-time URL.
@@ -195,6 +206,9 @@ export function AppView({ workspaceId }: { workspaceId: string }) {
         </button>
         <button type="button" aria-label="Reload" disabled={!active} onClick={doReload} className={iconBtn}>
           <RotateCw className="size-[18px]" />
+        </button>
+        <button type="button" aria-label="Name this app" title="Name this app" disabled={!active} onClick={doName} className={iconBtn}>
+          <Tag className="size-[18px]" />
         </button>
         <form
           className={cn('min-w-0 flex-1 items-center', bar ? 'flex' : 'hidden sm:flex')}

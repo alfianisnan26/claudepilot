@@ -1,4 +1,4 @@
-import { Bell, Boxes, ChartColumn, Hand, House, KeyRound, Layers, Library, MessagesSquare, Server, Settings, Ticket, Workflow, type LucideIcon } from 'lucide-react';
+import { Bell, Boxes, CalendarClock, ChartColumn, Hand, House, KeyRound, Layers, Library, MessagesSquare, Server, Settings, Ticket, Workflow, type LucideIcon } from 'lucide-react';
 
 export interface NavItem {
   id: string;
@@ -30,6 +30,8 @@ export const NAV: NavItem[] = [
   // A git remote on each workspace and the runs of the pipelines in its repositories (Local git and CI/CD PRD).
   { id: 'ci', to: '/admin/ci', label: 'CI', icon: Workflow, group: 'work' },
   { id: 'usage', to: '/admin/usage', label: 'Usage', icon: ChartColumn, group: 'admin' },
+  // What runs by itself: cron triggers, the portal's loops, the apps open in App mode (owner, 2026-10-18; T-965).
+  { id: 'schedules', to: '/admin/schedules', label: 'Schedules', icon: CalendarClock, group: 'admin' },
   // One hub for every pool type, Accounts first (Skillset PRD §18 A8).
   { id: 'pools', to: '/admin/pools', label: 'Pools', icon: Layers, group: 'admin' },
   // Where workspaces run, and machines that connect to the portal (Targets and Connect PRD §16).

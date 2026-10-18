@@ -13,6 +13,7 @@ import type { PoolService } from '../pools/service.js';
 import type { Store } from '../store/store.js';
 import { SecretsKind, type StoredEntry } from './kind.js';
 import { exposureRef } from './values.js';
+import { loop } from '../platform/loops.js';
 
 /**
  * Rotation, versions, revocation and the purge of old values (Secrets & env PRD FR16 to FR18, FR20).
@@ -247,7 +248,7 @@ export class SecretRotations {
     };
     const first = setTimeout(() => {
       run();
-      this.#timer = setInterval(run, DAY_MS);
+      this.#timer = setInterval(loop('secrets.rotation', DAY_MS, 'Secret rotation reminders and expiries').wrap(run), DAY_MS);
       this.#timer.unref();
     }, 5 * 60_000);
     first.unref();

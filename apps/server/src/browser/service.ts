@@ -26,6 +26,7 @@ import { headersFile, headersSpec, headersSummary, resolveHeaders, type Resolved
 import type { BrowserKind } from './kind.js';
 import { INSTALL_PATH } from './scripts.js';
 import { companionName, sha256, splitWorkspaceId } from './spec.js';
+import { loop } from '../platform/loops.js';
 
 /**
  * The browser pool at run time (browser & desktop PRD §10, §14.2): keeps each workspace's browser container
@@ -142,7 +143,8 @@ export class BrowserService {
         }),
       );
     }
-    this.#timer = setInterval(() => void this.#tick(), TICK_MS);
+    const run = loop('browser.health', TICK_MS, 'Browser pool: container health and idle stops').wrap(() => this.#tick());
+    this.#timer = setInterval(() => void run(), TICK_MS);
     this.#timer.unref();
     this.leases.start();
     void this.#tick();

@@ -8,6 +8,7 @@ import { useNotifyWhenDone } from '@/features/notify/sessionFlag';
 import { usePersonaOf } from '@/features/personas/identities';
 import { errorText } from '@/lib/api';
 import { pinnedToViewport, useVisualViewport } from '@/lib/viewport';
+import { SessionsSidebar } from './SessionsSidebar';
 import { AgentsPanel, AgentsSheet } from './AgentsPanel';
 import { chatApi } from './api';
 import { DividerMark } from '@/features/autotransfer/DividerMark';
@@ -752,6 +753,12 @@ export function SessionPage() {
         {wide && !gone && panel === 'files' && btwLayout.mode !== 'panel' && (
           <aside id="files-panel" aria-label="Files" className="flex w-[360px] shrink-0 flex-col border-l border-line bg-bg pt-[var(--safe-top)]">
             <FilesPanel key={id} sessionId={id} view={filesView} onView={setFilesView} onClose={toggleFiles} closeLabel="Hide files" />
+          </aside>
+        )}
+        {/* T-947: the other sessions, when no panel takes the right side, on wide screens (1280 px and up). */}
+        {!panel && btwLayout.mode !== 'panel' && (
+          <aside aria-label="Sessions" className="hidden w-[280px] shrink-0 flex-col border-l border-line bg-bg pt-[var(--safe-top)] xl:flex">
+            <SessionsSidebar currentId={id} />
           </aside>
         )}
       </div>

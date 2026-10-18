@@ -18,6 +18,7 @@ import { sendPush, type PushMessage } from './push.js';
 import { holds, inQuietHours } from './quiet.js';
 import { render, summary, tagOf, type Rendered } from './templates.js';
 import type { NotifyKeys } from './vapid.js';
+import { loop } from '../platform/loops.js';
 
 /** What a tab said about itself on the live socket. */
 export interface Presence {
@@ -103,7 +104,8 @@ export class NotifyPipeline {
   start(): void {
     if (this.#off) return;
     this.#off = this.d.bus.on('*', (e) => void this.handle(e).catch((err: unknown) => console.error(`[notify] delivery of ${e.kind} failed: ${(err as Error).message}`)));
-    this.#tick = setInterval(() => void this.tick().catch(() => undefined), 30_000);
+    const run = loop('notify.deliver', 30_000, 'Notifications: send what is queued (Web Push, webhooks)').wrap(() => this.tick());
+    this.#tick = setInterval(() => void Promise.resolve(run()).catch(() => undefined), 30_000);
     this.#tick.unref();
   }
 
