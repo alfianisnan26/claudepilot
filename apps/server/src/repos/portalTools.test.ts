@@ -251,3 +251,96 @@ test('T-980 worktree_create: the repository by path is the same repository as by
     r.done();
   }
 });
+
+/** A repository row in `docker/other`, a workspace the agents below do not belong to. */
+function saveForeign(r: Awaited<ReturnType<typeof rig>>): string {
+  const id = repoId('docker/other', '/home/node/x');
+  r.h.repos.db.save([{ id, workspaceId: 'docker/other', path: '/home/node/x', name: 'x', kind: 'repo', parentId: null, mainId: null, state: null, error: null, worktree: null, submodule: null, drifted: 0 }], new Date().toISOString());
+  return id;
+}
+
+test('T-980 by repo_id: a real repository of another workspace is the same not found as an unknown id, in every tool that takes an id', async () => {
+  const r = await rig();
+  try {
+    const foreign = saveForeign(r);
+    const unknownId = 'r_000000000000';
+    assert.notEqual(foreign, unknownId);
+    const agent = await r.mcp.agentToken(WS, 'sess1');
+    const calls: Array<[string, (id: string) => Record<string, unknown>]> = [
+      ['repo_get', (id) => ({ id })],
+      ['repo_events', (id) => ({ repo_id: id })],
+      ['worktree_create', (id) => ({ repo_id: id, branch: 'probe' })],
+    ];
+    for (const [tool, args] of calls) {
+      const unknown = await r.mcp.call(agent.secret, tool, args(unknownId));
+      const other = await r.mcp.call(agent.secret, tool, args(foreign));
+      assert.equal(unknown.result?.isError, true, `${tool}: an unknown id is refused`);
+      assert.match(text(unknown), /No such repository/, tool);
+      assert.equal(text(other), text(unknown), `${tool}: the other workspace's repository gets the unknown id's answer, word for word`);
+    }
+    // an admin reaches it: the same can() decides, only the answer for a refusal changed
+    assert.equal((await r.mcp.call(r.mcp.token('read').secret, 'repo_get', { id: foreign })).result?.isError, undefined);
+  } finally {
+    r.done();
+  }
+});
+
+test('T-980 workspace_id beside a repo_id must be that repository’s workspace: a mismatch is refused, not ignored; a match works', async () => {
+  const r = await rig();
+  try {
+    const proj = r.pool.path('proj');
+    const projId = repoId(WS, proj);
+    const op = r.mcp.token('operate');
+    // an admin who may reach both workspaces: the repository is in WS, the call says docker/other
+    const wrong = await r.mcp.call(op.secret, 'worktree_create', { repo_id: projId, workspace_id: 'docker/other', branch: 'mismatch' });
+    assert.equal(wrong.result?.isError, true, 'refused');
+    assert.match(text(wrong), /No such repository/);
+    assert.equal(r.pool.g(proj, 'branch', '--list', 'mismatch'), '', 'nothing was made');
+    const wrongEvents = await r.mcp.call(op.secret, 'repo_events', { repo_id: projId, workspace_id: 'docker/other' });
+    assert.equal(wrongEvents.result?.isError, true, 'repo_events refuses it too');
+    assert.match(text(wrongEvents), /No such repository/);
+    // the right workspace beside the id is fine, for both tools
+    const right = await r.mcp.call(op.secret, 'worktree_create', { repo_id: projId, workspace_id: WS, branch: 'match' });
+    assert.equal(right.result?.isError, undefined, text(right));
+    assert.equal((await r.mcp.call(op.secret, 'repo_events', { repo_id: projId, workspace_id: WS })).result?.isError, undefined);
+    // an agent that names its own workspace beside its own repository is fine; naming another is refused
+    const agent = await r.mcp.agentToken(WS, 'sess2');
+    assert.equal((await r.mcp.call(agent.secret, 'worktree_create', { repo_id: projId, workspace_id: WS, branch: 'agent-match' })).result?.isError, undefined);
+    assert.equal((await r.mcp.call(agent.secret, 'worktree_create', { repo_id: projId, workspace_id: 'docker/other', branch: 'agent-mismatch' })).result?.isError, true);
+    assert.equal(r.pool.g(proj, 'branch', '--list', 'agent-mismatch'), '');
+  } finally {
+    r.done();
+  }
+});
+
+test('T-980 survivors: a relative or empty path, an admin path without workspace_id, and a cursor reused after the name filter changed are all refused with the reason', async () => {
+  const r = await rig();
+  try {
+    const proj = r.pool.path('proj');
+    const op = r.mcp.token('operate');
+    // P3: not an absolute path of a folder (relative, empty, dot segments, no leading slash): refused before anything runs
+    for (const path of ['', 'proj', './proj', `${proj}/../proj`, `${proj}/./`]) {
+      const res = await r.mcp.call(op.secret, 'worktree_create', { path, workspace_id: WS, branch: 'p3' });
+      assert.equal(res.result?.isError, true, JSON.stringify(path));
+      assert.match(text(res), /absolute path of a repository folder/, JSON.stringify(path));
+    }
+    assert.equal(r.pool.g(proj, 'branch', '--list', 'p3'), '');
+    // P4: an admin has no workspace of its own, so a path alone has nowhere to look: refused, with the reason
+    const noWs = await r.mcp.call(op.secret, 'worktree_create', { path: proj, branch: 'p4' });
+    assert.equal(noWs.result?.isError, true);
+    assert.match(text(noWs), /A path needs a workspace_id/);
+    assert.equal(r.pool.g(proj, 'branch', '--list', 'p4'), '');
+    // P8: a cursor belongs to the filter it was made under; with another name it is refused, not read as a page of the new filter
+    const t = r.mcp.token('read');
+    const page = (await r.mcp.call(t.secret, 'repos_list', { workspace_id: WS, name: 'mods/', limit: 1 })).result!.structuredContent as { next_cursor: string | null };
+    assert.ok(page.next_cursor, 'there is a second page');
+    const reused = await r.mcp.call(t.secret, 'repos_list', { workspace_id: WS, name: 'creds', limit: 1, cursor: page.next_cursor });
+    assert.equal(reused.result?.isError, true, 'the cursor of name=mods/ is no cursor for name=creds');
+    const noName = await r.mcp.call(t.secret, 'repos_list', { workspace_id: WS, limit: 1, cursor: page.next_cursor });
+    assert.equal(noName.result?.isError, true, 'nor for no name at all');
+    const same = await r.mcp.call(t.secret, 'repos_list', { workspace_id: WS, name: 'mods/', limit: 1, cursor: page.next_cursor });
+    assert.equal(same.result?.isError, undefined, 'under the same name it still works');
+  } finally {
+    r.done();
+  }
+});
