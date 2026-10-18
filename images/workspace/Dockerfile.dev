@@ -1,6 +1,6 @@
 # The development flavour of the workspace image: what a session needs to build, test and LOOK AT ClaudePilot itself, on top of the
 # normal workspace image (build that first; BASE names it). Chromium and fonts for the UI checks (tools/qa), shellcheck for the
-# installers' tests, kubectl for the cluster. Built in the cluster like the others: scripts/k3s-build.sh workspace-dev <tag>.
+# installers' tests, kubectl for the cluster, Playwright's Chromium for job-run's browser Jobs (T-970). Built in the cluster like the others: scripts/k3s-build.sh workspace-dev <tag>.
 ARG BASE=registry.int.isnan.me/claudepilot/workspace:2.1.296-2026.10.12-1
 FROM ${BASE}
 
@@ -17,5 +17,19 @@ RUN curl -fsSL -o /usr/local/bin/kubectl "https://dl.k8s.io/release/${KUBECTL_VE
     && rm /tmp/kubectl.sha256 \
     && chmod +x /usr/local/bin/kubectl
 
-LABEL claudepilot.flavour="dev"
+# Playwright's own Chromium and its system libraries at one pinned Playwright version (T-970), so a job-run Job's `npx playwright test`
+# starts at once instead of downloading a browser every run. PLAYWRIGHT_BROWSERS_PATH points every Playwright in the image here; the
+# folder belongs to node, so a repository pinned to another Playwright version still runs `npx playwright install chromium` and adds
+# its own revision beside this one (its system libraries are near enough the same; a missing one is an image change). The version
+# guard refuses anything but an exact x.y.z, and the build fails when no Chromium landed. docs/dev-session.md names the same version.
+ARG PLAYWRIGHT_VERSION=__PLAYWRIGHT_VERSION__
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN echo "${PLAYWRIGHT_VERSION}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' \
+    && mkdir -p "${PLAYWRIGHT_BROWSERS_PATH}" \
+    && npx -y "playwright@${PLAYWRIGHT_VERSION}" install --with-deps chromium \
+    && ls -d "${PLAYWRIGHT_BROWSERS_PATH}"/chromium-* \
+    && chown -R node:node "${PLAYWRIGHT_BROWSERS_PATH}" \
+    && rm -rf /var/lib/apt/lists/* /root/.npm /tmp/*
+
+LABEL claudepilot.flavour="dev" claudepilot.playwright="${PLAYWRIGHT_VERSION}"
 USER node

@@ -27,7 +27,7 @@ The credentials sit on the workspace's volume, so anyone who can open a shell in
 ## Tools, and what is missing
 
 - In the image: node 22, npm, git, gh, curl, jq, ripgrep, tmux, sudo (passwordless), python3. Added to the home folder: `kubectl`.
-- **The dev image** (`images/workspace/Dockerfile.dev`: Chromium, fonts, shellcheck, kubectl on top of the workspace image) is what the UI checks need (`tools/qa/*.mjs` start `chromium`). Build it with `scripts/k3s-build.sh workspace-dev <tag>` and put it on this workspace (`kubectl -n isnan-claudepilot-workspaces set image deploy/ws-kohi-event workspace=registry.int.isnan.me/claudepilot/workspace:<tag>`; the pod restarts, the home volume stays).
+- **The dev image** (`images/workspace/Dockerfile.dev`: Chromium, fonts, shellcheck, kubectl and Playwright's Chromium (T-970, below) on top of the workspace image) is what the UI checks need (`tools/qa/*.mjs` start `chromium`). Build it with `scripts/k3s-build.sh workspace-dev <tag>` and put it on this workspace (`kubectl -n isnan-claudepilot-workspaces set image deploy/ws-kohi-event workspace=registry.int.isnan.me/claudepilot/workspace:<tag>`; the pod restarts, the home volume stays).
 - **No Docker daemon** in a pod: images are built by kaniko Jobs (`scripts/k3s-build.sh`), and the 23 Docker-only tests skip.
 - **No SSH to the nodes** from here: the jump host needs a Cloudflare Access login in a browser. Use `kubectl debug node/<name> -it --image=busybox` (a pod with the node's filesystem under `/host`) for node-level work.
 - Resources: this workspace is limited to 4 CPUs and 8 GiB (it reserves only 250m and 1 GiB). Run heavy jobs (typecheck, the suite, a production build) one at a time; `scripts/gate.sh` keeps test concurrency at 2 (`GATE_CONCURRENCY`).
@@ -157,6 +157,12 @@ scripts/image-build.sh --repo konfersi:<org>/<repo> --ref <branch> --dockerfile 
 scripts/job-run.sh --repo konfersi:<org>/<repo> --ref <branch> --image registry.int.isnan.me/konfersi/<name>:<tag> -- 'python -m pytest -q tests/'
 ```
 
+- **Playwright's Chromium is in the image (T-970):** the dev image bakes it with its system libraries for `playwright@__PLAYWRIGHT_VERSION__`
+  (`ARG PLAYWRIGHT_VERSION` in `images/workspace/Dockerfile.dev`, `PLAYWRIGHT_BROWSERS_PATH=/ms-playwright`). A repository on that
+  Playwright version runs `npx playwright test` at once, with no `npx playwright install`. On another version, keep
+  `npx playwright install chromium` at the start of the command: it adds that version's browser beside the baked one (the folder
+  belongs to `node`), a download each run, so move the repository to the baked version or the pin to the repository's. Images built
+  before T-970 have no baked browser.
 - **`--image <ref>` (T-379):** the image of the command container only. Allowed: `registry.int.isnan.me/claudepilot/<path>` or
   `registry.int.isnan.me/konfersi/<path>` or `registry.int.isnan.me/event/<path>` (the paths `scripts/image-build.sh` pushes to), pinned by
   `:<tag>` (never `:latest`) or `@sha256:<digest>`; any other
