@@ -928,6 +928,10 @@ test('T-1043 S0c: a member reaches only its own workspaces and sessions; a refus
     assert.equal(actor.kind === 'token' && actor.userId, MEMBER, 'the principal’s user is the actor');
     assert.equal(resolveWorkspaceFor(actor, 'view', world.workspaces as never, 'api').id, 'k8s/api', 'docker/api is not its: “api” is its one');
     assert.throws(() => resolveWorkspaceFor(actor, 'view', world.workspaces as never, 'web'), /No workspace “web”/);
+    // A read token sees its own workspace but may not operate it: that refusal is the same not found, never a FORBIDDEN that says it exists.
+    const reader = actorOfPrincipal({ kind: 'user', tokenId: 'tk_r', scope: 'read', workspaceId: null, sessionId: null, userId: MEMBER });
+    assert.equal(resolveWorkspaceFor(reader, 'view', world.workspaces as never, 'docker/old').id, 'docker/old', 'a read token views its own');
+    assert.throws(() => resolveWorkspaceFor(reader, 'operate', world.workspaces as never, 'docker/old'), { code: 'NOT_FOUND', message: 'No workspace “docker/old”. List them with workspace_list.' });
     // With the resolvers decided by owner, the founding owner's “api” is its own docker/api; with no workspace resolver (production until
     // one is registered) it holds every workspace, so it still sees both and gets AMBIGUOUS, as before S0c.
     assert.equal(resolveWorkspaceFor(ownerActor(), 'view', world.workspaces as never, 'api').id, 'docker/api', 'by owner: the founding owner’s own');
