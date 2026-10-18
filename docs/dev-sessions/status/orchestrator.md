@@ -26,7 +26,7 @@
   decode-fallback pin; index.ts wiring left as written gap), Job bplwz9ct5 -> delta c691df71 + blind d9f18599 on d68ab35c.
   T-1042 audit only (2a0edbd8), build after T-976 is live.
 - T-968 S2b be6b3adc FINAL: Job 74b74e97 rc0, 18 mutants applied and killed -> QA c691df71 + blind d9f18599. PRD fix 2a0edbd8.
-- T-565 FIX 103c4d80 QA PWG (T-595 10968) -> gap 1 e309aacc (parsed yaml + 3 mutants), Job bt7ea72qt; N11/N14 dropped
+- T-565 FIX 103c4d80 QA PWG (T-595 10968) -> gap 1 e309aacc Job rc1 (TS2353 js-yaml 5 option name) -> 9d1d1203, Job b3pik9awy; N11/N14 dropped
   (labels exist nowhere, 10973) -> delta c691df71 -> blind (infra).
 - T-968 PRD fix a32754c3 (gaps 2-7) -> re-check d9f18599. T-968 S1 03fcd4c4 (2a0edbd8; seam, cpmt_, revoke,
   migration 793), Job b7sajor81 queued -> QA c691df71 + blind d9f18599; lead reads seam/migration. T-1033 S1 rc 75 (11035) head
