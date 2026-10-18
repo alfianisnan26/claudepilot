@@ -27,8 +27,8 @@
 - T-1033 53527bfa QA mutants #11449: D1, D2 SURVIVED -> same builder 2a0edbd8 (tests + default 3600 s, decision #11467).
 - T-119 S1a 11e16382, S2a bd1a5c90 (Jobs queued) -> S1b API (blind: authz route), 3753d3c2, sonnet. S1b-2 = option A. T-980 dbb1bd76 rc0 8/8, 4 killed -> QA.
 - T-968 S1 delta a8fca5a3 QA PASS #11509; K8 ccef3ef4 rc0 7/7 (#11646); S1 fmt 79c2d25c check bsrlhcxps; S2 needs fmt (#11732). T-523 + T-402 audits -> a3554d40.
-- 76845676: S0b x T-976 aaa9169f rc1 (5/77: member 403 on T-976 team routes, 403->404 in 2 tests, teamsSso:162 cookie
-  set twice; asked: T-976 or S0b?) -> fix, re-queue -> S0c 78b0e668 -> T-1065+T-1084; meanwhile T-1094 (urgent, blind).
+- 76845676: S0b aaa9169f rc1 (5/77) -> fix 0574c38c Job b6gqnybcc (double cookie was S0b's own merge, not T-976; 403->404
+  test edits per review 10681 #5: blind checks them) -> S0c 78b0e668 -> T-1065+T-1084; now T-1094 plan (urgent, blind).
 - a3554d40 Pilot tools 401 since the recovery (FOR THE COORDINATOR T-595 #12036): T-402 rc0 105/105, T-523 covered by
   T-1033; now T-524 open done-items (OOM message plus test, master under 85% for a busy hour, measured).
   T-961 green 128/128; T-1076 fix cae18cd6 proof bdo9erb2x queued. T-975 FIX2 3a21e02a delta QA PWG #11446 -> blind d9f18599.
