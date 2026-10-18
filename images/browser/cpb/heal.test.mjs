@@ -126,16 +126,19 @@ test('guardSignals: a spawn error is not a signal error: it goes to onError (the
   assert.deepEqual(lines, []);
 });
 
-/** A fake Chrome: never answers when it was started with headers (the extension), answers otherwise. */
+/**
+ * A fake Chrome: never answers when it was started with headers (the extension), answers otherwise. What it was asked is in `calls`
+ * (not `log`: spread into startWithHeal's options, a `log` field would replace the logger with an array).
+ */
 function fakeChrome({ answersWithHeaders = false, answersWithout = true } = {}) {
-  const log = [];
+  const calls = [];
   return {
-    log,
-    start: async ({ headers }) => (log.push(`start headers=${headers}`), { pid: 100 + log.length, headers }),
+    calls,
+    start: async ({ headers }) => (calls.push(`start headers=${headers}`), { pid: 100 + calls.length, headers }),
     waitReady: async (s) => {
       if (s.headers ? !answersWithHeaders : !answersWithout) throw new Error('no CDP');
     },
-    stop: async () => void log.push('stop'),
+    stop: async () => void calls.push('stop'),
   };
 }
 
@@ -145,7 +148,7 @@ test('startWithHeal: no CDP with headers, the second start without them answers,
   const state = { degradedAt: 0 };
   const r = await startWithHeal({ ...f, state, log, now: () => 1000 });
   assert.equal(r.headers, 'degraded');
-  assert.deepEqual(f.log, ['start headers=true', 'stop', 'start headers=false']);
+  assert.deepEqual(f.calls, ['start headers=true', 'stop', 'start headers=false']);
   assert.equal(state.degradedAt, 1000);
   assert.deepEqual(lines, ['headers disabled: Chrome did not start with them']);
 });
@@ -155,12 +158,12 @@ test('startWithHeal: the next wake inside the cooldown skips the headers, after 
   const f = fakeChrome();
   const inside = await startWithHeal({ ...f, state, now: () => 1000 + 60_000, cooldownMs: 10 * 60_000 });
   assert.equal(inside.headers, 'degraded');
-  assert.deepEqual(f.log, ['start headers=false']);
+  assert.deepEqual(f.calls, ['start headers=false']);
 
   const g = fakeChrome({ answersWithHeaders: true });
   const after = await startWithHeal({ ...g, state, now: () => 1000 + 11 * 60_000, cooldownMs: 10 * 60_000 });
   assert.equal(after.headers, 'on');
-  assert.deepEqual(g.log, ['start headers=true']);
+  assert.deepEqual(g.calls, ['start headers=true']);
   assert.equal(state.degradedAt, 0);
 });
 
@@ -168,14 +171,14 @@ test('startWithHeal: headers working is "on"; no headers configured is "off" and
   const ok = fakeChrome({ answersWithHeaders: true });
   assert.equal((await startWithHeal({ ...ok, state: { degradedAt: 0 } })).headers, 'on');
 
-  const none = { log: [], start: async () => ({ pid: 1, headers: false }), waitReady: async () => { throw new Error('no CDP'); }, stop: async () => {} };
+  const none = { calls: [], start: async () => ({ pid: 1, headers: false }), waitReady: async () => { throw new Error('no CDP'); }, stop: async () => {} };
   await assert.rejects(startWithHeal({ ...none, state: { degradedAt: 0 } }), /no CDP/);
 });
 
 test('startWithHeal: when the second start fails too, it throws', async () => {
   const f = fakeChrome({ answersWithout: false });
   await assert.rejects(startWithHeal({ ...f, state: { degradedAt: 0 } }), /no CDP/);
-  assert.deepEqual(f.log, ['start headers=true', 'stop', 'start headers=false']);
+  assert.deepEqual(f.calls, ['start headers=true', 'stop', 'start headers=false']);
 });
 
 test('no header value reaches a log line, a result or an error', async () => {
@@ -189,7 +192,7 @@ test('no header value reaches a log line, a result or an error', async () => {
     return o.headers ? { ...s, rules: [{ name: 'x-id', value: idValue }, { name: 'x-secret', value: secretValue }] } : s;
   };
   const r = await startWithHeal({ ...f, start, state: { degradedAt: 0 }, log });
-  const printed = JSON.stringify({ lines, r: { headers: r.headers, pid: r.started.pid }, f: f.log });
+  const printed = JSON.stringify({ lines, r: { headers: r.headers, pid: r.started.pid }, f: f.calls });
   assert.ok(!printed.includes(idValue) && !printed.includes(secretValue));
 
   const e = await startWithHeal({ ...fakeChrome({ answersWithout: false }), start, state: { degradedAt: 0 }, log }).catch((x) => x);
