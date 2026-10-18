@@ -30,7 +30,7 @@
   (labels exist nowhere, 10973) -> delta c691df71 -> blind (infra).
 - T-968 PRD fix a32754c3 (gaps 2-7) -> re-check d9f18599. T-968 S1 03fcd4c4 (2a0edbd8; seam, cpmt_, revoke,
   migration 793), Job b7sajor81 rc1 (typecheck; managers.test 3+6) -> 89e5aba6 + diagnosis Job bfzybcl0u -> QA c691df71 + blind d9f18599; lead reads seam/migration. T-1033 S1 rc 75 (11035) head
-  53527bfa, Job blfnye6go (8 mutants) -> QA + blind (pipeline). T-921 4511c7be Job rc0 VOID (base test red) -> 515bb0c1, rerun on green base.
+  53527bfa, Job blfnye6go rc1 (jobRun.test file timeout, a leftover process?) -> diagnosis Job -> fix -> QA + blind. T-921 4511c7be Job rc0 VOID (base test red) -> 515bb0c1, Job bl8pu6oc6 (green base first).
 - T-251 (unknown usage) 3753d3c2: audit vs integration (decide.ts unknownUsage, t255.test), build only what is missing.
 - T-1043 S0c (MCP tools through can()) 76845676 on ticket/T-1043-s0c, beside T-1065.
 - T-961 (deploy outage: PriorityClass, headroom, release pre-check; 10887) -> QA + blind (infra); PriorityClasses in
