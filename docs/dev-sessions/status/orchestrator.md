@@ -1,6 +1,7 @@
-# orchestrator status (2026-10-18 04:35 UTC, session 355881a3; older entries: git history)
+# orchestrator status (2026-10-18 05:20 UTC, session 355881a3; older entries: git history)
 
 ## DONE
+- T-251 CLOSED 05:18 (audit #11326, proof Job bvnawjkmq rc0, QA PWG #11340, citation fixed #11344).
 - Batch 33 LANDED: T-974 f70d333c. Slip (pushed 76bdc9d0 before its re-gate; T-595 11166) closed: re-gate GREEN 03:00,
   hold lifted on T-731 11206. Flaky unavailable.s2.test.ts:75 -> T-1076.
 - Batch 32 LANDED 22:54 (74599ece): T-382 S6, T-294 FIX1, T-1049. Older batches: git history.
@@ -22,11 +23,12 @@
 - T-1079 (after T-1083 S1 is in QA; owner: Konfersi stg release docs per module into vault 98af7d16def1, reuse releaseReport.ts) 2a0edbd8, S1+S2 16fee55e.
 - 2a0edbd8 Jobs: T-921 db1d8d19 rc0, QA PWG #11350 (J1, J4 survive) -> tests (11368) -> delta c691df71 -> blind; T-257 d34f47b2 rc1 (test bug) -> fix e22ae23d, Job after T-968's two;
   T-976 fmt re-run baov0fphs (patch lost to $OUT), T-968 a8fca5a3 b1gahci5o, T-565 bzq96a9ey on 59451a5f running.
-- T-251 QA PWG #11340 (citation only) -> 3753d3c2 reassigns to me -> close.
+- T-1033 53527bfa QA mutants #11449: D1, D2 SURVIVED -> same builder 2a0edbd8 (tests + default 3600 s, decision #11467).
+- T-119 S1a (pure ticketFlow.ts + tests, no migration) -> 3753d3c2, sonnet (#11470). T-523 + T-402 audits -> a3554d40.
 - 76845676: S0b x T-976 aaa9169f Job bk7jaaj34 -> S0c-on-s0b 78b0e668 (6 mutants) -> T-1065 641b45cf + T-1084 229fc44f
   (no issued-token match: no incident) one Job -> blind d9f18599.
 - a3554d40: H1 fmt Job b9xx1x0um, T-980 bpc5x0blu, T-961 7684391b b44zf2p1l (QA PWG #11433); worked: T-1076 (flaky
-  wall-clock bound at :75, 124 ms). T-975 FIX2 3a21e02a rc0 (9eb40516) -> delta c691df71 -> blind d9f18599.
+  wall-clock bound) fix cae18cd6, proof bkqffm0uu queued. T-975 FIX2 3a21e02a delta QA PWG #11446 -> blind d9f18599.
 - 3753d3c2: T-971 d8189e5f Job bpwzt2g06 (B10, M11 fixed); T-634 0f4ffde6 QA PWG #11432 -> C2 test; T-356 N8 Job.
 - c691df71 (QA): T-968 first; T-1033 53527bfa (rc0, 8 killed) -> blind; T-277 spot-check; T-1058 PWG (already closed).
 - d9f18599 (QA/blind): T-968 S2b H4/H5/H12 (bq9f0174k), S1-token blind; then T-969 V5, T-975, T-970 QA.
@@ -55,7 +57,7 @@
 - Incident T-1082 (deploy #365 gate=false): its post-mortem and the check that refuses gate=false without the owner.
 - Job capacity: queue timeouts and Pending on memory (T-595 10932, 11197, 11282, 11285).
 - T-961 PriorityClasses if Argo can't create them; T-974 remove the text-matching `git -C` denies (after T-425 lands).
-- T-565: assign to session 355881a3; name the backup bucket and its secret (BACKUP_S3_*). T-257 DECISIONS row (11198).
+- T-565 (now mine, 11482): name the backup bucket and its secret (BACKUP_S3_*). T-257 DECISIONS row (11198).
 - T-948: PORT_PROXY_HOST_SUFFIX and the claudepilot-app-ports route. T-976: live Traefik X-Forwarded-Proto (10855).
 - T-1058 pre-push hook for the context-pack check. T-382 DOM test library; T-1032 QC format skips readFileSync files.
 - T-938, T-666, T-578, T-868 (older, git history); T-921 rig door (11060); T-970 image build (11160).
