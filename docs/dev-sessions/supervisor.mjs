@@ -67,7 +67,7 @@ const BUILD_LANES = {
 const LANES = (prog) =>
   `Your crew is LANES (D-70): long-lived worker sessions you spawn once each (session_spawn, claude auto, mode dontAsk, report idle, model sonnet) and keep: the build lanes ${BUILD_LANES[prog]}, and at most two QA lanes: '${prog} QA UI' (role lane-qa-ui: UI/UX, refinement, Lighthouse, responsiveness, journeys end to end) and '${prog} QA Perf' (role lane-qa-perf: performance, security, load tests, API behaviour). Every build lane and one QA lane are always live; give each lane its area in its first brief. Give a lane its next ticket with session_message; never end a lane for lack of work and never start a second session of a live lane. Every delivery goes to the QA lane of its side before you merge (UI to QA UI, the rest to QA Perf; with one QA lane, to it); QA never authors. The free slot is for a blind reviewer (a new sonnet session each time) or an explorer. A lane goes to opus for one ticket only with a why on the ticket (session_configure), then back. The supervisor compacts an idle lane past 120k.`;
 const TRACKS = [
-  { key: 'orchestrator', title: 'Orchestrator: ClaudePilot dev', claudes: ['hasyim', 'fadlilah', 'alfian.isnan'] },
+  { key: 'orchestrator', title: 'Orchestrator: ClaudePilot dev', statusTicket: 'T-595', claudes: ['hasyim', 'fadlilah', 'alfian.isnan'] },
   // The Konfersi program as a crew (D-52): its own folder, tickets tagged konfersi-migration. Not named Orchestrator: the title prefix finds the track's chats.
   {
     key: 'konfersi',
@@ -1051,7 +1051,7 @@ async function watch({ rounds = Infinity } = {}) {
 
 /* ---------- Go ---------- */
 
-export { harmlessEnding, watch, STATE_FILE, bestClaude, compactDue, slotsFull, compactLanes, wakeStaleLanes, worktreeTrustable, ownWorktrees, COMPACT, COMPACT_LANE, LANES };
+export { harmlessEnding, watch, STATE_FILE, TRACKS, bestClaude, compactDue, slotsFull, compactLanes, wakeStaleLanes, worktreeTrustable, ownWorktrees, COMPACT, COMPACT_LANE, LANES };
 if (IS_MAIN) {
   process.on('SIGTERM', () => revokeMcpToken().finally(() => process.exit(0)));
   process.on('SIGINT', () => revokeMcpToken().finally(() => process.exit(0)));

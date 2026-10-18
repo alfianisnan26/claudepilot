@@ -81,6 +81,18 @@ const sup = (await import(pathToFileURL(resolve(import.meta.dirname, '../../../.
   harmlessEnding: (s: unknown) => boolean;
   watch: (o: { rounds: number }) => Promise<void>;
   STATE_FILE: string;
+  TRACKS: { key: string; statusTicket?: string }[];
+};
+const orchestratorTrack = sup.TRACKS.find((t) => t.key === 'orchestrator')!;
+/** Runs `fn` with the orchestrator track's own status ticket removed, so the portal setting decides. */
+const withoutOwnStatus = async (fn: () => Promise<void>) => {
+  const own = orchestratorTrack.statusTicket;
+  delete orchestratorTrack.statusTicket;
+  try {
+    await fn();
+  } finally {
+    orchestratorTrack.statusTicket = own;
+  }
 };
 
 const H = 3_600_000;
@@ -200,7 +212,8 @@ const capped = () => {
   portal.recover = { status: 409, body: { error: { code: 'RECOVER_SUSPICIOUS', message: 'a person must look' } } };
 };
 
-test('T-257 A: a track left down is written once on the status ticket (the portal setting for the orchestrator track); unset, nothing', async () => {
+test('T-257 A: a track left down is written once on the status ticket (the portal setting, for a track with none of its own); unset, nothing', () =>
+  withoutOwnStatus(async () => {
   capped();
   portal.statusTicket = ' t-60 ';
   await sup.watch({ rounds: 1 });
@@ -220,6 +233,24 @@ test('T-257 A: a track left down is written once on the status ticket (the porta
   await sup.watch({ rounds: 1 });
   assert.equal(tickets().length, 1);
   assert.equal(statusComments().length, 0);
+
+  // The status ticket is the watchdog ticket itself (the fake portal opens T-900): it is not commented about itself.
+  portal.calls.length = 0;
+  capped();
+  portal.statusTicket = 'T-900';
+  await sup.watch({ rounds: 1 });
+  assert.equal(tickets().length, 1);
+  assert.equal(statusComments().length, 0);
+  }));
+
+test('T-257 A: the track’s own status ticket (the orchestrator’s T-595) wins over the portal setting, which is not read', async () => {
+  assert.equal(orchestratorTrack.statusTicket, 'T-595');
+  capped();
+  portal.statusTicket = 'T-60';
+  await sup.watch({ rounds: 1 });
+  assert.equal(tickets().length, 1);
+  assert.deepEqual(statusComments().map((c) => c.path), ['/api/tickets/T-595/comments']);
+  assert.equal(portal.calls.filter((c) => c.path === '/api/settings').length, 0);
 });
 
 test('T-257 A, the dry-run twin: DRY_RUN=1 says it would comment the status ticket and writes nothing', async () => {
@@ -232,7 +263,7 @@ test('T-257 A, the dry-run twin: DRY_RUN=1 says it would comment the status tick
   portal.statusTicket = 'T-60';
   await dry.watch({ rounds: 1 });
   assert.ok(logs.some((l) => /\[dry\] orchestrator: would open a watchdog ticket/.test(l)), logs.join('\n'));
-  assert.ok(logs.some((l) => /\[dry\] orchestrator: would comment the status ticket T-60/.test(l)));
+  assert.ok(logs.some((l) => /\[dry\] orchestrator: would comment the status ticket T-595/.test(l)), 'the track’s own, not the setting’s T-60');
   assert.equal(tickets().length, 0);
   assert.equal(statusComments().length, 0);
 });

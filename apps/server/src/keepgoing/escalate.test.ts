@@ -135,6 +135,13 @@ test('T-257 A: a report is written once on the status ticket (keepgoing.statusTi
     assert.equal(x.tickets.made.length, 1, value);
     assert.deepEqual(x.tickets.comments, [], value);
   }
+
+  // The status ticket is the report's own ticket (T-1 here): it is not commented about itself.
+  const own = await rig({ settings: settingsMap({ [KEEPGOING_SETTING_KEYS.statusTicket]: 'T-1' }) });
+  await leftDown(own);
+  await own.after(1);
+  assert.equal(own.tickets.made.length, 1);
+  assert.deepEqual(own.tickets.comments.filter((c) => /Keep going reported/.test(c.text)), []);
 });
 
 test('a harmless ending does not count against the cap: after the integrity cap left the chat down, a harmless ending is still recovered in place', async () => {
