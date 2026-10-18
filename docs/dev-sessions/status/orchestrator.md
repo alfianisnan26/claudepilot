@@ -39,7 +39,8 @@
 - T-968 S1+S2 merged BY THE COORDINATOR (coord/T-968-gm). S1-token 5ccfb52c job-069af0eb rc0 (29/29, 7 killed); QA PWG #11312
   (K7 index.ts sign-out wiring, done->wont_do row, service.ts:200 format) -> one fix 2a0edbd8; blind d9f18599. S2b QA bzh0ehw7b.
   2a0edbd8: T-921 db1d8d19, T-257 d34f47b2, T-976 fmt, T-565 bzq96a9ey; T-1079 S1+S2 16fee55e (L, 3 slices, 11295). T-277 met -> QA.
-- 3753d3c2: T-971 H2 head bbfd0ae3 Job b2rxfgopr (21 mutants); T-425 2b57efce rc0 -> b34; T-251 ALL MET + T-634 audit (assigned).
+- 3753d3c2: T-971 H2 head bbfd0ae3 Job b2rxfgopr (21 mutants); T-425 2b57efce rc0 -> b34; T-251 ALL MET 11326 -> QA c691df71; T-634 test-only slice (11327).
+  T-968 S2b blind PWG 11302 -> last_error untrusted label fix 2a0edbd8 (11335); S1 gaps fixed a8fca5a3 (Job queued).
 - 76845676: T-1043 S0c 558c74ed rc0 (66/66; mutants next) ; S0b x T-976 4a57abe6 Job b9829len2; T-1065 worked. T-1058 evidence 11325.
 
 ## DECISIONS (binding)
