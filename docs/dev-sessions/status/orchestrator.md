@@ -41,7 +41,9 @@
 - T-356 S1 64b4effa (MCP authz gaps 1-4; 10906) by 3753d3c2, Jobs pending. 10922: workspace resolver NOT wired (that is
   the multi-user switch); FR19 enforced by test + exemption list, not at start-up -> QA + blind; lead reads the authz diff.
 - T-968 (a) bdd1a3ce any sign-out revokes cpmt_ (Job bes6vu30j), (b) c6cc0ffe manager refused ticket_close (was ALLOWED
-  before; Job bohgvhpk1) -> QA c691df71. 2a0edbd8 worked slice: T-277 + T-257 remainder audit (read only).
+  before; Job bohgvhpk1). QA HOLE: ticket_update status done still closes for a manager (service.ts:1486) -> fix 2a0edbd8 FIRST (11189).
+  2a0edbd8 then: T-565 T5 negative case (T-595 11179), T-921 heal.test.mjs under gate collection (11180), T-257 option A (11187).
+  T-277 ALL MET (11186) -> QA spot-check c691df71 -> close.
 
 ## DECISIONS (binding)
 - D-81 risk-based review: same builder through all fixes; one QA, the same QA re-checks; blind review only for security, auth,
@@ -69,9 +71,8 @@
 - T-93 Konfersi production (owner checklist). T-610 pre-deploy read-only prod count (through the coordinator).
 
 ## NEXT (in order, as slots free)
-1. Batch 33: T-425 S2b + what passes (T-974, T-971 H1+H2 S1, T-975, T-969, T-968 S2a+S2b, T-1043 S0a+S0b, T-976).
-2. T-1043 S0c MCP tools; T-968 S1 (after the PRD fix).
-3. T-1042 (after T-976), T-30 (XL), T-33, T-379 S3 (paused), T-105, T-1031.
+1. Batch 34 (re-cut on integration after the 76bdc9d0 re-gate) + T-425, T-969; then T-1043 S0b, T-968 S1/S2, T-975, T-565.
+2. T-1042 (after T-976), T-30 (XL), T-33, T-379 S3 (paused), T-105, T-1031.
 
 LESSONS: dontAsk lanes run Bash only in their spawn worktree and refuse git merge/restore: the lead pushes the merge (with
 markers) to a new branch, the lane does `git switch -C <br> origin/<br>` and resolves by Edit. Never prettier files tests read
