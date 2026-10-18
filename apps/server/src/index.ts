@@ -105,7 +105,7 @@ import { wireConnect } from './workspaces/connect/wire.js';
 import type { Runtime } from './workspaces/runtime.js';
 import { AppPorts, routeAppHostUpgrades } from './appports/index.js';
 import { loop } from './platform/loops.js';
-import { AGENT_MCP_CONFIG } from './portalmcp/agents.js';
+import { managerAccess } from './manager/access.js';
 import { MANAGER_BRIEF } from './manager/service.js';
 
 // A background task that rejects (a module reading a table a frozen database doesn't have, a probe, a scan) must not
@@ -491,24 +491,13 @@ wireVaultBinding(portalMcp.agents, knowledge);
 chatController.agentAccess = portalMcp.agents;
 // T-968: the General Manager's process gets the person's manager token (it acts as them) and its brief; the URL is the portal as its
 // workspace reaches it, the same as an agent's.
-chatController.managerAccess = {
-  mint: async ({ workspaceId, sessionId, ownerId }) => {
-    // Only while the person is signed in somewhere (a sign-out revokes it, Q3; a later wake must not mint it again: review 2026-10-18).
-    if (!portal.signedIn(ownerId)) return null;
-    const url = await agentUrls(workspaceId);
-    const t = url ? portalMcp.managers.mint({ userId: ownerId, sessionId }, { keepOthers: true }) : null;
-    return t && url
-      ? {
-          // claude.ai's own connectors stay out of the manager's process whatever the global setting (review 2026-10-18).
-          env: { PILOT_MCP_TOKEN: t.secret, PILOT_MCP_URL: url, PILOT_SESSION_ID: sessionId, PILOT_WORKSPACE_ID: workspaceId, ENABLE_CLAUDEAI_MCP_SERVERS: 'false' },
-          mcpConfig: AGENT_MCP_CONFIG,
-          tokenId: t.tokenId,
-        }
-      : null;
-  },
-  settle: (sessionId, tokenId, started) => portalMcp.managers.settle(sessionId, tokenId, started),
+// Only while the person is signed in somewhere (a sign-out revokes it, Q3; a later wake must not mint it again: review 2026-10-18).
+chatController.managerAccess = managerAccess({
+  signedIn: (userId) => portal.signedIn(userId),
+  url: agentUrls,
+  tokens: portalMcp.managers,
   brief: () => MANAGER_BRIEF,
-};
+});
 // Self-heal (owner, 2026-10-17): a live session calling with a replaced or expired token gets a restart at its turn's end (the same
 // conversation, MCP reconnected), so its new process starts with a good token and nobody has to run /mcp by hand.
 portalMcp.agents.onStaleToken = (sessionId, reason) => {

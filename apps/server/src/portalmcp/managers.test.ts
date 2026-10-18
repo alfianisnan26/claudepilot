@@ -228,6 +228,18 @@ test('migration 793: every session is a workspace session of the founding user, 
     add('gm3', 'manager', ALICE);
     assert.throws(() => add('gm4', 'manager', ALICE), /UNIQUE/);
     assert.throws(() => add('x1', 'robot'), /CHECK/);
+    // The index holds live rows only (review 2026-10-18): Disable ends the manager and its transcript stays; Enable again makes a new one.
+    const end = (id: string) => db.prepare("UPDATE chat_sessions SET state = 'ended' WHERE id = ?").run(id);
+    end('gm3');
+    add('gm5', 'manager', ALICE);
+    end('gm5');
+    add('gm6', 'manager', ALICE);
+    assert.throws(() => add('gm7', 'manager', ALICE), /UNIQUE/, 'still one live manager per person');
+    const rows = db.prepare("SELECT id, state FROM chat_sessions WHERE kind = 'manager' AND owner_id = ? ORDER BY id").all(ALICE) as { id: string; state: string }[];
+    assert.deepEqual(rows.map((r) => r.id), ['gm3', 'gm5', 'gm6'], 'the ended ones stay');
+    assert.deepEqual(rows.filter((r) => r.state !== 'ended').map((r) => r.id), ['gm6']);
+    // Bringing an ended manager back while another is live is refused as well.
+    assert.throws(() => db.prepare("UPDATE chat_sessions SET state = 'idle' WHERE id = 'gm5'").run(), /UNIQUE/);
   } finally {
     h.done();
   }

@@ -173,20 +173,17 @@ export class Portal {
     return s;
   }
 
-  /** Ends every session of one email account (a password change, a disable, a removal, a demotion), except `keepToken`'s; cuts its sockets. */
   /**
    * T-968 (review 2026-10-18): whether the person is signed in anywhere now, so their General Manager is minted a token only while they
-   * are. `u_owner` is the server code's person: any live server-code session (no account) counts.
+   * are. A server-code session (no account) is the founding user's, as `signOut` counts it.
    */
   signedIn(userId: string): boolean {
     const now = Date.now();
-    for (const s of this.#sessions.values()) {
-      if (s.expiresAt <= now) continue;
-      if (userId === 'u_owner' ? !s.userId : s.userId === userId) return true;
-    }
+    for (const s of this.#sessions.values()) if (s.expiresAt > now && (s.userId ?? FOUNDING_USER_ID) === userId) return true;
     return false;
   }
 
+  /** Ends every session of one email account (a password change, a disable, a removal, a demotion), except `keepToken`'s; cuts its sockets. */
   revokeUser(userId: string, keepToken?: string) {
     const keep = keepToken ? tokenHash(keepToken) : null;
     let any = false;

@@ -29,10 +29,15 @@ async function build(sessions: ChatSession[] = []) {
   const registry = new ToolRegistry();
   const h = await portalMcpHarness({ registry });
   const reached = { get: 0 };
+  const sent: { sessionId: string; text: string; opts: { actor?: string; actorLabel?: string; priority?: 'next' | 'later' } }[] = [];
   registerChatManagerTools(
     {
       db: () => h.store.db,
-      chat: { get: (id) => (reached.get++, sessions.find((s) => s.id === id) ?? null), list: (f) => sessions.filter((s) => !f?.parentId || s.parentId === f.parentId) },
+      chat: {
+        get: (id) => (reached.get++, sessions.find((s) => s.id === id) ?? null),
+        list: (f) => sessions.filter((s) => !f?.parentId || s.parentId === f.parentId),
+        send: async (sessionId, _uuid, text, opts) => void sent.push({ sessionId, text, opts }),
+      },
       caps: () => ({ maxDepth: 1, maxChildren: 5, spawnsPerHour: 20, messagesPerHour: 60 }),
       now: () => NOW,
     },
@@ -47,7 +52,7 @@ async function build(sessions: ChatSession[] = []) {
     db
       .prepare('INSERT INTO chat_requests (session_id, request_id, kind, tool_name, title, detail, agent_label, created_at, answered_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
       .run(s, id, o.kind ?? 'tool', o.tool ?? 'Bash', o.title ?? 'Run a command', 'ls', o.agent ?? null, ago(min), o.answered ? ago(0) : null);
-  return { h, row, live, request, reached };
+  return { h, row, live, request, reached, sent };
 }
 
 type Called = Awaited<ReturnType<Awaited<ReturnType<typeof portalMcpHarness>>['call']>>;
@@ -241,5 +246,75 @@ test('declared through the seam: view on the session, the same text as a missing
   assert.deepEqual(CHAT_MANAGER_TOOL_POLICIES, {
     approvals_list: { kind: 'objects', checks: [{ type: 'session', verb: 'view', arg: 'session_id', optional: true, notFound: 'No such session.' }], filter: 'session' },
     crew_limits_get: { kind: 'objects', checks: [{ type: 'session', verb: 'view', arg: 'session_id', notFound: 'No such session.' }] },
+    manager_message: { kind: 'objects', checks: [{ type: 'session', verb: 'operate', arg: 'session_id', notFound: 'No such session.' }] },
   });
+});
+
+/** The person's General Manager token (a `cpmt_`, minted at run time) for the manager session `gm`, which is running. */
+const managerToken = (h: Awaited<ReturnType<typeof build>>['h'], userId: string = FOUNDING_USER_ID, gm = 'gm1') => {
+  h.alive.add(gm);
+  return h.module.managers.mint({ userId, sessionId: gm })!.secret;
+};
+
+test('manager_message: the manager sends into a session its person may operate, as "General Manager", with the priority it names', async () => {
+  const { h, sent } = await build([session('s_lead'), session('gm1')]);
+  try {
+    owners({ s_lead: FOUNDING_USER_ID, gm1: FOUNDING_USER_ID });
+    const gm = managerToken(h);
+    const r = await h.call(gm, 'manager_message', { session_id: 's_lead', text: 'Dispatch a worker to T-1.\u0007', priority: 'next' });
+    assert.equal(r.result?.isError, undefined, JSON.stringify(r.raw));
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0]!.sessionId, 's_lead');
+    assert.equal(sent[0]!.text, 'Dispatch a worker to T-1.', 'control characters are dropped');
+    assert.equal(sent[0]!.opts.actorLabel, 'General Manager');
+    assert.equal(sent[0]!.opts.priority, 'next');
+    assert.match(r.result!.structuredContent.summary, /Sent to s_lead/);
+    // Without a priority none is passed (the controller's default, later).
+    await h.call(gm, 'manager_message', { session_id: 's_lead', text: 'Later.' });
+    assert.equal(sent[1]!.opts.priority, undefined);
+    // Never to itself.
+    assert.ok(refused(await h.call(gm, 'manager_message', { session_id: 'gm1', text: 'hi' })));
+    assert.equal(sent.length, 2);
+  } finally {
+    h.done();
+    clearResolvers();
+  }
+});
+
+test('manager_message refused: an operate, an admin and an agent token never send; only the manager does', async () => {
+  const { h, sent } = await build([session('s_lead')]);
+  try {
+    owners({ s_lead: FOUNDING_USER_ID });
+    for (const secret of [h.token('operate').secret, h.token('admin').secret, (await h.agentToken('docker/dev', 's_lead')).secret]) {
+      const r = await h.call(secret, 'manager_message', { session_id: 's_lead', text: 'hi' });
+      assert.ok(refused(r), JSON.stringify(r.raw));
+    }
+    // A person's operate token reaches the handler (can(operate) holds) and is refused there, by kind.
+    assert.match(JSON.stringify((await h.call(h.token('operate').secret, 'manager_message', { session_id: 's_lead', text: 'hi' })).raw), /Only the General Manager/);
+    assert.equal(sent.length, 0, 'nothing was sent');
+  } finally {
+    h.done();
+    clearResolvers();
+  }
+});
+
+test('manager_message denied: another person\'s session answers exactly like a missing one, and nothing is sent', async () => {
+  const { h, sent, reached } = await build([session('s_theirs')]);
+  try {
+    owners({ s_theirs: U_B, gm1: FOUNDING_USER_ID });
+    const gm = managerToken(h);
+    const theirs = await h.call(gm, 'manager_message', { session_id: 's_theirs', text: 'hi' });
+    assert.equal(theirs.result?.structuredContent.error.code, 'NOT_FOUND', JSON.stringify(theirs.raw));
+    assert.deepEqual(theirs.result, (await h.call(gm, 'manager_message', { session_id: 's_nosuch', text: 'hi' })).result);
+    assert.equal(reached.get, 0, 'the handler never saw a refused call');
+    assert.equal(sent.length, 0);
+    // That person's own manager reaches it: the denial is the seam's answer for this person, not a blanket refusal.
+    const theirManager = managerToken(h, U_B, 'gm2');
+    const ok = await h.call(theirManager, 'manager_message', { session_id: 's_theirs', text: 'hi' });
+    assert.equal(ok.result?.isError, undefined, JSON.stringify(ok.raw));
+    assert.equal(sent.length, 1);
+  } finally {
+    h.done();
+    clearResolvers();
+  }
 });

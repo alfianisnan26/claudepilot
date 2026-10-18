@@ -123,6 +123,7 @@ import type { HeldShare } from './identity/grants.js';
 import type { OidcClient } from './identity/oidc.js';
 import { identityRoutes } from './identity/routes.js';
 import { listLoops } from './platform/loops.js';
+import { managerHealer } from './manager/access.js';
 import { ManagerService } from './manager/service.js';
 import { SsoProviders } from './identity/sso.js';
 import { PortalTeams } from './identity/teams.js';
@@ -351,11 +352,11 @@ export function createApp(
     return c.json(success(status));
   });
 
-  const healManager = (ownerId: string) => {
-    const m = chatController.managerOf(ownerId);
-    if (!m || m.state === 'ended' || !portalMcp?.managers || portalMcp.managers.hasLive(m.id)) return;
-    void chatController.restart(m.id, { why: 'mcp', when: 'turn_end', actor: 'portal:manager', from: 'auto' }).catch(() => undefined);
-  };
+  const healManager = managerHealer({
+    managerOf: (ownerId) => chatController.managerOf(ownerId),
+    hasLive: portalMcp?.managers ? (id) => portalMcp.managers.hasLive(id) : undefined,
+    restart: (id, opts) => chatController.restart(id, opts),
+  });
   app.post(API.login, async (c) => {
     const key = clientKey(c);
     if (limiter.blocked(key)) throw new AppError('RATE_LIMITED', 'Too many tries. Wait a few minutes.');
