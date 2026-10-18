@@ -1462,8 +1462,9 @@ test('T-860 S2c: set -a, a for loop over a GIT_ name, GIT_ assigned by a paramet
 });
 
 // T-1092: a lead's python3 heredoc writing its own status file was refused as "a rule file is named": WRITE_API matched
-// open(p,'w') and the bare word "claude" matched "claudepilot-job-..." in the note's data. Fragments are rule-file paths now.
-test('T-1092: a heredoc writing a notes file whose text says claudepilot-job-x, ~/.claudepilot and claudes/ goes through', () => {
+// open(p,'w') and the bare word "claude" matched "claudepilot-job-..." in the note's data. Resolved by guidance, not by
+// loosening (every exemption tried was a write path to a rule file): still refused, and the message says to use Edit or Write.
+test('T-1092: the 04:33 status-file heredoc is refused with guidance to use the Edit or Write tool, never "a rule file is named"', () => {
   const notes = join(R.root, 'scratch', 'lead', 'notes');
   mkdirSync(notes, { recursive: true });
   const file = join(notes, 'status-lead.md');
@@ -1478,7 +1479,23 @@ test('T-1092: a heredoc writing a notes file whose text says claudepilot-job-x, 
     "open(p, 'w').write(txt)",
     'EOF',
   ].join('\n');
-  allowed(bash(command), 'the 04:33 status-file heredoc');
+  const res = bash(command);
+  refused(res, 'the 04:33 status-file heredoc');
+  assert.match(
+    res.stderr,
+    /names something like a rule file: claude\. To edit a notes or status file, use the Edit or Write tool, not inline code/,
+  );
+  assert.doesNotMatch(res.stderr, /rule file is named/);
+});
+
+// The way the guidance points: the Edit and Write tools on a notes file never reach inlineReason (only Bash code does), so
+// a note whose text says claude, settings, claudepilot-job-x or .claude/settings.json is written.
+test('T-1092: Edit and Write of a notes or status file go through whatever its text says', () => {
+  const file = join(R.root, 'scratch', 'lead', 'notes', 'status-lead.md');
+  mkdirSync(join(R.root, 'scratch', 'lead', 'notes'), { recursive: true });
+  const content = '# Status lead\n- claudepilot-job-x done; one.claude moved; the settings page; see .claude/settings.json\n';
+  allowed(run(R, 'Write', { file_path: file, content }), 'Write of the status file');
+  allowed(run(R, 'Edit', { file_path: file, old_string: 'done', new_string: 'claude settings allowlist' }), 'Edit of the status file');
 });
 
 test('T-1092: a heredoc that writes or names a rule file is still refused; a fragment hit says so in its own words', () => {
@@ -1524,9 +1541,19 @@ const T1092_BYPASSES: [string, string][] = [
   ["python 'claude-x'[:6]", py("p = '.' + 'claude-x'[:6] + '/x'\nopen(p,'w').write('{}')")],
   ['node slice(1,-1)', `node -e "require('fs').writeFileSync('.'+'zclaudez'.slice(1,-1)+'/x','{}')"`],
   ['ruby [1..6]', `ruby -e 'File.write("." + "zclaudez"[1..6] + "/x", "{}")'`],
+  // Re-review of afae35b2: the claudepilot / claudes/ exemption was itself a write path (~/.claude.json and the like).
+  ["python 'claudepilot'[:6] to .claude.json", py("p = '.'+'claudepilot'[:6]+'.'+'js'+'on'\nopen(p,'w').write('{}')")],
+  ["python .replace('pilot','')", py("p = '.claudepilot'.replace('pilot','') + '.' + 'js' + 'on'\nopen(p,'w').write('{}')")],
+  ["python 'claudes/'[:6]", py("p = '.' + 'claudes/'[:6] + '/x'\nopen(p,'w').write('{}')")],
+  ['node slice(0,6)', `node -e "require('fs').writeFileSync('.'+'claudepilot'.slice(0,6)+'.'+'js'+'on','{}')"`],
+  ["node .replace('pilot','')", `node -e "require('fs').writeFileSync('.claudepilot'.replace('pilot','')+'.'+'js'+'on','{}')"`],
+  ['ruby [0,6]', `ruby -e 'File.write("." + "claudepilot"[0,6] + "." + "js" + "on", "{}")'`],
+  ["ruby .sub('pilot','')", `ruby -e 'File.write(".claudepilot".sub("pilot", "") + "." + "js" + "on", "{}")'`],
+  ["glob('.claudepilot*')", py("import glob\nfor p in glob.glob('.claudepilot*'): open(p + '/x','w').write('{}')")],
+  ["os.chdir('claudes/c1/..')", py("import os\nos.chdir('claudes/c1/..')\nopen('x','w').write('{}')")],
 ];
-// The documented trade-off (coordinator decision): only claudepilot and claudes/ are exempt; any other claude or settings
-// in the data of code that writes keeps it refused. Such notes go through the Edit or Write tool.
+// The documented trade-off (coordinator decision): no word is exempt; any claude or settings in the data of code that
+// writes keeps it refused. Such notes go through the Edit or Write tool.
 test('T-1092: "one.claude" or "settings" in the data of a heredoc that writes is still refused', () => {
   for (const line of ['- one.claude run moved', '- the settings page is fine']) {
     const res = bash(py(`txt = '''${line}'''\nopen('notes.md', 'w').write(txt)`));

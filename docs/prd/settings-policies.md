@@ -1010,10 +1010,12 @@ create`), and any command that is not a known reader (`cat`, `grep`, `jq`, `git 
   when the command names one anywhere (data on stdin), when they read code from stdin while one is named, and when inline
   code writes a file and carries a piece of a rule file's name (`'.cla' + 'ude'`), a decoding call (base64, char codes,
   hex escapes), or the words claude, settings, mcp or allowlist anywhere in it (a word padded and cut out again,
-  `'zclaudez'[1:-1]`, shows nothing more). One exemption (T-1092): `claude` right before `pilot` or `s/`
-  (`claudepilot-job-x`, `~/.claudepilot/...`, `claudes/c2`) does not count, so a lead's status note naming its jobs is
-  written; any other `claude` or `settings` in the data (`one.claude`, `the settings page`) is still refused, and such a
-  note goes through the Edit or Write tool. Also refused, for code that writes: a quoted glob that could match a rule
+  `'zclaudez'[1:-1]`, shows nothing more), with no exemption. **T-1092 was resolved by guidance, not by loosening**: a
+  lead's python heredoc writing its status note was refused because the note's data said `claudepilot-job-x`; every
+  exemption tried (rule-file paths only, words glued to an edge, `claudepilot` and `claudes/`) was a write path to a rule
+  file in review (`'claudepilot'[:6]` + `'.json'` writes `~/.claude.json`). So the refusal stays, and its message says
+  what to do: "To edit a notes or status file, use the Edit or Write tool, not inline code" (those tools are checked by
+  path only, so a note's text never matters there). Also refused, for code that writes: a quoted glob that could match a rule
   file (`glob.glob('*/settings.*')`), a quoted piece of a protected path with a slash in it (`'/etc/' + 'claudepilot/...'`),
   `'CLAUDE_' + ...`, and a folder listing (`readdirSync`, `glob`, `listdir`) with a two-letter start (`startsWith('.c')`).
   These refusals have their own message ("the command writes a file and its text names something like a rule file:

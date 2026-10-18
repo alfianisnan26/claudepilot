@@ -55,13 +55,13 @@ const MENTION = /\.mcp\.json|\.claude\.json|check-allowlist|\/etc\/+claude-code|
 const DYNAMIC_WORDS = /claude|settings|\.mcp|mcp\.json|allowlist/i;
 // Rule-file path fragments, for the text of code that writes a file: shown first in the message, as the clearest word.
 const FRAGMENT_WORDS = /\.claude\/|\.claude\.json|settings(\.local)?\.json|\.mcp\.json|managed-settings|check-allowlist|\/etc\/+claude-code|\/etc\/+claudepilot|CLAUDE_CONFIG_DIR/i;
-// The bare words for the text of code that writes a file: the original loose set (a word cut from a longer string,
-// 'zclaudez'[1:-1], shows nothing more), with ONE exemption (T-1092, coordinator decision): claude right before "pilot" or
-// "s/" ("claudepilot-job-x", "~/.claudepilot/...", "claudes/c2") does not count. "one.claude" and "settings" still do.
-const INLINE_WORDS = /claude(?!pilot|s\/)|settings|\.mcp|mcp\.json|allowlist/i;
+// The bare words for the text of code that writes a file: the original loose set, with no exemption (T-1092). A word cut
+// from a longer string ('zclaudez'[1:-1], 'claudepilot'[:6], 'claudes/'[:6]) shows nothing more, so every exemption tried
+// was a write path to a rule file. A refusal tells the agent to use the Edit or Write tool for a notes file instead.
+const INLINE_WORDS = /claude|settings|\.mcp|mcp\.json|allowlist/i;
 // The narrow net of bare words for code that writes (T-1092 review): a word glued to a path, glob or quote edge
-// ('x.claude'.slice(1), '.claude*/settings*.json', 'CLAUDE_' + 'CONFIG_DIR'). Mostly inside INLINE_WORDS; kept because
-// it only refuses more ('claudepilot' + '*' is caught here, not there).
+// ('x.claude'.slice(1), '.claude*/settings*.json', 'CLAUDE_' + 'CONFIG_DIR'). Inside INLINE_WORDS today; kept because
+// it only refuses more, and it gives a clearer word in the message.
 const BARE_NET = /claude(?:[\/*?\[\]'"\x60]|\.(?=[\w*?\[]))|settings(?:[\/*?\[\]'"\x60_]|\.(?=[\w*?\[]))|allowlist|CLAUDE_['"\x60+]/i;
 // Code that lists a folder: with a quoted two-letter start of a rule file's name ('.c', '.m') it can find one.
 const LISTING = /glob|readdir|listdir|scandir|iterdir|os\.walk|opendir|Dir\.(children|entries|each|glob)/i;
@@ -322,7 +322,7 @@ function inlineReason(code) {
   if (MENTION.test(code)) return 'mention';
   const w = FRAGMENT_WORDS.exec(code) || INLINE_WORDS.exec(code);
   const word = w ? w[0].toLowerCase() : fragmentString(code) || bareNet(code);
-  if (word) return 'the command writes a file and its text names something like a rule file: ' + word;
+  if (word) return 'the command writes a file and its text names something like a rule file: ' + word + '. To edit a notes or status file, use the Edit or Write tool, not inline code';
   const d = OBFUSCATION.exec(code);
   if (d) return 'the command writes a file and its text decodes or hides a name: ' + d[0].toLowerCase();
   return null;
