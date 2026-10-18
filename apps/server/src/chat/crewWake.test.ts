@@ -10,7 +10,7 @@ import type { AgentCaps } from './agents.js';
 import { CREW_WAKE_MIN, crewWakeMs } from './crewReport.js';
 import { CREW_REPORT_ACTOR, type CrewVerdict } from './controller.js';
 import { ChatStore } from './store.js';
-import { line, liveSession, sleep, until, type Live } from './testkit.js';
+import { line, liveSession, ok, sleep, until, type Live } from './testkit.js';
 
 const CAPS: AgentCaps = { maxDepth: 1, maxChildren: 5, spawnsPerHour: 20, messagesPerHour: 40 };
 const MIN = 60_000;
@@ -45,15 +45,22 @@ async function worker(s: Live, title: string): Promise<{ id: string; tail: Live[
   return { id: made.id, tail: s.ws.tails.at(-1)! };
 }
 
-/** The lead's Claude takes the wake (its last message) as a turn and ends it: the lead is idle again from now. */
-async function leadTurn(s: Live): Promise<void> {
+const taskStarted = (taskId: string) =>
+  line({ type: 'system', subtype: 'task_started', task_id: taskId, tool_use_id: `toolu_${taskId}`, description: `task ${taskId}`, task_type: 'local_agent', is_backgrounded: true });
+const taskDone = (taskId: string) => line({ type: 'system', subtype: 'task_notification', task_id: taskId, tool_use_id: `toolu_${taskId}`, status: 'completed', summary: 'ok' });
+
+/** The lead's Claude takes its last message as a turn and ends it: the lead is idle again from now (or still shown working, its tasks running). */
+async function leadTurn(s: Live, shown: 'idle' | 'working' = 'idle'): Promise<void> {
   const csid = s.controller.get(s.id)!.claudeSessionId;
   const msg = s.controller.history(s.id).findLast((e) => e.kind === 'user')!;
+  const results = () => s.controller.history(s.id).filter((e) => e.kind === 'result').length;
+  const before = results();
   s.tail.push(line({ type: 'command_lifecycle', command_uuid: msg.uuid, state: 'started', uuid: randomUUID(), session_id: csid }));
+  if (shown === 'working') s.tail.push(taskStarted('a1')); // a sub-agent that outlives the turn
   s.tail.push(line({ type: 'assistant', message: { content: [{ type: 'text', text: 'On it.' }] }, parent_tool_use_id: null, uuid: randomUUID() }));
   s.tail.push(line({ type: 'command_lifecycle', command_uuid: msg.uuid, state: 'completed', uuid: randomUUID(), session_id: csid }));
   s.tail.push(resultLine(csid));
-  await until(() => s.controller.get(s.id)!.state === 'idle');
+  await until(() => results() > before && s.controller.get(s.id)!.state === shown);
   await sleep(20);
 }
 
@@ -183,6 +190,89 @@ test('T-1613: a worker (it has a parent) is never woken this way, even idle with
     assert.deepEqual(await s.controller.wakeLeads(), [s.id], 'the top-level lead, for its idle worker');
     assert.equal(s.controller.history(w.id).filter((e) => e.kind === 'user' && e.actorLabel === 'Crew wake').length, 0, 'never the worker');
   } finally {
+    await s.done();
+  }
+});
+
+test('T-1613 QA: no wake for a lead that is ended or interrupted (for integrity or a vanished process), nor one whose process is gone', async () => {
+  const s = await rig();
+  try {
+    await worker(s, 'Lane A');
+    s.verdicts.push({ id: 3, ticket: 'T-3', role: 'qa', verdict: 'pass' });
+    s.ahead(16 * MIN);
+    const lead = new ChatStore(s.store);
+
+    // Interrupted as the store writes it for a vanished process or an integrity stop: interrupted and gone.
+    lead.patchSession(s.id, { state: 'interrupted', process: 'gone' });
+    assert.deepEqual(await s.controller.wakeLeads(), [], 'interrupted, process gone');
+    // Each guard on its own (the rows below are out of step on purpose, so one guard alone decides).
+    lead.patchSession(s.id, { state: 'interrupted', process: 'live' });
+    assert.deepEqual(await s.controller.wakeLeads(), [], 'interrupted');
+    lead.patchSession(s.id, { state: 'idle', process: 'gone' });
+    assert.deepEqual(await s.controller.wakeLeads(), [], 'its process is gone');
+
+    lead.patchSession(s.id, { state: 'idle', process: 'live' });
+    await s.controller.end(s.id); // its worker keeps running (the default)
+    assert.equal(s.controller.get(s.id)!.state, 'ended');
+    assert.deepEqual(await s.controller.wakeLeads(), [], 'ended');
+    assert.equal(s.wakes().length, 0);
+  } finally {
+    await s.done();
+  }
+});
+
+test('T-1613 QA: no wake for a lead a person stopped, nor one with a sub-agent running', async () => {
+  const s = await rig();
+  try {
+    await worker(s, 'Lane A');
+    s.ahead(16 * MIN);
+
+    const stop = s.controller.control(s.id, 'stop');
+    s.tail.push(ok((await s.take('interrupt')).id));
+    await stop;
+    assert.equal(s.controller.get(s.id)!.state, 'idle');
+    assert.deepEqual(await s.controller.wakeLeads(), [], 'a person stopped it: the portal does not run it again');
+    assert.equal(s.wakes().length, 0);
+  } finally {
+    await s.done();
+  }
+  const t = await rig();
+  try {
+    await worker(t, 'Lane A');
+    // The lead's turn ends with a sub-agent still running: stored idle, shown working.
+    await t.controller.send(t.id, randomUUID(), 'Start a helper.');
+    await leadTurn(t, 'working');
+    assert.equal(t.controller.get(t.id)!.agentsRunning, 1);
+    t.ahead(16 * MIN);
+    assert.deepEqual(await t.controller.wakeLeads(), [], 'a sub-agent of it runs: it is busy');
+    t.tail.push(taskDone('a1'));
+    await until(() => t.controller.get(t.id)!.state === 'idle');
+    assert.deepEqual(await t.controller.wakeLeads(), [t.id], 'and once it is done, it is woken');
+  } finally {
+    await t.done();
+  }
+});
+
+test('T-1613 QA: no wake for a lead whose wake waits for a slot under the cap', async () => {
+  const s = await rig();
+  let send: Promise<unknown> | undefined;
+  try {
+    const w = await worker(s, 'Lane A');
+    // The worker works (so the cap has nothing to put to sleep) and the lead is asleep: a person's message must wait for a slot.
+    await s.controller.messageFamily(s.id, w.id, 'Go on.');
+    await until(() => s.controller.get(w.id)!.state === 'working');
+    new ChatStore(s.store).patchSession(s.id, { process: 'asleep' });
+    s.controller.liveCaps = () => ({ perWorkspace: 1, total: 10 });
+    send = s.controller.send(s.id, randomUUID(), 'Plan the next batch.').catch(() => undefined);
+    await until(() => !!s.controller.get(s.id)!.slotWait);
+    assert.equal(s.controller.get(s.id)!.state, 'idle', 'still idle: only the slot wait holds it');
+    s.verdicts.push({ id: 4, ticket: 'T-4', role: 'qa', verdict: 'pass' });
+    s.ahead(16 * MIN);
+    assert.deepEqual(await s.controller.wakeLeads(), [], 'waits for a slot');
+    assert.equal(s.wakes().length, 0);
+  } finally {
+    s.controller.liveCaps = undefined;
+    await send;
     await s.done();
   }
 });

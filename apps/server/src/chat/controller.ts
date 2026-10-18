@@ -4521,8 +4521,12 @@ export class ChatController {
         const row = this.#chat.row(leadId);
         const lead = this.#chat.get(leadId);
         if (!row || !lead || row.parent_id) continue;
-        if (lead.state !== 'idle' || lead.waiting > 0 || this.#chat.openRequests(leadId).length) continue; // busy, or waits on a person
-        if (row.process === 'gone' || this.#crewHeld.has(leadId) || this.#slotWaits.has(leadId)) continue;
+        // One guard a line (each has its test, T-1613 QA): an ended lead is also left out by the query.
+        if (lead.state !== 'idle') continue; // working, waiting, interrupted (for integrity too) or ended
+        if (lead.waiting > 0 || this.#chat.openRequests(leadId).length) continue; // waits on a person, whatever the state says
+        if (row.process === 'gone') continue; // a gone process is never relaunched for a wake
+        if (this.#crewHeld.has(leadId)) continue; // a person stopped it
+        if (this.#slotWaits.has(leadId)) continue; // its wake waits for a slot under the cap
         if (this.#busy.has(leadId) || this.#moving.has(leadId) || this.#restarting.has(leadId) || this.#chat.hasOpenInputs(leadId)) continue;
         if (this.#decorate(lead).state !== 'idle') continue; // a sub-agent of it still runs: it is working
         const since = this.#idleSince(row);
