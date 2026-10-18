@@ -195,7 +195,9 @@ const reporterRef = (c: { sessionId: string }) => `session:${c.sessionId}`;
 const LIST_MAX = 500;
 const USER_LABEL_MAX = 40;
 const OPEN_SQL = TICKET_OPEN_STATUSES.map((s) => `'${s}'`).join(', ');
-const CLOSED_SQL = TICKET_CLOSED_STATUSES.map((s) => `'${s}'`).join(', ');
+/** The refusal for a General Manager token that would close or reopen a ticket (close() and update(); #11136 b). */
+const MANAGER_NO_CLOSE = 'The General Manager does not close tickets: QA closes a ticket on its pass.';
+const CLOSED_SQL =TICKET_CLOSED_STATUSES.map((s) => `'${s}'`).join(', ');
 
 const invalid = (field: string, message: string) => new AppError('VALIDATION_FAILED', message, { details: { [field]: message } });
 const notFound = () => new AppError('NOT_FOUND', 'No such ticket.');
@@ -1483,6 +1485,9 @@ export class Tickets {
     }
     if (req.status !== undefined) {
       const v = oneOf(req.status, TICKET_STATUSES, 'status');
+      // The manager neither closes (done, wont_do) nor reopens through update: the same rule as close() (#11136 b, QA c691df71).
+      if (caller.kind === 'token' && caller.manager && v !== row.status && (isTicketClosed(v) || isTicketClosed(row.status)))
+        throw new AppError('FORBIDDEN', MANAGER_NO_CLOSE);
       if (isTicketClosed(v) && agent) throw invalid('status', 'Close a ticket with ticket_close, which records what was done.');
       if (isTicketClosed(row.status) && agent)
         throw new AppError('FORBIDDEN', `${ticketIdOf(row.number)} is closed. A person can reopen it.`);
@@ -1539,7 +1544,7 @@ export class Tickets {
   close(caller: Caller, id: string, req: Partial<CloseTicketRequest> = {}, opts: { sessionId?: string | null } = {}): TicketItem {
     const row = this.#need(caller, id);
     // A manager is not a QA session: QA closes on its pass (general-manager PRD §9.4, #11136 b). After #need, so a missing ticket stays NOT_FOUND.
-    if (caller.kind === 'token' && caller.manager) throw new AppError('FORBIDDEN', 'The General Manager does not close tickets: QA closes a ticket on its pass.');
+    if (caller.kind === 'token' && caller.manager) throw new AppError('FORBIDDEN', MANAGER_NO_CLOSE);
     const w = this.#writer(caller, opts.sessionId);
     const grant = this.#assertCanModify(caller, row, w);
     if (isTicketClosed(row.status)) throw new AppError('CONFLICT', `${ticketIdOf(row.number)} is already closed.`);

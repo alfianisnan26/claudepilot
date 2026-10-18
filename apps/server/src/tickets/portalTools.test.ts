@@ -145,6 +145,36 @@ test('a General Manager token (T-968, #11136 b): ticket_verdict and ticket_close
   }
 });
 
+test('a General Manager token (T-968, QA c691df71): ticket_update to done or wont_do, or reopening, is refused; an operate token does each', async () => {
+  const r = await rig();
+  try {
+    r.h.alive.add('gm1');
+    const m = r.h.module.managers.mint({ userId: 'u_alice', sessionId: 'gm1' })!;
+    const operate = r.h.token('operate');
+    const err = async (t: { secret: string }, args: Record<string, unknown>) => {
+      const e = (await r.h.call(t.secret, 'ticket_update', args)).result?.structuredContent?.error;
+      return e && { code: e.code, message: e.message };
+    };
+    const status = (id: string) => r.tickets.get(UI, id).status;
+    for (const n of [1, 2, 3, 4]) r.tickets.create(UI, { summary: `ticket ${n}` });
+    r.tickets.close(UI, 'T-3', { summary: 'Shipped.' });
+    for (const [id, to, before] of [['T-1', 'done', 'open'], ['T-2', 'wont_do', 'open'], ['T-3', 'open', 'done']] as const) {
+      const refused = await err(m, { id, status: to });
+      assert.equal(refused?.code, 'FORBIDDEN', `${id} → ${to}: ${JSON.stringify(refused)}`);
+      assert.match(String(refused?.message), /does not close tickets/, `${id} → ${to}`);
+      assert.equal(status(id), before, `${id} untouched by the manager`);
+      // The twin: an operate token (the same tool, a token caller without the manager flag) still makes the change.
+      assert.equal(await err(operate, { id, status: to }), undefined, `${id} → ${to} by an operate token`);
+      assert.equal(status(id), to, `${id} changed by the operate token`);
+    }
+    // A status that neither closes nor reopens stays open to it.
+    assert.equal(await err(m, { id: 'T-4', status: 'blocked' }), undefined);
+    assert.equal(status('T-4'), 'blocked');
+  } finally {
+    r.done();
+  }
+});
+
 test('the authorization matrix over MCP: another session’s ticket, a person’s, a closed one, another workspace, a read token', async () => {
   const r = await rig();
   try {
