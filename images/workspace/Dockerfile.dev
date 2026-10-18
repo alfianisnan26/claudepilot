@@ -22,7 +22,9 @@ RUN curl -fsSL -o /usr/local/bin/kubectl "https://dl.k8s.io/release/${KUBECTL_VE
 # folder belongs to node, so a repository pinned to another Playwright version still runs `npx playwright install chromium` and adds
 # its own revision beside this one (its system libraries are near enough the same; a missing one is an image change). The version
 # guard refuses anything but an exact x.y.z, and the build fails when no Chromium landed. docs/dev-session.md names the same version.
-ARG PLAYWRIGHT_VERSION=__PLAYWRIGHT_VERSION__
+# 1.62.1 is what konfersi-console's package-lock.json resolves @playwright/test to (125b0c0, wip/qa-ui14-stg-shots: the T-956/T-964
+# shots Jobs); konfersi-universe/e2e locks 1.63.0 (f9f4475). Override with --build-arg PLAYWRIGHT_VERSION=<x.y.z>.
+ARG PLAYWRIGHT_VERSION=1.62.1
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN echo "${PLAYWRIGHT_VERSION}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' \
     && mkdir -p "${PLAYWRIGHT_BROWSERS_PATH}" \

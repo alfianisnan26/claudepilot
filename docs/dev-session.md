@@ -157,8 +157,8 @@ scripts/image-build.sh --repo konfersi:<org>/<repo> --ref <branch> --dockerfile 
 scripts/job-run.sh --repo konfersi:<org>/<repo> --ref <branch> --image registry.int.isnan.me/konfersi/<name>:<tag> -- 'python -m pytest -q tests/'
 ```
 
-- **Playwright's Chromium is in the image (T-970):** the dev image bakes it with its system libraries for `playwright@__PLAYWRIGHT_VERSION__`
-  (`ARG PLAYWRIGHT_VERSION` in `images/workspace/Dockerfile.dev`, `PLAYWRIGHT_BROWSERS_PATH=/ms-playwright`). A repository on that
+- **Playwright's Chromium is in the image (T-970):** the dev image bakes it with its system libraries for `playwright@1.62.1`
+  (what konfersi-console locks for the shots Jobs; konfersi-universe/e2e locks 1.63.0; `ARG PLAYWRIGHT_VERSION` in `images/workspace/Dockerfile.dev`, `PLAYWRIGHT_BROWSERS_PATH=/ms-playwright`). A repository on that
   Playwright version runs `npx playwright test` at once, with no `npx playwright install`. On another version, keep
   `npx playwright install chromium` at the start of the command: it adds that version's browser beside the baked one (the folder
   belongs to `node`), a download each run, so move the repository to the baked version or the pin to the repository's. Images built
