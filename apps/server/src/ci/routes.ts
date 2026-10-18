@@ -13,6 +13,7 @@ import {
   type Actor,
   type BumpRequest,
   type CiApprovalRequest,
+  type CiBranchBackfillRequest,
   type CiReleaseReportSetting,
   type UpdateCiEnvironmentRequest,
   type UpdateCiAutoApproveRequest,
@@ -211,6 +212,12 @@ export function createCiRoutes(ci: CiService): Hono {
     if (req.setting && vaultId && /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(vaultId))
       requireVaultWrite(actor, vaultId, (v) => ci.vaultExists(v));
     return c.json(success(ci.setReleaseReport(id(c), req.setting, by)));
+  });
+  // T-1079 S3: the notes of the branch's last heads. The body is the count only; the vault and folder are the setting's.
+  app.post('/repos/:id/release-report/backfill', async (c) => {
+    person(may(c, 'manage', repoRef));
+    const req = await body<CiBranchBackfillRequest>(c);
+    return c.json(success(await ci.backfillBranchReport(id(c), req.count)));
   });
   app.post('/runs/:id/release-report', async (c) => {
     person(may(c, 'manage', runRef));

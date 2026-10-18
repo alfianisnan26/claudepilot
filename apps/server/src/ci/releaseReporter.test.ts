@@ -260,4 +260,8 @@ test('routes: the setting and the backfill are declared as a person with manage,
   // The only parameter the backfill takes is the run id in its path.
   assert.equal(post.checks[0]!.from, 'path');
   assert.equal(CI_API.runReleaseReport('run41').includes('vault'), false);
+  // T-1079 S3: the branch backfill is a person with manage on the remote, audited.
+  const back = CI_POLICIES['POST /api/ci/repos/:id/release-report/backfill'];
+  assert.deepEqual([back.checks[0]!.verb, back.checks[0]!.from, back.audit], ['manage', 'path', 'ci.release_report']);
+  assert.equal(CI_API.releaseReportBackfill('r1').includes('vault'), false);
 });

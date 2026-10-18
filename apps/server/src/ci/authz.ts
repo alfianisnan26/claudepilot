@@ -145,6 +145,7 @@ export const CI_POLICIES = {
   'GET /api/ci/repos/:id/release-report': repo('view'),
   'PUT /api/ci/repos/:id/release-report': { ...repo('manage'), audit: 'ci.release_report_setting' },
   'POST /api/ci/runs/:id/release-report': { ...run('manage'), audit: 'ci.release_report' },
+  'POST /api/ci/repos/:id/release-report/backfill': { ...repo('manage'), audit: 'ci.release_report' },
   'POST /api/ci/validate': { kind: 'signed-in' },
   // Runners (T-557): the list shows the workspaces the person may see (the handler filters). Making a workspace a runner sends other
   // workspaces' commits and secrets to it: manage on that workspace, a person only (the handler refuses tokens and agents), audited.

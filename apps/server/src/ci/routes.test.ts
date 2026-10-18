@@ -183,6 +183,15 @@ test('release report routes: person only, 404 on a vault the person may not writ
     assert.deepEqual((await call('a', 'GET', url)).data, ok.data);
     assert.deepEqual(audits.map((e) => [e.kind, e.actor, e.detail?.vault]), [['ci.release_report_setting', 'user:u_a', 'vmine']]);
 
+    // T-1079 S3, the branch backfill: a person with manage only, 404 for B, the count checked, 409 on a setting of kind pipeline.
+    const back = `${url}/backfill`;
+    for (const who of ['token', 'agent']) assert.equal((await call(who, 'POST', back, { count: 1 })).status, 403, `${who} backfill`);
+    assert.equal((await call('b', 'POST', back, { count: 1 })).status, 404);
+    for (const count of [0, 21, 'x']) assert.equal((await call('a', 'POST', back, { count })).status, 422, `count ${count}`);
+    const pipelineKind = await call('a', 'POST', back, {});
+    assert.equal(pipelineKind.status, 409, JSON.stringify(pipelineKind.error));
+    assert.match(pipelineKind.error!.message, /no release report of kind branch/);
+
     // The backfill: a person only, 404 for B, and 409 with the reason for a run that gets no report.
     const start = await call('a', 'POST', '/api/ci/runs', { repoId: repo.id, pipeline: 'deploy', ref: 'main' });
     assert.equal(start.status, 201, JSON.stringify(start.error));

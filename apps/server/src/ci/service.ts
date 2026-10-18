@@ -5,7 +5,10 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { AppError } from '@isnanme/core';
 import {
+  CI_BRANCH_BACKFILL_DEFAULT,
+  CI_BRANCH_BACKFILL_MAX,
   CI_REPO_NAME,
+  type CiBranchBackfillResult,
   type CiRunFlaky,
   isCiActive,
   parseTicketBranch,
@@ -2665,6 +2668,23 @@ export class CiService {
     });
     this.#changed();
     return setting;
+  }
+
+  /**
+   * The branch backfill (T-1079 S3): the notes of the last `count` heads of the branch the remote's setting of kind branch names, into that
+   * setting's vault. `count` is a whole number from 1 to CI_BRANCH_BACKFILL_MAX (422 otherwise); 409 with why when nothing can be reported.
+   */
+  async backfillBranchReport(repoId: string, count: unknown = CI_BRANCH_BACKFILL_DEFAULT): Promise<CiBranchBackfillResult> {
+    const repo = this.#cs.repo(repoId);
+    if (!repo || repo.removed_at) throw notFound('remote');
+    if (typeof count !== 'number' || !Number.isInteger(count) || count < 1 || count > CI_BRANCH_BACKFILL_MAX)
+      throw new AppError('VALIDATION_FAILED', 'Check the count.', { details: { count: `A whole number from 1 to ${CI_BRANCH_BACKFILL_MAX}.` } });
+    try {
+      return { written: await this.#branchReporter.backfill(repoId, count) };
+    } catch (e) {
+      if (e instanceof ReportRefused) throw new AppError('CONFLICT', e.message);
+      throw e;
+    }
   }
 
   /** The backfill: the report of a past run, into the vault the remote's own setting names. Refuses a run that does not qualify (409 with why). */

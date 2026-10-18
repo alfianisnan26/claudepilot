@@ -9,7 +9,7 @@ import { test } from 'node:test';
 import { BranchReporter, type BranchMove } from './branchReporter.js';
 import type { CiReply } from './host.js';
 import { NULL_SHA } from './plan.js';
-import type { ReleaseNoteSink, ReporterDeps } from './releaseReporter.js';
+import { ReportRefused, type ReleaseNoteSink, type ReporterDeps } from './releaseReporter.js';
 import type { Home } from './runner/testkit.js';
 import { harness, remote } from './testkit.js';
 
@@ -38,7 +38,7 @@ function memorySink() {
 type Audit = { kind: string; detail?: Record<string, unknown> };
 
 /** A remote row, the setting on it, and `cp` answering from a table of snapshots (a -> b -> c, c the new head). */
-function fakes(o: { setting?: unknown; upstream?: string | null; snapshots?: Record<string, CiReply>; changes?: CiReply; throwPut?: boolean } = {}) {
+function fakes(o: { setting?: unknown; upstream?: string | null; snapshots?: Record<string, CiReply>; changes?: CiReply; throwPut?: boolean; rev?: CiReply } = {}) {
   const row = {
     id: 'r1',
     name: 'konfersi-backend',
@@ -60,6 +60,7 @@ function fakes(o: { setting?: unknown; upstream?: string | null; snapshots?: Rec
       calls.push(args);
       if (args[0] === 'snapshot') return snapshots[args[2]!] ?? { ok: false, error: 'no_commit' };
       if (args[0] === 'changes') return o.changes ?? { ok: true, paths: ['src/app.ts', 'src/migrations/0042_course.sql'], truncated: false, ancestor: true };
+      if (args[0] === 'repo' && args[1] === 'rev') return o.rev ?? { ok: true, sha: sha('c') };
       return { ok: false };
     },
     tickets: { info: (id: string) => (id === 'T-84' ? { summary: 'Konfersi status', type: 'task', status: 'open' } : null) } as never,
@@ -149,6 +150,64 @@ test('a failed write is audited with a fixed code, never the error text, and nev
   assert.ok(!JSON.stringify(f.audits).includes('vault down'));
 });
 
+/* ---------- The backfill (S3) ---------- */
+
+/** c -> b -> a, `a` a root commit (readable, no parent). */
+const CHAIN: Record<string, CiReply> = {
+  [sha('c')]: { ok: true, parents: [sha('b'), sha('9')], author: { name: 'Satria', email: '' }, at: '2026-10-18T09:30:00+07:00', subject: "Merge pull request 'Add the course page' (#42) from feat/course into stg", message: "Merge pull request 'Add the course page' (#42) from feat/course into stg\n\nTicket: T-84" },
+  [sha('b')]: { ok: true, parents: [sha('a')], author: { name: 'Sekar', email: '' }, at: '2026-10-18T09:00:00+07:00', subject: 'Fix the login redirect', message: 'Fix the login redirect' },
+  [sha('a')]: { ok: true, parents: [], author: { name: 'Raka', email: '' }, at: '2026-10-17T08:00:00+07:00', subject: 'Start', message: 'Start' },
+};
+
+test('backfill: one note per first-parent step of the setting branch, oldest first, read only, stopping at a root commit', async () => {
+  const f = fakes({ snapshots: CHAIN });
+  const r = await f.reporter.backfill('r1', 5);
+  // Asked for 5, the branch has 2 steps above its root: 2 notes, b (a..b) then c (b..c).
+  assert.deepEqual(
+    r.map((x) => [x.path, x.created]),
+    [
+      [`Releases/konfersi-backend/2026-10-18-${sha('b').slice(0, 7)}.md`, true],
+      [`Releases/konfersi-backend/2026-10-18-${sha('c').slice(0, 7)}.md`, true],
+    ],
+  );
+  assert.deepEqual(f.calls[0], ['repo', 'rev', 'konfersi-backend', 'refs/heads/stg'], 'the head of the setting branch, from the mirror');
+  assert.ok(f.calls.every((c) => ['repo', 'snapshot', 'changes'].includes(c[0]!) && (c[0] !== 'repo' || c[1] === 'rev')), 'read-only commands only');
+  assert.match(f.notes.get(`v1:Releases/konfersi-backend/2026-10-18-${sha('b').slice(0, 7)}.md`)!, /- Commits: aaaaaaa\.\.bbbbbbb/);
+  assert.match(f.notes.get(NOTE)!, /- Commits: bbbbbbb\.\.ccccccc/);
+  assert.equal(f.notes.get('v1:Releases/README.md')!.split('\n').filter((l) => l.startsWith('- [[')).length, 2);
+  assert.deepEqual(f.audits.map((a) => [a.detail?.outcome, a.detail?.to]), [['written', sha('b')], ['written', sha('c')]]);
+
+  // count bounds the walk: 1 writes the head only. A rerun replaces the same note (idempotent).
+  const g = fakes({ snapshots: CHAIN });
+  assert.deepEqual((await g.reporter.backfill('r1', 1)).map((x) => x.path), [NOTE.slice(3)]);
+  assert.deepEqual((await g.reporter.backfill('r1', 1)).map((x) => [x.created, x.unchanged]), [[false, true]]);
+  assert.equal(g.notes.size, 2);
+});
+
+test('backfill is refused with nothing written: a pipeline setting, no setting, the branch not in the mirror, a commit that can not be read, a failed write', async () => {
+  const refused = async (o: Parameters<typeof fakes>[0], re: RegExp, id = 'r1') => {
+    const f = fakes(o);
+    await assert.rejects(f.reporter.backfill(id, 3), (e: unknown) => e instanceof ReportRefused && re.test(e.message));
+    assert.equal(f.notes.size, 0);
+  };
+  await refused({ setting: { pipeline: 'deploy', vaultId: 'v1', folder: 'Releases' } }, /no release report of kind branch/);
+  await refused({}, /no release report of kind branch/, 'nope');
+  await refused({ rev: { ok: false, error: 'no_ref' } }, /branch stg is not in the mirror yet/);
+  await refused({ rev: { ok: true, sha: 'HEAD' } }, /branch stg is not in the mirror yet/);
+  await refused({ snapshots: {} }, /Commit ccccccc can not be read/);
+  const f = fakes({ throwPut: true, snapshots: CHAIN });
+  await assert.rejects(f.reporter.backfill('r1', 1), /was not written \(see the audit\)/);
+  assert.deepEqual(f.audits.map((a) => a.detail?.code), ['write_failed']);
+  // The twin: the same remote with a branch setting and a readable chain writes.
+  assert.equal((await fakes({ snapshots: CHAIN }).reporter.backfill('r1', 3)).length, 2);
+});
+
+test('backfill: the vault and folder are the setting only', async () => {
+  const f = fakes({ setting: { kind: 'branch', branch: 'stg', vaultId: 'v2', folder: 'Konfersi/Releases' }, snapshots: CHAIN });
+  await f.reporter.backfill('r1', 1);
+  assert.deepEqual([...f.notes.keys()].sort(), [`v2:Konfersi/Releases/README.md`, `v2:Konfersi/Releases/konfersi-backend/2026-10-18-ccccccc.md`]);
+});
+
 /* ---------- The service, on real repositories ---------- */
 
 const URL_ = 'https://upstream.test/x.git';
@@ -210,6 +269,15 @@ test('the service: the first sync writes nothing; a merge into the branch writes
     await h.svc.syncUpstream(repo.id, BY);
     await h.svc.syncsSettled();
     assert.equal(puts.length, before);
+
+    // S3, the backfill on the real mirror: `repo rev` finds the head; the merge's note is the same path the sync wrote (replaced, not a second
+    // note; the content may differ only by the "seen by the portal" time).
+    const back = await h.svc.backfillBranchReport(repo.id, 1);
+    assert.deepEqual(back.written.map((w) => [`v1:${w.path}`, w.created]), [[noteKey, false]]);
+    assert.equal(notes.size, 2, 'no second note for the same head');
+    for (const bad of [0, 21, 1.5, '3', null]) await assert.rejects(h.svc.backfillBranchReport(repo.id, bad), /Check the count/, String(bad));
+    h.svc.setReleaseReport(repo.id, { pipeline: 'deploy', vaultId: 'v1', folder: 'Releases' }, BY);
+    await assert.rejects(h.svc.backfillBranchReport(repo.id, 1), /no release report of kind branch/);
     assert.ok(![...notes.values(), JSON.stringify(audits)].some((t) => t.includes(value)), 'the secret value is in no note and no audit row');
   } finally {
     h.done();

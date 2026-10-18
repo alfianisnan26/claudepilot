@@ -5,12 +5,12 @@
 // sync just created). Idempotent: the note's path is a function of (module, head), so a second report of the same head replaces it.
 // It never breaks the sync: the service calls `moved` without awaiting; a failure leaves an audit row with a fixed code, never a message.
 
-import { parseTicketTrailers, type CiReleaseReportResult } from '@portal/contracts';
+import { parseTicketTrailers, type CiBranchReleaseReport, type CiReleaseReportResult } from '@portal/contracts';
 import { branchNoteName, branchSummary, buildBranchReport, migrationPaths, upstreamWeb, type BranchCommit, type BranchFacts } from './branchReport.js';
 import type { CiReply } from './host.js';
 import { NULL_SHA } from './plan.js';
 import { REPORT_MAX_COMMITS, updateReadme, type ReportTicket } from './releaseReport.js';
-import { parseSetting, type ReporterDeps } from './releaseReporter.js';
+import { parseSetting, ReportRefused, type ReporterDeps } from './releaseReporter.js';
 import type { RepoRow } from './store.js';
 
 /** One branch the sync moved. */
@@ -44,6 +44,44 @@ export class BranchReporter {
     if (!repo || repo.removed_at || !setting || setting.kind !== 'branch' || baseline || !sink) return null;
     const m = moves.find((x) => x.branch === setting.branch);
     if (!m || !SHA.test(m.new) || !SHA.test(m.old) || m.old === NULL_SHA || m.old === m.new) return null;
+    return this.#report(repo, setting, m);
+  }
+
+  /**
+   * The backfill (T-1079 S3): the notes of the last `count` heads of the setting's branch, one per first-parent step (from its first parent
+   * to it), oldest first, as if the sync had seen each step. Read only on the remote's mirror; the vault and folder are the setting's only.
+   * Stops early at a root commit. Throws `ReportRefused` (the route's 409) when there is nothing to report from, or a note fails.
+   */
+  async backfill(repoId: string, count: number): Promise<CiReleaseReportResult[]> {
+    const { cs, cp, sink } = this.#deps;
+    const repo = cs.repo(repoId);
+    const setting = parseSetting(repo?.release_report);
+    if (!repo || repo.removed_at || !setting || setting.kind !== 'branch') throw new ReportRefused('This remote has no release report of kind branch.');
+    if (!sink) throw new ReportRefused('No vault is connected.');
+    const head: CiReply = await cp(repo.workspace_id, ['repo', 'rev', repo.name, `refs/heads/${setting.branch}`]).catch((): CiReply => ({ ok: false }));
+    const top = text(head, 'sha');
+    if (!top || !SHA.test(top)) throw new ReportRefused(`The branch ${setting.branch} is not in the mirror yet: sync the remote first.`);
+    const steps: BranchMove[] = [];
+    for (let at = top; steps.length < count; ) {
+      const s: CiReply = await cp(repo.workspace_id, ['snapshot', repo.name, at]).catch((): CiReply => ({ ok: false }));
+      if (!s.ok) throw new ReportRefused(`Commit ${at.slice(0, 7)} can not be read.`);
+      const parent = Array.isArray(s.parents) && typeof s.parents[0] === 'string' ? (s.parents[0] as string) : null;
+      if (!parent || !SHA.test(parent)) break; // a root commit: no earlier head to report from
+      steps.push({ branch: setting.branch, old: parent, new: at });
+      at = parent;
+    }
+    const written: CiReleaseReportResult[] = [];
+    for (const m of steps.reverse()) {
+      const r = await this.#report(repo, setting, m);
+      if (!r) throw new ReportRefused(`The note of ${m.new.slice(0, 7)} was not written (see the audit).`);
+      written.push(r);
+    }
+    return written;
+  }
+
+  async #report(repo: RepoRow, setting: CiBranchReleaseReport, m: BranchMove): Promise<CiReleaseReportResult | null> {
+    const sink = this.#deps.sink;
+    if (!sink) return null;
     const key = `${repo.id}:${m.new}`;
     if (this.#busy.has(key)) return null;
     this.#busy.add(key);

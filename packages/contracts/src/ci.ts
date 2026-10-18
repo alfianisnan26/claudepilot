@@ -620,7 +620,24 @@ export const CI_API = {
   releaseReport: (repoId: string) => `/api/ci/repos/${encodeURIComponent(repoId)}/release-report`,
   /** POST: write the release report of a past run (backfill) into the vault its remote's setting names; `CiReleaseReportResult` (a person with manage only; T-591). */
   runReleaseReport: (runId: string) => `/api/ci/runs/${encodeURIComponent(runId)}/release-report`,
+  /**
+   * POST `CiBranchBackfillRequest`: the notes of the last `count` heads of the branch a remote's setting of kind branch names, into the vault
+   * that setting names; `CiBranchBackfillResult` (a person with manage only; T-1079).
+   */
+  releaseReportBackfill: (repoId: string) => `/api/ci/repos/${encodeURIComponent(repoId)}/release-report/backfill`,
 } as const;
+
+/** T-1079: how many past heads of the branch to report (1 to `CI_BRANCH_BACKFILL_MAX`, default 5). Nothing else: the vault and folder are the setting's. */
+export interface CiBranchBackfillRequest {
+  count?: number;
+}
+export const CI_BRANCH_BACKFILL_MAX = 20;
+export const CI_BRANCH_BACKFILL_DEFAULT = 5;
+
+/** T-1079: the notes written, oldest first. Fewer than asked when the branch has fewer first-parent steps. */
+export interface CiBranchBackfillResult {
+  written: CiReleaseReportResult[];
+}
 
 /**
  * T-591 (D-69): where a remote's release reports go. Null on a remote: no reports. The vault and folder are never taken from a run or a tool call.
