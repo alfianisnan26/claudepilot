@@ -1062,6 +1062,34 @@ create`), and any command that is not a known reader (`cat`, `grep`, `jq`, `git 
   a `.git` file planted in a lane folder that points at the main repository; repository hooks; `cd M && git commit` (the cwd moves, not
   `-C`: a sibling rule); writes from inside the lane folder to other places (`worktree add /abs`, `archive -o`, `checkout-index --prefix`,
   `push M`), reads outside it, and `git -C <other-lane>` (a lane may reach a sibling lane: the ticket allows everything under the root).
+  **By subcommand and flags (T-974).** A text deny such as `git -C * restore*` cannot tell a subcommand from the words of a `-m`
+  message (a message that said "restore" or "clean" was refused), and `HEAD~1`, `grep -o` and `.env.example` matched other text
+  denies. So in a lane workspace a `git -C` (or `--git-dir`, `--work-tree`) line is read as an argv by the same lexer: the subcommand,
+  its flags and its words, quotes respected, short flag clusters split (`-an`, `-fD`), long options taken in full or as an unambiguous
+  start (`--no-ver`), and **the values of `-m`, `-F` and `--message` (commit, tag, merge, stash, notes) are never matched**. Refused:
+  `reset --hard`; `clean`; `restore` of the work tree (`--staged` alone passes); `checkout` or `switch` of `stg`, `main` or `uat`
+  (also `refs/heads/x`, `-b`, `-B`, `-c`, `-C`) and `--force`; `checkout` of paths (`--`, `.`, a commit and a path); `rebase`;
+  `branch -d`, `-D`, `--delete` and a forced move of a protected branch; `push` to `stg`, `main` or `uat`, `--force`, `-f`,
+  `--force-with-lease`, a `+refspec`, a `:branch` deletion, `--delete`, `--mirror`, `--prune`, `--all`; `commit -n` and `--no-verify`;
+  `--upload-pack`, `--receive-pack` and `--exec` on any of them; `clone -u`, `--config`, `--template`; `worktree remove`; and a
+  global `-c` (already refused before the subcommand). **Fail closed:** a value the guard cannot see (a variable, a command
+  substitution, backticks) in any word that is not a message value, a pattern in a destructive subcommand, an unclosed quote or a
+  trailing backslash next to `git` is refused. `;`, `&&` and `|` split the line into commands and each git command is read on its own.
+  A message from a substitution (`-m "$(cat <<EOF ...)"`) passes. **Config that redirects a push (T-974 FIX, blind review PWG
+  10575):** `git -C <lane> config` that SETS `remote.<name>.push`, `remote.<name>.url`, `remote.<name>.pushurl`, `push.*`,
+  `url.<base>.insteadOf` (and `pushInsteadOf`) or `branch.<name>.pushRemote` is refused, because it would turn a later bare
+  `git push` into a push to a protected branch; reading them (`config --get remote.origin.url`) passes. `alias.*` was and stays
+  refused (set or read), as are `core.*` keys that run a program, `include.*`, `credential.*` and `filter.*`.
+  **What is not read.** A plain `git <sub>` with no `-C` is left to the allow and deny rules (a prefix deny still works there); the
+  guard reads only lines with `-C`, `--git-dir` or `--work-tree`. Also not read, `pull --rebase`, a bare `git push` (the branch it
+  pushes is the current one) and every subcommand off this list: `merge`, `cherry-pick`, `revert`, `stash`, `tag`, `add`, `rm`, `mv`, `am`, `apply`, `reflog`, `gc`, `notes`. The policed ones are `reset`, `clean`,
+  `restore`, `checkout`, `switch`, `rebase`, `branch`, `push`, `commit`, `worktree`, `fetch`, `ls-remote`, `clone`, `pull` and,
+  from the blind re-check (10774), `remote`: `remote add`, `set-url`, `rename`, `remove`, `rm`, `set-branches` and `set-head` are refused (they
+  move where a push or fetch goes, like the `remote.*.url` keys), while `remote`, `remote -v`, `remote show` and `remote get-url` pass. The
+  tests also keep a mixed-case `-c Remote.origin.pushurl=…` row, so a later relaxation of the refusal of `-c` is caught.
+  **`commit --amend` is allowed**: a commit that was pushed can only be replaced by a force push, and a force push is refused.
+  Tests: `ruleGuard.test.ts` "T-974" (every refused form and the harmless shapes). The programs' text denies for these forms
+  become removable after a blind PASS (D-60); that is the coordinator's step.
   Tests: `settings/ruleGuard.test.ts` (T-860), which build a scratch lane root and give it to the guard by `CLAUDEPILOT_GUARD_GITC_ROOTS_FILE`
   (read only by the Node half, which the wrapper starts with an emptied environment, so a session cannot set it). Not yet observed in a
   running Claude Code in a lane pod; the coordinator's deny lines (T-860 stopgap) stay as the first layer.
