@@ -34,9 +34,12 @@ async function inBypass(s: Live, o: { lead?: boolean } = {}) {
   return lead;
 }
 
-/** Answers every mode switch (with the asked mode) and settings read on the newest tail until `p` settles. */
-async function answering<T>(s: Live, p: Promise<T>): Promise<T> {
-  const seen = new Set(controls(s.ws).map((c) => c.id));
+/**
+ * Answers every mode switch (with the asked mode) and settings read on the newest tail until `p` settles. `from`: answer the requests from
+ * that index on too, ones written before this was called (gate #459: the switch out of Bypass was written first, never answered, timed out).
+ */
+async function answering<T>(s: Live, p: Promise<T>, from?: number): Promise<T> {
+  const seen = new Set(controls(s.ws).slice(0, from).map((c) => c.id));
   let settled = false;
   p.then(
     () => (settled = true),
@@ -240,6 +243,7 @@ test('T-1094: lost touch, then an attach (exit 3) to the same process in Bypass 
     await answering(
       s,
       sending.then(() => until(() => asks().length > 0)).then(() => sleep(100)),
+      before,
     );
 
     const row = s.controller.get(lead.id)!;
