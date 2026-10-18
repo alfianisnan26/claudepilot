@@ -279,7 +279,8 @@ export class AppPortProxy {
     if (!this.d.suffix || !host) return false;
     const h = host.toLowerCase().replace(/:\d{1,5}$/, '');
     const tail = `.${this.d.suffix}`;
-    return h.endsWith(tail) && h.slice(0, -tail.length).startsWith('app-');
+    // Any `<digits>-…` label is the proxy's, a malformed one too (an out-of-range port answers 404 here, never the portal's pages).
+    return h.endsWith(tail) && /^\d+-/.test(h.slice(0, -tail.length));
   }
 
   /** The app host's grant for this request (cookie for this exact host, the portal session alive, the seam still says `operate`); else null. */

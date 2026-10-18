@@ -2,6 +2,7 @@ import type { AccountHealthState, CheckResult } from '@portal/contracts';
 import type { OutboxEvent } from '../delivery/outbox.js';
 import type { Store } from '../store/store.js';
 import { assertReachableHost, authHeaders, redact } from './check.js';
+import { loop } from '../platform/loops.js';
 
 /** Claude Code 2.1.296's default model: probes measure the model group workspaces use (PRD §11.2). */
 export const DEFAULT_PROBE_MODEL = 'claude-opus-5-5';
@@ -200,7 +201,7 @@ export class AccountHealthService {
   }
 
   start() {
-    this.#timer = setInterval(() => this.#tick(), 15_000);
+    this.#timer = setInterval(loop('accounts.health', 15_000, 'Account pool: key and sign-in health checks').wrap(() => this.#tick()), 15_000);
     this.#timer.unref();
   }
 

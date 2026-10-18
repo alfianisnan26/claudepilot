@@ -104,6 +104,7 @@ import { agentBundle } from './connect/bundle.js';
 import { wireConnect } from './workspaces/connect/wire.js';
 import type { Runtime } from './workspaces/runtime.js';
 import { AppPorts, routeAppHostUpgrades } from './appports/index.js';
+import { loop } from './platform/loops.js';
 
 // A background task that rejects (a module reading a table a frozen database doesn't have, a probe, a scan) must not
 // take the portal down with every open terminal: log it and carry on. Synchronous throws still stop the process.
@@ -152,7 +153,7 @@ const dailyBackup = () =>
     (e: unknown) => console.error(`[store] daily backup failed: ${(e as Error).message}`),
   );
 dailyBackup();
-const backupTimer = setInterval(dailyBackup, 60 * 60 * 1000);
+const backupTimer = setInterval(loop('store.backup', 60 * 60 * 1000, 'Daily database backup (checked hourly)').wrap(dailyBackup), 60 * 60 * 1000);
 backupTimer.unref();
 
 const portal = new Portal(config.serverCode, config.session.ttlMs);

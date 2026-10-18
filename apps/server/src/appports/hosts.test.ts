@@ -2,7 +2,7 @@
 // workspace can only ever reach its loopback: the address is a literal, the port an integer in range, and Connect targets answer 501.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { appPortHost, isAppPortNext, parseAppPortHost } from '@portal/contracts';
+import { appHostSlug, appPortHost, isAppPortNext, parseAppPortHost } from '@portal/contracts';
 import type { ExecSession, Runtime } from '../workspaces/runtime.js';
 import { BRIDGE, NotOnThisTarget, bridgeCommand, createDialer } from './dial.js';
 import { AppPortGrants } from './grants.js';
@@ -10,34 +10,44 @@ import { AppPortProxy } from './proxy.js';
 
 const S = 'apps.test';
 
-test('parseAppPortHost: only app-<slug>-<port>.<suffix>, port 1024-65535', () => {
-  assert.deepEqual(parseAppPortHost('app-ws-1-8080.apps.test', S), { slug: 'ws-1', port: 8080 });
-  assert.deepEqual(parseAppPortHost('APP-WS-1-8080.Apps.Test:3000', S), { slug: 'ws-1', port: 8080 });
-  assert.deepEqual(parseAppPortHost('app-kohi-event-8765.apps.test', S), { slug: 'kohi-event', port: 8765 });
+test('parseAppPortHost: only <port>-<rest>.<suffix>, a 4- or 5-digit port in range (owner, 2026-10-18)', () => {
+  assert.deepEqual(parseAppPortHost('8080-ws-1.apps.test', S), { rest: 'ws-1', port: 8080 });
+  assert.deepEqual(parseAppPortHost('8080-WS-1.Apps.Test:3000', S), { rest: 'ws-1', port: 8080 });
+  assert.deepEqual(parseAppPortHost('8765-tradingbot-isnan-pod.apps.test', S), { rest: 'tradingbot-isnan-pod', port: 8765 });
   for (const bad of [
-    'app-ws-1-80.apps.test', // below 1024
-    'app-ws-1-65536.apps.test', // above the range
-    'app-ws-1-08080.apps.test', // leading zero
-    'app-ws-1.apps.test', // no port
-    'app--8080.apps.test', // no slug
-    'app-ws-1-8080.evil.test', // another suffix
-    'app-ws-1-8080.apps.test.evil.test', // the suffix in the middle
-    'x.app-ws-1-8080.apps.test', // two labels
-    'app-ws_1-8080.apps.test', // not a label
+    '80-ws-1.apps.test', // below 1024
+    '65536-ws-1.apps.test', // above the range
+    '08080-ws-1.apps.test', // leading zero
+    'ws-1.apps.test', // no port
+    '8080.apps.test', // no workspace
+    '8080--ws.apps.test', // an empty part is no label at its start
+    '8080-ws-1.evil.test', // another suffix
+    '8080-ws-1.apps.test.evil.test', // the suffix in the middle
+    'x.8080-ws-1.apps.test', // two labels
+    '8080-ws_1.apps.test', // not a label
+    'app-ws-1-8080.apps.test', // the old form
     'pilot.apps.test',
     'apps.test',
     '127.0.0.1:8080',
     '',
   ])
     assert.equal(parseAppPortHost(bad, S), null, bad);
-  assert.equal(parseAppPortHost('app-ws-1-8080.apps.test', undefined), null, 'feature off');
+  assert.equal(parseAppPortHost('8080-ws-1.apps.test', undefined), null, 'feature off');
 });
 
-test('appPortHost: the name lowercased; null for a name that is no label', () => {
-  assert.equal(appPortHost('Tradingbot', 8765, S), 'app-tradingbot-8765.apps.test');
-  assert.equal(appPortHost('my.ws', 8080, S), null);
-  assert.equal(appPortHost('my_ws', 8080, S), null);
+test('appPortHost: <port>[-<app>]-<workspace>, from slugs; appHostSlug makes a label of a name', () => {
+  assert.equal(appPortHost('isnan-pod', 8765, S), '8765-isnan-pod.apps.test');
+  assert.equal(appPortHost('isnan-pod', 8765, S, 'tradingbot'), '8765-tradingbot-isnan-pod.apps.test');
+  assert.equal(appHostSlug('Trading Bot!'), 'trading-bot');
+  assert.equal(appHostSlug('isnan-pod'), 'isnan-pod');
+  assert.equal(appHostSlug('my.ws_1'), 'my-ws-1');
+  assert.equal(appHostSlug('  --  '), null);
+  assert.equal(appHostSlug(undefined), null);
+  assert.equal(appPortHost('my.ws', 8080, S), null, 'not a slug');
   assert.equal(appPortHost('ws', 80, S), null);
+  assert.equal(appPortHost('w'.repeat(40), 8080, S, 'a'.repeat(30)), null, 'over 63 characters');
+  // What is built reads back as the same port.
+  assert.deepEqual(parseAppPortHost(appPortHost('isnan-pod', 8765, S, 'tradingbot'), S), { rest: 'tradingbot-isnan-pod', port: 8765 });
 });
 
 test('isAppPortNext: a path only; a scheme, // or a backslash is refused', () => {
@@ -95,7 +105,7 @@ test('the dialer: Kubernetes, Docker and local get the bridge; a Connect target 
   await assert.rejects(range('docker/ws-1', 22), RangeError);
 });
 
-test('owns: the proxy takes app-* hosts under the suffix only, and nothing when the feature is off', () => {
+test('owns: the proxy takes <port>-* hosts under the suffix only, and nothing when the feature is off', () => {
   const deps = {
     grants: new AppPortGrants(),
     dial: async () => assert.fail('no dial'),
@@ -103,11 +113,12 @@ test('owns: the proxy takes app-* hosts under the suffix only, and nothing when 
     deniedPorts: new Set<number>(),
   };
   const on = new AppPortProxy({ ...deps, suffix: S });
-  assert.equal(on.owns('app-ws-1-8080.apps.test'), true);
-  assert.equal(on.owns('app-ws-1-8080.apps.test:3000'), true);
-  assert.equal(on.owns('app-x.apps.test'), true, 'malformed app host: the proxy 404s it, never the portal');
+  assert.equal(on.owns('8080-ws-1.apps.test'), true);
+  assert.equal(on.owns('8080-ws-1.apps.test:3000'), true);
+  assert.equal(on.owns('8080-x_y.apps.test'), true, 'malformed app host: the proxy 404s it, never the portal');
   assert.equal(on.owns('pilot.apps.test'), false);
-  assert.equal(on.owns('app-ws-1-8080.evil.test'), false);
+  assert.equal(on.owns('app-ws-1-8080.apps.test'), false, 'the old form is not an app host');
+  assert.equal(on.owns('8080-ws-1.evil.test'), false);
   assert.equal(on.owns(undefined), false);
   const off = new AppPortProxy({ ...deps, suffix: undefined });
   assert.equal(off.enabled, false);

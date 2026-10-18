@@ -73,3 +73,20 @@ test('codes and cookies are random and differ every time', () => {
   assert.notEqual(a, b);
   assert.match(a, /^[A-Za-z0-9_-]{43}$/);
 });
+
+test('list and revoke (owner, 2026-10-18): the open app sessions, with when they began and were last used; a revoked one is refused at once', () => {
+  let now = 1_000_000;
+  const g = new AppPortGrants({ now: () => now });
+  const grant = { workspaceId: 'kubernetes/kohi-event', port: 8765, host: '8765-isnan-pod.apps.test', sessionToken: 's', actor: { kind: 'owner' } as never, portalOrigin: 'https://pilot.apps.test', scheme: 'https' as const };
+  const r = g.redeem(g.mint(grant).code, grant.host)!;
+  now += 5000;
+  g.lookup(r.cookie, grant.host);
+  const [row] = g.list();
+  assert.deepEqual([row!.workspaceId, row!.port, row!.host, row!.createdAt, row!.lastUsedAt], ['kubernetes/kohi-event', 8765, grant.host, 1_000_000, 1_005_000]);
+  assert.match(row!.id, /^[A-Za-z0-9_-]{16}$/);
+  assert.ok(!JSON.stringify(g.list()).includes(r.cookie), 'no cookie value in the list');
+  assert.equal(g.revoke('not-an-id'), false);
+  assert.equal(g.revoke(row!.id), true);
+  assert.equal(g.lookup(r.cookie, grant.host), null, 'refused at once');
+  assert.deepEqual(g.list(), []);
+});

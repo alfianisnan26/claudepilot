@@ -8,6 +8,7 @@ import { GLANCE_WIDGETS } from '@/features/glance/registry';
 import { moveInOrder } from '@/features/glance/settings';
 import type { GlanceWidget } from '@/features/glance/types';
 import { GlanceSkeleton } from '@/features/glance/widgets/shared/states';
+import { HomeModeSwitch, ManagerMode, readHomeMode, readManagerSession, saveHomeMode, saveManagerSession, type HomeMode } from './ManagerMode';
 import { DEFAULT_HOME, orderCards, resetHomeSettings, updateHomeSettings, useHomeSettings } from './settings';
 
 /** The widgets that have a Home card. */
@@ -23,17 +24,41 @@ export function HomePage() {
   const s = useHomeSettings();
   const cards = orderCards(CARDS, s);
   const [arranging, setArranging] = useState(false);
+  // D-80 / T-968 S3: Dashboard | Manager, remembered on this device.
+  const [mode, setModeState] = useState<HomeMode>(readHomeMode);
+  const [managerId, setManagerId] = useState<string | null>(readManagerSession);
+  const setMode = (m: HomeMode) => (setModeState(m), saveHomeMode(m));
+  const pickManager = (id: string | null) => (setManagerId(id), saveManagerSession(id));
+  const header = (
+    <PageHeader
+      title={mode === 'manager' ? 'Manager' : 'Home'}
+      description={
+        mode === 'manager'
+          ? 'Your General Manager: the one chat for the whole pilot. Switch back to the dashboard at any time.'
+          : 'What needs you and how things stand, at a glance. Arrange hides and orders the cards on this device.'
+      }
+      action={
+        <div className="flex items-center gap-2">
+          <HomeModeSwitch mode={mode} onMode={setMode} />
+          {mode === 'dashboard' && (
+            <Button variant="ghost" size="sm" icon={<SlidersHorizontal className="size-4" />} onClick={() => setArranging(true)} aria-label="Arrange cards" title="Arrange cards">
+              <span className="max-sm:sr-only">Arrange</span>
+            </Button>
+          )}
+        </div>
+      }
+    />
+  );
+  if (mode === 'manager')
+    return (
+      <>
+        {header}
+        <ManagerMode sessionId={managerId} onPick={pickManager} onBack={() => setMode('dashboard')} />
+      </>
+    );
   return (
     <>
-      <PageHeader
-        title="Home"
-        description="What needs you and how things stand, at a glance. Arrange hides and orders the cards on this device."
-        action={
-          <Button variant="ghost" size="sm" icon={<SlidersHorizontal className="size-4" />} onClick={() => setArranging(true)} aria-label="Arrange cards" title="Arrange cards">
-            <span className="max-sm:sr-only">Arrange</span>
-          </Button>
-        }
-      />
+      {header}
       {cards.length === 0 ? (
         <EmptyState
           icon={<House className="size-6" />}

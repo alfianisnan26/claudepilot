@@ -54,6 +54,7 @@ import { runCanary, type CanaryHooks, type CanaryOutcome, type CanaryTarget } fr
 import { canaryChecks } from './canary/checks.js';
 import { buildReport, canaryWarnings, flagsOf, parseDoctor, testedSet, unacceptedFailures, workspaceWarnings } from './info.js';
 import { ClaudeVersionStore, verdictOf, type HistoryRow } from './store.js';
+import { loop } from '../platform/loops.js';
 
 /** A canary this fresh counts for an Apply; older, or from an older suite, must be run again. */
 const CANARY_FRESH_MS = 7 * 86_400_000;
@@ -817,7 +818,8 @@ export class ClaudeVersions {
     void this.#removeLeftovers();
     this.#first = setTimeout(() => void this.#tick(), this.deps.scheduleDelayMs ?? SCHEDULE_FIRST_DELAY_MS);
     this.#first.unref();
-    this.#timer = setInterval(() => void this.#tick(), SCHEDULE_TICK_MS);
+    const run = loop('claudeversion.schedule', SCHEDULE_TICK_MS, 'Claude Code version: scheduled applies and the canary').wrap(() => this.#tick());
+    this.#timer = setInterval(() => void run(), SCHEDULE_TICK_MS);
     this.#timer.unref();
   }
 

@@ -36,7 +36,7 @@ const fresh = () => randomBytes(32).toString('base64url');
 
 export class AppPortGrants {
   readonly #codes = new Map<string, AppGrant & { expiresAt: number }>();
-  readonly #cookies = new Map<string, AppGrant & { expiresAt: number }>();
+  readonly #cookies = new Map<string, AppGrant & { expiresAt: number; createdAt?: number; lastUsedAt?: number }>();
   readonly #now: () => number;
   readonly codeTtlMs: number;
   readonly cookieTtlMs: number;
@@ -79,7 +79,7 @@ export class AppPortGrants {
       portalOrigin: g.portalOrigin,
       scheme: g.scheme,
     };
-    this.#cookies.set(hash(cookie), { ...grant, expiresAt: this.#now() + this.cookieTtlMs });
+    this.#cookies.set(hash(cookie), { ...grant, expiresAt: this.#now() + this.cookieTtlMs, createdAt: this.#now(), lastUsedAt: this.#now() });
     return { cookie, grant, maxAgeS: Math.floor(this.cookieTtlMs / 1000) };
   }
 
@@ -98,8 +98,43 @@ export class AppPortGrants {
       this.#cookies.delete(hash(cookie));
       return null;
     }
-    return g.host === host.toLowerCase() ? g : null;
+    if (g.host !== host.toLowerCase()) return null;
+    g.lastUsedAt = this.#now();
+    return g;
   }
+
+  /**
+   * The open app sessions (owner, 2026-10-18: "list of running browser proxy session"): one per app host cookie that still lives. `id` is the
+   * first 16 characters of the cookie's hash: enough to revoke it, nothing to sign in with.
+   */
+  list(): { id: string; workspaceId: string; port: number; host: string; actor: Actor; createdAt: number | null; lastUsedAt: number | null; expiresAt: number }[] {
+    this.#sweep();
+    return [...this.#cookies].map(([k, g]) => ({
+      id: k.slice(0, 16),
+      workspaceId: g.workspaceId,
+      port: g.port,
+      host: g.host,
+      actor: g.actor,
+      createdAt: g.createdAt ?? null,
+      lastUsedAt: g.lastUsedAt ?? null,
+      expiresAt: g.expiresAt,
+    }));
+  }
+
+  /** Ends one app session by its `list` id: the next request with that cookie is refused. Returns whether one was found. */
+  revoke(id: string): boolean {
+    if (!/^[A-Za-z0-9_-]{16}$/.test(id)) return false;
+    for (const k of this.#cookies.keys())
+      if (k.startsWith(id)) {
+        this.#cookies.delete(k);
+        this.onRevoke?.(k);
+        return true;
+      }
+    return false;
+  }
+
+  /** Called after a revoke with the grant's key (the proxy may cut that grant's open sockets). */
+  onRevoke: ((key: string) => void) | undefined;
 
   /** Drops every cookie of a workspace (it was removed or renamed). */
   forgetWorkspace(workspaceId: string): void {

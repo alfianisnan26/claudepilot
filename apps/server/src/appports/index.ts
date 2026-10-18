@@ -3,6 +3,7 @@ import {
   APP_PORT_AUTH_PATH,
   APP_PORT_MAX,
   APP_PORT_MIN,
+  appHostSlug,
   appPortHost,
   isAppPortNext,
   type AppPortItem,
@@ -149,7 +150,7 @@ export class AppPorts {
   async open(
     target: string,
     name: string,
-    req: { port?: unknown; path?: unknown },
+    req: { port?: unknown; path?: unknown; name?: unknown },
     who: { actor: Actor; actorString: string; userId: string | null; sessionToken: string; portalOrigin: string },
   ): Promise<OpenAppPortResult> {
     if (!this.enabled) throw new AppError('NOT_FOUND', 'Not found.');
@@ -161,15 +162,26 @@ export class AppPorts {
     const path = req.path === undefined ? '/' : req.path;
     if (typeof path !== 'string' || !isAppPortNext(path))
       throw new AppError('VALIDATION_FAILED', 'A path on the app, starting with /.', { details: { path: 'Not a path.' } });
+    if (req.name !== undefined && req.name !== null && (typeof req.name !== 'string' || req.name.length > 40))
+      throw new AppError('VALIDATION_FAILED', 'A short app name.', { details: { name: 'At most 40 characters.' } });
+    const app = typeof req.name === 'string' && req.name.trim() ? appHostSlug(req.name) : null;
+    if (typeof req.name === 'string' && req.name.trim() && !app)
+      throw new AppError('VALIDATION_FAILED', 'An app name with letters or digits.', { details: { name: 'Letters, digits and dashes.' } });
     const workspaceId = `${target}/${name}`;
     const all = await this.d.workspaces.list();
-    if (!all.some((w) => w.id === workspaceId)) throw new AppError('NOT_FOUND', 'Not found.');
-    if (all.filter((w) => w.name.toLowerCase() === name.toLowerCase()).length > 1)
-      throw new AppError('CONFLICT', 'Another workspace has the same name on another target: an app host needs a name of its own.');
+    const me = all.find((w) => w.id === workspaceId);
+    if (!me) throw new AppError('NOT_FOUND', 'Not found.');
+    // The host names the workspace by its label (owner, 2026-10-18: isnan-pod, not kohi-event), else by its name. Two workspaces with the
+    // same slug can't both have app hosts: refused, never guessed.
+    const slugOf = (w: { name: string; label?: string }) => appHostSlug(w.label) ?? appHostSlug(w.name);
+    const slug = slugOf(me);
+    if (!slug) throw new AppError('CONFLICT', 'This workspace’s name can’t be a host name. Give it a label with letters or digits.');
+    if (all.filter((w) => slugOf(w) === slug).length > 1)
+      throw new AppError('CONFLICT', `Another workspace is also called ${slug}: an app host needs a name of its own. Rename one of them.`);
     const origin = new URL(who.portalOrigin);
     const scheme = origin.protocol === 'https:' ? 'https' : 'http';
-    const bare = appPortHost(name, port, this.d.suffix!);
-    if (!bare) throw new AppError('CONFLICT', 'This workspace’s name can’t be a host name (a dot or an underscore in it).');
+    const bare = appPortHost(slug, port, this.d.suffix!, app);
+    if (!bare) throw new AppError('CONFLICT', 'The app and workspace names are too long for a host name (63 characters). Use a shorter app name.');
     const host = origin.port ? `${bare}:${origin.port}` : bare;
     const { code, expiresAt } = this.grants.mint({
       workspaceId,
@@ -185,7 +197,7 @@ export class AppPorts {
       actor: who.actorString,
       userId: who.userId,
       subject: this.d.workspaces.resolve(workspaceId)?.id ?? workspaceId,
-      detail: { workspace: workspaceId, port },
+      detail: { workspace: workspaceId, port, host: bare },
     });
     const q = new URLSearchParams({ code, next: path });
     return { url: `${scheme}://${host}${APP_PORT_AUTH_PATH}?${q.toString()}`, host, expiresAt: new Date(expiresAt).toISOString() };

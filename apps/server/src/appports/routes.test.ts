@@ -44,7 +44,7 @@ const wsDeps = {
     };
   },
   list: async () => [
-    { id: 'kubernetes/kohi-event', name: 'kohi-event' },
+    { id: 'kubernetes/kohi-event', name: 'kohi-event', label: 'isnan-pod' },
     { id: 'docker/other', name: 'other' },
   ],
   hooks: { audit: (e: (typeof audits)[number]) => void audits.push(e) },
@@ -111,16 +111,17 @@ test('the owner opens a port: a URL on the app host with a one-time code, audite
   const r = await call(app, 'POST', OPEN, { origin: `https://${PORTAL}`, body: { port: 8765, path: '/dash' } });
   assert.equal(r.status, 200);
   const url = new URL(String(r.json.data?.url));
-  assert.equal(url.host, `app-kohi-event-8765.${SUFFIX}`);
+  // Owner, 2026-10-18: the host names the workspace by its label (isnan-pod), not its key (kohi-event).
+  assert.equal(url.host, `8765-isnan-pod.${SUFFIX}`);
   assert.equal(url.protocol, 'https:');
   assert.equal(url.pathname, '/__pilot/auth');
   assert.equal(url.searchParams.get('next'), '/dash');
   assert.match(url.searchParams.get('code') ?? '', /^[A-Za-z0-9_-]{43}$/);
-  assert.equal(r.json.data?.host, `app-kohi-event-8765.${SUFFIX}`);
+  assert.equal(r.json.data?.host, `8765-isnan-pod.${SUFFIX}`);
   assert.equal(grants.size.codes, before + 1);
   assert.equal(audits.length, 1);
   assert.equal(audits[0]!.kind, 'workspace.port.open');
-  assert.deepEqual(audits[0]!.detail, { workspace: 'kubernetes/kohi-event', port: 8765 });
+  assert.deepEqual(audits[0]!.detail, { workspace: 'kubernetes/kohi-event', port: 8765, host: `8765-isnan-pod.${SUFFIX}` });
   assert.doesNotMatch(JSON.stringify(audits), new RegExp(url.searchParams.get('code')!), 'the code is never in the audit row');
 });
 
@@ -170,7 +171,7 @@ test('a seam denial is the same 404 on the open and the list, and mints nothing'
 
 test('an app host’s Origin (or any foreign one) is refused on portal mutations', async () => {
   const before = grants.size.codes;
-  for (const origin of [`https://app-kohi-event-8765.${SUFFIX}`, `https://app-other-3001.${SUFFIX}`, 'https://evil.test']) {
+  for (const origin of [`https://8765-isnan-pod.${SUFFIX}`, `https://3001-other.${SUFFIX}`, 'https://evil.test']) {
     const open = await call(app, 'POST', OPEN, { origin, body: { port: 8765 } });
     assert.equal(open.status, 403, origin);
     const stop = await call(app, 'POST', '/api/workspaces/kubernetes/kohi-event/stop', { origin, body: {} });
@@ -185,4 +186,14 @@ test('off (no suffix): the list says so, the open is 404', async () => {
   assert.equal(list.status, 200);
   assert.deepEqual(list.json.data, { enabled: false, ports: [] });
   assert.equal((await call(off, 'POST', OPEN, { origin: `https://${PORTAL}`, body: { port: 8765 } })).status, 404);
+});
+
+test('an app name goes in the host (8765-tradingbot-isnan-pod); a name with no letters or digits, or over 40 characters, is refused', async () => {
+  const named = await call(app, 'POST', OPEN, { origin: `https://${PORTAL}`, body: { port: 8765, name: 'Trading Bot' } });
+  assert.equal(named.status, 200, JSON.stringify(named.json));
+  assert.equal(named.json.data?.host, `8765-trading-bot-isnan-pod.${SUFFIX}`);
+  const blank = await call(app, 'POST', OPEN, { origin: `https://${PORTAL}`, body: { port: 8765, name: '  ' } });
+  assert.equal(blank.json.data?.host, `8765-isnan-pod.${SUFFIX}`, 'a blank name is no name');
+  assert.equal((await call(app, 'POST', OPEN, { origin: `https://${PORTAL}`, body: { port: 8765, name: '!!!' } })).status, 422);
+  assert.equal((await call(app, 'POST', OPEN, { origin: `https://${PORTAL}`, body: { port: 8765, name: 'x'.repeat(41) } })).status, 422);
 });

@@ -8,6 +8,7 @@ import { useNotifyWhenDone } from '@/features/notify/sessionFlag';
 import { usePersonaOf } from '@/features/personas/identities';
 import { errorText } from '@/lib/api';
 import { pinnedToViewport, useVisualViewport } from '@/lib/viewport';
+import { SessionsSidebar } from './SessionsSidebar';
 import { AgentsPanel, AgentsSheet } from './AgentsPanel';
 import { chatApi } from './api';
 import { DividerMark } from '@/features/autotransfer/DividerMark';
@@ -79,8 +80,10 @@ function savedDetails(): boolean {
  * socket for as long as it's mounted. A send, resume or change refused because the session's folder
  * needs trust asks first ("Trust this folder?") and runs again once trusted.
  */
-export function SessionPage() {
-  const { id = '' } = useParams();
+export function SessionPage({ sessionId, onBack }: { sessionId?: string; onBack?: () => void } = {}) {
+  // Home's Manager mode (T-968 S3) shows a session in place: its id comes in, and Back goes to the dashboard.
+  const params = useParams();
+  const id = sessionId ?? params.id ?? '';
   const navigate = useNavigate();
   const toast = useToast();
   const { connected, events, paging, loadOlder, loadWhole, delta, agentLive, session, removed, inputs, outbox, tasks, btw, btwAsk, btwCancel, btwClose, btwPin, send, respond, control, stop, end } =
@@ -471,13 +474,24 @@ export function SessionPage() {
             >
               {/* Bypass is on: the whole bar is tinted until it's off. */}
               {bypass && <span aria-hidden="true" className="pointer-events-none absolute inset-0 -z-10 rounded-full bg-danger/10" />}
-              <Link
-                to="/admin/sessions"
-                aria-label="Back to sessions"
-                className="press flex size-11 shrink-0 items-center justify-center rounded-full text-ink-soft hover:bg-ink/[0.07] hover:text-ink"
-              >
-                <ArrowLeft className="size-[18px]" />
-              </Link>
+              {onBack ? (
+                <button
+                  type="button"
+                  onClick={onBack}
+                  aria-label="Back to the dashboard"
+                  className="press flex size-11 shrink-0 items-center justify-center rounded-full text-ink-soft hover:bg-ink/[0.07] hover:text-ink"
+                >
+                  <ArrowLeft className="size-[18px]" />
+                </button>
+              ) : (
+                <Link
+                  to="/admin/sessions"
+                  aria-label="Back to sessions"
+                  className="press flex size-11 shrink-0 items-center justify-center rounded-full text-ink-soft hover:bg-ink/[0.07] hover:text-ink"
+                >
+                  <ArrowLeft className="size-[18px]" />
+                </Link>
+              )}
               <button
                 type="button"
                 onClick={() => setInfoOpen(true)}
@@ -752,6 +766,12 @@ export function SessionPage() {
         {wide && !gone && panel === 'files' && btwLayout.mode !== 'panel' && (
           <aside id="files-panel" aria-label="Files" className="flex w-[360px] shrink-0 flex-col border-l border-line bg-bg pt-[var(--safe-top)]">
             <FilesPanel key={id} sessionId={id} view={filesView} onView={setFilesView} onClose={toggleFiles} closeLabel="Hide files" />
+          </aside>
+        )}
+        {/* T-947: the other sessions, when no panel takes the right side, on wide screens (1280 px and up). */}
+        {!panel && btwLayout.mode !== 'panel' && (
+          <aside aria-label="Sessions" className="hidden w-[280px] shrink-0 flex-col border-l border-line bg-bg pt-[var(--safe-top)] xl:flex">
+            <SessionsSidebar currentId={id} />
           </aside>
         )}
       </div>
