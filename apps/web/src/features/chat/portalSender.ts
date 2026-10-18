@@ -24,6 +24,7 @@ export function portalSender(actor: string, label: string | undefined): PortalSe
   if (ci) return { kind: 'ci', id, who: !label || label === 'CI' ? 'CI' : label.startsWith('#') ? `CI ${label}` : `CI · ${label}` };
   // Session delegation: a person the session was shared with, named by their account's email.
   if (head === 'account') return { kind: 'account', id, who: label ?? 'a shared account' };
+  if (head === 'manager') return { kind: 'account', id, who: 'your General Manager' };
   // T-294: the portal's one-line news about a lead's workers (actor portal:crew), not an MCP client.
   if (actor === 'portal:crew') return { kind: 'crew', id: '', who: 'your crew' };
   return { kind: 'mcp', id: '', who: label ? `MCP client “${label}”` : 'an MCP client' };

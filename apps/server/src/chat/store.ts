@@ -490,6 +490,10 @@ export class ChatStore {
     spawnWhy?: string | null;
     /** T-561: its starter marked it a crew lead (stored 1; otherwise null). */
     lead?: boolean;
+    /** T-968: the person's General Manager (one per person, never listed); absent: a workspace session. */
+    kind?: 'manager';
+    /** T-968: whose manager it is (`u_owner` for the server code's person). */
+    ownerId?: string;
   }): ChatSession {
     const now = this.#stamp();
     const db = this.#writable();
@@ -497,8 +501,8 @@ export class ChatStore {
     db.prepare(
       `INSERT INTO chat_sessions (id, workspace_id, cwd, title, origin, state, state_since, created_at, last_activity_at, claude_id, predecessor_id,
            ticket_id, parent_id, started_by, worktree_path, worktree_branch, worktree_repo, claude_session_id, bypass_capable, continued_from, agent,
-           max_workers, subagents, folder_branch, spawn_why, lead)
-         VALUES (?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           max_workers, subagents, folder_branch, spawn_why, lead, kind, owner_id)
+         VALUES (?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       opts.id,
       this.#refs ? this.#refs.storedRef(opts.workspaceId) : opts.workspaceId,
@@ -525,6 +529,8 @@ export class ChatStore {
       opts.worktree ? null : (opts.folderBranch ?? null),
       why,
       opts.lead === true ? 1 : null,
+      opts.kind === 'manager' ? 'manager' : 'workspace',
+      opts.ownerId ?? 'u_owner',
     );
     // Its first run: on its Claude, under its own id.
     db.prepare(`INSERT INTO chat_segments (session_id, n, claude_id, claude_session_id, cwd, started_at) VALUES (?, 1, ?, ?, ?, ?)`).run(
@@ -535,6 +541,19 @@ export class ChatStore {
       now,
     );
     return this.get(opts.id)!;
+  }
+
+  /** T-968: the person's General Manager session (the newest that is not ended), or null. */
+  managerOf(ownerId: string): ChatSession | null {
+    const r = this.#db()
+      .prepare("SELECT * FROM chat_sessions WHERE kind = 'manager' AND owner_id = ? ORDER BY (state = 'ended'), created_at DESC LIMIT 1")
+      .get(ownerId) as ChatSessionRow | undefined;
+    return r ? this.toSession(this.#keyed(r)) : null;
+  }
+
+  /** T-968: whether a session is a General Manager. */
+  isManager(id: string): boolean {
+    return !!this.#db().prepare("SELECT 1 FROM chat_sessions WHERE id = ? AND kind = 'manager'").get(this.resolveId(id));
   }
 
   /** The id a chat goes by now: a folded session's old id (an alias) resolves to the chat that took it in. */
@@ -564,7 +583,8 @@ export class ChatStore {
 
   /** Sessions, newest activity first; optionally one workspace's, one ticket's, or one parent's children. */
   list(filter: { workspaceId?: string; ticketId?: string; parentId?: string } = {}): ChatSession[] {
-    const where: string[] = [];
+    // T-968: a General Manager is never in a list (Sessions, session_list, crews, widgets); Home is its only door.
+    const where: string[] = ["kind != 'manager'"];
     const vals: string[] = [];
     if (filter.workspaceId) {
       const one = this.#inWorkspace(filter.workspaceId);
@@ -591,7 +611,7 @@ export class ChatStore {
     filter: { workspaceId?: string; ticketId?: string; parentId?: string } = {},
     args: { cursor?: string | undefined; limit?: unknown; keep?: (s: ChatSession) => boolean } = {},
   ): CursorPage<ChatSession> {
-    const where: string[] = [];
+    const where: string[] = ["kind != 'manager'"];
     const params: string[] = [];
     if (filter.workspaceId) {
       const one = this.#inWorkspace(filter.workspaceId);

@@ -6,7 +6,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -83,6 +83,10 @@ case $args in
   *" logs deploy/"*) cat "$FAKE/portal.log" 2>/dev/null || echo '[store] ready (portal 1234abcd, schema 610)'; [ -f "$FAKE/portal.log.next" ] && mv "$FAKE/portal.log.next" "$FAKE/portal.log"; true ;;
   # The new portal pod's start (the chats job's window, T-277 layer 4): a file, or now.
   *" get pods "*"startTime"*) cat "$FAKE/started" 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ ;;
+  # The pre-pull (2026-10-18): the portal's node, and its Job, which succeeds unless the test says the pull keeps failing.
+  *" get pods "*"spec.nodeName"*) printf 'k3s-node2' ;;
+  *" create -f -"*) cat > "$FAKE/prepull.yaml" ;;
+  *" get job claudepilot-prepull-"*) if [ -f "$FAKE/prepull-fails" ]; then printf '/9'; else printf '1/'; fi ;;
   *" get pods "*) printf '0 ' ;;
   *" get job "*) if [ -f "$FAKE/build-fails" ]; then printf '/1'; else printf '1/'; fi ;;
   *" logs job/"*) echo "kaniko: pushing"; [ -f "$FAKE/leak" ] && echo "auth: $(cat "$FAKE/token")"; true ;;
@@ -685,4 +689,24 @@ test('the whole pipeline through the CI service and the real runner: gate, build
     console.log = realLog;
     h.done();
   }
+});
+
+test('pre-pull (2026-10-18): the new portal image is pulled onto the portal\'s node before the push; a pull that keeps failing deploys nothing', () => {
+  const w = world();
+  assert.equal(w.run('gate').code, 0);
+  assert.equal(w.run('build', { images: 'portal' }).code, 0);
+  writeFileSync(join(w.root, 'prepull-fails'), '');
+  const refused = w.run('release');
+  assert.notEqual(refused.code, 0);
+  assert.match(refused.out, /could not be pulled onto k3s-node2 \(9 tries\): nothing was deployed, the portal keeps running/);
+  assert.equal(w.main(), w.base, 'main never moved: the old portal keeps running');
+  const job = readFileSync(join(w.root, 'prepull.yaml'), 'utf8');
+  assert.match(job, /nodeName: k3s-node2/);
+  assert.match(job, new RegExp(`image: registry\\.int\\.isnan\\.me/claudepilot/portal:${today().replace(/\./g, '\\.')}-2`));
+  assert.match(job, /backoffLimit: 8/);
+  rmSync(join(w.root, 'prepull-fails'));
+  const release = w.run('release');
+  assert.equal(release.code, 0, release.out);
+  assert.match(release.out, /the new image is on k3s-node2/);
+  assert.notEqual(w.main(), w.base, 'released once the image is there');
 });

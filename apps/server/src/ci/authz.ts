@@ -174,6 +174,8 @@ export function declareCiPolicies(): void {
   // The tools filter to the caller's own runs themselves (an agent: its branch, its ticket, its session's runs). None approves.
   declareToolPolicies('ci', {
     ci_runs_list: { kind: 'signed-in', filter: 'ci_run' },
+    // T-968 S2a (general-manager PRD §9.1): the runs that deploy, each kept only when can(view) on it holds; read only, approves nothing.
+    deploy_status: { kind: 'signed-in', filter: 'ci_run' },
     ci_run_get: { kind: 'objects', checks: [{ type: 'ci_run', verb: 'view', arg: 'id', notFound: NO_RUN }] },
     ci_run_logs: { kind: 'objects', checks: [{ type: 'ci_run', verb: 'view', arg: 'id', notFound: NO_RUN }] },
     ci_validate: { kind: 'signed-in' },

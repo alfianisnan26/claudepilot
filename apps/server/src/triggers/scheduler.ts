@@ -5,12 +5,15 @@
 // timer drives the runner's minute watch and the daily retention sweep.
 
 import type { TriggerEventFacts } from '@portal/contracts';
+import { defineLoop } from '../schedules/registry.js';
 import { nextRunIso } from './cron.js';
 import type { TriggerRunner } from './runner.js';
 import type { TriggerRecord, TriggerStore } from './store.js';
-import { loop } from '../platform/loops.js';
 
 export const TICK_MS = 30_000;
+
+/** Its heartbeat in the schedules registry (T-968 S2b). A tick that finds the database locked still beats: the loop is alive. */
+export const CRON_LOOP = defineLoop({ name: 'triggers-cron', module: 'triggers', intervalMs: TICK_MS, description: 'Fires the cron triggers that are due; the runner\'s minute watch; daily retention.' });
 /** A due time older than this was missed rather than reached late by one tick. */
 export const MISSED_AFTER_MS = 90_000;
 
@@ -37,22 +40,28 @@ export class TriggerScheduler {
 
   start(): void {
     if (this.#timer) return;
-    const run = loop('triggers.cron', TICK_MS, 'Cron triggers: start the runs that are due').wrap(() => this.tick());
-    this.#timer = setInterval(() => void run(), TICK_MS);
+    CRON_LOOP.started(this.#now());
+    this.#timer = setInterval(() => void this.tick(), TICK_MS);
     this.#timer.unref?.();
     void this.tick();
   }
 
   stop(): void {
+    if (this.#timer) CRON_LOOP.stopped();
     if (this.#timer) clearInterval(this.#timer);
     this.#timer = null;
   }
 
   /** One tick. Returns the triggers it fired (tests). */
   async tick(): Promise<string[]> {
-    if (this.#busy || this.d.runner.locked()) return [];
+    if (this.#busy) return [];
+    if (this.d.runner.locked()) {
+      CRON_LOOP.ok(this.#now());
+      return [];
+    }
     this.#busy = true;
     const fired: string[] = [];
+    let failed: unknown = null;
     try {
       this.#ticks++;
       // Every other tick (a minute): the minutes limit and expired approvals; once a day (2,880 ticks): retention.
@@ -75,10 +84,13 @@ export class TriggerScheduler {
         fired.push(t.id);
       }
     } catch (e) {
+      failed = e;
       console.error(`[triggers] the cron tick failed: ${(e as Error).message}`);
     } finally {
       this.#busy = false;
     }
+    if (failed) CRON_LOOP.fail(failed, this.#now());
+    else CRON_LOOP.ok(this.#now());
     return fired;
   }
 

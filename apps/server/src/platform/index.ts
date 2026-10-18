@@ -20,6 +20,7 @@ import { createPlatformRoutes } from './routes.js';
 import { createTriggersModule } from '../triggers/index.js';
 import { createAutoTransferModule } from '../autotransfer/index.js';
 import { createKeepGoingModule } from '../keepgoing/index.js';
+import { createSchedulesModule } from '../schedules/index.js';
 
 export type { PlatformOwner, PlatformActor } from './owner.js';
 export type { PlatformAudit } from './audit.js';
@@ -152,6 +153,8 @@ export function createPlatform(deps: PlatformDeps): Platform {
   platform.register(createAutoTransferModule(platform));
   // T-259: Keep going, the watchdog inside the portal.
   platform.register(createKeepGoingModule(platform));
+  // T-968 S2b: the one list of loops and cron triggers (general-manager PRD §9.2).
+  platform.register(createSchedulesModule(platform));
 
   return platform;
 }

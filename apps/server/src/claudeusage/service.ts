@@ -31,6 +31,7 @@ import {
   type UsageSummary,
 } from '@portal/contracts';
 import { isUsageRange } from '../chat/usage.js';
+import { defineLoop } from '../schedules/registry.js';
 import type { Store } from '../store/store.js';
 import type { ExecSession } from '../workspaces/runtime.js';
 import { ALERT_RANK, alertLevelOf, headroomOf, stateOf, viewWindows, withLimitReport } from './derive.js';
@@ -105,6 +106,8 @@ const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 export const TICK_MS = 15_000;
 const FIRST_TICK_MS = 20_000;
+/** The probe pass's heartbeat in the schedules registry (T-968 S2b). A pass with probes off still beats: the loop is alive. */
+export const USAGE_LOOP = defineLoop({ name: 'usage-probe', module: 'claudeusage', intervalMs: TICK_MS, description: 'Probes the plan limits of the Claudes that are due.' });
 const PRUNE_EVERY_MS = 6 * HOUR;
 /** A Claude found signed out, or on a key, is looked at again this rarely (nothing changes until someone signs in). */
 const SETTLED_MS = HOUR;
@@ -198,9 +201,11 @@ export class ClaudeUsageMonitor {
     const prune = setInterval(() => this.#prune(), PRUNE_EVERY_MS);
     for (const t of [first, every, prune]) t.unref();
     this.#timers = [first, every, prune];
+    USAGE_LOOP.started();
   }
 
   stop(): void {
+    if (this.#timers.length) USAGE_LOOP.stopped();
     for (const t of this.#timers) clearTimeout(t);
     this.#timers = [];
   }
@@ -261,7 +266,10 @@ export class ClaudeUsageMonitor {
     if (this.#ticking) return;
     this.#ticking = true;
     try {
-      if (!this.#settings.probes || !this.#active()) return;
+      if (!this.#settings.probes || !this.#active()) {
+        USAGE_LOOP.ok();
+        return;
+      }
       const list = await this.#list(true);
       const now = this.#now();
       const due = list
@@ -272,7 +280,9 @@ export class ClaudeUsageMonitor {
         if (this.#busy.has(c.workspaceId)) continue;
         void this.#probe(c);
       }
+      USAGE_LOOP.ok();
     } catch (e) {
+      USAGE_LOOP.fail(e);
       this.#warn('the probe pass', e);
     } finally {
       this.#ticking = false;

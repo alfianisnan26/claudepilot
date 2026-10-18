@@ -56,6 +56,8 @@ bump=$(git rev-parse HEAD)
 # 0. The chats this restarts (T-277 layer 4): which are attached to a live process, into chats.env and this log, and a bounded wait while one is
 #    answering a control request the portal asked (any change to the manifest restarts the portal: the workspace tag is its env too).
 record_chats
+# 0b. The new portal image is on the portal's node before anything restarts (pre-pull, lib.sh).
+[ -n "$PORTAL_TAG" ] && prepull "$DEPLOY_REGISTRY/$(registry_repo portal):$PORTAL_TAG"
 # 1. The deploy: the release commit to main alone (it fast-forwards main: main is an ancestor of the run's commit). Nothing else can make it
 #    fail: a push to the run's branch during the approval no longer matters here (T-95).
 if [ -n "${PILOT_BRANCH:-}" ] && [ "$PILOT_BRANCH" != "$DEPLOY_MAIN" ]; then

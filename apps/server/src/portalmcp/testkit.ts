@@ -50,6 +50,7 @@ export async function portalMcpHarness(opts: HarnessOptions = {}) {
     limits: opts.limits,
     now: opts.now,
     agentHost: { alive: (id) => alive.has(id), url: () => 'http://172.18.0.1:3105/mcp' },
+    managerAlive: (id) => alive.has(id),
   });
   if (!opts.off) module.settings.update({ enabled: true });
 

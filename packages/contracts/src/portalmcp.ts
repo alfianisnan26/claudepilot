@@ -56,6 +56,13 @@ export const PORTAL_TOKEN_PREFIX = 'cpat_';
  */
 export const PORTAL_AGENT_TOKEN_PREFIX = 'cpst_';
 
+/**
+ * The General Manager's token (T-968 S1, general-manager PRD §4): minted for the person's one `kind = 'manager'` session, only in
+ * that process's environment, hashed at rest, at most 7 days. It acts as the person (their `can()`, resolved at use time), never
+ * authenticates a web route, and is revoked on disable, remove and any sign-out of the person, on any device.
+ */
+export const PORTAL_MANAGER_TOKEN_PREFIX = 'cpmt_';
+
 export const PORTAL_TOKEN_LABEL_MAX = 60;
 
 /** An admin's token as the UI lists it. The secret itself is shown once, at creation. */

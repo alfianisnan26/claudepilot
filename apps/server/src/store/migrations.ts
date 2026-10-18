@@ -3443,6 +3443,33 @@ export const MIGRATIONS: Migration[] = [
     },
   },
   {
+    version: 793,
+    name: 'chat sessions: the General Manager kind, its owner, one per person, and its cpmt_ tokens (T-968 S1)',
+    up(db) {
+      // T-968 S1 (general-manager PRD §2, §4). Every existing row is a workspace session owned by the founding user (multi-user adoption
+      // rule 4, as the other owner_id columns). The partial unique index holds "one manager per person" in the database, not only in code.
+      // cpmt_ tokens: hashed like cpst_, bound to the person (user_id) and the manager session, at most 7 days.
+      db.exec(`
+        ALTER TABLE chat_sessions ADD COLUMN kind TEXT NOT NULL DEFAULT 'workspace' CHECK (kind IN ('workspace', 'manager'));
+        ALTER TABLE chat_sessions ADD COLUMN owner_id TEXT NOT NULL DEFAULT 'u_owner';
+        CREATE UNIQUE INDEX chat_sessions_one_manager ON chat_sessions (owner_id) WHERE kind = 'manager';
+        CREATE TABLE pmcp_manager_tokens (
+          id TEXT PRIMARY KEY,
+          token_hash TEXT NOT NULL UNIQUE,
+          user_id TEXT NOT NULL,
+          session_id TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          expires_at TEXT NOT NULL,
+          last_used_at TEXT,
+          revoked_at TEXT,
+          revoked_reason TEXT
+        ) STRICT;
+        CREATE INDEX pmcp_manager_tokens_user ON pmcp_manager_tokens (user_id) WHERE revoked_at IS NULL;
+        CREATE INDEX pmcp_manager_tokens_session ON pmcp_manager_tokens (session_id) WHERE revoked_at IS NULL;
+      `);
+    },
+  },
+  {
     version: 400,
     name: 'identity: email accounts and the login throttle (T-118 MU1-min)',
     up(db) {

@@ -1,10 +1,8 @@
 # orchestrator status (2026-10-18 02:45 UTC, session 355881a3; older entries: git history)
 
 ## DONE
-- Batch 33 LANDED ~02:40: T-974 f70d333c. Gate claudepilot-gate-dc259a2-2c40 GREEN on dc259a25. SLIP (mine): integration
-  moved during the gate (coordinator af45f95a, 7ef4feca, a862d367, 43bcc89c), and I pushed the merge 76bdc9d0 WITHOUT
-  re-gating it (my chained command didn't stop on the non-empty diff). Re-gate b2j1ii0mf on 76bdc9d0 running. Do not
-  deploy 76bdc9d0 until it is green: told on T-731 11163, self-report T-595 11166.
+- Batch 33 LANDED: T-974 f70d333c. Slip (pushed 76bdc9d0 before its re-gate; T-595 11166) closed: re-gate GREEN 03:00,
+  hold lifted on T-731 11206. Flaky unavailable.s2.test.ts:75 -> T-1076.
 - Batch 32 LANDED 22:54 (74599ece): T-382 S6, T-294 FIX1, T-1049. Batch 31 / T-948 live: close on live checks.
 - T-860 S2c on integration (a87d00b8); the realpath guard side is the coordinator's. Older batches: git history.
 
@@ -12,8 +10,8 @@
 - T-425 S2b+gaps 12acb9ed PASS (T-595 11065), testkit.ts conflict: ticket/T-425-s2b-int a3f79dd5 -> 3753d3c2 -> b34.
   After landing: FOR THE COORDINATOR remove the text-matching `git -C` denies (T-974).
 - T-980 (repos_list filter; worktree_create by path through can()) a3554d40, worked slice -> QA + blind.
-- BATCH 34: premerge/b34 1b8482cf = b33 + T-971 H1 fdd38c6b (PASS #10967) + T-976 d68ab35c (blind PWG #11125, 11135;
-  lead read sessionCookie.ts). QC bx4ymzpso running; gate after b33 lands.
+- BATCH 34: premerge/b34 aa58499a = integration + T-971 H1 fdd38c6b (PASS #10967) + T-976 d68ab35c (blind PWG #11125, 11135;
+  lead read sessionCookie.ts). Gate claudepilot-gate-aa58499-6788 GREEN; QC tests 6/6 ok but format FAIL (15 files) -> base check b9yw5v2rj (T-595 11226) before landing.
   Next in: T-425 (conflict), T-969 (blind PWG 10969; V5 cross-workspace mutant rerun by d9f18599).
 - T-971 H2: blind #10978 (a) resumes a stopped session, (b) B13, (c) unscrubbed `why`, (d) B7 + QA edges -> one fix 3753d3c2 (11134).
 - T-1043 S0b blind PWG #11081 (D5 live per-message check untested, D7) + T-976 merge with markers ticket/T-1043-s0b-976
@@ -56,6 +54,8 @@
 - D-78: only production/uat go to a person; all else "FOR THE COORDINATOR:" on the ticket. D-70 feed lanes by session_message.
 - D-61 nothing heavy in the pod; D-66 the lead runs QC at premerge (lanes' allow lists refuse it, T-586).
 - The pipeline gate stays on; only the owner's own word turns it off (T-731 10699).
+- 03:15 owner order via the coordinator (T-968 11240): coordinator builds T-968 S1 runtime/S3/S4/S6; this crew only lands
+  S1-token + S2 fast (QA lanes take T-968 first). No new T-968 slices.
 
 ## FOR THE COORDINATOR (D-78; each also on its ticket)
 - Deploy batch 32 (74599ece). T-948: PORT_PROXY_HOST_SUFFIX and the claudepilot-app-ports route. T-976: live Traefik X-Forwarded-Proto;
