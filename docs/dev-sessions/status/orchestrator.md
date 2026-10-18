@@ -7,10 +7,11 @@
 - T-860 S2c on integration (a87d00b8); the realpath guard side is the coordinator's. Older batches: git history.
 
 ## IN FLIGHT (6 of 6 workers, D-71; QA/review sonnet, D-63; ids in full in session_family)
-- T-425 S2b merge e2e4a2b6 QA PWG (Job 5c8816ad; gaps relayed on T-595 10930: guard untested, 400 ms timeout test,
-  both send paths) -> S2b-gaps 3753d3c2 (after T-356) -> delta c691df71 -> b33.
-- T-974 FIX2 42b95954 BLIND PWG 10892 -> FIX3 test rows (prune/update allowed on record, set-url --add/--delete refused;
-  10902) FIX3 f70d333c (Job queued) a3554d40 -> re-check d9f18599 -> b33 -> FOR THE COORDINATOR: remove the text-matching `git -C` denies.
+- BATCH 33: premerge/b33 d6a91e49 = integration 4616b878 + T-974 f70d333c (FIX3 PASS 10994; lead read ruleGuard diff:
+  refusals only, fail closed). QC bfrn7d9kh running. T-425 S2b+gaps 12acb9ed PASS (T-595 11065) but conflicts in
+  chat/testkit.ts: marker branch ticket/T-425-s2b-int a3f79dd5 -> 3753d3c2 resolves + Job -> into b33 -> gate.
+  After landing: FOR THE COORDINATOR remove the text-matching `git -C` denies (T-974).
+- T-980 (repos_list filter; worktree_create by path through can()) a3554d40, worked slice -> QA + blind.
 - T-971 H1 FIX fade65c2 BLIND PWG 10905 (C2, C3 survive) -> FIX2 fdd38c6b pushed, Job pending (a3554d40) -> re-check d9f18599.
 - T-969 FIX 065d3665 pushed (testers-bot etc., copy test dropped, perf/ux lanes), Job pending -> blind d9f18599.
 - T-961 S1 613139e3: its proof Job timed out in the queue (feea6e9e, 3600 s), rerun later. T-974 FIX3 Job bctygk2fn queued.
@@ -21,8 +22,9 @@
   links.test 12/12 x3, not this change) -> FIX2 a3554d40 (after T-969/H1 Jobs) -> delta c691df71 -> blind d9f18599 (mig 788).
 - T-1043 S0a+S0b (10790) head f5ae317e, 76845676: QA PWG #10965 (M14a/b, M16, G1, G2 killed). Gap: two cookie readers vs
   T-976 -> after T-976 QA the lead pushes a merge with markers, 76845676 makes ONE reader. Blind d9f18599 next. Denial = 404.
-- T-976 merge resolved a2da98cb (2a0edbd8), Job eaee60e7 rc0 (typecheck, cookie/socket/auth/SSO tests; not verified: the SSO
-  test failing without the fix) -> QA c691df71 (#10931 interim) + blind d9f18599.
+- T-976 a2da98cb QA PWG #11040 (C6 browser socket survived) -> gap fix d68ab35c (2a0edbd8: socket.test.ts handshakes,
+  decode-fallback pin; index.ts wiring left as written gap), Job bplwz9ct5 -> delta c691df71 + blind d9f18599 on d68ab35c.
+  T-1042 audit only (2a0edbd8), build after T-976 is live.
 - T-968 S2b be6b3adc FINAL: Job 74b74e97 rc0, 18 mutants applied and killed -> QA c691df71 + blind d9f18599. PRD fix 2a0edbd8.
 - T-565 FIX 103c4d80 QA PWG (T-595 10968) -> gap 1 e309aacc (parsed yaml + 3 mutants), Job bt7ea72qt; N11/N14 dropped
   (labels exist nowhere, 10973) -> delta c691df71 -> blind (infra).
