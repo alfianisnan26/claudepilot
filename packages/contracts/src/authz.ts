@@ -252,7 +252,7 @@ export function parseActorString(s: string | null | undefined): ParsedActor {
   if (prefix === 'portal-mcp') return { kind: 'token', id: rest };
   if (prefix === 'session') return { kind: 'agent', id: rest };
   if (prefix === 'system') return { kind: 'system', id: rest };
-  if (['ticket', 'ci', 'trigger', 'automove', 'notify', 'rule'].includes(prefix)) return { kind: 'job', id: rest, prefix };
+  if (['ticket', 'ci', 'trigger', 'automove', 'notify', 'rule', 'jobrun'].includes(prefix)) return { kind: 'job', id: rest, prefix };
   return { kind: 'unknown', id: v };
 }
 

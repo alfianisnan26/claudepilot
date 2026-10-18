@@ -51,6 +51,7 @@ import {
   type AppPortList,
   type OpenAppPortRequest,
   type OpenAppPortResult,
+  type Actor,
 } from '@portal/contracts';
 import type { AppPorts } from './appports/index.js';
 import { Hono, type Context } from 'hono';
@@ -105,6 +106,9 @@ import { createTicketRoutes } from './tickets/routes.js';
 import type { CiService } from './ci/service.js';
 import { createCiRoutes } from './ci/routes.js';
 import { createCiHookRoutes } from './ci/upstreamHook.js';
+import { declareJobRunPolicies } from './jobrun/authz.js';
+import { createJobRunAdminRoutes, createJobRunDoor } from './jobrun/routes.js';
+import { JobRunTokens } from './jobrun/tokens.js';
 import type { BrowserModule } from './browser/index.js';
 import { createReposRoutes, createWorkspaceReposRoutes, type ReposService } from './repos/index.js';
 import { isWorkspaceId, PLAIN_NAME } from './names.js';
@@ -1182,6 +1186,25 @@ export function createApp(
     app.route('/api/ci', cr);
     // T-486 S2: the upstream webhook, outside /api and the session guard: its door is the Git host's signature (ci/upstreamHook.ts).
     app.route('/hooks/ci', createCiHookRoutes(ci) as never);
+  }
+
+  // T-1083 S1b (D-84): the job-run Mac door. Its tokens are minted by an admin under /api (the cookie); the door itself sits outside /api
+  // and takes its own `cpjr_` token only (jobrun/authz.ts).
+  {
+    declareJobRunPolicies();
+    const jobRunDeps = {
+      tokens: new JobRunTokens(store),
+      workspace: async (id: string, actor: Actor) => {
+        const w = await workspaces.get(id, actor);
+        return { id: w.id, status: w.status };
+      },
+      audit: platform?.audit,
+    };
+    const jr = new Hono<Env>();
+    jr.use(requireSession);
+    jr.route('/', createJobRunAdminRoutes(jobRunDeps));
+    app.route('/api/jobrun', jr);
+    app.route('/jobrun/mac', createJobRunDoor(jobRunDeps) as never);
   }
 
   // Workspace git: every workspace's repositories at a glance, the audit, and one repository (docs/prd/workspace-git.md).

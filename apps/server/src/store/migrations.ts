@@ -3634,6 +3634,30 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 880,
+    name: 'job-run: the Mac door tokens (T-1083)',
+    up(db) {
+      // T-1083 S1b (D-84): a `cpjr_` token opens /jobrun/mac/* for ONE workspace (the Mac's) and nothing else; minted and revoked by an admin
+      // (POST /api/jobrun/tokens). Only the SHA-256 of the secret is kept; `last4` is for recognising it. `user_id` is the admin who minted
+      // it: the door acts as that person (can() on every call), so a right they lose is lost by the token too.
+      db.exec(`
+        CREATE TABLE jobrun_tokens (
+          id TEXT PRIMARY KEY CHECK (id GLOB 'jrt_*'),
+          label TEXT NOT NULL CHECK (length(label) BETWEEN 1 AND 60),
+          token_hash TEXT NOT NULL UNIQUE,
+          last4 TEXT NOT NULL,
+          user_id TEXT NOT NULL,
+          workspace_id TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          expires_at TEXT NOT NULL,
+          last_used_at TEXT,
+          revoked_at TEXT,
+          revoked_reason TEXT
+        ) STRICT;
+      `);
+    },
+  },
 ];
 
 /**

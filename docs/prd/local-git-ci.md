@@ -647,3 +647,32 @@ session's result. With it, a Job that passed is saved, and the same work later r
 - **Not covered:** `scripts/gate-job.sh` is never reused (the charter wants the full gate on the exact commit; reuse of gate results is owner decision T-578).
   A pass that depended on something outside the key (the network, the clock, a registry) is reused too: leave `--reuse` off for such a check.
 - **Tests:** `apps/server/src/ci/jobRun.test.ts` (opt-in, hit, miss, failure, each changed key part, the age limit, the store's own files, and mutants that drop the commit, `--keep-tests` or the `Complete` condition).
+
+## 25. `job-run` on the owner's Mac: the door (T-1083, D-84)
+
+The owner gave his Mac as more room for `job-run` Jobs ("load balance otomatis", D-84). `scripts/job-run.sh` reaches the Mac only through the portal's door,
+never over Docker or SSH itself.
+
+- **The door:** `/jobrun/mac/*` (`apps/server/src/jobrun/`). It sits outside `/api`, like `/mcp` and `/hooks/ci`, because `/api` takes only the session cookie.
+  - `GET /slot` answers `{slot:true, free}`, or `{slot:false, reason}` with the reason `mac-not-running`, `mac-full` or `no-runtime`.
+  - `GET /runs` lists the calling token's own runs. Each has `where: 'mac'`.
+  - `POST /runs` starts a run, `GET /runs/:id/log` reads its log, and `DELETE /runs/:id` stops it. Each works only on a run the same token started.
+  - Up to S1b-2 there is no Mac runtime: the slot says `no-runtime` and a start answers 503.
+- **Its token:** `cpjr_` plus 43 base64url characters.
+  - It lives in its own table (`jobrun_tokens`, migration 880) and only its SHA-256 is stored. It lasts 30 days.
+  - It is bound to ONE workspace, the Mac's. The door accepts no other token; `/mcp` and `/api` never accept this one.
+  - `job-run.sh` reads it from `JOB_RUN_MAC_TOKEN`, delivered by name through the Secrets pool.
+- **Who mints:** an admin, signed in, through `/api/jobrun/tokens` (list, mint, revoke).
+  - These routes need the cookie, the CSRF check and `manage` on the platform's `targets` area. Minting needs re-authentication.
+  - An agent token or a Portal MCP token cannot reach these routes.
+  - Every mint and revoke writes a platform audit row (`jobrun.token.create`, `jobrun.token.revoke`) with the workspace and the label, never the secret.
+- **Authz:** the door acts as the admin who minted the token (a job acting for them, `jobrun:<token id>`). On every call it asks `can(operate)` on the token's workspace.
+  Any refusal is the same 404 as a route that does not exist: no token, another kind of token, a revoked or expired token, a denial, or another token's run.
+- **Guards:**
+  - a body of at most 64 KiB, read within 10 s (413, 408), checked before the token is read;
+  - 120 calls a minute per token (429);
+  - 30 refusals a minute per address, after which that address waits (429).
+- **Tests:** `apps/server/src/jobrun/jobrun.test.ts` covers the token store, every refusal, can() as the minting admin, the slot, run ownership, the guards, and the
+  routes as mounted in `createApp` (mint by cookie only; a door token is refused at `/mcp` and `/api`).
+- **Next:** S1b-2 runs Jobs on the Mac: the fetch and run containers on one `-home` volume, credentials on exec stdin, the log masked with `chat/redact.ts`.
+  S1b-3 is placement in `job-run.sh`: caps counted across both sides, and one retry on the cluster.
