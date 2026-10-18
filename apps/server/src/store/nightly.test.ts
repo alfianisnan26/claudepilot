@@ -197,7 +197,7 @@ function mirrorsWithoutExclude(docs: unknown[]) {
 test('the mirror check reads the parsed yaml: a reformat passes, a second mirror step without the exclude fails, none at all fails', () => {
   const docs = loadAll(readFileSync(new URL('../../../../deploy/k3s/backup/portal-backup.yaml', import.meta.url), 'utf8'));
   // A reformat (flow style, other quoting, one line per document) is the same manifest.
-  assert.deepEqual(mirrorsWithoutExclude(loadAll(dump(docs[0], { flowLevel: 3, quotingType: "'", forceQuotes: true }))), { mirrors: 1, missing: [] });
+  assert.deepEqual(mirrorsWithoutExclude(loadAll(dump(docs[0], { flowLevel: 3, quoteStyle: 'single', forceQuotes: true }))), { mirrors: 1, missing: [] });
   // The mutant: a second mirror step without the exclude.
   const second = structuredClone(docs) as { spec: { jobTemplate: { spec: { template: { spec: { containers: unknown[] } } } } } }[];
   second[0]!.spec.jobTemplate.spec.template.spec.containers.push({ name: 'offsite-2', image: 'x', command: ['aws', 's3', 'sync', '/data/backups/nightly', 's3://b/p', '--delete'] });
