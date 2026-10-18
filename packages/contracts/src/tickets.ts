@@ -389,7 +389,54 @@ export interface TicketTag {
   count: number;
 }
 
+/** T-119 S1b: the scale a timeline is asked at. */
+export const TICKET_TIMELINE_GRANULARITIES = ['minute', 'hour', 'day'] as const;
+export type TicketTimelineGranularity = (typeof TICKET_TIMELINE_GRANULARITIES)[number];
+
+/**
+ * The longest window a granularity may ask for (a minute scale over a long window would be thousands of columns the chart cannot show) and the
+ * window it gets when `from` is absent. A longer one is a 400 that names the limit.
+ */
+export const TICKET_TIMELINE_LIMITS: Record<TicketTimelineGranularity, { maxWindowMs: number; defaultWindowMs: number }> = {
+  minute: { maxWindowMs: 24 * 3_600_000, defaultWindowMs: 6 * 3_600_000 },
+  hour: { maxWindowMs: 31 * 86_400_000, defaultWindowMs: 3 * 86_400_000 },
+  day: { maxWindowMs: 366 * 86_400_000, defaultWindowMs: 30 * 86_400_000 },
+};
+
+/** GET `/api/tickets/timeline` query: `from` and `to` are ISO times, `granularity` a {@link TicketTimelineGranularity} (default `hour`), `limit` 1..100 (25), `cursor`. */
+export interface TicketTimelineQuery {
+  from?: string;
+  to?: string;
+  granularity?: TicketTimelineGranularity;
+  limit?: number;
+  cursor?: string;
+}
+
+/** One ticket on the timeline: a summary row and its flow (all of its spans, not cut to the window: the chart clips). */
+export interface TicketTimelineRow {
+  id: string;
+  summary: string;
+  status: TicketStatus;
+  priority: TicketPriority;
+  type: TicketType;
+  flow: TicketFlow;
+}
+
+/** The tickets whose life overlaps the window (created before `to`, not closed before `from`), oldest number first, a page at a time. */
+export interface TicketTimeline {
+  /** ISO, as resolved (absent params filled in). */
+  from: string;
+  to: string;
+  granularity: TicketTimelineGranularity;
+  /** ISO: the time the open spans run to. */
+  now: string;
+  items: TicketTimelineRow[];
+  next: string | null;
+}
+
 export const TICKET_API = {
+  /** GET `TicketTimelineQuery` as a query string: `TicketTimeline` (T-119). */
+  timeline: '/api/tickets/timeline',
   /** GET `TicketFilter` as a query string: `TicketList`. POST `CreateTicketRequest`: `TicketItem`. */
   list: '/api/tickets',
   /** GET: `TicketDetail`. PATCH `UpdateTicketRequest`: `TicketItem`. DELETE: remove it. */
