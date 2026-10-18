@@ -10,6 +10,12 @@
 The portal reads the folder: `GET /api/admin/system` returns `nightlyBackup.stale = true` when there is no nightly backup or
 the newest is older than 26 hours, and `portal status` prints `STALE`.
 
+**The backup does not hold the key.** Stored secrets in the database are sealed with the key in the Secret
+`claudepilot-secret-key` (`deploy/k3s/README.md`), and neither this CronJob nor the off-site mirror copies it. Back that Secret up
+separately (a person, out of band, never in git or in the bucket next to the database). Without the same key the backup's secrets
+cannot be opened: `portal restore` checks that the current key opens them, and a portal whose key does not open its database starts
+Locked (`deploy/k3s/portal.yaml`).
+
 ## Not applied
 
 Argo CD syncs `deploy/k3s` without recursing, so nothing in this folder reaches the cluster. To apply it, the coordinator:
