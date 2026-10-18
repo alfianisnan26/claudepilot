@@ -897,6 +897,8 @@ There is ONE session-token reader, T-976's `sessionCookie.ts` (`sessionFromCooki
 
 Two rows close blind review #11081: a live message the connection's declaration refuses never reaches the handler (`handleIfAllowed` in `live.ts`, D5; today no member reaches a live message, so this holds the check for MU2), and one token that opens a full socket and then, made a member, a second one keeps the full mark, so the sweep cuts both (D7).
 
+T-976's routes are declared like every other (`identity/authz.ts`, and the `/api/me/*` rows in `authz/appPolicies.ts`). The SSO sign-in (`discover`, `sso/start`, `sso/callback`) is `public`. An account's own password, teams and delegated-session list are `self`. One team's page and people, and the delegate's door on one shared session (`/api/me/sessions/:id…`), are `signed-in`: their handlers answer the same 404 to an account the team or the share does not include. The admin side (session shares and teams in the `users` area, SSO providers in `registration`) is `platform`. The app-port proxy (`appports/proxy.ts`, `routeAppHostUpgrades`) is the one other `upgrade` listener: an app host's upgrade is its own door (the host cookie, the portal session, `can(operate)` on the workspace), and every other upgrade still meets the socket guard (`socketGuard.test.ts`).
+
 The serveWeb walk serves a temporary dist made by the test, so it never depends on a web build.
 
 It also checks the guard on its own:

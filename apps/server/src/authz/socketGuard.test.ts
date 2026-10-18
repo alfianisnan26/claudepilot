@@ -10,8 +10,10 @@ import { connect, type AddressInfo } from 'node:net';
 import { join, relative } from 'node:path';
 import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import type { Duplex } from 'node:stream';
 import { CHAT_SOCKET_PATH, CONNECT_PUBLIC, LIVE_PATH } from '@portal/contracts';
 import WebSocket, { WebSocketServer } from 'ws';
+import { routeAppHostUpgrades } from '../appports/proxy.js';
 import { attachBrowserSockets } from '../browser/socket.js';
 import { attachChat } from '../chat/socket.js';
 import { openCore, openHub } from '../connect/testkit.js';
@@ -57,11 +59,11 @@ async function listen(server: Server): Promise<number> {
 }
 
 /** A raw WebSocket handshake; resolves with the answer's head (status line and headers), as the client reads it. */
-function handshake(port: number, path: string, o: { who?: 'owner' | 'member'; origin?: string | false; headers?: string[] } = {}): Promise<string> {
+function handshake(port: number, path: string, o: { who?: 'owner' | 'member'; origin?: string | false; headers?: string[]; host?: string } = {}): Promise<string> {
   const origin = o.origin === undefined ? `http://127.0.0.1:${port}` : o.origin;
   const lines = [
     `GET ${path} HTTP/1.1`,
-    `Host: 127.0.0.1:${port}`,
+    `Host: ${o.host ?? `127.0.0.1:${port}`}`,
     'Upgrade: websocket',
     'Connection: Upgrade',
     `Sec-WebSocket-Key: ${randomBytes(16).toString('base64')}`,
@@ -123,7 +125,36 @@ test('nothing in the server listens for `upgrade` but the socket guard and the s
     }
   };
   walk(root);
-  assert.deepEqual(found.sort(), [join('authz', 'socketGuard.ts'), 'sockets.ts'].sort(), 'a module that needs a socket calls onSocket (authz/socketGuard.ts)');
+  // appports/proxy.ts (T-948, merged with T-976): `routeAppHostUpgrades` wraps the listeners; an app host's upgrade is the proxy's own door
+  // (its host cookie, the portal session and `can(operate)` on the workspace), every other upgrade goes to the guard: the next test.
+  assert.deepEqual(
+    found.sort(),
+    [join('appports', 'proxy.ts'), join('authz', 'socketGuard.ts'), 'sockets.ts'].sort(),
+    'a module that needs a socket calls onSocket (authz/socketGuard.ts)',
+  );
+});
+
+test('the app-ports proxy in front of the listeners: an app host goes to the proxy alone, every other upgrade still meets the guard', async () => {
+  const { server, port, grants } = await testSockets();
+  const proxied: string[] = [];
+  const proxy = {
+    owns: (host: string | undefined) => !!host?.startsWith('app-'),
+    upgrade: async (req: IncomingMessage, socket: Duplex) => {
+      proxied.push(req.url ?? '');
+      socket.end(ALLOWED);
+    },
+  };
+  routeAppHostUpgrades(server, proxy as never);
+  // Not an app host: the guard decides as before (a member is refused the admin socket with the unknown target's answer).
+  assert.equal(status(await handshake(port, '/t/admin', { who: 'member' })), status(UPGRADE_NOT_FOUND));
+  assert.equal(status(await handshake(port, '/t/sock/1', { who: 'member' })), status(ALLOWED));
+  assert.equal(status(await handshake(port, '/t/admin', { who: 'owner' })), status(ALLOWED));
+  assert.deepEqual(proxied, [], 'the proxy took no portal upgrade');
+  assert.deepEqual(grants.map((g) => g.path), ['/t/sock/:id', '/t/admin']);
+  // An app host: the proxy alone, no portal socket handler runs for it.
+  assert.equal(status(await handshake(port, '/t/sock/2', { who: 'member', host: `app-3000-x.${'pilot.test'}` })), status(ALLOWED));
+  assert.deepEqual(proxied, ['/t/sock/2']);
+  assert.equal(grants.length, 2, 'no guarded handler ran for the app host');
 });
 
 test('every socket module of index.ts attaches through the guard, each with a declaration, and every declaration has its socket', async () => {

@@ -18,6 +18,7 @@ import { declareCodespacesPolicies } from '../codespaces/authz.js';
 import { declareConnectPolicies } from '../connect/authz.js';
 import { declareInstallPolicies } from '../connect/install/routes.js';
 import { declareGlancePolicies } from '../glance/authz.js';
+import { declareIdentityPolicies } from '../identity/authz.js';
 import { declareKeepGoingPolicies } from '../keepgoing/authz.js';
 import { declareLabPolicies } from '../lab/authz.js';
 import { declareNotifyPolicies } from '../notify/authz.js';
@@ -51,6 +52,15 @@ export const APP_POLICIES: RoutePolicies = {
   'POST /api/login': { kind: 'public', why: 'signing in (rate limited)' },
   'POST /api/logout': { kind: 'public', why: 'signing out ends only the caller’s own cookie' },
   'GET /api/me': { kind: 'self' },
+  // T-976: an account changes its own password (the current one first); a signed-in account's delegated sessions. The delegate's door
+  // (app.ts `delegate`) checks the account's live share on the session on every request, with the same 404 for one not shared with it.
+  'POST /api/me/password': { kind: 'self' },
+  'GET /api/me/sessions': { kind: 'self' },
+  'GET /api/me/sessions/:id': { kind: 'signed-in' },
+  'GET /api/me/sessions/:id/events': { kind: 'signed-in' },
+  'POST /api/me/sessions/:id/send': { kind: 'signed-in' },
+  'POST /api/me/sessions/:id/respond': { kind: 'signed-in' },
+  'POST /api/me/sessions/:id/stop': { kind: 'signed-in' },
   // The catch-all of the API answers 404 for a path nobody serves; the web app's shell is the same page for every path.
   'ALL /api/*': { kind: 'public', why: 'answers 404 for an unknown API path' },
   // Hono lists `app.get('*')` as `/*` (mergePath): the key is what `app.routes` says (review 10681 #6 found `GET *` matched nothing).
@@ -332,6 +342,7 @@ export function declareAppPolicies(): void {
     declareConnectPolicies,
     declareInstallPolicies,
     declareGlancePolicies,
+    declareIdentityPolicies,
     declareKeepGoingPolicies,
     declareLabPolicies,
     declareNotifyPolicies,
