@@ -7,7 +7,8 @@
 - T-938 FIX2 73b8137c re-check PASS 10685 -> the coordinator lands it (T-938 10695). Older batches: git history.
 
 ## IN FLIGHT (6 of 6 workers, D-71; QA/review sonnet, D-63; ids in full in session_family)
-- T-425 S2b merge e2e4a2b6 QA PWG (U1 caught; relay T-595 10914; gap list asked) -> gaps 3753d3c2 -> b33.
+- T-425 S2b merge e2e4a2b6 QA PWG (Job 5c8816ad; gaps relayed on T-595 10930: guard untested, 400 ms timeout test,
+  both send paths) -> S2b-gaps 3753d3c2 (after T-356) -> delta c691df71 -> b33.
 - T-974 FIX2 42b95954 BLIND PWG 10892 -> FIX3 test rows (prune/update allowed on record, set-url --add/--delete refused;
   10902) FIX3 f70d333c (Job queued) a3554d40 -> re-check d9f18599 -> b33 -> FOR THE COORDINATOR: remove the text-matching `git -C` denies.
 - T-971 H1 FIX fade65c2 BLIND PWG 10905 (C2, C3 survive) -> FIX2 fdd38c6b pushed, Job pending (a3554d40) -> re-check d9f18599.
@@ -28,7 +29,7 @@
 - T-1065 (new: redact.ts misses short passwords/URL userinfo; 10888) 76845676 while its Job queues -> QA + blind.
 - T-356 S1 64b4effa (MCP authz gaps 1-4; 10906) by 3753d3c2, Jobs pending. 10922: workspace resolver NOT wired (that is
   the multi-user switch); FR19 enforced by test + exemption list, not at start-up -> QA + blind; lead reads the authz diff.
-- Queues: c691df71 S0a+S0b be3698ba > T-968 S2b > T-565 > T-976 > H2 delta > T-975 FIX2 > T-356 (+ T-425 gap list). d9f18599 H2 S1 > H1 delta > T-974
+- Queues: c691df71 S0a+S0b be3698ba > T-968 S2b > T-565 > T-976 > H2 delta > T-975 FIX2 > T-356 > T-425 gaps delta. d9f18599 H2 S1 > H1 delta > T-974
   FIX3 > T-969 > T-975 > PRD > S2b > S0b. a3554d40 T-961 + T-974 FIX3. 76845676 T-1043 + T-1065. 2a0edbd8 T-976 > S2b >
   T-565 > PRD. 3753d3c2 H2 fix > T-356.
 
