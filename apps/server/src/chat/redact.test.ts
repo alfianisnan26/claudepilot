@@ -126,6 +126,36 @@ test('T-1065 twins: in a stream the twin comes out whole wherever it is split', 
   }
 });
 
+// QA #11410: prose with a colon after the word is not cut. Each secret differs from its twin in the one thing that makes it a value: a
+// digit in it, or the end of its line after it.
+test('T-1065 twins: a word of prose after `password:` stays; a value there still goes', () => {
+  const pairs: [string, string][] = [
+    [`Enter your password: ${MARK}7 then press enter`, `Enter your password: ${MARK} then press enter`],
+    [`password: ${MARK}\nnext`, `password: ${MARK} next`],
+    [`password: ${MARK}`, `password: ${MARK}, then`],
+    [`"token": ${MARK}-x and more`, `"token": ${MARK} and more`],
+  ];
+  for (const [secret, twin] of pairs) {
+    assert.ok(!redact(secret).includes(MARK), `${secret} kept part of its value`);
+    assert.equal(redact(twin), twin, `the twin of ${secret}`);
+  }
+  // `=` is never prose: the word goes there, more text or not.
+  assert.equal(redact(`password=${MARK} then`), `password=${REDACTED} then`);
+  // Split anywhere, a stream gives what the whole text gives, and never shows the value.
+  for (const text of [`Enter your password: ${MARK} then press enter`, `password: ${MARK}\nnext`, `Say password: ${MARK}`]) {
+    const whole = redact(text);
+    for (let at = 0; at <= text.length; at++) {
+      const r = new StreamRedactor();
+      const frames = [r.push(text.slice(0, at)), r.push(text.slice(at)), r.flush()];
+      assert.equal(frames.join(''), whole, `${text} split at ${at}`);
+    }
+    const r = new StreamRedactor();
+    let out = '';
+    for (const ch of text) out += r.push(ch);
+    assert.equal(out + r.flush(), whole, `${text} one character at a time`);
+  }
+});
+
 test('T-1065: redacting twice changes nothing more', () => {
   const text = `password=${MARK} and {"token": "${spaced}"} and postgres://a:${MARK}@db/x`;
   const once = redact(text);
