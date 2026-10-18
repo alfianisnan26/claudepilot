@@ -13,9 +13,9 @@ import {
   type MenuItem,
 } from '@isnanme/ui';
 import { isLastKnownStatus, workspaceDisplayName, type AccountPool, type DeliveryStatus, type RepoWorkspaceSummary, type Workspace, type WorkspaceStatus, type WorkspaceTarget, type WorkspaceUsage } from '@portal/contracts';
-import { Box, Boxes, Check, ChevronRight, ListChecks, Play, Plus, ShieldCheck, SlidersHorizontal, Square, SquareTerminal, Trash2 } from 'lucide-react';
+import { AppWindow, Box, Boxes, Check, ChevronRight, ListChecks, Play, Plus, ShieldCheck, SlidersHorizontal, Square, SquareTerminal, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
-import { Link } from 'react-router';
+import { Link, useNavigate } from 'react-router';
 import { Card } from '@/components/Card';
 import { InfoTip } from '@/components/InfoTip';
 import { PageHeader } from '@/components/PageHeader';
@@ -362,11 +362,15 @@ function WorkspaceRow({
   const unreachable = isLastKnownStatus(w.status);
   const note = unavailableNote(w);
   const limits = [w.cpus && `${w.cpus} CPU`, w.memoryMb && formatBytes(w.memoryMb * 1024 * 1024)].filter(Boolean).join(' · ');
+  const navigate = useNavigate();
   const items: MenuItem[] = [
     running || w.status === 'starting'
       ? { label: 'Stop', icon: <Square className="size-4" />, onSelect: onStop, disabled: busy || unreachable }
       : { label: 'Start', icon: <Play className="size-4" />, onSelect: onStart, disabled: busy || unreachable || w.status !== 'stopped' },
     // Every pool type in one place, the account pool included (foundation PRD §10).
+    // Owner, 2026-10-18 ("where?"): the browser page (Remote, and App mode: an app of this workspace opened inside the portal) was reachable
+    // only from a link in Configuration's browser tab.
+    { label: 'Browser', icon: <AppWindow className="size-4" />, onSelect: () => navigate(`/admin/workspaces/${w.id}/browser`), disabled: !running },
     { label: 'Configuration…', icon: <SlidersHorizontal className="size-4" />, onSelect: onConfigure, disabled: w.status === 'creating' || unreachable },
     ...(w.delivery?.status === 'frozen' ? [{ label: 'Adopt workspace', icon: <ShieldCheck className="size-4" />, onSelect: onAdopt }] : []),
     { label: 'Remove', icon: <Trash2 className="size-4" />, onSelect: onRemove, danger: true, disabled: w.status === 'creating' || unreachable || !removable },
