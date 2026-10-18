@@ -8,3 +8,5 @@ package-lock.json
 docs/context-pack.md
 # Not valid YAML: a template; scripts/job-run.sh replaces the __MASTER_REQUIRED__ line before kubectl reads it (prettier: SyntaxError).
 deploy/k3s-build/job-run.yaml
+# Read by apps/server/src/workspaces/routeAuthz.test.ts, which parses Appendix A's rows; prettier's column padding breaks that parse (T-1032).
+docs/prd/authorization.md
