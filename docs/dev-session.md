@@ -229,7 +229,13 @@ scripts/job-run.sh --repo konfersi:<org>/<repo> --ref <branch> --image registry.
   `bash -x` / xtrace, which would print the values.
 - **Caps:** `JOB_RUN_MAX` (3) Jobs at once cluster-wide, `JOB_RUN_MAX_PER_CHAT` (2) per chat (`PILOT_SESSION_ID`) and `JOB_RUN_MAX_PER_PROGRAM`
   (2) per program (claudepilot, event, konfersi; T-524). A Job over a cap is created suspended and waits in creation order ("queued behind K").
-  Jobs carry the labels `job-run/chat`, `job-run/role` (`PILOT_AGENT`), `job-run/repo`, `job-run/program`.
+  Jobs carry the labels `job-run/chat`, `job-run/role` (`PILOT_AGENT`), `job-run/repo`, `job-run/program`, `job-run/where`.
+- **Where (T-1083 S1a):** a Job runs in the cluster or, later, on the owner's Mac through the Connect agent. `--big`, `--pool-env` and `--image`
+  are pinned to the cluster; the release gate (`gate-job.sh`) and image builds (`image-build.sh`) do not go through `job-run.sh`, so they stay
+  there too. Until the portal's door exists (T-1083 S1b) the Mac backend reports no slot, so every Job runs in the cluster exactly as before.
+  The Job's log says which, before the node decision: `=== JOB-RUN PLACEMENT where=cluster pinned=big|pool-env|image` or
+  `=== JOB-RUN PLACEMENT where=cluster mac=no-slot reason=no-door`. `--list` has a last column, `cluster` or `mac` (a Job without the label is
+  `cluster`).
 - **Placement (T-611):** the scheduler counts memory requests, but the control-plane node's own pods use far more for real. Before it creates a
   Job, `job-run.sh` reads that node's real memory (`kubectl top nodes`). The test is on the node's use PLUS the Job's expected peak (use x pct /
   used gives allocatable, no new verb): `JOB_RUN_EXPECTED_PEAK_MI` (default 2300 Mi, the measured p99 of Job peaks, 2270 Mi in the T-731 note;

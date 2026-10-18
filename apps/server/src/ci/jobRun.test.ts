@@ -46,7 +46,7 @@ const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 
 const lock = (fn) => { const l = path.join(F, 'lock'); for (;;) { try { fs.mkdirSync(l); break; } catch { sleep(5); } } try { const s = JSON.parse(fs.readFileSync(S, 'utf8')); const r = fn(s); fs.writeFileSync(S + '.tmp', JSON.stringify(s)); fs.renameSync(S + '.tmp', S); return r; } finally { fs.rmdirSync(l); } };
 const read = () => JSON.parse(fs.readFileSync(S, 'utf8'));
 const k8s = (j) => ({ metadata: { name: j.name, uid: 'uid-' + j.name, creationTimestamp: '2026-01-01T00:' + String(Math.floor(j.seq / 60)).padStart(2, '0') + ':' + String(j.seq % 60).padStart(2, '0') + 'Z',
-  labels: { app: 'claudepilot-job-run', 'job-run/chat': j.chat, 'job-run/role': j.role || 'agent', ...(j.program ? { 'job-run/program': j.program } : {}), ...(j.repo ? { 'job-run/repo': j.repo } : {}) },
+  labels: { app: 'claudepilot-job-run', 'job-run/chat': j.chat, 'job-run/role': j.role || 'agent', ...(j.program ? { 'job-run/program': j.program } : {}), ...(j.repo ? { 'job-run/repo': j.repo } : {}), ...(j.where ? { 'job-run/where': j.where } : {}) },
   annotations: { 'job-run/owner': j.owner || '' } },
   spec: { suspend: j.suspend }, status: j.done ? { [j.rc === 0 ? 'succeeded' : 'failed']: 1, conditions: [{ type: j.rc === 0 ? 'Complete' : 'Failed', status: 'True', reason: j.reason }] } : {} });
 const stdin = () => fs.readFileSync(0, 'utf8');
@@ -119,6 +119,8 @@ interface Seed {
   owner?: string;
   program?: string;
   repo?: string;
+  /** The job-run/where label (T-1083); none = a Job made before it existed. */
+  where?: string;
 }
 /** What the fake "kubectl top nodes" prints for the control-plane node (T-611): a memory percentage, a raw text, or "FAIL"; none = the metrics API is missing (exit 1). */
 interface Scenario {
@@ -310,6 +312,7 @@ test('a run: the suspended Job manifest, the stream, the exit code, the artifact
     'job-run/role': 't107-runner',
     'job-run/repo': 'claudepilot',
     'job-run/program': 'claudepilot',
+    'job-run/where': 'cluster',
   });
   assert.match(m.metadata.annotations['job-run/owner'] ?? '', new RegExp(`^${hostname()}/\\d+/\\d+$`));
   assert.equal(m.spec.suspend, true, 'created suspended: the queue lets it out');
@@ -817,6 +820,36 @@ test("--list and --stop: a chat's Jobs stop, the others stay", () => {
     ['claudepilot-job-0000000b'],
   );
   assert.match(w.run(['--stop', 'nope; rm -rf /']).out, /usage/);
+});
+
+test('T-1083 S1a: where. With no Mac door every Job runs in the cluster as before; --big, --pool-env and --image are pinned there; --list shows it', () => {
+  const base = ['--repo', 'claudepilot', '--ref', 'main'];
+  const pool = 'E2E_CF_ACCESS_CLIENT_ID';
+  const cases: [string[], Record<string, string>, string][] = [
+    [[], {}, 'where=cluster mac=no-slot reason=no-door'],
+    [['--big'], {}, 'where=cluster pinned=big'],
+    [['--pool-env', pool], { [pool]: `p${hex(8)}` }, 'where=cluster pinned=pool-env'],
+    [['--image', 'registry.int.isnan.me/claudepilot/py-test:abc123'], {}, 'where=cluster pinned=image'],
+  ];
+  for (const [argv, over, line] of cases) {
+    const w = world([], { top: 40 });
+    const r = w.run([...argv, ...base, '--', 'true'], over);
+    assert.equal(r.code, 0, r.out);
+    const log = w.log();
+    const lines = log.split('\n').filter((l) => l.startsWith('=== JOB-RUN PLACEMENT where='));
+    assert.deepEqual(lines, [`=== JOB-RUN PLACEMENT ${line}`], `${argv.join(' ') || 'default'}: one where line`);
+    assert.ok(log.indexOf(lines[0]!) < log.indexOf('=== JOB-RUN PLACEMENT node=control-plane'), 'the where line comes before the node decision');
+    const m = yamlLoad(w.applied1()) as Manifest;
+    assert.equal(m.metadata.labels['job-run/where'], 'cluster');
+    // The same Job as before T-1083 otherwise: the control-plane decision and the preferred rules are untouched.
+    assert.match(log, /^=== JOB-RUN PLACEMENT node=control-plane pct=40 .*decision=preferred$/m);
+  }
+  const l = world([
+    { name: 'claudepilot-job-0000000c', chat: 'chat-a', where: 'mac' },
+    { name: 'claudepilot-job-0000000d', chat: 'chat-a' },
+  ]).run(['--list']).out;
+  assert.match(l, /^claudepilot-job-0000000c\tchat-a\tagent\trunning\t\S+\tmac$/m);
+  assert.match(l, /^claudepilot-job-0000000d\tchat-a\tagent\trunning\t\S+\tcluster$/m, 'a Job without the label was made in the cluster');
 });
 
 test('usage errors: nothing is created', () => {

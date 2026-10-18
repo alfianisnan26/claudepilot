@@ -58,7 +58,7 @@
 # a pass without a credential must never stand for a run with it, and a log made with a credential is never saved). A failure is never saved. A
 # result older than JOB_RUN_REUSE_MAX_AGE_DAYS (7) is a miss. A reused log is the saved one, as it was: its PLACEMENT lines name the node of the
 # run that passed, and a hit makes no kubectl call (no placement, no Secret, no Job). The key and the store: docs/prd/local-git-ci.md section 24.
-#   scripts/job-run.sh --list                           the Jobs, their chat, role and state
+#   scripts/job-run.sh --list                           the Jobs, their chat, role, state, creation time and where (cluster or mac; T-1083)
 #   scripts/job-run.sh --stop [<job> | --chat <id>]     stop Jobs (all, one, or a chat's) and delete their Secrets
 # Caps: JOB_RUN_MAX Jobs at once cluster-wide (default 3), JOB_RUN_MAX_PER_CHAT per chat (2) and JOB_RUN_MAX_PER_PROGRAM per program (2;
 # claudepilot, event, konfersi: T-524). A Job over a cap is created suspended and waits its turn (creation order), with "queued behind K". The Job stops when this script is interrupted or killed (the next run removes a Job whose
@@ -120,7 +120,7 @@ case "${1:-}" in
   --list)
     jobs_json | jq -r "$JQ_FIN"' .items[] | [.metadata.name, (.metadata.labels["job-run/chat"] // "-"), (.metadata.labels["job-run/role"] // "-"),
       (if fin then (if (.status.succeeded // 0) > 0 then "succeeded" else "failed" end) elif .spec.suspend then "queued" else "running" end),
-      .metadata.creationTimestamp] | @tsv' | grep . || echo "no job-run jobs"
+      .metadata.creationTimestamp, (.metadata.labels["job-run/where"] // "cluster")] | @tsv' | grep . || echo "no job-run jobs"
     exit 0 ;;
   --stop)
     sel=; chat=
@@ -373,6 +373,18 @@ rule_placement() {
   master_aff=; master_rule=
   [ -z "$ex" ] || { master_aff="{\"nodeSelectorTerms\":[{\"matchExpressions\":[$ex]}]}"; master_rule="requiredDuringSchedulingIgnoredDuringExecution: $master_aff"; }
 }
+# Where (T-1083 S1a): the cluster, or the owner's Mac through the Connect agent. Pinned to the cluster: --big (8Gi: only k3s-node2 has room),
+# --pool-env (the Mac gets no credential but the fetch's own, D-84) and --image (a command image from the internal registry). The release gate
+# (gate-job.sh) and image builds (image-build.sh) never come through here, so they stay on the cluster by construction. Any other Job may go to
+# the Mac when it has a slot. The Mac backend has no door yet (the portal route is T-1083 S1b), so it reports no slot and every Job runs in the
+# cluster as before; a slot without a Mac runtime here stops the run (rc 2) rather than run a cluster Job labelled mac.
+where=cluster; where_pin=; mac_why=
+if [ -n "$big" ]; then where_pin=big; elif [ -n "$pool_names" ]; then where_pin=pool-env; elif [ -n "$image_given" ]; then where_pin=image; fi
+mac_slot() { mac_why=no-door; return 1; } # S1b: ask the portal's door for a slot
+if [ -n "$where_pin" ]; then plog "=== JOB-RUN PLACEMENT where=cluster pinned=$where_pin" >/dev/null
+elif mac_slot; then where=mac
+else plog "=== JOB-RUN PLACEMENT where=cluster mac=no-slot reason=$mac_why" >/dev/null; fi
+[ "$where" = cluster ] || die "where=mac: this script has no Mac runtime yet (T-1083 S1b)"
 placement
 [ -z "$place_msg" ] || echo "$place_msg" >&2
 [ -z "$place_say" ] || plog "$place_say"
@@ -404,7 +416,7 @@ for n in $pool_names; do
 done
 pool_refs=${pool_refs#\\n}
 [ -n "$pool_refs" ] || pool_refs='            # no --pool-env'
-sed -e "s|^ *# __POOL_ENV__.*\$|$pool_refs|" -e "s#__MASTER_REQUIRED__#$master_rule#" -e "s#__NAME__#$job#g" -e "s#__CHAT__#$chat#g" -e "s#__ROLE__#$role#g" -e "s#__REPO__#$repo_label#g" -e "s#__PROGRAM__#$program#g" \
+sed -e "s|^ *# __POOL_ENV__.*\$|$pool_refs|" -e "s#__MASTER_REQUIRED__#$master_rule#" -e "s#__NAME__#$job#g" -e "s#__CHAT__#$chat#g" -e "s#__ROLE__#$role#g" -e "s#__REPO__#$repo_label#g" -e "s#__PROGRAM__#$program#g" -e "s#__WHERE__#$where#g" \
     -e "s#__MEMORY__#$memory#g" -e "s#__TMP_SIZE__#$tmp_size#" -e "s#__OWNER__#$host/$$/$(starttime $$)#" \
     -e "s#__DEADLINE__#$timeout#" -e "s#__IMAGE__#$image#" -e "s#__RUN_IMAGE__#${run_image:-$image}#" -e "s#__REPO_URL__#$url#" -e "s#__REF__#$ref#" -e "s#__ALSO__#$alsos#" \
     -e "s#__AGAINST__#$against#" -e "s#__KEEP__#$keep#" -e "s#__STEPS__#$steps#" -e "s#__ARTIFACTS__#$artifacts#" -e "s#__ARTMAX__#$art_max#" -e "s#__CMD__#$(printf '%s' "$cmd" | base64 -w0)#" \

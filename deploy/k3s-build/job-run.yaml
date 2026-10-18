@@ -16,7 +16,7 @@ kind: Job
 metadata:
   name: __NAME__
   namespace: isnan-claudepilot
-  labels: {app: claudepilot-job-run, job-run/chat: __CHAT__, job-run/role: __ROLE__, job-run/repo: __REPO__, job-run/program: __PROGRAM__}
+  labels: {app: claudepilot-job-run, job-run/chat: __CHAT__, job-run/role: __ROLE__, job-run/repo: __REPO__, job-run/program: __PROGRAM__, job-run/where: __WHERE__}
   annotations: {job-run/owner: "__OWNER__"}
 spec:
   suspend: true
