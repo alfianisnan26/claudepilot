@@ -31,7 +31,10 @@ const managerOf = (userId: string | undefined): PortalPrincipal => ({
 /** Workspaces owned by two people; anything else is missing. */
 function ownedWorkspaces() {
   const owners: Record<string, string> = { 'docker/alice': ALICE, 'docker/bob': 'u_bob' };
-  registerResolver({ type: 'workspace', resolve: (id) => (owners[id] ? { ref: workspaceRef(id), owner: { kind: 'user', id: owners[id]! as UserId } } : null) });
+  registerResolver({
+    type: 'workspace',
+    resolve: (id) => (owners[id] ? { ref: workspaceRef(id), owner: { kind: 'user', id: owners[id]! as UserId } } : null),
+  });
 }
 
 test('seam: a manager principal is its person for can(), with the same answer as the person on every sampled object', () => {
@@ -71,10 +74,30 @@ function registry() {
     description: 'The context a tool sees.',
     scope: 'read',
     input: z.object({}),
-    handler: (ctx) => ({ actor: ctx.actor, label: ctx.actorLabel ?? null, isAgent: ctx.isAgent, sessionId: ctx.sessionId, workspaceId: ctx.workspaceId }),
+    handler: (ctx) => ({
+      actor: ctx.actor,
+      label: ctx.actorLabel ?? null,
+      isAgent: ctx.isAgent,
+      sessionId: ctx.sessionId,
+      workspaceId: ctx.workspaceId,
+    }),
   });
-  r.register({ name: 'session_rename_self', title: 'Rename', description: 'Agent self.', scope: 'agent', input: z.object({}), handler: () => ((ran.session_rename_self = (ran.session_rename_self ?? 0) + 1), { renamed: true }) });
-  r.register({ name: 'big_switch', title: 'Admin', description: 'Admin tier.', scope: 'admin', input: z.object({}), handler: () => ((ran.big_switch = (ran.big_switch ?? 0) + 1), { switched: true }) });
+  r.register({
+    name: 'session_rename_self',
+    title: 'Rename',
+    description: 'Agent self.',
+    scope: 'agent',
+    input: z.object({}),
+    handler: () => ((ran.session_rename_self = (ran.session_rename_self ?? 0) + 1), { renamed: true }),
+  });
+  r.register({
+    name: 'big_switch',
+    title: 'Admin',
+    description: 'Admin tier.',
+    scope: 'admin',
+    input: z.object({}),
+    handler: () => ((ran.big_switch = (ran.big_switch ?? 0) + 1), { switched: true }),
+  });
   return r;
 }
 
@@ -188,7 +211,9 @@ test('the token: hashed at rest, at most 7 days, replaced on a new mint, refused
   try {
     h.alive.add('gm1');
     const first = h.module.managers.mint({ userId: ALICE, sessionId: 'gm1' })!;
-    const row = h.store.db!.prepare('SELECT token_hash, created_at, expires_at FROM pmcp_manager_tokens WHERE id = ?').get(first.tokenId) as {
+    const row = h.store
+      .db!.prepare('SELECT token_hash, created_at, expires_at FROM pmcp_manager_tokens WHERE id = ?')
+      .get(first.tokenId) as {
       token_hash: string;
       created_at: string;
       expires_at: string;
@@ -247,7 +272,10 @@ test('migration 793: every session is a workspace session of the founding user, 
     add('w1');
     add('w2');
     // node:sqlite rows have a null prototype: copy into a plain object before the strict compare.
-    assert.deepEqual({ ...db.prepare("SELECT kind, owner_id FROM chat_sessions WHERE id = 'w1'").get() }, { kind: 'workspace', owner_id: 'u_owner' });
+    assert.deepEqual(
+      { ...db.prepare("SELECT kind, owner_id FROM chat_sessions WHERE id = 'w1'").get() },
+      { kind: 'workspace', owner_id: 'u_owner' },
+    );
     add('gm1', 'manager');
     assert.throws(() => add('gm2', 'manager'), /UNIQUE/, 'one manager per person, in the database');
     add('gm3', 'manager', ALICE);

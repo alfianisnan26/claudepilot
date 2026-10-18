@@ -104,7 +104,10 @@ async function withPortal(dataDir: string, fn: (portal: Portal) => Promise<void>
     const deadline = Date.now() + BOOT_DEADLINE_MS;
     let up = false;
     while (!up && child.exitCode === null && Date.now() < deadline) {
-      up = await fetch(`${base}/healthz`, { signal: AbortSignal.timeout(2000) }).then((r) => r.ok, () => false);
+      up = await fetch(`${base}/healthz`, { signal: AbortSignal.timeout(2000) }).then(
+        (r) => r.ok,
+        () => false,
+      );
       if (!up) await sleep(250);
     }
     assert.ok(up, `the portal did not come up within ${BOOT_DEADLINE_MS / 1000} s (exit ${child.exitCode}):\n${output.slice(-1500)}`);
@@ -112,10 +115,18 @@ async function withPortal(dataDir: string, fn: (portal: Portal) => Promise<void>
     await sleep(1500);
     assert.equal(child.exitCode, null, `the portal died after starting:\n${output.slice(-1500)}`);
     const system = async (): Promise<SystemStatus> => {
-      const login = await fetch(`${base}/api/login`, { method: 'POST', headers: { 'content-type': 'application/json', origin: base }, body: JSON.stringify({ code: CODE }), signal: AbortSignal.timeout(10_000) });
+      const login = await fetch(`${base}/api/login`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin: base },
+        body: JSON.stringify({ code: CODE }),
+        signal: AbortSignal.timeout(10_000),
+      });
       assert.equal(login.status, 200, 'sign-in works');
       const cookie = /portal_session=([^;]+)/.exec(login.headers.get('set-cookie') ?? '')![1];
-      const res = await fetch(`${base}/api/admin/system`, { headers: { cookie: `portal_session=${cookie}` }, signal: AbortSignal.timeout(10_000) });
+      const res = await fetch(`${base}/api/admin/system`, {
+        headers: { cookie: `portal_session=${cookie}` },
+        signal: AbortSignal.timeout(10_000),
+      });
       assert.equal(res.status, 200);
       return ((await res.json()) as { data: SystemStatus }).data;
     };
@@ -142,7 +153,10 @@ test('a database whose migration failed: the portal stays up, signs you in and s
   await withPortal(await failedMigration(), async (portal) => {
     const s = await portal.system();
     assert.equal(s.trust.state, 'frozen');
-    assert.deepEqual(s.trust.reasons.map((r) => r.code), ['migration-failed']);
+    assert.deepEqual(
+      s.trust.reasons.map((r) => r.code),
+      ['migration-failed'],
+    );
     assert.equal(s.secretKey.canUnlock, false);
     assert.ok(s.portalId);
     assert.equal(portal.child.exitCode, null, portal.output().slice(-1500));
@@ -158,24 +172,34 @@ test('a database from a newer portal: the portal stays up, read-only and frozen'
   await withPortal(dir, async (portal) => {
     const s = await portal.system();
     assert.equal(s.trust.state, 'frozen');
-    assert.deepEqual(s.trust.reasons.map((r) => r.code), ['db-newer']);
+    assert.deepEqual(
+      s.trust.reasons.map((r) => r.code),
+      ['db-newer'],
+    );
     assert.equal(s.schemaVersion, 9999);
     assert.equal(portal.child.exitCode, null, portal.output().slice(-1500));
   });
 });
 
-test('a database file that is not a database: the portal stays up and frozen, and does not touch the file', { timeout: 120_000 }, async () => {
-  const dir = tempDirectory('cp-qa-boot-');
-  const { writeFileSync, readFileSync } = await import('node:fs');
-  const junk = Buffer.from('this is not a database '.repeat(300));
-  writeFileSync(join(dir, 'portal.db'), junk);
-  await withPortal(dir, async (portal) => {
-    const s = await portal.system();
-    assert.equal(s.trust.state, 'frozen');
-    assert.deepEqual(s.trust.reasons.map((r) => r.code), ['db-unreadable']);
-    assert.ok(readFileSync(join(dir, 'portal.db')).equals(junk), 'the file was left as it was (never replaced by an empty database)');
-  });
-});
+test(
+  'a database file that is not a database: the portal stays up and frozen, and does not touch the file',
+  { timeout: 120_000 },
+  async () => {
+    const dir = tempDirectory('cp-qa-boot-');
+    const { writeFileSync, readFileSync } = await import('node:fs');
+    const junk = Buffer.from('this is not a database '.repeat(300));
+    writeFileSync(join(dir, 'portal.db'), junk);
+    await withPortal(dir, async (portal) => {
+      const s = await portal.system();
+      assert.equal(s.trust.state, 'frozen');
+      assert.deepEqual(
+        s.trust.reasons.map((r) => r.code),
+        ['db-unreadable'],
+      );
+      assert.ok(readFileSync(join(dir, 'portal.db')).equals(junk), 'the file was left as it was (never replaced by an empty database)');
+    });
+  },
+);
 
 test('control: a fresh database comes up healthy, and is gone when its test is over', { timeout: 120_000 }, async () => {
   let child: ChildProcess | undefined;
@@ -189,36 +213,54 @@ test('control: a fresh database comes up healthy, and is gone when its test is o
   assert.equal(children.size, 0, 'nothing left to kill');
 });
 
-test('T-968 Q3 (#11136), through the wiring in index.ts: a sign-out on the real server revokes the person’s manager token', { timeout: 120_000 }, async () => {
-  const dir = tempDirectory('cp-qa-boot-');
-  // A manager token of the code's person (the founding user), minted on the same database before the portal starts.
-  const store = await Store.open({ dataDir: dir, secretKey: parseSecretKey(KEY) });
-  const minted = new ManagerTokens(store).mint({ userId: FOUNDING_USER_ID, sessionId: 'gm-boot' });
-  store.close();
-  assert.ok(minted, 'a token was minted');
-  const tokenId = minted.tokenId;
-  const row = () => {
-    const db = new DatabaseSync(join(dir, 'portal.db'), { timeout: 5000 });
-    try {
-      return { ...(db.prepare('SELECT revoked_at, revoked_reason FROM pmcp_manager_tokens WHERE id = ?').get(tokenId) as { revoked_at: string | null; revoked_reason: string | null }) };
-    } finally {
-      db.close();
-    }
-  };
-  await withPortal(dir, async (portal) => {
-    const headers = { 'content-type': 'application/json', origin: portal.base };
-    const login = await fetch(`${portal.base}/api/login`, { method: 'POST', headers, body: JSON.stringify({ code: CODE }), signal: AbortSignal.timeout(10_000) });
-    assert.equal(login.status, 200);
-    const cookie = /portal_session=([^;]+)/.exec(login.headers.get('set-cookie') ?? '')![1];
-    // The twin: signed in, the token is still good.
-    assert.deepEqual(row(), { revoked_at: null, revoked_reason: null });
-    const out = await fetch(`${portal.base}/api/logout`, { method: 'POST', headers: { ...headers, cookie: `portal_session=${cookie}` }, signal: AbortSignal.timeout(10_000) });
-    assert.equal(out.status, 200);
-    const after = row();
-    assert.equal(after.revoked_reason, 'signed out', JSON.stringify(after));
-    assert.ok(after.revoked_at);
-  });
-});
+test(
+  'T-968 Q3 (#11136), through the wiring in index.ts: a sign-out on the real server revokes the person’s manager token',
+  { timeout: 120_000 },
+  async () => {
+    const dir = tempDirectory('cp-qa-boot-');
+    // A manager token of the code's person (the founding user), minted on the same database before the portal starts.
+    const store = await Store.open({ dataDir: dir, secretKey: parseSecretKey(KEY) });
+    const minted = new ManagerTokens(store).mint({ userId: FOUNDING_USER_ID, sessionId: 'gm-boot' });
+    store.close();
+    assert.ok(minted, 'a token was minted');
+    const tokenId = minted.tokenId;
+    const row = () => {
+      const db = new DatabaseSync(join(dir, 'portal.db'), { timeout: 5000 });
+      try {
+        return {
+          ...(db.prepare('SELECT revoked_at, revoked_reason FROM pmcp_manager_tokens WHERE id = ?').get(tokenId) as {
+            revoked_at: string | null;
+            revoked_reason: string | null;
+          }),
+        };
+      } finally {
+        db.close();
+      }
+    };
+    await withPortal(dir, async (portal) => {
+      const headers = { 'content-type': 'application/json', origin: portal.base };
+      const login = await fetch(`${portal.base}/api/login`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ code: CODE }),
+        signal: AbortSignal.timeout(10_000),
+      });
+      assert.equal(login.status, 200);
+      const cookie = /portal_session=([^;]+)/.exec(login.headers.get('set-cookie') ?? '')![1];
+      // The twin: signed in, the token is still good.
+      assert.deepEqual(row(), { revoked_at: null, revoked_reason: null });
+      const out = await fetch(`${portal.base}/api/logout`, {
+        method: 'POST',
+        headers: { ...headers, cookie: `portal_session=${cookie}` },
+        signal: AbortSignal.timeout(10_000),
+      });
+      assert.equal(out.status, 200);
+      const after = row();
+      assert.equal(after.revoked_reason, 'signed out', JSON.stringify(after));
+      assert.ok(after.revoked_at);
+    });
+  },
+);
 
 test('a test that throws still takes its portal down with it', { timeout: 120_000 }, async () => {
   let child: ChildProcess | undefined;
