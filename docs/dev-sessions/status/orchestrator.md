@@ -11,7 +11,7 @@
   2b57efce + T-565 55f5aa8e; app.ts conflict (T-976 setSessionCookie vs T-968 healManager): kept both; pack fresh. QC#1 expired in queue
   (3600 s, ran nothing); gate#2 on 037f7e4b GREEN; QC#3 FAILED format (26 batch files) + lint (old lines). Merged integration ->
   d7ade65b; fmt 3896f232 (T-595 12101) -> QC#4 FAIL (controller.ts fmt; routeAuthz read 0 PRD rows) -> a6fec61b keeps
-  authorization.md + .prettierignore (12153) -> Job bpj3nclr2 (controller fmt + checks) -> QC#5 -> gate -> land -> T-731. T-969 joins the next batch after V5. Rule until the queue drains: ONE Job per lane.
+  authorization.md + .prettierignore (12153) -> controller fmt 20a93647 -> QC#5 then gate#3 (b12yyln1h) -> land -> T-731. T-969 joins the next batch after V5. Rule until the queue drains: ONE Job per lane.
 - T-968 (coordinator builds S1 runtime/S3/S4/S6; this crew lands S1-token + S2 only). S1-token 5ccfb52c rc0, QA PWG #11312
   -> fix a8fca5a3 (2a0edbd8, Job b1gahci5o) -> re-check c691df71; blind PWG 11365 (K8 -> test ccef3ef4, own Job;
   K12 = a8fca5a3). S2 e605c835 Job bno2lrpwq. S2b blind PWG 11302 -> last_error
@@ -19,7 +19,7 @@
   review; fixes on coord/T-968-gm): no deploy until T-731 says so.
 - T-1083 URGENT (D-84: job-run places Jobs on the cluster or the owner's Mac) -> 2a0edbd8, ahead of T-1079. Plan 11383:
   S1a d01b5949 (blind d9f18599). S1b door /jobrun/mac/* on agents.verify (coordinator #11498; NO table, NO migration: my
-  05:25 table acceptance was wrong, 12153; block 880-889 released) -> S1b-1 rebuilt by 2a0edbd8 before T-1079; S1b-3 design
+  05:25 table acceptance was wrong, 12153; block released) -> S1b-1 rebuilt 4850a1c8 (lead read OK; Job, then blind); S1b-3 design
   #12152. Blind per slice. agent.json diff as text to the coordinator after the blind PASS.
 - T-1079 (Konfersi stg release docs per module, vault 98af7d16def1, reuse releaseReport.ts) 2a0edbd8 building now, Job last.
 - 2a0edbd8 Jobs: T-921 db1d8d19 rc0, QA PWG #11350 (J1, J4 survive) -> tests (11368) -> delta c691df71 -> blind; T-257 d34f47b2 rc1 (test bug) -> fix e22ae23d, Job after T-968's two;
