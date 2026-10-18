@@ -159,6 +159,7 @@ export class Portal {
     if (s && s.expiresAt <= Date.now()) {
       this.#sessions.delete(hash);
       this.#persist((st) => st.remove(hash));
+      this.#expired([s.userId ?? FOUNDING_USER_ID]);
       return undefined;
     }
     if (s?.userId) {
@@ -171,6 +172,16 @@ export class Portal {
       }
     }
     return s;
+  }
+
+  /**
+   * T-968 (review 2026-10-18): whether the person is signed in anywhere now, so their General Manager is minted a token only while they
+   * are. A server-code session (no account) is the founding user's, as `signOut` counts it.
+   */
+  signedIn(userId: string): boolean {
+    const now = Date.now();
+    for (const s of this.#sessions.values()) if (s.expiresAt > now && (s.userId ?? FOUNDING_USER_ID) === userId) return true;
+    return false;
   }
 
   /** Ends every session of one email account (a password change, a disable, a removal, a demotion), except `keepToken`'s; cuts its sockets. */
@@ -223,11 +234,22 @@ export class Portal {
 
   #prune() {
     const now = Date.now();
+    const ended: string[] = [];
     for (const [hash, s] of this.#sessions) {
       if (s.expiresAt > now) continue;
       this.#sessions.delete(hash);
       this.#persist((st) => st.remove(hash));
+      ended.push(s.userId ?? FOUNDING_USER_ID);
     }
+    this.#expired(ended);
+  }
+
+  /**
+   * T-968 review M4 and N1: an expired login stops the person's manager only when it was their LAST live one (a sign-out stops it on any
+   * device, Q3; an expiry on the laptop while the phone is signed in does not).
+   */
+  #expired(people: string[]) {
+    this.#signedOut(people.filter((u) => !this.signedIn(u)));
   }
 
   adminState(token: string): AdminState {

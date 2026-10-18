@@ -420,7 +420,11 @@ extends it to assert that each class P, R, D, C and G answers a `cpmt_` call wit
 
 **Built (T-968 S1, identity part).**
 - Migration 793 (chat set) adds `chat_sessions.kind` (`'workspace'` or `'manager'`, CHECK), `owner_id` (default `'u_owner'`), the unique
-  index `chat_sessions_one_manager` on `(owner_id) WHERE kind = 'manager'`, and the `pmcp_manager_tokens` table.
+  index `chat_sessions_one_manager` on `(owner_id) WHERE kind = 'manager' AND state != 'ended'` (one LIVE manager per person: Disable,
+  then Enable again, makes a new one beside the ended one), and the `pmcp_manager_tokens` table.
+- The token goes into the manager's process only while the person is signed in somewhere (`Portal.signedIn`; a server-code session is the
+  founding user's), and a sign-in restarts at its turn's end a manager that holds no live token (`manager/access.ts`: `managerAccess`,
+  `managerHealer`; wired in index.ts and app.ts). Tests: `manager/access.test.ts`, `manager/service.test.ts`, `ci/managerTrigger.test.ts`.
 - `cpmt_` tokens live in `portalmcp/managers.ts` (`ManagerTokens`): minted per manager session (a new mint revokes the older ones), sha256
   at rest, 7 days (`AGENT_TOKEN_TTL_MS`), refused once the session ended.
 - They are revoked on session end, archive or delete (index.ts), on a lockdown, and by `Portal.onSignedOut` whenever a session of the person

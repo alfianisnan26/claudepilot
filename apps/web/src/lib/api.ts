@@ -160,7 +160,8 @@ export const api = {
   removeTeamMember: (id: string, userId: string) => request<{ removed: boolean }>('DELETE', PORTAL_TEAM_API.member(id, userId)),
   // The General Manager (T-968).
   managerStatus: () => request<ManagerStatus>('GET', MANAGER_API.status),
-  enableManager: (workspaceId?: string) => request<ManagerStatus>('POST', MANAGER_API.enable, workspaceId ? { workspaceId } : {}),
+  prepareManager: () => request<ManagerStatus>('POST', MANAGER_API.prepare, {}),
+  enableManager: () => request<ManagerStatus>('POST', MANAGER_API.enable, {}),
   disableManager: () => request<ManagerStatus>('POST', MANAGER_API.disable, {}),
   // Schedules and open apps (owner, 2026-10-18).
   portalLoops: () => request<PortalLoop[]>('GET', SCHEDULES_API.loops),

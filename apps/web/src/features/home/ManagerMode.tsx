@@ -1,9 +1,10 @@
 import { Button, cn, useToast } from '@isnanme/ui';
-import type { ManagerStatus } from '@portal/contracts';
-import { Bot, LayoutDashboard, Power } from 'lucide-react';
+import type { ManagerStatus, Workspace } from '@portal/contracts';
+import { Bot, LayoutDashboard, Power, Server } from 'lucide-react';
 import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
 import { Card } from '@/components/Card';
 import { InfoTip } from '@/components/InfoTip';
+import { ClaudesSection } from '@/features/workspaces/ClaudesSection';
 import { api, errorText } from '@/lib/api';
 
 const SessionPage = lazy(() => import('@/features/chat/SessionPage').then((m) => ({ default: m.SessionPage })));
@@ -61,27 +62,35 @@ export function HomeModeSwitch({ mode, onMode }: { mode: HomeMode; onMode: (m: H
 export function ManagerMode({ onBack }: { onBack: () => void }) {
   const toast = useToast();
   const [st, setSt] = useState<ManagerStatus | null>(null);
-  const [where, setWhere] = useState('');
   const [busy, setBusy] = useState(false);
+  const [ws, setWs] = useState<Workspace | null>(null);
 
   const load = useCallback(async () => {
     try {
       const s = await api.managerStatus();
       setSt(s);
-      setWhere((w) => w || s.candidates[0]?.id || '');
+      if (s.runtime?.status === 'running' && !s.enabled) setWs((await api.workspaces.list()).find((w) => w.id === s.runtime?.workspaceId) ?? null);
     } catch (e) {
       toast(errorText(e, 'Couldn’t read the manager.'), 'error');
     }
   }, [toast]);
   useEffect(() => void load(), [load]);
+  // While its runtime starts, look again every 5 s.
+  const starting = !!st && !st.enabled && !!st.runtime && st.runtime.status !== 'running';
+  useEffect(() => {
+    if (!starting) return;
+    const t = setInterval(() => void load(), 5000);
+    return () => clearInterval(t);
+  }, [starting, load]);
 
-  const enable = async () => {
+  const act = async (fn: () => Promise<ManagerStatus>, done: string, fail: string) => {
     setBusy(true);
     try {
-      setSt(await api.enableManager(where || undefined));
-      toast('General Manager is on');
+      setSt(await fn());
+      toast(done);
     } catch (e) {
-      toast(errorText(e, 'Couldn’t turn it on.'), 'error');
+      toast(errorText(e, fail), 'error');
+      void load();
     } finally {
       setBusy(false);
     }
@@ -94,6 +103,7 @@ export function ManagerMode({ onBack }: { onBack: () => void }) {
       </Suspense>
     );
 
+  const rt = st?.runtime ?? null;
   return (
     <Card className="p-4 sm:p-5" data-manager-enable="">
       <h2 className="mb-1 flex items-center gap-1 text-[15px] font-semibold">
@@ -101,29 +111,26 @@ export function ManagerMode({ onBack }: { onBack: () => void }) {
         <InfoTip label="About the General Manager">
           Your one chat for the whole pilot. It watches every crew and its lead, routes work, follows CI and deploys, and turns what you report
           into tickets. It manages; it does not work tickets itself. It acts only through the pilot’s tools, as you: no files, no shell, no
-          web. Production, a release approval, deleting data and credentials stay your decision in its chat.
+          web. It runs in its own small workspace where nothing else runs. Production, a release approval, deleting data and credentials stay
+          your decision in its chat.
         </InfoTip>
       </h2>
       {st === null ? (
         <div className="skeleton mt-2 h-10 rounded-xl" />
-      ) : st.candidates.length === 0 ? (
-        <p className="text-sm text-muted">It runs on a Claude in one of your workspaces: start a workspace with a signed-in Claude first.</p>
+      ) : !rt ? (
+        <div className="mt-3 flex flex-col gap-3">
+          <p className="text-sm text-muted">Step 1: its own workspace (1 CPU, 1.5 GB).</p>
+          <Button size="lg" loading={busy} onClick={() => void act(api.prepareManager, 'Runtime is starting', 'Couldn’t make its workspace.')} icon={<Server className="size-4" />} className="w-full">
+            Prepare
+          </Button>
+        </div>
+      ) : rt.status !== 'running' ? (
+        <p className="mt-3 text-sm text-muted">Its workspace is starting ({rt.status})…</p>
       ) : (
         <div className="mt-3 flex flex-col gap-3">
-          <label className="flex flex-col gap-1.5">
-            <span className="flex items-center gap-1 text-sm font-semibold text-ink-soft">
-              Runs on
-              <InfoTip label="About where it runs">The workspace whose Claudes it uses (auto move works as for any session). It gets an empty folder there and no tool to touch it.</InfoTip>
-            </span>
-            <select value={where} onChange={(e) => setWhere(e.target.value)} className="h-12 w-full rounded-2xl border border-line bg-surface px-3 text-[15px]">
-              {st.candidates.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <Button size="lg" loading={busy} onClick={() => void enable()} icon={<Power className="size-4" />} className="w-full">
+          <p className="text-sm text-muted">Step 2: a Claude signed in there, once. Then Enable.</p>
+          {ws && <ClaudesSection workspace={ws} onLeave={() => void load()} />}
+          <Button size="lg" loading={busy} onClick={() => void act(api.enableManager, 'General Manager is on', 'Couldn’t turn it on.')} icon={<Power className="size-4" />} className="w-full">
             Enable
           </Button>
         </div>
