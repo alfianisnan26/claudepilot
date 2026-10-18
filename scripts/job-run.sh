@@ -34,7 +34,8 @@
 #                                                       only k3s-node2 has room for it. Memory is requested = limited: the scheduler places a Job
 #                                                       only where it fits, says why it is Pending, and an OOMKilled Job says so with its limit.
 #     --pool-env <NAME>                               (repeatable, T-426) a scoped test credential from this workspace's Secrets pool for the
-#                                                       command (Konfersi's stg e2e: Cloudflare Access). Only E2E_CF_ACCESS_* names, set here; the
+#                                                       command (Konfersi's stg e2e: Cloudflare Access, the QA test account). Only E2E_CF_ACCESS_*,
+#                                                       E2E_QA_EMAIL and E2E_QA_PASSWORD (T-384), set here; the
 #                                                       value goes on stdin into the Job's Secret (deleted with the Job), the command's container
 #                                                       gets it as env by secretKeyRef (fetch does not), and the log is masked for it. Values under 8
 #                                                       characters are refused (the mask skips them); an --out file that holds a value, and any
@@ -179,12 +180,13 @@ for a in $artifacts; do [[ $a =~ ^[A-Za-z0-9_.][A-Za-z0-9_./*-]*$ && ! $a =~ (^|
 # A leading dot is a path too (.pilot/tests/x.py: T-960, 2026-10-17, no test under .pilot/ could be proved); never `..`, `.` or `./` alone.
 for a in $keep; do [[ $a =~ ^[A-Za-z0-9_.][A-Za-z0-9_./-]*$ && ! $a =~ (^|/)\.\.(/|$) && ! $a =~ ^\.(/)?$ ]] || die "--keep-tests: file paths inside the repository (got $a)"; done
 # --pool-env (T-426): the scoped test credentials of the Secrets pool, by NAME, for the command. Checked here, before any kubectl call.
-# Only E2E_CF_ACCESS_* names. The --pool-env name check and the unknown-option branch never echo what they refuse (it may be a secret value
+# Only E2E_CF_ACCESS_* names, and the stg QA test account's two (E2E_QA_EMAIL, E2E_QA_PASSWORD: T-384, coordinator decision 2026-10-17
+# #9575; a test account on stg, never a person's). The --pool-env name check and the unknown-option branch never echo what they refuse (it may be a secret value
 # pasted by mistake, and a value can look like a name): the message says only that it was refused and why. Other options' messages still show
 # their own value (--ref, --repo ... "got X"): never paste a value into any option. Values under 8 characters are refused: the log mask skips them.
 pool_names=
 for n in ${pool[@]+"${pool[@]}"}; do
-  [[ $n =~ ^E2E_CF_ACCESS_[A-Z0-9_]+$ ]] || die "--pool-env: refused: not an allowed name (E2E_CF_ACCESS_*); the argument is not shown"
+  [[ $n =~ ^E2E_CF_ACCESS_[A-Z0-9_]+$ || $n == E2E_QA_EMAIL || $n == E2E_QA_PASSWORD ]] || die "--pool-env: refused: not an allowed name (E2E_CF_ACCESS_*, E2E_QA_EMAIL, E2E_QA_PASSWORD); the argument is not shown"
   [ -n "${!n:-}" ] || die "--pool-env: $n is not set in this workspace (the Secrets pool delivers it)"
   [[ ${!n} != *[$'\n\r']* ]] || die "--pool-env: $n holds a line break; refused"
   # Printable ASCII only (kubectl's env-file parser fails on other bytes and may then print the line).
