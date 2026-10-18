@@ -15,8 +15,9 @@ import WebSocket, { WebSocketServer } from 'ws';
 import { attachBrowserSockets } from '../browser/socket.js';
 import { attachChat } from '../chat/socket.js';
 import { openCore, openHub } from '../connect/testkit.js';
-import { LiveHub } from '../live.js';
+import { LiveHub, handleIfAllowed } from '../live.js';
 import { Portal } from '../portal.js';
+import { LEGACY_SESSION_COOKIE, SESSION_COOKIE, sessionOfRequest } from '../sessionCookie.js';
 import { SocketGuard, fullSessionOf, signedInOf } from '../sockets.js';
 import { attachShell } from '../workspaces/shell.js';
 import { SHELL_SOCKET_PATH } from '../workspaces/authz.js';
@@ -24,7 +25,8 @@ import type { SignedIn } from './routeGuard.js';
 import { SOCKET_GUARD_NAME, UPGRADE_NOT_FOUND, attachedSockets, declareSocketPolicies, declaredSockets, onSocket, socketPolicyFor, type SocketGrant } from './socketGuard.js';
 
 const MEMBER = 'u_member1';
-const COOKIE = 'portal_session';
+/** The old name (what a plain-http portal sets); the tests that sign in for real read through sessionCookie.ts, the API's own reader. */
+const COOKIE = LEGACY_SESSION_COOKIE;
 const CODE = '24681357';
 const servers: Server[] = [];
 after(() =>
@@ -96,7 +98,7 @@ async function testSockets() {
     '/t/open': { connect: { kind: 'handler', checks: ['a test door'] }, messages: {} },
   });
   const server = createServer();
-  new SocketGuard(new Portal(CODE, 60_000), COOKIE, 100).attach(server);
+  new SocketGuard(new Portal(CODE, 60_000), sessionOfRequest, 100).attach(server);
   const grants: { path: string; grant: SocketGrant }[] = [];
   for (const path of ['/t/sock/:id', '/t/admin', '/t/open', '/t/undeclared'])
     onSocket(server, path, { signedIn: fakeSignedIn }, (_req, socket, _head, grant) => {
@@ -127,7 +129,7 @@ test('nothing in the server listens for `upgrade` but the socket guard and the s
 test('every socket module of index.ts attaches through the guard, each with a declaration, and every declaration has its socket', async () => {
   const server = createServer();
   const portal = new Portal(CODE, 60_000);
-  new SocketGuard(portal, COOKIE).attach(server);
+  new SocketGuard(portal, sessionOfRequest).attach(server);
   attachShell(server, portal, spy('workspaces') as never, fakeSignedIn);
   attachBrowserSockets(server, { portal, service: spy('browser') as never, signedIn: fakeSignedIn });
   new LiveHub({ workspaces: async () => [], usage: async () => [] }, () => false).attach(server, fakeSignedIn);
@@ -192,7 +194,7 @@ test('each message: the owner goes on, a member only with a type its declaration
 test('the real modules: a member gets the unknown path’s 404 from the terminal and the live socket, and they never run', async () => {
   const server = createServer();
   const portal = new Portal(CODE, 60_000);
-  new SocketGuard(portal, COOKIE, 100).attach(server);
+  new SocketGuard(portal, sessionOfRequest, 100).attach(server);
   attachShell(server, portal, spy('workspaces') as never, fakeSignedIn);
   new LiveHub({ workspaces: async () => (touched.push('live.workspaces'), []), usage: async () => [] }, () => true).attach(server, fakeSignedIn);
   const port = await listen(server);
@@ -206,34 +208,60 @@ test('the real modules: a member gets the unknown path’s 404 from the terminal
   assert.equal(status(await handshake(port, LIVE_PATH, { who: 'owner' })), 'HTTP/1.1 101 Switching Protocols', 'the owner still opens it');
 });
 
-test('T-976 `__Host-` cookie: the sockets read the session through the shared reader, the guard, the module and the tracker alike', async () => {
-  const name = ['__Host', 'portal_session'].join('-');
+test('T-976 `__Host-` cookie: the sockets read the session through THE shared reader (sessionCookie.ts), the guard, the module and the tracker alike', async () => {
   const portal = new Portal(CODE, 60_000);
   portal.roleOf = (id) => (id === MEMBER ? 'member' : null);
   const server = createServer();
-  const tracker = new SocketGuard(portal, name, 100);
+  // index.ts's own wiring: the tracker reads with sessionOfRequest, the guard and the modules through signedInOf / fullSessionOf (sockets.ts).
+  const tracker = new SocketGuard(portal, sessionOfRequest, 100);
   tracker.attach(server);
-  attachShell(server, portal, spy('workspaces') as never, signedInOf(portal, name));
-  new LiveHub({ workspaces: async () => [], usage: async () => [] }, fullSessionOf(portal, name)).attach(server, signedInOf(portal, name));
+  attachShell(server, portal, spy('workspaces') as never, signedInOf(portal));
+  new LiveHub({ workspaces: async () => [], usage: async () => [] }, fullSessionOf(portal)).attach(server, signedInOf(portal));
   const port = await listen(server);
-  const as = (token: string, cookie = name) => ({ headers: [`Cookie: theme=dark; ${cookie}=${token}`] });
+  const cookie = (pairs: [string, string][]) => ({ headers: [`Cookie: theme=dark; ${pairs.map(([n, t]) => `${n}=${t}`).join('; ')}`] });
+  const as = (token: string, name = SESSION_COOKIE) => cookie([[name, token]]);
   const unknown = await handshake(port, '/api/no-such-socket');
   const owner = portal.signIn(CODE);
   const member = portal.openSession(MEMBER);
   const before = touched.length;
-  assert.equal(await handshake(port, '/api/workspaces/docker/w1/shell', as(member)), unknown, 'a member under that name is signed in: the 404, never the 401 of nobody');
-  assert.equal(await handshake(port, LIVE_PATH, as(member)), unknown);
+  for (const name of [SESSION_COOKIE, LEGACY_SESSION_COOKIE]) {
+    assert.equal(await handshake(port, '/api/workspaces/docker/w1/shell', as(member, name)), unknown, `${name}: a member is signed in: the 404, never the 401 of nobody`);
+    assert.equal(await handshake(port, LIVE_PATH, as(member, name)), unknown);
+    assert.equal(status(await handshake(port, LIVE_PATH, as(owner, name))), 'HTTP/1.1 101 Switching Protocols', `${name}: both names resolve for the owner`);
+  }
   assert.deepEqual(touched.slice(before), []);
-  assert.match(status(await handshake(port, LIVE_PATH, as(owner, COOKIE))), /^HTTP\/1\.1 401 /, 'the old name is not the session any more');
-  const ws = new WebSocket(`ws://127.0.0.1:${port}${LIVE_PATH}`, { headers: { Origin: `http://127.0.0.1:${port}`, Cookie: `${name}=${owner}` } });
+  // The read rule: the `__Host-` cookie wins whenever it is there, in either order; a planted old-name cookie never overrides it.
+  for (const pairs of [
+    [[LEGACY_SESSION_COOKIE, owner], [SESSION_COOKIE, member]],
+    [[SESSION_COOKIE, member], [LEGACY_SESSION_COOKIE, owner]],
+  ] as [string, string][][])
+    assert.equal(await handshake(port, LIVE_PATH, cookie(pairs)), unknown, 'the member’s `__Host-` session, never the owner’s planted under the old name');
+  assert.match(status(await handshake(port, LIVE_PATH, cookie([[LEGACY_SESSION_COOKIE, member], [SESSION_COOKIE, 'not-a-session']]))), /^HTTP\/1\.1 401 /, 'a dead `__Host-` cookie still wins: the old name is read only when it is absent');
+  const ws = new WebSocket(`ws://127.0.0.1:${port}${LIVE_PATH}`, { headers: { Origin: `http://127.0.0.1:${port}`, Cookie: `${LEGACY_SESSION_COOKIE}=${member}; ${SESSION_COOKIE}=${owner}` } });
   await new Promise((r, j) => (ws.once('open', r), ws.once('error', j)));
   assert.equal(tracker.size, 1, 'the tracker ties the socket to the `__Host-` sign-in');
   const gone = new Promise<void>((r) => ws.once('close', () => r()));
   portal.signOut(owner);
   tracker.sweep();
   await gone;
-  assert.equal(tracker.size, 0);
+  assert.equal(tracker.size, 0, 'and cuts it when that sign-in ends');
   tracker.close();
+});
+
+test('blind #11081 D5: a message the connection’s declaration refuses never reaches the live socket’s handler', async () => {
+  const { port, grants } = await testSockets();
+  await handshake(port, '/t/sock/d5', { who: 'member' });
+  const member = grants.at(-1)!.grant;
+  const handled: string[] = [];
+  const handle = (m: { type?: unknown }) => void handled.push(String(m.type));
+  await handleIfAllowed(member, { type: 'admin' }, handle);
+  await handleIfAllowed(member, { type: 'no-such-type' }, handle);
+  assert.deepEqual(handled, [], 'a refused type (a platform one, an undeclared one) never runs handle()');
+  await handleIfAllowed(member, { type: 'ok' }, handle);
+  assert.deepEqual(handled, ['ok'], 'an allowed one does');
+  await handshake(port, '/t/sock/d5', { who: 'owner' });
+  await handleIfAllowed(grants.at(-1)!.grant, { type: 'admin' }, handle);
+  assert.deepEqual(handled, ['ok', 'admin'], 'the founding owner at once');
 });
 
 test('the chat socket: a member’s message on a session it may not see gets what a session that does not exist gets', async () => {
@@ -259,12 +287,12 @@ test('revocation: a member’s socket ends with its sign-in, an admin made a mem
   ]);
   portal.roleOf = (id) => roles.get(id) ?? null;
   const server = createServer();
-  const guard = new SocketGuard(portal, COOKIE, 100);
+  const guard = new SocketGuard(portal, sessionOfRequest, 100);
   guard.attach(server);
   portal.onRevoked = () => guard.sweep();
   declareSocketPolicies('t', { '/t/sock/:id': { connect: { kind: 'signed-in' }, messages: { ok: { kind: 'signed-in' }, admin: { kind: 'platform', area: 'users', verb: 'view' } } } });
   const wss = new WebSocketServer({ noServer: true });
-  onSocket(server, '/t/sock/:id', { signedIn: signedInOf(portal, COOKIE) }, (req, socket, head) => wss.handleUpgrade(req, socket, head, () => undefined));
+  onSocket(server, '/t/sock/:id', { signedIn: signedInOf(portal) }, (req, socket, head) => wss.handleUpgrade(req, socket, head, () => undefined));
   const port = await listen(server);
   const open = (token: string) =>
     new Promise<WebSocket>((resolve, reject) => {
@@ -293,6 +321,20 @@ test('revocation: a member’s socket ends with its sign-in, an admin made a mem
   portal.signOut(token);
   await gone;
   assert.equal(other.readyState, WebSocket.OPEN, 'signing out one sign-in leaves the others');
+
+  // Blind #11081 D7: one token opens a full socket, is made a member and opens a second (not full) one: the full mark stays pinned, so the
+  // sweep cuts both, the member-era one too (overwriting the mark with the latest socket's would keep both open on a live member session).
+  roles.set('u_admin2', 'admin');
+  const pinned = portal.openSession('u_admin2');
+  const fullOne = await open(pinned);
+  roles.set('u_admin2', 'member');
+  const memberOne = await open(pinned);
+  assert.equal(portal.anySession(pinned)?.userId, 'u_admin2', 'the sign-in itself is still live, as a member');
+  guard.sweep();
+  await closed(fullOne);
+  await closed(memberOne);
+  assert.equal(other.readyState, WebSocket.OPEN);
+  assert.equal(guard.size, 1, 'only the other member’s socket is left');
   other.close();
   guard.close();
 });

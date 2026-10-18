@@ -3,18 +3,12 @@ import type { Duplex } from 'node:stream';
 import { isAppError } from '@isnanme/core';
 import type { ShellClientMessage, ShellServerMessage } from '@portal/contracts';
 import { WebSocketServer, type WebSocket } from 'ws';
-<<<<<<< HEAD
 import type { SignedIn } from '../authz/routeGuard.js';
 import { UPGRADE_NOT_FOUND, declareSocketPolicies, onSocket } from '../authz/socketGuard.js';
-import { config } from '../config.js';
-import type { Portal } from '../portal.js';
-import { sessionTokenOf } from '../sessionToken.js';
-import { signedInOf } from '../sockets.js';
-import { SHELL_SOCKET_PATH, SHELL_SOCKET_POLICIES } from './authz.js';
-=======
 import type { Portal } from '../portal.js';
 import { sessionOfRequest } from '../sessionCookie.js';
->>>>>>> origin/ticket/T-976-merge
+import { signedInOf } from '../sockets.js';
+import { SHELL_SOCKET_PATH, SHELL_SOCKET_POLICIES } from './authz.js';
 import { runtimeMessage, type Workspaces } from './manager.js';
 import { attachCommand, TERMINAL_ID } from './terminals.js';
 
@@ -42,7 +36,7 @@ const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, M
  * `GET /api/workspaces/<target>/<name>/shell` upgrades to a WebSocket running a login shell in the
  * workspace. Binary frames are terminal bytes both ways; text frames are JSON control messages.
  */
-export function attachShell(server: Server, portal: Portal, workspaces: Workspaces, signedIn: (req: IncomingMessage) => SignedIn = signedInOf(portal, config.session.cookie)) {
+export function attachShell(server: Server, portal: Portal, workspaces: Workspaces, signedIn: (req: IncomingMessage) => SignedIn = signedInOf(portal)) {
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
 
   // T-1043 S0b: behind the socket guard, with its declaration (`operate` on the workspace, and on the terminal `?term=` names).
@@ -52,11 +46,7 @@ export function attachShell(server: Server, portal: Portal, workspaces: Workspac
     const match = url.pathname.match(SHELL_PATH);
     if (!match) return void socket.end(UPGRADE_NOT_FOUND); // a name no workspace can have
     if (!sameOrigin(req)) return refuse(socket, 403, 'Forbidden');
-<<<<<<< HEAD
-    if (!portal.session(sessionTokenOf(req, config.session.cookie))) return refuse(socket, 401, 'Unauthorized');
-=======
     if (!portal.session(sessionOfRequest(req))) return refuse(socket, 401, 'Unauthorized');
->>>>>>> origin/ticket/T-976-merge
 
     const [, target, name] = match as unknown as [string, string, string];
     const size = {

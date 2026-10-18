@@ -9,24 +9,22 @@ const SWEEP_MS = 15_000;
 /** An upgrade request nobody has answered by then is dropped (a path no module owns would otherwise hang for ever). */
 const UNANSWERED_MS = 5_000;
 
-<<<<<<< HEAD
 /**
- * Who a handshake's cookie signs in, exactly as the HTTP guard reads it (app.ts; both through sessionToken.ts): a full session (the server
- * code, an admin account), a member account, or nobody. The socket guard (authz/socketGuard.ts, T-1043 S0b) decides for it.
+ * Who a handshake's cookie signs in, exactly as the HTTP guard reads it (app.ts; both through sessionCookie.ts, `__Host-portal_session`
+ * first): a full session (the server code, an admin account), a member account, or nobody. The socket guard (authz/socketGuard.ts,
+ * T-1043 S0b) decides for it.
  */
 export const signedInOf =
-  (portal: Pick<Portal, 'session' | 'anySession'>, cookie: string) =>
+  (portal: Pick<Portal, 'session' | 'anySession'>) =>
   (req: IncomingMessage): SignedIn =>
-    signedInFor(portal, sessionTokenOf(req, cookie));
+    signedInFor(portal, sessionTokenOf(req));
 
 /** Whether a handshake carries a full session (the server code, an admin account): a module's own check (the shell, the browser, chat). */
 export const fullSessionOf =
-  (portal: Pick<Portal, 'session'>, cookie: string) =>
+  (portal: Pick<Portal, 'session'>) =>
   (req: IncomingMessage): boolean =>
-    !!portal.session(sessionTokenOf(req, cookie));
+    !!portal.session(sessionTokenOf(req));
 
-=======
->>>>>>> origin/ticket/T-976-merge
 /**
  * Ties the sockets a signed-in tab opens (live updates, chat, terminals) to its session. Each module checks the
  * session once, at the handshake; this keeps the connection with its session token and cuts it when that
@@ -40,14 +38,9 @@ export class SocketGuard {
   readonly #timer: NodeJS.Timeout;
 
   constructor(
-<<<<<<< HEAD
     private readonly portal: Pick<Portal, 'session'> & Partial<Pick<Portal, 'anySession'>>,
-    private readonly cookie: string,
-=======
-    private readonly portal: Pick<Portal, 'session'>,
     /** The session token of a handshake (sessionCookie.ts `sessionOfRequest`: the same read rule as the API). */
-    private readonly tokenOf: (req: IncomingMessage) => string | undefined,
->>>>>>> origin/ticket/T-976-merge
+    private readonly tokenOf: (req: IncomingMessage) => string | undefined = sessionTokenOf,
     private readonly unansweredMs = UNANSWERED_MS,
   ) {
     this.#timer = setInterval(() => this.sweep(), SWEEP_MS);
@@ -63,8 +56,7 @@ export class SocketGuard {
       unanswered.unref();
       socket.once('close', () => clearTimeout(unanswered));
 
-<<<<<<< HEAD
-      const token = sessionTokenOf(req, this.cookie);
+      const token = this.tokenOf(req);
       if (!token) return; // the owner of the path answers 401
       const full = !!this.portal.session(token);
       if (!full && !this.portal.anySession?.(token)) return;
@@ -74,13 +66,6 @@ export class SocketGuard {
       else entry.full ||= full;
       const tracked = entry;
       tracked.sockets.add(socket);
-=======
-      const token = this.tokenOf(req);
-      if (!token || !this.portal.session(token)) return; // the owner of the path answers 401
-      let sockets = this.#open.get(token);
-      if (!sockets) this.#open.set(token, (sockets = new Set()));
-      sockets.add(socket);
->>>>>>> origin/ticket/T-976-merge
       socket.once('close', () => {
         tracked.sockets.delete(socket);
         if (tracked.sockets.size === 0 && this.#open.get(token) === tracked) this.#open.delete(token);

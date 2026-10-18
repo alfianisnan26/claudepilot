@@ -53,10 +53,7 @@ import {
 import type { AppPorts } from './appports/index.js';
 import { Hono, type Context } from 'hono';
 import { deleteCookie, setCookie } from 'hono/cookie';
-<<<<<<< HEAD
-import { sessionTokenFrom, signedInFor } from './sessionToken.js';
-=======
->>>>>>> origin/ticket/T-976-merge
+import { signedInFor } from './sessionToken.js';
 import { bodyLimit } from 'hono/body-limit';
 import { PortalUsers } from './identity/users.js';
 import { SessionGrants } from './identity/grants.js';
@@ -121,16 +118,13 @@ import { createClaudeVersionRoutes, createWorkspaceClaudeVersionRoutes, type Cla
 import { createCodespacesRoutes, type Codespaces } from './codespaces/index.js';
 import type { Platform } from './platform/index.js';
 import { actorOf, actorString, actorUserId, visible } from './authz/seam.js';
-<<<<<<< HEAD
 import { createRouteGuard, middleware, notFound } from './authz/routeGuard.js';
 import { declareAppPolicies } from './authz/appPolicies.js';
-=======
 import type { HeldShare } from './identity/grants.js';
 import type { OidcClient } from './identity/oidc.js';
 import { identityRoutes } from './identity/routes.js';
 import { SsoProviders } from './identity/sso.js';
 import { PortalTeams } from './identity/teams.js';
->>>>>>> origin/ticket/T-976-merge
 import { assetCompress, jsonCompress } from './jsonCompress.js';
 import { LEGACY_SESSION_COOKIE, SESSION_COOKIE, overHttps, sessionCookieSpec, sessionFromCookies } from './sessionCookie.js';
 
@@ -315,13 +309,6 @@ export function createApp(
       return 'unavailable';
     }
   };
-<<<<<<< HEAD
-  const { cookie, ttlMs } = config.session;
-  /** The one place a request's session token is read: the route guard, the session guard and the sign-in routes all use it (T-976 renames the cookie here). */
-  // The sockets read it the same way (sessionToken.ts), so a renamed cookie is one name on every door.
-  const sessionToken = (c: Context): string | undefined => sessionTokenFrom(c.req.header('cookie'), cookie);
-=======
->>>>>>> origin/ticket/T-976-merge
 
   // Served over plain HTTP: no HSTS.
   // The built app also gets a CSP (csp.ts); the dev server's pages come from Vite, not from here.
@@ -367,8 +354,9 @@ export function createApp(
   app.use(
     '*',
     createRouteGuard({
-      // Only a full session is the founding owner; a member account is a member (sessionToken.ts, tested there).
-      signedIn: (c) => signedInFor(portal, sessionToken(c)),
+      // Only a full session is the founding owner; a member account is a member (sessionToken.ts, tested there). The token is read by
+      // `sessionToken` above, sessionCookie.ts's one read rule (T-976: `__Host-portal_session` wins), the same reader as every socket.
+      signedIn: (c) => signedInFor(portal, sessionToken(c as Context<Env>)),
       // A `/:ref…` workspace route asks about the `<target>/<name>` a stable id resolves to; anything else there is handed on (T-531 S2).
       idOf: (check, value) => (check.type === 'workspace' && check.param === 'ref' ? (isStableWorkspaceId(value) ? (workspaces.resolve(value)?.legacyId ?? value) : null) : undefined),
     }),
@@ -389,15 +377,9 @@ export function createApp(
   app.get(API.session, (c) => {
     const token = sessionToken(c);
     const status: SessionStatus = {
-<<<<<<< HEAD
-      authenticated: !!portal.anySession(sessionToken(c)),
-      enabled: portal.enabled,
-      member: !!portal.anySession(sessionToken(c)) && !portal.session(sessionToken(c)),
-=======
       authenticated: !!portal.anySession(token),
       enabled: portal.enabled,
       member: !!portal.anySession(token) && !portal.session(token),
->>>>>>> origin/ticket/T-976-merge
       emailSignIn: (() => {
         try {
           return users.any();
@@ -596,11 +578,7 @@ export function createApp(
   });
 
   app.post(API.logout, (c) => {
-<<<<<<< HEAD
-    const token = sessionToken(c);
-=======
     const { token } = sessionFromCookies(c.req.header('cookie'));
->>>>>>> origin/ticket/T-976-merge
     if (token) portal.signOut(token);
     if (https(c)) deleteCookie(c, SESSION_COOKIE, { path: '/', secure: true });
     deleteCookie(c, LEGACY_SESSION_COOKIE, { path: '/' });

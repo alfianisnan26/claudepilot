@@ -49,6 +49,15 @@ export const LIVE_SOCKET_POLICIES: SocketPolicies = {
 };
 
 /**
+ * One live message, handled only when the connection's declaration allows its type (T-1043 S0b, blind #11081 D5). With today's
+ * declarations a member never reaches a message (the handshake is the platform's) and both types are `signed-in`, so this is the check
+ * that holds once MU2 opens the socket: a refused message never reaches `handle`.
+ */
+export async function handleIfAllowed<M extends { type?: unknown }>(grant: Pick<SocketGrant, 'allows'>, msg: M, handle: (msg: M) => void): Promise<void> {
+  if (await grant.allows(String(msg.type), msg as Record<string, unknown>)) handle(msg);
+}
+
+/**
  * The live socket (`/api/live`, one per tab): pushes the workspace list and usage while a page shows
  * them, and tells pages when accounts, pools or the portal's storage state change, so nothing polls.
  * Listing runs once for all tabs, only while someone watches, and a list goes out only when it changed.
@@ -134,9 +143,7 @@ export class LiveHub {
       } catch {
         return;
       }
-      queue = queue.then(async () => {
-        if (await grant.allows(String(msg.type), msg as Record<string, unknown>)) handle(msg);
-      });
+      queue = queue.then(() => handleIfAllowed(grant, msg, handle));
     });
     const handle = (msg: { type?: unknown; topics?: unknown }) => {
       if (msg.type === 'presence') return this.#presence(ws, msg as Record<string, unknown>, req);

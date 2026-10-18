@@ -325,12 +325,12 @@ const spy = (what: string): object =>
 
 /**
  * The real app. `serveWeb`: with the web app's static routes, served from a temporary dist made here (an `index.html` and one asset), so the
- * walk never depends on a web build (QA 10733 #2). `cookie`: the session cookie's name for this app (QA 10733 #3: T-976's `__Host-` name).
+ * walk never depends on a web build (QA 10733 #2). `cookie`: the name the requests send the session under (QA 10733 #3: T-976's `__Host-`
+ * name; the app reads both through sessionCookie.ts).
  */
 async function realApp(serveWeb = false, cookie = 'portal_session', early?: (h: Hono) => void) {
   const paths = config.paths as { webDist: string };
-  const session = config.session as { cookie: string };
-  const was = { webDist: paths.webDist, cookie: session.cookie };
+  const was = { webDist: paths.webDist };
   let dist: string | null = null;
   if (serveWeb) {
     dist = mkdtempSync(join(tmpdir(), 'routeguard-dist-'));
@@ -339,7 +339,6 @@ async function realApp(serveWeb = false, cookie = 'portal_session', early?: (h: 
     writeFileSync(join(dist, 'assets', 'app.js'), 'export {};');
     paths.webDist = dist;
   }
-  session.cookie = cookie;
   try {
     return await buildRealApp(
       serveWeb,
@@ -350,9 +349,8 @@ async function realApp(serveWeb = false, cookie = 'portal_session', early?: (h: 
       early,
     );
   } finally {
-    // createApp reads both when it is built; put them back for the next app.
+    // createApp reads it when it is built; put it back for the next app.
     paths.webDist = was.webDist;
-    session.cookie = was.cookie;
   }
 }
 

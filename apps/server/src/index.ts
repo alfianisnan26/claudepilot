@@ -15,12 +15,8 @@ import { AccountPools } from './accounts/pools.js';
 import { AccountsService } from './accounts/service.js';
 import { Outbox } from './delivery/outbox.js';
 import { LiveHub } from './live.js';
-<<<<<<< HEAD
 import { SocketGuard, fullSessionOf, signedInOf } from './sockets.js';
-=======
-import { SocketGuard } from './sockets.js';
 import { cutOnRevoke } from './revoke.js';
->>>>>>> origin/ticket/T-976-merge
 import { workspaceView } from './workspaces/view.js';
 import { readWorkspaceMemory } from './workspaces/memory.js';
 import { runToEnd } from './workspaces/runToEnd.js';
@@ -86,10 +82,7 @@ import { sessionStore } from './store/sessions.js';
 import { Store } from './store/store.js';
 import { DockerRuntime } from './workspaces/docker.js';
 import { attachShell } from './workspaces/shell.js';
-<<<<<<< HEAD
-=======
 import { sessionOfRequest } from './sessionCookie.js';
->>>>>>> origin/ticket/T-976-merge
 import { ChatController } from './chat/controller.js';
 import { BYPASS_SETTING } from './chat/bypass.js';
 import { LEAD_RULES_SETTING } from './chat/leadRules.js';
@@ -398,11 +391,7 @@ workspaces.hooks.audit = (e) => platform.audit.record(e);
 const view = workspaceView(pools, reconciler, claudeVersions.brief);
 const live = new LiveHub(
   { workspaces: async () => (await workspaces.list()).map(view), usage: () => workspaces.usage() },
-<<<<<<< HEAD
-  fullSessionOf(portal, config.session.cookie),
-=======
-  (req) => !!portal.session(sessionOfRequest(req)),
->>>>>>> origin/ticket/T-976-merge
+  fullSessionOf(portal),
 );
 // Needs you (docs/prd/attention.md): what waits for a person, read from each module's own state. The topics of the modules it reads
 // (pools: MCP catalog and skills; tickets; CI) make it look again; the chat's events and a minute's tick are chained further down.
@@ -699,11 +688,7 @@ const platform = createPlatform({
   pushContact: config.notify.pushContact ?? null,
   selfOrigin: `http://localhost:${config.port}`,
   publish: (topic) => notify(topic),
-<<<<<<< HEAD
-  socketAuthorized: fullSessionOf(portal, config.session.cookie),
-=======
-  socketAuthorized: (req) => !!portal.session(sessionOfRequest(req)),
->>>>>>> origin/ticket/T-976-merge
+  socketAuthorized: fullSessionOf(portal),
 });
 live.onPresence = (connection, presence, req) => platform.presence(connection, presence, req);
 // A new Needs you item tells each person who may decide it, once, through the notification pipeline (its quiet hours and matrix).
@@ -754,19 +739,13 @@ sockets.attach(server);
 cutOnRevoke(portal, sockets, appPorts);
 // The agents' tunnel (`/connect/v1/tunnel`): no cookie, its own handshake; answers only its own path.
 connect.attach(server, portal);
-<<<<<<< HEAD
-// T-1043 S0b: every socket module attaches through the socket guard (authz/socketGuard.ts), which decides for who this cookie signs in.
-const signedIn = signedInOf(portal, config.session.cookie);
+// T-1043 S0b: every socket module attaches through the socket guard (authz/socketGuard.ts), which decides for who this cookie signs in
+// (read by sessionCookie.ts, the same reader as the API).
+const signedIn = signedInOf(portal);
 attachShell(server, portal, workspaces, signedIn);
 browser.attach(server, portal, signedIn);
 live.attach(server, signedIn);
-attachChat(server, chatController, fullSessionOf(portal, config.session.cookie), signedIn);
-=======
-attachShell(server, portal, workspaces);
-browser.attach(server, portal);
-live.attach(server);
-attachChat(server, chatController, (req) => !!portal.session(sessionOfRequest(req)));
->>>>>>> origin/ticket/T-976-merge
+attachChat(server, chatController, fullSessionOf(portal), signedIn);
 
 if (config.dev) {
   // One port for everything: the API through Hono, the rest through Vite (with HMR on this server).
