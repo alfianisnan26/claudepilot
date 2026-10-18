@@ -228,7 +228,7 @@ scripts/job-run.sh --repo konfersi:<org>/<repo> --ref <branch> --image registry.
   `bash -x` / xtrace, which would print the values.
 - **Caps:** `JOB_RUN_MAX` (3) Jobs at once cluster-wide, `JOB_RUN_MAX_PER_CHAT` (2) per chat (`PILOT_SESSION_ID`) and `JOB_RUN_MAX_PER_PROGRAM`
   (2) per program (claudepilot, event, konfersi; T-524). A Job over a cap is created suspended and waits in creation order ("queued behind K").
-  **The queue has a deadline (T-1033):** `JOB_RUN_QUEUE_WAIT_S` (default 1800, 30 minutes; 1 to 7200, was 3600 and exit 1). Past it the Job is
+  **The queue has a deadline (T-1033):** `JOB_RUN_QUEUE_WAIT_S` (default 3600, 60 minutes, sized from measured queue waits of 2079 s and over 3600 s, T-1033 #11467; 1 to 7200; before T-1033 it was also 3600 but ended with exit 1). Past it the Job is
   deleted without having run, the script says `job-run: queue deadline: ... the command never ran ... rerun it`, the log gets
   `=== JOB-RUN QUEUE-EXPIRED`, and the exit is **75** (EX_TEMPFAIL: the command never ran, a rerun is safe, D-75; job-run uses 75 for nothing
   else). The start wait (`JOB_RUN_START_WAIT_S`, 900) and the Job's deadline count only once it is let out. **A Job deleted under the script**

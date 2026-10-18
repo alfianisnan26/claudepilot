@@ -61,7 +61,7 @@
 #   scripts/job-run.sh --stop [<job> | --chat <id>]     stop Jobs (all, one, or a chat's) and delete their Secrets
 # Caps: JOB_RUN_MAX Jobs at once cluster-wide (default 3), JOB_RUN_MAX_PER_CHAT per chat (2) and JOB_RUN_MAX_PER_PROGRAM per program (2;
 # claudepilot, event, konfersi: T-524). A Job over a cap is created suspended and waits its turn (creation order), with "queued behind K".
-# The queue has its own deadline (T-1033): JOB_RUN_QUEUE_WAIT_S (default 1800, 30 min; 1 to 7200). Past it the Job is deleted, never having run,
+# The queue has its own deadline (T-1033): JOB_RUN_QUEUE_WAIT_S (default 3600, 60 min: measured queue waits of 2079 s and over 3600 s, T-1033 #11467; 1 to 7200). Past it the Job is deleted, never having run,
 # with "job-run: queue deadline: ..." and "=== JOB-RUN QUEUE-EXPIRED" in the log, exit 75 (EX_TEMPFAIL: never ran, rerun it; D-75). A Job deleted
 # under the script (--stop, a person, the cluster) ends it at once with "=== JOB-RUN VANISHED": queued ("stopped while queued") or starting
 # (Pending or fetching; "vanished") exit 75, the command never ran; running ("vanished") exit 1, it may have run in part. The Job stops when this script is interrupted or killed (the next run removes a Job whose
@@ -81,7 +81,7 @@ case $- in *x*) echo "job-run: refuses to run under xtrace (set -x / bash -x wou
 here=$(cd "$(dirname "$0")/.." && pwd)
 ns=${JOB_RUN_NAMESPACE:-isnan-claudepilot}; registry=${DEPLOY_REGISTRY:-registry.int.isnan.me}
 max=${JOB_RUN_MAX:-3}; per=${JOB_RUN_MAX_PER_CHAT:-2}; pprog=${JOB_RUN_MAX_PER_PROGRAM:-2}; poll=${JOB_RUN_POLL_S:-5}
-queue_wait=${JOB_RUN_QUEUE_WAIT_S:-1800}; start_wait=${JOB_RUN_START_WAIT_S:-900}; art_max=${JOB_RUN_ARTIFACT_MAX:-4194304}
+queue_wait=${JOB_RUN_QUEUE_WAIT_S:-3600}; start_wait=${JOB_RUN_START_WAIT_S:-900}; art_max=${JOB_RUN_ARTIFACT_MAX:-4194304}
 gitea=${JOB_RUN_GITEA:-git.konfersi.com}; github_repo=${JOB_RUN_GITHUB_REPO:-alfianisnan26/claudepilot}
 event_repo=isnanme/event # fixed on purpose (T-491): the door names one repository, no override
 # Memory per Job (T-524), request = limit, sized from measured cgroup peaks (docs/dev-session.md, "Heavy agent work in the cluster"); fixed here,

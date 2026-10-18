@@ -649,7 +649,7 @@ session's result. With it, a Job that passed is saved, and the same work later r
 - **Tests:** `apps/server/src/ci/jobRun.test.ts` (opt-in, hit, miss, failure, each changed key part, the age limit, the store's own files, and mutants that drop the commit, `--keep-tests` or the `Complete` condition).
 
 **The queue's deadline and a vanished Job (T-1033, T-939).** Why: on 2026-10-17 a job-run waited 71 minutes with no Job of its own, and lanes sat silent on
-Jobs that no longer existed. A Job held by the caps waits suspended for at most `JOB_RUN_QUEUE_WAIT_S` (default 1800 s, 1 to 7200; it was 3600 with exit 1).
+Jobs that no longer existed. A Job held by the caps waits suspended for at most `JOB_RUN_QUEUE_WAIT_S` (default 3600 s, 1 to 7200; measured queue waits were 2079 s and over 3600 s, so 30 minutes would have killed Jobs that ran later, T-1033 #11467; before T-1033 the wait was 3600 too, but it ended with exit 1).
 Past it the Job is deleted, never having run: `job-run: queue deadline: …`, `=== JOB-RUN QUEUE-EXPIRED` in the log, **exit 75** (EX_TEMPFAIL), so a rerun is
 safe (D-75). 75 means "the command never ran" and nothing else (the lead's decision on T-1033: 3 was taken by `--pool-env`'s deleted artifact). The start wait
 and the Job's own deadline count only once it is let out, so queue time never eats the run's deadline. A Job deleted under the script (`--stop`, a person, the

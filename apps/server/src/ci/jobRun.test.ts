@@ -47,7 +47,7 @@ const lock = (fn) => { const l = path.join(F, 'lock'); for (;;) { try { fs.mkdir
 const read = () => JSON.parse(fs.readFileSync(S, 'utf8'));
 const k8s = (j) => ({ metadata: { name: j.name, uid: 'uid-' + j.name, creationTimestamp: '2026-01-01T00:' + String(Math.floor(j.seq / 60)).padStart(2, '0') + ':' + String(j.seq % 60).padStart(2, '0') + 'Z',
   labels: { app: 'claudepilot-job-run', 'job-run/chat': j.chat, 'job-run/role': j.role || 'agent', ...(j.program ? { 'job-run/program': j.program } : {}), ...(j.repo ? { 'job-run/repo': j.repo } : {}) },
-  annotations: { 'job-run/owner': j.owner || '' } },
+  annotations: { 'job-run/owner': j.owner || '' }, ...(j.deleting ? { deletionTimestamp: '2026-01-01T01:00:00Z' } : {}) },
   spec: { suspend: j.suspend }, status: j.done ? { [j.rc === 0 ? 'succeeded' : 'failed']: 1, conditions: [{ type: j.rc === 0 ? 'Complete' : 'Failed', status: 'True', reason: j.reason }] } : {} });
 const stdin = () => fs.readFileSync(0, 'utf8');
 const job = (n) => read().jobs.find((j) => j.name === n);
@@ -79,6 +79,8 @@ const refuse = () => { const t = stdin(); let plain = ''; try { plain = Object.v
   process.stderr.write('error: ' + t + ' ' + plain + '\n'); process.exit(1); };
 if (verb === 'get' && kind === 'jobs') { process.stdout.write(JSON.stringify({ items: read().jobs.map(k8s) })); }
 // T-1033: with --ignore-not-found a missing Job is no output and exit 0, as kubectl does; without it, exit 1.
+// T-1033 D2: the file "apierror" makes the Job's state read fail as an API error does (exit 1, no output), Job or none.
+else if (verb === 'get' && kind === 'job' && a.includes('--ignore-not-found') && fs.existsSync(path.join(F, 'apierror'))) { process.stderr.write('Unable to connect to the server\n'); process.exit(1); }
 else if (verb === 'get' && kind === 'job') { const j = job(name); if (!j && a.includes('--ignore-not-found')) process.exit(0); if (!j || (failing('uid') && !a.includes('json'))) process.exit(1); process.stdout.write(a.includes('json') ? JSON.stringify(k8s(j)) : 'uid-' + name); }
 else if (verb === 'get' && kind === 'pods' && a.includes('app=claudepilot-gate')) { const g = path.join(F, 'gates.txt'); process.stdout.write(fs.existsSync(g) ? fs.readFileSync(g, 'utf8') : ''); }
 else if (verb === 'get' && kind === 'pods' && a.includes('json')) { process.stdout.write(JSON.stringify(podOf(job(a[3].replace('job-name=', ''))))); }
@@ -122,6 +124,8 @@ interface Seed {
   owner?: string;
   program?: string;
   repo?: string;
+  /** T-1033: the Job is being deleted (metadata.deletionTimestamp set) but still exists. */
+  deleting?: boolean;
 }
 /** What the fake "kubectl top nodes" prints for the control-plane node (T-611): a memory percentage, a raw text, or "FAIL"; none = the metrics API is missing (exit 1). */
 interface Scenario {
@@ -810,8 +814,8 @@ test('T-1033 the queue deadline: a Job still queued past JOB_RUN_QUEUE_WAIT_S is
   assert.deepEqual(w.state().secrets, {});
 });
 
-test('T-1033 the queue deadline: 30 minutes by default; a value outside 1 to 7200 seconds is refused before any kubectl call', () => {
-  assert.match(readFileSync(SCRIPT, 'utf8'), /^queue_wait=\$\{JOB_RUN_QUEUE_WAIT_S:-1800\}; /m);
+test('T-1033 the queue deadline: 60 minutes by default; a value outside 1 to 7200 seconds is refused before any kubectl call', () => {
+  assert.match(readFileSync(SCRIPT, 'utf8'), /^queue_wait=\$\{JOB_RUN_QUEUE_WAIT_S:-3600\}; /m);
   for (const v of ['0', '7201', 'abc', '-5', '1e3', '99999']) {
     const w = world();
     const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--', 'true'], { JOB_RUN_QUEUE_WAIT_S: v });
@@ -852,6 +856,42 @@ test('T-1033 a Job deleted while starting (Pending) ends job-run at once with "v
   assert.equal(r.code, 75, r.out);
   assert.match(r.out, new RegExp(`job-run: ${name} vanished while it was starting \\(deleted: job-run\\.sh --stop, a person or the cluster\\); the command never ran: rerun it`));
   assert.match(w.log(), /^=== JOB-RUN VANISHED while=starting /m);
+});
+
+test('T-1033 D1: a Job that still exists but is being deleted (deletionTimestamp) is gone: "vanished while starting", exit 75, at once', async () => {
+  const w = world();
+  writeFileSync(join(w.root, 'pending'), '0/2 nodes are available: 2 Insufficient memory.');
+  const s = w.start(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'true'], { JOB_RUN_START_WAIT_S: '900' });
+  await waitFor('Pending', () => /is Pending/.test(s.out()));
+  const name = ourJob(w)?.name;
+  assert.ok(name);
+  w.edit((st) => {
+    const j = st.jobs.find((x) => x.name === name);
+    assert.ok(j);
+    j.deleting = true;
+  });
+  const r = await within(s.done, 10_000, 'being deleted while starting');
+  assert.equal(r.code, 75, r.out);
+  assert.match(r.out, new RegExp(`job-run: ${name} vanished while it was starting`));
+  assert.match(w.log(), /^=== JOB-RUN VANISHED while=starting /m);
+});
+
+test('T-1033 D2: an API error while reading the Job is not a vanish: job-run keeps waiting, and the Job then runs to its own exit code', async () => {
+  const w = world();
+  writeFileSync(join(w.root, 'pending'), '0/2 nodes are available: 2 Insufficient memory.');
+  const s = w.start(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'true'], { JOB_RUN_START_WAIT_S: '900' });
+  await waitFor('Pending', () => /is Pending/.test(s.out()));
+  const reads = () => w.calls().split('\n').filter((l) => / get job \S+ --ignore-not-found/.test(l)).length;
+  writeFileSync(join(w.root, 'apierror'), '');
+  const before = reads();
+  await waitFor('three failed reads of the Job', () => reads() >= before + 3);
+  assert.equal(s.p.exitCode, null, `still waiting through the API errors; ${s.out()}`);
+  rmSync(join(w.root, 'apierror'));
+  rmSync(join(w.root, 'pending'));
+  const r = await within(s.done, 10_000, 'after the API errors');
+  assert.equal(r.code, 0, r.out);
+  assert.doesNotMatch(r.out, /vanished/);
+  assert.doesNotMatch(w.log(), /JOB-RUN VANISHED/);
 });
 
 test('T-1033 a Job deleted while running ends job-run at once with "vanished" (exit 1), not after its deadline', async () => {
