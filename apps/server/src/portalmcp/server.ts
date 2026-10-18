@@ -1,12 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { isAppError } from '@isnanme/core';
-import { PORTAL_AGENT_TOKEN_PREFIX, type PortalAuditOutcome } from '@portal/contracts';
+import { PORTAL_AGENT_TOKEN_PREFIX, PORTAL_MANAGER_TOKEN_PREFIX, type PortalAuditOutcome } from '@portal/contracts';
 import { CLIENT_INFO_META_KEY, createMcpHandler, McpServer, type CallToolResult, type McpHttpHandler, type McpServerFactory } from '@modelcontextprotocol/server';
 import type { PortalAudit } from './audit.js';
 import { Confirmations } from './confirm.js';
 import { PortalLimits, type CallClass } from './limits.js';
 import {
   agentCallable,
+  managerCallable,
   PortalToolError,
   scopeAllows,
   userTier,
@@ -18,6 +19,7 @@ import {
 } from './registry.js';
 import { actorOfPrincipal, requireToolPolicy } from '../authz/seam.js';
 import type { AgentAccess } from './agents.js';
+import type { ManagerTokens } from './managers.js';
 import { registerResourcesAndPrompts } from './resources.js';
 import { auditArgs, cleanText, deepClean, findSecret, untrusted } from './sanitize.js';
 import type { PortalMcpSettingsStore } from './settings.js';
@@ -73,6 +75,8 @@ export interface PortalMcpOptions {
   tokens: PortalTokens;
   /** The agents' per-session tokens (interface I8); without it only admin tokens are accepted. */
   agents?: AgentAccess;
+  /** The General Manager's tokens (cpmt_, T-968); without it a cpmt_ token is unknown. */
+  managers?: ManagerTokens;
   audit: PortalAudit;
   /** `Origin` values accepted besides this server's own (comma-separated `PORTAL_MCP_ORIGINS`). */
   extraOrigins?: string[];
@@ -222,9 +226,10 @@ export class PortalMcp {
     return this.#audited(res, record);
   }
 
-  /** An admin's token (cpat_) or an agent's per-session token (cpst_); anything else is unknown. */
+  /** An admin's token (cpat_), an agent's per-session token (cpst_) or the General Manager's (cpmt_); anything else is unknown. */
   #verify(secret: string, ip: string): { ok: true; principal: PortalPrincipal } | { ok: false; reason: string } {
     if (secret.startsWith(PORTAL_AGENT_TOKEN_PREFIX)) return this.o.agents ? this.o.agents.verify(secret) : { ok: false, reason: 'unknown' };
+    if (secret.startsWith(PORTAL_MANAGER_TOKEN_PREFIX)) return this.o.managers ? this.o.managers.verify(secret) : { ok: false, reason: 'unknown' };
     return this.o.tokens.verify(secret, ip);
   }
 
@@ -304,6 +309,7 @@ export class PortalMcp {
     const settings = this.o.settings.get();
     for (const tool of this.o.registry.list()) {
       if (extra.principal.kind === 'agent' && !agentCallable(tool)) continue; // an agent sees only what opted in for agents
+      if (extra.principal.kind === 'manager' && !managerCallable(tool)) continue; // the manager is never offered an agent-self tool
       if (tool.requires === 'session_control' && !settings.sessionControl) continue;
       this.#register(server, tool, extra);
     }
@@ -374,6 +380,9 @@ export class PortalMcp {
         agent ? `${tool.name} is not available to agents.` : `${tool.name} needs the ${tier} scope; this token has ${principal.scope}. Make a token with the ${tier} scope in the portal (Access → MCP).`,
         { required: agent ? 'admin or operate token' : tier, granted: principal.scope },
       );
+    // The manager acts as the person, not as an agent: the tools for an agent acting as itself refuse it (T-968, PRD §4).
+    if (principal.kind === 'manager' && !managerCallable(tool))
+      return fail('denied', 'SCOPE_REQUIRED', `${tool.name} is only for an agent acting as itself.`, { required: 'agent token', granted: 'manager' });
     // 2. Rate limits per token (§14.5), lower for agents, and per tool where a tool declared its own.
     const limit = this.#limits.call(principal.tokenId, callClass(tool), agent);
     const toolLimit = limit.ok && tool.rate ? this.#limits.tool(principal.tokenId, tool.name, tool.rate) : limit;
@@ -427,6 +436,8 @@ export class PortalMcp {
     const { principal, record } = extra;
     const settings = this.o.settings.get();
     let progress = 0;
+    // A manager has no workspace or session binding a tool may lean on (PRD §4): its own session id is an audit label only.
+    const bound = principal.kind === 'agent';
     return {
       principal,
       actor: actorOf(principal),
@@ -434,8 +445,8 @@ export class PortalMcp {
       scope: principal.scope,
       isAgent: principal.kind === 'agent',
       requestId: record.requestId,
-      workspaceId: principal.workspaceId,
-      sessionId: principal.sessionId,
+      workspaceId: bound ? principal.workspaceId : null,
+      sessionId: bound ? principal.sessionId : null,
       vaults: principal.vaults,
       settings: { sessionControl: settings.sessionControl, confirmAbove: CONFIRM_ABOVE },
       signal: sdk.mcpReq.signal,
@@ -471,11 +482,16 @@ export class PortalMcp {
   }
 }
 
-/** What events a call records as their actor: `session:<id>` for an agent, `portal-mcp:<token id>` for an admin's token. */
-const actorOf = (p: PortalPrincipal): string => (p.kind === 'agent' ? `session:${p.sessionId}` : `portal-mcp:${p.tokenId}`);
+/**
+ * What events a call records as their actor: `session:<id>` for an agent, `manager:<session id>` for the General Manager (an audit label
+ * only: no authorization decision reads it, T-968), `portal-mcp:<token id>` for an admin's token.
+ */
+const actorOf = (p: PortalPrincipal): string =>
+  p.kind === 'agent' ? `session:${p.sessionId}` : p.kind === 'manager' ? `manager:${p.sessionId}` : `portal-mcp:${p.tokenId}`;
 
 /** The name an admin's token is shown under (its label, one line); an agent's per-session token is shown as its session, so none. */
-const actorLabelOf = (p: PortalPrincipal): string | undefined => (p.kind === 'agent' ? undefined : cleanText(p.label, 60) || undefined);
+const actorLabelOf = (p: PortalPrincipal): string | undefined =>
+  p.kind === 'agent' ? undefined : p.kind === 'manager' ? 'General Manager' : cleanText(p.label, 60) || undefined;
 
 /** The parts of the SDK's per-call context this file uses. */
 interface SdkCtx {

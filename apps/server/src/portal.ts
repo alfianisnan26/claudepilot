@@ -1,6 +1,7 @@
 import { createHash, randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
 import {
   CODE_ALPHABET,
+  FOUNDING_USER_ID,
   GENERATED_CODE_LENGTH,
   codeProblem,
   normalizeCode,
@@ -55,6 +56,24 @@ export class Portal {
   roleOf: AccountRole = () => null;
   /** Called after sessions end by sign-out or a new code, so what is tied to them (open sockets) can be cut. */
   onRevoked: () => void = () => {};
+  /**
+   * T-968 S1 (general-manager PRD Q3): called with each person whose sessions a sign-out, a revoke or a new code just ended and who has no
+   * live session left on any device (the server code's session is the founding user's). index.ts revokes their manager's token here.
+   */
+  onSignedOutEverywhere: (userId: string) => void = () => {};
+
+  /** Calls `onSignedOutEverywhere` for each of `people` with no live session left. */
+  #signedOut(people: Iterable<string>) {
+    const now = Date.now();
+    for (const person of new Set(people)) {
+      if ([...this.#sessions.values()].some((s) => (s.userId ?? FOUNDING_USER_ID) === person && s.expiresAt > now)) continue;
+      try {
+        this.onSignedOutEverywhere(person);
+      } catch (e) {
+        console.error(`[portal] after the last sign-out: ${(e as Error).message}`);
+      }
+    }
+  }
 
   constructor(
     envCode: string | undefined,
@@ -166,13 +185,16 @@ export class Portal {
       any = true;
     }
     if (any) this.onRevoked();
+    this.#signedOut([userId]);
   }
 
   signOut(token: string) {
     const hash = tokenHash(token);
+    const s = this.#sessions.get(hash);
     this.#sessions.delete(hash);
     this.#persist((st) => st.remove(hash));
     this.onRevoked();
+    if (s) this.#signedOut([s.userId ?? FOUNDING_USER_ID]);
   }
 
   /** Sets a new code (given, or generated) and signs out every session but `keep`. */
@@ -185,9 +207,15 @@ export class Portal {
     this.#source = input === undefined ? 'generated' : 'custom';
     this.#codeUpdatedAt = Date.now();
     const keepHash = tokenHash(keep);
-    for (const hash of this.#sessions.keys()) if (hash !== keepHash) this.#sessions.delete(hash);
+    const ended: string[] = [];
+    for (const [hash, s] of this.#sessions)
+      if (hash !== keepHash) {
+        ended.push(s.userId ?? FOUNDING_USER_ID);
+        this.#sessions.delete(hash);
+      }
     this.#persist((st) => st.removeAllExcept(keepHash));
     this.onRevoked();
+    this.#signedOut(ended);
   }
 
   setEnabled(enabled: boolean) {

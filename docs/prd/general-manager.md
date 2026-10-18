@@ -371,6 +371,23 @@ extends it to assert that each class P, R, D, C and G answers a `cpmt_` call wit
 | S5 | Confirmation cards, server limits, untrusted framing check, audit, blind security review (D-60) | Backend + reviewer | S1, S2 |
 | S6 | The coordinator's routine as the manager's skills | Orchestrator | S2, S5 |
 
+**Built (T-968 S1, identity part).**
+- Migration 788 (chat set) adds `chat_sessions.kind` (`'workspace'` or `'manager'`, CHECK), `owner_id` (default `'u_owner'`), the unique
+  index `chat_sessions_one_manager` on `(owner_id) WHERE kind = 'manager'`, and the `pmcp_manager_tokens` table.
+- `cpmt_` tokens live in `portalmcp/managers.ts` (`ManagerTokens`): minted per manager session (a new mint revokes the older ones), sha256
+  at rest, 7 days (`AGENT_TOKEN_TTL_MS`), refused once the session ended.
+- They are revoked on session end, archive or delete (index.ts), on a lockdown, and by `Portal.onSignedOutEverywhere` when the person has
+  no live session left (sign-out, `revokeUser`, `rotate`; Q3).
+- `/mcp` accepts them (`server.ts #verify`). The principal is `kind: 'manager'` with the person's `userId`; `actorOfPrincipal` gives can()
+  the person's user actor. `ctx.actor` is `manager:<session id>` and the label "General Manager"; `isAgent` is false and `ctx.sessionId`
+  and `ctx.workspaceId` are null.
+- The five agent-self tools are not offered and are refused (`AGENT_SELF_TOOLS`).
+- The tool tier is `operate` until S5's confirmation card, so an admin-tier tool is refused **(default)**.
+- `cpmt_` is in the transcript redactor and the delivery token pattern. Web routes read only the session cookie, so they never accept it.
+- Tests: `portalmcp/managers.test.ts` and `qa/managerWeb.test.ts`.
+- Not in this part: the hidden runtime (§3), Claude sign-in, auto move, the hiding from lists, and `session_start`/`session_spawn`
+  refusing `kind: 'manager'` (no tool takes a kind today).
+
 ## 13. Done when (from T-968)
 
 - On a clean portal, Home shows the dashboard and the enable card.
