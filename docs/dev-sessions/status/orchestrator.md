@@ -26,7 +26,8 @@
 - T-968 S2b be6b3adc FINAL: Job 74b74e97 rc0, 18 mutants applied and killed -> QA c691df71 + blind d9f18599. PRD fix 2a0edbd8.
 - T-565 FIX 103c4d80 QA PWG (T-595 10968) -> gap 1 e309aacc (parsed yaml + 3 mutants), Job bt7ea72qt; N11/N14 dropped
   (labels exist nowhere, 10973) -> delta c691df71 -> blind (infra).
-- T-968 PRD fix a32754c3 (gaps 2-7) -> re-check d9f18599. T-968 S1 (manager kind, cpmt_ token, migration) 2a0edbd8 now (10976).
+- T-968 PRD fix a32754c3 (gaps 2-7) -> re-check d9f18599. T-968 S1 9f901a5f (2a0edbd8; seam, cpmt_, revoke)
+  used migration 788 = T-975's -> renumber to 793 (11017/11019) -> Job -> QA c691df71 + blind d9f18599; lead reads seam/migration.
 - T-251 (unknown usage) 3753d3c2: audit vs integration (decide.ts unknownUsage, t255.test), build only what is missing.
 - T-1043 S0c (MCP tools through can()) 76845676 on ticket/T-1043-s0c, beside T-1065.
 - T-961 (deploy outage: PriorityClass, headroom, release pre-check; 10887) -> QA + blind (infra); PriorityClasses in
@@ -62,7 +63,7 @@
 - T-938: confirm the QA account is stg-only, low-privilege; job-run --pool-env loosening (T-384).
 - T-436 deploy note: agents reach only vaults whose agentWorkspaces names their workspace.
 - T-666 RBAC narrowing; T-578 gate reuse choice; T-868 allow line must not allow a SHOTS_TEST_MODE=1 prefix.
-- Older: T-341 D, T-422, T-306/T-340, T-417, T-433, T-437/T-432, T-476, T-491, T-509, T-525, T-591, T-325 S3, T-527, T-657, T-739.
+- Older items: git history of this file.
 
 ## NEEDS A HUMAN (production and uat only, D-62/D-78)
 - T-93 Konfersi production (owner checklist). T-610 pre-deploy read-only prod count (through the coordinator).
@@ -75,4 +76,4 @@
 LESSONS: dontAsk lanes run Bash only in their spawn worktree and refuse git merge/restore: the lead pushes the merge (with
 markers) to a new branch, the lane does `git switch -C <br> origin/<br>` and resolves by Edit. Never prettier files tests read
 with readFileSync. Re-run `context-pack.sh --check HEAD` after every merge; integration moved during a gate = merge + re-gate.
-A mutant line must prove it was applied (diff non-empty). The status file: Edit/Write tools ONLY (23:47 slip, T-595). Full ids and full hashes only. gate-job.sh in the background, timeout 7200000.
+A mutant line must prove it was applied (diff non-empty). The status file: Edit/Write tools ONLY (23:47 slip, T-595). Full ids and full hashes only. Migration numbers: sorted versions on integration AND lane branches (file is by area). gate-job.sh in the background, timeout 7200000.
