@@ -1,15 +1,15 @@
-# orchestrator status (2026-10-17 23:45 UTC, session 355881a3; older entries: git history)
+# orchestrator status (2026-10-18 02:45 UTC, session 355881a3; older entries: git history)
 
 ## DONE
-- Batch 32 LANDED 22:54: integration 74599ece (gate claudepilot-gate-18d8e9d-f5f1 green on 18d8e9d0): T-382 S6, T-294 FIX1,
-  T-1049. Relayed T-731 10876 -> coordinator deploys. Format sweep stays T-1032 (10857).
-- Batch 31 in portal 2026.10.17-11; T-948 62a44a10 in 2026.10.17-12 (ON state = coordinator live check 10822). Close on live checks.
+- Batch 33 LANDED ~02:40: T-974 f70d333c. Gate claudepilot-gate-dc259a2-2c40 GREEN on dc259a25. SLIP (mine): integration
+  moved during the gate (coordinator af45f95a, 7ef4feca, a862d367, 43bcc89c), and I pushed the merge 76bdc9d0 WITHOUT
+  re-gating it (my chained command didn't stop on the non-empty diff). Re-gate b2j1ii0mf on 76bdc9d0 running. Do not
+  deploy 76bdc9d0 until it is green. Portal MCP unreachable at 02:42, so this goes on T-595/T-731 when it is back.
+- Batch 32 LANDED 22:54 (74599ece): T-382 S6, T-294 FIX1, T-1049. Batch 31 / T-948 live: close on live checks.
 - T-860 S2c on integration (a87d00b8); the realpath guard side is the coordinator's. Older batches: git history.
 
 ## IN FLIGHT (6 of 6 workers, D-71; QA/review sonnet, D-63; ids in full in session_family)
-- BATCH 33 GATING: premerge/b33 dc259a25 = integration + T-974 f70d333c (FIX3 PASS 10994; lead read ruleGuard diff:
-  refusals only, fail closed). QC job-1fe3489c rc0 (31/31). Gate b0zeb5215 running. T-425 S2b+gaps 12acb9ed PASS
-  (T-595 11065), testkit.ts conflict: marker branch ticket/T-425-s2b-int a3f79dd5 -> 3753d3c2 resolves -> batch 34.
+- T-425 S2b+gaps 12acb9ed PASS (T-595 11065), testkit.ts conflict: ticket/T-425-s2b-int a3f79dd5 -> 3753d3c2 -> b34.
   After landing: FOR THE COORDINATOR remove the text-matching `git -C` denies (T-974).
 - T-980 (repos_list filter; worktree_create by path through can()) a3554d40, worked slice -> QA + blind.
 - BATCH 34: premerge/b34 1b8482cf = b33 + T-971 H1 fdd38c6b (PASS #10967) + T-976 d68ab35c (blind PWG #11125, 11135;
@@ -75,5 +75,5 @@
 
 LESSONS: dontAsk lanes run Bash only in their spawn worktree and refuse git merge/restore: the lead pushes the merge (with
 markers) to a new branch, the lane does `git switch -C <br> origin/<br>` and resolves by Edit. Never prettier files tests read
-with readFileSync. Re-run `context-pack.sh --check HEAD` after every merge; integration moved during a gate = merge + re-gate.
+with readFileSync. Re-run `context-pack.sh --check HEAD` after every merge; integration moved during a gate = merge + re-gate BEFORE the push: landing is two separate commands, (1) `git diff --stat <gated> origin/integration -- . ':!docs/dev-sessions/status'` and read it, (2) push only if it is empty (02:40 slip).
 A mutant line must prove it was applied (diff non-empty), on a GREEN base; a Job exits on its base rc. The status file: Edit/Write tools ONLY (23:47 slip, T-595). Full ids and full hashes only. Migration numbers: sorted versions on integration AND lane branches (file is by area). gate-job.sh in the background, timeout 7200000.
