@@ -170,6 +170,48 @@ export interface TicketEvent {
   fromAgent: boolean;
 }
 
+/** T-119: a state a ticket's flow shows: its status, or `waiting` (it carries the tag `needs-a-person`). */
+export type TicketFlowState = TicketStatus | 'waiting';
+
+export interface TicketFlowActor {
+  /** `ui`, `session:<id>`, `portal-mcp:<token id>`, `system`. */
+  actor: string;
+  label: string;
+  /** The session id, when the actor is a session. */
+  session: string | null;
+}
+
+/** One stretch of a ticket in one state (derived from its events: `ticketFlow`, tickets/ticketFlow.ts). A closed state ends where it starts. */
+export interface TicketFlowSpan {
+  state: TicketFlowState;
+  /** ISO. */
+  start: string;
+  /** ISO; null while the span runs. */
+  end: string | null;
+  durationMs: number;
+  /** Who moved the ticket into this state. */
+  by: TicketFlowActor | null;
+  reason: string | null;
+}
+
+export type TicketFlowMarkerKind = 'assigned' | 'claimed' | 'bumped' | 'comment' | 'priority' | 'tags' | 'ci' | 'waiting';
+
+/** A point on a ticket's flow: an assignment, a claim, a bump, a person's comment, a priority or tag change, a CI result. */
+export interface TicketFlowMarker {
+  kind: TicketFlowMarkerKind;
+  at: string;
+  by: TicketFlowActor;
+  detail: string | null;
+}
+
+export interface TicketFlow {
+  spans: TicketFlowSpan[];
+  markers: TicketFlowMarker[];
+  state: TicketFlowState | null;
+  /** Milliseconds per state over all spans. */
+  totals: Partial<Record<TicketFlowState, number>>;
+}
+
 export interface TicketDetail {
   ticket: TicketItem;
   /** Oldest first. */

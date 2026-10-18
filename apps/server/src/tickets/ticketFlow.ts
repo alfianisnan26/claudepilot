@@ -14,12 +14,22 @@
 //  - An open span has `end` null; its `durationMs` runs to the given "now" (never negative).
 // Not in this slice: an open approval as a reason to wait, linked commits and pull requests, the table (`ticket_spans`), the route and the chart.
 
-import { isTicketClosed, TICKET_STATUSES, type TicketStatus } from '@portal/contracts';
+import {
+  isTicketClosed,
+  TICKET_STATUSES,
+  type TicketFlow,
+  type TicketFlowActor,
+  type TicketFlowMarker,
+  type TicketFlowMarkerKind,
+  type TicketFlowSpan,
+  type TicketFlowState,
+  type TicketStatus,
+} from '@portal/contracts';
 
 /** The tag a ticket carries while it waits for a person. */
 export const WAITING_TAG = 'needs-a-person';
 
-export type FlowState = TicketStatus | 'waiting';
+export type FlowState = TicketFlowState;
 
 /** The part of a ticket event the flow reads (a `TicketEvent` fits). */
 export interface FlowEvent {
@@ -42,43 +52,12 @@ export interface FlowInput {
   events: readonly FlowEvent[];
 }
 
-export interface FlowActor {
-  /** `ui`, `session:<id>`, `portal-mcp:<token id>`, `system`. */
-  actor: string;
-  label: string;
-  /** The session id, when the actor is a session. */
-  session: string | null;
-}
-
-export interface FlowSpan {
-  state: FlowState;
-  /** ISO. */
-  start: string;
-  /** ISO; null while the span runs. A closed state ends where it starts. */
-  end: string | null;
-  durationMs: number;
-  /** Who moved the ticket into this state; null for the first span of a ticket whose creation is not in the events. */
-  by: FlowActor | null;
-  reason: string | null;
-}
-
-export type FlowMarkerKind = 'assigned' | 'claimed' | 'bumped' | 'comment' | 'priority' | 'tags' | 'ci' | 'waiting';
-
-export interface FlowMarker {
-  kind: FlowMarkerKind;
-  at: string;
-  by: FlowActor;
-  detail: string | null;
-}
-
-export interface Flow {
-  spans: FlowSpan[];
-  markers: FlowMarker[];
-  /** The state of the last span; null when the ticket has no readable time at all. */
-  state: FlowState | null;
-  /** Milliseconds per state over all spans (a closed state counts 0). */
-  totals: Partial<Record<FlowState, number>>;
-}
+// The wire shapes live in the contracts (the chart reads them); the names here are the same types.
+export type FlowActor = TicketFlowActor;
+export type FlowSpan = TicketFlowSpan;
+export type FlowMarkerKind = TicketFlowMarkerKind;
+export type FlowMarker = TicketFlowMarker;
+export type Flow = TicketFlow;
 
 const STATUSES = new Set<string>(TICKET_STATUSES);
 const isStatus = (v: unknown): v is TicketStatus => typeof v === 'string' && STATUSES.has(v);
