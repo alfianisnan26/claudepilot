@@ -104,7 +104,10 @@ export function groupTag(workspaceId: string, r: Refusal): string {
  */
 export const defang = (s: string) => s.replace(/FOR[\s ​-‍]+THE[\s ​-‍]+COORDINATOR[\s​-‍]*:?/gi, 'FOR THE COORDINATOR (quoted)');
 
-const clean = (s: string) => defang(redact(s).replace(/[`\r\n\u0000-\u001f]+/g, ' ')).trim().slice(0, SAMPLE_MAX);
+const clean = (s: string) =>
+  defang(redact(s).replace(/[`\r\n\u0000-\u001f]+/g, ' '))
+    .trim()
+    .slice(0, SAMPLE_MAX);
 
 /** Groups refusals by (workspace, rule shape), counting each. `into` merges a later batch into an earlier one. */
 export function groupRefusals(events: RefusalEventRow[], into: Map<string, RefusalGroup> = new Map()): Map<string, RefusalGroup> {
@@ -133,7 +136,12 @@ export function groupRefusals(events: RefusalEventRow[], into: Map<string, Refus
 export function ticketFor(g: RefusalGroup): { summary: string; description: string; tags: string[] } {
   const shape = defang(g.refusal.shape);
   const proposed = defang(g.refusal.proposed);
-  const what = g.refusal.kind === 'permission' ? `${shape} refused` : g.refusal.kind === 'portal_forbidden' ? `${shape} forbidden` : 'folder untrusted';
+  const what =
+    g.refusal.kind === 'permission'
+      ? `${shape} refused`
+      : g.refusal.kind === 'portal_forbidden'
+        ? `${shape} forbidden`
+        : 'folder untrusted';
   const description = [
     `FOR THE COORDINATOR: ${proposed}`,
     '',
