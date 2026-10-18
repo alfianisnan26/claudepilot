@@ -90,6 +90,11 @@ export class FakeWorkspaces {
   sendCode = 0;
   /** A host that takes stdin but never exits. */
   hangSends = false;
+  /**
+   * A `send` whose line this accepts is held open, never answered, until the test ends it with `exec.exit(code)` (no clock: the test decides when and
+   * how the write ends). Other sends are answered as usual.
+   */
+  holdSend: ((line: string) => boolean) | null = null;
   /** What `trustscan` prints (a folder with nothing to load unless a test says otherwise) and its exit code. */
   scanOut = JSON.stringify(EMPTY_SCAN);
   scanCode = 0;
@@ -179,6 +184,7 @@ export class FakeWorkspaces {
       if (this.hangSends) return exec;
       setTimeout(() => {
         if (exec.closed) return exec.exit(null); // closed early: nothing arrived, no exit code either
+        if (this.holdSend?.(exec.written)) return; // held for the test to end
         if (this.sendCode === 0) {
           this.sends.push({ args: command.slice(2), line: exec.written });
           this.ops.push(`send ${exec.written.slice(0, 40)}`);

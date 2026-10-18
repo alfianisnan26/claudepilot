@@ -1,5 +1,7 @@
-// Proof for T-425 S2b (the ordering test): caps.test.ts as it is, then with QA's mutant B (the send does not wait for the sends before it);
-// the mutant must make the suite fail ("KILLED"). The file is restored after. Run from the repo root inside a cluster Job (job-run).
+// Proof for T-425 S2b: caps.test.ts as it is, then with each mutant of controller.ts; every mutant must make the suite fail ("KILLED") and
+// must really change the file (the line "applied (N -> M chars)" shows the diff is not empty). The file is restored after each.
+// B: the send does not wait for the sends before it. C: the undo of the optimistic Working has no "unless something else moved it" guard.
+// D: a failed write does not undo the optimistic Working at all. Run from the repo root inside a cluster Job (job-run).
 import { spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -20,23 +22,36 @@ if (base.status !== 0) {
 
 const path = join(root, CONTROLLER);
 const original = readFileSync(path, 'utf8');
-const from = 'await inLine; // the sends before this one are written first';
-const at = original.indexOf(from);
-if (at < 0) {
-  console.log('NOT APPLIED mutant B: the line to change was not found');
-  bad++;
-} else {
-  writeFileSync(path, original.slice(0, at) + original.slice(at + from.length));
+const mutants = [
+  ['B (no await inLine)', 'await inLine; // the sends before this one are written first', ''],
+  ['C (no guard on the undo)', "if (woke && before && this.#chat.get(sessionId)?.state === 'working') {", 'if (woke && before) {'],
+  ['D (no undo)', "if (woke && before && this.#chat.get(sessionId)?.state === 'working') {", 'if (false as boolean) {'],
+];
+for (const [label, from, to] of mutants) {
+  const at = original.indexOf(from);
+  if (at < 0) {
+    console.log(`NOT APPLIED mutant ${label}: the line to change was not found`);
+    bad++;
+    continue;
+  }
+  const mutated = original.slice(0, at) + to + original.slice(at + from.length);
+  if (mutated === original) {
+    console.log(`EMPTY DIFF mutant ${label}`);
+    bad++;
+    continue;
+  }
+  console.log(`applied mutant ${label} (${original.length} -> ${mutated.length} chars)`);
+  writeFileSync(path, mutated);
   try {
     const r = run();
     if (r.status === 0) {
-      console.log('SURVIVED mutant B (no await inLine)');
+      console.log(`SURVIVED mutant ${label}`);
       bad++;
-    } else console.log(`KILLED   mutant B (no await inLine) rc=${r.status}\n${names(r)}`);
+    } else console.log(`KILLED   mutant ${label} rc=${r.status}\n${names(r)}`);
   } finally {
     writeFileSync(path, original);
   }
 }
 
-console.log(bad ? `FAILED: ${bad} problem(s)` : 'ALL GREEN: baseline passes, mutant B killed');
+console.log(bad ? `FAILED: ${bad} problem(s)` : 'ALL GREEN: baseline passes, mutants B, C, D killed');
 process.exit(bad ? 1 : 0);

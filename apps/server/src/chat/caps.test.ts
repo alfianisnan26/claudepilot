@@ -228,21 +228,92 @@ test('T-425 S2b: a wake refused for a reason that is not an AppError (the launch
   }
 });
 
+/**
+ * The write of one send is held open by the fake host (`holdSend`) until the test ends it: no clock decides when it fails. Resolves with the
+ * held exec once the line is on its way (the optimistic Working is shown by then).
+ */
+async function heldWrite(s: Live, marker: string) {
+  s.ws.holdSend = (l) => l.includes(marker);
+  return {
+    exec: async () => {
+      await until(() => s.ws.sendExecs.some((e) => e.written.includes(marker)));
+      return s.ws.sendExecs.find((e) => e.written.includes(marker))!;
+    },
+  };
+}
+
+const askTool = (id: string) => line({ type: 'control_request', request_id: id, request: { subtype: 'can_use_tool', tool_name: 'Bash', input: { command: 'true' }, tool_use_id: `toolu_${id}` } });
+
 test('T-425 S2b + optimistic Working: a send that waited for a slot and then fails to write is marked failed, and the optimistic Working is undone', async () => {
   const s = await liveSession();
   try {
     await asleepAtCap(s);
-    s.controller.execTimeoutMs = 400;
+    const held = await heldWrite(s, 'LATE-FAIL-LINE');
     await s.controller.send(s.id, 'late-fail-1', 'LATE-FAIL-LINE');
     assert.match(s.controller.get(s.id)!.slotWait ?? '', /^Waiting for a slot/);
-    s.ws.hangSends = true; // the slot comes, the wake works, then the write to Claude Code never completes
-    s.controller.liveCaps = () => ({ perWorkspace: 5, total: 10 });
-    await until(() => s.inputs('late-fail-1').includes('failed'), 6000);
-    s.ws.hangSends = false;
+    s.controller.liveCaps = () => ({ perWorkspace: 5, total: 10 }); // the slot comes, the wake works, then the write to Claude Code is held open
+    const exec = await held.exec();
+    assert.equal(s.controller.get(s.id)!.state, 'working', 'the optimistic Working is shown while the line is being written');
+    exec.exit(1); // the host rejects the line
+    await until(() => s.inputs('late-fail-1').includes('failed'));
     assert.ok(s.controller.history(s.id).some((e) => e.kind === 'system' && /A message wasn’t delivered/.test(e.text ?? '')));
-    await sleep(50);
     assert.notEqual(s.controller.get(s.id)!.state, 'working', 'nothing reached Claude Code: the session is not left Working');
     assert.ok(!s.ws.sends.some((x) => x.line.includes('LATE-FAIL-LINE')), 'the line was never delivered');
+  } finally {
+    await s.done();
+  }
+});
+
+test('T-425 S2b + optimistic Working: the undo leaves the state alone when something else moved it during the write (a request opened: Waiting stays)', async () => {
+  const s = await liveSession();
+  try {
+    await asleepAtCap(s);
+    const held = await heldWrite(s, 'MOVED-LINE');
+    await s.controller.send(s.id, 'moved-1', 'MOVED-LINE');
+    s.controller.liveCaps = () => ({ perWorkspace: 5, total: 10 });
+    const exec = await held.exec();
+    assert.equal(s.controller.get(s.id)!.state, 'working');
+    s.ws.tails.at(-1)!.push(askTool('R-moved')); // Claude asks for permission while the line is still being written
+    await until(() => s.controller.get(s.id)!.state === 'waiting');
+    exec.exit(1);
+    await until(() => s.inputs('moved-1').includes('failed'));
+    assert.equal(s.controller.get(s.id)!.state, 'waiting', 'the failed write did not put back the state it saw before: the request is still open');
+  } finally {
+    await s.done();
+  }
+});
+
+test('T-425 S2b + optimistic Working: both paths undo the Working on a failed write, the send that never waited and the one that waited for a slot', async () => {
+  const s = await liveSession();
+  try {
+    // Never waited: the session is awake, the send itself carries the write.
+    const before = s.controller.get(s.id)!.state;
+    assert.equal(before, 'idle');
+    const direct = await heldWrite(s, 'DIRECT-FAIL-LINE');
+    const sent = s.controller.send(s.id, 'direct-1', 'DIRECT-FAIL-LINE').then(
+      () => 'sent',
+      (e: unknown) => String(e),
+    );
+    const exec = await direct.exec();
+    assert.equal(s.controller.get(s.id)!.state, 'working');
+    exec.exit(1);
+    assert.match(await sent, /The session host rejected the line \(exit 1\)/, 'the send itself refuses');
+    assert.ok(s.inputs('direct-1').includes('failed'));
+    assert.equal(s.controller.get(s.id)!.state, before, 'back to what it was');
+    assert.ok(!s.controller.history(s.id).some((e) => e.kind === 'system' && /A message wasn’t delivered/.test(e.text ?? '')), 'no detached note: the caller got the refusal');
+
+    // Waited: asleep at the cap, the send returned at once, the write comes after the slot.
+    s.ws.holdSend = null;
+    await asleepAtCap(s);
+    const waited = await heldWrite(s, 'WAITED-FAIL-LINE');
+    await s.controller.send(s.id, 'waited-1', 'WAITED-FAIL-LINE');
+    s.controller.liveCaps = () => ({ perWorkspace: 5, total: 10 });
+    const exec2 = await waited.exec();
+    assert.equal(s.controller.get(s.id)!.state, 'working');
+    exec2.exit(1);
+    await until(() => s.inputs('waited-1').includes('failed'));
+    assert.notEqual(s.controller.get(s.id)!.state, 'working');
+    assert.ok(s.controller.history(s.id).some((e) => e.kind === 'system' && /A message wasn’t delivered/.test(e.text ?? '')), 'the detached send says so in the transcript');
   } finally {
     await s.done();
   }
