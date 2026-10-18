@@ -814,7 +814,11 @@ The table above is the target. What is true today: 26 tools carry a declaration 
 | Tool | Declared | Dispatch enforces | Handler enforces |
 | --- | --- | --- | --- |
 | `session_start` | workspace operate `workspace_id`; claude operate `claude_id`?; session operate `parent`? | all three (parent: `NO_PARENT` text) | parent live, same workspace, `requireCan` (`portalmcp/tools/sessions.ts:76-86`) |
-| `workspace_rename`, `workspace_resources` | workspace operate `id` | workspace operate (an agent outside its box; nothing more while `workspace` has no resolver) | scope admin only (`portalmcp/tools/workspaces.ts:131`, `:174`) |
+| `workspace_get`; `workspace_start`, `workspace_stop`, `workspace_sync`, `workspace_rename`, `workspace_resources`; `workspace_delete` (T-1043 S0c) | workspace view; operate; manage `id` (`NO_WORKSPACE`: `No workspace “{arg}”. …`) | yes, on the form given | `resolveWorkspaceFor` (`portalmcp/tools/common.ts`): the name or label resolves over the workspaces the actor may view (never AMBIGUOUS across another person's), then the verb on the one found; same not found |
+| `workspace_list` | signed-in, filter workspace | nothing | `visible()` |
+| `workspace_create` | target operate `target`, creates workspace | yes | the manager's own check |
+| `session_get`; `session_interrupt`, `session_end`, `session_send`, `session_respond`, `session_configure` (T-1043 S0c) | session view; operate `id` (`NO_SESSION`) | yes | `session_configure` also `manage` for its limits (as `PATCH …/limits`); `session_get` lists only the workers the actor may view, `workspace_get` only its sessions |
+| `session_list` | signed-in, filter session | nothing | `visible()` |
 | `autotransfer_status` | session view `session_id` | yes ("No such session.") | `owner.can(view)` (`autotransfer/portalTools.ts:22`) |
 | `session_keepgoing_set` | session operate `session_id`, confirm, audit | yes ("No such session.") | agents refused, `owner.can(view, operate)` (`keepgoing/portalTools.ts:44`) |
 | `ticket_bump` | ticket operate `id`; session operate `session_id`? (was required: corrected, the tool lists targets without it) | both | `requireCan` both (`tickets/portalTools.ts:425`, `:433`) |
@@ -834,6 +838,8 @@ The table above is the target. What is true today: 26 tools carry a declaration 
 | `ticket_verdict` | agent, reach workspace | nothing | the verdict rule `canRecordVerdict` (`tickets/verdicts.ts`): a QA or review session of its own role, never the author or the lead; an invisible ticket is the same not found (T-325) |
 | `lab_summary`, `lab_arm_draw` | agent, reach session | nothing | its own session only (`lab/portalTools.ts:81-82`, `:114`) |
 | `crew_scorecard` (T-450) | agent, reach session | nothing | its own program only (the top of its session's lineage; another program is `NOT_FOUND`) in `Lab.scorecard` (`lab/index.ts`) |
+
+**Members (T-1043 S0c).** A principal that acts for a user other than the founding user (`PortalPrincipal.userId`; tokens record no owner until S1b's column, so today only tests mint one) reaches only a tool with a declaration: any other is not listed, not offered as a resource or prompt, and a call reads like a tool the portal lacks (`reachable`, `portalmcp/server.ts`). The founding user's tokens and agents are unchanged. Limit: the dispatch asks the seam about the form given, so until the `workspace` resolver takes every form, a member names a workspace by the form the resolver knows. Share tools do not exist yet (S2). `portalmcp/tools.test.ts` (the S0c test) runs a member over these tools.
 
 ### B.2 The workspaces router, declared and enforced (T-531)
 

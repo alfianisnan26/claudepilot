@@ -1,10 +1,10 @@
 import { AppError } from '@isnanme/core';
-import type { MultiPoolType, Workspace } from '@portal/contracts';
+import type { MultiPoolType, Verb, Workspace } from '@portal/contracts';
 import { z } from 'zod';
 import { paginate, pageInput } from '../paging.js';
-import { registerPortalTool, PortalToolError } from '../registry.js';
-import { actorOfPrincipal } from '../../authz/seam.js';
-import { assertCanChange, labelProse, resolveWorkspace, uiLink, workspaceBrief } from './common.js';
+import { registerPortalTool, PortalToolError, type PortalToolContext } from '../registry.js';
+import { actorOfPrincipal, visible } from '../../authz/seam.js';
+import { assertCanChange, labelProse, resolveWorkspaceFor, uiLink, workspaceBrief } from './common.js';
 import type { PortalToolDeps } from './deps.js';
 
 const WORKSPACE_STATUSES = ['creating', 'starting', 'running', 'stopping', 'stopped', 'error'] as const;
@@ -18,8 +18,10 @@ export function registerWorkspaceTools(deps: PortalToolDeps): void {
     const row = reconciler.row(w.id);
     return { ...w, account: accountPools.stateFor(w.id), delivery: row ? { status: row.status, reason: row.reason, appliedAt: row.applied_at, claudeVersion: row.claude_version } : null };
   };
-  // Any form of the id, through the manager's one resolver (T-42): it also knows the labels a workspace had before a rename.
-  const find = async (idOrName: string) => decorate(resolveWorkspace(await workspaces.list(), idOrName, (ref) => workspaces.resolve?.(ref) ?? null));
+  // Any form of the id, through the manager's one resolver (T-42): it also knows the labels a workspace had before a rename. T-1043 S0c: out
+  // of the workspaces the caller may view, and `verb` asked of the seam on the one found (the dispatch asked about the form given).
+  const find = async (idOrName: string, verb: Verb, ctx: PortalToolContext) =>
+    decorate(resolveWorkspaceFor(actorOfPrincipal(ctx.principal), verb, await workspaces.list(), idOrName, (ref) => workspaces.resolve?.(ref) ?? null));
   const liveSessions = (id: string) => chat.list().filter((s) => s.workspaceId === id && s.state !== 'ended' && !s.archivedAt);
 
   registerPortalTool({
@@ -34,7 +36,7 @@ export function registerWorkspaceTools(deps: PortalToolDeps): void {
       ...pageInput,
     }),
     async handler(ctx, args) {
-      const all = (await workspaces.list()).map(decorate).filter((w) => (!args.target || w.target === args.target) && (!args.status || w.status === args.status) && (!args.query || w.name.includes(args.query.toLowerCase())));
+      const all = visible(actorOfPrincipal(ctx.principal), 'workspace', await workspaces.list(), (w) => w.id).map(decorate).filter((w) => (!args.target || w.target === args.target) && (!args.status || w.status === args.status) && (!args.query || w.name.includes(args.query.toLowerCase())));
       const page = paginate(all, args, { t: args.target, s: args.status, q: args.query });
       return { summary: `${page.total} workspaces.`, workspaces: page.items.map((w) => workspaceBrief(w, ctx)), total: page.total, next_cursor: page.next_cursor };
     },
@@ -50,15 +52,18 @@ export function registerWorkspaceTools(deps: PortalToolDeps): void {
       include: z.array(z.enum(['usage', 'sessions', 'claudes', 'pools'])).max(4).optional().describe('Extras to include (default: pools, sessions and claudes).'),
     }),
     async handler(ctx, args) {
-      const w = await find(args.id);
+      const w = await find(args.id, 'view', ctx);
       const include = new Set(args.include ?? ['pools', 'sessions', 'claudes']);
       const out: Record<string, unknown> = { summary: `${w.id} is ${w.status}.`, workspace: workspaceBrief(w, ctx), ui: uiLink(`/admin/workspaces`) };
       if (include.has('pools'))
         out.pools = poolService.assignmentsFor(w.id).map((a) => ({ type: a.type, pool_id: a.poolId, name: a.poolName, revision: a.revision, pinned_revision: a.pinnedRevision, state: a.state }));
       if (include.has('sessions'))
-        out.sessions = chat
-          .list()
-          .filter((s) => s.workspaceId === w.id && !s.archivedAt)
+        out.sessions = visible(
+          actorOfPrincipal(ctx.principal),
+          'session',
+          chat.list().filter((s) => s.workspaceId === w.id && !s.archivedAt),
+          (s) => s.id,
+        )
           .slice(0, 20)
           .map((s) => ({ id: s.id, title: ctx.untrusted(s.title, 'agent'), state: s.state, last_activity_at: s.lastActivityAt }));
       if (include.has('claudes')) out.claudes = chat.listClaudes(w.id).filter((c) => !c.removedAt).map((c) => ({ id: c.id, name: c.name }));
@@ -129,7 +134,7 @@ export function registerWorkspaceTools(deps: PortalToolDeps): void {
       confirm_token: z.string().optional().describe('From the confirmation_required answer.'),
     }),
     async handler(ctx, args) {
-      const w = await find(args.id);
+      const w = await find(args.id, 'operate', ctx);
       assertCanChange(store, 'workspace');
       const actor = actorOfPrincipal(ctx.principal);
       // Checked before the confirmation: a label that is not allowed, or taken on the target, is refused at once.
@@ -172,7 +177,7 @@ export function registerWorkspaceTools(deps: PortalToolDeps): void {
       confirm_token: z.string().optional().describe('From the confirmation_required answer.'),
     }),
     async handler(ctx, args) {
-      const w = await find(args.id);
+      const w = await find(args.id, 'operate', ctx);
       assertCanChange(store, 'workspace');
       const actor = actorOfPrincipal(ctx.principal);
       const req = { apply: args.apply, cpus: args.cpus, memoryMb: args.memory_mb, cpuRequest: args.cpu_request, memoryRequestMb: args.memory_request_mb };
@@ -218,7 +223,7 @@ export function registerWorkspaceTools(deps: PortalToolDeps): void {
     hints: { idempotent: true },
     input: z.object({ id: z.string().max(100) }),
     async handler(ctx, args) {
-      const w = await find(args.id);
+      const w = await find(args.id, 'operate', ctx);
       assertCanChange(store, 'workspace');
       if (w.status === 'running') return { summary: `${w.id} is already running.`, id: w.id, status: w.status };
       await workspaces.start(w.target, w.name);
@@ -235,7 +240,7 @@ export function registerWorkspaceTools(deps: PortalToolDeps): void {
     hints: { destructive: true, idempotent: true },
     input: z.object({ id: z.string().max(100) }),
     async handler(ctx, args) {
-      const w = await find(args.id);
+      const w = await find(args.id, 'operate', ctx);
       assertCanChange(store, 'workspace');
       const sessions = liveSessions(w.id);
       if (w.status === 'stopped') return { summary: `${w.id} is already stopped.`, id: w.id, status: w.status, sessions_stopped: 0 };
@@ -253,7 +258,7 @@ export function registerWorkspaceTools(deps: PortalToolDeps): void {
     hints: { idempotent: true },
     input: z.object({ id: z.string().max(100) }),
     async handler(ctx, args) {
-      const w = await find(args.id);
+      const w = await find(args.id, 'operate', ctx);
       assertCanChange(store, 'pool');
       await reconciler.request(w.id, `portal mcp sync (${ctx.actor})`);
       const row = reconciler.row(w.id);
@@ -275,7 +280,7 @@ export function registerWorkspaceTools(deps: PortalToolDeps): void {
     hints: { destructive: true, idempotent: true },
     input: z.object({ id: z.string().max(100), confirm_token: z.string().optional().describe('From the confirmation_required answer.') }),
     async handler(ctx, args) {
-      const w = await find(args.id);
+      const w = await find(args.id, 'manage', ctx);
       assertCanChange(store, 'workspace');
       const sessions = liveSessions(w.id);
       const assignments = poolService.assignmentsFor(w.id);

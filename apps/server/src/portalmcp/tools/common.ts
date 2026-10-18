@@ -1,5 +1,6 @@
 import { AppError } from '@isnanme/core';
-import { sessionCost, type ChatSession, type Workspace } from '@portal/contracts';
+import { sessionCost, workspaceRef, type Actor, type ChatSession, type Verb, type Workspace } from '@portal/contracts';
+import { can, visible } from '../../authz/seam.js';
 import { config } from '../../config.js';
 import { findWorkspace } from '../../workspaces/identity.js';
 import { PortalToolError, type PortalToolContext } from '../registry.js';
@@ -62,6 +63,17 @@ export function resolveWorkspace(all: Workspace[], idOrName: string, resolve?: (
       throw new PortalToolError('AMBIGUOUS', `${named.length} workspaces are named “${wanted}”. Use the full id.`, { matches: named.map((w) => w.id) });
   }
   throw new AppError('NOT_FOUND', `No workspace “${wanted}”. List them with workspace_list.`);
+}
+
+/**
+ * T-1043 S0c: `resolveWorkspace` for an actor. Only the workspaces it may view take part (so a name or a label never resolves to, nor an
+ * AMBIGUOUS answer lists, one it may not see), and the one found is asked of the seam for `verb`. Every refusal is the resolver's own not
+ * found (decision 10605: the same answer as a workspace that does not exist).
+ */
+export function resolveWorkspaceFor(actor: Actor, verb: Verb, all: Workspace[], idOrName: string, resolve?: (ref: string) => { legacyId: string } | null): Workspace {
+  const w = resolveWorkspace(visible(actor, 'workspace', all, (x) => x.id), idOrName, resolve);
+  if (!can(actor, verb, workspaceRef(w.id)).allow) throw new AppError('NOT_FOUND', `No workspace “${idOrName.trim()}”. List them with workspace_list.`);
+  return w;
 }
 
 /** The portal's database must be writable for any change; Locked and Frozen get the codes PRD §16 names. */

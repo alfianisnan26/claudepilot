@@ -223,5 +223,29 @@ test('every real tool\'s object checks name arguments of its input, optional exa
     }
     checked.push(name);
   }
-  assert.deepEqual(checked.sort(), ['autotransfer_status', 'ci_run_bump', 'ci_run_cancel', 'ci_run_get', 'ci_run_logs', 'session_keepgoing_set', 'session_start', 'ticket_bump', 'workspace_rename', 'workspace_resources']);
+  assert.deepEqual(checked.sort(), [
+    'autotransfer_status',
+    'ci_run_bump',
+    'ci_run_cancel',
+    'ci_run_get',
+    'ci_run_logs',
+    // T-1043 S0c: the session and workspace tools, as their routes.
+    'session_configure',
+    'session_end',
+    'session_get',
+    'session_interrupt',
+    'session_keepgoing_set',
+    'session_respond',
+    'session_send',
+    'session_start',
+    'ticket_bump',
+    'workspace_create',
+    'workspace_delete',
+    'workspace_get',
+    'workspace_rename',
+    'workspace_resources',
+    'workspace_start',
+    'workspace_stop',
+    'workspace_sync',
+  ]);
 });

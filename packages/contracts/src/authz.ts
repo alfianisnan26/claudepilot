@@ -354,7 +354,8 @@ export interface ToolObjectCheck {
   many?: boolean;
   /**
    * T-348: the text the tool itself answers NOT_FOUND with for a missing object of this argument ("No such run."), so a refusal at dispatch
-   * reads byte for byte like a missing one. Default "Not found." (what `requireCan` says).
+   * reads byte for byte like a missing one. Default "Not found." (what `requireCan` says). T-1043 S0c: `{arg}` stands for the argument as
+   * given, trimmed (`No workspace “{arg}”. …`).
    */
   notFound?: string;
 }

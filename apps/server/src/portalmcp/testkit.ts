@@ -71,6 +71,23 @@ export async function portalMcpHarness(opts: HarnessOptions = {}) {
   };
 
   /**
+   * T-1043 S0c: a token that acts for `userId` (a member), as tokens will once they record an owner (S1b). Tokens have no owner column yet,
+   * so the harness tags the principal its own verify returns; everything after (dispatch, `can()`, the handlers) is the portal's own.
+   */
+  const members = new Map<string, string>();
+  const verify = module.tokens.verify.bind(module.tokens);
+  module.tokens.verify = ((secret: string, ip: string) => {
+    const v = verify(secret, ip);
+    const userId = v.ok ? members.get(v.principal.tokenId) : undefined;
+    return v.ok && userId ? { ...v, principal: { ...v.principal, userId } } : v;
+  }) as typeof module.tokens.verify;
+  const memberToken = (scope: PortalScope, userId: string) => {
+    const t = token(scope, `member-${userId}-${scope}`);
+    members.set(t.id, userId);
+    return t;
+  };
+
+  /**
    * An agent's per-session token (interface I8): opts the workspace in, marks the session as running, and mints through
    * the same function the chat launch calls. Returns its secret and the grant (env and MCP config).
    */
@@ -107,5 +124,5 @@ export async function portalMcpHarness(opts: HarnessOptions = {}) {
     store.close();
     rmSync(dataDir, { recursive: true, force: true });
   };
-  return { store, module, registry, token, agentToken, alive, rpc, call, client, ip, done, dataDir };
+  return { store, module, registry, token, memberToken, agentToken, alive, rpc, call, client, ip, done, dataDir };
 }
