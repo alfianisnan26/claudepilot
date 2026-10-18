@@ -171,13 +171,15 @@ export interface CutOffAudit {
  * The cut-offs still waiting: a `session.cutoff` row per session (its newest), not older than an hour, with no `session.restart_recovery`
  * row after it. Oldest first. Idempotent across restarts: once a recovery row is written, a later start finds nothing for that cut-off.
  */
-export function pendingCutOffs(cuts: readonly CutOffAudit[], recoveries: readonly CutOffAudit[], now: number): { sessionId: string; cutAt: number; bypass: boolean }[] {
-  const newest = new Map<string, { cutAt: number; bypass: boolean }>();
+export function pendingCutOffs(cuts: readonly CutOffAudit[], recoveries: readonly CutOffAudit[], now: number): { sessionId: string; cutAt: number; bypass: boolean; started: string | null | undefined }[] {
+  const newest = new Map<string, { cutAt: number; bypass: boolean; started: string | null | undefined }>();
   for (const c of cuts) {
     const at = Date.parse(c.at);
     if (!c.sessionId || !Number.isFinite(at) || now - at >= RESTART_PENDING_MS) continue;
     const had = newest.get(c.sessionId);
-    if (!had || at >= had.cutAt) newest.set(c.sessionId, { cutAt: at, bypass: c.detail.bypass === true });
+    // `started`: when the process that was cut off had started (the generation the row is bound to); undefined on a row written before it was kept.
+    const started = 'started' in c.detail ? (typeof c.detail.started === 'string' ? c.detail.started : null) : undefined;
+    if (!had || at >= had.cutAt) newest.set(c.sessionId, { cutAt: at, bypass: c.detail.bypass === true, started });
   }
   for (const r of recoveries) {
     const at = Date.parse(r.at);
@@ -187,9 +189,12 @@ export function pendingCutOffs(cuts: readonly CutOffAudit[], recoveries: readonl
   return [...newest].map(([sessionId, v]) => ({ sessionId, ...v })).sort((a, b) => a.cutAt - b.cutAt);
 }
 
-/** How many times a restart resumed this session in the last 24 hours, from its `session.restart_recovery` rows. */
+/** The results of a `session.restart_recovery` row that count against the daily limit: a resume that was tried, whether or not it worked (a launch that keeps failing is a loop too). */
+const TRIED = new Set(['resumed', 'failed']);
+
+/** How many times a restart tried to resume this session in the last 24 hours, from its `session.restart_recovery` rows. */
 export const restartResumesToday = (recoveries: readonly CutOffAudit[], sessionId: string, now: number): number =>
-  recoveries.filter((r) => r.sessionId === sessionId && r.detail.result === 'resumed' && now - Date.parse(r.at) < DAY_MS).length;
+  recoveries.filter((r) => r.sessionId === sessionId && TRIED.has(String(r.detail.result)) && now - Date.parse(r.at) < DAY_MS).length;
 
 /** The line the portal sends to a session it resumed after a restart: what happened, and that Bypass is off. */
 export const restartContinuation = (bypass: boolean): string =>

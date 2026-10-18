@@ -287,6 +287,83 @@ test('T-971 H2 loop guard edge (injected clock): three resumes just inside 24 ho
   }
 });
 
+test('T-971 H2 a person chose since the cut-off: a session put to sleep, or resumed and stopped again, is not resumed; one left alone is', async () => {
+  const s = await liveSession();
+  try {
+    fast(s, 0); // the first start records the cut-offs and resumes nothing
+    const b = await made(s, 'B');
+    const c = await made(s, 'C');
+    const starts = s.ws.startArgs.length;
+    await cutOff(s, [s.id, b.id, c.id]);
+    await sleep(100);
+    const db = s.store.db!;
+    db.prepare("UPDATE chat_sessions SET state = 'idle', process = 'asleep' WHERE id = ?").run(s.id); // a person put it to sleep
+    db.prepare('UPDATE chat_sessions SET process_started_at = ? WHERE id = ?').run('2099-01-01T00:00:00.000Z', b.id); // a person resumed it (another process) and stopped it again: gone, interrupted
+    s.controller.stop();
+    const second = new ChatController(s.store, s.ws as unknown as Workspaces, {});
+    second.controlTimeoutMs = 150;
+    second.recoverSettings = settings(5);
+    second.start();
+    try {
+      await until(() => recoveries(s).length === 3);
+      const why = (id: string) => [recoveries(s, id)[0]!.detail.result, /put to sleep since|resumed and stopped since/.exec(String(recoveries(s, id)[0]!.detail.line))?.[0]];
+      assert.deepEqual(why(s.id), ['skipped', 'put to sleep since']);
+      assert.deepEqual(why(b.id), ['skipped', 'resumed and stopped since']);
+      assert.equal(recoveries(s, c.id)[0]!.detail.result, 'resumed', 'the one nobody touched is resumed');
+      await until(() => second.get(c.id)!.process === 'live');
+      assert.equal(s.ws.startArgs.length, starts + 1, 'only that one was started');
+      assert.equal(second.get(s.id)!.process, 'asleep', 'the sleeper stays asleep');
+    } finally {
+      second.stop();
+    }
+  } finally {
+    await s.done();
+  }
+});
+
+test('T-971 H2 failed tries count: three failed resumes today stop a fourth; skipped, over-limit and looping rows do not count', async () => {
+  const now = Date.now();
+  const s = await liveSession({ clock: () => now });
+  try {
+    fast(s, 5);
+    const b = await made(s, 'B');
+    for (let i = 0; i < 3; i++) plant(s, s.id, 'session.restart_recovery', now - 5 * HOUR + i, { result: 'failed' });
+    ['skipped', 'over_limit', 'looping'].forEach((result, i) => plant(s, b.id, 'session.restart_recovery', now - 5 * HOUR + i, { result }));
+    await cutOff(s, [s.id, b.id]);
+    await until(() => recoveries(s, s.id).length === 4 && recoveries(s, b.id).length === 4);
+    assert.equal(recoveries(s, s.id)[0]!.detail.result, 'looping', 'three failed tries are three tries');
+    assert.equal(recoveries(s, b.id)[0]!.detail.result, 'resumed', 'rows that tried nothing do not count');
+  } finally {
+    await s.done();
+  }
+});
+
+test('T-971 H2 a failed resume: the error text is scrubbed before it reaches the audit row and the platform line', async () => {
+  const s = await liveSession();
+  try {
+    fast(s, 5);
+    const secret = `${['sk', 'ant', 'api03'].join('-')}-${'Zq9_'.repeat(12)}`; // built at run time: never a literal
+    const lines: string[] = [];
+    s.controller.onRestartRecovery = (i) => lines.push(i.line);
+    const exec = s.ws.exec.bind(s.ws);
+    s.ws.exec = async (target: string, name: string, command: string[]) => {
+      if (command[2] === 'start') throw new Error(`launch refused ${secret}`);
+      return exec(target, name, command);
+    };
+    await cutOff(s, [s.id]);
+    await until(() => recoveries(s, s.id).length === 1);
+    const row = recoveries(s, s.id)[0]!;
+    assert.equal(row.detail.result, 'failed');
+    assert.match(String(row.detail.line), /could not be resumed: launch refused \[redacted\]/);
+    assert.ok(!JSON.stringify(row).includes(secret), 'not in the audit row');
+    assert.equal(lines.length, 1);
+    assert.ok(!lines[0]!.includes(secret), 'not in the platform audit line');
+    assert.match(lines[0]!, /\[redacted\]/);
+  } finally {
+    await s.done();
+  }
+});
+
 test('T-971 H2 pending age (injected clock): a cut-off older than an hour is dropped, one just inside is resumed', async () => {
   const now = Date.now();
   const s = await liveSession({ clock: () => now });
@@ -322,6 +399,9 @@ test('T-971 H2 exact edges (pure, fixed instants): a cut-off exactly an hour old
   const resumed = (ms: number) => ({ sessionId: 's', at: at(ms), detail: { result: 'resumed' } });
   assert.equal(restartResumesToday([resumed(now - DAY_MS)], 's', now), 0, 'a resume exactly 24 hours old is outside the day');
   assert.equal(restartResumesToday([resumed(now - DAY_MS + 1)], 's', now), 1, 'one millisecond younger counts');
+  const result = (r: string) => ({ sessionId: 's', at: at(now - 1000), detail: { result: r } });
+  assert.equal(restartResumesToday([result('resumed'), result('failed'), result('failed')], 's', now), 3, 'a failed try is a try');
+  assert.equal(restartResumesToday([result('skipped'), result('over_limit'), result('looping')], 's', now), 0, 'rows that tried nothing are not');
 });
 
 test('T-971 H2 race: a session a person resumed during the spacing wait is skipped: no message, and it does not count against the loop guard', async () => {

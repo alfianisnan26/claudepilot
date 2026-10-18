@@ -609,8 +609,11 @@ first gets a `session.cutoff` audit row (its state and whether it was in Bypass)
 resume takes (`#live`, a new process with `--resume`) and sends it one continuation message ("The portal restarted while you were
 working …"). There is no second resume mechanism. Limits: at most `chat.restartResume.max` resumes per start (default 5; 0 turns it
 off), spaced by `chat.restartResume.staggerSec` (default 20) so a restart storm does not hit the Claude quota at once; the rest stay
-Interrupted and are listed as "over the limit … Resume it by hand". Skipped: ended and archived sessions, and one already running again.
-One session is resumed by restarts at most 3 times in 24 hours (`looping`). Idempotent: the cut-off is a persisted row, a
+Interrupted and are listed as "over the limit … Resume it by hand". Skipped: ended and archived sessions, one already running again, and one a person
+has chosen for since the cut-off (put to sleep, or resumed and stopped again: the cut-off row keeps the cut-off process's start, and a
+different start, or a process that is no longer `gone`, means the person's choice stands).
+One session is tried by restarts at most 3 times in 24 hours (`looping`); a resume that failed counts as a try. The failure text is
+scrubbed (secret values and credential shapes) before it reaches either audit row. Idempotent: the cut-off is a persisted row, a
 `session.restart_recovery` row after it marks it answered, so two quick restarts resume a session once, and a cut-off older than an hour is dropped.
 **Bypass is never re-entered by this.** A session that was in Bypass resumes in its normal mode (the T-416 S2 relaunch that would put a
 lead back in Bypass through its gates is switched off for this path, and its kept record is superseded); its summary line ends

@@ -1247,16 +1247,23 @@ export class ChatController {
       sessionId: row.id,
       workspaceId: row.workspace_id,
       actor: 'portal',
-      detail: { state: row.state, bypass: row.mode === 'bypassPermissions' },
+      // `started`: the process that was cut off, so a later resume can tell it is no longer the one the row is about.
+      detail: { state: row.state, bypass: row.mode === 'bypassPermissions', started: row.process_started_at ?? null },
     });
   }
 
-  /** Why a restart recovery must not resume this session now (read fresh), or undefined when it may. */
-  #restartSkipWhy(sessionId: string): string | undefined {
+  /**
+   * Why a restart recovery must not resume this session now (read fresh), or undefined when it may. `started` is the cut-off row's process
+   * generation (undefined: a row from before it was kept): a session a person has since resumed and stopped has another process start, and
+   * one a person put to sleep is no longer `gone`; either way the person's choice stands.
+   */
+  #restartSkipWhy(sessionId: string, started?: string | null): string | undefined {
     const row = this.#chat.row(sessionId);
     if (!row || row.state === 'ended') return 'it has ended';
     if (row.archived_at) return 'it is archived';
     if (row.process === 'live' || this.#busy.has(sessionId) || this.#moving.has(sessionId)) return 'it is running again';
+    if (row.process === 'asleep') return 'it was put to sleep since';
+    if (started !== undefined && (row.process_started_at ?? null) !== started) return 'it was resumed and stopped since';
     return undefined;
   }
 
@@ -1301,7 +1308,7 @@ export class ChatController {
         const who = `${title ? `“${this.scrub(row!.workspace_id, title.replace(/\s+/g, ' ').trim()).slice(0, 60)}” ` : ''}(${shortId(next.sessionId)}${row ? `, ${row.workspace_id}` : ''})`;
         let result: 'resumed' | 'failed' | 'over_limit' | 'looping' | 'skipped';
         let why = '';
-        const skip = this.#restartSkipWhy(next.sessionId);
+        const skip = this.#restartSkipWhy(next.sessionId, next.started);
         if (!row || skip) (result = 'skipped'), (why = skip ?? 'it has ended');
         else if (this.#restartResumed >= config.max) (result = 'over_limit'), (why = `over the limit of ${config.max} per start: Resume it by hand`);
         else if (restartResumesToday(recoveries, next.sessionId, now) >= RESTART_RESUMES_PER_DAY) (result = 'looping'), (why = `already resumed ${RESTART_RESUMES_PER_DAY} times today: Resume it by hand`);
@@ -1309,7 +1316,7 @@ export class ChatController {
           if (attempted > 0) await (this.restartPause ?? ((ms: number) => this.#wait(ms)))(config.staggerMs);
           if (this.#closed) return;
           // The stagger can be long: a person may have resumed it, or ended it, meanwhile. Then nothing is sent and nothing is counted.
-          const again = this.#restartSkipWhy(row.id);
+          const again = this.#restartSkipWhy(row.id, next.started);
           if (again) {
             result = 'skipped';
             why = again;
@@ -1333,7 +1340,8 @@ export class ChatController {
               }
             } catch (e) {
               result = 'failed';
-              why = isAppError(e) ? e.message : this.#message(e);
+              // The error text of a failed launch can carry what the workspace printed: scrubbed (as the title is) before it reaches the audit rows.
+              why = this.scrub(row.workspace_id, isAppError(e) ? e.message : this.#message(e));
             }
           }
         }

@@ -18,11 +18,18 @@ const mutants = [
   ['M9 no stagger', CTL, 'if (attempted > 0) await (this.restartPause ?? ((ms: number) => this.#wait(ms)))(config.staggerMs);', ''],
   ['M10 no loop guard', CTL, 'restartResumesToday(recoveries, next.sessionId, now) >= RESTART_RESUMES_PER_DAY)', 'false)'],
   ['M11 no re-read after the stagger', CTL, 'const again = this.#restartSkipWhy(row.id);', 'const again = undefined;'],
-  ['M12 loop guard window too long', REC, 'r.detail.result === \'resumed\' && now - Date.parse(r.at) < DAY_MS)', 'r.detail.result === \'resumed\' && now - Date.parse(r.at) < DAY_MS * 2)'],
+  ['M12 loop guard window too long', REC, 'TRIED.has(String(r.detail.result)) && now - Date.parse(r.at) < DAY_MS)', 'TRIED.has(String(r.detail.result)) && now - Date.parse(r.at) < DAY_MS * 2)'],
   ['M13 old cut-off kept', REC, 'now - at >= RESTART_PENDING_MS', 'now - at >= RESTART_PENDING_MS * 99'],
   // QA #11062: the exact edges. H5: an hour-old cut-off is kept (>= to >). H9: a resume exactly 24 hours old still counts (< to <=).
   ['H5 pending edge >= to >', REC, 'now - at >= RESTART_PENDING_MS) continue', 'now - at > RESTART_PENDING_MS) continue'],
   ['H9 day edge < to <=', REC, 'now - Date.parse(r.at) < DAY_MS).length', 'now - Date.parse(r.at) <= DAY_MS).length'],
+  // Blind review of H2 S1 (#10978). B7: no age limit on a cut-off. B10: the failure text is not scrubbed. B13: failed tries do not count against
+  // the daily limit. A1 and A2: a session a person put to sleep, or resumed and stopped, is resumed anyway.
+  ['B7 no cut-off age limit', REC, 'now - at >= RESTART_PENDING_MS) continue', 'false) continue'],
+  ['B10 failure text not scrubbed', CTL, 'why = this.scrub(row.workspace_id, isAppError(e) ? e.message : this.#message(e));', 'why = isAppError(e) ? e.message : this.#message(e);'],
+  ['B13 failed tries not counted', REC, "new Set(['resumed', 'failed'])", "new Set(['resumed'])"],
+  ['A1 asleep is resumed', CTL, "if (row.process === 'asleep') return 'it was put to sleep since';", ''],
+  ['A2 other generation is resumed', CTL, "if (started !== undefined && (row.process_started_at ?? null) !== started) return 'it was resumed and stopped since';", ''],
   ['M14 no platform audit row', 'apps/server/src/chat/restartAudit.ts', '    record({', '    void ({'],
 ];
 // Returns { passed, failing }: `failing` is the names of the tests that failed (what killed the mutant).
