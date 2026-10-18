@@ -28,7 +28,7 @@
 - T-565 FIX 103c4d80 QA PWG (T-595 10968) -> gap 1 9d1d1203 Job b3pik9awy rc0 (Y1-3 killed; T-595 11123); N11/N14 dropped
   (labels exist nowhere, 10973) -> delta c691df71 -> blind (infra).
 - T-968 PRD fix a32754c3 (gaps 2-7) -> re-check d9f18599. T-968 S1 03fcd4c4 (2a0edbd8; seam, cpmt_, revoke,
-  migration 793), Job b7sajor81 rc1 (typecheck; managers.test 3+6) -> 89e5aba6 + diagnosis Job bfzybcl0u -> QA c691df71 + blind d9f18599; lead reads seam/migration. T-1033 S1 rc 75 (11035) head
+  migration 793), fix 352194df (test was wrong, #11127), Job bcf1333pr -> QA c691df71 + blind d9f18599; lead reads seam/migration. T-1033 S1 rc 75 (11035) head
   53527bfa, Job blfnye6go rc1 (jobRun.test file timeout, a leftover process?) -> diagnosis Job -> fix -> QA + blind. T-921 4511c7be Job rc0 VOID (base test red) -> 515bb0c1, Job bl8pu6oc6 (green base first).
 - T-251 (unknown usage) 3753d3c2: audit vs integration (decide.ts unknownUsage, t255.test), build only what is missing.
 - T-1043 S0c (MCP tools through can()) 76845676 on ticket/T-1043-s0c, beside T-1065.
