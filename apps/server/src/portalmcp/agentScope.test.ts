@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { z } from 'zod';
+import { declareAllToolPolicies } from './declareAll.js';
 import { agentCallable, portalTools, ToolRegistry, userTier } from './registry.js';
 import { registerBuiltInPortalTools } from './tools/index.js';
 import { portalMcpHarness } from './testkit.js';
@@ -28,6 +29,7 @@ test('registering: an agent-callable tool can’t be destructive', () => {
 test('over the real tool set an agent sees only what opted in, and every other tool is refused by name', async () => {
   // The built-in tools and the ticket tools, registered as index.ts does (their handlers are never run here: no services).
   const fake = new Proxy({}, { get: () => ({}) });
+  declareAllToolPolicies(); // as index.ts does before it registers: the portal's registry refuses an undeclared tool (FR19)
   registerBuiltInPortalTools({ store: fake, module: fake, workspaces: fake, chat: fake, accounts: fake, accountPools: fake, poolService: fake, reconciler: fake, mcp: fake } as never);
   registerTicketTools(new Tickets({ db: null, writable: false } as never, new FakeSessions()));
   const h = await portalMcpHarness({ registry: portalTools });

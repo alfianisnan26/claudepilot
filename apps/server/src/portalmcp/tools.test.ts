@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { declareAllToolPolicies } from './declareAll.js';
 import { portalTools, agentCallable } from './registry.js';
 import { portalMcpHarness } from './testkit.js';
 import { registerBuiltInPortalTools } from './tools/index.js';
@@ -157,6 +158,7 @@ const fakes = {
 };
 
 const h = await portalMcpHarness({ registry: portalTools });
+declareAllToolPolicies(); // as index.ts does before it registers: the portal's registry refuses an undeclared tool (FR19)
 registerBuiltInPortalTools({ ...fakes, module: h.module } as never);
 process.once('beforeExit', () => h.done());
 

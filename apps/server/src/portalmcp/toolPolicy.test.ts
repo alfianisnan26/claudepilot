@@ -181,19 +181,18 @@ const stub: any = new Proxy(function () {}, { get: (_t, k) => (k === Symbol.iter
 test('every real tool\'s object checks name arguments of its input, optional exactly where the input is', async () => {
   const { registerSessionTools } = await import('./tools/sessions.js');
   const { registerWorkspaceTools } = await import('./tools/workspaces.js');
-  const { declarePortalMcpPolicies } = await import('./authz.js');
+  const { declareAllToolPolicies } = await import('./declareAll.js');
   const { registerChatTools } = await import('../chat/portalTools.js');
   const { registerChatAuthz } = await import('../chat/authz.js');
   const { registerCiTools } = await import('../ci/portalTools.js');
   const { registerClaudeVersionTools } = await import('../claudeversion/portalTools.js');
-  const { declareClaudeVersionPolicies } = await import('../claudeversion/authz.js');
   const { registerKeepGoingTools } = await import('../keepgoing/portalTools.js');
-  const { declareKeepGoingPolicies } = await import('../keepgoing/authz.js');
   const { registerLabTools } = await import('../lab/portalTools.js');
   const { registerTicketTools } = await import('../tickets/portalTools.js');
   const { registerAutoTransferTools } = await import('../autotransfer/portalTools.js');
-  const { declareAutoTransferPolicies } = await import('../autotransfer/authz.js');
-  const { declareWorkspacePolicies } = await import('../workspaces/authz.js');
+  // As index.ts does: the policies are declared before the first tool registers (the portal's registry refuses an undeclared one, FR19).
+  registerChatAuthz(() => null);
+  declareAllToolPolicies();
   registerSessionTools(stub);
   registerWorkspaceTools(stub);
   registerChatTools(stub);
@@ -203,12 +202,6 @@ test('every real tool\'s object checks name arguments of its input, optional exa
   registerLabTools(stub);
   registerTicketTools(stub);
   registerAutoTransferTools(stub);
-  declarePortalMcpPolicies();
-  registerChatAuthz(() => null);
-  declareClaudeVersionPolicies();
-  declareKeepGoingPolicies();
-  declareAutoTransferPolicies();
-  declareWorkspacePolicies();
   clearResolvers();
 
   const checked: string[] = [];
