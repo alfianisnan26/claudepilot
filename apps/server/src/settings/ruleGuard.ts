@@ -50,8 +50,12 @@ const CHECKER_BASE = /^check-allowlist(\.[A-Za-z0-9]+)?$/;
 const ANY_RULE_BASE = /^(settings(\.local)?\.json|\.mcp\.json|\.claude\.json|check-allowlist(\.[A-Za-z0-9]+)?)$/;
 // A rule file named in text: the literal paths, a config folder's settings, or the variable that names one.
 const MENTION = /\.mcp\.json|\.claude\.json|check-allowlist|\/etc\/+claude-code|\/etc\/+claudepilot|\.claude\/+(\.\/+)*settings(\.local)?\.json|claudes\/[^\s\/'"]+\/+settings(\.local)?\.json|CLAUDE_CONFIG_DIR/;
-// Words that could be part of a rule file's name, for values the hook cannot see (a variable, a pipe).
-const FRAGMENT_WORDS = /claude|settings|\.mcp|mcp\.json|allowlist/i;
+// Words that could be part of a rule file's name, for shell values the hook cannot see (a variable, a pipe): loose on
+// purpose, since A=claude; B=settings; echo x > ~/.$A/$B.json shows no more than these words.
+const DYNAMIC_WORDS = /claude|settings|\.mcp|mcp\.json|allowlist/i;
+// Rule-file path fragments, for the text of code that writes a file (T-1092). Never a bare word: "claudepilot-job-x",
+// "one.claude" or "claudes/" in a note's data is not a rule file. A quoted piece ('.cla' + 'ude') is fragmentString's.
+const FRAGMENT_WORDS = /\.claude\/|\.claude\.json|settings(\.local)?\.json|\.mcp\.json|managed-settings|check-allowlist|\/etc\/+claude-code|\/etc\/+claudepilot|CLAUDE_CONFIG_DIR/i;
 const RULE_NAMES = ['.claude/settings.json', '.claude/settings.local.json', '.mcp.json', '.claude.json', 'check-allowlist.mjs'];
 // Path patterns compared segment by segment with a glob (the last one is the .claude folder itself).
 const CANDIDATES = [['.mcp.json'], ['.claude.json'], ['.claude', 'settings.json'], ['.claude', 'settings.local.json'], ['check-allowlist.mjs'], ['.claude']];
@@ -258,25 +262,37 @@ function couldMatch(pattern, baseDir, dotglob) {
   return false;
 }
 
-/** Whether a quoted string in code is a piece (3+ characters) of a rule file's name: '.cla' + 'ude/settings.json'. */
-function hasFragmentString(code) {
+/** The rule file a quoted string in code is a piece (3+ characters) of ('.cla' + 'ude/settings.json'), or null. A fixed name, never the code's text. */
+function fragmentString(code) {
   const re = /(['"\x60])((?:\\.|(?!\1)[^\\\n]){3,200})\1/g;
   let m;
   while ((m = re.exec(code))) {
     const s = m[2];
-    if (FRAGMENT_WORDS.test(s)) return true;
-    for (const name of RULE_NAMES) if (name.includes(s)) return true;
+    const w = FRAGMENT_WORDS.exec(s);
+    if (w) return w[0].toLowerCase();
+    for (const name of RULE_NAMES) if (name.includes(s)) return 'a piece of ' + name;
   }
-  return false;
+  return null;
 }
 
 // Code that writes a file or runs a command (which could).
 const WRITE_API = /writeFile|appendFile|createWriteStream|copyFile|\bcp(Sync)?\(|rename|unlink|\brm(Sync)?\(|rmdir|symlink|\blink(Sync)?\(|truncate|chmod|open(Sync)?\([^)]*['"][wax+]|['"](w|a|x|wb|ab|w\+|a\+|r\+)['"]|\.write(_text|_bytes)?\(|shutil\.|os\.(replace|remove)|\bFile\.(write|open)|IO\.write|child_process|exec(Sync|File)?\(|spawn|system\(|subprocess|popen|Deno\.write|Bun\.write|print\s*>|printf[^;\n]*>|>\s*['"]?[\w.~\/$]|\btee\b|sed\s+-i|\bmv\s|\bcp\s/i;
 const OBFUSCATION = /fromCharCode|atob\(|base64|b64decode|\\x[0-9a-f]{2}|\\u00[0-9a-f]{2}|\bchr\(|unhexlify|codecs\.|rot13|reverse\(\)|\[::-1\]|String\.raw|decodeURIComponent|unescape\(|\bpack\(/i;
 
-function inlineSuspicious(code) {
-  if (!WRITE_API.test(code)) return false;
-  return MENTION.test(code) || FRAGMENT_WORDS.test(code) || hasFragmentString(code) || OBFUSCATION.test(code);
+/**
+ * Why code that writes a file is refused, or null: 'mention' when it names a rule file, else the heuristic's own message
+ * (T-1092: a fragment or a decoding call is not a named rule file, and the message must not say it is). The word shown is
+ * one of the guard's fixed fragments, never the code's text.
+ */
+function inlineReason(code) {
+  if (!WRITE_API.test(code)) return null;
+  if (MENTION.test(code)) return 'mention';
+  const w = FRAGMENT_WORDS.exec(code);
+  const word = w ? w[0].toLowerCase() : fragmentString(code);
+  if (word) return 'the command writes a file and its text names something like a rule file: ' + word;
+  const d = OBFUSCATION.exec(code);
+  if (d) return 'the command writes a file and its text decodes or hides a name: ' + d[0].toLowerCase();
+  return null;
 }
 
 /** A script file run directly: comments dropped, refused when its code names a rule file and writes. */
@@ -702,7 +718,7 @@ function analyzeBash(command, cwd) {
   const flat = all.join(' ');
   st.mentions = MENTION.test(flat) || all.some((s) => typeof s === 'string' && s.length < 400 && MENTION.test(s));
   // A piece of a rule file's name: one of its words, or a word with a dot, slash or dash inside a name ('.cla', 'ude/s').
-  st.fragments = st.mentions || FRAGMENT_WORDS.test(flat) || all.some((s) => s.length >= 3 && s.length <= 60 && /[.\/-]/.test(s) && !/\s/.test(s) && RULE_NAMES.some((nm) => nm.includes(s)));
+  st.fragments = st.mentions || DYNAMIC_WORDS.test(flat) || all.some((s) => s.length >= 3 && s.length <= 60 && /[.\/-]/.test(s) && !/\s/.test(s) && RULE_NAMES.some((nm) => nm.includes(s)));
   st.decoder = DECODER.test(flat);
   st.dotglob = /dotglob|GLOBIGNORE|globdots|GLOB_DOTS/.test(flat);
   const found = analyze(command, st, cwd, 0);
@@ -2006,7 +2022,8 @@ function interpreter(name, args, st, base, command, stdinText, stdinFile, piped)
   if (checker ? MENTION.test(command.split(script.text).join(' ')) : st.mentions) return hit(name + ' in a command that names a rule file', name);
   if (code !== null) {
     if (MENTION.test(code)) return hit(name + ' with a rule file named', name);
-    if (inlineSuspicious(code)) return hit(name + ' code that could write a rule file', name);
+    const why = inlineReason(code);
+    if (why) return hit(why === 'mention' ? name + ' code that could write a rule file' : why, name);
     return null;
   }
   if (script && !fromStdin) {
@@ -2017,7 +2034,8 @@ function interpreter(name, args, st, base, command, stdinText, stdinFile, piped)
   if (name === 'claude') return null;
   // The program comes from stdin: a heredoc, a file, or a pipe.
   if (stdinText) {
-    if (st.mentions || inlineSuspicious(stdinText)) return hit(name + ' reading code from stdin while a rule file is named', name);
+    const why = st.mentions ? 'mention' : inlineReason(stdinText);
+    if (why) return hit(why === 'mention' ? name + ' reading code from stdin while a rule file is named' : why, name);
     return null;
   }
   if (stdinFile && !stdinFile.target.dyn) {
@@ -2025,7 +2043,8 @@ function interpreter(name, args, st, base, command, stdinText, stdinFile, piped)
     return null;
   }
   if (piped || fromStdin) {
-    if (st.mentions || inlineSuspicious(command) || st.decoder) return hit(name + ' reading code from stdin while a rule file is named', name);
+    const why = st.mentions ? 'mention' : inlineReason(command) || (st.decoder ? name + ' reading decoded code from a pipe' : null);
+    if (why) return hit(why === 'mention' ? name + ' reading code from stdin while a rule file is named' : why, name);
   }
   return null;
 }

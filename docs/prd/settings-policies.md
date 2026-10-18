@@ -1009,7 +1009,12 @@ create`), and any command that is not a known reader (`cat`, `grep`, `jq`, `git 
   Interpreters (`node`, `python`, `perl`, `ruby`, `awk`, `claude`, ...) are refused when their words name a rule file,
   when the command names one anywhere (data on stdin), when they read code from stdin while one is named, and when inline
   code writes a file and carries a piece of a rule file's name (`'.cla' + 'ude'`), a decoding call (base64, char codes,
-  hex escapes) or the words claude, settings, mcp or allowlist. Running the allow-list checker itself is a read.
+  hex escapes) or a rule-file path fragment (`.claude/`, `.claude.json`, `settings.json`, `settings.local.json`,
+  `.mcp.json`, `managed-settings`, `check-allowlist`, `/etc/claude-code`, `/etc/claudepilot`, `CLAUDE_CONFIG_DIR`); never a
+  bare word, so a note whose data says `claudepilot-job-x` or `one.claude` is written (T-1092). That refusal has its own
+  message ("the command writes a file and its text names something like a rule file: <fragment>"), not "a rule file is
+  named". The loose words (claude, settings, mcp, allowlist) still count for shell values the guard cannot see (a variable
+  or pipe as a target). Running the allow-list checker itself is a read.
 - The forms that hide a name, where the text shows them: quotes and escapes (`.cl""aude`, `$'\x2eclaude'`), `./` and `..`
   in the path, globs and braces that could match (`.claude/set*`, `.c*/settings.json`, `{settings,x}.json`, and `*.json`
   after `shopt -s dotglob`), a variable or command substitution as the target when the command carries a piece of a rule

@@ -1460,3 +1460,40 @@ test('T-860 S2c: set -a, a for loop over a GIT_ name, GIT_ assigned by a paramet
   }
   assert.deepEqual(misses, []);
 });
+
+// T-1092: a lead's python3 heredoc writing its own status file was refused as "a rule file is named": WRITE_API matched
+// open(p,'w') and the bare word "claude" matched "claudepilot-job-..." in the note's data. Fragments are rule-file paths now.
+test('T-1092: a heredoc writing a notes file whose text says claudepilot-job-x, one.claude and claudes/ goes through', () => {
+  const notes = join(R.root, 'scratch', 'lead', 'notes');
+  mkdirSync(notes, { recursive: true });
+  const file = join(notes, 'status-lead.md');
+  const command = [
+    "python3 - <<'EOF'",
+    `p = '${file}'`,
+    "txt = '''# Status lead",
+    '- job claudepilot-job-x finished; one.claude run moved to claudes/c2',
+    '- the settings page and the claude usage tile are fine',
+    "'''",
+    "open(p, 'w').write(txt)",
+    'EOF',
+  ].join('\n');
+  allowed(bash(command), 'the 04:33 status-file heredoc');
+});
+
+test('T-1092: a heredoc that writes or names a rule file is still refused; a fragment hit says so in its own words', () => {
+  refused(bash("python3 - <<'EOF'\nopen('.claude/settings.json', 'w').write('{}')\nEOF"), 'heredoc writing .claude/settings.json');
+  refused(
+    bash("python3 - <<'EOF'\nimport os\np = 'notes.md'\nopen(p, 'w').write('see .claude/settings.local.json')\nEOF"),
+    'heredoc whose text names .claude/settings.local.json',
+  );
+  // A fragment, not a named rule file: refused with the heuristic's message, which must not say a rule file is named.
+  const frag = bash("python3 - <<'EOF'\nimport os\nopen(os.path.join(os.environ['D'], 'settings.json'), 'w').write('{}')\nEOF");
+  refused(frag, 'heredoc writing a settings.json under a variable folder');
+  assert.match(frag.stderr, /the command writes a file and its text names something like a rule file: settings\.json/);
+  assert.doesNotMatch(frag.stderr, /rule file is named|rule file named/);
+  const piece = bash("python3 - <<'EOF'\nimport os\nopen(os.path.join('.cla' + 'ude', 'x'), 'w').write('{}')\nEOF");
+  refused(piece, 'a quoted piece of a rule file name');
+  assert.match(piece.stderr, /something like a rule file: a piece of \.claude\/settings\.json/);
+  // Shell values the guard cannot see keep the loose words: only "claude" and "settings" show here.
+  refused(bash('A=claude; B=settings; echo x > ~/.$A/$B.json'), 'a target built from variables');
+});
