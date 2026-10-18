@@ -64,6 +64,7 @@ import type { CiSessionsPort } from './sessions.js';
 import { DeployChatsWatch } from './deployChats.js';
 import { parseSetting, ReleaseReporter, ReportRefused, type ReleaseNoteSink } from './releaseReporter.js';
 import { validBranch, validFolder } from './releaseReport.js';
+import { BranchReporter } from './branchReporter.js';
 import type { CiTicketsPort } from './tickets.js';
 import { cleanLog, oneLine, redactSecrets } from './text.js';
 import { flakyComment, flakyDescription, flakyExcerpt, flakyTitle, parseFlaky, repoTag, type FlakySighting } from './flaky.js';
@@ -274,6 +275,10 @@ export class CiService {
   /** Where release reports are written (T-591): the knowledge vault, as the portal. Set after both services exist; unset: no report is written. */
   releaseNotes?: ReleaseNoteSink;
   readonly #reporter: ReleaseReporter;
+  /** T-1079: the note of a branch the upstream sync moved (a remote whose release report is of kind branch). */
+  readonly #branchReporter: BranchReporter;
+  /** Branch reports being written (detached from the sync; `syncsSettled` waits for them too). */
+  readonly #branchReports = new Set<Promise<unknown>>();
   readonly #cs: CiStore;
   readonly #opts: Required<
     Omit<CiServiceOptions, 'redactFor' | 'streamFor' | 'tickets' | 'sessions' | 'secrets' | 'secretValue' | 'audit' | 'upstreamHosts'>
@@ -317,15 +322,17 @@ export class CiService {
     this.#links = new CiLinks(this.#cs, opts.tickets, opts.sessions);
     this.#tickets = opts.tickets;
     const sinkNow = (): ReleaseNoteSink | undefined => this.releaseNotes;
-    this.#reporter = new ReleaseReporter({
+    const reporterDeps = {
       cs: this.#cs,
-      cp: (ws, args) => this.host.cp(ws, args, { timeoutMs: 30_000 }),
+      cp: (ws: string, args: string[]) => this.host.cp(ws, args, { timeoutMs: 30_000 }),
       tickets: opts.tickets,
       get sink() {
         return sinkNow();
       },
       audit: opts.audit,
-    });
+    };
+    this.#reporter = new ReleaseReporter(reporterDeps);
+    this.#branchReporter = new BranchReporter(reporterDeps, opts.now);
     const sessions = opts.sessions;
     this.#deployChats = sessions?.attached ? new DeployChatsWatch(() => sessions.attached!()) : null;
     this.#opts = {
@@ -622,6 +629,10 @@ export class CiService {
         },
       });
       this.kick(repo.workspace_id);
+      // T-1079: a branch report, detached (it never holds or breaks the sync); the first sight (the sync's baseline) writes nothing.
+      const p = this.#branchReporter.moved(repo.id, reply.moved, r.baseline === true).catch(() => null);
+      this.#branchReports.add(p);
+      void p.finally(() => this.#branchReports.delete(p));
     }
     if (reply.moved.length || shown(prev) !== shown(next)) this.#changed();
     return reply;
@@ -1446,9 +1457,10 @@ export class CiService {
     while (this.#ruling.size) await Promise.all([...this.#ruling]);
   }
 
-  /** Waits for the upstream syncs in flight (tests). A failed sync counts as settled. */
+  /** Waits for the upstream syncs in flight and the branch reports they started (tests). A failed sync counts as settled. */
   async syncsSettled(): Promise<void> {
-    while (this.#syncing.size) await Promise.all([...this.#syncing.values()].map((p) => p.catch(() => undefined)));
+    while (this.#syncing.size || this.#branchReports.size)
+      await Promise.all([...this.#syncing.values(), ...this.#branchReports].map((p) => p.catch(() => undefined)));
   }
 
   /** The run is over: each deployment gets how its job ended, an undecided approval expires, and every key is dropped. */
