@@ -208,6 +208,31 @@ test('the token: hashed at rest, at most 7 days, replaced on a new mint, refused
   }
 });
 
+test('the token is refused from the moment it expires (7 days), over /mcp and in verify(), though its session still runs (blind K8)', async () => {
+  let clock = Date.parse('2026-03-01T10:00:00.000Z');
+  const h = await portalMcpHarness({ registry: registry(), now: () => new Date(clock) });
+  try {
+    h.alive.add('gm1');
+    const m = h.module.managers.mint({ userId: ALICE, sessionId: 'gm1' })!;
+    const end = Date.parse(m.expiresAt);
+    assert.equal(end - clock, 7 * 24 * 60 * 60 * 1000);
+    const works = async () => (await h.call(m.secret, 'who_am_i')).status === 200;
+
+    clock = end - 1;
+    assert.equal(h.module.managers.verify(m.secret).ok, true, 'one millisecond before the end it still works');
+    assert.equal(await works(), true);
+
+    clock = end;
+    assert.deepEqual(h.module.managers.verify(m.secret), { ok: false, reason: 'expired', tokenId: m.tokenId }, 'refused at the end itself');
+    assert.equal(await works(), false, 'refused over /mcp too');
+    clock = end + 60_000;
+    assert.deepEqual(h.module.managers.verify(m.secret), { ok: false, reason: 'expired', tokenId: m.tokenId });
+    assert.equal(h.alive.has('gm1'), true, 'the refusal is the expiry, not an ended session');
+  } finally {
+    h.done();
+  }
+});
+
 test('migration 793: every session is a workspace session of the founding user, and a second manager per person is refused', async () => {
   const h = await portalMcpHarness();
   try {
