@@ -5227,9 +5227,9 @@ export class ChatController {
     const managerRow = this.#chat.row(o.sessionId);
     const manager = (managerRow as { kind?: string } | undefined)?.kind === 'manager';
     const grant = manager
-      ? await this.managerAccess
+      ? ((await this.managerAccess
           ?.mint({ workspaceId, sessionId: o.sessionId, ownerId: (managerRow as { owner_id?: string }).owner_id ?? 'u_owner' })
-          .catch(() => null) ?? null
+          .catch(() => null)) ?? null)
       : await this.#grant(workspaceId, o.sessionId);
     if (grant) this.#pilotTools.set(o.sessionId, false);
     else this.#pilotTools.delete(o.sessionId);
@@ -5263,7 +5263,16 @@ export class ChatController {
       // no hook runs (a project SessionStart hook did not); `--strict-mcp-config` admits the pilot server alone; no slash commands.
       // (`--safe-mode` would also drop the MCP server, so it is not used.)
       ...(manager
-        ? ['--tools', '', '--setting-sources', '', '--strict-mcp-config', '--disable-slash-commands', '--append-system-prompt', this.managerAccess?.brief() ?? '']
+        ? [
+            '--tools',
+            '',
+            '--setting-sources',
+            '',
+            '--strict-mcp-config',
+            '--disable-slash-commands',
+            '--append-system-prompt',
+            this.managerAccess?.brief() ?? '',
+          ]
         : []),
       o.resume ? '--resume' : '--session-id',
       o.csid,
@@ -5274,10 +5283,10 @@ export class ChatController {
       ...(manager
         ? []
         : leadSettings !== null
-        ? ['--settings', leadSettings]
-        : this.#projectSettings.has(`${workspaceId}\u0000${sessionCwd(o.cwd)}`)
-          ? ['--settings', this.#projectSettings.get(`${workspaceId}\u0000${sessionCwd(o.cwd)}`)!]
-          : []),
+          ? ['--settings', leadSettings]
+          : this.#projectSettings.has(`${workspaceId}\u0000${sessionCwd(o.cwd)}`)
+            ? ['--settings', this.#projectSettings.get(`${workspaceId}\u0000${sessionCwd(o.cwd)}`)!]
+            : []),
     ];
     const args = ['start', o.csid, String(o.seg), o.cwd, ...(lines.length ? ['--env', String(lines.length)] : []), '--', ...flags];
     const settle = (started: boolean) => {
@@ -5783,7 +5792,8 @@ export class ChatController {
       reader.parked = true;
       return;
     }
-    if (reader.retries >= MAX_IMMEDIATE_RETRIES) return this.#markGone(reader.sessionId, 'Lost touch with Claude Code before it answered.', false);
+    if (reader.retries >= MAX_IMMEDIATE_RETRIES)
+      return this.#markGone(reader.sessionId, 'Lost touch with Claude Code before it answered.', false);
     reader.retries++;
     reader.timer = setTimeout(() => {
       reader.timer = undefined;

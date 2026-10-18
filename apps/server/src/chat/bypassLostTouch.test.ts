@@ -93,13 +93,29 @@ test('T-1094: lost touch, a failed resume, then an attach to the same process st
     assert.notEqual(row.state, 'ended', `not ended for its own Bypass: ${row.endedReason ?? ''}`);
     assert.equal(row.process, 'live');
     assert.equal(s.ws.starts, starts + 2, 'the failed start and the attach: no new process');
-    const asks = controls(s.ws).filter((c) => c.request.subtype === 'set_permission_mode').map((c) => c.request.mode);
-    assert.deepEqual(asks.slice(-2), ['default', 'bypassPermissions'], 'out of Bypass first (fail closed), then back through the gated path');
+    const asks = controls(s.ws)
+      .filter((c) => c.request.subtype === 'set_permission_mode')
+      .map((c) => c.request.mode);
+    assert.deepEqual(
+      asks.slice(-2),
+      ['default', 'bypassPermissions'],
+      'out of Bypass first (fail closed), then back through the gated path',
+    );
     assert.equal(row.mode, 'bypassPermissions');
-    assert.ok(notes(s, lead.id).includes('Bypass paused: the portal lost touch with Claude Code while it ran in Bypass.'), notes(s, lead.id).join(' | '));
+    assert.ok(
+      notes(s, lead.id).includes('Bypass paused: the portal lost touch with Claude Code while it ran in Bypass.'),
+      notes(s, lead.id).join(' | '),
+    );
     assert.ok(notes(s, lead.id).includes('Bypass kept after Claude Code stopped.'));
     const left = s.controller.audit({ kind: 'bypass.left', sessionId: lead.id }).map((a) => [a.detail.why, a.detail.kept ?? null]);
-    assert.deepEqual(left.slice(0, 2), [['lost_touch', true], ['stopped', true]], 'newest first: the loss, then the attach that left Bypass');
+    assert.deepEqual(
+      left.slice(0, 2),
+      [
+        ['lost_touch', true],
+        ['stopped', true],
+      ],
+      'newest first: the loss, then the attach that left Bypass',
+    );
     const entered = s.controller.audit({ kind: 'bypass.entered', sessionId: lead.id })[0]!;
     assert.deepEqual([entered.actor, entered.detail.how], ['portal', 'lost'], 'put back by the portal, every gate asked again');
   } finally {
@@ -123,7 +139,10 @@ test('T-1094: a process that really stopped: a new one reporting Bypass without 
     assert.equal(s.controller.get(lead.id)!.process, 'live', 'a new process (exit 0)');
     s.ws.tails.at(-1)!.push(init(lead.id, 'bypassPermissions'));
     await until(() => s.controller.get(lead.id)!.state === 'ended');
-    assert.match(s.controller.get(lead.id)!.endedReason ?? '', /^integrity: the agent reported Bypass permissions, which chat sessions never allow$/);
+    assert.match(
+      s.controller.get(lead.id)!.endedReason ?? '',
+      /^integrity: the agent reported Bypass permissions, which chat sessions never allow$/,
+    );
   } finally {
     await s.done();
   }
@@ -145,7 +164,10 @@ test('T-1094: the host said gone, so nothing is kept: even an attach (exit 3) th
     s.ws.tails.at(-1)!.push(init(lead.id, 'bypassPermissions'));
     await until(() => s.controller.get(lead.id)!.state === 'ended');
     await sending;
-    assert.match(s.controller.get(lead.id)!.endedReason ?? '', /^integrity: the agent reported Bypass permissions, which chat sessions never allow$/);
+    assert.match(
+      s.controller.get(lead.id)!.endedReason ?? '',
+      /^integrity: the agent reported Bypass permissions, which chat sessions never allow$/,
+    );
   } finally {
     await s.done();
   }
