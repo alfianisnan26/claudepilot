@@ -509,7 +509,6 @@ export interface ChatControllerOptions {
 
 /** A refusal Claude Code sent, made safe to show: one line, no control characters, bounded, redacted. */
 function cliMessage(error: string): string {
-   
   const text = redact(error.replace(/[\x00-\x1f\x7f]+/g, ' ').trim());
   if (!text) return 'Claude Code refused the request.';
   return text.length > 300 ? `${text.slice(0, 299)}…` : text;
@@ -524,7 +523,7 @@ function shortId(v: string): string {
 /** A label for a transcript: one line, no control characters, no quotes that could close a frame, bounded and redacted. */
 function oneLineLabel(raw: string | undefined): string | undefined {
   if (!raw) return undefined;
-   
+
   const label = redact(
     raw
       .replace(/[\x00-\x1f\x7f"<>]+/g, ' ')
