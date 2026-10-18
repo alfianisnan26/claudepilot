@@ -229,7 +229,7 @@ export interface TicketsOptions {
   agentOpenPerWorkspace?: () => number;
   /** FR9c (D-62, T-483): the tags that let an agent put a ticket on a person (`tickets.agentAssignUserTags`). Default `production`. */
   agentAssignUserTags?: () => string;
-  /** FR9e (D-85): `tickets.leadPeerGroups`, the owner's list of peer lead sessions. */
+  /** FR9g (D-85): `tickets.leadPeerGroups`, the owner's list of peer lead sessions. */
   leadPeerGroups?: () => unknown;
 }
 
