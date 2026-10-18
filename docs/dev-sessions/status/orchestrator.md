@@ -4,7 +4,7 @@
 - Batch 32 LANDED 22:54: integration 74599ece (gate claudepilot-gate-18d8e9d-f5f1 green on 18d8e9d0): T-382 S6, T-294 FIX1,
   T-1049. Relayed T-731 10876 -> coordinator deploys. Format sweep stays T-1032 (10857).
 - Batch 31 in portal 2026.10.17-11; T-948 62a44a10 in 2026.10.17-12 (ON state = coordinator live check 10822). Close on live checks.
-- T-938 FIX2 73b8137c re-check PASS 10685 -> the coordinator lands it (T-938 10695). Older batches: git history.
+- T-860 S2c on integration (a87d00b8); the realpath guard side is the coordinator's. Older batches: git history.
 
 ## IN FLIGHT (6 of 6 workers, D-71; QA/review sonnet, D-63; ids in full in session_family)
 - T-425 S2b merge e2e4a2b6 QA PWG (Job 5c8816ad; gaps relayed on T-595 10930: guard untested, 400 ms timeout test,
@@ -27,8 +27,8 @@
 - T-565 FIX 103c4d80 QA PWG (T-595 10968) -> gap 1 e309aacc (parsed yaml + 3 mutants), Job bt7ea72qt; N11/N14 dropped
   (labels exist nowhere, 10973) -> delta c691df71 -> blind (infra).
 - T-968 PRD fix a32754c3 (gaps 2-7) -> re-check d9f18599. T-968 S1 03fcd4c4 (2a0edbd8; seam, cpmt_, revoke,
-  migration 793), Job b7sajor81 queued -> QA c691df71 + blind d9f18599; lead reads seam/migration. T-1033 S1 5df8f359 (queue deadline
-  1800 s; vanished) -> rc 75 not 3 (11035) -> new head + Job -> QA + blind (pipeline).
+  migration 793), Job b7sajor81 queued -> QA c691df71 + blind d9f18599; lead reads seam/migration. T-1033 S1 rc 75 (11035) head
+  53527bfa, Job blfnye6go (8 mutants) -> QA + blind (pipeline). T-921 (browser init, paused) audit 0dfff348 + build gaps: 2a0edbd8.
 - T-251 (unknown usage) 3753d3c2: audit vs integration (decide.ts unknownUsage, t255.test), build only what is missing.
 - T-1043 S0c (MCP tools through can()) 76845676 on ticket/T-1043-s0c, beside T-1065.
 - T-961 (deploy outage: PriorityClass, headroom, release pre-check; 10887) -> QA + blind (infra); PriorityClasses in
@@ -39,7 +39,6 @@
 - Queues: c691df71 S2b > T-976 > H2 delta > T-975 FIX2 > T-356 > T-425 gaps > T-565 delta. d9f18599 H2 S1 > S0b f5ae317e >
   H1 FIX2 > T-969 > T-974 FIX3 > T-565 > T-975 > PRD > S2b. a3554d40 T-974 > T-969 > H1 > T-961 rerun > T-975 FIX2.
   76845676 T-1065 + S0c (then the T-976 reader merge). 2a0edbd8 T-565 gap 1 + T-968 S1. 3753d3c2 H2 fix, T-356, T-425 gaps + T-251.
-- 00:25 my process stopped and the coordinator restarted it; the coordinator says the job-run queue is draining (gates first).
 
 ## DECISIONS (binding)
 - D-81 risk-based review: same builder through all fixes; one QA, the same QA re-checks; blind review only for security, auth,
@@ -72,7 +71,7 @@
 ## NEXT (in order, as slots free)
 1. Batch 33: T-425 S2b + what passes (T-974, T-971 H1+H2 S1, T-975, T-969, T-968 S2a+S2b, T-1043 S0a+S0b, T-976).
 2. T-1043 S0c MCP tools; T-968 S1 (after the PRD fix).
-3. T-860, T-30 (XL), T-33, T-921, T-379 S3 (paused).
+3. T-1042 (after T-976), T-30 (XL), T-33, T-379 S3 (paused), T-105, T-1031.
 
 LESSONS: dontAsk lanes run Bash only in their spawn worktree and refuse git merge/restore: the lead pushes the merge (with
 markers) to a new branch, the lane does `git switch -C <br> origin/<br>` and resolves by Edit. Never prettier files tests read
