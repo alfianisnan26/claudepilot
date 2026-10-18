@@ -491,7 +491,7 @@ test('lead assigns (2026-10-18): a lead hands its workspace\'s tickets to its ow
 
 test('lead_peer (D-85): the leads in one owner-set group comment on each other\'s tickets; a renamed session, a worker, another group or a change get nothing', async () => {
   const MAIN = 'aaaaaaaa-0001', BIZ = 'aaaaaaaa-0002', LAB = 'aaaaaaaa-0003', BIZ2 = 'aaaaaaaa-0004', OTHER = 'bbbbbbbb-0001', WK = 'aaaaaaaa-0009';
-  let groups = `${MAIN},${BIZ},${LAB}`;
+  let groups = `${MAIN},${BIZ},${LAB},${WK}`; // the worker is listed too: its parent alone must refuse it
   const r = await rig({ leadPeerGroups: () => groups });
   const audits: { kind: string; detail?: Record<string, unknown> }[] = [];
   r.tickets.onAudit = (e) => void audits.push(e);
