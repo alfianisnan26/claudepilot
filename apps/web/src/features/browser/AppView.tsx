@@ -58,6 +58,9 @@ export function AppView({ workspaceId }: { workspaceId: string }) {
   };
   useEffect(() => {
     void loadPorts();
+    // Owner, 2026-10-18: the sidebar lists the listening ports, so a new app shows up by itself.
+    const t = setInterval(() => void loadPorts(), 10_000);
+    return () => clearInterval(t);
   }, [workspaceId]);
 
   // The address bar shows the front tab's address.
@@ -156,12 +159,12 @@ export function AppView({ workspaceId }: { workspaceId: string }) {
     void load(active.id, t);
   };
 
-  const openOutside = async () => {
-    if (!active) return;
+  const openOutside = async (given?: AppTarget) => {
+    if (!given && !active) return;
     // Opened at once (a phone refuses a window that is opened after a wait), then pointed at the one-time URL.
     const w = window.open('about:blank', '_blank');
     if (w) w.opener = null;
-    const target = currentTarget(active);
+    const target = given ?? currentTarget(active!);
     const out = await runOpen(() => appProxy.open(workspaceId, target));
     if (out.kind === 'url') {
       if (w) w.location.href = out.url;
@@ -298,6 +301,20 @@ export function AppView({ workspaceId }: { workspaceId: string }) {
         </button>
       </div>
 
+      <div className="flex min-h-0 flex-1">
+      <PortsSidebar
+        ports={ports}
+        openPorts={new Set(tabs.tabs.map((t) => currentTarget(t).port))}
+        activePort={active ? currentTarget(active).port : null}
+        names={appNames(workspaceId)}
+        onOpen={(p) => {
+          const tab = tabs.tabs.find((t) => currentTarget(t).port === p.port);
+          if (tab) setTabs((s) => switchTab(s, tab.id));
+          else pick(p);
+        }}
+        onOutside={(p) => void openOutside({ port: p.port, path: '/' })}
+      />
+      <div className="relative flex min-w-0 flex-1 flex-col">
       {problem && (
         <p
           role="alert"
@@ -394,7 +411,73 @@ export function AppView({ workspaceId }: { workspaceId: string }) {
           </div>
         )}
       </div>
+      </div>
+      </div>
     </div>
+  );
+}
+
+/**
+ * The listening ports of the workspace, always in view on a tablet or wider (owner, 2026-10-18: "having the list of open port and can open
+ * that port ... sidebar menu of browser list open ports"). A row opens the port in a tab here (or goes to its tab), the arrow opens it in a
+ * new browser tab at its own https address. Ports the portal never opens (its own, the agent's) are listed greyed. A phone keeps the Ports
+ * button.
+ */
+function PortsSidebar({
+  ports,
+  openPorts,
+  activePort,
+  names,
+  onOpen,
+  onOutside,
+}: {
+  ports: AppPortItem[] | null;
+  openPorts: Set<number>;
+  activePort: number | null;
+  names: Record<string, string>;
+  onOpen: (p: AppPortItem) => void;
+  onOutside: (p: AppPortItem) => void;
+}) {
+  const list = [...(ports ?? [])].sort((a, b) => Number(b.openable) - Number(a.openable) || a.port - b.port);
+  return (
+    <nav aria-label="Open ports" data-ports-sidebar="" className="hidden w-56 shrink-0 flex-col border-r border-white/10 bg-[#101012] md:flex">
+      <p className="flex h-9 shrink-0 items-center gap-1 px-3 text-[12px] font-semibold tracking-wide text-white/50 uppercase">
+        Ports
+        <InfoTip label="About ports">Ports listening in this workspace, refreshed every 10 seconds. Tap one to open it here; the arrow opens it in a new tab.</InfoTip>
+      </p>
+      {ports === null ? (
+        <div className="mx-3 h-8 animate-pulse rounded-lg bg-white/5" />
+      ) : list.length === 0 ? (
+        <p className="px-3 py-2 text-[13px] text-white/50">Nothing is listening.</p>
+      ) : (
+        <ul className="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-2">
+          {list.map((p) => (
+            <li key={p.port} className="flex items-center">
+              <button
+                type="button"
+                disabled={!p.openable}
+                onClick={() => onOpen(p)}
+                aria-current={activePort === p.port ? 'true' : undefined}
+                className={cn(
+                  'flex min-h-11 min-w-0 flex-1 items-center gap-2 px-3 text-left text-white/80 hover:bg-white/5 disabled:opacity-40 disabled:hover:bg-transparent',
+                  activePort === p.port && 'bg-white/10 text-white',
+                )}
+                title={p.openable ? `Open port ${p.port}` : 'The portal does not open this port'}
+              >
+                <span aria-hidden="true" className={cn('size-1.5 shrink-0 rounded-full', openPorts.has(p.port) ? 'bg-emerald-400' : 'bg-white/20')} />
+                <span className="font-mono text-[13px]">{p.port}</span>
+                <span className="min-w-0 flex-1 truncate text-[12px] text-white/50">{names[String(p.port)] ?? p.process ?? ''}</span>
+              </button>
+              {p.openable && (
+                <button type="button" aria-label={`Open port ${p.port} in a new tab`} onClick={() => onOutside(p)} className={cn(iconBtn, 'mr-1')}>
+                  <ExternalLink className="size-4" />
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </nav>
   );
 }
 
