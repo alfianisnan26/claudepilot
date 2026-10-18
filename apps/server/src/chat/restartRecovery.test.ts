@@ -345,10 +345,10 @@ test('T-971 H2 a failed resume: the error text is scrubbed before it reaches the
     const secret = `${['sk', 'ant', 'api03'].join('-')}-${'Zq9_'.repeat(12)}`; // built at run time: never a literal
     const lines: string[] = [];
     s.controller.onRestartRecovery = (i) => lines.push(i.line);
-    const exec = s.ws.exec.bind(s.ws);
-    s.ws.exec = async (target: string, name: string, command: string[]) => {
-      if (command[2] === 'start') throw new Error(`launch refused ${secret}`);
-      return exec(target, name, command);
+    // A raw error from the slot check on the way to the launch: it reaches the recovery's catch as it is. (An error from the launch itself is
+    // read back from the session's stored ended_reason, already redacted, so it would pass with or without the scrub in the recovery.)
+    s.controller.liveCaps = () => {
+      throw new Error(`launch refused ${secret}`);
     };
     await cutOff(s, [s.id]);
     await until(() => recoveries(s, s.id).length === 1);

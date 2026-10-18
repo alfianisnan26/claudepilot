@@ -17,7 +17,7 @@ const mutants = [
   ['M8 idle counts', CTL, "|| row.state !== 'working') return;", ') return;'],
   ['M9 no stagger', CTL, 'if (attempted > 0) await (this.restartPause ?? ((ms: number) => this.#wait(ms)))(config.staggerMs);', ''],
   ['M10 no loop guard', CTL, 'restartResumesToday(recoveries, next.sessionId, now) >= RESTART_RESUMES_PER_DAY)', 'false)'],
-  ['M11 no re-read after the stagger', CTL, 'const again = this.#restartSkipWhy(row.id);', 'const again = undefined;'],
+  ['M11 no re-read after the stagger', CTL, 'const again = this.#restartSkipWhy(row.id, next.started);', 'const again = undefined;'],
   ['M12 loop guard window too long', REC, 'TRIED.has(String(r.detail.result)) && now - Date.parse(r.at) < DAY_MS)', 'TRIED.has(String(r.detail.result)) && now - Date.parse(r.at) < DAY_MS * 2)'],
   ['M13 old cut-off kept', REC, 'now - at >= RESTART_PENDING_MS', 'now - at >= RESTART_PENDING_MS * 99'],
   // QA #11062: the exact edges. H5: an hour-old cut-off is kept (>= to >). H9: a resume exactly 24 hours old still counts (< to <=).
