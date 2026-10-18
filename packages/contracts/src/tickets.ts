@@ -129,6 +129,8 @@ export const TICKET_SETTING_KEYS = {
   agentOpenPerWorkspace: 'tickets.agentOpenPerWorkspace',
   /** D-62 (T-483): the tags that let an agent put a ticket on a person; comma separated. */
   agentAssignUserTags: 'tickets.agentAssignUserTags',
+  /** FR9g (D-85): groups of lead sessions that may comment on each other's tickets: groups split by `;`, session ids by `,`. Owner only. */
+  leadPeerGroups: 'tickets.leadPeerGroups',
 } as const;
 
 export type TicketEventKind =

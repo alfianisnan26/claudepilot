@@ -169,7 +169,7 @@ export function canAgentTagChecklist(facts: {
  * Why a worker may comment: the ticket its spawn named (`spawn_ticket`), a ticket its lead holds (`lead_ticket`), one a crew mate holds
  * (`crew_ticket`), or an unassigned ticket of its own workspace (`crew_queue`).
  */
-export type WorkerCommentReason = 'spawn_ticket' | 'lead_ticket' | 'crew_ticket' | 'crew_queue';
+export type WorkerCommentReason = 'spawn_ticket' | 'lead_ticket' | 'crew_ticket' | 'crew_queue' | 'lead_peer';
 export type WorkerCommentDecision = { allow: true; why: WorkerCommentReason } | { allow: false };
 
 /**
@@ -206,4 +206,32 @@ export function canWorkerComment(facts: {
   if (facts.holderKind === null && facts.worker.ticketId === facts.ticketId) return { allow: true, why: 'spawn_ticket' };
   if (facts.holderKind === null && facts.ticketWorkspace && facts.ticketWorkspace === facts.worker.workspaceId) return { allow: true, why: 'crew_queue' };
   return { allow: false };
+}
+
+/**
+ * D-85 (2026-10-18): the leads of ONE program talk on each other's tickets. A live top-level session may COMMENT on a ticket held by another
+ * live top-level session in the same workspace when both are in one group of `tickets.leadPeerGroups` (an owner-only setting: ids, never a
+ * title an agent could rename; review 2026-10-18). `lineage` is each session's own id plus its predecessors (continued_from back), so a
+ * continuation of a listed lead counts as it. Nothing else is granted (no change, close, claim or attachment).
+ */
+export function canPeerLeadComment(facts: {
+  actor: RuleSession & { parentId?: string | null };
+  holder: (RuleSession & { parentId?: string | null; archivedAt?: string | null }) | null;
+  actorLineage: readonly string[];
+  holderLineage: readonly string[];
+  groups: readonly (readonly string[])[];
+}): boolean {
+  const { actor, holder } = facts;
+  if (!holder || actor.id === holder.id || actor.parentId || holder.parentId) return false;
+  if (actor.state === 'ended' || holder.state === 'ended' || holder.archivedAt || actor.workspaceId !== holder.workspaceId) return false;
+  return facts.groups.some((g) => facts.actorLineage.some((id) => g.includes(id)) && facts.holderLineage.some((id) => g.includes(id)));
+}
+
+/** `tickets.leadPeerGroups` parsed: groups by ";", ids by ","; anything not a plain id is dropped (fail closed). */
+export function parseLeadPeerGroups(raw: unknown): string[][] {
+  if (typeof raw !== 'string') return [];
+  return raw
+    .split(';')
+    .map((g) => g.split(',').map((x) => x.trim()).filter((x) => /^[0-9a-f-]{8,64}$/.test(x)))
+    .filter((g) => g.length > 1);
 }

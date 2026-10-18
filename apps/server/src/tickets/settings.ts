@@ -33,6 +33,20 @@ defineSetting({
   help: 'How many open tickets agents may have made in one workspace before the portal refuses another (FR20, the queue is protected from a looping agent). Several programs can share a workspace; a person is never limited.',
 });
 
+// FR9g (D-85): which lead sessions are peers (comment on each other's tickets). Owner only (the settings route); no agent tool writes it,
+// so an agent cannot join a group by renaming itself (review 2026-10-18 of the title-track version).
+defineSetting({
+  key: TICKET_SETTING_KEYS.leadPeerGroups,
+  type: 'string',
+  default: '',
+  max: 2000,
+  scope: 'global',
+  group: 'tickets',
+  order: 40,
+  label: 'Peer leads',
+  help: 'Groups of lead session ids that may comment on each other\'s tickets (D-85): groups separated by ";", ids by ",". A session continuing a listed one counts as it. Empty: no peers.',
+});
+
 // D-62 (T-483): an agent may put a ticket on a person only with one of these tags. Owner only (the settings route); no agent tool writes it.
 defineSetting({
   key: TICKET_SETTING_KEYS.agentAssignUserTags,
