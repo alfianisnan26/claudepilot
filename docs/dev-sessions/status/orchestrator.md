@@ -4,7 +4,6 @@
 - T-251 CLOSED 05:18 (audit #11326, proof Job bvnawjkmq rc0, QA PWG #11340, citation fixed #11344).
 - Batch 33 LANDED: T-974 f70d333c. Slip (pushed 76bdc9d0 before its re-gate; T-595 11166) closed: re-gate GREEN 03:00,
   hold lifted on T-731 11206. Flaky unavailable.s2.test.ts:75 -> T-1076.
-- Batch 32 LANDED 22:54 (74599ece): T-382 S6, T-294 FIX1, T-1049. Older batches: git history.
 
 ## IN FLIGHT (6 of 6 workers, D-71; QA/review sonnet, D-63; ids in full in session_family)
 - DEPLOY #365 (rmvcyeslw4a7ecb, 62a44a10, prod, actor "ui") ran with gate=false (the tree was gated by gate-job, 10823):
