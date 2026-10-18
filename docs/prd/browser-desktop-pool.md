@@ -631,18 +631,24 @@ only, never a value. Hosts commit when the field loses focus.
 **Never die, degrade (T-921).** The image `t623` with headers crashed Chrome in a rig: the init (root, every capability dropped but SETUID and SETGID, so no
 CAP_KILL) signalled Chrome (uid 1000); Node reports a refused signal (`EPERM`) as an `error` event on the child, and the child had no listener left, so the
 event was uncaught and the init died. Now (`cpb/heal.mjs`, `cpb/init.mjs`, `cpb/supervisor.mjs`):
-- Every child of the init has a persistent `error` listener. A refused signal (`EPERM`, `ESRCH`) is logged as one line (`signal to chrome refused (EPERM)`) and the init
-  goes on; on `EPERM` the signal is sent again by a helper (`node -e process.kill`) running as Chrome's uid. `safeKill` also catches a throw. The supervisor's own
-  children have the same listener.
+- Every child of the init (Chrome and the supervisor) has a persistent `error` listener (`guardSignals`). A refused signal (an `error` with syscall `kill`) is logged as
+  one line (`signal SIGKILL to chrome refused (EPERM)`) and the init goes on; on `EPERM` the last signal sent is sent again by a helper (`node -e process.kill`)
+  running as Chrome's uid, and a helper that fails is logged too. Any other `error` (a failed spawn) still fails the start. `safeKill` also catches a throw (Node
+  throws only for an invalid signal). The supervisor's own children have a persistent listener as well.
 - **Self-heal.** When Chrome started with the extension does not answer on CDP within 30 s, the supervisor ends it and asks the init for one more start without the
-  headers (`chrome-start` with `headers: false`; the init clears the extension and logs `headers disabled: Chrome did not start with them`, no names, no values). The
+  headers (`chrome-start` with `headers: false`; the supervisor logs `headers disabled: Chrome did not start with them`, the init clears the extension and logs
+  `headers: skipped for this start`; no names, no values). The
   status the portal reads (`cpb-ctl status` → `chrome.headers`: `on`, `off` or `degraded`; `service.ts` shows `detail: "Running without headers"` while `degraded`) says
   so, and the browser stays usable. For ten minutes after a degrade a wake starts without headers at once (no 30 s wait); after that the headers are tried again.
   The worst case of a wake that degrades is two CDP waits (about 60 s plus the stop).
-- Tests: `images/browser/cpb/heal.test.mjs` (`node --test`): the kill throw path, the retry-without-headers path with a fake Chrome that never answers with the
-  extension, the cooldown, and that no header value (built at runtime) reaches a log line, a result or an error.
-- Not verified (needs the image in a rig): the init surviving a real refused signal; the helper really killing Chrome as uid 1000; a real Chromium that fails with
-  the extension and then starts without; `browser_navigate` to a stg host with headers and an unchanged restart count.
+- Tests: `images/browser/cpb/heal.test.mjs` (`node --test`): with a real Node child whose handle refuses the signal (`EPERM`, as without CAP_KILL), a `kill` with
+  no listener throws (the crash, reproduced) and with `guardSignals` the stop and its 5 s backstop are logged and sent again through the helper without a throw; a
+  spawn error still fails the start; the kill throw path; the retry-without-headers path with a fake Chrome that never answers with the extension; the cooldown;
+  that no header value (built at runtime) reaches a log line, a result or an error. `apps/server/src/browser/service.test.ts`: `headers: degraded` reads as state
+  `ready` with the detail "Running without headers".
+- Not verified (needs the image in a rig): the init under the real Kubernetes securityContext; the helper really killing Chrome as uid 1000; why Chromium does not
+  open CDP with `--load-extension` (T-921 comment 9390, item b); a real Chromium that fails with the extension and then starts without; `browser_navigate` to a stg
+  host with headers and an unchanged restart count.
 
 **Who can read the value.**
 

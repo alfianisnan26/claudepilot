@@ -1,8 +1,10 @@
 // T-921: a refused signal never kills the init, and Chrome that does not start with headers is started again without them.
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
+import os from 'node:os';
 import { test } from 'node:test';
-import { safeKill, startWithHeal } from './heal.mjs';
+import { guardSignals, safeKill, startWithHeal } from './heal.mjs';
 
 const errno = (code) => Object.assign(new Error(`kill ${code}`), { code, syscall: 'kill' });
 const collector = () => {
@@ -38,6 +40,90 @@ test('safeKill: a helper that throws is logged; a delivered signal is true', () 
   assert.ok(lines.some((l) => /through the helper failed/.test(l)));
   assert.equal(safeKill({ pid: 1, kill: () => true }, 'SIGTERM', { log }), true);
   assert.equal(safeKill({ pid: 1, kill: () => false }, 'SIGTERM', { log }), false);
+});
+
+// The real mechanism (T-921): Node's ChildProcess.kill does not throw EPERM, it emits 'error'. A real child whose handle refuses the
+// signal, as the init's kill of uid 1000 without CAP_KILL is refused in the Kubernetes container.
+const { errno: E } = os.constants;
+function refusingChild() {
+  const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { stdio: 'ignore' });
+  return new Promise((resolve, reject) => {
+    child.once('error', reject);
+    child.once('spawn', () => {
+      child.removeListener('error', reject); // the test decides which listeners the child has
+      child._handle.kill = () => -E.EPERM; // libuv's error number, as uv_process_kill returns it
+      resolve(child);
+    });
+  });
+}
+const reap = (child) => {
+  delete child._handle?.kill;
+  child.kill('SIGKILL');
+};
+
+test('T-921 reproduction: a refused kill with no error listener throws out of kill(), so a timer that calls it ends the process', async () => {
+  const child = await refusingChild();
+  try {
+    assert.equal(child.listenerCount('error'), 0);
+    assert.throws(() => child.kill('SIGKILL'), (e) => e.code === 'EPERM' && e.syscall === 'kill');
+  } finally {
+    reap(child);
+  }
+});
+
+test('guardSignals: a refused kill (twice, as stop and its 5 s backstop) is logged and sent again as Chrome; the caller never throws', async () => {
+  const child = await refusingChild();
+  try {
+    const { lines, log } = collector();
+    const helper = [];
+    const others = [];
+    guardSignals(child, { name: 'chrome', log, asChrome: (pid, sig) => (helper.push([pid, sig]), true), onError: (e) => others.push(e) });
+    assert.equal(safeKill(child, 'SIGTERM', { log }), false);
+    assert.equal(safeKill(child, 'SIGKILL', { log }), false);
+    assert.deepEqual(helper, [[child.pid, 'SIGTERM'], [child.pid, 'SIGKILL']]);
+    assert.deepEqual(lines, ['signal SIGTERM to chrome refused (EPERM)', 'signal SIGKILL to chrome refused (EPERM)']);
+    assert.deepEqual(others, [], 'a signal error is not a failed start');
+  } finally {
+    reap(child);
+  }
+});
+
+test('guardSignals: a helper that fails or does not deliver is logged; with no helper the error is only logged', async () => {
+  const child = await refusingChild();
+  try {
+    const { lines, log } = collector();
+    guardSignals(child, { name: 'chrome', log, asChrome: () => false });
+    safeKill(child, 'SIGKILL', { log });
+    assert.ok(lines.includes('signal SIGKILL to chrome through the helper not delivered'));
+    const second = await refusingChild();
+    try {
+      const out = collector();
+      guardSignals(second, { name: 'supervisor', log: out.log });
+      assert.doesNotThrow(() => second.kill('SIGTERM'));
+      assert.deepEqual(out.lines, ['signal SIGTERM to supervisor refused (EPERM)']);
+      const thrower = collector();
+      const third = await refusingChild();
+      try {
+        guardSignals(third, { name: 'chrome', log: thrower.log, asChrome: () => { throw new Error('helper gone'); } });
+        assert.doesNotThrow(() => safeKill(third, 'SIGKILL'));
+        assert.match(thrower.lines.at(-1), /through the helper failed: helper gone/);
+      } finally {
+        reap(third);
+      }
+    } finally {
+      reap(second);
+    }
+  } finally {
+    reap(child);
+  }
+});
+
+test('guardSignals: a spawn error is not a signal error: it goes to onError (the start fails)', async () => {
+  const child = spawn(`/nonexistent-${randomBytes(4).toString('hex')}/chromium`, [], { stdio: 'ignore' });
+  const { lines, log } = collector();
+  const got = await new Promise((resolve) => guardSignals(child, { name: 'chrome', log, onError: resolve }));
+  assert.equal(got.code, 'ENOENT');
+  assert.deepEqual(lines, []);
 });
 
 /** A fake Chrome: never answers when it was started with headers (the extension), answers otherwise. */

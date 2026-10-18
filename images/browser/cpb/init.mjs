@@ -7,7 +7,7 @@
 import { fork, spawn, spawnSync } from 'node:child_process';
 import { chmodSync, mkdirSync, readFileSync } from 'node:fs';
 import { EXT_DIR } from './headers-ext.mjs';
-import { safeKill } from './heal.mjs';
+import { guardSignals, safeKill } from './heal.mjs';
 import { chromeArgs, limitedRelay, loadConfig, log, UID_CHROME, UID_CPB } from './lib.mjs';
 
 const cfg = loadConfig();
@@ -102,7 +102,7 @@ function prepareHeaders({ skip = false } = {}) {
   let entries;
   if (skip) {
     // The supervisor asked for a start without headers (T-921 self-heal): clear the extension and say so.
-    log('headers disabled: Chrome did not start with them');
+    log('headers: skipped for this start (the supervisor asked for a start without them)');
     spawnSync(process.execPath, [HEADERS_EXT, 'write', EXT_DIR], { ...as(UID_CHROME), input: '[]', encoding: 'utf8' });
     return null;
   }
@@ -142,15 +142,15 @@ function startChrome(id, { headers = true } = {}) {
     const me = { child, pid: child.pid, stopping: false, timer: null };
     chrome = me;
     // Node reports a refused signal (EPERM) as an 'error' event on the child, not a throw: with no listener left it took the init down
-    // (T-921). A persistent listener: a signal error is logged and retried as Chrome's uid, only a spawn error fails the start.
-    child.on('error', (e) => {
-      if (e?.syscall === 'kill' || e?.code === 'EPERM' || e?.code === 'ESRCH') {
-        log(`signal to chrome refused (${e.code})`);
-        if (e.code === 'EPERM' && me.signal && child.pid) killAsChrome(child.pid, me.signal);
-        return;
-      }
-      chrome = null;
-      tellSupervisor({ event: 'chrome-failed', id, error: e.message });
+    // (T-921). A persistent listener: a signal error is logged and sent again as Chrome's uid, only a spawn error fails the start.
+    guardSignals(child, {
+      name: 'chrome',
+      log,
+      asChrome: killAsChrome,
+      onError: (e) => {
+        if (chrome === me) chrome = null;
+        tellSupervisor({ event: 'chrome-failed', id, error: e.message });
+      },
     });
     child.once('exit', (code, signal) => {
       clearTimeout(me.timer);
@@ -177,13 +177,9 @@ function stopChrome({ force } = {}) {
   const me = chrome;
   if (!me) return;
   me.stopping = true;
-  me.signal = force ? 'SIGKILL' : 'SIGTERM';
-  safeKill(me.child, me.signal, killer);
+  safeKill(me.child, force ? 'SIGKILL' : 'SIGTERM', killer);
   clearTimeout(me.timer);
-  me.timer = setTimeout(() => {
-    me.signal = 'SIGKILL';
-    safeKill(me.child, 'SIGKILL', killer);
-  }, 5000);
+  me.timer = setTimeout(() => safeKill(me.child, 'SIGKILL', killer), 5000);
   me.timer.unref();
 }
 
@@ -194,7 +190,7 @@ function startSupervisor() {
     stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
   });
   supervisor = child;
-  child.on('error', (e) => log(`supervisor process error (${e?.code ?? 'unknown'})`));
+  guardSignals(child, { name: 'supervisor', log, onError: (e) => log(`supervisor process error (${e?.code ?? 'unknown'})`) });
   const startedAt = Date.now();
   child.on('message', (m) => {
     if (!m || typeof m !== 'object') return;

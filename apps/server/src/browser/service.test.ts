@@ -192,6 +192,11 @@ test('status: one word for the browser, from the supervisor’s own state', asyn
     const crashed = await at({ chrome: { ...supervisorStatus().chrome, state: 'error', error: 'The browser crashed 3 times in 10 minutes.' } });
     assert.equal(crashed.state, 'error');
     assert.match(crashed.detail ?? '', /crashed 3 times/);
+    // T-921 self-heal: Chrome did not start with the request headers and runs without them; the browser is usable, the status says so.
+    const degraded = await at({ chrome: { ...supervisorStatus().chrome, headers: 'degraded' } });
+    assert.equal(degraded.state, 'ready');
+    assert.equal(degraded.detail, 'Running without headers');
+    assert.equal((await at({ chrome: { ...supervisorStatus().chrome, headers: 'on' } })).detail, null);
   } finally {
     h.done();
   }
