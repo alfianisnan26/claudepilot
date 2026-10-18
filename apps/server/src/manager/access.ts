@@ -49,8 +49,13 @@ export interface ManagerHealerDeps {
 /** A manager that is live but holds no working token is restarted at its turn's end; one with a token, or none at all, is left alone. */
 export function managerHealer(d: ManagerHealerDeps): (ownerId: string) => void {
   return (ownerId) => {
-    const m = d.managerOf(ownerId);
-    if (!m || m.state === 'ended' || !d.hasLive || d.hasLive(m.id)) return;
-    void d.restart(m.id, { why: 'mcp', when: 'turn_end', actor: 'portal:manager', from: 'auto' }).catch(() => undefined);
+    // Runs on every sign-in: a failure here (a frozen or unreadable database: the boot test) never breaks the sign-in.
+    try {
+      const m = d.managerOf(ownerId);
+      if (!m || m.state === 'ended' || !d.hasLive || d.hasLive(m.id)) return;
+      void d.restart(m.id, { why: 'mcp', when: 'turn_end', actor: 'portal:manager', from: 'auto' }).catch(() => undefined);
+    } catch (e) {
+      console.error(`[manager] heal skipped: ${(e as Error).message}`);
+    }
   };
 }

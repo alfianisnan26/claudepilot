@@ -133,3 +133,14 @@ test('managerHealer: restarts at turn end a live manager with no live token; not
   managerHealer({ managerOf: () => m, hasLive: () => false, restart: async () => Promise.reject(new Error('busy')) })(ALICE);
   await new Promise((r) => setImmediate(r));
 });
+
+test('managerHealer: a store that throws (frozen or unreadable database) never breaks the sign-in that calls it', () => {
+  const heal = managerHealer({
+    managerOf: () => {
+      throw new Error('file is not a database');
+    },
+    hasLive: () => false,
+    restart: async () => undefined,
+  });
+  assert.doesNotThrow(() => heal(ALICE));
+});
