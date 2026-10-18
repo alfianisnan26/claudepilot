@@ -3,5 +3,11 @@
  * apps/server/src/**\/*.test.ts (scripts/gate.sh), so this file imports that one: its `test()` calls register here and run
  * in this file's process, the same as cpbview.test.ts and headers.test.ts reach images/browser/cpb.
  */
-export {}; // a module, so the top-level await is allowed
-await import(new URL('../../../../images/browser/cpb/heal.test.mjs', import.meta.url).href);
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+
+const heal: { registered: number } = await import(new URL('../../../../images/browser/cpb/heal.test.mjs', import.meta.url).href);
+
+test('the heal tests of the browser image are registered here (all 12, so none is lost by a wrong path or an empty import)', () => {
+  assert.equal(heal.registered, 12);
+});

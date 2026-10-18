@@ -3,8 +3,12 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import os from 'node:os';
-import { test } from 'node:test';
+import { test as nodeTest } from 'node:test';
 import { guardSignals, safeKill, startWithHeal } from './heal.mjs';
+
+/** How many tests this file registered: apps/server/src/browser/heal.test.ts checks the count, so an import that runs none fails the gate. */
+export let registered = 0;
+const test = (...args) => (registered++, nodeTest(...args));
 
 const errno = (code) => Object.assign(new Error(`kill ${code}`), { code, syscall: 'kill' });
 const collector = () => {

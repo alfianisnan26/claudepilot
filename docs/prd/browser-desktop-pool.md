@@ -641,7 +641,7 @@ event was uncaught and the init died. Now (`cpb/heal.mjs`, `cpb/init.mjs`, `cpb/
   status the portal reads (`cpb-ctl status` → `chrome.headers`: `on`, `off` or `degraded`; `service.ts` shows `detail: "Running without headers"` while `degraded`) says
   so, and the browser stays usable. For ten minutes after a degrade a wake starts without headers at once (no 30 s wait); after that the headers are tried again.
   The worst case of a wake that degrades is two CDP waits (about 60 s plus the stop).
-- Tests: `images/browser/cpb/heal.test.mjs` (`node --test`; the gate runs it through `apps/server/src/browser/heal.test.ts`, which imports it): with a real Node child whose handle refuses the signal (`EPERM`, as without CAP_KILL), a `kill` with
+- Tests: `images/browser/cpb/heal.test.mjs` (`node --test`; the gate runs it through `apps/server/src/browser/heal.test.ts`, which imports it and fails unless all 12 tests registered): with a real Node child whose handle refuses the signal (`EPERM`, as without CAP_KILL), a `kill` with
   no listener throws (the crash, reproduced) and with `guardSignals` the stop and its 5 s backstop are logged and sent again through the helper without a throw; a
   spawn error still fails the start; the kill throw path; the retry-without-headers path with a fake Chrome that never answers with the extension; the cooldown;
   that no header value (built at runtime) reaches a log line, a result or an error. `apps/server/src/browser/service.test.ts`: `headers: degraded` reads as state
