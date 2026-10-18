@@ -7,9 +7,9 @@
 - T-860 S2c on integration (a87d00b8); the realpath guard side is the coordinator's. Older batches: git history.
 
 ## IN FLIGHT (6 of 6 workers, D-71; QA/review sonnet, D-63; ids in full in session_family)
-- BATCH 33: premerge/b33 d6a91e49 = integration 4616b878 + T-974 f70d333c (FIX3 PASS 10994; lead read ruleGuard diff:
-  refusals only, fail closed). QC bfrn7d9kh running. T-425 S2b+gaps 12acb9ed PASS (T-595 11065) but conflicts in
-  chat/testkit.ts: marker branch ticket/T-425-s2b-int a3f79dd5 -> 3753d3c2 resolves + Job -> into b33 -> gate.
+- BATCH 33 GATING: premerge/b33 dc259a25 = integration + T-974 f70d333c (FIX3 PASS 10994; lead read ruleGuard diff:
+  refusals only, fail closed). QC job-1fe3489c rc0 (31/31). Gate b0zeb5215 running. T-425 S2b+gaps 12acb9ed PASS
+  (T-595 11065), testkit.ts conflict: marker branch ticket/T-425-s2b-int a3f79dd5 -> 3753d3c2 resolves -> batch 34.
   After landing: FOR THE COORDINATOR remove the text-matching `git -C` denies (T-974).
 - T-980 (repos_list filter; worktree_create by path through can()) a3554d40, worked slice -> QA + blind.
 - T-971 H1 FIX fade65c2 BLIND PWG 10905 (C2, C3 survive) -> FIX2 fdd38c6b pushed, Job pending (a3554d40) -> re-check d9f18599.
@@ -23,9 +23,9 @@
 - T-976 a2da98cb QA PWG #11040 (C6 browser socket survived) -> gap fix d68ab35c (2a0edbd8: socket.test.ts handshakes,
   decode-fallback pin; index.ts wiring left as written gap), Job bplwz9ct5 rc0 (C6, D1 killed) -> delta PWG #11066 -> blind d9f18599 on d68ab35c.
   T-1042 audit only (2a0edbd8), build after T-976 is live.
-- T-968 S2b be6b3adc QA PWG #11080 (15/15 killed) -> nested settings mask fix in slice (11109, 2a0edbd8) -> delta + blind.
+- T-968 S2b be6b3adc QA PWG #11080 (15/15 killed) -> nested mask fix 5688811c (11109), Job bj718gl5c -> delta + blind.
 - T-971 H2 delta 03bc42d6 QA PWG #11062 (H5, H9 edges survive) -> edge tests 3753d3c2 (11110) -> re-check; blind on S1.
-- T-565 FIX 103c4d80 QA PWG (T-595 10968) -> gap 1 e309aacc Job rc1 (TS2353 js-yaml 5 option name) -> 9d1d1203, Job b3pik9awy; N11/N14 dropped
+- T-565 FIX 103c4d80 QA PWG (T-595 10968) -> gap 1 9d1d1203 Job b3pik9awy rc0 (Y1-3 killed; T-595 11123); N11/N14 dropped
   (labels exist nowhere, 10973) -> delta c691df71 -> blind (infra).
 - T-968 PRD fix a32754c3 (gaps 2-7) -> re-check d9f18599. T-968 S1 03fcd4c4 (2a0edbd8; seam, cpmt_, revoke,
   migration 793), Job b7sajor81 rc1 (typecheck; managers.test 3+6) -> 89e5aba6 + diagnosis Job bfzybcl0u -> QA c691df71 + blind d9f18599; lead reads seam/migration. T-1033 S1 rc 75 (11035) head
