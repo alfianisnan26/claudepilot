@@ -14,8 +14,7 @@ const TOUCH_EVERY_MS = 60_000;
 const hashOf = (secret: string) => createHash('sha256').update(secret).digest('hex');
 
 export type ManagerVerify =
-  | { ok: true; principal: PortalPrincipal }
-  | { ok: false; reason: 'unknown' | 'revoked' | 'expired' | 'ended'; tokenId?: string };
+  { ok: true; principal: PortalPrincipal } | { ok: false; reason: 'unknown' | 'revoked' | 'expired' | 'ended'; tokenId?: string };
 
 export interface ManagerTokensOptions {
   /** Whether the manager session is still running (exists, not ended, not archived). Default: no session is, so no token passes. */
@@ -57,14 +56,9 @@ export class ManagerTokens {
     const id = `mgt_${randomBytes(6).toString('hex')}`;
     const now = this.#now;
     const expiresAt = new Date(now.getTime() + AGENT_TOKEN_TTL_MS).toISOString();
-    db.prepare('INSERT INTO pmcp_manager_tokens (id, token_hash, user_id, session_id, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)').run(
-      id,
-      hashOf(secret),
-      req.userId,
-      req.sessionId,
-      now.toISOString(),
-      expiresAt,
-    );
+    db.prepare(
+      'INSERT INTO pmcp_manager_tokens (id, token_hash, user_id, session_id, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)',
+    ).run(id, hashOf(secret), req.userId, req.sessionId, now.toISOString(), expiresAt);
     this.onChange?.();
     return { tokenId: id, secret, expiresAt };
   }
@@ -96,7 +90,8 @@ export class ManagerTokens {
 
   /** Checks a bearer token: a `cpmt_` that exists, wasn't revoked, hasn't expired, and whose session still runs. */
   verify(secret: string): ManagerVerify {
-    if (!secret.startsWith(PORTAL_MANAGER_TOKEN_PREFIX) || secret.length < 20 || secret.length > 128) return { ok: false, reason: 'unknown' };
+    if (!secret.startsWith(PORTAL_MANAGER_TOKEN_PREFIX) || secret.length < 20 || secret.length > 128)
+      return { ok: false, reason: 'unknown' };
     const row = this.store.db
       ?.prepare('SELECT id, user_id, session_id, expires_at, revoked_at FROM pmcp_manager_tokens WHERE token_hash = ?')
       .get(hashOf(secret)) as Row | undefined;
