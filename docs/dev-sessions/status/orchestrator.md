@@ -13,7 +13,8 @@
   10902) FIX3 f70d333c (Job queued) a3554d40 -> re-check d9f18599 -> b33 -> FOR THE COORDINATOR: remove the text-matching `git -C` denies.
 - T-971 H1 FIX fade65c2 BLIND PWG 10905 (C2, C3 survive) -> FIX2 fdd38c6b pushed, Job pending (a3554d40) -> re-check d9f18599.
 - T-969 FIX 065d3665 pushed (testers-bot etc., copy test dropped, perf/ux lanes), Job pending -> blind d9f18599.
-- T-961 S1 613139e3 Job bzd30x3vl queued; T-974 FIX3 Job bctygk2fn queued (pod memory tight; a3554d40 runs them in turn).
+- T-961 S1 613139e3: its proof Job timed out in the queue (feea6e9e, 3600 s), rerun later. T-974 FIX3 Job bctygk2fn queued.
+  a3554d40 then runs T-969 > T-971 H1 > T-975 > T-961, one at a time. The job-run queue is ~14 deep, 2 per chat (T-595 coordinator note).
 - T-971 H2 S1 11d5a5a1 QA PWG 10847 -> FIX 03bc42d6 (Job running) + deterministic race test (M11) by 3753d3c2 -> QA delta
   c691df71; blind d9f18599 on 11d5a5a1 running. No auto Bypass on resume stands (10736).
 - T-975 FIX 6650e8ff QA FAIL 10926, tests only (Q1, Q2 survive; R5 gap; #retry/#finishFailed rewrite a cancelled run;
@@ -29,8 +30,8 @@
 - T-1065 (new: redact.ts misses short passwords/URL userinfo; 10888) 76845676 while its Job queues -> QA + blind.
 - T-356 S1 64b4effa (MCP authz gaps 1-4; 10906) by 3753d3c2, Jobs pending. 10922: workspace resolver NOT wired (that is
   the multi-user switch); FR19 enforced by test + exemption list, not at start-up -> QA + blind; lead reads the authz diff.
-- Queues: c691df71 S0a+S0b be3698ba > T-968 S2b > T-565 > T-976 > H2 delta > T-975 FIX2 > T-356 > T-425 gaps delta. d9f18599 H2 S1 > H1 delta > T-974
-  FIX3 > T-969 > T-975 > PRD > S2b > S0b. a3554d40 T-961 + T-974 FIX3. 76845676 T-1043 + T-1065. 2a0edbd8 T-976 > S2b >
+- Queues: c691df71 S0a+S0b be3698ba > T-968 S2b > T-565 > T-976 > H2 delta > T-975 FIX2 > T-356 > T-425 gaps delta. d9f18599 H2 S1 > H1 FIX2 > T-969 blind >
+  T-974 FIX3 > T-975 > PRD > S2b > S0b. a3554d40 T-961 + T-974 FIX3. 76845676 T-1043 + T-1065. 2a0edbd8 T-976 > S2b >
   T-565 > PRD. 3753d3c2 H2 fix > T-356.
 
 ## DECISIONS (binding)
@@ -46,6 +47,7 @@
 ## FOR THE COORDINATOR (D-78; each also on its ticket)
 - Deploy batch 32 (74599ece). T-948: PORT_PROXY_HOST_SUFFIX and the claudepilot-app-ports route. T-976: live Traefik X-Forwarded-Proto;
   cookie-shadowing nuisance until T-976 is live (10855).
+- job-run capacity or queue timeout: the queue is ~14 deep, so proof Jobs time out unrun (T-595 10932).
 - T-961: the cluster-scoped PriorityClass objects, if Argo cannot create them (the builder names them).
 - T-974 after the FIX3 re-check: remove the text-matching `git -C` deny lines.
 - T-565: assign it to session 355881a3; name the backup bucket and its secret (BACKUP_S3_*).
