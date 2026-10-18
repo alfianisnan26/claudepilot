@@ -31,16 +31,16 @@
 - T-968 PRD fix a32754c3 (gaps 2-7) -> re-check d9f18599. T-968 S1 03fcd4c4 (2a0edbd8; seam, cpmt_, revoke,
   migration 793), fix 352194df (test was wrong, #11127), Job bcf1333pr -> QA c691df71 + blind d9f18599; lead reads seam/migration. T-1033 S1 rc 75 (11035) head
   53527bfa, Job blfnye6go rc1 (jobRun.test file timeout, a leftover process?) -> diagnosis Job -> fix -> QA + blind. T-921 515bb0c1 Job bl8pu6oc6 rc0 (12/12, 4 killed; #11142) -> QA c691df71 -> blind.
-- T-251 (unknown usage) 3753d3c2: audit vs integration (decide.ts unknownUsage, t255.test), build only what is missing.
-- T-1043 S0c (MCP tools through can()) 76845676 on ticket/T-1043-s0c, beside T-1065.
 - T-961 (deploy outage: PriorityClass, headroom, release pre-check; 10887) -> QA + blind (infra); PriorityClasses in
   deploy/k3s/priorityclasses.yaml are FOR THE COORDINATOR if Argo can't create them.
 - T-1065 (new: redact.ts misses short passwords/URL userinfo; 10888) 76845676 while its Job queues -> QA + blind.
 - T-356 S1 64b4effa (MCP authz gaps 1-4; 10906) by 3753d3c2, Jobs pending. 10922: workspace resolver NOT wired (that is
   the multi-user switch); FR19 enforced by test + exemption list, not at start-up -> QA + blind; lead reads the authz diff.
-- T-968 S1+S2 merged to integration BY THE COORDINATOR (coord/T-968-gm). Ours: S1-token head 5ccfb52c (a, b, update() hole,
-  test type fix), Job bh18r4yvs (7 mutants) -> QA c691df71 + blind d9f18599 (S2b too), verdicts on T-968 for the coordinator.
-  2a0edbd8 Jobs: T-921 db1d8d19 bl0qxi7ym, T-257 d34f47b2 bu3g02m4x, then T-565 T5 rerun 59451a5f. T-277 ALL MET -> QA spot-check.
+- T-968 S1+S2 merged BY THE COORDINATOR (coord/T-968-gm). S1-token 5ccfb52c job-069af0eb rc0 (29/29, 7 killed); QA PWG #11312
+  (K7 index.ts sign-out wiring, done->wont_do row, service.ts:200 format) -> one fix 2a0edbd8; blind d9f18599. S2b QA bzh0ehw7b.
+  2a0edbd8: T-921 db1d8d19, T-257 d34f47b2, T-976 fmt, T-565 bzq96a9ey; T-1079 S1+S2 16fee55e (L, 3 slices, 11295). T-277 met -> QA.
+- 3753d3c2: T-971 H2 head bbfd0ae3 Job b2rxfgopr (21 mutants); T-425 2b57efce rc0 -> b34; T-251 ALL MET + T-634 audit (assigned).
+- 76845676: T-1043 S0c 558c74ed rc0 (66/66; mutants next) ; S0b x T-976 4a57abe6 Job b9829len2; T-1065 worked. T-1058 evidence 11325.
 
 ## DECISIONS (binding)
 - D-81 risk-based review: same builder through all fixes; one QA, the same QA re-checks; blind review only for security, auth,
