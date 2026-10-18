@@ -546,6 +546,8 @@ chatController.crewSettings = (key) => settingsModule.settings.get(key);
 chatController.crewTicketOf = (sessionId) => tickets.latestCommentOf(sessionId);
 // T-1613: the crew wake tells an idle lead of the verdicts recorded on the tickets it holds (its window is `chat.crew.wakeMin`).
 chatController.crewVerdictsOf = (sessionId, sinceMs) => tickets.verdictsHeldBy(sessionId, sinceMs);
+// T-1616: and of the tickets it holds that are in review with a pass as their latest verdict (ready to close or merge).
+chatController.crewReadyOf = (sessionId) => tickets.readyToCloseHeldBy(sessionId);
 // T-270: a continuation takes its predecessors' tickets in the transaction that creates it.
 chatController.continueTickets = (to, from) => tickets.continueFrom(to, from);
 // T-136: recover in place reads its cap and pause from the settings; past the cap, ONE watchdog ticket says so (facts, no transcript).

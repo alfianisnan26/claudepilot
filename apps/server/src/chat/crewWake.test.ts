@@ -8,7 +8,7 @@ import { test } from 'node:test';
 import { settingDef } from '../settings/registry.js';
 import type { AgentCaps } from './agents.js';
 import { CREW_WAKE_MIN, crewWakeMs } from './crewReport.js';
-import { CREW_REPORT_ACTOR, type CrewVerdict } from './controller.js';
+import { CREW_REPORT_ACTOR, type CrewReady, type CrewVerdict } from './controller.js';
 import { ChatStore } from './store.js';
 import { line, liveSession, ok, sleep, until, type Live } from './testkit.js';
 
@@ -19,7 +19,7 @@ const resultLine = (sessionId: string) =>
 const askBash = (requestId: string) =>
   line({ type: 'control_request', request_id: requestId, request: { subtype: 'can_use_tool', tool_name: 'Bash', input: { command: 'npm test' }, tool_use_id: `toolu_${requestId}` } });
 
-type Rig = Live & { ahead: (ms: number) => void; verdicts: CrewVerdict[]; wakes: () => string[]; setWake: (min: number | undefined) => void };
+type Rig = Live & { ahead: (ms: number) => void; verdicts: CrewVerdict[]; ready: CrewReady[]; wakes: () => string[]; setWake: (min: number | undefined) => void };
 
 /** A lead (the live session) with the wake set to 15 minutes, a clock `ahead` of the wall clock, and installed verdicts. */
 async function rig(livenessMs?: number): Promise<Rig> {
@@ -31,8 +31,10 @@ async function rig(livenessMs?: number): Promise<Rig> {
   s.controller.crewSettings = (key) => (key === CREW_WAKE_MIN ? wakeMin : undefined);
   s.controller.crewWakeClock = () => Date.now() + offset;
   s.controller.crewVerdictsOf = () => verdicts;
+  const ready: CrewReady[] = [];
+  s.controller.crewReadyOf = () => ready;
   const wakes = () => s.controller.history(s.id).flatMap((e) => (e.kind === 'user' && e.actor === CREW_REPORT_ACTOR && e.actorLabel === 'Crew wake' ? [e.text ?? ''] : []));
-  return Object.assign(s, { ahead: (ms: number) => void (offset = ms), verdicts, wakes, setWake: (m: number | undefined) => void (wakeMin = m) });
+  return Object.assign(s, { ahead: (ms: number) => void (offset = ms), verdicts, ready, wakes, setWake: (m: number | undefined) => void (wakeMin = m) });
 }
 
 /** A worker of the lead, idle with its own tail. */
@@ -281,6 +283,64 @@ test('T-1613 QA: no wake for a lead whose wake waits for a slot under the cap', 
     s.controller.liveCaps = undefined;
     await send;
     await s.done();
+  }
+});
+
+test('T-1616: held tickets ready to close or merge are listed, and the list alone wakes the lead; an unchanged list does not wake it again; a changed one does after the window', async () => {
+  const s = await rig();
+  try {
+    const w = await worker(s, 'Lane A');
+    // The worker is busy and no verdict is new: only the list can wake the lead.
+    await s.controller.messageFamily(s.id, w.id, 'Go on.');
+    await until(() => s.controller.get(w.id)!.state === 'working');
+    s.ahead(16 * MIN);
+    assert.deepEqual(await s.controller.wakeLeads(), [], 'nothing to say');
+
+    s.ready.push({ ticket: 'T-20', role: 'qa' }, { ticket: 'T-21', role: 'review' });
+    assert.deepEqual(await s.controller.wakeLeads(), [s.id]);
+    await until(() => s.wakes().length === 1);
+    assert.match(
+      s.wakes()[0]!,
+      /\nReady to close or merge:\n- T-20: qa PASS\n- T-21: review PASS\nClose what is done, dispatch idle lanes\. Close or merge these before new dispatch\.$/,
+    );
+
+    await leadTurn(s);
+    s.ahead(40 * MIN);
+    assert.deepEqual(await s.controller.wakeLeads(), [], 'the same list past the window: no turn spent');
+    s.ready.splice(0, 1); // T-20 closed
+    assert.deepEqual(await s.controller.wakeLeads(), [s.id], 'a changed list is news');
+    await until(() => s.wakes().length === 2);
+    assert.match(s.wakes()[1]!, /\nReady to close or merge:\n- T-21: review PASS\nClose/);
+  } finally {
+    await s.done();
+  }
+});
+
+test('T-1616: the ready list is cut at 15 lines and says how many there are; with no list the closing line stays as it was', async () => {
+  const s = await rig();
+  try {
+    await worker(s, 'Lane A');
+    for (let n = 1; n <= 17; n++) s.ready.push({ ticket: `T-${100 + n}`, role: 'qa' });
+    s.ahead(16 * MIN);
+    assert.deepEqual(await s.controller.wakeLeads(), [s.id]);
+    await until(() => s.wakes().length === 1);
+    const text = s.wakes()[0]!;
+    assert.match(text, /\nReady to close or merge: 17, the first 15\n/);
+    assert.equal(text.split('\n').filter((l) => /^- T-1\d\d: qa PASS$/.test(l)).length, 15);
+    assert.ok(text.includes('- T-115: qa PASS') && !text.includes('T-116'), 'the first 15, in order');
+  } finally {
+    await s.done();
+  }
+  const t = await rig();
+  try {
+    await worker(t, 'Lane A');
+    t.ahead(16 * MIN);
+    assert.deepEqual(await t.controller.wakeLeads(), [t.id]);
+    await until(() => t.wakes().length === 1);
+    assert.ok(!/Ready to close/.test(t.wakes()[0]!));
+    assert.match(t.wakes()[0]!, /\nClose what is done, dispatch idle lanes\.$/);
+  } finally {
+    await t.done();
   }
 });
 

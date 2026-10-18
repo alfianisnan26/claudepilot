@@ -380,6 +380,34 @@ test('verdictsHeldBy (T-1613): the verdicts since a time on the open tickets a s
   }
 });
 
+test('readyToCloseHeldBy (T-1616): held, in review, and the latest verdict a pass; a later fail, another holder or another status is not listed', async () => {
+  const r = await rig();
+  try {
+    record(r, 'qa1', 'qa', 'pass', A);
+    assert.deepEqual(r.tickets.readyToCloseHeldBy('impl'), [], 'in progress, not in review');
+    r.tickets.update(UI, r.id, { status: 'in_review' });
+    assert.deepEqual(r.tickets.readyToCloseHeldBy('impl'), [{ ticket: r.id, role: 'qa' }], 'held, in review, passed');
+    assert.deepEqual(r.tickets.readyToCloseHeldBy('lead'), [], 'held by someone else');
+
+    // A second ticket, held by the lead, in review: a QA pass then a review fail. The latest verdict decides.
+    const t2 = r.tickets.create(UI, { summary: 'second', workspaceId: WS });
+    r.tickets.update(UI, t2.id, { assignee: { kind: 'session', sessionId: 'impl' }, status: 'in_review' });
+    const rec2 = (who: string, role: string, verdict: string) =>
+      r.tickets.recordVerdict(agent(WS, who), t2.id, { role, verdict, commit: A });
+    rec2('qa1', 'qa', 'fail');
+    assert.deepEqual(r.tickets.readyToCloseHeldBy('impl').map((x) => x.ticket), [r.id], 'a fail is not listed');
+    rec2('qa1', 'qa', 'pass');
+    assert.deepEqual(r.tickets.readyToCloseHeldBy('impl').map((x) => x.ticket), [r.id, t2.id], 'a pass after it is');
+    rec2('rev1', 'review', 'fail');
+    assert.deepEqual(r.tickets.readyToCloseHeldBy('impl').map((x) => x.ticket), [r.id], 'a later fail of another role takes it off');
+    r.tickets.update(UI, r.id, { assignee: { kind: 'session', sessionId: 'lead' } });
+    assert.deepEqual(r.tickets.readyToCloseHeldBy('impl'), [], 'handed to another holder');
+    assert.deepEqual(r.tickets.readyToCloseHeldBy('lead'), [{ ticket: r.id, role: 'qa' }]);
+  } finally {
+    r.done();
+  }
+});
+
 test('migration 785: a ticket_verdicts table, a unique version, and the table itself refuses a short sha', async () => {
   assert.equal(MIGRATIONS.filter((m) => m.version === 785).length, 1);
   assert.equal(new Set(MIGRATIONS.map((m) => m.version)).size, MIGRATIONS.length, 'versions are unique');
