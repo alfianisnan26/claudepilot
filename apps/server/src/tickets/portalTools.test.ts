@@ -405,6 +405,44 @@ test('T-294: a crew worker comments on its lead’s ticket and changes nothing e
   }
 });
 
+test('lead assigns (2026-10-18): a lead hands its workspace\'s tickets to its own workers; not another crew\'s, a person\'s, another workspace\'s, or other fields', async () => {
+  const r = await rig();
+  const audits: { kind: string; detail?: Record<string, unknown> }[] = [];
+  r.tickets.onAudit = (e) => void audits.push(e);
+  try {
+    const lead = await r.agent('docker/api', 'lead');
+    await r.agent('docker/api', 'qa');
+    await r.agent('docker/api', 'builder');
+    await r.agent('docker/api', 'otherlead');
+    await r.agent('docker/api', 'stranger');
+    const worker = await r.agent('docker/api', 'wk');
+    const patch = (id: string, over: Record<string, unknown>) => r.sessions.sessions.set(id, { ...r.sessions.sessions.get(id)!, ...over });
+    patch('qa', { parentId: 'lead' });
+    patch('builder', { parentId: 'lead' });
+    patch('wk', { parentId: 'lead' });
+    patch('stranger', { parentId: 'otherlead' });
+    r.tickets.create(UI, { summary: 'unassigned, its workspace', workspaceId: 'docker/api' }); // T-1
+    r.tickets.create(UI, { summary: 'held by its builder', workspaceId: 'docker/api', assignee: { kind: 'session', sessionId: 'builder' } }); // T-2
+    r.tickets.create(UI, { summary: 'held by another crew', workspaceId: 'docker/api', assignee: { kind: 'session', sessionId: 'stranger' } }); // T-3
+    r.tickets.create(UI, { summary: 'held by a person', workspaceId: 'docker/api', assignee: { kind: 'user', name: 'Admin' } }); // T-4
+    r.tickets.create(UI, { summary: 'the shared queue' }); // T-5
+    const code = async (t: { secret: string }, args: Record<string, unknown>) => (await r.h.call(t.secret, 'ticket_update', args)).result?.structuredContent?.error?.code;
+    assert.equal(await code(lead, { id: 'T-1', assignee: 'session:qa', status: 'in_review' }), undefined, 'unassigned -> its QA lane');
+    assert.deepEqual(r.tickets.get(UI, 'T-1').ticket.assignee, { kind: 'session', sessionId: 'qa' });
+    assert.equal(await code(lead, { id: 'T-2', assignee: 'session:qa', priority: 'high' }), undefined, 'builder -> QA');
+    assert.equal(audits.filter((a) => a.kind === 'ticket.lead_assigned').length, 2, 'each hand-off audited');
+    assert.equal(await code(lead, { id: 'T-1', assignee: 'session:stranger' }), 'FORBIDDEN', 'not to another crew');
+    assert.equal(await code(lead, { id: 'T-3', assignee: 'session:qa' }), 'FORBIDDEN', 'not from another crew');
+    assert.equal(await code(lead, { id: 'T-4', assignee: 'session:qa' }), 'FORBIDDEN', 'not a person\'s');
+    assert.equal(await code(lead, { id: 'T-5', assignee: 'session:qa' }), 'FORBIDDEN', 'not the shared queue');
+    r.tickets.update(UI, 'T-1', { assignee: null });
+    assert.equal(await code(lead, { id: 'T-1', assignee: 'session:qa', summary: 'renamed' }), 'FORBIDDEN', 'only assignee, status, priority');
+    assert.equal(await code(worker, { id: 'T-1', assignee: 'session:qa' }), 'FORBIDDEN', 'a worker is not the lead of its mates');
+  } finally {
+    r.done();
+  }
+});
+
 test('T-397: a worker comments on the ticket its spawn named and on its lead’s (or its lead’s successor’s) tickets, audited as itself; nothing else', async () => {
   const r = await rig();
   const audits: { kind: string; actor: string; detail?: Record<string, unknown> }[] = [];

@@ -488,6 +488,41 @@ export class Tickets {
     return null;
   }
 
+  /**
+   * A crew LEAD may hand a ticket of its own workspace to one of its workers (or take it itself): the ticket is open, held by nobody, by the
+   * lead, by one of its workers, or by a session that ended; the new holder is the lead or a live worker whose parent is the lead; and the
+   * change is the assignee (with status or priority at most). Anything else keeps the usual refusal. Each use leaves `ticket.lead_assigned`.
+   */
+  #leadMayAssign(caller: Caller, row: Row, w: Writer, req: Partial<UpdateTicketRequest>): boolean {
+    if (caller.kind !== 'agent' || !w.session || isTicketClosed(row.status) || req.assignee === undefined) return false;
+    const extra = Object.keys(req).filter((k) => (req as Record<string, unknown>)[k] !== undefined && !['assignee', 'status', 'priority'].includes(k));
+    if (extra.length) return false;
+    const lead = w.session;
+    if (!row.workspace_id || row.workspace_id !== lead.workspaceId) return false;
+    if (row.assignee_kind === 'user') return false;
+    if (row.assignee_kind === 'session' && row.assignee_ref && row.assignee_ref !== lead.id) {
+      const holder = this.sessions.get(row.assignee_ref);
+      const crew = holder?.parentId === lead.id;
+      const gone = !holder || holder.state === 'ended' || !!holder.archivedAt;
+      if (!crew && !gone) return false;
+    }
+    const to = req.assignee;
+    if (to !== null) {
+      if (to.kind !== 'session' || typeof to.sessionId !== 'string') return false;
+      const target = to.sessionId === lead.id ? lead : this.sessions.get(to.sessionId);
+      if (!target || target.state === 'ended' || (target.id !== lead.id && target.parentId !== lead.id)) return false;
+    }
+    this.onAudit?.({
+      kind: 'ticket.lead_assigned',
+      actor: w.actor,
+      actorLabel: null,
+      userId: FOUNDING_USER_ID,
+      subject: `ticket:${ticketIdOf(row.number)}`,
+      detail: { ticketId: ticketIdOf(row.number), lead: lead.id, from: row.assignee_ref ?? null, to: to ? to.sessionId : null },
+    });
+    return true;
+  }
+
   /** The actor's predecessors, nearest first (`continued_from` back; bounded, cycle safe). */
   #ancestors(s: TicketSessionInfo): string[] {
     const out: string[] = [];
@@ -1395,7 +1430,14 @@ export class Tickets {
   update(caller: Caller, id: string, req: Partial<UpdateTicketRequest>, opts: { sessionId?: string | null } = {}): TicketItem {
     const row = this.#need(caller, id); // visibility first: a ticket it can't see doesn't exist for it
     const w = this.#writer(caller, opts.sessionId);
-    const grant = this.#assertCanModify(caller, row, w);
+    let grant: EndedGrant | null;
+    try {
+      grant = this.#assertCanModify(caller, row, w);
+    } catch (e) {
+      // 2026-10-18: a lead routes its crew's work (T-84 c11534: every hand-off of an unassigned ticket went through the coordinator).
+      if (!this.#leadMayAssign(caller, row, w, req)) throw e;
+      grant = null;
+    }
     const agent = caller.kind === 'agent';
     const tags = this.#tagsOf([row.number]).get(row.number) ?? [];
     const sets: Record<string, string | number | null> = {};
