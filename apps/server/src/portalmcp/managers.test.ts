@@ -8,6 +8,7 @@ import { z } from 'zod';
 import { workspaceRef, type Actor, type ObjectRef, type UserId, type Verb } from '@portal/contracts';
 import { actorOfPrincipal, can, clearResolvers, registerResolver, requireCan } from '../authz/seam.js';
 import { Portal } from '../portal.js';
+import { ManagerTokens } from './managers.js';
 import { ToolRegistry, type PortalPrincipal } from './registry.js';
 import { portalMcpHarness } from './testkit.js';
 
@@ -243,4 +244,33 @@ test('migration 793: every session is a workspace session of the founding user, 
   } finally {
     h.done();
   }
+});
+
+test('review 2026-10-18 M4: a token passes only while its person is signed in; a check that says no revokes it', async () => {
+  const h = await portalMcpHarness({ registry: registry() });
+  try {
+    let signedIn = true;
+    const tokens = new ManagerTokens(h.store, { alive: () => true, signedIn: () => signedIn });
+    const t = tokens.mint({ userId: ALICE, sessionId: 'gm1' })!;
+    assert.equal(tokens.verify(t.secret).ok, true);
+    signedIn = false;
+    assert.deepEqual(tokens.verify(t.secret), { ok: false, reason: 'revoked', tokenId: t.tokenId });
+    signedIn = true;
+    assert.equal(tokens.verify(t.secret).ok, false, 'revoked stays revoked: the next sign-in mints a new one');
+  } finally {
+    h.done();
+  }
+});
+
+test('review 2026-10-18 M4: an expired login signs the person out (their manager stops), like a sign-out', () => {
+  const portal = new Portal(undefined, 50);
+  const out: string[] = [];
+  portal.onSignedOut = (u) => void out.push(u);
+  const token = portal.openSession(ALICE);
+  const start = Date.now();
+  while (Date.now() - start < 80) {
+    // wait past the 50 ms login lifetime
+  }
+  assert.equal(portal.anySession(token), undefined);
+  assert.deepEqual(out, [ALICE]);
 });

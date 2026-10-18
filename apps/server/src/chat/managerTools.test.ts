@@ -37,6 +37,7 @@ async function build(sessions: ChatSession[] = []) {
         get: (id) => (reached.get++, sessions.find((s) => s.id === id) ?? null),
         list: (f) => sessions.filter((s) => !f?.parentId || s.parentId === f.parentId),
         send: async (sessionId, _uuid, text, opts) => void sent.push({ sessionId, text, opts }),
+        isManager: (id) => id.startsWith('gm'),
       },
       caps: () => ({ maxDepth: 1, maxChildren: 5, spawnsPerHour: 20, messagesPerHour: 60 }),
       now: () => NOW,
@@ -257,9 +258,9 @@ const managerToken = (h: Awaited<ReturnType<typeof build>>['h'], userId: string 
 };
 
 test('manager_message: the manager sends into a session its person may operate, as "General Manager", with the priority it names', async () => {
-  const { h, sent } = await build([session('s_lead'), session('gm1')]);
+  const { h, sent } = await build([session('s_lead'), session('gm1'), session('gm2')]);
   try {
-    owners({ s_lead: FOUNDING_USER_ID, gm1: FOUNDING_USER_ID });
+    owners({ s_lead: FOUNDING_USER_ID, gm1: FOUNDING_USER_ID, gm2: FOUNDING_USER_ID });
     const gm = managerToken(h);
     const r = await h.call(gm, 'manager_message', { session_id: 's_lead', text: 'Dispatch a worker to T-1.\u0007', priority: 'next' });
     assert.equal(r.result?.isError, undefined, JSON.stringify(r.raw));
@@ -274,6 +275,11 @@ test('manager_message: the manager sends into a session its person may operate, 
     assert.equal(sent[1]!.opts.priority, undefined);
     // Never to itself.
     assert.ok(refused(await h.call(gm, 'manager_message', { session_id: 'gm1', text: 'hi' })));
+    // Never into another manager (review 2026-10-18 m2): the same answer as a session that is not there.
+    const other = await h.call(gm, 'manager_message', { session_id: 'gm2', text: 'hi' });
+    const missing = await h.call(gm, 'manager_message', { session_id: 'nope', text: 'hi' });
+    assert.ok(refused(other));
+    assert.equal(JSON.stringify(other.result?.content), JSON.stringify(missing.result?.content));
     assert.equal(sent.length, 2);
   } finally {
     h.done();

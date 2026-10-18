@@ -43,6 +43,12 @@ test('the General Manager starts a deployment pipeline (its release waits for a 
     const id = d.structuredContent.run.id as string;
     await h.until('the release to wait', () => h.svc.get(id).deployments.some((x) => x.approval === 'waiting'));
     assert.deepEqual(started().map((a) => [a.detail?.pipeline, a.detail?.rule]), [['deploy', 'deployment']]);
+    // Review 2026-10-18 M2: a deployment pipeline on a feature branch is refused too (its jobs before the deploying one would run that
+    // branch's code); only integration or the default branch.
+    const branch = await call(gm, { pipeline: 'deploy', ref: 'dev/x' });
+    assert.equal(branch.isError, true, JSON.stringify(branch));
+    assert.match(branch.content![0]!.text, /on integration or the default branch/);
+    assert.equal(started().length, 1);
 
     // The rule is the manager's only: a person's own operate token still starts the gate.
     const person = await call(mcp.token('operate').secret, { pipeline: 'gate', ref: 'main' });
