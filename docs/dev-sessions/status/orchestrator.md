@@ -19,20 +19,21 @@
   c691df71; blind d9f18599 on 11d5a5a1 running. No auto Bypass on resume stands (10736).
 - T-975 FIX 6650e8ff QA FAIL 10926, tests only (Q1, Q2 survive; R5 gap; #retry/#finishFailed rewrite a cancelled run;
   links.test 12/12 x3, not this change) -> FIX2 a3554d40 (after T-969/H1 Jobs) -> delta c691df71 -> blind d9f18599 (mig 788).
-- T-1043 S0a+S0b ONE unit (10790) on ticket/T-1043-s0b, 76845676: M14/M16 tests, app.all behind ALL /api/*, sockets via
-  sessionToken; Job queued -> QA c691df71 + blind d9f18599. Denial = 404 (10605).
-- T-976 conflicted merge 130fb339 pushed by lead (ticket/T-976-merge, 4 markers in app.ts) -> 2a0edbd8 resolves -> QA + blind.
-- T-968 S2a 896daa98 PWG x2 -> gaps in S2b be6b3adc by 2a0edbd8: Job bdeqeg7e5 rc1 (40/40 but TESTS=1; mutants
-  "applied=0", kills unproven) -> per-file Job bp02vzvse -> fix -> QA c691df71 + blind. T-968 PRD fix 2a0edbd8 -> re-check d9f18599.
-- T-565 S1 64f7c137 QA PWG (T-595 10773) -> FIX 2a0edbd8 -> delta c691df71 -> blind (infra).
+- T-1043 S0a+S0b (10790) head f5ae317e, 76845676: QA PWG #10965 (M14a/b, M16, G1, G2 killed). Gap: two cookie readers vs
+  T-976 -> after T-976 QA the lead pushes a merge with markers, 76845676 makes ONE reader. Blind d9f18599 next. Denial = 404.
+- T-976 merge resolved a2da98cb (2a0edbd8), Job eaee60e7 rc0 (typecheck, cookie/socket/auth/SSO tests; not verified: the SSO
+  test failing without the fix) -> QA c691df71 (#10931 interim) + blind d9f18599.
+- T-968 S2b be6b3adc FINAL: Job 74b74e97 rc0, 18 mutants applied and killed -> QA c691df71 + blind d9f18599. PRD fix 2a0edbd8.
+- T-565 FIX 103c4d80 QA PWG (relay T-595 10968: yaml regex check, N11/N14) -> gaps 2a0edbd8 -> delta c691df71 -> blind (infra).
 - T-961 (deploy outage: PriorityClass, headroom, release pre-check; 10887) -> QA + blind (infra); PriorityClasses in
   deploy/k3s/priorityclasses.yaml are FOR THE COORDINATOR if Argo can't create them.
 - T-1065 (new: redact.ts misses short passwords/URL userinfo; 10888) 76845676 while its Job queues -> QA + blind.
 - T-356 S1 64b4effa (MCP authz gaps 1-4; 10906) by 3753d3c2, Jobs pending. 10922: workspace resolver NOT wired (that is
   the multi-user switch); FR19 enforced by test + exemption list, not at start-up -> QA + blind; lead reads the authz diff.
-- Queues: c691df71 S0a+S0b be3698ba > T-968 S2b > T-565 > T-976 > H2 delta > T-975 FIX2 > T-356 > T-425 gaps delta. d9f18599 H2 S1 > H1 FIX2 > T-969 blind >
-  T-974 FIX3 > T-975 > PRD > S2b > S0b. a3554d40 T-961 + T-974 FIX3. 76845676 T-1043 + T-1065. 2a0edbd8 T-976 > S2b >
-  T-565 > PRD. 3753d3c2 H2 fix > T-356.
+- Queues: c691df71 S2b > T-976 > H2 delta > T-975 FIX2 > T-356 > T-425 gaps > T-565 delta. d9f18599 H2 S1 > S0b f5ae317e >
+  H1 FIX2 > T-969 > T-974 FIX3 > T-565 > T-975 > PRD > S2b. a3554d40 T-974 > T-969 > H1 > T-961 rerun > T-975 FIX2.
+  76845676 T-1065 (then the T-976 reader merge). 2a0edbd8 T-565 gaps > PRD. 3753d3c2 H2 fix > T-356 > T-425 gaps (12acb9ed).
+- 00:25 my process stopped and the coordinator restarted it; the coordinator says the job-run queue is draining (gates first).
 
 ## DECISIONS (binding)
 - D-81 risk-based review: same builder through all fixes; one QA, the same QA re-checks; blind review only for security, auth,
