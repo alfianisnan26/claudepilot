@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { Workspaces } from '../workspaces/manager.js';
 import { ChatController } from './controller.js';
-import { RESTART_RESUME_MAX, RESTART_RESUME_STAGGER_SEC } from './recover.js';
+import { DAY_MS, pendingCutOffs, RESTART_PENDING_MS, RESTART_RESUME_MAX, RESTART_RESUME_STAGGER_SEC, restartResumesToday } from './recover.js';
 import { controls, init, liveSession, ok, sleep, until, type Live } from './testkit.js';
 
 const settings = (max: number, staggerSec = 0) => (key: string) => (key === RESTART_RESUME_MAX ? max : key === RESTART_RESUME_STAGGER_SEC ? staggerSec : undefined);
@@ -307,6 +307,21 @@ test('T-971 H2 pending age (injected clock): a cut-off older than an hour is dro
   } finally {
     await s.done();
   }
+});
+
+test('T-971 H2 exact edges (pure, fixed instants): a cut-off exactly an hour old is dropped, one a millisecond younger stays; a resume exactly 24 hours old no longer counts, one a millisecond younger does', () => {
+  const now = Date.parse('2026-10-18T12:00:00.000Z');
+  const at = (ms: number) => new Date(ms).toISOString();
+  const cut = (sessionId: string, ms: number) => ({ sessionId, at: at(ms), detail: { bypass: false } });
+  assert.deepEqual(pendingCutOffs([cut('edge', now - RESTART_PENDING_MS)], [], now), [], 'at exactly RESTART_PENDING_MS it is too old');
+  assert.deepEqual(
+    pendingCutOffs([cut('inside', now - RESTART_PENDING_MS + 1)], [], now).map((p) => p.sessionId),
+    ['inside'],
+    'one millisecond younger is still pending',
+  );
+  const resumed = (ms: number) => ({ sessionId: 's', at: at(ms), detail: { result: 'resumed' } });
+  assert.equal(restartResumesToday([resumed(now - DAY_MS)], 's', now), 0, 'a resume exactly 24 hours old is outside the day');
+  assert.equal(restartResumesToday([resumed(now - DAY_MS + 1)], 's', now), 1, 'one millisecond younger counts');
 });
 
 test('T-971 H2 race: a session a person resumed during the spacing wait is skipped: no message, and it does not count against the loop guard', async () => {

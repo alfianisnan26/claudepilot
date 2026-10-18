@@ -20,14 +20,19 @@ const mutants = [
   ['M11 no re-read after the stagger', CTL, 'const again = this.#restartSkipWhy(row.id);', 'const again = undefined;'],
   ['M12 loop guard window too long', REC, 'r.detail.result === \'resumed\' && now - Date.parse(r.at) < DAY_MS)', 'r.detail.result === \'resumed\' && now - Date.parse(r.at) < DAY_MS * 2)'],
   ['M13 old cut-off kept', REC, 'now - at >= RESTART_PENDING_MS', 'now - at >= RESTART_PENDING_MS * 99'],
+  // QA #11062: the exact edges. H5: an hour-old cut-off is kept (>= to >). H9: a resume exactly 24 hours old still counts (< to <=).
+  ['H5 pending edge >= to >', REC, 'now - at >= RESTART_PENDING_MS) continue', 'now - at > RESTART_PENDING_MS) continue'],
+  ['H9 day edge < to <=', REC, 'now - Date.parse(r.at) < DAY_MS).length', 'now - Date.parse(r.at) <= DAY_MS).length'],
   ['M14 no platform audit row', 'apps/server/src/chat/restartAudit.ts', '    record({', '    void ({'],
 ];
+// Returns { passed, failing }: `failing` is the names of the tests that failed (what killed the mutant).
 const run = () => {
   try {
     execFileSync('node', ['--import', 'tsx', '--test', 'src/chat/restartRecovery.test.ts', 'src/chat/restartAudit.test.ts'], { cwd: 'apps/server', stdio: 'pipe', timeout: 240_000 });
-    return true;
-  } catch {
-    return false;
+    return { passed: true, failing: [] };
+  } catch (e) {
+    const out = `${e.stdout ?? ''}`;
+    return { passed: false, failing: out.split('\n').filter((l) => /^not ok /.test(l)).map((l) => l.replace(/^not ok \d+ - /, '').slice(0, 110)) };
   }
 };
 let bad = 0;
@@ -38,10 +43,17 @@ for (const [name, file, from, to] of mutants) {
     bad++;
     continue;
   }
-  writeFileSync(file, src.replace(from, to));
-  const passed = run();
+  const mutated = src.replace(from, to);
+  if (mutated === src) {
+    console.log(`T971-MUTANT ${name}: EMPTY DIFF`);
+    bad++;
+    continue;
+  }
+  writeFileSync(file, mutated);
+  const { passed, failing } = run();
   writeFileSync(file, src);
-  console.log(`T971-MUTANT ${name}: ${passed ? 'SURVIVED' : 'KILLED'}`);
+  console.log(`T971-MUTANT ${name}: applied (${src.length} -> ${mutated.length} chars) ${passed ? 'SURVIVED' : 'KILLED'}`);
+  for (const f of failing.slice(0, 3)) console.log(`T971-MUTANT ${name}:   failing: ${f}`);
   if (passed) bad++;
 }
 console.log(`T971-MUTANTS ${mutants.length - bad}/${mutants.length} killed`);
