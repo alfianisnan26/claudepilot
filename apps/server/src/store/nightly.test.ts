@@ -3,6 +3,7 @@ import { closeSync, openSync, readdirSync, readFileSync, statSync, writeFileSync
 import { basename, dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
+import { dump, loadAll } from 'js-yaml';
 import { MIGRATIONS, type Migration } from './migrations.js';
 import { compareCounts, gunzipBackup, listNightly, nightlyBackup, nightlyDir, nightlyNames, nightlyStatus, restoreAny, restoreDrill, rowCounts, toKeep } from './nightly.js';
 import { generateSecretKey, parseSecretKey } from './secretBox.js';
@@ -161,9 +162,53 @@ test('the work files start with a dot and the finished file does not, so the off
   assert.equal(basename(n.file), 'portal-20261014T021700Z-nightly.db.gz');
   assert.ok(!basename(n.file).startsWith('.'));
   assert.equal(new Set([n.copy, n.part, n.file]).size, 3);
-  // The CronJob's mirror excludes exactly the dot names.
+  // The CronJob's mirror excludes exactly the dot names (parsed, so a reformat does not matter; every mirror step, not the first).
   const yaml = readFileSync(new URL('../../../../deploy/k3s/backup/portal-backup.yaml', import.meta.url), 'utf8');
-  assert.match(yaml, /- --exclude\n\s+- "\.\*"\n/);
+  assert.deepEqual(mirrorsWithoutExclude(loadAll(yaml)), { mirrors: 1, missing: [] });
+});
+
+/** Every container in every pod template of the documents (a CronJob, a Job, a Deployment), init containers included. */
+function containersOf(docs: unknown[]): { name: string; argv: string[] }[] {
+  const out: { name: string; argv: string[] }[] = [];
+  const walk = (v: unknown): void => {
+    if (Array.isArray(v)) return v.forEach(walk);
+    if (!v || typeof v !== 'object') return;
+    const o = v as Record<string, unknown>;
+    for (const k of ['containers', 'initContainers'])
+      if (Array.isArray(o[k]))
+        for (const c of o[k] as Record<string, unknown>[]) {
+          // A shell script (`sh -c "aws s3 sync ..."`) is split into its words, so a step hidden in one is still seen.
+          const words = [...((c.command as unknown[]) ?? []), ...((c.args as unknown[]) ?? [])].flatMap((w) => String(w).split(/\s+/)).filter(Boolean);
+          out.push({ name: String(c.name), argv: words.map((w) => w.replace(/^["']|["']$/g, '')) });
+        }
+    Object.values(o).forEach(walk);
+  };
+  walk(docs);
+  return out;
+}
+
+/** A mirror step copies the nightly folder off-site; each one must carry `--exclude .*` (or `--exclude=.*`). */
+function mirrorsWithoutExclude(docs: unknown[]) {
+  const mirrors = containersOf(docs).filter((c) => c.argv.some((w) => /^[a-z0-9]+:\/\//i.test(w) || /^[A-Za-z0-9_-]+:[^/\s]/.test(w)) && c.argv.some((w) => /\/backups\/nightly\/?$/.test(w)));
+  const excludes = (argv: string[]) => argv.some((w, i) => (w === '--exclude' && argv[i + 1] === '.*') || w === '--exclude=.*');
+  return { mirrors: mirrors.length, missing: mirrors.filter((m) => !excludes(m.argv)).map((m) => m.name) };
+}
+
+test('the mirror check reads the parsed yaml: a reformat passes, a second mirror step without the exclude fails, none at all fails', () => {
+  const docs = loadAll(readFileSync(new URL('../../../../deploy/k3s/backup/portal-backup.yaml', import.meta.url), 'utf8'));
+  // A reformat (flow style, other quoting, one line per document) is the same manifest.
+  assert.deepEqual(mirrorsWithoutExclude(loadAll(dump(docs[0], { flowLevel: 3, quotingType: "'", forceQuotes: true }))), { mirrors: 1, missing: [] });
+  // The mutant: a second mirror step without the exclude.
+  const second = structuredClone(docs) as { spec: { jobTemplate: { spec: { template: { spec: { containers: unknown[] } } } } } }[];
+  second[0]!.spec.jobTemplate.spec.template.spec.containers.push({ name: 'offsite-2', image: 'x', command: ['aws', 's3', 'sync', '/data/backups/nightly', 's3://b/p', '--delete'] });
+  assert.deepEqual(mirrorsWithoutExclude(second), { mirrors: 2, missing: ['offsite-2'] });
+  // The same step hidden in a shell script is still seen; with `--exclude=.*` it passes.
+  const shell = { spec: { template: { spec: { containers: [{ name: 'sh', command: ['sh', '-c', 'aws s3 sync /data/backups/nightly s3://b/p --delete'] }] } } } };
+  assert.deepEqual(mirrorsWithoutExclude([shell]), { mirrors: 1, missing: ['sh'] });
+  shell.spec.template.spec.containers[0]!.command[2] += ' --exclude=.*';
+  assert.deepEqual(mirrorsWithoutExclude([shell]), { mirrors: 1, missing: [] });
+  // A manifest with no mirror at all is not a pass for the real file (its assertion wants exactly one).
+  assert.deepEqual(mirrorsWithoutExclude([{ kind: 'ConfigMap' }]), { mirrors: 0, missing: [] });
 });
 
 test('the drill reports a lost row, a lost table and an extra table', () => {
