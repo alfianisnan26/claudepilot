@@ -17,6 +17,8 @@ const mutants = [
   ['N5 resolver: no trim', WS, "typeof ref === 'string' ? ref.trim() : ''", "typeof ref === 'string' ? ref : ''", WSTEST],
   ['N6 rename: refusal text differs from a missing one', WS, "workspace_rename: { kind: 'objects', checks: [{ type: 'workspace', verb: 'operate', arg: 'id', notFound: NO_WORKSPACE }] }", "workspace_rename: { kind: 'objects', checks: [{ type: 'workspace', verb: 'operate', arg: 'id' }] }", WSTEST],
   ['N7 registry accepts an undeclared tool', REG, 'if (this.#requireDeclared && !this.#requireDeclared.isDeclared', 'if (false && this.#requireDeclared && !this.#requireDeclared.isDeclared', REGTEST],
+  // QA #11120's N7 (a different one from the registry mutant above): the `/` guard. A reference with a slash that does not resolve is tried as a bare name.
+  ['N8 resolver: slash reference tried as a bare name (QA N7)', WS, "if (wanted.includes('/')) return null;", '', WSTEST],
 ];
 const run = (test) => {
   try {

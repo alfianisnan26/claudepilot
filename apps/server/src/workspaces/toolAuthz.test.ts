@@ -40,6 +40,18 @@ test('canonicalWorkspaceId: every form resolves to <target>/<name>; unknown and 
   assert.equal(canonicalWorkspaceId(facts, ''), null);
 });
 
+test('canonicalWorkspaceId: a reference with a slash that does not resolve is never tried as a bare name (QA #11120 N7)', () => {
+  // A name or label can hold a slash in the facts' own list; `team/web` is not a bare name, so it must not reach `named` and borrow that workspace.
+  const asked: string[] = [];
+  const odd: WorkspaceAuthzFacts = {
+    resolve: () => null,
+    named: (name) => (asked.push(name), name === 'team/web' ? ['docker/api'] : []),
+  };
+  assert.equal(canonicalWorkspaceId(odd, 'team/web'), null, 'unresolved with a slash: refused like a missing one');
+  assert.deepEqual(asked, [], 'named() is not asked for a reference with a slash');
+  assert.equal(canonicalWorkspaceId({ ...odd, named: () => ['docker/api'] }, 'web'), 'docker/api', 'the same lookup does serve a bare name');
+});
+
 for (const tool of ['workspace_rename', 'workspace_resources'] as const) {
   test(`${tool}: decided on the workspace for any form of its id; another person's, missing and ambiguous read exactly like a missing one`, () => {
     declareWorkspacePolicies();
