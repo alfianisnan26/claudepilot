@@ -102,9 +102,12 @@ function Columns({ ids, children }: { ids: string[]; children: (i: number) => Re
   const nodes = useRef(new Map<string, HTMLElement>());
   const key = `${n}|${ids.join(',')}`;
   const [packing, setPacking] = useState<{ key: string; cols: number[][] }>(() => ({ key, cols: packColumns(ids.map(() => 0), n) }));
+  // The first packing with every height known is taken as it is (the first paint was round robin); later ones follow the hysteresis.
+  const settled = useRef('');
   const repack = (force: boolean) => {
     const h = ids.map((id) => heights.current.get(id) ?? 0);
     const next = packColumns(h, n);
+    if (settled.current !== key && h.every((x) => x > 0)) ((settled.current = key), (force = true));
     setPacking((cur) => {
       if (!force && cur.key === key && JSON.stringify(cur.cols) === JSON.stringify(next)) return cur;
       if (!force && cur.key === key && cur.cols.flat().length === ids.length && spread(h, cur.cols) - spread(h, next) < REPACK_GAIN_PX) return cur;
