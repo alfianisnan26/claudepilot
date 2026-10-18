@@ -445,7 +445,14 @@ const portalMcp = new PortalMcpModule(store, {
     url: agentUrls,
     known: agentUrls.known,
   },
+  // T-968 S1: the General Manager's token, alive while its session is (the runtime that starts it lands in a later slice).
+  managerAlive: (id) => {
+    const s = chatController.get(id);
+    return !!s && s.state !== 'ended' && !s.archivedAt;
+  },
 });
+// Q3 (general-manager PRD, #11136): any sign-out of the person, on any device, stops their manager; it gets a new token at the next sign-in.
+portal.onSignedOut = (userId) => void portalMcp.managers.revokeUser(userId, 'signed out');
 // With "Pool MCP only" on, Claude Code admits only listed servers, and the portal's own endpoint (which an agent's session reaches
 // through --mcp-config) is one of them: its exact URL for each workspace that opted in. Compile again when that changes.
 settingsModule.lockdown.addMatcherSource((workspaceId) => portalMcp.agentMatchers(workspaceId));
@@ -453,9 +460,11 @@ portalMcp.onAgentAddress = (workspaceId) =>
   void reconciler.request(workspaceId, 'the portal MCP address for agents changed').catch(() => undefined);
 // A token never outlives its session, whatever else is wired: ended, archived and deleted sessions lose theirs here too.
 chatController.onEvent((id, msg) => {
-  if (msg.type === 'session' && (msg.session.state === 'ended' || msg.session.archivedAt))
-    portalMcp.agents.revokeSession(id, `session ${msg.session.state}`);
-  else if (msg.type === 'removed') portalMcp.agents.revokeSession(id, 'session deleted');
+  const reason =
+    msg.type === 'session' && (msg.session.state === 'ended' || msg.session.archivedAt) ? `session ${msg.session.state}` : msg.type === 'removed' ? 'session deleted' : null;
+  if (!reason) return;
+  portalMcp.agents.revokeSession(id, reason);
+  portalMcp.managers.revokeSession(id, reason);
 });
 registerBuiltInPortalTools({
   store,

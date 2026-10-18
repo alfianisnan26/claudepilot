@@ -8,6 +8,7 @@ import type {
 } from '@portal/contracts';
 import type { Store } from '../store/store.js';
 import { AgentAccess } from './agents.js';
+import { ManagerTokens } from './managers.js';
 import { PortalAudit } from './audit.js';
 import { connectFor } from './connect.js';
 import type { PortalLimits } from './limits.js';
@@ -32,6 +33,8 @@ export interface PortalMcpModuleOptions {
     /** The address already known for a workspace, without asking it (for a lockdown's allowlist). */
     known?: (workspaceId: string) => string | null;
   };
+  /** Whether a General Manager session still runs (T-968); unset, no manager token passes. */
+  managerAlive?: (sessionId: string) => boolean;
   /** Rate limits (tests use small ones). */
   limits?: PortalLimits;
   version?: string;
@@ -51,6 +54,8 @@ export class PortalMcpModule {
   readonly audit: PortalAudit;
   /** Agents' per-session tokens and the per-workspace opt-in (interface I8). */
   readonly agents: AgentAccess;
+  /** The General Manager's tokens (cpmt_, T-968 S1). */
+  readonly managers: ManagerTokens;
   readonly mcp: PortalMcp;
   readonly internalUrl: string | null;
   #timer: NodeJS.Timeout | undefined;
@@ -80,12 +85,24 @@ export class PortalMcpModule {
       mcpEnabled: () => this.settings.get().enabled,
       now,
     });
-    this.mcp = new PortalMcp({ registry: this.registry, settings: this.settings, tokens: this.tokens, agents: this.agents, audit: this.audit, extraOrigins: opts.extraOrigins, limits: opts.limits, version: opts.version });
+    this.managers = new ManagerTokens(store, { alive: opts.managerAlive, now });
+    this.mcp = new PortalMcp({
+      registry: this.registry,
+      settings: this.settings,
+      tokens: this.tokens,
+      agents: this.agents,
+      managers: this.managers,
+      audit: this.audit,
+      extraOrigins: opts.extraOrigins,
+      limits: opts.limits,
+      version: opts.version,
+    });
     const changed = () => this.onChange?.();
     this.settings.onChange = changed;
     this.tokens.onChange = changed;
     this.audit.onChange = changed;
     this.agents.onChange = changed;
+    this.managers.onChange = changed;
     this.agents.onAccessChange = (workspaceId) => this.onAgentAddress?.(workspaceId);
   }
 
@@ -204,7 +221,7 @@ export class PortalMcpModule {
 
   /** Revokes every live token, agents' included; with `turnOff`, MCP answers 404 until an admin turns it back on (`mcp_lockdown`). */
   lockdown(reason: string, opts: { turnOff?: boolean } = {}): PortalLockdownResult {
-    const revoked = this.tokens.revokeAll(reason) + this.agents.revokeAll(reason);
+    const revoked = this.tokens.revokeAll(reason) + this.agents.revokeAll(reason) + this.managers.revokeAll(reason);
     if (opts.turnOff) this.settings.update({ enabled: false });
     this.audit.event(opts.turnOff ? 'lockdown' : 'revoke_all', null, { reason, revoked });
     return { revoked, enabled: this.settings.get().enabled };

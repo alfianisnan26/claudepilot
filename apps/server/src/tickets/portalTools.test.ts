@@ -107,6 +107,74 @@ test('an agent asks a person for something: a ticket assigned to them, then read
   }
 });
 
+test('a General Manager token (T-968, #11136 b): ticket_verdict and ticket_close are refused, the ticket untouched; a missing ticket is the same not-found', async () => {
+  const r = await rig();
+  try {
+    r.h.alive.add('gm1');
+    const m = r.h.module.managers.mint({ userId: 'u_alice', sessionId: 'gm1' })!;
+    const operate = r.h.token('operate');
+    r.tickets.create(UI, { summary: 'Ship the fix' });
+    const commit = 'ab'.repeat(20);
+    const err = async (t: { secret: string }, tool: string, args: Record<string, unknown>) => {
+      const e = (await r.h.call(t.secret, tool, args)).result?.structuredContent?.error;
+      return e && { code: e.code, message: e.message };
+    };
+    // A verdict: refused as no QA session, exactly as an operate token is (canRecordVerdict: not_a_verifier).
+    const verdict = await err(m, 'ticket_verdict', { id: 'T-1', role: 'qa', verdict: 'pass', commit });
+    assert.equal(verdict?.code, 'FORBIDDEN', JSON.stringify(verdict));
+    assert.match(String(verdict?.message), /Only a QA or review session/);
+    assert.deepEqual(await err(operate, 'ticket_verdict', { id: 'T-1', role: 'qa', verdict: 'pass', commit }), verdict, 'the same refusal as any token');
+    // A close: refused, though an operate token may close.
+    const close = await err(m, 'ticket_close', { id: 'T-1', summary: 'Done.' });
+    assert.equal(close?.code, 'FORBIDDEN', JSON.stringify(close));
+    assert.match(String(close?.message), /does not close tickets/);
+    const t = r.tickets.get(UI, 'T-1');
+    assert.equal(t.status, 'open');
+    assert.equal(r.tickets.verdicts(UI, 'T-1').length, 0, 'no verdict was stored');
+    // A ticket that does not exist reads the same for the manager as for any token.
+    for (const [tool, args] of [['ticket_close', { id: 'T-99', summary: 'x' }], ['ticket_verdict', { id: 'T-99', role: 'qa', verdict: 'pass', commit }]] as const) {
+      const mine = await err(m, tool, args);
+      assert.equal(mine?.code, 'NOT_FOUND', tool);
+      assert.deepEqual(mine, await err(operate, tool, args), tool);
+    }
+    // The ordinary writes stay open to it (§9.4: ticket_comment is an ordinary operate write).
+    assert.equal(await err(m, 'ticket_comment', { id: 'T-1', text: 'Looked at it.' }), undefined);
+    assert.equal(await err(operate, 'ticket_close', { id: 'T-1', summary: 'Done.' }), undefined, 'an operate token still closes');
+  } finally {
+    r.done();
+  }
+});
+
+test('a General Manager token (T-968, QA c691df71): ticket_update to done or wont_do, or reopening, is refused; an operate token does each', async () => {
+  const r = await rig();
+  try {
+    r.h.alive.add('gm1');
+    const m = r.h.module.managers.mint({ userId: 'u_alice', sessionId: 'gm1' })!;
+    const operate = r.h.token('operate');
+    const err = async (t: { secret: string }, args: Record<string, unknown>) => {
+      const e = (await r.h.call(t.secret, 'ticket_update', args)).result?.structuredContent?.error;
+      return e && { code: e.code, message: e.message };
+    };
+    const status = (id: string) => r.tickets.get(UI, id).status;
+    for (const n of [1, 2, 3, 4]) r.tickets.create(UI, { summary: `ticket ${n}` });
+    r.tickets.close(UI, 'T-3', { summary: 'Shipped.' });
+    for (const [id, to, before] of [['T-1', 'done', 'open'], ['T-2', 'wont_do', 'open'], ['T-3', 'open', 'done']] as const) {
+      const refused = await err(m, { id, status: to });
+      assert.equal(refused?.code, 'FORBIDDEN', `${id} → ${to}: ${JSON.stringify(refused)}`);
+      assert.match(String(refused?.message), /does not close tickets/, `${id} → ${to}`);
+      assert.equal(status(id), before, `${id} untouched by the manager`);
+      // The twin: an operate token (the same tool, a token caller without the manager flag) still makes the change.
+      assert.equal(await err(operate, { id, status: to }), undefined, `${id} → ${to} by an operate token`);
+      assert.equal(status(id), to, `${id} changed by the operate token`);
+    }
+    // A status that neither closes nor reopens stays open to it.
+    assert.equal(await err(m, { id: 'T-4', status: 'blocked' }), undefined);
+    assert.equal(status('T-4'), 'blocked');
+  } finally {
+    r.done();
+  }
+});
+
 test('the authorization matrix over MCP: another session’s ticket, a person’s, a closed one, another workspace, a read token', async () => {
   const r = await rig();
   try {
