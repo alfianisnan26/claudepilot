@@ -529,6 +529,42 @@ test('lead_peer (D-85): the leads in one owner-set group comment on each other\'
   }
 });
 
+test('FR36c (T-1608): ticket_update, ticket_create and ticket_claim_next carry a warning when the new holder is a QA or review session; none for an implementer', async () => {
+  const r = await rig();
+  try {
+    const lead = await r.agent('docker/api', 'lead');
+    const qa = await r.agent('docker/api', 'lab-qa');
+    await r.agent('docker/api', 'rev');
+    await r.agent('docker/api', 'impl');
+    const patch = (id: string, over: Record<string, unknown>) => r.sessions.sessions.set(id, { ...r.sessions.sessions.get(id)!, ...over });
+    patch('lab-qa', { parentId: 'lead', agent: 'qa-verifier' });
+    patch('rev', { parentId: 'lead', agent: 'reviewer' });
+    patch('impl', { parentId: 'lead', agent: 'implementer' });
+    const call = async (t: { secret: string }, tool: string, args: Record<string, unknown>) => r.out(await r.h.call(t.secret, tool, args));
+    const lane = (who: string) => new RegExp(`^${who} is a QA/review session: holding this ticket makes it an author of its work, so it can never record a verdict on it\\. If you meant it to verify, keep the ticket and brief the lane by ticket id\\.$`);
+    r.tickets.create(UI, { summary: 'QA work', workspaceId: 'docker/api' }); // T-1
+    const toQa = await call(lead, 'ticket_update', { id: 'T-1', assignee: 'session:lab-qa' });
+    assert.equal(toQa.error, undefined, 'the hand-off goes through');
+    assert.match(toQa.warning, lane('lab-qa'));
+    assert.equal(r.tickets.get(UI, 'T-1').events.filter((e) => e.kind === 'comment' && e.data?.verdictLane === 'lab-qa').length, 1, 'and the lead sees it on the ticket');
+    const toRev = await call(lead, 'ticket_update', { id: 'T-1', assignee: 'session:rev' });
+    assert.match(toRev.warning, lane('rev'));
+    const toImpl = await call(lead, 'ticket_update', { id: 'T-1', assignee: 'session:impl' });
+    assert.equal(toImpl.error, undefined);
+    assert.equal('warning' in toImpl, false, 'an implementer holder: no warning');
+    assert.equal('warning' in (await call(lead, 'ticket_update', { id: 'T-1', priority: 'high' })), false, 'no assignee in the call: no warning');
+    const made = await call(lead, 'ticket_create', { summary: 'perf plan', assignee: 'session:lab-qa' });
+    assert.match(made.warning, lane('lab-qa'));
+    assert.equal('warning' in (await call(lead, 'ticket_create', { summary: 'unassigned' })), false);
+    r.tickets.create(UI, { summary: 'test plan', workspaceId: 'docker/api' });
+    const claimed = await call(qa, 'ticket_claim_next', {});
+    assert.equal(claimed.ticket.id !== undefined, true, 'the QA lane claims it');
+    assert.match(claimed.warning, lane('lab-qa'));
+  } finally {
+    r.done();
+  }
+});
+
 test('T-397: a worker comments on the ticket its spawn named and on its lead’s (or its lead’s successor’s) tickets, audited as itself; nothing else', async () => {
   const r = await rig();
   const audits: { kind: string; actor: string; detail?: Record<string, unknown> }[] = [];

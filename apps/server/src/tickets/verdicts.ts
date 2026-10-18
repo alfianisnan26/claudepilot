@@ -24,6 +24,16 @@ export function verdictRoleOfAgent(agent: string | null | undefined): VerdictRol
   return null;
 }
 
+/**
+ * FR36c (T-1608): what an agent is told when a ticket it assigns or claims is now held by a QA or review session. Every session ever assigned
+ * a ticket is an author (FR36a), so that lane can never record its verdict. A warning, not a refusal: a QA lane may hold QA work (a test
+ * plan, a perf suite). Null for any other holder.
+ */
+export function verdictLaneWarning(session: { id: string; agent?: string | null } | null | undefined): string | null {
+  if (!session || !verdictRoleOfAgent(session.agent)) return null;
+  return `${session.id} is a QA/review session: holding this ticket makes it an author of its work, so it can never record a verdict on it. If you meant it to verify, keep the ticket and brief the lane by ticket id.`;
+}
+
 export type VerdictRefusal = 'not_a_verifier' | 'wrong_role' | 'is_author' | 'is_lead' | 'descends_from_author' | 'bad_commit';
 
 export type VerdictDecision = { allow: true } | { allow: false; why: VerdictRefusal };

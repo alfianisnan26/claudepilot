@@ -79,7 +79,7 @@ import {
   VERDICT_REFUSAL_TEXT,
   VERDICT_ROLES,
   VERDICTS,
-  verdictRoleOfAgent,
+  verdictLaneWarning,
   type StoredVerdict,
   type Verdict,
   type VerdictEvaluation,
@@ -106,17 +106,6 @@ export type Caller =
    * actor `trigger:<id>`, and its text (an event's words) is untrusted. The session it starts carries `portal:trigger-<id>`.
    */
   | { kind: 'trigger'; triggerId: string; ownerId: string; label: string };
-
-/**
- * FR36c (T-1608): every session ever assigned a ticket is an author of its work (FR36a), so a QA or review session that held one could never
- * record its verdict. An agent is refused putting a ticket on one (itself included); a person in the portal is not.
- */
-function verdictLaneRefusal(session: TicketSessionInfo): AppError {
-  return new AppError(
-    'CONFLICT',
-    `${session.id} is a QA/review session: holding a ticket makes it an author, so it could never record a verdict on it. Keep the ticket and brief the lane by ticket id.`,
-  );
-}
 
 /** FR9a (T-270): an agent acts on a ticket an ENDED session holds, and why it may. */
 interface EndedGrant {
@@ -1170,6 +1159,17 @@ export class Tickets {
       .run(number, this.#now().toISOString(), kind, w.actor, w.label, body, data ? JSON.stringify(data) : null);
   }
 
+  /** FR36c (T-1608): an agent put the ticket on a QA or review session: one Portal note on the timeline, so the lead sees the consequence. */
+  #laneNote(number: number, caller: Caller, session: TicketSessionInfo) {
+    const warning = caller.kind === 'agent' ? verdictLaneWarning(session) : null;
+    if (warning) this.#addEvent(number, 'comment', { actor: 'system', label: 'Portal' }, warning, { verdictLane: session.id });
+  }
+
+  /** FR36c (T-1608): the warning a tool result carries when the ticket's holder is a QA or review session; null otherwise. */
+  holderWarning(t: TicketItem): string | null {
+    return t.assignee?.kind === 'session' ? verdictLaneWarning(this.sessions.get(t.assignee.sessionId)) : null;
+  }
+
   #setTags(number: number, tags: string[]) {
     this.#db.prepare('DELETE FROM ticket_tags WHERE ticket_number = ?').run(number);
     const add = this.#db.prepare('INSERT INTO ticket_tags (ticket_number, tag) VALUES (?, ?)');
@@ -1189,7 +1189,6 @@ export class Tickets {
     if (s.state === 'ended') throw invalid('assignee', 'That session has ended.');
     if (caller.kind === 'agent' && s.workspaceId !== caller.workspaceId)
       throw new AppError('FORBIDDEN', `That session is not in workspace ${caller.workspaceId}.`);
-    if (caller.kind === 'agent' && verdictRoleOfAgent(s.agent)) throw verdictLaneRefusal(s);
     return { kind: 'session', session: s };
   }
 
@@ -1432,6 +1431,7 @@ export class Tickets {
           from: null,
           to: assignee.kind === 'session' ? { kind: 'session', sessionId: assignee.session.id } : { kind: 'user', name: assignee.name },
         });
+      if (assignee?.kind === 'session') this.#laneNote(n, caller, assignee.session);
       return n;
     });
     this.#auditAssignedPerson(assignedAudit, ticketIdOf(number));
@@ -1494,6 +1494,7 @@ export class Tickets {
     let status = row.status;
     let assigneeAfter = row.assignee_kind;
     let assignsUser = false;
+    let laneTo: TicketSessionInfo | null = null;
     if (req.assignee !== undefined) {
       const a = this.#assignee(caller, req.assignee);
       const before = row.assignee_kind ? `${row.assignee_kind}:${row.assignee_ref}` : null;
@@ -1519,6 +1520,7 @@ export class Tickets {
           ((sets.workspace_id = a.session.workspaceId),
             entries.push({ kind: 'workspace', data: { from: row.workspace_id, to: a.session.workspaceId } }));
         if (!a && status === 'in_progress') status = 'open';
+        if (a?.kind === 'session') laneTo = a.session;
       }
     }
     const assignedAudit = this.#assertAgentAssign(caller, w, {
@@ -1574,6 +1576,7 @@ export class Tickets {
         .run(...cols.map((c) => sets[c]!), row.number);
       if (newTags) this.#setTags(row.number, newTags);
       for (const e of entries) this.#addEvent(row.number, e.kind, w, e.body ?? null, e.data);
+      if (laneTo) this.#laneNote(row.number, caller, laneTo);
     });
     this.#auditForEnded(grant, w, row, 'update');
     if (handoff)
@@ -1646,7 +1649,6 @@ export class Tickets {
     const w = this.#writer(caller, req.sessionId);
     const session = this.#needSession(w, 'To claim a ticket');
     if (session.state === 'ended') throw invalid('session_id', 'That session has ended.');
-    if (caller.kind === 'agent' && verdictRoleOfAgent(session.agent)) throw verdictLaneRefusal(session);
     const tags = cleanTags(req.tags);
     const types = Array.isArray(req.types) ? req.types.map((t) => oneOf(t, TICKET_TYPES, 'types')) : [];
     let wantedNumber: number | null = null;
@@ -1682,6 +1684,7 @@ export class Tickets {
         .prepare('UPDATE tickets SET assignee_kind = ?, assignee_ref = ?, status = ?, workspace_id = ?, updated_at = ? WHERE number = ?')
         .run('session', session.id, status, this.#stored(session.workspaceId), at, row.number);
       this.#addEvent(row.number, 'assigned', w, null, { from: null, to: { kind: 'session', sessionId: session.id }, claimed: true });
+      this.#laneNote(row.number, caller, session);
       if (status !== row.status) this.#addEvent(row.number, 'status', w, null, { from: row.status, to: status });
       if (!this.#isIn(row, session.workspaceId))
         this.#addEvent(row.number, 'workspace', w, null, { from: row.workspace_id, to: session.workspaceId });

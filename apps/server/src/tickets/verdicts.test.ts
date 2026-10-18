@@ -310,28 +310,39 @@ test('another workspace’s agent gets the same not found as for a missing ticke
   }
 });
 
-test('FR36c (T-1608): an agent never puts a ticket on a QA or review session, itself included; a person may; an implementer still takes one', async () => {
+test('FR36c (T-1608): an agent putting a ticket on a QA or review session goes through, with one Portal note on the timeline; a person, an implementer: no note', async () => {
   const r = await rig();
   try {
     const lead = agent(WS, 'lead');
-    const lane = (fn: () => unknown, who: string) =>
-      assert.throws(fn, (e: any) => e.code === 'CONFLICT' && e.message.startsWith(`${who} is a QA/review session`) && /brief the lane by ticket id/.test(e.message));
-    // The lead hands the ticket on (FR9d): to its QA lane and to its review lane it is refused, the ticket stays where it was.
-    lane(() => r.tickets.update(lead, r.id, { assignee: { kind: 'session', sessionId: 'qa1' } }), 'qa1');
-    lane(() => r.tickets.update(lead, r.id, { assignee: { kind: 'session', sessionId: 'rev1' } }), 'rev1');
-    lane(() => r.tickets.create(lead, { summary: 'for QA', assignee: { kind: 'session', sessionId: 'qa1' } }), 'qa1');
-    assert.deepEqual(r.tickets.get(UI, r.id).ticket.assignee, { kind: 'session', sessionId: 'impl' });
-    // A QA or review session claiming a ticket for itself.
-    const open = r.tickets.create(UI, { summary: 'queue work', workspaceId: WS });
-    lane(() => r.tickets.claimNext(agent(WS, 'qa1'), { id: open.id }), 'qa1');
-    lane(() => r.tickets.claimNext(agent(WS, 'rev1'), {}), 'rev1');
-    assert.equal(r.tickets.get(UI, open.id).ticket.assignee, null, 'still in the queue');
-    // The lane can still record its verdict: it never became an author.
-    assert.equal(record(r, 'qa1', 'qa', 'pass', A).verdict, 'pass');
-    // An implementer still takes work from the lead; a person may still put a ticket on a QA session (the portal is the owner).
+    const notes = (id: string) => r.tickets.get(UI, id).events.filter((e) => e.kind === 'comment' && e.data?.verdictLane);
+    const warned = (id: string, who: string) => {
+      const n = notes(id).filter((e) => e.data?.verdictLane === who);
+      assert.equal(n.length, 1, `one note for ${who} on ${id}`);
+      assert.equal(n[0]!.actor, 'system');
+      assert.match(n[0]!.body!, new RegExp(`^${who} is a QA/review session: holding this ticket makes it an author of its work, so it can never record a verdict on it\\. If you meant it to verify, keep the ticket and brief the lane by ticket id\\.$`));
+    };
+    // The lead hands the ticket on (FR9d) to its QA lane, then to its review lane: both stick (a QA lane may hold QA work).
+    assert.deepEqual(r.tickets.update(lead, r.id, { assignee: { kind: 'session', sessionId: 'qa1' } }).assignee, { kind: 'session', sessionId: 'qa1' });
+    warned(r.id, 'qa1');
+    assert.deepEqual(r.tickets.update(lead, r.id, { assignee: { kind: 'session', sessionId: 'rev1' } }).assignee, { kind: 'session', sessionId: 'rev1' });
+    warned(r.id, 'rev1');
+    const made = r.tickets.create(lead, { summary: 'QA plan', assignee: { kind: 'session', sessionId: 'qa1' } });
+    warned(made.id, 'qa1');
+    assert.equal(r.tickets.holderWarning(made)?.startsWith('qa1 is a QA/review session'), true);
+    // A QA session claiming QA work for itself: claimed, and noted.
+    const open = r.tickets.create(UI, { summary: 'perf suite', workspaceId: WS });
+    assert.deepEqual(r.tickets.claimNext(agent(WS, 'qa1'), { id: open.id })!.assignee, { kind: 'session', sessionId: 'qa1' });
+    warned(open.id, 'qa1');
+    // The consequence is real: the lane that held the ticket can no longer record its verdict.
+    assert.throws(() => record(r, 'qa1', 'qa', 'pass', A), (e: any) => e.code === 'FORBIDDEN' && /author/.test(e.message));
+    // An implementer holder: no note, no warning. A person putting a ticket on a QA session: no note (the portal is the owner).
     r.sessions.add({ id: 'impl2', workspaceId: WS, agent: 'implementer', parentId: 'lead' });
-    assert.equal((r.tickets.update(lead, r.id, { assignee: { kind: 'session', sessionId: 'impl2' } }).assignee as any).sessionId, 'impl2');
-    assert.equal((r.tickets.update(UI, open.id, { assignee: { kind: 'session', sessionId: 'qa1' } }).assignee as any).sessionId, 'qa1');
+    const toImpl = r.tickets.update(lead, r.id, { assignee: { kind: 'session', sessionId: 'impl2' } });
+    assert.equal(r.tickets.holderWarning(toImpl), null);
+    const byPerson = r.tickets.create(UI, { summary: 'by a person', workspaceId: WS });
+    r.tickets.update(UI, byPerson.id, { assignee: { kind: 'session', sessionId: 'rev1' } });
+    assert.equal(notes(byPerson.id).length, 0);
+    assert.equal(notes(r.id).length, 2, 'the implementer hand-off added none');
   } finally {
     r.done();
   }

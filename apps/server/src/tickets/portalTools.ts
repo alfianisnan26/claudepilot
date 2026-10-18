@@ -311,7 +311,8 @@ export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = p
       const assignee = args.assignee === undefined ? null : assigneeOf(tickets, ctx, args.assignee, args.session_id);
       const t = tickets.create(caller, { summary: args.summary, description: args.description, type: args.type, priority: args.priority, tags: args.tags, assignee, workspaceId: ticketWorkspaceOf(ctx, args.workspace_id, opts.workspaceExists) }, { sessionId: args.session_id });
       ctx.affected(`ticket:${t.id}`);
-      return { summary: `Created ${t.id}${t.assignee?.kind === 'user' ? ' for a person' : ''}.`, ticket: ticketHead(ctx, t), ui: uiUrl(t.id) };
+      const warning = assignee ? tickets.holderWarning(t) : null;
+      return { summary: `Created ${t.id}${t.assignee?.kind === 'user' ? ' for a person' : ''}.`, ticket: ticketHead(ctx, t), ui: uiUrl(t.id), ...(warning ? { warning } : {}) };
     },
   });
 
@@ -337,7 +338,9 @@ export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = p
       const assignee = args.assignee === undefined ? undefined : assigneeOf(tickets, ctx, args.assignee, args.session_id);
       const t = tickets.update(callerOf(ctx), args.id, { summary: args.summary, description: args.description, type: args.type, priority: args.priority, status: args.status, tags: args.tags, assignee }, { sessionId: args.session_id });
       ctx.affected(`ticket:${t.id}`);
-      return { summary: `${t.id} is ${t.status}.`, ticket: { id: t.id, status: t.status, priority: t.priority, assignee: assigneeShort(t) } };
+      // FR36c (T-1608): the new holder is a QA or review lane, which can then never record this ticket's verdict.
+      const warning = assignee ? tickets.holderWarning(t) : null;
+      return { summary: `${t.id} is ${t.status}.`, ticket: { id: t.id, status: t.status, priority: t.priority, assignee: assigneeShort(t) }, ...(warning ? { warning } : {}) };
     },
   });
 
@@ -439,7 +442,8 @@ export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = p
       ctx.affected(`ticket:${t.id}`);
       const cut: string[] = [];
       const ticket = ticketBrief(ctx, t, cut);
-      return { summary: `Claimed ${t.id}: it is yours and in progress.`, ticket, ...(cut.length ? { cut } : {}) };
+      const warning = tickets.holderWarning(t);
+      return { summary: `Claimed ${t.id}: it is yours and in progress.`, ticket, ...(cut.length ? { cut } : {}), ...(warning ? { warning } : {}) };
     },
   });
 
