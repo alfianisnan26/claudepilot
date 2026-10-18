@@ -103,12 +103,13 @@ test('SSO: the domain decides; a password is refused for it; a whole sign-in mak
     assert.ok(ana && bind);
     const me = await data<{ kind: string; user: { email: string; role: string; id: string } }>(await call('GET', '/api/me', undefined, ana));
     assert.deepEqual([me.kind, me.user.email, me.user.role], ['account', 'ana@example.com', 'member']);
-    assert.equal((await call('GET', '/api/workspaces', undefined, ana)).status, 403, 'a member, not an admin');
+    // T-1043 S0a (review 10681 #5): an admin route refuses a member with the unknown path's 404, never a 403 that says it is there.
+    assert.equal((await call('GET', '/api/workspaces', undefined, ana)).status, 404, 'a member, not an admin');
     const mine = await data<{ id: string; myRole: string }[]>(await call('GET', '/api/me/teams', undefined, ana));
     assert.deepEqual(mine.map((t) => [t.id, t.myRole]), [[team.id, 'member']]);
     // A member reaches none of the admin's SSO or share routes.
-    assert.equal((await call('GET', '/api/admin/sso', undefined, ana)).status, 403);
-    assert.equal((await call('GET', '/api/admin/session-shares', undefined, ana)).status, 403);
+    assert.equal((await call('GET', '/api/admin/sso', undefined, ana)).status, 404);
+    assert.equal((await call('GET', '/api/admin/session-shares', undefined, ana)).status, 404);
   } finally {
     done();
   }

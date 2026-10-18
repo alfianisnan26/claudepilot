@@ -368,7 +368,12 @@ async function buildRealApp(serveWeb: boolean, cookie: string, cleanup: () => vo
   const CODE = '24681357';
   const portal = new Portal(CODE, 60_000);
   const make = createApp as unknown as (...args: unknown[]) => Hono;
-  const app = make(portal, spy('workspaces'), spy('store'), spy('accounts'), spy('pools'), spy('reconciler'), spy('health'), spy('chat'), {
+  // The app's store is a spy, but its database is the real (fresh) one: a spy row reads as truthy, so T-976's team routes took the spy for
+  // a team role and answered a member 403 for a team that does not exist. A read of the database still counts as a handler touching it.
+  const appStore = new Proxy(spy('store'), {
+    get: (t, p, r) => (p === 'db' || p === 'writable' ? (touched.push(`store.${p}`), Reflect.get(store, p)) : Reflect.get(t, p, r)),
+  });
+  const app = make(portal, spy('workspaces'), appStore, spy('accounts'), spy('pools'), spy('reconciler'), spy('health'), spy('chat'), {
     serveWeb,
     poolService: spy('poolService'),
     mcp: spy('mcp'),
