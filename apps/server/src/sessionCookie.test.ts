@@ -43,6 +43,18 @@ test('the cookie reader: the __Host- name wins whenever it is there, the old nam
   assert.equal(sessionFromCookies(undefined).token, undefined);
 });
 
+test('the cookie reader (pinned, QA #11040): a __Host- value that does not decode counts as absent, so the old name is read', () => {
+  // A browser only sends a __Host- cookie this host set, and the portal sets it encoded, so an undecodable one is not a planter's tool:
+  // the fallback is today's behaviour, pinned here so a change to it is a decision, not an accident.
+  const b = `t${Date.now()}b`;
+  const bad = '%E0%A4%A';
+  assert.throws(() => decodeURIComponent(bad), URIError);
+  assert.deepEqual(sessionFromCookies(`${SESSION_COOKIE}=${bad}; ${LEGACY_SESSION_COOKIE}=${b}`), { token: b, legacy: true });
+  assert.deepEqual(sessionFromCookies(`${SESSION_COOKIE}=${bad}`), { token: undefined, legacy: true });
+  const a = `t${Date.now()}a`;
+  assert.deepEqual(sessionFromCookies(`${SESSION_COOKIE}=${bad}; ${SESSION_COOKIE}=${a}; ${LEGACY_SESSION_COOKIE}=${b}`), { token: a, legacy: false }, 'a second, decodable __Host- value still wins');
+});
+
 test('https: from the request URL, or from X-Forwarded-Proto only behind a trusted proxy', () => {
   assert.equal(overHttps('https://h/api', undefined), true);
   assert.equal(overHttps('http://h/api', 'https'), config.trustProxy, 'the header counts only with PORTAL_TRUST_PROXY');
