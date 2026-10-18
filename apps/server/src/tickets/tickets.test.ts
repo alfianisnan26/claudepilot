@@ -558,3 +558,34 @@ test('migration 45 keeps what migration 44 wrote: a waiting check becomes queued
     store.close();
   }
 });
+
+test('T-1069: a lead claims a delivered ticket nobody holds by naming it (status kept), then passes it to its lane; the queue still takes only open ones', async () => {
+  // 2026-10-17: Konfersi tickets sat in review, unassigned, and their lead got FORBIDDEN on each verdict copy and could not claim them.
+  const h = await ticketsHarness();
+  try {
+    const lead = h.sessions.add({ workspaceId: 'docker/api', id: 'lead' });
+    const lane = h.sessions.add({ workspaceId: 'docker/api', id: 'qa1', parentId: 'lead' });
+    h.sessions.add({ workspaceId: 'docker/web', id: 'other' });
+    const me = agent('docker/api', lead.id);
+    const t = h.tickets.create(UI, { summary: 'delivered work', workspaceId: 'docker/api' });
+    h.tickets.update(UI, t.id, { status: 'in_review' });
+    assert.equal(h.tickets.claimNext(me, {}), null, 'the queue never hands out a ticket in review');
+    const claimed = h.tickets.claimNext(me, { id: t.id })!;
+    assert.deepEqual([claimed.id, claimed.status, claimed.assignee], [t.id, 'in_review', { kind: 'session', sessionId: 'lead' }]);
+    // Now its holder, the lead passes it to its own lane, which may then post its verdict.
+    h.tickets.update(me, t.id, { assignee: { kind: 'session', sessionId: lane.id } });
+    assert.deepEqual(h.tickets.get(UI, t.id).ticket.assignee, { kind: 'session', sessionId: 'qa1' });
+    // Not a closed one, not one somebody holds, not an approval, not another workspace's.
+    const closed = h.tickets.create(UI, { summary: 'done', workspaceId: 'docker/api' });
+    h.tickets.update(UI, closed.id, { status: 'done' });
+    assert.equal(h.tickets.claimNext(me, { id: closed.id }), null);
+    const held = h.tickets.create(UI, { summary: 'held', workspaceId: 'docker/api', assignee: { kind: 'session', sessionId: lane.id } });
+    h.tickets.update(UI, held.id, { status: 'in_review' });
+    assert.equal(h.tickets.claimNext(me, { id: held.id }), null);
+    const elsewhere = h.tickets.create(UI, { summary: 'web', workspaceId: 'docker/web' });
+    h.tickets.update(UI, elsewhere.id, { status: 'in_review' });
+    assert.equal(h.tickets.claimNext(me, { id: elsewhere.id }), null);
+  } finally {
+    h.done();
+  }
+});

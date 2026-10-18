@@ -403,7 +403,7 @@ export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = p
     input: z.object({
       tags: z.array(z.string().max(30)).max(10).optional().describe('The ticket must have all of these.'),
       types: z.array(z.enum(TICKET_TYPES)).max(8).optional().describe('The ticket must be one of these types.'),
-      id: z.string().max(20).optional().describe('Claim this ticket instead, if it is claimable.'),
+      id: z.string().max(20).optional().describe('Claim this ticket instead, if it is claimable. Named this way, an unassigned ticket in progress, in review or blocked is claimable too (keeping its status): take a delivered ticket nobody holds, then pass it to your lane with ticket_update assignee session:<id>.'),
       session_id: sessionIdArg,
     }),
     handler(ctx, args) {
