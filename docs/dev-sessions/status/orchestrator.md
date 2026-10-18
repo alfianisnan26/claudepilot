@@ -1,9 +1,9 @@
 # orchestrator status (2026-10-18 05:20 UTC, session 355881a3; older entries: git history)
 
 ## DONE
-- T-251 CLOSED 05:18 (audit #11326, proof Job bvnawjkmq rc0, QA PWG #11340, citation fixed #11344).
-- Batch 33 LANDED: T-974 f70d333c. Slip (pushed 76bdc9d0 before its re-gate; T-595 11166) closed: re-gate GREEN 03:00,
-  hold lifted on T-731 11206. Flaky unavailable.s2.test.ts:75 -> T-1076.
+- CLOSED 07:00 (stale since the 06:4x session end put them back in the queue): T-611 (ff4eaf47, QA PWG #8715, blind APPROVE
+  #8537) and T-1049 (6c30af2d in b32, QA PWG #10771). T-251 CLOSED 05:18.
+- Batch 33 LANDED: T-974 f70d333c (slip closed, re-gate GREEN 03:00, T-731 11206).
 
 ## IN FLIGHT (6 of 6 workers, D-71; QA/review sonnet, D-63; ids in full in session_family)
 - DEPLOY #365 (rmvcyeslw4a7ecb, 62a44a10, prod, actor "ui") ran with gate=false (the tree was gated by gate-job, 10823):
@@ -27,10 +27,11 @@
 - T-1033 53527bfa QA mutants #11449: D1, D2 SURVIVED -> same builder 2a0edbd8 (tests + default 3600 s, decision #11467).
 - T-119 S1a 11e16382, S2a bd1a5c90 (Jobs queued) -> S1b API (blind: authz route), 3753d3c2, sonnet. S1b-2 = option A. T-980 dbb1bd76 rc0 8/8, 4 killed -> QA.
 - T-968 S1 delta a8fca5a3 QA PASS #11509; K8 ccef3ef4 rc0 7/7 (#11646); S1 fmt 79c2d25c check bsrlhcxps; S2 needs fmt (#11732). T-523 + T-402 audits -> a3554d40.
-- 76845676: S0b x T-976 aaa9169f Job bk7jaaj34 -> S0c-on-s0b 78b0e668 (6 mutants) -> T-1065 641b45cf + T-1084 229fc44f
-  (no issued-token match: no incident) one Job -> blind d9f18599.
-- a3554d40: H1 fmt Job b9xx1x0um, T-980 bpc5x0blu, T-961 7684391b b44zf2p1l (QA PWG #11433); worked: T-1076 (flaky
-  wall-clock bound) fix cae18cd6, proof bkqffm0uu queued. T-975 FIX2 3a21e02a delta QA PWG #11446 -> blind d9f18599.
+- 76845676: S0b x T-976 aaa9169f rc1 (5/77: member 403 on T-976 team routes, 403->404 in 2 tests, teamsSso:162 cookie
+  set twice; asked: T-976 or S0b?) -> fix, re-queue -> S0c 78b0e668 -> T-1065+T-1084; meanwhile T-1094 (urgent, blind).
+- a3554d40 Pilot tools 401 since the recovery (FOR THE COORDINATOR T-595 #12036): T-402 rc0 105/105, T-523 covered by
+  T-1033; now T-524 open done-items (OOM message plus test, master under 85% for a busy hour, measured).
+  T-961 green 128/128; T-1076 fix cae18cd6 proof bdo9erb2x queued. T-975 FIX2 3a21e02a delta QA PWG #11446 -> blind d9f18599.
 - 3753d3c2: T-971 d8189e5f Job bpwzt2g06 (B10, M11 fixed); T-634 0f4ffde6 QA PWG #11432 -> C2 test; T-356 N8 Job.
 - c691df71 (QA): T-968 first; T-1033 53527bfa (rc0, 8 killed) -> blind; T-277 spot-check; T-1058 PWG (already closed).
 - d9f18599 (QA/blind): T-968 S2b H4/H5/H12 (bq9f0174k), S1-token blind; then T-969 V5, T-975, T-970 QA.
@@ -40,7 +41,6 @@
 - T-1065 3258ec46 QA PWG #11410 (prose colon over-cut, PRD line) + T-1084 (token-shaped literal valueRedact.test.ts:9)
   -> 76845676 -> blind d9f18599. T-980 fix dbb1bd76 (bpc5x0blu) -> QA c691df71.
 - T-356 S1 e03d7f21 QA PWG #11120 (N7 `/` guard authz.ts:171 survived) -> N7 test 3753d3c2 (11380) -> delta -> blind; lead reads authz.
-- T-1043 S0b blind PWG #11081 (D5, D7): Job 19e76665 Pending OOM, re-queued besujkveh. Recovery: tickets re-claimed, all 6 lanes resumed.
 
 ## DECISIONS (binding)
 - D-81 risk-based review: same builder through all fixes; one QA, the same QA re-checks; blind review only for security, auth,
@@ -62,7 +62,7 @@
 - T-565 (now mine, 11482): name the backup bucket and its secret (BACKUP_S3_*). T-257 DECISIONS row (11198).
 - T-948: PORT_PROXY_HOST_SUFFIX and the claudepilot-app-ports route. T-976: live Traefik X-Forwarded-Proto (10855).
 - T-1058 pre-push hook for the context-pack check. T-382 DOM test library; T-1032 QC format skips readFileSync files.
-- T-938, T-666, T-578, T-868 (older, git history); T-921 rig door (11060); T-970 image build (11160).
+- a3554d40 Pilot tools 401 (T-595 12036); `git apply <job-out patch>` for 2a0edbd8 (T-968).
 
 ## NEEDS A HUMAN (production and uat only, D-62/D-78)
 - T-93 Konfersi production (owner checklist). T-610 pre-deploy read-only prod count (through the coordinator).
