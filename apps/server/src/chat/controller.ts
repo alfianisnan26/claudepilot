@@ -652,6 +652,14 @@ export class ChatController {
   readonly #idleTimers = new Map<string, NodeJS.Timeout>();
   /** T-417: the starts and wakes waiting for a slot under the live cap, first come first served, with the cap each found full. */
   readonly #slotQueue: SlotTurn[] = [];
+  /** T-425: a send whose wake began to wait for a slot is told (it stores its message and returns; see `#send`). */
+  readonly #slotWatchers = new Map<string, Set<() => void>>();
+  /** T-425 S2: per session, the end of the line of sends waiting to be written (see `#send`). */
+  readonly #writeTail = new Map<string, Promise<void>>();
+  /** Test seam (T-425 S2b): how many sessions have a send line open; zero when every send is written or refused. */
+  get openWriteLines(): number {
+    return this.#writeTail.size;
+  }
   /**
    * T-417 review: the slots granted under the live cap whose session is not live yet (between its room and the end of its launch):
    * they count as running, so a second start can't take the same room.
@@ -2784,6 +2792,25 @@ export class ChatController {
 
   /** {@link send} without the moving check: the move's own messages (the handoff request, the opening) go through here. */
   async #send(sessionId: string, uuid: string, text: string, opts: ChatSendOptions = {}): Promise<void> {
+    // T-425 S2: sends to one session are written in call order, whatever their wake or Bypass restore costs. The place in line is taken
+    // here, before any await; `deliver` waits for the earlier sends' turn and gives its own back when its write is done or refused.
+    const before = this.#writeTail.get(sessionId) ?? Promise.resolve();
+    let release!: () => void;
+    const turn = new Promise<void>((r) => (release = r));
+    const tail = before.then(() => turn);
+    this.#writeTail.set(sessionId, tail);
+    void tail.then(() => {
+      if (this.#writeTail.get(sessionId) === tail) this.#writeTail.delete(sessionId);
+    });
+    try {
+      await this.#sendInLine(sessionId, uuid, text, opts, before, release);
+    } catch (e) {
+      release(); // refused before its write: the sends behind it go on
+      throw e;
+    }
+  }
+
+  async #sendInLine(sessionId: string, uuid: string, text: string, opts: ChatSendOptions, inLine: Promise<void>, release: () => void): Promise<void> {
     const session = this.#require(sessionId);
     if (session.state === 'ended') throw new AppError('CONFLICT', 'This session has ended.');
     if (typeof uuid !== 'string' || !CLIENT_ID.test(uuid)) throw new AppError('VALIDATION_FAILED', 'That message has no valid id.');
@@ -2814,7 +2841,22 @@ export class ChatController {
       if (report && this.#crewHeld.has(sessionId)) throw new AppError('CONFLICT', 'A person stopped this session.');
     };
     held();
-    await this.#live(sessionId, !report, true, opts.actor ?? 'ui');
+    // T-425: a wake that has to wait for a slot (up to 15 minutes) doesn't hold the send: the message is stored at once and the send returns;
+    // the line goes to Claude when the slot comes (`deliver` below), or the input is marked failed and the transcript says why.
+    const woken = this.#live(sessionId, !report, true, opts.actor ?? 'ui');
+    let tell!: () => void;
+    const waits = new Promise<'wait'>((r) => (tell = () => r('wait')));
+    const watchers = this.#slotWatchers.get(sessionId) ?? new Set<() => void>();
+    watchers.add(tell);
+    this.#slotWatchers.set(sessionId, watchers);
+    let detached: boolean;
+    try {
+      detached = (await Promise.race([woken.then(() => 'live' as const), waits])) === 'wait';
+    } finally {
+      watchers.delete(tell);
+      if (!watchers.size) this.#slotWatchers.delete(sessionId);
+    }
+    if (detached) woken.catch(() => undefined); // its refusal is handled in `deliver`
     if (this.#chat.hasInput(sessionId, uuid)) throw new AppError('CONFLICT', 'That message was already sent.'); // a retry raced it
     held(); // a Stop while it woke
     if (!report) this.#crewHeld.delete(sessionId); // someone else's message runs it again: its crew's news may follow
@@ -2837,41 +2879,49 @@ export class ChatController {
     const seq = this.#chat.lastEvent(sessionId)?.seq;
     if (seq !== undefined) rec.link(seq);
     if (portal?.startsWith('session:')) this.#noteSent(portal.slice('session:'.length), session.title, text);
-    const before = this.#chat.get(sessionId)?.state;
-    const woke = before !== undefined && before !== 'working' && before !== 'waiting';
-    if (woke) {
-      this.#chat.patchSession(sessionId, { state: 'working' });
-      this.#emitSession(sessionId);
-    }
-    try {
-      await this.#writeLine(
-        sessionId,
-        userLine(
-          att.withNote(
-            portal && !bare
-              ? portalFrame(
-                  portal,
-                  actorLabel,
-                  text,
-                  opts.relation,
-                  leadSubagentWarning(this.#chat.get(sessionId)?.agentsRunning ?? 0, this.#chat.row(sessionId)?.max_workers),
-                )
-              : text,
-          ),
-          { uuid, priority, images: att.inline(), imagesFirst: att.needsStaging },
-        ),
-      );
-      att.done();
-    } catch (e) {
-      this.#setInput(sessionId, uuid, 'failed');
-      // Nothing reached Claude Code: undo the optimistic Working, unless something else moved it since.
-      if (woke && before && this.#chat.get(sessionId)?.state === 'working') {
-        this.#chat.patchSession(sessionId, { state: before });
+    // The optimistic Working and its undo (integration) are decided in `deliverInLine`, when the line is really written: after a slot wait, not before it.
+    const deliver = async (): Promise<void> => {
+      try {
+        await deliverInLine();
+      } finally {
+        release();
+      }
+    };
+    const deliverInLine = async (): Promise<void> => {
+      if (detached) {
+        await woken; // the slot came (or it throws: refused, ended)
+        held();
+        if (!report) this.#crewHeld.delete(sessionId);
+      }
+      await inLine; // the sends before this one are written first
+      const before = this.#chat.get(sessionId)?.state;
+      const woke = before !== undefined && before !== 'working' && before !== 'waiting';
+      if (woke) {
+        this.#chat.patchSession(sessionId, { state: 'working' });
         this.#emitSession(sessionId);
       }
-      throw e;
-    }
-    this.#ensureReader(sessionId);
+      try {
+        await this.#writeLine(
+          sessionId,
+          userLine(att.withNote(portal && !bare ? portalFrame(portal, actorLabel, text, opts.relation, leadSubagentWarning(this.#chat.get(sessionId)?.agentsRunning ?? 0, this.#chat.row(sessionId)?.max_workers)) : text), { uuid, priority, images: att.inline(), imagesFirst: att.needsStaging }),
+        );
+        att.done();
+      } catch (e) {
+        this.#setInput(sessionId, uuid, 'failed');
+        // Nothing reached Claude Code: undo the optimistic Working, unless something else moved it since.
+        if (woke && before && this.#chat.get(sessionId)?.state === 'working') {
+          this.#chat.patchSession(sessionId, { state: before });
+          this.#emitSession(sessionId);
+        }
+        throw e;
+      }
+      this.#ensureReader(sessionId);
+    };
+    if (!detached) return deliver();
+    void deliver().catch((e: unknown) => {
+      this.#setInput(sessionId, uuid, 'failed');
+      if (!this.#closed) this.#note(sessionId, `A message wasn’t delivered: ${isAppError(e) ? e.message : this.#message(e)}`);
+    });
   }
 
   /** How a portal actor is named in the transcript: the caller's label, else a `session:` actor's title; bounded, one line, redacted. */
@@ -4656,6 +4706,7 @@ export class ChatController {
   /** T-417: shows (or clears, `null`) why a session waits for a slot; tells its watchers only when that changed. */
   #showSlotWait(sessionId: string, why: string | null): void {
     const was = this.#slotWaits.get(sessionId) ?? null;
+    if (why) for (const tell of this.#slotWatchers.get(sessionId) ?? []) tell(); // T-425: a send that joins a wait already shown is told too
     if (was === why) return;
     if (why) {
       this.#slotWaits.set(sessionId, why);

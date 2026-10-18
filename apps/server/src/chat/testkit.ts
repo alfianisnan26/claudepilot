@@ -91,6 +91,11 @@ export class FakeWorkspaces {
   /** A host that takes stdin but never exits. */
   hangSends = false;
   /**
+   * A `send` whose line this accepts is held open, never answered, until the test ends it with `exec.exit(code)` (no clock: the test decides when and
+   * how the write ends). Other sends are answered as usual.
+   */
+  holdSend: ((line: string) => boolean) | null = null;
+  /**
    * T-1049: opt-in. Every control request the portal writes is answered on the newest tail in the same tick it is recorded (settings: the applied
    * ones, permission mode: the asked mode, usage: an API-key account, anything else: a bare success), so a test never races a short
    * `controlTimeoutMs` against a polling responder under load.
@@ -200,6 +205,7 @@ export class FakeWorkspaces {
       if (this.hangSends) return exec;
       setTimeout(() => {
         if (exec.closed) return exec.exit(null); // closed early: nothing arrived, no exit code either
+        if (this.holdSend?.(exec.written)) return; // held for the test to end
         if (this.sendCode === 0) {
           this.sends.push({ args: command.slice(2), line: exec.written });
           this.ops.push(`send ${exec.written.slice(0, 40)}`);

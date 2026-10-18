@@ -30,7 +30,7 @@ import { crewCount, crewOfRows, fromLead } from './crew';
 import { RecoverButton } from './Recover';
 import { RoleBadge } from './RoleBadge';
 import { barWidth, lineTwo, roleShown, rowMeta, rowState, thirdLine, type LineTwoItem, type QuotaMeter, type RowState } from './rowMeta';
-import { endedForSafety, formatUsd, StateBadge, timeShort } from './shared';
+import { endedForSafety, formatUsd, SlotWaitBadge, StateBadge, timeShort } from './shared';
 import { SWIPE_SETTLE_MS, useRowSwipe } from './swipe';
 
 /**
@@ -98,9 +98,11 @@ const WORD: Record<RowState['tone'], string> = {
 /** Line two's state: a dot and a word; from 640 px a working session also says how many agents run (T-41). */
 function StateWord({ state }: { state: RowState }) {
   return (
-    <span data-row-state="" className={cn('inline-flex items-center gap-1', WORD[state.tone])}>
+    // `why` (T-425, a start waiting for a slot): the row is one link, so no button inside it; the full line is the title and the screen reader's text, the ⓘ is on the session page.
+    <span data-row-state="" title={state.why} className={cn('inline-flex items-center gap-1', WORD[state.tone])}>
       <span aria-hidden="true" className={cn('size-2 shrink-0 rounded-full', DOT[state.tone])} />
       {state.word}
+      {state.why && <span className="sr-only">: {state.why}</span>}
       {state.agents > 0 && (
         <span className="hidden sm:inline">
           {' '}
@@ -381,7 +383,15 @@ export function SessionRow({
             <span data-header-title="" className="min-w-0 flex-1 truncate font-semibold text-ink-soft">
               {title}
             </span>
-            {safety ? <Badge tone="danger">{safety.label}</Badge> : asks ? <Badge tone="warning">Needs you</Badge> : <StateBadge state={s.state} agents={s.agentsRunning ?? 0} />}
+            {safety ? (
+              <Badge tone="danger">{safety.label}</Badge>
+            ) : asks ? (
+              <Badge tone="warning">Needs you</Badge>
+            ) : s.slotWait && s.state !== 'ended' ? (
+              <SlotWaitBadge why={s.slotWait} />
+            ) : (
+              <StateBadge state={s.state} agents={s.agentsRunning ?? 0} />
+            )}
             {crew && (
               <span title={crew.label} data-crew-count="" className="inline-flex shrink-0">
                 <Badge tone={crew.tone}>
