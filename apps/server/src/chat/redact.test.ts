@@ -77,6 +77,55 @@ test('T-1065: the word password in prose, comparisons, types and URLs without a 
     assert.equal(redact(text), text, text);
 });
 
+// Twins: each case above next to the same text with the one thing changed that makes it a secret. The secret goes, its twin stays whole,
+// so a rule widened past that one thing (a name that only contains the word, `==` or `=>`, a URL with no `@` after the colon) fails here.
+test('T-1065 twins: a key form next to the same text whose name does not end in the word, or that compares', () => {
+  for (const k of NAMES) {
+    const v = short(4);
+    const pairs: [string, string][] = [
+      [`${k}=${v}`, `${k}_hint=${v}`],
+      [`${k}: ${v}`, `${k}less: ${v}`],
+      [`{"${k}":"${v}"}`, `{"${k}_len":"${v}"}`],
+      [`${k}='${spaced}' next`, `${k}.file='${spaced}' next`],
+      [`--${k}=${v} --verbose`, `--${k}-file=${v} --verbose`],
+      [`https://x.io/cb?${k}=${v}&next=1`, `https://x.io/cb?${k}_kind=${v}&next=1`],
+      [`${k} = ${v}`, `${k} == ${v}`],
+      [`${k}=${v}`, `${k}=>${v}`],
+    ];
+    for (const [secret, twin] of pairs) {
+      assert.ok(!redact(secret).includes(MARK), `${secret} kept part of its value`);
+      assert.equal(redact(twin), twin, `the twin of ${secret}`);
+    }
+  }
+});
+
+test('T-1065 twins: a URL with a userinfo password next to the same URL without one', () => {
+  const pw = short(6);
+  const pairs: [string, string][] = [
+    [`postgres://app:${pw}@db.internal:5432/main`, `postgres://app@db.internal:5432/main`],
+    [`postgres://app:${pw}@db.internal:5432/main`, `postgres://db.internal:5432/${pw}`],
+    [`git clone https://bot:${pw}@git.example.com/org/repo.git`, `git clone https://bot@git.example.com/org/repo.git`],
+    [`redis://:${pw}@cache:6379`, `redis://cache:6379/${pw}`],
+    // A colon and an `@` after the host are a path, not userinfo.
+    [`https://u:${pw}@x.io/a`, `https://x.io/u:${pw}@a`],
+    [`amqp://user:${MARK}@${MARK}@mq.local/vhost`, `amqp://user@mq.local/${MARK}@${MARK}`],
+  ];
+  for (const [secret, twin] of pairs) {
+    assert.ok(!redact(secret).includes(MARK), `${secret} kept part of its password`);
+    assert.equal(redact(twin), twin, `the twin of ${secret}`);
+  }
+});
+
+test('T-1065 twins: in a stream the twin comes out whole wherever it is split', () => {
+  for (const text of [`Here: pwd_hint=${short(5)} and more.`, `Use password == ${MARK} here.`, `Open postgres://app@db.internal:5432/${MARK} now.`, `See https://x.io/u:${MARK}@a too.`]) {
+    assert.equal(redact(text), text, text);
+    for (let at = 0; at <= text.length; at++) {
+      const r = new StreamRedactor();
+      assert.equal([r.push(text.slice(0, at)), r.push(text.slice(at)), r.flush()].join(''), text, `${text} split at ${at}`);
+    }
+  }
+});
+
 test('T-1065: redacting twice changes nothing more', () => {
   const text = `password=${MARK} and {"token": "${spaced}"} and postgres://a:${MARK}@db/x`;
   const once = redact(text);
