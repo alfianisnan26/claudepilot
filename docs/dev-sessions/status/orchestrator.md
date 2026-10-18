@@ -2,7 +2,7 @@
 
 ## DONE
 - CLOSED 07:00 (stale since the 06:4x session end put them back in the queue): T-611 (ff4eaf47, QA PWG #8715, blind APPROVE
-  #8537) and T-1049 (6c30af2d in b32, QA PWG #10771). T-251 CLOSED 05:18.
+  #8537), T-1049 (6c30af2d in b32, QA PWG #10771); T-524 08:05 (OOM pinned, master max 74% over a busy hour).
 - Batch 33 LANDED: T-974 f70d333c (slip closed, re-gate GREEN 03:00, T-731 11206).
 
 ## IN FLIGHT (6 of 6 workers, D-71; QA/review sonnet, D-63; ids in full in session_family)
@@ -31,11 +31,12 @@
   test edits per review 10681 #5: blind checks them) -> S0c merged by lead 4eb2866a (ticket/T-1043-s0c-v2) -> T-1065+T-1084
   -> T-1094 ac31a578 (lost-touch keeps mode record; tests unrun; blind). T-968 managers fmt 2ce4d72e by6q1yxv9; T-1079 S3a/S3b.
 - a3554d40 Pilot tools 401 since the recovery (FOR THE COORDINATOR T-595 #12036): T-402 rc0 105/105, T-523 covered by
-  T-1033; now T-524 open done-items (OOM message plus test, master under 85% for a busy hour, measured).
+  T-1033; now T-980 gaps (repo_id same 404, workspace_id mismatch, P3/P4/P8 tests; #12376; T-1261 split) + T-1076 proof.
   T-961 green 128/128; T-1076 fix cae18cd6 proof bdo9erb2x queued. T-975 FIX2 3a21e02a delta QA PWG #11446 -> blind d9f18599.
 - 3753d3c2: T-971 d8189e5f Job bpwzt2g06 (B10, M11 fixed); T-634 0f4ffde6 QA PWG #11432 -> C2 test; T-356 N8 Job.
-- c691df71 (QA): T-968 first; T-1033 53527bfa (rc0, 8 killed) -> blind; T-277 spot-check. S1a now d01b5949 (regex fix) for d9f18599.
-- d9f18599 (QA/blind): T-968 S2b H4/H5/H12 (bq9f0174k), S1-token blind; then T-969 V5, T-975, T-970 QA.
+- c691df71 (QA): T-1033 D1/D2 on 576ad450 (bwyypm3wd), then T-1083 M1-M6, T-634. T-980 PWG #12146 (P3/P4/P8 survive).
+- d9f18599 (blind): S1a d01b5949, T-1043 S0b delta f30675f5, T-968 S1-token 2ce4d72e + S2b, S1b-1 4850a1c8 after its
+  Job; then T-1065, T-975, T-969 V5, T-970.
 - T-975 FIX2 tests (a3554d40) -> delta c691df71 -> blind (mig 788). T-970 5a0fa697 rc0 -> QA; image build FOR THE COORDINATOR.
 - T-565 9d1d1203 QA PWG (cfbdbfb0, T5 survived) -> T5 fix 59451a5f Job b7aafa4e rc0, QA PWG; blind PWG (T-595) -> README 55f5aa8e -> READY, into batch 34;
   image tag + bucket versioning at apply FOR THE COORDINATOR.
