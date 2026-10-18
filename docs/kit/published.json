@@ -1,6 +1,6 @@
 {
-  "kit": "1.0.1",
-  "at": "2026-10-17T12:04:48.223Z",
+  "kit": "1.0.2",
+  "at": "2026-10-18T00:43:18.847Z",
   "portal": "https://pilot.ai.isnan.me",
   "contexts": {
     "charter-essentials": "01a13624-3b6c-7087-a61d-26730374d3a6",
@@ -15,7 +15,7 @@
   "skills": {
     "browser-testing": "01a13625-2718-7946-bf02-c5658d779b54",
     "charter": "01a1496d-d8b0-7f1d-9809-61e9ecd68b3f",
-    "ci-cd": "01a14964-288c-74d8-9368-03059444c45a",
+    "ci-cd": "01a14c76-8e4e-7940-9bc0-bbab483d450d",
     "decisions": "01a13625-2719-720d-8181-973400ac4431",
     "design-standard": "01a13625-2719-7347-ad33-6c232ed0e691",
     "efficiency": "01a13847-5bbd-7fae-a843-e442b5739fe1",
@@ -23,7 +23,7 @@
     "git-flow": "01a13625-271a-7548-a864-ccd6f6effc68",
     "incident": "01a13625-271a-7d55-9f57-8c9a3312f67b",
     "knowledge": "01a13625-271a-7f0e-a0cb-e5d4d9e51a6d",
-    "orchestration": "01a149c0-2780-791a-a1ee-448706168ea3",
+    "orchestration": "01a14c76-8e50-7f84-8ad6-75303228f64a",
     "peer-review": "01a13625-271a-7e0a-bde9-4c377256c122",
     "portal-mcp": "01a14643-596b-7e10-9134-be10af83966e",
     "qa-verification": "01a13625-271b-74fb-bdea-ead060e10b81",

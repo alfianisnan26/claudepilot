@@ -91,10 +91,33 @@ export class FakeWorkspaces {
   /** A host that takes stdin but never exits. */
   hangSends = false;
   /**
+<<<<<<< HEAD
    * A `send` whose line this accepts is held open, never answered, until the test ends it with `exec.exit(code)` (no clock: the test decides when and
    * how the write ends). Other sends are answered as usual.
    */
   holdSend: ((line: string) => boolean) | null = null;
+=======
+   * T-1049: opt-in. Every control request the portal writes is answered on the newest tail in the same tick it is recorded (settings: the applied
+   * ones, permission mode: the asked mode, usage: an API-key account, anything else: a bare success), so a test never races a short
+   * `controlTimeoutMs` against a polling responder under load.
+   */
+  autoRespond = false;
+  #answerControl(written: string): void {
+    let o: { type?: string; request_id?: string; request?: { subtype?: string; mode?: unknown } };
+    try {
+      o = JSON.parse(written);
+    } catch {
+      return;
+    }
+    const tail = this.tails.at(-1);
+    if (o.type !== 'control_request' || !o.request_id || !o.request || !tail) return;
+    const sub = o.request.subtype;
+    if (sub === 'get_settings') tail.push(ok(o.request_id, APPLIED));
+    else if (sub === 'set_permission_mode') tail.push(ok(o.request_id, { mode: String(o.request.mode) }));
+    else if (sub === 'get_usage') tail.push(ok(o.request_id, USAGE_API_KEY));
+    else tail.push(ok(o.request_id));
+  }
+>>>>>>> origin/integration
   /** What `trustscan` prints (a folder with nothing to load unless a test says otherwise) and its exit code. */
   scanOut = JSON.stringify(EMPTY_SCAN);
   scanCode = 0;
@@ -188,6 +211,7 @@ export class FakeWorkspaces {
         if (this.sendCode === 0) {
           this.sends.push({ args: command.slice(2), line: exec.written });
           this.ops.push(`send ${exec.written.slice(0, 40)}`);
+          if (this.autoRespond) this.#answerControl(exec.written);
         }
         exec.exit(this.sendCode);
       }, 0);

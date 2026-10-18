@@ -1564,6 +1564,8 @@ export class Tickets {
    * FR13: hands the most urgent claimable ticket to a session. Claimable: open, unassigned, visible to the caller, in
    * the session's workspace or the shared queue, and not an approval (a person answers those). All the tags asked for,
    * one of the types asked for; most urgent first, then oldest. One transaction, so two callers never get the same one.
+   * T-1069: a ticket NAMED by `id` may also be claimed while unassigned in progress, in review or blocked (a lane delivered it and nobody
+   * holds it: its lead could neither post the lane's verdict nor pass it on, 2026-10-17); its status stays as it is.
    */
   claimNext(caller: Caller, req: { id?: string; tags?: unknown; types?: unknown; sessionId?: string | null } = {}): TicketItem | null {
     this.#assertWrites(caller);
@@ -1578,7 +1580,11 @@ export class Tickets {
       if (wantedNumber === null) throw invalid('id', 'Not a ticket id.');
     }
     const claimed = this.#tx(() => {
-      const where = ["t.status = 'open'", 't.assignee_kind IS NULL', "t.type <> 'approval'"];
+      const where = [
+        wantedNumber !== null ? "t.status IN ('open', 'in_progress', 'in_review', 'blocked')" : "t.status = 'open'",
+        't.assignee_kind IS NULL',
+        "t.type <> 'approval'",
+      ];
       const args: (string | number)[] = [];
       const mine = this.#inWorkspace('t.workspace_id', session.workspaceId);
       where.push(`(t.workspace_id IS NULL OR ${mine.sql})`);
@@ -1596,13 +1602,12 @@ export class Tickets {
       );
       if (!row) return null;
       const at = this.#now().toISOString();
+      const status = row.status === 'open' ? 'in_progress' : row.status;
       this.#db
-        .prepare(
-          "UPDATE tickets SET assignee_kind = 'session', assignee_ref = ?, status = 'in_progress', workspace_id = ?, updated_at = ? WHERE number = ?",
-        )
-        .run(session.id, this.#stored(session.workspaceId), at, row.number);
+        .prepare('UPDATE tickets SET assignee_kind = ?, assignee_ref = ?, status = ?, workspace_id = ?, updated_at = ? WHERE number = ?')
+        .run('session', session.id, status, this.#stored(session.workspaceId), at, row.number);
       this.#addEvent(row.number, 'assigned', w, null, { from: null, to: { kind: 'session', sessionId: session.id }, claimed: true });
-      this.#addEvent(row.number, 'status', w, null, { from: 'open', to: 'in_progress' });
+      if (status !== row.status) this.#addEvent(row.number, 'status', w, null, { from: row.status, to: status });
       if (!this.#isIn(row, session.workspaceId))
         this.#addEvent(row.number, 'workspace', w, null, { from: row.workspace_id, to: session.workspaceId });
       return row.number;

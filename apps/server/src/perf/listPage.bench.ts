@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gzipSync } from 'node:zlib';
 import { ChatStore } from '../chat/store.js';
+import { CiStore } from '../ci/store.js';
 import { generateSecretKey, parseSecretKey } from '../store/secretBox.js';
 import { Store } from '../store/store.js';
 import { Tickets } from '../tickets/service.js';
@@ -88,6 +89,27 @@ try {
   }
   console.log(`-- sessions: ${SESSIONS} rows`);
   bench('sessions', sessionRun, deepS);
+
+  // CI runs (T-382 S6): raw rows. Page 1 also counts: hide 0% is the founding user (no `keep`: SQL counts), the others check run by run and
+  // their counts come from a scan of at most 10 x limit rows (null past it). Only the columns the table needs.
+  const RUNS = SMOKE ? 300 : 5_000;
+  const addRun = db.prepare(
+    "INSERT INTO ci_runs (id, number, workspace_id, repo_id, repo, pipeline, trigger, ref, sha, status, actor, created_at) VALUES (?, ?, 'docker/ws0', 'r1', 'bench', 'ci', 'manual', 'main', 'abc', ?, 'bench', ?)",
+  );
+  db.exec('BEGIN');
+  for (let i = 0; i < RUNS; i++) {
+    const at = new Date(day + Math.floor(i / 3) * 60_000).toISOString();
+    addRun.run(`bench-r-${String(i).padStart(6, '0')}`, i + 1, i % 50 === 0 ? 'running' : i % 2 ? 'failed' : 'passed', at);
+  }
+  db.exec('COMMIT');
+  const cis = new CiStore(store);
+  const runRun = (cursor: string | undefined, limit: number, hide: number) => {
+    const keep = keeper(hide);
+    const p = cis.listRunsPage({}, { scope: 'bench', cursor, limit, ...(hide === 0 ? {} : { keep: (r: { id: string }) => keep(r.id) }) });
+    return { items: p.rows, next: p.next, total: p.total, active: p.active };
+  };
+  console.log(`-- ci runs: ${RUNS} rows`);
+  bench('ci runs', runRun, undefined);
 
   // Tickets: created through the service, with a long description (the page cuts it).
   const tickets = new Tickets(store, new FakeSessions(), {});

@@ -69,6 +69,7 @@ Sub-agents stop when the chat restarts, moves to another account or ends; anythi
 ## 8. Never idle
 
 - When a sub-agent returns, dispatch the next slice at once; gate in the background.
+- **WIP 2 per lane while a Job waits** (owner, 2026-10-18). A lane whose proof Job is queued or running gets its next ready slice now. One slice waits on a Job, the other is worked on. Never hold builders or QA "until results come in": a result reaches the lane when it is ready.
 - A blocked ticket, a waiting approval or an unanswered question is never a reason to stop: take the next ranked ticket.
 - When nothing is dispatchable, say exactly why in the status file (every remaining ticket blocked, and on what).
 

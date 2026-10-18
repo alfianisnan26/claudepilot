@@ -22,6 +22,15 @@ test('the last runs (five), the failures that stand and the deploys to approve; 
   assert.deepEqual(ciCompact(ciView({ items: [], active: 0 }, glance({ ok: true, count: 0 }, { ok: true, count: 0 })), false), { value: '0', level: 'idle', title: 'CI: nothing failing' });
 });
 
+test('a running count the server could not give (null) is unavailable, never zero and never "nothing running"', () => {
+  const none = glance({ ok: true, count: 0 }, { ok: true, count: 0 });
+  const v = ciView({ items: [], active: null }, none);
+  assert.equal(v.active, null);
+  assert.deepEqual(ciCompact(v, false), { value: '0', level: 'unknown', title: 'CI: running count not available' });
+  assert.equal(ciView({ items: [] }, none).active, null, 'absent is unavailable too');
+  assert.equal(ciView({ items: [], active: 0 }, none).active, 0, 'a real zero stays zero');
+});
+
 test('failures the snapshot could not read are unavailable, never zero', () => {
   const v = ciView({ items: [], active: 0 }, glance({ ok: false, count: 0 }, { ok: false, count: 0 }));
   assert.deepEqual([v.failing, v.deploys], [null, null]);

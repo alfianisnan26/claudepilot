@@ -632,16 +632,74 @@ export class ChatStore {
     this.#writable().prepare('UPDATE chat_sessions SET report = ? WHERE id = ?').run(report, sessionId);
   }
 
+  /** T-294: the newest messages a crew channel keeps; older ones are dropped as new ones come. */
+  static readonly CREW_KEEP = 500;
+
+  /** T-294: one message on the channel of lead `leadId`, from member `fromId` (the caller redacts the text). Returns its id and time. */
+  crewPost(leadId: string, fromId: string, text: string): { id: number; at: string } {
+    const db = this.#writable();
+    const at = this.#stamp();
+    let id = 0;
+    this.transaction(() => {
+      const r = db.prepare('INSERT INTO crew_messages (lead_id, from_id, text, at) VALUES (?, ?, ?, ?)').run(leadId, fromId, text, at);
+      id = Number(r.lastInsertRowid);
+      db.prepare(
+        'DELETE FROM crew_messages WHERE lead_id = ? AND id NOT IN (SELECT id FROM crew_messages WHERE lead_id = ? ORDER BY id DESC LIMIT ?)',
+      ).run(leadId, leadId, ChatStore.CREW_KEEP);
+    });
+    return { id, at };
+  }
+
+  /**
+   * T-294: the messages of a channel after `after` (default: after the member's own cursor), oldest first, at most `limit`. Unless `peek`,
+   * the member's cursor moves to the last one returned, so the next read goes on from there; a restart keeps it. `more` says there are
+   * messages past the ones returned.
+   */
+  crewRead(
+    leadId: string,
+    sessionId: string,
+    opts: { after?: number; limit: number; peek?: boolean },
+  ): { items: { id: number; from: string; text: string; at: string }[]; cursor: number; more: boolean } {
+    const db = this.#db();
+    const stored = db.prepare('SELECT last_id FROM crew_cursors WHERE lead_id = ? AND session_id = ?').get(leadId, sessionId) as
+      { last_id: number } | undefined;
+    const start = opts.after ?? stored?.last_id ?? 0;
+    const rows = db
+      .prepare('SELECT id, from_id, text, at FROM crew_messages WHERE lead_id = ? AND id > ? ORDER BY id LIMIT ?')
+      .all(leadId, start, opts.limit + 1) as { id: number; from_id: string; text: string; at: string }[];
+    const more = rows.length > opts.limit;
+    const items = rows.slice(0, opts.limit).map((r) => ({ id: r.id, from: r.from_id, text: r.text, at: r.at }));
+    const cursor = items.at(-1)?.id ?? start;
+    if (!opts.peek && items.length) {
+      this.#writable()
+        .prepare(
+          'INSERT INTO crew_cursors (lead_id, session_id, last_id) VALUES (?, ?, ?) ON CONFLICT (lead_id, session_id) DO UPDATE SET last_id = excluded.last_id',
+        )
+        .run(leadId, sessionId, cursor);
+    }
+    return { items, cursor, more };
+  }
+
+  /** T-294: the channel of lead `from` becomes the channel of lead `to` (its crew moved with a continuation or a transfer): messages and cursors go along. */
+  #moveCrewChannel(from: string, to: string): void {
+    const db = this.#writable();
+    db.prepare('UPDATE crew_messages SET lead_id = ? WHERE lead_id = ?').run(to, from);
+    db.prepare('UPDATE OR IGNORE crew_cursors SET lead_id = ? WHERE lead_id = ?').run(to, from);
+    db.prepare('DELETE FROM crew_cursors WHERE lead_id = ?').run(from); // a cursor `to` already had stays as it was
+  }
+
   /**
    * T-294: the workers of `from` that have not ended report to `to` from now on (a continuation takes over its predecessor's live crew);
-   * ended ones stay where they were (history). Returns the ids moved.
+   * ended ones stay where they were (history). Returns the ids moved. The crew channel goes with them.
    */
   adoptLiveChildren(from: string, to: string): string[] {
     const ids = (
       this.#db().prepare(`SELECT id FROM chat_sessions WHERE parent_id = ? AND state != 'ended'`).all(from) as { id: string }[]
     ).map((r) => r.id);
-    if (ids.length)
+    if (ids.length) {
       this.#writable().prepare(`UPDATE chat_sessions SET parent_id = ? WHERE parent_id = ? AND state != 'ended'`).run(to, from);
+      this.#moveCrewChannel(from, to);
+    }
     return ids;
   }
 
@@ -655,6 +713,7 @@ export class ChatStore {
   /** Sessions that report to `from` report to `to` instead (a transfer: the successor carries on as the parent). */
   reparentChildren(from: string, to: string): void {
     this.#writable().prepare('UPDATE chat_sessions SET parent_id = ? WHERE parent_id = ?').run(to, from);
+    this.#moveCrewChannel(from, to);
   }
 
   /** Sessions whose process should be running (for liveness checks and reattaching after a restart). */

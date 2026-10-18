@@ -9,8 +9,11 @@ on:
     branches: [integration]
   manual: {}
 timeout: 2h
+# Only the newest push needs its check (2026-10-18: 20 runs queued behind one that had run for 7 hours on the Mac runner): a new push stops
+# the check in progress and takes its place.
 concurrency:
   group: check-claudepilot
+  cancel-in-progress: true
 jobs:
   gate:
     name: Gate
