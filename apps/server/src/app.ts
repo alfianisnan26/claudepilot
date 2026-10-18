@@ -254,11 +254,14 @@ export function createApp(
   /**
    * The session token of a request (sessionCookie.ts: the `__Host-` name wins, the old one only when it is absent). A valid session (the
    * server code's or an account's, a member's too) that came under the old name over https is moved to the new one (and the old cleared), so
-   * the change signs nobody out (T-976).
+   * the change signs nobody out (T-976). The move happens once per request: the route guard reads the token first and the route again, and
+   * a second move would set the cookie twice (T-1043 S0b, teamsSso.test.ts).
    */
+  const moved = new WeakSet<Request>();
   const sessionToken = (c: Context<Env>): string | undefined => {
     const { token, legacy } = sessionFromCookies(c.req.header('cookie'));
-    if (token && legacy && https(c) && portal.anySession(token)) {
+    if (token && legacy && https(c) && !moved.has(c.req.raw) && portal.anySession(token)) {
+      moved.add(c.req.raw);
       const spec = sessionCookieSpec(true, ttlMs);
       setCookie(c, spec.name, token, spec.options);
       deleteCookie(c, LEGACY_SESSION_COOKIE, { path: '/' });
