@@ -270,7 +270,8 @@ How the build differs from the table above:
 - **Loops.** Each portal loop defines itself in `schedules/registry.ts` (`defineLoop`) and calls its heartbeat: `started`, `stopped`,
   and `ok` or `fail` after each pass. Six beat today: `orphan-sweep`, `triggers-cron`, `usage-probe`, `delivery-reconcile`,
   `version-canary`, `notify-clock`. A row has the module, interval, last run, last result, last error (credentials cleaned, 200
-  characters at most) and next run. Kept in memory: a restart starts the loops again.
+  characters at most; the tool returns it as untrusted text, source `loop`) and next run. Kept in memory: a restart starts the loops
+  again.
 - **States.** `ok`; `failing` (the last pass failed); `stale` (running, but no beat, or no start, for more than two intervals; stale
   wins over failing); `stopped`; `disabled` (a trigger that is off or paused).
 - **Cron triggers.** Expression, last and next time, and how the last run ended. A trigger's name comes back to the tool as untrusted

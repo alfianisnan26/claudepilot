@@ -1,13 +1,14 @@
 // `schedules_list` on the Portal MCP (general-manager PRD §9.2, T-968 S2b): the same list as `GET /api/schedules`, read only. Declared in
 // ./authz.ts (`view` on the platform's `system` area): the dispatch refuses anyone else with NOT_FOUND before this runs. A trigger's name
-// was written by a person or an agent: it is returned as untrusted text.
+// was written by a person or an agent, and a loop's last error carries text from outside (a workspace, a remote, a log): both are returned
+// as untrusted text, labelled with the row's kind.
 
 import type { ScheduleRow, ScheduleState } from '@portal/contracts';
 import { portalTools, z, type ToolRegistry } from '../portalmcp/registry.js';
 import type { UntrustedText } from '../portalmcp/sanitize.js';
 import type { Schedules } from './service.js';
 
-export type ScheduleToolRow = Omit<ScheduleRow, 'name'> & { name: string | UntrustedText | null };
+export type ScheduleToolRow = Omit<ScheduleRow, 'name' | 'last_error'> & { name: string | UntrustedText | null; last_error: UntrustedText | null };
 
 const ATTENTION: ReadonlySet<ScheduleState> = new Set(['stale', 'failing']);
 
@@ -27,7 +28,11 @@ export function registerSchedulesTools(schedules: Pick<Schedules, 'list'>, regis
     }),
     handler(ctx, args) {
       const rows = schedules.list().filter((r) => (!args.kind || r.kind === args.kind) && (!args.attention || ATTENTION.has(r.state)));
-      const out: ScheduleToolRow[] = rows.map((r) => (r.kind === 'trigger' ? { ...r, name: ctx.untrusted(r.name, 'trigger') } : r));
+      const out: ScheduleToolRow[] = rows.map((r) => ({
+        ...r,
+        name: r.kind === 'trigger' ? ctx.untrusted(r.name, 'trigger') : r.name,
+        last_error: ctx.untrusted(r.last_error, r.kind),
+      }));
       const stale = rows.filter((r) => r.state === 'stale').length;
       const failing = rows.filter((r) => r.state === 'failing').length;
       return {
