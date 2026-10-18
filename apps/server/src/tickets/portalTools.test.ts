@@ -405,6 +405,31 @@ test('T-294: a crew worker comments on its lead’s ticket and changes nothing e
   }
 });
 
+test('crew_queue (2026-10-18): a crew lane comments on an UNASSIGNED ticket of its own workspace; not another workspace, the shared queue, or without a lead', async () => {
+  const r = await rig();
+  const audits: { kind: string; detail?: Record<string, unknown> }[] = [];
+  r.tickets.onAudit = (e) => void audits.push(e);
+  try {
+    await r.agent('docker/api', 'lead');
+    const lane = await r.agent('docker/api', 'lane');
+    const solo = await r.agent('docker/api', 'solo');
+    r.sessions.sessions.set('lane', { ...r.sessions.sessions.get('lane')!, parentId: 'lead', ticketId: 'T-99' });
+    r.tickets.create(UI, { summary: 'in its workspace, nobody holds it', workspaceId: 'docker/api' }); // T-1
+    r.tickets.create(UI, { summary: 'another workspace', workspaceId: 'docker/web' }); // T-2
+    r.tickets.create(UI, { summary: 'the shared queue' }); // T-3
+    r.tickets.create(UI, { summary: 'held by a person', workspaceId: 'docker/api', assignee: { kind: 'user', name: 'Admin' } }); // T-4
+    const code = async (t: { secret: string }, id: string) => (await r.h.call(t.secret, 'ticket_comment', { id, text: `QA verdict on ${id}` })).result?.structuredContent?.error?.code;
+    assert.equal(await code(lane, 'T-1'), undefined, 'its workspace, unassigned: a comment');
+    assert.equal(audits.find((x) => x.kind === 'ticket.worker_commented')?.detail?.why, 'crew_queue');
+    assert.equal((await r.h.call(lane.secret, 'ticket_update', { id: 'T-1', priority: 'urgent' })).result?.structuredContent?.error?.code, 'FORBIDDEN', 'a comment only');
+    assert.equal(await code(lane, 'T-2'), 'NOT_FOUND', 'another workspace: not even seen');
+    for (const id of ['T-3', 'T-4']) assert.equal(await code(lane, id), 'FORBIDDEN', id);
+    assert.equal(await code(solo, 'T-1'), 'FORBIDDEN', 'a session with no lead is not a crew lane');
+  } finally {
+    r.done();
+  }
+});
+
 test('T-397: a worker comments on the ticket its spawn named and on its lead’s (or its lead’s successor’s) tickets, audited as itself; nothing else', async () => {
   const r = await rig();
   const audits: { kind: string; actor: string; detail?: Record<string, unknown> }[] = [];

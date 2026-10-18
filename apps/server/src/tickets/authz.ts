@@ -165,8 +165,11 @@ export function canAgentTagChecklist(facts: {
 
 /* ---------- A crew worker reports on its work (T-294, T-397) ---------- */
 
-/** Why a worker may comment: the ticket its spawn named (`spawn_ticket`), a ticket its lead holds (`lead_ticket`), or one a crew mate holds (`crew_ticket`). */
-export type WorkerCommentReason = 'spawn_ticket' | 'lead_ticket' | 'crew_ticket';
+/**
+ * Why a worker may comment: the ticket its spawn named (`spawn_ticket`), a ticket its lead holds (`lead_ticket`), one a crew mate holds
+ * (`crew_ticket`), or an unassigned ticket of its own workspace (`crew_queue`).
+ */
+export type WorkerCommentReason = 'spawn_ticket' | 'lead_ticket' | 'crew_ticket' | 'crew_queue';
 export type WorkerCommentDecision = { allow: true; why: WorkerCommentReason } | { allow: false };
 
 /**
@@ -178,6 +181,9 @@ export type WorkerCommentDecision = { allow: true; why: WorkerCommentReason } | 
  *   evidence there; 2026-10-17 every Konfersi QA verdict comment was refused, T-969). A session outside the crew stays refused.
  * - `spawn_ticket`: the ticket its spawn named (the session's `ticketId`, set only by `session_spawn`) while NOBODY holds it (the lead started
  *   the worker before claiming). Held by a person or by another session, it is refused: a lead cannot open someone else's ticket by naming it.
+ * - `crew_queue` (2026-10-18): a ticket NOBODY holds, in the worker's own workspace. Long-lived lanes (D-70) take ticket after ticket, so their
+ *   spawn ticket is rarely the one they work, and every report on an unassigned ticket went to the coordinator to post (T-84 c11361, c11378,
+ *   c11481). A comment only; another workspace's ticket, or one held by a person or by another crew, stays refused.
  * Pure: the service gathers the facts, keeps today's refusal on a deny, and writes the audit row with `why`.
  */
 export function canWorkerComment(facts: {
@@ -190,11 +196,14 @@ export function canWorkerComment(facts: {
   holderAncestors: readonly string[];
   /** The holder session's own lead (`parentId`), when it is a session with one. */
   holderLead?: string | null;
+  /** The ticket's workspace (null: the shared queue). */
+  ticketWorkspace?: string | null;
 }): WorkerCommentDecision {
   const lead = facts.worker.parentId;
   if (!lead || facts.worker.state === 'ended') return { allow: false };
   if (facts.holderKind === 'session' && facts.holderId && (facts.holderId === lead || facts.holderAncestors.includes(lead))) return { allow: true, why: 'lead_ticket' };
   if (facts.holderKind === 'session' && facts.holderId && facts.holderId !== facts.worker.id && facts.holderLead === lead) return { allow: true, why: 'crew_ticket' };
   if (facts.holderKind === null && facts.worker.ticketId === facts.ticketId) return { allow: true, why: 'spawn_ticket' };
+  if (facts.holderKind === null && facts.ticketWorkspace && facts.ticketWorkspace === facts.worker.workspaceId) return { allow: true, why: 'crew_queue' };
   return { allow: false };
 }

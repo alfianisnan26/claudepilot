@@ -568,6 +568,7 @@ export class Tickets {
       holderId: row.assignee_ref,
       holderAncestors: holder ? this.#ancestors(holder) : [],
       holderLead: holder?.parentId ?? null,
+      ticketWorkspace: row.workspace_id,
     });
     return d.allow ? d.why : null;
   }
