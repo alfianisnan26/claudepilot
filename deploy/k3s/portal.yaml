@@ -87,9 +87,9 @@ spec:
               value: local-path
             - name: PORTAL_K8S_STORAGE
               value: 10Gi
-            # Keep workspace pods off the control-plane node (it is short of memory).
+            # Keep workspace pods off the control-plane node: any worker-pool node (k3s-node2, k3s-node3).
             - name: PORTAL_K8S_NODE_SELECTOR
-              value: kubernetes.io/hostname=k3s-node2
+              value: isnan.me/pool=worker
             # What a workspace pod asks the scheduler to reserve (its limits stay): with only limits set Kubernetes reserves the whole
             # limit, and a 2-CPU workspace stayed Pending ("Insufficient cpu") while the node was 40% busy.
             # 1 CPU and 2 GiB (owner, 2026-10-13): at 250m the dev workspace lost every fight for CPU against Jobs and neighbours on a busy node
