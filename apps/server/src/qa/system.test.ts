@@ -25,13 +25,24 @@ async function status(store: Store): Promise<SystemStatus> {
   const portal = new Portal(CODE, 60_000);
   const token = portal.signIn(CODE);
   const app = make(portal, stub, store, stub, stub, stub, stub, stub, { serveWeb: false, poolService: stub, mcp: stub, skills: stub });
-  const res = await app.request('http://localhost:3000/api/admin/system', { headers: { host: 'localhost:3000', cookie: `portal_session=${token}` } });
+  const res = await app.request('http://localhost:3000/api/admin/system', {
+    headers: { host: 'localhost:3000', cookie: `portal_session=${token}` },
+  });
   assert.equal(res.status, 200);
   return ((await res.json()) as { data: SystemStatus }).data;
 }
 
 const first = MIGRATIONS.filter((m) => m.version <= 5);
-const failing = [...first, { version: 6, name: 'boom', up: () => { throw new Error('table already exists'); } }];
+const failing = [
+  ...first,
+  {
+    version: 6,
+    name: 'boom',
+    up: () => {
+      throw new Error('table already exists');
+    },
+  },
+];
 
 test('a failed migration freezes the database without offering key actions, and still names the portal', async () => {
   const dir = tempDirectory('cp-qa-sys-');
@@ -40,7 +51,10 @@ test('a failed migration freezes the database without offering key actions, and 
   const store = await Store.open({ dataDir: dir, secretKey: key, migrations: failing });
   const s = await status(store);
   assert.equal(s.trust.state, 'frozen');
-  assert.deepEqual(s.trust.reasons.map((r) => r.code), ['migration-failed']);
+  assert.deepEqual(
+    s.trust.reasons.map((r) => r.code),
+    ['migration-failed'],
+  );
   assert.match(s.trust.reasons[0]!.message, /migration 6 \(boom\): table already exists/);
   assert.equal(s.secretKey.canUnlock, false, 'a key cannot fix a failed migration');
   assert.equal(s.secretKey.canSetUp, false);

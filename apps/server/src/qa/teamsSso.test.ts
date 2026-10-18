@@ -27,8 +27,19 @@ const H = { host: 'pilot.example.com', origin: 'http://pilot.example.com', 'cont
 
 function fakeChat() {
   const calls: string[] = [];
-  const sessions: Record<string, { id: string; title: string; state: string; workspaceId: string; waiting: number; lastSeq: number; mode: string }> = {
-    lead: { id: 'lead', title: 'Orchestrator', state: 'working', workspaceId: 'kubernetes/kohi-event', waiting: 0, lastSeq: 3, mode: 'default' },
+  const sessions: Record<
+    string,
+    { id: string; title: string; state: string; workspaceId: string; waiting: number; lastSeq: number; mode: string }
+  > = {
+    lead: {
+      id: 'lead',
+      title: 'Orchestrator',
+      state: 'working',
+      workspaceId: 'kubernetes/kohi-event',
+      waiting: 0,
+      lastSeq: 3,
+      mode: 'default',
+    },
   };
   return {
     calls,
@@ -49,18 +60,37 @@ async function build() {
   const portal = new Portal(CODE, 60_000);
   const chat = fakeChat();
   const idp = fakeIdp();
-  const app = make(portal, stub, store, stub, stub, stub, stub, chat, { serveWeb: false, poolService: stub, mcp: stub, skills: stub, oidc: idp.client });
+  const app = make(portal, stub, store, stub, stub, stub, stub, chat, {
+    serveWeb: false,
+    poolService: stub,
+    mcp: stub,
+    skills: stub,
+    oidc: idp.client,
+  });
   const callOver = (scheme: 'http' | 'https') => (method: string, path: string, body?: unknown, cookie?: string) =>
     app.request(
       `${scheme}://pilot.example.com${path}`,
-      { method, headers: { ...H, origin: `${scheme}://pilot.example.com`, ...(cookie ? { cookie } : {}) }, body: body === undefined ? undefined : JSON.stringify(body) },
+      {
+        method,
+        headers: { ...H, origin: `${scheme}://pilot.example.com`, ...(cookie ? { cookie } : {}) },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      },
       { incoming: { socket: { remoteAddress: '127.0.0.1' } } },
     );
   const call = callOver('http');
   // `(^|[\s,])` so `portal_session` never matches inside `__Host-portal_session`.
-  const cookieOf = (r: Response, name = 'portal_session') => new RegExp(`(?:^|[\\s,])(${name}=[^;]+)`).exec(r.headers.get('set-cookie') ?? '')?.[1];
+  const cookieOf = (r: Response, name = 'portal_session') =>
+    new RegExp(`(?:^|[\\s,])(${name}=[^;]+)`).exec(r.headers.get('set-cookie') ?? '')?.[1];
   const data = async <T>(r: Response) => ((await r.json()) as { data: T }).data;
-  return { call, https: callOver('https'), cookieOf, data, chat, idp, done: () => (store.close(), rmSync(dataDir, { recursive: true, force: true })) };
+  return {
+    call,
+    https: callOver('https'),
+    cookieOf,
+    data,
+    chat,
+    idp,
+    done: () => (store.close(), rmSync(dataDir, { recursive: true, force: true })),
+  };
 }
 
 test('SSO: the domain decides; a password is refused for it; a whole sign-in makes a member in the team; the secret never comes back', async () => {
@@ -68,7 +98,12 @@ test('SSO: the domain decides; a password is refused for it; a whole sign-in mak
   try {
     const admin = cookieOf(await call('POST', '/api/login', { code: CODE }))!;
     const team = await data<{ id: string }>(await call('POST', '/api/admin/teams', { name: 'Konfersi' }, admin));
-    const created = await call('POST', '/api/admin/sso', { name: 'Example', issuer: ISSUER, clientId: CLIENT_ID, clientSecret: SECRET, domains: ['example.com'], defaultTeamId: team.id }, admin);
+    const created = await call(
+      'POST',
+      '/api/admin/sso',
+      { name: 'Example', issuer: ISSUER, clientId: CLIENT_ID, clientSecret: SECRET, domains: ['example.com'], defaultTeamId: team.id },
+      admin,
+    );
     assert.equal(created.status, 201);
     const listed = JSON.stringify(await data(await call('GET', '/api/admin/sso', undefined, admin)));
     assert.ok(!listed.includes(SECRET) && listed.includes('"hasClientSecret":true'));
@@ -101,11 +136,16 @@ test('SSO: the domain decides; a password is refused for it; a whole sign-in mak
     assert.equal(back.headers.get('location'), '/');
     const ana = cookieOf(back)!;
     assert.ok(ana && bind);
-    const me = await data<{ kind: string; user: { email: string; role: string; id: string } }>(await call('GET', '/api/me', undefined, ana));
+    const me = await data<{ kind: string; user: { email: string; role: string; id: string } }>(
+      await call('GET', '/api/me', undefined, ana),
+    );
     assert.deepEqual([me.kind, me.user.email, me.user.role], ['account', 'ana@example.com', 'member']);
     assert.equal((await call('GET', '/api/workspaces', undefined, ana)).status, 403, 'a member, not an admin');
     const mine = await data<{ id: string; myRole: string }[]>(await call('GET', '/api/me/teams', undefined, ana));
-    assert.deepEqual(mine.map((t) => [t.id, t.myRole]), [[team.id, 'member']]);
+    assert.deepEqual(
+      mine.map((t) => [t.id, t.myRole]),
+      [[team.id, 'member']],
+    );
     // A member reaches none of the admin's SSO or share routes.
     assert.equal((await call('GET', '/api/admin/sso', undefined, ana)).status, 403);
     assert.equal((await call('GET', '/api/admin/session-shares', undefined, ana)).status, 403);
@@ -120,21 +160,42 @@ test('T-976 over https: an email sign-in and an SSO sign-in both set __Host-port
   const sessionSet = (r: Response) => r.headers.getSetCookie().filter((c) => c.startsWith(`${HOST_COOKIE}=`) && !/Max-Age=0/i.test(c));
   const assertHostCookie = (r: Response, what: string) => {
     const [c, ...more] = sessionSet(r);
-    assert.ok(c, `${what}: ${r.headers.getSetCookie().map((x) => x.split('=')[0]).join(', ')}`);
+    assert.ok(
+      c,
+      `${what}: ${r.headers
+        .getSetCookie()
+        .map((x) => x.split('=')[0])
+        .join(', ')}`,
+    );
     assert.equal(more.length, 0, what);
     assert.match(c, /;\s*Secure/i, what);
     assert.match(c, /;\s*Path=\/(;|$)/, what);
     assert.match(c, /;\s*HttpOnly/i, what);
     assert.doesNotMatch(c, /;\s*Domain=/i, what);
-    assert.ok(!r.headers.getSetCookie().some((x) => x.startsWith('portal_session=') && !/Max-Age=0/i.test(x)), `${what}: the old name is only ever cleared over https`);
+    assert.ok(
+      !r.headers.getSetCookie().some((x) => x.startsWith('portal_session=') && !/Max-Age=0/i.test(x)),
+      `${what}: the old name is only ever cleared over https`,
+    );
     return `${HOST_COOKIE}=${c.slice(HOST_COOKIE.length + 1).split(';')[0]}`;
   };
   try {
     const admin = cookieOf(await https('POST', '/api/login', { code: CODE }), HOST_COOKIE)!;
     assert.ok(admin, 'the server code over https');
     const team = await data<{ id: string }>(await https('POST', '/api/admin/teams', { name: 'Konfersi' }, admin));
-    assert.equal((await https('POST', '/api/admin/sso', { name: 'Example', issuer: ISSUER, clientId: CLIENT_ID, clientSecret: SECRET, domains: ['example.com'], defaultTeamId: team.id }, admin)).status, 201);
-    assert.ok((await data<{ id: string }>(await https('POST', '/api/admin/users', { email: 'pw@corp.test', password: PASSWORD }, admin))).id);
+    assert.equal(
+      (
+        await https(
+          'POST',
+          '/api/admin/sso',
+          { name: 'Example', issuer: ISSUER, clientId: CLIENT_ID, clientSecret: SECRET, domains: ['example.com'], defaultTeamId: team.id },
+          admin,
+        )
+      ).status,
+      201,
+    );
+    assert.ok(
+      (await data<{ id: string }>(await https('POST', '/api/admin/users', { email: 'pw@corp.test', password: PASSWORD }, admin))).id,
+    );
 
     // An email account.
     const pw = await https('POST', '/api/login', { email: 'pw@corp.test', password: PASSWORD });
@@ -167,8 +228,14 @@ test('T-976 over https: an email sign-in and an SSO sign-in both set __Host-port
     const out = await https('POST', '/api/logout', {}, both);
     assert.equal(out.status, 200);
     const cleared = out.headers.getSetCookie();
-    assert.ok(cleared.some((c) => c.startsWith(`${HOST_COOKIE}=;`) && /Max-Age=0/i.test(c) && /;\s*Secure/i.test(c)), cleared.join(' | '));
-    assert.ok(cleared.some((c) => c.startsWith('portal_session=;') && /Max-Age=0/i.test(c)), cleared.join(' | '));
+    assert.ok(
+      cleared.some((c) => c.startsWith(`${HOST_COOKIE}=;`) && /Max-Age=0/i.test(c) && /;\s*Secure/i.test(c)),
+      cleared.join(' | '),
+    );
+    assert.ok(
+      cleared.some((c) => c.startsWith('portal_session=;') && /Max-Age=0/i.test(c)),
+      cleared.join(' | '),
+    );
     assert.equal((await https('GET', '/api/me', undefined, ana)).status, 401, 'the SSO session is ended');
     assert.equal((await https('GET', '/api/me', undefined, pwCookie)).status, 200, 'the other session is not');
 
@@ -203,12 +270,22 @@ test('teams and granular shares: read-only through a team; an owner manages peop
 
     // Share to the team: read only, with an end.
     const end = new Date(Date.now() + 86_400_000).toISOString();
-    const put = await call('PUT', '/api/admin/session-grants/lead', { subject: { kind: 'team', id: team.id }, caps: ['read'], expiresAt: end, note: 'on call' }, admin);
+    const put = await call(
+      'PUT',
+      '/api/admin/session-grants/lead',
+      { subject: { kind: 'team', id: team.id }, caps: ['read'], expiresAt: end, note: 'on call' },
+      admin,
+    );
     assert.equal(put.status, 200);
     const share = await data<{ id: string; caps: string[]; subjectName: string }>(put);
     assert.deepEqual([share.caps, share.subjectName], [['read'], 'Ops']);
-    const list = await data<{ id: string; caps: string[]; via: string[]; expiresAt: string }[]>(await call('GET', '/api/me/sessions', undefined, mem.c));
-    assert.deepEqual(list.map((x) => [x.id, x.caps, x.via]), [['lead', ['read'], ['Ops']]]);
+    const list = await data<{ id: string; caps: string[]; via: string[]; expiresAt: string }[]>(
+      await call('GET', '/api/me/sessions', undefined, mem.c),
+    );
+    assert.deepEqual(
+      list.map((x) => [x.id, x.caps, x.via]),
+      [['lead', ['read'], ['Ops']]],
+    );
     assert.equal((await call('GET', '/api/me/sessions/lead/events?after=0', undefined, mem.c)).status, 200);
     assert.equal((await call('POST', '/api/me/sessions/lead/send', { text: 'hi' }, mem.c)).status, 403, 'read only');
     assert.equal((await call('GET', '/api/me/sessions/lead', undefined, out.c)).status, 404, 'not in the team');
@@ -225,13 +302,19 @@ test('teams and granular shares: read-only through a team; an owner manages peop
     // Bypass: an acting share needs the acceptance; without it the share is not written.
     chat.sessions.lead!.mode = 'bypassPermissions';
     assert.equal((await call('POST', '/api/me/sessions/lead/send', { text: 'x' }, mem.c)).status, 403, 'Bypass came after the share');
-    assert.equal((await call('PUT', '/api/admin/session-grants/lead', { subject: { kind: 'user', id: out.id }, caps: ['send'] }, admin)).status, 422);
+    assert.equal(
+      (await call('PUT', '/api/admin/session-grants/lead', { subject: { kind: 'user', id: out.id }, caps: ['send'] }, admin)).status,
+      422,
+    );
     assert.equal((await call('GET', '/api/me/sessions/lead', undefined, out.c)).status, 404, 'the refused share was not written');
     chat.sessions.lead!.mode = 'default';
 
     // The admin's overview lists it; leaving the team ends it at once; removing the team removes its shares.
     const all = await data<{ id: string; sessionTitle: string }[]>(await call('GET', '/api/admin/session-shares', undefined, admin));
-    assert.deepEqual(all.map((x) => [x.id, x.sessionTitle]), [[share.id, 'Orchestrator']]);
+    assert.deepEqual(
+      all.map((x) => [x.id, x.sessionTitle]),
+      [[share.id, 'Orchestrator']],
+    );
     assert.equal((await call('DELETE', `/api/teams/${team.id}/members/${mem.id}`, undefined, mem.c)).status, 200, 'a member may leave');
     assert.equal((await call('GET', '/api/me/sessions/lead', undefined, mem.c)).status, 404);
     assert.equal((await call('DELETE', `/api/teams/${team.id}/members/${own.id}`, undefined, own.c)).status, 409, 'the last owner stays');

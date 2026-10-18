@@ -24,11 +24,25 @@ export async function until(cond: () => boolean, ms = 3000) {
 export const line = (value: unknown) => `${JSON.stringify(value)}\n`;
 /** A Claude Code success reply to one of the portal's control requests (body optional). */
 export const ok = (requestId: string, response?: unknown) =>
-  line({ type: 'control_response', response: { subtype: 'success', request_id: requestId, ...(response === undefined ? {} : { response }) } });
-export const fail = (requestId: string, error: string) => line({ type: 'control_response', response: { subtype: 'error', request_id: requestId, error, error_code: 'invalid' } });
+  line({
+    type: 'control_response',
+    response: { subtype: 'success', request_id: requestId, ...(response === undefined ? {} : { response }) },
+  });
+export const fail = (requestId: string, error: string) =>
+  line({ type: 'control_response', response: { subtype: 'error', request_id: requestId, error, error_code: 'invalid' } });
 
 /** `trustscan` for a folder with none of the project settings files. */
-export const EMPTY_SCAN = { hash: TRUST_EMPTY_HASH, files: [], invalid: [], mcpServers: [], hooks: [], plugins: [], allowRules: 0, envNames: [], extras: [] };
+export const EMPTY_SCAN = {
+  hash: TRUST_EMPTY_HASH,
+  files: [],
+  invalid: [],
+  mcpServers: [],
+  hooks: [],
+  plugins: [],
+  allowRules: 0,
+  envNames: [],
+  extras: [],
+};
 
 /** A controllable stand-in for one `workspaces.exec` call. */
 export class FakeExec implements ExecSession {
@@ -140,8 +154,14 @@ export class FakeWorkspaces {
    * and every call is recorded with its arguments. The defaults make a worktree beside the repository, clean and merged.
    */
   readonly wtCalls: { cmd: string; args: string[] }[] = [];
-  wtAdd: (args: string[]) => { code: number; out: string } = ([folder, leaf, branch]) => ({ code: 0, out: `ok\t${folder}.worktrees/${leaf}\t${branch}\tc0ffee${'0'.repeat(34)}\t${folder}\t\n` });
-  wtStatus: (args: string[]) => { code: number; out: string } = () => ({ code: 0, out: 'dirty=0\nuntracked=0\nunique=0\nbranch=feature\nhead=c0ffee\n' });
+  wtAdd: (args: string[]) => { code: number; out: string } = ([folder, leaf, branch]) => ({
+    code: 0,
+    out: `ok\t${folder}.worktrees/${leaf}\t${branch}\tc0ffee${'0'.repeat(34)}\t${folder}\t\n`,
+  });
+  wtStatus: (args: string[]) => { code: number; out: string } = () => ({
+    code: 0,
+    out: 'dirty=0\nuntracked=0\nunique=0\nbranch=feature\nhead=c0ffee\n',
+  });
   wtRemove: (args: string[]) => { code: number; out: string } = () => ({ code: 0, out: 'branch=deleted\nok\n' });
   wtList: (args: string[]) => { code: number; out: string } = () => ({ code: 0, out: '[]' });
   /** `sh -c` scripts the controller ran (mkdir, the transfer file's write), with what they got on stdin. */
@@ -164,7 +184,9 @@ export class FakeWorkspaces {
       const args = command.slice(3);
       this.wtCalls.push({ cmd, args });
       this.ops.push(`${cmd} ${args.join(' ')}`.trim());
-      const reply = (cmd === 'wt-add' ? this.wtAdd : cmd === 'wt-status' ? this.wtStatus : cmd === 'wt-remove' ? this.wtRemove : this.wtList)(args);
+      const reply = (
+        cmd === 'wt-add' ? this.wtAdd : cmd === 'wt-status' ? this.wtStatus : cmd === 'wt-remove' ? this.wtRemove : this.wtList
+      )(args);
       setTimeout(() => {
         exec.push(reply.out);
         exec.exit(reply.code);
@@ -312,7 +334,8 @@ export async function liveSession(opts: ChatControllerOptions = {}, start = fals
     return p;
   };
   const inputs = (uuid: string) => messages.flatMap((m) => (m.type === 'input' && m.uuid === uuid ? [m.state] : []));
-  const lastTasks = (): ChatTask[] | undefined => messages.findLast((m): m is Extract<ChatServerMessage, { type: 'tasks' }> => m.type === 'tasks')?.tasks;
+  const lastTasks = (): ChatTask[] | undefined =>
+    messages.findLast((m): m is Extract<ChatServerMessage, { type: 'tasks' }> => m.type === 'tasks')?.tasks;
   const state = () => controller.get(id)!.state;
   const done = async () => {
     await controller.end(id).catch(() => undefined);
@@ -335,7 +358,22 @@ export const USAGE_API_KEY = {
     total_duration_ms: 6987,
     total_lines_added: 0,
     total_lines_removed: 0,
-    model_usage: { 'claude-opus-5-5': { inputTokens: 10, outputTokens: 5, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, webSearchRequests: 0, costUSD: 0.00014, contextWindow: 1_000_000, maxOutputTokens: 128_000, thinkingTokens: 0, canonicalModel: 'claude-opus-5-5', provider: 'firstParty', costBasis: 'list' } },
+    model_usage: {
+      'claude-opus-5-5': {
+        inputTokens: 10,
+        outputTokens: 5,
+        cacheReadInputTokens: 0,
+        cacheCreationInputTokens: 0,
+        webSearchRequests: 0,
+        costUSD: 0.00014,
+        contextWindow: 1_000_000,
+        maxOutputTokens: 128_000,
+        thinkingTokens: 0,
+        canonicalModel: 'claude-opus-5-5',
+        provider: 'firstParty',
+        costBasis: 'list',
+      },
+    },
   },
   subscription_type: null,
   rate_limits_available: false,
@@ -344,7 +382,14 @@ export const USAGE_API_KEY = {
 };
 /** A main-thread `system/init`: a turn starts, on the pool's helper (what Claude Code 2.1.296 reports for it). */
 export const init = (sessionId: string, mode = 'default', apiKeySource: string | null = 'apiKeyHelper') =>
-  line({ type: 'system', subtype: 'init', session_id: sessionId, model: 'claude-opus-5-5', permissionMode: mode, ...(apiKeySource === null ? {} : { apiKeySource }) });
+  line({
+    type: 'system',
+    subtype: 'init',
+    session_id: sessionId,
+    model: 'claude-opus-5-5',
+    permissionMode: mode,
+    ...(apiKeySource === null ? {} : { apiKeySource }),
+  });
 
 /** A first turn starts (so Claude Code has a transcript to resume) and its applied settings are read. */
 export async function firstTurn(s: Live) {
@@ -358,7 +403,11 @@ export async function firstTurn(s: Live) {
  * same store and workspaces starts and attaches again. `s.controller`, `s.tail` and `s.state` become the new ones and `s.done` stops it
  * too. `setup` installs what the owner installs (the Bypass policy, the server code check) before it starts.
  */
-export async function restartPortal(s: Live, opts: ChatControllerOptions = {}, setup?: (c: ChatController) => void): Promise<ChatController> {
+export async function restartPortal(
+  s: Live,
+  opts: ChatControllerOptions = {},
+  setup?: (c: ChatController) => void,
+): Promise<ChatController> {
   s.controller.stop();
   const tails = s.ws.tails.length;
   const next = new ChatController(s.store, s.ws as unknown as Workspaces, opts);
@@ -388,4 +437,3 @@ export async function vanish(s: Live) {
   await until(() => s.state() === 'interrupted');
   s.ws.alive = true;
 }
-

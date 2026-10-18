@@ -18,7 +18,7 @@ metadata:
   name: claudepilot-portal-backup
   namespace: isnan-claudepilot
 spec:
-  schedule: "17 2 * * *"
+  schedule: '17 2 * * *'
   timeZone: Etc/UTC
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: 3600
@@ -44,7 +44,7 @@ spec:
               # Keep this tag the same as the portal Deployment's (portal.yaml); the deploy pipeline bumps both once applied.
               image: registry.int.isnan.me/claudepilot/portal:2026.10.17-10
               imagePullPolicy: IfNotPresent
-              command: ["node", "--disable-warning=ExperimentalWarning", "apps/server/dist/cli.js", "backup", "--nightly"]
+              command: ['node', '--disable-warning=ExperimentalWarning', 'apps/server/dist/cli.js', 'backup', '--nightly']
               resources:
                 requests:
                   cpu: 50m
@@ -54,7 +54,7 @@ spec:
               securityContext:
                 allowPrivilegeEscalation: false
                 capabilities:
-                  drop: ["ALL"]
+                  drop: ['ALL']
               volumeMounts:
                 - name: state
                   mountPath: /data
@@ -74,7 +74,7 @@ spec:
                 - --endpoint-url
                 - BACKUP_S3_ENDPOINT
                 - --exclude
-                - ".*"
+                - '.*'
                 - --delete
                 - --only-show-errors
               env:
@@ -99,7 +99,7 @@ spec:
               securityContext:
                 allowPrivilegeEscalation: false
                 capabilities:
-                  drop: ["ALL"]
+                  drop: ['ALL']
               volumeMounts:
                 - name: state
                   mountPath: /data

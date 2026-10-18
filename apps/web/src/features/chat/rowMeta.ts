@@ -5,7 +5,16 @@
 // same on every row says nothing, so the workspace shows only when the rows span several, and a persona's avatar only when they have
 // several personas. Every number has a source: the quota bar is the Claude's 5-hour window from the claude-usage readings (the same
 // snapshot as the top bar's chip), "unavailable" when the reading is missing, old or past its reset; never a guess.
-import { reasonText, sessionCost, workspaceLabel, type ChatSession, type ClaudeUsage, type ListGroupBy, type ListRow, type PersonaIdentity } from '@portal/contracts';
+import {
+  reasonText,
+  sessionCost,
+  workspaceLabel,
+  type ChatSession,
+  type ClaudeUsage,
+  type ListGroupBy,
+  type ListRow,
+  type PersonaIdentity,
+} from '@portal/contracts';
 import { agoText, leftText, localTime } from '../usage/claude/format';
 import { roleOf } from './crewLimits';
 import { modelShortName } from './modelName';
@@ -24,7 +33,8 @@ export type QuotaMeter =
   | { kind: 'unavailable'; title: string }
   | { kind: 'no_limits'; title: string };
 
-export const quotaTone = (usedPct: number): QuotaTone => (usedPct >= QUOTA_TONE_AT.critical ? 'critical' : usedPct >= QUOTA_TONE_AT.warn ? 'warn' : 'neutral');
+export const quotaTone = (usedPct: number): QuotaTone =>
+  usedPct >= QUOTA_TONE_AT.critical ? 'critical' : usedPct >= QUOTA_TONE_AT.warn ? 'warn' : 'neutral';
 
 /** A window's reading at `nowMs`: null when it has no number or its reset passed (the number belongs to an old period). */
 function windowNow(c: ClaudeUsage, key: string, nowMs: number): { usedPct: number; resetsAt: string | null } | null {
@@ -43,14 +53,24 @@ const resets = (iso: string | null, nowMs: number) => (iso ? `, resets ${localTi
  */
 export function quotaMeter(claudeName: string, usage: ClaudeUsage | null | undefined, nowMs: number): QuotaMeter {
   const who = `Quota, ${claudeName}`;
-  const unavailable = (why: string): QuotaMeter => ({ kind: 'unavailable', title: `${who}: unavailable (${why.replace(/\.$/, '').toLowerCase()})` });
+  const unavailable = (why: string): QuotaMeter => ({
+    kind: 'unavailable',
+    title: `${who}: unavailable (${why.replace(/\.$/, '').toLowerCase()})`,
+  });
   if (!usage) return unavailable('Not read yet.');
-  if (usage.runsOn === 'pool' || usage.runsOn === 'key') return { kind: 'no_limits', title: `${who}: no plan limits (a pool or an API key)` };
+  if (usage.runsOn === 'pool' || usage.runsOn === 'key')
+    return { kind: 'no_limits', title: `${who}: no plan limits (a pool or an API key)` };
   if (usage.runsOn === 'none') return unavailable('Not signed in.');
   const age = usage.checkedAt ? `read ${agoText(usage.checkedAt, nowMs)}` : '';
   // A chat answered with Claude Code's limit message: measured, the Claude is used up until then (T-255).
   const report = usage.limitReport && Date.parse(usage.limitReport.until) > nowMs ? usage.limitReport : null;
-  if (report) return { kind: 'plan', usedPct: 100, tone: 'critical', title: `${who}: used up (${report.label}), back ${localTime(report.until, nowMs)}` };
+  if (report)
+    return {
+      kind: 'plan',
+      usedPct: 100,
+      tone: 'critical',
+      title: `${who}: used up (${report.label}), back ${localTime(report.until, nowMs)}`,
+    };
   if (usage.unavailable) return unavailable(reasonText(usage.unavailable));
   if (usage.stale) return unavailable(`The reading is old${age ? `, ${age}` : ''}.`);
   const session = windowNow(usage, 'session', nowMs);
@@ -126,7 +146,11 @@ const WORDS: Record<ChatSession['state'], string> = {
 };
 
 /** `safety`: the label when the portal ended it for safety or integrity (`endedForSafety`). */
-export function rowState(s: Pick<ChatSession, 'state' | 'waiting' | 'switching' | 'agentsRunning' | 'slotWait'>, workspaceGone: boolean, safety: string | null): RowState {
+export function rowState(
+  s: Pick<ChatSession, 'state' | 'waiting' | 'switching' | 'agentsRunning' | 'slotWait'>,
+  workspaceGone: boolean,
+  safety: string | null,
+): RowState {
   if (workspaceGone) return { word: 'Removed', tone: 'danger', agents: 0 };
   if (safety) return { word: safety, tone: 'danger', agents: 0 };
   if (s.switching) return { word: 'Moving', tone: 'busy', agents: 0 };
@@ -169,7 +193,10 @@ export function rowMeta({ session: s, groupBy, showWorkspace, usage, nowMs, lead
   const label = modelShortName(s.model);
   const model = label ? { label, title: `Model: ${s.model}${s.effort ? `, effort ${s.effort}` : ''}` } : null;
   const claudeName = s.claudeName ?? usage?.claudeName ?? null;
-  const claude = (s.claudeId || claudeName) && !(lead && sameClaude(s, lead)) ? { name: groupBy === 'claude' ? null : claudeName, meter: quotaMeter(claudeName ?? 'this Claude', usage, nowMs) } : null;
+  const claude =
+    (s.claudeId || claudeName) && !(lead && sameClaude(s, lead))
+      ? { name: groupBy === 'claude' ? null : claudeName, meter: quotaMeter(claudeName ?? 'this Claude', usage, nowMs) }
+      : null;
   const c = sessionCost(s);
   return {
     model,

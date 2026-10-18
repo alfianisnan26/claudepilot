@@ -11,14 +11,7 @@ import { SecretBox, type SecretSlot } from './secretBox.js';
 
 export type TrustState = 'ok' | 'locked' | 'frozen';
 export type TrustCode =
-  | 'key-missing'
-  | 'key-wrong'
-  | 'db-unreadable'
-  | 'db-corrupt'
-  | 'db-newer'
-  | 'migration-failed'
-  | 'restored'
-  | 'frozen-by-admin';
+  'key-missing' | 'key-wrong' | 'db-unreadable' | 'db-corrupt' | 'db-newer' | 'migration-failed' | 'restored' | 'frozen-by-admin';
 
 export interface Trust {
   /** `ok` delivers. `locked`: the secret key is missing or wrong. `frozen`: the database can't be trusted. */
@@ -44,7 +37,11 @@ const KEY_CHECK_SLOT: SecretSlot = { table: 'portal_meta', row: 'key_check', col
 /** Reasons an admin can clear with "Resume delivery"; the rest clear only when the cause is fixed. */
 const RESUMABLE: TrustCode[] = ['restored', 'frozen-by-admin'];
 
-const stamp = (d: Date) => d.toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
+const stamp = (d: Date) =>
+  d
+    .toISOString()
+    .replace(/[-:]/g, '')
+    .replace(/\.\d+Z$/, 'Z');
 const BACKUP_NAME = /^portal-(\d{8}T\d{6}Z)-(pre-migrate|daily|manual|replaced)\.db$/;
 const parseStamp = (s: string) =>
   new Date(`${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}T${s.slice(9, 11)}:${s.slice(11, 13)}:${s.slice(13, 15)}Z`);
@@ -306,7 +303,10 @@ export class Store {
       } catch (e) {
         this.#schemaVersion = Number((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version);
         this.#portalId = this.#metaGet('portal_id');
-        return this.#freeze('migration-failed', `A schema migration failed: ${(e as Error).message}${this.#oldNumberingRepair(db, applied)}`);
+        return this.#freeze(
+          'migration-failed',
+          `A schema migration failed: ${(e as Error).message}${this.#oldNumberingRepair(db, applied)}`,
+        );
       }
     }
     this.#schemaVersion = latest;
@@ -398,7 +398,10 @@ export class Store {
   }
 
   #metaSet(key: string, value: string) {
-    this.#db!.prepare('INSERT INTO portal_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, value);
+    this.#db!.prepare('INSERT INTO portal_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(
+      key,
+      value,
+    );
   }
 
   /** Stops deliveries until an admin resumes them (for example after a restore). */
@@ -449,7 +452,10 @@ export class Store {
   #prune(kind: BackupKind) {
     const keep = KEEP[kind];
     if (!keep) return;
-    for (const old of this.listBackups().filter((b) => b.kind === kind).slice(keep)) rmSync(old.file, { force: true });
+    for (const old of this.listBackups()
+      .filter((b) => b.kind === kind)
+      .slice(keep))
+      rmSync(old.file, { force: true });
   }
 
   close() {
@@ -506,7 +512,8 @@ export function inspectStore(opts: { dataDir: string; secretKey: Buffer | null; 
     db = new DatabaseSync(path, { readOnly: true, timeout: 5000 });
     base.schemaVersion = Number((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version);
     if (base.schemaVersion === 0) return base;
-    const meta = (key: string) => (db!.prepare('SELECT value FROM portal_meta WHERE key = ?').get(key) as { value: string } | undefined)?.value ?? null;
+    const meta = (key: string) =>
+      (db!.prepare('SELECT value FROM portal_meta WHERE key = ?').get(key) as { value: string } | undefined)?.value ?? null;
     base.portalId = meta('portal_id');
     base.createdAt = meta('created_at');
     base.frozen = meta('frozen');
@@ -605,7 +612,11 @@ export async function restoreBackup(opts: {
   const restored = new DatabaseSync(path);
   try {
     if (Number((restored.prepare('PRAGMA user_version').get() as { user_version: number }).user_version) > 0) {
-      const frozen = { code: 'restored', message: `Restored from ${basename(opts.file)}. Check workspaces, then resume delivery.`, at: now().toISOString() };
+      const frozen = {
+        code: 'restored',
+        message: `Restored from ${basename(opts.file)}. Check workspaces, then resume delivery.`,
+        at: now().toISOString(),
+      };
       restored
         .prepare("INSERT INTO portal_meta (key, value) VALUES ('frozen', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
         .run(JSON.stringify(frozen));
@@ -632,7 +643,8 @@ export async function rotateKey(opts: {
     encryptedColumns: opts.encryptedColumns,
   });
   try {
-    if (!store.writable || !store.secrets) throw new Error(store.trust.reasons.map((r) => r.message).join(' ') || 'The database is not usable.');
+    if (!store.writable || !store.secrets)
+      throw new Error(store.trust.reasons.map((r) => r.message).join(' ') || 'The database is not usable.');
     const db = store.db!;
     const oldBox = store.secrets;
     const newBox = new SecretBox(opts.newKey);
@@ -641,7 +653,9 @@ export async function rotateKey(opts: {
     db.exec('BEGIN IMMEDIATE');
     try {
       for (const col of opts.encryptedColumns ?? ENCRYPTED_COLUMNS) {
-        const rows = db.prepare(`SELECT ${col.idColumn} AS id, ${col.column} AS value FROM ${col.table} WHERE ${col.column} IS NOT NULL`).all() as { id: string | number; value: string }[];
+        const rows = db
+          .prepare(`SELECT ${col.idColumn} AS id, ${col.column} AS value FROM ${col.table} WHERE ${col.column} IS NOT NULL`)
+          .all() as { id: string | number; value: string }[];
         const update = db.prepare(`UPDATE ${col.table} SET ${col.column} = ? WHERE ${col.idColumn} = ?`);
         for (const r of rows) {
           const slot = { table: col.table, row: String(r.id), column: col.column };
@@ -689,8 +703,9 @@ export async function forgetSecrets(opts: {
     try {
       for (const col of opts.encryptedColumns ?? ENCRYPTED_COLUMNS)
         cleared += Number(db.prepare(`UPDATE ${col.table} SET ${col.column} = NULL WHERE ${col.column} IS NOT NULL`).run().changes);
-      db.prepare("INSERT INTO portal_meta (key, value) VALUES ('key_check', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
-        .run(new SecretBox(opts.newKey).seal(KEY_CHECK_TEXT, KEY_CHECK_SLOT));
+      db.prepare("INSERT INTO portal_meta (key, value) VALUES ('key_check', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(
+        new SecretBox(opts.newKey).seal(KEY_CHECK_TEXT, KEY_CHECK_SLOT),
+      );
       db.exec('COMMIT');
     } catch (e) {
       db.exec('ROLLBACK');

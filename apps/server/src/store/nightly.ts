@@ -2,7 +2,17 @@
 // online copy through SQLite's backup API (safe while the portal writes; WAL readers don't block it), checked, gzipped and
 // kept as 7 daily plus 4 weekly in `<data dir>/backups/nightly`, which the same Job then mirrors off-site. The portal reads
 // that folder to say when the newest one is older than 26 hours (`nightlyStatus`).
-import { chmodSync, createReadStream, createWriteStream, existsSync, mkdtempSync, readdirSync, renameSync, rmSync, statSync } from 'node:fs';
+import {
+  chmodSync,
+  createReadStream,
+  createWriteStream,
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  statSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { backup, DatabaseSync } from 'node:sqlite';
@@ -23,7 +33,11 @@ export interface Retention {
 export const RETAIN: Readonly<Retention> = { daily: 7, weekly: 4 };
 
 const NAME = /^portal-(\d{8}T\d{6}Z)-nightly\.db\.gz$/;
-const stamp = (d: Date) => d.toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
+const stamp = (d: Date) =>
+  d
+    .toISOString()
+    .replace(/[-:]/g, '')
+    .replace(/\.\d+Z$/, 'Z');
 const parseStamp = (s: string) =>
   new Date(`${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}T${s.slice(9, 11)}:${s.slice(11, 13)}:${s.slice(13, 15)}Z`);
 
@@ -51,7 +65,8 @@ export function listNightly(dir: string): NightlyInfo[] {
 
 const dayKey = (d: Date) => d.toISOString().slice(0, 10);
 /** The Monday (UTC) of the ISO week `d` falls in. */
-const weekKey = (d: Date) => dayKey(new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) - ((d.getUTCDay() + 6) % 7) * DAY_MS));
+const weekKey = (d: Date) =>
+  dayKey(new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) - ((d.getUTCDay() + 6) % 7) * DAY_MS));
 
 /** Which of `list` (any order) to keep: the newest of each of the last `daily` days and of each of the last `weekly` weeks. */
 export function toKeep<T extends { at: Date }>(list: T[], retain: Retention = RETAIN): Set<T> {
@@ -147,7 +162,13 @@ export async function gunzipBackup(file: string, to: string): Promise<string> {
  * `portal restore` for either kind of backup: a `.db.gz` is unzipped next to the other backups first, then restored as usual
  * (integrity, schema, key check; the replaced database kept; the portal starts Frozen). The portal must be stopped.
  */
-export async function restoreAny(opts: { dataDir: string; file: string; secretKey: Buffer | null; migrations?: Migration[]; now?: () => Date }) {
+export async function restoreAny(opts: {
+  dataDir: string;
+  file: string;
+  secretKey: Buffer | null;
+  migrations?: Migration[];
+  now?: () => Date;
+}) {
   if (!opts.file.endsWith('.gz')) return restoreBackup(opts);
   const dir = join(opts.dataDir, 'backups');
   ensurePrivateDir(dir);
@@ -164,7 +185,9 @@ export async function restoreAny(opts: { dataDir: string; file: string; secretKe
 export function rowCounts(file: string): Record<string, number> {
   const db = new DatabaseSync(file, { readOnly: true });
   try {
-    const tables = db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all() as { name: string }[];
+    const tables = db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all() as {
+      name: string;
+    }[];
     const counts: Record<string, number> = {};
     for (const { name } of tables) {
       const q = `SELECT count(*) AS n FROM "${name.replaceAll('"', '""')}"${name === 'portal_meta' ? " WHERE key <> 'frozen'" : ''}`;
@@ -230,5 +253,9 @@ export function nightlyStatus(opts: { dataDir: string; now?: Date; staleAfterMs?
   const list = listNightly(nightlyDir(opts.dataDir));
   const last = list[0]?.at ?? null;
   const now = (opts.now ?? new Date()).getTime();
-  return { lastAt: last?.toISOString() ?? null, stale: !last || now - last.getTime() > (opts.staleAfterMs ?? STALE_AFTER_MS), count: list.length };
+  return {
+    lastAt: last?.toISOString() ?? null,
+    stale: !last || now - last.getTime() > (opts.staleAfterMs ?? STALE_AFTER_MS),
+    count: list.length,
+  };
 }

@@ -40,10 +40,17 @@ async function main(argv: string[]) {
       if (s.error) return console.log(`Database     unreadable: ${s.error}`);
       console.log(`Database     schema ${s.schemaVersion} (this portal knows ${s.latestSchemaVersion})`);
       console.log(`Portal ID    ${s.portalId ?? '-'}${s.createdAt ? `, created ${s.createdAt}` : ''}`);
-      const key = { opens: 'opens the database', wrong: "doesn't match the database", 'no-key': 'not set', none: 'set; the database has no key check yet' }[s.key];
+      const key = {
+        opens: 'opens the database',
+        wrong: "doesn't match the database",
+        'no-key': 'not set',
+        none: 'set; the database has no key check yet',
+      }[s.key];
       console.log(`Secret key   ${key}${s.keyId ? ` (key ${s.keyId})` : ''}`);
       if (s.frozen) console.log(`Frozen       ${(JSON.parse(s.frozen) as { message: string }).message}`);
-      console.log(`Backups      ${s.backups.length}${s.backups[0] ? `, latest ${s.backups[0].at.toISOString()} (${s.backups[0].kind})` : ''}`);
+      console.log(
+        `Backups      ${s.backups.length}${s.backups[0] ? `, latest ${s.backups[0].at.toISOString()} (${s.backups[0].kind})` : ''}`,
+      );
       for (const b of s.backups.slice(0, 5)) console.log(`  ${b.file}  ${fmtBytes(b.bytes)}`);
       const n = nightlyStatus({ dataDir });
       console.log(`Nightly      ${n.count}${n.lastAt ? `, latest ${n.lastAt}` : ''}${n.stale ? ' (STALE: none in the last 26 h)' : ''}`);
@@ -85,8 +92,7 @@ async function main(argv: string[]) {
       return;
     }
     case 'forget-secrets': {
-      if (!args.includes('--yes'))
-        throw new Error('This deletes every stored secret. Run `portal forget-secrets --yes` to confirm.');
+      if (!args.includes('--yes')) throw new Error('This deletes every stored secret. Run `portal forget-secrets --yes` to confirm.');
       const newKey = currentKey();
       if (!newKey) throw new Error('Set PORTAL_SECRET_KEY (or PORTAL_SECRET_KEY_FILE) to the new key first.');
       const { cleared, backup } = await forgetSecrets({ dataDir, newKey });

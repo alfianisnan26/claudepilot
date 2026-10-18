@@ -2,7 +2,20 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { ChatSession, ClaudeUsage, ClaudeUsageWindow, ListRow, PersonaIdentity } from '@portal/contracts';
 import { modelShortName } from './modelName';
-import { avatarsShown, barWidth, LINE_TWO_ORDER, lineTwo, listFacts, quotaMeter, quotaTone, roleShown, rowMeta, rowState, thirdLine, workspaceShown } from './rowMeta';
+import {
+  avatarsShown,
+  barWidth,
+  LINE_TWO_ORDER,
+  lineTwo,
+  listFacts,
+  quotaMeter,
+  quotaTone,
+  roleShown,
+  rowMeta,
+  rowState,
+  thirdLine,
+  workspaceShown,
+} from './rowMeta';
 
 // Times are relative to the real clock (no fixed dates).
 const NOW = Date.now();
@@ -46,7 +59,12 @@ function s(over: Partial<ChatSession> = {}): ChatSession {
   } as ChatSession;
 }
 
-const win = (key: string, usedPct: number | null, resetsInMin: number | null, level: ClaudeUsageWindow['level'] = 'ok'): ClaudeUsageWindow => ({
+const win = (
+  key: string,
+  usedPct: number | null,
+  resetsInMin: number | null,
+  level: ClaudeUsageWindow['level'] = 'ok',
+): ClaudeUsageWindow => ({
   key,
   label: key === 'session' ? 'Session' : 'Week',
   usedPct,
@@ -150,7 +168,11 @@ test('quota: unavailable (grey, no number) when the reading is missing, old, pas
 test('quota: a pool or an API key has no plan limits (no bar); a limit a chat reported is measured, used up', () => {
   assert.equal(quotaMeter('pool', usage({ runsOn: 'pool' }), NOW).kind, 'no_limits');
   assert.equal(quotaMeter('key', usage({ runsOn: 'key' }), NOW).kind, 'no_limits');
-  const out = quotaMeter('satria', usage({ limitReport: { window: 'session', label: 'Session', at: inMin(-1), until: inMin(60), guessed: false, sessionId: null } }), NOW);
+  const out = quotaMeter(
+    'satria',
+    usage({ limitReport: { window: 'session', label: 'Session', at: inMin(-1), until: inMin(60), guessed: false, sessionId: null } }),
+    NOW,
+  );
   assert.ok(out.kind === 'plan' && out.usedPct === 100 && out.tone === 'critical');
   assert.match(out.title, /used up \(Session\), back /);
 });
@@ -160,24 +182,56 @@ test('row meta: the Claude is named with its bar; under a Claude heading only th
   assert.equal(m.claude?.name, 'satria');
   assert.equal(m.claude?.meter.kind, 'plan');
   assert.equal(rowMeta({ session: s(), groupBy: 'claude', showWorkspace: false, usage: usage(), nowMs: NOW }).claude?.name, null);
-  assert.equal(rowMeta({ session: s({ claudeId: '', claudeName: null }), groupBy: 'none', showWorkspace: false, usage: null, nowMs: NOW }).claude, null);
+  assert.equal(
+    rowMeta({ session: s({ claudeId: '', claudeName: null }), groupBy: 'none', showWorkspace: false, usage: null, nowMs: NOW }).claude,
+    null,
+  );
 });
 
-test('row meta: a worker on its lead\'s Claude does not repeat it (the lead above says it); on another Claude it names it', () => {
+test("row meta: a worker on its lead's Claude does not repeat it (the lead above says it); on another Claude it names it", () => {
   const worker = s();
   const same = { claudeId: worker.claudeId, claudeName: worker.claudeName };
   assert.equal(rowMeta({ session: worker, groupBy: 'none', showWorkspace: false, usage: usage(), nowMs: NOW, lead: same }).claude, null);
-  assert.equal(rowMeta({ session: worker, groupBy: 'none', showWorkspace: false, usage: usage(), nowMs: NOW, lead: { claudeId: '', claudeName: worker.claudeName } }).claude, null, 'the same name, no id');
-  const other = rowMeta({ session: worker, groupBy: 'none', showWorkspace: false, usage: usage(), nowMs: NOW, lead: { claudeId: 'claude-other', claudeName: 'Work' } });
+  assert.equal(
+    rowMeta({
+      session: worker,
+      groupBy: 'none',
+      showWorkspace: false,
+      usage: usage(),
+      nowMs: NOW,
+      lead: { claudeId: '', claudeName: worker.claudeName },
+    }).claude,
+    null,
+    'the same name, no id',
+  );
+  const other = rowMeta({
+    session: worker,
+    groupBy: 'none',
+    showWorkspace: false,
+    usage: usage(),
+    nowMs: NOW,
+    lead: { claudeId: 'claude-other', claudeName: 'Work' },
+  });
   assert.equal(other.claude?.name, worker.claudeName);
   assert.equal(other.claude?.meter.kind, 'plan');
-  assert.equal(rowMeta({ session: worker, groupBy: 'none', showWorkspace: false, usage: usage(), nowMs: NOW, lead: null }).claude?.name, worker.claudeName, 'no lead: its own');
+  assert.equal(
+    rowMeta({ session: worker, groupBy: 'none', showWorkspace: false, usage: usage(), nowMs: NOW, lead: null }).claude?.name,
+    worker.claudeName,
+    'no lead: its own',
+  );
 });
 
 test('row meta: the cost (an estimate while a turn runs), nothing at 0; branch and ticket unless the grouping says them', () => {
   assert.equal(rowMeta({ session: s(), groupBy: 'none', showWorkspace: false, usage: null, nowMs: NOW }).cost, null);
-  assert.deepEqual(rowMeta({ session: s({ costUsd: 10, turnCostEstimateUsd: 0.39 }), groupBy: 'none', showWorkspace: false, usage: null, nowMs: NOW }).cost, { usd: 10.39, estimate: true });
-  assert.deepEqual(rowMeta({ session: s({ costUsd: 2.39 }), groupBy: 'none', showWorkspace: false, usage: null, nowMs: NOW }).cost, { usd: 2.39, estimate: false });
+  assert.deepEqual(
+    rowMeta({ session: s({ costUsd: 10, turnCostEstimateUsd: 0.39 }), groupBy: 'none', showWorkspace: false, usage: null, nowMs: NOW })
+      .cost,
+    { usd: 10.39, estimate: true },
+  );
+  assert.deepEqual(rowMeta({ session: s({ costUsd: 2.39 }), groupBy: 'none', showWorkspace: false, usage: null, nowMs: NOW }).cost, {
+    usd: 2.39,
+    estimate: false,
+  });
   const wt = s({ worktree: { path: '/w/t-375', branch: 'ticket/T-375-rows' } as ChatSession['worktree'], ticketId: 'T-375' });
   const m = rowMeta({ session: wt, groupBy: 'none', showWorkspace: false, usage: null, nowMs: NOW });
   assert.deepEqual(m.branch, { label: 'ticket/T-375-rows', title: '/w/t-375' });
@@ -189,28 +243,66 @@ test('row meta: the cost (an estimate while a turn runs), nothing at 0; branch a
 test('line two: the items in priority order (state, quota, cost, model, workspace, Claude, branch, ticket); only those it has', () => {
   assert.deepEqual([...LINE_TWO_ORDER], ['state', 'quota', 'cost', 'model', 'workspace', 'claude', 'branch', 'ticket']);
   const full = s({ costUsd: 1.5, ticketId: 'T-1', worktree: { path: '/w/x', branch: 'ticket/T-1-x' } as ChatSession['worktree'] });
-  assert.deepEqual(lineTwo(rowMeta({ session: full, groupBy: 'none', showWorkspace: true, usage: usage(), nowMs: NOW })), [...LINE_TWO_ORDER]);
+  assert.deepEqual(lineTwo(rowMeta({ session: full, groupBy: 'none', showWorkspace: true, usage: usage(), nowMs: NOW })), [
+    ...LINE_TWO_ORDER,
+  ]);
   // The cost comes before the model and the Claude's name, so a short line keeps the number (the ux check of c84657f: the lead's cost gone).
   const lead = lineTwo(rowMeta({ session: s({ costUsd: 10.39 }), groupBy: 'none', showWorkspace: false, usage: usage(), nowMs: NOW }));
   assert.deepEqual(lead, ['state', 'quota', 'cost', 'model', 'claude']);
   // Under a Claude heading: the bar, not the name. A pool or a key: no bar, the name stays. A worker on its lead's Claude: neither.
-  assert.deepEqual(lineTwo(rowMeta({ session: s(), groupBy: 'claude', showWorkspace: false, usage: usage(), nowMs: NOW })), ['state', 'quota', 'model']);
-  assert.deepEqual(lineTwo(rowMeta({ session: s(), groupBy: 'none', showWorkspace: false, usage: usage({ runsOn: 'pool' }), nowMs: NOW })), ['state', 'model', 'claude']);
+  assert.deepEqual(lineTwo(rowMeta({ session: s(), groupBy: 'claude', showWorkspace: false, usage: usage(), nowMs: NOW })), [
+    'state',
+    'quota',
+    'model',
+  ]);
+  assert.deepEqual(
+    lineTwo(rowMeta({ session: s(), groupBy: 'none', showWorkspace: false, usage: usage({ runsOn: 'pool' }), nowMs: NOW })),
+    ['state', 'model', 'claude'],
+  );
   const lead2 = s();
-  assert.deepEqual(lineTwo(rowMeta({ session: s(), groupBy: 'none', showWorkspace: false, usage: usage(), nowMs: NOW, lead: lead2 })), ['state', 'model']);
-  assert.deepEqual(lineTwo(rowMeta({ session: s({ model: null, claudeId: '', claudeName: null }), groupBy: 'none', showWorkspace: false, usage: null, nowMs: NOW })), ['state']);
+  assert.deepEqual(lineTwo(rowMeta({ session: s(), groupBy: 'none', showWorkspace: false, usage: usage(), nowMs: NOW, lead: lead2 })), [
+    'state',
+    'model',
+  ]);
+  assert.deepEqual(
+    lineTwo(
+      rowMeta({
+        session: s({ model: null, claudeId: '', claudeName: null }),
+        groupBy: 'none',
+        showWorkspace: false,
+        usage: null,
+        nowMs: NOW,
+      }),
+    ),
+    ['state'],
+  );
 });
 
 test('line three: only the open request; a branch or ticket stays on line two (two lines)', () => {
-  const ask = rowMeta({ session: s({ state: 'waiting', waiting: 1, waitingFor: 'Run a command: npm test', ticketId: 'T-1' }), groupBy: 'none', showWorkspace: false, usage: null, nowMs: NOW });
+  const ask = rowMeta({
+    session: s({ state: 'waiting', waiting: 1, waitingFor: 'Run a command: npm test', ticketId: 'T-1' }),
+    groupBy: 'none',
+    showWorkspace: false,
+    usage: null,
+    nowMs: NOW,
+  });
   assert.equal(ask.waitingFor, 'Run a command: npm test');
   assert.equal(thirdLine(ask), 'waiting');
-  const where = rowMeta({ session: s({ ticketId: 'T-1', worktree: { path: '/w/x', branch: 'ticket/T-1-x' } as ChatSession['worktree'] }), groupBy: 'none', showWorkspace: false, usage: null, nowMs: NOW });
+  const where = rowMeta({
+    session: s({ ticketId: 'T-1', worktree: { path: '/w/x', branch: 'ticket/T-1-x' } as ChatSession['worktree'] }),
+    groupBy: 'none',
+    showWorkspace: false,
+    usage: null,
+    nowMs: NOW,
+  });
   assert.equal(where.ticket, 'T-1');
   assert.equal(thirdLine(where), null);
   assert.equal(thirdLine(rowMeta({ session: s(), groupBy: 'none', showWorkspace: false, usage: null, nowMs: NOW })), null);
   // A stale waitingFor on a session that no longer waits says nothing.
-  assert.equal(rowMeta({ session: s({ waitingFor: 'old' }), groupBy: 'none', showWorkspace: false, usage: null, nowMs: NOW }).waitingFor, null);
+  assert.equal(
+    rowMeta({ session: s({ waitingFor: 'old' }), groupBy: 'none', showWorkspace: false, usage: null, nowMs: NOW }).waitingFor,
+    null,
+  );
 });
 
 test('workspace label: only when the rows span more than one workspace, never under a workspace heading', () => {
@@ -230,10 +322,20 @@ test('persona avatar: only when the rows shown have more than one persona', () =
   const pw: PersonaIdentity = { poolId: 'p-way', name: 'pilot-way', avatar: null };
   const ko: PersonaIdentity = { poolId: 'p-ko', name: 'konfersi', avatar: null };
   const rows = [row(s()), row(s({ workspaceId: 'docker/b' }))];
-  assert.equal(avatarsShown(listFacts(rows, { 'kubernetes/ws': pw, 'docker/b': pw })), false, 'the same persona on every row tells nothing apart');
+  assert.equal(
+    avatarsShown(listFacts(rows, { 'kubernetes/ws': pw, 'docker/b': pw })),
+    false,
+    'the same persona on every row tells nothing apart',
+  );
   assert.equal(avatarsShown(listFacts(rows, { 'kubernetes/ws': pw })), false, 'one persona and none');
   assert.equal(avatarsShown(listFacts(rows, { 'kubernetes/ws': pw, 'docker/b': ko })), true);
-  assert.equal(avatarsShown(listFacts([row(s()), row(s({ workspaceId: 'docker/b' }), { workspaceGone: true })], { 'kubernetes/ws': pw, 'docker/b': ko })), false, 'a removed workspace has no persona');
+  assert.equal(
+    avatarsShown(
+      listFacts([row(s()), row(s({ workspaceId: 'docker/b' }), { workspaceGone: true })], { 'kubernetes/ws': pw, 'docker/b': ko }),
+    ),
+    false,
+    'a removed workspace has no persona',
+  );
 });
 
 test('role: hidden when the title already starts with it, shown otherwise, none when unset', () => {
@@ -249,7 +351,12 @@ test('state: one word and a tone; removed, safety and moving first; several open
   assert.deepEqual(rowState(s({ state: 'idle', agentsRunning: 2 }), false, null), { word: 'Idle', tone: 'quiet', agents: 0 });
   // T-425: a start or wake waiting for a slot says so in one word and keeps the server's line as its explanation; a question to you still wins.
   const why = 'Waiting for a slot · 4 of 4 running in docker/ws1 (Settings › Sessions)';
-  assert.deepEqual(rowState(s({ state: 'idle', process: 'asleep', slotWait: why }), false, null), { word: 'Queued', tone: 'busy', agents: 0, why });
+  assert.deepEqual(rowState(s({ state: 'idle', process: 'asleep', slotWait: why }), false, null), {
+    word: 'Queued',
+    tone: 'busy',
+    agents: 0,
+    why,
+  });
   assert.deepEqual(rowState(s({ state: 'starting', slotWait: why }), false, null), { word: 'Queued', tone: 'busy', agents: 0, why });
   assert.equal(rowState(s({ state: 'idle', slotWait: null }), false, null).word, 'Idle');
   assert.equal(rowState(s({ state: 'waiting', waiting: 1, slotWait: why }), false, null).word, 'Needs you');

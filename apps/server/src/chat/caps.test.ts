@@ -11,21 +11,47 @@ const idle = (...rows: [string, number][]) => rows.map(([id, since]) => ({ id, s
 test('makeRoom: nothing to do under the caps; the longest-idle session of the workspace sleeps first; the total is eased by the longest-idle anywhere', () => {
   const caps = { perWorkspace: 2, total: 4 };
   assert.deepEqual(makeRoom(live(['a', 'w1']), idle(['a', 1]), 'w1', 1, caps), { sleep: [] });
-  assert.deepEqual(makeRoom(live(['a', 'w1'], ['b', 'w1']), idle(['a', 5], ['b', 2]), 'w1', 1, caps), { sleep: ['b'] }, 'b has been idle longer');
+  assert.deepEqual(
+    makeRoom(live(['a', 'w1'], ['b', 'w1']), idle(['a', 5], ['b', 2]), 'w1', 1, caps),
+    { sleep: ['b'] },
+    'b has been idle longer',
+  );
   // Another workspace's idle session doesn't ease this workspace's cap.
-  assert.deepEqual(makeRoom(live(['a', 'w1'], ['b', 'w1'], ['c', 'w2']), idle(['c', 1]), 'w1', 1, caps), { refuse: { scope: 'workspace', limit: 2, running: 2 } });
+  assert.deepEqual(makeRoom(live(['a', 'w1'], ['b', 'w1'], ['c', 'w2']), idle(['c', 1]), 'w1', 1, caps), {
+    refuse: { scope: 'workspace', limit: 2, running: 2 },
+  });
   // The total: w3 has room of its own, the portal doesn't; the longest-idle anywhere sleeps.
   const full = live(['a', 'w1'], ['b', 'w1'], ['c', 'w2'], ['d', 'w2']);
   assert.deepEqual(makeRoom(full, idle(['b', 9], ['c', 3]), 'w3', 1, caps), { sleep: ['c'] });
   assert.deepEqual(makeRoom(full, idle(), 'w3', 1, caps), { refuse: { scope: 'total', limit: 4, running: 4 } });
   // Ultracode counts as two, on either side.
   assert.equal(weightOf({ ultracode: 1 }), 2);
-  assert.deepEqual(makeRoom(live(['a', 'w1', 2]), idle(), 'w1', 1, { perWorkspace: 2, total: 9 }), { refuse: { scope: 'workspace', limit: 2, running: 2 } });
-  assert.deepEqual(makeRoom(live(['a', 'w1']), idle(['a', 1]), 'w1', 2, { perWorkspace: 2, total: 9 }), { sleep: ['a'] }, 'an Ultracode session needs two slots');
+  assert.deepEqual(makeRoom(live(['a', 'w1', 2]), idle(), 'w1', 1, { perWorkspace: 2, total: 9 }), {
+    refuse: { scope: 'workspace', limit: 2, running: 2 },
+  });
+  assert.deepEqual(
+    makeRoom(live(['a', 'w1']), idle(['a', 1]), 'w1', 2, { perWorkspace: 2, total: 9 }),
+    { sleep: ['a'] },
+    'an Ultracode session needs two slots',
+  );
   // More than one may have to sleep.
-  assert.deepEqual(makeRoom(live(['a', 'w1'], ['b', 'w1']), idle(['a', 1], ['b', 2]), 'w1', 2, { perWorkspace: 2, total: 9 }), { sleep: ['a', 'b'] });
+  assert.deepEqual(makeRoom(live(['a', 'w1'], ['b', 'w1']), idle(['a', 1], ['b', 2]), 'w1', 2, { perWorkspace: 2, total: 9 }), {
+    sleep: ['a', 'b'],
+  });
   // T-417: the lower rank sleeps first (an idle worker before an idle chat without workers), however long the other was idle.
-  assert.deepEqual(makeRoom(live(['a', 'w1'], ['b', 'w1']), [{ id: 'a', since: 1, rank: 1 }, { id: 'b', since: 9, rank: 0 }], 'w1', 1, caps), { sleep: ['b'] });
+  assert.deepEqual(
+    makeRoom(
+      live(['a', 'w1'], ['b', 'w1']),
+      [
+        { id: 'a', since: 1, rank: 1 },
+        { id: 'b', since: 9, rank: 0 },
+      ],
+      'w1',
+      1,
+      caps,
+    ),
+    { sleep: ['b'] },
+  );
   const e = capError('workspace', 2, 2, 'docker/api');
   assert.equal(e.code, SESSION_CAP);
   assert.match(e.message, /2 sessions are already running in docker\/api, which is the limit \(Settings › Sessions\)/);
@@ -52,7 +78,10 @@ test('over the per-workspace cap a new session puts the longest-idle one to slee
     assert.equal(procs[s.id], 'asleep', 'the longest-idle one went to sleep');
     assert.equal(procs[second.id], 'live');
     assert.equal(procs[third.id], 'live');
-    assert.deepEqual(s.controller.audit({ kind: 'cap.slept' }).map((a) => a.sessionId), [s.id]);
+    assert.deepEqual(
+      s.controller.audit({ kind: 'cap.slept' }).map((a) => a.sessionId),
+      [s.id],
+    );
 
     // A working session never sleeps for this: with both of the awake ones busy, the next start waits for a slot (T-417), saying why;
     // when none comes free in time it reads Interrupted, naming the cap.
@@ -73,11 +102,20 @@ test('over the per-workspace cap a new session puts the longest-idle one to slee
     const t0 = Date.now();
     await s.controller.send(s.id, 'wake-1', 'hello');
     assert.ok(Date.now() - t0 < 300, 'the send returns without waiting for the slot');
-    assert.ok(s.controller.history(s.id).some((e) => e.kind === 'user' && e.text === 'hello'), 'the message is stored at once');
+    assert.ok(
+      s.controller.history(s.id).some((e) => e.kind === 'user' && e.text === 'hello'),
+      'the message is stored at once',
+    );
     assert.match(s.controller.get(s.id)!.slotWait ?? '', /^Waiting for a slot · 2 of 2 running in docker\/ws1/);
-    await until(() => s.controller.history(s.id).some((e) => /wasn’t delivered: .*2 sessions are already running in docker\/ws1/.test(e.text ?? '')));
+    await until(() =>
+      s.controller.history(s.id).some((e) => /wasn’t delivered: .*2 sessions are already running in docker\/ws1/.test(e.text ?? '')),
+    );
     assert.equal(s.controller.get(s.id)!.slotWait ?? null, null);
-    assert.deepEqual(s.controller.inputStates(s.id).filter((x) => x.uuid === 'wake-1'), [{ uuid: 'wake-1', state: 'failed' }], 'the refused wake marks its input failed');
+    assert.deepEqual(
+      s.controller.inputStates(s.id).filter((x) => x.uuid === 'wake-1'),
+      [{ uuid: 'wake-1', state: 'failed' }],
+      'the refused wake marks its input failed',
+    );
     assert.equal(s.controller.get(s.id)!.process, 'asleep');
     // Lowering a cap never stops a running session.
     s.controller.liveCaps = () => ({ perWorkspace: 1, total: 1 });
@@ -103,15 +141,33 @@ test('T-425: a send to a session waiting for a slot returns at once with the mes
     const t0 = Date.now();
     await s.controller.send(s.id, 'wait-1', 'hello after the wait');
     assert.ok(Date.now() - t0 < 1000, 'the send did not wait for the slot');
-    assert.ok(s.controller.history(s.id).some((e) => e.kind === 'user' && e.text === 'hello after the wait'), 'stored at once');
+    assert.ok(
+      s.controller.history(s.id).some((e) => e.kind === 'user' && e.text === 'hello after the wait'),
+      'stored at once',
+    );
     assert.match(s.controller.get(s.id)!.slotWait ?? '', /^Waiting for a slot/);
     assert.equal(s.ws.sends.length, sends, 'nothing reached Claude yet');
     s.controller.liveCaps = () => ({ perWorkspace: 5, total: 10 }); // a slot comes
     await until(() => s.controller.get(s.id)!.process === 'live', 4000);
-    await until(() => s.ws.sends.slice(sends).some((x) => x.line.includes('hello after the wait')) || s.controller.history(s.id).some((e) => /wasn’t delivered/.test(e.text ?? '')), 4000).catch((e: unknown) => {
-      throw new Error(`${String(e)}; lines: ${JSON.stringify(s.ws.sends.slice(sends).map((x) => x.line.slice(0, 80)))}; notes: ${JSON.stringify(s.controller.history(s.id).filter((e2) => e2.kind === 'system').map((e2) => e2.text))}`);
+    await until(
+      () =>
+        s.ws.sends.slice(sends).some((x) => x.line.includes('hello after the wait')) ||
+        s.controller.history(s.id).some((e) => /wasn’t delivered/.test(e.text ?? '')),
+      4000,
+    ).catch((e: unknown) => {
+      throw new Error(
+        `${String(e)}; lines: ${JSON.stringify(s.ws.sends.slice(sends).map((x) => x.line.slice(0, 80)))}; notes: ${JSON.stringify(
+          s.controller
+            .history(s.id)
+            .filter((e2) => e2.kind === 'system')
+            .map((e2) => e2.text),
+        )}`,
+      );
     });
-    assert.ok(s.ws.sends.slice(sends).some((x) => x.line.includes('hello after the wait')), 'the line reached Claude Code');
+    assert.ok(
+      s.ws.sends.slice(sends).some((x) => x.line.includes('hello after the wait')),
+      'the line reached Claude Code',
+    );
     assert.equal(s.controller.get(s.id)!.slotWait ?? null, null);
   } finally {
     await s.done();
@@ -137,14 +193,21 @@ test('the total cap counts every workspace; no caps installed, no limit', async 
 test('the spending limit is the setting (ten dollars when none), and a turn Claude Code stopped for it says so in words', async () => {
   const s = await liveSession();
   try {
-    assert.deepEqual(s.ws.startArgs[0]!.slice(s.ws.startArgs[0]!.indexOf('--max-budget-usd'), s.ws.startArgs[0]!.indexOf('--max-budget-usd') + 2), ['--max-budget-usd', '10']);
+    assert.deepEqual(
+      s.ws.startArgs[0]!.slice(s.ws.startArgs[0]!.indexOf('--max-budget-usd'), s.ws.startArgs[0]!.indexOf('--max-budget-usd') + 2),
+      ['--max-budget-usd', '10'],
+    );
     s.controller.sessionBudgetUsd = () => 25;
     await idleSession(s);
     const args = s.ws.startArgs.at(-1)!;
     assert.deepEqual(args.slice(args.indexOf('--max-budget-usd'), args.indexOf('--max-budget-usd') + 2), ['--max-budget-usd', '25']);
     s.controller.sessionBudgetUsd = () => Number.NaN;
     await idleSession(s);
-    assert.equal(s.ws.startArgs.at(-1)![s.ws.startArgs.at(-1)!.indexOf('--max-budget-usd') + 1], '10', 'nonsense falls back to the default');
+    assert.equal(
+      s.ws.startArgs.at(-1)![s.ws.startArgs.at(-1)!.indexOf('--max-budget-usd') + 1],
+      '10',
+      'nonsense falls back to the default',
+    );
     s.tail.push(line({ type: 'result', subtype: 'error_max_budget_usd', is_error: true, total_cost_usd: 10.02, session_id: s.id }));
     await until(() => s.controller.history(s.id).some((e) => e.kind === 'error'));
     assert.match(s.controller.history(s.id).find((e) => e.kind === 'error')!.text!, /^Budget reached: this session hit its spending limit/);
@@ -242,7 +305,12 @@ async function heldWrite(s: Live, marker: string) {
   };
 }
 
-const askTool = (id: string) => line({ type: 'control_request', request_id: id, request: { subtype: 'can_use_tool', tool_name: 'Bash', input: { command: 'true' }, tool_use_id: `toolu_${id}` } });
+const askTool = (id: string) =>
+  line({
+    type: 'control_request',
+    request_id: id,
+    request: { subtype: 'can_use_tool', tool_name: 'Bash', input: { command: 'true' }, tool_use_id: `toolu_${id}` },
+  });
 
 test('T-425 S2b + optimistic Working: a send that waited for a slot and then fails to write is marked failed, and the optimistic Working is undone', async () => {
   const s = await liveSession();
@@ -277,7 +345,11 @@ test('T-425 S2b + optimistic Working: the undo leaves the state alone when somet
     await until(() => s.controller.get(s.id)!.state === 'waiting');
     exec.exit(1);
     await until(() => s.inputs('moved-1').includes('failed'));
-    assert.equal(s.controller.get(s.id)!.state, 'waiting', 'the failed write did not put back the state it saw before: the request is still open');
+    assert.equal(
+      s.controller.get(s.id)!.state,
+      'waiting',
+      'the failed write did not put back the state it saw before: the request is still open',
+    );
   } finally {
     await s.done();
   }
@@ -300,7 +372,10 @@ test('T-425 S2b + optimistic Working: both paths undo the Working on a failed wr
     assert.match(await sent, /The session host rejected the line \(exit 1\)/, 'the send itself refuses');
     assert.ok(s.inputs('direct-1').includes('failed'));
     assert.equal(s.controller.get(s.id)!.state, before, 'back to what it was');
-    assert.ok(!s.controller.history(s.id).some((e) => e.kind === 'system' && /A message wasn’t delivered/.test(e.text ?? '')), 'no detached note: the caller got the refusal');
+    assert.ok(
+      !s.controller.history(s.id).some((e) => e.kind === 'system' && /A message wasn’t delivered/.test(e.text ?? '')),
+      'no detached note: the caller got the refusal',
+    );
 
     // Waited: asleep at the cap, the send returned at once, the write comes after the slot.
     s.ws.holdSend = null;
@@ -313,7 +388,10 @@ test('T-425 S2b + optimistic Working: both paths undo the Working on a failed wr
     exec2.exit(1);
     await until(() => s.inputs('waited-1').includes('failed'));
     assert.notEqual(s.controller.get(s.id)!.state, 'working');
-    assert.ok(s.controller.history(s.id).some((e) => e.kind === 'system' && /A message wasn’t delivered/.test(e.text ?? '')), 'the detached send says so in the transcript');
+    assert.ok(
+      s.controller.history(s.id).some((e) => e.kind === 'system' && /A message wasn’t delivered/.test(e.text ?? '')),
+      'the detached send says so in the transcript',
+    );
   } finally {
     await s.done();
   }
@@ -331,10 +409,17 @@ test('T-425 S2b: a later send is not written while an earlier send to the same s
     const sends = s.ws.sends.length;
     const second = s.controller.send(s.id, 'order-2', 'ORDER-SECOND');
     await sleep(300);
-    assert.equal(s.ws.sends.slice(sends).some((x) => x.line.includes('ORDER-SECOND')), false, 'held behind the first send, whose write is still open');
+    assert.equal(
+      s.ws.sends.slice(sends).some((x) => x.line.includes('ORDER-SECOND')),
+      false,
+      'held behind the first send, whose write is still open',
+    );
     await first;
     await second;
-    assert.ok(s.ws.sends.slice(sends).some((x) => x.line.includes('ORDER-SECOND')), 'written once the first is done');
+    assert.ok(
+      s.ws.sends.slice(sends).some((x) => x.line.includes('ORDER-SECOND')),
+      'written once the first is done',
+    );
   } finally {
     await s.done();
   }
@@ -347,12 +432,18 @@ test('T-425 S2b: a send after one that waits for a slot does not hang behind it:
     const sends = s.ws.sends.length;
     await s.controller.send(s.id, 'wait-a', 'FIRST-WAITER'); // detached: waits for its slot
     assert.equal(await within(s.controller.send(s.id, 'wait-b', 'SECOND-WAITER'), 1500), 'done', 'the later send is not held for the slot');
-    assert.ok(s.controller.history(s.id).some((e) => e.kind === 'user' && e.text === 'SECOND-WAITER'), 'stored');
+    assert.ok(
+      s.controller.history(s.id).some((e) => e.kind === 'user' && e.text === 'SECOND-WAITER'),
+      'stored',
+    );
     assert.equal(s.ws.sends.length, sends, 'nothing reached Claude yet');
     s.controller.liveCaps = () => ({ perWorkspace: 5, total: 10 });
     await until(() => ['FIRST-WAITER', 'SECOND-WAITER'].every((t) => s.ws.sends.slice(sends).some((x) => x.line.includes(t))), 5000);
     const written = s.ws.sends.slice(sends).map((x) => x.line);
-    assert.ok(written.findIndex((l) => l.includes('FIRST-WAITER')) < written.findIndex((l) => l.includes('SECOND-WAITER')), 'in the order sent');
+    assert.ok(
+      written.findIndex((l) => l.includes('FIRST-WAITER')) < written.findIndex((l) => l.includes('SECOND-WAITER')),
+      'in the order sent',
+    );
   } finally {
     await s.done();
   }

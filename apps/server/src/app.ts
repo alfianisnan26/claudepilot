@@ -281,12 +281,30 @@ export function createApp(
   };
   // T-118 MU1-min: email accounts beside the server code (identity/users.ts).
   // Review #10: reads (roleOf, verify) use the read handle, so a frozen store does not end every account session; writes stay guarded.
-  const users = new PortalUsers(() => store.db, undefined, undefined, () => (store.writable ? store.db : null));
+  const users = new PortalUsers(
+    () => store.db,
+    undefined,
+    undefined,
+    () => (store.writable ? store.db : null),
+  );
   // Session delegation (owner, 2026-10-17): one session to one account at view or operate.
-  const grants = new SessionGrants(() => store.db, () => (store.writable ? store.db : null));
+  const grants = new SessionGrants(
+    () => store.db,
+    () => (store.writable ? store.db : null),
+  );
   // Teams and SSO (owner, 2026-10-17): accounts in teams, sessions shared to a team, sign-in through an OpenID Connect provider by domain.
-  const teams = new PortalTeams(() => store.db, () => (store.writable ? store.db : null));
-  const sso = new SsoProviders(() => store.db, () => (store.writable ? store.db : null), () => store.secrets, users, teams, oidc);
+  const teams = new PortalTeams(
+    () => store.db,
+    () => (store.writable ? store.db : null),
+  );
+  const sso = new SsoProviders(
+    () => store.db,
+    () => (store.writable ? store.db : null),
+    () => store.secrets,
+    users,
+    teams,
+    oidc,
+  );
   // Review #5: the attempt counters are swept once an hour.
   const sweep = setInterval(() => {
     try {
@@ -297,7 +315,13 @@ export function createApp(
   }, 60 * 60_000);
   sweep.unref?.();
   /** Gap 2 (owner, 2026-10-17): account and sign-in events in the platform audit (no password, an unknown email only as a fingerprint). */
-  const audit = (kind: string, subject: string | null, detail: Record<string, unknown>, severity: 'info' | 'medium' = 'info', by: string | null = null) => {
+  const audit = (
+    kind: string,
+    subject: string | null,
+    detail: Record<string, unknown>,
+    severity: 'info' | 'medium' = 'info',
+    by: string | null = null,
+  ) => {
     try {
       platform?.audit.record({ kind, actor: 'ui', userId: by, subject: subject ? `user:${subject}` : null, detail, severity });
     } catch {
@@ -315,7 +339,12 @@ export function createApp(
 
   // Served over plain HTTP: no HSTS.
   // The built app also gets a CSP (csp.ts); the dev server's pages come from Vite, not from here.
-  app.use(secureHeaders({ strictTransportSecurity: false, ...(serveWeb ? { contentSecurityPolicy: contentSecurityPolicy(`${config.paths.webDist}/index.html`) } : {}) }));
+  app.use(
+    secureHeaders({
+      strictTransportSecurity: false,
+      ...(serveWeb ? { contentSecurityPolicy: contentSecurityPolicy(`${config.paths.webDist}/index.html`) } : {}),
+    }),
+  );
   // What the API says is for this session only: never kept by a shared cache or replayed from the back/forward cache.
   // (Blobs and downloads set their own Cache-Control.)
   app.use('/api/*', async (c, next) => {
@@ -407,7 +436,12 @@ export function createApp(
         console.log(`[portal] signed in with an email account (${user.id}, ${user.role})`);
       } catch (e) {
         if (isAppError(e) && (e.is('UNAUTHORIZED') || e.is('LOCKED_OUT')))
-          audit('portal.signin_failed', null, { method: 'email', email: fingerprint(typeof email === 'string' ? normalizeEmail(email) : ''), code: e.code }, 'medium');
+          audit(
+            'portal.signin_failed',
+            null,
+            { method: 'email', email: fingerprint(typeof email === 'string' ? normalizeEmail(email) : ''), code: e.code },
+            'medium',
+          );
         throw e;
       }
     } else {
@@ -483,7 +517,11 @@ export function createApp(
     const held = grants.held(id, s.userId, teams.idsOf(s.userId), (t) => teams.nameOf(t));
     // The same not-found for a session that does not exist and one that is not yours: nothing is told.
     if (!held) throw new AppError('NOT_FOUND', 'Not found.');
-    if (!held.caps.includes(need)) throw new AppError('FORBIDDEN', need === 'read' ? 'Not shared with you.' : `This share does not let you ${need === 'respond' ? 'answer approvals' : need}.`);
+    if (!held.caps.includes(need))
+      throw new AppError(
+        'FORBIDDEN',
+        need === 'read' ? 'Not shared with you.' : `This share does not let you ${need === 'respond' ? 'answer approvals' : need}.`,
+      );
     // A session that went into Bypass after the share is read-only to the delegate until the owner shares it again and accepts Bypass
     // (checked on every act, not only at the share).
     if ((need === 'send' || need === 'respond') && !held.bypassAck && chatController.get(id)?.mode === 'bypassPermissions')
@@ -514,7 +552,17 @@ export function createApp(
   const delegated = (id: string, held: HeldShare): DelegatedSession | null => {
     const x = chatController.get(id);
     return x
-      ? { id: x.id, title: x.title, state: x.state, workspaceId: x.workspaceId, waiting: x.waiting ?? 0, level: levelOfCaps(held.caps), caps: held.caps, expiresAt: held.expiresAt, via: held.via }
+      ? {
+          id: x.id,
+          title: x.title,
+          state: x.state,
+          workspaceId: x.workspaceId,
+          waiting: x.waiting ?? 0,
+          level: levelOfCaps(held.caps),
+          caps: held.caps,
+          expiresAt: held.expiresAt,
+          via: held.via,
+        }
       : null;
   };
   app.get(SESSION_GRANT_API.mine, (c) => {
@@ -555,8 +603,12 @@ export function createApp(
   app.post('/api/me/sessions/:id/respond', async (c) => {
     const d = delegate(c, 'respond');
     const { requestId, decision, note } = await body<{ requestId: string; decision: string; note?: string }>(c);
-    if (typeof requestId !== 'string' || (decision !== 'allow' && decision !== 'deny')) throw new AppError('VALIDATION_FAILED', 'Answer allow or deny.');
-    await chatController.respond(d.id, requestId, decision, { note: typeof note === 'string' ? note.slice(0, 2000) : undefined, actor: `account:${d.userId}` });
+    if (typeof requestId !== 'string' || (decision !== 'allow' && decision !== 'deny'))
+      throw new AppError('VALIDATION_FAILED', 'Answer allow or deny.');
+    await chatController.respond(d.id, requestId, decision, {
+      note: typeof note === 'string' ? note.slice(0, 2000) : undefined,
+      actor: `account:${d.userId}`,
+    });
     audit('session.delegate_answered', d.userId, { sessionId: d.id, requestId, decision });
     return c.json(success({ ok: true }));
   });
@@ -591,7 +643,10 @@ export function createApp(
     for (const f of WORKSPACE_FIELDS) if (c.req.queries(f)?.some(notAnId)) return f;
     if (/^(POST|PUT|PATCH|DELETE)$/.test(c.req.method) && /^application\/json/i.test(c.req.header('content-type') ?? '')) {
       // A clone, so the handler still gets the stream untouched (the avatar and file routes read it themselves).
-      const json: unknown = await c.req.raw.clone().json().catch(() => undefined);
+      const json: unknown = await c.req.raw
+        .clone()
+        .json()
+        .catch(() => undefined);
       if (json && typeof json === 'object' && !Array.isArray(json)) {
         for (const f of WORKSPACE_FIELDS) {
           const v = (json as Record<string, unknown>)[f];
@@ -639,7 +694,8 @@ export function createApp(
   });
   admin.delete('/app-sessions/:id', (c) => {
     const removed = appPorts?.grants.revoke(c.req.param('id')) ?? false;
-    if (removed) audit('workspace.port.closed', null, { session: c.req.param('id') }, 'info', portal.session(c.get('token'))?.userId ?? null);
+    if (removed)
+      audit('workspace.port.closed', null, { session: c.req.param('id') }, 'info', portal.session(c.get('token'))?.userId ?? null);
     return c.json(success({ removed }));
   });
   admin.get('/loops', (c) => c.json(success<PortalLoop[]>(listLoops())));
@@ -650,12 +706,24 @@ export function createApp(
   admin.get('/manager', async (c) => c.json(success(await managers.status(managerOwner(c)))));
   admin.post('/manager/prepare', async (c) => {
     const st = await managers.prepare(managerOwner(c));
-    audit('manager.prepared', null, { workspaceId: st.runtime?.workspaceId ?? null }, 'medium', portal.session(c.get('token'))?.userId ?? null);
+    audit(
+      'manager.prepared',
+      null,
+      { workspaceId: st.runtime?.workspaceId ?? null },
+      'medium',
+      portal.session(c.get('token'))?.userId ?? null,
+    );
     return c.json(success(st));
   });
   admin.post('/manager/enable', async (c) => {
     const st = await managers.enable(managerOwner(c));
-    audit('manager.enabled', null, { sessionId: st.sessionId, workspaceId: st.workspaceId }, 'medium', portal.session(c.get('token'))?.userId ?? null);
+    audit(
+      'manager.enabled',
+      null,
+      { sessionId: st.sessionId, workspaceId: st.workspaceId },
+      'medium',
+      portal.session(c.get('token'))?.userId ?? null,
+    );
     return c.json(success(st));
   });
   admin.post('/manager/disable', async (c) => {
@@ -760,11 +828,14 @@ export function createApp(
   };
   const unlockLimiter = new RateLimiter(10, 10 * 60 * 1000);
   admin.post('/system/key/reset', (c) => {
-    if (!systemStatus().secretKey.canReset) throw new AppError('CONFLICT', 'Secrets are stored with the current key. Unlock with it instead.');
+    if (!systemStatus().secretKey.canReset)
+      throw new AppError('CONFLICT', 'Secrets are stored with the current key. Unlock with it instead.');
     const key = generateSecretKey();
     store.resetKey(parseSecretKey(key));
     const savedTo = saveKeyFile(key);
-    console.log(`[store] lost key replaced from the panel; nothing was encrypted with it (${savedTo ? `saved to ${savedTo}` : 'kept in memory'})`);
+    console.log(
+      `[store] lost key replaced from the panel; nothing was encrypted with it (${savedTo ? `saved to ${savedTo}` : 'kept in memory'})`,
+    );
     reconciler.requestAll('key reset');
     notify('system', 'accounts');
     return c.json(success<KeySetupResult>({ key, savedTo, status: systemStatus() }));
@@ -843,7 +914,9 @@ export function createApp(
   const refOf = (ref: string) => workspaces.resolve(ref)?.legacyId;
   const refToView = workspaceRefGuard('view', refOf);
   const refToOperate = workspaceRefGuard('operate', refOf);
-  ws.get('/targets', async (c) => c.json(success(visible(actorOf(c), 'target', await workspaces.targets(c.req.query('fresh') === '1'), (t) => t.id))));
+  ws.get('/targets', async (c) =>
+    c.json(success(visible(actorOf(c), 'target', await workspaces.targets(c.req.query('fresh') === '1'), (t) => t.id))),
+  );
   ws.get('/usage', async (c) => c.json(success(visible(actorOf(c), 'workspace', await workspaces.usage(), (u) => u.id))));
   // The labels of renamed workspaces (T-42), from the records only: the app learns them once, so every place that holds an id shows the label.
   ws.get('/labels', (c) => {
@@ -864,7 +937,10 @@ export function createApp(
   const ownSignIn = (c: Context<Env>) => {
     const [target, name] = [c.req.param('target')!, c.req.param('name')!];
     if (pools.stateFor(`${target}/${name}`))
-      throw new AppError('CONFLICT', 'This workspace uses its account pool’s keys. Unassign the pool to sign in with your own Claude account.');
+      throw new AppError(
+        'CONFLICT',
+        'This workspace uses its account pool’s keys. Unassign the pool to sign in with your own Claude account.',
+      );
     return [target, name] as const;
   };
   /** `?claude=<id>`: which of the workspace's Claudes (its directory, each with its own login); Default when absent. */
@@ -881,7 +957,9 @@ export function createApp(
   ws.post('/:target/:name/claude-login', toManage, async (c) => {
     const [target, name] = ownSignIn(c);
     const req = (await c.req.json().catch(() => ({}))) as Partial<ClaudeLoginRequest> | null;
-    return c.json(success<ClaudeLoginStart>(await logins.start(target, name, { sso: req?.sso === true, email: req?.email, dir: claudeDir(c) })));
+    return c.json(
+      success<ClaudeLoginStart>(await logins.start(target, name, { sso: req?.sso === true, email: req?.email, dir: claudeDir(c) })),
+    );
   });
   ws.post('/:target/:name/claude-login/code', toManage, async (c) => {
     const { code } = await body<{ code: string }>(c);
@@ -923,7 +1001,8 @@ export function createApp(
     const [target, name] = [c.req.param('target'), c.req.param('name')];
     const live = (await chatController.claudesOf(`${target}/${name}`)).filter((x) => !x.removedAt);
     // Its target's API does not answer (T-515): the Claudes come from the store, and their sign-in and terminals are unknown, not waited for.
-    if (workspaces.isUnavailable(target)) return c.json(success(live.map((claude): WorkspaceClaudeState => ({ claude, auth: null, terminals: 0 }))));
+    if (workspaces.isUnavailable(target))
+      return c.json(success(live.map((claude): WorkspaceClaudeState => ({ claude, auth: null, terminals: 0 }))));
     const open = await terminals.list(target, name).catch(() => []);
     const states = await Promise.all(
       live.map(async (claude): Promise<WorkspaceClaudeState> => ({
@@ -936,7 +1015,9 @@ export function createApp(
   });
   ws.patch('/:target/:name/claudes/:claude', toOperate, childGuard('claude', 'manage'), async (c) => {
     const { name: label } = await body<{ name: string }>(c);
-    return c.json(success(chatController.renameClaude(`${c.req.param('target')}/${c.req.param('name')}`, c.req.param('claude'), String(label ?? ''))));
+    return c.json(
+      success(chatController.renameClaude(`${c.req.param('target')}/${c.req.param('name')}`, c.req.param('claude'), String(label ?? ''))),
+    );
   });
   ws.delete('/:target/:name/claudes/:claude', toManage, childGuard('claude', 'manage'), async (c) => {
     const [target, name, claudeId] = [c.req.param('target'), c.req.param('name'), c.req.param('claude')];
@@ -963,13 +1044,27 @@ export function createApp(
   ws.patch('/:ref/resources', refToOperate, async (c, next) => {
     const ref = c.req.param('ref');
     if (!isStableWorkspaceId(ref)) return next();
-    return c.json(success<WorkspaceResources>(await workspaces.setResources(ref, await body<UpdateWorkspaceResourcesRequest>(c), actorOf(c))));
+    return c.json(
+      success<WorkspaceResources>(await workspaces.setResources(ref, await body<UpdateWorkspaceResourcesRequest>(c), actorOf(c))),
+    );
   });
-  ws.get('/:target/:name/resources', toViewAlias, async (c) => c.json(success<WorkspaceResources>(await workspaces.resourcesOf(`${c.req.param('target')}/${c.req.param('name')}`, actorOf(c)))));
-  ws.patch('/:target/:name/resources', toOperateAlias, async (c) =>
-    c.json(success<WorkspaceResources>(await workspaces.setResources(`${c.req.param('target')}/${c.req.param('name')}`, await body<UpdateWorkspaceResourcesRequest>(c), actorOf(c)))),
+  ws.get('/:target/:name/resources', toViewAlias, async (c) =>
+    c.json(success<WorkspaceResources>(await workspaces.resourcesOf(`${c.req.param('target')}/${c.req.param('name')}`, actorOf(c)))),
   );
-  ws.get('/:target/:name', toViewAlias, async (c) => c.json(success(decorate(await workspaces.get(`${c.req.param('target')}/${c.req.param('name')}`, actorOf(c))))));
+  ws.patch('/:target/:name/resources', toOperateAlias, async (c) =>
+    c.json(
+      success<WorkspaceResources>(
+        await workspaces.setResources(
+          `${c.req.param('target')}/${c.req.param('name')}`,
+          await body<UpdateWorkspaceResourcesRequest>(c),
+          actorOf(c),
+        ),
+      ),
+    ),
+  );
+  ws.get('/:target/:name', toViewAlias, async (c) =>
+    c.json(success(decorate(await workspaces.get(`${c.req.param('target')}/${c.req.param('name')}`, actorOf(c))))),
+  );
   // Rename (T-42 slice 2): the label only, by either form of the id. Nothing running is touched; the old forms keep resolving.
   const rename = async (c: Context<Env>, ref: string) => {
     const { label } = await body<RenameWorkspaceRequest>(c);
@@ -990,7 +1085,12 @@ export function createApp(
     const created = await workspaces.create(req, actorOf(c));
     // A new workspace has no sign-in of its own yet, so no override confirmation is needed.
     if (poolId) pools.assign(created.id, { poolId }, { existing: false });
-    for (const [type, ids] of Object.entries(addOns)) poolService.setAssignments(created.id, type, ids.map((id) => ({ poolId: id })));
+    for (const [type, ids] of Object.entries(addOns))
+      poolService.setAssignments(
+        created.id,
+        type,
+        ids.map((id) => ({ poolId: id })),
+      );
     console.log(`[workspaces] creating ${created.id}${poolId ? ' with an account pool' : ''}`);
     return c.json(success(decorate(created)), 202);
   });
@@ -1006,7 +1106,13 @@ export function createApp(
   const auditRuntime = (c: Context<Env>, kind: string, subject: string | null) => {
     const actor = actorOf(c);
     const workspace = `${c.req.param('target')}/${c.req.param('name')}`;
-    workspaces.hooks.audit?.({ kind, actor: actorString(actor), userId: actorUserId(actor), subject: subject ?? workspace, detail: { workspace } });
+    workspaces.hooks.audit?.({
+      kind,
+      actor: actorString(actor),
+      userId: actorUserId(actor),
+      subject: subject ?? workspace,
+      detail: { workspace },
+    });
   };
   const stableIdOf = (c: Context<Env>) => workspaces.resolve(`${c.req.param('target')}/${c.req.param('name')}`)?.id ?? null;
   ws.get('/:target/:name/preflight', toOperate, async (c) => {
@@ -1044,7 +1150,9 @@ export function createApp(
   // App ports (T-948, docs/prd/app-ports.md): the ports listening in a workspace, and the open of one on its own app host (a one-time code, audited).
   // Both `operate`: the list runs a command in the workspace, the open reaches into it. Off (no PORT_PROXY_HOST_SUFFIX): the list says so, the open is 404.
   ws.get('/:target/:name/ports', toOperate, async (c) =>
-    c.json(success<AppPortList>(appPorts ? await appPorts.list(c.req.param('target'), c.req.param('name')) : { enabled: false, ports: [] })),
+    c.json(
+      success<AppPortList>(appPorts ? await appPorts.list(c.req.param('target'), c.req.param('name')) : { enabled: false, ports: [] }),
+    ),
   );
   ws.post('/:target/:name/ports/open', toOperate, async (c) => {
     if (!appPorts?.enabled) throw new AppError('NOT_FOUND', 'Not found.');
@@ -1150,7 +1258,10 @@ export function createApp(
   if (secrets) {
     const sr = new Hono<Env>();
     sr.use(requireSession);
-    sr.route('/', createSecretsAdminRoutes(() => secrets));
+    sr.route(
+      '/',
+      createSecretsAdminRoutes(() => secrets),
+    );
     app.route('/api/secrets', sr);
   }
 
@@ -1188,7 +1299,10 @@ export function createApp(
     const pm = new Hono<Env>();
     pm.use(requireSession);
     plainNamesOn(pm, '/agents/:target/:name');
-    pm.route('/', createPortalMcpRoutes(portalMcp, { workspaces: async () => (await workspaces.list()).map((w) => ({ id: w.id, name: w.name })) }));
+    pm.route(
+      '/',
+      createPortalMcpRoutes(portalMcp, { workspaces: async () => (await workspaces.list()).map((w) => ({ id: w.id, name: w.name })) }),
+    );
     app.route('/api/portal-mcp', pm);
   }
 
@@ -1349,7 +1463,8 @@ export function createApp(
     // page of a tab that stayed open across a deploy (the hashed chunks it still asks for are gone). Client-side routes
     // never carry a file extension.
     app.get('*', async (c, next) => {
-      if (!/^\/assets\/|\.(?:m?js|css|map|json|png|jpe?g|gif|svg|ico|webp|avif|woff2?|ttf|txt|xml|webmanifest|wasm)$/i.test(c.req.path)) return next();
+      if (!/^\/assets\/|\.(?:m?js|css|map|json|png|jpe?g|gif|svg|ico|webp|avif|woff2?|ttf|txt|xml|webmanifest|wasm)$/i.test(c.req.path))
+        return next();
       c.header('Cache-Control', 'no-store');
       return c.text('Not found', 404);
     });

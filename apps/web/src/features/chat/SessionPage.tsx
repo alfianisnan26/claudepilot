@@ -1,6 +1,30 @@
 import { Badge, cn, ConfirmDialog, Menu, Spinner, useMediaQuery, useToast, type MenuItem } from '@isnanme/ui';
 import type { ChatRequest, ChatSession } from '@portal/contracts';
-import { UserPlus, Archive, ArchiveRestore, ArrowLeft, Bell, BellOff, Bot, CircleStop, FolderOpen, Gauge, Info, ListCollapse, ListTree, MoreHorizontal, Pencil, PanelRight, PanelRightClose, Pin, PinOff, RotateCw, ShieldAlert, Trash2, X } from 'lucide-react';
+import {
+  UserPlus,
+  Archive,
+  ArchiveRestore,
+  ArrowLeft,
+  Bell,
+  BellOff,
+  Bot,
+  CircleStop,
+  FolderOpen,
+  Gauge,
+  Info,
+  ListCollapse,
+  ListTree,
+  MoreHorizontal,
+  Pencil,
+  PanelRight,
+  PanelRightClose,
+  Pin,
+  PinOff,
+  RotateCw,
+  ShieldAlert,
+  Trash2,
+  X,
+} from 'lucide-react';
 import { type CSSProperties, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { BRAND_NAME } from '@/components/Logo';
@@ -86,8 +110,30 @@ export function SessionPage({ sessionId, onBack }: { sessionId?: string; onBack?
   const id = sessionId ?? params.id ?? '';
   const navigate = useNavigate();
   const toast = useToast();
-  const { connected, events, paging, loadOlder, loadWhole, delta, agentLive, session, removed, inputs, outbox, tasks, btw, btwAsk, btwCancel, btwClose, btwPin, send, respond, control, stop, end } =
-    useChatSession(id);
+  const {
+    connected,
+    events,
+    paging,
+    loadOlder,
+    loadWhole,
+    delta,
+    agentLive,
+    session,
+    removed,
+    inputs,
+    outbox,
+    tasks,
+    btw,
+    btwAsk,
+    btwCancel,
+    btwClose,
+    btwPin,
+    send,
+    respond,
+    control,
+    stop,
+    end,
+  } = useChatSession(id);
   // The glance widgets follow this session: Quota shows its Claude.
   useGlanceFocus({ sessionId: id, claudeId: session?.claudeId, workspaceId: session?.workspaceId });
   const [ending, setEnding] = useState(false);
@@ -154,7 +200,7 @@ export function SessionPage({ sessionId, onBack }: { sessionId?: string; onBack?
     if (!btw || !focusBtw.current) return;
     focusBtw.current = false;
     requestAnimationFrame(() => btwEl.current?.focus({ preventScroll: true }));
-  }, [btw?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [btw?.id]);
   const closeBtw = useCallback(() => {
     btwClose();
     composer.current?.focus();
@@ -322,7 +368,13 @@ export function SessionPage({ sessionId, onBack }: { sessionId?: string; onBack?
       const event = auto.marks.get(handoffId);
       if (!event) return null;
       // Undo is the normal Move dialog with the Claude the chat left chosen (FR19).
-      return <DividerMark event={event} undo={undoFor(auto.state?.lastMove ?? null, handoffId)} onUndo={(claudeId) => session && move.start(session, claudeId)} />;
+      return (
+        <DividerMark
+          event={event}
+          undo={undoFor(auto.state?.lastMove ?? null, handoffId)}
+          onUndo={(claudeId) => session && move.start(session, claudeId)}
+        />
+      );
     },
     [auto.marks, auto.state?.lastMove, session, move],
   );
@@ -400,7 +452,9 @@ export function SessionPage({ sessionId, onBack }: { sessionId?: string; onBack?
   const [sharing, setSharing] = useState(false);
   const menuItems: MenuItem[] = [
     // Bypass is one tap to leave (FR20): the header's red shield, and first here.
-    ...(bypass ? [{ label: 'Turn off Bypass', icon: <ShieldAlert className="size-4" />, onSelect: fromMenu(() => void leaveBypass()), danger: true }] : []),
+    ...(bypass
+      ? [{ label: 'Turn off Bypass', icon: <ShieldAlert className="size-4" />, onSelect: fromMenu(() => void leaveBypass()), danger: true }]
+      : []),
     { label: 'Info', icon: <Info className="size-4" />, onSelect: fromMenu(() => setInfoOpen(true)), disabled: !session },
     ...(roomy
       ? []
@@ -411,7 +465,12 @@ export function SessionPage({ sessionId, onBack }: { sessionId?: string; onBack?
     { label: 'Share…', icon: <UserPlus className="size-4" />, onSelect: fromMenu(() => setSharing(true)), disabled: !session },
     { label: 'Rename…', icon: <Pencil className="size-4" />, onSelect: fromMenu(() => setRenaming(true)), disabled: !session },
     { label: 'Usage', icon: <Gauge className="size-4" />, onSelect: fromMenu(() => setUsageOpen(true)) },
-    { label: notifyDone.done ? 'Don\u2019t notify when done' : 'Notify when done', icon: notifyDone.done ? <BellOff className="size-4" /> : <Bell className="size-4" />, onSelect: fromMenu(notifyDone.toggle), disabled: !session || ended },
+    {
+      label: notifyDone.done ? 'Don\u2019t notify when done' : 'Notify when done',
+      icon: notifyDone.done ? <BellOff className="size-4" /> : <Bell className="size-4" />,
+      onSelect: fromMenu(notifyDone.toggle),
+      disabled: !session || ended,
+    },
     details
       ? { label: 'Show less', icon: <ListCollapse className="size-4" />, onSelect: fromMenu(toggleDetails) }
       : { label: 'Show all details', icon: <ListTree className="size-4" />, onSelect: fromMenu(toggleDetails) },
@@ -431,17 +490,36 @@ export function SessionPage({ sessionId, onBack }: { sessionId?: string; onBack?
     ...(autoMenu.item ? [{ ...autoMenu.item, onSelect: fromMenu(autoMenu.item.onSelect) }] : []),
     session?.pinnedAt
       ? { label: 'Unpin', icon: <PinOff className="size-4" />, onSelect: fromMenu(() => void togglePin()) }
-      : { label: 'Pin', icon: <Pin className="size-4" />, onSelect: fromMenu(() => void togglePin()), disabled: !session || !!session.archivedAt },
+      : {
+          label: 'Pin',
+          icon: <Pin className="size-4" />,
+          onSelect: fromMenu(() => void togglePin()),
+          disabled: !session || !!session.archivedAt,
+        },
     session?.archivedAt
       ? { label: 'Unarchive', icon: <ArchiveRestore className="size-4" />, onSelect: fromMenu(() => void unarchive()) }
       : {
           label: 'Archive',
           icon: <Archive className="size-4" />,
-          onSelect: fromMenu(() => (session?.state === 'working' || session?.state === 'waiting' || session?.worktree ? setArchiving(true) : void archive())),
+          onSelect: fromMenu(() =>
+            session?.state === 'working' || session?.state === 'waiting' || session?.worktree ? setArchiving(true) : void archive(),
+          ),
           disabled: !session,
         },
-    { label: 'End session', icon: <CircleStop className="size-4" />, onSelect: fromMenu(() => setEnding(true)), danger: true, disabled: ended },
-    { label: 'Delete…', icon: <Trash2 className="size-4" />, onSelect: fromMenu(() => setDeleting(true)), danger: true, disabled: !session },
+    {
+      label: 'End session',
+      icon: <CircleStop className="size-4" />,
+      onSelect: fromMenu(() => setEnding(true)),
+      danger: true,
+      disabled: ended,
+    },
+    {
+      label: 'Delete…',
+      icon: <Trash2 className="size-4" />,
+      onSelect: fromMenu(() => setDeleting(true)),
+      danger: true,
+      disabled: !session,
+    },
   ];
 
   return (
@@ -452,7 +530,6 @@ export function SessionPage({ sessionId, onBack }: { sessionId?: string; onBack?
       className="fixed inset-x-0 top-0 h-dvh overflow-clip bg-bg text-ink [touch-action:pinch-zoom]"
       style={{ ...pinnedToViewport(viewport), ...(cramped ? ({ '--session-header-bottom': 'var(--bar-top)' } as CSSProperties) : null) }}
     >
-
       <div ref={row} className="flex h-full min-h-0">
         <div className="relative flex min-w-0 flex-1 flex-col">
           {/*
@@ -460,9 +537,16 @@ export function SessionPage({ sessionId, onBack }: { sessionId?: string; onBack?
             --bar-*), under the status bar; the transcript scrolls under it, and under the status bar's own band. Back, the title (tap:
             Session info), the state, ⋯; Bypass adds its red shield. Everything else is in ⋯.
           */}
-          <div hidden={cramped} className="pointer-events-none absolute inset-x-0 top-0 z-30 pt-[var(--bar-top)] pr-[var(--bar-right)] pl-[var(--bar-left)]">
+          <div
+            hidden={cramped}
+            className="pointer-events-none absolute inset-x-0 top-0 z-30 pt-[var(--bar-top)] pr-[var(--bar-right)] pl-[var(--bar-left)]"
+          >
             {/* What scrolls under the header blurs and fades out below it (T-102): no hard edge, no darker band under the pill. */}
-            <div aria-hidden="true" data-header-fade="" className="session-fade pointer-events-none absolute inset-x-0 top-0 -z-10 h-[calc(var(--session-header-bottom)+2.75rem)]" />
+            <div
+              aria-hidden="true"
+              data-header-fade=""
+              className="session-fade pointer-events-none absolute inset-x-0 top-0 -z-10 h-[calc(var(--session-header-bottom)+2.75rem)]"
+            />
             <header
               data-session-header=""
               data-popover-ceiling=""
@@ -525,7 +609,11 @@ export function SessionPage({ sessionId, onBack }: { sessionId?: string; onBack?
                     </span>
                   </>
                 ) : session ? (
-                  endedForSafety(session.endedReason) && ended ? <Badge tone="danger">Ended</Badge> : <StateBadge state={state} agents={running} />
+                  endedForSafety(session.endedReason) && ended ? (
+                    <Badge tone="danger">Ended</Badge>
+                  ) : (
+                    <StateBadge state={state} agents={running} />
+                  )
                 ) : null}
               </span>
               <KeepGoingChip session={session} onOpen={() => setInfoOpen(true)} />
@@ -589,7 +677,9 @@ export function SessionPage({ sessionId, onBack }: { sessionId?: string; onBack?
               {/* The kit's ⋯ is 36 px; on this bar every target is 44 (and its items too, for a thumb). */}
               <div ref={menuRef} className="shrink-0 [&_[aria-haspopup=menu]]:size-11 [&_[role=menuitem]]:min-h-11">
                 <Menu
-                  label={!roomy && running ? `Session actions, ${running} ${running === 1 ? 'agent' : 'agents'} running` : 'Session actions'}
+                  label={
+                    !roomy && running ? `Session actions, ${running} ${running === 1 ? 'agent' : 'agents'} running` : 'Session actions'
+                  }
                   trigger={
                     // The count sits at the corner of the 44 px button, clear of the dots (T-102: '14' used to cover them).
                     <span className="relative flex size-11 items-center justify-center">
@@ -641,7 +731,9 @@ export function SessionPage({ sessionId, onBack }: { sessionId?: string; onBack?
             className={cn(
               'pointer-events-none absolute inset-x-0 bottom-0 z-20 flex flex-col justify-end pr-[var(--bar-right)] pb-[var(--bar-gap)] pl-[var(--bar-left)]',
               // Review on a short screen asked for the whole card: then the stack may take everything below the header.
-              current && short && !approvalBar ? 'max-h-[calc(100%-var(--session-header-bottom)-0.25rem)]' : 'max-h-[calc(75%-var(--session-header-bottom))]',
+              current && short && !approvalBar
+                ? 'max-h-[calc(100%-var(--session-header-bottom)-0.25rem)]'
+                : 'max-h-[calc(75%-var(--session-header-bottom))]',
             )}
           >
             <div className="pointer-events-auto mx-auto flex min-h-0 w-full max-w-[760px] flex-col justify-end gap-2 pt-2">
@@ -667,10 +759,17 @@ export function SessionPage({ sessionId, onBack }: { sessionId?: string; onBack?
                 />
               ) : null}
               {auto.state?.pending && !gone && !ended && !session?.switching && (
-                <SuggestionCard state={auto.state} allowAuto={auto.allowAuto} bypass={bypass} disabled={!connected} onChange={auto.setState} />
+                <SuggestionCard
+                  state={auto.state}
+                  allowAuto={auto.allowAuto}
+                  bypass={bypass}
+                  disabled={!connected}
+                  onChange={auto.setState}
+                />
               )}
               {!auto.state?.pending && !gone && !ended && !session?.switching && <HoldLine state={auto.state} />}
-              {btw && btwLayout.mode === 'card' &&
+              {btw &&
+                btwLayout.mode === 'card' &&
                 btwCard(
                   'card',
                   btwLayout.canSide && (
@@ -697,7 +796,13 @@ export function SessionPage({ sessionId, onBack }: { sessionId?: string; onBack?
                   <>
                     {session && <ResumeBanner session={session} connected={connected} onResume={() => trustedControl('resume')} />}
                     {session && !gone && (
-                      <RestartChip hint={restart.hint} anchor={restart.anchor} onOpen={() => restart.start('mcp')} onCancel={() => void restart.actions.cancel()} onNow={restart.actions.now} />
+                      <RestartChip
+                        hint={restart.hint}
+                        anchor={restart.anchor}
+                        onOpen={() => restart.start('mcp')}
+                        onCancel={() => void restart.actions.cancel()}
+                        onNow={restart.actions.now}
+                      />
                     )}
                     <Composer
                       ref={composer}
@@ -751,7 +856,11 @@ export function SessionPage({ sessionId, onBack }: { sessionId?: string; onBack?
           </BtwSidePanel>
         )}
         {wide && panel === 'agents' && btwLayout.mode !== 'panel' && (
-          <aside id="agents-panel" aria-label="Agents" className="flex w-[360px] shrink-0 flex-col border-l border-line bg-bg pt-[var(--safe-top)]">
+          <aside
+            id="agents-panel"
+            aria-label="Agents"
+            className="flex w-[360px] shrink-0 flex-col border-l border-line bg-bg pt-[var(--safe-top)]"
+          >
             <AgentsPanel
               sessionId={id}
               tasks={tasks}
@@ -767,13 +876,20 @@ export function SessionPage({ sessionId, onBack }: { sessionId?: string; onBack?
           </aside>
         )}
         {wide && !gone && panel === 'files' && btwLayout.mode !== 'panel' && (
-          <aside id="files-panel" aria-label="Files" className="flex w-[360px] shrink-0 flex-col border-l border-line bg-bg pt-[var(--safe-top)]">
+          <aside
+            id="files-panel"
+            aria-label="Files"
+            className="flex w-[360px] shrink-0 flex-col border-l border-line bg-bg pt-[var(--safe-top)]"
+          >
             <FilesPanel key={id} sessionId={id} view={filesView} onView={setFilesView} onClose={toggleFiles} closeLabel="Hide files" />
           </aside>
         )}
         {/* T-947: the other sessions, when no panel takes the right side, on wide screens (1280 px and up). */}
         {!panel && btwLayout.mode !== 'panel' && (
-          <aside aria-label="Sessions" className="hidden w-[280px] shrink-0 flex-col border-l border-line bg-bg pt-[var(--safe-top)] xl:flex">
+          <aside
+            aria-label="Sessions"
+            className="hidden w-[280px] shrink-0 flex-col border-l border-line bg-bg pt-[var(--safe-top)] xl:flex"
+          >
             <SessionsSidebar currentId={id} />
           </aside>
         )}
@@ -793,7 +909,16 @@ export function SessionPage({ sessionId, onBack }: { sessionId?: string; onBack?
           onClose={() => setSheet(null)}
         />
       )}
-      {!wide && !gone && <FilesSheet key={id} open={sheet === 'files'} sessionId={id} view={filesView} onView={setFilesView} onClose={() => setSheet(null)} />}
+      {!wide && !gone && (
+        <FilesSheet
+          key={id}
+          open={sheet === 'files'}
+          sessionId={id}
+          view={filesView}
+          onView={setFilesView}
+          onClose={() => setSheet(null)}
+        />
+      )}
 
       <TrustSheet trust={trust} />
 
@@ -857,7 +982,11 @@ function GoneNote() {
 /** The chat is moving to another Claude: nothing is sent or queued meanwhile; the transcript shows the steps. */
 function MovingNote({ to, step, from }: { to: string; step: 'handoff' | 'starting' | 'finishing'; from: string | null }) {
   return (
-    <p role="status" aria-live="polite" className="glass-card flex items-center justify-center gap-2.5 rounded-full px-4 py-3 text-center text-[13.5px] text-muted">
+    <p
+      role="status"
+      aria-live="polite"
+      className="glass-card flex items-center justify-center gap-2.5 rounded-full px-4 py-3 text-center text-[13.5px] text-muted"
+    >
       <Spinner className="size-4" />
       <span>
         {step === 'handoff' ? `${from ?? 'Claude'} is writing the handoff…` : step === 'starting' ? `Starting ${to}…` : `Moving to ${to}…`}
@@ -874,7 +1003,13 @@ function EndedNote({ session }: { session: ChatSession | null | undefined }) {
   const stop = endedForSafety(session?.endedReason);
   const resumable = session?.state === 'ended' && !!session.endedFor;
   return (
-    <div role="status" className={cn('glass-card flex items-center justify-center gap-2 rounded-full py-1 text-center text-[13.5px] text-muted', resumable ? 'pr-1.5 pl-4' : 'px-4 py-3')}>
+    <div
+      role="status"
+      className={cn(
+        'glass-card flex items-center justify-center gap-2 rounded-full py-1 text-center text-[13.5px] text-muted',
+        resumable ? 'pr-1.5 pl-4' : 'px-4 py-3',
+      )}
+    >
       <span className="min-w-0 break-words">{stop ? <span className="font-semibold text-danger">{stop.label}</span> : 'Ended'}</span>
       {resumable && session && <RecoverButton session={session} />}
     </div>

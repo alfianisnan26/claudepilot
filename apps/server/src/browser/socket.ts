@@ -56,8 +56,19 @@ export function attachBrowserSockets(server: Server, deps: { portal: Portal; ser
       ws.close(1011, 'Something went wrong.');
     };
     if (match[3] === 'preview')
-      preview.handleUpgrade(req, socket, head, (ws) => void new PreviewSession({ ws, service: deps.service, workspaceId, device, secure }).run().catch(failed(ws)));
-    else vnc.handleUpgrade(req, socket, head, (ws) => void new VncSession({ ws, service: deps.service, workspaceId, device, secure }).run().catch(failed(ws)));
+      preview.handleUpgrade(
+        req,
+        socket,
+        head,
+        (ws) => void new PreviewSession({ ws, service: deps.service, workspaceId, device, secure }).run().catch(failed(ws)),
+      );
+    else
+      vnc.handleUpgrade(
+        req,
+        socket,
+        head,
+        (ws) => void new VncSession({ ws, service: deps.service, workspaceId, device, secure }).run().catch(failed(ws)),
+      );
   });
 
   return {

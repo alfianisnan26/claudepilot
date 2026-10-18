@@ -10,7 +10,11 @@ const root = process.cwd();
 const CONTROLLER = 'apps/server/src/chat/controller.ts';
 const test = { cwd: 'apps/server', args: ['--import', 'tsx', '--test', 'src/chat/caps.test.ts'] };
 const run = () => spawnSync(process.execPath, test.args, { cwd: join(root, test.cwd), encoding: 'utf8' });
-const names = (r) => `${r.stdout}`.split('\n').filter((l) => /^not ok /.test(l)).join('\n');
+const names = (r) =>
+  `${r.stdout}`
+    .split('\n')
+    .filter((l) => /^not ok /.test(l))
+    .join('\n');
 let bad = 0;
 
 const base = run();

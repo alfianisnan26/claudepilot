@@ -30,7 +30,8 @@ const notes = (s: Live, id: string) => s.controller.history(id).flatMap((e) => (
 
 /** A turn of `id` ends on `tail`: its message is done, so it is idle with nothing open. */
 function endTurn(id: string, tail: { push(x: string): void }, uuid: string) {
-  for (const state of ['queued', 'started']) tail.push(line({ type: 'command_lifecycle', command_uuid: uuid, state, uuid: `${uuid}-${state}`, session_id: id }));
+  for (const state of ['queued', 'started'])
+    tail.push(line({ type: 'command_lifecycle', command_uuid: uuid, state, uuid: `${uuid}-${state}`, session_id: id }));
   tail.push(line({ type: 'result', subtype: 'success', total_cost_usd: 0.01, is_error: false, session_id: id }));
   tail.push(line({ type: 'command_lifecycle', command_uuid: uuid, state: 'completed', uuid: `${uuid}-done`, session_id: id }));
 }
@@ -89,14 +90,20 @@ test('T-417: the cap full with only working workers and idle leads: the start wa
     assert.equal(s.controller.get(s.id)!.process, 'live', 'the idle lead never sleeps for it');
     assert.equal(s.ws.starts, starts, 'nothing started while it waits');
     assert.deepEqual(slept(s), []);
-    assert.ok(notes(s, queued.id).some((t) => t.startsWith('Waiting for a slot · 2 of 2 running in docker/ws1')), 'its transcript says it too');
+    assert.ok(
+      notes(s, queued.id).some((t) => t.startsWith('Waiting for a slot · 2 of 2 running in docker/ws1')),
+      'its transcript says it too',
+    );
 
     // The worker's turn ends: an idle worker may sleep, so the waiting start takes its slot.
     endTurn(worker.id, worker.tail, 'w-turn-1');
     worker.tail.push(ok((await s.take('get_usage')).id, USAGE_API_KEY)); // the usage check after a turn (§6 rule 3), answered as Claude Code does
-    const seen = () => JSON.stringify({ worker: pick(s, worker.id), queued: pick(s, queued.id), lead: pick(s, s.id), inputs: s.inputs('w-turn-1') });
+    const seen = () =>
+      JSON.stringify({ worker: pick(s, worker.id), queued: pick(s, queued.id), lead: pick(s, s.id), inputs: s.inputs('w-turn-1') });
     await until(() => s.controller.get(worker.id)!.state === 'idle').catch(() => assert.fail(`the worker's turn did not end: ${seen()}`));
-    await until(() => s.controller.get(queued.id)!.process === 'live' && s.controller.get(queued.id)!.state === 'idle').catch(() => assert.fail(`the waiting start did not run: ${seen()}`));
+    await until(() => s.controller.get(queued.id)!.process === 'live' && s.controller.get(queued.id)!.state === 'idle').catch(() =>
+      assert.fail(`the waiting start did not run: ${seen()}`),
+    );
     assert.equal(s.controller.get(worker.id)!.process, 'asleep');
     assert.equal(s.controller.get(s.id)!.process, 'live');
     assert.deepEqual(slept(s), [worker.id]);
@@ -126,11 +133,15 @@ async function leadInBypassAsleep(s: Live) {
   await until(() => s.controller.get(lead.id)!.process === 'asleep', 4000);
   assert.equal(s.controller.get(lead.id)!.mode, 'default', 'asleep, nothing runs in Bypass');
   assert.ok(notes(s, lead.id).includes('Bypass paused for sleep: it comes back at the wake if the policy still allows it.'));
-  assert.deepEqual(s.controller.audit({ kind: 'bypass.left', sessionId: lead.id }).map((a) => [a.detail.why, a.detail.kept]), [['sleep', true]]);
+  assert.deepEqual(
+    s.controller.audit({ kind: 'bypass.left', sessionId: lead.id }).map((a) => [a.detail.why, a.detail.kept]),
+    [['sleep', true]],
+  );
   return lead;
 }
 
-const bypassAsks = (s: Live) => controls(s.ws).filter((c) => c.request.subtype === 'set_permission_mode' && c.request.mode === 'bypassPermissions');
+const bypassAsks = (s: Live) =>
+  controls(s.ws).filter((c) => c.request.subtype === 'set_permission_mode' && c.request.mode === 'bypassPermissions');
 
 test('T-417: a lead slept in Bypass wakes in Bypass, through the gated path a Restart uses, on the record', async () => {
   const s = await liveSession({ idleSleepMs: 200 }, true);
@@ -168,11 +179,16 @@ test('T-425 S2: two sends to one session are written in call order, though the f
 
     const first = s.controller.send(lead.id, 'order-1', 'FIRST-LINE');
     await until(() => s.ws.tails.length > tails && bypassAsks(s).length > asked, 4000).catch((e: unknown) => {
-      throw new Error(`${String(e)}; tails ${s.ws.tails.length}/${tails}; sends: ${JSON.stringify(s.ws.sends.slice(sends).map((x) => x.line.slice(0, 90)))}; notes: ${JSON.stringify(notes(s, lead.id).slice(-4))}`);
+      throw new Error(
+        `${String(e)}; tails ${s.ws.tails.length}/${tails}; sends: ${JSON.stringify(s.ws.sends.slice(sends).map((x) => x.line.slice(0, 90)))}; notes: ${JSON.stringify(notes(s, lead.id).slice(-4))}`,
+      );
     }); // the first is in its Bypass step: the process is live
     const second = s.controller.send(lead.id, 'order-2', 'SECOND-LINE'); // finds the session live and would write at once
     await sleep(30); // inside the 150 ms the Bypass request waits for the answer
-    assert.ok(!s.ws.sends.slice(sends).some((x) => /FIRST-LINE|SECOND-LINE/.test(x.line)), 'no message is written before the first one’s turn (the control request is)');
+    assert.ok(
+      !s.ws.sends.slice(sends).some((x) => /FIRST-LINE|SECOND-LINE/.test(x.line)),
+      'no message is written before the first one’s turn (the control request is)',
+    );
     s.ws.tails.at(-1)!.push(ok(bypassAsks(s).at(-1)!.id, { mode: 'bypassPermissions' }));
     await Promise.all([first, second]);
     const written = s.ws.sends.slice(sends).map((x) => x.line);

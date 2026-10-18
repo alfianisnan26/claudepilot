@@ -157,7 +157,10 @@ const dailyBackup = () =>
     (e: unknown) => console.error(`[store] daily backup failed: ${(e as Error).message}`),
   );
 dailyBackup();
-const backupTimer = setInterval(loop('store.backup', 60 * 60 * 1000, 'Daily database backup (checked hourly)').wrap(dailyBackup), 60 * 60 * 1000);
+const backupTimer = setInterval(
+  loop('store.backup', 60 * 60 * 1000, 'Daily database backup (checked hourly)').wrap(dailyBackup),
+  60 * 60 * 1000,
+);
 backupTimer.unref();
 
 const portal = new Portal(config.serverCode, config.session.ttlMs);
@@ -468,7 +471,11 @@ portalMcp.onAgentAddress = (workspaceId) =>
 // A token never outlives its session, whatever else is wired: ended, archived and deleted sessions lose theirs here too.
 chatController.onEvent((id, msg) => {
   const reason =
-    msg.type === 'session' && (msg.session.state === 'ended' || msg.session.archivedAt) ? `session ${msg.session.state}` : msg.type === 'removed' ? 'session deleted' : null;
+    msg.type === 'session' && (msg.session.state === 'ended' || msg.session.archivedAt)
+      ? `session ${msg.session.state}`
+      : msg.type === 'removed'
+        ? 'session deleted'
+        : null;
   if (!reason) return;
   portalMcp.agents.revokeSession(id, reason);
   portalMcp.managers.revokeSession(id, reason);
@@ -507,7 +514,11 @@ portalMcp.agents.onStaleToken = (sessionId, reason) => {
   console.log(`[portal-mcp] ${sessionId.slice(0, 8)}: its process holds a ${reason} token; restarting it at the turn's end`);
   void chatController
     .restart(sessionId, { why: 'mcp', when: 'turn_end', actor: 'portal:token-heal', from: 'auto' })
-    .catch((e: unknown) => console.warn(`[portal-mcp] ${sessionId.slice(0, 8)}: the token heal could not restart it: ${e instanceof Error ? e.message : String(e)}`));
+    .catch((e: unknown) =>
+      console.warn(
+        `[portal-mcp] ${sessionId.slice(0, 8)}: the token heal could not restart it: ${e instanceof Error ? e.message : String(e)}`,
+      ),
+    );
 };
 {
   // T-102: agent access turned on or off changes the portal tools a session's NEXT process gets: its "Tools changed" hint says so.
@@ -733,7 +744,12 @@ const appPorts = new AppPorts({
   denyPorts: config.portProxy.denyPorts,
   workspaces,
   sessionValid: (token) => !!portal.session(token),
-  limits: { idleMs: config.portProxy.idleMs, socketIdleMs: config.portProxy.socketIdleMs, maxPerGrant: config.portProxy.maxPerGrant, maxPerWorkspace: config.portProxy.maxPerWorkspace },
+  limits: {
+    idleMs: config.portProxy.idleMs,
+    socketIdleMs: config.portProxy.socketIdleMs,
+    maxPerGrant: config.portProxy.maxPerGrant,
+    maxPerWorkspace: config.portProxy.maxPerWorkspace,
+  },
 });
 const app = createApp(portal, workspaces, store, accounts, pools, reconciler, health, chatController, {
   serveWeb: !config.dev,

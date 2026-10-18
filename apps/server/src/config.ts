@@ -42,7 +42,10 @@ export const config = {
     /** Where links into the admin UI point (PRD FR11); default this portal on its own port. */
     uiUrl: env('PORTAL_UI_URL'),
     /** `Origin` values `/mcp` accepts besides its own and https://claude.ai (comma-separated). */
-    origins: (env('PORTAL_MCP_ORIGINS') ?? '').split(',').map((s) => s.trim()).filter(Boolean),
+    origins: (env('PORTAL_MCP_ORIGINS') ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean),
   },
   /** Notifications (PWA PRD §11.4): the VAPID `sub` contact push services see (mailto: or https:); the setting `notify.contact` wins. */
   notify: {
@@ -55,7 +58,10 @@ export const config = {
     intervalS: Number(env('PORTAL_CLAUDE_USAGE_INTERVAL_S') ?? 600),
     fastS: Number(env('PORTAL_CLAUDE_USAGE_FAST_S') ?? 120),
     /** Probe only workspaces whose name starts with one of these (comma-separated); unset means all. */
-    only: (env('PORTAL_CLAUDE_USAGE_ONLY') ?? '').split(',').map((s) => s.trim()).filter(Boolean),
+    only: (env('PORTAL_CLAUDE_USAGE_ONLY') ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean),
   },
   /** Workspace git (workspace-git PRD §8): scans of each running workspace's repositories. `PORTAL_REPOS_AUTO=off` stops the timer (scans on request still work). */
   repos: {
@@ -63,7 +69,10 @@ export const config = {
     /** Seconds between automatic scans of one workspace, as given (repos/service.ts keeps it sane). */
     intervalS: Number(env('PORTAL_REPOS_INTERVAL_S') ?? 300),
     /** Folders scanned unless a workspace names its own (comma-separated, `~` is the home folder). */
-    roots: (env('PORTAL_REPOS_ROOTS') ?? '~').split(',').map((s) => s.trim()).filter(Boolean),
+    roots: (env('PORTAL_REPOS_ROOTS') ?? '~')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean),
     depth: Number(env('PORTAL_REPOS_DEPTH') ?? 6),
     maxRepos: Number(env('PORTAL_REPOS_MAX') ?? 300),
   },
@@ -95,12 +104,17 @@ export const config = {
      * repository (`PORTAL_WORKSPACE_IMAGE_REPO`, default claudepilot-workspace) at the tag of the default Claude Code pin, `cc-<x.y.z>`
      * (docs/prd/claude-version-pinning.md). Kubernetes keeps PORTAL_K8S_IMAGE as it was.
      */
-    dockerImage: env('PORTAL_WORKSPACE_IMAGE') ?? claudeImageRef(DEFAULT_CLAUDE_CODE_VERSION, env('PORTAL_WORKSPACE_IMAGE_REPO') ?? CLAUDE_IMAGE_REPO),
+    dockerImage:
+      env('PORTAL_WORKSPACE_IMAGE') ?? claudeImageRef(DEFAULT_CLAUDE_CODE_VERSION, env('PORTAL_WORKSPACE_IMAGE_REPO') ?? CLAUDE_IMAGE_REPO),
     /** Whether `PORTAL_WORKSPACE_IMAGE` fixed the image whole: then the default pin and "upgrade" pick tags in its repository only when asked. */
     dockerImageFixed: !!env('PORTAL_WORKSPACE_IMAGE'),
     imageContext: `${root}images/workspace`,
     /** Claude Code version pinning: the canary's container names start with this, and an optional moving tag follows the default pin's image. */
-    claude: { canaryPrefix: env('PORTAL_CANARY_PREFIX'), imageAlias: env('PORTAL_WORKSPACE_IMAGE_ALIAS'), canaryTarget: env('PORTAL_CANARY_TARGET') },
+    claude: {
+      canaryPrefix: env('PORTAL_CANARY_PREFIX'),
+      imageAlias: env('PORTAL_WORKSPACE_IMAGE_ALIAS'),
+      canaryTarget: env('PORTAL_CANARY_TARGET'),
+    },
     /**
      * The machine the portal runs on, as one workspace. Off unless asked for: anyone with the
      * server code gets a shell as the portal's user.
@@ -112,8 +126,7 @@ export const config = {
     kubernetes: {
       /** Off when there's no kubeconfig and we're not in a cluster. */
       enabled:
-        env('PORTAL_K8S_ENABLED') !== 'false' &&
-        !!(env('KUBECONFIG') || env('KUBERNETES_SERVICE_HOST') || env('PORTAL_K8S_ENABLED')),
+        env('PORTAL_K8S_ENABLED') !== 'false' && !!(env('KUBECONFIG') || env('KUBERNETES_SERVICE_HOST') || env('PORTAL_K8S_ENABLED')),
       namespace: env('PORTAL_K8S_NAMESPACE') ?? 'claudepilot-workspaces',
       image: env('PORTAL_K8S_IMAGE') ?? 'ghcr.io/alfianisnan26/claudepilot-workspace:latest',
       imagePullSecret: env('PORTAL_K8S_IMAGE_PULL_SECRET'),
@@ -138,8 +151,13 @@ export const config = {
    * (comma-separated), besides the portal's own and the browser's (CDP, supervisor).
    */
   portProxy: {
-    hostSuffix: env('PORT_PROXY_HOST_SUFFIX')?.toLowerCase().replace(/^\.+|\.+$/g, ''),
-    denyPorts: (env('PORT_PROXY_DENY_PORTS') ?? '').split(',').map((s) => Number(s.trim())).filter((n) => Number.isInteger(n) && n > 0),
+    hostSuffix: env('PORT_PROXY_HOST_SUFFIX')
+      ?.toLowerCase()
+      .replace(/^\.+|\.+$/g, ''),
+    denyPorts: (env('PORT_PROXY_DENY_PORTS') ?? '')
+      .split(',')
+      .map((s) => Number(s.trim()))
+      .filter((n) => Number.isInteger(n) && n > 0),
     /** An HTTP request whose app connection moves no byte for this long is cut (504 before the answer started). */
     idleMs: Math.max(1000, Number(env('PORT_PROXY_IDLE_MS') ?? 60_000) || 60_000),
     /** An upgraded socket (WebSocket) that moves no byte for this long is closed. */

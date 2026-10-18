@@ -509,7 +509,7 @@ export interface ChatControllerOptions {
 
 /** A refusal Claude Code sent, made safe to show: one line, no control characters, bounded, redacted. */
 function cliMessage(error: string): string {
-  // eslint-disable-next-line no-control-regex
+   
   const text = redact(error.replace(/[\x00-\x1f\x7f]+/g, ' ').trim());
   if (!text) return 'Claude Code refused the request.';
   return text.length > 300 ? `${text.slice(0, 299)}…` : text;
@@ -524,7 +524,7 @@ function shortId(v: string): string {
 /** A label for a transcript: one line, no control characters, no quotes that could close a frame, bounded and redacted. */
 function oneLineLabel(raw: string | undefined): string | undefined {
   if (!raw) return undefined;
-  // eslint-disable-next-line no-control-regex
+   
   const label = redact(
     raw
       .replace(/[\x00-\x1f\x7f"<>]+/g, ' ')
@@ -2821,7 +2821,14 @@ export class ChatController {
     }
   }
 
-  async #sendInLine(sessionId: string, uuid: string, text: string, opts: ChatSendOptions, inLine: Promise<void>, release: () => void): Promise<void> {
+  async #sendInLine(
+    sessionId: string,
+    uuid: string,
+    text: string,
+    opts: ChatSendOptions,
+    inLine: Promise<void>,
+    release: () => void,
+  ): Promise<void> {
     const session = this.#require(sessionId);
     if (session.state === 'ended') throw new AppError('CONFLICT', 'This session has ended.');
     if (typeof uuid !== 'string' || !CLIENT_ID.test(uuid)) throw new AppError('VALIDATION_FAILED', 'That message has no valid id.');
@@ -2914,7 +2921,20 @@ export class ChatController {
       try {
         await this.#writeLine(
           sessionId,
-          userLine(att.withNote(portal && !bare ? portalFrame(portal, actorLabel, text, opts.relation, leadSubagentWarning(this.#chat.get(sessionId)?.agentsRunning ?? 0, this.#chat.row(sessionId)?.max_workers)) : text), { uuid, priority, images: att.inline(), imagesFirst: att.needsStaging }),
+          userLine(
+            att.withNote(
+              portal && !bare
+                ? portalFrame(
+                    portal,
+                    actorLabel,
+                    text,
+                    opts.relation,
+                    leadSubagentWarning(this.#chat.get(sessionId)?.agentsRunning ?? 0, this.#chat.row(sessionId)?.max_workers),
+                  )
+                : text,
+            ),
+            { uuid, priority, images: att.inline(), imagesFirst: att.needsStaging },
+          ),
         );
         att.done();
       } catch (e) {
@@ -5275,9 +5295,9 @@ export class ChatController {
     const managerRow = this.#chat.row(o.sessionId);
     const manager = (managerRow as { kind?: string } | undefined)?.kind === 'manager';
     const grant = manager
-      ? await this.managerAccess
+      ? ((await this.managerAccess
           ?.mint({ workspaceId, sessionId: o.sessionId, ownerId: (managerRow as { owner_id?: string }).owner_id ?? 'u_owner' })
-          .catch(() => null) ?? null
+          .catch(() => null)) ?? null)
       : await this.#grant(workspaceId, o.sessionId);
     if (grant) this.#pilotTools.set(o.sessionId, false);
     else this.#pilotTools.delete(o.sessionId);
@@ -5311,7 +5331,16 @@ export class ChatController {
       // no hook runs (a project SessionStart hook did not); `--strict-mcp-config` admits the pilot server alone; no slash commands.
       // (`--safe-mode` would also drop the MCP server, so it is not used.)
       ...(manager
-        ? ['--tools', '', '--setting-sources', '', '--strict-mcp-config', '--disable-slash-commands', '--append-system-prompt', this.managerAccess?.brief() ?? '']
+        ? [
+            '--tools',
+            '',
+            '--setting-sources',
+            '',
+            '--strict-mcp-config',
+            '--disable-slash-commands',
+            '--append-system-prompt',
+            this.managerAccess?.brief() ?? '',
+          ]
         : []),
       o.resume ? '--resume' : '--session-id',
       o.csid,
@@ -5322,10 +5351,10 @@ export class ChatController {
       ...(manager
         ? []
         : leadSettings !== null
-        ? ['--settings', leadSettings]
-        : this.#projectSettings.has(`${workspaceId}\u0000${sessionCwd(o.cwd)}`)
-          ? ['--settings', this.#projectSettings.get(`${workspaceId}\u0000${sessionCwd(o.cwd)}`)!]
-          : []),
+          ? ['--settings', leadSettings]
+          : this.#projectSettings.has(`${workspaceId}\u0000${sessionCwd(o.cwd)}`)
+            ? ['--settings', this.#projectSettings.get(`${workspaceId}\u0000${sessionCwd(o.cwd)}`)!]
+            : []),
     ];
     const args = ['start', o.csid, String(o.seg), o.cwd, ...(lines.length ? ['--env', String(lines.length)] : []), '--', ...flags];
     const settle = (started: boolean) => {

@@ -68,7 +68,11 @@ export function rowActions(row: ListRow, on: RowActions): MenuItem[] {
   return [
     ...(s.archivedAt
       ? []
-      : [s.pinnedAt ? { label: 'Unpin', icon: <PinOff className="size-4" />, onSelect: () => on.pin(s) } : { label: 'Pin', icon: <Pin className="size-4" />, onSelect: () => on.pin(s) }]),
+      : [
+          s.pinnedAt
+            ? { label: 'Unpin', icon: <PinOff className="size-4" />, onSelect: () => on.pin(s) }
+            : { label: 'Pin', icon: <Pin className="size-4" />, onSelect: () => on.pin(s) },
+        ]),
     { label: 'Rename…', icon: <Pencil className="size-4" />, onSelect: () => on.rename(s) },
     ...(!gone && s.state !== 'ended' && !s.switching
       ? [{ label: 'Move to another Claude…', icon: <ArrowRightLeft className="size-4" />, onSelect: () => on.move(s) }]
@@ -76,7 +80,9 @@ export function rowActions(row: ListRow, on: RowActions): MenuItem[] {
     s.archivedAt
       ? { label: 'Unarchive', icon: <ArchiveRestore className="size-4" />, onSelect: () => on.unarchive(s) }
       : { label: 'Archive', icon: <Archive className="size-4" />, onSelect: () => on.archive(s) },
-    ...(s.state === 'ended' ? [] : [{ label: 'End session', icon: <CircleStop className="size-4" />, onSelect: () => on.end(s), danger: true }]),
+    ...(s.state === 'ended'
+      ? []
+      : [{ label: 'End session', icon: <CircleStop className="size-4" />, onSelect: () => on.end(s), danger: true }]),
     { label: 'Select', icon: <Check className="size-4" />, onSelect: () => on.select(s) },
     { label: 'Delete…', icon: <Trash2 className="size-4" />, onSelect: () => on.remove(s), danger: true },
   ];
@@ -114,7 +120,11 @@ function StateWord({ state }: { state: RowState }) {
 }
 
 const BAR: Record<'neutral' | 'warn' | 'critical', string> = { neutral: 'bg-ink-soft', warn: 'bg-amber-500', critical: 'bg-danger' };
-const PCT: Record<'neutral' | 'warn' | 'critical', string> = { neutral: '', warn: 'text-amber-700 dark:text-amber-400', critical: 'text-danger' };
+const PCT: Record<'neutral' | 'warn' | 'critical', string> = {
+  neutral: '',
+  warn: 'text-amber-700 dark:text-amber-400',
+  critical: 'text-danger',
+};
 
 /**
  * The mini quota bar (28 x 4 px) of the Claude a session runs on and its percent: the 5-hour window's percent used, neutral, amber from 70,
@@ -131,7 +141,9 @@ function ClaudeQuota({ meter: m }: { meter: QuotaMeter }) {
           data-quota-bar={m.kind === 'plan' ? m.tone : 'unavailable'}
           className="relative h-1 w-7 shrink-0 overflow-hidden rounded-full bg-line"
         >
-          {m.kind === 'plan' && <span className={cn('absolute inset-y-0 left-0 rounded-full', BAR[m.tone])} style={{ width: `${barWidth(m.usedPct)}%` }} />}
+          {m.kind === 'plan' && (
+            <span className={cn('absolute inset-y-0 left-0 rounded-full', BAR[m.tone])} style={{ width: `${barWidth(m.usedPct)}%` }} />
+          )}
         </span>
       )}
       {m.kind === 'plan' && (
@@ -227,7 +239,14 @@ export function SessionRow({
   const bypass = s.mode === 'bypassPermissions' && s.state !== 'ended';
   const role = roleShown(s);
   const state = rowState(s, row.workspaceGone, safety?.label ?? null);
-  const meta = rowMeta({ session: s, groupBy, showWorkspace: facts.showWorkspace, usage: facts.usage?.get(s.claudeId) ?? null, nowMs: facts.nowMs, lead });
+  const meta = rowMeta({
+    session: s,
+    groupBy,
+    showWorkspace: facts.showWorkspace,
+    usage: facts.usage?.get(s.claudeId) ?? null,
+    nowMs: facts.nowMs,
+    lead,
+  });
   const third = thirdLine(meta);
 
   // Line two (rowMeta.lineTwo): the items in priority order, each whole or not at all; a capped name ends in an ellipsis (its tip says it all).
@@ -239,7 +258,13 @@ export function SessionRow({
         return meta.claude && <ClaudeQuota meter={meta.claude.meter} />;
       case 'cost':
         // T-343: a running turn's cost is an estimate (≈) until its result; a model without a price adds nothing (unavailable, never a guess).
-        return meta.cost && <span data-row-cost="" className="tabular-nums">{meta.cost.estimate ? `≈ ${formatUsd(meta.cost.usd)}` : formatUsd(meta.cost.usd)}</span>;
+        return (
+          meta.cost && (
+            <span data-row-cost="" className="tabular-nums">
+              {meta.cost.estimate ? `≈ ${formatUsd(meta.cost.usd)}` : formatUsd(meta.cost.usd)}
+            </span>
+          )
+        );
       case 'model':
         return (
           meta.model && (
@@ -251,7 +276,11 @@ export function SessionRow({
       case 'workspace':
         return (
           meta.workspace && (
-            <span data-row-workspace="" title={meta.workspace.title} className={cn('max-w-32 truncate font-mono', row.workspaceGone && 'line-through')}>
+            <span
+              data-row-workspace=""
+              title={meta.workspace.title}
+              className={cn('max-w-32 truncate font-mono', row.workspaceGone && 'line-through')}
+            >
               {meta.workspace.label}
             </span>
           )
@@ -259,7 +288,11 @@ export function SessionRow({
       case 'claude':
         return (
           meta.claude?.name && (
-            <span data-row-claude-name="" title={meta.claude.meter.kind === 'no_limits' ? meta.claude.meter.title : meta.claude.name} className="max-w-24 truncate">
+            <span
+              data-row-claude-name=""
+              title={meta.claude.meter.kind === 'no_limits' ? meta.claude.meter.title : meta.claude.name}
+              className="max-w-24 truncate"
+            >
               {meta.claude.name}
             </span>
           )
@@ -412,156 +445,191 @@ export function SessionRow({
 
   return (
     <li>
-      <div className={cn('relative rounded-[inherit]', swipe.clipped && 'overflow-hidden')} style={{ touchAction: 'pan-y' }} {...swipe.handlers}>
+      <div
+        className={cn('relative rounded-[inherit]', swipe.clipped && 'overflow-hidden')}
+        style={{ touchAction: 'pan-y' }}
+        {...swipe.handlers}
+      >
         {swipe.dx !== 0 && (
-          <div aria-hidden="true" className="absolute inset-0 flex items-stretch justify-between rounded-[inherit] text-[12.5px] font-semibold">
-            <span className={cn('flex w-[104px] items-center gap-1.5 pl-4 transition-colors', swipe.armed === 'right' ? 'bg-primary text-primary-ink' : 'bg-primary/15 text-primary')}>
+          <div
+            aria-hidden="true"
+            className="absolute inset-0 flex items-stretch justify-between rounded-[inherit] text-[12.5px] font-semibold"
+          >
+            <span
+              className={cn(
+                'flex w-[104px] items-center gap-1.5 pl-4 transition-colors',
+                swipe.armed === 'right' ? 'bg-primary text-primary-ink' : 'bg-primary/15 text-primary',
+              )}
+            >
               {s.pinnedAt ? <PinOff className="size-4" /> : <Pin className="size-4" />}
               {rightLabel}
             </span>
-            <span className={cn('flex w-[104px] items-center justify-end gap-1.5 pr-4 transition-colors', swipe.armed === 'left' ? 'bg-danger text-white' : 'bg-danger/15 text-danger')}>
+            <span
+              className={cn(
+                'flex w-[104px] items-center justify-end gap-1.5 pr-4 transition-colors',
+                swipe.armed === 'left' ? 'bg-danger text-white' : 'bg-danger/15 text-danger',
+              )}
+            >
               {leftLabel}
               {s.archivedAt ? <ArchiveRestore className="size-4" /> : <Archive className="size-4" />}
             </span>
           </div>
         )}
-      <div
-        data-swipe={swipe.dx !== 0 ? 'moving' : undefined}
-        style={{ transform: swipe.dx ? `translateX(${swipe.dx}px)` : undefined, transition: swipe.dragging ? 'none' : `transform ${SWIPE_SETTLE_MS}ms ease-out` }}
-        className={cn('relative flex flex-wrap items-start gap-x-2.5 rounded-[inherit] bg-surface py-3 pr-2.5 pl-3 sm:pr-4 sm:pl-5', depth === 0 && 'pl-4', picked && 'bg-accent-soft/50')}
-      >
-        {selecting && (
-          <button
-            type="button"
-            role="checkbox"
-            aria-checked={picked}
-            aria-label={`Select ${title}`}
-            onClick={() => onToggle(s.id)}
-            className={cn(
-              'press mt-2 flex size-6 shrink-0 items-center justify-center rounded-md border-2 transition-colors',
-              picked ? 'border-primary bg-primary text-primary-ink' : 'border-line-strong bg-surface',
-            )}
-          >
-            {picked && <Check className="size-4" strokeWidth={3} />}
-          </button>
-        )}
-        {bypass && (
-          // The Bypass dot sits on the icon's corner, outside the row's link (a button inside a link is not allowed): a zero-width anchor at
-          // the link's start (its negative margin takes back the gap), the tip placed from it. Selecting, the dot is only a mark.
-          <span data-row-bypass="" className="relative -mr-2.5 w-0 shrink-0 self-start">
-            <span className={cn('absolute -top-[7px] z-10', depth > 0 ? 'left-[15px]' : 'left-[23px]')}>
-              {selecting ? (
-                <span className="flex size-6 items-center justify-center" role="img" aria-label="Bypass">
-                  {BYPASS_DOT}
-                </span>
+        <div
+          data-swipe={swipe.dx !== 0 ? 'moving' : undefined}
+          style={{
+            transform: swipe.dx ? `translateX(${swipe.dx}px)` : undefined,
+            transition: swipe.dragging ? 'none' : `transform ${SWIPE_SETTLE_MS}ms ease-out`,
+          }}
+          className={cn(
+            'relative flex flex-wrap items-start gap-x-2.5 rounded-[inherit] bg-surface py-3 pr-2.5 pl-3 sm:pr-4 sm:pl-5',
+            depth === 0 && 'pl-4',
+            picked && 'bg-accent-soft/50',
+          )}
+        >
+          {selecting && (
+            <button
+              type="button"
+              role="checkbox"
+              aria-checked={picked}
+              aria-label={`Select ${title}`}
+              onClick={() => onToggle(s.id)}
+              className={cn(
+                'press mt-2 flex size-6 shrink-0 items-center justify-center rounded-md border-2 transition-colors',
+                picked ? 'border-primary bg-primary text-primary-ink' : 'border-line-strong bg-surface',
+              )}
+            >
+              {picked && <Check className="size-4" strokeWidth={3} />}
+            </button>
+          )}
+          {bypass && (
+            // The Bypass dot sits on the icon's corner, outside the row's link (a button inside a link is not allowed): a zero-width anchor at
+            // the link's start (its negative margin takes back the gap), the tip placed from it. Selecting, the dot is only a mark.
+            <span data-row-bypass="" className="relative -mr-2.5 w-0 shrink-0 self-start">
+              <span className={cn('absolute -top-[7px] z-10', depth > 0 ? 'left-[15px]' : 'left-[23px]')}>
+                {selecting ? (
+                  <span className="flex size-6 items-center justify-center" role="img" aria-label="Bypass">
+                    {BYPASS_DOT}
+                  </span>
+                ) : (
+                  <InfoTip label="Bypass" icon={BYPASS_DOT}>
+                    Bypass: this session runs every tool without asking you first.
+                  </InfoTip>
+                )}
+              </span>
+            </span>
+          )}
+          <Link to={`/admin/sessions/${s.id}`} onClick={click} className="flex min-w-0 flex-1 items-start gap-3">
+            <span
+              data-row-icon=""
+              className={cn(
+                'flex shrink-0 items-center justify-center rounded-full',
+                icon,
+                asks ? 'ring-2 ring-amber-500/60' : active ? 'ring-2 ring-accent/60' : 'ring-1 ring-line',
+                row.workspaceGone && 'opacity-60',
+              )}
+            >
+              {persona ? (
+                // The persona's avatar, only when the rows on screen have several personas (rowMeta.avatarsShown).
+                <PersonaAvatar name={persona.name} avatar={persona.avatar} size={depth > 0 ? 'sm' : 'md'} />
               ) : (
-                <InfoTip label="Bypass" icon={BYPASS_DOT}>
-                  Bypass: this session runs every tool without asking you first.
-                </InfoTip>
+                <span
+                  className={cn(
+                    'flex size-full items-center justify-center rounded-full',
+                    asks
+                      ? 'bg-amber-500/15 text-amber-700 dark:text-amber-400'
+                      : active
+                        ? 'bg-accent-soft text-accent'
+                        : 'bg-surface-2 text-ink-soft',
+                  )}
+                >
+                  {row.workspaceGone ? (
+                    <CloudOff className={glyph} aria-hidden="true" />
+                  ) : s.process === 'asleep' && s.state === 'idle' ? (
+                    <Moon className={glyph} aria-hidden="true" />
+                  ) : s.agent ? (
+                    <IdCard className={glyph} aria-hidden="true" />
+                  ) : (
+                    <MessageSquare className={glyph} aria-hidden="true" />
+                  )}
+                </span>
               )}
             </span>
-          </span>
-        )}
-        <Link to={`/admin/sessions/${s.id}`} onClick={click} className="flex min-w-0 flex-1 items-start gap-3">
-          <span
-            data-row-icon=""
-            className={cn(
-              'flex shrink-0 items-center justify-center rounded-full',
-              icon,
-              asks ? 'ring-2 ring-amber-500/60' : active ? 'ring-2 ring-accent/60' : 'ring-1 ring-line',
-              row.workspaceGone && 'opacity-60',
-            )}
-          >
-            {persona ? (
-              // The persona's avatar, only when the rows on screen have several personas (rowMeta.avatarsShown).
-              <PersonaAvatar name={persona.name} avatar={persona.avatar} size={depth > 0 ? 'sm' : 'md'} />
-            ) : (
-              <span
-                className={cn(
-                  'flex size-full items-center justify-center rounded-full',
-                  asks ? 'bg-amber-500/15 text-amber-700 dark:text-amber-400' : active ? 'bg-accent-soft text-accent' : 'bg-surface-2 text-ink-soft',
+            <div className="min-w-0 flex-1">
+              <div className="flex min-w-0 items-center gap-1.5">
+                <p className="min-w-0 truncate font-semibold">{title}</p>
+                {s.pinnedAt && <Pin className="size-3.5 shrink-0 text-muted" aria-label="Pinned" />}
+                {role && <RoleBadge session={s} iconOnPhone />}
+                {crew && (
+                  <span title={crew.label} data-crew-count="" className="inline-flex shrink-0">
+                    <Badge tone={crew.tone}>
+                      <Network className="size-3" aria-hidden="true" />
+                      <span aria-hidden="true" className="tabular-nums">
+                        {crew.total}
+                      </span>
+                      <span className="sr-only">{crew.label}</span>
+                    </Badge>
+                  </span>
                 )}
+                {bypass && (
+                  <span aria-hidden="true" className="hidden shrink-0 sm:inline-flex">
+                    <Badge tone="danger">Bypass</Badge>
+                  </span>
+                )}
+                <span
+                  data-row-time=""
+                  className="ml-auto shrink-0 pl-1 text-[12.5px] text-muted tabular-nums"
+                  title={formatDateTime(s.lastActivityAt)}
+                >
+                  {timeShort(s.lastActivityAt)}
+                </span>
+              </div>
+              {/* One line high (h-5) and wrapping: an item that does not fit whole goes to the second, hidden line with all after it. */}
+              <p
+                data-row-meta=""
+                className="mt-0.5 flex h-5 min-w-0 flex-wrap content-start items-center gap-x-1 overflow-hidden text-[12.5px] leading-5 whitespace-nowrap text-muted"
               >
-                {row.workspaceGone ? (
-                  <CloudOff className={glyph} aria-hidden="true" />
-                ) : s.process === 'asleep' && s.state === 'idle' ? (
-                  <Moon className={glyph} aria-hidden="true" />
-                ) : s.agent ? (
-                  <IdCard className={glyph} aria-hidden="true" />
-                ) : (
-                  <MessageSquare className={glyph} aria-hidden="true" />
-                )}
-              </span>
-            )}
-          </span>
-          <div className="min-w-0 flex-1">
-            <div className="flex min-w-0 items-center gap-1.5">
-              <p className="min-w-0 truncate font-semibold">{title}</p>
-              {s.pinnedAt && <Pin className="size-3.5 shrink-0 text-muted" aria-label="Pinned" />}
-              {role && <RoleBadge session={s} iconOnPhone />}
-              {crew && (
-                <span title={crew.label} data-crew-count="" className="inline-flex shrink-0">
-                  <Badge tone={crew.tone}>
-                    <Network className="size-3" aria-hidden="true" />
-                    <span aria-hidden="true" className="tabular-nums">
-                      {crew.total}
-                    </span>
-                    <span className="sr-only">{crew.label}</span>
-                  </Badge>
-                </span>
-              )}
-              {bypass && (
-                <span aria-hidden="true" className="hidden shrink-0 sm:inline-flex">
-                  <Badge tone="danger">Bypass</Badge>
-                </span>
-              )}
-              <span data-row-time="" className="ml-auto shrink-0 pl-1 text-[12.5px] text-muted tabular-nums" title={formatDateTime(s.lastActivityAt)}>
-                {timeShort(s.lastActivityAt)}
-              </span>
-            </div>
-            {/* One line high (h-5) and wrapping: an item that does not fit whole goes to the second, hidden line with all after it. */}
-            <p data-row-meta="" className="mt-0.5 flex h-5 min-w-0 flex-wrap content-start items-center gap-x-1 overflow-hidden text-[12.5px] leading-5 whitespace-nowrap text-muted">
-              {facts2.map((k, i) => (
-                <span key={k} data-line-two={k} className="flex h-5 shrink-0 items-center gap-1">
-                  {i > 0 && <span aria-hidden="true">·</span>}
-                  {item(k)}
-                </span>
-              ))}
-            </p>
-            {third === 'waiting' && (
-              <p data-row-third="waiting" className="mt-0.5 truncate text-[12.5px] font-medium text-amber-700 dark:text-amber-400">
-                {meta.waitingFor}
+                {facts2.map((k, i) => (
+                  <span key={k} data-line-two={k} className="flex h-5 shrink-0 items-center gap-1">
+                    {i > 0 && <span aria-hidden="true">·</span>}
+                    {item(k)}
+                  </span>
+                ))}
               </p>
-            )}
-          </div>
-        </Link>
-        {row.children.length > 0 && (
-          <button
-            type="button"
-            aria-expanded={open}
-            aria-label={`${open ? 'Hide' : 'Show'} the ${row.children.length} ${row.children.length === 1 ? 'session' : 'sessions'} ${title} started`}
-            onClick={() => onCollapse(s.id)}
-            className="press -my-1 flex size-11 shrink-0 items-center justify-center rounded-full text-muted hover:bg-surface-2 hover:text-ink sm:my-0 sm:size-9"
-          >
-            <ChevronDown className={cn('size-[18px] transition-transform', !open && '-rotate-90')} />
-          </button>
-        )}
-        {!selecting && s.endedFor && !s.archivedAt && <RecoverButton session={s} tip={false} />}
-        {!selecting && <Menu label={`Actions for ${title}`} items={rowActions(row, actions)} />}
-        {from && !selecting && (
-          <Link
-            to={`/admin/sessions/${from.id}`}
-            data-crew-from=""
-            className={cn(
-              'press -mt-2 -mb-2 flex min-h-11 min-w-0 basis-full items-center gap-1 text-[12.5px] text-muted hover:text-ink sm:-mt-1 sm:-mb-1 sm:min-h-8',
-              depth > 0 ? 'pl-11' : 'pl-[52px]',
-            )}
-          >
-            <CornerLeftUp className="size-3.5 shrink-0" aria-hidden="true" />
-            <span className="min-w-0 truncate">from {from.title}</span>
+              {third === 'waiting' && (
+                <p data-row-third="waiting" className="mt-0.5 truncate text-[12.5px] font-medium text-amber-700 dark:text-amber-400">
+                  {meta.waitingFor}
+                </p>
+              )}
+            </div>
           </Link>
-        )}
-      </div>
+          {row.children.length > 0 && (
+            <button
+              type="button"
+              aria-expanded={open}
+              aria-label={`${open ? 'Hide' : 'Show'} the ${row.children.length} ${row.children.length === 1 ? 'session' : 'sessions'} ${title} started`}
+              onClick={() => onCollapse(s.id)}
+              className="press -my-1 flex size-11 shrink-0 items-center justify-center rounded-full text-muted hover:bg-surface-2 hover:text-ink sm:my-0 sm:size-9"
+            >
+              <ChevronDown className={cn('size-[18px] transition-transform', !open && '-rotate-90')} />
+            </button>
+          )}
+          {!selecting && s.endedFor && !s.archivedAt && <RecoverButton session={s} tip={false} />}
+          {!selecting && <Menu label={`Actions for ${title}`} items={rowActions(row, actions)} />}
+          {from && !selecting && (
+            <Link
+              to={`/admin/sessions/${from.id}`}
+              data-crew-from=""
+              className={cn(
+                'press -mt-2 -mb-2 flex min-h-11 min-w-0 basis-full items-center gap-1 text-[12.5px] text-muted hover:text-ink sm:-mt-1 sm:-mb-1 sm:min-h-8',
+                depth > 0 ? 'pl-11' : 'pl-[52px]',
+              )}
+            >
+              <CornerLeftUp className="size-3.5 shrink-0" aria-hidden="true" />
+              <span className="min-w-0 truncate">from {from.title}</span>
+            </Link>
+          )}
+        </div>
       </div>
       {crewList}
     </li>

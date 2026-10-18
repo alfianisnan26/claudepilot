@@ -5,14 +5,30 @@ import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
 import { dump, loadAll } from 'js-yaml';
 import { MIGRATIONS, type Migration } from './migrations.js';
-import { compareCounts, gunzipBackup, listNightly, nightlyBackup, nightlyDir, nightlyNames, nightlyStatus, restoreAny, restoreDrill, rowCounts, toKeep } from './nightly.js';
+import {
+  compareCounts,
+  gunzipBackup,
+  listNightly,
+  nightlyBackup,
+  nightlyDir,
+  nightlyNames,
+  nightlyStatus,
+  restoreAny,
+  restoreDrill,
+  rowCounts,
+  toKeep,
+} from './nightly.js';
 import { generateSecretKey, parseSecretKey } from './secretBox.js';
 import { restoreBackup, Store } from './store.js';
 import { tempDirectory } from './testTmp.js';
 
 const newKey = () => parseSecretKey(generateSecretKey());
 const LATEST = Math.max(...MIGRATIONS.map((m) => m.version));
-const NOTES: Migration = { version: LATEST + 1, name: 'test notes', up: (db) => db.exec('CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT) STRICT') };
+const NOTES: Migration = {
+  version: LATEST + 1,
+  name: 'test notes',
+  up: (db) => db.exec('CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT) STRICT'),
+};
 const withNotes = [...MIGRATIONS, NOTES];
 
 async function filled(rows: number) {
@@ -44,7 +60,13 @@ test('the nightly backup is an online, checked, gzipped copy, mode 0600, with no
     const plain = await gunzipBackup(file, join(tempDirectory('cp-nightly-'), 'x.db'));
     assert.ok(bytes < statSync(plain).size / 2, `gzipped (${bytes} of ${statSync(plain).size} bytes)`);
     const db = new DatabaseSync(plain, { readOnly: true });
-    assert.deepEqual(db.prepare('PRAGMA quick_check').all().map((r) => Object.values(r)[0]), ['ok']);
+    assert.deepEqual(
+      db
+        .prepare('PRAGMA quick_check')
+        .all()
+        .map((r) => Object.values(r)[0]),
+      ['ok'],
+    );
     assert.equal((db.prepare('PRAGMA journal_mode').get() as { journal_mode: string }).journal_mode, 'delete', 'one self-contained file');
     assert.ok((db.prepare('SELECT count(*) AS n FROM notes').get() as { n: number }).n >= 500);
     db.close();
@@ -78,7 +100,17 @@ test('retention keeps the newest of the last 7 days and of the last 4 weeks', ()
   const end = Date.UTC(2026, 9, 14, 2, 17);
   const list = Array.from({ length: 60 }, (_, i) => ({ at: new Date(end - i * 24 * 60 * 60 * 1000) }));
   const kept = [...toKeep(list)].map((b) => b.at.toISOString().slice(0, 10)).sort();
-  assert.deepEqual(kept, ['2026-09-27', '2026-10-04', '2026-10-08', '2026-10-09', '2026-10-10', '2026-10-11', '2026-10-12', '2026-10-13', '2026-10-14']);
+  assert.deepEqual(kept, [
+    '2026-09-27',
+    '2026-10-04',
+    '2026-10-08',
+    '2026-10-09',
+    '2026-10-10',
+    '2026-10-11',
+    '2026-10-12',
+    '2026-10-13',
+    '2026-10-14',
+  ]);
   // Two in one day: only the newer counts as that day's.
   const twice = [{ at: new Date(end) }, { at: new Date(end - 60_000) }];
   assert.deepEqual([...toKeep(twice)], [twice[0]]);
@@ -96,8 +128,20 @@ test('nightly backups over 30 days prune to the retention on disk', async () => 
   } finally {
     store.close();
   }
-  const days = listNightly(nightlyDir(dir)).map((b) => b.at.toISOString().slice(0, 10)).sort();
-  assert.deepEqual(days, ['2026-09-27', '2026-10-04', '2026-10-08', '2026-10-09', '2026-10-10', '2026-10-11', '2026-10-12', '2026-10-13', '2026-10-14']);
+  const days = listNightly(nightlyDir(dir))
+    .map((b) => b.at.toISOString().slice(0, 10))
+    .sort();
+  assert.deepEqual(days, [
+    '2026-09-27',
+    '2026-10-04',
+    '2026-10-08',
+    '2026-10-09',
+    '2026-10-10',
+    '2026-10-11',
+    '2026-10-12',
+    '2026-10-13',
+    '2026-10-14',
+  ]);
   // A file that is not a nightly backup is never touched.
   writeFileSync(join(nightlyDir(dir), 'keep-me.txt'), 'x');
   assert.ok(readdirSync(nightlyDir(dir)).includes('keep-me.txt'));
@@ -123,7 +167,10 @@ test('restore drill: a nightly restores into a scratch folder, timed, with every
   // The restored copy is a working portal database: it opens with the key and starts Frozen, as a restore should.
   const restored = await Store.open({ dataDir: scratch, secretKey: key, migrations: withNotes });
   assert.equal(restored.trust.state, 'frozen');
-  assert.deepEqual(restored.trust.reasons.map((x) => x.code), ['restored']);
+  assert.deepEqual(
+    restored.trust.reasons.map((x) => x.code),
+    ['restored'],
+  );
   restored.close();
   // The live data dir is untouched by a drill.
   assert.equal(listNightly(nightlyDir(dir)).length, 1);
@@ -178,7 +225,9 @@ function containersOf(docs: unknown[]): { name: string; argv: string[] }[] {
       if (Array.isArray(o[k]))
         for (const c of o[k] as Record<string, unknown>[]) {
           // A shell script (`sh -c "aws s3 sync ..."`) is split into its words, so a step hidden in one is still seen.
-          const words = [...((c.command as unknown[]) ?? []), ...((c.args as unknown[]) ?? [])].flatMap((w) => String(w).split(/\s+/)).filter(Boolean);
+          const words = [...((c.command as unknown[]) ?? []), ...((c.args as unknown[]) ?? [])]
+            .flatMap((w) => String(w).split(/\s+/))
+            .filter(Boolean);
           out.push({ name: String(c.name), argv: words.map((w) => w.replace(/^["']|["']$/g, '')) });
         }
     Object.values(o).forEach(walk);
@@ -189,7 +238,11 @@ function containersOf(docs: unknown[]): { name: string; argv: string[] }[] {
 
 /** A mirror step copies the nightly folder off-site; each one must carry `--exclude .*` (or `--exclude=.*`). */
 function mirrorsWithoutExclude(docs: unknown[]) {
-  const mirrors = containersOf(docs).filter((c) => c.argv.some((w) => /^[a-z0-9]+:\/\//i.test(w) || /^[A-Za-z0-9_-]+:[^/\s]/.test(w)) && c.argv.some((w) => /\/backups\/nightly\/?$/.test(w)));
+  const mirrors = containersOf(docs).filter(
+    (c) =>
+      c.argv.some((w) => /^[a-z0-9]+:\/\//i.test(w) || /^[A-Za-z0-9_-]+:[^/\s]/.test(w)) &&
+      c.argv.some((w) => /\/backups\/nightly\/?$/.test(w)),
+  );
   const excludes = (argv: string[]) => argv.some((w, i) => (w === '--exclude' && argv[i + 1] === '.*') || w === '--exclude=.*');
   return { mirrors: mirrors.length, missing: mirrors.filter((m) => !excludes(m.argv)).map((m) => m.name) };
 }
@@ -197,10 +250,17 @@ function mirrorsWithoutExclude(docs: unknown[]) {
 test('the mirror check reads the parsed yaml: a reformat passes, a second mirror step without the exclude fails, none at all fails', () => {
   const docs = loadAll(readFileSync(new URL('../../../../deploy/k3s/backup/portal-backup.yaml', import.meta.url), 'utf8'));
   // A reformat (flow style, other quoting, one line per document) is the same manifest.
-  assert.deepEqual(mirrorsWithoutExclude(loadAll(dump(docs[0], { flowLevel: 3, quoteStyle: 'single', forceQuotes: true }))), { mirrors: 1, missing: [] });
+  assert.deepEqual(mirrorsWithoutExclude(loadAll(dump(docs[0], { flowLevel: 3, quoteStyle: 'single', forceQuotes: true }))), {
+    mirrors: 1,
+    missing: [],
+  });
   // The mutant: a second mirror step without the exclude.
   const second = structuredClone(docs) as { spec: { jobTemplate: { spec: { template: { spec: { containers: unknown[] } } } } } }[];
-  second[0]!.spec.jobTemplate.spec.template.spec.containers.push({ name: 'offsite-2', image: 'x', command: ['aws', 's3', 'sync', '/data/backups/nightly', 's3://b/p', '--delete'] });
+  second[0]!.spec.jobTemplate.spec.template.spec.containers.push({
+    name: 'offsite-2',
+    image: 'x',
+    command: ['aws', 's3', 'sync', '/data/backups/nightly', 's3://b/p', '--delete'],
+  });
   assert.deepEqual(mirrorsWithoutExclude(second), { mirrors: 2, missing: ['offsite-2'] });
   // Another exclude is not the dot-name one (QA mutant T5: any `--exclude <pattern>` passed): it is still missing, in both spellings.
   const other = structuredClone(second);
@@ -209,7 +269,11 @@ test('the mirror check reads the parsed yaml: a reformat passes, a second mirror
   (other[0]!.spec.jobTemplate.spec.template.spec.containers[1] as { command: string[] }).command.splice(-2, 2, '--exclude=*.tmp');
   assert.deepEqual(mirrorsWithoutExclude(other), { mirrors: 2, missing: ['offsite-2'] }, '--exclude=*.tmp');
   // The same step hidden in a shell script is still seen; with `--exclude=.*` it passes.
-  const shell = { spec: { template: { spec: { containers: [{ name: 'sh', command: ['sh', '-c', 'aws s3 sync /data/backups/nightly s3://b/p --delete'] }] } } } };
+  const shell = {
+    spec: {
+      template: { spec: { containers: [{ name: 'sh', command: ['sh', '-c', 'aws s3 sync /data/backups/nightly s3://b/p --delete'] }] } },
+    },
+  };
   assert.deepEqual(mirrorsWithoutExclude([shell]), { mirrors: 1, missing: ['sh'] });
   shell.spec.template.spec.containers[0]!.command[2] += ' --exclude=.*';
   assert.deepEqual(mirrorsWithoutExclude([shell]), { mirrors: 1, missing: [] });

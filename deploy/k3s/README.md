@@ -3,11 +3,11 @@
 The portal runs in the cluster as one pod and its workspaces run as pods too, at https://pilot.ai.isnan.me (internal only:
 `*.ai.isnan.me` resolves privately). Argo CD follows this directory (`deploy/argocd/claudepilot.yaml`, project `isnan`).
 
-| File | What |
-| --- | --- |
-| `namespace.yaml` | `isnan-claudepilot-workspaces` (where workspaces are created), a memory default for pods in it and a quota |
-| `rbac.yaml` | the portal's service account, a Role in the workspaces namespace and the one cluster-wide right it needs (create a namespace) |
-| `portal.yaml` | volume, Deployment, Service and the Traefik IngressRoute |
+| File             | What                                                                                                                          |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `namespace.yaml` | `isnan-claudepilot-workspaces` (where workspaces are created), a memory default for pods in it and a quota                    |
+| `rbac.yaml`      | the portal's service account, a Role in the workspaces namespace and the one cluster-wide right it needs (create a namespace) |
+| `portal.yaml`    | volume, Deployment, Service and the Traefik IngressRoute                                                                      |
 
 ## Before the first sync (by hand, not in git)
 
