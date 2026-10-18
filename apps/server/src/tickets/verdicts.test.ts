@@ -264,6 +264,28 @@ test('T-1603: a continued lead leads the workers its predecessor started: its QA
   }
 });
 
+test('T-1603 review: a holder continuing a session nobody can look up does not lead; a continued implementer’s QA child is refused', async () => {
+  const h = await ticketsHarness();
+  try {
+    const s = h.sessions;
+    s.add({ id: 'lead', workspaceId: WS, agent: null, continuedFrom: 'ghost' });
+    const t = h.tickets.create(UI, { summary: 'line with a missing session', workspaceId: WS });
+    h.tickets.update(UI, t.id, { assignee: { kind: 'session', sessionId: 'lead' }, status: 'in_progress' });
+    s.add({ id: 'impl', workspaceId: WS, agent: 'implementer', parentId: 'ghost', ticketId: t.id });
+    s.add({ id: 'qa', workspaceId: WS, agent: 'qa-verifier', parentId: 'lead' });
+    const rec = (who: string) => h.tickets.recordVerdict(agent(WS, who), t.id, { role: 'qa', verdict: 'pass', commit: A });
+    assert.throws(() => rec('qa'), (e: any) => e.code === 'FORBIDDEN' && /descends from/.test(e.message), 'fail closed on the ghost');
+
+    s.sessions.get('impl')!.state = 'ended';
+    s.add({ id: 'impl2', workspaceId: WS, agent: 'implementer', continuedFrom: 'impl' });
+    s.add({ id: 'impl2Qa', workspaceId: WS, agent: 'qa-verifier', parentId: 'impl2' });
+    assert.throws(() => rec('impl2Qa'), (e: any) => e.code === 'FORBIDDEN', 'the continued implementer’s child');
+    assert.equal(h.tickets.verdicts(UI, t.id).length, 0);
+  } finally {
+    h.done();
+  }
+});
+
 test('QA M7 (T-325 S1b): a QA-named session started with this ticket_id is an author', async () => {
   const r = await rig();
   try {

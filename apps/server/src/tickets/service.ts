@@ -1812,7 +1812,11 @@ export class Tickets {
     const leadsWork =
       !!row.assignee_ref &&
       holderLine.some((id) => leads.has(id)) &&
-      holderLine.every((id) => (id === row.assignee_ref ? holder : this.sessions.get(id))?.ticketId !== ticket);
+      holderLine.every((id) => {
+        // A line member that can't be looked up counts as started on the ticket (fail closed; blind review of T-1603).
+        const info = id === row.assignee_ref ? holder : this.sessions.get(id);
+        return !!info && info.ticketId !== ticket;
+      });
     return { authors, leads, leadHolders: new Set(leadsWork ? holderLine : []) };
   }
 
