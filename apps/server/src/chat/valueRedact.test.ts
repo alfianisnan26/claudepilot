@@ -8,6 +8,26 @@ import { NO_VALUES, SessionStream, ValueRedactor, variantsOf } from './valueReda
 const SECRET = 'Hunter2/Pa$$w0rd+Zq9 "x"\\n';
 const TOKEN = 'cpst_Zk3pQ7vR1mT8xN4bC6yL0wH2dF5gJ9aS-uE_iO';
 
+test('T-1065: stored text meets the shapes first; what a key form leaves of a value still goes with it', () => {
+  // Each value holds a character that ends one of the key forms' values (`&`, a space, a quote, a delimiter).
+  const values = [['Tr0ub4', 'dor&3-int/pass phrase'], ['open', ' sesame now'], ['it', `'s-mine;ok`], ['pa', 'rt"tw(o)']].map((p) => p.join(''));
+  const r = new ValueRedactor(values);
+  for (const v of values) {
+    for (const said of [`PASSWORD=${v}`, `pwd: ${v}`, `secret='${v}'`, `{"token":"${v}"}`, `db_pwd=${encodeURIComponent(v)}&x=1`]) {
+      const out = r.redact(redact(said));
+      for (let i = 0; i + 4 <= v.length; i++) assert.ok(!out.includes(v.slice(i, i + 4)), `${JSON.stringify(said)} -> ${JSON.stringify(out)}`);
+      assert.ok(out.includes(REDACTED), out);
+    }
+  }
+  // The order the stream uses (values, then shapes) gives the same result.
+  assert.equal(redact(r.redact(`PASSWORD=${values[0]}\nnext`)), `PASSWORD=${REDACTED}\nnext`);
+  assert.equal(r.redact(redact(`PASSWORD=${values[0]}\nnext`)), `PASSWORD=${REDACTED}\nnext`);
+  // A rest is only a rest after the marker: the same words in prose stay.
+  assert.equal(r.redact('the phrase sesame now opens it'), 'the phrase sesame now opens it');
+  // Without the values, the shape alone leaves the rest: the gap the rests close.
+  assert.equal(NO_VALUES.redact(redact(`PASSWORD=${values[0]}`)), `PASSWORD=${REDACTED}&3-int/pass phrase`);
+});
+
 test('forms: raw, JSON-escaped, URL-encoded (both cases of the hex), form-encoded and base64 at every alignment', () => {
   const r = new ValueRedactor([SECRET]);
   assert.equal(r.redact(`pw=${SECRET}!`), `pw=${REDACTED}!`);

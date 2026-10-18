@@ -4,7 +4,7 @@
 // the objects here: nothing logs, stores or returns one. Each value is matched in the forms a tool prints it: as
 // it is, JSON-escaped, URL-encoded, and base64 (and base64url) wherever it starts inside a longer string.
 
-import { REDACTED, StreamRedactor } from './redact.js';
+import { REDACTED, StreamRedactor, shapeCuts } from './redact.js';
 
 /** A value shorter than this is never matched: a short "secret" would blank ordinary text. */
 export const MIN_VALUE = 6;
@@ -113,16 +113,23 @@ function blank(text: string, ranges: [number, number][], to = text.length): stri
 /** The secret values of one workspace, ready to take out of text. Holds them in memory only. */
 export class ValueRedactor {
   readonly #needles: Needles | null;
+  /** `[redacted]` + what a key-form shape left of a value (T-1065): stored text met the shapes first. */
+  readonly #rests: Needles | null;
 
   constructor(values: readonly string[]) {
     const all = new Set<string>();
+    const rests = new Set<string>();
     let count = 0;
     for (const raw of values) {
       if (typeof raw !== 'string' || raw.length < MIN_VALUE || raw.length > MAX_VALUE || count >= MAX_VALUES) continue;
       count++;
-      for (const v of variantsOf(raw)) all.add(v);
+      for (const v of variantsOf(raw)) {
+        all.add(v);
+        for (const cut of shapeCuts(v)) rests.add(REDACTED + v.slice(cut));
+      }
     }
     this.#needles = all.size ? new Needles([...all]) : null;
+    this.#rests = rests.size ? new Needles([...rests]) : null;
   }
 
   /** Whether there is anything to look for. */
@@ -130,11 +137,14 @@ export class ValueRedactor {
     return this.#needles !== null;
   }
 
-  /** `text` with every secret value (in any form) replaced by {@link REDACTED}. */
+  /** `text` with every secret value (in any form), and what a shape left of one, replaced by {@link REDACTED}. */
   redact(text: string): string {
     if (!text || !this.#needles) return text;
     const ranges = this.#needles.find(text);
-    return ranges.length ? blank(text, ranges) : text;
+    const out = ranges.length ? blank(text, ranges) : text;
+    if (!this.#rests) return out;
+    const rests = this.#rests.find(out);
+    return rests.length ? blank(out, rests) : out;
   }
 
   /** A stream that redacts as text arrives, holding back a tail that could still become a value. */

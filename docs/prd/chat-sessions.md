@@ -890,6 +890,7 @@ but attention.
 - The password of URL userinfo (`scheme://user:pass@host`): the scheme, the user and the host stay. A password that holds an `@` ends at the last `@` before the host.
 - Left alone on purpose: the word in prose (`reset your password`), names that do not end in the word (`max_tokens: 1024`, `secretName: x`), comparisons and arrows (`==`, `===`, `=>`), a bare type or empty word (`password: string`, `token: null`, `true`, `undefined`, …) and environment references (`process.env.`, `import.meta.env.`, `os.environ`, `os.getenv(`). Code such as `token = getToken()` loses its right-hand side; we accept that for safety.
 - Live deltas hold back a key form's value and a userinfo password until it ends (`scheme://user:pa…` is held until a `/`, a space or the end of the block), within the usual 64-character hold; a userinfo tail longer than that is released early. The tests are in `chat/redact.test.ts`.
+- A workspace's secret value with a space, a quote or `&` in it would be cut by a key form: stored text meets the shapes first (`protocol.ts`), and the value redactor only runs after that, so it would no longer find the whole value. The value redactor therefore also takes out `[redacted]` followed by what a key form leaves of a value (`shapeCuts`, `chat/valueRedact.ts`). A rest that a second shape has cut again is not found. The tests are in `chat/valueRedact.test.ts` and `chat/secretValues.test.ts`.
 
 ## 14. Observability and audit
 

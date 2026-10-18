@@ -42,8 +42,25 @@ const KV_CODE =
   '(?!(?:string|number|boolean|null|undefined|true|false|any|unknown|never|none|nil)(?![A-Za-z0-9_$])|process\\.env\\.|import\\.meta\\.env\\.|os\\.environ|os\\.getenv\\()';
 // A quoted value runs to its closing quote (an escaped quote stays inside), or to the end of the line when it has none yet.
 const kvQuoted = (q: string) => `[^${q}\\\\\\n]|\\\\.?`;
+/**
+ * Where a value shape stops when `value` follows a key form (`password=`, `"token":"`, `api_key=`): each length is a cut inside
+ * the value, so `password=` + value comes out as `password=[redacted]` + the rest. Stored text is shape-redacted before the
+ * workspace's secret values are looked for (protocol.ts, then the controller), so the value redactor also looks for
+ * `[redacted]` + each such rest (valueRedact.ts, T-1065). Lengths of 0 or of the whole value are no cut and are left out.
+ */
+export function shapeCuts(value: string): number[] {
+  const out = new Set<number>();
+  for (const re of CUT_RES) {
+    const n = re.exec(value)?.[0].length ?? 0;
+    if (n > 0 && n < value.length && (re !== CUT_RES[3] || n >= 16)) out.add(n);
+  }
+  return [...out];
+}
 // `scheme://user:pass@host`: only the password goes (it may hold an `@`; the last one before the host ends it).
 const USERINFO_HEAD = '[a-z][a-z0-9+.-]{0,30}:\\/\\/[^\\s:@\\/?#]{0,128}:';
+
+/** The value parts of the key forms, anchored at the value's start: unquoted, double-quoted, single-quoted, then `assign` (16 or more). */
+const CUT_RES = [`${KV_UNQUOTED}+`, `(?:${kvQuoted('"')})+`, `(?:${kvQuoted("'")})+`, `${VALUE}+`].map((p) => new RegExp(`^(?:${p})`, 'i'));
 
 const SHAPES: Shape[] = [
   // Anthropic: sk-ant-api03-…, sk-ant-oat01-…, sk-ant-admin01-…
