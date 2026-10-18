@@ -49,13 +49,13 @@ test('safeKill: a helper that throws is logged; a delivered signal is true', () 
 // The real mechanism (T-921): Node's ChildProcess.kill does not throw EPERM, it emits 'error'. A real child whose handle refuses the
 // signal, as the init's kill of uid 1000 without CAP_KILL is refused in the Kubernetes container.
 const { errno: E } = os.constants;
-function refusingChild() {
+function refusingChild(code = 'EPERM') {
   const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { stdio: 'ignore' });
   return new Promise((resolve, reject) => {
     child.once('error', reject);
     child.once('spawn', () => {
       child.removeListener('error', reject); // the test decides which listeners the child has
-      child._handle.kill = () => -E.EPERM; // libuv's error number, as uv_process_kill returns it
+      child._handle.kill = () => -E[code]; // libuv's error number, as uv_process_kill returns it
       resolve(child);
     });
   });
@@ -122,6 +122,21 @@ test('guardSignals: a helper that fails or does not deliver is logged; with no h
   }
 });
 
+// Node's kill() drops ESRCH silently and throws EINVAL and ENOSYS; any other code is emitted as 'error', so EIO stands for "not EPERM".
+test('guardSignals: a kill refused for another reason than EPERM is only logged, never sent again through the helper', async () => {
+  const child = await refusingChild('EIO');
+  try {
+    const { lines, log } = collector();
+    const helper = [];
+    guardSignals(child, { name: 'chrome', log, asChrome: (pid, sig) => (helper.push([pid, sig]), true) });
+    assert.doesNotThrow(() => safeKill(child, 'SIGTERM', { log }));
+    assert.deepEqual(lines, ['signal SIGTERM to chrome refused (EIO)']);
+    assert.deepEqual(helper, [], 'the helper is for EPERM only');
+  } finally {
+    reap(child);
+  }
+});
+
 test('guardSignals: a spawn error is not a signal error: it goes to onError (the start fails)', async () => {
   const child = spawn(`/nonexistent-${randomBytes(4).toString('hex')}/chromium`, [], { stdio: 'ignore' });
   const { lines, log } = collector();
@@ -168,6 +183,20 @@ test('startWithHeal: the next wake inside the cooldown skips the headers, after 
   const after = await startWithHeal({ ...g, state, now: () => 1000 + 11 * 60_000, cooldownMs: 10 * 60_000 });
   assert.equal(after.headers, 'on');
   assert.deepEqual(g.calls, ['start headers=true']);
+  assert.equal(state.degradedAt, 0);
+});
+
+test('startWithHeal: the cooldown edge: one millisecond before it the headers are still skipped, at exactly its end they are tried again', async () => {
+  const before = fakeChrome({ answersWithHeaders: true });
+  const skipped = await startWithHeal({ ...before, state: { degradedAt: 1000 }, now: () => 1000 + 10 * 60_000 - 1, cooldownMs: 10 * 60_000 });
+  assert.equal(skipped.headers, 'degraded');
+  assert.deepEqual(before.calls, ['start headers=false']);
+
+  const at = fakeChrome({ answersWithHeaders: true });
+  const state = { degradedAt: 1000 };
+  const retried = await startWithHeal({ ...at, state, now: () => 1000 + 10 * 60_000, cooldownMs: 10 * 60_000 });
+  assert.equal(retried.headers, 'on');
+  assert.deepEqual(at.calls, ['start headers=true']);
   assert.equal(state.degradedAt, 0);
 });
 

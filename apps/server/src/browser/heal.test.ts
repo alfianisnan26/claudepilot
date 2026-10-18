@@ -8,6 +8,6 @@ import { test } from 'node:test';
 
 const heal: { registered: number } = await import(new URL('../../../../images/browser/cpb/heal.test.mjs', import.meta.url).href);
 
-test('the heal tests of the browser image are registered here (all 12, so none is lost by a wrong path or an empty import)', () => {
-  assert.equal(heal.registered, 12);
+test('the heal tests of the browser image are registered here (all 14, so none is lost by a wrong path or an empty import)', () => {
+  assert.equal(heal.registered, 14);
 });
