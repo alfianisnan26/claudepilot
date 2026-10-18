@@ -300,7 +300,7 @@ export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = p
     name: 'ticket_update',
     title: 'Change a ticket',
     description:
-      'Changes fields of a ticket assigned to you (or one you made that nobody holds, or one an ended session of your track holds): summary, description, type, priority, tags, status (in_progress, blocked, in_review, open) or assignee. To finish a ticket use ticket_close. Unassigning (assignee none) returns it to the queue.',
+      'Changes fields of a ticket assigned to you (or one you made that nobody holds, or one an ended session of your track holds): summary, description, type, priority, tags, status (in_progress, blocked, in_review, open) or assignee. A crew lead may also hand a ticket of its workspace (held by nobody, itself or one of its workers) to itself, one of its workers or the queue (assignee, status, priority only). To finish a ticket use ticket_close. Unassigning (assignee none) returns it to the queue.',
     scope: 'agent',
     hints: { idempotent: true },
     input: z.object({

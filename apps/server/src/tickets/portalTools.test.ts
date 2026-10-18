@@ -429,8 +429,14 @@ test('lead assigns (2026-10-18): a lead hands its workspace\'s tickets to its ow
     const code = async (t: { secret: string }, args: Record<string, unknown>) => (await r.h.call(t.secret, 'ticket_update', args)).result?.structuredContent?.error?.code;
     assert.equal(await code(lead, { id: 'T-1', assignee: 'session:qa', status: 'in_review' }), undefined, 'unassigned -> its QA lane');
     assert.deepEqual(r.tickets.get(UI, 'T-1').ticket.assignee, { kind: 'session', sessionId: 'qa' });
+    assert.equal(r.tickets.get(UI, 'T-1').ticket.status, 'in_review', 'the status went with it');
     assert.equal(await code(lead, { id: 'T-2', assignee: 'session:qa', priority: 'high' }), undefined, 'builder -> QA');
-    assert.equal(audits.filter((a) => a.kind === 'ticket.lead_assigned').length, 2, 'each hand-off audited');
+    assert.equal(r.tickets.get(UI, 'T-2').ticket.priority, 'high');
+    const rows = audits.filter((a) => a.kind === 'ticket.lead_assigned');
+    assert.deepEqual(rows.map((a) => [a.detail?.ticketId, a.detail?.lead, a.detail?.from, a.detail?.to]), [
+      ['T-1', 'lead', null, 'qa'],
+      ['T-2', 'lead', 'builder', 'qa'],
+    ], 'each hand-off audited once it is stored');
     assert.equal(await code(lead, { id: 'T-1', assignee: 'session:stranger' }), 'FORBIDDEN', 'not to another crew');
     assert.equal(await code(lead, { id: 'T-3', assignee: 'session:qa' }), 'FORBIDDEN', 'not from another crew');
     assert.equal(await code(lead, { id: 'T-4', assignee: 'session:qa' }), 'FORBIDDEN', 'not a person\'s');
@@ -438,6 +444,15 @@ test('lead assigns (2026-10-18): a lead hands its workspace\'s tickets to its ow
     r.tickets.update(UI, 'T-1', { assignee: null });
     assert.equal(await code(lead, { id: 'T-1', assignee: 'session:qa', summary: 'renamed' }), 'FORBIDDEN', 'only assignee, status, priority');
     assert.equal(await code(worker, { id: 'T-1', assignee: 'session:qa' }), 'FORBIDDEN', 'a worker is not the lead of its mates');
+    assert.equal(await code(worker, { id: 'T-1', assignee: 'me' }), 'FORBIDDEN', 'a session with no workers is not a lead: it claims with ticket_claim_next');
+    // An ended holder's ticket keeps FR9a (adopt), not this rule.
+    r.tickets.create(UI, { summary: 'held by a session that ended', workspaceId: 'docker/api', assignee: { kind: 'session', sessionId: 'otherlead' } }); // T-6
+    patch('otherlead', { state: 'ended' });
+    await code(lead, { id: 'T-6', assignee: 'session:qa' }); // FR9a decides this one (orphan rule), not the lead rule
+    assert.ok(!audits.some((a) => a.kind === 'ticket.lead_assigned' && a.detail?.ticketId === 'T-6'), 'an ended holder is FR9a\'s, never a lead hand-off');
+    const before = audits.length;
+    assert.equal(await code(lead, { id: 'T-1', assignee: 'session:qa', status: 'done' }), 'VALIDATION_FAILED', 'never a close through status');
+    assert.equal(audits.length, before, 'a refused or failed call writes no hand-off row');
   } finally {
     r.done();
   }

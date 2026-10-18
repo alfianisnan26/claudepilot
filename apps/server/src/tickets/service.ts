@@ -489,38 +489,28 @@ export class Tickets {
   }
 
   /**
-   * A crew LEAD may hand a ticket of its own workspace to one of its workers (or take it itself): the ticket is open, held by nobody, by the
-   * lead, by one of its workers, or by a session that ended; the new holder is the lead or a live worker whose parent is the lead; and the
-   * change is the assignee (with status or priority at most). Anything else keeps the usual refusal. Each use leaves `ticket.lead_assigned`.
+   * A crew LEAD (a live agent session with at least one live worker of its own) may hand a ticket of its own workspace to one of its workers,
+   * take it itself, or put it back in the queue: the ticket is open and held by nobody, by the lead, or by one of its workers; the new holder is
+   * the lead or one of its live, unarchived workers; and only assignee, status and priority change. An ended holder's ticket keeps FR9a (adopt).
+   * Anything else keeps the usual refusal. The hand-off is audited (`ticket.lead_assigned`) by update() once the change is stored.
    */
-  #leadMayAssign(caller: Caller, row: Row, w: Writer, req: Partial<UpdateTicketRequest>): boolean {
-    if (caller.kind !== 'agent' || !w.session || isTicketClosed(row.status) || req.assignee === undefined) return false;
+  #leadMayAssign(caller: Caller, row: Row, w: Writer, req: Partial<UpdateTicketRequest>): { lead: string; from: string | null; to: string | null } | null {
+    if (caller.kind !== 'agent' || !w.session || isTicketClosed(row.status) || req.assignee === undefined) return null;
     const extra = Object.keys(req).filter((k) => (req as Record<string, unknown>)[k] !== undefined && !['assignee', 'status', 'priority'].includes(k));
-    if (extra.length) return false;
+    if (extra.length) return null;
     const lead = w.session;
-    if (!row.workspace_id || row.workspace_id !== lead.workspaceId) return false;
-    if (row.assignee_kind === 'user') return false;
-    if (row.assignee_kind === 'session' && row.assignee_ref && row.assignee_ref !== lead.id) {
-      const holder = this.sessions.get(row.assignee_ref);
-      const crew = holder?.parentId === lead.id;
-      const gone = !holder || holder.state === 'ended' || !!holder.archivedAt;
-      if (!crew && !gone) return false;
-    }
+    const live = (x: TicketSessionInfo | null) => !!x && x.state !== 'ended' && !x.archivedAt;
+    const workers = this.sessions.list({ workspaceId: lead.workspaceId }).filter((x) => x.parentId === lead.id && live(x));
+    if (!workers.length) return null; // not a lead
+    if (!this.#isIn(row, lead.workspaceId)) return null;
+    if (row.assignee_kind === 'user') return null;
+    if (row.assignee_kind === 'session' && row.assignee_ref && row.assignee_ref !== lead.id && !workers.some((x) => x.id === row.assignee_ref)) return null;
     const to = req.assignee;
     if (to !== null) {
-      if (to.kind !== 'session' || typeof to.sessionId !== 'string') return false;
-      const target = to.sessionId === lead.id ? lead : this.sessions.get(to.sessionId);
-      if (!target || target.state === 'ended' || (target.id !== lead.id && target.parentId !== lead.id)) return false;
+      if (to.kind !== 'session' || typeof to.sessionId !== 'string') return null;
+      if (to.sessionId !== lead.id && !workers.some((x) => x.id === to.sessionId)) return null;
     }
-    this.onAudit?.({
-      kind: 'ticket.lead_assigned',
-      actor: w.actor,
-      actorLabel: null,
-      userId: FOUNDING_USER_ID,
-      subject: `ticket:${ticketIdOf(row.number)}`,
-      detail: { ticketId: ticketIdOf(row.number), lead: lead.id, from: row.assignee_ref ?? null, to: to ? to.sessionId : null },
-    });
-    return true;
+    return { lead: lead.id, from: row.assignee_ref ?? null, to: to ? to.sessionId : null };
   }
 
   /** The actor's predecessors, nearest first (`continued_from` back; bounded, cycle safe). */
@@ -1431,11 +1421,13 @@ export class Tickets {
     const row = this.#need(caller, id); // visibility first: a ticket it can't see doesn't exist for it
     const w = this.#writer(caller, opts.sessionId);
     let grant: EndedGrant | null;
+    let handoff: { lead: string; from: string | null; to: string | null } | null = null;
     try {
       grant = this.#assertCanModify(caller, row, w);
     } catch (e) {
       // 2026-10-18: a lead routes its crew's work (T-84 c11534: every hand-off of an unassigned ticket went through the coordinator).
-      if (!this.#leadMayAssign(caller, row, w, req)) throw e;
+      handoff = this.#leadMayAssign(caller, row, w, req);
+      if (!handoff) throw e;
       grant = null;
     }
     const agent = caller.kind === 'agent';
@@ -1561,6 +1553,15 @@ export class Tickets {
       for (const e of entries) this.#addEvent(row.number, e.kind, w, e.body ?? null, e.data);
     });
     this.#auditForEnded(grant, w, row, 'update');
+    if (handoff)
+      this.onAudit?.({
+        kind: 'ticket.lead_assigned',
+        actor: w.actor,
+        actorLabel: null,
+        userId: FOUNDING_USER_ID,
+        subject: `ticket:${ticketIdOf(row.number)}`,
+        detail: { ticketId: ticketIdOf(row.number), ...handoff },
+      });
     this.#auditAssignedPerson(assignedAudit, ticketIdOf(row.number));
     this.#auditChecklistTagged(checklistAudit, ticketIdOf(row.number));
     this.onChange?.();
