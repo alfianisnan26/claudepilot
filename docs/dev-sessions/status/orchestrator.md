@@ -10,17 +10,17 @@
 - BATCH 34: premerge/b34 037f7e4b (pushed) = integration 5e84f4d7 + T-971 H1 (+fmt f6983797) + T-976 (+fmt 99f8bb69) + T-425
   2b57efce + T-565 55f5aa8e; app.ts conflict (T-976 setSessionCookie vs T-968 healManager): kept both; pack fresh. QC#1 expired in queue
   (3600 s, ran nothing); gate#2 on 037f7e4b GREEN; QC#3 FAILED format (26 batch files) + lint (old lines). Merged integration ->
-  d7ade65b; fmt Job 27bb3c76 rc0 -> 3896f232 (tool output, T-595 12101; pack fresh) -> QC#4 bo9fg2qj5 (+6 tests that read
-  reformatted files) -> gate -> two-step landing -> T-731. T-969 joins the next batch after V5. Rule until the queue drains: ONE Job per lane.
+  d7ade65b; fmt 3896f232 (T-595 12101) -> QC#4 FAIL (controller.ts fmt; routeAuthz read 0 PRD rows) -> a6fec61b keeps
+  authorization.md + .prettierignore (12153) -> Job bpj3nclr2 (controller fmt + checks) -> QC#5 -> gate -> land -> T-731. T-969 joins the next batch after V5. Rule until the queue drains: ONE Job per lane.
 - T-968 (coordinator builds S1 runtime/S3/S4/S6; this crew lands S1-token + S2 only). S1-token 5ccfb52c rc0, QA PWG #11312
   -> fix a8fca5a3 (2a0edbd8, Job b1gahci5o) -> re-check c691df71; blind PWG 11365 (K8 -> test ccef3ef4, own Job;
   K12 = a8fca5a3). S2 e605c835 Job bno2lrpwq. S2b blind PWG 11302 -> last_error
   untrusted fix e605c835 (Job after a8fca5a3) -> delta c691df71 + blind d9f18599. Integration holds c6c4a589 (FAILED security
   review; fixes on coord/T-968-gm): no deploy until T-731 says so.
 - T-1083 URGENT (D-84: job-run places Jobs on the cluster or the owner's Mac) -> 2a0edbd8, ahead of T-1079. Plan 11383:
-  S1a 9c7022c4 (Job after K8; QA PWG by read #11426; blind d9f18599). S1b design rev2 #11493 accepted: door /jobrun/mac/*,
-  own jobrun_tokens table (migration block 880-889, decided 05:25), admin-only mint; S1b-1 token+authz, S1b-2 Mac exec,
-  S1b-3 placement; blind per slice. agent.json volumes, JOB_RUN_MAC_TOKEN, deploy FOR THE COORDINATOR (T-731 11389).
+  S1a d01b5949 (blind d9f18599). S1b door /jobrun/mac/* on agents.verify (coordinator #11498; NO table, NO migration: my
+  05:25 table acceptance was wrong, 12153; block 880-889 released) -> S1b-1 rebuilt by 2a0edbd8 before T-1079; S1b-3 design
+  #12152. Blind per slice. agent.json diff as text to the coordinator after the blind PASS.
 - T-1079 (Konfersi stg release docs per module, vault 98af7d16def1, reuse releaseReport.ts) 2a0edbd8 building now, Job last.
 - 2a0edbd8 Jobs: T-921 db1d8d19 rc0, QA PWG #11350 (J1, J4 survive) -> tests (11368) -> delta c691df71 -> blind; T-257 d34f47b2 rc1 (test bug) -> fix e22ae23d, Job after T-968's two;
   T-976 fmt re-run baov0fphs (patch lost to $OUT), T-968 a8fca5a3 b1gahci5o, T-565 bzq96a9ey on 59451a5f running.
