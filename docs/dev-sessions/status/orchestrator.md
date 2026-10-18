@@ -12,7 +12,8 @@
   (7 batch files -> format commits a3554d40 (H1), 2a0edbd8 (T-976, Job bdlp8stxq); 8 older -> T-1080). Then add T-425 2b57efce
   (rc0), T-969 after V5 -> merge integration -> context-pack check -> QC -> gate -> two-step landing -> T-731.
 - T-968 (coordinator builds S1 runtime/S3/S4/S6; this crew lands S1-token + S2 only). S1-token 5ccfb52c rc0, QA PWG #11312
-  -> fix a8fca5a3 (2a0edbd8, Job queued) -> re-check c691df71; blind d9f18599 (btojwf6jk). S2b blind PWG 11302 -> last_error
+  -> fix a8fca5a3 (2a0edbd8, Job b1gahci5o) -> re-check c691df71; blind PWG 11365 (K8 expired token untested -> test
+  2a0edbd8; K12 = a8fca5a3). S2b blind PWG 11302 -> last_error
   untrusted fix e605c835 (Job after a8fca5a3) -> delta c691df71 + blind d9f18599. Integration holds c6c4a589 (FAILED security
   review; fixes on coord/T-968-gm): no deploy until T-731 says so.
 - T-1083 URGENT (D-84: job-run places Jobs on the cluster or the owner's Mac) -> 2a0edbd8, ahead of T-1079. Plan 11383:
