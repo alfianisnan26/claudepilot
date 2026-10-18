@@ -24,7 +24,10 @@ async function api(m, p, b) {
   const j = await r.json().catch(() => null);
   return { data: j?.data, error: j?.error };
 }
-const s = ((await api('GET', '/api/chat/sessions?limit=100')).data?.items ?? []).find((x) => x.id.startsWith(prefix));
+// A full id is read directly (the list is one page of the newest 100 and misses older sessions); a prefix searches that page.
+const s = /^[0-9a-f]{8}-[0-9a-f]{4}-/.test(prefix)
+  ? (await api('GET', `/api/chat/sessions/${prefix}`)).data
+  : ((await api('GET', '/api/chat/sessions?limit=100')).data?.items ?? []).find((x) => x.id.startsWith(prefix));
 if (!s) {
   console.log('no session', prefix);
   process.exit(1);
