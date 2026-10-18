@@ -1,77 +1,74 @@
-# orchestrator status (2026-10-17 15:55 UTC, session 355881a3, continuation of de232389; older: git history)
+# orchestrator status (2026-10-17 22:55 UTC, session 355881a3; older entries: git history)
 
 ## DONE
-- Batches 22-26: git history (to 83b7213e), gates green. Close on "Coordinator live check" PASS. T-574 re-check after 10-17 15:00Z.
-- RESPAWN rule (165db813 + D-78 4e101a59): respawn each lane BETWEEN tickets on a worktree cut from integration; scripts by abs path.
-- BATCH 29 edde2073 (T-524 S3c, T-733 S5, T-881 S1b, T-416 S2c, T-382 S1, T-781 S8c, T-675 R2c+R2d) RELEASED 2026.10.17-2: close on live checks.
-## IN FLIGHT (6 of 6, D-71; lanes respawned per ticket, D-78; sonnet)
-- BATCH 30 LANDED 08feccc6 GATE GREEN (T-731 10494; deploy is the coordinator's): T-772 S2f, T-736 S3g, T-612 S1+S1b,
-  T-868 S1-S3, T-436 S1+S2, T-379 S2, T-860 S2c, T-382 S2-S4. Close on live checks. LESSON: format commits break tests that
-  read source with a regex: grep readFileSync(*.ts) tests and run them in the QC; re-run the pack check after each merge.
-- T-938 DONE 259935e8 (Job 6bd127a4 rc0) -> blind review d9f18599 -> coordinator lands. Lane a3554d40 -> T-974 URGENT
-  (rule guard git argv, ruleGuard.ts; rule class: blind review, coordinator removes deny lines after PASS).
-- URGENT T-948 port proxy (9810): S1 BE INFRA 2 2a0edbd8 OPUS (security), ticket/T-948-port-proxy; app-<ws>-<port> subdomain (9811).
-  S1 fix f70c72bd RECHECK PASS 10380 (c691df71 now reads FIX2). S2 d08465f9 RECHECK PASS 10189; UX code-read only (no browser in
-  qa lane): visual look on the premerge scratch portal later. Blind review S1 (d9f18599) PWC 10219: 2 Majors (upstream timeout +
-  bridge caps; upgrade lifetime) + minors -> FIX2 5d929014 by 2a0edbd8 (10220; Job queued); deploy before T-976 own apps only.
-  Premerge t948 b2d62bfd (wip/t948-b2d62bf): QC running; then FIX2, gate, land. Paused: T-921 0dfff348, T-379 S3 9dfecffb.
-- T-976 __Host- cookie (security; blind review + coord live check): 2a0edbd8 opus, test fix a418de31, Job queued.
-  15:25 cluster full (node2 CPU 87% reserved): every Job queues ~1 h, several lost Pending; re-run once each (D-75).
-- T-382 S5 DONE 472e9015 QA PWG (877726a5, T-595 10427) -> batch 31. S6 gap 3 (unbounded ci total) 3753d3c2, proof Job running.
-  be63acc8 -> T-976 QA (code read; Job after builder rc). T-382 unassigned: comments refused, assign asked FOR THE COORDINATOR (10376).
-- T-425 S2b 357ff021: QA be63acc8 PWG 9970 (mutant B survives) -> test fix on next free Backend slot; same QA re-checks (T-595 10014).
-- T-436 S3 + T-772 S2g fe676258: QA PWG (T-595 10003) -> batch 31; permissions class: coordinator live check before close (D-81).
-- T-294 PWG 9858: crew_post/read + idle-child reuse not built -> slice after T-948 (T-595 9871).
-- URGENT T-1043 MU2 (D-82, plan 10460): S0a routes / S0b sockets / S0c MCP, opus builder (a3554d40 slot respawned), QA +
-  blind security review each; after T-948 ships, ahead of T-968/T-965. Then: T-968 General Manager (D-80, plan 9969; S0 scribe + S2 MCP tools incl. T-965 first),
-  T-971 self-healing (H1+H2 first; charter-wall conflict on healer landing rule lines FOR THE COORDINATOR 9988).
-  T-409 G3 ee75effd QA PWG 9820 -> merge in b31; G3b fup after T-425 S2b (T-595 9823).
+- Batches 22-30: git history (b30 08feccc6 gate green). Batch 29 released 2026.10.17-2. Close each on the coordinator's live checks.
+
+## IN FLIGHT (6 of 6 workers, D-71; QA/review sonnet, D-63)
+- BATCH 31 RELEASED: c9cf3089 is in release bbca47f4 (portal 2026.10.17-11, merged d244f466). Close its tickets on the coordinator's live checks.
+- T-948 RELEASED: 62a44a10 (gate claudepilot-gate-867873e-e9f4 green) is in portal 2026.10.17-12 (73ef53ca). Visual
+  off-state ok (10854); ON state = coordinator live check (10822). Close on that check.
+- T-976 1b99696f: auth conflict in app.ts with identity code (4 hunks) -> 2a0edbd8 rebases FIRST (10855; risk note FOR THE
+  COORDINATOR: shadowing nuisance until T-976 is live) -> QA delta + blind.
+- BATCH 32 LANDED 22:54: integration 74599ece (gate claudepilot-gate-18d8e9d-f5f1 green on 18d8e9d0; status-only merge on top):
+  T-382 S6, T-294 FIX1, T-1049. Relayed T-731 10876 -> coordinator deploys. Format sweep stays T-1032 (10857).
+- T-1043 S0a FIX1 3c907e76 (badfb8da rc0, 274/274) -> delta c691df71 + blind d9f18599. S0b: lead merged S0a in, 789474e4
+  (trace T-1043 10772) -> 76845676 continues. Denial = 404 (10605).
+- T-974 URGENT FIX 6abbf44f blind PWG 10774 (10 mutants killed) -> FIX2 `git remote set-url/add` + -c case row, a3554d40 first.
+- T-1043 S0a QA FAIL 10788 (M14, M16) + blind PWG 10775 (app.all behind ALL /api/*) -> S0a+S0b ONE unit (10790), fixes on S0b
+  by 76845676; sockets via sessionToken. T-976 note 10791 (sockets read the cookie name).
+- 21:20 cluster Job queue 16 deep: QA lanes code-read first, mutants in one Job when the queue < 5 (T-975 QA c691df71).
+- T-968 PRD PWG 10735 -> PRD fix 2a0edbd8 (decision 10779: cards for guarded classes) -> re-check d9f18599.
+- T-938 FIX2 73b8137c re-check PASS 10685 -> coordinator lands (T-938 10695).
+- T-971 H1 25d9d9b1 QA PWG 10737 -> FIX gaps 1+3 a3554d40 (10770) -> delta d9f18599 -> batch 32.
+- T-971 H2 S1 DONE 11d5a5a1 (rc0 33/33) -> QA c691df71 + blind d9f18599 (no auto Bypass stands, 10736; contradiction noted).
+- T-425 S2b merge: lead pushed the conflicted merge ticket/T-425-s2b-merge ac45f735 (lane can't git merge) -> 3753d3c2 resolves.
+- T-565 S1 64f7c137 QA PWG (relay T-595 10773) -> FIX gaps 1+2 2a0edbd8 -> delta c691df71 -> blind (infra).
+- T-968 S0 PRD dce0e9f7 -> QA d9f18599 (doc). S2a 896daa98 (f6a9cc80 rc0, 105/105) -> QA + blind. S2b schedules -> 2a0edbd8.
+- T-975 eacf6074 QA FAIL 10793 (hand-off race: cancel-queued vs #toRunner; migration 787 clash with T-294) -> FIX a3554d40
+  after T-974 FIX2 (decision 10799: T-975 takes 788) -> delta c691df71 -> blind. T-969 verdict role -> a3554d40 (QA + blind).
+- T-968 S2a 896daa98 PWG x2 (QA 10802, blind 10803 Job c04c05e7 12/13 killed) -> gaps fixed in S2b by 2a0edbd8 (10804);
+  S2a+S2b land together after the c691df71 delta + d9f18599 blind.
+- 21:30 both QA lanes idle (every verdict waits on a builder fix; T-595 note). 20:45 third-QA-lane plan WITHDRAWN.
+- 23:10 returns: T-425 S2b merge e2e4a2b6 (bvl4mr4k1 rc0 on 571f0fba, 851/851) -> QA delta c691df71. T-971 H2 S1 QA PWG 10847
+  (4 gaps) -> fix 3753d3c2. T-974 FIX2 42b95954 (b01b54cd rc0) -> blind d9f18599. T-969 8144c5ce (c2159b27 rc0) -> QA c691df71
+  -> blind d9f18599. T-975 FIX 6650e8ff Job bdwtltcfm rc1 (ci/links.test cancel-running) -> re-run by7elpu9y; lead: likely the CAS, not flake.
+- 23:05: T-975 FIX 6650e8ff e7750582 rc0 (3x45/45; the bdwtltcfm links.test failure unexplained, builder owns it if seen
+  again) -> QA delta c691df71 -> blind. T-971 H1 FIX fade65c2 (a0d0b91a rc0) -> delta d9f18599. New T-1065 (redact.ts
+  misses short passwords/URL userinfo) -> 76845676 while its Job queues. T-961 (deploy outage, PriorityClass) -> a3554d40 (10887).
+- Lanes: c691df71 QA (T-425 delta > T-969 > T-975 delta > S0a+S0b > S2b > T-565 > T-976 > H2 delta); d9f18599 blind
+  (H2 S1 > T-974 FIX2 > T-971 H1 delta > T-969 > T-975 > PRD > S2b > S0b); a3554d40 T-961; 76845676 T-1043 S0a+S0b
+  (Job queued) + T-1065; 2a0edbd8 T-976 rebase > T-565 fix > T-968 PRD > S2b; 3753d3c2 T-971 H2 S1 fix > batch 33.
 
 ## DECISIONS (binding)
-- 12:10 D-81 (owner via coordinator): risk-based review. Same builder keeps a ticket through all fixes; one QA pass, same QA re-checks;
-  blind review / 2nd QA / post-deploy only for security, auth, permissions, rule files, infra, pipelines, migrations, money, uat/prod.
-  Builders push their own ticket branch (`git push -u <remote> ticket/...`, no -q). T-948 S1 (security) keeps blind review; T-425 S2b one QA.
-- 10:00 Restart (~07:00 UTC, /tmp wiped; my Claude hit its session limit 03:xx): 6 lanes ended + respawned from pushed heads
-  (clean worktrees); lost Jobs re-run; T-924 re-gate re-run on the same commit (verdict unavailable). T-382 merges with gaps (9694).
-- D-75 (+amend 1444d836): one Job per commit; the lead runs only the merge gate (gate-job.sh, one per batch); idle QA gets no-Job work.
-- 16:30 D-71 (coordinator): limit 6; 3rd build lane BE Infra (CI, runners, job-run, k3s, deploy, secrets delivery, usage, spend, quota):
-  T-401, T-426, T-611, T-547, T-610. Backend: T-546, T-597, T-600 route, T-325. Spawn lanes with claude auto.
-- 14:56 D-70 LANES (DECISIONS.md; my decision T-595 5380): freed slots become lanes, spawned ONCE on sonnet and fed
-  by session_message, never ended for lack of work. Every delivery goes to its side's QA lane before merge. T-595 5389: the LEAD makes
-  each ticket's worktree+branch. 16:25 (T-595 5552/5553): QA Perf may `git merge --ff-only` a base the lead pushed; lane-backend may NOT.
-  An implementing lane needing a new base is ended and respawned as the same lane on a fresh branch from that base.
-- BINDING: the coordinator runs deploys; I start NO deploy.
-- 13:20 D-66: quick-check (format, lint, named tests) before the gate. Workers cannot git merge: the lead merges base heads in (4852).
-- 11:15 D-65 (coordinator): implementers sonnet by default (opus only with a written why); small QA/review findings fixed in the same
-  slice; full report on the ticket, the lead reads line 1 and opens it only on FAIL; ready features over chores.
-- 01:45 D-78 (owner via coordinator, 4e101a59): only PRODUCTION and UAT wait for a person; all else -> "FOR THE COORDINATOR:"
-  on the ticket with the exact change. Never tag owner-*/waits-owner/needs-person. Respawn lanes between tickets to load it.
-- D-63: QA/ux/reviewer on SONNET (opus needs a `why`: security, gate, rule or large slice); the lead never implements or commits code.
-- D-61: NO Agent-tool sub-agents, heavy work ONLY via scripts/job-run.sh or gate-job.sh, one at a time. Hand over before 250k.
+- D-81 risk-based review: same builder through all fixes; one QA, the same QA re-checks; blind review only for security, auth,
+  permissions, rule files, infra, pipelines, migrations, money, uat/prod.
+- Coordinator order: T-948 > T-1043 MU2 S0 (D-82, blind review per slice) > T-968 (D-80) > T-971 H1+H2, T-974, T-975, T-565.
+- The coordinator runs all deploys; I start none. I gate with gate-job.sh before every merge and tell T-731 when a batch lands.
+- 17:40 pace order: no idle lanes; a lane waiting on its Job takes the next slice. D-75 stays: one Job per commit.
+- D-78: only production/uat go to a person; all else "FOR THE COORDINATOR:" on the ticket. D-70 feed lanes by session_message.
+- D-61 nothing heavy in the pod; D-66 the lead runs QC at premerge (lanes' allow lists refuse it, T-586).
 
 ## FOR THE COORDINATOR (D-78; each also on its ticket)
-- T-938 job-run --pool-env adds E2E_QA_EMAIL/E2E_QA_PASSWORD (a loosening, T-384): BE Infra builds, blind review, coordinator lands.
-- T-436 deploy note (b30): after deploy agents reach only vaults whose agentWorkspaces list names their workspace.
-- T-924 deploy at once after its gate (urgent). T-921/T-923 image + pool rollout. Batch 29 edde2073 deploy + live checks.
-- T-578 gate reuse: (a) portal CI store [lead default] (b) pipeline-only RBAC ConfigMap (c) accept risk (d) drop reuse.
-- T-666 RBAC: workspace kohi-event can create/delete ConfigMaps in isnan-claudepilot (review 6168, can-i): narrow it.
-- T-341 D needs a real Claude Code session; T-422 (sudo); T-306 item 4 / T-340; T-417 Bypass across sleep D-row; T-433 (2984);
-  T-437/T-432 folder trust; T-868 allow line must not allow a SHOTS_TEST_MODE=1 prefix.
-- T-476 lead may START a deploy whose release waits for a person
-  (3813); T-491 Event token scope until T-426 (3965); deploys #35/#36/#37 production approval showed "auto", not changed by an agent;
-  T-509 kit republish; T-594 alfian.isnan signed out; T-525 session_get + scribe tools + QA UI browser tools (5505); T-595 lane Bash (5443);
-  T-591 #40 backfill after deploy (5511); T-325 S3 push door vs charter "only the main chat merges integration" + its token (5549);
-  T-527 finding 4 (owner triggers tagging owner-checklist); T-657 reopen T-259/T-317/T-338; T-739 A scoring defs (scoring = person's wall).
+- T-948 after landing: deploy with PORT_PROXY_HOST_SUFFIX and the claudepilot-app-ports route. T-976: live Traefik X-Forwarded-Proto.
+- T-974 after a blind PASS: remove the text-matching `git -C` deny lines.
+- T-565: assign it to session 355881a3; name the backup bucket and its secret (BACKUP_S3_*).
+- T-382: assign it; pick a DOM test library. T-1032: QC format must skip files tests read with readFileSync.
+- T-938: confirm the QA account is stg-only, low-privilege; job-run --pool-env loosening (T-384).
+- T-436 deploy note: agents reach only vaults whose agentWorkspaces names their workspace.
+- T-666 RBAC narrowing; T-578 gate reuse choice; T-868 allow line must not allow a SHOTS_TEST_MODE=1 prefix.
+- Older: T-341 D, T-422, T-306/T-340, T-417, T-433, T-437/T-432, T-476, T-491, T-509, T-525, T-591, T-325 S3, T-527, T-657, T-739.
 
 ## NEEDS A HUMAN (production and uat only, D-62/D-78)
-- T-93 Konfersi production (owner checklist). T-610 pre-deploy read-only prod count of the 2 rows (through the coordinator).
+- T-93 Konfersi production (owner checklist). T-610 pre-deploy read-only prod count (through the coordinator).
 
 ## NEXT (in order, as slots free)
-0. 12:15 audit (T-595 10033): T-924 CLOSED live; T-403 closed; after T-948 BE Infra: T-612 S1b > T-974 (T-971 H1) > T-565 portal backup >
-   T-975. Older order (9542): T-938 > T-860 fups > T-921 >
-   T-923 > T-911 > T-27 > T-598 > T-653 > T-654 > T-612 S2. Backend after T-382 S4: T-409 G3 > T-356 > T-30 (XL, 4 slices). Impl: T-379 S3 > T-33.1. b30 gate (+T-379 S2 merge b9dd11fd, trace 9534; T-436 deploy note: agents reach only vaults whose agentWorkspaces names them); T-924 gate ALONE; T-772 S2g (Impl); T-591 lastReleased fix; T-525 persona draft (8236). 2. T-401 in b24 (ack 8027 sat unseen 13:50-15:15: re-read HELD tickets' last comments each hour) -> T-426 S1e -> T-379 S2 3f11b28; deploys are the coordinator's. ticket_list fails: use ticket_get.
-4. RTK: T-340 (person/coordinator) -> T-341 merge -> T-306 item 3. 5. T-537. 6. T-513. 7. T-472 live re-check (needs portal_status), T-422, T-147, T-438, T-425, T-436, T-437, T-432, T-382, T-377, T-386, T-409, T-402, T-398,
-   T-399, T-370 HOLD, T-371..T-374, T-363, T-451, T-470, T-507, T-508, T-512, T-520; T-404 open till deployed.
+1. Batch 33: T-425 S2b, plus what passes (T-974, T-971 H1+H2 S1, T-975, T-968 S2a+S2b, T-1043 S0a+S0b, T-976).
+2. T-976 after its rebase. T-1043 S0b sockets, S0c MCP tools.
+3. T-968 General Manager (S0 scribe, S2 MCP incl. T-965), T-971 H2, T-975.
+4. T-356, T-30 (XL), T-33, T-921, T-379 S3 (paused).
 
-LESSONS: a lane's rules are its worktree's .claude/settings.json: cut worktrees from integration (>= 165db813) for the absolute form; reply_of = LATEST reply only (verdict must be the last reply; T-860 S2 sat 20 min unseen: check the urgent ticket's comments too); node --test, never vitest; a gate-done notice needs action; dontAsk workers cannot read /tmp, merge, gate or wait, and Bash only in their spawn worktree (new branch = new worker); whole
-test folders (T-574 red 10-15); integration moved during a gate = merge + re-gate (pack goes stale); FULL hashes; trailers in one block; a bg command's exit = its LAST command (tail!): append `echo RC=$?` to the log; status via Edit/Write ONLY; ancestor check before ff; NO status push while a gate runs (b23).
+LESSONS: dontAsk lanes run Bash only in their spawn worktree: push new branches from the main checkout, the lane does
+`git checkout -B <br> origin/<br>`. Never prettier files tests read with readFileSync. Re-run `context-pack.sh --check HEAD`
+after every merge; integration moved during a gate = merge + re-gate. QA PASS without a typecheck Job = "not verified: typecheck".
+Full session ids and full commit hashes only. Start gate-job.sh in the background with timeout 7200000: Pending alone may last 5400 s,
+and a killed watcher deletes the Job (T-948 20:20).

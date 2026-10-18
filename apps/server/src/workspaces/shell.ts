@@ -3,6 +3,7 @@ import type { Duplex } from 'node:stream';
 import { isAppError } from '@isnanme/core';
 import type { ShellClientMessage, ShellServerMessage } from '@portal/contracts';
 import { WebSocketServer, type WebSocket } from 'ws';
+<<<<<<< HEAD
 import type { SignedIn } from '../authz/routeGuard.js';
 import { UPGRADE_NOT_FOUND, declareSocketPolicies, onSocket } from '../authz/socketGuard.js';
 import { config } from '../config.js';
@@ -10,6 +11,10 @@ import type { Portal } from '../portal.js';
 import { sessionTokenOf } from '../sessionToken.js';
 import { signedInOf } from '../sockets.js';
 import { SHELL_SOCKET_PATH, SHELL_SOCKET_POLICIES } from './authz.js';
+=======
+import type { Portal } from '../portal.js';
+import { sessionOfRequest } from '../sessionCookie.js';
+>>>>>>> origin/ticket/T-976-merge
 import { runtimeMessage, type Workspaces } from './manager.js';
 import { attachCommand, TERMINAL_ID } from './terminals.js';
 
@@ -47,7 +52,11 @@ export function attachShell(server: Server, portal: Portal, workspaces: Workspac
     const match = url.pathname.match(SHELL_PATH);
     if (!match) return void socket.end(UPGRADE_NOT_FOUND); // a name no workspace can have
     if (!sameOrigin(req)) return refuse(socket, 403, 'Forbidden');
+<<<<<<< HEAD
     if (!portal.session(sessionTokenOf(req, config.session.cookie))) return refuse(socket, 401, 'Unauthorized');
+=======
+    if (!portal.session(sessionOfRequest(req))) return refuse(socket, 401, 'Unauthorized');
+>>>>>>> origin/ticket/T-976-merge
 
     const [, target, name] = match as unknown as [string, string, string];
     const size = {

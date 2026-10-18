@@ -1,6 +1,7 @@
 import type { IncomingMessage, Server } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { WebSocketServer, type WebSocket } from 'ws';
+<<<<<<< HEAD
 import type { SignedIn } from '../authz/routeGuard.js';
 import { UPGRADE_NOT_FOUND, declareSocketPolicies, onSocket } from '../authz/socketGuard.js';
 import { config } from '../config.js';
@@ -8,6 +9,10 @@ import type { Portal } from '../portal.js';
 import { sessionTokenOf } from '../sessionToken.js';
 import { signedInOf } from '../sockets.js';
 import { BROWSER_SOCKET_POLICIES } from './authz.js';
+=======
+import type { Portal } from '../portal.js';
+import { sessionOfRequest } from '../sessionCookie.js';
+>>>>>>> origin/ticket/T-976-merge
 import { DEVICE_ID, deviceLabel } from './control.js';
 import { secureContext } from './routes.js';
 import type { BrowserService } from './service.js';
@@ -52,7 +57,11 @@ export function attachBrowserSockets(server: Server, deps: { portal: Portal; ser
     const match = PATH.exec(url.pathname);
     if (!match) return void socket.end(UPGRADE_NOT_FOUND); // a name no workspace can have
     if (!sameOrigin(req)) return refuse(socket, 403, 'Forbidden');
+<<<<<<< HEAD
     if (!deps.portal.session(sessionTokenOf(req, config.session.cookie))) return refuse(socket, 401, 'Unauthorized');
+=======
+    if (!deps.portal.session(sessionOfRequest(req))) return refuse(socket, 401, 'Unauthorized');
+>>>>>>> origin/ticket/T-976-merge
     const device = url.searchParams.get('device') ?? '';
     if (!DEVICE_ID.test(device)) return refuse(socket, 400, 'Bad Request');
     const workspaceId = `${match[1]}/${match[2]}`;

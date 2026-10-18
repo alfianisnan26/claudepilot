@@ -44,7 +44,7 @@ function fakeWorkspaces(
       const out = (t: string) => data.forEach((fn) => fn(Buffer.from(t)));
       const exit = (c: number) => exits.forEach((fn) => fn(c));
       const session: ExecSession = {
-        write: (d) => answer(d.trim(), { out, exit }),
+        write: (d) => answer(String(d).trim(), { out, exit }),
         close: () => undefined,
         onData: (fn) => void data.push(fn),
         onExit: (fn) => void exits.push(fn),

@@ -468,11 +468,25 @@ def key: [.metadata.creationTimestamp, .metadata.name];
     | if $s.go then "go"
       else "wait \([$q[] | select(.metadata.name != $me and (.spec.suspend != true or (key < ($mine | key))))] | length)" end
   end'
+# Gates first (2026-10-17: deploy 361's gate, 8Gi, sat Pending for an hour while 4Gi lane Jobs took every bit of room it freed). While a gate pod
+# waits for a node and some Job of ours runs (its memory comes free), a Job about to be let out waits instead; with none running, waiting frees
+# nothing, so it goes. JOB_RUN_GATE_FIRST=0 turns it off.
+gate_first=${JOB_RUN_GATE_FIRST:-1}
+gate_waiting() {
+  [ "$gate_first" = 1 ] || return 1
+  local unplaced running
+  unplaced=$(kubectl -n "$ns" get pods -l app=claudepilot-gate --field-selector=status.phase=Pending -o jsonpath='{range .items[*]}{.metadata.name}={.spec.nodeName}{"\n"}{end}' 2>/dev/null | grep -c '=$')
+  [ "${unplaced:-0}" -gt 0 ] || return 1
+  running=$(jobs_json | jq '[.items[] | select(.metadata.deletionTimestamp == null and .spec.suspend != true and ((.status.succeeded // 0) == 0) and ((.status.failed // 0) == 0))] | length' 2>/dev/null)
+  [ "${running:-0}" -gt 0 ]
+}
 last=
 while :; do
   d=$(jobs_json | jq -r --arg me "$job" --argjson max "$max" --argjson per "$per" --argjson pprog "$pprog" "$QUEUE_JQ" 2>/dev/null || true)
+  if [ "$d" = go ] && gate_waiting; then d=gate; fi
   case "$d" in
     go) break ;;
+    gate) [ "$d" = "$last" ] || echo "job-run: waits: a gate Job is Pending for room, and gates go first (JOB_RUN_GATE_FIRST=0 turns it off)"; last=$d ;;
     gone) echo "job-run: $job was stopped while queued" >&2; exit 1 ;;
     wait\ *) [ "$d" = "$last" ] || echo "job-run: queued behind ${d#wait } (at most $max at once, $per per chat, $pprog per program)"; last=$d ;;
   esac

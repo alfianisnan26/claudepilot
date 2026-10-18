@@ -79,6 +79,7 @@ const refuse = () => { const t = stdin(); let plain = ''; try { plain = Object.v
   process.stderr.write('error: ' + t + ' ' + plain + '\n'); process.exit(1); };
 if (verb === 'get' && kind === 'jobs') { process.stdout.write(JSON.stringify({ items: read().jobs.map(k8s) })); }
 else if (verb === 'get' && kind === 'job') { const j = job(name); if (!j || (failing('uid') && !a.includes('json'))) process.exit(1); process.stdout.write(a.includes('json') ? JSON.stringify(k8s(j)) : 'uid-' + name); }
+else if (verb === 'get' && kind === 'pods' && a.includes('app=claudepilot-gate')) { const g = path.join(F, 'gates.txt'); process.stdout.write(fs.existsSync(g) ? fs.readFileSync(g, 'utf8') : ''); }
 else if (verb === 'get' && kind === 'pods' && a.includes('json')) { process.stdout.write(JSON.stringify(podOf(job(a[3].replace('job-name=', ''))))); }
 // The Secret is made by a client-side dry run (JSON on stdout, as kubectl prints it) and then created (never applied) with its ownerReference and label.
 else if (verb === 'create' && kind === 'secret' && a.includes('--dry-run=client') && failing('dry-run')) refuse();
@@ -3040,4 +3041,24 @@ test('T-611 merge: the reuse key hashes job-run.sh AND job-run.yaml; the Secret 
   );
   assert.deepEqual(refs(m.spec.template.spec.containers), [`JR_POOL_${POOL_SECRET}`], 'run: the scoped pool name only');
   assert.ok(!p.applied1().includes(secret), 'the value is never in the manifest');
+});
+
+test('gates first: while a gate pod waits for a node and a Job of ours runs, a Job about to go waits; it goes once the gate is placed; with none running it never waits', async () => {
+  const w = world([{ name: 'claudepilot-job-00000001', chat: 'chat-x' }]);
+  // A gate Pending with no node (as kubectl prints name=nodeName per line).
+  writeFileSync(join(w.root, 'gates.txt'), 'claudepilot-gate-d244f46-2bd0-jdbhz=\n');
+  const s = w.start(['--repo', 'claudepilot', '--ref', 'main', '--', 'true'], { PILOT_SESSION_ID: 'chat-b' });
+  await waitFor('the gate line', () => /a gate Job is Pending for room, and gates go first/.test(s.out()));
+  await new Promise((r) => setTimeout(r, 400));
+  assert.doesNotMatch(s.out(), /rc=/, 'still held');
+  writeFileSync(join(w.root, 'gates.txt'), 'claudepilot-gate-d244f46-2bd0-jdbhz=k3s-node2\n');
+  const r = await s.done;
+  assert.equal(r.code, 0, r.out);
+  assert.equal((r.out.match(/gates go first/g) ?? []).length, 1, 'said once');
+  // Nothing of ours runs: waiting frees nothing, so it goes at once.
+  const w2 = world([]);
+  writeFileSync(join(w2.root, 'gates.txt'), 'claudepilot-gate-x=\n');
+  const r2 = await w2.start(['--repo', 'claudepilot', '--ref', 'main', '--', 'true']).done;
+  assert.equal(r2.code, 0, r2.out);
+  assert.doesNotMatch(r2.out, /gates go first/);
 });

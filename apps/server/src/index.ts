@@ -15,7 +15,12 @@ import { AccountPools } from './accounts/pools.js';
 import { AccountsService } from './accounts/service.js';
 import { Outbox } from './delivery/outbox.js';
 import { LiveHub } from './live.js';
+<<<<<<< HEAD
 import { SocketGuard, fullSessionOf, signedInOf } from './sockets.js';
+=======
+import { SocketGuard } from './sockets.js';
+import { cutOnRevoke } from './revoke.js';
+>>>>>>> origin/ticket/T-976-merge
 import { workspaceView } from './workspaces/view.js';
 import { readWorkspaceMemory } from './workspaces/memory.js';
 import { runToEnd } from './workspaces/runToEnd.js';
@@ -32,6 +37,7 @@ import { vaultReleaseNotes } from './ci/releaseNotesVault.js';
 import { parseActor } from './knowledge/journal.js';
 import { createKnowledge } from './knowledge/module.js';
 import { registerKnowledgeTools } from './knowledge/portalTools.js';
+import { wireVaultBinding } from './knowledge/vaultBinding.js';
 import { createClaudeUsage } from './claudeusage/index.js';
 import { registerClaudeUsageTools } from './claudeusage/portalTools.js';
 import { ClaudeVersions, registerClaudeVersionTools } from './claudeversion/index.js';
@@ -80,6 +86,10 @@ import { sessionStore } from './store/sessions.js';
 import { Store } from './store/store.js';
 import { DockerRuntime } from './workspaces/docker.js';
 import { attachShell } from './workspaces/shell.js';
+<<<<<<< HEAD
+=======
+import { sessionOfRequest } from './sessionCookie.js';
+>>>>>>> origin/ticket/T-976-merge
 import { ChatController } from './chat/controller.js';
 import { BYPASS_SETTING } from './chat/bypass.js';
 import { LEAD_RULES_SETTING } from './chat/leadRules.js';
@@ -99,6 +109,7 @@ import { createConnect } from './connect/index.js';
 import { agentBundle } from './connect/bundle.js';
 import { wireConnect } from './workspaces/connect/wire.js';
 import type { Runtime } from './workspaces/runtime.js';
+import { AppPorts, routeAppHostUpgrades } from './appports/index.js';
 
 // A background task that rejects (a module reading a table a frozen database doesn't have, a probe, a scan) must not
 // take the portal down with every open terminal: log it and carry on. Synchronous throws still stop the process.
@@ -387,7 +398,11 @@ workspaces.hooks.audit = (e) => platform.audit.record(e);
 const view = workspaceView(pools, reconciler, claudeVersions.brief);
 const live = new LiveHub(
   { workspaces: async () => (await workspaces.list()).map(view), usage: () => workspaces.usage() },
+<<<<<<< HEAD
   fullSessionOf(portal, config.session.cookie),
+=======
+  (req) => !!portal.session(sessionOfRequest(req)),
+>>>>>>> origin/ticket/T-976-merge
 );
 // Needs you (docs/prd/attention.md): what waits for a person, read from each module's own state. The topics of the modules it reads
 // (pools: MCP catalog and skills; tickets; CI) make it look again; the chat's events and a minute's tick are chained further down.
@@ -470,10 +485,16 @@ portalMcp.start();
 // Agent access stores its workspace as the stable id and reads it as the key (T-42 slice 3).
 portalMcp.agents.workspaceRefs = workspaces.identities;
 // T-436: a session's token is bound at mint to the vaults that name its workspace; a change of a vault's list rebinds the live tokens.
-portalMcp.agents.vaultsFor = (ws) => knowledge.vaultsForWorkspace(ws);
-knowledge.onAgentWorkspacesChange = () => void portalMcp.agents.rebindVaults();
-knowledge.onAgentWorkspacesFailClosed = () => void portalMcp.agents.closeVaults();
+wireVaultBinding(portalMcp.agents, knowledge);
 chatController.agentAccess = portalMcp.agents;
+// Self-heal (owner, 2026-10-17): a live session calling with a replaced or expired token gets a restart at its turn's end (the same
+// conversation, MCP reconnected), so its new process starts with a good token and nobody has to run /mcp by hand.
+portalMcp.agents.onStaleToken = (sessionId, reason) => {
+  console.log(`[portal-mcp] ${sessionId.slice(0, 8)}: its process holds a ${reason} token; restarting it at the turn's end`);
+  void chatController
+    .restart(sessionId, { why: 'mcp', when: 'turn_end', actor: 'portal:token-heal', from: 'auto' })
+    .catch((e: unknown) => console.warn(`[portal-mcp] ${sessionId.slice(0, 8)}: the token heal could not restart it: ${e instanceof Error ? e.message : String(e)}`));
+};
 {
   // T-102: agent access turned on or off changes the portal tools a session's NEXT process gets: its "Tools changed" hint says so.
   const accessChanged = portalMcp.agents.onAccessChange;
@@ -678,12 +699,26 @@ const platform = createPlatform({
   pushContact: config.notify.pushContact ?? null,
   selfOrigin: `http://localhost:${config.port}`,
   publish: (topic) => notify(topic),
+<<<<<<< HEAD
   socketAuthorized: fullSessionOf(portal, config.session.cookie),
+=======
+  socketAuthorized: (req) => !!portal.session(sessionOfRequest(req)),
+>>>>>>> origin/ticket/T-976-merge
 });
 live.onPresence = (connection, presence, req) => platform.presence(connection, presence, req);
 // A new Needs you item tells each person who may decide it, once, through the notification pipeline (its quiet hours and matrix).
 bridgeAttentionNotify(attention, platform.bus, () => platform.owner.ownersOf({ type: 'portal', id: 'attention' }));
 platform.start();
+// App ports (T-948, docs/prd/app-ports.md): a web app on a workspace's loopback at its own host `app-<name>-<port>.<PORT_PROXY_HOST_SUFFIX>`.
+// Its proxy answers those hosts before the portal's routes and socket modules (below); off when the suffix is unset.
+const appPorts = new AppPorts({
+  suffix: config.portProxy.hostSuffix,
+  portalPort: config.port,
+  denyPorts: config.portProxy.denyPorts,
+  workspaces,
+  sessionValid: (token) => !!portal.session(token),
+  limits: { idleMs: config.portProxy.idleMs, socketIdleMs: config.portProxy.socketIdleMs, maxPerGrant: config.portProxy.maxPerGrant, maxPerWorkspace: config.portProxy.maxPerWorkspace },
+});
 const app = createApp(portal, workspaces, store, accounts, pools, reconciler, health, chatController, {
   serveWeb: !config.dev,
   notify,
@@ -708,21 +743,30 @@ const app = createApp(portal, workspaces, store, accounts, pools, reconciler, he
   platform,
   claudeVersions,
   connect,
+  appPorts,
 });
 const handleApi = getRequestListener(app.fetch);
 const server = createServer();
 // Before the socket modules: ties their connections to the sign-in that opened them (QA-001) and drops unanswered upgrades.
-const sockets = new SocketGuard(portal, config.session.cookie);
+const sockets = new SocketGuard(portal, sessionOfRequest);
 sockets.attach(server);
-portal.onRevoked = () => sockets.sweep();
+// A sign-out or a new code also cuts the app hosts' live connections of the sessions that ended (T-948 review 10219).
+cutOnRevoke(portal, sockets, appPorts);
 // The agents' tunnel (`/connect/v1/tunnel`): no cookie, its own handshake; answers only its own path.
 connect.attach(server, portal);
+<<<<<<< HEAD
 // T-1043 S0b: every socket module attaches through the socket guard (authz/socketGuard.ts), which decides for who this cookie signs in.
 const signedIn = signedInOf(portal, config.session.cookie);
 attachShell(server, portal, workspaces, signedIn);
 browser.attach(server, portal, signedIn);
 live.attach(server, signedIn);
 attachChat(server, chatController, fullSessionOf(portal, config.session.cookie), signedIn);
+=======
+attachShell(server, portal, workspaces);
+browser.attach(server, portal);
+live.attach(server);
+attachChat(server, chatController, (req) => !!portal.session(sessionOfRequest(req)));
+>>>>>>> origin/ticket/T-976-merge
 
 if (config.dev) {
   // One port for everything: the API through Hono, the rest through Vite (with HMR on this server).
@@ -735,7 +779,8 @@ if (config.dev) {
   });
   server.on('request', (req, res) => {
     const url = req.url ?? '/';
-    if (
+    if (appPorts.proxy.owns(req.headers.host)) void appPorts.proxy.request(req, res);
+    else if (
       url.startsWith('/api/') ||
       url === '/healthz' ||
       url === '/mcp' ||
@@ -747,8 +792,10 @@ if (config.dev) {
     else vite.middlewares(req, res);
   });
 } else {
-  server.on('request', (req, res) => void handleApi(req, res));
+  server.on('request', (req, res) => void (appPorts.proxy.owns(req.headers.host) ? appPorts.proxy.request(req, res) : handleApi(req, res)));
 }
+// After every module (and Vite's HMR) attached its `upgrade` listener: an app host's upgrade goes to the app-port proxy alone.
+routeAppHostUpgrades(server, appPorts.proxy);
 
 server.listen(config.port, config.host, () => {
   const where = `http://localhost:${config.port}`;

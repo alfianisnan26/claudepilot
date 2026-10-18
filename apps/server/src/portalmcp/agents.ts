@@ -36,9 +36,13 @@ export interface AgentGrant {
 /** What the launch wiring depends on: the rest of the portal never sees a token. */
 export interface AgentTokenMinter {
   enabled(workspaceId: string): boolean;
-  mint(req: { workspaceId: string; sessionId: string }): Promise<AgentGrant | null>;
+  mint(req: { workspaceId: string; sessionId: string }, opts?: { keepOthers?: boolean }): Promise<AgentGrant | null>;
+  settle(sessionId: string, tokenId: string, started: boolean): void;
   revokeSession(sessionId: string, reason: string): number;
 }
+
+/** How often one session's stale-token heal may fire (a restart that fails is not retried in a loop). */
+export const STALE_HEAL_EVERY_MS = 10 * 60_000;
 
 export const AGENT_MCP_CONFIG = JSON.stringify({
   mcpServers: { pilot: { type: 'http', url: '${PILOT_MCP_URL}', headers: { Authorization: 'Bearer ${PILOT_MCP_TOKEN}' } } },
@@ -55,6 +59,7 @@ interface TokenRow {
   vaults: string | null;
   expires_at: string;
   revoked_at: string | null;
+  revoked_reason?: string | null;
 }
 
 export interface AgentAccessOptions {
@@ -77,6 +82,13 @@ export class AgentAccess implements AgentTokenMinter {
   readonly #warned = new Set<string>();
   /** Called after the opt-in or the live tokens change, for the page that shows them. */
   onChange?: () => void;
+  /**
+   * Self-heal (owner, 2026-10-17: "harusnya bisa otomatis auto heal apapun caranya"): a session that is still alive called with a token that
+   * was replaced or ran out. A running process can't be handed a new token, so the portal restarts it (index.ts: at the turn's end, the same
+   * conversation), and the new process starts with a good one. At most once in `STALE_HEAL_EVERY_MS` per session.
+   */
+  onStaleToken?: (sessionId: string, reason: 'revoked' | 'expired') => void;
+  readonly #healed = new Map<string, number>();
   /** Called when a workspace's opt-in is turned on or off (what a lockdown allowlist must admit changes with it). */
   onAccessChange?: (workspaceId: string) => void;
   /**
@@ -201,10 +213,12 @@ export class AgentAccess implements AgentTokenMinter {
 
   /**
    * Mints the token for one session at its launch, revoking the one it had (a Claude switch gives the new process a
-   * new token). Null when the workspace hasn't opted in, MCP is off, the session isn't running, or the portal's
+   * new token). With `keepOthers` the old one stays good until `settle` says whether a new process really started: a start the host
+   * answers "already running" (exit 3) attaches to the process that holds the OLD token, and revoking it then cut that process off
+   * from every portal tool until a person reconnected it (Konfersi lead, 2026-10-17 19:17). Null when the workspace hasn't opted in, MCP is off, the session isn't running, or the portal's
    * address can't be worked out for that workspace: the session then simply runs without portal tools.
    */
-  async mint(req: { workspaceId: string; sessionId: string }): Promise<AgentGrant | null> {
+  async mint(req: { workspaceId: string; sessionId: string }, opts: { keepOthers?: boolean } = {}): Promise<AgentGrant | null> {
     const { workspaceId, sessionId } = req;
     if (!this.enabled(workspaceId) || this.o.mcpEnabled?.() === false || !this.o.alive(sessionId)) return null;
     const db = this.#writable;
@@ -219,7 +233,7 @@ export class AgentAccess implements AgentTokenMinter {
       }
       return null;
     }
-    this.revokeSession(sessionId, 'replaced by a new token');
+    if (!opts.keepOthers) this.revokeSession(sessionId, 'replaced by a new token');
     const secret = `${PORTAL_AGENT_TOKEN_PREFIX}${randomBytes(32).toString('base64url')}`;
     const id = `agt_${randomBytes(6).toString('hex')}`;
     const now = this.#now;
@@ -290,6 +304,15 @@ export class AgentAccess implements AgentTokenMinter {
   }
 
   /** The session ended, was archived or deleted, or switched Claude: its tokens stop working on their next call. */
+  /**
+   * After a launch with `keepOthers`: a new process started, so every other token of the session goes; or none did (the host said "already
+   * running", or the start failed), so the unused new one goes and the running process keeps its own.
+   */
+  settle(sessionId: string, tokenId: string, started: boolean): void {
+    if (started) this.#revoke('session_id = ? AND id != ?', [sessionId, tokenId], 'replaced by a new token');
+    else this.#revoke('id = ?', [tokenId], 'its launch started no new process');
+  }
+
   revokeSession(sessionId: string, reason: string): number {
     return this.#revoke('session_id = ?', [sessionId], reason);
   }
@@ -314,15 +337,23 @@ export class AgentAccess implements AgentTokenMinter {
   verify(secret: string): AgentVerify {
     if (!secret.startsWith(PORTAL_AGENT_TOKEN_PREFIX) || secret.length < 20 || secret.length > 128) return { ok: false, reason: 'unknown' };
     const row = this.#db
-      ?.prepare('SELECT id, workspace_id, session_id, vaults, expires_at, revoked_at FROM pmcp_agent_tokens WHERE token_hash = ?')
+      ?.prepare('SELECT id, workspace_id, session_id, vaults, expires_at, revoked_at, revoked_reason FROM pmcp_agent_tokens WHERE token_hash = ?')
       .get(hashOf(secret)) as TokenRow | undefined;
     if (!row) return { ok: false, reason: 'unknown' };
     // The token's workspace as stored decides (a removed workspace's token never passes as a new one's); the principal carries the key.
     const stored = row.workspace_id;
     row.workspace_id = this.#key(stored);
-    if (row.revoked_at) return { ok: false, reason: 'revoked', tokenId: row.id };
     const now = this.#now;
-    if (Date.parse(row.expires_at) <= now.getTime()) return { ok: false, reason: 'expired', tokenId: row.id };
+    if (row.revoked_at) {
+      // Only a token that lost to a newer one of the same session heals by itself; one revoked on purpose (access off, the session ended,
+      // a lockdown) stays refused.
+      if (row.revoked_reason === 'replaced by a new token' || row.revoked_reason === 'its launch started no new process') this.#stale(row.session_id, 'revoked', now);
+      return { ok: false, reason: 'revoked', tokenId: row.id };
+    }
+    if (Date.parse(row.expires_at) <= now.getTime()) {
+      this.#stale(row.session_id, 'expired', now);
+      return { ok: false, reason: 'expired', tokenId: row.id };
+    }
     if (!this.#enabledAsStored(stored)) {
       this.#revoke('id = ?', [row.id], 'agent access turned off');
       return { ok: false, reason: 'disabled', tokenId: row.id };
@@ -354,6 +385,17 @@ export class AgentAccess implements AgentTokenMinter {
         vaults,
       },
     };
+  }
+
+  #stale(sessionId: string, reason: 'revoked' | 'expired', now: Date) {
+    if (!this.onStaleToken || !this.o.alive(sessionId)) return;
+    if (now.getTime() - (this.#healed.get(sessionId) ?? 0) < STALE_HEAL_EVERY_MS) return;
+    this.#healed.set(sessionId, now.getTime());
+    try {
+      this.onStaleToken(sessionId, reason);
+    } catch {
+      // the next stale call tries again after the pause
+    }
   }
 
   #touch(id: string, now: Date) {

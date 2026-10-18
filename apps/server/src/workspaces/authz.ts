@@ -68,6 +68,10 @@ export const WORKSPACE_POLICIES: RoutePolicies = {
   [`GET ${WS}/terminals`]: tn('operate'),
   [`POST ${WS}/terminals`]: tn('operate'),
   [`DELETE ${WS}/terminals/:term`]: { kind: 'objects', checks: [wsCheck('operate'), { type: 'terminal', verb: 'manage', from: 'path', param: 'target+name+term' }] },
+  // App ports (T-948): listing the ports runs a command in the workspace and opening one reaches into its loopback, so both are `operate`;
+  // an open is audited. The app host re-asks the seam (`operate`) on every proxied request.
+  [`GET ${WS}/ports`]: tn('operate'),
+  [`POST ${WS}/ports/open`]: tn('operate', 'workspace.port.open'),
   // The workspace's Claudes: renaming one is `manage` on that Claude, with `operate` on the workspace (its parent guard). Removing one (its login
   // with it) is `manage` on the Claude and, stricter than the PRD's parent guard, `manage` on the workspace.
   [`GET ${WS}/claudes`]: tn('view'),

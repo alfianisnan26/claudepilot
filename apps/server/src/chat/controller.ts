@@ -116,6 +116,7 @@ import { isLead, leadRulesSettings } from './leadRules.js';
 import { isStagedUpload } from './artifacts/records.js';
 import { redact } from './redact.js';
 import { TurnCost } from './turnCost.js';
+import { redactSecrets, stripUnsafe } from '../portalmcp/sanitize.js';
 import { crewQuote } from './crewQuote.js';
 import { NO_VALUES, SessionStream, ValueRedactor } from './valueRedact.js';
 import { HANDOFF_ACTOR, HANDOFF_QA, HandoffEngine } from './handoff.js';
@@ -461,11 +462,15 @@ type SlotTurn = { workspaceId: string; full: SlotFull };
 export interface ChatAgentGrant {
   env: Record<string, string>;
   mcpConfig: string;
+  /** Which token, so the launch can settle it (`ChatAgentAccess.settle`). */
+  tokenId?: string;
 }
 
 /** Portal MCP's side of I8: a token minted for one session, null when the workspace hasn't opted in to portal tools. */
 export interface ChatAgentAccess {
-  mint(req: { workspaceId: string; sessionId: string }): Promise<ChatAgentGrant | null>;
+  mint(req: { workspaceId: string; sessionId: string }, opts?: { keepOthers?: boolean }): Promise<ChatAgentGrant | null>;
+  /** After the host answered: a new process started (the old tokens go) or not (the new one goes; a live process keeps its own). */
+  settle?(sessionId: string, tokenId: string, started: boolean): void;
 }
 
 export interface ChatControllerOptions {
@@ -561,7 +566,16 @@ function portalFrameBase(actor: string, label: string | undefined, text: string,
         : relation === 'crew'
           ? 'a peer worker of your parent (your crew)'
           : 'another session';
-  const from = kind === 'session' ? session : kind === 'ticket' ? 'a ticket' : kind === 'portal' ? 'the portal' : 'an MCP client';
+  const from =
+    kind === 'session'
+      ? session
+      : kind === 'ticket'
+        ? 'a ticket'
+        : kind === 'portal'
+          ? 'the portal'
+          : kind === 'account'
+            ? 'a person this session was shared with (not its owner)'
+            : 'an MCP client';
   const named = label ? ` “${label}”` : '';
   // T-294: a report on a worker is the portal's own (nobody asked for it); what it quotes is the worker's text.
   if (actor === CREW_REPORT_ACTOR)
@@ -1835,7 +1849,7 @@ export class ChatController {
     const actor = opts.actor ?? CHAT_ACTOR_UI;
     if (!isChatActor(actor))
       throw new AppError('VALIDATION_FAILED', 'Unknown actor.', {
-        details: { actor: 'Expected ui, ticket:<id>, session:<id> or portal-mcp:<id>.' },
+        details: { actor: 'Expected ui, ticket:<id>, session:<id>, portal-mcp:<id> or account:<id>.' },
       });
     const ticketId = this.#ticket(req.ticketId);
     const agent = this.#agent(req.agent);
@@ -2744,7 +2758,7 @@ export class ChatController {
     // framed for Claude so it never reads as something the person typed.
     if (opts.actor !== undefined && !isChatActor(opts.actor))
       throw new AppError('VALIDATION_FAILED', 'Unknown actor.', {
-        details: { actor: 'Expected ui, ticket:<id>, session:<id> or portal-mcp:<id>.' },
+        details: { actor: 'Expected ui, ticket:<id>, session:<id>, portal-mcp:<id> or account:<id>.' },
       });
     const portal = isPortalActor(opts.actor) ? opts.actor : null;
     if (portal === `session:${sessionId}`) throw new AppError('VALIDATION_FAILED', 'A session can’t send a message to itself.');
@@ -4048,6 +4062,46 @@ export class ChatController {
     return this.#chat.list({ parentId: this.#chat.resolveId(rawId) }).map((s) => this.#decorate(s));
   }
 
+  /**
+   * T-294: the crew channel a session belongs to: its parent's (the parent and the parent's workers), or its own when it has no parent
+   * (a lead). `lead`, when given, must name that channel; any other id gets the same NOT_FOUND as one that exists nowhere, so the answer
+   * never tells a session which ids exist.
+   */
+  #crewChannel(rawId: string, lead?: string): { me: ChatSession; leadId: string } {
+    const me = this.#require(this.#chat.resolveId(rawId));
+    const leadId = me.parentId ?? me.id;
+    if (lead !== undefined && this.#chat.resolveId(lead) !== leadId) {
+      throw new AppError('NOT_FOUND', 'No such crew channel: yours is your parent’s (a lead’s own).');
+    }
+    return { me, leadId };
+  }
+
+  /** T-294: a member's message on its crew channel, stored redacted, with no slash command and no escape or invisible character in it. */
+  crewPost(fromId: string, text: string, opts: { lead?: string } = {}): { id: number; at: string; lead: string } {
+    const { me, leadId } = this.#crewChannel(fromId, opts.lead);
+    if (me.state === 'ended') throw new AppError('CONFLICT', 'This session has ended.');
+    // The workspace's secret values first (a value of no known shape), then the credential shapes.
+    const clean = redactSecrets(this.scrub(me.workspaceId, stripUnsafe(text))).trim();
+    if (!clean) throw new AppError('VALIDATION_FAILED', 'Type a message.', { details: { text: 'Required.' } });
+    const posted = this.#chat.crewPost(leadId, me.id, clean);
+    return { ...posted, lead: leadId };
+  }
+
+  /** T-294: what a member has not read on its crew channel (after its own cursor, or after `after`), and moves its cursor on unless `peek`. */
+  crewRead(
+    fromId: string,
+    opts: { lead?: string; after?: number; limit?: number; peek?: boolean } = {},
+  ): { lead: string; items: { id: number; from: string; text: string; at: string }[]; cursor: number; more: boolean } {
+    const { me, leadId } = this.#crewChannel(fromId, opts.lead);
+    const read = this.#chat.crewRead(leadId, me.id, {
+      limit: Math.min(Math.max(opts.limit ?? 20, 1), 100),
+      ...(opts.after !== undefined ? { after: opts.after } : {}),
+      ...(opts.peek ? { peek: true } : {}),
+    });
+    // Again on the way out: a row stored before a secret was added to the workspace, or by an older build, is scrubbed too.
+    return { lead: leadId, ...read, items: read.items.map((m) => ({ ...m, text: this.scrub(me.workspaceId, m.text) })) };
+  }
+
   /** Every session below this one that hasn't ended, deepest first (what ending the parent may end with it). */
   #liveDescendants(sessionId: string): ChatSession[] {
     const out: ChatSession[] = [];
@@ -5162,7 +5216,23 @@ export class ChatController {
           : []),
     ];
     const args = ['start', o.csid, String(o.seg), o.cwd, ...(lines.length ? ['--env', String(lines.length)] : []), '--', ...flags];
-    return this.#runOnce(workspaceId, args, lines.length ? `${lines.join('\n')}\n` : undefined, this.#chat.configDir(o.claudeId));
+    const settle = (started: boolean) => {
+      if (!grant?.tokenId) return;
+      try {
+        this.agentAccess?.settle?.(o.sessionId, grant.tokenId, started);
+      } catch {
+        // a token left unsettled still ends with its session
+      }
+    };
+    let r: { code: number | null; out: string };
+    try {
+      r = await this.#runOnce(workspaceId, args, lines.length ? `${lines.join('\n')}\n` : undefined, this.#chat.configDir(o.claudeId));
+    } catch (e) {
+      settle(false);
+      throw e;
+    }
+    settle(r.code === 0);
+    return r;
   }
 
   /** T-561: the sessions whose current process was launched with the lead rules; unknown after a portal restart. */
@@ -5212,7 +5282,9 @@ export class ChatController {
   async #grant(workspaceId: string, sessionId: string): Promise<ChatAgentGrant | null> {
     if (!this.agentAccess) return null;
     try {
-      const grant = await this.agentAccess.mint({ workspaceId, sessionId });
+      // The old token stays good until the host says a NEW process started (#hostStart settles it): an "already running" answer attaches
+      // to the process that holds it.
+      const grant = await this.agentAccess.mint({ workspaceId, sessionId }, { keepOthers: typeof this.agentAccess.settle === 'function' });
       return grant && grant.env && typeof grant.mcpConfig === 'string' && grant.mcpConfig ? grant : null;
     } catch {
       return null;

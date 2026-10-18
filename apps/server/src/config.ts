@@ -27,8 +27,8 @@ export const config = {
     webDist: `${root}apps/web/dist`,
     data: env('PORTAL_DATA_DIR') ?? `${root}.data`,
   },
+  /** The session's lifetime; its cookie's name and attributes are in sessionCookie.ts (T-976). */
   session: {
-    cookie: 'portal_session',
     ttlMs: 12 * 60 * 60 * 1000,
   },
   /** Failed sign-ins allowed per client address in each window. */
@@ -131,6 +131,22 @@ export const config = {
     enabled: env('PORTAL_CI_ENABLED') !== 'false',
     maxRunsPerWorkspace: Math.max(1, Number(env('PORTAL_CI_MAX_RUNS') ?? 2) || 2),
     maxJobsParallel: Math.max(1, Math.min(8, Number(env('PORTAL_CI_MAX_JOBS') ?? 2) || 2)),
+  },
+  /**
+   * App ports (docs/prd/app-ports.md, T-948): a web app on a workspace's loopback opens at `app-<name>-<port>.<hostSuffix>`. Unset suffix: the
+   * feature is off (the ports list says `enabled: false`, opening is 404, no host is proxied). `denyPorts`: more ports that may never be opened
+   * (comma-separated), besides the portal's own and the browser's (CDP, supervisor).
+   */
+  portProxy: {
+    hostSuffix: env('PORT_PROXY_HOST_SUFFIX')?.toLowerCase().replace(/^\.+|\.+$/g, ''),
+    denyPorts: (env('PORT_PROXY_DENY_PORTS') ?? '').split(',').map((s) => Number(s.trim())).filter((n) => Number.isInteger(n) && n > 0),
+    /** An HTTP request whose app connection moves no byte for this long is cut (504 before the answer started). */
+    idleMs: Math.max(1000, Number(env('PORT_PROXY_IDLE_MS') ?? 60_000) || 60_000),
+    /** An upgraded socket (WebSocket) that moves no byte for this long is closed. */
+    socketIdleMs: Math.max(1000, Number(env('PORT_PROXY_SOCKET_IDLE_MS') ?? 600_000) || 600_000),
+    /** Open bridges into workspaces (requests and sockets together) per app-host cookie and per workspace; past it a 503 with Retry-After. */
+    maxPerGrant: Math.max(1, Number(env('PORT_PROXY_MAX_PER_GRANT') ?? 16) || 16),
+    maxPerWorkspace: Math.max(1, Number(env('PORT_PROXY_MAX_PER_WORKSPACE') ?? 64) || 64),
   },
   /** Connect (docs/prd/targets-connect.md §15): targets enrolled from the web, agents that dial out. `PORTAL_CONNECT_ENABLED=false` is the kill switch. */
   connect: {

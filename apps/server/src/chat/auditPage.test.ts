@@ -138,6 +138,37 @@ test('a bad cursor is a 400: garbage, a tampered one, one from another filter, o
   }
 });
 
+// QA 9691 gap 2: the scan bound and its resume cursor (see the same test in ci/runsPage.test.ts). 50 entries, the caller may see the 3 oldest:
+// with limit 2 a request reads 20, shows none and must hand back a cursor on the 20th row scanned.
+test('scan bound: a request reads at most 10 x limit rows, and ends on a cursor that resumes after the last row scanned', async () => {
+  const s = await liveSession();
+  try {
+    write(s, 50);
+    const order = all(s);
+    const visible = new Set(order.slice(-3));
+    const keep = (e: ChatAuditEntry) => visible.has(e.id);
+    const chat = new ChatStore(s.store);
+    const first = chat.auditPage({ kind: 'test.page', scope: 'x' }, { limit: 2, keep });
+    assert.equal(first.items.length, 0, 'nothing of the first 20 rows is the caller’s');
+    assert.ok(first.next, 'the bound ended the page: a cursor to go on from, not null');
+    assert.equal(peekCursor(first.next!).id, order[19], 'it rests on the 20th row scanned, not later');
+    const seen: number[] = [];
+    let cursor: string | undefined;
+    let pages = 0;
+    for (let n = 0; n < 20; n++) {
+      const p = chat.auditPage({ kind: 'test.page', scope: 'x' }, { limit: 2, keep, ...(cursor ? { cursor } : {}) });
+      pages++;
+      seen.push(...p.items.map((i) => i.id));
+      if (!p.next) break;
+      cursor = p.next;
+    }
+    assert.deepEqual(seen, order.slice(-3), 'the walk still reaches every entry the caller may see');
+    assert.ok(pages >= 3, 'it took several bounded requests');
+  } finally {
+    await s.done();
+  }
+});
+
 test('authz: an entry about a session the caller may not view is in no page and no cursor names it', async () => {
   const s = await liveSession();
   try {

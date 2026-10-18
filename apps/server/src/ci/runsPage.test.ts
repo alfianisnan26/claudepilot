@@ -6,13 +6,15 @@ import { test } from 'node:test';
 import { AppError, isAppError } from '@isnanme/core';
 import { CURSOR_DEFAULT_LIMIT, CURSOR_MAX_LIMIT, type Actor, type CiRunPage } from '@portal/contracts';
 import { Hono } from 'hono';
-import { peekCursor } from '../store/keyset.js';
+import { ownerActor, seesEverything, systemActor, visible } from '../authz/seam.js';
+import { peekCursor, SCAN_FACTOR } from '../store/keyset.js';
 import { registerCiAuthz } from './authz.js';
 import { createCiRoutes } from './routes.js';
+import { CiStore } from './store.js';
 import { harness, remote, WS, type H } from './testkit.js';
 
 const user = (id: string): Actor => ({ kind: 'user', userId: id, loginSessionId: 'l1', via: 'ui' });
-const ACTORS: Record<string, Actor> = { a: user('u_a'), b: user('u_b') };
+const ACTORS: Record<string, Actor> = { a: user('u_a'), b: user('u_b'), o: ownerActor() };
 const OTHER_WS = 'docker/other';
 
 async function build() {
@@ -175,7 +177,7 @@ test('authz: a run the caller may not view is in no page, no count and no cursor
     const seen: string[] = [];
     const cursors: string[] = [];
     let cursor = '';
-    let counts: [number | undefined, number | undefined] = [undefined, undefined];
+    let counts: [number | null | undefined, number | null | undefined] = [undefined, undefined];
     for (let n = 0; n < 40; n++) {
       const p = await t.page('a', `?status=passed,failed&limit=2${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`);
       if (n === 0) counts = [p.total, p.active];
@@ -199,6 +201,146 @@ test('authz: a run the caller may not view is in no page, no count and no cursor
     assert.equal(mine.size + hidden.size, 12);
     const b = await t.page('b');
     assert.deepEqual([b.items.length, b.total, b.active], [0, 0, 0], 'B sees nothing and counts nothing');
+  } finally {
+    t.h.done();
+  }
+});
+
+// QA 9691 gap 2: the scan bound (SCAN_FACTOR x limit rows read per request, however many `keep` hides) and the cursor it leaves.
+// 51 runs, the caller may see only the 3 oldest bulk ones: with limit 2 one request reads 20 rows, shows none and must hand back a cursor
+// resting on the 20th row scanned. Raise the bound (`limit * 1000`) and the first request reads everything: next is null, the check on the 20th
+// row goes red. Drop the resume (`resume = null`) and next is null at the bound: the walk ends with nothing shown.
+test('scan bound: a request reads at most 10 x limit rows, and ends on a cursor that resumes after the last row scanned', async () => {
+  const t = await build();
+  try {
+    await seed(t.h, 50);
+    const order = (t.h.store.db!.prepare('SELECT id FROM ci_runs ORDER BY created_at DESC, id DESC').all() as { id: string }[]).map(
+      (r) => r.id,
+    );
+    assert.equal(order.length, 51);
+    const visible = new Set(bulk(t.h).slice(-3));
+    const keep = (r: { id: string }) => visible.has(r.id);
+    const cs = new CiStore(t.h.store);
+    const scope = 'test.scan';
+    const first = cs.listRunsPage({}, { scope, limit: 2, keep });
+    assert.equal(first.rows.length, 0, 'nothing of the first 20 rows is the caller’s');
+    assert.ok(first.next, 'the bound ended the page: a cursor to go on from, not null');
+    assert.equal(peekCursor(first.next!).id, order[19], 'it rests on the 20th row scanned, not later');
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    let pages = 0;
+    for (let n = 0; n < 20; n++) {
+      const p = cs.listRunsPage({}, { scope, limit: 2, keep, ...(cursor ? { cursor } : {}) });
+      pages++;
+      seen.push(...p.rows.map((r) => r.id));
+      if (!p.next) break;
+      cursor = p.next;
+    }
+    assert.deepEqual(seen, bulk(t.h).slice(-3), 'the walk still reaches every run the caller may see');
+    assert.ok(pages >= 3, 'it took several bounded requests');
+  } finally {
+    t.h.done();
+  }
+});
+
+// T-382 S6 (QA 9691 gap 3): page 1's total and active are bounded. No policy can hide a run (no `keep`): two SQL counts. A `keep` that can hide
+// runs: a scan of at most 10 x limit rows, exact when the list ends inside it, else null (unavailable). Never a guess, never an unbounded read.
+const liveCount = (h: H) =>
+  Number((h.store.db!.prepare("SELECT count(*) AS n FROM ci_runs WHERE status IN ('queued', 'running')").get() as { n: number }).n);
+
+test('counts without a keep: exact, from SQL, however long the list is', async () => {
+  const t = await build();
+  try {
+    await seed(t.h, 50);
+    const cs = new CiStore(t.h.store);
+    const p = cs.listRunsPage({}, { scope: 'test.count', limit: 1 });
+    assert.equal(p.rows.length, 1);
+    assert.equal(p.total, 51, 'every run, though limit 1 would bound a scan at 10');
+    assert.equal(p.active, liveCount(t.h));
+    const onlyFailed = cs.listRunsPage({ statuses: ['failed'] }, { scope: 'test.count', limit: 1 });
+    assert.equal(onlyFailed.total, bulk(t.h, "status = 'failed'").length, 'the filters apply to the count');
+    assert.equal(onlyFailed.active, 0);
+  } finally {
+    t.h.done();
+  }
+});
+
+test('counts with a keep that can hide runs: exact when the list fits the scan bound', async () => {
+  const t = await build();
+  try {
+    await seed(t.h, 50);
+    const cs = new CiStore(t.h.store);
+    const mine = new Set(bulk(t.h, "status = 'failed'"));
+    const p = cs.listRunsPage({}, { scope: 'test.count', limit: 25, keep: (r) => mine.has(r.id) }); // bound 250 > 51 rows
+    assert.equal(p.total, mine.size);
+    assert.equal(p.active, 0, 'the failed ones are not live');
+    const all = cs.listRunsPage({}, { scope: 'test.count', limit: 25, keep: () => true });
+    assert.deepEqual([all.total, all.active], [51, liveCount(t.h)]);
+  } finally {
+    t.h.done();
+  }
+});
+
+test('counts with a keep that can hide runs: past the scan bound they are null, and no more than the bound is checked', async () => {
+  const t = await build();
+  try {
+    await seed(t.h, 50);
+    const cs = new CiStore(t.h.store);
+    let checked = 0;
+    const p = cs.listRunsPage(
+      {},
+      {
+        scope: 'test.count',
+        limit: 2,
+        keep: () => {
+          checked++;
+          return true;
+        },
+      },
+    ); // bound 20 < 51 rows
+    assert.equal(p.total, null, 'unavailable, not a guess');
+    assert.equal(p.active, null);
+    assert.equal(p.rows.length, 2);
+    assert.ok(p.next, 'the list itself still pages');
+    assert.ok(checked <= 2 * SCAN_FACTOR, `the policy ran ${checked} times, at most ${2 * SCAN_FACTOR} allowed`);
+    const later = cs.listRunsPage({}, { scope: 'test.count', limit: 2, keep: () => true, cursor: p.next! });
+    assert.equal(later.total, undefined, 'later pages carry no counts at all');
+  } finally {
+    t.h.done();
+  }
+});
+
+// QA d9f18599 (Minor): `seesEverything` skips the ci_run resolver that `visible()` consults. They agree only while the portal's own resolver
+// leaves every run to the founding user. This pins that: if the resolver ever denies the founding user a run, this goes red, and the SQL count
+// path (which would then count runs the owner may not see) has to ask the resolver first.
+test('seesEverything agrees with visible(): with the portal’s own ci_run resolver the founding user sees every run', async () => {
+  const h = await harness();
+  try {
+    createCiRoutes(h.svc); // registers the portal's own ci_run resolver
+    await seed(h, 6);
+    const rows = h.store.db!.prepare('SELECT id FROM ci_runs').all() as { id: string }[];
+    assert.ok(rows.length >= 7);
+    const owner = ownerActor();
+    assert.equal(seesEverything(owner), true);
+    assert.equal(visible(owner, 'ci_run', rows, (r) => r.id).length, rows.length, 'the resolver hides no run from the founding user');
+    assert.equal(seesEverything(systemActor('test')), true);
+    assert.equal(seesEverything(user('u_a')), false, 'any other caller is checked run by run');
+  } finally {
+    h.done();
+  }
+});
+
+test('route: the founding user gets exact counts at limit 1; another caller with 51 runs to check gets null; the items are the same', async () => {
+  const t = await build();
+  try {
+    await seed(t.h, 50);
+    const owner = await t.page('o', '?limit=1');
+    assert.deepEqual([owner.total, owner.active], [51, liveCount(t.h)]);
+    const a = await t.page('a', '?limit=1');
+    assert.equal(a.total, null, 'checked run by run and longer than the bound: unavailable');
+    assert.equal(a.active, null);
+    assert.equal(a.items.length, 1);
+    assert.ok('total' in a && 'active' in a, 'the keys are there (null), not dropped');
   } finally {
     t.h.done();
   }

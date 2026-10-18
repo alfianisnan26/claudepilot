@@ -185,3 +185,13 @@ test('T-960: a Python test runs with unittest when the image has no pytest, and 
   assert.equal(bad.status, 1, bad.stdout + bad.stderr);
   assert.match(bad.stdout, /test_bad\.py \(unittest, no pytest in the Job image\) FAILED/);
 });
+
+test('--dir names the worktree, so a lane whose shell is back in another folder checks the right one (T-1053); a missing folder is a usage error', () => {
+  const f = fixture(0);
+  const r = run(f.root, f.fake, ['--dir', f.work, '--test', 'pkg/x.test.mjs']);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /QUICK CHECK: all passed$/m);
+  assert.equal(readFileSync(join(f.root, 'args'), 'utf8').split('\n')[1], sh(f.work, 'git rev-parse HEAD'), 'the worktree’s pushed commit');
+  assert.match(readFileSync(f.log, 'utf8'), /^vitest run x\.test\.mjs in pkg$/m);
+  assert.equal(run(f.root, f.fake, ['--dir', join(f.root, 'nope')]).status, 2);
+});
