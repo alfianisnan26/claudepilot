@@ -1,6 +1,6 @@
 import { Badge, Button, ConfirmDialog, LoadError, Menu, RowsSkeleton, Switch, useToast } from '@isnanme/ui';
 import type { CreatedPortalToken, PortalAgentWorkspace, PortalMcpState, PortalToken } from '@portal/contracts';
-import { Ban, Bot, ChevronRight, KeyRound, Plug, Plus } from 'lucide-react';
+import { Ban, Bot, Box, ChevronRight, KeyRound, Plug, Plus } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { Card } from '@/components/Card';
 import { InfoTip } from '@/components/InfoTip';
@@ -10,7 +10,7 @@ import { formatDateTime, timeAgo } from '@/lib/format';
 import { portalMcpApi } from './api';
 import { groupTokens, OUTCOME, SCOPE_LABEL, SCOPE_TONE, timeLeft, tokenState, type TokenGroup } from './labels';
 import { CodeBlock, MONO } from './parts';
-import { CreatedTokenDialog, NewTokenDialog } from './TokenDialogs';
+import { CreatedTokenDialog, NewTokenDialog, TokenWorkspaceDialog } from './TokenDialogs';
 
 type Confirm =
   | { kind: 'off' }
@@ -40,6 +40,8 @@ export function McpAccess() {
   const [confirm, setConfirm] = useState<Confirm>(null);
   const [showAll, setShowAll] = useState(false);
   const [more, setMore] = useState(false);
+  /** T-1105: the token whose default workspace is being changed. */
+  const [placing, setPlacing] = useState<PortalToken | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -87,6 +89,7 @@ export function McpAccess() {
   const groups = groupTokens(showAll ? state.tokens : live, now);
   const labelCount = confirm?.kind === 'label' ? (confirm.keepNewest ? confirm.group.live.length - 1 : confirm.group.live.length) : 0;
   const agentTokens = (agents ?? []).reduce((n, a) => n + a.liveTokens, 0);
+  const workspaceName = (id: string) => agents?.find((a) => a.workspaceId === id)?.name ?? id;
 
   return (
     <div className="flex flex-col gap-5">
@@ -131,12 +134,14 @@ export function McpAccess() {
             <ul className="divide-y divide-line">
               {groups.map((g) =>
                 g.tokens.length === 1 ? (
-                  <TokenRow key={g.label} token={g.tokens[0]!} now={now} onRevoke={() => setConfirm({ kind: 'revoke', token: g.tokens[0]! })} />
+                  <TokenRow key={g.label} token={g.tokens[0]!} now={now} workspaceName={workspaceName} onWorkspace={setPlacing} onRevoke={() => setConfirm({ kind: 'revoke', token: g.tokens[0]! })} />
                 ) : (
                   <GroupRow
                     key={g.label}
                     group={g}
                     now={now}
+                    workspaceName={workspaceName}
+                    onWorkspace={setPlacing}
                     onRevoke={(t) => setConfirm({ kind: 'revoke', token: t })}
                     onRevokeLabel={(keepNewest) => setConfirm({ kind: 'label', group: g, keepNewest })}
                   />
@@ -258,6 +263,16 @@ export function McpAccess() {
         }}
       />
       <CreatedTokenDialog created={created} onClose={() => setCreated(null)} />
+      <TokenWorkspaceDialog
+        token={placing}
+        workspaces={agents}
+        onClose={() => setPlacing(null)}
+        onSaved={() => {
+          setPlacing(null);
+          toast('Saved');
+          void load();
+        }}
+      />
 
       <ConfirmDialog
         open={confirm?.kind === 'off'}
@@ -334,7 +349,18 @@ function Heading({ title, tip, action }: { title: string; tip: string; action?: 
 }
 
 /** A label with more than one token: the count, the newest expiry and the last use; it opens to the tokens. */
-function GroupRow({ group: g, now, onRevoke, onRevokeLabel }: { group: TokenGroup; now: number; onRevoke: (t: PortalToken) => void; onRevokeLabel: (keepNewest: boolean) => void }) {
+interface TokenActions {
+  workspaceName: (id: string) => string;
+  onWorkspace: (t: PortalToken) => void;
+}
+
+function GroupRow({
+  group: g,
+  now,
+  onRevoke,
+  onRevokeLabel,
+  ...actions
+}: { group: TokenGroup; now: number; onRevoke: (t: PortalToken) => void; onRevokeLabel: (keepNewest: boolean) => void } & TokenActions) {
   const [open, setOpen] = useState(false);
   const scopes = [...new Set((g.live.length ? g.live : g.tokens).map((t) => t.scope))];
   const items = [
@@ -371,7 +397,7 @@ function GroupRow({ group: g, now, onRevoke, onRevokeLabel }: { group: TokenGrou
       {open && (
         <ul className="divide-y divide-line border-t border-line bg-surface-2/40 pl-4">
           {g.tokens.map((t) => (
-            <TokenRow key={t.id} token={t} now={now} onRevoke={() => onRevoke(t)} />
+            <TokenRow key={t.id} token={t} now={now} onRevoke={() => onRevoke(t)} {...actions} />
           ))}
         </ul>
       )}
@@ -379,8 +405,13 @@ function GroupRow({ group: g, now, onRevoke, onRevokeLabel }: { group: TokenGrou
   );
 }
 
-function TokenRow({ token: t, now, onRevoke }: { token: PortalToken; now: number; onRevoke: () => void }) {
+function TokenRow({ token: t, now, onRevoke, workspaceName, onWorkspace }: { token: PortalToken; now: number; onRevoke: () => void } & TokenActions) {
   const s = tokenState(t, now);
+  const items = [
+    // T-1105: only a token that makes tickets (operate, admin) has a default workspace.
+    ...(t.scope !== 'read' ? [{ label: 'Workspace', icon: <Box className="size-4" />, onSelect: () => onWorkspace(t) }] : []),
+    { label: 'Revoke', danger: true, icon: <Ban className="size-4" />, onSelect: onRevoke },
+  ];
   return (
     <li className="flex items-center gap-3 px-4 py-3 sm:px-5">
       <KeyRound className="size-4 shrink-0 text-muted" aria-hidden="true" />
@@ -389,12 +420,18 @@ function TokenRow({ token: t, now, onRevoke }: { token: PortalToken; now: number
           <span className="truncate text-sm font-semibold">{t.label}</span>
           <Badge tone={SCOPE_TONE[t.scope]}>{SCOPE_LABEL[t.scope]}</Badge>
           {!s.live && <Badge tone={s.tone}>{s.label}</Badge>}
+          {t.defaultWorkspaceId && (
+            <span className="inline-flex min-w-0 items-center gap-1 text-[12.5px] text-muted" title="Its tickets go here">
+              <Box className="size-3.5 shrink-0" aria-hidden="true" />
+              <span className="min-w-0 break-all">{workspaceName(t.defaultWorkspaceId)}</span>
+            </span>
+          )}
         </div>
         <p className="mt-0.5 truncate text-[12.5px] text-muted" title={t.revokedReason ?? undefined}>
           <span style={{ fontFamily: MONO }}>{t.preview}</span> · {s.live ? s.label : (t.revokedReason ?? s.label)} · {t.lastUsedAt ? timeAgo(t.lastUsedAt) : 'never used'}
         </p>
       </div>
-      {s.live && <Menu label={`Actions for ${t.label}`} items={[{ label: 'Revoke', danger: true, icon: <Ban className="size-4" />, onSelect: onRevoke }]} />}
+      {s.live && <Menu label={`Actions for ${t.label}`} items={items} />}
     </li>
   );
 }

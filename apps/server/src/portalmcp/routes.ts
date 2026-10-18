@@ -11,6 +11,7 @@ import type {
   RevokePortalTokenLabelRequest,
   SetAgentAccessRequest,
   UpdatePortalMcpSettingsRequest,
+  UpdatePortalTokenRequest,
 } from '@portal/contracts';
 import { Hono, type Context } from 'hono';
 import { actorOf, actorString, requireCan } from '../authz/seam.js';
@@ -87,6 +88,20 @@ export function createPortalMcpRoutes(module: PortalMcpModule, deps?: PortalMcpR
     if (typeof req.label !== 'string' || !req.label.trim()) throw new AppError('VALIDATION_FAILED', 'Name the label.', { details: { label: 'Required.' } });
     if (req.keepNewest !== undefined && typeof req.keepNewest !== 'boolean') throw new AppError('VALIDATION_FAILED', '`keepNewest` must be true or false.', { details: { keepNewest: 'Use true or false.' } });
     return c.json(success({ revoked: module.revokeLabel(req.label.trim(), req.keepNewest === true, actorString(actor)) }));
+  });
+
+  // T-1105: a token's default workspace for the tickets it makes. A person's manage on the token, and operate on the workspace (module.ts
+  // checks that, that the token may operate it and that it exists). Never a tool: an agent can't send a token's tickets elsewhere.
+  app.patch('/tokens/:id', async (c) => {
+    const actor = actorOf(c);
+    const id = c.req.param('id');
+    requireCan(actor, 'manage', tokenRef(id));
+    if (!module.tokens.get(id)) throw new AppError('NOT_FOUND', 'No such token.');
+    const req = await body<UpdatePortalTokenRequest>(c);
+    if (!('defaultWorkspaceId' in req) || (req.defaultWorkspaceId !== null && typeof req.defaultWorkspaceId !== 'string'))
+      throw new AppError('VALIDATION_FAILED', 'Give defaultWorkspaceId: a workspace or null.', { details: { defaultWorkspaceId: 'A workspace or null.' } });
+    const known = deps && req.defaultWorkspaceId ? (await deps.workspaces()).map((w) => w.id) : undefined;
+    return c.json(success(module.setTokenDefaultWorkspace(id, req.defaultWorkspaceId, actor, known, actorString(actor))));
   });
 
   app.delete('/tokens/:id', (c) => {
