@@ -82,7 +82,8 @@ import { loadSecretKey, SecretKeyError } from './store/secretBox.js';
 import { sessionStore } from './store/sessions.js';
 import { Store } from './store/store.js';
 import { DockerRuntime } from './workspaces/docker.js';
-import { attachShell, cookie } from './workspaces/shell.js';
+import { attachShell } from './workspaces/shell.js';
+import { sessionOfRequest } from './sessionCookie.js';
 import { ChatController } from './chat/controller.js';
 import { BYPASS_SETTING } from './chat/bypass.js';
 import { LEAD_RULES_SETTING } from './chat/leadRules.js';
@@ -391,7 +392,7 @@ workspaces.hooks.audit = (e) => platform.audit.record(e);
 const view = workspaceView(pools, reconciler, claudeVersions.brief);
 const live = new LiveHub(
   { workspaces: async () => (await workspaces.list()).map(view), usage: () => workspaces.usage() },
-  (req) => !!portal.session(cookie(req, config.session.cookie)),
+  (req) => !!portal.session(sessionOfRequest(req)),
 );
 // Needs you (docs/prd/attention.md): what waits for a person, read from each module's own state. The topics of the modules it reads
 // (pools: MCP catalog and skills; tickets; CI) make it look again; the chat's events and a minute's tick are chained further down.
@@ -691,7 +692,7 @@ const platform = createPlatform({
   pushContact: config.notify.pushContact ?? null,
   selfOrigin: `http://localhost:${config.port}`,
   publish: (topic) => notify(topic),
-  socketAuthorized: (req) => !!portal.session(cookie(req, config.session.cookie)),
+  socketAuthorized: (req) => !!portal.session(sessionOfRequest(req)),
 });
 live.onPresence = (connection, presence, req) => platform.presence(connection, presence, req);
 // A new Needs you item tells each person who may decide it, once, through the notification pipeline (its quiet hours and matrix).
@@ -736,7 +737,7 @@ const app = createApp(portal, workspaces, store, accounts, pools, reconciler, he
 const handleApi = getRequestListener(app.fetch);
 const server = createServer();
 // Before the socket modules: ties their connections to the sign-in that opened them (QA-001) and drops unanswered upgrades.
-const sockets = new SocketGuard(portal, config.session.cookie);
+const sockets = new SocketGuard(portal, sessionOfRequest);
 sockets.attach(server);
 // A sign-out or a new code also cuts the app hosts' live connections of the sessions that ended (T-948 review 10219).
 cutOnRevoke(portal, sockets, appPorts);
@@ -745,7 +746,7 @@ connect.attach(server, portal);
 attachShell(server, portal, workspaces);
 browser.attach(server, portal);
 live.attach(server);
-attachChat(server, chatController, (req) => !!portal.session(cookie(req, config.session.cookie)));
+attachChat(server, chatController, (req) => !!portal.session(sessionOfRequest(req)));
 
 if (config.dev) {
   // One port for everything: the API through Hono, the rest through Vite (with HMR on this server).

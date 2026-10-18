@@ -27,8 +27,8 @@ export const config = {
     webDist: `${root}apps/web/dist`,
     data: env('PORTAL_DATA_DIR') ?? `${root}.data`,
   },
+  /** The session's lifetime; its cookie's name and attributes are in sessionCookie.ts (T-976). */
   session: {
-    cookie: 'portal_session',
     ttlMs: 12 * 60 * 60 * 1000,
   },
   /** Failed sign-ins allowed per client address in each window. */

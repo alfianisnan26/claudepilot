@@ -9,7 +9,7 @@ import {
 import type { Duplex } from 'node:stream';
 import { APP_PORT_AUTH_PATH, isAppPortNext, parseAppPortHost, workspaceRef } from '@portal/contracts';
 import { can } from '../authz/seam.js';
-import { config } from '../config.js';
+import { LEGACY_SESSION_COOKIE, SESSION_COOKIE } from '../sessionCookie.js';
 import { APP_COOKIE, type AppGrant, type AppPortGrants } from './grants.js';
 import { NotOnThisTarget, type Dial } from './dial.js';
 
@@ -92,10 +92,10 @@ const STRIP_REQUEST = new Set([
   'x-real-ip',
 ]);
 /**
- * Cookies never forwarded, nor taken from an app's Set-Cookie: the app host's own and the portal's, by the name the portal really uses
- * (config), with its `__Host-` form (T-976) so the list stays right when the prefix lands.
+ * Cookies never forwarded, nor taken from an app's Set-Cookie: the app host's own and both names of the portal session (sessionCookie.ts,
+ * T-976: `__Host-portal_session` over https, `portal_session` over http and for the migration window).
  */
-export const PORTAL_COOKIES: ReadonlySet<string> = new Set([APP_COOKIE, config.session.cookie, `__Host-${config.session.cookie}`]);
+export const PORTAL_COOKIES: ReadonlySet<string> = new Set([APP_COOKIE, SESSION_COOKIE, LEGACY_SESSION_COOKIE]);
 
 const NOT_FOUND = 'HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Type: text/plain\r\nContent-Length: 10\r\n\r\nNot found.';
 

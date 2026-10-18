@@ -7,20 +7,6 @@ const SWEEP_MS = 15_000;
 /** An upgrade request nobody has answered by then is dropped (a path no module owns would otherwise hang for ever). */
 const UNANSWERED_MS = 5_000;
 
-const tokenOf = (req: IncomingMessage, name: string): string | undefined => {
-  for (const part of req.headers.cookie?.split(';') ?? []) {
-    const [k, ...v] = part.trim().split('=');
-    if (k === name) {
-      try {
-        return decodeURIComponent(v.join('='));
-      } catch {
-        return undefined;
-      }
-    }
-  }
-  return undefined;
-};
-
 /**
  * Ties the sockets a signed-in tab opens (live updates, chat, terminals) to its session. Each module checks the
  * session once, at the handshake; this keeps the connection with its session token and cuts it when that
@@ -34,7 +20,8 @@ export class SocketGuard {
 
   constructor(
     private readonly portal: Pick<Portal, 'session'>,
-    private readonly cookie: string,
+    /** The session token of a handshake (sessionCookie.ts `sessionOfRequest`: the same read rule as the API). */
+    private readonly tokenOf: (req: IncomingMessage) => string | undefined,
     private readonly unansweredMs = UNANSWERED_MS,
   ) {
     this.#timer = setInterval(() => this.sweep(), SWEEP_MS);
@@ -50,7 +37,7 @@ export class SocketGuard {
       unanswered.unref();
       socket.once('close', () => clearTimeout(unanswered));
 
-      const token = tokenOf(req, this.cookie);
+      const token = this.tokenOf(req);
       if (!token || !this.portal.session(token)) return; // the owner of the path answers 401
       let sockets = this.#open.get(token);
       if (!sockets) this.#open.set(token, (sockets = new Set()));
