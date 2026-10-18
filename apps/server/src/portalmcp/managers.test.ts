@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
 import { z } from 'zod';
-import { workspaceRef, type Actor, type ObjectRef, type Verb } from '@portal/contracts';
+import { workspaceRef, type Actor, type ObjectRef, type UserId, type Verb } from '@portal/contracts';
 import { actorOfPrincipal, can, clearResolvers, registerResolver, requireCan } from '../authz/seam.js';
 import { Portal } from '../portal.js';
 import { ToolRegistry, type PortalPrincipal } from './registry.js';
@@ -31,7 +31,7 @@ const managerOf = (userId: string | undefined): PortalPrincipal => ({
 /** Workspaces owned by two people; anything else is missing. */
 function ownedWorkspaces() {
   const owners: Record<string, string> = { 'docker/alice': ALICE, 'docker/bob': 'u_bob' };
-  registerResolver({ type: 'workspace', resolve: (id) => (owners[id] ? { owner: { kind: 'user', id: owners[id]! } } : null) });
+  registerResolver({ type: 'workspace', resolve: (id) => (owners[id] ? { ref: workspaceRef(id), owner: { kind: 'user', id: owners[id]! as UserId } } : null) });
 }
 
 test('seam: a manager principal is its person for can(), with the same answer as the person on every sampled object', () => {
@@ -49,6 +49,8 @@ test('seam: a manager principal is its person for can(), with the same answer as
   assert.deepEqual(actorOfPrincipal(managerOf(undefined)), { kind: 'anonymous' });
 });
 
+/** How often each tool's handler ran: a refused call must never reach one. */
+const ran: Record<string, number> = {};
 /** A registry with a tool that reads a workspace through the seam, a who-am-I, an agent-self tool and an admin tool. */
 function registry() {
   const r = new ToolRegistry();
@@ -71,8 +73,8 @@ function registry() {
     input: z.object({}),
     handler: (ctx) => ({ actor: ctx.actor, label: ctx.actorLabel ?? null, isAgent: ctx.isAgent, sessionId: ctx.sessionId, workspaceId: ctx.workspaceId }),
   });
-  r.register({ name: 'session_rename_self', title: 'Rename', description: 'Agent self.', scope: 'agent', input: z.object({}), handler: () => ({ renamed: true }) });
-  r.register({ name: 'big_switch', title: 'Admin', description: 'Admin tier.', scope: 'admin', input: z.object({}), handler: () => ({ switched: true }) });
+  r.register({ name: 'session_rename_self', title: 'Rename', description: 'Agent self.', scope: 'agent', input: z.object({}), handler: () => ((ran.session_rename_self = (ran.session_rename_self ?? 0) + 1), { renamed: true }) });
+  r.register({ name: 'big_switch', title: 'Admin', description: 'Admin tier.', scope: 'admin', input: z.object({}), handler: () => ((ran.big_switch = (ran.big_switch ?? 0) + 1), { switched: true }) });
   return r;
 }
 
@@ -117,8 +119,18 @@ test('over /mcp: the agent-self tools are neither offered to nor callable by a m
     const m = h.module.managers.mint({ userId: ALICE, sessionId: 'gm1' })!;
     const listed = (await h.rpc(m.secret, 'tools/list')).body.result.tools.map((t: { name: string }) => t.name).sort();
     assert.deepEqual(listed, ['big_switch', 'who_am_i', 'ws_peek'], 'session_rename_self is not offered');
-    assert.match(String(errorOf(await h.call(m.secret, 'session_rename_self')).text), /SCOPE_REQUIRED/);
-    assert.match(String(errorOf(await h.call(m.secret, 'big_switch')).text), /SCOPE_REQUIRED/);
+    // An agent-self tool is not even registered for a manager (server.ts #build), so the MCP SDK refuses the call as an unknown tool:
+    // a JSON-RPC error, no tool result, and the handler never runs. (The SCOPE_REQUIRED branch in #call is the second wall, for a
+    // path that bypasses #build; T-968 S1 QA: the first version of this test expected that tool error here, which was the test's mistake.)
+    const self = await h.call(m.secret, 'session_rename_self');
+    assert.equal(self.result, undefined, JSON.stringify(self.raw));
+    assert.ok(self.error && /session_rename_self/.test(self.error.message), JSON.stringify(self.raw));
+    assert.equal(ran.session_rename_self ?? 0, 0, 'the agent-self handler never ran');
+    // An admin-tier tool is offered (the tier is the token's, S5 grants admin) but an operate manager is refused, as a tool error.
+    const admin = errorOf(await h.call(m.secret, 'big_switch'));
+    assert.match(String(admin.text), /SCOPE_REQUIRED/);
+    assert.match(String(admin.text), /needs the admin scope; this token has operate/);
+    assert.equal(ran.big_switch ?? 0, 0, 'the admin handler never ran');
   } finally {
     h.done();
   }
