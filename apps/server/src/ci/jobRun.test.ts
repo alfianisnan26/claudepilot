@@ -80,6 +80,7 @@ const refuse = () => { const t = stdin(); let plain = ''; try { plain = Object.v
 if (verb === 'get' && kind === 'jobs') { process.stdout.write(JSON.stringify({ items: read().jobs.map(k8s) })); }
 else if (verb === 'get' && kind === 'job') { const j = job(name); if (!j || (failing('uid') && !a.includes('json'))) process.exit(1); process.stdout.write(a.includes('json') ? JSON.stringify(k8s(j)) : 'uid-' + name); }
 else if (verb === 'get' && kind === 'pods' && a.includes('app=claudepilot-gate')) { const g = path.join(F, 'gates.txt'); process.stdout.write(fs.existsSync(g) ? fs.readFileSync(g, 'utf8') : ''); }
+else if (verb === 'get' && kind === 'pods' && a.includes('app=claudepilot-portal')) { const g = path.join(F, 'portal-node'); process.stdout.write(fs.existsSync(g) ? fs.readFileSync(g, 'utf8') : ''); }
 else if (verb === 'get' && kind === 'pods' && a.includes('json')) { process.stdout.write(JSON.stringify(podOf(job(a[3].replace('job-name=', ''))))); }
 // The Secret is made by a client-side dry run (JSON on stdout, as kubectl prints it) and then created (never applied) with its ownerReference and label.
 else if (verb === 'create' && kind === 'secret' && a.includes('--dry-run=client') && failing('dry-run')) refuse();
@@ -3065,4 +3066,55 @@ test('gates first: while a gate pod waits for a node and a Job of ours runs, a J
   const r2 = await w2.start(['--repo', 'claudepilot', '--ref', 'main', '--', 'true']).done;
   assert.equal(r2.code, 0, r2.out);
   assert.doesNotMatch(r2.out, /gates go first/);
+});
+
+// ---- T-402: a --hogs command (scripts/test-repeat.sh: busy loops on every CPU) must not share a node with the portal. The portal's node joins the
+// avoid list, which is a REQUIRED hostname NotIn rule; the portal's node is read from the running pod labelled app=claudepilot-portal.
+function hogged(command: string[], top: number | undefined, portalNode: string | null, over: Record<string, string> = {}) {
+  const w = world([], top === undefined ? {} : { top });
+  if (portalNode !== null) writeFileSync(join(w.root, 'portal-node'), portalNode);
+  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', ...command], over);
+  return { w, r, required: r.code === 0 ? manifestRule(w) : undefined };
+}
+
+test('T-402: a --hogs command gets a REQUIRED rule away from the portal’s node (alone, with the control-plane rule over the line, merged with the avoid list)', () => {
+  const NODE = 'k3s-node2';
+  for (const cmd of [
+    ['scripts/test-repeat.sh --hogs 4 -n 20 -- npm test'], // one argument: a command line
+    ['scripts/test-repeat.sh', '-n', '20', '--hogs', 'cpus', '--', 'npm', 'test'], // the words of one command
+    ['scripts/test-repeat.sh --hogs "3" -- true'], // a quoted number
+  ]) {
+    const p = hogged(cmd, 50, `${NODE}\n`);
+    assert.equal(p.r.code, 0, p.r.out);
+    assert.deepEqual(p.required, rule(HOST(NODE)), `required rule away from the portal's node: ${cmd.join(' ')}`);
+    assert.match(p.w.log(), /PLACEMENT hogs=1 avoid=k3s-node2 /);
+  }
+  assert.deepEqual(hogged(['scripts/test-repeat.sh --hogs 2 -- true'], 90, `${NODE}\n`).required, rule(CP_EXPR, HOST(NODE)), 'with the control-plane rule: ONE term');
+  assert.deepEqual(
+    hogged(['scripts/test-repeat.sh --hogs 2 -- true'], 50, `${NODE}\n`, { JOB_RUN_AVOID_NODES: 'k3s-master' }).required,
+    rule(HOST('k3s-master', NODE)),
+    'merged with JOB_RUN_AVOID_NODES',
+  );
+  assert.deepEqual(
+    hogged(['scripts/test-repeat.sh --hogs 2 -- true'], 50, `${NODE}\n`, { JOB_RUN_AVOID_NODES: NODE }).required,
+    rule(HOST(NODE)),
+    'a node already in the list is not added twice',
+  );
+  assert.deepEqual(hogged(['scripts/test-repeat.sh --hogs 2 -- true'], 50, 'k3s-a\nk3s-b\n').required, rule(HOST('k3s-a', 'k3s-b')), 'two portal pods (a rollout): both nodes');
+});
+
+test('T-402: no --hogs, or --hogs 0, changes nothing; --hogs with a portal node that cannot be read is refused (rc 2) before a Job is made', () => {
+  for (const cmd of [['npm test'], ['scripts/test-repeat.sh -n 20 -- npm test'], ['scripts/test-repeat.sh --hogs 0 -- true'], ['echo hogs']]) {
+    const p = hogged(cmd, 50, 'k3s-node2\n');
+    assert.equal(p.r.code, 0, p.r.out);
+    assert.equal(p.required, undefined, `no required rule: ${cmd.join(' ')}`);
+    assert.doesNotMatch(p.w.log(), /hogs=1/);
+  }
+  const blind = hogged(['scripts/test-repeat.sh --hogs 4 -- true'], 50, null);
+  assert.equal(blind.r.code, 2, blind.r.out);
+  assert.match(blind.r.out, /--hogs: the portal's node could not be read/);
+  assert.equal(blind.w.state().jobs.length, 0, 'nothing was created');
+  const odd = hogged(['scripts/test-repeat.sh --hogs 4 -- true'], 50, 'node one\n');
+  assert.equal(odd.r.code, 2, odd.r.out);
+  assert.match(odd.r.out, /the portal's node name is odd/);
 });

@@ -373,6 +373,21 @@ rule_placement() {
   master_aff=; master_rule=
   [ -z "$ex" ] || { master_aff="{\"nodeSelectorTerms\":[{\"matchExpressions\":[$ex]}]}"; master_rule="requiredDuringSchedulingIgnoredDuringExecution: $master_aff"; }
 }
+# T-402: a command with --hogs (scripts/test-repeat.sh: busy loops on every CPU of the node, to prove a flaky test under load) must not run on the
+# portal's node: the preferred anti-affinity of the template only ranks nodes, and the portal's SQLite fsync starves (T-365). The node(s) of the running
+# portal pod join the avoid list, which is a REQUIRED rule (the same mechanism as JOB_RUN_AVOID_NODES, so the release-time patch and the Pending
+# explanation need no change). The node cannot be read: the run is refused (rc 2), never started beside the portal. --hogs 0 changes nothing.
+hogs_re="(^|[[:space:]])--hogs[[:space:]=]+['\"]?([1-9][0-9]*|cpus)"
+if [[ $cmd =~ $hogs_re ]]; then
+  portal_nodes=$(kubectl -n "$ns" get pods -l app=claudepilot-portal --field-selector=status.phase=Running -o jsonpath='{range .items[*]}{.spec.nodeName}{"\n"}{end}' 2>/dev/null | sort -u || true)
+  [ -n "$portal_nodes" ] || die "--hogs: the portal's node could not be read, so a Job that loads every CPU is not started (it could land beside the portal)"
+  while IFS= read -r n; do
+    [ -n "$n" ] || continue
+    [[ $n =~ ^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$ ]] || die "--hogs: the portal's node name is odd, so no rule can be made from it"
+    case ",$avoid_txt," in *",$n,"*) ;; *) avoid_json="${avoid_json:+$avoid_json,}\"$n\""; avoid_txt="${avoid_txt:+$avoid_txt,}$n" ;; esac
+  done <<<"$portal_nodes"
+  plog "=== JOB-RUN PLACEMENT hogs=1 avoid=$avoid_txt (the portal's node: required away)" >/dev/null
+fi
 placement
 [ -z "$place_msg" ] || echo "$place_msg" >&2
 [ -z "$place_say" ] || plog "$place_say"
