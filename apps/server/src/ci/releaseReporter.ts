@@ -20,6 +20,7 @@ import {
   reportDecision,
   REPORT_MAX_COMMITS,
   updateReadme,
+  validBranch,
   validFolder,
   type ReportCommit,
   type ReportFacts,
@@ -48,12 +49,17 @@ export interface ReporterDeps {
 /** A refusal the caller can show: the run is not one that gets a report, or the remote has no setting. */
 export class ReportRefused extends Error {}
 
-/** The setting as stored: JSON {pipeline, vaultId, folder}, or null when it is off, missing or not valid (fail closed: off). */
+/**
+ * The setting as stored: JSON {pipeline, vaultId, folder} or {kind:'branch', branch, vaultId, folder} (T-1079), or null when it is off, missing
+ * or not valid (fail closed: off).
+ */
 export function parseSetting(raw: string | null | undefined): CiReleaseReportSetting | null {
   if (!raw) return null;
   try {
-    const v = JSON.parse(raw) as Partial<CiReleaseReportSetting>;
-    if (typeof v.pipeline === 'string' && v.pipeline && typeof v.vaultId === 'string' && v.vaultId && typeof v.folder === 'string' && validFolder(v.folder)) return { pipeline: v.pipeline, vaultId: v.vaultId, folder: v.folder };
+    const v = JSON.parse(raw) as { kind?: unknown; pipeline?: unknown; branch?: unknown; vaultId?: unknown; folder?: unknown };
+    if (typeof v.vaultId !== 'string' || !v.vaultId || typeof v.folder !== 'string' || !validFolder(v.folder)) return null;
+    if (v.kind === 'branch') return typeof v.branch === 'string' && validBranch(v.branch) ? { kind: 'branch', branch: v.branch, vaultId: v.vaultId, folder: v.folder } : null;
+    if ((v.kind === undefined || v.kind === 'pipeline') && typeof v.pipeline === 'string' && v.pipeline) return { pipeline: v.pipeline, vaultId: v.vaultId, folder: v.folder };
   } catch {
     // fall through
   }
@@ -84,6 +90,7 @@ export class ReleaseReporter {
       return null;
     };
     if (!run || !repo || !setting) return refuse(!setting ? 'no release report is set for this remote' : 'no such run');
+    if (setting.kind === 'branch') return refuse('this remote reports the moves of a branch, not a run');
     let state: CiRunStateFile | null = null;
     try {
       state = run.state ? (JSON.parse(run.state) as CiRunStateFile) : null;

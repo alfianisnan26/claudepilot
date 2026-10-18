@@ -28,6 +28,7 @@ const falsy = (v: unknown): boolean => v === false || v === 'false';
  */
 export function reportDecision(run: { status: string; pipeline: string; inputs: string }, state: CiRunStateFile | null, setting: CiReleaseReportSetting | null): ReportDecision {
   if (!setting) return { report: false, why: 'no release report is set for this remote' };
+  if (setting.kind === 'branch') return { report: false, why: 'this remote reports the moves of a branch, not a run' };
   if (run.pipeline !== setting.pipeline) return { report: false, why: 'not the release pipeline of this remote' };
   if (run.status !== 'passed' && run.status !== 'failed' && run.status !== 'cancelled') return { report: false, why: 'the run has not ended' };
   let inputs: Record<string, unknown>;
@@ -181,7 +182,12 @@ export function validFolder(folder: string): boolean {
   return /^[A-Za-z0-9][A-Za-z0-9 ._-]{0,59}(?:\/[A-Za-z0-9][A-Za-z0-9 ._-]{0,59}){0,3}$/.test(folder) && !folder.split('/').some((s) => s === '..' || s.endsWith('.') || s.endsWith(' '));
 }
 
-const TYPE_ORDER = ['feature', 'bug', 'task', 'chore', 'docs'];
+/** T-1079: a branch name a branch report may follow: plain segments, no `..`, no ref syntax (`~ ^ : ? * [ \`), at most 100. */
+export function validBranch(branch: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}(?:\/[A-Za-z0-9][A-Za-z0-9._-]{0,99})*$/.test(branch) && branch.length <= 100 && !branch.includes('..') && !branch.endsWith('.lock') && !branch.endsWith('.');
+}
+
+const TYPE_ORDER =['feature', 'bug', 'task', 'chore', 'docs'];
 
 export function buildReport(f: ReportFacts): string {
   const out: string[] = [];

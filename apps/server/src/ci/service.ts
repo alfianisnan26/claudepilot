@@ -63,7 +63,7 @@ import { CiLinks, runLink, type CiBumper } from './links.js';
 import type { CiSessionsPort } from './sessions.js';
 import { DeployChatsWatch } from './deployChats.js';
 import { parseSetting, ReleaseReporter, ReportRefused, type ReleaseNoteSink } from './releaseReporter.js';
-import { validFolder } from './releaseReport.js';
+import { validBranch, validFolder } from './releaseReport.js';
 import type { CiTicketsPort } from './tickets.js';
 import { cleanLog, oneLine, redactSecrets } from './text.js';
 import { flakyComment, flakyDescription, flakyExcerpt, flakyTitle, parseFlaky, repoTag, type FlakySighting } from './flaky.js';
@@ -2610,10 +2610,20 @@ export class CiService {
     const repo = this.#cs.repo(repoId);
     if (!repo || repo.removed_at) throw notFound('remote');
     if (setting !== null) {
-      const pipeline = typeof setting.pipeline === 'string' ? setting.pipeline.trim() : '';
-      const vaultId = typeof setting.vaultId === 'string' ? setting.vaultId.trim() : '';
-      const folder = typeof setting.folder === 'string' ? setting.folder.trim().replace(/^\/+|\/+$/g, '') : '';
-      if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(pipeline))
+      // The body is a person's JSON: read every field as unknown.
+      const raw = setting as { kind?: unknown; pipeline?: unknown; branch?: unknown; vaultId?: unknown; folder?: unknown };
+      const branchKind = raw.kind === 'branch';
+      if (raw.kind !== undefined && raw.kind !== 'pipeline' && !branchKind)
+        throw new AppError('VALIDATION_FAILED', 'Check the kind.', { details: { kind: 'pipeline or branch.' } });
+      const pipeline = typeof raw.pipeline === 'string' ? raw.pipeline.trim() : '';
+      const branch = typeof raw.branch === 'string' ? raw.branch.trim() : '';
+      const vaultId = typeof raw.vaultId === 'string' ? raw.vaultId.trim() : '';
+      const folder = typeof raw.folder === 'string' ? raw.folder.trim().replace(/^\/+|\/+$/g, '') : '';
+      if (branchKind && !validBranch(branch))
+        throw new AppError('VALIDATION_FAILED', 'Check the branch.', { details: { branch: 'A branch of the upstream, e.g. stg.' } });
+      if (branchKind && !repo.upstream_url)
+        throw new AppError('VALIDATION_FAILED', 'Check the kind.', { details: { kind: 'A branch report needs a remote that follows an upstream.' } });
+      if (!branchKind && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(pipeline))
         throw new AppError('VALIDATION_FAILED', 'Check the pipeline.', {
           details: { pipeline: 'A pipeline file name without .yml, e.g. deploy.' },
         });
@@ -2623,16 +2633,23 @@ export class CiService {
         throw new AppError('VALIDATION_FAILED', 'Check the folder.', {
           details: { folder: 'A folder in the vault, e.g. Releases (no .., at most four levels).' },
         });
-      setting = { pipeline, vaultId, folder };
+      setting = branchKind ? { kind: 'branch', branch, vaultId, folder } : { pipeline, vaultId, folder };
     }
     this.#cs.updateRepo(repoId, { release_report: setting ? JSON.stringify(setting) : null });
+    const pipelineOf = setting && setting.kind !== 'branch' ? setting.pipeline : null;
     this.#opts.audit?.({
       kind: 'ci.release_report_setting',
       actor: by.actor,
       userId: by.userId,
       severity: 'medium',
       subject: `ci_repo:${repoId}`,
-      detail: { repo: repo.name, vault: setting?.vaultId ?? null, folder: setting?.folder ?? null, pipeline: setting?.pipeline ?? null },
+      detail: {
+        repo: repo.name,
+        vault: setting?.vaultId ?? null,
+        folder: setting?.folder ?? null,
+        pipeline: pipelineOf,
+        ...(setting?.kind === 'branch' ? { branch: setting.branch } : {}),
+      },
     });
     this.#changed();
     return setting;

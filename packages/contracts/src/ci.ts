@@ -622,13 +622,29 @@ export const CI_API = {
   runReleaseReport: (runId: string) => `/api/ci/runs/${encodeURIComponent(runId)}/release-report`,
 } as const;
 
-/** T-591 (D-69): where a remote's release reports go. Null on a remote: no reports. The vault and folder are never taken from a run or a tool call. */
-export interface CiReleaseReportSetting {
+/**
+ * T-591 (D-69): where a remote's release reports go. Null on a remote: no reports. The vault and folder are never taken from a run or a tool call.
+ * Two kinds: a pipeline's passed `release` job (T-591; `kind` absent or `pipeline`), or a branch of the upstream the remote follows (T-1079,
+ * `kind: 'branch'`): each time the upstream sync moves that branch, one note for the commits it gained.
+ */
+export type CiReleaseReportSetting = CiPipelineReleaseReport | CiBranchReleaseReport;
+
+export interface CiPipelineReleaseReport {
+  kind?: 'pipeline';
   /** The pipeline whose passed `release` job writes a note (for claudepilot: `Deploy`'s file name stem, e.g. `deploy`). */
   pipeline: string;
   /** A knowledge vault id. */
   vaultId: string;
   /** A folder in it, without leading or trailing slash (e.g. `Releases`). */
+  folder: string;
+}
+
+/** T-1079: a deploy is a move of `branch` on the upstream (e.g. a PR merged into `stg`). The note goes to `<folder>/<remote>/<date>-<short sha>.md`. */
+export interface CiBranchReleaseReport {
+  kind: 'branch';
+  /** The upstream branch whose moves are deploys (e.g. `stg`). */
+  branch: string;
+  vaultId: string;
   folder: string;
 }
 
