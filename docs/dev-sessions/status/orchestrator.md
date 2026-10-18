@@ -16,7 +16,8 @@
   untrusted fix e605c835 (Job after a8fca5a3) -> delta c691df71 + blind d9f18599. Integration holds c6c4a589 (FAILED security
   review; fixes on coord/T-968-gm): no deploy until T-731 says so.
 - T-1079 (owner: Konfersi stg release docs per module into vault 98af7d16def1, reuse releaseReport.ts) 2a0edbd8, S1+S2 16fee55e.
-- 2a0edbd8 Jobs: T-921 db1d8d19 (bl0qxi7ym Pending: memory), T-257 d34f47b2, T-976 fmt, T-565 bzq96a9ey on 59451a5f.
+- 2a0edbd8 Jobs: T-921 db1d8d19 rc0 -> QA c691df71; T-257 d34f47b2 rc1 (test bug) -> fix e22ae23d, Job after T-968's two;
+  T-976 fmt bdlp8stxq, T-565 bzq96a9ey on 59451a5f running.
 - 3753d3c2: T-971 H2 head bbfd0ae3 Job b2rxfgopr (21 mutants); T-634 test 0f4ffde6 (Job after b2rxfgopr); T-251 QA PWG
   #11340 (citation only) -> reassign to me -> close.
 - 76845676: T-1043 S0c 558c74ed rc0 (66/66; mutants next, redo on ticket/T-1043-s0c-on-s0b after S0b); S0b x T-976 4a57abe6
