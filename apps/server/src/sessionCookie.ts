@@ -57,6 +57,12 @@ export function overHttps(url: string, forwardedProto: string | undefined): bool
 export function sessionCookieSpec(https: boolean, ttlMs: number) {
   return {
     name: https ? SESSION_COOKIE : LEGACY_SESSION_COOKIE,
-    options: { httpOnly: true, sameSite: 'Strict' as const, path: '/', maxAge: Math.floor(ttlMs / 1000), ...(https ? { secure: true } : {}) },
+    options: {
+      httpOnly: true,
+      sameSite: 'Strict' as const,
+      path: '/',
+      maxAge: Math.floor(ttlMs / 1000),
+      ...(https ? { secure: true } : {}),
+    },
   };
 }

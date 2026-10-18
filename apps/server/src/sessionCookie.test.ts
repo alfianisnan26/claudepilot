@@ -25,11 +25,15 @@ function build() {
 const HOST = 'pilot.example.test';
 type Scheme = 'https' | 'http';
 const send = (app: import('hono').Hono, scheme: Scheme, method: string, path: string, extra: Record<string, string> = {}) =>
-  app.request(`${scheme}://${HOST}${path}`, {
-    method,
-    headers: { host: HOST, origin: `${scheme}://${HOST}`, 'content-type': 'application/json', ...extra },
-    body: method === 'GET' ? undefined : method === 'POST' && path === '/api/login' ? JSON.stringify({ code: CODE }) : '{}',
-  }, { incoming: { socket: { remoteAddress: '127.0.0.1' } } }); // the Node env @hono/node-server gives (sign-in's rate limit reads it)
+  app.request(
+    `${scheme}://${HOST}${path}`,
+    {
+      method,
+      headers: { host: HOST, origin: `${scheme}://${HOST}`, 'content-type': 'application/json', ...extra },
+      body: method === 'GET' ? undefined : method === 'POST' && path === '/api/login' ? JSON.stringify({ code: CODE }) : '{}',
+    },
+    { incoming: { socket: { remoteAddress: '127.0.0.1' } } },
+  ); // the Node env @hono/node-server gives (sign-in's rate limit reads it)
 const setCookies = (res: Response) => res.headers.getSetCookie();
 const named = (res: Response, name: string) => setCookies(res).filter((c) => c.startsWith(`${name}=`));
 
@@ -37,9 +41,17 @@ test('the cookie reader: the __Host- name wins whenever it is there, the old nam
   const a = `t${Date.now()}a`;
   const b = `t${Date.now()}b`;
   assert.deepEqual(sessionFromCookies(`${SESSION_COOKIE}=${a}; ${LEGACY_SESSION_COOKIE}=${b}`), { token: a, legacy: false });
-  assert.deepEqual(sessionFromCookies(`${LEGACY_SESSION_COOKIE}=${b}; ${SESSION_COOKIE}=${a}`), { token: a, legacy: false }, 'order does not matter');
+  assert.deepEqual(
+    sessionFromCookies(`${LEGACY_SESSION_COOKIE}=${b}; ${SESSION_COOKIE}=${a}`),
+    { token: a, legacy: false },
+    'order does not matter',
+  );
   assert.deepEqual(sessionFromCookies(`${LEGACY_SESSION_COOKIE}=${b}`), { token: b, legacy: true });
-  assert.deepEqual(sessionFromCookies(`x${LEGACY_SESSION_COOKIE}=${b}; other=1`).token, undefined, 'a cookie whose name merely ends the same is not read');
+  assert.deepEqual(
+    sessionFromCookies(`x${LEGACY_SESSION_COOKIE}=${b}; other=1`).token,
+    undefined,
+    'a cookie whose name merely ends the same is not read',
+  );
   assert.equal(sessionFromCookies(undefined).token, undefined);
 });
 
@@ -52,7 +64,11 @@ test('the cookie reader (pinned, QA #11040): a __Host- value that does not decod
   assert.deepEqual(sessionFromCookies(`${SESSION_COOKIE}=${bad}; ${LEGACY_SESSION_COOKIE}=${b}`), { token: b, legacy: true });
   assert.deepEqual(sessionFromCookies(`${SESSION_COOKIE}=${bad}`), { token: undefined, legacy: true });
   const a = `t${Date.now()}a`;
-  assert.deepEqual(sessionFromCookies(`${SESSION_COOKIE}=${bad}; ${SESSION_COOKIE}=${a}; ${LEGACY_SESSION_COOKIE}=${b}`), { token: a, legacy: false }, 'a second, decodable __Host- value still wins');
+  assert.deepEqual(
+    sessionFromCookies(`${SESSION_COOKIE}=${bad}; ${SESSION_COOKIE}=${a}; ${LEGACY_SESSION_COOKIE}=${b}`),
+    { token: a, legacy: false },
+    'a second, decodable __Host- value still wins',
+  );
 });
 
 test('https: from the request URL, or from X-Forwarded-Proto only behind a trusted proxy', () => {
@@ -77,7 +93,12 @@ test('signing in over https sets __Host-portal_session: Secure, Path=/, HttpOnly
   const res = await send(app, 'https', 'POST', '/api/login');
   assert.equal(res.status, 200);
   const [cookie, ...more] = named(res, SESSION_COOKIE);
-  assert.ok(cookie, `a ${SESSION_COOKIE} cookie: ${setCookies(res).map((c) => c.split('=')[0]).join(', ')}`);
+  assert.ok(
+    cookie,
+    `a ${SESSION_COOKIE} cookie: ${setCookies(res)
+      .map((c) => c.split('=')[0])
+      .join(', ')}`,
+  );
   assert.equal(more.length, 0);
   assert.match(cookie, /;\s*Secure/i);
   assert.match(cookie, /;\s*Path=\/(;|$)/);
@@ -152,8 +173,14 @@ test('with both names, the __Host- session is the one used: signing out ends it 
   assert.equal(portal.session(mine), undefined);
   assert.ok(portal.session(other));
   const cleared = setCookies(out);
-  assert.ok(cleared.some((c) => c.startsWith(`${SESSION_COOKIE}=;`) && /Max-Age=0/i.test(c) && /;\s*Secure/i.test(c)), cleared.join(' | '));
-  assert.ok(cleared.some((c) => c.startsWith(`${LEGACY_SESSION_COOKIE}=;`) && /Max-Age=0/i.test(c)), cleared.join(' | '));
+  assert.ok(
+    cleared.some((c) => c.startsWith(`${SESSION_COOKIE}=;`) && /Max-Age=0/i.test(c) && /;\s*Secure/i.test(c)),
+    cleared.join(' | '),
+  );
+  assert.ok(
+    cleared.some((c) => c.startsWith(`${LEGACY_SESSION_COOKIE}=;`) && /Max-Age=0/i.test(c)),
+    cleared.join(' | '),
+  );
 });
 
 test('migration: a signed-in browser with only the old cookie stays signed in over https and gets the __Host- cookie', async () => {
@@ -168,7 +195,10 @@ test('migration: a signed-in browser with only the old cookie stays signed in ov
     assert.match(moved, /;\s*Secure/i);
     assert.match(moved, /;\s*Path=\/(;|$)/);
     assert.doesNotMatch(moved, /;\s*Domain=/i);
-    assert.ok(named(res, LEGACY_SESSION_COOKIE).some((c) => /Max-Age=0/i.test(c)), `${path}: the old cookie is cleared`);
+    assert.ok(
+      named(res, LEGACY_SESSION_COOKIE).some((c) => /Max-Age=0/i.test(c)),
+      `${path}: the old cookie is cleared`,
+    );
   }
   const session = await send(app, 'https', 'GET', '/api/session', { cookie: `${LEGACY_SESSION_COOKIE}=${token}` });
   assert.equal(((await session.json()) as { data: { authenticated: boolean } }).data.authenticated, true);

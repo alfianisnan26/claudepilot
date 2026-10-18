@@ -115,7 +115,10 @@ async function startShell(portal: Portal) {
   /** The handshake's status (101 opened) and, when it opened, the first message. */
   const shell = (cookie: string) =>
     new Promise<{ status: number; first?: string }>((resolve) => {
-      const ws = new WebSocket(`ws://127.0.0.1:${port}/api/workspaces/docker/ws-1/shell`, { headers: { Cookie: cookie }, origin: `http://127.0.0.1:${port}` });
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/api/workspaces/docker/ws-1/shell`, {
+        headers: { Cookie: cookie },
+        origin: `http://127.0.0.1:${port}`,
+      });
       ws.once('message', (m) => (resolve({ status: 101, first: String(m) }), ws.close()));
       ws.once('unexpected-response', (_q, res) => (res.resume(), resolve({ status: res.statusCode ?? 0 })));
       ws.once('error', () => resolve({ status: -1 }));
@@ -133,7 +136,11 @@ test('T-976: the shell socket accepts __Host-portal_session, and a planted old-n
   const stale = portal.signIn(CODE);
   portal.signOut(stale);
   const planted = portal.signIn(CODE);
-  assert.equal((await shell(`${COOKIE}=${planted}; ${SESSION_COOKIE}=${stale}`)).status, 401, 'the __Host- cookie decides, even when stale');
+  assert.equal(
+    (await shell(`${COOKIE}=${planted}; ${SESSION_COOKIE}=${stale}`)).status,
+    401,
+    'the __Host- cookie decides, even when stale',
+  );
   assert.equal((await shell(`${COOKIE}=${planted}`)).status, 101, 'the old name alone still works (plain http, the migration window)');
   guard.close();
 });
