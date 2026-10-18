@@ -10,8 +10,10 @@
 - T-425 S2b+gaps 12acb9ed PASS (T-595 11065), testkit.ts conflict: ticket/T-425-s2b-int a3f79dd5 -> 3753d3c2 -> b34.
   After landing: FOR THE COORDINATOR remove the text-matching `git -C` denies (T-974).
 - T-980 (repos_list filter; worktree_create by path through can()) a3554d40, worked slice -> QA + blind.
-- BATCH 34: premerge/b34 aa58499a = integration + T-971 H1 fdd38c6b (PASS #10967) + T-976 d68ab35c (blind PWG #11125, 11135;
-  lead read sessionCookie.ts). Gate claudepilot-gate-aa58499-6788 GREEN; QC tests 6/6 ok but format FAIL (15 files) -> base check b9yw5v2rj (T-595 11226) before landing.
+- T-1079 (owner, Konfersi stg release docs into vault 98af7d16def1) -> 2a0edbd8. Integration has T-968 GM c6c4a589 that FAILED
+  security review (coordinator fixing on coord/T-968-gm; no deploy until T-731 says so).
+- BATCH 34: premerge/b34 0a9685ea = integration + T-971 H1 fdd38c6b (PASS #10967) + T-976 d68ab35c (blind PWG #11125). Gate GREEN
+  at aa58499a; QC format FAIL: 7 files are the batch's -> format-only commits a3554d40 (H1) + 2a0edbd8 (T-976), 8 older -> T-1080 (11296).
   Next in: T-425 (conflict), T-969 (blind PWG 10969; V5 cross-workspace mutant rerun by d9f18599).
 - T-971 H2: blind #10978 (a) resumes a stopped session, (b) B13, (c) unscrubbed `why`, (d) B7 + QA edges -> one fix 3753d3c2 (11134).
 - T-1043 S0b blind PWG #11081 (D5 live per-message check untested, D7) + T-976 merge with markers ticket/T-1043-s0b-976
@@ -20,9 +22,7 @@
   a3554d40 then runs T-969 > T-971 H1 > T-975 > T-961, one at a time. The job-run queue is ~14 deep, 2 per chat (T-595 coordinator note).
 - T-975 FIX 6650e8ff QA FAIL 10926, tests only (Q1, Q2 survive; R5 gap; #retry/#finishFailed rewrite a cancelled run;
   links.test 12/12 x3, not this change) -> FIX2 a3554d40 (after T-969/H1 Jobs) -> delta c691df71 -> blind d9f18599 (mig 788).
-- T-976 a2da98cb QA PWG #11040 (C6 browser socket survived) -> gap fix d68ab35c (2a0edbd8: socket.test.ts handshakes,
-  decode-fallback pin; index.ts wiring left as written gap), Job bplwz9ct5 rc0 (C6, D1 killed) -> delta PWG #11066 -> blind d9f18599 on d68ab35c.
-  T-1042 audit only (2a0edbd8), build after T-976 is live.
+- T-976 d68ab35c (delta PWG #11066, blind PWG #11125) in batch 34. T-1042 builds after T-976 is live.
 - T-968 S2b be6b3adc QA PWG #11080 (15/15 killed) -> nested mask fix 5688811c (11109), Job bj718gl5c rc0 -> delta c691df71 + blind d9f18599.
 - T-970 5a0fa697 (Chromium 1.62.1 in the job image) Job b3sgbc372 rc0 -> QA d9f18599; image build FOR THE COORDINATOR #11160.
 - T-971 H2 delta 03bc42d6 QA PWG #11062 (H5, H9 edges survive) -> edge tests 3753d3c2 (11110) -> re-check; blind on S1.
@@ -38,10 +38,9 @@
 - T-1065 (new: redact.ts misses short passwords/URL userinfo; 10888) 76845676 while its Job queues -> QA + blind.
 - T-356 S1 64b4effa (MCP authz gaps 1-4; 10906) by 3753d3c2, Jobs pending. 10922: workspace resolver NOT wired (that is
   the multi-user switch); FR19 enforced by test + exemption list, not at start-up -> QA + blind; lead reads the authz diff.
-- T-968 (a) bdd1a3ce any sign-out revokes cpmt_ (Job bes6vu30j), (b) c6cc0ffe manager refused ticket_close (was ALLOWED
-  before; Job bohgvhpk1). QA HOLE: ticket_update status done still closes for a manager (service.ts:1486) -> fix 2a0edbd8 FIRST (11189).
-  2a0edbd8 then: T-565 T5 negative case (T-595 11179), T-921 heal.test.mjs under gate collection (11180), T-257 option A (11187).
-  T-277 ALL MET (11186) -> QA spot-check c691df71 -> close.
+- T-968 S1+S2 merged to integration BY THE COORDINATOR (coord/T-968-gm). Ours: S1-token head 5ccfb52c (a, b, update() hole,
+  test type fix), Job bh18r4yvs (7 mutants) -> QA c691df71 + blind d9f18599 (S2b too), verdicts on T-968 for the coordinator.
+  2a0edbd8 Jobs: T-921 db1d8d19 bl0qxi7ym, T-257 d34f47b2 bu3g02m4x, then T-565 T5 rerun 59451a5f. T-277 ALL MET -> QA spot-check.
 
 ## DECISIONS (binding)
 - D-81 risk-based review: same builder through all fixes; one QA, the same QA re-checks; blind review only for security, auth,
