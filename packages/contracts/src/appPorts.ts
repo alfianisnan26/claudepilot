@@ -2,8 +2,9 @@
  * App ports (T-948, docs/prd/app-ports.md): a web app listening on loopback inside a workspace (`127.0.0.1:<port>`) opens in the browser
  * through the portal, as plain HTTP and WebSocket (not the remote browser's streamed screen).
  *
- * Subdomain mode: each workspace and port is its own host, `app-<name>-<port>.<suffix>` (one DNS label), so the app's scripts never run on the
- * portal's origin and never see the portal's cookie. The suffix is the portal's `PORT_PROXY_HOST_SUFFIX`; unset, the feature is off.
+ * Subdomain mode: each workspace and port is its own host, `<port>[-<app>]-<workspace>.<suffix>` (one DNS label; owner, 2026-10-18), so the
+ * app's scripts never run on the portal's origin and never see the portal's cookie (host-only). `<workspace>` is the workspace's label as a
+ * slug (`isnan-pod`), `<app>` an optional name the person gives the port. The suffix is `PORT_PROXY_HOST_SUFFIX`; unset, the feature is off.
  *
  * The flow: the portal page calls OPEN (owner session, `operate` on the workspace, audited `workspace.port.open`) and gets a URL on the app host
  * carrying a one-time code (30 s, single use). That host swaps the code for its own host-only cookie and redirects to `next`. The app host may be
@@ -20,38 +21,54 @@ export const APP_PORT_AUTH_PATH = '/__pilot/auth';
 /** A DNS label: lowercase letters, digits and dashes, no dash at either end, at most 63 characters. */
 const LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 
-/** The host label of a workspace name: the name lowercased. Null when it can't be one (a `.` or `_` in it, or the label grows past 63). */
-export function appPortLabel(name: string, port: number): string | null {
-  const label = `app-${name.toLowerCase()}-${port}`;
-  return LABEL.test(label) && Number.isInteger(port) && port >= APP_PORT_MIN && port <= APP_PORT_MAX ? label : null;
+/**
+ * A name as a host part (owner, 2026-10-18: "{port}-{name}-{workspace}.pilot.ai.isnan.me"): lowercase, every run of other characters one dash,
+ * no dash at either end. Null when nothing is left. `isnan-pod` stays `isnan-pod`; `Trading Bot!` becomes `trading-bot`.
+ */
+export function appHostSlug(name: string | null | undefined): string | null {
+  const s = (name ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return s && LABEL.test(s) ? s : null;
 }
 
-/** `app-<name>-<port>.<suffix>`; null when the name can't be a host label or the port is out of range. */
-export function appPortHost(name: string, port: number, suffix: string): string | null {
-  const label = appPortLabel(name, port);
+/**
+ * The host label `<port>-<app>-<workspace>`, or `<port>-<workspace>` without an app name: one DNS label, so one wildcard certificate covers
+ * every app host. `workspace` and `app` are slugs (`appHostSlug`). Null when the port is out of range or the label grows past 63 characters.
+ */
+export function appPortLabel(workspace: string, port: number, app?: string | null): string | null {
+  if (!Number.isInteger(port) || port < APP_PORT_MIN || port > APP_PORT_MAX || !LABEL.test(workspace) || (app && !LABEL.test(app))) return null;
+  const label = app ? `${port}-${app}-${workspace}` : `${port}-${workspace}`;
+  return LABEL.test(label) ? label : null;
+}
+
+/** `<port>[-<app>]-<workspace>.<suffix>`; null when the label can't be one. */
+export function appPortHost(workspace: string, port: number, suffix: string, app?: string | null): string | null {
+  const label = appPortLabel(workspace, port, app);
   return label ? `${label}.${suffix.toLowerCase()}` : null;
 }
 
 /**
- * Reads a Host header (a port after `:` is ignored) as `{ slug, port }` when it is exactly `app-<slug>-<port>.<suffix>`: one label before the
- * suffix, a port of 1 to 5 digits without a leading zero in range. Anything else is null. The slug is a lowercase workspace name; which
- * workspace it is (exactly one across all targets) is the server's to decide.
+ * Reads a Host header (a port after `:` is ignored) as `{ rest, port }` when it is exactly `<port>-<rest>.<suffix>`: one label before the
+ * suffix, a port of 4 or 5 digits without a leading zero, in range. `rest` is `<app>-<workspace>` or `<workspace>`; which workspace it names is
+ * decided at open, where the grant is bound to this exact host, so reading it back needs only the port. Anything else is null.
  */
 export function parseAppPortHost(
   host: string | undefined | null,
   suffix: string | undefined | null,
-): { slug: string; port: number } | null {
+): { rest: string; port: number } | null {
   if (!host || !suffix) return null;
   const h = host.toLowerCase().replace(/:\d{1,5}$/, '');
   const tail = `.${suffix.toLowerCase()}`;
   if (!h.endsWith(tail)) return null;
   const label = h.slice(0, -tail.length);
   if (!LABEL.test(label)) return null;
-  const m = /^app-([a-z0-9](?:[a-z0-9-]*[a-z0-9])?)-([1-9]\d{0,4})$/.exec(label);
+  const m = /^([1-9]\d{3,4})-([a-z0-9](?:[a-z0-9-]*[a-z0-9])?)$/.exec(label);
   if (!m) return null;
-  const port = Number(m[2]);
+  const port = Number(m[1]);
   if (port < APP_PORT_MIN || port > APP_PORT_MAX) return null;
-  return { slug: m[1]!, port };
+  return { rest: m[2]!, port };
 }
 
 /**
@@ -90,6 +107,8 @@ export interface AppPortList {
 export interface OpenAppPortRequest {
   port: number;
   path?: string;
+  /** An app name for the host (`8765-tradingbot-isnan-pod…`), made a slug by `appHostSlug`; absent or empty: `8765-isnan-pod…`. */
+  name?: string;
 }
 
 /**
@@ -103,7 +122,25 @@ export interface OpenAppPortResult {
   expiresAt: string;
 }
 
+/** One open app session (owner, 2026-10-18: "list of running browser proxy session"): a live app host cookie. */
+export interface AppPortSession {
+  /** Enough to revoke it, nothing to sign in with. */
+  id: string;
+  workspaceId: string;
+  port: number;
+  host: string;
+  /** Who opened it: `account:<id>` or the server code (`ui`). */
+  openedBy: string;
+  createdAt: string | null;
+  lastUsedAt: string | null;
+  expiresAt: string;
+}
+
 export const APP_PORTS_API = {
+  /** Full session only. GET: `AppPortSession[]`, every open app host. */
+  sessions: '/api/admin/app-sessions',
+  /** Full session only. DELETE: end one (the next request on that host is refused). */
+  session: (id: string) => `/api/admin/app-sessions/${encodeURIComponent(id)}`,
   /** GET: the listening ports (`operate` on the workspace). */
   list: (id: string) => `/api/workspaces/${id}/ports`,
   /** POST `OpenAppPortRequest` → `OpenAppPortResult` (`operate`, audited `workspace.port.open`). 404 when the feature is off. */

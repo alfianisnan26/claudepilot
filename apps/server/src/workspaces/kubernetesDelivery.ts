@@ -13,6 +13,7 @@
 import { AppError } from '@isnanme/core';
 import { tarOf } from './tar.js';
 import { HOME, type DeliveryAccess, type TarEntry } from './runtime.js';
+import { loop } from '../platform/loops.js';
 
 /** The only places delivery writes and reads (what the engine uses: the portal's folder, Claude Code's managed folder, the home, the shell hook). */
 /**
@@ -170,7 +171,8 @@ export function pollStarts(fetch: () => Promise<Map<string, string>>, onStart: (
     }
   };
   void tick();
-  const timer = setInterval(() => void tick(), everyMs);
+  const run = loop('delivery.kubernetes', everyMs, 'Pools: deliver sets into Kubernetes workspaces').wrap(() => tick());
+  const timer = setInterval(() => void run(), everyMs);
   timer.unref();
   return () => {
     stopped = true;

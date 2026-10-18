@@ -35,6 +35,7 @@ import { mainFolder, parseFind, parseState, parseSync, type FoundRepo, type RawR
 import { RepoStore, type NewEvent, type StoredRepo } from './store.js';
 import { basename, plain, repoId, within } from './text.js';
 import { addSummaries, attentionOf, buildNodes, orderNodes, summarize, type NodeCore } from './tree.js';
+import { loop } from '../platform/loops.js';
 
 export interface ReposConfig {
   /** Scan on a timer while workspaces run. */
@@ -196,7 +197,8 @@ export class ReposService {
 
   start(): void {
     if (this.#timer || this.#closed) return;
-    this.#timer = setInterval(() => void this.tick(), TICK_MS);
+    const run = loop('repos.scan', TICK_MS, 'Workspace git: scan repositories for changes').wrap(() => this.tick());
+    this.#timer = setInterval(() => void run(), TICK_MS);
     this.#timer.unref?.();
     this.#unsubscribe = this.#deps.sessions.onEvent((id, msg) => this.#onSession(id, msg));
   }

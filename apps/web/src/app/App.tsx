@@ -41,6 +41,7 @@ const VaultPage = lazy(() => import('@/features/knowledge/VaultPage').then((m) =
 // The portal-wide graphs (which sessions used which notes; the agents) draw on a canvas, so they load on first use too.
 const KnowledgeGraphPage = lazy(() => import('@/features/knowledge/GraphPage').then((m) => ({ default: m.GraphPage })));
 // The Usage page (stacked charts, budgets, attribution, spikes) is large and not every visit needs it: it loads on first use, behind a skeleton.
+const SchedulesPage = lazy(() => import('@/features/schedules/SchedulesPage').then((m) => ({ default: m.SchedulesPage })));
 const UsagePage = lazy(() => import('@/features/usage/UsagePage').then((m) => ({ default: m.UsagePage })));
 
 export function App() {
@@ -116,6 +117,14 @@ function Pages() {
           element={
             <Suspense fallback={<div className="skeleton h-28 rounded-[24px]" />}>
               <UsagePage />
+            </Suspense>
+          }
+        />
+        <Route
+          path="schedules"
+          element={
+            <Suspense fallback={<div className="skeleton h-28 rounded-[24px]" />}>
+              <SchedulesPage />
             </Suspense>
           }
         />

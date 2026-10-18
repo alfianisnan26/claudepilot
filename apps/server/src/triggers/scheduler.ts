@@ -8,6 +8,7 @@ import type { TriggerEventFacts } from '@portal/contracts';
 import { nextRunIso } from './cron.js';
 import type { TriggerRunner } from './runner.js';
 import type { TriggerRecord, TriggerStore } from './store.js';
+import { loop } from '../platform/loops.js';
 
 export const TICK_MS = 30_000;
 /** A due time older than this was missed rather than reached late by one tick. */
@@ -36,7 +37,8 @@ export class TriggerScheduler {
 
   start(): void {
     if (this.#timer) return;
-    this.#timer = setInterval(() => void this.tick(), TICK_MS);
+    const run = loop('triggers.cron', TICK_MS, 'Cron triggers: start the runs that are due').wrap(() => this.tick());
+    this.#timer = setInterval(() => void run(), TICK_MS);
     this.#timer.unref?.();
     void this.tick();
   }

@@ -46,6 +46,7 @@ import { buildSummary, summaryRowsFrom } from './summary.js';
 import { parseRateLimitInfo, sortWindows, windowLevel, type WindowReading } from './parse.js';
 import { probeClaude, type ProbeIo, type ProbeResult } from './probe.js';
 import { UsageStore, type AlertMark, type LatestRow, type ProjectionMark } from './store.js';
+import { loop } from '../platform/loops.js';
 
 /** A Claude of a workspace, as this module needs to know it. */
 export interface SourceClaude {
@@ -192,7 +193,8 @@ export class ClaudeUsageMonitor {
     this.#prune();
     void this.#list(true);
     const first = setTimeout(() => void this.tick(), FIRST_TICK_MS);
-    const every = setInterval(() => void this.tick(), TICK_MS);
+    const run = loop('claudeusage.poll', TICK_MS, 'Claude usage: read each Claude’s plan usage and limits').wrap(() => this.tick());
+    const every = setInterval(() => void run(), TICK_MS);
     const prune = setInterval(() => this.#prune(), PRUNE_EVERY_MS);
     for (const t of [first, every, prune]) t.unref();
     this.#timers = [first, every, prune];

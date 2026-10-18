@@ -115,8 +115,9 @@ spec:
               value: https://pilot.ai.isnan.me
             # T-948 app ports (docs/prd/app-ports.md): a workspace's web app on its own host app-<name>-<port>.ai.isnan.me (the
             # IngressRoute claudepilot-app-ports below). Unset turns the feature off.
+            # App hosts are <port>[-<app>]-<workspace>.pilot.ai.isnan.me (owner, 2026-10-18), one label under the portal's own name.
             - name: PORT_PROXY_HOST_SUFFIX
-              value: ai.isnan.me
+              value: pilot.ai.isnan.me
           # T-365: a 1 s timeout dropped a slow but alive portal from the Service and the liveness kill restarted it while the node's
           # disk was busy, which made the stall longer. Out of the Service after 3 slow checks (30 s), restarted only after 5 minutes.
           readinessProbe:
@@ -191,7 +192,7 @@ spec:
   tls:
     certResolver: cloudflare
     domains:
-      - main: "*.ai.isnan.me"
+      - main: "*.pilot.ai.isnan.me"
 ---
 # T-948 app ports: every app-<name>-<port>.ai.isnan.me host goes to the same portal Service, whose app-port proxy answers it (and only it).
 # One label under ai.isnan.me, so the existing *.ai.isnan.me certificate covers it. Its own route, so a mistake here can't take the
@@ -205,7 +206,7 @@ spec:
   entryPoints:
     - websecure
   routes:
-    - match: HostRegexp(`^app-[a-z0-9-]+\.ai\.isnan\.me$`)
+    - match: HostRegexp(`^[0-9]{4,5}-[a-z0-9-]+\.pilot\.ai\.isnan\.me$`)
       kind: Rule
       services:
         - name: claudepilot-portal

@@ -20,6 +20,7 @@ import { sliceMetrics, type SliceFilter } from './metrics.js';
 import { DAY_MS, dbTicketReader, outcomeOf, type TicketFacts, type TicketReader } from './outcomes.js';
 import { pruneLab, type PruneResult } from './retention.js';
 import { bootstrapMedian, loadedCosts, median, summarize, SUMMARY_BASIS } from './summary.js';
+import { loop } from '../platform/loops.js';
 
 export interface ViewFilter extends SliceFilter {
   experiment?: string;
@@ -281,7 +282,7 @@ export class Lab {
       }
     };
     const first = setTimeout(run, 60_000);
-    const daily = setInterval(run, DAY_MS);
+    const daily = setInterval(loop('lab.daily', DAY_MS, 'Lab: the daily scorecard').wrap(run), DAY_MS);
     for (const t of [first, daily]) t.unref();
     this.#timers = [first, daily];
   }
