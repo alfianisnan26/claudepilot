@@ -1,12 +1,14 @@
 // QA-006: a secret the agent was allowed to print never reaches the transcript, a socket frame or the events API.
 
 import assert from 'node:assert/strict';
+import { randomBytes } from 'node:crypto';
 import { test } from 'node:test';
 import { REDACTED, redact, StreamRedactor } from './redact.js';
 import { NO_VALUES, SessionStream, ValueRedactor, variantsOf } from './valueRedact.js';
 
 const SECRET = 'Hunter2/Pa$$w0rd+Zq9 "x"\\n';
-const TOKEN = 'cpst_Zk3pQ7vR1mT8xN4bC6yL0wH2dF5gJ9aS-uE_iO';
+// T-1084: built at runtime, in the shape the portal mints (agents.ts: the prefix and 43 base64url characters), so no token-shaped literal sits here.
+const TOKEN = ['cp', 'st_', randomBytes(32).toString('base64url')].join('');
 
 test('T-1065: stored text meets the shapes first; what a key form leaves of a value still goes with it', () => {
   // Each value holds a character that ends one of the key forms' values (`&`, a space, a quote, a delimiter).
