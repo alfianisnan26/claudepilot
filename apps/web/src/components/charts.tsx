@@ -1,12 +1,19 @@
 import { cn } from '@isnanme/ui';
 import { useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 
-/** A clean axis top: 1, 2 or 5 times a power of ten, at or above `v`. */
+/**
+ * A clean axis top at or above `v`, as close as a readable number allows: 1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8 or 10 times a power of ten
+ * (each with a clean half, for the middle grid line). Owner, 2026-10-18: with only 1, 2 and 5, a peak of $210 drew an axis to $500 and the
+ * chart used less than half its height.
+ */
+const NICE_STEPS = [1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10];
 export function niceMax(v: number): number {
   if (!(v > 0)) return 1;
   const p = 10 ** Math.floor(Math.log10(v));
   const n = v / p;
-  return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10) * p;
+  // A tiny margin for floating point (0.3 / 0.1 is 2.9999999999999996, not 3).
+  const step = NICE_STEPS.find((s) => n <= s * (1 + 1e-9)) ?? 10;
+  return Number((step * p).toPrecision(12));
 }
 
 /** The element's width, kept current. */
