@@ -10,8 +10,8 @@
   reported on T-731 11343; the coordinator opened incident T-1082. Its post-mortem is the coordinator's.
 - BATCH 34: premerge/b34 037f7e4b (pushed) = integration 5e84f4d7 + T-971 H1 (+fmt f6983797) + T-976 (+fmt 99f8bb69) + T-425
   2b57efce + T-565 55f5aa8e; app.ts conflict (T-976 setSessionCookie vs T-968 healManager): kept both; pack fresh. QC#1 expired in queue
-  (3600 s, ran nothing); QC#2 + gate#1 killed by the recovery -> gate#2 on 037f7e4b GREEN (suite 1249 s, peak 2247Mi); QC#3 bau88mbxq Pending.
-  Then two-step landing -> T-731. T-969 joins the next batch after V5. Rule until the queue drains: ONE Job per lane.
+  (3600 s, ran nothing); gate#2 on 037f7e4b GREEN; QC#3 FAILED format (26 batch files) + lint (old lines). Merged integration ->
+  d7ade65b (pack fresh); fmt Job by7mvgwx1 (prettier/eslint --fix, decision T-595 12101) -> fmt commit -> QC -> gate -> land -> T-731. T-969 joins the next batch after V5. Rule until the queue drains: ONE Job per lane.
 - T-968 (coordinator builds S1 runtime/S3/S4/S6; this crew lands S1-token + S2 only). S1-token 5ccfb52c rc0, QA PWG #11312
   -> fix a8fca5a3 (2a0edbd8, Job b1gahci5o) -> re-check c691df71; blind PWG 11365 (K8 -> test ccef3ef4, own Job;
   K12 = a8fca5a3). S2 e605c835 Job bno2lrpwq. S2b blind PWG 11302 -> last_error
