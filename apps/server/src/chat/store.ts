@@ -743,6 +743,18 @@ export class ChatStore {
     );
   }
 
+  /** T-1613: the ids of the top-level sessions (no parent) that haven't ended and have at least one worker that hasn't ended. */
+  leadsWithLiveWorkers(): string[] {
+    return (
+      this.#db()
+        .prepare(
+          `SELECT DISTINCT p.id AS id FROM chat_sessions c JOIN chat_sessions p ON p.id = c.parent_id
+           WHERE c.state != 'ended' AND p.parent_id IS NULL AND p.state != 'ended'`,
+        )
+        .all() as { id: string }[]
+    ).map((r) => r.id);
+  }
+
   /** One workspace's sessions that haven't ended (whatever their process), oldest first. */
   workspaceRows(workspaceId: string): ChatSessionRow[] {
     const one = this.#inWorkspace(workspaceId);

@@ -2180,6 +2180,24 @@ export class Tickets {
     return r ? { ticket: ticketIdOf(r.number), comment: r.id } : null;
   }
 
+  /**
+   * T-1613: the verdicts recorded at or after `sinceMs` on the open tickets `sessionId` holds, oldest first (at most the newest 50): what the
+   * portal's crew wake tells an idle lead. A fact for the portal's own message, not a read for a caller: ids, roles and verdicts only.
+   */
+  verdictsHeldBy(sessionId: string, sinceMs: number): { id: number; ticket: string; role: string; verdict: string }[] {
+    const rows = this.#db
+      .prepare(
+        `SELECT v.id AS id, v.ticket_number AS number, v.role AS role, v.verdict AS verdict, v.at AS at, t.status AS status
+         FROM ticket_verdicts v JOIN tickets t ON t.number = v.ticket_number
+         WHERE t.assignee_kind = 'session' AND t.assignee_ref = ? ORDER BY v.id DESC LIMIT 50`,
+      )
+      .all(sessionId) as { id: number; number: number; role: string; verdict: string; at: string; status: string }[];
+    return rows
+      .filter((r) => !isTicketClosed(r.status as TicketItem['status']) && Date.parse(r.at) >= sinceMs)
+      .reverse()
+      .map((r) => ({ id: r.id, ticket: ticketIdOf(r.number), role: r.role, verdict: r.verdict }));
+  }
+
   /** FR31: the tickets bumped into a session, the latest bump of each, newest first (the session page's chips). */
   bumpedInto(caller: Caller, sessionId: string): TicketBumped[] {
     const rows = this.#db
