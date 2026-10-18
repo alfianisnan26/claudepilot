@@ -72,14 +72,14 @@ export class SocketGuard {
   }
 
   /** Whether the sign-in is still what it was: a full one must still be full (an admin made a member is cut), a member's still live. */
-  #live(token: string, full: boolean): boolean {
+  #stillSignedIn(token: string, full: boolean): boolean {
     return full ? !!this.portal.session(token) : !!this.portal.anySession?.(token);
   }
 
   /** Cuts every tracked socket whose session has ended (or is no longer full). Called on sign-out, on a new code and on a timer. */
   sweep() {
     for (const [token, { full, sockets }] of this.#open) {
-      if (this.#live(token, full)) continue;
+      if (this.#stillSignedIn(token, full)) continue;
       for (const socket of sockets) socket.destroy();
       this.#open.delete(token);
     }
