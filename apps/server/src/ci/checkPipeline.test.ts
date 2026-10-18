@@ -93,3 +93,18 @@ test('with no base commit (a manual run) the gate always runs', () => {
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /GATE JOB/);
 });
+
+test('T-1609: in the workspace, a gate Job already in the cluster for this commit means no second Job; another commit\'s Job does not count', () => {
+  const f = fixture({ 'a.ts': 'export const a = 5;\n' });
+  const bin = join(f.root, '.fakebin');
+  const withJobs = (names: string) => {
+    tool(join(bin, 'kubectl'), `printf '%s\\n' ${names}`);
+    return f.run({ PATH: `${bin}:${process.env.PATH}` });
+  };
+  const same = withJobs(`job.batch/claudepilot-gate-${f.head.slice(0, 7)}-a1b2 job.batch/claudepilot-job-0f`);
+  assert.equal(same.status, 0, same.stderr);
+  assert.match(same.stdout, /already in the cluster/);
+  assert.doesNotMatch(same.stdout, /GATE JOB/);
+  const other = withJobs('job.batch/claudepilot-gate-0000000-a1b2');
+  assert.match(other.stdout, new RegExp(`GATE JOB ${f.head} typecheck,web-build`));
+});
