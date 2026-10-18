@@ -105,6 +105,8 @@ import { wireConnect } from './workspaces/connect/wire.js';
 import type { Runtime } from './workspaces/runtime.js';
 import { AppPorts, routeAppHostUpgrades } from './appports/index.js';
 import { loop } from './platform/loops.js';
+import { AGENT_MCP_CONFIG } from './portalmcp/agents.js';
+import { MANAGER_BRIEF } from './manager/service.js';
 
 // A background task that rejects (a module reading a table a frozen database doesn't have, a probe, a scan) must not
 // take the portal down with every open terminal: log it and carry on. Synchronous throws still stop the process.
@@ -487,6 +489,19 @@ portalMcp.agents.workspaceRefs = workspaces.identities;
 // T-436: a session's token is bound at mint to the vaults that name its workspace; a change of a vault's list rebinds the live tokens.
 wireVaultBinding(portalMcp.agents, knowledge);
 chatController.agentAccess = portalMcp.agents;
+// T-968: the General Manager's process gets the person's manager token (it acts as them) and its brief; the URL is the portal as its
+// workspace reaches it, the same as an agent's.
+chatController.managerAccess = {
+  mint: async ({ workspaceId, sessionId, ownerId }) => {
+    const url = await agentUrls(workspaceId);
+    const t = url ? portalMcp.managers.mint({ userId: ownerId, sessionId }, { keepOthers: true }) : null;
+    return t && url
+      ? { env: { PILOT_MCP_TOKEN: t.secret, PILOT_MCP_URL: url, PILOT_SESSION_ID: sessionId, PILOT_WORKSPACE_ID: workspaceId }, mcpConfig: AGENT_MCP_CONFIG, tokenId: t.tokenId }
+      : null;
+  },
+  settle: (sessionId, tokenId, started) => portalMcp.managers.settle(sessionId, tokenId, started),
+  brief: () => MANAGER_BRIEF,
+};
 // Self-heal (owner, 2026-10-17): a live session calling with a replaced or expired token gets a restart at its turn's end (the same
 // conversation, MCP reconnected), so its new process starts with a good token and nobody has to run /mcp by hand.
 portalMcp.agents.onStaleToken = (sessionId, reason) => {

@@ -434,6 +434,23 @@ export interface ChatCreateOptions {
    * the worker is being made gets no worker. Refused, it is a NOT_FOUND with exactly this message (the caller's one answer for a parent).
    */
   liveParent?: string;
+  /**
+   * T-968: the person's General Manager. Set ONLY by the manager service (manager/service.ts); no route or MCP tool passes it. Its row is
+   * `kind = 'manager'` with its owner, it is never bypass-capable, and its launch has the pilot MCP alone (manager token) and no built-in tools.
+   */
+  manager?: { ownerId: string };
+}
+
+/** T-968: the built-in tools a General Manager never has (PRD §3: tools off, three layers deep). */
+export const MANAGER_DENIED_TOOLS = ['Read', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Bash', 'BashOutput', 'KillShell', 'Glob', 'Grep', 'WebFetch', 'WebSearch', 'Task', 'Agent', 'TodoWrite'];
+
+/** T-968: what grants a General Manager's process its portal tools (the person's manager token); index.ts wires it to Portal MCP. */
+export interface ChatManagerAccess {
+  mint(req: { workspaceId: string; sessionId: string; ownerId: string }): Promise<ChatAgentGrant | null>;
+  /** As ChatAgentAccess.settle, for the manager's token. */
+  settle?(sessionId: string, tokenId: string, started: boolean): void;
+  /** The persona it starts with (its brief), appended to Claude Code's system prompt. */
+  brief(): string;
 }
 
 export interface ChatSendOptions {
@@ -575,7 +592,9 @@ function portalFrameBase(actor: string, label: string | undefined, text: string,
           ? 'the portal'
           : kind === 'account'
             ? 'a person this session was shared with (not its owner)'
-            : 'an MCP client';
+            : kind === 'manager'
+              ? 'the person’s General Manager (it speaks for the person; it manages, it does not do your work)'
+              : 'an MCP client';
   const named = label ? ` “${label}”` : '';
   // T-294: a report on a worker is the portal's own (nobody asked for it); what it quotes is the worker's text.
   if (actor === CREW_REPORT_ACTOR)
@@ -920,6 +939,8 @@ export class ChatController {
    * token the new one replaced: its portal tools work again from its next launch.
    */
   agentAccess?: ChatAgentAccess;
+  /** T-968: the General Manager's token and brief (index.ts); without it a manager session starts with no portal tools. */
+  managerAccess?: ChatManagerAccess;
   /** Installed by the owner: more environment, nothing secret, for every Claude Code process of a workspace (account MCP off). */
   launchEnv?: (workspaceId: string) => Record<string, string | undefined>;
   /**
@@ -1786,6 +1807,12 @@ export class ChatController {
     if (moving) throw new AppError('CONFLICT', `This chat is moving to ${moving.toClaude}. Try again in a moment.`);
   }
 
+  /** T-968: the person's General Manager session, or null (never in a list: Home is its only door). */
+  managerOf(ownerId: string): ChatSession | null {
+    const s = this.#chat.managerOf(ownerId);
+    return s ? this.#decorate(s) : null;
+  }
+
   /** Registers a dispatcher for live `events`, `delta`, `session`, `input` and `tasks` messages. Returns an unsubscribe. */
   onEvent(cb: Dispatch): () => void {
     this.#dispatchers.add(cb);
@@ -2017,6 +2044,7 @@ export class ChatController {
       agent,
       spawnWhy,
       ...(lead ? { lead: true } : {}),
+      ...(opts.manager ? { kind: 'manager' as const, ownerId: opts.manager.ownerId, bypassCapable: false } : {}),
       ...(limits ? { maxWorkers: limits.maxWorkers, subagents: limits.subagents } : {}),
     };
     let session!: ChatSession;
@@ -5175,7 +5203,14 @@ export class ChatController {
   ): Promise<{ code: number | null; out: string }> {
     // The environment of the process: whatever isn't secret every session of the workspace gets, and this session's token
     // (portal tools). It goes in on stdin: a command line is readable by every process in the workspace.
-    const grant = await this.#grant(workspaceId, o.sessionId);
+    // T-968: a General Manager gets the person's manager token (it acts as them), never an agent token.
+    const managerRow = this.#chat.row(o.sessionId);
+    const manager = (managerRow as { kind?: string } | undefined)?.kind === 'manager';
+    const grant = manager
+      ? await this.managerAccess
+          ?.mint({ workspaceId, sessionId: o.sessionId, ownerId: (managerRow as { owner_id?: string }).owner_id ?? 'u_owner' })
+          .catch(() => null) ?? null
+      : await this.#grant(workspaceId, o.sessionId);
     if (grant) this.#pilotTools.set(o.sessionId, false);
     else this.#pilotTools.delete(o.sessionId);
     const env = { ...this.#launchEnv(workspaceId), ...grant?.env };
@@ -5203,6 +5238,8 @@ export class ChatController {
       // The portal's own tools, for a workspace that opted in: the agent scope is rate-limited, labelled and never destructive, deny rules
       // still win, and without this the first call of each tool waits for a tap in Manual mode.
       ...(grant ? ['--mcp-config', grant.mcpConfig, '--allowedTools', PILOT_TOOLS] : []),
+      // T-968: the manager has the pilot MCP alone (no other server the folder or the user config names) and no built-in tool at all.
+      ...(manager ? ['--strict-mcp-config', '--append-system-prompt', this.managerAccess?.brief() ?? '', '--disallowedTools', ...MANAGER_DENIED_TOOLS] : []),
       o.resume ? '--resume' : '--session-id',
       o.csid,
       ...(this.#viaPool(workspaceId) ? ['--max-budget-usd', String(this.#budgetUsd())] : []),
@@ -5219,7 +5256,8 @@ export class ChatController {
     const settle = (started: boolean) => {
       if (!grant?.tokenId) return;
       try {
-        this.agentAccess?.settle?.(o.sessionId, grant.tokenId, started);
+        if (manager) this.managerAccess?.settle?.(o.sessionId, grant.tokenId, started);
+        else this.agentAccess?.settle?.(o.sessionId, grant.tokenId, started);
       } catch {
         // a token left unsettled still ends with its session
       }

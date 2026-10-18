@@ -56,3 +56,24 @@ export const SCHEDULES_API = {
   /** Full session only. GET: `PortalLoop[]` (the Schedules page). The cron triggers come from `TRIGGER_API.list`. */
   loops: '/api/admin/loops',
 } as const;
+
+/* ---------- The General Manager (T-968, D-80) ---------- */
+
+/** The person's manager as Home shows it. */
+export interface ManagerStatus {
+  enabled: boolean;
+  sessionId: string | null;
+  state: string | null;
+  workspaceId: string | null;
+  /** Running workspaces it can run in, for Enable. */
+  candidates: { id: string; label: string }[];
+}
+
+export const MANAGER_API = {
+  /** Full session. GET: `ManagerStatus`. */
+  status: '/api/admin/manager',
+  /** Full session. POST `{ workspaceId? }`: makes and starts the person's one manager; `ManagerStatus`. */
+  enable: '/api/admin/manager/enable',
+  /** Full session. POST: ends it (the transcript stays); `ManagerStatus`. */
+  disable: '/api/admin/manager/disable',
+} as const;

@@ -8,7 +8,7 @@ import { GLANCE_WIDGETS } from '@/features/glance/registry';
 import { moveInOrder } from '@/features/glance/settings';
 import type { GlanceWidget } from '@/features/glance/types';
 import { GlanceSkeleton } from '@/features/glance/widgets/shared/states';
-import { HomeModeSwitch, ManagerMode, readHomeMode, readManagerSession, saveHomeMode, saveManagerSession, type HomeMode } from './ManagerMode';
+import { HomeModeSwitch, ManagerMode, readHomeMode, saveHomeMode, type HomeMode } from './ManagerMode';
 import { DEFAULT_HOME, orderCards, resetHomeSettings, updateHomeSettings, useHomeSettings } from './settings';
 
 /** The widgets that have a Home card. */
@@ -26,9 +26,7 @@ export function HomePage() {
   const [arranging, setArranging] = useState(false);
   // D-80 / T-968 S3: Dashboard | Manager, remembered on this device.
   const [mode, setModeState] = useState<HomeMode>(readHomeMode);
-  const [managerId, setManagerId] = useState<string | null>(readManagerSession);
   const setMode = (m: HomeMode) => (setModeState(m), saveHomeMode(m));
-  const pickManager = (id: string | null) => (setManagerId(id), saveManagerSession(id));
   const header = (
     <PageHeader
       title={mode === 'manager' ? 'Manager' : 'Home'}
@@ -53,7 +51,7 @@ export function HomePage() {
     return (
       <>
         {header}
-        <ManagerMode sessionId={managerId} onPick={pickManager} onBack={() => setMode('dashboard')} />
+        <ManagerMode onBack={() => setMode('dashboard')} />
       </>
     );
   return (

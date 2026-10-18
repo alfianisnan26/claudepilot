@@ -49,10 +49,12 @@ export class ManagerTokens {
   }
 
   /** A fresh token for the person's manager session; the session's older tokens stop working. Null on a database that can't be written. */
-  mint(req: { userId: string; sessionId: string }): { tokenId: string; secret: string; expiresAt: string } | null {
+  mint(req: { userId: string; sessionId: string }, opts: { keepOthers?: boolean } = {}): { tokenId: string; secret: string; expiresAt: string } | null {
     const db = this.#writable;
     if (!db) return null;
-    this.revokeSession(req.sessionId, 'replaced by a new token');
+    // As an agent token (agents.ts settle): with keepOthers the old token stays good until the launch says a new process started; a start that
+    // attached to the running process must not cut it off.
+    if (!opts.keepOthers) this.revokeSession(req.sessionId, 'replaced by a new token');
     const secret = `${PORTAL_MANAGER_TOKEN_PREFIX}${randomBytes(32).toString('base64url')}`;
     const id = `mgt_${randomBytes(6).toString('hex')}`;
     const now = this.#now;
@@ -77,6 +79,12 @@ export class ManagerTokens {
       .run(this.#now.toISOString(), reason, ...args);
     if (r.changes > 0) this.onChange?.();
     return Number(r.changes);
+  }
+
+  /** After a launch with keepOthers: a new process started (the others go) or not (the unused new one goes). */
+  settle(sessionId: string, tokenId: string, started: boolean): void {
+    if (started) this.#revoke('session_id = ? AND id != ?', [sessionId, tokenId], 'replaced by a new token');
+    else this.#revoke('id = ?', [tokenId], 'its launch started no new process');
   }
 
   /** The manager was disabled or removed, or its process was replaced. */
