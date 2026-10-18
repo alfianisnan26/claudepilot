@@ -53,12 +53,15 @@ const MENTION = /\.mcp\.json|\.claude\.json|check-allowlist|\/etc\/+claude-code|
 // Words that could be part of a rule file's name, for shell values the hook cannot see (a variable, a pipe): loose on
 // purpose, since A=claude; B=settings; echo x > ~/.$A/$B.json shows no more than these words.
 const DYNAMIC_WORDS = /claude|settings|\.mcp|mcp\.json|allowlist/i;
-// Rule-file path fragments, for the text of code that writes a file (T-1092). Never a bare word: "claudepilot-job-x",
-// "one.claude" or "claudes/" in a note's data is not a rule file. A quoted piece ('.cla' + 'ude') is fragmentString's.
+// Rule-file path fragments, for the text of code that writes a file: shown first in the message, as the clearest word.
 const FRAGMENT_WORDS = /\.claude\/|\.claude\.json|settings(\.local)?\.json|\.mcp\.json|managed-settings|check-allowlist|\/etc\/+claude-code|\/etc\/+claudepilot|CLAUDE_CONFIG_DIR/i;
+// The bare words for the text of code that writes a file: the original loose set (a word cut from a longer string,
+// 'zclaudez'[1:-1], shows nothing more), with ONE exemption (T-1092, coordinator decision): claude right before "pilot" or
+// "s/" ("claudepilot-job-x", "~/.claudepilot/...", "claudes/c2") does not count. "one.claude" and "settings" still do.
+const INLINE_WORDS = /claude(?!pilot|s\/)|settings|\.mcp|mcp\.json|allowlist/i;
 // The narrow net of bare words for code that writes (T-1092 review): a word glued to a path, glob or quote edge
-// ('x.claude'.slice(1), '.claude*/settings*.json', 'CLAUDE_' + 'CONFIG_DIR'). Prose stays out: "one.claude run",
-// "claudes/c2", "claudepilot-job-x", "the settings page", "claude usage" (a letter, a space or a sentence's last dot follows).
+// ('x.claude'.slice(1), '.claude*/settings*.json', 'CLAUDE_' + 'CONFIG_DIR'). Mostly inside INLINE_WORDS; kept because
+// it only refuses more ('claudepilot' + '*' is caught here, not there).
 const BARE_NET = /claude(?:[\/*?\[\]'"\x60]|\.(?=[\w*?\[]))|settings(?:[\/*?\[\]'"\x60_]|\.(?=[\w*?\[]))|allowlist|CLAUDE_['"\x60+]/i;
 // Code that lists a folder: with a quoted two-letter start of a rule file's name ('.c', '.m') it can find one.
 const LISTING = /glob|readdir|listdir|scandir|iterdir|os\.walk|opendir|Dir\.(children|entries|each|glob)/i;
@@ -272,10 +275,12 @@ function couldMatch(pattern, baseDir, dotglob) {
 
 /** The quoted strings in code, short ones included so that a '.' does not throw the pairing of the quotes after it. */
 function quotedStrings(code) {
-  const re = /(['"\x60])((?:\\.|(?!\1)[^\\\n]){0,200})\1/g;
   const out = [];
-  let m;
-  while ((m = re.exec(code)) && out.length < 2000) out.push(m[2]);
+  // Both pairings: from length 0 (the right one) and the original 3+ one, so nothing the guard found before is lost.
+  for (const re of [/(['"\x60])((?:\\.|(?!\1)[^\\\n]){0,200})\1/g, /(['"\x60])((?:\\.|(?!\1)[^\\\n]){3,200})\1/g]) {
+    let m;
+    while ((m = re.exec(code)) && out.length < 4000) out.push(m[2]);
+  }
   return out;
 }
 
@@ -315,7 +320,7 @@ const OBFUSCATION = /fromCharCode|atob\(|base64|b64decode|\\x[0-9a-f]{2}|\\u00[0
 function inlineReason(code) {
   if (!WRITE_API.test(code)) return null;
   if (MENTION.test(code)) return 'mention';
-  const w = FRAGMENT_WORDS.exec(code);
+  const w = FRAGMENT_WORDS.exec(code) || INLINE_WORDS.exec(code);
   const word = w ? w[0].toLowerCase() : fragmentString(code) || bareNet(code);
   if (word) return 'the command writes a file and its text names something like a rule file: ' + word;
   const d = OBFUSCATION.exec(code);

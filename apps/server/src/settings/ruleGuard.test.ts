@@ -1463,7 +1463,7 @@ test('T-860 S2c: set -a, a for loop over a GIT_ name, GIT_ assigned by a paramet
 
 // T-1092: a lead's python3 heredoc writing its own status file was refused as "a rule file is named": WRITE_API matched
 // open(p,'w') and the bare word "claude" matched "claudepilot-job-..." in the note's data. Fragments are rule-file paths now.
-test('T-1092: a heredoc writing a notes file whose text says claudepilot-job-x, one.claude and claudes/ goes through', () => {
+test('T-1092: a heredoc writing a notes file whose text says claudepilot-job-x, ~/.claudepilot and claudes/ goes through', () => {
   const notes = join(R.root, 'scratch', 'lead', 'notes');
   mkdirSync(notes, { recursive: true });
   const file = join(notes, 'status-lead.md');
@@ -1471,9 +1471,9 @@ test('T-1092: a heredoc writing a notes file whose text says claudepilot-job-x, 
     "python3 - <<'EOF'",
     `p = '${file}'`,
     "txt = '''# Status lead",
-    '- job claudepilot-job-x finished; one.claude run moved to claudes/c2',
-    '- the settings page and the claude usage tile are fine',
-    '- asked claude. then fixed the settings.',
+    '- job claudepilot-job-b224b7d0 finished; claudepilot-job-x queued',
+    '- logs in ~/.claudepilot/outbox; the run moved to claudes/c2',
+    '- CLAUDEPILOT lane is green',
     "'''",
     "open(p, 'w').write(txt)",
     'EOF',
@@ -1518,7 +1518,23 @@ const T1092_BYPASSES: [string, string][] = [
   ['CLAUDE_ + CONFIG_DIR', py("import os\nopen(os.environ['CLAUDE_'+'CONFIG_DIR']+'/x','w').write('{}')")],
   ['/etc/ + claudepilot/...', py("open('/etc/'+'claudepilot/bin/policy-rule-guard.cjs','w').write('x')")],
   ['/etc/claudep + ilot/...', py("open('/etc/claudep'+'ilot/bin/policy-rule-guard.cjs','w').write('x')")],
+  // Re-review of f60cc9b7: words padded with letters and cut out again. The restored loose words refuse them.
+  ['python letter-padded words', py("p = '.'+'zclaudez'[1:-1]+'/'+'zsettingsz'[1:-1]+'z.jsonz'[1:-1]\nopen(p,'w').write('{}')")],
+  ["python 'claudeX'[:6]", py("p = '.' + 'claudeX'[:6] + '/x'\nopen(p,'w').write('{}')")],
+  ["python 'claude-x'[:6]", py("p = '.' + 'claude-x'[:6] + '/x'\nopen(p,'w').write('{}')")],
+  ['node slice(1,-1)', `node -e "require('fs').writeFileSync('.'+'zclaudez'.slice(1,-1)+'/x','{}')"`],
+  ['ruby [1..6]', `ruby -e 'File.write("." + "zclaudez"[1..6] + "/x", "{}")'`],
 ];
+// The documented trade-off (coordinator decision): only claudepilot and claudes/ are exempt; any other claude or settings
+// in the data of code that writes keeps it refused. Such notes go through the Edit or Write tool.
+test('T-1092: "one.claude" or "settings" in the data of a heredoc that writes is still refused', () => {
+  for (const line of ['- one.claude run moved', '- the settings page is fine']) {
+    const res = bash(py(`txt = '''${line}'''\nopen('notes.md', 'w').write(txt)`));
+    refused(res, line);
+    assert.match(res.stderr, /something like a rule file: (claude|settings)/);
+  }
+});
+
 for (const [what, command] of T1092_BYPASSES) {
   test(`T-1092 review: refused, ${what}`, () => {
     const res = bash(command);

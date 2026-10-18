@@ -1009,17 +1009,15 @@ create`), and any command that is not a known reader (`cat`, `grep`, `jq`, `git 
   Interpreters (`node`, `python`, `perl`, `ruby`, `awk`, `claude`, ...) are refused when their words name a rule file,
   when the command names one anywhere (data on stdin), when they read code from stdin while one is named, and when inline
   code writes a file and carries a piece of a rule file's name (`'.cla' + 'ude'`), a decoding call (base64, char codes,
-  hex escapes) or a rule-file path fragment (`.claude/`, `.claude.json`, `settings.json`, `settings.local.json`,
-  `.mcp.json`, `managed-settings`, `check-allowlist`, `/etc/claude-code`, `/etc/claudepilot`, `CLAUDE_CONFIG_DIR`); never a
-  bare word in prose, so a note whose data says `claudepilot-job-x`, `one.claude run`, `claudes/c2` or `the settings page`
-  is written (T-1092). A narrow net still catches the bare words `claude`, `settings` and `allowlist` glued to a path,
-  glob or quote edge (`'x.claude'.slice(1)`, `'Xsettings'[1:]`, `'CLAUDE_' + 'CONFIG_DIR'`), a quoted glob that could
-  match a rule file (`glob.glob('*/settings.*')`), a quoted piece of a protected path with a slash in it
-  (`'/etc/' + 'claudepilot/...'`), and a folder listing (`readdirSync`, `glob`, `listdir`) with a two-letter start
-  (`startsWith('.c')`). That refusal has its own
-  message ("the command writes a file and its text names something like a rule file: <fragment>"), not "a rule file is
-  named". The loose words (claude, settings, mcp, allowlist) still count for shell values the guard cannot see (a variable
-  or pipe as a target). Running the allow-list checker itself is a read.
+  hex escapes), or the words claude, settings, mcp or allowlist anywhere in it (a word padded and cut out again,
+  `'zclaudez'[1:-1]`, shows nothing more). One exemption (T-1092): `claude` right before `pilot` or `s/`
+  (`claudepilot-job-x`, `~/.claudepilot/...`, `claudes/c2`) does not count, so a lead's status note naming its jobs is
+  written; any other `claude` or `settings` in the data (`one.claude`, `the settings page`) is still refused, and such a
+  note goes through the Edit or Write tool. Also refused, for code that writes: a quoted glob that could match a rule
+  file (`glob.glob('*/settings.*')`), a quoted piece of a protected path with a slash in it (`'/etc/' + 'claudepilot/...'`),
+  `'CLAUDE_' + ...`, and a folder listing (`readdirSync`, `glob`, `listdir`) with a two-letter start (`startsWith('.c')`).
+  These refusals have their own message ("the command writes a file and its text names something like a rule file:
+  <word>"), not "a rule file is named". Running the allow-list checker itself is a read.
 - The forms that hide a name, where the text shows them: quotes and escapes (`.cl""aude`, `$'\x2eclaude'`), `./` and `..`
   in the path, globs and braces that could match (`.claude/set*`, `.c*/settings.json`, `{settings,x}.json`, and `*.json`
   after `shopt -s dotglob`), a variable or command substitution as the target when the command carries a piece of a rule
