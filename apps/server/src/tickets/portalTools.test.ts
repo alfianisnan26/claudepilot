@@ -129,7 +129,7 @@ test('a General Manager token (T-968, #11136 b): ticket_verdict and ticket_close
     assert.equal(close?.code, 'FORBIDDEN', JSON.stringify(close));
     assert.match(String(close?.message), /does not close tickets/);
     const t = r.tickets.get(UI, 'T-1');
-    assert.equal(t.status, 'open');
+    assert.equal(t.ticket.status, 'open');
     assert.equal(r.tickets.verdicts(UI, 'T-1').length, 0, 'no verdict was stored');
     // A ticket that does not exist reads the same for the manager as for any token.
     for (const [tool, args] of [['ticket_close', { id: 'T-99', summary: 'x' }], ['ticket_verdict', { id: 'T-99', role: 'qa', verdict: 'pass', commit }]] as const) {
@@ -155,7 +155,7 @@ test('a General Manager token (T-968, QA c691df71): ticket_update to done or won
       const e = (await r.h.call(t.secret, 'ticket_update', args)).result?.structuredContent?.error;
       return e && { code: e.code, message: e.message };
     };
-    const status = (id: string) => r.tickets.get(UI, id).status;
+    const status = (id: string) => r.tickets.get(UI, id).ticket.status;
     for (const n of [1, 2, 3, 4]) r.tickets.create(UI, { summary: `ticket ${n}` });
     r.tickets.close(UI, 'T-3', { summary: 'Shipped.' });
     for (const [id, to, before] of [['T-1', 'done', 'open'], ['T-2', 'wont_do', 'open'], ['T-3', 'open', 'done']] as const) {
