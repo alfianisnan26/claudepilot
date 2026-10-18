@@ -362,6 +362,24 @@ test('the stale-PASS guard on the stored rows: a PASS on the old head does not m
   }
 });
 
+test('verdictsHeldBy (T-1613): the verdicts since a time on the open tickets a session holds, oldest first; none for another session or a closed ticket', async () => {
+  const r = await rig();
+  try {
+    const before = Date.now() - 1000;
+    record(r, 'qa1', 'qa', 'pass', A);
+    record(r, 'rev1', 'review', 'fail', A);
+    const held = r.tickets.verdictsHeldBy('impl', before);
+    assert.deepEqual(held.map((v) => [v.ticket, v.role, v.verdict]), [[r.id, 'qa', 'pass'], [r.id, 'review', 'fail']]);
+    assert.ok(held[0]!.id < held[1]!.id, 'oldest first, by row id');
+    assert.deepEqual(r.tickets.verdictsHeldBy('lead', before), [], 'the lead does not hold it');
+    assert.deepEqual(r.tickets.verdictsHeldBy('impl', Date.now() + 60_000), [], 'nothing after a later time');
+    r.tickets.close(UI, r.id, { summary: 'done' });
+    assert.deepEqual(r.tickets.verdictsHeldBy('impl', before), [], 'a closed ticket is not news');
+  } finally {
+    r.done();
+  }
+});
+
 test('migration 785: a ticket_verdicts table, a unique version, and the table itself refuses a short sha', async () => {
   assert.equal(MIGRATIONS.filter((m) => m.version === 785).length, 1);
   assert.equal(new Set(MIGRATIONS.map((m) => m.version)).size, MIGRATIONS.length, 'versions are unique');
