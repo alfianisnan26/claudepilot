@@ -12,10 +12,13 @@
 #                                  block every Job).
 
 sched_preempted() {
-  jq -r 'if ([.items[]? | select(
+  # jq prints nothing and exits 0 on an empty input, so the default is applied to the output, not to the exit code
+  local out
+  out=$(jq -r 'if ([.items[]? | select(
         ((.status.reason // "") == "Preempted")
         or any((.status.conditions // [])[]?; .type == "DisruptionTarget" and .status == "True" and (.reason // "") == "PreemptionByScheduler"))] | length) > 0
-      then "yes" else "no" end' <<<"$1" 2>/dev/null || echo no
+      then "yes" else "no" end' <<<"$1" 2>/dev/null) || out=
+  echo "${out:-no}"
 }
 
 sched_cpu_free_m() {

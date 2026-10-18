@@ -61,7 +61,9 @@ test('sched_fit: fits, fits by preempting claudepilot-jobs, or no; the old porta
   assert.equal(fit([q('n2', '3950m', '1Gi', {}, { app: 'claudepilot-portal' })]), 'fits', 'the portal being replaced is gone when the new one starts');
   assert.equal(fit([q('n2', '1', '7900Mi')]), 'no', 'memory: 292Mi left of 384Mi');
   assert.equal(fit([q('n2', '1', '7900Mi', { priorityClassName: 'claudepilot-jobs' })]), 'preempt');
-  assert.equal(fit([q('n2', '3950m', '1Gi', { priorityClassName: 'claudepilot-jobs' }), q('n2', '500m', '1Gi')]), 'no', 'a workspace is not room');
+  // 50m of a Job and 3950m of a workspace: 0 free, 50m free once the Job is gone, 100m needed. (A fixture over the node's 4000m would be no real node.)
+  assert.equal(fit([q('n2', '50m', '1Gi', { priorityClassName: 'claudepilot-jobs' }), q('n2', '3950m', '1Gi')]), 'no', 'a workspace is not room');
+  assert.equal(fit([q('n2', '3950m', '1Gi', { priorityClassName: 'claudepilot-jobs' }), q('n2', '50m', '1Gi')]), 'preempt', 'the Job is the big one: its room is enough');
   assert.equal(fit([q('n3', '3950m', '9Gi')]), 'fits', 'another node\'s pods do not count');
   assert.equal(call('sched_fit', nodes, pods(), 'gone', '100', '384').out, 'no');
   assert.equal(call('sched_fit', '', '', 'n2', '100', '384').out, 'no');
