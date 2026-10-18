@@ -133,17 +133,19 @@ export function requireToolPolicy(actor: Actor, name: string, args: Record<strin
   if (policy.kind !== 'objects') return;
   for (const check of policy.checks) {
     const raw = args[check.arg];
+    // T-1043 S0c: `{arg}` in the text is the argument as given (trimmed), as a tool's own answer names it ("No workspace “x”.").
+    const text = (id: unknown) => check.notFound?.replace('{arg}', typeof id === 'string' ? id.trim() : '');
     const absent = raw === undefined || raw === null || raw === '' || (Array.isArray(raw) && raw.length === 0);
     if (absent) {
       if (check.optional) continue;
-      throw notFound(check.notFound);
+      throw notFound(text(''));
     }
     const ids = check.many && Array.isArray(raw) ? raw : [raw];
     const poolType = check.poolTypeArg ? args[check.poolTypeArg] : undefined;
     for (const id of ids) {
-      if (typeof id !== 'string' || !id) throw notFound(check.notFound);
+      if (typeof id !== 'string' || !id) throw notFound(text(id));
       const ref = objectRef(check.type, id, typeof poolType === 'string' && poolType ? (poolType as ObjectRef['poolType']) : undefined);
-      if (!current.can(actor, check.verb, ref).allow) throw notFound(check.notFound);
+      if (!current.can(actor, check.verb, ref).allow) throw notFound(text(id));
     }
   }
 }
@@ -335,9 +337,16 @@ export function actorOfSocket(req: IncomingMessage, authorized: (req: IncomingMe
   return authorized(req) ? owner() : ANONYMOUS;
 }
 
-/** Who a Portal MCP principal is: an admin's token (`cpat_`) or an agent's per-session token (`cpst_`). The real layer reads the user from the token's owner. */
-export function actorOfPrincipal(p: { kind: 'user' | 'agent'; tokenId: string; scope: string; workspaceId: string | null; sessionId: string | null }): Actor {
-  if (p.kind === 'agent' && p.workspaceId && p.sessionId) return { kind: 'agent', userId: FOUNDING_USER_ID, tokenId: p.tokenId, sessionId: p.sessionId, workspaceId: p.workspaceId };
+/**
+ * Who a Portal MCP principal is: an admin's token (`cpat_`) or an agent's per-session token (`cpst_`). T-1043 S0c: the user is the principal's
+ * `userId` when it carries one (a member's token, once tokens record an owner: S1b), else the founding user.
+ */
+export function actorOfPrincipal(p: { kind: 'user' | 'agent'; tokenId: string; scope: string; workspaceId: string | null; sessionId: string | null; userId?: string }): Actor {
+  const userId = (p.userId ?? FOUNDING_USER_ID) as UserId;
+  if (p.kind === 'agent' && p.workspaceId && p.sessionId) return { kind: 'agent', userId, tokenId: p.tokenId, sessionId: p.sessionId, workspaceId: p.workspaceId };
   const scope = p.scope === 'admin' || p.scope === 'operate' ? p.scope : 'read';
-  return { kind: 'token', userId: FOUNDING_USER_ID, tokenId: p.tokenId, scope };
+  return { kind: 'token', userId, tokenId: p.tokenId, scope };
 }
+
+/** T-1043 S0c: a Portal MCP principal that acts for someone other than the founding user. It reaches only declared tools. */
+export const isMemberPrincipal = (p: { userId?: string }): boolean => p.userId !== undefined && p.userId !== FOUNDING_USER_ID;

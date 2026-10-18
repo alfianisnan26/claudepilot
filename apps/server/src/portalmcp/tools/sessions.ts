@@ -1,14 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import { AppError, isAppError } from '@isnanme/core';
-import { CHAT_AGENT_NAME, CHAT_MAX_WORKERS_MAX, sessionRef, workspaceRef, type ChatEvent, type ChatPermissionMode, type ChatRequest, type ChatSession } from '@portal/contracts';
+import { CHAT_AGENT_NAME, CHAT_MAX_WORKERS_MAX, sessionRef, type ChatEvent, type ChatPermissionMode, type ChatRequest, type ChatSession } from '@portal/contracts';
 import { z } from 'zod';
-import { actorOfPrincipal, requireCan } from '../../authz/seam.js';
+import { actorOfPrincipal, requireCan, visible } from '../../authz/seam.js';
 import { WORKER_REPORTS } from '../../chat/agents.js';
 import { paginate, pageInput } from '../paging.js';
 import { PortalToolError, portalTools, type PortalToolContext, type ToolRegistry } from '../registry.js';
 import { cleanText } from '../sanitize.js';
 import { NO_PARENT } from '../authz.js';
-import { assertCanChange, costFields, resolveWorkspace, uiLink } from './common.js';
+import { assertCanChange, costFields, resolveWorkspaceFor, uiLink } from './common.js';
 import type { PortalToolDeps } from './deps.js';
 
 const STATES = ['starting', 'idle', 'working', 'waiting', 'interrupted', 'ended'] as const;
@@ -97,13 +97,8 @@ export function registerSessionTools(
    */
   const workspaceFor = async (raw: string, ctx: PortalToolContext): Promise<string> => {
     if (!workspaces) return raw.trim();
-    const w = resolveWorkspace(await workspaces.list(), raw, (ref) => workspaces.resolve?.(ref) ?? null);
-    try {
-      requireCan(actorOfPrincipal(ctx.principal), 'operate', workspaceRef(w.id));
-    } catch {
-      throw new AppError('NOT_FOUND', `No workspace “${raw.trim()}”. List them with workspace_list.`);
-    }
-    return w.id;
+    // T-1043 S0c: out of the workspaces the caller may view, so a name never resolves to (nor AMBIGUOUS lists) one it may not see.
+    return resolveWorkspaceFor(actorOfPrincipal(ctx.principal), 'operate', await workspaces.list(), raw, (ref) => workspaces.resolve?.(ref) ?? null).id;
   };
 
   registerPortalTool({
@@ -121,9 +116,15 @@ export function registerSessionTools(
       ...pageInput,
     }),
     handler(ctx, args) {
-      const all = chat
-        .list({ workspaceId: args.workspace_id, ticketId: args.ticket_id, ...(args.parent_id ? { parentId: args.parent_id } : {}) })
-        .filter((s) => !s.archivedAt && (args.state ? s.state === args.state : args.include_ended || s.state !== 'ended'));
+      // T-1043 S0c: only the sessions the caller may view (the declared filter).
+      const all = visible(
+        actorOfPrincipal(ctx.principal),
+        'session',
+        chat
+          .list({ workspaceId: args.workspace_id, ticketId: args.ticket_id, ...(args.parent_id ? { parentId: args.parent_id } : {}) })
+          .filter((s) => !s.archivedAt && (args.state ? s.state === args.state : args.include_ended || s.state !== 'ended')),
+        (s) => s.id,
+      );
       const page = paginate(all, args, { w: args.workspace_id, s: args.state, t: args.ticket_id, p: args.parent_id, e: args.include_ended });
       return { summary: `${page.total} sessions.`, sessions: page.items.map((s) => sessionBrief(s, ctx)), total: page.total, next_cursor: page.next_cursor };
     },
@@ -154,7 +155,8 @@ export function registerSessionTools(
       }
       // T-294: its workers, compact: the live ones first, then the ended, newest activity first within each.
       // Archived workers are left out, as session_list leaves them out.
-      const kids = chat.list({ parentId: s.id }).filter((w) => !w.archivedAt);
+      // T-1043 S0c: only the workers the caller may view.
+      const kids = visible(actorOfPrincipal(ctx.principal), 'session', chat.list({ parentId: s.id }).filter((w) => !w.archivedAt), (w) => w.id);
       const ordered = [...kids.filter((w) => w.state !== 'ended'), ...kids.filter((w) => w.state === 'ended')];
       const live = kids.length - kids.filter((w) => w.state === 'ended').length;
       const out: Record<string, unknown> = {
@@ -353,6 +355,8 @@ export function registerSessionTools(
       need(args.id);
       const limits = args.max_workers !== undefined || args.subagents !== undefined;
       if (!args.model && !args.effort && !args.mode && !limits) throw new AppError('VALIDATION_FAILED', 'Give a model, an effort, a mode, max_workers or subagents.');
+      // T-1043 S0c: limits widen or narrow what it may start: `manage`, as `PATCH /api/chat/sessions/:id/limits` (the dispatch asked `operate`).
+      if (limits) requireCan(actorOfPrincipal(ctx.principal), 'manage', sessionRef(args.id));
       // T-294: the limits first (a refusal leaves the rest untouched); the controller refuses a session's own actor.
       const changed = limits
         ? chat.setLimits(args.id, { ...(args.max_workers !== undefined ? { maxWorkers: args.max_workers } : {}), ...(args.subagents !== undefined ? { subagents: args.subagents } : {}) }, { actor: ctx.actor })

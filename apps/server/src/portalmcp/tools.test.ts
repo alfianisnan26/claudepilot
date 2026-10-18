@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { FOUNDING_USER_ID, objectRef, type UserId } from '@portal/contracts';
+import { actorOfPrincipal, clearResolvers, ownerActor, registerResolver } from '../authz/seam.js';
+import { declareWorkspacePolicies } from '../workspaces/authz.js';
+import { declarePortalMcpPolicies } from './authz.js';
 import { portalTools, agentCallable } from './registry.js';
 import { portalMcpHarness } from './testkit.js';
+import { resolveWorkspaceFor } from './tools/common.js';
 import { registerBuiltInPortalTools } from './tools/index.js';
 
 // The built-in tools (portal-mcp PRD §13) against hand-written fakes of the services they adapt: what each one
@@ -859,3 +864,74 @@ for (const era of ['legacy', 'modern'] as const) {
     }
   });
 }
+
+// T-1043 S0c (MU2, the MCP side): a member's token reaches a workspace or a session only through can(), and a refusal is the same not found
+// as an unknown id (decision 10605). The member `u_m` owns docker/old and k8s/api, and the sessions s3, s5 and s7; the founding user the rest.
+test('T-1043 S0c: a member reaches only its own workspaces and sessions; a refusal reads like a missing one; undeclared tools are not there', async () => {
+  const MEMBER = 'u_m';
+  const mineWs = new Set(['docker/old', 'k8s/api']);
+  const mineS = new Set(['s3', 's5', 's7']);
+  const extra = [
+    session('s4', { workspaceId: 'docker/old' }),
+    session('s5', { workspaceId: 'docker/old' }),
+    session('s6', { workspaceId: 'docker/old', parentId: 's5' }),
+    session('s7', { workspaceId: 'docker/old', parentId: 's5' }),
+  ];
+  world.sessions.push(...extra);
+  // Exact ids only: what the dispatch asks about is the form given; the handler asks again about the workspace it resolved.
+  registerResolver({ type: 'workspace', resolve: (id) => (world.workspaces.some((w) => w.id === id) ? { ref: objectRef('workspace', id), owner: { kind: 'user', id: (mineWs.has(id) ? MEMBER : FOUNDING_USER_ID) as UserId } } : null) });
+  registerResolver({ type: 'session', resolve: (id) => (world.sessions.some((s) => s.id === id) ? { ref: objectRef('session', id), owner: { kind: 'user', id: (mineS.has(id) ? MEMBER : FOUNDING_USER_ID) as UserId } } : null) });
+  declareWorkspacePolicies();
+  declarePortalMcpPolicies();
+  reset();
+  try {
+    const m = h.memberToken('admin', MEMBER).secret;
+    const listed = await names(m);
+    for (const t of ['workspace_list', 'workspace_get', 'workspace_stop', 'workspace_delete', 'session_list', 'session_get', 'session_end']) assert.ok(listed.has(t), `${t} is offered`);
+    for (const t of ['pool_list', 'pool_get', 'account_list']) assert.ok(!listed.has(t), `${t} has no declaration: not offered to a member`);
+    assert.ok((await names(h.token('admin').secret)).has('pool_list'), 'the owner’s token still has every tool');
+    const pools = await h.call(m, 'pool_list');
+    assert.ok(pools.error || pools.result?.isError, 'and not callable');
+    assert.ok(!JSON.stringify(pools.raw).includes('Secrets A'), 'nothing of a pool comes back');
+
+    assert.deepEqual(where(await h.call(m, 'workspace_list')).workspaces.map((w: Row) => w.id).sort(), ['docker/old', 'k8s/api'], 'only its own workspaces');
+    const refused = await h.call(m, 'workspace_get', { id: 'docker/api' });
+    const missing = await h.call(m, 'workspace_get', { id: 'docker/nosuch' });
+    assert.equal(where(refused).error.message, 'No workspace “docker/api”. List them with workspace_list.');
+    assert.equal(JSON.stringify(refused.result).replaceAll('docker/api', 'X'), JSON.stringify(missing.result).replaceAll('docker/nosuch', 'X'), 'another person’s workspace reads like a missing one');
+    const own = where(await h.call(m, 'workspace_get', { id: 'docker/old', include: ['sessions'] }));
+    assert.deepEqual(own.sessions.map((s: Row) => s.id).sort(), ['s5', 's7'], 'its workspace lists only the sessions it may view');
+
+    for (const tool of ['workspace_start', 'workspace_stop', 'workspace_sync', 'workspace_delete', 'workspace_rename', 'workspace_resources'])
+      assert.equal(err(await h.call(m, tool, { id: 'docker/web', label: 'x', apply: 'next_restart' })), 'NOT_FOUND', tool);
+    assert.equal(err(await h.call(m, 'workspace_create', { name: 'mine', target: 'docker' })), 'NOT_FOUND', 'a target it holds nothing on');
+    assert.deepEqual(calls, [], 'no refused call reached a service');
+    assert.equal(where(await h.call(m, 'workspace_stop', { id: 'docker/old' })).summary, 'docker/old is already stopped.');
+    assert.equal(where(await h.call(m, 'workspace_sync', { id: 'docker/old' })).id, 'docker/old');
+    assert.ok(calls.some((c) => c.startsWith('reconciler.request:docker/old')), 'its own workspace is reached');
+
+    reset();
+    assert.deepEqual(where(await h.call(m, 'session_list', { include_ended: true })).sessions.map((s: Row) => s.id).sort(), ['s3', 's5', 's7'], 'only its own sessions');
+    const sRefused = await h.call(m, 'session_get', { id: 's1' });
+    assert.equal(where(sRefused).error.message, 'No such session. List them with session_list.');
+    assert.deepEqual(sRefused.result, (await h.call(m, 'session_get', { id: 's_nosuch' })).result, 'another person’s session reads byte for byte like a missing one');
+    const lead = where(await h.call(m, 'session_get', { id: 's5' }));
+    assert.deepEqual(lead.workers.map((w: Row) => w.id), ['s7'], 'only the workers it may view');
+    assert.equal(lead.workers_total, 1);
+    for (const tool of ['session_interrupt', 'session_end']) assert.equal(err(await h.call(m, tool, { id: 's2' })), 'NOT_FOUND', tool);
+    assert.deepEqual(calls, [], 'no refused session call reached the controller');
+    assert.equal(err(await h.call(m, 'session_end', { id: 's5' })), undefined);
+    assert.deepEqual(calls, ['chat.end:s5'], 'its own session is reached');
+
+    // The handler's own resolution of a name or a label runs over what the actor may view: never AMBIGUOUS across someone else's.
+    const actor = actorOfPrincipal({ kind: 'user', tokenId: 'tk_m', scope: 'admin', workspaceId: null, sessionId: null, userId: MEMBER });
+    assert.equal(actor.kind === 'token' && actor.userId, MEMBER, 'the principal’s user is the actor');
+    assert.equal(resolveWorkspaceFor(actor, 'view', world.workspaces as never, 'api').id, 'k8s/api', 'docker/api is not its: “api” is its one');
+    assert.throws(() => resolveWorkspaceFor(actor, 'view', world.workspaces as never, 'web'), /No workspace “web”/);
+    assert.throws(() => resolveWorkspaceFor(ownerActor(), 'view', world.workspaces as never, 'api'), /workspaces are named “api”/, 'the owner still sees both');
+  } finally {
+    world.sessions.splice(world.sessions.length - extra.length, extra.length);
+    clearResolvers();
+    reset();
+  }
+});

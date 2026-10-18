@@ -91,11 +91,28 @@ export const SHELL_SOCKET_POLICIES: SocketPolicies = {
   },
 };
 
-/** `workspace_rename` is an admin token's tool (its scope); the seam is asked for `operate` on the workspace the id resolves to. */
+/** What a workspace tool answers for a workspace it can't find (tools/common.ts `resolveWorkspace`): a refusal reads the same (decision 10605). */
+export const NO_WORKSPACE = 'No workspace “{arg}”. List them with workspace_list.';
+const onTool = (verb: Verb, arg = 'id'): { kind: 'objects'; checks: [{ type: 'workspace'; verb: Verb; arg: string; notFound: string }] } => ({
+  kind: 'objects',
+  checks: [{ type: 'workspace', verb, arg, notFound: NO_WORKSPACE }],
+});
+
+/**
+ * The workspace tools, as their routes (T-1043 S0c): the dispatch asks the seam about the form given, and the handler asks again about the
+ * workspace it resolved, out of the ones the actor may view (tools/workspaces.ts), so a name or a label never reaches one it may not see.
+ * `workspace_rename` and `workspace_resources` (T-98) are admin tokens' tools; a resources change is audited as `workspace.resources`.
+ */
 export const WORKSPACE_TOOL_POLICIES: ToolPolicies = {
-  workspace_rename: { kind: 'objects', checks: [{ type: 'workspace', verb: 'operate', arg: 'id' }] },
-  /** `workspace_resources` (T-98): an admin token's tool, `operate` on the workspace; a change is audited as `workspace.resources`. */
-  workspace_resources: { kind: 'objects', checks: [{ type: 'workspace', verb: 'operate', arg: 'id' }], confirm: true, audit: 'workspace.resources' },
+  workspace_list: { kind: 'signed-in', filter: 'workspace' },
+  workspace_get: onTool('view'),
+  workspace_create: { kind: 'objects', checks: [{ type: 'target', verb: 'operate', arg: 'target' }], creates: 'workspace' },
+  workspace_rename: onTool('operate'),
+  workspace_resources: { ...onTool('operate'), confirm: true, audit: 'workspace.resources' },
+  workspace_start: onTool('operate'),
+  workspace_stop: onTool('operate'),
+  workspace_sync: onTool('operate'),
+  workspace_delete: onTool('manage'),
 };
 
 /**

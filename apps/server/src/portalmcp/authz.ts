@@ -3,8 +3,9 @@
 // below it and an agent's per-session token (`cpst_`) is refused outright (agent_box). Today the seam answers the one owner through the
 // cookie; the declarations are what the multi-user layer enforces.
 
-import type { ObjectRef, RoutePolicies, ToolPolicies } from '@portal/contracts';
+import type { ObjectRef, RoutePolicies, ToolPolicies, ToolPolicy, Verb } from '@portal/contracts';
 import { declarePolicies, declareToolPolicies } from '../authz/seam.js';
+import { NO_WORKSPACE } from '../workspaces/authz.js';
 
 /** The personal object a token route acts on: one token, or the person's tokens as a whole (minting, a label). */
 export const tokenRef = (id = '*'): ObjectRef => ({ type: 'personal', id: `pmcp_token:${id}` });
@@ -30,11 +31,27 @@ export const PORTAL_MCP_POLICIES: RoutePolicies = {
 /** T-336, T-348: session_start's one answer for a parent that is missing, ended, archived, elsewhere or refused (the dispatch's check and `leadFor`). */
 export const NO_PARENT = 'No such live session in that workspace to be the parent. List them with session_list.';
 
+/** What the session tools answer for a session they can't find (tools/sessions.ts `need`): a refusal reads the same (decision 10605). */
+export const NO_SESSION = 'No such session. List them with session_list.';
+const onSession = (verb: Verb): ToolPolicy => ({ kind: 'objects', checks: [{ type: 'session', verb, arg: 'id', notFound: NO_SESSION }] });
+
+/**
+ * T-1043 S0c: the session tools, as the chat routes and socket messages: reading one is `view`, acting on it (stop, end, a message, an answer,
+ * a control) `operate`. `session_configure` also needs `manage` for its limits (the handler asks, as `PATCH …/limits` does). Lists keep the
+ * rows the actor may view (`visible`), workers in `session_get` and sessions in `workspace_get` too.
+ */
 export const PORTAL_MCP_TOOL_POLICIES = {
+  session_list: { kind: 'signed-in', filter: 'session' },
+  session_get: onSession('view'),
+  session_interrupt: onSession('operate'),
+  session_end: onSession('operate'),
+  session_send: onSession('operate'),
+  session_respond: onSession('operate'),
+  session_configure: onSession('operate'),
   session_start: {
     kind: 'objects',
     checks: [
-      { type: 'workspace', verb: 'operate', arg: 'workspace_id' },
+      { type: 'workspace', verb: 'operate', arg: 'workspace_id', notFound: NO_WORKSPACE },
       { type: 'claude', verb: 'operate', arg: 'claude_id', optional: true },
       { type: 'session', verb: 'operate', arg: 'parent', optional: true, notFound: NO_PARENT },
     ],

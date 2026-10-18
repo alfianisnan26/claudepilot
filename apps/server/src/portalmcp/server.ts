@@ -16,7 +16,7 @@ import {
   type PortalToolResult,
   type ToolRegistry,
 } from './registry.js';
-import { actorOfPrincipal, requireToolPolicy } from '../authz/seam.js';
+import { actorOfPrincipal, isMemberPrincipal, requireToolPolicy, toolPolicyFor } from '../authz/seam.js';
 import type { AgentAccess } from './agents.js';
 import { registerResourcesAndPrompts } from './resources.js';
 import { auditArgs, cleanText, deepClean, findSecret, untrusted } from './sanitize.js';
@@ -305,17 +305,18 @@ export class PortalMcp {
     for (const tool of this.o.registry.list()) {
       if (extra.principal.kind === 'agent' && !agentCallable(tool)) continue; // an agent sees only what opted in for agents
       if (tool.requires === 'session_control' && !settings.sessionControl) continue;
+      if (!reachable(extra.principal, tool.name)) continue; // T-1043 S0c: a member is not offered a tool nobody declared
       this.#register(server, tool, extra);
     }
     // An admin's token also gets resources and prompts (views over read tools, run as this caller); an agent's token gets tools only.
-    if (extra.principal.kind !== 'agent') registerResourcesAndPrompts(server, (name, args, sdk) => this.#runTool(name, extra, args, sdk), (name) => !!this.o.registry.get(name));
+    if (extra.principal.kind !== 'agent') registerResourcesAndPrompts(server, (name, args, sdk) => this.#runTool(name, extra, args, sdk), (name) => !!this.o.registry.get(name) && reachable(extra.principal, name));
     return server;
   }
 
   /** A registry tool run for a resource: the same pipeline as a tool call (scope, limits, redaction, audit). */
   #runTool(name: string, extra: RequestExtra, args: Record<string, unknown>, sdk: unknown): Promise<CallToolResult> {
     const tool = this.o.registry.get(name);
-    if (!tool) return Promise.resolve(toolError('NOT_FOUND', `This portal has no ${name}.`));
+    if (!tool || !reachable(extra.principal, name)) return Promise.resolve(toolError('NOT_FOUND', `This portal has no ${name}.`));
     return this.#call(tool, extra, args, sdk as SdkCtx);
   }
 
@@ -362,6 +363,8 @@ export class PortalMcp {
       record.errorCode = code;
       return toolError(code, message, details, !tool.output);
     };
+    // 0. T-1043 S0c: a member reaches only declared tools (each through `can()` below); any other reads like a tool the portal lacks.
+    if (!reachable(principal, tool.name)) return fail('denied', 'NOT_FOUND', `This portal has no ${tool.name}.`);
 
     // 1. Scope: a token that can't step up gets a tool error naming the scope it needs (FR10). An agent's token reaches
     // only tools that opted in for agents (it isn't even offered the others); an admin's token needs the tool's tier.
@@ -470,6 +473,12 @@ export class PortalMcp {
     };
   }
 }
+
+/**
+ * T-1043 S0c: whether this caller may reach the tool at all. The founding user's tokens and agents reach every tool as before; a member's
+ * reaches only a tool with a declared policy, so a tool nobody reviewed for members fails closed (not listed, and not callable).
+ */
+const reachable = (principal: PortalPrincipal, name: string): boolean => !isMemberPrincipal(principal) || !!toolPolicyFor(name);
 
 /** What events a call records as their actor: `session:<id>` for an agent, `portal-mcp:<token id>` for an admin's token. */
 const actorOf = (p: PortalPrincipal): string => (p.kind === 'agent' ? `session:${p.sessionId}` : `portal-mcp:${p.tokenId}`);

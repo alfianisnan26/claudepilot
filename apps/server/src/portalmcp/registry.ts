@@ -69,6 +69,11 @@ export interface PortalPrincipal {
   client: string | null;
   /** The knowledge vaults this token may use, or null for whatever each vault's own policy allows. */
   vaults: string[] | null;
+  /**
+   * T-1043 S0c: the user the token acts for. Absent today (tokens record no owner until S1b's owner column): the founding user. A principal
+   * whose user is someone else (a member) reaches only declared tools, each through `can()` (portalmcp/server.ts).
+   */
+  userId?: string;
 }
 
 /** The portal-wide switches a tool may depend on. */
