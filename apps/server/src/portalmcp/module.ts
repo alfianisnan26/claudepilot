@@ -1,11 +1,17 @@
-import type {
-  CreatePortalTokenRequest,
-  CreatedPortalToken,
-  McpMatcher,
-  PortalLockdownResult,
-  PortalMcpState,
-  PortalToolInfo,
+import { AppError } from '@isnanme/core';
+import {
+  workspaceRef,
+  type Actor,
+  type CreatePortalTokenRequest,
+  type CreatedPortalToken,
+  type McpMatcher,
+  type PortalLockdownResult,
+  type PortalMcpState,
+  type PortalToken,
+  type PortalToolInfo,
 } from '@portal/contracts';
+import { actorOfPrincipal, can, requireCan } from '../authz/seam.js';
+import { isWorkspaceId } from '../names.js';
 import type { Store } from '../store/store.js';
 import { AgentAccess } from './agents.js';
 import { ManagerTokens } from './managers.js';
@@ -208,6 +214,30 @@ export class PortalMcpModule {
       this.audit.event('token_revoked', id, { reason: reason ?? 'revoked in the portal', by });
     }
     return done;
+  }
+
+  /**
+   * T-1105: a person sets (or with null clears) the workspace a token's tickets go to when a call names none. `actor` is the person (the route
+   * checked their manage on the token); `known` is every workspace there is, when the caller can list them. Refused: a token that is not live,
+   * a read token (it makes no tickets), a workspace that is not there, or one the person or the token may not operate.
+   */
+  setTokenDefaultWorkspace(id: string, raw: unknown, actor: Actor, known?: readonly string[], by = 'ui'): PortalToken {
+    const token = this.tokens.get(id);
+    if (!token) throw new AppError('NOT_FOUND', 'No such token.');
+    if (token.revokedAt) throw new AppError('CONFLICT', 'This token has ended.');
+    let workspaceId: string | null = null;
+    if (raw !== null && raw !== '') {
+      if (!isWorkspaceId(raw)) throw new AppError('VALIDATION_FAILED', 'A workspace is `<target>/<name>`.', { details: { defaultWorkspaceId: 'Pick a workspace.' } });
+      if (token.scope === 'read') throw new AppError('VALIDATION_FAILED', 'A read token makes no tickets: give it operate or admin.', { details: { defaultWorkspaceId: 'Not for a read token.' } });
+      requireCan(actor, 'operate', workspaceRef(raw));
+      if (known && !known.includes(raw)) throw new AppError('NOT_FOUND', 'No such workspace.');
+      const self = actorOfPrincipal({ kind: 'user', tokenId: token.id, scope: token.scope, workspaceId: null, sessionId: null });
+      if (!can(self, 'operate', workspaceRef(raw)).allow) throw new AppError('FORBIDDEN', 'This token may not operate that workspace.', { details: { defaultWorkspaceId: 'Not one this token may operate.' } });
+      workspaceId = raw;
+    }
+    if (!this.tokens.setDefaultWorkspace(id, workspaceId)) throw new AppError('CONFLICT', 'This token has ended.');
+    this.audit.event('token_default_workspace', id, { workspace: workspaceId, from: token.defaultWorkspaceId, by });
+    return this.tokens.get(id)!;
   }
 
   /** Revokes a label's live tokens (all, or all but the newest), one audit row each that says who. */

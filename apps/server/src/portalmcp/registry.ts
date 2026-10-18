@@ -74,6 +74,12 @@ export interface PortalPrincipal {
   client: string | null;
   /** The knowledge vaults this token may use, or null for whatever each vault's own policy allows. */
   vaults: string[] | null;
+  /**
+   * T-1105: a person's operate or admin token (cpat_) only, never an agent's or the manager's: where `ticket_create` puts a ticket that names
+   * no workspace, as a person set it. A handler uses it only while that workspace exists and the token may still operate it (at call time);
+   * never from arguments.
+   */
+  defaultWorkspaceId?: string | null;
 }
 
 /** The portal-wide switches a tool may depend on. */

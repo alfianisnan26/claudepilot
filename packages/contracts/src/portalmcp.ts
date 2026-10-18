@@ -78,6 +78,17 @@ export interface PortalToken {
   lastUsedIp: string | null;
   revokedAt: string | null;
   revokedReason: string | null;
+  /**
+   * T-1105: where `ticket_create` puts a ticket when the call names no `workspace_id` (`<target>/<name>`), or null for the shared queue.
+   * Only an operate or admin token has one, set by a person with manage on the token (`PATCH` `PORTAL_MCP_API.token(id)`), never by a tool.
+   */
+  defaultWorkspaceId: string | null;
+}
+
+/** `PATCH /api/portal-mcp/tokens/:id`: a person changes a live operate or admin token. The workspace must be one they and the token may operate. */
+export interface UpdatePortalTokenRequest {
+  /** `<target>/<name>`, or null to clear it. */
+  defaultWorkspaceId: string | null;
 }
 
 export interface CreatePortalTokenRequest {
@@ -218,7 +229,7 @@ export const PORTAL_MCP_API = {
   settings: '/api/portal-mcp/settings',
   /** POST `CreatePortalTokenRequest`: `CreatedPortalToken`. */
   tokens: '/api/portal-mcp/tokens',
-  /** DELETE: revoke one token. */
+  /** DELETE: revoke one token. PATCH `UpdatePortalTokenRequest`: `PortalToken` (its default workspace). */
   token: (id: string) => `/api/portal-mcp/tokens/${encodeURIComponent(id)}`,
   /** POST `RevokePortalTokenLabelRequest`: `RevokePortalTokenLabelResult`. */
   revokeLabel: '/api/portal-mcp/tokens/revoke-label',

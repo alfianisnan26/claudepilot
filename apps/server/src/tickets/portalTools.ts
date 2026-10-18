@@ -9,6 +9,7 @@ import {
   TICKET_PRIORITIES,
   TICKET_STATUSES,
   TICKET_TYPES,
+  workspaceRef,
   type PortalScope,
   type TicketAssignee,
   TICKET_API,
@@ -16,7 +17,7 @@ import {
   type TicketEvent,
   type TicketItem,
 } from '@portal/contracts';
-import { actorOfPrincipal, requireCan } from '../authz/seam.js';
+import { actorOfPrincipal, can, requireCan } from '../authz/seam.js';
 import { bumpMode, bumpNote } from '../chat/bump.js';
 import { clip, fullInput, page } from '../portalmcp/compact.js';
 import { pageInput, pageWindow } from '../portalmcp/paging.js';
@@ -41,6 +42,24 @@ const callerOf = (ctx: PortalToolContext): Caller =>
         scope: ctx.scope as PortalScope,
         ...(ctx.principal.kind === 'manager' ? { manager: true as const } : {}),
       };
+
+/**
+ * T-1105: where a ticket goes when the call names no workspace. An operate or admin token (cpat_) may have a default a person set; it is used
+ * only while that workspace still exists (`exists`, when the caller can tell) and the token may still operate it (both checked now, not when
+ * it was set), else the ticket goes to the shared queue as before. An agent's ticket is always in its own workspace (the service), so the
+ * default never applies to it; an explicit `workspace_id` (even empty) always wins.
+ */
+export function ticketWorkspaceOf(ctx: PortalToolContext, given: string | undefined, exists?: (workspaceId: string) => boolean): string | undefined {
+  if (given !== undefined || ctx.isAgent || ctx.principal.kind !== 'user') return given;
+  const fallback = ctx.principal.defaultWorkspaceId;
+  if (!fallback || (exists && !exists(fallback)) || !can(actorOfPrincipal(ctx.principal), 'operate', workspaceRef(fallback)).allow) return undefined;
+  return fallback;
+}
+
+export interface TicketToolOptions {
+  /** T-1105: whether a workspace (`<target>/<name>`) exists now, for a token's default workspace; index.ts asks the workspace identities. */
+  workspaceExists?: (workspaceId: string) => boolean;
+}
 
 /** Where ticket text came from, for the label the model sees. */
 const sourceOf = (t: Pick<TicketItem, 'source'>) => `ticket:${t.source}`;
@@ -164,7 +183,7 @@ function assigneeOf(tickets: Tickets, ctx: PortalToolContext, raw: string, sessi
 const CHECKLIST_TAG_HINT = 'An agent adds owner-checklist only with an allowed tag (default production, D-62): otherwise it is refused.';
 const assigneeArg = z.string().max(100).optional().describe('me (your session), user or user:<name> (a person: agents only with an allowed tag, default production, D-62), session:<id>, or none (the agents’ queue).');
 
-export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = portalTools): void {
+export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = portalTools, opts: TicketToolOptions = {}): void {
   declareTicketPolicies();
   const registerPortalTool = registry.register.bind(registry);
   const uiUrl = (id: string) => `${(config.portalMcp.uiUrl ?? `http://localhost:${config.port}`).replace(/\/+$/, '')}/admin/tickets/${id}`;
@@ -284,13 +303,13 @@ export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = p
       priority: z.enum(TICKET_PRIORITIES).optional(),
       tags: z.array(z.string().max(30)).max(10).optional().describe(`Lowercase words; letters, digits, dots, dashes and underscores. ${CHECKLIST_TAG_HINT}`),
       assignee: assigneeArg,
-      workspace_id: z.string().max(100).optional().describe('Where the work happens. Agents’ tickets are always in their own workspace.'),
+      workspace_id: z.string().max(100).optional().describe('Where the work happens. Agents’ tickets are always in their own workspace; an admin token’s default workspace when left out (empty for the shared queue).'),
       session_id: sessionIdArg,
     }),
     handler(ctx, args) {
       const caller = callerOf(ctx);
       const assignee = args.assignee === undefined ? null : assigneeOf(tickets, ctx, args.assignee, args.session_id);
-      const t = tickets.create(caller, { summary: args.summary, description: args.description, type: args.type, priority: args.priority, tags: args.tags, assignee, workspaceId: args.workspace_id }, { sessionId: args.session_id });
+      const t = tickets.create(caller, { summary: args.summary, description: args.description, type: args.type, priority: args.priority, tags: args.tags, assignee, workspaceId: ticketWorkspaceOf(ctx, args.workspace_id, opts.workspaceExists) }, { sessionId: args.session_id });
       ctx.affected(`ticket:${t.id}`);
       return { summary: `Created ${t.id}${t.assignee?.kind === 'user' ? ' for a person' : ''}.`, ticket: ticketHead(ctx, t), ui: uiUrl(t.id) };
     },

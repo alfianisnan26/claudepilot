@@ -561,7 +561,8 @@ chatController.onRecoverCapped = (i) => {
     },
   );
 };
-registerTicketTools(tickets);
+// T-1105: a token's default workspace is used only while the workspace is there (resolve answers null for a removed one).
+registerTicketTools(tickets, undefined, { workspaceExists: (id) => workspaces.resolve(id) !== null });
 // The chat's own tools for its Claude (rename itself); bound to the session its token was minted for.
 registerChatTools(chatController);
 // Chat content: the agent hands a file to the person as an artifact card (artifact_publish).

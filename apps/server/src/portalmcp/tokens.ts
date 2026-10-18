@@ -33,6 +33,7 @@ interface Row {
   last_used_ip: string | null;
   revoked_at: string | null;
   revoked_reason: string | null;
+  default_workspace_id: string | null;
 }
 
 declare module '@isnanme/core' {
@@ -90,6 +91,7 @@ function view(r: Row): PortalToken {
     lastUsedIp: r.last_used_ip,
     revokedAt: r.revoked_at,
     revokedReason: r.revoked_reason,
+    defaultWorkspaceId: r.default_workspace_id ?? null,
   };
 }
 
@@ -233,6 +235,7 @@ export class PortalTokens {
         expiresAt: row.expires_at,
         client: null,
         vaults: vaultsOf(row.vaults),
+        defaultWorkspaceId: row.default_workspace_id ?? null,
       },
     };
   }
@@ -246,6 +249,20 @@ export class PortalTokens {
     } catch {
       // bookkeeping only: a database that can't be written must not fail the call
     }
+  }
+
+  /**
+   * T-1105: sets (or with null clears) where the token's tickets go when a call names no workspace. The caller (module.ts) has checked the
+   * person's manage on the token and that the workspace is one they and the token may operate. False when the token is gone or not live.
+   */
+  setDefaultWorkspace(id: string, workspaceId: string | null): boolean {
+    const db = this.#writable;
+    if (!db) throw new AppError('SERVICE_UNAVAILABLE', 'The portal’s database is read-only right now.');
+    const r = db
+      .prepare('UPDATE pmcp_tokens SET default_workspace_id = ? WHERE id = ? AND revoked_at IS NULL AND expires_at > ?')
+      .run(workspaceId, id, this.now().toISOString());
+    if (r.changes > 0) this.onChange?.();
+    return r.changes > 0;
   }
 
   /** Revokes one token: it fails on its next request. False when it was already revoked or doesn't exist. */

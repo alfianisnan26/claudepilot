@@ -3634,6 +3634,15 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 46,
+    name: 'portal mcp: an access token may have a default workspace for the tickets it makes',
+    up(db) {
+      // T-1105: an external client's tickets (Hermes) landed in the shared queue, where a workspace's leads can't hand them out. A person
+      // with manage on the token sets it (never an agent tool); ticket_create without workspace_id takes it while the token may operate it.
+      db.exec(`ALTER TABLE pmcp_tokens ADD COLUMN default_workspace_id TEXT`);
+    },
+  },
 ];
 
 /**
