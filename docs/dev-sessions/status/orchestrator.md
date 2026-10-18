@@ -54,6 +54,8 @@
 - D-78: only production/uat go to a person; all else "FOR THE COORDINATOR:" on the ticket. D-70 feed lanes by session_message.
 - D-61 nothing heavy in the pod; D-66 the lead runs QC at premerge (lanes' allow lists refuse it, T-586).
 - The pipeline gate stays on; only the owner's own word turns it off (T-731 10699).
+- 03:15 owner order via the coordinator (T-968 11240): coordinator builds T-968 S1 runtime/S3/S4/S6; this crew only lands
+  S1-token + S2 fast (QA lanes take T-968 first). No new T-968 slices.
 
 ## FOR THE COORDINATOR (D-78; each also on its ticket)
 - Deploy batch 32 (74599ece). T-948: PORT_PROXY_HOST_SUFFIX and the claudepilot-app-ports route. T-976: live Traefik X-Forwarded-Proto;
