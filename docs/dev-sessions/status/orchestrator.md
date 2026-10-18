@@ -1,10 +1,9 @@
-# orchestrator status (2026-10-18 05:20 UTC, session 355881a3; older entries: git history)
-
+# orchestrator status (2026-10-18 08:13 UTC, session 355881a3; older entries: git history)
 ## DONE
 - CLOSED 07:00 (stale since the 06:4x session end put them back in the queue): T-611 (ff4eaf47, QA PWG #8715, blind APPROVE
   #8537), T-1049 (6c30af2d in b32, QA PWG #10771); T-524 08:05 (OOM pinned, master max 74% over a busy hour).
 
-## IN FLIGHT (6 of 6 workers, D-71; QA/review sonnet, D-63; ids in full in session_family)
+## IN FLIGHT (4 workers max while pod >85% mem, coordinator T-595 12506; c691df71 ENDED, a3554d40 ending after WIP push)
 - DEPLOY #365 (62a44a10, prod) ran with gate=false: on T-731 11343; incident T-1082 and its post-mortem are the coordinator's.
 - BATCH 34: premerge/b34 037f7e4b (pushed) = integration 5e84f4d7 + T-971 H1 (+fmt f6983797) + T-976 (+fmt 99f8bb69) + T-425
   2b57efce + T-565 55f5aa8e; app.ts conflict (T-976 setSessionCookie vs T-968 healManager): kept both; pack fresh. QC#1 expired in queue
@@ -33,8 +32,7 @@
   T-1033; now T-980 gaps (repo_id same 404, workspace_id mismatch, P3/P4/P8 tests; #12376; T-1261 split) + T-1076 proof.
   T-961 green 128/128; T-1076 fix cae18cd6 proof bdo9erb2x queued. T-975 FIX2 3a21e02a delta QA PWG #11446 -> blind d9f18599.
 - 3753d3c2: T-971 d8189e5f Job bpwzt2g06 (B10, M11 fixed); T-634 0f4ffde6 QA PWG #11432 -> C2 test; T-356 N8 Job.
-- c691df71 (QA): T-1033 D1/D2 on 576ad450 (bwyypm3wd), then T-1083 M1-M6, T-634. T-980 PWG #12146 (P3/P4/P8 survive).
-- d9f18599 (blind): S1a d01b5949, T-1043 S0b delta f30675f5, T-968 S1-token 2ce4d72e + S2b, S1b-1 4850a1c8 after its
+- d9f18599 = sole QA/blind; adds c691df71's queue: T-1033 D1/D2 (bwyypm3wd), T-1083 M1-M6, T-634, T-980 delta. Blind: S1a d01b5949, T-1043 S0b delta f30675f5, T-968 S1-token 2ce4d72e + S2b, S1b-1 4850a1c8 after its
   Job; then T-1065, T-975, T-969 V5, T-970.
 - T-975 FIX2 tests (a3554d40) -> delta c691df71 -> blind (mig 788). T-970 5a0fa697 rc0 -> QA; image build FOR THE COORDINATOR.
 - T-565 9d1d1203 QA PWG (cfbdbfb0, T5 survived) -> T5 fix 59451a5f Job b7aafa4e rc0, QA PWG; blind PWG (T-595) -> README 55f5aa8e -> READY, into batch 34;
@@ -44,6 +42,7 @@
 - T-356 S1 e03d7f21 QA PWG #11120 (N7 `/` guard authz.ts:171 survived) -> N7 test 3753d3c2 (11380) -> delta -> blind; lead reads authz.
 
 ## DECISIONS (binding)
+- 08:13 coordinator: pod at 10 GB limit (D-85 Konfersi leads): at most 4 live workers while pod >85% mem (T-595 12506).
 - D-81: same builder through all fixes; one QA re-checks; blind only for security/auth/rules/infra/migrations/money/uat/prod.
 - Coordinator order: T-948 > T-1043 MU2 S0 (D-82, blind review per slice) > T-968 (D-80) > T-971 H1+H2, T-974, T-975, T-565.
 - The coordinator runs all deploys; I start none. I gate with gate-job.sh before every merge and tell T-731 when a batch lands.
