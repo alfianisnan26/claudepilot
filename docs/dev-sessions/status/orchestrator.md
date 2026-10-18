@@ -9,8 +9,8 @@
 ## IN FLIGHT (6 of 6 workers, D-71; QA/review sonnet, D-63; ids in full in session_family)
 - DEPLOY #365 (rmvcyeslw4a7ecb, 62a44a10, prod, actor "ui") ran with gate=false (the tree was gated by gate-job, 10823):
   reported on T-731 11343; the coordinator opened incident T-1082. Its post-mortem is the coordinator's.
-- BATCH 34: premerge/b34 0a9685ea = integration + T-971 H1 fdd38c6b + T-976 d68ab35c; gate GREEN at aa58499a; QC format FAIL
-  (7 batch files -> format commits a3554d40 (H1), 2a0edbd8 (T-976, Job bdlp8stxq); 8 older -> T-1080). Then add T-425 2b57efce
+- BATCH 34: premerge/b34 977cd562 (local) = integration + T-971 H1 fdd38c6b + H1 fmt f6983797 + T-976 d68ab35c; QC format
+  FAIL before fmt; waits T-976 fmt (2a0edbd8, baov0fphs); 8 older files -> T-1080. Cluster: Pending "Insufficient memory" (T-595 11518). Then add T-425 2b57efce
   (rc0), T-969 after V5 -> merge integration -> context-pack check -> QC -> gate -> two-step landing -> T-731.
 - T-968 (coordinator builds S1 runtime/S3/S4/S6; this crew lands S1-token + S2 only). S1-token 5ccfb52c rc0, QA PWG #11312
   -> fix a8fca5a3 (2a0edbd8, Job b1gahci5o) -> re-check c691df71; blind PWG 11365 (K8 -> test ccef3ef4, own Job;
@@ -25,7 +25,8 @@
 - 2a0edbd8 Jobs: T-921 db1d8d19 rc0, QA PWG #11350 (J1, J4 survive) -> tests (11368) -> delta c691df71 -> blind; T-257 d34f47b2 rc1 (test bug) -> fix e22ae23d, Job after T-968's two;
   T-976 fmt re-run baov0fphs (patch lost to $OUT), T-968 a8fca5a3 b1gahci5o, T-565 bzq96a9ey on 59451a5f running.
 - T-1033 53527bfa QA mutants #11449: D1, D2 SURVIVED -> same builder 2a0edbd8 (tests + default 3600 s, decision #11467).
-- T-119 S1a (pure ticketFlow.ts + tests, no migration) -> 3753d3c2, sonnet (#11470). T-523 + T-402 audits -> a3554d40.
+- T-119 S1a 11e16382 (Job queued) -> S2a Gantt UI on fixture, 3753d3c2, sonnet (#11470). T-980 dbb1bd76 rc0 8/8, 4 killed -> QA.
+- T-968 S1 delta a8fca5a3 QA PASS #11509 (K7, W1 killed) -> blind delta after K8 Job. T-523 + T-402 audits -> a3554d40.
 - 76845676: S0b x T-976 aaa9169f Job bk7jaaj34 -> S0c-on-s0b 78b0e668 (6 mutants) -> T-1065 641b45cf + T-1084 229fc44f
   (no issued-token match: no incident) one Job -> blind d9f18599.
 - a3554d40: H1 fmt Job b9xx1x0um, T-980 bpc5x0blu, T-961 7684391b b44zf2p1l (QA PWG #11433); worked: T-1076 (flaky
@@ -39,7 +40,7 @@
 - T-1065 3258ec46 QA PWG #11410 (prose colon over-cut, PRD line) + T-1084 (token-shaped literal valueRedact.test.ts:9)
   -> 76845676 -> blind d9f18599. T-980 fix dbb1bd76 (bpc5x0blu) -> QA c691df71.
 - T-356 S1 e03d7f21 QA PWG #11120 (N7 `/` guard authz.ts:171 survived) -> N7 test 3753d3c2 (11380) -> delta -> blind; lead reads authz.
-- 04:38 a3554d40 and c691df71 processes died, then resumed; c691df71's Jobs were still alive. T-1043 S0b blind PWG #11081 (D5, D7) with 76845676 PRIORITY.
+- T-1043 S0b blind PWG #11081 (D5, D7): Job 19e76665 Pending OOM, re-queued besujkveh. 3753d3c2 interrupted 05:27, resumed.
 
 ## DECISIONS (binding)
 - D-81 risk-based review: same builder through all fixes; one QA, the same QA re-checks; blind review only for security, auth,
