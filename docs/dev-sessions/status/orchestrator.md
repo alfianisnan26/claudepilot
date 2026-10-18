@@ -4,7 +4,7 @@
 - Batch 33 LANDED ~02:40: T-974 f70d333c. Gate claudepilot-gate-dc259a2-2c40 GREEN on dc259a25. SLIP (mine): integration
   moved during the gate (coordinator af45f95a, 7ef4feca, a862d367, 43bcc89c), and I pushed the merge 76bdc9d0 WITHOUT
   re-gating it (my chained command didn't stop on the non-empty diff). Re-gate b2j1ii0mf on 76bdc9d0 running. Do not
-  deploy 76bdc9d0 until it is green. Portal MCP unreachable at 02:42, so this goes on T-595/T-731 when it is back.
+  deploy 76bdc9d0 until it is green: told on T-731 11163, self-report T-595 11166.
 - Batch 32 LANDED 22:54 (74599ece): T-382 S6, T-294 FIX1, T-1049. Batch 31 / T-948 live: close on live checks.
 - T-860 S2c on integration (a87d00b8); the realpath guard side is the coordinator's. Older batches: git history.
 
@@ -25,7 +25,8 @@
 - T-976 a2da98cb QA PWG #11040 (C6 browser socket survived) -> gap fix d68ab35c (2a0edbd8: socket.test.ts handshakes,
   decode-fallback pin; index.ts wiring left as written gap), Job bplwz9ct5 rc0 (C6, D1 killed) -> delta PWG #11066 -> blind d9f18599 on d68ab35c.
   T-1042 audit only (2a0edbd8), build after T-976 is live.
-- T-968 S2b be6b3adc QA PWG #11080 (15/15 killed) -> nested mask fix 5688811c (11109), Job bj718gl5c -> delta + blind.
+- T-968 S2b be6b3adc QA PWG #11080 (15/15 killed) -> nested mask fix 5688811c (11109), Job bj718gl5c rc0 -> delta c691df71 + blind d9f18599.
+- T-970 5a0fa697 (Chromium 1.62.1 in the job image) Job b3sgbc372 rc0 -> QA d9f18599; image build FOR THE COORDINATOR #11160.
 - T-971 H2 delta 03bc42d6 QA PWG #11062 (H5, H9 edges survive) -> edge tests 3753d3c2 (11110) -> re-check; blind on S1.
 - T-565 FIX 103c4d80 QA PWG (T-595 10968) -> gap 1 9d1d1203 Job b3pik9awy rc0 (Y1-3 killed; T-595 11123); N11/N14 dropped
   (labels exist nowhere, 10973) -> delta c691df71 -> blind (infra).
