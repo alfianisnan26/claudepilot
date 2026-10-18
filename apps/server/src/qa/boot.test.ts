@@ -10,7 +10,8 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import type { SystemStatus } from '@portal/contracts';
+import { FOUNDING_USER_ID, type SystemStatus } from '@portal/contracts';
+import { ManagerTokens } from '../portalmcp/managers.js';
 import { MIGRATIONS } from '../store/migrations.js';
 import { generateSecretKey, parseSecretKey } from '../store/secretBox.js';
 import { Store } from '../store/store.js';
@@ -56,6 +57,7 @@ async function freePort(): Promise<number> {
 
 interface Portal {
   child: ChildProcess;
+  base: string;
   output(): string;
   system(): Promise<SystemStatus>;
 }
@@ -117,7 +119,7 @@ async function withPortal(dataDir: string, fn: (portal: Portal) => Promise<void>
       assert.equal(res.status, 200);
       return ((await res.json()) as { data: SystemStatus }).data;
     };
-    await fn({ child, output: () => output, system });
+    await fn({ child, base, output: () => output, system });
   } finally {
     await stop(child);
   }
@@ -185,6 +187,37 @@ test('control: a fresh database comes up healthy, and is gone when its test is o
   });
   assert.ok(child && (child.exitCode !== null || child.signalCode !== null), 'the portal was stopped when its test ended');
   assert.equal(children.size, 0, 'nothing left to kill');
+});
+
+test('T-968 Q3 (#11136), through the wiring in index.ts: a sign-out on the real server revokes the person’s manager token', { timeout: 120_000 }, async () => {
+  const dir = tempDirectory('cp-qa-boot-');
+  // A manager token of the code's person (the founding user), minted on the same database before the portal starts.
+  const store = await Store.open({ dataDir: dir, secretKey: parseSecretKey(KEY) });
+  const minted = new ManagerTokens(store).mint({ userId: FOUNDING_USER_ID, sessionId: 'gm-boot' });
+  store.close();
+  assert.ok(minted, 'a token was minted');
+  const tokenId = minted.tokenId;
+  const row = () => {
+    const db = new DatabaseSync(join(dir, 'portal.db'), { timeout: 5000 });
+    try {
+      return { ...(db.prepare('SELECT revoked_at, revoked_reason FROM pmcp_manager_tokens WHERE id = ?').get(tokenId) as { revoked_at: string | null; revoked_reason: string | null }) };
+    } finally {
+      db.close();
+    }
+  };
+  await withPortal(dir, async (portal) => {
+    const headers = { 'content-type': 'application/json', origin: portal.base };
+    const login = await fetch(`${portal.base}/api/login`, { method: 'POST', headers, body: JSON.stringify({ code: CODE }), signal: AbortSignal.timeout(10_000) });
+    assert.equal(login.status, 200);
+    const cookie = /portal_session=([^;]+)/.exec(login.headers.get('set-cookie') ?? '')![1];
+    // The twin: signed in, the token is still good.
+    assert.deepEqual(row(), { revoked_at: null, revoked_reason: null });
+    const out = await fetch(`${portal.base}/api/logout`, { method: 'POST', headers: { ...headers, cookie: `portal_session=${cookie}` }, signal: AbortSignal.timeout(10_000) });
+    assert.equal(out.status, 200);
+    const after = row();
+    assert.equal(after.revoked_reason, 'signed out', JSON.stringify(after));
+    assert.ok(after.revoked_at);
+  });
 });
 
 test('a test that throws still takes its portal down with it', { timeout: 120_000 }, async () => {

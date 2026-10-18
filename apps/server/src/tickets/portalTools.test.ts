@@ -172,6 +172,13 @@ test('a General Manager token (T-968, QA c691df71): ticket_update to done or won
     assert.equal(await err(m, { id: 'T-1', status: 'done' }), undefined, 'the same status is a no-op');
     assert.equal(status('T-1'), 'done');
     assert.equal(r.tickets.get(UI, 'T-1').events.length, events, 'no event');
+    // One closed status to another (done → wont_do) is refused too, and the ticket is unchanged (QA c691df71, #11312); an operate token does it.
+    const across = await err(m, { id: 'T-1', status: 'wont_do' });
+    assert.equal(across?.code, 'FORBIDDEN', JSON.stringify(across));
+    assert.equal(status('T-1'), 'done', 'T-1 untouched by the manager');
+    assert.equal(r.tickets.get(UI, 'T-1').events.length, events, 'no event');
+    assert.equal(await err(operate, { id: 'T-1', status: 'wont_do' }), undefined);
+    assert.equal(status('T-1'), 'wont_do');
     // A status that neither closes nor reopens stays open to it.
     assert.equal(await err(m, { id: 'T-4', status: 'blocked' }), undefined);
     assert.equal(status('T-4'), 'blocked');

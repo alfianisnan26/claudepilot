@@ -155,7 +155,7 @@ test('Q3 (#11136): the token is revoked on ANY sign-out of the person, even with
     portal.signOut(phone);
     assert.equal(await works(mine.secret), false, 'one sign-out stops the manager, though the laptop is still signed in');
     assert.equal(h.module.managers.verify(mine.secret).ok, false);
-    assert.ok(portal.session(laptop),'the laptop session itself is untouched');
+    assert.ok(portal.session(laptop), 'the laptop session itself is untouched');
     assert.equal(await works(his.secret), true, "another person's manager is untouched");
     // The next sign-in mints a new token, and the laptop's later sign-out stops that one too.
     h.alive.add('gm5');

@@ -197,7 +197,7 @@ const USER_LABEL_MAX = 40;
 const OPEN_SQL = TICKET_OPEN_STATUSES.map((s) => `'${s}'`).join(', ');
 /** The refusal for a General Manager token that would close or reopen a ticket (close() and update(); #11136 b). */
 const MANAGER_NO_CLOSE = 'The General Manager does not close tickets: QA closes a ticket on its pass.';
-const CLOSED_SQL =TICKET_CLOSED_STATUSES.map((s) => `'${s}'`).join(', ');
+const CLOSED_SQL = TICKET_CLOSED_STATUSES.map((s) => `'${s}'`).join(', ');
 
 const invalid = (field: string, message: string) => new AppError('VALIDATION_FAILED', message, { details: { [field]: message } });
 const notFound = () => new AppError('NOT_FOUND', 'No such ticket.');
