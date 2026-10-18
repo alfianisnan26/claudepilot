@@ -647,3 +647,34 @@ session's result. With it, a Job that passed is saved, and the same work later r
 - **Not covered:** `scripts/gate-job.sh` is never reused (the charter wants the full gate on the exact commit; reuse of gate results is owner decision T-578).
   A pass that depended on something outside the key (the network, the clock, a registry) is reused too: leave `--reuse` off for such a check.
 - **Tests:** `apps/server/src/ci/jobRun.test.ts` (opt-in, hit, miss, failure, each changed key part, the age limit, the store's own files, and mutants that drop the commit, `--keep-tests` or the `Complete` condition).
+
+## 25. `job-run` on the owner's Mac: the door (T-1083, D-84)
+
+The owner gave his Mac as more room for `job-run` Jobs ("load balance otomatis", D-84). `scripts/job-run.sh` reaches the Mac only through the portal's door,
+never over Docker or SSH itself.
+
+- **The door:** `/jobrun/mac/*` (`apps/server/src/jobrun/`). It sits outside `/api`, like `/mcp` and `/hooks/ci`, because `/api` takes only the session cookie.
+  - `GET /slot` answers `{slot:true, free}`, or `{slot:false, reason}` with the reason `no-mac`, `mac-not-running`, `mac-full` or `no-runtime`.
+  - `GET /runs` lists the calling session's own runs. Each has `where: 'mac'`.
+  - `POST /runs` starts a run, `GET /runs/:id/log` reads its log, and `DELETE /runs/:id` stops it. Each works only on a run the same session started.
+  - Up to S1b-2 there is no Mac runtime: the slot says `no-runtime` and a start answers 503.
+- **Its key:** the calling session's own agent token, `PILOT_MCP_TOKEN` (`cpst_`), sent as `Authorization: Bearer`. No token, table or migration of its own
+  (coordinator, T-1083 #11498).
+  - Every call runs `AgentAccess.verify`: the token exists, is not revoked or expired, agent access is on for its workspace, and its session is alive.
+  - The principal maps to `{kind:'jobrun', session, workspaceId}` in `jobrun/authz.ts`. That caller reaches nothing else: no Portal MCP scope, and `/mcp` is unchanged.
+  - A Portal MCP token (`cpat_`, an admin's too), a manager token (`cpmt_`), the session cookie, a query string and a Basic header are never read as a key.
+  - `job-run.sh` finds the door at `${PILOT_MCP_URL%/mcp}/jobrun/mac`, the portal as the session's workspace reaches it (`portalmcp/internalUrl.ts`). It sends
+    the token through `curl -K -`, never on the command line. With no `PILOT_MCP_TOKEN` it logs `mac=no-slot reason=no-token` and runs in the cluster (S1b-3).
+- **Settings (an admin's, group CI, read at each call):**
+  - `jobrun.macWorkspace`: the workspace whose Docker runs Mac Jobs. Empty, the default, means no Mac (`no-mac`).
+  - `jobrun.macClients`: the workspaces whose sessions may call the door. Empty, the default, means none: the door is closed until an admin names both.
+- **Refusals:** each is the same 404 as a route that does not exist: no key, another kind of key, a token that verify refuses, a workspace off the list,
+  or another session's run.
+- **Guards:**
+  - a body of at most 64 KiB, read within 10 s (413, 408), checked before the key is read;
+  - 120 calls a minute per session (429);
+  - 30 refusals a minute per address, after which that address waits (429).
+- **Tests:** `apps/server/src/jobrun/jobrun.test.ts`, on the real `AgentAccess`. It covers every refusal above, the client list, the caller mapping, the slot
+  states, run ownership by session, and the guards.
+- **Next:** S1b-2 runs Jobs on the Mac: the fetch and run containers on one `-home` volume, credentials on exec stdin, the log masked with `chat/redact.ts`.
+  S1b-3 is placement in `job-run.sh`: caps counted across both sides, and one retry on the cluster.

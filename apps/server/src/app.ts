@@ -105,6 +105,9 @@ import { createTicketRoutes } from './tickets/routes.js';
 import type { CiService } from './ci/service.js';
 import { createCiRoutes } from './ci/routes.js';
 import { createCiHookRoutes } from './ci/upstreamHook.js';
+import { declareJobRunPolicies } from './jobrun/authz.js';
+import { createJobRunDoor } from './jobrun/routes.js';
+import { macClientsFrom, macWorkspaceFrom } from './jobrun/settings.js';
 import type { BrowserModule } from './browser/index.js';
 import { createReposRoutes, createWorkspaceReposRoutes, type ReposService } from './repos/index.js';
 import { isWorkspaceId, PLAIN_NAME } from './names.js';
@@ -118,7 +121,7 @@ import type { ConnectModule } from './connect/index.js';
 import { createClaudeVersionRoutes, createWorkspaceClaudeVersionRoutes, type ClaudeVersions } from './claudeversion/index.js';
 import { createCodespacesRoutes, type Codespaces } from './codespaces/index.js';
 import type { Platform } from './platform/index.js';
-import { actorOf, actorString, actorUserId, visible } from './authz/seam.js';
+import { actorOf, actorString, actorUserId, systemActor, visible } from './authz/seam.js';
 import type { HeldShare } from './identity/grants.js';
 import type { OidcClient } from './identity/oidc.js';
 import { identityRoutes } from './identity/routes.js';
@@ -1182,6 +1185,22 @@ export function createApp(
     app.route('/api/ci', cr);
     // T-486 S2: the upstream webhook, outside /api and the session guard: its door is the Git host's signature (ci/upstreamHook.ts).
     app.route('/hooks/ci', createCiHookRoutes(ci) as never);
+  }
+
+  // T-1083 S1b (D-84): the job-run Mac door, outside /api. Its only key is the calling session's own agent token (`PILOT_MCP_TOKEN`, checked
+  // by AgentAccess.verify); its workspace must be on `jobrun.macClients` (jobrun/authz.ts). No token, table or pmcp scope of its own.
+  if (portalMcp) {
+    declareJobRunPolicies();
+    const agents = portalMcp.agents;
+    app.route(
+      '/jobrun/mac',
+      createJobRunDoor({
+        verify: (secret) => agents.verify(secret),
+        clients: macClientsFrom(settings?.settings),
+        macWorkspace: macWorkspaceFrom(settings?.settings),
+        workspaceStatus: async (id) => (await workspaces.get(id, systemActor('jobrun'))).status,
+      }) as never,
+    );
   }
 
   // Workspace git: every workspace's repositories at a glance, the audit, and one repository (docs/prd/workspace-git.md).
