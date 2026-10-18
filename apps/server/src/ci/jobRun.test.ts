@@ -851,7 +851,8 @@ test('T-1083 S1a: where. With no Mac door every Job runs in the cluster as befor
     { name: 'claudepilot-job-0000000d', chat: 'chat-a' },
   ]).run(['--list']).out;
   assert.match(l, /^claudepilot-job-0000000c\tchat-a\tagent\trunning\t\S+\tmac$/m);
-  assert.match(l, /^claudepilot-job-0000000d\tchat-a\tagent\trunning\t\S+\tcluster$/m, 'a Job without the label was made in the cluster');
+  // QA #11426 (a): a Job without the label is NOT shown as `cluster`: every Job this script makes carries it, so `-` marks an old or foreign one.
+  assert.match(l, /^claudepilot-job-0000000d\tchat-a\tagent\trunning\t\S+\t-$/m, 'a Job without the label shows -');
 });
 
 test('usage errors: nothing is created', () => {

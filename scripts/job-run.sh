@@ -120,7 +120,7 @@ case "${1:-}" in
   --list)
     jobs_json | jq -r "$JQ_FIN"' .items[] | [.metadata.name, (.metadata.labels["job-run/chat"] // "-"), (.metadata.labels["job-run/role"] // "-"),
       (if fin then (if (.status.succeeded // 0) > 0 then "succeeded" else "failed" end) elif .spec.suspend then "queued" else "running" end),
-      .metadata.creationTimestamp, (.metadata.labels["job-run/where"] // "cluster")] | @tsv' | grep . || echo "no job-run jobs"
+      .metadata.creationTimestamp, (.metadata.labels["job-run/where"] // "-")] | @tsv' | grep . || echo "no job-run jobs"
     exit 0 ;;
   --stop)
     sel=; chat=
