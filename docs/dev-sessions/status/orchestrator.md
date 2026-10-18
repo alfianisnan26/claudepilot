@@ -24,7 +24,11 @@
 - T-976 merge resolved a2da98cb (2a0edbd8), Job eaee60e7 rc0 (typecheck, cookie/socket/auth/SSO tests; not verified: the SSO
   test failing without the fix) -> QA c691df71 (#10931 interim) + blind d9f18599.
 - T-968 S2b be6b3adc FINAL: Job 74b74e97 rc0, 18 mutants applied and killed -> QA c691df71 + blind d9f18599. PRD fix 2a0edbd8.
-- T-565 FIX 103c4d80 QA PWG (relay T-595 10968: yaml regex check, N11/N14) -> gaps 2a0edbd8 -> delta c691df71 -> blind (infra).
+- T-565 FIX 103c4d80 QA PWG (T-595 10968) -> gap 1 e309aacc (parsed yaml + 3 mutants), Job bt7ea72qt; N11/N14 dropped
+  (labels exist nowhere, 10973) -> delta c691df71 -> blind (infra).
+- T-968 PRD fix a32754c3 (gaps 2-7) -> re-check d9f18599. T-968 S1 (manager kind, cpmt_ token, migration) 2a0edbd8 now (10976).
+- T-251 (unknown usage) 3753d3c2: audit vs integration (decide.ts unknownUsage, t255.test), build only what is missing.
+- T-1043 S0c (MCP tools through can()) 76845676 on ticket/T-1043-s0c, beside T-1065.
 - T-961 (deploy outage: PriorityClass, headroom, release pre-check; 10887) -> QA + blind (infra); PriorityClasses in
   deploy/k3s/priorityclasses.yaml are FOR THE COORDINATOR if Argo can't create them.
 - T-1065 (new: redact.ts misses short passwords/URL userinfo; 10888) 76845676 while its Job queues -> QA + blind.
@@ -32,7 +36,7 @@
   the multi-user switch); FR19 enforced by test + exemption list, not at start-up -> QA + blind; lead reads the authz diff.
 - Queues: c691df71 S2b > T-976 > H2 delta > T-975 FIX2 > T-356 > T-425 gaps > T-565 delta. d9f18599 H2 S1 > S0b f5ae317e >
   H1 FIX2 > T-969 > T-974 FIX3 > T-565 > T-975 > PRD > S2b. a3554d40 T-974 > T-969 > H1 > T-961 rerun > T-975 FIX2.
-  76845676 T-1065 (then the T-976 reader merge). 2a0edbd8 T-565 gaps > PRD. 3753d3c2 H2 fix > T-356 > T-425 gaps (12acb9ed).
+  76845676 T-1065 + S0c (then the T-976 reader merge). 2a0edbd8 T-565 gap 1 + T-968 S1. 3753d3c2 H2 fix, T-356, T-425 gaps + T-251.
 - 00:25 my process stopped and the coordinator restarted it; the coordinator says the job-run queue is draining (gates first).
 
 ## DECISIONS (binding)
@@ -41,6 +45,8 @@
 - Coordinator order: T-948 > T-1043 MU2 S0 (D-82, blind review per slice) > T-968 (D-80) > T-971 H1+H2, T-974, T-975, T-565.
 - The coordinator runs all deploys; I start none. I gate with gate-job.sh before every merge and tell T-731 when a batch lands.
 - 17:40 pace order: no idle lanes; a lane waiting on its Job takes the next slice. D-75 stays: one Job per commit.
+- Owner order 2026-10-18 (via the coordinator): WIP 2 per lane, one slice on a Job and one worked; never hold lanes for
+  results. The queue runs at most 3 Jobs at once, gates first. Applied 00:44, list on T-731 10977.
 - D-78: only production/uat go to a person; all else "FOR THE COORDINATOR:" on the ticket. D-70 feed lanes by session_message.
 - D-61 nothing heavy in the pod; D-66 the lead runs QC at premerge (lanes' allow lists refuse it, T-586).
 - The pipeline gate stays on; only the owner's own word turns it off (T-731 10699).
