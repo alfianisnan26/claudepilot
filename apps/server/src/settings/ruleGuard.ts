@@ -56,7 +56,15 @@ const DYNAMIC_WORDS = /claude|settings|\.mcp|mcp\.json|allowlist/i;
 // Rule-file path fragments, for the text of code that writes a file (T-1092). Never a bare word: "claudepilot-job-x",
 // "one.claude" or "claudes/" in a note's data is not a rule file. A quoted piece ('.cla' + 'ude') is fragmentString's.
 const FRAGMENT_WORDS = /\.claude\/|\.claude\.json|settings(\.local)?\.json|\.mcp\.json|managed-settings|check-allowlist|\/etc\/+claude-code|\/etc\/+claudepilot|CLAUDE_CONFIG_DIR/i;
+// The narrow net of bare words for code that writes (T-1092 review): a word glued to a path, glob or quote edge
+// ('x.claude'.slice(1), '.claude*/settings*.json', 'CLAUDE_' + 'CONFIG_DIR'). Prose stays out: "one.claude run",
+// "claudes/c2", "claudepilot-job-x", "the settings page", "claude usage" (a letter, a space or a sentence's last dot follows).
+const BARE_NET = /claude(?:[\/*?\[\]'"\x60]|\.(?=[\w*?\[]))|settings(?:[\/*?\[\]'"\x60_]|\.(?=[\w*?\[]))|allowlist|CLAUDE_['"\x60+]/i;
+// Code that lists a folder: with a quoted two-letter start of a rule file's name ('.c', '.m') it can find one.
+const LISTING = /glob|readdir|listdir|scandir|iterdir|os\.walk|opendir|Dir\.(children|entries|each|glob)/i;
 const RULE_NAMES = ['.claude/settings.json', '.claude/settings.local.json', '.mcp.json', '.claude.json', 'check-allowlist.mjs'];
+// Protected paths, matched as quoted pieces only when the piece carries a slash or underscore ('/etc/' + 'claudepilot/...').
+const RULE_PATHS = ['/etc/claude-code/managed-settings.json', '/etc/claudepilot/bin/policy-rule-guard.cjs', 'CLAUDE_CONFIG_DIR/settings.json'];
 // Path patterns compared segment by segment with a glob (the last one is the .claude folder itself).
 const CANDIDATES = [['.mcp.json'], ['.claude.json'], ['.claude', 'settings.json'], ['.claude', 'settings.local.json'], ['check-allowlist.mjs'], ['.claude']];
 
@@ -262,16 +270,36 @@ function couldMatch(pattern, baseDir, dotglob) {
   return false;
 }
 
+/** The quoted strings in code, short ones included so that a '.' does not throw the pairing of the quotes after it. */
+function quotedStrings(code) {
+  const re = /(['"\x60])((?:\\.|(?!\1)[^\\\n]){0,200})\1/g;
+  const out = [];
+  let m;
+  while ((m = re.exec(code)) && out.length < 2000) out.push(m[2]);
+  return out;
+}
+
 /** The rule file a quoted string in code is a piece (3+ characters) of ('.cla' + 'ude/settings.json'), or null. A fixed name, never the code's text. */
 function fragmentString(code) {
-  const re = /(['"\x60])((?:\\.|(?!\1)[^\\\n]){3,200})\1/g;
-  let m;
-  while ((m = re.exec(code))) {
-    const s = m[2];
+  for (const s of quotedStrings(code)) {
+    if (s.length < 3) continue;
     const w = FRAGMENT_WORDS.exec(s);
     if (w) return w[0].toLowerCase();
     for (const name of RULE_NAMES) if (name.includes(s)) return 'a piece of ' + name;
   }
+  return null;
+}
+
+/** The narrow net (T-1092 review): a bare word at a path, glob or quote edge, a glob that could match a rule file, a piece of a protected path, a folder listing with a two-letter start. */
+function bareNet(code) {
+  const w = BARE_NET.exec(code);
+  if (w) return w[0].toLowerCase();
+  const strings = quotedStrings(code);
+  for (const s of strings) {
+    if (/[*?[]/.test(s) && /[A-Za-z]/.test(s) && couldMatch(s, null, true)) return 'a pattern that could match a rule file';
+    if (s.length >= 3 && /[\/_]/.test(s)) for (const p of RULE_PATHS) if (p.includes(s)) return 'a piece of ' + p;
+  }
+  if (LISTING.test(code) && strings.some((s) => s.length === 2 && ['.claude', '.mcp.json', 'settings', 'check-allowlist'].some((n) => n.startsWith(s)))) return 'a folder listing that looks for a rule file';
   return null;
 }
 
@@ -288,7 +316,7 @@ function inlineReason(code) {
   if (!WRITE_API.test(code)) return null;
   if (MENTION.test(code)) return 'mention';
   const w = FRAGMENT_WORDS.exec(code);
-  const word = w ? w[0].toLowerCase() : fragmentString(code);
+  const word = w ? w[0].toLowerCase() : fragmentString(code) || bareNet(code);
   if (word) return 'the command writes a file and its text names something like a rule file: ' + word;
   const d = OBFUSCATION.exec(code);
   if (d) return 'the command writes a file and its text decodes or hides a name: ' + d[0].toLowerCase();

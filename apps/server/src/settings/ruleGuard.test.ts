@@ -1473,6 +1473,7 @@ test('T-1092: a heredoc writing a notes file whose text says claudepilot-job-x, 
     "txt = '''# Status lead",
     '- job claudepilot-job-x finished; one.claude run moved to claudes/c2',
     '- the settings page and the claude usage tile are fine',
+    '- asked claude. then fixed the settings.',
     "'''",
     "open(p, 'w').write(txt)",
     'EOF',
@@ -1497,3 +1498,31 @@ test('T-1092: a heredoc that writes or names a rule file is still refused; a fra
   // Shell values the guard cannot see keep the loose words: only "claude" and "settings" show here.
   refused(bash('A=claude; B=settings; echo x > ~/.$A/$B.json'), 'a target built from variables');
 });
+
+// T-1092 blind review of 810ab250: code that writes and reaches a rule file by a glob, a folder listing, a bare word cut
+// out of a longer string, or a protected path split in two. Each was let through by 810ab250; the narrow net refuses it.
+const py = (body: string) => `python3 - <<'EOF'\n${body}\nEOF`;
+const T1092_BYPASSES: [string, string][] = [
+  ['glob .claude*/settings*.json', py("import glob\nfor p in glob.glob('.claude*/settings*.json'): open(p,'w').write('{}')")],
+  ['glob .cla*/settings*', py("import glob\nfor p in glob.glob('.cla*/settings*'): open(p,'w').write('{}')")],
+  ['glob */settings*.json', py("import glob\nfor p in glob.glob('*/settings*.json'): open(p,'w').write('{}')")],
+  ['glob */settings.*', py("import glob\nfor p in glob.glob('*/settings.*'): open(p,'w').write('{}')")],
+  ['Path.glob .cl*/settings*.json', py("from pathlib import Path\nfor p in Path('.').glob('.cl*/settings*.json'): p.write_text('{}')")],
+  [
+    'node readdir with startsWith .cl and settings',
+    `node -e "const fs=require('fs');for(const d of fs.readdirSync('.'))if(d.startsWith('.cl'))for(const f of fs.readdirSync(d))if(f.startsWith('settings'))fs.writeFileSync(d+'/'+f,'{}')"`,
+  ],
+  ['node readdir with a two-letter start', `node -e "const fs=require('fs');for(const d of fs.readdirSync('.'))if(d.startsWith('.c'))fs.writeFileSync(d+'/x','{}')"`],
+  ['node slice of x.claude', `node -e "require('fs').writeFileSync('x.claude'.slice(1)+'/'+'Xsettings'.slice(1)+'Y.json'.slice(1),'{\\"w\\":1}')"`],
+  ['python slice of x.claude', py("p = 'x.claude'[1:] + '/' + 'Xsettings'[1:] + 'Y.json'[1:]\nopen(p,'w').write('{}')")],
+  ['CLAUDE_ + CONFIG_DIR', py("import os\nopen(os.environ['CLAUDE_'+'CONFIG_DIR']+'/x','w').write('{}')")],
+  ['/etc/ + claudepilot/...', py("open('/etc/'+'claudepilot/bin/policy-rule-guard.cjs','w').write('x')")],
+  ['/etc/claudep + ilot/...', py("open('/etc/claudep'+'ilot/bin/policy-rule-guard.cjs','w').write('x')")],
+];
+for (const [what, command] of T1092_BYPASSES) {
+  test(`T-1092 review: refused, ${what}`, () => {
+    const res = bash(command);
+    refused(res, what);
+    assert.doesNotMatch(res.stderr, /rule file is named/);
+  });
+}

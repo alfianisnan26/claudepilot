@@ -1011,7 +1011,12 @@ create`), and any command that is not a known reader (`cat`, `grep`, `jq`, `git 
   code writes a file and carries a piece of a rule file's name (`'.cla' + 'ude'`), a decoding call (base64, char codes,
   hex escapes) or a rule-file path fragment (`.claude/`, `.claude.json`, `settings.json`, `settings.local.json`,
   `.mcp.json`, `managed-settings`, `check-allowlist`, `/etc/claude-code`, `/etc/claudepilot`, `CLAUDE_CONFIG_DIR`); never a
-  bare word, so a note whose data says `claudepilot-job-x` or `one.claude` is written (T-1092). That refusal has its own
+  bare word in prose, so a note whose data says `claudepilot-job-x`, `one.claude run`, `claudes/c2` or `the settings page`
+  is written (T-1092). A narrow net still catches the bare words `claude`, `settings` and `allowlist` glued to a path,
+  glob or quote edge (`'x.claude'.slice(1)`, `'Xsettings'[1:]`, `'CLAUDE_' + 'CONFIG_DIR'`), a quoted glob that could
+  match a rule file (`glob.glob('*/settings.*')`), a quoted piece of a protected path with a slash in it
+  (`'/etc/' + 'claudepilot/...'`), and a folder listing (`readdirSync`, `glob`, `listdir`) with a two-letter start
+  (`startsWith('.c')`). That refusal has its own
   message ("the command writes a file and its text names something like a rule file: <fragment>"), not "a rule file is
   named". The loose words (claude, settings, mcp, allowlist) still count for shell values the guard cannot see (a variable
   or pipe as a target). Running the allow-list checker itself is a read.
