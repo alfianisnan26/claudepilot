@@ -12,7 +12,8 @@
   (T-595 11065), testkit.ts conflict: marker branch ticket/T-425-s2b-int a3f79dd5 -> 3753d3c2 resolves -> batch 34.
   After landing: FOR THE COORDINATOR remove the text-matching `git -C` denies (T-974).
 - T-980 (repos_list filter; worktree_create by path through can()) a3554d40, worked slice -> QA + blind.
-- BATCH 34 READY: T-971 H1 FIX2 fdd38c6b (re-check PASS #10967), T-976 d68ab35c (blind PWG #11125, decisions 11135).
+- BATCH 34: premerge/b34 1b8482cf = b33 + T-971 H1 fdd38c6b (PASS #10967) + T-976 d68ab35c (blind PWG #11125, 11135;
+  lead read sessionCookie.ts). QC bx4ymzpso running; gate after b33 lands.
   Next in: T-425 (conflict), T-969 (blind PWG 10969; V5 cross-workspace mutant rerun by d9f18599).
 - T-971 H2: blind #10978 (a) resumes a stopped session, (b) B13, (c) unscrubbed `why`, (d) B7 + QA edges -> one fix 3753d3c2 (11134).
 - T-1043 S0b blind PWG #11081 (D5 live per-message check untested, D7) + T-976 merge with markers ticket/T-1043-s0b-976
