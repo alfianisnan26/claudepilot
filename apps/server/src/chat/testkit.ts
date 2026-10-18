@@ -91,12 +91,11 @@ export class FakeWorkspaces {
   /** A host that takes stdin but never exits. */
   hangSends = false;
   /**
-<<<<<<< HEAD
    * A `send` whose line this accepts is held open, never answered, until the test ends it with `exec.exit(code)` (no clock: the test decides when and
    * how the write ends). Other sends are answered as usual.
    */
   holdSend: ((line: string) => boolean) | null = null;
-=======
+  /**
    * T-1049: opt-in. Every control request the portal writes is answered on the newest tail in the same tick it is recorded (settings: the applied
    * ones, permission mode: the asked mode, usage: an API-key account, anything else: a bare success), so a test never races a short
    * `controlTimeoutMs` against a polling responder under load.
@@ -117,7 +116,6 @@ export class FakeWorkspaces {
     else if (sub === 'get_usage') tail.push(ok(o.request_id, USAGE_API_KEY));
     else tail.push(ok(o.request_id));
   }
->>>>>>> origin/integration
   /** What `trustscan` prints (a folder with nothing to load unless a test says otherwise) and its exit code. */
   scanOut = JSON.stringify(EMPTY_SCAN);
   scanCode = 0;
