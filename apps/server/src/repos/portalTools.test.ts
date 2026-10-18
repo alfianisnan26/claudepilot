@@ -169,3 +169,85 @@ test('worktree_create: refused to a read token, made for an operate token and fo
     r.done();
   }
 });
+
+type Row = { id: string; name: { untrusted_text: string }; path: { untrusted_text: string } };
+
+test('T-980 repos_list: the name filter returns only the repositories whose folder name or path contains it, not case sensitive, paged', async () => {
+  const r = await rig();
+  try {
+    const t = r.mcp.token('read');
+    const rows = async (a: Record<string, unknown>) => (await r.mcp.call(t.secret, 'repos_list', { workspace_id: WS, limit: 100, ...a })).result!.structuredContent as { repos: Row[]; total: number; next_cursor: string | null };
+    const all = await rows({});
+    assert.ok(all.total > 5, 'the workspace has several repositories');
+    const has = (row: Row, needle: string) => row.name.untrusted_text.toLowerCase().includes(needle) || row.path.untrusted_text.toLowerCase().includes(needle);
+    for (const needle of ['creds', 'mods/']) {
+      const want = all.repos.filter((x) => has(x, needle)).map((x) => x.id);
+      assert.ok(want.length > 0 && want.length < all.total, `${needle}: a real subset`);
+      const got = await rows({ name: needle });
+      assert.deepEqual(got.repos.map((x) => x.id), want, needle);
+      assert.equal(got.total, want.length, 'the total counts the matches, not the workspace');
+    }
+    assert.deepEqual((await rows({ name: 'CREDS' })).repos.map((x) => x.id), (await rows({ name: 'creds' })).repos.map((x) => x.id), 'case does not matter');
+    // a path fragment matches too, and what is returned all holds it
+    const whole = r.pool.path('proj');
+    const byPath = await rows({ name: whole });
+    assert.ok(byPath.repos.some((x) => x.id === repoId(WS, whole)) && byPath.repos.every((x) => x.path.untrusted_text.includes(whole)));
+    const none = await rows({ name: 'no-such-folder-zzz' });
+    assert.deepEqual([none.repos.length, none.total, none.next_cursor], [0, 0, null]);
+    // paged: a page of the matches, then the rest, and never an id that does not match
+    const want = all.repos.filter((x) => has(x, 'mods/')).map((x) => x.id);
+    assert.ok(want.length >= 2);
+    const p1 = await rows({ name: 'mods/', limit: 1 });
+    assert.equal(p1.repos.length, 1);
+    assert.ok(p1.next_cursor);
+    const p2 = await rows({ name: 'mods/', limit: 100, cursor: p1.next_cursor });
+    assert.deepEqual([...p1.repos, ...p2.repos].map((x) => x.id), want);
+    // a name filter without a workspace has nothing to search: refused, not silently ignored
+    assert.equal((await r.mcp.call(t.secret, 'repos_list', { name: 'proj' })).result?.isError, true);
+    // an agent searches its own workspace
+    const own = await r.mcp.agentToken(WS, 'sess1');
+    const mine = (await r.mcp.call(own.secret, 'repos_list', { name: 'creds', limit: 100 })).result!.structuredContent as { repos: Row[] };
+    assert.deepEqual(mine.repos.map((x) => x.id), all.repos.filter((x) => has(x, 'creds')).map((x) => x.id));
+  } finally {
+    r.done();
+  }
+});
+
+test('T-980 worktree_create: the repository by path is the same repository as by id, through the same workspace check; a path out of reach is the same not found as an unknown one', async () => {
+  const r = await rig();
+  try {
+    const proj = r.pool.path('proj');
+    const projId = repoId(WS, proj);
+    const op = r.mcp.token('operate');
+    const byId = await r.mcp.call(op.secret, 'worktree_create', { repo_id: projId, branch: 'by-id' });
+    assert.equal(byId.result?.isError, undefined, text(byId));
+    const byPath = await r.mcp.call(op.secret, 'worktree_create', { path: `${proj}/`, workspace_id: WS, branch: 'by-path' });
+    assert.equal(byPath.result?.isError, undefined, text(byPath));
+    const made = r.h.repos.events({ workspaceId: WS, group: 'audit' }).events.filter((e) => e.kind === 'worktree_created');
+    assert.deepEqual(made.map((e) => e.repoId).sort(), [projId, projId], 'both were made from the same repository row');
+    assert.equal(byPath.result!.structuredContent.worktree.branch.untrusted_text, 'by-path');
+    // an agent: its own workspace is the default
+    const agent = await r.mcp.agentToken(WS, 'sess9');
+    const mine = await r.mcp.call(agent.secret, 'worktree_create', { path: proj, branch: 'by-agent-path' });
+    assert.equal(mine.result?.isError, undefined, text(mine));
+    // one of the two, a plain absolute path, and a workspace for an admin
+    for (const bad of [{}, { repo_id: projId, path: proj, workspace_id: WS }, { path: 'proj', workspace_id: WS }, { path: `${proj}/../proj`, workspace_id: WS }, { path: proj }]) {
+      assert.equal((await r.mcp.call(op.secret, 'worktree_create', { ...bad, branch: 'bad' })).result?.isError, true, JSON.stringify(bad));
+    }
+    assert.equal(r.pool.g(proj, 'branch', '--list', 'bad'), '');
+    // another workspace's repository: for an agent it is the same answer as a path that nobody has, whether it names its own workspace or the other
+    r.h.repos.db.save([{ id: repoId('docker/other', '/home/node/x'), workspaceId: 'docker/other', path: '/home/node/x', name: 'x', kind: 'repo', parentId: null, mainId: null, state: null, error: null, worktree: null, submodule: null, drifted: 0 }], new Date().toISOString());
+    const unknown = await r.mcp.call(agent.secret, 'worktree_create', { path: '/home/node/nobody-has-this' });
+    assert.equal(unknown.result?.isError, true);
+    const foreignHere = await r.mcp.call(agent.secret, 'worktree_create', { path: '/home/node/x' });
+    const foreignThere = await r.mcp.call(agent.secret, 'worktree_create', { path: '/home/node/x', workspace_id: 'docker/other' });
+    assert.equal(text(foreignHere), text(unknown), 'a path of another workspace, asked in its own');
+    assert.equal(text(foreignThere), text(unknown), 'a path of another workspace, asked there');
+    assert.match(text(unknown), /No such repository/);
+    // an admin does reach it (the same can() as for the id): the row is found, so the refusal is git's, not a missing repository
+    const admin = await r.mcp.call(op.secret, 'worktree_create', { path: '/home/node/x', workspace_id: 'docker/other' });
+    assert.doesNotMatch(text(admin), /No such repository/);
+  } finally {
+    r.done();
+  }
+});
