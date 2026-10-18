@@ -1,6 +1,8 @@
 import type { PortalCallerScope, PortalScope } from '@portal/contracts';
 import { z } from 'zod';
+import { toolPolicyFor } from '../authz/seam.js';
 import type { UntrustedText } from './sanitize.js';
+import { UNDECLARED_TOOLS } from './undeclaredTools.js';
 
 // The Portal MCP tool registry (interface I2). Every area adds the tools of its own feature from its own
 // `portalTools.ts`, which index.ts calls once at startup:
@@ -233,8 +235,12 @@ export class ToolRegistry {
   }
 }
 
-/** The portal's registry: `registerPortalTool` adds to it, `/mcp` serves from it. */
-export const portalTools = new ToolRegistry();
+/**
+ * The portal's registry: `registerPortalTool` adds to it, `/mcp` serves from it. FR19 (T-356) is on here: a tool with no declared access policy
+ * and not on the closed list of tools that predate the rule is refused at registration, so the server does not start with it. The modules'
+ * policies are declared first, by `declareAllToolPolicies` (portalmcp/declareAll.ts), which index.ts calls before any registration.
+ */
+export const portalTools = new ToolRegistry({ requireDeclared: { isDeclared: (name) => toolPolicyFor(name) !== undefined, exempt: UNDECLARED_TOOLS } });
 
 /** Adds a tool to the portal's registry (interface I2). Throws on a bad or duplicate definition, at startup. */
 export function registerPortalTool<S extends z.ZodObject>(tool: PortalToolDefinition<S>): void {

@@ -3,6 +3,17 @@
 // tool must declare (the registry refuses it otherwise, and `toolDeclared.test.ts` fails on a tool that is neither declared nor listed here),
 // and a tool that gets a declaration leaves this list (the same test fails on a listed tool that is declared, so the list only ever shrinks).
 // The names below are what the discovery run of `toolDeclared.test.ts` reported on 708109ea (Job a3bf98ef).
+/**
+ * The two halves of the ratchet, over the tool names found in the sources: `unlisted` are tools that are neither declared nor listed (they must
+ * declare), `stale` are listed names that are declared or no longer a tool (they must leave the list).
+ */
+export function auditUndeclared(names: ReadonlySet<string>, listed: ReadonlySet<string>, isDeclared: (name: string) => boolean): { unlisted: string[]; stale: string[] } {
+  return {
+    unlisted: [...names].filter((n) => !isDeclared(n) && !listed.has(n)).sort(),
+    stale: [...listed].filter((n) => !names.has(n) || isDeclared(n)).sort(),
+  };
+}
+
 export const UNDECLARED_TOOLS: ReadonlySet<string> = new Set<string>([
   'account_check',
   'account_list',

@@ -12,6 +12,7 @@ import { NO_PARENT, declarePortalMcpPolicies } from '../portalmcp/authz.js';
 import { ToolRegistry } from '../portalmcp/registry.js';
 import { portalMcpHarness } from '../portalmcp/testkit.js';
 import { registerSessionTools } from '../portalmcp/tools/sessions.js';
+import { NO_WORKSPACE } from '../workspaces/authz.js';
 import type { AgentCaps } from './agents.js';
 import { registerChatAuthz } from './authz.js';
 import { SESSION_CAP } from './caps.js';
@@ -189,6 +190,24 @@ test('T-349: the first prompt of a worker session_start makes is framed as from 
     const plain = await r.start({ title: 'Solo', prompt: 'Read the plan.' });
     const soloId = plain.result!.structuredContent.session.id as string;
     assert.equal(r.s.controller.history(soloId).find((e) => e.kind === 'user')!.actor, `portal-mcp:${r.admin.id}`);
+  } finally {
+    await r.done();
+  }
+});
+
+test('T-356 P4: the workspace-not-found answer of session_start is the one fixed text and never echoes the name that was asked', async () => {
+  const r = await rig();
+  try {
+    const count = r.s.controller.list({}).length;
+    // Each form of a name that matches nothing: a made-up id, a <target>/<name>, a bare name, a ws_ id; the asked text is distinctive.
+    for (const asked of ['docker/zq-probe-77', 'zq-probe-77', `ws_${'0f1e2d'.repeat(2)}`, 'docker/zq probe 77']) {
+      const res = await r.start({ workspace_id: asked });
+      const err = res.result!.structuredContent.error;
+      assert.equal(err.code, 'NOT_FOUND', asked);
+      assert.equal(err.message, NO_WORKSPACE, asked);
+      assert.ok(!JSON.stringify(res.raw).includes(asked) && !JSON.stringify(res.raw).includes('zq-probe'), `the answer to “${asked}” does not repeat it`);
+    }
+    assert.equal(r.s.controller.list({}).length, count, 'nothing was started');
   } finally {
     await r.done();
   }

@@ -6,8 +6,9 @@ import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { declareToolPolicies, toolPolicyFor } from '../authz/seam.js';
-import { ToolRegistry, z } from './registry.js';
-import { UNDECLARED_TOOLS } from './undeclaredTools.js';
+import { declareAllToolPolicies } from './declareAll.js';
+import { portalTools, registerPortalTool, ToolRegistry, z } from './registry.js';
+import { auditUndeclared, UNDECLARED_TOOLS } from './undeclaredTools.js';
 
 const toy = (name: string) => ({ name, title: 'Toy', description: 'A toy tool.', scope: 'read' as const, input: z.object({}), handler: () => ({ summary: 'ok' }) });
 const enforcing = () => new ToolRegistry({ requireDeclared: { isDeclared: (n) => toolPolicyFor(n) !== undefined, exempt: new Set(['t356_listed']) } });
@@ -41,35 +42,41 @@ test('FR19: every registered tool of the portal is declared or on the closed lis
     for (const m of readFileSync(file, 'utf8').matchAll(/(?:registry\.register|registerPortalTool)\(\{\s*name: '([a-z][a-z0-9_]+)'/g)) names.add(m[1]!);
   assert.ok(names.size > 100, `found ${names.size} tools in the sources`);
 
-  // What the modules declare (the ones that declare inside their register function are called with an empty registry).
-  const { declarePortalMcpPolicies } = await import('./authz.js');
+  // What index.ts declares before it registers anything: the chat tools by registerChatAuthz, every other module by declareAllToolPolicies (the
+  // attention tools declare inside their register function, called here with an empty registry).
   const { registerChatAuthz } = await import('../chat/authz.js');
-  const { declareCiPolicies } = await import('../ci/authz.js');
-  const { declareClaudeVersionPolicies } = await import('../claudeversion/authz.js');
-  const { declareKeepGoingPolicies } = await import('../keepgoing/authz.js');
-  const { declareAutoTransferPolicies } = await import('../autotransfer/authz.js');
-  const { declareWorkspacePolicies } = await import('../workspaces/authz.js');
-  const { declareLabPolicies } = await import('../lab/authz.js');
-  const { declareNotifyPolicies } = await import('../notify/authz.js');
-  const { declareTicketPolicies } = await import('../tickets/authz.js');
-  const { declareTriggerPolicies } = await import('../triggers/authz.js');
   const { registerAttentionTools } = await import('../attention/portalTools.js');
-  declarePortalMcpPolicies();
   registerChatAuthz(() => null);
-  declareCiPolicies();
-  declareClaudeVersionPolicies();
-  declareKeepGoingPolicies();
-  declareAutoTransferPolicies();
-  declareWorkspacePolicies();
-  declareLabPolicies();
-  declareNotifyPolicies();
-  declareTicketPolicies();
-  declareTriggerPolicies();
+  declareAllToolPolicies();
   registerAttentionTools({} as never, new ToolRegistry());
 
-  const undeclared = [...names].filter((n) => toolPolicyFor(n) === undefined).sort();
-  const unlisted = undeclared.filter((n) => !UNDECLARED_TOOLS.has(n));
+  const { unlisted, stale } = auditUndeclared(names, UNDECLARED_TOOLS, (n) => toolPolicyFor(n) !== undefined);
   assert.deepEqual(unlisted, [], `these tools have no declared policy (FR19): declare them in their module's authz.ts, never add them to undeclaredTools.ts\n${unlisted.join('\n')}`);
-  const stale = [...UNDECLARED_TOOLS].filter((n) => !names.has(n) || toolPolicyFor(n) !== undefined).sort();
   assert.deepEqual(stale, [], `these are on the closed list but are declared or gone: remove them from undeclaredTools.ts\n${stale.join('\n')}`);
+});
+
+test('FR19 ratchet, stale half (T-356 P5): a listed tool that becomes declared, or is gone, must leave the list; an undeclared unlisted one must declare', () => {
+  const names = new Set(['a_declared', 'b_listed', 'c_listed_then_declared', 'd_bare']);
+  const declared = new Set(['a_declared', 'c_listed_then_declared']);
+  const r = auditUndeclared(names, new Set(['b_listed', 'c_listed_then_declared', 'e_gone']), (n) => declared.has(n));
+  assert.deepEqual(r.stale, ['c_listed_then_declared', 'e_gone'], 'declared now, and gone: both leave the list; the still-bare listed one stays');
+  assert.deepEqual(r.unlisted, ['d_bare']);
+  assert.deepEqual(auditUndeclared(names, new Set(['b_listed', 'd_bare']), (n) => declared.has(n)), { unlisted: [], stale: [] });
+});
+
+test('FR19 in production (T-356): the portal’s real registry refuses a tool with no declared policy, and the closed list is its only way in', () => {
+  assert.throws(() => portalTools.register(toy('t356_bare_real')), /t356_bare_real" declares no access policy \(FR19\)/);
+  assert.equal(portalTools.get('t356_bare_real'), undefined, 'a refused tool is not registered');
+  assert.throws(() => registerPortalTool(toy('t356_bare_real')), /declares no access policy/, 'registerPortalTool goes through the same registry');
+  // index.ts declares every module’s tool policies first: afterwards a declared tool is accepted.
+  declareAllToolPolicies();
+  assert.ok(toolPolicyFor('workspace_rename'), 'declareAllToolPolicies declares the workspace tools');
+  declareToolPolicies('toolDeclared.test', { t356_real_declared: { kind: 'signed-in' } });
+  portalTools.register(toy('t356_real_declared'));
+  assert.ok(portalTools.get('t356_real_declared'));
+  // A name on the closed list is accepted undeclared (the tools that predate the rule): it is the registry's exempt set, not a copy.
+  const listed = [...UNDECLARED_TOOLS].find((n) => toolPolicyFor(n) === undefined)!;
+  assert.ok(listed, 'the closed list has an undeclared tool');
+  portalTools.register(toy(listed));
+  assert.ok(portalTools.get(listed));
 });

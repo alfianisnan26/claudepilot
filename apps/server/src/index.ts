@@ -53,6 +53,7 @@ import { readWorkspaceFile } from './personas/workspaceFiles.js';
 import { registerSettings } from './settings/index.js';
 import { GUARD_CHANNEL, recordGuardRefusals } from './settings/ruleGuardAudit.js';
 import { BrowserModule } from './browser/index.js';
+import { declareAllToolPolicies } from './portalmcp/declareAll.js';
 import { PortalMcpModule } from './portalmcp/module.js';
 import { registerBuiltInPortalTools } from './portalmcp/tools/index.js';
 import { internalUrlResolver } from './portalmcp/internalUrl.js';
@@ -280,6 +281,8 @@ chatController.sessionBudgetUsd = () => settingsModule.settings.get<number>(BUDG
 // Side questions (chat PRD §20): their limits and switches come from the shared settings, and a session is read through the one authorization resolver.
 chatController.btwSettings = (key) => settingsModule.settings.get(key);
 registerChatAuthz((id) => chatController.sessionFacts(id));
+// FR19 (T-356): every module's tool policies are declared before the first tool is registered; the registry refuses an undeclared one.
+declareAllToolPolicies();
 chatController.agentCaps = () => ({
   maxDepth: settingsModule.settings.get<number>(AGENT_DEPTH_SETTING),
   maxChildren: settingsModule.settings.get<number>(AGENT_CHILDREN_SETTING),

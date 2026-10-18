@@ -6,7 +6,11 @@ import { readFileSync, writeFileSync } from 'node:fs';
 const CI = 'apps/server/src/ci/portalTools.ts';
 const WS = 'apps/server/src/workspaces/authz.ts';
 const REG = 'apps/server/src/portalmcp/registry.ts';
-const CITEST = 'src/ci/portalToolsAuthz.test.ts';
+const UND = 'apps/server/src/portalmcp/undeclaredTools.ts';
+const ALL = 'apps/server/src/portalmcp/declareAll.ts';
+const COMMON = 'apps/server/src/portalmcp/tools/common.ts';
+const STARTTEST = 'src/chat/sessionStartParent.test.ts';
+const CITEST ='src/ci/portalToolsAuthz.test.ts';
 const WSTEST = 'src/workspaces/toolAuthz.test.ts';
 const REGTEST = 'src/portalmcp/toolDeclared.test.ts';
 const mutants = [
@@ -19,6 +23,12 @@ const mutants = [
   ['N7 registry accepts an undeclared tool', REG, 'if (this.#requireDeclared && !this.#requireDeclared.isDeclared', 'if (false && this.#requireDeclared && !this.#requireDeclared.isDeclared', REGTEST],
   // QA #11120's N7 (a different one from the registry mutant above): the `/` guard. A reference with a slash that does not resolve is tried as a bare name.
   ['N8 resolver: slash reference tried as a bare name (QA N7)', WS, "if (wanted.includes('/')) return null;", '', WSTEST],
+  // The blind review #11576 (P4, P5, FR19 in production).
+  ['N9 production registry does not require a declaration', REG, 'new ToolRegistry({ requireDeclared: { isDeclared: (name) => toolPolicyFor(name) !== undefined, exempt: UNDECLARED_TOOLS } })', 'new ToolRegistry()', REGTEST],
+  ['N10 ratchet: a listed tool that is declared is not stale', UND, 'stale: [...listed].filter((n) => !names.has(n) || isDeclared(n)).sort()', 'stale: [...listed].filter((n) => !names.has(n)).sort()', REGTEST],
+  ['N11 ratchet: a gone tool is not stale', UND, 'stale: [...listed].filter((n) => !names.has(n) || isDeclared(n)).sort()', 'stale: [...listed].filter((n) => isDeclared(n)).sort()', REGTEST],
+  ['N12 declareAllToolPolicies leaves the trigger tools out', ALL, '  declareTriggerPolicies();\n}', '}', REGTEST],
+  ['N13 workspace not found echoes the name asked (P4)', COMMON, "throw new AppError('NOT_FOUND', NO_WORKSPACE);\n}", 'throw new AppError(\'NOT_FOUND\', `No workspace “${wanted}”.`);\n}', STARTTEST],
 ];
 const run = (test) => {
   try {
