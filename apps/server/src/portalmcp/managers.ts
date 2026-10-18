@@ -8,7 +8,7 @@ import type { PortalPrincipal } from './registry.js';
 // session when its process starts; it goes only into that process's environment (`PILOT_MCP_TOKEN`), is hashed at rest and lives
 // at most 7 days (as an agent's). It is not an agent token: its principal is the PERSON (`userId`), and `actorOfPrincipal` hands
 // can() the person's own user actor, resolved on every call. `manager:<session id>` is an audit label only. It is revoked on
-// disable, on remove, and when the person has signed out of every device (Q3: Portal.onSignedOutEverywhere, wired in index.ts).
+// disable, on remove, and on ANY sign-out of the person, on any device (Q3, #11136: Portal.onSignedOut, wired in index.ts).
 
 const TOUCH_EVERY_MS = 60_000;
 const hashOf = (secret: string) => createHash('sha256').update(secret).digest('hex');
@@ -84,7 +84,7 @@ export class ManagerTokens {
     return this.#revoke('session_id = ?', [sessionId], reason);
   }
 
-  /** The person signed out of every device (Q3), or their account went: their manager stops acting for them. */
+  /** The person signed out on any device (Q3, #11136), or their account went: their manager stops acting for them. */
   revokeUser(userId: string, reason: string): number {
     return this.#revoke('user_id = ?', [userId], reason);
   }

@@ -57,18 +57,17 @@ export class Portal {
   /** Called after sessions end by sign-out or a new code, so what is tied to them (open sockets) can be cut. */
   onRevoked: () => void = () => {};
   /**
-   * T-968 S1 (general-manager PRD Q3): called with each person whose sessions a sign-out, a revoke or a new code just ended and who has no
-   * live session left on any device (the server code's session is the founding user's). index.ts revokes their manager's token here.
+   * T-968 S1 (general-manager PRD Q3, lead decision #11136): called with each person whose session a sign-out, a revoke or a new code just
+   * ended, on ANY device, even when another device stays signed in (the server code's session is the founding user's). index.ts revokes
+   * their manager's token here; the manager gets a new one at the next sign-in.
    */
-  onSignedOutEverywhere: (userId: string) => void = () => {};
+  onSignedOut: (userId: string) => void = () => {};
 
-  /** Calls `onSignedOutEverywhere` for each of `people` with no live session left. */
+  /** Calls `onSignedOut` once for each of `people`. */
   #signedOut(people: Iterable<string>) {
-    const now = Date.now();
     for (const person of new Set(people)) {
-      if ([...this.#sessions.values()].some((s) => (s.userId ?? FOUNDING_USER_ID) === person && s.expiresAt > now)) continue;
       try {
-        this.onSignedOutEverywhere(person);
+        this.onSignedOut(person);
       } catch (e) {
         console.error(`[portal] after the last sign-out: ${(e as Error).message}`);
       }

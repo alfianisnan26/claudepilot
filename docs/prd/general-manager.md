@@ -89,7 +89,8 @@ Auto move works between the person's Claudes in the runtime, as for any workspac
 - **A third token class, `cpmt_`** (manager), next to `cpat_` (a person's personal token) and `cpst_` (an agent's session
   token). The portal mints it for the manager session when its process starts and puts it only in that process's environment
   (`PILOT_MCP_TOKEN`). It is hashed at rest, lives as long as the session, at most 7 days (as `AGENT_TOKEN_TTL_MS`), and is
-  revoked on disable, on remove and when the person signs out of every device (Q3). Nothing scheduled ever uses it (Q4).
+  revoked on disable, on remove and on any sign-out of the person, on any device, as §12 says (Q3). The manager gets a new token
+  at the next sign-in. Nothing scheduled ever uses it (Q4).
 - **Principal:**
 
   ```ts
@@ -376,8 +377,8 @@ extends it to assert that each class P, R, D, C and G answers a `cpmt_` call wit
   index `chat_sessions_one_manager` on `(owner_id) WHERE kind = 'manager'`, and the `pmcp_manager_tokens` table.
 - `cpmt_` tokens live in `portalmcp/managers.ts` (`ManagerTokens`): minted per manager session (a new mint revokes the older ones), sha256
   at rest, 7 days (`AGENT_TOKEN_TTL_MS`), refused once the session ended.
-- They are revoked on session end, archive or delete (index.ts), on a lockdown, and by `Portal.onSignedOutEverywhere` when the person has
-  no live session left (sign-out, `revokeUser`, `rotate`; Q3).
+- They are revoked on session end, archive or delete (index.ts), on a lockdown, and by `Portal.onSignedOut` whenever a session of the person
+  ends on any device (sign-out, `revokeUser`, `rotate`; Q3, #11136), even with another device still signed in.
 - `/mcp` accepts them (`server.ts #verify`). The principal is `kind: 'manager'` with the person's `userId`; `actorOfPrincipal` gives can()
   the person's user actor. `ctx.actor` is `manager:<session id>` and the label "General Manager"; `isAgent` is false and `ctx.sessionId`
   and `ctx.workspaceId` are null.
@@ -405,8 +406,8 @@ extends it to assert that each class P, R, D, C and G answers a `cpmt_` call wit
 
 1. **Runtime volume and resources:** 1 Gi home; 100m and 256 Mi requested, 1 CPU and 1 Gi limit **(default)**.
 2. **Persona editable by the person?** No in v1. Only the built-in `general-manager` persona and the S6 skills **(default)**.
-3. **Token revoked on sign-out of every device?** Yes **(decided, v0.2)**. The manager stops; Home shows Resume at the next
-   sign-in.
+3. **Token revoked on sign-out?** Yes, on ANY sign-out of the person, on any device, not only the last one **(decided, v0.2;
+   the safer reading, lead #11136 on T-968, settles §4 against §12)**. The manager stops; Home shows Resume at the next sign-in.
 4. **Does the manager run while nobody is signed in?** No: after sign-out it has no token, so it cannot call the portal
    **(decided, v0.2; this replaces v0.1's answer, which contradicted Q3)**. S6's routine work that must run on a clock
    (monitoring sweeps, reminders) runs on a **separate scheduled path**: the triggers and the schedules registry (T-965,

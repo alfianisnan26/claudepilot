@@ -1,6 +1,6 @@
 // T-968 S1 (general-manager PRD §2, §4, Q3): the General Manager's `cpmt_` token. It acts as its PERSON for can(), resolved on every call
 // (no manager branch), with `manager:<session id>` an audit label only; a denial is the same not-found; the agent-self tools refuse it;
-// it is revoked when the person has signed out of every device; the database holds one manager per person. Tokens are minted at run
+// it is revoked on any sign-out of the person, on any device (#11136); the database holds one manager per person. Tokens are minted at run
 // time, never written here.
 import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
@@ -136,12 +136,12 @@ test('over /mcp: the agent-self tools are neither offered to nor callable by a m
   }
 });
 
-test('Q3: the token is revoked when the person has signed out of every device, not before; another person is untouched', async () => {
+test('Q3 (#11136): the token is revoked on ANY sign-out of the person, even with another device still signed in; another person is untouched', async () => {
   const h = await portalMcpHarness({ registry: registry() });
   try {
     const portal = new Portal('24681357', 60_000);
     portal.roleOf = () => 'admin';
-    portal.onSignedOutEverywhere = (userId) => void h.module.managers.revokeUser(userId, 'signed out of every device');
+    portal.onSignedOut = (userId) => void h.module.managers.revokeUser(userId, 'signed out');
     const phone = portal.openSession(ALICE);
     const laptop = portal.openSession(ALICE);
     portal.openSession('u_bob');
@@ -151,12 +151,18 @@ test('Q3: the token is revoked when the person has signed out of every device, n
     const his = h.module.managers.mint({ userId: 'u_bob', sessionId: 'gm2' })!;
     const works = async (secret: string) => (await h.call(secret, 'who_am_i')).status === 200;
 
+    assert.equal(await works(mine.secret), true, 'signed in on both: the manager works');
     portal.signOut(phone);
-    assert.equal(await works(mine.secret), true, 'still signed in on the laptop');
-    portal.signOut(laptop);
-    assert.equal(await works(mine.secret), false, 'signed out of every device: the manager stops');
+    assert.equal(await works(mine.secret), false, 'one sign-out stops the manager, though the laptop is still signed in');
     assert.equal(h.module.managers.verify(mine.secret).ok, false);
+    assert.ok(portal.session(laptop),'the laptop session itself is untouched');
     assert.equal(await works(his.secret), true, "another person's manager is untouched");
+    // The next sign-in mints a new token, and the laptop's later sign-out stops that one too.
+    h.alive.add('gm5');
+    const again = h.module.managers.mint({ userId: ALICE, sessionId: 'gm5' })!;
+    assert.equal(await works(again.secret), true);
+    portal.signOut(laptop);
+    assert.equal(await works(again.secret), false);
 
     // A disable or removal (revokeUser with nothing kept) ends theirs too.
     portal.revokeUser('u_bob');

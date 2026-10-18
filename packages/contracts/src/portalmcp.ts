@@ -59,7 +59,7 @@ export const PORTAL_AGENT_TOKEN_PREFIX = 'cpst_';
 /**
  * The General Manager's token (T-968 S1, general-manager PRD §4): minted for the person's one `kind = 'manager'` session, only in
  * that process's environment, hashed at rest, at most 7 days. It acts as the person (their `can()`, resolved at use time), never
- * authenticates a web route, and is revoked on disable, remove and when the person has signed out of every device.
+ * authenticates a web route, and is revoked on disable, remove and any sign-out of the person, on any device.
  */
 export const PORTAL_MANAGER_TOKEN_PREFIX = 'cpmt_';
 

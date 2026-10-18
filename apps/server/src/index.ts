@@ -450,8 +450,8 @@ const portalMcp = new PortalMcpModule(store, {
     return !!s && s.state !== 'ended' && !s.archivedAt;
   },
 });
-// Q3 (general-manager PRD): the person signed out of every device, so their manager stops acting for them.
-portal.onSignedOutEverywhere = (userId) => void portalMcp.managers.revokeUser(userId, 'signed out of every device');
+// Q3 (general-manager PRD, #11136): any sign-out of the person, on any device, stops their manager; it gets a new token at the next sign-in.
+portal.onSignedOut = (userId) => void portalMcp.managers.revokeUser(userId, 'signed out');
 // With "Pool MCP only" on, Claude Code admits only listed servers, and the portal's own endpoint (which an agent's session reaches
 // through --mcp-config) is one of them: its exact URL for each workspace that opted in. Compile again when that changes.
 settingsModule.lockdown.addMatcherSource((workspaceId) => portalMcp.agentMatchers(workspaceId));
