@@ -15,8 +15,8 @@
 - T-961 S1 613139e3 Job bzd30x3vl queued; T-974 FIX3 Job bctygk2fn queued (pod memory tight; a3554d40 runs them in turn).
 - T-971 H2 S1 11d5a5a1 QA PWG 10847 -> FIX 03bc42d6 (Job running) + deterministic race test (M11) by 3753d3c2 -> QA delta
   c691df71; blind d9f18599 on 11d5a5a1 running. No auto Bypass on resume stands (10736).
-- T-975 FIX 6650e8ff (e7750582 rc0 3x45/45; one unexplained links.test failure in bdwtltcfm, builder owns it if seen again)
-  -> QA delta c691df71 -> blind d9f18599 (migration 788).
+- T-975 FIX 6650e8ff QA FAIL 10926, tests only (Q1, Q2 survive; R5 gap; #retry/#finishFailed rewrite a cancelled run;
+  links.test 12/12 x3, not this change) -> FIX2 a3554d40 (after T-969/H1 Jobs) -> delta c691df71 -> blind d9f18599 (mig 788).
 - T-1043 S0a+S0b ONE unit (10790) on ticket/T-1043-s0b, 76845676: M14/M16 tests, app.all behind ALL /api/*, sockets via
   sessionToken; Job queued -> QA c691df71 + blind d9f18599. Denial = 404 (10605).
 - T-976 conflicted merge 130fb339 pushed by lead (ticket/T-976-merge, 4 markers in app.ts) -> 2a0edbd8 resolves -> QA + blind.
@@ -28,7 +28,7 @@
 - T-1065 (new: redact.ts misses short passwords/URL userinfo; 10888) 76845676 while its Job queues -> QA + blind.
 - T-356 S1 64b4effa (MCP authz gaps 1-4; 10906) by 3753d3c2, Jobs pending. 10922: workspace resolver NOT wired (that is
   the multi-user switch); FR19 enforced by test + exemption list, not at start-up -> QA + blind; lead reads the authz diff.
-- Queues: c691df71 T-425 > T-969 > T-975 > S0a+S0b > S2b > T-565 > T-976 > H2 delta. d9f18599 H2 S1 > H1 delta > T-974
+- Queues: c691df71 S0a+S0b be3698ba > T-968 S2b > T-565 > T-976 > H2 delta > T-975 FIX2 > T-356 (+ T-425 gap list). d9f18599 H2 S1 > H1 delta > T-974
   FIX3 > T-969 > T-975 > PRD > S2b > S0b. a3554d40 T-961 + T-974 FIX3. 76845676 T-1043 + T-1065. 2a0edbd8 T-976 > S2b >
   T-565 > PRD. 3753d3c2 H2 fix > T-356.
 
