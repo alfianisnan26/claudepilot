@@ -61,7 +61,7 @@ import { internalUrlResolver } from './portalmcp/internalUrl.js';
 import { OrphanSweep } from './tickets/orphans.js';
 import { Tickets } from './tickets/service.js';
 import { CiService } from './ci/service.js';
-import { upstreamHostsFrom } from './ci/settings.js';
+import { runnerLostMinFrom, upstreamHostsFrom } from './ci/settings.js';
 import { WorkspacesCiHost } from './ci/host.js';
 import { registerCiTools } from './ci/portalTools.js';
 import { valueRedactors } from './ci/values.js';
@@ -600,6 +600,8 @@ const ci = new CiService(store, new WorkspacesCiHost(workspaces), {
   secretValue: (id, name) => deliveredSecretValue(poolService, id, name),
   // T-486 S2: the upstream host allow-list setting, read at each use.
   upstreamHosts: upstreamHostsFrom(settingsModule.settings),
+  // T-1637: how long a runner may not answer before its runs end as runner_lost, read at each look.
+  runnerLostMin: runnerLostMinFrom(settingsModule.settings),
   // Deployment approvals and environment protection changes (FR41) go to the platform audit, created further down.
   audit: (e) => platform.audit.record(e),
 });
