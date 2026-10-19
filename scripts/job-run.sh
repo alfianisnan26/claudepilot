@@ -342,7 +342,7 @@ peak_mi=$((10#$peak_mi))
 # the three texts the caller shows: place_msg (stderr), place_say (stdout and log), place_log (the log only).
 placement() {
   master_rule=; master_rule_why=; master_proj=; master_known=; master_used=; master_pct=; place_msg=; place_say=; place_log=
-  read -r master_used master_pct < <(kubectl top nodes -l node-role.kubernetes.io/control-plane --no-headers 2>/dev/null | awk 'NR == 1 { gsub(/%/, "", $5); print $4, $5 }' || true) || true
+  read -r master_used master_pct < <(kubectl top nodes -l isnan.me/pool=control --no-headers 2>/dev/null | awk 'NR == 1 { gsub(/%/, "", $5); print $4, $5 }' || true) || true
   if [[ ${master_pct:-} =~ ^[0-9]{1,3}$ ]]; then
     master_known=1; master_pct=$((10#$master_pct)); master_proj=$master_pct
     used_mi=
@@ -371,7 +371,7 @@ placement() {
 # master_aff is the JSON of the rule (for the release patch), master_rule the same as the line the template takes (flow YAML accepts JSON).
 rule_placement() {
   local ex=
-  [ -z "$master_rule_why" ] || ex='{"key":"node-role.kubernetes.io/control-plane","operator":"DoesNotExist"}'
+  [ -z "$master_rule_why" ] || ex='{"key":"isnan.me/pool","operator":"NotIn","values":["control"]}'
   [ -z "$avoid_json" ] || ex="${ex:+$ex,}{\"key\":\"kubernetes.io/hostname\",\"operator\":\"NotIn\",\"values\":[$avoid_json]}"
   master_aff=; master_rule=
   [ -z "$ex" ] || { master_aff="{\"nodeSelectorTerms\":[{\"matchExpressions\":[$ex]}]}"; master_rule="requiredDuringSchedulingIgnoredDuringExecution: $master_aff"; }
