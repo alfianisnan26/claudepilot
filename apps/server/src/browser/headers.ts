@@ -8,7 +8,7 @@ import { HEADER_SECRET_KEY, SECRET_ENTRY_NAME, type BrowserHeaderRule } from '@p
  */
 
 export const MAX_HEADERS = 10;
-/** The extension's folder in the container (images/browser/cpb/headers-ext.mjs `EXT_DIR`): the policy allows the id derived from it. */
+/** The extension's folder in the container (images/browser/cpb/headers-ext.mjs `EXT_DIR`); its id is derived from it. */
 export const EXT_DIR = '/dev/shm/cpb-ext';
 /** Where the browser container finds its headers, root-only (Docker: a file in the container; Kubernetes: a Secret volume). */
 export const HEADERS_DIR = '/etc/cpb-secrets';

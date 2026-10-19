@@ -155,17 +155,57 @@ test('Chromium loads the extension only when there is one, and the id the policy
   assert.equal(ext.EXT_DIR, '/dev/shm/cpb-ext');
 });
 
-test('the policy allows only the headers extension, and only when the pool has headers', () => {
+test('the policy lets Chromium load the headers extension, and shuts every other way in, only when the pool has headers (T-1660)', () => {
   const plain = chromePolicy(content({ headers: [] }), { portalHosts: [] });
   assert.deepEqual(plain.ExtensionInstallBlocklist, ['*']);
-  assert.equal(plain.ExtensionInstallAllowlist, undefined);
+  for (const k of ['ExtensionSettings', 'ExtensionAllowedTypes', 'BlockExternalExtensions', 'ExtensionDeveloperModeSettings', 'ExtensionInstallAllowlist']) assert.equal(plain[k], undefined, k);
   assert.ok(!(plain.URLBlocklist as string[]).includes('chrome-extension://*'));
-  const withHeaders = chromePolicy(content(), { portalHosts: [] });
-  assert.deepEqual(withHeaders.ExtensionInstallBlocklist, ['*']);
-  assert.deepEqual(withHeaders.ExtensionInstallAllowlist, [extensionId()]);
-  assert.ok((withHeaders.URLBlocklist as string[]).includes('chrome-extension://*'), 'a page can’t open the extension’s files');
   // A pool saved before headers existed has no field at all.
   assert.deepEqual(chromePolicy({ ...content(), headers: undefined as never }, { portalHosts: [] }).ExtensionInstallBlocklist, ['*']);
+
+  for (const allowlistMode of [false, true]) {
+    const p = JSON.parse(JSON.stringify(chromePolicy(content({ allowlistMode }), { portalHosts: ['172.17.0.1:3104'] }))) as Record<string, unknown>;
+    // Chromium refuses every unpacked extension while the default is blocked, whatever an allowlist says, and a headed browser then
+    // holds a modal "Error Loading Extension" dialog before CDP listens (the 2026-10-19 CrashLoopBackOff; seen in the image, Chromium 155).
+    assert.equal(p.ExtensionInstallBlocklist, undefined, 'a blocked default refuses --load-extension');
+    assert.equal(p.ExtensionInstallAllowlist, undefined, 'an allowlist means nothing without a blocked default');
+    assert.deepEqual(p.ExtensionSettings, { 'update_url:https://clients2.google.com/service/update2/crx': { installation_mode: 'blocked' } }, 'the Web Store is shut by its update URL');
+    assert.deepEqual(p.ExtensionAllowedTypes, ['extension']);
+    assert.equal(p.BlockExternalExtensions, true);
+    assert.equal(p.ExtensionDeveloperModeSettings, 1, 'no Load unpacked for a person in a take-over');
+    const blocked = p.URLBlocklist as string[];
+    for (const u of ['chrome-extension://*', 'chrome://extensions', 'chromewebstore.google.com', 'chrome.google.com/webstore', '172.17.0.1:3104', 'cluster.local']) assert.ok(blocked.includes(u), u);
+    assert.equal(blocked[0] === '*', allowlistMode, 'allowlist mode still blocks everything else first');
+    // Only policy names Chromium knows, each with the type it expects: a mistyped key is ignored, which would leave the browser looser.
+    const types: Record<string, string> = {
+      BrowserSignin: 'number', SyncDisabled: 'boolean', PasswordManagerEnabled: 'boolean', AutofillAddressEnabled: 'boolean', AutofillCreditCardEnabled: 'boolean',
+      MetricsReportingEnabled: 'boolean', BackgroundModeEnabled: 'boolean', HighEfficiencyModeEnabled: 'boolean', DefaultBrowserSettingEnabled: 'boolean',
+      TranslateEnabled: 'boolean', DownloadDirectory: 'string', PromptForDownloadLocation: 'boolean', DownloadRestrictions: 'number', URLBlocklist: 'array',
+      URLAllowlist: 'array', ExtensionSettings: 'object', ExtensionAllowedTypes: 'array', BlockExternalExtensions: 'boolean', ExtensionDeveloperModeSettings: 'number',
+    };
+    for (const [k, v] of Object.entries(p)) assert.equal(Array.isArray(v) ? 'array' : typeof v, types[k], k);
+  }
+});
+
+test('the incident’s pool (two headers on the same 12 hosts) builds one valid ruleset: a rule pair per host, both headers in each', () => {
+  const hosts = Array.from({ length: 12 }, (_, i) => `stg-app${i}.example.com`);
+  const id = fresh();
+  const secret = fresh();
+  const built = ext.buildExtension([{ hosts, name: 'CF-Access-Client-Id', value: id }, { hosts, name: 'CF-Access-Client-Secret', value: secret }]);
+  assert.equal(built.count, 12);
+  assert.deepEqual(built.dropped, []);
+  const rules = built.rules as unknown as { id: number; action: { type: string; requestHeaders: { header: string; operation: string; value: string }[] }; condition: { regexFilter: string; resourceTypes: string[]; initiatorDomains?: string[] } }[];
+  assert.deepEqual(rules.map((r) => r.id), Array.from({ length: 24 }, (_, i) => i + 1), 'ids are unique positive integers');
+  for (const r of rules) {
+    assert.equal(r.action.type, 'modifyHeaders');
+    assert.deepEqual(r.action.requestHeaders.map((h) => [h.header, h.operation, h.value]), [['CF-Access-Client-Id', 'set', id], ['CF-Access-Client-Secret', 'set', secret]]);
+    assert.ok(r.condition.regexFilter.length < 200, 'well under the regex size limit');
+    assert.doesNotThrow(() => new RegExp(r.condition.regexFilter));
+    assert.ok(r.condition.resourceTypes.length > 0);
+  }
+  assert.equal(rules.filter((r) => r.condition.initiatorDomains).length, 12);
+  assert.deepEqual(built.manifest.declarative_net_request, { rule_resources: [{ id: 'headers', enabled: true, path: 'rules.json' }] });
+  assert.equal(built.manifest.manifest_version, 3);
 });
 
 test('resolveHeaders: a removed, ambiguous or valueless secret leaves its header out, with the reason', () => {

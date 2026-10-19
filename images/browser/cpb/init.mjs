@@ -8,6 +8,7 @@ import { fork, spawn, spawnSync } from 'node:child_process';
 import { chmodSync, mkdirSync, readFileSync } from 'node:fs';
 import { EXT_DIR } from './headers-ext.mjs';
 import { chromeArgs, limitedRelay, loadConfig, log, UID_CHROME, UID_CPB } from './lib.mjs';
+import { signalAs } from './procs.mjs';
 
 const cfg = loadConfig();
 const headless = cfg.tier === 'headless';
@@ -16,6 +17,7 @@ const DISPLAY = process.env.CPB_DISPLAY || ':99';
 const CHROME_BIN = process.env.CPB_CHROME_BIN || '/usr/bin/chromium';
 const HEADERS_FILE = process.env.CPB_HEADERS_FILE || '/etc/cpb-secrets/headers.json';
 const HEADERS_EXT = process.env.CPB_HEADERS_EXT || '/opt/cpb/headers-ext.mjs';
+const PROCS = process.env.CPB_PROCS || '/opt/cpb/procs.mjs';
 const profileDir = cfg.profile === 'fresh' ? '/tmp/cpb-profile' : cfg.profileDir;
 
 let supervisor = null;
@@ -81,14 +83,21 @@ function tellSupervisor(msg) {
   }
 }
 
-/** The profile folder, ready for a start: stale Singleton locks gone (no Chrome runs), a fresh profile emptied. */
+/**
+ * The profile folder, ready for a start (as Chrome's user: root can't enter it): stale Singleton links gone, a fresh profile emptied.
+ * A Chrome this init lost track of that still holds the profile is killed and this start refused (the next one goes ahead), so two
+ * Chromes never share a profile and a removed lock never belongs to a live one (T-1660).
+ */
 function prepareProfile() {
-  const script =
-    cfg.profile === 'fresh'
-      ? 'rm -rf "$P"; mkdir -m 0700 "$P"'
-      : 'mkdir -p "$P" && chmod 0700 "$P" && rm -f "$P/SingletonLock" "$P/SingletonCookie" "$P/SingletonSocket"';
-  const r = spawnSync('/bin/sh', ['-c', script], { ...as(UID_CHROME), env: { P: profileDir, PATH: '/usr/bin:/bin' }, encoding: 'utf8' });
+  const r = spawnSync(process.execPath, [PROCS, 'profile', profileDir, cfg.profile], { ...as(UID_CHROME), env: { PATH: '/usr/bin:/bin' }, encoding: 'utf8' });
+  if (r.status === 3) {
+    const live = JSON.parse(r.stdout.trim().split('\n').at(-1) || '{}').live;
+    signalAs({ pid: live, exitCode: null, signalCode: null }, 'SIGKILL', { uid: UID_CHROME });
+    throw new Error(`profile ${profileDir} is held by an earlier Chrome (pid ${live}); stopped it, try again`);
+  }
   if (r.status !== 0) throw new Error(`profile folder ${profileDir}: ${(r.stderr || r.error?.message || 'failed').trim()}`);
+  const { removed } = JSON.parse(r.stdout.trim().split('\n').at(-1) || '{}');
+  if (removed?.length) log(`profile: removed stale ${removed.join(', ')}`);
 }
 
 /**
@@ -134,8 +143,12 @@ function startChrome(id) {
     child.stderr.on('data', relay);
     const me = { child, pid: child.pid, stopping: false, timer: null };
     chrome = me;
-    child.once('error', (e) => {
-      chrome = null;
+    // `on`, not `once`: a child emits 'error' for a failed spawn and also for a failed signal, and an unhandled one ends the init. Only a
+    // spawn that failed (no pid) means Chrome isn't running.
+    child.on('error', (e) => {
+      log('chrome error:', e.message);
+      if (me.pid) return;
+      if (chrome === me) chrome = null;
       tellSupervisor({ event: 'chrome-failed', id, error: e.message });
     });
     child.once('exit', (code, signal) => {
@@ -156,9 +169,10 @@ function stopChrome({ force } = {}) {
   const me = chrome;
   if (!me) return;
   me.stopping = true;
-  me.child.kill(force ? 'SIGKILL' : 'SIGTERM');
+  // As Chrome's user: this init has no CAP_KILL (T-1660).
+  signalAs(me.child, force ? 'SIGKILL' : 'SIGTERM', { uid: UID_CHROME });
   clearTimeout(me.timer);
-  me.timer = setTimeout(() => me.child.kill('SIGKILL'), 5000);
+  me.timer = setTimeout(() => signalAs(me.child, 'SIGKILL', { uid: UID_CHROME }), 5000);
   me.timer.unref();
 }
 
@@ -170,6 +184,7 @@ function startSupervisor() {
   });
   supervisor = child;
   const startedAt = Date.now();
+  child.on('error', (e) => log('supervisor error:', e.message));
   child.on('message', (m) => {
     if (!m || typeof m !== 'object') return;
     if (m.op === 'chrome-start') startChrome(m.id);
@@ -193,7 +208,7 @@ function shutdown(signal) {
   shuttingDown = true;
   log(`${signal}: closing`);
   // The supervisor closes Chrome through CDP so cookies flush; ours is the backstop.
-  if (supervisor) supervisor.kill('SIGTERM');
+  if (supervisor) signalAs(supervisor, 'SIGTERM', { uid: UID_CPB });
   setTimeout(() => stopChrome(), 3000).unref();
   const done = setInterval(() => {
     if (!chrome && !supervisor) process.exit(0);
