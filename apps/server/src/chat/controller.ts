@@ -1270,9 +1270,9 @@ export class ChatController {
     const kept = confirmed ? null : (this.#chat.row(sessionId)?.control_state ?? null);
     this.#forget(sessionId, why);
     if (kept) this.#chat.patchSession(sessionId, { controlState: kept });
-    // T-416 S2: a lead that vanished in Bypass (an OOM kill) has it put back at its relaunch, every gate checked again (`#live`).
+    // T-416 S2: a lead that vanished in Bypass (an OOM kill, an outage) has it put back at its relaunch, every gate checked again (`#live`).
     const lead = this.#chat.row(sessionId);
-    this.#closeOut(sessionId, 'stopped', !!lead && this.#keptLead(lead));
+    this.#closeOut(sessionId, 'stopped', !!lead && this.#lostLead(lead));
     this.#chat.patchSession(sessionId, { process: 'gone', state: 'interrupted' });
     this.#emitSession(sessionId);
   }
@@ -3845,10 +3845,13 @@ export class ChatController {
       if (!this.#bypassAllowed()) return drop('policy', `Bypass not kept ${after}: the policy no longer allows it.`);
       if (row.bypass_capable !== 1) return drop('not_capable', `Bypass not kept ${after}: this session wasn’t started to allow Bypass.`);
       // T-417 review: a lead when it slept, and still one now (its workers may have ended, its limit or Keep going been cleared meanwhile).
-      if (lead && !this.#keptLead(row))
+      // T-1646: after a vanishing, a top-level crew lead counts too (`#lostLead`).
+      if (lead && !(how === 'lost' ? this.#lostLead(row) : this.#keptLead(row)))
         return drop(
           'not_lead',
-          `Bypass not kept ${after}: this chat is no longer a lead (no live workers, no workers limit, no Keep going).`,
+          how === 'lost'
+            ? `Bypass not kept ${after}: this chat is no longer a lead (not a crew lead, no live workers, no workers limit, no Keep going).`
+            : `Bypass not kept ${after}: this chat is no longer a lead (no live workers, no workers limit, no Keep going).`,
         );
       if (lead && !this.#personEntered(sessionId))
         return drop(
@@ -4640,6 +4643,17 @@ export class ChatController {
   }
 
   /**
+   * T-1646: a lead whose process vanished (an OOM kill, an outage of the host or its API) keeps Bypass for its relaunch: a kept lead, or a
+   * top-level crew lead (marked a lead at its start, or one that started workers). On 2026-10-19 the main Konfersi lead (by the code, not its row) had no live worker,
+   * no workers limit and no Keep going, so the k3s API outage took it out of Bypass for good while the Lab lead (live workers) kept it. Only
+   * which chats count as a lead: the relaunch still asks every other gate (the policy, the capability, the person's own entry with the
+   * acknowledgement and a fresh code, the grant), and the cap still sleeps only by `#keptLead`.
+   */
+  #lostLead(row: ChatSessionRow): boolean {
+    return this.#keptLead(row) || (!row.parent_id && isLead(row, this.#chat.hasWorkers(row.id)));
+  }
+
+  /**
    * T-416 (D-61): throws MEMORY_BUDGET when one more session in `workspaceId` (`waking`, or a new one: null) would leave less than the
    * headroom free: its estimate (one more per Agent-tool sub-agent it runs) plus one per launch there that the reading can't see yet (a slot
    * granted or a launch in flight). An unavailable reading, or no `memory` installed, never blocks. The refusal is on the record.
@@ -5231,7 +5245,13 @@ export class ChatController {
         await this.installHost(workspaceId);
       } catch (e) {
         if (cancelled()) return;
-        this.#chat.patchSession(sessionId, { state: 'ended', process: 'gone', endedReason: this.#message(e) });
+        // T-1646: a resume whose host could not be checked (the workspace or its API unreachable: "fetch failed" through the k3s API outage
+        // of 2026-10-19) is Interrupted like a start that failed, so a later send resumes it; only a first start ends here (it never ran).
+        this.#chat.patchSession(sessionId, {
+          state: opts.resume ? 'interrupted' : 'ended',
+          process: 'gone',
+          endedReason: this.#message(e),
+        });
         this.#emitSession(sessionId);
         return;
       }
