@@ -19,8 +19,8 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 
 ## IN FLIGHT
 - T-1701 hash slice done: 74bae41 on ai-worker ticket/T-1701-prompt-hash-log (c17525); gate ask waits for T-1162 on stg because `npm test` is red at the stg head itself (URLPattern, Jobs b24b9ea8/21ea40b0); then cherry-pick on a fresh stg clone, QA, gate, one ai-worker deploy (c17526).
-- Worker mo-qa-w1 (5d4cfc18, satria, sonnet, dontAsk, qa-verifier): T-1574 delta QA on dbbc9a4; first step is the clone-shape probe (c17539). If it works: T-1103 dec58a1 and T-553 52afda1 QA workers next, then the records for T-1353, T-632, T-1632. If refused: c17308 stands.
-- No Agent sub-agent running. Usage 16:57Z: session 78 %, runs out ~17:34Z, reset 19:40Z: no Agent sub-agent until the reset; workers run on other Claudes; lead-only work (gate copies, decisions) meanwhile.
+- Worker probe mo-qa-w1 (5d4cfc18, satria, sonnet, dontAsk) refused on the allow-listed clone shape at 17:00Z (T-1574 c17540): ended; c17308 stands on a third Claude. No worker, no Agent sub-agent running.
+- Usage 17:01Z: session 83 %, runs out ~17:29Z, reset 19:40Z. Nothing runs until the reset: every open step needs a sub-agent (QA, Jobs) or a non-lineage verdict (workers). T-1012 ancestry check denied again in the lead clone (c17552).
 - 16:58Z Re-attached by the coordinator after a portal liveness mark at 16:21Z (process never stopped).
 
 ## DECISIONS
@@ -33,7 +33,8 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - 16:20Z Coordinator: stg Worker logs via `/home/node/work/claudepilot/scripts/cf-logs.sh` (read-only); the "Konfersi QA e2e (agents)" service token covers the main stg hosts for Job e2e. Use after each v14 deploy and for T-1528 AC5.
 
 ## FOR THE COORDINATOR
-- c17308: dontAsk workers refused on the allow-listed clone shape; check the folder's allow list loads for workers.
+- c17308 (re-tested 17:00Z on satria, T-1574 c17540): dontAsk workers refused on the allow-listed clone shape; check the folder's allow list loads for workers. Single blocker for every non-lineage QA record.
+- c17552: T-1012 ancestry (is 4f9d95a on stg) denied in the lead clone (fetch + plain log chain); an allow line for merge-base/branch --contains in agentic-worktrees clones, or the answer on T-1012.
 - c17465: non-lineage QA records needed on T-1574 dbbc9a4 (delta check before its gate ask), T-1353, T-632, T-1632; session_message cannot reach the general lead.
 - AIR quota on qa-regress-scratch (T-1528 AC5, c16625); shared browser cannot reach stg-lab.konfersi.com (T-1667, T-1017 c16925, T-1089 screen check).
 - T-1705: should `git switch` be denied wherever `git checkout` is; is `--detach <sha>` meant to be denied for lanes?
