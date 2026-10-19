@@ -1427,14 +1427,7 @@ test('T-524, T-1643: the heavy Jobs keep off the control plane (the gate by a re
       .replace(/__[A-Z_]+__/g, 'x');
     const pod = (yamlLoad(text) as { spec: { template: { spec: Pod } } }).spec.template.spec;
     const na = pod.affinity?.nodeAffinity;
-    if (name === 'gate-job.yaml')
-      // T-1643: the gate never runs on the control-plane node (k3s-node3 joined the worker pool, so a required rule leaves room to run).
-      assert.deepEqual(
-        na?.requiredDuringSchedulingIgnoredDuringExecution,
-        { nodeSelectorTerms: [{ matchExpressions: [{ key: 'isnan.me/pool', operator: 'NotIn', values: ['control'] }] }] },
-        name,
-      );
-    else {
+    {
       assert.equal(na?.requiredDuringSchedulingIgnoredDuringExecution, undefined, `${name}: the template itself has no required rule`);
       assert.deepEqual(
         na?.preferredDuringSchedulingIgnoredDuringExecution,
@@ -2365,11 +2358,11 @@ test('T-733 S5: scripts/job-run.sh has no syntax error (bash -n)', () => {
 
 // ---- T-611 S2: JOB_RUN_AVOID_NODES, a comma list of node names a Job may never run on (default none). A required hostname NotIn rule, in the same
 // term as the control-plane rule when the memory decision adds it.
-test('T-1643: with JOB_RUN_AVOID_NODES unset a Job never runs on k3s-master (the required hostname rule); set empty, no rule', () => {
-  const dflt = placed(50, [], { JOB_RUN_AVOID_NODES: UNSET });
-  assert.equal(dflt.r.code, 0, dflt.r.out);
-  assert.deepEqual(dflt.required, rule(HOST('k3s-master')), 'the master is avoided by default');
-  kept(placed(50, [], { JOB_RUN_AVOID_NODES: '' }), 'empty allows the master again');
+test('T-1643: with JOB_RUN_AVOID_NODES unset no node is avoided (the master is allowed again); set to k3s-master, the required hostname rule', () => {
+  kept(placed(50, [], { JOB_RUN_AVOID_NODES: UNSET }), 'unset: no required rule');
+  const off = placed(50, [], { JOB_RUN_AVOID_NODES: 'k3s-master' });
+  assert.equal(off.r.code, 0, off.r.out);
+  assert.deepEqual(off.required, rule(HOST('k3s-master')), 'named: the master is avoided');
 });
 
 const HOST = (...names: string[]) => ({ key: 'kubernetes.io/hostname', operator: 'NotIn', values: names });

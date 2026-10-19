@@ -536,7 +536,7 @@ test('the gate as a Job in the cluster (T-37, the default): a Secret for its lif
   assert.match(job, /podAntiAffinity[\s\S]*claudepilot\.managed: "true"/, 'it prefers a node without a development workspace pod');
   assert.match(job, /GATE_VERDICT_SH, value: "[A-Za-z0-9+/=]{100,}"/, 'the caller’s verdict script travels with the Job');
   assert.doesNotMatch(job, /^\s*nodeSelector:/m, 'never pinned to one node');
-  assert.match(job, /requiredDuringSchedulingIgnoredDuringExecution:[\s\S]*key: isnan\.me\/pool, operator: NotIn, values: \[control\]/, 'T-1643: never on the control-pool node (k3s-master)');
+  assert.match(job, /preferredDuringSchedulingIgnoredDuringExecution:[\s\S]*key: isnan\.me\/pool, operator: NotIn, values: \[control\]/, 'T-1643: prefers a worker-pool node');
   assert.ok(!job.includes(w.token), 'the token is in the Secret, never the Job');
   const calls = w.calls();
   assert.match(calls, /kubectl -n isnan-claudepilot create secret generic claudepilot-gate-/);
