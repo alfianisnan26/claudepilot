@@ -11,9 +11,12 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - Closed this session: 0.
 
 ## IN FLIGHT
-- T-1528 QA: Agent sub-agent mo-qa (sonnet, qa-verifier): test_pools + suite Jobs at stg sha, mutant on qa/T-1528-mutant, gate-form comment. Verdict record needs a worker QA later (sub-agent shares my session).
+- T-1528: QA PASS WITH GAPS on stg c29d103 (c17424; Jobs f1e957c4, a60470c9; 4 mutants red). Held in_review until AC5 (live stg re-run, AIR quota) or a coordinator waiver (c17428). Verdict record needs a non-lineage QA.
+- Gate audit: Agent sub-agent mo-audit (sonnet, read-only): per in_review/in_progress ticket, verdict sha vs branch head, gate-form present, v14 member.
 - T-1574 redo: Agent sub-agent mo-be-d (sonnet, implementer): clone -b ticket/T-1590-clip-recap, cherry-pick c603bae, push ticket/T-1574-nominal-tp-v14-2, Jobs on the new sha. (mo-be-c's a69d6ea void, T-1705.)
-- T-1103, T-1701: claimed, waiting for a free slot (D-43: session pace over, two sub-agents at a time).
+- T-1103, T-1701: claimed, waiting for a free slot.
+- 16:22Z Handover received: 53 tickets assigned to this session (ticket_list), the Lab-held metocean set included.
+- 16:21Z Usage read: session 60 %, runs out ~17:34Z at this pace (reset 19:40Z): one build sub-agent plus one read-only at most; short turns.
 - Workers: four dontAsk workers ended 16:12Z, all refused on the allow-listed clone shape (see FOR THE COORDINATOR).
 
 ## DECISIONS
@@ -27,8 +30,7 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 
 ## FOR THE COORDINATOR
 - T-1703 c17308: dontAsk workers get "Permission to use Bash has been denied because Claude Code is running in don't ask mode" on `git clone -q -b stg https://git.konfersi.com/platform/<repo>.git /home/node/work/agentic-worktrees/<label>-<repo>`; check the folder's allow list loads for workers.
-- T-1703 c17276: FR9f handover of the Lab-held metocean tickets (T-1013..T-1022, T-1089, T-1090, T-367, T-603, T-553, T-1352, T-1416, T-1435, T-1579, T-1586, T-1355, T-1365, T-1164, T-1160, T-1012, T-604) to session fc73ae34.
-- Carried over: AIR quota on stg QA project qa-regress-scratch (T-1528 AC5, c16625); shared browser cannot reach stg-lab.konfersi.com (T-1667, T-1017 c16925).
+- AIR quota on stg QA project qa-regress-scratch (T-1528 AC5, c16625, c17428: the only thing left before T-1528 closes); shared browser cannot reach stg-lab.konfersi.com (T-1667, T-1017 c16925).
 - D-88 text is not in this workspace's DECISIONS.md copy (ends at D-87).
 - T-1705: should `git switch` be denied wherever `git checkout` is, and is `--detach <sha>` meant to be denied for lanes? One line on T-1705 makes the briefs exact.
 
