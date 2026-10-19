@@ -11,7 +11,7 @@ test('a Portal MCP token on a timeline is named by its label', () => {
 test('the other actors read as before', () => {
   assert.equal(actorName('ui', 'Admin'), 'Admin');
   assert.equal(actorName('session:s1', 'Worker'), 'Worker');
-  assert.equal(actorName('session:s1', ''), 'A session');
+  assert.equal(actorName('session:s1', ''), 'An agent');
   assert.equal(actorName('ticket:T-2', ''), 'A ticket');
 });
 
@@ -41,10 +41,10 @@ test('a move by the orphan sweep reads as a sentence', () => {
   assert.equal(fallbackSentence('Portal', { to: null, reason: 'queue' }), 'Portal put it back in the queue');
   assert.equal(
     fallbackSentence('Portal', { to: { kind: 'session', sessionId: 's' }, reason: 'lineage' }),
-    'Portal moved it to the session that continues it',
+    'Portal moved it to the agent that continues it',
   );
   assert.equal(
     fallbackSentence('Portal', { to: { kind: 'session', sessionId: 's' }, reason: 'title' }),
-    'Portal moved it to the live session of its track',
+    'Portal moved it to the live agent of its track',
   );
 });

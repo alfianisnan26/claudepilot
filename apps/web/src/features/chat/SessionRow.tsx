@@ -76,7 +76,7 @@ export function rowActions(row: ListRow, on: RowActions): MenuItem[] {
     s.archivedAt
       ? { label: 'Unarchive', icon: <ArchiveRestore className="size-4" />, onSelect: () => on.unarchive(s) }
       : { label: 'Archive', icon: <Archive className="size-4" />, onSelect: () => on.archive(s) },
-    ...(s.state === 'ended' ? [] : [{ label: 'End session', icon: <CircleStop className="size-4" />, onSelect: () => on.end(s), danger: true }]),
+    ...(s.state === 'ended' ? [] : [{ label: 'End agent', icon: <CircleStop className="size-4" />, onSelect: () => on.end(s), danger: true }]),
     { label: 'Select', icon: <Check className="size-4" />, onSelect: () => on.select(s) },
     { label: 'Delete…', icon: <Trash2 className="size-4" />, onSelect: () => on.remove(s), danger: true },
   ];
@@ -446,7 +446,7 @@ export function SessionRow({
                 </span>
               ) : (
                 <InfoTip label="Bypass" icon={BYPASS_DOT}>
-                  Bypass: this session runs every tool without asking you first.
+                  Bypass: this agent runs every tool without asking you first.
                 </InfoTip>
               )}
             </span>
@@ -529,7 +529,7 @@ export function SessionRow({
           <button
             type="button"
             aria-expanded={open}
-            aria-label={`${open ? 'Hide' : 'Show'} the ${row.children.length} ${row.children.length === 1 ? 'session' : 'sessions'} ${title} started`}
+            aria-label={`${open ? 'Hide' : 'Show'} the ${row.children.length} ${row.children.length === 1 ? 'agent' : 'agents'} ${title} started`}
             onClick={() => onCollapse(s.id)}
             className="press -my-1 flex size-11 shrink-0 items-center justify-center rounded-full text-muted hover:bg-surface-2 hover:text-ink sm:my-0 sm:size-9"
           >

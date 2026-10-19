@@ -167,7 +167,7 @@ export function SessionsPage() {
   const unarchive = async (s: ChatSession) => {
     try {
       await chatApi.unarchive(s.id);
-      toast('Back in Sessions');
+      toast('Back in Agents');
       await reload();
     } catch (e) {
       toast(errorText(e, 'Could not unarchive it.'), 'error');
@@ -236,7 +236,7 @@ export function SessionsPage() {
     setBusy(false);
     setBulk(null);
     const verb = bulk === 'end' ? 'Ended' : bulk === 'archive' ? 'Archived' : 'Deleted';
-    if (result.failed.length === 0) toast(`${verb} ${result.ok} ${result.ok === 1 ? 'session' : 'sessions'}`);
+    if (result.failed.length === 0) toast(`${verb} ${result.ok} ${result.ok === 1 ? 'agent' : 'agents'}`);
     else
       toast(
         `${verb} ${result.ok}; ${result.failed.length} failed: ${errorText(result.failed[0]!.error, 'Something went wrong.')}`,
@@ -249,13 +249,13 @@ export function SessionsPage() {
   return (
     <>
       <PageHeader
-        title="Sessions"
+        title="Agents"
         description="Chat with the Claude Code agents in your workspaces."
         action={
           sessions &&
           sessions.length > 0 && (
             <Button icon={<Plus className="size-4" />} onClick={() => setCreating(true)}>
-              <span className="hidden sm:inline">New session</span>
+              <span className="hidden sm:inline">New agent</span>
               <span className="sm:hidden">New</span>
             </Button>
           )
@@ -298,18 +298,18 @@ export function SessionsPage() {
         (sessions.length === 0 ? (
           <EmptyState
             icon={<MessagesSquare className="size-6" />}
-            title="No sessions yet"
+            title="No agents yet"
             action={
               <Button icon={<Plus className="size-4" />} onClick={() => setCreating(true)}>
                 New session
               </Button>
             }
           >
-            Start a session to chat with Claude Code in one of your running workspaces.
+            Start an agent to chat with Claude Code in one of your running workspaces.
           </EmptyState>
         ) : list.shown === 0 ? (
-          <EmptyState icon={<MessagesSquare className="size-6" />} title={view.archived ? 'Nothing archived' : 'No sessions match'}>
-            {view.archived ? 'Archived sessions end and wait here, with their transcripts.' : 'Nothing fits this search and filter.'}{' '}
+          <EmptyState icon={<MessagesSquare className="size-6" />} title={view.archived ? 'Nothing archived' : 'No agents match'}>
+            {view.archived ? 'Archived agents end and wait here, with their transcripts.' : 'Nothing fits this search and filter.'}{' '}
             {(view.query || view.filter !== 'all' || view.archived || view.program) && (
               <button
                 type="button"
@@ -372,13 +372,13 @@ export function SessionsPage() {
       )}
 
       <NewSessionDialog open={creating} onClose={() => setCreating(false)} />
-      <EndSessionDialog session={ending} onClose={() => setEnding(null)} onEnded={() => (toast('Session ended'), void reload())} />
+      <EndSessionDialog session={ending} onClose={() => setEnding(null)} onEnded={() => (toast('Agent ended'), void reload())} />
       <ArchiveSessionDialog session={archiving} onClose={() => setArchiving(null)} onArchived={() => void reload()} />
       <ConfirmDialog
         open={!!bulk}
         title={bulkTitle(bulk, chosen)}
         description={bulkText(bulk, chosen)}
-        confirmLabel={bulk === 'end' ? 'End sessions' : bulk === 'archive' ? 'Archive' : 'Delete'}
+        confirmLabel={bulk === 'end' ? 'End agents' : bulk === 'archive' ? 'Archive' : 'Delete'}
         loading={busy}
         onConfirm={() => void runSelected()}
         onClose={() => !busy && setBulk(null)}
@@ -498,10 +498,10 @@ const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? o
 function bulkTitle(action: BulkAction | null, chosen: ChatSession[]): string {
   const n = chosen.length;
   return action === 'end'
-    ? `End ${plural(n, 'session')}?`
+    ? `End ${plural(n, 'agent')}?`
     : action === 'archive'
-      ? `Archive ${plural(n, 'session')}?`
-      : `Delete ${plural(n, 'session')}?`;
+      ? `Archive ${plural(n, 'agent')}?`
+      : `Delete ${plural(n, 'agent')}?`;
 }
 
 function bulkText(action: BulkAction | null, chosen: ChatSession[]): string {
@@ -512,5 +512,5 @@ function bulkText(action: BulkAction | null, chosen: ChatSession[]): string {
   const kept = trees && action !== 'end' ? ` The ${trees === 1 ? 'worktree folder stays' : `${trees} worktree folders stay`}.` : '';
   if (action === 'end') return `They stop; transcripts stay.${stops}`;
   if (action === 'archive') return `They end and move to Archived.${stops}${kept}`;
-  return `Transcripts and the sessions’ files in the workspaces are deleted. Can’t be undone.${stops}${kept}`;
+  return `Transcripts and the agents’ files in the workspaces are deleted. Can’t be undone.${stops}${kept}`;
 }

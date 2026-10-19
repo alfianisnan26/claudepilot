@@ -41,7 +41,7 @@ export function SessionInfoDialog({
   // Tickets pushed into this session (tickets PRD FR31): beside its own ticket, each with how it was bumped.
   const bumped = useBumpedTickets(session?.id, open);
   return (
-    <Dialog open={open} onClose={onClose} size="sm" title="Session">
+    <Dialog open={open} onClose={onClose} size="sm" title="Agent">
       {session && (
         <div className="flex flex-col gap-4">
           <div className="flex items-start gap-2">

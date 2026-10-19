@@ -65,7 +65,7 @@ export function DelegatedSessionView({ id, onBack }: { id: string; onBack: () =>
   if (gone)
     return (
       <div className="flex flex-col gap-3">
-        <p className="text-sm text-muted">This session is no longer shared with you.</p>
+        <p className="text-sm text-muted">This agent is no longer shared with you.</p>
         <Button variant="ghost" onClick={onBack}>
           Back
         </Button>

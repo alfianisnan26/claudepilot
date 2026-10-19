@@ -55,14 +55,14 @@ export function RecoverButton({ session, onDone, tip = true }: { session: ChatSe
         {tip && (
           <InfoTip label="About Resume">
             {suspicious
-              ? `Brings this session back as it was: same chat, same conversation. The line that ended it looks suspicious (${ended.origin}), so you confirm first.`
-              : 'Brings this session back as it was: same chat, conversation, tags and cost. The line that ended it is not read again.'}
+              ? `Brings this agent back as it was: same chat, same conversation. The line that ended it looks suspicious (${ended.origin}), so you confirm first.`
+              : 'Brings this agent back as it was: same chat, conversation, tags and cost. The line that ended it is not read again.'}
           </InfoTip>
         )}
       </span>
       <ConfirmDialog
         open={confirming}
-        title="Resume this session?"
+        title="Resume this agent?"
         tone="danger"
         description={
           <span className="block space-y-2 break-words [overflow-wrap:anywhere]">

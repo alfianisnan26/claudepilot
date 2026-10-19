@@ -7,7 +7,7 @@ import { evidenceText, sensitivityText } from './spikes.js';
 // $0.10 (5x) from 12 active periods, all of it one session; an outlier request of $1.20 against a $0.30 median (4x) over 11 requests.
 test('a burst names the requests, the window, the limit and the dollars', () => {
   const t = evidenceText({ kind: 'burst', requests: 24, windowMin: 10, threshold: 20, spentUsd: estimatedFigure(1.92) });
-  assert.equal(t, '24 finished requests in 10 minutes by one session; the limit is 20. They cost $1.92. Dollars are estimates.');
+  assert.equal(t, '24 finished requests in 10 minutes by one agent; the limit is 20. They cost $1.92. Dollars are estimates.');
 });
 
 test('a rate names the spend, the usual and how it is known, and the top session', () => {

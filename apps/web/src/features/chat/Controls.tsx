@@ -163,7 +163,7 @@ export function Controls({
 
   return (
     <>
-      <div role="group" aria-label="Session settings" className={cn('flex min-w-0 items-center gap-1 sm:gap-1.5', className)}>
+      <div role="group" aria-label="Agent settings" className={cn('flex min-w-0 items-center gap-1 sm:gap-1.5', className)}>
         <Quiet
           onClick={() => setOpen('model')}
           ariaLabel={`Model and effort: ${modelName}${effort ? `, ${effort}` : ''}${session.ultracode ? ', Ultracode on' : ''}`}
@@ -354,7 +354,7 @@ function ModelEffortSheet({
       ) : (
         <div className="flex flex-col gap-2">
           {models.length === 0 ? (
-            <p className="text-[13px] text-muted">This session has no other models to switch to.</p>
+            <p className="text-[13px] text-muted">This agent has no other models to switch to.</p>
           ) : (
             <ModelFamilies
               models={models}
@@ -433,7 +433,7 @@ function ModePicker({
   const options: Option[] = OFFERED_MODES.map((m) => {
     const { label, hint, icon: Icon } = MODES[m];
     const blocked = m === 'auto' && !autoAllowed && mode !== 'auto';
-    return { value: m, label, hint: blocked ? 'Only for sessions you start here.' : hint, icon: <Icon className="size-4" />, disabled: blocked };
+    return { value: m, label, hint: blocked ? 'Only for agents you start here.' : hint, icon: <Icon className="size-4" />, disabled: blocked };
   });
   // Bypass, in the danger colour, only where the policy allows it: its own row once the session can enter it, else the restart that makes it so.
   if (bypass?.allowed && !bypass.active)
@@ -479,7 +479,7 @@ function Footnotes({ error, connected }: { error: string | null; connected: bool
     <>
       {!connected && (
         <p className="text-[13px] text-muted" aria-live="polite">
-          Reconnecting… changes can be made once the session is back.
+          Reconnecting… changes can be made once the agent is back.
         </p>
       )}
       {error && <ErrorNote>{error}</ErrorNote>}

@@ -14,7 +14,7 @@ import { searchPalette, ticketByNumber, type PaletteItem, type PaletteKind } fro
 import { usePaletteData } from './usePaletteData';
 
 /** What the trailing word of a row says. Actions and pages are what they look like; the things you search for are named. */
-const KIND_WORD: Partial<Record<PaletteKind, string>> = { session: 'Session', workspace: 'Workspace', ticket: 'Ticket' };
+const KIND_WORD: Partial<Record<PaletteKind, string>> = { session: 'Agent', workspace: 'Workspace', ticket: 'Ticket' };
 
 const FOCUSABLE = 'a[href],button:not([disabled]),input:not([disabled]),[tabindex]:not([tabindex="-1"])';
 

@@ -20,7 +20,7 @@ export function evidenceText(e: SpikeEvidence): string {
         `${e.topSession ? ` ${Math.round(e.topSession.share)} % of it was one session.` : ''} Dollars are estimates.`
       );
     case 'burst':
-      return `${e.requests} finished requests in ${e.windowMin} minutes by one session; the limit is ${e.threshold}. They cost ${usd(e.spentUsd)}. Dollars are estimates.`;
+      return `${e.requests} finished requests in ${e.windowMin} minutes by one agent; the limit is ${e.threshold}. They cost ${usd(e.spentUsd)}. Dollars are estimates.`;
     case 'outlier':
       if (e.medianUsd.basis === 'unavailable') return `One ${usd(e.costUsd)} request. Nothing to compare it with: ${reasonText(e.medianUsd.reason)} Dollars are estimates.`;
       return `One ${usd(e.costUsd)} request, ${times(e.factor)} the median of ${usd(e.medianUsd)} over ${e.requests} requests in the 7 days before. Dollars are estimates.`;
@@ -32,7 +32,7 @@ export function sensitivityText(s: SpikeSettings): string {
   if (!s.enabled) return 'Spike detection is off in Settings.';
   return (
     `Rules of thumb, not proof that anything is wrong: they alert and never act. ` +
-    `Rate: the last 15 minutes cost ${s.rateFactor}x the usual or more. Burst: ${s.burstRequests} requests in ${s.burstWindowMin} minutes by one session. ` +
+    `Rate: the last 15 minutes cost ${s.rateFactor}x the usual or more. Burst: ${s.burstRequests} requests in ${s.burstWindowMin} minutes by one agent. ` +
     `Outlier: one request ${s.outlierFactor}x the median or more. Nothing under ${money(s.minUsd)}.`
   );
 }

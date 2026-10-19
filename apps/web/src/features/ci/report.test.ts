@@ -11,19 +11,19 @@ test('no report, no line', () => {
 });
 
 test('the latest report says where it went, with the chat it reached', () => {
-  assert.deepEqual(reportLine([r('waiting', 'sent'), r('passed', 'sent')]), { text: 'Pass reported to the session', sessionId: 's-now' });
+  assert.deepEqual(reportLine([r('waiting', 'sent'), r('passed', 'sent')]), { text: 'Pass reported to the agent', sessionId: 's-now' });
 });
 
 test('a report not sent says why, and links nowhere', () => {
-  assert.deepEqual(reportLine([r('failed', 'ended')]), { text: 'Failure not reported, the session has ended', sessionId: null });
+  assert.deepEqual(reportLine([r('failed', 'ended')]), { text: 'Failure not reported, the agent has ended', sessionId: null });
   assert.equal(reportLine([r('failed', 'capped')])!.text, 'Failure not reported, over the message cap');
   assert.equal(reportLine([r('failed', 'paused')])!.text, 'Failure not reported, paused after repeated failures');
-  assert.equal(reportLine([r('cancelled', 'refused')])!.text, 'Cancel not reported, the session refused it');
+  assert.equal(reportLine([r('cancelled', 'refused')])!.text, 'Cancel not reported, the agent refused it');
 });
 
 test('the bump line: the latest bump, how, and where it went or why not', () => {
   assert.equal(bumpLine([]), null);
-  assert.deepEqual(bumpLine([{ sessionId: 's1', mode: 'prioritise', outcome: 'sent', at: '', note: 'now' }]), { text: 'Bumped to a session (Fix)', sessionId: 's1' });
+  assert.deepEqual(bumpLine([{ sessionId: 's1', mode: 'prioritise', outcome: 'sent', at: '', note: 'now' }]), { text: 'Bumped to an agent (Fix)', sessionId: 's1' });
   assert.deepEqual(bumpLine([{ sessionId: 's1', mode: 'prioritise', outcome: 'sent', at: '', note: null }, { sessionId: 's2', mode: 'ask', outcome: 'refused', at: '', note: 'This session has ended.' }]), {
     text: 'Bump not taken (Ask): This session has ended. · 2 bumps',
     sessionId: null,

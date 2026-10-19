@@ -37,7 +37,7 @@ export function MemberPage() {
   const user = me?.kind === 'account' ? me.user : null;
   if (openId)
     return (
-      <AuthLayout title="Shared session">
+      <AuthLayout title="Shared agent">
         <DelegatedSessionView id={openId} onBack={() => setOpenId(null)} />
       </AuthLayout>
     );
@@ -72,7 +72,7 @@ export function MemberPage() {
         ) : (
           <p className="flex items-center gap-1 text-sm text-ink-soft">
             No access yet
-            <InfoTip label="About member accounts">An admin shares a session with you, then it shows here.</InfoTip>
+            <InfoTip label="About member accounts">An admin shares an agent with you, then it shows here.</InfoTip>
           </p>
         )}
         {teams.length > 0 && (

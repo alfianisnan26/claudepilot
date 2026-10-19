@@ -13,7 +13,7 @@ export const shortcutsWidget: GlanceWidget = {
   id: 'shortcuts',
   label: 'Shortcuts',
   icon: Search,
-  about: 'Quick search for sessions, workspaces, tickets, pages and actions, from anywhere with Ctrl+K (Cmd+K on a Mac), and a new session in a tap.',
+  about: 'Quick search for agents, workspaces, tickets, pages and actions, from anywhere with Ctrl+K (Cmd+K on a Mac), and a new agent in a tap.',
   placements: ['header', 'dock'],
   useCompact: useShortcutsCompact,
   activate: () => openPalette(),

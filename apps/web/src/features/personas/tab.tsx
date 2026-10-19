@@ -17,7 +17,7 @@ export const personasTab = definePoolType<PersonaContent>({
   label: 'Personas',
   type: 'persona',
   noun: { one: 'persona', other: 'personas' },
-  description: 'What Claude is told, and where sessions start.',
+  description: 'What Claude is told, and where agents start.',
   icon: UserRound,
   emptyContent: emptyPersona,
   Editor: PersonaEditor,
@@ -29,7 +29,7 @@ export const personasTab = definePoolType<PersonaContent>({
   summary: (p) => <PersonaSummary pool={p} />,
   ConfigurationDetail: PersonaConfiguration,
   AddOn: PersonaAddOn,
-  publishNote: (n) => `${n} workspace${n === 1 ? ' gets' : 's get'} this. Open sessions re-read the instructions at their next message; the rest applies to new sessions.`,
+  publishNote: (n) => `${n} workspace${n === 1 ? ' gets' : 's get'} this. Open agents re-read the instructions at their next message; the rest applies to new agents.`,
 });
 
 /** Instruction contexts' tab (Persona PRD A9, `/admin/pools?tab=contexts`): reusable instructions, assigned on their own or held by personas. */
@@ -49,5 +49,5 @@ export const contextsTab = definePoolType<ContextContent>({
     const lines = c ? lineCount(c.body) : 0;
     return lines ? `${lines} lines` : 'Empty';
   },
-  publishNote: (n) => `${n} workspace${n === 1 ? ' gets' : 's get'} this. Open sessions re-read it at their next message.`,
+  publishNote: (n) => `${n} workspace${n === 1 ? ' gets' : 's get'} this. Open agents re-read it at their next message.`,
 });

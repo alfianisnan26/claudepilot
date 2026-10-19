@@ -37,8 +37,8 @@ export function AccessSection() {
     <section aria-labelledby="settings-access" data-settings-access="">
       <div className="mb-2 flex items-center gap-1 px-1">
         <h2 id="settings-access" className="flex flex-1 items-center gap-1 text-[13px] font-semibold text-muted">
-          Shared sessions
-          <InfoTip label="About shared sessions">Every session shared with an account or a team. Share from a session’s menu; remove here or there.</InfoTip>
+          Shared agents
+          <InfoTip label="About shared agents">Every agent shared with an account or a team. Share from an agent’s menu; remove here or there.</InfoTip>
         </h2>
       </div>
       <Card>
@@ -53,7 +53,7 @@ export function AccessSection() {
                 <span className="min-w-0 flex-1">
                   <span className="flex min-w-0 items-center gap-1.5 font-medium">
                     <MessageSquare className="size-4 shrink-0 text-muted" aria-hidden="true" />
-                    <span className="min-w-0 [overflow-wrap:anywhere]">{s.sessionTitle ?? 'A removed session'}</span>
+                    <span className="min-w-0 [overflow-wrap:anywhere]">{s.sessionTitle ?? 'A removed agent'}</span>
                   </span>
                   <span className="flex min-w-0 flex-wrap items-center gap-1 pt-0.5 text-[12.5px] text-muted">
                     {s.subject.kind === 'team' ? <Users className="size-3.5 shrink-0" aria-hidden="true" /> : <UserRound className="size-3.5 shrink-0" aria-hidden="true" />}
@@ -66,7 +66,7 @@ export function AccessSection() {
                     {endText(s) && <span className={s.expired ? 'text-danger' : ''}>{endText(s)}</span>}
                   </span>
                 </span>
-                <Button variant="ghost" size="icon" aria-label={`Remove ${s.subjectName} from ${s.sessionTitle ?? 'the session'}`} onClick={() => void revoke(s)}>
+                <Button variant="ghost" size="icon" aria-label={`Remove ${s.subjectName} from ${s.sessionTitle ?? 'the agent'}`} onClick={() => void revoke(s)}>
                   <Trash2 className="size-[18px]" />
                 </Button>
               </li>

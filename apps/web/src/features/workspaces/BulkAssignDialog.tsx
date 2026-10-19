@@ -113,7 +113,7 @@ export function BulkAssignDialog({
             <ShieldAlert className="mt-0.5 size-4 shrink-0 text-flame" />
             <p className="min-w-0 text-ink-soft">
               Workspaces may have their own sign-in. From their next request, Claude Code uses the pool’s key instead, usage is billed to the
-              pool’s account, and their chat sessions end first.
+              pool’s account, and their agents end first.
             </p>
           </div>
         )}

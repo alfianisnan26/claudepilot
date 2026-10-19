@@ -83,7 +83,7 @@ export function ResourcesRow({ w, open }: { w: Workspace; open: boolean }) {
         <dt className="inline-flex shrink-0 items-center gap-1 text-muted">
           Resources
           <InfoTip label="About resources">
-            CPU and memory of this workspace: the limits it may use, and what its pod reserves on the node. A change applies now (the pod restarts and every session in it ends) or at its next restart. It must fit on the node, and it waits for a running CI run.
+            CPU and memory of this workspace: the limits it may use, and what its pod reserves on the node. A change applies now (the pod restarts and every agent in it ends) or at its next restart. It must fit on the node, and it waits for a running CI run.
           </InfoTip>
         </dt>
         <dd className="flex min-w-0 items-center justify-end gap-1 text-right">
@@ -145,13 +145,13 @@ export function ResourcesRow({ w, open }: { w: Workspace; open: boolean }) {
             onChange={setWhen}
           />
         </div>
-        {when === 'now' && state?.running && <p className="mt-3 rounded-2xl bg-danger-soft p-3 text-sm text-ink-soft">The pod restarts: every session in this workspace ends.</p>}
+        {when === 'now' && state?.running && <p className="mt-3 rounded-2xl bg-danger-soft p-3 text-sm text-ink-soft">The pod restarts: every agent in this workspace ends.</p>}
       </FormDialog>
 
       <ConfirmDialog
         open={confirming}
         title="Restart now?"
-        description="Every session in this workspace ends. The pod restarts with the new CPU and memory."
+        description="Every agent in this workspace ends. The pod restarts with the new CPU and memory."
         confirmLabel="Apply now"
         loading={saving}
         onConfirm={() => void send()}

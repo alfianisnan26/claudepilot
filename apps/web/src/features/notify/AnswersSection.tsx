@@ -10,8 +10,8 @@ type Key = 'deny' | 'allowRead' | 'allowEdit' | 'allowCommand';
 
 const ROWS: { key: Key; label: string; tip: string; confirm?: string }[] = [
   { key: 'deny', label: 'Deny', tip: 'Deny a tool request from the notification. The request stays open in the app only if you do not answer.' },
-  { key: 'allowRead', label: 'Read', tip: 'Allow Read, Glob, Grep and LS from the notification, only for a path inside the session folder that is not hidden, and only when the whole request is shown.', confirm: 'Reading files will be allowed from a notification, when the request is fully shown and inside the session folder.' },
-  { key: 'allowEdit', label: 'Edit', tip: 'Allow Edit, Write and NotebookEdit from the notification, with the same path rules as Read.', confirm: 'Editing files will be allowed from a notification, when the request is fully shown and inside the session folder.' },
+  { key: 'allowRead', label: 'Read', tip: 'Allow Read, Glob, Grep and LS from the notification, only for a path inside the agent folder that is not hidden, and only when the whole request is shown.', confirm: 'Reading files will be allowed from a notification, when the request is fully shown and inside the agent folder.' },
+  { key: 'allowEdit', label: 'Edit', tip: 'Allow Edit, Write and NotebookEdit from the notification, with the same path rules as Read.', confirm: 'Editing files will be allowed from a notification, when the request is fully shown and inside the agent folder.' },
   { key: 'allowCommand', label: 'Command', tip: 'Allow a Bash command from the notification, only when it is short, plain text with no shell operators, and fully shown.', confirm: 'Running commands will be allowed from a notification. Only short plain commands without operators qualify, but one tap on a lock screen will run them.' },
 ];
 

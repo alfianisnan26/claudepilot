@@ -302,7 +302,7 @@ async function scenario(cfg) {
   }
 
   // 4. The session ⋯ menu: "Auto move: <mode>" and its choices; no item when the platform is off.
-  await press(`document.querySelector('[aria-label^="Session actions"]')`, touch);
+  await press(`document.querySelector('[aria-label^="Agent actions"]')`, touch);
   await waitFor(`!!document.querySelector('[role=menu]')`, 2000);
   const item = `[...document.querySelectorAll('[role=menuitem]')].find((e) => e.textContent.includes('Auto move'))`;
   if (cfg.platform === 'off') {

@@ -37,7 +37,7 @@ export function StylesEditor({ value, onChange, errors, disabled }: { value: Per
     <div className="flex flex-col gap-2">
       <LabelRow
         label="Styles"
-        tip="Output styles change tone and format, and users can still pick another. The starred style is where new sessions start; with no star they keep choosing their own."
+        tip="Output styles change tone and format, and users can still pick another. The starred style is where new agents start; with no star they keep choosing their own."
         right={
           <Button
             size="sm"

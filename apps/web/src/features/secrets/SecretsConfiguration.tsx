@@ -68,9 +68,9 @@ export function SecretsConfiguration({ workspace, assignments }: { workspace: Wo
           <RotateCcw className="mt-0.5 size-4 shrink-0" />
           <span className="flex min-w-0 flex-1 items-center gap-1">
             <span>
-              Restart sessions to finish removing <span className="font-mono text-[12px]">{data.removing.join(', ')}</span>
+              Restart agents to finish removing <span className="font-mono text-[12px]">{data.removing.join(', ')}</span>
             </span>
-            <InfoTip label="About removing variables">Sessions that started before keep a blank value until they end.</InfoTip>
+            <InfoTip label="About removing variables">Agents that started before keep a blank value until they end.</InfoTip>
           </span>
         </p>
       )}

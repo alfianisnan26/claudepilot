@@ -59,7 +59,7 @@ export function BumpDialog({
         setTargets(list);
         setSessionId(firstPick(list));
       },
-      (e) => current && (setTargets([]), setError(errorText(e, 'Couldn’t load the sessions.'))),
+      (e) => current && (setTargets([]), setError(errorText(e, 'Couldn’t load the agents.'))),
     );
     return () => {
       current = false;
@@ -67,7 +67,7 @@ export function BumpDialog({
   }, [open]);
 
   const submit = async () => {
-    if (!sessionId) return setError('Pick a session.');
+    if (!sessionId) return setError('Pick an agent.');
     setSaving(true);
     setError(null);
     try {
@@ -114,12 +114,12 @@ export function SessionPicker({ targets, value, onChange, preferredLabel }: { ta
   return (
     <div className="flex flex-col gap-1.5">
       <p id={labelId} className="text-sm font-semibold">
-        Session
+        Agent
       </p>
       {targets === null ? (
         <div className="skeleton h-14 rounded-xl" aria-busy="true" />
       ) : targets.length === 0 ? (
-        <p className="rounded-xl border border-line px-3 py-3 text-[13.5px] text-muted">No running session</p>
+        <p className="rounded-xl border border-line px-3 py-3 text-[13.5px] text-muted">No running agent</p>
       ) : (
         <div role="radiogroup" aria-labelledby={labelId} className="flex max-h-64 flex-col overflow-y-auto overscroll-contain rounded-xl border border-line">
           {targets.map((t) => {

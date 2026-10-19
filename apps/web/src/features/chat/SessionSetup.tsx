@@ -95,7 +95,7 @@ export function NoSessionWorkspace({
         })}
       </ul>
       <p className="text-[13px] text-muted">
-        Sessions run on a Claude’s own sign-in, or on the workspace’s account pool.
+        Agents run on a Claude’s own sign-in, or on the workspace’s account pool.
       </p>
     </div>
   );

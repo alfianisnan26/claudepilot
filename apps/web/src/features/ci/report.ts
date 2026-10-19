@@ -2,9 +2,9 @@ import { CI_BUMP_MODE_LABEL, type CiRunBump, type CiRunReport } from '@portal/co
 
 const STATE: Record<CiRunReport['state'], string> = { failed: 'Failure', passed: 'Pass', cancelled: 'Cancel', waiting: 'Wait' };
 const WHY: Record<CiRunReport['outcome'], string> = {
-  sent: 'reported to the session',
-  ended: 'not reported, the session has ended',
-  refused: 'not reported, the session refused it',
+  sent: 'reported to the agent',
+  ended: 'not reported, the agent has ended',
+  refused: 'not reported, the agent refused it',
   capped: 'not reported, over the message cap',
   paused: 'not reported, paused after repeated failures',
 };
@@ -23,6 +23,6 @@ export function bumpLine(bumps: CiRunBump[] | undefined): { text: string; sessio
   const how = CI_BUMP_MODE_LABEL[last.mode] ?? last.mode;
   const more = bumps!.length > 1 ? ` · ${bumps!.length} bumps` : '';
   return last.outcome === 'sent'
-    ? { text: `Bumped to a session (${how})${more}`, sessionId: last.sessionId }
+    ? { text: `Bumped to an agent (${how})${more}`, sessionId: last.sessionId }
     : { text: `Bump not taken (${how})${last.note ? `: ${last.note}` : ''}${more}`, sessionId: null };
 }

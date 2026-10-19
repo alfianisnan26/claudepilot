@@ -11,7 +11,7 @@ import { orderWidgets, useGlanceSettings } from './settings';
 import type { GlanceContext, GlancePlacement, GlanceWidget } from './types';
 
 /** What a screen reader calls each strip (several can be on screen at once, so they differ). */
-const STRIP_LABEL: Record<GlancePlacement, string> = { header: 'At a glance', list: 'At a glance on this page', composer: 'At a glance in this session', dock: 'Dock' };
+const STRIP_LABEL: Record<GlancePlacement, string> = { header: 'At a glance', list: 'At a glance on this page', composer: 'At a glance in this agent', dock: 'Dock' };
 
 /** The widgets a place draws: the ones that fit it, the ones the person left on, in the order they chose; none when the place is off. */
 export function useStripWidgets(placement: GlancePlacement): GlanceWidget[] {

@@ -308,7 +308,7 @@ function TicketQueue({ selected }: { selected: string | null }) {
             <Chip
               on={orphans}
               tone="danger"
-              title="Their session ended: the portal moves them in a few minutes"
+              title="Their agent ended: the portal moves them in a few minutes"
               onClick={() => set({ orphan: orphans ? null : '1', assignee: null, s: null })}
               count={counts?.orphans ?? null}
             >
@@ -389,7 +389,7 @@ function TicketQueue({ selected }: { selected: string | null }) {
         onClose={() => setBumping(null)}
         onBumped={(r) => {
           setBumping(null);
-          toast(`${r.ticket.id} bumped into ${r.session.title || 'the session'}`);
+          toast(`${r.ticket.id} bumped into ${r.session.title || 'the agent'}`);
           void load();
         }}
       />

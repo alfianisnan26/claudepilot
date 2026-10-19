@@ -4,8 +4,8 @@ import { ciApi } from './api';
 
 /** The two ways, in the dialog's one ⓘ (local-git-ci PRD FR37a). */
 const HELP: Record<BumpMode, string> = {
-  prioritise: 'the session gets CI’s report of the run and acts on it now.',
-  ask: 'a question about the run. The session answers in its chat, then carries on.',
+  prioritise: 'the agent gets CI’s report of the run and acts on it now.',
+  ask: 'a question about the run. The agent answers in its chat, then carries on.',
 };
 
 /** Bump (FR37a): the shared Bump dialog over a run's sessions; the one that started it (or owns its branch) comes first. */
@@ -16,7 +16,7 @@ export function RunBumpDialog({ run, onClose, onBumped }: { run: Pick<CiRunSumma
       open={!!run}
       onClose={onClose}
       subject={run ? `${run.pipeline} #${run.number}` : undefined}
-      preferredLabel="Its session"
+      preferredLabel="Its agent"
       modeLabels={CI_BUMP_MODE_LABEL}
       modeHelp={HELP}
       load={() => ciApi.bumpTargets(id)}

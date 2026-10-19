@@ -18,7 +18,7 @@ export function actorLabel(actor: string): string {
   const colon = actor.indexOf(':');
   const type = colon > 0 ? actor.slice(0, colon) : actor;
   const key = colon > 0 ? actor.slice(colon + 1) : '';
-  if (type === 'session') return `Session ${key.slice(0, 8)}`;
+  if (type === 'session') return `Agent ${key.slice(0, 8)}`;
   if (type === 'ticket') return `Ticket ${key}`;
   if (type === 'portal-mcp') return 'Claude';
   if (type === 'workspace') return 'Workspace';

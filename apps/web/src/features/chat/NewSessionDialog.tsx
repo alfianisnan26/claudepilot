@@ -193,7 +193,7 @@ export function NewSessionDialog({ open, onClose }: { open: boolean; onClose: ()
         await askTrust(e, request, request.cwd ?? HOME);
       } else {
         setTrust(null);
-        setError(errorText(e, 'Could not start the session.'));
+        setError(errorText(e, 'Could not start the agent.'));
         if (isIneligible(e)) void reload();
       }
     } finally {
@@ -251,9 +251,9 @@ export function NewSessionDialog({ open, onClose }: { open: boolean; onClose: ()
       open={open}
       onClose={trust ? back : onClose}
       size="sm"
-      title={trust ? 'Trust this folder?' : 'New session'}
+      title={trust ? 'Trust this folder?' : 'New agent'}
       description={
-        trust ? <span className="font-mono break-all">{trust.scan.folder}</span> : needsSetup ? 'No workspace is ready for sessions.' : undefined
+        trust ? <span className="font-mono break-all">{trust.scan.folder}</span> : needsSetup ? 'No workspace is ready for agents.' : undefined
       }
       onSubmit={trust ? trustAndStart : needsSetup ? goNext : submit}
       submitLabel={trust ? 'Trust and start' : needsSetup ? (shell ? 'Open shell' : 'Workspaces') : 'Start'}
@@ -357,7 +357,7 @@ export function NewSessionDialog({ open, onClose }: { open: boolean; onClose: ()
           )}
           {bypassAllowed && (
             <SwitchRow
-              label="Allow Bypass later in this session"
+              label="Allow Bypass later in this agent"
               icon={<ShieldAlert className="size-4" />}
               checked={allowBypass}
               onChange={setAllowBypass}

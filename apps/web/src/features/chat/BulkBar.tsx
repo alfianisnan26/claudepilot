@@ -48,7 +48,7 @@ export function BulkBar({
   return (
     <div
       role="toolbar"
-      aria-label="Selected sessions"
+      aria-label="Selected agents"
       className="glass-card fixed inset-x-3 bottom-[calc(var(--tabbar-h,0px)+env(safe-area-inset-bottom)+0.5rem)] z-40 mx-auto flex max-w-[860px] flex-col gap-2 rounded-[24px] p-3 sm:bottom-6 sm:flex-row sm:items-center sm:gap-2 sm:px-4 sm:py-2.5"
     >
       <p className="flex items-center gap-2 text-[14px] font-semibold sm:mr-auto" aria-live="polite">

@@ -48,7 +48,7 @@ for (const cfg of MATRIX) {
     check(cfg.name, 'the bumped entry reads as a sentence', await seen(`document.body.innerText.includes('bumped it into “Worker” (Ask)')`, 30000));
     check(cfg.name, 'the note shows under it', await b.eval(`document.body.innerText.includes('Does this also happen on the mobile app?')`));
     check(cfg.name, 'page: no horizontal scroll', await b.eval(`document.scrollingElement.scrollWidth <= innerWidth + 1`));
-    const actions = await b.eval(`(() => { const tops = ['Start session', 'Bump', 'Close', 'More'].map((n) => [...document.querySelectorAll('main button')].find((e) => (e.textContent.trim() || e.getAttribute('aria-label')) === n)?.getBoundingClientRect().top); return tops.every((t) => t !== undefined && Math.abs(t - tops[0]) < 4); })()`);
+    const actions = await b.eval(`(() => { const tops = ['Start agent', 'Bump', 'Close', 'More'].map((n) => [...document.querySelectorAll('main button')].find((e) => (e.textContent.trim() || e.getAttribute('aria-label')) === n)?.getBoundingClientRect().top); return tops.every((t) => t !== undefined && Math.abs(t - tops[0]) < 4); })()`);
     check(cfg.name, 'the actions keep to one line', actions);
     await b.shot(`${cfg.name}-1-ticket`, { full: true });
 

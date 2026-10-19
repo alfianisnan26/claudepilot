@@ -20,7 +20,7 @@ export function actionItems(here: { pathname: string; search: string }): Palette
     return `${here.pathname}?${q.toString()}`;
   };
   return [
-    { id: 'action:new-session', kind: 'action', title: 'New session', hint: '', to: '/admin/sessions?new=1', keywords: 'create start chat' },
+    { id: 'action:new-session', kind: 'action', title: 'New agent', hint: '', to: '/admin/sessions?new=1', keywords: 'create start chat' },
     { id: 'action:attention', kind: 'action', title: 'Needs attention', hint: 'Approvals, tickets, CI', to: glance('attention'), keywords: 'approve deny waiting failed' },
     { id: 'action:quota', kind: 'action', title: 'Quota', hint: 'Plan left', to: glance('quota'), keywords: 'limit usage left reset' },
     { id: 'action:agents', kind: 'action', title: 'Agents', hint: 'Running now', to: glance('agents'), keywords: 'workers sub-agents stop' },

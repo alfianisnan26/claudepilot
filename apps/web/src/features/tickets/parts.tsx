@@ -63,7 +63,7 @@ export function AssigneeChip({ ticket: t }: { ticket: TicketItem }) {
   return (
     <span className="inline-flex min-w-0 items-center gap-1 text-[12.5px] text-ink-soft">
       <Bot className="size-3.5 shrink-0" aria-hidden="true" />
-      <span className="truncate">{s ? s.title : 'Session gone'}</span>
+      <span className="truncate">{s ? s.title : 'Agent gone'}</span>
       {s && <span className="shrink-0 text-muted">· {SESSION_STATE_LABEL[s.state]}</span>}
     </span>
   );
@@ -74,7 +74,7 @@ export function TicketFlags({ ticket: t }: { ticket: TicketItem }) {
   return (
     <>
       {t.assignee?.kind === 'user' && t.status !== 'done' && t.status !== 'wont_do' && <Badge tone="warning">Needs you</Badge>}
-      {t.orphan ? <Badge tone="danger">{ORPHAN_BADGE[t.orphan.why]}</Badge> : t.sessionEnded && <Badge tone="danger">Session ended</Badge>}
+      {t.orphan ? <Badge tone="danger">{ORPHAN_BADGE[t.orphan.why]}</Badge> : t.sessionEnded && <Badge tone="danger">Agent ended</Badge>}
       {t.worktree && (
         <span className="inline-flex items-center gap-1 text-[12px] text-muted" title={t.worktree.path}>
           <GitBranch className="size-3.5" aria-hidden="true" />

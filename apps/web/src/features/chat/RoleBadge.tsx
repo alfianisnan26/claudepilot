@@ -34,7 +34,7 @@ export function RoleChip({ session, onOpen }: { session: ChatSession | null | un
       type="button"
       onClick={onOpen}
       aria-haspopup="dialog"
-      aria-label={`Role: ${role}, session info`}
+      aria-label={`Role: ${role}, agent info`}
       title={`Role: ${role}`}
       data-role-chip=""
       className="press inline-flex size-11 min-w-0 shrink-0 items-center justify-center rounded-full text-ink-soft hover:bg-ink/[0.07] sm:w-auto sm:max-w-40 sm:px-1 sm:hover:bg-transparent"

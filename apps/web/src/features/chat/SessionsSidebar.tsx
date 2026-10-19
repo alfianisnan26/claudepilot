@@ -19,11 +19,11 @@ export function SessionsSidebar({ currentId }: { currentId: string }) {
     return list.sort((a, b) => rank(a) - rank(b) || (b.lastActivityAt ?? '').localeCompare(a.lastActivityAt ?? ''));
   }, [sessions]);
   return (
-    <nav aria-label="Sessions" data-sessions-sidebar="" className="flex min-h-0 flex-1 flex-col">
+    <nav aria-label="Agents" data-sessions-sidebar="" className="flex min-h-0 flex-1 flex-col">
       <div className="flex h-[60px] shrink-0 items-center gap-2 px-4">
         <MessagesSquare className="size-4 text-muted" aria-hidden="true" />
         <Link to="/admin/sessions" className="text-[13px] font-semibold text-muted hover:text-ink">
-          Sessions
+          Agents
         </Link>
         <span className="text-[12px] text-muted tabular-nums">{live.length}</span>
       </div>
