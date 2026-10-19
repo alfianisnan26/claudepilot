@@ -20,6 +20,7 @@ import { errorText } from '@/lib/api';
 import { chatApi } from './api';
 import { BulkBar, runBulk, type BulkAction } from './BulkBar';
 import { crewStatusGroup, selectable } from './crew';
+import { AgentTreeView } from './AgentTree';
 import { canFold, chipCounts, ofProgram, programCounts, withChange, withDefaultChip, type ChipChoice } from './listOrder';
 import { NewSessionDialog } from './NewSessionDialog';
 import { ArchiveSessionDialog, DeleteSessionDialog, EndSessionDialog, RenameSessionDialog } from './SessionDialogs';
@@ -34,12 +35,19 @@ import { useWorkspaceFacts } from './useWorkspaceFacts';
 const isBusy = (s: ChatSession) => s.state === 'working' || s.state === 'waiting';
 
 const VIEW_KEY = 'claudepilot.sessions-view';
-function savedView(): Pick<ViewState, 'groupBy'> {
+function savedView(): Pick<ViewState, 'groupBy'> & { tree: boolean } {
   try {
-    const raw = JSON.parse(localStorage.getItem(VIEW_KEY) ?? '{}') as { groupBy?: unknown };
-    return { groupBy: LIST_GROUP_BYS.includes(raw.groupBy as ListGroupBy) ? (raw.groupBy as ListGroupBy) : 'none' };
+    const raw = JSON.parse(localStorage.getItem(VIEW_KEY) ?? '{}') as { groupBy?: unknown; tree?: unknown };
+    return { groupBy: LIST_GROUP_BYS.includes(raw.groupBy as ListGroupBy) ? (raw.groupBy as ListGroupBy) : 'none', tree: raw.tree === true };
   } catch {
-    return { groupBy: 'none' };
+    return { groupBy: 'none', tree: false };
+  }
+}
+function saveView(v: { groupBy: ListGroupBy; tree: boolean }) {
+  try {
+    localStorage.setItem(VIEW_KEY, JSON.stringify(v));
+  } catch {
+    // private window: just not remembered
   }
 }
 
@@ -74,8 +82,10 @@ export function SessionsPage() {
   const counts = useMemo(() => chipCounts(shown ?? []), [shown]);
   // The chip opens on the first one with sessions in the order of attention (T-100: Needs you, In progress, Idle, Pinned, Ended, else All); once
   // the sessions are known, and only until the person picks one (the pick is in the same state, so a pending default never undoes it: T-321).
+  // T-1710: the Tree view (leads and their workers as connected cards), remembered with the grouping.
+  const [tree, setTree] = useState(() => savedView().tree);
   const [baseView, setView] = useState<Omit<ViewState, 'program'> & ChipChoice>(() => ({
-    ...savedView(),
+    groupBy: savedView().groupBy,
     filter: 'attention',
     query: '',
     archived: false,
@@ -101,13 +111,14 @@ export function SessionsPage() {
     if (nextProgram !== undefined) setProgram(nextProgram);
     setView((v) => {
       const merged = withChange(v, next);
-      try {
-        localStorage.setItem(VIEW_KEY, JSON.stringify({ groupBy: merged.groupBy }));
-      } catch {
-        // private window: just not remembered
-      }
+      saveView({ groupBy: merged.groupBy, tree });
       return merged;
     });
+  };
+  const changeTree = (on: boolean) => {
+    setTree(on);
+    if (on) stopSelecting();
+    saveView({ groupBy: baseView.groupBy, tree: on });
   };
 
   // All without another grouping is grouped under the status headings, in the chips' order (T-100); a worker that does not need you sits
@@ -264,13 +275,18 @@ export function SessionsPage() {
           onChange={change}
           selecting={selecting}
           onSelect={() => setSelecting(true)}
+          tree={tree}
+          onTree={changeTree}
         />
       )}
+
+      {tree && sessions && sessions.length > 0 && <AgentTreeView sessions={sessions} query={view.query} onChanged={() => void reload()} />}
 
       {/* What waits on you, on top of the other chips' lists (All has it as its first heading, Needs you is it). */}
       {list &&
         sessions &&
         sessions.length > 0 &&
+        !tree &&
         !view.archived &&
         view.filter !== 'attention' &&
         !byStatus &&
@@ -278,6 +294,7 @@ export function SessionsPage() {
 
       {list &&
         sessions &&
+        !(tree && sessions.length > 0) &&
         (sessions.length === 0 ? (
           <EmptyState
             icon={<MessagesSquare className="size-6" />}
