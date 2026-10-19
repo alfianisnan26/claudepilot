@@ -4,6 +4,7 @@
 
 import { CI_UPSTREAM_HOSTS_SETTING } from '@portal/contracts';
 import { defineSetting, defineSettingGroup } from '../settings/registry.js';
+import { RUNNER_LOST_MIN } from './service.js';
 import { hostList } from './upstream.js';
 
 defineSettingGroup('ci', 'CI', 43);
@@ -23,4 +24,29 @@ defineSetting({
 /** The list as the CI service reads it; undefined when the setting is empty or unset. */
 export function upstreamHostsFrom(settings: { get(key: string): unknown } | null | undefined): () => string[] | undefined {
   return () => hostList(settings?.get(CI_UPSTREAM_HOSTS_SETTING));
+}
+
+/** T-1637: minutes a runner may not answer before the runs executing on it end failed as `runner_lost`. 0: never. Global, so admin only. */
+export const CI_RUNNER_LOST_SETTING = 'ci.runnerLostMin';
+
+defineSetting({
+  key: CI_RUNNER_LOST_SETTING,
+  type: 'number',
+  default: RUNNER_LOST_MIN,
+  min: 0,
+  max: 1440,
+  integer: true,
+  scope: 'global',
+  group: 'ci',
+  order: 20,
+  label: 'Runner lost',
+  help: 'Minutes a runner may not answer before the runs on it end failed as runner_lost. A run whose runs-on has fallback: workspace runs again in the repository workspace. 0: never.',
+});
+
+/** The minutes as the CI service reads them, at each look; the default when the setting is unset or not a number. */
+export function runnerLostMinFrom(settings: { get(key: string): unknown } | null | undefined): () => number {
+  return () => {
+    const v = settings?.get(CI_RUNNER_LOST_SETTING);
+    return typeof v === 'number' ? v : RUNNER_LOST_MIN;
+  };
 }
