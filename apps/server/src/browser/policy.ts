@@ -16,6 +16,8 @@ export const SITE_PATTERN = /^[A-Za-z0-9*._~:/\-[\]]{1,200}$/;
 /** The Chrome Web Store's update URL (every store extension carries it) and its pages: shut when the headers extension opens the default. */
 export const WEB_STORE_UPDATE_URL = 'https://clients2.google.com/service/update2/crx';
 export const WEB_STORE_HOSTS = ['chromewebstore.google.com', 'chrome.google.com/webstore'];
+/** The extension's folder as a file URL (`EXT_DIR` is in `/dev/shm`): blocked, since its ruleset holds the header values. */
+export const EXT_FILES = 'file:///dev/shm';
 
 export function chromePolicy(content: BrowserPoolContent, ctx: { portalHosts: string[] }): Record<string, unknown> {
   const blocked = [...METADATA_HOSTS, ...ctx.portalHosts, ...content.blockedSites];
@@ -43,14 +45,15 @@ export function chromePolicy(content: BrowserPoolContent, ctx: { portalHosts: st
   // blocked (`ExtensionInstallBlocklist: ["*"]`, whatever the allowlist says): a headed browser then holds a modal "Error Loading
   // Extension" dialog before CDP listens (T-1660). So with headers the default stays open and every other way in is shut: the Web
   // Store by its update URL, external and non-extension types, developer mode, the extensions page; `--disable-extensions-except`
-  // keeps everything else off, and no page may open the extension's files (`chrome-extension://` carries the rules).
+  // keeps everything else off (and `--disable-extensions` when the init built none for a start), and no page may open the extension's
+  // files, which hold the values: neither as `chrome-extension://` nor as `file:///dev/shm/cpb-ext/rules.json`.
   if ((content.headers ?? []).length > 0) {
     delete policy.ExtensionInstallBlocklist;
     policy.ExtensionSettings = { [`update_url:${WEB_STORE_UPDATE_URL}`]: { installation_mode: 'blocked' } };
     policy.ExtensionAllowedTypes = ['extension'];
     policy.BlockExternalExtensions = true;
     policy.ExtensionDeveloperModeSettings = 1;
-    policy.URLBlocklist = [...(policy.URLBlocklist as string[]), 'chrome-extension://*', 'chrome://extensions', ...WEB_STORE_HOSTS];
+    policy.URLBlocklist = [...(policy.URLBlocklist as string[]), 'chrome-extension://*', EXT_FILES, 'chrome://extensions', ...WEB_STORE_HOSTS];
   }
   if (content.allowlistMode) policy.URLAllowlist = ['about:blank', ...content.allowedSites];
   return policy;

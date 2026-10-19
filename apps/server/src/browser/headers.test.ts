@@ -145,6 +145,7 @@ test('Chromium loads the extension only when there is one, and the id the policy
   assert.ok(!none.some((a) => a.includes('load-extension')));
   const withExt = lib.chromeArgs(cfg, { headless: true, profileDir: '/data/profile', extensionDir: ext.EXT_DIR });
   assert.ok(withExt.includes(`--load-extension=${ext.EXT_DIR}`) && withExt.includes(`--disable-extensions-except=${ext.EXT_DIR}`));
+  assert.ok(!withExt.includes('--disable-extensions'), 'it would switch the headers extension off too');
   assert.equal(withExt.filter((a) => a.startsWith('--disable-features=')).length, 1, 'a second --disable-features would replace the first');
   assert.equal(withExt.at(-1), 'about:blank');
   // Same algorithm in the container and in the portal, and the id is 32 letters a-p.
@@ -153,6 +154,34 @@ test('Chromium loads the extension only when there is one, and the id the policy
   assert.equal(extensionId('/dev/shm/other'), ext.extensionId('/dev/shm/other'));
   assert.notEqual(extensionId('/dev/shm/other'), extensionId());
   assert.equal(ext.EXT_DIR, '/dev/shm/cpb-ext');
+});
+
+test('a pool with headers whose start built no extension still runs with extensions off (T-1660 review)', () => {
+  // With headers the policy has no blocked default, so the command line is the guard whenever the init built no extension: the file
+  // not delivered yet (a new pod), unreadable, not JSON, or every entry dropped. Each of those ends in prepareHeaders() returning null.
+  const cfg = lib.loadConfig('/nonexistent/config.json');
+  assert.equal(ext.buildExtension([{ hosts: ['a.example.com'], name: 'Cookie', value: fresh() }]).count, 0, 'all entries dropped: nothing to load');
+  const none = lib.chromeArgs(cfg, { headless: false, profileDir: '/data/profile', extensionDir: null });
+  assert.ok(none.includes('--disable-extensions'), 'a planted extension in the persistent profile cannot load');
+  assert.ok(!none.some((a) => /load-extension|disable-extensions-except/.test(a)));
+  assert.ok(lib.chromeArgs(cfg, { headless: true, profileDir: '/p' }).includes('--disable-extensions'), 'the default is the guard too');
+  // The init hands Chrome exactly what prepareHeaders() built, and prepareHeaders() returns a folder only when it holds rules.
+  const init = readFileSync(new URL('../../../../images/browser/cpb/init.mjs', import.meta.url), 'utf8');
+  assert.match(init, /const extensionDir = prepareHeaders\(\);/);
+  assert.match(init, /chromeArgs\(cfg, \{ headless, profileDir, extensionDir \}\)/);
+  assert.match(init, /return out\.count \? EXT_DIR : null;/);
+});
+
+test('a pool’s own Chrome flags can’t load an extension or change which ones run', () => {
+  const base = lib.loadConfig('/nonexistent/config.json') as Record<string, unknown>;
+  const own = ['--load-extension=/data/profile/evil', '--disable-extensions-except=/data/profile/evil', '--LOAD-EXTENSION=/x', '--extensions-on-chrome-urls', '--disable-features=Foo', '--enable-features=DisableLoadExtensionCommandLineSwitch'];
+  for (const extensionDir of [null, ext.EXT_DIR]) {
+    const args = lib.chromeArgs({ ...base, chromeFlags: [...own, '--lang=de'] }, { headless: true, profileDir: '/p', extensionDir });
+    for (const f of own) assert.ok(!args.includes(f), f);
+    assert.ok(!args.some((a) => a.includes('/data/profile/evil')));
+    assert.ok(args.includes('--lang=de'), 'other flags still pass');
+    assert.equal(args.filter((a) => a.startsWith('--disable-features=')).length, 1);
+  }
 });
 
 test('the policy lets Chromium load the headers extension, and shuts every other way in, only when the pool has headers (T-1660)', () => {
@@ -174,8 +203,10 @@ test('the policy lets Chromium load the headers extension, and shuts every other
     assert.equal(p.BlockExternalExtensions, true);
     assert.equal(p.ExtensionDeveloperModeSettings, 1, 'no Load unpacked for a person in a take-over');
     const blocked = p.URLBlocklist as string[];
-    for (const u of ['chrome-extension://*', 'chrome://extensions', 'chromewebstore.google.com', 'chrome.google.com/webstore', '172.17.0.1:3104', 'cluster.local']) assert.ok(blocked.includes(u), u);
+    // `file:///dev/shm`: the extension's rules.json holds the values (seen blocked in Chromium 154, a file elsewhere still opens).
+    for (const u of ['chrome-extension://*', 'file:///dev/shm', 'chrome://extensions', 'chromewebstore.google.com', 'chrome.google.com/webstore', '172.17.0.1:3104', 'cluster.local']) assert.ok(blocked.includes(u), u);
     assert.equal(blocked[0] === '*', allowlistMode, 'allowlist mode still blocks everything else first');
+    assert.ok(!((p.URLAllowlist as string[] | undefined) ?? []).some((u) => u.startsWith('file:')), 'no allowlist entry reopens it');
     // Only policy names Chromium knows, each with the type it expects: a mistyped key is ignored, which would leave the browser looser.
     const types: Record<string, string> = {
       BrowserSignin: 'number', SyncDisabled: 'boolean', PasswordManagerEnabled: 'boolean', AutofillAddressEnabled: 'boolean', AutofillCreditCardEnabled: 'boolean',
