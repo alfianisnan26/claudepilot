@@ -10,13 +10,16 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - T-1574 redo: candidate dbbc9a49c5728a1c09cb380a6fca3d02789f4b8f on ticket/T-1574-nominal-tp-v14-2 (Jobs 3e6e65be, 59a50ebb rc=0; c17438, c17457). a69d6ea void (T-1705).
 - T-1705 incident opened; brief template fixed (allowed git shapes, a denied command stops the step).
 - Gate audit of the handed-over tickets done (mo-audit, read-only): results folded into T-1703 c17443 and NEXT.
+- T-1103: candidate dec58a1 (test isolation, injected-leak tests; Jobs e004edb6 rc=1 fail-first, d4e35b28, c03ad53a rc=0 362 passed; c17482).
+- T-1518: Job-backed QA PASS WITH GAPS on aeab2ec (c17483); merge decision and gate copy c17487/c17488; follow-up T-1708 (directional/monthly CI, GOF, Q-Q/P-P).
+- T-553: QA on 34deb24 (c17486) found regex false positives; sent back (c17491).
 - Closed this session: 0.
 
 ## IN FLIGHT
-- T-1103 build: Agent sub-agent mo-be-e (sonnet, implementer), clone of stg c29d103, branch ticket/T-1103-pools-leak, fail-first Job then fix Job then suite.
-- T-1518 + T-553 QA: Agent sub-agent mo-qa-2 (sonnet, qa-verifier), Jobs on aeab2ec and 34deb24, gate-form comments (no portal record: lineage).
+- T-553 fix: Agent sub-agent mo-be-f (sonnet, implementer), from 34deb24 as ticket/T-553-percent-unit-4: percent-unit false positives (c17491), fail-first tests then fix, Jobs.
+- Waiting for a non-lineage QA (c17465): T-1574 dbbc9a4 (then gate ask), T-1103 dec58a1 (in_review, c17484), T-1353, T-632, T-1632 records.
 - T-1701: claimed, waits for a slot. Workers: none (allow-list block, c17308).
-- 16:21Z Usage read: session 60 %, runs out ~17:34Z at this pace (reset 19:40Z): two sub-agents at most, short turns.
+- 16:36Z Usage read: session 70 %, runs out ~17:25Z at this pace (reset 19:40Z): one sub-agent at a time until the reset.
 
 ## DECISIONS
 - 16:05Z Lanes on `claude: auto` (session pace over). 16:12Z Workers blocked: Agent sub-agents instead; respawn when the clone shape works.
@@ -31,6 +34,7 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - c17465: non-lineage QA records needed on T-1574 dbbc9a4 (delta check before its gate ask), T-1353, T-632, T-1632; session_message cannot reach the general lead.
 - AIR quota on qa-regress-scratch (T-1528 AC5, c16625); shared browser cannot reach stg-lab.konfersi.com (T-1667, T-1017 c16925, T-1089 screen check).
 - T-1705: should `git switch` be denied wherever `git checkout` is; is `--detach <sha>` meant to be denied for lanes?
+- Read-only `git -C <lane clone> diff origin/stg...HEAD` and `git -C <clone> log A..B` are refused for lanes (mo-qa-2, 16:45Z); QA reads whole files instead. An allow line for diff/log with a range inside /home/node/work/agentic-worktrees/* would make QA diffs exact.
 - D-88 text missing from this workspace's DECISIONS.md copy (ends at D-87).
 
 ## NEEDS A HUMAN
