@@ -204,6 +204,10 @@ The chat reader turns it into a refusal of that window with the stated reset (`c
 
 `ClaudeUsage.unavailable` (and `UsageSummaryClaude.unavailable`) says why a plan Claude's usage is not known (`usageUnavailable` in contracts): `signed_out`, `no_usage_endpoint` (Claude Code's usage call failed or the sign-in has no scope for it), `no_reading`, `no_window`, `no_number`, `no_reset_time` (the session window has no reset time: 0 % so is not a reading), `period_reset`. Such a Claude is `unknown`, not `ok`; its row says "Unavailable: no reset time" with the detail in an ⓘ, and a window at 0 % with no reset time shows a dash. Auto move never prefers it to a measured Claude ([auto transfer](auto-transfer.md) FR10d).
 
+### 10.5 The prime heals `no_reset_time` (T-1707)
+
+When a background probe of a signed-in Claude reads `no_reset_time`, the workspace runs and no live session is on that Claude, the portal sends one tiny request as that Claude in the workspace (`claudeusage/prime.ts`: `claude -p` started like the probe, `--model haiku`, `--tools ""`, `--safe-mode`, `--no-session-persistence`, a one-line system prompt, the user line "ok", `timeout 40`, `--max-budget-usd 0.02`; its output is dropped except Claude Code's limit refusal) and probes again at once: the window is open, so the reading gets a number and a reset time. A refusal for a plan limit becomes the Claude's limit report (§10.3, `sessionId` null) until the reset it states, the next 5-hour boundary (`guessed`) when it states none. At most one prime per Claude per `claude.usage.primeMin` minutes (Settings, Usage; default 30, 0 is off; in memory, so a restart allows one more); Check now never primes. Each prime is one platform audit row `claude.usage.prime` (claude id, workspace, `ok`, `limited` with `until`, or `failed` with why); none is written to a chat or a ticket.
+
 ## 11. Probe mechanics and limits
 
 **Command**, run in the workspace by the runtime's exec as the workspace user:

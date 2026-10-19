@@ -627,6 +627,9 @@ const claudeUsage = createClaudeUsage({
   chat: chatController,
   pooled: (id) => !!pools.stateFor(id),
   notify: () => notify('claudeusage'),
+  settings: settingsModule.settings,
+  // T-1707: each prime of a Claude reading 0 % with no reset time goes to the platform audit, created further down.
+  audit: (e) => platform.audit.record(e),
 });
 claudeUsage.start();
 registerClaudeUsageTools(claudeUsage);
