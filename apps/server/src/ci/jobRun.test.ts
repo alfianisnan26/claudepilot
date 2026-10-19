@@ -25,6 +25,9 @@ import { fileURLToPath } from 'node:url';
 import { load as yamlLoad } from 'js-yaml';
 import { runPod } from './jobRunTestkit.js';
 
+/** An override value that removes the variable from a child's environment. */
+const UNSET = '\u0000unset';
+const withoutUnset = (e: NodeJS.ProcessEnv): NodeJS.ProcessEnv => Object.fromEntries(Object.entries(e).filter(([, v]) => v !== UNSET));
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '../../../..');
 const SCRIPT = join(REPO, 'scripts/job-run.sh');
 const TEMPLATE = join(REPO, 'deploy/k3s-build/job-run.yaml');
@@ -175,7 +178,8 @@ function world(seeds: Seed[] = [], scenario: Scenario = {}) {
     gitconfig,
     `[credential "https://git.konfersi.com"]\n\thelper = "!f() { echo username=bot; echo password=${giteaToken}; }; f"\n`,
   );
-  const env = (over: Record<string, string> = {}): NodeJS.ProcessEnv => ({
+  // UNSET as an override value leaves that variable out entirely (to test a script default that applies only when it is unset).
+  const env = (over: Record<string, string> = {}): NodeJS.ProcessEnv => withoutUnset({
     PATH: `${bin}:/usr/local/bin:/usr/bin:/bin`,
     HOME: home,
     TMPDIR: root,
@@ -187,6 +191,8 @@ function world(seeds: Seed[] = [], scenario: Scenario = {}) {
     // The queue tests are written for these caps (the script's defaults until T-1624); the defaults themselves have their own test.
     JOB_RUN_MAX: '3',
     JOB_RUN_MAX_PER_PROGRAM: '2',
+    // The placement tests are written with no node avoided (T-1643 made k3s-master the default; that default has its own test).
+    JOB_RUN_AVOID_NODES: '',
     JOB_RUN_WATCH_PID: 'none',
     JOB_RUN_LOG: join(root, 'job.log'),
     NODE_AUTH_TOKEN: npmToken,
@@ -1396,7 +1402,7 @@ test('T-365: job-run and gate Jobs prefer a node away from the portal (preferred
   assert.match(readFileSync(join(REPO, 'deploy/k3s/portal.yaml'), 'utf8'), /app: claudepilot-portal/);
 });
 
-test('T-524: the heavy Jobs prefer a node other than the control plane (preferred only) and request all the memory they may use', () => {
+test('T-524, T-1643: the heavy Jobs keep off the control plane (the gate by a required rule) and request all the memory they may use', () => {
   type Pod = {
     affinity?: {
       nodeAffinity?: {
@@ -1421,16 +1427,21 @@ test('T-524: the heavy Jobs prefer a node other than the control plane (preferre
       .replace(/__[A-Z_]+__/g, 'x');
     const pod = (yamlLoad(text) as { spec: { template: { spec: Pod } } }).spec.template.spec;
     const na = pod.affinity?.nodeAffinity;
-    assert.equal(
-      na?.requiredDuringSchedulingIgnoredDuringExecution,
-      undefined,
-      `${name}: never required (a required rule left every Job Pending)`,
-    );
-    assert.deepEqual(
-      na?.preferredDuringSchedulingIgnoredDuringExecution,
-      [{ weight: 100, preference: { matchExpressions: [{ key: 'node-role.kubernetes.io/control-plane', operator: 'DoesNotExist' }] } }],
-      name,
-    );
+    if (name === 'gate-job.yaml')
+      // T-1643: the gate never runs on the control-plane node (k3s-node3 joined the worker pool, so a required rule leaves room to run).
+      assert.deepEqual(
+        na?.requiredDuringSchedulingIgnoredDuringExecution,
+        { nodeSelectorTerms: [{ matchExpressions: [{ key: 'node-role.kubernetes.io/control-plane', operator: 'DoesNotExist' }] }] },
+        name,
+      );
+    else {
+      assert.equal(na?.requiredDuringSchedulingIgnoredDuringExecution, undefined, `${name}: the template itself has no required rule`);
+      assert.deepEqual(
+        na?.preferredDuringSchedulingIgnoredDuringExecution,
+        [{ weight: 100, preference: { matchExpressions: [{ key: 'node-role.kubernetes.io/control-plane', operator: 'DoesNotExist' }] } }],
+        name,
+      );
+    }
     for (const c of [...pod.containers, ...(pod.initContainers ?? [])])
       assert.equal(c.resources.requests.memory, c.resources.limits.memory, `${name}: memory request = limit`);
     const tmp = pod.volumes?.find((v) => v.name === 'tmp')?.emptyDir?.sizeLimit;
@@ -2354,6 +2365,13 @@ test('T-733 S5: scripts/job-run.sh has no syntax error (bash -n)', () => {
 
 // ---- T-611 S2: JOB_RUN_AVOID_NODES, a comma list of node names a Job may never run on (default none). A required hostname NotIn rule, in the same
 // term as the control-plane rule when the memory decision adds it.
+test('T-1643: with JOB_RUN_AVOID_NODES unset a Job never runs on k3s-master (the required hostname rule); set empty, no rule', () => {
+  const dflt = placed(50, [], { JOB_RUN_AVOID_NODES: UNSET });
+  assert.equal(dflt.r.code, 0, dflt.r.out);
+  assert.deepEqual(dflt.required, rule(HOST('k3s-master')), 'the master is avoided by default');
+  kept(placed(50, [], { JOB_RUN_AVOID_NODES: '' }), 'empty allows the master again');
+});
+
 const HOST = (...names: string[]) => ({ key: 'kubernetes.io/hostname', operator: 'NotIn', values: names });
 const CP_EXPR = { key: 'node-role.kubernetes.io/control-plane', operator: 'DoesNotExist' };
 const rule = (...exprs: unknown[]) => ({ nodeSelectorTerms: [{ matchExpressions: exprs }] });

@@ -3,7 +3,7 @@
 //   NODE_USE_ENV_PROXY=1 HTTPS_PROXY=http://127.0.0.1:3128 node portal.mjs ...
 // One admin token per run, 1 hour, replacing this label's leftovers, revoked at the end even when the call fails (tokenLease.mjs, T-258).
 import { tokenLease } from './tokenLease.mjs';
-const PORTAL = 'https://pilot.ai.isnan.me',
+const PORTAL = process.env.PILOT_URL || 'https://pilot.ai.isnan.me',
   CODE = process.env.PORTAL_SERVER_CODE,
   [cmd, prefix, ...rest] = process.argv.slice(2);
 let cookie = '';

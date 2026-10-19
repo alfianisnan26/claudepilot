@@ -32,10 +32,10 @@ spec:
         # Placement as in job-run.yaml (T-365, T-524; how the weights add up is explained there). All PREFERRED, never required: a required
         # rule left every Job Pending (2026-10-15). Away from the control-plane node (k3s-master, also the API server), away from the
         # portal's node and from workspace pods; with memory requested = limited the node with the most room left wins the tie.
+        # T-1643: never on the control-plane node (k3s-master); k3s-node3 joined the worker pool, so a required rule leaves room to run.
         nodeAffinity:
-          preferredDuringSchedulingIgnoredDuringExecution:
-            - weight: 100
-              preference: {matchExpressions: [{key: node-role.kubernetes.io/control-plane, operator: DoesNotExist}]}
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms: [{matchExpressions: [{key: node-role.kubernetes.io/control-plane, operator: DoesNotExist}]}]
         podAntiAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:
             - weight: 100

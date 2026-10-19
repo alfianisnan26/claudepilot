@@ -92,10 +92,12 @@ for n in "$max" "$per" "$pprog" "$art_max"; do [[ $n =~ ^[0-9]+$ ]] || die "the 
 # The placement numbers are used in $(( )): at most 3 / 6 digits (no wrap-around to a negative), and base 10 (a leading 08 is not octal) (T-611 C1 C2).
 [[ $master_max =~ ^[0-9]{1,3}$ ]] || die "JOB_RUN_MASTER_MAX_PCT is a percentage (at most 3 digits)"
 master_max=$((10#$master_max))
-# T-611 S2: nodes a Job may never run on (a comma list of node names, default none: a required rule that is always on can leave every Job Pending
-# when the other node is full, T-365/T-524, so it is the operator's choice). The names go into JSON: the shape is checked, nothing else passes.
+# T-611 S2: nodes a Job may never run on (a comma list of node names). The names go into JSON: the shape is checked, nothing else passes.
+# T-1643 (owner, 2026-10-19: "pindahin ci dari node1 ke node3"): unset means k3s-master, the only control plane (API server, Argo CD); with
+# k3s-node3 in the worker pool the required rule no longer leaves every Job Pending (the T-365/T-524 reason for none). Set it empty to allow the master.
+JOB_RUN_AVOID_NODES=${JOB_RUN_AVOID_NODES-k3s-master}
 avoid_json=; avoid_txt=
-if [ -n "${JOB_RUN_AVOID_NODES:-}" ]; then
+if [ -n "$JOB_RUN_AVOID_NODES" ]; then
   # The raw value is never echoed (a newline in it could forge a "=== JOB-RUN" line): the checks below say what is wrong, and the messages and
   # log lines carry the validated, joined list (avoid_txt). A newline is refused, not cut (read -a keeps only the first line); ASCII is checked
   # under LC_ALL=C, so the name regex below only ever sees ASCII.
