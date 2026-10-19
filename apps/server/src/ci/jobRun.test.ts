@@ -184,6 +184,9 @@ function world(seeds: Seed[] = [], scenario: Scenario = {}) {
     GIT_CONFIG_NOSYSTEM: '1',
     JOB_RUN_IMAGE: 'registry.test/claudepilot/workspace:1-dev-1',
     JOB_RUN_POLL_S: '0.1',
+    // The queue tests are written for these caps (the script's defaults until T-1624); the defaults themselves have their own test.
+    JOB_RUN_MAX: '3',
+    JOB_RUN_MAX_PER_PROGRAM: '2',
     JOB_RUN_WATCH_PID: 'none',
     JOB_RUN_LOG: join(root, 'job.log'),
     NODE_AUTH_TOKEN: npmToken,
@@ -471,6 +474,16 @@ test('T-491 Event: without a GitHub token the run is refused before anything is 
   assert.equal(r.code, 2, r.out);
   assert.match(r.out, /--repo event: no GitHub token/);
   assert.doesNotMatch(w.calls(), /create secret|apply/);
+});
+
+test('T-1624: with no cap set, the defaults are 8 at once, 2 per chat and 6 per program (k3s-node3 joined)', async () => {
+  const w = world(Array.from({ length: 8 }, (_, i) => ({ name: `claudepilot-job-0000000${i + 1}`, chat: `chat-${i}` })));
+  const s = w.start(['--repo', 'claudepilot', '--ref', 'main', '--', 'true'], { JOB_RUN_MAX: '', JOB_RUN_MAX_PER_PROGRAM: '' });
+  await waitFor('the queue line', () => /queued behind 8 \(at most 8 at once, 2 per chat, 6 per program\)/.test(s.out()));
+  w.edit((st) => {
+    Object.assign(st.jobs[0] ?? {}, { done: true, rc: 0 });
+  });
+  await s.done;
 });
 
 test('the cluster-wide cap: three running Jobs, the fourth says "queued behind 3" and starts when one ends', async () => {
