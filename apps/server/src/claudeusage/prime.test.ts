@@ -187,6 +187,25 @@ test('no prime: while a session runs on the Claude, when it is signed out, when 
   }
 });
 
+test('a probe that failed primes nothing, even when the last reading kept is 0 % with no reset time', async () => {
+  let min = 0;
+  const pr = primes(() => ({ outcome: 'ok' }));
+  const h = await usageHarness({ probe: probes(BLIND, () => ({ ...BLIND(), windows: [], failed: true, problem: 'timeout' })).probe, prime: pr.prime, primeMin: () => min });
+  try {
+    await h.usage.tick();
+    await sleep(5);
+    assert.equal((await h.usage.report()).claudes[0]!.unavailable, 'no_reset_time');
+    min = 30;
+    h.clock.t += INTERVAL + MIN;
+    await h.usage.tick();
+    await sleep(5);
+    assert.equal((await h.usage.report()).claudes[0]!.unavailable, 'no_reset_time', 'the failure kept the last numbers');
+    assert.deepEqual(pr.calls, []);
+  } finally {
+    h.done();
+  }
+});
+
 test('Check now never primes (it answers at once); the background pass does', async () => {
   const pr = primes(() => ({ outcome: 'ok' }));
   const h = await usageHarness({ probe: probes(BLIND).probe, prime: pr.prime, primeMin: () => 30 });
