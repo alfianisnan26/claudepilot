@@ -35,7 +35,7 @@ spec:
         # T-1643: never on the control-plane node (k3s-master); k3s-node3 joined the worker pool, so a required rule leaves room to run.
         nodeAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
-            nodeSelectorTerms: [{matchExpressions: [{key: node-role.kubernetes.io/control-plane, operator: DoesNotExist}]}]
+            nodeSelectorTerms: [{matchExpressions: [{key: isnan.me/pool, operator: NotIn, values: [control]}]}]
         podAntiAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:
             - weight: 100

@@ -52,7 +52,7 @@ spec:
           __MASTER_REQUIRED__
           preferredDuringSchedulingIgnoredDuringExecution:
             - weight: 100
-              preference: {matchExpressions: [{key: node-role.kubernetes.io/control-plane, operator: DoesNotExist}]}
+              preference: {matchExpressions: [{key: isnan.me/pool, operator: NotIn, values: [control]}]}
         podAntiAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:
             - weight: 100

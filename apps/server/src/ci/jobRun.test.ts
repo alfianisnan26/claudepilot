@@ -569,7 +569,7 @@ test('T-524 --big: 8Gi requested = limited, /tmp 4Gi; the default is 4Gi with /t
     });
     assert.deepEqual((m.spec.template.spec.affinity as { nodeAffinity: unknown }).nodeAffinity, {
       preferredDuringSchedulingIgnoredDuringExecution: [
-        { weight: 100, preference: { matchExpressions: [{ key: 'node-role.kubernetes.io/control-plane', operator: 'DoesNotExist' }] } },
+        { weight: 100, preference: { matchExpressions: [{ key: 'isnan.me/pool', operator: 'NotIn', values: ['control'] }] } },
       ],
     });
   }
@@ -1431,14 +1431,14 @@ test('T-524, T-1643: the heavy Jobs keep off the control plane (the gate by a re
       // T-1643: the gate never runs on the control-plane node (k3s-node3 joined the worker pool, so a required rule leaves room to run).
       assert.deepEqual(
         na?.requiredDuringSchedulingIgnoredDuringExecution,
-        { nodeSelectorTerms: [{ matchExpressions: [{ key: 'node-role.kubernetes.io/control-plane', operator: 'DoesNotExist' }] }] },
+        { nodeSelectorTerms: [{ matchExpressions: [{ key: 'isnan.me/pool', operator: 'NotIn', values: ['control'] }] }] },
         name,
       );
     else {
       assert.equal(na?.requiredDuringSchedulingIgnoredDuringExecution, undefined, `${name}: the template itself has no required rule`);
       assert.deepEqual(
         na?.preferredDuringSchedulingIgnoredDuringExecution,
-        [{ weight: 100, preference: { matchExpressions: [{ key: 'node-role.kubernetes.io/control-plane', operator: 'DoesNotExist' }] } }],
+        [{ weight: 100, preference: { matchExpressions: [{ key: 'isnan.me/pool', operator: 'NotIn', values: ['control'] }] } }],
         name,
       );
     }
@@ -2004,7 +2004,7 @@ test('S1d the create failing (its stderr quotes the decoded value): a fixed mess
 // ---- T-611: placement. The scheduler counts memory REQUESTS, the control-plane node's own pods use far more for real. job-run.sh reads its real
 // use (kubectl top) and, when use PLUS the Job's expected peak is over JOB_RUN_MASTER_MAX_PCT (85; 75 before T-731's 2026-10-17 change), makes the rule away from it REQUIRED.
 // The fake master prints 9000Mi at the given percentage (allocatable = 9000 * 100 / pct); the default expected peak is 2300 Mi, --big's is 8192 Mi.
-const CP_RULE = { nodeSelectorTerms: [{ matchExpressions: [{ key: 'node-role.kubernetes.io/control-plane', operator: 'DoesNotExist' }] }] };
+const CP_RULE = { nodeSelectorTerms: [{ matchExpressions: [{ key: 'isnan.me/pool', operator: 'NotIn', values: ['control'] }] }] };
 type NodeAff = { requiredDuringSchedulingIgnoredDuringExecution?: unknown; preferredDuringSchedulingIgnoredDuringExecution?: unknown };
 const topLine = (used: string, pct: string) => `k3s-master   310m   7%   ${used}   ${pct}\n`;
 function placed(top: number | string | undefined, extra: string[] = [], over: Record<string, string> = {}, script = SCRIPT) {
@@ -2247,7 +2247,7 @@ test('T-611 C5: 50% at create and 90% at release adds the required rule to the s
   assert.match(
     up.patches[0] ?? '',
     new RegExp(
-      `"affinity":\\{"nodeAffinity":\\{"${REQ}":\\{"nodeSelectorTerms":\\[\\{"matchExpressions":\\[\\{"key":"node-role.kubernetes.io/control-plane","operator":"DoesNotExist"\\}\\]\\}\\]\\}\\}\\}`,
+      `"affinity":\\{"nodeAffinity":\\{"${REQ}":\\{"nodeSelectorTerms":\\[\\{"matchExpressions":\\[\\{"key":"isnan.me/pool","operator":"NotIn","values":\\["control"\\]\\}\\]\\}\\]\\}\\}\\}`,
     ),
   );
   assert.match(up.patches[1] ?? '', /\{"spec":\{"suspend":false\}\}/, 'the release comes after the affinity patch');
@@ -2328,7 +2328,7 @@ const AVOID_RULE = {
   nodeSelectorTerms: [
     {
       matchExpressions: [
-        { key: 'node-role.kubernetes.io/control-plane', operator: 'DoesNotExist' },
+        { key: 'isnan.me/pool', operator: 'NotIn', values: ['control'] },
         { key: 'kubernetes.io/hostname', operator: 'NotIn', values: ['k3s-master'] },
       ],
     },
@@ -2373,7 +2373,7 @@ test('T-1643: with JOB_RUN_AVOID_NODES unset a Job never runs on k3s-master (the
 });
 
 const HOST = (...names: string[]) => ({ key: 'kubernetes.io/hostname', operator: 'NotIn', values: names });
-const CP_EXPR = { key: 'node-role.kubernetes.io/control-plane', operator: 'DoesNotExist' };
+const CP_EXPR = { key: 'isnan.me/pool', operator: 'NotIn', values: ['control'] };
 const rule = (...exprs: unknown[]) => ({ nodeSelectorTerms: [{ matchExpressions: exprs }] });
 test('T-611 S2: JOB_RUN_AVOID_NODES gives a required hostname NotIn rule, alone when the master has room, with the control-plane rule when it is over', () => {
   const alone = placed(50, [], { JOB_RUN_AVOID_NODES: 'k3s-master,node-9.lan' });
@@ -2634,10 +2634,10 @@ test('T-524: a Job queued while the master was under the line is read again when
   assert.match(r.out, /placement: the control-plane node is at 88% of its memory \(over 85%\)/);
   const calls = w.calls().split('\n');
   const rule = calls.findIndex((c) =>
-    /patch job .*requiredDuringSchedulingIgnoredDuringExecution.*node-role\.kubernetes\.io\/control-plane.*DoesNotExist/.test(c),
+    /patch job .*requiredDuringSchedulingIgnoredDuringExecution.*isnan\.me\/pool.*NotIn.*control/.test(c),
   );
   assert.ok(
-    !/node-role[^\n]*kubernetes\.io\/hostname/.test(calls[rule] ?? ''),
+    !/isnan\.me\/pool[^\n]*kubernetes\.io\/hostname/.test(calls[rule] ?? ''),
     'no avoid list: the patch holds the control-plane expression alone',
   );
   const go = calls.findIndex((c) => /patch job .*"suspend":false/.test(c));

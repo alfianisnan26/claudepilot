@@ -28,7 +28,7 @@ spec:
         # T-1643: never on the control-plane node (k3s-master), so builds keep running through a master maintenance.
         nodeAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
-            nodeSelectorTerms: [{matchExpressions: [{key: node-role.kubernetes.io/control-plane, operator: DoesNotExist}]}]
+            nodeSelectorTerms: [{matchExpressions: [{key: isnan.me/pool, operator: NotIn, values: [control]}]}]
         podAntiAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:
             - weight: 100
