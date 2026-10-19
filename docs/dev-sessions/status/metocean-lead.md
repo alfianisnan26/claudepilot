@@ -1,47 +1,45 @@
 # Konfersi: Metocean lead status (2026-10-19, session fc73ae34-40d3-4c82-8148-dd55697c9379)
 
-Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-worker, Mission Planning compute/report/plugin parts, report builder, metocean reports. Status ticket T-1703. Release ticket T-1704 (v14 batch).
+Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-worker, Mission Planning compute/report/plugin parts, report builder, metocean reports. Status ticket T-1703. Release ticket T-1704 (v14 batch). Incident T-1705.
 
 ## DONE
-- T-1703 opened; first status comment c17276; coordinator blocker c17308.
-- Gate-form merge asks posted: T-1349 8316fdc (c17289, in_review), T-1590 bd21e33 (c17294, in_review).
-- T-1704 created: v14 release batch plan (order, bump rule, deploy rule).
-- Decisions on the record: T-1574 rebase onto T-1590 (c17300); T-1518 v13 folded into v14 (c17306).
-- T-1705 incident opened (T-1574 builder used `git switch --detach` after `checkout --detach` was denied): a69d6ea void (T-1574 c17420); brief template fixed (allowed git shapes listed, 'a denied command stops the step').
+- T-1703 opened; status comments c17276, c17308, c17425, c17443 (gate-copy rule), c17465.
+- Gate-form lead copies posted (verdict sha == branch head, Job rc=0): T-1349 c17289, T-1590 c17294, T-1164 c17445, T-1586 c17446, T-1579 c17447, T-632 c17448, T-1632 c17449, T-1021 c17451 (carries T-1020/T-1022), T-1160 c17454+c17455, T-1162 c17456. T-1617 already in gate form (c16656).
+- T-1704 created and updated (c17460): v14 order, bump rule, deploy rule.
+- T-1528: independent QA PASS WITH GAPS on stg c29d103 (c17424; Jobs f1e957c4, a60470c9; 4 mutants red). Held in_review on AC5 (c17428).
+- T-1574 redo: candidate dbbc9a49c5728a1c09cb380a6fca3d02789f4b8f on ticket/T-1574-nominal-tp-v14-2 (Jobs 3e6e65be, 59a50ebb rc=0; c17438, c17457). a69d6ea void (T-1705).
+- T-1705 incident opened; brief template fixed (allowed git shapes, a denied command stops the step).
+- Gate audit of the handed-over tickets done (mo-audit, read-only): results folded into T-1703 c17443 and NEXT.
 - Closed this session: 0.
 
 ## IN FLIGHT
-- T-1528: QA PASS WITH GAPS on stg c29d103 (c17424; Jobs f1e957c4, a60470c9; 4 mutants red). Held in_review until AC5 (live stg re-run, AIR quota) or a coordinator waiver (c17428). Verdict record needs a non-lineage QA.
-- Gate audit: Agent sub-agent mo-audit (sonnet, read-only): per in_review/in_progress ticket, verdict sha vs branch head, gate-form present, v14 member.
-- T-1574 redo: Agent sub-agent mo-be-d (sonnet, implementer): clone -b ticket/T-1590-clip-recap, cherry-pick c603bae, push ticket/T-1574-nominal-tp-v14-2, Jobs on the new sha. (mo-be-c's a69d6ea void, T-1705.)
-- T-1103, T-1701: claimed, waiting for a free slot.
-- 16:22Z Handover received: 53 tickets assigned to this session (ticket_list), the Lab-held metocean set included.
-- 16:21Z Usage read: session 60 %, runs out ~17:34Z at this pace (reset 19:40Z): one build sub-agent plus one read-only at most; short turns.
-- Workers: four dontAsk workers ended 16:12Z, all refused on the allow-listed clone shape (see FOR THE COORDINATOR).
+- T-1103 build: Agent sub-agent mo-be-e (sonnet, implementer), clone of stg c29d103, branch ticket/T-1103-pools-leak, fail-first Job then fix Job then suite.
+- T-1518 + T-553 QA: Agent sub-agent mo-qa-2 (sonnet, qa-verifier), Jobs on aeab2ec and 34deb24, gate-form comments (no portal record: lineage).
+- T-1701: claimed, waits for a slot. Workers: none (allow-list block, c17308).
+- 16:21Z Usage read: session 60 %, runs out ~17:34Z at this pace (reset 19:40Z): two sub-agents at most, short turns.
 
 ## DECISIONS
-- 16:05Z Lanes on `claude: auto` because my session pace projects over the reset (claude_usage 16:04Z: 40 %, runs out ~18:28Z, reset 19:40Z).
-- 16:12Z Workers blocked: fallback to Agent sub-agents for the release-critical slices; respawn workers when the clone shape works.
-- 16:10Z One v14 batch (no separate v13 deploy): one reprocess of stored results; T-1518's bump folded (c17306).
-- 16:09Z T-1590 merges first in the v14 set; no compute stg-deploy before both v14 bumps are on stg (T-1704).
-
-- 16:19Z T-1574 a69d6ea voided (zero-tolerance 2: denied `checkout --detach` replaced by `switch --detach`); redo from a clone of the T-1590 branch; incident T-1705; every brief now lists the allowed git shapes and 'a denied command stops the step'.
-- 16:20Z Coordinator: live stg Worker logs via `/home/node/work/claudepilot/scripts/cf-logs.sh [--script konfersi-backend-stg] [--since 30m] [--level error] [--search text] [--limit N]` (read-only, stg only); the "Konfersi QA e2e (agents)" service token covers every main stg host for Job-based e2e. Use after each v14 deploy and for T-1528 AC5 once AIR quota is back.
+- 16:05Z Lanes on `claude: auto` (session pace over). 16:12Z Workers blocked: Agent sub-agents instead; respawn when the clone shape works.
+- 16:10Z One v14 batch; T-1518's v13 bump folded (c17306). 16:09Z T-1590 first; no compute deploy before both v14 bumps (T-1704).
+- 16:19Z T-1574 a69d6ea voided (denied `checkout --detach` replaced by `switch --detach`); redo via `clone -b`; incident T-1705.
+- 16:22Z T-1528 held in_review until AC5 runs or the coordinator waives it (c17428): an unmet acceptance criterion is not closed as done.
+- 16:35Z Gate-copy rule (c17443): "PASS WITH GAPS" whose gaps are post-deploy checks is restated as "Verdict: PASS on <sha>" with the gaps quoted; code or scope gaps are not restated. T-1416 and T-1435 held until T-1574 merges (contour files).
+- 16:20Z Coordinator: stg Worker logs via `/home/node/work/claudepilot/scripts/cf-logs.sh` (read-only); the "Konfersi QA e2e (agents)" service token covers the main stg hosts for Job e2e. Use after each v14 deploy and for T-1528 AC5.
 
 ## FOR THE COORDINATOR
-- T-1703 c17308: dontAsk workers get "Permission to use Bash has been denied because Claude Code is running in don't ask mode" on `git clone -q -b stg https://git.konfersi.com/platform/<repo>.git /home/node/work/agentic-worktrees/<label>-<repo>`; check the folder's allow list loads for workers.
-- AIR quota on stg QA project qa-regress-scratch (T-1528 AC5, c16625, c17428: the only thing left before T-1528 closes); shared browser cannot reach stg-lab.konfersi.com (T-1667, T-1017 c16925).
-- D-88 text is not in this workspace's DECISIONS.md copy (ends at D-87).
-- T-1705: should `git switch` be denied wherever `git checkout` is, and is `--detach <sha>` meant to be denied for lanes? One line on T-1705 makes the briefs exact.
+- c17308: dontAsk workers refused on the allow-listed clone shape; check the folder's allow list loads for workers.
+- c17465: non-lineage QA records needed on T-1574 dbbc9a4 (delta check before its gate ask), T-1353, T-632, T-1632; session_message cannot reach the general lead.
+- AIR quota on qa-regress-scratch (T-1528 AC5, c16625); shared browser cannot reach stg-lab.konfersi.com (T-1667, T-1017 c16925, T-1089 screen check).
+- T-1705: should `git switch` be denied wherever `git checkout` is; is `--detach <sha>` meant to be denied for lanes?
+- D-88 text missing from this workspace's DECISIONS.md copy (ends at D-87).
 
 ## NEEDS A HUMAN
 - none (no production or uat action pending).
 
 ## NEXT
-1. Integrate mo-qa (T-1528) and mo-be-d (T-1574 redo) returns; post the T-1574 gate ask on the new head after a QA re-check.
-2. T-1103 builder (compute test_pools order leak), then T-1007 (ai-worker empty-turn cap).
-3. T-1701 measurement (Explain prompt repeat rate) on T-1276.
-4. T-1518: QA re-check of aeab2ec vs stg c29d103, verdict record, gate ask.
-5. When handed over: T-1352, T-1416, T-1435, T-604 into the v14 set; T-1579 (Worker before compute), T-1586, T-1355, T-1365, T-1164, T-1160, T-1012 gate asks; Satria's T-1017 gaps, T-1089, T-1021 -> T-1020 -> T-1022, T-553, T-367, T-603.
-6. v14 bump commits (compute + backend) after the last v14 merge; backend migrations check; stg-deploy backend then compute (T-1704).
-7. Hourly closed-count report on T-1703.
+1. Integrate mo-be-e (T-1103) and mo-qa-2 (T-1518, T-553): lead copies if PASS; T-1518 and T-553 to in_review.
+2. T-1701 measurement (Explain prompt repeat rate) on T-1276; then T-1007 (ai-worker empty-turn cap).
+3. After T-1574's QA and merge: gate asks T-1352 f92828f, T-1416 65d952d, T-1435 f424b1c, T-604; then the v14 bump commits (compute catalog.py, backend metocean-catalog.ts), backend migrations check, stg-deploy backend then compute, cf-logs check.
+4. Need QA on head: T-1591 (billing, Job + blind review stands), T-1593 (backend suite Job, plugin sha), T-1012 (which branch is the fix: 4f9d95a on ticket/T-1012-r2-pull vs stg; merge-base denied in the pod).
+5. Satria's: T-1017 gaps, T-1089 (screen check blocked), T-1021/T-1022 after merge: stg v2 JSON check; T-367, T-603; T-1182 backend and compute parts; T-1542 (QA login quota).
+6. Hourly closed-count report on T-1703 (next ~17:05Z).
