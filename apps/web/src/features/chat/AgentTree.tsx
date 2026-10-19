@@ -297,7 +297,7 @@ const PILL: Record<AgentStatus, { className: string; icon: React.ReactNode }> = 
 function StatusPill({ status }: { status: AgentStatus }) {
   const p = PILL[status];
   return (
-    <span className="relative inline-grid shrink-0" role="status" aria-label={STATUS_LABEL[status]}>
+    <span className="relative inline-grid shrink-0">
       <AnimatePresence initial={false} mode="popLayout">
         <motion.span
           key={status}
