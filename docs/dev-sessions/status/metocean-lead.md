@@ -19,9 +19,9 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 
 ## IN FLIGHT
 - T-1701 hash slice done: 74bae41 on ai-worker ticket/T-1701-prompt-hash-log (c17525); gate ask waits for T-1162 on stg because `npm test` is red at the stg head itself (URLPattern, Jobs b24b9ea8/21ea40b0); then cherry-pick on a fresh stg clone, QA, gate, one ai-worker deploy (c17526).
-- No sub-agent running. Usage 16:47Z: session 77 %, runs out ~17:23Z, reset 19:40Z: no new sub-agent until the reset or a move to another Claude; lead-only work (gate copies, decisions) meanwhile.
-- Waiting for a non-lineage QA (c17465): T-1574 dbbc9a4 (then gate ask), T-1103 dec58a1 (c17484), T-553 52afda1 (c17504); records: T-1353, T-632, T-1632. Workers: none (allow-list block, c17308).
-- 16:36Z Usage read: session 70 %, runs out ~17:25Z at this pace (reset 19:40Z): one sub-agent at a time until the reset.
+- Worker mo-qa-w1 (5d4cfc18, satria, sonnet, dontAsk, qa-verifier): T-1574 delta QA on dbbc9a4; first step is the clone-shape probe (c17539). If it works: T-1103 dec58a1 and T-553 52afda1 QA workers next, then the records for T-1353, T-632, T-1632. If refused: c17308 stands.
+- No Agent sub-agent running. Usage 16:57Z: session 78 %, runs out ~17:34Z, reset 19:40Z: no Agent sub-agent until the reset; workers run on other Claudes; lead-only work (gate copies, decisions) meanwhile.
+- 16:58Z Re-attached by the coordinator after a portal liveness mark at 16:21Z (process never stopped).
 
 ## DECISIONS
 - 16:05Z Lanes on `claude: auto` (session pace over). 16:12Z Workers blocked: Agent sub-agents instead; respawn when the clone shape works.
