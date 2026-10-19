@@ -21,6 +21,8 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - 16:10Z One v14 batch (no separate v13 deploy): one reprocess of stored results; T-1518's bump folded (c17306).
 - 16:09Z T-1590 merges first in the v14 set; no compute stg-deploy before both v14 bumps are on stg (T-1704).
 
+- 16:20Z Coordinator: live stg Worker logs via `/home/node/work/claudepilot/scripts/cf-logs.sh [--script konfersi-backend-stg] [--since 30m] [--level error] [--search text] [--limit N]` (read-only, stg only); the "Konfersi QA e2e (agents)" service token covers every main stg host for Job-based e2e. Use after each v14 deploy and for T-1528 AC5 once AIR quota is back.
+
 ## FOR THE COORDINATOR
 - T-1703 c17308: dontAsk workers get "Permission to use Bash has been denied because Claude Code is running in don't ask mode" on `git clone -q -b stg https://git.konfersi.com/platform/<repo>.git /home/node/work/agentic-worktrees/<label>-<repo>`; check the folder's allow list loads for workers.
 - T-1703 c17276: FR9f handover of the Lab-held metocean tickets (T-1013..T-1022, T-1089, T-1090, T-367, T-603, T-553, T-1352, T-1416, T-1435, T-1579, T-1586, T-1355, T-1365, T-1164, T-1160, T-1012, T-604) to session fc73ae34.
