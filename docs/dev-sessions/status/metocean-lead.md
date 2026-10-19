@@ -12,13 +12,13 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - Gate audit of the handed-over tickets done (mo-audit, read-only): results folded into T-1703 c17443 and NEXT.
 - T-1103: candidate dec58a1 (test isolation, injected-leak tests; Jobs e004edb6 rc=1 fail-first, d4e35b28, c03ad53a rc=0 362 passed; c17482).
 - T-1518: Job-backed QA PASS WITH GAPS on aeab2ec (c17483); merge decision and gate copy c17487/c17488; follow-up T-1708 (directional/monthly CI, GOF, Q-Q/P-P).
-- T-553: QA on 34deb24 (c17486) found regex false positives; sent back (c17491).
+- T-553: QA on 34deb24 (c17486) found regex false positives; fixed as 52afda1 on ticket/T-553-percent-unit-4 (Jobs d9d7fd43 rc=1 fail-first, c1c3cec9, 06bb719a rc=0 363 passed; c17499, c17504).
+- Hourly reports on T-1703: c17425 (16:21Z), c17506 (17:05Z).
 - Closed this session: 0.
 
 ## IN FLIGHT
-- T-553 fix: Agent sub-agent mo-be-f (sonnet, implementer), from 34deb24 as ticket/T-553-percent-unit-4: percent-unit false positives (c17491), fail-first tests then fix, Jobs.
-- Waiting for a non-lineage QA (c17465): T-1574 dbbc9a4 (then gate ask), T-1103 dec58a1 (in_review, c17484), T-1353, T-632, T-1632 records.
-- T-1701: claimed, waits for a slot. Workers: none (allow-list block, c17308).
+- T-1701 measurement: Agent sub-agent mo-be-g (sonnet, implementer), brief build-T-1701.md, on T-1276.
+- Waiting for a non-lineage QA (c17465): T-1574 dbbc9a4 (then gate ask), T-1103 dec58a1 (c17484), T-553 52afda1 (c17504); records: T-1353, T-632, T-1632. Workers: none (allow-list block, c17308).
 - 16:36Z Usage read: session 70 %, runs out ~17:25Z at this pace (reset 19:40Z): one sub-agent at a time until the reset.
 
 ## DECISIONS
@@ -41,8 +41,8 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - none (no production or uat action pending).
 
 ## NEXT
-1. Integrate mo-be-e (T-1103) and mo-qa-2 (T-1518, T-553): lead copies if PASS; T-1518 and T-553 to in_review.
-2. T-1701 measurement (Explain prompt repeat rate) on T-1276; then T-1007 (ai-worker empty-turn cap).
+1. Integrate mo-be-g (T-1701); then T-1007 (ai-worker empty-turn cap).
+2. When a non-lineage QA exists: T-1574, T-1103, T-553 gate asks; T-1353 close.
 3. After T-1574's QA and merge: gate asks T-1352 f92828f, T-1416 65d952d, T-1435 f424b1c, T-604; then the v14 bump commits (compute catalog.py, backend metocean-catalog.ts), backend migrations check, stg-deploy backend then compute, cf-logs check.
 4. Need QA on head: T-1591 (billing, Job + blind review stands), T-1593 (backend suite Job, plugin sha), T-1012 (which branch is the fix: 4f9d95a on ticket/T-1012-r2-pull vs stg; merge-base denied in the pod).
 5. Satria's: T-1017 gaps, T-1089 (screen check blocked), T-1021/T-1022 after merge: stg v2 JSON check; T-367, T-603; T-1182 backend and compute parts; T-1542 (QA login quota).
