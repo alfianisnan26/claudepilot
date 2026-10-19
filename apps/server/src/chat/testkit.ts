@@ -85,6 +85,8 @@ export class FakeWorkspaces {
   /** What `status` reports (per session when set there), and the exit code `send` returns. */
   alive = true;
   readonly status = new Map<string, boolean>();
+  /** T-1650: every `status` the host answered: the session asked about, what it said, and when. */
+  readonly statusLog: { csid: string; alive: boolean; at: number }[] = [];
   /** The host cannot be reached for `status` (the exec fails): the portal reads it as unknown. */
   statusUnreachable = false;
   sendCode = 0;
@@ -211,6 +213,7 @@ export class FakeWorkspaces {
       throw new Error('the session host is unreachable');
     } else if (cmd === 'status') {
       const alive = this.status.get(command[3] ?? '') ?? this.alive;
+      this.statusLog.push({ csid: command[3] ?? '', alive, at: Date.now() });
       setTimeout(() => {
         exec.push(alive ? 'live 4242\n' : 'gone\n');
         exec.exit(0);
@@ -267,13 +270,19 @@ export function controls(ws: FakeWorkspaces): Control[] {
   return out;
 }
 
+/**
+ * T-1650: the gone guards at test speed: the second `gone` reading at once, and a whole workspace reading gone accepted at once (the fake
+ * host's `alive` is one switch for every session). Tests of the guards (liveness.test.ts) pass their own.
+ */
+export const QUICK_GONE: ChatControllerOptions = { goneConfirmMs: 0, workspaceGoneMs: 0 };
+
 /** A started session with its reader attached, a log of everything dispatched, and a way to take each
  *  new control request of a subtype as the controller writes it. `start` also starts durability work; `req` adds to the create request
  *  (an agent, say). */
 export async function liveSession(opts: ChatControllerOptions = {}, start = false, req: Partial<CreateChatSessionRequest> = {}) {
   const { store, dataDir } = await freshStore();
   const ws = new FakeWorkspaces();
-  const controller = new ChatController(store, ws as unknown as Workspaces, opts);
+  const controller = new ChatController(store, ws as unknown as Workspaces, { ...QUICK_GONE, ...opts });
   if (start) controller.start();
   const messages: ChatServerMessage[] = [];
   controller.onEvent((_id, msg) => messages.push(msg));
@@ -355,7 +364,7 @@ export async function firstTurn(s: Live) {
 export async function restartPortal(s: Live, opts: ChatControllerOptions = {}, setup?: (c: ChatController) => void): Promise<ChatController> {
   s.controller.stop();
   const tails = s.ws.tails.length;
-  const next = new ChatController(s.store, s.ws as unknown as Workspaces, opts);
+  const next = new ChatController(s.store, s.ws as unknown as Workspaces, { ...QUICK_GONE, ...opts });
   next.onEvent((_id, msg) => s.messages.push(msg));
   setup?.(next);
   next.start();
