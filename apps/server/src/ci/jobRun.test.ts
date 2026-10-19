@@ -567,11 +567,11 @@ test('T-524 --big: 8Gi requested = limited, /tmp 4Gi; the default is 4Gi with /t
       name: 'tmp',
       emptyDir: { medium: 'Memory', sizeLimit: tmp },
     });
-    assert.deepEqual((m.spec.template.spec.affinity as { nodeAffinity: unknown }).nodeAffinity, {
-      preferredDuringSchedulingIgnoredDuringExecution: [
-        { weight: 100, preference: { matchExpressions: [{ key: 'isnan.me/pool', operator: 'NotIn', values: ['control'] }] } },
-      ],
-    });
+    // T-1643: no node preference any more (every node is control-plane); the Jobs spread across the nodes instead.
+    assert.equal((m.spec.template.spec.affinity as { nodeAffinity?: unknown }).nodeAffinity ?? null, null);
+    assert.deepEqual(m.spec.template.spec.topologySpreadConstraints, [
+      { maxSkew: 1, topologyKey: 'kubernetes.io/hostname', whenUnsatisfiable: 'ScheduleAnyway', labelSelector: { matchLabels: { app: 'claudepilot-job-run' } } },
+    ]);
   }
 });
 
@@ -1427,7 +1427,8 @@ test('T-524, T-1643: the heavy Jobs keep off the control plane (the gate by a re
       .replace(/__[A-Z_]+__/g, 'x');
     const pod = (yamlLoad(text) as { spec: { template: { spec: Pod } } }).spec.template.spec;
     const na = pod.affinity?.nodeAffinity;
-    {
+    if (name === 'job-run.yaml') assert.equal(na ?? null, null, `${name}: T-1643 no node preference, a topology spread instead`);
+    else {
       assert.equal(na?.requiredDuringSchedulingIgnoredDuringExecution, undefined, `${name}: the template itself has no required rule`);
       assert.deepEqual(
         na?.preferredDuringSchedulingIgnoredDuringExecution,
@@ -2005,8 +2006,8 @@ function placed(top: number | string | undefined, extra: string[] = [], over: Re
   const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', ...extra, '--', 'true'], over, script);
   const required =
     r.code === 0
-      ? ((yamlLoad(w.applied1()) as Manifest).spec.template.spec.affinity as { nodeAffinity: NodeAff }).nodeAffinity
-          .requiredDuringSchedulingIgnoredDuringExecution
+      ? ((yamlLoad(w.applied1()) as Manifest).spec.template.spec.affinity as { nodeAffinity?: NodeAff | null }).nodeAffinity
+          ?.requiredDuringSchedulingIgnoredDuringExecution
       : undefined;
   return { r, w, required };
 }
