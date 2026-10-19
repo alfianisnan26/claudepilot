@@ -34,8 +34,10 @@ spec:
         # portal's node and from workspace pods; with memory requested = limited the node with the most room left wins the tie.
         # T-1643: never on the control-plane node (k3s-master); k3s-node3 joined the worker pool, so a required rule leaves room to run.
         nodeAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-            nodeSelectorTerms: [{matchExpressions: [{key: isnan.me/pool, operator: NotIn, values: [control]}]}]
+          # T-1643, 2026-10-19 15:4x: preferred again (all nodes are control-plane; the workers alone ran out of memory requests).
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference: {matchExpressions: [{key: isnan.me/pool, operator: NotIn, values: [control]}]}
         podAntiAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:
             - weight: 100

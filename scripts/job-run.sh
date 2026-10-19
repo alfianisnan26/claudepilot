@@ -95,7 +95,10 @@ master_max=$((10#$master_max))
 # T-611 S2: nodes a Job may never run on (a comma list of node names). The names go into JSON: the shape is checked, nothing else passes.
 # T-1643 (owner, 2026-10-19: "pindahin ci dari node1 ke node3"): unset means k3s-master, the only control plane (API server, Argo CD); with
 # k3s-node3 in the worker pool the required rule no longer leaves every Job Pending (the T-365/T-524 reason for none). Set it empty to allow the master.
-JOB_RUN_AVOID_NODES=${JOB_RUN_AVOID_NODES-k3s-master}
+# Then (owner, 2026-10-19 15:4x UTC, after the maintenance: "help answer the decisions ... handle the operations fully"): every node is
+# control-plane now, and with the master avoided the two workers' memory requests filled (gates Pending "Insufficient memory"), so the
+# default is none again: the master takes a Job when the preferred rules and the 85% guard allow it. Set k3s-master to keep it off.
+JOB_RUN_AVOID_NODES=${JOB_RUN_AVOID_NODES-}
 avoid_json=; avoid_txt=
 if [ -n "$JOB_RUN_AVOID_NODES" ]; then
   # The raw value is never echoed (a newline in it could forge a "=== JOB-RUN" line): the checks below say what is wrong, and the messages and
