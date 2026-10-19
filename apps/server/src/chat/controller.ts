@@ -265,6 +265,16 @@ const SLOT_WAIT_MS = 15 * 60_000;
 const SLOT_POLL_MS = 1000;
 /** How often live sessions' processes are checked. */
 const LIVENESS_MS = 60_000;
+/**
+ * T-1650: a `gone` reading is taken again this long later before a process is marked gone. On 2026-10-19 one round read every one of 13
+ * live processes of a workspace as gone and Interrupted them all (their processes ran on): one reading is not evidence.
+ */
+const GONE_CONFIRM_MS = 10_000;
+/**
+ * T-1650: when every live session of a workspace reads gone at once, the workspace (its host, its exec path) is suspect, not the processes:
+ * nothing is marked until that has lasted this long (a real end of them all, a pod restart say, still is, a few rounds later).
+ */
+const WORKSPACE_GONE_MS = 3 * 60_000;
 /** How long a workspace's secret values are kept in memory before they are read again. */
 const VALUES_CACHE_MS = 10_000;
 /** A worktree made for a start that never came through (waiting on folder trust) is swept after this long, if nothing is in it. */
@@ -506,6 +516,10 @@ export interface ChatControllerOptions {
   livenessMs?: number;
   /** How long one short `cp-session` command may run before it counts as failed. */
   execTimeoutMs?: number;
+  /** T-1650: how long after a first `gone` reading the second is taken; only two in a row mark a process gone. */
+  goneConfirmMs?: number;
+  /** T-1650: how long every live session of a workspace must keep reading gone before they are all marked gone. */
+  workspaceGoneMs?: number;
   /** How long a workspace's secret values are kept in memory before they are read again. */
   valuesCacheMs?: number;
   /** The clock the integrity checks' time windows read (a fake one in tests); `Date.now` otherwise. */
@@ -829,6 +843,12 @@ export class ChatController {
   readonly #bornAt = Date.now();
   readonly #idleMs: number;
   readonly #livenessMs: number;
+  readonly #goneConfirmMs: number;
+  readonly #workspaceGoneMs: number;
+  /** T-1650: since when every live session of a workspace has read gone (a suspected workspace fault), by workspace. */
+  readonly #workspaceGone = new Map<string, { since: number; last: number }>();
+  /** T-1650: one in-flight probe of a workspace's live sessions, shared by the gone checks that ask at the same time. */
+  readonly #workspaceProbe = new Map<string, Promise<Set<string>>>();
   #liveness?: NodeJS.Timeout;
   #started = false;
   #closed = false;
@@ -1104,6 +1124,8 @@ export class ChatController {
     });
     this.#idleMs = opts.idleSleepMs ?? IDLE_SLEEP_MS;
     this.#livenessMs = opts.livenessMs ?? LIVENESS_MS;
+    this.#goneConfirmMs = opts.goneConfirmMs ?? GONE_CONFIRM_MS;
+    this.#workspaceGoneMs = opts.workspaceGoneMs ?? WORKSPACE_GONE_MS;
     this.execTimeoutMs = opts.execTimeoutMs ?? EXEC_TIMEOUT_MS;
     this.valuesCacheMs = opts.valuesCacheMs ?? VALUES_CACHE_MS;
     this.#clock = opts.clock ?? Date.now;
@@ -1227,7 +1249,7 @@ export class ChatController {
   async #check(row: ChatSessionRow): Promise<void> {
     const id = row.id;
     if (this.#busy.has(id)) return; // a launch or sleep is deciding
-    const status = await this.#status(row.workspace_id, claudeSessionOf(row));
+    const status = await this.#goneCheck(row);
     if (status === 'unknown') return; // unreachable right now: ask again next round
     const now = this.#chat.row(id);
     // Act only on the process this check was about.
@@ -1256,6 +1278,55 @@ export class ChatController {
     } catch {
       return 'unknown';
     }
+  }
+
+  /**
+   * T-1650: whether a session's process is gone, fail safe: `gone` only on two `gone` readings at least {@link GONE_CONFIRM_MS} apart, and
+   * not while every other live session of its workspace reads gone too (a workspace-level fault: logged, `unknown`) unless that has lasted
+   * {@link WORKSPACE_GONE_MS}. Anything between is `unknown`: the next round, or the next drop of its reader, asks again. Every caller that
+   * marks a process gone on the host's word asks this, never {@link #status} alone.
+   */
+  async #goneCheck(row: ChatSessionRow): Promise<'live' | 'gone' | 'unknown'> {
+    const workspaceId = row.workspace_id;
+    const csid = claudeSessionOf(row);
+    const first = await this.#status(workspaceId, csid);
+    if (first === 'live') this.#workspaceGone.delete(workspaceId);
+    if (first !== 'gone') return first;
+    await new Promise<void>((resolve) => setTimeout(resolve, this.#goneConfirmMs).unref?.());
+    if (this.#closed) return 'unknown';
+    const second = await this.#status(workspaceId, csid);
+    if (second === 'live') this.#workspaceGone.delete(workspaceId);
+    if (second !== 'gone') return second === 'live' ? 'live' : 'unknown';
+    const others = this.#chat.liveRows().filter((r) => r.workspace_id === workspaceId && r.id !== row.id);
+    if (!others.length) return 'gone';
+    const live = await this.#probeWorkspace(workspaceId);
+    if (live.has(csid)) return 'live'; // it answered live after all: the gone readings were the fault
+    if (live.size) {
+      this.#workspaceGone.delete(workspaceId);
+      return 'gone';
+    }
+    const now = Date.now();
+    const seen = this.#workspaceGone.get(workspaceId);
+    // A sighting from before the last two rounds is not this fault: it starts again.
+    const since = seen && now - seen.last <= 2 * this.#livenessMs + this.#goneConfirmMs ? seen.since : now;
+    this.#workspaceGone.set(workspaceId, { since, last: now });
+    if (now - since >= this.#workspaceGoneMs) return 'gone'; // it lasted: they all ended (the workspace restarted, say)
+    if (since === now)
+      console.warn(`[chat] ${workspaceId}: all ${others.length + 1} live sessions read gone at once; a workspace fault until it lasts, nothing marked (T-1650)`);
+    return 'unknown';
+  }
+
+  /** T-1650: the Claude session ids of a workspace's live sessions whose host answers `live` now (one probe shared while it runs). */
+  #probeWorkspace(workspaceId: string): Promise<Set<string>> {
+    const running = this.#workspaceProbe.get(workspaceId);
+    if (running) return running;
+    const p = (async () => {
+      const csids = this.#chat.liveRows().filter((r) => r.workspace_id === workspaceId).map(claudeSessionOf);
+      const readings = await Promise.all(csids.map(async (c) => [c, await this.#status(workspaceId, c)] as const));
+      return new Set(readings.filter(([, s]) => s === 'live').map(([c]) => c));
+    })().finally(() => this.#workspaceProbe.delete(workspaceId));
+    this.#workspaceProbe.set(workspaceId, p);
+    return p;
   }
 
   /**
@@ -1350,7 +1421,7 @@ export class ChatController {
     this.#dropStale(sessionId, why, actor);
     const row = this.#chat.row(sessionId);
     if (!row || row.state === 'ended' || row.process !== 'live' || !this.#chat.openRequests(sessionId).length) return;
-    const status = await this.#status(row.workspace_id, claudeSessionOf(row));
+    const status = await this.#goneCheck(row);
     const now = this.#chat.row(sessionId);
     if (
       status !== 'gone' ||
@@ -5902,7 +5973,7 @@ export class ChatController {
     reader.checking = true;
     let status: 'live' | 'gone' | 'unknown';
     try {
-      status = await this.#status(row.workspace_id, claudeSessionOf(row));
+      status = await this.#goneCheck(row);
     } finally {
       reader.checking = false;
     }
@@ -6946,8 +7017,7 @@ export class ChatController {
       if (!(e instanceof ControlTimeout) || !this.#isLive(sessionId)) return;
       // No answer: a process that died after its turn says nothing about credentials; a running one that
       // won't answer fails closed. Unreachable, the liveness check and the next turn's check decide.
-      const workspaceId = this.#chat.row(sessionId)!.workspace_id;
-      const status = await this.#status(workspaceId, this.#csid(sessionId));
+      const status = await this.#goneCheck(this.#chat.row(sessionId)!);
       if (!this.#isLive(sessionId)) return;
       if (status === 'gone') this.#markGone(sessionId);
       else if (status === 'live') this.#endCredential(sessionId, CREDENTIAL.unanswered);
