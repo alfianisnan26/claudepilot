@@ -48,11 +48,11 @@ spec:
         # have room). Under the line, or when the metrics fail, the marker is empty and only the preferred rules apply (a metrics failure never
         # blocks every Job).
         # T-524: the script reads again when the queue lets the (suspended) Job out and patches the same required rule in if the master filled meanwhile.
+        # T-1643 (owner, 2026-10-19: "bantu distribusi worker node nya di node 1, 2, dan 3"): every node is control-plane now, so the
+        # preference for the worker pool is gone (it piled Jobs on k3s-node2, whose CPU the workspace's agents already fill) and the spread
+        # below shares the Jobs out across the three nodes. The marker (the master's memory guard) stays.
         nodeAffinity:
           __MASTER_REQUIRED__
-          preferredDuringSchedulingIgnoredDuringExecution:
-            - weight: 100
-              preference: {matchExpressions: [{key: isnan.me/pool, operator: NotIn, values: [control]}]}
         podAntiAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:
             - weight: 100
@@ -65,6 +65,12 @@ spec:
                 topologyKey: kubernetes.io/hostname
                 namespaces: [isnan-claudepilot-workspaces]
                 labelSelector: {matchLabels: {claudepilot.managed: "true"}}
+      # T-1643: at most one more lane Job on a node than on the least used one, when the scheduler can (never blocks a Job).
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector: {matchLabels: {app: claudepilot-job-run}}
       initContainers:
         # T-401: the only container with the Secret. No repository or dependency code runs here (npm ci --ignore-scripts, no command).
         - name: fetch
