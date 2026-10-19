@@ -18,7 +18,8 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - Closed this session: 0.
 
 ## IN FLIGHT
-- T-1701 hash slice: Agent sub-agent mo-be-h (sonnet, implementer), ai-worker ticket/T-1701-prompt-hash-log: prompt_hash, card_id, model on the "agent model call" log line, one test, Job.
+- T-1701 hash slice done: 74bae41 on ai-worker ticket/T-1701-prompt-hash-log (c17525); gate ask waits for T-1162 on stg because `npm test` is red at the stg head itself (URLPattern, Jobs b24b9ea8/21ea40b0); then cherry-pick on a fresh stg clone, QA, gate, one ai-worker deploy (c17526).
+- No sub-agent running. Usage 16:47Z: session 77 %, runs out ~17:23Z, reset 19:40Z: no new sub-agent until the reset or a move to another Claude; lead-only work (gate copies, decisions) meanwhile.
 - Waiting for a non-lineage QA (c17465): T-1574 dbbc9a4 (then gate ask), T-1103 dec58a1 (c17484), T-553 52afda1 (c17504); records: T-1353, T-632, T-1632. Workers: none (allow-list block, c17308).
 - 16:36Z Usage read: session 70 %, runs out ~17:25Z at this pace (reset 19:40Z): one sub-agent at a time until the reset.
 
@@ -43,8 +44,9 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - none (no production or uat action pending).
 
 ## NEXT
-1. Integrate mo-be-h (T-1701 hash slice): QA, gate ask, ai-worker stg-deploy with T-1162; then T-1007 (ai-worker empty-turn cap).
-2. When a non-lineage QA exists: T-1574, T-1103, T-553 gate asks; T-1353 close.
+1. T-367 gate copy (QA PASS on cd3569c, Job ae4495b1; v14 member); T-603 (68fcfd3) and T-604 (835cf8c) need QA.
+2. After the reset: T-1007 (ai-worker, after T-1162 lands), T-1591 QA Job, T-1593 backend suite Job, T-1012 branch question.
+3. When a non-lineage QA exists: T-1574, T-1103, T-553 gate asks; T-1353 close.
 3. After T-1574's QA and merge: gate asks T-1352 f92828f, T-1416 65d952d, T-1435 f424b1c, T-604; then the v14 bump commits (compute catalog.py, backend metocean-catalog.ts), backend migrations check, stg-deploy backend then compute, cf-logs check.
 4. Need QA on head: T-1591 (billing, Job + blind review stands), T-1593 (backend suite Job, plugin sha), T-1012 (which branch is the fix: 4f9d95a on ticket/T-1012-r2-pull vs stg; merge-base denied in the pod).
 5. Satria's: T-1017 gaps, T-1089 (screen check blocked), T-1021/T-1022 after merge: stg v2 JSON check; T-367, T-603; T-1182 backend and compute parts; T-1542 (QA login quota).
