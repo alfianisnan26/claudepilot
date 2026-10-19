@@ -159,6 +159,8 @@ export class FakeSource implements UsageSource {
   /** Sessions: id → the workspace and Claude they run in. */
   sessions = new Map<string, { workspaceId: string; claudeId: string }>();
   listCalls = 0;
+  /** Claudes with a live session on them (T-1707). */
+  live = new Set<string>();
 
   async claudes() {
     this.listCalls++;
@@ -170,6 +172,9 @@ export class FakeSource implements UsageSource {
   async exec(target: string, name: string, command: string[]) {
     this.execs.push({ target, name, command });
     return this.spawn(command);
+  }
+  sessionOn(c: { id: string }) {
+    return this.live.has(c.id);
   }
   sessionClaude(sessionId: string, claudeId: string) {
     const s = this.sessions.get(sessionId);
@@ -184,13 +189,15 @@ export const planResult = (windows: ProbeResult['windows'], over: Partial<ProbeR
 
 export const win = (key: string, usedPct: number | null, resetsAtMs: number | null, label = key): ProbeResult['windows'][number] => ({ key, label, usedPct, resetsAtMs });
 
-export async function usageHarness(opts: { now?: { t: number }; probe?: UsageOptions['probe']; settings?: UsageOptions['settings']; canUseClaude?: UsageOptions['canUseClaude']; log?: (line: string) => void } = {}) {
+export async function usageHarness(
+  opts: { now?: { t: number }; probe?: UsageOptions['probe']; settings?: UsageOptions['settings']; canUseClaude?: UsageOptions['canUseClaude']; log?: (line: string) => void; prime?: UsageOptions['prime']; primeMin?: UsageOptions['primeMin']; audit?: UsageOptions['audit'] } = {},
+) {
   const dataDir = mkdtempSync(join(tmpdir(), 'cp-usage-'));
   const store = await Store.open({ dataDir, secretKey: parseSecretKey(generateSecretKey()) });
   const source = new FakeSource();
   const clock = opts.now ?? { t: NOW };
   let changes = 0;
-  const usage = new ClaudeUsageMonitor({ store, source, now: () => clock.t, notify: () => void changes++, log: opts.log ?? (() => {}), probe: opts.probe, settings: opts.settings, canUseClaude: opts.canUseClaude });
+  const usage = new ClaudeUsageMonitor({ store, source, now: () => clock.t, notify: () => void changes++, log: opts.log ?? (() => {}), probe: opts.probe, settings: opts.settings, canUseClaude: opts.canUseClaude, prime: opts.prime, primeMin: opts.primeMin ?? (() => 0), audit: opts.audit });
   const done = () => {
     usage.stop();
     store.close();
