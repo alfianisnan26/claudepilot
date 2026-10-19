@@ -14,10 +14,11 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - T-1518: Job-backed QA PASS WITH GAPS on aeab2ec (c17483); merge decision and gate copy c17487/c17488; follow-up T-1708 (directional/monthly CI, GOF, Q-Q/P-P).
 - T-553: QA on 34deb24 (c17486) found regex false positives; fixed as 52afda1 on ticket/T-553-percent-unit-4 (Jobs d9d7fd43 rc=1 fail-first, c1c3cec9, 06bb719a rc=0 363 passed; c17499, c17504).
 - Hourly reports on T-1703: c17425 (16:21Z), c17506 (17:05Z).
+- T-1701 measurement (mo-be-g, read-only, c17513/c17514): no prompt hash in any log or ledger row, so the Explain repeat rate is unknown; no cache built (ticket rule).
 - Closed this session: 0.
 
 ## IN FLIGHT
-- T-1701 measurement: Agent sub-agent mo-be-g (sonnet, implementer), brief build-T-1701.md, on T-1276.
+- T-1701 hash slice: Agent sub-agent mo-be-h (sonnet, implementer), ai-worker ticket/T-1701-prompt-hash-log: prompt_hash, card_id, model on the "agent model call" log line, one test, Job.
 - Waiting for a non-lineage QA (c17465): T-1574 dbbc9a4 (then gate ask), T-1103 dec58a1 (c17484), T-553 52afda1 (c17504); records: T-1353, T-632, T-1632. Workers: none (allow-list block, c17308).
 - 16:36Z Usage read: session 70 %, runs out ~17:25Z at this pace (reset 19:40Z): one sub-agent at a time until the reset.
 
@@ -27,6 +28,7 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - 16:19Z T-1574 a69d6ea voided (denied `checkout --detach` replaced by `switch --detach`); redo via `clone -b`; incident T-1705.
 - 16:22Z T-1528 held in_review until AC5 runs or the coordinator waives it (c17428): an unmet acceptance criterion is not closed as done.
 - 16:35Z Gate-copy rule (c17443): "PASS WITH GAPS" whose gaps are post-deploy checks is restated as "Verdict: PASS on <sha>" with the gaps quoted; code or scope gaps are not restated. T-1416 and T-1435 held until T-1574 merges (contour files).
+- 17:12Z T-1701 (c17516): no Explain cache; add prompt_hash/card_id/model to the ai-worker log line and read the repeat rate with cf-logs.sh after 24 h on stg; cache reopens only above about 10 % identical prompts.
 - 16:20Z Coordinator: stg Worker logs via `/home/node/work/claudepilot/scripts/cf-logs.sh` (read-only); the "Konfersi QA e2e (agents)" service token covers the main stg hosts for Job e2e. Use after each v14 deploy and for T-1528 AC5.
 
 ## FOR THE COORDINATOR
@@ -41,7 +43,7 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - none (no production or uat action pending).
 
 ## NEXT
-1. Integrate mo-be-g (T-1701); then T-1007 (ai-worker empty-turn cap).
+1. Integrate mo-be-h (T-1701 hash slice): QA, gate ask, ai-worker stg-deploy with T-1162; then T-1007 (ai-worker empty-turn cap).
 2. When a non-lineage QA exists: T-1574, T-1103, T-553 gate asks; T-1353 close.
 3. After T-1574's QA and merge: gate asks T-1352 f92828f, T-1416 65d952d, T-1435 f424b1c, T-604; then the v14 bump commits (compute catalog.py, backend metocean-catalog.ts), backend migrations check, stg-deploy backend then compute, cf-logs check.
 4. Need QA on head: T-1591 (billing, Job + blind review stands), T-1593 (backend suite Job, plugin sha), T-1012 (which branch is the fix: 4f9d95a on ticket/T-1012-r2-pull vs stg; merge-base denied in the pod).
