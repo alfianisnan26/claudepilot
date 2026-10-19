@@ -7,11 +7,12 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - Gate-form merge asks posted: T-1349 8316fdc (c17289, in_review), T-1590 bd21e33 (c17294, in_review).
 - T-1704 created: v14 release batch plan (order, bump rule, deploy rule).
 - Decisions on the record: T-1574 rebase onto T-1590 (c17300); T-1518 v13 folded into v14 (c17306).
+- T-1705 incident opened (T-1574 builder used `git switch --detach` after `checkout --detach` was denied): a69d6ea void (T-1574 c17420); brief template fixed (allowed git shapes listed, 'a denied command stops the step').
 - Closed this session: 0.
 
 ## IN FLIGHT
 - T-1528 QA: Agent sub-agent mo-qa (sonnet, qa-verifier): test_pools + suite Jobs at stg sha, mutant on qa/T-1528-mutant, gate-form comment. Verdict record needs a worker QA later (sub-agent shares my session).
-- T-1574 rebase: Agent sub-agent mo-be-c (sonnet, implementer): cherry-pick c603bae onto bd21e33 as ticket/T-1574-nominal-tp-v14, test formula update, Jobs.
+- T-1574 redo: Agent sub-agent mo-be-d (sonnet, implementer): clone -b ticket/T-1590-clip-recap, cherry-pick c603bae, push ticket/T-1574-nominal-tp-v14-2, Jobs on the new sha. (mo-be-c's a69d6ea void, T-1705.)
 - T-1103, T-1701: claimed, waiting for a free slot (D-43: session pace over, two sub-agents at a time).
 - Workers: four dontAsk workers ended 16:12Z, all refused on the allow-listed clone shape (see FOR THE COORDINATOR).
 
@@ -21,6 +22,7 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - 16:10Z One v14 batch (no separate v13 deploy): one reprocess of stored results; T-1518's bump folded (c17306).
 - 16:09Z T-1590 merges first in the v14 set; no compute stg-deploy before both v14 bumps are on stg (T-1704).
 
+- 16:19Z T-1574 a69d6ea voided (zero-tolerance 2: denied `checkout --detach` replaced by `switch --detach`); redo from a clone of the T-1590 branch; incident T-1705; every brief now lists the allowed git shapes and 'a denied command stops the step'.
 - 16:20Z Coordinator: live stg Worker logs via `/home/node/work/claudepilot/scripts/cf-logs.sh [--script konfersi-backend-stg] [--since 30m] [--level error] [--search text] [--limit N]` (read-only, stg only); the "Konfersi QA e2e (agents)" service token covers every main stg host for Job-based e2e. Use after each v14 deploy and for T-1528 AC5 once AIR quota is back.
 
 ## FOR THE COORDINATOR
@@ -28,12 +30,13 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - T-1703 c17276: FR9f handover of the Lab-held metocean tickets (T-1013..T-1022, T-1089, T-1090, T-367, T-603, T-553, T-1352, T-1416, T-1435, T-1579, T-1586, T-1355, T-1365, T-1164, T-1160, T-1012, T-604) to session fc73ae34.
 - Carried over: AIR quota on stg QA project qa-regress-scratch (T-1528 AC5, c16625); shared browser cannot reach stg-lab.konfersi.com (T-1667, T-1017 c16925).
 - D-88 text is not in this workspace's DECISIONS.md copy (ends at D-87).
+- T-1705: should `git switch` be denied wherever `git checkout` is, and is `--detach <sha>` meant to be denied for lanes? One line on T-1705 makes the briefs exact.
 
 ## NEEDS A HUMAN
 - none (no production or uat action pending).
 
 ## NEXT
-1. Integrate mo-qa (T-1528) and mo-be-c (T-1574) returns; post the T-1574 gate ask on the new head after a QA re-check.
+1. Integrate mo-qa (T-1528) and mo-be-d (T-1574 redo) returns; post the T-1574 gate ask on the new head after a QA re-check.
 2. T-1103 builder (compute test_pools order leak), then T-1007 (ai-worker empty-turn cap).
 3. T-1701 measurement (Explain prompt repeat rate) on T-1276.
 4. T-1518: QA re-check of aeab2ec vs stg c29d103, verdict record, gate ask.
