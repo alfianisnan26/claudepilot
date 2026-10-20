@@ -26,9 +26,9 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - ticket_verdict refused for my sub-agents (c18870): verdicts are gate-form comments.
 
 ## DECISIONS
+- 12:40Z T-1623 QA mo-qa-1623 PASS WITH GAPS c20101 on 1c1da12 (bc4fb5cc rc=0 632, 9/9 mutants red, 26 shots by eye). Fix round (c20102): G1 AI-off test from the QA branch + F1 quota wording; new mo-fe-1623 (implementer, opus), same branch. Then the same QA re-checks only the change.
 - 12:25Z Moved fadlilah to rossi (quota). Found: T-1623 QA mo-qa-1623 gave no verdict (no QA worktree, last comment c20061 is the builder). Restarted mo-qa-1623 (lane-qa-ui, opus) on 1c1da12; no other slice was in flight.
 - 10:10Z T-1623 built: red 0c0c340 (d6cfd3da rc=1, 5 new fail), fix 911fba2 + test-type fix 1c1da12 (lint+suite+build 107a3bc6 rc=0 632; c20061). QA mo-qa-1623 (opus) dispatched: diff, mutants, 390/1280 shots by eye, duplicated quota wording.
-- 10:00Z T-1623 re-taken (c20051): handed-over staged fix + local red 0c0c340 at risk; commit deny solved by -F. mo-fe-1623 (opus) commits, fail-first, suite in the same worktree. stg S1 check stays blocked (502, c19978).
 - 09:58Z T-1848 N1 PASS c20046 on af9858d1 (suite 63c81372 rc=0, 6 shots by eye). All 5 slices family-QA passed, held for outside QA and blind review; merge order narrow, Lows, MP, RB, RB-narrow (c20048).
 - 09:50Z T-1848 N1 fixed af9858d1 (fail-first 0467412f rc=1, lint+suite fd8888e1 rc=0 700; c20032). QA mo-qa-1848a re-checks N1 only.
 - 09:40Z T-1848 Lows delta 2 PASS WITH GAPS c20014 on fbe66685 (suite cc3c9cdc rc=0 697, M6 killed, 70 shots). N1 Hs axis to -1 on a contour below 0: clamp now (c20018), same builder; QA re-checks N1 only.
