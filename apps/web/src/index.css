@@ -236,11 +236,16 @@ html {
  * (the kit in node_modules is read-only, so the floor is set here, once, for every page that uses them). Below the `medium` breakpoint
  * (compact, 600 px) each is at least 44 px (spacing step 11) tall and wide; from `medium` up the kit's own sizes stay.
  * targetFloor.test.ts keeps the breakpoint equal to --breakpoint-medium.
+ * T-1859 adds two more kit parts: a Dialog's (or sheet's) Close in its header, 40 px, and a text input, which in the kit's TextField is
+ * 42 px inside its 44 px bordered box (a tap on the border missed it); at 44 px the transparent input covers the border, the box is
+ * unchanged. tools/qa/touch-dialogs.mjs measures every target in New ticket, a Bump sheet and the session info at 390 px.
  */
 @media (width < 37.5rem) {
   [role='radiogroup'] > [role='radio'],
   button[aria-haspopup='menu'],
-  [role='menu'] > [role='menuitem'] {
+  [role='menu'] > [role='menuitem'],
+  [role='dialog'] > header > button:last-child,
+  input:is(:not([type]), [type='text'], [type='search'], [type='email'], [type='url'], [type='tel'], [type='password'], [type='number']) {
     min-height: calc(var(--spacing) * 11);
     min-width: calc(var(--spacing) * 11);
   }
