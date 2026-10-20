@@ -12,7 +12,7 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - T-1801 built: item 1 compute e45d5f9 (Jobs 63c820d6, mutant 36e3f9a5 rc=1, suite 4070507f 361), item 2 lab-plugin bec25a4 on T-1182's 4e32c8e (Job 53668779, 2 mutants red), item 4 backend 508e2d2 (ci c0769958 2098, mutant 8bcfe3b8 rc=1). c18940, c18946, c18948.
 
 ## IN FLIGHT
-- 04:3xZ mo-commit (implementer, sonnet): T-1629 commit + Job (label mo-fe-1629), then T-1803 commit + npm run ci (label mo-be-1803), -F SOP (T-84 item 8).
+- 04:3xZ mo-commit (implementer, sonnet), INTERRUPTED by the 04:5xZ move: T-1629 7e9b0da pushed to ticket/T-1629-storm-audit-id-2 (Job unknown); T-1803 cb0075a test + 1c3f518 fix committed in the mo-be-1803 clone, push not verified (fetch check denied), ci Job unknown. Restart: read T-1629 and T-1803 comments, then push/Job what is missing.
 - 04:3xZ worker bbde2b22 on two.claude (qa-verifier, auto, dontAsk): T-1611 item 2 probe commit + stg screen check; re-tests c17308 (workers and Bash).
 - T-602 QA PASS both repos (mo-qa-602): compute f7dfd3d c19120 (Job 7f2af862), backend 78d0c7c8 c19122 (Job f6a683af); in_review, rides v14; close after deploy + screen check + stored-data run.
 - T-1801 QA done (mo-qa-1801): item 2 PASS WITH GAPS c18958 (Job e553806b), item 1 PASS c19027 (190f6576), item 4 PASS c19115 (875f4dd8); in_review for the merge gate, close after merge (c19117).
@@ -29,6 +29,7 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - ticket_verdict is refused for my sub-agents (c18870): verdicts stay as gate-form comments.
 
 ## DECISIONS
+- 04:4xZ fadlilah at 10 % left: move to one.claude. Workers bbde2b22 (two.claude) and 55723e0e (one.claude) keep running; restart mo-commit only (T-1703 hand-over comment).
 - 04:3xZ T-84 item 8 solved by the coordinator (`git * credential *` matched a message word): -F message file is the SOP, in briefs/mo/common.md; blocked commits T-1629, T-1803, T-1611 woken. Workers start with claude: auto (coordinator, quota) (T-1703 comment).
 - 04:15Z D-91 (UI/UX polish: QA suggests, lead decides, batched per page or app) in briefs/mo/common.md and qa-lp2.md (T-1703 c19047). Standard's location asked FOR THE COORDINATOR.
 - 04:13Z T-602 merges only with the T-1704 v14 bump (c19044): without the bump, stored partition rows (36) count as incomplete against 45. Lab render of the new tables: post-deploy screen check with shots judged by eye (D-89) before close.
