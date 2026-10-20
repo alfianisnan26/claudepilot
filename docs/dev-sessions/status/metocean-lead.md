@@ -1,4 +1,4 @@
-# Konfersi: Metocean lead status (2026-10-20 08:12Z, session fc73ae34-40d3-4c82-8148-dd55697c9379, on fadlilah)
+# Konfersi: Metocean lead status (2026-10-20 12:25Z, session fc73ae34-40d3-4c82-8148-dd55697c9379, on rossi)
 
 Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-worker, Mission Planning compute/report/plugin parts, report builder, metocean reports. Status ticket T-1703. Release ticket T-1704 (v14 batch). Incidents T-1705, T-1808. Older lines: git history of this file.
 
@@ -26,6 +26,7 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - ticket_verdict refused for my sub-agents (c18870): verdicts are gate-form comments.
 
 ## DECISIONS
+- 12:25Z Moved fadlilah to rossi (quota). Found: T-1623 QA mo-qa-1623 gave no verdict (no QA worktree, last comment c20061 is the builder). Restarted mo-qa-1623 (lane-qa-ui, opus) on 1c1da12; no other slice was in flight.
 - 10:10Z T-1623 built: red 0c0c340 (d6cfd3da rc=1, 5 new fail), fix 911fba2 + test-type fix 1c1da12 (lint+suite+build 107a3bc6 rc=0 632; c20061). QA mo-qa-1623 (opus) dispatched: diff, mutants, 390/1280 shots by eye, duplicated quota wording.
 - 10:00Z T-1623 re-taken (c20051): handed-over staged fix + local red 0c0c340 at risk; commit deny solved by -F. mo-fe-1623 (opus) commits, fail-first, suite in the same worktree. stg S1 check stays blocked (502, c19978).
 - 09:58Z T-1848 N1 PASS c20046 on af9858d1 (suite 63c81372 rc=0, 6 shots by eye). All 5 slices family-QA passed, held for outside QA and blind review; merge order narrow, Lows, MP, RB, RB-narrow (c20048).
@@ -46,7 +47,6 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - 07:56Z T-1848 MP slice QA FAIL c19780 on 805e49e (suite 82d90d76 rc=0, 4 mutants killed, 35 shots): F1 Retry wraps per letter at 390, F2 MC tabs 44x43. Lead saw shot; added raw save reason and Lab home stale card (c19785). Back to mo-fe-1848c. Read-another-way pattern to coordinator (T-1703 c19786).
 - 07:48Z T-1848 slice 2 delta PASS WITH GAPS c19756 on c728f29 (suite 1627480a rc=0, opacity mutant fac1c7e6 killed). Held for outside QA. RB slice 3 starts now stacked on c728f29 (ticket/T-1848-report-builder-narrow, mo-fe-1848b), not after slice 1 (c19757).
 - 07:52Z T-1848 slice 2 fix c728f29 (fail-first 8015be16 rc=1, mutant 070b43f0 rc=1, suite de6e4c69 rc=0 655, lint baf46af7 rc=0; c19754). Same QA mo-qa-1848b re-checks the delta.
-- 07:44Z T-1848 slice 1 QA PASS WITH GAPS c19752 on 7bbc187 (suite 7e8807f5 rc=0, 3 mutants killed, 20 shots); gaps decided c19753 (Retry-closure test to Lows branch; MP 390 and Map Explorer shots at post-deploy re-shoot). Held for outside QA (c19654). QA mo-qa-1848c dispatched on 805e49e.
 - 07:40Z T-1848 slice 3 (MP) done 805e49e (fail-first eba24807 rc=1, suite 0a1d162f rc=0 682, lint 029675eb rc=0; c19737). QA mo-qa-1848c queued: satria caps sub-agents at 3. Builder slips (node -e in pod, cd &&) to coordinator T-1703 c19739; common.md line added.
 - 07:38Z T-1848 slice 2 QA FAIL c19730 (dark error box see-through over Sections header; items 1-3 PASS, suite 93c444ed rc=0, 4 mutants killed). Lead saw the shot; decided in-flow reserved row + 44 px controls + mutant-2 test fix (c19732). Back to mo-fe-1848b; same QA re-checks delta.
 - 05:15Z Coordinator rule: outside-family QA comes from peer leads by QA-ASK on T-84 (Lab QAs Metocean, Metocean QAs Business), answered before new build work. Asked 8 tickets (c19263, c19268). Leads cannot message each other (NOT_FOUND), T-84 c19264.
