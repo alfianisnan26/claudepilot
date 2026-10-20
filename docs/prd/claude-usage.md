@@ -942,6 +942,13 @@ figure. Experiments below: each arm's n, accepted slices, cost per accepted slic
 dark) and 1,280 px (light and dark) on a seeded scratch portal: no horizontal scroll, 9 rows, 2 experiments; the Day and Week control is
 the shared `Segmented` at 40 px high (as on the Spikes tab).
 
+Text diet (T-1852): the period is said once, above its rows (a band on a phone, a row of the table on a desktop), not on every row; a
+phone row shows four key figures (Slices, Cost, First pass, Per accepted, with the 90 % interval under the last) and a 44 px chevron
+opens the other five; the desktop table has nine figure columns, the interval under Per accepted instead of a column of its own. "median /
+p90" moved from the card into the Sources tip beside the Day / Week control. An experiment's arms are a small table (n, acc, $ / acc with
+the interval under it); the columns are explained in the Experiments tip. Empty states read "No slices" and "None". Pure helpers
+`splitFigures` and `groupByPeriod` (`features/lab/model.ts`), tests in `model.test.ts`.
+
 ### 28.12 Result tokens, effort, idle gaps and stratum keys (slice 3, migration 853)
 
 - **Result tokens** per slice, an estimate from the usage the stream reports (the stream carries no token count per result): for each
@@ -1133,6 +1140,18 @@ tables the portal already keeps; nothing new is stored.
   phone, 44 px controls, light and dark. S3: on a phone the Details button is a chevron only (labelled "Show details" / "Hide details"); the
   Sources InfoTip sits beside the window picker it explains; when targets warn and none breaches, the Breaches tile reads "2 warn" (the
   warn count) instead of "0" beside WARN. Check: `tools/qa/crew-scorecard.mjs`; tests `scorecardModel.test.ts`.
+- **Text diet (T-1852).** The owner found Lab and Crew too wordy. Every number (program and summary) is one stat tile (`features/lab/parts.tsx`
+  `Stat`): the value large in its state's colour, the label small with its InfoTip, "was" with a trend arrow only in Compare. The line of
+  state and basis words under each number is gone: an estimate shows "est.", a warn or breach shows an icon (shape and colour differ, the
+  word for screen readers), MEASURED needs no mark; the basis stays in the tip and on the element (`data-basis`), the source and the
+  reason when unavailable stay in the tip. The summary's line under a value keeps only a number of its own (dollars per hour, won't do)
+  and a Pace that warns (`shownSub`); "on pace", "per resolved, est." and the backlog direction were the label or the tip again. D-65
+  rows show the value and a state icon (two columns from 640 px); the QA opus counts (T-490, same source as the D-65 QA opus row) are
+  in that row's tip, the workspace in a tip beside the program title, the worker count as an icon and a number. Details and the
+  summary's expanded view are compact rows (label, value on the right, a muted line, a thin static bar where there is something to
+  scale by: done per type, CI passed of runs, lead and workers of the cost, resolved per program, each Claude's used pace with a tick at
+  even), titled Done, In review, CI, Deploys, Targets, Cost and Pace, Resolved, Created : closed (`detailSections`, `summarySections`).
+  Tests: `scorecardModel.test.ts`, `summaryModel.test.ts`, `render.test.ts` (markup without a browser).
 - **Attribution export (T-450 S2 fix).** Usage → Attribution's CSV followed `by` and `range` but not the Done filter, so a done-only view
   exported every ticket; the download now carries `done=1` like the rows (`attributionUrl`, test `attributionUrl.test.ts`).
 - **Known limits.** A done ticket's life cost looks back at most 30 days; waits-for is derived for the current window only; context per
