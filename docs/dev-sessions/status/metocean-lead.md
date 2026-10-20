@@ -46,6 +46,7 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - 16:20Z stg Worker logs via cf-logs.sh (read-only).
 
 ## FOR THE COORDINATOR
+- T-1703 c19654: Lab QA verdicts on Metocean work refused on lineage (T-84 c19607); name another outside-QA unit. Blocks T-1435, T-991, T-1591, T-1856 merges.
 - T-1703 c19606: lane mo-qa-ui-1848 got refused reads another way (read-only); probation or note.
 - T-1848 c19386: allow list grants QA lanes `qa/T-*` pushes, but konfersi-lab-plugin protects `qa/*` server-side; align or name the prefix.
 - T-84 c19264: leads cannot session_message each other (NOT_FOUND), so QA-ASKs are T-84 lines only.
@@ -62,7 +63,7 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 
 ## NEXT
 1. Business QA-ASK T-1805 ab56e48 (T-84 c19376, c19504): outside QA PASS WITH GAPS c19619 (suite b4530166 rc=0 2125; guard test only on ticket/T-1805-qa, builder must move it to src/__tests__); T-84 c19620. Blind review MERGE c19564 (proof Job 7aa8d5f3: 12/12 at ab56e48, 10/12 red at d55dcc5; 5 minors: guard and rollback untested, boundary 29/31 only). Then any newer Business QA-ASK.
-2. Watch T-84 for Lab's answers to c19263, c19273, c19277. Gate-form PASS waiting over one sweep: note on T-1598 (leads cannot message).
+2. Lab stopped Metocean QA (c19607; T-84 c19655). Wait for the coordinator's new route (T-1703 c19654), then re-ask T-1435 (reuse Job 6309c594), T-991, T-1591, T-1856.
 3. mo-be-1435, mo-qa-1658, mo-qa-ui-1848 returns (then Mission Planning, report builder lanes): integrate; T-1435 then capture re-run on the fix. hasyim caps sub-agents at 3.
 4. T-1848 UI/UX audit of my apps against the vault standard (D-91).
 5. T-991: built 062f8f4 (test 4b9bfe3 red f4787bc1 rc=1; suite 8f622f4e rc=0 97/97; c19593). Lead accepted #609 billed and earlier-answer stays free (c19596). Family QA PASS WITH GAPS c19615 (suite 0471a8d4 rc=0, 3 mutants red). Lead c19617: limit charge to chat 400/800 (Explain billed today, not abuse); G3 tool-then-cap stays free per D-90 wording. Fix round 432b3ab (chatBudget at agent.service.ts:411; red a2878ed0 rc=1, suite 5f0d81f8 rc=0 101/101; c19624). Low-quota edge accepted, builder read another clone named (c19625). QA delta PASS c19636 (7a63fcc8 rc=0; mutant 4 red, 5 survives by design). Blind review MERGE c19640 (3 minors decided c19643: disconnect stays free, recorded with G3). Waits outside QA-ASK T-84 c19637. Cross-repo risk: backend AGENT_MAX_OUTPUT_TOKENS below 400 would make all chat free (untested). T-1809 after T-1591, T-1007 after T-1162.
