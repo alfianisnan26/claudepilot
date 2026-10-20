@@ -19,7 +19,7 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - T-1801 QA done (mo-qa-1801): item 2 PASS WITH GAPS c18958 (Job e553806b), item 1 PASS c19027 (190f6576), item 4 PASS c19115 (875f4dd8); in_review for the merge gate, close after merge (c19117).
 - 04:50Z worker 3f19e911 (mo-qa-1803, hasyim, sonnet, auto): T-1803 then T-1629 QA in gate form, own mutants.
 - 04:57Z worker 13967686 (mo-qa-1800c, two.claude, sonnet): T-1800 then T-1802 diff + mutant QA. 262086d3 (hasyim) ended: clone refused, NOT VERIFIED c19187/c19188.
-- 04:57Z sub-agent mo-fe-1611p (sonnet, Agent): writes qa/t1611-recheck.mjs/.sh + .lane-commit-msg in mo-qa-1611's clone, no commit; then bbde2b22 commits, pushes, runs the Job.
+- 05:02Z mo-fe-1611p (sonnet) done: qa/t1611-recheck.mjs (459) + .sh + .lane-commit-msg in mo-qa-1611's clone, not run. bbde2b22 woken to commit, push, run the Job, post on T-1611. Lead removes the message file after.
 - Worker 55723e0e (mo-qa-1800, ended 04:52Z): T-1800 c19142 (Job be21c43a rc=0 359), T-1802 c19151 (Job d9722ec3 rc=0 631): PASS WITH GAPS on suites only; clone refused in dontAsk, diffs and mutants not verified.
 - T-822 delta QA PASS WITH GAPS (worker a6570457, rossi, ended): c19134 on 068f319 (Job e34e96f5); lead c19148: merge gate, then post-deploy screen check before close.
 - T-1611 item 2 (worker bbde2b22, two.claude): c19136 tide pin + PNG export PASS, bands PASS on data, track layer FAIL (500 km ground truth timed out); same QA re-checks the count + bands shot. D-91 suggestions wait for the standard's location (c19047).
