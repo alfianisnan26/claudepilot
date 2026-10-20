@@ -92,6 +92,8 @@ export class FakeWorkspaces {
   sendCode = 0;
   /** A host that takes stdin but never exits. */
   hangSends = false;
+  /** T-1692: per line written, how long its `send` takes to deliver (ms; 0 or null: at once). Lines then reach the process out of order. */
+  sendDelay: ((line: string) => number) | null = null;
   /**
    * T-1049: opt-in. Every control request the portal writes is answered on the newest tail in the same tick it is recorded (settings: the applied
    * ones, permission mode: the asked mode, usage: an API-key account, anything else: a bare success), so a test never races a short
@@ -200,7 +202,7 @@ export class FakeWorkspaces {
     } else if (cmd === 'send') {
       this.sendExecs.push(exec);
       if (this.hangSends) return exec;
-      setTimeout(() => {
+      const deliver = () => {
         if (exec.closed) return exec.exit(null); // closed early: nothing arrived, no exit code either
         if (this.sendCode === 0) {
           this.sends.push({ args: command.slice(2), line: exec.written });
@@ -208,6 +210,11 @@ export class FakeWorkspaces {
           if (this.autoRespond) this.#answerControl(exec.written);
         }
         exec.exit(this.sendCode);
+      };
+      setTimeout(() => {
+        const delay = this.sendDelay?.(exec.written) ?? 0;
+        if (delay > 0) setTimeout(deliver, delay);
+        else deliver();
       }, 0);
     } else if (cmd === 'status' && this.statusUnreachable) {
       throw new Error('the session host is unreachable');
