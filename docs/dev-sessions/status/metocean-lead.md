@@ -16,7 +16,7 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - T-1693 (Business ask) answered: mo-qa-1693 PASS WITH GAPS on 8dfe8fec, c19346 (ci 7412dbfb rc=0 2113, mutants e13b09ed 3/4 killed); T-84 c19351. 0111 data-only, D-77 person step stays with Business. Two-ref diff used after `A...B` refusal, disclosed on T-84.
 - T-1435 HELD: capture Job ad87a706 rc=1, 126/129 equal, 3 air_press POT bodies differ (global record RP -32%, AD 4th decimal), wind and edge records equal (c19321). Decision (b) fix to scipy parity (c19324). Builder done c19444: closed support z <= -1/c like scipy; test 2f06c3e fail-first d72dcae1 rc=1, fix 9c808138 suite e6e924c7 rc=0 367. Capture re-run: same QA (a7994ae, opus), head 719d52b5 on ticket/T-1435-output-compare-fix (script head-blob check updated, disclosed), Job 7e71e12c running.
 - T-1591: family delta QA PASS WITH GAPS on 2d633120, evidence only (c19356, c19362; 8fb38df8, de0fb288). CI 9c9434ea rc=0, 2080/2080 with lint (c19372). Needs outside QA + blind review (T-84 c19308).
-- Business QA-ASK T-1658 d39ecf96 + T-1442 6696c47a (c19336, privacy): outside QA mo-qa-1658 (opus) running (T-84 c19358). Blind review done: T-1658 MERGE WITH FIXES (c19365, migrations/ labelled retain, job not at head), T-1442 MERGE (c19366); relayed T-84 c19368.
+- Business QA-ASK T-1658 d39ecf96 + T-1442 6696c47a (c19336, privacy): outside QA FAIL both (T-1658 c19525: migrations/ map entry cites a job that is T-1693, unmerged; T-1442 c19528: purge misses DOCX reports via report_key, audit counts-only unpinned, mutant B1 survived). CI 42a3e743, 05c5287d rc=0. Relayed T-84 c19532. Blind review done: T-1658 MERGE WITH FIXES (c19365, migrations/ labelled retain, job not at head), T-1442 MERGE (c19366); relayed T-84 c19368.
 - T-1848 claimed (c19371). Step 1 pages named (c19373); one ticket kept, split after open is under 150 (backlog rule vs D-91, named). Step 2 metocean done: Job b2d11ffd rc=0, 95 shots, 1 High (390 side bars leave 50 px), 5 Medium, 10 Low, 7 suggestions (c19523). Lead decided c19531: one metocean fix slice, all accepted but the radius suggestion. Next: steps 3 Mission Planning, 4 report builder, then the fix slice.
 - T-1856: mo-fe-1856 done. Fix f6029652 (bands at least 3 px, out-of-range dropped), fail-first 48da29da rc=1, suite a9c5dfce rc=0 (c19287). Item 1: no client-code cause, the probe's timing (c19255, not verified on stg). Family QA PASS WITH GAPS item 2 (c19357; de31a041 rc=0, 3 mutants caught); in_review c19359, item 1 closes only on the post-deploy 500 km pass. QA-ASK T-84 c19288. bbde2b22 re-checks after deploy, waiting until the toast closes.
 - Sweep send-backs (mo-sweep-read done): QA-ASKs on T-84 c19273 (T-1012, T-1416, T-1349, T-553, T-1523, T-1662, T-632, T-1182, T-1521) and c19277 (T-1021 file list). D-77 file lists asked on T-1021 c19275, T-1662 c19276 (lead diff refused). T-1296 (coordinator blocker) and T-1528 (AC5) need no merge.
@@ -26,6 +26,7 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - ticket_verdict refused for my sub-agents (c18870): verdicts are gate-form comments.
 
 ## DECISIONS
+- 06:31Z Coordinator T-1863: no in-session schedules (general lead ended by integrity check). CronList empty, none set (T-1703 c19534); brief line added. General lead now 8d05f919. T-1805 blind review mo-rev-1805 (opus) dispatched.
 - 06:2xZ T-1435 delta goes to the same comparison QA (D-81), resumed; cherry-pick, not rebase (lane rule).
 - 05:49Z Deploy #502: T-1652 (lead-spawned QA lanes count on handed-off tickets; builder lineage still refused), T-1839, T-1711. My refused records were in-session sub-agents, so nothing to re-record (T-1703 c19320). 05:41Z permission denial reported for T-1711. T-1435 cmp hit 80 turns probing refused forms; told to stop and report.
 - 05:45Z T-1838 landed (1de2bdb): "credential" in messages passes, -F stays, stored credential reads denied everywhere. In briefs/mo/common.md.
@@ -59,7 +60,7 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - none (no production or uat action pending). T-1662 sweep note: D-77, a migration on stg D1 shared with uat needs a person's go; checked in the sweep read.
 
 ## NEXT
-1. Business QA-ASK T-1805 ab56e48 (T-84 c19376, c19504): mo-qa-1805 (opus) running since 06:29Z; blind review next free slot (D-81). Then any newer Business QA-ASK.
+1. Business QA-ASK T-1805 ab56e48 (T-84 c19376, c19504): mo-qa-1805 (opus) and blind review mo-rev-1805 (opus) running (D-81). Then any newer Business QA-ASK.
 2. Watch T-84 for Lab's answers to c19263, c19273, c19277. Gate-form PASS waiting over one sweep: note on T-1598 (leads cannot message).
 3. mo-be-1435, mo-qa-1658, mo-qa-ui-1848 returns (then Mission Planning, report builder lanes): integrate; T-1435 then capture re-run on the fix. hasyim caps sub-agents at 3.
 4. T-1848 UI/UX audit of my apps against the vault standard (D-91).
