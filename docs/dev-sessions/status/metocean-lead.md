@@ -29,6 +29,8 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - T-1701 74bae41 waits for T-1162 on stg (c17526). Post-mortems T-1705 c18775, T-1808 c18777 in_review.
 - ticket_verdict is refused for my sub-agents (c18870): verdicts stay as gate-form comments.
 
+- 05:03Z T-1826 claimed (S, sev 3, 1.5 h; c19224, c19225), option (a). Sub-agent mo-fe-1826 (opus, Agent) on ticket/T-1826-matrix-390: fail-first test, fix, Explain 44 px.
+
 ## DECISIONS
 - 04:57Z Moved to two.claude (6 %, resets 08:40Z). Clone refused on hasyim too (262086d3) but works on two.claude (bbde2b22): new QA workers go to two.claude by name. Probe-file implementer dispatched now, not after 07:20Z.
 - 04:52Z Move called off: stay on fadlilah (96 %, resets 07:20Z). New QA runs as auto workers on other Claudes. No Agent sub-agent on this Claude until the reset, so the T-1611 probe-file implementer waits for it. New worker for T-1800/T-1802 because 55723e0e's clone was refused on one.claude.
@@ -64,7 +66,7 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 
 ## NEXT
 1. On return: mo-qa-1801 and mo-qa-602 verdicts; close T-1801 on PASS (tests only, one QA, D-81); T-602 waits for v14.
-2. Closing beats starting: oldest in_review I can move (T-1662, T-1611, T-1521, T-822), then builder T-1826 (390 matrix labels), T-1809 (race test first, after T-1591 merges).
+2. Closing beats starting: oldest in_review I can move (T-1662, T-1611, T-1521, T-822), then T-1809 (race test first, after T-1591 merges).
 3. T-991 (D-90, ai-worker billing, test first, after or on T-1591; D-81 money review), T-1007 (after T-1162 lands).
 4. After T-1574's QA and merge: gate asks T-1352 f92828f, T-1416 65d952d, T-1435 f424b1c; then the v14 bump commits (compute catalog.py, backend metocean-catalog.ts) with T-602, backend migrations check, stg-deploy backend then compute, cf-logs check, post-deploy screen checks.
 5. After the in_review/merge sweep (D-91): UI/UX polish audit of my apps (Lab metocean views: Analysis, Map, Chart, Mission Planning, Report panels; report DOCX). QA suggests, I decide on the ticket against the standard (location asked, T-1703 c19047); one batched ticket per page or app.
