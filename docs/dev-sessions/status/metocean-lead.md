@@ -37,6 +37,7 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - 13 tickets with a gate-form PASS wait for the general lead's stg merge gate (T-1703 c18753; T-367, T-1021 first). Workers still refused Bash (T-553 c18740, c17308).
 
 ## DECISIONS
+- 03:52Z fadlilah session 44 %, pace projects out about 05:13Z (claude_usage 03:51Z, resets 07:20Z). D-43: hold at 2 sub-agents (mo-be-602 backend part, mo-qa-1801 items 1, 2 and 4); no new builder until one returns. T-1801 items 1 and 4 returned (e45d5f9, 508e2d2, c18948).
 - 03:34Z Coordinator backlog rule (open over 150): no follow-up tickets; closing beats starting; WIP 3 running (ListAgents), nothing new until a slot frees (c18924). Error: closed T-1828 before the fold-back comment landed; T-851 is closed so it was refused; c18924 and T-1828's summary are false, corrected in c18925. Brief rule added: never close a follow-up before its content is recorded.
 - 03:10Z Moved to fadlilah (10 %, resets 07:20Z). Found: mo-qa-scr, mo-qa-be done (verdicts posted), mo-qa-lp cut before T-1629. Closed T-851 (minor test gaps split to T-1828) and T-907 (criteria met on stg). Resumed T-1629 with T-1521; T-822 and T-1611 item 2 dispatched (stg-lab reachable by Playwright Job, so "not verified" is no longer the default there).
 - 02:58Z one.claude at 95 %, out about 03:14Z (resets 03:40Z): no new dispatch; the 3 running QA slices (mo-qa-be, mo-qa-lp, mo-qa-scr) finish. If interrupted, restart each from its brief: they push nothing but qa/ refs and comments.
