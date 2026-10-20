@@ -82,6 +82,7 @@ export type ObjectType =
   | 'terminal'
   | 'browser'
   | 'ticket'
+  | 'ticket_bucket'
   | 'pool'
   | 'account'
   | 'endpoint'
@@ -119,6 +120,8 @@ export const OBJECT_TYPES: Record<ObjectType, ObjectTypeInfo> = {
   browser: { label: 'Browser', owners: ['user', 'team'], grants: false, parent: 'workspace', inherit: 'same', id: '<target>/<name>' },
 
   ticket: { label: 'Ticket', owners: ['user', 'team'], grants: true, inherit: 'none', id: 'T-<number>' },
+  /** A bucket of tickets (T-1098): a project with its own id prefix. view = see it and its tickets; operate = file tickets in it; manage = change it. */
+  ticket_bucket: { label: 'Ticket bucket', owners: ['user', 'team'], grants: true, inherit: 'none', id: 'the bucket key (KONF)' },
   /** A set of any pool type (secrets, skillset, mcpset, persona, context, browser): `poolType` on the ref. `operate` = assign it to a workspace you manage. */
   pool: { label: 'Set', owners: ['user', 'team'], grants: true, inherit: 'none', id: 'the pool id' },
   /** A Claude API key or a custom endpoint, and the account pools that group keys (Account Pool PRD). Using one delivers its key into workspaces. */
@@ -177,6 +180,7 @@ export const objectKey = (r: ObjectRef): string => `${r.type}:${r.id}`;
 export const workspaceRef = (id: string): ObjectRef => objectRef('workspace', id);
 export const sessionRef = (id: string): ObjectRef => objectRef('session', id);
 export const ticketRef = (id: string): ObjectRef => objectRef('ticket', id);
+export const ticketBucketRef = (key: string): ObjectRef => objectRef('ticket_bucket', key);
 export const poolRef = (id: string, poolType?: MultiPoolType): ObjectRef => objectRef('pool', id, poolType);
 export const vaultRef = (id: string): ObjectRef => objectRef('vault', id);
 export const platformRef = (area: PlatformArea): ObjectRef => objectRef('platform', area);
