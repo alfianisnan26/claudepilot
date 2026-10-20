@@ -3,8 +3,8 @@
 // checked too). The handlers ask `requireCan` for each before the service runs; the service then applies the ticket rules (who may
 // bump, which sessions can take it, the limits).
 
-import type { RoutePolicies, ToolPolicies } from '@portal/contracts';
-import { declarePolicies, declareToolPolicies } from '../authz/seam.js';
+import { objectRef, type RoutePolicies, type ToolPolicies } from '@portal/contracts';
+import { declarePolicies, declareToolPolicies, registerResolver } from '../authz/seam.js';
 
 const ticket = (verb: 'view' | 'operate') => ({ type: 'ticket' as const, verb, from: 'path' as const, param: 'id' });
 
@@ -47,9 +47,48 @@ export const TICKET_VERDICT_TOOL_POLICIES = {
   ticket_verdict: { kind: 'agent', reach: 'workspace', audit: 'ticket.verdict' },
 } satisfies ToolPolicies;
 
+/* ---------- Buckets (T-1098): an object of the seam ---------- */
+
+const bucket = (verb: 'view' | 'operate' | 'manage') => ({ type: 'ticket_bucket' as const, verb, from: 'path' as const, param: 'key' });
+
+/**
+ * A bucket is its owner's (`owner_id`, the founding user for the seeded ones): view = see it and its tickets, operate = file a ticket in it,
+ * manage = change it. A refusal is the same 404 as a missing bucket. The ticket routes also check the ticket's bucket (routes.ts).
+ */
+export const TICKET_BUCKET_POLICIES = {
+  'GET /api/tickets/buckets': { kind: 'signed-in', filter: 'ticket_bucket' },
+  'POST /api/tickets/buckets': { kind: 'signed-in', creates: 'ticket_bucket', audit: 'ticket.bucket_created' },
+  'GET /api/tickets/buckets/:key': { kind: 'objects', checks: [bucket('view')] },
+  'PATCH /api/tickets/buckets/:key': { kind: 'objects', checks: [bucket('manage')], audit: 'ticket.bucket_updated' },
+} satisfies RoutePolicies;
+
+/** The tools name a bucket in `bucket`: filing needs operate, listing by it needs view; refused at dispatch as "No such bucket.". */
+export const TICKET_BUCKET_TOOL_POLICIES = {
+  ticket_create: { kind: 'objects', checks: [{ type: 'ticket_bucket', verb: 'operate', arg: 'bucket', optional: true, notFound: 'No such bucket.' }] },
+  ticket_list: { kind: 'objects', checks: [{ type: 'ticket_bucket', verb: 'view', arg: 'bucket', optional: true, notFound: 'No such bucket.' }] },
+  ticket_buckets: { kind: 'signed-in', filter: 'ticket_bucket' },
+} satisfies ToolPolicies;
+
+/** The seam's resolver for `ticket_bucket`: its owner, read now (a removed bucket is not found). */
+export function registerTicketBucketAuthz(tickets: { bucketOwner(key: string): string | null }): void {
+  registerResolver({
+    type: 'ticket_bucket',
+    resolve(id) {
+      const key = id.trim().toUpperCase();
+      let owner: string | null;
+      try {
+        owner = tickets.bucketOwner(key);
+      } catch {
+        return null; // no database: nothing to decide on, the same not found
+      }
+      return owner ? { ref: objectRef('ticket_bucket', key), owner: { kind: 'user', id: owner } } : null;
+    },
+  });
+}
+
 export function declareTicketPolicies(): void {
-  declarePolicies('tickets', { ...TICKET_BUMP_POLICIES, ...TICKET_ATTACHMENT_POLICIES });
-  declareToolPolicies('tickets', { ...TICKET_BUMP_TOOL_POLICIES, ...TICKET_ADOPT_TOOL_POLICIES, ...TICKET_VERDICT_TOOL_POLICIES });
+  declarePolicies('tickets', { ...TICKET_BUMP_POLICIES, ...TICKET_ATTACHMENT_POLICIES, ...TICKET_BUCKET_POLICIES });
+  declareToolPolicies('tickets', { ...TICKET_BUMP_TOOL_POLICIES, ...TICKET_ADOPT_TOOL_POLICIES, ...TICKET_VERDICT_TOOL_POLICIES, ...TICKET_BUCKET_TOOL_POLICIES });
 }
 
 /* ---------- Acting for an ended session (T-270) ---------- */

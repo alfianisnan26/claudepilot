@@ -35,7 +35,7 @@ test('an agent works the queue over MCP: claim, comment, block, close; ticket te
     const { client, close } = await r.h.client(a.secret, 'modern');
     try {
       const names = (await client.listTools()).tools.map((t) => t.name).filter((n) => n.startsWith('ticket_')).sort();
-      assert.deepEqual(names, ['ticket_adopt', 'ticket_attach', 'ticket_attachment_get', 'ticket_attachment_remove', 'ticket_claim_next', 'ticket_close', 'ticket_comment', 'ticket_create', 'ticket_get', 'ticket_list', 'ticket_update', 'ticket_verdict'], 'no start_session for agents');
+      assert.deepEqual(names, ['ticket_adopt', 'ticket_attach', 'ticket_attachment_get', 'ticket_attachment_remove', 'ticket_buckets', 'ticket_claim_next', 'ticket_close', 'ticket_comment', 'ticket_create', 'ticket_get', 'ticket_list', 'ticket_update', 'ticket_verdict'], 'no start_session for agents');
       const call = async (name: string, args: Record<string, unknown> = {}) => (await client.callTool({ name, arguments: args })) as { isError?: boolean; structuredContent?: any; content: { text: string }[] };
 
       const listed = (await call('ticket_list', { assignee: 'unassigned' })).structuredContent;
@@ -367,7 +367,7 @@ test('T-282: ticket_list rows are short, 20 a page; ticket_comment and ticket_up
     assert.equal(list.tickets.length, 20);
     assert.equal(list.total, 25);
     assert.ok(list.next_cursor);
-    assert.deepEqual(Object.keys(list.tickets[0]).sort(), ['assignee', 'id', 'priority', 'status', 'summary', 'tags', 'type']);
+    assert.deepEqual(Object.keys(list.tickets[0]).sort(), ['assignee', 'id', 'key', 'priority', 'status', 'summary', 'tags', 'type']);
     const full = r.out(await r.h.call(a.secret, 'ticket_list', { full: true, limit: 2 }));
     assert.equal(full.tickets.length, 2);
     assert.ok(full.tickets[0].reporter && full.tickets[0].created_at);

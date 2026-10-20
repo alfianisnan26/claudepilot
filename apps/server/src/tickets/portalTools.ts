@@ -17,13 +17,13 @@ import {
   type TicketEvent,
   type TicketItem,
 } from '@portal/contracts';
-import { actorOfPrincipal, can, requireCan } from '../authz/seam.js';
+import { actorOfPrincipal, can, requireCan, visible } from '../authz/seam.js';
 import { bumpMode, bumpNote } from '../chat/bump.js';
 import { clip, fullInput, page } from '../portalmcp/compact.js';
 import { pageInput, pageWindow } from '../portalmcp/paging.js';
 import { portalTools, z, type PortalToolContext, type ToolRegistry } from '../portalmcp/registry.js';
 import { config } from '../config.js';
-import { declareTicketPolicies } from './authz.js';
+import { declareTicketPolicies, registerTicketBucketAuthz } from './authz.js';
 import type { Caller, Tickets } from './service.js';
 import { VERDICT_ROLES, VERDICTS } from './verdicts.js';
 
@@ -71,6 +71,8 @@ function ticketView(ctx: PortalToolContext, t: TicketItem, full = false) {
   const source = sourceOf(t);
   return {
     id: t.id,
+    key: t.key ?? t.id,
+    bucket: t.bucket ?? null,
     type: t.type,
     priority: t.priority,
     status: t.status,
@@ -148,7 +150,7 @@ function assigneeShort(t: TicketItem) {
 
 /** A ticket as a list row: enough to pick one. */
 function ticketRow(ctx: PortalToolContext, t: TicketItem) {
-  return { id: t.id, type: t.type, priority: t.priority, status: t.status, summary: ctx.untrusted(t.summary, sourceOf(t), 140), tags: t.tags, assignee: assigneeShort(t) };
+  return { id: t.id, key: t.key ?? t.id, type: t.type, priority: t.priority, status: t.status, summary: ctx.untrusted(t.summary, sourceOf(t), 140), tags: t.tags, assignee: assigneeShort(t) };
 }
 
 /** A ticket's own fields without its long text and without who reported it. */
@@ -185,7 +187,13 @@ const assigneeArg = z.string().max(100).optional().describe('me (your session), 
 
 export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = portalTools, opts: TicketToolOptions = {}): void {
   declareTicketPolicies();
+  registerTicketBucketAuthz(tickets);
   const registerPortalTool = registry.register.bind(registry);
+  /** T-1098: `KONF-12 (T-1900)`: the key people see, with the stable id every tool also takes. */
+  const named = (t: Pick<TicketItem, 'id' | 'key'>) => (t.key && t.key !== t.id ? `${t.key} (${t.id})` : t.id);
+  /** The stable id of a ticket an argument names either way (for `affected`), or the argument as given. */
+  const stable = (ref: string) => tickets.resolve(ref) ?? ref;
+  const bucketArg = z.string().max(6).optional();
   const uiUrl = (id: string) => `${(config.portalMcp.uiUrl ?? `http://localhost:${config.port}`).replace(/\/+$/, '')}/admin/tickets/${id}`;
 
   registerPortalTool({
@@ -200,6 +208,7 @@ export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = p
       priority: z.array(z.enum(TICKET_PRIORITIES)).max(4).optional(),
       type: z.array(z.enum(TICKET_TYPES)).max(8).optional(),
       tag: z.string().max(30).optional(),
+      bucket: bucketArg.describe('One bucket (project) by its key, like KONF; ticket_buckets lists them.'),
       assignee: z.string().max(100).optional().describe('me, unassigned, user, any, or session:<id>.'),
       workspace_id: z.string().max(100).optional(),
       query: z.string().max(100).optional().describe('Text in the summary, description or tags.'),
@@ -212,7 +221,7 @@ export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = p
       let assignee = args.assignee;
       if (assignee === 'me') assignee = `session:${tickets.meSession(callerOf(ctx), args.session_id)}`;
       if (assignee && !['any', 'unassigned', 'user'].includes(assignee) && !assignee.startsWith('session:')) throw new AppError('VALIDATION_FAILED', 'assignee is me, unassigned, user, any or session:<id>.');
-      const filter = { status: args.status, priority: args.priority, type: args.type, tag: args.tag, assignee: assignee as never, workspaceId: args.workspace_id, query: args.query, includeClosed: args.include_closed };
+      const filter = { bucket: args.bucket?.toUpperCase(), status: args.status, priority: args.priority, type: args.type, tag: args.tag, assignee: assignee as never, workspaceId: args.workspace_id, query: args.query, includeClosed: args.include_closed };
       const { limit, offset, next } = pageWindow({ cursor: args.cursor, limit: args.limit ?? LIST_DEFAULT }, filter);
       const r = tickets.list(callerOf(ctx), { ...filter, limit, offset });
       return {
@@ -226,6 +235,23 @@ export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = p
   });
 
   registerPortalTool({
+    name: 'ticket_buckets',
+    title: 'List ticket buckets',
+    description:
+      'The buckets (projects) tickets are filed in: key (the id prefix, KONF in KONF-12), name, default workspace and tags, open tickets. Every ticket tool takes a ticket as its bucket key (KONF-12) or its stable id (T-1900); both always work. You see the buckets of your workspace and those open to all.',
+    scope: 'agent',
+    hints: { readOnly: true, idempotent: true },
+    input: z.object({}),
+    handler(ctx) {
+      const list = visible(actorOfPrincipal(ctx.principal), 'ticket_bucket', tickets.buckets(callerOf(ctx)), (b) => b.key);
+      return {
+        summary: `${list.length} buckets.`,
+        buckets: list.map((b) => ({ key: b.key, name: ctx.untrusted(b.name, 'ticket:human', 60), description: ctx.untrusted(b.description, 'ticket:human', 300), default_workspace_id: b.defaultWorkspaceId, default_tags: b.defaultTags, vault_id: b.vaultId, open: b.open, next_number: b.nextNumber })),
+      };
+    },
+  });
+
+  registerPortalTool({
     name: 'ticket_get',
     title: 'Get a ticket',
     description:
@@ -233,7 +259,7 @@ export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = p
     scope: 'agent',
     hints: { readOnly: true, idempotent: true },
     input: z.object({
-      id: z.string().max(20).describe('T-12'),
+      id: z.string().max(20).describe('T-12 or its bucket key, KONF-3'),
       events: z.number().int().min(0).max(100).optional().describe('The latest N timeline entries of any kind (short unless full; default with full 20).'),
       section: z.enum(['description', 'comments']).optional().describe('description: the whole description; comments: the latest comments whole (events sets how many, default 10).'),
       comment_id: z.number().int().min(1).optional().describe('One comment (or timeline entry) whole, by its id.'),
@@ -297,6 +323,7 @@ export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = p
       'Adds a ticket to the queue. Leave it unassigned for work any agent can take. An agent assigns a person (assignee user) only with an allowed tag (default production, D-62): otherwise it is refused; decide by the written default instead. Never put a secret in a ticket: describe where it lives.',
     scope: 'agent',
     input: z.object({
+      bucket: bucketArg.describe('The bucket (project) by its key, like KONF (ticket_buckets lists them). Left out: your workspace’s bucket, else the bucket of the ticket you or your lead work on, else PILOT.'),
       summary: z.string().min(1).max(140).describe('One line.'),
       description: z.string().max(20_000).optional().describe('Markdown: what is needed, why, and how to tell it is done.'),
       type: z.enum(TICKET_TYPES).optional(),
@@ -309,10 +336,10 @@ export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = p
     handler(ctx, args) {
       const caller = callerOf(ctx);
       const assignee = args.assignee === undefined ? null : assigneeOf(tickets, ctx, args.assignee, args.session_id);
-      const t = tickets.create(caller, { summary: args.summary, description: args.description, type: args.type, priority: args.priority, tags: args.tags, assignee, workspaceId: ticketWorkspaceOf(ctx, args.workspace_id, opts.workspaceExists) }, { sessionId: args.session_id });
+      const t = tickets.create(caller, { bucket: args.bucket, summary: args.summary, description: args.description, type: args.type, priority: args.priority, tags: args.tags, assignee, workspaceId: ticketWorkspaceOf(ctx, args.workspace_id, opts.workspaceExists) }, { sessionId: args.session_id });
       ctx.affected(`ticket:${t.id}`);
       const warning = assignee ? tickets.holderWarning(t) : null;
-      return { summary: `Created ${t.id}${t.assignee?.kind === 'user' ? ' for a person' : ''}.`, ticket: ticketHead(ctx, t), ui: uiUrl(t.id), ...(warning ? { warning } : {}) };
+      return { summary: `Created ${named(t)}${t.assignee?.kind === 'user' ? ' for a person' : ''}.`, ticket: ticketHead(ctx, t), ui: uiUrl(t.id), ...(warning ? { warning } : {}) };
     },
   });
 
@@ -419,7 +446,7 @@ export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = p
     input: z.object({ id: z.string().max(20), attachment_id: z.number().int().positive(), session_id: sessionIdArg }),
     handler(ctx, args) {
       tickets.removeAttachment(callerOf(ctx), args.id, args.attachment_id, { sessionId: args.session_id });
-      ctx.affected(`ticket:${args.id}`);
+      ctx.affected(`ticket:${stable(args.id)}`);
       return { summary: `Removed file ${args.attachment_id} from ${args.id}.` };
     },
   });
@@ -443,7 +470,7 @@ export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = p
       const cut: string[] = [];
       const ticket = ticketBrief(ctx, t, cut);
       const warning = tickets.holderWarning(t);
-      return { summary: `Claimed ${t.id}: it is yours and in progress.`, ticket, ...(cut.length ? { cut } : {}), ...(warning ? { warning } : {}) };
+      return { summary: `Claimed ${named(t)}: it is yours and in progress.`, ticket, ...(cut.length ? { cut } : {}), ...(warning ? { warning } : {}) };
     },
   });
 
@@ -518,7 +545,7 @@ export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = p
         };
       }
       const v = tickets.recordVerdict(caller, args.id, { role: args.role, verdict: args.verdict, commit: args.commit }, { sessionId: args.session_id });
-      ctx.affected(`ticket:${args.id}`);
+      ctx.affected(`ticket:${stable(args.id)}`);
       return { summary: `Recorded ${v.role} ${v.verdict} on ${v.commit.slice(0, 12)} for ${args.id}.`, verdict: { id: v.id, role: v.role, verdict: v.verdict, commit: v.commit, at: v.at } };
     },
   });

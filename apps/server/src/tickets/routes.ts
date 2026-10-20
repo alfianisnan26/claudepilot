@@ -4,6 +4,7 @@
 import { AppError, success } from '@isnanme/core';
 import {
   sessionRef,
+  ticketBucketRef,
   ticketRef,
   TICKET_PRIORITIES,
   TICKET_STATUSES,
@@ -13,6 +14,7 @@ import {
   type BumpRequest,
   type CloseTicketRequest,
   type CommentTicketRequest,
+  type CreateTicketBucketRequest,
   type CreateTicketRequest,
   type StartTicketSessionRequest,
   type TicketAssigneeFilter,
@@ -20,11 +22,12 @@ import {
   type TicketPriority,
   type TicketStatus,
   type TicketType,
+  type UpdateTicketBucketRequest,
   type UpdateTicketRequest,
 } from '@portal/contracts';
 import { Hono, type Context } from 'hono';
-import { actorOf, can, requireCan, visible } from '../authz/seam.js';
-import { declareTicketPolicies } from './authz.js';
+import { actorOf, actorUserId, can, refusal, requireCan, visible } from '../authz/seam.js';
+import { declareTicketPolicies, registerTicketBucketAuthz } from './authz.js';
 import type { Caller, Tickets } from './service.js';
 
 async function body<T>(c: Context): Promise<Partial<T>> {
@@ -64,8 +67,28 @@ const names = <T extends string>(raw: string | undefined, all: readonly T[], fie
 
 export function createTicketRoutes(tickets: Tickets): Hono {
   declareTicketPolicies();
+  registerTicketBucketAuthz(tickets);
   const app = new Hono();
   const id = (c: Context) => c.req.param('id') ?? '';
+
+  // T-1098: a ticket is reached through its bucket: view to read it, operate to change it. A bucket the person may not see answers like a
+  // missing ticket (the same 404). Paths that are not a ticket id are left to their own routes.
+  const NOT_IDS = new Set(['tags', 'bumped', 'buckets']);
+  const guard = async (c: Context, next: () => Promise<void>) => {
+    const ref = c.req.param('id') ?? '';
+    if (!NOT_IDS.has(ref)) {
+      const bucket = tickets.bucketOf(ref);
+      const verb = c.req.method === 'GET' ? 'view' : 'operate';
+      const d = bucket ? can(actorOf(c), verb, ticketBucketRef(bucket)) : null;
+      if (d && !d.allow) {
+        const e = refusal(d, verb, ticketBucketRef(bucket!));
+        throw e.code === 'NOT_FOUND' ? new AppError('NOT_FOUND', 'No such ticket.') : e;
+      }
+    }
+    await next();
+  };
+  app.use('/:id', guard);
+  app.use('/:id/*', guard);
 
   app.get('/', (c) => {
     const q = c.req.query();
@@ -75,6 +98,7 @@ export function createTicketRoutes(tickets: Tickets): Hono {
         details: { assignee: 'Use any, unassigned, user or session:<id>.' },
       });
     const filter: TicketFilter = {
+      bucket: q.bucket || undefined,
       status: names<TicketStatus>(q.status, TICKET_STATUSES, 'status'),
       priority: names<TicketPriority>(q.priority, TICKET_PRIORITIES, 'priority'),
       type: names<TicketType>(q.type, TICKET_TYPES, 'type'),
@@ -89,11 +113,43 @@ export function createTicketRoutes(tickets: Tickets): Hono {
     // D-58: `{ items, next }` (25 by default, 100 at most), summary rows, keyset. Each row passes `view` before it is shown and `next` points at
     // the last row shown, so a cursor never names a hidden ticket. A bad cursor, or one made for another filter, is a 400.
     const actor = actorOf(c);
-    const keep = (t: { id: string }) => visible(actor, 'ticket', [t], (x) => x.id).length > 0;
+    if (filter.bucket) requireCan(actor, 'view', ticketBucketRef(filter.bucket.toUpperCase()));
+    // T-1098: and its bucket passes `view` (asked once per bucket per request).
+    const seen = new Map<string, boolean>();
+    const inBucket = (b: string | undefined) => {
+      if (!b) return true;
+      if (!seen.has(b)) seen.set(b, can(actor, 'view', ticketBucketRef(b)).allow);
+      return seen.get(b)!;
+    };
+    const keep = (t: { id: string; bucket?: string }) => inBucket(t.bucket) && visible(actor, 'ticket', [t], (x) => x.id).length > 0;
     return c.json(success(tickets.listPage(UI, filter, { cursor: q.cursor || undefined, limit: q.limit, keep })));
   });
 
-  app.post('/', async (c) => c.json(success(tickets.create(UI, await body<CreateTicketRequest>(c))), 201));
+  app.post('/', async (c) => {
+    const req = await body<CreateTicketRequest>(c);
+    if (typeof req.bucket === 'string' && req.bucket.trim()) requireCan(actorOf(c), 'operate', ticketBucketRef(req.bucket.trim().toUpperCase()));
+    return c.json(success(tickets.create(UI, req)), 201);
+  });
+
+  // Buckets (T-1098). Registered before `/:id`.
+  app.get('/buckets', (c) => {
+    const actor = actorOf(c);
+    return c.json(success(visible(actor, 'ticket_bucket', tickets.buckets(UI), (b) => b.key)));
+  });
+  app.post('/buckets', async (c) => {
+    const actor = actorOf(c);
+    return c.json(success(tickets.createBucket(UI, await body<CreateTicketBucketRequest>(c), { ownerId: actorUserId(actor) ?? undefined })), 201);
+  });
+  app.get('/buckets/:key', (c) => {
+    const key = (c.req.param('key') ?? '').toUpperCase();
+    requireCan(actorOf(c), 'view', ticketBucketRef(key));
+    return c.json(success(tickets.bucket(UI, key)));
+  });
+  app.patch('/buckets/:key', async (c) => {
+    const key = (c.req.param('key') ?? '').toUpperCase();
+    requireCan(actorOf(c), 'manage', ticketBucketRef(key));
+    return c.json(success(tickets.updateBucket(UI, key, await body<UpdateTicketBucketRequest>(c))));
+  });
 
   // Registered before `/:id`, which would read "tags" as an id.
   app.get('/tags', (c) => c.json(success(tickets.tags(UI))));

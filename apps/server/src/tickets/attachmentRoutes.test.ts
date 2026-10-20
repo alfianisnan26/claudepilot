@@ -11,6 +11,11 @@ async function app() {
   const h = await ticketsHarness();
   const a = new Hono();
   a.onError((e, c) => (isAppError(e) ? c.json(e.toJSON(), e.status as 400) : c.json({ error: String(e) }, 500)));
+  // Signed in, as every /api route is behind requireSession (T-1098: the ticket's bucket is checked for the caller).
+  a.use(async (c, next) => {
+    (c as unknown as { set(k: string, v: unknown): void }).set('token', 'signed-in');
+    await next();
+  });
   a.route('/api/tickets', createTicketRoutes(h.tickets));
   return { h, a };
 }
