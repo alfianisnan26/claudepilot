@@ -18,7 +18,7 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - T-602 QA PASS both repos (mo-qa-602): compute f7dfd3d c19120 (Job 7f2af862), backend 78d0c7c8 c19122 (Job f6a683af); in_review, rides v14; close after deploy + screen check + stored-data run.
 - T-1801 QA done (mo-qa-1801): item 2 PASS WITH GAPS c18958 (Job e553806b), item 1 PASS c19027 (190f6576), item 4 PASS c19115 (875f4dd8); in_review for the merge gate, close after merge (c19117).
 - 04:50Z worker 3f19e911 (mo-qa-1803, hasyim, sonnet, auto): T-1803 then T-1629 QA in gate form, own mutants.
-- 04:57Z worker 13967686 (mo-qa-1800c, two.claude, sonnet): T-1800 then T-1802 diff + mutant QA. 262086d3 (hasyim) ended: clone refused, NOT VERIFIED c19187/c19188.
+- T-1800/T-1802 diff + mutant QA blocked: clone refused for dontAsk workers on every Claude incl. two.claude (13967686 c19205/c19206, 262086d3 c19187/c19188, both ended). Waits for the coordinator (T-1703 c19227).
 - 05:02Z mo-fe-1611p (sonnet) done: qa/t1611-recheck.mjs (459) + .sh + .lane-commit-msg in mo-qa-1611's clone, not run. bbde2b22 woken to commit, push, run the Job, post on T-1611. Lead removes the message file after.
 - Worker 55723e0e (mo-qa-1800, ended 04:52Z): T-1800 c19142 (Job be21c43a rc=0 359), T-1802 c19151 (Job d9722ec3 rc=0 631): PASS WITH GAPS on suites only; clone refused in dontAsk, diffs and mutants not verified.
 - T-822 delta QA PASS WITH GAPS (worker a6570457, rossi, ended): c19134 on 068f319 (Job e34e96f5); lead c19148: merge gate, then post-deploy screen check before close.
@@ -32,7 +32,8 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - 05:03Z T-1826 claimed (S, sev 3, 1.5 h; c19224, c19225), option (a). Sub-agent mo-fe-1826 (opus, Agent) on ticket/T-1826-matrix-390: fail-first test, fix, Explain 44 px.
 
 ## DECISIONS
-- 04:57Z Moved to two.claude (6 %, resets 08:40Z). Clone refused on hasyim too (262086d3) but works on two.claude (bbde2b22): new QA workers go to two.claude by name. Probe-file implementer dispatched now, not after 07:20Z.
+- 05:10Z Wrong at 04:57Z: two.claude refuses worker clones too; bbde2b22 only reused an old clone. Lead does not clone for workers without the coordinator's word (second-agent workaround risk).
+- 04:57Z Moved to two.claude (6 %, resets 08:40Z). Probe-file implementer dispatched now, not after 07:20Z.
 - 04:52Z Move called off: stay on fadlilah (96 %, resets 07:20Z). New QA runs as auto workers on other Claudes. No Agent sub-agent on this Claude until the reset, so the T-1611 probe-file implementer waits for it. New worker for T-1800/T-1802 because 55723e0e's clone was refused on one.claude.
 - 04:48Z mo-commit finished before the move: T-1629 and T-1803 pushed, Jobs green, -F form worked. Stray .lane-commit-msg in mo-qa-1611 removed.
 - 04:4xZ fadlilah at 10 % left: move to one.claude. Workers bbde2b22 (two.claude) and 55723e0e (one.claude) keep running; restart mo-commit only (T-1703 hand-over comment).
@@ -52,6 +53,7 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - 16:20Z stg Worker logs via cf-logs.sh (read-only); "Konfersi QA e2e (agents)" token covers stg hosts for Job e2e.
 
 ## FOR THE COORDINATOR
+- T-1703 c19227: dontAsk workers refused `git clone` on all Claudes (two.claude too; bbde2b22's folder was pre-cloned at 03:11Z). Fix the clone allow line, or rule that the lead may clone QA folders for workers (not done without that word).
 - T-1703 (04:3xZ): allow Read on /home/node/work/briefs/** for dontAsk workers (refused in bbde2b22, T-1611 c19088). Bash for workers works now (c17308 solved for Bash).
 - T-1703 c19047: where the Konfersi UI/UX standard lives (repo and path); not in konfersi-universe. Or: is the kit design-standard skill the baseline until it exists?
 - T-1703 c18925: reopen T-1828 (closed wont_do by my mistake, summary false) or note on it that its gaps live on T-1703.
@@ -70,5 +72,5 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 3. T-991 (D-90, ai-worker billing, test first, after or on T-1591; D-81 money review), T-1007 (after T-1162 lands).
 4. After T-1574's QA and merge: gate asks T-1352 f92828f, T-1416 65d952d, T-1435 f424b1c; then the v14 bump commits (compute catalog.py, backend metocean-catalog.ts) with T-602, backend migrations check, stg-deploy backend then compute, cf-logs check, post-deploy screen checks.
 5. After the in_review/merge sweep (D-91): UI/UX polish audit of my apps (Lab metocean views: Analysis, Map, Chart, Mission Planning, Report panels; report DOCX). QA suggests, I decide on the ticket against the standard (location asked, T-1703 c19047); one batched ticket per page or app.
-6. On reports: 3f19e911 (T-1803, T-1629), 13967686 (T-1800, T-1802), mo-fe-1611p (then wake bbde2b22).
+6. On reports: 3f19e911 (T-1803, T-1629), bbde2b22 (T-1611 re-check), mo-fe-1826 (then a UI QA). T-1800/T-1802 QA after the coordinator answers c19227.
 7. Hourly closed-count report on T-1703.
