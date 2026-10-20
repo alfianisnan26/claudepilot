@@ -6,7 +6,7 @@ import { guards, placeBeside, placePopover, safeInsets, visibleBox } from '@/lib
  * A small panel anchored to the control that opened it (T-102): on the side `prefer` asks when it fits, inside the visible viewport and the
  * safe areas, never over the composer (`[data-popover-floor]`) or under the session header (`[data-popover-ceiling]`). Rendered into <body>,
  * so no card's overflow clips it. It closes on a tap outside, Escape, a scroll of the page under it, and a resize. For a laptop; a phone
- * gets a sheet instead. With `beside`, it sits next to that element when the screen has room for it there (T-1825), else at the control.
+ * gets a sheet instead. With `beside`, it sits next to that element when the screen has room for it there (T-1825), never over the control, else at the control.
  */
 export function Popover({
   anchor,
@@ -38,7 +38,7 @@ export function Popover({
       const r = anchor.current.getBoundingClientRect();
       const height = panel.current.scrollHeight;
       const target = beside?.();
-      const b = target ? placeBeside({ target: target.getBoundingClientRect(), width, height, view: visibleBox(), safe: safeInsets() }) : null;
+      const b = target ? placeBeside({ target: target.getBoundingClientRect(), width, height, view: visibleBox(), safe: safeInsets(), avoid: r }) : null;
       const p = b ?? placePopover({ anchor: r, width, height, view: visibleBox(), safe: safeInsets(), prefer, ...guards(anchor.current) });
       setStyle({ position: 'fixed', top: p.top, left: p.left, width: p.width, maxHeight: p.maxHeight ?? undefined, overflowY: p.maxHeight ? 'auto' : undefined });
     };

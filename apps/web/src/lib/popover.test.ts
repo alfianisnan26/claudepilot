@@ -69,3 +69,23 @@ test('T-1825 QA: taller than the element beside it, it grows upwards: its bottom
   const nearTop = placeBeside({ target: { ...lead, top: 40, bottom: 135 }, width: 360, height: 137, view: desk, safe: none });
   assert.equal(nearTop?.top, 12, 'kept inside the view at the top');
 });
+
+test('T-1825 QA: it never covers the control that opened it: another side, else just below it', () => {
+  const desk = { top: 0, left: 0, width: 1280, height: 900 };
+  const none = { top: 0, right: 0, bottom: 0, left: 0 };
+  const lead = { top: 300, bottom: 395, left: 400, right: 752 };
+  const chip = { top: 240, bottom: 284, left: 120, right: 210 };
+  // The right side is clear of the chip (the left one would grow up over it): the right one.
+  const p = placeBeside({ target: lead, width: 360, height: 137, view: desk, safe: none, avoid: chip });
+  assert.equal(p?.side, 'right');
+  assert.equal(p!.top + 137, lead.bottom, 'still grows upwards there');
+  // Only the left fits and it would cover the chip: it starts below the chip.
+  const narrow = { ...desk, width: 1000 };
+  const q = placeBeside({ target: { ...lead, left: 560, right: 912 }, width: 360, height: 137, view: narrow, safe: none, avoid: { ...chip, left: 300, right: 390 } });
+  assert.equal(q?.side, 'left');
+  assert.equal(q?.top, chip.bottom + 6);
+  const covers = q!.left < 390 && q!.left + 360 > 300 && q!.top < chip.bottom && q!.top + 137 > chip.top;
+  assert.equal(covers, false);
+  // Without anything to avoid it is as before.
+  assert.equal(placeBeside({ target: lead, width: 360, height: 137, view: desk, safe: none })?.side, 'right');
+});

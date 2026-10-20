@@ -128,9 +128,10 @@ try {
       await b.eval(`document.querySelector('[data-agent-failed]').scrollIntoView({ block: 'center' })`);
       await b.clickSel('[data-agent-failed]');
       await sleep(700);
-      const pop = await b.eval(`(() => { const d = document.querySelector('[role=dialog]'); if (!d) return null; const r = d.getBoundingClientRect(); return { inside: r.left >= 0 && r.right <= innerWidth && r.top >= 0 && r.bottom <= innerHeight, buttons: [...d.querySelectorAll('button')].map((x) => Math.round(x.getBoundingClientRect().height)), focus: ${active} } })()`);
+      const pop = await b.eval(`(() => { const d = document.querySelector('[role=dialog]'); if (!d) return null; const r = d.getBoundingClientRect(); const t = document.querySelector('[data-agent-failed]').getBoundingClientRect(); return { inside: r.left >= 0 && r.right <= innerWidth && r.top >= 0 && r.bottom <= innerHeight, coversChip: r.left < t.right && r.right > t.left && r.top < t.bottom && r.bottom > t.top, buttons: [...d.querySelectorAll('button')].map((x) => Math.round(x.getBoundingClientRect().height)), focus: ${active} } })()`);
       if (shots) await b.shot(`${tag}-failed`);
       check(`${tag}: "N failed" opens a popover inside the viewport, focus inside`, !!pop && pop.inside && /^(A|BUTTON):(?!.*failed)/.test(pop.focus), JSON.stringify(pop));
+      check(`${tag}: the popover leaves "N failed" uncovered`, !!pop && !pop.coversChip, JSON.stringify(pop));
       if (pop && s.mobile) check(`${tag}: Dismiss and Retry are 44 px`, pop.buttons.every((h) => h >= 44), JSON.stringify(pop.buttons));
       await b.key('Escape');
       await sleep(500);
@@ -143,7 +144,7 @@ try {
     await open(SIZES[2], false, reduced);
     const r = await b.eval(`(async () => {
       const spin = getComputedStyle(document.querySelector('.at-spin')).animationName;
-      const btn = document.querySelector('[data-agent-card="qtree-cod"] button[aria-expanded]');
+      const btn = document.querySelector('[data-agent-card="qtree-cod"] button[aria-label^="Hide"]'); // the collapse, not the ⓘ
       const t0 = performance.now();
       btn.click();
       while (document.querySelector('[data-agent-card="qtree-tr"]') && performance.now() - t0 < 2000) await new Promise((x) => requestAnimationFrame(x));
