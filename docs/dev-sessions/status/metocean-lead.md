@@ -17,7 +17,8 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - T-602 QA PASS both repos (mo-qa-602): compute f7dfd3d c19120 (Job 7f2af862), backend 78d0c7c8 c19122 (Job f6a683af); in_review, rides v14; close after deploy + screen check + stored-data run.
 - T-1801 QA done (mo-qa-1801): item 2 PASS WITH GAPS c18958 (Job e553806b), item 1 PASS c19027 (190f6576), item 4 PASS c19115 (875f4dd8); in_review for the merge gate, close after merge (c19117).
 - 04:35Z worker 55723e0e on one.claude (qa-verifier, auto): T-1800 then T-1802 QA, non-lineage.
-- 04:34Z worker a6570457 on rossi (qa-verifier, auto): T-822 delta QA (068f319), non-lineage.
+- T-822 delta QA PASS WITH GAPS (worker a6570457, rossi, ended): c19134 on 068f319 (Job e34e96f5); lead c19148: merge gate, then post-deploy screen check before close.
+- T-1611 item 2 (worker bbde2b22, two.claude): c19136 tide pin + PNG export PASS, bands PASS on data, track layer FAIL (500 km ground truth timed out); same QA re-checks the count + bands shot. D-91 suggestions wait for the standard's location (c19047).
 - T-1591 in_review: fix 2d633120 on ticket/T-1591-metering-errors (fail-first 3e6b3f58, ci c29c4247 rc=0). Needs delta QA, merge gate, D-81 second QA + post-deploy check.
 - T-822 in_review: delta 068f319 (Job d7972651 rc=0, c18892) after QA FAIL c18868; delta QA needs a non-lineage session (c17308).
 - T-1629 blocked: rebuild bcea895 on ticket/T-1629-storm-audit-id-2 (Job 6e6db053 rc=0); test commit refused by the unnamed rule (c18912); edits uncommitted in the mo-fe-1629 clone.
