@@ -37,13 +37,15 @@ export function HomePage() {
           : 'What needs you and how things stand, at a glance. Arrange hides and orders the cards on this device.'
       }
       action={
-        <div className="flex items-center gap-2">
+        // T-1851: the same controls in the same slots in both modes, so nothing in the row moves on a switch. Arrange is Dashboard's only;
+        // in Manager its slot is kept but hidden (visibility: hidden also takes it out of the tab order and the accessibility tree).
+        <div className="flex items-center gap-2" data-home-header-actions="">
           <HomeModeSwitch mode={mode} onMode={setMode} />
-          {mode === 'dashboard' && (
-            <Button variant="ghost" size="sm" icon={<SlidersHorizontal className="size-4" />} onClick={() => setArranging(true)} aria-label="Arrange cards" title="Arrange cards">
+          <div className={mode === 'dashboard' ? 'flex' : 'invisible flex'} aria-hidden={mode === 'dashboard' ? undefined : true} data-home-arrange-slot={mode}>
+            <Button variant="ghost" size="sm" icon={<SlidersHorizontal className="size-4" />} onClick={() => setArranging(true)} disabled={mode !== 'dashboard'} aria-label="Arrange cards" title="Arrange cards">
               <span className="max-sm:sr-only">Arrange</span>
             </Button>
-          )}
+          </div>
         </div>
       }
     />
