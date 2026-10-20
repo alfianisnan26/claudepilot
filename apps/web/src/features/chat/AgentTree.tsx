@@ -365,7 +365,7 @@ function FailedItem({ node, onDismiss, onChanged }: { node: AgentNode; onDismiss
       <AlertTriangle className="size-4 shrink-0 text-danger" aria-hidden="true" />
       <Link
         to={`/admin/sessions/${s.id}`}
-        className="flex min-h-11 max-w-[45%] shrink-0 items-center truncate rounded-md font-semibold text-ink underline-offset-2 hover:underline focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:outline-hidden"
+        className="flex min-h-11 min-w-11 max-w-[45%] shrink-0 items-center truncate rounded-md font-semibold text-ink underline-offset-2 hover:underline focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:outline-hidden"
       >
         <span className="truncate">{node.name}</span>
       </Link>
