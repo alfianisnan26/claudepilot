@@ -160,7 +160,7 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
       // T-294 (Crew over MCP): what the worker tells you unasked.
       report: z.enum(WORKER_REPORTS).optional().describe('What the portal tells you about it unasked, one line each: idle (the default) when its turn ends, when it waits on a person and when it ends; end only when it ends; none nothing.'),
       // T-449: the ticket the worker works on (usage attribution reads the session's ticket).
-      ticket: z.string().regex(/^T-\d{1,9}$/).optional().describe('The ticket it works on (T-n): its cost counts under that ticket in usage_attribution. An unknown ticket is refused as not found. Default: none (No ticket).'),
+      ticket: z.string().regex(/^(?:T-\d{1,9}|[A-Za-z]{2,6}-\d{1,9})$/).optional().describe('The ticket it works on (T-n or its bucket key, KONF-3; stored as T-n): its cost counts under that ticket in usage_attribution. An unknown ticket is refused as not found. Default: none (No ticket).'),
     }),
     async handler(ctx, args) {
       const parentId = self(ctx);

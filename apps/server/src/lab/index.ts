@@ -14,7 +14,7 @@ import type { Store } from '../store/store.js';
 import { chainOf } from '../usagespend/attribution.js';
 import { SpendStore } from '../usagespend/store.js';
 import { ticketReport } from '../usagespend/ticketReport.js';
-import { armMembers, assignSlice, bindDraw, createExperiment, decideExperiment, drawArms, excludeSlice, experimentReport, listExperiments, drawStats, newDrawKey, ticketExistsIn, normTicket, stopExperiment, type DrawStat, type NewExperiment } from './experiments.js';
+import { armMembers, assignSlice, bindDraw, createExperiment, decideExperiment, drawArms, excludeSlice, experimentReport, listExperiments, drawStats, newDrawKey, ticketExistsIn, normTicket, canonTicket, stopExperiment, type DrawStat, type NewExperiment } from './experiments.js';
 import { LabIngest } from './ingest.js';
 import { sliceMetrics, type SliceFilter } from './metrics.js';
 import { DAY_MS, dbTicketReader, outcomeOf, type TicketFacts, type TicketReader } from './outcomes.js';
@@ -92,7 +92,9 @@ export class Lab {
   drawArms(info: { sessionId: string; ticket: string; role: string | null; model: string | null; effort: string | null }): { draw: string | null; arms: { experiment: string; name: string; arm: string }[] } {
     const db = this.#db();
     if (!db) throw new Error('the store is not writable');
-    const ticket = normTicket(info.ticket)!;
+    // T-1098: a bucket key (KONF-3) is stored as the stable T-<n>; one that names no ticket is refused as missing.
+    const ticket = canonTicket(db, info.ticket);
+    if (!ticket) throw new Error('no such ticket');
     const facts = (this.opts.tickets ?? dbTicketReader(db))(ticket);
     // The portal's tickets table (as the ticket service reads it); with an injected reader (tests) a ticket it knows.
     const exists = this.opts.tickets ? facts !== null : ticketExistsIn(db, ticket);

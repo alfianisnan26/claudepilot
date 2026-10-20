@@ -2222,6 +2222,11 @@ export class CiService {
     };
   }
 
+  /** T-1098: a run filter's ticket in either form (`KONF-3`) as the stable id runs store; unknown: as given (no match). */
+  #ticketRef(t: string | undefined): string | undefined {
+    return t ? (this.#tickets?.resolve?.(t) ?? t) : undefined;
+  }
+
   list(f: CiRunFilter = {}): CiRunList {
     const { rows, total, active } = this.#cs.listRuns({
       workspace: f.workspace,
@@ -2229,7 +2234,7 @@ export class CiService {
       pipeline: f.pipeline,
       branch: f.branch,
       statuses: f.status,
-      ticket: f.ticket,
+      ticket: this.#ticketRef(f.ticket),
       session: f.session,
       limit: f.limit,
     });
@@ -2252,7 +2257,7 @@ export class CiService {
         pipeline: f.pipeline,
         branch: f.branch,
         statuses: f.status,
-        ticket: f.ticket,
+        ticket: this.#ticketRef(f.ticket),
         session: f.session,
       },
       { scope, cursor: args.cursor, limit: args.limit, keep: args.keep },

@@ -226,7 +226,7 @@ export function registerLabTools(lab: Lab, registry: ToolRegistry = portalTools)
     hints: { idempotent: false },
     rate: { perHour: 120 },
     input: z.object({
-      ticket: z.string().regex(/^T-\d{1,6}$/).describe('The slice\'s ticket (its ESTIMATE size is the size stratum).'),
+      ticket: z.string().regex(/^(?:T-\d{1,6}|[A-Za-z]{2,6}-\d{1,6})$/).describe('The slice\'s ticket, T-n or its bucket key (KONF-3) (its ESTIMATE size is the size stratum).'),
       role: z.string().regex(/^[A-Za-z0-9_.:-]{1,80}$/).optional().describe('The Agent call\'s subagent_type.'),
       model: z.string().regex(/^[A-Za-z0-9_.:-]{1,80}$/).optional().describe('The Agent call\'s model; absent: inherit.'),
       effort: z.string().regex(/^[A-Za-z0-9_.:-]{1,80}$/).optional().describe('The Agent call\'s effort.'),
