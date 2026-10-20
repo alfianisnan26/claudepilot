@@ -101,6 +101,32 @@ test('a Claude reading 0 % with no reset time is primed once, then probed again;
   }
 });
 
+test('T-1835: a window that reset since the last prime is primed again at once, inside primeMin; still one prime per period', async () => {
+  // The prime opens a short window (it resets 20 minutes on); after the reset the probe (due at once) reads 0 % with no reset time again.
+  const shortReset = NOW + 20 * MIN;
+  const OPEN_SHORT = (): ProbeResult => planResult([win('session', 1, shortReset, 'Session'), win('week', 20, NOW + 3 * 24 * HOUR, 'Week')]);
+  const p = probes(BLIND, OPEN_SHORT, BLIND);
+  const pr = primes(() => ({ outcome: 'ok' }));
+  const h = await usageHarness({ probe: p.probe, prime: pr.prime, primeMin: () => 30 });
+  try {
+    await h.usage.tick();
+    await sleep(5);
+    assert.deepEqual(pr.calls, ['c1']);
+    assert.equal((await h.usage.report()).claudes[0]!.unavailable, null, 'measured after the prime');
+    h.clock.t = shortReset + MIN; // 21 minutes after the prime: inside the 30 minutes, but a new period began
+    await h.usage.tick();
+    await sleep(5);
+    assert.equal(p.calls(), 4, 'probed at once after the reset, then again after the prime');
+    assert.equal(pr.calls.length, 2, 'the cooldown does not hold a new period');
+    h.clock.t += INTERVAL + MIN; // 32 minutes after the first prime, 11 after the second: same period
+    await h.usage.tick();
+    await sleep(5);
+    assert.equal(pr.calls.length, 2, 'one prime per period');
+  } finally {
+    h.done();
+  }
+});
+
 test('a success: the probe right after reads the window open, so the Claude is measured', async () => {
   const p = probes(BLIND, OPEN);
   const pr = primes(() => ({ outcome: 'ok' }));

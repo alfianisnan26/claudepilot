@@ -115,6 +115,46 @@ test('a failed probe keeps the last numbers and backs off, doubling to an hour; 
   }
 });
 
+test('T-1835: a window whose reset passed since the last probe is due at once, not after the interval or a backoff; once per reset', async () => {
+  const soon = NOW + 5 * MIN;
+  const next = soon + 5 * HOUR;
+  let fail = false;
+  const s = scripted((_c, n) => (fail ? { runsOn: 'unknown', plan: null, windows: [], extra: null, problem: 'timeout', failed: true } : planResult([win('session', 40, n === 1 ? soon : next), win('week', 20, resetWeek)])));
+  const h = await usageHarness({ probe: s.probe });
+  try {
+    await h.usage.tick();
+    await sleep(5);
+    assert.equal(s.calls.length, 1);
+    h.clock.t = soon - MIN;
+    await h.usage.tick();
+    await sleep(5);
+    assert.equal(s.calls.length, 1, 'before the reset: the interval holds');
+    h.clock.t = soon + MIN; // 6 minutes after the probe, the interval is 10
+    assert.equal((await h.usage.report()).claudes[0]!.unavailable, 'period_reset');
+    await h.usage.tick();
+    await sleep(5);
+    assert.equal(s.calls.length, 2, 'the period ended: probed at once');
+    assert.equal((await h.usage.report()).claudes[0]!.unavailable, null, 'the new period is read');
+    h.clock.t += MIN;
+    await h.usage.tick();
+    await sleep(5);
+    assert.equal(s.calls.length, 2, 'once per reset: then the interval again');
+    // A failing Claude backs off (20 minutes after one failure), but a reset in that time still makes it due.
+    fail = true;
+    h.clock.t = next - 3 * MIN; // more than the interval since the last probe: due, and it fails
+    await h.usage.tick();
+    await sleep(5);
+    assert.equal(s.calls.length, 3);
+    fail = false;
+    h.clock.t = next + MIN;
+    await h.usage.tick();
+    await sleep(5);
+    assert.equal(s.calls.length, 4, 'the backoff does not hold a Claude whose window reset');
+  } finally {
+    h.done();
+  }
+});
+
 test('a Claude found signed out or on a key is looked at once an hour; a page open on the tab makes it faster', async () => {
   let result: ProbeResult = { runsOn: 'none', plan: null, windows: [], extra: null, problem: null, failed: false };
   const s = scripted(() => result);

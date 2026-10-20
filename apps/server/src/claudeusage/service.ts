@@ -271,7 +271,17 @@ export class ClaudeUsageMonitor {
 
   #due(c: SourceClaude, now: number): boolean {
     const row = this.#store.latest(c.id);
-    return !row || now - row.lastProbeAtMs >= this.#waitFor(row, now);
+    return !row || now - row.lastProbeAtMs >= this.#waitFor(row, now) || this.#periodEnded(row, now);
+  }
+
+  /**
+   * T-1835: a period of the Claude ended since its last probe (a window's reset time, or a limit report's end, between that probe and now).
+   * Its reading says `period_reset` (unknown) until a probe reads the new period, and an unknown Claude takes no worker and comes last for
+   * auto move, so it is due at once, not after the interval or a backoff. Once per reset: the probe moves `lastProbeAtMs` past it.
+   */
+  #periodEnded(row: LatestRow, now: number): boolean {
+    const ended = (t: number | null | undefined) => typeof t === 'number' && t > row.lastProbeAtMs && t <= now;
+    return ended(row.limitReport?.untilMs) || row.windows.some((w) => ended(w.resetsAtMs));
   }
 
   /** One pass: probes the Claudes that are due (FR10, FR11). Public so a test can drive it. */
@@ -342,7 +352,7 @@ export class ClaudeUsageMonitor {
     if (!row || row.runsOn !== 'plan' || this.o.source.pooled(c.workspaceId)) return false;
     if (this.#view(c, row, now).unavailable !== 'no_reset_time') return false;
     const last = this.#primed.get(c.id);
-    if (last !== undefined && now - last < mins * MINUTE) return false;
+    if (last !== undefined && now - last < mins * MINUTE && !this.#resetSince(c.id, row, last, now)) return false;
     let busy: boolean;
     try {
       busy = this.o.source.sessionOn(c);
@@ -376,6 +386,18 @@ export class ClaudeUsageMonitor {
       this.#warn('the prime audit', e);
     }
     return r.outcome === 'ok';
+  }
+
+  /**
+   * T-1835: whether a period of the Claude ended after `sinceMs` (a reset in `(sinceMs, now]`): a reset its session window's readings since
+   * then carried, one its latest reading still carries, or the end of a limit report. A new period began, so the prime's cooldown, which
+   * kept a Claude blind for up to `primeMin` after its 5-hour window reset, no longer holds; the prime it allows sets `sinceMs` past that
+   * reset, so it is still one prime per period.
+   */
+  #resetSince(claudeId: string, row: LatestRow, sinceMs: number, now: number): boolean {
+    const ended = (t: number | null | undefined) => typeof t === 'number' && t > sinceMs && t <= now;
+    if (ended(row.limitReport?.untilMs) || row.windows.some((w) => ended(w.resetsAtMs))) return true;
+    return this.#store.windowSamples(claudeId, 'session', sinceMs).some((s) => ended(s.resetsAtMs));
   }
 
   /** A prime refused for a plan limit: the Claude is used up until the stated reset (the next 5-hour boundary when none is stated). */
