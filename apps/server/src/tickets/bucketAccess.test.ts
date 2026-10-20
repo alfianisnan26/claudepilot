@@ -9,6 +9,7 @@ import { clearResolvers, declaredPolicies, declaredToolPolicies } from '../authz
 import { portalMcpHarness } from '../portalmcp/testkit.js';
 import { ToolRegistry } from '../portalmcp/registry.js';
 import { TICKET_BUCKET_POLICIES } from './authz.js';
+import { ticketKeyField, ticketKeyOf } from './keys.js';
 import { registerTicketTools } from './portalTools.js';
 import { createTicketRoutes } from './routes.js';
 import { Tickets } from './service.js';
@@ -152,6 +153,38 @@ test('tools: another workspace’s bucket and another person’s bucket are the 
     const listed = (await call('ticket_buckets')).structuredContent.buckets.map((b: { key: string }) => b.key);
     assert.deepEqual(listed, ['CP', 'KONF', 'PILOT', 'TB'], 'neither WEB (another workspace) nor PRIV (another person)');
     assert.equal((r.h.store.db!.prepare('SELECT count(*) AS n FROM tickets').get() as { n: number }).n, 0, 'nothing was filed');
+  } finally {
+    r.done();
+  }
+});
+
+test('MCP surface: every ticket tool says both forms; comment and close name peer leads; results carry keys; the server says 0.2.0 and why', async () => {
+  const r = await rig();
+  try {
+    r.sessions.add({ id: 'sa', workspaceId: 'docker/api', title: 'Lead' });
+    const a = await r.h.agentToken('docker/api', 'sa');
+    const { client, close } = await r.h.client(a.secret, 'modern');
+    try {
+      assert.equal(client.getServerVersion()?.version, '0.2.0');
+      assert.match(client.getInstructions() ?? '', /bucket key \(KONF-3\)/);
+      const tools = (await client.listTools()).tools.filter((t) => t.name.startsWith('ticket_'));
+      for (const t of tools) assert.match(t.description ?? '', /KONF-3/, t.name);
+      for (const name of ['ticket_comment', 'ticket_close']) assert.match(tools.find((t) => t.name === name)!.description ?? '', /tickets\.leadPeerGroups/, name);
+      const idArg = (tools.find((t) => t.name === 'ticket_get')!.inputSchema as { properties: { id: { description?: string } } }).properties.id.description;
+      assert.match(idArg ?? '', /T-12 or its bucket key/);
+    } finally {
+      await close();
+    }
+    const call = async (name: string, args: Record<string, unknown> = {}) => r.out(await r.h.call(a.secret, name, args));
+    await call('ticket_create', { summary: 'mine', bucket: 'TB' });
+    await call('ticket_claim_next', { id: 'TB-1' });
+    const c = (await call('ticket_comment', { id: 'TB-1', text: 'note' })).structuredContent;
+    assert.deepEqual([c.summary, c.comment.ticket_id, c.comment.ticket_key], ['Commented on TB-1 (T-1).', 'T-1', 'TB-1']);
+    // Other modules' rows (CI runs, trigger runs, the lab, usage) get the key through the lookup the ticket tools installed.
+    assert.equal(ticketKeyOf('T-1'), 'TB-1');
+    assert.deepEqual(ticketKeyField('T-1'), { ticket_key: 'TB-1' });
+    assert.deepEqual(ticketKeyField('T-404'), {});
+    assert.deepEqual(ticketKeyField(null), {});
   } finally {
     r.done();
   }

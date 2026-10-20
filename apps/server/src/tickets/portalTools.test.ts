@@ -376,7 +376,7 @@ test('T-282: ticket_list rows are short, 20 a page; ticket_comment and ticket_up
     assert.equal(claimed.ticket.description.untrusted_text.length, 1_500);
     assert.match(claimed.cut[0], /^description cut at 1500 of 2000 characters/);
     const commented = r.out(await r.h.call(a.secret, 'ticket_comment', { id: 'T-1', text: 'Working on it.' }));
-    assert.deepEqual(Object.keys(commented.comment).sort(), ['at', 'id', 'ticket_id']);
+    assert.deepEqual(Object.keys(commented.comment).sort(), ['at', 'id', 'ticket_id', 'ticket_key']);
     const updated = r.out(await r.h.call(a.secret, 'ticket_update', { id: 'T-1', status: 'blocked' }));
     assert.deepEqual(updated.ticket, { id: 'T-1', status: 'blocked', priority: 'normal', assignee: { kind: 'session', session_id: 'sa', session_state: 'idle' } });
   } finally {

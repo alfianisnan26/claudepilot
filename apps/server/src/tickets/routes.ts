@@ -28,6 +28,7 @@ import {
 import { Hono, type Context } from 'hono';
 import { actorOf, actorUserId, can, refusal, requireCan, visible } from '../authz/seam.js';
 import { declareTicketPolicies, registerTicketBucketAuthz } from './authz.js';
+import { setTicketKeyLookup } from './keys.js';
 import type { Caller, Tickets } from './service.js';
 
 async function body<T>(c: Context): Promise<Partial<T>> {
@@ -68,6 +69,7 @@ const names = <T extends string>(raw: string | undefined, all: readonly T[], fie
 export function createTicketRoutes(tickets: Tickets): Hono {
   declareTicketPolicies();
   registerTicketBucketAuthz(tickets);
+  setTicketKeyLookup((id) => tickets.keyOf(id));
   const app = new Hono();
   const id = (c: Context) => c.req.param('id') ?? '';
 

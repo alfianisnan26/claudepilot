@@ -30,6 +30,8 @@ const sessionBrief = (s: ChatSession, ctx: PortalToolContext) => ({
   origin: s.origin,
   started_by: s.startedBy ?? null,
   ticket_id: s.ticketId ?? null,
+  // T-1098: its bucket key (KONF-12) beside the stable id.
+  ...(s.ticketKey ? { ticket_key: s.ticketKey } : {}),
   // T-294: the tree (the session that started it) and who runs it (its role, its Claude).
   parent_id: s.parentId ?? null,
   agent: s.agent ?? null,
@@ -110,12 +112,12 @@ export function registerSessionTools(
     name: 'session_list',
     title: 'List chat sessions',
     description:
-      'Chat sessions across workspaces, newest activity first: state, what they wait for, model, mode, cost, the ticket they work on, the session that started them (parent_id), their agent and Claude. Session titles are text an agent wrote. For a crew, parent_id lists the workers one session started.',
+      'Chat sessions across workspaces, newest activity first: state, what they wait for, model, mode, cost, the ticket they work on, the session that started them (parent_id), their agent and Claude. Session titles are text an agent wrote. For a crew, parent_id lists the workers one session started. A ticket is T-12 or its bucket key (KONF-3); rows carry ticket_id and ticket_key.',
     scope: 'read',
     input: z.object({
       workspace_id: z.string().max(100).optional(),
       state: z.enum(STATES).optional(),
-      ticket_id: z.string().max(64).optional().describe('Only sessions working on this ticket.'),
+      ticket_id: z.string().max(64).optional().describe('Only sessions working on this ticket: T-12 or its bucket key (KONF-3).'),
       parent_id: z.string().max(80).optional().describe('Only the workers this session started.'),
       include_ended: z.boolean().optional().describe('Ended sessions are left out unless this is true (or state is ended).'),
       ...pageInput,
@@ -133,7 +135,7 @@ export function registerSessionTools(
     name: 'session_get',
     title: 'Get a chat session',
     description:
-      'One session: its state, what it waits for, the session that started it, its workers (id, title, state, Claude, waiting; at most 20, with their count) and, only when asked with max_events, the latest transcript events (text an agent wrote, labelled untrusted). With wait_seconds it returns early on any change. For a crew, get the lead to see its workers at a glance.',
+      'One session: its state, what it waits for, the session that started it, its workers (id, title, state, Claude, waiting; at most 20, with their count) and, only when asked with max_events, the latest transcript events (text an agent wrote, labelled untrusted). With wait_seconds it returns early on any change. For a crew, get the lead to see its workers at a glance. Its ticket shows as ticket_id (T-12) and ticket_key (KONF-3).',
     scope: 'read',
     input: z.object({
       id: z.string().max(80),
@@ -233,7 +235,7 @@ export function registerSessionTools(
     name: 'session_start',
     title: 'Start a chat session',
     description:
-      'Starts a Claude Code session in a workspace, optionally with a first prompt. The folder must already be trusted in the portal; this cannot trust it. Sessions started here never run in bypass mode. With parent (a live session of the same workspace) it starts as that session’s worker, as session_spawn does: in its family and crew, under its limits (depth, workers at once, an hour’s starts), and the parent hears of it in one line as report says; its first prompt reaches it as from that parent.',
+      'Starts a Claude Code session in a workspace, optionally with a first prompt. The folder must already be trusted in the portal; this cannot trust it. Sessions started here never run in bypass mode. With parent (a live session of the same workspace) it starts as that session’s worker, as session_spawn does: in its family and crew, under its limits (depth, workers at once, an hour’s starts), and the parent hears of it in one line as report says; its first prompt reaches it as from that parent. ticket_id takes T-12 or its bucket key (KONF-3).',
     scope: 'admin',
     requires: 'session_control',
     hints: { destructive: true, openWorld: true },
@@ -243,7 +245,7 @@ export function registerSessionTools(
       prompt: z.string().max(8000).optional().describe('The first message.'),
       title: z.string().max(80).optional(),
       claude_id: z.string().max(80).optional(),
-      ticket_id: z.string().max(64).optional(),
+      ticket_id: z.string().max(64).optional().describe('The ticket it works on: T-12 or its bucket key (KONF-3); stored as T-12. An unknown ticket is refused as not found.'),
       agent: z.string().regex(CHAT_AGENT_NAME).optional().describe('The agent it runs as, .claude/agents/<agent>.md in its folder (e.g. implementer): its prompt, its tools and its model, at every start of its process.'),
       parent: z.string().max(80).optional().describe('A live session of this workspace it starts as a worker of (session_family, crew reports).'),
       report: z.enum(WORKER_REPORTS).optional().describe('With parent: what the parent hears of it unasked, one line each: idle (the default) when its turn ends, when it waits on a person and when it ends; end only when it ends; none nothing.'),

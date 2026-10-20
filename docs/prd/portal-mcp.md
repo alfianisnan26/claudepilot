@@ -566,7 +566,7 @@ threshold), none above ceil((sessions + 1) / Claudes) + 1 sessions not ended (as
 `no_room_lowest`; its own only when no other qualifies), `role` (the worker runs as `.claude/agents/<role>.md`), `model` (default: the
 role's model in the workspace persona, T-490), `why` (T-490, D-63: required on a role whose model is below opus for any model but a sonnet or haiku alias or id (`sonnet`, `claude-haiku-*`, `[1m]` suffix allowed; so opus, fable, `default`, `opusplan`, `best` and an unknown id need it), else
 `VALIDATION_FAILED` naming D-63; kept as the worker's `spawnWhy`; the result says `model` and `why`), `effort`, `mode` (`default`, `plan`,
-`dontAsk`), `ticket` (`T-<n>`: the worker's ticket, the field usage attribution reads, so its cost counts under that ticket;
+`dontAsk`), `ticket` (`T-<n>` or its bucket key `KONF-<n>`, stored as `T-<n>`, T-1098: the worker's ticket, the field usage attribution reads, so its cost counts under that ticket;
 none means "No ticket"; a malformed id or a ticket that does not exist is refused as `NOT_FOUND` and starts nothing, T-449;
 T-397: while nobody holds that ticket the worker may `ticket_comment` on it, and on its lead's tickets, comment only, audited as the worker:
 [Tickets](tickets.md) FR9b),
@@ -660,6 +660,16 @@ and the code differ, the code is what ships:
 - Not built: elicitation. Confirmation is the server's `confirm_token`.
 
 ## 14. Safety mechanics
+
+### 13.6 Ticket buckets (T-1098)
+
+Tickets live in buckets ([Tickets](tickets.md) FR37 to FR42), and the server reports version `0.2.0` from this change. Every tool that takes a
+ticket takes its stable id (`T-12`, a permanent alias) or its bucket key (`KONF-3`, any case): the `ticket_*` tools' `id`, `session_start`'s
+`ticket_id`, `session_spawn`'s `ticket`, `lab_arm_draw`'s `ticket`, and the filters `session_list` `ticket_id` and `ci_runs_list` `ticket`.
+What is stored is always `T-<n>`. Results carry both: ticket rows have `id` and `key`, and session, CI run, trigger run, lab and usage rows
+have `ticket_id` and `ticket_key` (a by-ticket usage row has `ticket.id` and `ticket.key`). New: `ticket_buckets` (agent, read: the buckets
+the caller may use), `bucket` on `ticket_create` (operate on the bucket, checked at dispatch) and on `ticket_list` (view). The server's
+instructions and the `pilot://tickets/{id}` resource say the same; the resource takes either form and lists tickets titled by their key.
 
 ### 14.1 Confirming destructive actions
 
