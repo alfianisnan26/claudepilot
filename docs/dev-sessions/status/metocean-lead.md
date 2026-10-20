@@ -26,6 +26,7 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - ticket_verdict refused for my sub-agents (c18870): verdicts are gate-form comments.
 
 ## DECISIONS
+- 07:56Z T-1848 MP slice QA FAIL c19780 on 805e49e (suite 82d90d76 rc=0, 4 mutants killed, 35 shots): F1 Retry wraps per letter at 390, F2 MC tabs 44x43. Lead saw shot; added raw save reason and Lab home stale card (c19785). Back to mo-fe-1848c. Read-another-way pattern to coordinator (T-1703 c19786).
 - 07:48Z T-1848 slice 2 delta PASS WITH GAPS c19756 on c728f29 (suite 1627480a rc=0, opacity mutant fac1c7e6 killed). Held for outside QA. RB slice 3 starts now stacked on c728f29 (ticket/T-1848-report-builder-narrow, mo-fe-1848b), not after slice 1 (c19757).
 - 07:52Z T-1848 slice 2 fix c728f29 (fail-first 8015be16 rc=1, mutant 070b43f0 rc=1, suite de6e4c69 rc=0 655, lint baf46af7 rc=0; c19754). Same QA mo-qa-1848b re-checks the delta.
 - 07:44Z T-1848 slice 1 QA PASS WITH GAPS c19752 on 7bbc187 (suite 7e8807f5 rc=0, 3 mutants killed, 20 shots); gaps decided c19753 (Retry-closure test to Lows branch; MP 390 and Map Explorer shots at post-deploy re-shoot). Held for outside QA (c19654). QA mo-qa-1848c dispatched on 805e49e.
