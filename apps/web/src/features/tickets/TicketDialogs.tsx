@@ -59,15 +59,16 @@ function TagPicks({ value, onPick }: { value: string; onPick: (tag: string) => v
   const picks = tags.filter((t) => !have.has(t.tag));
   if (!picks.length) return null;
   return (
-    <div className="-mt-2 flex flex-wrap gap-1.5">
+    // On a phone each pick is a 44 px tap box around the same small pill (T-1859); the rows touch, so the boxes never overlap.
+    <div className="-mt-2 flex flex-wrap gap-1.5 max-medium:gap-y-0">
       {picks.map((t) => (
         <button
           key={t.tag}
           type="button"
           onClick={() => onPick(t.tag)}
-          className="press rounded-md bg-surface-2 px-2 py-1 text-[12px] font-medium text-ink-soft hover:text-ink focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden"
+          className="press group inline-flex items-center rounded-md text-[12px] font-medium text-ink-soft outline-hidden hover:text-ink max-medium:min-h-11 max-medium:min-w-11"
         >
-          + {t.tag}
+          <span className="rounded-md bg-surface-2 px-2 py-1 group-focus-visible:ring-2 group-focus-visible:ring-accent">+ {t.tag}</span>
         </button>
       ))}
     </div>

@@ -80,7 +80,7 @@ export function SessionInfoDialog({
             )}
             {(session.ticketId || bumped.length > 0) && (
               <Row label={bumped.length + (session.ticketId && !bumped.some((b) => b.ticketId === session.ticketId) ? 1 : 0) > 1 ? 'Tickets' : 'Ticket'}>
-                <span className="flex flex-wrap gap-x-3 gap-y-1">
+                <span className="flex flex-wrap gap-x-3 gap-y-1 max-medium:gap-y-6">
                   {session.ticketId && !bumped.some((b) => b.ticketId === session.ticketId) && <TicketChip ticketId={session.ticketId} compact />}
                   {bumped.map((b) => (
                     <BumpedChip key={b.ticketId} bump={b} />

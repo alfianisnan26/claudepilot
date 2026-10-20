@@ -19,7 +19,11 @@ export function FullBody({ widget, ctx, surface, close }: { widget: GlanceWidget
   );
 }
 
-/** The heading of a popover or a dock section: icon, one word, the page it opens and, where it can close, ×. */
+/**
+ * The heading of a popover or a dock section: icon, one word, the page it opens and, where it can close, ×. It shows from 640 px only
+ * (a phone gets the kit's sheet, whose Close the index.css floor sizes), so its two buttons are 32 px with a mouse and 44 px with a
+ * coarse pointer, a tablet (T-1859); the 48 px header holds either.
+ */
 export function FullHeader({ widget, onClose, onNavigate }: { widget: GlanceWidget; onClose?: () => void; onNavigate?: () => void }) {
   const Icon = widget.icon;
   return (
@@ -27,12 +31,12 @@ export function FullHeader({ widget, onClose, onNavigate }: { widget: GlanceWidg
       <Icon className="size-[18px] shrink-0 text-muted" aria-hidden="true" />
       <h2 className="min-w-0 flex-1 truncate text-[15px] font-bold tracking-tight">{widget.label}</h2>
       {widget.href && (
-        <Link to={widget.href} onClick={onNavigate} aria-label={`Open ${widget.label}`} title={`Open ${widget.label}`} className="press inline-flex size-8 items-center justify-center rounded-full text-muted hover:bg-surface-2 hover:text-ink">
+        <Link to={widget.href} onClick={onNavigate} aria-label={`Open ${widget.label}`} title={`Open ${widget.label}`} className="press inline-flex size-8 items-center justify-center rounded-full text-muted hover:bg-surface-2 hover:text-ink pointer-coarse:size-11">
           <ChevronRight className="size-[18px]" />
         </Link>
       )}
       {onClose && (
-        <button type="button" onClick={onClose} aria-label="Close" className="press inline-flex size-8 items-center justify-center rounded-full text-muted hover:bg-surface-2 hover:text-ink">
+        <button type="button" onClick={onClose} aria-label="Close" className="press inline-flex size-8 items-center justify-center rounded-full text-muted hover:bg-surface-2 hover:text-ink pointer-coarse:size-11">
           <X className="size-4" />
         </button>
       )}
