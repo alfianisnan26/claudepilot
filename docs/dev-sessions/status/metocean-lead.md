@@ -1,4 +1,4 @@
-# Konfersi: Metocean lead status (2026-10-20 05:21Z, session fc73ae34-40d3-4c82-8148-dd55697c9379, on two.claude)
+# Konfersi: Metocean lead status (2026-10-20 05:45Z, session fc73ae34-40d3-4c82-8148-dd55697c9379, on hasyim)
 
 Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-worker, Mission Planning compute/report/plugin parts, report builder, metocean reports. Status ticket T-1703. Release ticket T-1704 (v14 batch). Incidents T-1705, T-1808. Older lines: git history of this file.
 
@@ -13,9 +13,9 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - T-1611 re-check c19232 (Job dc81d232): GT 500 km 7 storms, 1000 km 77; tracks draw at 1000 only; bands about 0.1 px. Bugs moved to T-1856 (c19246). T-1611 waits for item 1's 3305bbe merge.
 
 ## IN FLIGHT
-- T-1693 (Business QA-ASK c19258, migration 0111): outside QA sub-agent mo-qa-1693 (opus) on 8dfe8fec, gate form on T-1693 or T-84.
-- T-1435 (decision c19278: before/after required): sub-agent mo-qa-1435-cmp (opus) builds qa/T-1435-output-compare, PROOF Job against 3b97011.
-- T-1856 (M, sev 3, c19245): sub-agent mo-fe-1856 (opus) on ticket/T-1856-cyclone-tracks-bands: diagnose 500 km tracks, band min 3 px. Told about --also.
+- T-1693 (Business QA-ASK c19258, migration 0111): outside QA mo-qa-1693 (opus) restarted 05:43Z on 8dfe8fec, gate form on T-1693 or T-84.
+- T-1435 (decision c19278): mo-qa-1435-cmp (opus) restarted 05:43Z from pushed qa/T-1435-output-compare d5491aab (capture script); runs the PROOF Job against 3b97011.
+- T-1856: mo-fe-1856 done. Fix f6029652 (bands at least 3 px, out-of-range dropped), fail-first 48da29da rc=1, suite a9c5dfce rc=0 (c19287). Item 1: no client-code cause, the probe's timing (c19255, not verified on stg). Family QA mo-qa-1856 (opus) restarted 05:43Z. QA-ASK T-84 c19288. bbde2b22 re-checks after deploy, waiting until the toast closes.
 - Sweep send-backs (mo-sweep-read done): QA-ASKs on T-84 c19273 (T-1012, T-1416, T-1349, T-553, T-1523, T-1662, T-632, T-1182, T-1521) and c19277 (T-1021 file list). D-77 file lists asked on T-1021 c19275, T-1662 c19276 (lead diff refused). T-1296 (coordinator blocker) and T-1528 (AC5) need no merge.
 - Worker bbde2b22 (two.claude, idle): kept for T-1856's post-deploy re-check.
 - T-1591 in_review: fix 2d633120 (fail-first 3e6b3f58, ci c29c4247). Needs delta QA, merge gate, D-81 second QA + post-deploy check.
@@ -23,12 +23,12 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - ticket_verdict refused for my sub-agents (c18870): verdicts are gate-form comments.
 
 ## DECISIONS
+- 05:43Z Moved to hasyim (session 2 %). mo-qa-1693, mo-qa-1435-cmp, mo-qa-1856 had posted nothing; all three restarted (opus). No new Business QA-ASK; Lab has not answered c19263, c19273, c19277, c19288.
 - 05:15Z Coordinator rule: outside-family QA comes from peer leads by QA-ASK on T-84 (Lab QAs Metocean, Metocean QAs Business), answered before new build work. Asked 8 tickets (c19263, c19268). Leads cannot message each other (NOT_FOUND), T-84 c19264.
 - 05:15Z UI/UX standard v0 is in the vault, "Konfersi/UI-UX standard.md" (T-84 c19101). My audit ticket is T-1848 (c19111), after the sweep fixes.
 - 05:20Z Lab-plugin Jobs need `--also platform/konfersi-shared@stg` (T-1826 c19253), in briefs/mo/common.md.
 - 05:11Z D-61 lapse by QA 3f19e911 (unquoted `&&` after `--` ran npm build in the pod, ENOENT, self-reported). Brief line: quote the Job command (T-1703 c19249).
 - 05:10Z dontAsk workers cannot clone on any Claude (two.claude too). The lead does not clone for workers (second-agent workaround risk); QA for code goes to sub-agents (family) plus a peer QA-ASK.
-- 04:57Z Moved to two.claude (6 %, resets 08:40Z).
 - 04:3xZ -F message file is the commit SOP (T-84 item 8), in briefs/mo/common.md.
 - 04:15Z D-91 (UI/UX: QA suggests, lead decides, batched per page or app). 04:11Z D-89 (QA judges shots by eye). D-90: T-991 after in_review.
 - 04:13Z T-602 merges only with the T-1704 v14 bump (c19044); post-deploy screen check before close.
@@ -54,7 +54,7 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 ## NEXT
 1. Answer any new Business QA-ASK on T-84 first (Metocean QAs Business), with a qa-verifier sub-agent.
 2. Watch T-84 for Lab's answers to c19263, c19273, c19277. Gate-form PASS waiting over one sweep: note on T-1598 (leads cannot message).
-3. mo-fe-1856 return: family QA sub-agent, then QA-ASK on T-84.
+3. mo-qa-1856, mo-qa-1693 (resumed after its turn limit), mo-qa-1435-cmp returns: integrate, then gate form.
 4. T-1848 UI/UX audit of my apps against the vault standard (D-91).
 5. T-991 (D-90, test first, D-81 money review), T-1809 after T-1591, T-1007 after T-1162.
 6. v14 batch (T-1704): T-602 + both catalog bumps, migrations check, stg-deploy backend then compute, post-deploy checks.
