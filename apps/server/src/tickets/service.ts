@@ -1868,7 +1868,11 @@ export class Tickets {
     const assigned = this.#db
       .prepare("SELECT DISTINCT json_extract(data, '$.to.sessionId') AS s FROM ticket_events WHERE ticket_number = ? AND kind = 'assigned'")
       .all(row.number) as { s: string | null }[];
-    for (const r of assigned) if (r.s) authors.add(r.s);
+    const pastHolders = new Set<string>();
+    for (const r of assigned) if (r.s) {
+      authors.add(r.s);
+      pastHolders.add(r.s);
+    }
     for (const s of this.sessions.list({ ticketId: ticketIdOf(row.number) })) authors.add(s.id);
     const leads = new Set<string>();
     for (const id of authors) {
@@ -1888,7 +1892,32 @@ export class Tickets {
         const info = id === row.assignee_ref ? holder : this.sessions.get(id);
         return !!info && info.ticketId !== ticket;
       });
-    return { authors, leads, leadHolders: new Set(leadsWork ? holderLine : []) };
+    const leadHolders = new Set<string>(leadsWork ? holderLine : []);
+    // T-1652: a lead that held the ticket and handed it to its own worker (lead -> worker) is a past holder, so an author; T-1603 covers the
+    // current holder line only, and every QA that lead spawned was refused (Konfersi T-993, T-1647, 2026-10-19). A past holder that is an
+    // ancestor of the current holder by `parentId` and was not started on the ticket (nor any session it continues) leads the work too. The
+    // builder (the holder, started on the ticket) and a past holder started on it stay authors; a missing session fails closed.
+    if (holder) {
+      const lineup = new Set(holderLine);
+      const seen = new Set<string>(holderLine);
+      let cur: TicketSessionInfo | null = holder;
+      while (cur?.parentId && seen.size < 200 && !seen.has(cur.parentId)) {
+        const up = cur.parentId;
+        seen.add(up);
+        const info = this.sessions.get(up);
+        if (!info) break;
+        if (pastHolders.has(up) && !lineup.has(up)) {
+          const line = [up, ...this.#ancestors(info)];
+          const notStarted = line.every((id) => {
+            const s = id === up ? info : this.sessions.get(id);
+            return !!s && s.ticketId !== ticket;
+          });
+          if (notStarted) for (const id of line) leadHolders.add(id);
+        }
+        cur = info;
+      }
+    }
+    return { authors, leads, leadHolders };
   }
 
   /** A session's spawn chain, nearest first: its parent and the session it continues, then theirs (bounded, cycle safe). Not the session itself. */
