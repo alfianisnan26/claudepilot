@@ -13,8 +13,8 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - T-1611 re-check c19232 (Job dc81d232): GT 500 km 7 storms, 1000 km 77; tracks draw at 1000 only; bands about 0.1 px. Bugs moved to T-1856 (c19246). T-1611 waits for item 1's 3305bbe merge.
 
 ## IN FLIGHT
-- T-1693 (Business QA-ASK c19258, migration 0111): outside QA mo-qa-1693 (opus) restarted 05:43Z on 8dfe8fec, gate form on T-1693 or T-84.
-- T-1435 HELD: capture Job ad87a706 rc=1, 126/129 equal, 3 air_press POT bodies differ (global record RP -32%, AD 4th decimal), wind and edge records equal (c19321). Decision (b) fix to scipy parity (c19324): builder mo-be-1435 waits for a slot. Capture runs as `python -m pytest qa/T-1435/capture_outputs.py -q -s`.
+- T-1693 (Business ask) answered: mo-qa-1693 PASS WITH GAPS on 8dfe8fec, c19346 (ci 7412dbfb rc=0 2113, mutants e13b09ed 3/4 killed); T-84 c19351. 0111 data-only, D-77 person step stays with Business. Two-ref diff used after `A...B` refusal, disclosed on T-84.
+- T-1435 HELD: capture Job ad87a706 rc=1, 126/129 equal, 3 air_press POT bodies differ (global record RP -32%, AD 4th decimal), wind and edge records equal (c19321). Decision (b) fix to scipy parity (c19324): builder mo-be-1435 (opus) running since 05:58Z. Capture runs as `python -m pytest qa/T-1435/capture_outputs.py -q -s`.
 - T-1591: delta QA mo-qa-1591d (opus) running on 2d633120 (05:50Z).
 - T-1856: mo-fe-1856 done. Fix f6029652 (bands at least 3 px, out-of-range dropped), fail-first 48da29da rc=1, suite a9c5dfce rc=0 (c19287). Item 1: no client-code cause, the probe's timing (c19255, not verified on stg). Family QA mo-qa-1856 (opus) restarted 05:43Z. QA-ASK T-84 c19288. bbde2b22 re-checks after deploy, waiting until the toast closes.
 - Sweep send-backs (mo-sweep-read done): QA-ASKs on T-84 c19273 (T-1012, T-1416, T-1349, T-553, T-1523, T-1662, T-632, T-1182, T-1521) and c19277 (T-1021 file list). D-77 file lists asked on T-1021 c19275, T-1662 c19276 (lead diff refused). T-1296 (coordinator blocker) and T-1528 (AC5) need no merge.
@@ -57,8 +57,7 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 ## NEXT
 1. Answer any new Business QA-ASK on T-84 first (Metocean QAs Business), with a qa-verifier sub-agent.
 2. Watch T-84 for Lab's answers to c19263, c19273, c19277. Gate-form PASS waiting over one sweep: note on T-1598 (leads cannot message).
-3. mo-qa-1856, mo-qa-1693, mo-qa-1591d returns: integrate, then gate form. hasyim caps sub-agents at 3.
-3b. Next free slot: builder mo-be-1435 (opus), per T-1435 c19324.
+3. mo-qa-1856, mo-qa-1591d, mo-be-1435 returns: integrate; T-1435 then capture re-run on the fix. hasyim caps sub-agents at 3.
 4. T-1848 UI/UX audit of my apps against the vault standard (D-91).
 5. T-991 (D-90, test first, D-81 money review), T-1809 after T-1591, T-1007 after T-1162.
 6. v14 batch (T-1704): T-602 + both catalog bumps, migrations check, stg-deploy backend then compute, post-deploy checks.
