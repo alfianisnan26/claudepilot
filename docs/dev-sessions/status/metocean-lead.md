@@ -1,4 +1,4 @@
-# Konfersi: Metocean lead status (2026-10-19, session fc73ae34-40d3-4c82-8148-dd55697c9379)
+# Konfersi: Metocean lead status (2026-10-20, session fc73ae34-40d3-4c82-8148-dd55697c9379)
 
 Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-worker, Mission Planning compute/report/plugin parts, report builder, metocean reports. Status ticket T-1703. Release ticket T-1704 (v14 batch). Incident T-1705.
 
@@ -24,16 +24,14 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - Closed this session: 1 (T-1353).
 
 ## IN FLIGHT
-- 02:22Z mo-stgread (sonnet, read-only): which in_review heads are on stg (Satria's list first), to close what has a verdict on stg (coordinator 02:2x ask). Worker probe mo-qa-553 (3f05742b, two.claude) refused Bash at clone (T-553 c18740): ended; c17308 stands (T-1703 c18743).
-- 01:40Z: no sub-agent running. Quota sekar 82 % at 01:39Z, out about 01:50Z (resets 05:50Z): no dispatch; next session resumes from NEXT.
-- mo-qa2-1591 done: PASS WITH GAPS on 4f26757 (c18653, Job f0c5ce51 rc=0). T-1591 held from the merge gate, in_progress (c18658): pre-marker unbilled row + later full bill = billed and booked unbilled (new with T-1591; reasoned, no probe Job). Pre-existing items to T-1809. Incident T-1808: my c18618 "trailers parse" was false.
-- mo-qa-1182 done: T-1182 backend PASS on stg b7941a3 (c18631, Job fbf415e9), compute PASS on stg c29d103 (c18632, Job 75d39f96); gaps G1/G2 to T-1801 (c18633); lead c18634: in_review until lab-plugin 4e32c8e merges. mo-fe-1802 done: T-1802 in_review, 819bf775 on ticket/T-1802-run-toast-cancel (Jobs 4285bd94 rc=1 red, 68028dea rc=0 631 passed; c18627, lead c18629); QA needs a non-lineage session (c17308). Cap on sekar: 3. Quota 01:22Z: session 57 %, projected out about 01:50Z (resets 05:50Z): no new dispatch until it eases (D-43).
-- T-1803 blocked (c18623): fix staged in mo-be-1803 clone, uncommitted; commit refused 3x by an unknown rule; builder ended.
-- T-1701 hash slice done: 74bae41 on ai-worker ticket/T-1701-prompt-hash-log (c17525); gate ask waits for T-1162 on stg because `npm test` is red at the stg head itself (URLPattern, Jobs b24b9ea8/21ea40b0); then cherry-pick on a fresh stg clone, QA, gate, one ai-worker deploy (c17526).
-- Worker probe mo-qa-w1 (5d4cfc18, satria, sonnet, dontAsk) refused on the allow-listed clone shape at 17:00Z (T-1574 c17540): ended; c17308 stands on a third Claude. No worker, no Agent sub-agent running.
-- 16:58Z Re-attached by the coordinator after a portal liveness mark at 16:21Z (process never stopped).
+- 02:25Z (moved to one.claude, 16 %): mo-be-1591b (implementer, opus) T-1591 double-billing fix on ticket/T-1591-metering-errors from 4f26757 (c18758). mo-qa-scr (lane-qa-ui, opus) T-1017 + T-1089 screen check as a Playwright Job on stg-lab (c18759). mo-be-1800 (implementer, sonnet) T-1800 on ticket/T-1800-proponent-exact (c18756).
+- T-1803 blocked (c18623): fix staged in the mo-be-1803 clone, uncommitted; commit refused 3x by an unknown rule.
+- T-1802 in_review 819bf775 (ticket/T-1802-run-toast-cancel); QA needs a non-lineage session (c17308).
+- T-1182 in_review until lab-plugin 4e32c8e merges (c18634). T-1701 74bae41 waits for T-1162 on stg (c17526).
+- 13 tickets with a gate-form PASS wait for the general lead's stg merge gate (T-1703 c18753; T-367, T-1021 first). Workers still refused Bash (T-553 c18740, c17308).
 
 ## DECISIONS
+- 02:25Z Moved to one.claude (16 %, resets 03:40Z): 3 slices dispatched. T-1808 brief line in briefs/mo/common.md (--trailer flags + trailers check, c18760).
 - 01:40Z T-1591 held (option a, fix before merge; money path D-81, gap new with the change). c18618's trailer claim corrected; incident T-1808.
 - 01:22Z T-1803: builder found none of the suspected denies matches its refused messages (c18619); the tests commit with the same trailers passed. Rule unknown: asked the coordinator (c18623), ticket blocked, no work-around.
 - 00:53Z (10-20) Moved to sekar. T-604 is wont_do since 10-17 (superseded by T-367): dropped from v14 (T-1704 c18558). T-603 rides T-1518's aeab2ec (c17324), pending the ancestry read.
