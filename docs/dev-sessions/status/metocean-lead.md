@@ -26,6 +26,7 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - ticket_verdict refused for my sub-agents (c18870): verdicts are gate-form comments.
 
 ## DECISIONS
+- 10:10Z T-1623 built: red 0c0c340 (d6cfd3da rc=1, 5 new fail), fix 911fba2 + test-type fix 1c1da12 (lint+suite+build 107a3bc6 rc=0 632; c20061). QA mo-qa-1623 (opus) dispatched: diff, mutants, 390/1280 shots by eye, duplicated quota wording.
 - 10:00Z T-1623 re-taken (c20051): handed-over staged fix + local red 0c0c340 at risk; commit deny solved by -F. mo-fe-1623 (opus) commits, fail-first, suite in the same worktree. stg S1 check stays blocked (502, c19978).
 - 09:58Z T-1848 N1 PASS c20046 on af9858d1 (suite 63c81372 rc=0, 6 shots by eye). All 5 slices family-QA passed, held for outside QA and blind review; merge order narrow, Lows, MP, RB, RB-narrow (c20048).
 - 09:50Z T-1848 N1 fixed af9858d1 (fail-first 0467412f rc=1, lint+suite fd8888e1 rc=0 700; c20032). QA mo-qa-1848a re-checks N1 only.
@@ -48,7 +49,6 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - 07:44Z T-1848 slice 1 QA PASS WITH GAPS c19752 on 7bbc187 (suite 7e8807f5 rc=0, 3 mutants killed, 20 shots); gaps decided c19753 (Retry-closure test to Lows branch; MP 390 and Map Explorer shots at post-deploy re-shoot). Held for outside QA (c19654). QA mo-qa-1848c dispatched on 805e49e.
 - 07:40Z T-1848 slice 3 (MP) done 805e49e (fail-first eba24807 rc=1, suite 0a1d162f rc=0 682, lint 029675eb rc=0; c19737). QA mo-qa-1848c queued: satria caps sub-agents at 3. Builder slips (node -e in pod, cd &&) to coordinator T-1703 c19739; common.md line added.
 - 07:38Z T-1848 slice 2 QA FAIL c19730 (dark error box see-through over Sections header; items 1-3 PASS, suite 93c444ed rc=0, 4 mutants killed). Lead saw the shot; decided in-flow reserved row + 44 px controls + mutant-2 test fix (c19732). Back to mo-fe-1848b; same QA re-checks delta.
-- 07:31Z T-1848 slice 1 items 1-6 at 7bbc187 (suite 6224ad96 rc=0 662, lint fea4d43d rc=0; c19703). QA mo-qa-1848a dispatched on 7bbc187. Same builder does item 7 on ticket/T-1848-metocean-lows (stacked). Item 6 Explain: stg log read pending (c19704).
 - 05:15Z Coordinator rule: outside-family QA comes from peer leads by QA-ASK on T-84 (Lab QAs Metocean, Metocean QAs Business), answered before new build work. Asked 8 tickets (c19263, c19268). Leads cannot message each other (NOT_FOUND), T-84 c19264.
 - 07:52Z-04:13Z older lines in git history. T-602 merges only with the T-1704 v14 bump (c19044); post-deploy screen check before close. T-1591 held (money path D-81); one v14 batch, no compute deploy before both v14 bumps.
 
