@@ -15,7 +15,8 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - 04:3xZ mo-commit (implementer, sonnet): T-1629 commit + Job (label mo-fe-1629), then T-1803 commit + npm run ci (label mo-be-1803), -F SOP (T-84 item 8).
 - 04:3xZ worker bbde2b22 on two.claude (qa-verifier, auto, dontAsk): T-1611 item 2 probe commit + stg screen check; re-tests c17308 (workers and Bash).
 - 04:13Z mo-qa-602 (qa-verifier, sonnet): T-602 QA, both repos, one gate form per repo.
-- 03:47Z mo-qa-1801 (qa-verifier, sonnet): T-1801 QA items 2, 1, 4 (backend Job running at 04:12Z).
+- T-1801 QA done (mo-qa-1801): item 2 PASS WITH GAPS c18958 (Job e553806b), item 1 PASS c19027 (190f6576), item 4 PASS c19115 (875f4dd8); in_review for the merge gate, close after merge (c19117).
+- 04:34Z worker a6570457 on rossi (qa-verifier, auto): T-822 delta QA (068f319), non-lineage.
 - T-1591 in_review: fix 2d633120 on ticket/T-1591-metering-errors (fail-first 3e6b3f58, ci c29c4247 rc=0). Needs delta QA, merge gate, D-81 second QA + post-deploy check.
 - T-822 in_review: delta 068f319 (Job d7972651 rc=0, c18892) after QA FAIL c18868; delta QA needs a non-lineage session (c17308).
 - T-1629 blocked: rebuild bcea895 on ticket/T-1629-storm-audit-id-2 (Job 6e6db053 rc=0); test commit refused by the unnamed rule (c18912); edits uncommitted in the mo-fe-1629 clone.
