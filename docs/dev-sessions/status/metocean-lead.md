@@ -18,12 +18,13 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - Closed this session: 0.
 
 ## IN FLIGHT
+- 00:53Z (10-20, sekar, quota 0 %): mo-qa-1591 (opus, T-1591 gate QA backend 4f26757), mo-qa-1593 (sonnet, T-1593 backend 4a8c7bec + lab-plugin e94bb68), mo-qa-1353 (sonnet, T-1353 verdict on compute stg head). Cap on sekar: 3 concurrent sub-agents. T-1703 c18559.
 - T-1701 hash slice done: 74bae41 on ai-worker ticket/T-1701-prompt-hash-log (c17525); gate ask waits for T-1162 on stg because `npm test` is red at the stg head itself (URLPattern, Jobs b24b9ea8/21ea40b0); then cherry-pick on a fresh stg clone, QA, gate, one ai-worker deploy (c17526).
 - Worker probe mo-qa-w1 (5d4cfc18, satria, sonnet, dontAsk) refused on the allow-listed clone shape at 17:00Z (T-1574 c17540): ended; c17308 stands on a third Claude. No worker, no Agent sub-agent running.
-- Usage 17:01Z: session 83 %, runs out ~17:29Z, reset 19:40Z. Nothing runs until the reset: every open step needs a sub-agent (QA, Jobs) or a non-lineage verdict (workers). T-1012 ancestry check denied again in the lead clone (c17552).
 - 16:58Z Re-attached by the coordinator after a portal liveness mark at 16:21Z (process never stopped).
 
 ## DECISIONS
+- 00:53Z (10-20) Moved to sekar. T-604 is wont_do since 10-17 (superseded by T-367): dropped from v14 (T-1704 c18558). T-603 rides T-1518's aeab2ec (c17324), pending the ancestry read.
 - 16:05Z Lanes on `claude: auto` (session pace over). 16:12Z Workers blocked: Agent sub-agents instead; respawn when the clone shape works.
 - 16:10Z One v14 batch; T-1518's v13 bump folded (c17306). 16:09Z T-1590 first; no compute deploy before both v14 bumps (T-1704).
 - 16:19Z T-1574 a69d6ea voided (denied `checkout --detach` replaced by `switch --detach`); redo via `clone -b`; incident T-1705.
@@ -45,10 +46,10 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - none (no production or uat action pending).
 
 ## NEXT
-1. T-367 gate copy (QA PASS on cd3569c, Job ae4495b1; v14 member); T-603 (68fcfd3) and T-604 (835cf8c) need QA.
-2. After the reset: T-1007 (ai-worker, after T-1162 lands), T-1591 QA Job, T-1593 backend suite Job, T-1012 branch question.
+1. Next free slot: mo-anc (sonnet, read-only: T-603 68fcfd3 in aeab2ec? T-1012 4f9d95a on stg? unchained single git commands); mo-v1523 (opus, T-1523 verify-first read of stg, items 1-3). Briefs as at 00:53Z.
+2. Then: T-1007 (ai-worker, after T-1162 lands), T-1591 QA Job, T-1593 backend suite Job, T-1012 branch question.
 3. When a non-lineage QA exists: T-1574, T-1103, T-553 gate asks; T-1353 close.
-3. After T-1574's QA and merge: gate asks T-1352 f92828f, T-1416 65d952d, T-1435 f424b1c, T-604; then the v14 bump commits (compute catalog.py, backend metocean-catalog.ts), backend migrations check, stg-deploy backend then compute, cf-logs check.
+3. After T-1574's QA and merge: gate asks T-1352 f92828f, T-1416 65d952d, T-1435 f424b1c; then the v14 bump commits (compute catalog.py, backend metocean-catalog.ts), backend migrations check, stg-deploy backend then compute, cf-logs check.
 4. Need QA on head: T-1591 (billing, Job + blind review stands), T-1593 (backend suite Job, plugin sha), T-1012 (which branch is the fix: 4f9d95a on ticket/T-1012-r2-pull vs stg; merge-base denied in the pod).
 5. Satria's: T-1017 gaps, T-1089 (screen check blocked), T-1021/T-1022 after merge: stg v2 JSON check; T-367, T-603; T-1182 backend and compute parts; T-1542 (QA login quota).
 6. Hourly closed-count report on T-1703 (next ~17:05Z).
