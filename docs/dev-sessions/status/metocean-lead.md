@@ -26,6 +26,7 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - ticket_verdict refused for my sub-agents (c18870): verdicts are gate-form comments.
 
 ## DECISIONS
+- 08:35Z T-1848 RB slice 3 done 00e579a on ticket/T-1848-report-builder-narrow (fail-first c358f381 rc=1, a6435a02 rc=1 Back button, suite+lint 2239109f rc=0 670; c19939). Skips: Low c backend text, row names need backend fields. QA mo-qa-1848b (opus) dispatched.
 - 08:20Z T-1848 MP fix round done 311a1e1 (fail-first a84061aa rc=1 12 new fails, suite b07880e2 rc=0 694, lint f6c4678d rc=0; c19840). Delta QA mo-qa-1848c (opus) dispatched; builder screenshot-free, by-eye with QA.
 - 08:12Z Moved satria to fadlilah (quota; session 17 %). Found: RB narrow 97db3a3 pushed plus 5 uncommitted files; MP fix 311a1e1 pushed (fail-first c00d15f), Jobs unknown; Lows QA no verdict. Restarted mo-fe-1848b (commit tree first), mo-fe-1848c (Jobs on c00d15f/311a1e1), mo-qa-1848a (delta on 520a89f), all opus, same worktrees.
 - 08:05Z T-1848 metocean Lows done 520a89f on ticket/T-1848-metocean-lows (fail-first 48edaae3 rc=1, Retry mutant 087c7579 rc=1, suite 5a1b0f57 rc=0 690, lint 3a179f84 rc=0 after 2 red lint Jobs; c19793). Same QA mo-qa-1848a checks the delta. Builder mo-fe-1848a done.
@@ -38,7 +39,6 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - 07:31Z T-1848 slice 1 items 1-6 at 7bbc187 (suite 6224ad96 rc=0 662, lint fea4d43d rc=0; c19703). QA mo-qa-1848a dispatched on 7bbc187. Same builder does item 7 on ticket/T-1848-metocean-lows (stacked). Item 6 Explain: stg log read pending (c19704).
 - 07:25Z T-1848 slice 2 built: abd19d8 (fail-first 1031cedf rc=1, suite 6e063b62 rc=0 653, lint 7bafd92b rc=0; c19683). One chained command refused, re-run as separate allowed calls. QA mo-qa-1848b (opus, lane-qa-ui) dispatched: diff, mutants one per Job, 390/1280 light/dark shots.
 - 06:31Z Coordinator T-1863: no in-session schedules (general lead ended by integrity check). CronList empty, none set (T-1703 c19534); brief line added. General lead now 8d05f919. T-1805 blind review mo-rev-1805 (opus) dispatched.
-- 05:45Z T-1838 landed (1de2bdb): "credential" in messages passes, -F stays, stored credential reads denied everywhere. In briefs/mo/common.md.
 - 05:15Z Coordinator rule: outside-family QA comes from peer leads by QA-ASK on T-84 (Lab QAs Metocean, Metocean QAs Business), answered before new build work. Asked 8 tickets (c19263, c19268). Leads cannot message each other (NOT_FOUND), T-84 c19264.
 - 05:15Z UI/UX standard v0 is in the vault, "Konfersi/UI-UX standard.md" (T-84 c19101). My audit ticket is T-1848 (c19111), after the sweep fixes.
 - 05:20Z Lab-plugin Jobs need `--also platform/konfersi-shared@stg` (T-1826 c19253), in briefs/mo/common.md.
