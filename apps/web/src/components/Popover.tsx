@@ -1,12 +1,12 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
-import { guards, narrowTo, placeBeside, placePopover, safeInsets, visibleBox } from '@/lib/popover';
+import { guards, placePopover, safeInsets, visibleBox } from '@/lib/popover';
 
 /**
  * A small panel anchored to the control that opened it (T-102): on the side `prefer` asks when it fits, inside the visible viewport and the
  * safe areas, never over the composer (`[data-popover-floor]`) or under the session header (`[data-popover-ceiling]`). Rendered into <body>,
  * so no card's overflow clips it. It closes on a tap outside, Escape, a scroll of the page under it, and a resize. For a laptop; a phone
- * gets a sheet instead. With `beside`, it sits next to that element when the screen has room for it there (T-1825), never over the control, else at the control.
+ * gets a sheet instead.
  */
 export function Popover({
   anchor,
@@ -15,8 +15,6 @@ export function Popover({
   label,
   width = 340,
   prefer = 'above',
-  beside,
-  within,
   children,
 }: {
   anchor: RefObject<HTMLElement | null>;
@@ -25,10 +23,6 @@ export function Popover({
   label: string;
   width?: number;
   prefer?: 'above' | 'below';
-  /** The element to sit beside when there is room (read when it opens). */
-  beside?: () => Element | null;
-  /** The element whose width it stays inside (the page's content column, not over a sidebar); the viewport when absent. */
-  within?: () => Element | null;
   children: ReactNode;
 }) {
   const panel = useRef<HTMLDivElement>(null);
@@ -40,15 +34,11 @@ export function Popover({
       if (!anchor.current || !panel.current) return;
       const r = anchor.current.getBoundingClientRect();
       const height = panel.current.scrollHeight;
-      const target = beside?.();
-      const box = within?.()?.getBoundingClientRect();
-      const view = box ? narrowTo(visibleBox(), box) : visibleBox();
-      const b = target ? placeBeside({ target: target.getBoundingClientRect(), width, height, view, safe: safeInsets(), avoid: r }) : null;
-      const p = b ?? placePopover({ anchor: r, width, height, view, safe: safeInsets(), prefer, ...guards(anchor.current) });
+      const p = placePopover({ anchor: r, width, height, view: visibleBox(), safe: safeInsets(), prefer, ...guards(anchor.current) });
       setStyle({ position: 'fixed', top: p.top, left: p.left, width: p.width, maxHeight: p.maxHeight ?? undefined, overflowY: p.maxHeight ? 'auto' : undefined });
     };
     place();
-  }, [open, anchor, width, prefer, beside, within, children]);
+  }, [open, anchor, width, prefer, children]);
 
   useEffect(() => {
     if (!open) return;

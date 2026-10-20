@@ -9,7 +9,6 @@ import geminiIcon from '@/assets/icons/google-gemini.svg';
 import ollamaIcon from '@/assets/icons/ollama.svg';
 import openaiIcon from '@/assets/icons/openai.svg';
 import { InfoTip } from '@/components/InfoTip';
-import { Popover } from '@/components/Popover';
 import { useNow } from '@/features/usage/claude/useClaudeUsage';
 import { errorText } from '@/lib/api';
 import {
@@ -122,6 +121,18 @@ function TreeSection({
   onChanged: () => void;
 }) {
   const shown = useMemo(() => filterTree(tree.root, filter), [tree.root, filter]);
+  // "N failed" opens the failed list in the page's flow, right under the lead's card (T-1825: a floating list kept covering cards).
+  const [failedOpen, setFailedOpen] = useState(false);
+  const chip = useRef<HTMLButtonElement>(null);
+  const failed = tree.failed.length;
+  useEffect(() => {
+    if (failedOpen && failed === 0) setFailedOpen(false);
+  }, [failedOpen, failed]);
+  const closeFailed = useCallback(() => {
+    setFailedOpen(false);
+    chip.current?.focus();
+  }, []);
+  const stripId = `at-failed-${tree.root.session.id}`;
   const more = foldedLabel(shown.folded);
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   const toggle = useCallback(
@@ -197,7 +208,7 @@ function TreeSection({
   }, []);
   return (
     <section aria-label={`${tree.root.name}: ${tree.total} agents`} data-agent-tree-root={tree.root.session.id}>
-      <TreeHeader tree={tree} onDismiss={onDismiss} onChanged={onChanged} leadCard={leadCard} />
+      <TreeHeader tree={tree} chip={chip} open={failedOpen} controls={stripId} onToggle={() => setFailedOpen((o) => !o)} />
       {/* From 1024 px the row can be wider than the page: it scrolls inside this box, never the page. */}
       <div
         ref={scroller}
@@ -206,7 +217,15 @@ function TreeSection({
         data-fade-right={fade.right || undefined}
       >
         <div className="at-root flex flex-col expanded:mx-auto expanded:w-max">
-          <Branch node={shown.root} depth={0} collapsed={collapsed} onToggle={toggle} />
+          <Branch
+            node={shown.root}
+            depth={0}
+            collapsed={collapsed}
+            onToggle={toggle}
+            under={
+              <FailedStrip id={stripId} open={failedOpen && failed > 0} nodes={tree.failed} onClose={closeFailed} onDismiss={onDismiss} onChanged={onChanged} />
+            }
+          />
         </div>
       </div>
       {more && (
@@ -224,41 +243,32 @@ function TreeSection({
   );
 }
 
-/** "8 agents · 4 running · 1 failed ⌃ · $1.52": the failed count opens the list of failed agents. */
+/** "8 agents · 4 running · 1 failed ⌃ · $1.52": the failed count opens the failed list under the lead's card. */
 function TreeHeader({
   tree,
-  onDismiss,
-  onChanged,
-  leadCard,
+  chip,
+  open,
+  controls,
+  onToggle,
 }: {
   tree: AgentTreeData;
-  onDismiss: (s: ChatSession) => void;
-  onChanged: () => void;
-  leadCard: () => Element | null;
+  chip: React.RefObject<HTMLButtonElement | null>;
+  open: boolean;
+  controls: string;
+  onToggle: () => void;
 }) {
-  const [open, setOpen] = useState(false);
-  // The page's content column: the list stays inside it, never over the sidebar (T-1825 QA).
-  const content = useCallback(() => button.current?.closest('[data-agent-tree]') ?? null, []);
-  const button = useRef<HTMLButtonElement>(null);
-  const close = useCallback(() => {
-    setOpen(false);
-    button.current?.focus();
-  }, []);
   const failed = tree.failed.length;
-  useEffect(() => {
-    if (open && failed === 0) setOpen(false);
-  }, [open, failed]);
   return (
     <div className="mb-2 flex min-h-11 flex-wrap items-center gap-x-3 gap-y-1 px-1 text-[13.5px]">
       <span className="text-muted tabular-nums">{plural(tree.total, 'agent')}</span>
       {tree.running > 0 && <span className="font-semibold text-sky-700 tabular-nums dark:text-sky-300">{tree.running} running</span>}
       {failed > 0 && (
         <button
-          ref={button}
+          ref={chip}
           type="button"
-          aria-haspopup="dialog"
           aria-expanded={open}
-          onClick={() => setOpen((o) => !o)}
+          aria-controls={controls}
+          onClick={onToggle}
           data-agent-failed=""
           className="press inline-flex min-h-11 items-center gap-1 rounded-full bg-danger-soft px-3 font-semibold text-danger tabular-nums focus-visible:ring-2 focus-visible:ring-danger/40 focus-visible:outline-hidden"
         >
@@ -270,26 +280,64 @@ function TreeHeader({
       <InfoTip label="About the cost">
         What the agents in this tree cost so far, at list price (for a plan, not a bill). A running turn counts as an estimate until it ends.
       </InfoTip>
-      <Popover anchor={button} open={open && failed > 0} onClose={close} label="Failed agents" prefer="below" width={360} beside={leadCard} within={content}>
-        <FailedList nodes={tree.failed} onDismiss={onDismiss} onChanged={onChanged} />
-      </Popover>
     </div>
   );
 }
 
-function FailedList({ nodes, onDismiss, onChanged }: { nodes: AgentNode[]; onDismiss: (s: ChatSession) => void; onChanged: () => void }) {
+/** The failed agents, in the flow under the lead's card (as wide as it), one line each; it pushes the workers down, so it covers nothing. */
+function FailedStrip({
+  id,
+  open,
+  nodes,
+  onClose,
+  onDismiss,
+  onChanged,
+}: {
+  id: string;
+  open: boolean;
+  nodes: AgentNode[];
+  onClose: () => void;
+  onDismiss: (s: ChatSession) => void;
+  onChanged: () => void;
+}) {
+  const still = useReducedMotion();
   const list = useRef<HTMLUListElement>(null);
-  // Keyboard: the first action takes focus when the list opens (Escape closes it and gives focus back to "N failed").
+  // Keyboard: the first link takes focus when it opens; Escape closes it and gives focus back to "N failed".
   useEffect(() => {
-    const id = requestAnimationFrame(() => list.current?.querySelector<HTMLElement>('a, button')?.focus());
-    return () => cancelAnimationFrame(id);
-  }, []);
+    if (!open) return;
+    const t = requestAnimationFrame(() => list.current?.querySelector<HTMLElement>('a, button')?.focus({ preventScroll: true }));
+    return () => cancelAnimationFrame(t);
+  }, [open]);
   return (
-    <ul ref={list} className="flex flex-col divide-y divide-line">
-      {nodes.map((n) => (
-        <FailedItem key={n.session.id} node={n} onDismiss={onDismiss} onChanged={onChanged} />
-      ))}
-    </ul>
+    <AnimatePresence initial={false}>
+      {open && (
+        <motion.div
+          key="failed"
+          id={id}
+          role="region"
+          aria-label="Failed agents"
+          data-agent-failed-strip=""
+          initial={{ height: 0, opacity: 0 }}
+          animate={{ height: 'auto', opacity: 1 }}
+          exit={{ height: 0, opacity: 0 }}
+          transition={{ duration: still ? 0 : 0.22, ease: EASE }}
+          // As wide as the lead's card (AgentCard: 22rem from 1024 px).
+          className="w-full overflow-hidden expanded:w-[22rem]"
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') {
+              e.stopPropagation();
+              onClose();
+            }
+          }}
+        >
+          <ul ref={list} className="mt-1.5 flex flex-col divide-y divide-line rounded-2xl border border-danger/25 bg-surface px-2 shadow-sm">
+            {nodes.map((n) => (
+              <FailedItem key={n.session.id} node={n} onDismiss={onDismiss} onChanged={onChanged} />
+            ))}
+          </ul>
+        </motion.div>
+      )}
+    </AnimatePresence>
   );
 }
 
@@ -311,41 +359,26 @@ function FailedItem({ node, onDismiss, onChanged }: { node: AgentNode; onDismiss
       setBusy(false);
     }
   };
+  const about = [node.task, s.endedReason].filter(Boolean).join(' · ');
   return (
-    <li className="flex flex-col gap-1.5 py-2.5 first:pt-0 last:pb-0">
-      <div className="flex min-w-0 items-start gap-2">
-        <AlertTriangle className="mt-0.5 size-4 shrink-0 text-danger" aria-hidden="true" />
-        <div className="min-w-0 flex-1 [overflow-wrap:anywhere]">
-          {/* A 44 px target on its own line (T-1825 QA: inline it was 17 px tall on a phone). */}
-          <Link
-            to={`/admin/sessions/${s.id}`}
-            className="-my-3 flex min-h-11 items-center font-semibold text-ink underline-offset-2 hover:underline focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:outline-hidden"
-          >
-            {node.name}
-          </Link>
-          {/* One line each, so the list stays about as tall as the lead's card (T-1825 QA); the whole text is in the tooltip and on the agent's page. */}
-          {node.task && (
-            <p className="truncate text-muted" title={node.task}>
-              {node.task}
-            </p>
-          )}
-          {s.endedReason && (
-            <p className="line-clamp-2 text-[13px] text-ink-soft" title={s.endedReason}>
-              {s.endedReason}
-            </p>
-          )}
-        </div>
-      </div>
-      <div className="flex justify-end gap-2">
-        <Button variant="secondary" size="sm" className="min-h-11" onClick={() => onDismiss(s)}>
-          Dismiss
+    <li className="flex min-w-0 items-center gap-1.5 py-1 text-[13.5px]" title={about || undefined}>
+      <AlertTriangle className="size-4 shrink-0 text-danger" aria-hidden="true" />
+      <Link
+        to={`/admin/sessions/${s.id}`}
+        className="flex min-h-11 max-w-[45%] shrink-0 items-center truncate rounded-md font-semibold text-ink underline-offset-2 hover:underline focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:outline-hidden"
+      >
+        <span className="truncate">{node.name}</span>
+      </Link>
+      <span className="min-w-0 flex-1 truncate text-muted">{node.task}</span>
+      {about && <span className="sr-only">{about}</span>}
+      <Button variant="secondary" size="sm" className="min-h-11 shrink-0 px-2.5" onClick={() => onDismiss(s)}>
+        Dismiss
+      </Button>
+      {kind && (
+        <Button size="sm" className="min-h-11 shrink-0 px-2.5" loading={busy} onClick={() => void retry()}>
+          Retry
         </Button>
-        {kind && (
-          <Button size="sm" className="min-h-11" loading={busy} onClick={() => void retry()}>
-            Retry
-          </Button>
-        )}
-      </div>
+      )}
     </li>
   );
 }
@@ -356,11 +389,14 @@ function Branch({
   depth,
   collapsed,
   onToggle,
+  under,
 }: {
   node: AgentNode;
   depth: number;
   collapsed: ReadonlySet<string>;
   onToggle: (id: string) => void;
+  /** What sits between the card and its workers (the lead's failed list). */
+  under?: React.ReactNode;
 }) {
   const id = node.session.id;
   const open = !collapsed.has(id);
@@ -370,6 +406,7 @@ function Branch({
   return (
     <>
       <AgentCard node={node} depth={depth} open={open} onToggle={kids ? () => onToggle(id) : undefined} />
+      {under}
       <AnimatePresence initial={false}>
         {kids && open && (
           <motion.div

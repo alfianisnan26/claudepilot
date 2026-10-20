@@ -73,58 +73,6 @@ export function placePopover(i: PlaceInput): Placement {
   return { top, left, width, maxHeight: height < i.height ? Math.max(0, room(side)) : null, side };
 }
 
-/**
- * T-1825: a popover beside an element (the Agents tree's failed list next to the lead's card, not over its row): on its right when the
- * visible width has room for all of it, else on its left, else null (the caller falls back to {@link placePopover}). Its top lines up with
- * the element's; taller than the element, its bottom does instead (it grows upwards, so it never hangs over what is below the element),
- * kept inside the visible height; taller than that, it scrolls inside. `avoid` is what it must never cover (the control that opened it):
- * a side that would cover it is passed over for one that does not; when every side would, it ends just above `avoid` when that has room
- * (so it never hangs over what is below the element), else it starts just below it.
- */
-export function placeBeside(i: {
-  target: { top: number; bottom: number; left: number; right: number };
-  width: number;
-  height: number;
-  view: Box;
-  safe: Insets;
-  avoid?: { top: number; bottom: number; left: number; right: number } | null;
-  margin?: number;
-  gap?: number;
-}): { top: number; left: number; width: number; maxHeight: number | null; side: 'right' | 'left' } | null {
-  const margin = i.margin ?? 12;
-  const gap = i.gap ?? 12;
-  const minX = i.view.left + i.safe.left + margin;
-  const maxX = i.view.left + i.view.width - i.safe.right - margin;
-  const minY = i.view.top + i.safe.top + margin;
-  const maxY = i.view.top + i.view.height - i.safe.bottom - margin;
-  const room = Math.max(0, maxY - minY);
-  const height = Math.min(i.height, room);
-  const want = height > i.target.bottom - i.target.top ? i.target.bottom - height : i.target.top;
-  const top = Math.min(Math.max(want, minY), maxY - height);
-  const sides: { side: 'right' | 'left'; left: number }[] = [];
-  if (maxX - (i.target.right + gap) >= i.width) sides.push({ side: 'right', left: i.target.right + gap });
-  if (i.target.left - gap - minX >= i.width) sides.push({ side: 'left', left: i.target.left - gap - i.width });
-  if (sides.length === 0) return null;
-  const a = i.avoid;
-  const covers = (left: number, t: number) => !!a && left < a.right && left + i.width > a.left && t < a.bottom && t + height > a.top;
-  const clear = sides.find((x) => !covers(x.left, top));
-  if (clear) return { top, left: clear.left, width: i.width, maxHeight: height < i.height ? room : null, side: clear.side };
-  // Every side covers it: above it when there is room, else below it.
-  const above = a!.top - 6 - height;
-  if (above >= minY && height === i.height) return { top: above, left: sides[0]!.left, width: i.width, maxHeight: null, side: sides[0]!.side };
-  const below = Math.max(top, a!.bottom + 6);
-  const fit = Math.max(0, maxY - below);
-  const h = Math.min(i.height, fit);
-  return { top: below, left: sides[0]!.left, width: i.width, maxHeight: h < i.height ? fit : null, side: sides[0]!.side };
-}
-
-/** T-1825: the visible area cut to an element's width (a page's content column), so a popover stays off a sidebar; the view when they miss. */
-export function narrowTo(view: Box, el: { left: number; right: number }): Box {
-  const left = Math.max(view.left, el.left);
-  const right = Math.min(view.left + view.width, el.right);
-  return right - left > 0 ? { ...view, left, width: right - left } : view;
-}
-
 /** The visible area: the visual viewport where there is one (the keyboard and a zoom shrink it), else the window. */
 export function visibleBox(): Box {
   const vv = typeof window !== 'undefined' ? window.visualViewport : null;

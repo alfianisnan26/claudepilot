@@ -4,8 +4,9 @@
 // dark, it asserts:
 //   - the page never scrolls sideways and no card overflows (a long title breaks);
 //   - from 1024 px a lead stays in view when its row of workers is wider than the page (the row scrolls inside its box, starting on the lead);
-//   - a card is a link all over (a 44 px target on a phone), the collapse, "N failed" and the popover's buttons are 44 px on a phone;
-//   - "N failed" opens a popover inside the viewport, focus moves into it, Escape closes it and gives focus back;
+//   - a card is a link all over (a 44 px target on a phone), the collapse, "N failed" and the failed strip's link and buttons are 44 px on a phone;
+//   - "N failed" opens and closes a strip in the flow under the lead's card (aria-expanded), nothing overlaps, focus moves into it, Escape
+//     closes it and gives focus back;
 //   - T-1853: Active is the default (idle and ended agents fold behind "+N"); then it shows All, and the leads stay in view after that switch;
 //   - with prefers-reduced-motion the spinner stands still and a collapse is instant (no height tween); without it the tween runs.
 // usage: tools/qa/with-portal.sh 3405 node tools/qa/agent-tree.mjs [--shots dir]   (it removes its rows at the end)
@@ -124,19 +125,41 @@ try {
         check(`${tag}: collapse, "N failed" and the toggle are 44 px`, m.small.length === 0, m.small.join());
         check(`${tag}: a card is a link all over (nothing dead to touch)`, m.dead.length === 0, `${m.dead.length}: ${m.dead.slice(0, 3).join(' ')}`);
       }
-      // the failed popover
+      // the failed list: a strip in the flow under the lead's card (T-1825), opened and closed by "N failed"
       await b.eval(`document.querySelector('[data-agent-failed]').scrollIntoView({ block: 'center' })`);
       await b.clickSel('[data-agent-failed]');
       await sleep(700);
-      const pop = await b.eval(`(() => { const d = document.querySelector('[role=dialog]'); if (!d) return null; const r = d.getBoundingClientRect(); const t = document.querySelector('[data-agent-failed]').getBoundingClientRect(); return { inside: r.left >= 0 && r.right <= innerWidth && r.top >= 0 && r.bottom <= innerHeight, coversChip: r.left < t.right && r.right > t.left && r.top < t.bottom && r.bottom > t.top, buttons: [...d.querySelectorAll('button')].map((x) => Math.round(x.getBoundingClientRect().height)), focus: ${active} } })()`);
+      const strip = await b.eval(`(() => {
+        const chip = document.querySelector('[data-agent-failed]');
+        const sec = chip.closest('[data-agent-tree-root]');
+        const d = sec.querySelector('[data-agent-failed-strip]');
+        if (!d) return { expanded: chip.getAttribute('aria-expanded') };
+        const r = d.getBoundingClientRect();
+        const lead = sec.querySelector('[data-agent-card]').getBoundingClientRect();
+        const hit = (a, b) => a.left < b.right - 0.5 && a.right > b.left + 0.5 && a.top < b.bottom - 0.5 && a.bottom > b.top + 0.5;
+        const cards = [...sec.querySelectorAll('[data-agent-card]')].map((c) => ({ id: c.dataset.agentCard, r: c.getBoundingClientRect() }));
+        const overStrip = cards.filter((c) => hit(c.r, r)).map((c) => c.id);
+        const overCards = [];
+        cards.forEach((a, i) => cards.slice(i + 1).forEach((b) => hit(a.r, b.r) && overCards.push(a.id + '/' + b.id)));
+        const targets = [...d.querySelectorAll('a, button')].map((x) => x.getBoundingClientRect()).filter((x) => x.width > 0).map((x) => Math.round(Math.min(x.width, x.height)));
+        return { expanded: chip.getAttribute('aria-expanded'), controls: chip.getAttribute('aria-controls') === d.id, underLead: r.top >= lead.bottom - 0.5 && Math.abs(r.width - lead.width) < 1.5 && Math.abs(r.left - lead.left) < 1.5,
+          overStrip, overCards, oneLine: [...d.querySelectorAll('li')].every((li) => li.getBoundingClientRect().height < 60), targets, focus: ${active} };
+      })()`);
       if (shots) await b.shot(`${tag}-failed`);
-      check(`${tag}: "N failed" opens a popover inside the viewport, focus inside`, !!pop && pop.inside && /^(A|BUTTON):(?!.*failed)/.test(pop.focus), JSON.stringify(pop));
-      check(`${tag}: the popover leaves "N failed" uncovered`, !!pop && !pop.coversChip, JSON.stringify(pop));
-      if (pop && s.mobile) check(`${tag}: Dismiss and Retry are 44 px`, pop.buttons.every((h) => h >= 44), JSON.stringify(pop.buttons));
+      check(`${tag}: "N failed" opens the strip under the lead's card, as wide as it (aria-expanded, aria-controls)`, strip.expanded === 'true' && strip.controls && strip.underLead, JSON.stringify(strip));
+      check(`${tag}: nothing overlaps (no card over the strip, no card over another)`, !!strip.overStrip && strip.overStrip.length === 0 && strip.overCards.length === 0, JSON.stringify(strip));
+      check(`${tag}: each failed agent is one line, focus inside`, !!strip.oneLine && /^(A|BUTTON):(?!.*failed)/.test(strip.focus), JSON.stringify(strip));
+      if (s.mobile) check(`${tag}: the strip's link, Dismiss and Retry are 44 px`, !!strip.targets && strip.targets.every((h) => h >= 44), JSON.stringify(strip.targets));
       await b.key('Escape');
       await sleep(500);
-      const back = await b.eval(`({ open: !!document.querySelector('[role=dialog]'), focus: ${active} })`);
-      check(`${tag}: Escape closes it and focus returns to "N failed"`, !back.open && /failed/.test(back.focus), JSON.stringify(back));
+      const back = await b.eval(`({ open: !!document.querySelector('[data-agent-failed-strip]'), expanded: document.querySelector('[data-agent-failed]').getAttribute('aria-expanded'), focus: ${active} })`);
+      check(`${tag}: Escape closes it and focus returns to "N failed"`, !back.open && back.expanded === 'false' && /failed/.test(back.focus), JSON.stringify(back));
+      await b.clickSel('[data-agent-failed]');
+      await sleep(500);
+      await b.clickSel('[data-agent-failed]');
+      await sleep(500);
+      const toggled = await b.eval(`({ open: !!document.querySelector('[data-agent-failed-strip]'), expanded: document.querySelector('[data-agent-failed]').getAttribute('aria-expanded') })`);
+      check(`${tag}: "N failed" toggles the strip closed again`, !toggled.open && toggled.expanded === 'false', JSON.stringify(toggled));
     }
 
   // reduced motion
