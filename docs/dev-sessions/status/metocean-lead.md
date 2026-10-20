@@ -16,10 +16,12 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - Hourly reports on T-1703: c17425 (16:21Z), c17506 (17:05Z).
 - T-1701 measurement (mo-be-g, read-only, c17513/c17514): no prompt hash in any log or ledger row, so the Explain repeat rate is unknown; no cache built (ticket rule).
 - T-1353 closed done 01:08Z (10-20): fix on compute stg c29d103, QA c14616 + mo-qa-1353 c18576 (Job b304e73c rc=0, mutants e83347cc/a32a1225); test gap to T-1800 (S, mine).
+- T-1593 gate-form PASS both heads: backend 4a8c7bec c18575 (Job cfb2de34), lab-plugin e94bb68 c18584 (Job 3c67391a); mutants red.
+- T-603 gate copy c18585 on 68fcfd3 (ticket/T-603-altimetry-qc; NOT in aeab2ec). T-1012 gate copy c18586 on d23ffc9 (ticket/T-1012-pull-measure, carries fix 4f9d95a…882786; not on stg).
 - Closed this session: 1 (T-1353).
 
 ## IN FLIGHT
-- 00:53Z (10-20, sekar, quota 0 %): mo-qa-1591 (opus, T-1591 gate QA backend 4f26757), mo-qa-1593 (sonnet, T-1593 backend 4a8c7bec + lab-plugin e94bb68); 01:08Z mo-anc (sonnet, read-only ancestry T-603/T-1012). Cap on sekar: 3 concurrent sub-agents. T-1703 c18559.
+- 00:53Z (10-20, sekar, quota 0 %): mo-qa-1591 (opus, T-1591 gate QA backend 4f26757), 01:09Z mo-v1523 (opus, T-1523 verify-first stg read), mo-v1182 (sonnet, T-1182 backend/compute parts read). Cap on sekar: 3 concurrent sub-agents. T-1703 c18559.
 - T-1701 hash slice done: 74bae41 on ai-worker ticket/T-1701-prompt-hash-log (c17525); gate ask waits for T-1162 on stg because `npm test` is red at the stg head itself (URLPattern, Jobs b24b9ea8/21ea40b0); then cherry-pick on a fresh stg clone, QA, gate, one ai-worker deploy (c17526).
 - Worker probe mo-qa-w1 (5d4cfc18, satria, sonnet, dontAsk) refused on the allow-listed clone shape at 17:00Z (T-1574 c17540): ended; c17308 stands on a third Claude. No worker, no Agent sub-agent running.
 - 16:58Z Re-attached by the coordinator after a portal liveness mark at 16:21Z (process never stopped).
@@ -36,7 +38,6 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 
 ## FOR THE COORDINATOR
 - c17308 (re-tested 17:00Z on satria, T-1574 c17540): dontAsk workers refused on the allow-listed clone shape; check the folder's allow list loads for workers. Single blocker for every non-lineage QA record.
-- c17552: T-1012 ancestry (is 4f9d95a on stg) denied in the lead clone (fetch + plain log chain); an allow line for merge-base/branch --contains in agentic-worktrees clones, or the answer on T-1012.
 - c17465: non-lineage QA records needed on T-1574 dbbc9a4 (delta check before its gate ask), T-1353, T-632, T-1632; session_message cannot reach the general lead.
 - AIR quota on qa-regress-scratch (T-1528 AC5, c16625); shared browser cannot reach stg-lab.konfersi.com (T-1667, T-1017 c16925, T-1089 screen check).
 - T-1705: should `git switch` be denied wherever `git checkout` is; is `--detach <sha>` meant to be denied for lanes?
@@ -47,7 +48,7 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - none (no production or uat action pending).
 
 ## NEXT
-1. Next free slots, in order: mo-v1523 (opus, T-1523 verify-first read of stg, items 1-3; brief as at 00:53Z); T-1800 builder (sonnet, S).
+1. Next free slots: work whose QA is not blocked first (QA of other sessions' builds, verify-first reads); then T-1800 builder (sonnet, S; its QA needs a non-lineage session). Brief rule: quote the whole job-run command (mo-qa-1593 near miss, T-1703).
 2. Then: T-1007 (ai-worker, after T-1162 lands), T-1591 QA Job, T-1593 backend suite Job, T-1012 branch question.
 3. When a non-lineage QA exists: T-1574, T-1103, T-553 gate asks; T-1353 close.
 3. After T-1574's QA and merge: gate asks T-1352 f92828f, T-1416 65d952d, T-1435 f424b1c; then the v14 bump commits (compute catalog.py, backend metocean-catalog.ts), backend migrations check, stg-deploy backend then compute, cf-logs check.
