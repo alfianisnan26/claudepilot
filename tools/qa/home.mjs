@@ -10,7 +10,23 @@ const call = api(cookie);
 // Something for the Tickets card to list (a scratch portal starts empty).
 await call('POST', '/api/tickets', { summary: 'Home check: a ticket with a rather long summary that must truncate on a phone', type: 'task', priority: 'normal' }).catch(() => undefined);
 
-const CARDS = ['attention', 'sessions', 'quota', 'workspaces', 'tickets', 'ci', 'usage'];
+// The cards and their default order, read from the page (the Arrange list holds every card, in order), not written here: Home grows
+// cards (autonomy, review, pace came after this check was written and it went stale).
+const CARDS = await (async () => {
+  const b = await Browser.launch({ width: 390, height: 844 });
+  try {
+    await b.cookie(cookie);
+    await b.eval(`localStorage.clear()`).catch(() => undefined);
+    await b.goto('/admin/home', 2500);
+    await b.waitFor(`!!document.querySelector('button[aria-label="Arrange cards"]')`, 10_000, 'the Arrange button');
+    await b.clickSel('button[aria-label="Arrange cards"]');
+    await b.waitFor(`document.querySelectorAll('[data-arrange-card]').length > 0`, 4000, 'the Arrange list');
+    return await b.eval(`[...document.querySelectorAll('[data-arrange-card]')].map((e) => e.dataset.arrangeCard)`);
+  } finally {
+    await b.close();
+  }
+})();
+console.log(`cards: ${CARDS.join(', ')}`);
 const fails = [];
 const check = (ok, what) => {
   if (!ok) fails.push(what);
@@ -29,7 +45,9 @@ for (const [width, height] of [[390, 844], [1280, 800]]) {
       const path = await b.eval('location.pathname');
       check(path === '/admin/home', `${tag}: the app opens on Home (${path})`);
       const ids = await b.eval(`[...document.querySelectorAll('[data-home-card]')].map((e) => e.dataset.homeCard)`);
-      check(JSON.stringify(ids) === JSON.stringify(CARDS), `${tag}: the cards in the default order (${ids.join(', ')})`);
+      // One column at 390 px reads in order; from 1024 px the cards sit in column stacks, so there only the set is compared.
+      if (width === 390) check(JSON.stringify(ids) === JSON.stringify(CARDS), `${tag}: the cards in the default order (${ids.join(', ')})`);
+      else check(JSON.stringify([...ids].sort()) === JSON.stringify([...CARDS].sort()), `${tag}: every card shows (${ids.join(', ')})`);
       const a = await b.eval(AUDIT);
       check(!a.hscroll && a.overflowing.length === 0, `${tag}: no sideways scroll ${a.hscroll ? JSON.stringify(a.hscroll) : ''} ${a.overflowing.join('; ')}`);
       const small = await b.eval(`[...document.querySelectorAll('[data-home-card] a[href], [data-home-card] button')].filter((e) => { const r = e.getBoundingClientRect(); return r.width > 0 && (r.height < 44 || r.width < 44); }).map((e) => (e.getAttribute('aria-label') || e.innerText).slice(0, 40) + ' ' + Math.round(e.getBoundingClientRect().width) + 'x' + Math.round(e.getBoundingClientRect().height))`);
@@ -78,9 +96,12 @@ for (const [width, height] of [[390, 844], [1280, 800]]) {
         await b.clickSel('[role=dialog] [aria-label="Show Usage"]');
         await b.clickSel('[role=dialog] button[aria-label="Move Quota up"]');
         await b.goto('/admin/home', 2500);
-        await b.waitFor(`document.querySelectorAll('[data-home-card]').length >= 6`, 8000, 'the cards after reload');
+        await b.waitFor(`document.querySelectorAll('[data-home-card]').length >= ${CARDS.length - 1}`, 8000, 'the cards after reload');
         const after = await b.eval(`[...document.querySelectorAll('[data-home-card]')].map((e) => e.dataset.homeCard)`);
-        check(JSON.stringify(after) === JSON.stringify(['attention', 'quota', 'sessions', 'workspaces', 'tickets', 'ci']), `${tag}: Arrange hid Usage and moved Quota up, kept on reload (${after.join(', ')})`);
+        const q = CARDS.indexOf('quota');
+        const moved = q > 0 ? [...CARDS.slice(0, q - 1), 'quota', CARDS[q - 1], ...CARDS.slice(q + 1)] : [...CARDS];
+        const want = moved.filter((id) => id !== 'usage');
+        check(JSON.stringify(after) === JSON.stringify(want), `${tag}: Arrange hid Usage and moved Quota up, kept on reload (${after.join(', ')}; want ${want.join(', ')})`);
         await b.eval(`localStorage.clear()`);
       }
       if (b.errors.length) check(false, `${tag}: page errors ${b.errors.slice(0, 3).join(' | ')}`);

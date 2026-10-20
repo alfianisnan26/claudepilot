@@ -214,7 +214,7 @@ function ArrangeDialog({ open, onClose }: { open: boolean; onClose: () => void }
           const title = titleOf(w);
           const on = !s.hidden.includes(w.id);
           return (
-            <li key={w.id} className="flex min-h-14 items-center gap-2 px-1 py-1.5">
+            <li key={w.id} data-arrange-card={w.id} className="flex min-h-14 items-center gap-2 px-1 py-1.5">
               <Icon className="size-[18px] shrink-0 text-muted" aria-hidden="true" />
               <span className="min-w-0 flex-1 truncate font-semibold">{title}</span>
               <MoveButton label={`Move ${title} up`} disabled={i === 0} onClick={() => updateHomeSettings({ order: moveInOrder(ids, w.id, -1) })}>
