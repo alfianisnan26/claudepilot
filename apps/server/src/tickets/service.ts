@@ -61,7 +61,7 @@ import {
   canAgentAssignUser,
   canAgentTagChecklist,
   OWNER_CHECKLIST_TAG,
-  canPeerLeadComment, canWorkerComment, parseLeadPeerGroups,
+  canPeerLeadAct, canWorkerComment, parseLeadPeerGroups,
   D62_ASSIGN_REFUSAL,
   D62_CHECKLIST_REFUSAL,
   type EndedGrantReason,
@@ -602,10 +602,47 @@ export class Tickets {
       ticketWorkspace: row.workspace_id,
     });
     if (d.allow) return d.why;
+    return this.#peerLead(s, row) ? 'lead_peer' : null;
+  }
+
+  /**
+   * D-85, T-1839: the crew root (top-level lead) of the session holding `row` when `s` is its peer lead (authz.ts `canPeerLeadAct`), or null.
+   * The root is found up the holder's `parentId` chain; a missing session, a cycle or a chain deeper than 20 gives no root (fail closed).
+   */
+  #peerLead(s: TicketSessionInfo, row: Row): string | null {
     const groups = parseLeadPeerGroups(this.#leadPeerGroups());
+    const holder = row.assignee_kind === 'session' && row.assignee_ref ? this.sessions.get(row.assignee_ref) : null;
     if (!groups.length || !holder) return null;
-    const lineage = (x: TicketSessionInfo) => [x.id, ...this.#ancestors(x)];
-    return canPeerLeadComment({ actor: s, holder, actorLineage: lineage(s), holderLineage: lineage(holder), groups }) ? 'lead_peer' : null;
+    let root: TicketSessionInfo | null = holder;
+    const seen = new Set<string>();
+    while (root?.parentId) {
+      if (seen.has(root.id) || seen.size >= 20) root = null;
+      else (seen.add(root.id), (root = this.sessions.get(root.parentId)));
+    }
+    if (!root) return null;
+    const ok = canPeerLeadAct({
+      actor: s,
+      holder,
+      root,
+      actorLineage: [s.id, ...this.#ancestors(s)],
+      rootLineage: [root.id, ...this.#ancestors(root), ...this.#successors(root)],
+      groups,
+    });
+    return ok ? root.id : null;
+  }
+
+  /** The sessions continuing `s`, directly or down its chain, in its workspace (bounded, cycle safe). */
+  #successors(s: TicketSessionInfo): string[] {
+    const all = this.sessions.list({ workspaceId: s.workspaceId });
+    const seen = new Set<string>([s.id]);
+    let frontier = [s.id];
+    while (frontier.length && seen.size < 500) {
+      const next = all.filter((x) => x.continuedFrom && frontier.includes(x.continuedFrom) && !seen.has(x.id));
+      for (const x of next) seen.add(x.id);
+      frontier = next.map((x) => x.id);
+    }
+    seen.delete(s.id);
+    return [...seen];
   }
 
   /** The audit row of a worker's comment under FR9b: the worker that wrote it, its lead and why. */
@@ -1615,7 +1652,15 @@ export class Tickets {
     // A manager is not a QA session: QA closes on its pass (general-manager PRD §9.4, #11136 b). After #need, so a missing ticket stays NOT_FOUND.
     if (caller.kind === 'token' && caller.manager) throw new AppError('FORBIDDEN', MANAGER_NO_CLOSE);
     const w = this.#writer(caller, opts.sessionId);
-    const grant = this.#assertCanModify(caller, row, w);
+    let grant: EndedGrant | null = null;
+    let peerRoot: string | null = null;
+    try {
+      grant = this.#assertCanModify(caller, row, w);
+    } catch (e) {
+      // T-1839: a peer lead (D-85) closes a ticket another lead of its group, or a worker of one, holds; audited as `ticket.lead_peer_closed`.
+      if (caller.kind === 'agent' && w.session && !isTicketClosed(row.status)) peerRoot = this.#peerLead(w.session, row);
+      if (!peerRoot) throw e;
+    }
     if (isTicketClosed(row.status)) throw new AppError('CONFLICT', `${ticketIdOf(row.number)} is already closed.`);
     const outcome = req.outcome === undefined ? 'done' : oneOf(req.outcome, TICKET_CLOSED_STATUSES, 'outcome');
     const summary = cleanMarkdown(req.summary, 'summary', TICKET_LIMITS.closing, {
@@ -1633,6 +1678,15 @@ export class Tickets {
       });
     });
     this.#auditForEnded(grant, w, row, 'close');
+    if (peerRoot)
+      this.onAudit?.({
+        kind: 'ticket.lead_peer_closed',
+        actor: w.actor,
+        actorLabel: null,
+        userId: FOUNDING_USER_ID,
+        subject: `ticket:${ticketIdOf(row.number)}`,
+        detail: { ticketId: ticketIdOf(row.number), sessionId: w.session?.id ?? null, holder: row.assignee_ref ?? null, holderLead: peerRoot, outcome, why: 'lead_peer' },
+      });
     this.onChange?.();
     return this.#items([this.#row(row.number)!])[0]!;
   }

@@ -513,7 +513,7 @@ test('lead_peer (D-85): the leads in one owner-set group comment on each other\'
     assert.equal(await code(other, 'T-1'), 'FORBIDDEN', 'a session that titled itself "Konfersi:" but is not in the owner\'s group');
     assert.equal(await code(wk, 'T-3'), 'FORBIDDEN', 'a worker is not a peer lead');
     assert.equal((await r.h.call(main.secret, 'ticket_update', { id: 'T-1', priority: 'low' })).result?.structuredContent?.error?.code, 'FORBIDDEN', 'a comment only');
-    assert.equal((await r.h.call(main.secret, 'ticket_close', { id: 'T-1', summary: 'x' })).result?.structuredContent?.error?.code, 'FORBIDDEN', 'never a close');
+    // T-1839: a peer lead may now close too; see the lead_peer close test below.
     const att = await r.h.call(main.secret, 'ticket_attach', { id: 'T-1', name: 'x.txt', content_base64: Buffer.from('hello').toString('base64') });
     assert.equal(att.result?.structuredContent?.error?.code, 'FORBIDDEN', 'never an attachment');
     // A continuation of a listed lead counts as it (its lineage).
@@ -524,6 +524,74 @@ test('lead_peer (D-85): the leads in one owner-set group comment on each other\'
     // The owner empties the setting: nobody is a peer.
     groups = '';
     assert.equal(await code(main, 'T-1'), 'FORBIDDEN', 'no group, no grant');
+  } finally {
+    r.done();
+  }
+});
+
+test('lead_peer close (T-1839): a peer lead comments on and closes a ticket a peer lead or a peer\'s worker holds; a worker, a lead outside the group, a person\'s ticket get nothing', async () => {
+  const GEN = 'cccccccc-0001', BIZ = 'cccccccc-0002', LAB = 'cccccccc-0003', OUT = 'dddddddd-0001';
+  const BW = 'cccccccc-0010', BW2 = 'cccccccc-0011', OW = 'dddddddd-0010', LAB0 = 'cccccccc-0020', LW = 'cccccccc-0021';
+  const r = await rig({ leadPeerGroups: () => `${GEN},${BIZ},${LAB}` });
+  const audits: { kind: string; detail?: Record<string, unknown> }[] = [];
+  r.tickets.onAudit = (e) => void audits.push(e);
+  try {
+    const gen = await r.agent('docker/api', GEN, 'Konfersi: general');
+    await r.agent('docker/api', BIZ, 'Konfersi: Business');
+    await r.agent('docker/api', LAB, 'Konfersi: Lab');
+    const out = await r.agent('docker/api', OUT, 'another lead');
+    const bw = await r.agent('docker/api', BW, 'Business lane');
+    await r.agent('docker/api', BW2, 'Business sub-lane');
+    await r.agent('docker/api', OW, 'outsider lane');
+    await r.agent('docker/api', LAB0, 'Lab, before its restart');
+    await r.agent('docker/api', LW, 'Lab lane');
+    const patch = (id: string, over: Record<string, unknown>) => r.sessions.sessions.set(id, { ...r.sessions.sessions.get(id)!, ...over });
+    patch(BW, { parentId: BIZ });
+    patch(BW2, { parentId: BW });
+    patch(OW, { parentId: OUT });
+    patch(LAB0, { state: 'ended' });
+    patch(LAB, { continuedFrom: LAB0 });
+    patch(LW, { parentId: LAB0 }); // started by the Lab lead before it was continued
+    const held = (summary: string, sessionId: string) => r.tickets.create(UI, { summary, workspaceId: 'docker/api', assignee: { kind: 'session', sessionId } }).id;
+    const tBiz = held('Business status', BIZ);
+    const tBw = held('Business lane work', BW);
+    const tBw2 = held('nested lane work', BW2);
+    const tLw = held('Lab lane work', LW);
+    const tOw = held('outsider lane work', OW);
+    const tBiz2 = held('Business second', BIZ);
+    const tPerson = r.tickets.create(UI, { summary: 'a person holds it', workspaceId: 'docker/api', assignee: { kind: 'user', name: 'Admin' } }).id;
+    const comment = async (t: { secret: string }, id: string) => (await r.h.call(t.secret, 'ticket_comment', { id, text: `note on ${id}` })).result?.structuredContent?.error?.code;
+    const close = async (t: { secret: string }, id: string) => (await r.h.call(t.secret, 'ticket_close', { id, summary: `merged and deployed ${id}` })).result?.structuredContent?.error?.code;
+
+    // Refused first, so the tickets are still open for the allowed calls.
+    assert.equal(await close(bw, tBiz2), 'FORBIDDEN', 'a worker does not close its own lead\'s ticket');
+    assert.equal(await close(bw, tLw), 'FORBIDDEN', 'nor a peer\'s worker\'s');
+    assert.equal(await comment(bw, tLw), 'FORBIDDEN', 'nor comment on it');
+    assert.equal(await close(out, tBiz), 'FORBIDDEN', 'a lead outside the group');
+    assert.equal(await comment(out, tBw), 'FORBIDDEN', 'a lead outside the group comments on no peer\'s worker');
+    assert.equal(await close(gen, tOw), 'FORBIDDEN', 'a peer lead does not close an outsider\'s worker\'s ticket');
+    assert.equal(await comment(gen, tOw), 'FORBIDDEN', 'nor comment on it');
+    assert.equal(await close(gen, tPerson), 'FORBIDDEN', 'a person\'s ticket is unchanged');
+    assert.equal((await r.h.call(gen.secret, 'ticket_update', { id: tBw, priority: 'low' })).result?.structuredContent?.error?.code, 'FORBIDDEN', 'no change beyond comment and close');
+    assert.equal(audits.filter((a) => a.kind === 'ticket.lead_peer_closed').length, 0, 'no refused call is audited');
+
+    assert.equal(await comment(gen, tBw), undefined, 'the general lead comments on the Business lane\'s ticket');
+    assert.equal(await comment(gen, tLw), undefined, 'and on a lane its Lab peer started before it was continued');
+    assert.equal(await close(gen, tBiz), undefined, 'a peer lead closes a peer lead\'s ticket');
+    assert.equal(await close(gen, tBw), undefined, 'and a peer\'s worker\'s');
+    assert.equal(await close(gen, tBw2), undefined, 'and a peer\'s worker\'s worker\'s (an ended holder is FR9a\'s)');
+    assert.equal(r.tickets.get(UI, tBw).ticket.status, 'done');
+    const rows = audits.filter((a) => a.kind === 'ticket.lead_peer_closed');
+    assert.deepEqual(rows.map((a) => [a.detail?.ticketId, a.detail?.sessionId, a.detail?.holder, a.detail?.holderLead]), [
+      [tBiz, GEN, BIZ, BIZ],
+      [tBw, GEN, BW, BIZ],
+      [tBw2, GEN, BW2, BIZ],
+    ], 'each close audited with the holder and its lead');
+    assert.equal(await close(gen, tBiz), 'FORBIDDEN', 'a closed ticket stays closed for it');
+    // A broken chain (the lead is gone from the database) is refused: fail closed.
+    patch(BW, { parentId: 'cccccccc-9999' });
+    const tBroken = held('broken chain', BW);
+    assert.equal(await close(gen, tBroken), 'FORBIDDEN', 'a missing lead up the chain refuses');
   } finally {
     r.done();
   }

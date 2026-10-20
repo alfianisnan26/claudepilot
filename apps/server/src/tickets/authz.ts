@@ -209,22 +209,29 @@ export function canWorkerComment(facts: {
 }
 
 /**
- * D-85 (2026-10-18): the leads of ONE program talk on each other's tickets. A live top-level session may COMMENT on a ticket held by another
- * live top-level session in the same workspace when both are in one group of `tickets.leadPeerGroups` (an owner-only setting: ids, never a
- * title an agent could rename; review 2026-10-18). `lineage` is each session's own id plus its predecessors (continued_from back), so a
- * continuation of a listed lead counts as it. Nothing else is granted (no change, close, claim or attachment).
+ * D-85 (2026-10-18): the leads of ONE program talk on each other's tickets. T-1839 (2026-10-20): and close them, also when a WORKER of a peer
+ * lead holds it (the general lead merged and deployed T-993, T-1162, T-1506 and T-1617 but its close was refused; its comments on tickets its
+ * peers' lanes held were refused too). A live top-level session may COMMENT on and CLOSE a ticket held by a session of its workspace whose
+ * crew root (the top of its `parentId` chain: the holder itself when it is a lead) is in one group of `tickets.leadPeerGroups` with it (an
+ * owner-only setting: ids, never a title an agent could rename; review 2026-10-18). `actorLineage` is the actor's id plus its predecessors
+ * (continued_from back), so a continuation of a listed lead counts as it; `rootLineage` is the root's id with its predecessors AND its
+ * continuations, so a worker started by a lead that was continued still belongs to the listed successor (as T-1603). The holder may have
+ * ended (a lane that delivered and stopped). The service passes a null root when the chain is broken (a missing session, a cycle, too deep):
+ * refused (fail closed). Nothing else is granted (no change, claim or attachment); a worker (an actor with a lead) never.
  */
-export function canPeerLeadComment(facts: {
+export function canPeerLeadAct(facts: {
   actor: RuleSession & { parentId?: string | null };
-  holder: (RuleSession & { parentId?: string | null; archivedAt?: string | null }) | null;
+  holder: RuleSession | null;
+  /** The top of the holder's `parentId` chain (a session without a lead), or null when the chain cannot be followed. */
+  root: (RuleSession & { parentId?: string | null }) | null;
   actorLineage: readonly string[];
-  holderLineage: readonly string[];
+  rootLineage: readonly string[];
   groups: readonly (readonly string[])[];
 }): boolean {
-  const { actor, holder } = facts;
-  if (!holder || actor.id === holder.id || actor.parentId || holder.parentId) return false;
-  if (actor.state === 'ended' || holder.state === 'ended' || holder.archivedAt || actor.workspaceId !== holder.workspaceId) return false;
-  return facts.groups.some((g) => facts.actorLineage.some((id) => g.includes(id)) && facts.holderLineage.some((id) => g.includes(id)));
+  const { actor, holder, root } = facts;
+  if (!holder || !root || actor.id === holder.id || actor.parentId || root.parentId) return false;
+  if (actor.state === 'ended' || actor.workspaceId !== holder.workspaceId || actor.workspaceId !== root.workspaceId) return false;
+  return facts.groups.some((g) => facts.actorLineage.some((id) => g.includes(id)) && facts.rootLineage.some((id) => g.includes(id)));
 }
 
 /** `tickets.leadPeerGroups` parsed: groups by ";", ids by ","; anything not a plain id is dropped (fail closed). */
