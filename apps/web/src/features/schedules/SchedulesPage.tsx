@@ -81,7 +81,7 @@ export function SchedulesPage() {
         }
       />
 
-      <Section id="sched-triggers" title="Cron triggers" tip="Triggers that start a session or a ticket on a schedule. Make and change them under Triggers.">
+      <Section id="sched-triggers" title="Cron triggers" tip="Triggers that start an agent or a ticket on a schedule. Make and change them under Triggers.">
         {triggers === null ? (
           <Loading />
         ) : triggers.length === 0 ? (

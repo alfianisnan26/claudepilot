@@ -56,7 +56,7 @@ function Event({ e, nowMs, onChanged }: { e: SpikeEvent; nowMs: number; onChange
         </p>
       </div>
       <Menu
-        label={`Snooze ${e.kind === 'rate' ? e.claudeName : (e.sessionTitle ?? 'this session')}`}
+        label={`Snooze ${e.kind === 'rate' ? e.claudeName : (e.sessionTitle ?? 'this agent')}`}
         align="right"
         trigger={<BellOff className={e.snoozedUntil ? 'size-4 text-gold' : 'size-4'} aria-hidden="true" />}
         items={[

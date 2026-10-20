@@ -124,7 +124,7 @@ export function TeamDialog({ teamId, manage, meId, open, onClose, onChanged }: {
                 <li key={s.id} className="flex min-h-11 flex-col justify-center px-3 py-1.5">
                   <span className="flex min-w-0 items-center gap-1.5 text-sm font-medium">
                     <Users className="size-4 shrink-0 text-muted" aria-hidden="true" />
-                    <span className="min-w-0 [overflow-wrap:anywhere]">{s.sessionTitle ?? 'A removed session'}</span>
+                    <span className="min-w-0 [overflow-wrap:anywhere]">{s.sessionTitle ?? 'A removed agent'}</span>
                   </span>
                   <span className="flex flex-wrap items-center gap-1 pt-0.5">
                     {s.caps.map((c) => (

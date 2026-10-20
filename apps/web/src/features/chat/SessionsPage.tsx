@@ -20,6 +20,7 @@ import { errorText } from '@/lib/api';
 import { chatApi } from './api';
 import { BulkBar, runBulk, type BulkAction } from './BulkBar';
 import { crewStatusGroup, selectable } from './crew';
+import { AgentTreeView } from './AgentTree';
 import { canFold, chipCounts, ofProgram, programCounts, withChange, withDefaultChip, type ChipChoice } from './listOrder';
 import { NewSessionDialog } from './NewSessionDialog';
 import { ArchiveSessionDialog, DeleteSessionDialog, EndSessionDialog, RenameSessionDialog } from './SessionDialogs';
@@ -34,12 +35,19 @@ import { useWorkspaceFacts } from './useWorkspaceFacts';
 const isBusy = (s: ChatSession) => s.state === 'working' || s.state === 'waiting';
 
 const VIEW_KEY = 'claudepilot.sessions-view';
-function savedView(): Pick<ViewState, 'groupBy'> {
+function savedView(): Pick<ViewState, 'groupBy'> & { tree: boolean } {
   try {
-    const raw = JSON.parse(localStorage.getItem(VIEW_KEY) ?? '{}') as { groupBy?: unknown };
-    return { groupBy: LIST_GROUP_BYS.includes(raw.groupBy as ListGroupBy) ? (raw.groupBy as ListGroupBy) : 'none' };
+    const raw = JSON.parse(localStorage.getItem(VIEW_KEY) ?? '{}') as { groupBy?: unknown; tree?: unknown };
+    return { groupBy: LIST_GROUP_BYS.includes(raw.groupBy as ListGroupBy) ? (raw.groupBy as ListGroupBy) : 'none', tree: raw.tree === true };
   } catch {
-    return { groupBy: 'none' };
+    return { groupBy: 'none', tree: false };
+  }
+}
+function saveView(v: { groupBy: ListGroupBy; tree: boolean }) {
+  try {
+    localStorage.setItem(VIEW_KEY, JSON.stringify(v));
+  } catch {
+    // private window: just not remembered
   }
 }
 
@@ -74,8 +82,10 @@ export function SessionsPage() {
   const counts = useMemo(() => chipCounts(shown ?? []), [shown]);
   // The chip opens on the first one with sessions in the order of attention (T-100: Needs you, In progress, Idle, Pinned, Ended, else All); once
   // the sessions are known, and only until the person picks one (the pick is in the same state, so a pending default never undoes it: T-321).
+  // T-1710: the Tree view (leads and their workers as connected cards), remembered with the grouping.
+  const [tree, setTree] = useState(() => savedView().tree);
   const [baseView, setView] = useState<Omit<ViewState, 'program'> & ChipChoice>(() => ({
-    ...savedView(),
+    groupBy: savedView().groupBy,
     filter: 'attention',
     query: '',
     archived: false,
@@ -101,13 +111,14 @@ export function SessionsPage() {
     if (nextProgram !== undefined) setProgram(nextProgram);
     setView((v) => {
       const merged = withChange(v, next);
-      try {
-        localStorage.setItem(VIEW_KEY, JSON.stringify({ groupBy: merged.groupBy }));
-      } catch {
-        // private window: just not remembered
-      }
+      saveView({ groupBy: merged.groupBy, tree });
       return merged;
     });
+  };
+  const changeTree = (on: boolean) => {
+    setTree(on);
+    if (on) stopSelecting();
+    saveView({ groupBy: baseView.groupBy, tree: on });
   };
 
   // All without another grouping is grouped under the status headings, in the chips' order (T-100); a worker that does not need you sits
@@ -156,7 +167,7 @@ export function SessionsPage() {
   const unarchive = async (s: ChatSession) => {
     try {
       await chatApi.unarchive(s.id);
-      toast('Back in Sessions');
+      toast('Back in Agents');
       await reload();
     } catch (e) {
       toast(errorText(e, 'Could not unarchive it.'), 'error');
@@ -225,7 +236,7 @@ export function SessionsPage() {
     setBusy(false);
     setBulk(null);
     const verb = bulk === 'end' ? 'Ended' : bulk === 'archive' ? 'Archived' : 'Deleted';
-    if (result.failed.length === 0) toast(`${verb} ${result.ok} ${result.ok === 1 ? 'session' : 'sessions'}`);
+    if (result.failed.length === 0) toast(`${verb} ${result.ok} ${result.ok === 1 ? 'agent' : 'agents'}`);
     else
       toast(
         `${verb} ${result.ok}; ${result.failed.length} failed: ${errorText(result.failed[0]!.error, 'Something went wrong.')}`,
@@ -238,13 +249,13 @@ export function SessionsPage() {
   return (
     <>
       <PageHeader
-        title="Sessions"
+        title="Agents"
         description="Chat with the Claude Code agents in your workspaces."
         action={
           sessions &&
           sessions.length > 0 && (
             <Button icon={<Plus className="size-4" />} onClick={() => setCreating(true)}>
-              <span className="hidden sm:inline">New session</span>
+              <span className="hidden sm:inline">New agent</span>
               <span className="sm:hidden">New</span>
             </Button>
           )
@@ -264,13 +275,18 @@ export function SessionsPage() {
           onChange={change}
           selecting={selecting}
           onSelect={() => setSelecting(true)}
+          tree={tree}
+          onTree={changeTree}
         />
       )}
+
+      {tree && sessions && sessions.length > 0 && <AgentTreeView sessions={sessions} query={view.query} onChanged={() => void reload()} />}
 
       {/* What waits on you, on top of the other chips' lists (All has it as its first heading, Needs you is it). */}
       {list &&
         sessions &&
         sessions.length > 0 &&
+        !tree &&
         !view.archived &&
         view.filter !== 'attention' &&
         !byStatus &&
@@ -278,21 +294,22 @@ export function SessionsPage() {
 
       {list &&
         sessions &&
+        !(tree && sessions.length > 0) &&
         (sessions.length === 0 ? (
           <EmptyState
             icon={<MessagesSquare className="size-6" />}
-            title="No sessions yet"
+            title="No agents yet"
             action={
               <Button icon={<Plus className="size-4" />} onClick={() => setCreating(true)}>
                 New session
               </Button>
             }
           >
-            Start a session to chat with Claude Code in one of your running workspaces.
+            Start an agent to chat with Claude Code in one of your running workspaces.
           </EmptyState>
         ) : list.shown === 0 ? (
-          <EmptyState icon={<MessagesSquare className="size-6" />} title={view.archived ? 'Nothing archived' : 'No sessions match'}>
-            {view.archived ? 'Archived sessions end and wait here, with their transcripts.' : 'Nothing fits this search and filter.'}{' '}
+          <EmptyState icon={<MessagesSquare className="size-6" />} title={view.archived ? 'Nothing archived' : 'No agents match'}>
+            {view.archived ? 'Archived agents end and wait here, with their transcripts.' : 'Nothing fits this search and filter.'}{' '}
             {(view.query || view.filter !== 'all' || view.archived || view.program) && (
               <button
                 type="button"
@@ -355,13 +372,13 @@ export function SessionsPage() {
       )}
 
       <NewSessionDialog open={creating} onClose={() => setCreating(false)} />
-      <EndSessionDialog session={ending} onClose={() => setEnding(null)} onEnded={() => (toast('Session ended'), void reload())} />
+      <EndSessionDialog session={ending} onClose={() => setEnding(null)} onEnded={() => (toast('Agent ended'), void reload())} />
       <ArchiveSessionDialog session={archiving} onClose={() => setArchiving(null)} onArchived={() => void reload()} />
       <ConfirmDialog
         open={!!bulk}
         title={bulkTitle(bulk, chosen)}
         description={bulkText(bulk, chosen)}
-        confirmLabel={bulk === 'end' ? 'End sessions' : bulk === 'archive' ? 'Archive' : 'Delete'}
+        confirmLabel={bulk === 'end' ? 'End agents' : bulk === 'archive' ? 'Archive' : 'Delete'}
         loading={busy}
         onConfirm={() => void runSelected()}
         onClose={() => !busy && setBulk(null)}
@@ -481,10 +498,10 @@ const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? o
 function bulkTitle(action: BulkAction | null, chosen: ChatSession[]): string {
   const n = chosen.length;
   return action === 'end'
-    ? `End ${plural(n, 'session')}?`
+    ? `End ${plural(n, 'agent')}?`
     : action === 'archive'
-      ? `Archive ${plural(n, 'session')}?`
-      : `Delete ${plural(n, 'session')}?`;
+      ? `Archive ${plural(n, 'agent')}?`
+      : `Delete ${plural(n, 'agent')}?`;
 }
 
 function bulkText(action: BulkAction | null, chosen: ChatSession[]): string {
@@ -495,5 +512,5 @@ function bulkText(action: BulkAction | null, chosen: ChatSession[]): string {
   const kept = trees && action !== 'end' ? ` The ${trees === 1 ? 'worktree folder stays' : `${trees} worktree folders stay`}.` : '';
   if (action === 'end') return `They stop; transcripts stay.${stops}`;
   if (action === 'archive') return `They end and move to Archived.${stops}${kept}`;
-  return `Transcripts and the sessions’ files in the workspaces are deleted. Can’t be undone.${stops}${kept}`;
+  return `Transcripts and the agents’ files in the workspaces are deleted. Can’t be undone.${stops}${kept}`;
 }

@@ -19,10 +19,10 @@ import { useLoad } from './useLoad';
 const MAX_INDENT = 4;
 
 const WHAT: Record<AttributionBy, string> = {
-  session: 'Each session’s requests, with the sessions it started rolled up into it (own is its requests alone). A sub-agent inside a request counts once, in that request.',
+  session: 'Each agent’s requests, with the agents it started rolled up into it (own is its requests alone). A sub-agent inside a request counts once, in that request.',
   workspace: 'Where the requests ran.',
-  ticket: 'The session’s ticket; a session started by another with no ticket of its own counts under its parent’s. A lead’s own dollars are split over the tickets of its workers (via lead).',
-  persona: 'The persona assigned to the workspace when the session’s process started, recorded from now on. Earlier requests are not recorded, and never guessed.',
+  ticket: 'The agent’s ticket; an agent started by another with no ticket of its own counts under its parent’s. A lead’s own dollars are split over the tickets of its workers (via lead).',
+  persona: 'The persona assigned to the workspace when the agent’s process started, recorded from now on. Earlier requests are not recorded, and never guessed.',
   claude: 'Which Claude the requests ran as.',
 };
 
@@ -120,7 +120,7 @@ export function AttributionTab() {
     <>
       <PageHeader
         title="Attribution"
-        description="Who spent what: each session, workspace, ticket or persona in the window. A session’s children are rolled up into it."
+        description="Who spent what: each agent, workspace, ticket or persona in the window. An agent’s children are rolled up into it."
         action={
           <ExportMenu
             items={[

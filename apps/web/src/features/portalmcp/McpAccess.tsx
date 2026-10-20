@@ -76,7 +76,7 @@ export function McpAccess() {
   };
 
   const setEnabled = (enabled: boolean) => act(() => portalMcpApi.updateSettings({ enabled }), enabled ? 'MCP on' : 'MCP off', 'Couldn’t change MCP.');
-  const setSessionControl = (sessionControl: boolean) => act(() => portalMcpApi.updateSettings({ sessionControl }), sessionControl ? 'Session control on' : 'Session control off', 'Couldn’t change it.');
+  const setSessionControl = (sessionControl: boolean) => act(() => portalMcpApi.updateSettings({ sessionControl }), sessionControl ? 'Agent control on' : 'Agent control off', 'Couldn’t change it.');
   const setAgent = (w: PortalAgentWorkspace, enabled: boolean) => act(() => portalMcpApi.setAgentAccess(w.workspaceId, enabled), enabled ? `Agents in ${w.name} get portal tools` : `Agent access off in ${w.name}`, 'Couldn’t change it.');
 
   if (failed && !state) return <LoadError onRetry={load} />;
@@ -102,7 +102,7 @@ export function McpAccess() {
               <>
                 MCP
                 <InfoTip label="About MCP">
-                  The portal’s own MCP endpoint: Claude Code, claude.ai or a script manage workspaces, pools and sessions with a token, and agents in a workspace work tickets. Every call is recorded. Off: the endpoint answers 404.
+                  The portal’s own MCP endpoint: Claude Code, claude.ai or a script manage workspaces, pools and agents with a token, and agents in a workspace work tickets. Every call is recorded. Off: the endpoint answers 404.
                 </InfoTip>
               </>
             }
@@ -169,7 +169,7 @@ export function McpAccess() {
       </section>
 
       <section>
-        <Heading title="Agents" tip="Agents in a switched-on workspace get portal tools (tickets, notes, proposals for you to review) through a token made for each session. It lives in that session’s process only and ends with it. Off by default." />
+        <Heading title="Agents" tip="Agents in a switched-on workspace get portal tools (tickets, notes, proposals for you to review) through a token made for each agent. It lives in that agent’s process only and ends with it. Off by default." />
         {agents === null ? (
           <RowsSkeleton rows={2} lines={1} trailing icon="rounded-2xl" />
         ) : agents.length === 0 ? (
@@ -237,11 +237,11 @@ export function McpAccess() {
                   tone={settings.sessionControl ? 'warning' : 'neutral'}
                   label={
                     <>
-                      Session control
-                      <InfoTip label="About session control">Admin tokens can start sessions and send them messages, which run commands in a workspace. Off: sessions can be read, interrupted and ended only.</InfoTip>
+                      Agent control
+                      <InfoTip label="About agent control">Admin tokens can start agents and send them messages, which run commands in a workspace. Off: agents can be read, interrupted and ended only.</InfoTip>
                     </>
                   }
-                  trailing={<Switch label="Session control" checked={settings.sessionControl} disabled={busy} onChange={(on) => (on ? setConfirm({ kind: 'sessions' }) : void setSessionControl(false))} />}
+                  trailing={<Switch label="Agent control" checked={settings.sessionControl} disabled={busy} onChange={(on) => (on ? setConfirm({ kind: 'sessions' }) : void setSessionControl(false))} />}
                 />
               </ul>
             </Card>
@@ -286,8 +286,8 @@ export function McpAccess() {
       <ConfirmDialog
         open={confirm?.kind === 'sessions'}
         tone="primary"
-        title="Allow session control?"
-        description="Admin tokens can start and steer sessions: code runs in a workspace."
+        title="Allow agent control?"
+        description="Admin tokens can start and steer agents: code runs in a workspace."
         confirmLabel="Allow"
         loading={busy}
         onConfirm={() => void setSessionControl(true)}
@@ -325,7 +325,7 @@ export function McpAccess() {
       <ConfirmDialog
         open={confirm?.kind === 'agent-off'}
         title={confirm?.kind === 'agent-off' ? `Turn off agent access in ${confirm.workspace.name}?` : 'Turn off?'}
-        description="Its sessions lose their portal tools now."
+        description="Its agents lose their portal tools now."
         confirmLabel="Turn off"
         loading={busy}
         onConfirm={() => confirm?.kind === 'agent-off' && void setAgent(confirm.workspace, false)}

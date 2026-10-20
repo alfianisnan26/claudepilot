@@ -140,7 +140,7 @@ export function UsageDialog({
       onClose={onClose}
       title={
         <span className="inline-flex items-center gap-1.5">
-          Usage <InfoTip label="About usage">Estimated at list prices from this session’s stored turns.</InfoTip>
+          Usage <InfoTip label="About usage">Estimated at list prices from this agent’s stored turns.</InfoTip>
         </span>
       }
       size="sm"

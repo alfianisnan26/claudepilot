@@ -109,7 +109,7 @@ export function ShareSessionDialog({ sessionId, bypass, open, onClose }: { sessi
   };
 
   return (
-    <Dialog open={open} onClose={onClose} title="Share session" size="sm">
+    <Dialog open={open} onClose={onClose} title="Share agent" size="sm">
       <div className="flex flex-col gap-3" data-share-session="">
         {shares.length > 0 && (
           <ul className="divide-y divide-line rounded-2xl border border-line">
@@ -162,7 +162,7 @@ export function ShareSessionDialog({ sessionId, bypass, open, onClose }: { sessi
           <legend className="mb-1.5 flex items-center gap-1 text-sm font-semibold text-ink-soft">
             Can
             <InfoTip label="About permissions">
-              Read: see this session live. Send: write to it. Approve: answer its approval requests. Stop: stop a running turn. Nothing else of the workspace.
+              Read: see this agent live. Send: write to it. Approve: answer its approval requests. Stop: stop a running turn. Nothing else of the workspace.
             </InfoTip>
           </legend>
           <div className="grid grid-cols-4 gap-1.5">

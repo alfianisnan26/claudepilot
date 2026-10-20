@@ -6,7 +6,7 @@ import { formatCost } from '@/lib/usage/format';
 
 /** The dimensions the tab offers. (By Claude and by model are the Requests tab's.) */
 export const BY_OPTIONS: { value: AttributionBy; label: string }[] = [
-  { value: 'session', label: 'Session' },
+  { value: 'session', label: 'Agent' },
   { value: 'workspace', label: 'Workspace' },
   { value: 'ticket', label: 'Ticket' },
   { value: 'persona', label: 'Persona' },

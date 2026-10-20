@@ -13,7 +13,7 @@ export const isFolderUntrusted = (e: unknown): boolean =>
 /** Cancel on the trust prompt: the refused action stays undone. Callers needn't announce it. */
 export class TrustDeclined extends Error {
   constructor() {
-    super('The folder isn’t trusted, so the session didn’t start.');
+    super('The folder isn’t trusted, so the agent didn’t start.');
     this.name = 'TrustDeclined';
   }
 }
@@ -73,7 +73,7 @@ export function TrustDetails({ scan, changed }: { scan: ChatFolderScan; changed?
       {changed && <Notice>The folder’s settings changed. This is what it would load now.</Notice>}
       <p className="text-[14px] text-ink-soft">
         {listed
-          ? 'When the session starts, Claude Code loads this from the folder’s own settings:'
+          ? 'When the agent starts, Claude Code loads this from the folder’s own settings:'
           : scan.empty
             ? 'Nothing from this folder’s Claude Code settings would load.'
             : 'The folder has its own Claude Code settings, but they name no MCP servers, hooks, plugins, allow rules or environment variables.'}

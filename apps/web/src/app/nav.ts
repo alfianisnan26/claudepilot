@@ -21,7 +21,7 @@ export const NAV: NavItem[] = [
   // Everything that waits for a person, from every module (attention PRD, T-146). In More until the deck (slice 2) takes a bar place.
   { id: 'attention', to: '/admin/attention', label: 'Needs you', icon: Hand, group: 'work' },
   { id: 'workspaces', to: '/admin/workspaces', label: 'Workspaces', icon: Boxes, group: 'work', bar: true },
-  { id: 'sessions', to: '/admin/sessions', label: 'Sessions', icon: MessagesSquare, group: 'work', bar: true },
+  { id: 'sessions', to: '/admin/sessions', label: 'Agents', icon: MessagesSquare, group: 'work', bar: true },
   // One queue of work for people and agents (Tickets PRD).
   { id: 'tickets', to: '/admin/tickets', label: 'Tickets', icon: Ticket, group: 'work', bar: true },
   // Vaults of Markdown notes people and agents share, with their graphs (Knowledge PRD).

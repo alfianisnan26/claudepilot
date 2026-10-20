@@ -41,7 +41,7 @@ export function RenameSessionDialog({ session, onClose }: { session: ChatSession
   };
 
   return (
-    <FormDialog open={!!session} onClose={() => !saving && onClose()} size="sm" title="Rename session" onSubmit={save} submitLabel="Save" saving={saving}>
+    <FormDialog open={!!session} onClose={() => !saving && onClose()} size="sm" title="Rename agent" onSubmit={save} submitLabel="Save" saving={saving}>
       <TextField
         label="Title"
         maxLength={CHAT_SESSION_TITLE_MAX}
@@ -203,7 +203,7 @@ function SessionAction({
           <legend className="sr-only">Its workers</legend>
           <p className="mb-1 flex items-center gap-1.5 text-[13px] font-semibold text-ink">
             <Bot className="size-3.5 shrink-0" aria-hidden="true" />
-            {running === 1 ? 'It started 1 session still running' : `It started ${running} sessions still running`}
+            {running === 1 ? 'It started 1 agent still running' : `It started ${running} agents still running`}
           </p>
           <label className="flex min-h-9 cursor-pointer items-center gap-2.5 text-[14px] text-ink">
             <input type="radio" name="workers" checked={!endThem} onChange={() => setEndThem(false)} className="size-4 accent-[var(--color-primary)]" />
@@ -235,12 +235,12 @@ export function DeleteSessionDialog({ session, onClose, onDeleted }: { session: 
   return (
     <SessionAction
       session={session}
-      title={`Delete ${session?.title || 'this session'}?`}
+      title={`Delete ${session?.title || 'this agent'}?`}
       text={
         <>
           Deletes the transcript and its files. This can’t be undone.
           <InfoTip label="Details" className="ml-1 align-middle">
-            {running ? 'Claude Code stops working on it first. ' : ''}Images and the session’s files in the workspace go too. Claude Code’s own transcript stays until its cleanup (30 days by default). Usage history is kept.
+            {running ? 'Claude Code stops working on it first. ' : ''}Images and the agent’s files in the workspace go too. Claude Code’s own transcript stays until its cleanup (30 days by default). Usage history is kept.
           </InfoTip>
         </>
       }
@@ -261,7 +261,7 @@ export function ArchiveSessionDialog({ session, onClose, onArchived }: { session
   return (
     <SessionAction
       session={session}
-      title={`Archive ${session?.title || 'this session'}?`}
+      title={`Archive ${session?.title || 'this agent'}?`}
       text="Claude Code stops working on it and the chat ends. It moves to Archived, where the transcript stays."
       confirmLabel="Archive"
       danger={false}
@@ -280,9 +280,9 @@ export function EndSessionDialog({ session, onClose, onEnded }: { session: ChatS
   return (
     <SessionAction
       session={session}
-      title={`End ${session?.title || 'this session'}?`}
+      title={`End ${session?.title || 'this agent'}?`}
       text="The chat is closed and Claude Code stops working on it. The transcript stays for your records."
-      confirmLabel="End session"
+      confirmLabel="End agent"
       worktree={false}
       run={async (s, _worktree, children) => {
         await chatApi.end(s.id, children);

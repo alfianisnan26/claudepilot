@@ -12,7 +12,7 @@ import { MATRIX_KINDS } from './matrix';
 import { Titled } from './Titled';
 import { DURATION_LABEL, expiryText, HAND_SCOPES, hushedText, MUTE_SCOPE_LABEL, muteLine, muteWhere, SCOPE_HINT } from './mutes';
 
-const GUARD_WHY = 'Approvals stop a session until somebody answers, and a deploy waits for a person. Muting them can leave work stuck with nobody told.';
+const GUARD_WHY = 'Approvals stop an agent until somebody answers, and a deploy waits for a person. Muting them can leave work stuck with nobody told.';
 
 /** Settings > Muted: the person's rules in words, what each hushed and when it ends; remove one, add one by hand, Unmute all. */
 export function MutedSection({ destinations }: { destinations: NotifyDestination[] }) {

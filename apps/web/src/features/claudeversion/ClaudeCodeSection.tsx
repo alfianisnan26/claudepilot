@@ -141,7 +141,7 @@ export function ClaudeCodeSection({ workspace: w }: { workspace: Workspace }) {
       <ConfirmDialog
         open={rollingBack}
         title={`Roll back to ${info.previous?.version ?? 'the previous image'}?`}
-        description="Recreates the workspace from the previous image and keeps its home folder. Running sessions and terminals are interrupted."
+        description="Recreates the workspace from the previous image and keeps its home folder. Running agents and terminals are interrupted."
         confirmLabel="Roll back"
         loading={busy}
         onConfirm={() => void rollback()}

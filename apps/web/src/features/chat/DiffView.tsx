@@ -210,7 +210,7 @@ export function DiffView({ sessionId, active }: { sessionId: string; active: boo
           <PatchSkeleton />
         ) : diff.repo === null ? (
           <Empty icon={<GitBranch className="size-6" />} title="Not a git repository">
-            The session’s folder isn’t in a git repository, so there are no changes to show.
+            The agent’s folder isn’t in a git repository, so there are no changes to show.
           </Empty>
         ) : diff.files.length === 0 ? (
           <Empty icon={<FileDiff className="size-6" />} title="No changes">

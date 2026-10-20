@@ -198,7 +198,7 @@ export function WorkspaceSheet({
             label={
               <span className="inline-flex items-center gap-1">
                 Name
-                <InfoTip label="About renaming">Renaming changes only the name shown. Nothing running is touched: its container or pod, its files and its sessions stay as they are, and the old name keeps working.</InfoTip>
+                <InfoTip label="About renaming">Renaming changes only the name shown. Nothing running is touched: its container or pod, its files and its agents stay as they are, and the old name keeps working.</InfoTip>
               </span>
             }
           >

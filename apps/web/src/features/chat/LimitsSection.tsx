@@ -118,7 +118,7 @@ export function LimitsSection({ session, onRestart }: { session: ChatSession; on
         <p id={labelId} className="inline-flex min-w-0 flex-1 items-center gap-1 text-[15px] font-semibold text-ink">
           Workers
           <InfoTip label="About workers">
-            How many sessions this one may run at once as its workers (started over the portal). Default follows Settings › Sessions, which is
+            How many agents this one may run at once as its workers (started over the portal). Default follows Settings › Sessions, which is
             also the ceiling; None: it may not start any. Applies to its next worker.
           </InfoTip>
         </p>

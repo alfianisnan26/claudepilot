@@ -25,7 +25,7 @@ export function useNotifyWhenDone(sessionId: string | undefined): { done: boolea
     notifyApi.setSessionDone(sessionId, next).then(
       () => {
         setDone(next);
-        toast(next ? 'You will hear when it is done' : 'Not notifying for this session');
+        toast(next ? 'You will hear when it is done' : 'Not notifying for this agent');
       },
       (e: unknown) => toast(errorText(e, 'Could not change it.'), 'error'),
     );

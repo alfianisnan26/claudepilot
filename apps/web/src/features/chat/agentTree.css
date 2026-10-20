@@ -1,0 +1,132 @@
+/*
+ * T-1710: the Agents tree's connectors. A phone (and every level below the lead's workers) draws an indented column: one line down the
+ * left and an elbow into each card. From 1024 px the lead's workers sit in a row under the lead, joined by a bar with a drop into each
+ * card, like the owner's reference (docs/design/agent-tree-reference.png). The lines are the primary colour, softened, in both themes.
+ */
+.at-tree {
+  --at-line: color-mix(in oklab, var(--color-primary) 38%, transparent);
+  --at-indent: 14px;
+  --at-elbow: 30px; /* from a card's top to the middle of its name row */
+  --at-card: 18.5rem; /* a lead's and a worker's card from 1024 px */
+}
+
+/* A column: the children of a card, indented under it. */
+.at-col {
+  display: flex;
+  flex-direction: column;
+  margin-left: var(--at-indent);
+}
+.at-col > .at-item {
+  position: relative;
+  padding-top: 10px;
+  padding-left: calc(var(--at-indent) + 4px);
+}
+.at-col > .at-item::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: var(--at-indent);
+  height: calc(10px + var(--at-elbow));
+  border-left: 2px solid var(--at-line);
+  border-bottom: 2px solid var(--at-line);
+  border-bottom-left-radius: 10px;
+}
+.at-col > .at-item:not(:last-child)::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  border-left: 2px solid var(--at-line);
+}
+
+@media (min-width: 64rem) {
+  .at-tree {
+    --at-indent: 18px;
+  }
+  .at-root {
+    align-items: center;
+  }
+  /* The lead's workers: a row, with a bar over it and a drop into each card. */
+  .at-tree .at-row {
+    position: relative;
+    flex-direction: row;
+    align-items: flex-start;
+    justify-content: center;
+    margin-left: 0;
+  }
+  .at-tree .at-row::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 50%;
+    height: 16px;
+    border-left: 2px solid var(--at-line);
+  }
+  /* As wide as a card (the cards below a worker fit inside it), so each drop lands in the middle of its card. */
+  .at-tree .at-row > .at-item {
+    flex: none;
+    width: calc(var(--at-card) + 16px);
+    padding: 32px 8px 0;
+  }
+  .at-tree .at-row > .at-item::before,
+  .at-tree .at-row > .at-item::after {
+    content: '';
+    position: absolute;
+    top: 16px;
+    bottom: auto;
+    width: 50%;
+    height: 16px;
+    border: 0 solid var(--at-line);
+    border-top-width: 2px;
+    border-radius: 0;
+  }
+  .at-tree .at-row > .at-item::before {
+    left: 0;
+  }
+  .at-tree .at-row > .at-item::after {
+    left: 50%;
+    border-left-width: 2px;
+  }
+  .at-tree .at-row > .at-item:first-child::before {
+    border-top-width: 0;
+  }
+  .at-tree .at-row > .at-item:first-child::after {
+    border-top-left-radius: 10px;
+  }
+  .at-tree .at-row > .at-item:last-child::after {
+    border-top-width: 0;
+    left: auto;
+    right: 50%;
+    width: 50%;
+    border-left-width: 0;
+  }
+  .at-tree .at-row > .at-item:last-child::before {
+    width: 50%;
+    border-right-width: 2px;
+    border-top-right-radius: 10px;
+  }
+  /* One worker: a straight drop. */
+  .at-tree .at-row > .at-item:only-child::before {
+    display: none;
+  }
+  .at-tree .at-row > .at-item:only-child::after {
+    left: 50%;
+    right: auto;
+    border-top-width: 0;
+    border-left-width: 2px;
+    border-radius: 0;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .at-spin {
+    animation: at-spin 1.6s linear infinite;
+  }
+}
+@keyframes at-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

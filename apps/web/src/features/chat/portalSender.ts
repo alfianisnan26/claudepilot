@@ -19,7 +19,7 @@ export function portalSender(actor: string, label: string | undefined): PortalSe
   const head = ci ? 'ci' : actor.slice(0, sep);
   const id = ci ? actor.slice(actor.startsWith('ci:') ? 3 : 'portal:ci-'.length) : actor.slice(sep + 1);
   if (head === 'ticket') return { kind: 'ticket', id, who: `ticket ${label ?? id}` };
-  if (head === 'session') return { kind: 'session', id, who: label ? `session “${label}”` : 'another session' };
+  if (head === 'session') return { kind: 'session', id, who: label ? `agent “${label}”` : 'another agent' };
   // A bumped run is labelled by its number ("From CI #12"); a report says just "CI".
   if (ci) return { kind: 'ci', id, who: !label || label === 'CI' ? 'CI' : label.startsWith('#') ? `CI ${label}` : `CI · ${label}` };
   // Session delegation: a person the session was shared with, named by their account's email.

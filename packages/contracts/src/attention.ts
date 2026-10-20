@@ -24,7 +24,7 @@ export const ATTENTION_KIND_LABEL: Record<AttentionKind, string> = {
   skill_version: 'Skills',
   ci_deploy: 'Deploys',
   ticket_approval: 'Tickets',
-  tool_approval: 'Sessions',
+  tool_approval: 'Agents',
   keepgoing_down: 'Down',
   persona_proposal: 'Personas',
   ci_upstream: 'Upstream',

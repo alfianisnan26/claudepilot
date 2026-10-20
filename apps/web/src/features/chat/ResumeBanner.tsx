@@ -25,9 +25,9 @@ export function ResumeBanner({ session, onResume, connected }: { session: ChatSe
     try {
       await onResume();
     } catch (e) {
-      if (isIneligible(e)) setBlocked(errorText(e, 'Sessions can’t run in this workspace right now.'));
+      if (isIneligible(e)) setBlocked(errorText(e, 'Agents can’t run in this workspace right now.'));
       // Cancelled on "Trust this folder?": nothing to report.
-      else if (!isTrustDeclined(e)) toast(errorText(e, 'Could not resume the session.'), 'error');
+      else if (!isTrustDeclined(e)) toast(errorText(e, 'Could not resume the agent.'), 'error');
     } finally {
       setBusy(false);
     }

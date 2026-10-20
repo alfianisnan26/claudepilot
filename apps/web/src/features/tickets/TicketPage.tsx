@@ -128,8 +128,8 @@ export function TicketPage() {
                 </span>
               )}
             </span>
-            <InfoTip label="About an ended session">
-              Nobody works this ticket now. A few minutes after the session ended, the portal moves it by itself: to the session that continues the track, else back to the agents’ queue. A session that comes back keeps it.
+            <InfoTip label="About an ended agent">
+              Nobody works this ticket now. A few minutes after the agent ended, the portal moves it by itself: to the agent that continues the track, else back to the agents’ queue. An agent that comes back keeps it.
             </InfoTip>
           </div>
         )}
@@ -227,7 +227,7 @@ export function TicketPage() {
 
         {detail.sessions.length > 0 && (
           <Card className="p-4 sm:p-5">
-            <h2 className="mb-2 text-[13px] font-semibold text-muted">Sessions</h2>
+            <h2 className="mb-2 text-[13px] font-semibold text-muted">Agents</h2>
             <ul className="divide-y divide-line">
               {detail.sessions.map((s) => (
                 <li key={s.id}>
@@ -260,7 +260,7 @@ export function TicketPage() {
         onClose={() => setDialog(null)}
         onStarted={(r) => {
           setDialog(null);
-          toast(`Session started for ${t.id}`);
+          toast(`Agent started for ${t.id}`);
           navigate(`/admin/sessions/${r.session.id}`);
         }}
       />
@@ -269,7 +269,7 @@ export function TicketPage() {
         onClose={() => setDialog(null)}
         onBumped={(r) => {
           setDialog(null);
-          toast(`Bumped into ${r.session.title || 'the session'}`);
+          toast(`Bumped into ${r.session.title || 'the agent'}`);
           void load();
         }}
       />
@@ -336,7 +336,7 @@ function sentence(e: TicketEvent): string {
   const label = (v: unknown, map: Record<string, string>) => (typeof v === 'string' ? (map[v] ?? v) : '');
   const assignee = (v: unknown) => {
     const a = v as { kind?: string; name?: string; sessionId?: string } | null;
-    return !a ? 'the agents’ queue' : a.kind === 'user' ? (a.name === 'admin' ? 'you' : (a.name ?? 'a person')) : 'a session';
+    return !a ? 'the agents’ queue' : a.kind === 'user' ? (a.name === 'admin' ? 'you' : (a.name ?? 'a person')) : 'an agent';
   };
   switch (e.kind) {
     case 'created':
@@ -363,11 +363,11 @@ function sentence(e: TicketEvent): string {
       if (d.fallback) return fallbackSentence(who, d);
       return d.claimed ? `${who} claimed it` : `${who} assigned it to ${assignee(d.to)}`;
     case 'session_started':
-      return `${who} started a session for it`;
+      return `${who} started an agent for it`;
     case 'bumped':
-      return `${who} bumped it into ${typeof d.sessionTitle === 'string' && d.sessionTitle ? `“${d.sessionTitle}”` : 'a session'} (${d.mode === 'prioritise' ? BUMP_MODE_LABEL.prioritise : BUMP_MODE_LABEL.ask})`;
+      return `${who} bumped it into ${typeof d.sessionTitle === 'string' && d.sessionTitle ? `“${d.sessionTitle}”` : 'an agent'} (${d.mode === 'prioritise' ? BUMP_MODE_LABEL.prioritise : BUMP_MODE_LABEL.ask})`;
     case 'session_ended':
-      return `The session ended${typeof d.reason === 'string' && d.reason ? `: ${d.reason}` : ''}`;
+      return `The agent ended${typeof d.reason === 'string' && d.reason ? `: ${d.reason}` : ''}`;
     case 'attachment':
       return d.removed ? `${who} removed ${typeof d.name === 'string' ? d.name : 'a file'}` : `${who} attached ${typeof d.name === 'string' ? d.name : 'a file'}${typeof d.size === 'number' ? ` (${fileSize(d.size)})` : ''}`;
     case 'ci':

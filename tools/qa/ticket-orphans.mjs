@@ -69,7 +69,7 @@ for (const cfg of MATRIX) {
       'with its time',
       await b.eval(`/Its session ended\\s*·\\s*\\S/.test(document.querySelector('[role=status]')?.innerText ?? '')`),
     );
-    check(cfg.name, 'the row badge', await b.eval(`document.body.innerText.includes('Session ended')`));
+    check(cfg.name, 'the row badge', await b.eval(`document.body.innerText.includes('Agent ended')`));
     const tip = await b.eval(
       `(() => { const e = document.querySelector('[role=status] button'); if (!e) return null; const r = e.getBoundingClientRect(); return { w: Math.round(r.width), h: Math.round(r.height) }; })()`,
     );

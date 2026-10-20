@@ -246,12 +246,12 @@ export function eventTone(e: Pick<RepoEvent, 'kind' | 'data'>): Tone {
 export function actorLabel(actor: string, label?: string | null): string {
   if (actor === 'ui') return 'Person';
   if (actor === 'workspace') return 'Workspace';
-  if (actor.startsWith('session:')) return 'Session';
+  if (actor.startsWith('session:')) return 'Agent';
   if (actor.startsWith('ticket:')) return `Ticket ${actor.slice('ticket:'.length)}`;
   if (actor.startsWith('portal-mcp:')) return label?.trim() ? `MCP client “${label.trim()}”` : 'Agent token';
   if (actor === 'portal:sync') return 'Keep synced';
   if (actor === 'portal:timer') return 'Timer';
-  if (actor === 'portal:session') return 'Session turn';
+  if (actor === 'portal:session') return 'Agent turn';
   if (actor.startsWith('portal:')) return 'Portal';
   return actor.slice(0, 24);
 }
@@ -310,7 +310,7 @@ export function detailsOf(e: Pick<RepoEvent, 'kind' | 'data'>): string[] {
     default:
       break;
   }
-  if (d.sessions?.length) out.push(`Sessions there: ${d.sessions.length}`);
+  if (d.sessions?.length) out.push(`Agents there: ${d.sessions.length}`);
   return out;
 }
 

@@ -52,7 +52,7 @@ export function PersonaEditor({ value, onChange, errors, disabled, pool, name }:
 
       <CodeArea
         label="Chat prompt"
-        tip="Added to the system prompt of sessions started from the portal’s chat, never of terminals. A resumed conversation keeps the one it started with until it is compacted."
+        tip="Added to the system prompt of agents started from the portal’s chat, never of terminals. A resumed conversation keeps the one it started with until it is compacted."
         value={value.chatPrompt}
         onChange={(chatPrompt) => onChange({ ...value, chatPrompt })}
         error={errors.chatPrompt}
@@ -91,7 +91,7 @@ export function PersonaEditor({ value, onChange, errors, disabled, pool, name }:
       </div>
 
       <div className="flex flex-col gap-2">
-        <LabelRow label="Starts on" tip="Where sessions begin. Users can change the model and the effort in a session, and the workspace’s limits still apply." />
+        <LabelRow label="Starts on" tip="Where agents begin. Users can change the model and the effort in an agent, and the workspace’s limits still apply." />
         <div className="grid gap-4 sm:grid-cols-2">
           <ModelPicker label="Model" value={value.model ?? ''} onChange={(model) => onChange({ ...value, model: model || null })} error={errors.model} disabled={disabled} />
           <div className="flex flex-col gap-1.5">

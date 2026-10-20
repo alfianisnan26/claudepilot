@@ -95,7 +95,7 @@ export function BypassDialog({
         confirming ? (
           <span className="inline-flex items-center gap-1">
             Turn on Bypass?
-            <InfoTip label="About Bypass">Deny rules still apply. Bypass turns off when the session sleeps, restarts or moves to another Claude.</InfoTip>
+            <InfoTip label="About Bypass">Deny rules still apply. Bypass turns off when the agent sleeps, restarts or moves to another Claude.</InfoTip>
           </span>
         ) : (
           'Enter the server code'

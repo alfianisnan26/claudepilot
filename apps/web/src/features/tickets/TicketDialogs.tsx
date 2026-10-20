@@ -374,7 +374,7 @@ export function AssignDialog({
     try {
       const assignee: TicketAssignee | null =
         who === 'queue' ? null : who === 'user' ? { kind: 'user', name: name.trim() || 'admin' } : { kind: 'session', sessionId };
-      if (who === 'session' && !sessionId) return setError('Pick a session.');
+      if (who === 'session' && !sessionId) return setError('Pick an agent.');
       onSaved(await ticketsApi.update(ticket.id, { assignee }));
     } catch (e) {
       setError(fieldErrors(e, ['assignee'] as const).fields.assignee ?? errorText(e, 'Couldn’t assign it.'));
@@ -401,16 +401,16 @@ export function AssignDialog({
           options={[
             { value: 'queue', label: 'Unassigned' },
             { value: 'user', label: 'Person' },
-            { value: 'session', label: 'Session' },
+            { value: 'session', label: 'Agent' },
           ]}
         />
         {who === 'user' && <TextField label="Name" autoComplete="off" value={name} onChange={(e) => setName(e.target.value)} />}
         {who === 'session' && (
           <Select
-            label="Session"
+            label="Agent"
             value={sessionId}
             onChange={setSessionId}
-            placeholder={sessions.length ? 'Pick a session' : 'No running sessions'}
+            placeholder={sessions.length ? 'Pick an agent' : 'No running agents'}
             options={sessions.map((s) => ({ value: s.id, label: `${s.title} · ${s.workspaceId}` }))}
           />
         )}
@@ -556,8 +556,8 @@ export function StartSessionDialog({
       const details = (e as { details?: { folder?: string } }).details;
       setError(
         code === 'FOLDER_UNTRUSTED'
-          ? `${details?.folder ? `${details.folder} isn’t` : 'That folder isn’t'} trusted yet. Start a session there from Sessions once.`
-          : errorText(e, 'Couldn’t start the session.'),
+          ? `${details?.folder ? `${details.folder} isn’t` : 'That folder isn’t'} trusted yet. Start an agent there from Agents once.`
+          : errorText(e, 'Couldn’t start the agent.'),
       );
     } finally {
       setSaving(false);
@@ -569,10 +569,10 @@ export function StartSessionDialog({
     <FormDialog
       open={!!ticket}
       onClose={onClose}
-      title="Start a session"
+      title="Start an agent"
       description={ticket ? `${ticket.id} · ${ticket.summary}` : undefined}
       onSubmit={submit}
-      submitLabel="Start session"
+      submitLabel="Start agent"
       submitDisabled={!workspaceId}
       saving={saving}
       error={error}
@@ -599,7 +599,7 @@ export function StartSessionDialog({
         <div className="flex items-center gap-3">
           <p className="flex min-w-0 flex-1 items-center gap-1 text-sm font-semibold">
             Own git worktree
-            <InfoTip label="About worktrees">The session gets its own branch, so other work isn’t touched.</InfoTip>
+            <InfoTip label="About worktrees">The agent gets its own branch, so other work isn’t touched.</InfoTip>
           </p>
           <Switch label="Own git worktree" checked={worktree} onChange={setWorktree} />
         </div>
@@ -615,8 +615,8 @@ export function StartSessionDialog({
 
 /** The two ways, in the dialog's one ⓘ (tickets PRD FR28). */
 const BUMP_HELP: Record<BumpMode, string> = {
-  prioritise: 'the session takes it as its next work. It is assigned to that session and set in progress.',
-  ask: 'a question. The session answers in a comment here; the ticket stays as it is.',
+  prioritise: 'the agent takes it as its next work. It is assigned to that agent and set in progress.',
+  ask: 'a question. The agent answers in a comment here; the ticket stays as it is.',
 };
 
 /** Bump (FR28): the shared Bump dialog over this ticket's sessions; its assigned session comes first. */
