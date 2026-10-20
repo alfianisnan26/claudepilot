@@ -37,6 +37,7 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - 13 tickets with a gate-form PASS wait for the general lead's stg merge gate (T-1703 c18753; T-367, T-1021 first). Workers still refused Bash (T-553 c18740, c17308).
 
 ## DECISIONS
+- 04:11Z D-89 (QA judges screenshots by eye) in briefs/mo/common.md and qa-lp2.md, lane told (T-1703 c19026). D-90: T-991 queued after in_review.
 - 03:52Z fadlilah session 44 %, pace projects out about 05:13Z (claude_usage 03:51Z, resets 07:20Z). D-43: hold at 2 sub-agents (mo-be-602 backend part, mo-qa-1801 items 1, 2 and 4); no new builder until one returns. T-1801 items 1 and 4 returned (e45d5f9, 508e2d2, c18948).
 - 03:34Z Coordinator backlog rule (open over 150): no follow-up tickets; closing beats starting; WIP 3 running (ListAgents), nothing new until a slot frees (c18924). Error: closed T-1828 before the fold-back comment landed; T-851 is closed so it was refused; c18924 and T-1828's summary are false, corrected in c18925. Brief rule added: never close a follow-up before its content is recorded.
 - 03:10Z Moved to fadlilah (10 %, resets 07:20Z). Found: mo-qa-scr, mo-qa-be done (verdicts posted), mo-qa-lp cut before T-1629. Closed T-851 (minor test gaps split to T-1828) and T-907 (criteria met on stg). Resumed T-1629 with T-1521; T-822 and T-1611 item 2 dispatched (stg-lab reachable by Playwright Job, so "not verified" is no longer the default there).
@@ -71,7 +72,7 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 
 ## NEXT
 1. Next free slot (harness cap: 3 sub-agents; closing beats starting): the oldest in_review I can move first (T-1662, T-1611, T-1521, T-822), then builder T-1826 (390 matrix labels: cellRoom by column width) or T-1809 (race test first, D-81) after T-1591 merges; T-1801; T-602. WIP far over 5 from the D-88 hand-over: finish before new builds. Then T-1803 commit + `npm run ci` Job once the coordinator answers c18623; then QA of other sessions' builds. Brief rule: quote the whole job-run command (mo-qa-1593 near miss, T-1703).
-2. Then: T-1007 (ai-worker, after T-1162 lands), T-1591 QA Job, T-1593 backend suite Job, T-1012 branch question.
+2. Then: T-991 (D-90 option 2, ai-worker billing: charge held calls after 400+800 cap exhaustion, 5xx stays free; test first, after or on T-1591; D-81 money: blind review + 2nd QA + post-deploy; plan on T-1703, T-991 refuses comments until claimed), T-1007 (ai-worker, after T-1162 lands), T-1591 QA Job, T-1593 backend suite Job, T-1012 branch question.
 3. When a non-lineage QA exists: T-1574, T-1103, T-553, T-1802 (819bf775) QA and gate asks.
 3. After T-1574's QA and merge: gate asks T-1352 f92828f, T-1416 65d952d, T-1435 f424b1c; then the v14 bump commits (compute catalog.py, backend metocean-catalog.ts), backend migrations check, stg-deploy backend then compute, cf-logs check.
 4. Need QA on head: T-1591 (billing, Job + blind review stands), T-1593 (backend suite Job, plugin sha), T-1012 (which branch is the fix: 4f9d95a on ticket/T-1012-r2-pull vs stg; merge-base denied in the pod).
