@@ -47,13 +47,13 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - 05:15Z Coordinator rule: outside-family QA comes from peer leads by QA-ASK on T-84 (Lab QAs Metocean, Metocean QAs Business), answered before new build work. Asked 8 tickets (c19263, c19268). Leads cannot message each other (NOT_FOUND), T-84 c19264.
 - 04:15Z D-91 (UI/UX: QA suggests, lead decides, batched per page or app). 04:11Z D-89 (QA judges shots by eye). D-90: T-991 after in_review.
 - 04:13Z T-602 merges only with the T-1704 v14 bump (c19044); post-deploy screen check before close.
-- 03:34Z Backlog rule (open over 150): no follow-up tickets, closing beats starting (c18924).
 - 02:31Z No ">" in commit text; add and commit as separate calls (c18776, c18911).
 - 01:40Z T-1591 held (money path D-81). 16:10Z (10-19) one v14 batch; no compute deploy before both v14 bumps.
 - 16:35Z Gate-copy rule (c17443): post-deploy gaps restated as PASS with gaps quoted.
 - 16:20Z stg Worker logs via cf-logs.sh (read-only).
 
 ## FOR THE COORDINATOR
+- T-1703 c19978: cf-logs.sh refused for the lead (policy-rule-guard "writes a rule file"); blocks T-1848 item 6. c19970: QA read .claude/settings.json, blocked. c19954: QA python3 -c slip.
 - T-1703 c19654: Lab QA verdicts on Metocean work refused on lineage (T-84 c19607); name another outside-QA unit. Blocks T-1435, T-991, T-1591, T-1856 merges.
 - T-1703 c19606: lane mo-qa-ui-1848 got refused reads another way (read-only); probation or note.
 - T-1848 c19386: allow list grants QA lanes `qa/T-*` pushes, but konfersi-lab-plugin protects `qa/*` server-side; align or name the prefix.
@@ -70,7 +70,7 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - none (no production or uat action pending). T-1662 sweep note: D-77, a migration on stg D1 shared with uat needs a person's go; checked in the sweep read.
 
 ## NEXT
-0. When a slot frees: Explain stg log read (c19704); blind reviews for the merge gate once the outside QA route exists.
+0. Explain stg log read refused by hook (T-1703 c19978, T-1848 c19979): waits for the coordinator; blind reviews for the merge gate once the outside QA route exists.
 1. Business QA-ASK T-1805 ab56e48 (T-84 c19376, c19504): outside QA PASS WITH GAPS c19619 (suite b4530166 rc=0 2125; guard test only on ticket/T-1805-qa, builder must move it to src/__tests__); T-84 c19620. Blind review MERGE c19564 (proof Job 7aa8d5f3: 12/12 at ab56e48, 10/12 red at d55dcc5; 5 minors: guard and rollback untested, boundary 29/31 only). Then any newer Business QA-ASK.
 2. Lab stopped Metocean QA (c19607; T-84 c19655). Wait for the coordinator's new route (T-1703 c19654), then re-ask T-1435 (reuse Job 6309c594), T-991, T-1591, T-1856.
 3. mo-be-1435, mo-qa-1658, mo-qa-ui-1848 returns (then Mission Planning, report builder lanes): integrate; T-1435 then capture re-run on the fix. hasyim caps sub-agents at 3.
