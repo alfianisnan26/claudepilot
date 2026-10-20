@@ -73,6 +73,41 @@ export function placePopover(i: PlaceInput): Placement {
   return { top, left, width, maxHeight: height < i.height ? Math.max(0, room(side)) : null, side };
 }
 
+/**
+ * T-1825: a popover beside an element (the Agents tree's failed list next to the lead's card, not over its row): on its right when the
+ * visible width has room for all of it, else on its left, else null (the caller falls back to {@link placePopover}). Its top lines up with
+ * the element's, kept inside the visible height; taller than that, it scrolls inside.
+ */
+export function placeBeside(i: {
+  target: { top: number; bottom: number; left: number; right: number };
+  width: number;
+  height: number;
+  view: Box;
+  safe: Insets;
+  margin?: number;
+  gap?: number;
+}): { top: number; left: number; width: number; maxHeight: number | null; side: 'right' | 'left' } | null {
+  const margin = i.margin ?? 12;
+  const gap = i.gap ?? 12;
+  const minX = i.view.left + i.safe.left + margin;
+  const maxX = i.view.left + i.view.width - i.safe.right - margin;
+  let side: 'right' | 'left';
+  let left: number;
+  if (maxX - (i.target.right + gap) >= i.width) {
+    side = 'right';
+    left = i.target.right + gap;
+  } else if (i.target.left - gap - minX >= i.width) {
+    side = 'left';
+    left = i.target.left - gap - i.width;
+  } else return null;
+  const minY = i.view.top + i.safe.top + margin;
+  const maxY = i.view.top + i.view.height - i.safe.bottom - margin;
+  const room = Math.max(0, maxY - minY);
+  const height = Math.min(i.height, room);
+  const top = Math.min(Math.max(i.target.top, minY), maxY - height);
+  return { top, left, width: i.width, maxHeight: height < i.height ? room : null, side };
+}
+
 /** The visible area: the visual viewport where there is one (the keyboard and a zoom shrink it), else the window. */
 export function visibleBox(): Box {
   const vv = typeof window !== 'undefined' ? window.visualViewport : null;

@@ -23,7 +23,7 @@ export interface ChatManagerDeps {
     /** T-968: a General Manager is never a target of another manager's message. */
     isManager?(id: string): boolean;
   };
-  /** The global caps (Settings › Sessions); null when none are installed. */
+  /** The global caps (Settings › Running agents); null when none are installed. */
   caps: () => AgentCaps | null;
   now?: () => number;
 }

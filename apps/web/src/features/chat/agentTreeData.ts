@@ -154,6 +154,102 @@ export function elapsedLabel(ms: number): string {
 /** "$1.52", "$0.04", "$0.003". */
 export const costLabel = (usd: number): string => `$${usd.toFixed(usd > 0 && usd < 0.01 ? 3 : 2)}`;
 
+/** T-1825: a cost in two parts, so the cents read quieter than the dollars: "$1.52" → "$1" and ".52". */
+export function costParts(usd: number): { whole: string; fraction: string } {
+  const label = costLabel(usd);
+  const dot = label.indexOf('.');
+  return dot < 0 ? { whole: label, fraction: '' } : { whole: label.slice(0, dot), fraction: label.slice(dot) };
+}
+
+/** T-1825: who makes a card's model, for its glyph: `claude` (a Claude family or id), `other` (an id the portal cannot read), or null (no report yet). */
+export function modelMaker(model: string | null | undefined): 'claude' | 'other' | null {
+  const v = model?.trim();
+  if (!v) return null;
+  return /\b(claude|fable|opus|sonnet|haiku)\b/i.test(v) || /claude-/i.test(v) ? 'claude' : 'other';
+}
+
+/**
+ * T-1825: the icons on a card, each a fact of the session (never a guess): `branch` (it works in its own worktree), `bypass` (Bypass is on).
+ * The session carries no list of its tools or MCP servers, so none is drawn.
+ */
+export type AgentFacet = 'branch' | 'bypass';
+
+export function agentFacets(s: Pick<ChatSession, 'worktree' | 'mode'>): AgentFacet[] {
+  const out: AgentFacet[] = [];
+  if (s.worktree) out.push('branch');
+  if (s.mode === 'bypassPermissions') out.push('bypass');
+  return out;
+}
+
+/** T-1825: which edges of a sideways scroller have more to see (the edge fade), with a pixel of slack for sub-pixel scroll positions. */
+export function edgeFade(scrollLeft: number, scrollWidth: number, clientWidth: number): { left: boolean; right: boolean } {
+  if (scrollWidth - clientWidth <= 1) return { left: false, right: false };
+  return { left: scrollLeft > 1, right: scrollLeft + clientWidth < scrollWidth - 1 };
+}
+
+/* ---------- T-1853: the filter: by default the agents at work and the leads above them; the rest folds behind a count ---------- */
+
+/** `active`: running or waiting on a person. `waiting`: only those waiting. `all`: every agent. */
+export type TreeFilter = 'active' | 'waiting' | 'all';
+export const TREE_FILTERS: readonly TreeFilter[] = ['active', 'waiting', 'all'];
+export const FILTER_KEY = 'claudepilot.agent-tree.filter';
+
+const shows = (f: TreeFilter, st: AgentStatus) => f === 'all' || st === 'waiting' || (f === 'active' && st === 'running');
+
+/** What a filter folds away, by kind: `idle` (idle or asleep), `ended` (done or failed), `running` (hidden by Waiting). */
+export interface Folded {
+  idle: number;
+  ended: number;
+  running: number;
+}
+
+/**
+ * The tree as the filter shows it: an agent stays when it matches or has an agent under it that does (its leads stay, so a worker is never
+ * shown without the line to its lead); the tree's lead always stays. `descendants` counts what is shown. `folded` counts the rest.
+ */
+export function filterTree(root: AgentNode, filter: TreeFilter): { root: AgentNode; folded: Folded } {
+  const prune = (n: AgentNode, top: boolean): AgentNode | null => {
+    const children = n.children.map((c) => prune(c, false)).filter((c): c is AgentNode => c !== null);
+    if (!top && !shows(filter, n.status) && children.length === 0) return null;
+    const same = children.length === n.children.length && children.every((c, i) => c === n.children[i]);
+    return same ? n : { ...n, children, descendants: children.reduce((k, c) => k + 1 + c.descendants, 0) };
+  };
+  const shown = prune(root, true)!;
+  const kept = new Set(flatten(shown).map((n) => n.session.id));
+  const folded: Folded = { idle: 0, ended: 0, running: 0 };
+  for (const n of flatten(root)) {
+    if (kept.has(n.session.id)) continue;
+    if (n.status === 'done' || n.status === 'failed') folded.ended++;
+    else if (n.status === 'running' || n.status === 'waiting') folded.running++;
+    else folded.idle++;
+  }
+  return { root: shown, folded };
+}
+
+/** "+5 idle · 3 ended", or null when nothing is folded. */
+export function foldedLabel(f: Folded): string | null {
+  const parts = [f.running && `${f.running} running`, f.idle && `${f.idle} idle`, f.ended && `${f.ended} ended`].filter(Boolean);
+  return parts.length ? `+${parts.join(' · ')}` : null;
+}
+
+/** The viewer's filter (this browser), `active` when none is kept or storage cannot be read. */
+export function readFilter(store: Store | null = defaultStore()): TreeFilter {
+  try {
+    const v = store?.getItem(FILTER_KEY);
+    return TREE_FILTERS.includes(v as TreeFilter) ? (v as TreeFilter) : 'active';
+  } catch {
+    return 'active';
+  }
+}
+
+export function writeFilter(f: TreeFilter, store: Store | null = defaultStore()): void {
+  try {
+    store?.setItem(FILTER_KEY, f);
+  } catch {
+    // private window or blocked storage: this visit only
+  }
+}
+
 /* ---------- Dismiss: hide a failed agent from the failed count, for this viewer (this browser) ---------- */
 
 export const DISMISS_KEY = 'claudepilot.agent-tree.dismissed';

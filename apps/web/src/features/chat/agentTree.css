@@ -1,13 +1,37 @@
 /*
  * T-1710: the Agents tree's connectors. A phone (and every level below the lead's workers) draws an indented column: one line down the
  * left and an elbow into each card. From 1024 px the lead's workers sit in a row under the lead, joined by a bar with a drop into each
- * card, like the owner's reference (docs/design/agent-tree-reference.png). The lines are the primary colour, softened, in both themes.
+ * card, like the owner's reference (docs/design/agent-tree-reference.png). T-1825: the lines are a light blue in both themes and leave
+ * from a small node dot just under the parent card.
  */
 .at-tree {
-  --at-line: color-mix(in oklab, var(--color-primary) 38%, transparent);
+  --at-line: color-mix(in oklab, var(--color-sky-400, oklch(74.6% 0.16 232.661)) 70%, transparent);
+  --at-dot: 9px;
   --at-indent: 14px;
   --at-elbow: 30px; /* from a card's top to the middle of its name row */
-  --at-card: 18.5rem; /* a lead's and a worker's card from 1024 px */
+  --at-card: 18.5rem; /* a worker's card from 1024 px (the lead's is 22rem) */
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .at-tree {
+    --at-line: color-mix(in oklab, var(--color-sky-400, oklch(74.6% 0.16 232.661)) 55%, transparent);
+  }
+}
+:root[data-theme='dark'] .at-tree {
+  --at-line: color-mix(in oklab, var(--color-sky-400, oklch(74.6% 0.16 232.661)) 55%, transparent);
+}
+
+/* The node dot: a ring on the line's start, under the card (a column: on the left line; the lead's row: over the drop). */
+.at-dot {
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  left: calc(var(--at-indent) + 1px - var(--at-dot) / 2);
+  width: var(--at-dot);
+  height: var(--at-dot);
+  border: 2px solid var(--at-line);
+  border-radius: 9999px;
+  background: var(--color-surface, #fff);
+  pointer-events: none;
 }
 
 /* A column: the children of a card, indented under it. */
@@ -47,6 +71,22 @@
   }
   .at-root {
     align-items: center;
+  }
+  .at-tree .at-dot-row {
+    left: calc(50% + 1px - var(--at-dot) / 2);
+  }
+  /* The cue that a wide row scrolls: an edge with more beyond it fades out (AgentTree.tsx sets the data attributes). */
+  .at-scroll[data-fade-left],
+  .at-scroll[data-fade-right] {
+    --at-fade-l: 0px;
+    --at-fade-r: 0px;
+    mask-image: linear-gradient(to right, transparent, #000 var(--at-fade-l), #000 calc(100% - var(--at-fade-r)), transparent);
+  }
+  .at-scroll[data-fade-left] {
+    --at-fade-l: 48px;
+  }
+  .at-scroll[data-fade-right] {
+    --at-fade-r: 48px;
   }
   /* The lead's workers: a row, with a bar over it and a drop into each card. */
   .at-tree .at-row {

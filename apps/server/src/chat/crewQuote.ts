@@ -1,7 +1,7 @@
 import { redactSecrets, stripUnsafe } from '../portalmcp/sanitize.js';
 
 // T-294: what a quoted text could close the report's quotes or open a frame of its own with: quotes become ', brackets ( and ).
-const CREW_QUOTES = /["“”„‟«»＂‘’‚‛]/g; // not ‹ ›: they close no “ ” quote, and a menu path (Settings › Sessions) stays readable
+const CREW_QUOTES = /["“”„‟«»＂‘’‚‛]/g; // not ‹ ›: they close no “ ” quote, and a menu path (Settings › Running agents) stays readable
 const CREW_OPENS = /[[<［＜【〔〈《]/g;
 const CREW_CLOSES = /[\]>］＞】〕〉》]/g;
 

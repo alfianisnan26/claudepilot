@@ -1,6 +1,6 @@
 import { Button, cn, EmptyState, useToast } from '@isnanme/ui';
 import { CHAT_SOCKET_PATH, type ChatServerMessage, type ChatSession } from '@portal/contracts';
-import { AlertTriangle, Check, ChevronDown, ChevronUp, LoaderCircle, Moon, Network, Pause, UserRound } from 'lucide-react';
+import { AlertTriangle, Bot, Check, ChevronDown, ChevronUp, Cpu, GitBranch, LoaderCircle, Moon, Network, Pause, ShieldAlert, UserRound } from 'lucide-react';
 import { AnimatePresence, MotionConfig, motion, useReducedMotion } from 'motion/react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router';
@@ -9,18 +9,27 @@ import { Popover } from '@/components/Popover';
 import { useNow } from '@/features/usage/claude/useClaudeUsage';
 import { errorText } from '@/lib/api';
 import {
+  agentFacets,
   buildAgentTrees,
-  costLabel,
+  costParts,
   dismissFailed,
+  edgeFade,
   elapsedLabel,
+  filterTree,
+  foldedLabel,
   isDismissed,
+  modelMaker,
   readDismissed,
+  readFilter,
   RESUME_MESSAGE,
   retryKind,
   STATUS_LABEL,
+  writeFilter,
+  type AgentFacet,
   type AgentNode,
   type AgentStatus,
   type AgentTreeData,
+  type TreeFilter,
 } from './agentTreeData';
 import { chatApi } from './api';
 import './agentTree.css';
@@ -30,7 +39,8 @@ const EASE = [0.22, 1, 0.36, 1] as const;
 /**
  * T-1710: the Agents tree, the Tree view of the Agents page. Each lead that started workers, as connected cards (agentTreeData.ts has the
  * rules): on a phone an indented column, from 1024 px the lead's workers in a row under it (the owner's reference). It reads the list the
- * page already polls, so it updates with it; the clock ticks each second for the running ones' time.
+ * page already polls, so it updates with it; the clock ticks each second for the running ones' time. T-1853: by default only the agents at
+ * work (and the leads above them) show; the rest folds behind a count, and a filter (kept per viewer) shows Waiting only or All.
  */
 export function AgentTreeView({ sessions, query, onChanged }: { sessions: readonly ChatSession[]; query: string; onChanged: () => void }) {
   const now = useNow(1000);
@@ -40,6 +50,11 @@ export function AgentTreeView({ sessions, query, onChanged }: { sessions: readon
     [sessions, now, query, dismissed],
   );
   const dismiss = useCallback((s: ChatSession) => setDismissed((d) => dismissFailed(s, d)), []);
+  const [filter, setFilterState] = useState<TreeFilter>(() => readFilter());
+  const setFilter = useCallback((f: TreeFilter) => {
+    setFilterState(f);
+    writeFilter(f);
+  }, []);
 
   if (trees.length === 0)
     return (
@@ -50,15 +65,59 @@ export function AgentTreeView({ sessions, query, onChanged }: { sessions: readon
   return (
     <MotionConfig reducedMotion="user">
       <div className="at-tree flex flex-col gap-6" data-agent-tree="">
+        <FilterBar value={filter} onChange={setFilter} />
         {trees.map((t) => (
-          <TreeSection key={t.root.session.id} tree={t} onDismiss={dismiss} onChanged={onChanged} />
+          <TreeSection key={t.root.session.id} tree={t} filter={filter} onShowAll={() => setFilter('all')} onDismiss={dismiss} onChanged={onChanged} />
         ))}
       </div>
     </MotionConfig>
   );
 }
 
-function TreeSection({ tree, onDismiss, onChanged }: { tree: AgentTreeData; onDismiss: (s: ChatSession) => void; onChanged: () => void }) {
+const FILTER_LABEL: Record<TreeFilter, string> = { active: 'Active', waiting: 'Waiting', all: 'All' };
+
+/** All / Active / Waiting, for every tree on the page. */
+function FilterBar({ value, onChange }: { value: TreeFilter; onChange: (f: TreeFilter) => void }) {
+  return (
+    <div className="-mb-3 flex items-center gap-1" role="group" aria-label="Show agents">
+      {(['all', 'active', 'waiting'] as const satisfies readonly TreeFilter[]).map((f) => (
+        <button
+          key={f}
+          type="button"
+          aria-pressed={value === f}
+          onClick={() => onChange(f)}
+          data-agent-filter={f}
+          className={cn(
+            'press inline-flex min-h-11 items-center rounded-full px-3.5 text-[13.5px] font-semibold focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:outline-hidden',
+            value === f ? 'bg-ink text-surface' : 'text-muted hover:bg-surface-2 hover:text-ink',
+          )}
+        >
+          {FILTER_LABEL[f]}
+        </button>
+      ))}
+      <InfoTip label="About the filter">
+        Active shows the agents at work and waiting on you, with the leads above them; Waiting only those waiting. The rest folds behind a count
+        under each tree. Kept in this browser.
+      </InfoTip>
+    </div>
+  );
+}
+
+function TreeSection({
+  tree,
+  filter,
+  onShowAll,
+  onDismiss,
+  onChanged,
+}: {
+  tree: AgentTreeData;
+  filter: TreeFilter;
+  onShowAll: () => void;
+  onDismiss: (s: ChatSession) => void;
+  onChanged: () => void;
+}) {
+  const shown = useMemo(() => filterTree(tree.root, filter), [tree.root, filter]);
+  const more = foldedLabel(shown.folded);
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   const toggle = useCallback(
     (id: string) => setCollapsed((c) => (c.has(id) ? new Set([...c].filter((x) => x !== id)) : new Set(c).add(id))),
@@ -70,21 +129,68 @@ function TreeSection({ tree, onDismiss, onChanged }: { tree: AgentTreeData; onDi
     const el = scroller.current;
     if (el && el.scrollWidth > el.clientWidth) el.scrollLeft = (el.scrollWidth - el.clientWidth) / 2;
   }, []);
+  // T-1825: an edge with more of the row beyond it fades out, the cue that the row scrolls (agentTree.css .at-scroll).
+  const [fade, setFade] = useState({ left: false, right: false });
+  useEffect(() => {
+    const el = scroller.current;
+    if (!el) return;
+    const measure = () => {
+      const f = edgeFade(el.scrollLeft, el.scrollWidth, el.clientWidth);
+      setFade((o) => (o.left === f.left && o.right === f.right ? o : f));
+    };
+    measure();
+    el.addEventListener('scroll', measure, { passive: true });
+    const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure);
+    ro?.observe(el);
+    if (el.firstElementChild) ro?.observe(el.firstElementChild);
+    return () => {
+      el.removeEventListener('scroll', measure);
+      ro?.disconnect();
+    };
+  }, []);
+  const lead = tree.root.session.id;
+  const leadCard = useCallback(() => scroller.current?.querySelector(`[data-agent-card="${CSS.escape(lead)}"]`) ?? null, [lead]);
   return (
     <section aria-label={`${tree.root.name}: ${tree.total} agents`} data-agent-tree-root={tree.root.session.id}>
-      <TreeHeader tree={tree} onDismiss={onDismiss} onChanged={onChanged} />
+      <TreeHeader tree={tree} onDismiss={onDismiss} onChanged={onChanged} leadCard={leadCard} />
       {/* From 1024 px the row can be wider than the page: it scrolls inside this box, never the page. */}
-      <div ref={scroller} className="expanded:overflow-x-auto expanded:pb-2">
+      <div
+        ref={scroller}
+        className="at-scroll expanded:overflow-x-auto expanded:pb-2"
+        data-fade-left={fade.left || undefined}
+        data-fade-right={fade.right || undefined}
+      >
         <div className="at-root flex flex-col expanded:mx-auto expanded:w-max">
-          <Branch node={tree.root} depth={0} collapsed={collapsed} onToggle={toggle} />
+          <Branch node={shown.root} depth={0} collapsed={collapsed} onToggle={toggle} />
         </div>
       </div>
+      {more && (
+        <button
+          type="button"
+          onClick={onShowAll}
+          data-agent-folded=""
+          aria-label={`Show all: ${more.slice(1)} hidden`}
+          className="press mt-1 inline-flex min-h-11 items-center rounded-full px-3 text-[13px] font-semibold text-muted tabular-nums hover:bg-surface-2 hover:text-ink focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:outline-hidden expanded:mx-auto expanded:flex"
+        >
+          {more}
+        </button>
+      )}
     </section>
   );
 }
 
 /** "8 agents · 4 running · 1 failed ⌃ · $1.52": the failed count opens the list of failed agents. */
-function TreeHeader({ tree, onDismiss, onChanged }: { tree: AgentTreeData; onDismiss: (s: ChatSession) => void; onChanged: () => void }) {
+function TreeHeader({
+  tree,
+  onDismiss,
+  onChanged,
+  leadCard,
+}: {
+  tree: AgentTreeData;
+  onDismiss: (s: ChatSession) => void;
+  onChanged: () => void;
+  leadCard: () => Element | null;
+}) {
   const [open, setOpen] = useState(false);
   const button = useRef<HTMLButtonElement>(null);
   const close = useCallback(() => {
@@ -113,11 +219,11 @@ function TreeHeader({ tree, onDismiss, onChanged }: { tree: AgentTreeData; onDis
           {open ? <ChevronUp className="size-4" aria-hidden="true" /> : <ChevronDown className="size-4" aria-hidden="true" />}
         </button>
       )}
-      <span className="ml-auto font-semibold text-ink tabular-nums">{costLabel(tree.costUsd)}</span>
+      <Cost usd={tree.costUsd} className="ml-auto font-semibold text-ink tabular-nums" />
       <InfoTip label="About the cost">
         What the agents in this tree cost so far, at list price (for a plan, not a bill). A running turn counts as an estimate until it ends.
       </InfoTip>
-      <Popover anchor={button} open={open && failed > 0} onClose={close} label="Failed agents" prefer="below" width={360}>
+      <Popover anchor={button} open={open && failed > 0} onClose={close} label="Failed agents" prefer="below" width={360} beside={leadCard}>
         <FailedList nodes={tree.failed} onDismiss={onDismiss} onChanged={onChanged} />
       </Popover>
     </div>
@@ -203,7 +309,7 @@ function Branch({
   const still = useReducedMotion();
   return (
     <>
-      <AgentCard node={node} wide={depth <= 1} open={open} onToggle={kids ? () => onToggle(id) : undefined} />
+      <AgentCard node={node} depth={depth} open={open} onToggle={kids ? () => onToggle(id) : undefined} />
       <AnimatePresence initial={false}>
         {kids && open && (
           <motion.div
@@ -213,8 +319,10 @@ function Branch({
             animate={{ height: 'auto', opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
             transition={{ duration: still ? 0 : 0.22, ease: EASE }}
-            className="overflow-hidden"
+            className="relative overflow-hidden"
           >
+            {/* T-1825: the node the lines leave from, just under the card. */}
+            <span className={cn('at-dot', depth === 0 && 'at-dot-row')} aria-hidden="true" />
             <ul className={cn('at-col', depth === 0 && 'at-row')}>
               <AnimatePresence initial={false}>
                 {node.children.map((c) => (
@@ -238,8 +346,9 @@ function Branch({
   );
 }
 
-function AgentCard({ node, wide, open, onToggle }: { node: AgentNode; wide: boolean; open: boolean; onToggle?: () => void }) {
+function AgentCard({ node, depth, open, onToggle }: { node: AgentNode; depth: number; open: boolean; onToggle?: () => void }) {
   const s = node.session;
+  const facets = agentFacets(s);
   return (
     <motion.article
       initial={{ opacity: 0, y: 8 }}
@@ -249,11 +358,13 @@ function AgentCard({ node, wide, open, onToggle }: { node: AgentNode; wide: bool
       data-agent-status={node.status}
       className={cn(
         'relative w-full min-w-0 rounded-2xl border border-line bg-surface px-3.5 py-3 shadow-sm',
-        // From 1024 px a lead's and a worker's card are one width (agentTree.css --at-card); the cards below a worker fit in its column.
-        wide && 'expanded:w-[18.5rem]',
+        // From 1024 px the lead's card is wider than its workers' (agentTree.css --at-card); the cards below a worker fit in its column.
+        depth === 0 && 'expanded:w-[22rem]',
+        depth === 1 && 'expanded:w-[18.5rem]',
       )}
     >
-      <div className="flex min-w-0 items-start gap-2">
+      <div className="flex min-w-0 items-start gap-2.5">
+        <ModelGlyph model={s.model} />
         <div className="min-w-0 flex-1">
           <Link
             to={`/admin/sessions/${s.id}`}
@@ -266,15 +377,18 @@ function AgentCard({ node, wide, open, onToggle }: { node: AgentNode; wide: bool
         </div>
         <StatusPill status={node.status} />
       </div>
-      {(node.task || s.ticketId) && (
-        <p className="mt-1.5 text-[13.5px] leading-snug text-ink-soft [overflow-wrap:anywhere]">
-          {s.ticketId && <span className="mr-1.5 font-mono text-[12px] text-muted">{s.ticketId}</span>}
-          {node.task}
-        </p>
-      )}
-      <div className="mt-1.5 flex min-h-6 items-center gap-1 text-[13px] tabular-nums">
-        <span className="font-semibold text-ink">{costLabel(node.costUsd)}</span>
-        <span className="text-muted">· {elapsedLabel(node.elapsedMs)}</span>
+      <div className="mt-1.5 flex min-h-6 items-center gap-1.5 text-[13px] tabular-nums">
+        {s.ticketId && <span className="font-mono text-[12px] text-muted">{s.ticketId}</span>}
+        <Cost usd={node.costUsd} className="font-semibold text-ink" />
+        <InfoTip label={`About ${node.name}`} className="relative z-10">
+          {node.task && <span className="block text-ink">{node.task}</span>}
+          <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span>{elapsedLabel(node.elapsedMs)}</span>
+            {facets.map((f) => (
+              <FacetIcon key={f} facet={f} branch={s.worktree?.branch} />
+            ))}
+          </span>
+        </InfoTip>
         {onToggle && (
           <button
             type="button"
@@ -290,6 +404,56 @@ function AgentCard({ node, wide, open, onToggle }: { node: AgentNode; wide: bool
         )}
       </div>
     </motion.article>
+  );
+}
+
+/** "$1.52" with the cents muted (the owner's reference). */
+function Cost({ usd, className }: { usd: number; className?: string }) {
+  const { whole, fraction } = costParts(usd);
+  return (
+    <span className={className} data-cost="">
+      {whole}
+      <span className="font-normal text-muted">{fraction}</span>
+    </span>
+  );
+}
+
+/** Who makes the model: a Claude burst, a chip for a model the portal cannot name, a robot before the first report. */
+function ModelGlyph({ model }: { model: string | null }) {
+  const maker = modelMaker(model);
+  return (
+    <span
+      className="mt-0.5 inline-flex size-8 shrink-0 items-center justify-center rounded-lg border border-line bg-surface text-muted"
+      data-model-maker={maker ?? 'none'}
+      aria-hidden="true"
+    >
+      {maker === 'claude' ? <ClaudeBurst /> : maker === 'other' ? <Cpu className="size-4" /> : <Bot className="size-4" />}
+    </span>
+  );
+}
+
+/** A plain eight-ray burst in Claude's coral (simple inline SVG, no logo file). */
+function ClaudeBurst() {
+  return (
+    <svg viewBox="0 0 16 16" className="size-4 text-[#d97757]" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+      <path d="M8 1.5v4M8 10.5v4M1.5 8h4M10.5 8h4M3.4 3.4l2.8 2.8M9.8 9.8l2.8 2.8M12.6 3.4 9.8 6.2M6.2 9.8l-2.8 2.8" />
+    </svg>
+  );
+}
+
+const FACET: Record<AgentFacet, { label: string; icon: React.ReactNode }> = {
+  branch: { label: 'Own worktree', icon: <GitBranch className="size-3.5" aria-hidden="true" /> },
+  bypass: { label: 'Bypass on', icon: <ShieldAlert className="size-3.5 text-danger" aria-hidden="true" /> },
+};
+
+function FacetIcon({ facet, branch }: { facet: AgentFacet; branch?: string }) {
+  const f = FACET[facet];
+  const label = facet === 'branch' && branch ? `${f.label}: ${branch}` : f.label;
+  return (
+    <span className="inline-flex items-center gap-1" data-agent-facet={facet}>
+      {f.icon}
+      {label}
+    </span>
   );
 }
 
