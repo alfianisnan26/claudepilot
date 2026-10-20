@@ -190,7 +190,7 @@ export interface ChatSession {
   keepGoing?: ChatKeepGoing | null;
   /**
    * T-417: its start or wake waits for a slot under the live cap (FR39): why, in words ("Waiting for a slot · 12 of 12 running in
-   * kubernetes/x (Settings › Sessions)"). Absent or null when it doesn't wait.
+   * kubernetes/x (Settings › Running agents)"). Absent or null when it doesn't wait.
    */
   slotWait?: string | null;
 }

@@ -28,8 +28,8 @@ defineSetting({
   scope: 'global',
   group: 'sessions',
   order: 20,
-  label: 'Sessions per workspace',
-  help: 'How many chat sessions may have Claude Code running in one workspace. A new session over the cap puts an idle worker to sleep, else an idle chat without workers (it wakes on its next message); a lead (live workers, Keep going, or a workers limit) never sleeps for it. If none can sleep, the start waits for a slot. Ultracode counts as two. Lowering it never stops a running session.',
+  label: 'Agents per workspace',
+  help: 'How many agents may have Claude Code running in one workspace. A new agent over the cap puts an idle worker to sleep, else an idle chat without workers (it wakes on its next message); a lead (live workers, Keep going, or a workers limit) never sleeps for it. If none can sleep, the start waits for a slot. Ultracode counts as two. Lowering it never stops a running agent.',
 });
 
 defineSetting({
@@ -41,8 +41,8 @@ defineSetting({
   scope: 'global',
   group: 'sessions',
   order: 30,
-  label: 'Sessions in total',
-  help: 'How many chat sessions may have Claude Code running across all workspaces, so one busy workspace cannot starve the others or drain an account’s rate limit.',
+  label: 'Agents in total',
+  help: 'How many agents may have Claude Code running across all workspaces, so one busy workspace cannot starve the others or drain an account’s rate limit.',
 });
 
 /** The caps in force, read each time a session starts or wakes. */
@@ -92,13 +92,13 @@ export function makeRoom(
 
 /** T-417: what a start that waits for a slot shows (FR39's "Waiting for a slot · 4 of 4 running"), and where the number comes from. */
 export function slotWaitText(scope: 'workspace' | 'total', limit: number, running: number, workspaceId: string): string {
-  return `Waiting for a slot · ${running} of ${limit} running ${scope === 'workspace' ? `in ${workspaceId}` : 'in total'} (Settings › Sessions)`;
+  return `Waiting for a slot · ${running} of ${limit} running ${scope === 'workspace' ? `in ${workspaceId}` : 'in total'} (Settings › Running agents)`;
 }
 
 /** The refusal: which cap, how many are running, and where the number comes from. */
 export function capError(scope: 'workspace' | 'total', limit: number, running: number, workspaceId: string): AppError {
   const where = scope === 'workspace' ? `in ${workspaceId}` : 'in total';
-  return new AppError(SESSION_CAP, `${running} ${running === 1 ? 'session is' : 'sessions are'} already running ${where}, which is the limit (Settings › Sessions). Wait for one to finish, or end one.`, {
+  return new AppError(SESSION_CAP, `${running} ${running === 1 ? 'session is' : 'sessions are'} already running ${where}, which is the limit (Settings › Running agents). Wait for one to finish, or end one.`, {
     status: 409,
     details: { scope, limit, running, setting: scope === 'workspace' ? CAP_WORKSPACE_SETTING : CAP_TOTAL_SETTING },
   });
@@ -115,6 +115,6 @@ defineSetting({
   scope: 'global',
   group: 'sessions',
   order: 25,
-  label: 'Spend limit per session',
-  help: 'In US dollars: what one chat session on an account pool’s keys may spend before Claude Code stops it (an estimate from the keys’ prices). It applies to sessions that start or wake after the change; a session on a Claude’s own sign-in has its plan’s limits instead.',
+  label: 'Spend limit per agent',
+  help: 'In US dollars: what one agent on an account pool’s keys may spend before Claude Code stops it (an estimate from the keys’ prices). It applies to agents that start or wake after the change; an agent on a Claude’s own sign-in has its plan’s limits instead.',
 });

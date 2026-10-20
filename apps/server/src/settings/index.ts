@@ -22,7 +22,7 @@ declareSettingsPolicies();
 // The sections of the Settings page, in order. `sessions` is A2's: its settings appear when it defines them.
 defineSettingGroup('mcp', 'MCP', 10);
 defineSettingGroup('agents', 'Agents', 20);
-defineSettingGroup('sessions', 'Sessions', 30);
+defineSettingGroup('sessions', 'Running agents', 30); // T-1825: the UI says Agent; the id stays
 
 // I11: whether a session's Claude may propose changes to its own persona and skills. Always a proposal a
 // person approves in the portal, never live by itself; turning it on asks for a confirmation.

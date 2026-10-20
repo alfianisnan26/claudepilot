@@ -29,7 +29,7 @@ test('makeRoom: nothing to do under the caps; the longest-idle session of the wo
   assert.deepEqual(makeRoom(live(['a', 'w1'], ['b', 'w1']), [{ id: 'a', since: 1, rank: 1 }, { id: 'b', since: 9, rank: 0 }], 'w1', 1, caps), { sleep: ['b'] });
   const e = capError('workspace', 2, 2, 'docker/api');
   assert.equal(e.code, SESSION_CAP);
-  assert.match(e.message, /2 sessions are already running in docker\/api, which is the limit \(Settings › Sessions\)/);
+  assert.match(e.message, /2 sessions are already running in docker\/api, which is the limit \(Settings › Running agents\)/);
 });
 
 /** A session that has had its first turn and is idle (so it may sleep), on the fake host. */
@@ -62,7 +62,7 @@ test('over the per-workspace cap a new session puts the longest-idle one to slee
     s.controller.slotWaitMs = 300;
     s.controller.slotPollMs = 20;
     const queued = await s.controller.create({ workspaceId: 'docker/ws1' });
-    assert.match(queued.slotWait ?? '', /^Waiting for a slot · 2 of 2 running in docker\/ws1 \(Settings › Sessions\)$/);
+    assert.match(queued.slotWait ?? '', /^Waiting for a slot · 2 of 2 running in docker\/ws1 \(Settings › Running agents\)$/);
     assert.equal(s.controller.list().length, 4, 'the session is made; its start waits');
     await until(() => s.controller.get(queued.id)!.state === 'interrupted');
     assert.match(s.controller.get(queued.id)!.endedReason ?? '', /2 sessions are already running in docker\/ws1/);

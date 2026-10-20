@@ -40,8 +40,8 @@ defineSetting({
   scope: 'global',
   group: 'sessions',
   order: 50,
-  label: 'Workers per session',
-  help: 'How many sessions started by one session may be running at once. They also count against the running-session caps.',
+  label: 'Workers per agent',
+  help: 'How many agents started by one agent may be running at once. They also count against the running-agent caps.',
 });
 defineSetting({
   key: AGENT_SPAWNS_SETTING,
@@ -110,7 +110,7 @@ export function spawnProblem(
   if (caps && parent.depth + 1 > caps.maxDepth)
     return refuse(
       'depth',
-      caps.maxDepth === 0 ? 'Sessions may not start sessions here (Settings › Sessions).' : `Sessions started by sessions may go ${caps.maxDepth} ${caps.maxDepth === 1 ? 'level' : 'levels'} deep, and this session is at that depth (Settings › Sessions).`,
+      caps.maxDepth === 0 ? 'Sessions may not start sessions here (Settings › Running agents).' : `Sessions started by sessions may go ${caps.maxDepth} ${caps.maxDepth === 1 ? 'level' : 'levels'} deep, and this session is at that depth (Settings › Running agents).`,
       caps.maxDepth,
     );
   const own = effectiveMaxWorkers(null, parent.maxWorkers);
@@ -119,9 +119,9 @@ export function spawnProblem(
   // Its own limit when that is the tighter one, named as its own; else the global one.
   if (own !== null && (!caps || own < caps.maxChildren) && live >= own)
     return refuse('session_workers', `This session already has ${live} workers running, which is its own limit. Wait for one to finish, or end one.`, own);
-  if (caps && live >= caps.maxChildren) return refuse('children', `This session already has ${live} workers running, which is the limit (Settings › Sessions). Wait for one to finish, or end one.`, caps.maxChildren);
+  if (caps && live >= caps.maxChildren) return refuse('children', `This session already has ${live} workers running, which is the limit (Settings › Running agents). Wait for one to finish, or end one.`, caps.maxChildren);
   const recent = children.filter((c) => Date.parse(c.createdAt) > now - HOUR_MS).length;
-  if (caps && recent >= caps.spawnsPerHour) return refuse('rate', `This session has started ${recent} workers in the last hour, which is the limit (Settings › Sessions).`, caps.spawnsPerHour);
+  if (caps && recent >= caps.spawnsPerHour) return refuse('rate', `This session has started ${recent} workers in the last hour, which is the limit (Settings › Running agents).`, caps.spawnsPerHour);
   return null;
 }
 
