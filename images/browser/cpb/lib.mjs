@@ -86,14 +86,20 @@ export function chromeArgs(cfg, { headless, profileDir, cdpPort = CDP_PORT, exte
   if (headless) args.push('--headless=new');
   else args.push('--start-maximized');
   if (!cfg.sandbox) args.push('--no-sandbox', '--disable-setuid-sandbox');
-  // The headers extension (PRD §24), built by the init for this start; the policy allows only its id.
+  // The headers extension (PRD §24), built by the init for this start; nothing else may load.
   // Newer Chrome builds ignore --load-extension unless this feature is switched off; a second --disable-features would replace the first.
   if (extensionDir) {
     const i = args.findIndex((a) => a.startsWith('--disable-features='));
     args[i] = `${args[i]},DisableLoadExtensionCommandLineSwitch`;
     args.push(`--load-extension=${extensionDir}`, `--disable-extensions-except=${extensionDir}`);
+  } else {
+    // No extension built for this start (no headers, or the file not delivered yet, unreadable or empty): with headers the policy no
+    // longer blocks extensions by default, so the command line does, and one planted in the persistent profile can't load (T-1660).
+    args.push('--disable-extensions');
   }
-  args.push(...cfg.chromeFlags.filter((f) => /^--[a-z0-9-]+(=[^\s]*)?$/i.test(f) && !/remote-debugging|remote-allow-origins|user-data-dir|no-sandbox|disable-web-security/.test(f)));
+  // A pool's own flags never touch the debugging port, the profile, the sandbox or which extensions load.
+  const ownFlag = /remote-debugging|remote-allow-origins|user-data-dir|no-sandbox|disable-web-security|load-extension|load-component-extension|disable-extensions|extensions-on-chrome-urls|DisableLoadExtensionCommandLineSwitch|^--disable-features=/i;
+  args.push(...cfg.chromeFlags.filter((f) => /^--[a-z0-9-]+(=[^\s]*)?$/i.test(f) && !ownFlag.test(f)));
   // Last, so nothing above can turn it into a different first page.
   args.push('about:blank');
   return args;
