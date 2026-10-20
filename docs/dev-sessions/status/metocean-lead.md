@@ -26,6 +26,7 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - ticket_verdict refused for my sub-agents (c18870): verdicts are gate-form comments.
 
 ## DECISIONS
+- 09:05Z T-1848 RB slice 3 QA PASS WITH GAPS c19968 on 00e579a (suite 4f9d31cb rc=0, 3 mutants killed, 19/44 shots). Short round to mo-fe-1848b: 44 px Synthesize/Back, focus, Reports dark scheme, CHANGELOG (c19969). QA read of .claude/settings.json blocked by hook: T-1703 c19970, brief line added.
 - 08:58Z T-1848 MP fix round 2 3a58b2d (fail-first d7993719 rc=1 12, suite+lint efd74ad1 rc=0 705; c19963). Same QA mo-qa-1848c re-checks delta.
 - 08:50Z T-1848 Lows delta PASS WITH GAPS c19945 on 520a89f (suite 5fa464dd rc=0, 2 mutants killed, 31/53 shots). Lead saw shot; F1 end label by legend, F2 colour scale overlap, F3 contours cut (from 7bbc187), Low 3 placeholder: one more round (c19952) to mo-fe-1848a (opus, new session). QA python3 -c slip to coordinator T-1703 c19954.
 - 08:42Z T-1848 MP delta QA FAIL c19940 on 311a1e1 (suite 5553dc95 rc=0, 2 mutants killed, 21 shots): F3 Lab home stale mark cut by ellipsis (lead saw shot). G1 raw text in Run path in scope, Details marker accepted (c19941). Back to mo-fe-1848c.
@@ -43,7 +44,6 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - 07:25Z T-1848 slice 2 built: abd19d8 (fail-first 1031cedf rc=1, suite 6e063b62 rc=0 653, lint 7bafd92b rc=0; c19683). One chained command refused, re-run as separate allowed calls. QA mo-qa-1848b (opus, lane-qa-ui) dispatched: diff, mutants one per Job, 390/1280 light/dark shots.
 - 06:31Z Coordinator T-1863: no in-session schedules (general lead ended by integrity check). CronList empty, none set (T-1703 c19534); brief line added. General lead now 8d05f919. T-1805 blind review mo-rev-1805 (opus) dispatched.
 - 05:15Z Coordinator rule: outside-family QA comes from peer leads by QA-ASK on T-84 (Lab QAs Metocean, Metocean QAs Business), answered before new build work. Asked 8 tickets (c19263, c19268). Leads cannot message each other (NOT_FOUND), T-84 c19264.
-- 05:10Z dontAsk workers cannot clone on any Claude (two.claude too). The lead does not clone for workers (second-agent workaround risk); QA for code goes to sub-agents (family) plus a peer QA-ASK.
 - 04:3xZ -F message file is the commit SOP (T-84 item 8), in briefs/mo/common.md.
 - 04:15Z D-91 (UI/UX: QA suggests, lead decides, batched per page or app). 04:11Z D-89 (QA judges shots by eye). D-90: T-991 after in_review.
 - 04:13Z T-602 merges only with the T-1704 v14 bump (c19044); post-deploy screen check before close.
