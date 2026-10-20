@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { LabSummaryRow } from '@portal/contracts';
-import { figures, fmtInterval, fmtStat, fmtCount, rowTitle, UNAVAILABLE } from './model';
+import { figures, fmtInterval, fmtStat, fmtCount, groupByPeriod, rowTitle, splitFigures, UNAVAILABLE } from './model';
 
 const row = (o: Partial<LabSummaryRow> = {}): LabSummaryRow => ({
   period: '2026-10-14',
@@ -47,4 +47,18 @@ test('titles and intervals', () => {
   assert.deepEqual([f.insp, f.fpy, f.cpa, f.ci], ['25 %', '60 %', '$0.36', 'n too small']);
   const g = Object.fromEntries(figures(row({ costPerAccepted: 0.65, costPerAcceptedN: 24, costPerAcceptedInterval: { low: 0.44, high: 0.91 } })).map((x) => [x.key, x.value]));
   assert.equal(g.ci, '$0.44–$0.91');
+});
+
+test('T-1852: a phone row shows four key figures; the interval sits under "Per accepted", never as its own figure', () => {
+  const { key, rest, interval } = splitFigures(row());
+  assert.deepEqual(key.map((f) => f.label), ['Slices', 'Cost', 'First pass', 'Per accepted']);
+  assert.deepEqual(rest.map((f) => f.key), ['req', 'ctx', 'min', 'insp', 'rew']);
+  assert.equal(interval.value, UNAVAILABLE);
+  assert.equal(key.length + rest.length + 1, figures(row()).length, 'no figure is lost');
+});
+
+test('T-1852: rows grouped by period in order, so the date is said once', () => {
+  const g = groupByPeriod([row({ period: '2026-10-14' }), row({ period: '2026-10-14', role: 'qa' }), row({ period: '2026-10-13' })]);
+  assert.deepEqual(g.map((x) => [x.period, x.rows.length]), [['2026-10-14', 2], ['2026-10-13', 1]]);
+  assert.deepEqual(groupByPeriod([]), []);
 });

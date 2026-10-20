@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { CrewFigure, CrewSummary, CrewSummaryWindow } from '@portal/contracts';
-import { fmtRatio, paceCompact, paceSub, SUMMARY_GRID_CLASS, summaryLists, summaryTiles, trendOf } from './summaryModel';
+import { fmtRatio, paceCompact, paceSub, SUMMARY_GRID_CLASS, shownSub, summarySections, summaryTiles, trendOf } from './summaryModel';
 
 const fig = (value: number | null, basis: CrewFigure['basis'] = 'measured', reason?: CrewFigure['reason']): CrewFigure => ({ value, basis, source: 'a source', reason });
 const gone = (reason: CrewFigure['reason'] = 'no_samples'): CrewFigure => fig(null, 'unavailable', reason);
@@ -108,13 +108,28 @@ test('usage without dollars shows requests only and says why', () => {
   assert.match(t.tip, /Dollars: unavailable, the portal has no table for it/);
 });
 
-test('lists: each Claude, resolved and created per closed per program, weekly unavailable with the reason', () => {
-  const l = summaryLists(summary());
-  assert.deepEqual(l.map((x) => x.title), ['Pace by Claude', 'Weekly pace', 'Resolved by program', 'Created : closed by program']);
-  assert.equal(l[0]!.rows[0], 'one.claude: 0.98 : 1 (49 % used, 50 % even)');
-  assert.equal(l[1]!.rows[0], 'unavailable: the portal has no table for it');
-  assert.equal(l[2]!.rows[0], 'ClaudePilot: 45');
-  assert.equal(l[3]!.rows[0], 'ClaudePilot: 158 created, 55 closed, 2.87');
+test('sections: the weekly and each Claude\'s pace, resolved and created per closed per program, weekly unavailable with the reason', () => {
+  const l = summarySections(summary());
+  assert.deepEqual(l.map((x) => x.title), ['Pace', 'Resolved', 'Created : closed']);
+  const [week, one] = l[0]!.rows;
+  assert.deepEqual([week!.label, week!.value, week!.sub, week!.state], ['Week', 'unavailable', 'the portal has no table for it', 'unavailable']);
+  assert.deepEqual([one!.label, one!.value, one!.sub], ['one.claude', '0.98 : 1', '49 % used · 50 % even']);
+  assert.deepEqual([one!.bar, one!.mark], [0.49, 0.5]);
+  assert.deepEqual([l[1]!.rows[0]!.label, l[1]!.rows[0]!.value, l[1]!.rows[0]!.bar], ['ClaudePilot', '45', 1]);
+  assert.deepEqual([l[2]!.rows[0]!.value, l[2]!.rows[0]!.sub], ['2.87', '158 created · 55 closed']);
+  assert.ok(l.every((x) => x.title.split(' ').filter((w) => w !== ':').length <= 2), 'titles of one or two words');
+});
+
+test('T-1852: the line under a value keeps numbers and a warning; the reason and the rule stay in the tip', () => {
+  const s = summary();
+  const sub = (k: string, x = s) => shownSub(by(x, k));
+  assert.equal(sub('perCost'), null, '"per resolved" repeats the label');
+  assert.equal(sub('createdPerClosed'), null, 'the backlog direction is in the tip');
+  assert.equal(sub('pace'), by(s, 'pace').sub, 'a warning pace keeps its words');
+  assert.equal(sub('pace', summary({ pace: fig(1) })), null, 'on pace needs no words');
+  const gonePace = summary({ pace: gone('windows_just_reset') });
+  assert.equal(sub('pace', gonePace), null);
+  assert.match(by(gonePace, 'pace').tip, /the quota windows just reset/, 'the reason is still there, in the tip');
 });
 
 test('the chip: "0.75" with a warn dot; unavailable is "-" and unknown; at most five characters', () => {
