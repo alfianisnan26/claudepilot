@@ -14,8 +14,9 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 ## IN FLIGHT
 - 04:3xZ mo-commit (implementer, sonnet): T-1629 commit + Job (label mo-fe-1629), then T-1803 commit + npm run ci (label mo-be-1803), -F SOP (T-84 item 8).
 - 04:3xZ worker bbde2b22 on two.claude (qa-verifier, auto, dontAsk): T-1611 item 2 probe commit + stg screen check; re-tests c17308 (workers and Bash).
-- 04:13Z mo-qa-602 (qa-verifier, sonnet): T-602 QA, both repos, one gate form per repo.
+- T-602 QA PASS both repos (mo-qa-602): compute f7dfd3d c19120 (Job 7f2af862), backend 78d0c7c8 c19122 (Job f6a683af); in_review, rides v14; close after deploy + screen check + stored-data run.
 - T-1801 QA done (mo-qa-1801): item 2 PASS WITH GAPS c18958 (Job e553806b), item 1 PASS c19027 (190f6576), item 4 PASS c19115 (875f4dd8); in_review for the merge gate, close after merge (c19117).
+- 04:35Z worker 55723e0e on one.claude (qa-verifier, auto): T-1800 then T-1802 QA, non-lineage.
 - 04:34Z worker a6570457 on rossi (qa-verifier, auto): T-822 delta QA (068f319), non-lineage.
 - T-1591 in_review: fix 2d633120 on ticket/T-1591-metering-errors (fail-first 3e6b3f58, ci c29c4247 rc=0). Needs delta QA, merge gate, D-81 second QA + post-deploy check.
 - T-822 in_review: delta 068f319 (Job d7972651 rc=0, c18892) after QA FAIL c18868; delta QA needs a non-lineage session (c17308).
