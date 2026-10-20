@@ -1,4 +1,4 @@
-# Konfersi: Metocean lead status (2026-10-20 05:45Z, session fc73ae34-40d3-4c82-8148-dd55697c9379, on hasyim)
+# Konfersi: Metocean lead status (2026-10-20 07:15Z, session fc73ae34-40d3-4c82-8148-dd55697c9379, on satria)
 
 Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-worker, Mission Planning compute/report/plugin parts, report builder, metocean reports. Status ticket T-1703. Release ticket T-1704 (v14 batch). Incidents T-1705, T-1808. Older lines: git history of this file.
 
@@ -26,6 +26,7 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - ticket_verdict refused for my sub-agents (c18870): verdicts are gate-form comments.
 
 ## DECISIONS
+- 07:15Z Moved hasyim to satria (quota). Restarted mo-fe-1848a (head 60fb00f, Job result lost), mo-fe-1848b (3 untracked tests, nothing committed), mo-fe-1848c (nothing committed), all opus, same worktrees; briefs rebuilt from c19531/c19605/c19639/c19658 (T-1848 comment).
 - 06:31Z Coordinator T-1863: no in-session schedules (general lead ended by integrity check). CronList empty, none set (T-1703 c19534); brief line added. General lead now 8d05f919. T-1805 blind review mo-rev-1805 (opus) dispatched.
 - 06:2xZ T-1435 delta goes to the same comparison QA (D-81), resumed; cherry-pick, not rebase (lane rule).
 - 05:49Z Deploy #502: T-1652 (lead-spawned QA lanes count on handed-off tickets; builder lineage still refused), T-1839, T-1711. My refused records were in-session sub-agents, so nothing to re-record (T-1703 c19320). 05:41Z permission denial reported for T-1711. T-1435 cmp hit 80 turns probing refused forms; told to stop and report.
