@@ -17,7 +17,7 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - T-1435 HELD: capture Job ad87a706 rc=1, 126/129 equal, 3 air_press POT bodies differ (global record RP -32%, AD 4th decimal), wind and edge records equal (c19321). Decision (b) fix to scipy parity (c19324): builder mo-be-1435 (opus) running since 05:58Z. Capture runs as `python -m pytest qa/T-1435/capture_outputs.py -q -s`.
 - T-1591: family delta QA PASS WITH GAPS on 2d633120, evidence only (c19356, c19362; 8fb38df8, de0fb288). CI 9c9434ea rc=0, 2080/2080 with lint (c19372). Needs outside QA + blind review (T-84 c19308).
 - Business QA-ASK T-1658 d39ecf96 + T-1442 6696c47a (c19336, privacy): outside QA mo-qa-1658 (opus) running (T-84 c19358). Blind review done: T-1658 MERGE WITH FIXES (c19365, migrations/ labelled retain, job not at head), T-1442 MERGE (c19366); relayed T-84 c19368.
-- T-1848 claimed (c19371). Step 1 pages named (c19373); one ticket kept, split after open is under 150 (backlog rule vs D-91, named). Step 2 metocean: QA UI lane mo-qa-ui-1848 (opus) shoots stg Lab via a probe on qa/T-1848-metocean.
+- T-1848 claimed (c19371). Step 1 pages named (c19373); one ticket kept, split after open is under 150 (backlog rule vs D-91, named). Step 2 metocean: QA UI lane mo-qa-ui-1848 (opus) shoots stg Lab via probe 38f24f5; qa/* push refused server-side (c19384), my brief's error, resumed on ticket/T-1848-metocean-probe (c19386).
 - T-1856: mo-fe-1856 done. Fix f6029652 (bands at least 3 px, out-of-range dropped), fail-first 48da29da rc=1, suite a9c5dfce rc=0 (c19287). Item 1: no client-code cause, the probe's timing (c19255, not verified on stg). Family QA PASS WITH GAPS item 2 (c19357; de31a041 rc=0, 3 mutants caught); in_review c19359, item 1 closes only on the post-deploy 500 km pass. QA-ASK T-84 c19288. bbde2b22 re-checks after deploy, waiting until the toast closes.
 - Sweep send-backs (mo-sweep-read done): QA-ASKs on T-84 c19273 (T-1012, T-1416, T-1349, T-553, T-1523, T-1662, T-632, T-1182, T-1521) and c19277 (T-1021 file list). D-77 file lists asked on T-1021 c19275, T-1662 c19276 (lead diff refused). T-1296 (coordinator blocker) and T-1528 (AC5) need no merge.
 - Worker bbde2b22 ended 05:45Z (portal reported 6 running against the cap of 5, T-1703 c19313). A new QA worker does T-1856's post-deploy re-check.
@@ -44,6 +44,7 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - 16:20Z stg Worker logs via cf-logs.sh (read-only).
 
 ## FOR THE COORDINATOR
+- T-1848 c19386: allow list grants QA lanes `qa/T-*` pushes, but konfersi-lab-plugin protects `qa/*` server-side; align or name the prefix.
 - T-84 c19264: leads cannot session_message each other (NOT_FOUND), so QA-ASKs are T-84 lines only.
 - T-1703 c19227: dontAsk workers refused `git clone` on every Claude.
 - T-1703: allow Read on /home/node/work/briefs/** for dontAsk workers (T-1611 c19088).
