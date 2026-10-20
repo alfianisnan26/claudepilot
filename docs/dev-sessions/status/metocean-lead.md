@@ -30,9 +30,10 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - T-1701 74bae41 waits for T-1162 on stg (c17526). Post-mortems T-1705 c18775, T-1808 c18777 in_review.
 - ticket_verdict is refused for my sub-agents (c18870): verdicts stay as gate-form comments.
 
-- 05:03Z T-1826 claimed (S, sev 3, 1.5 h; c19224, c19225), option (a). Sub-agent mo-fe-1826 (opus, Agent) on ticket/T-1826-matrix-390: fail-first test, fix, Explain 44 px.
+- T-1826 built (mo-fe-1826, opus, 40 min): test e7a9219, fix 08d1ea4 on stg 69d794d; fail-first d4ec93c2 rc=1, suite 654842c9 rc=0 645, lint ef5a98f4 rc=0 (c19253). 05:20Z QA sub-agent mo-qa-1826 (sonnet): diff + 2 mutants. Screen check after deploy.
 
 ## DECISIONS
+- 05:20Z Lab-plugin Jobs need `--also platform/konfersi-shared@stg` (T-1826 c19253): in briefs/mo/common.md, mo-fe-1856 told.
 - 05:11Z D-61 lapse by QA 3f19e911 (unquoted `&&` after `--` ran npm build in the pod, ENOENT, self-reported). Brief line added to briefs/mo/common.md, T-1703 c19249. 3f19e911 ended.
 - 05:10Z Wrong at 04:57Z: two.claude refuses worker clones too; bbde2b22 only reused an old clone. Lead does not clone for workers without the coordinator's word (second-agent workaround risk).
 - 04:57Z Moved to two.claude (6 %, resets 08:40Z). Probe-file implementer dispatched now, not after 07:20Z.
