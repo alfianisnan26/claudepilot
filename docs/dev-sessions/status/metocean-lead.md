@@ -26,6 +26,7 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - ticket_verdict refused for my sub-agents (c18870): verdicts are gate-form comments.
 
 ## DECISIONS
+- 09:40Z T-1848 Lows delta 2 PASS WITH GAPS c20014 on fbe66685 (suite cc3c9cdc rc=0 697, M6 killed, 70 shots). N1 Hs axis to -1 on a contour below 0: clamp now (c20018), same builder; QA re-checks N1 only.
 - 09:35Z T-1848 RB slice 3 delta PASS c20005 on 97ad731 (suite 607ee151 rc=0 673, mutant 00a65534 killed, 8 shots by eye incl. Source). Held for outside QA; 26 px Copy/Download and 1 px ring to next RB batch.
 - 09:28Z T-1848 Lows round 2 fbe66685 (fail-first dbd5c6f0 rc=1 6 new, suite+lint+build f0e1cdee rc=0 697; c19991). y-axis can go below 0 with synthetic contours: QA to check with evidence. Same QA mo-qa-1848a re-checks delta.
 - 09:20Z T-1848 RB slice 3 short round 97ad731 (fail-first 9e5ac470 rc=1 3 new, lint+suite 92ef4932 rc=0 673; c19990). Same QA mo-qa-1848b re-checks delta incl. Source view shot.
@@ -49,7 +50,6 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - 05:15Z Coordinator rule: outside-family QA comes from peer leads by QA-ASK on T-84 (Lab QAs Metocean, Metocean QAs Business), answered before new build work. Asked 8 tickets (c19263, c19268). Leads cannot message each other (NOT_FOUND), T-84 c19264.
 - 04:13Z T-602 merges only with the T-1704 v14 bump (c19044); post-deploy screen check before close.
 - 01:40Z T-1591 held (money path D-81). 16:10Z (10-19) one v14 batch; no compute deploy before both v14 bumps.
-- 16:35Z Gate-copy rule (c17443): post-deploy gaps restated as PASS with gaps quoted.
 - 16:20Z stg Worker logs via cf-logs.sh (read-only).
 
 ## FOR THE COORDINATOR
