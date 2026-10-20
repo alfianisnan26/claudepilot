@@ -29,6 +29,7 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - 16:58Z Re-attached by the coordinator after a portal liveness mark at 16:21Z (process never stopped).
 
 ## DECISIONS
+- 01:25Z T-1803: tests cb0075a red (Job 44d3f3f7, 3 failing incl. shared-work gap b); fix commit refused 3x, likely deny `git * >*` etc. matching -m text. Same builder resumed: plain message once, else stop (no -F/file/other tool).
 - 00:53Z (10-20) Moved to sekar. T-604 is wont_do since 10-17 (superseded by T-367): dropped from v14 (T-1704 c18558). T-603 rides T-1518's aeab2ec (c17324), pending the ancestry read.
 - 16:05Z Lanes on `claude: auto` (session pace over). 16:12Z Workers blocked: Agent sub-agents instead; respawn when the clone shape works.
 - 16:10Z One v14 batch; T-1518's v13 bump folded (c17306). 16:09Z T-1590 first; no compute deploy before both v14 bumps (T-1704).
