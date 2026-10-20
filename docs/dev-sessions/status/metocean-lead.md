@@ -27,6 +27,7 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 
 ## DECISIONS
 - 09:31Z T-1623 QA delta PASS WITH GAPS c20124 on 49a8e2b (d4677124 rc=0 642, 6/6 mutants, 15 shots); S2 accepted c20126, gaps to the next Explain UI batch; held for outside QA; S1 still blocked on stg 502. T-632 fix round M1 money tests + m1 error mapping (review c19667): mo-be-632 (implementer, opus) on ticket/T-632-fetch-roundtrips-stg 7412c9d (c20127). Outside QA route found: T-84 c20062, accepted c20128.
+- 10:42Z Moved to hasyim. T-632 mo-be-632 had pushed 103122c (M1 tests) + f5570e6 (m1 fix), no report; restarted mo-be-632 (implementer, opus) from f5570e6 for fail-first proof, suite/lint/tsc, ticket report (c20202).
 - 09:23Z T-1623 fix round pushed: e3c64d9 G1 test, 49a8e2b F1 wording (bc99d639 rc=0 642; 503 mutant 9f115e65 red; c20111). Quick check fails on this repo (plain node --test, no vscode alias), for the coordinator on T-1623. Same QA mo-qa-1623 re-checks the change.
 - 09:05Z Moved fadlilah to rossi (quota). Found: T-1623 QA mo-qa-1623 gave no verdict (no QA worktree, last comment c20061 is the builder). Restarted mo-qa-1623 (lane-qa-ui, opus) on 1c1da12; no other slice was in flight.
 - 09:58Z T-1848 N1 PASS c20046 on af9858d1 (suite 63c81372 rc=0, 6 shots by eye). All 5 slices family-QA passed, held for outside QA and blind review; merge order narrow, Lows, MP, RB, RB-narrow (c20048).
