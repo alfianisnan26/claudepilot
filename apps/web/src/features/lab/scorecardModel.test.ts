@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { CrewFigure, CrewProgramScore, CrewTarget, CrewWindowScore } from '@portal/contracts';
-import { d65Rows, fmtAge, fmtFigure, fmtPerHour, qaOpusLine, REVIEW_WARN_MS, tiles, UNAVAILABLE } from './scorecardModel';
+import { barOf, d65Rows, detailSections, fmtAge, fmtFigure, fmtPerHour, qaOpusLine, REVIEW_WARN_MS, tiles, UNAVAILABLE } from './scorecardModel';
 
 const fig = (value: number | null, basis: CrewFigure['basis'] = 'measured', reason?: CrewFigure['reason']): CrewFigure => ({ value, basis, source: 'a source', reason });
 const gone = (reason: CrewFigure['reason'] = 'no_samples'): CrewFigure => fig(null, 'unavailable', reason);
@@ -123,4 +123,42 @@ test('number formats', () => {
   assert.equal(fmtAge(30 * 60_000), '30 min');
   assert.equal(fmtAge(5 * 3_600_000), '5 h');
   assert.equal(fmtAge(72 * 3_600_000), '3 d');
+});
+
+test('T-1852: Details as compact rows: titles of one or two words, numbers on the right, a bar where there is something to scale by', () => {
+  const cur = windowScore({ ages: [REVIEW_WARN_MS + 1] });
+  cur.effectiveness.byType = [
+    { type: 'feature', done: 4, perHour: 0.5, noStart: 1, costAllInUsd: 12, costWorkersUsd: 8, perTicketAllInUsd: 3, perTicketWorkersUsd: 2 } as (typeof cur.effectiveness.byType)[number],
+    { type: 'bug', done: 2, perHour: 0.25, noStart: 0, costAllInUsd: 4, costWorkersUsd: 2, perTicketAllInUsd: 2, perTicketWorkersUsd: 1 } as (typeof cur.effectiveness.byType)[number],
+  ];
+  cur.effectiveness.ci = [{ pipeline: 'gate', passed: 3, failed: 1, cancelled: 0 }];
+  cur.effectiveness.deploys = [{ runNumber: 7, pipeline: 'deploy', environment: 'prod', approval: 'auto', outcome: 'success', at: '' }];
+  const p = program({ current: cur, targets: [target('breach'), { ...target('ok', 'cost_per_done'), decision: 'D-65' }] });
+  const sec = detailSections(p);
+  assert.deepEqual(sec.map((x) => x.title), ['Done', 'In review', 'CI', 'Deploys', 'Targets', 'Cost']);
+  assert.ok(sec.every((x) => x.title.split(' ').length <= 2));
+  const [feature, bug] = sec[0]!.rows;
+  assert.deepEqual([feature!.label, feature!.value, feature!.sub, feature!.bar], ['feature', '4', '0.50 / h · $3 each · 1 no start', 1]);
+  assert.equal(bug!.bar, 0.5);
+  assert.deepEqual([sec[1]!.rows[0]!.value, sec[1]!.rows[0]!.state], ['24 h', 'warn']);
+  assert.deepEqual([sec[2]!.rows[0]!.value, sec[2]!.rows[0]!.sub, sec[2]!.rows[0]!.state, sec[2]!.rows[0]!.bar], ['3 / 4', '1 failed', 'warn', 0.75]);
+  assert.deepEqual([sec[3]!.rows[0]!.label, sec[3]!.rows[0]!.value, sec[3]!.rows[0]!.sub], ['#7 deploy', 'success', '→ prod · auto']);
+  assert.deepEqual(sec[4]!.rows.map((r) => [r.label, r.value, r.state]), [['D-61 live workers', 'breach', 'breach']], 'D-65 targets have their own rows');
+  assert.deepEqual(sec[5]!.rows.map((r) => [r.label, r.value, r.bar]), [['Total', '$10', null], ['Lead', '$4', 0.4], ['Workers', '$6', 0.6]]);
+});
+
+test('T-1852: an unavailable cost has no bar and reads the word; bars never divide by zero', () => {
+  const cur = windowScore();
+  cur.cost.total = gone('no_source');
+  cur.cost.lead = gone('no_source');
+  const cost = detailSections(program({ current: cur })).at(-1)!.rows;
+  assert.deepEqual(cost.map((r) => [r.value, r.bar]), [[UNAVAILABLE, null], [UNAVAILABLE, null], ['$6', null]]);
+  assert.equal(barOf(1, 0), null);
+  assert.equal(barOf(5, 4), 1);
+});
+
+test('T-1852: the QA opus counts ride in the D-65 QA opus tip, not on a line of their own', () => {
+  const p = program({ targets: [{ id: 'qa_opus_share', decision: 'D-65', rule: 'r', state: 'ok', figure: fig(0), offenders: [] }] });
+  assert.match(d65Rows(p).find((r) => r.id === 'qa_opus_share')!.tip, /QA\/review on opus: unavailable/);
+  assert.doesNotMatch(d65Rows(p).find((r) => r.id === 'cost_per_done')!.tip, /QA\/review/);
 });

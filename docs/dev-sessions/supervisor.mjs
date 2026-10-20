@@ -470,6 +470,34 @@ async function wakeStaleLanes(t, ts, sessions, cur, now = Date.now()) {
   }
   ts.laneWoken = last;
 }
+/**
+ * T-1692: the same silence wake for every top-level crew LEAD (marked a lead at its start, or with workers that have not ended), whether or
+ * not it is a track here: the Konfersi unit leads (Business, Lab, Metocean) are top-level sessions no track names, and a track's lead with
+ * Keep going on skipped every check but Bypass. On 2026-10-19 the Lab and Business leads sat `working` with no event 13:06-15:35 and no
+ * sub-agent running, and nothing woke them. A lead with a sub-agent of its own running is waiting on it and is left.
+ */
+const STALE_LEAD = (min) =>
+  `Supervisor: no event from you for ${min} min while working. If you are waiting on a background task or a command, its finish may not have reached you: read its output now, act on the result and go on with your crew. If it is still running, say so in one line and keep waiting.`;
+function leadsOf(sessions) {
+  const open = new Set(sessions.filter((x) => x.parentId && x.state !== 'ended').map((x) => x.parentId));
+  return sessions.filter((x) => !x.parentId && x.state !== 'ended' && !x.archivedAt && (x.lead === true || open.has(x.id)));
+}
+async function wakeStaleLeads(st, sessions, now = Date.now()) {
+  const leads = leadsOf(sessions);
+  const last = Object.fromEntries(Object.entries(st.leadWoken ?? {}).filter(([id]) => leads.some((l) => l.id === id)));
+  for (const l of leads) {
+    if (l.process !== 'live' || (l.agentsRunning ?? 0) > 0 || l.tasksOnly || !laneStale(l, last[l.id], now)) continue;
+    last[l.id] = now;
+    const min = Math.round((now - Date.parse(l.lastActivityAt)) / 60_000);
+    try {
+      await sessionSend(l.id, STALE_LEAD(min));
+      log(`lead ${String(l.title ?? l.id.slice(0, 8)).slice(0, 40)} silent ${min} min while working: told to read its task output`);
+    } catch (e) {
+      log(`could not wake lead ${l.id.slice(0, 8)}: ${e.message}`);
+    }
+  }
+  st.leadWoken = last;
+}
 /** Whether an idle lead is due a compaction now. */
 function compactDue(cur, ts, now = Date.now()) {
   const used = cur?.context?.usedTokens ?? 0;
@@ -803,6 +831,8 @@ async function watch({ rounds = Infinity } = {}) {
     const portalPauses = await api('GET', '/api/keepgoing')
       .then((r) => (Array.isArray(r.data?.pauses) ? r.data.pauses : []))
       .catch(() => []);
+    // T-1692: every crew lead, tracked here or not; held only by a pause of all.
+    if (!portalPauses.some((p) => p.program === null)) await wakeStaleLeads(state, sessions).catch((e) => log(`stale lead check failed: ${e.message}`));
     for (const t of TRACKS) {
       const ts = (state.tracks[t.key] ??= { key: t.key, starts: [], nudges: [], wakes: [] });
       ts.nudges ??= [];
@@ -836,6 +866,8 @@ async function watch({ rounds = Infinity } = {}) {
         if (ts.keepGoingLogged !== cur.id) log(`${t.key}: Keep going is on for ${cur.id.slice(0, 8)}: the portal keeps it going; only Bypass is kept here`), (ts.keepGoingLogged = cur.id);
         ts.sessionId = cur.id;
         if (cur.state !== 'ended' && !cur.archivedAt) await ensureBypass(t, ts, cur).catch((e) => log(`${t.key}: could not check Bypass: ${e.message}`));
+        // T-1692: Keep going does not wake a lane that sits `working` and silent: the T-727 check runs here too.
+        if (cur.state !== 'ended' && !cur.archivedAt) await wakeStaleLanes(t, ts, sessions, cur).catch((e) => log(`${t.key}: stale lane check failed: ${e.message}`));
         continue;
       }
       if (statusSaysDone(ts)) {
@@ -1018,7 +1050,7 @@ async function watch({ rounds = Infinity } = {}) {
 
 /* ---------- Go ---------- */
 
-export { harmlessEnding, watch, STATE_FILE, bestClaude, compactDue, slotsFull, compactLanes, wakeStaleLanes, worktreeTrustable, ownWorktrees, COMPACT, COMPACT_LANE, LANES };
+export { harmlessEnding, watch, STATE_FILE, bestClaude, compactDue, slotsFull, compactLanes, wakeStaleLanes, wakeStaleLeads, worktreeTrustable, ownWorktrees, COMPACT, COMPACT_LANE, LANES };
 if (IS_MAIN) {
   process.on('SIGTERM', () => revokeMcpToken().finally(() => process.exit(0)));
   process.on('SIGINT', () => revokeMcpToken().finally(() => process.exit(0)));

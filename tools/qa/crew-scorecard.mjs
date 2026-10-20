@@ -1,11 +1,12 @@
 // Usage → Crew (T-450 S2: the crew scorecard page) over 390 px (touch, safe areas) then 1280 px, light and dark, against a scratch portal seeded
 // with one program (a lead with two workers, a done ticket, a ticket in review, requests in the last hour). It takes a screenshot of each view and
 // asserts (QA-STANDARDS A1-A9, measured):
-//   - the page lists a program card with the five numbers, each with a state and MEASURED / ESTIMATE / UNAVAILABLE and an InfoTip;
+//   - the page lists a program card with the five numbers, each with a state, its basis (data-basis: MEASURED / ESTIMATE / UNAVAILABLE; T-1852:
+//     no longer printed, "est." marks an estimate) and an InfoTip;
 //   - A2: no horizontal scroll (document and the page's content);
 //   - A5: every visible control is at least 44 px tall and wide AT 390 PX (a FAIL; InfoTips are counted, not failed). At 1280 px a note;
 //   - Compare switches on "was" under the numbers (the window before) without breaking the layout; the window picker changes the window;
-//   - Details opens the lists of the tables the API returns (done by type, in review, CI, deploys, targets), still with no sideways scroll;
+//   - Details opens the rows of the tables the API returns (done, in review, CI, deploys, targets, cost), still with no sideways scroll;
 //   - nothing reads NaN, undefined or null.
 // usage: tools/qa/with-portal.sh 3471 env QA_SHOTS=dir node tools/qa/crew-scorecard.mjs [--out dir] [--keep]
 //   scripts/job-run.sh --ref <commit> --artifacts job-out/ux-t-450 --out job-out/ux-t-450-art/ -- 'npm run build -w @portal/web >/dev/null 2>&1 && tools/qa/with-portal.sh 3471 env QA_SHOTS=job-out/ux-t-450 node tools/qa/crew-scorecard.mjs --out job-out/ux-t-450; exit $?'
@@ -75,7 +76,8 @@ const MEASURE = `(() => {
     tiles: tiles.length,
     tileStates: tiles.map((t) => t.getAttribute('data-state')),
     tileTips: tiles.filter((t) => t.querySelector('[aria-label^="About"]')).length,
-    tileBasis: tiles.filter((t) => /MEASURED|ESTIMATE|UNAVAILABLE/.test(t.innerText)).length,
+    tileBasis: tiles.filter((t) => /^(MEASURED|ESTIMATE|UNAVAILABLE)$/.test(t.getAttribute('data-basis') || '') && (t.getAttribute('data-basis') !== 'ESTIMATE' || /est\\./.test(t.innerText))).length,
+    basisWords: tiles.filter((t) => /MEASURED|ESTIMATE/.test(t.innerText)).length,
     was: document.querySelectorAll('[data-was]').length,
     detail: !!root.querySelector('[data-scorecard-detail]'),
   };
@@ -111,7 +113,8 @@ try {
 
       let s = await m(b);
       check(`${tag}: a program card with five numbers`, s.tiles >= 5 && s.tiles % 5 === 0, `tiles=${s.tiles}`);
-      check(`${tag}: each number has a state, MEASURED / ESTIMATE / UNAVAILABLE and an InfoTip`, s.tileStates.every(Boolean) && s.tileBasis === s.tiles && s.tileTips === s.tiles, JSON.stringify([s.tileStates, s.tileBasis, s.tileTips]));
+      check(`${tag}: each number has a state, a basis ("est." shown on an estimate) and an InfoTip`, s.tileStates.every(Boolean) && s.tileBasis === s.tiles && s.tileTips === s.tiles, JSON.stringify([s.tileStates, s.tileBasis, s.tileTips]));
+      check(`${tag}: text diet: no MEASURED / ESTIMATE words under the numbers`, s.basisWords === 0, `basisWords=${s.basisWords}`);
       check(`${tag}: no NaN, undefined or null text`, s.bad.length === 0, JSON.stringify(s.bad));
       check(`${tag}: no sideways scroll`, noScroll(s), JSON.stringify([s.docScroll, s.docClient, s.rootScroll, s.rootClient]));
       sizes(`${tag}: controls >= 44 px`, size.mobile, s.small);
@@ -134,7 +137,7 @@ try {
       check(`${tag}: Details clicks`, await clickDetails(b));
       await sleep(400);
       s = await m(b);
-      check(`${tag}: details: the lists show (done by type, in review, CI, deploys, targets)`, s.detail && /Done by type/.test(s.text) && /In review/.test(s.text) && /Targets/.test(s.text));
+      check(`${tag}: details: the rows show (done, in review, CI, deploys, targets, cost)`, s.detail && /\bDone\b/.test(s.text) && /In review/.test(s.text) && /Targets/.test(s.text) && /Cost/.test(s.text));
       check(`${tag}: details: no sideways scroll, no NaN`, noScroll(s) && s.bad.length === 0, JSON.stringify([s.docScroll, s.docClient, s.rootScroll, s.rootClient]));
       sizes(`${tag}: details: controls >= 44 px`, size.mobile, s.small);
       await b.shot(`crew-details-${tag}`, { full: true });

@@ -1,68 +1,39 @@
 import { LoadError, RowsSkeleton, Segmented } from '@isnanme/ui';
 import type { CrewProgramScore, CrewScorecard, CrewWindow } from '@portal/contracts';
-import { ChevronDown, ChevronUp } from 'lucide-react';
+import { ChevronDown, ChevronUp, Users } from 'lucide-react';
 import { useState } from 'react';
 import { Card } from '@/components/Card';
 import { InfoTip } from '@/components/InfoTip';
 import { PageHeader } from '@/components/PageHeader';
-import { formatCost } from '@/lib/usage/format';
 import { NotAvailable } from '../usage/spend/shared';
 import { useLoad } from '../usage/spend/useLoad';
 import { labApi } from './api';
+import { Sections, Stat, STATE_CLASS, StateMark, Value } from './parts';
 import { SummaryBlock } from './SummaryBlock';
-import { d65Rows, fmtAge, fmtFigure, fmtPerHour, qaOpusLine, tiles, UNAVAILABLE, WINDOW_OPTIONS, type Tile, type TileState } from './scorecardModel';
-
-const STATE_CLASS: Record<TileState, string> = {
-  ok: 'text-ink',
-  warn: 'text-amber-600 dark:text-amber-400',
-  breach: 'text-red-600 dark:text-red-400',
-  unavailable: 'text-muted',
-};
+import { d65Rows, detailSections, tiles, WINDOW_OPTIONS, type Tile } from './scorecardModel';
 
 function TileView({ t }: { t: Tile }) {
-  return (
-    <div className="min-w-0" data-tile={t.key} data-state={t.state}>
-      <dt className="flex items-center text-[11.5px] text-muted">
-        <span className="truncate">{t.label}</span>
-        <InfoTip label={`About ${t.label}`}>{t.tip}</InfoTip>
-      </dt>
-      <dd className="break-words [overflow-wrap:anywhere]">
-        {t.value === UNAVAILABLE ? (
-          <span className="text-[12px] text-muted">{UNAVAILABLE}</span>
-        ) : (
-          <span className={`text-[17px] font-semibold tabular-nums ${STATE_CLASS[t.state]}`}>{t.value}</span>
-        )}
-        {t.was !== null && <span data-was="" className="ml-1.5 text-[11.5px] text-muted tabular-nums">was {t.was}</span>}
-        <span className="mt-0.5 block text-[10.5px] uppercase tracking-wide text-muted">
-          {t.state === 'unavailable' ? t.basis : `${t.state} · ${t.basis}`}
-        </span>
-      </dd>
-    </div>
-  );
+  return <Stat label={t.label} tip={t.tip} value={t.value} state={t.state} basis={t.basis} was={t.was} data={{ 'data-tile': t.key }} />;
 }
 
-/** T-549 (D-65): the efficiency targets, one row each: label, value and state; the offenders under it; the rule and source in the tip. */
+/** T-549 (D-65): the efficiency targets, a compact row each: label (rule and source in the tip), value, a state icon; the offenders under it. */
 function D65Rows({ p }: { p: CrewProgramScore }) {
   return (
     <div className="border-t border-line px-4 py-2" data-d65="">
-      <h4 className="text-[12.5px] font-semibold">D-65</h4>
-      <ul className="mt-1 divide-y divide-line">
+      <h4 className="text-[12px] font-semibold text-muted">D-65</h4>
+      <ul className="mt-0.5 grid gap-x-6 sm:grid-cols-2">
         {d65Rows(p).map((r) => (
-          <li key={r.id} className="min-w-0 py-1.5" data-d65-row={r.id} data-state={r.state}>
+          <li key={r.id} className="min-w-0" data-d65-row={r.id} data-state={r.state}>
             <div className="flex min-h-11 items-center gap-2 text-[13px]">
               <span className="flex min-w-0 flex-1 items-center">
                 <span className="truncate">{r.label}</span>
                 <InfoTip label={`About ${r.label}`}>{r.tip}</InfoTip>
               </span>
-              {r.value === UNAVAILABLE ? (
-                <span className="shrink-0 text-[12px] text-muted">{UNAVAILABLE}</span>
-              ) : (
-                <span className={`shrink-0 font-semibold tabular-nums ${STATE_CLASS[r.state]}`}>{r.value}</span>
-              )}
-              <span className={`w-14 shrink-0 text-right text-[10.5px] uppercase tracking-wide ${r.state === 'unavailable' ? 'text-muted' : STATE_CLASS[r.state]}`}>{r.state === 'unavailable' ? 'n/a' : r.state}</span>
+              <Value v={r.value} className={`shrink-0 font-semibold ${STATE_CLASS[r.state]}`} />
+              <StateMark state={r.state} />
             </div>
             {r.offenders.length > 0 && (
-              <p className="-mt-1 break-words text-[11.5px] text-muted [overflow-wrap:anywhere]" data-d65-offenders="">
+              <p className="-mt-2 pb-1 break-words text-[11.5px] text-muted [overflow-wrap:anywhere]" data-d65-offenders="">
                 {r.offenders.slice(0, 5).join(', ')}
                 {r.offenders.length > 5 ? ` +${r.offenders.length - 5}` : ''}
               </p>
@@ -74,64 +45,22 @@ function D65Rows({ p }: { p: CrewProgramScore }) {
   );
 }
 
-function List({ title, rows }: { title: string; rows: string[] }) {
-  return (
-    <div className="mt-3">
-      <h4 className="text-[12.5px] font-semibold">{title}</h4>
-      {rows.length === 0 ? (
-        <p className="text-[12.5px] text-muted">None in this window.</p>
-      ) : (
-        <ul className="mt-1 space-y-1 text-[12.5px]">
-          {rows.map((r, i) => (
-            <li key={i} dir="auto" className="break-words [overflow-wrap:anywhere] tabular-nums">
-              {r}
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
-}
-
-/** The tables the API returns, as lists (a table would scroll sideways on a phone). */
-function Detail({ p }: { p: CrewProgramScore }) {
-  const e = p.current.effectiveness;
-  return (
-    <div className="border-t border-line px-4 pb-3 pt-1" data-scorecard-detail="">
-      <List
-        title="Done by type"
-        rows={e.byType.map((r) => `${r.type}: ${r.done} done, ${fmtPerHour(r.perHour)} / h, ${formatCost(r.perTicketAllInUsd)} each${r.noStart ? `, ${r.noStart} no start` : ''}`)}
-      />
-      <List title="In review" rows={e.review.map((r) => `${r.ticket} (${r.type}) ${fmtAge(r.ageMs)}${r.waitsFor ? `, waits ${r.waitsFor}${r.waitsBasis === 'derived' ? ' (read now)' : ''}` : ''}`)} />
-      <List title="CI" rows={e.ci.map((r) => `${r.pipeline}: ${r.passed} passed, ${r.failed} failed, ${r.cancelled} cancelled`)} />
-      <List title="Deploys" rows={e.deploys.map((d) => `#${d.runNumber} ${d.pipeline} → ${d.environment}, ${d.approval}${d.outcome ? `, ${d.outcome}` : ''}`)} />
-      <List
-        title="Targets"
-        rows={p.targets.filter((t) => t.decision !== 'D-65').map((t) => `${t.decision} ${t.id.replace(/_/g, ' ')}: ${t.state}${t.figure.basis === 'unavailable' ? ' (unavailable)' : ''}${t.offenders.length ? `, ${t.offenders.slice(0, 5).join(', ')}` : ''}`)}
-      />
-      <p className="mt-2 text-[12px] text-muted">
-        Cost {fmtFigure(p.current.cost.total, formatCost)} · lead {fmtFigure(p.current.cost.lead, formatCost)} · workers {fmtFigure(p.current.cost.workers, formatCost)}
-      </p>
-      <p className="mt-1 break-words text-[12px] text-muted [overflow-wrap:anywhere]" data-qa-opus="">
-        {qaOpusLine(p)}
-        {p.workspaceId ? ` · ${p.workspaceId}` : ''}
-      </p>
-    </div>
-  );
-}
-
-function ProgramCard({ p }: { p: CrewProgramScore }) {
+export function ProgramCard({ p }: { p: CrewProgramScore }) {
   const [open, setOpen] = useState(false);
   return (
     <Card>
       <div className="px-4 pt-3" data-scorecard-program={p.program}>
-        <p className="flex min-w-0 items-baseline gap-2 text-[14px] font-semibold">
+        <p className="flex min-w-0 items-center gap-2 text-[14px] font-semibold">
           <span dir="auto" className="min-w-0 break-words [overflow-wrap:anywhere]">
             {p.title || p.program}
           </span>
-          <span className="ml-auto shrink-0 text-[12px] font-normal text-muted">{p.workers} workers</span>
+          {p.workspaceId && <InfoTip label="About this program">Workspace: {p.workspaceId}</InfoTip>}
+          <span className="ml-auto inline-flex shrink-0 items-center gap-1 text-[12px] font-normal text-muted tabular-nums" aria-label={`${p.workers} workers`} role="img">
+            <Users size={14} aria-hidden="true" />
+            {p.workers}
+          </span>
         </p>
-        <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-3 pb-2 sm:grid-cols-3 lg:grid-cols-5">
+        <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-3 pb-3 sm:grid-cols-3 lg:grid-cols-5">
           {tiles(p).map((t) => (
             <TileView key={t.key} t={t} />
           ))}
@@ -143,22 +72,21 @@ function ProgramCard({ p }: { p: CrewProgramScore }) {
         aria-expanded={open}
         aria-label={open ? 'Hide details' : 'Show details'}
         onClick={() => setOpen((o) => !o)}
-        className="press flex min-h-11 w-full items-center justify-between border-t border-line px-4 text-[13px] text-muted"
+        className="press flex min-h-11 w-full items-center justify-center border-t border-line text-muted"
       >
-        <span className="hidden sm:inline">{open ? 'Hide' : 'Details'}</span>
-        {open ? <ChevronUp size={18} aria-hidden="true" className="mx-auto sm:mx-0" /> : <ChevronDown size={18} aria-hidden="true" className="mx-auto sm:mx-0" />}
+        {open ? <ChevronUp size={18} aria-hidden="true" /> : <ChevronDown size={18} aria-hidden="true" />}
       </button>
-      {open && <Detail p={p} />}
+      {open && <Sections sections={detailSections(p)} data={{ 'data-scorecard-detail': '' }} />}
     </Card>
   );
 }
 
 function Programs({ data, loading }: { data: CrewScorecard; loading: boolean }) {
   return (
-    <div className={`space-y-3 ${loading ? 'opacity-70 transition-opacity' : 'transition-opacity'}`}>
+    <div className={`space-y-3 transition-opacity motion-reduce:transition-none ${loading ? 'opacity-70' : ''}`}>
       <SummaryBlock summary={data.headline} />
       {data.programs.length === 0 ? (
-        <p className="py-3 text-[13px] text-muted">No program active in this window.</p>
+        <p className="py-3 text-[13px] text-muted">No programs</p>
       ) : (
         <ul className="space-y-3">
           {data.programs.map((p) => (
@@ -174,7 +102,8 @@ function Programs({ data, loading }: { data: CrewScorecard; loading: boolean }) 
 
 /**
  * Usage → Crew (docs/prd/claude-usage.md §28.14): one card per program with five numbers (done per hour, dollars per done ticket, the lead's
- * share, the review backlog, breaches), each with its state and whether it is measured or an estimate, its source in a tip. Read only.
+ * share, the review backlog, breaches) as stat tiles: a state icon when one warns or breaches, "est." on an estimate, the source, the basis
+ * and the reason when unavailable in each tile's tip (T-1852 text diet). Read only.
  */
 export function ScorecardTab() {
   const [window, setWindow] = useState<CrewWindow>('day');
@@ -210,7 +139,7 @@ export function ScorecardTab() {
               onChange={setCompare}
             />
           </div>
-          <InfoTip label="About compare">Compare shows each number of the window before this one, the same length, as “was”.</InfoTip>
+          <InfoTip label="About compare">Compare shows each number of the window before this one, the same length, as “was”. “est.” marks an estimate.</InfoTip>
         </div>
       </div>
       {forbidden ? <NotAvailable /> : failed ? <LoadError onRetry={reload} /> : !data ? <RowsSkeleton rows={2} lines={3} label="Loading the scorecard" /> : <Programs data={data} loading={loading} />}

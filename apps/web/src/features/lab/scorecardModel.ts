@@ -133,7 +133,9 @@ export function d65Rows(p: CrewProgramScore): D65Row[] {
     const t = p.targets.find((x) => x.id === id);
     const { label, fmt } = D65_FORMAT[id];
     if (!t) return { id, label, value: UNAVAILABLE, state: 'unavailable', basis: 'UNAVAILABLE', offenders: [], tip: 'UNAVAILABLE. This server did not send the row.' };
-    return { id, label, value: fmtFigure(t.figure, fmt), state: t.state, basis: basisLabel(t.figure), offenders: t.offenders, tip: tip(t.figure, t.rule) };
+    // T-1852: the QA opus counts (T-490, the same source) ride in this row's tip instead of a line of their own under Details.
+    const more = id === 'qa_opus_share' ? ` ${qaOpusLine(p)}.` : '';
+    return { id, label, value: fmtFigure(t.figure, fmt), state: t.state, basis: basisLabel(t.figure), offenders: t.offenders, tip: `${tip(t.figure, t.rule)}${more}` };
   });
 }
 
@@ -151,4 +153,112 @@ export function qaOpusLine(p: CrewProgramScore): string {
 export function fmtAge(ms: number): string {
   const h = ms / 3_600_000;
   return h < 1 ? `${Math.max(1, Math.round(ms / 60_000))} min` : h < 48 ? `${Math.round(h)} h` : `${Math.round(h / 24)} d`;
+}
+
+/**
+ * T-1852: a compact row of the Details and summary lists: a label, a value on the right, an optional muted line under the label and a
+ * thin bar (0 to 1) under it. A bar's `mark` (0 to 1) is a tick on it (a Claude's even pace). Text diet: no sentences, the rule is in a tip.
+ */
+export interface MiniRow {
+  key: string;
+  label: string;
+  value: string;
+  sub: string | null;
+  /** null: no state to show (a plain count). */
+  state: TileState | null;
+  bar: number | null;
+  mark?: number | null;
+}
+
+export interface Section {
+  /** One or two words. */
+  title: string;
+  rows: MiniRow[];
+}
+
+/** A fraction for a bar, 0 to 1; null when there is nothing to scale by (never a division by zero). */
+export const barOf = (n: number, max: number): number | null => (max > 0 && Number.isFinite(n) ? Math.min(1, Math.max(0, n / max)) : null);
+
+const joinSub = (parts: (string | null | false | undefined)[]): string | null => {
+  const s = parts.filter(Boolean).join(' · ');
+  return s || null;
+};
+
+/** The tables the API returns, as compact rows (a table would scroll sideways on a phone). Targets other than D-65's (those have their own rows). */
+export function detailSections(p: CrewProgramScore): Section[] {
+  const e = p.current.effectiveness;
+  const c = p.current.cost;
+  const maxDone = Math.max(0, ...e.byType.map((r) => r.done));
+  const total = c.total.basis === 'unavailable' ? null : c.total.value;
+  const part = (f: CrewFigure): number | null => (total === null || f.basis === 'unavailable' || f.value === null ? null : barOf(f.value, total));
+  return [
+    {
+      title: 'Done',
+      rows: e.byType.map((r) => ({
+        key: r.type,
+        label: r.type,
+        value: String(r.done),
+        sub: joinSub([`${fmtPerHour(r.perHour)} / h`, `${formatCost(r.perTicketAllInUsd)} each`, r.noStart > 0 && `${r.noStart} no start`]),
+        state: null,
+        bar: barOf(r.done, maxDone),
+      })),
+    },
+    {
+      title: 'In review',
+      rows: e.review.map((r) => ({
+        key: r.ticket,
+        label: r.ticket,
+        value: fmtAge(r.ageMs),
+        sub: joinSub([r.type, r.waitsFor && `waits ${r.waitsFor}${r.waitsBasis === 'derived' ? ' (now)' : ''}`]),
+        state: r.ageMs > REVIEW_WARN_MS ? 'warn' : null,
+        bar: null,
+      })),
+    },
+    {
+      title: 'CI',
+      rows: e.ci.map((r) => {
+        const runs = r.passed + r.failed + r.cancelled;
+        return {
+          key: r.pipeline,
+          label: r.pipeline,
+          value: `${r.passed} / ${runs}`,
+          sub: joinSub([r.failed > 0 && `${r.failed} failed`, r.cancelled > 0 && `${r.cancelled} cancelled`]),
+          state: r.failed > 0 ? 'warn' : null,
+          bar: barOf(r.passed, runs),
+        };
+      }),
+    },
+    {
+      title: 'Deploys',
+      rows: e.deploys.map((d) => ({
+        key: `${d.pipeline}#${d.runNumber}`,
+        label: `#${d.runNumber} ${d.pipeline}`,
+        value: d.outcome ?? d.approval,
+        sub: joinSub([`→ ${d.environment}`, d.outcome && d.approval]),
+        state: null,
+        bar: null,
+      })),
+    },
+    {
+      title: 'Targets',
+      rows: p.targets
+        .filter((t) => t.decision !== 'D-65')
+        .map((t) => ({
+          key: `${t.decision}|${t.id}`,
+          label: `${t.decision} ${t.id.replace(/_/g, ' ')}`,
+          value: t.state === 'unavailable' ? UNAVAILABLE : t.state,
+          sub: t.offenders.length ? `${t.offenders.slice(0, 5).join(', ')}${t.offenders.length > 5 ? ` +${t.offenders.length - 5}` : ''}` : null,
+          state: t.state,
+          bar: null,
+        })),
+    },
+    {
+      title: 'Cost',
+      rows: [
+        { key: 'total', label: 'Total', value: fmtFigure(c.total, formatCost), sub: null, state: null, bar: null },
+        { key: 'lead', label: 'Lead', value: fmtFigure(c.lead, formatCost), sub: null, state: null, bar: part(c.lead) },
+        { key: 'workers', label: 'Workers', value: fmtFigure(c.workers, formatCost), sub: null, state: null, bar: part(c.workers) },
+      ],
+    },
+  ];
 }

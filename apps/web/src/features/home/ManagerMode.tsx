@@ -27,7 +27,7 @@ export function saveHomeMode(m: HomeMode): void {
   }
 }
 
-/** The Dashboard | Manager switch (D-80, T-968 S3): icon-only on a phone, 44 px. */
+/** The Dashboard | Manager switch (D-80, T-968 S3): icon-only on a phone, 44 px (T-1851: it was 40). */
 export function HomeModeSwitch({ mode, onMode }: { mode: HomeMode; onMode: (m: HomeMode) => void }) {
   return (
     <div role="group" aria-label="Home mode" className="flex rounded-full border border-line p-0.5">
@@ -43,7 +43,7 @@ export function HomeModeSwitch({ mode, onMode }: { mode: HomeMode; onMode: (m: H
           aria-pressed={mode === m}
           aria-label={label}
           onClick={() => onMode(m)}
-          className={cn('press flex min-h-10 items-center gap-1.5 rounded-full px-3 text-[13px] font-semibold', mode === m ? 'bg-ink text-bg' : 'text-ink-soft hover:text-ink')}
+          className={cn('press flex min-h-11 min-w-11 items-center justify-center gap-1.5 rounded-full px-3 text-[13px] font-semibold', mode === m ? 'bg-ink text-bg' : 'text-ink-soft hover:text-ink')}
         >
           <Icon className="size-4" aria-hidden="true" />
           <span className="max-sm:sr-only">{label}</span>
