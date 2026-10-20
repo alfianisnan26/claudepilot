@@ -45,7 +45,7 @@ function D65Rows({ p }: { p: CrewProgramScore }) {
   );
 }
 
-function ProgramCard({ p }: { p: CrewProgramScore }) {
+export function ProgramCard({ p }: { p: CrewProgramScore }) {
   const [open, setOpen] = useState(false);
   return (
     <Card>
