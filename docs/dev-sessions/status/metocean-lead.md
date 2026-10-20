@@ -26,6 +26,7 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - ticket_verdict refused for my sub-agents (c18870): verdicts are gate-form comments.
 
 ## DECISIONS
+- 09:58Z T-1848 N1 PASS c20046 on af9858d1 (suite 63c81372 rc=0, 6 shots by eye). All 5 slices family-QA passed, held for outside QA and blind review; merge order narrow, Lows, MP, RB, RB-narrow (c20048).
 - 09:50Z T-1848 N1 fixed af9858d1 (fail-first 0467412f rc=1, lint+suite fd8888e1 rc=0 700; c20032). QA mo-qa-1848a re-checks N1 only.
 - 09:40Z T-1848 Lows delta 2 PASS WITH GAPS c20014 on fbe66685 (suite cc3c9cdc rc=0 697, M6 killed, 70 shots). N1 Hs axis to -1 on a contour below 0: clamp now (c20018), same builder; QA re-checks N1 only.
 - 09:35Z T-1848 RB slice 3 delta PASS c20005 on 97ad731 (suite 607ee151 rc=0 673, mutant 00a65534 killed, 8 shots by eye incl. Source). Held for outside QA; 26 px Copy/Download and 1 px ring to next RB batch.
@@ -49,8 +50,7 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - 07:31Z T-1848 slice 1 items 1-6 at 7bbc187 (suite 6224ad96 rc=0 662, lint fea4d43d rc=0; c19703). QA mo-qa-1848a dispatched on 7bbc187. Same builder does item 7 on ticket/T-1848-metocean-lows (stacked). Item 6 Explain: stg log read pending (c19704).
 - 07:25Z T-1848 slice 2 built: abd19d8 (fail-first 1031cedf rc=1, suite 6e063b62 rc=0 653, lint 7bafd92b rc=0; c19683). One chained command refused, re-run as separate allowed calls. QA mo-qa-1848b (opus, lane-qa-ui) dispatched: diff, mutants one per Job, 390/1280 light/dark shots.
 - 05:15Z Coordinator rule: outside-family QA comes from peer leads by QA-ASK on T-84 (Lab QAs Metocean, Metocean QAs Business), answered before new build work. Asked 8 tickets (c19263, c19268). Leads cannot message each other (NOT_FOUND), T-84 c19264.
-- 04:13Z T-602 merges only with the T-1704 v14 bump (c19044); post-deploy screen check before close.
-- 01:40Z T-1591 held (money path D-81). 16:10Z (10-19) one v14 batch; no compute deploy before both v14 bumps.
+- 04:13Z T-602 merges only with the T-1704 v14 bump (c19044); post-deploy screen check before close. T-1591 held (money path D-81); one v14 batch, no compute deploy before both v14 bumps.
 
 ## FOR THE COORDINATOR
 - T-1703 c19978: cf-logs.sh refused for the lead (policy-rule-guard "writes a rule file"); blocks T-1848 item 6. c19970: QA read .claude/settings.json, blocked. c19954: QA python3 -c slip.
