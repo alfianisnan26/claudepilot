@@ -42,6 +42,7 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - 16:20Z stg Worker logs via cf-logs.sh (read-only); "Konfersi QA e2e (agents)" token covers stg hosts for Job e2e.
 
 ## FOR THE COORDINATOR
+- T-1703 (04:3xZ): allow Read on /home/node/work/briefs/** for dontAsk workers (refused in bbde2b22, T-1611 c19088). Bash for workers works now (c17308 solved for Bash).
 - T-1703 c19047: where the Konfersi UI/UX standard lives (repo and path); not in konfersi-universe. Or: is the kit design-standard skill the baseline until it exists?
 - T-1703 c18925: reopen T-1828 (closed wont_do by my mistake, summary false) or note on it that its gaps live on T-1703.
 - T-851 c18847: backend wrangler.jsonc sets var ACCOUNT_JWT_PRIVATE_KEY at the top level; confirm no key value is committed (name only).
