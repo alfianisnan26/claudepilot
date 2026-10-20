@@ -12,6 +12,8 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - T-1801 built: item 1 compute e45d5f9 (Jobs 63c820d6, mutant 36e3f9a5 rc=1, suite 4070507f 361), item 2 lab-plugin bec25a4 on T-1182's 4e32c8e (Job 53668779, 2 mutants red), item 4 backend 508e2d2 (ci c0769958 2098, mutant 8bcfe3b8 rc=1). c18940, c18946, c18948.
 
 ## IN FLIGHT
+- 04:3xZ mo-commit (implementer, sonnet): T-1629 commit + Job (label mo-fe-1629), then T-1803 commit + npm run ci (label mo-be-1803), -F SOP (T-84 item 8).
+- 04:3xZ worker bbde2b22 on two.claude (qa-verifier, auto, dontAsk): T-1611 item 2 probe commit + stg screen check; re-tests c17308 (workers and Bash).
 - 04:13Z mo-qa-602 (qa-verifier, sonnet): T-602 QA, both repos, one gate form per repo.
 - 03:47Z mo-qa-1801 (qa-verifier, sonnet): T-1801 QA items 2, 1, 4 (backend Job running at 04:12Z).
 - T-1591 in_review: fix 2d633120 on ticket/T-1591-metering-errors (fail-first 3e6b3f58, ci c29c4247 rc=0). Needs delta QA, merge gate, D-81 second QA + post-deploy check.
@@ -24,6 +26,7 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - ticket_verdict is refused for my sub-agents (c18870): verdicts stay as gate-form comments.
 
 ## DECISIONS
+- 04:3xZ T-84 item 8 solved by the coordinator (`git * credential *` matched a message word): -F message file is the SOP, in briefs/mo/common.md; blocked commits T-1629, T-1803, T-1611 woken. Workers start with claude: auto (coordinator, quota) (T-1703 comment).
 - 04:15Z D-91 (UI/UX polish: QA suggests, lead decides, batched per page or app) in briefs/mo/common.md and qa-lp2.md (T-1703 c19047). Standard's location asked FOR THE COORDINATOR.
 - 04:13Z T-602 merges only with the T-1704 v14 bump (c19044): without the bump, stored partition rows (36) count as incomplete against 45. Lab render of the new tables: post-deploy screen check with shots judged by eye (D-89) before close.
 - 04:13Z fadlilah session 61 %, out about 05:07Z (claude_usage 04:12Z, resets 07:20Z): 2 QA sub-agents only, no new builder. Pushed branches carry all work if the session moves.
@@ -41,7 +44,6 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 ## FOR THE COORDINATOR
 - T-1703 c19047: where the Konfersi UI/UX standard lives (repo and path); not in konfersi-universe. Or: is the kit design-standard skill the baseline until it exists?
 - T-1703 c18925: reopen T-1828 (closed wont_do by my mistake, summary false) or note on it that its gaps live on T-1703.
-- T-1803 c18623 + T-1703 c18874, c18911: name the rule that refused the mo-be-1803, mo-qa-1611 and mo-fe-1629 commits; allow the shape or fix the false positive. Blocks T-1803, T-1611 item 2, T-1629.
 - T-851 c18847: backend wrangler.jsonc sets var ACCOUNT_JWT_PRIVATE_KEY at the top level; confirm no key value is committed (name only).
 - c17308: dontAsk workers refused on the allow-listed clone shape. Single blocker for every non-lineage QA record (T-822, T-1800, T-1802, T-1574, T-1103, T-553; c17465: T-1353, T-632, T-1632).
 - T-1703 c18778 / T-1705: deny `git switch` like checkout; `--detach` intent; `git * >*` false positive on quoted commit text; lane clone commit author is a person's identity (T-1591 c18791).
