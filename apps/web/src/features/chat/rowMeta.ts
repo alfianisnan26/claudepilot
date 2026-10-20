@@ -170,7 +170,8 @@ export function rowMeta({ session: s, groupBy, showWorkspace, usage, nowMs, lead
     cost: c.usd > 0 ? { usd: c.usd, estimate: c.basis === 'estimate' } : null,
     workspace: showWorkspace ? { label: workspaceLabel(s.workspaceId), title: s.workspaceId } : null,
     branch: s.worktree && groupBy !== 'worktree' ? { label: s.worktree.branch, title: s.worktree.path } : null,
-    ticket: s.ticketId && groupBy !== 'ticket' ? s.ticketId : null,
+    // T-1098: the bucket key (KONF-12) the server sends; the stable id from an older server.
+    ticket: s.ticketId && groupBy !== 'ticket' ? (s.ticketKey ?? s.ticketId) : null,
     waitingFor: s.waiting > 0 || s.state === 'waiting' ? s.waitingFor : null,
   };
 }

@@ -372,8 +372,25 @@ export class SpendStore {
         }
         want = [...next];
       }
+      this.#ticketKeys(db, out);
       return out;
     });
+  }
+
+  /** T-1098: each session's ticket's bucket key, in one read per chunk of tickets (not per row). A table without buckets: none. */
+  #ticketKeys(db: DatabaseSync, sessions: Map<string, SessionInfo>): void {
+    const numbers = [...new Set([...sessions.values()].map((s) => /^T-(\d{1,9})$/.exec(s.ticketId ?? '')?.[1]).filter((n): n is string => !!n).map(Number))];
+    const keys = new Map<string, string>();
+    try {
+      for (let i = 0; i < numbers.length; i += CHUNK) {
+        const part = numbers.slice(i, i + CHUNK);
+        const rows = db.prepare(`SELECT number, bucket_key, bucket_number FROM tickets WHERE number IN ${inList(part.length)}`).all(...part) as unknown as { number: number; bucket_key: string; bucket_number: number | null }[];
+        for (const r of rows) if (r.bucket_number !== null) keys.set(`T-${r.number}`, `${r.bucket_key}-${r.bucket_number}`);
+      }
+    } catch {
+      return; // an older table: the screens show the stable id
+    }
+    for (const s of sessions.values()) if (s.ticketId && keys.has(s.ticketId)) s.ticketKey = keys.get(s.ticketId)!;
   }
 
   /** Every session below `rootId` (started by it, or by one it started, ...), live or kept; not the root itself. */

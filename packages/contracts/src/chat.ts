@@ -102,8 +102,10 @@ export interface ChatSession {
   archivedAt: string | null;
   /** When the person pinned it (FR2: the Pinned chip, first in its group), or null. Archiving unpins. */
   pinnedAt: string | null;
-  /** The ticket this session works on (Tickets), or null. Set when it's created, or with `setTicket`. */
+  /** The ticket this session works on (Tickets), or null. Set when it's created, or with `setTicket`. Always the stable `T-<n>`. */
   ticketId: string | null;
+  /** T-1098: that ticket's bucket key (`KONF-12`), what the portal shows; absent from an older server or for a ticket gone. */
+  ticketKey?: string | null;
   /** The session that started this one (multi-agent), or null for one a person or a ticket started. */
   parentId: string | null;
   /** The git worktree it runs in, which is also its `cwd`, or null when it runs in a plain folder. */

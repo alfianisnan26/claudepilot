@@ -65,9 +65,10 @@ export function ticketItems(tickets: readonly TicketItem[]): PaletteItem[] {
     id: `ticket:${t.id}`,
     kind: 'ticket' as const,
     title: t.summary,
-    hint: `${t.id} · ${TICKET_STATUS_LABEL[t.status]}`,
-    to: `/admin/tickets/${encodeURIComponent(t.id)}`,
-    keywords: t.tags.join(' '),
+    hint: `${t.key ?? t.id} · ${TICKET_STATUS_LABEL[t.status]}`,
+    to: `/admin/tickets/${encodeURIComponent(t.key ?? t.id)}`,
+    // T-1098: both ids match (the key shows, the stable T-n stays an alias).
+    keywords: [t.id, t.key ?? '', ...t.tags].filter(Boolean).join(' '),
     matched: true,
   }));
 }

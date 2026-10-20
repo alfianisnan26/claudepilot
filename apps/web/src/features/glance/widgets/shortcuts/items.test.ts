@@ -39,7 +39,9 @@ test('a workspace opens its shell while it runs, else the Workspaces page, and t
 
 test('tickets the portal found are matched already and open their page', () => {
   const t = { id: 'T-12', summary: 'Ship it', status: 'in_progress', tags: ['release', 'web'] } as TicketItem;
-  assert.deepEqual(ticketItems([t]), [{ id: 'ticket:T-12', kind: 'ticket', title: 'Ship it', hint: 'T-12 · In progress', to: '/admin/tickets/T-12', keywords: 'release web', matched: true }]);
+  assert.deepEqual(ticketItems([t]), [{ id: 'ticket:T-12', kind: 'ticket', title: 'Ship it', hint: 'T-12 · In progress', to: '/admin/tickets/T-12', keywords: 'T-12 release web', matched: true }]);
+  // T-1098: a ticket with a bucket key shows and links the key; both ids match.
+  assert.deepEqual(ticketItems([{ ...t, key: 'KONF-3' }])[0], { id: 'ticket:T-12', kind: 'ticket', title: 'Ship it', hint: 'KONF-3 · In progress', to: '/admin/tickets/KONF-3', keywords: 'T-12 KONF-3 release web', matched: true });
 });
 
 test('pages come from the sidebar\'s own list', () => {

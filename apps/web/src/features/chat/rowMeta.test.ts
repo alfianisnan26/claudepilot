@@ -254,3 +254,9 @@ test('state: one word and a tone; removed, safety and moving first; several open
   assert.deepEqual(rowState(s({ state: 'ended' }), false, 'Ended for safety'), { word: 'Ended for safety', tone: 'danger', agents: 0 });
   assert.equal(rowState(s({ switching: { toClaude: 'x', step: 'handoff' } }), false, null).word, 'Moving');
 });
+
+test('T-1098: a row shows its ticket’s bucket key when the server sends one, the stable id otherwise', () => {
+  const base = { groupBy: 'none' as const, showWorkspace: false, usage: null, nowMs: NOW };
+  assert.equal(rowMeta({ ...base, session: s({ ticketId: 'T-9', ticketKey: 'KONF-3' }) }).ticket, 'KONF-3');
+  assert.equal(rowMeta({ ...base, session: s({ ticketId: 'T-9' }) }).ticket, 'T-9');
+});

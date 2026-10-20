@@ -34,6 +34,8 @@ export interface SessionInfo {
    */
   continuedFrom?: string | null;
   ticketId: string | null;
+  /** T-1098: the ticket's bucket key (`KONF-12`), read with the sessions; absent when unknown. */
+  ticketKey?: string | null;
   title: string;
   state: ChatSessionState | null;
   /** False once the session is deleted. */

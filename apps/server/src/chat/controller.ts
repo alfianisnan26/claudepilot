@@ -1025,6 +1025,8 @@ export class ChatController {
    * there is none. A session stores the stable id, so the ticket's session list, usage attribution and the lab find it. Wins over `ticketExists`.
    */
   ticketResolve?: (ticketId: string) => string | null;
+  /** T-1098: installed by the tickets module: the bucket key (`KONF-12`) a session's ticket shows as, null when the ticket is gone. */
+  ticketKeyOf?: (ticketId: string) => string | null;
   /**
    * Installed by the tickets module (T-270): a continuation was created; assign every unfinished ticket held by `from` (ended sessions, the
    * predecessor first) to `to`. Called INSIDE the transaction that inserts the new row, so the link and the move commit together. Returns the
@@ -1757,6 +1759,16 @@ export class ChatController {
     if (this.#launchedLeadRules.has(session.id) && out.process === 'live') out = { ...out, leadRules: true };
     const slotWait = this.#slotWaits.get(session.id);
     if (slotWait) out = { ...out, slotWait };
+    // T-1098: the key the screens show for its ticket (one primary-key read), so a list never asks per row.
+    if (out.ticketId && this.ticketKeyOf) {
+      let ticketKey: string | null = null;
+      try {
+        ticketKey = this.ticketKeyOf(out.ticketId);
+      } catch {
+        // no database right now: the screens show the stable id
+      }
+      out = { ...out, ticketKey };
+    }
     const change = this.#configChange(session);
     if (change) out = { ...out, configChangedAt: change.at, configChanged: change };
     // One definition of working (T-41): the main turn runs, or a task of its live process does. The stored state stays the turn's (what

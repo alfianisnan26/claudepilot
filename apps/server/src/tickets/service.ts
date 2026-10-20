@@ -729,6 +729,14 @@ export class Tickets {
     return n !== null && this.#row(n) ? ticketIdOf(n) : null;
   }
 
+  /** T-1098: the bucket key (`KONF-12`) of a ticket named either way, for the screens that show a ticket's id; null when there is none. */
+  keyOf(ref: string): string | null {
+    const n = this.#numberOf(ref);
+    if (n === null) return null;
+    const r = this.#db.prepare('SELECT bucket_key, bucket_number FROM tickets WHERE number = ?').get(n) as { bucket_key: string; bucket_number: number | null } | undefined;
+    return r ? (r.bucket_number === null ? ticketIdOf(n) : ticketKeyOf(r.bucket_key, r.bucket_number)) : null;
+  }
+
   /** T-1098: the bucket of a ticket named either way (for the routes' bucket check), or null when there is no such ticket. */
   bucketOf(ref: string): string | null {
     const n = this.#numberOf(ref);

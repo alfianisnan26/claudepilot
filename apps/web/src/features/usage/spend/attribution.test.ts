@@ -16,6 +16,11 @@ test('a session that started others shows its own dollars beside the total (whic
   assert.deepEqual(sessionLine(child), { claude: 'Satria', claudeId: 'c1', ticket: null, own: null, deleted: false });
 });
 
+test('T-1098: a session line shows its ticket’s bucket key when the server sends one', () => {
+  assert.equal(sessionLine(row({ session: session({ ticketKey: 'KONF-3' }) }))?.ticket, 'KONF-3');
+  assert.equal(sessionLine(row({ session: session() }))?.ticket, 'T-12', 'an older server: the stable id');
+});
+
 test('a deleted session is marked, and a row without session facts has no line', () => {
   assert.equal(sessionLine(row({ session: session({ exists: false, state: null }) }))!.deleted, true);
   assert.equal(sessionLine(row({ by: 'ticket' })), null);

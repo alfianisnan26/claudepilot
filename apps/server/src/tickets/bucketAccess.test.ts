@@ -46,6 +46,8 @@ test('routes: a ticket by T-<n> or by its key, every route; bucket admin; declar
     assert.equal((await app.request(TICKET_API.close('KONF-1'), json('POST', { summary: 'done' }))).status, 200);
     assert.equal((await read(await app.request(`${TICKET_API.list}?bucket=KONF&includeClosed=1`))).body.data.items.length, 1);
     assert.equal((await read(await app.request(`${TICKET_API.list}?bucket=CP`))).body.data.items.length, 0);
+    // The search box: by its key and by its old id.
+    for (const q of ['KONF-1', 'konf-1', 'T-1']) assert.deepEqual((await read(await app.request(`${TICKET_API.list}?q=${q}&includeClosed=1`))).body.data.items.map((t: { key: string }) => t.key), ['KONF-1'], q);
 
     const b = await read(await app.request(TICKET_API.buckets, json('POST', { key: 'OPS', name: 'Ops', defaultTags: ['ops'] })));
     assert.deepEqual([b.status, b.body.data.key, b.body.data.defaultTags], [201, 'OPS', ['ops']]);

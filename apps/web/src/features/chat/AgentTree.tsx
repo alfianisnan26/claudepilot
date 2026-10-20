@@ -268,7 +268,7 @@ function AgentCard({ node, wide, open, onToggle }: { node: AgentNode; wide: bool
       </div>
       {(node.task || s.ticketId) && (
         <p className="mt-1.5 text-[13.5px] leading-snug text-ink-soft [overflow-wrap:anywhere]">
-          {s.ticketId && <span className="mr-1.5 font-mono text-[12px] text-muted">{s.ticketId}</span>}
+          {s.ticketId && <span className="mr-1.5 font-mono text-[12px] text-muted" title={s.ticketId}>{s.ticketKey ?? s.ticketId}</span>}
           {node.task}
         </p>
       )}
