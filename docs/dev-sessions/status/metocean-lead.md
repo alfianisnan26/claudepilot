@@ -24,7 +24,8 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - Closed this session: 1 (T-1353).
 
 ## IN FLIGHT
-- 01:28Z mo-qa2-1591 (opus, T-1591 second QA, D-81; same lead session as mo-qa-1591, said on the ticket). Only sub-agent running.
+- 01:40Z: no sub-agent running. Quota sekar 82 % at 01:39Z, out about 01:50Z (resets 05:50Z): no dispatch; next session resumes from NEXT.
+- mo-qa2-1591 done: PASS WITH GAPS on 4f26757 (c18653, Job f0c5ce51 rc=0). T-1591 held from the merge gate, in_progress (c18658): pre-marker unbilled row + later full bill = billed and booked unbilled (new with T-1591; reasoned, no probe Job). Pre-existing items to T-1809. Incident T-1808: my c18618 "trailers parse" was false.
 - mo-qa-1182 done: T-1182 backend PASS on stg b7941a3 (c18631, Job fbf415e9), compute PASS on stg c29d103 (c18632, Job 75d39f96); gaps G1/G2 to T-1801 (c18633); lead c18634: in_review until lab-plugin 4e32c8e merges. mo-fe-1802 done: T-1802 in_review, 819bf775 on ticket/T-1802-run-toast-cancel (Jobs 4285bd94 rc=1 red, 68028dea rc=0 631 passed; c18627, lead c18629); QA needs a non-lineage session (c17308). Cap on sekar: 3. Quota 01:22Z: session 57 %, projected out about 01:50Z (resets 05:50Z): no new dispatch until it eases (D-43).
 - T-1803 blocked (c18623): fix staged in mo-be-1803 clone, uncommitted; commit refused 3x by an unknown rule; builder ended.
 - T-1701 hash slice done: 74bae41 on ai-worker ticket/T-1701-prompt-hash-log (c17525); gate ask waits for T-1162 on stg because `npm test` is red at the stg head itself (URLPattern, Jobs b24b9ea8/21ea40b0); then cherry-pick on a fresh stg clone, QA, gate, one ai-worker deploy (c17526).
@@ -32,6 +33,7 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - 16:58Z Re-attached by the coordinator after a portal liveness mark at 16:21Z (process never stopped).
 
 ## DECISIONS
+- 01:40Z T-1591 held (option a, fix before merge; money path D-81, gap new with the change). c18618's trailer claim corrected; incident T-1808.
 - 01:22Z T-1803: builder found none of the suspected denies matches its refused messages (c18619); the tests commit with the same trailers passed. Rule unknown: asked the coordinator (c18623), ticket blocked, no work-around.
 - 00:53Z (10-20) Moved to sekar. T-604 is wont_do since 10-17 (superseded by T-367): dropped from v14 (T-1704 c18558). T-603 rides T-1518's aeab2ec (c17324), pending the ancestry read.
 - 16:05Z Lanes on `claude: auto` (session pace over). 16:12Z Workers blocked: Agent sub-agents instead; respawn when the clone shape works.
@@ -55,7 +57,7 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - none (no production or uat action pending).
 
 ## NEXT
-1. Next free slots (quota high: one at a time): T-1803 commit + `npm run ci` Job once the coordinator answers c18623; then work whose QA is not blocked (QA of other sessions' builds, verify-first reads); then T-1800 builder (sonnet, S; its QA needs a non-lineage session). Brief rule: quote the whole job-run command (mo-qa-1593 near miss, T-1703).
+1. Next free slots (quota high: one at a time): T-1591 fix builder (opus, on its branch at 4f26757: fail-first test that a successful settle after a pre-marker failure leaves no unbilled row for the job, then fix; Job 'npm run ci' with --also konfersi-shared; QA non-lineage, c17308); T-1808 brief line (trailers: one --trailer flag each; claims about commit metadata quote `git log --format='%(trailers:only)'`); then T-1803 commit + `npm run ci` Job once the coordinator answers c18623; then work whose QA is not blocked (QA of other sessions' builds, verify-first reads); then T-1800 builder (sonnet, S; its QA needs a non-lineage session). Brief rule: quote the whole job-run command (mo-qa-1593 near miss, T-1703).
 2. Then: T-1007 (ai-worker, after T-1162 lands), T-1591 QA Job, T-1593 backend suite Job, T-1012 branch question.
 3. When a non-lineage QA exists: T-1574, T-1103, T-553, T-1802 (819bf775) QA and gate asks.
 3. After T-1574's QA and merge: gate asks T-1352 f92828f, T-1416 65d952d, T-1435 f424b1c; then the v14 bump commits (compute catalog.py, backend metocean-catalog.ts), backend migrations check, stg-deploy backend then compute, cf-logs check.
