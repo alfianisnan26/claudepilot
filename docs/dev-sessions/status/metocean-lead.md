@@ -24,6 +24,7 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - ticket_verdict is refused for my sub-agents (c18870): verdicts stay as gate-form comments.
 
 ## DECISIONS
+- 04:15Z D-91 (UI/UX polish: QA suggests, lead decides, batched per page or app) in briefs/mo/common.md and qa-lp2.md (T-1703 c19047). Standard's location asked FOR THE COORDINATOR.
 - 04:13Z T-602 merges only with the T-1704 v14 bump (c19044): without the bump, stored partition rows (36) count as incomplete against 45. Lab render of the new tables: post-deploy screen check with shots judged by eye (D-89) before close.
 - 04:13Z fadlilah session 61 %, out about 05:07Z (claude_usage 04:12Z, resets 07:20Z): 2 QA sub-agents only, no new builder. Pushed branches carry all work if the session moves.
 - 04:11Z D-89 (QA judges screenshots by eye) in briefs/mo/common.md and qa-lp2.md, lane told (T-1703 c19026). D-90: T-991 queued after in_review; plan on T-1703 c19033 (T-991 refuses comments until claimed).
@@ -38,6 +39,7 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - 16:20Z stg Worker logs via cf-logs.sh (read-only); "Konfersi QA e2e (agents)" token covers stg hosts for Job e2e.
 
 ## FOR THE COORDINATOR
+- T-1703 c19047: where the Konfersi UI/UX standard lives (repo and path); not in konfersi-universe. Or: is the kit design-standard skill the baseline until it exists?
 - T-1703 c18925: reopen T-1828 (closed wont_do by my mistake, summary false) or note on it that its gaps live on T-1703.
 - T-1803 c18623 + T-1703 c18874, c18911: name the rule that refused the mo-be-1803, mo-qa-1611 and mo-fe-1629 commits; allow the shape or fix the false positive. Blocks T-1803, T-1611 item 2, T-1629.
 - T-851 c18847: backend wrangler.jsonc sets var ACCOUNT_JWT_PRIVATE_KEY at the top level; confirm no key value is committed (name only).
@@ -54,5 +56,6 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 2. Closing beats starting: oldest in_review I can move (T-1662, T-1611, T-1521, T-822), then builder T-1826 (390 matrix labels), T-1809 (race test first, after T-1591 merges).
 3. T-991 (D-90, ai-worker billing, test first, after or on T-1591; D-81 money review), T-1007 (after T-1162 lands).
 4. After T-1574's QA and merge: gate asks T-1352 f92828f, T-1416 65d952d, T-1435 f424b1c; then the v14 bump commits (compute catalog.py, backend metocean-catalog.ts) with T-602, backend migrations check, stg-deploy backend then compute, cf-logs check, post-deploy screen checks.
-5. When the coordinator answers: T-1803 commit + `npm run ci` Job; T-1629 test commit; T-1611 item 2 probe.
-6. Hourly closed-count report on T-1703.
+5. After the in_review/merge sweep (D-91): UI/UX polish audit of my apps (Lab metocean views: Analysis, Map, Chart, Mission Planning, Report panels; report DOCX). QA suggests, I decide on the ticket against the standard (location asked, T-1703 c19047); one batched ticket per page or app.
+6. When the coordinator answers: T-1803 commit + `npm run ci` Job; T-1629 test commit; T-1611 item 2 probe.
+7. Hourly closed-count report on T-1703.
