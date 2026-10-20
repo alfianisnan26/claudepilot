@@ -1,4 +1,4 @@
-# Konfersi: Metocean lead status (2026-10-20 07:15Z, session fc73ae34-40d3-4c82-8148-dd55697c9379, on satria)
+# Konfersi: Metocean lead status (2026-10-20 08:12Z, session fc73ae34-40d3-4c82-8148-dd55697c9379, on fadlilah)
 
 Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-worker, Mission Planning compute/report/plugin parts, report builder, metocean reports. Status ticket T-1703. Release ticket T-1704 (v14 batch). Incidents T-1705, T-1808. Older lines: git history of this file.
 
@@ -26,6 +26,7 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - ticket_verdict refused for my sub-agents (c18870): verdicts are gate-form comments.
 
 ## DECISIONS
+- 08:12Z Moved satria to fadlilah (quota; session 17 %). Found: RB narrow 97db3a3 pushed plus 5 uncommitted files; MP fix 311a1e1 pushed (fail-first c00d15f), Jobs unknown; Lows QA no verdict. Restarted mo-fe-1848b (commit tree first), mo-fe-1848c (Jobs on c00d15f/311a1e1), mo-qa-1848a (delta on 520a89f), all opus, same worktrees.
 - 08:05Z T-1848 metocean Lows done 520a89f on ticket/T-1848-metocean-lows (fail-first 48edaae3 rc=1, Retry mutant 087c7579 rc=1, suite 5a1b0f57 rc=0 690, lint 3a179f84 rc=0 after 2 red lint Jobs; c19793). Same QA mo-qa-1848a checks the delta. Builder mo-fe-1848a done.
 - 07:56Z T-1848 MP slice QA FAIL c19780 on 805e49e (suite 82d90d76 rc=0, 4 mutants killed, 35 shots): F1 Retry wraps per letter at 390, F2 MC tabs 44x43. Lead saw shot; added raw save reason and Lab home stale card (c19785). Back to mo-fe-1848c. Read-another-way pattern to coordinator (T-1703 c19786).
 - 07:48Z T-1848 slice 2 delta PASS WITH GAPS c19756 on c728f29 (suite 1627480a rc=0, opacity mutant fac1c7e6 killed). Held for outside QA. RB slice 3 starts now stacked on c728f29 (ticket/T-1848-report-builder-narrow, mo-fe-1848b), not after slice 1 (c19757).
@@ -35,12 +36,9 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - 07:38Z T-1848 slice 2 QA FAIL c19730 (dark error box see-through over Sections header; items 1-3 PASS, suite 93c444ed rc=0, 4 mutants killed). Lead saw the shot; decided in-flow reserved row + 44 px controls + mutant-2 test fix (c19732). Back to mo-fe-1848b; same QA re-checks delta.
 - 07:31Z T-1848 slice 1 items 1-6 at 7bbc187 (suite 6224ad96 rc=0 662, lint fea4d43d rc=0; c19703). QA mo-qa-1848a dispatched on 7bbc187. Same builder does item 7 on ticket/T-1848-metocean-lows (stacked). Item 6 Explain: stg log read pending (c19704).
 - 07:25Z T-1848 slice 2 built: abd19d8 (fail-first 1031cedf rc=1, suite 6e063b62 rc=0 653, lint 7bafd92b rc=0; c19683). One chained command refused, re-run as separate allowed calls. QA mo-qa-1848b (opus, lane-qa-ui) dispatched: diff, mutants one per Job, 390/1280 light/dark shots.
-- 07:15Z Moved hasyim to satria (quota). Restarted mo-fe-1848a (head 60fb00f, Job result lost), mo-fe-1848b (3 untracked tests, nothing committed), mo-fe-1848c (nothing committed), all opus, same worktrees; briefs rebuilt from c19531/c19605/c19639/c19658 (T-1848 comment).
 - 06:31Z Coordinator T-1863: no in-session schedules (general lead ended by integrity check). CronList empty, none set (T-1703 c19534); brief line added. General lead now 8d05f919. T-1805 blind review mo-rev-1805 (opus) dispatched.
-- 06:2xZ T-1435 delta goes to the same comparison QA (D-81), resumed; cherry-pick, not rebase (lane rule).
 - 05:49Z Deploy #502: T-1652 (lead-spawned QA lanes count on handed-off tickets; builder lineage still refused), T-1839, T-1711. My refused records were in-session sub-agents, so nothing to re-record (T-1703 c19320). 05:41Z permission denial reported for T-1711. T-1435 cmp hit 80 turns probing refused forms; told to stop and report.
 - 05:45Z T-1838 landed (1de2bdb): "credential" in messages passes, -F stays, stored credential reads denied everywhere. In briefs/mo/common.md.
-- 05:43Z Moved to hasyim (session 2 %). mo-qa-1693, mo-qa-1435-cmp, mo-qa-1856 had posted nothing; all three restarted (opus). No new Business QA-ASK; Lab has not answered c19263, c19273, c19277, c19288.
 - 05:15Z Coordinator rule: outside-family QA comes from peer leads by QA-ASK on T-84 (Lab QAs Metocean, Metocean QAs Business), answered before new build work. Asked 8 tickets (c19263, c19268). Leads cannot message each other (NOT_FOUND), T-84 c19264.
 - 05:15Z UI/UX standard v0 is in the vault, "Konfersi/UI-UX standard.md" (T-84 c19101). My audit ticket is T-1848 (c19111), after the sweep fixes.
 - 05:20Z Lab-plugin Jobs need `--also platform/konfersi-shared@stg` (T-1826 c19253), in briefs/mo/common.md.
