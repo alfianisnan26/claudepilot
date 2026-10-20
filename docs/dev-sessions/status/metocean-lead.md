@@ -26,6 +26,7 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - ticket_verdict refused for my sub-agents (c18870): verdicts are gate-form comments.
 
 ## DECISIONS
+- 08:05Z T-1848 metocean Lows done 520a89f on ticket/T-1848-metocean-lows (fail-first 48edaae3 rc=1, Retry mutant 087c7579 rc=1, suite 5a1b0f57 rc=0 690, lint 3a179f84 rc=0 after 2 red lint Jobs; c19793). Same QA mo-qa-1848a checks the delta. Builder mo-fe-1848a done.
 - 07:56Z T-1848 MP slice QA FAIL c19780 on 805e49e (suite 82d90d76 rc=0, 4 mutants killed, 35 shots): F1 Retry wraps per letter at 390, F2 MC tabs 44x43. Lead saw shot; added raw save reason and Lab home stale card (c19785). Back to mo-fe-1848c. Read-another-way pattern to coordinator (T-1703 c19786).
 - 07:48Z T-1848 slice 2 delta PASS WITH GAPS c19756 on c728f29 (suite 1627480a rc=0, opacity mutant fac1c7e6 killed). Held for outside QA. RB slice 3 starts now stacked on c728f29 (ticket/T-1848-report-builder-narrow, mo-fe-1848b), not after slice 1 (c19757).
 - 07:52Z T-1848 slice 2 fix c728f29 (fail-first 8015be16 rc=1, mutant 070b43f0 rc=1, suite de6e4c69 rc=0 655, lint baf46af7 rc=0; c19754). Same QA mo-qa-1848b re-checks the delta.
@@ -71,7 +72,7 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - none (no production or uat action pending). T-1662 sweep note: D-77, a migration on stg D1 shared with uat needs a person's go; checked in the sweep read.
 
 ## NEXT
-0. When a slot frees: slice 1 Lows QA; Explain stg log read (c19704); blind reviews for the merge gate once the outside QA route exists.
+0. When a slot frees: Explain stg log read (c19704); blind reviews for the merge gate once the outside QA route exists.
 1. Business QA-ASK T-1805 ab56e48 (T-84 c19376, c19504): outside QA PASS WITH GAPS c19619 (suite b4530166 rc=0 2125; guard test only on ticket/T-1805-qa, builder must move it to src/__tests__); T-84 c19620. Blind review MERGE c19564 (proof Job 7aa8d5f3: 12/12 at ab56e48, 10/12 red at d55dcc5; 5 minors: guard and rollback untested, boundary 29/31 only). Then any newer Business QA-ASK.
 2. Lab stopped Metocean QA (c19607; T-84 c19655). Wait for the coordinator's new route (T-1703 c19654), then re-ask T-1435 (reuse Job 6309c594), T-991, T-1591, T-1856.
 3. mo-be-1435, mo-qa-1658, mo-qa-ui-1848 returns (then Mission Planning, report builder lanes): integrate; T-1435 then capture re-run on the fix. hasyim caps sub-agents at 3.
