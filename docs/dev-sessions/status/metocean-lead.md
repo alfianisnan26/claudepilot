@@ -14,7 +14,7 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 
 ## IN FLIGHT
 - T-1693 (Business ask) answered: mo-qa-1693 PASS WITH GAPS on 8dfe8fec, c19346 (ci 7412dbfb rc=0 2113, mutants e13b09ed 3/4 killed); T-84 c19351. 0111 data-only, D-77 person step stays with Business. Two-ref diff used after `A...B` refusal, disclosed on T-84.
-- T-1435 HELD: capture Job ad87a706 rc=1, 126/129 equal, 3 air_press POT bodies differ (global record RP -32%, AD 4th decimal), wind and edge records equal (c19321). Decision (b) fix to scipy parity (c19324): builder mo-be-1435 (opus) running since 05:58Z. Capture runs as `python -m pytest qa/T-1435/capture_outputs.py -q -s`.
+- T-1435 HELD: capture Job ad87a706 rc=1, 126/129 equal, 3 air_press POT bodies differ (global record RP -32%, AD 4th decimal), wind and edge records equal (c19321). Decision (b) fix to scipy parity (c19324). Builder done c19444: closed support z <= -1/c like scipy; test 2f06c3e fail-first d72dcae1 rc=1, fix 9c808138 suite e6e924c7 rc=0 367. Capture re-run: same QA (a7994ae, opus) cherry-picks onto its clone, pushes ticket/T-1435-output-compare-fix.
 - T-1591: family delta QA PASS WITH GAPS on 2d633120, evidence only (c19356, c19362; 8fb38df8, de0fb288). CI 9c9434ea rc=0, 2080/2080 with lint (c19372). Needs outside QA + blind review (T-84 c19308).
 - Business QA-ASK T-1658 d39ecf96 + T-1442 6696c47a (c19336, privacy): outside QA mo-qa-1658 (opus) running (T-84 c19358). Blind review done: T-1658 MERGE WITH FIXES (c19365, migrations/ labelled retain, job not at head), T-1442 MERGE (c19366); relayed T-84 c19368.
 - T-1848 claimed (c19371). Step 1 pages named (c19373); one ticket kept, split after open is under 150 (backlog rule vs D-91, named). Step 2 metocean: QA UI lane mo-qa-ui-1848 (opus) shoots stg Lab via probe 38f24f5; qa/* push refused server-side (c19384), my brief's error, resumed on ticket/T-1848-metocean-probe (c19386).
@@ -26,6 +26,7 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - ticket_verdict refused for my sub-agents (c18870): verdicts are gate-form comments.
 
 ## DECISIONS
+- 06:2xZ T-1435 delta goes to the same comparison QA (D-81), resumed; cherry-pick, not rebase (lane rule).
 - 05:49Z Deploy #502: T-1652 (lead-spawned QA lanes count on handed-off tickets; builder lineage still refused), T-1839, T-1711. My refused records were in-session sub-agents, so nothing to re-record (T-1703 c19320). 05:41Z permission denial reported for T-1711. T-1435 cmp hit 80 turns probing refused forms; told to stop and report.
 - 05:45Z T-1838 landed (1de2bdb): "credential" in messages passes, -F stays, stored credential reads denied everywhere. In briefs/mo/common.md.
 - 05:43Z Moved to hasyim (session 2 %). mo-qa-1693, mo-qa-1435-cmp, mo-qa-1856 had posted nothing; all three restarted (opus). No new Business QA-ASK; Lab has not answered c19263, c19273, c19277, c19288.
