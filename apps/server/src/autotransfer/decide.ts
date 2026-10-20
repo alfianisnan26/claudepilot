@@ -36,6 +36,8 @@ import {
 import { ROOM_PCT } from '../claudeusage/recommend.js';
 
 const MIN = 60_000;
+/** T-1835: what one chat already live on a destination costs it in the order, in points of what is left (two Claudes ~15 points apart are even at one chat). */
+export const LOAD_PCT = 15;
 
 /** U1a's ranking, injected (the engine passes `recommendMove` from claudeusage/recommend.ts; its signature is kept as is). */
 export type RecommendFn = (claudes: ClaudeUsage[], opts: { workspaceId: string; from?: string | null; nowMs: number; allow?: (claudeId: string) => boolean }) => MoveRecommendation;
@@ -349,10 +351,13 @@ export function candidates(
     const reason: MoveCandidate['reason'] = left < ROOM_PCT ? 'tight' : c.reason === 'over_pace' ? 'over_pace' : 'room';
     return { ...c, reason, leftPct: measuredFigure(left) };
   };
-  // The ranking's shape kept (room first, then Claudes without plan limits, then tight), each part by what it leaves the chat, ties in
-  // the ranking's own order (stable sort).
-  const byLeft = (a: MoveCandidate, b: MoveCandidate) =>
-    (b.leftPct.value ?? -1) - (a.leftPct.value ?? -1) || (forced ? input.load(a.claudeId) - input.load(b.claudeId) : 0);
+  // The ranking's shape kept (room first, then Claudes without plan limits, then tight), each part by what it leaves the chat less what
+  // is already running there, ties to the fewest chats, then in the ranking's own order (stable sort).
+  // T-1835: load is weighed, not only a tiebreak: five exhausted chats moved to the one Claude with the most room within a minute
+  // (2026-10-20 03:03), because each saw the same order. Every chat live there (a move just made counts: `input.load`) costs it
+  // LOAD_PCT points, so a burst spreads over the Claudes with room while one with far more room still wins.
+  const score = (c: MoveCandidate) => (c.leftPct.value ?? -1) - LOAD_PCT * input.load(c.claudeId);
+  const byLeft = (a: MoveCandidate, b: MoveCandidate) => score(b) - score(a) || input.load(a.claudeId) - input.load(b.claudeId);
   // T-255: a Claude whose usage is unknown for this chat (no reading, no reset time, stale) is taken out of the measured ranking and
   // listed after every measured candidate, with why on its `leftPct`: it is chosen only when no measured one qualifies.
   const unknowns: MoveCandidate[] = [];

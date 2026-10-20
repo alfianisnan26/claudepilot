@@ -593,3 +593,33 @@ test('T-109: the owner’s order overrides the catalogue (modelFallback "haiku")
   const d = decide({ ...fableOptions([WORK_FABLE_LOW(), SEKAR()]), settings: { ...SETTINGS, modelFallback: ['haiku'] } });
   assert.deepEqual(d.act === 'move' && d.to, { id: 'sekar', name: 'Sekar', model: 'haiku' });
 });
+
+test('T-1835: a burst of five exhausted chats spreads over the three Claudes with room (load counts each move), never all on the best one', () => {
+  // 2026-10-20 03:03: five exhausted chats moved to the same Claude within a minute, because load only broke ties on what was left.
+  const EXH = () => claude('work', 'Work', [win('session', 100)]);
+  const a = claude('a', 'A', [win('session', 10)]); // 90 % left
+  const b = claude('b', 'B', [win('session', 20)]); // 80 % left
+  const c = claude('c', 'C', [win('session', 35)]); // 65 % left
+  const tight = claude('t', 'Tight', [win('session', 85)]); // 15 % left: never before one with room
+  const live = new Map<string, number>();
+  const picks: string[] = [];
+  for (let i = 1; i <= 5; i++) {
+    const cs = [EXH(), a, b, c, tight];
+    const base = input(cs, { load: (id) => live.get(id) ?? 0 });
+    const d = decide({ ...base, session: { ...base.session, id: `s${i}` } });
+    assert.equal(d.act, 'move', `chat ${i} moves`);
+    if (d.act !== 'move') return;
+    picks.push(d.to.id);
+    live.set(d.to.id, (live.get(d.to.id) ?? 0) + 1); // the engine's load counts a chat on its new Claude at once
+  }
+  // By hand, 15 points a chat: A 90, B 80 → A; A 75, B 80 → B; A 75, B 65, C 65 → A; A 60, B 65, C 65 (C fewer chats) → C; B 65 → B.
+  assert.deepEqual(picks, ['a', 'b', 'a', 'c', 'b']);
+  assert.equal(new Set(picks).size, 3, 'all three Claudes with room take a share');
+  assert.ok(!picks.includes('t'));
+});
+
+test('T-1835: load does not outweigh a large difference in room: 90 % left with one chat still beats 40 % left with none', () => {
+  const far = claude('far', 'Far', [win('session', 10)]);
+  const d = decide(input([WORK_92(), far, HOME_60()], { load: (id) => (id === 'far' ? 1 : 0) }));
+  assert.equal(d.act === 'move' && d.to.id, 'far');
+});
