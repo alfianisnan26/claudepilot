@@ -56,7 +56,7 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - none (no production or uat action pending).
 
 ## NEXT
-1. Next free slots (quota high: one at a time): T-1591 fix builder (opus, on its branch at 4f26757: fail-first test that a successful settle after a pre-marker failure leaves no unbilled row for the job, then fix; Job 'npm run ci' with --also konfersi-shared; QA non-lineage, c17308); T-1808 brief line (trailers: one --trailer flag each; claims about commit metadata quote `git log --format='%(trailers:only)'`); then T-1803 commit + `npm run ci` Job once the coordinator answers c18623; then work whose QA is not blocked (QA of other sessions' builds, verify-first reads); then T-1800 builder (sonnet, S; its QA needs a non-lineage session). Brief rule: quote the whole job-run command (mo-qa-1593 near miss, T-1703).
+1. Next free slot (harness cap here: 3 sub-agents): mo-pm (incident-analyst, sonnet) post-mortems of T-1705 and T-1808 (neither has one). Then T-1803 commit + `npm run ci` Job once the coordinator answers c18623; then QA of other sessions' builds. Brief rule: quote the whole job-run command (mo-qa-1593 near miss, T-1703).
 2. Then: T-1007 (ai-worker, after T-1162 lands), T-1591 QA Job, T-1593 backend suite Job, T-1012 branch question.
 3. When a non-lineage QA exists: T-1574, T-1103, T-553, T-1802 (819bf775) QA and gate asks.
 3. After T-1574's QA and merge: gate asks T-1352 f92828f, T-1416 65d952d, T-1435 f424b1c; then the v14 bump commits (compute catalog.py, backend metocean-catalog.ts), backend migrations check, stg-deploy backend then compute, cf-logs check.
