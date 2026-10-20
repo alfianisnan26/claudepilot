@@ -64,6 +64,6 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 2. Watch T-84 for Lab's answers to c19263, c19273, c19277. Gate-form PASS waiting over one sweep: note on T-1598 (leads cannot message).
 3. mo-be-1435, mo-qa-1658, mo-qa-ui-1848 returns (then Mission Planning, report builder lanes): integrate; T-1435 then capture re-run on the fix. hasyim caps sub-agents at 3.
 4. T-1848 UI/UX audit of my apps against the vault standard (D-91).
-5. T-991 claimed c19573: builder mo-be-991 (opus) on ticket/T-991-charge-budget-exhausted, test first; then family QA, blind review, QA-ASK (D-81). T-1809 after T-1591, T-1007 after T-1162.
+5. T-991: built 062f8f4 (test 4b9bfe3 red f4787bc1 rc=1; suite 8f622f4e rc=0 97/97; c19593). Lead accepted #609 billed and earlier-answer stays free (c19596). Family QA mo-qa-991 (opus) running; then blind review + QA-ASK (D-81). T-1809 after T-1591, T-1007 after T-1162.
 6. v14 batch (T-1704): T-602 + both catalog bumps, migrations check, stg-deploy backend then compute, post-deploy checks.
 7. Hourly closed-count report on T-1703.
