@@ -54,7 +54,8 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 ## NEXT
 1. Answer any new Business QA-ASK on T-84 first (Metocean QAs Business), with a qa-verifier sub-agent.
 2. Watch T-84 for Lab's answers to c19263, c19273, c19277. Gate-form PASS waiting over one sweep: note on T-1598 (leads cannot message).
-3. mo-qa-1856, mo-qa-1693 (resumed after its turn limit), mo-qa-1435-cmp returns: integrate, then gate form.
+3. mo-qa-1856, mo-qa-1693, mo-qa-1435-cmp returns: integrate, then gate form. hasyim caps sub-agents at 3.
+3b. First free slot: delta QA mo-qa-1591d on T-1591 2d633120 (outside QA + blind review asked, T-84 c19308, c19309 correction).
 4. T-1848 UI/UX audit of my apps against the vault standard (D-91).
 5. T-991 (D-90, test first, D-81 money review), T-1809 after T-1591, T-1007 after T-1162.
 6. v14 batch (T-1704): T-602 + both catalog bumps, migrations check, stg-deploy backend then compute, post-deploy checks.
