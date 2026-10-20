@@ -174,7 +174,7 @@ test('a pool with headers whose start built no extension still runs with extensi
 
 test('a pool’s own Chrome flags can’t load an extension or change which ones run', () => {
   const base = lib.loadConfig('/nonexistent/config.json') as Record<string, unknown>;
-  const own = ['--load-extension=/data/profile/evil', '--disable-extensions-except=/data/profile/evil', '--LOAD-EXTENSION=/x', '--extensions-on-chrome-urls', '--disable-features=Foo', '--enable-features=DisableLoadExtensionCommandLineSwitch'];
+  const own = ['--load-extension=/data/profile/evil', '--disable-extensions-except=/data/profile/evil', '--LOAD-EXTENSION=/x', '--extensions-on-chrome-urls', '--disable-features=Foo', '--enable-features=DisableLoadExtensionCommandLineSwitch', '--load-component-extension=/data/profile/evil'];
   for (const extensionDir of [null, ext.EXT_DIR]) {
     const args = lib.chromeArgs({ ...base, chromeFlags: [...own, '--lang=de'] }, { headless: true, profileDir: '/p', extensionDir });
     for (const f of own) assert.ok(!args.includes(f), f);
@@ -204,7 +204,7 @@ test('the policy lets Chromium load the headers extension, and shuts every other
     assert.equal(p.ExtensionDeveloperModeSettings, 1, 'no Load unpacked for a person in a take-over');
     const blocked = p.URLBlocklist as string[];
     // `file:///dev/shm`: the extension's rules.json holds the values (seen blocked in Chromium 154, a file elsewhere still opens).
-    for (const u of ['chrome-extension://*', 'file:///dev/shm', 'chrome://extensions', 'chromewebstore.google.com', 'chrome.google.com/webstore', '172.17.0.1:3104', 'cluster.local']) assert.ok(blocked.includes(u), u);
+    for (const u of ['chrome-extension://*', 'file://*', 'chrome://extensions', 'chromewebstore.google.com', 'chrome.google.com/webstore', '172.17.0.1:3104', 'cluster.local']) assert.ok(blocked.includes(u), u);
     assert.equal(blocked[0] === '*', allowlistMode, 'allowlist mode still blocks everything else first');
     assert.ok(!((p.URLAllowlist as string[] | undefined) ?? []).some((u) => u.startsWith('file:')), 'no allowlist entry reopens it');
     // Only policy names Chromium knows, each with the type it expects: a mistyped key is ignored, which would leave the browser looser.

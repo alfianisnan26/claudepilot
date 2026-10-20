@@ -98,7 +98,7 @@ export function chromeArgs(cfg, { headless, profileDir, cdpPort = CDP_PORT, exte
     args.push('--disable-extensions');
   }
   // A pool's own flags never touch the debugging port, the profile, the sandbox or which extensions load.
-  const ownFlag = /remote-debugging|remote-allow-origins|user-data-dir|no-sandbox|disable-web-security|load-extension|disable-extensions|extensions-on-chrome-urls|DisableLoadExtensionCommandLineSwitch|^--disable-features=/i;
+  const ownFlag = /remote-debugging|remote-allow-origins|user-data-dir|no-sandbox|disable-web-security|load-extension|load-component-extension|disable-extensions|extensions-on-chrome-urls|DisableLoadExtensionCommandLineSwitch|^--disable-features=/i;
   args.push(...cfg.chromeFlags.filter((f) => /^--[a-z0-9-]+(=[^\s]*)?$/i.test(f) && !ownFlag.test(f)));
   // Last, so nothing above can turn it into a different first page.
   args.push('about:blank');

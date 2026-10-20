@@ -16,8 +16,11 @@ export const SITE_PATTERN = /^[A-Za-z0-9*._~:/\-[\]]{1,200}$/;
 /** The Chrome Web Store's update URL (every store extension carries it) and its pages: shut when the headers extension opens the default. */
 export const WEB_STORE_UPDATE_URL = 'https://clients2.google.com/service/update2/crx';
 export const WEB_STORE_HOSTS = ['chromewebstore.google.com', 'chrome.google.com/webstore'];
-/** The extension's folder as a file URL (`EXT_DIR` is in `/dev/shm`): blocked, since its ruleset holds the header values. */
-export const EXT_FILES = 'file:///dev/shm';
+/**
+ * Local files, blocked while the pool has headers: the extension's ruleset in `/dev/shm` holds the header values, and a path prefix can be
+ * walked around (`file:///dev//shm/...`, `file:///proc/self/root/dev/shm/...`; T-1660 re-review), so every `file://` URL is blocked.
+ */
+export const EXT_FILES = 'file://*';
 
 export function chromePolicy(content: BrowserPoolContent, ctx: { portalHosts: string[] }): Record<string, unknown> {
   const blocked = [...METADATA_HOSTS, ...ctx.portalHosts, ...content.blockedSites];
