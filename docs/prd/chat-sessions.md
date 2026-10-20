@@ -786,7 +786,7 @@ matches. It reads the list the page already polls (every 5 s), and a clock ticks
 | Layout | Phone: an indented column with one line down the left and an elbow into each card. From 1024 px: the lead on top, its workers in a row under it joined by a bar (the row scrolls inside its box when wider than the page), deeper levels as indented columns. |
 | Motion | Cards fade and rise in, a status cross-fades, a fold animates its height; with reduced motion only fades remain (`MotionConfig reducedMotion="user"`) and the spinner stops. |
 
-Rules and tests: `apps/web/src/features/chat/agentTree.ts`, `agentTree.test.ts`.
+Rules and tests: `apps/web/src/features/chat/agentTreeData.ts`, `agentTreeData.test.ts`.
 
 ### 12.3 Session screen and approvals dock (`/admin/sessions/:id`)
 

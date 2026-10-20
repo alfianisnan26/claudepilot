@@ -13,7 +13,7 @@ import {
   isDismissed,
   readDismissed,
   retryKind,
-} from './agentTree';
+} from './agentTreeData';
 
 const NOW = Date.parse('2026-01-01T12:00:00Z');
 const at = (sec: number) => new Date(NOW - sec * 1000).toISOString();

@@ -1,8 +1,8 @@
 import { Button, cn, EmptyState, useToast } from '@isnanme/ui';
 import { CHAT_SOCKET_PATH, type ChatServerMessage, type ChatSession } from '@portal/contracts';
 import { AlertTriangle, Check, ChevronDown, ChevronUp, LoaderCircle, Moon, Network, Pause, UserRound } from 'lucide-react';
-import { AnimatePresence, MotionConfig, motion } from 'motion/react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { AnimatePresence, MotionConfig, motion, useReducedMotion } from 'motion/react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { InfoTip } from '@/components/InfoTip';
 import { Popover } from '@/components/Popover';
@@ -21,14 +21,14 @@ import {
   type AgentNode,
   type AgentStatus,
   type AgentTreeData,
-} from './agentTree';
+} from './agentTreeData';
 import { chatApi } from './api';
 import './agentTree.css';
 
 const EASE = [0.22, 1, 0.36, 1] as const;
 
 /**
- * T-1710: the Agents tree, the Tree view of the Agents page. Each lead that started workers, as connected cards (agentTree.ts has the
+ * T-1710: the Agents tree, the Tree view of the Agents page. Each lead that started workers, as connected cards (agentTreeData.ts has the
  * rules): on a phone an indented column, from 1024 px the lead's workers in a row under it (the owner's reference). It reads the list the
  * page already polls, so it updates with it; the clock ticks each second for the running ones' time.
  */
@@ -64,11 +64,17 @@ function TreeSection({ tree, onDismiss, onChanged }: { tree: AgentTreeData; onDi
     (id: string) => setCollapsed((c) => (c.has(id) ? new Set([...c].filter((x) => x !== id)) : new Set(c).add(id))),
     [],
   );
+  // A row wider than the page starts with the lead in view (the lead sits in the middle of its row), not at the row's left edge.
+  const scroller = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const el = scroller.current;
+    if (el && el.scrollWidth > el.clientWidth) el.scrollLeft = (el.scrollWidth - el.clientWidth) / 2;
+  }, []);
   return (
     <section aria-label={`${tree.root.name}: ${tree.total} agents`} data-agent-tree-root={tree.root.session.id}>
       <TreeHeader tree={tree} onDismiss={onDismiss} onChanged={onChanged} />
       {/* From 1024 px the row can be wider than the page: it scrolls inside this box, never the page. */}
-      <div className="expanded:overflow-x-auto expanded:pb-2">
+      <div ref={scroller} className="expanded:overflow-x-auto expanded:pb-2">
         <div className="at-root flex flex-col expanded:mx-auto expanded:w-max">
           <Branch node={tree.root} depth={0} collapsed={collapsed} onToggle={toggle} />
         </div>
@@ -193,6 +199,8 @@ function Branch({
   const id = node.session.id;
   const open = !collapsed.has(id);
   const kids = node.children.length > 0;
+  // Motion's reducedMotion="user" drops transforms but still tweens height and opacity: with the setting on, the subtree just appears.
+  const still = useReducedMotion();
   return (
     <>
       <AgentCard node={node} wide={depth <= 1} open={open} onToggle={kids ? () => onToggle(id) : undefined} />
@@ -204,7 +212,7 @@ function Branch({
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: 'auto', opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.22, ease: EASE }}
+            transition={{ duration: still ? 0 : 0.22, ease: EASE }}
             className="overflow-hidden"
           >
             <ul className={cn('at-col', depth === 0 && 'at-row')}>
@@ -249,7 +257,8 @@ function AgentCard({ node, wide, open, onToggle }: { node: AgentNode; wide: bool
         <div className="min-w-0 flex-1">
           <Link
             to={`/admin/sessions/${s.id}`}
-            className="block rounded-md text-[15px] leading-snug font-semibold text-ink [overflow-wrap:anywhere] hover:underline focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:outline-hidden"
+            // The link stretches over the whole card (a 44 px target on a phone); the collapse button sits above it.
+            className="block rounded-md text-[15px] leading-snug font-semibold text-ink [overflow-wrap:anywhere] after:absolute after:inset-0 after:rounded-2xl hover:underline focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:outline-hidden"
           >
             {node.name}
           </Link>
@@ -273,7 +282,7 @@ function AgentCard({ node, wide, open, onToggle }: { node: AgentNode; wide: bool
             aria-expanded={open}
             aria-controls={`at-kids-${s.id}`}
             aria-label={`${open ? 'Hide' : 'Show'} ${plural(node.descendants, 'worker')}`}
-            className="press -my-2.5 -mr-2 ml-auto inline-flex min-h-11 min-w-11 items-center justify-center gap-0.5 rounded-full px-2 text-muted hover:bg-surface-2 hover:text-ink focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:outline-hidden"
+            className="press relative z-10 -my-2.5 -mr-2 ml-auto inline-flex min-h-11 min-w-11 items-center justify-center gap-0.5 rounded-full px-2 text-muted hover:bg-surface-2 hover:text-ink focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:outline-hidden"
           >
             {node.descendants}
             <ChevronDown className={cn('size-4 transition-transform motion-reduce:transition-none', !open && '-rotate-90')} aria-hidden="true" />

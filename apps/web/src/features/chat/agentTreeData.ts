@@ -1,7 +1,7 @@
 // T-1710: the Agents tree (the owner's reference, docs/design/agent-tree-reference.png): a lead with its workers (`parentId`) and their
 // workers, as connected cards with a status, the task, cost and time. This module is the data: which trees there are, what each card
 // says, the header's counts, the failed list and the person's Dismiss (kept in this browser). Pure, so the rules are tested
-// (agentTree.test.ts); AgentTree.tsx draws it.
+// (agentTreeData.test.ts); AgentTree.tsx draws it.
 import { CHAT_ENDED_CREDENTIAL, CHAT_ENDED_INTEGRITY, matchesQuery, sessionCost, type ChatSession } from '@portal/contracts';
 import { bySpawn } from './crew';
 import { cap, modelShortName } from './modelName';
