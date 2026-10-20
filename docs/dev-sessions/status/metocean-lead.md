@@ -1,4 +1,4 @@
-# Konfersi: Metocean lead status (2026-10-20 19:43Z, session fc73ae34-40d3-4c82-8148-dd55697c9379, on two.claude)
+# Konfersi: Metocean lead status (2026-10-20 21:30Z, session fc73ae34-40d3-4c82-8148-dd55697c9379, on sekar)
 
 Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-worker, Mission Planning compute/report/plugin parts, report builder, metocean reports. Status ticket T-1703. Release ticket T-1704 (v14 batch). Incidents T-1705, T-1808. Older lines: git history of this file.
 
@@ -25,6 +25,7 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - ticket_verdict refused for my sub-agents (c18870): verdicts are gate-form comments.
 
 ## DECISIONS
+- 21:30Z Moved two.claude to sekar. No sub-agent was running (mo-be-1591r2 had reported), nothing to restart. No verdict on my units since c20691; reviewers a13240fb and 482a08c0 are free (c20719, c20753), so I asked for T-1591 r2 and T-632 delta reviews on T-84 c20799.
 - 19:43Z Moved hasyim to two.claude (gap 11:05Z-19:39Z). Found: d53dd342 QA PASS T-1856 item 2 and T-1591 QA 1, 482a08c0 T-1591 MERGE, relayed on T-84 c20166/c20246 but never posted; posted c20668, c20669. T-1856 item 2 merge ask + remaining queue on T-84 c20670. Older T-1848/T-1623 decision lines dropped (git history).
 - 10:42Z Moved to hasyim. T-632 mo-be-632 had pushed 103122c (M1 tests) + f5570e6 (m1 fix), no report; restarted mo-be-632 (implementer, opus) from f5570e6 for fail-first proof, suite/lint/tsc, ticket report (c20202).
 - 11:03Z T-632 fix round done (c20255): head d3e837f, fail-first Job 64eda985, full Job 73eb2d39 tsc + 2055/2055; lead read of money diff OK (c20256). Re-review M1/m1 + outside QA asked on T-84 c20257.
