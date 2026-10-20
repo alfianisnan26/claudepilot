@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
-import { guards, placeBeside, placePopover, safeInsets, visibleBox } from '@/lib/popover';
+import { guards, narrowTo, placeBeside, placePopover, safeInsets, visibleBox } from '@/lib/popover';
 
 /**
  * A small panel anchored to the control that opened it (T-102): on the side `prefer` asks when it fits, inside the visible viewport and the
@@ -16,6 +16,7 @@ export function Popover({
   width = 340,
   prefer = 'above',
   beside,
+  within,
   children,
 }: {
   anchor: RefObject<HTMLElement | null>;
@@ -26,6 +27,8 @@ export function Popover({
   prefer?: 'above' | 'below';
   /** The element to sit beside when there is room (read when it opens). */
   beside?: () => Element | null;
+  /** The element whose width it stays inside (the page's content column, not over a sidebar); the viewport when absent. */
+  within?: () => Element | null;
   children: ReactNode;
 }) {
   const panel = useRef<HTMLDivElement>(null);
@@ -38,12 +41,14 @@ export function Popover({
       const r = anchor.current.getBoundingClientRect();
       const height = panel.current.scrollHeight;
       const target = beside?.();
-      const b = target ? placeBeside({ target: target.getBoundingClientRect(), width, height, view: visibleBox(), safe: safeInsets(), avoid: r }) : null;
-      const p = b ?? placePopover({ anchor: r, width, height, view: visibleBox(), safe: safeInsets(), prefer, ...guards(anchor.current) });
+      const box = within?.()?.getBoundingClientRect();
+      const view = box ? narrowTo(visibleBox(), box) : visibleBox();
+      const b = target ? placeBeside({ target: target.getBoundingClientRect(), width, height, view, safe: safeInsets(), avoid: r }) : null;
+      const p = b ?? placePopover({ anchor: r, width, height, view, safe: safeInsets(), prefer, ...guards(anchor.current) });
       setStyle({ position: 'fixed', top: p.top, left: p.left, width: p.width, maxHeight: p.maxHeight ?? undefined, overflowY: p.maxHeight ? 'auto' : undefined });
     };
     place();
-  }, [open, anchor, width, prefer, beside, children]);
+  }, [open, anchor, width, prefer, beside, within, children]);
 
   useEffect(() => {
     if (!open) return;

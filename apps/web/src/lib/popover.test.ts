@@ -2,7 +2,7 @@
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { placeBeside, placePopover } from './popover';
+import { narrowTo, placeBeside, placePopover } from './popover';
 
 const view = { top: 0, left: 0, width: 390, height: 844 };
 const safe = { top: 47, right: 0, bottom: 34, left: 0 };
@@ -79,13 +79,28 @@ test('T-1825 QA: it never covers the control that opened it: another side, else 
   const p = placeBeside({ target: lead, width: 360, height: 137, view: desk, safe: none, avoid: chip });
   assert.equal(p?.side, 'right');
   assert.equal(p!.top + 137, lead.bottom, 'still grows upwards there');
-  // Only the left fits and it would cover the chip: it starts below the chip.
+  // Only the left fits and it would cover the chip: it ends just above the chip (never over the workers below the lead).
   const narrow = { ...desk, width: 1000 };
   const q = placeBeside({ target: { ...lead, left: 560, right: 912 }, width: 360, height: 137, view: narrow, safe: none, avoid: { ...chip, left: 300, right: 390 } });
   assert.equal(q?.side, 'left');
-  assert.equal(q?.top, chip.bottom + 6);
+  assert.equal(q!.top + 137, chip.top - 6);
+  // No room above the chip either: it starts below it.
+  const low = placeBeside({ target: { top: 120, bottom: 215, left: 560, right: 912 }, width: 360, height: 137, view: narrow, safe: none, avoid: { top: 60, bottom: 104, left: 300, right: 390 } });
+  assert.equal(low?.top, 104 + 6);
   const covers = q!.left < 390 && q!.left + 360 > 300 && q!.top < chip.bottom && q!.top + 137 > chip.top;
   assert.equal(covers, false);
   // Without anything to avoid it is as before.
   assert.equal(placeBeside({ target: lead, width: 360, height: 137, view: desk, safe: none })?.side, 'right');
+});
+
+test('T-1825 QA: kept inside the content column, never over the sidebar', () => {
+  const view = { top: 0, left: 0, width: 1024, height: 800 };
+  const content = narrowTo(view, { left: 240, right: 1024 });
+  assert.deepEqual(content, { top: 0, left: 240, width: 784, height: 800 });
+  const lead = { top: 300, bottom: 395, left: 460, right: 812 };
+  const p = placeBeside({ target: lead, width: 360, height: 90, view: content, safe: { top: 0, right: 0, bottom: 0, left: 0 } });
+  assert.equal(p, null, 'no room beside the lead inside the column: the caller falls back');
+  const f = placePopover({ anchor: { top: 240, bottom: 284, left: 300, right: 390 }, width: 360, height: 90, view: content, safe: { top: 0, right: 0, bottom: 0, left: 0 } });
+  assert.ok(f.left >= 240 + 12, `left edge ${f.left}`);
+  assert.deepEqual(narrowTo(view, { left: 2000, right: 2100 }), view, 'an element off screen leaves the view as it is');
 });

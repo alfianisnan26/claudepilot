@@ -223,7 +223,14 @@ test('T-1825: the model glyph: Claude for a Claude family or id, other for an id
   assert.equal(modelMaker('claude-opus-5-5'), 'claude');
   assert.equal(modelMaker('sonnet'), 'claude');
   assert.equal(modelMaker('us.anthropic.claude-haiku-4-5-20251001-v1:0'), 'claude');
-  assert.equal(modelMaker('gpt-6-sol'), 'other');
+  assert.equal(modelMaker('gpt-6-sol'), 'openai');
+  assert.equal(modelMaker('openai/o4-mini'), 'openai');
+  assert.equal(modelMaker('o3'), 'openai');
+  assert.equal(modelMaker('gemini-3.8-flash'), 'gemini');
+  assert.equal(modelMaker('ollama/qwen3:32b'), 'ollama');
+  assert.equal(modelMaker('llama-4-scout'), 'other', 'a Llama may run anywhere: only an Ollama id says Ollama');
+  assert.equal(modelMaker('mistral-large'), 'other');
+  assert.equal(modelMaker('folio-2'), 'other', 'an o followed by letters is no OpenAI o-series');
   assert.equal(modelMaker(null), null);
   assert.equal(modelMaker('  '), null);
 });

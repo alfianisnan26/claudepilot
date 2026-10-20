@@ -4,6 +4,10 @@ import { AlertTriangle, Bot, Check, ChevronDown, ChevronUp, Cpu, GitBranch, Load
 import { AnimatePresence, MotionConfig, motion, useReducedMotion } from 'motion/react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router';
+import claudeIcon from '@/assets/icons/claude-ai.svg';
+import geminiIcon from '@/assets/icons/google-gemini.svg';
+import ollamaIcon from '@/assets/icons/ollama.svg';
+import openaiIcon from '@/assets/icons/openai.svg';
 import { InfoTip } from '@/components/InfoTip';
 import { Popover } from '@/components/Popover';
 import { useNow } from '@/features/usage/claude/useClaudeUsage';
@@ -29,6 +33,7 @@ import {
   type AgentNode,
   type AgentStatus,
   type AgentTreeData,
+  type ModelMaker,
   type TreeFilter,
 } from './agentTreeData';
 import { chatApi } from './api';
@@ -232,6 +237,8 @@ function TreeHeader({
   leadCard: () => Element | null;
 }) {
   const [open, setOpen] = useState(false);
+  // The page's content column: the list stays inside it, never over the sidebar (T-1825 QA).
+  const content = useCallback(() => button.current?.closest('[data-agent-tree]') ?? null, []);
   const button = useRef<HTMLButtonElement>(null);
   const close = useCallback(() => {
     setOpen(false);
@@ -263,7 +270,7 @@ function TreeHeader({
       <InfoTip label="About the cost">
         What the agents in this tree cost so far, at list price (for a plan, not a bill). A running turn counts as an estimate until it ends.
       </InfoTip>
-      <Popover anchor={button} open={open && failed > 0} onClose={close} label="Failed agents" prefer="below" width={360} beside={leadCard}>
+      <Popover anchor={button} open={open && failed > 0} onClose={close} label="Failed agents" prefer="below" width={360} beside={leadCard} within={content}>
         <FailedList nodes={tree.failed} onDismiss={onDismiss} onChanged={onChanged} />
       </Popover>
     </div>
@@ -316,8 +323,17 @@ function FailedItem({ node, onDismiss, onChanged }: { node: AgentNode; onDismiss
           >
             {node.name}
           </Link>
-          {node.task && <p className="text-muted">{node.task}</p>}
-          {s.endedReason && <p className="mt-0.5 text-[13px] text-ink-soft">{s.endedReason}</p>}
+          {/* One line each, so the list stays about as tall as the lead's card (T-1825 QA); the whole text is in the tooltip and on the agent's page. */}
+          {node.task && (
+            <p className="truncate text-muted" title={node.task}>
+              {node.task}
+            </p>
+          )}
+          {s.endedReason && (
+            <p className="line-clamp-2 text-[13px] text-ink-soft" title={s.endedReason}>
+              {s.endedReason}
+            </p>
+          )}
         </div>
       </div>
       <div className="flex justify-end gap-2">
@@ -462,26 +478,31 @@ function Cost({ usd, className }: { usd: number; className?: string }) {
   );
 }
 
-/** Who makes the model: a Claude burst, a chip for a model the portal cannot name, a robot before the first report. */
+/** The model's maker as its mark (src/assets/icons, NOTICE.md); a chip for a model the portal cannot place, a robot before the first report. */
+const MAKER: Record<Exclude<ModelMaker, 'other'>, { src: string; name: string; invert?: boolean }> = {
+  claude: { src: claudeIcon, name: 'Claude' },
+  openai: { src: openaiIcon, name: 'OpenAI', invert: true },
+  gemini: { src: geminiIcon, name: 'Gemini' },
+  ollama: { src: ollamaIcon, name: 'Ollama', invert: true },
+};
+
 function ModelGlyph({ model }: { model: string | null }) {
   const maker = modelMaker(model);
+  const mark = maker && maker !== 'other' ? MAKER[maker] : null;
   return (
     <span
       className="mt-0.5 inline-flex size-8 shrink-0 items-center justify-center rounded-lg border border-line bg-surface text-muted"
       data-model-maker={maker ?? 'none'}
       aria-hidden="true"
     >
-      {maker === 'claude' ? <ClaudeBurst /> : maker === 'other' ? <Cpu className="size-4" /> : <Bot className="size-4" />}
+      {mark ? (
+        <img src={mark.src} alt="" width={16} height={16} draggable={false} className={cn('size-4 object-contain', mark.invert && 'dark:invert')} />
+      ) : maker === 'other' ? (
+        <Cpu className="size-4" />
+      ) : (
+        <Bot className="size-4" />
+      )}
     </span>
-  );
-}
-
-/** A plain eight-ray burst in Claude's coral (simple inline SVG, no logo file). */
-function ClaudeBurst() {
-  return (
-    <svg viewBox="0 0 16 16" className="size-4 text-[#d97757]" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
-      <path d="M8 1.5v4M8 10.5v4M1.5 8h4M10.5 8h4M3.4 3.4l2.8 2.8M9.8 9.8l2.8 2.8M12.6 3.4 9.8 6.2M6.2 9.8l-2.8 2.8" />
-    </svg>
   );
 }
 

@@ -161,11 +161,22 @@ export function costParts(usd: number): { whole: string; fraction: string } {
   return dot < 0 ? { whole: label, fraction: '' } : { whole: label.slice(0, dot), fraction: label.slice(dot) };
 }
 
-/** T-1825: who makes a card's model, for its glyph: `claude` (a Claude family or id), `other` (an id the portal cannot read), or null (no report yet). */
-export function modelMaker(model: string | null | undefined): 'claude' | 'other' | null {
-  const v = model?.trim();
+/** T-1825: who makes a card's model, for its glyph. */
+export type ModelMaker = 'claude' | 'openai' | 'gemini' | 'ollama' | 'other';
+
+/**
+ * Read from the model id Claude Code reported (a gateway can route Claude Code to other models): a Claude family or id, an OpenAI one
+ * (`gpt-…`, `o3`, `o4-mini`), a Gemini one, a model served by Ollama (`ollama/…`), `other` for an id it cannot place, null before
+ * the first report. Never a guess beyond the id.
+ */
+export function modelMaker(model: string | null | undefined): ModelMaker | null {
+  const v = model?.trim().toLowerCase();
   if (!v) return null;
-  return /\b(claude|fable|opus|sonnet|haiku)\b/i.test(v) || /claude-/i.test(v) ? 'claude' : 'other';
+  if (/\b(claude|fable|opus|sonnet|haiku)\b/.test(v) || v.includes('claude-')) return 'claude';
+  if (/(^|[/.:])(gpt-|chatgpt|o[1-9](-|$)|openai)/.test(v)) return 'openai';
+  if (/gemini/.test(v)) return 'gemini';
+  if (v.includes('ollama')) return 'ollama';
+  return 'other';
 }
 
 /**
