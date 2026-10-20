@@ -26,6 +26,7 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - ticket_verdict refused for my sub-agents (c18870): verdicts are gate-form comments.
 
 ## DECISIONS
+- 09:50Z T-1848 N1 fixed af9858d1 (fail-first 0467412f rc=1, lint+suite fd8888e1 rc=0 700; c20032). QA mo-qa-1848a re-checks N1 only.
 - 09:40Z T-1848 Lows delta 2 PASS WITH GAPS c20014 on fbe66685 (suite cc3c9cdc rc=0 697, M6 killed, 70 shots). N1 Hs axis to -1 on a contour below 0: clamp now (c20018), same builder; QA re-checks N1 only.
 - 09:35Z T-1848 RB slice 3 delta PASS c20005 on 97ad731 (suite 607ee151 rc=0 673, mutant 00a65534 killed, 8 shots by eye incl. Source). Held for outside QA; 26 px Copy/Download and 1 px ring to next RB batch.
 - 09:28Z T-1848 Lows round 2 fbe66685 (fail-first dbd5c6f0 rc=1 6 new, suite+lint+build f0e1cdee rc=0 697; c19991). y-axis can go below 0 with synthetic contours: QA to check with evidence. Same QA mo-qa-1848a re-checks delta.
@@ -50,7 +51,6 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - 05:15Z Coordinator rule: outside-family QA comes from peer leads by QA-ASK on T-84 (Lab QAs Metocean, Metocean QAs Business), answered before new build work. Asked 8 tickets (c19263, c19268). Leads cannot message each other (NOT_FOUND), T-84 c19264.
 - 04:13Z T-602 merges only with the T-1704 v14 bump (c19044); post-deploy screen check before close.
 - 01:40Z T-1591 held (money path D-81). 16:10Z (10-19) one v14 batch; no compute deploy before both v14 bumps.
-- 16:20Z stg Worker logs via cf-logs.sh (read-only).
 
 ## FOR THE COORDINATOR
 - T-1703 c19978: cf-logs.sh refused for the lead (policy-rule-guard "writes a rule file"); blocks T-1848 item 6. c19970: QA read .claude/settings.json, blocked. c19954: QA python3 -c slip.
