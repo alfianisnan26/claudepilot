@@ -1,4 +1,4 @@
-# Konfersi: Metocean lead status (2026-10-20 12:25Z, session fc73ae34-40d3-4c82-8148-dd55697c9379, on rossi)
+# Konfersi: Metocean lead status (2026-10-20 09:30Z, session fc73ae34-40d3-4c82-8148-dd55697c9379, on rossi)
 
 Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-worker, Mission Planning compute/report/plugin parts, report builder, metocean reports. Status ticket T-1703. Release ticket T-1704 (v14 batch). Incidents T-1705, T-1808. Older lines: git history of this file.
 
@@ -26,9 +26,9 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - ticket_verdict refused for my sub-agents (c18870): verdicts are gate-form comments.
 
 ## DECISIONS
-- 12:55Z T-1623 fix round pushed: e3c64d9 G1 test, 49a8e2b F1 wording (bc99d639 rc=0 642; 503 mutant 9f115e65 red; c20111). Quick check fails on this repo (plain node --test, no vscode alias), for the coordinator on T-1623. Same QA mo-qa-1623 re-checks the change.
-- 12:40Z T-1623 QA mo-qa-1623 PASS WITH GAPS c20101 on 1c1da12 (bc4fb5cc rc=0 632, 9/9 mutants red, 26 shots by eye). Fix round (c20102): G1 AI-off test from the QA branch + F1 quota wording; new mo-fe-1623 (implementer, opus), same branch. Then the same QA re-checks only the change.
-- 12:25Z Moved fadlilah to rossi (quota). Found: T-1623 QA mo-qa-1623 gave no verdict (no QA worktree, last comment c20061 is the builder). Restarted mo-qa-1623 (lane-qa-ui, opus) on 1c1da12; no other slice was in flight.
+- 09:31Z T-1623 QA delta PASS WITH GAPS c20124 on 49a8e2b (d4677124 rc=0 642, 6/6 mutants, 15 shots); S2 accepted c20126, gaps to the next Explain UI batch; held for outside QA; S1 still blocked on stg 502. T-632 fix round M1 money tests + m1 error mapping (review c19667): mo-be-632 (implementer, opus) on ticket/T-632-fetch-roundtrips-stg 7412c9d (c20127). Outside QA route found: T-84 c20062, accepted c20128.
+- 09:23Z T-1623 fix round pushed: e3c64d9 G1 test, 49a8e2b F1 wording (bc99d639 rc=0 642; 503 mutant 9f115e65 red; c20111). Quick check fails on this repo (plain node --test, no vscode alias), for the coordinator on T-1623. Same QA mo-qa-1623 re-checks the change.
+- 09:05Z Moved fadlilah to rossi (quota). Found: T-1623 QA mo-qa-1623 gave no verdict (no QA worktree, last comment c20061 is the builder). Restarted mo-qa-1623 (lane-qa-ui, opus) on 1c1da12; no other slice was in flight.
 - 09:58Z T-1848 N1 PASS c20046 on af9858d1 (suite 63c81372 rc=0, 6 shots by eye). All 5 slices family-QA passed, held for outside QA and blind review; merge order narrow, Lows, MP, RB, RB-narrow (c20048).
 - 09:50Z T-1848 N1 fixed af9858d1 (fail-first 0467412f rc=1, lint+suite fd8888e1 rc=0 700; c20032). QA mo-qa-1848a re-checks N1 only.
 - 09:40Z T-1848 Lows delta 2 PASS WITH GAPS c20014 on fbe66685 (suite cc3c9cdc rc=0 697, M6 killed, 70 shots). N1 Hs axis to -1 on a contour below 0: clamp now (c20018), same builder; QA re-checks N1 only.
@@ -72,7 +72,7 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 ## NEXT
 0. Explain stg log read refused by hook (T-1703 c19978, T-1848 c19979): waits for the coordinator; blind reviews for the merge gate once the outside QA route exists.
 1. Business QA-ASK T-1805 ab56e48 (T-84 c19376, c19504): outside QA PASS WITH GAPS c19619 (suite b4530166 rc=0 2125; guard test only on ticket/T-1805-qa, builder must move it to src/__tests__); T-84 c19620. Blind review MERGE c19564 (proof Job 7aa8d5f3: 12/12 at ab56e48, 10/12 red at d55dcc5; 5 minors: guard and rollback untested, boundary 29/31 only). Then any newer Business QA-ASK.
-2. Lab stopped Metocean QA (c19607; T-84 c19655). Wait for the coordinator's new route (T-1703 c19654), then re-ask T-1435 (reuse Job 6309c594), T-991, T-1591, T-1856.
+2. Outside QA route: general lead QA lane d53dd342 (T-84 c20062, accepted c20128), queue T-1856, T-1591, T-1435, T-991, T-1848, T-1623, T-632. d53dd342 stuck on a session limit until 12:20 UTC (c20109).
 3. mo-be-1435, mo-qa-1658, mo-qa-ui-1848 returns (then Mission Planning, report builder lanes): integrate; T-1435 then capture re-run on the fix. hasyim caps sub-agents at 3.
 4. T-1848 UI/UX audit of my apps against the vault standard (D-91).
 5. T-991: built 062f8f4 (test 4b9bfe3 red f4787bc1 rc=1; suite 8f622f4e rc=0 97/97; c19593). Lead accepted #609 billed and earlier-answer stays free (c19596). Family QA PASS WITH GAPS c19615 (suite 0471a8d4 rc=0, 3 mutants red). Lead c19617: limit charge to chat 400/800 (Explain billed today, not abuse); G3 tool-then-cap stays free per D-90 wording. Fix round 432b3ab (chatBudget at agent.service.ts:411; red a2878ed0 rc=1, suite 5f0d81f8 rc=0 101/101; c19624). Low-quota edge accepted, builder read another clone named (c19625). QA delta PASS c19636 (7a63fcc8 rc=0; mutant 4 red, 5 survives by design). Blind review MERGE c19640 (3 minors decided c19643: disconnect stays free, recorded with G3). Waits outside QA-ASK T-84 c19637. Cross-repo risk: backend AGENT_MAX_OUTPUT_TOKENS below 400 would make all chat free (untested). T-1809 after T-1591, T-1007 after T-1162.
