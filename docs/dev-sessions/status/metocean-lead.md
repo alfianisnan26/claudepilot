@@ -17,7 +17,9 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - Worker bbde2b22 (mo-qa-1611, asleep): re-check needs a new probe qa/t1611-recheck.mjs + message file; the worker has no Write tool. Track layer FAIL stands (c19136).
 - T-602 QA PASS both repos (mo-qa-602): compute f7dfd3d c19120 (Job 7f2af862), backend 78d0c7c8 c19122 (Job f6a683af); in_review, rides v14; close after deploy + screen check + stored-data run.
 - T-1801 QA done (mo-qa-1801): item 2 PASS WITH GAPS c18958 (Job e553806b), item 1 PASS c19027 (190f6576), item 4 PASS c19115 (875f4dd8); in_review for the merge gate, close after merge (c19117).
-- Worker 55723e0e (mo-qa-1800, idle): T-1800 c19142 (Job be21c43a rc=0 359), T-1802 c19151 (Job d9722ec3 rc=0 631): PASS WITH GAPS on suites only; clone refused in dontAsk, diffs and mutants not verified.
+- 04:50Z worker 3f19e911 (mo-qa-1803, hasyim, sonnet, auto): T-1803 then T-1629 QA in gate form, own mutants.
+- 04:52Z worker 262086d3 (mo-qa-1800b, hasyim, sonnet, auto): T-1800 then T-1802 diff + mutant QA (completes 55723e0e's suite-only pass).
+- Worker 55723e0e (mo-qa-1800, ended 04:52Z): T-1800 c19142 (Job be21c43a rc=0 359), T-1802 c19151 (Job d9722ec3 rc=0 631): PASS WITH GAPS on suites only; clone refused in dontAsk, diffs and mutants not verified.
 - T-822 delta QA PASS WITH GAPS (worker a6570457, rossi, ended): c19134 on 068f319 (Job e34e96f5); lead c19148: merge gate, then post-deploy screen check before close.
 - T-1611 item 2 (worker bbde2b22, two.claude): c19136 tide pin + PNG export PASS, bands PASS on data, track layer FAIL (500 km ground truth timed out); same QA re-checks the count + bands shot. D-91 suggestions wait for the standard's location (c19047).
 - T-1591 in_review: fix 2d633120 on ticket/T-1591-metering-errors (fail-first 3e6b3f58, ci c29c4247 rc=0). Needs delta QA, merge gate, D-81 second QA + post-deploy check.
@@ -27,6 +29,7 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - ticket_verdict is refused for my sub-agents (c18870): verdicts stay as gate-form comments.
 
 ## DECISIONS
+- 04:52Z Move called off: stay on fadlilah (96 %, resets 07:20Z). New QA runs as auto workers on other Claudes. No Agent sub-agent on this Claude until the reset, so the T-1611 probe-file implementer waits for it. New worker for T-1800/T-1802 because 55723e0e's clone was refused on one.claude.
 - 04:48Z mo-commit finished before the move: T-1629 and T-1803 pushed, Jobs green, -F form worked. Stray .lane-commit-msg in mo-qa-1611 removed.
 - 04:4xZ fadlilah at 10 % left: move to one.claude. Workers bbde2b22 (two.claude) and 55723e0e (one.claude) keep running; restart mo-commit only (T-1703 hand-over comment).
 - 04:3xZ T-84 item 8 solved by the coordinator (`git * credential *` matched a message word): -F message file is the SOP, in briefs/mo/common.md; blocked commits T-1629, T-1803, T-1611 woken. Workers start with claude: auto (coordinator, quota) (T-1703 comment).
@@ -63,5 +66,5 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 3. T-991 (D-90, ai-worker billing, test first, after or on T-1591; D-81 money review), T-1007 (after T-1162 lands).
 4. After T-1574's QA and merge: gate asks T-1352 f92828f, T-1416 65d952d, T-1435 f424b1c; then the v14 bump commits (compute catalog.py, backend metocean-catalog.ts) with T-602, backend migrations check, stg-deploy backend then compute, cf-logs check, post-deploy screen checks.
 5. After the in_review/merge sweep (D-91): UI/UX polish audit of my apps (Lab metocean views: Analysis, Map, Chart, Mission Planning, Report panels; report DOCX). QA suggests, I decide on the ticket against the standard (location asked, T-1703 c19047); one batched ticket per page or app.
-6. After the move: QA for T-1629 and T-1803 (non-lineage worker, auto); diff + mutant QA for T-1800/T-1802; an implementer writes qa/t1611-recheck.mjs + message file for bbde2b22.
+6. On worker reports: integrate 3f19e911 and 262086d3 verdicts. After 07:20Z reset: an implementer writes qa/t1611-recheck.mjs + message file for bbde2b22.
 7. Hourly closed-count report on T-1703.
