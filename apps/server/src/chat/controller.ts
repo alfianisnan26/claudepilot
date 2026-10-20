@@ -249,6 +249,11 @@ const MODEL_NOTE_MS = 60_000;
 /** How long a dropped `tail` waits before re-following, and how many immediate failures end the reader. */
 const RETAIL_MS = 1_000;
 const MAX_IMMEDIATE_RETRIES = 5;
+/**
+ * T-1711: the longest wait between re-follows of a process the host says is running. Its follower may keep dropping (an exec path that
+ * closes streams), but a `live` reading is never a reason to mark it gone: the reader backs off to this instead of giving up.
+ */
+const RETAIL_LIVE_MAX_MS = 30_000;
 /** A `tail` that ran at least this long counts as healthy (it hit its 600 s limit), so retries reset. */
 const HEALTHY_TAIL_MS = 5_000;
 /** `cp-session tail`'s exit when the cursor is past the segment's end (it prints the size; T-265): the cursor heals to the size. */
@@ -333,8 +338,10 @@ interface Reader {
   ready: boolean;
   /** True once the reader is deliberately stopped (end, integrity, sleep, a new process); never reused. */
   stopped: boolean;
-  /** Consecutive immediate `tail` exits; reset when a follow makes progress or runs its full term. */
+  /** Consecutive immediate `tail` exits the host could not account for; reset when a follow makes progress, runs its full term, or the host says the process runs. */
   retries: number;
+  /** T-1711: consecutive immediate `tail` exits while the host said the process runs: they only slow the re-follow down (back-off). */
+  liveDrops?: number;
   tailStart: number;
   timer?: NodeJS.Timeout;
   /** Waiting for its target's tunnel to come back (targets-connect PRD §12.5): no retries counted, nothing marked gone. */
@@ -691,6 +698,12 @@ export class ChatController {
   readonly #slotWaits = new Map<string, string>();
   /** T-417: the sessions whose Bypass is being put back after a wake (a retry inside it wakes it again: never twice). */
   readonly #wakeBypass = new Set<string>();
+  /**
+   * T-1692: a fail-closed switch out of Bypass in flight (`#leaveBypass` after `#bypassUnfinished`), by session. The gated re-entry
+   * (`#keepBypass`) waits for it: each request goes out on its own exec, so a slow "out" line could reach Claude Code after the "back in"
+   * one and leave the process in the start mode under a "Bypass kept" note (the Lab and Business leads, 2026-10-19, through the k3s API outage).
+   */
+  readonly #leaving = new Map<string, Promise<void>>();
   /** Per session: the running cost its process last reported, so each `result` can say what its turn cost. */
   readonly #costBase = new Map<string, number>();
   /** T-343: per session, the running turn's calls for the cost estimate until its result (turnCost.ts), and the estimate last shown. */
@@ -1559,7 +1572,9 @@ export class ChatController {
     this.#forget(sessionId, 'The session went to sleep.');
     this.#chat.patchSession(sessionId, { process: 'asleep' });
     if (this.#chat.endRunningTasks(sessionId)) this.#emitTasks(sessionId); // none should be (it sleeps only when none run); never left running
-    this.#bypassOver(sessionId, 'sleep', this.#keptLead(now));
+    // T-1692: a top-level crew lead keeps it over a sleep as over a vanishing (`#lostLead`, T-1646): the general Konfersi lead (no live worker,
+    // no workers limit, no Keep going) slept out of Bypass for good on 2026-10-20 and came back on the start mode. The wake asks every gate.
+    this.#bypassOver(sessionId, 'sleep', this.#lostLead(now));
     this.#emitSession(sessionId);
   }
 
@@ -2605,6 +2620,10 @@ export class ChatController {
       this.#step(sessionId, 'starting', `Starting ${dest.name}…`);
       const cwd = sessionCwd(row.cwd);
       const wasBypass = row.mode === 'bypassPermissions';
+      // T-1692: a lead whose sleep (or vanishing) kept its Bypass reads the start mode while nothing runs; the move is its wake, so the
+      // move puts it back the way the wake would have (`#keepBypass('wake' | 'lost')`, every gate and the lead's own asked again). Before,
+      // an automatic move of a sleeping lead woke it on the new Claude in the start mode for good (general and Metocean leads, 2026-10-20).
+      const pausedBypass = !wasBypass && row.process !== 'live' && this.#sleptInBypass(sessionId) ? (row.process === 'asleep' ? 'wake' : 'lost') : null;
       const r = await this.#hostStart(workspaceId, {
         sessionId,
         csid: newCsid,
@@ -2679,6 +2698,7 @@ export class ChatController {
       if (this.#chat.endRunningTasks(sessionId, oldTasks)) this.#emitTasks(sessionId);
       // The new run started on the start mode and took the context in it (its tool requests denied): Bypass comes back only now, the move done.
       if (wasBypass) await this.#keepBypass(sessionId, 'move');
+      else if (pausedBypass) await this.#keepBypass(sessionId, pausedBypass);
       return this.#chat.get(sessionId)!;
     } catch (e) {
       const why = isAppError(e) ? e.message : this.#message(e);
@@ -3916,19 +3936,19 @@ export class ChatController {
       if (!this.#bypassAllowed()) return drop('policy', `Bypass not kept ${after}: the policy no longer allows it.`);
       if (row.bypass_capable !== 1) return drop('not_capable', `Bypass not kept ${after}: this session wasn’t started to allow Bypass.`);
       // T-417 review: a lead when it slept, and still one now (its workers may have ended, its limit or Keep going been cleared meanwhile).
-      // T-1646: after a vanishing, a top-level crew lead counts too (`#lostLead`).
-      if (lead && !(how === 'lost' ? this.#lostLead(row) : this.#keptLead(row)))
+      // T-1646: after a vanishing, a top-level crew lead counts too (`#lostLead`); T-1692: after a sleep too (the sleep kept it by the same rule).
+      if (lead && !this.#lostLead(row))
         return drop(
           'not_lead',
-          how === 'lost'
-            ? `Bypass not kept ${after}: this chat is no longer a lead (not a crew lead, no live workers, no workers limit, no Keep going).`
-            : `Bypass not kept ${after}: this chat is no longer a lead (no live workers, no workers limit, no Keep going).`,
+          `Bypass not kept ${after}: this chat is no longer a lead (not a crew lead, no live workers, no workers limit, no Keep going).`,
         );
       if (lead && !this.#personEntered(sessionId))
         return drop(
           'not_confirmed',
           `Bypass not kept ${after}: no entry by a person with the confirmation and the server code is on record for this chat.`,
         );
+      // T-1692: out of Bypass first, then back in: never two switches racing on separate execs.
+      await this.#leaving.get(sessionId);
       try {
         await this.#setBypass(sessionId);
       } catch {
@@ -5909,6 +5929,7 @@ export class ChatController {
       start = nl + 1;
       reader.offset += lineBuf.length;
       reader.retries = 0; // progress: the follow is healthy
+      reader.liveDrops = 0;
       const offset = reader.offset;
       unsaved = true;
       reader.at = { start: offset - lineBuf.length, segment: reader.segment ?? 0 };
@@ -5945,7 +5966,10 @@ export class ChatController {
     reader.exec = undefined;
     if (reader.stopped) return;
     if (code === TAIL_PAST_END) this.#healCursor(reader);
-    if (Date.now() - reader.tailStart >= HEALTHY_TAIL_MS) reader.retries = 0; // hit its 600 s limit: normal renewal
+    if (Date.now() - reader.tailStart >= HEALTHY_TAIL_MS) {
+      reader.retries = 0; // hit its 600 s limit: normal renewal
+      reader.liveDrops = 0;
+    }
     void this.#checkAndRetail(reader);
   }
 
@@ -5979,7 +6003,9 @@ export class ChatController {
     }
     if (reader.stopped || this.#readers.get(reader.sessionId) !== reader) return; // replaced meanwhile
     if (status === 'gone') return this.#markGone(reader.sessionId);
-    this.#scheduleRetail(reader); // live, or unreachable (which runs out of retries if it stays so)
+    // Live: re-followed, never "Lost touch" (T-1711: a lead read live by the host was Interrupted after its follower dropped five times
+    // in a row, and its Bypass paused). Unreachable: runs out of retries if it stays so.
+    this.#scheduleRetail(reader, status === 'live');
   }
 
   /**
@@ -6009,7 +6035,7 @@ export class ChatController {
     }
   }
 
-  #scheduleRetail(reader: Reader): void {
+  #scheduleRetail(reader: Reader, live = false): void {
     if (reader.stopped || reader.timer || reader.parked) return;
     // An outage is not a vanished process: wait for the target instead of spending retries (FR39).
     const workspaceId = this.#chat.row(reader.sessionId)?.workspace_id;
@@ -6017,13 +6043,23 @@ export class ChatController {
       reader.parked = true;
       return;
     }
-    if (reader.retries >= MAX_IMMEDIATE_RETRIES)
-      return this.#markGone(reader.sessionId, 'Lost touch with Claude Code before it answered.', false);
-    reader.retries++;
+    let wait = RETAIL_MS;
+    if (live) {
+      // T-1711: the host says the process runs, so this drop is the follower's, not the process's: no retry is spent (only readings the
+      // host could not give count toward "Lost touch"); the re-follow backs off once the drops keep coming.
+      reader.retries = 0;
+      reader.liveDrops = (reader.liveDrops ?? 0) + 1;
+      const over = reader.liveDrops - MAX_IMMEDIATE_RETRIES;
+      if (over > 0) wait = Math.min(RETAIL_LIVE_MAX_MS, RETAIL_MS * 2 ** Math.min(over, 16));
+    } else {
+      if (reader.retries >= MAX_IMMEDIATE_RETRIES)
+        return this.#markGone(reader.sessionId, 'Lost touch with Claude Code before it answered.', false);
+      reader.retries++;
+    }
     reader.timer = setTimeout(() => {
       reader.timer = undefined;
       void this.#tail(reader);
-    }, RETAIL_MS);
+    }, wait);
     reader.timer.unref?.();
   }
 
@@ -6675,7 +6711,12 @@ export class ChatController {
       detail: lost ? { why: 'lost_touch', how, kept } : { why: 'restart_unfinished', how },
     });
     this.#saveControl(sessionId);
-    void Promise.resolve().then(() => this.#leaveBypass(sessionId, 'Bypass was not finished before the portal restarted.'));
+    const leaving: Promise<void> = Promise.resolve()
+      .then(() => this.#leaveBypass(sessionId, 'Bypass was not finished before the portal restarted.'))
+      .finally(() => {
+        if (this.#leaving.get(sessionId) === leaving) this.#leaving.delete(sessionId);
+      });
+    this.#leaving.set(sessionId, leaving);
   }
 
   /**
