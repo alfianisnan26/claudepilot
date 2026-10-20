@@ -24,6 +24,7 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - Closed this session: 1 (T-1353).
 
 ## IN FLIGHT
+- 02:22Z mo-stgread (sonnet, read-only): which in_review heads are on stg (Satria's list first), to close what has a verdict on stg (coordinator 02:2x ask). Worker probe mo-qa-553 (3f05742b, two.claude) refused Bash at clone (T-553 c18740): ended; c17308 stands (T-1703 c18743).
 - 01:40Z: no sub-agent running. Quota sekar 82 % at 01:39Z, out about 01:50Z (resets 05:50Z): no dispatch; next session resumes from NEXT.
 - mo-qa2-1591 done: PASS WITH GAPS on 4f26757 (c18653, Job f0c5ce51 rc=0). T-1591 held from the merge gate, in_progress (c18658): pre-marker unbilled row + later full bill = billed and booked unbilled (new with T-1591; reasoned, no probe Job). Pre-existing items to T-1809. Incident T-1808: my c18618 "trailers parse" was false.
 - mo-qa-1182 done: T-1182 backend PASS on stg b7941a3 (c18631, Job fbf415e9), compute PASS on stg c29d103 (c18632, Job 75d39f96); gaps G1/G2 to T-1801 (c18633); lead c18634: in_review until lab-plugin 4e32c8e merges. mo-fe-1802 done: T-1802 in_review, 819bf775 on ticket/T-1802-run-toast-cancel (Jobs 4285bd94 rc=1 red, 68028dea rc=0 631 passed; c18627, lead c18629); QA needs a non-lineage session (c17308). Cap on sekar: 3. Quota 01:22Z: session 57 %, projected out about 01:50Z (resets 05:50Z): no new dispatch until it eases (D-43).
