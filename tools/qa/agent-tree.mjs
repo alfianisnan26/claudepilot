@@ -6,6 +6,7 @@
 //   - from 1024 px a lead stays in view when its row of workers is wider than the page (the row scrolls inside its box, starting on the lead);
 //   - a card is a link all over (a 44 px target on a phone), the collapse, "N failed" and the popover's buttons are 44 px on a phone;
 //   - "N failed" opens a popover inside the viewport, focus moves into it, Escape closes it and gives focus back;
+//   - T-1853: Active is the default (idle and ended agents fold behind "+N"); then it shows All, and the leads stay in view after that switch;
 //   - with prefers-reduced-motion the spinner stands still and a collapse is instant (no height tween); without it the tween runs.
 // usage: tools/qa/with-portal.sh 3405 node tools/qa/agent-tree.mjs [--shots dir]   (it removes its rows at the end)
 import { mkdirSync } from 'node:fs';
@@ -69,9 +70,19 @@ const active = `(() => { const e = document.activeElement; return e ? e.tagName 
 const showTree = async () => {
   await b.waitFor(`!!document.querySelector('button[aria-label="Tree"]')`, 60000, 'the Tree toggle');
   if ((await b.eval(`document.querySelector('button[aria-label="Tree"]').getAttribute('aria-pressed')`)) !== 'true') await b.clickSel('button[aria-label="Tree"]');
-  await b.waitFor(`document.querySelectorAll('[data-agent-tree-root]').length === 3`, 10000, 'three trees');
+  // T-1853: Active is the default and folds idle and ended agents; this check is about every card, so it shows All (kept in the browser,
+  // so only the first visit switches). The switch widens the rows after they opened: the leads must still be in view (T-1825 QA).
+  await b.waitFor(`!!document.querySelector('[data-agent-filter="all"]')`, 10000, 'the filter');
+  if (!filterChecked) {
+    filterChecked = true;
+    const d = await b.eval(`({ active: document.querySelector('[data-agent-filter="active"]').getAttribute('aria-pressed'), folded: [...document.querySelectorAll('[data-agent-folded]')].map((x) => x.textContent.trim()) })`);
+    check('Active is the default and idle or ended agents fold behind a count', d.active === 'true' && d.folded.length > 0 && d.folded.every((t) => /^\+\d/.test(t)), JSON.stringify(d));
+  }
+  if ((await b.eval(`document.querySelector('[data-agent-filter="all"]').getAttribute('aria-pressed')`)) !== 'true') await b.clickSel('[data-agent-filter="all"]');
+  await b.waitFor(`document.querySelectorAll('[data-agent-tree-root]').length === 3 && !document.querySelector('[data-agent-folded]')`, 10000, 'three trees, all shown');
   await sleep(600);
 };
+let filterChecked = false;
 const open = async (s, dark, reducedMotion = false) => {
   await b.setViewport(s.w, s.h, s.mobile);
   await b.send('Emulation.setSafeAreaInsetsOverride', { insets: s.insets ?? { top: 0, bottom: 0, left: 0, right: 0 } }).catch(() => {});

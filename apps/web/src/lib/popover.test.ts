@@ -40,7 +40,7 @@ test('T-1825: beside an element: on its right when there is room, else its left,
   const desk = { top: 0, left: 0, width: 1280, height: 800 };
   const none = { top: 0, right: 0, bottom: 0, left: 0 };
   const lead = { top: 150, bottom: 320, left: 460, right: 812 };
-  const r = placeBeside({ target: lead, width: 360, height: 180, view: desk, safe: none });
+  const r = placeBeside({ target: lead, width: 360, height: 160, view: desk, safe: none });
   assert.equal(r?.side, 'right');
   assert.equal(r?.left, 812 + 12);
   assert.equal(r?.top, 150, 'lined up with the element, not over its row');
@@ -57,4 +57,15 @@ test('T-1825: beside an element near the bottom: kept inside the visible height;
   assert.ok(p && p.top + 200 <= 600 - 12);
   const tall = placeBeside({ target: { top: 50, bottom: 200, left: 100, right: 400 }, width: 360, height: 2000, view: desk, safe: none });
   assert.equal(tall?.maxHeight, 600 - 24);
+});
+
+test('T-1825 QA: taller than the element beside it, it grows upwards: its bottom on the element\'s, never over what is below', () => {
+  const desk = { top: 0, left: 0, width: 1280, height: 900 };
+  const none = { top: 0, right: 0, bottom: 0, left: 0 };
+  const lead = { top: 300, bottom: 395, left: 460, right: 812 };
+  const p = placeBeside({ target: lead, width: 360, height: 137, view: desk, safe: none });
+  assert.equal(p?.top, 395 - 137);
+  assert.equal(p!.top + 137, lead.bottom);
+  const nearTop = placeBeside({ target: { ...lead, top: 40, bottom: 135 }, width: 360, height: 137, view: desk, safe: none });
+  assert.equal(nearTop?.top, 12, 'kept inside the view at the top');
 });

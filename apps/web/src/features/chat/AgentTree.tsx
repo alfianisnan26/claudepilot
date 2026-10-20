@@ -123,12 +123,54 @@ function TreeSection({
     (id: string) => setCollapsed((c) => (c.has(id) ? new Set([...c].filter((x) => x !== id)) : new Set(c).add(id))),
     [],
   );
-  // A row wider than the page starts with the lead in view (the lead sits in the middle of its row), not at the row's left edge.
   const scroller = useRef<HTMLDivElement>(null);
-  useLayoutEffect(() => {
+  const lead = tree.root.session.id;
+  const leadCard = useCallback(() => scroller.current?.querySelector(`[data-agent-card="${CSS.escape(lead)}"]`) ?? null, [lead]);
+  // A row wider than the page shows the lead in its middle, not the row's left edge: when it opens, when the filter changes, and whenever
+  // the row's width changes (a fold, new workers) until the person scrolls it by hand (T-1825 QA: All widened the row past the lead).
+  const byHand = useRef(false);
+  const centre = useCallback(() => {
     const el = scroller.current;
-    if (el && el.scrollWidth > el.clientWidth) el.scrollLeft = (el.scrollWidth - el.clientWidth) / 2;
-  }, []);
+    const card = leadCard();
+    if (!el || !card || el.scrollWidth <= el.clientWidth) return;
+    const box = el.getBoundingClientRect();
+    const c = card.getBoundingClientRect();
+    el.scrollLeft += (c.left + c.right) / 2 - (box.left + box.right) / 2;
+  }, [leadCard]);
+  useLayoutEffect(() => {
+    byHand.current = false;
+    centre();
+  }, [filter, centre]);
+  useEffect(() => {
+    const el = scroller.current;
+    const row = el?.firstElementChild;
+    if (!el || !row || typeof ResizeObserver === 'undefined') return;
+    const mark = () => {
+      byHand.current = true;
+    };
+    const keys = (e: KeyboardEvent) => /^(Arrow(Left|Right)|Home|End)$/.test(e.key) && mark();
+    // The scroll bar itself is the box (a press on a card or a button inside it is not a scroll).
+    const bar = (e: PointerEvent) => e.target === el && mark();
+    el.addEventListener('wheel', mark, { passive: true });
+    el.addEventListener('touchmove', mark, { passive: true });
+    el.addEventListener('keydown', keys);
+    el.addEventListener('pointerdown', bar);
+    let width = row.getBoundingClientRect().width;
+    const ro = new ResizeObserver(() => {
+      const w = row.getBoundingClientRect().width;
+      if (Math.abs(w - width) < 1) return;
+      width = w;
+      if (!byHand.current) centre();
+    });
+    ro.observe(row);
+    return () => {
+      el.removeEventListener('wheel', mark);
+      el.removeEventListener('touchmove', mark);
+      el.removeEventListener('keydown', keys);
+      el.removeEventListener('pointerdown', bar);
+      ro.disconnect();
+    };
+  }, [centre]);
   // T-1825: an edge with more of the row beyond it fades out, the cue that the row scrolls (agentTree.css .at-scroll).
   const [fade, setFade] = useState({ left: false, right: false });
   useEffect(() => {
@@ -148,8 +190,6 @@ function TreeSection({
       ro?.disconnect();
     };
   }, []);
-  const lead = tree.root.session.id;
-  const leadCard = useCallback(() => scroller.current?.querySelector(`[data-agent-card="${CSS.escape(lead)}"]`) ?? null, [lead]);
   return (
     <section aria-label={`${tree.root.name}: ${tree.total} agents`} data-agent-tree-root={tree.root.session.id}>
       <TreeHeader tree={tree} onDismiss={onDismiss} onChanged={onChanged} leadCard={leadCard} />
@@ -269,10 +309,14 @@ function FailedItem({ node, onDismiss, onChanged }: { node: AgentNode; onDismiss
       <div className="flex min-w-0 items-start gap-2">
         <AlertTriangle className="mt-0.5 size-4 shrink-0 text-danger" aria-hidden="true" />
         <div className="min-w-0 flex-1 [overflow-wrap:anywhere]">
-          <Link to={`/admin/sessions/${s.id}`} className="font-semibold text-ink underline-offset-2 hover:underline">
+          {/* A 44 px target on its own line (T-1825 QA: inline it was 17 px tall on a phone). */}
+          <Link
+            to={`/admin/sessions/${s.id}`}
+            className="-my-3 flex min-h-11 items-center font-semibold text-ink underline-offset-2 hover:underline focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:outline-hidden"
+          >
             {node.name}
           </Link>
-          {node.task && <span className="text-muted"> {node.task}</span>}
+          {node.task && <p className="text-muted">{node.task}</p>}
           {s.endedReason && <p className="mt-0.5 text-[13px] text-ink-soft">{s.endedReason}</p>}
         </div>
       </div>

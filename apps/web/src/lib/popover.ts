@@ -76,7 +76,8 @@ export function placePopover(i: PlaceInput): Placement {
 /**
  * T-1825: a popover beside an element (the Agents tree's failed list next to the lead's card, not over its row): on its right when the
  * visible width has room for all of it, else on its left, else null (the caller falls back to {@link placePopover}). Its top lines up with
- * the element's, kept inside the visible height; taller than that, it scrolls inside.
+ * the element's; taller than the element, its bottom does instead (it grows upwards, so it never hangs over what is below the element),
+ * kept inside the visible height; taller than that, it scrolls inside.
  */
 export function placeBeside(i: {
   target: { top: number; bottom: number; left: number; right: number };
@@ -104,7 +105,8 @@ export function placeBeside(i: {
   const maxY = i.view.top + i.view.height - i.safe.bottom - margin;
   const room = Math.max(0, maxY - minY);
   const height = Math.min(i.height, room);
-  const top = Math.min(Math.max(i.target.top, minY), maxY - height);
+  const want = height > i.target.bottom - i.target.top ? i.target.bottom - height : i.target.top;
+  const top = Math.min(Math.max(want, minY), maxY - height);
   return { top, left, width: i.width, maxHeight: height < i.height ? room : null, side };
 }
 
