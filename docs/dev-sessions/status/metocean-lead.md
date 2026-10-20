@@ -26,6 +26,7 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - ticket_verdict refused for my sub-agents (c18870): verdicts are gate-form comments.
 
 ## DECISIONS
+- 09:35Z T-1848 RB slice 3 delta PASS c20005 on 97ad731 (suite 607ee151 rc=0 673, mutant 00a65534 killed, 8 shots by eye incl. Source). Held for outside QA; 26 px Copy/Download and 1 px ring to next RB batch.
 - 09:28Z T-1848 Lows round 2 fbe66685 (fail-first dbd5c6f0 rc=1 6 new, suite+lint+build f0e1cdee rc=0 697; c19991). y-axis can go below 0 with synthetic contours: QA to check with evidence. Same QA mo-qa-1848a re-checks delta.
 - 09:20Z T-1848 RB slice 3 short round 97ad731 (fail-first 9e5ac470 rc=1 3 new, lint+suite 92ef4932 rc=0 673; c19990). Same QA mo-qa-1848b re-checks delta incl. Source view shot.
 - 09:10Z T-1848 MP delta 2 PASS c19972 on 3a58b2d (suite 525e01c4 rc=0 705, mutant 6ea88f8d killed, 26 shots). MP slice done, held for outside QA. s2 (card unit cut) and s3 kept for next MP UI batch; merge order narrow, MP, RB (c19975).
@@ -45,7 +46,6 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - 07:38Z T-1848 slice 2 QA FAIL c19730 (dark error box see-through over Sections header; items 1-3 PASS, suite 93c444ed rc=0, 4 mutants killed). Lead saw the shot; decided in-flow reserved row + 44 px controls + mutant-2 test fix (c19732). Back to mo-fe-1848b; same QA re-checks delta.
 - 07:31Z T-1848 slice 1 items 1-6 at 7bbc187 (suite 6224ad96 rc=0 662, lint fea4d43d rc=0; c19703). QA mo-qa-1848a dispatched on 7bbc187. Same builder does item 7 on ticket/T-1848-metocean-lows (stacked). Item 6 Explain: stg log read pending (c19704).
 - 07:25Z T-1848 slice 2 built: abd19d8 (fail-first 1031cedf rc=1, suite 6e063b62 rc=0 653, lint 7bafd92b rc=0; c19683). One chained command refused, re-run as separate allowed calls. QA mo-qa-1848b (opus, lane-qa-ui) dispatched: diff, mutants one per Job, 390/1280 light/dark shots.
-- 06:31Z Coordinator T-1863: no in-session schedules (general lead ended by integrity check). CronList empty, none set (T-1703 c19534); brief line added. General lead now 8d05f919. T-1805 blind review mo-rev-1805 (opus) dispatched.
 - 05:15Z Coordinator rule: outside-family QA comes from peer leads by QA-ASK on T-84 (Lab QAs Metocean, Metocean QAs Business), answered before new build work. Asked 8 tickets (c19263, c19268). Leads cannot message each other (NOT_FOUND), T-84 c19264.
 - 04:13Z T-602 merges only with the T-1704 v14 bump (c19044); post-deploy screen check before close.
 - 01:40Z T-1591 held (money path D-81). 16:10Z (10-19) one v14 batch; no compute deploy before both v14 bumps.
