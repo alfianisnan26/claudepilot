@@ -64,14 +64,15 @@ test('save: a header names a secret, goes only to allowed hosts, and a value is 
   }
 });
 
-test('coveredBy: the same host, any port of a bare entry, and *.domain for what is under it', () => {
+test('coveredBy: the same host, any port of a bare entry, and *.domain for the domain and what is under it', () => {
   assert.ok(coveredBy('a.example.com', ['a.example.com']));
   assert.ok(coveredBy('a.example.com:8443', ['a.example.com']));
   assert.ok(!coveredBy('a.example.com', ['a.example.com:8443']));
   assert.ok(coveredBy('a.example.com', ['*.example.com']));
   assert.ok(coveredBy('*.stg.example.com', ['*.example.com']));
   assert.ok(coveredBy('*.example.com', ['*.example.com']));
-  assert.ok(!coveredBy('example.com', ['*.example.com']));
+  // T-1716: Chrome gets `*.example.com` as `example.com`, which allows the domain itself too, so a header may go there.
+  assert.ok(coveredBy('example.com', ['*.example.com']));
   assert.ok(!coveredBy('evilexample.com', ['*.example.com']));
   assert.ok(!coveredBy('a.example.com.evil.net', ['*.example.com']));
   assert.ok(coveredBy('a.example.com', ['https://a.example.com/path']));
