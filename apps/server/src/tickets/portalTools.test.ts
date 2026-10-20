@@ -579,7 +579,7 @@ test('lead_peer close (T-1839): a peer lead comments on and closes a ticket a pe
     assert.equal(await comment(gen, tLw), undefined, 'and on a lane its Lab peer started before it was continued');
     assert.equal(await close(gen, tBiz), undefined, 'a peer lead closes a peer lead\'s ticket');
     assert.equal(await close(gen, tBw), undefined, 'and a peer\'s worker\'s');
-    assert.equal(await close(gen, tBw2), undefined, 'and a peer\'s worker\'s worker\'s (an ended holder is FR9a\'s)');
+    assert.equal(await close(gen, tBw2), undefined, 'and a peer\'s worker\'s worker\'s');
     assert.equal(r.tickets.get(UI, tBw).ticket.status, 'done');
     const rows = audits.filter((a) => a.kind === 'ticket.lead_peer_closed');
     assert.deepEqual(rows.map((a) => [a.detail?.ticketId, a.detail?.sessionId, a.detail?.holder, a.detail?.holderLead]), [
