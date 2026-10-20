@@ -12,11 +12,16 @@ import {
   dismissFailed,
   edgeFade,
   elapsedLabel,
+  FILTER_KEY,
+  filterTree,
   flatten,
+  foldedLabel,
   isDismissed,
   modelMaker,
   readDismissed,
+  readFilter,
   retryKind,
+  writeFilter,
 } from './agentTreeData';
 
 const NOW = Date.parse('2026-01-01T12:00:00Z');
@@ -277,4 +282,66 @@ test('dismiss: at most DISMISS_MAX are kept, the oldest go first', () => {
   assert.equal(Object.keys(kept).length, DISMISS_MAX);
   assert.ok(!('x0' in kept));
   assert.ok(`x${DISMISS_MAX + 4}` in kept);
+});
+
+/** T-1853: a lead (idle) → a (idle) → a1 (running); b (waiting); c (done); d (asleep) → d1 (failed). */
+function crew() {
+  const list = [
+    s({ id: 'lead', born: 900 }),
+    s({ id: 'a', parentId: 'lead', born: 800 }),
+    s({ id: 'a1', parentId: 'a', born: 700, state: 'working' }),
+    s({ id: 'b', parentId: 'lead', born: 600, waiting: 1 }),
+    s({ id: 'c', parentId: 'lead', born: 500, state: 'ended', endedReason: 'closed' }),
+    s({ id: 'd', parentId: 'lead', born: 400, process: 'asleep' }),
+    s({ id: 'd1', parentId: 'd', born: 300, state: 'interrupted' }),
+  ];
+  return buildAgentTrees(list, { now: NOW })[0]!.root;
+}
+const ids = (n: ReturnType<typeof crew>) => flatten(n).map((x) => x.session.id);
+
+test('T-1853: Active shows the agents at work and the leads above them; idle and ended fold behind a count', () => {
+  const { root, folded } = filterTree(crew(), 'active');
+  assert.deepEqual(ids(root), ['lead', 'a', 'a1', 'b'], 'a is idle but stays: it leads a running worker');
+  assert.equal(root.descendants, 3, 'the toggle counts what is shown');
+  assert.deepEqual(folded, { idle: 1, ended: 2, running: 0 });
+  assert.equal(foldedLabel(folded), '+1 idle · 2 ended');
+});
+
+test('T-1853: Waiting shows only the waiting ones; All shows every agent, the same nodes, nothing folded', () => {
+  const w = filterTree(crew(), 'waiting');
+  assert.deepEqual(ids(w.root), ['lead', 'b']);
+  assert.deepEqual(w.folded, { idle: 2, ended: 2, running: 1 });
+  assert.equal(foldedLabel(w.folded), '+1 running · 2 idle · 2 ended');
+  const full = crew();
+  const all = filterTree(full, 'all');
+  assert.equal(all.root, full, 'unchanged when nothing is folded');
+  assert.equal(foldedLabel(all.folded), null);
+});
+
+test('T-1853: a tree with nobody at work still shows its lead, with the rest folded', () => {
+  const quiet = buildAgentTrees([s({ id: 'l' }), s({ id: 'w', parentId: 'l', state: 'ended', endedReason: 'closed' })], { now: NOW })[0]!.root;
+  const { root, folded } = filterTree(quiet, 'active');
+  assert.deepEqual(ids(root), ['l']);
+  assert.equal(root.descendants, 0);
+  assert.equal(foldedLabel(folded), '+1 ended');
+});
+
+test('T-1853: the filter is kept per viewer; junk, missing or throwing storage reads as Active', () => {
+  const store = memory();
+  assert.equal(readFilter(store), 'active');
+  writeFilter('all', store);
+  assert.equal(store.m.get(FILTER_KEY), 'all');
+  assert.equal(readFilter(store), 'all');
+  assert.equal(readFilter(memory({ [FILTER_KEY]: 'bogus' })), 'active');
+  const broken = {
+    getItem: () => {
+      throw new Error('blocked');
+    },
+    setItem: () => {
+      throw new Error('blocked');
+    },
+  };
+  assert.equal(readFilter(broken), 'active');
+  assert.doesNotThrow(() => writeFilter('waiting', broken));
+  assert.equal(readFilter(null), 'active');
 });

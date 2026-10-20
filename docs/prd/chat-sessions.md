@@ -769,7 +769,8 @@ middle-click) on a row opens the session in its own tab, the v1 split view.
 **Words on screen (T-1710).** The app calls a session an **agent**: the nav and the page are "Agents", the button is "New agent", and
 dialogs, toasts, empty states and tips say agent. Routes (`/admin/sessions`), the API, types and the database keep "session". Where
 "session" means something else it stays: Claude Code's own session, the 5-hour session window of a plan, an app port's session, and the
-server's Settings group "Sessions".
+server's setting keys and group id `sessions`. The server's labels follow (T-1825): the Settings group is "Running agents" (with
+"Agents per workspace", "Agents in total", "Spend limit per agent", "Workers per agent"), the knowledge graph's group "Agents".
 
 #### 12.2.1 Agents tree (T-1710)
 
@@ -780,10 +781,11 @@ matches. It reads the list the page already polls (every 5 s), and a clock ticks
 
 | Part   | Design |
 | ------ | ------ |
-| Card   | The role (`agent`) as the name, else the title; the model short ("Opus 5.5"); a status (Running with a slow spinner, Waiting on a person, Failed, Done, Asleep, Idle); the title as the task with the ticket id; cost (`sessionCost`) and time (from its start to now while it runs or waits, else to its last activity); a child count that folds its subtree. The name opens the agent. |
+| Filter (T-1853) | All / Active / Waiting over every tree, kept in this browser (`claudepilot.agent-tree.filter`, Active by default). Active shows the agents running or waiting on a person and the leads above them; Waiting only the waiting ones and their leads. A tree's lead always shows. What is left out folds behind a count under the tree ("+1 idle · 2 ended"), which switches to All. The header counts and the failed list always cover the whole tree. |
+| Card   | Kept short (T-1853): a model glyph (a Claude burst, a chip for a model the portal cannot name, a robot before the first report; T-1825), the role (`agent`) as the name, else the title; the model short ("Opus 5.5"); a status (Running with a slow spinner, Waiting on a person, Failed, Done, Asleep, Idle); the ticket id; cost (`sessionCost`, the cents muted); a child count of what is shown that folds its subtree. An ⓘ holds the rest: the title as the task, the time (from its start to now while it runs or waits, else to its last activity), its own worktree branch and Bypass on. The session carries no list of tools or MCP servers, so the card shows none. The whole card opens the agent. The lead's card is wider than its workers' from 1024 px. |
 | Status | Failed: interrupted, or ended for a credential or integrity stop or an ending that reads as an error. Done: ended any other way. Idle (alive and quiet) is said as it is, never shown as Done. |
-| Header | "N agents · M running · K failed · $total". "K failed" opens a list of the failed ones with **Dismiss** (hidden from the count in this browser, `claudepilot.agent-tree.dismissed`, until the agent fails again) and **Retry**: `recover` for an integrity ending, a short resume message over the chat socket for an interrupted one, none for a credential stop (open the agent). |
-| Layout | Phone: an indented column with one line down the left and an elbow into each card. From 1024 px: the lead on top, its workers in a row under it joined by a bar (the row scrolls inside its box when wider than the page), deeper levels as indented columns. |
+| Header | "N agents · M running · K failed · $total". "K failed" opens a list, beside the lead's card when the screen has room (else under the button; T-1825), of the failed ones with **Dismiss** (hidden from the count in this browser, `claudepilot.agent-tree.dismissed`, until the agent fails again) and **Retry**: `recover` for an integrity ending, a short resume message over the chat socket for an interrupted one, none for a credential stop (open the agent). |
+| Layout | Phone: an indented column with one line down the left and an elbow into each card. From 1024 px: the lead on top, its workers in a row under it joined by a bar (the row scrolls inside its box when wider than the page, and an edge with more beyond it fades out), deeper levels as indented columns. The lines are light blue and leave from a small node dot under the parent card (T-1825). |
 | Motion | Cards fade and rise in, a status cross-fades, a fold animates its height; with reduced motion only fades remain (`MotionConfig reducedMotion="user"`) and the spinner stops. |
 
 Rules and tests: `apps/web/src/features/chat/agentTreeData.ts`, `agentTreeData.test.ts`.

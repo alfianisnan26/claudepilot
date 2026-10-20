@@ -15,16 +15,21 @@ import {
   dismissFailed,
   edgeFade,
   elapsedLabel,
+  filterTree,
+  foldedLabel,
   isDismissed,
   modelMaker,
   readDismissed,
+  readFilter,
   RESUME_MESSAGE,
   retryKind,
   STATUS_LABEL,
+  writeFilter,
   type AgentFacet,
   type AgentNode,
   type AgentStatus,
   type AgentTreeData,
+  type TreeFilter,
 } from './agentTreeData';
 import { chatApi } from './api';
 import './agentTree.css';
@@ -34,7 +39,8 @@ const EASE = [0.22, 1, 0.36, 1] as const;
 /**
  * T-1710: the Agents tree, the Tree view of the Agents page. Each lead that started workers, as connected cards (agentTreeData.ts has the
  * rules): on a phone an indented column, from 1024 px the lead's workers in a row under it (the owner's reference). It reads the list the
- * page already polls, so it updates with it; the clock ticks each second for the running ones' time.
+ * page already polls, so it updates with it; the clock ticks each second for the running ones' time. T-1853: by default only the agents at
+ * work (and the leads above them) show; the rest folds behind a count, and a filter (kept per viewer) shows Waiting only or All.
  */
 export function AgentTreeView({ sessions, query, onChanged }: { sessions: readonly ChatSession[]; query: string; onChanged: () => void }) {
   const now = useNow(1000);
@@ -44,6 +50,11 @@ export function AgentTreeView({ sessions, query, onChanged }: { sessions: readon
     [sessions, now, query, dismissed],
   );
   const dismiss = useCallback((s: ChatSession) => setDismissed((d) => dismissFailed(s, d)), []);
+  const [filter, setFilterState] = useState<TreeFilter>(() => readFilter());
+  const setFilter = useCallback((f: TreeFilter) => {
+    setFilterState(f);
+    writeFilter(f);
+  }, []);
 
   if (trees.length === 0)
     return (
@@ -54,15 +65,59 @@ export function AgentTreeView({ sessions, query, onChanged }: { sessions: readon
   return (
     <MotionConfig reducedMotion="user">
       <div className="at-tree flex flex-col gap-6" data-agent-tree="">
+        <FilterBar value={filter} onChange={setFilter} />
         {trees.map((t) => (
-          <TreeSection key={t.root.session.id} tree={t} onDismiss={dismiss} onChanged={onChanged} />
+          <TreeSection key={t.root.session.id} tree={t} filter={filter} onShowAll={() => setFilter('all')} onDismiss={dismiss} onChanged={onChanged} />
         ))}
       </div>
     </MotionConfig>
   );
 }
 
-function TreeSection({ tree, onDismiss, onChanged }: { tree: AgentTreeData; onDismiss: (s: ChatSession) => void; onChanged: () => void }) {
+const FILTER_LABEL: Record<TreeFilter, string> = { active: 'Active', waiting: 'Waiting', all: 'All' };
+
+/** All / Active / Waiting, for every tree on the page. */
+function FilterBar({ value, onChange }: { value: TreeFilter; onChange: (f: TreeFilter) => void }) {
+  return (
+    <div className="-mb-3 flex items-center gap-1" role="group" aria-label="Show agents">
+      {(['all', 'active', 'waiting'] as const satisfies readonly TreeFilter[]).map((f) => (
+        <button
+          key={f}
+          type="button"
+          aria-pressed={value === f}
+          onClick={() => onChange(f)}
+          data-agent-filter={f}
+          className={cn(
+            'press inline-flex min-h-11 items-center rounded-full px-3.5 text-[13.5px] font-semibold focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:outline-hidden',
+            value === f ? 'bg-ink text-surface' : 'text-muted hover:bg-surface-2 hover:text-ink',
+          )}
+        >
+          {FILTER_LABEL[f]}
+        </button>
+      ))}
+      <InfoTip label="About the filter">
+        Active shows the agents at work and waiting on you, with the leads above them; Waiting only those waiting. The rest folds behind a count
+        under each tree. Kept in this browser.
+      </InfoTip>
+    </div>
+  );
+}
+
+function TreeSection({
+  tree,
+  filter,
+  onShowAll,
+  onDismiss,
+  onChanged,
+}: {
+  tree: AgentTreeData;
+  filter: TreeFilter;
+  onShowAll: () => void;
+  onDismiss: (s: ChatSession) => void;
+  onChanged: () => void;
+}) {
+  const shown = useMemo(() => filterTree(tree.root, filter), [tree.root, filter]);
+  const more = foldedLabel(shown.folded);
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   const toggle = useCallback(
     (id: string) => setCollapsed((c) => (c.has(id) ? new Set([...c].filter((x) => x !== id)) : new Set(c).add(id))),
@@ -106,9 +161,20 @@ function TreeSection({ tree, onDismiss, onChanged }: { tree: AgentTreeData; onDi
         data-fade-right={fade.right || undefined}
       >
         <div className="at-root flex flex-col expanded:mx-auto expanded:w-max">
-          <Branch node={tree.root} depth={0} collapsed={collapsed} onToggle={toggle} />
+          <Branch node={shown.root} depth={0} collapsed={collapsed} onToggle={toggle} />
         </div>
       </div>
+      {more && (
+        <button
+          type="button"
+          onClick={onShowAll}
+          data-agent-folded=""
+          aria-label={`Show all: ${more.slice(1)} hidden`}
+          className="press mt-1 inline-flex min-h-11 items-center rounded-full px-3 text-[13px] font-semibold text-muted tabular-nums hover:bg-surface-2 hover:text-ink focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:outline-hidden expanded:mx-auto expanded:flex"
+        >
+          {more}
+        </button>
+      )}
     </section>
   );
 }
@@ -311,22 +377,18 @@ function AgentCard({ node, depth, open, onToggle }: { node: AgentNode; depth: nu
         </div>
         <StatusPill status={node.status} />
       </div>
-      {(node.task || s.ticketId || facets.length > 0) && (
-        <p className="mt-1.5 text-[13.5px] leading-snug text-ink-soft [overflow-wrap:anywhere]">
-          {facets.length > 0 && (
-            <span className="mr-1.5 inline-flex translate-y-[2px] items-center gap-1">
-              {facets.map((f) => (
-                <FacetIcon key={f} facet={f} branch={s.worktree?.branch} />
-              ))}
-            </span>
-          )}
-          {s.ticketId && <span className="mr-1.5 font-mono text-[12px] text-muted">{s.ticketId}</span>}
-          {node.task}
-        </p>
-      )}
-      <div className="mt-1.5 flex min-h-6 items-center gap-1 text-[13px] tabular-nums">
+      <div className="mt-1.5 flex min-h-6 items-center gap-1.5 text-[13px] tabular-nums">
+        {s.ticketId && <span className="font-mono text-[12px] text-muted">{s.ticketId}</span>}
         <Cost usd={node.costUsd} className="font-semibold text-ink" />
-        <span className="text-muted">· {elapsedLabel(node.elapsedMs)}</span>
+        <InfoTip label={`About ${node.name}`} className="relative z-10">
+          {node.task && <span className="block text-ink">{node.task}</span>}
+          <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span>{elapsedLabel(node.elapsedMs)}</span>
+            {facets.map((f) => (
+              <FacetIcon key={f} facet={f} branch={s.worktree?.branch} />
+            ))}
+          </span>
+        </InfoTip>
         {onToggle && (
           <button
             type="button"
@@ -388,9 +450,9 @@ function FacetIcon({ facet, branch }: { facet: AgentFacet; branch?: string }) {
   const f = FACET[facet];
   const label = facet === 'branch' && branch ? `${f.label}: ${branch}` : f.label;
   return (
-    <span className="inline-flex text-muted" title={label} data-agent-facet={facet}>
+    <span className="inline-flex items-center gap-1" data-agent-facet={facet}>
       {f.icon}
-      <span className="sr-only">{label}</span>
+      {label}
     </span>
   );
 }
