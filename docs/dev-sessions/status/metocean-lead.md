@@ -24,7 +24,8 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - Closed this session: 1 (T-1353).
 
 ## IN FLIGHT
-- 02:25Z (moved to one.claude, 16 %): mo-be-1591b (implementer, opus) T-1591 double-billing fix on ticket/T-1591-metering-errors from 4f26757 (c18758). mo-qa-scr (lane-qa-ui, opus) T-1017 + T-1089 screen check as a Playwright Job on stg-lab (c18759). 02:33Z mo-qa-be (lane-qa-perf, opus): independent QA of Lab-built T-851 (on stg d3157cf) and T-1662 (04b45a4); my lineage did not build them, so verdicts can be recorded. mo-pm done: post-mortems T-1705 c18775, T-1808 c18777, both in_review; rule asks to the coordinator T-1703 c18778.
+- T-1591 in_review: fix 2d633120 on ticket/T-1591-metering-errors (fail-first 3e6b3f58 rc=1 on b6c5fb8; ci c29c4247 rc=0 2080 tests; c18789; lead diff read c18791). Needs non-lineage delta QA, merge gate, D-81 post-deploy check. Lane clone commits carry a person's name as author (noted c18791).
+- 02:39Z mo-triage (general-purpose, sonnet, read-only): next step per in_progress ticket. mo-qa-scr (lane-qa-ui, opus) T-1017 + T-1089 screen check as a Playwright Job on stg-lab (c18759). 02:33Z mo-qa-be (lane-qa-perf, opus): independent QA of Lab-built T-851 (on stg d3157cf) and T-1662 (04b45a4); my lineage did not build them, so verdicts can be recorded. mo-pm done: post-mortems T-1705 c18775, T-1808 c18777, both in_review; rule asks to the coordinator T-1703 c18778.
 - T-1800 in_review: head 55bdb7dc on ticket/T-1800-proponent-exact (suite Job ddd2e129 rc=0 359 passed; mutants M1 4ed6ba3a, M2 db690816 rc=1; c18769, lead c18773). Mutant refs ticket/T-1800-mutant-m1/m2 never merge. QA non-lineage (c17308).
 - T-1803 blocked (c18623): fix staged in the mo-be-1803 clone, uncommitted; commit refused 3x by an unknown rule.
 - T-1802 in_review 819bf775 (ticket/T-1802-run-toast-cancel); QA needs a non-lineage session (c17308).
@@ -46,6 +47,7 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - 16:20Z Coordinator: stg Worker logs via `/home/node/work/claudepilot/scripts/cf-logs.sh` (read-only); the "Konfersi QA e2e (agents)" service token covers the main stg hosts for Job e2e. Use after each v14 deploy and for T-1528 AC5.
 
 ## FOR THE COORDINATOR
+- T-1703 c18778: deny `git switch` like checkout; checkout --detach intent; trailer gate step; `git * >*` false positive on quoted commit text. Lane clone commit author is a person's identity (T-1591 c18791).
 - c17308 (re-tested 17:00Z on satria, T-1574 c17540): dontAsk workers refused on the allow-listed clone shape; check the folder's allow list loads for workers. Single blocker for every non-lineage QA record.
 - c17465: non-lineage QA records needed on T-1574 dbbc9a4 (delta check before its gate ask), T-1353, T-632, T-1632; session_message cannot reach the general lead.
 - AIR quota on qa-regress-scratch (T-1528 AC5, c16625); shared browser cannot reach stg-lab.konfersi.com (T-1667, T-1017 c16925, T-1089 screen check).
