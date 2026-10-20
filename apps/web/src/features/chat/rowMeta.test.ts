@@ -186,13 +186,16 @@ test('row meta: the cost (an estimate while a turn runs), nothing at 0; branch a
   assert.equal(rowMeta({ session: wt, groupBy: 'ticket', showWorkspace: false, usage: null, nowMs: NOW }).ticket, null);
 });
 
-test('line two: the items in priority order (state, quota, cost, model, workspace, Claude, branch, ticket); only those it has', () => {
-  assert.deepEqual([...LINE_TWO_ORDER], ['state', 'quota', 'cost', 'model', 'workspace', 'claude', 'branch', 'ticket']);
+test('line two: the items in priority order (state, ticket, quota, cost, model, workspace, Claude, branch); only those it has', () => {
+  assert.deepEqual([...LINE_TWO_ORDER], ['state', 'ticket', 'quota', 'cost', 'model', 'workspace', 'claude', 'branch']);
   const full = s({ costUsd: 1.5, ticketId: 'T-1', worktree: { path: '/w/x', branch: 'ticket/T-1-x' } as ChatSession['worktree'] });
   assert.deepEqual(lineTwo(rowMeta({ session: full, groupBy: 'none', showWorkspace: true, usage: usage(), nowMs: NOW })), [...LINE_TWO_ORDER]);
   // The cost comes before the model and the Claude's name, so a short line keeps the number (the ux check of c84657f: the lead's cost gone).
   const lead = lineTwo(rowMeta({ session: s({ costUsd: 10.39 }), groupBy: 'none', showWorkspace: false, usage: usage(), nowMs: NOW }));
   assert.deepEqual(lead, ['state', 'quota', 'cost', 'model', 'claude']);
+  // T-1098 (UI check at 390 px): a lead's row with a ticket keeps the key right after the state, ahead of everything a phone cuts.
+  const ticketed = lineTwo(rowMeta({ session: s({ costUsd: 10.39, ticketId: 'T-3', ticketKey: 'KONF-3' }), groupBy: 'none', showWorkspace: false, usage: usage(), nowMs: NOW }));
+  assert.deepEqual(ticketed.slice(0, 2), ['state', 'ticket']);
   // Under a Claude heading: the bar, not the name. A pool or a key: no bar, the name stays. A worker on its lead's Claude: neither.
   assert.deepEqual(lineTwo(rowMeta({ session: s(), groupBy: 'claude', showWorkspace: false, usage: usage(), nowMs: NOW })), ['state', 'quota', 'model']);
   assert.deepEqual(lineTwo(rowMeta({ session: s(), groupBy: 'none', showWorkspace: false, usage: usage({ runsOn: 'pool' }), nowMs: NOW })), ['state', 'model', 'claude']);

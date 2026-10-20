@@ -27,6 +27,10 @@ test('sessions are findable by the Claude, the branch and the ticket, as the Ses
   assert.match(i!.keywords!, /ticket\/T-4-login/);
   assert.match(i!.keywords!, /T-4/);
   assert.match(i!.keywords!, /docker\/api-dev/);
+  // T-1098: and by its ticket's bucket key.
+  const [k] = sessionItems([session({ id: 'y', ticketId: 'T-3', ticketKey: 'KONF-3' })]);
+  assert.match(k!.keywords!, /\bKONF-3\b/);
+  assert.match(k!.keywords!, /\bT-3\b/);
 });
 
 const ws = (over: Partial<Workspace>): Workspace => ({ id: 'docker/api-dev', name: 'api-dev', target: 'docker', image: '', status: 'running', createdAt: '', ...over });

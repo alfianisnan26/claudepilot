@@ -38,7 +38,8 @@ export function sessionItems(sessions: readonly ChatSession[]): PaletteItem[] {
       hint: `${SESSION_WORD[s.state]} · ${workspaceLabel(s.workspaceId)}`,
       to: `/admin/sessions/${encodeURIComponent(s.id)}`,
       // What the Sessions page's own search looks in, beside the title.
-      keywords: [s.claudeName, s.workspaceId, s.worktree?.branch, s.ticketId, s.id].filter(Boolean).join(' '),
+      // T-1098: its ticket by either id (T-3 and KONF-3).
+      keywords: [s.claudeName, s.workspaceId, s.worktree?.branch, s.ticketId, s.ticketKey, s.id].filter(Boolean).join(' '),
       recent: Date.parse(s.lastActivityAt) || 0,
       state: s.state,
     }));

@@ -181,11 +181,12 @@ export function rowMeta({ session: s, groupBy, showWorkspace, usage, nowMs, lead
  * mid-number, the Claude's name to "De" with no ellipsis, and dropped the lead's cost). The line is one line high and wraps: an item that does
  * not fit whole goes to the hidden second line with everything after it, so a lower-priority item is dropped whole and a number is never
  * cut. A name that must shorten (the Claude, the workspace, the branch) is capped and ends in an ellipsis, its full text in the tip.
- *   state · quota (bar and percent) · cost · model · workspace · Claude's name · branch · ticket
+ *   state · ticket · quota (bar and percent) · cost · model · workspace · Claude's name · branch
  * The workspace shows only when the card's rows span several workspaces (it then tells rows apart, more than the Claude's name, which the
  * bar's tip also says).
  */
-export const LINE_TWO_ORDER = ['state', 'quota', 'cost', 'model', 'workspace', 'claude', 'branch', 'ticket'] as const;
+// T-1098 (UI check): the ticket key second, so a phone keeps it at rest on a long line and on a lead's row; it was last and was cut first.
+export const LINE_TWO_ORDER = ['state', 'ticket', 'quota', 'cost', 'model', 'workspace', 'claude', 'branch'] as const;
 export type LineTwoItem = (typeof LINE_TWO_ORDER)[number];
 
 /** The items line two carries for these facts, in {@link LINE_TWO_ORDER}; the quota item only when there is a bar (not a pool or a key). */
