@@ -37,13 +37,15 @@ export function HomePage() {
           : 'What needs you and how things stand, at a glance. Arrange hides and orders the cards on this device.'
       }
       action={
-        <div className="flex items-center gap-2">
+        // T-1851: the same controls in the same slots in both modes, so nothing in the row moves on a switch. Arrange is Dashboard's only;
+        // in Manager its slot is kept but hidden (visibility: hidden also takes it out of the tab order and the accessibility tree).
+        <div className="flex items-center gap-2" data-home-header-actions="">
           <HomeModeSwitch mode={mode} onMode={setMode} />
-          {mode === 'dashboard' && (
-            <Button variant="ghost" size="sm" icon={<SlidersHorizontal className="size-4" />} onClick={() => setArranging(true)} aria-label="Arrange cards" title="Arrange cards">
+          <div className={mode === 'dashboard' ? 'flex' : 'invisible flex'} aria-hidden={mode === 'dashboard' ? undefined : true} data-home-arrange-slot={mode}>
+            <Button variant="ghost" size="sm" icon={<SlidersHorizontal className="size-4" />} onClick={() => setArranging(true)} disabled={mode !== 'dashboard'} aria-label="Arrange cards" title="Arrange cards">
               <span className="max-sm:sr-only">Arrange</span>
             </Button>
-          )}
+          </div>
         </div>
       }
     />
@@ -212,7 +214,7 @@ function ArrangeDialog({ open, onClose }: { open: boolean; onClose: () => void }
           const title = titleOf(w);
           const on = !s.hidden.includes(w.id);
           return (
-            <li key={w.id} className="flex min-h-14 items-center gap-2 px-1 py-1.5">
+            <li key={w.id} data-arrange-card={w.id} className="flex min-h-14 items-center gap-2 px-1 py-1.5">
               <Icon className="size-[18px] shrink-0 text-muted" aria-hidden="true" />
               <span className="min-w-0 flex-1 truncate font-semibold">{title}</span>
               <MoveButton label={`Move ${title} up`} disabled={i === 0} onClick={() => updateHomeSettings({ order: moveInOrder(ids, w.id, -1) })}>
