@@ -32,6 +32,7 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - 13 tickets with a gate-form PASS wait for the general lead's stg merge gate (T-1703 c18753; T-367, T-1021 first). Workers still refused Bash (T-553 c18740, c17308).
 
 ## DECISIONS
+- 02:31Z T-1591 fix commit refused: " > held" in -m matched `git * >*` (redirect deny, false positive on quoted text). Option (a) reword without ">", same command otherwise; -F refused as another flag (c18776). Same builder resumed. Fail-first Job 3e6b3f58 rc=1 on test b6c5fb8. Brief: no ">" in commit text.
 - 02:25Z Moved to one.claude (16 %, resets 03:40Z): 3 slices dispatched. T-1808 brief line in briefs/mo/common.md (--trailer flags + trailers check, c18760).
 - 01:40Z T-1591 held (option a, fix before merge; money path D-81, gap new with the change). c18618's trailer claim corrected; incident T-1808.
 - 01:22Z T-1803: builder found none of the suspected denies matches its refused messages (c18619); the tests commit with the same trailers passed. Rule unknown: asked the coordinator (c18623), ticket blocked, no work-around.
