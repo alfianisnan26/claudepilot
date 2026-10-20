@@ -1,6 +1,6 @@
-// T-1859: every visible interactive element in three shared dialogs is a 44 x 44 tap target at 390 px (QA-STANDARDS A5): the New ticket
+// T-1859: every visible interactive element in four shared dialogs is a 44 x 44 tap target at 390 px (QA-STANDARDS A5): the New ticket
 // sheet (TextField, Select, tag picks, Segmented, the sheet's Close), the Bump sheet on a ticket page, and the session info sheet (its
-// ticket chip, Rename, Keep going, limits). An element counts with its label when it is a visually hidden input inside one. Light and dark
+// ticket chip, Rename, Keep going, limits), and a glance widget (sheet on a phone, popover from 640 px). An element counts with its label when it is a visually hidden input inside one. Light and dark
 // at 390 x 844, plus 1280 x 800 to show the desktop sizes (reported, not failed: the floor is for phones). Screenshots go to QA_SHOTS.
 // Against a scratch portal with "This machine" and a signed-in-looking Claude (a session needs one; it does not need to answer):
 //   node tools/qa/mock-anthropic.mjs 4627 /tmp/cp-t1859-mock.jsonl &
@@ -80,6 +80,21 @@ const SHEETS = [
       await sleep(400);
     },
     must: [t.id, 'Rename', 'Close'],
+  },
+  {
+    // A glance widget's full form from the app bar's first chip: the kit's sheet on a phone, a popover with FullHeader (Open, Close) from
+    // 640 px, 32 px with a mouse (the 1280 run reports it) and 44 px with a coarse pointer, which headless Chromium cannot emulate (its
+    // pointer is always `none`).
+    name: 'glance',
+    async open(b) {
+      await b.goto('/admin/home', 2500);
+      const chip = 'ul[aria-label="At a glance"] button[aria-haspopup=dialog]';
+      await b.waitFor(`[...document.querySelectorAll('${chip}')].some((e) => e.getBoundingClientRect().width > 0)`, 30000);
+      await b.eval(`[...document.querySelectorAll('${chip}')].find((e) => e.getBoundingClientRect().width > 0).click()`);
+      await b.waitFor(`!!document.querySelector('[role=dialog]')`);
+      await sleep(600);
+    },
+    must: ['Close'],
   },
 ];
 
