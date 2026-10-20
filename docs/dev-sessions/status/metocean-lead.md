@@ -25,7 +25,7 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 
 ## IN FLIGHT
 - T-1591 in_review: fix 2d633120 on ticket/T-1591-metering-errors (fail-first 3e6b3f58 rc=1 on b6c5fb8; ci c29c4247 rc=0 2080 tests; c18789; lead diff read c18791). Needs non-lineage delta QA, merge gate, D-81 post-deploy check. Lane clone commits carry a person's name as author (noted c18791).
-- 02:39Z mo-triage (general-purpose, sonnet, read-only): next step per in_progress ticket. mo-qa-scr (lane-qa-ui, opus) T-1017 + T-1089 screen check as a Playwright Job on stg-lab (c18759). 02:33Z mo-qa-be (lane-qa-perf, opus): independent QA of Lab-built T-851 (on stg d3157cf) and T-1662 (04b45a4); my lineage did not build them, so verdicts can be recorded. mo-pm done: post-mortems T-1705 c18775, T-1808 c18777, both in_review; rule asks to the coordinator T-1703 c18778.
+- 02:41Z mo-qa-lp (lane-qa-ui, opus): independent QA of Lab-built T-907 (stg 7988654), T-1611 (3305bbe), T-1629 (ff045bb). mo-triage done (18 tickets): QA-able other-lineage heads next: T-822 ddda338, T-1521 18191b5; builder slices: T-602, T-1801, T-1809; blocked: T-1623 (commit deny), T-1542/T-1276 (AIR quota), T-1234/T-1020 (person's go D-77). mo-qa-scr (lane-qa-ui, opus) T-1017 + T-1089 screen check as a Playwright Job on stg-lab (c18759). 02:33Z mo-qa-be (lane-qa-perf, opus): independent QA of Lab-built T-851 (on stg d3157cf) and T-1662 (04b45a4); my lineage did not build them, so verdicts can be recorded. mo-pm done: post-mortems T-1705 c18775, T-1808 c18777, both in_review; rule asks to the coordinator T-1703 c18778.
 - T-1800 in_review: head 55bdb7dc on ticket/T-1800-proponent-exact (suite Job ddd2e129 rc=0 359 passed; mutants M1 4ed6ba3a, M2 db690816 rc=1; c18769, lead c18773). Mutant refs ticket/T-1800-mutant-m1/m2 never merge. QA non-lineage (c17308).
 - T-1803 blocked (c18623): fix staged in the mo-be-1803 clone, uncommitted; commit refused 3x by an unknown rule.
 - T-1802 in_review 819bf775 (ticket/T-1802-run-toast-cancel); QA needs a non-lineage session (c17308).
@@ -60,7 +60,7 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - none (no production or uat action pending).
 
 ## NEXT
-1. Next free slot (harness cap here: 3 sub-agents): independent QA of other lineages' builds among my 25 open/in_progress tickets (WIP far over 5 from the D-88 hand-over: finish these before new builds), then T-1803 commit + `npm run ci` Job once the coordinator answers c18623; then QA of other sessions' builds. Brief rule: quote the whole job-run command (mo-qa-1593 near miss, T-1703).
+1. Next free slot (harness cap here: 3 sub-agents): QA T-822 ddda338 + T-1521 18191b5 (other lineage); then builder T-1809 (race test first, D-81) after T-1591 merges; T-1801; T-602. WIP far over 5 from the D-88 hand-over: finish before new builds. Then T-1803 commit + `npm run ci` Job once the coordinator answers c18623; then QA of other sessions' builds. Brief rule: quote the whole job-run command (mo-qa-1593 near miss, T-1703).
 2. Then: T-1007 (ai-worker, after T-1162 lands), T-1591 QA Job, T-1593 backend suite Job, T-1012 branch question.
 3. When a non-lineage QA exists: T-1574, T-1103, T-553, T-1802 (819bf775) QA and gate asks.
 3. After T-1574's QA and merge: gate asks T-1352 f92828f, T-1416 65d952d, T-1435 f424b1c; then the v14 bump commits (compute catalog.py, backend metocean-catalog.ts), backend migrations check, stg-deploy backend then compute, cf-logs check.
