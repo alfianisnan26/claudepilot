@@ -1,4 +1,4 @@
-# Konfersi: Metocean lead status (2026-10-20 05:20Z, session fc73ae34-40d3-4c82-8148-dd55697c9379, on two.claude)
+# Konfersi: Metocean lead status (2026-10-20 05:21Z, session fc73ae34-40d3-4c82-8148-dd55697c9379, on two.claude)
 
 Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-worker, Mission Planning compute/report/plugin parts, report builder, metocean reports. Status ticket T-1703. Release ticket T-1704 (v14 batch). Incidents T-1705, T-1808. Older lines: git history of this file.
 
@@ -13,8 +13,10 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - T-1611 re-check c19232 (Job dc81d232): GT 500 km 7 storms, 1000 km 77; tracks draw at 1000 only; bands about 0.1 px. Bugs moved to T-1856 (c19246). T-1611 waits for item 1's 3305bbe merge.
 
 ## IN FLIGHT
+- T-1693 (Business QA-ASK c19258, migration 0111): outside QA sub-agent mo-qa-1693 (opus) on 8dfe8fec, gate form on T-1693 or T-84.
+- T-1435 (decision c19278: before/after required): sub-agent mo-qa-1435-cmp (opus) builds qa/T-1435-output-compare, PROOF Job against 3b97011.
 - T-1856 (M, sev 3, c19245): sub-agent mo-fe-1856 (opus) on ticket/T-1856-cyclone-tracks-bands: diagnose 500 km tracks, band min 3 px. Told about --also.
-- mo-sweep-read (sonnet, read-only): send-back reasons of the 03:55Z sweep for 22 of my tickets (T-84 c18997). The DONE line "13 gate-form PASS waiting" was stale: the sweep sent them back.
+- Sweep send-backs (mo-sweep-read done): QA-ASKs on T-84 c19273 (T-1012, T-1416, T-1349, T-553, T-1523, T-1662, T-632, T-1182, T-1521) and c19277 (T-1021 file list). D-77 file lists asked on T-1021 c19275, T-1662 c19276 (lead diff refused). T-1296 (coordinator blocker) and T-1528 (AC5) need no merge.
 - Worker bbde2b22 (two.claude, idle): kept for T-1856's post-deploy re-check.
 - T-1591 in_review: fix 2d633120 (fail-first 3e6b3f58, ci c29c4247). Needs delta QA, merge gate, D-81 second QA + post-deploy check.
 - T-1528 held on AC5 (c17428). T-1701 74bae41 waits for T-1162 on stg. Post-mortems T-1705 c18775, T-1808 c18777 in_review.
@@ -43,15 +45,15 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - T-1703 c18925: reopen T-1828 or note that its gaps live on T-1703.
 - T-851 c18847: backend wrangler.jsonc var ACCOUNT_JWT_PRIVATE_KEY at the top level; confirm no key value is committed.
 - T-1703 c18778 / T-1705: deny `git switch` like checkout; `git * >*` false positive; lane commit author is a person's identity (T-1591 c18791).
-- Read-only `git -C <lane clone> diff A...B` / `log A..B` refused for lanes.
+- Read-only `git -C <lane clone> diff A...B` / `log A..B` refused for lanes, and for the lead clone too (T-1021 c19275): needed to name files for D-77.
 - AIR quota on qa-regress-scratch (T-1528 AC5). D-88 text missing from this workspace's DECISIONS.md copy.
 
 ## NEEDS A HUMAN
 - none (no production or uat action pending). T-1662 sweep note: D-77, a migration on stg D1 shared with uat needs a person's go; checked in the sweep read.
 
 ## NEXT
-1. Answer any Business QA-ASK on T-84 first (Metocean QAs Business), with a qa-verifier sub-agent.
-2. Fix the 03:55Z sweep send-backs from mo-sweep-read (format first, then rebase, then QA-ASK).
+1. Answer any new Business QA-ASK on T-84 first (Metocean QAs Business), with a qa-verifier sub-agent.
+2. Watch T-84 for Lab's answers to c19263, c19273, c19277. Gate-form PASS waiting over one sweep: note on T-1598 (leads cannot message).
 3. mo-fe-1856 return: family QA sub-agent, then QA-ASK on T-84.
 4. T-1848 UI/UX audit of my apps against the vault standard (D-91).
 5. T-991 (D-90, test first, D-81 money review), T-1809 after T-1591, T-1007 after T-1162.
