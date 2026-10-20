@@ -12,9 +12,10 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - T-1801 built: item 1 compute e45d5f9 (Jobs 63c820d6, mutant 36e3f9a5 rc=1, suite 4070507f 361), item 2 lab-plugin bec25a4 on T-1182's 4e32c8e (Job 53668779, 2 mutants red), item 4 backend 508e2d2 (ci c0769958 2098, mutant 8bcfe3b8 rc=1). c18940, c18946, c18948.
 
 ## IN FLIGHT
-- T-1629 built: 7e9b0dac on ticket/T-1629-storm-audit-id-2, Job 143c52c3 rc=0 (612 pass), N3/N5/N6 mutants red (c19121). Needs independent QA (non-lineage).
-- T-1803 built: test cb0075ab, fix 1c3f5188 on ticket/T-1803-job-deadline; fail-first 44d3f3f7 rc=1, ci fe6d8895 rc=0 2100 (c19170). Needs independent QA.
-- Worker bbde2b22 (mo-qa-1611, asleep): re-check needs a new probe qa/t1611-recheck.mjs + message file; the worker has no Write tool. Track layer FAIL stands (c19136).
+- T-1629 7e9b0dac: QA PASS WITH GAPS c19236 (3f19e911, Jobs f98270e3, a8939eed), diff unread; lead c19248; in_review for the merge gate.
+- T-1803 1c3f5188: QA PASS WITH GAPS c19233 (Jobs e9523ccd 2100, 60071e96), diff unread; lead c19247; in_review for the merge gate.
+- T-1611 re-check c19232 (Job dc81d232): GT 500 km = 7 storms, 1000 km = 77; tracks draw at 1000, not at 500; bands 0.1 px, invisible. Bugs to new T-1856 (c19246). T-1611 waits for item 1's 3305bbe merge. bbde2b22 kept for T-1856's post-deploy re-check.
+- 05:09Z T-1856 claimed (M, sev 3, 2.5 h, c19245). Sub-agent mo-fe-1856 (opus) on ticket/T-1856-cyclone-tracks-bands: diagnose 500 km, min band 3 px.
 - T-602 QA PASS both repos (mo-qa-602): compute f7dfd3d c19120 (Job 7f2af862), backend 78d0c7c8 c19122 (Job f6a683af); in_review, rides v14; close after deploy + screen check + stored-data run.
 - T-1801 QA done (mo-qa-1801): item 2 PASS WITH GAPS c18958 (Job e553806b), item 1 PASS c19027 (190f6576), item 4 PASS c19115 (875f4dd8); in_review for the merge gate, close after merge (c19117).
 - 04:50Z worker 3f19e911 (mo-qa-1803, hasyim, sonnet, auto): T-1803 then T-1629 QA in gate form, own mutants.
@@ -32,6 +33,7 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - 05:03Z T-1826 claimed (S, sev 3, 1.5 h; c19224, c19225), option (a). Sub-agent mo-fe-1826 (opus, Agent) on ticket/T-1826-matrix-390: fail-first test, fix, Explain 44 px.
 
 ## DECISIONS
+- 05:11Z D-61 lapse by QA 3f19e911 (unquoted `&&` after `--` ran npm build in the pod, ENOENT, self-reported). Brief line added to briefs/mo/common.md, T-1703 c19249. 3f19e911 ended.
 - 05:10Z Wrong at 04:57Z: two.claude refuses worker clones too; bbde2b22 only reused an old clone. Lead does not clone for workers without the coordinator's word (second-agent workaround risk).
 - 04:57Z Moved to two.claude (6 %, resets 08:40Z). Probe-file implementer dispatched now, not after 07:20Z.
 - 04:52Z Move called off: stay on fadlilah (96 %, resets 07:20Z). New QA runs as auto workers on other Claudes. No Agent sub-agent on this Claude until the reset, so the T-1611 probe-file implementer waits for it. New worker for T-1800/T-1802 because 55723e0e's clone was refused on one.claude.
@@ -72,5 +74,5 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 3. T-991 (D-90, ai-worker billing, test first, after or on T-1591; D-81 money review), T-1007 (after T-1162 lands).
 4. After T-1574's QA and merge: gate asks T-1352 f92828f, T-1416 65d952d, T-1435 f424b1c; then the v14 bump commits (compute catalog.py, backend metocean-catalog.ts) with T-602, backend migrations check, stg-deploy backend then compute, cf-logs check, post-deploy screen checks.
 5. After the in_review/merge sweep (D-91): UI/UX polish audit of my apps (Lab metocean views: Analysis, Map, Chart, Mission Planning, Report panels; report DOCX). QA suggests, I decide on the ticket against the standard (location asked, T-1703 c19047); one batched ticket per page or app.
-6. On reports: 3f19e911 (T-1803, T-1629), bbde2b22 (T-1611 re-check), mo-fe-1826 (then a UI QA). T-1800/T-1802 QA after the coordinator answers c19227.
+6. On reports: mo-fe-1826 and mo-fe-1856 (then a UI QA each, worker in a folder it can use). T-1800/T-1802 QA after the coordinator answers c19227.
 7. Hourly closed-count report on T-1703.
