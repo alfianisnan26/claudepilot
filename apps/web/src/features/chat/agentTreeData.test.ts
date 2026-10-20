@@ -2,15 +2,19 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { CHAT_ENDED_CREDENTIAL, CHAT_ENDED_INTEGRITY, type ChatSession } from '@portal/contracts';
 import {
+  agentFacets,
   agentStatus,
   buildAgentTrees,
   costLabel,
+  costParts,
   DISMISS_KEY,
   DISMISS_MAX,
   dismissFailed,
+  edgeFade,
   elapsedLabel,
   flatten,
   isDismissed,
+  modelMaker,
   readDismissed,
   retryKind,
 } from './agentTreeData';
@@ -201,6 +205,39 @@ test('labels: elapsed and cost', () => {
   assert.equal(costLabel(0.04), '$0.04');
   assert.equal(costLabel(0.003), '$0.003');
   assert.equal(costLabel(0), '$0.00');
+});
+
+test('T-1825: a cost in two parts, the cents apart (muted on the card)', () => {
+  assert.deepEqual(costParts(1.52), { whole: '$1', fraction: '.52' });
+  assert.deepEqual(costParts(0.003), { whole: '$0', fraction: '.003' });
+  assert.deepEqual(costParts(0), { whole: '$0', fraction: '.00' });
+  assert.deepEqual(costParts(123.4), { whole: '$123', fraction: '.40' });
+});
+
+test('T-1825: the model glyph: Claude for a Claude family or id, other for an id the portal cannot read, none before a report', () => {
+  assert.equal(modelMaker('claude-opus-5-5'), 'claude');
+  assert.equal(modelMaker('sonnet'), 'claude');
+  assert.equal(modelMaker('us.anthropic.claude-haiku-4-5-20251001-v1:0'), 'claude');
+  assert.equal(modelMaker('gpt-6-sol'), 'other');
+  assert.equal(modelMaker(null), null);
+  assert.equal(modelMaker('  '), null);
+});
+
+test('T-1825: card icons are facts of the session: its own worktree, Bypass on', () => {
+  assert.deepEqual(agentFacets(s()), []);
+  assert.deepEqual(
+    agentFacets(s({ worktree: { path: '/w', branch: 'ticket/x', repo: '/r' } as ChatSession['worktree'], mode: 'bypassPermissions' })),
+    ['branch', 'bypass'],
+  );
+  assert.deepEqual(agentFacets(s({ mode: 'auto' })), []);
+});
+
+test('T-1825: edge fade: none when it fits, the side with more beyond it otherwise', () => {
+  assert.deepEqual(edgeFade(0, 800, 800), { left: false, right: false });
+  assert.deepEqual(edgeFade(0, 1200, 800), { left: false, right: true });
+  assert.deepEqual(edgeFade(200, 1200, 800), { left: true, right: true });
+  assert.deepEqual(edgeFade(400, 1200, 800), { left: true, right: false });
+  assert.deepEqual(edgeFade(399.5, 1200, 800), { left: true, right: false });
 });
 
 test('dismiss: kept in storage, read back, and holds only for the same failure', () => {

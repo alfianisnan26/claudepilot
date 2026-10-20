@@ -154,6 +154,39 @@ export function elapsedLabel(ms: number): string {
 /** "$1.52", "$0.04", "$0.003". */
 export const costLabel = (usd: number): string => `$${usd.toFixed(usd > 0 && usd < 0.01 ? 3 : 2)}`;
 
+/** T-1825: a cost in two parts, so the cents read quieter than the dollars: "$1.52" → "$1" and ".52". */
+export function costParts(usd: number): { whole: string; fraction: string } {
+  const label = costLabel(usd);
+  const dot = label.indexOf('.');
+  return dot < 0 ? { whole: label, fraction: '' } : { whole: label.slice(0, dot), fraction: label.slice(dot) };
+}
+
+/** T-1825: who makes a card's model, for its glyph: `claude` (a Claude family or id), `other` (an id the portal cannot read), or null (no report yet). */
+export function modelMaker(model: string | null | undefined): 'claude' | 'other' | null {
+  const v = model?.trim();
+  if (!v) return null;
+  return /\b(claude|fable|opus|sonnet|haiku)\b/i.test(v) || /claude-/i.test(v) ? 'claude' : 'other';
+}
+
+/**
+ * T-1825: the icons on a card, each a fact of the session (never a guess): `branch` (it works in its own worktree), `bypass` (Bypass is on).
+ * The session carries no list of its tools or MCP servers, so none is drawn.
+ */
+export type AgentFacet = 'branch' | 'bypass';
+
+export function agentFacets(s: Pick<ChatSession, 'worktree' | 'mode'>): AgentFacet[] {
+  const out: AgentFacet[] = [];
+  if (s.worktree) out.push('branch');
+  if (s.mode === 'bypassPermissions') out.push('bypass');
+  return out;
+}
+
+/** T-1825: which edges of a sideways scroller have more to see (the edge fade), with a pixel of slack for sub-pixel scroll positions. */
+export function edgeFade(scrollLeft: number, scrollWidth: number, clientWidth: number): { left: boolean; right: boolean } {
+  if (scrollWidth - clientWidth <= 1) return { left: false, right: false };
+  return { left: scrollLeft > 1, right: scrollLeft + clientWidth < scrollWidth - 1 };
+}
+
 /* ---------- Dismiss: hide a failed agent from the failed count, for this viewer (this browser) ---------- */
 
 export const DISMISS_KEY = 'claudepilot.agent-tree.dismissed';

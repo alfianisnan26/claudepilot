@@ -1,6 +1,6 @@
 import { Button, cn, EmptyState, useToast } from '@isnanme/ui';
 import { CHAT_SOCKET_PATH, type ChatServerMessage, type ChatSession } from '@portal/contracts';
-import { AlertTriangle, Check, ChevronDown, ChevronUp, LoaderCircle, Moon, Network, Pause, UserRound } from 'lucide-react';
+import { AlertTriangle, Bot, Check, ChevronDown, ChevronUp, Cpu, GitBranch, LoaderCircle, Moon, Network, Pause, ShieldAlert, UserRound } from 'lucide-react';
 import { AnimatePresence, MotionConfig, motion, useReducedMotion } from 'motion/react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router';
@@ -9,15 +9,19 @@ import { Popover } from '@/components/Popover';
 import { useNow } from '@/features/usage/claude/useClaudeUsage';
 import { errorText } from '@/lib/api';
 import {
+  agentFacets,
   buildAgentTrees,
-  costLabel,
+  costParts,
   dismissFailed,
+  edgeFade,
   elapsedLabel,
   isDismissed,
+  modelMaker,
   readDismissed,
   RESUME_MESSAGE,
   retryKind,
   STATUS_LABEL,
+  type AgentFacet,
   type AgentNode,
   type AgentStatus,
   type AgentTreeData,
@@ -70,11 +74,37 @@ function TreeSection({ tree, onDismiss, onChanged }: { tree: AgentTreeData; onDi
     const el = scroller.current;
     if (el && el.scrollWidth > el.clientWidth) el.scrollLeft = (el.scrollWidth - el.clientWidth) / 2;
   }, []);
+  // T-1825: an edge with more of the row beyond it fades out, the cue that the row scrolls (agentTree.css .at-scroll).
+  const [fade, setFade] = useState({ left: false, right: false });
+  useEffect(() => {
+    const el = scroller.current;
+    if (!el) return;
+    const measure = () => {
+      const f = edgeFade(el.scrollLeft, el.scrollWidth, el.clientWidth);
+      setFade((o) => (o.left === f.left && o.right === f.right ? o : f));
+    };
+    measure();
+    el.addEventListener('scroll', measure, { passive: true });
+    const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure);
+    ro?.observe(el);
+    if (el.firstElementChild) ro?.observe(el.firstElementChild);
+    return () => {
+      el.removeEventListener('scroll', measure);
+      ro?.disconnect();
+    };
+  }, []);
+  const lead = tree.root.session.id;
+  const leadCard = useCallback(() => scroller.current?.querySelector(`[data-agent-card="${CSS.escape(lead)}"]`) ?? null, [lead]);
   return (
     <section aria-label={`${tree.root.name}: ${tree.total} agents`} data-agent-tree-root={tree.root.session.id}>
-      <TreeHeader tree={tree} onDismiss={onDismiss} onChanged={onChanged} />
+      <TreeHeader tree={tree} onDismiss={onDismiss} onChanged={onChanged} leadCard={leadCard} />
       {/* From 1024 px the row can be wider than the page: it scrolls inside this box, never the page. */}
-      <div ref={scroller} className="expanded:overflow-x-auto expanded:pb-2">
+      <div
+        ref={scroller}
+        className="at-scroll expanded:overflow-x-auto expanded:pb-2"
+        data-fade-left={fade.left || undefined}
+        data-fade-right={fade.right || undefined}
+      >
         <div className="at-root flex flex-col expanded:mx-auto expanded:w-max">
           <Branch node={tree.root} depth={0} collapsed={collapsed} onToggle={toggle} />
         </div>
@@ -84,7 +114,17 @@ function TreeSection({ tree, onDismiss, onChanged }: { tree: AgentTreeData; onDi
 }
 
 /** "8 agents · 4 running · 1 failed ⌃ · $1.52": the failed count opens the list of failed agents. */
-function TreeHeader({ tree, onDismiss, onChanged }: { tree: AgentTreeData; onDismiss: (s: ChatSession) => void; onChanged: () => void }) {
+function TreeHeader({
+  tree,
+  onDismiss,
+  onChanged,
+  leadCard,
+}: {
+  tree: AgentTreeData;
+  onDismiss: (s: ChatSession) => void;
+  onChanged: () => void;
+  leadCard: () => Element | null;
+}) {
   const [open, setOpen] = useState(false);
   const button = useRef<HTMLButtonElement>(null);
   const close = useCallback(() => {
@@ -113,11 +153,11 @@ function TreeHeader({ tree, onDismiss, onChanged }: { tree: AgentTreeData; onDis
           {open ? <ChevronUp className="size-4" aria-hidden="true" /> : <ChevronDown className="size-4" aria-hidden="true" />}
         </button>
       )}
-      <span className="ml-auto font-semibold text-ink tabular-nums">{costLabel(tree.costUsd)}</span>
+      <Cost usd={tree.costUsd} className="ml-auto font-semibold text-ink tabular-nums" />
       <InfoTip label="About the cost">
         What the agents in this tree cost so far, at list price (for a plan, not a bill). A running turn counts as an estimate until it ends.
       </InfoTip>
-      <Popover anchor={button} open={open && failed > 0} onClose={close} label="Failed agents" prefer="below" width={360}>
+      <Popover anchor={button} open={open && failed > 0} onClose={close} label="Failed agents" prefer="below" width={360} beside={leadCard}>
         <FailedList nodes={tree.failed} onDismiss={onDismiss} onChanged={onChanged} />
       </Popover>
     </div>
@@ -203,7 +243,7 @@ function Branch({
   const still = useReducedMotion();
   return (
     <>
-      <AgentCard node={node} wide={depth <= 1} open={open} onToggle={kids ? () => onToggle(id) : undefined} />
+      <AgentCard node={node} depth={depth} open={open} onToggle={kids ? () => onToggle(id) : undefined} />
       <AnimatePresence initial={false}>
         {kids && open && (
           <motion.div
@@ -213,8 +253,10 @@ function Branch({
             animate={{ height: 'auto', opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
             transition={{ duration: still ? 0 : 0.22, ease: EASE }}
-            className="overflow-hidden"
+            className="relative overflow-hidden"
           >
+            {/* T-1825: the node the lines leave from, just under the card. */}
+            <span className={cn('at-dot', depth === 0 && 'at-dot-row')} aria-hidden="true" />
             <ul className={cn('at-col', depth === 0 && 'at-row')}>
               <AnimatePresence initial={false}>
                 {node.children.map((c) => (
@@ -238,8 +280,9 @@ function Branch({
   );
 }
 
-function AgentCard({ node, wide, open, onToggle }: { node: AgentNode; wide: boolean; open: boolean; onToggle?: () => void }) {
+function AgentCard({ node, depth, open, onToggle }: { node: AgentNode; depth: number; open: boolean; onToggle?: () => void }) {
   const s = node.session;
+  const facets = agentFacets(s);
   return (
     <motion.article
       initial={{ opacity: 0, y: 8 }}
@@ -249,11 +292,13 @@ function AgentCard({ node, wide, open, onToggle }: { node: AgentNode; wide: bool
       data-agent-status={node.status}
       className={cn(
         'relative w-full min-w-0 rounded-2xl border border-line bg-surface px-3.5 py-3 shadow-sm',
-        // From 1024 px a lead's and a worker's card are one width (agentTree.css --at-card); the cards below a worker fit in its column.
-        wide && 'expanded:w-[18.5rem]',
+        // From 1024 px the lead's card is wider than its workers' (agentTree.css --at-card); the cards below a worker fit in its column.
+        depth === 0 && 'expanded:w-[22rem]',
+        depth === 1 && 'expanded:w-[18.5rem]',
       )}
     >
-      <div className="flex min-w-0 items-start gap-2">
+      <div className="flex min-w-0 items-start gap-2.5">
+        <ModelGlyph model={s.model} />
         <div className="min-w-0 flex-1">
           <Link
             to={`/admin/sessions/${s.id}`}
@@ -266,14 +311,21 @@ function AgentCard({ node, wide, open, onToggle }: { node: AgentNode; wide: bool
         </div>
         <StatusPill status={node.status} />
       </div>
-      {(node.task || s.ticketId) && (
+      {(node.task || s.ticketId || facets.length > 0) && (
         <p className="mt-1.5 text-[13.5px] leading-snug text-ink-soft [overflow-wrap:anywhere]">
+          {facets.length > 0 && (
+            <span className="mr-1.5 inline-flex translate-y-[2px] items-center gap-1">
+              {facets.map((f) => (
+                <FacetIcon key={f} facet={f} branch={s.worktree?.branch} />
+              ))}
+            </span>
+          )}
           {s.ticketId && <span className="mr-1.5 font-mono text-[12px] text-muted">{s.ticketId}</span>}
           {node.task}
         </p>
       )}
       <div className="mt-1.5 flex min-h-6 items-center gap-1 text-[13px] tabular-nums">
-        <span className="font-semibold text-ink">{costLabel(node.costUsd)}</span>
+        <Cost usd={node.costUsd} className="font-semibold text-ink" />
         <span className="text-muted">· {elapsedLabel(node.elapsedMs)}</span>
         {onToggle && (
           <button
@@ -290,6 +342,56 @@ function AgentCard({ node, wide, open, onToggle }: { node: AgentNode; wide: bool
         )}
       </div>
     </motion.article>
+  );
+}
+
+/** "$1.52" with the cents muted (the owner's reference). */
+function Cost({ usd, className }: { usd: number; className?: string }) {
+  const { whole, fraction } = costParts(usd);
+  return (
+    <span className={className} data-cost="">
+      {whole}
+      <span className="font-normal text-muted">{fraction}</span>
+    </span>
+  );
+}
+
+/** Who makes the model: a Claude burst, a chip for a model the portal cannot name, a robot before the first report. */
+function ModelGlyph({ model }: { model: string | null }) {
+  const maker = modelMaker(model);
+  return (
+    <span
+      className="mt-0.5 inline-flex size-8 shrink-0 items-center justify-center rounded-lg border border-line bg-surface text-muted"
+      data-model-maker={maker ?? 'none'}
+      aria-hidden="true"
+    >
+      {maker === 'claude' ? <ClaudeBurst /> : maker === 'other' ? <Cpu className="size-4" /> : <Bot className="size-4" />}
+    </span>
+  );
+}
+
+/** A plain eight-ray burst in Claude's coral (simple inline SVG, no logo file). */
+function ClaudeBurst() {
+  return (
+    <svg viewBox="0 0 16 16" className="size-4 text-[#d97757]" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+      <path d="M8 1.5v4M8 10.5v4M1.5 8h4M10.5 8h4M3.4 3.4l2.8 2.8M9.8 9.8l2.8 2.8M12.6 3.4 9.8 6.2M6.2 9.8l-2.8 2.8" />
+    </svg>
+  );
+}
+
+const FACET: Record<AgentFacet, { label: string; icon: React.ReactNode }> = {
+  branch: { label: 'Own worktree', icon: <GitBranch className="size-3.5" aria-hidden="true" /> },
+  bypass: { label: 'Bypass on', icon: <ShieldAlert className="size-3.5 text-danger" aria-hidden="true" /> },
+};
+
+function FacetIcon({ facet, branch }: { facet: AgentFacet; branch?: string }) {
+  const f = FACET[facet];
+  const label = facet === 'branch' && branch ? `${f.label}: ${branch}` : f.label;
+  return (
+    <span className="inline-flex text-muted" title={label} data-agent-facet={facet}>
+      {f.icon}
+      <span className="sr-only">{label}</span>
+    </span>
   );
 }
 
