@@ -227,3 +227,172 @@ test('T-1692: after lost touch, the attach’s switch out of Bypass lands before
     await s.done();
   }
 });
+
+test('T-1711 review: drops that keep coming with nothing read, though the host says live, end in "Lost touch" past the ceiling: the process is kept, a lead’s Bypass paused', async () => {
+  const s = await liveSession({ liveDropsMax: 4 }, true);
+  try {
+    s.controller.controlTimeoutMs = 150;
+    policy(s);
+    const lead = await inBypass(s, { maxWorkers: 3 });
+    await until(() => {
+      const tail = s.ws.tails.at(-1)!;
+      if (!tail.exited) tail.exit(0);
+      return s.controller.get(lead.id)!.state === 'interrupted';
+    }, 15_000);
+    assert.ok(s.ws.statusLog.filter((r) => r.csid === s.controller.get(lead.id)!.claudeSessionId).every((r) => r.alive), 'the host said live every time');
+    const row = s.controller.get(lead.id)!;
+    assert.deepEqual([row.process, row.mode], ['gone', 'default']);
+    assert.ok(notes(s, lead.id).some((t) => t.startsWith('Lost touch with Claude Code: its output could not be followed (4 tries')), notes(s, lead.id).join(' | '));
+    assert.ok(notes(s, lead.id).includes('Bypass paused: Claude Code stopped. It comes back when the session runs again if every gate still allows it.'));
+    const left = s.controller.audit({ kind: 'bypass.left', sessionId: lead.id })[0]!;
+    assert.deepEqual([left.detail.why, left.detail.kept], ['stopped', true]);
+    // Unconfirmed: the control state of the process that may still run is kept (T-1094), so an attach reloads it.
+    const stored = s.store.db!.prepare('SELECT control_state FROM chat_sessions WHERE id = ?').get(lead.id) as { control_state: string | null };
+    assert.ok(stored.control_state, 'kept for an attach');
+  } finally {
+    await s.done();
+  }
+});
+
+/** Moves an asleep chat to a new Claude with the handoff skipped; returns it and the mode switches asked from then on. */
+async function moveAsleep(s: Live, id: string) {
+  const asked = modeAsks(s).length;
+  const work = await s.controller.createClaude('docker/ws1', `Work ${randomUUID().slice(0, 4)}`);
+  const old = s.controller.get(id)!.claudeSessionId;
+  const moving = answering(s, s.controller.switchClaude(id, work.id, { handoff: 'skip' }));
+  await acknowledge(s, id, old);
+  const moved = await moving;
+  return { moved, bypassAsked: modeAsks(s).slice(asked).some((c) => c.request.mode === 'bypassPermissions') };
+}
+
+/** A lead (a workers limit) in Bypass, asleep with its Bypass kept. */
+async function keptAsleep(s: Live, o: { lead?: boolean; maxWorkers?: number } = { maxWorkers: 3 }) {
+  const lead = await inBypass(s, o);
+  await until(() => s.controller.get(lead.id)!.process === 'asleep', 4000);
+  assert.deepEqual(s.controller.audit({ kind: 'bypass.left', sessionId: lead.id }).map((a) => [a.detail.why, a.detail.kept ?? null])[0], ['sleep', true]);
+  return lead;
+}
+
+test('T-1692 gates: a move of a lead asleep with its Bypass kept stays on the start mode once the policy is off', async () => {
+  const s = await liveSession({ idleSleepMs: 200 }, true);
+  try {
+    s.controller.controlTimeoutMs = 150;
+    const state = { allowed: true };
+    s.controller.bypassAllowed = () => state.allowed;
+    s.controller.reauth = { fresh: (token) => token === 'tok' };
+    const lead = await keptAsleep(s);
+    state.allowed = false;
+    const { moved, bypassAsked } = await moveAsleep(s, lead.id);
+    assert.equal(moved.mode, 'default');
+    assert.equal(bypassAsked, false, 'Claude Code was never asked to enter Bypass');
+    assert.ok(notes(s, lead.id).includes('Bypass not kept after the wake: the policy no longer allows it.'));
+  } finally {
+    await s.done();
+  }
+});
+
+for (const [what, edit] of [
+  ['no entry by a person on record', 'delete'],
+  ['an entry without the acknowledgement', 'unacknowledged'],
+  ['an entry whose server code was not fresh', 'stale'],
+] as const) {
+  test(`T-1692 gates: a move of a lead asleep with its Bypass kept stays on the start mode with ${what}`, async () => {
+    const s = await liveSession({ idleSleepMs: 200 }, true);
+    try {
+      s.controller.controlTimeoutMs = 150;
+      policy(s);
+      const lead = await keptAsleep(s);
+      const db = s.store.db!;
+      if (edit === 'delete') db.prepare("DELETE FROM chat_audit WHERE session_id = ? AND kind = 'bypass.entered'").run(lead.id);
+      else {
+        const detail = edit === 'unacknowledged' ? { acknowledged: false, reauth: 'fresh' } : { acknowledged: true, reauth: 'stale' };
+        db.prepare("UPDATE chat_audit SET detail = ? WHERE session_id = ? AND kind = 'bypass.entered'").run(JSON.stringify(detail), lead.id);
+      }
+      const { moved, bypassAsked } = await moveAsleep(s, lead.id);
+      assert.equal(moved.mode, 'default');
+      assert.equal(bypassAsked, false, 'Claude Code was never asked to enter Bypass');
+      assert.deepEqual(
+        [s.controller.audit({ kind: 'bypass.left', sessionId: lead.id })[0]!.detail.why, s.controller.audit({ kind: 'bypass.left', sessionId: lead.id })[0]!.detail.how],
+        ['not_confirmed', 'wake'],
+      );
+    } finally {
+      await s.done();
+    }
+  });
+}
+
+test('T-1692 gates: a crew lead (marked) asleep with its Bypass kept wakes on the start mode once the policy is off', async () => {
+  const s = await liveSession({ idleSleepMs: 200 }, true);
+  try {
+    s.controller.controlTimeoutMs = 150;
+    const state = { allowed: true };
+    s.controller.bypassAllowed = () => state.allowed;
+    s.controller.reauth = { fresh: (token) => token === 'tok' };
+    const lead = await keptAsleep(s, { lead: true });
+    state.allowed = false;
+    const asked = modeAsks(s).length;
+    await answering(s, s.controller.send(lead.id, 'lead-policy-off', 'go on'));
+    assert.equal(s.controller.get(lead.id)!.mode, 'default');
+    assert.ok(!modeAsks(s).slice(asked).some((c) => c.request.mode === 'bypassPermissions'));
+    assert.ok(notes(s, lead.id).includes('Bypass not kept after the wake: the policy no longer allows it.'));
+  } finally {
+    await s.done();
+  }
+});
+
+test('T-1692 gates: a worker marked a lead is no lead for Bypass: its sleep turns Bypass off, and a move does not put it back', async () => {
+  const s = await liveSession({ idleSleepMs: 200 }, true);
+  try {
+    s.controller.controlTimeoutMs = 150;
+    policy(s);
+    // A worker can't be started bypass-capable (FR20): the row is made one by hand, to show the lead rule alone holds it back.
+    const w = await inBypass(s, { lead: true });
+    s.store.db!.prepare('UPDATE chat_sessions SET parent_id = ? WHERE id = ?').run(s.id, w.id);
+    await until(() => s.controller.get(w.id)!.process === 'asleep', 4000);
+    assert.ok(notes(s, w.id).includes('Bypass turned off after sleep.'), notes(s, w.id).join(' | '));
+    const { moved, bypassAsked } = await moveAsleep(s, w.id);
+    assert.equal(moved.mode, 'default');
+    assert.equal(bypassAsked, false);
+  } finally {
+    await s.done();
+  }
+});
+
+/** A crew lead in Bypass that a person took out of it, then asleep: nothing of Bypass is kept. */
+async function offAsleep(s: Live) {
+  const lead = await inBypass(s, { lead: true });
+  await answering(s, s.controller.control(lead.id, 'mode', { mode: 'default' }, { actor: 'ui' }));
+  assert.equal(s.controller.get(lead.id)!.mode, 'default');
+  await until(() => s.controller.get(lead.id)!.process === 'asleep', 4000);
+  assert.ok(!notes(s, lead.id).some((t) => t.startsWith('Bypass paused for sleep')), 'nothing to pause');
+  return lead;
+}
+
+test('T-1692 gates: a lead whose Bypass a person turned off before its sleep stays off after the wake', async () => {
+  const s = await liveSession({ idleSleepMs: 200 }, true);
+  try {
+    s.controller.controlTimeoutMs = 150;
+    policy(s);
+    const lead = await offAsleep(s);
+    const asked = modeAsks(s).length;
+    await answering(s, s.controller.send(lead.id, 'off-by-hand', 'go on'));
+    assert.equal(s.controller.get(lead.id)!.mode, 'default');
+    assert.ok(!modeAsks(s).slice(asked).some((c) => c.request.mode === 'bypassPermissions'), 'the wake puts nothing back');
+  } finally {
+    await s.done();
+  }
+});
+
+test('T-1692 gates: a lead whose Bypass a person turned off before its sleep stays off after a move', async () => {
+  const s = await liveSession({ idleSleepMs: 200 }, true);
+  try {
+    s.controller.controlTimeoutMs = 150;
+    policy(s);
+    const lead = await offAsleep(s);
+    const { moved, bypassAsked } = await moveAsleep(s, lead.id);
+    assert.equal(moved.mode, 'default');
+    assert.equal(bypassAsked, false, 'the move puts nothing back');
+  } finally {
+    await s.done();
+  }
+});

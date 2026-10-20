@@ -251,9 +251,16 @@ const RETAIL_MS = 1_000;
 const MAX_IMMEDIATE_RETRIES = 5;
 /**
  * T-1711: the longest wait between re-follows of a process the host says is running. Its follower may keep dropping (an exec path that
- * closes streams), but a `live` reading is never a reason to mark it gone: the reader backs off to this instead of giving up.
+ * closes streams): a few drops with `live` readings no longer mark it gone, the reader backs off to this instead.
  */
 const RETAIL_LIVE_MAX_MS = 30_000;
+/**
+ * T-1711 review: the ceiling on that. `live` only means the pid answers `kill -0` (an unreaped parent or a reused pid does too), so drops
+ * that keep coming with no line read, this many in a row or for this long, end in the unconfirmed "Lost touch" after all (process kept,
+ * a lead's Bypass paused for its resume), with a note.
+ */
+const LIVE_DROPS_MAX = 20;
+const LIVE_DROPS_MS = 10 * 60_000;
 /** A `tail` that ran at least this long counts as healthy (it hit its 600 s limit), so retries reset. */
 const HEALTHY_TAIL_MS = 5_000;
 /** `cp-session tail`'s exit when the cursor is past the segment's end (it prints the size; T-265): the cursor heals to the size. */
@@ -340,8 +347,10 @@ interface Reader {
   stopped: boolean;
   /** Consecutive immediate `tail` exits the host could not account for; reset when a follow makes progress, runs its full term, or the host says the process runs. */
   retries: number;
-  /** T-1711: consecutive immediate `tail` exits while the host said the process runs: they only slow the re-follow down (back-off). */
+  /** T-1711: consecutive immediate `tail` exits while the host said the process runs: they slow the re-follow down (back-off), up to a ceiling. */
   liveDrops?: number;
+  /** T-1711 review: when the first of those drops came (cleared with them). */
+  liveSince?: number;
   tailStart: number;
   timer?: NodeJS.Timeout;
   /** Waiting for its target's tunnel to come back (targets-connect PRD §12.5): no retries counted, nothing marked gone. */
@@ -521,6 +530,9 @@ export interface ChatControllerOptions {
   idleSleepMs?: number;
   /** How often `start()`ed durability work checks live sessions' processes. */
   livenessMs?: number;
+  /** T-1711 review: how many follower drops in a row, read live, with no line read, and for how long, before the portal says it lost touch. */
+  liveDropsMax?: number;
+  liveDropsMs?: number;
   /** How long one short `cp-session` command may run before it counts as failed. */
   execTimeoutMs?: number;
   /** T-1650: how long after a first `gone` reading the second is taken; only two in a row mark a process gone. */
@@ -857,6 +869,8 @@ export class ChatController {
   readonly #idleMs: number;
   readonly #livenessMs: number;
   readonly #goneConfirmMs: number;
+  readonly #liveDropsMax: number;
+  readonly #liveDropsMs: number;
   readonly #workspaceGoneMs: number;
   /** T-1650: since when every live session of a workspace has read gone (a suspected workspace fault), by workspace. */
   readonly #workspaceGone = new Map<string, { since: number; last: number }>();
@@ -1138,6 +1152,8 @@ export class ChatController {
     this.#idleMs = opts.idleSleepMs ?? IDLE_SLEEP_MS;
     this.#livenessMs = opts.livenessMs ?? LIVENESS_MS;
     this.#goneConfirmMs = opts.goneConfirmMs ?? GONE_CONFIRM_MS;
+    this.#liveDropsMax = opts.liveDropsMax ?? LIVE_DROPS_MAX;
+    this.#liveDropsMs = opts.liveDropsMs ?? LIVE_DROPS_MS;
     this.#workspaceGoneMs = opts.workspaceGoneMs ?? WORKSPACE_GONE_MS;
     this.execTimeoutMs = opts.execTimeoutMs ?? EXEC_TIMEOUT_MS;
     this.valuesCacheMs = opts.valuesCacheMs ?? VALUES_CACHE_MS;
@@ -2026,7 +2042,8 @@ export class ChatController {
     const title = (typeof req.title === 'string' && req.title.trim() ? req.title.trim() : 'New session').slice(0, CHAT_SESSION_TITLE_MAX);
     // A continuation (T-270): refused before anything is made when the session it names is live or elsewhere.
     const continuedFrom = this.#continuation(req.continuedFrom, workspaceId);
-    // T-561: marked a crew lead by its starter (it only ever makes the session stricter), or the continuation of one.
+    // T-561: marked a crew lead by its starter (the lead rules; T-1692: and a top-level lead's Bypass is paused over a sleep, every gate
+    // asked at its wake), or the continuation of one.
     const lead = req.lead === true || (continuedFrom !== null && this.#chat.row(continuedFrom.id)?.lead === 1);
     this.#requireEligible(workspaceId);
     const claude =
@@ -5930,6 +5947,7 @@ export class ChatController {
       reader.offset += lineBuf.length;
       reader.retries = 0; // progress: the follow is healthy
       reader.liveDrops = 0;
+      reader.liveSince = undefined;
       const offset = reader.offset;
       unsaved = true;
       reader.at = { start: offset - lineBuf.length, segment: reader.segment ?? 0 };
@@ -5969,6 +5987,7 @@ export class ChatController {
     if (Date.now() - reader.tailStart >= HEALTHY_TAIL_MS) {
       reader.retries = 0; // hit its 600 s limit: normal renewal
       reader.liveDrops = 0;
+      reader.liveSince = undefined;
     }
     void this.#checkAndRetail(reader);
   }
@@ -6003,8 +6022,8 @@ export class ChatController {
     }
     if (reader.stopped || this.#readers.get(reader.sessionId) !== reader) return; // replaced meanwhile
     if (status === 'gone') return this.#markGone(reader.sessionId);
-    // Live: re-followed, never "Lost touch" (T-1711: a lead read live by the host was Interrupted after its follower dropped five times
-    // in a row, and its Bypass paused). Unreachable: runs out of retries if it stays so.
+    // Live: re-followed with a back-off, "Lost touch" only past a ceiling (T-1711: a lead read live by the host was Interrupted after its
+    // follower dropped five times in a row, and its Bypass paused). Unreachable: runs out of retries if it stays so.
     this.#scheduleRetail(reader, status === 'live');
   }
 
@@ -6045,10 +6064,24 @@ export class ChatController {
     }
     let wait = RETAIL_MS;
     if (live) {
-      // T-1711: the host says the process runs, so this drop is the follower's, not the process's: no retry is spent (only readings the
-      // host could not give count toward "Lost touch"); the re-follow backs off once the drops keep coming.
+      // T-1711: the host says the process runs, so this drop is most likely the follower's, not the process's: no retry is spent; the
+      // re-follow backs off once the drops keep coming. Not forever (review): `live` is only `kill -0` on the pid, so drops with nothing
+      // read, LIVE_DROPS_MAX in a row or for LIVE_DROPS_MS, end in the unconfirmed "Lost touch" like unanswered readings do.
       reader.retries = 0;
       reader.liveDrops = (reader.liveDrops ?? 0) + 1;
+      const now = Date.now();
+      reader.liveSince ??= now;
+      if (reader.liveDrops >= this.#liveDropsMax || now - reader.liveSince >= this.#liveDropsMs) {
+        const min = Math.round((now - reader.liveSince) / 60_000);
+        console.warn(
+          `[chat] ${shortId(reader.sessionId)}: the follower dropped ${reader.liveDrops} times in ${min} min with nothing read while the host said live: lost touch (T-1711)`,
+        );
+        this.#note(
+          reader.sessionId,
+          `Lost touch with Claude Code: its output could not be followed (${reader.liveDrops} tries in ${min} min) though the host says it runs.`,
+        );
+        return this.#markGone(reader.sessionId, 'Lost touch with Claude Code before it answered.', false);
+      }
       const over = reader.liveDrops - MAX_IMMEDIATE_RETRIES;
       if (over > 0) wait = Math.min(RETAIL_LIVE_MAX_MS, RETAIL_MS * 2 ** Math.min(over, 16));
     } else {

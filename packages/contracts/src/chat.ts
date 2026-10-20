@@ -634,8 +634,10 @@ export interface CreateChatSessionRequest {
    */
   worktree?: ChatWorktreeRequest;
   /**
-   * T-561: marks it a crew lead (the dev supervisor's leads). It only ever makes a session stricter: with the policy `sessions.leadRules`
-   * on, a lead launches with the lead rules (`ChatSession.leadRules`). A session that starts workers is a lead without it.
+   * T-561: marks it a crew lead (the dev supervisor's leads). With the policy `sessions.leadRules` on, a lead launches with the lead rules
+   * (`ChatSession.leadRules`): stricter. Not only stricter: a top-level lead's Bypass is paused, not dropped, over a sleep or a vanishing,
+   * and comes back at its wake or a Move through every Bypass gate (T-1646, T-1692; chat-sessions FR20). A session that starts workers is a
+   * lead without it.
    */
   lead?: boolean;
 }
