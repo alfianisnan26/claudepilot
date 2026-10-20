@@ -94,7 +94,7 @@ export interface ManagerWorkerRow {
 /** `crew_limits_get`: the lead's caps (D-43, D-71) and its slots. */
 export interface ManagerCrewLimits {
   session_id: string;
-  /** The portal-wide settings (Settings › Sessions). */
+  /** The portal-wide settings (Settings › Running agents). */
   global: { max_depth: number; max_children: number; spawns_per_hour: number; messages_per_hour: number } | 'unavailable';
   /** The session's own limit: null follows the global one, 0 starts none. */
   own_max_workers: number | null;

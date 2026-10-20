@@ -139,7 +139,7 @@ const KIND_LABEL: Record<GraphNodeKind, string> = {
   tag: 'Tags',
   attachment: 'Files',
   unresolved: 'Unresolved',
-  session: 'Sessions',
+  session: 'Agents',
   ticket: 'Tickets',
   workspace: 'Workspaces',
   claude: 'Claudes',

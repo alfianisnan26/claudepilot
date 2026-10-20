@@ -563,7 +563,7 @@ const CREW_TRIES = 3;
 /** T-294: a worker's state as its lead hears of it (see `#crewState`). */
 type CrewState = 'idle' | 'waiting' | 'ended' | 'stopped' | 'working' | 'other';
 
-// T-548: crewQuote's patterns moved to crewQuote.ts (they leave out‹ ›: they close no “ ” quote, and a menu path (Settings › Sessions) stays readable
+// T-548: crewQuote's patterns moved to crewQuote.ts (they leave out‹ ›: they close no “ ” quote, and a menu path (Settings › Running agents) stays readable
 // T-548: crewQuote moved to ./crewQuote.ts so handoff.ts can use it; re-exported for its callers.
 export { crewQuote };
 
@@ -4294,7 +4294,7 @@ export class ChatController {
       });
       throw new AppError(
         SESSION_CAP,
-        `This session has sent ${caps.messagesPerHour} messages to its parent, its workers or its crew in the last hour, which is the limit (Settings › Sessions).`,
+        `This session has sent ${caps.messagesPerHour} messages to its parent, its workers or its crew in the last hour, which is the limit (Settings › Running agents).`,
         { status: 409, details: { scope: 'messages', limit: caps.messagesPerHour } },
       );
     }
@@ -4371,7 +4371,7 @@ export class ChatController {
       });
       throw new AppError(
         SESSION_CAP,
-        `Sending to ${group.length} would go over this session's limit of ${caps.messagesPerHour} messages an hour to its parent, its workers or its crew (each recipient counts; Settings › Sessions). Nothing was sent.`,
+        `Sending to ${group.length} would go over this session's limit of ${caps.messagesPerHour} messages an hour to its parent, its workers or its crew (each recipient counts; Settings › Running agents). Nothing was sent.`,
         { status: 409, details: { scope: 'messages', limit: caps.messagesPerHour, recipients: group.length } },
       );
     }
