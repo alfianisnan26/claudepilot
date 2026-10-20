@@ -60,10 +60,10 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - none (no production or uat action pending). T-1662 sweep note: D-77, a migration on stg D1 shared with uat needs a person's go; checked in the sweep read.
 
 ## NEXT
-1. Business QA-ASK T-1805 ab56e48 (T-84 c19376, c19504): mo-qa-1805 (opus) and blind review mo-rev-1805 (opus) running (D-81). Then any newer Business QA-ASK.
+1. Business QA-ASK T-1805 ab56e48 (T-84 c19376, c19504): mo-qa-1805 (opus) running; blind review MERGE c19564 (proof Job 7aa8d5f3: 12/12 at ab56e48, 10/12 red at d55dcc5; 5 minors: guard and rollback untested, boundary 29/31 only). Then any newer Business QA-ASK.
 2. Watch T-84 for Lab's answers to c19263, c19273, c19277. Gate-form PASS waiting over one sweep: note on T-1598 (leads cannot message).
 3. mo-be-1435, mo-qa-1658, mo-qa-ui-1848 returns (then Mission Planning, report builder lanes): integrate; T-1435 then capture re-run on the fix. hasyim caps sub-agents at 3.
 4. T-1848 UI/UX audit of my apps against the vault standard (D-91).
-5. T-991 (D-90, test first, D-81 money review), T-1809 after T-1591, T-1007 after T-1162.
+5. T-991 claimed c19573: builder mo-be-991 (opus) on ticket/T-991-charge-budget-exhausted, test first; then family QA, blind review, QA-ASK (D-81). T-1809 after T-1591, T-1007 after T-1162.
 6. v14 batch (T-1704): T-602 + both catalog bumps, migrations check, stg-deploy backend then compute, post-deploy checks.
 7. Hourly closed-count report on T-1703.
