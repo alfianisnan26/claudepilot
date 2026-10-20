@@ -14,7 +14,8 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 
 ## IN FLIGHT
 - T-1693 (Business QA-ASK c19258, migration 0111): outside QA mo-qa-1693 (opus) restarted 05:43Z on 8dfe8fec, gate form on T-1693 or T-84.
-- T-1435 (decision c19278): mo-qa-1435-cmp (opus) restarted 05:43Z from pushed qa/T-1435-output-compare d5491aab (capture script); runs the PROOF Job against 3b97011.
+- T-1435 HELD: capture Job ad87a706 rc=1, 126/129 equal, 3 air_press POT bodies differ (global record RP -32%, AD 4th decimal), wind and edge records equal (c19321). Decision (b) fix to scipy parity (c19324): builder mo-be-1435 waits for a slot. Capture runs as `python -m pytest qa/T-1435/capture_outputs.py -q -s`.
+- T-1591: delta QA mo-qa-1591d (opus) running on 2d633120 (05:50Z).
 - T-1856: mo-fe-1856 done. Fix f6029652 (bands at least 3 px, out-of-range dropped), fail-first 48da29da rc=1, suite a9c5dfce rc=0 (c19287). Item 1: no client-code cause, the probe's timing (c19255, not verified on stg). Family QA mo-qa-1856 (opus) restarted 05:43Z. QA-ASK T-84 c19288. bbde2b22 re-checks after deploy, waiting until the toast closes.
 - Sweep send-backs (mo-sweep-read done): QA-ASKs on T-84 c19273 (T-1012, T-1416, T-1349, T-553, T-1523, T-1662, T-632, T-1182, T-1521) and c19277 (T-1021 file list). D-77 file lists asked on T-1021 c19275, T-1662 c19276 (lead diff refused). T-1296 (coordinator blocker) and T-1528 (AC5) need no merge.
 - Worker bbde2b22 ended 05:45Z (portal reported 6 running against the cap of 5, T-1703 c19313). A new QA worker does T-1856's post-deploy re-check.
@@ -56,8 +57,8 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 ## NEXT
 1. Answer any new Business QA-ASK on T-84 first (Metocean QAs Business), with a qa-verifier sub-agent.
 2. Watch T-84 for Lab's answers to c19263, c19273, c19277. Gate-form PASS waiting over one sweep: note on T-1598 (leads cannot message).
-3. mo-qa-1856, mo-qa-1693, mo-qa-1435-cmp returns: integrate, then gate form. hasyim caps sub-agents at 3.
-3b. First free slot: delta QA mo-qa-1591d on T-1591 2d633120 (outside QA + blind review asked, T-84 c19308, c19309 correction).
+3. mo-qa-1856, mo-qa-1693, mo-qa-1591d returns: integrate, then gate form. hasyim caps sub-agents at 3.
+3b. Next free slot: builder mo-be-1435 (opus), per T-1435 c19324.
 4. T-1848 UI/UX audit of my apps against the vault standard (D-91).
 5. T-991 (D-90, test first, D-81 money review), T-1809 after T-1591, T-1007 after T-1162.
 6. v14 batch (T-1704): T-602 + both catalog bumps, migrations check, stg-deploy backend then compute, post-deploy checks.
