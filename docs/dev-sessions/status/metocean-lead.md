@@ -26,6 +26,7 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - ticket_verdict refused for my sub-agents (c18870): verdicts are gate-form comments.
 
 ## DECISIONS
+- 09:20Z T-1848 RB slice 3 short round 97ad731 (fail-first 9e5ac470 rc=1 3 new, lint+suite 92ef4932 rc=0 673; c19990). Same QA mo-qa-1848b re-checks delta incl. Source view shot.
 - 09:10Z T-1848 MP delta 2 PASS c19972 on 3a58b2d (suite 525e01c4 rc=0 705, mutant 6ea88f8d killed, 26 shots). MP slice done, held for outside QA. s2 (card unit cut) and s3 kept for next MP UI batch; merge order narrow, MP, RB (c19975).
 - 09:05Z T-1848 RB slice 3 QA PASS WITH GAPS c19968 on 00e579a (suite 4f9d31cb rc=0, 3 mutants killed, 19/44 shots). Short round to mo-fe-1848b: 44 px Synthesize/Back, focus, Reports dark scheme, CHANGELOG (c19969). QA read of .claude/settings.json blocked by hook: T-1703 c19970, brief line added.
 - 08:58Z T-1848 MP fix round 2 3a58b2d (fail-first d7993719 rc=1 12, suite+lint efd74ad1 rc=0 705; c19963). Same QA mo-qa-1848c re-checks delta.
@@ -47,7 +48,6 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - 05:15Z Coordinator rule: outside-family QA comes from peer leads by QA-ASK on T-84 (Lab QAs Metocean, Metocean QAs Business), answered before new build work. Asked 8 tickets (c19263, c19268). Leads cannot message each other (NOT_FOUND), T-84 c19264.
 - 04:15Z D-91 (UI/UX: QA suggests, lead decides, batched per page or app). 04:11Z D-89 (QA judges shots by eye). D-90: T-991 after in_review.
 - 04:13Z T-602 merges only with the T-1704 v14 bump (c19044); post-deploy screen check before close.
-- 02:31Z No ">" in commit text; add and commit as separate calls (c18776, c18911).
 - 01:40Z T-1591 held (money path D-81). 16:10Z (10-19) one v14 batch; no compute deploy before both v14 bumps.
 - 16:35Z Gate-copy rule (c17443): post-deploy gaps restated as PASS with gaps quoted.
 - 16:20Z stg Worker logs via cf-logs.sh (read-only).
