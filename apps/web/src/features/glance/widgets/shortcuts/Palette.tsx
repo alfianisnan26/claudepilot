@@ -122,7 +122,8 @@ export default function Palette() {
         transition={{ duration: 0.15, ease }}
       >
         <div className="absolute inset-0 bg-black/35" onClick={closePalette} aria-hidden="true" />
-        <div className="relative flex h-full items-start justify-center p-3 sm:pt-24">
+        {/* Below the status bar and the notch, above the home indicator (the screen edges, index.css), on a phone installed edge to edge (T-1859). */}
+        <div className="relative flex h-full items-start justify-center px-3 pt-[var(--bar-top)] pb-[max(var(--bar-gap),var(--safe-bottom))] sm:pt-24">
           <motion.div
             ref={panel}
             role="dialog"

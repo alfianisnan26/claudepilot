@@ -1,6 +1,7 @@
-// T-1859: every visible interactive element in four shared dialogs is a 44 x 44 tap target at 390 px (QA-STANDARDS A5): the New ticket
+// T-1859: every visible interactive element in five shared dialogs is a 44 x 44 tap target at 390 px (QA-STANDARDS A5): the New ticket
 // sheet (TextField, Select, tag picks, Segmented, the sheet's Close), the Bump sheet on a ticket page, and the session info sheet (its
-// ticket chip, Rename, Keep going, limits), and a glance widget (sheet on a phone, popover from 640 px). An element counts with its label when it is a visually hidden input inside one. Light and dark
+// ticket chip, Rename, Keep going, limits), a glance widget (sheet on a phone, popover from 640 px), and the quick search, whose field
+// must start below the top safe-area inset (the phone runs emulate an iPhone's 59 / 34 px insets). An element counts with its label when it is a visually hidden input inside one. Light and dark
 // at 390 x 844, plus 1280 x 800 to show the desktop sizes (reported, not failed: the floor is for phones). Screenshots go to QA_SHOTS.
 // Against a scratch portal with "This machine" and a signed-in-looking Claude (a session needs one; it does not need to answer):
 //   node tools/qa/mock-anthropic.mjs 4627 /tmp/cp-t1859-mock.jsonl &
@@ -43,7 +44,8 @@ const MEASURE = `(() => {
     const name = (e.getAttribute('aria-label') || e.labels?.[0]?.innerText || e.innerText || e.getAttribute('placeholder') || e.getAttribute('name') || e.tagName).trim().replace(/\\s+/g, ' ').slice(0, 28);
     out.push({ name, tag: e.tagName.toLowerCase(), w: Math.round(b.width * 10) / 10, h: Math.round(b.height * 10) / 10 });
   }
-  return { items: out, hscroll: document.scrollingElement.scrollWidth > innerWidth + 1 };
+  const field = d.querySelector('input:not([type=hidden])')?.getBoundingClientRect();
+  return { items: out, hscroll: document.scrollingElement.scrollWidth > innerWidth + 1, top: Math.round(d.getBoundingClientRect().top), fieldTop: field ? Math.round(field.top) : null };
 })()`;
 
 const SHEETS = [
@@ -96,7 +98,23 @@ const SHEETS = [
     },
     must: ['Close'],
   },
+  {
+    // The quick search (Ctrl+K): a panel at the top of the screen, so on a phone its field must clear the status bar and the notch.
+    name: 'palette',
+    async open(b) {
+      await b.goto('/admin/home', 2500);
+      await b.waitFor(`!!document.querySelector('main')`, 30000);
+      await b.key('k', { modifiers: 2, code: 'KeyK' });
+      await b.waitFor(`!!document.querySelector('[role=dialog][aria-label=Search] input')`);
+      await sleep(400);
+    },
+    must: ['Search', 'Close search'],
+    clearsTop: true,
+  },
 ];
+
+// An iPhone with a notch, installed edge to edge: the insets the phone runs emulate.
+const PHONE_INSETS = { top: 59, bottom: 34, left: 0, right: 0 };
 
 let fails = 0;
 for (const cfg of [
@@ -108,6 +126,7 @@ for (const cfg of [
   const b = await Browser.launch({ width: cfg.width, height: cfg.height, mobile: cfg.mobile, dark: !!cfg.dark });
   try {
     await b.cookie(cookie);
+    await b.send('Emulation.setSafeAreaInsetsOverride', { insets: phone ? PHONE_INSETS : { top: 0, bottom: 0, left: 0, right: 0 } });
     for (const sheet of SHEETS) {
       const bad = [];
       let m = null;
@@ -122,11 +141,12 @@ for (const cfg of [
         const small = m.items.filter((x) => x.w < MIN || x.h < MIN);
         if (phone && small.length) bad.push(`under ${MIN}: ${JSON.stringify(small)}`);
         if (phone && m.hscroll) bad.push('horizontal scroll');
+        if (phone && sheet.clearsTop && !(m.fieldTop >= PHONE_INSETS.top)) bad.push(`field top ${m.fieldTop} under the ${PHONE_INSETS.top} px top inset`);
         for (const want of sheet.must) if (!m.items.some((x) => x.name.includes(want))) bad.push(`missing "${want}"`);
       }
       if (phone && bad.length) fails++;
       const sizes = m ? m.items.map((x) => `${x.name} ${x.w}x${x.h}`).join('; ') : '';
-      console.log(`${phone ? (bad.length ? 'FAIL' : 'ok  ') : 'info'} ${cfg.tag} ${sheet.name}: ${m?.items.length ?? 0} targets ${bad.join(' | ')}`);
+      console.log(`${phone ? (bad.length ? 'FAIL' : 'ok  ') : 'info'} ${cfg.tag} ${sheet.name}: ${m?.items.length ?? 0} targets, top ${m?.top}${m?.fieldTop != null ? `, field top ${m.fieldTop}` : ''} ${bad.join(' | ')}`);
       if (!phone || bad.length) console.log(`     ${sizes}`);
       if (file) console.log(`     ${file}`);
       await b.key('Escape');
@@ -136,5 +156,5 @@ for (const cfg of [
     await b.close();
   }
 }
-console.log(fails ? `\n${fails} sheet/preset(s) with targets under ${MIN} px; screenshots in ${SHOTS}` : `\nevery target is ${MIN} px or more at 390; screenshots in ${SHOTS}`);
+console.log(fails ? `\n${fails} sheet/preset(s) with findings (a target under ${MIN} px, sideways scroll, a field under the top inset); screenshots in ${SHOTS}` : `\nevery target is ${MIN} px or more at 390 and clears the top inset; screenshots in ${SHOTS}`);
 process.exit(fails ? 1 : 0);
