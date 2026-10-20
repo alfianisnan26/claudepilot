@@ -1,5 +1,6 @@
 // The Home page (docs/prd/glance-widgets.md §18) in a real browser: the app opens on it, every card shows, no sideways scroll, every
-// control in a card is a 44 px target, Arrange hides and orders a card (kept on reload); at 390 px (touch) and 1280 px, light and dark.
+// control in a card is a 44 px target, Arrange hides and orders a card (kept on reload), and switching Dashboard | Manager moves no header
+// control (T-1851: the right-most button used to jump); at 390 px (touch) and 1280 px, light and dark.
 // usage: QA_PORT=3423 QA_CODE=24681372 node tools/qa/home.mjs   ->  screenshots in /tmp/qa-shots/home-<width>-<theme>.png; exits 1 on a failure.
 import { AUDIT, Browser, SHOTS } from './browser.mjs';
 import { api, login, sleep } from './lib.mjs';
@@ -44,6 +45,30 @@ for (const [width, height] of [[390, 844], [1280, 800]]) {
         check(first === 'Home', `${tag}: Home is first in the phone bar (${first})`);
       }
       await b.shot(`home-${tag}`, { full: true });
+      // T-1851: every header control keeps its place across the switch: the switch's two buttons and the right-most control.
+      const RECTS = `[...document.querySelectorAll('[data-home-header-actions] button')].map((e) => { const r = e.getBoundingClientRect(); return (e.getAttribute('aria-label') || '?') + '@' + Math.round(r.left) + ',' + Math.round(r.top) + ',' + Math.round(r.width) + 'x' + Math.round(r.height); })`;
+      const RIGHT = `(() => { const v = [...document.querySelectorAll('[data-home-header-actions] button')].map((e) => e.getBoundingClientRect()).filter((r) => r.width > 0); const r = v.sort((x, y) => y.right - x.right)[0]; return r ? Math.round(r.right) + ',' + Math.round(r.top) + ',' + Math.round(r.width) : 'none'; })()`;
+      const SWITCH = `[...document.querySelectorAll('[role=group][aria-label="Home mode"] button')].map((e) => { const r = e.getBoundingClientRect(); return Math.round(r.left) + ',' + Math.round(r.top) + ',' + Math.round(r.width); }).join(' ')`;
+      const dash = { all: await b.eval(RECTS), right: await b.eval(RIGHT), sw: await b.eval(SWITCH) };
+      await b.clickSel('[role=group][aria-label="Home mode"] button[aria-label="Manager"]');
+      await b.waitFor(`document.querySelector('h1')?.textContent === 'Manager'`, 4000, 'Manager mode');
+      await sleep(600);
+      const mgr = { all: await b.eval(RECTS), right: await b.eval(RIGHT), sw: await b.eval(SWITCH) };
+      await b.shot(`home-manager-${tag}`);
+      check(dash.right === mgr.right, `${tag}: the right-most header control holds still on the switch (dashboard ${dash.right}, manager ${mgr.right})`);
+      check(dash.sw === mgr.sw, `${tag}: the mode switch holds still (dashboard ${dash.sw}, manager ${mgr.sw})`);
+      check(JSON.stringify(dash.all) === JSON.stringify(mgr.all), `${tag}: every header control in the same slot (${dash.all.join(' ')} | ${mgr.all.join(' ')})`);
+      const arrangeHidden = await b.eval(`(() => { const e = document.querySelector('button[aria-label="Arrange cards"]'); return !!e && getComputedStyle(e).visibility === 'hidden' && !!e.closest('[aria-hidden=true]'); })()`);
+      check(arrangeHidden, `${tag}: in Manager, Arrange keeps its slot but is hidden from sight, tab order and screen readers`);
+      if (width === 390) {
+        const small = await b.eval(`[...document.querySelectorAll('[role=group][aria-label="Home mode"] button')].filter((e) => { const r = e.getBoundingClientRect(); return r.height < 44 || r.width < 44; }).map((e) => e.getAttribute('aria-label') + ' ' + Math.round(e.getBoundingClientRect().width) + 'x' + Math.round(e.getBoundingClientRect().height))`);
+        check(small.length === 0, `${tag}: the mode switch is 44 px ${small.join('; ')}`);
+      }
+      await b.clickSel('[role=group][aria-label="Home mode"] button[aria-label="Dashboard"]');
+      await b.waitFor(`document.querySelector('h1')?.textContent === 'Home'`, 4000, 'Dashboard mode');
+      await sleep(400);
+      check((await b.eval(RIGHT)) === dash.right, `${tag}: and back on Dashboard, the same place`);
+      await b.eval(`localStorage.removeItem('home.mode')`);
       if (width === 390 && !dark) {
         // Arrange: hide Usage and move Quota up, then a reload keeps both.
         await b.clickSel('button[aria-label="Arrange cards"]');
