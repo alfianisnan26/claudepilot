@@ -12,23 +12,22 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - T-1801 built: item 1 compute e45d5f9 (Jobs 63c820d6, mutant 36e3f9a5 rc=1, suite 4070507f 361), item 2 lab-plugin bec25a4 on T-1182's 4e32c8e (Job 53668779, 2 mutants red), item 4 backend 508e2d2 (ci c0769958 2098, mutant 8bcfe3b8 rc=1). c18940, c18946, c18948.
 
 ## IN FLIGHT
-- 04:3xZ mo-commit (implementer, sonnet), INTERRUPTED by the 04:5xZ move: T-1629 7e9b0da pushed to ticket/T-1629-storm-audit-id-2 (Job unknown); T-1803 cb0075a test + 1c3f518 fix committed in the mo-be-1803 clone, push not verified (fetch check denied), ci Job unknown. Restart: read T-1629 and T-1803 comments, then push/Job what is missing.
-- 04:3xZ worker bbde2b22 on two.claude (qa-verifier, auto, dontAsk): T-1611 item 2 probe commit + stg screen check; re-tests c17308 (workers and Bash).
+- T-1629 built: 7e9b0dac on ticket/T-1629-storm-audit-id-2, Job 143c52c3 rc=0 (612 pass), N3/N5/N6 mutants red (c19121). Needs independent QA (non-lineage).
+- T-1803 built: test cb0075ab, fix 1c3f5188 on ticket/T-1803-job-deadline; fail-first 44d3f3f7 rc=1, ci fe6d8895 rc=0 2100 (c19170). Needs independent QA.
+- Worker bbde2b22 (mo-qa-1611, asleep): re-check needs a new probe qa/t1611-recheck.mjs + message file; the worker has no Write tool. Track layer FAIL stands (c19136).
 - T-602 QA PASS both repos (mo-qa-602): compute f7dfd3d c19120 (Job 7f2af862), backend 78d0c7c8 c19122 (Job f6a683af); in_review, rides v14; close after deploy + screen check + stored-data run.
 - T-1801 QA done (mo-qa-1801): item 2 PASS WITH GAPS c18958 (Job e553806b), item 1 PASS c19027 (190f6576), item 4 PASS c19115 (875f4dd8); in_review for the merge gate, close after merge (c19117).
-- 04:35Z worker 55723e0e on one.claude (qa-verifier, auto): T-1800 then T-1802 QA, non-lineage.
+- Worker 55723e0e (mo-qa-1800, idle): T-1800 c19142 (Job be21c43a rc=0 359), T-1802 c19151 (Job d9722ec3 rc=0 631): PASS WITH GAPS on suites only; clone refused in dontAsk, diffs and mutants not verified.
 - T-822 delta QA PASS WITH GAPS (worker a6570457, rossi, ended): c19134 on 068f319 (Job e34e96f5); lead c19148: merge gate, then post-deploy screen check before close.
 - T-1611 item 2 (worker bbde2b22, two.claude): c19136 tide pin + PNG export PASS, bands PASS on data, track layer FAIL (500 km ground truth timed out); same QA re-checks the count + bands shot. D-91 suggestions wait for the standard's location (c19047).
 - T-1591 in_review: fix 2d633120 on ticket/T-1591-metering-errors (fail-first 3e6b3f58, ci c29c4247 rc=0). Needs delta QA, merge gate, D-81 second QA + post-deploy check.
 - T-822 in_review: delta 068f319 (Job d7972651 rc=0, c18892) after QA FAIL c18868; delta QA needs a non-lineage session (c17308).
-- T-1629 blocked: rebuild bcea895 on ticket/T-1629-storm-audit-id-2 (Job 6e6db053 rc=0); test commit refused by the unnamed rule (c18912); edits uncommitted in the mo-fe-1629 clone.
-- T-1611 item 2 blocked: probe commit refused by the unnamed rule (c18873); probe staged in the mo-qa-1611 clone.
-- T-1803 blocked (c18623): fix staged in the mo-be-1803 clone; commit refused 3x by the unnamed rule.
 - T-1800 in_review 55bdb7dc (suite ddd2e129 rc=0, mutants red, c18769); T-1802 in_review 819bf775: QA non-lineage (c17308).
 - T-1701 74bae41 waits for T-1162 on stg (c17526). Post-mortems T-1705 c18775, T-1808 c18777 in_review.
 - ticket_verdict is refused for my sub-agents (c18870): verdicts stay as gate-form comments.
 
 ## DECISIONS
+- 04:48Z mo-commit finished before the move: T-1629 and T-1803 pushed, Jobs green, -F form worked. Stray .lane-commit-msg in mo-qa-1611 removed.
 - 04:4xZ fadlilah at 10 % left: move to one.claude. Workers bbde2b22 (two.claude) and 55723e0e (one.claude) keep running; restart mo-commit only (T-1703 hand-over comment).
 - 04:3xZ T-84 item 8 solved by the coordinator (`git * credential *` matched a message word): -F message file is the SOP, in briefs/mo/common.md; blocked commits T-1629, T-1803, T-1611 woken. Workers start with claude: auto (coordinator, quota) (T-1703 comment).
 - 04:15Z D-91 (UI/UX polish: QA suggests, lead decides, batched per page or app) in briefs/mo/common.md and qa-lp2.md (T-1703 c19047). Standard's location asked FOR THE COORDINATOR.
@@ -64,5 +63,5 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 3. T-991 (D-90, ai-worker billing, test first, after or on T-1591; D-81 money review), T-1007 (after T-1162 lands).
 4. After T-1574's QA and merge: gate asks T-1352 f92828f, T-1416 65d952d, T-1435 f424b1c; then the v14 bump commits (compute catalog.py, backend metocean-catalog.ts) with T-602, backend migrations check, stg-deploy backend then compute, cf-logs check, post-deploy screen checks.
 5. After the in_review/merge sweep (D-91): UI/UX polish audit of my apps (Lab metocean views: Analysis, Map, Chart, Mission Planning, Report panels; report DOCX). QA suggests, I decide on the ticket against the standard (location asked, T-1703 c19047); one batched ticket per page or app.
-6. When the coordinator answers: T-1803 commit + `npm run ci` Job; T-1629 test commit; T-1611 item 2 probe.
+6. After the move: QA for T-1629 and T-1803 (non-lineage worker, auto); diff + mutant QA for T-1800/T-1802; an implementer writes qa/t1611-recheck.mjs + message file for bbde2b22.
 7. Hourly closed-count report on T-1703.
