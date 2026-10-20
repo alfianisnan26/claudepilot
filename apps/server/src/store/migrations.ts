@@ -3643,6 +3643,64 @@ export const MIGRATIONS: Migration[] = [
       db.exec(`ALTER TABLE pmcp_tokens ADD COLUMN default_workspace_id TEXT`);
     },
   },
+  {
+    version: 47,
+    name: 'tickets: buckets (projects) with their own id prefix and number counter (T-1098)',
+    up(db) {
+      // T-1098 (owner, 2026-10-18): per-project tickets. A bucket's key is its ids' prefix (KONF-12); every ticket is in exactly one. The ticket's
+      // `number` stays its primary key and `T-<number>` a permanent alias, so nothing that names T-n (URLs, trailers, sessions, the timeline) moves.
+      db.exec(`
+        CREATE TABLE ticket_buckets (
+          key TEXT PRIMARY KEY CHECK (length(key) BETWEEN 2 AND 6 AND key NOT GLOB '*[^A-Z]*'),
+          name TEXT NOT NULL,
+          description TEXT NOT NULL DEFAULT '',
+          default_workspace_id TEXT,
+          -- JSON array of tags every new ticket in it gets.
+          default_tags TEXT NOT NULL DEFAULT '[]',
+          vault_id TEXT,
+          -- The number its next ticket takes; the trigger below hands it out inside the insert's own transaction.
+          next_number INTEGER NOT NULL DEFAULT 1 CHECK (next_number >= 1),
+          owner_id TEXT NOT NULL DEFAULT 'u_owner',
+          created_by TEXT NOT NULL DEFAULT 'u_owner',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        ) STRICT;
+
+        ALTER TABLE tickets ADD COLUMN bucket_key TEXT NOT NULL DEFAULT 'PILOT';
+        ALTER TABLE tickets ADD COLUMN bucket_number INTEGER;
+      `);
+      const at = new Date().toISOString();
+      const seed = db.prepare('INSERT INTO ticket_buckets (key, name, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?)');
+      seed.run('KONF', 'Konfersi', 'Konfersi work (was tagged konfersi-migration).', at, at);
+      seed.run('CP', 'ClaudePilot', 'The portal itself (was tagged claudepilot).', at, at);
+      seed.run('TB', 'Tradingbot', 'The paper-trading lab (was tagged tradingbot).', at, at);
+      seed.run('PILOT', 'Pilot', 'Everything else.', at, at);
+      // Existing tickets by tag, first match wins in this order; the rest stay in PILOT (the column default).
+      for (const [tag, key] of [['konfersi-migration', 'KONF'], ['claudepilot', 'CP'], ['tradingbot', 'TB']] as const)
+        db.prepare(
+          `UPDATE tickets SET bucket_key = ? WHERE bucket_key = 'PILOT' AND number IN (SELECT ticket_number FROM ticket_tags WHERE tag = ?)`,
+        ).run(key, tag);
+      // Their numbers in creation order, per bucket; each counter continues after the last.
+      db.exec(`
+        UPDATE tickets SET bucket_number = (
+          SELECT r.n FROM (SELECT number, ROW_NUMBER() OVER (PARTITION BY bucket_key ORDER BY created_at, number) AS n FROM tickets) r
+          WHERE r.number = tickets.number
+        );
+        UPDATE ticket_buckets SET next_number = 1 + COALESCE((SELECT max(bucket_number) FROM tickets WHERE bucket_key = ticket_buckets.key), 0);
+        CREATE UNIQUE INDEX tickets_bucket_number ON tickets (bucket_key, bucket_number);
+        CREATE INDEX tickets_bucket_status ON tickets (bucket_key, status);
+
+        -- Every new ticket takes the next number of its bucket, whoever inserts it (the service, a test, an import), in the same transaction:
+        -- two creates can never get one number. A bucket that does not exist gives no number (the service refuses it before).
+        CREATE TRIGGER tickets_bucket_number AFTER INSERT ON tickets WHEN NEW.bucket_number IS NULL
+        BEGIN
+          UPDATE ticket_buckets SET next_number = next_number + 1 WHERE key = NEW.bucket_key;
+          UPDATE tickets SET bucket_number = (SELECT next_number - 1 FROM ticket_buckets WHERE key = NEW.bucket_key)
+            WHERE number = NEW.number AND EXISTS (SELECT 1 FROM ticket_buckets WHERE key = NEW.bucket_key);
+        END;
+      `);
+    },
+  },
 ];
 
 /**

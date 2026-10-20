@@ -17,6 +17,7 @@ import { PortalToolError, portalTools, z, type PortalToolContext, type ToolRegis
 import { declareLabPolicies } from './authz.js';
 import type { Lab } from './index.js';
 import { parseSince } from './routes.js';
+import { ticketKeyField } from '../tickets/keys.js';
 
 declareLabPolicies();
 
@@ -27,7 +28,7 @@ const ci = (i: LabInterval) => (i === 'n too small' ? i : [r2(i.low), r2(i.high)
 
 /** The tickets' dollars (usage spend's per-ticket figures, T-449): ticket, type, status, own, via lead, total. Top `n` (default 10). */
 const ticketsShort = (t: LabTicketCost[] | undefined, n = 10) =>
-  (t ?? []).slice(0, n).map((x) => ({ ticket: x.ticket, type: x.type, status: x.status, done_at: x.doneAt, own_usd: x.ownUsd, via_lead_usd: x.viaLeadUsd, total_usd: x.totalUsd }));
+  (t ?? []).slice(0, n).map((x) => ({ ticket: x.ticket, ...ticketKeyField(x.ticket), type: x.type, status: x.status, done_at: x.doneAt, own_usd: x.ownUsd, via_lead_usd: x.viaLeadUsd, total_usd: x.totalUsd }));
 
 /** A figure in a short row: its value, or `unavailable:<reason>`. */
 const v = (f: CrewFigure) => (f.basis === 'unavailable' ? `unavailable:${f.reason ?? 'no_source'}` : f.value);
@@ -151,7 +152,7 @@ export function registerLabTools(lab: Lab, registry: ToolRegistry = portalTools)
     name: 'lab_summary',
     title: 'Efficiency lab',
     description:
-      'Slice economy per day or week and per role and model: n, median requests, context p50, result tokens (an estimate), minutes, cost per slice (estimated dollars), inspection share of Bash calls, cache re-write share, first-pass yield and median cost per accepted slice. Short rows by default; full true adds p90s, outcomes, Bash classes, the experiments with their primary and 90 percent interval, and the source of every figure. An admin’s token reads the portal; an agent’s token reads only its own session.',
+      'Slice economy per day or week and per role and model: n, median requests, context p50, result tokens (an estimate), minutes, cost per slice (estimated dollars), inspection share of Bash calls, cache re-write share, first-pass yield and median cost per accepted slice. Short rows by default; full true adds p90s, outcomes, Bash classes, the experiments with their primary and 90 percent interval, and the source of every figure. An admin’s token reads the portal; an agent’s token reads only its own session. Tickets show as ticket (T-12) and ticket_key (KONF-3).',
     scope: 'agent',
     hints: { readOnly: true, idempotent: true },
     input: z.object({
@@ -221,12 +222,12 @@ export function registerLabTools(lab: Lab, registry: ToolRegistry = portalTools)
     name: 'lab_arm_draw',
     title: 'Draw a slice\'s arm',
     description:
-      'Draws the arm of a sub-agent slice before you write its brief, in every running draws-only experiment (the arm is fixed per ticket, so drawing again gives the same arm; the ticket must exist; the stratum from the ticket\'s ESTIMATE size and the role, model and effort you will dispatch with). Put `Lab-Draw: <draw>` in the brief\'s first line: when that Agent call starts in this session, with the same ticket, role, model and effort (and the ticket\'s ESTIMATE size unchanged), the slice keeps these arms. One draw per slice; every draw is counted, used or not, and a slice of a drawn ticket dispatched without its draw is out and counted. No draws-only experiment running: no draw, nothing recorded. Your own session only.',
+      'Draws the arm of a sub-agent slice before you write its brief, in every running draws-only experiment (the arm is fixed per ticket, so drawing again gives the same arm; the ticket must exist; the stratum from the ticket\'s ESTIMATE size and the role, model and effort you will dispatch with). Put `Lab-Draw: <draw>` in the brief\'s first line: when that Agent call starts in this session, with the same ticket, role, model and effort (and the ticket\'s ESTIMATE size unchanged), the slice keeps these arms. One draw per slice; every draw is counted, used or not, and a slice of a drawn ticket dispatched without its draw is out and counted. No draws-only experiment running: no draw, nothing recorded. Your own session only. ticket: T-12 or KONF-3.',
     scope: 'agent',
     hints: { idempotent: false },
     rate: { perHour: 120 },
     input: z.object({
-      ticket: z.string().regex(/^T-\d{1,6}$/).describe('The slice\'s ticket (its ESTIMATE size is the size stratum).'),
+      ticket: z.string().regex(/^(?:T-\d{1,6}|[A-Za-z]{2,6}-\d{1,6})$/).describe('The slice\'s ticket, T-n or its bucket key (KONF-3) (its ESTIMATE size is the size stratum).'),
       role: z.string().regex(/^[A-Za-z0-9_.:-]{1,80}$/).optional().describe('The Agent call\'s subagent_type.'),
       model: z.string().regex(/^[A-Za-z0-9_.:-]{1,80}$/).optional().describe('The Agent call\'s model; absent: inherit.'),
       effort: z.string().regex(/^[A-Za-z0-9_.:-]{1,80}$/).optional().describe('The Agent call\'s effort.'),

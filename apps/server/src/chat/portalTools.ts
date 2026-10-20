@@ -138,7 +138,7 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
     name: 'session_spawn',
     title: 'Start a worker session',
     description:
-      'Starts another chat session in this workspace to do part of the work, and gives it a first instruction. It runs on your Claude unless claude says otherwise (auto: one of this workspace with room, the least busy first), never in bypass mode; you can message it, see it and stop it, and the workers you start can message each other (your crew). The folder must already be trusted. With worktree it works on a branch of its own; with role it runs as the agent .claude/agents/<role>.md, on the role’s model unless model is given (opus above a role on sonnet needs why, D-63); model, effort and mode apply before its first instruction. For a crew: the portal tells you in one line when a worker’s turn ends, waits on a person or ends (report), so wait for those instead of calling session_family in a loop. How many, how deep and how often are limited in the portal; max_workers and subagents narrow the worker, never wider than yours.',
+      'Starts another chat session in this workspace to do part of the work, and gives it a first instruction. It runs on your Claude unless claude says otherwise (auto: one of this workspace with room, the least busy first), never in bypass mode; you can message it, see it and stop it, and the workers you start can message each other (your crew). The folder must already be trusted. With worktree it works on a branch of its own; with role it runs as the agent .claude/agents/<role>.md, on the role’s model unless model is given (opus above a role on sonnet needs why, D-63); model, effort and mode apply before its first instruction. For a crew: the portal tells you in one line when a worker’s turn ends, waits on a person or ends (report), so wait for those instead of calling session_family in a loop. How many, how deep and how often are limited in the portal; max_workers and subagents narrow the worker, never wider than yours. ticket: T-12 or KONF-3.',
     scope: 'agent',
     hints: { openWorld: true },
     rate: { perMinute: 10, perHour: 60 },
@@ -160,7 +160,7 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
       // T-294 (Crew over MCP): what the worker tells you unasked.
       report: z.enum(WORKER_REPORTS).optional().describe('What the portal tells you about it unasked, one line each: idle (the default) when its turn ends, when it waits on a person and when it ends; end only when it ends; none nothing.'),
       // T-449: the ticket the worker works on (usage attribution reads the session's ticket).
-      ticket: z.string().regex(/^T-\d{1,9}$/).optional().describe('The ticket it works on (T-n): its cost counts under that ticket in usage_attribution. An unknown ticket is refused as not found. Default: none (No ticket).'),
+      ticket: z.string().regex(/^(?:T-\d{1,9}|[A-Za-z]{2,6}-\d{1,9})$/).optional().describe('The ticket it works on (T-n or its bucket key, KONF-3; stored as T-n): its cost counts under that ticket in usage_attribution. An unknown ticket is refused as not found. Default: none (No ticket).'),
     }),
     async handler(ctx, args) {
       const parentId = self(ctx);

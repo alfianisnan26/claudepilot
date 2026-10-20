@@ -86,6 +86,7 @@ test('with nothing typed: the actions, the five sessions used last, then the pag
 test('a ticket number typed finds the ticket by its number', () => {
   assert.deepEqual(ticketByNumber('T-12'), { id: 'ticket:T-12', kind: 'ticket', title: 'T-12', hint: 'Open ticket', to: '/admin/tickets/T-12', matched: true });
   assert.equal(ticketByNumber(' t12 ')?.to, '/admin/tickets/T-12');
+  assert.equal(ticketByNumber('konf-12')?.to, '/admin/tickets/KONF-12', 'T-1098: a bucket key');
   assert.equal(ticketByNumber('T-007')?.title, 'T-7');
   assert.equal(ticketByNumber('12'), null, 'a bare number is a search, not a ticket');
   assert.equal(ticketByNumber('tests'), null);

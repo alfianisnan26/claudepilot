@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { actorName, fallbackSentence, mcpClientName, pageFilter } from './labels';
+import { actorName, fallbackSentence, isTicket, mcpClientName, pageFilter, ticketLabel } from './labels';
 
 test('a Portal MCP token on a timeline is named by its label', () => {
   assert.equal(actorName('portal-mcp:ptk_1', 'relay'), 'MCP client “relay”');
@@ -47,4 +47,13 @@ test('a move by the orphan sweep reads as a sentence', () => {
     fallbackSentence('Portal', { to: { kind: 'session', sessionId: 's' }, reason: 'title' }),
     'Portal moved it to the live agent of its track',
   );
+});
+
+test('T-1098: a ticket shows its bucket key; an address in either form, any case, names it', () => {
+  assert.equal(ticketLabel({ id: 'T-9', key: 'KONF-2' }), 'KONF-2');
+  assert.equal(ticketLabel({ id: 'T-9' }), 'T-9', 'an older server sends no key');
+  const t = { id: 'T-9', key: 'KONF-2' };
+  assert.ok(isTicket(t, 'KONF-2') && isTicket(t, 'konf-2') && isTicket(t, 'T-9') && isTicket(t, 't-9'));
+  assert.ok(!isTicket(t, 'KONF-3') && !isTicket(t, null));
+  assert.equal(pageFilter({ view: 'list', scope: 'active', needs: false, queue: false, orphans: false, priority: null, type: null, tag: null, q: '', bucket: 'KONF' }).bucket, 'KONF');
 });

@@ -53,9 +53,13 @@ export const TICKET_TAG = /^[a-z0-9][a-z0-9._-]*$/;
 export const TICKET_DEFAULT_USER = 'admin';
 
 export interface Ticket {
-  /** `T-12`. */
+  /** `T-12`: the ticket's stable id, kept for ever (a PERMANENT alias of its bucket key, T-1098). URLs, sessions and trailers may use either. */
   id: string;
   number: number;
+  /** T-1098: the bucket it belongs to (`KONF`). Absent from an older server. */
+  bucket?: string;
+  /** T-1098: its id in its bucket, `KONF-12`: what the portal shows. Absent from an older server (show `id`). */
+  key?: string;
   type: TicketType;
   priority: TicketPriority;
   status: TicketStatus;
@@ -227,6 +231,8 @@ export interface TicketCheck {
 
 export interface TicketCounts {
   byStatus: Record<TicketStatus, number>;
+  /** T-1098: unfinished tickets per bucket key (only buckets that have one). Absent from an older server. */
+  byBucket?: Record<string, number>;
   /** Not closed and assigned to a person. */
   needsYou: number;
   /** Open and assigned to nobody: the agents' queue. */
@@ -257,6 +263,8 @@ export interface TicketPage extends CursorPage<TicketItem> {
 export type TicketAssigneeFilter = 'any' | 'unassigned' | 'user' | `session:${string}`;
 
 export interface TicketFilter {
+  /** T-1098: one bucket's tickets (its key, `KONF`). */
+  bucket?: string;
   status?: TicketStatus[];
   priority?: TicketPriority[];
   type?: TicketType[];
@@ -280,6 +288,11 @@ export interface TicketFilter {
 }
 
 export interface CreateTicketRequest {
+  /**
+   * T-1098: the bucket (`KONF`). Left out: the bucket whose default workspace is the ticket's (or the agent's) workspace, else the bucket of the
+   * ticket the calling session or its lead works on, else {@link TICKET_DEFAULT_BUCKET}.
+   */
+  bucket?: string;
   summary: string;
   description?: string;
   type?: TicketType;
@@ -352,6 +365,10 @@ export interface TicketTag {
 export const TICKET_API = {
   /** GET `TicketFilter` as a query string: `TicketList`. POST `CreateTicketRequest`: `TicketItem`. */
   list: '/api/tickets',
+  /** GET: `TicketBucket[]` (the ones the caller may view). POST `CreateTicketBucketRequest`: `TicketBucket` (T-1098). */
+  buckets: '/api/tickets/buckets',
+  /** GET: `TicketBucket`. PATCH `UpdateTicketBucketRequest`: `TicketBucket`. */
+  bucket: (key: string) => `/api/tickets/buckets/${encodeURIComponent(key)}`,
   /** GET: `TicketDetail`. PATCH `UpdateTicketRequest`: `TicketItem`. DELETE: remove it. */
   one: (id: string) => `/api/tickets/${encodeURIComponent(id)}`,
   /** POST `CommentTicketRequest`: the new `TicketEvent`. */
@@ -380,20 +397,84 @@ export const TICKET_API = {
 /** `T-12` for 12. */
 export const ticketIdOf = (n: number): string => `T-${n}`;
 
+/* ---------- Buckets (T-1098): a project of tickets with its own id prefix and number counter ---------- */
+
+/** A bucket's key: 2 to 6 capital letters (`KONF`, `CP`). Never `T` alone, so `T-12` always names the stable id. */
+export const TICKET_BUCKET_KEY = /^[A-Z]{2,6}$/;
+/** Where a ticket goes when nothing names a bucket, and where the migration put every ticket without a project tag. */
+export const TICKET_DEFAULT_BUCKET = 'PILOT';
+/** `KONF-12`. */
+export const ticketKeyOf = (bucket: string, n: number): string => `${bucket}-${n}`;
+
+export interface TicketBucket {
+  /** The id prefix, `KONF`. Fixed once made. */
+  key: string;
+  name: string;
+  description: string;
+  /** Where its tickets go when a create names no workspace; and an agent files in it only from this workspace. Null: any. */
+  defaultWorkspaceId: string | null;
+  /** Tags every new ticket in it gets. */
+  defaultTags: string[];
+  /** A knowledge vault for its notes, or null. */
+  vaultId: string | null;
+  /** The number its next ticket takes. */
+  nextNumber: number;
+  /** Its unfinished tickets. */
+  open: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateTicketBucketRequest {
+  key: string;
+  name: string;
+  description?: string;
+  defaultWorkspaceId?: string | null;
+  defaultTags?: string[];
+  vaultId?: string | null;
+}
+
+export type UpdateTicketBucketRequest = Partial<Omit<CreateTicketBucketRequest, 'key'>>;
+
 /**
- * The ticket a git branch is for: `ticket/T-12-fix-login`, `ticket/12-fix-login` or `feature/ticket/12`
- * (interface I10: CI finds a ticket from the branch it ran on). Null when the branch names none.
+ * What a ticket reference names: the stable id (`T-12`, `#12`, `12`) or a bucket key (`KONF-12`, any case). Null when it is neither.
+ * Every place that takes a ticket id takes both (T-1098: `T-<n>` is a permanent alias).
+ */
+export function parseTicketRef(raw: string): { number: number } | { bucket: string; n: number } | null {
+  const v = raw.trim();
+  const id = /^(?:T-|#)?(\d{1,9})$/i.exec(v);
+  if (id) return { number: Number(id[1]) };
+  const key = /^([A-Za-z]{2,6})-(\d{1,9})$/.exec(v);
+  return key ? { bucket: key[1]!.toUpperCase(), n: Number(key[2]) } : null;
+}
+
+/** A reference as one canonical string: `T-12` or `KONF-12`. Null when it is not one. */
+export function normalTicketRef(raw: string): string | null {
+  const r = parseTicketRef(raw);
+  if (!r) return null;
+  return 'number' in r ? ticketIdOf(r.number) : ticketKeyOf(r.bucket, r.n);
+}
+
+/**
+ * The ticket a git branch is for: `ticket/T-12-fix-login`, `ticket/12-fix-login`, `feature/ticket/12` or `ticket/KONF-12-fix-login`
+ * (interface I10: CI finds a ticket from the branch it ran on). Null when the branch names none. A bucket key comes back as it is; the tickets
+ * service resolves it.
  */
 export function parseTicketBranch(branch: string): string | null {
   const m = /(?:^|\/)ticket\/(?:T-)?(\d{1,9})(?:[-_/]|$)/i.exec(branch.trim());
-  return m ? ticketIdOf(Number(m[1])) : null;
+  if (m) return ticketIdOf(Number(m[1]));
+  // Capitals only (`ticket/fix-12-login` is not a bucket key).
+  const k = /(?:^|\/)ticket\/([A-Z]{2,6})-(\d{1,9})(?:[-_/]|$)/.exec(branch.trim());
+  return k ? ticketKeyOf(k[1]!, Number(k[2])) : null;
 }
 
-/** The tickets a commit message names in `Ticket: T-12` trailers (interface I10), in order, without repeats. */
+/** The tickets a commit message names in `Ticket: T-12` (or `Ticket: KONF-12`) trailers (interface I10), in order, without repeats. */
 export function parseTicketTrailers(message: string): string[] {
   const ids: string[] = [];
-  for (const m of message.matchAll(/^Ticket:[ \t]*(?:T-|#)?(\d{1,9})\b/gim)) {
-    const id = ticketIdOf(Number(m[1]));
+  for (const m of message.matchAll(/^Ticket:[ \t]*(?:(?:T-|#)?(\d{1,9})|([A-Za-z]{2,6})-(\d{1,9}))\b/gim)) {
+    // A bucket key in capitals only, as the portal writes it (the `i` flag is for `Ticket:`).
+    if (m[1] === undefined && !TICKET_BUCKET_KEY.test(m[2]!)) continue;
+    const id = m[1] !== undefined ? ticketIdOf(Number(m[1])) : ticketKeyOf(m[2]!, Number(m[3]));
     if (!ids.includes(id)) ids.push(id);
   }
   return ids;

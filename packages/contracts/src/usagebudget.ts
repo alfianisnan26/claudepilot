@@ -44,6 +44,8 @@ export interface SessionFacts {
   claudeId: string;
   claudeName: string;
   ticketId: string | null;
+  /** T-1098: the ticket's bucket key (`KONF-12`) to show; absent from an older server or for a ticket gone. */
+  ticketKey?: string | null;
   /** The session that started this one, or null. A parent that is gone still shows here. */
   parentId: string | null;
   /**

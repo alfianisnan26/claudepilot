@@ -15,6 +15,7 @@ import { portalTools, z, type PortalToolContext, type ToolRegistry } from '../po
 import { agentStart, declareCiPolicies, leadReadsRemote, NO_RUN, noRemote, ownsBranchOn } from './authz.js';
 import type { CiService } from './service.js';
 import type { CiSessionsPort } from './sessions.js';
+import { ticketKeyField } from '../tickets/keys.js';
 
 /** Where a person approves a run's deployment: the run page of the portal. */
 export const runLink = (id: string): string => `/admin/ci/runs/${encodeURIComponent(id)}`;
@@ -59,6 +60,7 @@ export function registerCiTools(ci: CiService, sessions: CiSessionsPort | undefi
     actor: r.actor,
     actor_label: r.actorLabel,
     ticket_id: r.ticketId,
+    ...ticketKeyField(r.ticketId),
     session_id: r.sessionId,
     created_at: r.createdAt,
     finished_at: r.finishedAt,
@@ -74,7 +76,7 @@ export function registerCiTools(ci: CiService, sessions: CiSessionsPort | undefi
     sha: r.sha ? r.sha.slice(0, 12) : r.sha,
     status: r.status,
     ...(r.reason ? { reason: r.reason } : {}),
-    ...(r.ticketId ? { ticket_id: r.ticketId } : {}),
+    ...(r.ticketId ? { ticket_id: r.ticketId, ...ticketKeyField(r.ticketId) } : {}),
     created_at: r.createdAt,
     duration_ms: r.durationMs,
   });
@@ -82,13 +84,13 @@ export function registerCiTools(ci: CiService, sessions: CiSessionsPort | undefi
   registry.register({
     name: 'ci_runs_list',
     title: 'List CI runs',
-    description: 'Recent runs of the pipelines in workspace remotes, newest first, as short rows (id, pipeline, branch, short sha, status, ticket, when); full true for every field, ci_run_get for one run. An agent sees the runs of its own branch and ticket; a lead (has workers) also every run on its program\'s remotes, with stg_age_minutes per remote (minutes since the last stg deploy that passed, or "unavailable").',
+    description: 'Recent runs of the pipelines in workspace remotes, newest first, as short rows (id, pipeline, branch, short sha, status, ticket, when); full true for every field, ci_run_get for one run. An agent sees the runs of its own branch and ticket; a lead (has workers) also every run on its program\'s remotes, with stg_age_minutes per remote (minutes since the last stg deploy that passed, or "unavailable"). A ticket is T-12 or its bucket key (KONF-3); rows carry ticket_id and ticket_key.',
     scope: 'agent',
     hints: { readOnly: true },
     input: z.object({
       workspace_id: z.string().max(200).optional().describe('Admin tokens: limit to one workspace, e.g. docker/api. An agent is always in its own.'),
       branch: z.string().max(200).optional(),
-      ticket: z.string().max(20).optional().describe('A ticket id such as T-12.'),
+      ticket: z.string().max(20).optional().describe('A ticket: T-12 or its bucket key (KONF-3).'),
       status: z.enum(CI_STATUSES).optional(),
       limit: z.number().int().min(1).max(50).optional(),
       ...fullInput,
@@ -131,7 +133,7 @@ export function registerCiTools(ci: CiService, sessions: CiSessionsPort | undefi
     title: 'Get a CI run',
     description:
       'One run with its jobs and steps, their status, exit codes and durations, and what was wrong with the pipeline file when it was invalid. ' +
-      'A job with status "waiting" is held for a person\'s approval (deployments): tell the person to approve it on the run page (`link`); you can not approve it.',
+      'A job with status "waiting" is held for a person\'s approval (deployments): tell the person to approve it on the run page (`link`); you can not approve it. Its ticket shows as ticket_id (T-12) and ticket_key (KONF-3).',
     scope: 'agent',
     hints: { readOnly: true },
     input: z.object({ id: z.string().max(40).describe('A run id from ci_runs_list.') }),

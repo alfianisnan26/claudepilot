@@ -90,6 +90,13 @@ export function fallbackSentence(who: string, d: { to?: unknown; reason?: unknow
 }
 
 /** The list's filter from the page's choices (the address): one place, so the chips cannot drift from the request. */
+/** T-1098: what a ticket is called on screen, its bucket key (`KONF-12`); an older server sends only the stable id. */
+export const ticketLabel = (t: { id: string; key?: string }): string => t.key ?? t.id;
+
+/** Whether an address's ticket (`T-12` or `KONF-3`, any case) is this one. */
+export const isTicket = (t: { id: string; key?: string }, ref: string | null | undefined): boolean =>
+  !!ref && (t.id.toUpperCase() === ref.toUpperCase() || (!!t.key && t.key.toUpperCase() === ref.toUpperCase()));
+
 export function pageFilter(p: {
   view: 'list' | 'board';
   scope: string;
@@ -100,8 +107,10 @@ export function pageFilter(p: {
   type: string | null;
   tag: string | null;
   q: string;
+  bucket?: string | null;
 }): TicketFilter {
   const f: TicketFilter = { limit: 100 };
+  if (p.bucket) f.bucket = p.bucket;
   if (p.view === 'board') f.includeClosed = true;
   else if (p.scope === 'closed') f.status = ['done', 'wont_do'];
   else if (p.scope !== 'active') f.status = [p.scope as TicketStatus];

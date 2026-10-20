@@ -156,8 +156,8 @@ const BYPASS_DOT = (
  * The icon is the state's ring (amber needs you, accent working, a line otherwise) around the session's kind (a role, asleep, removed, a
  * chat), or the persona's avatar when the rows on screen have more than one persona; Bypass is a red shield dot on its corner (a tip says
  * it; the word too from 640 px). Line one: the title, the pin, the role (an icon on a phone, hidden when the title already starts with it),
- * the crew count, the time. Line two (muted, one line, rowMeta.LINE_TWO_ORDER): the state, the quota bar and percent, the cost, the model
- * (its id and effort in the tip), the workspace only when the card's rows span several, the Claude's name, the branch and ticket; what does
+ * the crew count, the time. Line two (muted, one line, rowMeta.LINE_TWO_ORDER): the state, the ticket key, the quota bar and percent, the cost,
+ * the model (its id and effort in the tip), the workspace only when the card's rows span several, the Claude's name, the branch; what does
  * not fit is dropped whole, never cut mid-value. Line three: only what it waits on
  * (amber). The folder lives on the session page. Selecting turns the row into a checkbox. Grouped by
  * Claude, a chat that moved is also listed, lighter, under the Claudes it ran on earlier: the same chat. A removed workspace is stated

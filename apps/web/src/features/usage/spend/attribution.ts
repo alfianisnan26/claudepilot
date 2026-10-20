@@ -41,7 +41,8 @@ export interface SessionLine {
 export function sessionLine(row: AttributionRow): SessionLine | null {
   const s = row.session;
   if (!s) return null;
-  return { claude: s.claudeName, claudeId: s.claudeId, ticket: s.ticketId, own: s.children > 0 ? `own ${formatCost(row.own.costUsd)}` : null, deleted: !s.exists, continued: s.continuedFrom !== null && s.depth > 0 };
+  // T-1098: the ticket's bucket key (KONF-12) when the server sends it.
+  return { claude: s.claudeName, claudeId: s.claudeId, ticket: s.ticketKey ?? s.ticketId, own: s.children > 0 ? `own ${formatCost(row.own.costUsd)}` : null, deleted: !s.exists, continued: s.continuedFrom !== null && s.depth > 0 };
 }
 
 /** A ticket row's facts under its title (T-449): "feature · done · via lead $1.20"; the via-lead part only when leads' dollars were apportioned to it. Null for other rows. */

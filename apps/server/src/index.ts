@@ -541,6 +541,9 @@ tickets.start();
 const orphanSweep = new OrphanSweep(tickets);
 orphanSweep.start();
 chatController.ticketExists = (id) => tickets.exists(id);
+// T-1098: a session links the stable id, whichever form (T-12 or KONF-3) the caller gave.
+chatController.ticketResolve = (id) => tickets.resolve(id);
+chatController.ticketKeyOf = (id) => tickets.keyOf(id);
 // T-546: the crew digest's window is a setting, and each worker's line points to its latest ticket comment.
 chatController.crewSettings = (key) => settingsModule.settings.get(key);
 chatController.crewTicketOf = (sessionId) => tickets.latestCommentOf(sessionId);

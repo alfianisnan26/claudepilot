@@ -1048,6 +1048,13 @@ export class ChatController {
    */
   ticketExists?: (ticketId: string) => boolean;
   /**
+   * T-1098: installed by the tickets module: the stable id (`T-12`) of a ticket named either way (`T-12` or its bucket key `KONF-3`), null when
+   * there is none. A session stores the stable id, so the ticket's session list, usage attribution and the lab find it. Wins over `ticketExists`.
+   */
+  ticketResolve?: (ticketId: string) => string | null;
+  /** T-1098: installed by the tickets module: the bucket key (`KONF-12`) a session's ticket shows as, null when the ticket is gone. */
+  ticketKeyOf?: (ticketId: string) => string | null;
+  /**
    * Installed by the tickets module (T-270): a continuation was created; assign every unfinished ticket held by `from` (ended sessions, the
    * predecessor first) to `to`. Called INSIDE the transaction that inserts the new row, so the link and the move commit together. Returns the
    * ticket ids moved.
@@ -1598,7 +1605,13 @@ export class ChatController {
 
   /** Sessions, newest activity first; optionally one workspace's, one ticket's, or one parent's children. */
   list(filter: { workspaceId?: string; ticketId?: string; parentId?: string } = {}): ChatSession[] {
-    return this.#chat.list(filter).map((s) => this.#decorate(s));
+    return this.#chat.list(this.#byTicket(filter)).map((s) => this.#decorate(s));
+  }
+
+  /** T-1098: a ticket filter in either form (`KONF-3`) reads as the stable id sessions store; one that names no ticket stays as given (no match). */
+  #byTicket<F extends { ticketId?: string }>(filter: F): F {
+    if (!filter.ticketId || !this.ticketResolve) return filter;
+    return { ...filter, ticketId: this.ticketResolve(filter.ticketId) ?? filter.ticketId };
   }
 
   /** D-58: one page of {@link list} for `GET /api/chat/sessions`; `keep` is the caller's `view` check, run before a row is shown. */
@@ -1606,7 +1619,7 @@ export class ChatController {
     filter: { workspaceId?: string; ticketId?: string; parentId?: string },
     args: { cursor?: string | undefined; limit?: unknown; keep?: (s: ChatSession) => boolean },
   ): CursorPage<ChatSession> {
-    const page = this.#chat.listPage(filter, args);
+    const page = this.#chat.listPage(this.#byTicket(filter), args);
     return { items: page.items.map((s) => this.#decorate(s)), next: page.next };
   }
 
@@ -1777,6 +1790,16 @@ export class ChatController {
     if (this.#launchedLeadRules.has(session.id) && out.process === 'live') out = { ...out, leadRules: true };
     const slotWait = this.#slotWaits.get(session.id);
     if (slotWait) out = { ...out, slotWait };
+    // T-1098: the key the screens show for its ticket (one primary-key read), so a list never asks per row.
+    if (out.ticketId && this.ticketKeyOf) {
+      let ticketKey: string | null = null;
+      try {
+        ticketKey = this.ticketKeyOf(out.ticketId);
+      } catch {
+        // no database right now: the screens show the stable id
+      }
+      out = { ...out, ticketKey };
+    }
     const change = this.#configChange(session);
     if (change) out = { ...out, configChangedAt: change.at, configChanged: change };
     // One definition of working (T-41): the main turn runs, or a task of its live process does. The stored state stays the turn's (what
@@ -2362,6 +2385,11 @@ export class ChatController {
       throw new AppError('VALIDATION_FAILED', 'That ticket id isn’t valid.', {
         details: { ticketId: 'Use letters, digits and . _ : - (at most 64).' },
       });
+    }
+    if (this.ticketResolve) {
+      const id = this.ticketResolve(raw);
+      if (!id) throw new AppError('NOT_FOUND', 'No such ticket.', { details: { ticketId: 'Unknown ticket.' } });
+      return id;
     }
     if (this.ticketExists && !this.ticketExists(raw))
       throw new AppError('NOT_FOUND', 'No such ticket.', { details: { ticketId: 'Unknown ticket.' } });

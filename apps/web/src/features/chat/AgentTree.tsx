@@ -475,7 +475,7 @@ function AgentCard({ node, depth, open, onToggle }: { node: AgentNode; depth: nu
         <StatusPill status={node.status} />
       </div>
       <div className="mt-1.5 flex min-h-6 items-center gap-1.5 text-[13px] tabular-nums">
-        {s.ticketId && <span className="font-mono text-[12px] text-muted">{s.ticketId}</span>}
+        {s.ticketId && <span className="font-mono text-[12px] text-muted" title={s.ticketId}>{s.ticketKey ?? s.ticketId}</span>}
         <Cost usd={node.costUsd} className="font-semibold text-ink" />
         <InfoTip label={`About ${node.name}`} className="relative z-10">
           {node.task && <span className="block text-ink">{node.task}</span>}

@@ -15,9 +15,15 @@ import {
   TICKET_TYPES,
   isTicketClosed,
   parseTicketBranch,
-  parseTicketId,
+  parseTicketRef,
   parseTicketTrailers,
   ticketIdOf,
+  ticketKeyOf,
+  TICKET_BUCKET_KEY,
+  TICKET_DEFAULT_BUCKET,
+  type CreateTicketBucketRequest,
+  type TicketBucket,
+  type UpdateTicketBucketRequest,
   type BumpRequest,
   type BumpTarget,
   type CloseTicketRequest,
@@ -165,6 +171,22 @@ interface Row {
   created_at: string;
   updated_at: string;
   closed_at: string | null;
+  /** T-1098: its bucket and its number there (null only for a row inserted into a bucket that did not exist). */
+  bucket_key: string;
+  bucket_number: number | null;
+}
+
+interface BucketRow {
+  key: string;
+  name: string;
+  description: string;
+  default_workspace_id: string | null;
+  default_tags: string;
+  vault_id: string | null;
+  next_number: number;
+  owner_id: string;
+  created_at: string;
+  updated_at: string;
 }
 
 interface EventRow {
@@ -202,6 +224,7 @@ const CLOSED_SQL =TICKET_CLOSED_STATUSES.map((s) => `'${s}'`).join(', ');
 
 const invalid = (field: string, message: string) => new AppError('VALIDATION_FAILED', message, { details: { [field]: message } });
 const notFound = () => new AppError('NOT_FOUND', 'No such ticket.');
+const noBucket = () => new AppError('NOT_FOUND', 'No such bucket.');
 const oneOf = <T extends string>(v: unknown, all: readonly T[], field: string): T => {
   if (typeof v !== 'string' || !(all as readonly string[]).includes(v)) throw invalid(field, `Use one of: ${all.join(', ')}.`);
   return v as T;
@@ -675,16 +698,50 @@ export class Tickets {
     return this.#keyed(this.#db.prepare('SELECT * FROM tickets WHERE number = ?').get(number) as unknown as Row | undefined);
   }
 
+  /**
+   * T-1098: the ticket number a reference names, either form: the stable id (`T-12`, `#12`, `12`: a permanent alias) or its bucket key
+   * (`KONF-12`). Null when it names none.
+   */
+  #numberOf(ref: string): number | null {
+    const r = parseTicketRef(String(ref));
+    if (!r) return null;
+    if ('number' in r) return r.number;
+    const hit = this.#db.prepare('SELECT number FROM tickets WHERE bucket_key = ? AND bucket_number = ?').get(r.bucket, r.n) as
+      | { number: number }
+      | undefined;
+    return hit ? hit.number : null;
+  }
+
   #need(caller: Caller, idOrNumber: string | number): Row {
-    const n = typeof idOrNumber === 'number' ? idOrNumber : parseTicketId(idOrNumber);
+    const n = typeof idOrNumber === 'number' ? idOrNumber : this.#numberOf(idOrNumber);
     const row = n === null ? undefined : this.#row(n);
     if (!row || !this.#visible(caller, row)) throw notFound();
     return row;
   }
 
   exists(id: string): boolean {
-    const n = parseTicketId(id);
-    return n !== null && !!this.#row(n);
+    return this.resolve(id) !== null;
+  }
+
+  /** T-1098: the stable id (`T-12`) of a ticket named either way, or null when there is no such ticket. Callers outside this module use it. */
+  resolve(ref: string): string | null {
+    const n = this.#numberOf(ref);
+    return n !== null && this.#row(n) ? ticketIdOf(n) : null;
+  }
+
+  /** T-1098: the bucket key (`KONF-12`) of a ticket named either way, for the screens that show a ticket's id; null when there is none. */
+  keyOf(ref: string): string | null {
+    const n = this.#numberOf(ref);
+    if (n === null) return null;
+    const r = this.#db.prepare('SELECT bucket_key, bucket_number FROM tickets WHERE number = ?').get(n) as { bucket_key: string; bucket_number: number | null } | undefined;
+    return r ? (r.bucket_number === null ? ticketIdOf(n) : ticketKeyOf(r.bucket_key, r.bucket_number)) : null;
+  }
+
+  /** T-1098: the bucket of a ticket named either way (for the routes' bucket check), or null when there is no such ticket. */
+  bucketOf(ref: string): string | null {
+    const n = this.#numberOf(ref);
+    const row = n === null ? undefined : this.#row(n);
+    return row ? row.bucket_key : null;
   }
 
   #tagsOf(numbers: number[]): Map<number, string[]> {
@@ -720,6 +777,8 @@ export class Tickets {
     const ticket: Ticket = {
       id: ticketIdOf(r.number),
       number: r.number,
+      bucket: r.bucket_key,
+      key: r.bucket_number === null ? ticketIdOf(r.number) : ticketKeyOf(r.bucket_key, r.bucket_number),
       type: r.type,
       priority: r.priority,
       status: r.status,
@@ -763,6 +822,7 @@ export class Tickets {
       args.push(...mine.args);
     }
     if (forCounts) return { sql: where.length ? `WHERE ${where.join(' AND ')}` : '', args };
+    if (f.bucket) (where.push('t.bucket_key = ?'), args.push(f.bucket.trim().toUpperCase()));
     const statuses = f.status?.filter((s) => (TICKET_STATUSES as readonly string[]).includes(s));
     if (statuses?.length) (where.push(`t.status IN (${statuses.map(() => '?').join(',')})`), args.push(...statuses));
     else if (!f.includeClosed) where.push(`t.status NOT IN (${CLOSED_SQL})`);
@@ -788,10 +848,13 @@ export class Tickets {
     }
     if (f.query?.trim()) {
       const q = like(f.query.trim().slice(0, 100));
+      // T-1098: a query that is a ticket reference (T-12 or KONF-12) finds that ticket too.
+      const ref = parseTicketRef(f.query.trim());
+      const byRef = ref ? ('number' in ref ? ' OR t.number = ?' : ' OR (t.bucket_key = ? AND t.bucket_number = ?)') : '';
       where.push(
-        "(t.summary LIKE ? ESCAPE '\\' OR t.description LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM ticket_tags g WHERE g.ticket_number = t.number AND g.tag LIKE ? ESCAPE '\\'))",
+        `(t.summary LIKE ? ESCAPE '\\' OR t.description LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM ticket_tags g WHERE g.ticket_number = t.number AND g.tag LIKE ? ESCAPE '\\')${byRef})`,
       );
-      args.push(q, q, q);
+      args.push(q, q, q, ...(ref ? ('number' in ref ? [ref.number] : [ref.bucket, ref.n]) : []));
     }
     return { sql: where.length ? `WHERE ${where.join(' AND ')}` : '', args };
   }
@@ -817,7 +880,12 @@ export class Tickets {
     ).n;
     const o = this.#orphanSql();
     const orphans = (this.#db.prepare(`SELECT count(*) AS n FROM tickets t ${and} ${o.sql}`).get(...args, ...o.args) as { n: number }).n;
-    return { byStatus, needsYou, unassigned, orphans, total: Object.values(byStatus).reduce((a, b) => a + b, 0) };
+    const byBucket: Record<string, number> = {};
+    for (const r of this.#db
+      .prepare(`SELECT t.bucket_key AS b, count(*) AS n FROM tickets t ${and} t.status IN (${OPEN_SQL}) GROUP BY t.bucket_key ORDER BY t.bucket_key`)
+      .all(...args) as { b: string; n: number }[])
+      byBucket[r.b] = r.n;
+    return { byStatus, byBucket, needsYou, unassigned, orphans, total: Object.values(byStatus).reduce((a, b) => a + b, 0) };
   }
 
   list(caller: Caller, filter: TicketFilter = {}): TicketList {
@@ -855,7 +923,7 @@ export class Tickets {
     const limit = clampLimit(args.limit);
     const closedOnly = !!filter.status?.length && filter.status.every((s) => isTicketClosed(s));
     const kind = closedOnly ? 'closed' : filter.sort === 'newest' ? 'newest' : 'priority';
-    const scope = `tickets|${JSON.stringify([caller.kind === 'agent' ? `agent:${caller.workspaceId}` : caller.kind, kind, filter.status ?? null, filter.priority ?? null, filter.type ?? null, filter.tag ?? null, filter.assignee ?? null, filter.workspaceId ?? null, filter.query?.trim() ?? null, !!filter.includeClosed, !!filter.orphan])}`;
+    const scope = `tickets|${JSON.stringify([caller.kind === 'agent' ? `agent:${caller.workspaceId}` : caller.kind, kind, filter.bucket ?? null, filter.status ?? null, filter.priority ?? null, filter.type ?? null, filter.tag ?? null, filter.assignee ?? null, filter.workspaceId ?? null, filter.query?.trim() ?? null, !!filter.includeClosed, !!filter.orphan])}`;
     // The sort key of a row, as the cursor carries it, and the SQL that says "after the cursor" in the list's order.
     const keyOf = (r: Row): string =>
       kind === 'closed' ? (r.closed_at ?? '') : kind === 'newest' ? r.created_at : `${r.priority_rank}|${r.updated_at}`;
@@ -1142,10 +1210,12 @@ export class Tickets {
   }
 
   /** A ticket's id and summary, for a link to it. */
-  brief(id: string): { id: string; summary: string; status: TicketStatus; type: TicketType } | null {
-    const n = parseTicketId(id);
+  brief(id: string): { id: string; key: string; summary: string; status: TicketStatus; type: TicketType } | null {
+    const n = this.#numberOf(id);
     const row = n === null ? undefined : this.#row(n);
-    return row ? { id: ticketIdOf(row.number), summary: row.summary, status: row.status, type: row.type } : null;
+    if (!row) return null;
+    const key = row.bucket_number === null ? ticketIdOf(row.number) : ticketKeyOf(row.bucket_key, row.bucket_number);
+    return { id: ticketIdOf(row.number), key, summary: row.summary, status: row.status, type: row.type };
   }
 
   /** The message a session started for this ticket would open with, for the dialog's preview (its session id is not known yet). */
@@ -1409,8 +1479,15 @@ export class Tickets {
     const description = cleanMarkdown(req.description, 'description', TICKET_LIMITS.description);
     const type = req.type === undefined ? 'task' : oneOf(req.type, TICKET_TYPES, 'type');
     const priority = req.priority === undefined ? 'normal' : oneOf(req.priority, TICKET_PRIORITIES, 'priority');
-    const tags = cleanTags(req.tags);
+    const given = cleanTags(req.tags);
     const assignee = this.#assignee(caller, req.assignee);
+    // An agent's ticket concerns its own workspace; a session assignee's workspace is where the work is.
+    let workspaceId = caller.kind === 'agent' ? caller.workspaceId : workspaceIdOf(req.workspaceId);
+    if (assignee?.kind === 'session') workspaceId = assignee.session.workspaceId;
+    // T-1098: the bucket, named or found; its default workspace when nothing named one, and its default tags.
+    const bucket = this.#bucketFor(caller, w, req.bucket, workspaceId);
+    if (workspaceId === null && req.workspaceId === undefined && bucket.default_workspace_id) workspaceId = this.#bucketWorkspace(bucket);
+    const tags = cleanTags([...new Set([...given, ...(JSON.parse(bucket.default_tags) as string[])])].slice(0, TICKET_LIMITS.tags));
     const assignedAudit = this.#assertAgentAssign(caller, w, {
       ticketId: null,
       action: 'create',
@@ -1420,9 +1497,6 @@ export class Tickets {
       tagsAfter: tags,
     });
     const checklistAudit = this.#assertAgentChecklist(caller, w, { ticketId: null, action: 'create', tagsBefore: [], tagsAfter: tags });
-    // An agent's ticket concerns its own workspace; a session assignee's workspace is where the work is.
-    let workspaceId = caller.kind === 'agent' ? caller.workspaceId : workspaceIdOf(req.workspaceId);
-    if (assignee?.kind === 'session') workspaceId = assignee.session.workspaceId;
     const source = caller.kind === 'ui' ? 'human' : caller.kind === 'system' || caller.kind === 'trigger' ? 'system' : 'agent';
     const reporter =
       caller.kind === 'ui'
@@ -1440,8 +1514,8 @@ export class Tickets {
       const r = this.#db
         .prepare(
           `INSERT INTO tickets (type, priority, priority_rank, status, summary, description, source, reporter_kind, reporter_ref, reporter_label, reporter_workspace,
-             assignee_kind, assignee_ref, workspace_id, created_at, updated_at)
-           VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             assignee_kind, assignee_ref, workspace_id, created_at, updated_at, bucket_key)
+           VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           type,
@@ -1459,10 +1533,11 @@ export class Tickets {
           this.#stored(workspaceId),
           at,
           at,
+          bucket.key,
         );
       const n = Number(r.lastInsertRowid);
       this.#setTags(n, tags);
-      this.#addEvent(n, 'created', w, null, { type, priority, tags, workspaceId, source });
+      this.#addEvent(n, 'created', w, null, { type, priority, tags, workspaceId, source, bucket: bucket.key });
       if (assignee)
         this.#addEvent(n, 'assigned', w, null, {
           from: null,
@@ -1707,8 +1782,9 @@ export class Tickets {
     const types = Array.isArray(req.types) ? req.types.map((t) => oneOf(t, TICKET_TYPES, 'types')) : [];
     let wantedNumber: number | null = null;
     if (req.id !== undefined) {
-      wantedNumber = parseTicketId(String(req.id));
-      if (wantedNumber === null) throw invalid('id', 'Not a ticket id.');
+      if (!parseTicketRef(String(req.id))) throw invalid('id', 'Not a ticket id.');
+      // A well-formed key that names no ticket claims nothing (-1 matches no row).
+      wantedNumber = this.#numberOf(String(req.id)) ?? -1;
     }
     const claimed = this.#tx(() => {
       const where = [
@@ -1756,6 +1832,167 @@ export class Tickets {
     this.onChange?.();
   }
 
+  /* ---------- Buckets (T-1098): a project of tickets with its own id prefix and number counter ---------- */
+
+  #bucketRow(key: string): BucketRow | undefined {
+    return this.#db.prepare('SELECT * FROM ticket_buckets WHERE key = ?').get(key) as unknown as BucketRow | undefined;
+  }
+
+  /** A bucket's default workspace as the key the portal speaks (stored as the stable id, like a ticket's). */
+  #bucketWorkspace(b: BucketRow): string | null {
+    if (b.default_workspace_id === null) return null;
+    return this.#refs ? this.#refs.keyOf(b.default_workspace_id) : b.default_workspace_id;
+  }
+
+  /** FR9 for buckets: an agent files in, lists and reads only the buckets of its own workspace and those with no default workspace. */
+  #bucketOpenTo(caller: Caller, b: BucketRow): boolean {
+    if (caller.kind !== 'agent' || b.default_workspace_id === null) return true;
+    return this.#refs ? this.#refs.storedForms(caller.workspaceId).includes(b.default_workspace_id) : b.default_workspace_id === caller.workspaceId;
+  }
+
+  /**
+   * The bucket a new ticket goes in: the one named (refused as not found when it does not exist or is not the agent's); else the one bucket whose
+   * default workspace is the ticket's workspace; else the bucket of the ticket the calling session, then its lead, works on; else PILOT.
+   */
+  #bucketFor(caller: Caller, w: Writer, raw: unknown, workspaceId: string | null): BucketRow {
+    if (raw !== undefined && raw !== null && raw !== '') {
+      if (typeof raw !== 'string') throw invalid('bucket', 'A bucket is its key, like KONF.');
+      const b = this.#bucketRow(raw.trim().toUpperCase());
+      if (!b || !this.#bucketOpenTo(caller, b)) throw noBucket();
+      return b;
+    }
+    if (workspaceId) {
+      const one = this.#inWorkspace('default_workspace_id', workspaceId);
+      const rows = this.#db.prepare(`SELECT * FROM ticket_buckets WHERE ${one.sql} ORDER BY key LIMIT 2`).all(...one.args) as unknown as BucketRow[];
+      if (rows.length === 1) return rows[0]!;
+    }
+    const s = w.session;
+    const lead = s?.parentId ? this.sessions.get(s.parentId) : null;
+    for (const x of [s, lead]) {
+      const n = x?.ticketId ? this.#numberOf(x.ticketId) : null;
+      const row = n === null ? undefined : this.#row(n);
+      const b = row ? this.#bucketRow(row.bucket_key) : undefined;
+      if (b && this.#bucketOpenTo(caller, b)) return b;
+    }
+    const fallback = this.#bucketRow(TICKET_DEFAULT_BUCKET);
+    if (!fallback) throw noBucket();
+    return fallback;
+  }
+
+  #bucketView(b: BucketRow, open: number): TicketBucket {
+    let defaultTags: string[] = [];
+    try {
+      defaultTags = JSON.parse(b.default_tags) as string[];
+    } catch {
+      // an unreadable list reads as none
+    }
+    return {
+      key: b.key,
+      name: b.name,
+      description: b.description,
+      defaultWorkspaceId: this.#bucketWorkspace(b),
+      defaultTags,
+      vaultId: b.vault_id,
+      nextNumber: b.next_number,
+      open,
+      createdAt: b.created_at,
+      updatedAt: b.updated_at,
+    };
+  }
+
+  #openIn(key: string): number {
+    return (this.#db.prepare(`SELECT count(*) AS n FROM tickets WHERE bucket_key = ? AND status IN (${OPEN_SQL})`).get(key) as { n: number }).n;
+  }
+
+  /** Every bucket the caller may file in (an agent: its workspace's and the open ones), by key. The routes filter by `view` on top. */
+  buckets(caller: Caller): TicketBucket[] {
+    const open = new Map(
+      (this.#db.prepare(`SELECT bucket_key AS k, count(*) AS n FROM tickets WHERE status IN (${OPEN_SQL}) GROUP BY bucket_key`).all() as { k: string; n: number }[]).map(
+        (r) => [r.k, r.n],
+      ),
+    );
+    return (this.#db.prepare('SELECT * FROM ticket_buckets ORDER BY key').all() as unknown as BucketRow[])
+      .filter((b) => this.#bucketOpenTo(caller, b))
+      .map((b) => this.#bucketView(b, open.get(b.key) ?? 0));
+  }
+
+  bucket(caller: Caller, key: string): TicketBucket {
+    const b = this.#bucketRow(String(key).trim().toUpperCase());
+    if (!b || !this.#bucketOpenTo(caller, b)) throw noBucket();
+    return this.#bucketView(b, this.#openIn(b.key));
+  }
+
+  /** The owner of a bucket, for the authorization seam's resolver; null when there is none. */
+  bucketOwner(key: string): string | null {
+    const r = this.#db.prepare('SELECT owner_id FROM ticket_buckets WHERE key = ?').get(String(key).trim().toUpperCase()) as { owner_id: string } | undefined;
+    return r ? r.owner_id : null;
+  }
+
+  /** Making and changing buckets: a person or an admin token, never an agent (its tickets would pick their own project). */
+  #assertBucketAdmin(caller: Caller) {
+    if (caller.kind === 'ui' || caller.kind === 'system') return;
+    if (caller.kind === 'token' && caller.scope === 'admin' && !caller.manager) return;
+    throw new AppError('FORBIDDEN', 'Only a person or an admin token makes or changes a bucket.');
+  }
+
+  #bucketFields(req: UpdateTicketBucketRequest) {
+    const out: { name?: string; description?: string; workspace?: string | null; tags?: string[]; vault?: string | null } = {};
+    if (req.name !== undefined) out.name = cleanLine(req.name, 'name', 60);
+    if (req.description !== undefined) out.description = cleanMarkdown(req.description, 'description', 2_000);
+    if (req.defaultWorkspaceId !== undefined) out.workspace = workspaceIdOf(req.defaultWorkspaceId);
+    if (req.defaultTags !== undefined) out.tags = cleanTags(req.defaultTags);
+    if (req.vaultId !== undefined) {
+      const v = req.vaultId;
+      if (v !== null && v !== '' && (typeof v !== 'string' || !/^[A-Za-z0-9._:-]{1,80}$/.test(v))) throw invalid('vaultId', 'A vault id, or empty for none.');
+      out.vault = v ? v : null;
+    }
+    return out;
+  }
+
+  createBucket(caller: Caller, req: Partial<CreateTicketBucketRequest>, opts: { ownerId?: string } = {}): TicketBucket {
+    this.#assertBucketAdmin(caller);
+    const key = typeof req.key === 'string' ? req.key.trim().toUpperCase() : '';
+    if (!TICKET_BUCKET_KEY.test(key)) throw invalid('key', 'A key is 2 to 6 capital letters, like KONF.');
+    const f = this.#bucketFields({ ...req, name: req.name ?? undefined });
+    if (f.name === undefined) throw invalid('name', 'Required.');
+    const at = this.#now().toISOString();
+    this.#tx(() => {
+      if (this.#bucketRow(key)) throw new AppError('CONFLICT', `There is a bucket ${key} already.`);
+      this.#db
+        .prepare(
+          `INSERT INTO ticket_buckets (key, name, description, default_workspace_id, default_tags, vault_id, owner_id, created_by, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(key, f.name!, f.description ?? '', this.#stored(f.workspace ?? null), JSON.stringify(f.tags ?? []), f.vault ?? null, opts.ownerId ?? FOUNDING_USER_ID, opts.ownerId ?? FOUNDING_USER_ID, at, at);
+    });
+    this.onChange?.();
+    return this.bucket(caller, key);
+  }
+
+  updateBucket(caller: Caller, key: string, req: UpdateTicketBucketRequest): TicketBucket {
+    this.#assertBucketAdmin(caller);
+    const b = this.#bucketRow(String(key).trim().toUpperCase());
+    if (!b) throw noBucket();
+    const f = this.#bucketFields(req);
+    this.#tx(() => {
+      this.#db
+        .prepare(
+          `UPDATE ticket_buckets SET name = ?, description = ?, default_workspace_id = ?, default_tags = ?, vault_id = ?, updated_at = ? WHERE key = ?`,
+        )
+        .run(
+          f.name ?? b.name,
+          f.description ?? b.description,
+          f.workspace !== undefined ? this.#stored(f.workspace) : b.default_workspace_id,
+          f.tags !== undefined ? JSON.stringify(f.tags) : b.default_tags,
+          f.vault !== undefined ? f.vault : b.vault_id,
+          this.#now().toISOString(),
+          b.key,
+        );
+    });
+    this.onChange?.();
+    return this.bucket(caller, b.key);
+  }
+
   /* ---------- CI (interface I10) ---------- */
 
   /**
@@ -1766,12 +2003,13 @@ export class Tickets {
     const ids = [refs.branch ? parseTicketBranch(refs.branch) : null, ...(refs.message ? parseTicketTrailers(refs.message) : [])].filter(
       (x): x is string => !!x,
     );
-    return [...new Set(ids)].filter((id) => this.exists(id));
+    // T-1098: a bucket key (`ticket/KONF-12-…`, `Ticket: KONF-12`) resolves to the stable id, so CI keeps speaking T-<n>.
+    return [...new Set(ids.map((id) => this.resolve(id)).filter((id): id is string => !!id))];
   }
 
   /** The checks CI attached to a ticket. */
   checks(id: string): TicketCheck[] {
-    const n = parseTicketId(id);
+    const n = this.#numberOf(id);
     return n !== null && this.#row(n) ? this.#checks(n) : [];
   }
 
@@ -1785,7 +2023,7 @@ export class Tickets {
     check: { name: string; state: TicketCheckState; runId?: string | null; commit?: string | null; link?: string | null },
     by: { actor: string; label?: string },
   ): TicketCheck | null {
-    const n = parseTicketId(id);
+    const n = this.#numberOf(id);
     const row = n === null ? undefined : this.#row(n);
     if (!row) return null;
     if (!/^[a-z][a-z0-9-]{1,24}:[A-Za-z0-9._~:-]{1,80}$/.test(by.actor)) throw invalid('actor', 'An actor is like ci:<run id>.');
@@ -1836,7 +2074,7 @@ export class Tickets {
 
   /** A note on a ticket's timeline from another module (a run's summary, say). False when there is no such ticket. */
   note(id: string, text: string, by: { actor: string; label?: string }): boolean {
-    const n = parseTicketId(id);
+    const n = this.#numberOf(id);
     const row = n === null ? undefined : this.#row(n);
     if (!row) return false;
     if (!/^[a-z][a-z0-9-]{1,24}:[A-Za-z0-9._~:-]{1,80}$/.test(by.actor)) throw invalid('actor', 'An actor is like ci:<run id>.');

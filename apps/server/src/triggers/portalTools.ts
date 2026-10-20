@@ -7,6 +7,7 @@ import { actorOfPrincipal } from '../authz/seam.js';
 import type { PlatformOwner } from '../platform/owner.js';
 import { registerPortalTool, z } from '../portalmcp/registry.js';
 import type { TriggerService } from './service.js';
+import { ticketKeyField } from '../tickets/keys.js';
 
 export function registerTriggerTools(d: { service: TriggerService; owner: PlatformOwner }): void {
   const mine = (userId: string | null) => (userId ? d.service.store.list(userId).filter((t) => d.owner.can(userId, 'view', { type: 'trigger', id: t.id })) : []);
@@ -44,7 +45,7 @@ export function registerTriggerTools(d: { service: TriggerService; owner: Platfo
   registerPortalTool({
     name: 'trigger_runs',
     title: 'Trigger runs',
-    description: 'Recent runs of the token owner’s triggers (or of one, by trigger_id): state, reason code, event type, repository, branch, number, the session and ticket ids, and the estimated cost. No event text.',
+    description: 'Recent runs of the token owner’s triggers (or of one, by trigger_id): state, reason code, event type, repository, branch, number, the session and ticket ids, and the estimated cost. No event text. Tickets show as ticket_id and ticket_key.',
     scope: 'read',
     hints: { readOnly: true },
     input: z.object({ trigger_id: z.string().max(40).optional(), limit: z.number().int().min(1).max(100).optional() }),
@@ -70,6 +71,7 @@ export function registerTriggerTools(d: { service: TriggerService; owner: Platfo
           number: r.event.number,
           session_id: r.sessionId,
           ticket_id: r.ticketId,
+          ...ticketKeyField(r.ticketId),
           cost_usd_estimate: r.costUsd.value,
         })),
       };

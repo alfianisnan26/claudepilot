@@ -3,7 +3,6 @@ import { useEffect, useState } from 'react';
 import { chatApi } from '@/features/chat/api';
 import { ticketsApi } from '@/features/tickets/api';
 import { api } from '@/lib/api';
-import { ticketByNumber } from './search';
 
 /** What the palette searches besides the pages: sessions and workspaces (asked for when it opens) and tickets (asked for as you type). */
 export interface PaletteData {
@@ -40,7 +39,8 @@ export function usePaletteData(query: string): PaletteData {
   const [tickets, setTickets] = useState<PaletteData['tickets']>(null);
   const q = query.trim();
   useEffect(() => {
-    if (q.length < 2 || ticketByNumber(q)) {
+    // T-1098: a ticket reference (T-12, KONF-3) is searched too: the portal's search finds it by either id, and its summary titles the row.
+    if (q.length < 2) {
       setTickets(null);
       return;
     }

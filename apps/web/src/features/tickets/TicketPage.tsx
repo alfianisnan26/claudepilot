@@ -27,7 +27,7 @@ import { formatDateTime, timeAgo } from '@/lib/format';
 import { useLive } from '@/lib/live';
 import { ticketsApi } from './api';
 import { Attachments, fileSize } from './Attachments';
-import { ORPHAN_TITLE, SESSION_STATE_LABEL, actorName, fallbackSentence } from './labels';
+import { ORPHAN_TITLE, SESSION_STATE_LABEL, actorName, fallbackSentence, ticketLabel } from './labels';
 import { AssigneeChip, CheckChips, PriorityMark, StatusBadge, TagList, TicketFlags, TypeBadge } from './parts';
 import { AssignDialog, CloseDialog, EditTicketDialog, StartSessionDialog, TagsDialog, TicketBumpDialog } from './TicketDialogs';
 
@@ -107,7 +107,9 @@ export function TicketPage() {
       <header className={split ? 'mb-5 pr-12' : 'mb-5'}>
         <p className="flex items-center gap-2 text-[13px] font-semibold text-muted">
           <PriorityMark priority={t.priority} />
-          <span className="tabular-nums">{t.id}</span>
+          <span className="tabular-nums">{ticketLabel(t)}</span>
+          {/* T-1098: the stable id stays a permanent alias (trailers, old links). */}
+          {t.key && t.key !== t.id && <span className="font-normal tabular-nums">{t.id}</span>}
           <span aria-hidden="true">·</span>
           <span title={formatDateTime(t.createdAt)}>Created {timeAgo(t.createdAt)}</span>
         </p>
@@ -254,13 +256,13 @@ export function TicketPage() {
       <EditTicketDialog ticket={dialog === 'edit' ? t : null} onClose={() => setDialog(null)} onSaved={done('Saved')} />
       <TagsDialog ticket={dialog === 'tags' ? t : null} onClose={() => setDialog(null)} onSaved={done('Tags saved')} />
       <AssignDialog ticket={dialog === 'assign' ? t : null} onClose={() => setDialog(null)} onSaved={done('Assigned')} />
-      <CloseDialog ticket={dialog === 'close' ? t : null} onClose={() => setDialog(null)} onClosed={done(`${t.id} closed`)} />
+      <CloseDialog ticket={dialog === 'close' ? t : null} onClose={() => setDialog(null)} onClosed={done(`${ticketLabel(t)} closed`)} />
       <StartSessionDialog
         ticket={dialog === 'start' ? t : null}
         onClose={() => setDialog(null)}
         onStarted={(r) => {
           setDialog(null);
-          toast(`Agent started for ${t.id}`);
+          toast(`Agent started for ${ticketLabel(t)}`);
           navigate(`/admin/sessions/${r.session.id}`);
         }}
       />
@@ -275,7 +277,7 @@ export function TicketPage() {
       />
       <ConfirmDialog
         open={dialog === 'delete'}
-        title={`Delete ${t.id}?`}
+        title={`Delete ${ticketLabel(t)}?`}
         description="Removes it and its timeline for good."
         confirmLabel="Delete"
         loading={busy}
@@ -283,7 +285,7 @@ export function TicketPage() {
           setBusy(true);
           try {
             await ticketsApi.remove(t.id);
-            toast(`${t.id} deleted`);
+            toast(`${ticketLabel(t)} deleted`);
             navigate('/admin/tickets');
           } catch (e) {
             toast(errorText(e, 'Couldn’t delete it.'), 'error');

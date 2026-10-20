@@ -6,7 +6,10 @@ import {
   type BumpTarget,
   type CloseTicketRequest,
   type CommentTicketRequest,
+  type CreateTicketBucketRequest,
   type CreateTicketRequest,
+  type TicketBucket,
+  type UpdateTicketBucketRequest,
   type StartTicketSessionRequest,
   type StartTicketSessionResult,
   type TicketBumped,
@@ -47,6 +50,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 /** `TicketFilter` as a query string. */
 function query(f: TicketFilter): string {
   const q = new URLSearchParams();
+  if (f.bucket) q.set('bucket', f.bucket);
   if (f.status?.length) q.set('status', f.status.join(','));
   if (f.priority?.length) q.set('priority', f.priority.join(','));
   if (f.type?.length) q.set('type', f.type.join(','));
@@ -75,7 +79,10 @@ export const ticketsApi = {
   startSession: (id: string, body: StartTicketSessionRequest) => request<StartTicketSessionResult>('POST', TICKET_API.session(id), body),
   opening: (id: string) => request<{ text: string }>('GET', TICKET_API.opening(id)),
   tags: () => request<TicketTag[]>('GET', TICKET_API.tags),
-  brief: (id: string) => request<{ id: string; summary: string; status: string }>('GET', TICKET_API.brief(id)),
+  buckets: () => request<TicketBucket[]>('GET', TICKET_API.buckets),
+  createBucket: (body: CreateTicketBucketRequest) => request<TicketBucket>('POST', TICKET_API.buckets, body),
+  updateBucket: (key: string, body: UpdateTicketBucketRequest) => request<TicketBucket>('PATCH', TICKET_API.bucket(key), body),
+  brief: (id: string) => request<{ id: string; key?: string; summary: string; status: string }>('GET', TICKET_API.brief(id)),
   bumpTargets: (id: string) => request<BumpTarget[]>('GET', TICKET_API.bump(id)),
   bump: (id: string, body: BumpRequest) => request<TicketBumpResult>('POST', TICKET_API.bump(id), body),
   bumped: (sessionId: string) => request<TicketBumped[]>('GET', TICKET_API.bumped(sessionId)),
