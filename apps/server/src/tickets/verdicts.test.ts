@@ -420,3 +420,85 @@ test('migration 785: a ticket_verdicts table, a unique version, and the table it
     r.done();
   }
 });
+
+test('T-1652: a lead that handed the ticket to its own worker leads the work: its QA verifies; QA under the builder still does not', async () => {
+  const h = await ticketsHarness();
+  try {
+    const s = h.sessions;
+    s.add({ id: 'orch', workspaceId: WS, agent: null });
+    s.add({ id: 'lead', workspaceId: WS, agent: null, parentId: 'orch' });
+    const t = h.tickets.create(UI, { summary: 'lead hands to its worker', workspaceId: WS });
+    h.tickets.update(UI, t.id, { assignee: { kind: 'session', sessionId: 'orch' }, status: 'in_progress' });
+    h.tickets.update(UI, t.id, { assignee: { kind: 'session', sessionId: 'lead' } });
+    s.add({ id: 'fe2', workspaceId: WS, agent: 'implementer', parentId: 'lead', ticketId: t.id });
+    h.tickets.update(UI, t.id, { assignee: { kind: 'session', sessionId: 'fe2' } });
+    const rec = (who: string) => h.tickets.recordVerdict(agent(WS, who), t.id, { role: 'qa', verdict: 'pass', commit: A });
+    const refused = (who: string, why: RegExp, msg: string) => assert.throws(() => rec(who), (e: any) => e.code === 'FORBIDDEN' && why.test(e.message), msg);
+
+    s.add({ id: 'qaLead', workspaceId: WS, agent: 'qa-verifier', parentId: 'lead' });
+    assert.equal(rec('qaLead').actor, 'session:qaLead', 'the past-holder lead’s QA child');
+    s.add({ id: 'qaOrch', workspaceId: WS, agent: 'qa-verifier', parentId: 'orch' });
+    assert.equal(rec('qaOrch').actor, 'session:qaOrch', 'a past holder further up the parent chain leads too');
+
+    s.add({ id: 'qaFe', workspaceId: WS, agent: 'qa-verifier', parentId: 'fe2' });
+    refused('qaFe', /descends from/, 'QA under the builder');
+    s.add({ id: 'qaDeep', workspaceId: WS, agent: 'qa-verifier', parentId: 'qaFe' });
+    refused('qaDeep', /descends from/, 'QA under the builder, two levels down');
+    refused('fe2', /./, 'the builder itself (not a QA agent either)');
+    refused('lead', /./, 'the lead itself is no verifier');
+    s.sessions.get('fe2')!.agent = 'qa-verifier';
+    refused('fe2', /author of this ticket/, 'a builder named as QA is a self-verdict');
+    s.sessions.get('fe2')!.agent = 'implementer';
+    assert.equal(h.tickets.verdicts(UI, t.id).length, 2);
+  } finally {
+    h.done();
+  }
+});
+
+test('T-1652: a past holder started on the ticket is still an author: its QA child, and its continuation’s, are refused', async () => {
+  const h = await ticketsHarness();
+  try {
+    const s = h.sessions;
+    const t = h.tickets.create(UI, { summary: 'coding lead hands over', workspaceId: WS });
+    // The lead was started on the ticket and coded, then handed it to a worker of its own.
+    s.add({ id: 'lead', workspaceId: WS, agent: 'implementer', ticketId: t.id });
+    h.tickets.update(UI, t.id, { assignee: { kind: 'session', sessionId: 'lead' }, status: 'in_progress' });
+    s.add({ id: 'w', workspaceId: WS, agent: 'implementer', parentId: 'lead', ticketId: t.id });
+    h.tickets.update(UI, t.id, { assignee: { kind: 'session', sessionId: 'w' } });
+    const rec = (who: string) => h.tickets.recordVerdict(agent(WS, who), t.id, { role: 'qa', verdict: 'pass', commit: A });
+    s.add({ id: 'qaLead', workspaceId: WS, agent: 'qa-verifier', parentId: 'lead' });
+    assert.throws(() => rec('qaLead'), (e: any) => e.code === 'FORBIDDEN' && /descends from/.test(e.message), 'the coding lead’s QA');
+
+    // A past holder whose predecessor was started on the ticket: the line is the author's, refused.
+    const t2 = h.tickets.create(UI, { summary: 'continued coder hands over', workspaceId: WS });
+    s.add({ id: 'coderOld', workspaceId: WS, agent: 'implementer', state: 'ended', ticketId: t2.id });
+    s.add({ id: 'coder', workspaceId: WS, agent: null, continuedFrom: 'coderOld' });
+    h.tickets.update(UI, t2.id, { assignee: { kind: 'session', sessionId: 'coder' }, status: 'in_progress' });
+    s.add({ id: 'w2', workspaceId: WS, agent: 'implementer', parentId: 'coder', ticketId: t2.id });
+    h.tickets.update(UI, t2.id, { assignee: { kind: 'session', sessionId: 'w2' } });
+    s.add({ id: 'qaCoder', workspaceId: WS, agent: 'qa-verifier', parentId: 'coder' });
+    assert.throws(() => h.tickets.recordVerdict(agent(WS, 'qaCoder'), t2.id, { role: 'qa', verdict: 'pass', commit: A }), (e: any) => e.code === 'FORBIDDEN' && /descends from/.test(e.message));
+
+    // A past holder that is not an ancestor of the holder (a sibling it was handed to) is no lead: its QA is refused.
+    const t3 = h.tickets.create(UI, { summary: 'sideways hand-off', workspaceId: WS });
+    s.add({ id: 'peer', workspaceId: WS, agent: null });
+    h.tickets.update(UI, t3.id, { assignee: { kind: 'session', sessionId: 'peer' }, status: 'in_progress' });
+    s.add({ id: 'other', workspaceId: WS, agent: null });
+    s.add({ id: 'w3', workspaceId: WS, agent: 'implementer', parentId: 'other', ticketId: t3.id });
+    h.tickets.update(UI, t3.id, { assignee: { kind: 'session', sessionId: 'w3' } });
+    s.add({ id: 'qaPeer', workspaceId: WS, agent: 'qa-verifier', parentId: 'peer' });
+    assert.throws(() => h.tickets.recordVerdict(agent(WS, 'qaPeer'), t3.id, { role: 'qa', verdict: 'pass', commit: A }), (e: any) => e.code === 'FORBIDDEN' && /descends from/.test(e.message));
+
+    // A gap in the parent chain (a session nobody can look up) fails closed.
+    const t4 = h.tickets.create(UI, { summary: 'ghost between', workspaceId: WS });
+    s.add({ id: 'top', workspaceId: WS, agent: null });
+    h.tickets.update(UI, t4.id, { assignee: { kind: 'session', sessionId: 'top' }, status: 'in_progress' });
+    s.add({ id: 'w4', workspaceId: WS, agent: 'implementer', parentId: 'ghost', ticketId: t4.id });
+    h.tickets.update(UI, t4.id, { assignee: { kind: 'session', sessionId: 'w4' } });
+    s.add({ id: 'qaTop', workspaceId: WS, agent: 'qa-verifier', parentId: 'top' });
+    assert.throws(() => h.tickets.recordVerdict(agent(WS, 'qaTop'), t4.id, { role: 'qa', verdict: 'pass', commit: A }), (e: any) => e.code === 'FORBIDDEN');
+    for (const id of [t.id, t2.id, t3.id, t4.id]) assert.equal(h.tickets.verdicts(UI, id).length, 0);
+  } finally {
+    h.done();
+  }
+});

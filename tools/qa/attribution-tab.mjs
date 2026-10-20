@@ -4,6 +4,7 @@
 //   - A2: no horizontal scroll (document and the tab's own content: scrollWidth <= clientWidth + 1);
 //   - A5: every visible control (button, link, tab, segmented option) is at least 44 px tall and wide AT 390 PX (a FAIL). At 1280 px the same
 //     measure only warns (the lead's decision on T-449: the rule binds at the touch width). Inline InfoTips are counted, not failed;
+//   - by session, the lead's workers fold under it ("4 agents", folded by default, the lead listed once; T-377, T-955) and open on a tap;
 //   - Group by Ticket shows its rows, with "via lead" on the lead-fed tickets and an InfoTip that explains it;
 //   - the Done filter exists only under Ticket, switches to done tickets only (the open ticket and the unknown one drop out), shows the
 //     "Done, per ticket" line, and returns to All;
@@ -126,7 +127,18 @@ try {
 
       // Session view (the default).
       let s = await m(b);
-      check(`${tag}: session view lists rows`, s.rows >= 5, `rows=${s.rows}`);
+      // T-377: the lead's four workers fold under it (folded by default, "4 agents"); lead, unknown-ticket and solo are the top level.
+      check(`${tag}: session view lists the top-level rows`, s.rows >= 3, `rows=${s.rows}`);
+      const fold = `document.querySelector('[data-attr-fold="qaattr-lead"]')`;
+      const folded = await b.eval(`(() => { const e = ${fold}; return e ? e.getAttribute('aria-expanded') + ' ' + e.innerText.trim() : null; })()`);
+      check(`${tag}: session view: the lead's workers are folded under it with a count`, folded === 'false 4 agents', JSON.stringify(folded));
+      check(`${tag}: session view: the lead is listed once`, (s.text.match(/QA attribution lead/g) ?? []).length === 1);
+      check(`${tag}: session view: a worker is hidden while folded`, !/QA attribution worker one/.test(s.text));
+      await b.eval(`${fold}?.click()`);
+      await sleep(300);
+      const opened = await m(b);
+      check(`${tag}: session view: opening the fold shows the four workers`, opened.rows === s.rows + 4 && /QA attribution worker one/.test(opened.text), `rows=${s.rows}->${opened.rows}`);
+      s = opened;
       check(`${tag}: session view: the Done filter is absent (only under Ticket)`, !s.hasDone);
       check(`${tag}: session view: no sideways scroll`, noScroll(s), JSON.stringify([s.docScroll, s.docClient, s.rootScroll, s.rootClient]));
       sizes(`${tag}: session view: controls >= 44 px`, size.mobile, s.small);

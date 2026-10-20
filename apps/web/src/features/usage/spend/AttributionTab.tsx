@@ -1,7 +1,8 @@
 import { LoadError, RowsSkeleton, Segmented } from '@isnanme/ui';
 import type { AttributionBy, AttributionRow, ChatUsageRange } from '@portal/contracts';
 import { ATTRIBUTION_LEAD_BASIS, reasonText } from '@portal/contracts';
-import { useState } from 'react';
+import { ChevronRight } from 'lucide-react';
+import { useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { Card } from '@/components/Card';
 import { InfoTip } from '@/components/InfoTip';
@@ -11,7 +12,7 @@ import { ExportMenu } from '../ExportMenu';
 import { DOLLARS_FORMULA } from '../figure';
 import { RANGE_OPTIONS, saveRange, savedRange } from '../range';
 import { usageSpendApi } from './api';
-import { BY_OPTIONS, countsLine, coverageNote, maxTotal, rowName, sessionLine, shareText, ticketLine } from './attribution';
+import { ATTRIBUTION_PAGE, BY_OPTIONS, countsLine, coverageNote, foldRows, maxTotal, nestedText, pageItems, rowName, sessionLine, shareText, ticketLine, type AttributionItem } from './attribution';
 import { NotAvailable } from './shared';
 import { useLoad } from './useLoad';
 
@@ -36,7 +37,7 @@ function RowBar({ value, max, claudeId }: { value: number; max: number; claudeId
   );
 }
 
-function Row({ r, max, indent }: { r: AttributionRow; max: number; indent: number }) {
+function Row({ r, max, indent, children }: { r: AttributionRow; max: number; indent: number; children?: ReactNode }) {
   const line = sessionLine(r);
   const tk = ticketLine(r);
   const name = rowName(r);
@@ -79,6 +80,7 @@ function Row({ r, max, indent }: { r: AttributionRow; max: number; indent: numbe
                 </span>
               )}
               {line.own && <span className="tabular-nums">{line.own}</span>}
+              {line.continued && <span>continued</span>}
               {line.deleted && <span>deleted</span>}
             </>
           ) : tk ? (
@@ -99,7 +101,33 @@ function Row({ r, max, indent }: { r: AttributionRow; max: number; indent: numbe
         </div>
         <RowBar value={r.total.costUsd} max={max} claudeId={line?.claudeId} />
       </div>
+      {children}
     </li>
+  );
+}
+
+/** A top-level row and, folded under it by default, the agents it started (T-377): the toggle says how many. */
+function Item({ item, max }: { item: AttributionItem; max: number }) {
+  const [open, setOpen] = useState(false);
+  const n = item.nested.length;
+  return (
+    <>
+      <Row r={item.row} max={max} indent={0}>
+        {n > 0 && (
+          <button
+            type="button"
+            aria-expanded={open}
+            onClick={() => setOpen((o) => !o)}
+            data-attr-fold={item.row.key}
+            className="press -mb-3 mt-0.5 flex min-h-11 w-full items-center gap-1 text-left text-[12.5px] text-muted hover:text-ink"
+          >
+            <ChevronRight className={`size-4 shrink-0 transition-transform motion-reduce:transition-none ${open ? 'rotate-90' : ''}`} aria-hidden="true" />
+            {nestedText(n)}
+          </button>
+        )}
+      </Row>
+      {open && item.nested.map((r) => <Row key={`${r.state}|${r.key}`} r={r} max={max} indent={r.session?.depth ?? 1} />)}
+    </>
   );
 }
 
@@ -113,8 +141,14 @@ export function AttributionTab() {
   const [by, setBy] = useState<AttributionBy>('session');
   const [done, setDone] = useState<'all' | 'done'>('all');
   const doneOnly = by === 'ticket' && done === 'done';
-  const { data, failed, forbidden, loading, reload } = useLoad(() => usageSpendApi.attribution(by, range, doneOnly), `${by}|${range}|${doneOnly}`, { live: false });
+  const loadKey = `${by}|${range}|${doneOnly}`;
+  const { data, failed, forbidden, loading, reload } = useLoad(() => usageSpendApi.attribution(by, range, doneOnly), loadKey, { live: false });
   const max = data ? maxTotal(data.rows) : 0;
+  // T-377: the top ATTRIBUTION_PAGE rows, then Load more; back to the first page when the window or the grouping changes.
+  const [page, setPage] = useState({ at: loadKey, n: ATTRIBUTION_PAGE });
+  const shown = page.at === loadKey ? page.n : ATTRIBUTION_PAGE;
+  const folded = data ? foldRows(data.rows) : null;
+  const paged = folded ? pageItems(folded.items, shown) : null;
   const coverage = data ? coverageNote(data) : null;
   return (
     <>
@@ -199,12 +233,30 @@ export function AttributionTab() {
             </div>
           )}
           <ul className="divide-y divide-line">
-            {data.rows.map((r) => (
-              <Row key={`${r.state}|${r.key}`} r={r} max={max} indent={r.session?.depth ?? 0} />
+            {paged!.visible.map((item) => (
+              <Item key={`${item.row.state}|${item.row.key}`} item={item} max={max} />
             ))}
-            {data.more > 0 && (
+            {/* Others sums the rows past the server's limit: shown once every row before it is. */}
+            {paged!.left === 0 && folded!.others && <Row r={folded!.others} max={max} indent={0} />}
+            {paged!.left === 0 && data.more > 0 && (
               <li className="px-4 py-3 text-[13px] text-muted sm:px-5">
                 {data.more} more in Others
+              </li>
+            )}
+            {folded!.tail.map((r) => (
+              <Row key={`${r.state}|${r.key}`} r={r} max={max} indent={0} />
+            ))}
+            {paged!.left > 0 && (
+              <li>
+                <button
+                  type="button"
+                  data-attr-more=""
+                  onClick={() => setPage({ at: loadKey, n: shown + ATTRIBUTION_PAGE })}
+                  className="press flex min-h-11 w-full items-center justify-center gap-1.5 px-4 text-[13px] font-semibold text-ink-soft hover:text-ink"
+                >
+                  Load more
+                  <span className="font-normal text-muted tabular-nums">{paged!.left}</span>
+                </button>
               </li>
             )}
           </ul>

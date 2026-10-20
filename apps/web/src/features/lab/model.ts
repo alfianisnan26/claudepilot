@@ -49,3 +49,26 @@ export function figures(r: LabSummaryRow): Figure[] {
     { key: 'ci', label: '90 % interval', value: r.costPerAcceptedN ? fmtInterval(r.costPerAcceptedInterval) : UNAVAILABLE, basis: 'costPerAccepted' },
   ];
 }
+
+/** T-1852: the figures a phone row shows before it is opened; the rest wait behind the row's chevron. The 90 % interval sits under "Per accepted". */
+export const KEY_FIGURES = ['n', 'cost', 'fpy', 'cpa'] as const;
+
+/** The figures split for a row: the key ones, the rest, and the interval apart (it is shown under the cost per accepted slice, not as a column). */
+export function splitFigures(r: LabSummaryRow): { key: Figure[]; rest: Figure[]; interval: Figure } {
+  const all = figures(r);
+  const interval = all.find((f) => f.key === 'ci')!;
+  const shown = all.filter((f) => f.key !== 'ci');
+  const isKey = (f: Figure) => (KEY_FIGURES as readonly string[]).includes(f.key);
+  return { key: shown.filter(isKey), rest: shown.filter((f) => !isKey(f)), interval };
+}
+
+/** Rows grouped by their period, in the order the server sent them, so the date is said once per group, not on every row. */
+export function groupByPeriod(rows: LabSummaryRow[]): { period: string; rows: LabSummaryRow[] }[] {
+  const out: { period: string; rows: LabSummaryRow[] }[] = [];
+  for (const r of rows) {
+    const last = out[out.length - 1];
+    if (last && last.period === r.period) last.rows.push(r);
+    else out.push({ period: r.period, rows: [r] });
+  }
+  return out;
+}
