@@ -97,6 +97,12 @@ export function suggest(items: readonly PaletteItem[], opts: SearchOptions = {})
 /** "T-12", "t12" or "12" typed after a "T": a way to a ticket by its number, which the search over text would not find. */
 export function ticketByNumber(query: string): PaletteItem | null {
   const m = /^\s*t-?(\d{1,7})\s*$/i.exec(query);
+  // T-1098: a bucket key (KONF-12, any case) opens that ticket too; the server resolves it.
+  const k = m ? null : /^\s*([a-z]{2,6})-(\d{1,7})\s*$/i.exec(query);
+  if (k) {
+    const key = `${k[1]!.toUpperCase()}-${Number(k[2])}`;
+    return { id: `ticket:${key}`, kind: 'ticket', title: key, hint: 'Open ticket', to: `/admin/tickets/${key}`, matched: true };
+  }
   if (!m) return null;
   const id = `T-${Number(m[1])}`;
   return { id: `ticket:${id}`, kind: 'ticket', title: id, hint: 'Open ticket', to: `/admin/tickets/${id}`, matched: true };

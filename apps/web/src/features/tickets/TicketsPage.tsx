@@ -6,6 +6,7 @@ import {
   TICKET_TYPES,
   TICKET_TYPE_LABEL,
   isTicketClosed,
+  type TicketBucket,
   type TicketFilter,
   type TicketItem,
   type TicketPage as TicketPageData,
@@ -14,7 +15,7 @@ import {
   type TicketTag,
   type TicketType,
 } from '@portal/contracts';
-import { Bot, ChevronDown, ChevronsUp, Columns3, List, Plus, Search, Ticket as TicketIcon, X } from 'lucide-react';
+import { Bot, ChevronDown, ChevronsUp, Columns3, FolderKanban, List, Plus, Search, Ticket as TicketIcon, X } from 'lucide-react';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router';
 import { PageHeader } from '@/components/PageHeader';
@@ -22,7 +23,8 @@ import { usePanel, Workbench } from '@/components/Workbench';
 import { errorText } from '@/lib/api';
 import { useLive } from '@/lib/live';
 import { ticketsApi } from './api';
-import { BOARD_COLUMNS, ageShort, pageFilter } from './labels';
+import { BucketsDialog } from './Buckets';
+import { BOARD_COLUMNS, ageShort, isTicket, pageFilter, ticketLabel } from './labels';
 import { AssigneeChip, PriorityMark, StatusBadge, TagList, TicketFlags, TypeBadge } from './parts';
 import { NewTicketDialog, TicketBumpDialog } from './TicketDialogs';
 
@@ -103,6 +105,7 @@ function TicketQueue({ selected }: { selected: string | null }) {
   const priority = params.get('priority') as TicketPriority | null;
   const type = params.get('type') as TicketType | null;
   const tag = params.get('tag');
+  const bucket = params.get('bucket');
   const [text, setText] = useState(params.get('q') ?? '');
   const q = params.get('q') ?? '';
 
@@ -113,6 +116,12 @@ function TicketQueue({ selected }: { selected: string | null }) {
   const [failed, setFailed] = useState(false);
   const [creating, setCreating] = useState(false);
   const [bumping, setBumping] = useState<TicketItem | null>(null);
+  const [buckets, setBuckets] = useState<TicketBucket[]>([]);
+  const [editingBuckets, setEditingBuckets] = useState(false);
+  const loadBuckets = useCallback(() => {
+    ticketsApi.buckets().then(setBuckets, () => undefined);
+  }, []);
+  useEffect(() => loadBuckets(), [loadBuckets]);
 
   const set = (patch: Record<string, string | null>) =>
     setParams(
@@ -125,8 +134,8 @@ function TicketQueue({ selected }: { selected: string | null }) {
     );
 
   const filter = useMemo<TicketFilter>(
-    () => pageFilter({ view, scope, needs, queue, orphans, priority, type, tag, q }),
-    [view, scope, needs, queue, orphans, priority, type, tag, q],
+    () => pageFilter({ view, scope, needs, queue, orphans, priority, type, tag, q, bucket }),
+    [view, scope, needs, queue, orphans, priority, type, tag, q, bucket],
   );
 
   const seq = useRef(0);
@@ -184,7 +193,7 @@ function TicketQueue({ selected }: { selected: string | null }) {
   const move = async (t: TicketItem, status: TicketStatus) => {
     try {
       await ticketsApi.update(t.id, { status });
-      toast(`${t.id} moved to ${TICKET_STATUS_LABEL[status]}`);
+      toast(`${ticketLabel(t)} moved to ${TICKET_STATUS_LABEL[status]}`);
       await load();
     } catch (e) {
       toast(errorText(e, 'Couldn’t move it.'), 'error');
@@ -222,15 +231,15 @@ function TicketQueue({ selected }: { selected: string | null }) {
     (data.items.length === 0 ? (
       <EmptyState
         icon={<TicketIcon className="size-6" />}
-        title={q || needs || queue || orphans || priority || type || tag ? 'No match' : 'No tickets'}
-        action={q || needs || queue || orphans || priority || type || tag ? undefined : add}
+        title={q || needs || queue || orphans || priority || type || tag || bucket ? 'No match' : 'No tickets'}
+        action={q || needs || queue || orphans || priority || type || tag || bucket ? undefined : add}
       />
     ) : view === 'list' ? (
       // As many columns of rows as the panel has room for (one on a phone): a wide screen shows more tickets, not longer rows.
       <>
         <ul className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,28rem),1fr))] gap-2">
           {data.items.map((t) => (
-            <TicketRow key={t.id} ticket={t} selected={t.id === selected} onOpen={() => open(t.id)} onBump={() => setBumping(t)} />
+            <TicketRow key={t.id} ticket={t} selected={isTicket(t, selected)} onOpen={() => open(t.key ?? t.id)} onBump={() => setBumping(t)} />
           ))}
         </ul>
         {moreButton}
@@ -349,6 +358,24 @@ function TicketQueue({ selected }: { selected: string | null }) {
         </div>
 
         <div className="-mx-4 flex gap-2 overflow-x-auto px-4 [scrollbar-width:none] sm:mx-0 sm:flex-wrap sm:overflow-visible sm:px-0 [&::-webkit-scrollbar]:hidden">
+          {/* T-1098: one bucket (project) at a time; its count is its unfinished tickets. */}
+          {(buckets.length > 0 || bucket) && (
+            <FilterSelect
+              label="Bucket"
+              value={bucket ?? ''}
+              onChange={(v) => set({ bucket: v || null })}
+              options={buckets.map((b) => ({ value: b.key, label: `${b.key} · ${b.name} (${counts?.byBucket?.[b.key] ?? b.open})` }))}
+            />
+          )}
+          <button
+            type="button"
+            aria-label="Buckets"
+            title="Buckets"
+            onClick={() => setEditingBuckets(true)}
+            className="press flex size-9 shrink-0 items-center justify-center rounded-full border border-line bg-surface text-muted hover:text-ink tap:size-11"
+          >
+            <FolderKanban className="size-4" />
+          </button>
           <FilterSelect
             label="Priority"
             value={priority ?? ''}
@@ -389,18 +416,26 @@ function TicketQueue({ selected }: { selected: string | null }) {
         onClose={() => setBumping(null)}
         onBumped={(r) => {
           setBumping(null);
-          toast(`${r.ticket.id} bumped into ${r.session.title || 'the agent'}`);
+          toast(`${ticketLabel(r.ticket)} bumped into ${r.session.title || 'the agent'}`);
           void load();
         }}
       />
       <NewTicketDialog
         open={creating}
+        buckets={buckets}
+        bucket={bucket}
         onClose={() => setCreating(false)}
         onCreated={(t) => {
           setCreating(false);
-          toast(`${t.id} created`);
-          open(t.id);
+          toast(`${ticketLabel(t)} created`);
+          open(t.key ?? t.id);
         }}
+      />
+      <BucketsDialog
+        open={editingBuckets}
+        buckets={buckets}
+        onClose={() => setEditingBuckets(false)}
+        onChanged={loadBuckets}
       />
     </div>
   );
@@ -509,7 +544,9 @@ function TicketRow({
         <PriorityMark priority={t.priority} className="mt-0.5" />
         <span className="min-w-0 flex-1">
           <span className="flex items-baseline gap-2">
-            <span className="shrink-0 text-[12.5px] font-semibold text-muted tabular-nums">{t.id}</span>
+            <span className="shrink-0 text-[12.5px] font-semibold text-muted tabular-nums" title={t.id}>
+              {ticketLabel(t)}
+            </span>
             <span className="line-clamp-2 text-[14.5px] font-semibold [overflow-wrap:anywhere]">{t.summary}</span>
           </span>
           <span className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -529,7 +566,7 @@ function TicketRow({
       {open && (
         <div className={cn('absolute top-1.5 right-1.5', TAP_MENU)}>
           <Menu
-            label={`More for ${t.id}`}
+            label={`More for ${ticketLabel(t)}`}
             align="right"
             items={[{ label: 'Bump…', icon: <ChevronsUp className="size-4" />, onSelect: onBump }]}
           />
@@ -607,20 +644,22 @@ function Board({
             {cards.map((t) => (
               <li
                 key={t.id}
-                aria-current={t.id === selected ? 'true' : undefined}
-                className={cn('rounded-xl border bg-surface p-3', t.id === selected ? 'border-primary' : 'border-line')}
+                aria-current={isTicket(t, selected) ? 'true' : undefined}
+                className={cn('rounded-xl border bg-surface p-3', isTicket(t, selected) ? 'border-primary' : 'border-line')}
               >
                 <div className={cn('flex items-start gap-2', TAP_MENU)}>
                   <PriorityMark priority={t.priority} className="mt-px" />
                   <Link
-                    to={{ pathname: `/admin/tickets/${t.id}`, search }}
+                    to={{ pathname: `/admin/tickets/${t.key ?? t.id}`, search }}
                     className="min-w-0 flex-1 rounded-md focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden tap:min-h-11"
                   >
-                    <span className="text-[12px] font-semibold text-muted tabular-nums">{t.id}</span>
+                    <span className="text-[12px] font-semibold text-muted tabular-nums" title={t.id}>
+                      {ticketLabel(t)}
+                    </span>
                     <span className="line-clamp-3 block text-[13.5px] font-semibold [overflow-wrap:anywhere]">{t.summary}</span>
                   </Link>
                   <Menu
-                    label={`More for ${t.id}`}
+                    label={`More for ${ticketLabel(t)}`}
                     items={[
                       ...(isTicketClosed(t.status)
                         ? []

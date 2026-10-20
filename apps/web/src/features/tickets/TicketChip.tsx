@@ -11,10 +11,13 @@ import { ticketsApi } from './api';
  */
 export function TicketChip({ ticketId, compact, className }: { ticketId: string; compact?: boolean; className?: string }) {
   const [summary, setSummary] = useState<string | null>(null);
+  // T-1098: the bucket key once the brief says it (KONF-12); the stable id until then and from an older server.
+  const [label, setLabel] = useState(ticketId);
   useEffect(() => {
     let current = true;
+    setLabel(ticketId);
     ticketsApi.brief(ticketId).then(
-      (b) => current && setSummary(b.summary),
+      (b) => current && (setSummary(b.summary), setLabel(b.key ?? ticketId)),
       () => undefined,
     );
     return () => {
@@ -24,7 +27,7 @@ export function TicketChip({ ticketId, compact, className }: { ticketId: string;
   return (
     <Link
       to={`/admin/tickets/${ticketId}`}
-      title={summary ? `${ticketId}: ${summary}` : ticketId}
+      title={summary ? `${label}: ${summary}` : label}
       className={
         compact
           ? `inline-flex items-center gap-1 rounded align-bottom font-semibold text-ink-soft hover:text-ink focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden ${className ?? ''}`
@@ -32,7 +35,7 @@ export function TicketChip({ ticketId, compact, className }: { ticketId: string;
       }
     >
       <Ticket className={compact ? 'size-3' : 'size-3.5 shrink-0'} aria-hidden="true" />
-      <span className="tabular-nums">{ticketId}</span>
+      <span className="tabular-nums">{label}</span>
       {summary && !compact && <span className="min-w-0 truncate font-medium">· {summary}</span>}
     </Link>
   );

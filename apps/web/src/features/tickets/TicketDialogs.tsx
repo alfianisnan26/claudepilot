@@ -6,6 +6,7 @@ import {
   TICKET_TYPES,
   TICKET_TYPE_LABEL,
   type CreateTicketRequest,
+  type TicketBucket,
   type BumpMode,
   type StartTicketSessionResult,
   type TicketBumpResult,
@@ -77,8 +78,22 @@ function TagPicks({ value, onPick }: { value: string; onPick: (tag: string) => v
 const NO_WORKSPACE = '';
 
 /** Makes a ticket (tickets PRD §13): what it is, how urgent, and who takes it. */
-export function NewTicketDialog({ open, onClose, onCreated }: { open: boolean; onClose: () => void; onCreated: (t: TicketItem) => void }) {
+export function NewTicketDialog({
+  open,
+  onClose,
+  onCreated,
+  buckets = [],
+  bucket: initialBucket = null,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onCreated: (t: TicketItem) => void;
+  /** T-1098: the buckets to file in; empty picks itself (the workspace's bucket, else PILOT). */
+  buckets?: TicketBucket[];
+  bucket?: string | null;
+}) {
   const [summary, setSummary] = useState('');
+  const [bucket, setBucket] = useState('');
   const [description, setDescription] = useState('');
   const [type, setType] = useState<TicketType>('task');
   const [priority, setPriority] = useState<TicketPriority>('normal');
@@ -99,6 +114,7 @@ export function NewTicketDialog({ open, onClose, onCreated }: { open: boolean; o
     setTags('');
     setMine('queue');
     setWorkspaceId(NO_WORKSPACE);
+    setBucket(initialBucket ?? '');
     setError(null);
     setErrors({});
     let current = true;
@@ -109,7 +125,7 @@ export function NewTicketDialog({ open, onClose, onCreated }: { open: boolean; o
     return () => {
       current = false;
     };
-  }, [open]);
+  }, [open, initialBucket]);
 
   const submit = async () => {
     setSaving(true);
@@ -123,7 +139,9 @@ export function NewTicketDialog({ open, onClose, onCreated }: { open: boolean; o
         priority,
         tags: tagsOf(tags),
         assignee: mine === 'me' ? ({ kind: 'user', name: '' } satisfies TicketAssignee) : null,
-        workspaceId: workspaceId || null,
+        // Left out (not null) when none is picked, so the bucket's default workspace applies.
+        workspaceId: workspaceId || undefined,
+        bucket: bucket || undefined,
       };
       onCreated(await ticketsApi.create(body));
     } catch (e) {
@@ -147,6 +165,14 @@ export function NewTicketDialog({ open, onClose, onCreated }: { open: boolean; o
       dirty={!!summary.trim() || !!description.trim()}
     >
       <div className="flex flex-col gap-4">
+        {buckets.length > 0 && (
+          <Select
+            label="Bucket"
+            value={bucket}
+            onChange={setBucket}
+            options={[{ value: '', label: 'Auto' }, ...buckets.map((b) => ({ value: b.key, label: `${b.key} · ${b.name}` }))]}
+          />
+        )}
         <TextField
           label="Summary"
           placeholder="Fix the login redirect"
