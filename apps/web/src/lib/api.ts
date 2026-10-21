@@ -6,6 +6,8 @@ import {
   type RenameWorkspaceResult,
   ACCOUNT_API,
   API,
+  VSCODE_API,
+  type VscodePending,
   POOLS_API,
   WORKSPACE_API,
   type AssignPoolResult,
@@ -182,6 +184,9 @@ export const api = {
   delegatedSend: (id: string, text: string) => request<{ ok: true }>('POST', SESSION_GRANT_API.send(id), { text, uuid: crypto.randomUUID() }),
   delegatedRespond: (id: string, requestId: string, decision: 'allow' | 'deny') => request<{ ok: true }>('POST', SESSION_GRANT_API.respond(id), { requestId, decision }),
   delegatedStop: (id: string) => request<{ ok: true }>('POST', SESSION_GRANT_API.stop(id), {}),
+  // The VS Code extension's sign-in (T-1974): what a code asks for, and the person's answer.
+  vscodePending: (code: string) => request<VscodePending>('GET', `${VSCODE_API.pending}?code=${encodeURIComponent(code)}`),
+  vscodeAnswer: (userCode: string, decision: 'approve' | 'deny') => request<{ ok: true; decision: string }>('POST', VSCODE_API.approve, { userCode, decision }),
   logout: () => request<{ ok: true }>('POST', API.logout),
   adminState: () => request<AdminState>('GET', API.adminState),
   rotateCode: (body: RotateCodeRequest = {}) => request<AdminState>('POST', API.rotateCode, body),
