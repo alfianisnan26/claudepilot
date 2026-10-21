@@ -23,6 +23,7 @@ import { SettingsPage } from '@/features/settings/SettingsPage';
 import { POOL_TABS } from '@/features/pools/registry';
 import { TargetsPage } from '@/features/targets';
 import { WorkspacesPage } from '@/features/workspaces/WorkspacesPage';
+import { VscodePage } from '@/features/vscode/VscodePage';
 import { useAppUpdate } from '@/lib/appUpdate';
 import { MemberPage } from '@/features/auth/MemberPage';
 import { AuthProvider, useAuth } from '@/lib/auth';
@@ -136,6 +137,8 @@ function Pages() {
         <Route path="access" element={<AccessPage />} />
         <Route path="notifications" element={<NotificationsPage />} />
         <Route path="settings" element={<SettingsPage />} />
+        {/* The VS Code extension's sign-in: a person approves the code their editor shows (T-1974). */}
+        <Route path="vscode" element={<VscodePage />} />
       </Route>
       {/* Full screen, outside the app frame: the chat view owns the viewport (composer pinned, no tab bar). */}
       <Route

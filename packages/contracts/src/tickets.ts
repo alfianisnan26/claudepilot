@@ -414,7 +414,7 @@ export type TicketTimelineGranularity = (typeof TICKET_TIMELINE_GRANULARITIES)[n
 
 /**
  * The longest window a granularity may ask for (a minute scale over a long window would be thousands of columns the chart cannot show) and the
- * window it gets when `from` is absent. A longer one is a 400 that names the limit. The maxima are the ticket's (T-119): 24 hours, 14 days, 180 days.
+ * window it gets when `from` is absent. A longer one is a 422 (VALIDATION_FAILED) that names the limit; a bad cursor is a 400. The maxima are the ticket's (T-119): 24 hours, 14 days, 180 days.
  */
 export const TICKET_TIMELINE_LIMITS: Record<TicketTimelineGranularity, { maxWindowMs: number; defaultWindowMs: number }> = {
   minute: { maxWindowMs: 24 * 3_600_000, defaultWindowMs: 6 * 3_600_000 },

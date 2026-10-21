@@ -78,7 +78,7 @@ export function createTicketRoutes(tickets: Tickets): Hono {
 
   // T-1098: a ticket is reached through its bucket: view to read it, operate to change it. A bucket the person may not see answers like a
   // missing ticket (the same 404). Paths that are not a ticket id are left to their own routes.
-  const NOT_IDS = new Set(['tags', 'bumped', 'buckets', 'bucket-moves']);
+  const NOT_IDS = new Set(['tags', 'bumped', 'buckets', 'bucket-moves', 'timeline']);
   const guard = async (c: Context, next: () => Promise<void>) => {
     const ref = c.req.param('id') ?? '';
     if (!NOT_IDS.has(ref)) {
@@ -186,7 +186,7 @@ export function createTicketRoutes(tickets: Tickets): Hono {
   // Registered before `/:id`, which would read "tags" as an id.
   app.get('/tags', (c) => c.json(success(tickets.tags(UI))));
   // T-119: the tickets of a window with their flow, filtered like the list. Like the list: each row (and its bucket) passes `view` before it is
-  // shown; a bad window, scale or filter is a 400. The answer is cached for a few seconds per viewer (the service drops it on any ticket write).
+  // shown; a bad window, scale or filter is a 422, a bad cursor a 400. The answer is cached for a few seconds per viewer (the service drops it on any ticket write).
   app.get('/timeline', (c) => {
     const q = c.req.query();
     const { includeClosed: _i, orphan: _o, sort: _s, ...filter } = filterOf(q);

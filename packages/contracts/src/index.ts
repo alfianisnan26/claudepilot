@@ -48,3 +48,4 @@ export * from './sharing.js';
 export * from './teams.js';
 export * from './codespaces.js';
 export * from './schedules.js';
+export * from './vscode.js';

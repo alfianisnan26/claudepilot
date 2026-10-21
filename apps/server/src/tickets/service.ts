@@ -1028,8 +1028,8 @@ export class Tickets {
   /**
    * T-119: the tickets whose life overlaps a window, each with its flow ({@link ticketFlow}, computed on read from the stored events: nothing is
    * stored twice), its spans and markers cut to the ones that touch the window ({@link clipFlow}). Oldest number first, by keyset on the number,
-   * a page at a time (50 by default, 200 at most). The window is bounded by the granularity (a minute scale over a long window is a 400 that
-   * names the limit); `from` defaults to the granularity's default window before `to`, `to` to now. `filter` is the list's (bucket, status,
+   * a page at a time (50 by default, 200 at most). The window is bounded by the granularity: a window over the scale's limit (named in
+   * the message), an unknown scale, a bad time or filter is a 422 VALIDATION_FAILED, a bad or foreign cursor a 400 BAD_REQUEST; `from` defaults to the granularity's default window before `to`, `to` to now. `filter` is the list's (bucket, status,
    * priority, type, tag, assignee, workspace, query); closed tickets are in unless `status` says otherwise. `keep` is the caller's `view` check,
    * as in {@link listPage}: a hidden ticket is not shown, and the cursor (sealed, bound to the caller, the filter and the window) points at the
    * last row shown, or at the last scanned when the scan bound ends the page. The events of a page are read in ONE query (index

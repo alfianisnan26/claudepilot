@@ -14,7 +14,7 @@ Two lanes keep the integration branch shippable without slowing every slice: a q
 | Quick gate | Before every push of the integration branch | In the checkout, minutes: typecheck; web build and web tests when web code changed; only the server tests of the touched areas, or the whole suite when shared foundations changed (contracts, migrations, authorization, settings, platform). Documents only: passes at once. | `scripts/gate-quick.sh [base]` (base: the pushed integration head) |
 | Full gate | On the exact commit before every deploy, and periodically on the integration head | On a clean copy of the commit (fresh install, clean environment without credentials): install, typecheck, web build, the whole suite. One verdict line: `GATE-VERDICT: green` or `GATE-VERDICT: red: <why>`. | `scripts/gate.sh [commit]`, or as a cluster Job: `scripts/gate-job.sh <commit> [steps] [files]` (the commit must be pushed) |
 
-- **Who runs what.** An implementer runs its package's typecheck and its own test files, never a build or a gate. The integrator runs the quick gate. The release pipeline runs the full gate.
+- **Who runs what.** An implementer runs its package's typecheck and its own test files, never a build or a gate, and hands over only when the typecheck of every package is clean on its last pushed commit (the job runner, or in ClaudePilot `scripts/typecheck-worktree.sh <worktree>`). The integrator runs the quick gate. The release pipeline runs the full gate.
 - **Integration stays shippable.** A red full gate on the integration branch is fixed first, before any new slice is merged.
 - Run a gate on a clean copy, not your working tree: code that needs an uncommitted file passes in the tree and fails on the copy.
 

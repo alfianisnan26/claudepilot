@@ -1,0 +1,180 @@
+{
+  "name": "claudepilot",
+  "displayName": "ClaudePilot",
+  "description": "Your ClaudePilot agents, tickets, approvals and usage inside VS Code.",
+  "version": "0.1.0",
+  "publisher": "claudepilot",
+  "private": true,
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/alfianisnan26/claudepilot.git",
+    "directory": "tools/vscode"
+  },
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "extensionKind": [
+    "workspace",
+    "ui"
+  ],
+  "main": "./dist/extension.js",
+  "browser": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": true,
+      "description": "The extension reads nothing from the open folder: everything comes from the portal."
+    },
+    "virtualWorkspaces": true
+  },
+  "contributes": {
+    "configuration": {
+      "title": "ClaudePilot",
+      "properties": {
+        "claudepilot.portalUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:3400",
+          "markdownDescription": "The portal's address. `https://` for a real deployment; `http://` only for this machine (`localhost`, `127.0.0.1`, `::1`), such as a `kubectl port-forward`.",
+          "scope": "machine"
+        },
+        "claudepilot.pollSeconds": {
+          "type": "number",
+          "default": 15,
+          "minimum": 5,
+          "maximum": 300,
+          "description": "How often the views, the status bar and approvals are refreshed."
+        }
+      }
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "claudepilot",
+          "title": "ClaudePilot",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "claudepilot": [
+        {
+          "id": "claudepilot.agents",
+          "name": "Agents"
+        },
+        {
+          "id": "claudepilot.tickets",
+          "name": "Tickets"
+        },
+        {
+          "id": "claudepilot.workspaces",
+          "name": "Workspaces",
+          "visibility": "collapsed"
+        },
+        {
+          "type": "webview",
+          "id": "claudepilot.chat",
+          "name": "Chat"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "claudepilot.agents",
+        "contents": "Sign in to your portal to see your agents.\n[Sign In](command:claudepilot.signIn)",
+        "when": "!claudepilot.signedIn"
+      }
+    ],
+    "commands": [
+      {
+        "command": "claudepilot.signIn",
+        "title": "Sign In",
+        "category": "ClaudePilot"
+      },
+      {
+        "command": "claudepilot.signOut",
+        "title": "Sign Out",
+        "category": "ClaudePilot"
+      },
+      {
+        "command": "claudepilot.refresh",
+        "title": "Refresh",
+        "category": "ClaudePilot",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "claudepilot.openInPortal",
+        "title": "Open in Portal",
+        "category": "ClaudePilot",
+        "icon": "$(link-external)"
+      },
+      {
+        "command": "claudepilot.openChat",
+        "title": "Open Chat",
+        "category": "ClaudePilot",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "claudepilot.approvals",
+        "title": "Approvals",
+        "category": "ClaudePilot"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "claudepilot.refresh",
+          "when": "view =~ /^claudepilot\\.(agents|tickets|workspaces)$/",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "claudepilot.openChat",
+          "when": "view == claudepilot.agents && viewItem == agent",
+          "group": "inline"
+        },
+        {
+          "command": "claudepilot.openInPortal",
+          "when": "view =~ /^claudepilot\\./ && viewItem =~ /^(agent|ticket|workspace)$/",
+          "group": "inline"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "claudepilot.openInPortal",
+          "when": "false"
+        },
+        {
+          "command": "claudepilot.openChat",
+          "when": "false"
+        },
+        {
+          "command": "claudepilot.signOut",
+          "when": "claudepilot.signedIn"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "build": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --format=cjs --platform=neutral --main-fields=module,main --target=es2022 --external:vscode --sourcemap=external",
+    "typecheck": "tsc --noEmit -p . && tsc --noEmit -p tsconfig.test.json",
+    "test": "node --import tsx --test test/*.test.ts",
+    "test:web": "node scripts/test-web.mjs",
+    "package": "npm run build && vsce package --no-dependencies --skip-license --out claudepilot.vsix"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "@types/vscode": "1.95.0",
+    "@vscode/test-web": "0.0.81",
+    "@vscode/vsce": "3.9.2",
+    "esbuild": "0.25.12",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3"
+  }
+}

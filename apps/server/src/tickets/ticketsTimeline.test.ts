@@ -1,5 +1,5 @@
 // T-119 S1b: GET /api/tickets/timeline. The tickets whose life overlaps a window, each with its flow computed from the stored events; a window
-// bounded by the granularity (400 that names the limit); 50 rows by default, 200 at most, by keyset on the number; the list's filters; a ticket the caller may not
+// bounded by the granularity (a 422 that names the limit; a bad cursor is a 400); 50 rows by default, 200 at most, by keyset on the number; the list's filters; a ticket the caller may not
 // view is in no page and no cursor names it; an agent sees its workspace and the shared queue only. Time is the harness clock: no real clock.
 import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
@@ -125,7 +125,7 @@ test('waiting for a person shows as a span from the tag, and a marker', async ()
   }
 });
 
-test('guards: the window is bounded by the granularity, and every bad parameter is a 400 that says what to use', async () => {
+test('guards: the window is bounded by the granularity, and every bad parameter is a 422 that says what to use', async () => {
   const { h, clock } = await clocked();
   try {
     h.tickets.create(UI, { summary: 'One' });
@@ -141,7 +141,7 @@ test('guards: the window is bounded by the granularity, and every bad parameter 
     // The route: a minute scale over a week is refused with the reason, a coarser scale over the same window is fine.
     const week = `from=${encodeURIComponent(iso(T0 - 4 * DAY))}&to=${encodeURIComponent(iso(T0 + 3 * DAY))}`;
     const refused = await a.request(`/timeline?granularity=minute&${week}`);
-    assert.ok(refused.status >= 400 && refused.status < 500);
+    assert.equal(refused.status, 422);
     const body = JSON.stringify(await refused.json());
     assert.match(body, /too long for the minute scale/);
     assert.match(body, /24 hours/);

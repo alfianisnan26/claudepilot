@@ -34,6 +34,15 @@ interface Row {
   revoked_at: string | null;
   revoked_reason: string | null;
   default_workspace_id: string | null;
+  client?: string | null;
+  client_instance?: string | null;
+}
+
+/** T-1974: a token issued to a first-party client by its device flow, and the installation that signed in (replaced only by itself). */
+export interface ClientTokenOrigin {
+  client: 'vscode';
+  /** The installation's own id, or null when the client sent none (then nothing is replaced). */
+  instance: string | null;
 }
 
 declare module '@isnanme/core' {
@@ -92,6 +101,7 @@ function view(r: Row): PortalToken {
     revokedAt: r.revoked_at,
     revokedReason: r.revoked_reason,
     defaultWorkspaceId: r.default_workspace_id ?? null,
+    client: r.client === 'vscode' ? 'vscode' : null,
   };
 }
 
@@ -161,7 +171,7 @@ export class PortalTokens {
    * Makes a token. Returns the view, the secret (which exists nowhere else) and the ids of the tokens a `replace` revoked, for the
    * caller's audit rows.
    */
-  create(req: Partial<CreatePortalTokenRequest>, rules: CreateTokenRules = {}): { token: PortalToken; secret: string; replaced: string[] } {
+  create(req: Partial<CreatePortalTokenRequest>, rules: CreateTokenRules = {}, origin?: ClientTokenOrigin): { token: PortalToken; secret: string; replaced: string[] } {
     const db = this.#writable;
     if (!db) throw new AppError('SERVICE_UNAVAILABLE', 'The portal’s database is read-only right now.');
     const label = typeof req.label === 'string' ? req.label.trim() : '';
@@ -199,6 +209,14 @@ export class PortalTokens {
 
     const now = this.now();
     const replaced: string[] = [];
+    // A client's sign-in replaces the token of the same installation only (never another one that happens to carry the same name).
+    if (origin?.instance) {
+      const mine = this.#db
+        ?.prepare('SELECT id FROM pmcp_tokens WHERE client = ? AND client_instance = ? AND revoked_at IS NULL AND expires_at > ?')
+        .all(origin.client, origin.instance, now.toISOString()) as { id: string }[] | undefined;
+      const stmt = db.prepare('UPDATE pmcp_tokens SET revoked_at = ?, revoked_reason = ? WHERE id = ? AND revoked_at IS NULL');
+      for (const t of mine ?? []) if (stmt.run(now.toISOString(), 'replaced by a new sign-in from the same installation', t.id).changes > 0) replaced.push(t.id);
+    }
     if (req.replace) {
       const stmt = db.prepare('UPDATE pmcp_tokens SET revoked_at = ?, revoked_reason = ? WHERE id = ? AND revoked_at IS NULL');
       for (const t of live) if (stmt.run(now.toISOString(), 'replaced by a new token with this label', t.id).changes > 0) replaced.push(t.id);
@@ -206,9 +224,9 @@ export class PortalTokens {
     const secret = newTokenSecret();
     const id = `ptk_${randomBytes(6).toString('hex')}`;
     db.prepare(
-      `INSERT INTO pmcp_tokens (id, label, token_hash, last4, scope, purpose, created_at, expires_at)
-       VALUES (?, ?, ?, ?, ?, 'user', ?, ?)`,
-    ).run(id, name, hashToken(secret), secret.slice(-4), req.scope, now.toISOString(), new Date(now.getTime() + ttl).toISOString());
+      `INSERT INTO pmcp_tokens (id, label, token_hash, last4, scope, purpose, created_at, expires_at, client, client_instance)
+       VALUES (?, ?, ?, ?, ?, 'user', ?, ?, ?, ?)`,
+    ).run(id, name, hashToken(secret), secret.slice(-4), req.scope, now.toISOString(), new Date(now.getTime() + ttl).toISOString(), origin?.client ?? null, origin?.instance ?? null);
     this.onChange?.();
     return { token: this.get(id)!, secret, replaced };
   }

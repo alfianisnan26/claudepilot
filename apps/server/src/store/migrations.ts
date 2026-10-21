@@ -3729,6 +3729,21 @@ export const MIGRATIONS: Migration[] = [
     },
   },
   {
+    version: 49,
+    name: 'portal mcp: a token made for a first-party client (the VS Code extension) is marked as such (T-1974)',
+    up(db) {
+      // T-1974 security review R1: a token the VS Code device flow issues opens /api/vscode only, and /mcp refuses it. `purpose` can't take a
+      // new value without rebuilding the table (its CHECK), so the marker is a column of its own: NULL for every token made before and for
+      // Access -> MCP tokens; 'vscode' for the extension's. `client_instance` is the extension installation that signed in: a new sign-in
+      // replaces only that installation's token, never another client's with the same name.
+      db.exec(`
+        ALTER TABLE pmcp_tokens ADD COLUMN client TEXT CHECK (client IS NULL OR client IN ('vscode'));
+        ALTER TABLE pmcp_tokens ADD COLUMN client_instance TEXT;
+        CREATE INDEX pmcp_tokens_client ON pmcp_tokens (client, client_instance) WHERE client IS NOT NULL;
+      `);
+    },
+  },
+  {
     version: 794,
     name: 'tickets: an index on events by ticket and time, for the timeline (T-119)',
     up(db) {
