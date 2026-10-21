@@ -1989,7 +1989,15 @@ export class Tickets {
     this.#tx(() => {
       if (this.#bucketRow(key)) throw new AppError('CONFLICT', `There is a bucket ${key} already.`);
       // T-1967: a key a merged bucket had: its old keys still name their tickets, so the new bucket counts on after them.
-      const after = (this.#db.prepare('SELECT COALESCE(max(bucket_number), 0) AS n FROM ticket_key_aliases WHERE bucket_key = ?').get(key) as { n: number }).n;
+      // And after every number a merged bucket of that key handed out (its kept counter), a deleted ticket's included.
+      const after = (
+        this.#db
+          .prepare(
+            `SELECT max(COALESCE((SELECT max(bucket_number) FROM ticket_key_aliases WHERE bucket_key = ?), 0),
+                        COALESCE((SELECT next_number - 1 FROM ticket_buckets_retired WHERE key = ?), 0)) AS n`,
+          )
+          .get(key, key) as { n: number }
+      ).n;
       this.#db
         .prepare(
           `INSERT INTO ticket_buckets (key, name, description, default_workspace_id, default_tags, vault_id, owner_id, created_by, created_at, updated_at, next_number)
@@ -2116,6 +2124,13 @@ export class Tickets {
       });
       if (name !== null || description !== null)
         this.#db.prepare('UPDATE ticket_buckets SET name = ?, description = ?, updated_at = ? WHERE key = ?').run(name ?? into.name, description ?? into.description, this.#now().toISOString(), into.key);
+      // Its counter outlives it, so a bucket made again under this key never hands out a number it already gave (a deleted ticket's too).
+      this.#db
+        .prepare(
+          `INSERT INTO ticket_buckets_retired (key, next_number, retired_at) VALUES (?, (SELECT next_number FROM ticket_buckets WHERE key = ?), ?)
+           ON CONFLICT (key) DO UPDATE SET next_number = max(next_number, excluded.next_number), retired_at = excluded.retired_at`,
+        )
+        .run(from.key, from.key, this.#now().toISOString());
       this.#db.prepare('DELETE FROM ticket_buckets WHERE key = ?').run(from.key);
       return done;
     });

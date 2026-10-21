@@ -9,6 +9,7 @@ import { TICKET_API, type Actor } from '@portal/contracts';
 import { clearResolvers, declaredPolicies } from '../authz/seam.js';
 import { portalMcpHarness } from '../portalmcp/testkit.js';
 import { ToolRegistry } from '../portalmcp/registry.js';
+import { canonTicket } from '../lab/experiments.js';
 import { registerTicketTools } from './portalTools.js';
 import { createTicketRoutes } from './routes.js';
 import { Tickets, type TicketAudit } from './service.js';
@@ -262,5 +263,38 @@ test('tool: ticket_update moves by bucket; ticket_get by the old key; a bucket o
   } finally {
     tickets.stop();
     mcp.done();
+  }
+});
+
+test('QA: a bucket made again after a merge counts on after every number it handed out, a deleted ticket’s too', async () => {
+  const h = await ticketsHarness();
+  try {
+    h.tickets.createBucket(UI, { key: 'AAA', name: 'Probe' });
+    h.tickets.create(UI, { summary: 'one', bucket: 'AAA' });
+    const two = h.tickets.create(UI, { summary: 'two', bucket: 'AAA' });
+    assert.equal(two.key, 'AAA-2');
+    h.tickets.remove(UI, two.id); // AAA-2 is gone: no ticket, no alias, only the counter knew it
+    h.tickets.mergeBucket(UI, 'AAA', { into: 'PILOT' });
+    const again = h.tickets.createBucket(UI, { key: 'AAA', name: 'Again' });
+    assert.equal(again.nextNumber, 3, 'after AAA-2, not after the last alias (AAA-1)');
+    assert.equal(h.tickets.create(UI, { summary: 'new', bucket: 'AAA' }).key, 'AAA-3');
+    // Merged again: the kept counter only grows.
+    h.tickets.mergeBucket(UI, 'AAA', { into: 'PILOT' });
+    assert.equal(h.tickets.createBucket(UI, { key: 'AAA', name: 'Third' }).nextNumber, 4);
+  } finally {
+    h.done();
+  }
+});
+
+test('QA: the lab resolves a moved ticket’s old key (an alias) to its stable id', async () => {
+  const h = await ticketsHarness();
+  try {
+    const t = h.tickets.create(UI, { summary: 'lab', bucket: 'KONF' });
+    h.tickets.update(UI, t.id, { bucket: 'CP' });
+    assert.equal(canonTicket(h.store.db!, 'KONF-1'), t.id, 'the old key');
+    assert.equal(canonTicket(h.store.db!, 'cp-1'), t.id, 'the new key');
+    assert.equal(canonTicket(h.store.db!, 'KONF-2'), null);
+  } finally {
+    h.done();
   }
 });

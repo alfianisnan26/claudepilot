@@ -3717,6 +3717,14 @@ export const MIGRATIONS: Migration[] = [
           PRIMARY KEY (bucket_key, bucket_number)
         ) STRICT;
         CREATE INDEX ticket_key_aliases_ticket ON ticket_key_aliases (ticket_number);
+
+        -- A merged bucket's counter, kept when the bucket goes: a bucket made again under its key counts on after every number it ever handed
+        -- out, a deleted ticket's included (QA of T-1967: the aliases alone missed those).
+        CREATE TABLE ticket_buckets_retired (
+          key TEXT PRIMARY KEY,
+          next_number INTEGER NOT NULL CHECK (next_number >= 1),
+          retired_at TEXT NOT NULL
+        ) STRICT;
       `);
     },
   },
