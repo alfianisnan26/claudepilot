@@ -58,5 +58,7 @@ test('quietLine: "Nothing needed a nudge." only when every program was read; an 
   const unread = flowView({ ...snap([prog(), prog({ name: 'b', ok: false })]), lastRunAt: '2026-10-21T00:00:00.000Z' });
   assert.deepEqual(unread.unread, ['b']);
   assert.equal(quietLine(unread), null);
+  const stalled = flowView({ ...snap([prog({ counts: { merge: 0, qa: 0, idle: 0, bypass: 0, stall: 1 } })]), lastRunAt: '2026-10-21T00:00:00.000Z' });
+  assert.equal(quietLine(stalled), null, 'a stall has its own line: no quiet claim beside it');
   assert.deepEqual(flowView(snap([prog({ counts: { merge: 0, qa: 0, idle: 0, bypass: 0, stall: 1 } }), prog({ name: 'b', ok: false, counts: { merge: 0, qa: 0, idle: 0, bypass: 0, stall: 1 } })])).stalledIn, ['konfersi']);
 });

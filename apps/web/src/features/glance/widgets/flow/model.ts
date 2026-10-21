@@ -71,6 +71,7 @@ export const actionLevel = (a: FlowAction): GlanceLevel => (a.kind === 'failed' 
  * "nothing needed a nudge" would be a claim about a program nobody looked at.
  */
 export function quietLine(v: FlowView): string | null {
-  if (v.unread.length) return null;
+  // A program unread or stalled has something to say on its own line: no quiet claim beside it.
+  if (v.unread.length || v.stalledIn.length) return null;
   return v.lastRunAt ? 'Nothing needed a nudge.' : 'No round yet.';
 }
