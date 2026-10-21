@@ -21,7 +21,7 @@ import type { PortalLimits } from './limits.js';
 import { agentCallable, portalTools, type PortalToolDefinition, type ToolRegistry } from './registry.js';
 import { PortalMcp } from './server.js';
 import { PortalMcpSettingsStore } from './settings.js';
-import { PortalTokens } from './tokens.js';
+import { PortalTokens, type ClientTokenOrigin } from './tokens.js';
 import { loop } from '../platform/loops.js';
 
 const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
@@ -197,8 +197,8 @@ export class PortalMcpModule {
    * Mints an admin's token. `by` is who asked (`actorString`), written in every audit row: the mint, and one `token_revoked` row per token a
    * `replace` revoked. The label rules and the cap are the admin tokens' only (T-258); agents' per-session tokens are minted by `agents.mint`.
    */
-  createToken(req: Partial<CreatePortalTokenRequest>, url: string, by = 'ui'): CreatedPortalToken {
-    const { token, secret, replaced } = this.tokens.create(req, { maxAdminPerLabel: this.#maxActivePerLabel() });
+  createToken(req: Partial<CreatePortalTokenRequest>, url: string, by = 'ui', origin?: ClientTokenOrigin): CreatedPortalToken {
+    const { token, secret, replaced } = this.tokens.create(req, { maxAdminPerLabel: this.#maxActivePerLabel() }, origin);
     for (const id of replaced) {
       this.mcp.confirmations.forget(id);
       this.audit.event('token_revoked', id, { reason: 'replaced by a new token with this label', by, replacedBy: token.id });

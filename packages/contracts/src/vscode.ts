@@ -72,6 +72,11 @@ export interface VscodeVersion {
 export interface VscodeDeviceStartRequest {
   /** What to call this client in the portal (the machine or window name), one line; the token's label is built from it. */
   client?: string;
+  /**
+   * The installation's own id (a UUID the extension made once; not a secret): signing in again from it replaces its earlier token, and only
+   * that one. Without it nothing is replaced.
+   */
+  instance?: string;
 }
 
 /** RFC 8628 §3.2, in the portal's casing. `deviceCode` is the client's secret for polling: never shown, never logged. */
@@ -107,6 +112,9 @@ export interface VscodePending {
   client: string;
   /** The address the client started from, as the portal saw it. */
   ip: string | null;
+  /** The address the person's own browser comes from, as the portal sees it, and whether the two are the same (a warning when not). */
+  viewerIp: string | null;
+  sameAddress: boolean;
   createdAt: string;
   expiresAt: string;
 }
@@ -194,7 +202,10 @@ export interface VscodeStatus {
   at: string;
 }
 
-/** One open approval, with the WHOLE text that is approved on (the same `full` the web's card shows). */
+/**
+ * One open approval, with the WHOLE text that is asked (the same `full` the web's card shows). Slice 1 answers DENY only from VS Code: Allow
+ * is given in the portal (T-1974 review R2, decided by the coordinator), so the extension offers Deny and Open in Portal.
+ */
 export interface VscodeApproval {
   sessionId: string;
   sessionTitle: string;
@@ -203,25 +214,18 @@ export interface VscodeApproval {
   kind: string;
   toolName: string | null;
   title: string;
-  /** Exactly what is allowed, up to the portal's cap; null when the portal has nothing to show. */
+  /** Exactly what is asked, up to the portal's cap; null when the portal has nothing to show. */
   full: string | null;
-  /** More was asked than can be shown: deny only. */
+  /** More was asked than can be shown. */
   fullCut: boolean;
-  /** Whether Allow may be offered at all (requestReview): false for a cut or empty request. */
-  allowable: boolean;
-  /** Why not, in a few words. */
-  note: string | null;
-  /** SHA-256 (hex) of `full` as sent: an Allow must echo it, so what is allowed is what was shown. */
-  fullSha256: string | null;
   createdAt: string;
   url: string;
 }
 
+/** Deny only: Allow is the portal's (see VscodeApproval). */
 export interface VscodeRespondRequest {
   requestId: string;
-  decision: 'allow' | 'deny';
-  /** Required for allow: the `fullSha256` of the approval the person saw. */
-  fullSha256?: string;
+  decision: 'deny';
   note?: string;
 }
 

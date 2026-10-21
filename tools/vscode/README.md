@@ -7,7 +7,7 @@ are in `docs/prd/vscode-extension.md` of the ClaudePilot repository.
   VS Code's SecretStorage only, lives 30 days, and is revoked by `ClaudePilot: Sign Out` or in the portal (Access, MCP tokens).
 - **Views**: Agents (leads and their workers), Tickets (by bucket and status), Workspaces, and Chat (one agent's transcript; send).
 - **Status bar**: the active Claude's tightest usage window and what needs you; a click lists the approvals.
-- **Approvals**: each new one is a notification; Review opens the whole request read-only, and only then can it be allowed.
+- **Approvals**: each new one is a notification; Review opens the whole request read-only. Deny it here; Allow it in the portal (Open in Portal).
 
 Setting `claudepilot.portalUrl`: `https://` for a real portal, `http://` only for this machine (a `kubectl port-forward`).
 

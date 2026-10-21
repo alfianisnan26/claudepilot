@@ -95,9 +95,6 @@ const approval = (o: Partial<VscodeApproval> = {}): VscodeApproval => ({
   title: 'Run a command',
   full: 'rm -rf build &&\n  npm run build',
   fullCut: false,
-  allowable: true,
-  note: null,
-  fullSha256: 'x',
   createdAt: '2026-01-01T00:00:00.000Z',
   ...o,
   url: '/admin/sessions/s1',
@@ -107,7 +104,8 @@ test('an approval: one line for the notification, the WHOLE text exactly in the 
   assert.equal(approvalHeadline(approval()), 'Fix the build: Run a command (Bash)');
   const doc = approvalDocument(approval());
   assert.ok(doc.endsWith('----- request -----\nrm -rf build &&\n  npm run build\n'), 'the text as it will run, nothing folded');
-  assert.match(approvalDocument(approval({ allowable: false, note: 'Too long to show in full.' })), /Too long to show in full\. It can only be denied\./);
+  assert.match(doc, /To allow it, open it in the portal\./);
+  assert.match(approvalDocument(approval({ fullCut: true })), /More was asked than can be shown\./);
   assert.equal(oneLine('a\u0000b\u2028c\n\nd', 10), 'a b c d');
   assert.equal(oneLine('x'.repeat(20), 5), 'xxxx…');
 });

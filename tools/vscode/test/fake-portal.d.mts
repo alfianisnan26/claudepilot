@@ -6,7 +6,7 @@ export interface FakePortal {
     calls: { method: string; path: string; auth: string | null; cookie: boolean }[];
     sent: { id: string; text: string }[];
     answered: Record<string, unknown>[];
-    pending: Map<string, { approved: boolean; polls: number; client: string }>;
+    pending: Map<string, { approved: boolean; polls: number; client: string; instance: string | null }>;
   };
   close(): Promise<void>;
 }

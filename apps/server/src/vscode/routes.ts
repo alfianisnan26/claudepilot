@@ -5,12 +5,11 @@
 //   createVscodeBearerRoutes   /api/vscode/{me,agents,...}          `Authorization: Bearer` with a token the device flow issued, never a cookie
 //
 // A bearer request is a token actor capped at `operate` (the seam caps it): it can read what the person can see, send to a session and
-// answer an approval, and nothing else. Every object goes through the seam (`requireCan`, `visible`), and a refusal is the same 404 as a
-// missing object. Sending and answering go through the chat controller's own door, so its rules hold here too: nothing is allowed that
-// was not shown whole (`requestReview`, enforced again in `controller.respond`), and an Allow must echo the SHA-256 of the text the
-// extension received, so what is allowed is exactly what was shown.
+// DENY a request, and nothing else; Allow is given in the portal (review R2). Every object goes through the seam (`can`, `visible`), and a
+// refusal is the same 404 as a missing object. Sending and denying go through the chat controller's own door as the token
+// (`portal-mcp:<id>`, labelled `VS Code · <client>`), like a Portal MCP tool, and honour the Portal MCP switches (on, session control).
 
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { AppError, success } from '@isnanme/core';
 import {
   VSCODE_API_HEADER,
@@ -20,7 +19,6 @@ import {
   VSCODE_TOKEN_LABEL_PREFIX,
   VSCODE_TOKEN_LIFETIME,
   VSCODE_VERIFY_PATH,
-  requestReview,
   sessionCost,
   sessionRef,
   ticketBucketRef,
@@ -42,7 +40,6 @@ import {
   type VscodeEvents,
   type VscodeMe,
   type VscodePending,
-  type VscodeRespondRequest,
   type VscodeSendRequest,
   type VscodeStatus,
   type VscodeTicket,
@@ -55,14 +52,15 @@ import { Hono, type Context } from 'hono';
 import { actorOf, actorOfPrincipal, actorString, can, visible } from '../authz/seam.js';
 import { SLASH_ALLOWED, slashWord } from '../chat/slash.js';
 import type { PortalToken } from '@portal/contracts';
-import type { VerifyResult } from '../portalmcp/tokens.js';
+import type { ClientTokenOrigin, VerifyResult } from '../portalmcp/tokens.js';
 import { RateLimiter } from '../rateLimit.js';
-import { DeviceFlow } from './device.js';
+import { DeviceFlow, type Issued } from './device.js';
 import { declareVscodePolicies } from './authz.js';
 
 /** What the routes need of the token store: the device flow issues through the same machinery as Access → MCP (one table, one revoke). */
 export interface VscodeTokenStore {
-  create(req: { label: string; scope: 'operate'; expiresIn: typeof VSCODE_TOKEN_LIFETIME; replace: true }): { token: PortalToken; secret: string };
+  /** `by`: the person who approved (the token's creator in the MCP audit); `origin`: the client and its installation. */
+  create(req: { label: string; scope: 'operate'; expiresIn: typeof VSCODE_TOKEN_LIFETIME; addAnother: true }, by: string, origin: ClientTokenOrigin): { token: PortalToken; secret: string };
   verify(secret: string, ip?: string): VerifyResult;
   revoke(id: string, reason?: string): boolean;
 }
@@ -76,8 +74,8 @@ export interface VscodeDeps {
     openRequests(id: string): ChatRequest[];
     history(id: string, after?: number): ChatEvent[];
     historyPage(id: string, before: number | null, limit: number): { events: ChatEvent[] };
-    send(id: string, uuid: string, text: string, opts?: { actor?: string }): Promise<void>;
-    respond(id: string, requestId: string, decision: 'allow' | 'deny', opts?: { note?: string; actor?: string }): Promise<void>;
+    send(id: string, uuid: string, text: string, opts?: { actor?: string; actorLabel?: string }): Promise<void>;
+    respond(id: string, requestId: string, decision: 'deny', opts?: { note?: string; actor?: string }): Promise<void>;
   };
   workspaces?: { list(): Promise<Workspace[]> };
   tickets?: { listPage(caller: { kind: 'token'; tokenId: string; label: string; scope: 'read' }, filter: TicketFilter, args: { limit?: unknown; keep?: (t: TicketItem) => boolean }): TicketPage };
@@ -89,12 +87,14 @@ export interface VscodeDeps {
   clientKey: (c: Context) => string;
   /** The portal's own origin as the person reaches it, for the verify link. */
   origin: (c: Context) => string;
+  /** The Portal MCP switches (Access -> MCP): off refuses every bearer route; session control off refuses send and deny. */
+  mcpSettings?: () => { enabled: boolean; sessionControl: boolean };
+  /** The workspace-id rule of every /api route (QA-032): throws 422 for a hostile field in the body or query. */
+  idCheck?: (c: Context) => Promise<void>;
   now?: () => number;
 }
 
 type Vars = { Variables: { actor: Actor; vscodeToken: PortalToken } };
-
-const sha256 = (s: string) => createHash('sha256').update(s, 'utf8').digest('hex');
 
 /** Every /api/vscode answer says which API this portal speaks, so an extension can warn on a mismatch from any response. */
 const stamp = async (c: Context, next: () => Promise<void>) => {
@@ -108,14 +108,14 @@ async function jsonBody<T>(c: Context): Promise<Partial<T>> {
   return v as Partial<T>;
 }
 
-/** The one flow per portal process (shared by the public and the approve routes). */
-export function createVscodeFlow(now?: () => number): DeviceFlow {
-  return new DeviceFlow(now);
+/** The one flow per portal process (shared by the public and the approve routes). A token approved but never picked up is revoked. */
+export function createVscodeFlow(tokens: Pick<VscodeTokenStore, 'revoke'>, now?: () => number): DeviceFlow {
+  return new DeviceFlow(now, (issued) => void tokens.revoke(issued.tokenId, 'the sign-in code expired before VS Code picked the token up'));
 }
 
 /* ---------- Public ---------- */
 
-export function createVscodePublicRoutes(flow: DeviceFlow, deps: Pick<VscodeDeps, 'tokens' | 'audit' | 'clientKey' | 'origin'>): Hono {
+export function createVscodePublicRoutes(flow: DeviceFlow, deps: Pick<VscodeDeps, 'clientKey' | 'origin' | 'idCheck'>): Hono {
   declareVscodePolicies();
   const r = new Hono();
   r.use('*', stamp);
@@ -125,12 +125,15 @@ export function createVscodePublicRoutes(flow: DeviceFlow, deps: Pick<VscodeDeps
 
   r.get('/version', (c) => c.json(success<VscodeVersion>({ api: VSCODE_API_VERSION, minApi: 1, name: 'ClaudePilot' })));
 
+  // Order (review M3): the address's limit first (no body read for a blocked one), then the id rule, then the count and the work.
   r.post('/device', async (c) => {
     const ip = deps.clientKey(c);
     if (starts.blocked(ip)) throw new AppError('RATE_LIMITED', 'Too many sign-ins from here. Wait a few minutes.');
+    await deps.idCheck?.(c);
     starts.fail(ip);
-    const body = (await c.req.json().catch(() => ({}))) as { client?: unknown } | null;
-    const got = flow.start(body && typeof body === 'object' ? body.client : undefined, ip);
+    const body = (await c.req.json().catch(() => ({}))) as { client?: unknown; instance?: unknown } | null;
+    const o = body && typeof body === 'object' ? body : {};
+    const got = flow.start(o.client, ip, o.instance);
     if (!got) throw new AppError('RATE_LIMITED', 'Too many sign-ins are waiting. Try again in a few minutes.');
     const base = `${deps.origin(c)}${VSCODE_VERIFY_PATH}`;
     return c.json(
@@ -148,15 +151,14 @@ export function createVscodePublicRoutes(flow: DeviceFlow, deps: Pick<VscodeDeps
   r.post('/token', async (c) => {
     const ip = deps.clientKey(c);
     if (polls.blocked(ip)) return c.json(success<VscodeTokenPoll>({ status: 'slow_down', interval: 10 }));
+    await deps.idCheck?.(c);
     polls.fail(ip);
     const body = await jsonBody<{ deviceCode: string }>(c);
     const got = flow.poll(body.deviceCode);
     if (got.status !== 'approved') return c.json(success<VscodeTokenPoll>(got));
-    const label = `${VSCODE_TOKEN_LABEL_PREFIX}${got.client}`;
-    // One live token per client name: signing in again from the same VS Code replaces (revokes) the one it had.
-    const { token, secret } = deps.tokens.create({ label, scope: 'operate', expiresIn: VSCODE_TOKEN_LIFETIME, replace: true });
-    deps.audit?.('vscode.token_issued', { tokenId: token.id, client: got.client }, `portal-mcp:${token.id}`);
-    return c.json(success<VscodeTokenPoll>({ status: 'ok', token: secret, tokenId: token.id, expiresAt: token.expiresAt, label: token.label }));
+    // The token was made when the person approved (its creator is that person); this is the one answer that hands it over.
+    const t = got.issued;
+    return c.json(success<VscodeTokenPoll>({ status: 'ok', token: t.token, tokenId: t.tokenId, expiresAt: t.expiresAt, label: t.label }));
   });
 
   return r;
@@ -164,7 +166,7 @@ export function createVscodePublicRoutes(flow: DeviceFlow, deps: Pick<VscodeDeps
 
 /* ---------- The signed-in person's ---------- */
 
-export function createVscodeApproveRoutes(flow: DeviceFlow, deps: Pick<VscodeDeps, 'audit'>): Hono {
+export function createVscodeApproveRoutes(flow: DeviceFlow, deps: Pick<VscodeDeps, 'audit' | 'tokens' | 'clientKey'>): Hono {
   declareVscodePolicies();
   const r = new Hono();
   r.use('*', stamp);
@@ -186,7 +188,9 @@ export function createVscodeApproveRoutes(flow: DeviceFlow, deps: Pick<VscodeDep
       tries.fail(key);
       throw NO_CODE();
     }
-    return c.json(success<VscodePending>(p));
+    // Where the person is, beside where the request came from: a code someone else started from elsewhere is told apart (review R4).
+    const viewerIp = deps.clientKey(c);
+    return c.json(success<VscodePending>({ ...p, viewerIp, sameAddress: p.ip !== null && p.ip === viewerIp }));
   });
 
   r.post('/approve', async (c) => {
@@ -195,11 +199,24 @@ export function createVscodeApproveRoutes(flow: DeviceFlow, deps: Pick<VscodeDep
     if (body.decision !== 'approve' && body.decision !== 'deny') throw new AppError('VALIDATION_FAILED', 'Approve or deny.');
     const code = typeof body.userCode === 'string' ? body.userCode : '';
     const p = flow.pending(code);
-    if (!p || !flow.decide(code, body.decision)) {
+    const by = actorString(actorOf(c));
+    if (!p) {
       tries.fail(key);
       throw NO_CODE();
     }
-    deps.audit?.(body.decision === 'approve' ? 'vscode.approved' : 'vscode.denied', { client: p.client, ip: p.ip }, actorString(actorOf(c)));
+    if (body.decision === 'deny') {
+      if (!flow.deny(code)) throw NO_CODE();
+      deps.audit?.('vscode.denied', { client: p.client, ip: p.ip }, by);
+      return c.json(success({ ok: true as const, decision: body.decision }));
+    }
+    // The token is made now, by the person (review m1), only for this installation (m2). If making it fails, the code stays pending and
+    // the person can approve again (m5).
+    const issued: Issued | null = flow.approve(code, ({ client, instance }) => {
+      const { token, secret } = deps.tokens.create({ label: `${VSCODE_TOKEN_LABEL_PREFIX}${client}`, scope: 'operate', expiresIn: VSCODE_TOKEN_LIFETIME, addAnother: true }, by, { client: 'vscode', instance });
+      return { token: secret, tokenId: token.id, expiresAt: token.expiresAt, label: token.label };
+    });
+    if (!issued) throw NO_CODE();
+    deps.audit?.('vscode.approved', { client: p.client, ip: p.ip, tokenId: issued.tokenId }, by);
     return c.json(success({ ok: true as const, decision: body.decision }));
   });
 
@@ -243,8 +260,6 @@ export function agentOf(s: ChatSession): VscodeAgent {
 }
 
 export function approvalOf(s: ChatSession, r: ChatRequest): VscodeApproval {
-  const review = requestReview(r);
-  const full = r.full && r.full.trim() ? r.full : null;
   return {
     sessionId: s.id,
     sessionTitle: s.title,
@@ -253,11 +268,8 @@ export function approvalOf(s: ChatSession, r: ChatRequest): VscodeApproval {
     kind: r.kind,
     toolName: r.toolName,
     title: r.title,
-    full,
+    full: r.full && r.full.trim() ? r.full : null,
     fullCut: r.fullCut === true,
-    allowable: review.allow,
-    note: review.note,
-    fullSha256: full === null ? null : sha256(full),
     createdAt: r.createdAt,
     url: `/admin/sessions/${encodeURIComponent(s.id)}`,
   };
@@ -304,13 +316,18 @@ export function createVscodeBearerRoutes(deps: VscodeDeps): Hono<Vars> {
   const UNAUTH = () => new AppError('UNAUTHORIZED', 'Sign in to the portal again from VS Code.');
 
   const auth = async (c: Context<Vars>, next: () => Promise<void>) => {
+    // The id rule first: a hostile field is refused before any dependency is asked (QA-032).
+    await deps.idCheck?.(c);
     // FR51: a bearer request carries no cookie. One that has both is refused, so a page can never ride a person's cookie in here.
     if (c.req.header('cookie')) throw new AppError('BAD_REQUEST', 'Send the token without a cookie.');
     const secret = bearerOf(c);
     if (!secret) throw UNAUTH();
     const v = deps.tokens.verify(secret, deps.clientKey(c));
-    // Only a token the device flow issued opens these routes; unknown, revoked, expired and any other token get the same answer.
-    if (!v.ok || !v.token.label.startsWith(VSCODE_TOKEN_LABEL_PREFIX)) throw UNAUTH();
+    // Only a token the device flow issued (marked `client = 'vscode'`, review R1) opens these routes; a label proves nothing. Unknown,
+    // revoked, expired and any other token get the same answer.
+    if (!v.ok || v.token.client !== 'vscode') throw UNAUTH();
+    // The Portal MCP switch: these are Portal MCP tokens, and off means off for them too.
+    if (deps.mcpSettings && !deps.mcpSettings().enabled) throw new AppError('FORBIDDEN', 'The Portal MCP is off. Turn it on in Access, MCP.');
     if (perToken.blocked(v.token.id)) throw new AppError('RATE_LIMITED', 'Too many requests. Wait a minute.');
     perToken.fail(v.token.id);
     // The seam caps a token by its scope; the device flow issues `operate`, and nothing here is ever more than that.
@@ -324,6 +341,12 @@ export function createVscodeBearerRoutes(deps: VscodeDeps): Hono<Vars> {
   for (const p of BEARER_PATHS) r.use(p, auth);
 
   const actor = (c: Context<Vars>) => c.get('actor');
+  /** Sending and denying change a session: the Portal MCP's session-control switch must be on, as for its session tools. */
+  const control = () => {
+    if (deps.mcpSettings && !deps.mcpSettings().sessionControl) throw new AppError('FORBIDDEN', 'Session control is off. Turn it on in Access, MCP.');
+  };
+  /** The token as an actor of the chat: `portal-mcp:<id>`, named by its label, so the transcript says who sent and Claude reads the portal's frame. */
+  const as = (c: Context<Vars>) => ({ actor: `portal-mcp:${c.get('vscodeToken').id}`, actorLabel: c.get('vscodeToken').label });
   const NOT_FOUND = () => new AppError('NOT_FOUND', 'Not found.');
   /** A session the actor holds `verb` on, by any id it goes by; otherwise the same 404 as a missing one. */
   const session = (c: Context<Vars>, verb: 'view' | 'operate'): ChatSession => {
@@ -466,6 +489,7 @@ export function createVscodeBearerRoutes(deps: VscodeDeps): Hono<Vars> {
 
   r.post('/sessions/:id/send', async (c) => {
     const s = session(c, 'operate');
+    control();
     const body = await jsonBody<VscodeSendRequest>(c);
     const text = typeof body.text === 'string' ? body.text : '';
     if (!text.trim()) throw new AppError('VALIDATION_FAILED', 'Write a message.');
@@ -474,29 +498,23 @@ export function createVscodeBearerRoutes(deps: VscodeDeps): Hono<Vars> {
     const first = slashWord(text);
     if (first && !SLASH_ALLOWED.has(first)) throw new AppError('FORBIDDEN', `${first.slice(0, 40)} is not sent from VS Code. Allowed: ${[...SLASH_ALLOWED].join(', ')}.`);
     const uuid = typeof body.uuid === 'string' && /^[A-Za-z0-9-]{8,64}$/.test(body.uuid) ? body.uuid : randomUUID();
-    // The person typed it, as in the web app: it reaches Claude as theirs ('ui'); the audit row says it came from this token.
-    await deps.chat.send(s.id, uuid, text, { actor: 'ui' });
+    await deps.chat.send(s.id, uuid, text, as(c));
     deps.audit?.('vscode.sent', { tokenId: c.get('vscodeToken').id, sessionId: s.id, chars: text.length }, `portal-mcp:${c.get('vscodeToken').id}`);
     return c.json(success({ ok: true as const, uuid }));
   });
 
   r.post('/sessions/:id/respond', async (c) => {
     const s = session(c, 'operate');
-    const body = await jsonBody<VscodeRespondRequest>(c);
-    if (typeof body.requestId !== 'string' || !body.requestId || (body.decision !== 'allow' && body.decision !== 'deny'))
-      throw new AppError('VALIDATION_FAILED', 'Answer allow or deny.');
+    const body = await jsonBody<{ requestId: string; decision: string; note?: string }>(c);
+    // Review R2 (decided): no Allow from VS Code in slice 1. The person allows in the portal, as over the Portal MCP without admin.
+    if (body.decision === 'allow') throw new AppError('FORBIDDEN', 'Allow it in the portal. From VS Code a request can be denied.');
+    if (typeof body.requestId !== 'string' || !body.requestId || body.decision !== 'deny') throw new AppError('VALIDATION_FAILED', 'Answer deny.');
+    control();
     const open = deps.chat.openRequests(s.id).find((x) => x.requestId === body.requestId);
     if (!open) throw new AppError('CONFLICT', 'That request is no longer open.');
-    if (body.decision === 'allow') {
-      const shown = approvalOf(s, open);
-      if (!shown.allowable) throw new AppError('CONFLICT', `${shown.note ?? 'It can’t be allowed.'} It can be denied, not allowed.`);
-      // What is allowed is what the extension was shown: the text's hash must match the open request's, or the answer is refused.
-      if (typeof body.fullSha256 !== 'string' || body.fullSha256 !== shown.fullSha256)
-        throw new AppError('CONFLICT', 'The request changed since it was shown. Look at it again.');
-    }
     const note = typeof body.note === 'string' ? body.note.slice(0, 2000) : undefined;
-    await deps.chat.respond(s.id, body.requestId, body.decision, { note, actor: 'ui' });
-    deps.audit?.('vscode.answered', { tokenId: c.get('vscodeToken').id, sessionId: s.id, requestId: body.requestId, decision: body.decision }, `portal-mcp:${c.get('vscodeToken').id}`);
+    await deps.chat.respond(s.id, body.requestId, 'deny', { note, actor: as(c).actor });
+    deps.audit?.('vscode.answered', { tokenId: c.get('vscodeToken').id, sessionId: s.id, requestId: body.requestId, decision: 'deny' }, `portal-mcp:${c.get('vscodeToken').id}`);
     return c.json(success({ ok: true as const }));
   });
 

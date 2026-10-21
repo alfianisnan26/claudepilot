@@ -24,7 +24,7 @@ export function fakeData() {
     workspaces: [{ id: 'local/ws1', name: 'One', target: 'local', status: 'running', url: '/admin/workspaces' }],
     status: { quota: { claudeId: 'cl1', claudeName: 'Main', label: 'Week', usedPct: 61, resetsAt: null }, claudes: [{ claudeId: 'cl1', claudeName: 'Main', windows: [{ label: 'Week', usedPct: 61, resetsAt: null }] }], attention: 2, approvals: 1, at },
     approvals: [
-      { sessionId: 's2', sessionTitle: 'Worker', workspaceId: 'local/ws1', requestId: 'r1', kind: 'tool', toolName: 'Bash', title: 'Run a command', full: 'npm test', fullCut: false, allowable: true, note: null, fullSha256: 'f'.repeat(64), createdAt: at, url: '/admin/sessions/s2' },
+      { sessionId: 's2', sessionTitle: 'Worker', workspaceId: 'local/ws1', requestId: 'r1', kind: 'tool', toolName: 'Bash', title: 'Run a command', full: 'npm test', fullCut: false, createdAt: at, url: '/admin/sessions/s2' },
     ],
     events: [
       { seq: 1, at, kind: 'user', text: 'hello', toolName: null, requestId: null },
@@ -54,7 +54,7 @@ export async function startFakePortal(opts = {}) {
     if (p === '/api/vscode/device' && req.method === 'POST') {
       const deviceCode = randomBytes(32).toString('base64url');
       const userCode = 'BCDF-GHJK';
-      state.pending.set(deviceCode, { approved: false, polls: 0, client: String(body.client ?? '') });
+      state.pending.set(deviceCode, { approved: false, polls: 0, client: String(body.client ?? ''), instance: typeof body.instance === 'string' ? body.instance : null });
       return ok(res, { deviceCode, userCode, verifyUrl: 'http://127.0.0.1/admin/vscode', verifyUrlComplete: `http://127.0.0.1/admin/vscode?code=${userCode}`, expiresIn: 600, interval: opts.interval ?? 1 }, o);
     }
     if (p === '/fake/approve') {
@@ -98,7 +98,7 @@ export async function startFakePortal(opts = {}) {
         state.sent.push({ id, text: body.text });
         return ok(res, { ok: true, uuid: body.uuid }, o);
       }
-      if (body.decision === 'allow' && body.fullSha256 !== d.approvals[0]?.fullSha256) return fail(res, 409, 'CONFLICT', 'The request changed since it was shown. Look at it again.', o);
+      if (body.decision !== 'deny') return fail(res, 403, 'FORBIDDEN', 'Allow it in the portal. From VS Code a request can be denied.', o);
       state.answered.push({ id, ...body });
       return ok(res, { ok: true }, o);
     }

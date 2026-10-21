@@ -38,7 +38,8 @@ test('sign-in against the fake portal: device start, polls until approved, then 
   const seen: number[] = [];
   const client = new PortalClient({ baseUrl: fake.url, token: async () => token, onApiVersion: (v) => seen.push(v) });
   assert.equal((await client.version()).api, 1);
-  const start = await client.startDevice('test box');
+  const start = await client.startDevice('test box', 'install-0001');
+  assert.equal([...fake.state.pending.values()].at(-1)?.instance, 'install-0001', 'the installation id goes with the start');
   assert.equal(start.userCode, 'BCDF-GHJK');
   let polls = 0;
   const outcome = await pollForToken(
@@ -102,12 +103,12 @@ test('polling: slow_down widens the wait, cancel and expiry end it', async () =>
   assert.deepEqual(timedOut, { ok: false, reason: 'expired' });
 });
 
-test('Allow without the hash of the shown text is refused by the portal; with it, it goes through', async () => {
+test('the client can only deny: its one answer sends decision deny', async () => {
   const client = new PortalClient({ baseUrl: fake.url, token: async () => fake.state.token ?? undefined });
   const [a] = await client.approvals();
-  await assert.rejects(client.respond(a!.sessionId, { requestId: a!.requestId, decision: 'allow' }), (e: unknown) => e instanceof PortalError && e.status === 409);
-  await client.respond(a!.sessionId, { requestId: a!.requestId, decision: 'allow', fullSha256: a!.fullSha256! });
-  assert.equal(fake.state.answered.length, 1);
+  await client.deny(a!.sessionId, { requestId: a!.requestId });
+  assert.deepEqual(fake.state.answered.at(-1), { id: 's2', requestId: 'r1', decision: 'deny' });
+  assert.equal('respond' in client, false, 'no allow path in the client');
 });
 
 test('pageUrl stays on the portal', () => {

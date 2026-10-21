@@ -140,7 +140,8 @@ export function approvalDocument(a: VscodeApproval): string {
     `Workspace: ${a.workspaceId}`,
     `Asks:      ${oneLine(a.title, 200)}${a.toolName ? ` (${a.toolName})` : ''}`,
     `Asked at:  ${a.createdAt}`,
-    a.allowable ? 'This is the whole request. Allow or deny it in the dialog.' : `${a.note ?? 'It can’t be allowed.'} It can only be denied.`,
+    a.fullCut ? 'More was asked than can be shown.' : 'This is the whole request.',
+    'From VS Code you can deny it. To allow it, open it in the portal.',
     '',
     '----- request -----',
   ];

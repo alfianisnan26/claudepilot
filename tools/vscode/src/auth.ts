@@ -111,7 +111,7 @@ export class Auth {
         return;
       }
       const name = `${vscode.env.appName}${vscode.env.remoteName ? ` (${vscode.env.remoteName})` : ''}`;
-      const start = await client.startDevice(name);
+      const start = await client.startDevice(name, await this.#instance());
       // The page is built from the address in the settings, never from what the server says: the link always goes to the portal you set.
       const verify = vscode.Uri.parse(`${client.pageUrl('/admin/vscode')}?code=${encodeURIComponent(start.userCode)}`);
       const outcome = await vscode.window.withProgress(
@@ -136,6 +136,15 @@ export class Auth {
       this.log.error(`sign-in failed: ${redact(e instanceof Error ? e.message : String(e))}`);
       void vscode.window.showErrorMessage(e instanceof PortalError ? e.message : 'The sign-in failed.');
     }
+  }
+
+  /** This installation's own id (not a secret), made once: a new sign-in from it replaces only its own earlier token at the portal. */
+  async #instance(): Promise<string> {
+    const known = this.ctx.globalState.get<string>('claudepilot.instance');
+    if (known && /^[A-Za-z0-9-]{8,64}$/.test(known)) return known;
+    const made = crypto.randomUUID();
+    await this.ctx.globalState.update('claudepilot.instance', made);
+    return made;
   }
 
   async signOut(): Promise<void> {

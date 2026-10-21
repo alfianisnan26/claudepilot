@@ -119,7 +119,8 @@ export class PortalClient {
   }
 
   version = () => this.#call<VscodeVersion>('GET', VSCODE_API.version, undefined, false);
-  startDevice = (client: string) => this.#call<VscodeDeviceStart>('POST', VSCODE_API.device, { client }, false);
+  /** `instance`: this installation's own id, so a new sign-in replaces only its own earlier token. */
+  startDevice = (client: string, instance?: string) => this.#call<VscodeDeviceStart>('POST', VSCODE_API.device, { client, ...(instance ? { instance } : {}) }, false);
   poll = (deviceCode: string) => this.#call<VscodeTokenPoll>('POST', VSCODE_API.token, { deviceCode }, false);
   me = () => this.#call<VscodeMe>('GET', VSCODE_API.me);
   logout = () => this.#call<{ revoked: boolean }>('POST', VSCODE_API.logout, {});
@@ -130,7 +131,8 @@ export class PortalClient {
   approvals = () => this.#call<VscodeApproval[]>('GET', VSCODE_API.approvals);
   events = (sessionId: string, after?: number) => this.#call<VscodeEvents>('GET', `${VSCODE_API.events(sessionId)}${after !== undefined ? `?after=${after}` : ''}`);
   send = (sessionId: string, text: string, uuid: string) => this.#call<{ ok: true; uuid: string }>('POST', VSCODE_API.send(sessionId), { text, uuid });
-  respond = (sessionId: string, req: VscodeRespondRequest) => this.#call<{ ok: true }>('POST', VSCODE_API.respond(sessionId), req);
+  /** Deny only: Allow is given in the portal. */
+  deny = (sessionId: string, req: Omit<VscodeRespondRequest, 'decision'>) => this.#call<{ ok: true }>('POST', VSCODE_API.respond(sessionId), { ...req, decision: 'deny' });
 
   /** A page of the portal, for "Open in Portal". Only a path of the portal's own: never another origin. */
   pageUrl(path: string): string {

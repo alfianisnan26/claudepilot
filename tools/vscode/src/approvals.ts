@@ -1,6 +1,6 @@
-// Approvals (docs/prd/vscode-extension.md §6): a new request arrives as a notification; Allow is offered only after the WHOLE text is
-// open in a read-only editor, and only when the portal says it may be allowed (a cut or empty request can only be denied). The answer
-// goes to the portal with the hash of the text that was shown, and the portal applies the same rules as the web on top.
+// Approvals (docs/prd/vscode-extension.md §6): a new request arrives as a notification with Review, Deny and Open in Portal. Slice 1 never
+// allows from VS Code (review R2, decided): the person allows in the portal; Review shows the WHOLE text read-only, and Deny goes to the
+// portal's own rules.
 
 import * as vscode from 'vscode';
 import type { VscodeApproval } from '../../../packages/contracts/src/vscode.js';
@@ -43,9 +43,10 @@ export class Approvals implements vscode.TextDocumentContentProvider, vscode.Dis
       const k = this.#key(a);
       if (this.#seen.has(k)) continue;
       this.#seen.add(k);
-      void vscode.window.showWarningMessage(approvalHeadline(a), 'Review', 'Deny').then((pick) => {
+      void vscode.window.showWarningMessage(approvalHeadline(a), 'Review', 'Deny', 'Open in Portal').then((pick) => {
         if (pick === 'Review') void this.review(a);
-        if (pick === 'Deny') void this.#answer(a, 'deny');
+        if (pick === 'Deny') void this.#deny(a);
+        if (pick === 'Open in Portal') void this.#portal(a);
       });
     }
   }
@@ -65,31 +66,36 @@ export class Approvals implements vscode.TextDocumentContentProvider, vscode.Dis
     if (chosen) await this.review(chosen.a);
   }
 
-  /** Opens the whole text, then asks. Allow is a button only when the portal says the request may be allowed. */
+  /** Opens the whole text read-only, then asks: Deny here, or Open in Portal to allow it there. */
   async review(a: VscodeApproval): Promise<void> {
     const uri = vscode.Uri.from({ scheme: SCHEME, path: `/${encodeURIComponent(a.sessionId)}/${encodeURIComponent(a.requestId)}.txt` });
     this.#docs.set(uri.toString(), approvalDocument(a));
     const doc = await vscode.workspace.openTextDocument(uri);
     await vscode.window.showTextDocument(doc, { preview: true, preserveFocus: false });
-    const buttons = a.allowable ? ['Allow', 'Deny'] : ['Deny'];
     const pick = await vscode.window.showWarningMessage(
-      a.allowable ? `Allow this request? ${approvalHeadline(a)}` : `${a.note ?? 'This can’t be allowed.'} Deny it?`,
-      { modal: true, detail: 'The whole request is open in the editor. Read it there before you answer.' },
-      ...buttons,
+      approvalHeadline(a),
+      { modal: true, detail: 'The whole request is open in the editor. Deny it here, or open it in the portal to allow it.' },
+      'Deny',
+      'Open in Portal',
     );
-    if (pick === 'Allow' && a.allowable) await this.#answer(a, 'allow');
-    if (pick === 'Deny') await this.#answer(a, 'deny');
+    if (pick === 'Deny') await this.#deny(a);
+    if (pick === 'Open in Portal') await this.#portal(a);
   }
 
-  async #answer(a: VscodeApproval, decision: 'allow' | 'deny'): Promise<void> {
+  async #portal(a: VscodeApproval): Promise<void> {
+    const client = this.auth.client();
+    if (client) await vscode.env.openExternal(await vscode.env.asExternalUri(vscode.Uri.parse(client.pageUrl(a.url))));
+  }
+
+  async #deny(a: VscodeApproval): Promise<void> {
     const client = this.auth.client();
     if (!client) return;
     try {
-      await client.respond(a.sessionId, { requestId: a.requestId, decision, ...(decision === 'allow' && a.fullSha256 ? { fullSha256: a.fullSha256 } : {}) });
-      void vscode.window.showInformationMessage(decision === 'allow' ? 'Allowed.' : 'Denied.');
+      await client.deny(a.sessionId, { requestId: a.requestId });
+      void vscode.window.showInformationMessage('Denied.');
     } catch (e) {
       if (e instanceof PortalError && e.signedOut) return void this.auth.lost();
-      this.log.warn(`answer failed: ${redact(e instanceof Error ? e.message : String(e))}`);
+      this.log.warn(`deny failed: ${redact(e instanceof Error ? e.message : String(e))}`);
       void vscode.window.showErrorMessage(e instanceof PortalError ? e.message : 'The answer failed.');
     } finally {
       void this.poller.refresh();
