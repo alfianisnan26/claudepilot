@@ -80,7 +80,9 @@ const failing = (w) => { const f = path.join(F, 'fail'); return fs.existsSync(f)
 // kubectl error that quotes the object might. Without this the 2>&1 on the real create could be dropped and no test would notice.
 const refuse = () => { const t = stdin(); let plain = ''; try { plain = Object.values(JSON.parse(t).data || {}).map((v) => Buffer.from(v, 'base64').toString()).join(' '); } catch {}
   process.stderr.write('error: ' + t + ' ' + plain + '\n'); process.exit(1); };
-if (verb === 'get' && kind === 'jobs') { process.stdout.write(JSON.stringify({ items: read().jobs.map(k8s) })); }
+// T-1982: the API server proxying the registry's service: the file "cluster-tags.json" is its answer; none = the call fails.
+if (verb === 'get' && kind === '--raw') { const t = path.join(F, 'cluster-tags.json'); if (!fs.existsSync(t)) process.exit(1); process.stdout.write(fs.readFileSync(t, 'utf8')); }
+else if (verb === 'get' && kind === 'jobs') { process.stdout.write(JSON.stringify({ items: read().jobs.map(k8s) })); }
 else if (verb === 'get' && kind === 'job') { const j = job(name); if (!j || (failing('uid') && !a.includes('json'))) process.exit(1); process.stdout.write(a.includes('json') ? JSON.stringify(k8s(j)) : 'uid-' + name); }
 else if (verb === 'get' && kind === 'pods' && a.includes('app=claudepilot-gate')) { const g = path.join(F, 'gates.txt'); process.stdout.write(fs.existsSync(g) ? fs.readFileSync(g, 'utf8') : ''); }
 else if (verb === 'get' && kind === 'pods' && a.includes('json')) { process.stdout.write(JSON.stringify(podOf(job(a[3].replace('job-name=', ''))))); }
@@ -480,6 +482,66 @@ test('T-491 Event: without a GitHub token the run is refused before anything is 
   assert.equal(r.code, 2, r.out);
   assert.match(r.out, /--repo event: no GitHub token/);
   assert.doesNotMatch(w.calls(), /create secret|apply/);
+});
+
+// T-1982: with no JOB_RUN_IMAGE the newest -dev- workspace tag is looked up. The registry first (the pod); when this host cannot reach it
+// (the Mac devcontainer: "Could not resolve host") the cluster answers through kubectl (the API server proxies the registry's service).
+// The fake curl answers with the file "curl-tags.json", or fails as an unresolvable host does (exit 6).
+function imageLookup(curlTags: string | null, clusterTags: string | null, over: Record<string, string> = {}) {
+  const w = world();
+  writeFileSync(
+    join(w.root, 'bin', 'curl'),
+    '#!/bin/sh\n[ -f "$FAKE/curl-tags.json" ] || { echo "curl: (6) Could not resolve host" >&2; exit 6; }\ncat "$FAKE/curl-tags.json"\n',
+  );
+  chmodSync(join(w.root, 'bin', 'curl'), 0o755);
+  if (curlTags !== null) writeFileSync(join(w.root, 'curl-tags.json'), curlTags);
+  if (clusterTags !== null) writeFileSync(join(w.root, 'cluster-tags.json'), clusterTags);
+  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'true'], {
+    JOB_RUN_IMAGE: UNSET,
+    DEPLOY_REGISTRY: UNSET,
+    ...over,
+  });
+  const raw = w
+    .calls()
+    .split('\n')
+    .filter((l) => l.includes('--raw'));
+  return { w, r, raw };
+}
+const tagsJson = (...tags: string[]) => JSON.stringify({ name: 'claudepilot/workspace', tags });
+
+test('T-1982: the registry unreachable from here, the cluster names the newest development workspace image', () => {
+  const { w, r, raw } = imageLookup(
+    null,
+    tagsJson('2.1.296-dev-2026.10.13-1', '2.1.296-2026.10.15-2', '2.1.296-dev-2026.10.15-1', '2.1.296-dev-2026.10.9-3'),
+  );
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /did not answer from here: asking the cluster/);
+  assert.deepEqual(raw, [
+    'kubectl get --raw /api/v1/namespaces/isnan-registry/services/registry:5000/proxy/v2/claudepilot/workspace/tags/list',
+  ]);
+  assert.equal(
+    container(yamlLoad(w.applied1()) as Manifest).image,
+    'registry.int.isnan.me/claudepilot/workspace:2.1.296-dev-2026.10.15-1',
+  );
+});
+
+test('T-1982: the registry answering (the pod) is used as before, with no call to the cluster for it', () => {
+  const { w, r, raw } = imageLookup(tagsJson('1.0.0-dev-2026.1.1-1', '1.0.0-dev-2026.1.2-1'), tagsJson('9.9.9-dev-2026.1.1-1'));
+  assert.equal(r.code, 0, r.out);
+  assert.deepEqual(raw, []);
+  assert.ok(!r.out.includes('asking the cluster'), r.out);
+  assert.equal(container(yamlLoad(w.applied1()) as Manifest).image, 'registry.int.isnan.me/claudepilot/workspace:1.0.0-dev-2026.1.2-1');
+});
+
+test('T-1982: neither the registry nor the cluster answers: exit 1, no Job; another DEPLOY_REGISTRY never asks the internal one', () => {
+  const none = imageLookup(null, null);
+  assert.equal(none.r.code, 1, none.r.out);
+  assert.match(none.r.out, /no development workspace image in registry\.int\.isnan\.me: set JOB_RUN_IMAGE/);
+  assert.deepEqual(none.w.applied(), []);
+  const other = imageLookup(null, tagsJson('9.9.9-dev-2026.1.1-1'), { DEPLOY_REGISTRY: 'registry.test' });
+  assert.equal(other.r.code, 1, other.r.out);
+  assert.deepEqual(other.raw, []);
+  assert.deepEqual(other.w.applied(), []);
 });
 
 test('T-1624: with no cap set, the defaults are 8 at once, 2 per chat and 6 per program (k3s-node3 joined)', async () => {
