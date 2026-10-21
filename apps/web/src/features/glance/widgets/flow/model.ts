@@ -7,6 +7,10 @@ export interface FlowView {
   enabled: boolean;
   /** Programs a pause holds (Flow's own, or Keep going's): counted, nothing sent. */
   paused: string[];
+  /** Programs on but not read in the last round: their counts are unknown, not zero. */
+  unread: string[];
+  /** Programs stalled now (nothing done while tickets wait in review). */
+  stalledIn: string[];
   /** Null: no program could be read in the last round (shown as "-", never a guessed zero). */
   merge: number | null;
   qa: number | null;
@@ -24,6 +28,8 @@ export function flowView(s: FlowSnapshot): FlowView {
   return {
     enabled: s.enabled,
     paused: s.programs.filter((p) => p.enabled && p.paused).map((p) => p.name),
+    unread: s.programs.filter((p) => p.enabled && !p.ok).map((p) => p.name),
+    stalledIn: s.programs.filter((p) => p.enabled && p.ok && p.counts.stall > 0).map((p) => p.name),
     merge: sum((p) => p.counts.merge),
     qa: sum((p) => p.counts.qa),
     idle: sum((p) => p.counts.idle),
@@ -59,3 +65,12 @@ export function actionLine(a: FlowAction): string {
 }
 
 export const actionLevel = (a: FlowAction): GlanceLevel => (a.kind === 'failed' || a.kind === 'notified' ? 'critical' : a.kind === 'told' ? 'ok' : 'warn');
+
+/**
+ * The line under the counts when no action is listed. Null while a program could not be read: the card says Unavailable instead, since
+ * "nothing needed a nudge" would be a claim about a program nobody looked at.
+ */
+export function quietLine(v: FlowView): string | null {
+  if (v.unread.length) return null;
+  return v.lastRunAt ? 'Nothing needed a nudge.' : 'No round yet.';
+}

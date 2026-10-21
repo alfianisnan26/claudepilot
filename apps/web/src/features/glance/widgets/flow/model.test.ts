@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { FlowProgramView, FlowSnapshot } from '@portal/contracts';
-import { actionLine, flowCompact, flowView } from './model';
+import { actionLine, flowCompact, flowView, quietLine } from './model';
 
 const prog = (over: Partial<FlowProgramView> = {}): FlowProgramView => ({
   name: 'konfersi',
@@ -49,4 +49,14 @@ test('flowView lists the programs a pause holds', () => {
   const v = flowView(snap([prog(), prog({ name: 'b', paused: 'keepgoing' })]));
   assert.deepEqual(v.paused, ['b']);
   assert.match(flowCompact(v, false).title, /paused: b/);
+});
+
+test('quietLine: "Nothing needed a nudge." only when every program was read; an unread one is unavailable, not quiet', () => {
+  const read = flowView({ ...snap([prog()]), lastRunAt: '2026-10-21T00:00:00.000Z' });
+  assert.equal(quietLine(read), 'Nothing needed a nudge.');
+  assert.equal(quietLine(flowView(snap([prog()]))), 'No round yet.');
+  const unread = flowView({ ...snap([prog(), prog({ name: 'b', ok: false })]), lastRunAt: '2026-10-21T00:00:00.000Z' });
+  assert.deepEqual(unread.unread, ['b']);
+  assert.equal(quietLine(unread), null);
+  assert.deepEqual(flowView(snap([prog({ counts: { merge: 0, qa: 0, idle: 0, bypass: 0, stall: 1 } }), prog({ name: 'b', ok: false, counts: { merge: 0, qa: 0, idle: 0, bypass: 0, stall: 1 } })])).stalledIn, ['konfersi']);
 });

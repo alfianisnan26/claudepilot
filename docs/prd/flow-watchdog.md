@@ -77,9 +77,10 @@ The settings route needs `settings` `manage`. No agent tool writes settings.
 - **Notification:** the stall uses the existing `keepgoing_attention` kind (`what: flow_stalled`, title "Flow stalled", body
   `program · N in review · none done in 3 h`). Every destination that already hears Keep going hears it too, Web Push included. A new
   kind would have needed a migration for destinations that keep an explicit list of kinds.
-- **Card:** Home card and glance widget `flow`, hidden in the strips by default. It shows Merge, No QA, Idle, Bypass and Stalled, plus
+- **Card:** Home card and glance widget `flow`, hidden in the strips by default. It shows Merge, No QA, Idle and Bypass in one row (a stall is a status line above them, "Stalled · program"), plus
   the last 5 actions; the explanation is in its InfoTip. It reloads after each round (see Live refresh). A program the round could
-  not read shows `-`, not zero.
+  not read shows `-` and "Unavailable · program" (why in its InfoTip), never "Nothing needed a nudge.", which shows only when every program
+  was read.
 
 ## Who is never told, and holds
 
