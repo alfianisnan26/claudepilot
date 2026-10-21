@@ -34,6 +34,8 @@ export function BucketsDialog({
   const [workspaceId, setWorkspaceId] = useState('');
   const [tags, setTags] = useState('');
   const [vaultId, setVaultId] = useState('');
+  // T-1967: merge the picked bucket into another (its tickets move, their old keys keep working, the bucket goes).
+  const [mergeInto, setMergeInto] = useState('');
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -61,6 +63,7 @@ export function BucketsDialog({
     setWorkspaceId(b?.defaultWorkspaceId ?? '');
     setTags(b?.defaultTags.join(', ') ?? '');
     setVaultId(b?.vaultId ?? '');
+    setMergeInto('');
   }, [pick, buckets]);
 
   const isNew = pick === NEW;
@@ -78,6 +81,7 @@ export function BucketsDialog({
         vaultId: vaultId.trim() || null,
       };
       if (isNew) await ticketsApi.createBucket({ key: key.trim().toUpperCase(), ...fields });
+      else if (mergeInto) await ticketsApi.mergeBucket(pick, { into: mergeInto });
       else await ticketsApi.updateBucket(pick, fields);
       onChanged();
       onClose();
@@ -94,7 +98,7 @@ export function BucketsDialog({
       onClose={onClose}
       title="Buckets"
       onSubmit={submit}
-      submitLabel={isNew ? 'Create' : 'Save'}
+      submitLabel={isNew ? 'Create' : mergeInto ? `Merge into ${mergeInto}` : 'Save'}
       saving={saving}
       error={error}
       dirty={!!name.trim()}
@@ -139,6 +143,16 @@ export function BucketsDialog({
           onChange={(e) => setTags(e.target.value)}
         />
         <TextField label="Vault" optional autoComplete="off" spellCheck={false} value={vaultId} onChange={(e) => setVaultId(e.target.value)} />
+        {!isNew && (
+          <Select
+            label="Merge into"
+            optional
+            hint="Its tickets move there; their old ids keep working. This bucket goes."
+            value={mergeInto}
+            onChange={setMergeInto}
+            options={[{ value: '', label: 'None' }, ...buckets.filter((b) => b.key !== pick).map((b) => ({ value: b.key, label: `${b.key} · ${b.name}` }))]}
+          />
+        )}
       </div>
     </FormDialog>
   );

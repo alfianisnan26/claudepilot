@@ -14,6 +14,7 @@ import {
   type TicketPriority,
   type TicketStatus,
   type TicketType,
+  type TicketBucket,
 } from '@portal/contracts';
 import { Bot, ChevronLeft, ChevronsUp, Circle, GitBranch, MessageSquare, Play, RotateCcw, Trash2, User, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -47,6 +48,11 @@ export function TicketPage() {
   const [failed, setFailed] = useState<'missing' | 'error' | null>(null);
   const [dialog, setDialog] = useState<Dialog>(null);
   const [busy, setBusy] = useState(false);
+  // T-1967: the buckets a ticket can move to.
+  const [buckets, setBuckets] = useState<TicketBucket[]>([]);
+  useEffect(() => {
+    ticketsApi.buckets().then(setBuckets, () => undefined);
+  }, []);
   // Beside the queue, Close floats at the panel's top right: the header keeps clear of it.
   const { split } = usePanel();
 
@@ -178,6 +184,16 @@ export function TicketPage() {
             <Select label="Status" value={t.status} disabled={busy} onChange={(v) => void change({ status: v as TicketStatus })} options={TICKET_STATUSES.map((s) => ({ value: s, label: TICKET_STATUS_LABEL[s] }))} />
             <Select label="Priority" value={t.priority} disabled={busy} onChange={(v) => void change({ priority: v as TicketPriority })} options={TICKET_PRIORITIES.map((p) => ({ value: p, label: TICKET_PRIORITY_LABEL[p] }))} />
             <Select label="Type" value={t.type} disabled={busy} onChange={(v) => void change({ type: v as TicketType })} options={TICKET_TYPES.map((x) => ({ value: x, label: TICKET_TYPE_LABEL[x] }))} />
+            {/* T-1967: a move takes the next number there; the old key keeps opening this ticket. */}
+            {t.bucket && buckets.length > 0 && (
+              <Select
+                label="Bucket"
+                value={t.bucket}
+                disabled={busy}
+                onChange={(v) => void change({ bucket: v }, `Moved to ${v}`)}
+                options={(buckets.some((b) => b.key === t.bucket) ? buckets : [...buckets, { key: t.bucket, name: t.bucket } as TicketBucket]).map((b) => ({ value: b.key, label: `${b.key} · ${b.name}` }))}
+              />
+            )}
             <Field label="Workspace">
               <p className="flex min-h-11 flex-wrap items-center gap-x-2 text-[14px]">
                 {t.workspaceId ?? <span className="text-muted">Shared queue</span>}
@@ -374,6 +390,8 @@ function sentence(e: TicketEvent): string {
       return d.removed ? `${who} removed ${typeof d.name === 'string' ? d.name : 'a file'}` : `${who} attached ${typeof d.name === 'string' ? d.name : 'a file'}${typeof d.size === 'number' ? ` (${fileSize(d.size)})` : ''}`;
     case 'ci':
       return `${who}: ${typeof d.name === 'string' ? d.name : 'a check'} ${typeof d.state === 'string' ? d.state : 'changed'}`;
+    case 'bucket':
+      return `${who} moved it from ${typeof d.from === 'string' ? d.from : 'its bucket'} to ${typeof d.to === 'string' ? d.to : 'another bucket'}${d.merged ? ' (buckets merged)' : ''}`;
     default:
       return `${who} changed it`;
   }

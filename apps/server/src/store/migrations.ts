@@ -3701,6 +3701,25 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 48,
+    name: 'tickets: a ticket moves between buckets and its old keys stay aliases (T-1967)',
+    up(db) {
+      // T-1967 (owner, 2026-10-21: "PILOT and CLAUDEPILOT should be consolidated"): a moved ticket takes its new bucket's next number; every key
+      // it had keeps naming it here, so nothing that wrote KONF-12 breaks. A key is never handed out twice: a bucket's counter only grows, and a
+      // bucket made again under a merged key starts after its aliases (the service). Rows go with their ticket.
+      db.exec(`
+        CREATE TABLE ticket_key_aliases (
+          bucket_key TEXT NOT NULL,
+          bucket_number INTEGER NOT NULL,
+          ticket_number INTEGER NOT NULL REFERENCES tickets (number) ON DELETE CASCADE,
+          moved_at TEXT NOT NULL,
+          PRIMARY KEY (bucket_key, bucket_number)
+        ) STRICT;
+        CREATE INDEX ticket_key_aliases_ticket ON ticket_key_aliases (ticket_number);
+      `);
+    },
+  },
 ];
 
 /**

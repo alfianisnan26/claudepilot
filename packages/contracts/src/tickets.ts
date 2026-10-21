@@ -156,7 +156,9 @@ export type TicketEventKind =
   /** A person (or a script) pushed it into a running session (FR28): `data` `{ sessionId, sessionTitle, mode }`, `body` the note. */
   | 'bumped'
   /** A file was attached (`data` `{ attachmentId, name, size, mediaType }`) or removed (`data` adds `removed: true`). */
-  | 'attachment';
+  | 'attachment'
+  /** T-1967: it moved to another bucket: `data` `{ from, to }`, its key before and after (the old key stays an alias). */
+  | 'bucket';
 
 /** One entry on a ticket's timeline: who did what, when. Never edited. */
 export interface TicketEvent {
@@ -304,6 +306,8 @@ export interface CreateTicketRequest {
 }
 
 export interface UpdateTicketRequest {
+  /** T-1967: move it to another bucket (its key): it takes that bucket's next number; its old key keeps resolving. */
+  bucket?: string;
   summary?: string;
   description?: string;
   type?: TicketType;
@@ -369,6 +373,10 @@ export const TICKET_API = {
   buckets: '/api/tickets/buckets',
   /** GET: `TicketBucket`. PATCH `UpdateTicketBucketRequest`: `TicketBucket`. */
   bucket: (key: string) => `/api/tickets/buckets/${encodeURIComponent(key)}`,
+  /** POST `MergeTicketBucketRequest`: `MergeTicketBucketResult` (T-1967, owner only): every ticket of the bucket moves into `into`, then it is gone. */
+  bucketMerge: (key: string) => `/api/tickets/buckets/${encodeURIComponent(key)}/merge`,
+  /** POST `TicketBucketMovesRequest`: `TicketBucketMoveResult[]` (T-1967, owner only), each move on its own. */
+  bucketMoves: '/api/tickets/bucket-moves',
   /** GET: `TicketDetail`. PATCH `UpdateTicketRequest`: `TicketItem`. DELETE: remove it. */
   one: (id: string) => `/api/tickets/${encodeURIComponent(id)}`,
   /** POST `CommentTicketRequest`: the new `TicketEvent`. */
@@ -435,6 +443,33 @@ export interface CreateTicketBucketRequest {
 }
 
 export type UpdateTicketBucketRequest = Partial<Omit<CreateTicketBucketRequest, 'key'>>;
+
+/** T-1967: merge a bucket into another; `name` and `description` rename the target as it takes them in (optional). */
+export interface MergeTicketBucketRequest {
+  into: string;
+  name?: string;
+  description?: string;
+}
+
+/** One ticket a merge or a bulk move moved: its stable id and its key before and after. */
+export interface TicketBucketMove {
+  id: string;
+  from: string;
+  to: string;
+}
+
+export interface MergeTicketBucketResult {
+  bucket: TicketBucket;
+  /** In creation order. */
+  moved: TicketBucketMove[];
+}
+
+export interface TicketBucketMovesRequest {
+  moves: { id: string; bucket: string }[];
+}
+
+/** One move of a bulk request: done (`to` is its new key; `from === to` when it was already there) or refused with why. */
+export type TicketBucketMoveResult = (TicketBucketMove & { ok: true }) | { id: string; ok: false; error: string };
 
 /**
  * What a ticket reference names: the stable id (`T-12`, `#12`, `12`) or a bucket key (`KONF-12`, any case). Null when it is neither.

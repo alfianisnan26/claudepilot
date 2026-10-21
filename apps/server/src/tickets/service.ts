@@ -22,6 +22,10 @@ import {
   TICKET_BUCKET_KEY,
   TICKET_DEFAULT_BUCKET,
   type CreateTicketBucketRequest,
+  type MergeTicketBucketRequest,
+  type MergeTicketBucketResult,
+  type TicketBucketMove,
+  type TicketBucketMoveResult,
   type TicketBucket,
   type UpdateTicketBucketRequest,
   type BumpRequest,
@@ -709,7 +713,12 @@ export class Tickets {
     const hit = this.#db.prepare('SELECT number FROM tickets WHERE bucket_key = ? AND bucket_number = ?').get(r.bucket, r.n) as
       | { number: number }
       | undefined;
-    return hit ? hit.number : null;
+    if (hit) return hit.number;
+    // T-1967: a key it had before it moved (an alias for ever).
+    const was = this.#db.prepare('SELECT ticket_number AS number FROM ticket_key_aliases WHERE bucket_key = ? AND bucket_number = ?').get(r.bucket, r.n) as
+      | { number: number }
+      | undefined;
+    return was ? was.number : null;
   }
 
   #need(caller: Caller, idOrNumber: string | number): Row {
@@ -850,11 +859,16 @@ export class Tickets {
       const q = like(f.query.trim().slice(0, 100));
       // T-1098: a query that is a ticket reference (T-12 or KONF-12) finds that ticket too.
       const ref = parseTicketRef(f.query.trim());
-      const byRef = ref ? ('number' in ref ? ' OR t.number = ?' : ' OR (t.bucket_key = ? AND t.bucket_number = ?)') : '';
+      // T-1967: a key a moved ticket had (an alias) finds it too.
+      const byRef = ref
+        ? 'number' in ref
+          ? ' OR t.number = ?'
+          : ' OR (t.bucket_key = ? AND t.bucket_number = ?) OR t.number IN (SELECT ticket_number FROM ticket_key_aliases WHERE bucket_key = ? AND bucket_number = ?)'
+        : '';
       where.push(
         `(t.summary LIKE ? ESCAPE '\\' OR t.description LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM ticket_tags g WHERE g.ticket_number = t.number AND g.tag LIKE ? ESCAPE '\\')${byRef})`,
       );
-      args.push(q, q, q, ...(ref ? ('number' in ref ? [ref.number] : [ref.bucket, ref.n]) : []));
+      args.push(q, q, q, ...(ref ? ('number' in ref ? [ref.number] : [ref.bucket, ref.n, ref.bucket, ref.n]) : []));
     }
     return { sql: where.length ? `WHERE ${where.join(' AND ')}` : '', args };
   }
@@ -1678,8 +1692,22 @@ export class Tickets {
       } else entries.push({ kind: 'status', data: { from: row.status, to: status } });
     }
 
-    if (!entries.length) return this.#items([row])[0]!;
+    // T-1967: a move to another bucket (the caller may change the ticket, and file in the target: an agent only in its workspace's).
+    let moveTo: BucketRow | null = null;
+    if (req.bucket !== undefined && req.bucket !== null && req.bucket !== '') {
+      if (handoff) throw new AppError('FORBIDDEN', 'A crew lead hands a ticket on (assignee, status, priority); moving it to another bucket needs its holder.');
+      if (typeof req.bucket !== 'string') throw invalid('bucket', 'A bucket is its key, like KONF.');
+      const b = this.#bucketRow(req.bucket.trim().toUpperCase());
+      if (!b || !this.#bucketOpenTo(caller, b)) throw noBucket();
+      if (b.key !== row.bucket_key) moveTo = b;
+    }
+    if (!entries.length && !moveTo) return this.#items([row])[0]!;
+    let moved: TicketBucketMove | null = null;
     this.#tx(() => {
+      if (moveTo) {
+        moved = this.#moveIn(row.number, moveTo);
+        entries.push({ kind: 'bucket', data: { from: moved.from, to: moved.to } });
+      }
       sets.updated_at = this.#now().toISOString();
       if ('workspace_id' in sets) sets.workspace_id = this.#stored(sets.workspace_id as string | null);
       const cols = Object.keys(sets);
@@ -1691,6 +1719,8 @@ export class Tickets {
       if (laneTo) this.#laneNote(row.number, caller, laneTo);
     });
     this.#auditForEnded(grant, w, row, 'update');
+    const m = moved as TicketBucketMove | null;
+    if (m) this.#moveAudit(w, 'ticket.bucket_moved', { ticketId: m.id, from: m.from, to: m.to });
     if (handoff)
       this.onAudit?.({
         kind: 'ticket.lead_assigned',
@@ -1958,12 +1988,14 @@ export class Tickets {
     const at = this.#now().toISOString();
     this.#tx(() => {
       if (this.#bucketRow(key)) throw new AppError('CONFLICT', `There is a bucket ${key} already.`);
+      // T-1967: a key a merged bucket had: its old keys still name their tickets, so the new bucket counts on after them.
+      const after = (this.#db.prepare('SELECT COALESCE(max(bucket_number), 0) AS n FROM ticket_key_aliases WHERE bucket_key = ?').get(key) as { n: number }).n;
       this.#db
         .prepare(
-          `INSERT INTO ticket_buckets (key, name, description, default_workspace_id, default_tags, vault_id, owner_id, created_by, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO ticket_buckets (key, name, description, default_workspace_id, default_tags, vault_id, owner_id, created_by, created_at, updated_at, next_number)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
-        .run(key, f.name!, f.description ?? '', this.#stored(f.workspace ?? null), JSON.stringify(f.tags ?? []), f.vault ?? null, opts.ownerId ?? FOUNDING_USER_ID, opts.ownerId ?? FOUNDING_USER_ID, at, at);
+        .run(key, f.name!, f.description ?? '', this.#stored(f.workspace ?? null), JSON.stringify(f.tags ?? []), f.vault ?? null, opts.ownerId ?? FOUNDING_USER_ID, opts.ownerId ?? FOUNDING_USER_ID, at, at, after + 1);
     });
     this.onChange?.();
     return this.bucket(caller, key);
@@ -1991,6 +2023,105 @@ export class Tickets {
     });
     this.onChange?.();
     return this.bucket(caller, b.key);
+  }
+
+  /* ---------- Moving tickets between buckets (T-1967) ---------- */
+
+  /**
+   * Inside a transaction: the ticket leaves its bucket for `to`, taking `to`'s next number; the key it had stays an alias (ticket_key_aliases).
+   * The counter and the ticket change in this transaction, under SQLite's one writer, so a create racing it can never get the same number.
+   */
+  #moveIn(number: number, to: BucketRow): TicketBucketMove {
+    const cur = this.#db.prepare('SELECT bucket_key, bucket_number FROM tickets WHERE number = ?').get(number) as { bucket_key: string; bucket_number: number | null };
+    const from = cur.bucket_number === null ? ticketIdOf(number) : ticketKeyOf(cur.bucket_key, cur.bucket_number);
+    if (cur.bucket_key === to.key) return { id: ticketIdOf(number), from, to: from };
+    const at = this.#now().toISOString();
+    if (cur.bucket_number !== null)
+      this.#db
+        .prepare('INSERT OR IGNORE INTO ticket_key_aliases (bucket_key, bucket_number, ticket_number, moved_at) VALUES (?, ?, ?, ?)')
+        .run(cur.bucket_key, cur.bucket_number, number, at);
+    const n = (this.#db.prepare('UPDATE ticket_buckets SET next_number = next_number + 1 WHERE key = ? RETURNING next_number - 1 AS n').get(to.key) as { n: number }).n;
+    this.#db.prepare('UPDATE tickets SET bucket_key = ?, bucket_number = ?, updated_at = ? WHERE number = ?').run(to.key, n, at, number);
+    return { id: ticketIdOf(number), from, to: ticketKeyOf(to.key, n) };
+  }
+
+  /** Merging buckets and moving many tickets at once: the owner (a person in the portal, or the portal itself), never a token or an agent. */
+  #assertOwner(caller: Caller) {
+    if (caller.kind !== 'ui' && caller.kind !== 'system') throw new AppError('FORBIDDEN', 'Only the owner merges buckets or moves tickets in bulk.');
+  }
+
+  #moveAudit(w: Writer, kind: string, detail: Record<string, unknown>) {
+    this.onAudit?.({ kind, actor: w.actor, actorLabel: null, userId: FOUNDING_USER_ID, subject: typeof detail.ticketId === 'string' ? `ticket:${detail.ticketId}` : null, detail });
+  }
+
+  /**
+   * Bulk move (the coordinator's consolidation): each move on its own transaction, so one refused move (no such ticket or bucket) leaves the
+   * others done. Returns each ticket's new key; a ticket already in the bucket answers `from === to`.
+   */
+  moveBuckets(caller: Caller, moves: unknown, opts: { allow?: (from: string, to: string) => boolean } = {}): TicketBucketMoveResult[] {
+    this.#assertOwner(caller);
+    if (!Array.isArray(moves) || moves.length === 0 || moves.length > 500) throw invalid('moves', 'Give 1 to 500 moves of { id, bucket }.');
+    const w = this.#writer(caller);
+    const out: TicketBucketMoveResult[] = [];
+    for (const m of moves as { id?: unknown; bucket?: unknown }[]) {
+      const ref = typeof m?.id === 'string' ? m.id : '';
+      const n = ref ? this.#numberOf(ref) : null;
+      const b = typeof m?.bucket === 'string' ? this.#bucketRow(m.bucket.trim().toUpperCase()) : undefined;
+      if (n === null || !this.#row(n)) {
+        out.push({ id: ref, ok: false, error: 'No such ticket.' });
+        continue;
+      }
+      if (!b) {
+        out.push({ id: ticketIdOf(n), ok: false, error: 'No such bucket.' });
+        continue;
+      }
+      // The route's authz (operate on both buckets): a bucket the caller may not reach reads as a missing ticket.
+      if (opts.allow && !opts.allow(this.#row(n)!.bucket_key, b.key)) {
+        out.push({ id: ref, ok: false, error: 'No such ticket.' });
+        continue;
+      }
+      const moved = this.#tx(() => {
+        const r = this.#moveIn(n, b);
+        if (r.from !== r.to) this.#addEvent(n, 'bucket', w, null, { from: r.from, to: r.to });
+        return r;
+      });
+      if (moved.from !== moved.to) this.#moveAudit(w, 'ticket.bucket_moved', { ticketId: moved.id, from: moved.from, to: moved.to, via: 'bulk' });
+      out.push({ ...moved, ok: true });
+    }
+    this.onChange?.();
+    return out;
+  }
+
+  /**
+   * Merges bucket `fromKey` into `req.into` (owner only): its tickets move in creation order, taking the target's next numbers, their old keys
+   * stay aliases, and the bucket is deleted, all in one transaction. `name` and `description` rename the target; merging CP into PILOT names it
+   * "Pilot", "ClaudePilot" unless they are given (T-1967, the owner's consolidation).
+   */
+  mergeBucket(caller: Caller, fromKey: string, req: Partial<MergeTicketBucketRequest>): MergeTicketBucketResult {
+    this.#assertOwner(caller);
+    const from = this.#bucketRow(String(fromKey).trim().toUpperCase());
+    const into = typeof req.into === 'string' ? this.#bucketRow(req.into.trim().toUpperCase()) : undefined;
+    if (!from || !into) throw noBucket();
+    if (from.key === into.key) throw invalid('into', 'Pick another bucket to merge into.');
+    const consolidation = from.key === 'CP' && into.key === TICKET_DEFAULT_BUCKET;
+    const name = req.name !== undefined ? cleanLine(req.name, 'name', 60) : consolidation ? 'Pilot' : null;
+    const description = req.description !== undefined ? cleanMarkdown(req.description, 'description', 2_000) : consolidation ? 'ClaudePilot' : null;
+    const w = this.#writer(caller);
+    const moved = this.#tx(() => {
+      const numbers = (this.#db.prepare('SELECT number FROM tickets WHERE bucket_key = ? ORDER BY created_at, number').all(from.key) as { number: number }[]).map((r) => r.number);
+      const done = numbers.map((n) => {
+        const r = this.#moveIn(n, into);
+        this.#addEvent(n, 'bucket', w, null, { from: r.from, to: r.to, merged: true });
+        return r;
+      });
+      if (name !== null || description !== null)
+        this.#db.prepare('UPDATE ticket_buckets SET name = ?, description = ?, updated_at = ? WHERE key = ?').run(name ?? into.name, description ?? into.description, this.#now().toISOString(), into.key);
+      this.#db.prepare('DELETE FROM ticket_buckets WHERE key = ?').run(from.key);
+      return done;
+    });
+    this.#moveAudit(w, 'ticket.bucket_merged', { from: from.key, into: into.key, tickets: moved.length });
+    this.onChange?.();
+    return { bucket: this.bucket(caller, into.key), moved };
   }
 
   /* ---------- CI (interface I10) ---------- */
