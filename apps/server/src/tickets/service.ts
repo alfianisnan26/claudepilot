@@ -412,7 +412,7 @@ export class Tickets {
   /** `t.workspace_id IN (…)` for one workspace, in every form its rows may hold while the move runs. */
   #inWorkspace(column: string, key: string): { sql: string; args: string[] } {
     const forms = this.#refs ? this.#refs.storedForms(key) : [key];
-    return { sql: `t.bucket_key IN (${forms.map(() => '?').join(', ')})`, args: forms };
+    return { sql: `${column} IN (${forms.map(() => '?').join(', ')})`, args: forms };
   }
 
   /**

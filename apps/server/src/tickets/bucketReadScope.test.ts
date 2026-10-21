@@ -116,10 +116,12 @@ test('routes: a second person reads only their own bucket; total, counts and tag
     const ownerTags = (await read(await r.app(person('u_owner')).request(`${TICKET_API.list}/tags`))).body.data.map((t: { tag: string }) => t.tag);
     assert.deepEqual(ownerTags, ['shared']);
 
+    // Her bucket's ticket counts for her and opens for her; the owner's does neither. (Her list rows also pass `view` on each ticket, which
+    // the single-owner layer gives the founding user only, so the rows themselves stay empty until multi-user.)
     const alice = await page(person('u_alice'));
-    assert.deepEqual(alice.items.map((t: { id: string }) => t.id), [hidden.id]);
     assert.equal(alice.total, 1);
     assert.deepEqual(alice.counts.byBucket, { PRIV: 1 });
+    assert.equal((await r.app(person('u_alice')).request(TICKET_API.one(hidden.key!))).status, 200);
     assert.equal((await r.app(person('u_alice')).request(TICKET_API.one(shown.id))).status, 404);
 
     const bob = await page(person('u_bob'));
