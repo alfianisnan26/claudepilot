@@ -111,8 +111,8 @@ The fake portal (`tools/vscode/test/fake-portal.mjs`) is the API with fixed data
 
 - **A real desktop VS Code** (Electron, the OS keychain behind SecretStorage, native notifications and the modal) and **this devcontainer's remote extension host**: not run here. Manual check: install the `.vsix`, sign in against a portal that has this API, approve on the phone, see Agents and the status bar, open Chat and send, review an approval, sign out and see the token revoked in Access → MCP tokens.
 - **The real portal end to end**: the API is not deployed. Until this branch is released, the cluster portal behind `127.0.0.1:3400` answers `404` and the extension says so.
-- **The approval page** in a browser (phone width and desktop, light and dark): typechecked only.
-- **The web host against the real portal**: the portal sends no CORS headers, so a web-hosted VS Code on another origin cannot call it (the smoke used a fake that allows any origin). Slice 2.
+- **The approval page**: checked in a browser on 2026-10-21 (390 and 1280, light and dark): PASS (code large, no lookup until the last 4 letters, requester address with a warning, Approve/Deny 44 px).
+- **The web host against the real portal**: untested. The portal sends no CORS headers and its CSRF layer refuses a foreign Origin, so a web-hosted VS Code on another origin will most likely be refused (the smoke used a fake that allows any origin). Slice 2.
 - **Marketplace or Open VSX** publishing, and `@vscode/test-electron`: not tried.
 - **Multi-user**: today every token is the founding user's (the single-owner seam). With accounts, the token must be bound to its person (FR51's `login_sessions.client`).
 
@@ -135,6 +135,11 @@ The fake portal (`tools/vscode/test/fake-portal.mjs`) is the API with fixed data
 | V11 | A token sends a terminal-only slash command | the token's slash rule (as over MCP) | `/clear` → 403 |
 | V12 | A version skew breaks silently | version endpoint and header, clear messages | compat unit test |
 
+### Residual risk after the review (accepted, 2026-10-21)
+
+- **Phishing of the device flow.** A hostile agent (or anyone) can start a flow and put the code in front of the owner. Typing the last 4 letters only proves the person has the code in front of them; the real signal is the requester address and its warning, which is noisy on mobile data and silent behind a proxy without `trustProxy`. What a phished token can do is bounded: read agents, tickets, usage and transcripts; with session control on, send portal-framed messages (labelled "VS Code · <client>") and deny requests. It can never Allow, and it is refused on `/mcp`. Revoke in Access → MCP tokens.
+- **Failed bearer attempts** are not rate-limited; acceptable with 256-bit secrets.
+
 ## 12. Slice 2 (suggested)
 
 1. Deploy the server part and run the manual check of §10 in this devcontainer; then wire `package.sh` into `.pilot` (a job that uploads the `.vsix` as an artifact).
@@ -146,8 +151,7 @@ The fake portal (`tools/vscode/test/fake-portal.mjs`) is the API with fixed data
 
 ## 13. Owner decisions
 
-- **Publisher id** (`claudepilot` is a placeholder) and **distribution**: a `.vsix` from CI (today), Open VSX, or the Microsoft Marketplace (its terms and a publisher account).
-- **Licence** of the extension (`UNLICENSED` for now; the package is private).
+- **Decided by the coordinator (2026-10-21, D-62 defaults):** publisher id `claudepilot`; distribution as a `.vsix` built by pilot CI (no Marketplace or Open VSX for now); licence as the repository (`UNLICENSED`, private package); slice 1 has no Allow (Deny and Open in Portal).
 - Whether a later slice brings **Allow** back to VS Code, and with what (§6).
 
 ## 14. Security review (2026-10-21): what changed
