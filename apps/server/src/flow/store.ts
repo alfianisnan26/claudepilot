@@ -85,9 +85,10 @@ export class MetaFlowStore implements FlowStatePort {
 
   save(s: FlowState): void {
     this.#cache = s;
-    if (!this.store.writable) return;
+    const db = this.store.db;
+    if (!this.store.writable || !db) return;
     try {
-      this.store.db
+      db
         .prepare('INSERT INTO portal_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
         .run(META_KEY, JSON.stringify(s));
     } catch (e) {

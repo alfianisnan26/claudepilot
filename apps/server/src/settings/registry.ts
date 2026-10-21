@@ -59,7 +59,7 @@ export function defineSetting<T extends SettingValue>(def: SettingDef<T>): Setti
   if (def.choices && (def.type !== 'string' || !def.choices.includes(def.default as string))) throw new Error(`Setting ${def.key}: choices need a string default that is one of them.`);
   const known = defs.get(def.key);
   if (known && JSON.stringify(known) !== JSON.stringify(def)) throw new Error(`Setting ${def.key} is already defined differently.`);
-  defs.set(def.key, def as SettingDef);
+  defs.set(def.key, def as unknown as SettingDef);
   if (!groups.has(def.group)) groups.set(def.group, { label: def.group[0]!.toUpperCase() + def.group.slice(1), order: 100 });
   return def;
 }
