@@ -41,7 +41,7 @@ spec:
         kubernetes.io/hostname: k3s-node2
       containers:
         - name: portal
-          image: registry.int.isnan.me/claudepilot/portal:2026.10.21-1
+          image: registry.int.isnan.me/claudepilot/portal:2026.10.21-2
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
