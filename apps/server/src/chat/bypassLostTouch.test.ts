@@ -103,8 +103,11 @@ test('T-1094: lost touch, a failed resume, then an attach to the same process st
     const tails = s.ws.tails.length;
     const sending = s.controller.send(lead.id, 'lt-2', 'go on');
     await until(() => s.ws.tails.length > tails, 4000);
+    // T-1985: every switch is answered in the tick it is written. The polling `answering` raced the 1 s control timeout under the full
+    // suite's load (deploy #518): the switch back into Bypass timed out, so the lead took its restart-once path (a stop and a 5th start).
+    s.ws.autoRespond = true;
     s.ws.tails.at(-1)!.push(init(lead.id, 'bypassPermissions'));
-    await answering(s, sending);
+    await sending;
     await sleep(50);
 
     const row = s.controller.get(lead.id)!;
