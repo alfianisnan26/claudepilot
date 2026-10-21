@@ -165,7 +165,15 @@ push_host=${push%%/*}
 chat=$(label "${PILOT_SESSION_ID:-manual}"); role=$(label "$role")
 image=${IMAGE_BUILD_CLONE_IMAGE:-}
 if [ -z "$image" ]; then
-  tag=$(curl -fsS "https://$registry/v2/claudepilot/workspace/tags/list" | jq -r '.tags[]? | select(test("-dev-"))' | sort -V | tail -n 1)
+  # T-1982: the registry directly (the pod, a host whose DNS knows it); when that fails (the coordinator's Mac devcontainer: "Could not resolve
+  # host"), the cluster answers through kubectl's own route (its SOCKS tunnel there): the API server proxies the registry's in-cluster service,
+  # so this host needs neither its DNS nor a route to it. The fallback is for the internal registry only (DEPLOY_REGISTRY unset or the same).
+  tags=$(curl -fsS --connect-timeout 10 -m 30 "https://$registry/v2/claudepilot/workspace/tags/list" 2>/dev/null) || tags=
+  if [ -z "$tags" ] && [ "$registry" = registry.int.isnan.me ]; then
+    echo "image-build: $registry did not answer from here: asking the cluster for the workspace image" >&2
+    tags=$(kubectl get --raw /api/v1/namespaces/isnan-registry/services/registry:5000/proxy/v2/claudepilot/workspace/tags/list 2>/dev/null) || tags=
+  fi
+  tag=$(printf '%s' "$tags" | jq -r '.tags[]? | select(test("-dev-"))' 2>/dev/null | sort -V | tail -n 1) || tag=
   [ -n "$tag" ] || { echo "image-build: no development workspace image in $registry: set IMAGE_BUILD_CLONE_IMAGE" >&2; exit 1; }
   image=$registry/claudepilot/workspace:$tag
 fi
