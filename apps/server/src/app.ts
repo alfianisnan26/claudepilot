@@ -1199,6 +1199,12 @@ export function createApp(
       },
     };
     const vs = new Hono<Env>();
+    // The id rule of every /api route (QA-032) holds here too, for the public and the bearer routes that requireSession does not cover.
+    vs.use('*', async (c, next) => {
+      const field = await hostileWorkspaceField(c);
+      if (field) throw new AppError('VALIDATION_FAILED', 'A workspace is `<target>/<name>`.', { details: { [field]: 'Not a workspace.' } });
+      await next();
+    });
     vs.use('/pending', requireSession);
     vs.use('/approve', requireSession);
     vs.route('/', createVscodePublicRoutes(vsFlow, vsDeps) as never);
