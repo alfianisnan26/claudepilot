@@ -44,21 +44,31 @@ export interface SessionReader {
 const HOPS = 50;
 const ended = (s: ChatSession) => s.state === 'ended' || !!s.archivedAt;
 
+/** A person closed it (the chat's End): the portal's words for that ending (Keep going's `closedByPerson`). */
+export const closedByPerson = (s: Pick<ChatSession, 'state' | 'endedReason'>): boolean => s.state === 'ended' && /^closed by operator$/i.test(s.endedReason ?? '');
+const byPerson = (startedBy: string | null | undefined) => startedBy === 'ui' || !!startedBy?.startsWith('account:');
+
 /**
  * The live session a configured id stands for now: itself while it runs, else its successor (a Move) or its continuation, followed until
- * one that has not ended. Null when the line ends in an ended session (never a message to an ended one). Bounded and cycle safe.
+ * one that has not ended. Null when the line ends in an ended session (never a message to an ended one). A session a PERSON closed is
+ * followed only into a continuation a person started: a lead someone ended on purpose is not raised again through a portal-made one
+ * (`why: 'closed'`). Bounded and cycle safe.
  */
-export function liveHead(chat: SessionReader, id: string): ChatSession | null {
+export function resolveHead(chat: SessionReader, id: string): { head: ChatSession | null; why: 'ended' | 'closed' | null } {
   const seen = new Set<string>();
   let cur = chat.get(id);
   while (cur && !seen.has(cur.id) && seen.size < HOPS) {
-    if (!ended(cur)) return cur;
+    if (!ended(cur)) return { head: cur, why: null };
     seen.add(cur.id);
-    const next = cur.successorId ?? chat.continuationOf(cur.id);
-    cur = next ? chat.get(next) : null;
+    const nextId = cur.successorId ?? chat.continuationOf(cur.id);
+    const next = nextId ? chat.get(nextId) : null;
+    if (next && closedByPerson(cur) && !byPerson(next.startedBy)) return { head: null, why: 'closed' };
+    cur = next;
   }
-  return null;
+  return { head: null, why: 'ended' };
 }
+
+export const liveHead = (chat: SessionReader, id: string): ChatSession | null => resolveHead(chat, id).head;
 
 /**
  * Every id a lead has gone by: the configured id, the sessions it was continued or moved into (up to its live head), and what they

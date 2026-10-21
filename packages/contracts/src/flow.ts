@@ -22,6 +22,9 @@ export const FLOW_CONDITIONS = ['merge', 'qa', 'idle', 'bypass', 'stall'] as con
 export type FlowCondition = (typeof FLOW_CONDITIONS)[number];
 
 /** What the watchdog did: told a lead, reported (no safe action), told the owner, or could not (no live session, a refused send). */
+/** What holds a program: the Flow pause (`flow.paused`), or Keep going's pause for all or for the program's name. */
+export type FlowHold = 'flow' | 'keepgoing';
+
 export const FLOW_ACTIONS = ['told', 'reported', 'notified', 'skipped', 'failed'] as const;
 export type FlowActionKind = (typeof FLOW_ACTIONS)[number];
 
@@ -53,6 +56,8 @@ export interface FlowProgramView {
   inReview: number;
   /** Closed done within the stall window. */
   doneRecent: number;
+  /** Held by a pause: counted, nothing sent or notified. Null: not held. */
+  paused: FlowHold | null;
   /** The stall began (nothing done while tickets wait in review), or null. */
   stallSince: string | null;
 }
@@ -72,6 +77,8 @@ export const FLOW_LIMITS = { actions: 5, ticketsPerMessage: 20, kept: 50 } as co
 export const FLOW_SETTING_KEYS = {
   enabled: 'flow.enabled',
   programs: 'flow.programs',
+  /** Programs held (comma separated names, or `*` for all): counted, never acted on. */
+  paused: 'flow.paused',
   mergeAfterMin: 'flow.mergeAfterMin',
   qaAfterMin: 'flow.qaAfterMin',
   idleAfterMin: 'flow.idleAfterMin',

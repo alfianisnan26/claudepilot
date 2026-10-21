@@ -58,6 +58,7 @@ the lead was continued as a new chat (never bypass-capable, FR20).
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `flow.enabled` | on | The kill switch |
+| `flow.paused` | empty | Programs on hold (names, comma separated, `*` for all): counted, not acted on |
 | `flow.programs` | `konfersi\|konfersi-migration\|\|` | Programs split by `;`, each `name\|tag\|group\|merge gate\|on`. `group` is a 1-based index into `tickets.leadPeerGroups`; empty means the first group whose leads hold the program's tickets (else the first group). `merge gate` is a lead id; empty means the first lead of the group. Add `\|off` to stop one program. Malformed programs are dropped. |
 | `flow.mergeAfterMin`, `flow.qaAfterMin`, `flow.idleAfterMin`, `flow.repeatMin` | 20, 60, 30, 30 | Minutes |
 | `flow.stallHours`, `flow.notifyAfterHours` | 3, 3 | Hours |
@@ -74,11 +75,29 @@ The settings route needs `settings` `manage`. No agent tool writes settings.
   `program · N in review · none done in 3 h`). Every destination that already hears Keep going hears it too, Web Push included. A new
   kind would have needed a migration for destinations that keep an explicit list of kinds.
 - **Card:** Home card and glance widget `flow`, hidden in the strips by default. It shows Merge, No QA, Idle, Bypass and Stalled, plus
-  the last 5 actions; the explanation is in its InfoTip. It reloads on the live topic `tickets`; there is no topic of its own yet. A
-  program the round could not read shows `-`, not zero.
+  the last 5 actions; the explanation is in its InfoTip. It reloads after each round (see Live refresh). A program the round could
+  not read shows `-`, not zero.
+
+## Who is never told, and holds
+
+- **A lead a person stopped.** This is the chat controller's crew hold (`stoppedByPerson`): a Stop by a person or through the session
+  tools, until a message from someone else runs it again. Crew reports respect the same hold. The hold is kept in memory, so a portal
+  restart clears it, as it does for crew reports. A controller without the accessor counts as held (fail closed).
+- **A lead a person closed** (End: "Closed by operator"). It is followed only into a continuation a person started (`startedBy` `ui` or
+  `account:`), never one the portal made. The skip says "A person closed the lead".
+- **A lead whose own Keep going policy program is paused**, or any lead while Keep going is paused for all. Keep going's rows are read;
+  nothing is written to them.
+- Each of these skips is recorded (`flow.skipped`, the card), once per lead and condition per window. As a QA-ASK target, such a lead is
+  passed over for the next peer.
+- **Program holds.** The setting `flow.paused` (program names, comma separated, or `*`), Keep going paused for all, or Keep going paused
+  for a program with the same name, holds the program. It is still counted (the card shows "Paused · name") but nothing is sent, reported
+  or notified. Turning a program off (`|off`) stops even the counting.
+
+## Live refresh
+
+After every round the watchdog publishes the live topic `keepgoing` (the same watchdog family; no new topic). The card reloads on
+`keepgoing` and `tickets`.
 
 ## Known gaps
 
-- A lead that a person stopped (the crew hold) is woken by a watchdog message, as it would be by any portal message other than the crew
-  report. Keep going's pause does not hold the watchdog.
 - "Merged" is read as "no longer in review". The portal does not read the integration branch.

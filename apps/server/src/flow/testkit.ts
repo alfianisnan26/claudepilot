@@ -59,6 +59,10 @@ export class FlowFakeChat implements FlowChatPort {
   maxWorkers() {
     return this.cap;
   }
+  readonly stopped = new Set<string>();
+  stoppedByPerson(id: string) {
+    return this.stopped.has(id);
+  }
 }
 
 export class FlowFakeTickets implements FlowTicketPort {
@@ -116,12 +120,14 @@ export class FlowFakeTickets implements FlowTicketPort {
 export const sha = (c: string) => c.repeat(40).slice(0, 40);
 
 export function rig(opts: { settings?: Record<string, unknown>; ownerCan?: boolean; owner?: string | null } = {}) {
+  const kg = { pauses: [] as { program: string | null }[], programs: new Map<string, string>() };
   const clock = fakeClock();
   const chat = new FlowFakeChat(clock);
   const tickets = new FlowFakeTickets(clock);
   const store = new MemoryFlowStore();
   const audits: AuditInput[] = [];
   const notes: NotifyEmit[] = [];
+  const published: number[] = [];
   const settings = new Map<string, unknown>([
     [TICKET_SETTING_KEYS.leadPeerGroups, `${LEAD_A},${LEAD_B},${LEAD_C}`],
     ...Object.entries(opts.settings ?? {}),
@@ -137,6 +143,8 @@ export function rig(opts: { settings?: Record<string, unknown>; ownerCan?: boole
     leadGroups: () => settings.get(TICKET_SETTING_KEYS.leadPeerGroups),
     bus: { emit: (e) => (notes.push(e), { ...e, id: 'evt_1', at: new Date(clock.now()).toISOString() }) as never },
     audit: { record: (e) => void audits.push(e) },
+    keepGoing: { pauses: () => kg.pauses, programOf: (id) => kg.programs.get(id) ?? null },
+    publish: () => void published.push(clock.now()),
   });
-  return { clock, chat, tickets, store, audits, notes, settings, engine, K: FLOW_SETTING_KEYS };
+  return { clock, chat, tickets, store, audits, notes, settings, engine, kg, published, K: FLOW_SETTING_KEYS };
 }

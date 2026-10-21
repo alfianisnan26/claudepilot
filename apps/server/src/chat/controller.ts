@@ -4098,6 +4098,14 @@ export class ChatController {
     }
   }
 
+  /**
+   * T-1966: a person (or a caller of the session tools) stopped this session and nothing has run it since: the crew hold that crew reports
+   * respect. The flow watchdog reads it to leave such a lead alone. Read only.
+   */
+  stoppedByPerson(id: string): boolean {
+    return this.#crewHeld.has(this.#chat.resolveId(id));
+  }
+
   /** The audit trail, newest first: Bypass entered and left, and what was refused. */
   audit(filter: { kind?: string; sessionId?: string; limit?: number } = {}) {
     return this.#chat.audit(filter);

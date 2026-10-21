@@ -342,3 +342,98 @@ test('parsePrograms: fields checked, malformed ones dropped (fail closed)', () =
   for (const bad of ['', 'Bad|tag', 'a|Tag!', 'a|t|x', 'a|t||not an id', 'a|t|||maybe', 'a|t|||on|extra']) assert.deepEqual(parsePrograms(bad), [], bad);
   assert.deepEqual(parsePrograms(42), []);
 });
+
+/** A merge-ready ticket of B's unit (A is the merge gate). */
+function mergeReady(r: ReturnType<typeof rig>) {
+  crew(r);
+  r.tickets.add(12, { holder: 'wb' });
+  r.tickets.verdict('T-12', { role: 'qa', verdict: 'pass', commit: sha('a'), at: ago(r, 25) });
+}
+
+test('a lead a person stopped is never messaged: skipped and recorded once per window; QA goes to another peer', async () => {
+  const r = rig();
+  mergeReady(r);
+  r.chat.stopped.add(LEAD_A);
+  r.tickets.add(20, { holder: 'wb' }); // QA-ASK: A or C, A is stopped
+  r.tickets.add(21, { holder: 'wb' });
+  await r.engine.round();
+  r.clock.advance(5);
+  await r.engine.round();
+  assert.equal(r.chat.sent.filter((m) => m.id === LEAD_A).length, 0);
+  const skips = r.engine.snapshot().actions.filter((a) => a.kind === 'skipped' && a.condition === 'merge');
+  assert.equal(skips.length, 1);
+  assert.match(skips[0]!.note, /A person stopped this lead/);
+  const asks = r.chat.sent.filter((m) => m.text.includes('QA-ASK'));
+  assert.ok(asks.length >= 1);
+  assert.ok(asks.every((m) => m.id === LEAD_C));
+});
+
+test('a lead a person closed is not raised through a portal-made continuation; one a person started is followed', async () => {
+  const r = rig();
+  mergeReady(r);
+  r.chat.patch(LEAD_A, { state: 'ended', endedReason: 'Closed by operator' });
+  r.chat.put('a2', { continuedFrom: LEAD_A, state: 'working', startedBy: 'portal:keepgoing' });
+  await r.engine.round();
+  assert.equal(r.chat.sent.length, 0);
+  assert.match(r.engine.snapshot().actions.find((a) => a.condition === 'merge')!.note, /A person closed the lead/);
+
+  const p = rig();
+  mergeReady(p);
+  p.chat.patch(LEAD_A, { state: 'ended', endedReason: 'Closed by operator' });
+  p.chat.put('a2', { continuedFrom: LEAD_A, state: 'working', startedBy: 'ui' });
+  await p.engine.round();
+  assert.deepEqual(
+    p.chat.sent.map((m) => m.id),
+    ['a2'],
+  );
+});
+
+test('Keep going’s pause for a lead’s own program skips that lead (recorded)', async () => {
+  const r = rig();
+  mergeReady(r);
+  r.kg.programs.set(LEAD_A, 'orchestrator');
+  r.kg.pauses.push({ program: 'orchestrator' });
+  await r.engine.round();
+  assert.equal(r.chat.sent.length, 0);
+  assert.match(r.engine.snapshot().actions[0]!.note, /Keep going is paused for this lead/);
+  assert.equal(r.engine.snapshot().programs[0]!.paused, null); // the program itself is not held
+});
+
+test('the program pause holds the watchdog: Flow’s own (by name or *) and Keep going’s (all, or the program’s name)', async () => {
+  const holds: [string, (r: ReturnType<typeof rig>) => void, string][] = [
+    ['flow by name', (r) => r.settings.set('flow.paused', 'konfersi'), 'flow'],
+    ['flow all', (r) => r.settings.set('flow.paused', '*'), 'flow'],
+    ['keepgoing all', (r) => r.kg.pauses.push({ program: null }), 'keepgoing'],
+    ['keepgoing by name', (r) => r.kg.pauses.push({ program: 'konfersi' }), 'keepgoing'],
+  ];
+  for (const [what, hold, by] of holds) {
+    const r = rig();
+    mergeReady(r);
+    r.tickets.add(20, { holder: 'wb' });
+    r.chat.bypass.set(LEAD_B, { sessionId: LEAD_B, kind: 'bypass.left', actor: 'portal', at: ago(r, 10), detail: {} });
+    hold(r);
+    await r.engine.round();
+    r.clock.advance(300); // a stall that outlasts the notify window
+    await r.engine.round();
+    assert.equal(r.chat.sent.length, 0, what);
+    assert.equal(r.notes.length, 0, what);
+    assert.equal(r.engine.snapshot().actions.length, 0, what);
+    const v = r.engine.snapshot().programs[0]!;
+    assert.equal(v.paused, by, what);
+    assert.equal(v.counts.qa, 1, `${what}: still counted`);
+    assert.equal(v.counts.bypass, 1, what);
+  }
+  // Another program's Flow pause does not hold this one.
+  const o = rig({ settings: { 'flow.paused': 'other' } });
+  mergeReady(o);
+  await o.engine.round();
+  assert.equal(o.chat.sent.length, 1);
+});
+
+test('the card’s live topic is told after every round', async () => {
+  const r = rig();
+  await r.engine.round();
+  r.clock.advance(5);
+  await r.engine.round();
+  assert.equal(r.published.length, 2);
+});

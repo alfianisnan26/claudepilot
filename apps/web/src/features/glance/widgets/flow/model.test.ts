@@ -8,6 +8,7 @@ const prog = (over: Partial<FlowProgramView> = {}): FlowProgramView => ({
   tag: 'konfersi-migration',
   enabled: true,
   ok: true,
+  paused: null,
   mergeGate: null,
   mergeGateLive: null,
   leads: [],
@@ -42,4 +43,10 @@ test('actionLine: a few words, at most three tickets', () => {
     'Told · merge · T-1, T-2, T-3 +1',
   );
   assert.equal(actionLine({ at: '', program: 'k', condition: 'stall', kind: 'notified', sessionId: null, tickets: [], note: '' }), 'Notified you · stall');
+});
+
+test('flowView lists the programs a pause holds', () => {
+  const v = flowView(snap([prog(), prog({ name: 'b', paused: 'keepgoing' })]));
+  assert.deepEqual(v.paused, ['b']);
+  assert.match(flowCompact(v, false).title, /paused: b/);
 });

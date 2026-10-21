@@ -24,6 +24,7 @@ import {
   type FlowAction,
   type FlowActionKind,
   type FlowCondition,
+  type FlowHold,
   type FlowProgramView,
   type FlowSnapshot,
   type NotifySubject,
@@ -36,8 +37,8 @@ import type { ClockPort } from '../autotransfer/ports.js';
 import type { NotifyBus } from '../notify/bus.js';
 import type { AuditInput } from '../platform/audit.js';
 import { evaluateVerdicts, type StoredVerdict } from '../tickets/verdicts.js';
-import { crewRoot, lineage, liveHead, parseLeadPeerGroups, parsePrograms, type FlowProgram, type SessionReader } from './programs.js';
-import { flowOn, flowProgramsRaw, flowThresholds, type FlowSettingsReader, type FlowThresholds } from './settings.js';
+import { crewRoot, lineage, parseLeadPeerGroups, resolveHead, parsePrograms, type FlowProgram, type SessionReader } from './programs.js';
+import { flowOn, flowPaused, flowProgramsRaw, flowThresholds, type FlowSettingsReader, type FlowThresholds } from './settings.js';
 import { trimState, type FlowState, type FlowStatePort } from './store.js';
 
 export const FLOW_ROUND_MS = 5 * 60_000;
@@ -60,6 +61,14 @@ export interface FlowChatPort extends SessionReader {
   lastBypass(id: string): FlowBypassRecord | null;
   /** How many workers it may run at once (its own limit clamped to the global cap); null: no limit. */
   maxWorkers(s: ChatSession): number | null;
+  /** A person stopped it and nothing has run it since (the controller's crew hold). */
+  stoppedByPerson(id: string): boolean;
+}
+
+/** Keep going's pause switch, read only: the pauses that stand (program null: all) and the program on a chat's own Keep going policy. */
+export interface FlowKeepGoingPort {
+  pauses(): { program: string | null }[];
+  programOf(sessionId: string): string | null;
 }
 
 /** What it reads of the tickets module, as the portal itself. */
@@ -85,6 +94,9 @@ export interface FlowDeps {
   leadGroups: () => unknown;
   bus: Pick<NotifyBus, 'emit'> | null;
   audit: { record(e: AuditInput): void } | null;
+  /** Keep going's pause; null: no Keep going in this portal. */
+  keepGoing?: FlowKeepGoingPort | null;
+  /** After each round: the live topic the card reloads on. */
   publish?: () => void;
 }
 
@@ -124,6 +136,10 @@ interface Ctx {
   now: number;
   ownerId: string | null;
   told: boolean;
+  /** What holds the whole program (nothing is sent, reported or notified), or null. */
+  hold: FlowHold | null;
+  /** Keep going's pauses as read at the start of the round. */
+  kgPaused: (program: string | null) => boolean;
 }
 
 export class FlowEngine {
@@ -171,6 +187,14 @@ export class FlowEngine {
     const ownerId = this.#d.owner.ownersOf({ type: 'portal', id: 'flow' })[0] ?? null;
     const view: FlowProgramView[] = [];
     let done = 0;
+    let kgPauses: { program: string | null }[] = [];
+    try {
+      kgPauses = this.#d.keepGoing?.pauses() ?? [];
+    } catch {
+      // unreadable: no pause read (the Flow pause still holds)
+    }
+    const kgPaused = (program: string | null) => kgPauses.some((x) => x.program === null || (program !== null && x.program === program));
+    const flowHeld = flowPaused(this.#d.settings);
     for (const p of parsePrograms(flowProgramsRaw(this.#d.settings))) {
       if (!p.enabled) {
         delete st.stall[p.name];
@@ -178,7 +202,8 @@ export class FlowEngine {
         continue;
       }
       try {
-        view.push(await this.#program({ p, st, t, now, ownerId, told: false }, groups));
+        const hold: FlowHold | null = flowHeld.has('*') || flowHeld.has(p.name) ? 'flow' : kgPaused(p.name) ? 'keepgoing' : null;
+        view.push(await this.#program({ p, st, t, now, ownerId, told: false, hold, kgPaused }, groups));
         done++;
       } catch (e) {
         console.error(`[flow] the program ${p.name} could not be looked at: ${(e as Error).message}`);
@@ -225,9 +250,16 @@ export class FlowEngine {
       const r = h ? root(h) : null;
       return r ? (leads.find((l) => lineOf(l).has(r)) ?? null) : null;
     };
-    const heads = new Map(leads.map((l) => [l, liveHead(chat, l)] as const));
+    const resolved = new Map(leads.map((l) => [l, resolveHead(chat, l)] as const));
+    const heads = new Map([...resolved].map(([l, r]) => [l, r.head] as const));
     const gate = p.mergeGate ?? leads[0] ?? null;
-    const gateHead = gate ? (heads.get(gate) ?? liveHead(chat, gate)) : null;
+    const gateResolved = gate ? (resolved.get(gate) ?? resolveHead(chat, gate)) : { head: null, why: 'ended' as const };
+    const gateHead = gateResolved.head;
+    // A lead that may hear from the watchdog now: it runs, no person stopped it, and Keep going is not paused for it.
+    const reachable = (l: string) => {
+      const h = heads.get(l);
+      return !!h && !this.#heldWhy(c, h);
+    };
 
     // (a) and (b): the tickets in review, judged on their head.
     const merge: { t: TicketItem; head: string }[] = [];
@@ -254,7 +286,7 @@ export class FlowEngine {
 
     if (merge.length) {
       const rows = merge.slice(0, FLOW_LIMITS.ticketsPerMessage).map((m) => `- ${ref(m.t)} head ${m.head}`);
-      await this.#tell(c, 'merge', gate, gateHead, merge.map((m) => m.t.id), [
+      await this.#tell(c, 'merge', gate, gateHead, gateResolved.why, merge.map((m) => m.t.id), [
         `${FLOW_PREFIX} ${plural(merge.length, 'ticket')} in review ${merge.length === 1 ? 'has' : 'have'} a QA PASS on the head and ${merge.length === 1 ? 'is' : 'are'} not merged after ${t.mergeAfterMs / MIN} min (program ${p.name}). Merge or close each, or say on the ticket why not:`,
         ...rows,
         ...more(merge.length),
@@ -263,7 +295,7 @@ export class FlowEngine {
 
     if (qa.length) {
       // Round robin over the peer leads that run, never the author's own (the lead whose unit holds the ticket).
-      const live = leads.filter((l) => heads.get(l));
+      const live = leads.filter(reachable);
       const byLead = new Map<string, { t: TicketItem; head: string | null }[]>();
       let rr = c.st.rr[p.name] ?? 0;
       const unplaced: string[] = [];
@@ -281,14 +313,14 @@ export class FlowEngine {
       }
       c.st.rr[p.name] = rr;
       for (const [l, list] of byLead)
-        await this.#tell(c, 'qa', l, heads.get(l) ?? null, list.map((q) => q.t.id), [
+        await this.#tell(c, 'qa', l, heads.get(l) ?? null, null, list.map((q) => q.t.id), [
           `${FLOW_PREFIX} QA-ASK (program ${p.name}). ${plural(list.length, 'ticket')} in review ${list.length === 1 ? 'has' : 'have'} no verdict on the head and nobody working on ${list.length === 1 ? 'it' : 'them'} for ${t.qaAfterMs / MIN} min. Send a QA lane that is not the author to verify each and record the verdict on the head:`,
           ...list.slice(0, FLOW_LIMITS.ticketsPerMessage).map((q) => `- ${ref(q.t)} head ${q.head ?? 'unknown'}${holder(q.t) ? ` held by ${holder(q.t)}` : ''}`),
           ...more(list.length),
         ]);
-      if (unplaced.length && !this.#limited(c, 'qa', `program-${p.name}`)) {
+      if (unplaced.length && !c.hold && !this.#limited(c, 'qa', `program-${p.name}`)) {
         c.st.sent[`qa:program-${p.name}`] = c.now;
-        this.#act(c, 'qa', 'skipped', null, unplaced, 'No peer lead runs that is not the author: nobody was asked to verify these.');
+        this.#act(c, 'qa', 'skipped', null, unplaced, 'No peer lead that is not the author runs and may be told: nobody was asked to verify these.');
       }
     }
 
@@ -307,7 +339,7 @@ export class FlowEngine {
       if (cap !== null && workers >= cap) continue;
       idle++;
       const next = [...unit].sort((a, b) => rank(a.priority) - rank(b.priority) || ms(a.createdAt) - ms(b.createdAt) || a.number - b.number);
-      await this.#tell(c, 'idle', l, h, next.slice(0, 5).map((x) => x.id), [
+      await this.#tell(c, 'idle', l, h, null, next.slice(0, 5).map((x) => x.id), [
         `${FLOW_PREFIX} you have been idle ${Math.floor(idleMs / MIN)} min while your unit holds ${plural(unit.length, 'open ticket')} and runs ${workers} of ${cap ?? 'unlimited'} workers (program ${p.name}). Your next tickets, oldest high priority first:`,
         ...next.slice(0, 5).map((x) => `- ${ref(x)} ${x.priority} ${x.status}`),
         'Dispatch them, or say on each ticket why not.',
@@ -325,7 +357,7 @@ export class FlowEngine {
       if (rec.kind !== 'bypass.left' && rec.kind !== 'bypass.entered') continue;
       if (h && h.process !== 'live' && rec.kind === 'bypass.left' && rec.detail.kept === true && rec.sessionId === h.id) continue;
       bypass++;
-      if (this.#limited(c, 'bypass', l)) continue;
+      if (c.hold || this.#limited(c, 'bypass', l)) continue;
       c.st.sent[`bypass:${l}`] = now;
       this.#act(
         c,
@@ -344,7 +376,7 @@ export class FlowEngine {
     if (stall) {
       if (c.told && stall.nudgedAt === null) stall.nudgedAt = now;
       const base = stall.nudgedAt ?? stall.since;
-      if (stall.notifiedAt === null && now - base >= t.notifyAfterMs) {
+      if (!c.hold && stall.notifiedAt === null && now - base >= t.notifyAfterMs) {
         stall.notifiedAt = now;
         this.#notifyOwner(c, inReview.length, stall.nudgedAt !== null);
       }
@@ -355,6 +387,7 @@ export class FlowEngine {
       tag: p.tag,
       enabled: true,
       ok: true,
+      paused: c.hold,
       mergeGate: gate,
       mergeGateLive: gateHead?.id ?? null,
       leads,
@@ -374,10 +407,43 @@ export class FlowEngine {
    * One message to a lead's live session, rate limited per lead and condition. Not to an ended one (`head` null: skipped, recorded once per
    * window), and only when the owner may operate it. A refused send is recorded and waits for the next window.
    */
-  async #tell(c: Ctx, cond: FlowCondition, lead: string | null, head: ChatSession | null, tickets: string[], lines: string[]): Promise<void> {
-    if (!lead || this.#limited(c, cond, lead)) return;
+  /** Why a live head may not be told: a person stopped it, or Keep going is paused for it (its own policy's program, or all). */
+  #heldWhy(c: Ctx, h: ChatSession): string | null {
+    try {
+      if (this.#d.chat.stoppedByPerson(h.id)) return 'A person stopped this lead: nothing was sent.';
+    } catch {
+      return 'Whether a person stopped this lead could not be read: nothing was sent.';
+    }
+    let program: string | null = null;
+    try {
+      program = this.#d.keepGoing?.programOf(h.id) ?? null;
+    } catch {
+      program = null;
+    }
+    if (c.kgPaused(program)) return 'Keep going is paused for this lead: nothing was sent.';
+    return null;
+  }
+
+  /**
+   * One message to a lead's live session, rate limited per lead and condition. Never while the program is held (a pause), never to an
+   * ended one (`head` null), one a person stopped or closed, or one Keep going's pause holds: each skip is recorded once per window. Only
+   * when the owner may operate it. A refused send is recorded and waits for the next window.
+   */
+  async #tell(
+    c: Ctx,
+    cond: FlowCondition,
+    lead: string | null,
+    head: ChatSession | null,
+    why: 'ended' | 'closed' | null,
+    tickets: string[],
+    lines: string[],
+  ): Promise<void> {
+    if (c.hold || !lead || this.#limited(c, cond, lead)) return;
     c.st.sent[`${cond}:${lead}`] = c.now;
-    if (!head || ended(head)) return this.#act(c, cond, 'skipped', null, tickets, `The lead ${lead} has no live session: nothing was sent.`);
+    if (!head || ended(head))
+      return this.#act(c, cond, 'skipped', null, tickets, why === 'closed' ? `A person closed the lead ${lead}: nothing was sent.` : `The lead ${lead} has no live session: nothing was sent.`);
+    const held = this.#heldWhy(c, head);
+    if (held) return this.#act(c, cond, 'skipped', head.id, tickets, held);
     const subject = { type: 'session' as const, id: head.id, workspaceId: head.workspaceId };
     if (!c.ownerId || !this.#d.owner.can(c.ownerId, 'operate', subject))
       return this.#act(c, cond, 'skipped', head.id, tickets, 'The owner may not operate this session: nothing was sent.');
@@ -446,6 +512,7 @@ function emptyView(p: FlowProgram, enabled: boolean, ok: boolean): FlowProgramVi
     tag: p.tag,
     enabled,
     ok,
+    paused: null,
     mergeGate: p.mergeGate,
     mergeGateLive: null,
     leads: [],

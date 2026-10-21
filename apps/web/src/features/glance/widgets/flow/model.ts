@@ -5,6 +5,8 @@ import type { GlanceCompact, GlanceLevel } from '../../types';
 
 export interface FlowView {
   enabled: boolean;
+  /** Programs a pause holds (Flow's own, or Keep going's): counted, nothing sent. */
+  paused: string[];
   /** Null: no program could be read in the last round (shown as "-", never a guessed zero). */
   merge: number | null;
   qa: number | null;
@@ -21,6 +23,7 @@ export function flowView(s: FlowSnapshot): FlowView {
   const sum = (f: (p: (typeof ran)[number]) => number) => (ran.length ? ran.reduce((a, p) => a + f(p), 0) : null);
   return {
     enabled: s.enabled,
+    paused: s.programs.filter((p) => p.enabled && p.paused).map((p) => p.name),
     merge: sum((p) => p.counts.merge),
     qa: sum((p) => p.counts.qa),
     idle: sum((p) => p.counts.idle),
@@ -35,13 +38,14 @@ export function flowView(s: FlowSnapshot): FlowView {
 export function flowCompact(v: FlowView | null, failed: boolean): GlanceCompact {
   if (!v) return { value: failed ? '-' : null, level: 'unknown', title: failed ? 'Flow: not available' : 'Flow: loading', loading: !failed };
   if (!v.enabled) return { value: null, level: 'idle', title: 'Flow: the watchdog is off' };
+  if (v.paused.length && v.merge === null) return { value: null, level: 'idle', title: `Flow: paused (${v.paused.join(', ')})` };
   if (v.merge === null) return { value: '-', level: 'unknown', title: 'Flow: no program was read' };
   const stuck = (v.merge ?? 0) + (v.qa ?? 0) + (v.idle ?? 0);
   const level: GlanceLevel = (v.stalled ?? 0) > 0 ? 'critical' : stuck > 0 || (v.bypass ?? 0) > 0 ? 'warn' : 'ok';
   return {
     value: String(stuck),
     level,
-    title: `Flow: ${v.merge} to merge, ${v.qa} without QA, ${v.idle} idle leads${(v.stalled ?? 0) > 0 ? ', stalled' : ''}`,
+    title: `Flow: ${v.merge} to merge, ${v.qa} without QA, ${v.idle} idle leads${(v.stalled ?? 0) > 0 ? ', stalled' : ''}${v.paused.length ? `; paused: ${v.paused.join(', ')}` : ''}`,
   };
 }
 

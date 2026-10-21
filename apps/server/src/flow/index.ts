@@ -13,6 +13,7 @@ import { FlowEngine, type FlowBypassRecord, type FlowChatPort, type FlowTicketPo
 import { createFlowRoutes } from './routes.js';
 import './settings.js';
 import { MetaFlowStore } from './store.js';
+import { KeepGoingStore } from '../keepgoing/store.js';
 
 export { FlowEngine } from './engine.js';
 
@@ -21,6 +22,7 @@ interface ControllerLike {
   list(filter?: { workspaceId?: string; ticketId?: string; parentId?: string }): ChatSession[];
   send(id: string, uuid: string, text: string, opts: { priority?: 'next' | 'later'; actor?: string; actorLabel?: string }): Promise<void>;
   audit(filter: { kind?: string; sessionId?: string; limit?: number }): ChatAuditEntry[];
+  stoppedByPerson?(id: string): boolean;
   agentCaps?: () => AgentCaps;
 }
 
@@ -53,6 +55,8 @@ export function flowChatPort(raw: unknown): FlowChatPort | null {
       return r ? { sessionId: r.sessionId ?? id, kind: r.kind, actor: r.actor ?? '', at: r.at, detail: r.detail ?? {} } : null;
     },
     maxWorkers: (s) => effectiveMaxWorkers(ctl.agentCaps?.() ?? null, s.maxWorkers),
+    // A controller without the hold (an older one, a test double) is read as held: fail closed, nothing is sent.
+    stoppedByPerson: (id) => (typeof ctl.stoppedByPerson === 'function' ? ctl.stoppedByPerson(id) : true),
   };
 }
 
@@ -74,6 +78,7 @@ export function createFlowModule(platform: Platform, opts: { clock?: ClockPort }
   const tickets = flowTicketPort(platform.deps.tickets);
   if (!chat || !tickets) return { name: 'flow', engine: null };
   const settings = platform.deps.settings ?? null;
+  const kgStore = new KeepGoingStore(platform.deps.store);
   const engine = new FlowEngine({
     chat,
     tickets,
@@ -90,6 +95,10 @@ export function createFlowModule(platform: Platform, opts: { clock?: ClockPort }
     },
     bus: platform.bus,
     audit: platform.audit,
+    // Keep going's pause switch, read from its own rows (no edit in Keep going): all, a program, or the program on a chat's policy.
+    keepGoing: { pauses: () => kgStore.pauses(), programOf: (id) => kgStore.policy(id)?.program ?? null },
+    // The Home card reloads on Keep going's topic (the same watchdog family), after each round.
+    publish: () => platform.publish('keepgoing'),
   });
   return {
     name: 'flow',

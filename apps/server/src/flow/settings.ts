@@ -33,6 +33,18 @@ defineSetting({
   help: 'One program per ";": name|tag|group|merge gate|on. tag: the tickets it watches. group: which group of Peer leads (Tickets settings) runs it, 1 for the first; empty: the first group whose leads hold its tickets. merge gate: the lead id told about QA PASS tickets; empty: the first lead of the group. Add |off to stop one program.',
 });
 
+defineSetting({
+  key: K.paused,
+  type: 'string',
+  default: '',
+  max: 400,
+  scope: 'global',
+  group: 'flow',
+  order: 25,
+  label: 'Paused',
+  help: 'Programs on hold, by name, comma separated; * holds them all. A held program is still counted on the card, but no lead is told and you are not notified. Pausing Keep going for all chats (or for a program of the same name) holds it too. Empty: none held.',
+});
+
 const minutes = (key: string, order: number, label: string, def: number, help: string) =>
   defineSetting({ key, type: 'number', default: def, min: 5, max: 1440, integer: true, scope: 'global', group: 'flow', order, label, help });
 
@@ -108,6 +120,16 @@ export function flowOn(r: FlowSettingsReader | null): boolean {
     return typeof v === 'boolean' ? v : true;
   } catch {
     return true;
+  }
+}
+
+/** The programs the Flow pause holds; `*` stands for all. */
+export function flowPaused(r: FlowSettingsReader | null): Set<string> {
+  try {
+    const v = r?.get(K.paused);
+    return new Set(typeof v === 'string' ? v.split(',').map((x) => x.trim().toLowerCase()).filter(Boolean) : []);
+  } catch {
+    return new Set();
   }
 }
 

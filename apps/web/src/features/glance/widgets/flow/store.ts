@@ -19,5 +19,8 @@ async function loadFlow(): Promise<FlowSnapshot> {
   throw new ApiError('INTERNAL_ERROR', `Unexpected response (${res.status}).`, res.status);
 }
 
-/** The flow watchdog's last round (T-1966); loaded again on a ticket push (what its counts follow) and when the socket comes back. */
-export const flowStore = createLiveStore({ load: loadFlow, topics: ['tickets'] });
+/**
+ * The flow watchdog's last round (T-1966); loaded again after each round (it publishes Keep going's topic, the same watchdog family), on a
+ * ticket push, and when the socket comes back.
+ */
+export const flowStore = createLiveStore({ load: loadFlow, topics: ['keepgoing', 'tickets'] });

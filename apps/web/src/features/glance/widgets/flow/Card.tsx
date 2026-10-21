@@ -22,6 +22,14 @@ export function FlowCard() {
           <InfoTip label="Why Flow is off">The flow watchdog is switched off (Settings, Flow): nothing is looked at until it is on again.</InfoTip>
         </p>
       )}
+      {v.paused.length > 0 && (
+        <p role="status" data-flow-paused="" className="mb-1 flex items-center justify-center gap-1 text-xs font-semibold text-amber-700 dark:text-amber-400 [overflow-wrap:anywhere]">
+          Paused · {v.paused.join(', ')}
+          <InfoTip label="Why Flow is paused">
+            A pause holds these programs (Settings, Flow, Paused; or Keep going paused for all chats or for the program): they are still counted, but no lead is told and you are not notified.
+          </InfoTip>
+        </p>
+      )}
       <Stats>
         <Stat value={v.merge} label="Merge" tone={v.merge ? 'accent' : undefined} />
         <Stat value={v.qa} label="No QA" tone={v.qa ? 'accent' : undefined} />
