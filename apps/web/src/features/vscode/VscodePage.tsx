@@ -102,6 +102,7 @@ export function VscodePage() {
                     </span>
                   </span>
                 </div>
+                <p className="text-sm text-ink-soft">Approve only a code your own VS Code shows.</p>
                 <div className="flex gap-2">
                   <Button variant="secondary" className="min-h-11 flex-1" onClick={() => void answer('deny')} disabled={busy} data-vscode-deny="">
                     Deny
