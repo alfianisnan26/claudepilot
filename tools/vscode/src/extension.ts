@@ -5,9 +5,16 @@ import * as vscode from 'vscode';
 import { Approvals } from './approvals.js';
 import { Auth } from './auth.js';
 import { ChatView } from './chat.js';
-import { AgentsTree, Poller, StatusBar, TicketsTree, WorkspacesTree, type Item } from './views.js';
+import { AgentsTree, Poller, StatusBar, TicketsTree, WorkspacesTree, type Item, type Snapshot } from './views.js';
 
-export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
+/** What the web smoke reads (test/web/smoke.ts). Returned only in the Test mode, so no other extension ever gets the portal's data. */
+export interface TestHooks {
+  signedIn(): boolean;
+  snapshot(): Snapshot;
+  statusText(): string;
+}
+
+export async function activate(ctx: vscode.ExtensionContext): Promise<TestHooks | undefined> {
   const log = vscode.window.createOutputChannel('ClaudePilot', { log: true });
   const auth = new Auth(ctx, log);
   const poller = new Poller(auth, log);
@@ -51,6 +58,8 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
 
   await auth.refresh();
   poller.start();
+  if (ctx.extensionMode !== vscode.ExtensionMode.Test) return undefined;
+  return { signedIn: () => auth.signedIn, snapshot: () => poller.snapshot, statusText: () => status.text };
 }
 
 export function deactivate(): void {

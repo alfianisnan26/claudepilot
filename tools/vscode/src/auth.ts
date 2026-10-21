@@ -98,8 +98,9 @@ export class Auth {
     const client = this.client();
     if (!client) {
       const url = this.portalUrl();
-      const pick = await vscode.window.showErrorMessage(url.ok ? 'The portal address is not set.' : url.reason, 'Settings');
-      if (pick) await vscode.commands.executeCommand('workbench.action.openSettings', 'claudepilot.portalUrl');
+      void vscode.window.showErrorMessage(url.ok ? 'The portal address is not set.' : url.reason, 'Settings').then((pick) => {
+        if (pick) void vscode.commands.executeCommand('workbench.action.openSettings', 'claudepilot.portalUrl');
+      });
       return;
     }
     try {

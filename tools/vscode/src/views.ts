@@ -191,6 +191,10 @@ export class StatusBar implements vscode.Disposable {
     this.update(null);
   }
 
+  get text(): string {
+    return this.#item.text;
+  }
+
   update(s: Snapshot | null): void {
     const v = statusView(s?.status ?? null, { signedIn: this.auth.signedIn, error: s?.error ?? null });
     this.#item.text = v.text;
