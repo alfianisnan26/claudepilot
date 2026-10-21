@@ -15,7 +15,11 @@ const mutants = [
   ['F8 an agent comment is a marker', '!isAgent(e) && e.actor', 'e.actor'],
   ['F9 an unknown status is a move', 'isStatus(x.e.data?.to));', "typeof x.e.data?.to === 'string');"],
   ['F10 waiting at creation is ignored', 'hasWaitingTag(createdEv?.e.data?.tags) ||', 'false ||'],
-  ['F11 a waiting span is cut by the close', 'if (isTicketClosed(r.state as TicketStatus) || r.end <= r.start) {', 'if (r.end <= r.start) {'],
+  // F11 was `isTicketClosed(..) || r.end <= r.start` -> `r.end <= r.start`: an EQUIVALENT mutant (a closed span is a point, so end <= start
+  // already holds) and the reason the S1b Job failed. The clause is gone from the code; this mutant breaks the rule the clause was meant to keep.
+  ['F11 a waiting span is not cut by the close', 'const w1 = Math.min(w.end, r.end);', 'const w1 = w.end;'],
+  ['F12 clipFlow keeps spans that end before the window', 'return a <= to && b >= from;', 'return a <= to;'],
+  ['F13 clipFlow keeps markers after the window', 'return at >= from && at <= to;', 'return at >= from;'],
 ];
 const run = () => {
   try {

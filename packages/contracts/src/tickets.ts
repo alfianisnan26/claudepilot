@@ -414,16 +414,23 @@ export type TicketTimelineGranularity = (typeof TICKET_TIMELINE_GRANULARITIES)[n
 
 /**
  * The longest window a granularity may ask for (a minute scale over a long window would be thousands of columns the chart cannot show) and the
- * window it gets when `from` is absent. A longer one is a 400 that names the limit.
+ * window it gets when `from` is absent. A longer one is a 400 that names the limit. The maxima are the ticket's (T-119): 24 hours, 14 days, 180 days.
  */
 export const TICKET_TIMELINE_LIMITS: Record<TicketTimelineGranularity, { maxWindowMs: number; defaultWindowMs: number }> = {
   minute: { maxWindowMs: 24 * 3_600_000, defaultWindowMs: 6 * 3_600_000 },
-  hour: { maxWindowMs: 31 * 86_400_000, defaultWindowMs: 3 * 86_400_000 },
-  day: { maxWindowMs: 366 * 86_400_000, defaultWindowMs: 30 * 86_400_000 },
+  hour: { maxWindowMs: 14 * 86_400_000, defaultWindowMs: 3 * 86_400_000 },
+  day: { maxWindowMs: 180 * 86_400_000, defaultWindowMs: 30 * 86_400_000 },
 };
 
-/** GET `/api/tickets/timeline` query: `from` and `to` are ISO times, `granularity` a {@link TicketTimelineGranularity} (default `hour`), `limit` 1..100 (25), `cursor`. */
-export interface TicketTimelineQuery {
+/** Rows per timeline page: 50 when absent, at most 200 (the chart asks for 200). */
+export const TICKET_TIMELINE_PAGE = { defaultLimit: 50, maxLimit: 200 } as const;
+
+/**
+ * GET `/api/tickets/timeline` query: `from` and `to` are ISO times, `granularity` a {@link TicketTimelineGranularity} (default `hour`), `limit`
+ * 1..200 (50), `cursor`. The filters are the list's (`bucket`, `status`, `priority`, `type`, `tag`, `assignee`, `workspace`, `q`); closed
+ * tickets are in unless `status` says otherwise. A next page sends the `from` and `to` the first page answered with.
+ */
+export interface TicketTimelineQuery extends Pick<TicketFilter, 'bucket' | 'status' | 'priority' | 'type' | 'tag' | 'assignee' | 'workspaceId' | 'query'> {
   from?: string;
   to?: string;
   granularity?: TicketTimelineGranularity;
@@ -431,13 +438,31 @@ export interface TicketTimelineQuery {
   cursor?: string;
 }
 
-/** One ticket on the timeline: a summary row and its flow (all of its spans, not cut to the window: the chart clips). */
+/** Who has a timeline row's ticket, as its label column shows it (initials): a person, or a session by its title. */
+export interface TicketTimelineAssignee {
+  kind: 'user' | 'session';
+  /** The person's name, or the session's title (`Agent gone` when it no longer exists). */
+  label: string;
+  /** The session id, for a session. */
+  sessionId: string | null;
+}
+
+/**
+ * One ticket on the timeline: a summary row and its flow. `flow.spans` and `flow.markers` are the ones that touch the window (a span that
+ * overlaps it, a marker inside it); `flow.totals` and `flow.state` are over the ticket's whole life.
+ */
 export interface TicketTimelineRow {
   id: string;
+  /** T-1098: its bucket key (`KONF-12`), what the row shows. */
+  key: string;
+  bucket: string;
   summary: string;
   status: TicketStatus;
   priority: TicketPriority;
   type: TicketType;
+  assignee: TicketTimelineAssignee | null;
+  createdAt: string;
+  closedAt: string | null;
   flow: TicketFlow;
 }
 

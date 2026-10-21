@@ -1,7 +1,7 @@
 // T-119 S1a: ticketFlow turns a ticket's events into spans and markers. Pure: every time here is fixed and "now" is passed in (no real clock).
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { WAITING_TAG, ticketFlow, type FlowEvent, type FlowInput } from './ticketFlow.js';
+import { WAITING_TAG, clipFlow, ticketFlow, type FlowEvent, type FlowInput } from './ticketFlow.js';
 
 const T0 = Date.parse('2026-10-18T00:00:00.000Z');
 /** The ISO time `m` minutes after T0. */
@@ -146,4 +146,54 @@ test('markers: assigned, claimed, bumped, a person’s comment (not an agent’s
       ['ci', '09', 'gate'],
     ],
   );
+});
+
+test('closed, then reopened while the needs-a-person tag is still on: waiting stops at the close and starts again at the reopen', () => {
+  const f = flow([
+    ev(0, 'created'),
+    ev(10, 'tags', { from: [], to: [WAITING_TAG] }),
+    ev(30, 'closed', { from: 'open', to: 'done' }),
+    ev(50, 'reopened', { from: 'done', to: 'in_progress' }),
+  ]);
+  assert.deepEqual(brief(f), ['open 00:00-00:10', 'waiting 00:10-00:30', 'done at 00:30', 'waiting 00:50 ..']);
+  assert.equal(f.totals.waiting, 20 * MIN + (NOW - (T0 + 50 * MIN)), 'the time between the close and the reopen is nobody’s');
+  assert.equal(f.state, 'waiting');
+});
+
+test('a ticket assigned to a session that later ended: the claim is a marker and its spans still read from the events', () => {
+  const f = flow([
+    ev(0, 'created'),
+    ev(5, 'assigned', { from: null, to: { kind: 'session', sessionId: 'gone' }, claimed: true }, { actor: 'session:gone', actorLabel: 'Old lane', fromAgent: true }),
+    ev(5, 'status', { from: 'open', to: 'in_progress' }, { actor: 'session:gone', actorLabel: 'Old lane', fromAgent: true }),
+    ev(40, 'session_ended', { sessionId: 'gone' }, { actor: 'system', actorLabel: 'Portal' }),
+    ev(45, 'status', { from: 'in_progress', to: 'open', fallback: true }, { actor: 'system', actorLabel: 'Portal' }),
+  ]);
+  assert.deepEqual(brief(f), ['open 00:00-00:05', 'in_progress 00:05-00:45', 'open 00:45 ..']);
+  assert.deepEqual(f.spans[1]!.by, { actor: 'session:gone', label: 'Old lane', session: 'gone' });
+  assert.deepEqual(f.spans[2]!.by, { actor: 'system', label: 'Portal', session: null });
+  assert.deepEqual(f.markers.map((m) => [m.kind, m.detail]), [['claimed', 'gone']]);
+});
+
+test('clipFlow keeps the spans that touch a window (a running one up to now) and the markers inside it; state and totals stay whole', () => {
+  const f = flow([
+    ev(0, 'created'),
+    ev(10, 'status', { from: 'open', to: 'in_progress' }),
+    ev(15, 'comment', null, ui, 'early'),
+    ev(60, 'status', { from: 'in_progress', to: 'blocked' }),
+    ev(70, 'comment', null, ui, 'inside'),
+    ev(200, 'comment', null, ui, 'late'),
+  ], {}, T0 + 300 * MIN);
+  const w = (a: number, b: number) => clipFlow(f, T0 + a * MIN, T0 + b * MIN, T0 + 300 * MIN);
+  const inside = w(50, 100);
+  assert.deepEqual(brief(inside), ['in_progress 00:10-01:00', 'blocked 01:00 ..']);
+  assert.deepEqual(inside.markers.map((m) => m.detail), ['inside']);
+  assert.deepEqual([inside.state, inside.totals], [f.state, f.totals]);
+  assert.deepEqual(brief(w(250, 280)), ['blocked 01:00 ..'], 'a running span reaches every window up to now');
+  assert.deepEqual(w(250, 280).markers, []);
+  assert.deepEqual(brief(w(0, 5)), ['open 00:00-00:10'], 'an edge: the span that starts at 0');
+  assert.deepEqual(brief(w(10, 10)), ['open 00:00-00:10', 'in_progress 00:10-01:00'], 'a span that ends where the window starts touches it');
+  assert.deepEqual(w(-50, -10).spans, [], 'before the ticket: nothing');
+  const closed = flow([ev(0, 'created'), ev(20, 'closed', { from: 'open', to: 'done' })]);
+  assert.deepEqual(brief(clipFlow(closed, T0 + 19 * MIN, T0 + 21 * MIN, NOW)), ['open 00:00-00:20', 'done at 00:20'], 'a close inside the window is kept');
+  assert.deepEqual(brief(clipFlow(closed, T0 + 30 * MIN, T0 + 40 * MIN, NOW)), [], 'a closed ticket is not in a later window');
 });

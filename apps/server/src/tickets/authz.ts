@@ -76,6 +76,8 @@ export const TICKET_BUCKET_TOOL_POLICIES = {
   // T-1967: moving a ticket needs operate on the bucket it goes to (the service applies who may change the ticket).
   ticket_update: { kind: 'objects', checks: [{ type: 'ticket_bucket', verb: 'operate', arg: 'bucket', optional: true, notFound: 'No such bucket.' }] },
   ticket_buckets: { kind: 'signed-in', filter: 'ticket_bucket' },
+  // T-119: like ticket_list (the handler also checks view on each row and its bucket).
+  ticket_timeline: { kind: 'objects', checks: [{ type: 'ticket_bucket', verb: 'view', arg: 'bucket', optional: true, notFound: 'No such bucket.' }] },
 } satisfies ToolPolicies;
 
 /** The seam's resolver for `ticket_bucket`: its owner, read now (a removed bucket is not found). */

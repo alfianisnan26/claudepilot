@@ -12,7 +12,8 @@
 //  - "Waiting for a person" is the tag `needs-a-person`: while it is on a ticket that is not closed, that stretch is a `waiting` span in place of
 //    the status span it covers (the status span is split around it).
 //  - An open span has `end` null; its `durationMs` runs to the given "now" (never negative).
-// Not in this slice: an open approval as a reason to wait, linked commits and pull requests, the table (`ticket_spans`), the route and the chart.
+//  - clipFlow keeps what touches a window: a span that overlaps it (a running one up to now), a marker inside it.
+// Not yet: an open approval as a reason to wait, linked commits and pull requests, the derived table (`ticket_spans`).
 
 import {
   isTicketClosed,
@@ -141,7 +142,8 @@ export function ticketFlow(input: FlowInput, now: number): Flow {
 
   const pieces: Raw[] = [];
   for (const r of raw) {
-    if (isTicketClosed(r.state as TicketStatus) || r.end <= r.start) {
+    // A closed state is a point (end = start), so this also keeps waiting off a close.
+    if (r.end <= r.start) {
       pieces.push(r);
       continue;
     }
@@ -204,4 +206,21 @@ export function ticketFlow(input: FlowInput, now: number): Flow {
   }
 
   return { spans, markers, state: spans.at(-1)?.state ?? null, totals };
+}
+
+/**
+ * The part of a flow a window shows: the spans that overlap `from`..`to` (a running span lasts until `now`; a closed point counts when it falls
+ * inside) and the markers inside it. `state` and `totals` stay over the whole life. Spans are not cut: the chart clips them to its axis.
+ */
+export function clipFlow(flow: Flow, from: number, to: number, now: number): Flow {
+  const spans = flow.spans.filter((s) => {
+    const a = Date.parse(s.start);
+    const b = s.end === null ? Math.max(a, now) : Date.parse(s.end);
+    return a <= to && b >= from;
+  });
+  const markers = flow.markers.filter((m) => {
+    const at = Date.parse(m.at);
+    return at >= from && at <= to;
+  });
+  return { ...flow, spans, markers };
 }

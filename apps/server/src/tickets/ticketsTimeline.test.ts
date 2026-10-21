@@ -1,10 +1,10 @@
 // T-119 S1b: GET /api/tickets/timeline. The tickets whose life overlaps a window, each with its flow computed from the stored events; a window
-// bounded by the granularity (400 that names the limit); 25 rows by default, 100 at most, by keyset on the number; a ticket the caller may not
+// bounded by the granularity (400 that names the limit); 50 rows by default, 200 at most, by keyset on the number; the list's filters; a ticket the caller may not
 // view is in no page and no cursor names it; an agent sees its workspace and the shared queue only. Time is the harness clock: no real clock.
 import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
 import { AppError, isAppError } from '@isnanme/core';
-import { CURSOR_DEFAULT_LIMIT, CURSOR_MAX_LIMIT, TICKET_TIMELINE_LIMITS, ticketRef, type TicketTimeline } from '@portal/contracts';
+import { objectRef, TICKET_TIMELINE_LIMITS, TICKET_TIMELINE_PAGE, ticketRef, type TicketTimeline } from '@portal/contracts';
 import { Hono } from 'hono';
 import { clearResolvers, registerResolver } from '../authz/seam.js';
 import { peekCursor } from '../store/keyset.js';
@@ -162,26 +162,26 @@ test('guards: the window is bounded by the granularity, and every bad parameter 
   }
 });
 
-test('a ticket cap with a cursor: 25 by default, 100 at most, every ticket once in number order; a bad or foreign cursor is a 400', async () => {
+test('a ticket cap with a cursor: 50 by default, 200 at most, every ticket once in number order; a bad or foreign cursor is a 400', async () => {
   const { h } = await clocked();
   try {
-    for (let i = 0; i < 130; i++) h.tickets.create(UI, { summary: `Bulk ${i}` });
+    for (let i = 0; i < 230; i++) h.tickets.create(UI, { summary: `Bulk ${i}` });
     const a = app(h);
     const q = (rest: string) => window(-5, 5, rest);
     const first = await get(a, q(''));
-    assert.equal(first.items.length, CURSOR_DEFAULT_LIMIT);
-    assert.equal((await get(a, q('&limit=1000'))).items.length, CURSOR_MAX_LIMIT);
+    assert.equal(first.items.length, TICKET_TIMELINE_PAGE.defaultLimit);
+    assert.equal((await get(a, q('&limit=1000'))).items.length, TICKET_TIMELINE_PAGE.maxLimit);
     assert.equal((await get(a, q('&limit=0'))).items.length, 1);
-    assert.equal((await get(a, q('&limit=junk'))).items.length, CURSOR_DEFAULT_LIMIT);
+    assert.equal((await get(a, q('&limit=junk'))).items.length, TICKET_TIMELINE_PAGE.defaultLimit);
     const ids: string[] = [];
     let cursor = '';
     for (let n = 0; n < 60; n++) {
-      const p = await get(a, q(`&limit=17${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`));
+      const p = await get(a, q(`&limit=37${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`));
       ids.push(...p.items.map((i) => i.id));
       if (!p.next) break;
       cursor = p.next;
     }
-    assert.deepEqual(ids, Array.from({ length: 130 }, (_, i) => `T-${i + 1}`), 'every ticket once, in number order');
+    assert.deepEqual(ids, Array.from({ length: 230 }, (_, i) => `T-${i + 1}`), 'every ticket once, in number order');
     const next = first.next!;
     assert.ok(next);
     for (const bad of ['garbage', 'a.b', `${next}.x`]) assert.equal((await a.request(`/timeline${q(`&cursor=${encodeURIComponent(bad)}`)}`)).status, 400, bad);
@@ -206,6 +206,9 @@ test('authz: a ticket the caller may not view is in no page and no cursor names 
       resolve: (id) => ({ ref: ticketRef(id), owner: mine.has(id) ? { kind: 'user', id: 'u_a' } : { kind: 'user', id: 'u_b' } }),
     });
     const them = app(h, { kind: 'user', userId: 'u_a', loginSessionId: 'l1', via: 'ui' });
+    // T-1098: the row's bucket passes view as well (as in the list's test); u_a may view the bucket, not every ticket in it. After app(): the
+    // routes register the real bucket resolver.
+    registerResolver({ type: 'ticket_bucket', resolve: (id) => ({ ref: objectRef('ticket_bucket', id), owner: { kind: 'user', id: 'u_a' } }) });
     const seen: string[] = [];
     const cursors: string[] = [];
     let cursor = '';
@@ -248,6 +251,114 @@ test('an agent sees its workspace’s tickets and the shared queue, never anothe
     const next = h.tickets.timeline(UI, w, { limit: 2 }).next!;
     assert.ok(next);
     assert.equal(code(() => h.tickets.timeline(me, w, { cursor: next })), 'BAD_REQUEST');
+  } finally {
+    h.done();
+  }
+});
+
+test('rows carry the bucket key, the assignee and the times; spans and markers are cut to the ones that touch the window', async () => {
+  const { h, clock } = await clocked();
+  try {
+    h.sessions.add({ workspaceId: 'docker/api', id: 'sa', title: 'Build lane' });
+    const t1 = h.tickets.create(UI, { summary: 'Keyed', bucket: 'KONF', assignee: { kind: 'session', sessionId: 'sa' } });
+    clock.at = T0 + 10 * MIN;
+    h.tickets.update(UI, t1.id, { status: 'in_progress' });
+    h.tickets.comment(UI, t1.id, 'early note');
+    clock.at = T0 + 100 * MIN;
+    h.tickets.update(UI, t1.id, { status: 'blocked' });
+    clock.at = T0 + 150 * MIN;
+    h.tickets.comment(UI, t1.id, 'late note');
+    clock.at = T0 + 200 * MIN;
+    const t = await get(app(h), window(90, 120));
+    const row = t.items[0]!;
+    assert.deepEqual([row.id, row.key, row.bucket], [t1.id, t1.key, 'KONF']);
+    assert.match(row.key, /^KONF-\d+$/);
+    assert.deepEqual(row.assignee, { kind: 'session', label: 'Build lane', sessionId: 'sa' });
+    assert.equal(row.createdAt, iso(T0));
+    assert.deepEqual(brief(t, t1.id), ['in_progress@10-100', 'blocked@100..'], 'the open span before the window is out; the ones touching it are in');
+    assert.deepEqual(row.flow.markers.map((m) => m.detail), [], 'both comments are outside 90..120');
+    assert.equal(row.flow.totals.open, 10 * MIN, 'totals stay over the whole life');
+    assert.equal(row.flow.state, 'blocked');
+  } finally {
+    h.done();
+  }
+});
+
+test('the list’s filters apply: bucket, status, assignee, tag, q; closed tickets are in unless status says otherwise', async () => {
+  const { h, clock } = await clocked();
+  try {
+    const a1 = h.tickets.create(UI, { summary: 'Alpha login', bucket: 'KONF', tags: ['frontend'] });
+    const b1 = h.tickets.create(UI, { summary: 'Beta queue', bucket: 'CP', assignee: { kind: 'user', name: 'admin' } });
+    const c1 = h.tickets.create(UI, { summary: 'Gamma done', bucket: 'CP' });
+    clock.at = T0 + 5 * MIN;
+    h.tickets.close(UI, c1.id, { outcome: 'done', summary: 'Done.' });
+    clock.at = T0 + 10 * MIN;
+    const a = app(h);
+    const ids = async (rest: string) => (await get(a, window(-5, 20, rest))).items.map((i) => i.id);
+    assert.deepEqual(await ids(''), [a1.id, b1.id, c1.id], 'closed is in by default');
+    assert.deepEqual(await ids('&bucket=cp'), [b1.id, c1.id]);
+    assert.deepEqual(await ids('&status=done'), [c1.id]);
+    assert.deepEqual(await ids('&status=open'), [a1.id, b1.id]);
+    assert.deepEqual(await ids('&assignee=user'), [b1.id]);
+    assert.deepEqual(await ids('&assignee=unassigned'), [a1.id, c1.id]);
+    assert.deepEqual(await ids('&tag=frontend'), [a1.id]);
+    assert.deepEqual(await ids('&q=login'), [a1.id]);
+    assert.deepEqual(await ids(`&q=${encodeURIComponent(a1.key!)}`), [a1.id], 'a key finds its ticket');
+    assert.equal((await a.request(`/timeline${window(-5, 20, '&assignee=nobody')}`)).status, 422, 'a validation error, as on the list');
+    assert.equal((await a.request(`/timeline${window(-5, 20, '&status=sleeping')}`)).status, 422);
+    // A cursor is bound to the filter too.
+    const next = (await get(a, window(-5, 20, '&limit=1'))).next!;
+    assert.equal((await a.request(`/timeline${window(-5, 20, `&bucket=CP&limit=1&cursor=${encodeURIComponent(next)}`)}`)).status, 400);
+  } finally {
+    h.done();
+  }
+});
+
+test('authz: a bucket the caller may not view is the same 404 as a missing one, and its tickets are in no page', async () => {
+  const { h } = await clocked();
+  try {
+    registerResolver({ type: 'ticket', resolve: (id) => ({ ref: ticketRef(id), owner: { kind: 'user', id: 'u_owner' } }) });
+    h.tickets.createBucket(UI, { key: 'PRIV', name: 'Private' }, { ownerId: 'u_alice' });
+    h.tickets.create(UI, { summary: 'hers, secret', bucket: 'PRIV' });
+    const mine = h.tickets.create(UI, { summary: 'mine', bucket: 'CP' });
+    const me = app(h, { kind: 'user', userId: 'u_owner', loginSessionId: 'l', via: 'ui' });
+    const hidden = await me.request(`/timeline${window(-5, 5, '&bucket=PRIV')}`);
+    const missing = await me.request(`/timeline${window(-5, 5, '&bucket=NONE')}`);
+    assert.equal(hidden.status, 404);
+    assert.deepEqual(await hidden.json(), await missing.json(), 'byte for byte a missing bucket');
+    const raw = await (await me.request(`/timeline${window(-5, 5)}`)).text();
+    assert.ok(raw.includes(`"${mine.id}"`));
+    assert.ok(!raw.includes('secret') && !raw.includes('PRIV-'), 'nothing of the hidden bucket');
+  } finally {
+    h.done();
+  }
+});
+
+test('the short cache: the same question is answered from memory until a ticket is written', async () => {
+  const { h } = await clocked();
+  try {
+    const t1 = h.tickets.create(UI, { summary: 'Cached' });
+    const ask = () => h.tickets.timeline(UI, { from: iso(T0 - 5 * MIN), to: iso(T0 + 5 * MIN) }, { cacheKey: 'viewer' });
+    const first = ask();
+    assert.equal(ask(), first, 'the same object: from memory');
+    assert.notEqual(h.tickets.timeline(UI, { from: iso(T0 - 5 * MIN), to: iso(T0 + 5 * MIN) }, { cacheKey: 'someone else' }), first, 'per viewer');
+    h.tickets.update(UI, t1.id, { status: 'in_progress' });
+    const after = ask();
+    assert.notEqual(after, first, 'a write ends it');
+    assert.equal(after.items[0]!.status, 'in_progress');
+    assert.notEqual(h.tickets.timeline(UI, { from: iso(T0 - 5 * MIN), to: iso(T0 + 5 * MIN) }), h.tickets.timeline(UI, { from: iso(T0 - 5 * MIN), to: iso(T0 + 5 * MIN) }), 'no cache key, no cache');
+  } finally {
+    h.done();
+  }
+});
+
+test('the events of a page are read through the (ticket_number, at) index, never a scan of the events', async () => {
+  const { h } = await clocked();
+  try {
+    const db = h.store.db!;
+    const plan = (db.prepare('EXPLAIN QUERY PLAN SELECT ticket_number, at, kind, actor, actor_label, body, data FROM ticket_events WHERE ticket_number IN (?,?,?) ORDER BY ticket_number, at, id').all(1, 2, 3) as { detail: string }[]).map((r) => r.detail).join(' | ');
+    assert.match(plan, /ticket_events_ticket_at/, plan);
+    assert.doesNotMatch(plan, /SCAN ticket_events\b(?! USING)/, plan);
   } finally {
     h.done();
   }
