@@ -275,9 +275,10 @@ export const TICKET_VERDICT_BATCH_LIMITS = { items: 20, jobId: 120, branch: 120,
 
 /**
  * A batch branch name as D-93 spells it, as a whole token: Konfersi `qa/batch-<date>-<n>`, ClaudePilot `batch/<date>-<n>`, the date
- * `YYYY-MM-DD` or `YYYYMMDD`. A remote prefix (`origin/`) is allowed; a path such as `src/batch/foo.ts` is not a batch (QA on T-1987).
+ * `YYYY-MM-DD` or `YYYYMMDD`; or `wip/qa-batch-<date>-<unit>-<n>[-<sha>]`, the form leads can push today (qa/batch-* is not on their push allow list). A remote prefix (`origin/`) is allowed; a path such as `src/batch/foo.ts` is not a batch (QA on T-1987).
  */
-export const TICKET_BATCH_BRANCH = /(?:^|[^A-Za-z0-9._-])((?:qa\/batch-|batch\/)(?:\d{4}-\d{2}-\d{2}|\d{8})-\d+)(?![A-Za-z0-9_/-]|\.[A-Za-z0-9])/;
+export const TICKET_BATCH_BRANCH =
+  /(?:^|[^A-Za-z0-9._-])((?:qa\/batch-|batch\/)(?:\d{4}-\d{2}-\d{2}|\d{8})-\d+|wip\/qa-batch-(?:\d{4}-\d{2}-\d{2}|\d{8})(?:-[A-Za-z0-9]+)+)(?![A-Za-z0-9_/-]|\.[A-Za-z0-9])/;
 
 /** A check a CI run attached to a ticket (interface I10): its latest state. */
 export interface TicketCheck {

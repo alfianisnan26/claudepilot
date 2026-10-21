@@ -622,6 +622,11 @@ test('liveBatchOf (T-1987): a comment after the newest verdict naming a batch br
     }
     r.tickets.comment(UI, r.id, 'Now in qa/batch-20261021-4.');
     assert.equal(r.tickets.liveBatchOf(r.id)?.branch, 'qa/batch-20261021-4', 'the compact date, at the end of a sentence');
+    r.tickets.comment(UI, r.id, 'Pushed wip/qa-batch-20261021-general-1-6cd049f (six tickets).');
+    assert.equal(r.tickets.liveBatchOf(r.id)?.branch, 'wip/qa-batch-20261021-general-1-6cd049f', 'the wip/ form leads can push');
+    r.tickets.recordVerdict(UI, r.id, { role: 'qa', verdict: 'fail', commit: A });
+    r.tickets.comment(UI, r.id, 'wip/qa-batch-tomorrow and wip/qa-batch-20261021');
+    assert.equal(r.tickets.liveBatchOf(r.id), null, 'a wip/ name needs a date and a unit or number');
   } finally {
     r.done();
   }
