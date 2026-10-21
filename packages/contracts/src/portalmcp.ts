@@ -83,6 +83,11 @@ export interface PortalToken {
    * Only an operate or admin token has one, set by a person with manage on the token (`PATCH` `PORTAL_MCP_API.token(id)`), never by a tool.
    */
   defaultWorkspaceId: string | null;
+  /**
+   * T-1974: the first-party client this token was issued to by a device flow (`vscode`), or null (absent from an older server) for a token
+   * made in Access -> MCP. A client token opens only its own API (`/api/vscode`); `/mcp` refuses it like an unknown token.
+   */
+  client?: 'vscode' | null;
 }
 
 /** `PATCH /api/portal-mcp/tokens/:id`: a person changes a live operate or admin token. The workspace must be one they and the token may operate. */

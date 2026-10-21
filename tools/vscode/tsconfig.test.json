@@ -1,0 +1,8 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2022", "DOM"],
+    "types": ["node", "vscode"]
+  },
+  "include": ["test/**/*.ts", "src/model.ts", "src/api.ts", "src/redact.ts", "src/page.ts"]
+}

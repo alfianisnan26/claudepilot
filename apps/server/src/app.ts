@@ -5,6 +5,7 @@ import { serveStatic } from '@hono/node-server/serve-static';
 import { AppError, codeForStatus, isAppError, success } from '@isnanme/core';
 import {
   API,
+  VSCODE_API,
   isStableWorkspaceId,
   type RenameWorkspaceRequest,
   type UpdateWorkspaceResourcesRequest,
@@ -128,6 +129,7 @@ import { ManagerService } from './manager/service.js';
 import { SsoProviders } from './identity/sso.js';
 import { PortalTeams } from './identity/teams.js';
 import { assetCompress, jsonCompress } from './jsonCompress.js';
+import { createVscodeApproveRoutes, createVscodeBearerRoutes, createVscodeFlow, createVscodePublicRoutes, type VscodeDeps } from './vscode/routes.js';
 
 type Env = { Bindings: HttpBindings; Variables: { token: string } };
 
@@ -1164,6 +1166,56 @@ export function createApp(
     plainNamesOn(pm, '/agents/:target/:name');
     pm.route('/', createPortalMcpRoutes(portalMcp, { workspaces: async () => (await workspaces.list()).map((w) => ({ id: w.id, name: w.name })) }));
     app.route('/api/portal-mcp', pm);
+  }
+
+  // The VS Code extension (docs/prd/vscode-extension.md): the device flow's public calls, the signed-in person's approval of a code, and
+  // the bearer routes the extension reads and acts through. Its tokens are Portal MCP tokens (one table, revoked in Access → MCP too).
+  if (portalMcp) {
+    const vsDeps: VscodeDeps = {
+      tokens: {
+        create: (req, by, origin) => portalMcp.createToken(req, '', by, origin),
+        verify: (secret, ip) => portalMcp.tokens.verify(secret, ip),
+        revoke: (id, reason) => portalMcp.revokeToken(id, reason, 'vscode'),
+      },
+      chat: chatController,
+      workspaces,
+      tickets,
+      usage: claudeUsage,
+      glance,
+      audit: (kind, detail, actor) => {
+        try {
+          platform?.audit.record({ kind, actor, userId: null, detail, severity: 'info' });
+        } catch {
+          // the audit never breaks a sign-in or a message
+        }
+      },
+      clientKey: (c) => clientKey(c as Context<Env>),
+      mcpSettings: () => portalMcp.settings.get(),
+      idCheck: async (c) => {
+        const field = await hostileWorkspaceField(c as Context<Env>);
+        if (field) throw new AppError('VALIDATION_FAILED', 'A workspace is `<target>/<name>`.', { details: { [field]: 'Not a workspace.' } });
+      },
+      origin: (c) => {
+        const sso = process.env.PORTAL_SSO_ORIGIN?.trim();
+        if (sso) return sso.replace(/\/+$/, '');
+        const proto = config.trustProxy ? c.req.header('x-forwarded-proto')?.split(',')[0]?.trim() : undefined;
+        const u = new URL(c.req.url);
+        return `${proto === 'https' || proto === 'http' ? proto : u.protocol.replace(':', '')}://${c.req.header('host') ?? u.host}`;
+      },
+    };
+    const vsFlow = createVscodeFlow(vsDeps.tokens);
+    // The device flow's two public calls take a few bytes, like sign-in: 4 KiB at most, refused before anything reads them (review M3).
+    app.use(VSCODE_API.device, loginLimit);
+    app.use(VSCODE_API.token, loginLimit);
+    const vs = new Hono<Env>();
+    // The id rule of every /api route (QA-032): requireSession runs it for the cookie routes; the public routes run it after their
+    // address limit, the bearer routes before the token is looked up (`idCheck`).
+    vs.use('/pending', requireSession);
+    vs.use('/approve', requireSession);
+    vs.route('/', createVscodePublicRoutes(vsFlow, vsDeps) as never);
+    vs.route('/', createVscodeApproveRoutes(vsFlow, vsDeps) as never);
+    vs.route('/', createVscodeBearerRoutes(vsDeps) as never);
+    app.route('/api/vscode', vs);
   }
 
   // Tickets: the queue of work for people and agents; agents reach it through Portal MCP tools instead.

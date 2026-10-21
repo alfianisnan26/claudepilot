@@ -237,7 +237,10 @@ export class PortalMcp {
   #verify(secret: string, ip: string): { ok: true; principal: PortalPrincipal } | { ok: false; reason: string } {
     if (secret.startsWith(PORTAL_AGENT_TOKEN_PREFIX)) return this.o.agents ? this.o.agents.verify(secret) : { ok: false, reason: 'unknown' };
     if (secret.startsWith(PORTAL_MANAGER_TOKEN_PREFIX)) return this.o.managers ? this.o.managers.verify(secret) : { ok: false, reason: 'unknown' };
-    return this.o.tokens.verify(secret, ip);
+    const v = this.o.tokens.verify(secret, ip);
+    // T-1974 R1: a token issued to a first-party client (the VS Code extension) opens its own API only; here it is an unknown token.
+    if (v.ok && v.token.client) return { ok: false, reason: 'unknown' };
+    return v;
   }
 
   #record(parsed: unknown, principal: PortalPrincipal, from: RequestOrigin, req: Request): CallRecord {
