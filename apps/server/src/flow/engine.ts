@@ -252,7 +252,8 @@ export class FlowEngine {
     };
     const resolved = new Map(leads.map((l) => [l, resolveHead(chat, l)] as const));
     const heads = new Map([...resolved].map(([l, r]) => [l, r.head] as const));
-    const gate = p.mergeGate ?? leads[0] ?? null;
+    // A merge gate must be a lead of the group (checked on save); one that no longer is (the group changed) falls back to the first lead.
+    const gate = (p.mergeGate && leads.includes(p.mergeGate) ? p.mergeGate : null) ?? leads[0] ?? null;
     const gateResolved = gate ? (resolved.get(gate) ?? resolveHead(chat, gate)) : { head: null, why: 'ended' as const };
     const gateHead = gateResolved.head;
     // A lead that may hear from the watchdog now: it runs, no person stopped it, and Keep going is not paused for it.
@@ -285,9 +286,9 @@ export class FlowEngine {
     else c.st.stall[p.name] ??= { since: now, nudgedAt: null, notifiedAt: null };
 
     if (merge.length) {
-      const rows = merge.slice(0, FLOW_LIMITS.ticketsPerMessage).map((m) => `- ${ref(m.t)} head ${m.head}`);
+      const rows = merge.slice(0, FLOW_LIMITS.ticketsPerMessage).map((m) => `- ${ref(m.t)} QA PASS on ${m.head} (newest seen)`);
       await this.#tell(c, 'merge', gate, gateHead, gateResolved.why, merge.map((m) => m.t.id), [
-        `${FLOW_PREFIX} ${plural(merge.length, 'ticket')} in review ${merge.length === 1 ? 'has' : 'have'} a QA PASS on the head and ${merge.length === 1 ? 'is' : 'are'} not merged after ${t.mergeAfterMs / MIN} min (program ${p.name}). Merge or close each, or say on the ticket why not:`,
+        `${FLOW_PREFIX} ${plural(merge.length, 'ticket')} in review ${merge.length === 1 ? 'has' : 'have'} a QA PASS on the newest commit the portal has seen and ${merge.length === 1 ? 'is' : 'are'} not merged after ${t.mergeAfterMs / MIN} min (program ${p.name}). Check that commit is still the branch head, then merge or close each, or say on the ticket why not:`,
         ...rows,
         ...more(merge.length),
       ]);
@@ -404,11 +405,13 @@ export class FlowEngine {
   }
 
   /**
-   * One message to a lead's live session, rate limited per lead and condition. Not to an ended one (`head` null: skipped, recorded once per
-   * window), and only when the owner may operate it. A refused send is recorded and waits for the next window.
+   * Why a live head may not be told. Its process is gone or it is interrupted: a send would relaunch it, and the watchdog never relaunches
+   * a session (Keep going or a person brings it back; an asleep one is only woken, as crew reports do). A person stopped it (on record, so
+   * it holds across a portal restart). Keep going is paused for it (its own policy's program, or all).
    */
-  /** Why a live head may not be told: a person stopped it, or Keep going is paused for it (its own policy's program, or all). */
   #heldWhy(c: Ctx, h: ChatSession): string | null {
+    if (h.process === 'gone' || h.state === 'interrupted')
+      return 'This lead’s process is gone or interrupted: the watchdog never relaunches a session, nothing was sent.';
     try {
       if (this.#d.chat.stoppedByPerson(h.id)) return 'A person stopped this lead: nothing was sent.';
     } catch {

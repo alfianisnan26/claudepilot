@@ -16,7 +16,7 @@ skips the round while it is switched off, or while the portal cannot write (froz
 
 | | Condition | Action |
 | --- | --- | --- |
-| a | In review, a QA PASS on the head, not merged for `flow.mergeAfterMin` (20) | Message the merge-gate lead with the exact list: stable id, bucket key, head commit |
+| a | In review, a QA PASS on the head, not merged for `flow.mergeAfterMin` (20) | Message the merge-gate lead with the exact list: stable id, bucket key, and "QA PASS on <sha> (newest seen)", with the ask to check that commit is still the branch head before merging |
 | b | In review, no verdict on the head, nobody working on it for `flow.qaAfterMin` (60) | Message a peer lead a `QA-ASK` with the tickets, round robin, never the author's lead or lineage |
 | c | A lead idle for `flow.idleAfterMin` (30) while its unit (itself and its workers) holds open or in-progress tickets, and it runs fewer live workers than its cap | Message that lead its next tickets: priority first, then oldest, at most 5 |
 | d | A lead that was in Bypass is now on the default mode or has ended | Reported only (audit and card). See Bypass |
@@ -24,7 +24,10 @@ skips the round while it is switched off, or while the portal cannot write (froz
 
 The **head** of a ticket is the newest commit the portal has heard of for it: a CI check's commit or a verdict's commit. A verdict wins a
 tie. The portal does not know a branch's head. A short check sha is widened to the verdict commit it begins; otherwise it stays short and
-no verdict matches it. A branch that moved after a PASS is therefore not passing (FR36: `evaluateVerdicts`). "Nobody working on it" means
+no verdict matches it. A branch that moved after a PASS is therefore not passing (FR36: `evaluateVerdicts`). A branch that moved with no
+newer CI check and no newer verdict can still look passing; that is why the merge message names the commit as the newest seen and asks the
+merge lead to check the branch head. Resolving the real head would need a git read in the workspace on every round, which the watchdog
+does not do. "Nobody working on it" means
 no session started on the ticket (`ticketId`) is live and was active within the QA threshold. The ticket itself must also have had no
 update for that long.
 
@@ -59,7 +62,7 @@ the lead was continued as a new chat (never bypass-capable, FR20).
 | --- | --- | --- |
 | `flow.enabled` | on | The kill switch |
 | `flow.paused` | empty | Programs on hold (names, comma separated, `*` for all): counted, not acted on |
-| `flow.programs` | `konfersi\|konfersi-migration\|\|` | Programs split by `;`, each `name\|tag\|group\|merge gate\|on`. `group` is a 1-based index into `tickets.leadPeerGroups`; empty means the first group whose leads hold the program's tickets (else the first group). `merge gate` is a lead id; empty means the first lead of the group. Add `\|off` to stop one program. Malformed programs are dropped. |
+| `flow.programs` | `konfersi\|konfersi-migration\|\|` | Programs split by `;`, each `name\|tag\|group\|merge gate\|on`. `group` is a 1-based index into `tickets.leadPeerGroups`; empty means the first group whose leads hold the program's tickets (else the first group). `merge gate` is a lead id; empty means the first lead of the group. Add `\|off` to stop one program. Checked on save: every program must read, and a merge gate must be a lead of its group (any group when the group is empty). If the groups change later, a gate that is no longer a lead falls back to the first lead. |
 | `flow.mergeAfterMin`, `flow.qaAfterMin`, `flow.idleAfterMin`, `flow.repeatMin` | 20, 60, 30, 30 | Minutes |
 | `flow.stallHours`, `flow.notifyAfterHours` | 3, 3 | Hours |
 
@@ -80,9 +83,13 @@ The settings route needs `settings` `manage`. No agent tool writes settings.
 
 ## Who is never told, and holds
 
-- **A lead a person stopped.** This is the chat controller's crew hold (`stoppedByPerson`): a Stop by a person or through the session
-  tools, until a message from someone else runs it again. Crew reports respect the same hold. The hold is kept in memory, so a portal
-  restart clears it, as it does for crew reports. A controller without the accessor counts as held (fail closed).
+- **A lead whose process is gone, or that is interrupted.** A send to it would relaunch it, and the watchdog never relaunches a session
+  (Keep going or a person brings it back). Crew reports and the crew wake skip the same leads. An asleep lead is only woken by the
+  message, as crew reports do.
+- **A lead a person stopped.** A Stop by a person, or through the session tools, is put on record in the chat audit trail
+  (`crewhold.set`), so it survives a portal restart. Only a person lifts it (`crewhold.lifted`): their own message or their own Resume. The
+  portal's messages and resumes (Keep going, tickets, the watchdog) do not lift it. A row is written only when the state changes. The
+  controller answers through `stoppedByPerson`; a controller without it counts as held (fail closed).
 - **A lead a person closed** (End: "Closed by operator"). It is followed only into a continuation a person started (`startedBy` `ui` or
   `account:`), never one the portal made. The skip says "A person closed the lead".
 - **A lead whose own Keep going policy program is paused**, or any lead while Keep going is paused for all. Keep going's rows are read;

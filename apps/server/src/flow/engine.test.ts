@@ -33,7 +33,8 @@ test('(a) a QA PASS on the head not merged after 20 min: the merge-gate lead get
   assert.equal(m.priority, 'later');
   assert.equal(m.actor, FLOW_ACTOR);
   assert.ok(m.text.startsWith(FLOW_PREFIX));
-  assert.match(m.text, new RegExp(`- T-12 \\(KONF-12\\) head ${sha('a')}`));
+  assert.match(m.text, new RegExp(`- T-12 \\(KONF-12\\) QA PASS on ${sha('a')} \\(newest seen\\)`));
+  assert.match(m.text, /Check that commit is still the branch head/);
   assert.doesNotMatch(m.text, /T-13/);
   assert.doesNotMatch(m.text, /CANARY/); // no ticket or session text in a message
   assert.equal(r.engine.snapshot().programs[0]!.counts.merge, 1);
@@ -158,6 +159,7 @@ test('rate limit: one message per lead per condition per 30 min, across rounds a
   await r.engine.round();
   r.clock.advance(5);
   await r.engine.round();
+  r.restart(); // the limit is stored: a restart does not reset it
   r.clock.advance(20);
   await r.engine.round();
   assert.equal(r.chat.sent.length, 1);
@@ -436,4 +438,42 @@ test('the card’s live topic is told after every round', async () => {
   r.clock.advance(5);
   await r.engine.round();
   assert.equal(r.published.length, 2);
+});
+
+test('D1: a gone or interrupted lead is never messaged (a send would relaunch it); an asleep one is woken by the message', async () => {
+  for (const over of [{ process: 'gone' as const }, { state: 'interrupted' as const }]) {
+    const r = rig();
+    mergeReady(r);
+    r.chat.patch(LEAD_A, over);
+    await r.engine.round();
+    assert.equal(r.chat.sent.length, 0, JSON.stringify(over));
+    assert.match(r.engine.snapshot().actions[0]!.note, /never relaunches/);
+  }
+  const a = rig();
+  mergeReady(a);
+  a.chat.patch(LEAD_A, { process: 'asleep', state: 'idle' });
+  await a.engine.round();
+  assert.deepEqual(
+    a.chat.sent.map((m) => m.id),
+    [LEAD_A],
+  );
+});
+
+test('D1: a lead a person stopped stays unmessaged across a portal restart (the hold is read each round)', async () => {
+  const r = rig();
+  mergeReady(r);
+  r.chat.stopped.add(LEAD_A); // the controller answers from its record, which a restart keeps
+  await r.engine.round();
+  r.restart();
+  r.clock.advance(31);
+  await r.engine.round();
+  assert.equal(r.chat.sent.length, 0);
+  assert.equal(r.engine.snapshot().actions.filter((x) => /A person stopped/.test(x.note)).length, 2);
+});
+
+test('a merge gate that is not a lead of the group falls back to the first lead', async () => {
+  const r = rig({ settings: { 'flow.programs': 'konfersi|konfersi-migration||dddddddd-0000-0000-0000-00000000000d' } });
+  mergeReady(r);
+  await r.engine.round();
+  assert.equal(r.chat.sent[0]!.id, LEAD_A);
 });

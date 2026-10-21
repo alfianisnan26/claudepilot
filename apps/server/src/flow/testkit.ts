@@ -133,7 +133,7 @@ export function rig(opts: { settings?: Record<string, unknown>; ownerCan?: boole
     ...Object.entries(opts.settings ?? {}),
   ]);
   const owner = opts.owner === undefined ? 'u_a' : opts.owner;
-  const engine = new FlowEngine({
+  const make = () => new FlowEngine({
     chat,
     tickets,
     owner: { ownersOf: () => (owner ? [owner] : []), can: () => opts.ownerCan ?? true },
@@ -146,5 +146,23 @@ export function rig(opts: { settings?: Record<string, unknown>; ownerCan?: boole
     keepGoing: { pauses: () => kg.pauses, programOf: (id) => kg.programs.get(id) ?? null },
     publish: () => void published.push(clock.now()),
   });
-  return { clock, chat, tickets, store, audits, notes, settings, engine, kg, published, K: FLOW_SETTING_KEYS };
+  const r = {
+    clock,
+    chat,
+    tickets,
+    store,
+    audits,
+    notes,
+    settings,
+    engine: make(),
+    kg,
+    published,
+    K: FLOW_SETTING_KEYS,
+    /** A portal restart: a new engine over the same stored state (the chat and tickets stand). */
+    restart() {
+      r.engine.stop();
+      r.engine = make();
+    },
+  };
+  return r;
 }

@@ -87,6 +87,8 @@ export class Settings {
     if (def.type === 'string' && (value as string).length > (def.max ?? 500)) throw invalid('value', `Use at most ${def.max ?? 500} characters.`);
     if (def.integer && !Number.isInteger(value)) throw invalid('value', 'Send a whole number.');
     if (def.choices && !def.choices.includes(value as string)) throw invalid('value', `Use one of ${def.choices.join(', ')}.`);
+    const why = def.validate?.(value as SettingValue, (k) => this.get(k));
+    if (why) throw invalid('value', why);
     const db = this.store.db;
     if (!db || !this.store.writable) throw new AppError('SERVICE_UNAVAILABLE', 'The database is not writable.');
     const old = this.get(key);

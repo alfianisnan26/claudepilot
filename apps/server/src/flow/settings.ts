@@ -1,8 +1,9 @@
 // The flow watchdog's settings (T-1966, docs/prd/flow-watchdog.md), group "Flow". Owner only: the settings route needs `settings` `manage`
 // and no agent tool writes them, so a lead cannot change who it is told about nor turn the watchdog off for itself.
 
-import { FLOW_DEFAULT_PROGRAMS, FLOW_SETTING_KEYS as K } from '@portal/contracts';
+import { FLOW_DEFAULT_PROGRAMS as DEFAULT_PROGRAMS, FLOW_SETTING_KEYS as K, TICKET_SETTING_KEYS } from '@portal/contracts';
 import { defineSetting, defineSettingGroup } from '../settings/registry.js';
+import { parseLeadPeerGroups, parsePrograms } from './programs.js';
 
 export interface FlowSettingsReader {
   get(key: string): unknown;
@@ -24,12 +25,13 @@ defineSetting({
 defineSetting({
   key: K.programs,
   type: 'string',
-  default: FLOW_DEFAULT_PROGRAMS,
+  default: DEFAULT_PROGRAMS,
   max: 1000,
   scope: 'global',
   group: 'flow',
   order: 20,
   label: 'Programs',
+  validate: (v, get) => programsProblem(v, get(TICKET_SETTING_KEYS.leadPeerGroups)),
   help: 'One program per ";": name|tag|group|merge gate|on. tag: the tickets it watches. group: which group of Peer leads (Tickets settings) runs it, 1 for the first; empty: the first group whose leads hold its tickets. merge gate: the lead id told about QA PASS tickets; empty: the first lead of the group. Add |off to stop one program.',
 });
 
@@ -136,8 +138,25 @@ export function flowPaused(r: FlowSettingsReader | null): Set<string> {
 export function flowProgramsRaw(r: FlowSettingsReader | null): string {
   try {
     const v = r?.get(K.programs);
-    return typeof v === 'string' ? v : FLOW_DEFAULT_PROGRAMS;
+    return typeof v === 'string' ? v : DEFAULT_PROGRAMS;
   } catch {
-    return FLOW_DEFAULT_PROGRAMS;
+    return DEFAULT_PROGRAMS;
   }
+}
+
+/**
+ * Why `flow.programs` is refused on save, or null: every program must read (none is dropped silently), and a merge gate must be a lead of
+ * the program's group (the numbered one, or, with the group left empty, any group of `tickets.leadPeerGroups`).
+ */
+export function programsProblem(raw: string, groupsRaw: unknown): string | null {
+  const parts = raw.split(';').map((x) => x.trim()).filter(Boolean);
+  const programs = parsePrograms(raw);
+  if (programs.length !== parts.length) return 'Each program is name|tag|group|merge gate|on (lowercase name and tag, group a number, gate a session id).';
+  const groups = parseLeadPeerGroups(groupsRaw);
+  for (const p of programs) {
+    if (!p.mergeGate) continue;
+    const pool = p.group !== null ? (groups[p.group - 1] ?? []) : groups.flat();
+    if (!pool.includes(p.mergeGate)) return `The merge gate of ${p.name} is not a lead of its group (Tickets, Peer leads).`;
+  }
+  return null;
 }
