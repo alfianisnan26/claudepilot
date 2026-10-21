@@ -6,7 +6,7 @@ import { InfoTip } from '@/components/InfoTip';
 import { api, errorText } from '@/lib/api';
 import { CAP_LABEL, endText } from '@/features/chat/ShareSessionDialog';
 
-const field = 'h-12 w-full min-w-0 rounded-2xl border border-line bg-surface px-4 text-[15px] outline-none focus-visible:ring-2 focus-visible:ring-accent';
+const field = 'h-12 w-full min-w-0 rounded-2xl border border-line bg-surface px-4 text-[15px] outline-hidden focus-visible:ring-2 focus-visible:ring-accent';
 
 /**
  * One team (owner, 2026-10-17: "team based multiaccount"): its people and what is shared with it. An admin or one of the team's owners adds

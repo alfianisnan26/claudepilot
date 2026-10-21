@@ -7,7 +7,7 @@ import { InfoTip } from '@/components/InfoTip';
 import { TeamDialog } from '@/features/auth/TeamDialog';
 import { api, errorText } from '@/lib/api';
 
-const field = 'h-12 w-full rounded-2xl border border-line bg-surface px-4 text-[15px] outline-none focus-visible:ring-2 focus-visible:ring-accent';
+const field = 'h-12 w-full rounded-2xl border border-line bg-surface px-4 text-[15px] outline-hidden focus-visible:ring-2 focus-visible:ring-accent';
 
 /** Teams (owner, 2026-10-17: "team based multiaccount"): groups of accounts a session can be shared with. Owners of a team manage its people. */
 export function TeamsSection() {
