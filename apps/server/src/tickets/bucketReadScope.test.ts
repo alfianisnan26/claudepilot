@@ -134,6 +134,25 @@ test('routes: a second person reads only their own bucket; total, counts and tag
   }
 });
 
+test('a General Manager token is its person: another person’s manager reads none of the owner’s tickets, the owner’s reads them', async () => {
+  const r = await rig();
+  try {
+    const { shown } = seed(r.tickets);
+    r.h.alive.add('gm1');
+    r.h.alive.add('gm2');
+    const alice = r.h.module.managers.mint({ userId: 'u_alice', sessionId: 'gm1' })!;
+    const owner = r.h.module.managers.mint({ userId: 'u_owner', sessionId: 'gm2' })!;
+    const call = async (t: { secret: string }, name: string, args: Record<string, unknown>): Promise<Out> => (await r.h.call(t.secret, name, args)).result!;
+    const missing = await call(alice, 'ticket_get', { id: 'T-99' });
+    assert.deepEqual((await call(alice, 'ticket_get', { id: shown.key! })).content, missing.content);
+    assert.equal((await call(alice, 'ticket_list', {})).structuredContent.total, 1, 'only her own bucket’s ticket');
+    assert.equal((await call(owner, 'ticket_get', { id: shown.key! })).structuredContent.ticket.id, shown.id);
+    assert.equal((await call(owner, 'ticket_list', {})).structuredContent.total, 1, 'the owner’s manager: the owner’s buckets');
+  } finally {
+    r.done();
+  }
+});
+
 test('the owner: every bucket is theirs, so every ticket, count and claim is as before', async () => {
   const r = await rig();
   try {
