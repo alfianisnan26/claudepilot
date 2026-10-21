@@ -170,7 +170,7 @@ test('MCP surface: every ticket tool says both forms; comment and close name pee
       const tools = (await client.listTools()).tools.filter((t) => t.name.startsWith('ticket_'));
       for (const t of tools) assert.match(t.description ?? '', /KONF-3/, t.name);
       for (const name of ['ticket_comment', 'ticket_close']) assert.match(tools.find((t) => t.name === name)!.description ?? '', /tickets\.leadPeerGroups/, name);
-      const idArg = (tools.find((t) => t.name === 'ticket_get')!.inputSchema as { properties: { id: { description?: string } } }).properties.id.description;
+      const idArg = (tools.find((t) => t.name === 'ticket_get')!.inputSchema as unknown as { properties: { id: { description?: string } } }).properties.id.description;
       assert.match(idArg ?? '', /T-12 or its bucket key/);
     } finally {
       await close();
