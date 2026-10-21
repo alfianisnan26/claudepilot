@@ -1,4 +1,4 @@
-# Konfersi: Metocean lead status (2026-10-20 23:58Z, session fc73ae34-40d3-4c82-8148-dd55697c9379, on regitha)
+# Konfersi: Metocean lead status (2026-10-21 00:06Z, session fc73ae34-40d3-4c82-8148-dd55697c9379, on two.claude)
 
 Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-worker, Mission Planning compute/report/plugin parts, report builder, metocean reports. Status ticket T-1703. Release ticket T-1704 (v14 batch). Incidents T-1705, T-1808. Older lines: git history of this file.
 
@@ -13,7 +13,7 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - T-1611 re-check c19232 (Job dc81d232): GT 500 km 7 storms, 1000 km 77; tracks draw at 1000 only; bands about 0.1 px. Bugs moved to T-1856 (c19246). T-1611 waits for item 1's 3305bbe merge.
 
 ## IN FLIGHT
-- Outside asks for general lead: T-1901 f3c472a QA1 CHANGES c21016 (trailing-dot bypass, own-zone + internal names; also on stg) + review MERGE WITH FIXES c21005; T-1883 2752c5c QA PASS WITH GAPS c21007 + review MERGE c21014 (ready for gate); T-1619 5b1294a review MERGE c21018 (its "stg rewound" was the stale ref-clone refs/heads/stg; Gitea stg = 7635c33), mo-qa-1619 opus running (Job c9465866).
+- Outside asks for general lead: T-1901 f3c472a QA1 CHANGES c21016 (trailing-dot bypass, own-zone + internal names; also on stg) + review MERGE WITH FIXES c21005; T-1883 2752c5c QA PASS WITH GAPS c21007 + review MERGE c21014 (ready for gate); T-1619 5b1294a QA PASS WITH GAPS c21021 + review MERGE c21018. Gate-form relays on T-1619 c21034/c21035, T-1883 c21036/c21037; D-81 second QA left to Lab/Business (c21038). T-1901 delta b64da71 (c21022): mo-qa-1901b + mo-rv-1901b (opus) running. T-1712-mutant 3a6c941 review MERGE c21024, mo-qa-1712 (opus) restarted. T-1723 r3 5766fd4 QA + review queued.
 - T-1693 (Business ask) answered: mo-qa-1693 PASS WITH GAPS on 8dfe8fec, c19346 (ci 7412dbfb rc=0 2113, mutants e13b09ed 3/4 killed); T-84 c19351. 0111 data-only, D-77 person step stays with Business. Two-ref diff used after `A...B` refusal, disclosed on T-84.
 - T-1435 HELD: capture Job ad87a706 rc=1, 126/129 equal, 3 air_press POT bodies differ (global record RP -32%, AD 4th decimal), wind and edge records equal (c19321). Decision (b) fix to scipy parity (c19324). Builder done c19444: closed support z <= -1/c like scipy; test 2f06c3e fail-first d72dcae1 rc=1, fix 9c808138 suite e6e924c7 rc=0 367. Capture re-run PASS c19539: Job 7e71e12c rc=0, 129/129 equal to stg 3b97011 (head 719d52b5, script blob check updated, disclosed). Outside QA-ASK T-84 c19547.
 - T-1591: on 2d633120 family QA (c19356), outside QA 1 PASS d53dd342 + blind review MERGE 482a08c0 (relayed c20669). Decision (b): rebuilt on backend stg 7e63d2a by mo-be-1591r2 (opus): ticket/T-1591-r2 head 2049ccf, ci c35abc88 rc=0 2166, fail-first b85827ed (c20685); lead read OK c20690. Asked T-84 c20691: delta QA d53dd342, delta review 482a08c0, second outside QA (coordinator, T-84 c20652).
@@ -26,6 +26,7 @@ Scope (D-88, coordinator 2026-10-19): konfersi-metocean-compute, konfersi-ai-wor
 - ticket_verdict refused for my sub-agents (c18870): verdicts are gate-form comments.
 
 ## DECISIONS
+- 00:05Z Moved regitha to two.claude. Interrupted without verdicts: mo-qa-1712, mo-qa-1723, mo-rv-1723. Restarted mo-qa-1712; the urgent T-1901 delta took the other 2 slots; T-1723 queued.
 - 23:58Z Lesson: clones of agentic-worktrees/ref/* carry a stale refs/heads/stg (io 87e5f0a, admin 374e6fb); briefs must read tips with ls-remote from the ref clone (Gitea). mo-qa-1901 hit 80 turns twice; later briefs cap tool calls.
 - 23:45Z Moved sekar to regitha; nothing running, nothing to restart. No verdicts on my units since c20799. General lead asks outside QA for its lineage (c20954); took the oldest security asks with free slots (T-84 c21002): mo-qa-1901, mo-rv-1901 (T-1901 f3c472a), mo-qa-1883 (T-1883 2752c5c), all opus Agent sub-agents, verdicts relayed on T-84.
 - 21:30Z Moved two.claude to sekar. No sub-agent was running (mo-be-1591r2 had reported), nothing to restart. No verdict on my units since c20691; reviewers a13240fb and 482a08c0 are free (c20719, c20753), so I asked for T-1591 r2 and T-632 delta reviews on T-84 c20799.
