@@ -575,6 +575,10 @@ function oneLineLabel(raw: string | undefined): string | undefined {
 
 /** T-294: the actor of the portal's reports to a lead about its workers (Crew over MCP). */
 export const CREW_REPORT_ACTOR = 'portal:crew';
+/** T-1966: the audit kinds of a person's Stop hold (`crewhold.set`, `crewhold.lifted`). */
+const HOLD_KIND = 'crewhold';
+/** A person at the keyboard (`ui`, the default) or signed in with a shared account (`account:<id>`). */
+const isPersonActor = (actor: string | undefined): boolean => actor === undefined || actor === CHAT_ACTOR_UI || actor.startsWith('account:');
 /** T-546: a report quotes at most this much of the first line of the worker's latest reply (its verdict or DONE, and the sha). */
 const CREW_REPLY_HEAD = 120;
 /** T-294: a report the lead could not take is tried this often, backing off; then again at the next change of a worker or of the lead. */
@@ -2987,6 +2991,7 @@ export class ChatController {
     if (this.#chat.hasInput(sessionId, uuid)) throw new AppError('CONFLICT', 'That message was already sent.'); // a retry raced it
     held(); // a Stop while it woke
     if (!report) this.#crewHeld.delete(sessionId); // someone else's message runs it again: its crew's news may follow
+    if (isPersonActor(opts.actor)) this.#holdByPerson(sessionId, opts.actor ?? CHAT_ACTOR_UI, false); // T-1966: only a person lifts it
 
     // Uploaded files are written into the workspace first, so Claude can open them; a failure refuses the send with nothing stored.
     if (att.needsStaging) await this.#content.stage(att, session.workspaceId);
@@ -3160,7 +3165,10 @@ export class ChatController {
     switch (op) {
       case 'stop':
         // T-294: a person stopped it: crew reports wait until a message from someone else lets it run again (they never undo the Stop).
-        if ((this.#chat.row(sessionId)?.state ?? 'ended') !== 'ended') this.#crewHeld.add(sessionId);
+        if ((this.#chat.row(sessionId)?.state ?? 'ended') !== 'ended') {
+          this.#crewHeld.add(sessionId);
+          this.#holdByPerson(sessionId, opts.actor ?? CHAT_ACTOR_UI, true);
+        }
         return this.interrupt(sessionId);
       case 'end':
         return this.end(sessionId);
@@ -3175,6 +3183,8 @@ export class ChatController {
       case 'cancel_queued':
         return this.#cancelQueued(sessionId, a.inputUuid);
       case 'resume':
+        // T-1966: a person's own Resume lifts the hold their Stop left (the portal's resumes do not).
+        if (isPersonActor(opts.actor)) this.#holdByPerson(sessionId, opts.actor ?? CHAT_ACTOR_UI, false);
         return this.#resume(sessionId, opts.actor);
       case 'stop_task':
         return this.#stopTask(sessionId, a.taskId);
@@ -4095,6 +4105,32 @@ export class ChatController {
       } catch {
         // it couldn't be reached right now: its next launch starts without the flag, and a restart resets the mode
       }
+    }
+  }
+
+  /**
+   * T-1966: a person (or a caller of the session tools) stopped this session and nothing has run it since: the crew hold that crew reports
+   * respect. The flow watchdog reads it to leave such a lead alone. Read only.
+   */
+  stoppedByPerson(id: string): boolean {
+    const sessionId = this.#chat.resolveId(id);
+    if (this.#crewHeld.has(sessionId)) return true;
+    // The hold on record survives a portal restart (the set above does not): the newest `crewhold.*` row of the session decides.
+    return this.#chat.audit({ kind: HOLD_KIND, sessionId, limit: 1 })[0]?.kind === `${HOLD_KIND}.set`;
+  }
+
+  /**
+   * T-1966: a person's Stop is put on record (`crewhold.set`), and lifted (`crewhold.lifted`) only by a person: their message or their
+   * Resume. A row is written only when the state changes. Never throws: the in-memory hold still stands.
+   */
+  #holdByPerson(sessionId: string, actor: string, set: boolean): void {
+    try {
+      const held = this.#chat.audit({ kind: HOLD_KIND, sessionId, limit: 1 })[0]?.kind === `${HOLD_KIND}.set`;
+      if (held === set) return;
+      const row = this.#chat.row(sessionId);
+      this.#chat.addAudit({ severity: 'info', kind: `${HOLD_KIND}.${set ? 'set' : 'lifted'}`, sessionId, workspaceId: row?.workspace_id ?? null, actor });
+    } catch {
+      // the store is unavailable: the in-memory hold decides until the portal restarts
     }
   }
 

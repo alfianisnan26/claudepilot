@@ -43,6 +43,8 @@ export interface SettingDef<T extends SettingValue = SettingValue> {
   integer?: boolean;
   /** Strings only: the values it may take (the page shows a choice). */
   choices?: string[];
+  /** A check of its own on save: why the value is refused, or null. `get` reads the other settings as they are now. */
+  validate?: (value: T, get: (key: string) => unknown) => string | null;
 }
 
 const KEY = /^[a-z][a-z0-9]*(?:\.[a-z][A-Za-z0-9]*)+$/;

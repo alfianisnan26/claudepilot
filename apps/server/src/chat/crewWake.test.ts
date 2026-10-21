@@ -234,10 +234,12 @@ test('T-1613 QA: no wake for a lead a person stopped, nor one with a sub-agent r
     await worker(s, 'Lane A');
     s.ahead(16 * MIN);
 
+    assert.equal(s.controller.stoppedByPerson(s.id), false);
     const stop = s.controller.control(s.id, 'stop');
     s.tail.push(ok((await s.take('interrupt')).id));
     await stop;
     assert.equal(s.controller.get(s.id)!.state, 'idle');
+    assert.equal(s.controller.stoppedByPerson(s.id), true, 'T-1966: the flow watchdog reads the same hold');
     assert.deepEqual(await s.controller.wakeLeads(), [], 'a person stopped it: the portal does not run it again');
     assert.equal(s.wakes().length, 0);
   } finally {
