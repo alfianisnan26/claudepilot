@@ -133,7 +133,7 @@ export class DeviceFlow {
   }
 
   /** What a code asks for, for the approval page; null for a code that is unknown, expired or already answered (one answer for all). */
-  pending(typed: string): VscodePending | null {
+  pending(typed: string): Omit<VscodePending, 'viewerIp' | 'sameAddress'> | null {
     this.#sweep();
     const code = normalizeUserCode(typed);
     const e = code ? this.#byUser.get(code) : undefined;
