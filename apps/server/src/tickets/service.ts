@@ -54,6 +54,9 @@ import {
   type TicketPage,
   CURSOR_MAX_LIMIT,
   TICKET_LIST_TEXT,
+  TICKET_BATCH_BRANCH,
+  TICKET_VERDICT_BATCH_LIMITS,
+  type TicketVerdictBatch,
   type TicketOrphan,
   type TicketOrphanWhy,
   type TicketPriority,
@@ -251,6 +254,29 @@ const oneOf = <T extends string>(v: unknown, all: readonly T[], field: string): 
   if (typeof v !== 'string' || !(all as readonly string[]).includes(v)) throw invalid(field, `Use one of: ${all.join(', ')}.`);
   return v as T;
 };
+/**
+ * FR36d (T-1987): a QA batch's shared evidence, checked like any ticket text (hidden characters out, no credential-shaped value), or null
+ * when none was given. A job id and a branch are plain names; a note is one line.
+ */
+export function verdictBatchOf(v: unknown): TicketVerdictBatch | null {
+  if (v === undefined || v === null) return null;
+  if (typeof v !== 'object' || Array.isArray(v)) throw invalid('evidence', 'Evidence is { jobId, branch, note }.');
+  const o = v as Record<string, unknown>;
+  const name = (raw: unknown, field: 'jobId' | 'branch', re: RegExp, what: string) => {
+    const t = cleanLine(raw, field, TICKET_VERDICT_BATCH_LIMITS[field], { required: false });
+    if (t && !re.test(t)) throw invalid(field, what);
+    return t || null;
+  };
+  return {
+    jobId: name(o.jobId, 'jobId', /^[A-Za-z0-9][A-Za-z0-9._:\/-]*$/, 'A job id is a plain name (letters, digits, . _ : / -).'),
+    branch: name(o.branch, 'branch', /^[A-Za-z0-9][A-Za-z0-9._\/-]*$/, 'A branch is a plain git branch name.'),
+    note: cleanLine(o.note, 'note', TICKET_VERDICT_BATCH_LIMITS.note, { required: false }) || null,
+  };
+}
+
+/** One item of {@link Tickets.recordVerdicts}: the verdict recorded, or why not (the same code and words `ticket_verdict` answers). */
+export type VerdictBatchResult = { id: string; ok: true; verdict: StoredVerdict } | { id: string; ok: false; error: { code: string; message: string } };
+
 const workspaceIdOf = (v: unknown): string | null => {
   if (v === undefined || v === null || v === '') return null;
   if (typeof v !== 'string' || !/^[a-z0-9-]+\/[A-Za-z0-9._-]+$/.test(v.trim()))
@@ -2499,16 +2525,19 @@ export class Tickets {
   /**
    * Records a QA or review verdict on ONE full commit. Refused by `canRecordVerdict` (the author, the lead, anything but a QA/review session
    * or a person); a ticket the caller cannot see is the same not found. Rows are never edited: the latest verdict of a role on a commit wins.
-   * Writes a timeline entry and an audit row `ticket.verdict`.
+   * Writes a timeline entry and an audit row `ticket.verdict`. `req.batch` (FR36d, T-1987): the shared evidence of a QA batch, kept with the
+   * row, in the timeline entry and in the audit row; checked like any ticket text (see {@link verdictBatchOf}). A batch entry's sentence
+   * names a short sha and no branch: the page shows the branch and the job as chips, and `data.commit` keeps the full sha.
    */
   recordVerdict(
     caller: Caller,
     id: string,
-    req: { role?: unknown; verdict?: unknown; commit?: unknown },
+    req: { role?: unknown; verdict?: unknown; commit?: unknown; batch?: unknown },
     opts: { sessionId?: string | null } = {},
   ): StoredVerdict {
     this.#assertWrites(caller);
     const row = this.#need(caller, id);
+    const batch = verdictBatchOf(req.batch);
     const role = oneOf(req.role, VERDICT_ROLES, 'role');
     const verdict = oneOf(req.verdict, VERDICTS, 'verdict');
     const commit = normalizeSha(req.commit);
@@ -2546,19 +2575,19 @@ export class Tickets {
     const stored = this.#tx(() => {
       this.#db
         .prepare(
-          'INSERT INTO ticket_verdicts (ticket_number, role, verdict, commit_sha, actor, actor_label, at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+          'INSERT INTO ticket_verdicts (ticket_number, role, verdict, commit_sha, actor, actor_label, at, batch) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
         )
-        .run(row.number, role, verdict, commit!, w.actor, w.label, at);
+        .run(row.number, role, verdict, commit!, w.actor, w.label, at, batch ? JSON.stringify(batch) : null);
       const vid = Number((this.#db.prepare('SELECT last_insert_rowid() AS id').get() as { id: number }).id);
       this.#db.prepare('UPDATE tickets SET updated_at = ? WHERE number = ?').run(at, row.number);
       this.#addEvent(
         row.number,
         'comment',
         w,
-        `${role === 'qa' ? 'QA' : 'Review'} ${verdict.toUpperCase()} recorded on commit ${commit}.`,
-        { verdict, role, commit, verdictId: vid },
+        `${role === 'qa' ? 'QA' : 'Review'} ${verdict.toUpperCase()} recorded on commit ${batch ? `${commit!.slice(0, 12)} in a batch` : commit}.`,
+        { verdict, role, commit, verdictId: vid, ...(batch ? { batch } : {}) },
       );
-      return { id: vid, role, verdict, commit: commit!, actor: w.actor, at } satisfies StoredVerdict;
+      return { id: vid, role, verdict, commit: commit!, actor: w.actor, at, batch } satisfies StoredVerdict;
     });
     this.onAudit?.({
       kind: 'ticket.verdict',
@@ -2566,10 +2595,58 @@ export class Tickets {
       actorLabel: null,
       userId: FOUNDING_USER_ID,
       subject: `ticket:${ticketId}`,
-      detail: { ticketId, role, verdict, commit, sessionId: w.session?.id ?? null },
+      detail: { ticketId, role, verdict, commit, sessionId: w.session?.id ?? null, ...(batch ? { batch } : {}) },
     });
     this.onChange?.();
     return stored;
+  }
+
+  /**
+   * FR36d (T-1987, D-93): one QA pass over a batch branch, a verdict per ticket. Each item goes through {@link recordVerdict} exactly as
+   * `ticket_verdict` does (the same rule, the same not found for a ticket the caller cannot see, one audit row per ticket); one refused item
+   * does not stop the others. The evidence is checked once, before any item, and kept with every verdict it records.
+   */
+  recordVerdicts(
+    caller: Caller,
+    items: readonly { id: string; role?: unknown; verdict?: unknown; commit?: unknown }[],
+    evidence: unknown,
+    opts: { sessionId?: string | null } = {},
+  ): VerdictBatchResult[] {
+    this.#assertWrites(caller);
+    if (!Array.isArray(items) || items.length < 1 || items.length > TICKET_VERDICT_BATCH_LIMITS.items)
+      throw invalid('verdicts', `One to ${TICKET_VERDICT_BATCH_LIMITS.items} verdicts.`);
+    const batch = verdictBatchOf(evidence ?? {})!;
+    const out: VerdictBatchResult[] = [];
+    for (const it of items) {
+      try {
+        out.push({ id: it.id, ok: true, verdict: this.recordVerdict(caller, it.id, { role: it.role, verdict: it.verdict, commit: it.commit, batch }, opts) });
+      } catch (e) {
+        if (!(e instanceof AppError)) throw e;
+        out.push({ id: it.id, ok: false, error: { code: e.code, message: e.message } });
+      }
+    }
+    return out;
+  }
+
+  /**
+   * T-1987 (flow watchdog, D-93): the batch branch a ticket is in now, or null: the newest comment or CI entry AFTER its newest verdict that
+   * names a batch branch ({@link TICKET_BATCH_BRANCH}). Bounded (the newest 20 such entries); a fact for the portal itself, not a caller read.
+   */
+  liveBatchOf(id: string): { branch: string; at: string } | null {
+    const n = this.#numberOf(id);
+    if (n === null) return null;
+    const rows = this.#db
+      .prepare(
+        `SELECT body, data, at FROM ticket_events WHERE ticket_number = ? AND kind IN ('comment', 'ci')
+           AND id > coalesce((SELECT max(id) FROM ticket_events WHERE ticket_number = ? AND json_extract(data, '$.verdictId') IS NOT NULL), 0)
+         ORDER BY id DESC LIMIT 20`,
+      )
+      .all(n, n) as { body: string | null; data: string | null; at: string }[];
+    for (const r of rows) {
+      const m = TICKET_BATCH_BRANCH.exec(`${r.body ?? ''} ${r.data ?? ''}`);
+      if (m) return { branch: m[1]!, at: r.at };
+    }
+    return null;
   }
 
   /** Every verdict on a ticket, oldest first. A ticket the caller cannot see: not found. */
@@ -2577,9 +2654,9 @@ export class Tickets {
     const row = this.#need(caller, id);
     return (
       this.#db
-        .prepare('SELECT id, role, verdict, commit_sha, actor, at FROM ticket_verdicts WHERE ticket_number = ? ORDER BY id')
-        .all(row.number) as { id: number; role: VerdictRole; verdict: Verdict; commit_sha: string; actor: string; at: string }[]
-    ).map((v) => ({ id: v.id, role: v.role, verdict: v.verdict, commit: v.commit_sha, actor: v.actor, at: v.at }));
+        .prepare('SELECT id, role, verdict, commit_sha, actor, at, batch FROM ticket_verdicts WHERE ticket_number = ? ORDER BY id')
+        .all(row.number) as { id: number; role: VerdictRole; verdict: Verdict; commit_sha: string; actor: string; at: string; batch: string | null }[]
+    ).map((v) => ({ id: v.id, role: v.role, verdict: v.verdict, commit: v.commit_sha, actor: v.actor, at: v.at, batch: v.batch ? (JSON.parse(v.batch) as TicketVerdictBatch) : null }));
   }
 
   /** Whether `head` (a full sha) is passing now: each needed role's latest verdict ON THAT COMMIT is a pass. An older commit's verdict never counts. */

@@ -4,6 +4,8 @@
 // counts five conditions and messages the lead that can clear each:
 //   merge   in review, a QA PASS on the head, not merged for `flow.mergeAfterMin`   -> the merge-gate lead, the exact list (ids, keys, heads)
 //   qa      in review, no verdict on the head, nobody on it for `flow.qaAfterMin`   -> a peer lead, round robin, never the author's: QA-ASK
+//                                                                                        as one batch (D-93, T-1987): at most 8 per peer per
+//                                                                                        message; a ticket already in a live batch is skipped
 //   idle    a lead idle `flow.idleAfterMin` with open work in its unit, under cap   -> that lead, its next tickets (oldest high priority first)
 //   bypass  a lead that was in Bypass is not now                                      -> reported only (audit and the card): see below
 //   stall   nothing done in `flow.stallHours` while tickets wait in review           -> the owner, once, if it lasts `flow.notifyAfterHours`
@@ -76,6 +78,8 @@ export interface FlowTicketPort {
   list(tag: string, statuses: TicketStatus[]): TicketItem[];
   verdicts(id: string): StoredVerdict[];
   checks(id: string): TicketCheck[];
+  /** T-1987 (D-93): the batch branch the ticket is in, named after its newest verdict, and when; null: none. Absent: no batches read. */
+  batchOf?(id: string): { branch: string; at: string } | null;
 }
 
 export interface FlowOwnerPort {
@@ -276,7 +280,11 @@ export class FlowEngine {
       } else if (qaRole === 'missing' || qaRole === 'stale') {
         if (now - ms(x.updatedAt) < t.qaAfterMs) continue;
         const working = chat.list({ ticketId: x.id }).some((s) => !ended(s) && (s.state === 'working' || s.state === 'starting' || now - ms(s.lastActivityAt) < t.qaAfterMs));
-        if (!working) qa.push({ t: x, head });
+        if (working) continue;
+        // T-1987 (D-93): a ticket a QA lane already took into a batch (named after its newest verdict, recently) waits for that batch.
+        const batch = this.#d.tickets.batchOf?.(x.id) ?? null;
+        if (batch && now - ms(batch.at) < FLOW_LIMITS.batchLiveMin * MIN) continue;
+        qa.push({ t: x, head });
       }
     }
 
@@ -303,11 +311,14 @@ export class FlowEngine {
       for (const q of qa) {
         const author = leadOf(q.t);
         const authorRoot = holder(q.t) ? root(holder(q.t)!) : null;
-        const ok = live.filter((l) => l !== author && !(authorRoot && lineOf(l).has(authorRoot)) && (byLead.has(l) || !this.#limited(c, 'qa', l)));
-        if (!ok.length) {
+        const peers = live.filter((l) => l !== author && !(authorRoot && lineOf(l).has(authorRoot)) && (byLead.has(l) || !this.#limited(c, 'qa', l)));
+        if (!peers.length) {
           unplaced.push(q.t.id);
           continue;
         }
+        // One batch per peer per message (D-93): a peer that has its batch is full; what no peer has room for waits for the next window.
+        const ok = peers.filter((l) => (byLead.get(l)?.length ?? 0) < FLOW_LIMITS.qaBatchPerPeer);
+        if (!ok.length) continue;
         const to = ok[rr % ok.length]!;
         rr++;
         byLead.set(to, [...(byLead.get(to) ?? []), q]);
@@ -315,9 +326,8 @@ export class FlowEngine {
       c.st.rr[p.name] = rr;
       for (const [l, list] of byLead)
         await this.#tell(c, 'qa', l, heads.get(l) ?? null, null, list.map((q) => q.t.id), [
-          `${FLOW_PREFIX} QA-ASK (program ${p.name}). ${plural(list.length, 'ticket')} in review ${list.length === 1 ? 'has' : 'have'} no verdict on the head and nobody working on ${list.length === 1 ? 'it' : 'them'} for ${t.qaAfterMs / MIN} min. Send a QA lane that is not the author to verify each and record the verdict on the head:`,
-          ...list.slice(0, FLOW_LIMITS.ticketsPerMessage).map((q) => `- ${ref(q.t)} head ${q.head ?? 'unknown'}${holder(q.t) ? ` held by ${holder(q.t)}` : ''}`),
-          ...more(list.length),
+          `${FLOW_PREFIX} QA-ASK batch: take these as one qa/batch branch, one job run, a verdict per ticket (D-93). Program ${p.name}: ${plural(list.length, 'ticket')} in review ${list.length === 1 ? 'has' : 'have'} no verdict on the head and nobody working on ${list.length === 1 ? 'it' : 'them'} for ${t.qaAfterMs / MIN} min. Send a QA lane that is not the author; it records each ticket's verdict on that ticket's head (ticket_verdict_batch, the job run as evidence):`,
+          ...list.map((q) => `- ${ref(q.t)} head ${q.head ?? 'unknown'}${holder(q.t) ? ` held by ${holder(q.t)}` : ''}`),
         ]);
       if (unplaced.length && !c.hold && !this.#limited(c, 'qa', `program-${p.name}`)) {
         c.st.sent[`qa:program-${p.name}`] = c.now;

@@ -35,7 +35,7 @@ test('an agent works the queue over MCP: claim, comment, block, close; ticket te
     const { client, close } = await r.h.client(a.secret, 'modern');
     try {
       const names = (await client.listTools()).tools.map((t) => t.name).filter((n) => n.startsWith('ticket_')).sort();
-      assert.deepEqual(names, ['ticket_adopt', 'ticket_attach', 'ticket_attachment_get', 'ticket_attachment_remove', 'ticket_buckets', 'ticket_claim_next', 'ticket_close', 'ticket_comment', 'ticket_create', 'ticket_get', 'ticket_list', 'ticket_timeline', 'ticket_update', 'ticket_verdict'], 'no start_session for agents');
+      assert.deepEqual(names, ['ticket_adopt', 'ticket_attach', 'ticket_attachment_get', 'ticket_attachment_remove', 'ticket_buckets', 'ticket_claim_next', 'ticket_close', 'ticket_comment', 'ticket_create', 'ticket_get', 'ticket_list', 'ticket_timeline', 'ticket_update', 'ticket_verdict', 'ticket_verdict_batch'], 'no start_session for agents');
       const call = async (name: string, args: Record<string, unknown> = {}) => (await client.callTool({ name, arguments: args })) as { isError?: boolean; structuredContent?: any; content: { text: string }[] };
 
       const listed = (await call('ticket_list', { assignee: 'unassigned' })).structuredContent;
@@ -736,6 +736,54 @@ test('attachments over MCP: an agent attaches text and binary, sees them in tick
 
     await call('ticket_attachment_remove', { id: t.id, attachment_id: log.attachment.id });
     assert.deepEqual(r.tickets.attachments(UI, t.id).map((x) => x.name), ['home-390.png']);
+  } finally {
+    r.done();
+  }
+});
+
+test('ticket_verdict_batch (T-1987, D-93): a QA session records a verdict per ticket with the shared evidence; refusals per item; an unseen ticket reads as a missing one', async () => {
+  const r = await rig();
+  try {
+    const ws = 'docker/api';
+    r.sessions.add({ id: 'lead', workspaceId: ws, agent: null });
+    r.sessions.add({ id: 'impl', workspaceId: ws, agent: 'implementer', parentId: 'lead' });
+    const qa = await r.agent(ws, 'qa1');
+    r.sessions.sessions.get('qa1')!.agent = 'qa-verifier';
+    const impl = await r.h.agentToken(ws, 'impl');
+    const a = r.tickets.create(UI, { summary: 'one', workspaceId: ws });
+    const b = r.tickets.create(UI, { summary: 'two', workspaceId: ws });
+    const hidden = r.tickets.create(UI, { summary: 'elsewhere', workspaceId: 'docker/web' });
+    for (const t of [a, b]) r.tickets.update(UI, t.id, { assignee: { kind: 'session', sessionId: 'impl' }, status: 'in_review' });
+    const head = (c: string) => c.repeat(40);
+    const evidence = { job_id: 'job-run-9c1', batch_branch: 'qa/batch-2026-10-21-1', note: 'suite once on the batch head' };
+    const out = r.out(
+      await r.h.call(qa.secret, 'ticket_verdict_batch', {
+        verdicts: [
+          { id: a.id, commit: head('a'), verdict: 'pass', role: 'qa' },
+          { id: b.key ?? b.id, commit: head('b'), verdict: 'fail', role: 'qa' },
+          { id: hidden.id, commit: head('c'), verdict: 'pass', role: 'qa' },
+          { id: 'T-999', commit: head('c'), verdict: 'pass', role: 'qa' },
+          { id: a.id, commit: head('a'), verdict: 'pass', role: 'review' },
+        ],
+        evidence,
+      }),
+    );
+    assert.match(out.summary, /^Recorded 2 of 5 verdicts \(3 refused/);
+    assert.deepEqual(out.results.map((x: any) => [x.id, x.ok]), [[a.id, true], [b.id, true], [hidden.id, false], ['T-999', false], [a.id, false]]);
+    assert.equal(out.results[1].key, b.key ?? b.id, 'an ok result carries the key');
+    assert.deepEqual(out.results[2].error, out.results[3].error, 'the same not found for an unseen and a missing ticket');
+    assert.equal(out.results[2].error.code, 'NOT_FOUND');
+    assert.equal(out.results[2].key, undefined, 'nothing about an unseen ticket');
+    assert.equal(out.results[4].error.code, 'FORBIDDEN');
+    assert.deepEqual(r.tickets.verdicts(UI, a.id)[0]!.batch, { jobId: 'job-run-9c1', branch: 'qa/batch-2026-10-21-1', note: 'suite once on the batch head' });
+    // The author's own token: every item refused, nothing written.
+    const self = r.out(await r.h.call(impl.secret, 'ticket_verdict_batch', { verdicts: [{ id: a.id, commit: head('d'), verdict: 'pass', role: 'qa' }], evidence: {} }));
+    assert.equal(self.results[0].ok, false);
+    assert.equal(self.results[0].error.code, 'FORBIDDEN');
+    assert.equal(r.tickets.verdicts(UI, a.id).length, 1);
+    // Over the limit: refused at the input.
+    const many = await r.h.call(qa.secret, 'ticket_verdict_batch', { verdicts: Array.from({ length: 21 }, () => ({ id: a.id, commit: head('a'), verdict: 'pass', role: 'qa' })), evidence: {} });
+    assert.ok(many.result?.isError || many.result?.structuredContent?.error || (many as any).error, JSON.stringify(many).slice(0, 200));
   } finally {
     r.done();
   }

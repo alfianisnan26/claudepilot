@@ -23,6 +23,8 @@ The tools an agent's session token reaches, checked against the portal's tool re
 | `ticket_comment` | W | The record: decisions, status, evidence. |
 | `ticket_claim_next` | W | Takes the most urgent open unassigned ticket matching your tags and types, assigns it to your session, marks it in progress. Never claims an approval. Claim only when work starts. |
 | `ticket_close` | W | Closes a ticket assigned to you (or one you made that nobody holds) as done or wont_do with a summary. Only a person reopens. QA is independent: the author does not close its own work (see the charter and ticket-flow skills). |
+| `ticket_verdict` | W | A QA or review session records pass or fail on ONE full 40-character head sha of a ticket; the author, its lead and anything an author started are refused. Without `verdict` it reads the verdicts. |
+| `ticket_verdict_batch` | W | One QA pass over a batch branch (D-93): 1 to 20 `{id, commit, verdict, role}`, each on that ticket's own head, with one `evidence` `{job_id, batch_branch, note}` kept with every verdict. Each item is judged as `ticket_verdict` would; refused items come back in `results` with their error and the rest are recorded. |
 
 A ticket is named by its stable id (`T-12`) or its bucket key (`KONF-3`) in every tool, trailer (`Ticket: KONF-3`) and branch (`ticket/KONF-3-slug`); both always work, and what the portal stores is `T-12`.
 

@@ -10,6 +10,7 @@ import {
   TICKET_PRIORITIES,
   TICKET_STATUSES,
   TICKET_TYPES,
+  TICKET_VERDICT_BATCH_LIMITS,
   workspaceRef,
   type PortalScope,
   type TicketAssignee,
@@ -641,6 +642,54 @@ export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = p
       const v = tickets.recordVerdict(caller, args.id, { role: args.role, verdict: args.verdict, commit: args.commit }, { sessionId: args.session_id });
       ctx.affected(`ticket:${stable(args.id)}`);
       return { summary: `Recorded ${v.role} ${v.verdict} on ${v.commit.slice(0, 12)} for ${args.id}.`, verdict: { id: v.id, role: v.role, verdict: v.verdict, commit: v.commit, at: v.at } };
+    },
+  });
+
+  registerPortalTool({
+    name: 'ticket_verdict_batch',
+    title: 'Record the verdicts of a QA batch',
+    description:
+      'Records the verdicts of ONE QA pass over a batch branch (D-93): one verdict per ticket, each on that ticket’s own full 40-character head sha, with the batch run as shared evidence (job_id, batch_branch, note) kept with every verdict. Each item is judged exactly as ticket_verdict judges it (only a QA or review session of that role, never the author, its lead or anything an author started; a ticket you cannot see is not found), so some may be refused while the rest are recorded: read results. 1 to 20 verdicts. A ticket is named by its stable id (T-12) or its bucket key (KONF-3); results that show a ticket carry both (id and key).',
+    scope: 'agent',
+    input: z.object({
+      verdicts: z
+        .array(
+          z.object({
+            id: ticketIdArg,
+            commit: z.string().max(64).describe('That ticket’s head: the full commit sha you verified (40 hex characters).'),
+            verdict: z.enum(VERDICTS),
+            role: z.enum(VERDICT_ROLES),
+          }),
+        )
+        .min(1)
+        .max(TICKET_VERDICT_BATCH_LIMITS.items)
+        .describe('One per ticket of the batch.'),
+      evidence: z
+        .object({
+          job_id: z.string().max(TICKET_VERDICT_BATCH_LIMITS.jobId).optional().describe('The job run that ran the suite and the build on the batch head.'),
+          batch_branch: z.string().max(TICKET_VERDICT_BATCH_LIMITS.branch).optional().describe('The batch branch, e.g. qa/batch-2026-10-21-1.'),
+          note: z.string().max(TICKET_VERDICT_BATCH_LIMITS.note).optional().describe('One line about the run.'),
+        })
+        .describe('Shared by every verdict of the call.'),
+      session_id: sessionIdArg,
+    }),
+    handler(ctx, args) {
+      const results = tickets.recordVerdicts(
+        callerOf(ctx),
+        args.verdicts,
+        { jobId: args.evidence.job_id, branch: args.evidence.batch_branch, note: args.evidence.note },
+        { sessionId: args.session_id },
+      );
+      const ok = results.filter((r) => r.ok);
+      if (ok.length) ctx.affected(...ok.map((r) => `ticket:${stable(r.id)}`));
+      return {
+        summary: `Recorded ${ok.length} of ${results.length} verdicts${ok.length < results.length ? ` (${results.length - ok.length} refused: see results)` : ''}.`,
+        results: results.map((r) =>
+          r.ok
+            ? { id: stable(r.id), key: tickets.keyOf(stable(r.id)) ?? stable(r.id), ok: true, verdict: { id: r.verdict.id, role: r.verdict.role, verdict: r.verdict.verdict, commit: r.verdict.commit, at: r.verdict.at } }
+            : { id: r.id, ok: false, error: r.error },
+        ),
+      };
     },
   });
 

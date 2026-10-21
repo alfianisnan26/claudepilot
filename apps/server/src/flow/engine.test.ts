@@ -477,3 +477,43 @@ test('a merge gate that is not a lead of the group falls back to the first lead'
   await r.engine.round();
   assert.equal(r.chat.sent[0]!.id, LEAD_A);
 });
+
+test('(b) T-1987 (D-93): the QA-ASK is a batch: named so, at most 8 tickets per peer per message; the rest wait for the next window', async () => {
+  const r = rig({ settings: { 'tickets.leadPeerGroups': `${LEAD_A},${LEAD_B}` } });
+  r.chat.put(LEAD_A, { state: 'working', lastActivityAt: ago(r, 1) });
+  r.chat.put(LEAD_B, { state: 'working', lastActivityAt: ago(r, 1) });
+  r.chat.put('wb', { parentId: LEAD_B, state: 'ended' });
+  for (let n = 100; n < 111; n++) r.tickets.add(n, { holder: 'wb' }); // 11 of B's tickets: only A may verify them
+  await r.engine.round();
+  const asks = r.chat.sent.filter((m) => m.text.includes('QA-ASK'));
+  assert.equal(asks.length, 1);
+  assert.equal(asks[0]!.id, LEAD_A);
+  assert.match(asks[0]!.text, /QA-ASK batch: take these as one qa\/batch branch, one job run, a verdict per ticket \(D-93\)/);
+  assert.match(asks[0]!.text, /ticket_verdict_batch/);
+  const listed = [...asks[0]!.text.matchAll(/^- (T-\d+) /gm)].map((m) => m[1]);
+  assert.deepEqual(listed, ['T-100', 'T-101', 'T-102', 'T-103', 'T-104', 'T-105', 'T-106', 'T-107'], 'eight, oldest first');
+  assert.doesNotMatch(asks[0]!.text, /T-108|and \d+ more/);
+  assert.equal(r.engine.snapshot().programs[0]!.counts.qa, 11, 'all eleven still counted');
+  assert.ok(!r.audits.some((a) => a.kind === 'flow.skipped'), 'the three left over are not "nobody may verify": they wait');
+  // The next window: the rest go out (the first eight are still unverified, so the lead gets eight again: the oldest).
+  r.clock.advance(61);
+  await r.engine.round();
+  const next = r.chat.sent.filter((m) => m.text.includes('QA-ASK'));
+  assert.equal(next.length, 2);
+});
+
+test('(b) T-1987: a ticket already in a live batch (a batch branch named after its newest verdict) is not asked; an old batch mention is', async () => {
+  const r = rig();
+  crew(r);
+  r.tickets.add(50, { holder: 'wb' });
+  r.tickets.add(51, { holder: 'wb' });
+  r.tickets.add(52, { holder: 'wb' });
+  r.tickets.batches.set('T-50', { branch: 'qa/batch-2026-10-21-1', at: ago(r, 30) });
+  r.tickets.batches.set('T-52', { branch: 'qa/batch-2026-10-20-4', at: ago(r, 200) }); // past batchLiveMin: that batch is not live
+  await r.engine.round();
+  const text = r.chat.sent.filter((m) => m.text.includes('QA-ASK')).map((m) => m.text).join('\n');
+  assert.doesNotMatch(text, /T-50 /);
+  assert.match(text, /T-51 /);
+  assert.match(text, /T-52 /);
+  assert.equal(r.engine.snapshot().programs[0]!.counts.qa, 2);
+});

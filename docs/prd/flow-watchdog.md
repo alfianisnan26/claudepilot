@@ -17,7 +17,7 @@ skips the round while it is switched off, or while the portal cannot write (froz
 | | Condition | Action |
 | --- | --- | --- |
 | a | In review, a QA PASS on the head, not merged for `flow.mergeAfterMin` (20) | Message the merge-gate lead with the exact list: stable id, bucket key, and "QA PASS on <sha> (newest seen)", with the ask to check that commit is still the branch head before merging |
-| b | In review, no verdict on the head, nobody working on it for `flow.qaAfterMin` (60) | Message a peer lead a `QA-ASK` with the tickets, round robin, never the author's lead or lineage |
+| b | In review, no verdict on the head, nobody working on it for `flow.qaAfterMin` (60), and not in a live batch | Message a peer lead a `QA-ASK batch` with the tickets, round robin, never the author's lead or lineage: at most 8 per peer per message (D-93, T-1987) |
 | c | A lead idle for `flow.idleAfterMin` (30) while its unit (itself and its workers) holds open or in-progress tickets, and it runs fewer live workers than its cap | Message that lead its next tickets: priority first, then oldest, at most 5 |
 | d | A lead that was in Bypass is now on the default mode or has ended | Reported only (audit and card). See Bypass |
 | e | No ticket done in `flow.stallHours` (3) while tickets wait in review | Notify the owner once per stall, when it has lasted `flow.notifyAfterHours` (3) after the first nudge. If no lead could be told, the time counts from when the stall began |
@@ -35,6 +35,14 @@ A **lead** is a configured session id. It stands for its live head: the session 
 newest continuation (`continuedFrom`), followed until one has not ended. A lead with no live head gets no message. The skip is recorded
 once per window. A ticket belongs to a lead's unit when its holder's crew root (the top of the `parentId` chain) is any id the lead has gone
 by, its predecessors and continuations included.
+
+**QA in batches** (D-93, T-1987). A QA-ASK is a batch: it starts `QA-ASK batch: take these as one qa/batch branch, one job run, a verdict
+per ticket (D-93)` and asks the peer to record each verdict with `ticket_verdict_batch` (tickets PRD FR36d). One message to one peer holds at
+most 8 tickets (`FLOW_LIMITS.qaBatchPerPeer`); tickets no peer has room for this round are still counted and wait for the next window (no
+`skipped` row: a peer may verify them, it is only full). A ticket **in a live batch** is not asked again: a comment or CI entry after its
+newest verdict names a batch branch as a whole token (`qa/batch-<date>-<n>` or `batch/<date>-<n>`, the date `YYYY-MM-DD` or `YYYYMMDD`; a path like `src/batch/foo.ts` is not one; `liveBatchOf` in the tickets service, the newest 20 entries)
+within `FLOW_LIMITS.batchLiveMin` (180 min). Its verdict ends the batch for it; an older mention is a batch that stopped, and the ticket is
+asked again.
 
 ## Messages
 

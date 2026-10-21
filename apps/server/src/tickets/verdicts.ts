@@ -2,6 +2,8 @@
 // A verdict is bound to ONE full commit sha. Whoever reads it (S2's planner, a person) asks `evaluateVerdicts` with the CURRENT head: a verdict
 // on any other commit is stale and never counts, so a branch that moved after a PASS is not passing.
 
+import type { TicketVerdictBatch } from '@portal/contracts';
+
 export const VERDICT_ROLES = ['qa', 'review'] as const;
 export type VerdictRole = (typeof VERDICT_ROLES)[number];
 export const VERDICTS = ['pass', 'fail'] as const;
@@ -91,6 +93,8 @@ export interface StoredVerdict {
   commit: string;
   actor: string;
   at: string;
+  /** FR36d (T-1987): the shared evidence when it was recorded in a QA batch; absent or null when recorded alone. */
+  batch?: TicketVerdictBatch | null;
 }
 
 /** Whether a verdict's commit is the head being judged. Full shas, compared whole. */

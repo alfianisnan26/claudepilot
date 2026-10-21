@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { actorName, bucketOption, fallbackSentence, isTicket, mcpClientName, mergeText, pageFilter, ticketLabel } from './labels';
+import { actorName, bucketOption, fallbackSentence, isTicket, mcpClientName, mergeText, pageFilter, ticketLabel, verdictBatchOf } from './labels';
 
 test('a Portal MCP token on a timeline is named by its label', () => {
   assert.equal(actorName('portal-mcp:ptk_1', 'relay'), 'MCP client “relay”');
@@ -64,6 +64,15 @@ test('T-1967: the merge confirm says how many move, that old keys work and that 
   assert.equal(mergeText('CP', 'PILOT', undefined), 'Its tickets move to PILOT, CP keys keep working, CP is deleted.');
   assert.equal(bucketOption({ key: 'CP', name: 'ClaudePilot' }, false), 'CP');
   assert.equal(bucketOption({ key: 'CP', name: 'ClaudePilot' }, true), 'CP · ClaudePilot');
+});
+
+test('verdictBatchOf (T-1987): a verdict entry recorded in a batch gives its branch and job; anything else gives nothing', () => {
+  const batch = { jobId: 'job-run-9c1', branch: 'qa/batch-2026-10-21-1', note: 'once on the batch head' };
+  assert.deepEqual(verdictBatchOf({ verdictId: 3, verdict: 'pass', batch }), batch);
+  assert.deepEqual(verdictBatchOf({ verdictId: 3, batch: { branch: 'qa/batch-1', jobId: 7 } }), { jobId: null, branch: 'qa/batch-1', note: null }, 'only strings are shown');
+  assert.equal(verdictBatchOf({ verdictId: 3, verdict: 'pass' }), null, 'a verdict recorded alone');
+  assert.equal(verdictBatchOf({ batch }), null, 'not a verdict entry');
+  assert.equal(verdictBatchOf(null), null);
 });
 
 test('the timeline shares the list’s filters; its first chip is everything in the window, closed included', () => {
