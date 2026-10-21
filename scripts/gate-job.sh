@@ -3,7 +3,7 @@
 # so the dev pod's 4 CPUs stay for the agents, and gates for different commits run side by side. The commit must be on GitHub (any branch).
 #   scripts/gate-job.sh <commit> [steps] [files]
 #                                            files: server test files, space or comma separated, relative to apps/server (default all)
-#                                            steps: typecheck,web-build,server-suite (the default, the whole gate), or fewer, e.g.
+#                                            steps: typecheck,web-build,web-tests,server-suite (the default, the whole gate), or fewer, e.g.
 #                                            typecheck,web-build for a heavy check without the suite
 # Prints the summary and one verdict line (scripts/gate-verdict.sh), exits 0 for green, 1 for red, 2 for a usage error. The whole log is kept
 # in GATE_JOB_LOG (default /tmp/gate-job-<sha>.log). GATE_IMAGE: the image (default: the newest development workspace image in the registry).
@@ -11,10 +11,10 @@
 set -eu
 cd "$(git rev-parse --show-toplevel)"
 commit=$(git rev-parse --verify "${1:?usage: scripts/gate-job.sh <commit> [steps]}^{commit}") || exit 2
-steps=${2:-typecheck,web-build,server-suite}
+steps=${2:-typecheck,web-build,web-tests,server-suite}
 files=${3:-}; files=${files//,/ }
 for f in $files; do [[ $f =~ ^src/[A-Za-z0-9_./*-]+\.ts$ ]] || { echo "files: test files under apps/server/src (got $f)" >&2; exit 2; }; done
-[[ $steps =~ ^(typecheck|web-build|server-suite)(,(typecheck|web-build|server-suite))*$ ]] || { echo "steps: typecheck, web-build, server-suite (comma separated)" >&2; exit 2; }
+[[ $steps =~ ^(typecheck|web-build|web-tests|server-suite)(,(typecheck|web-build|web-tests|server-suite))*$ ]] || { echo "steps: typecheck, web-build, web-tests, server-suite (comma separated)" >&2; exit 2; }
 ns=${GATE_NAMESPACE:-isnan-claudepilot}; registry=${DEPLOY_REGISTRY:-registry.int.isnan.me}
 sha=${commit:0:7}; job=claudepilot-gate-$sha-$(od -An -N2 -tx1 /dev/urandom | tr -d ' \n')
 out=${GATE_JOB_LOG:-/tmp/gate-job-$sha.log}; wait_s=${GATE_JOB_WAIT_S:-5400}; poll_s=${GATE_JOB_POLL_S:-10}

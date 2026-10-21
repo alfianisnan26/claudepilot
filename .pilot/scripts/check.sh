@@ -33,6 +33,6 @@ if command -v kubectl >/dev/null 2>&1 &&
   echo "check: a gate Job for ${sha:0:8} is already in the cluster (the deploy's or an earlier check's): nothing to add"
   exit 0
 fi
-# The cluster is shared and busy: here only typecheck and the web build (the deploy runs the whole gate, the suite included).
-echo "check: no runner free (or the hand-off failed): typecheck and web build at ${sha:0:8} go to the cluster as a Job"
-exec bash scripts/gate-job.sh "$sha" typecheck,web-build
+# The cluster is shared and busy: here only typecheck, the web build and the web unit tests (the deploy runs the whole gate, the suite included).
+echo "check: no runner free (or the hand-off failed): typecheck, web build and web tests at ${sha:0:8} go to the cluster as a Job"
+exec bash scripts/gate-job.sh "$sha" typecheck,web-build,web-tests

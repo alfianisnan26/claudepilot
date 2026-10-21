@@ -22,7 +22,7 @@ function logs(summary: string[], suite?: string): string {
   if (suite !== undefined) writeFileSync(join(dir, 'server-suite.log'), suite);
   return dir;
 }
-const ALL_OK = ['npm-ci rc=0 12s', 'typecheck rc=0 54s', 'web-build rc=0 39s', 'server-suite rc=0 1449s'];
+const ALL_OK = ['npm-ci rc=0 12s', 'typecheck rc=0 54s', 'web-build rc=0 39s', 'web-tests rc=0 21s', 'server-suite rc=0 1449s'];
 
 test('logs: every step at rc=0 and the last suite summary at 0 failing and 0 timed out is green', () => {
   assert.deepEqual(verdict('logs', logs(ALL_OK, '# tests 3\n# pass 3\n# fail 0\n# cancelled 0\n')), { code: 0, out: 'GATE-VERDICT: green' });
