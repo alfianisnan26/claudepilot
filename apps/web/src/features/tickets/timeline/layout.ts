@@ -1,10 +1,12 @@
-// T-119 S2a: the maths of the flow chart (Gantt), pure, so it is tested without a browser. A scale is pixels per unit of time; a bar is a span
-// placed on that scale. A closed state (done, wont_do) is a point: it gets a fixed-width mark, never zero width. "now" is always passed in.
+// T-119: the maths of the Timeline (a Gantt of ticket states), pure, so it is tested without a browser. A scale is pixels per unit of time;
+// the chart covers the window the API answered for (from..to), and a bar is a span placed on that scale, clipped to the window. A closed
+// state (done, wont_do) is a point: it gets a fixed-width mark, never zero width. "now" is always passed in.
 
-import type { TicketFlowSpan, TicketFlowState } from '@portal/contracts';
+import { TICKET_STATUS_LABEL, TICKET_TIMELINE_LIMITS, type TicketFlowSpan, type TicketFlowState } from '@portal/contracts';
 
 export const SCALES = ['minute', 'hour', 'day'] as const;
 export type Scale = (typeof SCALES)[number];
+export const isScale = (v: string | null | undefined): v is Scale => !!v && (SCALES as readonly string[]).includes(v);
 
 export const SCALE_LABEL: Record<Scale, string> = { minute: 'Min', hour: 'Hour', day: 'Day' };
 export const UNIT_MS: Record<Scale, number> = { minute: 60_000, hour: 3_600_000, day: 86_400_000 };
@@ -16,37 +18,40 @@ export const TICK_MS: Record<Scale, number> = { minute: 5 * 60_000, hour: 3_600_
 /** The narrowest a bar is drawn (a span of a few seconds is still tappable), and the width of a closed state's mark. */
 export const MIN_BAR_PX = 6;
 export const POINT_PX = 12;
-/** Room around the chart's range so the first and last bar do not touch the edge. */
-export const PAD_MS: Record<Scale, number> = { minute: 5 * 60_000, hour: 3_600_000, day: 86_400_000 };
+/** A bar shows its state's letter from this width (colour is never the only cue: the letter, the pattern and the legend are). */
+export const LETTER_PX = 16;
 
-export const STATE_LABEL: Record<TicketFlowState, string> = {
-  open: 'Open',
-  in_progress: 'Working',
-  blocked: 'Blocked',
-  in_review: 'Review',
-  done: 'Done',
-  wont_do: 'Dropped',
-  waiting: 'Waiting',
+/** The words of the list (Open, In progress, ...) plus the flow's own `waiting`. */
+export const STATE_LABEL: Record<TicketFlowState, string> = { ...TICKET_STATUS_LABEL, waiting: 'Waiting' };
+
+export type Pattern = 'none' | 'hatch' | 'dots' | 'strike';
+
+/**
+ * A look per state, from the ticket status palette (the badges' tokens: neutral, accent for success, amber for warning, danger) plus the
+ * flame token for waiting. Each has a letter and, where two could be confused, a pattern, so colour is never the only signal.
+ */
+export const STATE_LOOK: Record<TicketFlowState, { bar: string; ink: string; letter: string; pattern: Pattern }> = {
+  open: { bar: 'bg-line-strong', ink: 'text-ink', letter: 'O', pattern: 'none' },
+  in_progress: { bar: 'bg-accent', ink: 'text-surface', letter: 'P', pattern: 'none' },
+  blocked: { bar: 'bg-danger', ink: 'text-surface', letter: 'B', pattern: 'hatch' },
+  in_review: { bar: 'bg-amber-500', ink: 'text-black/80', letter: 'R', pattern: 'none' },
+  waiting: { bar: 'bg-flame', ink: 'text-surface', letter: 'W', pattern: 'dots' },
+  done: { bar: 'bg-accent', ink: 'text-surface', letter: 'D', pattern: 'none' },
+  wont_do: { bar: 'bg-muted', ink: 'text-surface', letter: 'X', pattern: 'strike' },
 };
 
-/** A bar colour per state (the legend names them too: colour is never the only cue). */
-export const STATE_BAR: Record<TicketFlowState, string> = {
-  open: 'bg-slate-400 dark:bg-slate-500',
-  in_progress: 'bg-sky-500 dark:bg-sky-400',
-  blocked: 'bg-rose-500 dark:bg-rose-400',
-  in_review: 'bg-amber-500 dark:bg-amber-400',
-  done: 'bg-emerald-600 dark:bg-emerald-400',
-  wont_do: 'bg-slate-600 dark:bg-slate-300',
-  waiting: 'bg-violet-500 dark:bg-violet-400',
-};
+/** The legend's order: the life of a ticket. */
+export const LEGEND: readonly TicketFlowState[] = ['open', 'in_progress', 'blocked', 'in_review', 'waiting', 'done', 'wont_do'];
+
+/** The CSS of a pattern, laid over the bar's colour (a white wash, so it reads in both themes). */
+export function patternStyle(p: Pattern): { backgroundImage?: string; backgroundSize?: string } {
+  if (p === 'hatch') return { backgroundImage: 'repeating-linear-gradient(135deg, rgb(255 255 255 / 0.38) 0 3px, transparent 3px 7px)' };
+  if (p === 'dots') return { backgroundImage: 'radial-gradient(rgb(255 255 255 / 0.6) 1px, transparent 1.6px)', backgroundSize: '6px 6px' };
+  if (p === 'strike') return { backgroundImage: 'linear-gradient(135deg, transparent 44%, rgb(255 255 255 / 0.85) 44% 56%, transparent 56%)' };
+  return {};
+}
 
 export const pxPerMs = (scale: Scale): number => UNIT_PX[scale] / UNIT_MS[scale];
-
-export interface FlowRow {
-  id: string;
-  title: string;
-  spans: readonly TicketFlowSpan[];
-}
 
 export interface Range {
   from: number;
@@ -55,21 +60,13 @@ export interface Range {
 
 const ms = (iso: string): number => Date.parse(iso);
 
-/** The time the chart covers: from the earliest start to the latest end (an open span ends at now), padded. Null when no row has a readable span. */
-export function chartRange(rows: readonly FlowRow[], now: number, scale: Scale): Range | null {
-  let from = Infinity;
-  let to = -Infinity;
-  for (const row of rows) {
-    for (const s of row.spans) {
-      const a = ms(s.start);
-      if (!Number.isFinite(a)) continue;
-      const b = s.end === null ? now : ms(s.end);
-      from = Math.min(from, a);
-      to = Math.max(to, Number.isFinite(b) ? Math.max(a, b) : a);
-    }
-  }
-  if (!Number.isFinite(from) || !Number.isFinite(to)) return null;
-  return { from: from - PAD_MS[scale], to: to + PAD_MS[scale] };
+/**
+ * The window the chart asks for at a scale: the scale's default length (6 hours, 3 days, 30 days: the API's) up to now, with its end on the
+ * next whole minute, so the same question within a minute is the same request (the server's short cache answers it).
+ */
+export function windowFor(scale: Scale, now: number): Range {
+  const to = Math.ceil(now / 60_000) * 60_000;
+  return { from: to - TICKET_TIMELINE_LIMITS[scale].defaultWindowMs, to };
 }
 
 export interface Bar {
@@ -81,13 +78,15 @@ export interface Bar {
   point: boolean;
   /** Still running: drawn with an open right end. */
   running: boolean;
+  /** It began before the window (its left end is cut). */
+  cutStart: boolean;
   startMs: number;
   endMs: number;
   /** The index in the row's spans (the details read it). */
   index: number;
 }
 
-/** Spans of one row as bars on a scale. A span with an unreadable start is left out. */
+/** Spans of one row as bars on a scale, clipped to the range. A span outside the range, or with an unreadable start, is left out. */
 export function layoutBars(spans: readonly TicketFlowSpan[], range: Range, scale: Scale, now: number): Bar[] {
   const k = pxPerMs(scale);
   const bars: Bar[] = [];
@@ -98,16 +97,27 @@ export function layoutBars(spans: readonly TicketFlowSpan[], range: Range, scale
     const rawEnd = running ? now : ms(s.end!);
     const b = Number.isFinite(rawEnd) ? Math.max(a, rawEnd) : a;
     const point = s.state === 'done' || s.state === 'wont_do';
-    const left = (a - range.from) * k;
-    // A point is centred on its time, so a close at 10:00 sits over 10:00 on the axis.
-    const width = point ? POINT_PX : Math.max(MIN_BAR_PX, (b - a) * k);
-    bars.push({ state: s.state, left: point ? left - POINT_PX / 2 : left, width, point, running, startMs: a, endMs: b, index });
+    if (point ? a < range.from || a > range.to : b < range.from || a > range.to) return;
+    if (point) {
+      // A point is centred on its time, so a close at 10:00 sits over 10:00 on the axis.
+      bars.push({ state: s.state, left: (a - range.from) * k - POINT_PX / 2, width: POINT_PX, point, running: false, cutStart: false, startMs: a, endMs: a, index });
+      return;
+    }
+    const a1 = Math.max(a, range.from);
+    const b1 = Math.min(b, range.to);
+    bars.push({ state: s.state, left: (a1 - range.from) * k, width: Math.max(MIN_BAR_PX, (b1 - a1) * k), point, running, cutStart: a < range.from, startMs: a, endMs: b, index });
   });
   return bars;
 }
 
 /** The chart's width in pixels. */
 export const chartWidth = (range: Range, scale: Scale): number => Math.ceil((range.to - range.from) * pxPerMs(scale));
+
+/** Where a time sits on the chart, or null outside the range (a marker, the now line). */
+export function timeLeft(at: number, range: Range, scale: Scale): number | null {
+  if (!Number.isFinite(at) || at < range.from || at > range.to) return null;
+  return (at - range.from) * pxPerMs(scale);
+}
 
 export interface Tick {
   at: number;
@@ -123,16 +133,66 @@ export function axisTicks(range: Range, scale: Scale): Tick[] {
   return ticks;
 }
 
-/** A tick's label: a clock time at minute and hour scale, a date at day scale. */
+/** A tick's label: a clock time at minute and hour scale (the date at midnight), a date at day scale. */
 export function tickLabel(at: number, scale: Scale, locale?: string): string {
   const d = new Date(at);
-  return scale === 'day' ? d.toLocaleDateString(locale, { month: 'short', day: 'numeric' }) : d.toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit', hour12: false });
+  if (scale === 'day' || (scale === 'hour' && d.getHours() === 0 && d.getMinutes() === 0)) return d.toLocaleDateString(locale, { month: 'short', day: 'numeric' });
+  return d.toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit', hour12: false });
 }
 
-/** The scale that shows the whole range in about `width` pixels, for a first view: the largest unit that still fits. */
-export function fitScale(range: Range, width: number): Scale {
-  for (const s of ['minute', 'hour'] as const) if ((range.to - range.from) * pxPerMs(s) <= width) return s;
-  return 'day';
+/**
+ * The shaded stretches: weekends at the day scale, nights (22:00 to 06:00, local time) at the hour scale, none at the minute scale. Each is
+ * clipped to the range, in pixels.
+ */
+export function shading(range: Range, scale: Scale): { left: number; width: number }[] {
+  if (scale === 'minute') return [];
+  const k = pxPerMs(scale);
+  const out: { left: number; width: number }[] = [];
+  const d = new Date(range.from);
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() - 1);
+  for (; d.getTime() < range.to; d.setDate(d.getDate() + 1)) {
+    const day = d.getTime();
+    const next = new Date(d);
+    next.setDate(next.getDate() + 1);
+    const stretches: [number, number][] = [];
+    if (scale === 'day') {
+      if (d.getDay() === 0 || d.getDay() === 6) stretches.push([day, next.getTime()]);
+    } else {
+      const six = new Date(d);
+      six.setHours(6);
+      const ten = new Date(d);
+      ten.setHours(22);
+      stretches.push([day, six.getTime()], [ten.getTime(), next.getTime()]);
+    }
+    for (const [a, b] of stretches) {
+      const a1 = Math.max(a, range.from);
+      const b1 = Math.min(b, range.to);
+      if (b1 > a1) out.push({ left: (a1 - range.from) * k, width: (b1 - a1) * k });
+    }
+  }
+  return out;
+}
+
+/** Up to two letters for a name: "Build lane" is BL, "frontend" is FR, "" is "?". */
+export function initials(label: string): string {
+  const words = label.trim().split(/[\s._-]+/).filter(Boolean);
+  if (!words.length) return '?';
+  const first = [...words[0]!];
+  return (words.length > 1 ? `${first[0]}${[...words[1]!][0]}` : first.slice(0, 2).join('')).toUpperCase();
+}
+
+/**
+ * Keyboard: the bar focus moves to after an arrow key. Left and Right step within a row; Up and Down go to the nearest row above or below
+ * that has bars, keeping the position as close as its bar count allows. Null: nowhere to go.
+ */
+export function moveFocus(counts: readonly number[], at: { row: number; bar: number }, key: string): { row: number; bar: number } | null {
+  if (key === 'ArrowLeft') return at.bar > 0 ? { row: at.row, bar: at.bar - 1 } : null;
+  if (key === 'ArrowRight') return at.bar < (counts[at.row] ?? 0) - 1 ? { row: at.row, bar: at.bar + 1 } : null;
+  const step = key === 'ArrowUp' ? -1 : key === 'ArrowDown' ? 1 : 0;
+  if (!step) return null;
+  for (let r = at.row + step; r >= 0 && r < counts.length; r += step) if ((counts[r] ?? 0) > 0) return { row: r, bar: Math.min(at.bar, counts[r]! - 1) };
+  return null;
 }
 
 /** A duration as short as a label wants it: "45s", "12m", "3h 5m", "2d 4h". */

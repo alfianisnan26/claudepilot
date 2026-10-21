@@ -612,7 +612,7 @@ Generated from the REAL app (`createApp` with stub services, `app.routes`: 261 r
 | `GET /api/tickets` | in:list(ticket) |  |
 | `POST /api/tickets` | in:create(ticket); workspace view body workspaceId optional (a linked ticket needs the link target to be visible) |  |
 | `GET /api/tickets/tags` | in | tags of visible tickets only |
-| `GET /api/tickets/timeline` | in:list(ticket) | T-119: each row passes view before it is shown; a cursor rests on a row shown |
+| `GET /api/tickets/timeline` | in:list(ticket); bucket view query bucket optional | T-119: each row and its bucket pass view before it is shown; a cursor rests on a row shown |
 | `GET /api/tickets/:id` | obj(ticket view path id) |  |
 | `GET /api/tickets/:id/brief` | obj(ticket view path id) |  |
 | `GET /api/tickets/:id/opening` | obj(ticket view path id) |  |

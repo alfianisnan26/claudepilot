@@ -15,7 +15,7 @@ import {
   type TicketTag,
   type TicketType,
 } from '@portal/contracts';
-import { Bot, ChevronDown, ChevronsUp, Columns3, FolderKanban, List, Plus, Search, Ticket as TicketIcon, X } from 'lucide-react';
+import { Bot, ChartGantt, ChevronDown, ChevronsUp, Columns3, FolderKanban, List, Plus, Search, Ticket as TicketIcon, X } from 'lucide-react';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router';
 import { PageHeader } from '@/components/PageHeader';
@@ -27,16 +27,28 @@ import { BucketsDialog } from './Buckets';
 import { BOARD_COLUMNS, ageShort, isTicket, pageFilter, ticketLabel } from './labels';
 import { AssigneeChip, PriorityMark, StatusBadge, TagList, TicketFlags, TypeBadge } from './parts';
 import { NewTicketDialog, TicketBumpDialog } from './TicketDialogs';
+import { isScale, type Scale } from './timeline/layout';
 
 type Scope = 'active' | TicketStatus | 'closed';
-type View = 'list' | 'board';
+type View = 'list' | 'board' | 'timeline';
+const VIEWS: readonly View[] = ['list', 'board', 'timeline'];
+const isView = (v: string | null): v is View => !!v && (VIEWS as readonly string[]).includes(v);
 
 const VIEW_KEY = 'claudepilot.tickets-view';
-const savedView = (): View => {
+const SCALE_KEY = 'claudepilot.tickets-scale';
+const saved = <T extends string>(key: string, ok: (v: string | null) => v is T, fallback: T): T => {
   try {
-    return localStorage.getItem(VIEW_KEY) === 'board' ? 'board' : 'list';
+    const v = localStorage.getItem(key);
+    return ok(v) ? v : fallback;
   } catch {
-    return 'list';
+    return fallback;
+  }
+};
+const remember = (key: string, v: string) => {
+  try {
+    localStorage.setItem(key, v);
+  } catch {
+    // private window: just not remembered
   }
 };
 
@@ -54,6 +66,8 @@ const BOARD_CLOSED = 15;
 
 // A ticket's page renders Markdown, so it loads on first use like the chat does.
 const TicketPage = lazy(() => import('./TicketPage').then((m) => ({ default: m.TicketPage })));
+// T-119: the Timeline is its own chunk; the List and the Board never load it.
+const TimelineView = lazy(() => import('./timeline/TimelineView').then((m) => ({ default: m.TimelineView })));
 
 /**
  * The Tickets page (tickets PRD §13), a Workbench of two panels (T-158): the queue, and the ticket that is open. On a phone one shows
@@ -97,7 +111,10 @@ function TicketQueue({ selected }: { selected: string | null }) {
   const { pinned } = usePanel();
   const { search } = useLocation();
   const [params, setParams] = useSearchParams();
-  const view: View = params.get('view') === 'board' ? 'board' : params.get('view') === 'list' ? 'list' : savedView();
+  const asked = params.get('view');
+  const view: View = isView(asked) ? asked : saved(VIEW_KEY, isView, 'list');
+  const askedScale = params.get('scale');
+  const scale: Scale = isScale(askedScale) ? askedScale : saved(SCALE_KEY, isScale, 'hour');
   const scope = (params.get('s') ?? 'active') as Scope;
   const needs = params.get('assignee') === 'user';
   const queue = params.get('assignee') === 'unassigned';
@@ -182,12 +199,12 @@ function TicketQueue({ selected }: { selected: string | null }) {
   }, [text]);
 
   const setView = (v: View) => {
-    try {
-      localStorage.setItem(VIEW_KEY, v);
-    } catch {
-      // private window: just not remembered
-    }
+    remember(VIEW_KEY, v);
     set({ view: v });
+  };
+  const setScale = (s: Scale) => {
+    remember(SCALE_KEY, s);
+    set({ scale: s });
   };
 
   const move = async (t: TicketItem, status: TicketStatus) => {
@@ -234,7 +251,7 @@ function TicketQueue({ selected }: { selected: string | null }) {
         title={q || needs || queue || orphans || priority || type || tag || bucket ? 'No match' : 'No tickets'}
         action={q || needs || queue || orphans || priority || type || tag || bucket ? undefined : add}
       />
-    ) : view === 'list' ? (
+    ) : view === 'timeline' ? null : view === 'list' ? (
       // As many columns of rows as the panel has room for (one on a phone): a wide screen shows more tickets, not longer rows.
       <>
         <ul className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,28rem),1fr))] gap-2">
@@ -291,6 +308,7 @@ function TicketQueue({ selected }: { selected: string | null }) {
               [
                 ['list', List, 'List'],
                 ['board', Columns3, 'Board'],
+                ['timeline', ChartGantt, 'Timeline'],
               ] as const
             ).map(([id, Icon, label]) => (
               <button
@@ -313,7 +331,7 @@ function TicketQueue({ selected }: { selected: string | null }) {
 
         <div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-0.5 [scrollbar-width:none] sm:mx-0 sm:flex-wrap sm:overflow-visible sm:px-0 [&::-webkit-scrollbar]:hidden">
           {/* First while there are any: on a phone the row scrolls sideways, and an orphan must be seen without that. */}
-          {(orphans || !!counts?.orphans) && (
+          {view !== 'timeline' && (orphans || !!counts?.orphans) && (
             <Chip
               on={orphans}
               tone="danger"
@@ -324,10 +342,11 @@ function TicketQueue({ selected }: { selected: string | null }) {
               Orphans
             </Chip>
           )}
-          {view === 'list' &&
+          {view !== 'board' &&
             SCOPES.map((s) => {
               const on = scope === s.id && !needs && !queue && !orphans;
-              const n = chipCount(s.id);
+              // The counts are the queue's, not the window's: the timeline shows none.
+              const n = view === 'timeline' ? null : chipCount(s.id);
               return (
                 <Chip
                   key={s.id}
@@ -335,7 +354,7 @@ function TicketQueue({ selected }: { selected: string | null }) {
                   onClick={() => set({ s: s.id === 'active' ? null : s.id, assignee: null, orphan: null })}
                   count={n}
                 >
-                  {s.label}
+                  {view === 'timeline' && s.id === 'active' ? 'All' : s.label}
                 </Chip>
               );
             })}
@@ -399,9 +418,19 @@ function TicketQueue({ selected }: { selected: string | null }) {
         </div>
       </div>
 
-      {failed && !data && <LoadError onRetry={load} />}
-      {!data && !failed && <RowsSkeleton rows={4} lines={2} trailing icon="rounded-2xl" />}
-      {!pinned ? (
+      {view === 'timeline' ? (
+        <div className={cn(pinned && '-mx-1 min-h-0 flex-1 overflow-y-auto overscroll-contain px-1 pt-1 pb-4')}>
+          <Suspense fallback={<RowsSkeleton rows={6} lines={1} />}>
+            <TimelineView filter={filter} scale={scale} onScale={setScale} search={search} />
+          </Suspense>
+        </div>
+      ) : (
+        <>
+          {failed && !data && <LoadError onRetry={load} />}
+          {!data && !failed && <RowsSkeleton rows={4} lines={2} trailing icon="rounded-2xl" />}
+        </>
+      )}
+      {view === 'timeline' ? null : !pinned ? (
         body
       ) : view === 'board' && data?.items.length ? (
         // The board fills the rest of the panel: its columns scroll down, the board itself sideways.

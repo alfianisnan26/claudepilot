@@ -1,8 +1,8 @@
-// T-119 S2a: the scale maths and the bar layout of the flow chart. Every time is fixed; "now" is passed in.
+// T-119: the scale maths and the bar layout of the Timeline. Every time is fixed; "now" is passed in.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import type { TicketFlowSpan, TicketFlowState } from '@portal/contracts';
-import { axisTicks, chartRange, chartWidth, durationShort, fitScale, layoutBars, MIN_BAR_PX, PAD_MS, POINT_PX, pxPerMs, UNIT_MS, UNIT_PX, type Scale } from './layout';
+import { TICKET_TIMELINE_LIMITS, type TicketFlowSpan, type TicketFlowState } from '@portal/contracts';
+import { axisTicks, chartWidth, durationShort, initials, layoutBars, LEGEND, MIN_BAR_PX, moveFocus, patternStyle, POINT_PX, pxPerMs, shading, STATE_LABEL, STATE_LOOK, timeLeft, UNIT_MS, UNIT_PX, windowFor, type Scale } from './layout';
 
 const T0 = Date.parse('2026-10-18T00:00:00.000Z');
 const MIN = 60_000;
@@ -20,19 +20,6 @@ const NOW = T0 + 120 * MIN;
 test('a scale is pixels per unit: one unit is its width, and the three scales are ordered', () => {
   for (const s of ['minute', 'hour', 'day'] as Scale[]) assert.equal(pxPerMs(s) * UNIT_MS[s], UNIT_PX[s]);
   assert.ok(pxPerMs('minute') > pxPerMs('hour') && pxPerMs('hour') > pxPerMs('day'));
-});
-
-test('the range covers every span, an open one up to now, with the scale’s padding; no readable span: null', () => {
-  const rows = [
-    { id: 'T-1', title: 'a', spans: [span('open', 10, 30), span('in_progress', 30, null)] },
-    { id: 'T-2', title: 'b', spans: [span('open', 5, 20)] },
-  ];
-  assert.deepEqual(chartRange(rows, NOW, 'hour'), { from: T0 + 5 * MIN - PAD_MS.hour, to: NOW + PAD_MS.hour });
-  assert.deepEqual(chartRange(rows, NOW, 'minute'), { from: T0 + 5 * MIN - PAD_MS.minute, to: NOW + PAD_MS.minute });
-  assert.equal(chartRange([], NOW, 'day'), null);
-  assert.equal(chartRange([{ id: 'x', title: 'x', spans: [{ ...span('open', 0, 1), start: 'nope' }] }], NOW, 'day'), null);
-  // A closed ticket does not stretch to now.
-  assert.equal(chartRange([{ id: 'T-3', title: 'c', spans: [span('open', 0, 10), span('done', 10, 10)] }], NOW, 'hour')!.to, T0 + 10 * MIN + PAD_MS.hour);
 });
 
 test('bars: left and width follow the scale; an open span runs to now; a tiny span keeps a tappable width', () => {
@@ -77,10 +64,76 @@ test('axis ticks sit on multiples of the step, in order, inside the range, and t
   assert.deepEqual(axisTicks({ from: T0 + 1, to: T0 + 2 }, 'day'), []);
 });
 
-test('fitScale picks the finest scale whose whole range fits the width', () => {
-  assert.equal(fitScale({ from: T0, to: T0 + 30 * MIN }, 390), 'minute');
-  assert.equal(fitScale({ from: T0, to: T0 + 6 * 60 * MIN }, 390), 'hour');
-  assert.equal(fitScale({ from: T0, to: T0 + 10 * 24 * 60 * MIN }, 390), 'day');
+test('the window is the scale’s default length (the API’s) up to now, its end on the next whole minute', () => {
+  const now = T0 + 90 * MIN + 12_345;
+  for (const s of ['minute', 'hour', 'day'] as Scale[]) {
+    const w = windowFor(s, now);
+    assert.equal(w.to, T0 + 91 * MIN);
+    assert.equal(w.to - w.from, TICKET_TIMELINE_LIMITS[s].defaultWindowMs);
+  }
+  assert.deepEqual(windowFor('hour', now), windowFor('hour', now + 30_000), 'the same request within the minute');
+  assert.equal(windowFor('hour', T0).to, T0, 'a whole minute stays');
+});
+
+test('bars are clipped to the window: one that began before starts at 0 and says so; outside the window, none', () => {
+  const range = { from: T0 + 30 * MIN, to: T0 + 90 * MIN };
+  const k = pxPerMs('minute');
+  const bars = layoutBars([span('open', 0, 40), span('in_progress', 40, null), span('done', 10, 10), span('blocked', 100, 110), span('open', 0, 20)], range, 'minute', T0 + 200 * MIN);
+  assert.deepEqual(bars.map((b) => [b.state, b.left, b.width, b.cutStart, b.index]), [
+    ['open', 0, 10 * MIN * k, true, 0],
+    ['in_progress', 10 * MIN * k, 50 * MIN * k, false, 1],
+  ]);
+  assert.equal(bars[1]!.running, true);
+  assert.equal(bars[1]!.endMs, T0 + 200 * MIN, 'the details still know when it really ends');
+  assert.equal(layoutBars([span('done', 60, 60)], range, 'minute', NOW).length, 1, 'a close inside the window is a mark');
+  assert.equal(layoutBars([span('done', 95, 95)], range, 'minute', NOW).length, 0, 'a close after the window is not');
+});
+
+test('a time on the chart: its pixels, or null outside the window (markers, the now line)', () => {
+  const range = { from: T0, to: T0 + 60 * MIN };
+  assert.equal(timeLeft(T0 + 30 * MIN, range, 'minute'), 30 * MIN * pxPerMs('minute'));
+  assert.equal(timeLeft(T0 - 1, range, 'minute'), null);
+  assert.equal(timeLeft(T0 + 61 * MIN, range, 'minute'), null);
+  assert.equal(timeLeft(NaN, range, 'minute'), null);
+});
+
+test('shading: weekends at the day scale (two days a week), nights at the hour scale (8 hours a day), nothing at the minute scale', () => {
+  const start = new Date(T0);
+  start.setHours(0, 0, 0, 0);
+  const week = { from: start.getTime(), to: start.getTime() + 7 * 86_400_000 };
+  const total = (xs: { width: number }[]) => xs.reduce((n, x) => n + x.width, 0);
+  assert.ok(Math.abs(total(shading(week, 'day')) - 2 * UNIT_PX.day) < 1, 'two days of a week');
+  const day = { from: start.getTime(), to: start.getTime() + 86_400_000 };
+  assert.ok(Math.abs(total(shading(day, 'hour')) - 8 * UNIT_PX.hour) < 1, '22:00 to 06:00');
+  assert.deepEqual(shading(day, 'minute'), []);
+  for (const x of shading(week, 'hour')) assert.ok(x.left >= 0 && x.left + x.width <= chartWidth(week, 'hour') + 1, 'inside the chart');
+});
+
+test('every state has a word, a letter of its own and a look; blocked, waiting and won’t do carry a pattern too', () => {
+  assert.deepEqual([...LEGEND].sort(), Object.keys(STATE_LOOK).sort());
+  const letters = LEGEND.map((s) => STATE_LOOK[s].letter);
+  assert.equal(new Set(letters).size, letters.length, 'letters are unique');
+  for (const s of LEGEND) assert.ok(STATE_LABEL[s] && STATE_LOOK[s].bar.startsWith('bg-'), s);
+  const bars = LEGEND.map((s) => `${STATE_LOOK[s].bar}|${STATE_LOOK[s].pattern}`);
+  assert.equal(new Set(bars.filter((_, i) => !['done', 'wont_do'].includes(LEGEND[i]!))).size, 5, 'the stretch states differ in colour or pattern');
+  for (const s of ['blocked', 'waiting', 'wont_do'] as const) assert.ok(patternStyle(STATE_LOOK[s].pattern).backgroundImage, s);
+  assert.deepEqual(patternStyle('none'), {});
+});
+
+test('initials: two letters of a name, and a mark for none', () => {
+  assert.deepEqual(['Build lane', 'frontend', 'QA: blind review', '', '  ', 'éclair bot'].map(initials), ['BL', 'FR', 'QB', '?', '?', 'ÉB']);
+});
+
+test('arrow keys move between bars: along a row, and to the nearest row with bars above or below', () => {
+  const counts = [2, 0, 3, 1];
+  assert.deepEqual(moveFocus(counts, { row: 0, bar: 0 }, 'ArrowRight'), { row: 0, bar: 1 });
+  assert.equal(moveFocus(counts, { row: 0, bar: 1 }, 'ArrowRight'), null);
+  assert.equal(moveFocus(counts, { row: 0, bar: 0 }, 'ArrowLeft'), null);
+  assert.deepEqual(moveFocus(counts, { row: 0, bar: 1 }, 'ArrowDown'), { row: 2, bar: 1 }, 'the empty row is skipped');
+  assert.deepEqual(moveFocus(counts, { row: 2, bar: 2 }, 'ArrowDown'), { row: 3, bar: 0 }, 'clamped to the row’s bars');
+  assert.deepEqual(moveFocus(counts, { row: 2, bar: 0 }, 'ArrowUp'), { row: 0, bar: 0 });
+  assert.equal(moveFocus(counts, { row: 0, bar: 0 }, 'ArrowUp'), null);
+  assert.equal(moveFocus(counts, { row: 0, bar: 0 }, 'Enter'), null);
 });
 
 test('durations read short: seconds, minutes, hours with minutes, days with hours', () => {

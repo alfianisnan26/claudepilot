@@ -23,6 +23,8 @@ import {
   type TicketItem,
   type TicketPage,
   type TicketTag,
+  type TicketTimeline,
+  type TicketTimelineGranularity,
   type TicketAttachment,
   type UpdateTicketRequest,
 } from '@portal/contracts';
@@ -69,6 +71,18 @@ function query(f: TicketFilter): string {
   return q.size ? `?${q}` : '';
 }
 
+/** T-119: a timeline window with the list's filters (the closed-ticket, orphan and sort switches are the list's own and are not sent). */
+export function timelineQuery(f: TicketFilter, w: { from: string; to: string; granularity: TicketTimelineGranularity; limit?: number; cursor?: string }): string {
+  const { includeClosed: _i, orphan: _o, sort: _s, limit: _l, cursor: _c, offset: _f, ...rest } = f;
+  const q = new URLSearchParams(query(rest).slice(1));
+  q.set('from', w.from);
+  q.set('to', w.to);
+  q.set('granularity', w.granularity);
+  if (w.limit) q.set('limit', String(w.limit));
+  if (w.cursor) q.set('cursor', w.cursor);
+  return `?${q}`;
+}
+
 export const ticketsApi = {
   /** One page of summary rows (D-58): `next` goes back as `filter.cursor`; `total` and `counts` come with the first page only. */
   list: (filter: TicketFilter = {}) => request<TicketPage>('GET', `${TICKET_API.list}${query(filter)}`),
@@ -82,6 +96,7 @@ export const ticketsApi = {
   startSession: (id: string, body: StartTicketSessionRequest) => request<StartTicketSessionResult>('POST', TICKET_API.session(id), body),
   opening: (id: string) => request<{ text: string }>('GET', TICKET_API.opening(id)),
   tags: () => request<TicketTag[]>('GET', TICKET_API.tags),
+  timeline: (f: TicketFilter, w: Parameters<typeof timelineQuery>[1]) => request<TicketTimeline>('GET', `${TICKET_API.timeline}${timelineQuery(f, w)}`),
   buckets: () => request<TicketBucket[]>('GET', TICKET_API.buckets),
   createBucket: (body: CreateTicketBucketRequest) => request<TicketBucket>('POST', TICKET_API.buckets, body),
   updateBucket: (key: string, body: UpdateTicketBucketRequest) => request<TicketBucket>('PATCH', TICKET_API.bucket(key), body),

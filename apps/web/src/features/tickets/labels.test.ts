@@ -65,3 +65,17 @@ test('T-1967: the merge confirm says how many move, that old keys work and that 
   assert.equal(bucketOption({ key: 'CP', name: 'ClaudePilot' }, false), 'CP');
   assert.equal(bucketOption({ key: 'CP', name: 'ClaudePilot' }, true), 'CP · ClaudePilot');
 });
+
+test('the timeline shares the list’s filters; its first chip is everything in the window, closed included', () => {
+  const base = { view: 'timeline' as const, scope: 'active', needs: false, queue: false, orphans: false, priority: null, type: null, tag: null, q: '' };
+  assert.deepEqual(pageFilter(base), { limit: 100, includeClosed: true });
+  assert.deepEqual(pageFilter({ ...base, scope: 'blocked', bucket: 'KONF', tag: 'ui', q: 'login', queue: true }), {
+    limit: 100,
+    bucket: 'KONF',
+    status: ['blocked'],
+    assignee: 'unassigned',
+    tag: 'ui',
+    query: 'login',
+  });
+  assert.deepEqual(pageFilter({ ...base, scope: 'closed' }).status, ['done', 'wont_do']);
+});
