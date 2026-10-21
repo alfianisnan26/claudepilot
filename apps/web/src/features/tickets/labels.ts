@@ -123,3 +123,12 @@ export function pageFilter(p: {
   if (p.q) f.query = p.q;
   return f;
 }
+
+/** What the merge confirm says: how many tickets move, that the old keys keep working, that the bucket goes. */
+export function mergeText(from: string, into: string, tickets: number | undefined): string {
+  const what = tickets === undefined ? 'Its tickets move' : `${tickets} ${tickets === 1 ? 'ticket moves' : 'tickets move'}`;
+  return `${what} to ${into}, ${from} keys keep working, ${from} is deleted.`;
+}
+
+/** A bucket in a picker: the key alone where room is short (a phone), with its name where it fits (UI check of T-1967). */
+export const bucketOption = (b: { key: string; name: string }, wide: boolean): string => (wide ? `${b.key} · ${b.name}` : b.key);

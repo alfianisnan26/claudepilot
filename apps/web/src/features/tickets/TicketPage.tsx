@@ -28,7 +28,7 @@ import { formatDateTime, timeAgo } from '@/lib/format';
 import { useLive } from '@/lib/live';
 import { ticketsApi } from './api';
 import { Attachments, fileSize } from './Attachments';
-import { ORPHAN_TITLE, SESSION_STATE_LABEL, actorName, fallbackSentence, ticketLabel } from './labels';
+import { ORPHAN_TITLE, SESSION_STATE_LABEL, actorName, bucketOption, fallbackSentence, ticketLabel } from './labels';
 import { AssigneeChip, CheckChips, PriorityMark, StatusBadge, TagList, TicketFlags, TypeBadge } from './parts';
 import { AssignDialog, CloseDialog, EditTicketDialog, StartSessionDialog, TagsDialog, TicketBumpDialog } from './TicketDialogs';
 
@@ -52,6 +52,15 @@ export function TicketPage() {
   const [buckets, setBuckets] = useState<TicketBucket[]>([]);
   useEffect(() => {
     ticketsApi.buckets().then(setBuckets, () => undefined);
+  }, []);
+  // At phone width the select shows the key alone ("CP · ClaudePi" was cut at 390 px); the name stays in the field's tip.
+  const [wide, setWide] = useState(() => typeof matchMedia === 'function' && matchMedia('(min-width: 640px)').matches);
+  useEffect(() => {
+    if (typeof matchMedia !== 'function') return;
+    const q = matchMedia('(min-width: 640px)');
+    const on = () => setWide(q.matches);
+    q.addEventListener('change', on);
+    return () => q.removeEventListener('change', on);
   }, []);
   // Beside the queue, Close floats at the panel's top right: the header keeps clear of it.
   const { split } = usePanel();
@@ -191,7 +200,8 @@ export function TicketPage() {
                 value={t.bucket}
                 disabled={busy}
                 onChange={(v) => void change({ bucket: v }, `Moved to ${v}`)}
-                options={(buckets.some((b) => b.key === t.bucket) ? buckets : [...buckets, { key: t.bucket, name: t.bucket } as TicketBucket]).map((b) => ({ value: b.key, label: `${b.key} · ${b.name}` }))}
+                hint={wide ? undefined : buckets.find((b) => b.key === t.bucket)?.name}
+                options={(buckets.some((b) => b.key === t.bucket) ? buckets : [...buckets, { key: t.bucket, name: t.bucket } as TicketBucket]).map((b) => ({ value: b.key, label: bucketOption(b, wide) }))}
               />
             )}
             <Field label="Workspace">

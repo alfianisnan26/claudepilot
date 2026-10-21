@@ -119,6 +119,10 @@ test('merge CP into PILOT: every ticket in creation order with PILOT’s next nu
     const c2 = h.tickets.create(UI, { summary: 'c2', bucket: 'CP' });
     h.tickets.update(UI, c1.id, { bucket: 'KONF' }); // KONF-1 now, CP-1 an alias
     h.tickets.update(UI, c1.id, { bucket: 'CP' }); // back as CP-3
+    // What the merge confirm counts: every ticket, closed ones too.
+    h.tickets.close(UI, c2.id, { summary: 'done' });
+    assert.deepEqual([h.tickets.buckets(UI).find((b) => b.key === 'CP')!.total, h.tickets.buckets(UI).find((b) => b.key === 'CP')!.open], [2, 1]);
+    h.tickets.update(UI, c2.id, { status: 'open' });
     assert.equal(code(() => h.tickets.mergeBucket(token('t', 'admin'), 'CP', { into: 'PILOT' })), 'FORBIDDEN');
     assert.equal(code(() => h.tickets.mergeBucket(UI, 'CP', { into: 'CP' })), 'VALIDATION_FAILED');
     assert.equal(code(() => h.tickets.mergeBucket(UI, 'CP', { into: 'NOPE' })), 'NOT_FOUND:No such bucket.');

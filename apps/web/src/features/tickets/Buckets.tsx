@@ -1,10 +1,12 @@
-import { FormDialog, Select, TextField } from '@isnanme/ui';
+import { ConfirmDialog, FormDialog, Select, TextField } from '@isnanme/ui';
 import { TICKET_BUCKET_KEY, type TicketBucket, type Workspace } from '@portal/contracts';
 import { useEffect, useState } from 'react';
 import { api, errorText } from '@/lib/api';
 import { ticketsApi } from './api';
+import { mergeText } from './labels';
 
 const NEW = '__new__';
+
 
 const tagList = (raw: string) =>
   raw
@@ -36,6 +38,8 @@ export function BucketsDialog({
   const [vaultId, setVaultId] = useState('');
   // T-1967: merge the picked bucket into another (its tickets move, their old keys keep working, the bucket goes).
   const [mergeInto, setMergeInto] = useState('');
+  // A merge cannot be undone: the primary button asks first (UI check of T-1967).
+  const [confirming, setConfirming] = useState(false);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -69,7 +73,24 @@ export function BucketsDialog({
   const isNew = pick === NEW;
   const keyOk = TICKET_BUCKET_KEY.test(key.trim().toUpperCase());
 
+  const merge = async () => {
+    setSaving(true);
+    setError(null);
+    try {
+      await ticketsApi.mergeBucket(pick, { into: mergeInto });
+      setConfirming(false);
+      onChanged();
+      onClose();
+    } catch (e) {
+      setConfirming(false);
+      setError(errorText(e, 'That didn’t work.'));
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const submit = async () => {
+    if (!isNew && mergeInto) return setConfirming(true);
     setSaving(true);
     setError(null);
     try {
@@ -81,7 +102,6 @@ export function BucketsDialog({
         vaultId: vaultId.trim() || null,
       };
       if (isNew) await ticketsApi.createBucket({ key: key.trim().toUpperCase(), ...fields });
-      else if (mergeInto) await ticketsApi.mergeBucket(pick, { into: mergeInto });
       else await ticketsApi.updateBucket(pick, fields);
       onChanged();
       onClose();
@@ -92,25 +112,28 @@ export function BucketsDialog({
     }
   };
 
+  const picked = buckets.find((b) => b.key === pick);
+  const moving = picked?.total ?? picked?.open;
   return (
-    <FormDialog
-      open={open}
-      onClose={onClose}
-      title="Buckets"
-      onSubmit={submit}
-      submitLabel={isNew ? 'Create' : mergeInto ? `Merge into ${mergeInto}` : 'Save'}
-      saving={saving}
-      error={error}
-      dirty={!!name.trim()}
-    >
-      <div className="flex flex-col gap-4">
-        <Select
-          label="Bucket"
-          value={pick}
-          onChange={setPick}
-          options={[{ value: NEW, label: 'New bucket' }, ...buckets.map((b) => ({ value: b.key, label: `${b.key} · ${b.name}` }))]}
-        />
-        <TextField
+    <>
+      <FormDialog
+        open={open}
+        onClose={onClose}
+        title="Buckets"
+        onSubmit={submit}
+        submitLabel={isNew ? 'Create' : mergeInto ? `Merge into ${mergeInto}` : 'Save'}
+        saving={saving}
+        error={error}
+        dirty={!!name.trim()}
+      >
+        <div className="flex flex-col gap-4">
+          <Select
+            label="Bucket"
+            value={pick}
+            onChange={setPick}
+            options={[{ value: NEW, label: 'New bucket' }, ...buckets.map((b) => ({ value: b.key, label: `${b.key} · ${b.name}` }))]}
+          />
+          <TextField
             label="Key"
             placeholder="KONF"
             maxLength={6}
@@ -123,37 +146,52 @@ export function BucketsDialog({
             hint="Id prefix (KONF-12). Fixed once made."
             error={isNew && key && !keyOk ? '2 to 6 capital letters.' : undefined}
           />
-        <TextField label="Name" placeholder="Konfersi" maxLength={60} value={name} onChange={(e) => setName(e.target.value)} />
-        <TextField label="Description" optional maxLength={2000} value={description} onChange={(e) => setDescription(e.target.value)} />
-        <Select
-          label="Default workspace"
-          optional
-          value={workspaceId}
-          onChange={setWorkspaceId}
-          options={[{ value: '', label: 'Any' }, ...workspaces.map((w) => ({ value: w.id, label: w.id }))]}
-        />
-        <TextField
-          label="Default tags"
-          optional
-          placeholder="konfersi"
-          autoCapitalize="none"
-          autoCorrect="off"
-          spellCheck={false}
-          value={tags}
-          onChange={(e) => setTags(e.target.value)}
-        />
-        <TextField label="Vault" optional autoComplete="off" spellCheck={false} value={vaultId} onChange={(e) => setVaultId(e.target.value)} />
-        {!isNew && (
-          <Select
-            label="Merge into"
-            optional
-            hint="Its tickets move there; their old ids keep working. This bucket goes."
-            value={mergeInto}
-            onChange={setMergeInto}
-            options={[{ value: '', label: 'None' }, ...buckets.filter((b) => b.key !== pick).map((b) => ({ value: b.key, label: `${b.key} · ${b.name}` }))]}
-          />
-        )}
-      </div>
-    </FormDialog>
+          {!isNew && (
+            <Select
+              label="Merge into"
+              optional
+              hint="Its tickets move there; their old ids keep working. This bucket goes."
+              value={mergeInto}
+              onChange={setMergeInto}
+              options={[{ value: '', label: 'None' }, ...buckets.filter((b) => b.key !== pick).map((b) => ({ value: b.key, label: `${b.key} · ${b.name}` }))]}
+            />
+          )}
+          {/* A merge changes none of these: they hide while a target is picked. */}
+          {!mergeInto && (
+            <>
+              <TextField label="Name" placeholder="Konfersi" maxLength={60} value={name} onChange={(e) => setName(e.target.value)} />
+              <TextField label="Description" optional maxLength={2000} value={description} onChange={(e) => setDescription(e.target.value)} />
+              <Select
+                label="Default workspace"
+                optional
+                value={workspaceId}
+                onChange={setWorkspaceId}
+                options={[{ value: '', label: 'Any' }, ...workspaces.map((w) => ({ value: w.id, label: w.id }))]}
+              />
+              <TextField
+                label="Default tags"
+                optional
+                placeholder="konfersi"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                value={tags}
+                onChange={(e) => setTags(e.target.value)}
+              />
+              <TextField label="Vault" optional autoComplete="off" spellCheck={false} value={vaultId} onChange={(e) => setVaultId(e.target.value)} />
+            </>
+          )}
+        </div>
+      </FormDialog>
+      <ConfirmDialog
+        open={confirming}
+        title={`Merge ${pick} into ${mergeInto}?`}
+        description={mergeText(pick, mergeInto, moving)}
+        confirmLabel="Merge"
+        loading={saving}
+        onConfirm={merge}
+        onClose={() => !saving && setConfirming(false)}
+      />
+    </>
   );
 }

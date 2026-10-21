@@ -429,6 +429,8 @@ export interface TicketBucket {
   nextNumber: number;
   /** Its unfinished tickets. */
   open: number;
+  /** T-1967: all its tickets, closed ones too (what a merge moves). Absent from an older server. */
+  total?: number;
   createdAt: string;
   updatedAt: string;
 }

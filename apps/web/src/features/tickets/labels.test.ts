@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { actorName, fallbackSentence, isTicket, mcpClientName, pageFilter, ticketLabel } from './labels';
+import { actorName, bucketOption, fallbackSentence, isTicket, mcpClientName, mergeText, pageFilter, ticketLabel } from './labels';
 
 test('a Portal MCP token on a timeline is named by its label', () => {
   assert.equal(actorName('portal-mcp:ptk_1', 'relay'), 'MCP client “relay”');
@@ -56,4 +56,12 @@ test('T-1098: a ticket shows its bucket key; an address in either form, any case
   assert.ok(isTicket(t, 'KONF-2') && isTicket(t, 'konf-2') && isTicket(t, 'T-9') && isTicket(t, 't-9'));
   assert.ok(!isTicket(t, 'KONF-3') && !isTicket(t, null));
   assert.equal(pageFilter({ view: 'list', scope: 'active', needs: false, queue: false, orphans: false, priority: null, type: null, tag: null, q: '', bucket: 'KONF' }).bucket, 'KONF');
+});
+
+test('T-1967: the merge confirm says how many move, that old keys work and that the bucket goes; a phone picker shows the key alone', () => {
+  assert.equal(mergeText('CP', 'PILOT', 12), '12 tickets move to PILOT, CP keys keep working, CP is deleted.');
+  assert.equal(mergeText('CP', 'PILOT', 1), '1 ticket moves to PILOT, CP keys keep working, CP is deleted.');
+  assert.equal(mergeText('CP', 'PILOT', undefined), 'Its tickets move to PILOT, CP keys keep working, CP is deleted.');
+  assert.equal(bucketOption({ key: 'CP', name: 'ClaudePilot' }, false), 'CP');
+  assert.equal(bucketOption({ key: 'CP', name: 'ClaudePilot' }, true), 'CP · ClaudePilot');
 });

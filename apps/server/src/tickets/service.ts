@@ -1909,7 +1909,7 @@ export class Tickets {
     return fallback;
   }
 
-  #bucketView(b: BucketRow, open: number): TicketBucket {
+  #bucketView(b: BucketRow, open: number, total?: number): TicketBucket {
     let defaultTags: string[] = [];
     try {
       defaultTags = JSON.parse(b.default_tags) as string[];
@@ -1925,6 +1925,7 @@ export class Tickets {
       vaultId: b.vault_id,
       nextNumber: b.next_number,
       open,
+      ...(total !== undefined ? { total } : {}),
       createdAt: b.created_at,
       updatedAt: b.updated_at,
     };
@@ -1941,9 +1942,10 @@ export class Tickets {
         (r) => [r.k, r.n],
       ),
     );
+    const total = new Map((this.#db.prepare('SELECT bucket_key AS k, count(*) AS n FROM tickets GROUP BY bucket_key').all() as { k: string; n: number }[]).map((r) => [r.k, r.n]));
     return (this.#db.prepare('SELECT * FROM ticket_buckets ORDER BY key').all() as unknown as BucketRow[])
       .filter((b) => this.#bucketOpenTo(caller, b))
-      .map((b) => this.#bucketView(b, open.get(b.key) ?? 0));
+      .map((b) => this.#bucketView(b, open.get(b.key) ?? 0, total.get(b.key) ?? 0));
   }
 
   bucket(caller: Caller, key: string): TicketBucket {
