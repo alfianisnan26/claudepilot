@@ -1,4 +1,5 @@
 import { AppError } from '@isnanme/core';
+import { can } from '../authz/seam.js';
 import type { WorkspaceRefs } from '../workspaces/identity.js';
 import {
   BUMP_PRIORITY,
@@ -24,6 +25,8 @@ import {
   ticketKeyOf,
   TICKET_BUCKET_KEY,
   TICKET_DEFAULT_BUCKET,
+  ticketBucketRef,
+  type Actor,
   type CreateTicketBucketRequest,
   type MergeTicketBucketRequest,
   type MergeTicketBucketResult,
@@ -116,11 +119,15 @@ import {
  * minted for: both verified from the token, never from what a call says.
  */
 export type Caller =
-  | { kind: 'ui' }
+  /** `actor` (T-1857): the person as the seam knows them, when the route passes it; without it the route has checked the bucket itself. */
+  | { kind: 'ui'; actor?: Actor }
   | { kind: 'system' }
-  /** `manager`: the General Manager's `cpmt_` token (T-968): it may not close a ticket nor record a verdict (#11136 b, PRD §9.4). */
-  | { kind: 'token'; tokenId: string; label: string; scope: PortalScope; manager?: true }
-  | { kind: 'agent'; tokenId: string; label: string; workspaceId: string; sessionId: string }
+  /**
+   * `manager`: the General Manager's `cpmt_` token (T-968): it may not close a ticket nor record a verdict (#11136 b, PRD §9.4).
+   * `actor` (T-1857): the seam's actor for the token (the tools pass `actorOfPrincipal`); left out, the token's own as the seam reads it.
+   */
+  | { kind: 'token'; tokenId: string; label: string; scope: PortalScope; manager?: true; actor?: Actor }
+  | { kind: 'agent'; tokenId: string; label: string; workspaceId: string; sessionId: string; actor?: Actor }
   /**
    * A trigger a person made (triggers PRD FR17, owner decision O8): no more rights than `system` plus starting a session; recorded as
    * actor `trigger:<id>`, and its text (an event's words) is untrusted. The session it starts carries `portal:trigger-<id>`.
@@ -405,7 +412,7 @@ export class Tickets {
   /** `t.workspace_id IN (…)` for one workspace, in every form its rows may hold while the move runs. */
   #inWorkspace(column: string, key: string): { sql: string; args: string[] } {
     const forms = this.#refs ? this.#refs.storedForms(key) : [key];
-    return { sql: `${column} IN (${forms.map(() => '?').join(', ')})`, args: forms };
+    return { sql: `t.bucket_key IN (${forms.map(() => '?').join(', ')})`, args: forms };
   }
 
   /**
@@ -529,10 +536,45 @@ export class Tickets {
     return this.#needSession(this.#writer(caller, sessionId), 'To say “me”').id;
   }
 
-  /** Whether the caller may see a ticket: an agent sees its workspace's tickets and the shared queue. */
+  /**
+   * Whether the caller may see a ticket: its bucket passes `view` (T-1857: for agents, tokens and a person whose route passes the actor), and an
+   * agent sees only its workspace's tickets and the shared queue. Every read by id (`#need`) and every list (`#where`) goes through it.
+   */
   #visible(caller: Caller, row: Row): boolean {
+    const buckets = this.#viewableBuckets(caller);
+    if (buckets && !buckets.has(row.bucket_key)) return false;
     if (caller.kind !== 'agent') return true;
     return row.workspace_id === null || this.#isIn(row, caller.workspaceId);
+  }
+
+  /** The seam's actor for a caller (T-1857), or null when no bucket rule applies to it (the portal, a trigger, a person's route that checks it). */
+  #actorOf(caller: Caller): Actor | null {
+    if (caller.kind === 'agent')
+      return caller.actor ?? { kind: 'agent', userId: FOUNDING_USER_ID, tokenId: caller.tokenId, sessionId: caller.sessionId, workspaceId: caller.workspaceId };
+    if (caller.kind === 'token') return caller.actor ?? { kind: 'token', userId: FOUNDING_USER_ID, tokenId: caller.tokenId, scope: caller.scope };
+    if (caller.kind === 'ui') return caller.actor ?? null;
+    return null;
+  }
+
+  /**
+   * T-1857: the buckets the caller may view (`can(view, ticket_bucket)`, asked once per bucket), or null when it may view every one (the
+   * owner: nothing is filtered and the SQL stays as it was). A bucket key no bucket row has is not in the set, so its tickets are hidden too,
+   * as the REST guard hides them.
+   */
+  #viewableBuckets(caller: Caller): Set<string> | null {
+    const actor = this.#actorOf(caller);
+    if (!actor) return null;
+    const keys = (this.#db.prepare('SELECT key FROM ticket_buckets').all() as { key: string }[]).map((r) => r.key);
+    const ok = keys.filter((k) => can(actor, 'view', ticketBucketRef(k)).allow);
+    return ok.length === keys.length ? null : new Set(ok);
+  }
+
+  /** The SQL that keeps a list to the buckets the caller may view (T-1857); empty when it may view them all. */
+  #bucketSql(caller: Caller): { sql: string; args: string[] } | null {
+    const buckets = this.#viewableBuckets(caller);
+    if (!buckets) return null;
+    if (!buckets.size) return { sql: '0', args: [] };
+    return { sql: `t.bucket_key IN (${[...buckets].map(() => '?').join(',')})`, args: [...buckets] };
   }
 
   /**
@@ -874,6 +916,9 @@ export class Tickets {
       where.push(`(t.workspace_id IS NULL OR ${mine.sql})`);
       args.push(...mine.args);
     }
+    // T-1857: a bucket the caller may not view is not in any list nor any count.
+    const inBuckets = this.#bucketSql(caller);
+    if (inBuckets) (where.push(inBuckets.sql), args.push(...inBuckets.args));
     if (forCounts) return { sql: where.length ? `WHERE ${where.join(' AND ')}` : '', args };
     if (f.bucket) (where.push('t.bucket_key = ?'), args.push(f.bucket.trim().toUpperCase()));
     const statuses = f.status?.filter((s) => (TICKET_STATUSES as readonly string[]).includes(s));
@@ -2021,6 +2066,9 @@ export class Tickets {
       const mine = this.#inWorkspace('t.workspace_id', session.workspaceId);
       where.push(`(t.workspace_id IS NULL OR ${mine.sql})`);
       args.push(...mine.args);
+      // T-1857: a ticket in a bucket the caller may not view is never claimed, by id or by the queue.
+      const inBuckets = this.#bucketSql(caller);
+      if (inBuckets) (where.push(inBuckets.sql), args.push(...inBuckets.args));
       if (wantedNumber !== null) (where.push('t.number = ?'), args.push(wantedNumber));
       for (const tag of tags)
         (where.push('EXISTS (SELECT 1 FROM ticket_tags g WHERE g.ticket_number = t.number AND g.tag = ?)'), args.push(tag));
@@ -3023,7 +3071,7 @@ export class Tickets {
     const grant = this.#forEnded(me, from.id);
     if (!grant) throw new AppError('FORBIDDEN', 'A live session continues that one: its tickets are that session’s to take.');
     const tickets = this.#heldBy(from.id)
-      .filter((r) => r.workspace_id === null || this.#isIn(r, me.workspaceId))
+      .filter((r) => (r.workspace_id === null || this.#isIn(r, me.workspaceId)) && this.#visible(caller, r))
       .map((r) => ticketIdOf(r.number));
     return { me, from: from.id, why: grant.why, tickets };
   }
@@ -3043,7 +3091,7 @@ export class Tickets {
       const out: string[] = [];
       const at = this.#now().toISOString();
       for (const r of this.#heldBy(plan.from)) {
-        if (!(r.workspace_id === null || this.#isIn(r, plan.me.workspaceId))) continue;
+        if (!(r.workspace_id === null || this.#isIn(r, plan.me.workspaceId)) || !this.#visible(caller, r)) continue;
         this.#db.prepare('UPDATE tickets SET assignee_ref = ?, updated_at = ? WHERE number = ?').run(plan.me.id, at, r.number);
         this.#addEvent(r.number, 'assigned', w, null, {
           from: { kind: 'session', sessionId: plan.from },

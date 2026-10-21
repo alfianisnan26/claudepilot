@@ -49,6 +49,8 @@ const optionalBody = async <T>(c: Context): Promise<Partial<T>> => {
 };
 
 const UI: Caller = { kind: 'ui' };
+/** T-1857: a person's list, with the seam's actor, so its total and counts leave out the buckets they may not view. */
+const viewer = (c: Context): Caller => ({ kind: 'ui', actor: actorOf(c) });
 
 const attachmentNumber = (c: Context): number => {
   const n = Number(c.req.param('attachmentId'));
@@ -137,7 +139,7 @@ export function createTicketRoutes(tickets: Tickets): Hono {
     // D-58: `{ items, next }` (25 by default, 100 at most), summary rows, keyset. Each row passes `view` before it is shown and `next` points at
     // the last row shown, so a cursor never names a hidden ticket. A bad cursor, or one made for another filter, is a 400.
     const keep = viewerOf(actorOf(c), filter);
-    return c.json(success(tickets.listPage(UI, filter, { cursor: q.cursor || undefined, limit: q.limit, keep })));
+    return c.json(success(tickets.listPage(viewer(c), filter, { cursor: q.cursor || undefined, limit: q.limit, keep })));
   });
 
   app.post('/', async (c) => {
@@ -184,7 +186,7 @@ export function createTicketRoutes(tickets: Tickets): Hono {
   });
 
   // Registered before `/:id`, which would read "tags" as an id.
-  app.get('/tags', (c) => c.json(success(tickets.tags(UI))));
+  app.get('/tags', (c) => c.json(success(tickets.tags(viewer(c)))));
   // T-119: the tickets of a window with their flow, filtered like the list. Like the list: each row (and its bucket) passes `view` before it is
   // shown; a bad window, scale or filter is a 422, a bad cursor a 400. The answer is cached for a few seconds per viewer (the service drops it on any ticket write).
   app.get('/timeline', (c) => {
@@ -195,7 +197,7 @@ export function createTicketRoutes(tickets: Tickets): Hono {
     return c.json(
       success(
         tickets.timeline(
-          UI,
+          viewer(c),
           { from: q.from, to: q.to, granularity: q.granularity, filter },
           { cursor: q.cursor || undefined, limit: q.limit, keep, cacheKey: JSON.stringify(actor) },
         ),
