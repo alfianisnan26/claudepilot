@@ -3744,6 +3744,16 @@ export const MIGRATIONS: Migration[] = [
     },
   },
   {
+    version: 794,
+    name: 'tickets: an index on events by ticket and time, for the timeline (T-119)',
+    up(db) {
+      // T-119: the tickets block 40-49 is full (49 is T-1974's), so this takes 794, after the ticket ones at
+      // 785-787 (788 is T-975's). The timeline reads the events of a page of tickets in one query, per ticket in time order; (ticket_number, id)
+      // was the only one.
+      db.exec(`CREATE INDEX IF NOT EXISTS ticket_events_ticket_at ON ticket_events (ticket_number, at)`);
+    },
+  },
+  {
     version: 795,
     name: 'tickets: a verdict recorded in a QA batch keeps the batch evidence (T-1987, D-93)',
     up(db) {

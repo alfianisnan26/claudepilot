@@ -539,7 +539,8 @@ test('recordVerdicts (T-1987): every refusal rule applies per item; the rest are
     assert.equal(r.tickets.verdictStatus(UI, r.id, A).pass, true);
     assert.equal(r.tickets.verdictStatus(UI, t2.id, B).pass, false);
     const entry = r.tickets.get(UI, t2.id).events.find((e) => e.kind === 'comment' && e.data?.verdictId)!;
-    assert.match(entry.body!, /QA FAIL recorded on commit .* in batch qa\/batch-2026-10-21-1\./);
+    assert.equal(entry.body, `QA FAIL recorded on commit ${B.slice(0, 12)} in a batch.`, 'a short sha, no branch: the chips carry it');
+    assert.equal(entry.data!.commit, B, 'the full sha stays in the data');
     assert.deepEqual(entry.data!.batch, evidence);
     assert.equal(r.tickets.verdicts(UI, t3.id).length + r.tickets.verdicts(UI, t4.id).length, 0, 'nothing on a refused item');
     // One audit row per ticket recorded, each with the batch; one refusal row per item that reached the rule.
@@ -613,6 +614,14 @@ test('liveBatchOf (T-1987): a comment after the newest verdict naming a batch br
     r.tickets.comment(UI, r.id, 'Back in batch/2026-10-21-3 after the fix.');
     assert.equal(r.tickets.liveBatchOf(r.id)?.branch, 'batch/2026-10-21-3');
     assert.equal(r.tickets.liveBatchOf('T-9999'), null);
+    // QA on T-1987: a path or a name that only looks like one is no batch (the watchdog would skip the ticket for 180 min).
+    r.tickets.recordVerdict(UI, r.id, { role: 'qa', verdict: 'fail', commit: A });
+    for (const text of ['Changed apps/server/src/batch/foo.ts.', 'See batch/2026-10-21-3.ts', 'subbatch/2026-10-21-1 and xqa/batch-20261021-1', 'qa/batch-tomorrow', 'batch/20261021']) {
+      r.tickets.comment(UI, r.id, text);
+      assert.equal(r.tickets.liveBatchOf(r.id), null, text);
+    }
+    r.tickets.comment(UI, r.id, 'Now in qa/batch-20261021-4.');
+    assert.equal(r.tickets.liveBatchOf(r.id)?.branch, 'qa/batch-20261021-4', 'the compact date, at the end of a sentence');
   } finally {
     r.done();
   }

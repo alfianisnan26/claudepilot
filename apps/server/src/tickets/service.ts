@@ -12,6 +12,9 @@ import {
   TICKET_OPEN_STATUSES,
   TICKET_PRIORITIES,
   TICKET_STATUSES,
+  TICKET_TIMELINE_GRANULARITIES,
+  TICKET_TIMELINE_LIMITS,
+  TICKET_TIMELINE_PAGE,
   TICKET_TYPES,
   isTicketClosed,
   parseTicketBranch,
@@ -60,6 +63,9 @@ import {
   type TicketSession,
   type TicketStatus,
   type TicketTag,
+  type TicketTimeline,
+  type TicketTimelineGranularity,
+  type TicketTimelineRow,
   type TicketType,
   type UpdateTicketRequest,
 } from '@portal/contracts';
@@ -84,6 +90,7 @@ import './errors.js';
 import { bumpTicketMessage, openingMessage } from './opening.js';
 import type { TicketSessionInfo, TicketSessions } from './sessions.js';
 import { cleanLine, cleanMarkdown, cleanTags } from './text.js';
+import { clipFlow, ticketFlow, type FlowEvent } from './ticketFlow.js';
 import { putTicketFile, readTicketFile, removeTicketFile } from './files.js';
 import {
   canRecordVerdict,
@@ -205,6 +212,17 @@ interface EventRow {
   actor_label: string;
   body: string | null;
   data: string | null;
+}
+
+/** T-119: how long a timeline answer may be served from memory, and how many answers are kept. */
+const TIMELINE_CACHE_MS = 5_000;
+const TIMELINE_CACHE_MAX = 64;
+
+/** A timeline page size: 50 when absent or not a number, clamped to 1..200. */
+function timelineLimit(limit: unknown): number {
+  const n = typeof limit === 'string' && limit.trim() !== '' ? Number(limit) : typeof limit === 'number' ? limit : NaN;
+  if (!Number.isFinite(n)) return TICKET_TIMELINE_PAGE.defaultLimit;
+  return Math.min(Math.max(Math.trunc(n), 1), TICKET_TIMELINE_PAGE.maxLimit);
 }
 
 const RANK: Record<TicketPriority, number> = { urgent: 0, high: 1, normal: 2, low: 3 };
@@ -1029,6 +1047,157 @@ export class Tickets {
     if (!args.cursor) {
       out.total = (this.#db.prepare(`SELECT count(*) AS n FROM tickets t ${sql}`).get(...sqlArgs) as { n: number }).n;
       out.counts = this.counts(caller);
+    }
+    return out;
+  }
+
+  /**
+   * T-119: the tickets whose life overlaps a window, each with its flow ({@link ticketFlow}, computed on read from the stored events: nothing is
+   * stored twice), its spans and markers cut to the ones that touch the window ({@link clipFlow}). Oldest number first, by keyset on the number,
+   * a page at a time (50 by default, 200 at most). The window is bounded by the granularity: a window over the scale's limit (named in
+   * the message), an unknown scale, a bad time or filter is a 422 VALIDATION_FAILED, a bad or foreign cursor a 400 BAD_REQUEST; `from` defaults to the granularity's default window before `to`, `to` to now. `filter` is the list's (bucket, status,
+   * priority, type, tag, assignee, workspace, query); closed tickets are in unless `status` says otherwise. `keep` is the caller's `view` check,
+   * as in {@link listPage}: a hidden ticket is not shown, and the cursor (sealed, bound to the caller, the filter and the window) points at the
+   * last row shown, or at the last scanned when the scan bound ends the page. The events of a page are read in ONE query (index
+   * `ticket_events_ticket_at`, migration 794). `cacheKey` (the viewer, from the route) turns on a short cache: the same question within
+   * {@link TIMELINE_CACHE_MS} and with no ticket written since is answered from memory.
+   */
+  timeline(
+    caller: Caller,
+    q: { from?: unknown; to?: unknown; granularity?: unknown; filter?: TicketFilter },
+    args: { cursor?: string | undefined; limit?: unknown; keep?: (t: TicketItem) => boolean; cacheKey?: string } = {},
+  ): TicketTimeline {
+    const nowMs = this.#now().getTime();
+    const granularity = q.granularity === undefined || q.granularity === '' ? 'hour' : q.granularity;
+    if (typeof granularity !== 'string' || !(TICKET_TIMELINE_GRANULARITIES as readonly string[]).includes(granularity))
+      throw new AppError('VALIDATION_FAILED', 'Unknown granularity.', { details: { granularity: `Use: ${TICKET_TIMELINE_GRANULARITIES.join(', ')}.` } });
+    const scale = granularity as TicketTimelineGranularity;
+    const limits = TICKET_TIMELINE_LIMITS[scale];
+    const time = (v: unknown, field: string): number | null => {
+      if (v === undefined || v === '') return null;
+      const ms = typeof v === 'string' && v.length <= 40 ? Date.parse(v) : NaN;
+      if (!Number.isFinite(ms)) throw new AppError('VALIDATION_FAILED', `${field} is not a time.`, { details: { [field]: 'Use an ISO time, e.g. 2026-10-18T00:00:00Z.' } });
+      return ms;
+    };
+    const toMs = time(q.to, 'to') ?? nowMs;
+    const fromMs = time(q.from, 'from') ?? toMs - limits.defaultWindowMs;
+    if (fromMs >= toMs) throw new AppError('VALIDATION_FAILED', 'from must be before to.', { details: { from: 'Earlier than to.' } });
+    if (toMs - fromMs > limits.maxWindowMs) {
+      const max = limits.maxWindowMs >= 2 * 86_400_000 ? `${Math.round(limits.maxWindowMs / 86_400_000)} days` : `${Math.round(limits.maxWindowMs / 3_600_000)} hours`;
+      throw new AppError('VALIDATION_FAILED', `That window is too long for the ${scale} scale: at most ${max}.`, {
+        details: { granularity: `At most ${max} at the ${scale} scale; use a coarser scale or a shorter window.` },
+      });
+    }
+    const from = new Date(fromMs).toISOString();
+    const to = new Date(toMs).toISOString();
+    const f: TicketFilter = q.filter ?? {};
+    const limit = timelineLimit(args.limit);
+    const scope = `tickets-timeline|${JSON.stringify([caller.kind === 'agent' ? `agent:${caller.workspaceId}` : caller.kind, scale, from, to, f.bucket ?? null, f.status ?? null, f.priority ?? null, f.type ?? null, f.tag ?? null, f.assignee ?? null, f.workspaceId ?? null, f.query?.trim() ?? null])}`;
+
+    // The short cache: keyed by the question as asked (an absent `to` is "now" for the few seconds a hit may be old), stamped with the
+    // tickets' write state so a change is never hidden by it.
+    const cacheKey = args.cacheKey ? `${args.cacheKey}|${scope}|${String(q.from ?? '')}|${String(q.to ?? '')}|${args.cursor ?? ''}|${limit}` : null;
+    const stamp = cacheKey ? this.#timelineStamp() : '';
+    if (cacheKey) {
+      const hit = this.#timelineCache.get(cacheKey);
+      if (hit && hit.stamp === stamp && performance.now() - hit.at < TIMELINE_CACHE_MS && Math.abs(nowMs - hit.nowMs) < TIMELINE_CACHE_MS) return hit.value;
+    }
+
+    const base = this.#where(caller, { ...f, includeClosed: true });
+    const overlap = 't.created_at <= ? AND (t.closed_at IS NULL OR t.closed_at >= ?)';
+    const sql = `${base.sql ? `${base.sql} AND` : 'WHERE'} ${overlap}`;
+    const sqlArgs = [...base.args, to, from];
+    let resume = 0;
+    if (args.cursor) {
+      const at = decodeCursor(args.cursor, scope);
+      if (typeof at.id !== 'number') throw new AppError('BAD_REQUEST', 'That cursor is not valid for this list. Load the list again.');
+      resume = at.id;
+    }
+    // Bounded scan, as in listPage: at most SCAN_FACTOR x limit rows read per request, however many `keep` hides.
+    const shown: { item: TicketItem; num: number }[] = [];
+    const maxScan = limit * SCAN_FACTOR;
+    let scanned = 0;
+    let more: number | null = null;
+    while (scanned < maxScan) {
+      const room = Math.min(TICKET_TIMELINE_PAGE.maxLimit, maxScan - scanned);
+      const got = (
+        this.#db
+          .prepare(`SELECT t.* FROM tickets t ${sql} AND t.number > ? ORDER BY t.number ASC LIMIT ?`)
+          .all(...sqlArgs, resume, room + 1) as unknown as Row[]
+      ).map((r) => this.#keyed(r));
+      const batch = got.slice(0, room);
+      const items = this.#items(batch);
+      batch.forEach((r, i) => {
+        const item = items[i]!;
+        if (!args.keep || args.keep(item)) shown.push({ item, num: r.number });
+      });
+      scanned += batch.length;
+      const last = batch[batch.length - 1];
+      more = got.length > room && last ? last.number : null;
+      if (shown.length > limit || more === null) break;
+      resume = more;
+    }
+    const page = shown.slice(0, limit);
+    const last = page[page.length - 1];
+    const nextNum = shown.length > limit && last ? last.num : shown.length > limit ? null : more;
+    const events = this.#flowEvents(page.map((p) => p.num));
+    const items: TicketTimelineRow[] = page.map(({ item, num }) => {
+      const flow = ticketFlow({ createdAt: item.createdAt, status: item.status, closedAt: item.closedAt, events: events.get(num) ?? [] }, nowMs);
+      const a = item.assignee;
+      return {
+        id: item.id,
+        key: item.key ?? item.id,
+        bucket: item.bucket ?? TICKET_DEFAULT_BUCKET,
+        summary: item.summary,
+        status: item.status,
+        priority: item.priority,
+        type: item.type,
+        assignee: !a
+          ? null
+          : a.kind === 'user'
+            ? { kind: 'user', label: a.name || 'A person', sessionId: null }
+            : { kind: 'session', label: item.assigneeSession?.title || 'Agent gone', sessionId: a.sessionId },
+        createdAt: item.createdAt,
+        closedAt: item.closedAt,
+        flow: clipFlow(flow, fromMs, toMs, nowMs),
+      };
+    });
+    const value: TicketTimeline = { from, to, granularity: scale, now: new Date(nowMs).toISOString(), items, next: nextNum === null ? null : cursorAfter(scope, nextNum, nextNum) };
+    if (cacheKey) {
+      if (this.#timelineCache.size >= TIMELINE_CACHE_MAX) this.#timelineCache.delete(this.#timelineCache.keys().next().value!);
+      this.#timelineCache.set(cacheKey, { stamp, at: performance.now(), nowMs, value });
+    }
+    return value;
+  }
+
+  #timelineCache = new Map<string, { stamp: string; at: number; nowMs: number; value: TicketTimeline }>();
+
+  /** What changes whenever a ticket or its events are written (a new event, a ticket made, changed or deleted): the timeline cache's stamp. */
+  #timelineStamp(): string {
+    const e = this.#db.prepare('SELECT max(id) AS id FROM ticket_events').get() as { id: number | null };
+    const t = this.#db.prepare('SELECT count(*) AS n, max(updated_at) AS u FROM tickets').get() as { n: number; u: string | null };
+    return `${e.id ?? 0}|${t.n}|${t.u ?? ''}`;
+  }
+
+  /** The events of many tickets in one query, oldest first per ticket, as the flow reads them. */
+  #flowEvents(numbers: number[]): Map<number, FlowEvent[]> {
+    const out = new Map<number, FlowEvent[]>();
+    if (!numbers.length) return out;
+    const rows = this.#db
+      .prepare(
+        `SELECT ticket_number, at, kind, actor, actor_label, body, data FROM ticket_events WHERE ticket_number IN (${numbers.map(() => '?').join(',')}) ORDER BY ticket_number, at, id`,
+      )
+      .all(...numbers) as unknown as Omit<EventRow, 'id'>[];
+    for (const e of rows) {
+      let data: Record<string, unknown> | null = null;
+      try {
+        data = e.data ? (JSON.parse(e.data) as Record<string, unknown>) : null;
+      } catch {
+        // an unreadable entry is read without its data
+      }
+      const list = out.get(e.ticket_number) ?? [];
+      list.push({ at: e.at, kind: e.kind, actor: e.actor, actorLabel: e.actor_label, body: e.body, data, fromAgent: /^(portal-mcp|session|ci|trigger):/.test(e.actor) });
+      out.set(e.ticket_number, list);
     }
     return out;
   }
@@ -2357,7 +2526,8 @@ export class Tickets {
    * Records a QA or review verdict on ONE full commit. Refused by `canRecordVerdict` (the author, the lead, anything but a QA/review session
    * or a person); a ticket the caller cannot see is the same not found. Rows are never edited: the latest verdict of a role on a commit wins.
    * Writes a timeline entry and an audit row `ticket.verdict`. `req.batch` (FR36d, T-1987): the shared evidence of a QA batch, kept with the
-   * row, in the timeline entry and in the audit row; checked like any ticket text (see {@link verdictBatchOf}).
+   * row, in the timeline entry and in the audit row; checked like any ticket text (see {@link verdictBatchOf}). A batch entry's sentence
+   * names a short sha and no branch: the page shows the branch and the job as chips, and `data.commit` keeps the full sha.
    */
   recordVerdict(
     caller: Caller,
@@ -2414,7 +2584,7 @@ export class Tickets {
         row.number,
         'comment',
         w,
-        `${role === 'qa' ? 'QA' : 'Review'} ${verdict.toUpperCase()} recorded on commit ${commit}${batch?.branch ? ` in batch ${batch.branch}` : batch ? ' in a batch' : ''}.`,
+        `${role === 'qa' ? 'QA' : 'Review'} ${verdict.toUpperCase()} recorded on commit ${batch ? `${commit!.slice(0, 12)} in a batch` : commit}.`,
         { verdict, role, commit, verdictId: vid, ...(batch ? { batch } : {}) },
       );
       return { id: vid, role, verdict, commit: commit!, actor: w.actor, at, batch } satisfies StoredVerdict;

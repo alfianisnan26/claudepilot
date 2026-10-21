@@ -74,7 +74,7 @@ export interface FlowSnapshot {
 
 /**
  * `qaBatchPerPeer` (T-1987, D-93): at most this many tickets in one QA-ASK to one peer lead (one batch); the rest wait for the next window.
- * `batchLiveMin`: a ticket whose newest activity after its newest verdict names a batch branch (`qa/batch-*`, `batch/<date>-<n>`) this
+ * `batchLiveMin`: a ticket whose newest activity after its newest verdict names a batch branch (`TICKET_BATCH_BRANCH`: `qa/batch-<date>-<n>`, `batch/<date>-<n>`) this
  * recently is in a live batch and is not asked again.
  */
 export const FLOW_LIMITS = { actions: 5, ticketsPerMessage: 20, kept: 50, qaBatchPerPeer: 8, batchLiveMin: 180 } as const;

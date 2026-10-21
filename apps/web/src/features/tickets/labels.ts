@@ -99,7 +99,7 @@ export const isTicket = (t: { id: string; key?: string }, ref: string | null | u
   !!ref && (t.id.toUpperCase() === ref.toUpperCase() || (!!t.key && t.key.toUpperCase() === ref.toUpperCase()));
 
 export function pageFilter(p: {
-  view: 'list' | 'board';
+  view: 'list' | 'board' | 'timeline';
   scope: string;
   needs: boolean;
   queue: boolean;
@@ -112,7 +112,8 @@ export function pageFilter(p: {
 }): TicketFilter {
   const f: TicketFilter = { limit: 100 };
   if (p.bucket) f.bucket = p.bucket;
-  if (p.view === 'board') f.includeClosed = true;
+  // The board and the timeline (T-119) show closed tickets too: the timeline's first chip is All, not Active.
+  if (p.view === 'board' || (p.view === 'timeline' && p.scope === 'active')) f.includeClosed = true;
   else if (p.scope === 'closed') f.status = ['done', 'wont_do'];
   else if (p.scope !== 'active') f.status = [p.scope as TicketStatus];
   if (p.needs) f.assignee = 'user';

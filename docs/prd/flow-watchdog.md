@@ -40,7 +40,7 @@ by, its predecessors and continuations included.
 per ticket (D-93)` and asks the peer to record each verdict with `ticket_verdict_batch` (tickets PRD FR36d). One message to one peer holds at
 most 8 tickets (`FLOW_LIMITS.qaBatchPerPeer`); tickets no peer has room for this round are still counted and wait for the next window (no
 `skipped` row: a peer may verify them, it is only full). A ticket **in a live batch** is not asked again: a comment or CI entry after its
-newest verdict names a batch branch (`qa/batch-*` or `batch/<date>-<n>`, `liveBatchOf` in the tickets service, the newest 20 entries)
+newest verdict names a batch branch as a whole token (`qa/batch-<date>-<n>` or `batch/<date>-<n>`, the date `YYYY-MM-DD` or `YYYYMMDD`; a path like `src/batch/foo.ts` is not one; `liveBatchOf` in the tickets service, the newest 20 entries)
 within `FLOW_LIMITS.batchLiveMin` (180 min). Its verdict ends the batch for it; an older mention is a batch that stopped, and the ticket is
 asked again.
 

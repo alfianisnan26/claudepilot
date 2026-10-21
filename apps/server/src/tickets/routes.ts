@@ -78,7 +78,7 @@ export function createTicketRoutes(tickets: Tickets): Hono {
 
   // T-1098: a ticket is reached through its bucket: view to read it, operate to change it. A bucket the person may not see answers like a
   // missing ticket (the same 404). Paths that are not a ticket id are left to their own routes.
-  const NOT_IDS = new Set(['tags', 'bumped', 'buckets', 'bucket-moves']);
+  const NOT_IDS = new Set(['tags', 'bumped', 'buckets', 'bucket-moves', 'timeline']);
   const guard = async (c: Context, next: () => Promise<void>) => {
     const ref = c.req.param('id') ?? '';
     if (!NOT_IDS.has(ref)) {
@@ -95,14 +95,14 @@ export function createTicketRoutes(tickets: Tickets): Hono {
   app.use('/:id', guard);
   app.use('/:id/*', guard);
 
-  app.get('/', (c) => {
-    const q = c.req.query();
+  /** The list's filter from a query string (the list and the timeline read the same one); an unknown assignee is a 400. */
+  const filterOf = (q: Record<string, string>): TicketFilter => {
     const assignee = q.assignee;
     if (assignee && !['any', 'unassigned', 'user'].includes(assignee) && !assignee.startsWith('session:'))
       throw new AppError('VALIDATION_FAILED', 'Unknown assignee filter.', {
         details: { assignee: 'Use any, unassigned, user or session:<id>.' },
       });
-    const filter: TicketFilter = {
+    return {
       bucket: q.bucket || undefined,
       status: names<TicketStatus>(q.status, TICKET_STATUSES, 'status'),
       priority: names<TicketPriority>(q.priority, TICKET_PRIORITIES, 'priority'),
@@ -115,18 +115,28 @@ export function createTicketRoutes(tickets: Tickets): Hono {
       orphan: q.orphan === '1' || q.orphan === 'true' || undefined,
       sort: q.sort === 'newest' ? 'newest' : undefined,
     };
-    // D-58: `{ items, next }` (25 by default, 100 at most), summary rows, keyset. Each row passes `view` before it is shown and `next` points at
-    // the last row shown, so a cursor never names a hidden ticket. A bad cursor, or one made for another filter, is a 400.
-    const actor = actorOf(c);
+  };
+  /**
+   * Who may see a row: a bucket filter the caller may not view is the same 404 as a bucket that does not exist; each row's bucket passes
+   * `view` (T-1098, asked once per bucket per request) and the ticket itself passes `view`.
+   */
+  const viewerOf = (actor: ReturnType<typeof actorOf>, filter: TicketFilter) => {
     if (filter.bucket) requireCan(actor, 'view', ticketBucketRef(filter.bucket.toUpperCase()));
-    // T-1098: and its bucket passes `view` (asked once per bucket per request).
     const seen = new Map<string, boolean>();
     const inBucket = (b: string | undefined) => {
       if (!b) return true;
       if (!seen.has(b)) seen.set(b, can(actor, 'view', ticketBucketRef(b)).allow);
       return seen.get(b)!;
     };
-    const keep = (t: { id: string; bucket?: string }) => inBucket(t.bucket) && visible(actor, 'ticket', [t], (x) => x.id).length > 0;
+    return (t: { id: string; bucket?: string }) => inBucket(t.bucket) && visible(actor, 'ticket', [t], (x) => x.id).length > 0;
+  };
+
+  app.get('/', (c) => {
+    const q = c.req.query();
+    const filter = filterOf(q);
+    // D-58: `{ items, next }` (25 by default, 100 at most), summary rows, keyset. Each row passes `view` before it is shown and `next` points at
+    // the last row shown, so a cursor never names a hidden ticket. A bad cursor, or one made for another filter, is a 400.
+    const keep = viewerOf(actorOf(c), filter);
     return c.json(success(tickets.listPage(UI, filter, { cursor: q.cursor || undefined, limit: q.limit, keep })));
   });
 
@@ -175,6 +185,23 @@ export function createTicketRoutes(tickets: Tickets): Hono {
 
   // Registered before `/:id`, which would read "tags" as an id.
   app.get('/tags', (c) => c.json(success(tickets.tags(UI))));
+  // T-119: the tickets of a window with their flow, filtered like the list. Like the list: each row (and its bucket) passes `view` before it is
+  // shown; a bad window, scale or filter is a 422, a bad cursor a 400. The answer is cached for a few seconds per viewer (the service drops it on any ticket write).
+  app.get('/timeline', (c) => {
+    const q = c.req.query();
+    const { includeClosed: _i, orphan: _o, sort: _s, ...filter } = filterOf(q);
+    const actor = actorOf(c);
+    const keep = viewerOf(actor, filter);
+    return c.json(
+      success(
+        tickets.timeline(
+          UI,
+          { from: q.from, to: q.to, granularity: q.granularity, filter },
+          { cursor: q.cursor || undefined, limit: q.limit, keep, cacheKey: JSON.stringify(actor) },
+        ),
+      ),
+    );
+  });
   // The tickets bumped into a session (FR31), for its page: whoever may view the session.
   app.get('/bumped', (c) => {
     const session = c.req.query('session') ?? '';
