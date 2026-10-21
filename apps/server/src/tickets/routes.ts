@@ -175,6 +175,15 @@ export function createTicketRoutes(tickets: Tickets): Hono {
 
   // Registered before `/:id`, which would read "tags" as an id.
   app.get('/tags', (c) => c.json(success(tickets.tags(UI))));
+  // T-119 S1b: the tickets of a window with their flow. Like the list: each row passes `view` before it is shown; a bad window or scale is a 400.
+  app.get('/timeline', (c) => {
+    const q = c.req.query();
+    const actor = actorOf(c);
+    const keep = (t: { id: string }) => visible(actor, 'ticket', [t], (x) => x.id).length > 0;
+    return c.json(
+      success(tickets.timeline(UI, { from: q.from, to: q.to, granularity: q.granularity }, { cursor: q.cursor || undefined, limit: q.limit, keep })),
+    );
+  });
   // The tickets bumped into a session (FR31), for its page: whoever may view the session.
   app.get('/bumped', (c) => {
     const session = c.req.query('session') ?? '';

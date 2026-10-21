@@ -178,6 +178,48 @@ export interface TicketEvent {
   fromAgent: boolean;
 }
 
+/** T-119: a state a ticket's flow shows: its status, or `waiting` (it carries the tag `needs-a-person`). */
+export type TicketFlowState = TicketStatus | 'waiting';
+
+export interface TicketFlowActor {
+  /** `ui`, `session:<id>`, `portal-mcp:<token id>`, `system`. */
+  actor: string;
+  label: string;
+  /** The session id, when the actor is a session. */
+  session: string | null;
+}
+
+/** One stretch of a ticket in one state (derived from its events: `ticketFlow`, tickets/ticketFlow.ts). A closed state ends where it starts. */
+export interface TicketFlowSpan {
+  state: TicketFlowState;
+  /** ISO. */
+  start: string;
+  /** ISO; null while the span runs. */
+  end: string | null;
+  durationMs: number;
+  /** Who moved the ticket into this state. */
+  by: TicketFlowActor | null;
+  reason: string | null;
+}
+
+export type TicketFlowMarkerKind = 'assigned' | 'claimed' | 'bumped' | 'comment' | 'priority' | 'tags' | 'ci' | 'waiting';
+
+/** A point on a ticket's flow: an assignment, a claim, a bump, a person's comment, a priority or tag change, a CI result. */
+export interface TicketFlowMarker {
+  kind: TicketFlowMarkerKind;
+  at: string;
+  by: TicketFlowActor;
+  detail: string | null;
+}
+
+export interface TicketFlow {
+  spans: TicketFlowSpan[];
+  markers: TicketFlowMarker[];
+  state: TicketFlowState | null;
+  /** Milliseconds per state over all spans. */
+  totals: Partial<Record<TicketFlowState, number>>;
+}
+
 export interface TicketDetail {
   ticket: TicketItem;
   /** Oldest first. */
@@ -366,7 +408,54 @@ export interface TicketTag {
   count: number;
 }
 
+/** T-119 S1b: the scale a timeline is asked at. */
+export const TICKET_TIMELINE_GRANULARITIES = ['minute', 'hour', 'day'] as const;
+export type TicketTimelineGranularity = (typeof TICKET_TIMELINE_GRANULARITIES)[number];
+
+/**
+ * The longest window a granularity may ask for (a minute scale over a long window would be thousands of columns the chart cannot show) and the
+ * window it gets when `from` is absent. A longer one is a 400 that names the limit.
+ */
+export const TICKET_TIMELINE_LIMITS: Record<TicketTimelineGranularity, { maxWindowMs: number; defaultWindowMs: number }> = {
+  minute: { maxWindowMs: 24 * 3_600_000, defaultWindowMs: 6 * 3_600_000 },
+  hour: { maxWindowMs: 31 * 86_400_000, defaultWindowMs: 3 * 86_400_000 },
+  day: { maxWindowMs: 366 * 86_400_000, defaultWindowMs: 30 * 86_400_000 },
+};
+
+/** GET `/api/tickets/timeline` query: `from` and `to` are ISO times, `granularity` a {@link TicketTimelineGranularity} (default `hour`), `limit` 1..100 (25), `cursor`. */
+export interface TicketTimelineQuery {
+  from?: string;
+  to?: string;
+  granularity?: TicketTimelineGranularity;
+  limit?: number;
+  cursor?: string;
+}
+
+/** One ticket on the timeline: a summary row and its flow (all of its spans, not cut to the window: the chart clips). */
+export interface TicketTimelineRow {
+  id: string;
+  summary: string;
+  status: TicketStatus;
+  priority: TicketPriority;
+  type: TicketType;
+  flow: TicketFlow;
+}
+
+/** The tickets whose life overlaps the window (created before `to`, not closed before `from`), oldest number first, a page at a time. */
+export interface TicketTimeline {
+  /** ISO, as resolved (absent params filled in). */
+  from: string;
+  to: string;
+  granularity: TicketTimelineGranularity;
+  /** ISO: the time the open spans run to. */
+  now: string;
+  items: TicketTimelineRow[];
+  next: string | null;
+}
+
 export const TICKET_API = {
+  /** GET `TicketTimelineQuery` as a query string: `TicketTimeline` (T-119). */
+  timeline: '/api/tickets/timeline',
   /** GET `TicketFilter` as a query string: `TicketList`. POST `CreateTicketRequest`: `TicketItem`. */
   list: '/api/tickets',
   /** GET: `TicketBucket[]` (the ones the caller may view). POST `CreateTicketBucketRequest`: `TicketBucket` (T-1098). */

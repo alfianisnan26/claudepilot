@@ -12,6 +12,8 @@ import {
   TICKET_OPEN_STATUSES,
   TICKET_PRIORITIES,
   TICKET_STATUSES,
+  TICKET_TIMELINE_GRANULARITIES,
+  TICKET_TIMELINE_LIMITS,
   TICKET_TYPES,
   isTicketClosed,
   parseTicketBranch,
@@ -57,6 +59,9 @@ import {
   type TicketSession,
   type TicketStatus,
   type TicketTag,
+  type TicketTimeline,
+  type TicketTimelineGranularity,
+  type TicketTimelineRow,
   type TicketType,
   type UpdateTicketRequest,
 } from '@portal/contracts';
@@ -81,6 +86,7 @@ import './errors.js';
 import { bumpTicketMessage, openingMessage } from './opening.js';
 import type { TicketSessionInfo, TicketSessions } from './sessions.js';
 import { cleanLine, cleanMarkdown, cleanTags } from './text.js';
+import { ticketFlow } from './ticketFlow.js';
 import { putTicketFile, readTicketFile, removeTicketFile } from './files.js';
 import {
   canRecordVerdict,
@@ -1005,6 +1011,93 @@ export class Tickets {
       out.counts = this.counts(caller);
     }
     return out;
+  }
+
+  /**
+   * T-119 S1b: the tickets whose life overlaps a window, each with its flow ({@link ticketFlow}, computed from the stored events: nothing is stored
+   * twice). Oldest number first, by keyset on the number, a page at a time (25 by default, 100 at most). The window is bounded by the
+   * granularity (a minute scale over a long window is a 400 that names the limit); `from` defaults to a window of the granularity's default
+   * length before `to`, `to` to now. `keep` is the caller's `view` check, as in {@link listPage}: a hidden ticket is not shown, and the
+   * cursor (sealed, bound to the caller and the window) points at the last row shown, or at the last scanned when the scan bound ends the page.
+   */
+  timeline(
+    caller: Caller,
+    q: { from?: unknown; to?: unknown; granularity?: unknown },
+    args: { cursor?: string | undefined; limit?: unknown; keep?: (t: TicketItem) => boolean } = {},
+  ): TicketTimeline {
+    const nowMs = this.#now().getTime();
+    const granularity = q.granularity === undefined || q.granularity === '' ? 'hour' : q.granularity;
+    if (typeof granularity !== 'string' || !(TICKET_TIMELINE_GRANULARITIES as readonly string[]).includes(granularity))
+      throw new AppError('VALIDATION_FAILED', 'Unknown granularity.', { details: { granularity: `Use: ${TICKET_TIMELINE_GRANULARITIES.join(', ')}.` } });
+    const scale = granularity as TicketTimelineGranularity;
+    const limits = TICKET_TIMELINE_LIMITS[scale];
+    const time = (v: unknown, field: string): number | null => {
+      if (v === undefined || v === '') return null;
+      const ms = typeof v === 'string' ? Date.parse(v) : NaN;
+      if (!Number.isFinite(ms)) throw new AppError('VALIDATION_FAILED', `${field} is not a time.`, { details: { [field]: 'Use an ISO time, e.g. 2026-10-18T00:00:00Z.' } });
+      return ms;
+    };
+    const toMs = time(q.to, 'to') ?? nowMs;
+    const fromMs = time(q.from, 'from') ?? toMs - limits.defaultWindowMs;
+    if (fromMs >= toMs) throw new AppError('VALIDATION_FAILED', 'from must be before to.', { details: { from: 'Earlier than to.' } });
+    if (toMs - fromMs > limits.maxWindowMs)
+      throw new AppError('VALIDATION_FAILED', `That window is too long for the ${scale} scale.`, {
+        details: { granularity: `At most ${Math.round(limits.maxWindowMs / 3_600_000)} hours at the ${scale} scale; use a coarser scale or a shorter window.` },
+      });
+    const from = new Date(fromMs).toISOString();
+    const to = new Date(toMs).toISOString();
+
+    const base = this.#where(caller, {}, true);
+    const overlap = 't.created_at <= ? AND (t.closed_at IS NULL OR t.closed_at >= ?)';
+    const sql = `${base.sql ? `${base.sql} AND` : 'WHERE'} ${overlap}`;
+    const sqlArgs = [...base.args, to, from];
+    const limit = clampLimit(args.limit);
+    const scope = `tickets-timeline|${JSON.stringify([caller.kind === 'agent' ? `agent:${caller.workspaceId}` : caller.kind, scale, from, to])}`;
+    let resume = 0;
+    if (args.cursor) {
+      const at = decodeCursor(args.cursor, scope);
+      if (typeof at.id !== 'number') throw new AppError('BAD_REQUEST', 'That cursor is not valid for this list. Load the list again.');
+      resume = at.id;
+    }
+    // Bounded scan, as in listPage: at most SCAN_FACTOR x limit rows read per request, however many `keep` hides.
+    const shown: { item: TicketItem; num: number }[] = [];
+    const maxScan = limit * SCAN_FACTOR;
+    let scanned = 0;
+    let more: number | null = null;
+    while (scanned < maxScan) {
+      const room = Math.min(CURSOR_MAX_LIMIT, maxScan - scanned);
+      const got = (
+        this.#db
+          .prepare(`SELECT t.* FROM tickets t ${sql} AND t.number > ? ORDER BY t.number ASC LIMIT ?`)
+          .all(...sqlArgs, resume, room + 1) as unknown as Row[]
+      ).map((r) => this.#keyed(r));
+      const batch = got.slice(0, room);
+      const items = this.#items(batch);
+      batch.forEach((r, i) => {
+        const item = items[i]!;
+        if (!args.keep || args.keep(item)) shown.push({ item, num: r.number });
+      });
+      scanned += batch.length;
+      const last = batch[batch.length - 1];
+      more = got.length > room && last ? last.number : null;
+      if (shown.length > limit || more === null) break;
+      resume = more;
+    }
+    const page = shown.slice(0, limit);
+    const last = page[page.length - 1];
+    const nextNum = shown.length > limit && last ? last.num : shown.length > limit ? null : more;
+    const items: TicketTimelineRow[] = page.map(({ item }) => {
+      const events = this.#events(Number(item.number));
+      return {
+        id: item.id,
+        summary: item.summary,
+        status: item.status,
+        priority: item.priority,
+        type: item.type,
+        flow: ticketFlow({ createdAt: item.createdAt, status: item.status, closedAt: item.closedAt, events }, nowMs),
+      };
+    });
+    return { from, to, granularity: scale, now: new Date(nowMs).toISOString(), items, next: nextNum === null ? null : cursorAfter(scope, nextNum, nextNum) };
   }
 
   /** A list row: the long texts cut (D-58). The detail read has the whole. */
