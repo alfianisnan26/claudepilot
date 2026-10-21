@@ -97,6 +97,19 @@ export function effectiveMaxWorkers(caps: Pick<AgentCaps, 'maxChildren'> | null 
 export const SUBAGENT_TOOLS = ['Agent', 'Task', 'Workflow', 'RemoteTrigger'] as const;
 
 /**
+ * T-1863: Claude Code's own scheduling tools, taken away from EVERY session the portal starts (normal, lead, worker; at every start).
+ * A schedule set with them makes Claude Code queue a prompt the portal never sent, and the integrity check ends the session for it
+ * (incident 2026-10-20: a lead's `/loop` merge sweep). Schedules go through the portal (Triggers, keep-going). Names from `system/init`
+ * on Claude Code 2.1.296 (docs/prd/evidence/t294-subagents-flag.md). The bundled `/loop` skill has nothing left to schedule with.
+ */
+export const SCHEDULE_TOOLS = ['CronCreate', 'CronDelete', 'CronList', 'ScheduleWakeup', 'RemoteTrigger'] as const;
+
+/** The `--disallowedTools` values of a start: the scheduling tools always, the sub-agent tools too with sub-agents off (each name once). */
+export function launchDisallowedTools(subagents: boolean): string[] {
+  return [...new Set<string>([...(subagents ? [] : SUBAGENT_TOOLS), ...SCHEDULE_TOOLS])];
+}
+
+/**
  * Why a session may not start another, or null when it may. `parent` is the session that would start it, with its own limit on workers
  * (T-294: null for the global one, 0 for none). `caps` null: no global limits installed (tests); the session's own limit still holds.
  */

@@ -124,7 +124,7 @@ import {
   MessageRate,
   pickSpawnClaude,
   spawnProblem,
-  SUBAGENT_TOOLS,
+  launchDisallowedTools,
   WORKER_REPORTS,
   workerLimits,
   type AgentCaps,
@@ -5544,7 +5544,9 @@ export class ChatController {
       ...(agent && CHAT_AGENT_NAME.test(agent) ? ['--agent', agent] : []),
       // T-294: sub-agents off takes the sub-agent tool away (both its names), at every start like the agent; Claude Code 2.1.296 checked:
       // docs/prd/evidence/t294-subagents-flag.md. On or off only: Claude Code has no count.
-      ...(launched?.subagents === 0 ? ['--disallowedTools', ...SUBAGENT_TOOLS] : []),
+      // T-1863: Claude Code's own scheduling tools are always taken away: a prompt it schedules itself is one this portal never sent.
+      '--disallowedTools',
+      ...launchDisallowedTools(launched?.subagents !== 0),
       // The portal's own tools, for a workspace that opted in: the agent scope is rate-limited, labelled and never destructive, deny rules
       // still win, and without this the first call of each tool waits for a tap in Manual mode.
       ...(grant ? ['--mcp-config', grant.mcpConfig, '--allowedTools', PILOT_TOOLS] : []),

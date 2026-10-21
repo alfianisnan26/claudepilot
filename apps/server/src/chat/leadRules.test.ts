@@ -11,6 +11,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { settingDef } from '../settings/registry.js';
 import { SETTINGS_POLICIES } from '../settings/authz.js';
+import { SCHEDULE_TOOLS } from './agents.js';
 import { isLead, LEAD_RULES_MATCHER, LEAD_RULES_SETTING, leadAllowedDirs, leadHookScript, leadRulesSettings } from './leadRules.js';
 import { ChatStore } from './store.js';
 import { APPLIED, EMPTY_SCAN, init, liveSession, ok, sleep, until, type Live } from './testkit.js';
@@ -271,6 +272,10 @@ test('a lead under the policy launches with the lead rules after the host’s ar
     assert.ok(lead.args.indexOf('--settings') > lead.args.indexOf('--'), 'a flag of claude');
     assert.equal(s.controller.get(lead.id)!.lead, true);
     assert.equal(s.controller.get(lead.id)!.leadRules, true, 'shown in the session’s info');
+    // T-1863: a lead has no in-session schedules either (the incident of 2026-10-20 was a lead's own merge sweep).
+    const at = lead.args.indexOf('--disallowedTools');
+    assert.ok(at > lead.args.indexOf('--'));
+    for (const t of SCHEDULE_TOOLS) assert.ok(lead.args.slice(at + 1).includes(t), t);
 
     const plain = await another(s, { cwd: REPO });
     assert.equal(leadSettingsOf(plain.args), null, 'not a lead: no rules');

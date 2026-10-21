@@ -38,6 +38,12 @@ export const MAX_BODY_BYTES = 1_048_576;
 /** One result block stays under this many characters (PRD FR9). */
 export const MAX_RESULT_CHARS = 20_000;
 const INSTRUCTIONS_MAX = 2_048;
+/**
+ * T-1863: an agent session starts without Claude Code's scheduling tools (`SCHEDULE_TOOLS`, chat/agents.ts): a prompt Claude Code queues
+ * by itself is one the portal never sent, and the integrity check ends the session for it. Said where the agent reads its rules.
+ */
+export const NO_SCHEDULES_NOTE =
+  "Claude Code's in-session schedules (CronCreate, CronList, CronDelete, ScheduleWakeup, RemoteTrigger, and /loop, which uses them) are off in portal sessions: a prompt Claude Code queues by itself would end the session for integrity. For repeated or later work, ask a person for a portal Trigger or keep-going.";
 /** What an agent's call may carry as arguments, unless its tool says otherwise (a proposal's text is capped, not open-ended). */
 export const AGENT_ARGS_MAX_BYTES = 32 * 1024;
 
@@ -336,7 +342,7 @@ export class PortalMcp {
       `Results are short by default and every result read stays in your context: ticket_get gives a ticket's head and last comments, lists give short rows. Ask for more only when you need it (full true, section, comment_id, limit, cursor). A cut field says so in a cut line; a result over ${MAX_RESULT_CHARS} characters is refused with a hint to narrow it.`,
     ];
     if (principal?.kind === 'agent')
-      lines.push(`You are an agent in workspace ${principal.workspaceId}, in chat session ${principal.sessionId}. You can work with tickets, notes and proposals for a person to review; you can't change the portal itself.`);
+      lines.push(`You are an agent in workspace ${principal.workspaceId}, in chat session ${principal.sessionId}. You can work with tickets, notes and proposals for a person to review; you can't change the portal itself.`, NO_SCHEDULES_NOTE);
     return lines.join('\n');
   }
 
