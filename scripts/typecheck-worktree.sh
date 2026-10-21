@@ -17,7 +17,8 @@
 set -eu
 set -o pipefail
 refuse() { echo "typecheck-worktree: refused: $*" >&2; exit 2; }
-wt=${1:?usage: scripts/typecheck-worktree.sh <worktree>}
+[ -n "${1:-}" ] || refuse "usage: scripts/typecheck-worktree.sh <worktree>"
+wt=$1
 [ -d "$wt" ] || refuse "$wt is not a folder"
 wt=$(cd "$wt" && pwd -P)
 [ "$(git -C "$wt" rev-parse --show-toplevel 2>/dev/null || :)" = "$wt" ] || refuse "$wt is not the top of a git worktree"
