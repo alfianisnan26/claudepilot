@@ -78,6 +78,8 @@ try {
     console.log(
       `${res.status} ${cmd} -> ${s.id.slice(0, 8)} "${s.title}" ${/Denied|Allowed|Interrupted|confirmation|error/i.exec(text)?.[0] ?? ''}`,
     );
+    // PM_DEBUG=1 prints the tool's answer (it is the portal's reply, never a secret).
+    if (process.env.PM_DEBUG) console.log(text.slice(0, 1500));
   }
 } finally {
   await lease.revoke();
