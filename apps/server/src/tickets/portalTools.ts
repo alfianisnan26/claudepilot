@@ -351,7 +351,7 @@ export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = p
     name: 'ticket_update',
     title: 'Change a ticket',
     description:
-      'Changes fields of a ticket assigned to you (or one you made that nobody holds, or one an ended session of your track holds): summary, description, type, priority, tags, status (in_progress, blocked, in_review, open) or assignee. A crew lead may also hand a ticket of its workspace (held by nobody, itself or one of its workers) to itself, one of its workers or the queue (assignee, status, priority only). To finish a ticket use ticket_close. Unassigning (assignee none) returns it to the queue. A ticket is named by its stable id (T-12) or its bucket key (KONF-3); results that show a ticket carry both (id and key).',
+      'Changes fields of a ticket assigned to you (or one you made that nobody holds, or one an ended session of your track holds): summary, description, type, priority, tags, status (in_progress, blocked, in_review, open), assignee or bucket (a move: the next number there, the old key stays an alias). A crew lead may also hand a ticket of its workspace (held by nobody, itself or one of its workers) to itself, one of its workers or the queue (assignee, status, priority only). To finish a ticket use ticket_close. Unassigning (assignee none) returns it to the queue. A ticket is named by its stable id (T-12) or its bucket key (KONF-3); results that show a ticket carry both (id and key).',
     scope: 'agent',
     hints: { idempotent: true },
     input: z.object({
@@ -361,17 +361,18 @@ export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = p
       type: z.enum(TICKET_TYPES).optional(),
       priority: z.enum(TICKET_PRIORITIES).optional(),
       status: z.enum(TICKET_STATUSES).optional(),
+      bucket: bucketArg.describe('Move it to this bucket (its key, like KONF): it takes that bucket’s next number, and its old key keeps naming it.'),
       tags: z.array(z.string().max(30)).max(10).optional().describe(`The whole list: it replaces the tags. ${CHECKLIST_TAG_HINT}`),
       assignee: assigneeArg,
       session_id: sessionIdArg,
     }),
     handler(ctx, args) {
       const assignee = args.assignee === undefined ? undefined : assigneeOf(tickets, ctx, args.assignee, args.session_id);
-      const t = tickets.update(callerOf(ctx), args.id, { summary: args.summary, description: args.description, type: args.type, priority: args.priority, status: args.status, tags: args.tags, assignee }, { sessionId: args.session_id });
+      const t = tickets.update(callerOf(ctx), args.id, { bucket: args.bucket, summary: args.summary, description: args.description, type: args.type, priority: args.priority, status: args.status, tags: args.tags, assignee }, { sessionId: args.session_id });
       ctx.affected(`ticket:${t.id}`);
       // FR36c (T-1608): the new holder is a QA or review lane, which can then never record this ticket's verdict.
       const warning = assignee ? tickets.holderWarning(t) : null;
-      return { summary: `${t.id} is ${t.status}.`, ticket: { id: t.id, status: t.status, priority: t.priority, assignee: assigneeShort(t) }, ...(warning ? { warning } : {}) };
+      return { summary: `${t.id} is ${t.status}.`, ticket: { id: t.id, key: t.key ?? t.id, status: t.status, priority: t.priority, assignee: assigneeShort(t) }, ...(warning ? { warning } : {}) };
     },
   });
 

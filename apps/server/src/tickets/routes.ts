@@ -15,6 +15,9 @@ import {
   type CloseTicketRequest,
   type CommentTicketRequest,
   type CreateTicketBucketRequest,
+  type MergeTicketBucketRequest,
+  type TicketBucketMovesRequest,
+  platformRef,
   type CreateTicketRequest,
   type StartTicketSessionRequest,
   type TicketAssigneeFilter,
@@ -75,7 +78,7 @@ export function createTicketRoutes(tickets: Tickets): Hono {
 
   // T-1098: a ticket is reached through its bucket: view to read it, operate to change it. A bucket the person may not see answers like a
   // missing ticket (the same 404). Paths that are not a ticket id are left to their own routes.
-  const NOT_IDS = new Set(['tags', 'bumped', 'buckets']);
+  const NOT_IDS = new Set(['tags', 'bumped', 'buckets', 'bucket-moves']);
   const guard = async (c: Context, next: () => Promise<void>) => {
     const ref = c.req.param('id') ?? '';
     if (!NOT_IDS.has(ref)) {
@@ -147,6 +150,23 @@ export function createTicketRoutes(tickets: Tickets): Hono {
     requireCan(actorOf(c), 'view', ticketBucketRef(key));
     return c.json(success(tickets.bucket(UI, key)));
   });
+  // T-1967: merge a bucket into another, and move many tickets at once: the owner only (manage on the platform's settings).
+  app.post('/buckets/:key/merge', async (c) => {
+    const actor = actorOf(c);
+    const key = (c.req.param('key') ?? '').toUpperCase();
+    const req = await body<MergeTicketBucketRequest>(c);
+    requireCan(actor, 'manage', platformRef('settings'));
+    requireCan(actor, 'manage', ticketBucketRef(key));
+    requireCan(actor, 'manage', ticketBucketRef(typeof req.into === 'string' ? req.into.trim().toUpperCase() : ''));
+    return c.json(success(tickets.mergeBucket(UI, key, req)));
+  });
+  app.post('/bucket-moves', async (c) => {
+    const actor = actorOf(c);
+    requireCan(actor, 'manage', platformRef('settings'));
+    const { moves } = await body<TicketBucketMovesRequest>(c);
+    const allow = (from: string, to: string) => can(actor, 'operate', ticketBucketRef(from)).allow && can(actor, 'operate', ticketBucketRef(to)).allow;
+    return c.json(success(tickets.moveBuckets(UI, moves, { allow })));
+  });
   app.patch('/buckets/:key', async (c) => {
     const key = (c.req.param('key') ?? '').toUpperCase();
     requireCan(actorOf(c), 'manage', ticketBucketRef(key));
@@ -170,7 +190,12 @@ export function createTicketRoutes(tickets: Tickets): Hono {
     return c.json(success(brief));
   });
   app.get('/:id/opening', (c) => c.json(success({ text: tickets.opening(UI, id(c)) })));
-  app.patch('/:id', async (c) => c.json(success(tickets.update(UI, id(c), await body<UpdateTicketRequest>(c)))));
+  app.patch('/:id', async (c) => {
+    const req = await body<UpdateTicketRequest>(c);
+    // T-1967: a move needs operate on the bucket it goes to as well (the guard checked the one it is in).
+    if (typeof req.bucket === 'string' && req.bucket.trim()) requireCan(actorOf(c), 'operate', ticketBucketRef(req.bucket.trim().toUpperCase()));
+    return c.json(success(tickets.update(UI, id(c), req)));
+  });
   app.delete('/:id', (c) => {
     tickets.remove(UI, id(c));
     return c.json(success({ ok: true }));

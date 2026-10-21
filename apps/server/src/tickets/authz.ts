@@ -60,12 +60,21 @@ export const TICKET_BUCKET_POLICIES = {
   'POST /api/tickets/buckets': { kind: 'signed-in', creates: 'ticket_bucket', audit: 'ticket.bucket_created' },
   'GET /api/tickets/buckets/:key': { kind: 'objects', checks: [bucket('view')] },
   'PATCH /api/tickets/buckets/:key': { kind: 'objects', checks: [bucket('manage')], audit: 'ticket.bucket_updated' },
+  // T-1967: owner only (the handler also asks manage on the platform's settings) and manage on both buckets; every ticket moves with its old key kept as an alias.
+  'POST /api/tickets/buckets/:key/merge': {
+    kind: 'objects',
+    checks: [bucket('manage'), { type: 'ticket_bucket', verb: 'manage', from: 'body', param: 'into' }],
+    audit: 'ticket.bucket_merged',
+  },
+  'POST /api/tickets/bucket-moves': { kind: 'platform', area: 'settings', verb: 'manage', audit: 'ticket.bucket_moved' },
 } satisfies RoutePolicies;
 
 /** The tools name a bucket in `bucket`: filing needs operate, listing by it needs view; refused at dispatch as "No such bucket.". */
 export const TICKET_BUCKET_TOOL_POLICIES = {
   ticket_create: { kind: 'objects', checks: [{ type: 'ticket_bucket', verb: 'operate', arg: 'bucket', optional: true, notFound: 'No such bucket.' }] },
   ticket_list: { kind: 'objects', checks: [{ type: 'ticket_bucket', verb: 'view', arg: 'bucket', optional: true, notFound: 'No such bucket.' }] },
+  // T-1967: moving a ticket needs operate on the bucket it goes to (the service applies who may change the ticket).
+  ticket_update: { kind: 'objects', checks: [{ type: 'ticket_bucket', verb: 'operate', arg: 'bucket', optional: true, notFound: 'No such bucket.' }] },
   ticket_buckets: { kind: 'signed-in', filter: 'ticket_bucket' },
 } satisfies ToolPolicies;
 

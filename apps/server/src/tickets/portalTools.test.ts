@@ -378,7 +378,7 @@ test('T-282: ticket_list rows are short, 20 a page; ticket_comment and ticket_up
     const commented = r.out(await r.h.call(a.secret, 'ticket_comment', { id: 'T-1', text: 'Working on it.' }));
     assert.deepEqual(Object.keys(commented.comment).sort(), ['at', 'id', 'ticket_id', 'ticket_key']);
     const updated = r.out(await r.h.call(a.secret, 'ticket_update', { id: 'T-1', status: 'blocked' }));
-    assert.deepEqual(updated.ticket, { id: 'T-1', status: 'blocked', priority: 'normal', assignee: { kind: 'session', session_id: 'sa', session_state: 'idle' } });
+    assert.deepEqual(updated.ticket, { id: 'T-1', key: 'PILOT-1', status: 'blocked', priority: 'normal', assignee: { kind: 'session', session_id: 'sa', session_state: 'idle' } });
   } finally {
     r.done();
   }

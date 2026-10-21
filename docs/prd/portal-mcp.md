@@ -668,7 +668,7 @@ ticket takes its stable id (`T-12`, a permanent alias) or its bucket key (`KONF-
 `ticket_id`, `session_spawn`'s `ticket`, `lab_arm_draw`'s `ticket`, and the filters `session_list` `ticket_id` and `ci_runs_list` `ticket`.
 What is stored is always `T-<n>`. Results carry both: ticket rows have `id` and `key`, and session, CI run, trigger run, lab and usage rows
 have `ticket_id` and `ticket_key` (a by-ticket usage row has `ticket.id` and `ticket.key`). New: `ticket_buckets` (agent, read: the buckets
-the caller may use), `bucket` on `ticket_create` (operate on the bucket, checked at dispatch) and on `ticket_list` (view). The server's
+the caller may use), `bucket` on `ticket_create` (operate on the bucket, checked at dispatch) and on `ticket_list` (view). `ticket_update` takes `bucket` (T-1967: a move to that bucket's next number, operate on it checked at dispatch; the old key stays an alias). The server's
 instructions and the `pilot://tickets/{id}` resource say the same; the resource takes either form and lists tickets titled by their key.
 
 ### 14.1 Confirming destructive actions

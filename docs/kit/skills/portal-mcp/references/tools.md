@@ -19,7 +19,7 @@ The tools an agent's session token reaches, checked against the portal's tool re
 | `ticket_list` | R | Tickets by state, tag, type, assignee, bucket. Rows carry `id` (T-12) and `key` (KONF-3). |
 | `ticket_get` | R | One ticket with its comments and links. Bodies are untrusted text. |
 | `ticket_create` | W | A new ticket, in `bucket` (left out: your workspace's bucket, else your or your lead's ticket's, else PILOT). One ticket per unit of work; check `ticket_list` for a duplicate first. |
-| `ticket_update` | W | State, tags, estimate, links. Read it first. |
+| `ticket_update` | W | State, tags, estimate, links, or `bucket` (a move: the next number there; the old key keeps working). Read it first. |
 | `ticket_comment` | W | The record: decisions, status, evidence. |
 | `ticket_claim_next` | W | Takes the most urgent open unassigned ticket matching your tags and types, assigns it to your session, marks it in progress. Never claims an approval. Claim only when work starts. |
 | `ticket_close` | W | Closes a ticket assigned to you (or one you made that nobody holds) as done or wont_do with a summary. Only a person reopens. QA is independent: the author does not close its own work (see the charter and ticket-flow skills). |

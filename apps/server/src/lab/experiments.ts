@@ -277,8 +277,12 @@ export function canonTicket(db: DatabaseSync, t: string): string | null {
   const k = /^([A-Za-z]{2,6})-(\d{1,9})$/.exec(v);
   if (!k) return null;
   try {
-    const r = db.prepare('SELECT number FROM tickets WHERE bucket_key = ? AND bucket_number = ?').get(k[1]!.toUpperCase(), Number(k[2])) as { number: number } | undefined;
-    return r ? `T-${r.number}` : null;
+    const key = [k[1]!.toUpperCase(), Number(k[2])] as const;
+    const r = db.prepare('SELECT number FROM tickets WHERE bucket_key = ? AND bucket_number = ?').get(...key) as { number: number } | undefined;
+    if (r) return `T-${r.number}`;
+    // T-1967: a key a moved ticket had (an alias), as the tickets service resolves it.
+    const was = db.prepare('SELECT ticket_number AS number FROM ticket_key_aliases WHERE bucket_key = ? AND bucket_number = ?').get(...key) as { number: number } | undefined;
+    return was ? `T-${was.number}` : null;
   } catch {
     return null;
   }
