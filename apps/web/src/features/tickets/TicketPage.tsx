@@ -28,8 +28,8 @@ import { formatDateTime, timeAgo } from '@/lib/format';
 import { useLive } from '@/lib/live';
 import { ticketsApi } from './api';
 import { Attachments, fileSize } from './Attachments';
-import { ORPHAN_TITLE, SESSION_STATE_LABEL, actorName, bucketOption, fallbackSentence, ticketLabel } from './labels';
-import { AssigneeChip, CheckChips, PriorityMark, StatusBadge, TagList, TicketFlags, TypeBadge } from './parts';
+import { ORPHAN_TITLE, SESSION_STATE_LABEL, actorName, bucketOption, fallbackSentence, ticketLabel, verdictBatchOf } from './labels';
+import { AssigneeChip, CheckChips, PriorityMark, StatusBadge, TagList, TicketFlags, TypeBadge, VerdictBatchChips } from './parts';
 import { AssignDialog, CloseDialog, EditTicketDialog, StartSessionDialog, TagsDialog, TicketBumpDialog } from './TicketDialogs';
 
 type Dialog = 'edit' | 'tags' | 'assign' | 'close' | 'start' | 'bump' | 'delete' | null;
@@ -432,8 +432,9 @@ function Timeline({ events, ticketId, onChanged }: { events: TicketEvent[]; tick
         <InfoTip label="About the timeline">Agents working this ticket read your comments.</InfoTip>
       </h2>
       <ol className="flex flex-col gap-3">
-        {events.map((e) =>
-          e.kind === 'comment' ? (
+        {events.map((e) => {
+          const batch = e.kind === 'comment' ? verdictBatchOf(e.data) : null;
+          return e.kind === 'comment' ? (
             <li key={e.id} className="flex gap-3">
               <span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full bg-surface-2 text-ink-soft">{e.fromAgent ? <Bot className="size-4" /> : e.actor === 'system' ? <Circle className="size-3.5" /> : <User className="size-4" />}</span>
               <div className="min-w-0 flex-1 rounded-2xl border border-line bg-surface px-3.5 py-2.5">
@@ -441,6 +442,7 @@ function Timeline({ events, ticketId, onChanged }: { events: TicketEvent[]; tick
                   <span className="font-semibold text-ink-soft">{actorName(e.actor, e.actorLabel)}</span>
                   {e.fromAgent && <Badge>Agent</Badge>}
                   <span title={formatDateTime(e.at)}>{timeAgo(e.at)}</span>
+                  {batch && <VerdictBatchChips batch={batch} />}
                 </p>
                 <Markdown text={e.body ?? ''} className="max-w-measure text-[14px] leading-relaxed" />
               </div>
@@ -455,8 +457,8 @@ function Timeline({ events, ticketId, onChanged }: { events: TicketEvent[]; tick
                 {(e.kind === 'closed' || e.kind === 'bumped') && e.body && <span className="mt-1 block rounded-xl bg-surface-2/60 px-3 py-2 [overflow-wrap:anywhere] text-ink-soft">{e.body}</span>}
               </p>
             </li>
-          ),
-        )}
+          );
+        })}
       </ol>
       <div ref={end} />
       <div className="mt-4 flex flex-col gap-2">

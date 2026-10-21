@@ -8,6 +8,7 @@ import {
   type TicketSessionState,
   type TicketStatus,
   type TicketType,
+  type TicketVerdictBatch,
 } from '@portal/contracts';
 
 /** Status words and tones (tickets PRD §13). Done is quiet green, blocked is warm, the rest are neutral. */
@@ -132,3 +133,15 @@ export function mergeText(from: string, into: string, tickets: number | undefine
 
 /** A bucket in a picker: the key alone where room is short (a phone), with its name where it fits (UI check of T-1967). */
 export const bucketOption = (b: { key: string; name: string }, wide: boolean): string => (wide ? `${b.key} · ${b.name}` : b.key);
+
+/**
+ * FR36d (T-1987): the QA batch a verdict entry was recorded in (its `data.batch`), or null: a verdict recorded alone, any other entry, or
+ * a shape this page does not know. Only strings are kept; nothing else is shown.
+ */
+export function verdictBatchOf(data: Record<string, unknown> | null | undefined): TicketVerdictBatch | null {
+  if (!data || data.verdictId === undefined) return null;
+  const b = data.batch as Record<string, unknown> | undefined;
+  if (!b || typeof b !== 'object') return null;
+  const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : null);
+  return { jobId: str(b.jobId), branch: str(b.branch), note: str(b.note) };
+}

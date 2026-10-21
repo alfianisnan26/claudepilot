@@ -9,8 +9,9 @@ import {
   type TicketPriority,
   type TicketStatus,
   type TicketType,
+  type TicketVerdictBatch,
 } from '@portal/contracts';
-import { Ban, Bot, ChevronDown, ChevronsUp, ChevronUp, CircleCheck, CircleX, Clock, GitBranch, Loader2, Minus, User, type LucideIcon } from 'lucide-react';
+import { Ban, Bot, ChevronDown, ChevronsUp, ChevronUp, CircleCheck, CircleX, Clock, GitBranch, Layers, Loader2, Minus, Play, User, type LucideIcon } from 'lucide-react';
 import { Link } from 'react-router';
 import { timeAgo } from '@/lib/format';
 import { ORPHAN_BADGE, PRIORITY_TONE, SESSION_STATE_LABEL, STATUS_TONE, TYPE_TONE, ageShort } from './labels';
@@ -96,6 +97,30 @@ const CHECK_LOOK: Record<TicketCheckState, { Icon: LucideIcon; tone: string }> =
 };
 
 /** What CI says about the ticket: one chip per pipeline with its latest state; a tap opens the run (in the app, or the address it gave). */
+/**
+ * FR36d (T-1987): a verdict recorded in a QA batch, on its timeline entry: "batch <branch>" and the job run as small chips (plain text: an
+ * agent wrote them). The note, when there is one, is the chips' title.
+ */
+export function VerdictBatchChips({ batch }: { batch: TicketVerdictBatch }) {
+  const cls = 'inline-flex min-w-0 max-w-full items-center gap-1 rounded-full border border-line bg-surface px-2 py-0.5 text-[12px] font-semibold text-ink-soft [overflow-wrap:anywhere]';
+  const title = batch.note ?? undefined;
+  return (
+    <span className="inline-flex min-w-0 max-w-full flex-wrap items-center gap-1" aria-label="QA batch">
+      <span className={cls} title={title}>
+        <Layers className="size-3 shrink-0" aria-hidden="true" />
+        {batch.branch ? `batch ${batch.branch}` : 'batch'}
+      </span>
+      {batch.jobId && (
+        <span className={cls} title={title}>
+          <Play className="size-3 shrink-0" aria-hidden="true" />
+          <span className="sr-only">job </span>
+          {batch.jobId}
+        </span>
+      )}
+    </span>
+  );
+}
+
 export function CheckChips({ checks }: { checks: TicketCheck[] }) {
   if (!checks.length) return null;
   return (

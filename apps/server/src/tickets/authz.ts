@@ -45,6 +45,8 @@ export const TICKET_ADOPT_TOOL_POLICIES = {
  */
 export const TICKET_VERDICT_TOOL_POLICIES = {
   ticket_verdict: { kind: 'agent', reach: 'workspace', audit: 'ticket.verdict' },
+  // T-1987 (FR36d, D-93): a QA batch's verdicts, each item through the same rule and the same not found; one audit row per ticket.
+  ticket_verdict_batch: { kind: 'agent', reach: 'workspace', audit: 'ticket.verdict' },
 } satisfies ToolPolicies;
 
 /* ---------- Buckets (T-1098): an object of the seam ---------- */

@@ -219,6 +219,21 @@ export const TICKET_ATTACHMENT_INLINE_TYPES = ['image/png', 'image/jpeg', 'image
 export const TICKET_CHECK_STATES = ['queued', 'running', 'passed', 'failed', 'cancelled'] as const;
 export type TicketCheckState = (typeof TICKET_CHECK_STATES)[number];
 
+/**
+ * FR36d (T-1987, D-93): the shared evidence of a verdict recorded in a batch (`ticket_verdict_batch`): the job run, the batch branch, a
+ * note. Stored with each verdict of the batch and in its timeline entry (`data.batch`). Absent on a verdict recorded alone.
+ */
+export interface TicketVerdictBatch {
+  jobId: string | null;
+  branch: string | null;
+  note: string | null;
+}
+
+export const TICKET_VERDICT_BATCH_LIMITS = { items: 20, jobId: 120, branch: 120, note: 500 } as const;
+
+/** A batch branch name as D-93 spells it: Konfersi `qa/batch-<date>-<n>`, ClaudePilot `batch/<date>-<n>`. */
+export const TICKET_BATCH_BRANCH = /(?:^|[^A-Za-z0-9._-])((?:qa\/batch-|batch\/)[A-Za-z0-9._-]+)/;
+
 /** A check a CI run attached to a ticket (interface I10): its latest state. */
 export interface TicketCheck {
   name: string;

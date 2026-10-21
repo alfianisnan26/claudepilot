@@ -30,6 +30,7 @@ interface TicketsLike {
   list(caller: { kind: 'system' }, filter: { tag?: string; status?: TicketStatus[]; limit?: number }): { items: TicketItem[] };
   verdicts(caller: { kind: 'system' }, id: string): StoredVerdict[];
   checks(id: string): TicketCheck[];
+  liveBatchOf?(id: string): { branch: string; at: string } | null;
 }
 
 /** The chat controller as the watchdog needs it; null when what was handed over lacks it (some tests). */
@@ -69,6 +70,8 @@ function flowTicketPort(raw: unknown): FlowTicketPort | null {
     list: (tag, status) => tickets.list(system, { tag, status, limit: 500 }).items,
     verdicts: (id) => tickets.verdicts(system, id),
     checks: (id) => tickets.checks(id),
+    // T-1987: an older tickets service without it reads as no batch (the ticket is asked as before).
+    batchOf: (id) => (typeof tickets.liveBatchOf === 'function' ? tickets.liveBatchOf(id) : null),
   };
 }
 

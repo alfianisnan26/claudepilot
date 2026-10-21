@@ -3743,6 +3743,15 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 795,
+    name: 'tickets: a verdict recorded in a QA batch keeps the batch evidence (T-1987, D-93)',
+    up(db) {
+      // T-1987 (tickets PRD FR36d): `ticket_verdict_batch` records one verdict per ticket of a QA batch; the shared evidence (job id, batch
+      // branch, note) is kept with each row as JSON `{ jobId, branch, note }`. NULL for a verdict recorded alone and for every row before.
+      db.exec(`ALTER TABLE ticket_verdicts ADD COLUMN batch TEXT CHECK (batch IS NULL OR json_valid(batch));`);
+    },
+  },
 ];
 
 /**

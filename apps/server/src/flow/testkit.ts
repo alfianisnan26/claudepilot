@@ -69,6 +69,8 @@ export class FlowFakeTickets implements FlowTicketPort {
   readonly items: TicketItem[] = [];
   readonly verdictsOf = new Map<string, StoredVerdict[]>();
   readonly checksOf = new Map<string, TicketCheck[]>();
+  /** T-1987: the live batch a ticket is in (liveBatchOf). */
+  readonly batches = new Map<string, { branch: string; at: string }>();
   #vid = 1;
   constructor(readonly clock: Clock) {}
   add(n: number, over: Partial<TicketItem> & { holder?: string } = {}): TicketItem {
@@ -113,6 +115,9 @@ export class FlowFakeTickets implements FlowTicketPort {
   }
   checks(id: string) {
     return this.checksOf.get(id) ?? [];
+  }
+  batchOf(id: string) {
+    return this.batches.get(id) ?? null;
   }
 }
 

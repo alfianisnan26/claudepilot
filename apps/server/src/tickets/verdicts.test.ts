@@ -502,3 +502,130 @@ test('T-1652: a past holder started on the ticket is still an author: its QA chi
     h.done();
   }
 });
+
+/* ---------- FR36d (T-1987, D-93): a QA batch, a verdict per ticket ---------- */
+
+test('recordVerdicts (T-1987): every refusal rule applies per item; the rest are recorded; one audit row per ticket, with the batch', async () => {
+  const r = await rig();
+  try {
+    const s = r.sessions;
+    // A second ticket of the batch, held by another implementer of the crew.
+    s.add({ id: 'impl2', workspaceId: WS, agent: 'implementer', parentId: 'lead' });
+    const t2 = r.tickets.create(UI, { summary: 'second', workspaceId: WS });
+    r.tickets.update(UI, t2.id, { assignee: { kind: 'session', sessionId: 'impl2' }, status: 'in_review' });
+    // A third ticket, held by qa1 itself (it is its author), and a fourth in another workspace (unseen).
+    const t3 = r.tickets.create(UI, { summary: 'qa1 holds it', workspaceId: WS });
+    r.tickets.update(UI, t3.id, { assignee: { kind: 'session', sessionId: 'qa1' } });
+    const t4 = r.tickets.create(UI, { summary: 'elsewhere', workspaceId: 'docker/other' });
+    const evidence = { jobId: 'job-run-7f3a', branch: 'qa/batch-2026-10-21-1', note: 'suite and build once on the batch head' };
+    const res = r.tickets.recordVerdicts(agent(WS, 'qa1'), [
+      { id: r.id, role: 'qa', verdict: 'pass', commit: A },
+      { id: t2.id, role: 'qa', verdict: 'fail', commit: B },
+      { id: t3.id, role: 'qa', verdict: 'pass', commit: A },
+      { id: t4.id, role: 'qa', verdict: 'pass', commit: A },
+      { id: 'T-9999', role: 'qa', verdict: 'pass', commit: A },
+      { id: r.id, role: 'review', verdict: 'pass', commit: A },
+      { id: t2.id, role: 'qa', verdict: 'pass', commit: 'abc1234' },
+    ], evidence);
+    assert.deepEqual(res.map((x) => (x.ok ? 'ok' : x.error.code)), ['ok', 'ok', 'FORBIDDEN', 'NOT_FOUND', 'NOT_FOUND', 'FORBIDDEN', 'VALIDATION_FAILED']);
+    const err = (i: number) => (res[i]!.ok ? null : (res[i] as { error: { message: string } }).error.message);
+    assert.match(err(2)!, /author of this ticket/);
+    assert.equal(err(3), err(4), 'an unseen ticket reads exactly as a missing one');
+    assert.match(err(5)!, /not the role/);
+    // The rows carry the batch; the timeline entry names it; the verdict on the head counts as any verdict does.
+    const v1 = r.tickets.verdicts(UI, r.id);
+    assert.equal(v1.length, 1);
+    assert.deepEqual(v1[0]!.batch, evidence);
+    assert.equal(r.tickets.verdictStatus(UI, r.id, A).pass, true);
+    assert.equal(r.tickets.verdictStatus(UI, t2.id, B).pass, false);
+    const entry = r.tickets.get(UI, t2.id).events.find((e) => e.kind === 'comment' && e.data?.verdictId)!;
+    assert.match(entry.body!, /QA FAIL recorded on commit .* in batch qa\/batch-2026-10-21-1\./);
+    assert.deepEqual(entry.data!.batch, evidence);
+    assert.equal(r.tickets.verdicts(UI, t3.id).length + r.tickets.verdicts(UI, t4.id).length, 0, 'nothing on a refused item');
+    // One audit row per ticket recorded, each with the batch; one refusal row per item that reached the rule.
+    const rows = r.audits.filter((a) => a.kind === 'ticket.verdict');
+    assert.deepEqual(rows.map((a) => a.subject), [`ticket:${r.id}`, `ticket:${t2.id}`]);
+    for (const a of rows) assert.deepEqual(a.detail!.batch, evidence);
+    assert.equal(r.audits.filter((a) => a.kind === 'ticket.verdict_refused').length, 3, 'author, wrong role and the short sha');
+  } finally {
+    r.done();
+  }
+});
+
+test('recordVerdicts (T-1987): the lead, a non-verifier, a token and an author’s QA child are refused per item exactly as alone (T-1652 too)', async () => {
+  const r = await rig();
+  try {
+    const one = (caller: Parameters<typeof r.tickets.recordVerdict>[0]) => {
+      const alone = (() => {
+        try {
+          r.tickets.recordVerdict(caller, r.id, { role: 'qa', verdict: 'pass', commit: A });
+          return 'ok';
+        } catch (e: any) {
+          return `${e.code}: ${e.message}`;
+        }
+      })();
+      const batched = r.tickets.recordVerdicts(caller, [{ id: r.id, role: 'qa', verdict: 'pass', commit: A }], { branch: 'qa/batch-x-1' })[0]!;
+      assert.equal(batched.ok ? 'ok' : `${batched.error.code}: ${batched.error.message}`, alone);
+      return alone;
+    };
+    assert.match(one(agent(WS, 'lead')), /^FORBIDDEN/);
+    assert.match(one(agent(WS, 'impl')), /^FORBIDDEN/);
+    assert.match(one(token('t1', 'admin')), /^FORBIDDEN: Only a QA or review session/);
+    r.sessions.add({ id: 'qaKid', workspaceId: WS, agent: 'qa-verifier', parentId: 'impl' });
+    assert.match(one(agent(WS, 'qaKid')), /descends from an author/);
+    assert.match(one(agent('docker/other', 'qaX')), /^NOT_FOUND/);
+    assert.equal(r.tickets.verdicts(UI, r.id).length, 0);
+  } finally {
+    r.done();
+  }
+});
+
+test('recordVerdicts (T-1987): the evidence is checked once (a secret or a bad name refuses the whole call, nothing written); 1 to 20 items', async () => {
+  const r = await rig();
+  try {
+    const qa = agent(WS, 'qa1');
+    const item = { id: r.id, role: 'qa', verdict: 'pass', commit: A };
+    const secretish = ['gh', 'p_', 'x'.repeat(36)].join('');
+    assert.throws(() => r.tickets.recordVerdicts(qa, [item], { note: `token ${secretish}` }), (e: any) => e.code === 'VALIDATION_FAILED');
+    assert.throws(() => r.tickets.recordVerdicts(qa, [item], { branch: 'qa/batch 1; rm -rf' }), (e: any) => e.code === 'VALIDATION_FAILED');
+    assert.throws(() => r.tickets.recordVerdicts(qa, [], {}), (e: any) => e.code === 'VALIDATION_FAILED');
+    assert.throws(() => r.tickets.recordVerdicts(qa, Array.from({ length: 21 }, () => item), {}), (e: any) => e.code === 'VALIDATION_FAILED');
+    assert.equal(r.tickets.verdicts(UI, r.id).length, 0);
+    // No evidence at all is still a batch verdict (marked), and a verdict recorded alone has none.
+    r.tickets.recordVerdicts(qa, [item], undefined);
+    record(r, 'qa1', 'qa', 'pass', B);
+    assert.deepEqual(r.tickets.verdicts(UI, r.id).map((v) => v.batch), [{ jobId: null, branch: null, note: null }, null]);
+  } finally {
+    r.done();
+  }
+});
+
+test('liveBatchOf (T-1987): a comment after the newest verdict naming a batch branch; a later verdict ends it', async () => {
+  const r = await rig();
+  try {
+    assert.equal(r.tickets.liveBatchOf(r.id), null);
+    r.tickets.comment(UI, r.id, 'Looking at it.');
+    assert.equal(r.tickets.liveBatchOf(r.id), null);
+    r.tickets.comment(UI, r.id, 'Taken into origin/qa/batch-2026-10-21-2 with T-5 and T-6.');
+    assert.equal(r.tickets.liveBatchOf(r.id)?.branch, 'qa/batch-2026-10-21-2');
+    r.tickets.recordVerdicts(agent(WS, 'qa1'), [{ id: r.id, role: 'qa', verdict: 'fail', commit: A }], { branch: 'qa/batch-2026-10-21-2' });
+    assert.equal(r.tickets.liveBatchOf(r.id), null, 'the batch gave its verdict');
+    r.tickets.comment(UI, r.id, 'Back in batch/2026-10-21-3 after the fix.');
+    assert.equal(r.tickets.liveBatchOf(r.id)?.branch, 'batch/2026-10-21-3');
+    assert.equal(r.tickets.liveBatchOf('T-9999'), null);
+  } finally {
+    r.done();
+  }
+});
+
+test('migration 795 (T-1987): a batch column on ticket_verdicts that holds JSON only', async () => {
+  assert.equal(MIGRATIONS.filter((m) => m.version === 795).length, 1);
+  const r = await rig();
+  try {
+    const db = r.store.db!;
+    assert.throws(() => db.prepare("INSERT INTO ticket_verdicts (ticket_number, role, verdict, commit_sha, actor, actor_label, at, batch) VALUES (1, 'qa', 'pass', ?, 'ui', 'x', 'now', 'not json')").run(A));
+    db.prepare("INSERT INTO ticket_verdicts (ticket_number, role, verdict, commit_sha, actor, actor_label, at, batch) VALUES (1, 'qa', 'pass', ?, 'ui', 'x', 'now', NULL)").run(A);
+  } finally {
+    r.done();
+  }
+});
