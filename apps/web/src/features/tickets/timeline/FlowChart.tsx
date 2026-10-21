@@ -1,6 +1,6 @@
 import { cn, Dialog, useMediaQuery } from '@isnanme/ui';
 import type { TicketFlowMarker, TicketFlowSpan, TicketTimelineRow } from '@portal/contracts';
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from 'react';
 import { Link } from 'react-router';
 import { InfoTip } from '@/components/InfoTip';
 import { Popover } from '@/components/Popover';
@@ -9,6 +9,7 @@ import { PriorityMark } from '../parts';
 import {
   axisTicks,
   chartWidth,
+  labelledTicks,
   durationShort,
   initials,
   layoutBars,
@@ -26,6 +27,7 @@ import {
   type Bar,
   type Range,
   type Scale,
+  type Tick,
 } from './layout';
 
 /** Width of the label column: key, priority and initials on a phone; the title too where there is room. */
@@ -120,6 +122,41 @@ function SpanDetails({ picked, now, search }: { picked: Picked; now: number; sea
   );
 }
 
+/**
+ * The axis labels (T-1988): only those whose whole label is in view, so none sits half under the sticky label column or past the box's
+ * edge. It follows the box's own scroll and size, so a pan re-renders the labels only, not the rows.
+ */
+function AxisLabels({ ticks, scale, box, labels }: { ticks: readonly Tick[]; scale: Scale; box: RefObject<HTMLDivElement | null>; labels: RefObject<HTMLDivElement | null> }) {
+  const [view, setView] = useState<{ from: number; to: number } | null>(null);
+  useLayoutEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    const read = () => {
+      const from = el.scrollLeft;
+      const to = from + el.clientWidth - (labels.current?.offsetWidth ?? 0);
+      setView((v) => (v && v.from === from && v.to === to ? v : { from, to }));
+    };
+    read();
+    el.addEventListener('scroll', read, { passive: true });
+    const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(read);
+    ro?.observe(el);
+    return () => {
+      el.removeEventListener('scroll', read);
+      ro?.disconnect();
+    };
+  }, [box, labels, ticks]);
+  const shown = view ? labelledTicks(ticks, view) : [];
+  return (
+    <div className="relative h-7 border-b border-line" aria-hidden>
+      {shown.map((t) => (
+        <span key={t.at} className="absolute top-1.5 -translate-x-1/2 text-[10.5px] whitespace-nowrap text-muted tabular-nums" style={{ left: t.left }}>
+          {tickLabel(t.at, scale)}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 /** Min / Hour / Day: a radio group with 44 px targets on touch (the kit's Segmented is 40). */
 function ScaleSwitch({ value, onChange }: { value: Scale; onChange: (s: Scale) => void }) {
   return (
@@ -175,6 +212,7 @@ export function FlowChart({
 }) {
   const roomy = useMediaQuery('(min-width: 640px)');
   const box = useRef<HTMLDivElement>(null);
+  const labelCol = useRef<HTMLDivElement>(null);
   const anchor = useRef<HTMLElement | null>(null);
   const [picked, setPicked] = useState<{ id: string; index: number } | null>(null);
   const width = chartWidth(range, scale);
@@ -245,7 +283,7 @@ export function FlowChart({
         onKeyDown={onKey}
       >
         <div className="flex [--label-w:7.5rem] medium:[--label-w:14rem]" style={{ width: `calc(${width}px + var(--label-w))` }} data-timeline="">
-          <div className={cn('sticky left-0 z-20 shrink-0 border-r border-line bg-surface', LABEL)}>
+          <div ref={labelCol} className={cn('sticky left-0 z-20 shrink-0 border-r border-line bg-surface', LABEL)}>
             <div className="h-7 border-b border-line" />
             {rows.map((r) => (
               <Link
@@ -269,14 +307,7 @@ export function FlowChart({
           </div>
 
           <div className="relative shrink-0" style={{ width }}>
-            <div className="relative h-7 border-b border-line" aria-hidden>
-              {ticks.map((t, i) => (
-                // Every other label at the minute scale on a phone would crowd; the tick spacing (30 px and up) keeps one in each.
-                <span key={t.at} className={cn('absolute top-1.5 -translate-x-1/2 text-[10.5px] whitespace-nowrap text-muted tabular-nums', i === 0 && 'translate-x-0')} style={{ left: t.left }}>
-                  {tickLabel(t.at, scale)}
-                </span>
-              ))}
-            </div>
+            <AxisLabels ticks={ticks} scale={scale} box={box} labels={labelCol} />
             {/* One layer for the grid, the shading and the now line under every row, not a copy per row. */}
             <div className="pointer-events-none absolute inset-x-0 top-7 bottom-0" aria-hidden>
               {shade.map((s, i) => (

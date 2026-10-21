@@ -12,8 +12,17 @@ export const SCALE_LABEL: Record<Scale, string> = { minute: 'Min', hour: 'Hour',
 export const UNIT_MS: Record<Scale, number> = { minute: 60_000, hour: 3_600_000, day: 86_400_000 };
 /** How wide one unit is on screen. Tuned so a tick is never closer than about 30 px. */
 export const UNIT_PX: Record<Scale, number> = { minute: 6, hour: 40, day: 64 };
-/** The distance between two axis ticks, in ms (minute: every 5, so a label has room). */
+/** The finest distance between two axis ticks, in ms; axisTicks thins it to the next step that leaves a label room (TICK_GAP_PX). */
 export const TICK_MS: Record<Scale, number> = { minute: 5 * 60_000, hour: 3_600_000, day: 86_400_000 };
+/** Round tick steps, finest first: 1, 2, 5, 10, 15, 30 minutes; 1, 2, 3, 6, 12 hours; 1, 2, 7 days. */
+export const TICK_STEPS_MS: readonly number[] = [1, 2, 5, 10, 15, 30, 60, 120, 180, 360, 720, 1440, 2880, 10_080].map((m) => m * 60_000);
+/**
+ * The least distance between two labelled ticks (T-1988). A label ("14:05", "Oct 21") at 10.5 px is up to about 34 px wide, so 40 px
+ * keeps a gap between neighbours at every width (at 30 px, the old minute step, they touched).
+ */
+export const TICK_GAP_PX = 40;
+/** Half a label's width: a label is centred on its tick, and is only shown when all of it is in view (labelledTicks). */
+export const LABEL_HALF_PX = 18;
 
 /** The narrowest a bar is drawn (a span of a few seconds is still tappable), and the width of a closed state's mark. */
 export const MIN_BAR_PX = 6;
@@ -27,8 +36,8 @@ export const STATE_LABEL: Record<TicketFlowState, string> = { ...TICKET_STATUS_L
 export type Pattern = 'none' | 'hatch' | 'dots' | 'strike';
 
 /**
- * A look per state, from the ticket status palette (the badges' tokens: neutral, accent for success, amber for warning, danger) plus the
- * flame token for waiting. Each has a letter and, where two could be confused, a pattern, so colour is never the only signal.
+ * A look per state, from the ticket status palette (the badges' tokens: neutral, accent for in progress, amber for warning, danger) plus the
+ * flame token for waiting and Done's own violet (index.css, T-1988). Each has a letter and, where two could be confused, a pattern, so colour is never the only signal.
  */
 export const STATE_LOOK: Record<TicketFlowState, { bar: string; ink: string; letter: string; pattern: Pattern }> = {
   open: { bar: 'bg-line-strong', ink: 'text-ink', letter: 'O', pattern: 'none' },
@@ -36,7 +45,7 @@ export const STATE_LOOK: Record<TicketFlowState, { bar: string; ink: string; let
   blocked: { bar: 'bg-danger', ink: 'text-surface', letter: 'B', pattern: 'hatch' },
   in_review: { bar: 'bg-amber-500', ink: 'text-black/80', letter: 'R', pattern: 'none' },
   waiting: { bar: 'bg-flame', ink: 'text-surface', letter: 'W', pattern: 'dots' },
-  done: { bar: 'bg-accent', ink: 'text-surface', letter: 'D', pattern: 'none' },
+  done: { bar: 'bg-done', ink: 'text-white', letter: 'D', pattern: 'none' },
   wont_do: { bar: 'bg-muted', ink: 'text-surface', letter: 'X', pattern: 'strike' },
 };
 
@@ -124,13 +133,28 @@ export interface Tick {
   left: number;
 }
 
-/** Axis ticks on multiples of the scale's step (UTC-aligned: the label is formatted in local time by the caller). */
-export function axisTicks(range: Range, scale: Scale): Tick[] {
-  const step = TICK_MS[scale];
+/** The tick step at a scale: the finest round step from the scale's own that puts ticks at least `gap` pixels apart. */
+export function tickStep(scale: Scale, gap: number = TICK_GAP_PX): number {
+  const k = pxPerMs(scale);
+  return TICK_STEPS_MS.find((s) => s >= TICK_MS[scale] && s * k >= gap) ?? TICK_STEPS_MS[TICK_STEPS_MS.length - 1]!;
+}
+
+/** Axis ticks on multiples of the scale's step, thinned so labels never crowd (UTC-aligned: the label is formatted in local time by the caller). */
+export function axisTicks(range: Range, scale: Scale, gap: number = TICK_GAP_PX): Tick[] {
+  const step = tickStep(scale, gap);
   const k = pxPerMs(scale);
   const ticks: Tick[] = [];
   for (let at = Math.ceil(range.from / step) * step; at <= range.to; at += step) ticks.push({ at, left: (at - range.from) * k });
   return ticks;
+}
+
+/**
+ * The ticks whose label fits whole inside the part of the chart in view (chart pixels: from the scroll offset, which is where the sticky
+ * label column ends, to that plus the visible chart width). A label half under the label column or past the box's edge is left out, never
+ * drawn cut (T-1988); the grid line stays.
+ */
+export function labelledTicks(ticks: readonly Tick[], view: { from: number; to: number }, half: number = LABEL_HALF_PX): Tick[] {
+  return ticks.filter((t) => t.left - half >= view.from && t.left + half <= view.to);
 }
 
 /** A tick's label: a clock time at minute and hour scale (the date at midnight), a date at day scale. */

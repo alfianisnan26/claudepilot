@@ -33,9 +33,11 @@ export function Popover({
     const place = () => {
       if (!anchor.current || !panel.current) return;
       const r = anchor.current.getBoundingClientRect();
-      const height = panel.current.scrollHeight;
+      // Its natural height: the inner scroller's whole content plus the panel's border (the panel itself no longer overflows).
+      const inner = panel.current.firstElementChild as HTMLElement | null;
+      const height = inner ? panel.current.offsetHeight - inner.clientHeight + inner.scrollHeight : panel.current.scrollHeight;
       const p = placePopover({ anchor: r, width, height, view: visibleBox(), safe: safeInsets(), prefer, ...guards(anchor.current) });
-      setStyle({ position: 'fixed', top: p.top, left: p.left, width: p.width, maxHeight: p.maxHeight ?? undefined, overflowY: p.maxHeight ? 'auto' : undefined });
+      setStyle({ position: 'fixed', top: p.top, left: p.left, width: p.width, maxHeight: p.maxHeight ?? undefined });
     };
     place();
   }, [open, anchor, width, prefer, children]);
@@ -69,9 +71,10 @@ export function Popover({
       role="dialog"
       aria-label={label}
       style={style}
-      className="z-[60] rounded-2xl border border-line bg-surface p-3 text-[13.5px] break-words text-ink-soft shadow-lift [overflow-wrap:anywhere]"
+      className="z-[60] flex flex-col overflow-hidden rounded-2xl border border-line bg-surface text-[13.5px] break-words text-ink-soft shadow-lift [overflow-wrap:anywhere]"
     >
-      {children}
+      {/* The panel cut to fit scrolls inside its padding, so a classic scrollbar never sits over the rounded border (T-1988). */}
+      <div className="min-h-0 overflow-y-auto overscroll-contain p-3">{children}</div>
     </div>,
     document.body,
   );
