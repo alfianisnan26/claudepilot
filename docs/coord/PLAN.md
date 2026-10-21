@@ -39,7 +39,7 @@ app.ts `clientKey`. That is someone's separate deployment effort in the same che
 | A7 | Chat motion and polish: smooth text reveal, smooth scroll-follow, polished transitions | new apps/web/src/features/chat/motion/**; surgical integration edits in features/chat/{Transcript,Markdown,Activity,ToolRows}.tsx (A2's files) | 3111 | 9241 | mo- | none |
 | A3a | Pools: MCP sets and Secrets & env enhancements; the Skillset pool; the MCP lockdown settings and the shared settings store | apps/server/src/{pools,secrets,mcp,skills,delivery,settings}/**, apps/web/src/features/{pools,secrets,mcp,skills,settings}/**, contracts {pools,secrets,mcp,skills,settings}.ts, images/workspace/Dockerfile, docs/prd/{foundation-pools,secrets-env-pool,mcpset-pool,skillset-pool,settings-policies}.md | 3103 | 9233 | pl- | 20-29 |
 | A3c | Personas and instruction contexts | apps/server/src/personas/**, apps/web/src/features/personas/**, contracts personas.ts, docs/prd/persona-pool.md | 3108 | 9238 | pe- | 70-79 |
-| A3b | Platform: Portal MCP (internal and external), global "add MCP" flow, ticketing system | apps/server/src/{portalmcp,tickets}/** (new), apps/web/src/features/{tickets,portalmcp}/** (new), contracts {tickets,portalmcp}.ts (new), docs/prd/portal-mcp.md, new docs/prd/tickets.md | 3105 | 9235 | pm- | 40-49 |
+| A3b | Platform: Portal MCP (internal and external), global "add MCP" flow, ticketing system | apps/server/src/{portalmcp,tickets}/** (new), apps/web/src/features/{tickets,portalmcp}/** (new), contracts {tickets,portalmcp}.ts (new), docs/prd/portal-mcp.md, new docs/prd/tickets.md | 3105 | 9235 | pm- | 40-49 (full; overflow 785+: 785-787, 794 used) |
 | A4 (a) | Browser & desktop (VNC) and the proxy browser, agent-driven over MCP | apps/server/src/browser/** (new), apps/web/src/features/browser/** (new), contracts browser.ts (new), images/browser/** (new), docs/prd/browser-desktop-pool.md | 3104 | 9234 | br- | 30-39 |
 | A4b | Knowledge: docs graph, context graph, agentic graph, second-brain vaults with an Obsidian approach | apps/server/src/knowledge/** (new), apps/web/src/features/knowledge/** (new), contracts knowledge.ts (new), a NEW docs/prd/knowledge-graph.md | 3106 | 9236 | kg- | 50-59 |
 
@@ -147,6 +147,8 @@ I11 Agent self-adjustment. The owner's words (2026-10-12): "for personas, skills
 4. Own your area. Surgical edits in shared files. Re-read before editing. Never reformat.
 5. Migrations: append only, in your block, never edit migrations 1-15 or another block. They run once per database: while iterating, use a scratch data
    dir and delete it to re-run. Anything that adds a column holding sealed values must be listed in ENCRYPTED_COLUMNS.
+   The tickets block (A3b, 40-49) is full since T-1974 took 49 (2026-10-21); tickets migrations overflow to 785+ (785-787 and 794 used; 788 is
+   T-975's on its branch): take the next free number there after checking integration and the open branches.
 6. Dependencies: run `npm install` only under `flock COORD/npm.lock npm install ...`, then re-run the typecheck. Prefer no new dependencies; say in your
    report which you added and why. Never edit `@isnanme/*` packages in node_modules.
 7. Docker is ONE shared daemon. Give everything your prefix. A portal lists every `claudepilot-*` managed container, so other agents' workspaces show up in
