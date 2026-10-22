@@ -598,6 +598,98 @@ test('lead_peer close (T-1839): a peer lead comments on and closes a ticket a pe
   }
 });
 
+test('peer_worker (T-2011, D-93): a peer lead\'s QA worker comments on and records verdicts on another lead\'s tickets; FR36, a lead outside the group, an implementer, close, update and attach stay refused', async () => {
+  const GEN = 'eeeeeeee-0001', BIZ = 'eeeeeeee-0002', OUT = 'ffffffff-0001';
+  const GQ = 'eeeeeeee-0010', GB = 'eeeeeeee-0011', GBQ = 'eeeeeeee-0012', GI = 'eeeeeeee-0013', BB = 'eeeeeeee-0020', OQ = 'ffffffff-0010';
+  let groups = `${GEN},${BIZ}`;
+  const r = await rig({ leadPeerGroups: () => groups });
+  const audits: { kind: string; detail?: Record<string, unknown> }[] = [];
+  r.tickets.onAudit = (e) => void audits.push(e);
+  try {
+    const ws = 'docker/api';
+    await r.agent(ws, GEN, 'Konfersi: general');
+    await r.agent(ws, BIZ, 'Konfersi: Business');
+    await r.agent(ws, OUT, 'another lead');
+    const gq = await r.agent(ws, GQ, 'general QA lane');
+    await r.agent(ws, GB, 'general builder');
+    const gbq = await r.agent(ws, GBQ, 'QA the builder started');
+    const gi = await r.agent(ws, GI, 'general implementer lane');
+    await r.agent(ws, BB, 'Business builder');
+    const oq = await r.agent(ws, OQ, 'outsider QA lane');
+    const patch = (id: string, over: Record<string, unknown>) => r.sessions.sessions.set(id, { ...r.sessions.sessions.get(id)!, ...over });
+    patch(GQ, { parentId: GEN, agent: 'qa-verifier' });
+    patch(GB, { parentId: GEN, agent: 'implementer' });
+    patch(GBQ, { parentId: GB, agent: 'qa-verifier' });
+    patch(GI, { parentId: GEN, agent: 'implementer' });
+    patch(BB, { parentId: BIZ, agent: 'implementer' });
+    patch(OQ, { parentId: OUT, agent: 'qa-verifier' });
+    const held = (summary: string, sessionId: string, workspaceId = ws) => {
+      const id = r.tickets.create(UI, { summary, workspaceId, assignee: { kind: 'session', sessionId } }).id;
+      r.tickets.update(UI, id, { status: 'in_review' });
+      return id;
+    };
+    const tBb = held('Business builder work', BB); // like T-1705
+    const tBiz = held('Business status', BIZ); // like T-84
+    const tBb2 = held('more Business work', BB);
+    const tGb = held('general builder work', GB);
+    const tOnce = held('the QA lane held it once', GQ);
+    r.tickets.update(UI, tOnce, { assignee: { kind: 'session', sessionId: BB } });
+    const tElsewhere = held('another workspace', BB, 'docker/web');
+    const sha = (c: string) => c.repeat(40);
+    const comment = async (t: { secret: string }, id: string) => (await r.h.call(t.secret, 'ticket_comment', { id, text: `QA evidence on ${id}` })).result?.structuredContent?.error?.code;
+    const verdict = async (t: { secret: string }, id: string, c = 'a') =>
+      (await r.h.call(t.secret, 'ticket_verdict', { id, role: 'qa', verdict: 'pass', commit: sha(c) })).result?.structuredContent?.error;
+
+    // Refused first: nothing below may be written or audited as peer_worker.
+    assert.equal(await comment(oq, tBb), 'FORBIDDEN', 'a worker of a lead outside the group');
+    assert.equal(await comment(gi, tBb), 'FORBIDDEN', 'an implementer worker of a peer lead (T-1839 unchanged for it)');
+    assert.equal(await comment(gq, tElsewhere), 'NOT_FOUND', 'a ticket it may not see is the same not found');
+    assert.equal((await verdict(gq, tElsewhere))?.code, 'NOT_FOUND');
+    assert.equal((await r.h.call(gq.secret, 'ticket_close', { id: tBb2, summary: 'verified' })).result?.structuredContent?.error?.code, 'FORBIDDEN', 'never a close');
+    assert.equal((await r.h.call(gq.secret, 'ticket_update', { id: tBb2, status: 'done' })).result?.structuredContent?.error?.code, 'FORBIDDEN', 'never a change');
+    const att = await r.h.call(gq.secret, 'ticket_attach', { id: tBb2, name: 'qa.txt', content_base64: Buffer.from('log').toString('base64') });
+    assert.equal(att.result?.structuredContent?.error?.code, 'FORBIDDEN', 'never an attachment');
+    // FR36 is unchanged: a QA started by the builder (the author's lineage) and a QA lane that once held the ticket are refused.
+    assert.match(String((await verdict(gbq, tGb))?.message), /descends from an author/);
+    assert.match(String((await verdict(gq, tOnce))?.message), /author of this ticket/);
+    assert.equal(audits.filter((a) => a.detail?.why === 'peer_worker').length, 0, 'no refused call is audited as peer_worker');
+    assert.equal(r.tickets.get(UI, tBb2).ticket.status, 'in_review');
+
+    // Allowed: the general lead's QA lane on the Business lead's and the Business builder's tickets.
+    assert.equal(await comment(gq, tBb), undefined, 'comments on a peer lead\'s builder\'s ticket');
+    assert.equal(await comment(gq, tBiz), undefined, 'and on the peer lead\'s own ticket');
+    assert.equal(await verdict(gq, tBb), undefined, 'records its verdict there');
+    const batch = r.out(
+      await r.h.call(gq.secret, 'ticket_verdict_batch', {
+        verdicts: [
+          { id: tBb2, commit: sha('b'), verdict: 'pass', role: 'qa' },
+          { id: tGb, commit: sha('c'), verdict: 'pass', role: 'qa' },
+          { id: tOnce, commit: sha('d'), verdict: 'pass', role: 'qa' },
+        ],
+        evidence: { job_id: 'job-run-1', batch_branch: 'qa/batch-2026-10-22-1' },
+      }),
+    );
+    assert.deepEqual(batch.results.map((x: any) => [x.id, x.ok]), [[tBb2, true], [tGb, true], [tOnce, false]], 'the batch path: each item judged by FR36');
+    assert.deepEqual(r.tickets.verdicts(UI, tBb).map((v) => [v.role, v.verdict, v.actor]), [['qa', 'pass', `session:${GQ}`]]);
+    const rows = audits.filter((a) => a.kind === 'ticket.worker_commented' && a.detail?.why === 'peer_worker');
+    assert.deepEqual(rows.map((a) => [a.detail?.ticketId, a.detail?.sessionId, a.detail?.leadId, a.detail?.holder]), [
+      [tBb, GQ, GEN, BB],
+      [tBiz, GQ, GEN, BIZ],
+    ], 'each comment audited as peer_worker with the worker, its lead and the holder');
+    assert.equal(audits.filter((a) => a.kind === 'ticket.verdict').length, 3, 'each verdict audited');
+
+    // A broken chain is refused (fail closed), and so is everything once the owner empties the setting.
+    patch(GQ, { parentId: 'eeeeeeee-9999' });
+    assert.equal(await comment(gq, tBb2), 'FORBIDDEN', 'a missing lead up the chain refuses');
+    patch(GQ, { parentId: GEN });
+    assert.equal(await comment(gq, tBb2), undefined, 'the chain mended');
+    groups = '';
+    assert.equal(await comment(gq, tBiz), 'FORBIDDEN', 'no group, no grant');
+  } finally {
+    r.done();
+  }
+});
+
 test('FR36c (T-1608): ticket_update, ticket_create and ticket_claim_next carry a warning when the new holder is a QA or review session; none for an implementer', async () => {
   const r = await rig();
   try {

@@ -83,7 +83,7 @@ import {
   canAgentAssignUser,
   canAgentTagChecklist,
   OWNER_CHECKLIST_TAG,
-  canPeerLeadAct, canWorkerComment, parseLeadPeerGroups,
+  canPeerLeadAct, canPeerWorkerComment, canWorkerComment, parseLeadPeerGroups,
   D62_ASSIGN_REFUSAL,
   D62_CHECKLIST_REFUSAL,
   type EndedGrantReason,
@@ -696,7 +696,7 @@ export class Tickets {
       if (caller.kind === 'agent' && !isTicketClosed(row.status)) {
         const why = this.#workerComment(w.session!, row);
         // crew_queue is the widest grant (any unassigned ticket of the workspace): a comment only, never an attachment (review 2026-10-18).
-        if (why && !(opts.attach && (why === 'crew_queue' || why === 'lead_peer'))) return { ended: null, worker: why };
+        if (why && !(opts.attach && (why === 'crew_queue' || why === 'lead_peer' || why === 'peer_worker'))) return { ended: null, worker: why };
       }
       throw e;
     }
@@ -715,7 +715,43 @@ export class Tickets {
       ticketWorkspace: row.workspace_id,
     });
     if (d.allow) return d.why;
-    return this.#peerLead(s, row) ? 'lead_peer' : null;
+    if (this.#peerLead(s, row)) return 'lead_peer';
+    return this.#peerWorker(s, row) ? 'peer_worker' : null;
+  }
+
+  /** The top of `s`'s `parentId` chain (itself when it has no lead), or null when a session is missing, a cycle or deeper than 20 (fail closed). */
+  #crewRoot(s: TicketSessionInfo): TicketSessionInfo | null {
+    let root: TicketSessionInfo | null = s;
+    const seen = new Set<string>();
+    while (root?.parentId) {
+      if (seen.has(root.id) || seen.size >= 20) root = null;
+      else (seen.add(root.id), (root = this.sessions.get(root.parentId)));
+    }
+    return root;
+  }
+
+  /** A root's lineage for the peer rules: itself, its predecessors and its continuations. */
+  #rootLineage(root: TicketSessionInfo): string[] {
+    return [root.id, ...this.#ancestors(root), ...this.#successors(root)];
+  }
+
+  /** T-2011: whether the QA or review worker `s`, under a peer-group lead, may comment on `row` (authz.ts `canPeerWorkerComment`). */
+  #peerWorker(s: TicketSessionInfo, row: Row): boolean {
+    if (!s.parentId) return false;
+    const groups = parseLeadPeerGroups(this.#leadPeerGroups());
+    const holder = row.assignee_kind === 'session' && row.assignee_ref ? this.sessions.get(row.assignee_ref) : null;
+    if (!groups.length || !holder) return false;
+    const workerRoot = this.#crewRoot(s);
+    const holderRoot = this.#crewRoot(holder);
+    return canPeerWorkerComment({
+      worker: s,
+      holder,
+      workerRoot,
+      holderRoot,
+      workerRootLineage: workerRoot ? this.#rootLineage(workerRoot) : [],
+      holderRootLineage: holderRoot ? this.#rootLineage(holderRoot) : [],
+      groups,
+    });
   }
 
   /**
@@ -726,19 +762,14 @@ export class Tickets {
     const groups = parseLeadPeerGroups(this.#leadPeerGroups());
     const holder = row.assignee_kind === 'session' && row.assignee_ref ? this.sessions.get(row.assignee_ref) : null;
     if (!groups.length || !holder) return null;
-    let root: TicketSessionInfo | null = holder;
-    const seen = new Set<string>();
-    while (root?.parentId) {
-      if (seen.has(root.id) || seen.size >= 20) root = null;
-      else (seen.add(root.id), (root = this.sessions.get(root.parentId)));
-    }
+    const root = this.#crewRoot(holder);
     if (!root) return null;
     const ok = canPeerLeadAct({
       actor: s,
       holder,
       root,
       actorLineage: [s.id, ...this.#ancestors(s)],
-      rootLineage: [root.id, ...this.#ancestors(root), ...this.#successors(root)],
+      rootLineage: this.#rootLineage(root),
       groups,
     });
     return ok ? root.id : null;
