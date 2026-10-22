@@ -23,7 +23,7 @@ skips the round while it is switched off, or while the portal cannot write (froz
 | e | No ticket done in `flow.stallHours` (3) while tickets wait in review | Notify the owner once per stall, when it has lasted `flow.notifyAfterHours` (3) after the first nudge. If no lead could be told, the time counts from when the stall began |
 | conflict | In review, the merge gate's newest open record is `conflict` (T-2014). Told at once, the round it is seen (T-2018; it used to wait `flow.mergeAfterMin`) | Message the ticket's unit lead: send it back to its builder for a rebase; QA then verifies the new head |
 | no_pr | In review, the merge gate's newest open record is `no_pr`, told at once too (T-2014, T-2018) | Message the ticket's unit lead: open the PR (or have its builder open it), or say on the ticket why not |
-| idle_lanes | A lead that may be told (live, not stopped by a person, Keep going not paused for it) has one or more builder workers idle for `flow.laneIdleMin` (10) while its unit has a `conflict` or `no_pr` record, or open or in-progress tickets (T-2018) | Message that lead the idle lane ids (longest idle first) and the next items: conflicts first (ticket, repo#pr), then no_pr, then the open tickets, priority first then oldest (at most 5) |
+| idle_lanes | A lead that may be told (live, not stopped by a person, Keep going not paused for it) whose unit has a `conflict` or `no_pr` record, or open or in-progress tickets, and that has builder workers idle for `flow.laneIdleMin` (10), or direct workers of any role idle for `flow.staleLaneMin` (180), or conflicts or no_pr with no live builder at all (T-2018) | Message that lead the idle builder lane ids (longest idle first), "No builder alive: spawn one" when it has none, the stale workers under "End these to free slots" (the watchdog never ends a session), and the next items: conflicts first (ticket, repo#pr), then no_pr, then the open tickets, priority first then oldest (at most 5) |
 
 **Idle lanes** (T-2018). On 2026-10-22 at 03:35 UTC, 4 sessions were working and 19 idle, every Claude had fresh quota, and 15 PRs
 were in conflict with nobody rebasing them: condition c only fires when the LEAD itself is idle under its cap, and a lead that is busy (or
@@ -33,7 +33,11 @@ lead's live head or any id the lead went by) whose agent name is a whole builder
 review lanes are not counted (they take QA-ASK batches), nor `builder-qa`, a worker of a worker, or a worker without an agent. It is idle
 when it has not ended, its process is not gone, its state is idle with nothing waiting, no busy turn and no running sub-agents, and its
 last activity is `flow.laneIdleMin` old or more. The unit's work is the same as elsewhere: tickets whose holder's crew root is the lead.
-The card counts the idle lanes of units that have work.
+Two more cases, from the same morning: QA and reviewer workers idle for 3 to 10 hours held their leads' worker caps, so no builder could
+be started; a **stale lane** is any direct worker (any role, its process asleep or gone included, as the cap counts it) with no turn, nothing
+waiting and no activity for `flow.staleLaneMin` (180), listed to be ended. And a unit with 7 conflicts had only QA and reviewers alive:
+with conflicts or no_pr and **no live builder** (no direct builder that has not ended and whose process is not gone), the lead is told to
+spawn one. The card counts the idle builder lanes and the stale lanes (each session once) of units that have work.
 
 **The merge gate's record** (T-2014, tickets PRD FR36e). The merge gate (the program's merge-gate lead, or a worker it started) records what
 it knows of a ticket's pull request per repo with `ticket_merge_status`: the PR number, its current head and a state (`ready`, `merged`,
@@ -93,7 +97,7 @@ the lead was continued as a new chat (never bypass-capable, FR20).
 | `flow.enabled` | on | The kill switch |
 | `flow.paused` | empty | Programs on hold (names, comma separated, `*` for all): counted, not acted on |
 | `flow.programs` | `konfersi\|konfersi-migration\|\|` | Programs split by `;`, each `name\|tag\|group\|merge gate\|on`. `group` is a 1-based index into `tickets.leadPeerGroups`; empty means the first group whose leads hold the program's tickets (else the first group). `merge gate` is a lead id; empty means the first lead of the group. Add `\|off` to stop one program. Checked on save: every program must read, and a merge gate must be a lead of its group (any group when the group is empty). If the groups change later, a gate that is no longer a lead falls back to the first lead. |
-| `flow.mergeAfterMin`, `flow.qaAfterMin`, `flow.idleAfterMin`, `flow.laneIdleMin`, `flow.repeatMin` | 20, 60, 30, 10, 30 | Minutes. `flow.mergeAfterMin` no longer delays conflict and no_pr (T-2018) |
+| `flow.mergeAfterMin`, `flow.qaAfterMin`, `flow.idleAfterMin`, `flow.laneIdleMin`, `flow.staleLaneMin`, `flow.repeatMin` | 20, 60, 30, 10, 180, 30 | Minutes. `flow.mergeAfterMin` no longer delays conflict and no_pr (T-2018) |
 | `flow.stallHours`, `flow.notifyAfterHours` | 3, 3 | Hours |
 
 The settings route needs `settings` `manage`. No agent tool writes settings.

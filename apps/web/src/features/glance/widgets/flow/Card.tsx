@@ -41,7 +41,7 @@ export function FlowCard() {
         <p role="status" data-flow-idle-lanes="" className="mb-1 flex items-center justify-center gap-1.5 text-xs font-semibold text-amber-700 dark:text-amber-400 [overflow-wrap:anywhere]">
           <LevelDot level="warn" />
           Idle lanes · {v.idleLanes}
-          <InfoTip label="What idle lanes means">Builder workers of a lead idle past the lane threshold while its unit has conflicts, PRs to open or open tickets. The lead is told which lanes are free and what to give them.</InfoTip>
+          <InfoTip label="What idle lanes means">Workers of a lead that do not move its work: builders idle past the lane threshold, or any worker idle for hours (it holds a slot), while its unit has conflicts, PRs to open or open tickets. The lead is told which to use or end, and what waits.</InfoTip>
         </p>
       )}
       {v.unread.length > 0 && (

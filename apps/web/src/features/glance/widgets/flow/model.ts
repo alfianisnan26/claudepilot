@@ -16,7 +16,7 @@ export interface FlowView {
   qa: number | null;
   idle: number | null;
   bypass: number | null;
-  /** T-2018: builder workers idle while their lead's unit has work (a portal from before it reports none: 0). */
+  /** T-2018: idle builder lanes and stale workers of leads whose unit has work (a portal from before it reports none: 0). */
   idleLanes: number | null;
   stalled: number | null;
   inReview: number | null;

@@ -44,3 +44,8 @@ test('T-2018: flow.laneIdleMin defaults to 10 min and is clamped to its range', 
   assert.equal(of(1), 5);
   assert.equal(of(99_999), 1440);
 });
+
+test('T-2018: flow.staleLaneMin defaults to 180 min', () => {
+  assert.equal(flowThresholds(null).staleLaneMs / 60_000, 180);
+  assert.equal(flowThresholds({ get: (k) => (k === FLOW_SETTING_KEYS.staleLaneMin ? 240 : undefined) }).staleLaneMs / 60_000, 240);
+});

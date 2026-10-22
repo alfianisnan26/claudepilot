@@ -18,7 +18,8 @@ export const FLOW_PREFIX = 'FLOW WATCHDOG:';
  * a lead idle for the idle threshold while its unit holds open work and it runs fewer workers than its cap. `bypass`: a lead that was in
  * Bypass is not now (reported only). `stall`: nothing done in the stall window while tickets wait in review. `conflict` and `no_pr`
  * (T-2014): the merge gate recorded that the ticket's PR needs a rebase, or that it has no PR: its unit lead is told at once (T-2018).
- * `idle_lanes` (T-2018): a lead's own builder workers sit idle for the lane threshold while its unit has conflicts, no_pr or open work.
+ * `idle_lanes` (T-2018): a lead's unit has conflicts, no_pr or open work while its builder workers sit idle for the lane threshold, its
+ * workers of any role sit idle for the stale threshold (they hold its cap), or it has conflicts or no_pr and no live builder at all.
  */
 export const FLOW_CONDITIONS = ['merge', 'qa', 'idle', 'bypass', 'stall', 'conflict', 'no_pr', 'idle_lanes'] as const;
 export type FlowCondition = (typeof FLOW_CONDITIONS)[number];
@@ -91,6 +92,8 @@ export const FLOW_SETTING_KEYS = {
   idleAfterMin: 'flow.idleAfterMin',
   /** T-2018: minutes a builder worker of a lead may sit idle while its unit has work before the lead is told. */
   laneIdleMin: 'flow.laneIdleMin',
+  /** T-2018: minutes any worker of a lead may sit idle before the idle-lanes message lists it to be ended (it holds the worker cap). */
+  staleLaneMin: 'flow.staleLaneMin',
   repeatMin: 'flow.repeatMin',
   stallHours: 'flow.stallHours',
   notifyAfterHours: 'flow.notifyAfterHours',

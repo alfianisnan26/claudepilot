@@ -13,8 +13,9 @@
 //                                                                                        as one batch (D-93, T-1987): at most 8 per peer per
 //                                                                                        message; a ticket already in a live batch is skipped
 //   idle    a lead idle `flow.idleAfterMin` with open work in its unit, under cap   -> that lead, its next tickets (oldest high priority first)
-//   idle_lanes  a lead's own builder workers idle `flow.laneIdleMin` while its unit has -> that lead: the idle lane ids and the next items
-//               conflicts, no_pr or open work (T-2018)                                  (conflicts, then no_pr, then oldest high priority)
+//   idle_lanes  a lead's unit has conflicts, no_pr or open work while its builders idle -> that lead: the idle lane ids, the stale workers to
+//               `flow.laneIdleMin`, its workers idle `flow.staleLaneMin` hold its cap,     end, "no builder alive", and the next items
+//               or it has conflicts/no_pr and no live builder (T-2018)                   (conflicts, then no_pr, then oldest high priority)
 //   bypass  a lead that was in Bypass is not now                                      -> reported only (audit and the card): see below
 //   stall   nothing done in `flow.stallHours` while tickets wait in review           -> the owner, once, if it lasts `flow.notifyAfterHours`
 //                                                                                        after the first nudge
@@ -415,25 +416,30 @@ export class FlowEngine {
       ]);
     }
 
-    // T-2018 idle lanes: a lead that may be told (reachable: live, not stopped by a person, Keep going not paused for it) whose own builder
-    // workers (direct children of any id it went by, a builder role name) sit idle past `flow.laneIdleMin` while its unit has a conflict, a
-    // missing PR or open work. The lead dispatches; the watchdog only names the free lanes and the next items. QA and review lanes are not
-    // counted here (they take QA-ASK batches).
+    // T-2018 idle lanes: a lead that may be told (reachable: live, not stopped by a person, Keep going not paused for it) whose unit has a
+    // conflict, a missing PR or open work, and that has (1) builder workers (direct children of any id it went by, a builder role name) idle
+    // past `flow.laneIdleMin`, (2) direct workers of any role idle past `flow.staleLaneMin` (they hold its worker cap: end them to free a
+    // slot), or (3) conflicts or missing PRs and no live builder at all (spawn one). The lead acts; the watchdog only names the lanes and the
+    // next items, and never ends or starts a session itself. QA and review lanes are never counted as idle builders (they take QA-ASK batches).
     let idleLanes = 0;
+    const idleFor = (s: ChatSession) => now - ms(s.lastActivityAt);
+    const quiet = (s: ChatSession) => s.state !== 'working' && s.state !== 'starting' && s.waiting === 0 && !s.busySince && (s.agentsRunning ?? 0) === 0;
+    // An agent name is printed only in the shape of one (a role word): anything else is left out of the message.
+    const named = (s: ChatSession) => (s.agent && /^[a-z0-9][a-z0-9_-]{0,39}$/.test(s.agent.toLowerCase()) ? ` ${s.agent.toLowerCase()}` : '');
     for (const l of leads) {
       if (!reachable(l)) continue;
       const h = heads.get(l)!;
       const seen = new Set<string>();
-      const lanes: ChatSession[] = [];
+      const workers: ChatSession[] = [];
       for (const id of new Set([h.id, ...lineOf(l)]))
         for (const s of chat.list({ parentId: id })) {
-          if (s.parentId !== id || seen.has(s.id)) continue;
+          if (s.parentId !== id || seen.has(s.id) || ended(s)) continue;
           seen.add(s.id);
-          if (ended(s) || s.process === 'gone' || s.state !== 'idle' || s.waiting > 0 || s.busySince || (s.agentsRunning ?? 0) > 0) continue;
-          if (!isBuilderLaneName(s.agent) || !(now - ms(s.lastActivityAt) >= t.laneIdleMs)) continue;
-          lanes.push(s);
+          workers.push(s);
         }
-      if (!lanes.length) continue;
+      const builders = workers.filter((s) => s.process !== 'gone' && isBuilderLaneName(s.agent));
+      const lanes = builders.filter((s) => s.state === 'idle' && quiet(s) && idleFor(s) >= t.laneIdleMs);
+      const stale = workers.filter((s) => quiet(s) && idleFor(s) >= t.staleLaneMs);
       const mine = <T extends { t: TicketItem }>(xs: T[]) => xs.filter((i) => leadOf(i.t) === l);
       const conf = mine(conflict);
       const nop = mine(noPr);
@@ -441,8 +447,12 @@ export class FlowEngine {
         .filter((x) => leadOf(x) === l)
         .sort((a, b) => rank(a.priority) - rank(b.priority) || ms(a.createdAt) - ms(b.createdAt) || a.number - b.number);
       if (!conf.length && !nop.length && !work.length) continue;
-      idleLanes += lanes.length;
-      lanes.sort((a, b) => ms(a.lastActivityAt) - ms(b.lastActivityAt) || a.id.localeCompare(b.id));
+      const noBuilder = !builders.length && conf.length + nop.length > 0;
+      if (!lanes.length && !stale.length && !noBuilder) continue;
+      idleLanes += new Set([...lanes, ...stale].map((s) => s.id)).size;
+      const oldest = (a: ChatSession, b: ChatSession) => ms(a.lastActivityAt) - ms(b.lastActivityAt) || a.id.localeCompare(b.id);
+      lanes.sort(oldest);
+      stale.sort(oldest);
       const pr = (m: TicketMergeStatus) => `${m.repo}${m.pr ? `#${m.pr}` : ''}`;
       const rows = [
         ...conf.map((i) => ({ id: i.t.id, line: `- ${ref(i.t)} conflict ${pr(i.pr)}: rebase onto the base branch` })),
@@ -450,13 +460,23 @@ export class FlowEngine {
         ...work.slice(0, 5).map((x) => ({ id: x.id, line: `- ${ref(x)} ${x.priority} ${x.status}` })),
       ];
       const n = rows.length;
+      const cap = FLOW_LIMITS.ticketsPerMessage;
       await this.#tell(c, 'idle_lanes', l, h, null, rows.map((r) => r.id), [
-        `${FLOW_PREFIX} ${plural(lanes.length, 'builder lane')} of yours ${lanes.length === 1 ? 'has' : 'have'} been idle ${t.laneIdleMs / MIN} min or more while your unit has work (program ${p.name}):`,
-        ...lanes.slice(0, FLOW_LIMITS.ticketsPerMessage).map((s) => `- ${s.id}${s.agent ? ` ${s.agent.toLowerCase()}` : ''} idle ${Math.floor((now - ms(s.lastActivityAt)) / MIN)} min`),
-        'Give them the next items, conflicts first:',
-        ...rows.slice(0, FLOW_LIMITS.ticketsPerMessage).map((r) => r.line),
+        `${FLOW_PREFIX} your unit has work and lanes that do not move it (program ${p.name}).`,
+        ...(lanes.length
+          ? [`${plural(lanes.length, 'builder lane')} idle ${t.laneIdleMs / MIN} min or more:`, ...lanes.slice(0, cap).map((s) => `- ${s.id}${named(s)} idle ${Math.floor(idleFor(s) / MIN)} min`)]
+          : []),
+        ...(noBuilder ? ['No builder alive: spawn one for the conflicts and missing PRs below.'] : []),
+        ...(stale.length
+          ? [
+              `End these to free slots (${plural(stale.length, 'worker')} idle ${t.staleLaneMs / MIN} min or more hold your worker cap; the watchdog never ends a session):`,
+              ...stale.slice(0, cap).map((s) => `- ${s.id}${named(s)} idle ${Math.floor(idleFor(s) / MIN)} min`),
+            ]
+          : []),
+        'The next items, conflicts first:',
+        ...rows.slice(0, cap).map((r) => r.line),
         ...more(n),
-        'Send each to an idle lane, or say on the ticket why not.',
+        lanes.length ? 'Send each to an idle lane, or say on the ticket why not.' : 'Start a builder for each, or say on the ticket why not.',
       ]);
     }
 
@@ -623,7 +643,7 @@ const NOTE: Record<FlowCondition, string> = {
   stall: 'Told the owner the program has stalled.',
   conflict: 'Told a unit lead which pull requests need a rebase.',
   no_pr: 'Told a unit lead which tickets in review have no pull request.',
-  idle_lanes: 'Told a lead which of its builder lanes are idle and what to give them.',
+  idle_lanes: 'Told a lead which of its lanes are idle or stale, or that no builder is alive, and what its unit waits on.',
 };
 
 const more = (n: number) => (n > FLOW_LIMITS.ticketsPerMessage ? [`- and ${n - FLOW_LIMITS.ticketsPerMessage} more`] : []);

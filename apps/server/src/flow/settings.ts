@@ -54,6 +54,7 @@ minutes(K.mergeAfterMin, 30, 'Merge after', 20, 'Minutes a ticket may wait in re
 minutes(K.qaAfterMin, 40, 'QA after', 60, 'Minutes a ticket may wait in review with no verdict and nobody working on it before a peer lead is asked to verify it.');
 minutes(K.idleAfterMin, 50, 'Idle lead', 30, 'Minutes a lead may be idle while its unit holds open work and it runs fewer workers than its cap before it is told its next tickets.');
 minutes(K.laneIdleMin, 55, 'Idle lane', 10, 'Minutes a builder worker of a lead (implementer, builder, lane-backend, lane-frontend, lane-fullstack) may sit idle while its unit has a conflict, a missing PR or open tickets before the lead is told which lanes are free and what to give them.');
+minutes(K.staleLaneMin, 57, 'Stale lane', 180, 'Minutes any worker of a lead (QA and reviewers too) may sit idle before the idle-lanes message lists it to be ended, so it stops holding the lead\'s worker cap. The watchdog never ends a session itself.');
 minutes(K.repeatMin, 60, 'Repeat', 30, 'Each lead hears about each condition at most once in this many minutes.');
 
 defineSetting({
@@ -89,6 +90,7 @@ export interface FlowThresholds {
   qaAfterMs: number;
   idleAfterMs: number;
   laneIdleMs: number;
+  staleLaneMs: number;
   repeatMs: number;
   stallMs: number;
   notifyAfterMs: number;
@@ -112,6 +114,7 @@ export function flowThresholds(r: FlowSettingsReader | null): FlowThresholds {
     qaAfterMs: read(r, K.qaAfterMin, 60, 5, 1440) * MIN,
     idleAfterMs: read(r, K.idleAfterMin, 30, 5, 1440) * MIN,
     laneIdleMs: read(r, K.laneIdleMin, 10, 5, 1440) * MIN,
+    staleLaneMs: read(r, K.staleLaneMin, 180, 5, 1440) * MIN,
     repeatMs: read(r, K.repeatMin, 30, 5, 1440) * MIN,
     stallMs: read(r, K.stallHours, 3, 1, 48) * 60 * MIN,
     notifyAfterMs: read(r, K.notifyAfterHours, 3, 1, 48) * 60 * MIN,
