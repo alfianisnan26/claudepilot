@@ -5,6 +5,9 @@
 #                                                     tests (node counts a timed-out file as "cancelled", not "fail"). steps: as GATE_STEPS.
 #                                                     A `context-pack` line (any steps) must be rc=0 too.
 #   scripts/gate-verdict.sh joblog <file>             the log of a gate Job: its last `GATE-VERDICT:` line.
+#   scripts/gate-verdict.sh steps <steps> <gate.sh>   the steps that gate.sh can run (T-1992): a gate.sh from before the web-tests step has
+#                                                     no such step, so it is dropped (one note on stderr) and that commit's gate can still be
+#                                                     green; prints the steps. Nothing is dropped when it would leave none.
 #   scripts/gate-verdict.sh failures <suite log>      every failing test with its own report (TAP's YAML block: error, expected, actual,
 #                                                     location, stack), at most 80 lines each and 600 in all; prints, no verdict.
 #   scripts/gate-verdict.sh flaky <suite log>         every failing test (not a whole file) as `<file>;<test name>`, the file from its report's
@@ -36,6 +39,18 @@ case ${1:-} in
     esac
     green
     ;;
+  steps)
+    want=${2:?steps}; gate=${3:?gate.sh}
+    if [[ ,$want, == *,web-tests,* ]] && ! grep -q 'web-tests' "$gate" 2>/dev/null; then
+      trimmed=",$want,"; trimmed=${trimmed//,web-tests,/,}; trimmed=${trimmed#,}; trimmed=${trimmed%,}
+      if [ -n "$trimmed" ]; then
+        echo "gate: web-tests skipped: this commit's scripts/gate.sh has no web-tests step (from before T-1992)" >&2
+        want=$trimmed
+      fi
+    fi
+    echo "$want"
+    exit 0
+    ;;
   joblog)
     line=$(grep -E '^GATE-VERDICT: ' "${2:?job log}" 2>/dev/null | tail -n 1)
     case $line in
@@ -59,5 +74,5 @@ case ${1:-} in
     ' "${2:?suite log}" 2>/dev/null | grep -E '^src/[^;]*\.test\.ts;.' | sort -u | head -n 10
     exit 0
     ;;
-  *) echo "usage: scripts/gate-verdict.sh logs <dir> [steps] | joblog <file> | failures <suite log> | flaky <suite log>" >&2; exit 2 ;;
+  *) echo "usage: scripts/gate-verdict.sh logs <dir> [steps] | joblog <file> | steps <steps> <gate.sh> | failures <suite log> | flaky <suite log>" >&2; exit 2 ;;
 esac
