@@ -157,6 +157,15 @@ export function labelledTicks(ticks: readonly Tick[], view: { from: number; to: 
   return ticks.filter((t) => t.left - half >= view.from && t.left + half <= view.to);
 }
 
+/**
+ * The part of the chart in view, in chart pixels, from the box's scroll offset and width and the sticky label column's width: the column
+ * covers the box's left, so what shows of the chart starts at the scroll offset and is the box less the column wide.
+ */
+export function axisView(scrollLeft: number, boxWidth: number, labelWidth: number): { from: number; to: number } {
+  const from = Math.max(0, scrollLeft);
+  return { from, to: from + Math.max(0, boxWidth - labelWidth) };
+}
+
 /** A tick's label: a clock time at minute and hour scale (the date at midnight), a date at day scale. */
 export function tickLabel(at: number, scale: Scale, locale?: string): string {
   const d = new Date(at);

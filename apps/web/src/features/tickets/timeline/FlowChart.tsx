@@ -1,6 +1,6 @@
 import { cn, Dialog, useMediaQuery } from '@isnanme/ui';
 import type { TicketFlowMarker, TicketFlowSpan, TicketTimelineRow } from '@portal/contracts';
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { Link } from 'react-router';
 import { InfoTip } from '@/components/InfoTip';
 import { Popover } from '@/components/Popover';
@@ -9,6 +9,7 @@ import { PriorityMark } from '../parts';
 import {
   axisTicks,
   chartWidth,
+  axisView,
   labelledTicks,
   durationShort,
   initials,
@@ -124,30 +125,36 @@ function SpanDetails({ picked, now, search }: { picked: Picked; now: number; sea
 
 /**
  * The axis labels (T-1988): only those whose whole label is in view, so none sits half under the sticky label column or past the box's
- * edge. It follows the box's own scroll and size, so a pan re-renders the labels only, not the rows.
+ * edge. It follows the box's own scroll and size, so a pan re-renders the labels only, not the rows. It finds the box and the label
+ * column from its own element (`closest`): its own ref is set before its layout effect runs, while the box's ref (a parent's) is not yet,
+ * which left the axis blank on the first load until the ticks changed.
  */
-function AxisLabels({ ticks, scale, box, labels }: { ticks: readonly Tick[]; scale: Scale; box: RefObject<HTMLDivElement | null>; labels: RefObject<HTMLDivElement | null> }) {
+function AxisLabels({ ticks, scale }: { ticks: readonly Tick[]; scale: Scale }) {
+  const self = useRef<HTMLDivElement>(null);
   const [view, setView] = useState<{ from: number; to: number } | null>(null);
   useLayoutEffect(() => {
-    const el = box.current;
+    const el = self.current?.closest<HTMLElement>('[data-timeline-box]');
     if (!el) return;
+    const labels = el.querySelector<HTMLElement>('[data-timeline-labels]');
     const read = () => {
-      const from = el.scrollLeft;
-      const to = from + el.clientWidth - (labels.current?.offsetWidth ?? 0);
-      setView((v) => (v && v.from === from && v.to === to ? v : { from, to }));
+      const next = axisView(el.scrollLeft, el.clientWidth, labels?.offsetWidth ?? 0);
+      setView((v) => (v && v.from === next.from && v.to === next.to ? v : next));
     };
     read();
     el.addEventListener('scroll', read, { passive: true });
+    window.addEventListener('resize', read);
     const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(read);
     ro?.observe(el);
+    if (labels) ro?.observe(labels);
     return () => {
       el.removeEventListener('scroll', read);
+      window.removeEventListener('resize', read);
       ro?.disconnect();
     };
-  }, [box, labels, ticks]);
+  }, [ticks]);
   const shown = view ? labelledTicks(ticks, view) : [];
   return (
-    <div className="relative h-7 border-b border-line" aria-hidden>
+    <div ref={self} className="relative h-7 border-b border-line" aria-hidden data-timeline-axis="">
       {shown.map((t) => (
         <span key={t.at} className="absolute top-1.5 -translate-x-1/2 text-[10.5px] whitespace-nowrap text-muted tabular-nums" style={{ left: t.left }}>
           {tickLabel(t.at, scale)}
@@ -212,7 +219,6 @@ export function FlowChart({
 }) {
   const roomy = useMediaQuery('(min-width: 640px)');
   const box = useRef<HTMLDivElement>(null);
-  const labelCol = useRef<HTMLDivElement>(null);
   const anchor = useRef<HTMLElement | null>(null);
   const [picked, setPicked] = useState<{ id: string; index: number } | null>(null);
   const width = chartWidth(range, scale);
@@ -277,13 +283,14 @@ export function FlowChart({
 
       <div
         ref={box}
+        data-timeline-box=""
         className="relative min-w-0 max-w-full overflow-x-auto overscroll-x-contain rounded-xl border border-line bg-surface"
         role="group"
         aria-label="Timeline chart, scrolls sideways"
         onKeyDown={onKey}
       >
         <div className="flex [--label-w:7.5rem] medium:[--label-w:14rem]" style={{ width: `calc(${width}px + var(--label-w))` }} data-timeline="">
-          <div ref={labelCol} className={cn('sticky left-0 z-20 shrink-0 border-r border-line bg-surface', LABEL)}>
+          <div data-timeline-labels="" className={cn('sticky left-0 z-20 shrink-0 border-r border-line bg-surface', LABEL)}>
             <div className="h-7 border-b border-line" />
             {rows.map((r) => (
               <Link
@@ -307,7 +314,7 @@ export function FlowChart({
           </div>
 
           <div className="relative shrink-0" style={{ width }}>
-            <AxisLabels ticks={ticks} scale={scale} box={box} labels={labelCol} />
+            <AxisLabels ticks={ticks} scale={scale} />
             {/* One layer for the grid, the shading and the now line under every row, not a copy per row. */}
             <div className="pointer-events-none absolute inset-x-0 top-7 bottom-0" aria-hidden>
               {shade.map((s, i) => (

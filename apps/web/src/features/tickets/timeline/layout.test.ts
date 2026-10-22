@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { TICKET_TIMELINE_LIMITS, type TicketFlowSpan, type TicketFlowState } from '@portal/contracts';
-import { axisTicks, chartWidth, durationShort, initials, LABEL_HALF_PX, labelledTicks, layoutBars, LEGEND, MIN_BAR_PX, moveFocus, patternStyle, POINT_PX, pxPerMs, shading, STATE_LABEL, STATE_LOOK, TICK_GAP_PX, tickStep, timeLeft, UNIT_MS, UNIT_PX, windowFor, type Scale } from './layout';
+import { axisTicks, axisView, chartWidth, durationShort, initials, LABEL_HALF_PX, labelledTicks, layoutBars, LEGEND, MIN_BAR_PX, moveFocus, patternStyle, POINT_PX, pxPerMs, shading, STATE_LABEL, STATE_LOOK, TICK_GAP_PX, tickStep, timeLeft, UNIT_MS, UNIT_PX, windowFor, type Scale } from './layout';
 
 const T0 = Date.parse('2026-10-18T00:00:00.000Z');
 const MIN = 60_000;
@@ -87,6 +87,26 @@ test('T-1988: only labels wholly in view are drawn: none half under the sticky l
   assert.deepEqual(lefts(labelledTicks(ticks, { from: 50, to: 250 })), [120, 180]);
   assert.deepEqual(labelledTicks(ticks, { from: 0, to: 0 }), [], 'nothing in view, no labels');
   for (const t of labelledTicks(ticks, { from: 25, to: 333 })) assert.ok(t.left - LABEL_HALF_PX >= 25 && t.left + LABEL_HALF_PX <= 333);
+});
+
+test('T-1988: the axis has labels on first load at 390 and 1280 px, at the left end and opened at now, at every scale', () => {
+  // The box's width less the label column (7.5rem on a phone, 14rem from 600 px), with the chart at scroll 0 and scrolled to its end.
+  for (const [box, column] of [
+    [390 - 2, 120],
+    [1280 - 2 - 256, 224],
+  ] as const) {
+    for (const s of ['minute', 'hour', 'day'] as Scale[]) {
+      const range = windowFor(s, T0);
+      const ticks = axisTicks(range, s);
+      const end = Math.max(0, chartWidth(range, s) - (box - column));
+      for (const scroll of [0, end]) {
+        const view = axisView(scroll, box, column);
+        assert.equal(view.to - view.from, box - column);
+        assert.ok(labelledTicks(ticks, view).length >= 3, `${s} at ${box} px, scroll ${scroll}`);
+      }
+    }
+  }
+  assert.deepEqual(axisView(-5, 100, 120), { from: 0, to: 0 }, 'a box narrower than the column shows no chart');
 });
 
 test('the window is the scale’s default length (the API’s) up to now, its end on the next whole minute', () => {
