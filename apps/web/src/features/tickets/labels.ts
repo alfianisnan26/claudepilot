@@ -3,6 +3,8 @@ import {
   TICKET_PRIORITIES,
   TICKET_TYPES,
   type TicketFilter,
+  type TicketMergeState,
+  type TicketMergeStatus,
   type TicketOrphanWhy,
   type TicketPriority,
   type TicketSessionState,
@@ -145,4 +147,20 @@ export function verdictBatchOf(data: Record<string, unknown> | null | undefined)
   if (!b || typeof b !== 'object') return null;
   const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : null);
   return { jobId: str(b.jobId), branch: str(b.branch), note: str(b.note) };
+}
+
+/** T-2014: a merge state in a word or two, for the PR chip. */
+export const MERGE_STATE_LABEL: Record<TicketMergeState, string> = {
+  ready: 'ready',
+  merged: 'merged',
+  conflict: 'conflict',
+  waiting: 'waiting',
+  no_pr: 'no PR',
+  failed: 'failed',
+};
+
+/** T-2014: the PR chip's text, "api#12 · ready": the repo's last part (the whole name is in the chip's title), no number without a PR. */
+export function mergeChipText(m: Pick<TicketMergeStatus, 'repo' | 'pr' | 'state'>): string {
+  const name = m.repo.split('/').pop() || m.repo;
+  return `${name}${m.pr ? `#${m.pr}` : ''} · ${MERGE_STATE_LABEL[m.state]}`;
 }

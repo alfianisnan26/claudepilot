@@ -10,11 +10,13 @@ import { FakeSessions, UI } from './testkit.js';
 const TAGS = String.fromCodePoint(0xe0049, 0xe0067, 0xe006e);
 
 /** The endpoint, the ticket tools and the service around a fake of the chat side. */
-async function rig(opts: { limits?: import('../portalmcp/limits.js').PortalLimits; leadPeerGroups?: () => string } = {}) {
+async function rig(
+  opts: { limits?: import('../portalmcp/limits.js').PortalLimits; leadPeerGroups?: () => string; mergeGates?: () => { tag: string; gates: string[] }[] } = {},
+) {
   const registry = new ToolRegistry();
   const h = await portalMcpHarness({ registry, limits: opts.limits });
   const sessions = new FakeSessions();
-  const tickets = new Tickets(h.store, sessions, { leadPeerGroups: opts.leadPeerGroups });
+  const tickets = new Tickets(h.store, sessions, { leadPeerGroups: opts.leadPeerGroups, mergeGates: opts.mergeGates });
   tickets.start();
   registerTicketTools(tickets, registry);
   /** A running chat session in a workspace, and the per-session token minted for it. */
@@ -36,7 +38,7 @@ test('an agent works the queue over MCP: claim, comment, block, close; ticket te
     const { client, close } = await r.h.client(a.secret, 'modern');
     try {
       const names = (await client.listTools()).tools.map((t) => t.name).filter((n) => n.startsWith('ticket_')).sort();
-      assert.deepEqual(names, ['ticket_adopt', 'ticket_attach', 'ticket_attachment_get', 'ticket_attachment_remove', 'ticket_buckets', 'ticket_claim_next', 'ticket_close', 'ticket_comment', 'ticket_create', 'ticket_get', 'ticket_list', 'ticket_timeline', 'ticket_update', 'ticket_verdict', 'ticket_verdict_batch'], 'no start_session for agents');
+      assert.deepEqual(names, ['ticket_adopt', 'ticket_attach', 'ticket_attachment_get', 'ticket_attachment_remove', 'ticket_buckets', 'ticket_claim_next', 'ticket_close', 'ticket_comment', 'ticket_create', 'ticket_get', 'ticket_list', 'ticket_merge_status', 'ticket_timeline', 'ticket_update', 'ticket_verdict', 'ticket_verdict_batch'], 'no start_session for agents');
       const call = async (name: string, args: Record<string, unknown> = {}) => (await client.callTool({ name, arguments: args })) as { isError?: boolean; structuredContent?: any; content: { text: string }[] };
 
       const listed = (await call('ticket_list', { assignee: 'unassigned' })).structuredContent;
@@ -970,6 +972,74 @@ test('ticket_timeline: a big page is asked again smaller (never cut mid-page), a
     } finally {
       await close();
     }
+  } finally {
+    r.done();
+  }
+});
+
+test('ticket_merge_status (T-2014, FR36e): the merge-gate lead and a worker it started record; another lead, a worker\'s worker, any other agent and a ticket outside the program are refused; a hidden ticket is the same not found; read gives the latest per repo', async () => {
+  const GATE = 'eeeeeeee-0101', GATE2 = 'eeeeeeee-0102', OTHER = 'eeeeeeee-0201', GW = 'eeeeeeee-0110', GWW = 'eeeeeeee-0111', OW = 'eeeeeeee-0210';
+  let gates = [{ tag: 'konfersi-migration', gates: [GATE] }];
+  const r = await rig({ mergeGates: () => gates });
+  const audits: { kind: string; detail?: Record<string, unknown> }[] = [];
+  r.tickets.onAudit = (e) => void audits.push(e);
+  try {
+    const ws = 'docker/api';
+    const gate = await r.agent(ws, GATE, 'Konfersi: general (merge gate)');
+    const other = await r.agent(ws, OTHER, 'Konfersi: Business');
+    const gw = await r.agent(ws, GW, 'gate merge worker');
+    const gww = await r.agent(ws, GWW, 'worker of the merge worker');
+    const ow = await r.agent(ws, OW, 'Business worker');
+    const loner = await r.agent(ws, 'eeeeeeee-0301', 'any other session');
+    const patch = (id: string, over: Record<string, unknown>) => r.sessions.sessions.set(id, { ...r.sessions.sessions.get(id)!, ...over });
+    patch(GW, { parentId: GATE });
+    patch(GWW, { parentId: GW });
+    patch(OW, { parentId: OTHER });
+    const inProgram = r.tickets.create(UI, { summary: 'a migration ticket', workspaceId: ws, tags: ['konfersi-migration'] }).id;
+    const outside = r.tickets.create(UI, { summary: 'not in the program', workspaceId: ws, tags: ['frontend'] }).id;
+    const hidden = r.tickets.create(UI, { summary: 'another workspace', workspaceId: 'docker/web', tags: ['konfersi-migration'] }).id;
+    const head = (c: string) => c.repeat(40);
+    const rec = async (t: { secret: string }, id: string, over: Record<string, unknown> = {}) =>
+      (await r.h.call(t.secret, 'ticket_merge_status', { id, repo: 'konfersi/api', pr: 7, pr_head: head('a'), state: 'ready', ...over })).result?.structuredContent;
+    const code = async (t: { secret: string }, id: string, over: Record<string, unknown> = {}) => (await rec(t, id, over))?.error?.code;
+
+    // Refused first: nothing below is stored.
+    assert.equal(await code(other, inProgram), 'FORBIDDEN', 'another lead');
+    assert.equal(await code(ow, inProgram), 'FORBIDDEN', 'another lead\'s worker');
+    assert.equal(await code(gww, inProgram), 'FORBIDDEN', 'a worker\'s worker of the gate');
+    assert.equal(await code(loner, inProgram), 'FORBIDDEN', 'any other agent');
+    assert.equal(await code(gate, outside), 'FORBIDDEN', 'a ticket without the program\'s tag');
+    assert.equal(await code(gate, hidden), 'NOT_FOUND', 'a ticket it may not see is the same not found');
+    assert.equal(await code(loner, hidden), 'NOT_FOUND', 'for anyone');
+    assert.equal(await code(gate, inProgram, { pr_head: 'abc123' }), 'VALIDATION_FAILED', 'a short sha');
+    assert.equal(await code(gate, inProgram, { pr_head: undefined }), 'VALIDATION_FAILED', 'ready without its head');
+    assert.equal(await code(gate, inProgram, { repo: '../x y' }), 'VALIDATION_FAILED');
+    assert.deepEqual(r.tickets.mergeStatus(UI, inProgram), []);
+    assert.equal(audits.filter((a) => a.kind === 'ticket.merge_status').length, 0);
+    assert.equal(audits.filter((a) => a.kind === 'ticket.merge_status_refused').length, 5, 'each refusal by rule is audited');
+
+    // Allowed: the gate lead and a worker it started.
+    assert.equal((await rec(gate, inProgram, { state: 'waiting', pr_head: head('A') })).merge.pr_head, head('a'), 'stored lowercase');
+    assert.equal((await rec(gw, inProgram, { state: 'ready' })).merge.state, 'ready');
+    assert.equal((await rec(gate, inProgram, { repo: 'konfersi/web', pr: undefined, pr_head: undefined, state: 'no_pr', reason: 'not opened yet' })).merge.pr, null);
+    assert.deepEqual(
+      audits.filter((a) => a.kind === 'ticket.merge_status').map((a) => [a.detail?.why, a.detail?.sessionId, a.detail?.state]),
+      [['gate', GATE, 'waiting'], ['gate_worker', GW, 'ready'], ['gate', GATE, 'no_pr']],
+    );
+    const read = r.out(await r.h.call(loner.secret, 'ticket_merge_status', { id: inProgram }));
+    assert.deepEqual(read.merge.map((m: any) => [m.repo, m.pr, m.state]), [['konfersi/web', null, 'no_pr'], ['konfersi/api', 7, 'ready']], 'the latest per repo, newest first; any agent that sees it may read');
+    assert.deepEqual(read.merge[0].reason, { untrusted_text: 'not opened yet', source: 'agent' });
+    assert.deepEqual(r.tickets.get(UI, inProgram).merge?.map((m) => m.state), ['no_pr', 'ready'], 'the ticket page gets it with the detail');
+
+    // A continuation of the gate is the gate; a gate the owner moved is no longer one.
+    const cont = await r.agent(ws, GATE2, 'Konfersi: general, continued');
+    patch(GATE2, { continuedFrom: GATE });
+    assert.equal((await rec(cont, inProgram, { state: 'merged' })).merge.state, 'merged');
+    gates = [{ tag: 'konfersi-migration', gates: [OTHER] }];
+    assert.equal(await code(gate, inProgram), 'FORBIDDEN');
+    assert.equal((await rec(other, inProgram, { state: 'merged' })).merge.state, 'merged');
+    gates = [];
+    assert.equal(await code(other, inProgram), 'FORBIDDEN', 'no program, nobody');
   } finally {
     r.done();
   }

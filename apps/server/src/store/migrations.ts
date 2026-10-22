@@ -3762,6 +3762,31 @@ export const MIGRATIONS: Migration[] = [
       db.exec(`ALTER TABLE ticket_verdicts ADD COLUMN batch TEXT CHECK (batch IS NULL OR json_valid(batch));`);
     },
   },
+  {
+    version: 796,
+    name: 'tickets: the merge gate records a ticket PR, its head and its merge state (T-2014)',
+    up(db) {
+      // T-2014 (tickets PRD FR36e): `ticket_merge_status` writes what the merge gate knows of a ticket's pull request per repo; the flow
+      // watchdog judges the QA PASS on `pr_head` and skips what is merged. Rows are never edited: the newest row of a repo is its state.
+      // `pr` and `pr_head` are null only for `no_pr`. Overflow of the tickets block (40-49 full; 785-787, 794 and 795 used, 788 is T-975's).
+      db.exec(`
+        CREATE TABLE ticket_merge_status (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          ticket_number INTEGER NOT NULL REFERENCES tickets (number) ON DELETE CASCADE,
+          repo TEXT NOT NULL CHECK (length(repo) BETWEEN 1 AND 120),
+          pr INTEGER CHECK (pr IS NULL OR pr > 0),
+          pr_head TEXT CHECK (pr_head IS NULL OR length(pr_head) = 40),
+          state TEXT NOT NULL CHECK (state IN ('ready', 'merged', 'conflict', 'waiting', 'no_pr', 'failed')),
+          reason TEXT,
+          actor TEXT NOT NULL,
+          actor_label TEXT NOT NULL,
+          at TEXT NOT NULL,
+          CHECK (state = 'no_pr' OR (pr IS NOT NULL AND pr_head IS NOT NULL))
+        ) STRICT;
+        CREATE INDEX ticket_merge_status_ticket ON ticket_merge_status (ticket_number, repo, id);
+      `);
+    },
+  },
 ];
 
 /**

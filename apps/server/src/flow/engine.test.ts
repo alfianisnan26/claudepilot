@@ -33,8 +33,8 @@ test('(a) a QA PASS on the head not merged after 20 min: the merge-gate lead get
   assert.equal(m.priority, 'later');
   assert.equal(m.actor, FLOW_ACTOR);
   assert.ok(m.text.startsWith(FLOW_PREFIX));
-  assert.match(m.text, new RegExp(`- T-12 \\(KONF-12\\) QA PASS on ${sha('a')} \\(newest seen\\)`));
-  assert.match(m.text, /Check that commit is still the branch head/);
+  assert.match(m.text, new RegExp(`- T-12 \\(KONF-12\\) QA PASS on ${sha('a')} \\(newest seen, no PR status\\)`), 'T-2014: no PR recorded: the old heuristic, labelled');
+  assert.match(m.text, /check it is the PR head and record the PR/);
   assert.doesNotMatch(m.text, /T-13/);
   assert.doesNotMatch(m.text, /CANARY/); // no ticket or session text in a message
   assert.equal(r.engine.snapshot().programs[0]!.counts.merge, 1);
@@ -516,4 +516,88 @@ test('(b) T-1987: a ticket already in a live batch (a batch branch named after i
   assert.match(text, /T-51 /);
   assert.match(text, /T-52 /);
   assert.equal(r.engine.snapshot().programs[0]!.counts.qa, 2);
+});
+
+/* ---------- T-2014: the merge gate's PR record is the head ---------- */
+
+test('T-2014: with a PR recorded, the QA PASS is judged on its pr_head, not on the newest commit seen', async () => {
+  const r = rig();
+  crew(r);
+  // T-12: QA passed the PR head (a); the newest commit seen is a batch head (b) nobody passed. Counted, on the PR head.
+  r.tickets.add(12, { holder: 'wb' });
+  r.tickets.verdict('T-12', { role: 'qa', verdict: 'pass', commit: sha('a'), at: ago(r, 40) });
+  r.tickets.checksOf.set('T-12', [{ name: 'gate', state: 'passed', runId: null, commit: sha('b'), link: null, updatedAt: ago(r, 30) }]);
+  r.tickets.merged('T-12', { repo: 'konfersi/api', pr: 7, prHead: sha('a'), state: 'ready', reason: null });
+  // T-13: QA passed the newest commit seen (c), a batch head, but the PR head is (d): not counted (the old heuristic would have).
+  r.tickets.add(13, { holder: 'wb', updatedAt: ago(r, 5) });
+  r.tickets.verdict('T-13', { role: 'qa', verdict: 'pass', commit: sha('c'), at: ago(r, 40) });
+  r.tickets.merged('T-13', { repo: 'konfersi/api', pr: 8, prHead: sha('d'), state: 'waiting', reason: null });
+  await r.engine.round();
+  const m = r.chat.sent.find((x) => x.id === LEAD_A)!;
+  assert.match(m.text, new RegExp(`- T-12 \\(KONF-12\\) konfersi/api#7 QA PASS on the PR head ${sha('a')} \\(ready\\)`));
+  assert.doesNotMatch(m.text, /T-13/);
+  assert.doesNotMatch(m.text, new RegExp(sha('b')));
+  assert.equal(r.engine.snapshot().programs[0]!.counts.merge, 1);
+});
+
+test('T-2014: with a PR recorded and any review verdict on the ticket, a review PASS on the PR head is needed too', async () => {
+  const r = rig();
+  crew(r);
+  r.tickets.add(12, { holder: 'wb', updatedAt: ago(r, 5) });
+  r.tickets.verdict('T-12', { role: 'review', verdict: 'pass', commit: sha('e'), at: ago(r, 90) }); // reviewed, on an older commit
+  r.tickets.verdict('T-12', { role: 'qa', verdict: 'pass', commit: sha('a'), at: ago(r, 40) });
+  r.tickets.merged('T-12', { repo: 'konfersi/api', pr: 7, prHead: sha('a'), state: 'ready', reason: null });
+  await r.engine.round();
+  assert.equal(r.engine.snapshot().programs[0]!.counts.merge, 0, 'QA PASS alone is not enough');
+  r.tickets.verdict('T-12', { role: 'review', verdict: 'pass', commit: sha('a'), at: ago(r, 25) });
+  r.clock.advance(31);
+  await r.engine.round();
+  assert.equal(r.engine.snapshot().programs[0]!.counts.merge, 1);
+  assert.match(r.chat.sent.find((x) => x.id === LEAD_A)!.text, /konfersi\/api#7 QA PASS on the PR head/);
+});
+
+test('T-2014: a ticket recorded merged (in every repo it was recorded in) and a closed one are not counted', async () => {
+  const r = rig();
+  crew(r);
+  r.tickets.add(12, { holder: 'wb' });
+  r.tickets.verdict('T-12', { role: 'qa', verdict: 'pass', commit: sha('a'), at: ago(r, 40) });
+  r.tickets.merged('T-12', { repo: 'konfersi/api', pr: 7, prHead: sha('a'), state: 'merged', reason: null });
+  r.tickets.add(13, { holder: 'wb', status: 'done', closedAt: ago(r, 10) });
+  r.tickets.verdict('T-13', { role: 'qa', verdict: 'pass', commit: sha('b'), at: ago(r, 40) });
+  r.tickets.merged('T-13', { repo: 'konfersi/api', pr: 8, prHead: sha('b'), state: 'ready', reason: null });
+  r.tickets.add(14, { holder: 'wb', status: 'wont_do', closedAt: ago(r, 10) });
+  r.tickets.verdict('T-14', { role: 'qa', verdict: 'pass', commit: sha('c'), at: ago(r, 40) });
+  // T-15: merged in one repo, still ready in another: counted on the open one.
+  r.tickets.add(15, { holder: 'wb' });
+  r.tickets.verdict('T-15', { role: 'qa', verdict: 'pass', commit: sha('d'), at: ago(r, 40) });
+  r.tickets.merged('T-15', { repo: 'konfersi/web', pr: 2, prHead: sha('d'), state: 'ready', reason: null, min: 50 });
+  r.tickets.merged('T-15', { repo: 'konfersi/api', pr: 9, prHead: sha('f'), state: 'merged', reason: null, min: 20 });
+  await r.engine.round();
+  const m = r.chat.sent.find((x) => x.id === LEAD_A)!;
+  assert.doesNotMatch(m.text, /T-1[234]\b/);
+  assert.match(m.text, /T-15 \(KONF-15\) konfersi\/web#2 QA PASS on the PR head/);
+  assert.equal(r.engine.snapshot().programs[0]!.counts.merge, 1);
+});
+
+test('T-2014: conflict and no_pr are listed apart and go to the ticket\'s unit lead: rebase it, open the PR; not before the merge threshold', async () => {
+  const r = rig();
+  crew(r);
+  r.tickets.add(12, { holder: 'wb' });
+  r.tickets.verdict('T-12', { role: 'qa', verdict: 'pass', commit: sha('a'), at: ago(r, 40) });
+  r.tickets.merged('T-12', { repo: 'konfersi/api', pr: 7, prHead: sha('a'), state: 'conflict', reason: null });
+  r.tickets.add(13, { holder: 'wb' });
+  r.tickets.verdict('T-13', { role: 'qa', verdict: 'pass', commit: sha('b'), at: ago(r, 40) });
+  r.tickets.merged('T-13', { repo: 'konfersi/api', pr: null, prHead: null, state: 'no_pr', reason: null });
+  r.tickets.add(14, { holder: 'wc' });
+  r.tickets.merged('T-14', { repo: 'konfersi/api', pr: null, prHead: null, state: 'no_pr', reason: null, min: 5 }); // too fresh
+  await r.engine.round();
+  assert.equal(r.chat.sent.filter((x) => x.id === LEAD_A).length, 0, 'the merge gate is not told about them');
+  const toB = r.chat.sent.filter((x) => x.id === LEAD_B).map((x) => x.text);
+  assert.equal(toB.length, 2, 'one message per condition to the unit lead');
+  assert.match(toB.find((t) => /conflict/.test(t))!, new RegExp(`for a rebase[\\s\\S]*- T-12 \\(KONF-12\\) konfersi/api#7 head ${sha('a')}`));
+  assert.match(toB.find((t) => /no pull request/.test(t))!, /Open the PR[\s\S]*- T-13 \(KONF-13\) konfersi\/api$/m);
+  assert.equal(r.chat.sent.filter((x) => x.id === LEAD_C).length, 0);
+  const counts = r.engine.snapshot().programs[0]!.counts;
+  assert.deepEqual([counts.merge, counts.conflict, counts.no_pr], [0, 1, 1]);
+  assert.deepEqual(r.engine.snapshot().actions.filter((a) => a.kind === 'told').map((a) => a.condition).sort(), ['conflict', 'no_pr']);
 });

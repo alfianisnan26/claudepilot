@@ -1,6 +1,6 @@
 // The flow watchdog (T-1966, docs/prd/flow-watchdog.md): a deterministic loop inside the portal, no model, that keeps a program's work
 // moving when the lead sessions that run it only act when messaged. Every few minutes it counts, per configured program (a ticket tag and a
-// group of peer leads), the five stalls below and messages the lead that can clear each, rate limited and audited; it tells the owner only
+// group of peer leads), the stalls below and messages the lead that can clear each, rate limited and audited; it tells the owner only
 // when nothing was done for hours after it nudged.
 
 export const FLOW_API = {
@@ -13,12 +13,13 @@ export const FLOW_ACTOR = 'portal:flow';
 export const FLOW_PREFIX = 'FLOW WATCHDOG:';
 
 /**
- * The five conditions. `merge`: in review with a QA PASS on the head and not merged for the merge threshold. `qa`: in review with no
- * verdict on the head and nobody working on it for the QA threshold. `idle`: a lead idle for the idle threshold while its unit holds open
- * work and it runs fewer workers than its cap. `bypass`: a lead that was in Bypass is not now (reported only). `stall`: nothing done in the
- * stall window while tickets wait in review.
+ * The conditions. `merge`: in review with a QA PASS on the head (the PR head the merge gate recorded, T-2014, else the newest commit seen)
+ * and not merged for the merge threshold. `qa`: in review with no verdict on the head and nobody working on it for the QA threshold. `idle`:
+ * a lead idle for the idle threshold while its unit holds open work and it runs fewer workers than its cap. `bypass`: a lead that was in
+ * Bypass is not now (reported only). `stall`: nothing done in the stall window while tickets wait in review. `conflict` and `no_pr`
+ * (T-2014): the merge gate recorded that the ticket's PR needs a rebase, or that it has no PR, for the merge threshold: its unit lead is told.
  */
-export const FLOW_CONDITIONS = ['merge', 'qa', 'idle', 'bypass', 'stall'] as const;
+export const FLOW_CONDITIONS = ['merge', 'qa', 'idle', 'bypass', 'stall', 'conflict', 'no_pr'] as const;
 export type FlowCondition = (typeof FLOW_CONDITIONS)[number];
 
 /** What the watchdog did: told a lead, reported (no safe action), told the owner, or could not (no live session, a refused send). */

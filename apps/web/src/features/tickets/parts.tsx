@@ -6,15 +6,17 @@ import {
   type TicketCheck,
   type TicketCheckState,
   type TicketItem,
+  type TicketMergeState,
+  type TicketMergeStatus,
   type TicketPriority,
   type TicketStatus,
   type TicketType,
   type TicketVerdictBatch,
 } from '@portal/contracts';
-import { Ban, Bot, ChevronDown, ChevronsUp, ChevronUp, CircleCheck, CircleX, Clock, GitBranch, Layers, Loader2, Minus, Play, User, type LucideIcon } from 'lucide-react';
+import { Ban, Bot, ChevronDown, ChevronsUp, ChevronUp, CircleCheck, CircleX, Clock, GitBranch, GitMerge, GitPullRequest, Layers, Loader2, Minus, Play, User, type LucideIcon } from 'lucide-react';
 import { Link } from 'react-router';
 import { timeAgo } from '@/lib/format';
-import { ORPHAN_BADGE, PRIORITY_TONE, SESSION_STATE_LABEL, STATUS_TONE, TYPE_TONE, ageShort } from './labels';
+import { MERGE_STATE_LABEL, ORPHAN_BADGE, PRIORITY_TONE, SESSION_STATE_LABEL, STATUS_TONE, TYPE_TONE, ageShort, mergeChipText } from './labels';
 
 /** Shape and colour, not colour alone (tickets PRD §13): chevrons up for urgent and high, a dash for normal, down for low. */
 export function PriorityMark({ priority, className }: { priority: TicketPriority; className?: string }) {
@@ -118,6 +120,39 @@ export function VerdictBatchChips({ batch }: { batch: TicketVerdictBatch }) {
         </span>
       )}
     </span>
+  );
+}
+
+const MERGE_LOOK: Record<TicketMergeState, { Icon: LucideIcon; tone: string }> = {
+  ready: { Icon: GitPullRequest, tone: 'text-accent' },
+  merged: { Icon: GitMerge, tone: 'text-accent' },
+  conflict: { Icon: GitPullRequest, tone: 'text-danger' },
+  waiting: { Icon: GitPullRequest, tone: 'text-muted' },
+  no_pr: { Icon: GitPullRequest, tone: 'text-gold' },
+  failed: { Icon: GitPullRequest, tone: 'text-danger' },
+};
+
+/** T-2014: the merge gate's word per repo, "api#12 · ready"; the whole repo, the head and when in the title. */
+export function MergeChips({ merge }: { merge: TicketMergeStatus[] }) {
+  if (!merge.length) return null;
+  return (
+    <ul className="flex flex-wrap gap-1.5" aria-label="Pull requests">
+      {merge.map((m) => {
+        const { Icon, tone } = MERGE_LOOK[m.state];
+        const title = `${m.repo}${m.pr ? `#${m.pr}` : ''}: ${MERGE_STATE_LABEL[m.state]}${m.prHead ? ` · ${m.prHead.slice(0, 7)}` : ''} · ${timeAgo(m.at)}${m.reason ? ` · ${m.reason}` : ''}`;
+        return (
+          <li key={m.repo} className="min-w-0">
+            <span
+              className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-line bg-surface px-2.5 py-1 text-[12.5px] font-semibold break-all text-ink-soft"
+              title={title}
+            >
+              <Icon className={cn('size-3.5 shrink-0', tone)} aria-hidden="true" />
+              {mergeChipText(m)}
+            </span>
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 

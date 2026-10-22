@@ -59,6 +59,9 @@ import {
   TICKET_LIST_TEXT,
   TICKET_BATCH_BRANCH,
   TICKET_VERDICT_BATCH_LIMITS,
+  TICKET_MERGE_LIMITS,
+  TICKET_MERGE_STATES,
+  type TicketMergeStatus,
   type TicketVerdictBatch,
   type TicketOrphan,
   type TicketOrphanWhy,
@@ -310,6 +313,11 @@ export interface TicketsOptions {
   agentAssignUserTags?: () => string;
   /** FR9g (D-85): `tickets.leadPeerGroups`, the owner's list of peer lead sessions. */
   leadPeerGroups?: () => unknown;
+  /**
+   * FR36e (T-2014): the merge gates of the flow programs that are on: per program tag, the configured lead ids that gate its merges
+   * (flow/programs.ts `mergeGatesOf`). Absent or empty: nobody may record a merge status.
+   */
+  mergeGates?: () => { tag: string; gates: string[] }[];
 }
 
 /** One move the orphan sweep made (T-270 layer 3): where the ticket went and why. `to` null: back in the agents' queue. */
@@ -380,6 +388,7 @@ export class Tickets {
   readonly #agentOpenPerWorkspace: () => number;
   readonly #agentAssignUserTags: () => string;
   readonly #leadPeerGroups: () => unknown;
+  readonly #mergeGates: () => { tag: string; gates: string[] }[];
   #orphans: { lastRunAt: string | null; dead: Record<string, string> } | null = null;
 
   constructor(
@@ -394,6 +403,7 @@ export class Tickets {
     this.#agentOpenPerWorkspace = opts.agentOpenPerWorkspace ?? (() => OPEN_PER_WORKSPACE);
     this.#agentAssignUserTags = opts.agentAssignUserTags ?? (() => AGENT_ASSIGN_USER_TAGS_DEFAULT);
     this.#leadPeerGroups = opts.leadPeerGroups ?? (() => '');
+    this.#mergeGates = opts.mergeGates ?? (() => []);
   }
 
   /* ---------- The workspace column (T-42 slice 3): written as the stable id, read as the key, matched in either form ---------- */
@@ -1335,6 +1345,7 @@ export class Tickets {
       sessions,
       checks: this.#checks(row.number),
       attachments: this.#attachments(row.number),
+      merge: this.#mergeStatusOf(row.number),
     };
   }
 
@@ -2743,6 +2754,107 @@ export class Tickets {
     const sha = normalizeSha(head);
     if (!sha) throw invalid('commit', VERDICT_REFUSAL_TEXT.bad_commit);
     return evaluateVerdicts(this.verdicts(caller, id), sha, need);
+  }
+
+  /* ---------- Merge status (FR36e, T-2014) ---------- */
+
+  /**
+   * Why the agent session `s` may record a merge status on `row`, or null: `gate` when it is the merge-gate lead of a flow program whose tag
+   * the ticket carries (the configured id, a session it continues or one that continues it, top-level), `gate_worker` when it is a live
+   * worker that lead started directly. Anything else (another lead, a peer, a worker's worker, a person's token) is refused.
+   */
+  #mergeGateWhy(s: TicketSessionInfo, row: Row): 'gate' | 'gate_worker' | null {
+    if (s.state === 'ended' || s.archivedAt) return null;
+    const tags = this.#tagsOf([row.number]).get(row.number) ?? [];
+    let programs: { tag: string; gates: string[] }[];
+    try {
+      programs = this.#mergeGates();
+    } catch {
+      return null; // unreadable: nobody (fail closed)
+    }
+    const lineOf = (id: string): string[] => {
+      const g = this.sessions.get(id);
+      return g ? this.#rootLineage(g) : [id];
+    };
+    for (const p of programs) {
+      if (!tags.includes(p.tag)) continue;
+      for (const gate of p.gates) {
+        const line = lineOf(gate);
+        if (!s.parentId && line.includes(s.id)) return 'gate';
+        if (s.parentId && line.includes(s.parentId)) return 'gate_worker';
+      }
+    }
+    return null;
+  }
+
+  /**
+   * FR36e (T-2014): the merge gate records what it knows of a ticket's pull request in one repo (`ticket_merge_status`). Only an agent's
+   * own token, and only the merge-gate lead of a flow program the ticket belongs to or a worker it started ({@link #mergeGateWhy}); a ticket
+   * the caller cannot see is the same not found. A row is added, never edited; audited `ticket.merge_status` (or `_refused`).
+   */
+  recordMergeStatus(
+    caller: Caller,
+    id: string,
+    req: { repo?: unknown; pr?: unknown; prHead?: unknown; state?: unknown; reason?: unknown },
+    opts: { sessionId?: string | null } = {},
+  ): TicketMergeStatus {
+    this.#assertWrites(caller);
+    const row = this.#need(caller, id);
+    const state = oneOf(req.state, TICKET_MERGE_STATES, 'state');
+    const repo = cleanLine(req.repo, 'repo', TICKET_MERGE_LIMITS.repo, { required: true });
+    if (!/^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+){0,3}$/.test(repo)) throw invalid('repo', 'A repo is owner/name.');
+    const pr = req.pr === undefined || req.pr === null ? null : req.pr;
+    if (pr !== null && !(typeof pr === 'number' && Number.isInteger(pr) && pr > 0 && pr < TICKET_MERGE_LIMITS.pr)) throw invalid('pr', 'A pull request number.');
+    const prHead = req.prHead === undefined || req.prHead === null ? null : normalizeSha(req.prHead);
+    if (req.prHead !== undefined && req.prHead !== null && !prHead) throw invalid('pr_head', VERDICT_REFUSAL_TEXT.bad_commit);
+    if (state !== 'no_pr' && (pr === null || prHead === null)) throw invalid(pr === null ? 'pr' : 'pr_head', 'Every state but no_pr names the pull request and its head.');
+    const reason = req.reason === undefined || req.reason === null ? null : cleanLine(req.reason, 'reason', TICKET_MERGE_LIMITS.reason) || null;
+    const w = this.#writer(caller, opts.sessionId);
+    const ticketId = ticketIdOf(row.number);
+    const why = caller.kind === 'agent' && w.session ? this.#mergeGateWhy(w.session, row) : null;
+    if (!why) {
+      this.onAudit?.({
+        kind: 'ticket.merge_status_refused',
+        actor: w.actor,
+        actorLabel: null,
+        userId: FOUNDING_USER_ID,
+        subject: `ticket:${ticketId}`,
+        detail: { ticketId, repo, state, sessionId: w.session?.id ?? null },
+      });
+      throw new AppError('FORBIDDEN', 'Only the merge-gate lead of a flow program this ticket belongs to, or a worker it started, records a merge status.');
+    }
+    const at = this.#now().toISOString();
+    const stored = this.#tx(() => {
+      this.#db
+        .prepare('INSERT INTO ticket_merge_status (ticket_number, repo, pr, pr_head, state, reason, actor, actor_label, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+        .run(row.number, repo, pr as number | null, prHead, state, reason, w.actor, w.label, at);
+      return { repo, pr: pr as number | null, prHead, state, reason, actor: w.actor, at } satisfies TicketMergeStatus;
+    });
+    this.onAudit?.({
+      kind: 'ticket.merge_status',
+      actor: w.actor,
+      actorLabel: null,
+      userId: FOUNDING_USER_ID,
+      subject: `ticket:${ticketId}`,
+      detail: { ticketId, repo, pr, prHead, state, why, sessionId: w.session?.id ?? null },
+    });
+    this.onChange?.();
+    return stored;
+  }
+
+  /** The merge gate's latest word per repo, newest first (FR36e). A ticket the caller cannot see: not found. */
+  mergeStatus(caller: Caller, id: string): TicketMergeStatus[] {
+    return this.#mergeStatusOf(this.#need(caller, id).number);
+  }
+
+  #mergeStatusOf(number: number): TicketMergeStatus[] {
+    const rows = this.#db
+      .prepare(
+        `SELECT repo, pr, pr_head, state, reason, actor, at FROM ticket_merge_status
+          WHERE id IN (SELECT max(id) FROM ticket_merge_status WHERE ticket_number = ? GROUP BY repo) ORDER BY id DESC`,
+      )
+      .all(number) as { repo: string; pr: number | null; pr_head: string | null; state: TicketMergeStatus['state']; reason: string | null; actor: string; at: string }[];
+    return rows.map((r) => ({ repo: r.repo, pr: r.pr, prHead: r.pr_head, state: r.state, reason: r.reason, actor: r.actor, at: r.at }));
   }
 
   /* ---------- Sessions ---------- */

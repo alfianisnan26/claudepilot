@@ -56,7 +56,7 @@ export function flowCompact(v: FlowView | null, failed: boolean): GlanceCompact 
 }
 
 const KIND: Record<FlowAction['kind'], string> = { told: 'Told', reported: 'Reported', notified: 'Notified you', skipped: 'Skipped', failed: 'Failed' };
-const COND: Record<FlowAction['condition'], string> = { merge: 'merge', qa: 'QA', idle: 'idle lead', bypass: 'Bypass', stall: 'stall' };
+const COND: Record<FlowAction['condition'], string> = { merge: 'merge', qa: 'QA', idle: 'idle lead', bypass: 'Bypass', stall: 'stall', conflict: 'conflict', no_pr: 'no PR' };
 
 /** One action in a few words: "Told · merge · T-12, T-13". */
 export function actionLine(a: FlowAction): string {

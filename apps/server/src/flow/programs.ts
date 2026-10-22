@@ -4,6 +4,7 @@
 // a program that cannot be read watches nothing). Its leads are one group of `tickets.leadPeerGroups` (the owner's list of peer lead ids).
 
 import { TICKET_TAG, type ChatSession } from '@portal/contracts';
+import { parseLeadPeerGroups as parseLeadPeerGroupsOf } from '../tickets/authz.js';
 
 export interface FlowProgram {
   name: string;
@@ -114,3 +115,24 @@ export function crewRoot(chat: Pick<SessionReader, 'get'>, id: string): string |
 
 /** `tickets.leadPeerGroups` as the tickets module parses it: groups by ";", ids by ","; a group needs two ids. */
 export { parseLeadPeerGroups } from '../tickets/authz.js';
+
+/**
+ * T-2014 (tickets FR36e): who gates the merges of each program that is on, as the watchdog picks it: the configured merge gate when it is a
+ * lead of the program's group, else that group's first lead. A program with no group set may run with any group (the watchdog takes the
+ * first whose leads hold its tickets), so each group's gate counts. The tickets service lets these (and the workers they start) record
+ * `ticket_merge_status` on the program's tickets.
+ */
+export function mergeGatesOf(programsRaw: unknown, groupsRaw: unknown): { tag: string; gates: string[] }[] {
+  const groups = parseLeadPeerGroupsOf(groupsRaw);
+  const out: { tag: string; gates: string[] }[] = [];
+  for (const p of parsePrograms(programsRaw)) {
+    if (!p.enabled) continue;
+    const gates = new Set<string>();
+    for (const leads of p.group !== null ? [groups[p.group - 1] ?? []] : groups) {
+      const gate = p.mergeGate && leads.includes(p.mergeGate) ? p.mergeGate : leads[0];
+      if (gate) gates.add(gate);
+    }
+    if (gates.size) out.push({ tag: p.tag, gates: [...gates] });
+  }
+  return out;
+}

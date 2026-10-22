@@ -230,6 +230,8 @@ export interface TicketDetail {
   checks: TicketCheck[];
   /** Files attached to it, oldest first. Absent from an older server. */
   attachments?: TicketAttachment[];
+  /** T-2014: the merge gate's latest word per repo (`ticket_merge_status`), newest first. Absent from an older server. */
+  merge?: TicketMergeStatus[];
 }
 
 /** A file on a ticket (owner, 2026-10-17: "ticket support with attachment, all files"): any type, kept by the portal, served only to who may see the ticket. */
@@ -270,6 +272,31 @@ export interface TicketVerdictBatch {
   branch: string | null;
   note: string | null;
 }
+
+/**
+ * T-2014 (tickets PRD FR36e): what the merge gate (the merge-gate lead of a flow program, or a worker it started) says of a ticket's pull
+ * request in one repo. `ready`: open with the verdicts it needs on `prHead`; `merged`; `conflict`: needs a rebase; `waiting`: open, verdicts
+ * on its head not yet in; `no_pr`: no pull request is open for it; `failed`: the gate tried and could not merge (`reason`).
+ */
+export const TICKET_MERGE_STATES = ['ready', 'merged', 'conflict', 'waiting', 'no_pr', 'failed'] as const;
+export type TicketMergeState = (typeof TICKET_MERGE_STATES)[number];
+
+export interface TicketMergeStatus {
+  /** `owner/name` as the forge spells it. */
+  repo: string;
+  /** The pull request number; null only with `no_pr`. */
+  pr: number | null;
+  /** The pull request's head when the gate looked: a full 40-character sha, lowercase; null only with `no_pr`. */
+  prHead: string | null;
+  state: TicketMergeState;
+  /** One line from the gate, or null. Written by an agent: untrusted text. */
+  reason: string | null;
+  /** `session:<id>` of the gate (or its worker) that recorded it. */
+  actor: string;
+  at: string;
+}
+
+export const TICKET_MERGE_LIMITS = { repo: 120, reason: 300, pr: 1_000_000_000 } as const;
 
 export const TICKET_VERDICT_BATCH_LIMITS = { items: 20, jobId: 120, branch: 120, note: 500 } as const;
 
@@ -531,6 +558,8 @@ export const TICKET_API = {
   attachments: (id: string) => `/api/tickets/${encodeURIComponent(id)}/attachments`,
   /** GET: the file (inline for a preview image, else a download). DELETE: remove it. */
   attachment: (id: string, attachmentId: number) => `/api/tickets/${encodeURIComponent(id)}/attachments/${attachmentId}`,
+  /** GET: `TicketMergeStatus[]`, the merge gate's latest word per repo, newest first (T-2014). */
+  merge: (id: string) => `/api/tickets/${encodeURIComponent(id)}/merge`,
   /** GET: the tickets bumped into a session, as `TicketBumped[]` (FR31). */
   bumped: (sessionId: string) => `/api/tickets/bumped?session=${encodeURIComponent(sessionId)}`,
 } as const;
