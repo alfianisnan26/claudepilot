@@ -5,7 +5,6 @@
 
 import { objectRef, type RoutePolicies, type ToolPolicies } from '@portal/contracts';
 import { declarePolicies, declareToolPolicies, registerResolver } from '../authz/seam.js';
-import { verdictRoleOfAgent } from './verdicts.js';
 
 const ticket = (verb: 'view' | 'operate') => ({ type: 'ticket' as const, verb, from: 'path' as const, param: 'id' });
 
@@ -288,9 +287,19 @@ export function canPeerLeadAct(facts: {
 }
 
 /**
- * T-2011 (D-93, 2026-10-22): cross-unit QA. A QA or REVIEW worker (its agent's verdict role, `verdicts.ts` `verdictRoleOfAgent`) that
- * descends from a lead of a peer group may COMMENT on a ticket held by a session whose crew root is in the same group (a peer lead, its
- * workers, or its own crew), so it can post the evidence of the verdict it records: on 2026-10-22 the general lead's QA lane passed T-1705
+ * The verifier names the peer rule accepts (review of T-2011): the name ENDS in a whole role word (`qa`, `qa-verifier`, `verifier`,
+ * `reviewer`, `review`), with at most one prefix part (`konfersi-qa`). So `reviewer-evil`, `unverified-builder` or `preview` do not count.
+ * Stricter than `verdictRoleOfAgent` (verdicts.ts), which FR36 keeps unchanged.
+ */
+const PEER_VERIFIER_NAME = /^(?:[a-z0-9]+[-_])?(?:qa|qa[-_]verifier|verifier|reviewer|review)$/;
+export function isPeerVerifierName(agent: string | null | undefined): boolean {
+  return PEER_VERIFIER_NAME.test((agent ?? '').toLowerCase());
+}
+
+/**
+ * T-2011 (D-93, 2026-10-22): cross-unit QA. A QA or REVIEW worker (a whole role name: {@link isPeerVerifierName})
+ * that the lead of a peer group started DIRECTLY (its `parentId` is the lead, a predecessor or a continuation of it) may COMMENT on a ticket
+ * held by a session whose crew root is in the same group (a peer lead, its workers, or its own crew), so it can post the evidence of the verdict it records: on 2026-10-22 the general lead's QA lane passed T-1705
  * but its comments on its peers' tickets were refused (T-1839 grants peer LEADS only). `workerRoot` is the top of the worker's `parentId`
  * chain, `holderRoot` the holder's; null when a chain is broken (refused). Lineages are as in {@link canPeerLeadAct} (the root, its
  * predecessors and its continuations). A comment only: never a close, a change, a claim or an attachment (those stay a lead's), and an
@@ -306,8 +315,11 @@ export function canPeerWorkerComment(facts: {
   groups: readonly (readonly string[])[];
 }): boolean {
   const { worker, holder, workerRoot, holderRoot } = facts;
-  if (!worker.parentId || worker.state === 'ended' || !verdictRoleOfAgent(worker.agent)) return false;
+  if (!worker.parentId || worker.state === 'ended' || !isPeerVerifierName(worker.agent)) return false;
   if (!holder || !workerRoot || !holderRoot || workerRoot.parentId || holderRoot.parentId || worker.id === holder.id) return false;
+  // Review of T-2011: the agent name is the spawner's choice, so the label grants nothing unless the group lead itself (or a continuation of
+  // it) started the worker. A QA-named child of an implementer, or of anything below the lead, is refused.
+  if (!facts.workerRootLineage.includes(worker.parentId)) return false;
   const ws = worker.workspaceId;
   if (holder.workspaceId !== ws || workerRoot.workspaceId !== ws || holderRoot.workspaceId !== ws) return false;
   return facts.groups.some((g) => facts.workerRootLineage.some((id) => g.includes(id)) && facts.holderRootLineage.some((id) => g.includes(id)));

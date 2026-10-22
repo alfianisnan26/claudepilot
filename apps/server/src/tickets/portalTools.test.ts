@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import { portalMcpHarness } from '../portalmcp/testkit.js';
 import { ToolRegistry } from '../portalmcp/registry.js';
 import { registerTicketTools } from './portalTools.js';
+import { isPeerVerifierName } from './authz.js';
 import { Tickets } from './service.js';
 import { FakeSessions, UI } from './testkit.js';
 
@@ -623,6 +624,10 @@ test('peer_worker (T-2011, D-93): a peer lead\'s QA worker comments on and recor
     patch(GI, { parentId: GEN, agent: 'implementer' });
     patch(BB, { parentId: BIZ, agent: 'implementer' });
     patch(OQ, { parentId: OUT, agent: 'qa-verifier' });
+    const iq = await r.agent(ws, 'eeeeeeee-0014', 'QA-named child of an implementer');
+    patch('eeeeeeee-0014', { parentId: GI, agent: 'qa' });
+    const evil = await r.agent(ws, 'eeeeeeee-0015', 'the lead\'s lane, named like a reviewer');
+    patch('eeeeeeee-0015', { parentId: GEN, agent: 'reviewer-evil' });
     const held = (summary: string, sessionId: string, workspaceId = ws) => {
       const id = r.tickets.create(UI, { summary, workspaceId, assignee: { kind: 'session', sessionId } }).id;
       r.tickets.update(UI, id, { status: 'in_review' });
@@ -644,6 +649,11 @@ test('peer_worker (T-2011, D-93): a peer lead\'s QA worker comments on and recor
     // Refused first: nothing below may be written or audited as peer_worker.
     assert.equal(await comment(oq, tBb), 'FORBIDDEN', 'a worker of a lead outside the group');
     assert.equal(await comment(gi, tBb), 'FORBIDDEN', 'an implementer worker of a peer lead (T-1839 unchanged for it)');
+    // Review of T-2011: the name is the spawner's choice, so only a verifier the group lead started itself counts.
+    assert.equal(await comment(iq, tBb), 'FORBIDDEN', 'a QA-named child of an implementer');
+    assert.equal(await comment(gbq, tBb), 'FORBIDDEN', 'a QA the builder started');
+    assert.equal(await comment(gbq, tBiz), 'FORBIDDEN', 'nor on the peer lead\'s own ticket');
+    assert.equal(await comment(evil, tBb), 'FORBIDDEN', 'a role word inside another name is no role');
     assert.equal(await comment(gq, tElsewhere), 'NOT_FOUND', 'a ticket it may not see is the same not found');
     assert.equal((await verdict(gq, tElsewhere))?.code, 'NOT_FOUND');
     assert.equal((await r.h.call(gq.secret, 'ticket_close', { id: tBb2, summary: 'verified' })).result?.structuredContent?.error?.code, 'FORBIDDEN', 'never a close');
@@ -678,6 +688,9 @@ test('peer_worker (T-2011, D-93): a peer lead\'s QA worker comments on and recor
       [tBiz, GQ, GEN, BIZ],
     ], 'each comment audited as peer_worker with the worker, its lead and the holder');
     assert.equal(audits.filter((a) => a.kind === 'ticket.verdict').length, 3, 'each verdict audited');
+
+    for (const n of ['qa', 'qa-verifier', 'reviewer', 'review', 'verifier', 'konfersi-qa', 'QA_Verifier']) assert.equal(isPeerVerifierName(n), true, n);
+    for (const n of ['reviewer-evil', 'unverified-builder', 'preview', 'qa-x', 'implementer', 'a-b-qa', '', null]) assert.equal(isPeerVerifierName(n), false, String(n));
 
     // A broken chain is refused (fail closed), and so is everything once the owner empties the setting.
     patch(GQ, { parentId: 'eeeeeeee-9999' });
