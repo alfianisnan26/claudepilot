@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The release gate on a CLEAN COPY of a commit (not the working tree): npm ci, typecheck, web build, the server suite.
+# The release gate on a CLEAN COPY of a commit (not the working tree): npm ci, typecheck, web build, the web unit tests, the server suite.
 #   scripts/gate.sh [commit]        default HEAD; logs in /tmp/gate-<sha>.logs, one summary line per step
 # GATE_CONCURRENCY (default 2): test files run at once; this workspace has 4 CPUs and 8 GiB, so keep it low. The tests that need a
 # Docker daemon are skipped here (CLAUDEPILOT_DOCKER_TESTS unset): they run on a machine with Docker. The suite runs from `env -i`:
@@ -7,7 +7,7 @@
 # GATE_FILES (default every src/**/*.test.ts): the server test files to run, space separated, relative to apps/server (one file in a Job, say).
 # Every failing test's own report (its error, expected and actual, the stack) goes to <logs>/failures.txt; a file that passes when rerun
 # alone is written to the summary as flaky, one line per test that failed in the full run (`<file>;<test name>`: the portal opens a ticket per test).
-# GATE_STEPS (default typecheck,web-build,server-suite): which steps run after npm ci (scripts/gate-job.sh runs only typecheck,web-build, say).
+# GATE_STEPS (default typecheck,web-build,web-tests,server-suite): which steps run after npm ci (scripts/gate-job.sh runs only typecheck,web-build, say).
 # Whatever GATE_STEPS: docs/context-pack.md must be fresh for the commit (scripts/context-pack.sh --check, T-292; needs the repository, so it
 # runs before the clean copy is used). The verdict: scripts/gate-verdict.sh logs <logs dir>.
 set -u
@@ -24,10 +24,12 @@ step npm-ci npm ci --no-audit --no-fund || { echo "npm ci failed: see $logs/npm-
 # Timing tests wait CP_TEST_TIME_SCALE times longer when the machine is busier than it has CPUs (load average above the CPU count): 1 to 6, rounded up.
 scale=$(awk -v l="$(cut -d' ' -f1 /proc/loadavg 2>/dev/null || echo 0)" -v c="$(nproc 2>/dev/null || echo 1)" 'BEGIN { s = (l > c) ? int(l / c) + 1 : 1; if (s > 6) s = 6; print s }')
 clean=(env -i "PATH=$PATH" "HOME=$dir/.home" LANG=C.UTF-8 PORTAL_K8S_ENABLED=false "CP_TEST_TIME_SCALE=$scale" NODE_OPTIONS=--disable-warning=ExperimentalWarning)
-steps=",${GATE_STEPS:-typecheck,web-build,server-suite},"
+steps=",${GATE_STEPS:-typecheck,web-build,web-tests,server-suite},"
 wants() { [[ $steps == *",$1,"* ]]; }
 if wants typecheck; then step typecheck "${clean[@]}" nice -n 10 npm run typecheck; fi
 if wants web-build; then step web-build "${clean[@]}" nice -n 10 npm run build -w @portal/web; fi
+# The web unit tests (apps/web/src/**/*.test.ts, T-1992): gate-quick ran them but the full gate did not, so a red web test reached integration.
+if wants web-tests; then step web-tests "${clean[@]}" nice -n 10 npm test -w @portal/web; fi
 # The server suite. A test, or a whole test file, that runs longer than GATE_TEST_TIMEOUT_MS (default 10 minutes) FAILS instead of blocking the run
 # for ever (connect/agent/rekey.test.ts hung 9 to 26 minutes inside the full suite, twice, and passes alone in seconds), and the files with a failing
 # or timed-out test run once more, alone: a test that hangs or races under load passes alone (the known ones are in docs/open-items.md). The verdict

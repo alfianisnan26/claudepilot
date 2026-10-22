@@ -6,7 +6,7 @@ import { Card } from '@/components/Card';
 import { InfoTip } from '@/components/InfoTip';
 import { api, errorText } from '@/lib/api';
 
-const field = 'h-12 w-full min-w-0 rounded-2xl border border-line bg-surface px-4 text-[15px] outline-none focus-visible:ring-2 focus-visible:ring-accent';
+const field = 'h-12 w-full min-w-0 rounded-2xl border border-line bg-surface px-4 text-[15px] outline-hidden focus-visible:ring-2 focus-visible:ring-accent';
 
 interface Form {
   name: string;

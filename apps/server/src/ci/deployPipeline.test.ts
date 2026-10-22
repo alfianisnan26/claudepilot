@@ -52,7 +52,7 @@ function templateFiles(): Record<string, string> {
   out['scripts/gate.sh'] = `#!/usr/bin/env bash
 sha=$(git rev-parse --short "\${1:-HEAD}"); dir=\${GATE_DIR:-/tmp/gate-$sha}; logs=$dir.logs
 mkdir -p "$dir" "$logs"; mode=$(cat "$FAKE/gate-mode" 2>/dev/null || echo green)
-for s in npm-ci typecheck web-build; do echo "$s rc=0 1s" >> "$logs/SUMMARY.txt"; : > "$logs/$s.log"; done
+for s in npm-ci typecheck web-build web-tests; do echo "$s rc=0 1s" >> "$logs/SUMMARY.txt"; : > "$logs/$s.log"; done
 if [ "$mode" = red ]; then echo "server-suite rc=1 9s" >> "$logs/SUMMARY.txt"; printf 'not ok 7 - a test\\n# fail 1\\n' > "$logs/server-suite.log"
 else echo "server-suite rc=0 9s" >> "$logs/SUMMARY.txt"; printf '# tests 3\\n# pass 3\\n# fail 0\\n' > "$logs/server-suite.log"; fi
 echo "gate (stand-in) at $sha"
@@ -525,7 +525,7 @@ test('the gate as a Job in the cluster (T-37, the default): a Secret for its lif
   const green = w.run('gate');
   assert.equal(green.code, 0, green.out);
   assert.match(green.out, /gate: leftover stopped claudepilot-gate-aaaaaaa-0000/);
-  assert.match(green.out, new RegExp(`gate job claudepilot-gate-${w.sha.slice(0, 7)}-[0-9a-f]{4}: typecheck,web-build,server-suite at ${w.sha.slice(0, 7)} on registry\\.test/claudepilot/workspace:dev-1`));
+  assert.match(green.out, new RegExp(`gate job claudepilot-gate-${w.sha.slice(0, 7)}-[0-9a-f]{4}: typecheck,web-build,web-tests,server-suite at ${w.sha.slice(0, 7)} on registry\\.test/claudepilot/workspace:dev-1`));
   assert.match(green.out, /GATE-VERDICT: green/);
   assert.match(green.out, /gate: green at [0-9a-f]{7}/);
   const job = readFileSync(join(w.root, 'applied.yaml'), 'utf8');

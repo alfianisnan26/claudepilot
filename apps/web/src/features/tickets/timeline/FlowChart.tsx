@@ -343,7 +343,7 @@ export function FlowChart({
                         anchor.current = e.currentTarget;
                         setPicked(on ? null : { id: r.id, index: b.index });
                       }}
-                      className="group absolute inset-y-0 z-[1] flex items-center focus-visible:outline-none"
+                      className="group absolute inset-y-0 z-[1] flex items-center focus-visible:outline-hidden"
                       style={{ left: b.left, width: b.width }}
                     >
                       {/* A thin bar still has a finger-wide target. */}

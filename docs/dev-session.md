@@ -124,7 +124,7 @@ twice. `scripts/gate-job.sh <commit> [steps]` (T-37) runs `scripts/gate.sh` as a
   fills npm's cache with `npm ci --ignore-scripts` in a throwaway copy, then checks that the token is in no file under `/tmp`. The `gate`
   container has no token; `gate.sh`'s `npm ci` installs from that cache (`npm_config_prefer_offline`), so no install script, test or build
   can read it.
-- **Steps:** `typecheck,web-build,server-suite` by default; fewer for a heavy check without the suite, e.g. `typecheck,web-build`.
+- **Steps:** `typecheck,web-build,web-tests,server-suite` by default (`web-tests` is `npm test -w @portal/web`, every `apps/web/src/**/*.test.ts`, T-1992; the gate Job drops it, with a note, for a commit whose `gate.sh` predates it, so an older commit can still be green); fewer for a heavy check without the suite, e.g. `typecheck,web-build,web-tests`.
 - **The verdict:** the Job ends with one `GATE-VERDICT: green` or `GATE-VERDICT: red: <why>` line from `scripts/gate-verdict.sh` (the same
   reading the local gate uses: every step at rc=0, the last suite summary at 0 failing and 0 timed out). The script prints the summary and
   that line, keeps the whole log in `GATE_JOB_LOG` (default `/tmp/gate-job-<sha>.log`), exits 0 green, 1 red. The summary always ends with
