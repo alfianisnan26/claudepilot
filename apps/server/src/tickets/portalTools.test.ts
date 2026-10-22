@@ -634,7 +634,8 @@ test('peer_worker (T-2011, D-93): a peer lead\'s QA worker comments on and recor
     const tGb = held('general builder work', GB);
     const tOnce = held('the QA lane held it once', GQ);
     r.tickets.update(UI, tOnce, { assignee: { kind: 'session', sessionId: BB } });
-    const tElsewhere = held('another workspace', BB, 'docker/web');
+    r.sessions.add({ id: 'eeeeeeee-0030', workspaceId: 'docker/web', title: 'Business lane elsewhere', parentId: BIZ, agent: 'implementer' });
+    const tElsewhere = held('another workspace', 'eeeeeeee-0030', 'docker/web');
     const sha = (c: string) => c.repeat(40);
     const comment = async (t: { secret: string }, id: string) => (await r.h.call(t.secret, 'ticket_comment', { id, text: `QA evidence on ${id}` })).result?.structuredContent?.error?.code;
     const verdict = async (t: { secret: string }, id: string, c = 'a') =>
