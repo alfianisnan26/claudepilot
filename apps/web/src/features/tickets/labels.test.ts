@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { actorName, bucketOption, fallbackSentence, isTicket, mcpClientName, mergeText, pageFilter, ticketLabel, verdictBatchOf } from './labels';
+import { actorName, bucketOption, fallbackSentence, isTicket, mcpClientName, mergeChipText, mergeText, pageFilter, ticketLabel, verdictBatchOf } from './labels';
 
 test('a Portal MCP token on a timeline is named by its label', () => {
   assert.equal(actorName('portal-mcp:ptk_1', 'relay'), 'MCP client “relay”');
@@ -87,4 +87,10 @@ test('the timeline shares the list’s filters; its first chip is everything in 
     query: 'login',
   });
   assert.deepEqual(pageFilter({ ...base, scope: 'closed' }).status, ['done', 'wont_do']);
+});
+
+test('T-2014: the PR chip is "name#n · state", no number without a PR', () => {
+  assert.equal(mergeChipText({ repo: 'konfersi/api', pr: 12, state: 'ready' }), 'api#12 · ready');
+  assert.equal(mergeChipText({ repo: 'konfersi/web', pr: null, state: 'no_pr' }), 'web · no PR');
+  assert.equal(mergeChipText({ repo: 'solo', pr: 3, state: 'conflict' }), 'solo#3 · conflict');
 });

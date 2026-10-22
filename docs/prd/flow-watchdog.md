@@ -12,21 +12,32 @@ inside the portal server, with no model. It keeps the leads moving whoever is on
 ## What it does
 
 `apps/server/src/flow` is a platform module (one line in `platform/index.ts`). Every 5 minutes it looks at each configured program. It
-skips the round while it is switched off, or while the portal cannot write (frozen, locked). It counts five conditions:
+skips the round while it is switched off, or while the portal cannot write (frozen, locked). It counts seven conditions:
 
 | | Condition | Action |
 | --- | --- | --- |
-| a | In review, a QA PASS on the head, not merged for `flow.mergeAfterMin` (20) | Message the merge-gate lead with the exact list: stable id, bucket key, and "QA PASS on <sha> (newest seen)", with the ask to check that commit is still the branch head before merging |
+| a | In review, a QA PASS on the head (with a recorded PR: its `pr_head`, plus a review PASS there when the ticket has any review verdict), not merged for `flow.mergeAfterMin` (20) | Message the merge-gate lead with the exact list: stable id, bucket key, and either "<repo>#<pr> QA PASS on the PR head <sha> (<state>)" or, with no PR recorded, "QA PASS on <sha> (newest seen, no PR status)" with the ask to check it is the PR head and record the PR |
 | b | In review, no verdict on the head, nobody working on it for `flow.qaAfterMin` (60), and not in a live batch | Message a peer lead a `QA-ASK batch` with the tickets, round robin, never the author's lead or lineage: at most 8 per peer per message (D-93, T-1987) |
 | c | A lead idle for `flow.idleAfterMin` (30) while its unit (itself and its workers) holds open or in-progress tickets, and it runs fewer live workers than its cap | Message that lead its next tickets: priority first, then oldest, at most 5 |
 | d | A lead that was in Bypass is now on the default mode or has ended | Reported only (audit and card). See Bypass |
 | e | No ticket done in `flow.stallHours` (3) while tickets wait in review | Notify the owner once per stall, when it has lasted `flow.notifyAfterHours` (3) after the first nudge. If no lead could be told, the time counts from when the stall began |
+| conflict | In review, the merge gate's newest open record is `conflict`, recorded `flow.mergeAfterMin` ago or more (T-2014) | Message the ticket's unit lead: send it back to its builder for a rebase; QA then verifies the new head |
+| no_pr | In review, the merge gate's newest open record is `no_pr`, that long (T-2014) | Message the ticket's unit lead: open the PR (or have its builder open it), or say on the ticket why not |
 
-The **head** of a ticket is the newest commit the portal has heard of for it: a CI check's commit or a verdict's commit. A verdict wins a
+**The merge gate's record** (T-2014, tickets PRD FR36e). The merge gate (the program's merge-gate lead, or a worker it started) records what
+it knows of a ticket's pull request per repo with `ticket_merge_status`: the PR number, its current head and a state (`ready`, `merged`,
+`conflict`, `waiting`, `no_pr`, `failed`). When a ticket has a record, the watchdog uses it and not the heuristic below: a ticket whose every
+recorded repo is `merged` is skipped; otherwise the newest record that is not `merged` stands. `conflict` and `no_pr` go to the ticket's unit
+lead (the lead whose unit holds it; a ticket no unit lead holds is recorded `skipped` once per window); the rest are judged on that record's
+`pr_head`, the same rule the merge gate applies: a QA PASS on exactly that commit, and a review PASS on it too when the ticket has any review
+verdict. A ticket that is done or won't do is never looked at (only open, in-progress, blocked and in-review tickets are read). On
+2026-10-22 about 25 of 58 tickets the heuristic counted were not mergeable: verdicts on a batch head, already merged or closed, no PR.
+
+Without a record, the **head** of a ticket is the newest commit the portal has heard of for it: a CI check's commit or a verdict's commit. A verdict wins a
 tie. The portal does not know a branch's head. A short check sha is widened to the verdict commit it begins; otherwise it stays short and
 no verdict matches it. A branch that moved after a PASS is therefore not passing (FR36: `evaluateVerdicts`). A branch that moved with no
-newer CI check and no newer verdict can still look passing; that is why the merge message names the commit as the newest seen and asks the
-merge lead to check the branch head. Resolving the real head would need a git read in the workspace on every round, which the watchdog
+newer CI check and no newer verdict can still look passing; that is why the merge message labels such a row "(newest seen, no PR status)"
+and asks the merge lead to check it is the PR head and record the PR. Resolving the real head would need a git read in the workspace on every round, which the watchdog
 does not do. "Nobody working on it" means
 no session started on the ticket (`ticketId`) is live and was active within the QA threshold. The ticket itself must also have had no
 update for that long.

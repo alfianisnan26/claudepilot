@@ -29,7 +29,7 @@ import { useLive } from '@/lib/live';
 import { ticketsApi } from './api';
 import { Attachments, fileSize } from './Attachments';
 import { ORPHAN_TITLE, SESSION_STATE_LABEL, actorName, bucketOption, fallbackSentence, ticketLabel, verdictBatchOf } from './labels';
-import { AssigneeChip, CheckChips, PriorityMark, StatusBadge, TagList, TicketFlags, TypeBadge, VerdictBatchChips } from './parts';
+import { AssigneeChip, CheckChips, MergeChips, PriorityMark, StatusBadge, TagList, TicketFlags, TypeBadge, VerdictBatchChips } from './parts';
 import { AssignDialog, CloseDialog, EditTicketDialog, StartSessionDialog, TagsDialog, TicketBumpDialog } from './TicketDialogs';
 
 type Dialog = 'edit' | 'tags' | 'assign' | 'close' | 'start' | 'bump' | 'delete' | null;
@@ -150,8 +150,9 @@ export function TicketPage() {
             </InfoTip>
           </div>
         )}
-        {detail.checks.length > 0 && (
-          <div className="mt-2">
+        {(detail.checks.length > 0 || (detail.merge?.length ?? 0) > 0) && (
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            <MergeChips merge={detail.merge ?? []} />
             <CheckChips checks={detail.checks} />
           </div>
         )}
