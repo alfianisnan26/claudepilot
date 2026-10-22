@@ -21,6 +21,7 @@ import {
   type TicketEvent,
   type TicketItem,
   type TicketMergeStatus,
+  type TicketVerdictBatch,
 } from '@portal/contracts';
 import { actorOfPrincipal, can, requireCan, visible } from '../authz/seam.js';
 import { bumpMode, bumpNote } from '../chat/bump.js';
@@ -37,6 +38,9 @@ import { VERDICT_ROLES, VERDICTS } from './verdicts.js';
 // interface I8), except `ticket_start_session`. Who may change what is the service's call (FR9): these only turn a
 // token into a caller (an agent is its verified session, in its verified workspace) and a ticket into text the model
 // can read as data.
+
+// T-2014: a verdict's evidence as ticket_verdict answers it (the batch's, or what a single verdict was recorded with); null when none.
+const evidenceOf = (b: TicketVerdictBatch | null | undefined) => (b ? { job_id: b.jobId, batch_branch: b.branch, note: b.note } : null);
 
 // T-1857: the caller carries the seam's actor, so the service hides a ticket in a bucket it may not view on every read (the same not found).
 const callerOf = (ctx: PortalToolContext): Caller =>
@@ -631,6 +635,13 @@ export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = p
       commit: z.string().max(64).optional().describe('The full commit sha you verified (40 hex characters). Needed to record.'),
       head: z.string().max(64).optional().describe('To read: a full sha; the answer says whether it is passing now (needs qa, plus review when need includes it).'),
       need: z.array(z.enum(VERDICT_ROLES)).max(2).optional().describe('With head: the roles that must pass. Default qa.'),
+      evidence: z
+        .object({
+          job_id: z.string().max(TICKET_VERDICT_BATCH_LIMITS.jobId).optional().describe('The job run that ran the full suite on this commit, e.g. claudepilot-job-<hex>.'),
+          note: z.string().max(TICKET_VERDICT_BATCH_LIMITS.note).optional().describe('One line about the run.'),
+        })
+        .optional()
+        .describe('When recording: what the verdict rests on, kept with it and returned with every read (the merge gate reads the job here, T-2014).'),
       session_id: sessionIdArg,
     }),
     handler(ctx, args) {
@@ -640,13 +651,17 @@ export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = p
         const status = args.head ? tickets.verdictStatus(caller, args.id, args.head, args.need ?? ['qa']) : null;
         return {
           summary: status ? `${args.id}: ${args.head!.slice(0, 12)} is ${status.pass ? 'passing' : 'not passing'}.` : `${args.id} has ${list.length} verdicts.`,
-          verdicts: list.map((v) => ({ id: v.id, role: v.role, verdict: v.verdict, commit: v.commit, actor: v.actor, at: v.at })),
+          verdicts: list.map((v) => ({ id: v.id, role: v.role, verdict: v.verdict, commit: v.commit, actor: v.actor, at: v.at, evidence: evidenceOf(v.batch) })),
           ...(status ? { head: { commit: args.head, pass: status.pass, roles: status.roles } } : {}),
         };
       }
-      const v = tickets.recordVerdict(caller, args.id, { role: args.role, verdict: args.verdict, commit: args.commit }, { sessionId: args.session_id });
+      const batch = args.evidence ? { jobId: args.evidence.job_id, note: args.evidence.note } : undefined;
+      const v = tickets.recordVerdict(caller, args.id, { role: args.role, verdict: args.verdict, commit: args.commit, batch }, { sessionId: args.session_id });
       ctx.affected(`ticket:${stable(args.id)}`);
-      return { summary: `Recorded ${v.role} ${v.verdict} on ${v.commit.slice(0, 12)} for ${args.id}.`, verdict: { id: v.id, role: v.role, verdict: v.verdict, commit: v.commit, at: v.at } };
+      return {
+        summary: `Recorded ${v.role} ${v.verdict} on ${v.commit.slice(0, 12)} for ${args.id}.`,
+        verdict: { id: v.id, role: v.role, verdict: v.verdict, commit: v.commit, at: v.at, evidence: evidenceOf(v.batch) },
+      };
     },
   });
 

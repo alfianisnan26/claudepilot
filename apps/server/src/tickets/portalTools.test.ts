@@ -885,6 +885,17 @@ test('ticket_verdict_batch (T-1987, D-93): a QA session records a verdict per ti
     assert.equal(out.results[2].key, undefined, 'nothing about an unseen ticket');
     assert.equal(out.results[4].error.code, 'FORBIDDEN');
     assert.deepEqual(r.tickets.verdicts(UI, a.id)[0]!.batch, { jobId: 'job-run-9c1', branch: 'qa/batch-2026-10-21-1', note: 'suite once on the batch head' });
+    // T-2014: the read answer carries each verdict's evidence, so the merge gate can find the suite job.
+    const read = r.out(await r.h.call(qa.secret, 'ticket_verdict', { id: a.id, head: head('a') }));
+    assert.deepEqual(read.verdicts[0].evidence, evidence);
+    // A verdict recorded alone carries its own evidence (job id), and one recorded without any reads as null.
+    const solo = r.out(await r.h.call(qa.secret, 'ticket_verdict', { id: b.id, role: 'qa', verdict: 'pass', commit: head('e'), evidence: { job_id: 'claudepilot-job-0a1b2c' } }));
+    assert.deepEqual(solo.verdict.evidence, { job_id: 'claudepilot-job-0a1b2c', batch_branch: null, note: null });
+    const bare = r.out(await r.h.call(qa.secret, 'ticket_verdict', { id: b.id, role: 'qa', verdict: 'pass', commit: head('f') }));
+    assert.equal(bare.verdict.evidence, null);
+    const listed = r.out(await r.h.call(qa.secret, 'ticket_verdict', { id: b.id })).verdicts;
+    assert.deepEqual(listed.map((v: any) => v.evidence?.job_id ?? null), ['job-run-9c1', 'claudepilot-job-0a1b2c', null]);
+    assert.match(r.tickets.get(UI, b.id).events.at(-2)!.body ?? '', /recorded on commit e{40}\./, 'a single verdict with evidence is not called a batch');
     // The author's own token: every item refused, nothing written.
     const self = r.out(await r.h.call(impl.secret, 'ticket_verdict_batch', { verdicts: [{ id: a.id, commit: head('d'), verdict: 'pass', role: 'qa' }], evidence: {} }));
     assert.equal(self.results[0].ok, false);

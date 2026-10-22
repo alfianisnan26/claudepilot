@@ -2674,7 +2674,7 @@ export class Tickets {
         row.number,
         'comment',
         w,
-        `${role === 'qa' ? 'QA' : 'Review'} ${verdict.toUpperCase()} recorded on commit ${batch ? `${commit!.slice(0, 12)} in a batch` : commit}.`,
+        `${role === 'qa' ? 'QA' : 'Review'} ${verdict.toUpperCase()} recorded on commit ${batch?.branch ? `${commit!.slice(0, 12)} in a batch` : commit}.`,
         { verdict, role, commit, verdictId: vid, ...(batch ? { batch } : {}) },
       );
       return { id: vid, role, verdict, commit: commit!, actor: w.actor, at, batch } satisfies StoredVerdict;
