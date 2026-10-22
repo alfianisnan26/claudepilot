@@ -34,4 +34,4 @@ spec:
     pods: "12"
     persistentvolumeclaims: "12"
     requests.storage: 120Gi
-    limits.memory: 24Gi
+    limits.memory: 32Gi
