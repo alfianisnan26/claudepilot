@@ -111,7 +111,8 @@ test('a General Manager token (T-968, #11136 b): ticket_verdict and ticket_close
   const r = await rig();
   try {
     r.h.alive.add('gm1');
-    const m = r.h.module.managers.mint({ userId: 'u_alice', sessionId: 'gm1' })!;
+    // The owner's manager: a manager IS its person (T-968 S1), and since T-1857 a person reads only tickets in buckets they may view.
+    const m = r.h.module.managers.mint({ userId: 'u_owner', sessionId: 'gm1' })!;
     const operate = r.h.token('operate');
     r.tickets.create(UI, { summary: 'Ship the fix' });
     const commit = 'ab'.repeat(20);
@@ -149,7 +150,7 @@ test('a General Manager token (T-968, QA c691df71): ticket_update to done or won
   const r = await rig();
   try {
     r.h.alive.add('gm1');
-    const m = r.h.module.managers.mint({ userId: 'u_alice', sessionId: 'gm1' })!;
+    const m = r.h.module.managers.mint({ userId: 'u_owner', sessionId: 'gm1' })!; // the owner's (see above)
     const operate = r.h.token('operate');
     const err = async (t: { secret: string }, args: Record<string, unknown>) => {
       const e = (await r.h.call(t.secret, 'ticket_update', args)).result?.structuredContent?.error;

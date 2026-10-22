@@ -35,15 +35,17 @@ import { VERDICT_ROLES, VERDICTS } from './verdicts.js';
 // token into a caller (an agent is its verified session, in its verified workspace) and a ticket into text the model
 // can read as data.
 
+// T-1857: the caller carries the seam's actor, so the service hides a ticket in a bucket it may not view on every read (the same not found).
 const callerOf = (ctx: PortalToolContext): Caller =>
   ctx.isAgent
-    ? { kind: 'agent', tokenId: ctx.principal.tokenId, label: ctx.principal.label, workspaceId: ctx.workspaceId!, sessionId: ctx.sessionId! }
+    ? { kind: 'agent', tokenId: ctx.principal.tokenId, label: ctx.principal.label, workspaceId: ctx.workspaceId!, sessionId: ctx.sessionId!, actor: actorOfPrincipal(ctx.principal) }
     : {
         kind: 'token',
         tokenId: ctx.principal.tokenId,
         label: ctx.principal.label,
         scope: ctx.scope as PortalScope,
         ...(ctx.principal.kind === 'manager' ? { manager: true as const } : {}),
+        actor: actorOfPrincipal(ctx.principal),
       };
 
 /**
