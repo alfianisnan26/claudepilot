@@ -3,7 +3,7 @@
 // of the chart (not under the sticky label column, not past the box's edge), and neighbouring labels never touch.
 // usage: tools/qa/with-portal.sh 3471 env QA_SHOTS=dir node tools/qa/timeline-axis.mjs
 import { Browser, SHOTS } from './browser.mjs';
-import { api, login } from './lib.mjs';
+import { api, login, sleep } from './lib.mjs';
 
 const call = api(await login());
 await call('POST', '/api/tickets', { summary: 'Timeline axis check', type: 'task', priority: 'normal' }).catch(() => undefined);
@@ -35,7 +35,11 @@ for (const [width, height, dark] of [
   await b.signedIn();
   for (const scale of ['minute', 'hour', 'day']) {
     // A fresh load each time: the bug was on first render, so a switch inside one page would not show it.
-    await b.goto(`/admin/tickets?view=timeline&scale=${scale}`, 2500);
+    await b.goto(`/admin/tickets?view=timeline&scale=${scale}`, 1500);
+    // Wait for the chart itself (a cold portal loads the view's lazy chunk slowly), then give the labels one second, far less than the
+    // 60 s refresh that used to bring them.
+    for (let i = 0; i < 20 && (await b.eval(`!document.querySelector('[data-timeline-axis]')`)); i++) await sleep(500);
+    await sleep(1000);
     const m = await b.eval(MEASURE);
     const file = await b.shot(`timeline-axis-${scale}-${tag}`);
     const bad = [];
