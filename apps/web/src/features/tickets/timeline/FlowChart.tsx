@@ -9,6 +9,8 @@ import { PriorityMark } from '../parts';
 import {
   axisTicks,
   chartWidth,
+  axisView,
+  labelledTicks,
   durationShort,
   initials,
   layoutBars,
@@ -26,6 +28,7 @@ import {
   type Bar,
   type Range,
   type Scale,
+  type Tick,
 } from './layout';
 
 /** Width of the label column: key, priority and initials on a phone; the title too where there is room. */
@@ -116,6 +119,47 @@ function SpanDetails({ picked, now, search }: { picked: Picked; now: number; sea
       >
         Open ticket
       </Link>
+    </div>
+  );
+}
+
+/**
+ * The axis labels (T-1988): only those whose whole label is in view, so none sits half under the sticky label column or past the box's
+ * edge. It follows the box's own scroll and size, so a pan re-renders the labels only, not the rows. It finds the box and the label
+ * column from its own element (`closest`): its own ref is set before its layout effect runs, while the box's ref (a parent's) is not yet,
+ * which left the axis blank on the first load until the ticks changed.
+ */
+function AxisLabels({ ticks, scale }: { ticks: readonly Tick[]; scale: Scale }) {
+  const self = useRef<HTMLDivElement>(null);
+  const [view, setView] = useState<{ from: number; to: number } | null>(null);
+  useLayoutEffect(() => {
+    const el = self.current?.closest<HTMLElement>('[data-timeline-box]');
+    if (!el) return;
+    const labels = el.querySelector<HTMLElement>('[data-timeline-labels]');
+    const read = () => {
+      const next = axisView(el.scrollLeft, el.clientWidth, labels?.offsetWidth ?? 0);
+      setView((v) => (v && v.from === next.from && v.to === next.to ? v : next));
+    };
+    read();
+    el.addEventListener('scroll', read, { passive: true });
+    window.addEventListener('resize', read);
+    const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(read);
+    ro?.observe(el);
+    if (labels) ro?.observe(labels);
+    return () => {
+      el.removeEventListener('scroll', read);
+      window.removeEventListener('resize', read);
+      ro?.disconnect();
+    };
+  }, [ticks]);
+  const shown = view ? labelledTicks(ticks, view) : [];
+  return (
+    <div ref={self} className="relative h-7 border-b border-line" aria-hidden data-timeline-axis="">
+      {shown.map((t) => (
+        <span key={t.at} className="absolute top-1.5 -translate-x-1/2 text-[10.5px] whitespace-nowrap text-muted tabular-nums" style={{ left: t.left }}>
+          {tickLabel(t.at, scale)}
+        </span>
+      ))}
     </div>
   );
 }
@@ -239,13 +283,14 @@ export function FlowChart({
 
       <div
         ref={box}
+        data-timeline-box=""
         className="relative min-w-0 max-w-full overflow-x-auto overscroll-x-contain rounded-xl border border-line bg-surface"
         role="group"
         aria-label="Timeline chart, scrolls sideways"
         onKeyDown={onKey}
       >
         <div className="flex [--label-w:7.5rem] medium:[--label-w:14rem]" style={{ width: `calc(${width}px + var(--label-w))` }} data-timeline="">
-          <div className={cn('sticky left-0 z-20 shrink-0 border-r border-line bg-surface', LABEL)}>
+          <div data-timeline-labels="" className={cn('sticky left-0 z-20 shrink-0 border-r border-line bg-surface', LABEL)}>
             <div className="h-7 border-b border-line" />
             {rows.map((r) => (
               <Link
@@ -269,14 +314,7 @@ export function FlowChart({
           </div>
 
           <div className="relative shrink-0" style={{ width }}>
-            <div className="relative h-7 border-b border-line" aria-hidden>
-              {ticks.map((t, i) => (
-                // Every other label at the minute scale on a phone would crowd; the tick spacing (30 px and up) keeps one in each.
-                <span key={t.at} className={cn('absolute top-1.5 -translate-x-1/2 text-[10.5px] whitespace-nowrap text-muted tabular-nums', i === 0 && 'translate-x-0')} style={{ left: t.left }}>
-                  {tickLabel(t.at, scale)}
-                </span>
-              ))}
-            </div>
+            <AxisLabels ticks={ticks} scale={scale} />
             {/* One layer for the grid, the shading and the now line under every row, not a copy per row. */}
             <div className="pointer-events-none absolute inset-x-0 top-7 bottom-0" aria-hidden>
               {shade.map((s, i) => (

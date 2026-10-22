@@ -181,6 +181,26 @@ body::before {
 }
 
 /*
+ * The Timeline's Done state (T-1988): its own violet, apart from In progress (the accent green) in hue and in lightness. Light #4c1d95
+ * and dark #7c3aed hold 3:1 against the surface, about 2:1 against the accent and 4.5:1 for the white letter on the bar
+ * (timeline/doneToken.test.ts checks the numbers against the tokens).
+ */
+@theme {
+  --color-done: var(--done);
+}
+:root {
+  --done: #4c1d95;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --done: #7c3aed;
+  }
+}
+:root[data-theme='dark'] {
+  --done: #7c3aed;
+}
+
+/*
  * Code token colours (the code viewer, T-148, docs/design/code-viewer.md): the same steps as a tool row's CodeBlock (Tailwind 700 in
  * light, 300 or 400 in dark), as variables so the viewer's theme follows the app's theme live.
  */
