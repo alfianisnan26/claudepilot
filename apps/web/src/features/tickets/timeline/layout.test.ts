@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { TICKET_TIMELINE_LIMITS, type TicketFlowSpan, type TicketFlowState } from '@portal/contracts';
-import { axisTicks, chartWidth, durationShort, initials, layoutBars, LEGEND, MIN_BAR_PX, moveFocus, patternStyle, POINT_PX, pxPerMs, shading, STATE_LABEL, STATE_LOOK, timeLeft, UNIT_MS, UNIT_PX, windowFor, type Scale } from './layout';
+import { axisTicks, axisView, chartWidth, durationShort, initials, LABEL_HALF_PX, labelledTicks, layoutBars, LEGEND, MIN_BAR_PX, moveFocus, patternStyle, POINT_PX, pxPerMs, shading, STATE_LABEL, STATE_LOOK, TICK_GAP_PX, tickStep, timeLeft, UNIT_MS, UNIT_PX, windowFor, type Scale } from './layout';
 
 const T0 = Date.parse('2026-10-18T00:00:00.000Z');
 const MIN = 60_000;
@@ -57,11 +57,56 @@ test('a span with an unreadable start is left out, and each bar keeps the index 
 test('axis ticks sit on multiples of the step, in order, inside the range, and the width is the range on the scale', () => {
   const range = { from: T0 + 7 * MIN, to: T0 + 32 * MIN };
   const t = axisTicks(range, 'minute');
-  assert.deepEqual(t.map((x) => (x.at - T0) / MIN), [10, 15, 20, 25, 30]);
+  assert.deepEqual(t.map((x) => (x.at - T0) / MIN), [10, 20, 30]);
   assert.equal(t[0]!.left, 3 * MIN * pxPerMs('minute'));
   assert.deepEqual(axisTicks({ from: T0 - 30 * MIN, to: T0 + 150 * MIN }, 'hour').map((x) => (x.at - T0) / MIN), [0, 60, 120]);
   assert.equal(chartWidth(range, 'minute'), Math.ceil(25 * MIN * pxPerMs('minute')));
   assert.deepEqual(axisTicks({ from: T0 + 1, to: T0 + 2 }, 'day'), []);
+});
+
+test('T-1988: ticks are thinned to a round step that leaves a label room, at every scale and over a whole default window', () => {
+  // The minute scale's 5-minute step was 30 px: the labels touched at 390 px and at 1280 px. It is now every 10 minutes.
+  assert.equal(tickStep('minute'), 10 * MIN);
+  assert.equal(tickStep('hour'), 60 * MIN);
+  assert.equal(tickStep('day'), 1440 * MIN);
+  for (const s of ['minute', 'hour', 'day'] as Scale[]) {
+    const ticks = axisTicks(windowFor(s, T0), s);
+    assert.ok(ticks.length > 2, s);
+    for (let i = 1; i < ticks.length; i++) assert.ok(ticks[i]!.left - ticks[i - 1]!.left >= TICK_GAP_PX, `${s}: ${i}`);
+    assert.ok(TICK_GAP_PX >= 2 * LABEL_HALF_PX + 4, 'two neighbouring labels keep a gap');
+  }
+  assert.equal(tickStep('minute', 100), 30 * MIN, 'a wider gap takes the next round step');
+});
+
+test('T-1988: only labels wholly in view are drawn: none half under the sticky label column, none past the right edge', () => {
+  const range = { from: T0, to: T0 + 60 * MIN };
+  const ticks = axisTicks(range, 'minute'); // 0, 60, 120, ... 360 px
+  const lefts = (xs: { left: number }[]) => xs.map((x) => x.left);
+  assert.deepEqual(lefts(labelledTicks(ticks, { from: 0, to: 400 })), [60, 120, 180, 240, 300, 360], 'the tick at 0 would be cut at the column');
+  // Panned 50 px: the column covers chart pixels up to 50, so the label at 60 (42..78) is cut and left out; 120 is the first.
+  assert.deepEqual(lefts(labelledTicks(ticks, { from: 50, to: 250 })), [120, 180]);
+  assert.deepEqual(labelledTicks(ticks, { from: 0, to: 0 }), [], 'nothing in view, no labels');
+  for (const t of labelledTicks(ticks, { from: 25, to: 333 })) assert.ok(t.left - LABEL_HALF_PX >= 25 && t.left + LABEL_HALF_PX <= 333);
+});
+
+test('T-1988: the axis has labels on first load at 390 and 1280 px, at the left end and opened at now, at every scale', () => {
+  // The box's width less the label column (7.5rem on a phone, 14rem from 600 px), with the chart at scroll 0 and scrolled to its end.
+  for (const [box, column] of [
+    [390 - 2, 120],
+    [1280 - 2 - 256, 224],
+  ] as const) {
+    for (const s of ['minute', 'hour', 'day'] as Scale[]) {
+      const range = windowFor(s, T0);
+      const ticks = axisTicks(range, s);
+      const end = Math.max(0, chartWidth(range, s) - (box - column));
+      for (const scroll of [0, end]) {
+        const view = axisView(scroll, box, column);
+        assert.equal(view.to - view.from, box - column);
+        assert.ok(labelledTicks(ticks, view).length >= 3, `${s} at ${box} px, scroll ${scroll}`);
+      }
+    }
+  }
+  assert.deepEqual(axisView(-5, 100, 120), { from: 0, to: 0 }, 'a box narrower than the column shows no chart');
 });
 
 test('the window is the scale’s default length (the API’s) up to now, its end on the next whole minute', () => {
@@ -116,6 +161,10 @@ test('every state has a word, a letter of its own and a look; blocked, waiting a
   for (const s of LEGEND) assert.ok(STATE_LABEL[s] && STATE_LOOK[s].bar.startsWith('bg-'), s);
   const bars = LEGEND.map((s) => `${STATE_LOOK[s].bar}|${STATE_LOOK[s].pattern}`);
   assert.equal(new Set(bars.filter((_, i) => !['done', 'wont_do'].includes(LEGEND[i]!))).size, 5, 'the stretch states differ in colour or pattern');
+  // T-1988: Done and In progress shared the accent green; every state now has a colour of its own (the legend swatch is the same class).
+  const colours = LEGEND.map((s) => STATE_LOOK[s].bar);
+  assert.equal(new Set(colours).size, colours.length, 'no two states share a colour');
+  assert.notEqual(STATE_LOOK.done.bar, STATE_LOOK.in_progress.bar);
   for (const s of ['blocked', 'waiting', 'wont_do'] as const) assert.ok(patternStyle(STATE_LOOK[s].pattern).backgroundImage, s);
   assert.deepEqual(patternStyle('none'), {});
 });
