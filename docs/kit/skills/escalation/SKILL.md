@@ -9,7 +9,7 @@ Human touch is a scored term in two classes that are never mixed. A **required**
 
 ## 1. Who it goes to (D-62: the owner's only standing action is PRODUCTION)
 
-**Needs a human, and only these two:**
+**Needs a human, and only these:**
 
 | Class | Examples |
 | --- | --- |
