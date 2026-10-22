@@ -218,6 +218,11 @@ export function createTicketRoutes(tickets: Tickets): Hono {
     if (!brief) throw new AppError('NOT_FOUND', 'No such ticket.');
     return c.json(success(brief));
   });
+  // T-2014 (FR36e): the merge gate's latest word per repo. Declared view on the ticket (authz.ts); the guard above checked its bucket.
+  app.get('/:id/merge', (c) => {
+    requireCan(actorOf(c), 'view', ticketRef(id(c)));
+    return c.json(success(tickets.mergeStatus(UI, id(c))));
+  });
   app.get('/:id/opening', (c) => c.json(success({ text: tickets.opening(UI, id(c)) })));
   app.patch('/:id', async (c) => {
     const req = await body<UpdateTicketRequest>(c);

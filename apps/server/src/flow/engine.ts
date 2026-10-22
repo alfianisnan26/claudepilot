@@ -3,6 +3,12 @@
 // them stops, nothing moves (2026-10-20/21: 4 tickets done in 24 h while in review went from 50 to 92). Every 5 minutes, per program, it
 // counts five conditions and messages the lead that can clear each:
 //   merge   in review, a QA PASS on the head, not merged for `flow.mergeAfterMin`   -> the merge-gate lead, the exact list (ids, keys, heads)
+//                                                                                        T-2014: the head is the PR head the merge gate
+//                                                                                        recorded (ticket_merge_status), with a review PASS
+//                                                                                        too when the ticket has review verdicts; a ticket
+//                                                                                        recorded merged is skipped; without a record, the
+//                                                                                        newest commit seen, labelled so
+//   conflict, no_pr  the gate recorded a PR needing a rebase, or no PR, that long        -> the ticket's unit lead: rebase it, or open the PR
 //   qa      in review, no verdict on the head, nobody on it for `flow.qaAfterMin`   -> a peer lead, round robin, never the author's: QA-ASK
 //                                                                                        as one batch (D-93, T-1987): at most 8 per peer per
 //                                                                                        message; a ticket already in a live batch is skipped
@@ -32,6 +38,7 @@ import {
   type NotifySubject,
   type TicketCheck,
   type TicketItem,
+  type TicketMergeStatus,
   type TicketStatus,
   type Verb,
 } from '@portal/contracts';
@@ -80,6 +87,8 @@ export interface FlowTicketPort {
   checks(id: string): TicketCheck[];
   /** T-1987 (D-93): the batch branch the ticket is in, named after its newest verdict, and when; null: none. Absent: no batches read. */
   batchOf?(id: string): { branch: string; at: string } | null;
+  /** T-2014: the merge gate's latest record per repo (`ticket_merge_status`), newest first. Absent: none read (the old heuristic). */
+  mergeStatus?(id: string): TicketMergeStatus[];
 }
 
 export interface FlowOwnerPort {
@@ -266,17 +275,32 @@ export class FlowEngine {
       return !!h && !this.#heldWhy(c, h);
     };
 
-    // (a) and (b): the tickets in review, judged on their head.
-    const merge: { t: TicketItem; head: string }[] = [];
+    // (a) and (b): the tickets in review, judged on their head. T-2014: the head is the PR head the merge gate recorded when it recorded one
+    // (the newest record of a repo not merged); a ticket merged in every repo it was recorded in is skipped; conflict and no_pr go to the
+    // unit lead. Without a record, the newest commit the portal has seen, as before, and the row says so.
+    const merge: { t: TicketItem; head: string; pr: TicketMergeStatus | null }[] = [];
     const qa: { t: TicketItem; head: string | null }[] = [];
+    const conflict: { t: TicketItem; pr: TicketMergeStatus }[] = [];
+    const noPr: { t: TicketItem; pr: TicketMergeStatus }[] = [];
     const inReview = open.filter((x) => x.status === 'in_review');
     for (const x of inReview) {
+      const recorded = this.#mergeStatus(x.id);
+      const pending = recorded.filter((m) => m.state !== 'merged').sort((a, b) => ms(b.at) - ms(a.at));
+      if (recorded.length && !pending.length) continue;
+      const pr = pending[0] ?? null;
+      if (pr && (pr.state === 'conflict' || pr.state === 'no_pr')) {
+        if (now - ms(pr.at) >= t.mergeAfterMs) (pr.state === 'conflict' ? conflict : noPr).push({ t: x, pr });
+        continue;
+      }
       const verdicts = this.#d.tickets.verdicts(x.id);
-      const head = headOf(verdicts, this.#d.tickets.checks(x.id));
-      const qaRole = head ? evaluateVerdicts(verdicts, head, ['qa']).roles.qa : 'missing';
-      if (qaRole === 'pass' && head) {
-        const passAt = Math.max(...verdicts.filter((v) => v.role === 'qa' && v.verdict === 'pass' && v.commit === head).map((v) => ms(v.at)));
-        if (now - passAt >= t.mergeAfterMs) merge.push({ t: x, head });
+      const head = pr?.prHead ?? headOf(verdicts, this.#d.tickets.checks(x.id));
+      // With a recorded PR, the merge gate's own rule: a review PASS on that head as well when the ticket was reviewed at all.
+      const need: ('qa' | 'review')[] = pr && verdicts.some((v) => v.role === 'review') ? ['qa', 'review'] : ['qa'];
+      const ev = head ? evaluateVerdicts(verdicts, head, need) : null;
+      const qaRole = ev ? ev.roles.qa : 'missing';
+      if (ev?.pass && head) {
+        const passAt = Math.max(...need.map((r) => Math.max(...verdicts.filter((v) => v.role === r && v.verdict === 'pass' && v.commit === head).map((v) => ms(v.at)))));
+        if (now - passAt >= t.mergeAfterMs) merge.push({ t: x, head, pr });
       } else if (qaRole === 'missing' || qaRole === 'stale') {
         if (now - ms(x.updatedAt) < t.qaAfterMs) continue;
         const working = chat.list({ ticketId: x.id }).some((s) => !ended(s) && (s.state === 'working' || s.state === 'starting' || now - ms(s.lastActivityAt) < t.qaAfterMs));
@@ -294,13 +318,44 @@ export class FlowEngine {
     else c.st.stall[p.name] ??= { since: now, nudgedAt: null, notifiedAt: null };
 
     if (merge.length) {
-      const rows = merge.slice(0, FLOW_LIMITS.ticketsPerMessage).map((m) => `- ${ref(m.t)} QA PASS on ${m.head} (newest seen)`);
-      await this.#tell(c, 'merge', gate, gateHead, gateResolved.why, merge.map((m) => m.t.id), [
-        `${FLOW_PREFIX} ${plural(merge.length, 'ticket')} in review ${merge.length === 1 ? 'has' : 'have'} a QA PASS on the newest commit the portal has seen and ${merge.length === 1 ? 'is' : 'are'} not merged after ${t.mergeAfterMs / MIN} min (program ${p.name}). Check that commit is still the branch head, then merge or close each, or say on the ticket why not:`,
+      // Recorded PR heads first: those are the gate's own facts; the heuristic rows after, labelled.
+      const sorted = [...merge].sort((a, b) => Number(!a.pr) - Number(!b.pr));
+      const rows = sorted
+        .slice(0, FLOW_LIMITS.ticketsPerMessage)
+        .map((m) => (m.pr ? `- ${ref(m.t)} ${m.pr.repo}#${m.pr.pr} QA PASS on the PR head ${m.head} (${m.pr.state})` : `- ${ref(m.t)} QA PASS on ${m.head} (newest seen, no PR status)`));
+      await this.#tell(c, 'merge', gate, gateHead, gateResolved.why, sorted.map((m) => m.t.id), [
+        `${FLOW_PREFIX} ${plural(merge.length, 'ticket')} in review ${merge.length === 1 ? 'has' : 'have'} a QA PASS and ${merge.length === 1 ? 'is' : 'are'} not merged after ${t.mergeAfterMs / MIN} min (program ${p.name}). A row with a PR is judged on the PR head you recorded (ticket_merge_status); a row marked (newest seen, no PR status) is the newest commit the portal has seen: check it is the PR head and record the PR. Merge or close each, or record why not with ticket_merge_status:`,
         ...rows,
         ...more(merge.length),
       ]);
     }
+
+    // T-2014: conflict and no_pr, each to the ticket's unit lead (the lead whose unit holds it); a ticket with no unit lead is reported.
+    const toUnits = async (cond: 'conflict' | 'no_pr', list: { t: TicketItem; pr: TicketMergeStatus }[]) => {
+      const byLead = new Map<string, { t: TicketItem; pr: TicketMergeStatus }[]>();
+      const orphans: string[] = [];
+      for (const it of list) {
+        const l = leadOf(it.t);
+        if (l) byLead.set(l, [...(byLead.get(l) ?? []), it]);
+        else orphans.push(it.t.id);
+      }
+      for (const [l, items] of byLead) {
+        const n = items.length;
+        await this.#tell(c, cond, l, heads.get(l) ?? null, resolved.get(l)?.why ?? null, items.map((i) => i.t.id), [
+          cond === 'conflict'
+            ? `${FLOW_PREFIX} the merge gate recorded a conflict on ${plural(n, 'pull request')} of your unit for ${t.mergeAfterMs / MIN} min or more (program ${p.name}). Send ${n === 1 ? 'it' : 'each'} back to its builder for a rebase onto the base branch; QA then verifies the new head:`
+            : `${FLOW_PREFIX} the merge gate recorded no pull request for ${plural(n, 'ticket')} of your unit in review for ${t.mergeAfterMs / MIN} min or more (program ${p.name}). Open the PR for each (or have its builder open it), or say on the ticket why not:`,
+          ...items.slice(0, FLOW_LIMITS.ticketsPerMessage).map((i) => `- ${ref(i.t)} ${i.pr.repo}${i.pr.pr ? `#${i.pr.pr}` : ''}${i.pr.prHead ? ` head ${i.pr.prHead}` : ''}`),
+          ...more(n),
+        ]);
+      }
+      if (orphans.length && !c.hold && !this.#limited(c, cond, `program-${p.name}`)) {
+        c.st.sent[`${cond}:program-${p.name}`] = c.now;
+        this.#act(c, cond, 'skipped', null, orphans, 'No unit lead of the program holds these: nobody was told.');
+      }
+    };
+    if (conflict.length) await toUnits('conflict', conflict);
+    if (noPr.length) await toUnits('no_pr', noPr);
 
     if (qa.length) {
       // Round robin over the peer leads that run, never the author's own (the lead whose unit holds the ticket).
@@ -402,11 +457,20 @@ export class FlowEngine {
       mergeGate: gate,
       mergeGateLive: gateHead?.id ?? null,
       leads,
-      counts: { merge: merge.length, qa: qa.length, idle, bypass, stall: stalled ? 1 : 0 },
+      counts: { merge: merge.length, qa: qa.length, idle, bypass, stall: stalled ? 1 : 0, conflict: conflict.length, no_pr: noPr.length },
       inReview: inReview.length,
       doneRecent,
       stallSince: stall ? iso(stall.since) : null,
     };
+  }
+
+  /** T-2014: the merge gate's records of a ticket; none when the port has none or cannot be read (the old heuristic then). */
+  #mergeStatus(id: string): TicketMergeStatus[] {
+    try {
+      return this.#d.tickets.mergeStatus?.(id) ?? [];
+    } catch {
+      return [];
+    }
   }
 
   #limited(c: Ctx, cond: FlowCondition, lead: string): boolean {
@@ -509,6 +573,8 @@ const NOTE: Record<FlowCondition, string> = {
   idle: 'Told an idle lead its next tickets.',
   bypass: 'Reported a lead out of Bypass.',
   stall: 'Told the owner the program has stalled.',
+  conflict: 'Told a unit lead which pull requests need a rebase.',
+  no_pr: 'Told a unit lead which tickets in review have no pull request.',
 };
 
 const more = (n: number) => (n > FLOW_LIMITS.ticketsPerMessage ? [`- and ${n - FLOW_LIMITS.ticketsPerMessage} more`] : []);
@@ -529,7 +595,7 @@ function emptyView(p: FlowProgram, enabled: boolean, ok: boolean): FlowProgramVi
     mergeGate: p.mergeGate,
     mergeGateLive: null,
     leads: [],
-    counts: { merge: 0, qa: 0, idle: 0, bypass: 0, stall: 0 },
+    counts: { merge: 0, qa: 0, idle: 0, bypass: 0, stall: 0, conflict: 0, no_pr: 0 },
     inReview: 0,
     doneRecent: 0,
     stallSince: null,

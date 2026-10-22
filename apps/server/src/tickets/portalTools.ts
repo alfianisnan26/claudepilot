@@ -11,6 +11,8 @@ import {
   TICKET_STATUSES,
   TICKET_TYPES,
   TICKET_VERDICT_BATCH_LIMITS,
+  TICKET_MERGE_LIMITS,
+  TICKET_MERGE_STATES,
   workspaceRef,
   type PortalScope,
   type TicketAssignee,
@@ -18,6 +20,7 @@ import {
   type TicketAttachment,
   type TicketEvent,
   type TicketItem,
+  type TicketMergeStatus,
 } from '@portal/contracts';
 import { actorOfPrincipal, can, requireCan, visible } from '../authz/seam.js';
 import { bumpMode, bumpNote } from '../chat/bump.js';
@@ -692,6 +695,34 @@ export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = p
             : { id: r.id, ok: false, error: r.error },
         ),
       };
+    },
+  });
+
+  registerPortalTool({
+    name: 'ticket_merge_status',
+    title: 'Record or read a ticket’s PR merge state',
+    description:
+      'The merge gate’s record of a ticket’s pull request in one repo: the PR number, its CURRENT head (the full 40-character sha) and its state: ready (open, the verdicts it needs are on that head), merged, conflict (needs a rebase), waiting (verdicts on that head not yet in), no_pr (no pull request is open; leave pr and pr_head out) or failed (tried and could not merge; say why in reason). The flow watchdog judges the QA PASS on that head, skips merged tickets, and tells the unit lead about conflict and no_pr. Only the merge-gate lead of a flow program the ticket belongs to, or a worker that lead started, may record; record again whenever the PR head or its state changes. Without state it reads the latest record per repo. A ticket is named by its stable id (T-12) or its bucket key (KONF-3); results that show a ticket carry both (id and key).',
+    scope: 'agent',
+    input: z.object({
+      id: ticketIdArg,
+      repo: z.string().max(TICKET_MERGE_LIMITS.repo).optional().describe('owner/name as the forge spells it. Needed to record.'),
+      pr: z.number().int().positive().optional().describe('The pull request number. Needed for every state but no_pr.'),
+      pr_head: z.string().max(64).optional().describe('The PR’s head now: the full 40-character sha. Needed for every state but no_pr.'),
+      state: z.enum(TICKET_MERGE_STATES).optional().describe('ready, merged, conflict, waiting, no_pr or failed. Leave out to read.'),
+      reason: z.string().max(TICKET_MERGE_LIMITS.reason).optional().describe('One line, e.g. why it failed.'),
+      session_id: sessionIdArg,
+    }),
+    handler(ctx, args) {
+      const caller = callerOf(ctx);
+      const view = (m: TicketMergeStatus) => ({ repo: m.repo, pr: m.pr, pr_head: m.prHead, state: m.state, reason: ctx.untrusted(m.reason, 'agent', TICKET_MERGE_LIMITS.reason), actor: m.actor, at: m.at });
+      if (args.state === undefined) {
+        const list = tickets.mergeStatus(caller, args.id);
+        return { summary: `${args.id} has a merge status in ${list.length} repos.`, id: stable(args.id), key: tickets.keyOf(stable(args.id)) ?? stable(args.id), merge: list.map(view) };
+      }
+      const m = tickets.recordMergeStatus(caller, args.id, { repo: args.repo, pr: args.pr, prHead: args.pr_head, state: args.state, reason: args.reason }, { sessionId: args.session_id });
+      ctx.affected(`ticket:${stable(args.id)}`);
+      return { summary: `Recorded ${m.repo}#${m.pr ?? '-'} ${m.state} for ${args.id}.`, id: stable(args.id), key: tickets.keyOf(stable(args.id)) ?? stable(args.id), merge: view(m) };
     },
   });
 

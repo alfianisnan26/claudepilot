@@ -22,6 +22,11 @@ export const TICKET_ATTACHMENT_POLICIES = {
   'DELETE /api/tickets/:id/attachments/:attachmentId': { kind: 'objects', checks: [ticket('operate')], audit: 'ticket.attachment_removed' },
 } satisfies RoutePolicies;
 
+/** T-2014 (FR36e): the merge gate's latest word per repo; seeing it needs view on the ticket (the same 404 as a missing ticket). */
+export const TICKET_MERGE_POLICIES = {
+  'GET /api/tickets/:id/merge': { kind: 'objects', checks: [ticket('view')] },
+} satisfies RoutePolicies;
+
 export const TICKET_BUMP_TOOL_POLICIES = {
   ticket_bump: {
     kind: 'objects',
@@ -47,6 +52,9 @@ export const TICKET_VERDICT_TOOL_POLICIES = {
   ticket_verdict: { kind: 'agent', reach: 'workspace', audit: 'ticket.verdict' },
   // T-1987 (FR36d, D-93): a QA batch's verdicts, each item through the same rule and the same not found; one audit row per ticket.
   ticket_verdict_batch: { kind: 'agent', reach: 'workspace', audit: 'ticket.verdict' },
+  // T-2014 (FR36e): the merge gate's record of a ticket's PR. The service allows only the merge-gate lead of a flow program the ticket
+  // belongs to, or a worker it started; a ticket the caller cannot see is the same not found. Audited (ticket.merge_status).
+  ticket_merge_status: { kind: 'agent', reach: 'workspace', audit: 'ticket.merge_status' },
 } satisfies ToolPolicies;
 
 /* ---------- Buckets (T-1098): an object of the seam ---------- */
@@ -100,7 +108,7 @@ export function registerTicketBucketAuthz(tickets: { bucketOwner(key: string): s
 }
 
 export function declareTicketPolicies(): void {
-  declarePolicies('tickets', { ...TICKET_BUMP_POLICIES, ...TICKET_ATTACHMENT_POLICIES, ...TICKET_BUCKET_POLICIES });
+  declarePolicies('tickets', { ...TICKET_BUMP_POLICIES, ...TICKET_ATTACHMENT_POLICIES, ...TICKET_MERGE_POLICIES, ...TICKET_BUCKET_POLICIES });
   declareToolPolicies('tickets', { ...TICKET_BUMP_TOOL_POLICIES, ...TICKET_ADOPT_TOOL_POLICIES, ...TICKET_VERDICT_TOOL_POLICIES, ...TICKET_BUCKET_TOOL_POLICIES });
 }
 

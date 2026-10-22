@@ -2,7 +2,7 @@
 // Home card), the Flow settings. platform/index.ts registers it with ONE line. Adapters below are the only place it touches the chat
 // controller and the tickets service; both are read through their public methods (no edit in either).
 
-import type { ChatAuditEntry, ChatSession, TicketCheck, TicketItem, TicketStatus } from '@portal/contracts';
+import type { ChatAuditEntry, ChatSession, TicketCheck, TicketItem, TicketMergeStatus, TicketStatus } from '@portal/contracts';
 import { TICKET_SETTING_KEYS } from '@portal/contracts';
 import { realClock, type ClockPort } from '../autotransfer/ports.js';
 import { effectiveMaxWorkers, type AgentCaps } from '../chat/agents.js';
@@ -31,6 +31,7 @@ interface TicketsLike {
   verdicts(caller: { kind: 'system' }, id: string): StoredVerdict[];
   checks(id: string): TicketCheck[];
   liveBatchOf?(id: string): { branch: string; at: string } | null;
+  mergeStatus?(caller: { kind: 'system' }, id: string): TicketMergeStatus[];
 }
 
 /** The chat controller as the watchdog needs it; null when what was handed over lacks it (some tests). */
@@ -72,6 +73,8 @@ function flowTicketPort(raw: unknown): FlowTicketPort | null {
     checks: (id) => tickets.checks(id),
     // T-1987: an older tickets service without it reads as no batch (the ticket is asked as before).
     batchOf: (id) => (typeof tickets.liveBatchOf === 'function' ? tickets.liveBatchOf(id) : null),
+    // T-2014: an older tickets service without it reads as no record (the newest-seen heuristic, labelled).
+    mergeStatus: (id) => (typeof tickets.mergeStatus === 'function' ? tickets.mergeStatus(system, id) : []),
   };
 }
 

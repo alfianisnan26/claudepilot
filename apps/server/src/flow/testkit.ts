@@ -1,7 +1,7 @@
 // Test helpers for the flow watchdog: a chat and a ticket queue in memory, on the fake clock. Nothing here runs a workspace or contacts anyone.
 
 import { AppError } from '@isnanme/core';
-import { FLOW_SETTING_KEYS, TICKET_SETTING_KEYS, type ChatSession, type TicketCheck, type TicketItem, type TicketStatus } from '@portal/contracts';
+import { FLOW_SETTING_KEYS, TICKET_SETTING_KEYS, type ChatSession, type TicketCheck, type TicketItem, type TicketMergeStatus, type TicketStatus } from '@portal/contracts';
 import type { NotifyEmit } from '../notify/bus.js';
 import { fakeClock } from '../autotransfer/testkit.js';
 import { session } from '../notify/testkit.js';
@@ -71,6 +71,8 @@ export class FlowFakeTickets implements FlowTicketPort {
   readonly checksOf = new Map<string, TicketCheck[]>();
   /** T-1987: the live batch a ticket is in (liveBatchOf). */
   readonly batches = new Map<string, { branch: string; at: string }>();
+  /** T-2014: the merge gate's latest record per repo (ticket_merge_status), newest first. */
+  readonly merges = new Map<string, TicketMergeStatus[]>();
   #vid = 1;
   constructor(readonly clock: Clock) {}
   add(n: number, over: Partial<TicketItem> & { holder?: string } = {}): TicketItem {
@@ -118,6 +120,15 @@ export class FlowFakeTickets implements FlowTicketPort {
   }
   batchOf(id: string) {
     return this.batches.get(id) ?? null;
+  }
+  /** A record the merge gate made `min` minutes ago (the newest goes first, as the service orders them). */
+  merged(id: string, m: Omit<TicketMergeStatus, 'actor' | 'at'> & { min?: number }) {
+    const { min = 30, ...rest } = m;
+    const row = { actor: 'session:gate', at: new Date(this.clock.now() - min * MIN).toISOString(), ...rest };
+    this.merges.set(id, [row, ...(this.merges.get(id) ?? []).filter((x) => x.repo !== m.repo)]);
+  }
+  mergeStatus(id: string) {
+    return this.merges.get(id) ?? [];
   }
 }
 
