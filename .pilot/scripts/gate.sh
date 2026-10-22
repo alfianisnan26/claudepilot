@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The gate job: scripts/gate.sh (npm ci, typecheck, web build, the server suite) on a clean copy of the run's commit, and its verdict
+# The gate job: scripts/gate.sh (npm ci, typecheck, web build, web tests, the server suite) on a clean copy of the run's commit, and its verdict
 # (scripts/gate-verdict.sh). By default it runs as a Job in the cluster (scripts/gate-job.sh, T-37), on CPUs other than the workspace's;
 # DEPLOY_GATE_IN_CLUSTER=false runs it here instead. Input gate=false skips it; a dry run only says what it would run.
 set -euo pipefail
@@ -39,7 +39,7 @@ export GATE_DIR="${TMPDIR:-/tmp}/pilot-gate-${PILOT_RUN_ID:-local}"
 logs="$GATE_DIR.logs"
 trap 'rm -rf "$GATE_DIR" "$logs"' EXIT
 bash scripts/gate.sh "$sha" 2>&1 | mask
-for step in npm-ci typecheck web-build server-suite; do
+for step in npm-ci typecheck web-build web-tests server-suite; do
   if ! grep -q "^$step rc=0 " "$logs/SUMMARY.txt" 2>/dev/null; then
     log "--- the end of $step's log:"
     tail -n 40 "$logs/$step.log" 2>/dev/null | mask || true

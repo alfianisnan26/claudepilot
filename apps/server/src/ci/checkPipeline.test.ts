@@ -72,7 +72,7 @@ test('in the workspace (the fallback, no PILOT_RUNNER) the gate goes to the clus
   const f = fixture({ 'a.ts': 'export const a = 3;\n', 'docs/x.md': 'x\n' });
   const r = f.run({});
   assert.equal(r.status, 0, r.stderr);
-  assert.match(r.stdout, new RegExp(`GATE JOB ${f.head} typecheck,web-build`));
+  assert.match(r.stdout, new RegExp(`GATE JOB ${f.head} typecheck,web-build,web-tests`));
   assert.doesNotMatch(r.stdout, /GATE HERE/);
 });
 
@@ -106,5 +106,5 @@ test('T-1609: in the workspace, a gate Job already in the cluster for this commi
   assert.match(same.stdout, /already in the cluster/);
   assert.doesNotMatch(same.stdout, /GATE JOB/);
   const other = withJobs('job.batch/claudepilot-gate-0000000-a1b2');
-  assert.match(other.stdout, new RegExp(`GATE JOB ${f.head} typecheck,web-build`));
+  assert.match(other.stdout, new RegExp(`GATE JOB ${f.head} typecheck,web-build,web-tests`));
 });

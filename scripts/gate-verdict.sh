@@ -16,7 +16,7 @@ green() { echo "GATE-VERDICT: green"; exit 0; }
 red() { echo "GATE-VERDICT: red: $*"; exit 1; }
 case ${1:-} in
   logs)
-    logs=${2:?logs dir}; steps=${3:-${GATE_STEPS:-typecheck,web-build,server-suite}}
+    logs=${2:?logs dir}; steps=${3:-${GATE_STEPS:-typecheck,web-build,web-tests,server-suite}}
     [ -f "$logs/SUMMARY.txt" ] || red "the gate left no summary"
     for step in npm-ci ${steps//,/ }; do
       grep -q "^$step rc=0 " "$logs/SUMMARY.txt" || red "$step failed"
