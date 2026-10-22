@@ -12,7 +12,7 @@ inside the portal server, with no model. It keeps the leads moving whoever is on
 ## What it does
 
 `apps/server/src/flow` is a platform module (one line in `platform/index.ts`). Every 5 minutes it looks at each configured program. It
-skips the round while it is switched off, or while the portal cannot write (frozen, locked). It counts seven conditions:
+skips the round while it is switched off, or while the portal cannot write (frozen, locked). It counts eight conditions:
 
 | | Condition | Action |
 | --- | --- | --- |
@@ -21,8 +21,19 @@ skips the round while it is switched off, or while the portal cannot write (froz
 | c | A lead idle for `flow.idleAfterMin` (30) while its unit (itself and its workers) holds open or in-progress tickets, and it runs fewer live workers than its cap | Message that lead its next tickets: priority first, then oldest, at most 5 |
 | d | A lead that was in Bypass is now on the default mode or has ended | Reported only (audit and card). See Bypass |
 | e | No ticket done in `flow.stallHours` (3) while tickets wait in review | Notify the owner once per stall, when it has lasted `flow.notifyAfterHours` (3) after the first nudge. If no lead could be told, the time counts from when the stall began |
-| conflict | In review, the merge gate's newest open record is `conflict`, recorded `flow.mergeAfterMin` ago or more (T-2014) | Message the ticket's unit lead: send it back to its builder for a rebase; QA then verifies the new head |
-| no_pr | In review, the merge gate's newest open record is `no_pr`, that long (T-2014) | Message the ticket's unit lead: open the PR (or have its builder open it), or say on the ticket why not |
+| conflict | In review, the merge gate's newest open record is `conflict` (T-2014). Told at once, the round it is seen (T-2018; it used to wait `flow.mergeAfterMin`) | Message the ticket's unit lead: send it back to its builder for a rebase; QA then verifies the new head |
+| no_pr | In review, the merge gate's newest open record is `no_pr`, told at once too (T-2014, T-2018) | Message the ticket's unit lead: open the PR (or have its builder open it), or say on the ticket why not |
+| idle_lanes | A lead that may be told (live, not stopped by a person, Keep going not paused for it) has one or more builder workers idle for `flow.laneIdleMin` (10) while its unit has a `conflict` or `no_pr` record, or open or in-progress tickets (T-2018) | Message that lead the idle lane ids (longest idle first) and the next items: conflicts first (ticket, repo#pr), then no_pr, then the open tickets, priority first then oldest (at most 5) |
+
+**Idle lanes** (T-2018). On 2026-10-22 at 03:35 UTC, 4 sessions were working and 19 idle, every Claude had fresh quota, and 15 PRs
+were in conflict with nobody rebasing them: condition c only fires when the LEAD itself is idle under its cap, and a lead that is busy (or
+at its cap) while its own builders sit idle was never told. A **builder lane** is a worker the lead started directly (its `parentId` is the
+lead's live head or any id the lead went by) whose agent name is a whole builder role word: `implementer`, `builder`, `lane-backend`,
+`lane-frontend`, `lane-fullstack`, with at most one prefix part (`konfersi-implementer`), the same rule as the peer verifier names. QA and
+review lanes are not counted (they take QA-ASK batches), nor `builder-qa`, a worker of a worker, or a worker without an agent. It is idle
+when it has not ended, its process is not gone, its state is idle with nothing waiting, no busy turn and no running sub-agents, and its
+last activity is `flow.laneIdleMin` old or more. The unit's work is the same as elsewhere: tickets whose holder's crew root is the lead.
+The card counts the idle lanes of units that have work.
 
 **The merge gate's record** (T-2014, tickets PRD FR36e). The merge gate (the program's merge-gate lead, or a worker it started) records what
 it knows of a ticket's pull request per repo with `ticket_merge_status`: the PR number, its current head and a state (`ready`, `merged`,
@@ -82,7 +93,7 @@ the lead was continued as a new chat (never bypass-capable, FR20).
 | `flow.enabled` | on | The kill switch |
 | `flow.paused` | empty | Programs on hold (names, comma separated, `*` for all): counted, not acted on |
 | `flow.programs` | `konfersi\|konfersi-migration\|\|` | Programs split by `;`, each `name\|tag\|group\|merge gate\|on`. `group` is a 1-based index into `tickets.leadPeerGroups`; empty means the first group whose leads hold the program's tickets (else the first group). `merge gate` is a lead id; empty means the first lead of the group. Add `\|off` to stop one program. Checked on save: every program must read, and a merge gate must be a lead of its group (any group when the group is empty). If the groups change later, a gate that is no longer a lead falls back to the first lead. |
-| `flow.mergeAfterMin`, `flow.qaAfterMin`, `flow.idleAfterMin`, `flow.repeatMin` | 20, 60, 30, 30 | Minutes |
+| `flow.mergeAfterMin`, `flow.qaAfterMin`, `flow.idleAfterMin`, `flow.laneIdleMin`, `flow.repeatMin` | 20, 60, 30, 10, 30 | Minutes. `flow.mergeAfterMin` no longer delays conflict and no_pr (T-2018) |
 | `flow.stallHours`, `flow.notifyAfterHours` | 3, 3 | Hours |
 
 The settings route needs `settings` `manage`. No agent tool writes settings.
@@ -96,7 +107,7 @@ The settings route needs `settings` `manage`. No agent tool writes settings.
 - **Notification:** the stall uses the existing `keepgoing_attention` kind (`what: flow_stalled`, title "Flow stalled", body
   `program · N in review · none done in 3 h`). Every destination that already hears Keep going hears it too, Web Push included. A new
   kind would have needed a migration for destinations that keep an explicit list of kinds.
-- **Card:** Home card and glance widget `flow`, hidden in the strips by default. It shows Merge, No QA, Idle and Bypass in one row (a stall is a status line above them, "Stalled · program"), plus
+- **Card:** Home card and glance widget `flow`, hidden in the strips by default. It shows Merge, No QA, Idle and Bypass in one row (a stall is a status line above them, "Stalled · program"; idle builder lanes too, "Idle lanes · N", since a fifth figure does not fit the row at 390 px), plus
   the last 5 actions; the explanation is in its InfoTip. It reloads after each round (see Live refresh). A program the round could
   not read shows `-` and "Unavailable · program" (why in its InfoTip), never "Nothing needed a nudge.", which shows only when every program
   was read.

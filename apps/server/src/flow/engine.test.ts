@@ -579,7 +579,7 @@ test('T-2014: a ticket recorded merged (in every repo it was recorded in) and a 
   assert.equal(r.engine.snapshot().programs[0]!.counts.merge, 1);
 });
 
-test('T-2014: conflict and no_pr are listed apart and go to the ticket\'s unit lead: rebase it, open the PR; not before the merge threshold', async () => {
+test('T-2014: conflict and no_pr are listed apart and go to the ticket\'s unit lead: rebase it, open the PR; T-2018: at once', async () => {
   const r = rig();
   crew(r);
   r.tickets.add(12, { holder: 'wb' });
@@ -589,15 +589,124 @@ test('T-2014: conflict and no_pr are listed apart and go to the ticket\'s unit l
   r.tickets.verdict('T-13', { role: 'qa', verdict: 'pass', commit: sha('b'), at: ago(r, 40) });
   r.tickets.merged('T-13', { repo: 'konfersi/api', pr: null, prHead: null, state: 'no_pr', reason: null });
   r.tickets.add(14, { holder: 'wc' });
-  r.tickets.merged('T-14', { repo: 'konfersi/api', pr: null, prHead: null, state: 'no_pr', reason: null, min: 5 }); // too fresh
+  r.tickets.merged('T-14', { repo: 'konfersi/api', pr: null, prHead: null, state: 'no_pr', reason: null, min: 0 }); // T-2018: fresh is told too
   await r.engine.round();
   assert.equal(r.chat.sent.filter((x) => x.id === LEAD_A).length, 0, 'the merge gate is not told about them');
   const toB = r.chat.sent.filter((x) => x.id === LEAD_B).map((x) => x.text);
   assert.equal(toB.length, 2, 'one message per condition to the unit lead');
   assert.match(toB.find((t) => /conflict/.test(t))!, new RegExp(`for a rebase[\\s\\S]*- T-12 \\(KONF-12\\) konfersi/api#7 head ${sha('a')}`));
   assert.match(toB.find((t) => /no pull request/.test(t))!, /Open the PR[\s\S]*- T-13 \(KONF-13\) konfersi\/api$/m);
-  assert.equal(r.chat.sent.filter((x) => x.id === LEAD_C).length, 0);
+  const toC = r.chat.sent.filter((x) => x.id === LEAD_C).map((x) => x.text);
+  assert.equal(toC.length, 1, 'T-2018: a no_pr recorded this minute is told at once');
+  assert.match(toC[0]!, /- T-14 \(KONF-14\) konfersi\/api$/m);
+  assert.doesNotMatch(toC[0]!, /min or more/);
   const counts = r.engine.snapshot().programs[0]!.counts;
-  assert.deepEqual([counts.merge, counts.conflict, counts.no_pr], [0, 1, 1]);
-  assert.deepEqual(r.engine.snapshot().actions.filter((a) => a.kind === 'told').map((a) => a.condition).sort(), ['conflict', 'no_pr']);
+  assert.deepEqual([counts.merge, counts.conflict, counts.no_pr], [0, 1, 2]);
+  assert.deepEqual(r.engine.snapshot().actions.filter((a) => a.kind === 'told').map((a) => a.condition).sort(), ['conflict', 'no_pr', 'no_pr']);
+});
+
+// T-2018: idle builder lanes while the unit has work.
+
+/** Lead B with builder lanes (idle 15 min) and a QA lane; leads A and C working, no idle lanes. */
+function lanes(r: ReturnType<typeof rig>) {
+  crew(r);
+  r.chat.put('b-impl', { parentId: LEAD_B, agent: 'implementer', state: 'idle', lastActivityAt: ago(r, 15) });
+  r.chat.put('b-fe', { parentId: LEAD_B, agent: 'konfersi-lane-frontend', state: 'idle', lastActivityAt: ago(r, 25) });
+}
+
+test('T-2018 idle_lanes: idle builders and conflicts: the lead hears the lane ids and the items, conflicts first, then no_pr, then open', async () => {
+  const r = rig();
+  lanes(r);
+  r.tickets.add(20, { holder: 'wb', status: 'open', priority: 'normal' });
+  r.tickets.add(21, { holder: 'wb', status: 'in_progress', priority: 'high', createdAt: ago(r, 300) });
+  r.tickets.add(22, { holder: 'b-impl' });
+  r.tickets.merged('T-22', { repo: 'konfersi/api', pr: 9, prHead: sha('c'), state: 'conflict', reason: null, min: 0 });
+  r.tickets.add(23, { holder: 'wb' });
+  r.tickets.merged('T-23', { repo: 'konfersi/web', pr: null, prHead: null, state: 'no_pr', reason: null, min: 0 });
+  await r.engine.round();
+  const m = r.chat.sent.filter((x) => x.id === LEAD_B).map((x) => x.text).find((t) => /builder lane/.test(t));
+  assert.ok(m, 'lead B is told about its idle lanes');
+  assert.ok(m.startsWith(FLOW_PREFIX));
+  assert.match(m, /2 builder lanes of yours have been idle 10 min or more/);
+  assert.match(m, /- b-fe konfersi-lane-frontend idle 25 min\n- b-impl implementer idle 15 min/, 'the longest idle first');
+  const order = ['T-22 (KONF-22) conflict konfersi/api#9', 'T-23 (KONF-23) no PR konfersi/web', 'T-21 (KONF-21) high in_progress', 'T-20 (KONF-20) normal open'].map((x) => m.indexOf(x));
+  assert.ok(order.every((i) => i > 0), `every item named: ${order}`);
+  assert.deepEqual([...order].sort((a, b) => a - b), order, 'conflicts, then no_pr, then the oldest high priority open');
+  assert.doesNotMatch(m, /CANARY/);
+  assert.equal(r.chat.sent.filter((x) => x.id === LEAD_A || x.id === LEAD_C).filter((x) => /builder lane/.test(x.text)).length, 0);
+  assert.equal(r.engine.snapshot().programs[0]!.counts.idle_lanes, 2);
+  const act = r.engine.snapshot().actions.find((a) => a.condition === 'idle_lanes')!;
+  assert.equal(act.kind, 'told');
+  assert.deepEqual(act.tickets, ['T-22', 'T-23', 'T-21', 'T-20']);
+  assert.ok(r.audits.some((a) => a.kind === 'flow.told' && (a.detail as { condition: string }).condition === 'idle_lanes'), 'audited');
+});
+
+test('T-2018 idle_lanes: QA and review lanes, look-alike names, workers of a worker and fresh idle builders are not counted', async () => {
+  const r = rig();
+  crew(r);
+  r.chat.put('b-qa', { parentId: LEAD_B, agent: 'qa-verifier', state: 'idle', lastActivityAt: ago(r, 60) });
+  r.chat.put('b-rev', { parentId: LEAD_B, agent: 'reviewer', state: 'idle', lastActivityAt: ago(r, 60) });
+  r.chat.put('b-odd', { parentId: LEAD_B, agent: 'builder-qa', state: 'idle', lastActivityAt: ago(r, 60) });
+  r.chat.put('b-none', { parentId: LEAD_B, agent: null, state: 'idle', lastActivityAt: ago(r, 60) });
+  r.chat.put('b-sub', { parentId: 'b-qa', agent: 'implementer', state: 'idle', lastActivityAt: ago(r, 60) });
+  r.chat.put('b-fresh', { parentId: LEAD_B, agent: 'implementer', state: 'idle', lastActivityAt: ago(r, 5) });
+  r.tickets.add(20, { holder: 'wb', status: 'open' });
+  await r.engine.round();
+  assert.equal(r.chat.sent.filter((x) => /builder lane/.test(x.text)).length, 0);
+  assert.equal(r.engine.snapshot().programs[0]!.counts.idle_lanes, 0);
+});
+
+test('T-2018 idle_lanes: not while the builders work, or with no work in the unit, or for a lead a person stopped', async () => {
+  const working = rig();
+  crew(working);
+  working.chat.put('b-impl', { parentId: LEAD_B, agent: 'implementer', state: 'working', lastActivityAt: ago(working, 15) });
+  working.chat.put('b-be', { parentId: LEAD_B, agent: 'lane-backend', state: 'idle', busySince: ago(working, 20), lastActivityAt: ago(working, 20) });
+  working.chat.put('b-gone', { parentId: LEAD_B, agent: 'lane-fullstack', state: 'idle', process: 'gone', lastActivityAt: ago(working, 20) });
+  working.chat.put('b-end', { parentId: LEAD_B, agent: 'builder', state: 'ended', lastActivityAt: ago(working, 20) });
+  working.tickets.add(20, { holder: 'wb', status: 'open' });
+  await working.engine.round();
+  assert.equal(working.engine.snapshot().programs[0]!.counts.idle_lanes, 0);
+
+  const nothing = rig();
+  lanes(nothing);
+  nothing.tickets.add(20, { holder: 'wa', status: 'open' }); // another unit's work
+  nothing.tickets.add(21, { holder: 'wb', status: 'blocked' });
+  await nothing.engine.round();
+  assert.equal(nothing.engine.snapshot().programs[0]!.counts.idle_lanes, 0);
+  assert.equal(nothing.chat.sent.filter((x) => /builder lane/.test(x.text)).length, 0);
+
+  const stopped = rig();
+  lanes(stopped);
+  stopped.chat.stopped.add(LEAD_B);
+  stopped.tickets.add(20, { holder: 'wb', status: 'open' });
+  await stopped.engine.round();
+  assert.equal(stopped.engine.snapshot().programs[0]!.counts.idle_lanes, 0);
+  assert.equal(stopped.chat.sent.filter((x) => x.id === LEAD_B).length, 0);
+});
+
+test('T-2018 idle_lanes: one message per lead per 30 min; a builder of a continued lead counts for its live head', async () => {
+  const r = rig();
+  lanes(r);
+  r.tickets.add(20, { holder: 'wb', status: 'open' });
+  await r.engine.round();
+  const told = () => r.chat.sent.filter((x) => x.id === LEAD_B && /builder lane/.test(x.text)).length;
+  assert.equal(told(), 1);
+  r.clock.advance(10);
+  await r.engine.round();
+  assert.equal(told(), 1, 'rate limited');
+  assert.equal(r.engine.snapshot().programs[0]!.counts.idle_lanes, 2, 'still counted');
+  r.clock.advance(25);
+  await r.engine.round();
+  assert.equal(told(), 2, 'the next window');
+
+  const c = rig();
+  crew(c);
+  c.chat.patch(LEAD_B, { state: 'ended' });
+  c.chat.put('b2', { continuedFrom: LEAD_B, state: 'working', lastActivityAt: ago(c, 1) });
+  c.chat.put('b-impl', { parentId: LEAD_B, agent: 'implementer', state: 'idle', lastActivityAt: ago(c, 15) });
+  c.tickets.add(20, { holder: 'b-impl', status: 'open' });
+  await c.engine.round();
+  const m = c.chat.sent.find((x) => x.id === 'b2' && /builder lane/.test(x.text));
+  assert.ok(m, 'told to the live continuation');
+  assert.match(m.text, /- b-impl implementer idle 15 min/);
 });

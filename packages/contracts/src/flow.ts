@@ -17,9 +17,10 @@ export const FLOW_PREFIX = 'FLOW WATCHDOG:';
  * and not merged for the merge threshold. `qa`: in review with no verdict on the head and nobody working on it for the QA threshold. `idle`:
  * a lead idle for the idle threshold while its unit holds open work and it runs fewer workers than its cap. `bypass`: a lead that was in
  * Bypass is not now (reported only). `stall`: nothing done in the stall window while tickets wait in review. `conflict` and `no_pr`
- * (T-2014): the merge gate recorded that the ticket's PR needs a rebase, or that it has no PR, for the merge threshold: its unit lead is told.
+ * (T-2014): the merge gate recorded that the ticket's PR needs a rebase, or that it has no PR: its unit lead is told at once (T-2018).
+ * `idle_lanes` (T-2018): a lead's own builder workers sit idle for the lane threshold while its unit has conflicts, no_pr or open work.
  */
-export const FLOW_CONDITIONS = ['merge', 'qa', 'idle', 'bypass', 'stall', 'conflict', 'no_pr'] as const;
+export const FLOW_CONDITIONS = ['merge', 'qa', 'idle', 'bypass', 'stall', 'conflict', 'no_pr', 'idle_lanes'] as const;
 export type FlowCondition = (typeof FLOW_CONDITIONS)[number];
 
 /** What the watchdog did: told a lead, reported (no safe action), told the owner, or could not (no live session, a refused send). */
@@ -88,6 +89,8 @@ export const FLOW_SETTING_KEYS = {
   mergeAfterMin: 'flow.mergeAfterMin',
   qaAfterMin: 'flow.qaAfterMin',
   idleAfterMin: 'flow.idleAfterMin',
+  /** T-2018: minutes a builder worker of a lead may sit idle while its unit has work before the lead is told. */
+  laneIdleMin: 'flow.laneIdleMin',
   repeatMin: 'flow.repeatMin',
   stallHours: 'flow.stallHours',
   notifyAfterHours: 'flow.notifyAfterHours',

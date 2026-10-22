@@ -6,7 +6,7 @@ import { isAppError } from '@isnanme/core';
 import { FLOW_SETTING_KEYS, TICKET_SETTING_KEYS } from '@portal/contracts';
 import { freshStore } from '../notify/testkit.js';
 import { Settings } from '../settings/store.js';
-import { programsProblem } from './settings.js';
+import { flowThresholds, programsProblem } from './settings.js';
 import { LEAD_A, LEAD_B, LEAD_C } from './testkit.js';
 
 const GROUPS = `${LEAD_A},${LEAD_B};${LEAD_C},${LEAD_C.replace('c', 'd')}`;
@@ -34,4 +34,13 @@ test('the settings store refuses a bad flow.programs on save and keeps the old v
   settings.set(FLOW_SETTING_KEYS.programs, `konfersi|konfersi-migration|1|${LEAD_B}`, { actor: 'ui' });
   assert.equal(settings.get(FLOW_SETTING_KEYS.programs), `konfersi|konfersi-migration|1|${LEAD_B}`);
   store.close();
+});
+
+test('T-2018: flow.laneIdleMin defaults to 10 min and is clamped to its range', () => {
+  const of = (v: unknown) => flowThresholds({ get: (k) => (k === FLOW_SETTING_KEYS.laneIdleMin ? v : undefined) }).laneIdleMs / 60_000;
+  assert.equal(of(undefined), 10);
+  assert.equal(of('x'), 10);
+  assert.equal(of(15), 15);
+  assert.equal(of(1), 5);
+  assert.equal(of(99_999), 1440);
 });

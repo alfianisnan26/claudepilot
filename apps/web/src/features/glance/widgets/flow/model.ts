@@ -16,6 +16,8 @@ export interface FlowView {
   qa: number | null;
   idle: number | null;
   bypass: number | null;
+  /** T-2018: builder workers idle while their lead's unit has work (a portal from before it reports none: 0). */
+  idleLanes: number | null;
   stalled: number | null;
   inReview: number | null;
   lastRunAt: string | null;
@@ -34,6 +36,7 @@ export function flowView(s: FlowSnapshot): FlowView {
     qa: sum((p) => p.counts.qa),
     idle: sum((p) => p.counts.idle),
     bypass: sum((p) => p.counts.bypass),
+    idleLanes: sum((p) => p.counts.idle_lanes ?? 0),
     stalled: sum((p) => p.counts.stall),
     inReview: sum((p) => p.inReview),
     lastRunAt: s.lastRunAt,
@@ -46,17 +49,17 @@ export function flowCompact(v: FlowView | null, failed: boolean): GlanceCompact 
   if (!v.enabled) return { value: null, level: 'idle', title: 'Flow: the watchdog is off' };
   if (v.paused.length && v.merge === null) return { value: null, level: 'idle', title: `Flow: paused (${v.paused.join(', ')})` };
   if (v.merge === null) return { value: '-', level: 'unknown', title: 'Flow: no program was read' };
-  const stuck = (v.merge ?? 0) + (v.qa ?? 0) + (v.idle ?? 0);
+  const stuck = (v.merge ?? 0) + (v.qa ?? 0) + (v.idle ?? 0) + (v.idleLanes ?? 0);
   const level: GlanceLevel = (v.stalled ?? 0) > 0 ? 'critical' : stuck > 0 || (v.bypass ?? 0) > 0 ? 'warn' : 'ok';
   return {
     value: String(stuck),
     level,
-    title: `Flow: ${v.merge} to merge, ${v.qa} without QA, ${v.idle} idle leads${(v.stalled ?? 0) > 0 ? ', stalled' : ''}${v.paused.length ? `; paused: ${v.paused.join(', ')}` : ''}`,
+    title: `Flow: ${v.merge} to merge, ${v.qa} without QA, ${v.idle} idle leads, ${v.idleLanes ?? 0} idle lanes${(v.stalled ?? 0) > 0 ? ', stalled' : ''}${v.paused.length ? `; paused: ${v.paused.join(', ')}` : ''}`,
   };
 }
 
 const KIND: Record<FlowAction['kind'], string> = { told: 'Told', reported: 'Reported', notified: 'Notified you', skipped: 'Skipped', failed: 'Failed' };
-const COND: Record<FlowAction['condition'], string> = { merge: 'merge', qa: 'QA', idle: 'idle lead', bypass: 'Bypass', stall: 'stall', conflict: 'conflict', no_pr: 'no PR' };
+const COND: Record<FlowAction['condition'], string> = { merge: 'merge', qa: 'QA', idle: 'idle lead', bypass: 'Bypass', stall: 'stall', conflict: 'conflict', no_pr: 'no PR', idle_lanes: 'idle lanes' };
 
 /** One action in a few words: "Told · merge · T-12, T-13". */
 export function actionLine(a: FlowAction): string {
