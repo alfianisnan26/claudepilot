@@ -33,6 +33,7 @@ A change outside your own worktree goes through a narrow door: a script that doe
 ## Environments
 
 - Production and uat are never touched by an agent on its own: no deploy, no query, no config change, no credential use. They are required escalations. uat on the owner's explicit request is the crew's work through the normal path, dry run first, secrets by name only (D-79).
+- Not uat (D-92): an additive migration on a database stg shares with uat, applied by the app's stg-deploy with migrate_approval=<ticket> after its QA PASS and the dry run in the same run. A non-additive change is split expand/contract; its contract part waits for the next uat promotion.
 - A shared service that hosts your own session (the portal, the workspace) is never stopped, restarted or reconfigured by you.
 - Work that needs a running service uses a scratch instance or a test environment you created, and you remove it when done.
 
