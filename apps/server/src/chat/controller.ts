@@ -4037,6 +4037,11 @@ export class ChatController {
       }
       this.#chat.patchSession(sessionId, { mode: 'bypassPermissions' });
       this.#note(sessionId, `Bypass kept ${after}.`);
+      // A relaunch runs on the start mode until the switch, and Claude Code often asks for its first tool call in that gap (memor.id lead,
+      // 2026-10-23 18:53 and 22:05): the card would then wait for a person although Bypass would have run it. Allow those tool requests now,
+      // the way Bypass treats them; deny rules never reach a card, a request not shown whole stays for a person (`#respond` refuses it).
+      for (const req of this.#chat.openRequests(sessionId))
+        if (req.kind === 'tool') await this.#respond(sessionId, req.requestId, 'allow', { actor: 'portal:bypass-kept' }).catch(() => undefined);
       this.#chat.addAudit({
         severity: 'high',
         kind: 'bypass.entered',
