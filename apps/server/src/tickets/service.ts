@@ -2821,7 +2821,7 @@ export class Tickets {
         subject: `ticket:${ticketId}`,
         detail: { ticketId, repo, state, sessionId: w.session?.id ?? null },
       });
-      throw new AppError('FORBIDDEN', 'Only the merge-gate lead of a flow program this ticket belongs to, or a worker it started, records a merge status.');
+      throw new AppError('FORBIDDEN', 'Only a lead of a flow program this ticket belongs to, or a worker it started, records a merge status.');
     }
     const at = this.#now().toISOString();
     const stored = this.#tx(() => {

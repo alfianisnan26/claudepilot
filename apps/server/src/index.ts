@@ -60,7 +60,7 @@ import { registerBuiltInPortalTools } from './portalmcp/tools/index.js';
 import { internalUrlResolver } from './portalmcp/internalUrl.js';
 import { OrphanSweep } from './tickets/orphans.js';
 import { Tickets } from './tickets/service.js';
-import { mergeGatesOf } from './flow/programs.js';
+import { mergeRecordersOf } from './flow/programs.js';
 import { flowProgramsRaw } from './flow/settings.js';
 import { CiService } from './ci/service.js';
 import { runnerLostMinFrom, upstreamHostsFrom } from './ci/settings.js';
@@ -534,8 +534,8 @@ const tickets = new Tickets(store, new ChatTicketSessions(chatController), {
   agentOpenPerWorkspace: () => settingsModule.settings.get<number>(TICKET_SETTING_KEYS.agentOpenPerWorkspace),
   agentAssignUserTags: () => settingsModule.settings.get<string>(TICKET_SETTING_KEYS.agentAssignUserTags),
   leadPeerGroups: () => settingsModule.settings.get<string>(TICKET_SETTING_KEYS.leadPeerGroups),
-  // T-2014 (FR36e): who may record ticket_merge_status: the flow programs' merge gates, read each call.
-  mergeGates: () => mergeGatesOf(flowProgramsRaw(settingsModule.settings), settingsModule.settings.get<string>(TICKET_SETTING_KEYS.leadPeerGroups)),
+  // T-2014 (FR36e), D-99: who may record ticket_merge_status: every lead of the flow programs' groups (and their workers), read each call.
+  mergeGates: () => mergeRecordersOf(flowProgramsRaw(settingsModule.settings), settingsModule.settings.get<string>(TICKET_SETTING_KEYS.leadPeerGroups)),
 });
 tickets.onChange = () => notify('tickets');
 // A bump reaches into a session: the platform audit (created further down) records who, which ticket, which session and how (FR30).

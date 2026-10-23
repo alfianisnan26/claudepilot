@@ -6,7 +6,7 @@ import { Hono } from 'hono';
 import { isAppError } from '@isnanme/core';
 import { MIGRATIONS } from '../store/migrations.js';
 import { policyFor } from '../authz/seam.js';
-import { mergeGatesOf } from '../flow/programs.js';
+import { mergeGatesOf, mergeRecordersOf } from '../flow/programs.js';
 import { createTicketRoutes } from './routes.js';
 import { agent, ticketsHarness, UI } from './testkit.js';
 
@@ -67,4 +67,13 @@ test('mergeGatesOf: the configured gate when a lead of the group, else its first
   assert.deepEqual(mergeGatesOf('konfersi|konfersi-migration|1||off', groups), []);
   assert.deepEqual(mergeGatesOf('konfersi|konfersi-migration|3|', groups), [], 'a group that does not exist: nobody');
   assert.deepEqual(mergeGatesOf('konfersi|konfersi-migration||', ''), []);
+});
+
+test('mergeRecordersOf (D-99): every lead of the program\'s group records; a program with no group has every group\'s leads; off programs none', () => {
+  const groups = `${GATE},${B};${C},${B}`;
+  assert.deepEqual(mergeRecordersOf(`konfersi|konfersi-migration|1|${B}`, groups), [{ tag: 'konfersi-migration', gates: [GATE, B] }]);
+  assert.deepEqual(mergeRecordersOf('konfersi|konfersi-migration||', groups), [{ tag: 'konfersi-migration', gates: [GATE, B, C] }]);
+  assert.deepEqual(mergeRecordersOf('konfersi|konfersi-migration|1||off', groups), []);
+  assert.deepEqual(mergeRecordersOf('konfersi|konfersi-migration|3|', groups), [], 'a group that does not exist: nobody');
+  assert.deepEqual(mergeRecordersOf('konfersi|konfersi-migration||', ''), []);
 });

@@ -122,6 +122,22 @@ export { parseLeadPeerGroups } from '../tickets/authz.js';
  * first whose leads hold its tickets), so each group's gate counts. The tickets service lets these (and the workers they start) record
  * `ticket_merge_status` on the program's tickets.
  */
+/**
+ * D-99: who may record `ticket_merge_status` on each program's tickets: every lead of the program's group (each unit lead merges its own
+ * NORMAL rows and records them), and the workers they start. Same shape as {@link mergeGatesOf}; the watchdog still tells the merge gate alone.
+ */
+export function mergeRecordersOf(programsRaw: unknown, groupsRaw: unknown): { tag: string; gates: string[] }[] {
+  const groups = parseLeadPeerGroupsOf(groupsRaw);
+  const out: { tag: string; gates: string[] }[] = [];
+  for (const p of parsePrograms(programsRaw)) {
+    if (!p.enabled) continue;
+    const leads = new Set<string>();
+    for (const group of p.group !== null ? [groups[p.group - 1] ?? []] : groups) for (const l of group) leads.add(l);
+    if (leads.size) out.push({ tag: p.tag, gates: [...leads] });
+  }
+  return out;
+}
+
 export function mergeGatesOf(programsRaw: unknown, groupsRaw: unknown): { tag: string; gates: string[] }[] {
   const groups = parseLeadPeerGroupsOf(groupsRaw);
   const out: { tag: string; gates: string[] }[] = [];
