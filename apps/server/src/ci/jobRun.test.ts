@@ -306,7 +306,7 @@ test('a run: the suspended Job manifest, the stream, the exit code, the artifact
   assert.equal(r.code, 3, r.out);
   assert.match(r.out, /hello from the job/);
   assert.match(r.out, /=== JOB-RUN SUMMARY claudepilot@abc1234 .* rc=3/);
-  assert.match(r.out, /job-run: claudepilot-job-[0-9a-f]{8} rc=3 in \d+s \(queued \d+s\) on k3s-master with 4Gi; log: /);
+  assert.match(r.out, /job-run: claudepilot-job-[0-9a-f]{8} rc=3 in \d+s \(queued \d+s\) on k3s-master with 3Gi; log: /);
   assert.doesNotMatch(r.out, /OOM|Pending|evicted/, 'a plain failure is not reported as memory');
   assert.doesNotMatch(r.out, /ARTIFACTS BEGIN/, 'the artifacts block is not shown');
   assert.equal(readFileSync(join(w.root, 'got/reports/junit.xml'), 'utf8'), '<testsuites tests="1"/>');
@@ -335,7 +335,7 @@ test('a run: the suspended Job manifest, the stream, the exit code, the artifact
     /"podAntiAffinity".*"namespaces":\["isnan-claudepilot-workspaces"\].*"claudepilot.managed":"true"/,
   );
   // T-524: memory requested = limited, so the scheduler only places the Job where all of it fits; /tmp (in memory) inside that limit.
-  assert.deepEqual(c.resources, { requests: { cpu: '500m', memory: '4Gi' }, limits: { cpu: '4', memory: '4Gi' } });
+  assert.deepEqual(c.resources, { requests: { cpu: '500m', memory: '3Gi' }, limits: { cpu: '4', memory: '3Gi' } });
   // T-401: fetch-home holds the fetch container's credential helper and .npmrc; the run container never mounts it.
   assert.deepEqual(pod.volumes, [
     { name: 'tmp', emptyDir: { medium: 'Memory', sizeLimit: '2Gi' } },
@@ -544,10 +544,10 @@ test('T-1982: neither the registry nor the cluster answers: exit 1, no Job; anot
   assert.deepEqual(other.w.applied(), []);
 });
 
-test('T-1624: with no cap set, the defaults are 8 at once, 2 per chat and 6 per program (k3s-node3 joined)', async () => {
-  const w = world(Array.from({ length: 8 }, (_, i) => ({ name: `claudepilot-job-0000000${i + 1}`, chat: `chat-${i}` })));
+test('T-1624, D-96: with no cap set, the defaults are 12 at once, 2 per chat and 9 per program', async () => {
+  const w = world(Array.from({ length: 12 }, (_, i) => ({ name: `claudepilot-job-${String(i + 1).padStart(8, '0')}`, chat: `chat-${i}` })));
   const s = w.start(['--repo', 'claudepilot', '--ref', 'main', '--', 'true'], { JOB_RUN_MAX: '', JOB_RUN_MAX_PER_PROGRAM: '' });
-  await waitFor('the queue line', () => /queued behind 8 \(at most 8 at once, 2 per chat, 6 per program\)/.test(s.out()));
+  await waitFor('the queue line', () => /queued behind 12 \(at most 12 at once, 2 per chat, 9 per program\)/.test(s.out()));
   w.edit((st) => {
     Object.assign(st.jobs[0] ?? {}, { done: true, rc: 0 });
   });
@@ -614,9 +614,9 @@ test('T-524 the per-program cap: two Konfersi Jobs running (one from before the 
   assert.equal(w.run(['--list'], { JOB_RUN_MAX_PER_PROGRAM: 'x' }).code, 2, 'the cap is a number');
 });
 
-test('T-524 --big: 8Gi requested = limited, /tmp 4Gi; the default is 4Gi with /tmp 2Gi; both prefer a node other than the control plane', () => {
+test('T-524 --big: 8Gi requested = limited, /tmp 4Gi; the default is 3Gi with /tmp 2Gi; both prefer a node other than the control plane', () => {
   for (const [argv, mem, tmp] of [
-    [[], '4Gi', '2Gi'],
+    [[], '3Gi', '2Gi'],
     [['--big'], '8Gi', '4Gi'],
   ] as const) {
     const w = world();
@@ -642,7 +642,7 @@ test('T-524 OOMKilled: the container killed at its limit says so with the limit 
   for (const [argv, re] of [
     [
       [],
-      /was OOMKilled: it reached its memory limit of 4Gi \(the in-memory \/tmp counts too\); rerun with --big \(8Gi, prefers k3s-node2\)/,
+      /was OOMKilled: it reached its memory limit of 3Gi \(the in-memory \/tmp counts too\); rerun with --big \(8Gi, prefers k3s-node2\)/,
     ],
     [['--big'], /was OOMKilled: it reached its memory limit of 8Gi .*; 8Gi is the most a Job gets: split the command/],
   ] as const) {
@@ -659,7 +659,7 @@ test('T-524 OOMKilled: the container killed at its limit says so with the limit 
   });
   const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--', 'npm test']);
   assert.equal(r.code, 1, r.out);
-  assert.match(r.out, /2 process\(es\) were OOM-killed at the memory limit of 4Gi; rerun with --big/);
+  assert.match(r.out, /2 process\(es\) were OOM-killed at the memory limit of 3Gi; rerun with --big/);
   // Evicted for /tmp over its sizeLimit.
   const ev = world([], {
     rc: 1,
@@ -682,7 +682,7 @@ test('T-524 Pending for memory: one clear line (not a silent wait), then the Job
   );
   const s = w.start(['--repo', 'claudepilot', '--ref', 'main', '--', 'true']);
   await waitFor('the Pending line', () =>
-    /is Pending: no node has 4Gi of memory free to request \(0\/2 nodes are available: 2 Insufficient memory\./.test(s.out()),
+    /is Pending: no node has 3Gi of memory free to request \(0\/2 nodes are available: 2 Insufficient memory\./.test(s.out()),
   );
   assert.match(s.out(), /it starts when a Job ends and frees memory \(waits up to 900s\)/);
   await new Promise((r) => setTimeout(r, 400));
@@ -704,7 +704,7 @@ test('T-524 a full in-memory /tmp: "No space left on device" in a failed Job giv
   for (const [argv, re] of [
     [
       [],
-      /: No space left on device: \/tmp holds at most 2Gi in memory \(it and \/dev\/shm count against the 4Gi limit\); rerun with --big \(\/tmp 4Gi\)/,
+      /: No space left on device: \/tmp holds at most 2Gi in memory \(it and \/dev\/shm count against the 3Gi limit\); rerun with --big \(\/tmp 4Gi\)/,
     ],
     [['--big'], /: No space left on device: \/tmp holds at most 4Gi in memory .*the 8Gi limit\); 4Gi is the most \/tmp gets/],
   ] as const) {
@@ -1484,7 +1484,7 @@ test('T-524, T-1643: the heavy Jobs keep off the control plane (the gate by a re
   for (const name of ['job-run.yaml', 'gate-job.yaml', 'browser-job.yaml']) {
     const text = readFileSync(join(REPO, 'deploy/k3s-build', name), 'utf8')
       .replace(/__MASTER_REQUIRED__/g, '')
-      .replace(/__MEMORY__/g, '4Gi')
+      .replace(/__MEMORY__/g, '3Gi')
       .replace(/__TMP_SIZE__/g, '2Gi')
       .replace(/__[A-Z_]+__/g, 'x');
     const pod = (yamlLoad(text) as { spec: { template: { spec: Pod } } }).spec.template.spec;

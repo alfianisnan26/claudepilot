@@ -60,8 +60,8 @@
 # run that passed, and a hit makes no kubectl call (no placement, no Secret, no Job). The key and the store: docs/prd/local-git-ci.md section 24.
 #   scripts/job-run.sh --list                           the Jobs, their chat, role and state
 #   scripts/job-run.sh --stop [<job> | --chat <id>]     stop Jobs (all, one, or a chat's) and delete their Secrets
-# Caps: JOB_RUN_MAX Jobs at once cluster-wide (default 8; 3 until T-1624, when k3s-node3 joined and the master and node3 had room for
-# about 6 more 4Gi Jobs while Konfersi Jobs queued a median 6 min to run 5-60 s), JOB_RUN_MAX_PER_CHAT per chat (2) and JOB_RUN_MAX_PER_PROGRAM per program (6, was 2;
+# Caps: JOB_RUN_MAX Jobs at once cluster-wide (default 12 since D-96, 2026-10-23; 8 before; 3 until T-1624, when k3s-node3 joined and the master and node3 had room for
+# about 6 more 4Gi Jobs while Konfersi Jobs queued a median 6 min to run 5-60 s), JOB_RUN_MAX_PER_CHAT per chat (2) and JOB_RUN_MAX_PER_PROGRAM per program (9 since D-96; 6, was 2;
 # claudepilot, event, konfersi: T-524). A Job over a cap is created suspended and waits its turn (creation order), with "queued behind K". The Job stops when this script is interrupted or killed (the next run removes a Job whose
 # script is gone), and when the chat ends (the Claude process, CLAUDE_PID or JOB_RUN_WATCH_PID, exits).
 # A failed `npm ci` in the Job is tried once more (it says so in the log). Exit 0 of a proof means the proof held, not only the command.
@@ -77,15 +77,16 @@ set -eu
 case $- in *x*) echo "job-run: refuses to run under xtrace (set -x / bash -x would print the credentials)" >&2; exit 2 ;; esac
 here=$(cd "$(dirname "$0")/.." && pwd)
 ns=${JOB_RUN_NAMESPACE:-isnan-claudepilot}; registry=${DEPLOY_REGISTRY:-registry.int.isnan.me}
-max=${JOB_RUN_MAX:-8}; per=${JOB_RUN_MAX_PER_CHAT:-2}; pprog=${JOB_RUN_MAX_PER_PROGRAM:-6}; poll=${JOB_RUN_POLL_S:-5}
+max=${JOB_RUN_MAX:-12}; per=${JOB_RUN_MAX_PER_CHAT:-2}; pprog=${JOB_RUN_MAX_PER_PROGRAM:-9}; poll=${JOB_RUN_POLL_S:-5}
 queue_wait=${JOB_RUN_QUEUE_WAIT_S:-3600}; start_wait=${JOB_RUN_START_WAIT_S:-900}; art_max=${JOB_RUN_ARTIFACT_MAX:-4194304}
 gitea=${JOB_RUN_GITEA:-git.konfersi.com}; github_repo=${JOB_RUN_GITHUB_REPO:-alfianisnan26/claudepilot}
 event_repo=isnanme/event # fixed on purpose (T-491): the door names one repository, no override
 # Memory per Job (T-524), request = limit, sized from measured cgroup peaks (docs/dev-session.md, "Heavy agent work in the cluster"); fixed here,
 # no environment override: the size is a cluster decision, not a caller's.
-# T-731: stays 4Gi. 518 measured peaks: median 1133Mi, p90 1971Mi, p99 2270Mi, max 2536Mi, none OOMKilled, so 3Gi would fit; but on k3s-node2 the CPU
-# requests bind at 3 Jobs and the master takes 0 by real use, so a lower default only cuts the margin: it waits on a CPU-request measurement.
-mem_std=4Gi; tmp_std=2Gi; mem_big=8Gi; tmp_big=4Gi
+# T-731: 518 measured peaks: median 1133Mi, p90 1971Mi, p99 2270Mi, max 2536Mi, none OOMKilled. D-96 (owner, 2026-10-23, "up to 2-5x speed"):
+# 3Gi, measured 02:40 UTC with k3s-master and k3s-node2 at 95% CPU and k3s-node3 at 20% CPU (33% of its CPU requested) but memory-bound at 4Gi,
+# so Jobs piled on the two busy nodes. 3Gi keeps ~500Mi over the largest peak; --big (8Gi) stays the answer to an OOMKill.
+mem_std=3Gi; tmp_std=2Gi; mem_big=8Gi; tmp_big=4Gi
 master_max=${JOB_RUN_MASTER_MAX_PCT:-85}
 die() { echo "job-run: $*" >&2; exit 2; }
 for n in "$max" "$per" "$pprog" "$art_max"; do [[ $n =~ ^[0-9]+$ ]] || die "the caps are numbers"; done
