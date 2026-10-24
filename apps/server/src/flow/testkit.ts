@@ -7,7 +7,7 @@ import { fakeClock } from '../autotransfer/testkit.js';
 import { session } from '../notify/testkit.js';
 import type { AuditInput } from '../platform/audit.js';
 import type { StoredVerdict } from '../tickets/verdicts.js';
-import { FlowEngine, type FlowBypassRecord, type FlowChatPort, type FlowTicketPort } from './engine.js';
+import { FlowEngine, type FlowBypassRecord, type FlowChatPort, type FlowPrPort, type FlowTicketPort } from './engine.js';
 import { MemoryFlowStore } from './store.js';
 
 export { T0, fakeClock } from '../autotransfer/testkit.js';
@@ -130,12 +130,21 @@ export class FlowFakeTickets implements FlowTicketPort {
   mergeStatus(id: string) {
     return this.merges.get(id) ?? [];
   }
+  /** D-102: the ticket's comments, oldest first. */
+  readonly commentsOf = new Map<string, { at: string; body: string }[]>();
+  /** A comment written `min` minutes ago. */
+  comment(id: string, body: string, min = 30) {
+    this.commentsOf.set(id, [...(this.commentsOf.get(id) ?? []), { at: new Date(this.clock.now() - min * MIN).toISOString(), body }]);
+  }
+  comments(id: string) {
+    return this.commentsOf.get(id) ?? [];
+  }
 }
 
 /** A full sha built at run time (no hex literal a scanner could take for a token). */
 export const sha = (c: string) => c.repeat(40).slice(0, 40);
 
-export function rig(opts: { settings?: Record<string, unknown>; ownerCan?: boolean; owner?: string | null } = {}) {
+export function rig(opts: { settings?: Record<string, unknown>; ownerCan?: boolean; owner?: string | null; prs?: FlowPrPort } = {}) {
   const kg = { pauses: [] as { program: string | null }[], programs: new Map<string, string>() };
   const clock = fakeClock();
   const chat = new FlowFakeChat(clock);
@@ -161,6 +170,7 @@ export function rig(opts: { settings?: Record<string, unknown>; ownerCan?: boole
     audit: { record: (e) => void audits.push(e) },
     keepGoing: { pauses: () => kg.pauses, programOf: (id) => kg.programs.get(id) ?? null },
     publish: () => void published.push(clock.now()),
+    prs: opts.prs,
   });
   const r = {
     clock,

@@ -32,8 +32,10 @@ export const KEEPGOING_CONSTANTS = {
   approvalReportMin: 10,
   /** A chat ended this long ago and not started again is down (T-257 item 4). */
   downAfterMin: 15,
-  /** After a failed action the chat is left alone this long. */
+  /** After a failed action the chat is left alone this long at most: the first failure in 30 minutes waits backoffFirstMin, each more one twice as long. */
   backoffMin: 15,
+  /** A first failure (a wake refused while the cluster was busy) is tried again this soon. */
+  backoffFirstMin: 2,
   /** Two starts of a chat's lineage are at least this far apart (the supervisor's RESTART_GAP_MIN). */
   restartGapMin: 5,
 } as const;

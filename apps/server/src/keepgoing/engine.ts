@@ -406,8 +406,12 @@ export class KeepGoingEngine {
 
   #failed(s: ChatSession, ownerId: string, what: string, e: unknown): void {
     const code = (e as { code?: unknown })?.code;
-    this.#d.store.patchState(s.id, { backoffUntil: iso(this.#d.clock.now() + C.backoffMin * MIN) });
-    this.#trail(s.id, ownerId, 'failed', null, `${what} (${typeof code === 'string' ? code : 'error'}): tried again in ${C.backoffMin} min.`);
+    // Escalating: a busy moment passes in minutes, a lasting fault is not hammered (2, 4, 8, then 15 min while failures keep coming).
+    const now = this.#d.clock.now();
+    const before = this.#d.store.count(s.id, 'failed', iso(now - 30 * MIN));
+    const wait = Math.min(C.backoffMin, C.backoffFirstMin * 2 ** before);
+    this.#d.store.patchState(s.id, { backoffUntil: iso(now + wait * MIN) });
+    this.#trail(s.id, ownerId, 'failed', null, `${what} (${typeof code === 'string' ? code : 'error'}): tried again in ${wait} min.`);
   }
 
   /** The report: one ticket per chat and cause (a comment while its ticket is open), one notification, one trail row. Never throws. */

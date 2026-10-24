@@ -9,10 +9,19 @@
 //                                                                                        recorded merged is skipped; without a record, the
 //                                                                                        newest commit seen, labelled so
 //   conflict, no_pr  the gate recorded a PR needing a rebase, or no PR, that long        -> the ticket's unit lead: rebase it, or open the PR
+//                    each record is first checked with the forge (FlowPrPort, when set): merged there is merged, closed unmerged is no_pr,
+//                    an open PR is judged on its live head and is a conflict when the forge cannot merge it
+//                                                                                        D-102: or the implementer's self-test line on the head
+//                                                                                        (a comment, `Self-test: <run> on <sha> pass <N>`), with a
+//                                                                                        review PASS too when HIGH (tag `risk:high`, or reviewed);
+//                                                                                        a NORMAL self-test row goes to its unit lead (D-99)
 //   qa      in review, no verdict on the head, nobody on it for `flow.qaAfterMin`   -> a peer lead, round robin, never the author's: QA-ASK
 //                                                                                        as one batch (D-93, T-1987): at most 8 per peer per
 //                                                                                        message; a ticket already in a live batch is skipped
 //   idle    a lead idle `flow.idleAfterMin` with open work in its unit, under cap   -> that lead, its next tickets (oldest high priority first)
+//                                                                                        open work: not dispatched, or its holder ended or idle;
+//                                                                                        the cap counts workers that work, not ones merely live
+//   review  a HIGH ticket self-tested on the head, no review verdict that long         -> a peer lead (as qa, never the author's): REVIEW-ASK
 //   bypass  a lead that was in Bypass is not now                                      -> reported only (audit and the card): see below
 //   stall   nothing done in `flow.stallHours` while tickets wait in review           -> the owner, once, if it lasts `flow.notifyAfterHours`
 //                                                                                        after the first nudge
@@ -89,6 +98,8 @@ export interface FlowTicketPort {
   batchOf?(id: string): { branch: string; at: string } | null;
   /** T-2014: the merge gate's latest record per repo (`ticket_merge_status`), newest first. Absent: none read (the old heuristic). */
   mergeStatus?(id: string): TicketMergeStatus[];
+  /** D-102: the ticket's comments, oldest first. Absent: no self-test read (a QA PASS only, as before). */
+  comments?(id: string): { at: string; body: string }[];
 }
 
 export interface FlowOwnerPort {
@@ -111,7 +122,27 @@ export interface FlowDeps {
   keepGoing?: FlowKeepGoingPort | null;
   /** After each round: the live topic the card reloads on. */
   publish?: () => void;
+  /** The forge's word on a recorded pull request; absent: the gate's records are taken as they stand. */
+  prs?: FlowPrPort;
 }
+
+/** A pull request as the forge says it is now: a gate record goes stale when a PR is merged, closed, pushed to or conflicts outside it. */
+export interface FlowPrView {
+  state: 'open' | 'closed';
+  merged: boolean;
+  /** Its head now, a full sha; null: not read. */
+  head: string | null;
+  /** False: the forge cannot merge it (a conflict); null: not known. */
+  mergeable: boolean | null;
+}
+
+export interface FlowPrPort {
+  /** null: unknown (unreadable, gone, or a repo it does not serve): the record stands. */
+  pr(repo: string, n: number): Promise<FlowPrView | null>;
+}
+
+/** At most this many forge reads per program per round; the rest stand as recorded until the next round. */
+export const FLOW_PR_READS = 60;
 
 const iso = (ms: number) => new Date(ms).toISOString();
 const ms = (s: string | null | undefined) => (s ? Date.parse(s) : NaN);
@@ -142,6 +173,24 @@ export function headOf(verdicts: readonly StoredVerdict[], checks: readonly Tick
   return verdicts.find((v) => v.commit.startsWith(b.sha))?.commit ?? b.sha;
 }
 
+/** D-102: the tag of a HIGH ticket (security, permissions, money, migrations, infra): self-test plus one blind review by another unit. */
+export const RISK_HIGH_TAG = 'risk:high';
+/** D-102: the implementer's self-test line, the merge gate's own form: `Self-test: <job | command> on <sha> pass <N>[ stg same failures: <ids>]`. */
+const SELF_TEST = /^Self-test: \S.*? on ([0-9a-f]{12,40}) pass [1-9][0-9]*(?: stg same failures: .*\S.*)?$/;
+const sameCommit = (a: string, b: string) => a.length >= 12 && b.length >= 12 && (a.startsWith(b) || b.startsWith(a));
+
+/** When the newest comment with a self-test line on `head` was written (Markdown emphasis and code marks ignored), or null: none. */
+export function selfTestAt(comments: readonly { at: string; body: string }[], head: string): number | null {
+  let at: number | null = null;
+  const h = head.toLowerCase();
+  for (const c of comments)
+    for (const raw of c.body.split('\n')) {
+      const m = SELF_TEST.exec(raw.replace(/[*`]/g, '').trim());
+      if (m && sameCommit(m[1]!, h) && Number.isFinite(ms(c.at))) at = Math.max(at ?? 0, ms(c.at));
+    }
+  return at;
+}
+
 interface Ctx {
   p: FlowProgram;
   st: FlowState;
@@ -153,6 +202,8 @@ interface Ctx {
   hold: FlowHold | null;
   /** Keep going's pauses as read at the start of the round. */
   kgPaused: (program: string | null) => boolean;
+  /** Forge reads spent this round. */
+  prReads: number;
 }
 
 export class FlowEngine {
@@ -216,7 +267,7 @@ export class FlowEngine {
       }
       try {
         const hold: FlowHold | null = flowHeld.has('*') || flowHeld.has(p.name) ? 'flow' : kgPaused(p.name) ? 'keepgoing' : null;
-        view.push(await this.#program({ p, st, t, now, ownerId, told: false, hold, kgPaused }, groups));
+        view.push(await this.#program({ p, st, t, now, ownerId, told: false, hold, kgPaused, prReads: 0 }, groups));
         done++;
       } catch (e) {
         console.error(`[flow] the program ${p.name} could not be looked at: ${(e as Error).message}`);
@@ -278,13 +329,13 @@ export class FlowEngine {
     // (a) and (b): the tickets in review, judged on their head. T-2014: the head is the PR head the merge gate recorded when it recorded one
     // (the newest record of a repo not merged); a ticket merged in every repo it was recorded in is skipped; conflict and no_pr go to the
     // unit lead. Without a record, the newest commit the portal has seen, as before, and the row says so.
-    const merge: { t: TicketItem; head: string; pr: TicketMergeStatus | null }[] = [];
-    const qa: { t: TicketItem; head: string | null }[] = [];
+    const merge: { t: TicketItem; head: string; pr: TicketMergeStatus | null; basis: string }[] = [];
+    const qa: { t: TicketItem; head: string | null; ask: 'qa' | 'review' }[] = [];
     const conflict: { t: TicketItem; pr: TicketMergeStatus }[] = [];
     const noPr: { t: TicketItem; pr: TicketMergeStatus }[] = [];
     const inReview = open.filter((x) => x.status === 'in_review');
     for (const x of inReview) {
-      const recorded = this.#mergeStatus(x.id);
+      const recorded = await this.#livePrs(c, this.#mergeStatus(x.id));
       const pending = recorded.filter((m) => m.state !== 'merged').sort((a, b) => ms(b.at) - ms(a.at));
       if (recorded.length && !pending.length) continue;
       const pr = pending[0] ?? null;
@@ -298,17 +349,29 @@ export class FlowEngine {
       const need: ('qa' | 'review')[] = pr && verdicts.some((v) => v.role === 'review') ? ['qa', 'review'] : ['qa'];
       const ev = head ? evaluateVerdicts(verdicts, head, need) : null;
       const qaRole = ev ? ev.roles.qa : 'missing';
+      const passAtOf = (roles: readonly ('qa' | 'review')[]) =>
+        Math.max(...roles.map((r) => Math.max(...verdicts.filter((v) => v.role === r && v.verdict === 'pass' && v.commit === head).map((v) => ms(v.at)))));
+      const busy = (afterMs: number) => chat.list({ ticketId: x.id }).some((s) => !ended(s) && (s.state === 'working' || s.state === 'starting' || now - ms(s.lastActivityAt) < afterMs));
+      // D-102: the implementer's self-test on the head is a merge basis of its own; a HIGH ticket (tagged, or reviewed at all) needs a
+      // review PASS on that head as well, asked of another unit's lead below. QA only runs regression then: it is never asked per ticket.
+      const selfTest = head ? this.#selfTest(x.id, head) : null;
+      const high = x.tags.includes(RISK_HIGH_TAG) || verdicts.some((v) => v.role === 'review');
+      const review = head && high ? evaluateVerdicts(verdicts, head, ['review']) : null;
       if (ev?.pass && head) {
-        const passAt = Math.max(...need.map((r) => Math.max(...verdicts.filter((v) => v.role === r && v.verdict === 'pass' && v.commit === head).map((v) => ms(v.at)))));
-        if (now - passAt >= t.mergeAfterMs) merge.push({ t: x, head, pr });
+        const passAt = passAtOf(need);
+        if (now - passAt >= t.mergeAfterMs) merge.push({ t: x, head, pr, basis: 'QA PASS' });
+      } else if (selfTest !== null && head) {
+        if (!high || review?.pass) {
+          const passAt = Math.max(selfTest, high ? passAtOf(['review']) : 0);
+          if (now - passAt >= t.mergeAfterMs) merge.push({ t: x, head, pr, basis: high ? 'self-test + review PASS' : 'self-test' });
+        } else if (review && review.roles.review !== 'fail' && now - selfTest >= t.mergeAfterMs && !busy(t.mergeAfterMs)) qa.push({ t: x, head, ask: 'review' });
       } else if (qaRole === 'missing' || qaRole === 'stale') {
         if (now - ms(x.updatedAt) < t.qaAfterMs) continue;
-        const working = chat.list({ ticketId: x.id }).some((s) => !ended(s) && (s.state === 'working' || s.state === 'starting' || now - ms(s.lastActivityAt) < t.qaAfterMs));
-        if (working) continue;
+        if (busy(t.qaAfterMs)) continue;
         // T-1987 (D-93): a ticket a QA lane already took into a batch (named after its newest verdict, recently) waits for that batch.
         const batch = this.#d.tickets.batchOf?.(x.id) ?? null;
         if (batch && now - ms(batch.at) < FLOW_LIMITS.batchLiveMin * MIN) continue;
-        qa.push({ t: x, head });
+        qa.push({ t: x, head, ask: 'qa' });
       }
     }
 
@@ -317,16 +380,24 @@ export class FlowEngine {
     if (!stalled) delete c.st.stall[p.name];
     else c.st.stall[p.name] ??= { since: now, nudgedAt: null, notifiedAt: null };
 
-    if (merge.length) {
+    // D-99: a NORMAL row merged on its self-test goes to its own unit lead; QA-passed and HIGH rows to the merge gate, as before.
+    const mergeTo = new Map<string | null, typeof merge>();
+    for (const m of merge) {
+      const to = m.basis === 'self-test' ? (leadOf(m.t) ?? gate) : gate;
+      mergeTo.set(to, [...(mergeTo.get(to) ?? []), m]);
+    }
+    for (const [to, list] of mergeTo) {
       // Recorded PR heads first: those are the gate's own facts; the heuristic rows after, labelled.
-      const sorted = [...merge].sort((a, b) => Number(!a.pr) - Number(!b.pr));
+      const sorted = [...list].sort((a, b) => Number(!a.pr) - Number(!b.pr));
       const rows = sorted
         .slice(0, FLOW_LIMITS.ticketsPerMessage)
-        .map((m) => (m.pr ? `- ${ref(m.t)} ${m.pr.repo}#${m.pr.pr} QA PASS on the PR head ${m.head} (${m.pr.state})` : `- ${ref(m.t)} QA PASS on ${m.head} (newest seen, no PR status)`));
-      await this.#tell(c, 'merge', gate, gateHead, gateResolved.why, sorted.map((m) => m.t.id), [
-        `${FLOW_PREFIX} ${plural(merge.length, 'ticket')} in review ${merge.length === 1 ? 'has' : 'have'} a QA PASS and ${merge.length === 1 ? 'is' : 'are'} not merged after ${t.mergeAfterMs / MIN} min (program ${p.name}). A row with a PR is judged on the PR head you recorded (ticket_merge_status); a row marked (newest seen, no PR status) is the newest commit the portal has seen: check it is the PR head and record the PR. Merge or close each, or record why not with ticket_merge_status:`,
+        .map((m) => (m.pr ? `- ${ref(m.t)} ${m.pr.repo}#${m.pr.pr} ${m.basis} on the PR head ${m.head} (${m.pr.state})` : `- ${ref(m.t)} ${m.basis} on ${m.head} (newest seen, no PR status)`));
+      const n = list.length;
+      const toGate = to === gate;
+      await this.#tell(c, 'merge', to, toGate ? gateHead : (heads.get(to!) ?? null), toGate ? gateResolved.why : (resolved.get(to!)?.why ?? null), sorted.map((m) => m.t.id), [
+        `${FLOW_PREFIX} ${plural(n, 'ticket')} in review ${n === 1 ? 'has' : 'have'} a merge basis (a QA PASS, or the D-102 self-test, with a review PASS when HIGH) and ${n === 1 ? 'is' : 'are'} not merged after ${t.mergeAfterMs / MIN} min (program ${p.name}). A row with a PR is judged on the PR head you recorded (ticket_merge_status); a row marked (newest seen, no PR status) is the newest commit the portal has seen: check it is the PR head and record the PR. Merge or close each, or record why not with ticket_merge_status:`,
         ...rows,
-        ...more(merge.length),
+        ...more(n),
       ]);
     }
 
@@ -360,7 +431,7 @@ export class FlowEngine {
     if (qa.length) {
       // Round robin over the peer leads that run, never the author's own (the lead whose unit holds the ticket).
       const live = leads.filter(reachable);
-      const byLead = new Map<string, { t: TicketItem; head: string | null }[]>();
+      const byLead = new Map<string, (typeof qa)[number][]>();
       let rr = c.st.rr[p.name] ?? 0;
       const unplaced: string[] = [];
       for (const q of qa) {
@@ -379,11 +450,25 @@ export class FlowEngine {
         byLead.set(to, [...(byLead.get(to) ?? []), q]);
       }
       c.st.rr[p.name] = rr;
-      for (const [l, list] of byLead)
+      const row = (q: { t: TicketItem; head: string | null }) => `- ${ref(q.t)} head ${q.head ?? 'unknown'}${holder(q.t) ? ` held by ${holder(q.t)}` : ''}`;
+      for (const [l, list] of byLead) {
+        const asks = list.filter((q) => q.ask === 'qa');
+        const reviews = list.filter((q) => q.ask === 'review');
         await this.#tell(c, 'qa', l, heads.get(l) ?? null, null, list.map((q) => q.t.id), [
-          `${FLOW_PREFIX} QA-ASK batch: take these as one qa/batch branch, one job run, a verdict per ticket (D-93). Program ${p.name}: ${plural(list.length, 'ticket')} in review ${list.length === 1 ? 'has' : 'have'} no verdict on the head and nobody working on ${list.length === 1 ? 'it' : 'them'} for ${t.qaAfterMs / MIN} min. Send a QA lane that is not the author; it records each ticket's verdict on that ticket's head (ticket_verdict_batch, the job run as evidence):`,
-          ...list.map((q) => `- ${ref(q.t)} head ${q.head ?? 'unknown'}${holder(q.t) ? ` held by ${holder(q.t)}` : ''}`),
+          ...(asks.length
+            ? [
+                `${FLOW_PREFIX} QA-ASK batch: take these as one qa/batch branch, one job run, a verdict per ticket (D-93). Program ${p.name}: ${plural(asks.length, 'ticket')} in review ${asks.length === 1 ? 'has' : 'have'} no verdict on the head and nobody working on ${asks.length === 1 ? 'it' : 'them'} for ${t.qaAfterMs / MIN} min. Send a QA lane that is not the author; it records each ticket's verdict on that ticket's head (ticket_verdict_batch, the job run as evidence):`,
+                ...asks.map(row),
+              ]
+            : []),
+          ...(reviews.length
+            ? [
+                `${FLOW_PREFIX} REVIEW-ASK (D-102): ${plural(reviews.length, 'HIGH ticket')} of another unit ${reviews.length === 1 ? 'has' : 'have'} the implementer's self-test on the head and no review verdict for ${t.mergeAfterMs / MIN} min (program ${p.name}). Have your reviewer worker read each PR blind (no CI run) and record a review verdict on that head (ticket_verdict, role review):`,
+                ...reviews.map(row),
+              ]
+            : []),
         ]);
+      }
       if (unplaced.length && !c.hold && !this.#limited(c, 'qa', `program-${p.name}`)) {
         c.st.sent[`qa:program-${p.name}`] = c.now;
         this.#act(c, 'qa', 'skipped', null, unplaced, 'No peer lead that is not the author runs and may be told: nobody was asked to verify these.');
@@ -393,20 +478,27 @@ export class FlowEngine {
     // (c) idle leads with open work in their unit and room under their cap.
     let idle = 0;
     const unitOpen = open.filter((x) => x.status === 'open' || x.status === 'in_progress');
+    const working = (s: ChatSession) => s.state === 'working' || s.state === 'starting' || !!s.busySince || (s.agentsRunning ?? 0) > 0 || s.waiting > 0;
+    const doing = (id: string | null) => {
+      const s = id ? chat.get(id) : null;
+      return !!s && !ended(s) && (working(s) || now - ms(s.lastActivityAt) < t.idleAfterMs);
+    };
     for (const l of leads) {
       const h = heads.get(l);
       if (!h || h.state !== 'idle' || h.waiting > 0 || h.busySince || (h.agentsRunning ?? 0) > 0) continue;
       const idleMs = now - ms(h.lastActivityAt);
       if (!(idleMs >= t.idleAfterMs)) continue;
-      const unit = unitOpen.filter((x) => leadOf(x) === l);
+      // Work nobody does: a ticket not dispatched, or one whose holder ended or sat idle that long (a live worker counts only while it works).
+      const unit = unitOpen.filter((x) => leadOf(x) === l && (x.status === 'open' || !doing(holder(x))));
       if (!unit.length) continue;
-      const workers = chat.list({ parentId: h.id }).filter((s) => s.parentId === h.id && !ended(s)).length;
+      const live = chat.list({ parentId: h.id }).filter((s) => s.parentId === h.id && !ended(s));
+      const workers = live.filter(working).length;
       const cap = chat.maxWorkers(h);
       if (cap !== null && workers >= cap) continue;
       idle++;
       const next = [...unit].sort((a, b) => rank(a.priority) - rank(b.priority) || ms(a.createdAt) - ms(b.createdAt) || a.number - b.number);
       await this.#tell(c, 'idle', l, h, null, next.slice(0, 5).map((x) => x.id), [
-        `${FLOW_PREFIX} you have been idle ${Math.floor(idleMs / MIN)} min while your unit holds ${plural(unit.length, 'open ticket')} and runs ${workers} of ${cap ?? 'unlimited'} workers (program ${p.name}). Your next tickets, oldest high priority first:`,
+        `${FLOW_PREFIX} you have been idle ${Math.floor(idleMs / MIN)} min while your unit holds ${plural(unit.length, 'open ticket')} and has ${workers} of ${cap ?? 'unlimited'} workers working (${live.length} live) (program ${p.name}). Your next tickets, oldest high priority first:`,
         ...next.slice(0, 5).map((x) => `- ${ref(x)} ${x.priority} ${x.status}`),
         'Dispatch them, or say on each ticket why not.',
       ]);
@@ -470,6 +562,40 @@ export class FlowEngine {
       return this.#d.tickets.mergeStatus?.(id) ?? [];
     } catch {
       return [];
+    }
+  }
+
+  /** The gate's records, each corrected by the forge's word now: merged there is merged; closed unmerged has no PR; an open one is judged
+   *  on its live head, and is a conflict when the forge cannot merge it. A record the forge does not answer for stands. */
+  async #livePrs(c: Ctx, recorded: TicketMergeStatus[]): Promise<TicketMergeStatus[]> {
+    const prs = this.#d.prs;
+    if (!prs) return recorded;
+    const out: TicketMergeStatus[] = [];
+    for (const m of recorded) {
+      if (m.state === 'merged' || m.pr === null || c.prReads >= FLOW_PR_READS) {
+        out.push(m);
+        continue;
+      }
+      c.prReads++;
+      let v: FlowPrView | null = null;
+      try {
+        v = await prs.pr(m.repo, m.pr);
+      } catch {
+        v = null;
+      }
+      if (!v) out.push(m);
+      else if (v.merged) out.push({ ...m, state: 'merged' });
+      else if (v.state === 'closed') out.push({ ...m, state: 'no_pr', prHead: null });
+      else out.push({ ...m, prHead: v.head ?? m.prHead, state: v.mergeable === false ? 'conflict' : m.state === 'conflict' && v.mergeable ? 'ready' : m.state });
+    }
+    return out;
+  }
+
+  #selfTest(id: string, head: string): number | null {
+    try {
+      return selfTestAt(this.#d.tickets.comments?.(id) ?? [], head);
+    } catch {
+      return null;
     }
   }
 

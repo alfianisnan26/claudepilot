@@ -128,3 +128,18 @@ After every round the watchdog publishes the live topic `keepgoing` (the same wa
 ## Known gaps
 
 - "Merged" is read as "no longer in review". The portal does not read the integration branch.
+
+## D-102 merges, the forge's word and idle workers (2026-10-24)
+
+- **Self-tested merges.** A ticket in review has a merge basis when the implementer's comment carries the merge gate's line
+  `Self-test: <job | command> on <sha> pass <N>[ stg same failures: <ids>]` on the head (the recorded PR head, else the newest commit seen).
+  A HIGH ticket (tag `risk:high`, or any review verdict on it) needs a review PASS on that head as well. A QA PASS stays a basis on its own.
+  A NORMAL self-test row goes to its own unit lead (D-99); QA-passed and HIGH rows to the merge gate. A self-tested ticket is never asked of QA.
+- **REVIEW-ASK.** A HIGH ticket self-tested on the head with no review verdict for `flow.mergeAfterMin`, and nobody working on it, is asked of
+  a peer lead (round robin, never the author's lineage), in the same message as that peer's QA-ASK batch. A review FAIL goes back to the author, not asked again.
+- **The forge's word (FlowPrPort).** With `FLOW_FORGE_URL` and `FLOW_FORGE_TOKEN` set (a Gitea base URL and a token that may read pull requests),
+  each recorded PR not merged is read each round (at most 60 per program): merged there counts as merged, closed unmerged as `no_pr`,
+  an open PR is judged on its live head and is a `conflict` when Gitea cannot merge it. Unset or unanswered: the record stands as written.
+- **Idle.** A lead's cap counts workers that work (working, starting, busy, running agents or waiting on a person), not ones merely live; its unit's
+  open work is the tickets not dispatched plus those whose holder ended or sat idle `flow.idleAfterMin`.
+

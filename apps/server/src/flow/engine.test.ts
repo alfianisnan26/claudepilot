@@ -4,7 +4,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { FLOW_ACTOR, FLOW_PREFIX } from '@portal/contracts';
-import { headOf } from './engine.js';
+import { headOf, selfTestAt, type FlowPrView } from './engine.js';
+import { giteaPrPort } from './index.js';
 import { parsePrograms } from './programs.js';
 import { LEAD_A, LEAD_B, LEAD_C, rig, sha } from './testkit.js';
 
@@ -121,7 +122,7 @@ test('(c) an idle lead with open work in its unit and room under its cap gets it
   const m = r.chat.sent.find((x) => x.id === LEAD_B);
   assert.ok(m, 'the idle lead is told');
   assert.match(m.text, /idle 45 min/);
-  assert.match(m.text, /runs 1 of 4 workers/);
+  assert.match(m.text, /has 1 of 4 workers working \(1 live\)/);
   const order = [...m.text.matchAll(/- (T-\d+) /g)].map((x) => x[1]);
   assert.deepEqual(order, ['T-52', 'T-51', 'T-50']);
   assert.equal(r.engine.snapshot().programs[0]!.counts.idle, 1);
@@ -600,4 +601,145 @@ test('T-2014: conflict and no_pr are listed apart and go to the ticket\'s unit l
   const counts = r.engine.snapshot().programs[0]!.counts;
   assert.deepEqual([counts.merge, counts.conflict, counts.no_pr], [0, 1, 1]);
   assert.deepEqual(r.engine.snapshot().actions.filter((a) => a.kind === 'told').map((a) => a.condition).sort(), ['conflict', 'no_pr']);
+});
+
+test('D-102: selfTestAt reads the gate\'s line form on the head (emphasis ignored, short sha prefixes), never another head or a loose mention', () => {
+  const at = (min: number) => new Date(Date.UTC(2026, 9, 24, 12, min)).toISOString();
+  const h = sha('a');
+  assert.equal(selfTestAt([{ at: at(1), body: `notes\n**Self-test:** \`claudepilot-job-1f2e\` on ${h.slice(0, 12)} pass 42` }], h), Date.parse(at(1)));
+  assert.equal(selfTestAt([{ at: at(1), body: `Self-test: npm test on ${h} pass 3 stg same failures: a.spec, b.spec` }], h), Date.parse(at(1)));
+  assert.equal(selfTestAt([{ at: at(1), body: `Self-test: npm test on ${sha('b')} pass 3` }], h), null, 'another head');
+  assert.equal(selfTestAt([{ at: at(1), body: `Self-test: npm test on ${h} pass 0` }], h), null, 'nothing passed');
+  assert.equal(selfTestAt([{ at: at(1), body: `I will post the Self-test: later on ${h}` }], h), null);
+  assert.equal(selfTestAt([{ at: at(1), body: `Self-test: npm test on ${h.slice(0, 8)} pass 3` }], h), null, 'too short a sha');
+  assert.equal(
+    selfTestAt([{ at: at(1), body: `Self-test: x on ${h} pass 1` }, { at: at(5), body: `Self-test: y on ${h} pass 2` }], h),
+    Date.parse(at(5)),
+    'the newest',
+  );
+});
+
+test('D-102 + D-99: a NORMAL ticket self-tested on the PR head goes to its own unit lead to merge, not to the gate; never before the threshold', async () => {
+  const r = rig();
+  crew(r);
+  r.tickets.add(60, { holder: 'wb' });
+  r.tickets.merged('T-60', { repo: 'konfersi/api', pr: 9, prHead: sha('a'), state: 'ready', reason: null });
+  r.tickets.comment('T-60', `Self-test: claudepilot-job-9a on ${sha('a').slice(0, 12)} pass 12`, 25);
+  r.tickets.add(61, { holder: 'wb' });
+  r.tickets.merged('T-61', { repo: 'konfersi/api', pr: 10, prHead: sha('b'), state: 'ready', reason: null });
+  r.tickets.comment('T-61', `Self-test: claudepilot-job-9b on ${sha('b')} pass 4`, 5); // too fresh
+  r.tickets.add(62, { holder: 'wb' });
+  r.tickets.merged('T-62', { repo: 'konfersi/api', pr: 11, prHead: sha('c'), state: 'ready', reason: null });
+  r.tickets.comment('T-62', `Self-test: claudepilot-job-9c on ${sha('d')} pass 4`, 25); // an older head
+  await r.engine.round();
+  const m = r.chat.sent.find((x) => x.text.includes('T-60'));
+  assert.ok(m);
+  assert.equal(m.id, LEAD_B);
+  assert.match(m.text, new RegExp(`- T-60 \\(KONF-60\\) konfersi/api#9 self-test on the PR head ${sha('a')} \\(ready\\)`));
+  assert.doesNotMatch(m.text, /T-61|T-62/);
+  // T-62's self-test names another head: it is asked of QA as before; the self-tested ones never are.
+  assert.equal(r.chat.sent.filter((x) => x.text.includes('QA-ASK') && /T-6[01] /.test(x.text)).length, 0, 'a self-tested ticket is never asked of QA');
+  assert.equal(r.engine.snapshot().programs[0]!.counts.merge, 1);
+});
+
+test('D-102: a HIGH ticket self-tested needs a blind review PASS; until then a peer lead (never the author\'s) gets a REVIEW-ASK; then the gate merges', async () => {
+  const r = rig();
+  crew(r);
+  r.tickets.add(70, { holder: 'wb', tags: ['konfersi-migration', 'risk:high'] });
+  r.tickets.merged('T-70', { repo: 'konfersi/api', pr: 12, prHead: sha('a'), state: 'ready', reason: null });
+  r.tickets.comment('T-70', `Self-test: claudepilot-job-7a on ${sha('a')} pass 30`, 25);
+  await r.engine.round();
+  assert.equal(r.engine.snapshot().programs[0]!.counts.merge, 0, 'self-test alone is not enough for HIGH');
+  const ask = r.chat.sent.find((x) => x.text.includes('REVIEW-ASK'));
+  assert.ok(ask, 'a peer is asked to review');
+  assert.notEqual(ask.id, LEAD_B);
+  assert.match(ask.text, /- T-70 \(KONF-70\) head/);
+  assert.doesNotMatch(ask.text, /QA-ASK/);
+  r.tickets.verdict('T-70', { role: 'review', verdict: 'pass', commit: sha('a'), at: ago(r, 25) });
+  r.clock.advance(31);
+  await r.engine.round();
+  const m = r.chat.sent.find((x) => x.text.includes('self-test + review PASS'));
+  assert.ok(m);
+  assert.equal(m.id, LEAD_A, 'HIGH rows go to the merge gate');
+});
+
+test('D-102: a HIGH ticket whose review failed, or whose author still works on it, is not asked again', async () => {
+  for (const setup of [
+    (r: ReturnType<typeof rig>) => r.tickets.verdict('T-70', { role: 'review', verdict: 'fail', commit: sha('a'), at: ago(r, 25) }),
+    (r: ReturnType<typeof rig>) => r.chat.put('wb3', { parentId: LEAD_B, state: 'working', ticketId: 'T-70' }),
+  ]) {
+    const r = rig();
+    crew(r);
+    r.tickets.add(70, { holder: 'wb', tags: ['konfersi-migration', 'risk:high'] });
+    r.tickets.merged('T-70', { repo: 'konfersi/api', pr: 12, prHead: sha('a'), state: 'ready', reason: null });
+    r.tickets.comment('T-70', `Self-test: claudepilot-job-7a on ${sha('a')} pass 30`, 25);
+    setup(r);
+    await r.engine.round();
+    assert.equal(r.chat.sent.filter((x) => x.text.includes('REVIEW-ASK')).length, 0);
+    assert.equal(r.engine.snapshot().programs[0]!.counts.merge, 0);
+  }
+});
+
+test('(c) a lead whose live workers all sit idle is told; a ticket its working worker holds is not "open work"', async () => {
+  const r = rig();
+  crew(r);
+  r.chat.cap = 2;
+  r.chat.patch(LEAD_B, { state: 'idle', lastActivityAt: ago(r, 45) });
+  r.chat.put('wb2', { parentId: LEAD_B, state: 'idle', lastActivityAt: ago(r, 90) });
+  r.chat.put('wb3', { parentId: LEAD_B, state: 'idle', lastActivityAt: ago(r, 90) });
+  r.chat.put('wb4', { parentId: LEAD_B, state: 'working', lastActivityAt: ago(r, 1) });
+  r.tickets.add(80, { holder: 'wb2', status: 'in_progress' }); // its holder sat idle 90 min
+  r.tickets.add(81, { holder: 'wb4', status: 'in_progress' }); // being worked
+  await r.engine.round();
+  const m = r.chat.sent.find((x) => x.id === LEAD_B);
+  assert.ok(m, 'two idle live workers under a cap of 2 no longer hide an idle unit');
+  assert.match(m.text, /has 1 of 2 workers working \(3 live\)/);
+  assert.match(m.text, /- T-80 /);
+  assert.doesNotMatch(m.text, /T-81/);
+});
+
+test('#2: the forge\'s word corrects a stale record: merged there is skipped, closed is no_pr, an open PR is judged on its live head, unmergeable is a conflict', async () => {
+  const views = new Map<number, FlowPrView | null>();
+  const asked: string[] = [];
+  const r = rig({ prs: { pr: async (repo, n) => (asked.push(`${repo}#${n}`), views.get(n) ?? null) } });
+  crew(r);
+  const ready = (n: number, head: string) => {
+    r.tickets.add(n, { holder: 'wb' });
+    r.tickets.verdict(`T-${n}`, { role: 'qa', verdict: 'pass', commit: sha('a'), at: ago(r, 40) });
+    r.tickets.merged(`T-${n}`, { repo: 'konfersi/api', pr: n, prHead: head, state: 'ready', reason: null });
+  };
+  ready(90, sha('a')); views.set(90, { state: 'closed', merged: true, head: sha('a'), mergeable: null }); // merged outside the gate
+  ready(91, sha('a')); views.set(91, { state: 'closed', merged: false, head: sha('a'), mergeable: null }); // closed: no PR now
+  ready(92, sha('a')); views.set(92, { state: 'open', merged: false, head: sha('b'), mergeable: true }); // pushed to: the PASS is stale
+  ready(93, sha('a')); views.set(93, { state: 'open', merged: false, head: sha('a'), mergeable: false }); // conflicts now
+  ready(94, sha('a')); views.set(94, { state: 'open', merged: false, head: sha('a'), mergeable: true }); // as recorded
+  ready(95, sha('a')); views.set(95, null); // the forge does not answer: the record stands
+  await r.engine.round();
+  assert.deepEqual(asked.sort(), [90, 91, 92, 93, 94, 95].map((n) => `konfersi/api#${n}`));
+  const counts = r.engine.snapshot().programs[0]!.counts;
+  assert.equal(counts.merge, 2, 'T-94 and T-95');
+  assert.equal(counts.no_pr, 1);
+  assert.equal(counts.conflict, 1);
+  const all = r.chat.sent.map((m) => m.text).join('\n');
+  assert.doesNotMatch(all, /T-90 /, 'merged on the forge: nobody is told');
+  assert.match(all, /T-94 \(KONF-94\) konfersi\/api#94 QA PASS on the PR head/);
+});
+
+test('#2: giteaPrPort reads Gitea\'s pull request (token in a header only), and answers null for a bad repo, an error, or no config', async () => {
+  const calls: { url: string; auth: string | null }[] = [];
+  const fake = (async (url: string, init: RequestInit) => {
+    calls.push({ url, auth: new Headers(init.headers).get('authorization') });
+    if (url.endsWith('/7')) return new Response(JSON.stringify({ state: 'open', merged: false, mergeable: false, head: { sha: sha('C') } }), { status: 200 });
+    return new Response('{}', { status: 404 });
+  }) as unknown as typeof fetch;
+  assert.equal(giteaPrPort(undefined, 'x', fake), undefined);
+  assert.equal(giteaPrPort('https://git.example', undefined, fake), undefined);
+  const p = giteaPrPort('https://git.example/', 'tok', fake)!;
+  assert.deepEqual(await p.pr('konfersi/api', 7), { state: 'open', merged: false, head: sha('c'), mergeable: false });
+  assert.equal(calls[0]!.url, 'https://git.example/api/v1/repos/konfersi/api/pulls/7');
+  assert.equal(calls[0]!.auth, 'token tok');
+  assert.equal(await p.pr('konfersi/api', 8), null);
+  assert.equal(await p.pr('../etc', 7), null);
+  assert.equal(await p.pr('konfersi/api', 0), null);
+  assert.equal(calls.length, 2);
 });

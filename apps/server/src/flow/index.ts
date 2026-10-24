@@ -9,7 +9,8 @@ import { effectiveMaxWorkers, type AgentCaps } from '../chat/agents.js';
 import type { Platform, PlatformModule } from '../platform/index.js';
 import type { StoredVerdict } from '../tickets/verdicts.js';
 import { declareFlowPolicies } from './authz.js';
-import { FlowEngine, type FlowBypassRecord, type FlowChatPort, type FlowTicketPort } from './engine.js';
+import { config } from '../config.js';
+import { FlowEngine, type FlowBypassRecord, type FlowChatPort, type FlowPrPort, type FlowTicketPort } from './engine.js';
 import { createFlowRoutes } from './routes.js';
 import './settings.js';
 import { MetaFlowStore } from './store.js';
@@ -32,6 +33,7 @@ interface TicketsLike {
   checks(id: string): TicketCheck[];
   liveBatchOf?(id: string): { branch: string; at: string } | null;
   mergeStatus?(caller: { kind: 'system' }, id: string): TicketMergeStatus[];
+  get?(caller: { kind: 'system' }, id: string, opts?: { eventsLimit?: number }): { events: { kind: string; at: string; body: string | null }[] };
 }
 
 /** The chat controller as the watchdog needs it; null when what was handed over lacks it (some tests). */
@@ -75,6 +77,37 @@ function flowTicketPort(raw: unknown): FlowTicketPort | null {
     batchOf: (id) => (typeof tickets.liveBatchOf === 'function' ? tickets.liveBatchOf(id) : null),
     // T-2014: an older tickets service without it reads as no record (the newest-seen heuristic, labelled).
     mergeStatus: (id) => (typeof tickets.mergeStatus === 'function' ? tickets.mergeStatus(system, id) : []),
+    // D-102: the comments, where an implementer's self-test line is; an older tickets service without get reads as none.
+    comments: (id) =>
+      typeof tickets.get === 'function'
+        ? tickets.get(system, id, { eventsLimit: 200 }).events.flatMap((e) => (e.kind === 'comment' && e.body ? [{ at: e.at, body: e.body }] : []))
+        : [],
+  };
+}
+
+/** The forge's word on a pull request: Gitea's `GET /api/v1/repos/{owner}/{name}/pulls/{n}`, read only, when a URL and a token are set. */
+export function giteaPrPort(base: string | undefined, token: string | undefined, fetchImpl: typeof fetch = fetch): FlowPrPort | undefined {
+  if (!base || !token) return undefined;
+  const root = base.replace(/\/+$/, '');
+  return {
+    async pr(repo, n) {
+      // `owner/name`, neither starting with a dot (no `..` walks out of the repo path).
+      if (!/^[A-Za-z0-9_-][A-Za-z0-9_.-]*\/[A-Za-z0-9_-][A-Za-z0-9_.-]*$/.test(repo) || !Number.isSafeInteger(n) || n < 1) return null;
+      const r = await fetchImpl(`${root}/api/v1/repos/${repo}/pulls/${n}`, {
+        headers: { authorization: `token ${token}`, accept: 'application/json' },
+        redirect: 'error',
+        signal: AbortSignal.timeout(5_000),
+      });
+      if (!r.ok) return null;
+      const j = (await r.json()) as { state?: unknown; merged?: unknown; mergeable?: unknown; head?: { sha?: unknown } };
+      const sha = typeof j.head?.sha === 'string' ? j.head.sha.toLowerCase() : '';
+      return {
+        state: j.state === 'closed' ? 'closed' : 'open',
+        merged: j.merged === true,
+        head: /^[0-9a-f]{40}$/.test(sha) ? sha : null,
+        mergeable: typeof j.mergeable === 'boolean' ? j.mergeable : null,
+      };
+    },
   };
 }
 
@@ -105,6 +138,7 @@ export function createFlowModule(platform: Platform, opts: { clock?: ClockPort }
     keepGoing: { pauses: () => kgStore.pauses(), programOf: (id) => kgStore.policy(id)?.program ?? null },
     // The Home card reloads on Keep going's topic (the same watchdog family), after each round.
     publish: () => platform.publish('keepgoing'),
+    prs: giteaPrPort(config.flowForge.url, config.flowForge.token),
   });
   return {
     name: 'flow',

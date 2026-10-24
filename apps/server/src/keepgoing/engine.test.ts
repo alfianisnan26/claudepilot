@@ -156,10 +156,23 @@ test('the caps: at most maxNudgesPerDay nudges in 24 h, then one capped row and 
   w.on('s2');
   await w.engine.round();
   assert.equal(w.chat.resumed.length, 1);
-  for (let i = 0; i < 14; i++) await w.after(1);
-  assert.equal(w.chat.resumed.length, 1, 'backed off for 15 minutes');
+  // Escalating back-off: 2, 4, 8, then at most 15 minutes while the failures keep coming.
+  await w.after(1);
+  assert.equal(w.chat.resumed.length, 1, 'backed off for 2 minutes first');
   await w.after(1);
   assert.equal(w.chat.resumed.length, 2);
+  for (let i = 0; i < 3; i++) await w.after(1);
+  assert.equal(w.chat.resumed.length, 2, 'then 4 minutes');
+  await w.after(1);
+  assert.equal(w.chat.resumed.length, 3);
+  for (let i = 0; i < 7; i++) await w.after(1);
+  assert.equal(w.chat.resumed.length, 3, 'then 8 minutes');
+  await w.after(1);
+  assert.equal(w.chat.resumed.length, 4);
+  for (let i = 0; i < 14; i++) await w.after(1);
+  assert.equal(w.chat.resumed.length, 4, 'then 15 minutes, the ceiling');
+  await w.after(1);
+  assert.equal(w.chat.resumed.length, 5);
   assert.equal(w.tickets.made.length, 1, 'could not wake: reported once');
   assert.match(w.tickets.made[0]!.summary, /could not wake/);
 });
