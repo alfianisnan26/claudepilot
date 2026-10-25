@@ -1,7 +1,28 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { AutoTransferEvent } from '@portal/contracts';
-import { modelChange, autoMarks, EXCLUDE_NOTE, excludedNote, excludeItem, isExcluded,clockText, droppedText, holdLine, headline, inPlace, modeChoices, moveItem, offer, parseThreshold, pctText, reasonText, toggleItem, undoFor, whyText } from './pure';
+import {
+  modelChange,
+  autoMarks,
+  EXCLUDE_NOTE,
+  excludedNote,
+  excludeItem,
+  isExcluded,
+  clockText,
+  droppedText,
+  holdLine,
+  headline,
+  inPlace,
+  modeChoices,
+  moveItem,
+  offer,
+  parseThreshold,
+  pctText,
+  reasonText,
+  toggleItem,
+  undoFor,
+  whyText,
+} from './pure';
 
 const m = (value: number) => ({ value, basis: 'measured' as const });
 

@@ -1,5 +1,17 @@
 // Auto move: the words and numbers the page shows, as pure functions (tested under Node).
-import { AUTO_BOUNDS, modelDisplayName, reasonText as usageReasonText, type AutoClaudeConfig, type AutoMode,type AutoRefusal, type AutoSessionState, type AutoSuggestion, type AutoTransferEvent, type ChatSwitchOption, type Figure } from '@portal/contracts';
+import {
+  AUTO_BOUNDS,
+  modelDisplayName,
+  reasonText as usageReasonText,
+  type AutoClaudeConfig,
+  type AutoMode,
+  type AutoRefusal,
+  type AutoSessionState,
+  type AutoSuggestion,
+  type AutoTransferEvent,
+  type ChatSwitchOption,
+  type Figure,
+} from '@portal/contracts';
 
 export const MODE_LABEL: Record<AutoMode, string> = { off: 'Off', ask: 'Ask', auto: 'Automatic' };
 
