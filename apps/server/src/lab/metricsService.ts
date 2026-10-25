@@ -130,7 +130,7 @@ export class Metrics {
    */
   leadSession(sessionId: string): boolean {
     const db = this.deps.store.db;
-    const row = db ? tryRead(() => db.prepare('SELECT parent_id FROM chat_sessions WHERE id = ?').get(sessionId) as { parent_id: string | null } | undefined) : null;
+    const row = db ? this.#read('lead session', () => db.prepare('SELECT parent_id FROM chat_sessions WHERE id = ?').get(sessionId) as { parent_id: string | null } | undefined) : null;
     return !!row && !row.parent_id;
   }
 
