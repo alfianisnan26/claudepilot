@@ -28,18 +28,31 @@ const ids: string[] = [];
 for (let i = 0; i < SESSIONS; i++) {
   const id = `s${String(i).padStart(4, '0')}`;
   ids.push(id);
-  chat.create({ id, workspaceId: `kubernetes/ws${i % 12}`, cwd: '/home/node', title: id, origin: i % 3 ? 'mcp' : 'ui', parentId: i > 20 && i % 4 === 0 ? ids[i % 20]! : null });
+  chat.create({
+    id,
+    workspaceId: `kubernetes/ws${i % 12}`,
+    cwd: '/home/node',
+    title: id,
+    origin: i % 3 ? 'mcp' : 'ui',
+    parentId: i > 20 && i % 4 === 0 ? ids[i % 20]! : null,
+  });
   // About a fifth are live (some working), the rest asleep or ended, like the fleet.
   const live = i % 5 === 0;
-  chat.patchSession(id, { process: live ? 'live' : i % 2 ? 'asleep' : 'gone', state: live ? (i % 10 === 0 ? 'working' : 'idle') : i % 2 ? 'idle' : 'ended' });
+  chat.patchSession(id, {
+    process: live ? 'live' : i % 2 ? 'asleep' : 'gone',
+    state: live ? (i % 10 === 0 ? 'working' : 'idle') : i % 2 ? 'idle' : 'ended',
+  });
 }
-const insertTask = db.prepare('INSERT INTO chat_tasks (session_id, task_id, label, status, started_at, ended_at) VALUES (?, ?, ?, ?, ?, ?)');
+const insertTask = db.prepare(
+  'INSERT INTO chat_tasks (session_id, task_id, label, status, started_at, ended_at) VALUES (?, ?, ?, ?, ?, ?)',
+);
 const insertAsk = db.prepare(
   'INSERT INTO chat_requests (session_id, request_id, kind, title, detail, created_at, answered_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
 );
 db.exec('BEGIN');
 let t = 0;
-const status = (n: number) => (n % 97 === 0 ? 'running' : n % 211 === 0 ? null : n % 13 === 0 ? 'failed' : n % 17 === 0 ? 'killed' : 'completed');
+const status = (n: number) =>
+  n % 97 === 0 ? 'running' : n % 211 === 0 ? null : n % 13 === 0 ? 'failed' : n % 17 === 0 ? 'killed' : 'completed';
 const addTask = (sid: string) => {
   const at = new Date(Date.UTC(2026, 9, 1) + t * 60_000).toISOString();
   const st = status(t);
@@ -61,7 +74,12 @@ const running = (id: string): ChatTask[] => {
 };
 const reads = glanceSources({
   // Both names: the source before T-2368 asks `tasks` (the whole history), the one after asks `runningTasks`.
-  chat: { list: () => chat.list(), openRequests: (id: string) => chat.openRequests(id), tasks: (id: string) => chat.tasks(id), runningTasks: running } as never,
+  chat: {
+    list: () => chat.list(),
+    openRequests: (id: string) => chat.openRequests(id),
+    tasks: (id: string) => chat.tasks(id),
+    runningTasks: running,
+  } as never,
   tickets: { list: () => ({ items: [], total: 0, counts: { byStatus: {} as never, needsYou: 0, unassigned: 0, total: 0 } }) } as never,
   ci: fakeCi([]),
 });
@@ -80,8 +98,18 @@ function measure(name: string, fn: () => unknown) {
 }
 
 const heavy = ids[0]!;
-const counts = { sessions: (db.prepare('SELECT count(*) AS n FROM chat_sessions').get() as { n: number }).n, tasks: t, heavyTasks: chat.tasks(heavy).length };
-console.log(JSON.stringify({ name: 'shape', ...counts, index: !!db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'chat_tasks_session_status'").get() }));
+const counts = {
+  sessions: (db.prepare('SELECT count(*) AS n FROM chat_sessions').get() as { n: number }).n,
+  tasks: t,
+  heavyTasks: chat.tasks(heavy).length,
+};
+console.log(
+  JSON.stringify({
+    name: 'shape',
+    ...counts,
+    index: !!db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'chat_tasks_session_status'").get(),
+  }),
+);
 measure('list (all sessions)', () => chat.list());
 measure('glance build', () => buildSnapshot(reads, ownerActor(), Date.UTC(2026, 9, 25, 12)));
 // A session event's read for the heaviest lead: its row as tabs see it, and its running agents (the controller's count before a move/restart).
