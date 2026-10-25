@@ -112,9 +112,9 @@ test('T-2360: measure the metrics reads on a synthetic database', { skip: proces
     const o = time(() => loadOpenTickets(h.db));
     print('open', { medianMs: o.median, runs: o.runs, rows: o.out.length });
     const flow24 = time(() => metrics.flow('all', '24h', 'lead'));
-    print('flow_all_24h_lead', { medianMs: flow24.median, runs: flow24.runs, done: flow24.out!.total.current.done });
+    print('flow_all_24h_lead', { medianMs: flow24.median, runs: flow24.runs, done: flow24.out!.total!.current.done });
     const flow7 = time(() => metrics.flow('claudepilot', '7d', 'type'));
-    print('flow_claudepilot_7d_type', { medianMs: flow7.median, runs: flow7.runs, done: flow7.out!.total.current.done });
+    print('flow_claudepilot_7d_type', { medianMs: flow7.median, runs: flow7.runs, done: flow7.out!.total!.current.done });
     const runs: number[] = [];
     for (let i = 0; i < 6; i++) {
       const t = performance.now();

@@ -280,8 +280,14 @@ export function parseMetricsPrograms(raw: unknown): { programs: ParsedMetricsPro
 const COMMITS_TEXT = 'This program has no tickets in the portal, and the portal keeps no commit history (workspace git keeps the repo state and scan events only), so its flow is unavailable.';
 
 /**
- * The programs, `all` first: the setting's, then a `program-*` tag no program covers (`program-x` is program `x`), then a `flow.programs`
- * tag no program covers (named as the flow watchdog names it).
+ * At most this many programs come from `program-*` tags (each one costs a snapshot row every 10 min); the setting's and the flow programs
+ * always count. The tags arrive ranked (loadProgramTags: tickets touched in the last 30 days, then all their tickets).
+ */
+export const MAX_TAG_PROGRAMS = 12;
+
+/**
+ * The programs, `all` first: the setting's, then a `program-*` tag no program covers (`program-x` is program `x`; the first
+ * MAX_TAG_PROGRAMS of the ranked tags, shown by id), then a `flow.programs` tag no program covers (named as the flow watchdog names it).
  */
 export function resolvePrograms(input: { setting: unknown; programTags: readonly string[]; flow: readonly { name: string; tag: string }[] }): MetricsProgram[] {
   const parsed = parseMetricsPrograms(input.setting).programs;
@@ -301,11 +307,14 @@ export function resolvePrograms(input: { setting: unknown; programTags: readonly
   }
   const covered = () => new Set(out.flatMap((p) => p.tags));
   const ids = () => new Set(out.map((p) => p.id));
-  for (const tag of [...input.programTags].sort()) {
+  const fromTags: MetricsProgram[] = [];
+  for (const tag of input.programTags) {
+    if (fromTags.length >= MAX_TAG_PROGRAMS) break;
     const id = tag.slice('program-'.length);
-    if (!tag.startsWith('program-') || covered().has(tag) || !PROGRAM_ID.test(id) || ids().has(id)) continue;
-    out.push({ id, label: id, kind: 'tickets', tags: [tag], source: 'program-tag', targets: DEFAULT_TARGETS });
+    if (!tag.startsWith('program-') || covered().has(tag) || !PROGRAM_ID.test(id) || ids().has(id) || fromTags.some((p) => p.id === id)) continue;
+    fromTags.push({ id, label: id, kind: 'tickets', tags: [tag], source: 'program-tag', targets: DEFAULT_TARGETS });
   }
+  out.push(...fromTags.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)));
   for (const f of input.flow) {
     if (covered().has(f.tag) || ids().has(f.name)) continue;
     out.push({ id: f.name, label: f.name, kind: 'tickets', tags: [f.tag], source: 'flow', targets: DEFAULT_TARGETS });

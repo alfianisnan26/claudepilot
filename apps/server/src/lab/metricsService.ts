@@ -15,6 +15,7 @@ import {
   type MetricsTrend,
   type MetricsTrendKey,
   type MetricsTrendWindow,
+  type MetricsUnavailable,
   type MetricsWindow,
 } from '@portal/contracts';
 import type { Store } from '../store/store.js';
@@ -81,16 +82,30 @@ interface Loaded {
   open: OpenTicketFacts[] | null;
 }
 
-const tryRead = <T>(fn: () => T): T | null => {
-  try {
-    return fn();
-  } catch {
-    return null;
-  }
+/** The closed tickets could not be read: the flow is unavailable, never an empty 0. */
+export const FLOW_UNAVAILABLE: MetricsUnavailable = {
+  reason: 'no_source',
+  text: 'The closed tickets could not be read, so the flow figures are unavailable (not 0). The server log names the error.',
 };
+/** The trend keys that come from the closed tickets of the day: null in a snapshot whose read failed. */
+const FLOW_KEYS = ['done24h', 'wontDo24h'] as const;
+/** Program tags count only with a ticket touched in this span (the longest trend window), ranked by how many. */
+export const PROGRAM_TAG_RECENT_MS = 30 * 24 * HOUR;
+/** At most this many programs per snapshot (each is one row every SNAPSHOT_EVERY_MS). */
+export const MAX_SNAPSHOT_PROGRAMS = 32;
 
 export class Metrics {
   constructor(private readonly deps: MetricsDeps) {}
+
+  /** A read that fails is null (unavailable to the caller), and its error name, never its message or data, goes to the log. */
+  #read<T>(what: string, fn: () => T): T | null {
+    try {
+      return fn();
+    } catch (e) {
+      this.deps.log?.(`metrics: ${what} read failed (${e instanceof Error ? e.name : 'error'})`);
+      return null;
+    }
+  }
 
   #setting(key: string): unknown {
     try {
@@ -106,7 +121,7 @@ export class Metrics {
     const flow = parsePrograms(flowProgramsRaw(this.deps.settings)).map((p) => ({ name: p.name, tag: p.tag }));
     // No settings module, or a value that is not text: the setting's default (as flowProgramsRaw does for flow.programs).
     const raw = this.#setting(METRICS_SETTING.programs);
-    return resolvePrograms({ setting: typeof raw === 'string' ? raw : DEFAULT_METRICS_PROGRAMS, programTags: (db && tryRead(() => loadProgramTags(db))) || [], flow });
+    return resolvePrograms({ setting: typeof raw === 'string' ? raw : DEFAULT_METRICS_PROGRAMS, programTags: (db && this.#read('program tags', () => loadProgramTags(db, this.deps.now() - PROGRAM_TAG_RECENT_MS))) || [], flow });
   }
 
   /**
@@ -130,8 +145,8 @@ export class Metrics {
     const spend = new SpendStore(this.deps.store);
     // At least two days back: effectiveness reads the last 24 h whatever the window.
     const from = nowMs - Math.max(2 * windowMs, 48 * HOUR);
-    const facts = tryRead(() => loadFlowTickets(db, from, nowMs + 1, (ids) => spend.sessions(ids)));
-    return { nowMs, rows: facts ? facts.map(ticketFlow) : null, open: tryRead(() => loadOpenTickets(db)) };
+    const facts = this.#read('closed tickets', () => loadFlowTickets(db, from, nowMs + 1, (ids) => spend.sessions(ids)));
+    return { nowMs, rows: facts ? facts.map(ticketFlow) : null, open: this.#read('open tickets', () => loadOpenTickets(db)) };
   }
 
   #rowsOf(l: Loaded, p: MetricsProgram): FlowRow[] | null {
@@ -183,7 +198,7 @@ export class Metrics {
 
   #previous(program: string, nowMs: number, windowMs: number): { efficiency: number | null; effectiveness: number | null } {
     const db = this.deps.store.db;
-    const s = db ? tryRead(() => snapshotNear(db, program, nowMs - windowMs, Math.max(SNAPSHOT_EVERY_MS * 3, windowMs / 24))) : null;
+    const s = db ? this.#read('snapshot', () => snapshotNear(db, program, nowMs - windowMs, Math.max(SNAPSHOT_EVERY_MS * 3, windowMs / 24))) : null;
     const n = (v: unknown) => (typeof v === 'number' ? v : null);
     return { efficiency: n(s?.values.efficiency), effectiveness: n(s?.values.effectiveness) };
   }
@@ -206,10 +221,12 @@ export class Metrics {
     if (!p) return null;
     const windowMs = METRICS_WINDOW_MS[window];
     const l = this.#load(windowMs);
-    const facts = tryRead(() => loadCrewFacts(this.deps.store, l.nowMs, l.nowMs - 2 * windowMs));
+    const facts = this.#read('crew facts', () => loadCrewFacts(this.deps.store, l.nowMs, l.nowMs - 2 * windowMs));
     const paces = await this.#paces();
     const s = this.#scores(l, p, facts, paces, windowMs);
-    const flow = groupFlow(s.rows ?? [], l.nowMs, windowMs, null, []).total;
+    // A failed read is null with the reason, never a window of zeros.
+    const flow = s.rows === null ? null : groupFlow(s.rows, l.nowMs, windowMs, null, []).total;
+    const flowUnavailable = flow === null ? { flowUnavailable: FLOW_UNAVAILABLE } : {};
     let crew: MetricsOverview['crew'] = null;
     if (facts && s.crews) {
       const headline = buildHeadline({ programs: s.crews, facts, windowMs, compare: true, paces });
@@ -219,10 +236,11 @@ export class Metrics {
         return vals.length ? vals.reduce((a, f) => a + f.value!, 0) : null;
       };
       const src = 'chat_usage.cost_usd of the crews in the window (crew scorecard cost, T-450), summed';
-      const fig = (v: number | null, source = src): CrewFigure => (v === null ? { value: null, basis: 'unavailable', source, reason: 'no_samples' } : { value: Math.round(v * 100) / 100, basis: 'estimate', source });
+      const fig = (v: number | null, source = src, reason: 'no_samples' | 'no_source' = 'no_samples'): CrewFigure =>
+        v === null ? { value: null, basis: 'unavailable', source, reason } : { value: Math.round(v * 100) / 100, basis: 'estimate', source };
       const total = sum('total');
       const lead = sum('lead');
-      const done = flow.current.done;
+      const done = flow?.current.done ?? null;
       crew = {
         programs: s.crews.map((c) => c.id),
         headline,
@@ -231,7 +249,8 @@ export class Metrics {
           lead: fig(lead),
           workers: fig(sum('workers')),
           leadShare: fig(total && lead !== null ? (100 * lead) / total : null, 'the crews’ lead dollars / all their dollars, percent'),
-          perDone: fig(total !== null && done > 0 ? total / done : null, 'the crews’ dollars / the program’s tickets done in the window'),
+          // The done count unreadable: no_source (not "no samples").
+          perDone: fig(total !== null && done !== null && done > 0 ? total / done : null, 'the crews’ dollars / the program’s tickets done in the window', done === null ? 'no_source' : 'no_samples'),
         },
       };
     }
@@ -242,6 +261,7 @@ export class Metrics {
       efficiency: s.efficiency,
       effectiveness: s.effectiveness,
       flow,
+      ...flowUnavailable,
       open: s.open ? { open: s.open.open, inProgress: s.open.inProgress, blocked: s.open.blocked, inReview: s.open.inReview, oldestReviewMs: s.open.oldestReviewMs, stalled: s.open.stalled } : null,
       crew,
       basis: METRICS_BASIS,
@@ -253,7 +273,9 @@ export class Metrics {
     if (!p) return null;
     const windowMs = METRICS_WINDOW_MS[window];
     const l = this.#load(windowMs);
-    const { total, groups } = groupFlow(this.#rowsOf(l, p) ?? [], l.nowMs, windowMs, groupBy, this.programs());
+    const rows = this.#rowsOf(l, p);
+    if (rows === null) return { program: p.id, window, nowMs: l.nowMs, groupBy, total: null, groups: [], basis: METRICS_BASIS, unavailable: FLOW_UNAVAILABLE };
+    const { total, groups } = groupFlow(rows, l.nowMs, windowMs, groupBy, this.programs());
     return { program: p.id, window, nowMs: l.nowMs, groupBy, total, groups, basis: METRICS_BASIS };
   }
 
@@ -264,10 +286,22 @@ export class Metrics {
     const windowMs = METRICS_WINDOW_MS[window];
     const l = this.#load(windowMs);
     const programs = this.programs();
-    let rows = (this.#rowsOf(l, p) ?? []).filter((r) => !opts.stage || r.stages[opts.stage] !== null);
+    const read = this.#rowsOf(l, p);
+    let rows = (read ?? []).filter((r) => !opts.stage || r.stages[opts.stage] !== null);
     if (opts.groupBy && opts.group) rows = rows.filter((r) => groupKeysOf(r, opts.groupBy!, programs).includes(opts.group!));
     const all = ticketRows(rows, l.nowMs - windowMs, l.nowMs, programs);
-    return { program: p.id, window, nowMs: l.nowMs, stage: opts.stage ?? null, group: opts.group ?? null, groupBy: opts.groupBy ?? null, total: all.length, rows: all.slice(Math.max(0, opts.offset ?? 0), Math.max(0, opts.offset ?? 0) + TICKET_ROWS) };
+    const from = Math.max(0, opts.offset ?? 0);
+    return {
+      program: p.id,
+      window,
+      nowMs: l.nowMs,
+      stage: opts.stage ?? null,
+      group: opts.group ?? null,
+      groupBy: opts.groupBy ?? null,
+      total: read === null ? null : all.length,
+      rows: all.slice(from, from + TICKET_ROWS),
+      ...(read === null ? { unavailable: FLOW_UNAVAILABLE } : {}),
+    };
   }
 
   trend(programId: string | undefined, metric: MetricsTrendKey, window: MetricsTrendWindow): MetricsTrend | null {
@@ -276,7 +310,7 @@ export class Metrics {
     const nowMs = this.deps.now();
     const from = nowMs - METRICS_WINDOW_MS[window];
     const db = this.deps.store.db;
-    const points = db ? (tryRead(() => readTrend(db, p.id, metric, from, nowMs)) ?? []) : [];
+    const points = db ? (this.#read('trend', () => readTrend(db, p.id, metric, from, nowMs)) ?? []) : [];
     return {
       program: p.id,
       metric,
@@ -296,9 +330,10 @@ export class Metrics {
     const windowMs = METRICS_WINDOW_MS[window];
     const l = this.#load(windowMs);
     if (p.kind === 'commits') return { program: p.id, window, nowMs: l.nowMs, items: [{ kind: 'no_data', severity: 'info', text: p.unavailable!.text, tickets: [] }] };
-    const facts = tryRead(() => loadCrewFacts(this.deps.store, l.nowMs, l.nowMs - HOUR));
+    const facts = this.#read('crew facts', () => loadCrewFacts(this.deps.store, l.nowMs, l.nowMs - HOUR));
     const s = this.#scores(l, p, facts, await this.#paces(), windowMs);
-    const rows = s.rows ?? [];
+    if (s.rows === null) return { program: p.id, window, nowMs: l.nowMs, items: [{ kind: 'no_data', severity: 'info', text: FLOW_UNAVAILABLE.text, tickets: [] }] };
+    const rows = s.rows;
     const flow = groupFlow(rows, l.nowMs, windowMs, null, []).total;
     return { program: p.id, window, nowMs: l.nowMs, items: insights({ label: p.label, windowLabel: window === '24h' ? '24 hours' : '7 days', flow, rows, efficiency: s.efficiency, open: s.open, targets: p.targets }) };
   }
@@ -309,14 +344,21 @@ export class Metrics {
     if (!db) return 0;
     const windowMs = METRICS_WINDOW_MS['24h'];
     const l = this.#load(windowMs);
-    const facts = tryRead(() => loadCrewFacts(this.deps.store, l.nowMs, l.nowMs - HOUR));
+    const facts = this.#read('crew facts', () => loadCrewFacts(this.deps.store, l.nowMs, l.nowMs - HOUR));
     const paces = await this.#paces();
-    const rows = this.programs()
-      .filter((p) => p.kind !== 'commits')
+    const all = this.programs().filter((p) => p.kind !== 'commits');
+    // A hard cap per snapshot (all first, then the setting's, the tag and the flow programs in that order): the table grows by at most
+    // MAX_SNAPSHOT_PROGRAMS rows every 10 minutes, whatever the setting or the tags hold.
+    if (all.length > MAX_SNAPSHOT_PROGRAMS) this.deps.log?.(`metrics: snapshot keeps the first ${MAX_SNAPSHOT_PROGRAMS} of ${all.length} programs`);
+    const rows = all
+      .slice(0, MAX_SNAPSHOT_PROGRAMS)
       .map((p) => {
         const s = this.#scores(l, p, facts, paces, windowMs);
         const day = groupFlow(s.rows ?? [], l.nowMs, windowMs, null, []).total.current;
-        return { program: p.id, values: snapshotValues({ efficiency: s.efficiency, effectiveness: s.effectiveness, day, open: s.open }) };
+        const values = snapshotValues({ efficiency: s.efficiency, effectiveness: s.effectiveness, day, open: s.open });
+        // A failed read is a gap in the trend, never a dip to 0.
+        if (s.rows === null) for (const k of Object.keys(values) as (keyof typeof values)[]) if (FLOW_KEYS.includes(k as never) || k.endsWith('P50')) values[k] = null;
+        return { program: p.id, values };
       });
     return writeSnapshots(db, l.nowMs, rows);
   }
