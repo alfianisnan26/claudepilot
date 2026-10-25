@@ -89,8 +89,10 @@ export const FLOW_UNAVAILABLE: MetricsUnavailable = {
 };
 /** The trend keys that come from the closed tickets of the day: null in a snapshot whose read failed. */
 const FLOW_KEYS = ['done24h', 'wontDo24h'] as const;
-/** Program tags are ranked by their tickets touched in this span. */
+/** Program tags count only with a ticket touched in this span (the longest trend window), ranked by how many. */
 export const PROGRAM_TAG_RECENT_MS = 30 * 24 * HOUR;
+/** At most this many programs per snapshot (each is one row every SNAPSHOT_EVERY_MS). */
+export const MAX_SNAPSHOT_PROGRAMS = 32;
 
 export class Metrics {
   constructor(private readonly deps: MetricsDeps) {}
@@ -212,8 +214,9 @@ export class Metrics {
     const facts = this.#read('crew facts', () => loadCrewFacts(this.deps.store, l.nowMs, l.nowMs - 2 * windowMs));
     const paces = await this.#paces();
     const s = this.#scores(l, p, facts, paces, windowMs);
-    const flow = groupFlow(s.rows ?? [], l.nowMs, windowMs, null, []).total;
-    const flowUnavailable = s.rows === null ? { flowUnavailable: FLOW_UNAVAILABLE } : {};
+    // A failed read is null with the reason, never a window of zeros.
+    const flow = s.rows === null ? null : groupFlow(s.rows, l.nowMs, windowMs, null, []).total;
+    const flowUnavailable = flow === null ? { flowUnavailable: FLOW_UNAVAILABLE } : {};
     let crew: MetricsOverview['crew'] = null;
     if (facts && s.crews) {
       const headline = buildHeadline({ programs: s.crews, facts, windowMs, compare: true, paces });
@@ -223,10 +226,11 @@ export class Metrics {
         return vals.length ? vals.reduce((a, f) => a + f.value!, 0) : null;
       };
       const src = 'chat_usage.cost_usd of the crews in the window (crew scorecard cost, T-450), summed';
-      const fig = (v: number | null, source = src): CrewFigure => (v === null ? { value: null, basis: 'unavailable', source, reason: 'no_samples' } : { value: Math.round(v * 100) / 100, basis: 'estimate', source });
+      const fig = (v: number | null, source = src, reason: 'no_samples' | 'no_source' = 'no_samples'): CrewFigure =>
+        v === null ? { value: null, basis: 'unavailable', source, reason } : { value: Math.round(v * 100) / 100, basis: 'estimate', source };
       const total = sum('total');
       const lead = sum('lead');
-      const done = flow.current.done;
+      const done = flow?.current.done ?? null;
       crew = {
         programs: s.crews.map((c) => c.id),
         headline,
@@ -235,7 +239,8 @@ export class Metrics {
           lead: fig(lead),
           workers: fig(sum('workers')),
           leadShare: fig(total && lead !== null ? (100 * lead) / total : null, 'the crews’ lead dollars / all their dollars, percent'),
-          perDone: fig(total !== null && done > 0 ? total / done : null, 'the crews’ dollars / the program’s tickets done in the window'),
+          // The done count unreadable: no_source (not "no samples").
+          perDone: fig(total !== null && done !== null && done > 0 ? total / done : null, 'the crews’ dollars / the program’s tickets done in the window', done === null ? 'no_source' : 'no_samples'),
         },
       };
     }
@@ -259,8 +264,9 @@ export class Metrics {
     const windowMs = METRICS_WINDOW_MS[window];
     const l = this.#load(windowMs);
     const rows = this.#rowsOf(l, p);
-    const { total, groups } = groupFlow(rows ?? [], l.nowMs, windowMs, groupBy, this.programs());
-    return { program: p.id, window, nowMs: l.nowMs, groupBy, total, groups, basis: METRICS_BASIS, ...(rows === null ? { unavailable: FLOW_UNAVAILABLE } : {}) };
+    if (rows === null) return { program: p.id, window, nowMs: l.nowMs, groupBy, total: null, groups: [], basis: METRICS_BASIS, unavailable: FLOW_UNAVAILABLE };
+    const { total, groups } = groupFlow(rows, l.nowMs, windowMs, groupBy, this.programs());
+    return { program: p.id, window, nowMs: l.nowMs, groupBy, total, groups, basis: METRICS_BASIS };
   }
 
   tickets(programId: string | undefined, window: MetricsWindow, opts: { stage?: MetricsStage; groupBy?: MetricsGroupBy; group?: string }): MetricsTickets | null {
@@ -280,7 +286,7 @@ export class Metrics {
       stage: opts.stage ?? null,
       group: opts.group ?? null,
       groupBy: opts.groupBy ?? null,
-      total: all.length,
+      total: read === null ? null : all.length,
       rows: all.slice(0, TICKET_ROWS),
       ...(read === null ? { unavailable: FLOW_UNAVAILABLE } : {}),
     };
@@ -328,8 +334,12 @@ export class Metrics {
     const l = this.#load(windowMs);
     const facts = this.#read('crew facts', () => loadCrewFacts(this.deps.store, l.nowMs, l.nowMs - HOUR));
     const paces = await this.#paces();
-    const rows = this.programs()
-      .filter((p) => p.kind !== 'commits')
+    const all = this.programs().filter((p) => p.kind !== 'commits');
+    // A hard cap per snapshot (all first, then the setting's, the tag and the flow programs in that order): the table grows by at most
+    // MAX_SNAPSHOT_PROGRAMS rows every 10 minutes, whatever the setting or the tags hold.
+    if (all.length > MAX_SNAPSHOT_PROGRAMS) this.deps.log?.(`metrics: snapshot keeps the first ${MAX_SNAPSHOT_PROGRAMS} of ${all.length} programs`);
+    const rows = all
+      .slice(0, MAX_SNAPSHOT_PROGRAMS)
       .map((p) => {
         const s = this.#scores(l, p, facts, paces, windowMs);
         const day = groupFlow(s.rows ?? [], l.nowMs, windowMs, null, []).total.current;

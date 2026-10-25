@@ -108,12 +108,12 @@ export interface MetricsFlow {
   window: MetricsWindow;
   nowMs: number;
   groupBy: MetricsGroupBy | null;
-  /** The whole program. */
-  total: MetricsFlowGroup;
-  /** Per group, biggest first (empty without groupBy). */
+  /** The whole program; null when the closed tickets could not be read (`unavailable` says why), never zeros. */
+  total: MetricsFlowGroup | null;
+  /** Per group, biggest first (empty without groupBy, and when unavailable). */
   groups: MetricsFlowGroup[];
   basis: Record<string, string>;
-  /** Set when the closed tickets could not be read: the counts above are empty, not 0 (show "unavailable"). */
+  /** Set when the closed tickets could not be read: `total` is null (show "unavailable", not 0). */
   unavailable?: MetricsUnavailable;
 }
 
@@ -167,9 +167,9 @@ export interface MetricsOverview {
   nowMs: number;
   efficiency: MetricsScore;
   effectiveness: MetricsScore;
-  /** The stage medians of the window and the one before. */
-  flow: MetricsFlowGroup;
-  /** Set when the closed tickets could not be read: `flow` is empty, not 0. */
+  /** The stage medians of the window and the one before; null when the closed tickets could not be read (`flowUnavailable`). */
+  flow: MetricsFlowGroup | null;
+  /** Set when the closed tickets could not be read: `flow` is null, not 0. */
   flowUnavailable?: MetricsUnavailable;
   open: MetricsOpenWork | null;
   /**
@@ -221,9 +221,10 @@ export interface MetricsTickets {
   stage: MetricsStage | null;
   group: string | null;
   groupBy: MetricsGroupBy | null;
-  total: number;
+  /** The rows in all (before the cut); null when the closed tickets could not be read. */
+  total: number | null;
   rows: MetricsTicketRow[];
-  /** Set when the closed tickets could not be read: `rows` is empty, not "no ticket". */
+  /** Set when the closed tickets could not be read: `total` is null and `rows` empty, not "no ticket". */
   unavailable?: MetricsUnavailable;
 }
 
