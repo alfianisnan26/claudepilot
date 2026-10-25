@@ -17,7 +17,8 @@ import type {
   MetricsTrend,
   MetricsWindow,
 } from '@portal/contracts';
-import { UNAVAILABLE, formatSpan, histogramBins, type ChartColumn, type LinePoint, type StageRow } from '@/components/chartMath';
+import { UNAVAILABLE, formatSpan, histogramBins, type LinePoint, type StageRow } from '@/components/chartMath';
+import type { ChartColumn } from '@/components/charts';
 import { reasonText } from './scorecardModel';
 
 export { UNAVAILABLE, formatSpan };
