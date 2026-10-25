@@ -1,8 +1,9 @@
 // Pilot metrics (T-2360, §28.15): the loader. Reads the closed tickets of a bounded span (the window and the one before it, by the
 // `tickets_closed_at` index of migration 856), their events, verdicts and merge records (by ticket number, indexed), and the open work now.
-// Read only. Ticket text is not kept: only a comment with a line starting "Self-test:" is read, to find its verdict line, then dropped.
+// Read only. Ticket text is not kept: only a comment naming "Self-test" is read, to find its verdict line (as the flow watchdog reads it), then dropped.
 
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
+import { selfTestText } from '../flow/engine.js';
 import type { SessionInfo } from '../usagespend/model.js';
 import type { FlowTicketFacts, OpenTicketFacts } from './flowMetrics.js';
 import { programIdOf } from './scorecard.js';
@@ -28,8 +29,10 @@ function chunked<R>(db: DatabaseSync, ids: readonly number[], sql: (list: string
 export const SELF_TEST_VERDICT = /^Self-test:\s*\S.*?\son\s+[0-9a-f]{12,40}\s+(pass|fail)\b/i;
 
 /**
- * The first self-test line of a comment body (its first 300 characters), or null. Only a line that starts with "Self-test:" counts
- * (D-102 posts it as one line): one quoted inside a line, after `> `, indented, or inside a ``` or ~~~ code fence is not a verdict.
+ * The first self-test line of a comment body (its first 300 characters, read as the flow watchdog reads it: `selfTestText` drops `*` and
+ * backticks and trims, so `**Self-test:** \`job\` on ...` counts as it does for the merge gate), or null. Only a line that then starts
+ * with "Self-test:" counts (D-102 posts it as one line): one quoted inside a line, after `> `, in a list, indented as code (4 spaces or a
+ * tab), or inside a ``` or ~~~ code fence is not a verdict.
  */
 export function selfTestLineOf(body: string | null): string | null {
   if (!body) return null;
@@ -43,7 +46,9 @@ export function selfTestLineOf(body: string | null): string | null {
       else if (mark[0] === fence[0] && mark.length >= fence.length && !f[2]!.trim()) fence = null;
       continue;
     }
-    if (fence === null && line.startsWith('Self-test:')) return line.slice(0, 300);
+    if (fence !== null || /^( {4}|\t)/.test(line)) continue;
+    const text = selfTestText(line);
+    if (text.startsWith('Self-test:')) return text.slice(0, 300);
   }
   return null;
 }
@@ -107,9 +112,10 @@ export function loadFlowTickets(db: DatabaseSync, fromMs: number, toMs: number, 
     db,
     numbers,
     (l) =>
-      // Only a comment with a line that starts with "Self-test:" brings its body (selfTestLineOf then skips quotes and code fences).
+      // Only a comment that names "Self-test" anywhere brings its body (the watchdog's form may be bold or in code marks, `**Self-test**:`);
+      // selfTestLineOf then keeps only a real line, skipping quotes, lists, code and fences.
       `SELECT ticket_number, at, kind, actor, data,
-              CASE WHEN kind = 'comment' AND (substr(body, 1, 10) = 'Self-test:' OR instr(body, char(10) || 'Self-test:') > 0) THEN body END AS body
+              CASE WHEN kind = 'comment' AND instr(body, 'Self-test') > 0 THEN body END AS body
        FROM ticket_events WHERE ticket_number IN ${l} AND kind IN ('status', 'comment') ORDER BY ticket_number, id`,
   );
   for (const e of events) {

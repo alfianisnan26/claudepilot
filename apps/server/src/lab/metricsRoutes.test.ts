@@ -11,6 +11,7 @@ import { isAppError } from '@isnanme/core';
 import { Hono } from 'hono';
 import { METRICS_API, type Actor, type MetricsFlow, type MetricsInsights, type MetricsOverview, type MetricsProgram, type MetricsTickets, type MetricsTrend } from '@portal/contracts';
 import { clearResolvers, declaredPolicies } from '../authz/seam.js';
+import { selfTestAt } from '../flow/engine.js';
 import { generateSecretKey, parseSecretKey } from '../store/secretBox.js';
 import { Store } from '../store/store.js';
 import { LAB_POLICIES } from './authz.js';
@@ -66,8 +67,7 @@ async function seeded(opts: { settings?: Record<string, unknown> } = {}) {
   // A self-test line quoted inside a line, and as a quote block, is not a verdict (D-102: the line starts with "Self-test:").
   comment(1, 5, `Quoting the old run: "Self-test: claudepilot-job-9 on ${SHA} pass 4"\n> Self-test: claudepilot-job-9 on ${SHA} pass 4`);
   // Nor is one inside a code fence, though the line inside starts with "Self-test:" (the SQL brings the body; the parser skips the fence).
-  comment(1, 4.5, `The log said:\n\`\`\`\nSelf-test: claudepilot-job-9 on ${SHA} pass 4\n\`\`\``);
-  merged(1, 3);
+  comment(1, 4.5, `The log said:\n\`\`\`\nSelf-test: claudepilot-job-9 on ${SHA} pass 4\n\`\`\``);  merged(1, 3);
   // T-2: won't-do, Konfersi.
   ticket(2, 'wont_do', { createdAgo: 6, closedAgo: 2, tags: ['konfersi'] });
   // T-3: done with nothing recorded but its open and close: only resolve (15 h) counts; every other stage leaves it out.
@@ -147,17 +147,50 @@ test('loader: the golden ticket’s stages from events, verdicts, self-test line
   }
 });
 
+test('loader: the watchdog’s bold self-test form is a verdict (the SQL brings a body naming "Self-test" in any marks)', async () => {
+  const h = await seeded();
+  try {
+    h.ticket(10, 'done', { createdAgo: 9, closedAgo: 2, tags: ['claudepilot'] });
+    const add = (hoursAgo: number, body: string) =>
+      h.db.prepare(`INSERT INTO ticket_events (ticket_number, at, kind, actor, actor_label, body) VALUES (10, ?, 'comment', 'session:W1', 'x', ?)`).run(iso(at(hoursAgo)), body);
+    add(4, `Bundle done.\n**Self-test**: \`npm test\` on ${SHA} fail 2`);
+    add(3, `Fixed.\n**Self-test:** \`claudepilot-job-2\` on ${SHA} pass 40`);
+    add(2.5, `> **Self-test:** claudepilot-job-9 on ${SHA} pass 4`);
+    const t10 = loadFlowTickets(h.db, at(48), NOW + 1, null).find((f) => f.id === 'T-10')!;
+    assert.deepEqual(t10.verdicts, [
+      { atMs: at(4), pass: false },
+      { atMs: at(3), pass: true },
+    ], 'both bold lines count; the bold one in a quote does not');
+  } finally {
+    h.done();
+  }
+});
+
 test('selfTestLineOf: only a line that starts with "Self-test:" outside a code fence', () => {
   const line = `Self-test: claudepilot-job-1 on ${SHA} pass 12`;
   assert.equal(selfTestLineOf(line), line);
   assert.equal(selfTestLineOf(`Notes first.\r\n${line}\nmore`), line, 'any line, CRLF too');
+  // Read as the flow watchdog reads it (flow/engine.ts selfTestText): bold and code marks dropped, so these count for both.
+  for (const [name, body] of [
+    ['bold label', `**Self-test:** \`claudepilot-job-1\` on ${SHA} pass 12`],
+    ['bold word', `**Self-test**: claudepilot-job-1 on \`${SHA}\` pass 12`],
+    ['whole line bold', `**${line}**`],
+    ['inline code', `\`${line}\``],
+    ['trailing spaces', `${line}   `],
+  ] as const) {
+    assert.equal(selfTestLineOf(body), line, name);
+    assert.ok(selfTestAt([{ at: new Date(NOW).toISOString(), body }], SHA) !== null, `${name}: the watchdog counts it too`);
+    assert.equal(verdictOf(null, selfTestLineOf(body)), true, name);
+  }
   for (const [name, body] of [
     ['mid-line', `The last one read "${line}".`],
+    ['mid-line bold', `The last one read **${line}**.`],
     ['blockquote', `> ${line}`],
+    ['blockquote bold', `> **Self-test:** claudepilot-job-1 on ${SHA} pass 12`],
     ['nested quote', `>> ${line}`],
     ['list item', `- ${line}`],
     ['indented code', `    ${line}`],
-    ['inline code', `\`${line}\``],
+    ['bold fence', `\`\`\`\n**Self-test:** claudepilot-job-1 on ${SHA} pass 12\n\`\`\``],
     ['backtick fence', `Old run:\n\`\`\`\n${line}\n\`\`\``],
     ['tilde fence with info', `~~~text\n${line}\n~~~`],
     ['unclosed fence', `\`\`\`\n${line}`],
