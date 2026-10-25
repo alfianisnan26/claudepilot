@@ -132,7 +132,7 @@ test('createGlance follows the controller: a session event pushes once, a delta 
     chat: {
       list: () => sessions,
       openRequests: () => [],
-      tasks: () => [],
+      runningTasks: () => [],
       onEvent: (cb) => (listeners.add(cb), () => void listeners.delete(cb)),
     },
     tickets: { list: () => ({ items: [], total: 0, counts: { byStatus: {} as never, needsYou: 0, unassigned: 0, total: 0 } }) },
@@ -159,7 +159,7 @@ test('glanceSources: tickets are the ones assigned to a person, asked as the per
   const chat = {
     list: () => [],
     openRequests: () => [],
-    tasks: () => {
+    runningTasks: () => {
       throw new Error('No such session.');
     },
   };
@@ -175,7 +175,7 @@ test('glanceSources: tickets are the ones assigned to a person, asked as the per
   });
   assert.deepEqual(src.tickets(OWNER).count, 4);
   assert.deepEqual(asked, [[{ kind: 'ui' }, { assignee: 'user', limit: 5 }]]);
-  assert.deepEqual(src.tasks(OWNER, 'gone'), []);
+  assert.deepEqual(src.runningTasks(OWNER, 'gone'), []);
   const ci = src.failedRuns(OWNER, NOW);
   assert.deepEqual([ci.count, ci.items.map((r) => r.id)], [1, ['F']]);
 });

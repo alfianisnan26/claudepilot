@@ -24,6 +24,7 @@ import type {
 import { CHAT_SPAWN_WHY_MAX, CURSOR_MAX_LIMIT, TASK_EVENTS_MAX, type CursorPage } from '@portal/contracts';
 import { createHash, randomBytes } from 'node:crypto';
 import { posix } from 'node:path';
+import type { DatabaseSync, StatementSync } from 'node:sqlite';
 import { clampLimit, cursorAfter, keysetPage, SCAN_FACTOR } from '../store/keyset.js';
 import type { Store } from '../store/store.js';
 import { HOME } from '../workspaces/runtime.js';
@@ -212,6 +213,9 @@ type RequestRow = {
   created_at: string;
 };
 
+/** T-2368: a list's per-session counts, read once for all its rows (see `ChatStore.toSession`). */
+type SessionCounts = { waiting: Map<string, number>; agents: Map<string, number> };
+
 /** Fields `patchSession` can change. `cost` is absolute; `turnsDelta` is added to the current count. */
 export interface ChatSessionPatch {
   model?: string | null;
@@ -297,6 +301,46 @@ const PROCESS_STATES = new Set<string>(['live', 'asleep', 'gone']);
 export const EVENT_TEXT_MAX = 16_000;
 
 const TASK_STATUSES = new Set<string>(['running', 'completed', 'failed', 'killed']);
+
+/** T-2368: a task {@link taskOut} reads as running (`running`, NULL, or a status this portal does not know), in SQL. */
+const TASK_RUNNING_SQL = `(status IS NULL OR status NOT IN (${[...TASK_STATUSES]
+  .filter((s) => s !== 'running')
+  .map((s) => `'${s}'`)
+  .join(', ')}))`;
+
+/** The chat store's view of the database: `prepare` hands back one prepared statement per SQL text (T-2368), `raw` is the database itself. */
+type ChatDb = { prepare(sql: string): StatementSync; exec(sql: string): void; readonly raw: DatabaseSync };
+
+/** Prepared statements kept per database at most; past it the cache starts afresh (SQL built per call, like `IN (?, ?)`, varies). */
+const STATEMENTS_MAX = 512;
+
+/**
+ * T-2368: the portal spent a sixth of its CPU in `prepare()`: every read prepared its SQL again (a list of 1,500 sessions, thousands). A
+ * statement is prepared once per database and reused: node:sqlite resets it after each `run`, `get` and `all`, and SQLite prepares it
+ * again by itself after a schema change. Keyed by the database, so a reopened one starts afresh and a closed one's go with it.
+ */
+const chatDbs = new WeakMap<DatabaseSync, ChatDb>();
+function chatDb(db: DatabaseSync): ChatDb {
+  let out = chatDbs.get(db);
+  if (!out) {
+    const statements = new Map<string, StatementSync>();
+    out = {
+      prepare(sql) {
+        let st = statements.get(sql);
+        if (!st) {
+          if (statements.size >= STATEMENTS_MAX) statements.clear();
+          st = db.prepare(sql);
+          statements.set(sql, st);
+        }
+        return st;
+      },
+      exec: (sql) => db.exec(sql),
+      raw: db,
+    };
+    chatDbs.set(db, out);
+  }
+  return out;
+}
 
 /** An epoch-ms instant as ISO-8601, or null when it isn't a plausible one. */
 function isoFromMs(ms: number | undefined): string | null {
@@ -435,11 +479,11 @@ export class ChatStore {
     }
   }
 
-  /** The database, for reads. Throws when the store has no usable database. */
-  #db() {
+  /** The database, for reads (statements prepared once, T-2368). Throws when the store has no usable database. */
+  #db(): ChatDb {
     const db = this.#store.db;
     if (!db) throw new Error('The chat store has no database.');
-    return db;
+    return chatDb(db);
   }
 
   /** The database, for writes. Throws when the store is read-only (frozen / from a newer portal). */
@@ -587,7 +631,22 @@ export class ChatStore {
         `SELECT * FROM chat_sessions ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY last_activity_at DESC, created_at DESC`,
       )
       .all(...vals) as ChatSessionRow[];
-    return rows.map((r) => this.toSession(this.#keyed(r)));
+    const counts = this.#listCounts();
+    return rows.map((r) => this.toSession(this.#keyed(r), counts));
+  }
+
+  /**
+   * T-2368: what {@link toSession} counts per session (open requests, running tasks), for every session in two grouped reads, so a list
+   * of 1,500 rows does not ask 3,000 times. A session in neither has none.
+   */
+  #listCounts(): SessionCounts {
+    const db = this.#db();
+    const group = (sql: string) =>
+      new Map((db.prepare(sql).all() as { session_id: string; n: number }[]).map((r) => [r.session_id, r.n] as const));
+    return {
+      waiting: group('SELECT session_id, count(*) AS n FROM chat_requests WHERE answered_at IS NULL GROUP BY session_id'),
+      agents: group(`SELECT session_id, count(*) AS n FROM chat_tasks WHERE status IS NULL OR status = 'running' GROUP BY session_id`),
+    };
   }
 
   /**
@@ -626,7 +685,7 @@ export class ChatStore {
     let scanned = 0;
     let resume: string | null = null;
     while (scanned < maxScan) {
-      const got = keysetPage<ChatSessionRow>(this.#db(), spec, { cursor, limit: Math.min(CURSOR_MAX_LIMIT, maxScan - scanned) });
+      const got = keysetPage<ChatSessionRow>(this.#db().raw, spec, { cursor, limit: Math.min(CURSOR_MAX_LIMIT, maxScan - scanned) });
       scanned += got.rows.length;
       for (const r of got.rows) {
         const s = this.toSession(this.#keyed(r));
@@ -765,12 +824,15 @@ export class ChatStore {
     ).map((r) => this.#keyed(r));
   }
 
-  toSession(row: ChatSessionRow): ChatSession {
-    const waiting = (
-      this.#db().prepare('SELECT count(*) AS n FROM chat_requests WHERE session_id = ? AND answered_at IS NULL').get(row.id) as {
-        n: number;
-      }
-    ).n;
+  /** `counts`: a list's grouped counts (T-2368); without them, this session's own are read. */
+  toSession(row: ChatSessionRow, counts?: SessionCounts): ChatSession {
+    const waiting = counts
+      ? (counts.waiting.get(row.id) ?? 0)
+      : (
+          this.#db().prepare('SELECT count(*) AS n FROM chat_requests WHERE session_id = ? AND answered_at IS NULL').get(row.id) as {
+            n: number;
+          }
+        ).n;
     let waitingFor: string | null = null;
     if (waiting > 0) {
       const ask = this.#db()
@@ -804,11 +866,13 @@ export class ChatStore {
       lastSeq: row.last_seq,
       waiting,
       waitingFor,
-      agentsRunning: (
-        this.#db()
-          .prepare(`SELECT count(*) AS n FROM chat_tasks WHERE session_id = ? AND (status IS NULL OR status = 'running')`)
-          .get(row.id) as { n: number }
-      ).n,
+      agentsRunning: counts
+        ? (counts.agents.get(row.id) ?? 0)
+        : (
+            this.#db()
+              .prepare(`SELECT count(*) AS n FROM chat_tasks WHERE session_id = ? AND (status IS NULL OR status = 'running')`)
+              .get(row.id) as { n: number }
+          ).n,
       createdAt: row.created_at,
       lastActivityAt: row.last_activity_at,
       endedReason: row.ended_reason ?? null,
@@ -839,7 +903,7 @@ export class ChatStore {
 
   /** The chain this session belongs to (T-136): every row from the root to the head, each one's cost, and their sum. Null when unknown. */
   lineage(sessionId: string): Lineage | null {
-    return lineageOf(this.#db(), sessionId);
+    return lineageOf(this.#db().raw, sessionId);
   }
 
   /** The other Claudes this chat ran on before its current one, oldest first, each once. */
@@ -1407,6 +1471,14 @@ export class ChatStore {
     return rows.map(taskOut);
   }
 
+  /** T-2368: the session's tasks that read as running (exactly `tasks().filter(running)`), oldest first, through the (session_id, status) index. */
+  runningTasks(sessionId: string): ChatTask[] {
+    const rows = this.#db()
+      .prepare(`SELECT ${TASK_COLUMNS} FROM chat_tasks WHERE session_id = ? AND ${TASK_RUNNING_SQL} ORDER BY started_at, task_id`)
+      .all(sessionId) as TaskRow[];
+    return rows.map(taskOut);
+  }
+
   /** One sub-agent or background task, or null. */
   task(sessionId: string, taskId: string): ChatTask | null {
     const row = this.#db().prepare(`SELECT ${TASK_COLUMNS} FROM chat_tasks WHERE session_id = ? AND task_id = ?`).get(sessionId, taskId) as
@@ -1919,7 +1991,7 @@ export class ChatStore {
     let scanned = 0;
     let resume: string | null = null;
     while (scanned < maxScan) {
-      const got = keysetPage<AuditRow>(this.#db(), spec, { cursor, limit: Math.min(CURSOR_MAX_LIMIT, maxScan - scanned) });
+      const got = keysetPage<AuditRow>(this.#db().raw, spec, { cursor, limit: Math.min(CURSOR_MAX_LIMIT, maxScan - scanned) });
       scanned += got.rows.length;
       for (const r of got.rows) {
         const e = auditEntry(r);

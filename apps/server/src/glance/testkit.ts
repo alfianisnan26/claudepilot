@@ -175,7 +175,8 @@ export function sources(over: {
     asked,
     sessions: (actor) => (asked.push(actorString(actor)), reads.sessions++, over.sessions ?? []),
     requests: (actor, id) => (asked.push(actorString(actor)), over.requests?.[id] ?? []),
-    tasks: (actor, id) => (asked.push(actorString(actor)), over.tasks?.[id] ?? []),
+    // The fixtures hold every status; the source hands out the running ones, as the portal's does (T-2368).
+    runningTasks: (actor, id) => (asked.push(actorString(actor)), (over.tasks?.[id] ?? []).filter((t) => t.status === 'running')),
     tickets: (actor) => (asked.push(actorString(actor)), over.tickets ?? { count: 0, items: [] }),
     failedRuns: (actor) => (asked.push(actorString(actor)), over.failed ?? { count: 0, items: [] }),
     deploys: (actor) => (asked.push(actorString(actor)), over.deploys ?? { count: 0, items: [] }),

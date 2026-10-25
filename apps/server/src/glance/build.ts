@@ -32,8 +32,8 @@ export interface GlanceSources {
   sessions(actor: Actor): ChatSession[];
   /** One session's open requests that `actor` may DECIDE (seeing a session is not enough to answer for it), oldest first. */
   requests(actor: Actor, sessionId: string): ChatRequest[];
-  /** One session's sub-agents and background tasks (every status), for a session `actor` may see. */
-  tasks(actor: Actor, sessionId: string): ChatTask[];
+  /** One session's sub-agents and background tasks that are running (T-2368: never its history), for a session `actor` may see. */
+  runningTasks(actor: Actor, sessionId: string): ChatTask[];
   /** Tickets waiting on `actor` (assigned to a person and not closed): all of them counted, the top few listed. */
   tickets(actor: Actor): { count: number; items: TicketItem[] };
   /** Failed CI runs `actor` may see that still stand (see `failedRuns`): all of them counted, the top few listed. */
@@ -259,7 +259,7 @@ export function buildSnapshot(src: GlanceSources, actor: Actor, now: number, log
   const taskCache = new Map<string, ChatTask[]>();
   const tasksOf = (id: string): ChatTask[] => {
     let t = taskCache.get(id);
-    if (!t) taskCache.set(id, (t = src.tasks(actor, id)));
+    if (!t) taskCache.set(id, (t = src.runningTasks(actor, id)));
     return t;
   };
   const noAgents: GlanceAgents = { ok: false, running: 0, waiting: 0, rows: [], more: 0 };
