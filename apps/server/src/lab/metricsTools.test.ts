@@ -235,12 +235,14 @@ test('size budget: a large store (3,000 done tickets, 300 leads, a month of snap
       `INSERT INTO tickets (number, type, priority, priority_rank, status, summary, source, reporter_kind, reporter_label, created_at, updated_at, closed_at) VALUES (?, ?, 'normal', 2, 'done', 'x', 'human', 'ui', 'Admin', ?, ?, ?)`,
     );
     const tag = h.db.prepare('INSERT INTO ticket_tags (ticket_number, tag) VALUES (?, ?)');
+    // Every ticket type the tickets table's CHECK allows.
+    const TYPES = ['task', 'bug', 'feature', 'question', 'request', 'incident', 'approval', 'chore'];
     const ev = h.db.prepare(`INSERT INTO ticket_events (ticket_number, at, kind, actor, actor_label, data) VALUES (?, ?, 'status', 'session:W1', 'x', ?)`);
     h.db.exec('BEGIN');
     for (let i = 0; i < 3000; i++) {
       const n = 1000 + i;
       const closed = at((i % 160) + 0.5); // spread over the last 7 days
-      ins.run(n, `type-${i % 40}`, iso(closed - 20 * H), iso(closed), iso(closed));
+      ins.run(n, TYPES[i % TYPES.length]!, iso(closed - 20 * H), iso(closed), iso(closed));
       tag.run(n, 'claudepilot');
       tag.run(n, `area-l${i % 300}`);
       ev.run(n, iso(closed - 10 * H), JSON.stringify({ from: 'open', to: 'in_progress' }));
@@ -269,8 +271,9 @@ test('size budget: a large store (3,000 done tickets, 300 leads, a month of snap
     }
     const short = data(await mcp.call(admin, 'metrics_flow_times', { window: '7d', group_by: 'lead' }));
     assert.equal(short.groups.length, 30, 'the short form keeps 30 groups');
+    assert.ok(h.lab.metrics.flow('all', '7d', 'lead')!.groups.length > 300, 'the 300 seeded leads and the fixture’s');
     const fullLead = data(await mcp.call(admin, 'metrics_flow_times', { window: '7d', group_by: 'lead', full: true }));
-    assert.ok(fullLead.omitted > 0 && fullLead.groups.length + fullLead.omitted === 301, 'full: what does not fit is counted in omitted');
+    assert.ok(fullLead.omitted > 0 && fullLead.groups.length + fullLead.omitted === h.lab.metrics.flow('all', '7d', 'lead')!.groups.length, 'full: what does not fit is counted in omitted');
     const tr = data(await mcp.call(admin, 'metrics_trend', { metric: 'startP50', window: '30d' }));
     assert.ok(tr.points.length <= 200 && tr.points.length > 150, `${tr.points.length} points`);
     const tk = data(await mcp.call(admin, 'metrics_tickets', { window: '7d' }));
