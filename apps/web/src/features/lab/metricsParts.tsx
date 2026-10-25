@@ -75,6 +75,15 @@ export function MetricCard({
   );
 }
 
+/** A read that came back without figures because the closed tickets could not be read: the reason in words, never 0 or "no ticket". */
+export function UnavailableNote({ text }: { text: string }) {
+  return (
+    <p className="py-2 text-[13px] break-words text-muted [overflow-wrap:anywhere]" data-metric-unavailable="">
+      {UNAVAILABLE}: {text}
+    </p>
+  );
+}
+
 /** One read's states: refused, failed (with another try), on its way (rows in the shape of the card), or its content. */
 export function Slot<T>({
   load,
@@ -151,6 +160,7 @@ export function ScoresCard({
             </div>
           ))}
         </dl>
+        {overview.flowUnavailable && <UnavailableNote text={overview.flowUnavailable.text} />}
       </section>
     </Card>
   );
@@ -183,7 +193,7 @@ export function TrendCard({ eff, effv, window }: { eff: Load<MetricsTrend>; effv
       title="Scores over time"
       tip={
         t
-          ? `${t.source} A snapshot every ${formatSpan(t.everyMs)}, kept ${formatSpan(t.keepMs)}. A gap is a time with no reading, never a zero.`
+          ? `${t.source} A snapshot every ${formatSpan(t.everyMs)}, kept ${formatSpan(t.keepMs)}; each point scores the 24 hours before it, so in the 7d view the tiles (7 days) differ from the line. A gap is a time with no reading, never a zero.`
           : 'Read from the portal’s snapshots.'
       }
     >
@@ -216,6 +226,7 @@ export function ClosuresCard({ load, window }: { load: Load<MetricsTickets>; win
     >
       <Slot load={load} label="Loading closures">
         {(d) => {
+          if (d.unavailable) return <UnavailableNote text={d.unavailable.text} />;
           const c = closureColumns(d, window);
           return (
             <>
@@ -267,7 +278,10 @@ export function StagesCard({
       }
     >
       <Slot load={load} label="Loading the stages" rows={4}>
-        {(f) => (
+        {(f) =>
+          f.total === null ? (
+            <UnavailableNote text={f.unavailable?.text ?? 'The flow figures could not be read.'} />
+          ) : (
           <div
             className={
               load.loading
@@ -292,7 +306,8 @@ export function StagesCard({
               />
             </div>
           </div>
-        )}
+          )
+        }
       </Slot>
     </MetricCard>
   );
@@ -307,6 +322,7 @@ export function LeadTimeCard({ load }: { load: Load<MetricsTickets> }) {
     >
       <Slot load={load} label="Loading lead times">
         {(d) => {
+          if (d.unavailable) return <UnavailableNote text={d.unavailable.text} />;
           const s = leadTimeSpread(d);
           return (
             <>
@@ -349,6 +365,7 @@ export function LeadsCard({
     >
       <Slot load={load} label="Loading the leads" rows={3}>
         {(f) => {
+          if (f.total === null) return <UnavailableNote text={f.unavailable?.text ?? 'The flow figures could not be read.'} />;
           const { rows, hidden } = leadRows(f);
           return (
             <>
@@ -444,6 +461,7 @@ export function DrillList({ load, target, window }: { load: Load<MetricsTickets>
   return (
     <Slot load={load} label="Loading tickets" rows={4}>
       {(d) => {
+        if (d.unavailable || d.total === null) return <UnavailableNote text={d.unavailable?.text ?? 'The tickets could not be read.'} />;
         const rows = drillRows(d, target.stage);
         const which = target.stage ? STAGE_INFO[target.stage].label : STAGE_INFO.resolve.label;
         if (!rows.length) return <p className="py-3 text-[13px] text-muted">No ticket was done in the last {window}</p>;

@@ -291,7 +291,8 @@ test('LineChart: an image with a summary, a legend for two series, a 44 px Table
   assert.match(text(html), /Target 35m/);
   assert.equal((html.match(/<li class="flex items-center gap-1\.5">/g) ?? []).length, 2, 'a legend entry per series');
   assert.match(html, /<button[^>]*min-h-11[^>]*min-w-11[^>]*>Table<\/button>/);
-  assert.match(html, /r="3"[^>]*fill="var\(--color-surface\)"/, 'the hollow dot of the gap');
+  assert.equal((html.match(/data-chart-gap="a"[^>]*><line/g) ?? []).length, 1, 'the gap of the median is a hairline');
+  assert.doesNotMatch(html, /r="3"[^>]*fill="var\(--color-surface\)"/, 'no dot on the baseline: it read as 0');
   assert.match(html, /role="group" aria-label="Cycle time: values by time"/);
   assert.equal((html.match(/role="button"/g) ?? []).length, 4, 'a focusable point per time');
   assert.equal((html.match(/tabindex="0"/g) ?? []).length, 1, 'one tab stop');

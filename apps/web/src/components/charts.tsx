@@ -553,8 +553,8 @@ const LINE_PAD = { top: 14, right: 56, bottom: 24, left: 44 };
 
 /**
  * One to three series over time. x is milliseconds; the y axis tops at a clean number (`niceMax`, from 0) with the bottom, middle and top
- * gridlines; an optional dashed target line. A null value breaks the line (never bridged, never dropped to 0) and sits as a hollow dot on
- * the baseline, "unavailable" in the tooltip and the table. The last value of each line is labelled at its end. Two or more series get a
+ * gridlines; an optional dashed target line. A null value breaks the line (never bridged, never dropped to 0) and is marked by a dashed
+ * hairline over the plot height (no mark on the baseline: it read as 0), "unavailable" in the tooltip and the table. The last value of each line is labelled at its end. Two or more series get a
  * legend. Hover, tap or focus shows every series at that time; the points are one tab stop, arrow keys move between times.
  */
 export function LineChart({
@@ -709,15 +709,29 @@ export function LineChart({
                             strokeWidth={2}
                           />
                         ))}
-                      {/* A gap: a hollow dot on the baseline at the time with nothing recorded. */}
-                      {pts
-                        .filter((p) => p.y === null)
-                        .map((p) => (
-                          <circle key={p.x} cx={p.x} cy={base} r={3} fill="var(--color-surface)" stroke={s.color} strokeWidth={1.5} />
-                        ))}
                     </g>
                   );
                 })}
+                {/* A gap: a dashed hairline over the whole height at a time with nothing recorded. A dot on the baseline read as a 0. */}
+                {lines.map((s) => (
+                  <g key={s.key} className="pointer-events-none" data-chart-gap={s.key}>
+                    {s.points
+                      .filter((p) => Number.isFinite(p.t) && (p.v === null || p.v === undefined || !Number.isFinite(p.v)))
+                      .map((p) => (
+                        <line
+                          key={p.t}
+                          x1={x(p.t)}
+                          x2={x(p.t)}
+                          y1={LINE_PAD.top}
+                          y2={base}
+                          stroke={s.color}
+                          strokeWidth={1}
+                          strokeDasharray="2 3"
+                          opacity={0.6}
+                        />
+                      ))}
+                  </g>
+                ))}
                 {ends.map((e, i) => (
                   <g key={e.s.key} className="pointer-events-none">
                     <circle cx={x(e.last.t)} cy={y(e.last.v)} r={4} fill={e.s.color} stroke="var(--color-surface)" strokeWidth={2} />

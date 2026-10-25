@@ -14,7 +14,7 @@
 import { mkdirSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { Browser } from './browser.mjs';
-import { login, PORT, sleep } from './lib.mjs';
+import { api, login, PORT, sleep } from './lib.mjs';
 
 const args = process.argv.slice(2);
 mkdirSync(process.env.QA_SHOTS ?? '/tmp/qa-shots', { recursive: true });
@@ -94,12 +94,24 @@ const seed = () => {
   ev.run(9413, ago(5), 'status', 'session:qa-w1', null, JSON.stringify({ from: 'in_progress', to: 'in_review' }));
   tk.run(9414, 'task', 'normal', 'blocked', 'QA metrics blocked', ago(30), ago(28), null);
   tag.run(9414, 'program-qa');
-  // Snapshots every 90 minutes over the last day; one reading with no effectiveness (a gap, not a zero).
+};
+
+// Snapshots every 90 minutes over the last day, seeded AFTER the tickets: the newest one carries what the portal itself reads now
+// (the 24h overview's two scores, null where it says unavailable), so the tile and the end of the line agree. One earlier reading has no
+// effectiveness (a gap, not a zero); the older readings are only a shape to look at.
+const seedSnapshots = async (call) => {
+  const now = Date.now();
   const snap = db.prepare('INSERT INTO lab_metric_snapshots (at_ms, program, metrics) VALUES (?, ?, ?)');
-  for (let i = 16; i >= 0; i--) {
-    const eff = 52 + Math.round(18 * Math.sin(i / 3)) + (16 - i);
-    const eft = i === 6 ? null : 61 + Math.round(10 * Math.cos(i / 4)) + Math.floor((16 - i) / 2);
-    for (const program of ['all', 'qa']) snap.run(now - i * 1.5 * H, program, JSON.stringify({ efficiency: eff, effectiveness: eft }));
+  for (const program of ['all', 'qa']) {
+    const r = await call('GET', `/api/lab/metrics/overview?program=${program}&window=24h`);
+    const live = (k) => (typeof r.data?.[k]?.value === 'number' ? r.data[k].value : null);
+    const now_ = { efficiency: live('efficiency'), effectiveness: live('effectiveness') };
+    console.log(`  seed ${program}: live scores ${JSON.stringify(now_)}`);
+    for (let i = 16; i >= 0; i--) {
+      const eff = i === 0 ? now_.efficiency : 52 + Math.round(18 * Math.sin(i / 3)) + (16 - i);
+      const eft = i === 0 ? now_.effectiveness : i === 6 ? null : 40 + Math.round(10 * Math.cos(i / 4)) + Math.floor((16 - i) / 2);
+      snap.run(now - i * 1.5 * H, program, JSON.stringify({ efficiency: eff, effectiveness: eft }));
+    }
   }
 };
 
@@ -121,6 +133,7 @@ const MEASURE = `(() => {
     bad, text: root.innerText, cards,
     scores: root.querySelectorAll('[data-metric-score]').length,
     svgs: root.querySelectorAll('svg[aria-label], svg [role=img][aria-label]').length,
+    trend: (() => { const c = root.querySelector('[data-metric-card="trend"]'); const g = c && c.querySelector('g[role=img]'); const s = g && g.ownerSVGElement; return c ? { svg: !!s, h: s ? Math.round(s.getBoundingClientRect().height) : 0, w: Math.round(c.getBoundingClientRect().width), texts: s ? s.querySelectorAll('text').length : 0, gaps: c.querySelectorAll('[data-chart-gap] line').length, dots: s ? [...s.querySelectorAll('circle')].filter((e) => e.getAttribute('r') === '3').length : 0, html: s ? '' : c.innerHTML.slice(0, 700) } : null; })(),
     tips: [...root.querySelectorAll('[data-metric-card]')].filter((c) => c.querySelector('[aria-label^="About"]')).length,
   };
 })()`;
@@ -146,6 +159,7 @@ try {
       const tag = `${size.name}-${dark ? 'dark' : 'light'}`;
       console.log(tag);
       seed();
+      await seedSnapshots(api(cookie));
       await b.setViewport(size.w, size.h, size.mobile);
       await b.send('Emulation.setSafeAreaInsetsOverride', { insets: size.insets }).catch(() => {});
       await b.media({ dark });
@@ -167,6 +181,11 @@ try {
         JSON.stringify([s.scores, s.cards]),
       );
       check(`${tag}: charts have a label (an SVG with a name)`, s.svgs >= 3, `svgs=${s.svgs}`);
+      check(
+        `${tag}: the trend draws (axes and lines), a gap is a hairline and no dot sits on the baseline`,
+        !!s.trend && s.trend.svg && s.trend.h > 100 && s.trend.texts >= 4 && s.trend.gaps >= 1 && s.trend.dots === 0,
+        JSON.stringify(s.trend),
+      );
       check(`${tag}: no NaN, undefined or null text`, s.bad.length === 0, JSON.stringify(s.bad));
       check(`${tag}: no sideways scroll`, noScroll(s), JSON.stringify([s.docScroll, s.docClient, s.rootScroll, s.rootClient]));
       sizes(`${tag}: controls >= 44 px`, size.mobile, s.small);

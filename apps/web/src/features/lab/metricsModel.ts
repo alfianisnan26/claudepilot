@@ -15,6 +15,7 @@ import type {
   MetricsTickets,
   MetricsTicketRow,
   MetricsTrend,
+  MetricsUnavailable,
   MetricsWindow,
 } from '@portal/contracts';
 import { UNAVAILABLE, formatSpan, histogramBins, type LinePoint, type StageRow } from '@/components/chartMath';
@@ -179,6 +180,15 @@ const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
 const two = (n: number) => String(n).padStart(2, '0');
 
+/**
+ * The sentence for a set of figures the portal could not read ("The closed tickets could not be read, ... (not 0)"), or null when they
+ * were read. A read that failed is never shown as "no ticket".
+ */
+export const unavailableNote = (u: MetricsUnavailable | undefined | null): string | null => (u ? u.text : null);
+
+/** Rows still to show of a read: `total` null (the closed tickets could not be read) counts as none missing. */
+export const missingRows = (t: MetricsTickets | null): number => (t && t.total !== null ? Math.max(0, t.total - t.rows.length) : 0);
+
 export interface Closures {
   columns: ChartColumn[];
   /** "hour" or "day": what a column covers. */
@@ -220,7 +230,7 @@ export function closureColumns(tickets: MetricsTickets | null, window: MetricsWi
       label: `${per === 'hour' ? hm(from) : day(from)}: ${value} done`,
     };
   });
-  return { columns, per, done, missing: Math.max(0, (tickets?.total ?? 0) - (tickets?.rows.length ?? 0)) };
+  return { columns, per, done, missing: missingRows(tickets) };
 }
 
 /** Nearest rank, as the server does (the scorecard's `percentile`): the value at ceil(p * n). Null with none. */
@@ -247,7 +257,7 @@ export function leadTimeSpread(tickets: MetricsTickets | null): LeadTimeSpread {
   const values = (tickets?.rows ?? [])
     .filter((r) => r.status === 'done')
     .flatMap((r) => (r.stages.resolve === null ? [] : [r.stages.resolve]));
-  const missing = Math.max(0, (tickets?.total ?? 0) - (tickets?.rows.length ?? 0));
+  const missing = missingRows(tickets);
   if (!values.length) return { edges: [], counts: [], median: null, n: 0, beyond: 0, missing };
   const p90 = nearestRank(values, 0.9) ?? 0;
   const max = Math.max(...values);
@@ -390,16 +400,17 @@ export function headlineFigures(o: MetricsOverview | null): HeadlineFigure[] {
     s && s.value !== null
       ? { key, label, value: String(Math.round(s.value)), available: true }
       : { key, label, value: '-', available: false };
-  if (!o || o.program.unavailable) {
+  // No program figures, or the closed tickets could not be read (flow null): resolved and median are "-", never 0.
+  if (!o || o.program.unavailable || !o.flow) {
+    const scores = o && !o.program.unavailable ? o : undefined;
     return [
-      score('efficiency', 'Efficiency', undefined),
-      score('effectiveness', 'Effectiveness', undefined),
+      score('efficiency', 'Efficiency', scores?.efficiency),
+      score('effectiveness', 'Effectiveness', scores?.effectiveness),
       { key: 'resolved', label: 'Resolved', value: '-', available: false },
       { key: 'median', label: 'Median', value: '-', available: false },
     ];
   }
-  const resolve = o.flow.current.stages.find((s) => s.stage === 'resolve');
-  const median = resolve?.medianMs ?? null;
+  const resolve = o.flow.current.stages.find((s) => s.stage === 'resolve');  const median = resolve?.medianMs ?? null;
   return [
     score('efficiency', 'Efficiency', o.efficiency),
     score('effectiveness', 'Effectiveness', o.effectiveness),
@@ -421,22 +432,33 @@ export interface SummaryStat {
 /** Done, won't do, the median, and the open work now (review, blocked, stalled). `open` null (the store could not be read) is "unavailable". */
 export function summaryStats(o: MetricsOverview | null): SummaryStat[] {
   if (!o) return [];
-  const cur = o.flow.current;
-  const prev = o.flow.previous;
-  const median = (w: MetricsFlowGroup['current']) => w.stages.find((s) => s.stage === 'resolve')?.medianMs ?? null;
+  const cur = o.flow?.current ?? null;
+  const prev = o.flow?.previous ?? null;
+  const median = (w: MetricsFlowGroup['current'] | null) => w?.stages.find((s) => s.stage === 'resolve')?.medianMs ?? null;
   const was = (v: string | null) => (v === null || v === UNAVAILABLE ? null : `was ${v}`);
   const open = o.open;
   const count = (n: number | undefined): Pick<SummaryStat, 'value' | 'sub'> =>
     n === undefined ? { value: '-', sub: UNAVAILABLE } : { value: String(n), sub: null };
+  // The closed tickets could not be read (`flow` null): done, won't do and the median are "unavailable", never 0.
+  const flowStats: SummaryStat[] =
+    cur && prev
+      ? [
+          { key: 'done', label: 'Done', value: String(cur.done), sub: was(String(prev.done)) },
+          { key: 'wontDo', label: "Won't do", value: String(cur.wontDo), sub: was(String(prev.wontDo)) },
+          {
+            key: 'median',
+            label: 'Median',
+            value: median(cur) === null ? '-' : formatSpan(median(cur)),
+            sub: median(cur) === null ? UNAVAILABLE : was(median(prev) === null ? null : formatSpan(median(prev))),
+          },
+        ]
+      : [
+          { key: 'done', label: 'Done', value: '-', sub: UNAVAILABLE },
+          { key: 'wontDo', label: "Won't do", value: '-', sub: UNAVAILABLE },
+          { key: 'median', label: 'Median', value: '-', sub: UNAVAILABLE },
+        ];
   return [
-    { key: 'done', label: 'Done', value: String(cur.done), sub: was(String(prev.done)) },
-    { key: 'wontDo', label: "Won't do", value: String(cur.wontDo), sub: was(String(prev.wontDo)) },
-    {
-      key: 'median',
-      label: 'Median',
-      value: median(cur) === null ? '-' : formatSpan(median(cur)),
-      sub: median(cur) === null ? UNAVAILABLE : was(median(prev) === null ? null : formatSpan(median(prev))),
-    },
+    ...flowStats,
     {
       key: 'review',
       label: 'In review',
