@@ -1,8 +1,9 @@
 // Pilot metrics (T-2360, §28.15): the loader. Reads the closed tickets of a bounded span (the window and the one before it, by the
 // `tickets_closed_at` index of migration 856), their events, verdicts and merge records (by ticket number, indexed), and the open work now.
-// Read only. Ticket text is not kept: of a comment only the first 300 characters after "Self-test:" are read, in SQL, to find its verdict.
+// Read only. Ticket text is not kept: only a comment naming "Self-test" is read, to find its verdict line (as the flow watchdog reads it), then dropped.
 
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
+import { selfTestText } from '../flow/engine.js';
 import type { SessionInfo } from '../usagespend/model.js';
 import type { FlowTicketFacts, OpenTicketFacts } from './flowMetrics.js';
 import { programIdOf } from './scorecard.js';
@@ -26,6 +27,31 @@ function chunked<R>(db: DatabaseSync, ids: readonly number[], sql: (list: string
 
 /** D-102's self-test line (flow/engine.ts), and its fail form: `Self-test: <job | command> on <sha> pass|fail <N>`. */
 export const SELF_TEST_VERDICT = /^Self-test:\s*\S.*?\son\s+[0-9a-f]{12,40}\s+(pass|fail)\b/i;
+
+/**
+ * The first self-test line of a comment body (its first 300 characters, read as the flow watchdog reads it: `selfTestText` drops `*` and
+ * backticks and trims, so `**Self-test:** \`job\` on ...` counts as it does for the merge gate), or null. Only a line that then starts
+ * with "Self-test:" counts (D-102 posts it as one line): one quoted inside a line, after `> `, in a list, indented as code (4 spaces or a
+ * tab), or inside a ``` or ~~~ code fence is not a verdict.
+ */
+export function selfTestLineOf(body: string | null): string | null {
+  if (!body) return null;
+  let fence: string | null = null;
+  for (const line of body.split(/\r?\n/)) {
+    const f = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    if (f) {
+      const mark = f[1]!;
+      if (fence === null) fence = mark;
+      // A fence closes on the same character, at least as long, with nothing after it.
+      else if (mark[0] === fence[0] && mark.length >= fence.length && !f[2]!.trim()) fence = null;
+      continue;
+    }
+    if (fence !== null || /^( {4}|\t)/.test(line)) continue;
+    const text = selfTestText(line);
+    if (text.startsWith('Self-test:')) return text.slice(0, 300);
+  }
+  return null;
+}
 
 /** The verdict a comment carries: its `data.verdict` (QA or review verdict), else a self-test line; null for any other comment. */
 export function verdictOf(data: string | null, selfTest: string | null): boolean | null {
@@ -55,6 +81,8 @@ export function leadOf(tags: readonly string[], holder: string | null, sessions:
 /**
  * The window read. `+status` keeps the planner off `tickets_queue` (status first): without it SQLite picked that index and walked every done
  * ticket ever closed (metricsPerf.test.ts checks the plan); the window is bounded by `tickets_closed_at`.
+ * `closed_at` is compared as text with `toISOString()` bounds: its only writer, tickets/service.ts (update's close and close()), stores
+ * `toISOString()` too (metricsRoutes.test.ts pins that format through the service).
  */
 export const CLOSED_IN_WINDOW_SQL = `SELECT number, type, priority, status, created_at, closed_at, assignee_kind, assignee_ref FROM tickets
        WHERE closed_at >= ? AND closed_at < ? AND +status IN ('done', 'wont_do')`;
@@ -80,11 +108,14 @@ export function loadFlowTickets(db: DatabaseSync, fromMs: number, toMs: number, 
   const by = new Map<number, Acc>();
   for (const r of rows) by.set(r.number, { starts: [], firstAgent: null, verdicts: [], merges: [], tags: [], holder: r.assignee_kind === 'session' ? r.assignee_ref : null });
   const numbers = [...by.keys()];
-  const events = chunked<{ ticket_number: number; at: string; kind: string; actor: string; data: string | null; st: string | null }>(
+  const events = chunked<{ ticket_number: number; at: string; kind: string; actor: string; data: string | null; body: string | null }>(
     db,
     numbers,
     (l) =>
-      `SELECT ticket_number, at, kind, actor, data, CASE WHEN kind = 'comment' AND instr(body, 'Self-test:') > 0 THEN substr(body, instr(body, 'Self-test:'), 300) END AS st
+      // Only a comment that names "Self-test" anywhere brings its body (the watchdog's form may be bold or in code marks, `**Self-test**:`);
+      // selfTestLineOf then keeps only a real line, skipping quotes, lists, code and fences.
+      `SELECT ticket_number, at, kind, actor, data,
+              CASE WHEN kind = 'comment' AND instr(body, 'Self-test') > 0 THEN body END AS body
        FROM ticket_events WHERE ticket_number IN ${l} AND kind IN ('status', 'comment') ORDER BY ticket_number, id`,
   );
   for (const e of events) {
@@ -104,7 +135,7 @@ export function loadFlowTickets(db: DatabaseSync, fromMs: number, toMs: number, 
       continue;
     }
     if (a.firstAgent === null && e.actor.startsWith('session:')) a.firstAgent = at;
-    const v = verdictOf(e.data, e.st);
+    const v = verdictOf(e.data, selfTestLineOf(e.body));
     if (v !== null) a.verdicts.push({ atMs: at, pass: v });
   }
   for (const m of chunked<{ ticket_number: number; at: string }>(db, numbers, (l) => `SELECT ticket_number, at FROM ticket_merge_status WHERE ticket_number IN ${l} AND state = 'merged' ORDER BY ticket_number, id`)) {
@@ -178,7 +209,20 @@ export function loadOpenTickets(db: DatabaseSync): OpenTicketFacts[] {
   });
 }
 
-/** The `program-*` tags in use (a range on the tag index). */
-export function loadProgramTags(db: DatabaseSync): string[] {
-  return (db.prepare(`SELECT DISTINCT tag FROM ticket_tags WHERE tag >= 'program-' AND tag < 'program.' ORDER BY tag`).all() as unknown as { tag: string }[]).map((r) => r.tag);
+/**
+ * The `program-*` tags in use (a range on the tag index) with at least one ticket updated since `sinceMs` (a dormant tag adds no
+ * program, so no snapshot rows), ranked: most tickets updated since `sinceMs` first, then most tickets, then by name.
+ * resolvePrograms keeps the first MAX_TAG_PROGRAMS.
+ */
+export function loadProgramTags(db: DatabaseSync, sinceMs: number): string[] {
+  const iso = new Date(sinceMs).toISOString();
+  return (
+    db
+      .prepare(
+        `SELECT tt.tag AS tag FROM ticket_tags tt JOIN tickets t ON t.number = tt.ticket_number
+         WHERE tt.tag >= 'program-' AND tt.tag < 'program.'
+         GROUP BY tt.tag HAVING SUM(t.updated_at >= ?) > 0 ORDER BY SUM(t.updated_at >= ?) DESC, COUNT(*) DESC, tt.tag`,
+      )
+      .all(iso, iso) as unknown as { tag: string }[]
+  ).map((r) => r.tag);
 }

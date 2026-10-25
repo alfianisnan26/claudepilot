@@ -40,6 +40,7 @@ import { ClaudeVersions, registerClaudeVersionTools } from './claudeversion/inde
 import { createUsageSpend, registerUsageSpendTools } from './usagespend/index.js';
 import { Lab } from './lab/index.js';
 import { registerLabTools } from './lab/portalTools.js';
+import { registerMetricsTools } from './lab/metricsTools.js';
 import { createRepos, registerRepoTools } from './repos/index.js';
 import { changesGlance, createGlance } from './glance/index.js';
 import { bridgeAttentionNotify, createAttention, registerAttentionTools } from './attention/index.js';
@@ -686,6 +687,7 @@ registerUsageSpendTools(usageSpend);
 const lab = new Lab({ store, log: (m) => console.warn(m), paceSource: async () => (await claudeUsage.report()).claudes, settings: settingsModule.settings });
 chatController.onStreamLine = (sessionId, raw) => lab.line(sessionId, raw);
 registerLabTools(lab);
+registerMetricsTools(lab);
 lab.start();
 // Workspace git: the repositories inside each running workspace, found by scanning and tracked each on its own, with worktrees, an audit
 // and a summary (workspace-git PRD). It reads through the chat's hardened session host; a scan never fetches.

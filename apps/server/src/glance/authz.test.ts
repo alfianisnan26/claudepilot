@@ -39,7 +39,7 @@ function reads() {
         session({ id: 'ghost', state: 'working' }), // a session no resolver knows: nobody's
       ],
       openRequests: (id) => [asking(id, 5)],
-      tasks: (id) => [task({ taskId: `t-${id}`, description: `Task of ${id}` })],
+      runningTasks: (id) => [task({ taskId: `t-${id}`, description: `Task of ${id}` })],
     },
     tickets: { list: () => ({ items: [ticket({ id: 'T-1' }), ticket({ id: 'T-2' })], total: 2, counts: { byStatus: {} as never, needsYou: 2, unassigned: 0, total: 2 } }) },
     ci: fakeCi([

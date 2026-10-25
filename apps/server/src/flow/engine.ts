@@ -179,13 +179,19 @@ export const RISK_HIGH_TAG = 'risk:high';
 const SELF_TEST = /^Self-test: \S.*? on ([0-9a-f]{12,40}) pass [1-9][0-9]*(?: stg same failures: .*\S.*)?$/;
 const sameCommit = (a: string, b: string) => a.length >= 12 && b.length >= 12 && (a.startsWith(b) || b.startsWith(a));
 
+/**
+ * One comment line as the self-test check reads it: Markdown emphasis and code marks (`*`, backticks) dropped, trimmed. Shared with the lab
+ * metrics (lab/flowMetricsData.ts `selfTestLineOf`, T-2360), so both count the same lines.
+ */
+export const selfTestText = (raw: string): string => raw.replace(/[*`]/g, '').trim();
+
 /** When the newest comment with a self-test line on `head` was written (Markdown emphasis and code marks ignored), or null: none. */
 export function selfTestAt(comments: readonly { at: string; body: string }[], head: string): number | null {
   let at: number | null = null;
   const h = head.toLowerCase();
   for (const c of comments)
     for (const raw of c.body.split('\n')) {
-      const m = SELF_TEST.exec(raw.replace(/[*`]/g, '').trim());
+      const m = SELF_TEST.exec(selfTestText(raw));
       if (m && sameCommit(m[1]!, h) && Number.isFinite(ms(c.at))) at = Math.max(at ?? 0, ms(c.at));
     }
   return at;

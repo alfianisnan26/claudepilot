@@ -29,6 +29,15 @@ export const LAB_TOOL_POLICIES: ToolPolicies = {
   crew_scorecard: { kind: 'agent', reach: 'session' },
   lab_arm_draw: { kind: 'agent', reach: 'session', audit: 'lab.arm.draw' },
   lab_experiment_set: { kind: 'platform', area: 'usage', verb: 'manage', confirm: true, audit: 'lab.experiment.set' },
+  // The pilot metrics (T-2360 D, metricsTools.ts): whole-portal numbers, read only. Not `platform`: the seam boxes every agent out of a
+  // platform area, and the ticket's readers are the leads too. So `agent`, enforced in the handler: an agent's token only when its session
+  // is a lead (a top-level chat, no parent: a worker is NOT_FOUND); an admin's or manager's token only with `view` on the area `usage`
+  // (the REST routes' reader). Counts, durations, ticket ids and program ids only: no ticket text, no session title.
+  metrics_overview: { kind: 'agent', reach: 'session' },
+  metrics_flow_times: { kind: 'agent', reach: 'session' },
+  metrics_trend: { kind: 'agent', reach: 'session' },
+  metrics_insights: { kind: 'agent', reach: 'session' },
+  metrics_tickets: { kind: 'agent', reach: 'session' },
 };
 
 let declared = false;

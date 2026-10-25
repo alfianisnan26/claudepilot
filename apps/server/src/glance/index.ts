@@ -13,7 +13,7 @@ export { Glance } from './service.js';
 export { glanceSources } from './authz.js';
 
 export interface GlanceDeps {
-  chat: Pick<ChatController, 'list' | 'openRequests' | 'tasks' | 'onEvent'>;
+  chat: Pick<ChatController, 'list' | 'openRequests' | 'runningTasks' | 'onEvent'>;
   tickets: Pick<Tickets, 'list'>;
   ci: Pick<CiService, 'list'>;
   /** Tells open pages to load the snapshot again (the `glance` live topic). */
