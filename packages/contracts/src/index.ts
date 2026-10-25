@@ -28,6 +28,7 @@ export * from './usage.js';
 export * from './usagebudget.js';
 export * from './lab.js';
 export * from './scorecard.js';
+export * from './metrics.js';
 export * from './repos.js';
 export * from './glance.js';
 export * from './attention.js';

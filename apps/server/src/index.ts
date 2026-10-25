@@ -681,7 +681,9 @@ chatController.sendGate = (info) => usageSpend.gate(info);
 registerUsageSpendTools(usageSpend);
 // The efficiency lab (T-287, claude-usage PRD §28): per-slice counts from every accepted stream line, experiments, outcomes from the
 // tickets' timelines, the read routes and Portal MCP tools (lab/authz.ts), and retention of the request rows (14 days, once a day).
-const lab = new Lab({ store, log: (m) => console.warn(m), paceSource: async () => (await claudeUsage.report()).claudes });
+// T-2360: plus the pilot metrics (flow times, the two scores, findings) with a snapshot every 10 minutes (kept 30 days); `settings` holds
+// the metrics programs and their targets.
+const lab = new Lab({ store, log: (m) => console.warn(m), paceSource: async () => (await claudeUsage.report()).claudes, settings: settingsModule.settings });
 chatController.onStreamLine = (sessionId, raw) => lab.line(sessionId, raw);
 registerLabTools(lab);
 lab.start();
@@ -832,6 +834,7 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const)
     server.close();
     refRewrite.abort();
     clearInterval(backupTimer);
+    lab.close();
     claudeVersions.stop();
     reconciler.stop();
     browser.stop();

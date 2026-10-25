@@ -3787,6 +3787,27 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 856,
+    name: 'efficiency lab: metric snapshots per program, and closed tickets by close time (T-2360)',
+    up(db) {
+      // T-2360 (docs/prd/claude-usage.md §28.16): every 10 minutes the lab writes one row per metrics program with the values its trend
+      // reads (scores, counts, stage medians; numbers only, never ticket text). Kept 30 days (lab/metricsSnapshots.ts). Trend reads go by
+      // (program, at_ms); retention by at_ms. `tickets_closed_at` bounds the flow loader to the window and the one before it.
+      // Additive only (D-92): new objects with IF NOT EXISTS. Next free number of the lab block (850-855 used).
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS lab_metric_snapshots (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          at_ms INTEGER NOT NULL,
+          program TEXT NOT NULL CHECK (length(program) BETWEEN 1 AND 60),
+          metrics TEXT NOT NULL CHECK (json_valid(metrics))
+        ) STRICT;
+        CREATE INDEX IF NOT EXISTS lab_metric_snapshots_program_at ON lab_metric_snapshots (program, at_ms);
+        CREATE INDEX IF NOT EXISTS lab_metric_snapshots_at ON lab_metric_snapshots (at_ms);
+        CREATE INDEX IF NOT EXISTS tickets_closed_at ON tickets (closed_at);
+      `);
+    },
+  },
 ];
 
 /**

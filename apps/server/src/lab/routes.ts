@@ -4,7 +4,18 @@
 
 import { AppError, success } from '@isnanme/core';
 import { Hono, type Context } from 'hono';
-import { CREW_WINDOWS, platformRef, type Actor, type CrewWindow, type LabPeriod } from '@portal/contracts';
+import {
+  CREW_WINDOWS,
+  METRICS_GROUP_BY,
+  METRICS_STAGES,
+  METRICS_TREND_KEYS,
+  METRICS_TREND_WINDOWS,
+  METRICS_WINDOWS,
+  platformRef,
+  type Actor,
+  type CrewWindow,
+  type LabPeriod,
+} from '@portal/contracts';
 import { actorOf, actorString, can } from '../authz/seam.js';
 import { declareLabPolicies } from './authz.js';
 import type { Lab, ViewFilter } from './index.js';
@@ -114,6 +125,70 @@ export function createLabRoutes(lab: Lab): Hono {
     });
     if (!s) throw NOT_FOUND();
     return c.json(success(s));
+  });
+
+  // T-2360 (§28.16, METRICS_API): the pilot metrics. Whole-portal numbers (every program's tickets, every crew, every Claude's quota), so
+  // only a reader of the usage area: an agent actor gets the same 404 (the Portal MCP slice decides an agent's reach). A program that is
+  // not there is the same 404.
+  const metricsReader = (c: Context) => {
+    if (labReader(actorOf(c)).session) throw NOT_FOUND();
+  };
+  const choice = <T extends string>(c: Context, name: string, list: readonly T[], def: T | null): T | null => {
+    const v = c.req.query(name);
+    if (v === undefined || v === '') return def;
+    if (!(list as readonly string[]).includes(v)) throw new AppError('VALIDATION_FAILED', `${name}: ${list.join(', ')}.`, { details: { [name]: list.join(', ') } });
+    return v as T;
+  };
+  const found = <T>(v: T | null): T => {
+    if (v === null) throw NOT_FOUND();
+    return v;
+  };
+
+  // GET /api/lab/metrics/programs
+  r.get('/metrics/programs', (c) => {
+    metricsReader(c);
+    return c.json(success(lab.metrics.programs()));
+  });
+
+  // GET /api/lab/metrics/overview?program=&window=24h|7d
+  r.get('/metrics/overview', async (c) => {
+    metricsReader(c);
+    const window = choice(c, 'window', METRICS_WINDOWS, '24h')!;
+    return c.json(success(found(await lab.metrics.overview(param(c, 'program'), window))));
+  });
+
+  // GET /api/lab/metrics/flow?program=&window=&groupBy=lead|type|priority|program
+  r.get('/metrics/flow', (c) => {
+    metricsReader(c);
+    const window = choice(c, 'window', METRICS_WINDOWS, '24h')!;
+    const groupBy = choice(c, 'groupBy', METRICS_GROUP_BY, null);
+    return c.json(success(found(lab.metrics.flow(param(c, 'program'), window, groupBy))));
+  });
+
+  // GET /api/lab/metrics/trend?metric=&program=&window=24h|7d|30d
+  r.get('/metrics/trend', (c) => {
+    metricsReader(c);
+    const metric = choice(c, 'metric', METRICS_TREND_KEYS, 'effectiveness')!;
+    const window = choice(c, 'window', METRICS_TREND_WINDOWS, '7d')!;
+    return c.json(success(found(lab.metrics.trend(param(c, 'program'), metric, window))));
+  });
+
+  // GET /api/lab/metrics/tickets?program=&window=&stage=&groupBy=&group=
+  r.get('/metrics/tickets', (c) => {
+    metricsReader(c);
+    const window = choice(c, 'window', METRICS_WINDOWS, '24h')!;
+    const stage = choice(c, 'stage', METRICS_STAGES, null);
+    const groupBy = choice(c, 'groupBy', METRICS_GROUP_BY, null);
+    const group = param(c, 'group');
+    if (group && !groupBy) throw new AppError('VALIDATION_FAILED', 'group: needs groupBy.', { details: { group: 'needs groupBy' } });
+    return c.json(success(found(lab.metrics.tickets(param(c, 'program'), window, { ...(stage ? { stage } : {}), ...(groupBy ? { groupBy } : {}), ...(group ? { group } : {}) }))));
+  });
+
+  // GET /api/lab/metrics/insights?program=&window=
+  r.get('/metrics/insights', async (c) => {
+    metricsReader(c);
+    const window = choice(c, 'window', METRICS_WINDOWS, '24h')!;
+    return c.json(success(found(await lab.metrics.insights(param(c, 'program'), window))));
   });
 
   return r;

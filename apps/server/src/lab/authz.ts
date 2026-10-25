@@ -14,6 +14,13 @@ export const LAB_POLICIES = {
   'GET /api/lab/summary': { kind: 'platform', area: 'usage', verb: 'view' },
   // The crew scorecard (T-450): an agent actor reads only its own program (the lead chain and workers its session is in).
   'GET /api/lab/scorecard': { kind: 'platform', area: 'usage', verb: 'view' },
+  // The pilot metrics (T-2360): whole-portal numbers, so a reader of the area only; an agent actor gets the 404.
+  'GET /api/lab/metrics/programs': { kind: 'platform', area: 'usage', verb: 'view' },
+  'GET /api/lab/metrics/overview': { kind: 'platform', area: 'usage', verb: 'view' },
+  'GET /api/lab/metrics/flow': { kind: 'platform', area: 'usage', verb: 'view' },
+  'GET /api/lab/metrics/trend': { kind: 'platform', area: 'usage', verb: 'view' },
+  'GET /api/lab/metrics/tickets': { kind: 'platform', area: 'usage', verb: 'view' },
+  'GET /api/lab/metrics/insights': { kind: 'platform', area: 'usage', verb: 'view' },
 } satisfies RoutePolicies;
 
 export const LAB_TOOL_POLICIES: ToolPolicies = {

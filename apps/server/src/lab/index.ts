@@ -21,6 +21,9 @@ import { DAY_MS, dbTicketReader, outcomeOf, type TicketFacts, type TicketReader 
 import { pruneLab, type PruneResult } from './retention.js';
 import { bootstrapMedian, loadedCosts, median, summarize, SUMMARY_BASIS } from './summary.js';
 import { loop } from '../platform/loops.js';
+import type { FlowSettingsReader } from '../flow/settings.js';
+import { Metrics } from './metricsService.js';
+import { pruneMetricSnapshots, SNAPSHOT_EVERY_MS } from './metricsSnapshots.js';
 
 export interface ViewFilter extends SliceFilter {
   experiment?: string;
@@ -31,8 +34,12 @@ export class Lab {
   readonly #ingest: LabIngest;
   #timers: NodeJS.Timeout[] = [];
 
-  constructor(private readonly opts: { store: Store; now?: () => number; log?: (msg: string) => void; tickets?: TicketReader; paceSource?: PaceSource }) {
+  /** T-2360 (§28.16): the pilot metrics (flow times, efficiency and effectiveness, trend, findings). */
+  readonly metrics: Metrics;
+
+  constructor(private readonly opts: { store: Store; now?: () => number; log?: (msg: string) => void; tickets?: TicketReader; paceSource?: PaceSource; settings?: FlowSettingsReader }) {
     const now = opts.now ?? Date.now;
+    this.metrics = new Metrics({ store: opts.store, now, settings: opts.settings ?? null, paces: opts.paceSource ?? null, ...(opts.log ? { log: opts.log } : {}) });
     this.#ingest = new LabIngest(() => (opts.store.writable ? opts.store.db : null), now, (s) => {
       const db = this.#db();
       if (!db) return;
@@ -274,7 +281,29 @@ export class Lab {
     return r;
   }
 
-  /** Retention once a minute after start, then once a day (the timers do not hold the process open). */
+  /** T-2360: drops metric snapshots older than 30 days (with the daily retention). */
+  pruneSnapshots(): number {
+    const db = this.#db();
+    if (!db) return 0;
+    const n = pruneMetricSnapshots(db, this.#now());
+    if (n) this.opts.log?.(`lab: retention dropped ${n} metric snapshots`);
+    return n;
+  }
+
+  /** T-2360: one metrics snapshot per program now. Never throws (a failed snapshot is logged and the next one tries again). */
+  async snapshotMetrics(): Promise<number> {
+    try {
+      return await this.metrics.snapshot();
+    } catch (e) {
+      this.opts.log?.(`lab: metrics snapshot failed (${e instanceof Error ? e.name : 'error'})`);
+      return 0;
+    }
+  }
+
+  /**
+   * Retention once a minute after start, then once a day; a metrics snapshot every 10 minutes (T-2360). The timers do not hold the process
+   * open and `close` stops them.
+   */
   start(): void {
     const run = () => {
       try {
@@ -282,11 +311,17 @@ export class Lab {
       } catch (e) {
         this.opts.log?.(`lab: retention failed (${e instanceof Error ? e.name : 'error'})`);
       }
+      try {
+        this.pruneSnapshots();
+      } catch (e) {
+        this.opts.log?.(`lab: snapshot retention failed (${e instanceof Error ? e.name : 'error'})`);
+      }
     };
     const first = setTimeout(run, 60_000);
     const daily = setInterval(loop('lab.daily', DAY_MS, 'Lab: the daily scorecard').wrap(run), DAY_MS);
-    for (const t of [first, daily]) t.unref();
-    this.#timers = [first, daily];
+    const snap = setInterval(loop('lab.metrics', SNAPSHOT_EVERY_MS, 'Lab: the metrics snapshot').wrap(() => this.snapshotMetrics()), SNAPSHOT_EVERY_MS);
+    for (const t of [first, daily, snap]) t.unref();
+    this.#timers = [first, daily, snap];
   }
 
   /** Ends the retention timers (shutdown, tests). */
