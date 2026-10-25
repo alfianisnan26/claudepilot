@@ -60,9 +60,19 @@
  * fade alone, opaque. The element's height is var(--session-header-bottom) + 2.75rem.
  */
 @utility session-fade {
-  background-image: linear-gradient(to bottom, var(--color-bg) 0, var(--color-bg) calc(var(--session-header-bottom) + 0.75rem), transparent 100%);
+  background-image: linear-gradient(
+    to bottom,
+    var(--color-bg) 0,
+    var(--color-bg) calc(var(--session-header-bottom) + 0.75rem),
+    transparent 100%
+  );
   @supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
-    background-image: linear-gradient(to bottom, color-mix(in oklab, var(--color-bg) 85%, transparent) 0, color-mix(in oklab, var(--color-bg) 85%, transparent) calc(var(--session-header-bottom) + 0.75rem), transparent 100%);
+    background-image: linear-gradient(
+      to bottom,
+      color-mix(in oklab, var(--color-bg) 85%, transparent) 0,
+      color-mix(in oklab, var(--color-bg) 85%, transparent) calc(var(--session-header-bottom) + 0.75rem),
+      transparent 100%
+    );
     -webkit-backdrop-filter: blur(12px);
     backdrop-filter: blur(12px);
     -webkit-mask-image: linear-gradient(to bottom, #000 0, #000 calc(var(--session-header-bottom) + 0.75rem), transparent 100%);
@@ -143,7 +153,14 @@ body::before {
 /* Text that's still happening ("Running ls…"): a soft light sweeps across it. Still with reduced motion. */
 @utility shimmer {
   color: transparent;
-  background-image: linear-gradient(90deg, var(--color-muted) 0%, var(--color-muted) 38%, var(--color-ink) 50%, var(--color-muted) 62%, var(--color-muted) 100%);
+  background-image: linear-gradient(
+    90deg,
+    var(--color-muted) 0%,
+    var(--color-muted) 38%,
+    var(--color-ink) 50%,
+    var(--color-muted) 62%,
+    var(--color-muted) 100%
+  );
   background-size: 250% 100%;
   -webkit-background-clip: text;
   background-clip: text;
@@ -170,15 +187,27 @@ body::before {
  */
 :root {
   --chart-1: #08794f;
+  --chart-2: #6250d6;
+  --chart-3: #eb6834;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme='light']) {
     --chart-1: #26a876;
+    --chart-2: #9085e9;
+    --chart-3: #d95926;
   }
 }
 :root[data-theme='dark'] {
   --chart-1: #26a876;
+  --chart-2: #9085e9;
+  --chart-3: #d95926;
 }
+/*
+ * T-2360: slots 2 and 3 for a chart of up to three series, in this order (green, violet, orange). Run through the dataviz validator
+ * (--pairs all): light and dark pass the lightness band, chroma floor, the normal-vision floor (worst pair 27.6 light / 24.7 dark)
+ * and 3:1 against the surface; CVD worst pair is 7.1 in light (green and orange), in the 6 to 8 band, which is legal only with a second
+ * channel: a line chart always has the legend and a label at each line's end.
+ */
 
 /*
  * The Timeline's Done state (T-1988): its own violet, apart from In progress (the accent green) in hue and in lightness. Light #4c1d95
@@ -285,7 +314,11 @@ html {
   &::-webkit-slider-runnable-track {
     height: 6px;
     border-radius: 999px;
-    background: linear-gradient(to right, var(--color-ink) var(--fill, 0%), color-mix(in oklab, var(--color-ink) 12%, transparent) var(--fill, 0%));
+    background: linear-gradient(
+      to right,
+      var(--color-ink) var(--fill, 0%),
+      color-mix(in oklab, var(--color-ink) 12%, transparent) var(--fill, 0%)
+    );
   }
   &::-webkit-slider-thumb {
     -webkit-appearance: none;
@@ -324,7 +357,9 @@ html {
     outline: none;
   }
   &:focus-visible::-webkit-slider-thumb {
-    box-shadow: 0 0 0 4px var(--ring), 0 3px 10px rgb(0 0 0 / 0.35);
+    box-shadow:
+      0 0 0 4px var(--ring),
+      0 3px 10px rgb(0 0 0 / 0.35);
   }
 }
 
