@@ -95,7 +95,7 @@ export function nearestIndex(xs: number[], x: number): number {
   let dist = Infinity;
   xs.forEach((v, i) => {
     const d = Math.abs(v - x);
-    if (d < dist) (dist = d), (best = i);
+    if (d < dist) ((dist = d), (best = i));
   });
   return best;
 }
@@ -121,7 +121,9 @@ export function valueAt(points: LinePoint[], t: number): number | null {
 /** The latest recorded (non-null) point of a series, or null when it has none. */
 export function lastPoint(points: LinePoint[]): { t: number; v: number } | null {
   let best: { t: number; v: number } | null = null;
-  for (const p of points) if (p.v !== null && p.v !== undefined && Number.isFinite(p.v) && Number.isFinite(p.t) && (!best || p.t >= best.t)) best = { t: p.t, v: p.v };
+  for (const p of points)
+    if (p.v !== null && p.v !== undefined && Number.isFinite(p.v) && Number.isFinite(p.t) && (!best || p.t >= best.t))
+      best = { t: p.t, v: p.v };
   return best;
 }
 
@@ -129,7 +131,11 @@ export function lastPoint(points: LinePoint[]): { t: number; v: number } | null 
  * Equal-width bins of raw values: `edges` has one more entry than `counts`; a value on an inner edge falls in the bin above it and the
  * highest value counts in the last bin. Values that are not numbers, or fall outside `range`, are left out. All values equal: one bin.
  */
-export function histogramBins(values: number[], binCount = 10, range?: { min: number; max: number }): { edges: number[]; counts: number[] } {
+export function histogramBins(
+  values: number[],
+  binCount = 10,
+  range?: { min: number; max: number },
+): { edges: number[]; counts: number[] } {
   const xs = values.filter((v) => Number.isFinite(v));
   if (!xs.length && !range) return { edges: [], counts: [] };
   const min = range?.min ?? Math.min(...xs);
@@ -173,8 +179,20 @@ export interface ScoreDelta {
 }
 
 /** The change since the previous period; null when either number is missing (there is no change to show, not a change of 0). */
-export function scoreDelta(score: number | null | undefined, previous: number | null | undefined, higherIsBetter = true): ScoreDelta | null {
-  if (score === null || score === undefined || previous === null || previous === undefined || !Number.isFinite(score) || !Number.isFinite(previous)) return null;
+export function scoreDelta(
+  score: number | null | undefined,
+  previous: number | null | undefined,
+  higherIsBetter = true,
+): ScoreDelta | null {
+  if (
+    score === null ||
+    score === undefined ||
+    previous === null ||
+    previous === undefined ||
+    !Number.isFinite(score) ||
+    !Number.isFinite(previous)
+  )
+    return null;
   const delta = Math.round((score - previous) * 10) / 10;
   if (delta === 0) return { delta: 0, direction: 'same', text: '0', tone: 'neutral' };
   const up = delta > 0;
@@ -218,14 +236,28 @@ export interface ChartTableData {
   rows: string[][];
 }
 
-const cell = (v: number | null | undefined, format: (v: number) => string) => (v === null || v === undefined || !Number.isFinite(v) ? UNAVAILABLE : format(v));
+const cell = (v: number | null | undefined, format: (v: number) => string) =>
+  v === null || v === undefined || !Number.isFinite(v) ? UNAVAILABLE : format(v);
 
-export function lineTable(series: { label: string; points: LinePoint[] }[], formatY: (v: number) => string, formatT: (t: number) => string, caption: string): ChartTableData {
-  return { caption, head: ['Time', ...series.map((s) => s.label)], rows: unionTimes(series).map((t) => [formatT(t), ...series.map((s) => cell(valueAt(s.points, t), formatY))]) };
+export function lineTable(
+  series: { label: string; points: LinePoint[] }[],
+  formatY: (v: number) => string,
+  formatT: (t: number) => string,
+  caption: string,
+): ChartTableData {
+  return {
+    caption,
+    head: ['Time', ...series.map((s) => s.label)],
+    rows: unionTimes(series).map((t) => [formatT(t), ...series.map((s) => cell(valueAt(s.points, t), formatY))]),
+  };
 }
 
 export function stageTable(rows: StageRow[], format: (v: number) => string, caption: string): ChartTableData {
-  return { caption, head: ['Stage', 'Median', 'p90', 'n', 'Excluded'], rows: rows.map((r) => [r.label, cell(r.median, format), cell(r.p90, format), String(r.n), String(r.excluded ?? 0)]) };
+  return {
+    caption,
+    head: ['Stage', 'Median', 'p90', 'n', 'Excluded'],
+    rows: rows.map((r) => [r.label, cell(r.median, format), cell(r.p90, format), String(r.n), String(r.excluded ?? 0)]),
+  };
 }
 
 export function histogramTable(edges: number[], counts: number[], format: (v: number) => string, caption: string): ChartTableData {
@@ -233,7 +265,12 @@ export function histogramTable(edges: number[], counts: number[], format: (v: nu
 }
 
 /** What a screen reader says for a line chart: per series its latest value and its range, or that it has none. */
-export function lineSummary(title: string, series: { label: string; points: LinePoint[] }[], formatY: (v: number) => string, formatT: (t: number) => string): string {
+export function lineSummary(
+  title: string,
+  series: { label: string; points: LinePoint[] }[],
+  formatY: (v: number) => string,
+  formatT: (t: number) => string,
+): string {
   const parts = series.map((s) => {
     const last = lastPoint(s.points);
     if (!last) return `${s.label}: ${UNAVAILABLE}`;

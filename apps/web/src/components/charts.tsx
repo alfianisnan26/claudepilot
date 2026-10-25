@@ -169,7 +169,13 @@ export function ColumnChart({
   const picked = active !== null ? columns[active] : null;
   const cx = (i: number) => PAD.left + (i + 0.5) * slot;
   // The previous period as dashed runs: a gap in the data breaks the line instead of dropping it to zero.
-  const markerPath = columns.reduce((d, c, i) => (c.marker == null ? d : `${d}${d && columns[i - 1]?.marker != null ? ' L' : ' M'}${cx(i).toFixed(1)},${y(c.marker).toFixed(1)}`), '').trim();
+  const markerPath = columns
+    .reduce(
+      (d, c, i) =>
+        c.marker == null ? d : `${d}${d && columns[i - 1]?.marker != null ? ' L' : ' M'}${cx(i).toFixed(1)},${y(c.marker).toFixed(1)}`,
+      '',
+    )
+    .trim();
 
   return (
     <div ref={ref} className={cn('relative w-full transition-opacity', dim && 'opacity-60')}>
@@ -178,7 +184,15 @@ export function ColumnChart({
           <defs>{defs}</defs>
           {ticks.map((t) => (
             <g key={t}>
-              <line x1={PAD.left} x2={width - PAD.right} y1={y(t)} y2={y(t)} stroke="var(--color-line)" strokeWidth={1} shapeRendering="crispEdges" />
+              <line
+                x1={PAD.left}
+                x2={width - PAD.right}
+                y1={y(t)}
+                y2={y(t)}
+                stroke="var(--color-line)"
+                strokeWidth={1}
+                shapeRendering="crispEdges"
+              />
               <text x={PAD.left - 8} y={y(t)} dy="0.32em" textAnchor="end" className="fill-muted text-[11px] tabular-nums">
                 {format(t)}
               </text>
@@ -192,7 +206,14 @@ export function ColumnChart({
             let acc = 0;
             return (
               <g key={c.key}>
-                {c.value > 0 && !bands.length && <path d={columnPath(x, base, top, barW)} fill="var(--chart-1)" opacity={opacity} className="transition-opacity duration-150" />}
+                {c.value > 0 && !bands.length && (
+                  <path
+                    d={columnPath(x, base, top, barW)}
+                    fill="var(--chart-1)"
+                    opacity={opacity}
+                    className="transition-opacity duration-150"
+                  />
+                )}
                 {c.value > 0 && bands.length > 0 && (
                   <g opacity={opacity} className="transition-opacity duration-150">
                     <clipPath id={`${clip}-${i}`}>
@@ -215,7 +236,9 @@ export function ColumnChart({
                         let a = 0;
                         return bands.slice(0, -1).map((s) => {
                           a += s.value;
-                          return <line key={s.key} x1={x} x2={x + barW} y1={y(a)} y2={y(a)} stroke="var(--color-surface)" strokeWidth={2} />;
+                          return (
+                            <line key={s.key} x1={x} x2={x + barW} y1={y(a)} y2={y(a)} stroke="var(--color-surface)" strokeWidth={2} />
+                          );
                         });
                       })()}
                     </g>
@@ -255,12 +278,35 @@ export function ColumnChart({
               </g>
             );
           })}
-          {markerPath && <path d={markerPath} fill="none" stroke="var(--color-ink-soft)" strokeWidth={1.5} strokeDasharray="4 3" strokeLinejoin="round" className="pointer-events-none" />}
-          {picked?.marker != null && <circle cx={cx(active!)} cy={y(picked.marker)} r={3.5} fill="var(--color-surface)" stroke="var(--color-ink-soft)" strokeWidth={1.5} className="pointer-events-none" />}
+          {markerPath && (
+            <path
+              d={markerPath}
+              fill="none"
+              stroke="var(--color-ink-soft)"
+              strokeWidth={1.5}
+              strokeDasharray="4 3"
+              strokeLinejoin="round"
+              className="pointer-events-none"
+            />
+          )}
+          {picked?.marker != null && (
+            <circle
+              cx={cx(active!)}
+              cy={y(picked.marker)}
+              r={3.5}
+              fill="var(--color-surface)"
+              stroke="var(--color-ink-soft)"
+              strokeWidth={1.5}
+              className="pointer-events-none"
+            />
+          )}
         </svg>
       )}
       {allZero && empty && (
-        <p className="pointer-events-none absolute inset-x-0 top-[38%] text-center text-[13px] text-muted" style={{ paddingLeft: PAD.left }}>
+        <p
+          className="pointer-events-none absolute inset-x-0 top-[38%] text-center text-[13px] text-muted"
+          style={{ paddingLeft: PAD.left }}
+        >
           {empty}
         </p>
       )}
@@ -361,7 +407,13 @@ export function BarList({
         return (
           <li key={r.key} className={cn('transition-opacity', dimmed && 'opacity-45')}>
             {onPick ? (
-              <button type="button" onClick={() => onPick(r.key)} aria-pressed={picked === r.key} title={r.title} className="press block w-full rounded-xl px-2 py-2 hover:bg-surface-2">
+              <button
+                type="button"
+                onClick={() => onPick(r.key)}
+                aria-pressed={picked === r.key}
+                title={r.title}
+                className="press block w-full rounded-xl px-2 py-2 hover:bg-surface-2"
+              >
                 {inner}
               </button>
             ) : (
@@ -386,7 +438,12 @@ export function BarList({
 function TableButton({ show, onToggle }: { show: boolean; onToggle: () => void }) {
   return (
     <div className="flex justify-end">
-      <button type="button" aria-pressed={show} onClick={onToggle} className="press inline-flex min-h-11 min-w-11 items-center justify-center rounded-xl px-3 text-[12.5px] font-medium text-ink-soft hover:bg-surface-2">
+      <button
+        type="button"
+        aria-pressed={show}
+        onClick={onToggle}
+        className="press inline-flex min-h-11 min-w-11 items-center justify-center rounded-xl px-3 text-[12.5px] font-medium text-ink-soft hover:bg-surface-2"
+      >
         {show ? 'Chart' : 'Table'}
       </button>
     </div>
@@ -454,7 +511,10 @@ function ChartTip({ x, width, top, offset, children }: { x: number; width: numbe
   return (
     <div
       role="status"
-      className={cn('pointer-events-none absolute z-10 max-w-[15rem] rounded-xl border border-line bg-surface px-2.5 py-1.5 whitespace-nowrap shadow-lift', right ? '-translate-x-full text-right' : 'text-left')}
+      className={cn(
+        'pointer-events-none absolute z-10 max-w-[15rem] rounded-xl border border-line bg-surface px-2.5 py-1.5 whitespace-nowrap shadow-lift',
+        right ? '-translate-x-full text-right' : 'text-left',
+      )}
       style={{ left: x + (right ? -offset : offset), top }}
     >
       {children}
@@ -464,7 +524,9 @@ function ChartTip({ x, width, top, offset, children }: { x: number; width: numbe
 
 /** The x axis label of a time: "14:30" over a day or two, "Oct 25" over longer. */
 export function timeLabel(spanMs: number): (t: number) => string {
-  return spanMs <= 2 * 86_400_000 ? (t) => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : (t) => new Date(t).toLocaleDateString([], { month: 'short', day: 'numeric' });
+  return spanMs <= 2 * 86_400_000
+    ? (t) => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    : (t) => new Date(t).toLocaleDateString([], { month: 'short', day: 'numeric' });
 }
 
 const longTime = (t: number) => new Date(t).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
@@ -535,7 +597,9 @@ export function LineChart({
   const rove = useRoving(n);
   const t0 = ts[0] ?? 0;
   const t1 = ts[n - 1] ?? 0;
-  const values = lines.flatMap((s) => s.points.map((p) => p.v).filter((v): v is number => v !== null && v !== undefined && Number.isFinite(v)));
+  const values = lines.flatMap((s) =>
+    s.points.map((p) => p.v).filter((v): v is number => v !== null && v !== undefined && Number.isFinite(v)),
+  );
   const hasData = values.length > 0;
   const max = niceMax(Math.max(0, ...values, target?.value ?? 0));
   const plotW = Math.max(0, width - LINE_PAD.left - LINE_PAD.right);
@@ -545,8 +609,15 @@ export function LineChart({
   const y = linearScale(0, max, base, LINE_PAD.top);
   const xLabel = formatX ?? timeLabel(t1 - t0);
   const xTicks = n > 1 ? timeTicks(t0, t1, width < 480 ? 3 : 5) : [t0];
-  const ends = lines.map((s) => ({ s, last: lastPoint(s.points) })).filter((e): e is { s: (typeof lines)[number]; last: { t: number; v: number } } => e.last !== null);
-  const endY = spreadLabels(ends.map((e) => y(e.last.v)), 14, LINE_PAD.top + 4, base - 2);
+  const ends = lines
+    .map((s) => ({ s, last: lastPoint(s.points) }))
+    .filter((e): e is { s: (typeof lines)[number]; last: { t: number; v: number } } => e.last !== null);
+  const endY = spreadLabels(
+    ends.map((e) => y(e.last.v)),
+    14,
+    LINE_PAD.top + 4,
+    base - 2,
+  );
   const summary = lineSummary(ariaLabel, lines, format, formatXLong);
   const data = lineTable(lines, format, formatXLong, ariaLabel);
   const at = active !== null ? ts[active] : undefined;
@@ -576,7 +647,15 @@ export function LineChart({
               <g role="img" aria-label={summary}>
                 {axisTicks(max).map((t) => (
                   <g key={t}>
-                    <line x1={LINE_PAD.left} x2={width - LINE_PAD.right} y1={y(t)} y2={y(t)} stroke="var(--color-line)" strokeWidth={1} shapeRendering="crispEdges" />
+                    <line
+                      x1={LINE_PAD.left}
+                      x2={width - LINE_PAD.right}
+                      y1={y(t)}
+                      y2={y(t)}
+                      stroke="var(--color-line)"
+                      strokeWidth={1}
+                      shapeRendering="crispEdges"
+                    />
                     <text x={LINE_PAD.left - 8} y={y(t)} dy="0.32em" textAnchor="end" className="fill-muted text-[11px] tabular-nums">
                       {format(t)}
                     </text>
@@ -590,14 +669,29 @@ export function LineChart({
                   ))}
                 {target && (
                   <g className="pointer-events-none">
-                    <line x1={LINE_PAD.left} x2={width - LINE_PAD.right} y1={y(target.value)} y2={y(target.value)} stroke="var(--color-ink-soft)" strokeWidth={1.5} strokeDasharray="4 3" />
-                    <text x={LINE_PAD.left + 4} y={y(target.value) - 4} className="fill-ink-soft text-[11px] tabular-nums" style={{ paintOrder: 'stroke', stroke: 'var(--color-surface)', strokeWidth: 3 }}>
+                    <line
+                      x1={LINE_PAD.left}
+                      x2={width - LINE_PAD.right}
+                      y1={y(target.value)}
+                      y2={y(target.value)}
+                      stroke="var(--color-ink-soft)"
+                      strokeWidth={1.5}
+                      strokeDasharray="4 3"
+                    />
+                    <text
+                      x={LINE_PAD.left + 4}
+                      y={y(target.value) - 4}
+                      className="fill-ink-soft text-[11px] tabular-nums"
+                      style={{ paintOrder: 'stroke', stroke: 'var(--color-surface)', strokeWidth: 3 }}
+                    >
                       {target.label} {format(target.value)}
                     </text>
                   </g>
                 )}
                 {lines.map((s) => {
-                  const pts = s.points.filter((p) => Number.isFinite(p.t)).map((p) => ({ x: x(p.t), y: p.v === null || p.v === undefined ? null : y(p.v) }));
+                  const pts = s.points
+                    .filter((p) => Number.isFinite(p.t))
+                    .map((p) => ({ x: x(p.t), y: p.v === null || p.v === undefined ? null : y(p.v) }));
                   return (
                     <g key={s.key} className="pointer-events-none">
                       <path d={linePath(pts)} fill="none" stroke={s.color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
@@ -605,7 +699,15 @@ export function LineChart({
                       {lineRuns(pts)
                         .filter((r) => r.length === 1)
                         .map((r) => (
-                          <circle key={r[0]!.x} cx={r[0]!.x} cy={r[0]!.y} r={4} fill={s.color} stroke="var(--color-surface)" strokeWidth={2} />
+                          <circle
+                            key={r[0]!.x}
+                            cx={r[0]!.x}
+                            cy={r[0]!.y}
+                            r={4}
+                            fill={s.color}
+                            stroke="var(--color-surface)"
+                            strokeWidth={2}
+                          />
                         ))}
                       {/* A gap: a hollow dot on the baseline at the time with nothing recorded. */}
                       {pts
@@ -619,7 +721,13 @@ export function LineChart({
                 {ends.map((e, i) => (
                   <g key={e.s.key} className="pointer-events-none">
                     <circle cx={x(e.last.t)} cy={y(e.last.v)} r={4} fill={e.s.color} stroke="var(--color-surface)" strokeWidth={2} />
-                    <text x={x(e.last.t) + 9} y={endY[i]} dy="0.32em" className="fill-ink text-[12px] font-semibold tabular-nums" style={{ paintOrder: 'stroke', stroke: 'var(--color-surface)', strokeWidth: 3 }}>
+                    <text
+                      x={x(e.last.t) + 9}
+                      y={endY[i]}
+                      dy="0.32em"
+                      className="fill-ink text-[12px] font-semibold tabular-nums"
+                      style={{ paintOrder: 'stroke', stroke: 'var(--color-surface)', strokeWidth: 3 }}
+                    >
                       {format(e.last.v)}
                     </text>
                   </g>
@@ -630,7 +738,9 @@ export function LineChart({
                   <line x1={x(at)} x2={x(at)} y1={LINE_PAD.top} y2={base} stroke="var(--color-ink-soft)" strokeWidth={1} opacity={0.5} />
                   {lines.map((s) => {
                     const v = valueAt(s.points, at);
-                    return v === null ? null : <circle key={s.key} cx={x(at)} cy={y(v)} r={4} fill={s.color} stroke="var(--color-surface)" strokeWidth={2} />;
+                    return v === null ? null : (
+                      <circle key={s.key} cx={x(at)} cy={y(v)} r={4} fill={s.color} stroke="var(--color-surface)" strokeWidth={2} />
+                    );
                   })}
                 </g>
               )}
@@ -680,7 +790,10 @@ export function LineChart({
           )
         )}
         {!table && !hasData && empty && (
-          <p className="pointer-events-none absolute inset-x-0 top-[38%] text-center text-[13px] text-muted" style={{ paddingLeft: LINE_PAD.left }}>
+          <p
+            className="pointer-events-none absolute inset-x-0 top-[38%] text-center text-[13px] text-muted"
+            style={{ paddingLeft: LINE_PAD.left }}
+          >
             {empty}
           </p>
         )}
@@ -694,7 +807,11 @@ export function LineChart({
                   <li key={s.key} className="flex items-center gap-1.5 text-[12px] text-ink-soft">
                     <RowSwatch fill={s.color} />
                     <span className="min-w-0 flex-1 truncate">{s.label}</span>
-                    {v === null ? <span className="pl-2 text-muted">{UNAVAILABLE}</span> : <span className="pl-2 font-semibold text-ink tabular-nums">{format(v)}</span>}
+                    {v === null ? (
+                      <span className="pl-2 text-muted">{UNAVAILABLE}</span>
+                    ) : (
+                      <span className="pl-2 font-semibold text-ink tabular-nums">{format(v)}</span>
+                    )}
                   </li>
                 );
               })}
@@ -757,11 +874,21 @@ export function ScoreTile({
           <path d={arcPath(60, 62, 50, 0, 1)} fill="none" stroke="var(--color-line)" strokeWidth={10} strokeLinecap="round" />
           {frac > 0 && <path d={arcPath(60, 62, 50, 0, frac)} fill="none" stroke="var(--chart-1)" strokeWidth={10} strokeLinecap="round" />}
         </svg>
-        <p className="absolute inset-x-0 bottom-0 leading-none">{has ? <span className="text-[22px] font-semibold text-ink tabular-nums">{format(score)}</span> : <span className="text-[12px] text-muted">{UNAVAILABLE}</span>}</p>
+        <p className="absolute inset-x-0 bottom-0 leading-none">
+          {has ? (
+            <span className="text-[22px] font-semibold text-ink tabular-nums">{format(score)}</span>
+          ) : (
+            <span className="text-[12px] text-muted">{UNAVAILABLE}</span>
+          )}
+        </p>
       </div>
       {!has && reason && <p className="mt-1 text-[11.5px] break-words text-muted [overflow-wrap:anywhere]">{reason}</p>}
       {has && d && Icon && (
-        <p className={cn('mt-1 flex items-center justify-center gap-1 text-[12.5px] font-medium tabular-nums', TONE_CLASS[d.tone])} data-delta={d.direction} data-tone={d.tone}>
+        <p
+          className={cn('mt-1 flex items-center justify-center gap-1 text-[12.5px] font-medium tabular-nums', TONE_CLASS[d.tone])}
+          data-delta={d.direction}
+          data-tone={d.tone}
+        >
           <Icon size={12} aria-hidden="true" />
           <span>{d.text}</span>
           <span className="font-normal text-muted">vs previous</span>
@@ -830,11 +957,20 @@ export function StageBars({
                         {/* The whisker: a line from the bar's end to the p90, with a cap. */}
                         {g.p90 !== null && g.p90 > g.median && (
                           <>
-                            <span className="absolute top-1/2 h-px -translate-y-1/2 bg-ink-soft" style={{ left: `${g.median}%`, width: `${g.p90 - g.median}%` }} />
-                            <span className="absolute top-0 h-2 w-0.5 -translate-x-1/2 rounded-full bg-ink-soft" style={{ left: `${g.p90}%` }} />
+                            <span
+                              className="absolute top-1/2 h-px -translate-y-1/2 bg-ink-soft"
+                              style={{ left: `${g.median}%`, width: `${g.p90 - g.median}%` }}
+                            />
+                            <span
+                              className="absolute top-0 h-2 w-0.5 -translate-x-1/2 rounded-full bg-ink-soft"
+                              style={{ left: `${g.p90}%` }}
+                            />
                           </>
                         )}
-                        <span className="absolute inset-y-0 left-0 block rounded-full" style={{ width: `${Math.max(1.5, g.median)}%`, background: 'var(--chart-1)' }} />
+                        <span
+                          className="absolute inset-y-0 left-0 block rounded-full"
+                          style={{ width: `${Math.max(1.5, g.median)}%`, background: 'var(--chart-1)' }}
+                        />
                       </>
                     )}
                   </span>
@@ -849,7 +985,13 @@ export function StageBars({
               return (
                 <li key={r.key} className={cn('transition-opacity', dimmed && 'opacity-45')}>
                   {onSelect ? (
-                    <button type="button" onClick={() => onSelect(r.key)} aria-pressed={selected === r.key} aria-label={stageSummary(r, format)} className="press block min-h-11 w-full rounded-xl px-2 py-2 hover:bg-surface-2">
+                    <button
+                      type="button"
+                      onClick={() => onSelect(r.key)}
+                      aria-pressed={selected === r.key}
+                      aria-label={stageSummary(r, format)}
+                      className="press block min-h-11 w-full rounded-xl px-2 py-2 hover:bg-surface-2"
+                    >
                       {inner}
                     </button>
                   ) : (
@@ -925,7 +1067,9 @@ export function Histogram({
   const nLabels = Math.min(n + 1, width < 480 ? 3 : 5);
   const labelAt = ok ? [...new Set(Array.from({ length: nLabels }, (_, i) => Math.round((i * n) / Math.max(1, nLabels - 1))))] : [];
   const medianText = hasMedian ? `, median ${format(median)}` : '';
-  const summary = ok ? `${ariaLabel}: ${total} values in ${n} bins from ${format(lo)} to ${format(hi)}${medianText}` : `${ariaLabel}: ${UNAVAILABLE}`;
+  const summary = ok
+    ? `${ariaLabel}: ${total} values in ${n} bins from ${format(lo)} to ${format(hi)}${medianText}`
+    : `${ariaLabel}: ${UNAVAILABLE}`;
   const picked = active !== null && ok ? active : null;
 
   return (
@@ -939,7 +1083,15 @@ export function Histogram({
               <g role="img" aria-label={summary}>
                 {axisTicks(max).map((t) => (
                   <g key={t}>
-                    <line x1={HIST_PAD.left} x2={width - HIST_PAD.right} y1={y(t)} y2={y(t)} stroke="var(--color-line)" strokeWidth={1} shapeRendering="crispEdges" />
+                    <line
+                      x1={HIST_PAD.left}
+                      x2={width - HIST_PAD.right}
+                      y1={y(t)}
+                      y2={y(t)}
+                      stroke="var(--color-line)"
+                      strokeWidth={1}
+                      shapeRendering="crispEdges"
+                    />
                     <text x={HIST_PAD.left - 8} y={y(t)} dy="0.32em" textAnchor="end" className="fill-muted text-[11px] tabular-nums">
                       {formatCount(t)}
                     </text>
@@ -947,17 +1099,45 @@ export function Histogram({
                 ))}
                 {ok &&
                   counts.map((c, i) =>
-                    c > 0 ? <path key={i} d={columnPath(HIST_PAD.left + i * slot + 1, base, y(c), barW)} fill="var(--chart-1)" opacity={picked === null || picked === i ? 1 : 0.4} className="pointer-events-none transition-opacity duration-150" /> : null,
+                    c > 0 ? (
+                      <path
+                        key={i}
+                        d={columnPath(HIST_PAD.left + i * slot + 1, base, y(c), barW)}
+                        fill="var(--chart-1)"
+                        opacity={picked === null || picked === i ? 1 : 0.4}
+                        className="pointer-events-none transition-opacity duration-150"
+                      />
+                    ) : null,
                   )}
                 {labelAt.map((i) => (
-                  <text key={i} x={HIST_PAD.left + i * slot} y={height - 6} textAnchor="middle" className="fill-muted text-[11px] tabular-nums">
+                  <text
+                    key={i}
+                    x={HIST_PAD.left + i * slot}
+                    y={height - 6}
+                    textAnchor="middle"
+                    className="fill-muted text-[11px] tabular-nums"
+                  >
                     {format(edges[i]!)}
                   </text>
                 ))}
                 {mx !== null && (
                   <g className="pointer-events-none">
-                    <line x1={mx} x2={mx} y1={HIST_PAD.top - 4} y2={base} stroke="var(--color-ink)" strokeWidth={1.5} strokeDasharray="4 3" />
-                    <text x={mx} y={HIST_PAD.top - 7} textAnchor={mx > width / 2 ? 'end' : 'start'} dx={mx > width / 2 ? -3 : 3} className="fill-ink-soft text-[11.5px] tabular-nums">
+                    <line
+                      x1={mx}
+                      x2={mx}
+                      y1={HIST_PAD.top - 4}
+                      y2={base}
+                      stroke="var(--color-ink)"
+                      strokeWidth={1.5}
+                      strokeDasharray="4 3"
+                    />
+                    <text
+                      x={mx}
+                      y={HIST_PAD.top - 7}
+                      textAnchor={mx > width / 2 ? 'end' : 'start'}
+                      dx={mx > width / 2 ? -3 : 3}
+                      className="fill-ink-soft text-[11.5px] tabular-nums"
+                    >
                       median {format(median!)}
                     </text>
                   </g>
@@ -994,7 +1174,10 @@ export function Histogram({
           )
         )}
         {(!ok || total === 0) && !table && empty && (
-          <p className="pointer-events-none absolute inset-x-0 top-[38%] text-center text-[13px] text-muted" style={{ paddingLeft: HIST_PAD.left }}>
+          <p
+            className="pointer-events-none absolute inset-x-0 top-[38%] text-center text-[13px] text-muted"
+            style={{ paddingLeft: HIST_PAD.left }}
+          >
             {empty}
           </p>
         )}
