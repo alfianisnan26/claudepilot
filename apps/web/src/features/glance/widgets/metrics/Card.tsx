@@ -20,7 +20,8 @@ export function MetricsCard() {
       <p className="flex items-center justify-center gap-1 text-xs text-muted">
         Last 24 hours
         <InfoTip label="About these numbers">
-          Efficiency and effectiveness are scores from 0 to 100 (the Metrics page lists their parts and weights). Resolved: tickets done in the last 24 hours. Median: created to done. A dash is a number the portal does not have, not a zero.
+          Efficiency and effectiveness are scores from 0 to 100 (the Metrics page lists their parts and weights). Resolved: tickets done in
+          the last 24 hours. Median: created to done. A dash is a number the portal does not have, not a zero.
         </InfoTip>
       </p>
       <CardFoot to="/admin/usage?tab=metrics">Metrics</CardFoot>

@@ -1,7 +1,18 @@
 // T-2360: the Metrics view models. Pure: the numbers and the words are checked without a browser.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import type { MetricsComponent, MetricsFlow, MetricsFlowGroup, MetricsFlowWindow, MetricsOverview, MetricsProgram, MetricsScore, MetricsStage, MetricsTicketRow, MetricsTickets } from '@portal/contracts';
+import type {
+  MetricsComponent,
+  MetricsFlow,
+  MetricsFlowGroup,
+  MetricsFlowWindow,
+  MetricsOverview,
+  MetricsProgram,
+  MetricsScore,
+  MetricsStage,
+  MetricsTicketRow,
+  MetricsTickets,
+} from '@portal/contracts';
 import {
   closureColumns,
   componentLines,
@@ -36,7 +47,13 @@ const program = (id: string, over: Partial<MetricsProgram> = {}): MetricsProgram
   targets: { closuresPerHour: 2, resolveHours: 24, reviewHours: 2 },
   ...over,
 });
-const stat = (stage: MetricsStage, n: number, medianMs: number | null, p90Ms: number | null, excluded = 0) => ({ stage, n, excluded, medianMs, p90Ms });
+const stat = (stage: MetricsStage, n: number, medianMs: number | null, p90Ms: number | null, excluded = 0) => ({
+  stage,
+  n,
+  excluded,
+  medianMs,
+  p90Ms,
+});
 const flowWin = (over: Partial<MetricsFlowWindow> = {}): MetricsFlowWindow => ({
   fromMs: 0,
   toMs: 1,
@@ -47,9 +64,29 @@ const flowWin = (over: Partial<MetricsFlowWindow> = {}): MetricsFlowWindow => ({
   rounds: { n: 0, medianRounds: null, reworked: 0, fails: 0 },
   ...over,
 });
-const group = (key: string, cur: Partial<MetricsFlowWindow> = {}, prev: Partial<MetricsFlowWindow> = {}): MetricsFlowGroup => ({ key, current: flowWin(cur), previous: flowWin(prev) });
-const comp = (over: Partial<MetricsComponent> = {}): MetricsComponent => ({ id: 'c', label: 'Closures', weight: 35, appliedWeight: 35, value: 72.4, basis: 'measured', source: 'tickets', raw: '3 done', ...over });
-const score = (over: Partial<MetricsScore> = {}): MetricsScore => ({ value: 72.4, previous: 60, components: [comp()], basis: 'weights from the ticket', ...over });
+const group = (key: string, cur: Partial<MetricsFlowWindow> = {}, prev: Partial<MetricsFlowWindow> = {}): MetricsFlowGroup => ({
+  key,
+  current: flowWin(cur),
+  previous: flowWin(prev),
+});
+const comp = (over: Partial<MetricsComponent> = {}): MetricsComponent => ({
+  id: 'c',
+  label: 'Closures',
+  weight: 35,
+  appliedWeight: 35,
+  value: 72.4,
+  basis: 'measured',
+  source: 'tickets',
+  raw: '3 done',
+  ...over,
+});
+const score = (over: Partial<MetricsScore> = {}): MetricsScore => ({
+  value: 72.4,
+  previous: 60,
+  components: [comp()],
+  basis: 'weights from the ticket',
+  ...over,
+});
 const overview = (over: Partial<MetricsOverview> = {}): MetricsOverview => ({
   program: program('all', { kind: 'all' }),
   window: '24h',
@@ -75,7 +112,16 @@ const row = (ticket: string, ageH: number, over: Partial<MetricsTicketRow> = {},
   fails: null,
   ...over,
 });
-const tickets = (rows: MetricsTicketRow[], total = rows.length): MetricsTickets => ({ program: 'all', window: '24h', nowMs: NOW, stage: null, group: null, groupBy: null, total, rows });
+const tickets = (rows: MetricsTicketRow[], total = rows.length): MetricsTickets => ({
+  program: 'all',
+  window: '24h',
+  nowMs: NOW,
+  stage: null,
+  group: null,
+  groupBy: null,
+  total,
+  rows,
+});
 
 test('metricsQuery leaves empty values out and encodes the rest', () => {
   assert.equal(metricsQuery({ program: 'a b', window: '24h', stage: null, group: undefined, groupBy: '' }), 'program=a+b&window=24h');
@@ -83,7 +129,10 @@ test('metricsQuery leaves empty values out and encodes the rest', () => {
 
 test('programOptions puts All first; pickProgram falls back to it', () => {
   const ps = [program('konfersi'), program('all', { kind: 'all', label: 'All' }), program('memor', { kind: 'commits' })];
-  assert.deepEqual(programOptions(ps).map((o) => o.value), ['all', 'konfersi', 'memor']);
+  assert.deepEqual(
+    programOptions(ps).map((o) => o.value),
+    ['all', 'konfersi', 'memor'],
+  );
   assert.equal(pickProgram(ps, 'konfersi'), 'konfersi');
   assert.equal(pickProgram(ps, 'gone'), 'all');
   assert.equal(pickProgram(ps, null), 'all');
@@ -91,7 +140,15 @@ test('programOptions puts All first; pickProgram falls back to it', () => {
 });
 
 test('componentLines: the applied weight shows only when it differs; an unavailable one says why', () => {
-  const lines = componentLines(score({ components: [comp(), comp({ id: 'd', weight: 20, appliedWeight: 25 }), comp({ id: 'q', value: null, appliedWeight: 0, basis: 'unavailable', reason: 'no_claude', raw: '' })] }));
+  const lines = componentLines(
+    score({
+      components: [
+        comp(),
+        comp({ id: 'd', weight: 20, appliedWeight: 25 }),
+        comp({ id: 'q', value: null, appliedWeight: 0, basis: 'unavailable', reason: 'no_claude', raw: '' }),
+      ],
+    }),
+  );
   assert.equal(lines[0]?.weight, '35 %');
   assert.equal(lines[0]?.value, '72');
   assert.equal(lines[1]?.weight, '20 % (25 % applied)');
@@ -100,8 +157,16 @@ test('componentLines: the applied weight shows only when it differs; an unavaila
 });
 
 test('scoreView: no value takes the program reason, else the first unavailable component, never 0', () => {
-  const off = score({ value: null, previous: null, components: [comp({ value: null, appliedWeight: 0, basis: 'unavailable', reason: 'no_source' })] });
-  const own = scoreView('Efficiency', off, program('memor', { kind: 'commits', unavailable: { reason: 'no_source', text: 'memor.id has no tickets in the portal' } }));
+  const off = score({
+    value: null,
+    previous: null,
+    components: [comp({ value: null, appliedWeight: 0, basis: 'unavailable', reason: 'no_source' })],
+  });
+  const own = scoreView(
+    'Efficiency',
+    off,
+    program('memor', { kind: 'commits', unavailable: { reason: 'no_source', text: 'memor.id has no tickets in the portal' } }),
+  );
   assert.equal(own.value, null);
   assert.equal(own.reason, 'memor.id has no tickets in the portal');
   const comp1 = scoreView('Efficiency', off, program('all'));
@@ -129,7 +194,15 @@ test('leadLabel and leadRows: lead names in words, at most ten rows, the rest co
   assert.equal(leadLabel('unrecorded'), 'Unrecorded');
   assert.equal(leadLabel('lead:abcdef0123456789'), 'lead abcdef01');
   assert.equal(leadLabel('area-web'), 'area-web');
-  const flow: MetricsFlow = { program: 'all', window: '24h', nowMs: NOW, groupBy: 'lead', total: group('all'), groups: Array.from({ length: 12 }, (_, i) => group(`area-${i}`)), basis: {} };
+  const flow: MetricsFlow = {
+    program: 'all',
+    window: '24h',
+    nowMs: NOW,
+    groupBy: 'lead',
+    total: group('all'),
+    groups: Array.from({ length: 12 }, (_, i) => group(`area-${i}`)),
+    basis: {},
+  };
   const r = leadRows(flow);
   assert.equal(r.rows.length, 10);
   assert.equal(r.hidden, 2);
@@ -137,8 +210,11 @@ test('leadLabel and leadRows: lead names in words, at most ten rows, the rest co
   assert.deepEqual(leadRows(null), { rows: [], hidden: 0 });
 });
 
-test('closureColumns: 24 hourly columns ending now; won\'t-do is a note, not a count; out-of-window rows are left out', () => {
-  const c = closureColumns(tickets([row('T-1', 0.5), row('T-2', 0.6), row('T-3', 4.5), row('T-4', 2.5, { status: 'wont_do' }), row('T-5', 30)], 9), '24h');
+test("closureColumns: 24 hourly columns ending now; won't-do is a note, not a count; out-of-window rows are left out", () => {
+  const c = closureColumns(
+    tickets([row('T-1', 0.5), row('T-2', 0.6), row('T-3', 4.5), row('T-4', 2.5, { status: 'wont_do' }), row('T-5', 30)], 9),
+    '24h',
+  );
   assert.equal(c.columns.length, 24);
   assert.equal(c.per, 'hour');
   assert.equal(c.done, 3);
@@ -165,13 +241,25 @@ test('leadTimeSpread: ten bins, a ticket without a resolve time is left out, the
   assert.equal(s.n, 10);
   assert.equal(s.counts.length, 10);
   assert.equal(s.beyond, 1);
-  assert.equal(s.counts.reduce((a, b) => a + b, 0), 9);
+  assert.equal(
+    s.counts.reduce((a, b) => a + b, 0),
+    9,
+  );
   assert.equal(s.median, 5 * HOUR);
   assert.equal(leadTimeSpread(tickets([row('T-1', 1)], 5)).missing, 4);
 });
 
 test('trendView: empty when no snapshot has a score', () => {
-  const t = (values: (number | null)[]) => ({ program: 'all', metric: 'efficiency' as const, window: '24h' as const, nowMs: NOW, points: values.map((value, i) => ({ atMs: i, value })), everyMs: 1, keepMs: 1, source: 's' });
+  const t = (values: (number | null)[]) => ({
+    program: 'all',
+    metric: 'efficiency' as const,
+    window: '24h' as const,
+    nowMs: NOW,
+    points: values.map((value, i) => ({ atMs: i, value })),
+    everyMs: 1,
+    keepMs: 1,
+    source: 's',
+  });
   assert.equal(trendView(t([null, null]), t([])).empty, true);
   assert.equal(trendView(t([null, 40]), null).empty, false);
   assert.equal(trendView(null, null).series.length, 2);
@@ -184,8 +272,19 @@ test('paceView: a note, never an invented row, when the crew figures are not the
 });
 
 test('insightRows carry the severity in words and the tickets', () => {
-  const rows = insightRows({ program: 'all', window: '24h', nowMs: NOW, items: [{ kind: 'outlier', severity: 'act', text: 'T-1 took long', tickets: ['T-1'] }, { kind: 'no_data', severity: 'info', text: 'No data', tickets: [] }] });
-  assert.deepEqual(rows.map((r) => r.word), ['Act', 'Note']);
+  const rows = insightRows({
+    program: 'all',
+    window: '24h',
+    nowMs: NOW,
+    items: [
+      { kind: 'outlier', severity: 'act', text: 'T-1 took long', tickets: ['T-1'] },
+      { kind: 'no_data', severity: 'info', text: 'No data', tickets: [] },
+    ],
+  });
+  assert.deepEqual(
+    rows.map((r) => r.word),
+    ['Act', 'Note'],
+  );
   assert.deepEqual(rows[0]?.tickets, ['T-1']);
   assert.deepEqual(insightRows(null), []);
 });
@@ -194,7 +293,10 @@ test('drillTitle and drillRows: slowest first, a ticket without the stage last a
   assert.equal(drillTitle({ stage: null, group: null }), 'Tickets');
   assert.equal(drillTitle({ stage: 'implement', group: 'area-web' }), 'area-web · Implement');
   const rows = drillRows(tickets([row('T-1', 1, {}, null), row('T-2', 1, {}, HOUR), row('T-3', 1, { status: 'wont_do' }, 3 * HOUR)]), null);
-  assert.deepEqual(rows.map((r) => r.ticket), ['T-3', 'T-2', 'T-1']);
+  assert.deepEqual(
+    rows.map((r) => r.ticket),
+    ['T-3', 'T-2', 'T-1'],
+  );
   assert.equal(rows[2]?.duration, UNAVAILABLE);
   assert.equal(rows[0]?.href, '/admin/tickets/T-3');
   assert.match(rows[0]?.meta ?? '', /won't do/);
@@ -203,8 +305,18 @@ test('drillTitle and drillRows: slowest first, a ticket without the stage last a
 
 test('headlineFigures: the four numbers; unavailable is "-" and not available, never 0', () => {
   const f = headlineFigures(overview());
-  assert.deepEqual(f.map((x) => [x.key, x.value, x.available]), [['efficiency', '72', true], ['effectiveness', '56', true], ['resolved', '4', true], ['median', '2h', true]]);
-  const none = headlineFigures(overview({ program: program('memor', { kind: 'commits', unavailable: { reason: 'no_source', text: 'x' } }) }));
+  assert.deepEqual(
+    f.map((x) => [x.key, x.value, x.available]),
+    [
+      ['efficiency', '72', true],
+      ['effectiveness', '56', true],
+      ['resolved', '4', true],
+      ['median', '2h', true],
+    ],
+  );
+  const none = headlineFigures(
+    overview({ program: program('memor', { kind: 'commits', unavailable: { reason: 'no_source', text: 'x' } }) }),
+  );
   assert.ok(none.every((x) => !x.available && x.value === '-'));
   assert.ok(headlineFigures(null).every((x) => !x.available));
   const noMedian = headlineFigures(overview({ efficiency: score({ value: null }), flow: group('all', { stages: [] }) }));

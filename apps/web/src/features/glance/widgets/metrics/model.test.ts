@@ -5,11 +5,26 @@ import { metricsCompact, metricsFigures } from './model';
 
 const score = (value: number | null): MetricsScore => ({ value, previous: null, components: [], basis: '' });
 const flow = (done: number, medianMs: number | null) => {
-  const w = { fromMs: 0, toMs: 1, done, wontDo: 0, wontDoMedianMs: null, stages: medianMs === null ? [] : [{ stage: 'resolve' as const, n: done, excluded: 0, medianMs, p90Ms: medianMs }], rounds: { n: 0, medianRounds: null, reworked: 0, fails: 0 } };
+  const w = {
+    fromMs: 0,
+    toMs: 1,
+    done,
+    wontDo: 0,
+    wontDoMedianMs: null,
+    stages: medianMs === null ? [] : [{ stage: 'resolve' as const, n: done, excluded: 0, medianMs, p90Ms: medianMs }],
+    rounds: { n: 0, medianRounds: null, reworked: 0, fails: 0 },
+  };
   return { key: 'all', current: w, previous: w };
 };
 const overview = (eff: number | null, done = 6, medianMs: number | null = 3_600_000): MetricsOverview => ({
-  program: { id: 'all', label: 'All', kind: 'all', tags: [], source: 'builtin', targets: { closuresPerHour: 2, resolveHours: 24, reviewHours: 2 } },
+  program: {
+    id: 'all',
+    label: 'All',
+    kind: 'all',
+    tags: [],
+    source: 'builtin',
+    targets: { closuresPerHour: 2, resolveHours: 24, reviewHours: 2 },
+  },
   window: '24h',
   nowMs: 0,
   efficiency: score(eff),
@@ -21,7 +36,10 @@ const overview = (eff: number | null, done = 6, medianMs: number | null = 3_600_
 });
 
 test('metricsFigures: four numbers in the order efficiency, effectiveness, resolved, median', () => {
-  assert.deepEqual(metricsFigures(overview(72)).map((f) => f.value), ['72', '40', '6', '1h']);
+  assert.deepEqual(
+    metricsFigures(overview(72)).map((f) => f.value),
+    ['72', '40', '6', '1h'],
+  );
 });
 
 test('metricsCompact: the efficiency score, five characters at most, the four numbers in the title', () => {

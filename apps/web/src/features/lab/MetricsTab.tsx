@@ -26,8 +26,24 @@ import {
 const SEGMENT_MAX = 4;
 
 /** The tickets behind a stage or a lead, in the kit's dialog (a bottom sheet on a phone; its header is not a drag handle, lib/sheetDrag.ts). */
-function DrillSheet({ program, window, target, open, onClose }: { program: string; window: MetricsWindow; target: DrillTarget; open: boolean; onClose: () => void }) {
-  const load = useLoad(() => metricsApi.tickets(program, window, { stage: target.stage, groupBy: target.group ? 'lead' : null, group: target.group }), `drill|${program}|${window}|${target.stage}|${target.group}`, { live: false });
+function DrillSheet({
+  program,
+  window,
+  target,
+  open,
+  onClose,
+}: {
+  program: string;
+  window: MetricsWindow;
+  target: DrillTarget;
+  open: boolean;
+  onClose: () => void;
+}) {
+  const load = useLoad(
+    () => metricsApi.tickets(program, window, { stage: target.stage, groupBy: target.group ? 'lead' : null, group: target.group }),
+    `drill|${program}|${window}|${target.stage}|${target.group}`,
+    { live: false },
+  );
   return (
     <Dialog open={open} onClose={onClose} size="md" title={drillTitle(target)} description={`Done in the last ${window}`}>
       <div data-metric-drill="">
@@ -70,7 +86,16 @@ function MetricsBody({ programId, window, programs }: { programId: string; windo
         </div>
       </div>
       <InsightsCard load={insights} />
-      {drill && <DrillSheet key={`${drill.target.stage}|${drill.target.group}`} program={programId} window={window} target={drill.target} open={drill.open} onClose={() => setDrill((d) => (d ? { ...d, open: false } : d))} />}
+      {drill && (
+        <DrillSheet
+          key={`${drill.target.stage}|${drill.target.group}`}
+          program={programId}
+          window={window}
+          target={drill.target}
+          open={drill.open}
+          onClose={() => setDrill((d) => (d ? { ...d, open: false } : d))}
+        />
+      )}
     </div>
   );
 }
@@ -107,7 +132,9 @@ export function MetricsTab() {
           <div className="min-w-0 flex-1">
             <Segmented label="Window" value={window} options={WINDOW_OPTIONS} onChange={setWindow} />
           </div>
-          <InfoTip label="About the window">Each number covers the last 24 hours or 7 days and is compared with the window before it, the same length. Scores are 0 to 100.</InfoTip>
+          <InfoTip label="About the window">
+            Each number covers the last 24 hours or 7 days and is compared with the window before it, the same length. Scores are 0 to 100.
+          </InfoTip>
           <button
             type="button"
             aria-label="Refresh"

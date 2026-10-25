@@ -11,7 +11,13 @@ export const metricsFigures = (o: MetricsOverview | null): HeadlineFigure[] => h
 
 /** The chip: the efficiency score ("72", never more than five characters); the four numbers in the title. */
 export function metricsCompact(o: MetricsOverview | null, failed: boolean): GlanceCompact {
-  if (!o) return { value: failed ? '-' : null, level: 'unknown', title: failed ? 'Metrics: not available' : 'Metrics: loading', loading: !failed };
+  if (!o)
+    return {
+      value: failed ? '-' : null,
+      level: 'unknown',
+      title: failed ? 'Metrics: not available' : 'Metrics: loading',
+      loading: !failed,
+    };
   const f = headlineFigures(o);
   const eff = f.find((x) => x.key === 'efficiency');
   const said = f.map((x) => `${x.label.toLowerCase()} ${x.available ? x.value : 'unavailable'}`).join(', ');

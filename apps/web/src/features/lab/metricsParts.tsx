@@ -1,5 +1,14 @@
 import { LoadError, RowsSkeleton } from '@isnanme/ui';
-import type { MetricsFlow, MetricsInsights, MetricsOverview, MetricsProgram, MetricsStage, MetricsTickets, MetricsTrend, MetricsWindow } from '@portal/contracts';
+import type {
+  MetricsFlow,
+  MetricsInsights,
+  MetricsOverview,
+  MetricsProgram,
+  MetricsStage,
+  MetricsTickets,
+  MetricsTrend,
+  MetricsWindow,
+} from '@portal/contracts';
 import { AlertTriangle, Info, OctagonAlert } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { Link } from 'react-router';
@@ -40,7 +49,19 @@ export interface Load<T> {
 }
 
 /** A card: a one or two word title, an InfoTip for the explanation, the body. */
-export function MetricCard({ title, tip, tipLabel, children, id }: { title: string; tip?: ReactNode; tipLabel?: string; children: ReactNode; id: string }) {
+export function MetricCard({
+  title,
+  tip,
+  tipLabel,
+  children,
+  id,
+}: {
+  title: string;
+  tip?: ReactNode;
+  tipLabel?: string;
+  children: ReactNode;
+  id: string;
+}) {
   return (
     <Card>
       <section aria-label={title} data-metric-card={id} className="px-4 pt-3 pb-2">
@@ -55,7 +76,17 @@ export function MetricCard({ title, tip, tipLabel, children, id }: { title: stri
 }
 
 /** One read's states: refused, failed (with another try), on its way (rows in the shape of the card), or its content. */
-export function Slot<T>({ load, label, rows = 2, children }: { load: Load<T>; label: string; rows?: number; children: (data: T) => ReactNode }) {
+export function Slot<T>({
+  load,
+  label,
+  rows = 2,
+  children,
+}: {
+  load: Load<T>;
+  label: string;
+  rows?: number;
+  children: (data: T) => ReactNode;
+}) {
   if (load.forbidden) return <NotAvailable />;
   if (load.failed) return <LoadError onRetry={() => void load.reload()} />;
   if (!load.data) return <RowsSkeleton rows={rows} lines={2} label={label} />;
@@ -88,12 +119,24 @@ function ScoreCell({ view, tipLabel }: { view: ScoreView; tipLabel: string }) {
 }
 
 /** Efficiency and effectiveness as gauges with the change since the window before; under them the counts of the window. */
-export function ScoresCard({ overview, program, loading }: { overview: MetricsOverview; program: MetricsProgram | undefined; loading: boolean }) {
+export function ScoresCard({
+  overview,
+  program,
+  loading,
+}: {
+  overview: MetricsOverview;
+  program: MetricsProgram | undefined;
+  loading: boolean;
+}) {
   const eff = scoreView('Efficiency', overview.efficiency, program);
   const eft = scoreView('Effectiveness', overview.effectiveness, program);
   const stats = summaryStats(overview);
   return (
-    <Card className={loading ? 'opacity-70 transition-opacity motion-reduce:transition-none' : 'transition-opacity motion-reduce:transition-none'}>
+    <Card
+      className={
+        loading ? 'opacity-70 transition-opacity motion-reduce:transition-none' : 'transition-opacity motion-reduce:transition-none'
+      }
+    >
       <section aria-label="Scores" data-metric-card="scores" className="px-4 py-3">
         <div className="grid grid-cols-2 gap-3">
           <ScoreCell view={eff} tipLabel="About efficiency" />
@@ -121,7 +164,9 @@ export function ProgramUnavailable({ program }: { program: MetricsProgram }) {
         <p className="text-[14px] font-semibold">
           {program.label}: {UNAVAILABLE}
         </p>
-        <p className="mt-1 text-[13px] break-words text-muted [overflow-wrap:anywhere]">{program.unavailable?.text ?? 'The portal has no figures for this program.'}</p>
+        <p className="mt-1 text-[13px] break-words text-muted [overflow-wrap:anywhere]">
+          {program.unavailable?.text ?? 'The portal has no figures for this program.'}
+        </p>
       </section>
     </Card>
   );
@@ -136,7 +181,11 @@ export function TrendCard({ eff, effv, window }: { eff: Load<MetricsTrend>; effv
     <MetricCard
       id="trend"
       title="Scores over time"
-      tip={t ? `${t.source} A snapshot every ${formatSpan(t.everyMs)}, kept ${formatSpan(t.keepMs)}. A gap is a time with no reading, never a zero.` : 'Read from the portal’s snapshots.'}
+      tip={
+        t
+          ? `${t.source} A snapshot every ${formatSpan(t.everyMs)}, kept ${formatSpan(t.keepMs)}. A gap is a time with no reading, never a zero.`
+          : 'Read from the portal’s snapshots.'
+      }
     >
       {forbidden ? (
         <NotAvailable />
@@ -160,13 +209,23 @@ export function TrendCard({ eff, effv, window }: { eff: Load<MetricsTrend>; effv
 export function ClosuresCard({ load, window }: { load: Load<MetricsTickets>; window: MetricsWindow }) {
   const per = window === '24h' ? 'hour' : 'day';
   return (
-    <MetricCard id="closed" title="Closed" tip={`Tickets closed done per ${per} over the last ${window}, the last column the newest. Won't do is not counted.`}>
+    <MetricCard
+      id="closed"
+      title="Closed"
+      tip={`Tickets closed done per ${per} over the last ${window}, the last column the newest. Won't do is not counted.`}
+    >
       <Slot load={load} label="Loading closures">
         {(d) => {
           const c = closureColumns(d, window);
           return (
             <>
-              <ColumnChart columns={c.columns} format={round} ariaLabel={`Tickets done per ${c.per}`} empty="Nothing closed" dim={load.loading} />
+              <ColumnChart
+                columns={c.columns}
+                format={round}
+                ariaLabel={`Tickets done per ${c.per}`}
+                empty="Nothing closed"
+                dim={load.loading}
+              />
               <p className="px-1 pt-1 text-[11.5px] text-muted tabular-nums">
                 {c.done} done per {c.per}
                 {c.missing > 0 && ` · newest ${d.rows.length} of ${d.total} closed read, older columns may be short`}
@@ -179,7 +238,15 @@ export function ClosuresCard({ load, window }: { load: Load<MetricsTickets>; win
   );
 }
 
-export function StagesCard({ load, onPick, picked }: { load: Load<MetricsFlow>; onPick: (t: DrillTarget) => void; picked: DrillTarget | null }) {
+export function StagesCard({
+  load,
+  onPick,
+  picked,
+}: {
+  load: Load<MetricsFlow>;
+  onPick: (t: DrillTarget) => void;
+  picked: DrillTarget | null;
+}) {
   const sel = (stages: MetricsStage[]) => (picked && !picked.group && picked.stage && stages.includes(picked.stage) ? picked.stage : null);
   return (
     <MetricCard
@@ -192,16 +259,37 @@ export function StagesCard({ load, onPick, picked }: { load: Load<MetricsFlow>; 
               <b>{STAGE_INFO[s].label}</b>: {STAGE_INFO[s].tip}
             </span>
           ))}
-          <span className="block">Bar: median. Whisker: p90. n tickets had both ends recorded; excluded did not and are left out, never counted as 0. Tap a row for its tickets.</span>
+          <span className="block">
+            Bar: median. Whisker: p90. n tickets had both ends recorded; excluded did not and are left out, never counted as 0. Tap a row
+            for its tickets.
+          </span>
         </>
       }
     >
       <Slot load={load} label="Loading the stages" rows={4}>
         {(f) => (
-          <div className={load.loading ? 'opacity-70 transition-opacity motion-reduce:transition-none' : 'transition-opacity motion-reduce:transition-none'}>
-            <StageBars rows={stageRows(f.total, STEP_STAGES)} format={formatSpan} ariaLabel="Time in each stage" onSelect={(k) => onPick({ stage: k as MetricsStage, group: null })} selected={sel(STEP_STAGES)} />
+          <div
+            className={
+              load.loading
+                ? 'opacity-70 transition-opacity motion-reduce:transition-none'
+                : 'transition-opacity motion-reduce:transition-none'
+            }
+          >
+            <StageBars
+              rows={stageRows(f.total, STEP_STAGES)}
+              format={formatSpan}
+              ariaLabel="Time in each stage"
+              onSelect={(k) => onPick({ stage: k as MetricsStage, group: null })}
+              selected={sel(STEP_STAGES)}
+            />
             <div className="mt-2 border-t border-line pt-1">
-              <StageBars rows={stageRows(f.total, TOTAL_STAGES)} format={formatSpan} ariaLabel="Total time" onSelect={(k) => onPick({ stage: k as MetricsStage, group: null })} selected={sel(TOTAL_STAGES)} />
+              <StageBars
+                rows={stageRows(f.total, TOTAL_STAGES)}
+                format={formatSpan}
+                ariaLabel="Total time"
+                onSelect={(k) => onPick({ stage: k as MetricsStage, group: null })}
+                selected={sel(TOTAL_STAGES)}
+              />
             </div>
           </div>
         )}
@@ -212,13 +300,25 @@ export function StagesCard({ load, onPick, picked }: { load: Load<MetricsFlow>; 
 
 export function LeadTimeCard({ load }: { load: Load<MetricsTickets> }) {
   return (
-    <MetricCard id="leadtime" title="Lead time" tip="How long the done tickets of the window took from created to done, in ten equal bins from 0. The dashed line is the median. The axis stops at 3 times the p90 so one outlier does not flatten the rest.">
+    <MetricCard
+      id="leadtime"
+      title="Lead time"
+      tip="How long the done tickets of the window took from created to done, in ten equal bins from 0. The dashed line is the median. The axis stops at 3 times the p90 so one outlier does not flatten the rest."
+    >
       <Slot load={load} label="Loading lead times">
         {(d) => {
           const s = leadTimeSpread(d);
           return (
             <>
-              <Histogram edges={s.edges} counts={s.counts} median={s.median} format={formatSpan} ariaLabel="Created to done" empty="No ticket was done" dim={load.loading} />
+              <Histogram
+                edges={s.edges}
+                counts={s.counts}
+                median={s.median}
+                format={formatSpan}
+                ariaLabel="Created to done"
+                empty="No ticket was done"
+                dim={load.loading}
+              />
               <p className="px-1 pt-1 text-[11.5px] break-words text-muted tabular-nums [overflow-wrap:anywhere]">
                 n {s.n}
                 {s.beyond > 0 && ` · ${s.beyond} longer than the last bin`}
@@ -232,9 +332,21 @@ export function LeadTimeCard({ load }: { load: Load<MetricsTickets> }) {
   );
 }
 
-export function LeadsCard({ load, onPick, picked }: { load: Load<MetricsFlow>; onPick: (t: DrillTarget) => void; picked: DrillTarget | null }) {
+export function LeadsCard({
+  load,
+  onPick,
+  picked,
+}: {
+  load: Load<MetricsFlow>;
+  onPick: (t: DrillTarget) => void;
+  picked: DrillTarget | null;
+}) {
   return (
-    <MetricCard id="leads" title="Leads" tip="Created to done per lead (the ticket’s first area tag, else the session that held it), median and p90 over the tickets done in the window. Tap a lead for its tickets.">
+    <MetricCard
+      id="leads"
+      title="Leads"
+      tip="Created to done per lead (the ticket’s first area tag, else the session that held it), median and p90 over the tickets done in the window. Tap a lead for its tickets."
+    >
       <Slot load={load} label="Loading the leads" rows={3}>
         {(f) => {
           const { rows, hidden } = leadRows(f);
@@ -259,12 +371,20 @@ export function LeadsCard({ load, onPick, picked }: { load: Load<MetricsFlow>; o
 
 export function AccountPaceCard({ overview }: { overview: Load<MetricsOverview> }) {
   return (
-    <MetricCard id="pace" title="Account pace" tip="Each Claude’s use of its 5-hour quota window against an even spend: 1 : 1 spends it exactly by the reset. Under 0.9 leaves quota unused, over 1.1 runs out early. Right now, so it does not follow the window.">
+    <MetricCard
+      id="pace"
+      title="Account pace"
+      tip="Each Claude’s use of its 5-hour quota window against an even spend: 1 : 1 spends it exactly by the reset. Under 0.9 leaves quota unused, over 1.1 runs out early. Right now, so it does not follow the window."
+    >
       <Slot load={overview} label="Loading the pace">
         {(o) => {
           const v = paceView(o);
           const rows: BarRow[] = v.rows.map((r) => ({ key: r.key, label: r.label, sub: `${r.sub} · ${r.state}`, value: r.ratio }));
-          return v.note ? <p className="py-2 text-[13px] break-words text-muted [overflow-wrap:anywhere]">{v.note}</p> : <BarList rows={rows} format={fmtRatio} />;
+          return v.note ? (
+            <p className="py-2 text-[13px] break-words text-muted [overflow-wrap:anywhere]">{v.note}</p>
+          ) : (
+            <BarList rows={rows} format={fmtRatio} />
+          );
         }}
       </Slot>
     </MetricCard>
@@ -273,7 +393,11 @@ export function AccountPaceCard({ overview }: { overview: Load<MetricsOverview> 
 
 export function InsightsCard({ load }: { load: Load<MetricsInsights> }) {
   return (
-    <MetricCard id="insights" title="Findings" tip="Plain-language reads of the window: the slowest stage, regressions against the window before, idle capacity, blocked share, review wait, outliers. Act first, then look, then note.">
+    <MetricCard
+      id="insights"
+      title="Findings"
+      tip="Plain-language reads of the window: the slowest stage, regressions against the window before, idle capacity, blocked share, review wait, outliers. Act first, then look, then note."
+    >
       <Slot load={load} label="Loading findings">
         {(i) => {
           const rows = insightRows(i);
@@ -293,7 +417,11 @@ export function InsightsCard({ load }: { load: Load<MetricsInsights> }) {
                       {r.tickets.length > 0 && (
                         <p className="mt-0.5 flex flex-wrap gap-x-1">
                           {r.tickets.map((t) => (
-                            <Link key={t} to={ticketHref(t)} className="press inline-flex min-h-11 items-center px-1 text-[12.5px] font-medium text-accent hover:underline">
+                            <Link
+                              key={t}
+                              to={ticketHref(t)}
+                              className="press inline-flex min-h-11 items-center px-1 text-[12.5px] font-medium text-accent hover:underline"
+                            >
                               {t}
                             </Link>
                           ))}
@@ -328,14 +456,19 @@ export function DrillList({ load, target, window }: { load: Load<MetricsTickets>
             <ul aria-label={drillTitle(target)} className="divide-y divide-line">
               {rows.map((r) => (
                 <li key={r.ticket}>
-                  <Link to={r.href} className="press -mx-2 flex min-h-11 min-w-0 items-center gap-3 rounded-xl px-2 py-1.5 hover:bg-surface-2">
+                  <Link
+                    to={r.href}
+                    className="press -mx-2 flex min-h-11 min-w-0 items-center gap-3 rounded-xl px-2 py-1.5 hover:bg-surface-2"
+                  >
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-[14px] font-semibold">{r.ticket}</span>
                       <span dir="auto" className="block truncate text-[11.5px] text-muted">
                         {r.meta}
                       </span>
                     </span>
-                    <span className={`shrink-0 text-[13.5px] tabular-nums ${r.durationMs === null ? 'text-muted' : 'text-ink-soft'}`}>{r.duration}</span>
+                    <span className={`shrink-0 text-[13.5px] tabular-nums ${r.durationMs === null ? 'text-muted' : 'text-ink-soft'}`}>
+                      {r.duration}
+                    </span>
                   </Link>
                 </li>
               ))}

@@ -41,7 +41,8 @@ export function programOptions(programs: MetricsProgram[]): { value: string; lab
 }
 
 /** The program to show: the one asked for when it is in the list, else the first (`all`). */
-export const pickProgram = (programs: MetricsProgram[], id: string | null): string => (id && programs.some((p) => p.id === id) ? id : (programOptions(programs)[0]?.value ?? 'all'));
+export const pickProgram = (programs: MetricsProgram[], id: string | null): string =>
+  id && programs.some((p) => p.id === id) ? id : (programOptions(programs)[0]?.value ?? 'all');
 
 // ───────────────────────── scores ─────────────────────────
 
@@ -90,7 +91,11 @@ export function scoreView(label: string, score: MetricsScore | undefined, progra
   let reason: string | undefined;
   if (value === null) {
     const first = score.components.find((c) => c.basis === 'unavailable');
-    reason = program?.unavailable ? program.unavailable.text : first ? `${first.label}: ${reasonText(first.reason)}` : 'no input is available';
+    reason = program?.unavailable
+      ? program.unavailable.text
+      : first
+        ? `${first.label}: ${reasonText(first.reason)}`
+        : 'no input is available';
   }
   return { label, value, previous: score.previous, reason, basis: score.basis, components: componentLines(score) };
 }
@@ -100,7 +105,10 @@ export function scoreView(label: string, score: MetricsScore | undefined, progra
 export const STAGE_INFO: Record<MetricsStage, { label: string; tip: string }> = {
   start: { label: 'Start', tip: 'Created to the first move into in progress.' },
   report: { label: 'Report', tip: 'Created to the first comment by an agent session.' },
-  implement: { label: 'Implement', tip: 'First in progress to the first verdict (a QA or review verdict, or a self-test line); with none, to the first merge.' },
+  implement: {
+    label: 'Implement',
+    tip: 'First in progress to the first verdict (a QA or review verdict, or a self-test line); with none, to the first merge.',
+  },
   test: { label: 'Test', tip: 'First verdict to the last passing one.' },
   deliver: { label: 'Deliver', tip: 'The last merge to the close.' },
   resolve: { label: 'Resolve', tip: 'Created to done: the whole life of the ticket.' },
@@ -111,7 +119,8 @@ export const STAGE_INFO: Record<MetricsStage, { label: string; tip: string }> = 
 export const STEP_STAGES: MetricsStage[] = ['start', 'report', 'implement', 'test', 'deliver'];
 export const TOTAL_STAGES: MetricsStage[] = ['resolve', 'work'];
 
-const statOf = (g: MetricsFlowGroup['current'], stage: MetricsStage): MetricsStageStat | undefined => g.stages.find((s) => s.stage === stage);
+const statOf = (g: MetricsFlowGroup['current'], stage: MetricsStage): MetricsStageStat | undefined =>
+  g.stages.find((s) => s.stage === stage);
 
 function noteFor(done: number, s: MetricsStageStat | undefined): string | undefined {
   if (s && s.n > 0) return undefined;
@@ -123,7 +132,15 @@ export function stageRows(group: MetricsFlowGroup | null, stages: MetricsStage[]
   if (!group) return [];
   return stages.map((stage) => {
     const s = statOf(group.current, stage);
-    return { key: stage, label: STAGE_INFO[stage].label, median: s?.medianMs ?? null, p90: s?.p90Ms ?? null, n: s?.n ?? 0, excluded: s?.excluded, note: noteFor(group.current.done, s) };
+    return {
+      key: stage,
+      label: STAGE_INFO[stage].label,
+      median: s?.medianMs ?? null,
+      p90: s?.p90Ms ?? null,
+      n: s?.n ?? 0,
+      excluded: s?.excluded,
+      note: noteFor(group.current.done, s),
+    };
   });
 }
 
@@ -141,7 +158,16 @@ export function leadRows(flow: MetricsFlow | null, stage: MetricsStage = 'resolv
   if (!flow) return { rows: [], hidden: 0 };
   const rows = flow.groups.slice(0, MAX_LEAD_ROWS).map((g): StageRow => {
     const s = statOf(g.current, stage);
-    return { key: g.key, label: leadLabel(g.key), sub: `${g.current.done} done`, median: s?.medianMs ?? null, p90: s?.p90Ms ?? null, n: s?.n ?? 0, excluded: s?.excluded, note: noteFor(g.current.done, s) };
+    return {
+      key: g.key,
+      label: leadLabel(g.key),
+      sub: `${g.current.done} done`,
+      median: s?.medianMs ?? null,
+      p90: s?.p90Ms ?? null,
+      n: s?.n ?? 0,
+      excluded: s?.excluded,
+      note: noteFor(g.current.done, s),
+    };
   });
   return { rows, hidden: Math.max(0, flow.groups.length - rows.length) };
 }
@@ -217,7 +243,9 @@ export interface LeadTimeSpread {
 
 /** The created-to-done times of the window's done tickets in ten equal bins from 0. */
 export function leadTimeSpread(tickets: MetricsTickets | null): LeadTimeSpread {
-  const values = (tickets?.rows ?? []).filter((r) => r.status === 'done').flatMap((r) => (r.stages.resolve === null ? [] : [r.stages.resolve]));
+  const values = (tickets?.rows ?? [])
+    .filter((r) => r.status === 'done')
+    .flatMap((r) => (r.stages.resolve === null ? [] : [r.stages.resolve]));
   const missing = Math.max(0, (tickets?.total ?? 0) - (tickets?.rows.length ?? 0));
   if (!values.length) return { edges: [], counts: [], median: null, n: 0, beyond: 0, missing };
   const p90 = nearestRank(values, 0.9) ?? 0;
@@ -237,7 +265,11 @@ export interface TrendView {
 }
 
 export function trendView(efficiency: MetricsTrend | null, effectiveness: MetricsTrend | null): TrendView {
-  const mk = (key: string, label: string, t: MetricsTrend | null) => ({ key, label, points: (t?.points ?? []).map((p): LinePoint => ({ t: p.atMs, v: p.value })) });
+  const mk = (key: string, label: string, t: MetricsTrend | null) => ({
+    key,
+    label,
+    points: (t?.points ?? []).map((p): LinePoint => ({ t: p.atMs, v: p.value })),
+  });
   const series = [mk('efficiency', 'Efficiency', efficiency), mk('effectiveness', 'Effectiveness', effectiveness)];
   return { series, empty: series.every((s) => s.points.every((p) => p.v === null)) };
 }
@@ -268,7 +300,15 @@ export function paceView(o: MetricsOverview | null): PaceView {
   const rows = pace.claudes.flatMap((c): PaceRow[] =>
     c.ratio.value === null
       ? []
-      : [{ key: c.claude, label: c.label, ratio: c.ratio.value, sub: `used ${Math.round(c.usedPct)} % of ${Math.round(c.evenPct)} % even`, state: c.ratio.value < 0.9 ? 'under' : c.ratio.value > 1.1 ? 'over' : 'on' }],
+      : [
+          {
+            key: c.claude,
+            label: c.label,
+            ratio: c.ratio.value,
+            sub: `used ${Math.round(c.usedPct)} % of ${Math.round(c.evenPct)} % even`,
+            state: c.ratio.value < 0.9 ? 'under' : c.ratio.value > 1.1 ? 'over' : 'on',
+          },
+        ],
   );
   if (rows.length) return { rows, note: null };
   return { rows: [], note: `Account pace: unavailable, ${reasonText(pace.ratio.reason)}.` };
@@ -290,7 +330,13 @@ export interface InsightRow {
 const SEVERITY_WORD: Record<MetricsInsight['severity'], string> = { act: 'Act', warn: 'Look', info: 'Note' };
 
 export function insightRows(i: MetricsInsights | null): InsightRow[] {
-  return (i?.items ?? []).map((it, n) => ({ key: `${it.kind}-${n}`, severity: it.severity, word: SEVERITY_WORD[it.severity], text: it.text, tickets: it.tickets }));
+  return (i?.items ?? []).map((it, n) => ({
+    key: `${it.kind}-${n}`,
+    severity: it.severity,
+    word: SEVERITY_WORD[it.severity],
+    text: it.text,
+    tickets: it.tickets,
+  }));
 }
 
 export const ticketHref = (id: string) => `/admin/tickets/${id}`;
@@ -301,7 +347,8 @@ export interface DrillTarget {
   group: string | null;
 }
 
-export const drillTitle = (t: DrillTarget): string => [t.group ? leadLabel(t.group) : null, t.stage ? STAGE_INFO[t.stage].label : null].filter(Boolean).join(' · ') || 'Tickets';
+export const drillTitle = (t: DrillTarget): string =>
+  [t.group ? leadLabel(t.group) : null, t.stage ? STAGE_INFO[t.stage].label : null].filter(Boolean).join(' · ') || 'Tickets';
 
 export interface DrillRow {
   ticket: string;
@@ -339,9 +386,16 @@ export interface HeadlineFigure {
 /** The four numbers: both scores, tickets resolved in the window, the median created-to-done. */
 export function headlineFigures(o: MetricsOverview | null): HeadlineFigure[] {
   const score = (key: 'efficiency' | 'effectiveness', label: string, s: MetricsScore | undefined): HeadlineFigure =>
-    s && s.value !== null ? { key, label, value: String(Math.round(s.value)), available: true } : { key, label, value: '-', available: false };
+    s && s.value !== null
+      ? { key, label, value: String(Math.round(s.value)), available: true }
+      : { key, label, value: '-', available: false };
   if (!o || o.program.unavailable) {
-    return [score('efficiency', 'Efficiency', undefined), score('effectiveness', 'Effectiveness', undefined), { key: 'resolved', label: 'Resolved', value: '-', available: false }, { key: 'median', label: 'Median', value: '-', available: false }];
+    return [
+      score('efficiency', 'Efficiency', undefined),
+      score('effectiveness', 'Effectiveness', undefined),
+      { key: 'resolved', label: 'Resolved', value: '-', available: false },
+      { key: 'median', label: 'Median', value: '-', available: false },
+    ];
   }
   const resolve = o.flow.current.stages.find((s) => s.stage === 'resolve');
   const median = resolve?.medianMs ?? null;
@@ -371,12 +425,23 @@ export function summaryStats(o: MetricsOverview | null): SummaryStat[] {
   const median = (w: MetricsFlowGroup['current']) => w.stages.find((s) => s.stage === 'resolve')?.medianMs ?? null;
   const was = (v: string | null) => (v === null || v === UNAVAILABLE ? null : `was ${v}`);
   const open = o.open;
-  const count = (n: number | undefined): Pick<SummaryStat, 'value' | 'sub'> => (n === undefined ? { value: '-', sub: UNAVAILABLE } : { value: String(n), sub: null });
+  const count = (n: number | undefined): Pick<SummaryStat, 'value' | 'sub'> =>
+    n === undefined ? { value: '-', sub: UNAVAILABLE } : { value: String(n), sub: null };
   return [
     { key: 'done', label: 'Done', value: String(cur.done), sub: was(String(prev.done)) },
     { key: 'wontDo', label: "Won't do", value: String(cur.wontDo), sub: was(String(prev.wontDo)) },
-    { key: 'median', label: 'Median', value: median(cur) === null ? '-' : formatSpan(median(cur)), sub: median(cur) === null ? UNAVAILABLE : was(median(prev) === null ? null : formatSpan(median(prev))) },
-    { key: 'review', label: 'In review', ...count(open?.inReview), sub: open?.oldestReviewMs != null ? `oldest ${formatSpan(open.oldestReviewMs)}` : open ? null : UNAVAILABLE },
+    {
+      key: 'median',
+      label: 'Median',
+      value: median(cur) === null ? '-' : formatSpan(median(cur)),
+      sub: median(cur) === null ? UNAVAILABLE : was(median(prev) === null ? null : formatSpan(median(prev))),
+    },
+    {
+      key: 'review',
+      label: 'In review',
+      ...count(open?.inReview),
+      sub: open?.oldestReviewMs != null ? `oldest ${formatSpan(open.oldestReviewMs)}` : open ? null : UNAVAILABLE,
+    },
     { key: 'blocked', label: 'Blocked', ...count(open?.blocked) },
     { key: 'stalled', label: 'Stalled', ...count(open?.stalled) },
   ];
