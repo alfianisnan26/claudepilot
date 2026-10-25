@@ -14,7 +14,7 @@ export function MetricsCard() {
       {stale && <StaleNote reload={reload} />}
       <Stats>
         {figures.map((f) => (
-          <Stat key={f.key} value={f.value} label={f.label} />
+          <Stat key={f.key} value={f.value} label={f.key === 'effectiveness' ? 'Effective' : f.label} />
         ))}
       </Stats>
       <p className="flex items-center justify-center gap-1 text-xs text-muted">

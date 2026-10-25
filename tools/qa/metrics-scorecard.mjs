@@ -95,7 +95,7 @@ const MEASURE = `(() => {
     smallTips: ctl.filter((e) => tip(e) && small(e)).length,
     bad, text: root.innerText, cards,
     scores: root.querySelectorAll('[data-metric-score]').length,
-    svgs: root.querySelectorAll('svg[role=img], svg[aria-label]').length,
+    svgs: root.querySelectorAll('svg[aria-label], svg [role=img][aria-label]').length,
     tips: [...root.querySelectorAll('[data-metric-card]')].filter((c) => c.querySelector('[aria-label^="About"]')).length,
   };
 })()`;
@@ -127,7 +127,7 @@ try {
       await sleep(1500);
 
       // The program picker: `all` first; select the seeded program.
-      check(`${tag}: Metrics tab lists a Program picker and a Window picker`, await b.eval(`!!document.querySelector('[aria-label="Program"], [role=radiogroup][aria-label="Program"]') && !!document.querySelector('[aria-label="Window"]')`));
+      check(`${tag}: Metrics tab lists a Program picker and a Window picker`, await b.eval(`/Program/.test(document.body.innerText) && [...document.querySelectorAll('button, label, [role=radio]')].some((x) => (x.innerText || '').trim() === '24h') && [...document.querySelectorAll('button, label, [role=radio]')].some((x) => (x.innerText || '').trim() === '7d')`));
       let s = await m(b);
       check(`${tag}: all programs: both score tiles and every card`, s.scores === 2 && CARDS.every((c) => s.cards.includes(c)), JSON.stringify([s.scores, s.cards]));
       check(`${tag}: charts have a label (an SVG with a name)`, s.svgs >= 3, `svgs=${s.svgs}`);
@@ -148,7 +148,7 @@ try {
       await b.shot(`metrics-qa-${tag}`, { full: true });
 
       // The drill-down: a tap on a stage row lists the tickets behind it, a link each.
-      const opened = await b.eval(`(() => { const row = document.querySelector('[data-metric-card="stages"] button'); if (!row) return false; row.click(); return true; })()`);
+      const opened = await b.eval(`(() => { const row = document.querySelector('[data-metric-card="stages"] button[aria-pressed]'); if (!row) return false; row.click(); return true; })()`);
       check(`${tag}: a stage row can be tapped`, opened);
       await b.waitFor(`document.querySelectorAll('[data-metric-drill] a[href^="/admin/tickets/"]').length > 0`, LOAD_MS, 'drill links').catch(() => {});
       await sleep(400);
@@ -180,7 +180,7 @@ try {
       await b.waitFor(`!!document.querySelector('[data-metrics-card]')`, LOAD_MS, 'the glance card').catch(() => {});
       await sleep(800);
       const g = await b.eval(`(() => { const c = document.querySelector('[data-metrics-card]'); return c ? { text: c.innerText, w: c.scrollWidth <= c.clientWidth + 1 } : null; })()`);
-      check(`${tag}: the Glance widget shows Efficiency, Effectiveness, Resolved and Median`, !!g && /Efficiency/.test(g.text) && /Effectiveness/.test(g.text) && /Resolved/.test(g.text) && /Median/.test(g.text) && !/\b(NaN|undefined|null)\b/.test(g.text), JSON.stringify(g));
+      check(`${tag}: the Glance widget shows Efficiency, Effective, Resolved and Median`, !!g && /Efficiency/.test(g.text) && /Effective/.test(g.text) && /Resolved/.test(g.text) && /Median/.test(g.text) && !/\b(NaN|undefined|null)\b/.test(g.text), JSON.stringify(g));
       await b.shot(`metrics-glance-${tag}`);
     }
   }

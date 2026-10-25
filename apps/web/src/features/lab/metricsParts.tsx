@@ -227,7 +227,7 @@ export function ClosuresCard({ load, window }: { load: Load<MetricsTickets>; win
                 dim={load.loading}
               />
               <p className="px-1 pt-1 text-[11.5px] text-muted tabular-nums">
-                {c.done} done per {c.per}
+                {c.done} done in {window}, a column per {c.per}
                 {c.missing > 0 && ` · newest ${d.rows.length} of ${d.total} closed read, older columns may be short`}
               </p>
             </>
