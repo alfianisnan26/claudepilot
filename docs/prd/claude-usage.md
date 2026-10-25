@@ -1179,8 +1179,10 @@ slices of T-2360; they read the same wire types (`packages/contracts/src/metrics
 
 - **Stages of a done ticket** (`lab/flowMetrics.ts` `ticketFlow`, pure): start = created to the first move into in_progress; report =
   created to the first comment by an agent session (`session:*`); implement = the first in_progress to the first verdict after it (QA or
-  review verdict in the comment's data, or a `Self-test: ... on <sha> pass|fail N` line: only a line that starts with `Self-test:`; one
-  quoted inside a line, after `> `, indented or inside a ``` or ~~~ code fence is not a verdict, `selfTestLineOf`), with no verdict to the first merge
+  review verdict in the comment's data, or a `Self-test: ... on <sha> pass|fail N` line: read as the flow watchdog reads it
+  (`flow/engine.ts` `selfTestText`: `*` and backticks dropped, trimmed, so `**Self-test:** \`job\` on ...` counts), only a line that then
+  starts with `Self-test:`; one quoted inside a line, after `> `, in a list, indented as code or inside a ``` or ~~~ code fence is not a
+  verdict, `selfTestLineOf`), with no verdict to the first merge
   (`ticket_merge_status` `merged`); test = the first verdict to the last PASSING verdict at or before the last merge (no merge: the close),
   rounds = the verdicts in it, rework = the failing ones; deliver = the last merge to the close; resolve = created to the close; work = the
   first in_progress to the close. Nothing after the close counts. **A ticket that lacks a stage's timestamps is left out of that stage and
@@ -1233,7 +1235,8 @@ slices of T-2360; they read the same wire types (`packages/contracts/src/metrics
   `Lab.metrics`, never a copy (table in [Portal MCP](portal-mcp.md)). Reach, decided here: the ticket names the leads and the operator as
   readers, so the tools are `agent` scope with the reach in the handler: an agent's token only for a LEAD session (a top-level chat, no
   parent session); a worker or an unknown session gets the same `NOT_FOUND`; an admin's or the manager's token only with `view` on `usage`.
-  Short by default, hours with two decimals, every figure the portal lacks `unavailable:<reason>`, never 0; counts, durations, ticket ids
+  Short by default, hours with two decimals, every figure the portal lacks `unavailable:<reason>`, never 0 (a failed closed-ticket read
+  makes the overview's `flow`, flow_times' `total` and metrics_tickets' `total` `unavailable:no_source`, no rows, no cursor); counts, durations, ticket ids
   and program ids only (no ticket text, no session title); every result kept under the MCP size limit.
 - **Not built in slice 1.** The per-model cost and review pass rate, and the "escalated to Opus" count; the web view; the MCP tools.
 - Source: `lab/flowMetrics.ts` (pure), `lab/flowMetricsData.ts` (the loader), `lab/metricsSnapshots.ts`, `lab/metricsSettings.ts`,

@@ -16,6 +16,7 @@ import { generateSecretKey, parseSecretKey } from '../store/secretBox.js';
 import { Store } from '../store/store.js';
 import { LAB_TOOL_POLICIES } from './authz.js';
 import { Lab } from './index.js';
+import { Metrics } from './metricsService.js';
 import { writeSnapshots } from './metricsSnapshots.js';
 import { fitRows, hours, registerMetricsTools, TICKETS_DEFAULT } from './metricsTools.js';
 
@@ -320,6 +321,51 @@ test('metrics_tickets pages with next_cursor; a cursor is bound to its query; a 
     assert.equal(code(await mcp.call(worker, 'metrics_tickets', { group: 'high' })), 'NOT_FOUND');
   } finally {
     done();
+  }
+});
+
+test('a failed closed-ticket read: overview flow, flow_times total and metrics_tickets total are unavailable:no_source, never 0 or "null tickets"', async () => {
+  const h = await seeded();
+  // The window read throws (a locked or broken store); every other read works (as in metricsRoutes.test.ts).
+  const db = new Proxy(h.db, {
+    get(target, key) {
+      if (key === 'prepare')
+        return (sql: string) => {
+          if (sql.includes('closed_at >= ?')) throw Object.assign(new Error('detail'), { name: 'SqliteError' });
+          return target.prepare(sql);
+        };
+      const v = Reflect.get(target, key) as unknown;
+      return typeof v === 'function' ? (v as (...a: unknown[]) => unknown).bind(target) : v;
+    },
+  });
+  const metrics = new Metrics({ store: { db, writable: true } as unknown as Store, now: () => NOW, settings: null, paces: null, log: () => {} });
+  const registry = new ToolRegistry();
+  const mcp = await portalMcpHarness({ registry });
+  registerMetricsTools({ metrics } as unknown as Lab, registry);
+  try {
+    for (const token of [mcp.token('read').secret, (await mcp.agentToken('docker/api', 'L1')).secret]) {
+      const ov = data(await mcp.call(token, 'metrics_overview', { program: 'claudepilot' }));
+      assert.equal(ov.flow, 'unavailable:no_source');
+      assert.match(ov.summary, /done and won't-do unavailable \(the closed tickets could not be read\)/);
+      assert.equal(typeof ov.open, 'object', 'the open-work read still works');
+      const full = data(await mcp.call(token, 'metrics_overview', { full: true }));
+      assert.deepEqual([full.flow, full.flowUnavailable?.reason], ['unavailable:no_source', 'no_source']);
+      const ft = data(await mcp.call(token, 'metrics_flow_times', { group_by: 'lead' }));
+      assert.deepEqual([ft.total, ft.groups], ['unavailable:no_source', []]);
+      assert.match(ft.summary, /flow times unavailable/);
+      assert.deepEqual([data(await mcp.call(token, 'metrics_flow_times', { full: true })).total], ['unavailable:no_source']);
+      const tk = data(await mcp.call(token, 'metrics_tickets', { stage: 'resolve', limit: 2 }));
+      assert.deepEqual([tk.total, tk.rows, tk.next_cursor], ['unavailable:no_source', [], null]);
+      assert.equal(tk.summary, 'Tickets closed in the last 24h for all with resolve recorded: unavailable (the closed tickets could not be read).');
+      const ins = data(await mcp.call(token, 'metrics_insights', {}));
+      assert.deepEqual(ins.items.map((i: any) => i.kind), ['no_data']);
+      for (const r of [ov, ft, tk, ins]) assert.doesNotMatch(r.summary, /\bnull\b|\b0 (done|tickets?)\b/, r.summary);
+    }
+    // The refusal is unchanged: a worker still gets NOT_FOUND.
+    assert.equal(code(await mcp.call((await mcp.agentToken('docker/api', 'W1')).secret, 'metrics_tickets', {})), 'NOT_FOUND');
+  } finally {
+    mcp.done();
+    h.done();
   }
 });
 
