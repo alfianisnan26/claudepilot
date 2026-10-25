@@ -257,7 +257,8 @@ export class Metrics {
     return { program: p.id, window, nowMs: l.nowMs, groupBy, total, groups, basis: METRICS_BASIS };
   }
 
-  tickets(programId: string | undefined, window: MetricsWindow, opts: { stage?: MetricsStage; groupBy?: MetricsGroupBy; group?: string }): MetricsTickets | null {
+  /** `offset` (the Portal MCP's paging, metricsTools.ts): the rows from there on, still at most TICKET_ROWS; `total` is over all of them. */
+  tickets(programId: string | undefined, window: MetricsWindow, opts: { stage?: MetricsStage; groupBy?: MetricsGroupBy; group?: string; offset?: number }): MetricsTickets | null {
     const p = this.program(programId);
     if (!p) return null;
     const windowMs = METRICS_WINDOW_MS[window];
@@ -266,7 +267,7 @@ export class Metrics {
     let rows = (this.#rowsOf(l, p) ?? []).filter((r) => !opts.stage || r.stages[opts.stage] !== null);
     if (opts.groupBy && opts.group) rows = rows.filter((r) => groupKeysOf(r, opts.groupBy!, programs).includes(opts.group!));
     const all = ticketRows(rows, l.nowMs - windowMs, l.nowMs, programs);
-    return { program: p.id, window, nowMs: l.nowMs, stage: opts.stage ?? null, group: opts.group ?? null, groupBy: opts.groupBy ?? null, total: all.length, rows: all.slice(0, TICKET_ROWS) };
+    return { program: p.id, window, nowMs: l.nowMs, stage: opts.stage ?? null, group: opts.group ?? null, groupBy: opts.groupBy ?? null, total: all.length, rows: all.slice(Math.max(0, opts.offset ?? 0), Math.max(0, opts.offset ?? 0) + TICKET_ROWS) };
   }
 
   trend(programId: string | undefined, metric: MetricsTrendKey, window: MetricsTrendWindow): MetricsTrend | null {

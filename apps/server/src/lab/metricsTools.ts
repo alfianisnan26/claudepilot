@@ -26,6 +26,7 @@ import {
 } from '@portal/contracts';
 import { actorOfPrincipal, can } from '../authz/seam.js';
 import { fullInput } from '../portalmcp/compact.js';
+import { PAGE_DEFAULT, PAGE_MAX, pageInput, pageWindow } from '../portalmcp/paging.js';
 import { PortalToolError, portalTools, z, type PortalToolContext, type ToolRegistry } from '../portalmcp/registry.js';
 import { ticketKeyField } from '../tickets/keys.js';
 import type { Lab } from './index.js';
@@ -36,8 +37,10 @@ const programArg = z.string().regex(ID).optional().describe('A program id (metri
 const windowArg = z.enum(METRICS_WINDOWS).optional().describe('24h or 7d, compared with the window before it. Default 24h.');
 
 /** Short rows of the drill-down by default, at most this many with `limit`. */
-export const TICKETS_DEFAULT = 25;
-export const TICKETS_MAX = 200;
+export const TICKETS_DEFAULT = PAGE_DEFAULT;
+export const TICKETS_MAX = PAGE_MAX;
+/** Room kept under the size budget for the page's `next_cursor`. */
+const CURSOR_ROOM = 500;
 /** Groups in a short flow_times result; `full` fits as many as the size budget holds. */
 export const GROUPS_SHORT = 30;
 
@@ -261,7 +264,7 @@ export function registerMetricsTools(lab: Lab, registry: ToolRegistry = portalTo
   registry.register({
     name: 'metrics_tickets',
     title: 'Tickets behind a metric',
-    description: `The tickets behind a flow number: those closed done or won't-do in the last 24h or 7d, newest close first, optionally only those with a stage recorded and in one group (group_by and group, as in metrics_flow_times). Each: ticket and ticket_key, type, priority, status, closed, lead, hours per stage (null: left out), rounds, fails. ${TICKETS_DEFAULT} rows by default, limit up to ${TICKETS_MAX}. ${reachNote}`,
+    description: `The tickets behind a flow number: those closed done or won't-do in the last 24h or 7d, newest close first, optionally only those with a stage recorded and in one group (group_by and group, as in metrics_flow_times). Each: ticket and ticket_key, type, priority, status, closed, lead, hours per stage (null: left out), rounds, fails. Paged: ${TICKETS_DEFAULT} rows a page by default, limit up to ${TICKETS_MAX}, the next page with cursor (next_cursor; null on the last). ${reachNote}`,
     scope: 'agent',
     hints: { readOnly: true, idempotent: true },
     input: z.object({
@@ -270,15 +273,26 @@ export function registerMetricsTools(lab: Lab, registry: ToolRegistry = portalTo
       stage: z.enum(METRICS_STAGES).optional().describe('Only tickets with this stage recorded.'),
       group_by: z.enum(METRICS_GROUP_BY).optional(),
       group: z.string().regex(ID).optional().describe('A group key from metrics_flow_times (needs group_by).'),
-      limit: z.number().int().min(1).max(TICKETS_MAX).optional().describe(`Default ${TICKETS_DEFAULT}.`),
+      ...pageInput,
     }),
     handler(ctx, args) {
-      if (args.group && !args.group_by) throw new PortalToolError('VALIDATION_FAILED', 'group: needs group_by.', { group: 'needs group_by' });
       const reach = metricsReach(ctx, lab);
-      const t = found(lab.metrics.tickets(args.program, args.window ?? '24h', { ...(args.stage ? { stage: args.stage } : {}), ...(args.group_by ? { groupBy: args.group_by } : {}), ...(args.group ? { group: args.group } : {}) }));
-      const rows = t.rows.slice(0, args.limit ?? TICKETS_DEFAULT).map(ticketShort);
-      const summary = `${t.total} ticket${t.total === 1 ? '' : 's'} closed in the last ${t.window} for ${t.program}${t.stage ? ` with ${t.stage} recorded` : ''}${t.group ? ` in ${t.groupBy} ${t.group}` : ''}. Hours.`;
-      return fitRows({ summary, reach, program: t.program, window: t.window, stage: t.stage, group_by: t.groupBy, group: t.group, total: t.total }, 'rows', rows, FULL_BUDGET_CHARS, 'Over the size limit: narrow with stage, group or limit.');
+      if (args.group && !args.group_by) throw new PortalToolError('VALIDATION_FAILED', 'group: needs group_by.', { group: 'needs group_by' });
+      // The cursor is bound to the query (program, window, stage, group): another query's cursor is INVALID_CURSOR.
+      const page = pageWindow(args, { p: args.program ?? 'all', w: args.window ?? '24h', s: args.stage ?? null, b: args.group_by ?? null, g: args.group ?? null });
+      const t = found(
+        lab.metrics.tickets(args.program, args.window ?? '24h', {
+          ...(args.stage ? { stage: args.stage } : {}),
+          ...(args.group_by ? { groupBy: args.group_by } : {}),
+          ...(args.group ? { group: args.group } : {}),
+          offset: page.offset,
+        }),
+      );
+      const rows = t.rows.slice(0, page.limit).map(ticketShort);
+      const summary = `${t.total} ticket${t.total === 1 ? '' : 's'} closed in the last ${t.window} for ${t.program}${t.stage ? ` with ${t.stage} recorded` : ''}${t.group ? ` in ${t.groupBy} ${t.group}` : ''}${page.offset ? `, from row ${page.offset + 1}` : ''}. Hours.`;
+      const head = { summary, reach, program: t.program, window: t.window, stage: t.stage, group_by: t.groupBy, group: t.group, total: t.total };
+      const out = fitRows(head, 'rows', rows, FULL_BUDGET_CHARS - CURSOR_ROOM, 'Over the size limit: the rest is on the next page (next_cursor).');
+      return { ...out, next_cursor: page.next((out.rows as unknown[]).length, t.total) };
     },
   });
 }

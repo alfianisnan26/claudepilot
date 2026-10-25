@@ -146,7 +146,8 @@ test('validation: a bad window, metric, group_by, stage, program id or a group w
       ['metrics_tickets', { stage: 'nap' }],
       ['metrics_tickets', { group: 'high' }],
       ['metrics_tickets', { limit: 0 }],
-      ['metrics_tickets', { limit: 201 }],
+      ['metrics_tickets', { limit: 101 }],
+      ['metrics_tickets', { cursor: 'forged.cursor' }],
     ];
     for (const [name, args] of bad) {
       const r = await mcp.call(admin, name, args);
@@ -259,7 +260,7 @@ test('size budget: a large store (3,000 done tickets, 300 leads, a month of snap
       ['metrics_trend', { metric: 'startP50', window: '30d' }],
       ['metrics_insights', { window: '7d' }],
       ['metrics_tickets', { window: '7d' }],
-      ['metrics_tickets', { window: '7d', limit: 200 }],
+      ['metrics_tickets', { window: '7d', limit: 100 }],
     ];
     for (const [name, args] of calls) {
       const r = await mcp.call(admin, name, args);
@@ -276,6 +277,44 @@ test('size budget: a large store (3,000 done tickets, 300 leads, a month of snap
     assert.deepEqual([tk.rows.length, tk.total > 2000], [TICKETS_DEFAULT, true]);
     const ov = data(await mcp.call(admin, 'metrics_overview', { window: '7d' }));
     assert.ok(ov.flow.done > 2000);
+    // Paging past the service's 200 rows: three pages of (up to) 100, each cut to the size budget, carry on where the last one stopped.
+    const want = [...h.lab.metrics.tickets('all', '7d', {})!.rows, ...h.lab.metrics.tickets('all', '7d', { offset: 200 })!.rows].map((r) => r.ticket);
+    const got: string[] = [];
+    let page = data(await mcp.call(admin, 'metrics_tickets', { window: '7d', limit: 100 }));
+    got.push(...page.rows.map((r: any) => r.ticket));
+    for (let i = 0; i < 2; i++) {
+      assert.equal(typeof page.next_cursor, 'string');
+      page = data(await mcp.call(admin, 'metrics_tickets', { window: '7d', limit: 100, cursor: page.next_cursor }));
+      assert.ok(JSON.stringify(page).length < MAX_RESULT_CHARS);
+      got.push(...page.rows.map((r: any) => r.ticket));
+    }
+    assert.ok(got.length > 200, `${got.length} rows over three pages`);
+    assert.deepEqual(got, want.slice(0, got.length), 'no row skipped or repeated across the pages');
+  } finally {
+    done();
+  }
+});
+
+test('metrics_tickets pages with next_cursor; a cursor is bound to its query; a lead pages too', async () => {
+  const { mcp, done } = await harness();
+  try {
+    const admin = mcp.token('read').secret;
+    const lead = (await mcp.agentToken('docker/api', 'L1')).secret;
+    for (const token of [admin, lead]) {
+      const first = data(await mcp.call(token, 'metrics_tickets', { limit: 2 }));
+      assert.deepEqual([first.total, first.rows.map((r: any) => r.ticket)], [4, ['T-1', 'T-2']]);
+      assert.equal(typeof first.next_cursor, 'string');
+      const second = data(await mcp.call(token, 'metrics_tickets', { limit: 2, cursor: first.next_cursor }));
+      assert.deepEqual(second.rows.map((r: any) => r.ticket), ['T-8', 'T-3']);
+      assert.equal(second.next_cursor, null, 'the last page');
+      assert.match(second.summary, /from row 3/);
+      assert.equal(code(await mcp.call(token, 'metrics_tickets', { limit: 2, cursor: first.next_cursor, stage: 'resolve' })), 'INVALID_CURSOR');
+    }
+    // A worker with a cursor a lead got: still the same NOT_FOUND (the reach is checked before anything else).
+    const worker = (await mcp.agentToken('docker/api', 'W1')).secret;
+    const first = data(await mcp.call(admin, 'metrics_tickets', { limit: 2 }));
+    assert.equal(code(await mcp.call(worker, 'metrics_tickets', { limit: 2, cursor: first.next_cursor })), 'NOT_FOUND');
+    assert.equal(code(await mcp.call(worker, 'metrics_tickets', { group: 'high' })), 'NOT_FOUND');
   } finally {
     done();
   }

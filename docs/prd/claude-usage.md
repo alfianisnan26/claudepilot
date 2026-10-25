@@ -1217,6 +1217,13 @@ slices of T-2360; they read the same wire types (`packages/contracts/src/metrics
   agent actor gets the 404 too, the Portal MCP slice decides its reach): `GET /api/lab/metrics/programs`, `/overview?program=&window=24h|7d`,
   `/flow?program=&window=&groupBy=program|lead|type|priority`, `/trend?program=&metric=&window=24h|7d|30d`,
   `/tickets?program=&window=&stage=&groupBy=&group=`, `/insights?program=&window=`. A bad parameter is a 422.
+- **Portal MCP (slice 3, `lab/metricsTools.ts`, read only, declared in `lab/authz.ts`).** `metrics_overview`, `metrics_flow_times`,
+  `metrics_trend`, `metrics_insights` and `metrics_tickets` (the drill-down, paged with `cursor`, 25 rows a page, at most 100) read
+  `Lab.metrics`, never a copy (table in [Portal MCP](portal-mcp.md)). Reach, decided here: the ticket names the leads and the operator as
+  readers, so the tools are `agent` scope with the reach in the handler: an agent's token only for a LEAD session (a top-level chat, no
+  parent session); a worker or an unknown session gets the same `NOT_FOUND`; an admin's or the manager's token only with `view` on `usage`.
+  Short by default, hours with two decimals, every figure the portal lacks `unavailable:<reason>`, never 0; counts, durations, ticket ids
+  and program ids only (no ticket text, no session title); every result kept under the MCP size limit.
 - **Not built in slice 1.** The per-model cost and review pass rate, and the "escalated to Opus" count; the web view; the MCP tools.
 - Source: `lab/flowMetrics.ts` (pure), `lab/flowMetricsData.ts` (the loader), `lab/metricsSnapshots.ts`, `lab/metricsSettings.ts`,
   `lab/metricsService.ts` (`Lab.metrics`), `lab/routes.ts`; tests `lab/flowMetrics.test.ts` (golden stages with the left-out cases and
