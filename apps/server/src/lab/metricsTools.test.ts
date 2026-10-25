@@ -8,8 +8,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, test } from 'node:test';
-import { clearResolvers, declaredToolPolicies } from '../authz/seam.js';
-import { ToolRegistry } from '../portalmcp/registry.js';
+import { clearResolvers, declaredToolPolicies, singleOwner, useAuthz } from '../authz/seam.js';
+import { ToolRegistry, type PortalToolContext } from '../portalmcp/registry.js';
 import { MAX_RESULT_CHARS } from '../portalmcp/server.js';
 import { portalMcpHarness } from '../portalmcp/testkit.js';
 import { generateSecretKey, parseSecretKey } from '../store/secretBox.js';
@@ -18,7 +18,7 @@ import { LAB_TOOL_POLICIES } from './authz.js';
 import { Lab } from './index.js';
 import { Metrics } from './metricsService.js';
 import { writeSnapshots } from './metricsSnapshots.js';
-import { fitRows, hours, registerMetricsTools, TICKETS_DEFAULT } from './metricsTools.js';
+import { fitRows, hours, metricsReach, registerMetricsTools, TICKETS_DEFAULT } from './metricsTools.js';
 
 const H = 3_600_000;
 const NOW = Date.UTC(2026, 9, 14, 12);
@@ -35,21 +35,41 @@ async function seeded() {
   const store = await Store.open({ dataDir, secretKey: parseSecretKey(generateSecretKey()) });
   const db = store.db!;
   const lab = new Lab({ store, now: () => NOW, settings: { get: () => undefined } });
-  const ticket = (n: number, status: string, o: { createdAgo: number; closedAgo?: number; type?: string; priority?: string; tags?: string[]; updatedAgo?: number }) => {
+  const ticket = (
+    n: number,
+    status: string,
+    o: { createdAgo: number; closedAgo?: number; type?: string; priority?: string; tags?: string[]; updatedAgo?: number },
+  ) => {
     db.prepare(
       `INSERT INTO tickets (number, type, priority, priority_rank, status, summary, source, reporter_kind, reporter_label, created_at, updated_at, closed_at)
        VALUES (?, ?, ?, 2, ?, 'Seed text that must never reach a result', 'human', 'ui', 'Admin', ?, ?, ?)`,
-    ).run(n, o.type ?? 'feature', o.priority ?? 'normal', status, iso(at(o.createdAgo)), iso(at(o.updatedAgo ?? o.closedAgo ?? 0)), o.closedAgo === undefined ? null : iso(at(o.closedAgo)));
+    ).run(
+      n,
+      o.type ?? 'feature',
+      o.priority ?? 'normal',
+      status,
+      iso(at(o.createdAgo)),
+      iso(at(o.updatedAgo ?? o.closedAgo ?? 0)),
+      o.closedAgo === undefined ? null : iso(at(o.closedAgo)),
+    );
     for (const t of o.tags ?? []) db.prepare('INSERT INTO ticket_tags (ticket_number, tag) VALUES (?, ?)').run(n, t);
   };
   const status = (n: number, hoursAgo: number, from: string, to: string) =>
-    db.prepare(`INSERT INTO ticket_events (ticket_number, at, kind, actor, actor_label, data) VALUES (?, ?, 'status', 'session:W1', 'x', ?)`).run(n, iso(at(hoursAgo)), JSON.stringify({ from, to }));
+    db
+      .prepare(
+        `INSERT INTO ticket_events (ticket_number, at, kind, actor, actor_label, data) VALUES (?, ?, 'status', 'session:W1', 'x', ?)`,
+      )
+      .run(n, iso(at(hoursAgo)), JSON.stringify({ from, to }));
   const comment = (n: number, hoursAgo: number, body: string, o: { actor?: string; data?: unknown } = {}) =>
     db
       .prepare(`INSERT INTO ticket_events (ticket_number, at, kind, actor, actor_label, body, data) VALUES (?, ?, 'comment', ?, 'x', ?, ?)`)
       .run(n, iso(at(hoursAgo)), o.actor ?? 'session:W1', body, o.data === undefined ? null : JSON.stringify(o.data));
   const merged = (n: number, hoursAgo: number) =>
-    db.prepare(`INSERT INTO ticket_merge_status (ticket_number, repo, pr, pr_head, state, actor, actor_label, at) VALUES (?, 'claudepilot', 7, ?, 'merged', 'system', 'gate', ?)`).run(n, SHA, iso(at(hoursAgo)));
+    db
+      .prepare(
+        `INSERT INTO ticket_merge_status (ticket_number, repo, pr, pr_head, state, actor, actor_label, at) VALUES (?, 'claudepilot', 7, ?, 'merged', 'system', 'gate', ?)`,
+      )
+      .run(n, SHA, iso(at(hoursAgo)));
   const session = (id: string, parent: string | null) =>
     db
       .prepare(
@@ -118,7 +138,7 @@ test('policy: an admin token and a lead read; a worker and an unknown session ge
     const args: Record<string, Record<string, unknown>> = { metrics_trend: { metric: 'effectiveness' } };
     for (const name of TOOLS) {
       assert.equal(data(await mcp.call(admin, name, args[name] ?? {})).reach, 'portal', name);
-      assert.equal(data(await mcp.call(lead, name, args[name] ?? {})).reach, 'lead', name);
+      assert.equal(data(await mcp.call(lead, name, args[name] ?? {})).reach, 'crew', name);
       const w = await mcp.call(worker, name, args[name] ?? {});
       const s = await mcp.call(stranger, name, args[name] ?? {});
       assert.equal(code(w), 'NOT_FOUND', `${name}: a worker is refused`);
@@ -126,6 +146,118 @@ test('policy: an admin token and a lead read; a worker and an unknown session ge
     }
     // A program that is not there: NOT_FOUND for the admin too.
     assert.equal(code(await mcp.call(admin, 'metrics_overview', { program: 'nope' })), 'NOT_FOUND');
+  } finally {
+    done();
+  }
+});
+
+test('policy (T-2360 review HIGH): a lead whose owner may not view usage gets the same NOT_FOUND as an unknown session', async () => {
+  const { h, mcp, done } = await harness();
+  try {
+    // L3 is a top-level chat of another person (u_member): in the single-owner seam only the founding user holds `view` on `usage`.
+    h.db
+      .prepare(
+        `INSERT INTO chat_sessions (id, workspace_id, title, state, state_since, created_at, last_activity_at, claude_id, parent_id, continued_from, max_workers, subagents, owner_id) VALUES ('L3', 'docker/api', 't', 'ended', ?, ?, ?, 'c1', NULL, NULL, 2, 0, 'u_member')`,
+      )
+      .run(iso(at(20)), iso(at(20)), iso(at(1)));
+    const member = (await mcp.agentToken('docker/api', 'L3')).secret;
+    const stranger = (await mcp.agentToken('docker/api', 'X9')).secret;
+    for (const name of TOOLS) {
+      const args = name === 'metrics_trend' ? { metric: 'effectiveness' } : { program: 'all' };
+      const m = await mcp.call(member, name, args);
+      assert.equal(code(m), 'NOT_FOUND', `${name}: a lead without the owner's usage view is refused`);
+      assert.deepEqual(m.result, (await mcp.call(stranger, name, args)).result, `${name}: reads exactly like an unknown session`);
+    }
+    assert.equal(h.lab.metrics.leadScope('L3'), null);
+    assert.deepEqual(h.lab.metrics.leadScope('L1'), { crew: 'L1' });
+  } finally {
+    done();
+  }
+});
+
+test('policy (T-2360 review HIGH): an admin token and a manager token without usage view are refused', async () => {
+  const { h, done } = await harness();
+  const ctx = (principal: Record<string, unknown>) =>
+    ({
+      isAgent: false,
+      sessionId: null,
+      principal: { tokenId: 't1', scope: 'read', workspaceId: null, sessionId: null, ...principal },
+    }) as unknown as PortalToolContext;
+  try {
+    // A manager acts as its person: one who is not the founding user holds no `view` on `usage`.
+    assert.throws(
+      () => metricsReach(ctx({ kind: 'manager', userId: 'u_member' }), h.lab),
+      (e: any) => e.code === 'NOT_FOUND',
+    );
+    // The founding user's manager and admin token read the portal.
+    assert.equal(metricsReach(ctx({ kind: 'manager', userId: 'u_owner' }), h.lab).reach, 'portal');
+    assert.equal(metricsReach(ctx({ kind: 'user' }), h.lab).reach, 'portal');
+    // An authz layer that withholds `usage`: the admin's token and the founding user's manager are refused too.
+    const was = useAuthz({
+      ...singleOwner,
+      can: (a, v, o) =>
+        o.type === 'platform' && o.id === 'usage' ? { allow: false, reason: 'no_right', level: 'none' } : singleOwner.can(a, v, o),
+    });
+    try {
+      assert.throws(
+        () => metricsReach(ctx({ kind: 'user' }), h.lab),
+        (e: any) => e.code === 'NOT_FOUND',
+      );
+      assert.throws(
+        () => metricsReach(ctx({ kind: 'manager', userId: 'u_owner' }), h.lab),
+        (e: any) => e.code === 'NOT_FOUND',
+      );
+      // And a lead whose owner it withholds `usage` from: refused (the owner's right, not the session's, decides).
+      assert.equal(h.lab.metrics.leadScope('L1'), null);
+    } finally {
+      useAuthz(was);
+    }
+  } finally {
+    done();
+  }
+});
+
+test('policy (T-2360 review HIGH): a lead reads only its own crew’s tickets, no paces, no score before, no trend', async () => {
+  const { h, mcp, done } = await harness();
+  try {
+    // A second crew: lead L2 with worker W2, holding T-3 (assigned).
+    for (const [id, parent] of [
+      ['L2', null],
+      ['W2', 'L2'],
+    ] as const)
+      h.db
+        .prepare(
+          `INSERT INTO chat_sessions (id, workspace_id, title, state, state_since, created_at, last_activity_at, claude_id, parent_id, continued_from, max_workers, subagents) VALUES (?, 'docker/api', 't', 'ended', ?, ?, ?, 'c1', ?, NULL, 2, 0)`,
+        )
+        .run(id, iso(at(20)), iso(at(20)), iso(at(1)), parent);
+    h.db.prepare(`UPDATE tickets SET assignee_kind = 'session', assignee_ref = 'W2' WHERE number = 3`).run();
+    // A whole-program snapshot a window ago: an admin's "previous", never a crew's.
+    writeSnapshots(h.db, at(24), [{ program: 'all', values: { efficiency: 40, effectiveness: 55 } as never }]);
+    const admin = mcp.token('read').secret;
+    const l1 = (await mcp.agentToken('docker/api', 'L1')).secret;
+    const l2 = (await mcp.agentToken('docker/api', 'L2')).secret;
+    const ids = async (t: string) => data(await mcp.call(t, 'metrics_tickets', { window: '7d', limit: 50 })).rows.map((r: any) => r.ticket);
+    assert.deepEqual(await ids(l1), ['T-1']);
+    assert.deepEqual(await ids(l2), ['T-3']);
+    assert.ok((await ids(admin)).length >= 4);
+    const f1 = data(await mcp.call(l1, 'metrics_flow_times', { window: '7d', group_by: 'lead', full: true }));
+    assert.equal(f1.total.done, 1);
+    assert.ok(
+      f1.groups.every((g: any) => !String(g.key).includes('L2')),
+      'no group of another crew',
+    );
+    const o1 = data(await mcp.call(l1, 'metrics_overview', { full: true }));
+    assert.equal(o1.effectiveness.previous, null, 'no whole-program score a window ago');
+    assert.ok(!o1.crew || o1.crew.programs.every((p: string) => p === 'L1'), 'only its own crew');
+    assert.equal(data(await mcp.call(admin, 'metrics_overview', {})).effectiveness.previous, 55);
+    const t1 = data(await mcp.call(l1, 'metrics_trend', { metric: 'effectiveness' }));
+    assert.deepEqual([t1.points, t1.unavailable], [[], 'unavailable:no_source']);
+    const i2 = data(await mcp.call(l2, 'metrics_insights', { window: '7d' }));
+    for (const it of i2.items)
+      assert.ok(
+        it.tickets.every((t: string) => t === 'T-3'),
+        JSON.stringify(it),
+      );
   } finally {
     done();
   }
@@ -184,8 +316,22 @@ test('shapes: overview, flow times, trend and tickets are short, in hours, with 
 
     const fl = data(await mcp.call(admin, 'metrics_flow_times', { group_by: 'lead' }));
     assert.equal(fl.group_by, 'lead');
-    assert.deepEqual(fl.groups.map((g: any) => [g.key, g.done]), [['unrecorded', 2], ['area-lab', 1]]);
-    assert.deepEqual(fl.groups.find((g: any) => g.key === 'area-lab').p50_h, { start: 1, report: 1.5, implement: 3, test: 2, deliver: 2, resolve: 9, work: 8 });
+    assert.deepEqual(
+      fl.groups.map((g: any) => [g.key, g.done]),
+      [
+        ['unrecorded', 2],
+        ['area-lab', 1],
+      ],
+    );
+    assert.deepEqual(fl.groups.find((g: any) => g.key === 'area-lab').p50_h, {
+      start: 1,
+      report: 1.5,
+      implement: 3,
+      test: 2,
+      deliver: 2,
+      resolve: 9,
+      work: 8,
+    });
     const flFull = data(await mcp.call(admin, 'metrics_flow_times', { group_by: 'type', full: true }));
     assert.deepEqual(flFull.groups.map((g: any) => g.key).sort(), ['bug', 'feature']);
     assert.equal(flFull.groups[0].stages.resolve.n >= 1, true);
@@ -194,18 +340,27 @@ test('shapes: overview, flow times, trend and tickets are short, in hours, with 
     writeSnapshots(h.db, at(1), [{ program: 'all', values: { effectiveness: 70 } }]);
     const tr = data(await mcp.call(admin, 'metrics_trend', { metric: 'effectiveness' }));
     assert.deepEqual([tr.window, tr.unit, tr.first, tr.last, tr.min, tr.max], ['7d', 'score 0-100', 60, 70, 60, 70]);
-    assert.deepEqual(tr.points, [[at(2), 60], [at(1), 70]]);
+    assert.deepEqual(tr.points, [
+      [at(2), 60],
+      [at(1), 70],
+    ]);
     const none = data(await mcp.call(admin, 'metrics_trend', { metric: 'resolveP50', window: '30d', program: 'konfersi' }));
     assert.deepEqual([none.points, none.last, none.unit], [[], null, 'ms']);
     assert.match(none.summary, /unavailable/);
 
     const tk = data(await mcp.call(admin, 'metrics_tickets', { stage: 'resolve', group_by: 'priority', group: 'high' }));
-    assert.deepEqual(tk.rows.map((r: any) => r.ticket), ['T-1']);
+    assert.deepEqual(
+      tk.rows.map((r: any) => r.ticket),
+      ['T-1'],
+    );
     assert.deepEqual(tk.rows[0].h, { start: 1, report: 1.5, implement: 3, test: 2, deliver: 2, resolve: 9, work: 8 });
     assert.deepEqual([tk.rows[0].rounds, tk.rows[0].fails, tk.rows[0].closed], [2, 1, iso(at(1))]);
 
     const all = JSON.stringify([ov, full, fl, flFull, tr, tk]);
-    assert.ok(!all.includes('Seed text') && !all.includes('A title an agent chose') && !all.includes('Plan: the loader'), 'no ticket text and no session title');
+    assert.ok(
+      !all.includes('Seed text') && !all.includes('A title an agent chose') && !all.includes('Plan: the loader'),
+      'no ticket text and no session title',
+    );
   } finally {
     done();
   }
@@ -219,11 +374,19 @@ test('insights on the golden fixture: blocked share and review wait (warn) befor
     assert.deepEqual(ins.items, [
       { kind: 'blocked_share', severity: 'warn', text: '33 % of open work is blocked (1 of 3).', tickets: ['T-6'] },
       { kind: 'review_wait', severity: 'warn', text: 'T-5 has waited 5 h in review (target 2 h).', tickets: ['T-5'] },
-      { kind: 'slowest_stage', severity: 'info', text: 'Slowest stage: implement, median 3 h (p90 3 h) over 1 tickets; 2 left out with no implement recorded.', tickets: [] },
+      {
+        kind: 'slowest_stage',
+        severity: 'info',
+        text: 'Slowest stage: implement, median 3 h (p90 3 h) over 1 tickets; 2 left out with no implement recorded.',
+        tickets: [],
+      },
     ]);
     assert.equal(ins.summary, '3 findings for all over the last 24h.');
     const memor = data(await mcp.call(admin, 'metrics_insights', { program: 'memor-id' }));
-    assert.deepEqual(memor.items.map((i: any) => i.kind), ['no_data']);
+    assert.deepEqual(
+      memor.items.map((i: any) => i.kind),
+      ['no_data'],
+    );
   } finally {
     done();
   }
@@ -238,7 +401,9 @@ test('size budget: a large store (3,000 done tickets, 300 leads, a month of snap
     const tag = h.db.prepare('INSERT INTO ticket_tags (ticket_number, tag) VALUES (?, ?)');
     // Every ticket type the tickets table's CHECK allows.
     const TYPES = ['task', 'bug', 'feature', 'question', 'request', 'incident', 'approval', 'chore'];
-    const ev = h.db.prepare(`INSERT INTO ticket_events (ticket_number, at, kind, actor, actor_label, data) VALUES (?, ?, 'status', 'session:W1', 'x', ?)`);
+    const ev = h.db.prepare(
+      `INSERT INTO ticket_events (ticket_number, at, kind, actor, actor_label, data) VALUES (?, ?, 'status', 'session:W1', 'x', ?)`,
+    );
     h.db.exec('BEGIN');
     for (let i = 0; i < 3000; i++) {
       const n = 1000 + i;
@@ -274,7 +439,10 @@ test('size budget: a large store (3,000 done tickets, 300 leads, a month of snap
     assert.equal(short.groups.length, 30, 'the short form keeps 30 groups');
     assert.ok(h.lab.metrics.flow('all', '7d', 'lead')!.groups.length > 300, 'the 300 seeded leads and the fixture’s');
     const fullLead = data(await mcp.call(admin, 'metrics_flow_times', { window: '7d', group_by: 'lead', full: true }));
-    assert.ok(fullLead.omitted > 0 && fullLead.groups.length + fullLead.omitted === h.lab.metrics.flow('all', '7d', 'lead')!.groups.length, 'full: what does not fit is counted in omitted');
+    assert.ok(
+      fullLead.omitted > 0 && fullLead.groups.length + fullLead.omitted === h.lab.metrics.flow('all', '7d', 'lead')!.groups.length,
+      'full: what does not fit is counted in omitted',
+    );
     const tr = data(await mcp.call(admin, 'metrics_trend', { metric: 'startP50', window: '30d' }));
     assert.ok(tr.points.length <= 200 && tr.points.length > 150, `${tr.points.length} points`);
     const tk = data(await mcp.call(admin, 'metrics_tickets', { window: '7d' }));
@@ -282,7 +450,9 @@ test('size budget: a large store (3,000 done tickets, 300 leads, a month of snap
     const ov = data(await mcp.call(admin, 'metrics_overview', { window: '7d' }));
     assert.ok(ov.flow.done > 2000);
     // Paging past the service's 200 rows: three pages of (up to) 100, each cut to the size budget, carry on where the last one stopped.
-    const want = [...h.lab.metrics.tickets('all', '7d', {})!.rows, ...h.lab.metrics.tickets('all', '7d', { offset: 200 })!.rows].map((r) => r.ticket);
+    const want = [...h.lab.metrics.tickets('all', '7d', {})!.rows, ...h.lab.metrics.tickets('all', '7d', { offset: 200 })!.rows].map(
+      (r) => r.ticket,
+    );
     const got: string[] = [];
     let page = data(await mcp.call(admin, 'metrics_tickets', { window: '7d', limit: 100 }));
     got.push(...page.rows.map((r: any) => r.ticket));
@@ -299,20 +469,29 @@ test('size budget: a large store (3,000 done tickets, 300 leads, a month of snap
   }
 });
 
-test('metrics_tickets pages with next_cursor; a cursor is bound to its query; a lead pages too', async () => {
+test('metrics_tickets pages with next_cursor; a cursor is bound to its query; a lead pages its own crew', async () => {
   const { mcp, done } = await harness();
   try {
     const admin = mcp.token('read').secret;
     const lead = (await mcp.agentToken('docker/api', 'L1')).secret;
-    for (const token of [admin, lead]) {
+    // The lead's crew (L1, W1) held T-1 only: one row, no next page.
+    const own = data(await mcp.call(lead, 'metrics_tickets', { limit: 2 }));
+    assert.deepEqual([own.total, own.rows.map((r: any) => r.ticket), own.next_cursor], [1, ['T-1'], null]);
+    for (const token of [admin]) {
       const first = data(await mcp.call(token, 'metrics_tickets', { limit: 2 }));
       assert.deepEqual([first.total, first.rows.map((r: any) => r.ticket)], [4, ['T-1', 'T-2']]);
       assert.equal(typeof first.next_cursor, 'string');
       const second = data(await mcp.call(token, 'metrics_tickets', { limit: 2, cursor: first.next_cursor }));
-      assert.deepEqual(second.rows.map((r: any) => r.ticket), ['T-8', 'T-3']);
+      assert.deepEqual(
+        second.rows.map((r: any) => r.ticket),
+        ['T-8', 'T-3'],
+      );
       assert.equal(second.next_cursor, null, 'the last page');
       assert.match(second.summary, /from row 3/);
-      assert.equal(code(await mcp.call(token, 'metrics_tickets', { limit: 2, cursor: first.next_cursor, stage: 'resolve' })), 'INVALID_CURSOR');
+      assert.equal(
+        code(await mcp.call(token, 'metrics_tickets', { limit: 2, cursor: first.next_cursor, stage: 'resolve' })),
+        'INVALID_CURSOR',
+      );
     }
     // A worker with a cursor a lead got: still the same NOT_FOUND (the reach is checked before anything else).
     const worker = (await mcp.agentToken('docker/api', 'W1')).secret;
@@ -338,7 +517,13 @@ test('a failed closed-ticket read: overview flow, flow_times total and metrics_t
       return typeof v === 'function' ? (v as (...a: unknown[]) => unknown).bind(target) : v;
     },
   });
-  const metrics = new Metrics({ store: { db, writable: true } as unknown as Store, now: () => NOW, settings: null, paces: null, log: () => {} });
+  const metrics = new Metrics({
+    store: { db, writable: true } as unknown as Store,
+    now: () => NOW,
+    settings: null,
+    paces: null,
+    log: () => {},
+  });
   const registry = new ToolRegistry();
   const mcp = await portalMcpHarness({ registry });
   registerMetricsTools({ metrics } as unknown as Lab, registry);
@@ -356,9 +541,15 @@ test('a failed closed-ticket read: overview flow, flow_times total and metrics_t
       assert.deepEqual([data(await mcp.call(token, 'metrics_flow_times', { full: true })).total], ['unavailable:no_source']);
       const tk = data(await mcp.call(token, 'metrics_tickets', { stage: 'resolve', limit: 2 }));
       assert.deepEqual([tk.total, tk.rows, tk.next_cursor], ['unavailable:no_source', [], null]);
-      assert.equal(tk.summary, 'Tickets closed in the last 24h for all with resolve recorded: unavailable (the closed tickets could not be read).');
+      assert.equal(
+        tk.summary,
+        'Tickets closed in the last 24h for all with resolve recorded: unavailable (the closed tickets could not be read).',
+      );
       const ins = data(await mcp.call(token, 'metrics_insights', {}));
-      assert.deepEqual(ins.items.map((i: any) => i.kind), ['no_data']);
+      assert.deepEqual(
+        ins.items.map((i: any) => i.kind),
+        ['no_data'],
+      );
       for (const r of [ov, ft, tk, ins]) assert.doesNotMatch(r.summary, /\bnull\b|\b0 (done|tickets?)\b/, r.summary);
     }
     // The refusal is unchanged: a worker still gets NOT_FOUND.

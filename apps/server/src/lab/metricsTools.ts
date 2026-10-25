@@ -4,8 +4,10 @@
 // Who may call (the policy, authz.ts): these are whole-portal numbers (every program's tickets, every crew, every Claude's pace), which the
 // REST routes give only to a reader of the platform area `usage`. The ticket's readers are the leads (agents) and the operator, and the seam
 // boxes every agent out of a platform area, so the tools are `scope: 'agent'` with the reach checked here:
-// - an agent's per-session token: only when its session is a lead (a top-level chat: no parent session). A worker gets NOT_FOUND, the
-//   dispatch's own "Not found." (its sub-agents share the lead's token, so a lead's helpers read them too);
+// - an agent's per-session token: only when its session is a lead (a top-level chat: no parent session) AND the person who owns that session
+//   may view `usage` (the routes' reader), and then only its own crew: the tickets its lineage held (the crew scorecard's own program), no
+//   paces, no score a window ago and no trend (both whole-program snapshots). A worker gets NOT_FOUND, the dispatch's own "Not found." (its
+//   sub-agents share the lead's token, so a lead's helpers read them too);
 // - an admin's (cpat_) or the manager's (cpmt_) token: only with `view` on `usage` through can(), as the routes ask.
 // Results are short by default (T-282) and kept under the result limit (FULL_BUDGET_CHARS); durations are hours with two decimals; ticket
 // ids and program ids only (no ticket text, no session titles); a figure the portal does not have is `unavailable:<reason>`, never 0.
@@ -31,10 +33,15 @@ import { PAGE_DEFAULT, PAGE_MAX, pageInput, pageWindow } from '../portalmcp/pagi
 import { PortalToolError, portalTools, z, type PortalToolContext, type ToolRegistry } from '../portalmcp/registry.js';
 import { ticketKeyField } from '../tickets/keys.js';
 import type { Lab } from './index.js';
+import type { MetricsScope } from './metricsService.js';
 import { FULL_BUDGET_CHARS, withoutSources } from './portalTools.js';
 
 const ID = /^[A-Za-z0-9_.:=-]{1,120}$/;
-const programArg = z.string().regex(ID).optional().describe('A program id (metrics programs: all, a setting entry, a program-* tag, a flow program). Default: all.');
+const programArg = z
+  .string()
+  .regex(ID)
+  .optional()
+  .describe('A program id (metrics programs: all, a setting entry, a program-* tag, a flow program). Default: all.');
 const windowArg = z.enum(METRICS_WINDOWS).optional().describe('24h or 7d, compared with the window before it. Default 24h.');
 
 /** Short rows of the drill-down by default, at most this many with `limit`. */
@@ -46,7 +53,8 @@ const CURSOR_ROOM = 500;
 export const GROUPS_SHORT = 30;
 
 /** ms to hours, two decimals; null stays null. */
-export const hours = (ms: number | null | undefined): number | null => (ms === null || ms === undefined ? null : Math.round(ms / 36_000) / 100);
+export const hours = (ms: number | null | undefined): number | null =>
+  ms === null || ms === undefined ? null : Math.round(ms / 36_000) / 100;
 const iso = (ms: number) => new Date(ms).toISOString();
 /** A figure in a short row: its value, or `unavailable:<reason>`. */
 const fig = (f: CrewFigure) => (f.basis === 'unavailable' ? `unavailable:${f.reason ?? 'no_source'}` : f.value);
@@ -55,17 +63,19 @@ const gone = (u: MetricsUnavailable | undefined) => `unavailable:${u?.reason ?? 
 const UNREAD = 'unavailable (the closed tickets could not be read)';
 
 /**
- * The reach (see the header): an agent's token only for a lead session, an admin's or manager's only with `view` on `usage`. A refusal is the
- * dispatch's own NOT_FOUND ("Not found."), so it reads like any refused tool.
+ * The reach (see the header): an agent's token only for a lead session whose owner may view `usage`, and then only its own crew's tickets;
+ * an admin's or manager's only with `view` on `usage`. A refusal is the dispatch's own NOT_FOUND ("Not found."), so it reads like any
+ * refused tool.
  */
-export function metricsReach(ctx: PortalToolContext, lab: Lab): 'lead' | 'portal' {
+export function metricsReach(ctx: PortalToolContext, lab: Lab): { reach: 'crew' | 'portal'; scope: MetricsScope } {
   const no = () => new PortalToolError('NOT_FOUND', 'Not found.');
   if (ctx.isAgent) {
-    if (!ctx.sessionId || !lab.metrics.leadSession(ctx.sessionId)) throw no();
-    return 'lead';
+    const scope = ctx.sessionId ? lab.metrics.leadScope(ctx.sessionId) : null;
+    if (!scope) throw no();
+    return { reach: 'crew', scope };
   }
   if (!can(actorOfPrincipal(ctx.principal), 'view', platformRef('usage')).allow) throw no();
-  return 'portal';
+  return { reach: 'portal', scope: null };
 }
 
 const noProgram = () => new PortalToolError('NOT_FOUND', 'No such program.');
@@ -95,10 +105,24 @@ export function flowShort(g: MetricsFlowGroup) {
     stages: Object.fromEntries(
       METRICS_STAGES.map((st) => {
         const c = stageRow(g.current, st);
-        return [st, { n: c.n, left_out: c.excluded, p50_h: hours(c.medianMs), p90_h: hours(c.p90Ms), before_p50_h: hours(stageRow(g.previous, st).medianMs) }];
+        return [
+          st,
+          {
+            n: c.n,
+            left_out: c.excluded,
+            p50_h: hours(c.medianMs),
+            p90_h: hours(c.p90Ms),
+            before_p50_h: hours(stageRow(g.previous, st).medianMs),
+          },
+        ];
       }),
     ),
-    rounds: { n: g.current.rounds.n, median: g.current.rounds.medianRounds, reworked: g.current.rounds.reworked, fails: g.current.rounds.fails },
+    rounds: {
+      n: g.current.rounds.n,
+      median: g.current.rounds.medianRounds,
+      reworked: g.current.rounds.reworked,
+      fails: g.current.rounds.fails,
+    },
   };
 }
 
@@ -130,11 +154,21 @@ const ticketShort = (r: MetricsTicketRow) => ({
 function withoutTitles<T>(x: T): T {
   if (Array.isArray(x)) return x.map(withoutTitles) as T;
   if (!x || typeof x !== 'object') return x;
-  return Object.fromEntries(Object.entries(x as Record<string, unknown>).filter(([k]) => k !== 'title').map(([k, v]) => [k, withoutTitles(v)])) as T;
+  return Object.fromEntries(
+    Object.entries(x as Record<string, unknown>)
+      .filter(([k]) => k !== 'title')
+      .map(([k, v]) => [k, withoutTitles(v)]),
+  ) as T;
 }
 
 /** Keeps `rows` in order while the whole result's JSON is at or under `max`; the count left out goes into `omitted` with how to see them. */
-export function fitRows<T>(head: Record<string, unknown>, key: string, rows: readonly T[], max: number, more: string): Record<string, unknown> {
+export function fitRows<T>(
+  head: Record<string, unknown>,
+  key: string,
+  rows: readonly T[],
+  max: number,
+  more: string,
+): Record<string, unknown> {
   let lo = 0,
     hi = rows.length;
   const make = (n: number) => ({ ...head, [key]: rows.slice(0, n), ...(n < rows.length ? { omitted: rows.length - n, more } : {}) });
@@ -149,7 +183,8 @@ export function fitRows<T>(head: Record<string, unknown>, key: string, rows: rea
 }
 
 export function registerMetricsTools(lab: Lab, registry: ToolRegistry = portalTools): void {
-  const reachNote = 'An agent’s token: a lead session only (a worker gets not found); an admin’s: with view on usage.';
+  const reachNote =
+    'An agent’s token: a lead session whose owner may view usage, its own crew’s tickets only (a worker gets not found); an admin’s: with view on usage.';
 
   registry.register({
     name: 'metrics_overview',
@@ -159,27 +194,50 @@ export function registerMetricsTools(lab: Lab, registry: ToolRegistry = portalTo
     hints: { readOnly: true, idempotent: true },
     input: z.object({ program: programArg, window: windowArg, ...fullInput }),
     async handler(ctx, args) {
-      const reach = metricsReach(ctx, lab);
-      const ov = found(await lab.metrics.overview(args.program, args.window ?? '24h'));
+      const { reach, scope: crew } = metricsReach(ctx, lab);
+      const ov = found(await lab.metrics.overview(args.program, args.window ?? '24h', crew));
       const p = ov.program;
       const summary = `${p.label} (${p.id}) over the last ${ov.window}: efficiency ${ov.efficiency.value ?? 'unavailable'}, effectiveness ${ov.effectiveness.value ?? 'unavailable'}, ${ov.flow ? `${ov.flow.current.done} done, ${ov.flow.current.wontDo} won't-do` : `done and won't-do ${UNREAD}`}. Dollars are estimates.`;
       if (args.full) {
         const flow = ov.flow ?? gone(ov.flowUnavailable);
         const full = { summary, reach, ...withoutTitles(withoutSources(ov)), flow, basis: ov.basis };
-        return JSON.stringify(full).length <= FULL_BUDGET_CHARS ? full : { summary, reach, ...withoutTitles(withoutSources({ ...ov, crew: null })), flow, basis: ov.basis, cut: ['crew: over the size limit; the short form has its headline.'] };
+        return JSON.stringify(full).length <= FULL_BUDGET_CHARS
+          ? full
+          : {
+              summary,
+              reach,
+              ...withoutTitles(withoutSources({ ...ov, crew: null })),
+              flow,
+              basis: ov.basis,
+              cut: ['crew: over the size limit; the short form has its headline.'],
+            };
       }
       const h = ov.crew?.headline;
       return {
         summary,
         reach,
-        program: { id: p.id, label: p.label, kind: p.kind, source: p.source, targets: p.targets, ...(p.unavailable ? { unavailable: `unavailable:${p.unavailable.reason}` } : {}) },
+        program: {
+          id: p.id,
+          label: p.label,
+          kind: p.kind,
+          source: p.source,
+          targets: p.targets,
+          ...(p.unavailable ? { unavailable: `unavailable:${p.unavailable.reason}` } : {}),
+        },
         window: ov.window,
         now: iso(ov.nowMs),
         efficiency: scoreShort(ov.efficiency),
         effectiveness: scoreShort(ov.effectiveness),
         flow: ov.flow ? flowShort(ov.flow) : gone(ov.flowUnavailable),
         open: ov.open
-          ? { open: ov.open.open, in_progress: ov.open.inProgress, blocked: ov.open.blocked, in_review: ov.open.inReview, oldest_review_h: hours(ov.open.oldestReviewMs), stalled: ov.open.stalled }
+          ? {
+              open: ov.open.open,
+              in_progress: ov.open.inProgress,
+              blocked: ov.open.blocked,
+              in_review: ov.open.inReview,
+              oldest_review_h: hours(ov.open.oldestReviewMs),
+              stalled: ov.open.stalled,
+            }
           : p.kind === 'commits'
             ? 'unavailable:no_source'
             : 'unavailable:store_unreadable',
@@ -206,15 +264,35 @@ export function registerMetricsTools(lab: Lab, registry: ToolRegistry = portalTo
     description: `Per stage of the tickets closed done in the last 24h or 7d (start: created to in progress; report: to the first agent comment; implement: in progress to the first verdict or merge; test: first to last passing verdict; deliver: merge to done; resolve: created to done; work: in progress to done): n, left out (a timestamp not recorded, never 0), median and p90 in hours, the median before, test rounds; with group_by (program, lead, type, priority) the same per group, biggest first. Short by default (${GROUPS_SHORT} groups, medians only); full true for every stage of every group that fits. ${reachNote}`,
     scope: 'agent',
     hints: { readOnly: true, idempotent: true },
-    input: z.object({ program: programArg, window: windowArg, group_by: z.enum(METRICS_GROUP_BY).optional().describe('program, lead (area-* tag or lead:<session>), type or priority.'), ...fullInput }),
+    input: z.object({
+      program: programArg,
+      window: windowArg,
+      group_by: z.enum(METRICS_GROUP_BY).optional().describe('program, lead (area-* tag or lead:<session>), type or priority.'),
+      ...fullInput,
+    }),
     handler(ctx, args) {
-      const reach = metricsReach(ctx, lab);
-      const f = found(lab.metrics.flow(args.program, args.window ?? '24h', args.group_by ?? null));
+      const { reach, scope: crew } = metricsReach(ctx, lab);
+      const f = found(lab.metrics.flow(args.program, args.window ?? '24h', args.group_by ?? null, crew));
       if (f.total === null)
-        return { summary: `${f.program} over the last ${f.window}: flow times ${UNREAD}.`, reach, program: f.program, window: f.window, group_by: f.groupBy, total: gone(f.unavailable), groups: [] };
+        return {
+          summary: `${f.program} over the last ${f.window}: flow times ${UNREAD}.`,
+          reach,
+          program: f.program,
+          window: f.window,
+          group_by: f.groupBy,
+          total: gone(f.unavailable),
+          groups: [],
+        };
       const summary = `${f.program} over the last ${f.window}: ${f.total.current.done} done${f.groupBy ? `, ${f.groups.length} ${f.groupBy} group${f.groups.length === 1 ? '' : 's'}` : ''}. Hours.`;
       const head = { summary, reach, program: f.program, window: f.window, group_by: f.groupBy, total: flowShort(f.total) };
-      if (args.full) return fitRows({ ...head, basis: f.basis }, 'groups', f.groups.map((g) => ({ key: g.key, ...flowShort(g) })), FULL_BUDGET_CHARS, 'Over the size limit: ask metrics_tickets with group_by and group for one group.');
+      if (args.full)
+        return fitRows(
+          { ...head, basis: f.basis },
+          'groups',
+          f.groups.map((g) => ({ key: g.key, ...flowShort(g) })),
+          FULL_BUDGET_CHARS,
+          'Over the size limit: ask metrics_tickets with group_by and group for one group.',
+        );
       return fitRows(head, 'groups', f.groups.slice(0, GROUPS_SHORT).map(groupShort), FULL_BUDGET_CHARS, 'Over the size limit.');
     },
   });
@@ -227,9 +305,26 @@ export function registerMetricsTools(lab: Lab, registry: ToolRegistry = portalTo
       reachNote,
     scope: 'agent',
     hints: { readOnly: true, idempotent: true },
-    input: z.object({ metric: z.enum(METRICS_TREND_KEYS), program: programArg, window: z.enum(METRICS_TREND_WINDOWS).optional().describe('24h, 7d or 30d. Default 7d.') }),
+    input: z.object({
+      metric: z.enum(METRICS_TREND_KEYS),
+      program: programArg,
+      window: z.enum(METRICS_TREND_WINDOWS).optional().describe('24h, 7d or 30d. Default 7d.'),
+    }),
     handler(ctx, args) {
-      const reach = metricsReach(ctx, lab);
+      const { reach, scope: crew } = metricsReach(ctx, lab);
+      // The snapshots hold whole-program numbers: an agent's crew read has no trend (never another crew's figures).
+      if (crew) {
+        const p = found(lab.metrics.program(args.program));
+        return {
+          summary: `${args.metric} of ${p.id}: unavailable for an agent's token (the trend is kept for whole programs only).`,
+          reach,
+          program: p.id,
+          metric: args.metric,
+          window: args.window ?? '7d',
+          points: [],
+          unavailable: 'unavailable:no_source',
+        };
+      }
       const t = found(lab.metrics.trend(args.program, args.metric, args.window ?? '7d'));
       const vals = t.points.map((p) => p.value).filter((v): v is number => v !== null);
       const summary = vals.length
@@ -260,11 +355,17 @@ export function registerMetricsTools(lab: Lab, registry: ToolRegistry = portalTo
     hints: { readOnly: true, idempotent: true },
     input: z.object({ program: programArg, window: windowArg }),
     async handler(ctx, args) {
-      const reach = metricsReach(ctx, lab);
-      const ins = found(await lab.metrics.insights(args.program, args.window ?? '24h'));
+      const { reach, scope: crew } = metricsReach(ctx, lab);
+      const ins = found(await lab.metrics.insights(args.program, args.window ?? '24h', crew));
       const act = ins.items.filter((i) => i.severity === 'act').length;
       const summary = `${ins.items.length} finding${ins.items.length === 1 ? '' : 's'} for ${ins.program} over the last ${ins.window}${act ? `, ${act} to act on` : ''}.`;
-      return { summary, reach, program: ins.program, window: ins.window, items: ins.items.map((i) => ({ kind: i.kind, severity: i.severity, text: i.text, tickets: i.tickets })) };
+      return {
+        summary,
+        reach,
+        program: ins.program,
+        window: ins.window,
+        items: ins.items.map((i) => ({ kind: i.kind, severity: i.severity, text: i.text, tickets: i.tickets })),
+      };
     },
   });
 
@@ -283,25 +384,63 @@ export function registerMetricsTools(lab: Lab, registry: ToolRegistry = portalTo
       ...pageInput,
     }),
     handler(ctx, args) {
-      const reach = metricsReach(ctx, lab);
-      if (args.group && !args.group_by) throw new PortalToolError('VALIDATION_FAILED', 'group: needs group_by.', { group: 'needs group_by' });
+      const { reach, scope: crew } = metricsReach(ctx, lab);
+      if (args.group && !args.group_by)
+        throw new PortalToolError('VALIDATION_FAILED', 'group: needs group_by.', { group: 'needs group_by' });
       // The cursor is bound to the query (program, window, stage, group): another query's cursor is INVALID_CURSOR.
-      const page = pageWindow(args, { p: args.program ?? 'all', w: args.window ?? '24h', s: args.stage ?? null, b: args.group_by ?? null, g: args.group ?? null });
+      const page = pageWindow(args, {
+        p: args.program ?? 'all',
+        w: args.window ?? '24h',
+        s: args.stage ?? null,
+        b: args.group_by ?? null,
+        g: args.group ?? null,
+      });
       const t = found(
-        lab.metrics.tickets(args.program, args.window ?? '24h', {
-          ...(args.stage ? { stage: args.stage } : {}),
-          ...(args.group_by ? { groupBy: args.group_by } : {}),
-          ...(args.group ? { group: args.group } : {}),
-          offset: page.offset,
-        }),
+        lab.metrics.tickets(
+          args.program,
+          args.window ?? '24h',
+          {
+            ...(args.stage ? { stage: args.stage } : {}),
+            ...(args.group_by ? { groupBy: args.group_by } : {}),
+            ...(args.group ? { group: args.group } : {}),
+            offset: page.offset,
+          },
+          crew,
+        ),
       );
       const scope = `${t.window} for ${t.program}${t.stage ? ` with ${t.stage} recorded` : ''}${t.group ? ` in ${t.groupBy} ${t.group}` : ''}`;
       if (t.total === null)
-        return { summary: `Tickets closed in the last ${scope}: ${UNREAD}.`, reach, program: t.program, window: t.window, stage: t.stage, group_by: t.groupBy, group: t.group, total: gone(t.unavailable), rows: [], next_cursor: null };
+        return {
+          summary: `Tickets closed in the last ${scope}: ${UNREAD}.`,
+          reach,
+          program: t.program,
+          window: t.window,
+          stage: t.stage,
+          group_by: t.groupBy,
+          group: t.group,
+          total: gone(t.unavailable),
+          rows: [],
+          next_cursor: null,
+        };
       const rows = t.rows.slice(0, page.limit).map(ticketShort);
       const summary = `${t.total} ticket${t.total === 1 ? '' : 's'} closed in the last ${scope}${page.offset ? `, from row ${page.offset + 1}` : ''}. Hours.`;
-      const head = { summary, reach, program: t.program, window: t.window, stage: t.stage, group_by: t.groupBy, group: t.group, total: t.total };
-      const out = fitRows(head, 'rows', rows, FULL_BUDGET_CHARS - CURSOR_ROOM, 'Over the size limit: the rest is on the next page (next_cursor).');
+      const head = {
+        summary,
+        reach,
+        program: t.program,
+        window: t.window,
+        stage: t.stage,
+        group_by: t.groupBy,
+        group: t.group,
+        total: t.total,
+      };
+      const out = fitRows(
+        head,
+        'rows',
+        rows,
+        FULL_BUDGET_CHARS - CURSOR_ROOM,
+        'Over the size limit: the rest is on the next page (next_cursor).',
+      );
       return { ...out, next_cursor: page.next((out.rows as unknown[]).length, t.total) };
     },
   });

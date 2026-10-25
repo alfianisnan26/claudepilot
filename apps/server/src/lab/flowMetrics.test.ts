@@ -100,7 +100,10 @@ test('ticketFlow: nothing after the close counts, and a negative span is left ou
       id: 'T-5',
       starts: [ago(8)],
       firstAgentCommentMs: ago(0.5), // after the close (1 h ago)
-      verdicts: [{ atMs: ago(4), pass: true }, { atMs: ago(0.5), pass: false }],
+      verdicts: [
+        { atMs: ago(4), pass: true },
+        { atMs: ago(0.5), pass: false },
+      ],
       merges: [ago(3), ago(0.2)],
     }),
   );
@@ -113,14 +116,34 @@ test('ticketFlow: nothing after the close counts, and a negative span is left ou
   assert.equal(skew.stages.start, null);
   assert.equal(skew.stages.work, null);
   // A test stage's verdicts before the first start belong to no one.
-  const early = ticketFlow(facts({ id: 'T-7', starts: [ago(5)], verdicts: [{ atMs: ago(7), pass: true }, { atMs: ago(3), pass: true }] }));
+  const early = ticketFlow(
+    facts({
+      id: 'T-7',
+      starts: [ago(5)],
+      verdicts: [
+        { atMs: ago(7), pass: true },
+        { atMs: ago(3), pass: true },
+      ],
+    }),
+  );
   assert.equal(early.stages.implement, 2 * H);
   assert.equal(early.stages.test, 0);
   assert.equal(early.rounds, 1);
 });
 
 test('ticketFlow: a pass after the last merge does not stretch the test stage', () => {
-  const r = ticketFlow(facts({ id: 'T-8', starts: [ago(9)], verdicts: [{ atMs: ago(7), pass: true }, { atMs: ago(5), pass: false }, { atMs: ago(2), pass: true }], merges: [ago(4)] }));
+  const r = ticketFlow(
+    facts({
+      id: 'T-8',
+      starts: [ago(9)],
+      verdicts: [
+        { atMs: ago(7), pass: true },
+        { atMs: ago(5), pass: false },
+        { atMs: ago(2), pass: true },
+      ],
+      merges: [ago(4)],
+    }),
+  );
   assert.equal(r.stages.test, 0, 'the last pass at or before the merge is the first verdict');
   assert.equal(r.rounds, 1);
 });
@@ -142,7 +165,15 @@ const row = (id: string, closedAgo: number, resolveH: number | null, o: Partial<
   closedAtMs: ago(closedAgo),
   tags: [],
   lead: 'area-lab',
-  stages: { start: null, report: null, implement: null, test: null, deliver: null, resolve: resolveH === null ? null : resolveH * H, work: null },
+  stages: {
+    start: null,
+    report: null,
+    implement: null,
+    test: null,
+    deliver: null,
+    resolve: resolveH === null ? null : resolveH * H,
+    work: null,
+  },
   rounds: null,
   fails: null,
   lifeMs: resolveH === null ? null : resolveH * H,
@@ -160,8 +191,16 @@ test('stageStat: n, excluded, median and p90 by nearest rank', () => {
 
 test('flowWindow: won’t-do is counted apart, rounds and rework are summed, the window is [from, to)', () => {
   const rows = [
-    row('T-1', 1, 4, { rounds: 3, fails: 2, stages: { start: null, report: null, implement: null, test: 2 * H, deliver: null, resolve: 4 * H, work: null } }),
-    row('T-2', 2, 6, { rounds: 1, fails: 0, stages: { start: null, report: null, implement: null, test: 0, deliver: null, resolve: 6 * H, work: null } }),
+    row('T-1', 1, 4, {
+      rounds: 3,
+      fails: 2,
+      stages: { start: null, report: null, implement: null, test: 2 * H, deliver: null, resolve: 4 * H, work: null },
+    }),
+    row('T-2', 2, 6, {
+      rounds: 1,
+      fails: 0,
+      stages: { start: null, report: null, implement: null, test: 0, deliver: null, resolve: 6 * H, work: null },
+    }),
     row('T-3', 3, 8),
     row('T-4', 5, null, { status: 'wont_do', lifeMs: 7 * H }),
     row('T-5', 30, 2), // outside the 24 h window
@@ -191,25 +230,37 @@ test('groupFlow: current and previous windows per group, sorted by most done', (
   const byProgram = groupFlow(rows, NOW, 24 * H, 'program', progs);
   assert.equal(byProgram.total.current.done, 4);
   assert.equal(byProgram.total.previous.done, 1);
-  assert.deepEqual(byProgram.groups.map((g) => [g.key, g.current.done, g.previous.done]), [
-    ['claudepilot', 2, 0],
-    ['konfersi', 1, 1],
-    ['unrecorded', 1, 0],
-  ]);
+  assert.deepEqual(
+    byProgram.groups.map((g) => [g.key, g.current.done, g.previous.done]),
+    [
+      ['claudepilot', 2, 0],
+      ['konfersi', 1, 1],
+      ['unrecorded', 1, 0],
+    ],
+  );
   const cp = byProgram.groups[0]!.current.stages.find((s) => s.stage === 'resolve')!;
   assert.deepEqual([cp.medianMs, cp.p90Ms], [2 * H, 4 * H]);
-  assert.deepEqual(groupFlow(rows, NOW, 24 * H, 'lead', progs).groups.map((g) => g.key), ['area-lab', 'area-console', 'unrecorded']);
-  assert.deepEqual(groupFlow(rows, NOW, 24 * H, 'priority', progs).groups.map((g) => g.key), ['normal', 'high']);
+  assert.deepEqual(
+    groupFlow(rows, NOW, 24 * H, 'lead', progs).groups.map((g) => g.key),
+    ['area-lab', 'area-console', 'unrecorded'],
+  );
+  assert.deepEqual(
+    groupFlow(rows, NOW, 24 * H, 'priority', progs).groups.map((g) => g.key),
+    ['normal', 'high'],
+  );
   assert.deepEqual(groupFlow(rows, NOW, 24 * H, null, progs).groups, []);
 });
 
 test('ticketRows: the drill-down keeps every row of the window, newest first, with its programs', () => {
   const rows = [row('T-1', 3, 2, { tags: ['konfersi'] }), row('T-2', 1, 2, { tags: ['claudepilot', 'konfersi'] }), row('T-3', 40, 2)];
   const out = ticketRows(rows, ago(24), NOW, progs);
-  assert.deepEqual(out.map((r) => [r.ticket, r.programs]), [
-    ['T-2', ['claudepilot', 'konfersi']],
-    ['T-1', ['konfersi']],
-  ]);
+  assert.deepEqual(
+    out.map((r) => [r.ticket, r.programs]),
+    [
+      ['T-2', ['claudepilot', 'konfersi']],
+      ['T-1', ['konfersi']],
+    ],
+  );
   assert.equal(out[0]!.stages.resolve, 2 * H);
 });
 
@@ -218,15 +269,21 @@ test('ticketRows: the drill-down keeps every row of the window, newest first, wi
 test('parseMetricsPrograms: the default parses clean; bad entries are named and the rest still parses', () => {
   const ok = parseMetricsPrograms(DEFAULT_METRICS_PROGRAMS);
   assert.deepEqual(ok.errors, []);
-  assert.deepEqual(ok.programs.map((p) => [p.id, p.kind]), [
-    ['all', 'all'],
-    ['claudepilot', 'tickets'],
-    ['konfersi', 'tickets'],
-    ['memor-id', 'commits'],
-  ]);
+  assert.deepEqual(
+    ok.programs.map((p) => [p.id, p.kind]),
+    [
+      ['all', 'all'],
+      ['claudepilot', 'tickets'],
+      ['konfersi', 'tickets'],
+      ['memor-id', 'commits'],
+    ],
+  );
   assert.deepEqual(ok.programs[0]!.targets, { closuresPerHour: 4, resolveHours: 24, reviewHours: 2 });
   const bad = parseMetricsPrograms('x=X|a;x=Y|b;Bad Id|a;y=Y|;z=Z|a|1/2;all=All|a;w=W|UPPER;v|v-tag|1/2/3');
-  assert.deepEqual(bad.programs.map((p) => p.id), ['x', 'v']);
+  assert.deepEqual(
+    bad.programs.map((p) => p.id),
+    ['x', 'v'],
+  );
   assert.equal(bad.programs[1]!.label, 'v');
   assert.deepEqual(bad.programs[1]!.targets, { closuresPerHour: 1, resolveHours: 2, reviewHours: 3 });
   assert.equal(bad.errors.length, 6);
@@ -235,11 +292,22 @@ test('parseMetricsPrograms: the default parses clean; bad entries are named and 
 
 test('resolvePrograms: at most MAX_TAG_PROGRAMS from program-* tags, the first of the ranked list, shown by id; setting and flow always', () => {
   const ranked = Array.from({ length: 15 }, (_, i) => `program-p${String(14 - i).padStart(2, '0')}`); // p14 ranks first
-  const p = resolvePrograms({ setting: DEFAULT_METRICS_PROGRAMS, programTags: ['program-konfersi', ...ranked], flow: [{ name: 'event', tag: 'event' }] });
+  const p = resolvePrograms({
+    setting: DEFAULT_METRICS_PROGRAMS,
+    programTags: ['program-konfersi', ...ranked],
+    flow: [{ name: 'event', tag: 'event' }],
+  });
   const tagged = p.filter((x) => x.source === 'program-tag').map((x) => x.id);
   assert.equal(MAX_TAG_PROGRAMS, 12);
-  assert.deepEqual(tagged, ['p03', 'p04', 'p05', 'p06', 'p07', 'p08', 'p09', 'p10', 'p11', 'p12', 'p13', 'p14'], 'a covered tag does not use a place');
-  assert.deepEqual(p.filter((x) => x.source !== 'program-tag').map((x) => x.id), ['all', 'claudepilot', 'konfersi', 'memor-id', 'event']);
+  assert.deepEqual(
+    tagged,
+    ['p03', 'p04', 'p05', 'p06', 'p07', 'p08', 'p09', 'p10', 'p11', 'p12', 'p13', 'p14'],
+    'a covered tag does not use a place',
+  );
+  assert.deepEqual(
+    p.filter((x) => x.source !== 'program-tag').map((x) => x.id),
+    ['all', 'claudepilot', 'konfersi', 'memor-id', 'event'],
+  );
 });
 
 test('resolvePrograms: all first, then the setting, then uncovered program-* tags, then uncovered flow tags', () => {
@@ -251,23 +319,39 @@ test('resolvePrograms: all first, then the setting, then uncovered program-* tag
       { name: 'event', tag: 'event' },
     ],
   });
-  assert.deepEqual(p.map((x) => [x.id, x.source]), [
-    ['all', 'setting'],
-    ['claudepilot', 'setting'],
-    ['konfersi', 'setting'],
-    ['memor-id', 'setting'],
-    ['kohi', 'program-tag'],
-    ['event', 'flow'],
-  ]);
+  assert.deepEqual(
+    p.map((x) => [x.id, x.source]),
+    [
+      ['all', 'setting'],
+      ['claudepilot', 'setting'],
+      ['konfersi', 'setting'],
+      ['memor-id', 'setting'],
+      ['kohi', 'program-tag'],
+      ['event', 'flow'],
+    ],
+  );
   assert.equal(p.find((x) => x.id === 'memor-id')!.unavailable?.reason, 'no_source');
   assert.deepEqual(p.find((x) => x.id === 'kohi')!.targets, DEFAULT_TARGETS);
   // No setting at all: a builtin `all` with its own targets.
   const bare = resolvePrograms({ setting: undefined, programTags: [], flow: [] });
-  assert.deepEqual(bare.map((x) => [x.id, x.source]), [['all', 'builtin']]);
+  assert.deepEqual(
+    bare.map((x) => [x.id, x.source]),
+    [['all', 'builtin']],
+  );
   assert.deepEqual(bare[0]!.targets, DEFAULT_ALL_TARGETS);
   assert.ok(inProgram(['anything'], bare[0]!));
-  assert.ok(!inProgram(['claudepilot'], p.find((x) => x.id === 'memor-id')!));
-  assert.ok(inProgram(['program-claudepilot'], p.find((x) => x.id === 'claudepilot')!));
+  assert.ok(
+    !inProgram(
+      ['claudepilot'],
+      p.find((x) => x.id === 'memor-id')!,
+    ),
+  );
+  assert.ok(
+    inProgram(
+      ['program-claudepilot'],
+      p.find((x) => x.id === 'claudepilot')!,
+    ),
+  );
 });
 
 /* ---------- Scores ---------- */
@@ -284,15 +368,28 @@ test('combine: the weighted mean of the available parts; an unavailable part sha
   );
   assert.equal(s.value, 62.5); // (50*60 + 100*20) / 80
   assert.equal(s.previous, 40);
-  assert.deepEqual(s.components.map((c) => c.appliedWeight), [75, 25, 0]);
+  assert.deepEqual(
+    s.components.map((c) => c.appliedWeight),
+    [75, 25, 0],
+  );
   assert.match(s.basis, /Weights: a 60, b 20, c 20\. Left out, their weight shared by the rest: c \(no_source\)\./);
-  const none = combine([{ id: 'a', label: 'A', weight: 1, value: null, basis: 'unavailable', source: 's', reason: 'no_samples', raw: 'r' }], 'S.', null);
+  const none = combine(
+    [{ id: 'a', label: 'A', weight: 1, value: null, basis: 'unavailable', source: 's', reason: 'no_samples', raw: 'r' }],
+    'S.',
+    null,
+  );
   assert.equal(none.value, null, 'nothing measured is unavailable, never 0');
 });
 
 test('the weights add up to 100 and the basis says the skill was not available', () => {
-  assert.equal(Object.values(EFFICIENCY_WEIGHTS).reduce((a, b) => a + b, 0), 100);
-  assert.equal(Object.values(EFFECTIVENESS_WEIGHTS).reduce((a, b) => a + b, 0), 100);
+  assert.equal(
+    Object.values(EFFICIENCY_WEIGHTS).reduce((a, b) => a + b, 0),
+    100,
+  );
+  assert.equal(
+    Object.values(EFFECTIVENESS_WEIGHTS).reduce((a, b) => a + b, 0),
+    100,
+  );
   const e = efficiencyScore({ nowMs: NOW, crews: null, exhausted: null, previous: null });
   assert.match(e.basis, /pilot-health skill was not available/);
   assert.equal(e.value, null);
@@ -312,7 +409,11 @@ test('efficiencyScore: utilisation, leads active, not exhausted, no long idle', 
         ],
         openWork: true,
       },
-      { lead: { id: 'L2', state: 'idle', claudeId: 'c2' }, workers: [{ id: 'w4', state: 'idle', stateSinceMs: NOW - MIN }], openWork: true },
+      {
+        lead: { id: 'L2', state: 'idle', claudeId: 'c2' },
+        workers: [{ id: 'w4', state: 'idle', stateSinceMs: NOW - MIN }],
+        openWork: true,
+      },
     ],
     exhausted: new Set(['c2']),
     previous: 10,
@@ -324,14 +425,27 @@ test('efficiencyScore: utilisation, leads active, not exhausted, no long idle', 
   assert.equal(s.previous, 10);
   assert.ok(s.components.every((c) => c.weight === c.appliedWeight && c.source.length > 0));
   // No quota reading: notExhausted is unavailable (no_source) and its 20 is shared by the other three.
-  const nq = efficiencyScore({ nowMs: NOW, crews: [{ lead: null, workers: [{ id: 'w', state: 'working', stateSinceMs: NOW }], openWork: false }], exhausted: null, previous: null });
+  const nq = efficiencyScore({
+    nowMs: NOW,
+    crews: [{ lead: null, workers: [{ id: 'w', state: 'working', stateSinceMs: NOW }], openWork: false }],
+    exhausted: null,
+    previous: null,
+  });
   const ne = nq.components.find((c) => c.id === 'notExhausted')!;
   assert.deepEqual([ne.value, ne.reason, ne.appliedWeight], [null, 'no_source', 0]);
   assert.equal(nq.components.find((c) => c.id === 'utilisation')!.appliedWeight, 50);
   assert.equal(nq.value, 100);
 });
 
-const openW = (o: Partial<MetricsOpenWork> = {}): MetricsOpenWork => ({ open: 0, inProgress: 0, blocked: 0, inReview: 0, oldestReviewMs: null, stalled: 0, ...o });
+const openW = (o: Partial<MetricsOpenWork> = {}): MetricsOpenWork => ({
+  open: 0,
+  inProgress: 0,
+  blocked: 0,
+  inReview: 0,
+  oldestReviewMs: null,
+  stalled: 0,
+  ...o,
+});
 
 test('effectivenessScore: each component against the program targets', () => {
   // 6 done in the last 6 h (1/h against 2/h: 50); 1 won't-do in 24 h; resolve median 12 h against 24 h: 100.
@@ -349,7 +463,10 @@ test('effectivenessScore: each component against the program targets', () => {
   });
   const v = Object.fromEntries(s.components.map((c) => [c.id, c.value]));
   assert.deepEqual(v, { closures: 50, reviewFlow: 50, notBlocked: 90, doneVsWontDo: 87.5, noStall: 75, flowTime: 100 });
-  assert.deepEqual(s.components.map((c) => c.id), Object.keys(EFFECTIVENESS_WEIGHTS));
+  assert.deepEqual(
+    s.components.map((c) => c.id),
+    Object.keys(EFFECTIVENESS_WEIGHTS),
+  );
   // (50*35 + 50*20 + 90*15 + 87.5*10 + 75*10 + 100*10) / 100
   assert.equal(s.value, 67.3);
   // Slow flow: a median twice the target scores 50.
@@ -388,14 +505,29 @@ test('openWork: counts, the oldest in review and the stalled', () => {
   );
   assert.deepEqual(
     { ...o },
-    { open: 1, inProgress: 2, blocked: 2, inReview: 2, oldestReviewMs: 5 * H, stalled: 1, blockedIds: ['T-9', 'T-100'], oldestReview: 'T-11' },
+    {
+      open: 1,
+      inProgress: 2,
+      blocked: 2,
+      inReview: 2,
+      oldestReviewMs: 5 * H,
+      stalled: 1,
+      blockedIds: ['T-9', 'T-100'],
+      oldestReview: 'T-11',
+    },
   );
 });
 
 test('snapshotValues and downsample', () => {
   const day = flowWindow([row('T-1', 1, 3)], ago(24), NOW);
   const e = efficiencyScore({ nowMs: NOW, crews: null, exhausted: null, previous: null });
-  const f = effectivenessScore({ nowMs: NOW, rows: [row('T-1', 1, 3)], open: openW({ open: 2, blocked: 1 }), targets: DEFAULT_TARGETS, previous: null });
+  const f = effectivenessScore({
+    nowMs: NOW,
+    rows: [row('T-1', 1, 3)],
+    open: openW({ open: 2, blocked: 1 }),
+    targets: DEFAULT_TARGETS,
+    previous: null,
+  });
   const v = snapshotValues({ efficiency: e, effectiveness: f, day, open: openW({ open: 2, blocked: 1 }) });
   assert.equal(v.efficiency, null);
   assert.equal(v.effectiveness, f.value);
@@ -417,7 +549,15 @@ test('fmtDur', () => {
 /* ---------- Findings ---------- */
 
 test('insights: slowest stage, regression, idle capacity, blocked share, review wait and outliers, act first', () => {
-  const st = (implement: number, resolve: number) => ({ start: H, report: null, implement, test: null, deliver: null, resolve, work: null });
+  const st = (implement: number, resolve: number) => ({
+    start: H,
+    report: null,
+    implement,
+    test: null,
+    deliver: null,
+    resolve,
+    work: null,
+  });
   // Current window: 6 done, implement 2 h each, one resolve far slower. Previous window: 3 done, implement 0.5 h.
   const rows = [
     ...Array.from({ length: 5 }, (_, i) => row(`T-${i + 1}`, i + 1, 4, { stages: st(2 * H, 4 * H) })),
@@ -427,7 +567,19 @@ test('insights: slowest stage, regression, idle capacity, blocked share, review 
   const flow = groupFlow(rows, NOW, 24 * H, null, progs).total;
   const eff = efficiencyScore({
     nowMs: NOW,
-    crews: [{ lead: null, workers: [{ id: 'w1', state: 'idle', stateSinceMs: NOW - MIN }, { id: 'w2', state: 'idle', stateSinceMs: NOW - MIN }, { id: 'w3', state: 'working', stateSinceMs: NOW }, { id: 'w4', state: 'idle', stateSinceMs: NOW - MIN }, { id: 'w5', state: 'idle', stateSinceMs: NOW - MIN }], openWork: true }],
+    crews: [
+      {
+        lead: null,
+        workers: [
+          { id: 'w1', state: 'idle', stateSinceMs: NOW - MIN },
+          { id: 'w2', state: 'idle', stateSinceMs: NOW - MIN },
+          { id: 'w3', state: 'working', stateSinceMs: NOW },
+          { id: 'w4', state: 'idle', stateSinceMs: NOW - MIN },
+          { id: 'w5', state: 'idle', stateSinceMs: NOW - MIN },
+        ],
+        openWork: true,
+      },
+    ],
     exhausted: new Set(),
     previous: null,
   });
@@ -437,17 +589,24 @@ test('insights: slowest stage, regression, idle capacity, blocked share, review 
     flow,
     rows,
     efficiency: eff,
-    open: { ...openW({ open: 2, inProgress: 1, blocked: 2, inReview: 1, oldestReviewMs: 10 * H }), blockedIds: ['T-30', 'T-31'], oldestReview: 'T-32' },
+    open: {
+      ...openW({ open: 2, inProgress: 1, blocked: 2, inReview: 1, oldestReviewMs: 10 * H }),
+      blockedIds: ['T-30', 'T-31'],
+      oldestReview: 'T-32',
+    },
     targets: DEFAULT_TARGETS,
   });
-  assert.deepEqual(out.map((x) => [x.kind, x.severity]), [
-    ['regression', 'act'], // implement 0.5 h -> 2 h: +300 %
-    ['idle_capacity', 'act'], // 1 of 5 working: 20
-    ['review_wait', 'act'], // 10 h against 2 h: over 4x
-    ['blocked_share', 'warn'], // 2 of 6: 33 %
-    ['slowest_stage', 'info'],
-    ['outlier', 'info'],
-  ]);
+  assert.deepEqual(
+    out.map((x) => [x.kind, x.severity]),
+    [
+      ['regression', 'act'], // implement 0.5 h -> 2 h: +300 %
+      ['idle_capacity', 'act'], // 1 of 5 working: 20
+      ['review_wait', 'act'], // 10 h against 2 h: over 4x
+      ['blocked_share', 'warn'], // 2 of 6: 33 %
+      ['slowest_stage', 'info'],
+      ['outlier', 'info'],
+    ],
+  );
   assert.match(out[0]!.text, /implement median went from 30 min to 2 h \(\+300 %\)/);
   assert.deepEqual(out.find((x) => x.kind === 'review_wait')!.tickets, ['T-32']);
   assert.deepEqual(out.find((x) => x.kind === 'blocked_share')!.tickets, ['T-30', 'T-31']);
@@ -457,6 +616,17 @@ test('insights: slowest stage, regression, idle capacity, blocked share, review 
 
 test('insights: an empty window says there is no data and invents nothing', () => {
   const flow = groupFlow([], NOW, 24 * H, null, progs).total;
-  const out = insights({ label: 'Konfersi', windowLabel: '24h', flow, rows: [], efficiency: efficiencyScore({ nowMs: NOW, crews: null, exhausted: null, previous: null }), open: null, targets: DEFAULT_TARGETS });
-  assert.deepEqual(out.map((x) => x.kind), ['no_data']);
+  const out = insights({
+    label: 'Konfersi',
+    windowLabel: '24h',
+    flow,
+    rows: [],
+    efficiency: efficiencyScore({ nowMs: NOW, crews: null, exhausted: null, previous: null }),
+    open: null,
+    targets: DEFAULT_TARGETS,
+  });
+  assert.deepEqual(
+    out.map((x) => x.kind),
+    ['no_data'],
+  );
 });
