@@ -3,6 +3,7 @@ import { useEffect, type ReactNode } from 'react';
 import { useSearchParams } from 'react-router';
 import { PageHeader } from '@/components/PageHeader';
 import { LabTab } from '@/features/lab/LabTab';
+import { MetricsTab } from '@/features/lab/MetricsTab';
 import { ScorecardTab } from '@/features/lab/ScorecardTab';
 import { AttributionTab } from '../spend/AttributionTab';
 import { BudgetsTab } from '../spend/BudgetsTab';
@@ -55,6 +56,7 @@ export function UsageTabs({ requests, top }: { requests: ReactNode; top?: ReactN
           { id: 'spikes', label: 'Spikes', badge: spikes || undefined, badgeTone: 'info', content: hub(<SpikesTab />) },
           { id: 'lab', label: 'Lab', content: hub(<LabTab />) },
           { id: 'crew', label: 'Crew', content: hub(<ScorecardTab />) },
+          { id: 'metrics', label: 'Metrics', content: hub(<MetricsTab />) },
         ]}
       />
     </>
