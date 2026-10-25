@@ -1,4 +1,4 @@
-// Pilot metrics (T-2360, §28.16): the loader. Reads the closed tickets of a bounded span (the window and the one before it, by the
+// Pilot metrics (T-2360, §28.15): the loader. Reads the closed tickets of a bounded span (the window and the one before it, by the
 // `tickets_closed_at` index of migration 856), their events, verdicts and merge records (by ticket number, indexed), and the open work now.
 // Read only. Ticket text is not kept: of a comment only the first 300 characters after "Self-test:" are read, in SQL, to find its verdict.
 

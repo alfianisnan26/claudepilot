@@ -1,4 +1,4 @@
-// Pilot metrics (T-2360, docs/prd/claude-usage.md §28.16): flow times per ticket stage, the efficiency and effectiveness scores, and the
+// Pilot metrics (T-2360, docs/prd/claude-usage.md §28.15): flow times per ticket stage, the efficiency and effectiveness scores, and the
 // findings. Pure: `flowMetricsData.ts` loads the facts and `metricsService.ts` puts them together; nothing is read here and nothing reads
 // the clock (every function takes its `nowMs` or its window).
 //
@@ -76,7 +76,7 @@ const span = (from: number | null | undefined, to: number | null | undefined): n
 const NO_STAGES = (): Record<MetricsStage, number | null> => ({ start: null, report: null, implement: null, test: null, deliver: null, resolve: null, work: null });
 
 /**
- * One closed ticket's stages (the rules of §28.16):
+ * One closed ticket's stages (the rules of §28.15):
  * - start: created to the first move into in_progress.
  * - report: created to the first comment by an agent session.
  * - implement: the first in_progress to the first verdict at or after it; with none, to the first merge at or after it.
@@ -386,9 +386,12 @@ export function efficiencyScore(input: { nowMs: number; crews: readonly CrewNow[
     : gone('utilisation', 'Worker utilisation', W.utilisation, 'no_samples', src.utilisation, 'no live worker');
   const withWork = input.crews.filter((c) => c.openWork);
   const active = withWork.filter((c) => (c.lead && c.lead.state === 'working') || c.workers.some((w) => w.state === 'working')).length;
-  const leadsActive = withWork.length
-    ? meas('leadsActive', 'Leads active', W.leadsActive, (100 * active) / withWork.length, src.leadsActive, `${active} of ${withWork.length} crews with open work active`)
-    : meas('leadsActive', 'Leads active', W.leadsActive, 100, src.leadsActive, 'no crew holds open work');
+  // No live crew at all is no sample (a 100 there would score an empty portal as fully active); live crews with no open work are 100.
+  const leadsActive = !input.crews.length
+    ? gone('leadsActive', 'Leads active', W.leadsActive, 'no_samples', src.leadsActive, 'no live crew')
+    : withWork.length
+      ? meas('leadsActive', 'Leads active', W.leadsActive, (100 * active) / withWork.length, src.leadsActive, `${active} of ${withWork.length} crews with open work active`)
+      : meas('leadsActive', 'Leads active', W.leadsActive, 100, src.leadsActive, 'no crew holds open work');
   const liveLeads = input.crews.flatMap((c) => (c.lead && live(c.lead.state) ? [c.lead] : []));
   const notExhausted = !input.exhausted
     ? gone('notExhausted', 'Leads not exhausted', W.notExhausted, 'no_source', src.notExhausted, 'no quota reading')

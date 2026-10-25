@@ -1170,3 +1170,55 @@ tables the portal already keeps; nothing new is stored.
   7 d 706.9 to 92.0 ms, 100 sessions 24 h 3399.7 to 44.2 ms, 100 sessions 7 d 3543.7 to 478.9 ms (the answers are identical); insert cost per
   10k events 49.5 ms without and 67.3 ms with the index (1.36 times, the whole 1M: 5.09 s and 6.91 s); process RSS 207 MiB. The migration
   runs in the startup transaction: scale 0.41 s per million events (this Job's disk) to the real count before a deploy.
+
+### 28.15 Pilot metrics (T-2360 slice 1: the server and the wire types; migration 856)
+
+How fast tickets move through each stage, how much of the crew is working, and how well tickets flow, per PROGRAM and per WINDOW (24h, 7d,
+each with the window before it), with a trend from snapshots and plain-language findings. The web view and the Portal MCP tools are later
+slices of T-2360; they read the same wire types (`packages/contracts/src/metrics.ts`, `METRICS_API`).
+
+- **Stages of a done ticket** (`lab/flowMetrics.ts` `ticketFlow`, pure): start = created to the first move into in_progress; report =
+  created to the first comment by an agent session (`session:*`); implement = the first in_progress to the first verdict after it (QA or
+  review verdict in the comment's data, or a `Self-test: ... on <sha> pass|fail N` line), with no verdict to the first merge
+  (`ticket_merge_status` `merged`); test = the first verdict to the last PASSING verdict at or before the last merge (no merge: the close),
+  rounds = the verdicts in it, rework = the failing ones; deliver = the last merge to the close; resolve = created to the close; work = the
+  first in_progress to the close. Nothing after the close counts. **A ticket that lacks a stage's timestamps is left out of that stage and
+  counted in its `excluded`, never 0**; a span below 0 is left out the same way. **Won't-do is counted apart** (count and the median of its
+  life), in no stage.
+- **Aggregates.** n, the median and p90 by nearest rank (the scorecard's `percentile`), over the tickets closed in the window, for the whole
+  program and grouped by program, lead, type or priority. The lead is the ticket's first `area-*` tag, else `lead:<lineage root>` of the
+  session that held it (assignee, or who moved it into in_progress), else `unrecorded`. The drill-down returns the per-ticket rows (at most
+  200, newest close first, `total` says how many).
+- **Programs** (`lab.metricsPrograms`, group Usage, owner only): `id=Label|tags|closures-per-hour/resolve-hours/review-hours` split by `;`.
+  Default: `all` (every ticket, targets 4/24/2), `claudepilot` (tags `claudepilot`, `program-claudepilot`), `konfersi` (`konfersi`,
+  `konfersi-migration`, `program-konfersi`), `memor-id` (`commits`). Decision: the live tickets mostly carry the plain program tag, so the
+  setting maps tags; a `program-*` tag and a `flow.programs` tag that no entry covers are added by themselves. Targets default 2/24/2.
+  **memor.id has no tickets in the portal and the portal keeps no commit history**, so its program is shown `unavailable` (`no_source`),
+  never 0.
+- **Scores** (0-100, every component with value, weight, applied weight, basis and source; an input the portal does not have is
+  `unavailable` with a reason and its weight is shared by the rest, the basis line says which). The pilot-health skill was not available to
+  this build, so the ticket's weights are the spec, and the basis text says so. **Efficiency**: worker utilisation 40 (live workers
+  working), leads active 25 (crews with open work whose lead or a worker is working; no live crew: unavailable), leads not exhausted 20 (a
+  live lead's Claude with no plan window at 100 %, from claudeusage; no quota reading: unavailable), no long idle 15 (live workers not idle
+  over 30 min). **Effectiveness**: closures 35 (done per hour over 6 h against the target), review flow 20 (the oldest ticket in review
+  against the target), not blocked 15, done vs won't-do 10 (24 h), no stall 10 (in progress with no change for `flow.stallHours`), flow
+  time 10 (the median created-to-done of 24 h against the target). The ticket's 40/25 for closures and review flow each gave 5 to flow
+  time. The crew headline (T-600) and cost (T-450) of the crews holding the program's tickets come from `buildHeadline` and `programScore`
+  (never a copy): total, lead, workers, lead share and dollars per done ticket.
+- **Snapshots** (migration 856, additive: `lab_metric_snapshots (at_ms, program, metrics JSON)` with indexes on `(program, at_ms)` and
+  `at_ms`, and `tickets_closed_at` so the window read is bounded). Every 10 minutes (an unref'd timer, stopped on shutdown) one row per
+  ticket program: both scores, done and won't-do of 24 h, open work, blocked, in review and each stage's median. Kept 30 days (the lab's
+  daily retention). The trend reads them (at most 200 points: the last snapshot of each equal slice); `previous` on a score is the
+  snapshot nearest to one window ago.
+- **Findings** (`insights`, pure): the slowest stage, the biggest regression against the window before (+25 % over at least 3 tickets on
+  both sides), idle capacity, the blocked share (20 % and up), the review wait over the target, outliers (3x the median resolve), each with
+  its ticket ids; act first, then warn, then info. No data is said, never invented.
+- **Read** (`view` on the platform area `usage`, declared in `lab/authz.ts`; a denial and a program that is not there are the same 404; an
+  agent actor gets the 404 too, the Portal MCP slice decides its reach): `GET /api/lab/metrics/programs`, `/overview?program=&window=24h|7d`,
+  `/flow?program=&window=&groupBy=program|lead|type|priority`, `/trend?program=&metric=&window=24h|7d|30d`,
+  `/tickets?program=&window=&stage=&groupBy=&group=`, `/insights?program=&window=`. A bad parameter is a 422.
+- **Not built in slice 1.** The per-model cost and review pass rate, and the "escalated to Opus" count; the web view; the MCP tools.
+- Source: `lab/flowMetrics.ts` (pure), `lab/flowMetricsData.ts` (the loader), `lab/metricsSnapshots.ts`, `lab/metricsSettings.ts`,
+  `lab/metricsService.ts` (`Lab.metrics`), `lab/routes.ts`; tests `lab/flowMetrics.test.ts` (golden stages with the left-out cases and
+  won't-do, grouping with median and p90, the setting, both scores and their weights, findings) and `lab/metricsRoutes.test.ts` (the loader
+  on a seeded sqlite, migration 856, snapshot write, retention and trend, the routes: owner 200, another user and an agent 404, 422).

@@ -1,4 +1,4 @@
-// Pilot metrics (T-2360, docs/prd/claude-usage.md §28.16): puts the pure parts together for the routes, the snapshot timer and (later) the
+// Pilot metrics (T-2360, docs/prd/claude-usage.md §28.15): puts the pure parts together for the routes, the snapshot timer and (later) the
 // Portal MCP tools. Reads go through the loaders (bounded to the window and the one before it); the T-450 / T-600 numbers come from the
 // scorecard's own functions (`loadCrewFacts`, `programScore`, `buildHeadline`, usage spend's `ticketReport` behind them), never a copy.
 
@@ -25,6 +25,7 @@ import { buildHeadline, type PaceClaude } from './headline.js';
 import { programScore, programsOf, programTickets, type CrewFacts, type Program } from './scorecard.js';
 import { loadCrewFacts } from './scorecardData.js';
 import {
+  DEFAULT_METRICS_PROGRAMS,
   efficiencyScore,
   effectivenessScore,
   groupFlow,
@@ -103,7 +104,9 @@ export class Metrics {
   programs(): MetricsProgram[] {
     const db = this.deps.store.db;
     const flow = parsePrograms(flowProgramsRaw(this.deps.settings)).map((p) => ({ name: p.name, tag: p.tag }));
-    return resolvePrograms({ setting: this.#setting(METRICS_SETTING.programs), programTags: (db && tryRead(() => loadProgramTags(db))) || [], flow });
+    // No settings module, or a value that is not text: the setting's default (as flowProgramsRaw does for flow.programs).
+    const raw = this.#setting(METRICS_SETTING.programs);
+    return resolvePrograms({ setting: typeof raw === 'string' ? raw : DEFAULT_METRICS_PROGRAMS, programTags: (db && tryRead(() => loadProgramTags(db))) || [], flow });
   }
 
   program(id: string | undefined): MetricsProgram | null {

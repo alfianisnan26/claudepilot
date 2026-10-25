@@ -1,4 +1,4 @@
-// Pilot metrics (T-2360, §28.16): the one setting, group Usage. Which ticket tags make a program, and the targets its effectiveness score
+// Pilot metrics (T-2360, §28.15): the one setting, group Usage. Which ticket tags make a program, and the targets its effectiveness score
 // measures against. Owner only (the settings route needs `settings` `manage`; no agent tool writes settings).
 
 import { defineSetting, defineSettingGroup } from '../settings/registry.js';

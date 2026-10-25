@@ -1,4 +1,4 @@
-// Pilot metrics (T-2360, docs/prd/claude-usage.md §28.16): flow times per ticket stage, the efficiency and effectiveness scores per
+// Pilot metrics (T-2360, docs/prd/claude-usage.md §28.15): flow times per ticket stage, the efficiency and effectiveness scores per
 // program, their trend from snapshots, and plain-language findings. Read by the Metrics page (web) and the Portal MCP tools (later slices).
 // Every number names its basis and source; an input the portal does not have is `unavailable` with a reason, never 0 (CrewFigure rule).
 
@@ -13,7 +13,7 @@ export type MetricsTrendWindow = (typeof METRICS_TREND_WINDOWS)[number];
 export const METRICS_WINDOW_MS: Record<MetricsTrendWindow, number> = { '24h': 24 * 3_600_000, '7d': 7 * 24 * 3_600_000, '30d': 30 * 24 * 3_600_000 };
 
 /**
- * The stages of a done ticket, each a duration in ms (see §28.16 for the exact start and end of each):
+ * The stages of a done ticket, each a duration in ms (see §28.15 for the exact start and end of each):
  * start (created to first in progress), report (created to the first comment by an agent session), implement (first in progress to the
  * first verdict, else the first merge), test (first verdict to the last passing one), deliver (the last merge to closed done), resolve
  * (created to done), work (first in progress to done).

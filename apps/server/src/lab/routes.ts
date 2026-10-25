@@ -127,7 +127,7 @@ export function createLabRoutes(lab: Lab): Hono {
     return c.json(success(s));
   });
 
-  // T-2360 (§28.16, METRICS_API): the pilot metrics. Whole-portal numbers (every program's tickets, every crew, every Claude's quota), so
+  // T-2360 (§28.15, METRICS_API): the pilot metrics. Whole-portal numbers (every program's tickets, every crew, every Claude's quota), so
   // only a reader of the usage area: an agent actor gets the same 404 (the Portal MCP slice decides an agent's reach). A program that is
   // not there is the same 404.
   const metricsReader = (c: Context) => {

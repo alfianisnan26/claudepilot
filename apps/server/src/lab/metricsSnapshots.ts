@@ -1,4 +1,4 @@
-// Pilot metrics (T-2360, docs/prd/claude-usage.md §28.16): the snapshot store. Every 10 minutes the lab writes one row per program with the
+// Pilot metrics (T-2360, docs/prd/claude-usage.md §28.15): the snapshot store. Every 10 minutes the lab writes one row per program with the
 // values the trend reads (migration 856, `lab_metric_snapshots`); rows older than 30 days go with the lab's daily retention. Numbers only.
 
 import type { DatabaseSync } from 'node:sqlite';

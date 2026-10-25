@@ -34,7 +34,7 @@ export class Lab {
   readonly #ingest: LabIngest;
   #timers: NodeJS.Timeout[] = [];
 
-  /** T-2360 (§28.16): the pilot metrics (flow times, efficiency and effectiveness, trend, findings). */
+  /** T-2360 (§28.15): the pilot metrics (flow times, efficiency and effectiveness, trend, findings). */
   readonly metrics: Metrics;
 
   constructor(private readonly opts: { store: Store; now?: () => number; log?: (msg: string) => void; tickets?: TicketReader; paceSource?: PaceSource; settings?: FlowSettingsReader }) {
