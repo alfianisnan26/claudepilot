@@ -79,7 +79,16 @@ test('DrillList: each ticket is a link to its page, the slowest first, a missing
     resolve,
     work: null,
   });
-  const base = { type: 'task', priority: 'high', status: 'done' as const, closedAtMs: 0, lead: 'area-web', programs: [], rounds: null, fails: null };
+  const base = {
+    type: 'task',
+    priority: 'high',
+    status: 'done' as const,
+    closedAtMs: 0,
+    lead: 'area-web',
+    programs: [],
+    rounds: null,
+    fails: null,
+  };
   const rows = [
     { ...base, ticket: 'T-1', stages: stages(HOUR) },
     { ...base, ticket: 'T-2', stages: stages(null) },
