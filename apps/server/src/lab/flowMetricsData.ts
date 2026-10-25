@@ -55,6 +55,8 @@ export function leadOf(tags: readonly string[], holder: string | null, sessions:
 /**
  * The window read. `+status` keeps the planner off `tickets_queue` (status first): without it SQLite picked that index and walked every done
  * ticket ever closed (metricsPerf.test.ts checks the plan); the window is bounded by `tickets_closed_at`.
+ * `closed_at` is compared as text with `toISOString()` bounds: its only writer, tickets/service.ts (update's close and close()), stores
+ * `toISOString()` too (metricsRoutes.test.ts pins that format through the service).
  */
 export const CLOSED_IN_WINDOW_SQL = `SELECT number, type, priority, status, created_at, closed_at, assignee_kind, assignee_ref FROM tickets
        WHERE closed_at >= ? AND closed_at < ? AND +status IN ('done', 'wont_do')`;
@@ -84,7 +86,11 @@ export function loadFlowTickets(db: DatabaseSync, fromMs: number, toMs: number, 
     db,
     numbers,
     (l) =>
-      `SELECT ticket_number, at, kind, actor, data, CASE WHEN kind = 'comment' AND instr(body, 'Self-test:') > 0 THEN substr(body, instr(body, 'Self-test:'), 300) END AS st
+      // A self-test line starts a line (D-102): the body's first, else the first after a newline. A "Self-test:" quoted inside a line is not one.
+      `SELECT ticket_number, at, kind, actor, data,
+              CASE WHEN kind <> 'comment' THEN NULL
+                   WHEN substr(body, 1, 10) = 'Self-test:' THEN substr(body, 1, 300)
+                   WHEN instr(body, char(10) || 'Self-test:') > 0 THEN substr(body, instr(body, char(10) || 'Self-test:') + 1, 300) END AS st
        FROM ticket_events WHERE ticket_number IN ${l} AND kind IN ('status', 'comment') ORDER BY ticket_number, id`,
   );
   for (const e of events) {
@@ -178,7 +184,18 @@ export function loadOpenTickets(db: DatabaseSync): OpenTicketFacts[] {
   });
 }
 
-/** The `program-*` tags in use (a range on the tag index). */
-export function loadProgramTags(db: DatabaseSync): string[] {
-  return (db.prepare(`SELECT DISTINCT tag FROM ticket_tags WHERE tag >= 'program-' AND tag < 'program.' ORDER BY tag`).all() as unknown as { tag: string }[]).map((r) => r.tag);
+/**
+ * The `program-*` tags in use (a range on the tag index), ranked: most tickets updated since `sinceMs` first, then most tickets, then by
+ * name. resolvePrograms keeps the first MAX_TAG_PROGRAMS.
+ */
+export function loadProgramTags(db: DatabaseSync, sinceMs: number): string[] {
+  return (
+    db
+      .prepare(
+        `SELECT tt.tag AS tag FROM ticket_tags tt JOIN tickets t ON t.number = tt.ticket_number
+         WHERE tt.tag >= 'program-' AND tt.tag < 'program.'
+         GROUP BY tt.tag ORDER BY SUM(t.updated_at >= ?) DESC, COUNT(*) DESC, tt.tag`,
+      )
+      .all(new Date(sinceMs).toISOString()) as unknown as { tag: string }[]
+  ).map((r) => r.tag);
 }

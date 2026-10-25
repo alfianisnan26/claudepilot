@@ -19,6 +19,9 @@ import { leadOf, loadFlowTickets, loadOpenTickets, loadProgramTags, verdictOf } 
 import { Lab } from './index.js';
 import { KEEP_SNAPSHOTS_MS, pruneMetricSnapshots, readTrend, snapshotNear, SNAPSHOT_EVERY_MS, writeSnapshots } from './metricsSnapshots.js';
 import { createLabRoutes } from './routes.js';
+import { FLOW_UNAVAILABLE, Metrics } from './metricsService.js';
+import { Tickets } from '../tickets/service.js';
+import { FakeSessions, UI } from '../tickets/testkit.js';
 
 const H = 3_600_000;
 const NOW = Date.UTC(2026, 9, 14, 12);
@@ -59,6 +62,8 @@ async function seeded(opts: { settings?: Record<string, unknown> } = {}) {
   comment(1, 8.5, 'Plan: the loader first.');
   comment(1, 6, `Done so far.\nSelf-test: claudepilot-job-1 on ${SHA} fail 3`);
   comment(1, 4, 'QA: pass', { actor: 'session:Q1', data: { verdict: 'pass', role: 'qa' } });
+  // A self-test line quoted inside a line, and as a quote block, is not a verdict (D-102: the line starts with "Self-test:").
+  comment(1, 5, `Quoting the old run: "Self-test: claudepilot-job-9 on ${SHA} pass 4"\n> Self-test: claudepilot-job-9 on ${SHA} pass 4`);
   merged(1, 3);
   // T-2: won't-do, Konfersi.
   ticket(2, 'wont_do', { createdAgo: 6, closedAgo: 2, tags: ['konfersi'] });
@@ -79,6 +84,7 @@ async function seeded(opts: { settings?: Record<string, unknown> } = {}) {
     db,
     lab,
     setNow: (v: number) => (now = v),
+    ticket,
     done: () => (lab.close(), store.close(), rmSync(dataDir, { recursive: true, force: true })),
   };
 }
@@ -120,7 +126,7 @@ test('loader: the golden ticket’s stages from events, verdicts, self-test line
     assert.deepEqual(t1.verdicts, [
       { atMs: at(6), pass: false },
       { atMs: at(4), pass: true },
-    ]);
+    ], 'the self-test line quoted at 5 h (inside a line, and as "> ") is not a verdict');
     assert.equal(t1.firstAgentCommentMs, at(8.5));
     assert.equal(t1.lead, 'area-lab');
     const r = ticketFlow(t1);
@@ -129,7 +135,7 @@ test('loader: the golden ticket’s stages from events, verdicts, self-test line
     const t3 = ticketFlow(facts.find((f) => f.id === 'T-3')!);
     assert.deepEqual(t3.stages, { start: null, report: null, implement: null, test: null, deliver: null, resolve: 15 * H, work: null });
     assert.equal(facts.find((f) => f.id === 'T-3')!.lead, 'unrecorded');
-    assert.deepEqual(loadProgramTags(h.db), ['program-kohi']);
+    assert.deepEqual(loadProgramTags(h.db, at(30 * 24)), ['program-kohi']);
     const open = loadOpenTickets(h.db);
     assert.deepEqual(open.map((t) => [t.id, t.status]).sort(), [['T-5', 'in_review'], ['T-6', 'blocked'], ['T-9', 'in_progress']]);
     assert.equal(open.find((t) => t.id === 'T-5')!.statusSinceMs, at(5));
@@ -290,6 +296,89 @@ test('routes: every metrics route is declared; the owner reads; bob and an agent
         assert.deepEqual([r.status, r.body.error?.code], [404, 'NOT_FOUND'], `${who.kind} ${path}`);
       }
     }
+  } finally {
+    h.done();
+  }
+});
+
+test('a failed closed-ticket read is unavailable (no_source) in flow, tickets, overview, insights and the snapshot, never 0; the log names the error only', async () => {
+  const h = await seeded();
+  try {
+    const logs: string[] = [];
+    // The window read throws (as a locked or broken store would); every other read works.
+    const db = new Proxy(h.db, {
+      get(target, key) {
+        if (key === 'prepare')
+          return (sql: string) => {
+            if (sql.includes('closed_at >= ?')) throw Object.assign(new Error('detail that must not be logged'), { name: 'SqliteError' });
+            return target.prepare(sql);
+          };
+        const v = Reflect.get(target, key) as unknown;
+        return typeof v === 'function' ? (v as (...a: unknown[]) => unknown).bind(target) : v;
+      },
+    });
+    const m = new Metrics({ store: { db, writable: true } as unknown as Store, now: () => NOW, settings: null, paces: null, log: (s) => logs.push(s) });
+    const flow = m.flow('all', '24h', null)!;
+    assert.deepEqual(flow.unavailable, FLOW_UNAVAILABLE);
+    assert.equal(flow.unavailable?.reason, 'no_source');
+    const tickets = m.tickets('all', '24h', {})!;
+    assert.deepEqual([tickets.unavailable?.reason, tickets.rows], ['no_source', []]);
+    const ov = (await m.overview('claudepilot', '24h'))!;
+    assert.equal(ov.flowUnavailable?.reason, 'no_source');
+    assert.ok(ov.open, 'the open-work read still works');
+    const ins = (await m.insights('claudepilot', '24h'))!;
+    assert.deepEqual(ins.items.map((i) => [i.kind, i.text]), [['no_data', FLOW_UNAVAILABLE.text]]);
+    assert.ok(logs.includes('metrics: closed tickets read failed (SqliteError)'), logs.join('\n'));
+    assert.ok(logs.every((l) => !l.includes('must not be logged')));
+    assert.ok((await m.snapshot()) > 0);
+    const snap = JSON.parse((h.db.prepare(`SELECT metrics FROM lab_metric_snapshots WHERE program = 'all'`).get() as { metrics: string }).metrics) as Record<string, unknown>;
+    assert.equal(snap.done24h, null, 'a gap in the trend, not a 0');
+    assert.equal(snap.resolveP50, null);
+    assert.equal(typeof snap.openWork, 'number');
+    // A read that works carries no flag.
+    assert.equal(h.lab.metrics.flow('all', '24h', null)!.unavailable, undefined);
+    assert.equal((await h.lab.metrics.overview('all', '24h'))!.flowUnavailable, undefined);
+  } finally {
+    h.done();
+  }
+});
+
+test('program tags: ranked by tickets touched in 30 days, then by all their tickets; at most 12 become programs', async () => {
+  const h = await seeded();
+  try {
+    const old = 40 * 24;
+    h.ticket(20, 'open', { createdAgo: 50, updatedAgo: 1, tags: ['program-a'] });
+    h.ticket(21, 'open', { createdAgo: 50, updatedAgo: 2, tags: ['program-a'] });
+    h.ticket(22, 'open', { createdAgo: old + 5, updatedAgo: 3, tags: ['program-b'] });
+    h.ticket(23, 'done', { createdAgo: old + 5, closedAgo: old, tags: ['program-b'] });
+    for (const n of [24, 25, 26]) h.ticket(n, 'done', { createdAgo: old + 5, closedAgo: old, tags: ['program-c'] });
+    // program-kohi: T-8, one recent ticket; program-b also has one recent but two in all.
+    assert.deepEqual(loadProgramTags(h.db, at(30 * 24)), ['program-a', 'program-b', 'program-kohi', 'program-c']);
+    for (let i = 0; i < 14; i++) h.ticket(30 + i, 'open', { createdAgo: 5, updatedAgo: 1, tags: [`program-z${String(i).padStart(2, '0')}`] });
+    const progs = h.lab.metrics.programs();
+    const tagged = progs.filter((p) => p.source === 'program-tag').map((p) => p.id);
+    // Ranked: a (2 recent), b (1 recent, 2 in all), then kohi and z00..z13 (1 recent, 1 in all) by name; the first 12, shown by id.
+    // c (no recent ticket) and z09..z13 are left out.
+    assert.deepEqual(tagged, ['a', 'b', 'kohi', ...Array.from({ length: 9 }, (_, i) => `z0${i}`)]);
+    assert.deepEqual(progs.filter((p) => p.source !== 'program-tag').map((p) => p.id), ['all', 'claudepilot', 'konfersi', 'memor-id'], 'the setting’s programs always stay');
+    assert.equal(await h.lab.snapshotMetrics(), 1 + 2 + 12, 'all, the two ticket programs of the setting, 12 tag programs');
+  } finally {
+    h.done();
+  }
+});
+
+test('closed_at: the ticket service writes toISOString(), the text form the window read compares against', async () => {
+  const h = await seeded();
+  try {
+    const closeAt = at(2.5); // no seeded ticket closes at this instant
+    const tickets = new Tickets(h.store, new FakeSessions(), { now: () => new Date(closeAt) });
+    const t = tickets.create(UI, { summary: 'Pin the close format' });
+    tickets.close(UI, t.id, { summary: 'done' });
+    const row = h.db.prepare(`SELECT number, closed_at FROM tickets WHERE closed_at = ?`).get(iso(closeAt)) as { number: number; closed_at: string } | undefined;
+    assert.ok(row, 'closed_at is exactly toISOString() of the close time');
+    assert.match(row.closed_at, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+    const ids = loadFlowTickets(h.db, closeAt, closeAt + 1, null).map((f) => f.id);
+    assert.deepEqual(ids, [`T-${row.number}`], 'the window bound at the same millisecond includes it');
   } finally {
     h.done();
   }

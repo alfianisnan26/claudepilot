@@ -113,6 +113,14 @@ export interface MetricsFlow {
   /** Per group, biggest first (empty without groupBy). */
   groups: MetricsFlowGroup[];
   basis: Record<string, string>;
+  /** Set when the closed tickets could not be read: the counts above are empty, not 0 (show "unavailable"). */
+  unavailable?: MetricsUnavailable;
+}
+
+/** Why a set of figures is unavailable (`no_source`: the store could not be read), with a sentence for the UI. */
+export interface MetricsUnavailable {
+  reason: CrewUnavailable;
+  text: string;
 }
 
 /** One component of a score. `value` 0-100 or null when unavailable (then `reason` is set and its weight is shared by the others). */
@@ -161,6 +169,8 @@ export interface MetricsOverview {
   effectiveness: MetricsScore;
   /** The stage medians of the window and the one before. */
   flow: MetricsFlowGroup;
+  /** Set when the closed tickets could not be read: `flow` is empty, not 0. */
+  flowUnavailable?: MetricsUnavailable;
   open: MetricsOpenWork | null;
   /**
    * T-600 / T-450 figures over the crews that work on this program's tickets (the scorecard's own functions): the headline (pace, resolved,
@@ -213,6 +223,8 @@ export interface MetricsTickets {
   groupBy: MetricsGroupBy | null;
   total: number;
   rows: MetricsTicketRow[];
+  /** Set when the closed tickets could not be read: `rows` is empty, not "no ticket". */
+  unavailable?: MetricsUnavailable;
 }
 
 export interface MetricsInsight {

@@ -1179,7 +1179,8 @@ slices of T-2360; they read the same wire types (`packages/contracts/src/metrics
 
 - **Stages of a done ticket** (`lab/flowMetrics.ts` `ticketFlow`, pure): start = created to the first move into in_progress; report =
   created to the first comment by an agent session (`session:*`); implement = the first in_progress to the first verdict after it (QA or
-  review verdict in the comment's data, or a `Self-test: ... on <sha> pass|fail N` line), with no verdict to the first merge
+  review verdict in the comment's data, or a `Self-test: ... on <sha> pass|fail N` line that starts a line of the comment; one quoted
+  inside a line or as `> ` is not a verdict), with no verdict to the first merge
   (`ticket_merge_status` `merged`); test = the first verdict to the last PASSING verdict at or before the last merge (no merge: the close),
   rounds = the verdicts in it, rework = the failing ones; deliver = the last merge to the close; resolve = created to the close; work = the
   first in_progress to the close. Nothing after the close counts. **A ticket that lacks a stage's timestamps is left out of that stage and
@@ -1193,6 +1194,8 @@ slices of T-2360; they read the same wire types (`packages/contracts/src/metrics
   Default: `all` (every ticket, targets 4/24/2), `claudepilot` (tags `claudepilot`, `program-claudepilot`), `konfersi` (`konfersi`,
   `konfersi-migration`, `program-konfersi`), `memor-id` (`commits`). Decision: the live tickets mostly carry the plain program tag, so the
   setting maps tags; a `program-*` tag and a `flow.programs` tag that no entry covers are added by themselves. Targets default 2/24/2.
+  **At most 12 programs come from `program-*` tags** (each costs a snapshot row every 10 min): the tags ranked by their tickets updated in
+  the last 30 days, then by all their tickets, then by name; the setting's and the flow programs always count.
   **memor.id has no tickets in the portal and the portal keeps no commit history**, so its program is shown `unavailable` (`no_source`),
   never 0.
 - **Scores** (0-100, every component with value, weight, applied weight, basis and source; an input the portal does not have is
@@ -1216,7 +1219,10 @@ slices of T-2360; they read the same wire types (`packages/contracts/src/metrics
 - **Read** (`view` on the platform area `usage`, declared in `lab/authz.ts`; a denial and a program that is not there are the same 404; an
   agent actor gets the 404 too, the Portal MCP slice decides its reach): `GET /api/lab/metrics/programs`, `/overview?program=&window=24h|7d`,
   `/flow?program=&window=&groupBy=program|lead|type|priority`, `/trend?program=&metric=&window=24h|7d|30d`,
-  `/tickets?program=&window=&stage=&groupBy=&group=`, `/insights?program=&window=`. A bad parameter is a 422.
+  `/tickets?program=&window=&stage=&groupBy=&group=`, `/insights?program=&window=`. A bad parameter is a 422. **A failed read of the
+  closed tickets is unavailable (`no_source`), never 0**: `flow` and `tickets` carry `unavailable`, the overview `flowUnavailable`, the
+  findings say so, and the snapshot stores null for done, won't-do and the stage medians (a gap in the trend); the server log gets the
+  error's name only. `closed_at` is compared as `toISOString()` text: its one writer, `tickets/service.ts`, stores that form (a test pins it).
 - **Not built in slice 1.** The per-model cost and review pass rate, and the "escalated to Opus" count; the web view; the MCP tools.
 - Source: `lab/flowMetrics.ts` (pure), `lab/flowMetricsData.ts` (the loader), `lab/metricsSnapshots.ts`, `lab/metricsSettings.ts`,
   `lab/metricsService.ts` (`Lab.metrics`), `lab/routes.ts`; tests `lab/flowMetrics.test.ts` (golden stages with the left-out cases and

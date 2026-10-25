@@ -20,6 +20,7 @@ import {
   inProgram,
   insights,
   LONG_IDLE_MS,
+  MAX_TAG_PROGRAMS,
   openWork,
   parseMetricsPrograms,
   resolvePrograms,
@@ -230,6 +231,15 @@ test('parseMetricsPrograms: the default parses clean; bad entries are named and 
   assert.deepEqual(bad.programs[1]!.targets, { closuresPerHour: 1, resolveHours: 2, reviewHours: 3 });
   assert.equal(bad.errors.length, 6);
   assert.deepEqual(parseMetricsPrograms(42).errors, ['not text']);
+});
+
+test('resolvePrograms: at most MAX_TAG_PROGRAMS from program-* tags, the first of the ranked list, shown by id; setting and flow always', () => {
+  const ranked = Array.from({ length: 15 }, (_, i) => `program-p${String(14 - i).padStart(2, '0')}`); // p14 ranks first
+  const p = resolvePrograms({ setting: DEFAULT_METRICS_PROGRAMS, programTags: ['program-konfersi', ...ranked], flow: [{ name: 'event', tag: 'event' }] });
+  const tagged = p.filter((x) => x.source === 'program-tag').map((x) => x.id);
+  assert.equal(MAX_TAG_PROGRAMS, 12);
+  assert.deepEqual(tagged, ['p03', 'p04', 'p05', 'p06', 'p07', 'p08', 'p09', 'p10', 'p11', 'p12', 'p13', 'p14'], 'a covered tag does not use a place');
+  assert.deepEqual(p.filter((x) => x.source !== 'program-tag').map((x) => x.id), ['all', 'claudepilot', 'konfersi', 'memor-id', 'event']);
 });
 
 test('resolvePrograms: all first, then the setting, then uncovered program-* tags, then uncovered flow tags', () => {
