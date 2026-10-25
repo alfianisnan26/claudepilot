@@ -5,7 +5,8 @@ import { test } from 'node:test';
 import type { MetricsProgram, MetricsOverview, MetricsScore } from '@portal/contracts';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { ProgramUnavailable, ScoresCard } from './metricsParts';
+import { MemoryRouter } from 'react-router';
+import { DrillList, ProgramUnavailable, ScoresCard } from './metricsParts';
 
 const text = (html: string) => html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
 const score = (value: number | null, previous: number | null): MetricsScore => ({ value, previous, components: [], basis: 'weights from the ticket' });
@@ -21,7 +22,24 @@ test('ProgramUnavailable says why, in words, and shows no number', () => {
 
 test('ScoresCard: a score with the window before shows both; one without says unavailable', () => {
   const html = renderToStaticMarkup(createElement(ScoresCard, { overview: overview({ ...memor, kind: 'all', unavailable: undefined }, score(72, 60)), program: undefined, loading: false }));
-  assert.match(html, /data-metric-scores/);
+  assert.match(html, /data-metric-card="scores"/);
   assert.match(text(html), /72/);
   assert.match(text(html), /unavailable/);
+});
+
+test('DrillList: each ticket is a link to its page, the slowest first, a missing stage reads unavailable', () => {
+  const HOUR = 3_600_000;
+  const stages = (resolve: number | null) => ({ start: null, report: null, implement: null, test: null, deliver: null, resolve, work: null });
+  const base = { type: 'task', priority: 'high', status: 'done' as const, closedAtMs: 0, lead: 'area-web', programs: [] };
+  const rows = [
+    { ...base, ticket: 'T-1', stages: stages(HOUR) },
+    { ...base, ticket: 'T-2', stages: stages(null) },
+    { ...base, ticket: 'T-3', stages: stages(5 * HOUR) },
+  ];
+  const data = { program: 'all', window: '24h' as const, nowMs: 0, stage: null, group: null, groupBy: null, total: 3, rows };
+  const load = { data, failed: false, forbidden: false, loading: false, reload: () => undefined };
+  const html = renderToStaticMarkup(createElement(MemoryRouter, null, createElement(DrillList, { load, target: { stage: 'resolve', group: null }, window: '24h' })));
+  const hrefs = [...html.matchAll(/href="([^"]+)"/g)].map((m) => m[1]);
+  assert.deepEqual(hrefs, ['/admin/tickets/T-3', '/admin/tickets/T-1', '/admin/tickets/T-2']);
+  assert.match(text(html), /T-2 .*unavailable/);
 });

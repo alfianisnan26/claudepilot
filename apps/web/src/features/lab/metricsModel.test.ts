@@ -138,13 +138,13 @@ test('leadLabel and leadRows: lead names in words, at most ten rows, the rest co
 });
 
 test('closureColumns: 24 hourly columns ending now; won\'t-do is a note, not a count; out-of-window rows are left out', () => {
-  const c = closureColumns(tickets([row('T-1', 0.5), row('T-2', 0.6), row('T-3', 5), row('T-4', 3, { status: 'wont_do' }), row('T-5', 30)], 9), '24h');
+  const c = closureColumns(tickets([row('T-1', 0.5), row('T-2', 0.6), row('T-3', 4.5), row('T-4', 2.5, { status: 'wont_do' }), row('T-5', 30)], 9), '24h');
   assert.equal(c.columns.length, 24);
   assert.equal(c.per, 'hour');
   assert.equal(c.done, 3);
   assert.equal(c.columns[23]?.value, 2);
-  assert.equal(c.columns[18]?.value, 1);
-  assert.equal(c.columns[20]?.detail, "1 won't do");
+  assert.equal(c.columns[19]?.value, 1);
+  assert.equal(c.columns[21]?.detail, "1 won't do");
   assert.equal(c.missing, 4);
   assert.equal(closureColumns(tickets([row('T-1', 50)]), '7d').columns.length, 7);
   assert.equal(closureColumns(tickets([row('T-1', 50)]), '7d').per, 'day');
