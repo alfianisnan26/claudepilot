@@ -34,7 +34,8 @@ async function build(undoOk: Record<string, boolean> = {}, o: { owners?: Record<
       looked.push(sessionId);
       const [last] = store.events(FOUNDING_USER_ID, { session: sessionId, kinds: ['moved'], limit: 1 });
       const lastMove = last ? { event: last, undo: { ok: undoOk[sessionId] ?? false, reason: null } } : null;
-      return { mode: null, effectiveMode: 'auto', applicable: true, why: null, pausedUntil: null, movesToday: 0, pending: null, lastMove } as unknown as AutoSessionState;
+      const head = { mode: null, effectiveMode: 'auto', applicable: true, why: null, pausedUntil: null, movesToday: 0, pending: null };
+      return { ...head, lastMove } as unknown as AutoSessionState;
     },
     // T-2398: the sessions whose Claude is left out of auto move.
     claudeExcluded: (sessionId: string) => (o.excluded ?? []).includes(sessionId),

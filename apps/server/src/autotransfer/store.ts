@@ -1,6 +1,6 @@
 // Auto transfer's rows (migration 220): a user's choices, a Claude's threshold, destinations and exclusion (881), a chat's state, the
-// open card, the trail. Every read and write names the owner it is for (`owner_id`); a row of another owner is never returned. Kept 90 days (events,
-// answered suggestions). No secret and no message text is stored.
+// open card, the trail. Every read and write names the owner it is for (`owner_id`); a row of another owner is never returned. Kept 90
+// days (events, answered suggestions). No secret and no message text is stored.
 
 import { randomBytes } from 'node:crypto';
 import {

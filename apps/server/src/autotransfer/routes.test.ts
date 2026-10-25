@@ -72,7 +72,14 @@ test('a Claude’s destinations: other Claudes of the same workspace, each once'
   const b = await build();
   const ok = await b.call('u_a', 'PUT', '/api/autotransfer/claudes/work', { thresholdPct: 15, destinations: ['home'] });
   assert.equal(ok.status, 200);
-  assert.deepEqual(ok.data, { claudeId: 'work', claudeName: 'Work', workspaceId: 'docker/api-dev', thresholdPct: 15, destinations: ['home'], excluded: false });
+  assert.deepEqual(ok.data, {
+    claudeId: 'work',
+    claudeName: 'Work',
+    workspaceId: 'docker/api-dev',
+    thresholdPct: 15,
+    destinations: ['home'],
+    excluded: false,
+  });
   assert.equal((await b.call('u_a', 'PUT', '/api/autotransfer/claudes/work', { destinations: ['work'] })).status, 422);
   assert.equal((await b.call('u_a', 'PUT', '/api/autotransfer/claudes/work', { destinations: ['home', 'home'] })).status, 422);
   assert.equal((await b.call('u_a', 'PUT', '/api/autotransfer/claudes/nope', { thresholdPct: 15 })).status, 404);
@@ -81,7 +88,8 @@ test('a Claude’s destinations: other Claudes of the same workspace, each once'
 
 test('T-2398: a Claude left out of auto move: PUT then GET, a partial PUT keeps the rest, a non-boolean is refused, audited, kept over a reopen', async () => {
   const b = await build();
-  const claudeOf = (v: { data: { claudes: { claudeId: string; excluded: boolean }[] } }, id: string) => v.data.claudes.find((c) => c.claudeId === id);
+  type View = { data: { claudes: { claudeId: string; excluded: boolean }[] } };
+  const claudeOf = (v: View, id: string) => v.data.claudes.find((c) => c.claudeId === id);
   // No row yet: false for every Claude.
   const before = await b.call('u_a', 'GET', '/api/autotransfer');
   assert.deepEqual(before.data.claudes.map((c: { excluded: boolean }) => c.excluded), [false, false]);

@@ -12,7 +12,10 @@ import { portalTools, z, type ToolRegistry } from '../portalmcp/registry.js';
 import type { AutoTransferEngine } from './engine.js';
 import type { AutoStore } from './store.js';
 
-export function registerAutoTransferTools(d: { engine: Pick<AutoTransferEngine, 'state' | 'claudeExcluded'>; store: AutoStore; owner: PlatformOwner }, registry: ToolRegistry = portalTools): void {
+export function registerAutoTransferTools(
+  d: { engine: Pick<AutoTransferEngine, 'state' | 'claudeExcluded'>; store: AutoStore; owner: PlatformOwner },
+  registry: ToolRegistry = portalTools,
+): void {
   registry.register({
     name: 'autotransfer_status',
     title: 'Auto move status',

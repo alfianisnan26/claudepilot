@@ -1100,7 +1100,8 @@ test('T-1835: three exhausted chats at once spread: each move counts on its new 
 });
 
 test('T-2398: with Home left out of auto move, three exhausted chats all go to Spare, none to Home (the stored setting is read)', async () => {
-  const r = await rig(AUTO, () => [usage('work', 'Work', [win('session', 100)]), usage('home', 'Home', [win('session', 60)]), usage('spare', 'Spare', [win('session', 50)])]);
+  const workHome = () => [usage('work', 'Work', [win('session', 100)]), usage('home', 'Home', [win('session', 60)])];
+  const r = await rig(AUTO, () => [...workHome(), usage('spare', 'Spare', [win('session', 50)])]);
   r.auto.setClaude('u_a', 'home', { thresholdPct: null, destinations: [], excluded: true });
   for (const id of ['s2', 's3']) r.chat.sessions.set(id, chatSession(id));
   for (const id of ['s1', 's2', 's3']) r.chat.turnEnds(id);

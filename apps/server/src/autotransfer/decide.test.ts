@@ -689,7 +689,8 @@ test('T-2398: a chat on an excluded Claude is never moved off it by itself: auto
   // Exhausted and silent for an hour while "working": the hard move does not apply either.
   const EXH = () => claude('work', 'Work', [win('session', 100)]);
   const exh = [EXH(), HOME_60()];
-  const stuck = decide(input(exh, { excluded: workOut, session: { ...input(exh).session, state: 'working' }, lastEventAtMs: NOW - 60 * 60_000 }));
+  const silent = { excluded: workOut, session: { ...input(exh).session, state: 'working' as const }, lastEventAtMs: NOW - 60 * 60_000 };
+  const stuck = decide(input(exh, silent));
   assert.equal(stuck.act, 'suggest');
   assert.equal('hard' in stuck, false);
   // Above the threshold: nothing, as for any Claude.
