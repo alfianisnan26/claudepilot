@@ -109,6 +109,16 @@ export class Metrics {
     return resolvePrograms({ setting: typeof raw === 'string' ? raw : DEFAULT_METRICS_PROGRAMS, programTags: (db && tryRead(() => loadProgramTags(db))) || [], flow });
   }
 
+  /**
+   * Whether a chat session is a lead: a top-level chat (no parent session; a worker started with `session_spawn` has one). Unknown or not
+   * readable: false. The reach of an agent's token on the metrics tools (portal MCP, metricsTools.ts).
+   */
+  leadSession(sessionId: string): boolean {
+    const db = this.deps.store.db;
+    const row = db ? tryRead(() => db.prepare('SELECT parent_id FROM chat_sessions WHERE id = ?').get(sessionId) as { parent_id: string | null } | undefined) : null;
+    return !!row && !row.parent_id;
+  }
+
   program(id: string | undefined): MetricsProgram | null {
     return this.programs().find((p) => p.id === (id ?? 'all')) ?? null;
   }
