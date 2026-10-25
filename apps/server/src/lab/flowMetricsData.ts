@@ -78,6 +78,11 @@ export function leadOf(tags: readonly string[], holder: string | null, sessions:
   return 'unrecorded';
 }
 
+/** The crew of a ticket's holder: its lineage root (crew_scorecard's program id), or null. */
+export function crewOf(holder: string | null, sessions: ReadonlyMap<string, SessionInfo> | null): string | null {
+  return holder && sessions?.has(holder) ? programIdOf(holder, sessions) : null;
+}
+
 /**
  * The window read. `+status` keeps the planner off `tickets_queue` (status first): without it SQLite picked that index and walked every done
  * ticket ever closed (metricsPerf.test.ts checks the plan); the window is bounded by `tickets_closed_at`.
@@ -144,7 +149,8 @@ export function loadFlowTickets(db: DatabaseSync, fromMs: number, toMs: number, 
   }
   for (const t of chunked<{ ticket_number: number; tag: string }>(db, numbers, (l) => `SELECT ticket_number, tag FROM ticket_tags WHERE ticket_number IN ${l}`)) by.get(t.ticket_number)!.tags.push(t.tag);
   const holders = new Set<string>();
-  for (const a of by.values()) if (a.holder && !a.tags.some((t) => t.startsWith('area-'))) holders.add(a.holder);
+  // Every holder, area-tagged or not: the crew of each ticket is what keeps an agent's read to its own crew (metricsTools.ts).
+  for (const a of by.values()) if (a.holder) holders.add(a.holder);
   let sessions: Map<string, SessionInfo> | null = null;
   if (sessionsOf && holders.size) {
     try {
@@ -169,6 +175,7 @@ export function loadFlowTickets(db: DatabaseSync, fromMs: number, toMs: number, 
       closedAtMs: closed,
       tags: a.tags.sort(),
       lead: leadOf(a.tags, a.holder, sessions),
+      crew: crewOf(a.holder, sessions),
       starts: sort(a.starts),
       firstAgentCommentMs: a.firstAgent,
       verdicts: a.verdicts.sort((x, y) => x.atMs - y.atMs),
@@ -178,8 +185,11 @@ export function loadFlowTickets(db: DatabaseSync, fromMs: number, toMs: number, 
   return out;
 }
 
-/** Every ticket that is open work now (open, in progress, blocked, in review), with its tags and, in review, since when. */
-export function loadOpenTickets(db: DatabaseSync): OpenTicketFacts[] {
+/**
+ * Every ticket that is open work now (open, in progress, blocked, in review), with its tags and, in review, since when. `sessionsOf` resolves
+ * the holder sessions for each ticket's crew; null leaves the crew null.
+ */
+export function loadOpenTickets(db: DatabaseSync, sessionsOf: ((ids: Iterable<string>) => Map<string, SessionInfo>) | null = null): OpenTicketFacts[] {
   const rows = db
     .prepare(`SELECT number, status, created_at, updated_at, assignee_kind, assignee_ref FROM tickets WHERE status IN ('open', 'in_progress', 'blocked', 'in_review')`)
     .all() as unknown as { number: number; status: string; created_at: string; updated_at: string; assignee_kind: string | null; assignee_ref: string | null }[];
@@ -196,15 +206,26 @@ export function loadOpenTickets(db: DatabaseSync): OpenTicketFacts[] {
     const at = ms(e.at);
     if (at !== null) since.set(e.ticket_number, at);
   }
+  const holders = new Set(rows.filter((r) => r.assignee_kind === 'session' && r.assignee_ref).map((r) => r.assignee_ref!));
+  let sessions: Map<string, SessionInfo> | null = null;
+  if (sessionsOf && holders.size) {
+    try {
+      sessions = sessionsOf(holders);
+    } catch {
+      sessions = null;
+    }
+  }
   return rows.map((r) => {
     const created = ms(r.created_at) ?? 0;
+    const holder = r.assignee_kind === 'session' ? r.assignee_ref : null;
     return {
       id: `T-${r.number}`,
       status: r.status,
       tags: (tags.get(r.number) ?? []).sort(),
       updatedAtMs: ms(r.updated_at) ?? created,
       statusSinceMs: since.get(r.number) ?? created,
-      assigneeSession: r.assignee_kind === 'session' ? r.assignee_ref : null,
+      assigneeSession: holder,
+      crew: crewOf(holder, sessions),
     };
   });
 }

@@ -339,11 +339,17 @@ test('routes: every metrics route is declared; the owner reads; bob and an agent
     const tk = await get(owner, '/api/lab/metrics/tickets?stage=resolve&groupBy=priority&group=high');
     assert.equal(tk.status, 200);
     assert.deepEqual((tk.body.data as MetricsTickets).rows.map((r) => r.ticket), ['T-1']);
+    // T-2360 review LOW: `offset` pages the drill-down; `total` stays over all rows.
+    const all = (await get(owner, '/api/lab/metrics/tickets?window=7d')).body.data as MetricsTickets;
+    const rest = (await get(owner, '/api/lab/metrics/tickets?window=7d&offset=1')).body.data as MetricsTickets;
+    assert.ok(all.rows.length >= 2);
+    assert.deepEqual([rest.total, rest.rows.map((r) => r.ticket)], [all.total, all.rows.slice(1).map((r) => r.ticket)]);
+    assert.deepEqual(((await get(owner, `/api/lab/metrics/tickets?window=7d&offset=${all.total}`)).body.data as MetricsTickets).rows, []);
     const ins = await get(owner, '/api/lab/metrics/insights?program=konfersi');
     assert.equal(ins.status, 200);
     assert.ok(Array.isArray((ins.body.data as MetricsInsights).items));
 
-    for (const url of ['/api/lab/metrics/overview?window=1h', '/api/lab/metrics/flow?groupBy=colour', '/api/lab/metrics/trend?metric=x', '/api/lab/metrics/tickets?group=high', '/api/lab/metrics/tickets?stage=nap', '/api/lab/metrics/overview?program=a%20b']) {
+    for (const url of ['/api/lab/metrics/overview?window=1h', '/api/lab/metrics/flow?groupBy=colour', '/api/lab/metrics/trend?metric=x', '/api/lab/metrics/tickets?group=high', '/api/lab/metrics/tickets?stage=nap', '/api/lab/metrics/tickets?offset=-1', '/api/lab/metrics/tickets?offset=1.5', '/api/lab/metrics/overview?program=a%20b']) {
       const r = await get(owner, url);
       assert.equal(r.status, 422, url);
       assert.equal(r.body.error?.code, 'VALIDATION_FAILED', url);

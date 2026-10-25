@@ -8,8 +8,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, test } from 'node:test';
-import { clearResolvers, declaredToolPolicies } from '../authz/seam.js';
-import { ToolRegistry } from '../portalmcp/registry.js';
+import { clearResolvers, declaredToolPolicies, singleOwner, useAuthz } from '../authz/seam.js';
+import { ToolRegistry, type PortalToolContext } from '../portalmcp/registry.js';
 import { MAX_RESULT_CHARS } from '../portalmcp/server.js';
 import { portalMcpHarness } from '../portalmcp/testkit.js';
 import { generateSecretKey, parseSecretKey } from '../store/secretBox.js';
@@ -18,7 +18,7 @@ import { LAB_TOOL_POLICIES } from './authz.js';
 import { Lab } from './index.js';
 import { Metrics } from './metricsService.js';
 import { writeSnapshots } from './metricsSnapshots.js';
-import { fitRows, hours, registerMetricsTools, TICKETS_DEFAULT } from './metricsTools.js';
+import { fitRows, hours, metricsReach, registerMetricsTools, TICKETS_DEFAULT } from './metricsTools.js';
 
 const H = 3_600_000;
 const NOW = Date.UTC(2026, 9, 14, 12);
@@ -118,7 +118,7 @@ test('policy: an admin token and a lead read; a worker and an unknown session ge
     const args: Record<string, Record<string, unknown>> = { metrics_trend: { metric: 'effectiveness' } };
     for (const name of TOOLS) {
       assert.equal(data(await mcp.call(admin, name, args[name] ?? {})).reach, 'portal', name);
-      assert.equal(data(await mcp.call(lead, name, args[name] ?? {})).reach, 'lead', name);
+      assert.equal(data(await mcp.call(lead, name, args[name] ?? {})).reach, 'crew', name);
       const w = await mcp.call(worker, name, args[name] ?? {});
       const s = await mcp.call(stranger, name, args[name] ?? {});
       assert.equal(code(w), 'NOT_FOUND', `${name}: a worker is refused`);
@@ -126,6 +126,93 @@ test('policy: an admin token and a lead read; a worker and an unknown session ge
     }
     // A program that is not there: NOT_FOUND for the admin too.
     assert.equal(code(await mcp.call(admin, 'metrics_overview', { program: 'nope' })), 'NOT_FOUND');
+  } finally {
+    done();
+  }
+});
+
+test('policy (T-2360 review HIGH): a lead whose owner may not view usage gets the same NOT_FOUND as an unknown session', async () => {
+  const { h, mcp, done } = await harness();
+  try {
+    // L3 is a top-level chat of another person (u_member): in the single-owner seam only the founding user holds `view` on `usage`.
+    h.db
+      .prepare(
+        `INSERT INTO chat_sessions (id, workspace_id, title, state, state_since, created_at, last_activity_at, claude_id, parent_id, continued_from, max_workers, subagents, owner_id) VALUES ('L3', 'docker/api', 't', 'ended', ?, ?, ?, 'c1', NULL, NULL, 2, 0, 'u_member')`,
+      )
+      .run(iso(at(20)), iso(at(20)), iso(at(1)));
+    const member = (await mcp.agentToken('docker/api', 'L3')).secret;
+    const stranger = (await mcp.agentToken('docker/api', 'X9')).secret;
+    for (const name of TOOLS) {
+      const args = name === 'metrics_trend' ? { metric: 'effectiveness' } : { program: 'all' };
+      const m = await mcp.call(member, name, args);
+      assert.equal(code(m), 'NOT_FOUND', `${name}: a lead without the owner's usage view is refused`);
+      assert.deepEqual(m.result, (await mcp.call(stranger, name, args)).result, `${name}: reads exactly like an unknown session`);
+    }
+    assert.equal(h.lab.metrics.leadScope('L3'), null);
+    assert.deepEqual(h.lab.metrics.leadScope('L1'), { crew: 'L1' });
+  } finally {
+    done();
+  }
+});
+
+test('policy (T-2360 review HIGH): an admin token and a manager token without usage view are refused', async () => {
+  const { h, done } = await harness();
+  const ctx = (principal: Record<string, unknown>) => ({ isAgent: false, sessionId: null, principal: { tokenId: 't1', scope: 'read', workspaceId: null, sessionId: null, ...principal } }) as unknown as PortalToolContext;
+  try {
+    // A manager acts as its person: one who is not the founding user holds no `view` on `usage`.
+    assert.throws(() => metricsReach(ctx({ kind: 'manager', userId: 'u_member' }), h.lab), (e: any) => e.code === 'NOT_FOUND');
+    // The founding user's manager and admin token read the portal.
+    assert.equal(metricsReach(ctx({ kind: 'manager', userId: 'u_owner' }), h.lab).reach, 'portal');
+    assert.equal(metricsReach(ctx({ kind: 'user' }), h.lab).reach, 'portal');
+    // An authz layer that withholds `usage`: the admin's token and the founding user's manager are refused too.
+    const was = useAuthz({ ...singleOwner, can: (a, v, o) => (o.type === 'platform' && o.id === 'usage' ? { allow: false, reason: 'no_right', level: 'none' } : singleOwner.can(a, v, o)) });
+    try {
+      assert.throws(() => metricsReach(ctx({ kind: 'user' }), h.lab), (e: any) => e.code === 'NOT_FOUND');
+      assert.throws(() => metricsReach(ctx({ kind: 'manager', userId: 'u_owner' }), h.lab), (e: any) => e.code === 'NOT_FOUND');
+      // And a lead whose owner it withholds `usage` from: refused (the owner's right, not the session's, decides).
+      assert.equal(h.lab.metrics.leadScope('L1'), null);
+    } finally {
+      useAuthz(was);
+    }
+  } finally {
+    done();
+  }
+});
+
+test('policy (T-2360 review HIGH): a lead reads only its own crew’s tickets, no paces, no score before, no trend', async () => {
+  const { h, mcp, done } = await harness();
+  try {
+    // A second crew: lead L2 with worker W2, holding T-3 (assigned).
+    for (const [id, parent] of [
+      ['L2', null],
+      ['W2', 'L2'],
+    ] as const)
+      h.db
+        .prepare(
+          `INSERT INTO chat_sessions (id, workspace_id, title, state, state_since, created_at, last_activity_at, claude_id, parent_id, continued_from, max_workers, subagents) VALUES (?, 'docker/api', 't', 'ended', ?, ?, ?, 'c1', ?, NULL, 2, 0)`,
+        )
+        .run(id, iso(at(20)), iso(at(20)), iso(at(1)), parent);
+    h.db.prepare(`UPDATE tickets SET assignee_kind = 'session', assignee_ref = 'W2' WHERE number = 3`).run();
+    // A whole-program snapshot a window ago: an admin's "previous", never a crew's.
+    writeSnapshots(h.db, at(24), [{ program: 'all', values: { efficiency: 40, effectiveness: 55 } as never }]);
+    const admin = mcp.token('read').secret;
+    const l1 = (await mcp.agentToken('docker/api', 'L1')).secret;
+    const l2 = (await mcp.agentToken('docker/api', 'L2')).secret;
+    const ids = async (t: string) => data(await mcp.call(t, 'metrics_tickets', { window: '7d', limit: 50 })).rows.map((r: any) => r.ticket);
+    assert.deepEqual(await ids(l1), ['T-1']);
+    assert.deepEqual(await ids(l2), ['T-3']);
+    assert.ok((await ids(admin)).length >= 4);
+    const f1 = data(await mcp.call(l1, 'metrics_flow_times', { window: '7d', group_by: 'lead', full: true }));
+    assert.equal(f1.total.done, 1);
+    assert.ok(f1.groups.every((g: any) => !String(g.key).includes('L2')), 'no group of another crew');
+    const o1 = data(await mcp.call(l1, 'metrics_overview', { full: true }));
+    assert.equal(o1.effectiveness.previous, null, 'no whole-program score a window ago');
+    assert.ok(!o1.crew || o1.crew.programs.every((p: string) => p === 'L1'), 'only its own crew');
+    assert.equal(data(await mcp.call(admin, 'metrics_overview', {})).effectiveness.previous, 55);
+    const t1 = data(await mcp.call(l1, 'metrics_trend', { metric: 'effectiveness' }));
+    assert.deepEqual([t1.points, t1.unavailable], [[], 'unavailable:no_source']);
+    const i2 = data(await mcp.call(l2, 'metrics_insights', { window: '7d' }));
+    for (const it of i2.items) assert.ok(it.tickets.every((t: string) => t === 'T-3'), JSON.stringify(it));
   } finally {
     done();
   }
@@ -299,12 +386,15 @@ test('size budget: a large store (3,000 done tickets, 300 leads, a month of snap
   }
 });
 
-test('metrics_tickets pages with next_cursor; a cursor is bound to its query; a lead pages too', async () => {
+test('metrics_tickets pages with next_cursor; a cursor is bound to its query; a lead pages its own crew', async () => {
   const { mcp, done } = await harness();
   try {
     const admin = mcp.token('read').secret;
     const lead = (await mcp.agentToken('docker/api', 'L1')).secret;
-    for (const token of [admin, lead]) {
+    // The lead's crew (L1, W1) held T-1 only: one row, no next page.
+    const own = data(await mcp.call(lead, 'metrics_tickets', { limit: 2 }));
+    assert.deepEqual([own.total, own.rows.map((r: any) => r.ticket), own.next_cursor], [1, ['T-1'], null]);
+    for (const token of [admin]) {
       const first = data(await mcp.call(token, 'metrics_tickets', { limit: 2 }));
       assert.deepEqual([first.total, first.rows.map((r: any) => r.ticket)], [4, ['T-1', 'T-2']]);
       assert.equal(typeof first.next_cursor, 'string');

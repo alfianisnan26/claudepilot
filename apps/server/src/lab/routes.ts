@@ -173,7 +173,8 @@ export function createLabRoutes(lab: Lab): Hono {
     return c.json(success(found(lab.metrics.trend(param(c, 'program'), metric, window))));
   });
 
-  // GET /api/lab/metrics/tickets?program=&window=&stage=&groupBy=&group=
+  // GET /api/lab/metrics/tickets?program=&window=&stage=&groupBy=&group=&offset=
+  // At most TICKET_ROWS rows from `offset` (default 0); `total` counts them all, so the next page is offset + rows.length while below it.
   r.get('/metrics/tickets', (c) => {
     metricsReader(c);
     const window = choice(c, 'window', METRICS_WINDOWS, '24h')!;
@@ -181,7 +182,10 @@ export function createLabRoutes(lab: Lab): Hono {
     const groupBy = choice(c, 'groupBy', METRICS_GROUP_BY, null);
     const group = param(c, 'group');
     if (group && !groupBy) throw new AppError('VALIDATION_FAILED', 'group: needs groupBy.', { details: { group: 'needs groupBy' } });
-    return c.json(success(found(lab.metrics.tickets(param(c, 'program'), window, { ...(stage ? { stage } : {}), ...(groupBy ? { groupBy } : {}), ...(group ? { group } : {}) }))));
+    const rawOffset = param(c, 'offset') ?? '0';
+    if (!/^\d{1,9}$/.test(rawOffset)) throw new AppError('VALIDATION_FAILED', 'offset: a whole number from 0.', { details: { offset: 'a whole number from 0' } });
+    const offset = Number(rawOffset);
+    return c.json(success(found(lab.metrics.tickets(param(c, 'program'), window, { ...(stage ? { stage } : {}), ...(groupBy ? { groupBy } : {}), ...(group ? { group } : {}), offset }))));
   });
 
   // GET /api/lab/metrics/insights?program=&window=

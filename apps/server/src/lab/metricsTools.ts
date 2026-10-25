@@ -4,8 +4,10 @@
 // Who may call (the policy, authz.ts): these are whole-portal numbers (every program's tickets, every crew, every Claude's pace), which the
 // REST routes give only to a reader of the platform area `usage`. The ticket's readers are the leads (agents) and the operator, and the seam
 // boxes every agent out of a platform area, so the tools are `scope: 'agent'` with the reach checked here:
-// - an agent's per-session token: only when its session is a lead (a top-level chat: no parent session). A worker gets NOT_FOUND, the
-//   dispatch's own "Not found." (its sub-agents share the lead's token, so a lead's helpers read them too);
+// - an agent's per-session token: only when its session is a lead (a top-level chat: no parent session) AND the person who owns that session
+//   may view `usage` (the routes' reader), and then only its own crew: the tickets its lineage held (the crew scorecard's own program), no
+//   paces, no score a window ago and no trend (both whole-program snapshots). A worker gets NOT_FOUND, the dispatch's own "Not found." (its
+//   sub-agents share the lead's token, so a lead's helpers read them too);
 // - an admin's (cpat_) or the manager's (cpmt_) token: only with `view` on `usage` through can(), as the routes ask.
 // Results are short by default (T-282) and kept under the result limit (FULL_BUDGET_CHARS); durations are hours with two decimals; ticket
 // ids and program ids only (no ticket text, no session titles); a figure the portal does not have is `unavailable:<reason>`, never 0.
@@ -31,6 +33,7 @@ import { PAGE_DEFAULT, PAGE_MAX, pageInput, pageWindow } from '../portalmcp/pagi
 import { PortalToolError, portalTools, z, type PortalToolContext, type ToolRegistry } from '../portalmcp/registry.js';
 import { ticketKeyField } from '../tickets/keys.js';
 import type { Lab } from './index.js';
+import type { MetricsScope } from './metricsService.js';
 import { FULL_BUDGET_CHARS, withoutSources } from './portalTools.js';
 
 const ID = /^[A-Za-z0-9_.:=-]{1,120}$/;
@@ -55,17 +58,19 @@ const gone = (u: MetricsUnavailable | undefined) => `unavailable:${u?.reason ?? 
 const UNREAD = 'unavailable (the closed tickets could not be read)';
 
 /**
- * The reach (see the header): an agent's token only for a lead session, an admin's or manager's only with `view` on `usage`. A refusal is the
- * dispatch's own NOT_FOUND ("Not found."), so it reads like any refused tool.
+ * The reach (see the header): an agent's token only for a lead session whose owner may view `usage`, and then only its own crew's tickets;
+ * an admin's or manager's only with `view` on `usage`. A refusal is the dispatch's own NOT_FOUND ("Not found."), so it reads like any
+ * refused tool.
  */
-export function metricsReach(ctx: PortalToolContext, lab: Lab): 'lead' | 'portal' {
+export function metricsReach(ctx: PortalToolContext, lab: Lab): { reach: 'crew' | 'portal'; scope: MetricsScope } {
   const no = () => new PortalToolError('NOT_FOUND', 'Not found.');
   if (ctx.isAgent) {
-    if (!ctx.sessionId || !lab.metrics.leadSession(ctx.sessionId)) throw no();
-    return 'lead';
+    const scope = ctx.sessionId ? lab.metrics.leadScope(ctx.sessionId) : null;
+    if (!scope) throw no();
+    return { reach: 'crew', scope };
   }
   if (!can(actorOfPrincipal(ctx.principal), 'view', platformRef('usage')).allow) throw no();
-  return 'portal';
+  return { reach: 'portal', scope: null };
 }
 
 const noProgram = () => new PortalToolError('NOT_FOUND', 'No such program.');
@@ -149,7 +154,7 @@ export function fitRows<T>(head: Record<string, unknown>, key: string, rows: rea
 }
 
 export function registerMetricsTools(lab: Lab, registry: ToolRegistry = portalTools): void {
-  const reachNote = 'An agent’s token: a lead session only (a worker gets not found); an admin’s: with view on usage.';
+  const reachNote = 'An agent’s token: a lead session whose owner may view usage, its own crew’s tickets only (a worker gets not found); an admin’s: with view on usage.';
 
   registry.register({
     name: 'metrics_overview',
@@ -159,8 +164,8 @@ export function registerMetricsTools(lab: Lab, registry: ToolRegistry = portalTo
     hints: { readOnly: true, idempotent: true },
     input: z.object({ program: programArg, window: windowArg, ...fullInput }),
     async handler(ctx, args) {
-      const reach = metricsReach(ctx, lab);
-      const ov = found(await lab.metrics.overview(args.program, args.window ?? '24h'));
+      const { reach, scope: crew } = metricsReach(ctx, lab);
+      const ov = found(await lab.metrics.overview(args.program, args.window ?? '24h', crew));
       const p = ov.program;
       const summary = `${p.label} (${p.id}) over the last ${ov.window}: efficiency ${ov.efficiency.value ?? 'unavailable'}, effectiveness ${ov.effectiveness.value ?? 'unavailable'}, ${ov.flow ? `${ov.flow.current.done} done, ${ov.flow.current.wontDo} won't-do` : `done and won't-do ${UNREAD}`}. Dollars are estimates.`;
       if (args.full) {
@@ -208,8 +213,8 @@ export function registerMetricsTools(lab: Lab, registry: ToolRegistry = portalTo
     hints: { readOnly: true, idempotent: true },
     input: z.object({ program: programArg, window: windowArg, group_by: z.enum(METRICS_GROUP_BY).optional().describe('program, lead (area-* tag or lead:<session>), type or priority.'), ...fullInput }),
     handler(ctx, args) {
-      const reach = metricsReach(ctx, lab);
-      const f = found(lab.metrics.flow(args.program, args.window ?? '24h', args.group_by ?? null));
+      const { reach, scope: crew } = metricsReach(ctx, lab);
+      const f = found(lab.metrics.flow(args.program, args.window ?? '24h', args.group_by ?? null, crew));
       if (f.total === null)
         return { summary: `${f.program} over the last ${f.window}: flow times ${UNREAD}.`, reach, program: f.program, window: f.window, group_by: f.groupBy, total: gone(f.unavailable), groups: [] };
       const summary = `${f.program} over the last ${f.window}: ${f.total.current.done} done${f.groupBy ? `, ${f.groups.length} ${f.groupBy} group${f.groups.length === 1 ? '' : 's'}` : ''}. Hours.`;
@@ -229,7 +234,12 @@ export function registerMetricsTools(lab: Lab, registry: ToolRegistry = portalTo
     hints: { readOnly: true, idempotent: true },
     input: z.object({ metric: z.enum(METRICS_TREND_KEYS), program: programArg, window: z.enum(METRICS_TREND_WINDOWS).optional().describe('24h, 7d or 30d. Default 7d.') }),
     handler(ctx, args) {
-      const reach = metricsReach(ctx, lab);
+      const { reach, scope: crew } = metricsReach(ctx, lab);
+      // The snapshots hold whole-program numbers: an agent's crew read has no trend (never another crew's figures).
+      if (crew) {
+        const p = found(lab.metrics.program(args.program));
+        return { summary: `${args.metric} of ${p.id}: unavailable for an agent's token (the trend is kept for whole programs only).`, reach, program: p.id, metric: args.metric, window: args.window ?? '7d', points: [], unavailable: 'unavailable:no_source' };
+      }
       const t = found(lab.metrics.trend(args.program, args.metric, args.window ?? '7d'));
       const vals = t.points.map((p) => p.value).filter((v): v is number => v !== null);
       const summary = vals.length
@@ -260,8 +270,8 @@ export function registerMetricsTools(lab: Lab, registry: ToolRegistry = portalTo
     hints: { readOnly: true, idempotent: true },
     input: z.object({ program: programArg, window: windowArg }),
     async handler(ctx, args) {
-      const reach = metricsReach(ctx, lab);
-      const ins = found(await lab.metrics.insights(args.program, args.window ?? '24h'));
+      const { reach, scope: crew } = metricsReach(ctx, lab);
+      const ins = found(await lab.metrics.insights(args.program, args.window ?? '24h', crew));
       const act = ins.items.filter((i) => i.severity === 'act').length;
       const summary = `${ins.items.length} finding${ins.items.length === 1 ? '' : 's'} for ${ins.program} over the last ${ins.window}${act ? `, ${act} to act on` : ''}.`;
       return { summary, reach, program: ins.program, window: ins.window, items: ins.items.map((i) => ({ kind: i.kind, severity: i.severity, text: i.text, tickets: i.tickets })) };
@@ -283,7 +293,7 @@ export function registerMetricsTools(lab: Lab, registry: ToolRegistry = portalTo
       ...pageInput,
     }),
     handler(ctx, args) {
-      const reach = metricsReach(ctx, lab);
+      const { reach, scope: crew } = metricsReach(ctx, lab);
       if (args.group && !args.group_by) throw new PortalToolError('VALIDATION_FAILED', 'group: needs group_by.', { group: 'needs group_by' });
       // The cursor is bound to the query (program, window, stage, group): another query's cursor is INVALID_CURSOR.
       const page = pageWindow(args, { p: args.program ?? 'all', w: args.window ?? '24h', s: args.stage ?? null, b: args.group_by ?? null, g: args.group ?? null });
@@ -293,7 +303,7 @@ export function registerMetricsTools(lab: Lab, registry: ToolRegistry = portalTo
           ...(args.group_by ? { groupBy: args.group_by } : {}),
           ...(args.group ? { group: args.group } : {}),
           offset: page.offset,
-        }),
+        }, crew),
       );
       const scope = `${t.window} for ${t.program}${t.stage ? ` with ${t.stage} recorded` : ''}${t.group ? ` in ${t.groupBy} ${t.group}` : ''}`;
       if (t.total === null)

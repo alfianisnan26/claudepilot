@@ -37,9 +37,27 @@ export class Lab {
   /** T-2360 (§28.15): the pilot metrics (flow times, efficiency and effectiveness, trend, findings). */
   readonly metrics: Metrics;
 
-  constructor(private readonly opts: { store: Store; now?: () => number; log?: (msg: string) => void; tickets?: TicketReader; paceSource?: PaceSource; settings?: FlowSettingsReader }) {
+  constructor(
+    private readonly opts: {
+      store: Store;
+      now?: () => number;
+      log?: (msg: string) => void;
+      tickets?: TicketReader;
+      paceSource?: PaceSource;
+      settings?: FlowSettingsReader;
+      /** The metrics' reuse of a read, ms (MetricsDeps.memoMs): the portal passes METRICS_MEMO_MS; absent, every call reads. */
+      metricsMemoMs?: number;
+    },
+  ) {
     const now = opts.now ?? Date.now;
-    this.metrics = new Metrics({ store: opts.store, now, settings: opts.settings ?? null, paces: opts.paceSource ?? null, ...(opts.log ? { log: opts.log } : {}) });
+    this.metrics = new Metrics({
+      store: opts.store,
+      now,
+      settings: opts.settings ?? null,
+      paces: opts.paceSource ?? null,
+      memoMs: opts.metricsMemoMs ?? 0,
+      ...(opts.log ? { log: opts.log } : {}),
+    });
     this.#ingest = new LabIngest(() => (opts.store.writable ? opts.store.db : null), now, (s) => {
       const db = this.#db();
       if (!db) return;

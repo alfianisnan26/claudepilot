@@ -43,6 +43,8 @@ export interface FlowTicketFacts {
   tags: readonly string[];
   /** The unit lead: the first `area-*` tag, else `lead:<the lineage root of its holder>`, else `unrecorded` (the loader decides). */
   lead: string;
+  /** The crew (lineage root, crew_scorecard's program id) of the session that held it; null or absent: no session held it. An agent reads only its own crew's. */
+  crew?: string | null;
   /** Every move into in_progress, oldest first. */
   starts: readonly number[];
   /** The first comment written by an agent session (`session:*` actor), or null. */
@@ -62,6 +64,7 @@ export interface FlowRow {
   closedAtMs: number;
   tags: readonly string[];
   lead: string;
+  crew?: string | null;
   stages: Record<MetricsStage, number | null>;
   /** Verdicts in the test stage, and how many of them failed; null without a test stage. */
   rounds: number | null;
@@ -88,7 +91,7 @@ const NO_STAGES = (): Record<MetricsStage, number | null> => ({ start: null, rep
  */
 export function ticketFlow(t: FlowTicketFacts): FlowRow {
   const close = t.closedAtMs;
-  const base = { id: t.id, type: t.type, priority: t.priority, status: t.status, createdAtMs: t.createdAtMs, closedAtMs: close, tags: t.tags, lead: t.lead, lifeMs: span(t.createdAtMs, close) };
+  const base = { id: t.id, type: t.type, priority: t.priority, status: t.status, createdAtMs: t.createdAtMs, closedAtMs: close, tags: t.tags, lead: t.lead, crew: t.crew ?? null, lifeMs: span(t.createdAtMs, close) };
   if (t.status !== 'done') return { ...base, stages: NO_STAGES(), rounds: null, fails: null };
   const upTo = (ms: number) => ms <= close;
   const start = t.starts.find((s) => upTo(s) && s >= t.createdAtMs) ?? null;
@@ -471,6 +474,8 @@ export interface OpenTicketFacts {
   /** When it entered its current status (the last status change to it), else its creation. */
   statusSinceMs: number;
   assigneeSession: string | null;
+  /** The crew (lineage root) of the session that holds it; null or absent: no session holds it. */
+  crew?: string | null;
 }
 
 export function openWork(tickets: readonly OpenTicketFacts[], nowMs: number, stallMs: number): MetricsOpenWork & { blockedIds: string[]; oldestReview: string | null } {
