@@ -144,7 +144,7 @@ try {
       s = await m(b);
       check(`${tag}: program qa: scores, trend, stages and findings show`, s.scores === 2 && CARDS.every((c) => s.cards.includes(c)), JSON.stringify(s.cards));
       check(`${tag}: program qa: no NaN, no sideways scroll`, s.bad.length === 0 && noScroll(s));
-      check(`${tag}: program qa: the stage rows carry median and p90 in words`, /Start|Implement|Deliver/.test(s.text) && /median|p90|\\d+\\s?(m|h|d)/.test(s.text));
+      check(`${tag}: program qa: the stage rows carry median and p90 in words`, /Start|Implement|Deliver/.test(s.text) && /median|p90|\d+\s?(m|h|d)/.test(s.text));
       await b.shot(`metrics-qa-${tag}`, { full: true });
 
       // The drill-down: a tap on a stage row lists the tickets behind it, a link each.
@@ -171,7 +171,7 @@ try {
       if (memor) {
         await sleep(2000);
         s = await m(b);
-        check(`${tag}: an unavailable program says "unavailable" with its reason, and no score is 0`, /unavailable/i.test(s.text) && !/\\b0\\b\\s*\\/\\s*100/.test(s.text) && s.bad.length === 0);
+        check(`${tag}: an unavailable program says "unavailable" with its reason, and no score is 0`, /unavailable/i.test(s.text) && !/\b0\b\s*\/\s*100/.test(s.text) && s.bad.length === 0);
         await b.shot(`metrics-unavailable-${tag}`);
       } else console.log('  note: no memor.id program in this portal; the unavailable program is not exercised');
 
@@ -180,7 +180,7 @@ try {
       await b.waitFor(`!!document.querySelector('[data-metrics-card]')`, LOAD_MS, 'the glance card').catch(() => {});
       await sleep(800);
       const g = await b.eval(`(() => { const c = document.querySelector('[data-metrics-card]'); return c ? { text: c.innerText, w: c.scrollWidth <= c.clientWidth + 1 } : null; })()`);
-      check(`${tag}: the Glance widget shows Efficiency, Effectiveness, Resolved and Median`, !!g && /Efficiency/.test(g.text) && /Effectiveness/.test(g.text) && /Resolved/.test(g.text) && /Median/.test(g.text) && !/\\b(NaN|undefined|null)\\b/.test(g.text), JSON.stringify(g));
+      check(`${tag}: the Glance widget shows Efficiency, Effectiveness, Resolved and Median`, !!g && /Efficiency/.test(g.text) && /Effectiveness/.test(g.text) && /Resolved/.test(g.text) && /Median/.test(g.text) && !/\b(NaN|undefined|null)\b/.test(g.text), JSON.stringify(g));
       await b.shot(`metrics-glance-${tag}`);
     }
   }
