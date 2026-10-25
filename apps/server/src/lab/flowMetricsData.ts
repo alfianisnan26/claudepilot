@@ -96,10 +96,13 @@ export const CLOSED_IN_WINDOW_SQL = `SELECT number, type, priority, status, crea
  * The tickets closed (done or won't-do) in [fromMs, toMs), with what their stages need. `sessionsOf` resolves holder sessions with their
  * lineage (usage spend's `sessions`); null leaves the lead to the `area-*` tag.
  */
-export function loadFlowTickets(db: DatabaseSync, fromMs: number, toMs: number, sessionsOf: ((ids: Iterable<string>) => Map<string, SessionInfo>) | null): FlowTicketFacts[] {
-  const rows = db
-    .prepare(CLOSED_IN_WINDOW_SQL)
-    .all(new Date(fromMs).toISOString(), new Date(toMs).toISOString()) as unknown as {
+export function loadFlowTickets(
+  db: DatabaseSync,
+  fromMs: number,
+  toMs: number,
+  sessionsOf: ((ids: Iterable<string>) => Map<string, SessionInfo>) | null,
+): FlowTicketFacts[] {
+  const rows = db.prepare(CLOSED_IN_WINDOW_SQL).all(new Date(fromMs).toISOString(), new Date(toMs).toISOString()) as unknown as {
     number: number;
     type: string;
     priority: string;
@@ -109,9 +112,24 @@ export function loadFlowTickets(db: DatabaseSync, fromMs: number, toMs: number, 
     assignee_kind: string | null;
     assignee_ref: string | null;
   }[];
-  type Acc = { starts: number[]; firstAgent: number | null; verdicts: { atMs: number; pass: boolean }[]; merges: number[]; tags: string[]; holder: string | null };
+  type Acc = {
+    starts: number[];
+    firstAgent: number | null;
+    verdicts: { atMs: number; pass: boolean }[];
+    merges: number[];
+    tags: string[];
+    holder: string | null;
+  };
   const by = new Map<number, Acc>();
-  for (const r of rows) by.set(r.number, { starts: [], firstAgent: null, verdicts: [], merges: [], tags: [], holder: r.assignee_kind === 'session' ? r.assignee_ref : null });
+  for (const r of rows)
+    by.set(r.number, {
+      starts: [],
+      firstAgent: null,
+      verdicts: [],
+      merges: [],
+      tags: [],
+      holder: r.assignee_kind === 'session' ? r.assignee_ref : null,
+    });
   const numbers = [...by.keys()];
   const events = chunked<{ ticket_number: number; at: string; kind: string; actor: string; data: string | null; body: string | null }>(
     db,
@@ -143,11 +161,20 @@ export function loadFlowTickets(db: DatabaseSync, fromMs: number, toMs: number, 
     const v = verdictOf(e.data, selfTestLineOf(e.body));
     if (v !== null) a.verdicts.push({ atMs: at, pass: v });
   }
-  for (const m of chunked<{ ticket_number: number; at: string }>(db, numbers, (l) => `SELECT ticket_number, at FROM ticket_merge_status WHERE ticket_number IN ${l} AND state = 'merged' ORDER BY ticket_number, id`)) {
+  for (const m of chunked<{ ticket_number: number; at: string }>(
+    db,
+    numbers,
+    (l) => `SELECT ticket_number, at FROM ticket_merge_status WHERE ticket_number IN ${l} AND state = 'merged' ORDER BY ticket_number, id`,
+  )) {
     const at = ms(m.at);
     if (at !== null) by.get(m.ticket_number)!.merges.push(at);
   }
-  for (const t of chunked<{ ticket_number: number; tag: string }>(db, numbers, (l) => `SELECT ticket_number, tag FROM ticket_tags WHERE ticket_number IN ${l}`)) by.get(t.ticket_number)!.tags.push(t.tag);
+  for (const t of chunked<{ ticket_number: number; tag: string }>(
+    db,
+    numbers,
+    (l) => `SELECT ticket_number, tag FROM ticket_tags WHERE ticket_number IN ${l}`,
+  ))
+    by.get(t.ticket_number)!.tags.push(t.tag);
   const holders = new Set<string>();
   // Every holder, area-tagged or not: the crew of each ticket is what keeps an agent's read to its own crew (metricsTools.ts).
   for (const a of by.values()) if (a.holder) holders.add(a.holder);
@@ -189,19 +216,37 @@ export function loadFlowTickets(db: DatabaseSync, fromMs: number, toMs: number, 
  * Every ticket that is open work now (open, in progress, blocked, in review), with its tags and, in review, since when. `sessionsOf` resolves
  * the holder sessions for each ticket's crew; null leaves the crew null.
  */
-export function loadOpenTickets(db: DatabaseSync, sessionsOf: ((ids: Iterable<string>) => Map<string, SessionInfo>) | null = null): OpenTicketFacts[] {
+export function loadOpenTickets(
+  db: DatabaseSync,
+  sessionsOf: ((ids: Iterable<string>) => Map<string, SessionInfo>) | null = null,
+): OpenTicketFacts[] {
   const rows = db
-    .prepare(`SELECT number, status, created_at, updated_at, assignee_kind, assignee_ref FROM tickets WHERE status IN ('open', 'in_progress', 'blocked', 'in_review')`)
-    .all() as unknown as { number: number; status: string; created_at: string; updated_at: string; assignee_kind: string | null; assignee_ref: string | null }[];
+    .prepare(
+      `SELECT number, status, created_at, updated_at, assignee_kind, assignee_ref FROM tickets WHERE status IN ('open', 'in_progress', 'blocked', 'in_review')`,
+    )
+    .all() as unknown as {
+    number: number;
+    status: string;
+    created_at: string;
+    updated_at: string;
+    assignee_kind: string | null;
+    assignee_ref: string | null;
+  }[];
   const tags = new Map<number, string[]>();
   const numbers = rows.map((r) => r.number);
-  for (const t of chunked<{ ticket_number: number; tag: string }>(db, numbers, (l) => `SELECT ticket_number, tag FROM ticket_tags WHERE ticket_number IN ${l}`)) (tags.get(t.ticket_number) ?? tags.set(t.ticket_number, []).get(t.ticket_number)!).push(t.tag);
+  for (const t of chunked<{ ticket_number: number; tag: string }>(
+    db,
+    numbers,
+    (l) => `SELECT ticket_number, tag FROM ticket_tags WHERE ticket_number IN ${l}`,
+  ))
+    (tags.get(t.ticket_number) ?? tags.set(t.ticket_number, []).get(t.ticket_number)!).push(t.tag);
   const review = rows.filter((r) => r.status === 'in_review').map((r) => r.number);
   const since = new Map<number, number>();
   for (const e of chunked<{ ticket_number: number; at: string }>(
     db,
     review,
-    (l) => `SELECT ticket_number, MAX(at) AS at FROM ticket_events WHERE ticket_number IN ${l} AND kind = 'status' AND json_extract(data, '$.to') = 'in_review' GROUP BY ticket_number`,
+    (l) =>
+      `SELECT ticket_number, MAX(at) AS at FROM ticket_events WHERE ticket_number IN ${l} AND kind = 'status' AND json_extract(data, '$.to') = 'in_review' GROUP BY ticket_number`,
   )) {
     const at = ms(e.at);
     if (at !== null) since.set(e.ticket_number, at);

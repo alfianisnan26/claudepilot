@@ -33,13 +33,20 @@ export function writeSnapshots(db: DatabaseSync, atMs: number, rows: readonly { 
 /** One metric of one program in [fromMs, toMs], oldest first (the (program, at_ms) index). */
 export function readTrend(db: DatabaseSync, program: string, metric: MetricsTrendKey, fromMs: number, toMs: number): MetricsTrendPoint[] {
   const rows = db
-    .prepare(`SELECT at_ms, json_extract(metrics, '$.' || ?) AS v FROM lab_metric_snapshots WHERE program = ? AND at_ms >= ? AND at_ms <= ? ORDER BY at_ms`)
+    .prepare(
+      `SELECT at_ms, json_extract(metrics, '$.' || ?) AS v FROM lab_metric_snapshots WHERE program = ? AND at_ms >= ? AND at_ms <= ? ORDER BY at_ms`,
+    )
     .all(metric, program, fromMs, toMs) as unknown as { at_ms: number; v: number | null }[];
   return rows.map((r) => ({ atMs: r.at_ms, value: typeof r.v === 'number' ? r.v : null }));
 }
 
 /** The program's newest snapshot at or before `atMs` and not older than `atMs - toleranceMs`, or null. */
-export function snapshotNear(db: DatabaseSync, program: string, atMs: number, toleranceMs: number): { atMs: number; values: SnapshotValues } | null {
+export function snapshotNear(
+  db: DatabaseSync,
+  program: string,
+  atMs: number,
+  toleranceMs: number,
+): { atMs: number; values: SnapshotValues } | null {
   const r = db
     .prepare('SELECT at_ms, metrics FROM lab_metric_snapshots WHERE program = ? AND at_ms <= ? AND at_ms >= ? ORDER BY at_ms DESC LIMIT 1')
     .get(program, atMs, atMs - toleranceMs) as { at_ms: number; metrics: string } | undefined;

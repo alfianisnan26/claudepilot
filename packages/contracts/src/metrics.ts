@@ -10,7 +10,11 @@ export type MetricsWindow = (typeof METRICS_WINDOWS)[number];
 /** The trend reads snapshots (kept 30 days), so it also has a month. */
 export const METRICS_TREND_WINDOWS = ['24h', '7d', '30d'] as const;
 export type MetricsTrendWindow = (typeof METRICS_TREND_WINDOWS)[number];
-export const METRICS_WINDOW_MS: Record<MetricsTrendWindow, number> = { '24h': 24 * 3_600_000, '7d': 7 * 24 * 3_600_000, '30d': 30 * 24 * 3_600_000 };
+export const METRICS_WINDOW_MS: Record<MetricsTrendWindow, number> = {
+  '24h': 24 * 3_600_000,
+  '7d': 7 * 24 * 3_600_000,
+  '30d': 30 * 24 * 3_600_000,
+};
 
 /**
  * The stages of a done ticket, each a duration in ms (see §28.15 for the exact start and end of each):
@@ -176,7 +180,11 @@ export interface MetricsOverview {
    * T-600 / T-450 figures over the crews that work on this program's tickets (the scorecard's own functions): the headline (pace, resolved,
    * $/resolved, created per closed) and the cost summed over those crews. null: the store could not be read.
    */
-  crew: { programs: string[]; headline: CrewSummary; cost: Pick<CrewCost, 'total' | 'lead' | 'workers' | 'leadShare'> & { perDone: CrewFigure } } | null;
+  crew: {
+    programs: string[];
+    headline: CrewSummary;
+    cost: Pick<CrewCost, 'total' | 'lead' | 'workers' | 'leadShare'> & { perDone: CrewFigure };
+  } | null;
   basis: Record<string, string>;
 }
 

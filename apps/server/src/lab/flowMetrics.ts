@@ -74,9 +74,19 @@ export interface FlowRow {
 }
 
 const span = (from: number | null | undefined, to: number | null | undefined): number | null =>
-  from === null || from === undefined || to === null || to === undefined || !Number.isFinite(from) || !Number.isFinite(to) || to < from ? null : to - from;
+  from === null || from === undefined || to === null || to === undefined || !Number.isFinite(from) || !Number.isFinite(to) || to < from
+    ? null
+    : to - from;
 
-const NO_STAGES = (): Record<MetricsStage, number | null> => ({ start: null, report: null, implement: null, test: null, deliver: null, resolve: null, work: null });
+const NO_STAGES = (): Record<MetricsStage, number | null> => ({
+  start: null,
+  report: null,
+  implement: null,
+  test: null,
+  deliver: null,
+  resolve: null,
+  work: null,
+});
 
 /**
  * One closed ticket's stages (the rules of §28.15):
@@ -91,7 +101,18 @@ const NO_STAGES = (): Record<MetricsStage, number | null> => ({ start: null, rep
  */
 export function ticketFlow(t: FlowTicketFacts): FlowRow {
   const close = t.closedAtMs;
-  const base = { id: t.id, type: t.type, priority: t.priority, status: t.status, createdAtMs: t.createdAtMs, closedAtMs: close, tags: t.tags, lead: t.lead, crew: t.crew ?? null, lifeMs: span(t.createdAtMs, close) };
+  const base = {
+    id: t.id,
+    type: t.type,
+    priority: t.priority,
+    status: t.status,
+    createdAtMs: t.createdAtMs,
+    closedAtMs: close,
+    tags: t.tags,
+    lead: t.lead,
+    crew: t.crew ?? null,
+    lifeMs: span(t.createdAtMs, close),
+  };
   if (t.status !== 'done') return { ...base, stages: NO_STAGES(), rounds: null, fails: null };
   const upTo = (ms: number) => ms <= close;
   const start = t.starts.find((s) => upTo(s) && s >= t.createdAtMs) ?? null;
@@ -120,7 +141,12 @@ export function ticketFlow(t: FlowTicketFacts): FlowRow {
     resolve: span(t.createdAtMs, close),
     work: span(start, close),
   };
-  return { ...base, stages, rounds: stages.test === null ? null : inTest.length, fails: stages.test === null ? null : inTest.filter((v) => !v.pass).length };
+  return {
+    ...base,
+    stages,
+    rounds: stages.test === null ? null : inTest.length,
+    fails: stages.test === null ? null : inTest.filter((v) => !v.pass).length,
+  };
 }
 
 /* ---------- Aggregates ---------- */
@@ -174,7 +200,13 @@ export function groupKeysOf(r: FlowRow, by: MetricsGroupBy, programs: readonly M
 }
 
 /** The window [nowMs - windowMs, nowMs) and the one before it, for the whole set and per group (most done first, then by key). */
-export function groupFlow(rows: readonly FlowRow[], nowMs: number, windowMs: number, groupBy: MetricsGroupBy | null, programs: readonly MetricsProgram[]): { total: MetricsFlowGroup; groups: MetricsFlowGroup[] } {
+export function groupFlow(
+  rows: readonly FlowRow[],
+  nowMs: number,
+  windowMs: number,
+  groupBy: MetricsGroupBy | null,
+  programs: readonly MetricsProgram[],
+): { total: MetricsFlowGroup; groups: MetricsFlowGroup[] } {
   const one = (key: string, list: readonly FlowRow[]): MetricsFlowGroup => ({
     key,
     current: flowWindow(list, nowMs - windowMs, nowMs),
@@ -184,12 +216,19 @@ export function groupFlow(rows: readonly FlowRow[], nowMs: number, windowMs: num
   if (!groupBy) return { total, groups: [] };
   const by = new Map<string, FlowRow[]>();
   for (const r of rows) for (const k of groupKeysOf(r, groupBy, programs)) (by.get(k) ?? by.set(k, []).get(k)!).push(r);
-  const groups = [...by].map(([k, list]) => one(k, list)).sort((a, b) => b.current.done - a.current.done || b.previous.done - a.previous.done || a.key.localeCompare(b.key));
+  const groups = [...by]
+    .map(([k, list]) => one(k, list))
+    .sort((a, b) => b.current.done - a.current.done || b.previous.done - a.previous.done || a.key.localeCompare(b.key));
   return { total, groups };
 }
 
 /** The drill-down rows: closed in [fromMs, toMs), newest close first. */
-export function ticketRows(rows: readonly FlowRow[], fromMs: number, toMs: number, programs: readonly MetricsProgram[]): MetricsTicketRow[] {
+export function ticketRows(
+  rows: readonly FlowRow[],
+  fromMs: number,
+  toMs: number,
+  programs: readonly MetricsProgram[],
+): MetricsTicketRow[] {
   return rows
     .filter((r) => inWindow(r, fromMs, toMs))
     .sort((a, b) => b.closedAtMs - a.closedAtMs || a.id.localeCompare(b.id))
@@ -270,7 +309,10 @@ export function parseMetricsPrograms(raw: unknown): { programs: ParsedMetricsPro
       programs.push({ id, label, kind: 'commits', tags: [], targets });
       continue;
     }
-    const tags = tagsRaw.split(',').map((x) => x.trim()).filter(Boolean);
+    const tags = tagsRaw
+      .split(',')
+      .map((x) => x.trim())
+      .filter(Boolean);
     if (!tags.length || tags.some((t) => t.length > 30 || !TICKET_TAG.test(t))) {
       errors.push(`${id}: tags are ticket tags split by commas`);
       continue;
@@ -280,7 +322,8 @@ export function parseMetricsPrograms(raw: unknown): { programs: ParsedMetricsPro
   return { programs, errors };
 }
 
-const COMMITS_TEXT = 'This program has no tickets in the portal, and the portal keeps no commit history (workspace git keeps the repo state and scan events only), so its flow is unavailable.';
+const COMMITS_TEXT =
+  'This program has no tickets in the portal, and the portal keeps no commit history (workspace git keeps the repo state and scan events only), so its flow is unavailable.';
 
 /**
  * At most this many programs come from `program-*` tags (each one costs a snapshot row every 10 min); the setting's and the flow programs
@@ -292,10 +335,23 @@ export const MAX_TAG_PROGRAMS = 12;
  * The programs, `all` first: the setting's, then a `program-*` tag no program covers (`program-x` is program `x`; the first
  * MAX_TAG_PROGRAMS of the ranked tags, shown by id), then a `flow.programs` tag no program covers (named as the flow watchdog names it).
  */
-export function resolvePrograms(input: { setting: unknown; programTags: readonly string[]; flow: readonly { name: string; tag: string }[] }): MetricsProgram[] {
+export function resolvePrograms(input: {
+  setting: unknown;
+  programTags: readonly string[];
+  flow: readonly { name: string; tag: string }[];
+}): MetricsProgram[] {
   const parsed = parseMetricsPrograms(input.setting).programs;
   const all = parsed.find((p) => p.kind === 'all');
-  const out: MetricsProgram[] = [{ id: 'all', label: all?.label ?? 'All', kind: 'all', tags: [], source: all ? 'setting' : 'builtin', targets: all?.targets ?? DEFAULT_ALL_TARGETS }];
+  const out: MetricsProgram[] = [
+    {
+      id: 'all',
+      label: all?.label ?? 'All',
+      kind: 'all',
+      tags: [],
+      source: all ? 'setting' : 'builtin',
+      targets: all?.targets ?? DEFAULT_ALL_TARGETS,
+    },
+  ];
   for (const p of parsed) {
     if (p.kind === 'all') continue;
     out.push({
@@ -314,7 +370,8 @@ export function resolvePrograms(input: { setting: unknown; programTags: readonly
   for (const tag of input.programTags) {
     if (fromTags.length >= MAX_TAG_PROGRAMS) break;
     const id = tag.slice('program-'.length);
-    if (!tag.startsWith('program-') || covered().has(tag) || !PROGRAM_ID.test(id) || ids().has(id) || fromTags.some((p) => p.id === id)) continue;
+    if (!tag.startsWith('program-') || covered().has(tag) || !PROGRAM_ID.test(id) || ids().has(id) || fromTags.some((p) => p.id === id))
+      continue;
     fromTags.push({ id, label: id, kind: 'tickets', tags: [tag], source: 'program-tag', targets: DEFAULT_TARGETS });
   }
   out.push(...fromTags.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)));
@@ -349,21 +406,42 @@ const r1 = (x: number) => Math.round(x * 10) / 10;
 const clamp = (x: number) => Math.max(0, Math.min(100, x));
 
 type Part = Omit<MetricsComponent, 'appliedWeight'>;
-const meas = (id: string, label: string, weight: number, value: number, source: string, raw: string): Part => ({ id, label, weight, value: r1(clamp(value)), basis: 'measured', source, raw });
-const gone = (id: string, label: string, weight: number, reason: CrewUnavailable, source: string, raw: string): Part => ({ id, label, weight, value: null, basis: 'unavailable', source, reason, raw });
+const meas = (id: string, label: string, weight: number, value: number, source: string, raw: string): Part => ({
+  id,
+  label,
+  weight,
+  value: r1(clamp(value)),
+  basis: 'measured',
+  source,
+  raw,
+});
+const gone = (id: string, label: string, weight: number, reason: CrewUnavailable, source: string, raw: string): Part => ({
+  id,
+  label,
+  weight,
+  value: null,
+  basis: 'unavailable',
+  source,
+  reason,
+  raw,
+});
 
 /** The weighted mean of the available parts; the weights of the unavailable ones are shared out (appliedWeight says by how much). */
 export function combine(parts: readonly Part[], spec: string, previous: number | null): MetricsScore {
   const avail = parts.filter((p) => p.value !== null);
   const w = avail.reduce((s, p) => s + p.weight, 0);
-  const components: MetricsComponent[] = parts.map((p) => ({ ...p, appliedWeight: p.value === null || w === 0 ? 0 : r1((p.weight * 100) / w) }));
+  const components: MetricsComponent[] = parts.map((p) => ({
+    ...p,
+    appliedWeight: p.value === null || w === 0 ? 0 : r1((p.weight * 100) / w),
+  }));
   const value = w > 0 ? r1(avail.reduce((s, p) => s + p.value! * p.weight, 0) / w) : null;
   const left = parts.filter((p) => p.value === null).map((p) => `${p.id} (${p.reason})`);
   const basis = `${spec} Weights: ${parts.map((p) => `${p.id} ${p.weight}`).join(', ')}.${left.length ? ` Left out, their weight shared by the rest: ${left.join(', ')}.` : ''}`;
   return { value, previous, components, basis };
 }
 
-export const EFFICIENCY_SPEC = 'Efficiency 0-100 (T-2360 section B; the pilot-health skill was not available, so the ticket is the spec): how much of the crew is working now.';
+export const EFFICIENCY_SPEC =
+  'Efficiency 0-100 (T-2360 section B; the pilot-health skill was not available, so the ticket is the spec): how much of the crew is working now.';
 export const EFFECTIVENESS_SPEC =
   'Effectiveness 0-100 (T-2360 section B; the pilot-health skill was not available, so the ticket is the spec; flow time added with its weight taken from closures and review flow): how well tickets move.';
 
@@ -379,7 +457,12 @@ const LIVE = new Set(['starting', 'idle', 'working', 'waiting', 'interrupted']);
 const live = (s: string) => LIVE.has(s);
 
 /** Efficiency now. `exhausted`: the Claudes with a plan window at 100 % or more; null when the portal has no quota reading (no_source). */
-export function efficiencyScore(input: { nowMs: number; crews: readonly CrewNow[] | null; exhausted: ReadonlySet<string> | null; previous: number | null }): MetricsScore {
+export function efficiencyScore(input: {
+  nowMs: number;
+  crews: readonly CrewNow[] | null;
+  exhausted: ReadonlySet<string> | null;
+  previous: number | null;
+}): MetricsScore {
   const W = EFFICIENCY_WEIGHTS;
   const src = {
     utilisation: 'chat_sessions.state of the crews’ live workers: working / live',
@@ -389,12 +472,28 @@ export function efficiencyScore(input: { nowMs: number; crews: readonly CrewNow[
   };
   if (!input.crews) {
     const u = (id: keyof typeof W, label: string) => gone(id, label, W[id], 'no_source', src[id], 'sessions not readable');
-    return combine([u('utilisation', 'Worker utilisation'), u('leadsActive', 'Leads active'), u('notExhausted', 'Leads not exhausted'), u('noLongIdle', 'No long idle')], EFFICIENCY_SPEC, input.previous);
+    return combine(
+      [
+        u('utilisation', 'Worker utilisation'),
+        u('leadsActive', 'Leads active'),
+        u('notExhausted', 'Leads not exhausted'),
+        u('noLongIdle', 'No long idle'),
+      ],
+      EFFICIENCY_SPEC,
+      input.previous,
+    );
   }
   const workers = input.crews.flatMap((c) => c.workers).filter((w) => live(w.state));
   const working = workers.filter((w) => w.state === 'working').length;
   const utilisation = workers.length
-    ? meas('utilisation', 'Worker utilisation', W.utilisation, (100 * working) / workers.length, src.utilisation, `${working} of ${workers.length} live workers working`)
+    ? meas(
+        'utilisation',
+        'Worker utilisation',
+        W.utilisation,
+        (100 * working) / workers.length,
+        src.utilisation,
+        `${working} of ${workers.length} live workers working`,
+      )
     : gone('utilisation', 'Worker utilisation', W.utilisation, 'no_samples', src.utilisation, 'no live worker');
   const withWork = input.crews.filter((c) => c.openWork);
   const active = withWork.filter((c) => (c.lead && c.lead.state === 'working') || c.workers.some((w) => w.state === 'working')).length;
@@ -402,7 +501,14 @@ export function efficiencyScore(input: { nowMs: number; crews: readonly CrewNow[
   const leadsActive = !input.crews.length
     ? gone('leadsActive', 'Leads active', W.leadsActive, 'no_samples', src.leadsActive, 'no live crew')
     : withWork.length
-      ? meas('leadsActive', 'Leads active', W.leadsActive, (100 * active) / withWork.length, src.leadsActive, `${active} of ${withWork.length} crews with open work active`)
+      ? meas(
+          'leadsActive',
+          'Leads active',
+          W.leadsActive,
+          (100 * active) / withWork.length,
+          src.leadsActive,
+          `${active} of ${withWork.length} crews with open work active`,
+        )
       : meas('leadsActive', 'Leads active', W.leadsActive, 100, src.leadsActive, 'no crew holds open work');
   const liveLeads = input.crews.flatMap((c) => (c.lead && live(c.lead.state) ? [c.lead] : []));
   const notExhausted = !input.exhausted
@@ -411,19 +517,48 @@ export function efficiencyScore(input: { nowMs: number; crews: readonly CrewNow[
       ? gone('notExhausted', 'Leads not exhausted', W.notExhausted, 'no_samples', src.notExhausted, 'no live lead')
       : (() => {
           const ok = liveLeads.filter((l) => !l.claudeId || !input.exhausted!.has(l.claudeId)).length;
-          return meas('notExhausted', 'Leads not exhausted', W.notExhausted, (100 * ok) / liveLeads.length, src.notExhausted, `${ok} of ${liveLeads.length} live leads on a Claude with quota left`);
+          return meas(
+            'notExhausted',
+            'Leads not exhausted',
+            W.notExhausted,
+            (100 * ok) / liveLeads.length,
+            src.notExhausted,
+            `${ok} of ${liveLeads.length} live leads on a Claude with quota left`,
+          );
         })();
-  const longIdle = workers.filter((w) => w.state === 'idle' && w.stateSinceMs !== null && input.nowMs - w.stateSinceMs > LONG_IDLE_MS).length;
+  const longIdle = workers.filter(
+    (w) => w.state === 'idle' && w.stateSinceMs !== null && input.nowMs - w.stateSinceMs > LONG_IDLE_MS,
+  ).length;
   const noLongIdle = workers.length
-    ? meas('noLongIdle', 'No long idle', W.noLongIdle, 100 - (100 * longIdle) / workers.length, src.noLongIdle, `${longIdle} of ${workers.length} live workers idle over ${LONG_IDLE_MS / 60_000} min`)
+    ? meas(
+        'noLongIdle',
+        'No long idle',
+        W.noLongIdle,
+        100 - (100 * longIdle) / workers.length,
+        src.noLongIdle,
+        `${longIdle} of ${workers.length} live workers idle over ${LONG_IDLE_MS / 60_000} min`,
+      )
     : gone('noLongIdle', 'No long idle', W.noLongIdle, 'no_samples', src.noLongIdle, 'no live worker');
   return combine([utilisation, leadsActive, notExhausted, noLongIdle], EFFICIENCY_SPEC, input.previous);
 }
 
-const labelOf = { closures: 'Closures', reviewFlow: 'Review flow', notBlocked: 'Not blocked', doneVsWontDo: 'Done vs won’t-do', noStall: 'No stall', flowTime: 'Flow time' } as const;
+const labelOf = {
+  closures: 'Closures',
+  reviewFlow: 'Review flow',
+  notBlocked: 'Not blocked',
+  doneVsWontDo: 'Done vs won’t-do',
+  noStall: 'No stall',
+  flowTime: 'Flow time',
+} as const;
 
 /** Effectiveness now, over the program's tickets. `rows`: the closed tickets (null: not readable); `open`: the open work now (null: same). */
-export function effectivenessScore(input: { nowMs: number; rows: readonly FlowRow[] | null; open: MetricsOpenWork | null; targets: MetricsTargets; previous: number | null }): MetricsScore {
+export function effectivenessScore(input: {
+  nowMs: number;
+  rows: readonly FlowRow[] | null;
+  open: MetricsOpenWork | null;
+  targets: MetricsTargets;
+  previous: number | null;
+}): MetricsScore {
   const W = EFFECTIVENESS_WEIGHTS;
   const T = input.targets;
   const src = {
@@ -437,27 +572,93 @@ export function effectivenessScore(input: { nowMs: number; rows: readonly FlowRo
   const now = input.nowMs;
   const parts: Part[] = [];
   if (!input.rows) {
-    for (const id of ['closures', 'doneVsWontDo', 'flowTime'] as const) parts.push(gone(id, labelOf[id], W[id], 'no_source', src[id], 'tickets not readable'));
+    for (const id of ['closures', 'doneVsWontDo', 'flowTime'] as const)
+      parts.push(gone(id, labelOf[id], W[id], 'no_source', src[id], 'tickets not readable'));
   } else {
     const done6 = input.rows.filter((r) => r.status === 'done' && inWindow(r, now - CLOSURES_WINDOW_MS, now)).length;
     const rate = done6 / (CLOSURES_WINDOW_MS / HOUR);
-    parts.push(meas('closures', labelOf.closures, W.closures, (100 * rate) / T.closuresPerHour, src.closures, `${done6} done in 6 h (${r1(rate)}/h)`));
+    parts.push(
+      meas(
+        'closures',
+        labelOf.closures,
+        W.closures,
+        (100 * rate) / T.closuresPerHour,
+        src.closures,
+        `${done6} done in 6 h (${r1(rate)}/h)`,
+      ),
+    );
     const day = input.rows.filter((r) => inWindow(r, now - 24 * HOUR, now));
     const d = day.filter((r) => r.status === 'done');
     const k = day.length - d.length;
-    parts.push(day.length ? meas('doneVsWontDo', labelOf.doneVsWontDo, W.doneVsWontDo, (100 * d.length) / day.length, src.doneVsWontDo, `${d.length} done, ${k} won’t-do`) : gone('doneVsWontDo', labelOf.doneVsWontDo, W.doneVsWontDo, 'no_samples', src.doneVsWontDo, 'nothing closed in 24 h'));
+    parts.push(
+      day.length
+        ? meas(
+            'doneVsWontDo',
+            labelOf.doneVsWontDo,
+            W.doneVsWontDo,
+            (100 * d.length) / day.length,
+            src.doneVsWontDo,
+            `${d.length} done, ${k} won’t-do`,
+          )
+        : gone('doneVsWontDo', labelOf.doneVsWontDo, W.doneVsWontDo, 'no_samples', src.doneVsWontDo, 'nothing closed in 24 h'),
+    );
     const med = stageStat(d, 'resolve').medianMs;
-    parts.push(med === null ? gone('flowTime', labelOf.flowTime, W.flowTime, 'no_samples', src.flowTime, 'nothing done in 24 h') : meas('flowTime', labelOf.flowTime, W.flowTime, med <= T.resolveHours * HOUR ? 100 : (100 * T.resolveHours * HOUR) / med, src.flowTime, `median ${fmtDur(med)}`));
+    parts.push(
+      med === null
+        ? gone('flowTime', labelOf.flowTime, W.flowTime, 'no_samples', src.flowTime, 'nothing done in 24 h')
+        : meas(
+            'flowTime',
+            labelOf.flowTime,
+            W.flowTime,
+            med <= T.resolveHours * HOUR ? 100 : (100 * T.resolveHours * HOUR) / med,
+            src.flowTime,
+            `median ${fmtDur(med)}`,
+          ),
+    );
   }
   const o = input.open;
   if (!o) {
-    for (const id of ['reviewFlow', 'notBlocked', 'noStall'] as const) parts.push(gone(id, labelOf[id], W[id], 'no_source', src[id], 'tickets not readable'));
+    for (const id of ['reviewFlow', 'notBlocked', 'noStall'] as const)
+      parts.push(gone(id, labelOf[id], W[id], 'no_source', src[id], 'tickets not readable'));
   } else {
     const age = o.oldestReviewMs;
-    parts.push(age === null ? meas('reviewFlow', labelOf.reviewFlow, W.reviewFlow, 100, src.reviewFlow, 'nothing in review') : meas('reviewFlow', labelOf.reviewFlow, W.reviewFlow, age <= T.reviewHours * HOUR ? 100 : (100 * T.reviewHours * HOUR) / age, src.reviewFlow, `oldest in review ${fmtDur(age)}`));
+    parts.push(
+      age === null
+        ? meas('reviewFlow', labelOf.reviewFlow, W.reviewFlow, 100, src.reviewFlow, 'nothing in review')
+        : meas(
+            'reviewFlow',
+            labelOf.reviewFlow,
+            W.reviewFlow,
+            age <= T.reviewHours * HOUR ? 100 : (100 * T.reviewHours * HOUR) / age,
+            src.reviewFlow,
+            `oldest in review ${fmtDur(age)}`,
+          ),
+    );
     const work = o.open + o.inProgress + o.blocked + o.inReview;
-    parts.push(work ? meas('notBlocked', labelOf.notBlocked, W.notBlocked, 100 - (100 * o.blocked) / work, src.notBlocked, `${o.blocked} of ${work} blocked`) : meas('notBlocked', labelOf.notBlocked, W.notBlocked, 100, src.notBlocked, 'no open work'));
-    parts.push(o.inProgress ? meas('noStall', labelOf.noStall, W.noStall, 100 - (100 * o.stalled) / o.inProgress, src.noStall, `${o.stalled} of ${o.inProgress} in progress stalled`) : meas('noStall', labelOf.noStall, W.noStall, 100, src.noStall, 'nothing in progress'));
+    parts.push(
+      work
+        ? meas(
+            'notBlocked',
+            labelOf.notBlocked,
+            W.notBlocked,
+            100 - (100 * o.blocked) / work,
+            src.notBlocked,
+            `${o.blocked} of ${work} blocked`,
+          )
+        : meas('notBlocked', labelOf.notBlocked, W.notBlocked, 100, src.notBlocked, 'no open work'),
+    );
+    parts.push(
+      o.inProgress
+        ? meas(
+            'noStall',
+            labelOf.noStall,
+            W.noStall,
+            100 - (100 * o.stalled) / o.inProgress,
+            src.noStall,
+            `${o.stalled} of ${o.inProgress} in progress stalled`,
+          )
+        : meas('noStall', labelOf.noStall, W.noStall, 100, src.noStall, 'nothing in progress'),
+    );
   }
   const order = Object.keys(W);
   parts.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
@@ -478,7 +679,11 @@ export interface OpenTicketFacts {
   crew?: string | null;
 }
 
-export function openWork(tickets: readonly OpenTicketFacts[], nowMs: number, stallMs: number): MetricsOpenWork & { blockedIds: string[]; oldestReview: string | null } {
+export function openWork(
+  tickets: readonly OpenTicketFacts[],
+  nowMs: number,
+  stallMs: number,
+): MetricsOpenWork & { blockedIds: string[]; oldestReview: string | null } {
   const of = (s: string) => tickets.filter((t) => t.status === s);
   const review = of('in_review').sort((a, b) => a.statusSinceMs - b.statusSinceMs || a.id.localeCompare(b.id));
   const inProgress = of('in_progress');
@@ -489,7 +694,9 @@ export function openWork(tickets: readonly OpenTicketFacts[], nowMs: number, sta
     inReview: review.length,
     oldestReviewMs: review.length ? Math.max(0, nowMs - review[0]!.statusSinceMs) : null,
     stalled: inProgress.filter((t) => nowMs - t.updatedAtMs >= stallMs).length,
-    blockedIds: of('blocked').map((t) => t.id).sort(byTicket),
+    blockedIds: of('blocked')
+      .map((t) => t.id)
+      .sort(byTicket),
     oldestReview: review[0]?.id ?? null,
   };
 }
@@ -499,7 +706,12 @@ const byTicket = (a: string, b: string) => Number(a.replace(/\D/g, '')) - Number
 /* ---------- Snapshots ---------- */
 
 /** The values one snapshot keeps for a program (the trend's metrics). */
-export function snapshotValues(input: { efficiency: MetricsScore; effectiveness: MetricsScore; day: MetricsFlowWindow; open: MetricsOpenWork | null }): Record<MetricsTrendKey, number | null> {
+export function snapshotValues(input: {
+  efficiency: MetricsScore;
+  effectiveness: MetricsScore;
+  day: MetricsFlowWindow;
+  open: MetricsOpenWork | null;
+}): Record<MetricsTrendKey, number | null> {
   const out: Record<string, number | null> = {
     efficiency: input.efficiency.value,
     effectiveness: input.effectiveness.value,
@@ -555,7 +767,13 @@ export function insights(input: {
   const out: MetricsInsight[] = [];
   const cur = input.flow.current;
   const prev = input.flow.previous;
-  if (!cur.done) out.push({ kind: 'no_data', severity: 'info', text: `${input.label}: no ticket closed done in the last ${input.windowLabel}, so there are no stage times.`, tickets: [] });
+  if (!cur.done)
+    out.push({
+      kind: 'no_data',
+      severity: 'info',
+      text: `${input.label}: no ticket closed done in the last ${input.windowLabel}, so there are no stage times.`,
+      tickets: [],
+    });
   const parts = cur.stages.filter((s) => PART_STAGES.includes(s.stage) && s.medianMs !== null);
   const slow = [...parts].sort((a, b) => b.medianMs! - a.medianMs!)[0];
   if (slow)
@@ -573,26 +791,51 @@ export function insights(input: {
     if (frac >= REGRESSION_FRAC && (!worst || frac > worst.frac)) worst = { stage: s.stage, frac, from: p.medianMs, to: s.medianMs };
   }
   if (worst)
-    out.push({ kind: 'regression', severity: worst.frac >= 1 ? 'act' : 'warn', text: `Biggest regression: ${worst.stage} median went from ${fmtDur(worst.from)} to ${fmtDur(worst.to)} (+${Math.round(worst.frac * 100)} %) against the ${input.windowLabel} before.`, tickets: [] });
+    out.push({
+      kind: 'regression',
+      severity: worst.frac >= 1 ? 'act' : 'warn',
+      text: `Biggest regression: ${worst.stage} median went from ${fmtDur(worst.from)} to ${fmtDur(worst.to)} (+${Math.round(worst.frac * 100)} %) against the ${input.windowLabel} before.`,
+      tickets: [],
+    });
   const util = input.efficiency.components.find((c) => c.id === 'utilisation');
-  if (util && util.value !== null && util.value < 50) out.push({ kind: 'idle_capacity', severity: util.value < 25 ? 'act' : 'warn', text: `Idle capacity: ${util.raw}.`, tickets: [] });
+  if (util && util.value !== null && util.value < 50)
+    out.push({ kind: 'idle_capacity', severity: util.value < 25 ? 'act' : 'warn', text: `Idle capacity: ${util.raw}.`, tickets: [] });
   const idle = input.efficiency.components.find((c) => c.id === 'noLongIdle');
-  if (idle && idle.value !== null && idle.value < 100) out.push({ kind: 'idle_capacity', severity: 'warn', text: `Long idle: ${idle.raw}; end them or give them work.`, tickets: [] });
+  if (idle && idle.value !== null && idle.value < 100)
+    out.push({ kind: 'idle_capacity', severity: 'warn', text: `Long idle: ${idle.raw}; end them or give them work.`, tickets: [] });
   const o = input.open;
   if (o) {
     const work = o.open + o.inProgress + o.blocked + o.inReview;
     if (work && o.blocked / work >= 0.2)
-      out.push({ kind: 'blocked_share', severity: o.blocked / work >= 0.4 ? 'act' : 'warn', text: `${Math.round((100 * o.blocked) / work)} % of open work is blocked (${o.blocked} of ${work}).`, tickets: o.blockedIds.slice(0, 10) });
+      out.push({
+        kind: 'blocked_share',
+        severity: o.blocked / work >= 0.4 ? 'act' : 'warn',
+        text: `${Math.round((100 * o.blocked) / work)} % of open work is blocked (${o.blocked} of ${work}).`,
+        tickets: o.blockedIds.slice(0, 10),
+      });
     if (o.oldestReviewMs !== null && o.oldestReviewMs > input.targets.reviewHours * HOUR)
-      out.push({ kind: 'review_wait', severity: o.oldestReviewMs > 4 * input.targets.reviewHours * HOUR ? 'act' : 'warn', text: `${o.oldestReview} has waited ${fmtDur(o.oldestReviewMs)} in review (target ${input.targets.reviewHours} h).`, tickets: o.oldestReview ? [o.oldestReview] : [] });
+      out.push({
+        kind: 'review_wait',
+        severity: o.oldestReviewMs > 4 * input.targets.reviewHours * HOUR ? 'act' : 'warn',
+        text: `${o.oldestReview} has waited ${fmtDur(o.oldestReviewMs)} in review (target ${input.targets.reviewHours} h).`,
+        tickets: o.oldestReview ? [o.oldestReview] : [],
+      });
   }
   const done = input.rows.filter((r) => r.status === 'done' && inWindow(r, cur.fromMs, cur.toMs) && r.stages.resolve !== null);
   const med = cur.stages.find((s) => s.stage === 'resolve')?.medianMs ?? null;
   if (med !== null && med > 0 && done.length >= 5) {
     const slowOnes = done.filter((r) => r.stages.resolve! >= OUTLIER_FACTOR * med).sort((a, b) => b.stages.resolve! - a.stages.resolve!);
     if (slowOnes.length)
-      out.push({ kind: 'outlier', severity: 'info', text: `${slowOnes.length} ticket${slowOnes.length > 1 ? 's' : ''} took over ${OUTLIER_FACTOR}x the median ${fmtDur(med)} to resolve; the slowest ${slowOnes[0]!.id} took ${fmtDur(slowOnes[0]!.stages.resolve!)}.`, tickets: slowOnes.slice(0, 10).map((r) => r.id) });
+      out.push({
+        kind: 'outlier',
+        severity: 'info',
+        text: `${slowOnes.length} ticket${slowOnes.length > 1 ? 's' : ''} took over ${OUTLIER_FACTOR}x the median ${fmtDur(med)} to resolve; the slowest ${slowOnes[0]!.id} took ${fmtDur(slowOnes[0]!.stages.resolve!)}.`,
+        tickets: slowOnes.slice(0, 10).map((r) => r.id),
+      });
   }
   const rank = { act: 0, warn: 1, info: 2 } as const;
-  return out.map((x, i) => ({ x, i })).sort((a, b) => rank[a.x.severity] - rank[b.x.severity] || a.i - b.i).map(({ x }) => x);
+  return out
+    .map((x, i) => ({ x, i }))
+    .sort((a, b) => rank[a.x.severity] - rank[b.x.severity] || a.i - b.i)
+    .map(({ x }) => x);
 }

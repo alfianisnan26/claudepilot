@@ -34,9 +34,13 @@ function fill(db: DatabaseSync, tickets: number) {
     `INSERT INTO tickets (number, type, priority, priority_rank, status, summary, source, reporter_kind, reporter_label, created_at, updated_at, closed_at)
      VALUES (?, ?, 'normal', 2, ?, 'Seed', 'human', 'ui', 'Admin', ?, ?, ?)`,
   );
-  const ev = db.prepare(`INSERT INTO ticket_events (ticket_number, at, kind, actor, actor_label, body, data) VALUES (?, ?, ?, ?, 'x', ?, ?)`);
+  const ev = db.prepare(
+    `INSERT INTO ticket_events (ticket_number, at, kind, actor, actor_label, body, data) VALUES (?, ?, ?, ?, 'x', ?, ?)`,
+  );
   const tag = db.prepare('INSERT INTO ticket_tags (ticket_number, tag) VALUES (?, ?)');
-  const merge = db.prepare(`INSERT INTO ticket_merge_status (ticket_number, repo, pr, pr_head, state, actor, actor_label, at) VALUES (?, 'claudepilot', 1, ?, 'merged', 'system', 'gate', ?)`);
+  const merge = db.prepare(
+    `INSERT INTO ticket_merge_status (ticket_number, repo, pr, pr_head, state, actor, actor_label, at) VALUES (?, 'claudepilot', 1, ?, 'merged', 'system', 'gate', ?)`,
+  );
   db.exec('BEGIN');
   for (let n = 1; n <= tickets; n++) {
     const closed = END - SPAN + Math.floor((n / tickets) * SPAN);
@@ -82,9 +86,17 @@ const time = <T>(fn: () => T): { median: number; runs: number[]; out: T } => {
 test('metrics reads: the window read uses tickets_closed_at; events and tags are read by ticket number', async () => {
   const h = await open(50);
   try {
-    const plan = (sql: string, ...args: (string | number)[]) => (h.db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...args) as { detail: string }[]).map((r) => r.detail).join(' | ');
+    const plan = (sql: string, ...args: (string | number)[]) =>
+      (h.db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...args) as { detail: string }[]).map((r) => r.detail).join(' | ');
     assert.match(plan(CLOSED_IN_WINDOW_SQL, 'a', 'b'), /tickets_closed_at/);
-    assert.match(plan(`SELECT ticket_number FROM ticket_events WHERE ticket_number IN (?, ?) AND kind IN ('status', 'comment') ORDER BY ticket_number, id`, 1, 2), /ticket_events_ticket/);
+    assert.match(
+      plan(
+        `SELECT ticket_number FROM ticket_events WHERE ticket_number IN (?, ?) AND kind IN ('status', 'comment') ORDER BY ticket_number, id`,
+        1,
+        2,
+      ),
+      /ticket_events_ticket/,
+    );
     assert.doesNotMatch(plan(`SELECT ticket_number, tag FROM ticket_tags WHERE ticket_number IN (?, ?)`, 1, 2), /^SCAN ticket_tags$/);
     // The loader agrees with the seed: 50 closed over 90 days, each with one start, three verdicts and one merge.
     const all = loadFlowTickets(h.db, END - SPAN - DAY, END + 1, null);
@@ -99,7 +111,9 @@ test('metrics reads: the window read uses tickets_closed_at; events and tags are
 test('crew facts ticket read: a union of index reads (tickets_queue, tickets_updated_at, tickets_closed_at), never a scan of every ticket', async () => {
   const h = await open(50);
   try {
-    const plan = (h.db.prepare(`EXPLAIN QUERY PLAN ${CREW_TICKETS_SQL}`).all('a', 'b') as { detail: string }[]).map((r) => r.detail).join(' | ');
+    const plan = (h.db.prepare(`EXPLAIN QUERY PLAN ${CREW_TICKETS_SQL}`).all('a', 'b') as { detail: string }[])
+      .map((r) => r.detail)
+      .join(' | ');
     assert.doesNotMatch(plan, /SCAN tickets\b/, plan);
     assert.match(plan, /tickets_updated_at/, plan);
     assert.match(plan, /tickets_closed_at/, plan);
@@ -110,9 +124,13 @@ test('crew facts ticket read: a union of index reads (tickets_queue, tickets_upd
 
 /** Chat data for the crew facts: 8 leads with 4 workers each (worker `w` of the seed is one), 300 events and 60 usage rows per session. */
 function fillChat(db: DatabaseSync) {
-  const s = db.prepare(`INSERT INTO chat_sessions (id, workspace_id, state, state_since, created_at, last_activity_at, parent_id) VALUES (?, 'docker/api', 'idle', ?, ?, ?, ?)`);
+  const s = db.prepare(
+    `INSERT INTO chat_sessions (id, workspace_id, state, state_since, created_at, last_activity_at, parent_id) VALUES (?, 'docker/api', 'idle', ?, ?, ?, ?)`,
+  );
   const ev = db.prepare('INSERT INTO chat_events (session_id, seq, at, kind, payload) VALUES (?, ?, ?, ?, ?)');
-  const use = db.prepare(`INSERT INTO chat_usage (at, at_ms, session_id, workspace_id, claude_id, model, cost_usd, requests) VALUES (?, ?, ?, 'docker/api', 'c1', 'm', 0.5, 1)`);
+  const use = db.prepare(
+    `INSERT INTO chat_usage (at, at_ms, session_id, workspace_id, claude_id, model, cost_usd, requests) VALUES (?, ?, ?, 'docker/api', 'c1', 'm', 0.5, 1)`,
+  );
   const ids: string[] = [];
   db.exec('BEGIN');
   for (let l = 0; l < 8; l++) {
@@ -128,7 +146,13 @@ function fillChat(db: DatabaseSync) {
   for (const id of ids) {
     for (let k = 0; k < 300; k++) {
       const at = END - Math.floor((k / 300) * 14 * DAY);
-      ev.run(id, k, iso(at), k % 5 ? 'assistant' : 'tool_result', k % 5 ? '{"text":"x"}' : JSON.stringify({ toolName: 'Bash', isError: k % 50 === 0, text: 'out' }));
+      ev.run(
+        id,
+        k,
+        iso(at),
+        k % 5 ? 'assistant' : 'tool_result',
+        k % 5 ? '{"text":"x"}' : JSON.stringify({ toolName: 'Bash', isError: k % 50 === 0, text: 'out' }),
+      );
     }
     for (let k = 0; k < 60; k++) {
       const at = END - Math.floor((k / 60) * 14 * DAY);
@@ -156,7 +180,9 @@ test('T-2360 review: the reads within a time budget with chat data seeded; a sec
     assert.ok(ov && ov.flow && ov.flow.current.done > 0);
     // Within the memo: a ticket closed now is not read yet, and the call is quick.
     h.db
-      .prepare(`INSERT INTO tickets (number, type, priority, priority_rank, status, summary, source, reporter_kind, reporter_label, created_at, updated_at, closed_at) VALUES (99999, 'bug', 'normal', 2, 'done', 'S', 'human', 'ui', 'Admin', ?, ?, ?)`)
+      .prepare(
+        `INSERT INTO tickets (number, type, priority, priority_rank, status, summary, source, reporter_kind, reporter_label, created_at, updated_at, closed_at) VALUES (99999, 'bug', 'normal', 2, 'done', 'S', 'human', 'ui', 'Admin', ?, ?, ?)`,
+      )
       .run(iso(END - H), iso(END - 1000), iso(END - 1000));
     nowMs = END + 30_000;
     const t1 = performance.now();

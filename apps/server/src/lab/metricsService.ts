@@ -62,7 +62,8 @@ export const METRICS_BASIS: Record<string, string> = {
     'ticket_events (status moves into in_progress, the first comment by an agent session, QA and review verdicts, self-test lines) and ticket_merge_status (merged) of the tickets closed in the window; a ticket that lacks a stage’s timestamps is left out of it (excluded), never 0',
   percentile: 'nearest rank (scorecard.ts percentile), median and 90th percentile',
   wontDo: 'closed won’t-do: counted apart, never in a stage',
-  programs: 'tickets carrying one of the program’s tags (setting lab.metricsPrograms; program-* tags and flow.programs added); all: every ticket',
+  programs:
+    'tickets carrying one of the program’s tags (setting lab.metricsPrograms; program-* tags and flow.programs added); all: every ticket',
   lead: 'the ticket’s first area-* tag, else the lineage root of the session that held it (assignee, or who moved it into in_progress)',
   crew: 'the crews (lead tracks) holding the program’s tickets: the crew scorecard’s headline (T-600) and cost (T-450) over them',
   previous: 'the score in the snapshot nearest to one window ago (snapshots every 10 min, kept 30 days)',
@@ -157,7 +158,11 @@ export class Metrics {
     const flow = parsePrograms(flowProgramsRaw(this.deps.settings)).map((p) => ({ name: p.name, tag: p.tag }));
     // No settings module, or a value that is not text: the setting's default (as flowProgramsRaw does for flow.programs).
     const raw = this.#setting(METRICS_SETTING.programs);
-    return resolvePrograms({ setting: typeof raw === 'string' ? raw : DEFAULT_METRICS_PROGRAMS, programTags: (db && this.#read('program tags', () => loadProgramTags(db, this.deps.now() - PROGRAM_TAG_RECENT_MS))) || [], flow });
+    return resolvePrograms({
+      setting: typeof raw === 'string' ? raw : DEFAULT_METRICS_PROGRAMS,
+      programTags: (db && this.#read('program tags', () => loadProgramTags(db, this.deps.now() - PROGRAM_TAG_RECENT_MS))) || [],
+      flow,
+    });
   }
 
   /**
@@ -168,7 +173,12 @@ export class Metrics {
   leadScope(sessionId: string): MetricsScope {
     const db = this.deps.store.db;
     const row = db
-      ? this.#read('lead session', () => db.prepare('SELECT parent_id, owner_id FROM chat_sessions WHERE id = ?').get(sessionId) as { parent_id: string | null; owner_id: string | null } | undefined)
+      ? this.#read(
+          'lead session',
+          () =>
+            db.prepare('SELECT parent_id, owner_id FROM chat_sessions WHERE id = ?').get(sessionId) as
+              { parent_id: string | null; owner_id: string | null } | undefined,
+        )
       : null;
     if (!row || row.parent_id || !row.owner_id) return null;
     if (!canUser(row.owner_id, 'view', platformRef('usage'))) return null;
@@ -184,7 +194,11 @@ export class Metrics {
 
   /** The window's reads, reused for memoMs; one with a failed part is read again next time. */
   #load(windowMs: number): Loaded {
-    return this.#memoized(`load:${windowMs}`, () => this.#loadNow(windowMs), (l) => l.rows !== null && l.open !== null);
+    return this.#memoized(
+      `load:${windowMs}`,
+      () => this.#loadNow(windowMs),
+      (l) => l.rows !== null && l.open !== null,
+    );
   }
 
   /** The crew facts from `backMs` before now (the scorecard's loader), reused like the ticket reads. */
@@ -200,7 +214,11 @@ export class Metrics {
     // At least two days back: effectiveness reads the last 24 h whatever the window.
     const from = nowMs - Math.max(2 * windowMs, 48 * HOUR);
     const facts = this.#read('closed tickets', () => loadFlowTickets(db, from, nowMs + 1, (ids) => spend.sessions(ids)));
-    return { nowMs, rows: facts ? facts.map(ticketFlow) : null, open: this.#read('open tickets', () => loadOpenTickets(db, (ids) => spend.sessions(ids))) };
+    return {
+      nowMs,
+      rows: facts ? facts.map(ticketFlow) : null,
+      open: this.#read('open tickets', () => loadOpenTickets(db, (ids) => spend.sessions(ids))),
+    };
   }
 
   #rowsOf(l: Loaded, p: MetricsProgram, scope: MetricsScope): FlowRow[] | null {
@@ -245,27 +263,58 @@ export class Metrics {
         const workers = [...c.members]
           .filter((m) => !leads.has(m))
           .map((m) => ({ id: m, state: facts.sessions.get(m)?.state ?? 'ended', stateSinceMs: facts.extra.get(m)?.stateSinceMs ?? null }));
-        return { lead: lead ? { id: leadId, state: lead.state ?? 'ended', claudeId: lead.claudeId || null } : null, workers, openWork: programTickets(c, open, facts.sessions).length > 0 };
+        return {
+          lead: lead ? { id: leadId, state: lead.state ?? 'ended', claudeId: lead.claudeId || null } : null,
+          workers,
+          openWork: programTickets(c, open, facts.sessions).length > 0,
+        };
       })
       .filter((c) => (c.lead && LIVE.has(c.lead.state)) || c.workers.some((w) => LIVE.has(w.state)));
   }
 
-  #previous(program: string, nowMs: number, windowMs: number, scope: MetricsScope): { efficiency: number | null; effectiveness: number | null } {
+  #previous(
+    program: string,
+    nowMs: number,
+    windowMs: number,
+    scope: MetricsScope,
+  ): { efficiency: number | null; effectiveness: number | null } {
     const db = scope ? null : this.deps.store.db;
-    const s = db ? this.#read('snapshot', () => snapshotNear(db, program, nowMs - windowMs, Math.max(SNAPSHOT_EVERY_MS * 3, windowMs / 24))) : null;
+    const s = db
+      ? this.#read('snapshot', () => snapshotNear(db, program, nowMs - windowMs, Math.max(SNAPSHOT_EVERY_MS * 3, windowMs / 24)))
+      : null;
     const n = (v: unknown) => (typeof v === 'number' ? v : null);
     return { efficiency: n(s?.values.efficiency), effectiveness: n(s?.values.effectiveness) };
   }
 
   /** Both scores of one program now, with the facts behind them. */
-  #scores(l: Loaded, p: MetricsProgram, facts: CrewFacts | null, paces: readonly PaceClaude[] | null, windowMs: number, scope: MetricsScope) {
+  #scores(
+    l: Loaded,
+    p: MetricsProgram,
+    facts: CrewFacts | null,
+    paces: readonly PaceClaude[] | null,
+    windowMs: number,
+    scope: MetricsScope,
+  ) {
     const prev = this.#previous(p.id, l.nowMs, windowMs, scope);
     const crews = facts ? this.#crews(facts, p, scope) : null;
-    const exhausted = paces ? new Set(paces.filter((c) => c.windows.some((w) => typeof w.usedPct === 'number' && w.usedPct >= 100)).map((c) => c.claudeId)) : null;
-    const efficiency = efficiencyScore({ nowMs: l.nowMs, crews: facts && crews ? this.#crewNow(facts, crews, p) : null, exhausted, previous: prev.efficiency });
+    const exhausted = paces
+      ? new Set(paces.filter((c) => c.windows.some((w) => typeof w.usedPct === 'number' && w.usedPct >= 100)).map((c) => c.claudeId))
+      : null;
+    const efficiency = efficiencyScore({
+      nowMs: l.nowMs,
+      crews: facts && crews ? this.#crewNow(facts, crews, p) : null,
+      exhausted,
+      previous: prev.efficiency,
+    });
     const rows = this.#rowsOf(l, p, scope);
     const open = p.kind === 'commits' ? null : this.#openOf(l, p, scope);
-    const effectiveness = effectivenessScore({ nowMs: l.nowMs, rows: p.kind === 'commits' ? null : rows, open, targets: p.targets, previous: prev.effectiveness });
+    const effectiveness = effectivenessScore({
+      nowMs: l.nowMs,
+      rows: p.kind === 'commits' ? null : rows,
+      open,
+      targets: p.targets,
+      previous: prev.effectiveness,
+    });
     return { efficiency, effectiveness, rows, open, crews };
   }
 
@@ -291,7 +340,9 @@ export class Metrics {
       };
       const src = 'chat_usage.cost_usd of the crews in the window (crew scorecard cost, T-450), summed';
       const fig = (v: number | null, source = src, reason: 'no_samples' | 'no_source' = 'no_samples'): CrewFigure =>
-        v === null ? { value: null, basis: 'unavailable', source, reason } : { value: Math.round(v * 100) / 100, basis: 'estimate', source };
+        v === null
+          ? { value: null, basis: 'unavailable', source, reason }
+          : { value: Math.round(v * 100) / 100, basis: 'estimate', source };
       const total = sum('total');
       const lead = sum('lead');
       const done = flow?.current.done ?? null;
@@ -304,7 +355,11 @@ export class Metrics {
           workers: fig(sum('workers')),
           leadShare: fig(total && lead !== null ? (100 * lead) / total : null, 'the crews’ lead dollars / all their dollars, percent'),
           // The done count unreadable: no_source (not "no samples").
-          perDone: fig(total !== null && done !== null && done > 0 ? total / done : null, 'the crews’ dollars / the program’s tickets done in the window', done === null ? 'no_source' : 'no_samples'),
+          perDone: fig(
+            total !== null && done !== null && done > 0 ? total / done : null,
+            'the crews’ dollars / the program’s tickets done in the window',
+            done === null ? 'no_source' : 'no_samples',
+          ),
         },
       };
     }
@@ -316,20 +371,44 @@ export class Metrics {
       effectiveness: s.effectiveness,
       flow,
       ...flowUnavailable,
-      open: s.open ? { open: s.open.open, inProgress: s.open.inProgress, blocked: s.open.blocked, inReview: s.open.inReview, oldestReviewMs: s.open.oldestReviewMs, stalled: s.open.stalled } : null,
+      open: s.open
+        ? {
+            open: s.open.open,
+            inProgress: s.open.inProgress,
+            blocked: s.open.blocked,
+            inReview: s.open.inReview,
+            oldestReviewMs: s.open.oldestReviewMs,
+            stalled: s.open.stalled,
+          }
+        : null,
       crew,
       basis: METRICS_BASIS,
     };
   }
 
-  flow(programId: string | undefined, window: MetricsWindow, groupBy: MetricsGroupBy | null, scope: MetricsScope = null): MetricsFlow | null {
+  flow(
+    programId: string | undefined,
+    window: MetricsWindow,
+    groupBy: MetricsGroupBy | null,
+    scope: MetricsScope = null,
+  ): MetricsFlow | null {
     const programs = this.programs();
     const p = this.program(programId, programs);
     if (!p) return null;
     const windowMs = METRICS_WINDOW_MS[window];
     const l = this.#load(windowMs);
     const rows = this.#rowsOf(l, p, scope);
-    if (rows === null) return { program: p.id, window, nowMs: l.nowMs, groupBy, total: null, groups: [], basis: METRICS_BASIS, unavailable: FLOW_UNAVAILABLE };
+    if (rows === null)
+      return {
+        program: p.id,
+        window,
+        nowMs: l.nowMs,
+        groupBy,
+        total: null,
+        groups: [],
+        basis: METRICS_BASIS,
+        unavailable: FLOW_UNAVAILABLE,
+      };
     const { total, groups } = groupFlow(rows, l.nowMs, windowMs, groupBy, programs);
     return { program: p.id, window, nowMs: l.nowMs, groupBy, total, groups, basis: METRICS_BASIS };
   }
@@ -389,13 +468,38 @@ export class Metrics {
     if (!p) return null;
     const windowMs = METRICS_WINDOW_MS[window];
     const l = this.#load(windowMs);
-    if (p.kind === 'commits') return { program: p.id, window, nowMs: l.nowMs, items: [{ kind: 'no_data', severity: 'info', text: p.unavailable!.text, tickets: [] }] };
+    if (p.kind === 'commits')
+      return {
+        program: p.id,
+        window,
+        nowMs: l.nowMs,
+        items: [{ kind: 'no_data', severity: 'info', text: p.unavailable!.text, tickets: [] }],
+      };
     const facts = this.#crewFacts(l.nowMs, HOUR);
     const s = this.#scores(l, p, facts, await this.#paces(scope), windowMs, scope);
-    if (s.rows === null) return { program: p.id, window, nowMs: l.nowMs, items: [{ kind: 'no_data', severity: 'info', text: FLOW_UNAVAILABLE.text, tickets: [] }] };
+    if (s.rows === null)
+      return {
+        program: p.id,
+        window,
+        nowMs: l.nowMs,
+        items: [{ kind: 'no_data', severity: 'info', text: FLOW_UNAVAILABLE.text, tickets: [] }],
+      };
     const rows = s.rows;
     const flow = groupFlow(rows, l.nowMs, windowMs, null, []).total;
-    return { program: p.id, window, nowMs: l.nowMs, items: insights({ label: p.label, windowLabel: window === '24h' ? '24 hours' : '7 days', flow, rows, efficiency: s.efficiency, open: s.open, targets: p.targets }) };
+    return {
+      program: p.id,
+      window,
+      nowMs: l.nowMs,
+      items: insights({
+        label: p.label,
+        windowLabel: window === '24h' ? '24 hours' : '7 days',
+        flow,
+        rows,
+        efficiency: s.efficiency,
+        open: s.open,
+        targets: p.targets,
+      }),
+    };
   }
 
   /** One snapshot per ticket program (the timer, every 10 minutes). Returns how many rows were written. */
@@ -409,17 +513,18 @@ export class Metrics {
     const all = this.programs().filter((p) => p.kind !== 'commits');
     // A hard cap per snapshot (all first, then the setting's, the tag and the flow programs in that order): the table grows by at most
     // MAX_SNAPSHOT_PROGRAMS rows every 10 minutes, whatever the setting or the tags hold.
-    if (all.length > MAX_SNAPSHOT_PROGRAMS) this.deps.log?.(`metrics: snapshot keeps the first ${MAX_SNAPSHOT_PROGRAMS} of ${all.length} programs`);
-    const rows = all
-      .slice(0, MAX_SNAPSHOT_PROGRAMS)
-      .map((p) => {
-        const s = this.#scores(l, p, facts, paces, windowMs, null);
-        const day = groupFlow(s.rows ?? [], l.nowMs, windowMs, null, []).total.current;
-        const values = snapshotValues({ efficiency: s.efficiency, effectiveness: s.effectiveness, day, open: s.open });
-        // A failed read is a gap in the trend, never a dip to 0.
-        if (s.rows === null) for (const k of Object.keys(values) as (keyof typeof values)[]) if (FLOW_KEYS.includes(k as never) || k.endsWith('P50')) values[k] = null;
-        return { program: p.id, values };
-      });
+    if (all.length > MAX_SNAPSHOT_PROGRAMS)
+      this.deps.log?.(`metrics: snapshot keeps the first ${MAX_SNAPSHOT_PROGRAMS} of ${all.length} programs`);
+    const rows = all.slice(0, MAX_SNAPSHOT_PROGRAMS).map((p) => {
+      const s = this.#scores(l, p, facts, paces, windowMs, null);
+      const day = groupFlow(s.rows ?? [], l.nowMs, windowMs, null, []).total.current;
+      const values = snapshotValues({ efficiency: s.efficiency, effectiveness: s.effectiveness, day, open: s.open });
+      // A failed read is a gap in the trend, never a dip to 0.
+      if (s.rows === null)
+        for (const k of Object.keys(values) as (keyof typeof values)[])
+          if (FLOW_KEYS.includes(k as never) || k.endsWith('P50')) values[k] = null;
+      return { program: p.id, values };
+    });
     return writeSnapshots(db, l.nowMs, rows);
   }
 }

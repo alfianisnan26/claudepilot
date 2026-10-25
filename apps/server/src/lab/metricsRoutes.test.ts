@@ -9,7 +9,16 @@ import { join } from 'node:path';
 import { afterEach, test } from 'node:test';
 import { isAppError } from '@isnanme/core';
 import { Hono } from 'hono';
-import { METRICS_API, type Actor, type MetricsFlow, type MetricsInsights, type MetricsOverview, type MetricsProgram, type MetricsTickets, type MetricsTrend } from '@portal/contracts';
+import {
+  METRICS_API,
+  type Actor,
+  type MetricsFlow,
+  type MetricsInsights,
+  type MetricsOverview,
+  type MetricsProgram,
+  type MetricsTickets,
+  type MetricsTrend,
+} from '@portal/contracts';
 import { clearResolvers, declaredPolicies } from '../authz/seam.js';
 import { selfTestAt } from '../flow/engine.js';
 import { generateSecretKey, parseSecretKey } from '../store/secretBox.js';
@@ -40,22 +49,38 @@ async function seeded(opts: { settings?: Record<string, unknown> } = {}) {
   let now = NOW;
   const settings = { get: (k: string) => opts.settings?.[k] };
   const lab = new Lab({ store, now: () => now, settings });
-  const ticket = (n: number, status: string, o: { createdAgo: number; closedAgo?: number; type?: string; priority?: string; tags?: string[]; updatedAgo?: number }) => {
+  const ticket = (
+    n: number,
+    status: string,
+    o: { createdAgo: number; closedAgo?: number; type?: string; priority?: string; tags?: string[]; updatedAgo?: number },
+  ) => {
     db.prepare(
       `INSERT INTO tickets (number, type, priority, priority_rank, status, summary, source, reporter_kind, reporter_label, created_at, updated_at, closed_at)
        VALUES (?, ?, ?, 2, ?, 'Seed', 'human', 'ui', 'Admin', ?, ?, ?)`,
-    ).run(n, o.type ?? 'feature', o.priority ?? 'normal', status, iso(at(o.createdAgo)), iso(at(o.updatedAgo ?? o.closedAgo ?? 0)), o.closedAgo === undefined ? null : iso(at(o.closedAgo)));
+    ).run(
+      n,
+      o.type ?? 'feature',
+      o.priority ?? 'normal',
+      status,
+      iso(at(o.createdAgo)),
+      iso(at(o.updatedAgo ?? o.closedAgo ?? 0)),
+      o.closedAgo === undefined ? null : iso(at(o.closedAgo)),
+    );
     for (const t of o.tags ?? []) db.prepare('INSERT INTO ticket_tags (ticket_number, tag) VALUES (?, ?)').run(n, t);
   };
   const status = (n: number, hoursAgo: number, from: string, to: string, actor = 'session:W1') =>
-    db.prepare(`INSERT INTO ticket_events (ticket_number, at, kind, actor, actor_label, data) VALUES (?, ?, 'status', ?, 'x', ?)`).run(n, iso(at(hoursAgo)), actor, JSON.stringify({ from, to }));
+    db
+      .prepare(`INSERT INTO ticket_events (ticket_number, at, kind, actor, actor_label, data) VALUES (?, ?, 'status', ?, 'x', ?)`)
+      .run(n, iso(at(hoursAgo)), actor, JSON.stringify({ from, to }));
   const comment = (n: number, hoursAgo: number, body: string, o: { actor?: string; data?: unknown } = {}) =>
     db
       .prepare(`INSERT INTO ticket_events (ticket_number, at, kind, actor, actor_label, body, data) VALUES (?, ?, 'comment', ?, 'x', ?, ?)`)
       .run(n, iso(at(hoursAgo)), o.actor ?? 'session:W1', body, o.data === undefined ? null : JSON.stringify(o.data));
   const merged = (n: number, hoursAgo: number) =>
     db
-      .prepare(`INSERT INTO ticket_merge_status (ticket_number, repo, pr, pr_head, state, actor, actor_label, at) VALUES (?, 'claudepilot', 7, ?, 'merged', 'system', 'gate', ?)`)
+      .prepare(
+        `INSERT INTO ticket_merge_status (ticket_number, repo, pr, pr_head, state, actor, actor_label, at) VALUES (?, 'claudepilot', 7, ?, 'merged', 'system', 'gate', ?)`,
+      )
       .run(n, SHA, iso(at(hoursAgo)));
 
   // T-1: the full journey (golden): created 10 h ago; started 9; agent comment 8.5; self-test FAIL 6; QA pass 4; merged 3; done 1.
@@ -67,7 +92,8 @@ async function seeded(opts: { settings?: Record<string, unknown> } = {}) {
   // A self-test line quoted inside a line, and as a quote block, is not a verdict (D-102: the line starts with "Self-test:").
   comment(1, 5, `Quoting the old run: "Self-test: claudepilot-job-9 on ${SHA} pass 4"\n> Self-test: claudepilot-job-9 on ${SHA} pass 4`);
   // Nor is one inside a code fence, though the line inside starts with "Self-test:" (the SQL brings the body; the parser skips the fence).
-  comment(1, 4.5, `The log said:\n\`\`\`\nSelf-test: claudepilot-job-9 on ${SHA} pass 4\n\`\`\``);  merged(1, 3);
+  comment(1, 4.5, `The log said:\n\`\`\`\nSelf-test: claudepilot-job-9 on ${SHA} pass 4\n\`\`\``);
+  merged(1, 3);
   // T-2: won't-do, Konfersi.
   ticket(2, 'wont_do', { createdAgo: 6, closedAgo: 2, tags: ['konfersi'] });
   // T-3: done with nothing recorded but its open and close: only resolve (15 h) counts; every other stage leaves it out.
@@ -99,7 +125,9 @@ function app(lab: Lab, actor?: Actor) {
     else c.set('token', 'signed-in');
     await next();
   });
-  a.onError((e, c) => (isAppError(e) ? c.json({ error: { code: e.code } }, e.status as 400) : c.json({ error: { code: 'INTERNAL', message: String(e) } }, 500)));
+  a.onError((e, c) =>
+    isAppError(e) ? c.json({ error: { code: e.code } }, e.status as 400) : c.json({ error: { code: 'INTERNAL', message: String(e) } }, 500),
+  );
   a.route('/api/lab', createLabRoutes(lab));
   return a;
 }
@@ -110,10 +138,19 @@ const agent: Actor = { kind: 'agent', userId: 'u_owner', tokenId: 't', sessionId
 test('migration 856: the snapshot table and its indexes, and the closed-at index on tickets', async () => {
   const h = await seeded();
   try {
-    const names = (h.db.prepare(`SELECT name FROM sqlite_master WHERE name LIKE 'lab_metric_snapshots%' OR name = 'tickets_closed_at' ORDER BY name`).all() as { name: string }[]).map((r) => r.name);
+    const names = (
+      h.db
+        .prepare(`SELECT name FROM sqlite_master WHERE name LIKE 'lab_metric_snapshots%' OR name = 'tickets_closed_at' ORDER BY name`)
+        .all() as { name: string }[]
+    ).map((r) => r.name);
     assert.deepEqual(names, ['lab_metric_snapshots', 'lab_metric_snapshots_at', 'lab_metric_snapshots_program_at', 'tickets_closed_at']);
-    const plan = h.db.prepare(`EXPLAIN QUERY PLAN SELECT number FROM tickets WHERE closed_at >= ? AND closed_at < ?`).all('a', 'b') as { detail: string }[];
-    assert.ok(plan.some((p) => /tickets_closed_at/.test(p.detail)), 'the window read uses the index');
+    const plan = h.db.prepare(`EXPLAIN QUERY PLAN SELECT number FROM tickets WHERE closed_at >= ? AND closed_at < ?`).all('a', 'b') as {
+      detail: string;
+    }[];
+    assert.ok(
+      plan.some((p) => /tickets_closed_at/.test(p.detail)),
+      'the window read uses the index',
+    );
     assert.throws(() => h.db.prepare(`INSERT INTO lab_metric_snapshots (at_ms, program, metrics) VALUES (1, 'x', 'not json')`).run());
   } finally {
     h.done();
@@ -126,10 +163,14 @@ test('loader: the golden ticket’s stages from events, verdicts, self-test line
     const facts = loadFlowTickets(h.db, at(48), NOW + 1, null);
     assert.deepEqual(facts.map((f) => f.id).sort(), ['T-1', 'T-2', 'T-3', 'T-4', 'T-8']);
     const t1 = facts.find((f) => f.id === 'T-1')!;
-    assert.deepEqual(t1.verdicts, [
-      { atMs: at(6), pass: false },
-      { atMs: at(4), pass: true },
-    ], 'the self-test lines quoted at 5 h (inside a line, as "> ") and fenced at 4.5 h are not verdicts');
+    assert.deepEqual(
+      t1.verdicts,
+      [
+        { atMs: at(6), pass: false },
+        { atMs: at(4), pass: true },
+      ],
+      'the self-test lines quoted at 5 h (inside a line, as "> ") and fenced at 4.5 h are not verdicts',
+    );
     assert.equal(t1.firstAgentCommentMs, at(8.5));
     assert.equal(t1.lead, 'area-lab');
     const r = ticketFlow(t1);
@@ -140,7 +181,11 @@ test('loader: the golden ticket’s stages from events, verdicts, self-test line
     assert.equal(facts.find((f) => f.id === 'T-3')!.lead, 'unrecorded');
     assert.deepEqual(loadProgramTags(h.db, at(30 * 24)), ['program-kohi']);
     const open = loadOpenTickets(h.db);
-    assert.deepEqual(open.map((t) => [t.id, t.status]).sort(), [['T-5', 'in_review'], ['T-6', 'blocked'], ['T-9', 'in_progress']]);
+    assert.deepEqual(open.map((t) => [t.id, t.status]).sort(), [
+      ['T-5', 'in_review'],
+      ['T-6', 'blocked'],
+      ['T-9', 'in_progress'],
+    ]);
     assert.equal(open.find((t) => t.id === 'T-5')!.statusSinceMs, at(5));
   } finally {
     h.done();
@@ -152,15 +197,23 @@ test('loader: the watchdog’s bold self-test form is a verdict (the SQL brings 
   try {
     h.ticket(10, 'done', { createdAgo: 9, closedAgo: 2, tags: ['claudepilot'] });
     const add = (hoursAgo: number, body: string) =>
-      h.db.prepare(`INSERT INTO ticket_events (ticket_number, at, kind, actor, actor_label, body) VALUES (10, ?, 'comment', 'session:W1', 'x', ?)`).run(iso(at(hoursAgo)), body);
+      h.db
+        .prepare(
+          `INSERT INTO ticket_events (ticket_number, at, kind, actor, actor_label, body) VALUES (10, ?, 'comment', 'session:W1', 'x', ?)`,
+        )
+        .run(iso(at(hoursAgo)), body);
     add(4, `Bundle done.\n**Self-test**: \`npm test\` on ${SHA} fail 2`);
     add(3, `Fixed.\n**Self-test:** \`claudepilot-job-2\` on ${SHA} pass 40`);
     add(2.5, `> **Self-test:** claudepilot-job-9 on ${SHA} pass 4`);
     const t10 = loadFlowTickets(h.db, at(48), NOW + 1, null).find((f) => f.id === 'T-10')!;
-    assert.deepEqual(t10.verdicts, [
-      { atMs: at(4), pass: false },
-      { atMs: at(3), pass: true },
-    ], 'both bold lines count; the bold one in a quote does not');
+    assert.deepEqual(
+      t10.verdicts,
+      [
+        { atMs: at(4), pass: false },
+        { atMs: at(3), pass: true },
+      ],
+      'both bold lines count; the bold one in a quote does not',
+    );
   } finally {
     h.done();
   }
@@ -251,17 +304,25 @@ test('Metrics.snapshot: one row per ticket program, read back by the trend and a
     const n1 = await h.lab.snapshotMetrics();
     h.setNow(NOW);
     const n2 = await h.lab.snapshotMetrics();
-    const programs = h.lab.metrics.programs().filter((p) => p.kind !== 'commits').map((p) => p.id);
+    const programs = h.lab.metrics
+      .programs()
+      .filter((p) => p.kind !== 'commits')
+      .map((p) => p.id);
     assert.equal(n1, programs.length);
     assert.equal(n2, programs.length);
     assert.deepEqual(programs, ['all', 'claudepilot', 'konfersi', 'kohi']);
     const trend = h.lab.metrics.trend('claudepilot', 'done24h', '7d')!;
-    assert.deepEqual(trend.points.map((p) => [p.atMs, p.value]), [
-      [at(24), 1],
-      [NOW, 1],
-    ]);
+    assert.deepEqual(
+      trend.points.map((p) => [p.atMs, p.value]),
+      [
+        [at(24), 1],
+        [NOW, 1],
+      ],
+    );
     assert.equal(trend.everyMs, SNAPSHOT_EVERY_MS);
-    const first = h.db.prepare(`SELECT metrics FROM lab_metric_snapshots WHERE program = 'all' AND at_ms = ?`).get(at(24)) as { metrics: string };
+    const first = h.db.prepare(`SELECT metrics FROM lab_metric_snapshots WHERE program = 'all' AND at_ms = ?`).get(at(24)) as {
+      metrics: string;
+    };
     const ov = (await h.lab.metrics.overview('all', '24h'))!;
     assert.equal(ov.effectiveness.previous, JSON.parse(first.metrics).effectiveness);
   } finally {
@@ -285,12 +346,22 @@ test('Metrics.overview and flow: the program’s tickets only, won’t-do apart,
     const all = h.lab.metrics.flow('all', '24h', 'program')!;
     assert.equal(all.total!.current.done, 3); // T-1, T-3, T-8
     assert.equal(all.total!.previous.done, 1); // T-4
-    assert.deepEqual(all.groups.map((g) => [g.key, g.current.done]), [['claudepilot', 1], ['kohi', 1], ['konfersi', 1]]);
+    assert.deepEqual(
+      all.groups.map((g) => [g.key, g.current.done]),
+      [
+        ['claudepilot', 1],
+        ['kohi', 1],
+        ['konfersi', 1],
+      ],
+    );
     const memor = (await h.lab.metrics.overview('memor-id', '24h'))!;
     assert.equal(memor.program.unavailable?.reason, 'no_source');
     assert.equal(memor.effectiveness.value, null);
     const ins = (await h.lab.metrics.insights('memor-id', '24h'))!;
-    assert.deepEqual(ins.items.map((i) => i.kind), ['no_data']);
+    assert.deepEqual(
+      ins.items.map((i) => i.kind),
+      ['no_data'],
+    );
   } finally {
     h.done();
   }
@@ -300,13 +371,28 @@ test('Metrics.tickets: drill-down by stage and by group; the setting changes the
   const h = await seeded({ settings: { 'lab.metricsPrograms': 'all=Everything|*|1/10/1;cp=CP|claudepilot|1/2/3' } });
   try {
     const progs = h.lab.metrics.programs();
-    assert.deepEqual(progs.map((p) => [p.id, p.label]), [['all', 'Everything'], ['cp', 'CP'], ['kohi', 'kohi'], ['konfersi', 'konfersi']]);
+    assert.deepEqual(
+      progs.map((p) => [p.id, p.label]),
+      [
+        ['all', 'Everything'],
+        ['cp', 'CP'],
+        ['kohi', 'kohi'],
+        ['konfersi', 'konfersi'],
+      ],
+    );
     assert.deepEqual(progs.find((p) => p.id === 'cp')!.targets, { closuresPerHour: 1, resolveHours: 2, reviewHours: 3 });
     assert.equal(progs.find((p) => p.id === 'konfersi')!.source, 'flow', 'the flow default program covers konfersi-migration');
     const tested = h.lab.metrics.tickets('all', '24h', { stage: 'test' })!;
-    assert.deepEqual(tested.rows.map((r) => r.ticket), ['T-1']);
+    assert.deepEqual(
+      tested.rows.map((r) => r.ticket),
+      ['T-1'],
+    );
     const byLead = h.lab.metrics.tickets('all', '24h', { groupBy: 'lead', group: 'unrecorded' })!;
-    assert.deepEqual(byLead.rows.map((r) => r.ticket), ['T-2', 'T-8', 'T-3'], 'no area-* tag and no holder; newest close first');
+    assert.deepEqual(
+      byLead.rows.map((r) => r.ticket),
+      ['T-2', 'T-8', 'T-3'],
+      'no area-* tag and no holder; newest close first',
+    );
     assert.equal(byLead.total, 3);
     assert.equal(h.lab.metrics.tickets('nope', '24h', {}), null);
   } finally {
@@ -318,7 +404,14 @@ test('routes: every metrics route is declared; the owner reads; bob and an agent
   const h = await seeded();
   try {
     for (const path of Object.values(METRICS_API)) assert.equal(declaredPolicies().get(`GET ${path}`)?.kind, 'platform', path);
-    assert.deepEqual(Object.keys(LAB_POLICIES).filter((k) => k.startsWith('GET /api/lab/metrics/')).sort(), Object.values(METRICS_API).map((p) => `GET ${p}`).sort());
+    assert.deepEqual(
+      Object.keys(LAB_POLICIES)
+        .filter((k) => k.startsWith('GET /api/lab/metrics/'))
+        .sort(),
+      Object.values(METRICS_API)
+        .map((p) => `GET ${p}`)
+        .sort(),
+    );
     const owner = app(h.lab);
     const get = async (a: ReturnType<typeof app>, url: string) => {
       const res = await a.request(url);
@@ -338,7 +431,10 @@ test('routes: every metrics route is declared; the owner reads; bob and an agent
     assert.deepEqual((tr.body.data as MetricsTrend).points, []);
     const tk = await get(owner, '/api/lab/metrics/tickets?stage=resolve&groupBy=priority&group=high');
     assert.equal(tk.status, 200);
-    assert.deepEqual((tk.body.data as MetricsTickets).rows.map((r) => r.ticket), ['T-1']);
+    assert.deepEqual(
+      (tk.body.data as MetricsTickets).rows.map((r) => r.ticket),
+      ['T-1'],
+    );
     // T-2360 review LOW: `offset` pages the drill-down; `total` stays over all rows.
     const all = (await get(owner, '/api/lab/metrics/tickets?window=7d')).body.data as MetricsTickets;
     const rest = (await get(owner, '/api/lab/metrics/tickets?window=7d&offset=1')).body.data as MetricsTickets;
@@ -349,7 +445,16 @@ test('routes: every metrics route is declared; the owner reads; bob and an agent
     assert.equal(ins.status, 200);
     assert.ok(Array.isArray((ins.body.data as MetricsInsights).items));
 
-    for (const url of ['/api/lab/metrics/overview?window=1h', '/api/lab/metrics/flow?groupBy=colour', '/api/lab/metrics/trend?metric=x', '/api/lab/metrics/tickets?group=high', '/api/lab/metrics/tickets?stage=nap', '/api/lab/metrics/tickets?offset=-1', '/api/lab/metrics/tickets?offset=1.5', '/api/lab/metrics/overview?program=a%20b']) {
+    for (const url of [
+      '/api/lab/metrics/overview?window=1h',
+      '/api/lab/metrics/flow?groupBy=colour',
+      '/api/lab/metrics/trend?metric=x',
+      '/api/lab/metrics/tickets?group=high',
+      '/api/lab/metrics/tickets?stage=nap',
+      '/api/lab/metrics/tickets?offset=-1',
+      '/api/lab/metrics/tickets?offset=1.5',
+      '/api/lab/metrics/overview?program=a%20b',
+    ]) {
       const r = await get(owner, url);
       assert.equal(r.status, 422, url);
       assert.equal(r.body.error?.code, 'VALIDATION_FAILED', url);
@@ -385,7 +490,13 @@ test('a failed closed-ticket read is unavailable (no_source) in flow, tickets, o
         return typeof v === 'function' ? (v as (...a: unknown[]) => unknown).bind(target) : v;
       },
     });
-    const m = new Metrics({ store: { db, writable: true } as unknown as Store, now: () => NOW, settings: null, paces: null, log: (s) => logs.push(s) });
+    const m = new Metrics({
+      store: { db, writable: true } as unknown as Store,
+      now: () => NOW,
+      settings: null,
+      paces: null,
+      log: (s) => logs.push(s),
+    });
     const flow = m.flow('all', '24h', 'lead')!;
     assert.deepEqual(flow.unavailable, FLOW_UNAVAILABLE);
     assert.equal(flow.unavailable?.reason, 'no_source');
@@ -397,7 +508,8 @@ test('a failed closed-ticket read is unavailable (no_source) in flow, tickets, o
     assert.ok(ov.open, 'the open-work read still works');
     // The score parts that read the closed tickets are unavailable (no_source), the open-work parts are measured.
     const parts = new Map(ov.effectiveness.components.map((c) => [c.id, c]));
-    for (const id of ['closures', 'doneVsWontDo', 'flowTime']) assert.deepEqual([parts.get(id)?.value, parts.get(id)?.reason], [null, 'no_source'], id);
+    for (const id of ['closures', 'doneVsWontDo', 'flowTime'])
+      assert.deepEqual([parts.get(id)?.value, parts.get(id)?.reason], [null, 'no_source'], id);
     assert.equal(typeof parts.get('notBlocked')?.value, 'number');
 
     // The REST responses carry the same nulls and reason (the routes read lab.metrics only).
@@ -414,11 +526,16 @@ test('a failed closed-ticket read is unavailable (no_source) in flow, tickets, o
     const tk = (await json('/api/lab/metrics/tickets')) as MetricsTickets;
     assert.deepEqual([tk.total, tk.rows, tk.unavailable?.reason], [null, [], 'no_source']);
     const ins = (await m.insights('claudepilot', '24h'))!;
-    assert.deepEqual(ins.items.map((i) => [i.kind, i.text]), [['no_data', FLOW_UNAVAILABLE.text]]);
+    assert.deepEqual(
+      ins.items.map((i) => [i.kind, i.text]),
+      [['no_data', FLOW_UNAVAILABLE.text]],
+    );
     assert.ok(logs.includes('metrics: closed tickets read failed (SqliteError)'), logs.join('\n'));
     assert.ok(logs.every((l) => !l.includes('must not be logged')));
     assert.ok((await m.snapshot()) > 0);
-    const snap = JSON.parse((h.db.prepare(`SELECT metrics FROM lab_metric_snapshots WHERE program = 'all'`).get() as { metrics: string }).metrics) as Record<string, unknown>;
+    const snap = JSON.parse(
+      (h.db.prepare(`SELECT metrics FROM lab_metric_snapshots WHERE program = 'all'`).get() as { metrics: string }).metrics,
+    ) as Record<string, unknown>;
     assert.equal(snap.done24h, null, 'a gap in the trend, not a 0');
     assert.equal(snap.resolveP50, null);
     assert.equal(typeof snap.openWork, 'number');
@@ -442,14 +559,23 @@ test('program tags: ranked by tickets touched in 30 days, then by all their tick
     // program-kohi: T-8, one recent ticket; program-b also has one recent but two in all; program-c has three tickets, none touched in
     // 30 days: dormant, so no program (and no snapshot rows).
     assert.deepEqual(loadProgramTags(h.db, at(30 * 24)), ['program-a', 'program-b', 'program-kohi']);
-    assert.deepEqual(loadProgramTags(h.db, at(50 * 24)), ['program-c', 'program-a', 'program-b', 'program-kohi'], 'in a longer span c counts, most recent tickets first');
-    for (let i = 0; i < 14; i++) h.ticket(30 + i, 'open', { createdAgo: 5, updatedAgo: 1, tags: [`program-z${String(i).padStart(2, '0')}`] });
+    assert.deepEqual(
+      loadProgramTags(h.db, at(50 * 24)),
+      ['program-c', 'program-a', 'program-b', 'program-kohi'],
+      'in a longer span c counts, most recent tickets first',
+    );
+    for (let i = 0; i < 14; i++)
+      h.ticket(30 + i, 'open', { createdAgo: 5, updatedAgo: 1, tags: [`program-z${String(i).padStart(2, '0')}`] });
     const progs = h.lab.metrics.programs();
     const tagged = progs.filter((p) => p.source === 'program-tag').map((p) => p.id);
     // Ranked: a (2 recent), b (1 recent, 2 in all), then kohi and z00..z13 (1 recent, 1 in all) by name; the first 12, shown by id.
     // c (dormant) and z09..z13 (past the cap) are left out.
     assert.deepEqual(tagged, ['a', 'b', 'kohi', ...Array.from({ length: 9 }, (_, i) => `z0${i}`)]);
-    assert.deepEqual(progs.filter((p) => p.source !== 'program-tag').map((p) => p.id), ['all', 'claudepilot', 'konfersi', 'memor-id'], 'the setting’s programs always stay');
+    assert.deepEqual(
+      progs.filter((p) => p.source !== 'program-tag').map((p) => p.id),
+      ['all', 'claudepilot', 'konfersi', 'memor-id'],
+      'the setting’s programs always stay',
+    );
     assert.equal(await h.lab.snapshotMetrics(), 1 + 2 + 12, 'all, the two ticket programs of the setting, 12 tag programs');
   } finally {
     h.done();
@@ -461,12 +587,20 @@ test('snapshot: at most MAX_SNAPSHOT_PROGRAMS rows per run, all and the setting�
   const h = await seeded({ settings: { [METRICS_SETTING.programs]: setting } });
   try {
     const logs: string[] = [];
-    const m = new Metrics({ store: h.store, now: () => NOW, settings: { get: (k: string) => (k === METRICS_SETTING.programs ? setting : undefined) }, paces: null, log: (s) => logs.push(s) });
+    const m = new Metrics({
+      store: h.store,
+      now: () => NOW,
+      settings: { get: (k: string) => (k === METRICS_SETTING.programs ? setting : undefined) },
+      paces: null,
+      log: (s) => logs.push(s),
+    });
     const listed = m.programs().length;
     assert.ok(listed > MAX_SNAPSHOT_PROGRAMS, `the list itself is not cut (${listed})`);
     assert.equal(MAX_SNAPSHOT_PROGRAMS, 32);
     assert.equal(await m.snapshot(), MAX_SNAPSHOT_PROGRAMS);
-    const written = (h.db.prepare(`SELECT program FROM lab_metric_snapshots WHERE at_ms = ? ORDER BY id`).all(NOW) as { program: string }[]).map((r) => r.program);
+    const written = (
+      h.db.prepare(`SELECT program FROM lab_metric_snapshots WHERE at_ms = ? ORDER BY id`).all(NOW) as { program: string }[]
+    ).map((r) => r.program);
     assert.deepEqual(written, ['all', ...Array.from({ length: 31 }, (_, i) => `p${String(i).padStart(2, '0')}`)]);
     assert.deepEqual(logs, [`metrics: snapshot keeps the first ${MAX_SNAPSHOT_PROGRAMS} of ${listed} programs`]);
   } finally {
@@ -490,11 +624,19 @@ test('closed_at: both writers (close() and update to done or won’t-do) store t
     tickets.update(UI, reopened.id, { status: 'done' });
     clock = closeAt + 3;
     tickets.update(UI, reopened.id, { status: 'open' });
-    const stored = (n: string) => (h.db.prepare(`SELECT closed_at FROM tickets WHERE number = ?`).get(Number(n.slice(2))) as { closed_at: string | null }).closed_at;
-    assert.deepEqual([stored(viaClose.id), stored(viaUpdate.id), stored(reopened.id)], [iso(closeAt), iso(closeAt + 1), null], 'exactly toISOString() of the close; a reopen clears it');
+    const stored = (n: string) =>
+      (h.db.prepare(`SELECT closed_at FROM tickets WHERE number = ?`).get(Number(n.slice(2))) as { closed_at: string | null }).closed_at;
+    assert.deepEqual(
+      [stored(viaClose.id), stored(viaUpdate.id), stored(reopened.id)],
+      [iso(closeAt), iso(closeAt + 1), null],
+      'exactly toISOString() of the close; a reopen clears it',
+    );
     for (const id of [viaClose.id, viaUpdate.id]) assert.match(stored(id)!, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
     // The window [from, to) compares those strings: each bound at the same millisecond includes from and excludes to.
-    const ids = (from: number, to: number) => loadFlowTickets(h.db, from, to, null).map((f) => f.id).sort();
+    const ids = (from: number, to: number) =>
+      loadFlowTickets(h.db, from, to, null)
+        .map((f) => f.id)
+        .sort();
     assert.deepEqual(ids(closeAt, closeAt + 2), [viaClose.id, viaUpdate.id].sort());
     assert.deepEqual(ids(closeAt, closeAt + 1), [viaClose.id]);
     assert.deepEqual(ids(closeAt + 1, closeAt + 4), [viaUpdate.id], 'the reopened ticket is out');
