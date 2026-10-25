@@ -24,6 +24,7 @@ import {
   leadRows,
   leadTimeSpread,
   metricsQuery,
+  missingRows,
   nearestRank,
   paceView,
   pickProgram,
@@ -33,6 +34,7 @@ import {
   summaryStats,
   trendView,
   UNAVAILABLE,
+  unavailableNote,
 } from './metricsModel';
 
 const HOUR = 3_600_000;
@@ -112,7 +114,7 @@ const row = (ticket: string, ageH: number, over: Partial<MetricsTicketRow> = {},
   fails: null,
   ...over,
 });
-const tickets = (rows: MetricsTicketRow[], total = rows.length): MetricsTickets => ({
+const tickets = (rows: MetricsTicketRow[], total: number | null = rows.length): MetricsTickets => ({
   program: 'all',
   window: '24h',
   nowMs: NOW,
@@ -333,4 +335,34 @@ test('summaryStats: the window before as "was", open work unavailable when the s
   assert.equal(off.find((x) => x.key === 'blocked')?.value, '-');
   assert.equal(off.find((x) => x.key === 'blocked')?.sub, UNAVAILABLE);
   assert.deepEqual(summaryStats(null), []);
+});
+
+const noRead = { reason: 'no_source' as const, text: 'The closed tickets could not be read, so the flow figures are unavailable (not 0).' };
+
+test('a failed read of the closed tickets (total, flow null) is unavailable in every figure, never 0 or "no ticket"', () => {
+  const down = tickets([], null);
+  assert.equal(down.total, null);
+  assert.equal(closureColumns(down, '24h').missing, 0);
+  assert.equal(leadTimeSpread(down).missing, 0);
+  const o = overview({ flow: null, flowUnavailable: noRead });
+  const s = summaryStats(o);
+  for (const k of ['done', 'wontDo', 'median']) {
+    assert.equal(s.find((x) => x.key === k)?.value, '-', k);
+    assert.equal(s.find((x) => x.key === k)?.sub, UNAVAILABLE, k);
+  }
+  assert.equal(s.find((x) => x.key === 'review')?.value, '4', 'the open work was read on its own');
+  const f = headlineFigures(o);
+  assert.deepEqual(
+    f.map((x) => [x.key, x.value, x.available]),
+    [
+      ['efficiency', '72', true],
+      ['effectiveness', '56', true],
+      ['resolved', '-', false],
+      ['median', '-', false],
+    ],
+  );
+  assert.deepEqual(stageRows(null, ['start']), []);
+  assert.equal(unavailableNote(noRead), noRead.text);
+  assert.equal(unavailableNote(undefined), null);
+  assert.equal(missingRows(tickets([row('T-1', 1)], 5)), 4);
 });

@@ -6,7 +6,7 @@ import type { MetricsProgram, MetricsOverview, MetricsScore } from '@portal/cont
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router';
-import { DrillList, ProgramUnavailable, ScoresCard } from './metricsParts';
+import { ClosuresCard, DrillList, LeadsCard, LeadTimeCard, ProgramUnavailable, ScoresCard, StagesCard } from './metricsParts';
 
 const text = (html: string) =>
   html
@@ -102,4 +102,40 @@ test('DrillList: each ticket is a link to its page, the slowest first, a missing
   const hrefs = [...html.matchAll(/href="([^"]+)"/g)].map((m) => m[1]);
   assert.deepEqual(hrefs, ['/admin/tickets/T-3', '/admin/tickets/T-1', '/admin/tickets/T-2']);
   assert.match(text(html), /T-2 .*unavailable/);
+});
+
+// Slice 1 made the totals nullable: a failed read of the closed tickets must read "unavailable" with its reason, never 0 or "no ticket".
+const noRead = { reason: 'no_source' as const, text: 'The closed tickets could not be read, so the flow figures are unavailable (not 0).' };
+const loaded = <T>(data: T) => ({ data, failed: false, forbidden: false, loading: false, reload: () => undefined });
+
+test('ScoresCard: flow null says why, and the done, won-t-do and median figures are a dash with unavailable', () => {
+  const html = renderToStaticMarkup(
+    createElement(ScoresCard, {
+      overview: { ...overview({ ...memor, kind: 'all', unavailable: undefined }, score(72, 60)), flow: null, flowUnavailable: noRead },
+      program: undefined,
+      loading: false,
+    }),
+  );
+  const t = text(html);
+  assert.match(t, /The closed tickets could not be read/);
+  assert.match(html, /data-metric-stat="done"[^>]*>.*?<dd[^>]*>-<\/dd>/);
+  assert.match(t, /Done - unavailable Won&#?\w*;?t do - unavailable Median - unavailable/);
+});
+
+test('the cards over the closed tickets: total null is "unavailable" with the reason, not an empty chart or "No ticket"', () => {
+  const none = { program: 'all', window: '24h' as const, nowMs: 0, stage: null, group: null, groupBy: null, total: null, rows: [], unavailable: noRead };
+  const flow = { program: 'all', window: '24h' as const, nowMs: 0, groupBy: 'lead' as const, total: null, groups: [], basis: {}, unavailable: noRead };
+  const pick = () => undefined;
+  const cards = [
+    createElement(ClosuresCard, { load: loaded(none), window: '24h' }),
+    createElement(LeadTimeCard, { load: loaded(none) }),
+    createElement(StagesCard, { load: loaded(flow), onPick: pick, picked: null }),
+    createElement(LeadsCard, { load: loaded(flow), onPick: pick, picked: null }),
+    createElement(MemoryRouter, null, createElement(DrillList, { load: loaded(none), target: { stage: null, group: null }, window: '24h' })),
+  ];
+  for (const c of cards) {
+    const t = text(renderToStaticMarkup(c));
+    assert.match(t, /unavailable: The closed tickets could not be read/);
+    assert.doesNotMatch(t, /No ticket was done|Nothing closed|No lead closed|\b0 done\b/);
+  }
 });

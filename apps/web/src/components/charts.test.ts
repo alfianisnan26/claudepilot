@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import {
+  CHART_FALLBACK_WIDTH,
   Histogram,
   LineChart,
   ScoreTile,
@@ -416,4 +417,67 @@ test('Histogram: a median outside the bins is not marked; no bins is empty, not 
   assert.match(text(none), /No data yet/);
   assert.match(none, /aria-label="x: unavailable"/);
   assert.doesNotMatch(none, /role="button"/);
+});
+
+test('the metric charts draw before they have a measured width (T-2360: the trend at 390 px was only a legend and "Table")', () => {
+  // No `width`: the server render and the first paint have none measured. Without the fallback width the SVG, the axes and the lines are absent.
+  const line = renderToStaticMarkup(
+    el(LineChart, {
+      series: [
+        {
+          key: 'a',
+          label: 'Efficiency',
+          points: [
+            { t: 0, v: 40 },
+            { t: 1000, v: 60 },
+          ],
+        },
+        {
+          key: 'b',
+          label: 'Effectiveness',
+          points: [
+            { t: 0, v: 30 },
+            { t: 1000, v: 50 },
+          ],
+        },
+      ],
+      format: String,
+      ariaLabel: 'Scores',
+    }),
+  );
+  assert.match(line, /<svg[^>]*width="320"/, 'drawn at the fallback width, narrower than a phone');
+  assert.match(line, /role="img" aria-label="Scores\./);
+  assert.match(line, /<path d="M/, 'the line itself');
+  assert.ok(CHART_FALLBACK_WIDTH < 390);
+  const hist = renderToStaticMarkup(
+    el(Histogram, { edges: [0, 1, 2], counts: [2, 1], format: (v: number) => `${v}h`, median: 1, ariaLabel: 'Cycle time' }),
+  );
+  assert.match(hist, /<svg[^>]*width="320"/);
+});
+
+test('LineChart: a gap is a hairline over the plot, never a dot or a point at the baseline (it read as 0)', () => {
+  const html = renderToStaticMarkup(
+    el(LineChart, {
+      series: [
+        {
+          key: 'e',
+          label: 'Effectiveness',
+          points: [
+            { t: 0, v: 50 },
+            { t: 1000, v: null },
+            { t: 2000, v: 70 },
+            { t: 3000, v: 72 },
+          ],
+        },
+      ],
+      format: String,
+      ariaLabel: 'Eff',
+      width: 390,
+    }),
+  );
+  assert.equal((html.match(/data-chart-gap="e"/g) ?? []).length, 1);
+  assert.equal((html.match(/<line[^>]*stroke-dasharray="2 3"/g) ?? []).length, 1, 'one hairline for the one gap');
+  assert.doesNotMatch(html, /<circle[^>]*\sr="3"/, 'no dot on the baseline');
+  // The 50 and the 70 are not joined across the gap, and the lone point before it is a dot, not a line down to 0.
+  assert.equal((html.match(/<path d="M/g) ?? []).length, 1);
 });

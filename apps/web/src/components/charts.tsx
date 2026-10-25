@@ -45,11 +45,18 @@ export function niceMax(v: number): number {
   return Number((step * p).toPrecision(12));
 }
 
-/** The element's width, kept current. */
-function useWidth(fixed?: number) {
+/**
+ * The width a chart draws at while the element has none yet (not measured, or measured as 0): narrower than a phone, so it never
+ * overflows one. T-2360: a trend chart measured as 0 drew nothing but its legend and "Table" at 390 px; it now draws at once and is
+ * redrawn at the real width.
+ */
+export const CHART_FALLBACK_WIDTH = 320;
+
+/** The element's width, kept current; `fallback` (the metric charts pass `CHART_FALLBACK_WIDTH`) until it has one, so they are never blank. */
+function useWidth(fixed?: number, fallback = 0) {
   const ref = useRef<HTMLDivElement>(null);
   const [measured, setWidth] = useState(0);
-  const width = fixed ?? measured;
+  const width = fixed ?? (measured > 0 ? measured : fallback);
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
@@ -588,7 +595,7 @@ export function LineChart({
   /** Start on the table. */
   defaultTable?: boolean;
 }) {
-  const [ref, width] = useWidth(fixedWidth);
+  const [ref, width] = useWidth(fixedWidth, CHART_FALLBACK_WIDTH);
   const [table, setTable] = useState(defaultTable);
   const [active, setActive] = useState<number | null>(null);
   const lines = series.slice(0, LINE_SERIES_MAX).map((s, i) => ({ ...s, color: s.color ?? LINE_COLORS[i]! }));
@@ -1059,7 +1066,7 @@ export function Histogram({
   width?: number;
   defaultTable?: boolean;
 }) {
-  const [ref, width] = useWidth(fixedWidth);
+  const [ref, width] = useWidth(fixedWidth, CHART_FALLBACK_WIDTH);
   const [table, setTable] = useState(defaultTable);
   const [active, setActive] = useState<number | null>(null);
   const ok = counts.length > 0 && edges.length === counts.length + 1;
