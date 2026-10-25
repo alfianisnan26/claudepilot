@@ -14,7 +14,7 @@ import { test } from 'node:test';
 import type { DatabaseSync } from 'node:sqlite';
 import { Store } from '../store/store.js';
 import { tempDirectory } from '../store/testTmp.js';
-import { loadFlowTickets, loadOpenTickets } from './flowMetricsData.js';
+import { CLOSED_IN_WINDOW_SQL, loadFlowTickets, loadOpenTickets } from './flowMetricsData.js';
 import { Metrics } from './metricsService.js';
 
 const H = 3_600_000;
@@ -82,7 +82,7 @@ test('metrics reads: the window read uses tickets_closed_at; events and tags are
   const h = await open(50);
   try {
     const plan = (sql: string, ...args: (string | number)[]) => (h.db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...args) as { detail: string }[]).map((r) => r.detail).join(' | ');
-    assert.match(plan(`SELECT number FROM tickets WHERE closed_at >= ? AND closed_at < ? AND status IN ('done', 'wont_do')`, 'a', 'b'), /tickets_closed_at/);
+    assert.match(plan(CLOSED_IN_WINDOW_SQL, 'a', 'b'), /tickets_closed_at/);
     assert.match(plan(`SELECT ticket_number FROM ticket_events WHERE ticket_number IN (?, ?) AND kind IN ('status', 'comment') ORDER BY ticket_number, id`, 1, 2), /ticket_events_ticket/);
     assert.doesNotMatch(plan(`SELECT ticket_number, tag FROM ticket_tags WHERE ticket_number IN (?, ?)`, 1, 2), /^SCAN ticket_tags$/);
     // The loader agrees with the seed: 50 closed over 90 days, each with one start, three verdicts and one merge.

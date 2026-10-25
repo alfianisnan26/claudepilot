@@ -53,15 +53,19 @@ export function leadOf(tags: readonly string[], holder: string | null, sessions:
 }
 
 /**
+ * The window read. `+status` keeps the planner off `tickets_queue` (status first): without it SQLite picked that index and walked every done
+ * ticket ever closed (metricsPerf.test.ts checks the plan); the window is bounded by `tickets_closed_at`.
+ */
+export const CLOSED_IN_WINDOW_SQL = `SELECT number, type, priority, status, created_at, closed_at, assignee_kind, assignee_ref FROM tickets
+       WHERE closed_at >= ? AND closed_at < ? AND +status IN ('done', 'wont_do')`;
+
+/**
  * The tickets closed (done or won't-do) in [fromMs, toMs), with what their stages need. `sessionsOf` resolves holder sessions with their
  * lineage (usage spend's `sessions`); null leaves the lead to the `area-*` tag.
  */
 export function loadFlowTickets(db: DatabaseSync, fromMs: number, toMs: number, sessionsOf: ((ids: Iterable<string>) => Map<string, SessionInfo>) | null): FlowTicketFacts[] {
   const rows = db
-    .prepare(
-      `SELECT number, type, priority, status, created_at, closed_at, assignee_kind, assignee_ref FROM tickets
-       WHERE closed_at >= ? AND closed_at < ? AND status IN ('done', 'wont_do')`,
-    )
+    .prepare(CLOSED_IN_WINDOW_SQL)
     .all(new Date(fromMs).toISOString(), new Date(toMs).toISOString()) as unknown as {
     number: number;
     type: string;
