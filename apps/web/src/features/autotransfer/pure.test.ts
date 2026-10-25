@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { AutoTransferEvent } from '@portal/contracts';
-import { modelChange, autoMarks, clockText, droppedText, holdLine, headline, inPlace, modeChoices, moveItem, offer, parseThreshold, pctText, reasonText, toggleItem, undoFor, whyText } from './pure';
+import { modelChange, autoMarks, EXCLUDE_NOTE, excludedNote, excludeItem, isExcluded,clockText, droppedText, holdLine, headline, inPlace, modeChoices, moveItem, offer, parseThreshold, pctText, reasonText, toggleItem, undoFor, whyText } from './pure';
 
 const m = (value: number) => ({ value, basis: 'measured' as const });
 
@@ -145,4 +145,35 @@ test('T-109: the Move dialog says the model a Claude would run the chat on, and 
   assert.equal(modelChange({ model: { from: 'opus', to: 'opus', known: true } }), null);
   assert.equal(modelChange({}), null);
   assert.deepEqual(modelChange({ model: { from: 'haiku', to: null, known: true } }), { to: null, text: 'No model at or below Haiku' });
+});
+
+test('T-2398: the menu item flips between Exclude and Include, and sends the opposite of what the Claude has', () => {
+  const included = excludeItem({ excluded: false }, false);
+  assert.deepEqual(included, { label: 'Exclude from auto move', next: true, disabled: false });
+  const excluded = excludeItem({ excluded: true }, false);
+  assert.deepEqual(excluded, { label: 'Include in auto move', next: false, disabled: false });
+  // The update body the item sends is { excluded: next }, nothing else.
+  assert.deepEqual({ excluded: included.next }, { excluded: true });
+  assert.deepEqual({ excluded: excluded.next }, { excluded: false });
+});
+
+test('T-2398: the item is not offered on an account pool, nor before the Claude’s config is known', () => {
+  assert.equal(excludeItem({ excluded: false }, true).disabled, true);
+  assert.equal(excludeItem({ excluded: true }, true).disabled, true);
+  assert.equal(excludeItem(undefined, false).disabled, true);
+});
+
+test('T-2398: the Auto move off badge and the manual move note show only for an excluded Claude', () => {
+  const list = [
+    { claudeId: 'a', excluded: true },
+    { claudeId: 'b', excluded: false },
+  ];
+  assert.equal(isExcluded(list, 'a'), true);
+  assert.equal(isExcluded(list, 'b'), false);
+  assert.equal(isExcluded(list, 'missing'), false, 'not listed (a pool): no badge');
+  assert.equal(isExcluded(null, 'a'), false, 'not loaded: no badge');
+  assert.equal(excludedNote(list, 'a'), EXCLUDE_NOTE);
+  assert.equal(EXCLUDE_NOTE, 'Auto move is off for this Claude; moving by hand is fine.');
+  assert.equal(excludedNote(list, 'b'), null);
+  assert.equal(excludedNote(undefined, 'a'), null);
 });

@@ -1,5 +1,5 @@
 // Auto move: the words and numbers the page shows, as pure functions (tested under Node).
-import { AUTO_BOUNDS, modelDisplayName, reasonText as usageReasonText, type AutoMode, type AutoRefusal, type AutoSessionState, type AutoSuggestion, type AutoTransferEvent, type ChatSwitchOption, type Figure } from '@portal/contracts';
+import { AUTO_BOUNDS, modelDisplayName, reasonText as usageReasonText, type AutoClaudeConfig, type AutoMode,type AutoRefusal, type AutoSessionState, type AutoSuggestion, type AutoTransferEvent, type ChatSwitchOption, type Figure } from '@portal/contracts';
 
 export const MODE_LABEL: Record<AutoMode, string> = { off: 'Off', ask: 'Ask', auto: 'Automatic' };
 
@@ -184,6 +184,40 @@ export function holdLine(s: Pick<AutoSessionState, 'waiting' | 'pendingMove'> | 
     title: w.nextFreeAt ? `Waiting for quota: next Claude free at ${clockText(w.nextFreeAt, nowMs)}` : 'Waiting for quota',
     tip: `${why} The portal looks again every 2 minutes; as soon as a Claude has room, or this one resets, the chat moves or goes on by itself.`,
   };
+}
+
+/** T-2398: the explanation of "Exclude from auto move" (the dialog's switch and the row's badge). */
+export const EXCLUDE_TIP = 'Stays signed in. Auto move never moves chats onto it or off it; you can still move by hand.';
+
+/** T-2398: the note the manual move dialog shows under an excluded destination. */
+export const EXCLUDE_NOTE = 'Auto move is off for this Claude; moving by hand is fine.';
+
+type ExcludedList = Array<Pick<AutoClaudeConfig, 'claudeId' | 'excluded'>> | null | undefined;
+
+/** Whether a Claude is left out of auto move, from the auto move overview's per-Claude list; false when it is not listed (an account pool, or not loaded). */
+export function isExcluded(claudes: ExcludedList, claudeId: string): boolean {
+  return !!claudes?.find((c) => c.claudeId === claudeId)?.excluded;
+}
+
+export interface ExcludeItem {
+  label: string;
+  /** The `excluded` value the item sends. */
+  next: boolean;
+  disabled: boolean;
+}
+
+/**
+ * The Claudes list's menu item (T-2398): "Exclude from auto move" for an included Claude, "Include in auto move" for an excluded one.
+ * Disabled on an account pool (no per-Claude auto move there, as "Auto move…"), and while the Claude's config is unknown (not loaded, or not listed).
+ */
+export function excludeItem(config: Pick<AutoClaudeConfig, 'excluded'> | undefined, pooled: boolean): ExcludeItem {
+  const excluded = !!config?.excluded;
+  return { label: excluded ? 'Include in auto move' : 'Exclude from auto move', next: !excluded, disabled: pooled || !config };
+}
+
+/** The manual move dialog's note when the chosen destination is excluded from auto move; null otherwise. Never blocks the move. */
+export function excludedNote(claudes: ExcludedList, claudeId: string): string | null {
+  return isExcluded(claudes, claudeId) ? EXCLUDE_NOTE : null;
 }
 
 /** The model a Claude would run the chat on when it is not the chat's own (T-109): its best one at or below it; null when the same. */
