@@ -193,7 +193,8 @@ for a in $keep; do [[ $a =~ ^[A-Za-z0-9_.][A-Za-z0-9_./-]*$ && ! $a =~ (^|/)\.\.
 # their own value (--ref, --repo ... "got X"): never paste a value into any option. Values under 8 characters are refused: the log mask skips them.
 pool_names=
 for n in ${pool[@]+"${pool[@]}"}; do
-  [[ $n =~ ^E2E_CF_ACCESS_[A-Z0-9_]+$ || $n == E2E_QA_EMAIL || $n == E2E_QA_PASSWORD ]] || die "--pool-env: refused: not an allowed name (E2E_CF_ACCESS_*, E2E_QA_EMAIL, E2E_QA_PASSWORD); the argument is not shown"
+  # T-1665: the second stg QA test account (E2E_QA2_*) for two-user checks, a test account like E2E_QA_*.
+  [[ $n =~ ^E2E_CF_ACCESS_[A-Z0-9_]+$ || $n =~ ^E2E_QA2?_(EMAIL|PASSWORD)$ ]] || die "--pool-env: refused: not an allowed name (E2E_CF_ACCESS_*, E2E_QA_EMAIL, E2E_QA_PASSWORD, E2E_QA2_EMAIL, E2E_QA2_PASSWORD); the argument is not shown"
   [ -n "${!n:-}" ] || die "--pool-env: $n is not set in this workspace (the Secrets pool delivers it)"
   [[ ${!n} != *[$'\n\r']* ]] || die "--pool-env: $n holds a line break; refused"
   # Printable ASCII only (kubectl's env-file parser fails on other bytes and may then print the line).
