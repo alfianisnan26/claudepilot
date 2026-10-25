@@ -410,7 +410,8 @@ export function headlineFigures(o: MetricsOverview | null): HeadlineFigure[] {
       { key: 'median', label: 'Median', value: '-', available: false },
     ];
   }
-  const resolve = o.flow.current.stages.find((s) => s.stage === 'resolve');  const median = resolve?.medianMs ?? null;
+  const resolve = o.flow.current.stages.find((s) => s.stage === 'resolve');
+  const median = resolve?.medianMs ?? null;
   return [
     score('efficiency', 'Efficiency', o.efficiency),
     score('effectiveness', 'Effectiveness', o.effectiveness),

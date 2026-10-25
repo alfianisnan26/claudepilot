@@ -1238,6 +1238,18 @@ slices of T-2360; they read the same wire types (`packages/contracts/src/metrics
   Short by default, hours with two decimals, every figure the portal lacks `unavailable:<reason>`, never 0 (a failed closed-ticket read
   makes the overview's `flow`, flow_times' `total` and metrics_tickets' `total` `unavailable:no_source`, no rows, no cursor); counts, durations, ticket ids
   and program ids only (no ticket text, no session title); every result kept under the MCP size limit.
+- **Web view (slice 2b, `apps/web/src/features/lab/Metrics*.tsx`, `metricsModel.ts`, `metricsParts.tsx`).** Usage → Metrics: a program picker
+  (`all` first; a segmented control up to four, else a select) and a 24h / 7d picker. Cards: the two scores as gauges with the change since
+  the window before and the counts under them, scores over time (one line each, from the snapshots), closed per hour or day, the lead-time
+  spread, flow time per stage (median bar, p90 whisker; a tap lists the tickets behind it as links in a sheet), per lead, each Claude's
+  pace and the findings. Every chart has a Table toggle with the same numbers. A program with no source (memor.id) is one card with its
+  reason. A figure the portal lacks is "unavailable" with its reason, never 0: that includes `flow`, `flow.total` and `tickets.total` null
+  (the closed tickets could not be read), which each card says in words instead of an empty chart or "No ticket". A gap in the trend is a
+  dashed hairline over the plot and a break in the line, never a dot at 0. Each trend point scores the 24 hours before it (the snapshot's
+  window), so in the 7d view the tiles (7 days) and the end of the line differ; the card's InfoTip says so. The Glance widget `metrics`
+  (hidden by default) shows both scores, resolved and the median. Tests: `metricsModel.test.ts`, `metricsRender.test.ts`,
+  `components/charts.test.ts`, the Glance `model.test.ts`; `tools/qa/metrics-scorecard.mjs` drives it on a scratch portal at 390 and 1280 px,
+  light and dark.
 - **Not built in slice 1.** The per-model cost and review pass rate, and the "escalated to Opus" count; the web view; the MCP tools.
 - Source: `lab/flowMetrics.ts` (pure), `lab/flowMetricsData.ts` (the loader), `lab/metricsSnapshots.ts`, `lab/metricsSettings.ts`,
   `lab/metricsService.ts` (`Lab.metrics`), `lab/routes.ts`; tests `lab/flowMetrics.test.ts` (golden stages with the left-out cases and

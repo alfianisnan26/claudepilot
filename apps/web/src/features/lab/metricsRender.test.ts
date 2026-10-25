@@ -123,15 +123,38 @@ test('ScoresCard: flow null says why, and the done, won-t-do and median figures 
 });
 
 test('the cards over the closed tickets: total null is "unavailable" with the reason, not an empty chart or "No ticket"', () => {
-  const none = { program: 'all', window: '24h' as const, nowMs: 0, stage: null, group: null, groupBy: null, total: null, rows: [], unavailable: noRead };
-  const flow = { program: 'all', window: '24h' as const, nowMs: 0, groupBy: 'lead' as const, total: null, groups: [], basis: {}, unavailable: noRead };
+  const none = {
+    program: 'all',
+    window: '24h' as const,
+    nowMs: 0,
+    stage: null,
+    group: null,
+    groupBy: null,
+    total: null,
+    rows: [],
+    unavailable: noRead,
+  };
+  const flow = {
+    program: 'all',
+    window: '24h' as const,
+    nowMs: 0,
+    groupBy: 'lead' as const,
+    total: null,
+    groups: [],
+    basis: {},
+    unavailable: noRead,
+  };
   const pick = () => undefined;
   const cards = [
     createElement(ClosuresCard, { load: loaded(none), window: '24h' }),
     createElement(LeadTimeCard, { load: loaded(none) }),
     createElement(StagesCard, { load: loaded(flow), onPick: pick, picked: null }),
     createElement(LeadsCard, { load: loaded(flow), onPick: pick, picked: null }),
-    createElement(MemoryRouter, null, createElement(DrillList, { load: loaded(none), target: { stage: null, group: null }, window: '24h' })),
+    createElement(
+      MemoryRouter,
+      null,
+      createElement(DrillList, { load: loaded(none), target: { stage: null, group: null }, window: '24h' }),
+    ),
   ];
   for (const c of cards) {
     const t = text(renderToStaticMarkup(c));

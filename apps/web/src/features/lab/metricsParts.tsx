@@ -282,30 +282,30 @@ export function StagesCard({
           f.total === null ? (
             <UnavailableNote text={f.unavailable?.text ?? 'The flow figures could not be read.'} />
           ) : (
-          <div
-            className={
-              load.loading
-                ? 'opacity-70 transition-opacity motion-reduce:transition-none'
-                : 'transition-opacity motion-reduce:transition-none'
-            }
-          >
-            <StageBars
-              rows={stageRows(f.total, STEP_STAGES)}
-              format={formatSpan}
-              ariaLabel="Time in each stage"
-              onSelect={(k) => onPick({ stage: k as MetricsStage, group: null })}
-              selected={sel(STEP_STAGES)}
-            />
-            <div className="mt-2 border-t border-line pt-1">
+            <div
+              className={
+                load.loading
+                  ? 'opacity-70 transition-opacity motion-reduce:transition-none'
+                  : 'transition-opacity motion-reduce:transition-none'
+              }
+            >
               <StageBars
-                rows={stageRows(f.total, TOTAL_STAGES)}
+                rows={stageRows(f.total, STEP_STAGES)}
                 format={formatSpan}
-                ariaLabel="Total time"
+                ariaLabel="Time in each stage"
                 onSelect={(k) => onPick({ stage: k as MetricsStage, group: null })}
-                selected={sel(TOTAL_STAGES)}
+                selected={sel(STEP_STAGES)}
               />
+              <div className="mt-2 border-t border-line pt-1">
+                <StageBars
+                  rows={stageRows(f.total, TOTAL_STAGES)}
+                  format={formatSpan}
+                  ariaLabel="Total time"
+                  onSelect={(k) => onPick({ stage: k as MetricsStage, group: null })}
+                  selected={sel(TOTAL_STAGES)}
+                />
+              </div>
             </div>
-          </div>
           )
         }
       </Slot>
