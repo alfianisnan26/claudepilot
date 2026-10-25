@@ -100,3 +100,18 @@ Each has a recommended default in its PRD; agents used the default and said so.
 - Real-device checks on the iPhone (E1-E7), the Light-mode dark band under the status bar (UX1 decision), removing and re-adding the Home Screen icon after the viewport change.
 - The pre-deploy backups of the Docker deployment (delete after acceptance); the probe image `claudepilot/probe` in the registry; the leaked htpasswd bcrypt hash disclosed earlier.
 - Commits are unsigned (no GPG key).
+
+## 11. Update 2026-10-25: pilot metrics (T-2360, Usage → Metrics; PRD `claude-usage.md` §28.15)
+
+**Built, on branches `dev/t-2360-mcp` (slices 1 and 3) and `dev/t-2360-web` (slice 2, merged with it), not yet on `integration`:**
+- Server (slice 1, migration 856): stage times of done tickets, the efficiency and effectiveness scores with every part, snapshots every 10 minutes (kept 30 days) and the trend, findings, the six read routes. A failed read of the closed tickets is `unavailable` (`no_source`) in every figure, never 0.
+- Portal MCP (slice 3): `metrics_overview`, `metrics_flow_times`, `metrics_trend`, `metrics_insights`, `metrics_tickets`; leads and the operator only. Self-test parity with the flow watchdog's line reader.
+- Web (slice 2): the Metrics tab (program and window pickers, two score gauges, scores over time, closed, lead-time spread, stage bars with drill-down sheet, per lead, Claude pace, findings, a Table toggle on each chart) and the Glance widget `metrics`. Gaps in the trend are a hairline, never a dot at 0; charts draw at a 320 px fallback width until measured.
+
+**Not verified:**
+- The cause of one report of a blank "Scores over time" chart at 390 px was not reproduced (the scratch-portal harness drew it in every run); the fallback width is a defensive fix with a test that fails without it.
+- The null `flow`, `flow.total` and `tickets.total` states are covered by model and render tests only, not seen in a browser.
+- Everything ran against a scratch portal with seeded tickets and snapshots, never a real crew, so the numbers are not checked against what the owner sees day to day. The scores' weights are the ticket's text (the pilot-health skill was not available).
+- The Glance card on Home (hidden by default), and the Usage-page controls under 44 px at 1280 px (reported by the harness as warnings, not changed).
+
+**Follow-ups:** per-model cost, review pass rate and the "escalated to Opus" count; memor.id has no source (no tickets or commit history in the portal); run the migration 856 timing on the real row count before a deploy; the 7d tiles and the end of the trend line differ by design (each point scores the 24 hours before it), which a person may prefer to change.

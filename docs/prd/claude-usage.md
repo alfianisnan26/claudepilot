@@ -805,7 +805,7 @@ In a real browser at 390, 844 x 390, 768, 1024, 1280 and 1920 px, light and dark
 | UU8 | A name cut to an ellipsis shows its full text in a native `title` (not on touch or for a keyboard) and in the accessible name; the shared clamp-with-popover component of QA standard A9 is not used yet (it was not there to use). |
 | UU9 | The Usage page is its own chunk, loaded on first use (App.tsx: `lazy` and a skeleton).                                                                                                                                              |
 
-## 28. Efficiency lab (T-287, slices 1 to 3 built: the data layer; outcomes, the read API, the MCP tools and the Lab tab; result tokens and stratum keys)
+## 28. Efficiency lab (T-287, slices 1 to 3 built: the data layer; outcomes, the read API, the MCP tools and the Lab tab; result tokens and stratum keys; §28.14 and §28.15 are the crew scorecard and the pilot metrics, T-450 and T-2360)
 
 Why: the first evaluation of the agents' economy (docs/dev-sessions/overhaul/token-economy-design.md) was computed by hand from the session
 tapes with `docs/dev-sessions/overhaul/evidence/slice_metrics.py`. The lab keeps the same numbers inside the portal as the stream is read,
@@ -1171,11 +1171,12 @@ tables the portal already keeps; nothing new is stored.
   10k events 49.5 ms without and 67.3 ms with the index (1.36 times, the whole 1M: 5.09 s and 6.91 s); process RSS 207 MiB. The migration
   runs in the startup transaction: scale 0.41 s per million events (this Job's disk) to the real count before a deploy.
 
-### 28.15 Pilot metrics (T-2360 slice 1: the server and the wire types; migration 856)
+### 28.15 Pilot metrics (T-2360 slices 1 to 3: the server and the wire types, migration 856; the Portal MCP tools; the Usage → Metrics view)
 
 How fast tickets move through each stage, how much of the crew is working, and how well tickets flow, per PROGRAM and per WINDOW (24h, 7d,
-each with the window before it), with a trend from snapshots and plain-language findings. The web view and the Portal MCP tools are later
-slices of T-2360; they read the same wire types (`packages/contracts/src/metrics.ts`, `METRICS_API`).
+each with the window before it), with a trend from snapshots and plain-language findings. The server reads them once (`Lab.metrics`); the
+REST routes, the five Portal MCP tools and the web view are three readers of the same wire types (`packages/contracts/src/metrics.ts`,
+`METRICS_API`), in the bullets below in that order.
 
 - **Stages of a done ticket** (`lab/flowMetrics.ts` `ticketFlow`, pure): start = created to the first move into in_progress; report =
   created to the first comment by an agent session (`session:*`); implement = the first in_progress to the first verdict after it (QA or
@@ -1250,7 +1251,8 @@ slices of T-2360; they read the same wire types (`packages/contracts/src/metrics
   (hidden by default) shows both scores, resolved and the median. Tests: `metricsModel.test.ts`, `metricsRender.test.ts`,
   `components/charts.test.ts`, the Glance `model.test.ts`; `tools/qa/metrics-scorecard.mjs` drives it on a scratch portal at 390 and 1280 px,
   light and dark.
-- **Not built in slice 1.** The per-model cost and review pass rate, and the "escalated to Opus" count; the web view; the MCP tools.
+- **Not built.** The per-model cost and review pass rate, and the "escalated to Opus" count; a Home card for the Glance widget by default
+  (it is hidden until a person adds it); metrics for memor.id (the portal has no tickets or commit history for it).
 - Source: `lab/flowMetrics.ts` (pure), `lab/flowMetricsData.ts` (the loader), `lab/metricsSnapshots.ts`, `lab/metricsSettings.ts`,
   `lab/metricsService.ts` (`Lab.metrics`), `lab/routes.ts`; tests `lab/flowMetrics.test.ts` (golden stages with the left-out cases and
   won't-do, grouping with median and p90, the setting, both scores and their weights, findings) and `lab/metricsRoutes.test.ts` (the loader
