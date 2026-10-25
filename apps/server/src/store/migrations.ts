@@ -3808,6 +3808,15 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 880,
+    name: 'chat tasks: an index by session and status, for the running ones (T-2368)',
+    up(db) {
+      // T-2368: the session list counts each session's running tasks and the glance lists them; with only the primary key every count read
+      // all of a session's history (6,000+ rows for a long-lived lead). The chat block (16-19) is full; 856 is T-2360's, so this takes 880.
+      db.exec(`CREATE INDEX IF NOT EXISTS chat_tasks_session_status ON chat_tasks (session_id, status)`);
+    },
+  },
 ];
 
 /**

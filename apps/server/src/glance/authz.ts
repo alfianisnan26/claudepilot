@@ -16,7 +16,7 @@ import type { Tickets } from '../tickets/service.js';
 import { failedRuns, waitingDeploys, type GlanceSources } from './build.js';
 
 export interface GlanceReads {
-  chat: Pick<ChatController, 'list' | 'openRequests' | 'tasks'>;
+  chat: Pick<ChatController, 'list' | 'openRequests' | 'runningTasks'>;
   tickets: Pick<Tickets, 'list'>;
   ci: Pick<CiService, 'list'>;
 }
@@ -34,7 +34,7 @@ export function declareGlancePolicies(): void {
  * - sessions: the ones the actor may view;
  * - requests: the open requests of a session the actor may OPERATE (to answer one is to operate it: viewing is not enough, and a request
  *   the actor cannot answer is not an item waiting on them);
- * - tasks: those of a session the actor may view;
+ * - running tasks: those of a session the actor may view;
  * - tickets: the tickets waiting on a person, the ones the actor may view;
  * - failed runs: from the CI runs the actor may view, so what supersedes a failure is also only what they can see;
  * - deploys: the running CI runs the actor may view that hold a job for a person's approval.
@@ -44,10 +44,10 @@ export function glanceSources(reads: GlanceReads): GlanceSources {
     sessions: (actor) => visible(actor, 'session', reads.chat.list(), (s: ChatSession) => s.id),
     requests: (actor, id): ChatRequest[] => (can(actor, 'operate', sessionRef(id)).allow ? reads.chat.openRequests(id) : []),
     // A session deleted between the listing and this call has no tasks to show.
-    tasks: (actor, id): ChatTask[] => {
+    runningTasks: (actor, id): ChatTask[] => {
       if (!can(actor, 'view', sessionRef(id)).allow) return [];
       try {
-        return reads.chat.tasks(id);
+        return reads.chat.runningTasks(id);
       } catch {
         return [];
       }

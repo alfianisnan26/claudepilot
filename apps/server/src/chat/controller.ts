@@ -1674,6 +1674,12 @@ export class ChatController {
     return this.#chat.tasks(session.id);
   }
 
+  /** T-2368: the session's sub-agents and background tasks that are running (the glance needs no history). */
+  runningTasks(id: string): ChatTask[] {
+    const session = this.#require(id);
+    return this.#chat.runningTasks(session.id);
+  }
+
   /**
    * One sub-agent's own transcript: its task row and the stored events of its lines (those whose parent is its Task call) after `after`,
    * bounded by `TASK_EVENTS_MAX`. The events are the stored ones, redacted as the main transcript's are. A task the session doesn't have is 404.
@@ -1860,8 +1866,7 @@ export class ChatController {
   #busySince(out: ChatSession, row: ChatSessionRow): string | null {
     if (!out.tasksOnly) return row.state_since ?? null;
     const starts = this.#chat
-      .tasks(out.id)
-      .filter((t) => t.status === 'running')
+      .runningTasks(out.id)
       .map((t) => t.startedAt)
       .filter((t) => Number.isFinite(Date.parse(t)))
       .sort();
@@ -2551,7 +2556,7 @@ export class ChatController {
     }
     // What the move drops: they end with the process the chat leaves.
     const queued = this.#chat.queuedMessages(sessionId);
-    const agents = this.#chat.tasks(sessionId).filter((t) => t.status === 'running').length;
+    const agents = this.#chat.runningTasks(sessionId).length;
     return {
       sessionId,
       via: pooled ? 'pool' : 'own',
@@ -2778,7 +2783,7 @@ export class ChatController {
     const facts = [`Folder: ${source.cwd}`];
     if (source.worktree)
       facts.push(`Worktree: ${source.worktree.path} on branch ${source.worktree.branch} (repository ${source.worktree.repo})`);
-    const agents = this.#chat.tasks(sessionId).filter((t) => t.status === 'running');
+    const agents = this.#chat.runningTasks(sessionId);
     if (agents.length)
       facts.push(
         `Agents that were running and stopped with the move: ${agents.map((t) => t.description || t.subagentType || 'agent').join(', ')}`,
@@ -3735,7 +3740,7 @@ export class ChatController {
       while (busy() && Date.now() < end) await new Promise((r) => setTimeout(r, 50));
     }
     const row = this.#chat.row(sessionId)!;
-    const agents = this.#chat.tasks(sessionId).filter((t) => t.status === 'running').length;
+    const agents = this.#chat.runningTasks(sessionId).length;
     // A deliberate restart keeps Bypass (the person confirmed it for this chat), while the policy allows it and the session can.
     const keep = row.mode === 'bypassPermissions' && this.#keepsBypass(row);
     // T-416: only a restart of a running process skips the memory check (it needs no more than the process it stops). One that is asleep
@@ -5333,7 +5338,7 @@ export class ChatController {
     const id = typeof taskId === 'string' ? taskId.trim() : '';
     if (!TASK_ID.test(id)) throw new AppError('VALIDATION_FAILED', 'Say which sub-agent to stop.');
     this.#require(sessionId);
-    const task = this.#chat.tasks(sessionId).find((t) => t.taskId === id);
+    const task = this.#chat.task(sessionId, id);
     if (!task) throw new AppError('NOT_FOUND', 'No such sub-agent.');
     if (task.status !== 'running') return;
     await this.#busy.get(sessionId);
