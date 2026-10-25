@@ -314,7 +314,18 @@ test('routes: declared with the seam; the owner reads; another user and an agent
     for (const k of Object.keys(LAB_POLICIES)) assert.equal(declaredPolicies().get(k)?.kind, 'platform', k);
     assert.equal(declaredToolPolicies().get('lab_summary')?.kind, 'agent');
     assert.equal(declaredToolPolicies().get('lab_experiment_set')?.kind, 'platform');
-    assert.deepEqual(Object.keys(LAB_TOOL_POLICIES).sort(), ['crew_scorecard', 'lab_arm_draw', 'lab_experiment_set', 'lab_summary']);
+    // T-2360 slice 3: the five read-only metrics tools (metricsTools.ts; their reach is tested in metricsTools.test.ts).
+    assert.deepEqual(Object.keys(LAB_TOOL_POLICIES).sort(), [
+      'crew_scorecard',
+      'lab_arm_draw',
+      'lab_experiment_set',
+      'lab_summary',
+      'metrics_flow_times',
+      'metrics_insights',
+      'metrics_overview',
+      'metrics_tickets',
+      'metrics_trend',
+    ]);
 
     const sl = (await (await owner.request('/api/lab/slices?role=implementer')).json()) as {
       data: { items: LabSliceView[]; next: string | null; total: number };
