@@ -623,3 +623,77 @@ test('T-1835: load does not outweigh a large difference in room: 90 % left with 
   const d = decide(input([WORK_92(), far, HOME_60()], { load: (id) => (id === 'far' ? 1 : 0) }));
   assert.equal(d.act === 'move' && d.to.id, 'far');
 });
+
+// T-2398: a Claude left out of auto move. Home 60 % used (40 % left) would win over Spare 70 % used (30 % left) on room alone.
+const SPARE_70 = () => claude('spare', 'Spare', [win('session', 70)]);
+const homeOut = (id: string) => id === 'home';
+
+test('T-2398: an excluded Claude is never the destination with an empty list: Spare instead of Home; both excluded: no_destination', () => {
+  const cs = [WORK_92(), HOME_60(), SPARE_70()];
+  const control = decide(input(cs));
+  assert.equal(control.act === 'move' && control.to.id, 'home');
+  const d = decide(input(cs, { excluded: homeOut }));
+  assert.equal(d.act, 'move');
+  if (d.act !== 'move') return;
+  assert.deepEqual(d.to, { id: 'spare', name: 'Spare' });
+  assert.ok(!d.alternatives.some((a) => a.id === 'home'));
+  const none = decide(input(cs, { excluded: (id) => id === 'home' || id === 'spare' }));
+  assert.deepEqual([none.act, none.act === 'warn' && none.code], ['warn', 'no_destination']);
+});
+
+test('T-2398: an explicit destinations list naming an excluded Claude does not bring it back', () => {
+  const cs = [WORK_92(), HOME_60(), SPARE_70()];
+  const d = decide(input(cs, { destinations: ['home', 'spare'], excluded: homeOut }));
+  assert.equal(d.act === 'move' && d.to.id, 'spare');
+  const only = decide(input(cs, { destinations: ['home'], excluded: homeOut }));
+  assert.deepEqual([only.act, only.act === 'warn' && only.code], ['warn', 'no_destination']);
+});
+
+test('T-2398: spreading never lands on an excluded Claude, and an ask card never lists it', () => {
+  const spare50 = claude('spare', 'Spare', [win('session', 50)]); // 50 % left, one chat there: 35 against Home's 40
+  const load = (id: string) => (id === 'spare' ? 1 : 0);
+  const cs = [WORK_92(), HOME_60(), spare50];
+  const control = decide(input(cs, { load }));
+  assert.equal(control.act === 'move' && control.to.id, 'home'); // the control: the spread picks Home
+  const d = decide(input(cs, { load, excluded: homeOut }));
+  assert.equal(d.act === 'move' && d.to.id, 'spare');
+  const ask = decide(input(cs, { mode: 'ask', excluded: homeOut }));
+  assert.equal(ask.act, 'suggest');
+  if (ask.act !== 'suggest') return;
+  assert.equal(ask.to.id, 'spare');
+  assert.ok(![ask.to, ...ask.alternatives].some((a) => a.id === 'home'));
+});
+
+test('T-2398: a forced move off an exhausted Claude (caps ignored) still skips an excluded Claude', () => {
+  const EXH = () => claude('work', 'Work', [win('session', 100)]);
+  const cs = [EXH(), HOME_60(), SPARE_70()];
+  const d = decide(input(cs, { load: () => 5, excluded: homeOut }));
+  assert.equal(d.act, 'move');
+  if (d.act !== 'move') return;
+  assert.equal(d.reason, 'exhausted');
+  assert.equal(d.to.id, 'spare');
+  assert.ok(!d.alternatives.some((a) => a.id === 'home'));
+  const none = decide(input([EXH(), HOME_60()], { load: () => 5, excluded: homeOut }));
+  assert.deepEqual([none.act, none.act === 'warn' && none.code], ['warn', 'no_destination']);
+});
+
+test('T-2398: a chat on an excluded Claude is never moved off it by itself: auto gives a card (why null), never a move, a wait or a hard move', () => {
+  const workOut = (id: string) => id === 'work';
+  const cs = [WORK_92(), HOME_60()];
+  const d = decide(input(cs, { excluded: workOut }));
+  assert.equal(d.act, 'suggest');
+  if (d.act === 'suggest') assert.deepEqual([d.why, d.to.id], [null, 'home']);
+  // A turn that runs is not waited for (no steer): the card shows at once.
+  const working = decide(input(cs, { excluded: workOut, session: { ...input(cs).session, state: 'working' } }));
+  assert.equal(working.act, 'suggest');
+  // Exhausted and silent for an hour while "working": the hard move does not apply either.
+  const EXH = () => claude('work', 'Work', [win('session', 100)]);
+  const exh = [EXH(), HOME_60()];
+  const silent = { excluded: workOut, session: { ...input(exh).session, state: 'working' as const }, lastEventAtMs: NOW - 60 * 60_000 };
+  const stuck = decide(input(exh, silent));
+  assert.equal(stuck.act, 'suggest');
+  assert.equal('hard' in stuck, false);
+  // Above the threshold: nothing, as for any Claude.
+  const above = decide(input([claude('work', 'Work', [win('session', 85)]), HOME_60()], { excluded: workOut }));
+  assert.deepEqual([above.act, above.act === 'none' && above.code], ['none', 'above_threshold']);
+});

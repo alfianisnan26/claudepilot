@@ -86,7 +86,14 @@ export function createAutoTransferRoutes(d: AutoRouteDeps): Hono {
   const claudesOf = async (userId: string): Promise<ClaudeUsage[]> => (await d.usage.report({ actorId: userId })).claudes;
   const config = (userId: string, c: ClaudeUsage): AutoClaudeConfig => {
     const own = d.store.claude(userId, c.claudeId);
-    return { claudeId: c.claudeId, claudeName: c.claudeName, workspaceId: c.workspaceId, thresholdPct: own.thresholdPct, destinations: own.destinations };
+    return {
+      claudeId: c.claudeId,
+      claudeName: c.claudeName,
+      workspaceId: c.workspaceId,
+      thresholdPct: own.thresholdPct,
+      destinations: own.destinations,
+      excluded: own.excluded,
+    };
   };
 
   r.get('/', async (c) => {
@@ -132,8 +139,19 @@ export function createAutoTransferRoutes(d: AutoRouteDeps): Hono {
       }
       next.destinations = [...seen];
     }
+    // T-2398: left out of auto move (absent: unchanged, like the other fields).
+    if (req.excluded !== undefined) {
+      if (typeof req.excluded !== 'boolean') throw bad('excluded', 'On or off.');
+      next.excluded = req.excluded;
+    }
     d.store.setClaude(a.userId, id, next);
-    d.audit?.record({ kind: 'autotransfer.claude', actor: a.label, userId: a.userId, subject: `claude:${id}`, detail: { thresholdPct: next.thresholdPct, destinations: next.destinations } });
+    d.audit?.record({
+      kind: 'autotransfer.claude',
+      actor: a.label,
+      userId: a.userId,
+      subject: `claude:${id}`,
+      detail: { thresholdPct: next.thresholdPct, destinations: next.destinations, excluded: next.excluded },
+    });
     d.publish();
     return c.json(success(config(a.userId, claude)));
   });

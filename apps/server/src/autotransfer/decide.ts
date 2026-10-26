@@ -268,7 +268,16 @@ export interface DecideInput {
   listed?: (claudeId: string, family: string) => boolean | null;
   /** When the chat's newest stored event happened (T-781, the hard move); null or absent when not known. */
   lastEventAtMs?: number | null | (() => number | null);
+  /** T-2398: whether the owner left a Claude out of auto move (`AutoClaudeConfig.excluded`); absent: none is. Read through `leftOut`. */
+  excluded?: (claudeId: string) => boolean;
 }
+
+/**
+ * T-2398, THE exclusion rule: a Claude left out of auto move is never a destination (every candidate goes through `candidates`' `pass`,
+ * whatever the source's destinations list says, forced or spread), and a chat on one is never moved off it by itself (`decide` caps
+ * `auto` to `ask` there: a card at most, which a person answers). A person's own move onto it or off it is not this module's.
+ */
+export const leftOut = (input: Pick<DecideInput, 'excluded'>, claudeId: string): boolean => input.excluded?.(claudeId) === true;
 
 export interface DecideChoice {
   reason: AutoReason;
@@ -309,6 +318,7 @@ export function candidates(
   let full = false;
   const pass = (c: MoveCandidate): boolean => {
     const unknown = isUnknown(c);
+    if (leftOut(input, c.claudeId)) return false; // T-2398: left out of auto move, even when the allowlist names it
     if (!ok.has(c.claudeId) || !input.allow(c.claudeId)) return false;
     if (allow.size && !allow.has(c.claudeId)) return false;
     const u = usage.get(c.claudeId);
@@ -404,6 +414,8 @@ export function decide(input: DecideInput): Decision {
   const { session, settings, nowMs, counters } = input;
   // 1. The mode.
   if (input.mode === 'off') return { act: 'none', code: 'mode_off', reading: null };
+  // T-2398: a chat on a Claude left out of auto move is never moved off it by itself: `auto` is `ask` there (a card at most).
+  const mode: AutoMode = input.mode === 'auto' && leftOut(input, session.claudeId) ? 'ask' : input.mode;
   // 2. A pool, or a Claude with no plan reading.
   if (input.pooled) return { act: 'none', code: 'pooled', reading: null };
   const source = input.claudes.find((c) => c.claudeId === session.claudeId);
@@ -432,7 +444,7 @@ export function decide(input: DecideInput): Decision {
   // or one whose automatic moves failed twice today, only ever gets a card: rank it as `ask` would.
   const bypass = session.mode === 'bypassPermissions' && !settings.allowBypass;
   const failedToday = counters.failures24h >= 2;
-  const autoish = input.mode === 'auto' && !bypass && !failedToday;
+  const autoish = mode === 'auto' && !bypass && !failedToday;
   const family = modelFamily(session.model);
   const usage = new Map(input.claudes.map((c) => [c.claudeId, c]));
   // T-255: a Claude with unknown usage is taken only by a chat that can do nothing where it is (exhausted): one that is merely low waits
@@ -524,7 +536,7 @@ export function decide(input: DecideInput): Decision {
     period,
   };
   // 8. `ask`: the card.
-  if (input.mode === 'ask') return { act: 'suggest', why: null, reading, ...choice };
+  if (mode === 'ask') return { act: 'suggest', why: null, reading, ...choice };
   // 9. `auto`: not Bypass unless allowed (a model change in place leaves Bypass as it is: allowed); not after two failures today; only at a
   // quiet boundary, else wait (up to 30 minutes), then a card.
   if (bypass && !inPlace) return { act: 'suggest', why: 'bypass', reading, ...choice };

@@ -464,6 +464,8 @@ export class AutoTransferEngine {
     const own = this.#d.owner;
     const ownerOk = own.userEnabled(ownerId) && own.can(ownerId, 'operate', { type: 'session', id: s.id, workspaceId: s.workspaceId });
     const cfg = this.#d.store.claude(ownerId, s.claudeId);
+    // T-2398: the owner's Claudes left out of auto move (never a destination; a chat on one gets a card at most).
+    const leftOut = this.#d.store.excludedClaudes(ownerId);
     const base = {
       nowMs: now,
       mode,
@@ -480,6 +482,7 @@ export class AutoTransferEngine {
       counters: this.#counters(s, ownerId, row),
       lastEventAtMs: () => this.#lastEventMs(s), // read only when the source is exhausted (F2)
       recommend: this.#d.usage.recommend,
+      excluded: (claudeId: string) => leftOut.has(claudeId),
       // What each Claude's list_models said (T-109), when the chat controller knows it: it overrides the catalogue's guess from the windows.
       listed: (claudeId: string, family: string) => {
         const fams = this.#d.chat.modelFamilies?.(claudeId) ?? null;
@@ -989,6 +992,13 @@ export class AutoTransferEngine {
       pendingMove = { to: last.to, reason: last.reason, steeredAt: steered?.at ?? null };
     }
     return { sessionId, mode: row?.mode ?? null, effectiveMode: mode, applicable, why, pending, pausedUntil, movesToday, lastMove, waiting, pendingMove };
+  }
+
+  /** T-2398: whether the chat's owner left the Claude it runs on out of auto move (the Portal MCP status says it); false when unknown. */
+  claudeExcluded(sessionId: string): boolean {
+    const s = this.#d.chat.get(sessionId);
+    const ownerId = s ? this.#ownerOf(sessionId) : null;
+    return !!s && !!ownerId && this.#d.store.claude(ownerId, s.claudeId).excluded;
   }
 
   /** Whether a model change can be undone: the chat is open and runs on another model than the one it left (T-29). */

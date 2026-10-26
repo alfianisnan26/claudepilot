@@ -1,10 +1,11 @@
 import { Badge, cn, FormDialog, Spinner, SwitchRow, useToast } from '@isnanme/ui';
-import type { ChatSession, ChatSwitchOption, ChatSwitchOptions } from '@portal/contracts';
+import type { AutoClaudeConfig, ChatSession, ChatSwitchOption, ChatSwitchOptions } from '@portal/contracts';
 import { CircleAlert } from 'lucide-react';
 import { useCallback, useEffect, useId, useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { InfoTip } from '@/components/InfoTip';
-import { modelChange } from '@/features/autotransfer/pure';
+import { autoApi } from '@/features/autotransfer/api';
+import { excludedNote, modelChange } from '@/features/autotransfer/pure';
 import { ClaudeHeadroom, NoRecommendation, RecommendedMark, recommendedId, useMoveAdvice } from '@/features/usage/claude';
 import { errorText } from '@/lib/api';
 import { chatApi } from './api';
@@ -53,6 +54,8 @@ export function SwitchDialog({
   const [pick, setPick] = useState('');
   const [touched, setTouched] = useState(false);
   const [ask, setAsk] = useState(true);
+  // Which Claudes are left out of auto move (T-2398): for a note only, so a failed read shows none.
+  const [auto, setAuto] = useState<AutoClaudeConfig[] | null>(null);
   const id = session?.id ?? null;
   // The Claude the portal recommends (what each has left, when it resets): the default choice until the person picks, marked in the list.
   const advice = useMoveAdvice(session?.workspaceId ?? null, session?.claudeId || null, open);
@@ -81,12 +84,26 @@ export function SwitchDialog({
   }, [open, id, preselect]);
 
   useEffect(() => {
+    if (!open) return;
+    let current = true;
+    setAuto(null);
+    autoApi.overview().then(
+      (o) => current && setAuto(o.claudes),
+      () => undefined,
+    );
+    return () => {
+      current = false;
+    };
+  }, [open]);
+
+  useEffect(() => {
     const rec = recommendedId(advice);
     if (!touched && rec && info?.options.some((o) => o.ok && o.claude.id === rec)) setPick(rec);
   }, [advice, info, touched]);
 
   const from = session?.claudeName ?? 'this Claude';
   const warning = info && droppedLine(info);
+  const excludedLine = excludedNote(auto, pick);
   return (
     <FormDialog
       open={open}
@@ -139,6 +156,7 @@ export function SwitchDialog({
             ))}
           </fieldset>
           <NoRecommendation advice={advice} />
+          {excludedLine && <p className="text-[13px] text-muted">{excludedLine}</p>}
           <SwitchRow
             className="rounded-none py-0"
             label={

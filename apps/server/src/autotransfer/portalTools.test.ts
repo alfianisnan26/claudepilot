@@ -24,7 +24,7 @@ function owners(rows: Record<string, UserId>) {
   registerResolver({ type: 'session', resolve: (id) => (rows[id] ? { ref: objectRef('session', id), owner: { kind: 'user', id: rows[id]! }, attrs: { workspaceId: 'docker/dev' } } : null) });
 }
 
-async function build(undoOk: Record<string, boolean> = {}) {
+async function build(undoOk: Record<string, boolean> = {}, o: { owners?: Record<string, string>; excluded?: string[] } = {}) {
   const registry = new ToolRegistry();
   const h = await portalMcpHarness({ registry });
   const store = new AutoStore(h.store, () => new Date(T0));
@@ -33,10 +33,14 @@ async function build(undoOk: Record<string, boolean> = {}) {
     async state(sessionId: string) {
       looked.push(sessionId);
       const [last] = store.events(FOUNDING_USER_ID, { session: sessionId, kinds: ['moved'], limit: 1 });
-      return { lastMove: last ? { event: last, undo: { ok: undoOk[sessionId] ?? false, reason: null } } : null } as AutoSessionState;
+      const lastMove = last ? { event: last, undo: { ok: undoOk[sessionId] ?? false, reason: null } } : null;
+      const head = { mode: null, effectiveMode: 'auto', applicable: true, why: null, pausedUntil: null, movesToday: 0, pending: null };
+      return { ...head, lastMove } as unknown as AutoSessionState;
     },
+    // T-2398: the sessions whose Claude is left out of auto move.
+    claudeExcluded: (sessionId: string) => (o.excluded ?? []).includes(sessionId),
   };
-  registerAutoTransferTools({ engine, store, owner: fakeOwner({}) }, registry);
+  registerAutoTransferTools({ engine, store, owner: fakeOwner(o.owners ?? {}) }, registry);
   const event = (sessionId: string, kind: AutoTransferEvent['kind'], min: number, o: { reason?: string; from?: string; to?: string; code?: string; actor?: string } = {}) =>
     store.addEvent({ at: at(min), userId: FOUNDING_USER_ID, sessionId, workspaceId: 'docker/dev', kind, mode: 'auto', reason: (o.reason ?? 'low') as never, from: { id: 'work', name: o.from ?? 'Work' }, to: { id: 'home', name: o.to ?? 'Home' }, facts: null, handoff: null, handoffId: null, code: (o.code ?? null) as never, actor: o.actor ?? 'portal:autotransfer' });
   // A card's reason is a fixed word (the table checks it); its Claude names are a person's naming.
@@ -120,6 +124,23 @@ test('untrusted: the reason, code, actor and Claude names come back labelled, wi
     assert.deepEqual(c.reason, { untrusted_text: 'low', source: 'autotransfer' });
     for (const f of [c.from, c.to]) assert.deepEqual(f, { untrusted_text: INJECTION, source: 'claude' });
     assert.ok(!JSON.stringify(r.raw).includes(secret), 'the value is in no part of the answer');
+  } finally {
+    h.done();
+    clearResolvers();
+  }
+});
+
+test('T-2398: autotransfer_status says whether the chat’s Claude is left out of auto move', async () => {
+  const { h } = await build({}, { owners: { 'session:s_out': FOUNDING_USER_ID, 'session:s_in': FOUNDING_USER_ID }, excluded: ['s_out'] });
+  try {
+    owners({ s_out: FOUNDING_USER_ID, s_in: FOUNDING_USER_ID });
+    const read = h.token('read').secret;
+    const out = await h.call(read, 'autotransfer_status', { session_id: 's_out' });
+    assert.equal(out.result?.isError, undefined, JSON.stringify(out.raw));
+    assert.equal(out.result!.structuredContent.claude_excluded, true);
+    const inn = await h.call(read, 'autotransfer_status', { session_id: 's_in' });
+    assert.equal(inn.result?.isError, undefined, JSON.stringify(inn.raw));
+    assert.equal(inn.result!.structuredContent.claude_excluded, false);
   } finally {
     h.done();
     clearResolvers();

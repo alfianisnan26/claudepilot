@@ -1,6 +1,6 @@
-// Auto transfer's rows (migration 220): a user's choices, a Claude's threshold and destinations, a chat's state, the open card, the
-// trail. Every read and write names the owner it is for (`owner_id`); a row of another owner is never returned. Kept 90 days (events,
-// answered suggestions). No secret and no message text is stored.
+// Auto transfer's rows (migration 220): a user's choices, a Claude's threshold, destinations and exclusion (881), a chat's state, the
+// open card, the trail. Every read and write names the owner it is for (`owner_id`); a row of another owner is never returned. Kept 90
+// days (events, answered suggestions). No secret and no message text is stored.
 
 import { randomBytes } from 'node:crypto';
 import {
@@ -36,6 +36,14 @@ export interface SessionRow {
   waitingCode: string | null;
   /** The source window period in which the chat was told to finish and stop (the steer, once per period), null when none. */
   steeredPeriod: string | null;
+}
+
+/** A Claude's own auto move settings (`autotransfer_claudes`). */
+export interface ClaudeRow {
+  thresholdPct: number | null;
+  destinations: string[];
+  /** T-2398: left out of auto move. */
+  excluded: boolean;
 }
 
 export interface StoredSuggestion extends AutoSuggestion {
@@ -101,23 +109,42 @@ export class AutoStore {
 
   /* ---------- a Claude's own settings ---------- */
 
-  claude(ownerId: string, claudeId: string): { thresholdPct: number | null; destinations: string[] } {
-    const r = this.#db?.prepare('SELECT threshold_pct, destinations FROM autotransfer_claudes WHERE owner_id = ? AND claude_id = ?').get(ownerId, claudeId) as Record<string, unknown> | undefined;
-    return { thresholdPct: typeof r?.threshold_pct === 'number' ? r.threshold_pct : null, destinations: json<string[]>(r?.destinations, []).filter((x) => typeof x === 'string') };
+  /** A Claude's own settings for an owner; `excluded` (T-2398, migration 881): left out of auto move, false when it has no row. */
+  claude(ownerId: string, claudeId: string): ClaudeRow {
+    const sql = 'SELECT threshold_pct, destinations, excluded FROM autotransfer_claudes WHERE owner_id = ? AND claude_id = ?';
+    const r = this.#db?.prepare(sql).get(ownerId, claudeId) as Record<string, unknown> | undefined;
+    return {
+      thresholdPct: typeof r?.threshold_pct === 'number' ? r.threshold_pct : null,
+      destinations: json<string[]>(r?.destinations, []).filter((x) => typeof x === 'string'),
+      excluded: r?.excluded === 1,
+    };
   }
 
-  claudes(ownerId: string): { claudeId: string; thresholdPct: number | null; destinations: string[] }[] {
-    const rows = (this.#db?.prepare('SELECT claude_id, threshold_pct, destinations FROM autotransfer_claudes WHERE owner_id = ? ORDER BY claude_id').all(ownerId) ?? []) as Record<string, unknown>[];
-    return rows.map((r) => ({ claudeId: String(r.claude_id), thresholdPct: typeof r.threshold_pct === 'number' ? r.threshold_pct : null, destinations: json<string[]>(r.destinations, []) }));
+  claudes(ownerId: string): ({ claudeId: string } & ClaudeRow)[] {
+    const sql = 'SELECT claude_id, threshold_pct, destinations, excluded FROM autotransfer_claudes WHERE owner_id = ? ORDER BY claude_id';
+    const rows = (this.#db?.prepare(sql).all(ownerId) ?? []) as Record<string, unknown>[];
+    return rows.map((r) => ({
+      claudeId: String(r.claude_id),
+      thresholdPct: typeof r.threshold_pct === 'number' ? r.threshold_pct : null,
+      destinations: json<string[]>(r.destinations, []),
+      excluded: r.excluded === 1,
+    }));
   }
 
-  setClaude(ownerId: string, claudeId: string, v: { thresholdPct: number | null; destinations: string[] }): void {
+  /** The Claudes an owner left out of auto move (T-2398): never a destination, and their own chats are never moved off by themselves. */
+  excludedClaudes(ownerId: string): Set<string> {
+    const sql = 'SELECT claude_id FROM autotransfer_claudes WHERE owner_id = ? AND excluded = 1';
+    const rows = (this.#db?.prepare(sql).all(ownerId) ?? []) as Record<string, unknown>[];
+    return new Set(rows.map((r) => String(r.claude_id)));
+  }
+
+  setClaude(ownerId: string, claudeId: string, v: ClaudeRow): void {
     this.#w
       ?.prepare(
-        `INSERT INTO autotransfer_claudes (owner_id, created_by, claude_id, threshold_pct, destinations, updated_at) VALUES (?, ?, ?, ?, ?, ?)
-         ON CONFLICT (owner_id, claude_id) DO UPDATE SET threshold_pct = excluded.threshold_pct, destinations = excluded.destinations, updated_at = excluded.updated_at`,
+        `INSERT INTO autotransfer_claudes (owner_id, created_by, claude_id, threshold_pct, destinations, excluded, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (owner_id, claude_id) DO UPDATE SET threshold_pct = excluded.threshold_pct, destinations = excluded.destinations, excluded = excluded.excluded, updated_at = excluded.updated_at`,
       )
-      .run(ownerId, ownerId, claudeId, v.thresholdPct, JSON.stringify(v.destinations), this.#at());
+      .run(ownerId, ownerId, claudeId, v.thresholdPct, JSON.stringify(v.destinations), v.excluded ? 1 : 0, this.#at());
   }
 
   /* ---------- a chat ---------- */

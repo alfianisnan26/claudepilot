@@ -1098,3 +1098,47 @@ test('T-1835: three exhausted chats at once spread: each move counts on its new 
   );
   r.engine.stop();
 });
+
+test('T-2398: with Home left out of auto move, three exhausted chats all go to Spare, none to Home (the stored setting is read)', async () => {
+  const workHome = () => [usage('work', 'Work', [win('session', 100)]), usage('home', 'Home', [win('session', 60)])];
+  const r = await rig(AUTO, () => [...workHome(), usage('spare', 'Spare', [win('session', 50)])]);
+  r.auto.setClaude('u_a', 'home', { thresholdPct: null, destinations: [], excluded: true });
+  for (const id of ['s2', 's3']) r.chat.sessions.set(id, chatSession(id));
+  for (const id of ['s1', 's2', 's3']) r.chat.turnEnds(id);
+  await r.engine.settled();
+  assert.deepEqual(r.chat.moves.map((m) => m.to), ['spare', 'spare', 'spare']);
+  assert.ok(!r.auto.events('u_a', { kinds: ['moved'] }).some((e) => e.to?.id === 'home'));
+  r.engine.stop();
+});
+
+test('T-2398: a chat on a Claude left out of auto move is not moved off it past its threshold: a card instead; a person’s Move on it still moves', async () => {
+  const r = await rig(AUTO);
+  r.auto.setClaude('u_a', 'work', { thresholdPct: null, destinations: [], excluded: true });
+  r.chat.turnEnds('s1');
+  await r.engine.settled();
+  assert.equal(r.chat.moves.length, 0); // Work 8 % left, under 10: an auto chat would have moved (S1)
+  assert.equal(r.auto.events('u_a', { kinds: ['moved'] }).length, 0);
+  const st = await r.engine.state('s1', 'u_a');
+  assert.equal(st.effectiveMode, 'auto'); // the chat's mode is unchanged; only the Claude is left out
+  assert.equal(st.pending?.to.id, 'home');
+  assert.equal(r.engine.claudeExcluded('s1'), true);
+  // The person answers the card: the move goes through.
+  await r.engine.answerMove(st.pending!.id, 'u_a', 'user:u_a');
+  await r.engine.settled();
+  assert.deepEqual(r.chat.moves, [{ id: 's1', to: 'home', handoff: 'ask' }]);
+  r.engine.stop();
+});
+
+test('T-2398: a person’s Move onto a Claude left out of auto move still works (a card answered after the Claude was left out)', async () => {
+  const r = await rig(ASK);
+  r.chat.turnEnds('s1');
+  await r.engine.settled();
+  const sug = (await r.engine.state('s1', 'u_a')).pending!;
+  assert.equal(sug.to.id, 'home');
+  r.auto.setClaude('u_a', 'home', { thresholdPct: null, destinations: [], excluded: true });
+  await r.engine.answerMove(sug.id, 'u_a', 'user:u_a');
+  await r.engine.settled();
+  assert.deepEqual(r.chat.moves, [{ id: 's1', to: 'home', handoff: 'ask' }]);
+  assert.equal(r.engine.claudeExcluded('s1'), true); // now on Home, which is left out
+  r.engine.stop();
+});

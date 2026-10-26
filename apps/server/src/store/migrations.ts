@@ -3819,6 +3819,15 @@ export const MIGRATIONS: Migration[] = [
       db.exec(`CREATE INDEX IF NOT EXISTS chat_tasks_session_status ON chat_tasks (session_id, status)`);
     },
   },
+  {
+    version: 881,
+    name: 'autotransfer: a Claude can be left out of auto move (T-2398)',
+    up(db) {
+      // T-2398: a Claude left out of auto move is never chosen as a destination and its own chats are never moved off it by themselves; it
+      // stays signed in and usable by hand. Additive (a column with a default); the next free number after 880.
+      db.exec(`ALTER TABLE autotransfer_claudes ADD COLUMN excluded INTEGER NOT NULL DEFAULT 0`);
+    },
+  },
 ];
 
 /**

@@ -8,13 +8,16 @@ import { createApp } from '../app.js';
 import { createPlatform } from '../platform/index.js';
 import { Portal } from '../portal.js';
 import { fakeOwner, freshStore } from '../notify/testkit.js';
+import { parseSecretKey } from '../store/secretBox.js';
+import { Store } from '../store/store.js';
+import { AutoStore } from './store.js';
 import { MoveChat, chatSession, fakeUsage, settingsMap, usage, win } from './testkit.js';
 
 const CODE = '24681357';
 const HOST = 'localhost:3235';
 
 async function build() {
-  const { store } = await freshStore();
+  const { store, dataDir, key } = await freshStore();
   const chat = new MoveChat();
   chat.sessions.set('s_a', chatSession('s_a'));
   chat.sessions.set('s_b', chatSession('s_b'));
@@ -42,7 +45,7 @@ async function build() {
   const settle = async () => {
     for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r));
   };
-  return { store, chat, owner, platform, app, call, settings, settle };
+  return { store, dataDir, key, chat, owner, platform, app, call, settings, settle };
 }
 
 test('the settings view, the user choices and their validation', async () => {
@@ -69,11 +72,68 @@ test('a Claude’s destinations: other Claudes of the same workspace, each once'
   const b = await build();
   const ok = await b.call('u_a', 'PUT', '/api/autotransfer/claudes/work', { thresholdPct: 15, destinations: ['home'] });
   assert.equal(ok.status, 200);
-  assert.deepEqual(ok.data, { claudeId: 'work', claudeName: 'Work', workspaceId: 'docker/api-dev', thresholdPct: 15, destinations: ['home'] });
+  assert.deepEqual(ok.data, {
+    claudeId: 'work',
+    claudeName: 'Work',
+    workspaceId: 'docker/api-dev',
+    thresholdPct: 15,
+    destinations: ['home'],
+    excluded: false,
+  });
   assert.equal((await b.call('u_a', 'PUT', '/api/autotransfer/claudes/work', { destinations: ['work'] })).status, 422);
   assert.equal((await b.call('u_a', 'PUT', '/api/autotransfer/claudes/work', { destinations: ['home', 'home'] })).status, 422);
   assert.equal((await b.call('u_a', 'PUT', '/api/autotransfer/claudes/nope', { thresholdPct: 15 })).status, 404);
   b.platform.stop();
+});
+
+test('T-2398: a Claude left out of auto move: PUT then GET, a partial PUT keeps the rest, a non-boolean is refused, audited, kept over a reopen', async () => {
+  const b = await build();
+  type View = { data: { claudes: { claudeId: string; excluded: boolean }[] } };
+  const claudeOf = (v: View, id: string) => v.data.claudes.find((c) => c.claudeId === id);
+  // No row yet: false for every Claude.
+  const before = await b.call('u_a', 'GET', '/api/autotransfer');
+  assert.deepEqual(before.data.claudes.map((c: { excluded: boolean }) => c.excluded), [false, false]);
+  const set = await b.call('u_a', 'PUT', '/api/autotransfer/claudes/home', { excluded: true, destinations: ['work'] });
+  assert.equal(set.status, 200);
+  assert.equal(set.data.excluded, true);
+  const after = await b.call('u_a', 'GET', '/api/autotransfer');
+  assert.equal(claudeOf(after, 'home')?.excluded, true);
+  assert.equal(claudeOf(after, 'work')?.excluded, false);
+  // Partial: only the threshold changes; excluded and the destinations stay.
+  const partial = await b.call('u_a', 'PUT', '/api/autotransfer/claudes/home', { thresholdPct: 20 });
+  assert.equal(partial.status, 200);
+  assert.deepEqual([partial.data.thresholdPct, partial.data.destinations, partial.data.excluded], [20, ['work'], true]);
+  // Not a boolean: refused like the other fields, nothing changes.
+  for (const bad of ['yes', 1, null, [true]]) {
+    const r = await b.call('u_a', 'PUT', '/api/autotransfer/claudes/home', { excluded: bad });
+    assert.equal(r.status, 422, JSON.stringify(bad));
+    assert.equal(r.error?.code, 'VALIDATION_FAILED');
+  }
+  assert.equal(claudeOf(await b.call('u_a', 'GET', '/api/autotransfer'), 'home')?.excluded, true);
+  // B has no row for Home: B's view is B's own.
+  assert.equal(claudeOf(await b.call('u_b', 'GET', '/api/autotransfer'), 'home')?.excluded, false);
+  // The trail: one `autotransfer.claude` row per accepted change, with excluded and who.
+  const rows = b.platform.audit.list({ kind: 'autotransfer.claude' }, 'u_a');
+  assert.equal(rows.length, 2);
+  assert.deepEqual(
+    rows.map((r) => [r.actor, r.subject, (r.detail as { excluded?: unknown }).excluded]),
+    [
+      ['user:u_a', 'claude:home', true],
+      ['user:u_a', 'claude:home', true],
+    ],
+  );
+  // Work left out too, then the store is opened again over the same files: both settings are still there.
+  const off = await b.call('u_a', 'PUT', '/api/autotransfer/claudes/work', { excluded: true });
+  assert.equal(off.data.excluded, true);
+  b.platform.stop();
+  b.store.close();
+  const again = await Store.open({ dataDir: b.dataDir, secretKey: parseSecretKey(b.key) });
+  const auto = new AutoStore(again);
+  assert.deepEqual(auto.claude('u_a', 'home'), { thresholdPct: 20, destinations: ['work'], excluded: true });
+  assert.equal(auto.claude('u_a', 'work').excluded, true);
+  assert.deepEqual([...auto.excludedClaudes('u_a')].sort(), ['home', 'work']);
+  assert.equal(auto.excludedClaudes('u_b').size, 0);
+  again.close();
 });
 
 test('S20: the card, the chat state and the trail are the owner’s; another user gets 404 and nothing changes', async () => {
