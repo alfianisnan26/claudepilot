@@ -101,12 +101,14 @@ test('T-1094: lost touch, a failed resume, then an attach to the same process st
     // The next start finds the old process still running (run.lock held) and attaches to it; it reports Bypass at once.
     s.ws.startCode = 3;
     const tails = s.ws.tails.length;
-    // T-1985: every switch is answered in the tick it is written. The polling `answering` raced the 1 s control timeout under the full
-    // suite's load (deploy #518): the switch back into Bypass timed out, so the lead took its restart-once path (a stop and a 5th start).
-    // T-2396: answering from before the send, so the switch OUT of Bypass the attach asks first is answered too, not only the one back in.
-    s.ws.autoRespond = true;
+    // T-2396: the attach's switch out of Bypass and back in each wait for an answer; under the gate's load 1 s was missed (a 5th start).
+    // Answering from before the send instead ended the lead in 4 of 7 runs ("This session has ended."), so: more time, same order.
+    s.controller.controlTimeoutMs = 5000;
     const sending = s.controller.send(lead.id, 'lt-2', 'go on');
     await until(() => s.ws.tails.length > tails, 4000);
+    // T-1985: every switch is answered in the tick it is written. The polling `answering` raced the 1 s control timeout under the full
+    // suite's load (deploy #518): the switch back into Bypass timed out, so the lead took its restart-once path (a stop and a 5th start).
+    s.ws.autoRespond = true;
     s.ws.tails.at(-1)!.push(init(lead.id, 'bypassPermissions'));
     await sending;
     await sleep(50);
