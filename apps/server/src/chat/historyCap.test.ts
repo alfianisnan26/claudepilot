@@ -58,18 +58,32 @@ test('history: past the cap it returns exactly the newest cap events, oldest fir
     assert.equal(all.length, CAP);
     assert.equal(all[0]!.seq, 51, 'the newest cap: the 50 oldest are left out');
     assert.equal(all.at(-1)!.seq, CAP + 50);
-    assert.ok(all.every((e, i) => i === 0 || e.seq === all[i - 1]!.seq + 1), 'oldest first, no gap');
+    assert.ok(
+      all.every((e, i) => i === 0 || e.seq === all[i - 1]!.seq + 1),
+      'oldest first, no gap',
+    );
 
     const near = b.chat.history(b.id, CAP + 40);
-    assert.deepEqual(near.map((e) => e.seq), Array.from({ length: 10 }, (_, i) => CAP + 41 + i), 'after a recent seq: all of them');
+    assert.deepEqual(
+      near.map((e) => e.seq),
+      Array.from({ length: 10 }, (_, i) => CAP + 41 + i),
+      'after a recent seq: all of them',
+    );
     assert.deepEqual(b.chat.history(b.id, CAP + 50), [], 'nothing after the newest');
 
-    assert.deepEqual(b.chat.history(b.id, 0, 3).map((e) => e.seq), [CAP + 48, CAP + 49, CAP + 50], 'a limit: the newest that many');
+    assert.deepEqual(
+      b.chat.history(b.id, 0, 3).map((e) => e.seq),
+      [CAP + 48, CAP + 49, CAP + 50],
+      'a limit: the newest that many',
+    );
     assert.equal(b.chat.history(b.id, 0, CAP * 10).length, CAP, 'a limit above the cap is the cap');
     assert.deepEqual(b.chat.history(b.id, 0, 0), []);
 
     // Forward pages from a known seq: the oldest after it, so a reader walking forward skips nothing.
-    assert.deepEqual(b.chat.historyFrom(b.id, 10, 3).map((e) => e.seq), [11, 12, 13]);
+    assert.deepEqual(
+      b.chat.historyFrom(b.id, 10, 3).map((e) => e.seq),
+      [11, 12, 13],
+    );
     assert.equal(b.chat.historyFrom(b.id, 0, CAP * 10).length, CAP, 'capped too');
   } finally {
     await b.done();
@@ -114,13 +128,22 @@ test('historyTail: only the kinds asked, the newest first read back, bounded in 
   try {
     b.chat.appendEvent(b.id, { kind: 'user', text: 'old ask' });
     b.chat.appendEvent(b.id, { kind: 'tool_result', text: 'z'.repeat(1_000) });
-    b.chat.appendEvent(b.id, { kind: 'tool_use', toolName: 'Write', text: 'notes.md', toolInput: { file_path: 'notes.md', content: 'w'.repeat(5_000) } });
+    b.chat.appendEvent(b.id, {
+      kind: 'tool_use',
+      toolName: 'Write',
+      text: 'notes.md',
+      toolInput: { file_path: 'notes.md', content: 'w'.repeat(5_000) },
+    });
     b.chat.appendEvent(b.id, { kind: 'assistant', text: 'new answer' });
     b.chat.appendEvent(b.id, { kind: 'result' });
 
     const whole = b.chat.historyTail(b.id, { kinds: TRANSFER_KINDS, maxEvents: 100, withoutToolInput: true });
     assert.equal(whole.cut, false);
-    assert.deepEqual(whole.events.map((e) => e.kind), ['user', 'tool_use', 'assistant', 'result'], 'no tool_result');
+    assert.deepEqual(
+      whole.events.map((e) => e.kind),
+      ['user', 'tool_use', 'assistant', 'result'],
+      'no tool_result',
+    );
     const call = whole.events.find((e) => e.kind === 'tool_use')!;
     assert.equal(call.toolName, 'Write');
     assert.equal(call.text, 'notes.md');
@@ -128,10 +151,16 @@ test('historyTail: only the kinds asked, the newest first read back, bounded in 
     assert.ok(b.chat.historyTail(b.id, { kinds: ['tool_use'], maxEvents: 1 }).events[0]!.toolInput, 'kept unless asked');
 
     const two = b.chat.historyTail(b.id, { kinds: TRANSFER_KINDS, maxEvents: 2 });
-    assert.deepEqual(two.events.map((e) => e.kind), ['assistant', 'result']);
+    assert.deepEqual(
+      two.events.map((e) => e.kind),
+      ['assistant', 'result'],
+    );
     assert.equal(two.cut, true);
     const after = b.chat.historyTail(b.id, { kinds: TRANSFER_KINDS, after: 3, maxEvents: 2 });
-    assert.deepEqual(after.events.map((e) => e.seq), [4, 5]);
+    assert.deepEqual(
+      after.events.map((e) => e.seq),
+      [4, 5],
+    );
     assert.equal(after.cut, false, 'nothing of those kinds after 3 was left');
 
     fill(b.chat, b.id, 1_200, 100);
@@ -146,9 +175,18 @@ test('historyTail: only the kinds asked, the newest first read back, bounded in 
 
 /* ---------- The Move reads a bounded tail and says when older messages were left out ---------- */
 
-const assistantText = (text: string) => line({ type: 'assistant', message: { content: [{ type: 'text', text }] }, parent_tool_use_id: null, uuid: randomUUID() });
+const assistantText = (text: string) =>
+  line({ type: 'assistant', message: { content: [{ type: 'text', text }] }, parent_tool_use_id: null, uuid: randomUUID() });
 const resultLine = (sessionId: string, total = 0.01) =>
-  line({ type: 'result', subtype: 'success', total_cost_usd: total, duration_ms: 100, usage: { input_tokens: 1, output_tokens: 1 }, is_error: false, session_id: sessionId });
+  line({
+    type: 'result',
+    subtype: 'success',
+    total_cost_usd: total,
+    duration_ms: 100,
+    usage: { input_tokens: 1, output_tokens: 1 },
+    is_error: false,
+    session_id: sessionId,
+  });
 const csid = (s: Live) => s.controller.get(s.id)!.claudeSessionId;
 
 async function acknowledge(s: Live) {
@@ -199,7 +237,15 @@ test('MCP session_get: a request older than the newest cap events is still liste
   try {
     registerSessionTools({ store: s.store, chat: s.controller }, registry);
     const chat = new ChatStore(s.store);
-    const request = chat.addRequest(s.id, { requestId: `req-${randomUUID()}`, kind: 'tool', toolName: 'Bash', agentLabel: null, title: 'Run a command', detail: 'ls', createdAt: new Date().toISOString() });
+    const request = chat.addRequest(s.id, {
+      requestId: `req-${randomUUID()}`,
+      kind: 'tool',
+      toolName: 'Bash',
+      agentLabel: null,
+      title: 'Run a command',
+      detail: 'ls',
+      createdAt: new Date().toISOString(),
+    });
     chat.appendEvent(s.id, { kind: 'request', requestId: request.requestId, request });
     fill(chat, s.id, CAP + 100);
     const last = s.controller.get(s.id)!.lastSeq;
@@ -208,11 +254,17 @@ test('MCP session_get: a request older than the newest cap events is still liste
     const got = await h.call(admin.secret, 'session_get', { id: s.id, max_events: 100 });
     assert.equal(got.result?.isError, undefined, JSON.stringify(got.raw));
     const out = got.result!.structuredContent;
-    assert.deepEqual(out.pending_requests.map((r: { request_id: string }) => r.request_id), [request.requestId]);
+    assert.deepEqual(
+      out.pending_requests.map((r: { request_id: string }) => r.request_id),
+      [request.requestId],
+    );
     assert.ok(out.events.length <= 100 && out.events.length > 0, `events: ${out.events.length}`);
     assert.equal(out.next_seq, last, 'the newest');
     const after = (await h.call(admin.secret, 'session_get', { id: s.id, max_events: 100, after_seq: last - 3 })).result!.structuredContent;
-    assert.deepEqual(after.events.map((e: { seq: number }) => e.seq), [last - 2, last - 1, last]);
+    assert.deepEqual(
+      after.events.map((e: { seq: number }) => e.seq),
+      [last - 2, last - 1, last],
+    );
   } finally {
     h.done();
     await s.done();
