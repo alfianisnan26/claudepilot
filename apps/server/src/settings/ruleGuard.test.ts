@@ -1530,8 +1530,14 @@ const T1092_BYPASSES: [string, string][] = [
     'node readdir with startsWith .cl and settings',
     `node -e "const fs=require('fs');for(const d of fs.readdirSync('.'))if(d.startsWith('.cl'))for(const f of fs.readdirSync(d))if(f.startsWith('settings'))fs.writeFileSync(d+'/'+f,'{}')"`,
   ],
-  ['node readdir with a two-letter start', `node -e "const fs=require('fs');for(const d of fs.readdirSync('.'))if(d.startsWith('.c'))fs.writeFileSync(d+'/x','{}')"`],
-  ['node slice of x.claude', `node -e "require('fs').writeFileSync('x.claude'.slice(1)+'/'+'Xsettings'.slice(1)+'Y.json'.slice(1),'{\\"w\\":1}')"`],
+  [
+    'node readdir with a two-letter start',
+    `node -e "const fs=require('fs');for(const d of fs.readdirSync('.'))if(d.startsWith('.c'))fs.writeFileSync(d+'/x','{}')"`,
+  ],
+  [
+    'node slice of x.claude',
+    `node -e "require('fs').writeFileSync('x.claude'.slice(1)+'/'+'Xsettings'.slice(1)+'Y.json'.slice(1),'{\\"w\\":1}')"`,
+  ],
   ['python slice of x.claude', py("p = 'x.claude'[1:] + '/' + 'Xsettings'[1:] + 'Y.json'[1:]\nopen(p,'w').write('{}')")],
   ['CLAUDE_ + CONFIG_DIR', py("import os\nopen(os.environ['CLAUDE_'+'CONFIG_DIR']+'/x','w').write('{}')")],
   ['/etc/ + claudepilot/...', py("open('/etc/'+'claudepilot/bin/policy-rule-guard.cjs','w').write('x')")],

@@ -181,27 +181,28 @@ function world(seeds: Seed[] = [], scenario: Scenario = {}) {
     `[credential "https://git.konfersi.com"]\n\thelper = "!f() { echo username=bot; echo password=${giteaToken}; }; f"\n`,
   );
   // UNSET as an override value leaves that variable out entirely (to test a script default that applies only when it is unset).
-  const env = (over: Record<string, string> = {}): NodeJS.ProcessEnv => withoutUnset({
-    PATH: `${bin}:/usr/local/bin:/usr/bin:/bin`,
-    HOME: home,
-    TMPDIR: root,
-    FAKE: root,
-    GIT_CONFIG_GLOBAL: gitconfig,
-    GIT_CONFIG_NOSYSTEM: '1',
-    JOB_RUN_IMAGE: 'registry.test/claudepilot/workspace:1-dev-1',
-    JOB_RUN_POLL_S: '0.1',
-    // The queue tests are written for these caps (the script's defaults until T-1624); the defaults themselves have their own test.
-    JOB_RUN_MAX: '3',
-    JOB_RUN_MAX_PER_PROGRAM: '2',
-    // The placement tests are written with no node avoided (T-1643 made k3s-master the default; that default has its own test).
-    JOB_RUN_AVOID_NODES: '',
-    JOB_RUN_WATCH_PID: 'none',
-    JOB_RUN_LOG: join(root, 'job.log'),
-    NODE_AUTH_TOKEN: npmToken,
-    PILOT_SESSION_ID: 'chat-a',
-    PILOT_AGENT: 't107',
-    ...over,
-  });
+  const env = (over: Record<string, string> = {}): NodeJS.ProcessEnv =>
+    withoutUnset({
+      PATH: `${bin}:/usr/local/bin:/usr/bin:/bin`,
+      HOME: home,
+      TMPDIR: root,
+      FAKE: root,
+      GIT_CONFIG_GLOBAL: gitconfig,
+      GIT_CONFIG_NOSYSTEM: '1',
+      JOB_RUN_IMAGE: 'registry.test/claudepilot/workspace:1-dev-1',
+      JOB_RUN_POLL_S: '0.1',
+      // The queue tests are written for these caps (the script's defaults until T-1624); the defaults themselves have their own test.
+      JOB_RUN_MAX: '3',
+      JOB_RUN_MAX_PER_PROGRAM: '2',
+      // The placement tests are written with no node avoided (T-1643 made k3s-master the default; that default has its own test).
+      JOB_RUN_AVOID_NODES: '',
+      JOB_RUN_WATCH_PID: 'none',
+      JOB_RUN_LOG: join(root, 'job.log'),
+      NODE_AUTH_TOKEN: npmToken,
+      PILOT_SESSION_ID: 'chat-a',
+      PILOT_AGENT: 't107',
+      ...over,
+    });
   const start = (argv: string[], over: Record<string, string> = {}) => {
     const p = spawn('bash', [SCRIPT, ...argv], { env: env(over), cwd: root });
     children.push(p);
@@ -519,10 +520,7 @@ test('T-1982: the registry unreachable from here, the cluster names the newest d
   assert.deepEqual(raw, [
     'kubectl get --raw /api/v1/namespaces/isnan-registry/services/registry:5000/proxy/v2/claudepilot/workspace/tags/list',
   ]);
-  assert.equal(
-    container(yamlLoad(w.applied1()) as Manifest).image,
-    'registry.int.isnan.me/claudepilot/workspace:2.1.296-dev-2026.10.15-1',
-  );
+  assert.equal(container(yamlLoad(w.applied1()) as Manifest).image, 'registry.int.isnan.me/claudepilot/workspace:2.1.296-dev-2026.10.15-1');
 });
 
 test('T-1982: the registry answering (the pod) is used as before, with no call to the cluster for it', () => {
@@ -632,7 +630,12 @@ test('T-524 --big: 8Gi requested = limited, /tmp 4Gi; the default is 3Gi with /t
     // T-1643: no node preference any more (every node is control-plane); the Jobs spread across the nodes instead.
     assert.equal((m.spec.template.spec.affinity as { nodeAffinity?: unknown }).nodeAffinity ?? null, null);
     assert.deepEqual(m.spec.template.spec.topologySpreadConstraints, [
-      { maxSkew: 1, topologyKey: 'kubernetes.io/hostname', whenUnsatisfiable: 'ScheduleAnyway', labelSelector: { matchLabels: { app: 'claudepilot-job-run' } } },
+      {
+        maxSkew: 1,
+        topologyKey: 'kubernetes.io/hostname',
+        whenUnsatisfiable: 'ScheduleAnyway',
+        labelSelector: { matchLabels: { app: 'claudepilot-job-run' } },
+      },
     ]);
   }
 });
@@ -1587,7 +1590,11 @@ test('T-426 --pool-env refusals, before any kubectl call: a name outside E2E_CF_
   const w = world();
   const val = `cs${hex(20)}`;
   const cases: [string[], Record<string, string>, RegExp][] = [
-    [['--pool-env', 'GITHUB_TOKEN'], { GITHUB_TOKEN: val }, /--pool-env: refused: not an allowed name \(E2E_CF_ACCESS_\*, E2E_QA_EMAIL, E2E_QA_PASSWORD, E2E_QA2_EMAIL, E2E_QA2_PASSWORD, E2E_QA3_EMAIL, E2E_QA3_PASSWORD, E2E_STAFF_EMAIL, E2E_STAFF_PASSWORD, E2E_STAFF2_EMAIL, E2E_STAFF2_PASSWORD, E2E_TURNSTILE_TOKEN\)/],
+    [
+      ['--pool-env', 'GITHUB_TOKEN'],
+      { GITHUB_TOKEN: val },
+      /--pool-env: refused: not an allowed name \(E2E_CF_ACCESS_\*, E2E_QA_EMAIL, E2E_QA_PASSWORD, E2E_QA2_EMAIL, E2E_QA2_PASSWORD, E2E_QA3_EMAIL, E2E_QA3_PASSWORD, E2E_STAFF_EMAIL, E2E_STAFF_PASSWORD, E2E_STAFF2_EMAIL, E2E_STAFF2_PASSWORD, E2E_TURNSTILE_TOKEN\)/,
+    ],
     // T-2294: the QA3, staff and Turnstile names exactly, nothing near them.
     [['--pool-env', 'E2E_QA4_EMAIL'], { E2E_QA4_EMAIL: val }, /not an allowed name/],
     [['--pool-env', 'E2E_STAFF3_PASSWORD'], { E2E_STAFF3_PASSWORD: val }, /not an allowed name/],
