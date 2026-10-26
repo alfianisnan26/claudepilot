@@ -1587,7 +1587,18 @@ test('T-426 --pool-env refusals, before any kubectl call: a name outside E2E_CF_
   const w = world();
   const val = `cs${hex(20)}`;
   const cases: [string[], Record<string, string>, RegExp][] = [
-    [['--pool-env', 'GITHUB_TOKEN'], { GITHUB_TOKEN: val }, /--pool-env: refused: not an allowed name \(E2E_CF_ACCESS_\*, E2E_QA_EMAIL, E2E_QA_PASSWORD, E2E_QA2_EMAIL, E2E_QA2_PASSWORD\)/],
+    [['--pool-env', 'GITHUB_TOKEN'], { GITHUB_TOKEN: val }, /--pool-env: refused: not an allowed name \(E2E_CF_ACCESS_\*, E2E_QA_EMAIL, E2E_QA_PASSWORD, E2E_QA2_EMAIL, E2E_QA2_PASSWORD, E2E_QA3_EMAIL, E2E_QA3_PASSWORD, E2E_STAFF_EMAIL, E2E_STAFF_PASSWORD, E2E_STAFF2_EMAIL, E2E_STAFF2_PASSWORD, E2E_TURNSTILE_TOKEN\)/],
+    // T-2294: the QA3, staff and Turnstile names exactly, nothing near them.
+    [['--pool-env', 'E2E_QA4_EMAIL'], { E2E_QA4_EMAIL: val }, /not an allowed name/],
+    [['--pool-env', 'E2E_STAFF3_PASSWORD'], { E2E_STAFF3_PASSWORD: val }, /not an allowed name/],
+    [['--pool-env', 'E2E_STAFF_TOKEN'], { E2E_STAFF_TOKEN: val }, /not an allowed name/],
+    [['--pool-env', 'E2E_TURNSTILE_TOKEN_X'], { E2E_TURNSTILE_TOKEN_X: val }, /not an allowed name/],
+    [['--pool-env', 'E2E_TURNSTILE_SECRET'], { E2E_TURNSTILE_SECRET: val }, /not an allowed name/],
+    [['--pool-env', 'E2E_TURNSTILE_TOKEN'], { E2E_TURNSTILE_TOKEN: 'short7!' }, /E2E_TURNSTILE_TOKEN is shorter than 8 characters/],
+    [['--pool-env', 'E2E_QA3_EMAIL'], {}, /--pool-env: E2E_QA3_EMAIL is not set in this workspace/],
+    [['--pool-env', 'E2E_STAFF_PASSWORD'], {}, /--pool-env: E2E_STAFF_PASSWORD is not set in this workspace/],
+    [['--pool-env', 'E2E_STAFF2_EMAIL'], {}, /--pool-env: E2E_STAFF2_EMAIL is not set in this workspace/],
+    [['--pool-env', 'E2E_QA2_PASSWORD'], {}, /--pool-env: E2E_QA2_PASSWORD is not set in this workspace/],
     // T-384: exactly the QA account's two names, nothing near them.
     [['--pool-env', 'E2E_QA_TOKEN'], { E2E_QA_TOKEN: val }, /not an allowed name/],
     [['--pool-env', 'E2E_QA_EMAIL_X'], { E2E_QA_EMAIL_X: val }, /not an allowed name/],

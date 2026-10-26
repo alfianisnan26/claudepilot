@@ -196,7 +196,8 @@ scripts/job-run.sh --repo konfersi:<org>/<repo> --ref <branch> --image registry.
 - **Test credentials for the command (`--pool-env NAME`, T-426):** repeatable, for a command that needs a scoped test credential from the
   workspace's Secrets pool, today Konfersi's stg e2e and Lighthouse behind Cloudflare Access:
   `scripts/job-run.sh --pool-env E2E_CF_ACCESS_CLIENT_ID --pool-env E2E_CF_ACCESS_CLIENT_SECRET -- 'scripts/e2e-stg.sh'`. Only
-  `E2E_CF_ACCESS_*` names and the stg QA test account's `E2E_QA_EMAIL` and `E2E_QA_PASSWORD` (T-384) are accepted, and the variable must
+  `E2E_CF_ACCESS_*` names, the stg QA test accounts' `E2E_QA_EMAIL`/`E2E_QA_PASSWORD` (T-384), `E2E_QA2_*` (T-1665) and `E2E_QA3_*`,
+  the stg staff test accounts' `E2E_STAFF_*`/`E2E_STAFF2_*` (each `_EMAIL` and `_PASSWORD`) and `E2E_TURNSTILE_TOKEN` (T-2294) are accepted, and the variable must
   be set in the workspace; anything else is refused (exit 2) before a Job is made.
   An unknown option now gets a quieter message than before (T-426: it names the argument only when it is a plain `--option`, otherwise it says
   an option is not known and shows nothing of it). The unknown-option branch and the `--pool-env` name check never show what they refuse (it may be a pasted value; an argument is named only

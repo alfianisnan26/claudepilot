@@ -194,7 +194,9 @@ for a in $keep; do [[ $a =~ ^[A-Za-z0-9_.][A-Za-z0-9_./-]*$ && ! $a =~ (^|/)\.\.
 pool_names=
 for n in ${pool[@]+"${pool[@]}"}; do
   # T-1665: the second stg QA test account (E2E_QA2_*) for two-user checks, a test account like E2E_QA_*.
-  [[ $n =~ ^E2E_CF_ACCESS_[A-Z0-9_]+$ || $n =~ ^E2E_QA2?_(EMAIL|PASSWORD)$ ]] || die "--pool-env: refused: not an allowed name (E2E_CF_ACCESS_*, E2E_QA_EMAIL, E2E_QA_PASSWORD, E2E_QA2_EMAIL, E2E_QA2_PASSWORD); the argument is not shown"
+  # T-2294: the third QA account (E2E_QA3_*), the stg staff test accounts (E2E_STAFF_*, E2E_STAFF2_*) and the stg Turnstile test token
+  # (E2E_TURNSTILE_TOKEN): standalone entries of the konfersi-stg pool, test accounts and a test token on stg, never a person's.
+  [[ $n =~ ^E2E_CF_ACCESS_[A-Z0-9_]+$ || $n =~ ^E2E_QA[23]?_(EMAIL|PASSWORD)$ || $n =~ ^E2E_STAFF2?_(EMAIL|PASSWORD)$ || $n == E2E_TURNSTILE_TOKEN ]] || die "--pool-env: refused: not an allowed name (E2E_CF_ACCESS_*, E2E_QA_EMAIL, E2E_QA_PASSWORD, E2E_QA2_EMAIL, E2E_QA2_PASSWORD, E2E_QA3_EMAIL, E2E_QA3_PASSWORD, E2E_STAFF_EMAIL, E2E_STAFF_PASSWORD, E2E_STAFF2_EMAIL, E2E_STAFF2_PASSWORD, E2E_TURNSTILE_TOKEN); the argument is not shown"
   [ -n "${!n:-}" ] || die "--pool-env: $n is not set in this workspace (the Secrets pool delivers it)"
   [[ ${!n} != *[$'\n\r']* ]] || die "--pool-env: $n holds a line break; refused"
   # Printable ASCII only (kubectl's env-file parser fails on other bytes and may then print the line).
