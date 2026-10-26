@@ -23,7 +23,7 @@ if script is not None and not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,62}-stg", scrip
 m = re.fullmatch(r"(\d{1,4})([mhd])", opt["--since"] or "")
 if not m: sys.exit("cf-logs: --since is like 30m, 2h or 1d")
 since_ms = int(m.group(1)) * {"m": 60, "h": 3600, "d": 86400}[m.group(2)] * 1000
-if since_ms > 7 * 86400000: sys.exit("cf-logs: --since is at most 7d")
+if 7 * 86400000 < since_ms: sys.exit("cf-logs: --since is at most 7d")
 level = opt["--level"]
 if level is not None and level not in ("error", "warn", "log", "info", "debug"): sys.exit("cf-logs: --level is error, warn, log, info or debug")
 try: limit = max(1, min(200, int(opt["--limit"])))

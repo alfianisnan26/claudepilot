@@ -15,8 +15,9 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { after, test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { ChatStore } from '../chat/store.js';
 import { compile } from '../delivery/compile.js';
 import { parseOutbox } from '../delivery/outbox.js';
@@ -1569,3 +1570,17 @@ for (const [what, command] of T1092_BYPASSES) {
     assert.doesNotMatch(res.stderr, /rule file is named/);
   });
 }
+
+// T-2099: scripts/cf-logs.sh (read-only) names /etc/claudepilot and once compared `since_ms > 7 * ...`, which the script check
+// read as a shell redirect, so lanes could not run it. The real script is allowed; the old line, put back, is still refused.
+test('T-2099 running scripts/cf-logs.sh is allowed; its old `> 7 *` comparison was read as a write', () => {
+  const real = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../../../../scripts/cf-logs.sh'), 'utf8');
+  assert.match(real, /\/etc\/claudepilot/, 'the script still names /etc/claudepilot (else this test proves nothing)');
+  writeFileSync(join(R.repo, 'scripts', 'cf-logs.sh'), real, { mode: 0o755 });
+  allowed(bash('scripts/cf-logs.sh --since 1h'), 'cf-logs.sh');
+  allowed(bash('bash scripts/cf-logs.sh --help'), 'bash cf-logs.sh');
+  const old = real.replace('if 7 * 86400000 < since_ms:', 'if since_ms > 7 * 86400000:');
+  assert.notEqual(old, real, 'the comparison is in the script');
+  writeFileSync(join(R.repo, 'scripts', 'cf-logs-old.sh'), old, { mode: 0o755 });
+  refused(bash('scripts/cf-logs-old.sh --since 1h'), 'the old comparison');
+});
