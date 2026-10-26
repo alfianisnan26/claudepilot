@@ -167,8 +167,11 @@ export class Metrics {
 
   /**
    * The reach of an agent's token on the metrics tools (portal MCP, metricsTools.ts): its own crew, only when its session is a lead (a
-   * top-level chat: no parent session; a worker started with `session_spawn` has one) AND the person who owns the session may view the area
-   * `usage` (what the REST routes ask). Unknown, unreadable, a worker, an owner without that right, or no crew: null (refused).
+   * top-level chat: no parent session; a worker started with `session_spawn` has one) AND the session's recorded owner may view the area
+   * `usage` (what the REST routes ask). The recorded owner is chat_sessions.owner_id: a manager chat's owner; any other chat records the
+   * founding user today (its starter is not stored), so for those the check holds only once owners are recorded, and the real limit is the
+   * crew: like crew_scorecard, a lead reads its own crew's tickets only. Unknown, unreadable, a worker, an owner without that right, or no
+   * crew: null (refused).
    */
   leadScope(sessionId: string): MetricsScope {
     const db = this.deps.store.db;

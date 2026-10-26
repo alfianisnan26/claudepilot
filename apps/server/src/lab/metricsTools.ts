@@ -4,8 +4,9 @@
 // Who may call (the policy, authz.ts): these are whole-portal numbers (every program's tickets, every crew, every Claude's pace), which the
 // REST routes give only to a reader of the platform area `usage`. The ticket's readers are the leads (agents) and the operator, and the seam
 // boxes every agent out of a platform area, so the tools are `scope: 'agent'` with the reach checked here:
-// - an agent's per-session token: only when its session is a lead (a top-level chat: no parent session) AND the person who owns that session
-//   may view `usage` (the routes' reader), and then only its own crew: the tickets its lineage held (the crew scorecard's own program), no
+// - an agent's per-session token: only when its session is a lead (a top-level chat: no parent session) AND the session's recorded owner
+//   (chat_sessions.owner_id: a manager chat's owner; every other chat records the founding user today, its starter is not stored) may view
+//   `usage` (the routes' reader), and then only its own crew: the tickets its lineage held (the crew scorecard's own program), no
 //   paces, no score a window ago and no trend (both whole-program snapshots). A worker gets NOT_FOUND, the dispatch's own "Not found." (its
 //   sub-agents share the lead's token, so a lead's helpers read them too);
 // - an admin's (cpat_) or the manager's (cpmt_) token: only with `view` on `usage` through can(), as the routes ask.
@@ -63,7 +64,7 @@ const gone = (u: MetricsUnavailable | undefined) => `unavailable:${u?.reason ?? 
 const UNREAD = 'unavailable (the closed tickets could not be read)';
 
 /**
- * The reach (see the header): an agent's token only for a lead session whose owner may view `usage`, and then only its own crew's tickets;
+ * The reach (see the header): an agent's token only for a lead session whose recorded owner may view `usage`, and then only its own crew's tickets;
  * an admin's or manager's only with `view` on `usage`. A refusal is the dispatch's own NOT_FOUND ("Not found."), so it reads like any
  * refused tool.
  */
@@ -184,7 +185,7 @@ export function fitRows<T>(
 
 export function registerMetricsTools(lab: Lab, registry: ToolRegistry = portalTools): void {
   const reachNote =
-    'An agent’s token: a lead session whose owner may view usage, its own crew’s tickets only (a worker gets not found); an admin’s: with view on usage.';
+    'An agent’s token: a lead session (its recorded owner may view usage), its own crew’s tickets only (a worker gets not found); an admin’s: with view on usage.';
 
   registry.register({
     name: 'metrics_overview',

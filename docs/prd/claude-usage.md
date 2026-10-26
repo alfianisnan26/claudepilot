@@ -1234,7 +1234,9 @@ slices of T-2360; they read the same wire types (`packages/contracts/src/metrics
   `metrics_trend`, `metrics_insights` and `metrics_tickets` (the drill-down, paged with `cursor`, 25 rows a page, at most 100) read
   `Lab.metrics`, never a copy (table in [Portal MCP](portal-mcp.md)). Reach, decided here: the ticket names the leads and the operator as
   readers, so the tools are `agent` scope with the reach in the handler: an agent's token only for a LEAD session (a top-level chat, no
-  parent session); a worker or an unknown session gets the same `NOT_FOUND`; an admin's or the manager's token only with `view` on `usage`.
+  parent session) whose recorded owner (`chat_sessions.owner_id`: a manager chat's owner, the founding user for any other chat today) may
+  view `usage`, and then only its own crew's tickets (the lineage root, as crew_scorecard), with no paces, no score a window ago and no
+  trend; a worker or an unknown session gets the same `NOT_FOUND`; an admin's or the manager's token only with `view` on `usage`.
   Short by default, hours with two decimals, every figure the portal lacks `unavailable:<reason>`, never 0 (a failed closed-ticket read
   makes the overview's `flow`, flow_times' `total` and metrics_tickets' `total` `unavailable:no_source`, no rows, no cursor); counts, durations, ticket ids
   and program ids only (no ticket text, no session title); every result kept under the MCP size limit.
