@@ -108,6 +108,19 @@ const fakes = {
       world.sessions.filter((s) => (!f.workspaceId || s.workspaceId === f.workspaceId) && (!f.ticketId || s.ticketId === f.ticketId) && (!f.parentId || s.parentId === f.parentId)),
     get: (id: string) => world.sessions.find((s) => s.id === id) ?? null,
     history: (id: string) => world.events[id] ?? [],
+    // The request table, as the store keeps it beside the transcript (a request with no resolution yet; T-2589: session_get reads this).
+    openRequests: (id: string) => {
+      const open = new Map<string, Row>();
+      for (const e of world.events[id] ?? []) {
+        if (e.kind === 'request' && e.request) open.set(e.request.requestId, e.request);
+        else if (e.kind === 'resolved' && e.requestId) open.delete(e.requestId);
+      }
+      return [...open.values()];
+    },
+    historyTail: (id: string, o: { kinds: readonly string[]; after?: number; maxEvents: number }) => {
+      const all = (world.events[id] ?? []).filter((e: Row) => e.seq > (o.after ?? 0) && o.kinds.includes(e.kind));
+      return { events: all.slice(-o.maxEvents), cut: all.length > o.maxEvents };
+    },
     listClaudes: () => [{ id: 'c1', name: 'Default', removedAt: null }],
     usage: () => ({ range: '1d', from: NOW, to: NOW, totals: { costUsd: 1.234, requests: 9, input: 1, output: 2, cacheRead: 3, cacheWrite: 4 }, byModel: [{ model: 'sonnet', costUsd: 1.2, requests: 9 }], byClaude: [] }),
     interrupt: async (id: string) => void calls.push(`chat.interrupt:${id}`),

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { AppError, isAppError } from '@isnanme/core';
-import { CHAT_AGENT_NAME, CHAT_MAX_WORKERS_MAX, sessionRef, workspaceRef, type ChatEvent, type ChatPermissionMode, type ChatRequest, type ChatSession } from '@portal/contracts';
+import { CHAT_AGENT_NAME, CHAT_MAX_WORKERS_MAX, sessionRef, workspaceRef, type ChatPermissionMode, type ChatSession } from '@portal/contracts';
 import { z } from 'zod';
 import { actorOfPrincipal, requireCan } from '../../authz/seam.js';
 import { WORKER_REPORTS } from '../../chat/agents.js';
@@ -49,15 +49,8 @@ const sessionBrief = (s: ChatSession, ctx: PortalToolContext) => ({
   ended_reason: ctx.untrusted(s.endedReason, 'runtime'),
 });
 
-/** The requests a session still waits on, read from its transcript (a request event with no resolution after it). */
-function pendingRequests(events: ChatEvent[]): ChatRequest[] {
-  const open = new Map<string, ChatRequest>();
-  for (const e of events) {
-    if (e.kind === 'request' && e.request) open.set(e.request.requestId, e.request);
-    else if (e.kind === 'resolved' && e.requestId) open.delete(e.requestId);
-  }
-  return [...open.values()];
-}
+/** The transcript kinds `session_get` returns with max_events. */
+const TRANSCRIPT_KINDS = ['user', 'assistant', 'result', 'error', 'system', 'tool_use'] as const;
 
 /** Chat sessions over MCP (portal-mcp PRD §13.3). The write tools are listed only while session control is on. */
 export function registerSessionTools(
@@ -166,8 +159,9 @@ export function registerSessionTools(
         workers_total: kids.length,
         workers: ordered.slice(0, WORKERS_MAX).map((w) => ({ id: w.id, title: ctx.untrusted(w.title, 'agent', 120), state: w.state, claude: w.claudeName ?? null, waiting: w.waiting })),
       };
-      const all = chat.history(s.id, 0);
-      out.pending_requests = pendingRequests(all).map((r) => ({
+      // T-2589: from the request table (what the approvals dock and chat.respond read), never the whole transcript: one chat of 204k
+      // events read whole took the portal past its heap.
+      out.pending_requests = chat.openRequests(s.id).map((r) => ({
         request_id: r.requestId,
         kind: r.kind,
         tool: r.toolName,
@@ -179,7 +173,8 @@ export function registerSessionTools(
       const max = args.max_events ?? 0;
       if (max > 0) {
         const after = args.after_seq ?? 0;
-        const picked = all.filter((e) => e.seq > after && ['user', 'assistant', 'result', 'error', 'system', 'tool_use'].includes(e.kind)).slice(-max);
+        // T-2589: only the newest `max` events of these kinds after `after`, read as such (a bounded tail, never the transcript).
+        const picked = chat.historyTail(s.id, { kinds: TRANSCRIPT_KINDS, after, maxEvents: max }).events;
         let used = 0;
         const events: unknown[] = [];
         for (const e of picked) {
@@ -318,7 +313,8 @@ export function registerSessionTools(
     }),
     async handler(ctx, args) {
       need(args.id);
-      const open = pendingRequests(chat.history(args.id, 0)).find((r) => r.requestId === args.request_id);
+      // T-2589: the request table (what chat.respond itself checks), never the whole transcript.
+      const open = chat.openRequests(args.id).find((r) => r.requestId === args.request_id);
       if (!open) throw new PortalToolError('CONFLICT', 'That request is no longer open.');
       if (args.decision === 'allow') {
         if (ctx.principal.scope !== 'admin') throw new PortalToolError('SCOPE_REQUIRED', 'Allowing a request needs the admin scope; denying needs operate.', { required: 'admin', granted: ctx.principal.scope });

@@ -857,7 +857,10 @@ export class AutoTransferEngine {
           this.#contTimers.delete(s.id);
           const cur = this.#d.chat.get(s.id);
           if (!cur || cur.state === 'ended' || cur.claudeId !== to.id) return;
-          if (this.#d.chat.history(s.id, seenSeq).some((ev) => ev.kind === 'user' && !ev.agentLabel && ev.actor !== ENGINE_ACTOR)) return; // a newer message stands
+          const since = this.#d.chat.history(s.id, seenSeq);
+          // T-2589: the read is capped (the newest events only): one that does not reach back to seenSeq means the chat has run on, a lot.
+          if (since.length && since[0]!.seq > seenSeq + 1) return;
+          if (since.some((ev) => ev.kind === 'user' && !ev.agentLabel && ev.actor !== ENGINE_ACTOR)) return; // a newer message stands
           void this.#continue(cur, ownerId, mode, to, why, attempt + 1);
         }),
       );

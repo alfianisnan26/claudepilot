@@ -240,7 +240,8 @@ export function createChatRoutes(controller: ChatController): Hono {
   chat.post('/:id/pin', (c) => c.json(success(controller.pin(c.req.param('id')))));
   chat.delete('/:id/pin', (c) => c.json(success(controller.unpin(c.req.param('id')))));
 
-  // GET /api/chat/sessions/:id/events?after=<seq> — stored transcript events (history and resume), whole, as before T-376.
+  // GET /api/chat/sessions/:id/events?after=<seq> — stored transcript events (history and resume), as before T-376, at most HISTORY_MAX_EVENTS
+  // (T-2589): a reader further behind gets the newest of them, and pages back with `before` for the older ones.
   // GET …/events?before=<seq>&limit=<n> — a page counted back from the newest (T-376, eventPage.ts): oldest first, `more`, tool_result previews.
   chat.get('/:id/events', (c) => {
     requireCan(actorOf(c), 'view', sessionRef(c.req.param('id')));

@@ -146,7 +146,11 @@ import {
   ChatStore,
   claudeSessionOf,
   EVENT_TEXT_MAX,
+  HISTORY_MAX_EVENTS,
   sessionCwd,
+  TRANSFER_KINDS,
+  TRANSFER_TAIL_CHARS,
+  TRANSFER_TAIL_EVENTS,
   type ChatSessionPatch,
   type ChatSessionRow,
   type InputState,
@@ -1085,6 +1089,8 @@ export class ChatController {
   noteWaitMs = NOTE_WAIT_MS;
   ackWaitMs = ACK_WAIT_MS;
   turnWaitMs = TURN_WAIT_MS;
+  /** T-2589: what a Move reads of the transcript at most (the newest rows of the kinds a transfer uses, and their characters); tests set less. */
+  moveTail = { events: TRANSFER_TAIL_EVENTS, chars: TRANSFER_TAIL_CHARS };
   /** T-294: at most one report line to a lead in this long (it lists every worker with news; the latest state wins), and how long a report waits after the change. */
   crewReportMs = 300_000;
   /** T-546: reads the digest window (`chat.crew.reportMin`); unset, `crewReportMs`. */
@@ -1643,7 +1649,7 @@ export class ChatController {
     const id = this.#chat.resolveId(rawId);
     const session = this.#chat.get(id);
     if (!session) return null;
-    const events = this.#chat.history(id, Math.max(0, session.lastSeq - 400));
+    const events = this.#chat.history(id, Math.max(0, session.lastSeq - 400), 400);
     return events.findLast((e) => e.kind === 'assistant' && !e.agentLabel && e.text)?.text ?? null;
   }
 
@@ -1652,8 +1658,14 @@ export class ChatController {
     return this.#chat.openRequests(this.#chat.resolveId(id));
   }
 
-  history(id: string, after = 0) {
-    return this.#chat.history(this.#chat.resolveId(id), after);
+  /** The events after `after`, oldest first, at most `limit` and never more than HISTORY_MAX_EVENTS: past it the newest (T-2589). */
+  history(id: string, after = 0, limit?: number) {
+    return this.#chat.history(this.#chat.resolveId(id), after, limit);
+  }
+
+  /** T-2589: the newest events of some kinds after `after`, bounded in rows and characters; `cut` when older ones were left unread. */
+  historyTail(id: string, opts: { kinds: readonly string[]; after?: number; maxEvents: number; maxChars?: number }) {
+    return this.#chat.historyTail(this.#chat.resolveId(id), opts);
   }
 
   /** A page of the transcript counted back from `before` (the newest when null), oldest first, tool_result bodies cut (T-376, `eventPage.ts`). */
@@ -2662,9 +2674,18 @@ export class ChatController {
         path,
       };
       const facts = this.#moveFacts(sessionId, source);
-      const stored = this.#chat.history(sessionId); // once: the opening's copy and the file's copy come from the same read
-      const convo = transferConversation(stored, conversationBudget(meta, EVENT_TEXT_MAX, document));
-      const fileConvo = transferFileConversation(stored);
+      // Once: the opening's copy and the file's copy come from the same read. T-2589: only the newest rows of the kinds a transfer uses,
+      // bounded (the file keeps about 1 MB of the newest messages anyway); a chat of 200k events read whole took the portal past its heap.
+      const tail = this.#chat.historyTail(sessionId, {
+        kinds: TRANSFER_KINDS,
+        maxEvents: this.moveTail.events,
+        maxChars: this.moveTail.chars,
+        withoutToolInput: true,
+      });
+      const convo = transferConversation(tail.events, conversationBudget(meta, EVENT_TEXT_MAX, document));
+      const fileConvo = transferFileConversation(tail.events);
+      // Older messages left unread are left out: the file and the opening say so.
+      if (tail.cut) convo.truncated = fileConvo.truncated = true;
       await this.#shellWrite(workspaceId, `${HOME}/.claudepilot/transfer`, path, transferFile(meta, fileConvo, document, facts));
       const sourceClaudeId = source.claudeId || this.#chat.ensureDefault(workspaceId).id;
       this.#chat.saveHandoff({ id: handoffId, workspaceId, sourceSessionId: sessionId, sourceClaudeId, destClaudeId: dest.id, path });
@@ -2738,7 +2759,7 @@ export class ChatController {
       this.#step(sessionId, 'starting');
       const opening = randomUUID();
       await this.#send(sessionId, opening, transferOpening(meta, convo, document, fileConvo), { transfer });
-      const asked = this.#chat.history(sessionId).findLast((e) => e.kind === 'user' && e.uuid === opening);
+      const asked = this.#chat.userEvent(sessionId, opening); // T-2589: one row, never the transcript
       // The new Claude acknowledges: a chat that can't answer on the destination isn't moved.
       const ack = await this.#awaitTurn(sessionId, asked?.seq ?? 0, this.ackWaitMs, 'ack');
       if (ack.problem) throw new AppError('SERVICE_UNAVAILABLE', `${dest.name} didn’t take the context: ${ack.problem}.`, { expose: true });
@@ -2812,7 +2833,7 @@ export class ChatController {
       if (!row || row.state === 'ended') return { problem: 'the session has ended' };
       const uuid = randomUUID();
       await this.#send(sessionId, uuid, HANDOFF_REQUEST, { actor: 'portal:handoff' });
-      const asked = this.#chat.history(sessionId).findLast((e) => e.kind === 'user' && e.uuid === uuid);
+      const asked = this.#chat.userEvent(sessionId, uuid); // T-2589: one row, never the transcript
       if (!asked) return { problem: 'the request was not recorded' };
       const r = await this.#awaitTurn(sessionId, asked.seq, this.noteWaitMs, 'handoff');
       if (r.problem) return { problem: r.problem };
@@ -2831,19 +2852,28 @@ export class ChatController {
   async #awaitTurn(sessionId: string, after: number, waitMs: number, what: 'handoff' | 'ack'): Promise<{ text: string; problem?: string }> {
     const deadline = Date.now() + waitMs;
     const denied = new Set<string>();
+    // T-2589: read forward from `after` a page at a time, keeping only what the answer needs (the main agent's text before the turn's
+    // end), never the whole transcript after it. As before: an error anywhere after `after` wins, else the first result ends the turn.
+    let cursor = after;
+    let failure: ChatEvent | undefined;
+    let ended = false;
+    const said: string[] = [];
     for (;;) {
-      const events = this.#chat.history(sessionId, after);
-      const failure = events.find((e) => e.kind === 'error');
-      if (failure) return { text: '', problem: (failure.text ?? 'an error').replace(/\s+/g, ' ').slice(0, 160) };
-      const end = events.find((e) => e.kind === 'result');
-      if (end) {
-        const text = events
-          .filter((e) => e.seq < end.seq && e.kind === 'assistant' && !e.agentLabel)
-          .map((e) => e.text?.trim() ?? '')
-          .filter(Boolean)
-          .join('\n\n');
-        return { text };
+      for (;;) {
+        const page = this.#chat.historyFrom(sessionId, cursor, HISTORY_MAX_EVENTS);
+        for (const e of page) {
+          if (e.kind === 'error') failure ??= e;
+          else if (e.kind === 'result') ended = true;
+          else if (!ended && e.kind === 'assistant' && !e.agentLabel) {
+            const t = e.text?.trim();
+            if (t) said.push(t);
+          }
+        }
+        if (page.length) cursor = page[page.length - 1]!.seq;
+        if (page.length < HISTORY_MAX_EVENTS) break;
       }
+      if (failure) return { text: '', problem: (failure.text ?? 'an error').replace(/\s+/g, ' ').slice(0, 160) };
+      if (ended) return { text: said.join('\n\n') };
       const now = this.#chat.row(sessionId);
       if (!now || now.state === 'ended') return { text: '', problem: 'the session ended first' };
       if (now.process !== 'live' && now.state === 'interrupted') return { text: '', problem: now.ended_reason ?? 'Claude Code stopped' };
@@ -6984,7 +7014,7 @@ export class ChatController {
           model: row.model,
         };
       },
-      events: (id, limit) => this.#chat.history(id, Math.max(0, (this.#chat.row(id)?.last_seq ?? 0) - limit)),
+      events: (id, limit) => this.#chat.history(id, Math.max(0, (this.#chat.row(id)?.last_seq ?? 0) - limit), limit),
       exec: (workspaceId, command) => {
         const [target, name] = this.#split(workspaceId);
         return this.#workspaces.exec(target, name, command);

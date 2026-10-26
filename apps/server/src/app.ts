@@ -514,7 +514,7 @@ export function createApp(
       // Review M1: bounded; a delegate far behind gets the newest DELEGATED_EVENTS_MAX, never the whole transcript.
       const last = chatController.get(d.id)?.lastSeq ?? 0;
       const from = Math.max(0, Number(after) || 0, last - DELEGATED_EVENTS_MAX);
-      return c.json(success(delegateView(chatController.history(d.id, from).slice(-DELEGATED_EVENTS_MAX))));
+      return c.json(success(delegateView(chatController.history(d.id, from, DELEGATED_EVENTS_MAX))));
     }
     const before = c.req.query('before');
     const limit = Math.min(DELEGATED_EVENTS_MAX, Math.max(1, Number(c.req.query('limit') ?? 80) || 80));

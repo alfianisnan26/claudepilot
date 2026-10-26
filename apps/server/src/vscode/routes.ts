@@ -72,7 +72,7 @@ export interface VscodeDeps {
     get(id: string): ChatSession | null;
     resolve(id: string): string;
     openRequests(id: string): ChatRequest[];
-    history(id: string, after?: number): ChatEvent[];
+    history(id: string, after?: number, limit?: number): ChatEvent[];
     historyPage(id: string, before: number | null, limit: number): { events: ChatEvent[] };
     send(id: string, uuid: string, text: string, opts?: { actor?: string; actorLabel?: string }): Promise<void>;
     respond(id: string, requestId: string, decision: 'deny', opts?: { note?: string; actor?: string }): Promise<void>;
@@ -482,7 +482,7 @@ export function createVscodeBearerRoutes(deps: VscodeDeps): Hono<Vars> {
     if (afterRaw !== undefined && afterRaw !== '') {
       // Bounded: a view far behind gets the newest VSCODE_EVENTS_MAX, never the whole transcript.
       const after = Math.max(0, Math.trunc(Number(afterRaw)) || 0, s.lastSeq - VSCODE_EVENTS_MAX);
-      events = deps.chat.history(s.id, after).slice(-VSCODE_EVENTS_MAX);
+      events = deps.chat.history(s.id, after, VSCODE_EVENTS_MAX); // T-2589: the cap is in the read, not a slice of a whole one
     } else events = deps.chat.historyPage(s.id, null, 100).events;
     return c.json(success<VscodeEvents>({ events: eventsOf(events), lastSeq: s.lastSeq, state: s.state, title: s.title }));
   });

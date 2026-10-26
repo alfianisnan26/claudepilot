@@ -300,6 +300,20 @@ const PROCESS_STATES = new Set<string>(['live', 'asleep', 'gone']);
 /** Whole, redacted event text over this many characters is truncated before it reaches the row. */
 export const EVENT_TEXT_MAX = 16_000;
 
+/**
+ * T-2589: the most events one {@link ChatStore.history} read returns. One chat held 204k events (208 MB of payload), and a read of its
+ * whole transcript (every row parsed at once, for a Move, an MCP session_get, a tab far behind) took the portal past its heap (exit 139).
+ * Past the cap a read returns the NEWEST events; the older ones stay reachable through the paged read (`historyBefore`).
+ */
+export const HISTORY_MAX_EVENTS = 2_000;
+/** T-2589: what a Move's tail read takes at most: rows of the kinds a transfer uses, and characters of their payloads. */
+export const TRANSFER_TAIL_EVENTS = 5_000;
+export const TRANSFER_TAIL_CHARS = 8_000_000;
+/** The kinds a transfer reads (`transfer.ts`): messages, the tools a turn used, and the turn ends (the handoff exchange is skipped by them). */
+export const TRANSFER_KINDS = ['user', 'assistant', 'tool_use', 'result'] as const;
+/** T-2589: a tail read walks back this many rows at a time, so it stops near its bounds instead of reading past them. */
+const TAIL_PAGE = 500;
+
 const TASK_STATUSES = new Set<string>(['running', 'completed', 'failed', 'killed']);
 
 /** T-2368: a task {@link taskOut} reads as running (`running`, NULL, or a status this portal does not know), in SQL. */
@@ -1065,13 +1079,87 @@ export class ChatStore {
     });
   }
 
-  history(sessionId: string, after = 0): ChatEvent[] {
+  /**
+   * The events after `after`, oldest first, at most `limit` (never more than {@link HISTORY_MAX_EVENTS}, T-2589). When more lie after
+   * `after`, the NEWEST of them: a reader far behind gets the latest and pages back for the rest (`historyBefore`). Never the whole
+   * transcript of a long chat at once.
+   */
+  history(sessionId: string, after = 0, limit: number = HISTORY_MAX_EVENTS): ChatEvent[] {
+    const n = Math.min(HISTORY_MAX_EVENTS, Math.max(0, Math.trunc(limit) || 0));
+    if (!n) return [];
     const rows = this.#db()
       .prepare(
-        'SELECT seq, at, kind, uuid, parent_tool_use_id, request_id, payload FROM chat_events WHERE session_id = ? AND seq > ? ORDER BY seq',
+        'SELECT seq, at, kind, uuid, parent_tool_use_id, request_id, payload FROM chat_events WHERE session_id = ? AND seq > ? ORDER BY seq DESC LIMIT ?',
       )
-      .all(sessionId, after) as EventRow[];
+      .all(sessionId, after, n) as EventRow[];
+    return rows.reverse().map((r) => this.#toEvent(r));
+  }
+
+  /**
+   * T-2589: the OLDEST events after `after`, at most `limit` (capped as {@link history}), oldest first: a reader that walks forward from a
+   * known seq a page at a time (a turn awaited after the message that started it) and must not skip any.
+   */
+  historyFrom(sessionId: string, after: number, limit: number = HISTORY_MAX_EVENTS): ChatEvent[] {
+    const n = Math.min(HISTORY_MAX_EVENTS, Math.max(0, Math.trunc(limit) || 0));
+    if (!n) return [];
+    const rows = this.#db()
+      .prepare(
+        'SELECT seq, at, kind, uuid, parent_tool_use_id, request_id, payload FROM chat_events WHERE session_id = ? AND seq > ? ORDER BY seq LIMIT ?',
+      )
+      .all(sessionId, after, n) as EventRow[];
     return rows.map((r) => this.#toEvent(r));
+  }
+
+  /** T-2589: the newest stored `user` event with this uuid (a message the portal just sent), or null: one row, never the transcript. */
+  userEvent(sessionId: string, uuid: string): ChatEvent | null {
+    const row = this.#db()
+      .prepare(
+        "SELECT seq, at, kind, uuid, parent_tool_use_id, request_id, payload FROM chat_events WHERE session_id = ? AND kind = 'user' AND uuid = ? ORDER BY seq DESC LIMIT 1",
+      )
+      .get(sessionId, uuid) as EventRow | undefined;
+    return row ? this.#toEvent(row) : null;
+  }
+
+  /**
+   * T-2589: the newest events of some kinds after `after`, oldest first, read back from the newest a page at a time and stopped at
+   * `maxEvents` rows or about `maxChars` characters of payload, whichever comes first. A `tool_use` row comes without its input when
+   * `withoutToolInput` (a Move names a call by its summary, never its input). `cut` says older events of those kinds were left unread.
+   */
+  historyTail(
+    sessionId: string,
+    opts: { kinds: readonly string[]; after?: number; maxEvents: number; maxChars?: number; withoutToolInput?: boolean },
+  ): { events: ChatEvent[]; cut: boolean } {
+    const db = this.#db();
+    const after = opts.after ?? 0;
+    const maxEvents = Math.max(0, Math.trunc(opts.maxEvents) || 0);
+    const maxChars = opts.maxChars ?? Number.MAX_SAFE_INTEGER;
+    if (!opts.kinds.length) return { events: [], cut: false };
+    const kinds = opts.kinds.map(() => '?').join(', ');
+    const payload = opts.withoutToolInput
+      ? "CASE WHEN kind = 'tool_use' AND json_valid(payload) THEN json_remove(payload, '$.toolInput') ELSE payload END AS payload"
+      : 'payload';
+    const page = db.prepare(
+      `SELECT seq, at, kind, uuid, parent_tool_use_id, request_id, ${payload} FROM chat_events
+         WHERE session_id = ? AND seq > ? AND seq < ? AND kind IN (${kinds}) ORDER BY seq DESC LIMIT ?`,
+    );
+    const rows: EventRow[] = [];
+    let before = Number.MAX_SAFE_INTEGER;
+    let chars = 0;
+    for (;;) {
+      const want = Math.min(TAIL_PAGE, maxEvents - rows.length);
+      if (want <= 0 || chars >= maxChars) break;
+      const got = page.all(sessionId, after, before, ...opts.kinds, want) as EventRow[];
+      for (const r of got) {
+        rows.push(r);
+        chars += r.payload.length;
+      }
+      if (got.length) before = got[got.length - 1]!.seq;
+      if (got.length < want) return { events: rows.reverse().map((r) => this.#toEvent(r)), cut: false };
+    }
+    const older = db
+      .prepare(`SELECT 1 FROM chat_events WHERE session_id = ? AND seq > ? AND seq < ? AND kind IN (${kinds}) LIMIT 1`)
+      .get(sessionId, after, before, ...opts.kinds);
+    return { events: rows.reverse().map((r) => this.#toEvent(r)), cut: older !== undefined };
   }
 
   /**

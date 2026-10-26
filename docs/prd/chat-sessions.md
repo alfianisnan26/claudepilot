@@ -653,7 +653,7 @@ against `PORTAL_APP_URL`, the session cookie), with pings every 25 s and 1 MB fr
 older pages, uploads, downloads and blobs under the existing guards.
 
 **History pages (T-376, server slice, as built 2026-10-15).** `GET /api/chat/sessions/:id/events` answers in two forms. With `?after=<seq>`
-or no parameter it answers as it always did: every stored event after that seq (all of them without one) as a `ChatEvent[]`, whole; the
+or no parameter it answers as it always did: the stored events after that seq as a `ChatEvent[]`, whole (bounded since T-2589, below); the
 web of this release still calls it this way. With `?before=<seq>` or `?limit=<n>` (either is enough) it answers a `ChatEventPage`: the
 newest events before `before` (before the newest event when it is absent or empty), read newest first on the `seq` key (never an offset,
 D-58) and returned oldest first, at most `limit` (200 when absent, 1,000 at most) and stopped earlier once the events would pass 512 KiB
@@ -664,6 +664,15 @@ does not have). `after` together with `before` or `limit`, or a limit or before 
 are declared `view` on the session: another user gets the same 404 as a session that does not exist. Every JSON answer under `/api/*`
 is gzip-compressed when the request accepts gzip and is at least 1 KiB (hono/compress, scoped to `application/json`); an event stream,
 a WebSocket upgrade, a blob, a download or a range answer never is. Not yet built: the opaque cursor (T-382).
+
+**Bounded transcript reads (T-2589, 2026-10-26).** One chat held 204k events (208 MB of payload); reading it whole took the portal past
+its heap (exit 139). No server read takes a whole transcript any more. The `after` form above, the socket's subscribe backlog, the
+delegated and VS Code event reads and the Portal MCP `session_get` read at most 2,000 events (`HISTORY_MAX_EVENTS`); past it they get the
+NEWEST 2,000, oldest first, and the older ones stay reachable with `before`. A Move reads only the newest rows of the kinds a transfer
+uses (messages, tool calls without their input, turn ends; at most 5,000 rows and about 8 M characters); when older ones were left
+unread, the context file and the opening say older messages were left out. `session_get` lists pending requests from the request table
+(the approvals dock's own source), so a request older than the newest 2,000 events is still listed. A turn the portal waits on (the
+handoff, the new Claude's acknowledgement) is read forward a page at a time.
 
 **History pages in the web (T-376, web slice, as built 2026-10-15).** Opening a session reads the newest page only (`?limit=200`; tried at 80 in T-376 S4 and reverted: a shorter page does not fill the screen, so older pages load by themselves during the open and add long tasks) and
 shows it at the bottom, rendered in a React transition (the page's rows commit in slices the browser can interrupt; older pages too), with the
