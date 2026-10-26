@@ -129,7 +129,9 @@ test('T-2360 re-review B: a database that ran 856 before the index existed gets 
     const db = first.db!;
     // As the earlier branch build left it: 856 applied without the index, 882 unknown.
     db.exec('DROP INDEX tickets_updated_at');
-    const applied = JSON.parse((db.prepare(`SELECT value FROM portal_meta WHERE key = 'migrations_applied'`).get() as { value: string }).value) as number[];
+    const applied = JSON.parse(
+      (db.prepare(`SELECT value FROM portal_meta WHERE key = 'migrations_applied'`).get() as { value: string }).value,
+    ) as number[];
     db.prepare(`UPDATE portal_meta SET value = ? WHERE key = 'migrations_applied'`).run(JSON.stringify(applied.filter((v) => v !== 882)));
     first.close();
     const again = await Store.open({ dataDir: dir, secretKey: null });
