@@ -30,11 +30,11 @@ const TOOLS = ['metrics_overview', 'metrics_flow_times', 'metrics_trend', 'metri
 afterEach(() => clearResolvers());
 
 /** The golden fixture of metricsRoutes.test.ts (T-1's full journey, won't-do, blocked, in review, stalled), plus a lead L1 and its worker W1. */
-async function seeded() {
+async function seeded(metricsMemoMs = 0) {
   const dataDir = mkdtempSync(join(tmpdir(), 'metrics-mcp-'));
   const store = await Store.open({ dataDir, secretKey: parseSecretKey(generateSecretKey()) });
   const db = store.db!;
-  const lab = new Lab({ store, now: () => NOW, settings: { get: () => undefined } });
+  const lab = new Lab({ store, now: () => NOW, settings: { get: () => undefined }, metricsMemoMs });
   const ticket = (
     n: number,
     status: string,
@@ -103,8 +103,8 @@ const data = (m: Call) => {
 };
 const code = (m: Call) => m.result?.structuredContent?.error?.code ?? (m.error ? 'RPC_ERROR' : null);
 
-async function harness() {
-  const h = await seeded();
+async function harness(metricsMemoMs = 0) {
+  const h = await seeded(metricsMemoMs);
   const registry = new ToolRegistry();
   const mcp = await portalMcpHarness({ registry });
   registerMetricsTools(h.lab, registry);
@@ -154,10 +154,11 @@ test('policy: an admin token and a lead read; a worker and an unknown session ge
 test('policy (T-2360 review HIGH): a lead whose owner may not view usage gets the same NOT_FOUND as an unknown session', async () => {
   const { h, mcp, done } = await harness();
   try {
-    // L3 is a top-level chat of another person (u_member): in the single-owner seam only the founding user holds `view` on `usage`.
+    // L3 is a manager chat of another person (u_member): the one kind of chat that records a real owner (controller.ts passes the
+    // manager's ownerId; any other chat records the founding user). In the single-owner seam only the founding user holds `view` on `usage`.
     h.db
       .prepare(
-        `INSERT INTO chat_sessions (id, workspace_id, title, state, state_since, created_at, last_activity_at, claude_id, parent_id, continued_from, max_workers, subagents, owner_id) VALUES ('L3', 'docker/api', 't', 'ended', ?, ?, ?, 'c1', NULL, NULL, 2, 0, 'u_member')`,
+        `INSERT INTO chat_sessions (id, workspace_id, title, state, state_since, created_at, last_activity_at, claude_id, parent_id, continued_from, max_workers, subagents, kind, owner_id) VALUES ('L3', 'docker/api', 't', 'ended', ?, ?, ?, 'c1', NULL, NULL, 2, 0, 'manager', 'u_member')`,
       )
       .run(iso(at(20)), iso(at(20)), iso(at(1)));
     const member = (await mcp.agentToken('docker/api', 'L3')).secret;
@@ -217,22 +218,51 @@ test('policy (T-2360 review HIGH): an admin token and a manager token without us
   }
 });
 
+/** A second crew: lead L2 with worker W2, holding T-3 (assigned); and a whole-program snapshot a window ago (an admin's "previous"). */
+function secondCrew(db: Awaited<ReturnType<typeof seeded>>['db']) {
+  for (const [id, parent] of [
+    ['L2', null],
+    ['W2', 'L2'],
+  ] as const)
+    db.prepare(
+      `INSERT INTO chat_sessions (id, workspace_id, title, state, state_since, created_at, last_activity_at, claude_id, parent_id, continued_from, max_workers, subagents) VALUES (?, 'docker/api', 't', 'ended', ?, ?, ?, 'c1', ?, NULL, 2, 0)`,
+    ).run(id, iso(at(20)), iso(at(20)), iso(at(1)), parent);
+  db.prepare(`UPDATE tickets SET assignee_kind = 'session', assignee_ref = 'W2' WHERE number = 3`).run();
+  writeSnapshots(db, at(24), [{ program: 'all', values: { efficiency: 40, effectiveness: 55 } as never }]);
+}
+
+test('policy (T-2360 re-review C): with the memo on, a lead, then an admin, then the lead again each get their own scope of the cached read', async () => {
+  const { h, mcp, done } = await harness(60_000);
+  try {
+    secondCrew(h.db);
+    const admin = mcp.token('read').secret;
+    const l1 = (await mcp.agentToken('docker/api', 'L1')).secret;
+    const l2 = (await mcp.agentToken('docker/api', 'L2')).secret;
+    const ids = async (t: string) => data(await mcp.call(t, 'metrics_tickets', { window: '7d', limit: 50 })).rows.map((r: any) => r.ticket);
+    const all = await ids(admin);
+    assert.ok(all.length >= 4 && all.includes('T-1') && all.includes('T-3'));
+    // The memo is on: a ticket closed after the first read is not seen within the TTL (the clock stands still here).
+    h.ticket(10, 'done', { createdAgo: 3, closedAgo: 1, tags: ['claudepilot'] });
+    assert.deepEqual(await ids(admin), all, 'served from the memo');
+    assert.deepEqual(await ids(l1), ['T-1'], 'the lead after the admin: its crew only');
+    assert.deepEqual(await ids(admin), all, 'the admin after the lead: the whole read, not the lead’s cut');
+    assert.deepEqual(await ids(l2), ['T-3']);
+    assert.deepEqual(await ids(l1), ['T-1']);
+    const o1 = data(await mcp.call(l1, 'metrics_overview', { full: true }));
+    assert.equal(o1.effectiveness.previous, null);
+    assert.ok(!o1.crew || o1.crew.programs.every((p: string) => p === 'L1'));
+    const oa = data(await mcp.call(admin, 'metrics_overview', { full: true }));
+    assert.equal(oa.effectiveness.previous, 55, 'the admin after the lead: the whole-program score is back');
+    assert.deepEqual(data(await mcp.call(l1, 'metrics_overview', { full: true })), o1, 'the lead again: the same as before');
+  } finally {
+    done();
+  }
+});
+
 test('policy (T-2360 review HIGH): a lead reads only its own crew’s tickets, no paces, no score before, no trend', async () => {
   const { h, mcp, done } = await harness();
   try {
-    // A second crew: lead L2 with worker W2, holding T-3 (assigned).
-    for (const [id, parent] of [
-      ['L2', null],
-      ['W2', 'L2'],
-    ] as const)
-      h.db
-        .prepare(
-          `INSERT INTO chat_sessions (id, workspace_id, title, state, state_since, created_at, last_activity_at, claude_id, parent_id, continued_from, max_workers, subagents) VALUES (?, 'docker/api', 't', 'ended', ?, ?, ?, 'c1', ?, NULL, 2, 0)`,
-        )
-        .run(id, iso(at(20)), iso(at(20)), iso(at(1)), parent);
-    h.db.prepare(`UPDATE tickets SET assignee_kind = 'session', assignee_ref = 'W2' WHERE number = 3`).run();
-    // A whole-program snapshot a window ago: an admin's "previous", never a crew's.
-    writeSnapshots(h.db, at(24), [{ program: 'all', values: { efficiency: 40, effectiveness: 55 } as never }]);
+    secondCrew(h.db);
     const admin = mcp.token('read').secret;
     const l1 = (await mcp.agentToken('docker/api', 'L1')).secret;
     const l2 = (await mcp.agentToken('docker/api', 'L2')).secret;

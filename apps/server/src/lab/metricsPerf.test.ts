@@ -122,6 +122,27 @@ test('crew facts ticket read: a union of index reads (tickets_queue, tickets_upd
   }
 });
 
+test('T-2360 re-review B: a database that ran 856 before the index existed gets tickets_updated_at from its own migration', async () => {
+  const dir = tempDirectory('cp-metrics-mig-');
+  try {
+    const first = await Store.open({ dataDir: dir, secretKey: null });
+    const db = first.db!;
+    // As the earlier branch build left it: 856 applied without the index, 882 unknown.
+    db.exec('DROP INDEX tickets_updated_at');
+    const applied = JSON.parse(
+      (db.prepare(`SELECT value FROM portal_meta WHERE key = 'migrations_applied'`).get() as { value: string }).value,
+    ) as number[];
+    db.prepare(`UPDATE portal_meta SET value = ? WHERE key = 'migrations_applied'`).run(JSON.stringify(applied.filter((v) => v !== 882)));
+    first.close();
+    const again = await Store.open({ dataDir: dir, secretKey: null });
+    const idx = again.db!.prepare(`SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'tickets_updated_at'`).get();
+    again.close();
+    assert.ok(idx, 'the index is created by 882 on a database that already ran 856');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 /** Chat data for the crew facts: 8 leads with 4 workers each (worker `w` of the seed is one), 300 events and 60 usage rows per session. */
 function fillChat(db: DatabaseSync) {
   const s = db.prepare(
