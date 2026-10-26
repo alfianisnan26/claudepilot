@@ -12,11 +12,15 @@ import { portalTools, z, type ToolRegistry } from '../portalmcp/registry.js';
 import type { AutoTransferEngine } from './engine.js';
 import type { AutoStore } from './store.js';
 
-export function registerAutoTransferTools(d: { engine: Pick<AutoTransferEngine, 'state'>; store: AutoStore; owner: PlatformOwner }, registry: ToolRegistry = portalTools): void {
+export function registerAutoTransferTools(
+  d: { engine: Pick<AutoTransferEngine, 'state' | 'claudeExcluded'>; store: AutoStore; owner: PlatformOwner },
+  registry: ToolRegistry = portalTools,
+): void {
   registry.register({
     name: 'autotransfer_status',
     title: 'Auto move status',
-    description: 'For one chat: its auto move mode (off, ask, auto) and the effective one, whether it applies (not on an account pool, a plan reading), an open move suggestion, a pause, moves today, and its recent auto move events. Read only.',
+    description:
+      'For one chat: its auto move mode (off, ask, auto) and the effective one, whether it applies (not on an account pool, a plan reading), whether the Claude it runs on is left out of auto move (claude_excluded: never a destination, never moved off by itself), an open move suggestion, a pause, moves today, and its recent auto move events. Read only.',
     scope: 'read',
     hints: { readOnly: true },
     input: z.object({ session_id: z.string().min(1).max(100).regex(/^[A-Za-z0-9_-]+$/) }),
@@ -31,6 +35,7 @@ export function registerAutoTransferTools(d: { engine: Pick<AutoTransferEngine, 
         effective_mode: state.effectiveMode,
         applicable: state.applicable,
         why: state.why,
+        claude_excluded: d.engine.claudeExcluded(args.session_id),
         paused_until: state.pausedUntil,
         moves_today: state.movesToday,
         suggestion: state.pending ? { id: state.pending.id, reason: state.pending.reason, from: state.pending.from.name, to: state.pending.to.name, left_pct: state.pending.facts.leftPct.value } : null,
