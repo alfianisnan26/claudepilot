@@ -3793,8 +3793,7 @@ export const MIGRATIONS: Migration[] = [
     up(db) {
       // T-2360 (docs/prd/claude-usage.md §28.15): every 10 minutes the lab writes one row per metrics program with the values its trend
       // reads (scores, counts, stage medians; numbers only, never ticket text). Kept 30 days (lab/metricsSnapshots.ts). Trend reads go by
-      // (program, at_ms); retention by at_ms. `tickets_closed_at` bounds the flow loader to the window and the one before it;
-      // with `tickets_updated_at` the crew facts' ticket read (scorecardData.ts CREW_TICKETS_SQL) is a union of index reads, not a scan.
+      // (program, at_ms); retention by at_ms. `tickets_closed_at` bounds the flow loader to the window and the one before it.
       // Additive only (D-92): new objects with IF NOT EXISTS. Next free number of the lab block (850-855 used).
       db.exec(`
         CREATE TABLE IF NOT EXISTS lab_metric_snapshots (
@@ -3806,7 +3805,6 @@ export const MIGRATIONS: Migration[] = [
         CREATE INDEX IF NOT EXISTS lab_metric_snapshots_program_at ON lab_metric_snapshots (program, at_ms);
         CREATE INDEX IF NOT EXISTS lab_metric_snapshots_at ON lab_metric_snapshots (at_ms);
         CREATE INDEX IF NOT EXISTS tickets_closed_at ON tickets (closed_at);
-        CREATE INDEX IF NOT EXISTS tickets_updated_at ON tickets (updated_at);
       `);
     },
   },
@@ -3826,6 +3824,16 @@ export const MIGRATIONS: Migration[] = [
       // T-2398: a Claude left out of auto move is never chosen as a destination and its own chats are never moved off it by themselves; it
       // stays signed in and usable by hand. Additive (a column with a default); the next free number after 880.
       db.exec(`ALTER TABLE autotransfer_claudes ADD COLUMN excluded INTEGER NOT NULL DEFAULT 0`);
+    },
+  },
+  {
+    version: 882,
+    name: 'tickets by last change, for the crew facts read (T-2360)',
+    up(db) {
+      // T-2360 (review): with `tickets_updated_at` the crew facts' ticket read (scorecardData.ts CREW_TICKETS_SQL) is a union of index reads,
+      // not a scan of every ticket. Its own migration, not 856: a database that already ran 856 gets it too. Additive (D-92); the next free
+      // number after 881.
+      db.exec(`CREATE INDEX IF NOT EXISTS tickets_updated_at ON tickets (updated_at)`);
     },
   },
 ];
