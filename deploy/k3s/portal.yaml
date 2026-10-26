@@ -118,6 +118,10 @@ spec:
             # App hosts are <port>[-<app>]-<workspace>.pilot.ai.isnan.me (owner, 2026-10-18), one label under the portal's own name.
             - name: PORT_PROXY_HOST_SUFFIX
               value: pilot.ai.isnan.me
+            # T-2589: V8's default old space (~970 MB here) died of heap OOM (exit 139) while the 2Gi limit had room. 1.5 GiB of heap
+            # leaves ~0.5 GiB of the limit for buffers, native memory and child processes.
+            - name: NODE_OPTIONS
+              value: --max-old-space-size=1536
           # T-365: a 1 s timeout dropped a slow but alive portal from the Service and the liveness kill restarted it while the node's
           # disk was busy, which made the stall longer. Out of the Service after 3 slow checks (30 s), restarted only after 5 minutes.
           readinessProbe:
