@@ -3914,6 +3914,7 @@ export class ChatController {
    * starts in) without the "turned off" note. A stop the workspace refused leaves everything as it was, and says so.
    */
   async #stopForRestart(sessionId: string, why: string, quiet = false): Promise<void> {
+    console.warn(`[diag] stopForRestart: ${why} | ${(new Error().stack ?? '').split('\n').slice(2, 5).map((l) => l.trim()).join(' < ')}`);
     const row = this.#chat.row(sessionId);
     if (!row || row.state === 'ended' || row.process !== 'live') {
       if (quiet && row?.mode === 'bypassPermissions') this.#chat.patchSession(sessionId, { mode: START_MODE }); // it slept: off already in fact
@@ -4011,7 +4012,8 @@ export class ChatController {
       await this.#leaving.get(sessionId);
       try {
         await this.#setBypass(sessionId);
-      } catch {
+      } catch (diag) {
+        console.warn(`[diag] keepBypass setBypass failed: ${this.#message(diag)}`);
         // Not launched with the flag, or the switch failed: the restart approach, once.
         if (!this.#bypassAllowed()) return drop('policy', `Bypass not kept ${after}: the policy no longer allows it.`);
         try {
@@ -6843,7 +6845,8 @@ export class ChatController {
       const now = this.#chat.row(sessionId);
       if (now && now.state !== 'ended' && now.mode !== START_MODE) this.#chat.patchSession(sessionId, { mode: START_MODE });
       this.#emitSession(sessionId);
-    } catch {
+    } catch (diag) {
+      console.warn(`[diag] leaveBypass failed: ${this.#message(diag)}`);
       try {
         await this.#stopForRestart(sessionId, why);
       } catch {
