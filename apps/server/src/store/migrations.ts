@@ -3841,7 +3841,7 @@ export const MIGRATIONS: Migration[] = [
     name: 'approvals: a request a person allows or denies, and the portal runs (PILOT-1000, T-2867)',
     up(db) {
       // T-2867 (docs/prd/approvals.md): the T2 tier of PILOT-996. `payload` is the exact JSON the portal runs on Allow; nothing updates it
-      // (approvals/store.ts writes only status, decided_by, decided_at and result, once, from pending). No secret value is ever stored here
+      // (approvals/service.ts writes only status, decided_by, decided_at and result, once, from pending). No secret value is ever stored here
       // (a kind names a secret). No area block fits; the next free number after 882 (checked on integration and the open S1-S3 branches).
       // Additive only (D-92): new objects with IF NOT EXISTS.
       db.exec(`

@@ -754,13 +754,12 @@ test('auto: a person in the app turns it on for their own session; the portal ex
   }
 });
 
-test('auto: never from MCP, a trigger or another module (no person), never for a session a ticket, MCP or another session started; nothing is written', async () => {
+test('auto, with “Auto for agents” off: never for a session a ticket, a trigger or MCP started, nor a worker of a parent not in Auto or Bypass; nothing is written', async () => {
   const s = await liveSession();
   try {
     const written = () => controlsOf(s).filter((c) => c.request.subtype === 'set_permission_mode').length;
     const before = written();
-    assert.equal(await code(s.controller.control(s.id, 'mode', { mode: 'auto' })), 'FORBIDDEN', 'no actor: a trigger, Portal MCP');
-    assert.equal(await code(s.controller.control(s.id, 'mode', { mode: 'auto' }, { actor: 'portal-mcp:tok1' })), 'FORBIDDEN');
+    // PILOT-996 (D-103): who asks no longer decides (MCP may ask for a person's session); the session's origin and its parent do.
     const ticket = await s.controller.create({ workspaceId: 'docker/ws1' }, { actor: 'ticket:T-1' });
     const trigger = await s.controller.create({ workspaceId: 'docker/ws1' }, { actor: 'portal:trigger-abc' });
     const mcp = await s.controller.create({ workspaceId: 'docker/ws1' }, { actor: 'portal-mcp:tok1' });
@@ -771,7 +770,7 @@ test('auto: never from MCP, a trigger or another module (no person), never for a
     }
     assert.equal(written(), before, 'not one set_permission_mode');
     const why = s.controller.audit({ kind: 'mode.refused' }).map((a) => a.detail.why);
-    assert.deepEqual(why.sort(), ['actor', 'actor', 'origin', 'origin', 'origin', 'origin']);
+    assert.deepEqual(why.sort(), ['origin', 'origin', 'origin', 'parent']);
     // Edit stays available where it was (the old ceiling of a trigger's session).
     const edit = s.controller.control(trigger.id, 'mode', { mode: 'acceptEdits' });
     s.ws.tails.at(-1 - 2)!.push(ok((await s.take('set_permission_mode')).id, { mode: 'acceptEdits' }));

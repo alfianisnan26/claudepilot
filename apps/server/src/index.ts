@@ -90,7 +90,7 @@ import { Store } from './store/store.js';
 import { DockerRuntime } from './workspaces/docker.js';
 import { attachShell, cookie } from './workspaces/shell.js';
 import { ChatController } from './chat/controller.js';
-import { BYPASS_SETTING } from './chat/bypass.js';
+import { AUTONOMOUS_AUTO_SETTING, BYPASS_SETTING } from './chat/bypass.js';
 import { LEAD_RULES_SETTING } from './chat/leadRules.js';
 import { AUTO_TRUST_SETTING } from './chat/trust.js';
 import { AGENT_CHILDREN_SETTING, AGENT_DEPTH_SETTING, AGENT_MESSAGES_SETTING, AGENT_SPAWNS_SETTING } from './chat/agents.js';
@@ -277,6 +277,7 @@ poolService.reconciler = reconciler;
 settingsModule.reconciler = reconciler;
 // Bypass in chat (chat PRD FR20): the interim policy switch, and what is true of a workspace for the confirmation.
 chatController.bypassAllowed = () => settingsModule.settings.get<boolean>(BYPASS_SETTING);
+chatController.autonomousAuto = () => settingsModule.settings.get<boolean>(AUTONOMOUS_AUTO_SETTING); // PILOT-996, D-103
 // T-561: crew leads launch with the lead rules (a hook in their --settings) while the policy is on; it applies at each lead's next start.
 chatController.leadRulesOn = () => settingsModule.settings.get<boolean>(LEAD_RULES_SETTING);
 chatController.autoTrustRules = () => settingsModule.settings.get<boolean>(AUTO_TRUST_SETTING);
@@ -421,8 +422,8 @@ const workspaceMemory = new WorkspaceMemory({
 attention.register(memoryAttentionSource(workspaceMemory));
 chatController.memory = workspaceMemory;
 // Approvals (docs/prd/approvals.md, PILOT-1000): an agent asks, a person allows on a Needs you card, the portal runs it (Bypass through
-// the chat's own gated path) and tells the asking session.
-const approvals = createApprovals(store, { chat: chatController, changed: () => attention.changed() });
+// the chat's own gated path, a protected pool's secret through the pools service) and tells the asking session.
+const approvals = createApprovals(store, { chat: chatController, pools: poolService, changed: () => attention.changed() });
 attention.register(approvalAttentionSource(approvals));
 registerApprovalTools(approvals);
 const ATTENTION_TOPICS = new Set<LiveTopic>(['pools', 'tickets', 'ci']);

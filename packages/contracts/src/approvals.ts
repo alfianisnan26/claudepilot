@@ -3,8 +3,12 @@
 // tells the asking session what happened. A payload is never edited after it is made and never holds a secret value (a kind that needs
 // one names it). Deciding is never an MCP tool: an agent's token can ask, list and read its own requests, nothing else.
 
-/** What can be asked. `test.echo` exists for the tests and a dry run of the flow; `session.bypass` puts a bypass-capable session in Bypass. */
-export const APPROVAL_KINDS = ['test.echo', 'session.bypass'] as const;
+/**
+ * What can be asked. `test.echo` exists for the tests and a dry run of the flow; `session.bypass` puts a bypass-capable session in Bypass;
+ * `pool.secret_set` sets one secret in a secrets pool an agent may not write itself (a protected one): the payload names the pool and the
+ * secret, and the VALUE is typed by the person on Allow (write-only, never stored with the request).
+ */
+export const APPROVAL_KINDS = ['test.echo', 'session.bypass', 'pool.secret_set'] as const;
 export type ApprovalKind = (typeof APPROVAL_KINDS)[number];
 export const isApprovalKind = (v: unknown): v is ApprovalKind => typeof v === 'string' && (APPROVAL_KINDS as readonly string[]).includes(v);
 
@@ -12,7 +16,11 @@ export const isApprovalKind = (v: unknown): v is ApprovalKind => typeof v === 's
 export const APPROVAL_KIND_LABEL: Record<ApprovalKind, string> = {
   'test.echo': 'Test',
   'session.bypass': 'Bypass',
+  'pool.secret_set': 'Secret',
 };
+
+/** The kinds whose Allow takes a value the person types (write-only: sent once with Allow, never stored, shown or returned). */
+export const approvalNeedsValue = (kind: ApprovalKind): boolean => kind === 'pool.secret_set';
 
 export const APPROVAL_STATUSES = ['pending', 'allowed', 'denied', 'expired'] as const;
 export type ApprovalStatus = (typeof APPROVAL_STATUSES)[number];
@@ -61,8 +69,13 @@ export interface Approval {
   result: ApprovalResult | null;
 }
 
-/** `POST /api/approvals/:id/allow`. */
-export type AllowApprovalRequest = Record<string, never>;
+/**
+ * `POST /api/approvals/:id/allow`. `value`: only for a kind that needs one ({@link approvalNeedsValue}): the secret the person types. It goes
+ * to the kind's executor in memory and is never stored in the request, its result, an audit row or a message.
+ */
+export interface AllowApprovalRequest {
+  value?: string;
+}
 /** `POST /api/approvals/:id/deny`. */
 export interface DenyApprovalRequest {
   reason?: string;

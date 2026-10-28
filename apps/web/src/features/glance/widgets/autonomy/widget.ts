@@ -18,7 +18,7 @@ export const autonomyWidget: GlanceWidget = {
   icon: Repeat,
   about: 'The chats the portal keeps going (Keep going): how each stands, what it did last, and which are left down.',
   cardAbout:
-    'Chats with Keep going on. Every minute the portal tells an idle one to continue, wakes an interrupted one, answers its questions with the written defaults, and brings an ended one back (in place, or as a new chat). It never answers a tool approval and never turns Bypass on: those, and a chat left down, are reported to you.',
+    'Chats with Keep going on. Every minute the portal tells an idle one to continue, wakes an interrupted one, answers its questions with the written defaults, and brings an ended one back (in place, or as a new chat). It never answers a tool approval, and turns Bypass back on only for a chat that was in it within 24 hours: the rest, and a chat left down, are reported to you.',
   href: '/admin/sessions',
   defaultHidden: true,
   useCompact: useAutonomyCompact,

@@ -24,8 +24,11 @@ Deny stores the reason. Either way the agent gets a chat message (actor `portal:
 | --- | --- | --- |
 | `test.echo` | `{ text }` (≤ 200) | Stores `{ ok: true, output: { text } }`. For tests and trying the flow. |
 | `session.bypass` | `{ sessionId }` | Enters Bypass on that session through the same gated path as the Bypass dialog (`enterBypass`): policy, capable session, fresh server code. The person's click is the acknowledgement. Audited as `bypass.entered` with `via: 'approval'` and the `approvalId`. |
+| `pool.secret_set` | `{ pool (id), name, expose?, baseRevision }` | Sets one secret in a secrets pool, with the value the person types on Allow. Result `{ pool, name, revision, expose }`, never the value. |
 
-`session.bypass`: an agent may ask only for its own session. Before the request is claimed, the person must be able to operate the session and have a fresh server code; without one the call answers `REAUTH_REQUIRED` and the request stays pending (the card asks for the code, then allows). A session that is not capable gets a stored failure (`BYPASS_NOT_CAPABLE`), nothing changes on the session.
+`session.bypass`: an agent may ask only for its own session. Before the request is claimed, the person must be able to operate the session and have a fresh server code; without one the call answers `REAUTH_REQUIRED` and the request stays pending (the card asks for the code, then allows). A session that is not capable gets a stored failure (`BYPASS_NOT_CAPABLE`), nothing changes on the session. The card says in one line what Bypass does, in the Bypass dialog's words.
+
+`pool.secret_set` (T-2867): for a protected pool (production, `[protected]`), which `pool_secret_set` refuses; its refusal names this kind, the pool id and the revision to send. An agent may ask only for a pool its workspace gets (the reach of `pool_secret_set`, a shared pool included because a person decides); any other pool is the same NOT_FOUND as a missing one. The **value path**: the person types the value on the card (a write-only field); it goes once in the `POST /:id/allow { value }` body to the executor, in memory, and from there only into the pool's encrypted store. It is never in the request row, the result, an audit row, a log or the message to the agent (tested by scanning every table). Before the claim: the person must `manage` the pool, a value must be typed, and the pool must still be at `baseRevision` (else CONFLICT; deny it and the agent asks again); each refusal leaves the request pending. An existing secret keeps its `expose` unless the payload names one. Rejected alternatives (the agent sends the value, stored encrypted; a one-shot pass for the agent) both put a protected credential in an agent's hands. A value sent with Allow for any other kind is refused.
 
 ## Tier
 
@@ -33,9 +36,9 @@ Every kind is tier `T2` (a person decides). The card shows the tier.
 
 ## Surfaces
 
-- **API** (`/api/approvals`, signed in): `GET /`, `GET /:id`, `POST /:id/allow`, `POST /:id/deny { reason? }`.
+- **API** (`/api/approvals`, signed in): `GET /`, `GET /:id`, `POST /:id/allow { value? }` (`value` only for `pool.secret_set`), `POST /:id/deny { reason? }`. A Deny reason that looks like a credential is refused.
 - **MCP**: `approval_request { kind, payload, reason?, ttl_minutes? }`, `approval_list`, `approval_get { id }`. A session sees only its own requests.
-- **Needs you**: attention kind `approval`, one item per pending request (who, kind, tier, expiry). The deck's act opens `/admin/approvals/:id`; it never allows by itself (the deck rule). Web Push comes from the existing attention bridge.
+- **Needs you**: attention kind `approval`, one item per pending request (who, kind, tier, expiry). Titles are fixed words with any agent-written name quoted and clipped; `test.echo` text never appears in one. An agent reading with scope `see` gets only the kind's label as the title. The deck's act opens `/admin/approvals/:id`; it never allows by itself (the deck rule). Web Push comes from the existing attention bridge.
 - **Card** (`/admin/approvals/:id`): kind, tier, status, who asked, the agent's reason (its words, untrusted), expiry, the payload as JSON with secrets masked, the result, and Allow and Deny (44 px, phone first, light and dark). Deny takes an optional reason.
 
 ## Storage

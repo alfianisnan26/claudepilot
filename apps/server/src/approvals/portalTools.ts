@@ -4,14 +4,16 @@
 
 import { APPROVAL_KINDS, APPROVAL_REASON_MAX, APPROVAL_TTL_MAX_MIN, approvalPath, type Approval } from '@portal/contracts';
 import { AppError } from '@isnanme/core';
+import { actorOfPrincipal } from '../authz/seam.js';
 import { portalTools, PortalToolError, z, type PortalToolContext, type ToolRegistry } from '../portalmcp/registry.js';
 import { declareApprovalPolicies, NO_APPROVAL } from './authz.js';
+import type { ApprovalRequester } from './kinds.js';
 import type { Approvals } from './service.js';
 
 /** The verified asking session, or a refusal: only an agent's per-session token asks (a person decides in the portal). */
-function sessionOf(ctx: PortalToolContext): { sessionId: string; workspaceId: string | null } {
+function sessionOf(ctx: PortalToolContext): ApprovalRequester {
   if (!ctx.isAgent || !ctx.sessionId) throw new PortalToolError('FORBIDDEN', 'Only an agent session asks for an approval; a person decides in the portal.');
-  return { sessionId: ctx.sessionId, workspaceId: ctx.workspaceId };
+  return { sessionId: ctx.sessionId, workspaceId: ctx.workspaceId, actor: actorOfPrincipal(ctx.principal) };
 }
 
 export function registerApprovalTools(approvals: Approvals, registry: ToolRegistry = portalTools): void {
@@ -35,7 +37,7 @@ export function registerApprovalTools(approvals: Approvals, registry: ToolRegist
     name: 'approval_request',
     title: 'Ask a person to allow an action',
     description:
-      'Asks a person to allow one action the portal then runs for you, exactly as you give it (the payload is never edited). Kinds: test.echo {text}; session.bypass {sessionId: your own session}, which puts your session in Bypass if it was started bypass-capable. ' +
+      'Asks a person to allow one action the portal then runs for you, exactly as you give it (the payload is never edited). Kinds: test.echo {text}; session.bypass {sessionId: your own session}, which puts your session in Bypass if it was started bypass-capable; pool.secret_set {pool: the pool id, name, expose (optional), baseRevision: the revision you read}, when pool_secret_set refuses a protected pool: the person types the VALUE on Allow, so it is never in the payload or anything you see. ' +
       'The request shows on the person\'s Needs you card with your reason; you get a message in this session when it is allowed (with the result) or denied (with the reason). It expires after ttl_minutes (default a day). Never put a secret value in the payload: name it. You can not allow or deny anything.',
     scope: 'agent',
     hints: { readOnly: false, idempotent: false },

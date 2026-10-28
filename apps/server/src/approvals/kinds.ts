@@ -2,9 +2,26 @@
 // executor as the portal; nothing else runs it. A payload names things (a session id, a secret's NAME), never a secret value.
 
 import { AppError } from '@isnanme/core';
-import { REAUTH_REQUIRED, sessionRef, type Actor, type ApprovalKind, type ApprovalResult, type AttentionWhy, type ChatSession } from '@portal/contracts';
+import {
+  poolRef,
+  REAUTH_REQUIRED,
+  SECRET_LIMITS,
+  secretExposeDefault,
+  sessionRef,
+  type Actor,
+  type ApprovalKind,
+  type ApprovalResult,
+  type AttentionWhy,
+  type ChatSession,
+  type PoolDetail,
+  type SecretEntryInput,
+  type SecretEntryView,
+} from '@portal/contracts';
 import { z } from 'zod';
+import { clip } from '../attention/registry.js';
 import { requireCan } from '../authz/seam.js';
+import { secretWriteAccess } from '../pools/authz.js';
+import type { PoolService } from '../pools/service.js';
 
 /** What the chat controller gives the approvals module: Bypass through its own gated path, a session's facts, and messages to a session. */
 export interface ApprovalChat {
@@ -15,20 +32,32 @@ export interface ApprovalChat {
   reauth?: { fresh(token: string | undefined): boolean };
 }
 
+/** What the pools service gives the approvals module (pool.secret_set): the same calls pool_secret_set makes. */
+export type ApprovalPools = Pick<PoolService, 'types' | 'get' | 'update'>;
+
+/** The services a kind may use, wired in index.ts (absent in a test that does not need them). */
+export interface ApprovalDeps {
+  chat: ApprovalChat | null;
+  pools: ApprovalPools | null;
+}
+
 /** Who asks, verified (an agent's token), or null when the portal asks for one of its own refusals. */
 export interface ApprovalRequester {
   sessionId: string;
   workspaceId: string | null;
+  /** The asking agent as the authz seam knows it, for a kind that checks what it may reach (pool.secret_set). */
+  actor?: Actor;
 }
 
 /** What an executor gets besides its payload. */
-export interface ApprovalRunContext {
+export interface ApprovalRunContext extends ApprovalDeps {
   approvalId: string;
   /** The person who clicked Allow. */
   actor: Actor;
   /** Their sign-in, for a kind that needs a fresh server code. */
   sessionToken: string | undefined;
-  chat: ApprovalChat | null;
+  /** What the person typed on Allow for a kind that needs it (approvalNeedsValue): write-only, held in memory for this call only. */
+  value?: string | undefined;
 }
 
 export interface ApprovalKindDef {
@@ -36,10 +65,13 @@ export interface ApprovalKindDef {
   schema: z.ZodType<Record<string, unknown>>;
   /** The Needs you class (D-10) of a request of this kind. */
   why: AttentionWhy;
-  /** One line for the card and the push: names and facts only. */
-  title(payload: Record<string, unknown>, chat: ApprovalChat | null): string;
+  /**
+   * One line for a person's card and push: fixed words, with any name an agent could write (a session title, a pool or secret name)
+   * quoted and clipped. Never the agent's free text (test.echo's text): that is only in the payload, on the card.
+   */
+  title(payload: Record<string, unknown>, deps: ApprovalDeps): string;
   /** Checked when an agent asks: what it may ask for (throws NOT_FOUND / VALIDATION_FAILED). */
-  mayAsk?(payload: Record<string, unknown>, requester: ApprovalRequester | null): void;
+  mayAsk?(payload: Record<string, unknown>, requester: ApprovalRequester | null, deps: ApprovalDeps): void;
   /**
    * Checked at Allow BEFORE the request is consumed (a refusal here leaves it pending, so the person can fix it and click again):
    * the person's rights on the object, a fresh server code.
@@ -51,11 +83,15 @@ export interface ApprovalKindDef {
 
 const SESSION_ID = z.string().trim().min(1).max(200);
 
+/** A name an agent could have written, for a title: one line, clipped, in quotes so it reads as a name and not as the portal's words. */
+export const quoted = (s: string, max = 60): string => `“${clip(s, max)}”`;
+
 const testEcho: ApprovalKindDef = {
   kind: 'test.echo',
   schema: z.object({ text: z.string().max(200) }).strict(),
   why: 'gate',
-  title: (p) => `Test: ${String(p.text ?? '')}`,
+  // The text is the agent's: it stays in the payload (the card shows it), never in a title, a push or Needs you.
+  title: () => 'Test request',
   run: async (p) => ({ ok: true, message: 'Echoed.', output: { text: String(p.text ?? '') } }),
 };
 
@@ -63,10 +99,10 @@ const sessionBypass: ApprovalKindDef = {
   kind: 'session.bypass',
   schema: z.object({ sessionId: SESSION_ID }).strict(),
   why: 'secrets_permissions',
-  title: (p, chat) => {
+  title: (p, { chat }) => {
     const id = String(p.sessionId ?? '');
-    const s = chat?.get(id);
-    return `Bypass for ${s?.title?.trim() || `session ${id.slice(0, 8)}`}`;
+    const t = chat?.get(id)?.title?.trim();
+    return `Bypass for ${t ? quoted(t) : `session ${id.slice(0, 8)}`}`;
   },
   // An agent asks for its own session only; the portal may ask for any.
   mayAsk(p, requester) {
@@ -94,7 +130,97 @@ const sessionBypass: ApprovalKindDef = {
   },
 };
 
+/** The one not-found answer for a pool, the same words pool_secret_set uses, so asking never tells a pool elsewhere exists. */
+const noPool = (ref: string) => new AppError('NOT_FOUND', `No pool “${ref}”. List them with pool_list.`);
+
+/** The secrets pool by id, or the not-found answer (also for a pool of another type, or no Secrets & env). */
+function secretsPool(pools: ApprovalPools | null, id: string): PoolDetail {
+  if (!pools || !pools.types().includes('secrets')) throw noPool(id);
+  let p: PoolDetail;
+  try {
+    p = pools.get(id);
+  } catch {
+    throw noPool(id);
+  }
+  if (p.type !== 'secrets') throw noPool(id);
+  return p;
+}
+
+const SECRET_NAME = z.string().trim().min(1).max(64);
+
+/**
+ * PILOT-1000: set one secret in a secrets pool the agent may not write itself (a protected pool: pool_secret_set refuses it with a hint
+ * to ask here). The payload names the pool (its id), the secret, expose and the revision the agent read: NEVER the value. The person types
+ * the value on Allow; it goes to this executor in memory, into the pool's encrypted store, and nowhere else (not the row, the result, the
+ * audit or the message). Decided on T-2867: the alternatives (the agent sends the value; a one-shot pass for the agent) both put a
+ * protected credential in an agent's hands.
+ */
+const poolSecretSet: ApprovalKindDef = {
+  kind: 'pool.secret_set',
+  schema: z
+    .object({
+      pool: z.string().trim().min(1).max(100),
+      name: SECRET_NAME,
+      expose: z.boolean().optional(),
+      baseRevision: z.number().int().min(0),
+    })
+    .strict(),
+  why: 'secrets_permissions',
+  title: (p) => `Set ${quoted(String(p.name ?? ''), 64)} in a secrets pool`,
+  // An agent asks only for a pool its own workspace gets (pool_secret_set's reach; a shared pool too, since a person decides): anything
+  // else is the same NOT_FOUND as a pool that does not exist.
+  mayAsk(p, requester, { pools }) {
+    const pool = secretsPool(pools, String(p.pool));
+    if (!requester) return;
+    if (!requester.actor || secretWriteAccess(requester.actor, { id: pool.id, workspaces: pool.assignedTo.map((a) => a.workspaceId) }) === 'not_found')
+      throw noPool(String(p.pool));
+  },
+  // The person must manage the pool, type a value, and the pool must still be at the revision the agent read (else the agent asks again).
+  precheck(p, ctx) {
+    const pool = secretsPool(ctx.pools, String(p.pool));
+    requireCan(ctx.actor, 'manage', poolRef(pool.id, 'secrets'));
+    const v = ctx.value;
+    if (typeof v !== 'string' || v.length === 0) throw new AppError('VALIDATION_FAILED', 'Type the value to allow it.', { details: { value: 'Required.' } });
+    if (Buffer.byteLength(v) > SECRET_LIMITS.secretBytes) throw new AppError('VALIDATION_FAILED', 'The value is too large.', { details: { value: 'Too large.' } });
+    if (pool.latestRevision !== p.baseRevision)
+      throw new AppError('CONFLICT', `The pool is at revision ${pool.latestRevision}, not ${String(p.baseRevision)}: deny this, and the agent asks again.`);
+    const existing = secretEntries(pool).find((e) => e.name === p.name);
+    if (existing && existing.kind !== 'secret') throw new AppError('CONFLICT', `${String(p.name)} is a plain variable in this pool, not a secret.`);
+  },
+  async run(p, ctx): Promise<ApprovalResult> {
+    const name = String(p.name);
+    try {
+      const pool = secretsPool(ctx.pools, String(p.pool));
+      const entries = secretEntries(pool);
+      const at = entries.findIndex((e) => e.name === name);
+      const found = at >= 0 ? entries[at]! : undefined;
+      // An existing secret keeps its expose unless the payload names one (its stored options omit a false expose); a new one takes the
+      // name's default, as pool_secret_set does.
+      const keep = found?.kind === 'secret' ? found.options?.expose === true : secretExposeDefault(name);
+      const expose = typeof p.expose === 'boolean' ? p.expose : keep;
+      const target: SecretEntryInput = found ? { ...found, kind: 'secret', options: { ...(found.kind === 'secret' ? found.options : {}), expose }, newValue: ctx.value! } : { kind: 'secret', name, options: { expose }, newValue: ctx.value! };
+      if (found) entries[at] = target;
+      else entries.push(target);
+      const updated = ctx.pools!.update(pool.id, { content: { entries }, note: `${name} set via approval ${ctx.approvalId}`, baseRevision: Number(p.baseRevision) });
+      return { ok: true, message: `${name} set in ${updated.name}: revision ${updated.latestRevision} is ${updated.status}.`, output: { pool: updated.id, name, revision: updated.latestRevision, expose } };
+    } catch (e) {
+      // A refusal is the result; its words are the service's, never the value (checked, in case a message ever quoted its input).
+      const said = e instanceof AppError ? e.message : 'The secret could not be set.';
+      const message = ctx.value && said.includes(ctx.value) ? 'The secret could not be set.' : said;
+      return { ok: false, message, output: { code: e instanceof AppError ? e.code : 'ERROR' } };
+    }
+  },
+};
+
+/** A secrets pool's entries as the input pool_update takes (values stay where they are; only `newValue` writes one). */
+function secretEntries(p: PoolDetail): SecretEntryInput[] {
+  return ((p.content as { entries?: SecretEntryView[] } | null)?.entries ?? []).map((e): SecretEntryInput =>
+    e.kind === 'variable' ? { id: e.id, kind: 'variable', name: e.name, value: e.value, confirmed: e.confirmed } : { id: e.id, kind: 'secret', name: e.name, options: e.options ?? {} },
+  );
+}
+
 export const APPROVAL_KIND_DEFS: Record<ApprovalKind, ApprovalKindDef> = {
   'test.echo': testEcho,
   'session.bypass': sessionBypass,
+  'pool.secret_set': poolSecretSet,
 };

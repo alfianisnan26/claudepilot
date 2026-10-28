@@ -29,6 +29,9 @@ interface ControllerLike {
   create(req: Partial<CreateChatSessionRequest>, opts: { actor: string }): Promise<ChatSession>;
   keepGoingOf?: (sessionId: string) => ChatKeepGoing | null;
   keepGoingChanged?: (sessionId: string) => void;
+  /** PILOT-996: when it was last in Bypass, and the gated put-back (the controller's `bypassSeenAt`, `restoreBypass`). */
+  bypassSeenAt?: (id: string) => string | null;
+  restoreBypass?: (id: string) => Promise<boolean>;
 }
 
 interface TicketsLike {
@@ -56,6 +59,9 @@ export function keepGoingChatPort(raw: unknown): (KeepGoingChatPort & { controll
         { workspaceId: s.workspaceId, cwd: s.cwd, title: s.title, ...(s.claudeId ? { claudeId: s.claudeId } : {}), ...(s.ticketId ? { ticketId: s.ticketId } : {}), continuedFrom: s.id },
         { actor: KEEPGOING_ACTOR },
       ),
+    ...(typeof ctl.bypassSeenAt === 'function' && typeof ctl.restoreBypass === 'function'
+      ? { bypassSeenAt: (id: string) => ctl.bypassSeenAt!(id), restoreBypass: (id: string) => ctl.restoreBypass!(id) }
+      : {}),
   };
 }
 

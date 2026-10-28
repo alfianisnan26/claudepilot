@@ -535,6 +535,34 @@ test('session_start and session_configure: the actor is the token, and a session
   }
 });
 
+test('PILOT-997: session_configure and session_start take mode auto (the controller decides where Auto is allowed); Bypass is refused with the reason, before anything changes', async () => {
+  reset();
+  h.module.settings.update({ sessionControl: true });
+  try {
+    const admin = h.token('admin');
+    const auto = await h.call(admin.secret, 'session_configure', { id: 's1', mode: 'auto' });
+    assert.equal(auto.result?.isError, undefined, JSON.stringify(auto.raw));
+    assert.deepEqual(calls, ['chat.control:s1:mode:{"mode":"auto"}']);
+
+    reset();
+    for (const [tool, args] of [
+      ['session_configure', { id: 's1', mode: 'bypassPermissions', max_workers: 0 }],
+      ['session_start', { workspace_id: 'docker/api', mode: 'bypassPermissions', prompt: 'x' }],
+    ] as const) {
+      const refused = await h.call(admin.secret, tool, args);
+      assert.equal(refused.result?.isError, true, tool);
+      assert.match(JSON.stringify(refused.result!.structuredContent), /Bypass over MCP needs a person’s approval \(PILOT-1000\)/);
+    }
+    assert.deepEqual(calls, [], 'nothing created, controlled or limited');
+
+    const started = where(await h.call(admin.secret, 'session_start', { workspace_id: 'docker/api', prompt: 'Go.', mode: 'auto' }));
+    assert.equal(started.session.id, 's-new');
+    assert.deepEqual(calls, [`chat.create:docker/api:portal-mcp:${admin.id}`, 'chat.control:s-new:mode:{"mode":"auto"}', `chat.send:s-new:portal-mcp:${admin.id}:Go.`], 'the mode before the first prompt');
+  } finally {
+    h.module.settings.update({ sessionControl: false });
+  }
+});
+
 test('session_configure (T-294): max_workers and subagents go to the session’s limits as the token; restart_needed for sub-agents; never for a session’s own token', async () => {
   reset();
   h.module.settings.update({ sessionControl: true });

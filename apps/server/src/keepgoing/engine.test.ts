@@ -262,6 +262,49 @@ test('out of Bypass on a bypass-capable chat is reported once, never re-entered;
   assert.equal(r.kg.standing('s1').length, 0);
 });
 
+/** PILOT-996: a bypass-capable chat out of Bypass, last in it `agoMin` minutes ago, with the controller's put-back installed. */
+async function outOfBypass(agoMin: number, back = true) {
+  const r = await rig();
+  r.chat.put('s1', { bypassCapable: true, mode: 'default', process: 'live' });
+  const calls: string[] = [];
+  r.chat.bypassSeenAt = () => new Date(r.clock.now() - agoMin * 60_000).toISOString();
+  r.chat.restoreBypass = async (id) => {
+    calls.push(id);
+    if (back) r.chat.patch(id, { mode: 'bypassPermissions' });
+    return back;
+  };
+  r.on('s1');
+  return { r, calls };
+}
+
+test('PILOT-996: out of Bypass, in it within 24 hours: Keep going puts it back (no ticket); past 24 hours it only reports', async () => {
+  const within = await outOfBypass(23 * 60);
+  await within.r.engine.round();
+  assert.deepEqual(within.calls, ['s1']);
+  assert.equal(within.r.chat.get('s1')!.mode, 'bypassPermissions');
+  assert.equal(within.r.tickets.made.length, 0, 'nothing to report');
+  assert.equal(within.r.engine.view('s1')!.last?.kind, 'rebypassed');
+  assert.equal(within.r.engine.last.get('s1')?.act, 'rebypass');
+  assert.equal(within.r.kg.standing('s1').length, 0);
+
+  const past = await outOfBypass(24 * 60 + 1);
+  await past.r.engine.round();
+  assert.deepEqual(past.calls, [], 'never tried after 24 hours');
+  assert.equal(past.r.tickets.made.length, 1);
+  assert.match(past.r.tickets.made[0]!.summary, /out of Bypass/);
+  assert.equal(past.r.chat.get('s1')!.mode, 'default');
+});
+
+test('PILOT-996: a put-back the portal refuses is reported once and not tried again while the report stands', async () => {
+  const { r, calls } = await outOfBypass(60, false);
+  await r.engine.round();
+  assert.deepEqual(calls, ['s1']);
+  assert.equal(r.tickets.made.length, 1);
+  for (let i = 0; i < 5; i++) await r.after(1);
+  assert.deepEqual(calls, ['s1'], 'one try');
+  assert.equal(r.tickets.made.length, 1);
+});
+
 test('nothing happens to a chat whose owner may no longer operate it, nor to one a move or a restart is busy with', async () => {
   const owner = fakeOwner({}, { fallback: 'u_a', disabled: ['u_a'] });
   const r = await rig({ owner });

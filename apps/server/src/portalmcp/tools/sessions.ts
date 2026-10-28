@@ -12,8 +12,19 @@ import { assertCanChange, costFields, resolveWorkspace, uiLink } from './common.
 import type { PortalToolDeps } from './deps.js';
 
 const STATES = ['starting', 'idle', 'working', 'waiting', 'interrupted', 'ended'] as const;
-/** Over MCP a session's mode is limited to the ones that can't run commands unasked (PRD §13.3): never Auto (the controller refuses it too) or Bypass. */
-const MCP_MODES = ['plan', 'default', 'acceptEdits', 'dontAsk'] as const satisfies readonly ChatPermissionMode[];
+/**
+ * The modes a session may be put in over MCP (PRD §13.3). PILOT-996 (D-103): Auto too, under the controller's rule (`autoModeAllowed`:
+ * its parent's mode, `sessions.autonomousAuto`). Never Bypass: asked for, it is refused with the reason until a person's approval card
+ * exists for it (PILOT-1000); an agent's own acknowledgement is not one.
+ */
+const MCP_MODES = ['plan', 'default', 'acceptEdits', 'dontAsk', 'auto'] as const satisfies readonly ChatPermissionMode[];
+/** Accepted by the schema only so that a request for Bypass gets its reason, never a bare validation error. */
+const MCP_MODE_INPUT = z.enum([...MCP_MODES, 'bypassPermissions']);
+export const MCP_BYPASS_REFUSED = 'Bypass over MCP needs a person’s approval (PILOT-1000). Ask for auto, or have a person turn Bypass on in the app.';
+function mcpMode(mode: ChatPermissionMode | undefined): Exclude<ChatPermissionMode, 'bypassPermissions'> | undefined {
+  if (mode === 'bypassPermissions') throw new PortalToolError('FORBIDDEN', MCP_BYPASS_REFUSED);
+  return mode;
+}
 /** Slash commands MCP text may use (chat-sessions FR13): anything else is for the terminal. */
 import { SLASH_ALLOWED, slashWord } from '../../chat/slash.js';
 /** What `session_get` returns of the transcript stays under this, so one call fits a result block. */
@@ -230,7 +241,7 @@ export function registerSessionTools(
     name: 'session_start',
     title: 'Start a chat session',
     description:
-      'Starts a Claude Code session in a workspace, optionally with a first prompt. The folder must already be trusted in the portal; this cannot trust it. Sessions started here never run in bypass mode. With parent (a live session of the same workspace) it starts as that session’s worker, as session_spawn does: in its family and crew, under its limits (depth, workers at once, an hour’s starts), and the parent hears of it in one line as report says; its first prompt reaches it as from that parent. ticket_id takes T-12 or its bucket key (KONF-3).',
+      'Starts a Claude Code session in a workspace, optionally with a first prompt. The folder must already be trusted in the portal; this cannot trust it. mode sets its permission mode (plan, default, acceptEdits, dontAsk or auto; without it a session no person started starts in auto while Settings › Sessions allows it). Bypass is refused here: it needs a person’s approval (PILOT-1000). With parent (a live session of the same workspace) it starts as that session’s worker, as session_spawn does: in its family and crew, under its limits (depth, workers at once, an hour’s starts), and the parent hears of it in one line as report says; its first prompt reaches it as from that parent. ticket_id takes T-12 or its bucket key (KONF-3).',
     scope: 'admin',
     requires: 'session_control',
     hints: { destructive: true, openWorld: true },
@@ -244,9 +255,11 @@ export function registerSessionTools(
       agent: z.string().regex(CHAT_AGENT_NAME).optional().describe('The agent it runs as, .claude/agents/<agent>.md in its folder (e.g. implementer): its prompt, its tools and its model, at every start of its process.'),
       parent: z.string().max(80).optional().describe('A live session of this workspace it starts as a worker of (session_family, crew reports).'),
       report: z.enum(WORKER_REPORTS).optional().describe('With parent: what the parent hears of it unasked, one line each: idle (the default) when its turn ends, when it waits on a person and when it ends; end only when it ends; none nothing.'),
+      mode: MCP_MODE_INPUT.optional().describe('Its permission mode, applied before its first prompt: plan, default, acceptEdits, dontAsk or auto. bypassPermissions is refused (PILOT-1000).'),
     }),
     async handler(ctx, args) {
       assertCanChange(store, 'workspace');
+      const mode = mcpMode(args.mode);
       if (args.report && !args.parent) throw new AppError('VALIDATION_FAILED', 'report needs a parent.', { details: { report: 'Only with parent.' } });
       const workspaceId = await workspaceFor(args.workspace_id, ctx);
       const parentId = args.parent ? leadFor(args.parent, workspaceId, ctx) : null;
@@ -256,6 +269,15 @@ export function registerSessionTools(
         // T-349: the parent must still be live when the row is written (liveParent), with the same not found as leadFor's.
         { actor: ctx.actor, ...(parentId ? { parentId, liveParent: NO_PARENT, ...(args.report ? { report: args.report } : {}) } : {}) },
       );
+      // PILOT-996: the mode asked applies before the first prompt; refused (Auto not allowed for it), the session is ended unprompted.
+      if (mode) {
+        try {
+          await chat.control(s.id, 'mode', { mode }, { actor: ctx.actor });
+        } catch (e) {
+          await chat.end(s.id).catch(() => undefined);
+          throw e;
+        }
+      }
       // T-349: a worker's first instruction is from its lead, framed as session_spawn frames it (your parent session); who started it stays
       // on the session (started_by) and in the agent.spawned audit row.
       if (args.prompt) await sendChecked(s.id, args.prompt, undefined, ctx, parentId ? { actor: `session:${parentId}`, relation: 'parent' } : undefined);
@@ -335,7 +357,7 @@ export function registerSessionTools(
     name: 'session_configure',
     title: 'Change a session’s model, effort, mode or limits',
     description:
-      'Changes what applies from the session’s next request. Over MCP the mode is limited to plan, default, acceptEdits and dontAsk; auto and bypass are never available here (a person turns them on in the app). Its limits: max_workers (how many workers it may run at once; 0 none, null the global setting, above the global cap counts as the cap) applies at once; subagents (whether its Claude may start Claude Code sub-agents) applies at its next start, so restart_needed says when a Restart is due.',
+      'Changes what applies from the session’s next request. Over MCP the mode is one of plan, default, acceptEdits, dontAsk and auto (auto where the session may run in it: its parent in auto or Bypass, or “Auto for agents” on). Bypass is refused here: it needs a person’s approval (PILOT-1000). Its limits: max_workers (how many workers it may run at once; 0 none, null the global setting, above the global cap counts as the cap) applies at once; subagents (whether its Claude may start Claude Code sub-agents) applies at its next start, so restart_needed says when a Restart is due.',
     scope: 'admin',
     requires: 'session_control',
     hints: { destructive: true, idempotent: true },
@@ -343,12 +365,13 @@ export function registerSessionTools(
       id: z.string().max(80),
       model: z.string().max(80).optional(),
       effort: z.string().max(20).optional(),
-      mode: z.enum(MCP_MODES).optional(),
+      mode: MCP_MODE_INPUT.optional(),
       max_workers: z.number().int().min(0).max(CHAT_MAX_WORKERS_MAX).nullable().optional().describe('Workers it may run at once: 0 none, null the global setting.'),
       subagents: z.boolean().optional().describe('Whether its Claude may start sub-agents (the Agent tool); applies at its next start.'),
     }),
     async handler(ctx, args) {
       need(args.id);
+      const mode = mcpMode(args.mode); // before anything changes
       const limits = args.max_workers !== undefined || args.subagents !== undefined;
       if (!args.model && !args.effort && !args.mode && !limits) throw new AppError('VALIDATION_FAILED', 'Give a model, an effort, a mode, max_workers or subagents.');
       // T-294: the limits first (a refusal leaves the rest untouched); the controller refuses a session's own actor.
@@ -359,7 +382,7 @@ export function registerSessionTools(
       try {
         if (args.model) await chat.control(args.id, 'model', { model: args.model }, { actor: ctx.actor });
         if (args.effort) await chat.control(args.id, 'effort', { effort: args.effort }, { actor: ctx.actor });
-        if (args.mode) await chat.control(args.id, 'mode', { mode: args.mode }, { actor: ctx.actor });
+        if (mode) await chat.control(args.id, 'mode', { mode }, { actor: ctx.actor });
       } catch (e) {
         if (!changed) throw e;
         const why = e instanceof Error ? e.message : 'refused';
