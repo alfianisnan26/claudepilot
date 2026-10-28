@@ -10,8 +10,9 @@ set -u
 passes=/etc/claudepilot/approval-passes
 owner=0
 [ -f "$passes" ] && [ ! -L "$passes" ] || exit 3
-[ "$(stat -c %u "$passes" 2>/dev/null)" = "$owner" ] || exit 3
-[ $(( 8#$(stat -c %a "$passes" 2>/dev/null || echo 777) & 8#022 )) -eq 0 ] || exit 3
+# No redirection here, not even of stderr (the guard reads any redirect as a write); job-run.sh discards this script's stderr itself.
+[ "$(stat -c %u "$passes")" = "$owner" ] || exit 3
+[ $(( 8#$(stat -c %a "$passes" || echo 777) & 8#022 )) -eq 0 ] || exit 3
 now=$(date +%s)
 # Each line is `<64 hex> <expiry, epoch seconds>`; the header and anything else is skipped. The words are hex and digits only.
 set -- $(grep -E '^[0-9a-f]{64} [0-9]{1,12}$' "$passes")
