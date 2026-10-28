@@ -1042,6 +1042,16 @@ create`), and any command that is not a known reader (`cat`, `grep`, `jq`, `git 
   Every `-C` of a command is checked (`git -C a -C b`), in a pipe, after `cd x &&`, in `bash -c`. The refusal's audit line carries the
   form and no path (`path` is empty), never the command. The check is on only in a workspace that has the lane folder or a roots file;
   elsewhere (no lane allow rule to guard) `git -C` is tracked as before, so it does not refuse a lead's `git -C` in its own repository.
+  **Tool checkouts (PILOT-998, decision PILOT-996 #42754).** The roots file also carries `tool <abs>` lines, one per main checkout
+  whose scripts lanes run (`GITC_TOOL_ROOTS` in `settings/ruleGuard.ts`, today `/home/node/work/claudepilot`; each must be absolute, at
+  least three folders deep, not a worktrees folder and holding no lane root, or the delivery throws). `git -C <tool root or below>` is
+  allowed for reads and fast-forwards only: `fetch`, `pull --ff-only`, `merge --ff-only`, `log`, `show`, `status`, `rev-parse`, `diff`
+  and `branch --contains`. Still refused there, each with its reason and what to do: any other subcommand (reset, checkout, push,
+  commit...), a plain or non-ff `pull`/`merge`, a forced or refspec `fetch` (`+`, `:`, `-u`, `--refmap`), `log/show/diff --output`,
+  `--git-dir`/`--work-tree` or `env -C`/`sudo -D` into a tool root, and writes to rule files (the rule-file checks run first). `$HOME`,
+  `${HOME}`, `~` and quoted paths are resolved, but only when nothing in the call can change HOME (no assignment, `export`, `read`,
+  `source`, `eval`..., no substitution); otherwise the variable form is refused as before. Every refusal of the guard now ends with
+  "What to do: ...".
   **S2: the allow's `*` takes everything after the folder**, so in a lane workspace the rest of the command is read too:
   `--git-dir` and `--work-tree` (both `=` and two-word forms) are read like `-C` and must stay below a lane root; before the subcommand
   only `--no-pager`, `-P`, `-p`, `--paginate`, `--no-optional-locks`, `--no-lazy-fetch`, the pathspec switches, `--no-advice`,

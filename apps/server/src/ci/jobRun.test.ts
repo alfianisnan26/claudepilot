@@ -147,6 +147,23 @@ function jobLog(root: string, rc: number, extra = '') {
   return `=== JOB-RUN checked out claudepilot at abc1234 in 1s\nhello from the job\n${extra}=== JOB-RUN ARTIFACTS BEGIN\n${tgz}\n\n=== JOB-RUN ARTIFACTS END\n=== JOB-RUN SUMMARY claudepilot@abc1234 checkout=1s steps=2s run=3s rc=${rc} node=k3s-master\n=== JOB-RUN EXIT ${rc}\n`;
 }
 
+// PILOT-998: the names world()'s fake pool delivers as env, and the drop-in file for a list (the values are filler: the script reads only keys).
+const WORLD_DELIVERED = [
+  'E2E_CF_ACCESS_CLIENT_SECRET',
+  'E2E_CF_ACCESS_CLIENT_ID',
+  'E2E_CF_ACCESS_NOT_SET',
+  'E2E_QA_EMAIL',
+  'E2E_QA2_PASSWORD',
+  'E2E_QA3_EMAIL',
+  'E2E_STAFF_PASSWORD',
+  'E2E_STAFF2_EMAIL',
+  'E2E_TURNSTILE_TOKEN',
+  'KONEVIRO_S3_RO_ACCESS_KEY_ID',
+  'KONEVIRO_S3_RO_SECRET_ACCESS_KEY',
+];
+const poolDropin = (names: string[]) =>
+  JSON.stringify({ env: Object.fromEntries(names.map((n) => [n, 'filler'])), permissions: { deny: [] } });
+
 function world(seeds: Seed[] = [], scenario: Scenario = {}) {
   const root = mkdtempSync(join(tmpdir(), 'cp-jobrun-'));
   roots.push(root);
@@ -180,6 +197,9 @@ function world(seeds: Seed[] = [], scenario: Scenario = {}) {
     gitconfig,
     `[credential "https://git.konfersi.com"]\n\thelper = "!f() { echo username=bot; echo password=${giteaToken}; }; f"\n`,
   );
+  // PILOT-998: the fake Secrets env drop-in, the names this workspace's pool delivers (its values are never read by the script).
+  const dropin = join(root, 'env-dropin.json');
+  writeFileSync(dropin, poolDropin(WORLD_DELIVERED));
   // UNSET as an override value leaves that variable out entirely (to test a script default that applies only when it is unset).
   const env = (over: Record<string, string> = {}): NodeJS.ProcessEnv =>
     withoutUnset({
@@ -201,6 +221,7 @@ function world(seeds: Seed[] = [], scenario: Scenario = {}) {
       NODE_AUTH_TOKEN: npmToken,
       PILOT_SESSION_ID: 'chat-a',
       PILOT_AGENT: 't107',
+      JOB_RUN_POOL_ENV_DROPIN: dropin,
       ...over,
     });
   const start = (argv: string[], over: Record<string, string> = {}) => {
@@ -1586,33 +1607,29 @@ test('T-426 without --pool-env the run container has no secretKeyRef at all (T-4
   );
 });
 
-test('T-426 --pool-env refusals, before any kubectl call: a name outside E2E_CF_ACCESS_*, a non-name (not echoed), an unset, empty or multi-line one', () => {
+test('T-426 --pool-env refusals, before any kubectl call: a deny-listed or undelivered name, a non-name (not echoed), an unset, empty or multi-line one', () => {
   const w = world();
   const val = `cs${hex(20)}`;
+  const NOT_DELIVERED = /--pool-env: refused: not delivered as env by this workspace's Secrets pool; the argument is not shown\. Turn on expose for it in its pool/;
   const cases: [string[], Record<string, string>, RegExp][] = [
-    [
-      ['--pool-env', 'GITHUB_TOKEN'],
-      { GITHUB_TOKEN: val },
-      /--pool-env: refused: not an allowed name \(E2E_CF_ACCESS_\*, E2E_QA_EMAIL, E2E_QA_PASSWORD, E2E_QA2_EMAIL, E2E_QA2_PASSWORD, E2E_QA3_EMAIL, E2E_QA3_PASSWORD, E2E_STAFF_EMAIL, E2E_STAFF_PASSWORD, E2E_STAFF2_EMAIL, E2E_STAFF2_PASSWORD, E2E_TURNSTILE_TOKEN\)/,
-    ],
-    // T-2294: the QA3, staff and Turnstile names exactly, nothing near them.
-    [['--pool-env', 'E2E_QA4_EMAIL'], { E2E_QA4_EMAIL: val }, /not an allowed name/],
-    [['--pool-env', 'E2E_STAFF3_PASSWORD'], { E2E_STAFF3_PASSWORD: val }, /not an allowed name/],
-    [['--pool-env', 'E2E_STAFF_TOKEN'], { E2E_STAFF_TOKEN: val }, /not an allowed name/],
-    [['--pool-env', 'E2E_TURNSTILE_TOKEN_X'], { E2E_TURNSTILE_TOKEN_X: val }, /not an allowed name/],
-    [['--pool-env', 'E2E_TURNSTILE_SECRET'], { E2E_TURNSTILE_SECRET: val }, /not an allowed name/],
+    [['--pool-env', 'GITHUB_TOKEN'], { GITHUB_TOKEN: val }, /--pool-env: refused: a deny-listed name .*It needs a person's approval \(PILOT-1000\)/],
+    // PILOT-998: a name near a delivered one is not delivered (set in the shell or not).
+    [['--pool-env', 'E2E_QA4_EMAIL'], { E2E_QA4_EMAIL: val }, NOT_DELIVERED],
+    [['--pool-env', 'E2E_STAFF3_PASSWORD'], { E2E_STAFF3_PASSWORD: val }, NOT_DELIVERED],
+    [['--pool-env', 'E2E_STAFF_TOKEN'], { E2E_STAFF_TOKEN: val }, NOT_DELIVERED],
+    [['--pool-env', 'E2E_TURNSTILE_TOKEN_X'], { E2E_TURNSTILE_TOKEN_X: val }, NOT_DELIVERED],
+    [['--pool-env', 'E2E_TURNSTILE_SECRET'], { E2E_TURNSTILE_SECRET: val }, NOT_DELIVERED],
     [['--pool-env', 'E2E_TURNSTILE_TOKEN'], { E2E_TURNSTILE_TOKEN: 'short7!' }, /E2E_TURNSTILE_TOKEN is shorter than 8 characters/],
     [['--pool-env', 'E2E_QA3_EMAIL'], {}, /--pool-env: E2E_QA3_EMAIL is not set in this workspace/],
     [['--pool-env', 'E2E_STAFF_PASSWORD'], {}, /--pool-env: E2E_STAFF_PASSWORD is not set in this workspace/],
     [['--pool-env', 'E2E_STAFF2_EMAIL'], {}, /--pool-env: E2E_STAFF2_EMAIL is not set in this workspace/],
     [['--pool-env', 'E2E_QA2_PASSWORD'], {}, /--pool-env: E2E_QA2_PASSWORD is not set in this workspace/],
-    // T-384: exactly the QA account's two names, nothing near them.
-    [['--pool-env', 'E2E_QA_TOKEN'], { E2E_QA_TOKEN: val }, /not an allowed name/],
-    [['--pool-env', 'E2E_QA_EMAIL_X'], { E2E_QA_EMAIL_X: val }, /not an allowed name/],
+    [['--pool-env', 'E2E_QA_TOKEN'], { E2E_QA_TOKEN: val }, NOT_DELIVERED],
+    [['--pool-env', 'E2E_QA_EMAIL_X'], { E2E_QA_EMAIL_X: val }, NOT_DELIVERED],
     [['--pool-env', 'E2E_QA_EMAIL'], {}, /--pool-env: E2E_QA_EMAIL is not set in this workspace/],
-    [['--pool-env', 'E2E_CF_ACCESS_'], {}, /not an allowed name/],
-    [['--pool-env', 'E2E_CF_ACCESS_id'], { E2E_CF_ACCESS_id: val }, /not an allowed name/],
-    [['--pool-env', `E2E_CF_ACCESS_X=${val}`], {}, /not an allowed name/],
+    [['--pool-env', 'E2E_CF_ACCESS_'], {}, NOT_DELIVERED],
+    [['--pool-env', 'E2E_CF_ACCESS_id'], { E2E_CF_ACCESS_id: val }, /--pool-env: refused: not a variable name .*the argument is not shown/],
+    [['--pool-env', `E2E_CF_ACCESS_X=${val}`], {}, /not a variable name/],
     [['--pool-env', POOL_ID], { [POOL_ID]: 'short7!' }, /shorter than 8 characters/],
     [['--pool-env', 'E2E_CF_ACCESS_NOT_SET'], {}, /--pool-env: E2E_CF_ACCESS_NOT_SET is not set in this workspace/],
     [['--pool-env', POOL_ID], { [POOL_ID]: '' }, /--pool-env: E2E_CF_ACCESS_CLIENT_ID is not set in this workspace/],
@@ -1626,6 +1643,67 @@ test('T-426 --pool-env refusals, before any kubectl call: a name outside E2E_CF_
   }
   assert.equal(w.calls(), '', 'refused before any kubectl call');
   assert.deepEqual(w.applied(), []);
+});
+
+test('PILOT-998 --pool-env: any name the Secrets pool delivers is accepted (the two T-2823 keys too); a deny-listed one is refused even when delivered; an undelivered one is refused and never shown', () => {
+  const w = world();
+  const custom = 'STG_SEARCH_READ_KEY'; // a name no old allow-list held
+  const deny = [
+    'GITHUB_TOKEN',
+    'GITEA_TOKEN',
+    'CLOUDFLARE_API_TOKEN',
+    'KONEVIRO_S3_RW_ACCESS_KEY_ID',
+    'STG_ADMIN_PASSWORD',
+    'PRODUCTION_DB_URL',
+    'APP_PROD_KEY',
+    'KONFERSI_PRD_SECRET',
+    'VAULT_MASTER_KEY',
+    'KONEVIRO_S3_RW',
+    'NODE_AUTH_TOKEN',
+    'GH_TOKEN',
+    'ANTHROPIC_API_KEY',
+    'CLAUDEPILOT_PORTAL_TOKEN',
+    'PILOT_MCP_TOKEN',
+  ];
+  const dropin = join(w.root, 'dropin-998.json');
+  writeFileSync(dropin, poolDropin([...WORLD_DELIVERED, custom, ...deny]));
+  const vals: Record<string, string> = {};
+  for (const n of [custom, 'KONEVIRO_S3_RO_ACCESS_KEY_ID', 'KONEVIRO_S3_RO_SECRET_ACCESS_KEY', ...deny]) vals[n] = `v${hex(12)}`;
+  const over = { ...vals, JOB_RUN_POOL_ENV_DROPIN: dropin };
+  // Refused first (before any kubectl call): each deny-listed name, delivered and set, with why and what to do; the name is not shown.
+  for (const n of deny) {
+    const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--pool-env', n, '--', 'true'], over);
+    assert.equal(r.code, 2, `${n}: ${r.out}`);
+    assert.match(r.out, /--pool-env: refused: a deny-listed name \(write, admin, production or master credentials.*\); the argument is not shown\. It needs a person's approval \(PILOT-1000\)/, n);
+    assert.ok(!r.out.includes(n), `${n} is not shown`);
+    assert.ok(!r.out.includes(vals[n] as string), 'nor its value');
+  }
+  // An undelivered name, set in the shell, built at runtime: refused with what to do, and shown nowhere.
+  const stray = `STRAY_${hex(6).toUpperCase()}`;
+  const u = w.run(['--repo', 'claudepilot', '--ref', 'main', '--pool-env', stray, '--', 'true'], { ...over, [stray]: `v${hex(12)}` });
+  assert.equal(u.code, 2, u.out);
+  assert.match(u.out, /not delivered as env by this workspace's Secrets pool; the argument is not shown\. Turn on expose for it in its pool/);
+  assert.ok(!u.out.includes(stray), 'the undelivered name is not shown');
+  // No drop-in (nothing exposed in this workspace): refused with what to do.
+  const none = w.run(['--repo', 'claudepilot', '--ref', 'main', '--pool-env', custom, '--', 'true'], { ...over, JOB_RUN_POOL_ENV_DROPIN: join(w.root, 'no-such.json') });
+  assert.equal(none.code, 2, none.out);
+  assert.match(none.out, /delivers no env .*Turn on expose for the secret in its pool/);
+  assert.ok(!none.out.includes(custom));
+  assert.equal(w.calls(), '', 'every refusal comes before any kubectl call');
+  // Accepted: the custom delivered name and the two read-only Koneviro keys of T-2823, as secretKeyRefs of the run container.
+  const ok = w.run(
+    ['--repo', 'claudepilot', '--ref', 'main', '--pool-env', custom, '--pool-env', 'KONEVIRO_S3_RO_ACCESS_KEY_ID', '--pool-env', 'KONEVIRO_S3_RO_SECRET_ACCESS_KEY', '--', 'true'],
+    over,
+  );
+  assert.equal(ok.code, 0, ok.out);
+  const m = yamlLoad(w.applied1()) as Manifest;
+  assert.deepEqual(
+    container(m)
+      .env.filter((e) => e.name.startsWith('JR_POOL_'))
+      .map((e) => e.valueFrom?.secretKeyRef?.key),
+    [custom, 'KONEVIRO_S3_RO_ACCESS_KEY_ID', 'KONEVIRO_S3_RO_SECRET_ACCESS_KEY'],
+  );
+  for (const n of [custom, 'KONEVIRO_S3_RO_ACCESS_KEY_ID', 'KONEVIRO_S3_RO_SECRET_ACCESS_KEY']) assert.ok(!ok.out.includes(vals[n] as string), 'no value shown');
 });
 
 test('T-426 --pool-env: a pasted value that looks like a variable name (lowercase hex starting with a letter) is refused and shown nowhere', () => {
@@ -3064,7 +3142,7 @@ test('T-611 merge (8207 item 3): with a saved entry present, --reuse and a bad -
   const bad = `BAD_${hex(6)}`;
   const r = go(w, c, 'npm test', ['--pool-env', bad]);
   assert.equal(r.code, 2, r.out);
-  assert.match(r.out, /--pool-env: refused: not an allowed name/);
+  assert.match(r.out, /--pool-env: refused: not a variable name/);
   assert.ok(!r.out.includes(bad), 'the argument is not shown');
   assert.doesNotMatch(r.out, /reused a passed result/);
   assert.equal(w.calls(), calls, 'no kubectl call');
