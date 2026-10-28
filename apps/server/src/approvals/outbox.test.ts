@@ -207,7 +207,8 @@ test('T-2889 job-run and the portal hash a run the same way; a kind with no pass
 
 test('a guard refusal too large for one outbox line files nothing and says so; no session or no outbox files nothing', () => {
   const g = guardRig();
-  const big = g.run('Write', { file_path: join(g.repo, '.claude', 'settings.json'), content: 'x'.repeat(5000) });
+  // A Write's content is stored as its digest (review M2), so a long call is a long command.
+  const big = g.run('Bash', { command: `echo ${'x'.repeat(5000)} > .claude/settings.json` });
   assert.equal(big.code, 2);
   assert.match(big.stderr, /too large to file as an approval request/);
   assert.equal(idIn(big.stderr), undefined);
@@ -248,6 +249,85 @@ test('the portal files only the outbox kinds, only for a chat of the pulled work
   assert.ok(made.every((id) => APPROVAL_ID.test(id)));
   await approvals.deny(ownerActor(), made[0]!);
   assert.equal(fileRefusalRequests(approvals, store, WS, [line()]).length, 1);
+});
+
+test('T-2885 review M2: a refused Write stores the path and a digest of the content, never the content; the pass still binds that content', async () => {
+  const g = guardRig();
+  // A password with no token shape, made at runtime.
+  const pw = `hunter-${randomBytes(6).toString('hex')}-pass`;
+  const content = `{"db":{"password":"${pw}"}}\n`;
+  const input = { file_path: join(g.repo, '.claude', 'settings.json'), content };
+  const r = g.run('Write', input);
+  assert.equal(r.code, 2, r.stderr);
+  const id = idIn(r.stderr)!;
+  assert.ok(id, r.stderr);
+  // The outbox line: path kept, content as sha256.
+  const raw = g.lines().join('\n');
+  assert.ok(!raw.includes(pw), 'the outbox line never holds the content');
+  const digest = `sha256:${createHash('sha256').update(content).digest('hex')}`;
+  assert.deepEqual((JSON.parse(g.lines()[0]!) as { payload: { input: unknown } }).payload.input, { file_path: input.file_path, content: digest });
+  // The card: the same.
+  const { store, approvals } = await portal();
+  assert.deepEqual(fileRefusalRequests(approvals, store, WS, g.pulled()), [id]);
+  const card = approvals.getFor(ownerActor(), id);
+  assert.ok(!JSON.stringify(card).includes(pw), 'the card never holds the content');
+  assert.deepEqual((card.payload as { input: unknown }).input, { file_path: input.file_path, content: digest });
+  // A line written by hand with raw content (an old guard, a forged line): the portal digests it before it stores it.
+  const forged: OutboxEvent = { id: `apr-${randomBytes(9).toString('hex')}`, type: 'request', kind: 'guard.refusal', claudeSession: CLAUDE_SESSION, payload: { tool: 'Write', input, cwd: g.repo } };
+  const [fid] = fileRefusalRequests(approvals, store, WS, [forged]);
+  assert.ok(fid);
+  assert.ok(!JSON.stringify(approvals.getFor(ownerActor(), fid!)).includes(pw));
+  // Allow: the pass binds the exact content (the same Write passes once; other content is refused).
+  const allowed = await approvals.allow(ownerActor(), id);
+  assert.equal(allowed.result?.ok, true, allowed.result?.message);
+  writeFileSync(g.passes, passesContent(approvals.livePasses(WS)));
+  chmodSync(g.passes, 0o644);
+  assert.equal(g.run('Write', { ...input, content: `${content} ` }).code, 2, 'other content');
+  assert.equal(g.run('Write', { ...input, content: digest }).code, 2, 'the digest itself as content');
+  const ok = g.run('Write', input);
+  assert.equal(ok.code, 0, ok.stderr);
+});
+
+test('T-2885 review M1: a forged outbox line buys no pass for a call that was never refused', async () => {
+  const g = guardRig();
+  const { store, approvals, delivered } = await portal();
+  const newId = () => `apr-${randomBytes(9).toString('hex')}`;
+  // job-run: a name it delivers freely, or a deny-listed name the arguments never pass as --pool-env: Allow gives no pass.
+  const runs = [
+    { name: 'STG_SEARCH_READ_KEY', args: ['--pool-env', 'STG_SEARCH_READ_KEY', '--', 'true'], cwd: '/w' },
+    { name: 'GITHUB_TOKEN', args: ['--', 'echo GITHUB_TOKEN'], cwd: '/w' },
+  ];
+  const jobIds = fileRefusalRequests(approvals, store, WS, runs.map((payload) => ({ id: newId(), type: 'request', kind: 'jobrun.pool_env', session: CHAT, payload })));
+  assert.equal(jobIds.length, 2);
+  for (const id of jobIds) {
+    const r = await approvals.allow(ownerActor(), id);
+    assert.equal(r.result?.ok, false, r.result?.message);
+    assert.match(r.result?.message ?? '', /No pass: job-run would not refuse this run/);
+  }
+  // guard: a call whose secret part redaction removed is not the exact call: no pass, and the card never holds the value.
+  const fake = `ghp_${randomBytes(18).toString('hex').slice(0, 36)}`;
+  const [redId] = fileRefusalRequests(approvals, store, WS, [
+    { id: newId(), type: 'request', kind: 'guard.refusal', claudeSession: CLAUDE_SESSION, payload: { tool: 'Bash', input: { command: `echo ${fake} > .claude/settings.json` }, cwd: g.repo } },
+  ]);
+  assert.ok(redId);
+  assert.ok(!JSON.stringify(approvals.getFor(ownerActor(), redId!)).includes(fake));
+  const red = await approvals.allow(ownerActor(), redId!);
+  assert.equal(red.result?.ok, false);
+  assert.match(red.result?.message ?? '', /No pass: parts of this call were redacted/);
+  assert.deepEqual(approvals.livePasses(WS), []);
+  assert.deepEqual(delivered, [], 'nothing delivered');
+  // guard: a forged line for a call the guard allows anyway. Allow makes a pass, but the guard consults passes only when it refuses,
+  // so the pass is never used: the call runs as it always did, nothing is marked used, and a refused call is not helped by it.
+  const allowedCall = { command: 'echo hi > notes.txt', description: 'x' };
+  const [aid] = fileRefusalRequests(approvals, store, WS, [{ id: newId(), type: 'request', kind: 'guard.refusal', claudeSession: CLAUDE_SESSION, payload: { tool: 'Bash', input: allowedCall, cwd: g.repo } }]);
+  assert.equal((await approvals.allow(ownerActor(), aid!)).result?.ok, true);
+  writeFileSync(g.passes, passesContent(approvals.livePasses(WS)));
+  chmodSync(g.passes, 0o644);
+  const r = g.run('Bash', allowedCall);
+  assert.equal(r.code, 0, r.stderr);
+  assert.doesNotMatch(r.stderr, /one-time pass/);
+  assert.ok(!existsSync(join(g.home, '.claudepilot', 'approval-passes-used')), 'the pass is not consumed');
+  assert.equal(g.run('Bash', { command: `echo '{"x":1}' > .claude/settings.json` }).code, 2, 'a refused call is still refused');
 });
 
 test('approval_request may not ask for a refusal kind as the portal (no session)', async () => {

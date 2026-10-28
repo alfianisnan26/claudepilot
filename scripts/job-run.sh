@@ -231,7 +231,8 @@ pool_approval() {
   for a in ${argv0[@]+"${argv0[@]}"}; do args=$(jq -nc --argjson l "$args" --arg a "$a" '$l + [$a]') || return 1; done
   line=$(jq -nc --arg id "$id" --arg t "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg s "${PILOT_SESSION_ID:-}" --arg n "$1" --argjson args "$args" --arg cwd "$PWD" \
     '{id: $id, t: $t, type: "request", kind: "jobrun.pool_env", session: $s, payload: {name: $n, args: $args, cwd: $cwd}}') || return 1
-  [ "${#line}" -le 4000 ] || return 1
+  # T-2885 review M3: bytes, not characters (${#line} counts characters in a UTF-8 locale; the portal's cap is in bytes).
+  [ "$(printf '%s' "$line" | wc -c)" -le 4000 ] || return 1
   printf '%s\n' "$line" >>"$box/approval.jsonl" || return 1
   printf '%s' "$id"
 }

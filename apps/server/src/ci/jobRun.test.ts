@@ -24,7 +24,7 @@ import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { load as yamlLoad } from 'js-yaml';
 import { runPod } from './jobRunTestkit.js';
-import { passesContent, passOf } from '../approvals/pass.js';
+import { JOBRUN_DENIED_GLOBS, jobRunDenies, passesContent, passOf } from '../approvals/pass.js';
 
 /** An override value that removes the variable from a child's environment. */
 const UNSET = '\u0000unset';
@@ -1815,6 +1815,35 @@ test('T-2885 a deny-listed --pool-env name files one approval request (name, exa
   assert.equal(n.code, 2, n.out);
   assert.match(n.out, /no request could be filed from here/);
   assert.ok(!existsSync(join(box, 'approval.jsonl')));
+});
+
+test('T-2885 review M3: the 4000 cap on a request line counts bytes, not characters (a UTF-8 locale counts characters)', (t) => {
+  // The cap only differs from a character count in a UTF-8 locale; without one here the test would prove nothing.
+  const probe = spawnSync('bash', ['-c', 'x=é; printf %s "${#x}"'], { env: { LC_ALL: 'C.UTF-8', PATH: '/usr/bin:/bin' }, encoding: 'utf8' });
+  if (probe.stdout !== '1') return t.skip('no UTF-8 locale here');
+  const w = world();
+  const box = join(w.root, 'home', '.claudepilot', 'outbox');
+  mkdirSync(box, { recursive: true });
+  // About 2,700 characters but about 5,300 bytes: under the cap as characters, over it as bytes.
+  const argv = ['--repo', 'claudepilot', '--ref', 'main', '--pool-env', 'GITHUB_TOKEN', '--', `echo ${'é'.repeat(2500)}`];
+  const r = w.run(argv, { GITHUB_TOKEN: `cs${hex(20)}`, LC_ALL: 'C.UTF-8' });
+  assert.equal(r.code, 2, r.out);
+  assert.match(r.out, /no request could be filed from here/);
+  assert.ok(!existsSync(join(box, 'approval.jsonl')) || readFileSync(join(box, 'approval.jsonl'), 'utf8') === '', 'nothing filed');
+});
+
+test('T-2885 review M1: the portal deny-list copy (approvals/pass.ts) is exactly job-run.sh pool_denied, and matches as the shell does', () => {
+  const src = readFileSync(SCRIPT, 'utf8');
+  const body = /^pool_denied\(\) \{\n([\s\S]*?)^\}/m.exec(src)?.[1] ?? '';
+  const globs = [...body.matchAll(/^\s*([^#\s][^)\n]*)\)\s*return 0 ;;/gm)].flatMap((m) => m[1]!.split('|').map((s) => s.trim()));
+  assert.ok(globs.length > 10, `pool_denied parsed: ${body}`);
+  assert.deepEqual([...new Set(globs)].sort(), [...JOBRUN_DENIED_GLOBS].sort());
+  // The glob reading agrees with bash's own `case` for names on and off the list.
+  const names = ['GITHUB_TOKEN', 'X_RW_Y', 'MY_ADMIN_KEY', 'STG_SEARCH_READ_KEY', 'CLAUDE_X', 'PILOTX', 'NODE_AUTH_TOKEN', 'RW', 'A_PRD', 'PRDX'];
+  for (const n of names) {
+    const sh = spawnSync('bash', ['-c', `${/^pool_denied\(\) \{\n[\s\S]*?^\}/m.exec(src)![0]}\npool_denied "$1"`, 'x', n]).status === 0;
+    assert.equal(jobRunDenies(n), sh, n);
+  }
 });
 
 test('T-2889 a one-time pass lets exactly the allowed run through once; another argument, folder, an expired pass or a file root does not own is refused', () => {
