@@ -237,7 +237,8 @@ spec:
               # leave the environment, so npm rebuild and the commit's lifecycle scripts do not inherit them; pool_on exports them for the
               # command alone. Known limit: this shell's own start-up environment (/proc/1/environ) still holds them: not hidden from code that reads it.
               declare -A jr_pool=()
-              for v in $(compgen -e); do case $v in JR_POOL_E2E_CF_ACCESS_*|JR_POOL_E2E_QA_EMAIL|JR_POOL_E2E_QA_PASSWORD|JR_POOL_E2E_QA2_EMAIL|JR_POOL_E2E_QA2_PASSWORD) jr_pool[${v#JR_POOL_}]=${!v}; unset "$v" ;; esac; done
+              # Every JR_POOL_<name> (T-2865): the manifest holds only names scripts/job-run.sh accepted, so the name policy lives there alone.
+              for v in $(compgen -e); do case $v in JR_POOL_[A-Z]*) jr_pool[${v#JR_POOL_}]=${!v}; unset "$v" ;; esac; done
               pool_on() { local k; for k in "${!jr_pool[@]}"; do export "$k=${jr_pool[$k]}"; done; }
               pool_off() { local k; for k in "${!jr_pool[@]}"; do unset "$k"; done; }
               cat "$root/fetch.log" 2>/dev/null
