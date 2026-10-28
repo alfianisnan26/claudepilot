@@ -114,6 +114,7 @@ import { createUsageSpendRoutes, type UsageSpend } from './usagespend/index.js';
 import type { Lab } from './lab/index.js';
 import { createLabRoutes } from './lab/routes.js';
 import { createGlanceRoutes, type Glance } from './glance/index.js';
+import { createApprovalRoutes, type Approvals } from './approvals/index.js';
 import { createAttentionRoutes, type AttentionRegistry } from './attention/index.js';
 import type { ConnectModule } from './connect/index.js';
 import { createClaudeVersionRoutes, createWorkspaceClaudeVersionRoutes, type ClaudeVersions } from './claudeversion/index.js';
@@ -193,6 +194,7 @@ export function createApp(
     repos,
     glance,
     attention,
+    approvals,
     codespaces,
     platform,
     claudeVersions,
@@ -236,6 +238,8 @@ export function createApp(
     glance?: Glance;
     /** Needs you: what waits for a person, from every module, read only (`/api/attention`). */
     attention?: AttentionRegistry;
+    /** Approvals: what an agent asks and a person allows or denies; the portal runs it (`/api/approvals`, docs/prd/approvals.md). */
+    approvals?: Approvals;
     /** GitHub Codespaces POC: GitHub connections and the codespace lifecycle (`/api/codespaces`, docs/prd/codespaces-poc.md). */
     codespaces?: Codespaces;
     /** The platform track: notifications, the platform audit, and the modules that register with it (`/api/notify`, `/api/platform`, `/hooks`). */
@@ -1258,6 +1262,14 @@ export function createApp(
     at.use(requireSession);
     at.route('/', createAttentionRoutes(attention));
     app.route('/api/attention', at);
+  }
+
+  // Approvals (docs/prd/approvals.md, PILOT-1000): a person's queue, one request, Allow and Deny; the service refuses anyone else (404).
+  if (approvals) {
+    const ap = new Hono<Env>();
+    ap.use(requireSession);
+    ap.route('/', createApprovalRoutes(approvals));
+    app.route('/api/approvals', ap);
   }
 
   // Claude Code version pinning: the registry, the compatibility canary and its schedule, images and the default pin (docs/prd/claude-version-pinning.md).
