@@ -392,10 +392,15 @@ test('PILOT-997: a new session no person started starts in Auto while “Auto fo
   try {
     s.controller.autonomousAuto = () => true;
     const before = s.ws.tails.length;
-    const p = s.controller.create({ workspaceId: 'docker/ws1', title: 'Trigger' }, { actor: 'portal:trigger-abc' });
-    const trig = await answering(s, p);
-    await until(() => s.ws.tails.length === before + 1);
-    await answering(s, until(() => s.controller.get(trig.id)?.mode === 'auto', 3000));
+    // One `answering` for the create and the wait: the Auto switch can go out between two of them, and a second one would start counting
+    // after it (never answered: the flake of claudepilot-job-0844c756).
+    const started = async () => {
+      const t = await s.controller.create({ workspaceId: 'docker/ws1', title: 'Trigger' }, { actor: 'portal:trigger-abc' });
+      await until(() => s.ws.tails.length === before + 1);
+      await until(() => s.controller.get(t.id)?.mode === 'auto', 3000);
+      return t;
+    };
+    const trig = await answering(s, started());
     const audit = s.controller.audit({ kind: 'mode.auto' }).find((x) => x.sessionId === trig.id)!;
     assert.deepEqual([audit.actor, audit.detail.how], ['portal', 'start']);
 
