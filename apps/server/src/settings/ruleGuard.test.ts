@@ -1432,7 +1432,11 @@ test('PILOT-998: git -C on a tool checkout refuses writes, plain pulls and merge
     ['merge --ff-only --squash', `${c} merge --ff-only --squash origin/x`, /with --squash/],
     ['merge --abort', `${c} merge --abort`, /without --ff-only/],
     // Review 43381 B1: only the checked-out branch's upstream, never a ref a lane chose.
-    ['merge --ff-only of another branch', `${c} merge --ff-only origin/ticket/x`, /only the checked-out branch.s upstream, origin\/integration/],
+    [
+      'merge --ff-only of another branch',
+      `${c} merge --ff-only origin/ticket/x`,
+      /only the checked-out branch.s upstream, origin\/integration/,
+    ],
     ['merge --ff-only of FETCH_HEAD', `${c} merge --ff-only FETCH_HEAD`, /only the checked-out branch/],
     ['merge --ff-only of a commit', `${c} merge --ff-only 0123abc`, /only the checked-out branch/],
     ['merge --ff-only of no ref', `${c} merge --ff-only`, /What to do: use git -C <tool root> merge --ff-only @\{u\}/],
