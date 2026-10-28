@@ -653,9 +653,10 @@ and the code differ, the code is what ships:
   `pool_get` shows each secret's name, options and fingerprint (not the hint), and `pool_get` and `pool_list`
   carry `warnings` for an environment-style name (`API_KEY`) stored without `expose` (T-2823).
   A value sent to `pool_create` or `pool_update` by mistake is never kept: wherever the call is kept (audit
-  row, chat tool row, approval card; `maskWriteOnlyArgs` in contracts) a secrets pool's `content` keeps only
-  `names`, each entry's `kind` and `name` and boolean options, and every other field is `[write-only]`; for
-  any other type, `value`, `values`, `newValue`, `secret`, `secrets`, `keys`, `password`, `token` and
+  row, chat tool row, approval card; `maskWriteOnlyArgs` in contracts) `pool_update`'s `content` is
+  `[write-only]` whole (it names the pool by id, so it may be a secrets pool's); `pool_create`'s for a secrets
+  pool keeps only `names`, each entry's `kind` and `name` and boolean options, and every other field is
+  `[write-only]`; for any other type, `value`, `values`, `newValue`, `secret`, `secrets`, `keys`, `password`, `token` and
   `credential(s)` keys of `content` are masked at any depth. The "looks like a secret" refusal still reads that
   content unmasked (only `pool_secret_set`'s `value` is left out of it), so a key in an MCP set is refused.
   Persona and browser pools are not listed until their services are in.

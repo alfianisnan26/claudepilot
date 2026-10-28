@@ -326,8 +326,9 @@ const namesOnly = (content: unknown): unknown => {
 
 /**
  * A copy of a call's arguments as it may be kept anywhere (the audit row, the chat transcript's tool row, an approval card): its declared
- * write-only arguments masked, and for `pool_create` and `pool_update` every value-bearing field of `content` masked too (T-2866). For a
- * secrets pool (`type` "secrets", in any case) the content keeps names only. Anything that is not an object comes back as it is.
+ * write-only arguments masked, and `content` of the pool tools too (T-2866): `pool_update`'s whole (it has no `type`, so it may be a
+ * secrets pool's); `pool_create`'s for a secrets pool (`type` "secrets", in any case) keeps names only, for any other type its
+ * value-bearing fields are masked. Anything that is not an object comes back as it is.
  */
 export function maskWriteOnlyArgs<T>(toolName: string | null | undefined, args: T): T {
   const declared = maskDeclaredWriteOnlyArgs(toolName, args);
@@ -335,6 +336,11 @@ export function maskWriteOnlyArgs<T>(toolName: string | null | undefined, args: 
   if (!declared || typeof declared !== 'object' || Array.isArray(declared)) return declared;
   const out: Record<string, unknown> = { ...(declared as Record<string, unknown>) };
   if (!('content' in out)) return out as T;
+  // pool_update names its pool by id only: nothing here says it is not a secrets pool, so its content is never kept, under any key.
+  if (bareToolName(toolName) === 'pool_update') {
+    out.content = WRITE_ONLY_MASK;
+    return out as T;
+  }
   const secrets = typeof out.type === 'string' && out.type.trim().toLowerCase() === 'secrets';
   out.content = secrets ? namesOnly(out.content) : maskValueKeys(out.content, 0);
   return out as T;

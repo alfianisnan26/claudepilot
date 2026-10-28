@@ -195,6 +195,8 @@ test('a value sent by mistake to pool_create or pool_update never reaches the au
     { tool: 'pool_create', args: (v) => ({ type: 'secrets', name: 'x'.repeat(80), content: { entries: [{ kind: 'secret', name: 'K', newValue: v }] } }) },
     { tool: 'pool_update', args: (v) => ({ id: own.id, base_revision: s.service.get(own.id).latestRevision, content: { entries: [{ kind: 'secret', name: 'K', newValue: v }] } }) },
     { tool: 'pool_update', args: (v) => ({ id: own.id, base_revision: 1, content: { entries: [{ kind: 'variable', name: 'K', value: v, secrets: { a: v } }] } }) },
+    // A key outside the value-key list: pool_update has no type, so its content is masked whole.
+    { tool: 'pool_update', args: (v) => ({ id: own.id, base_revision: 1, content: { entries: [{ name: 'K', val: v }], misc: { blob: v } } }) },
   ];
   const before = new Set(s.service.list('secrets').map((p) => p.id));
   for (const make of [value, keyShaped]) {
@@ -216,6 +218,11 @@ test('a value sent by mistake to pool_create or pool_update never reaches the au
   // The names stay readable where the call is kept.
   const masked = maskWriteOnlyArgs('pool_create', { type: 'secrets', name: 'n', content: { names: ['API_KEY'], entries: [{ kind: 'secret', name: 'B', options: { expose: true }, newValue: 'x' }] } });
   assert.deepEqual(masked.content, { names: ['API_KEY'], entries: [{ kind: 'secret', name: 'B', options: { expose: true }, newValue: WRITE_ONLY_MASK }] });
+  assert.deepEqual(maskWriteOnlyArgs('mcp__pilot__pool_update', { id: 'p', base_revision: 1, content: { entries: [{ name: 'K', val: 'x' }] } }), {
+    id: 'p',
+    base_revision: 1,
+    content: WRITE_ONLY_MASK,
+  });
   // Anything that is not a name or a boolean option is masked, whatever its key.
   const odd = maskWriteOnlyArgs('mcp__pilot__pool_create', { type: 'secrets', content: { entries: [{ kind: 'secret', name: 'C', options: { pathVariable: 'P' }, extra: 'e' }], other: 'o' } });
   assert.deepEqual(odd.content, { entries: [{ kind: 'secret', name: 'C', options: WRITE_ONLY_MASK, extra: WRITE_ONLY_MASK }], other: WRITE_ONLY_MASK });
