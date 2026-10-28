@@ -2369,14 +2369,74 @@ function ask(input, tool, form) {
   }
 }
 
+// T-2889: the one-time pass. A person who allowed request <id> made the portal deliver the sha256 of that exact call (the kind, the tool,
+// the canonical JSON of its input, the folder; approvals/pass.ts) to a root-owned file. A call that hashes to a listed, unexpired pass
+// that this workspace has not used yet goes through ONCE: the hash goes to the used list first, then a 'used' line to the outbox, so the
+// portal drops the pass. Any other call (another input, folder or tool) hashes differently and is refused as before. The file must be a
+// regular file owned by root that only root may write; the agent cannot make one. The path and owner are fixed: the wrapper runs this
+// under env -i, so the two overrides below are only reachable by a test that runs the script itself.
+const PASSES_FILE = process.env.CLAUDEPILOT_GUARD_PASSES_FILE || '/etc/claudepilot/approval-passes';
+const PASSES_UID = process.env.CLAUDEPILOT_GUARD_PASSES_FILE && /^[0-9]+$/.test(process.env.CLAUDEPILOT_GUARD_PASSES_UID || '') ? Number(process.env.CLAUDEPILOT_GUARD_PASSES_UID) : 0;
+const PASSES_USED = path.join(HOME, '.claudepilot', 'approval-passes-used');
+function canon(v) {
+  if (Array.isArray(v)) return '[' + v.map(function (x) { return canon(x === undefined ? null : x); }).join(',') + ']';
+  if (v && typeof v === 'object') {
+    return '{' + Object.keys(v).filter(function (k) { return v[k] !== undefined; }).sort().map(function (k) { return JSON.stringify(k) + ':' + canon(v[k]); }).join(',') + '}';
+  }
+  const s = JSON.stringify(v);
+  return s === undefined ? 'null' : s;
+}
+function passOfCall(input, tool) {
+  const ti = input && input.tool_input && typeof input.tool_input === 'object' && !Array.isArray(input.tool_input) ? input.tool_input : null;
+  if (!ti || !tool) return '';
+  const cwd = typeof input.cwd === 'string' ? input.cwd : '';
+  const parts = ['guard.refusal', tool, canon(ti), cwd];
+  return require('crypto').createHash('sha256').update(parts.map(function (x) { return x + '\0'; }).join('')).digest('hex');
+}
+function usePass(input, tool) {
+  try {
+    const st = fs.lstatSync(PASSES_FILE);
+    if (!st.isFile() || st.uid !== PASSES_UID || (st.mode & 18) !== 0) return false;
+    const pass = passOfCall(input, tool);
+    if (!pass) return false;
+    const now = Date.now() / 1000;
+    const live = fs.readFileSync(PASSES_FILE, 'utf8').split('\n').some(function (l) {
+      const m = /^([0-9a-f]{64}) ([0-9]{1,12})$/.exec(l.trim());
+      return !!m && m[1] === pass && Number(m[2]) > now;
+    });
+    if (!live) return false;
+    let used = '';
+    try {
+      used = fs.readFileSync(PASSES_USED, 'utf8');
+    } catch (e) {
+      used = '';
+    }
+    if (used.split('\n').indexOf(pass) >= 0) return false;
+    fs.mkdirSync(path.dirname(PASSES_USED), { recursive: true, mode: 448 });
+    fs.appendFileSync(PASSES_USED, pass + '\n', { mode: 384 });
+    try {
+      const file = path.join(HOME, '.claudepilot', 'outbox', 'approval.jsonl');
+      const line = JSON.stringify({ id: 'used-' + pass.slice(0, 16) + '-' + Date.now(), t: new Date().toISOString(), type: 'used', pass: pass });
+      fs.appendFileSync(file, line + '\n', { mode: 384 });
+    } catch (e) {
+      // the used list holds it; the portal drops the pass when it expires
+    }
+    process.stderr.write('claudepilot: this exact call runs once on a one-time pass a person allowed (T-2889).\n');
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
 function refuse(input, tool, form, p, todo) {
+  if (usePass(input, tool)) process.exit(0);
   audit(input, tool, form, p);
   const next = todo ? 'What to do: ' + todo + '.' : 'Propose the change as text on a ticket; the coordinator lands it.';
   const id = ask(input, tool, form);
   const filed = id === 'large'
     ? ' This call is too large to file as an approval request.'
     : id
-      ? ' Or a person allows this exact call: approval request ' + id + ' is filed (approval_get ' + id + ' shows it within a minute; if it never shows, the portal refused the request). Allow runs nothing yet (T-2889).'
+      ? ' Or a person allows this exact call: approval request ' + id + ' is filed (approval_get ' + id + ' shows it within a minute; if it never shows, the portal refused the request). When it is allowed, run this same call again (same input, same folder) within 15 minutes; it goes through once.'
       : '';
   process.stderr.write(MESSAGE + '. Refused: ' + form + (p ? ' (' + p + ')' : '') + '. ' + next + filed + '\n');
   process.exit(2);

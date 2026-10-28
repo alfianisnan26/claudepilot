@@ -24,6 +24,7 @@ import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { load as yamlLoad } from 'js-yaml';
 import { runPod } from './jobRunTestkit.js';
+import { passesContent, passOf } from '../approvals/pass.js';
 
 /** An override value that removes the variable from a child's environment. */
 const UNSET = '\u0000unset';
@@ -166,7 +167,10 @@ const poolDropin = (names: string[]) =>
 // The script's drop-in path is fixed (no variable overrides it: review 42840), so a test runs a scratch copy of the two files with
 // that one line pointing at its fixture.
 const DROPIN_LINE = 'pool_dropin=/etc/claude-code/managed-settings.d/20-claudepilot-env.json\n';
-function scriptWithDropin(dropin: string) {
+// T-2889: the passes file and its owner are fixed the same way; a pass test points the copy at its own file and owner.
+const PASS_FILE_LINE = 'pass_file=/etc/claudepilot/approval-passes\n';
+const PASS_UID_LINE = 'pass_uid=0\n';
+function scriptWithDropin(dropin: string, pass?: { file: string; uid: number }) {
   const dir = mkdtempSync(join(tmpdir(), 'cp-jobrun-pool-'));
   roots.push(dir);
   mkdirSync(join(dir, 'scripts'));
@@ -174,7 +178,11 @@ function scriptWithDropin(dropin: string) {
   writeFileSync(join(dir, 'deploy/k3s-build/job-run.yaml'), readFileSync(TEMPLATE, 'utf8'));
   const src = readFileSync(SCRIPT, 'utf8');
   assert.equal(src.split(DROPIN_LINE).length, 2, 'the script names the drop-in path on exactly one line');
-  writeFileSync(join(dir, 'scripts/job-run.sh'), src.replace(DROPIN_LINE, `pool_dropin=${dropin}\n`));
+  assert.equal(src.split(PASS_FILE_LINE).length, 2, 'the script names the passes file on exactly one line');
+  assert.equal(src.split(PASS_UID_LINE).length, 2, 'the script names the passes owner on exactly one line');
+  let out = src.replace(DROPIN_LINE, `pool_dropin=${dropin}\n`);
+  if (pass) out = out.replace(PASS_FILE_LINE, `pass_file=${pass.file}\n`).replace(PASS_UID_LINE, `pass_uid=${pass.uid}\n`);
+  writeFileSync(join(dir, 'scripts/job-run.sh'), out);
   return join(dir, 'scripts/job-run.sh');
 }
 
@@ -1787,7 +1795,7 @@ test('T-2885 a deny-listed --pool-env name files one approval request (name, exa
   const id = /approval request (apr-[0-9a-f]{18}) is filed for this exact run/.exec(r.out)?.[1];
   assert.ok(id, r.out);
   assert.match(r.out, /It needs a person's approval \(PILOT-1000\)/);
-  assert.match(r.out, /Allow runs nothing yet \(T-2889\)/);
+  assert.match(r.out, /When it is allowed, run this same command again, in the same folder, within 15 minutes: it passes once \(T-2889\)/);
   assert.ok(!r.out.includes('GITHUB_TOKEN'), 'the name is not shown');
   const raw = readFileSync(join(box, 'approval.jsonl'), 'utf8');
   assert.ok(!raw.includes(val) && !r.out.includes(val), 'a value is never written or shown');
@@ -1807,6 +1815,63 @@ test('T-2885 a deny-listed --pool-env name files one approval request (name, exa
   assert.equal(n.code, 2, n.out);
   assert.match(n.out, /no request could be filed from here/);
   assert.ok(!existsSync(join(box, 'approval.jsonl')));
+});
+
+test('T-2889 a one-time pass lets exactly the allowed run through once; another argument, folder, an expired pass or a file root does not own is refused', () => {
+  const w = world();
+  const box = join(w.root, 'home', '.claudepilot', 'outbox');
+  mkdirSync(box, { recursive: true });
+  // The deny-listed name is delivered by the pool, so a run the pass lets through goes on to the Job (the pass skips the deny-list only).
+  const dropin = join(w.root, 'dropin-2889.json');
+  writeFileSync(dropin, poolDropin([...WORLD_DELIVERED, 'GITHUB_TOKEN']));
+  const over = { GITHUB_TOKEN: `v${hex(12)}` };
+  const passes = join(w.root, 'approval-passes');
+  const uid = process.getuid!();
+  const script = scriptWithDropin(dropin, { file: passes, uid });
+  const argv = ['--repo', 'claudepilot', '--ref', 'main', '--pool-env', 'GITHUB_TOKEN', '--', 'npm test -- --grep "a b"'];
+  // The portal's own hash of the stored payload (approvals/pass.ts) is what the script must compute: the two sides agree.
+  const pass = passOf('jobrun.pool_env', { name: 'GITHUB_TOKEN', args: argv, cwd: w.root })!;
+  const write = (list: { pass: string; until: number }[], mode = 0o644) => {
+    writeFileSync(passes, passesContent(list));
+    chmodSync(passes, mode);
+  };
+  const refused = (r: { code: number | null; out: string }, what: string) => {
+    assert.equal(r.code, 2, `${what}: ${r.out}`);
+    assert.match(r.out, /a deny-listed name/, what);
+  };
+  // No pass, a pass for another folder, a pass for another argument, an expired pass: refused.
+  refused(w.run(argv, over, script), 'no passes file');
+  write([
+    { pass: passOf('jobrun.pool_env', { args: argv, cwd: '/elsewhere' })!, until: Date.now() + 60_000 },
+    { pass: passOf('jobrun.pool_env', { args: [...argv.slice(0, -1), 'npm test'], cwd: w.root })!, until: Date.now() + 60_000 },
+    { pass, until: Date.now() - 1000 },
+  ]);
+  refused(w.run(argv, over, script), 'other folder, other argument, expired');
+  // The live pass in a file group or others may write, or one root does not own (the script's own uid line is 0): refused.
+  write([{ pass, until: Date.now() + 60_000 }], 0o664);
+  refused(w.run(argv, over, script), 'group-writable');
+  write([{ pass, until: Date.now() + 60_000 }]);
+  refused(w.run(argv, over, scriptWithDropin(dropin, { file: passes, uid: uid + 1 })), 'not the owner');
+  // A different run, the live pass there: still refused (its argv hashes differently).
+  refused(w.run([...argv.slice(0, -1), 'npm test'], over, script), 'another argument');
+  assert.equal(w.calls(), '', 'every refusal comes before any kubectl call');
+  // The exact run: through, once; the use is reported on the outbox with the pass (no name, no value).
+  const ok = w.run(argv, over, script);
+  assert.equal(ok.code, 0, ok.out);
+  assert.match(ok.out, /passes its deny-listed --pool-env names once, on a one-time pass a person allowed \(T-2889\)/);
+  assert.notEqual(w.calls(), '', 'the Job was made');
+  assert.equal(readFileSync(join(w.root, 'home', '.claudepilot', 'approval-passes-used'), 'utf8'), `${pass}\n`);
+  const used = readFileSync(join(box, 'approval.jsonl'), 'utf8')
+    .trim()
+    .split('\n')
+    .map((l) => JSON.parse(l) as { id: string; type: string; pass?: string })
+    .filter((l) => l.type === 'used');
+  assert.equal(used.length, 1);
+  assert.equal(used[0]!.pass, pass);
+  assert.ok(used[0]!.id.length <= 100);
+  assert.ok(!JSON.stringify(used).includes('GITHUB_TOKEN') && !JSON.stringify(used).includes(over.GITHUB_TOKEN));
+  // The same run again, the pass still in the file (the portal has not pulled yet): refused.
+  refused(w.run(argv, over, script), 'used once already');
 });
 
 test('PILOT-998 --pool-env: any name the Secrets pool delivers is accepted (the two T-2823 keys too); a deny-listed one is refused even when delivered; an undelivered one is refused and never shown', () => {

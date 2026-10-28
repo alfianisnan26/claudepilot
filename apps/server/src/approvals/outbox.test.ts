@@ -1,20 +1,24 @@
 // T-2885 (PILOT-1009): a refusal files ONE approval request through the workspace outbox, and the refusal message shows its id. The rule
 // guard is run for real (the delivered script, node, a scratch home); the portal side is the handler index.ts subscribes to `approval`.
 import assert from 'node:assert/strict';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
 import { ownerActor } from '../authz/seam.js';
 import { ChatStore } from '../chat/store.js';
+import { changedAreas } from '../delivery/changes.js';
 import { parseOutbox, type OutboxEvent } from '../delivery/outbox.js';
+import { mayWrite } from '../delivery/ownership.js';
+import { MANIFEST_PATH } from '../delivery/types.js';
 import { RULE_GUARD_MESSAGE, RULE_GUARD_SCRIPT } from '../settings/ruleGuard.js';
 import { generateSecretKey, parseSecretKey } from '../store/secretBox.js';
 import { Store } from '../store/store.js';
 import type { ApprovalChat } from './kinds.js';
-import { APPROVAL_CHANNEL, fileRefusalRequests, OUTBOX_PENDING_MAX } from './outbox.js';
+import { APPROVAL_CHANNEL, fileRefusalRequests, markUsedPasses, OUTBOX_PENDING_MAX } from './outbox.js';
+import { APPROVAL_PASSES_PATH, PASS_TTL_MS, passesContent, passOf } from './pass.js';
 import { APPROVAL_ID, Approvals } from './service.js';
 
 const roots: string[] = [];
@@ -30,7 +34,7 @@ const CHAT = 'chat-a';
 const CLAUDE_SESSION = 'a1b2c3d4-0000-4000-8000-0000000000aa';
 
 /** The portal: a store whose chat CHAT (workspace WS) ran Claude Code session CLAUDE_SESSION, and an Approvals that knows that chat only. */
-async function portal() {
+async function portal(opts: { now?: () => number } = {}) {
   const store = await Store.open({ dataDir: scratch('cp-apr-outbox-db-'), secretKey: parseSecretKey(generateSecretKey()) });
   new ChatStore(store).create({ id: CHAT, workspaceId: WS, cwd: '/w', title: 't', origin: 'ui' });
   store.db!.prepare('UPDATE chat_sessions SET claude_session_id = ? WHERE id = ?').run(CLAUDE_SESSION, CHAT);
@@ -40,9 +44,11 @@ async function portal() {
     get: (id) => (sessions[id] ? { id, title: 't', workspaceId: sessions[id]!, bypassCapable: false, mode: 'default', state: 'idle' } : null),
     send: async () => undefined,
   };
-  const approvals = new Approvals({ db: () => store.db, chat });
+  // T-2889: delivery is a fake that records which workspace it was asked to deliver again.
+  const delivered: string[] = [];
+  const approvals = new Approvals({ db: () => store.db, chat, delivery: { passesChanged: (ws) => void delivered.push(ws) }, ...(opts.now ? { now: opts.now } : {}) });
   after(() => store.close());
-  return { store, approvals };
+  return { store, approvals, delivered };
 }
 
 /** A scratch home with an outbox, and the guard's Node half. */
@@ -55,21 +61,25 @@ function guardRig() {
   writeFileSync(join(repo, '.claude', 'settings.json'), '{}\n');
   const script = join(root, 'policy-rule-guard.cjs');
   writeFileSync(script, RULE_GUARD_SCRIPT);
-  const run = (tool: string, toolInput: Record<string, unknown>, session = CLAUDE_SESSION) => {
+  // T-2889: the passes file of this rig and the owner the guard requires of it (the real ones are fixed; see ruleGuard.ts PASSES_FILE).
+  const passes = join(root, 'approval-passes');
+  let passOwner = process.getuid!();
+  const run = (tool: string, toolInput: Record<string, unknown>, session = CLAUDE_SESSION, cwd = repo) => {
     const r = spawnSync(process.execPath, [script], {
-      input: JSON.stringify({ session_id: session, transcript_path: '/dev/null', cwd: repo, permission_mode: 'default', hook_event_name: 'PreToolUse', tool_name: tool, tool_input: toolInput }),
+      input: JSON.stringify({ session_id: session, transcript_path: '/dev/null', cwd, permission_mode: 'default', hook_event_name: 'PreToolUse', tool_name: tool, tool_input: toolInput }),
       cwd: repo,
-      env: { HOME: home, PATH: process.env.PATH ?? '/usr/bin:/bin' },
+      env: { HOME: home, PATH: process.env.PATH ?? '/usr/bin:/bin', CLAUDEPILOT_GUARD_PASSES_FILE: passes, CLAUDEPILOT_GUARD_PASSES_UID: String(passOwner) },
       encoding: 'utf8',
       timeout: 20_000,
     });
     return { code: r.status, stderr: r.stderr };
   };
+  const owner = (uid: number) => void (passOwner = uid);
   const file = join(home, '.claudepilot', 'outbox', `${APPROVAL_CHANNEL}.jsonl`);
   const lines = () => (existsSync(file) ? readFileSync(file, 'utf8').trim().split('\n').filter(Boolean) : []);
   /** What the portal's pull would hand the subscriber. */
   const pulled = (): OutboxEvent[] => parseOutbox(`\x1e${APPROVAL_CHANNEL}.1.pulling\n${lines().join('\n')}\n`).events.map((e) => e.event);
-  return { repo, run, lines, pulled };
+  return { root, home, repo, passes, run, owner, lines, pulled };
 }
 
 const idIn = (text: string) => /approval request (apr-[0-9a-f]{18}) is filed/.exec(text)?.[1];
@@ -82,7 +92,7 @@ test('a guard refusal files exactly one request with the exact call, shows its i
   assert.ok(r.stderr.startsWith(RULE_GUARD_MESSAGE), r.stderr);
   const id = idIn(r.stderr);
   assert.ok(id, `the refusal shows the request id: ${r.stderr}`);
-  assert.match(r.stderr, /Allow runs nothing yet \(T-2889\)/);
+  assert.match(r.stderr, /When it is allowed, run this same call again \(same input, same folder\) within 15 minutes; it goes through once\./);
   // One line, the exact call (tool, its whole input, the folder, the form), and the session.
   assert.equal(g.lines().length, 1);
   const line = JSON.parse(g.lines()[0]!) as Record<string, unknown>;
@@ -105,11 +115,94 @@ test('a guard refusal files exactly one request with the exact call, shows its i
   // The same line pulled again (a restart re-reading a file) makes nothing more: the id is taken.
   assert.deepEqual(fileRefusalRequests(approvals, store, WS, g.pulled()), []);
   assert.equal(approvals.listOwn(CHAT).length, 1, 'exactly one request');
-  // Allow runs nothing yet, and says so (T-2889).
+});
+
+test('T-2889 Allow on a guard refusal issues a pass the guard honours for exactly that call, once; the used line drops it', async () => {
+  const g = guardRig();
+  const command = `echo '{"x":1}' > .claude/settings.json`;
+  const input = { command, description: 'x' };
+  const r = g.run('Bash', input);
+  assert.equal(r.code, 2, r.stderr);
+  const id = idIn(r.stderr)!;
+  let now = Date.now();
+  const { store, approvals, delivered } = await portal({ now: () => now });
+  assert.deepEqual(fileRefusalRequests(approvals, store, WS, g.pulled()), [id]);
+  assert.deepEqual(approvals.livePasses(WS), [], 'no pass before Allow');
+  // Allow: the result holds the pass (the hash of the exact call, no name or value) and its expiry; delivery is asked for this workspace.
   const allowed = await approvals.allow(ownerActor(), id);
-  assert.equal(allowed.status, 'allowed');
-  assert.equal(allowed.result?.ok, false);
-  assert.match(allowed.result?.message ?? '', /Nothing ran.*T-2889/);
+  assert.equal(allowed.result?.ok, true, allowed.result?.message);
+  assert.match(allowed.result?.message ?? '', /run the same call again, in the same folder with the same arguments/);
+  const pass = passOf('guard.refusal', { tool: 'Bash', input, cwd: g.repo })!;
+  const out = allowed.result?.output as { pass: string; until: string; used: boolean };
+  assert.equal(out.pass, pass, 'the portal hashes the stored payload as the guard hashes the call');
+  assert.equal(Date.parse(out.until), now + PASS_TTL_MS, 'a pass lasts 15 minutes');
+  assert.deepEqual(delivered, [WS]);
+  assert.deepEqual(approvals.livePasses(WS), [{ pass, until: now + PASS_TTL_MS }]);
+  assert.deepEqual(approvals.livePasses('docker/ws2'), [], 'only its own workspace gets it');
+  // What the policy owner delivers (agentEnv.fragments): the passes file.
+  const deliver = (mode = 0o644) => {
+    writeFileSync(g.passes, passesContent(approvals.livePasses(WS)));
+    chmodSync(g.passes, mode);
+  };
+  deliver();
+  assert.ok(!readFileSync(g.passes, 'utf8').includes(command), 'the file holds hashes, never the call');
+  // Another input, another folder, another tool: still refused (each files its own request).
+  assert.equal(g.run('Bash', { command, description: 'y' }).code, 2, 'another input');
+  assert.equal(g.run('Bash', input, CLAUDE_SESSION, join(g.repo, '.claude')).code, 2, 'another folder');
+  assert.equal(g.run('Bash', { ...input, run_in_background: true }).code, 2, 'another field');
+  // A file group or others may write, or one root does not own: ignored, so refused.
+  deliver(0o664);
+  assert.equal(g.run('Bash', input).code, 2, 'group-writable');
+  deliver();
+  g.owner(process.getuid!() + 1);
+  assert.equal(g.run('Bash', input).code, 2, 'not owned by the required owner');
+  g.owner(process.getuid!());
+  // The exact call: through, once. The use is on the outbox and in the used list.
+  const before = g.lines().length;
+  const ok = g.run('Bash', input);
+  assert.equal(ok.code, 0, ok.stderr);
+  assert.match(ok.stderr, /runs once on a one-time pass a person allowed \(T-2889\)/);
+  assert.equal(readFileSync(join(g.home, '.claudepilot', 'approval-passes-used'), 'utf8'), `${pass}\n`);
+  const usedLine = g.lines().slice(before).map((l) => JSON.parse(l) as { id: string; type: string; pass: string });
+  assert.deepEqual(usedLine.map((l) => [l.type, l.pass]), [['used', pass]]);
+  // Again, the file not yet redelivered: refused.
+  assert.equal(g.run('Bash', input).code, 2, 'used once already');
+  // The portal pulls the used line: the pass is marked used, the workspace is delivered again, and the file drops it.
+  assert.equal(markUsedPasses(approvals, 'docker/ws2', g.pulled()), 0, 'another workspace cannot use it up');
+  assert.equal(markUsedPasses(approvals, WS, g.pulled()), 1);
+  assert.deepEqual(delivered, [WS, WS]);
+  assert.deepEqual(approvals.livePasses(WS), []);
+  assert.equal((approvals.getFor(ownerActor(), id).result?.output as { used: boolean }).used, true);
+  assert.equal(markUsedPasses(approvals, WS, g.pulled()), 0, 'a second pull marks nothing');
+  // Expiry: a pass past its time is not delivered, and a listed one past its time is refused by the guard.
+  now += PASS_TTL_MS + 1;
+  assert.deepEqual(approvals.livePasses(WS), []);
+  rmSync(join(g.home, '.claudepilot', 'approval-passes-used'));
+  writeFileSync(g.passes, passesContent([{ pass, until: Date.now() - 1000 }]));
+  assert.equal(g.run('Bash', input).code, 2, 'expired');
+});
+
+test('T-2889 the passes file is root-owned 0644 outside every workspace folder, only the policy owner may write it, and a change to it is no configuration change', () => {
+  assert.equal(APPROVAL_PASSES_PATH, '/etc/claudepilot/approval-passes');
+  assert.ok(mayWrite('policy', APPROVAL_PASSES_PATH));
+  for (const o of ['secrets', 'mcpset', 'skillset', 'persona', 'context', 'browser', 'account', 'settings', 'foundation'] as const) assert.ok(!mayWrite(o, APPROVAL_PASSES_PATH), o);
+  const content = passesContent([{ pass: 'a'.repeat(64), until: 2_000_000_000_000 }, { pass: 'not-a-hash', until: 2_000_000_000_000 }]);
+  assert.match(content, /^# claudepilot: one-time passes/);
+  assert.ok(content.endsWith(`${'a'.repeat(64)} 2000000000\n`) && !content.includes('not-a-hash'), 'only hashes, with expiry in seconds');
+  const files = (passesFile: string) => ({ [MANIFEST_PATH]: 'm', [APPROVAL_PASSES_PATH]: passesFile });
+  assert.deepEqual(changedAreas({ files: files('one') } as never, { files: files('two') } as never), [], 'no Restart hint for a new pass');
+});
+
+test('T-2889 job-run and the portal hash a run the same way; a kind with no pass has none', () => {
+  // bash: printf '%s\0' jobrun.pool_env "$PWD" "${argv0[@]}" | sha256sum (jobRun.test.ts runs the script itself).
+  const argv = ['--pool-env', 'GITHUB_TOKEN', '--', 'npm test'];
+  const nul = ['jobrun.pool_env', '/w', ...argv].map((p) => `${p}\0`).join('');
+  assert.equal(passOf('jobrun.pool_env', { name: 'GITHUB_TOKEN', args: argv, cwd: '/w' }), createHash('sha256').update(nul).digest('hex'));
+  assert.notEqual(passOf('jobrun.pool_env', { args: argv, cwd: '/w2' }), passOf('jobrun.pool_env', { args: argv, cwd: '/w' }));
+  // Key order does not matter (canonical JSON), the value does.
+  assert.equal(passOf('guard.refusal', { tool: 'Bash', input: { a: 1, b: [1, { d: 2, c: 3 }] }, cwd: '/w' }), passOf('guard.refusal', { tool: 'Bash', input: { b: [1, { c: 3, d: 2 }], a: 1 }, cwd: '/w' }));
+  assert.notEqual(passOf('guard.refusal', { tool: 'Bash', input: { a: 1 }, cwd: '/w' }), passOf('guard.refusal', { tool: 'Bash', input: { a: 2 }, cwd: '/w' }));
+  assert.equal(passOf('test.echo', { text: 'x' }), null);
 });
 
 test('a guard refusal too large for one outbox line files nothing and says so; no session or no outbox files nothing', () => {

@@ -235,13 +235,41 @@ pool_approval() {
   printf '%s\n' "$line" >>"$box/approval.jsonl" || return 1
   printf '%s' "$id"
 }
-pool_names=; pool_delivered=; pool_read=
+# T-2889: the one-time pass. A person who allowed request <id> made the portal deliver the sha256 of that exact run (the kind, this
+# folder, every argument, each followed by a NUL; apps/server/src/approvals/pass.ts) to a root-owned file. A run that hashes to a listed,
+# unexpired pass this workspace has not used yet may pass its deny-listed names ONCE: the hash goes to the used list first, then a 'used'
+# line to the outbox, so the portal drops the pass. It skips the deny-list only: the name must still be delivered by the pool (below).
+# Another folder or any other argument hashes differently and is refused as before. The file must be a regular file owned by root that
+# only root may write. Both lines are fixed on purpose (no variable overrides them); the tests run a copy with these two lines changed.
+pass_file=/etc/claudepilot/approval-passes
+pass_uid=0
+pool_pass() {
+  local hash used="$HOME/.claudepilot/approval-passes-used" h u now hit=
+  [ -f "$pass_file" ] && [ ! -L "$pass_file" ] || return 1
+  [ "$(stat -c %u "$pass_file" 2>/dev/null)" = "$pass_uid" ] || return 1
+  [ $(( 8#$(stat -c %a "$pass_file" 2>/dev/null || echo 777) & 8#022 )) -eq 0 ] || return 1
+  hash=$(printf '%s\0' jobrun.pool_env "$PWD" "${argv0[@]}" | sha256sum | cut -c1-64)
+  [[ $hash =~ ^[0-9a-f]{64}$ ]] || return 1
+  now=$(date +%s)
+  while read -r h u; do
+    [ "$h" = "$hash" ] && [[ $u =~ ^[0-9]{1,12}$ ]] && [ "$u" -gt "$now" ] && hit=1
+  done <"$pass_file"
+  [ -n "$hit" ] || return 1
+  ! grep -qxF "$hash" "$used" 2>/dev/null || return 1
+  mkdir -p "$HOME/.claudepilot" && printf '%s\n' "$hash" >>"$used" || return 1
+  [ ! -d "$HOME/.claudepilot/outbox" ] || [ -L "$HOME/.claudepilot/outbox/approval.jsonl" ] ||
+    printf '{"id":"used-%s-%s","t":"%s","type":"used","pass":"%s"}\n' "${hash:0:16}" "$now" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$hash" >>"$HOME/.claudepilot/outbox/approval.jsonl" || true
+  echo "job-run: this exact run passes its deny-listed --pool-env names once, on a one-time pass a person allowed (T-2889)" >&2
+}
+pool_names=; pool_delivered=; pool_read=; pool_passed=
 for n in ${pool[@]+"${pool[@]}"}; do
   [[ $n =~ ^[A-Z][A-Z0-9_]*$ ]] || die "--pool-env: refused: not a variable name (capital letters, digits and _, starting with a letter); the argument is not shown. Pass the NAME of the variable, never its value"
-  if pool_denied "$n"; then
+  # One pass covers the whole run (every deny-listed name in it): it is used once, on the first such name.
+  if pool_denied "$n" && [ -z "$pool_passed" ] && pool_pass; then pool_passed=1; fi
+  if pool_denied "$n" && [ -z "$pool_passed" ]; then
     denied="--pool-env: refused: a deny-listed name (write, admin, production or master credentials, and the runner's own tokens never go into a Job); the argument is not shown. It needs a person's approval (PILOT-1000)"
     if apr=$(pool_approval "$n"); then
-      die "$denied: approval request $apr is filed for this exact run (approval_get $apr shows it within a minute; if it never shows, the portal refused the request). Allow runs nothing yet (T-2889)"
+      die "$denied: approval request $apr is filed for this exact run (approval_get $apr shows it within a minute; if it never shows, the portal refused the request). When it is allowed, run this same command again, in the same folder, within 15 minutes: it passes once (T-2889)"
     fi
     die "$denied: no request could be filed from here (no outbox or jq); ask on your ticket"
   fi
