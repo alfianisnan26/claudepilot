@@ -81,7 +81,7 @@ const sessionBypass: ApprovalKindDef = {
   },
   // The existing gated path (policy, capable, acknowledgement, fresh code), with the person's click as the acknowledgement; it audits
   // bypass.entered with actor ui and `via: approval`. A refusal (not capable, blocked by policy) is the result.
-  async run(p, ctx) {
+  async run(p, ctx): Promise<ApprovalResult> {
     const id = String(p.sessionId);
     try {
       const s = await ctx.chat!.enterBypass(id, { acknowledged: true, sessionToken: ctx.sessionToken, actor: 'ui', via: { approvalId: ctx.approvalId } });

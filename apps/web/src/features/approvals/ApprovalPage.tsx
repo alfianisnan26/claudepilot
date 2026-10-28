@@ -1,5 +1,6 @@
 import type { Approval } from '@portal/contracts';
 import { EmptyState, LoadError, RowsSkeleton } from '@isnanme/ui';
+import { ShieldCheck } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { useParams } from 'react-router';
 import { PageHeader } from '@/components/PageHeader';
@@ -30,7 +31,7 @@ export function ApprovalPage() {
       <PageHeader title="Approval" />
       {state === 'loading' && <RowsSkeleton rows={1} lines={4} card label="Loading the request" />}
       {state === 'failed' && <LoadError onRetry={() => void load()} message="Could not read the request." />}
-      {state === 'missing' && <EmptyState title="No such request" />}
+      {state === 'missing' && <EmptyState icon={<ShieldCheck className="size-6" />} title="No such request" />}
       {state === 'ok' && approval && <ApprovalCard approval={approval} onChange={setApproval} />}
     </div>
   );
