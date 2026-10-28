@@ -352,7 +352,11 @@ test('PILOT-997 review 43296: a lead in a kept pause that a person then Ends (ke
 
     // A person Ends the lead and keeps its workers: the kept pause is superseded, and the worker leaves Bypass with it.
     await answering(r.s, r.s.controller.end(lead));
-    await answering(r.s, until(() => r.s.controller.get(w)!.mode !== 'bypassPermissions', 3000));
+    await answering(r.s, until(() => r.s.controller.get(w)!.mode !== 'bypassPermissions', 3000)).catch((e) => {
+      const g = (id: string) => { const x = r.s.controller.get(id)!; return { state: x.state, mode: x.mode, process: (x as { process?: unknown }).process }; };
+      console.log('DIAG', JSON.stringify({ lead: g(lead), w: g(w), audit: r.s.controller.audit({}).filter((x) => x.sessionId === lead || x.sessionId === w).map((x) => [x.sessionId === lead ? 'L' : 'W', x.kind, x.detail]) }));
+      throw e;
+    });
     assert.equal(r.s.controller.get(lead)!.state, 'ended');
     assert.notEqual(r.s.controller.get(w)!.state, 'ended', 'the worker was kept');
     assert.equal(r.s.controller.get(w)!.mode, 'dontAsk');
