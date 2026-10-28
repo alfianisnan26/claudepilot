@@ -1771,6 +1771,8 @@ function gitToolPolicy(sub, rest, root) {
   const before = dd < 0 ? argv : argv.slice(0, dd);
   const flags = before.filter((w) => w.text.startsWith('-')).map((w) => w.text);
   const pos = before.filter((w) => !w.text.startsWith('-')).map((w) => w.text);
+  // Review 43544: git reads the words after -- as the remote and refs too, so a -- would hide them from the checks below.
+  if (dd >= 0 && (sub === 'fetch' || sub === 'pull' || sub === 'merge')) return no('with -- (the words after it are refs the guard would not check)', 'drop the --: git -C <tool root> ' + sub + (sub === 'fetch' ? ' origin [<branch>]' : ' --ff-only'));
   if (sub === 'fetch' || sub === 'pull') {
     if (flags.some((f) => f === '-u' || gitLong(f, '--update-head-ok', 4) || gitLong(f, '--refmap', 5))) return no('with -u, --update-head-ok or --refmap', 'fetch by remote and branch name only');
     if (flags.some((f) => gitLong(f, '--set-upstream', 6))) return no('with --set-upstream (it writes the checkout’s config)', 'drop --set-upstream');
