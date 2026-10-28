@@ -425,7 +425,8 @@ export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = p
       'Adds a ticket to the queue. Leave it unassigned for work any agent can take. An agent assigns a person (assignee user) only with an allowed tag (default production, D-62): otherwise it is refused; decide by the written default instead. Never put a secret in a ticket: describe where it lives. A ticket is named by its stable id (T-12) or its bucket key (KONF-3); results that show a ticket carry both (id and key).',
     scope: 'agent',
     input: z.object({
-      bucket: bucketArg.describe('The bucket (project) by its key, like KONF (ticket_buckets lists them). Left out: your workspace’s bucket, else the bucket of the ticket you or your lead work on, else PILOT.'),
+      bucket: bucketArg.describe('The bucket (project) by its key, like KONF (ticket_buckets lists them). Left out: the bucket your tags imply (tickets.bucketRoutes, e.g. konfersi-migration or area-* to KONF, claudepilot to PILOT), else the parent’s bucket, else your workspace’s, else the bucket of the ticket you or your lead work on, else PILOT. The result says which and why.'),
+      parent: z.string().max(20).optional().describe('The epic or parent ticket (T-12 or KONF-3): its bucket is used when no bucket is named and no tag decides.'),
       summary: z.string().min(1).max(140).describe('One line.'),
       description: z.string().max(20_000).optional().describe('Markdown: what is needed, why, and how to tell it is done.'),
       type: z.enum(TICKET_TYPES).optional(),
@@ -438,10 +439,11 @@ export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = p
     handler(ctx, args) {
       const caller = callerOf(ctx);
       const assignee = args.assignee === undefined ? null : assigneeOf(tickets, ctx, args.assignee, args.session_id);
-      const t = tickets.create(caller, { bucket: args.bucket, summary: args.summary, description: args.description, type: args.type, priority: args.priority, tags: args.tags, assignee, workspaceId: ticketWorkspaceOf(ctx, args.workspace_id, opts.workspaceExists) }, { sessionId: args.session_id });
+      const { ticket: t, bucket } = tickets.createExplained(caller, { bucket: args.bucket, parent: args.parent, summary: args.summary, description: args.description, type: args.type, priority: args.priority, tags: args.tags, assignee, workspaceId: ticketWorkspaceOf(ctx, args.workspace_id, opts.workspaceExists) }, { sessionId: args.session_id });
       ctx.affected(`ticket:${t.id}`);
       const warning = assignee ? tickets.holderWarning(t) : null;
-      return { summary: `Created ${named(t)}${t.assignee?.kind === 'user' ? ' for a person' : ''}.`, ticket: ticketHead(ctx, t), ui: uiUrl(t.id), ...(warning ? { warning } : {}) };
+      // T-2881: which bucket and why, so a misfiled ticket is visible to the agent that filed it.
+      return { summary: `Created ${named(t)}${t.assignee?.kind === 'user' ? ' for a person' : ''} in ${bucket.bucket} (${bucket.reason}).`, ticket: ticketHead(ctx, t), bucket: { key: bucket.bucket, reason: bucket.reason, why: bucket.why }, ui: uiUrl(t.id), ...(warning ? { warning } : {}) };
     },
   });
 

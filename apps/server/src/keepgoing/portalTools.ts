@@ -18,7 +18,7 @@ export function registerKeepGoingTools(d: { engine: KeepGoingEngine; chat: Pick<
     name: 'session_keepgoing_set',
     title: 'Set Keep going on a chat',
     description:
-      "Turns the portal's Keep going on or off for one chat session, or changes its numbers. With it on, the portal looks at the chat every minute: an idle chat is told to continue with the policy's prompt, an interrupted or sleeping one is woken, a question is answered 'decide by the written defaults', an ended one is recovered in place or continued by a new chat (capped per day), and what it may not repair (a tool approval, Bypass off, a chat left down) is reported to the owner. It never answers a tool approval and never turns Bypass on. Admin tokens only; turning it on asks for confirmation first.",
+      "Turns the portal's Keep going on or off for one chat session, or changes its numbers. With it on, the portal looks at the chat every minute: an idle chat is told to continue with the policy's prompt, an interrupted or sleeping one is woken, a question is answered 'decide by the written defaults', an ended one is recovered in place or continued by a new chat (capped per day), and what it may not repair (a tool approval, Bypass off, a chat left down) is reported to the owner. It never answers a tool approval, and turns Bypass back on only for a chat that was in it within 24 hours. Admin tokens only; turning it on asks for confirmation first.",
     scope: 'admin',
     requires: 'session_control',
     hints: { destructive: true, idempotent: true },
@@ -62,7 +62,7 @@ export function registerKeepGoingTools(d: { engine: KeepGoingEngine; chat: Pick<
             session_id: s.id,
             title: ctx.untrusted(s.title, 'agent', 120),
             workspace_id: s.workspaceId,
-            changes: `Keep going ON: every minute the portal tells this chat to continue when it is idle for ${patch.nudgeAfterMin ?? was?.nudgeAfterMin ?? B.nudgeAfterMin.default} minutes, wakes it, answers its questions with "decide by the written defaults", and recovers or restarts it when it ends (at most ${KEEPGOING_RESTART_CAPS.other} new chats a day). It never answers a tool approval and never turns Bypass on.`,
+            changes: `Keep going ON: every minute the portal tells this chat to continue when it is idle for ${patch.nudgeAfterMin ?? was?.nudgeAfterMin ?? B.nudgeAfterMin.default} minutes, wakes it, answers its questions with "decide by the written defaults", and recovers or restarts it when it ends (at most ${KEEPGOING_RESTART_CAPS.other} new chats a day). It never answers a tool approval, and turns Bypass back on only for a chat that was in it within 24 hours.`,
           },
           s.id,
         );

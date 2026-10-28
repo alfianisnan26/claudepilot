@@ -2,13 +2,16 @@
 // exactly once and tells the asking session. Deciding is a person's: a token or an agent gets the same NOT_FOUND as a missing request.
 
 import assert from 'node:assert/strict';
+import { randomBytes } from 'node:crypto';
 import { rmSync } from 'node:fs';
 import { after, test } from 'node:test';
 import { isAppError } from '@isnanme/core';
-import { BYPASS_NOT_CAPABLE, FOUNDING_USER_ID, type Actor, type ApprovalResult } from '@portal/contracts';
+import { BYPASS_NOT_CAPABLE, FOUNDING_USER_ID, isProtectedPool, type Actor, type ApprovalResult, type SecretEntryView } from '@portal/contracts';
 import { ownerActor, systemActor } from '../authz/seam.js';
 import { liveSession, ok, sleep, until, type Live } from '../chat/testkit.js';
 import { PortalToolError, ToolRegistry } from '../portalmcp/registry.js';
+import { registerSessionTools } from '../portalmcp/tools/sessions.js';
+import { secretsHarness } from '../secrets/testkit.js';
 import { Store } from '../store/store.js';
 import { tempDirectory } from '../store/testTmp.js';
 import { approvalAttentionSource } from './attention.js';
@@ -182,7 +185,12 @@ test('the MCP tools: an agent asks for itself and sees only its own requests; an
   const registry = new ToolRegistry();
   registerApprovalTools(h.approvals, registry);
   const ctx = (sessionId: string | null, isAgent = true) =>
-    ({ isAgent, sessionId, workspaceId: 'docker/ws1', untrusted: (t: string | null | undefined) => (t ? { untrusted_text: t } : null), affected: () => undefined }) as never;
+    ({
+      isAgent,
+      sessionId,
+      workspaceId: 'docker/ws1',
+      principal: { kind: isAgent ? 'agent' : 'user', userId: FOUNDING_USER_ID, tokenId: 'tk-test', scope: 'operate', workspaceId: 'docker/ws1', sessionId },
+      untrusted: (t: string | null | undefined) => (t ? { untrusted_text: t } : null), affected: () => undefined }) as never;
   const call = (name: string, c: never, args: Record<string, unknown>) => Promise.resolve().then(() => registry.get(name)!.handler(c, registry.get(name)!.input.parse(args) as never));
   const mine = (await call('approval_request', ctx('s-a'), { kind: 'test.echo', payload: { text: 'hi' }, reason: 'please' })) as { approval: { id: string; status: string } };
   assert.equal(mine.approval.status, 'pending');
@@ -193,6 +201,73 @@ test('the MCP tools: an agent asks for itself and sees only its own requests; an
   assert.equal(await code(call('approval_request', ctx(null, false), { kind: 'test.echo', payload: { text: 'x' }, reason: 'r' })), 'FORBIDDEN', 'only an agent asks');
   // session.bypass: an agent asks for its own session only.
   assert.equal(await code(call('approval_request', ctx('s-a'), { kind: 'session.bypass', payload: { sessionId: 's-b' }, reason: 'r' })), 'NOT_FOUND');
+});
+
+test('T-2887: one pending session.bypass card per session: the same ask gets the waiting card and no second push; an expired or decided one gives way to a fresh card', async () => {
+  const h = await harness();
+  const asker = { sessionId: 's-a', workspaceId: 'docker/ws1' };
+  const needsYou = () => approvalAttentionSource(h.approvals).list(person, h.clock.now).length;
+  const first = h.approvals.create({ kind: 'session.bypass', payload: { sessionId: 's-a' }, reason: 'one' }, asker);
+  const pushes = h.changes();
+  const second = h.approvals.create({ kind: 'session.bypass', payload: { sessionId: 's-a' }, reason: 'two' }, asker);
+  assert.equal(second.id, first.id, 'the waiting card');
+  assert.equal(second.reason, 'one', 'it keeps its first reason');
+  assert.equal(h.changes(), pushes, 'no second Needs you change, so no second push');
+  assert.equal(needsYou(), 1);
+  // Another asker for the same session is never folded into it (review c43483): its own card, then that one is reused for it.
+  const portal = h.approvals.create({ kind: 'session.bypass', payload: { sessionId: 's-a' } }, null);
+  assert.notEqual(portal.id, first.id);
+  assert.equal(h.approvals.create({ kind: 'session.bypass', payload: { sessionId: 's-a' } }, null).id, portal.id);
+  assert.equal(needsYou(), 2);
+
+  // Another session has its own card; a decided card does not count.
+  const other = h.approvals.create({ kind: 'session.bypass', payload: { sessionId: 's-b' } }, null);
+  assert.notEqual(other.id, first.id);
+  await h.approvals.deny(person, other.id, 'no');
+  const otherAgain = h.approvals.create({ kind: 'session.bypass', payload: { sessionId: 's-b' } }, null);
+  assert.notEqual(otherAgain.id, other.id);
+  assert.equal(otherAgain.status, 'pending');
+
+  // Expired: the ask makes a fresh card (and Needs you hears of it).
+  h.clock.now += 2 * 24 * 60 * 60_000;
+  const before = h.changes();
+  const fresh = h.approvals.create({ kind: 'session.bypass', payload: { sessionId: 's-a' }, reason: 'three' }, asker);
+  assert.notEqual(fresh.id, first.id);
+  assert.deepEqual([fresh.status, fresh.reason], ['pending', 'three']);
+  assert.equal(h.changes(), before + 1);
+  assert.equal(h.approvals.getFor(person, first.id).status, 'expired');
+
+  // Other kinds are not folded: each test.echo ask is its own card.
+  const e1 = h.approvals.create({ kind: 'test.echo', payload: { text: 'x' } }, asker);
+  assert.notEqual(h.approvals.create({ kind: 'test.echo', payload: { text: 'x' } }, asker).id, e1.id);
+});
+
+test('T-2887 (review c43483): a portal card for S first, then S asks itself: S gets its own card, reads it, and hears the outcome', async () => {
+  const h = await harness();
+  // The harness's chat records what is sent; a fresh server code so Allow passes its precheck.
+  h.approvals.chat = { ...h.approvals.chat!, reauth: { fresh: () => true } };
+  const registry = new ToolRegistry();
+  registerApprovalTools(h.approvals, registry);
+  const ctx = (sessionId: string) =>
+    ({
+      isAgent: true,
+      sessionId,
+      workspaceId: 'docker/ws1',
+      principal: { kind: 'agent', userId: FOUNDING_USER_ID, tokenId: 'tk-test', scope: 'operate', workspaceId: 'docker/ws1', sessionId },
+      untrusted: (t: string | null | undefined) => (t ? { untrusted_text: t } : null),
+      affected: () => undefined,
+    }) as never;
+  const call = (name: string, c: never, args: Record<string, unknown>) =>
+    Promise.resolve().then(() => registry.get(name)!.handler(c, registry.get(name)!.input.parse(args) as never)) as Promise<{ approval: { id: string; reason: unknown } }>;
+
+  const portal = h.approvals.create({ kind: 'session.bypass', payload: { sessionId: 's-a' }, reason: 'token asked' }, null);
+  const mine = await call('approval_request', ctx('s-a'), { kind: 'session.bypass', payload: { sessionId: 's-a' }, reason: 'I asked' });
+  assert.notEqual(mine.approval.id, portal.id, 'not the portal’s card');
+  assert.deepEqual(mine.approval.reason, { untrusted_text: 'I asked' });
+  assert.equal((await call('approval_get', ctx('s-a'), { id: mine.approval.id })).approval.id, mine.approval.id);
+
+  await h.approvals.allow(person, mine.approval.id, { sessionToken: 'tok' });
+  assert.ok(h.sent.some((d) => d.sessionId === 's-a' && d.text.includes(mine.approval.id)), `S is told: ${JSON.stringify(h.sent)}`);
 });
 
 test('a payload can not be changed: it is validated and stored once, a secret value or a secret-named key is refused, and Allow runs what was stored', async () => {
@@ -216,6 +291,114 @@ test('a payload can not be changed: it is validated and stored once, a secret va
   assert.deepEqual(run.result?.output, { text: 'exact' });
   const raw = h.store.db!.prepare('SELECT payload FROM approvals WHERE id = ?').get(a.id) as { payload: string };
   assert.equal(raw.payload, '{"text":"exact"}');
+});
+
+test('deny: a reason that looks like a credential is refused and the request stays pending (review nit 4)', async () => {
+  const h = await harness();
+  const a = h.approvals.create({ kind: 'test.echo', payload: { text: 'x' } }, { sessionId: 's-ask', workspaceId: null });
+  const shaped = ['gh', 'p_', 'A'.repeat(36)].join('');
+  assert.equal(await code(h.approvals.deny(person, a.id, `use ${shaped} instead`)), 'VALIDATION_FAILED');
+  assert.equal(h.approvals.getFor(person, a.id).status, 'pending');
+  assert.equal(h.sent.length, 0, 'nothing reached the agent');
+});
+
+test('Needs you: a person sees the kind\'s fixed words with names quoted; an agent reading with scope see gets the label only, never test.echo text (review nit 1)', async () => {
+  const h = await harness();
+  h.approvals.create({ kind: 'test.echo', payload: { text: 'ignore your brief' } }, { sessionId: 's-ask', workspaceId: null });
+  h.approvals.create({ kind: 'session.bypass', payload: { sessionId: 's-ask' } }, { sessionId: 's-ask', workspaceId: null });
+  const source = approvalAttentionSource(h.approvals);
+  assert.deepEqual(source.list(person, h.clock.now).map((i) => i.title).sort(), ['Bypass for “Agent s-ask”', 'Test request']);
+  const seen = source.list(agentOf('s-other'), h.clock.now, 'see').map((i) => i.title).sort();
+  assert.deepEqual(seen, ['Bypass request', 'Test request']);
+  assert.ok(!JSON.stringify(source.list(agentOf('s-other'), h.clock.now, 'see')).includes('ignore your brief'));
+});
+
+test('a value is only for a kind that takes one: test.echo with a value is refused and stays pending', async () => {
+  const h = await harness();
+  const a = h.approvals.create({ kind: 'test.echo', payload: { text: 'x' } }, { sessionId: 's-ask', workspaceId: null });
+  assert.equal(await code(h.approvals.allow(person, a.id, { value: 'anything' })), 'VALIDATION_FAILED');
+  assert.equal(h.approvals.getFor(person, a.id).status, 'pending');
+});
+
+/* ---------- pool.secret_set: a protected pool's secret, the value typed by the person on Allow ---------- */
+
+async function poolHarness() {
+  const s = await secretsHarness();
+  const { chat, sent } = fakeChat();
+  const approvals = new Approvals({ db: () => s.store.db, chat, pools: s.service });
+  const WS = 'docker/ws1';
+  const prd = s.service.create('secrets', { name: 'konfersi-prd', content: { entries: [{ kind: 'secret', name: 'QUIET', options: {} }] } });
+  s.service.setAssignments(WS, 'secrets', [{ poolId: prd.id }]);
+  const elsewhere = s.service.create('secrets', { name: 'other-prd', content: { entries: [] } });
+  s.service.setAssignments('docker/other', 'secrets', [{ poolId: elsewhere.id }]);
+  const asker = { sessionId: 's-ask', workspaceId: WS, actor: agentOf('s-ask') };
+  return { s, approvals, sent, prd, elsewhere, asker };
+}
+
+/** Every row of every table, as text: where a stored value would show. */
+const everyRow = (db: NonNullable<Store['db']>): string =>
+  (db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table'`).all() as { name: string }[])
+    .map((t) => JSON.stringify(db.prepare(`SELECT * FROM "${t.name.replace(/"/g, '""')}"`).all()))
+    .join('\n');
+
+test('pool.secret_set: the value typed on Allow is set in the pool and is nowhere else: not the row, the result, an audit row or the message', async () => {
+  const p = await poolHarness();
+  try {
+    assert.equal(isProtectedPool(p.prd), true, 'a production pool: pool_secret_set refuses it');
+    const a = p.approvals.create({ kind: 'pool.secret_set', payload: { pool: p.prd.id, name: 'API_KEY', baseRevision: p.prd.latestRevision }, reason: 'the new key' }, p.asker);
+    assert.equal(a.status, 'pending');
+    // No value yet: refused before the request is used, so the person can type it and click again.
+    assert.equal(await code(p.approvals.allow(person, a.id)), 'VALIDATION_FAILED');
+    assert.equal(p.approvals.getFor(person, a.id).status, 'pending');
+
+    const v = `v-${randomBytes(16).toString('hex')}`;
+    const done = await p.approvals.allow(person, a.id, { value: v });
+    assert.equal(done.status, 'allowed');
+    assert.equal(done.result?.ok, true, done.result?.message);
+    assert.deepEqual(done.result?.output, { pool: p.prd.id, name: 'API_KEY', revision: p.prd.latestRevision + 1, expose: true });
+    const entry = ((p.s.service.get(p.prd.id).content as { entries: SecretEntryView[] }).entries).find((e) => e.name === 'API_KEY');
+    assert.ok(entry?.secret?.fingerprint, 'the pool has the secret');
+
+    assert.ok(!JSON.stringify(done).includes(v), 'not in what Allow returns');
+    assert.ok(!p.sent.some((m) => m.text.includes(v)), 'not in the message to the agent');
+    assert.match(p.sent[0]!.text, /Allowed: API_KEY set in konfersi-prd/);
+    assert.ok(!everyRow(p.s.store.db!).includes(v), 'not in any row of any table (the request, its result, the audit, the revision note)');
+    assert.ok(!everyRow(p.s.store.db!).includes(v.slice(-10)), 'nor its end');
+
+    // An existing secret keeps its expose when the payload names none (QUIET is not exposed).
+    const b = p.approvals.create({ kind: 'pool.secret_set', payload: { pool: p.prd.id, name: 'QUIET', baseRevision: p.s.service.get(p.prd.id).latestRevision } }, p.asker);
+    assert.equal((await p.approvals.allow(person, b.id, { value: `v-${randomBytes(8).toString('hex')}` })).result?.output?.expose, false);
+  } finally {
+    p.s.done();
+  }
+});
+
+test('pool.secret_set: an agent can not ask for a pool its workspace does not get (the same NOT_FOUND as a missing one), nor carry a value in the payload', async () => {
+  const p = await poolHarness();
+  try {
+    const ask = (payload: Record<string, unknown>) => () => p.approvals.create({ kind: 'pool.secret_set', payload }, p.asker);
+    assert.equal(await code(ask({ pool: p.elsewhere.id, name: 'API_KEY', baseRevision: 1 })), 'NOT_FOUND');
+    assert.equal(await code(ask({ pool: 'pool-missing', name: 'API_KEY', baseRevision: 1 })), 'NOT_FOUND');
+    assert.equal(await code(() => p.approvals.create({ kind: 'pool.secret_set', payload: { pool: p.prd.id, name: 'API_KEY', baseRevision: 1 } }, { sessionId: 's-x', workspaceId: 'docker/ws1' })), 'NOT_FOUND', 'an asker without a verified actor');
+    assert.equal(await code(ask({ pool: p.prd.id, name: 'API_KEY', baseRevision: 1, value: 'x' })), 'VALIDATION_FAILED', 'the payload has no value field');
+    assert.equal((p.s.store.db!.prepare('SELECT COUNT(*) AS n FROM approvals').get() as { n: number }).n, 0);
+    // The portal itself may ask for any pool (no requester).
+    assert.equal(p.approvals.create({ kind: 'pool.secret_set', payload: { pool: p.elsewhere.id, name: 'API_KEY', baseRevision: 1 } }, null).status, 'pending');
+  } finally {
+    p.s.done();
+  }
+});
+
+test('pool.secret_set: a pool that moved on since the agent read it is a conflict at Allow and the request stays pending', async () => {
+  const p = await poolHarness();
+  try {
+    const a = p.approvals.create({ kind: 'pool.secret_set', payload: { pool: p.prd.id, name: 'API_KEY', baseRevision: p.prd.latestRevision } }, p.asker);
+    p.s.service.update(p.prd.id, { content: { entries: [] }, baseRevision: p.prd.latestRevision });
+    assert.equal(await code(p.approvals.allow(person, a.id, { value: `v-${randomBytes(8).toString('hex')}` })), 'CONFLICT');
+    assert.equal(p.approvals.getFor(person, a.id).status, 'pending');
+  } finally {
+    p.s.done();
+  }
 });
 
 /* ---------- session.bypass, through the chat's own gated path ---------- */
@@ -261,6 +444,67 @@ test('session.bypass: Allow puts a bypass-capable session in Bypass through the 
     assert.equal(entered.length, 1);
     assert.deepEqual([entered[0]!.sessionId, entered[0]!.actor, entered[0]!.severity], [b.id, 'ui', 'high']);
     assert.deepEqual(entered[0]!.detail, { claude: 'Default', policy: 'allowed', capable: true, acknowledged: true, reauth: 'fresh', via: 'approval', approvalId: a.id });
+  } finally {
+    await s.done();
+  }
+});
+
+test('PILOT-1000: Bypass over MCP (session_configure) files a session.bypass card, takes no acknowledgement, and Allow goes through the enterBypass gate', async () => {
+  const s = await liveSession();
+  try {
+    const { approvals, state } = await bypassHarness(s);
+    const b = await capableSession(s, true);
+    const plain = await capableSession(s, false);
+    const registry = new ToolRegistry();
+    registerSessionTools({ store: { writable: true } as never, chat: s.controller as never, approvals }, registry);
+    const ctx = (scope: 'admin' | 'read') =>
+      ({
+        isAgent: false,
+        sessionId: null,
+        workspaceId: null,
+        actor: 'portal-mcp:tk-admin',
+        principal: { kind: 'user', userId: FOUNDING_USER_ID, tokenId: 'tk-admin', scope, workspaceId: null, sessionId: null },
+        untrusted: (t: string | null | undefined) => (t ? { untrusted_text: t } : null),
+        affected: () => undefined,
+      }) as never;
+    const tool = registry.get('session_configure')!;
+    const call = (c: never, args: Record<string, unknown>) => Promise.resolve().then(() => tool.handler(c, tool.input.parse(args) as never)) as Promise<{ approval?: { id: string; status: string; page: string } }>;
+    const sends = () => s.ws.sends.filter((x) => x.line.includes('set_permission_mode')).length;
+    const before = sends();
+
+    // An acknowledgement in the call is no input (the schema drops it): the call files a card and changes nothing.
+    const asked = await call(ctx('admin'), { id: b.id, mode: 'bypassPermissions', reason: 'unattended release run', acknowledged: true });
+    assert.equal(asked.approval?.status, 'pending');
+    assert.match(asked.approval!.page, /approvals/);
+    assert.equal(s.controller.get(b.id)!.mode, 'default');
+    assert.equal(sends(), before, 'no set_permission_mode until a person allows it');
+    const a = approvals.getFor(person, asked.approval!.id);
+    assert.deepEqual([a.kind, a.payload, a.requesterSession, a.reason], ['session.bypass', { sessionId: b.id }, null, 'unattended release run']);
+
+    // Bypass alone (the rest would not wait for the person); a token that may not operate the session gets the missing-session answer.
+    assert.equal(await code(call(ctx('admin'), { id: b.id, mode: 'bypassPermissions', model: 'sonnet' })), 'VALIDATION_FAILED');
+    assert.equal(await code(call(ctx('read'), { id: b.id, mode: 'bypassPermissions' })), 'NOT_FOUND');
+    // T-2887: the same ask again is the same card; an agent with no session is refused, never filed as the portal.
+    assert.equal((await call(ctx('admin'), { id: b.id, mode: 'bypassPermissions' })).approval?.id, asked.approval!.id);
+    const sessionless = { ...(ctx('admin') as object), isAgent: true } as never;
+    assert.equal(await code(call(sessionless, { id: b.id, mode: 'bypassPermissions' })), 'FORBIDDEN');
+    assert.equal(approvals.pending(person).filter((x) => x.payload.sessionId === b.id).length, 1);
+    // A session not started bypass-capable still becomes a card (its Allow then says BYPASS_NOT_CAPABLE, tested below).
+    assert.equal((await call(ctx('admin'), { id: plain.id, mode: 'bypassPermissions' })).approval?.status, 'pending');
+
+    // Allow: without a fresh server code it stays pending; with one, the gated path turns Bypass on, audited via the approval.
+    state.fresh = false;
+    assert.equal(await code(approvals.allow(person, a.id, { sessionToken: 'tok' })), 'REAUTH_REQUIRED');
+    assert.equal(approvals.getFor(person, a.id).status, 'pending');
+    state.fresh = true;
+    const allowing = approvals.allow(person, a.id, { sessionToken: 'tok' });
+    const req = await s.take('set_permission_mode');
+    b.tail.push(ok(req.id, { mode: 'bypassPermissions' }));
+    assert.equal((await allowing).result?.ok, true);
+    assert.equal(s.controller.get(b.id)!.mode, 'bypassPermissions');
+    assert.deepEqual(s.controller.audit({ kind: 'bypass.entered' }).map((r) => r.detail.approvalId), [a.id]);
+    // Already in Bypass: nothing more is asked.
+    assert.equal((await call(ctx('admin'), { id: b.id, mode: 'bypassPermissions' })).approval, undefined);
   } finally {
     await s.done();
   }

@@ -1,4 +1,5 @@
 import type { AccountPools } from '../../accounts/pools.js';
+import type { Approvals } from '../../approvals/service.js';
 import type { AccountsService } from '../../accounts/service.js';
 import type { ChatController } from '../../chat/controller.js';
 import type { Reconciler } from '../../delivery/reconciler.js';
@@ -20,4 +21,6 @@ export interface PortalToolDeps {
   reconciler: Reconciler;
   /** MCP sets: the catalog, where agents and tokens propose servers (interface I3). */
   mcp?: McpSets;
+  /** Approvals (PILOT-1000): Bypass asked over MCP becomes a person's session.bypass card. Absent: Bypass over MCP is refused. */
+  approvals?: Pick<Approvals, 'create'>;
 }

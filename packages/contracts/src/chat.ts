@@ -13,20 +13,55 @@ export type ChatOrigin = 'ui' | 'mcp' | 'persona_test';
 
 /**
  * Claude Code permission modes. `default` asks for everything (Manual); `acceptEdits` edits without asking (Edit); `auto` lets Claude
- * Code's classifier approve routine actions and block risky ones (Auto: only sessions a person started in the app, see
- * {@link autoModeAllowed}); `plan` changes nothing until approved; `dontAsk` (not offered, kept for stored rows) denies what isn't
+ * Code's classifier approve routine actions and block risky ones (Auto: see {@link autoModeAllowed}); `plan` changes nothing until approved; `dontAsk` (not offered, kept for stored rows) denies what isn't
  * pre-approved; Bypass only through its own confirmation (FR20).
  */
 export type ChatPermissionMode = 'default' | 'acceptEdits' | 'plan' | 'auto' | 'dontAsk' | 'bypassPermissions';
 
 /**
- * Whether a session may use Auto (chat-sessions PRD, Auto mode): only one a person started in the app. A session a trigger, a ticket,
- * Portal MCP or another session started read text nobody vetted (a webhook body, a ticket, an agent's words), so its ceiling stays
- * where it was (Edit). The server checks this on every change to Auto; the app uses it to show Auto as unavailable.
+ * Whether a session may use Auto (chat-sessions PRD, Auto mode). A session a person started in the app always may. Since PILOT-996
+ * (owner, 2026-10-28) a session with no person behind it (a trigger's, a ticket's, Portal MCP's, another session's) may too when its
+ * parent runs in Auto or Bypass (it is never wider than its parent, {@link modeWithin}), or when the policy `sessions.autonomousAuto`
+ * is on (the default). The server checks this on every change to Auto and audits it (`mode.auto`, `mode.refused`).
  */
-export function autoModeAllowed(s: { startedBy: string | null; origin: ChatOrigin; parentId: string | null }): boolean {
-  if (s.parentId) return false;
-  return s.startedBy === CHAT_ACTOR_UI || (s.startedBy === null && s.origin === 'ui');
+export function autoModeAllowed(
+  s: { startedBy: string | null; origin: ChatOrigin; parentId: string | null },
+  ctx: { parentMode?: ChatPermissionMode | null; autonomousAuto?: boolean } = {},
+): boolean {
+  if (!s.parentId && (s.startedBy === CHAT_ACTOR_UI || (s.startedBy === null && s.origin === 'ui'))) return true;
+  if (s.parentId && (ctx.parentMode === 'auto' || ctx.parentMode === 'bypassPermissions')) return true;
+  return ctx.autonomousAuto === true;
+}
+
+/**
+ * How wide a mode is, for a worker's cap (PILOT-996): a worker is never wider than its parent. `plan` changes nothing; `dontAsk` runs
+ * only what the folder allows; `default` adds what a person approves; `acceptEdits` edits unasked; `auto` lets the classifier approve;
+ * Bypass runs everything.
+ */
+export const MODE_WIDTH: Readonly<Record<ChatPermissionMode, number>> = {
+  plan: 0,
+  dontAsk: 1,
+  default: 2,
+  acceptEdits: 3,
+  auto: 4,
+  bypassPermissions: 5,
+};
+
+/** Whether `mode` is no wider than `cap` (PILOT-996: a worker's mode against its parent's). */
+export function modeWithin(mode: ChatPermissionMode, cap: ChatPermissionMode): boolean {
+  return MODE_WIDTH[mode] <= MODE_WIDTH[cap];
+}
+
+/**
+ * PILOT-996 (D-103): the mode a worker starts in: the one asked, else its parent's, else Auto. Whether the ask fits under the parent
+ * is {@link modeWithin}'s (the caller refuses a wider one); Bypass is entered only through the portal's gated inherit path. A parent in
+ * `default` (a person answers its cards) hands on dontAsk instead: a worker never waits on a person nobody asked for (D-62); a worker
+ * may still be asked into `default` by name.
+ */
+export function workerMode(asked: ChatPermissionMode | null | undefined, parent: ChatPermissionMode | null | undefined): ChatPermissionMode {
+  if (asked) return asked;
+  if (parent === 'default') return 'dontAsk';
+  return parent ?? 'auto';
 }
 
 export interface ChatSession {
@@ -676,6 +711,8 @@ export interface ChatBypassState {
   facts: ChatBypassFacts;
   /** The sign-in passed the re-check of the server code in the last 10 minutes. */
   reauthed: boolean;
+  /** PILOT-996: whether this session may switch to Auto now (`autoModeAllowed` with its parent's mode and the policy). */
+  autoAllowed?: boolean;
 }
 
 /** `POST CHAT_API.bypass(id)`: the person's confirmation. The server code check comes first (`REAUTH_REQUIRED`). */

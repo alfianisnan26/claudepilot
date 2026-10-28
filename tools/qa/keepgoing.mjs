@@ -334,7 +334,7 @@ for (const cfg of MATRIX) {
     await sleep(400);
     await ev(`document.querySelector('[data-home-card="autonomy"] header button[aria-label="About Autonomy"]').click()`);
     await sleep(400);
-    const tip = await ev(`(() => { const t = [...document.querySelectorAll('[role=tooltip], [role=note], [data-infotip]')].find((e) => /never turns Bypass on/.test(e.innerText)); if (!t) return null; const r = t.getBoundingClientRect(); return { x: r.x, r: r.right, y: r.y, b: r.bottom, w: innerWidth, h: innerHeight }; })()`);
+    const tip = await ev(`(() => { const t = [...document.querySelectorAll('[role=tooltip], [role=note], [data-infotip]')].find((e) => /never answers a tool approval/.test(e.innerText)); if (!t) return null; const r = t.getBoundingClientRect(); return { x: r.x, r: r.right, y: r.y, b: r.bottom, w: innerWidth, h: innerHeight }; })()`);
     check('the InfoTip opens inside the screen', !!tip && tip.x >= 0 && tip.r <= tip.w + 1 && tip.y >= 0 && tip.b <= tip.h + 1, JSON.stringify(tip));
     await shot(`home-${cfg.name}-autonomy-tip`);
     await ev(`document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))`);

@@ -211,7 +211,7 @@ export function Controls({
       <Dialog open={open === 'mode'} onClose={close} size="sm" title="Permission mode" description="What Claude may do without asking you.">
         <ModePicker
           mode={session.mode}
-          autoAllowed={autoModeAllowed(session)}
+          autoAllowed={bypass?.autoAllowed ?? autoModeAllowed(session)}
           connected={connected}
           bypass={bypass}
           onBypass={() => setOpen('bypass')}
@@ -417,7 +417,7 @@ function ModePicker({
   onPick,
 }: {
   mode: ChatPermissionMode;
-  /** Auto is only for a session a person started here (not a trigger's, a ticket's, MCP's or another session's). */
+  /** PILOT-996: the server's word (its origin, its parent's mode, “Auto for agents”); before it is read, a person's own session only. */
   autoAllowed: boolean;
   connected: boolean;
   /** Where Bypass stands; null until read (or when it can't be). */
@@ -433,7 +433,7 @@ function ModePicker({
   const options: Option[] = OFFERED_MODES.map((m) => {
     const { label, hint, icon: Icon } = MODES[m];
     const blocked = m === 'auto' && !autoAllowed && mode !== 'auto';
-    return { value: m, label, hint: blocked ? 'Only for agents you start here.' : hint, icon: <Icon className="size-4" />, disabled: blocked };
+    return { value: m, label, hint: blocked ? 'Off for agents: Settings › Sessions.' : hint, icon: <Icon className="size-4" />, disabled: blocked };
   });
   // Bypass, in the danger colour, only where the policy allows it: its own row once the session can enter it, else the restart that makes it so.
   if (bypass?.allowed && !bypass.active)

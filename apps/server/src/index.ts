@@ -90,7 +90,7 @@ import { Store } from './store/store.js';
 import { DockerRuntime } from './workspaces/docker.js';
 import { attachShell, cookie } from './workspaces/shell.js';
 import { ChatController } from './chat/controller.js';
-import { BYPASS_SETTING } from './chat/bypass.js';
+import { AUTONOMOUS_AUTO_SETTING, BYPASS_SETTING } from './chat/bypass.js';
 import { LEAD_RULES_SETTING } from './chat/leadRules.js';
 import { AUTO_TRUST_SETTING } from './chat/trust.js';
 import { AGENT_CHILDREN_SETTING, AGENT_DEPTH_SETTING, AGENT_MESSAGES_SETTING, AGENT_SPAWNS_SETTING } from './chat/agents.js';
@@ -277,6 +277,7 @@ poolService.reconciler = reconciler;
 settingsModule.reconciler = reconciler;
 // Bypass in chat (chat PRD FR20): the interim policy switch, and what is true of a workspace for the confirmation.
 chatController.bypassAllowed = () => settingsModule.settings.get<boolean>(BYPASS_SETTING);
+chatController.autonomousAuto = () => settingsModule.settings.get<boolean>(AUTONOMOUS_AUTO_SETTING); // PILOT-996, D-103
 // T-561: crew leads launch with the lead rules (a hook in their --settings) while the policy is on; it applies at each lead's next start.
 chatController.leadRulesOn = () => settingsModule.settings.get<boolean>(LEAD_RULES_SETTING);
 chatController.autoTrustRules = () => settingsModule.settings.get<boolean>(AUTO_TRUST_SETTING);
@@ -421,8 +422,8 @@ const workspaceMemory = new WorkspaceMemory({
 attention.register(memoryAttentionSource(workspaceMemory));
 chatController.memory = workspaceMemory;
 // Approvals (docs/prd/approvals.md, PILOT-1000): an agent asks, a person allows on a Needs you card, the portal runs it (Bypass through
-// the chat's own gated path) and tells the asking session.
-const approvals = createApprovals(store, { chat: chatController, changed: () => attention.changed() });
+// the chat's own gated path, a protected pool's secret through the pools service) and tells the asking session.
+const approvals = createApprovals(store, { chat: chatController, pools: poolService, changed: () => attention.changed() });
 attention.register(approvalAttentionSource(approvals));
 registerApprovalTools(approvals);
 const ATTENTION_TOPICS = new Set<LiveTopic>(['pools', 'tickets', 'ci']);
@@ -491,6 +492,7 @@ registerBuiltInPortalTools({
   poolService,
   reconciler,
   mcp: mcpSets,
+  approvals,
 });
 portalMcp.start();
 // What each session's Claude Code process is launched with (I8 and the Secrets & env redactor): its token for the portal's tools, the
@@ -542,6 +544,8 @@ const tickets = new Tickets(store, new ChatTicketSessions(chatController), {
   agentOpenPerWorkspace: () => settingsModule.settings.get<number>(TICKET_SETTING_KEYS.agentOpenPerWorkspace),
   agentAssignUserTags: () => settingsModule.settings.get<string>(TICKET_SETTING_KEYS.agentAssignUserTags),
   leadPeerGroups: () => settingsModule.settings.get<string>(TICKET_SETTING_KEYS.leadPeerGroups),
+  // T-2881: a ticket filed without a bucket goes where its tags say, read each call.
+  bucketRoutes: () => settingsModule.settings.get<string>(TICKET_SETTING_KEYS.bucketRoutes),
   // T-2014 (FR36e), D-99: who may record ticket_merge_status: every lead of the flow programs' groups (and their workers), read each call.
   mergeGates: () => mergeRecordersOf(flowProgramsRaw(settingsModule.settings), settingsModule.settings.get<string>(TICKET_SETTING_KEYS.leadPeerGroups)),
 });
