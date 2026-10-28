@@ -40,6 +40,21 @@ test('toolInput: redacted, and disguising characters shown as escapes', () => {
   assert.ok(!JSON.stringify(nested).includes(token));
 });
 
+test('toolInput: a write-only argument (pool_secret_set value) never reaches the row, whatever its shape (T-2866)', async () => {
+  const { randomBytes } = await import('node:crypto');
+  const value = `plain-${randomBytes(12).toString('hex')}`;
+  for (const name of ['mcp__pilot__pool_secret_set', 'mcp__claude_ai_pilot__pool_secret_set']) {
+    const kept = toolInput(name, { pool: 'kohi', name: 'API_KEY', value, note: 'rotate' })!;
+    assert.ok(!JSON.stringify(kept).includes(value), `${name}: the value is not kept`);
+    assert.equal(kept.input.value, '[write-only]');
+    assert.equal(kept.input.name, 'API_KEY', 'the other arguments stay readable');
+  }
+  const call = parseLine(line({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'toolu_s', name: 'mcp__pilot__pool_secret_set', input: { pool: 'p', name: 'X', value } }] }, parent_tool_use_id: null }));
+  assert.ok(!JSON.stringify(call.stored).includes(value), 'the stored event has no value');
+  // another tool with a field called value is untouched
+  assert.equal(toolInput('mcp__x__y', { value: 'shown' })!.input.value, 'shown');
+});
+
 test('toolInput: bounded per string and in all, and says so', () => {
   const long = 'a'.repeat(TOOL_INPUT_STRING_MAX + 100);
   const one = toolInput('Bash', { command: long })!;
