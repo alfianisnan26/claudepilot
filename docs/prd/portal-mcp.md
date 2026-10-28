@@ -529,8 +529,9 @@ so they get their own tools.
 | --- | --- | --- | --- | --- |
 | `pool_types` | read | R I | none | Per type: description, one or many per workspace, content JSON Schema, secret fields |
 | `pool_list` | read | R I | `type`, `query`, `cursor`, `limit` | Name, type, revision, review status, used by N |
-| `pool_get` | read | R I | `id`, `revision` | Content with secrets masked, last 10 revisions, workspaces |
-| `pool_create` | admin | – | `type`, `name`, `description`, `content` (approved versions only, no secret values) | id, revision, status, `secrets_missing[]` |
+| `pool_get` | read | R I | `id`, `revision` | Content with secrets as name, options and fingerprint only, last 10 revisions, workspaces, `warnings` (unexposed env-style secrets) |
+| `pool_create` | admin | – | `type`, `name`, `description`, `content` (approved versions only, no secret values; secrets: names only) | id, revision, status, `secrets_missing[]` |
+| `pool_secret_set` | agent | – | `pool`, `name`, `value` (write-only), `expose`, `note` | Name, revision, `expose`, fingerprint, version; never the value. Own workspace's pools only; protected pools refused (T-2866) |
 | `pool_update` | admin | D U C\* | `id`, `base_revision`, `content` or `restore_revision`, `note` | New revision, status (`deliverable`, `waiting_review` or `draft`), rollout plan. A stale `base_revision` gets `CONFLICT`. |
 | `pool_delete` | admin | D I U C | `id`, `unassign`, `confirm_token` | Preview, then done. Refused while in use unless `unassign`. |
 | `pool_assign` | admin | D I U C\* | `pool_id`, `workspace_ids[]` (up to 50), `pinned_revision` | Per workspace: result, pool replaced, delivery status |
@@ -645,8 +646,24 @@ monitoring 2 (`monitor_overview`, `usage_report`) and the catalog 3 (`mcp_propos
 `mcp_proposal_withdraw`, `mcp_catalog_list`: interface I3, scope `agent`, §12.6). Where the tables above
 and the code differ, the code is what ships:
 
-- `pool_*` cover the types that exist (skillset, MCP set). **Secrets pools are read-only over MCP**: a write
-  answers `UI_ONLY` (Q13 decided). Persona and browser pools are not listed until their services are in.
+- `pool_*` cover the types that exist (skillset, MCP set, secrets). **Secrets pools are write-only over MCP**
+  (T-2866, PILOT-996 S3; `pool_types` says `mcp_writes: "write-only"`): `pool_create` takes names only
+  (`{ "names": [...] }`, a value or a variable is `VALIDATION_FAILED`), `pool_secret_set` sets one value as a
+  new revision, and `pool_update` and `pool_delete` still answer `UI_ONLY`. No tool returns a value:
+  `pool_get` shows each secret's name, options and fingerprint (not the hint), and `pool_get` and `pool_list`
+  carry `warnings` for an environment-style name (`API_KEY`) stored without `expose` (T-2823).
+  Persona and browser pools are not listed until their services are in.
+- **`pool_secret_set`** (scope `agent`, 10 a minute, 60 an hour): `pool` (id or exact name), `name`,
+  `value`, `expose` (default true for an environment-style name that is not reserved), `note`. The value is
+  write-only (`PORTAL_WRITE_ONLY_ARGS` in contracts): masked as `[write-only]` in the audit row, in the chat
+  transcript's tool row and on an approval card, and not refused by the "looks like a secret" check. Its
+  result is the pool, name, revision, status, `expose`, `fingerprint` and `version`. Access goes through
+  `pools/authz.ts` (`secretWriteAccess`, one `can()`): an agent writes only to a secrets pool assigned to its
+  own workspace and to no other (a shared pool is `SHARED_POOL`); a pool it can't reach is the same
+  `NOT_FOUND` as a missing one; a token needs `manage` (admin). A protected pool (a name with the word `prd`,
+  `prod` or `production`, or `[protected]` in its description) is refused for everyone with `PROTECTED`:
+  "protected pool: needs a person's approval (PILOT-1000)"; the approval card is PILOT-1000 (S4). Not
+  covered: Claude Code's own session log in the workspace keeps the call's input as the agent sent it.
 - Not built: `settings_get`, `settings_update`, `event_search`, `account_pool_update`, `account_update`,
   `account_delete`, `secret_link_create` and the relaxation guard (FR13): their services, or the Settings
   PRD, are not in yet. `workspace_get` takes `include` of `usage`, `sessions`, `claudes` and `pools`
