@@ -155,6 +155,14 @@ export class Approvals {
     const reason = (req.reason ?? '').replace(/\s+/g, ' ').trim().slice(0, APPROVAL_REASON_MAX);
     if (findSecret(reason)) throw new AppError('VALIDATION_FAILED', 'The reason may not hold a secret.');
     def.mayAsk?.(payload, requester, this.deps);
+    // T-2887: one pending Bypass card per session. The same ask again gets the card that waits (no new row, no second push); an expired
+    // card does not count, so the ask makes a fresh one.
+    if (req.kind === 'session.bypass') {
+      const waiting = this.#db()
+        .prepare("SELECT * FROM approvals WHERE kind = ? AND payload = ? AND status = 'pending' AND expires_at > ? ORDER BY created_at, id LIMIT 1")
+        .get(req.kind, json, this.#iso()) as Row | undefined;
+      if (waiting) return this.#toApproval(waiting);
+    }
     const ttl = Math.min(Math.max(Math.round(req.ttlMinutes ?? APPROVAL_TTL_DEFAULT_MIN), 1), APPROVAL_TTL_MAX_MIN);
     const now = this.#now();
     const id = `apr-${randomBytes(9).toString('hex')}`;

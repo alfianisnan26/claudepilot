@@ -309,6 +309,8 @@ export function registerSessionTools(
     }
     if (target.mode === 'bypassPermissions') return { summary: `${target.id} is already in Bypass.`, session: sessionBrief(target, ctx) };
     // An agent asks as its own session (it hears the outcome there; the kind lets it ask for its own session only); a token asks as the portal.
+    // T-2887: an agent with no session is refused, never filed as the portal.
+    if (ctx.isAgent && !ctx.sessionId) throw new PortalToolError('FORBIDDEN', 'An agent asks for Bypass from its own session.');
     const requester = ctx.isAgent && ctx.sessionId ? { sessionId: ctx.sessionId, workspaceId: ctx.workspaceId, actor: actorOfPrincipal(ctx.principal) } : null;
     const a = approvals!.create({ kind: 'session.bypass', payload: { sessionId: target.id }, reason: args.reason ?? `Asked with session_configure by ${ctx.actor}.` }, requester);
     ctx.affected(`session:${target.id}`, `approval:${a.id}`);

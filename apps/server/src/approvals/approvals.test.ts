@@ -203,6 +203,41 @@ test('the MCP tools: an agent asks for itself and sees only its own requests; an
   assert.equal(await code(call('approval_request', ctx('s-a'), { kind: 'session.bypass', payload: { sessionId: 's-b' }, reason: 'r' })), 'NOT_FOUND');
 });
 
+test('T-2887: one pending session.bypass card per session: the same ask gets the waiting card and no second push; an expired or decided one gives way to a fresh card', async () => {
+  const h = await harness();
+  const asker = { sessionId: 's-a', workspaceId: 'docker/ws1' };
+  const needsYou = () => approvalAttentionSource(h.approvals).list(person, h.clock.now).length;
+  const first = h.approvals.create({ kind: 'session.bypass', payload: { sessionId: 's-a' }, reason: 'one' }, asker);
+  const pushes = h.changes();
+  const second = h.approvals.create({ kind: 'session.bypass', payload: { sessionId: 's-a' }, reason: 'two' }, asker);
+  assert.equal(second.id, first.id, 'the waiting card');
+  assert.equal(second.reason, 'one', 'it keeps its first reason');
+  assert.equal(h.approvals.create({ kind: 'session.bypass', payload: { sessionId: 's-a' } }, null).id, first.id, 'the portal asking for the same session too');
+  assert.equal(h.changes(), pushes, 'no second Needs you change, so no second push');
+  assert.equal(needsYou(), 1);
+
+  // Another session has its own card; a decided card does not count.
+  const other = h.approvals.create({ kind: 'session.bypass', payload: { sessionId: 's-b' } }, null);
+  assert.notEqual(other.id, first.id);
+  await h.approvals.deny(person, other.id, 'no');
+  const otherAgain = h.approvals.create({ kind: 'session.bypass', payload: { sessionId: 's-b' } }, null);
+  assert.notEqual(otherAgain.id, other.id);
+  assert.equal(otherAgain.status, 'pending');
+
+  // Expired: the ask makes a fresh card (and Needs you hears of it).
+  h.clock.now += 2 * 24 * 60 * 60_000;
+  const before = h.changes();
+  const fresh = h.approvals.create({ kind: 'session.bypass', payload: { sessionId: 's-a' }, reason: 'three' }, asker);
+  assert.notEqual(fresh.id, first.id);
+  assert.deepEqual([fresh.status, fresh.reason], ['pending', 'three']);
+  assert.equal(h.changes(), before + 1);
+  assert.equal(h.approvals.getFor(person, first.id).status, 'expired');
+
+  // Other kinds are not folded: each test.echo ask is its own card.
+  const e1 = h.approvals.create({ kind: 'test.echo', payload: { text: 'x' } }, asker);
+  assert.notEqual(h.approvals.create({ kind: 'test.echo', payload: { text: 'x' } }, asker).id, e1.id);
+});
+
 test('a payload can not be changed: it is validated and stored once, a secret value or a secret-named key is refused, and Allow runs what was stored', async () => {
   const h = await harness();
   const asker = { sessionId: 's-ask', workspaceId: null };
@@ -417,6 +452,11 @@ test('PILOT-1000: Bypass over MCP (session_configure) files a session.bypass car
     // Bypass alone (the rest would not wait for the person); a token that may not operate the session gets the missing-session answer.
     assert.equal(await code(call(ctx('admin'), { id: b.id, mode: 'bypassPermissions', model: 'sonnet' })), 'VALIDATION_FAILED');
     assert.equal(await code(call(ctx('read'), { id: b.id, mode: 'bypassPermissions' })), 'NOT_FOUND');
+    // T-2887: the same ask again is the same card; an agent with no session is refused, never filed as the portal.
+    assert.equal((await call(ctx('admin'), { id: b.id, mode: 'bypassPermissions' })).approval?.id, asked.approval!.id);
+    const sessionless = { ...(ctx('admin') as object), isAgent: true } as never;
+    assert.equal(await code(call(sessionless, { id: b.id, mode: 'bypassPermissions' })), 'FORBIDDEN');
+    assert.equal(approvals.pending(person).filter((x) => x.payload.sessionId === b.id).length, 1);
     // A session not started bypass-capable still becomes a card (its Allow then says BYPASS_NOT_CAPABLE, tested below).
     assert.equal((await call(ctx('admin'), { id: plain.id, mode: 'bypassPermissions' })).approval?.status, 'pending');
 
