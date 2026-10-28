@@ -273,7 +273,7 @@ test('T-2885 review M2: a refused Write stores the path and a digest of the cont
   assert.ok(!JSON.stringify(card).includes(pw), 'the card never holds the content');
   assert.deepEqual((card.payload as { input: unknown }).input, { file_path: input.file_path, content: digest });
   // A line written by hand with raw content (an old guard, a forged line): the portal digests it before it stores it.
-  const forged: OutboxEvent = { id: `apr-${randomBytes(9).toString('hex')}`, type: 'request', kind: 'guard.refusal', claudeSession: CLAUDE_SESSION, payload: { tool: 'Write', input, cwd: g.repo } };
+  const forged: OutboxEvent = { id: `apr-${randomBytes(9).toString('hex')}`, type: 'request', kind: 'guard.refusal', claudeSession: CLAUDE_SESSION, payload: { tool: 'Write', input, cwd: g.repo, form: 'forged' } };
   const [fid] = fileRefusalRequests(approvals, store, WS, [forged]);
   assert.ok(fid);
   assert.ok(!JSON.stringify(approvals.getFor(ownerActor(), fid!)).includes(pw));
@@ -307,7 +307,7 @@ test('T-2885 review M1: a forged outbox line buys no pass for a call that was ne
   // guard: a call whose secret part redaction removed is not the exact call: no pass, and the card never holds the value.
   const fake = `ghp_${randomBytes(18).toString('hex').slice(0, 36)}`;
   const [redId] = fileRefusalRequests(approvals, store, WS, [
-    { id: newId(), type: 'request', kind: 'guard.refusal', claudeSession: CLAUDE_SESSION, payload: { tool: 'Bash', input: { command: `echo ${fake} > .claude/settings.json` }, cwd: g.repo } },
+    { id: newId(), type: 'request', kind: 'guard.refusal', claudeSession: CLAUDE_SESSION, payload: { tool: 'Bash', input: { command: `echo ${fake} > .claude/settings.json` }, cwd: g.repo, form: 'forged' } },
   ]);
   assert.ok(redId);
   assert.ok(!JSON.stringify(approvals.getFor(ownerActor(), redId!)).includes(fake));
@@ -319,7 +319,7 @@ test('T-2885 review M1: a forged outbox line buys no pass for a call that was ne
   // guard: a forged line for a call the guard allows anyway. Allow makes a pass, but the guard consults passes only when it refuses,
   // so the pass is never used: the call runs as it always did, nothing is marked used, and a refused call is not helped by it.
   const allowedCall = { command: 'echo hi > notes.txt', description: 'x' };
-  const [aid] = fileRefusalRequests(approvals, store, WS, [{ id: newId(), type: 'request', kind: 'guard.refusal', claudeSession: CLAUDE_SESSION, payload: { tool: 'Bash', input: allowedCall, cwd: g.repo } }]);
+  const [aid] = fileRefusalRequests(approvals, store, WS, [{ id: newId(), type: 'request', kind: 'guard.refusal', claudeSession: CLAUDE_SESSION, payload: { tool: 'Bash', input: allowedCall, cwd: g.repo, form: 'forged' } }]);
   assert.equal((await approvals.allow(ownerActor(), aid!)).result?.ok, true);
   writeFileSync(g.passes, passesContent(approvals.livePasses(WS)));
   chmodSync(g.passes, 0o644);
