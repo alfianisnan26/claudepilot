@@ -123,15 +123,31 @@ async function withPortal(dataDir: string, fn: (portal: Portal) => Promise<void>
   }
 }
 
-/** A complete database whose last two migrations are marked as not run, so the next start applies them on top of themselves and fails. */
+/**
+ * A complete database with ONE migration marked as not run whose re-run fails, so the next start applies it on top of itself and fails.
+ * T-2888: the newest migrations may all be re-runnable (D-92: `IF NOT EXISTS`), so the test finds the newest one that is not by trying
+ * each on this database in a rolled-back transaction, newest first, instead of assuming the last ones fail. The runner picks what is
+ * pending by the applied set (store.ts), so `user_version` stays the highest.
+ */
 async function failedMigration(): Promise<string> {
   const dir = tempDirectory('cp-qa-boot-');
   (await Store.open({ dataDir: dir, secretKey: parseSecretKey(KEY) })).close();
   const db = new DatabaseSync(join(dir, 'portal.db'));
-  const versions = MIGRATIONS.map((m) => m.version).sort((a, b) => a - b);
-  const kept = versions.slice(0, -2);
+  const failsAgain = (m: (typeof MIGRATIONS)[number]): boolean => {
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      m.up(db);
+      return false;
+    } catch {
+      return true;
+    } finally {
+      db.exec('ROLLBACK');
+    }
+  };
+  const failing = [...MIGRATIONS].sort((a, b) => b.version - a.version).find(failsAgain);
+  assert.ok(failing, 'some released migration fails when it runs again');
+  const kept = MIGRATIONS.map((m) => m.version).filter((v) => v !== failing.version).sort((a, b) => a - b);
   db.prepare("UPDATE portal_meta SET value = ? WHERE key = 'migrations_applied'").run(JSON.stringify(kept));
-  db.exec(`PRAGMA user_version = ${kept.at(-1)}`);
   db.close();
   return dir;
 }
