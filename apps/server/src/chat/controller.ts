@@ -1552,7 +1552,7 @@ export class ChatController {
     if (row.mode !== 'bypassPermissions') {
       // T-416 S2b: the session is not in Bypass, but its newest Bypass record may still say a vanished process (or a sleep) kept it. A stop,
       // an end or a restart that is not itself a vanishing supersedes that record: only `#markGone` (kept) may leave it standing.
-      if (!kept && this.#sleptInBypass(sessionId))
+      if (!kept && this.#sleptInBypass(sessionId)) {
         this.#chat.addAudit({
           severity: 'info',
           kind: 'bypass.left',
@@ -1561,9 +1561,11 @@ export class ChatController {
           actor: 'portal',
           detail: { why: how, superseded: true },
         });
-      // PILOT-997 review 43296: a lead in a kept pause (its row already on the start mode) that is now ended or stopped for good takes its
-      // workers in an inherited Bypass out too; a kept pause itself (`kept`) leaves them, like the lead's own Bypass.
-      if (!kept) void this.#parentLeftBypass(sessionId, { why: how });
+        // PILOT-997 review 43296: a lead in a kept pause that is now ended or stopped for good takes its workers in an inherited Bypass out
+        // too. Only here (review 43368): a restart that keeps Bypass sets the start mode before it stops (`#stopForRestart` quiet), so it
+        // reaches this branch with no kept pause to supersede, and its workers stay.
+        void this.#parentLeftBypass(sessionId, { why: how });
+      }
       return;
     }
     this.#chat.patchSession(sessionId, { mode: START_MODE });
@@ -3998,7 +4000,7 @@ export class ChatController {
    * process's end isn't read as a crash. `quiet`: the session was in Bypass and keeps it, so it reads the start mode now (what the new process
    * starts in) without the "turned off" note. A stop the workspace refused leaves everything as it was, and says so.
    */
-  async #stopForRestart(sessionId: string, why: string, quiet = false): Promise<void> {
+  async #stopForRestart(sessionId: string, why: string, quiet = false, keeping = false): Promise<void> {
     const row = this.#chat.row(sessionId);
     if (!row || row.state === 'ended' || row.process !== 'live') {
       if (quiet && row?.mode === 'bypassPermissions') this.#chat.patchSession(sessionId, { mode: START_MODE }); // it slept: off already in fact
@@ -4018,7 +4020,9 @@ export class ChatController {
       }
       this.#forget(sessionId, why);
       if (quiet) this.#chat.patchSession(sessionId, { mode: START_MODE });
-      this.#closeOut(sessionId);
+      // `keeping`: the restart `#keepBypass` falls back on, Bypass about to come back; a wake's kept pause is not superseded by it, and the
+      // workers stay (PILOT-997 review 43368).
+      this.#closeOut(sessionId, 'stopped', keeping);
       this.#chat.patchSession(sessionId, { process: 'asleep' });
       this.#launchedAt.delete(sessionId);
       this.#emitSession(sessionId);
@@ -4113,7 +4117,7 @@ export class ChatController {
         // Not launched with the flag, or the switch failed: the restart approach, once.
         if (!this.#bypassAllowed()) return drop('policy', `Bypass not kept ${after}: the policy no longer allows it.`);
         try {
-          await this.#stopForRestart(sessionId, 'Restarting to keep Bypass.');
+          await this.#stopForRestart(sessionId, 'Restarting to keep Bypass.', false, true);
           await this.#setBypass(sessionId);
         } catch (e) {
           return drop(`${how}_failed`, `Bypass not kept ${after}: Claude Code refused the switch (${cliMessage(this.#message(e))}).`);
