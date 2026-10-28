@@ -1310,6 +1310,7 @@ test('T-924: the roots file is delivered root-owned 0644 with the default roots,
     '/home/node/work/claudepilot.worktrees',
     '/home/node/work/tradingbot.worktrees',
     '/home/node/work/konfersi-universe.worktrees',
+    'tool /home/node/work/claudepilot', // PILOT-998: the read-only tool checkout
   ]);
   const bundle = compile({
     portalId: 'p',
@@ -1333,6 +1334,130 @@ test('T-924: the roots file is delivered root-owned 0644 with the default roots,
   ]) {
     assert.throws(() => gitCRootsContent([bad]), /git -C root/, bad);
   }
+});
+
+// PILOT-998 (T-2865): a tool checkout (the main ClaudePilot folder) takes git -C for reads and fast-forwards only, and $HOME in a
+// git -C path is read as the session's HOME when nothing in the command can change it. Every refusal says what to do.
+function toolRig() {
+  const g = rig();
+  const lanes = join(g.home, 'work', 'agentic-worktrees');
+  const wt = join(lanes, 'lane1');
+  const tool = join(g.home, 'work', 'claudepilot');
+  for (const d of [wt, join(tool, '.git'), join(tool, 'scripts'), join(tool, '.claude')]) mkdirSync(d, { recursive: true });
+  const rootsFile = join(g.root, 'git-c-roots');
+  writeFileSync(rootsFile, gitCRootsContent([lanes], [tool]));
+  const sh = (command: string) =>
+    run(g, 'Bash', { command, description: 'x' }, { cwd: wt, env: { CLAUDEPILOT_GUARD_GITC_ROOTS_FILE: rootsFile } });
+  return { g, lanes, wt, tool, sh };
+}
+
+test('PILOT-998: git -C on a tool checkout allows reads and fast-forwards, with $HOME, ~ and quoted paths resolved', () => {
+  const { tool, sh } = toolRig();
+  const c = `git -C ${tool}`;
+  const H = '$' + 'HOME';
+  const HB = '$' + '{HOME}';
+  const ALLOWED: [string, string][] = [
+    ['fetch', `${c} fetch origin`],
+    ['fetch --prune', `${c} fetch --prune origin`],
+    ['pull --ff-only', `${c} pull --ff-only`],
+    ['pull --ff-only of a branch', `${c} pull --ff-only origin integration`],
+    ['pull -q --ff-only', `${c} pull -q --ff-only`],
+    ['merge --ff-only', `${c} merge --ff-only origin/integration`],
+    ['log', `${c} log --oneline -5`],
+    ['show', `${c} show HEAD --stat`],
+    ['status', `${c} status --short`],
+    ['rev-parse', `${c} rev-parse HEAD`],
+    ['diff', `${c} diff HEAD~1 --stat`],
+    ['branch --contains', `${c} branch --contains HEAD`],
+    ['branch -r --contains', `${c} branch -r --contains HEAD`],
+    ['a sub folder', `git -C ${tool}/scripts status`],
+    ['double quoted', `git -C "${tool}" pull --ff-only`],
+    ['single quoted', `git -C '${tool}' log --oneline`],
+    ['$HOME', `git -C ${H}/work/claudepilot pull --ff-only`],
+    ['$HOME in double quotes', `git -C "${H}/work/claudepilot" fetch origin`],
+    ['$HOME quoted alone', `git -C "${H}"/work/claudepilot status`],
+    ['$HOME in braces', `git -C ${HB}/work/claudepilot rev-parse HEAD`],
+    ['~', 'git -C ~/work/claudepilot fetch origin'],
+    ['$HOME to a lane worktree', `git -C ${H}/work/agentic-worktrees/lane1 commit -m x`],
+    ['~ to a lane worktree', 'git -C ~/work/agentic-worktrees/lane1 status'],
+    ['$HOME and &&', `git -C ${H}/work/claudepilot fetch origin && git -C ${H}/work/claudepilot merge --ff-only origin/integration`],
+  ];
+  const misses: string[] = [];
+  for (const [what, command] of ALLOWED) {
+    const r = sh(command);
+    if (r.code !== 0) misses.push(`allowed: ${what}: ${command} -> ${r.code} ${r.stderr}`);
+  }
+  assert.equal(misses.join('\n'), '');
+});
+
+test('PILOT-998: git -C on a tool checkout refuses writes, plain pulls and merges, and an unseen HOME, each with what to do', () => {
+  const { g, tool, sh } = toolRig();
+  const c = `git -C ${tool}`;
+  const H = '$' + 'HOME';
+  const REFUSED: [string, string, RegExp][] = [
+    ['a plain pull', `${c} pull`, /without --ff-only.*What to do: add --ff-only/],
+    ['pull origin x', `${c} pull origin integration`, /without --ff-only/],
+    ['pull --rebase', `${c} pull --rebase`, /without --ff-only/],
+    ['pull --ff-only --rebase', `${c} pull --ff-only --rebase`, /with --rebase/],
+    ['pull --ff-only --no-ff', `${c} pull --ff-only --no-ff`, /with --no-ff/],
+    ['pull --ff-only --autostash', `${c} pull --ff-only --autostash`, /with --autostash/],
+    ['a plain merge', `${c} merge origin/integration`, /without --ff-only/],
+    ['merge --ff-only --squash', `${c} merge --ff-only --squash origin/x`, /with --squash/],
+    ['merge --abort', `${c} merge --abort`, /without --ff-only/],
+    ['push', `${c} push origin HEAD`, /git push \(not a read or a fast-forward\).*What to do: on a tool checkout only/],
+    ['push alone', `${c} push`, /not a read or a fast-forward/],
+    ['reset', `${c} reset HEAD~1`, /git reset/],
+    ['reset --hard', `${c} reset --hard origin/integration`, /reset/],
+    ['checkout', `${c} checkout ticket/T-1-x`, /git checkout/],
+    ['checkout -b', `${c} checkout -b ticket/T-1-x`, /git checkout/],
+    ['switch', `${c} switch ticket/T-1-x`, /git switch/],
+    ['commit', `${c} commit -m x`, /git commit/],
+    ['stash', `${c} stash`, /git stash/],
+    ['rebase', `${c} rebase origin/integration`, /rebase/],
+    ['tag', `${c} tag v1`, /git tag/],
+    ['worktree add', `${c} worktree add ../x`, /git worktree/],
+    ['config', `${c} config user.name x`, /git config/],
+    ['branch create', `${c} branch newbranch`, /without --contains/],
+    ['branch --contains with -D', `${c} branch --contains HEAD -D x`, /--delete|with -D/],
+    ['fetch into a local branch', `${c} fetch origin integration:integration`, /refspec that writes a local branch/],
+    ['fetch a forced refspec', `${c} fetch origin +integration`, /refspec/],
+    ['fetch -u', `${c} fetch -u origin`, /--update-head-ok/],
+    ['log --output', `${c} log --output=/tmp/x`, /--output \(it writes a file\)/],
+    ['diff --output', `${c} diff --output=/tmp/x`, /--output/],
+    ['a variable in the argv', `${c} log $REF`, /cannot see/],
+    ['env -C into the tool', `env -C ${tool} git push`, /env -C or sudo -D into a tool checkout/],
+    ['--git-dir of the tool', `git --git-dir=${tool}/.git log`, /--git-dir or --work-tree of a tool checkout/],
+    ['the folder above the tool', `git -C ${g.home}/work status`, /outside the lane worktrees.*What to do: run git -C on your own worktree/],
+    ['HOME set first', `HOME=/tmp git -C ${H}/work/claudepilot status`, /value the guard cannot see .\$HOME, in a command that could change HOME/],
+    ['HOME exported', `export HOME=/tmp; git -C ${H}/work/claudepilot status`, /could change HOME/],
+    ['HOME spelled with quotes', `export HO''ME=/tmp; git -C ${H}/work/claudepilot status`, /could change HOME/],
+    ['an assignment of another name', `N=1; git -C ${H}/work/claudepilot status`, /could change HOME/],
+    ['read', `read X; git -C ${H}/work/claudepilot status`, /could change HOME/],
+    ['eval', `eval true; git -C ${H}/work/claudepilot status`, /could change HOME/],
+    ['arithmetic', `(( X )); git -C ${H}/work/claudepilot status`, /could change HOME/],
+    ['a command substitution elsewhere', `echo $(id -u); git -C ${H}/work/claudepilot status`, /could change HOME/],
+    ['~ after HOME is set', 'HOME=/tmp git -C ~/work/claudepilot status', /~ in a command that could change HOME/],
+    ['another variable', `git -C $HOMEX/work/claudepilot status`, /a variable other than \$HOME/],
+    ['$HOME in single quotes', `git -C '${H}/work/claudepilot' status`, /path the guard cannot read/],
+    ['a write to a settings file in the tool', `echo x > ${tool}/.claude/settings.json`, /./],
+    ['a pull then a write to a settings file', `${c} pull --ff-only && echo '{}' > ${tool}/.claude/settings.json`, /./],
+  ];
+  const misses: string[] = [];
+  for (const [what, command, reason] of REFUSED) {
+    const r = sh(command);
+    if (r.code !== 2 || !r.stderr.startsWith(RULE_GUARD_MESSAGE)) misses.push(`refused: ${what}: ${command} -> ${r.code} ${r.stderr}`);
+    else if (!reason.test(r.stderr)) misses.push(`reason: ${what}: ${command} -> ${r.stderr}`);
+    else if (!/What to do: |Propose the change/.test(r.stderr)) misses.push(`what to do: ${what}: ${r.stderr}`);
+  }
+  assert.equal(misses.join('\n'), '');
+});
+
+test('PILOT-998: a tool root is one checkout: never a worktrees folder, never one that holds a lane root, never shallow', () => {
+  const lanes = ['/home/node/work/claudepilot.worktrees'];
+  assert.match(gitCRootsContent(lanes, ['/home/node/work/claudepilot']), /^tool \/home\/node\/work\/claudepilot$/m);
+  for (const bad of ['/home/node/work', '/home/node', '/', 'home/node/work/x', '/home/node/work/../x', '/home/node/work/x/', '/home/node/work/a.worktrees', '/home/node/work/a b'])
+    assert.throws(() => gitCRootsContent(lanes, [bad]), /git -C tool root/, bad);
+  assert.throws(() => gitCRootsContent(['/home/node/work/x/y.worktrees'], ['/home/node/work/x']), /git -C tool root/);
 });
 
 // T-860 S2c (QA of S2 and S2b): more wrappers, more ways to set a GIT_ variable, and git config --blob. Each R form was allowed before this
