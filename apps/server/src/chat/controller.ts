@@ -1561,6 +1561,9 @@ export class ChatController {
           actor: 'portal',
           detail: { why: how, superseded: true },
         });
+      // PILOT-997 review 43296: a lead in a kept pause (its row already on the start mode) that is now ended or stopped for good takes its
+      // workers in an inherited Bypass out too; a kept pause itself (`kept`) leaves them, like the lead's own Bypass.
+      if (!kept) void this.#parentLeftBypass(sessionId, { why: how });
       return;
     }
     this.#chat.patchSession(sessionId, { mode: START_MODE });
