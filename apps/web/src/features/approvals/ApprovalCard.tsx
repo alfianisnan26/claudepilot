@@ -41,7 +41,6 @@ export function ApprovalCard({ approval, onChange }: { approval: Approval; onCha
     setError(null);
     try {
       onChange(await approvalsApi.allow(a.id, needsValue ? value : undefined));
-      setValue('');
       setStep('decide');
     } catch (e) {
       if (e instanceof ApiError && e.code === REAUTH_REQUIRED) {
@@ -49,6 +48,8 @@ export function ApprovalCard({ approval, onChange }: { approval: Approval; onCha
         setCode('');
       } else setError(errorText(e, 'Couldn’t allow it.'));
     } finally {
+      // The typed secret never outlives one try: allowed or refused, the person types it again.
+      setValue('');
       setBusy(null);
     }
   };
@@ -75,6 +76,7 @@ export function ApprovalCard({ approval, onChange }: { approval: Approval; onCha
   };
 
   const deny = async () => {
+    setValue('');
     setBusy('deny');
     setError(null);
     try {
