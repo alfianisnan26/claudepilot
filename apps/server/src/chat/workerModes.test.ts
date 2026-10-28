@@ -44,9 +44,10 @@ async function answering<T>(s: Live, p: Promise<T>): Promise<T> {
     for (const c of controls(s.ws)) {
       if (seen.has(c.id)) continue;
       seen.add(c.id);
-      if (c.request.subtype === 'set_permission_mode') s.ws.tails.at(-1)!.push(ok(c.id, { mode: String(c.request.mode) }));
-      else if (c.request.subtype === 'get_settings') s.ws.tails.at(-1)!.push(ok(c.id, APPLIED));
-      else if (c.request.subtype === 'get_usage') s.ws.tails.at(-1)!.push(ok(c.id, USAGE_API_KEY));
+      // The lead and its workers each have a process: the answer goes to every one (an id a process did not ask is ignored by it).
+      const answer =
+        c.request.subtype === 'set_permission_mode' ? ok(c.id, { mode: String(c.request.mode) }) : c.request.subtype === 'get_settings' ? ok(c.id, APPLIED) : c.request.subtype === 'get_usage' ? ok(c.id, USAGE_API_KEY) : null;
+      if (answer) for (const t of s.ws.tails) t.push(answer);
     }
     await sleep(5);
   }
