@@ -338,6 +338,31 @@ test('PILOT-997 review 42957: a session whose Bypass was inherited gets it back 
   }
 });
 
+test('PILOT-997 review 43296: a lead in a kept pause that a person then Ends (keeping its workers) takes its worker out of the inherited Bypass', async () => {
+  const r = await rig();
+  try {
+    const lead = await bypassLead(r.s);
+    const w = await bypassWorker(r.s, lead, 'Worker');
+    // The lead's Bypass is paused and kept (what a lead's sleep or vanishing writes, #bypassOver kept): its row reads the start mode, the
+    // worker stays in Bypass meanwhile (the pause comes back).
+    const chats = new ChatStore(r.s.store);
+    chats.patchSession(lead, { mode: 'default' });
+    chats.addAudit({ severity: 'info', kind: 'bypass.left', sessionId: lead, workspaceId: 'docker/ws1', actor: 'portal', detail: { why: 'sleep', kept: true } });
+    assert.equal(r.s.controller.get(w)!.mode, 'bypassPermissions', 'set up: the worker is in Bypass under a paused lead');
+
+    // A person Ends the lead and keeps its workers: the kept pause is superseded, and the worker leaves Bypass with it.
+    await answering(r.s, r.s.controller.end(lead));
+    await answering(r.s, until(() => r.s.controller.get(w)!.mode !== 'bypassPermissions', 3000));
+    assert.equal(r.s.controller.get(lead)!.state, 'ended');
+    assert.notEqual(r.s.controller.get(w)!.state, 'ended', 'the worker was kept');
+    assert.equal(r.s.controller.get(w)!.mode, 'dontAsk');
+    const left = r.s.controller.audit({ kind: 'bypass.left' }).find((x) => x.sessionId === w)!;
+    assert.deepEqual([left.detail.why, left.detail.parent], ['parent_left', lead]);
+  } finally {
+    await r.done();
+  }
+});
+
 test('PILOT-997: a new session no person started starts in Auto while “Auto for agents” is on; a person’s own and a worker do not', async () => {
   const s = await liveSession();
   try {
