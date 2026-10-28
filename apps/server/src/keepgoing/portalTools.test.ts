@@ -34,7 +34,7 @@ test('an admin token turns Keep going on after a confirmation, off without one; 
     const t = h.token('admin');
     const first = await h.call(t.secret, 'session_keepgoing_set', { session_id: 's_a', enabled: true, nudge_after_min: 6 });
     assert.equal(first.result?.structuredContent.status, 'confirmation_required', JSON.stringify(first.raw));
-    assert.match(first.result!.structuredContent.preview.changes, /never answers a tool approval and never turns Bypass on/);
+    assert.match(first.result!.structuredContent.preview.changes, /never answers a tool approval, and turns Bypass back on only for a chat that was in it within 24 hours/);
     assert.equal(r.engine.view('s_a'), null, 'nothing set before the confirmation');
     const token = first.result!.structuredContent.confirm_token as string;
     const on = await h.call(t.secret, 'session_keepgoing_set', { session_id: 's_a', enabled: true, nudge_after_min: 6, confirm_token: token });

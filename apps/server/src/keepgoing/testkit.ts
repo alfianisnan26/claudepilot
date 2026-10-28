@@ -73,6 +73,9 @@ export class KgChat extends FakeChat implements KeepGoingChatPort {
   async control(id: string, op: 'resume'): Promise<void> {
     if (op === 'resume') return this.resume(id);
   }
+  /** PILOT-996: the controller's Bypass put-back, when a test installs it (absent: Keep going only reports). */
+  bypassSeenAt?: (id: string) => string | null;
+  restoreBypass?: (id: string) => Promise<boolean>;
   /** The controller's hooks the module installs. */
   keepGoingOf?: (id: string) => unknown;
   readonly emittedFor: string[] = [];
