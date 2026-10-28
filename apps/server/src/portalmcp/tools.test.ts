@@ -167,6 +167,13 @@ const fakes = {
     withdrawProposal: (actor: string, id: string) => void calls.push(`mcp.withdraw:${actor}:${id}`),
     catalog: { list: () => [{ id: 'e1', key: 'linear', displayName: 'Linear', kind: 'remote', description: INJECTION, versions: [{ version: '1.0.0', reviewState: 'approved', proposal: null }] }] },
   },
+  // PILOT-1000: what session_configure asks a person for (the service itself is approvals/approvals.test.ts).
+  approvals: {
+    create: (req: Row, requester: Row | null) => (
+      calls.push(`approvals.create:${req.kind}:${JSON.stringify(req.payload)}:${requester ? requester.sessionId : 'portal'}:${req.reason}`),
+      { id: 'apr-1', kind: req.kind, status: 'pending', expiresAt: NOW }
+    ),
+  },
 };
 
 const h = await portalMcpHarness({ registry: portalTools });
@@ -515,7 +522,7 @@ test('session_send and session_start: the token’s label travels as actorLabel,
   }
 });
 
-test('session_start and session_configure: the actor is the token, and a session never gets bypass mode over MCP', async () => {
+test('session_start and session_configure: the actor is the token, and a session never gets bypass mode directly over MCP', async () => {
   reset();
   h.module.settings.update({ sessionControl: true });
   try {
@@ -524,8 +531,10 @@ test('session_start and session_configure: the actor is the token, and a session
     assert.equal(started.session.id, 's-new');
     assert.deepEqual(calls, [`chat.create:docker/api:portal-mcp:${admin.id}`, `chat.send:s-new:portal-mcp:${admin.id}:Look at the failing test.`]);
     reset();
-    const bypass = await h.call(admin.secret, 'session_configure', { id: 's1', mode: 'bypassPermissions' });
-    assert.ok(bypass.result?.isError || bypass.error, 'bypass is not an option here');
+    const bypass = where(await h.call(admin.secret, 'session_configure', { id: 's1', mode: 'bypassPermissions' }));
+    assert.equal(bypass.approval.id, 'apr-1', 'Bypass becomes a person’s approval card');
+    assert.ok(!calls.some((c) => c.startsWith('chat.control')), 'and the mode is not changed by the call');
+    reset();
     assert.equal(err(await h.call(admin.secret, 'session_configure', { id: 's1' })), 'VALIDATION_FAILED');
     await h.call(admin.secret, 'session_configure', { id: 's1', model: 'sonnet', mode: 'plan', effort: 'high' });
     assert.deepEqual(calls, ['chat.control:s1:model:{"model":"sonnet"}', 'chat.control:s1:effort:{"effort":"high"}', 'chat.control:s1:mode:{"mode":"plan"}']);
@@ -545,15 +554,24 @@ test('PILOT-997: session_configure and session_start take mode auto (the control
     assert.deepEqual(calls, ['chat.control:s1:mode:{"mode":"auto"}']);
 
     reset();
-    for (const [tool, args] of [
-      ['session_configure', { id: 's1', mode: 'bypassPermissions', max_workers: 0 }],
-      ['session_start', { workspace_id: 'docker/api', mode: 'bypassPermissions', prompt: 'x' }],
-    ] as const) {
-      const refused = await h.call(admin.secret, tool, args);
-      assert.equal(refused.result?.isError, true, tool);
-      assert.match(JSON.stringify(refused.result!.structuredContent), /Bypass over MCP needs a person’s approval \(PILOT-1000\)/);
-    }
-    assert.deepEqual(calls, [], 'nothing created, controlled or limited');
+    // PILOT-1000: Bypass with anything else is refused before anything changes; at start it is refused with the reason (never capable).
+    const mixed = await h.call(admin.secret, 'session_configure', { id: 's1', mode: 'bypassPermissions', max_workers: 0 });
+    assert.equal(err(mixed), 'VALIDATION_FAILED');
+    const atStart = await h.call(admin.secret, 'session_start', { workspace_id: 'docker/api', mode: 'bypassPermissions', prompt: 'x' });
+    assert.equal(err(atStart), 'FORBIDDEN');
+    assert.match(JSON.stringify(atStart.result!.structuredContent), /isn’t started bypass-capable/);
+    assert.deepEqual(calls, [], 'nothing created, controlled, limited or asked');
+
+    // Alone, it files a session.bypass card as the portal (a token has no session), with the reason given; the caller's
+    // acknowledgement is no input, and the session's mode is not touched.
+    const asked = await h.call(admin.secret, 'session_configure', { id: 's1', mode: 'bypassPermissions', reason: 'long run' });
+    assert.equal(asked.result?.isError, undefined, JSON.stringify(asked.raw));
+    assert.deepEqual(where(asked).approval, { id: 'apr-1', kind: 'session.bypass', status: 'pending', expires_at: NOW, page: '/admin/approvals/apr-1' });
+    assert.deepEqual(calls, ['approvals.create:session.bypass:{"sessionId":"s1"}:portal:long run']);
+    reset();
+    await h.call(admin.secret, 'session_configure', { id: 's1', mode: 'bypassPermissions' });
+    assert.deepEqual(calls, [`approvals.create:session.bypass:{"sessionId":"s1"}:portal:Asked with session_configure by portal-mcp:${admin.id}.`], 'a default reason names the token');
+    reset();
 
     const started = where(await h.call(admin.secret, 'session_start', { workspace_id: 'docker/api', prompt: 'Go.', mode: 'auto' }));
     assert.equal(started.session.id, 's-new');

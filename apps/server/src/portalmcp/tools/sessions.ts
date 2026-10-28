@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { AppError, isAppError } from '@isnanme/core';
-import { CHAT_AGENT_NAME, CHAT_MAX_WORKERS_MAX, sessionRef, workspaceRef, type ChatPermissionMode, type ChatSession } from '@portal/contracts';
+import { APPROVAL_REASON_MAX, approvalPath, CHAT_AGENT_NAME, CHAT_MAX_WORKERS_MAX, sessionRef, workspaceRef, type ChatPermissionMode, type ChatSession } from '@portal/contracts';
 import { z } from 'zod';
 import { actorOfPrincipal, requireCan } from '../../authz/seam.js';
 import { WORKER_REPORTS } from '../../chat/agents.js';
@@ -14,13 +14,16 @@ import type { PortalToolDeps } from './deps.js';
 const STATES = ['starting', 'idle', 'working', 'waiting', 'interrupted', 'ended'] as const;
 /**
  * The modes a session may be put in over MCP (PRD §13.3). PILOT-996 (D-103): Auto too, under the controller's rule (`autoModeAllowed`:
- * its parent's mode, `sessions.autonomousAuto`). Never Bypass: asked for, it is refused with the reason until a person's approval card
- * exists for it (PILOT-1000); an agent's own acknowledgement is not one.
+ * its parent's mode, `sessions.autonomousAuto`). Never Bypass directly: on `session_configure` it becomes a person's session.bypass
+ * approval card (PILOT-1000), whose Allow is the acknowledgement; the caller's own acknowledgement is never taken (PILOT-996 c42754).
  */
 const MCP_MODES = ['plan', 'default', 'acceptEdits', 'dontAsk', 'auto'] as const satisfies readonly ChatPermissionMode[];
-/** Accepted by the schema only so that a request for Bypass gets its reason, never a bare validation error. */
+/** Accepted by the schema so that a request for Bypass gets its card (session_configure) or its reason, never a bare validation error. */
 const MCP_MODE_INPUT = z.enum([...MCP_MODES, 'bypassPermissions']);
 export const MCP_BYPASS_REFUSED = 'Bypass over MCP needs a person’s approval (PILOT-1000). Ask for auto, or have a person turn Bypass on in the app.';
+/** session_start: a session started over MCP is never bypass-capable, so a card for it could only fail. */
+export const MCP_BYPASS_AT_START =
+  'A session started over MCP can’t run in Bypass: it isn’t started bypass-capable. Start it in another mode; for a session a person started bypass-capable, ask with session_configure mode bypassPermissions (a person’s approval card).';
 function mcpMode(mode: ChatPermissionMode | undefined): Exclude<ChatPermissionMode, 'bypassPermissions'> | undefined {
   if (mode === 'bypassPermissions') throw new PortalToolError('FORBIDDEN', MCP_BYPASS_REFUSED);
   return mode;
@@ -65,10 +68,10 @@ const TRANSCRIPT_KINDS = ['user', 'assistant', 'result', 'error', 'system', 'too
 
 /** Chat sessions over MCP (portal-mcp PRD §13.3). The write tools are listed only while session control is on. */
 export function registerSessionTools(
-  deps: Pick<PortalToolDeps, 'store' | 'chat'> & { workspaces?: Pick<PortalToolDeps['workspaces'], 'list' | 'resolve'> },
+  deps: Pick<PortalToolDeps, 'store' | 'chat' | 'approvals'> & { workspaces?: Pick<PortalToolDeps['workspaces'], 'list' | 'resolve'> },
   registry: ToolRegistry = portalTools,
 ): void {
-  const { store, chat, workspaces } = deps;
+  const { store, chat, workspaces, approvals } = deps;
   const registerPortalTool: ToolRegistry['register'] = (tool) => registry.register(tool);
 
   const need = (id: string): ChatSession => {
@@ -255,10 +258,11 @@ export function registerSessionTools(
       agent: z.string().regex(CHAT_AGENT_NAME).optional().describe('The agent it runs as, .claude/agents/<agent>.md in its folder (e.g. implementer): its prompt, its tools and its model, at every start of its process.'),
       parent: z.string().max(80).optional().describe('A live session of this workspace it starts as a worker of (session_family, crew reports).'),
       report: z.enum(WORKER_REPORTS).optional().describe('With parent: what the parent hears of it unasked, one line each: idle (the default) when its turn ends, when it waits on a person and when it ends; end only when it ends; none nothing.'),
-      mode: MCP_MODE_INPUT.optional().describe('Its permission mode, applied before its first prompt: plan, default, acceptEdits, dontAsk or auto. bypassPermissions is refused (PILOT-1000).'),
+      mode: MCP_MODE_INPUT.optional().describe('Its permission mode, applied before its first prompt: plan, default, acceptEdits, dontAsk or auto. bypassPermissions is refused here (a session started over MCP is not bypass-capable).'),
     }),
     async handler(ctx, args) {
       assertCanChange(store, 'workspace');
+      if (args.mode === 'bypassPermissions') throw new PortalToolError('FORBIDDEN', approvals ? MCP_BYPASS_AT_START : MCP_BYPASS_REFUSED);
       const mode = mcpMode(args.mode);
       if (args.report && !args.parent) throw new AppError('VALIDATION_FAILED', 'report needs a parent.', { details: { report: 'Only with parent.' } });
       const workspaceId = await workspaceFor(args.workspace_id, ctx);
@@ -285,6 +289,35 @@ export function registerSessionTools(
       return { summary: `Started session ${s.id} in ${s.workspaceId}${parentId ? `, a worker of ${parentId}` : ''}.`, session: sessionBrief(s, ctx), ui: uiLink(`/admin/sessions/${s.id}`) };
     },
   });
+
+  /**
+   * PILOT-1000: Bypass asked over MCP becomes a person's session.bypass card; nothing about the session changes in this call. The caller's
+   * acknowledgement is never taken (PILOT-996 c42754): Allow, with the person's operate right and a fresh server code, is the only way on.
+   */
+  function askBypass(
+    ctx: PortalToolContext,
+    target: ChatSession,
+    args: { model?: string; effort?: string; max_workers?: number | null; subagents?: boolean; reason?: string },
+  ) {
+    if (args.model || args.effort || args.max_workers !== undefined || args.subagents !== undefined)
+      throw new AppError('VALIDATION_FAILED', 'Ask for Bypass alone: it waits for a person, the rest would not.', { details: { mode: 'Alone, without model, effort or limits.' } });
+    // Only for a session the caller may operate (the same not found as a missing one): a card never names a session it can't reach.
+    try {
+      requireCan(actorOfPrincipal(ctx.principal), 'operate', sessionRef(target.id));
+    } catch {
+      throw new AppError('NOT_FOUND', 'No such session. List them with session_list.');
+    }
+    if (target.mode === 'bypassPermissions') return { summary: `${target.id} is already in Bypass.`, session: sessionBrief(target, ctx) };
+    // An agent asks as its own session (it hears the outcome there; the kind lets it ask for its own session only); a token asks as the portal.
+    const requester = ctx.isAgent && ctx.sessionId ? { sessionId: ctx.sessionId, workspaceId: ctx.workspaceId, actor: actorOfPrincipal(ctx.principal) } : null;
+    const a = approvals!.create({ kind: 'session.bypass', payload: { sessionId: target.id }, reason: args.reason ?? `Asked with session_configure by ${ctx.actor}.` }, requester);
+    ctx.affected(`session:${target.id}`, `approval:${a.id}`);
+    return {
+      summary: `Bypass for ${target.id} waits for a person’s approval (${a.id}, until ${a.expiresAt}). Nothing changed yet.`,
+      approval: { id: a.id, kind: a.kind, status: a.status, expires_at: a.expiresAt, page: approvalPath(a.id) },
+      session: sessionBrief(target, ctx),
+    };
+  }
 
   /** A message from this caller: no human origin, and only the slash commands MCP text may use. */
   async function sendChecked(
@@ -357,7 +390,7 @@ export function registerSessionTools(
     name: 'session_configure',
     title: 'Change a session’s model, effort, mode or limits',
     description:
-      'Changes what applies from the session’s next request. Over MCP the mode is one of plan, default, acceptEdits, dontAsk and auto (auto where the session may run in it: its parent in auto or Bypass, or “Auto for agents” on). Bypass is refused here: it needs a person’s approval (PILOT-1000). Its limits: max_workers (how many workers it may run at once; 0 none, null the global setting, above the global cap counts as the cap) applies at once; subagents (whether its Claude may start Claude Code sub-agents) applies at its next start, so restart_needed says when a Restart is due.',
+      'Changes what applies from the session’s next request. Over MCP the mode is one of plan, default, acceptEdits, dontAsk and auto (auto where the session may run in it: its parent in auto or Bypass, or “Auto for agents” on). mode bypassPermissions changes nothing here: it asks a person (a session.bypass approval card, with reason) and returns the request; on Allow the portal turns Bypass on if the session was started bypass-capable. Ask for it alone. Its limits: max_workers (how many workers it may run at once; 0 none, null the global setting, above the global cap counts as the cap) applies at once; subagents (whether its Claude may start Claude Code sub-agents) applies at its next start, so restart_needed says when a Restart is due.',
     scope: 'admin',
     requires: 'session_control',
     hints: { destructive: true, idempotent: true },
@@ -368,9 +401,11 @@ export function registerSessionTools(
       mode: MCP_MODE_INPUT.optional(),
       max_workers: z.number().int().min(0).max(CHAT_MAX_WORKERS_MAX).nullable().optional().describe('Workers it may run at once: 0 none, null the global setting.'),
       subagents: z.boolean().optional().describe('Whether its Claude may start sub-agents (the Agent tool); applies at its next start.'),
+      reason: z.string().trim().min(1).max(APPROVAL_REASON_MAX).optional().describe('With mode bypassPermissions: why, in a sentence, for the person who decides.'),
     }),
     async handler(ctx, args) {
-      need(args.id);
+      const target = need(args.id);
+      if (args.mode === 'bypassPermissions' && approvals) return askBypass(ctx, target, args);
       const mode = mcpMode(args.mode); // before anything changes
       const limits = args.max_workers !== undefined || args.subagents !== undefined;
       if (!args.model && !args.effort && !args.mode && !limits) throw new AppError('VALIDATION_FAILED', 'Give a model, an effort, a mode, max_workers or subagents.');

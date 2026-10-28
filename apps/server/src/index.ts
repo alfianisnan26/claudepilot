@@ -492,6 +492,7 @@ registerBuiltInPortalTools({
   poolService,
   reconciler,
   mcp: mcpSets,
+  approvals,
 });
 portalMcp.start();
 // What each session's Claude Code process is launched with (I8 and the Secrets & env redactor): its token for the portal's tools, the

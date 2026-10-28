@@ -10,6 +10,7 @@ import { BYPASS_NOT_CAPABLE, FOUNDING_USER_ID, isProtectedPool, type Actor, type
 import { ownerActor, systemActor } from '../authz/seam.js';
 import { liveSession, ok, sleep, until, type Live } from '../chat/testkit.js';
 import { PortalToolError, ToolRegistry } from '../portalmcp/registry.js';
+import { registerSessionTools } from '../portalmcp/tools/sessions.js';
 import { secretsHarness } from '../secrets/testkit.js';
 import { Store } from '../store/store.js';
 import { tempDirectory } from '../store/testTmp.js';
@@ -376,6 +377,62 @@ test('session.bypass: Allow puts a bypass-capable session in Bypass through the 
     assert.equal(entered.length, 1);
     assert.deepEqual([entered[0]!.sessionId, entered[0]!.actor, entered[0]!.severity], [b.id, 'ui', 'high']);
     assert.deepEqual(entered[0]!.detail, { claude: 'Default', policy: 'allowed', capable: true, acknowledged: true, reauth: 'fresh', via: 'approval', approvalId: a.id });
+  } finally {
+    await s.done();
+  }
+});
+
+test('PILOT-1000: Bypass over MCP (session_configure) files a session.bypass card, takes no acknowledgement, and Allow goes through the enterBypass gate', async () => {
+  const s = await liveSession();
+  try {
+    const { approvals, state } = await bypassHarness(s);
+    const b = await capableSession(s, true);
+    const plain = await capableSession(s, false);
+    const registry = new ToolRegistry();
+    registerSessionTools({ store: { writable: true } as never, chat: s.controller as never, approvals }, registry);
+    const ctx = (scope: 'admin' | 'read') =>
+      ({
+        isAgent: false,
+        sessionId: null,
+        workspaceId: null,
+        actor: 'portal-mcp:tk-admin',
+        principal: { kind: 'user', userId: FOUNDING_USER_ID, tokenId: 'tk-admin', scope, workspaceId: null, sessionId: null },
+        untrusted: (t: string | null | undefined) => (t ? { untrusted_text: t } : null),
+        affected: () => undefined,
+      }) as never;
+    const tool = registry.get('session_configure')!;
+    const call = (c: never, args: Record<string, unknown>) => Promise.resolve().then(() => tool.handler(c, tool.input.parse(args) as never)) as Promise<{ approval?: { id: string; status: string; page: string } }>;
+    const sends = () => s.ws.sends.filter((x) => x.line.includes('set_permission_mode')).length;
+    const before = sends();
+
+    // An acknowledgement in the call is no input (the schema drops it): the call files a card and changes nothing.
+    const asked = await call(ctx('admin'), { id: b.id, mode: 'bypassPermissions', reason: 'unattended release run', acknowledged: true });
+    assert.equal(asked.approval?.status, 'pending');
+    assert.match(asked.approval!.page, /approvals/);
+    assert.equal(s.controller.get(b.id)!.mode, 'default');
+    assert.equal(sends(), before, 'no set_permission_mode until a person allows it');
+    const a = approvals.getFor(person, asked.approval!.id);
+    assert.deepEqual([a.kind, a.payload, a.requesterSession, a.reason], ['session.bypass', { sessionId: b.id }, null, 'unattended release run']);
+
+    // Bypass alone (the rest would not wait for the person); a token that may not operate the session gets the missing-session answer.
+    assert.equal(await code(call(ctx('admin'), { id: b.id, mode: 'bypassPermissions', model: 'sonnet' })), 'VALIDATION_FAILED');
+    assert.equal(await code(call(ctx('read'), { id: b.id, mode: 'bypassPermissions' })), 'NOT_FOUND');
+    // A session not started bypass-capable still becomes a card (its Allow then says BYPASS_NOT_CAPABLE, tested below).
+    assert.equal((await call(ctx('admin'), { id: plain.id, mode: 'bypassPermissions' })).approval?.status, 'pending');
+
+    // Allow: without a fresh server code it stays pending; with one, the gated path turns Bypass on, audited via the approval.
+    state.fresh = false;
+    assert.equal(await code(approvals.allow(person, a.id, { sessionToken: 'tok' })), 'REAUTH_REQUIRED');
+    assert.equal(approvals.getFor(person, a.id).status, 'pending');
+    state.fresh = true;
+    const allowing = approvals.allow(person, a.id, { sessionToken: 'tok' });
+    const req = await s.take('set_permission_mode');
+    b.tail.push(ok(req.id, { mode: 'bypassPermissions' }));
+    assert.equal((await allowing).result?.ok, true);
+    assert.equal(s.controller.get(b.id)!.mode, 'bypassPermissions');
+    assert.deepEqual(s.controller.audit({ kind: 'bypass.entered' }).map((r) => r.detail.approvalId), [a.id]);
+    // Already in Bypass: nothing more is asked.
+    assert.equal((await call(ctx('admin'), { id: b.id, mode: 'bypassPermissions' })).approval, undefined);
   } finally {
     await s.done();
   }
