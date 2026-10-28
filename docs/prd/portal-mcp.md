@@ -652,6 +652,12 @@ and the code differ, the code is what ships:
   new revision, and `pool_update` and `pool_delete` still answer `UI_ONLY`. No tool returns a value:
   `pool_get` shows each secret's name, options and fingerprint (not the hint), and `pool_get` and `pool_list`
   carry `warnings` for an environment-style name (`API_KEY`) stored without `expose` (T-2823).
+  A value sent to `pool_create` or `pool_update` by mistake is never kept: wherever the call is kept (audit
+  row, chat tool row, approval card; `maskWriteOnlyArgs` in contracts) a secrets pool's `content` keeps only
+  `names`, each entry's `kind` and `name` and boolean options, and every other field is `[write-only]`; for
+  any other type, `value`, `values`, `newValue`, `secret`, `secrets`, `keys`, `password`, `token` and
+  `credential(s)` keys of `content` are masked at any depth. The "looks like a secret" refusal still reads that
+  content unmasked (only `pool_secret_set`'s `value` is left out of it), so a key in an MCP set is refused.
   Persona and browser pools are not listed until their services are in.
 - **`pool_secret_set`** (scope `agent`, 10 a minute, 60 an hour): `pool` (id or exact name), `name`,
   `value`, `expose` (default true for an environment-style name that is not reserved), `note`. The value is
@@ -661,7 +667,8 @@ and the code differ, the code is what ships:
   `pools/authz.ts` (`secretWriteAccess`, one `can()`): an agent writes only to a secrets pool assigned to its
   own workspace and to no other (a shared pool is `SHARED_POOL`); a pool it can't reach is the same
   `NOT_FOUND` as a missing one; a token needs `manage` (admin). A protected pool (a name with the word `prd`,
-  `prod` or `production`, or `[protected]` in its description) is refused for everyone with `PROTECTED`:
+  `prod` or `production` in any case, split on any separator, a case change or a letter-digit change, so
+  `konfersi_PRD`, `KonfersiProd` and `prod2` count and `product` does not; or `[protected]` in its description) is refused for everyone with `PROTECTED`:
   "protected pool: needs a person's approval (PILOT-1000)"; the approval card is PILOT-1000 (S4). Not
   covered: Claude Code's own session log in the workspace keeps the call's input as the agent sent it.
 - Not built: `settings_get`, `settings_update`, `event_search`, `account_pool_update`, `account_update`,

@@ -256,11 +256,19 @@ export const PROTECTED_POOL_REASON = "protected pool: needs a person's approval 
 
 /**
  * A pool an agent or a token may not write to over Portal MCP (T-2866): one whose name has the word `prd`, `prod` or `production`
- * (split on anything but letters and digits: `konfersi-prd`, `prod keys`), or whose description carries `[protected]`. Pools have no
- * protected flag of their own yet; this marks them without a migration, and a person adds `[protected]` to any other pool.
+ * (in any case; split on anything but letters and digits, on a lower-to-upper case change and between letters and digits: `konfersi-prd`,
+ * `prod_keys`, `KonfersiPRD`, `prodKeys`, `PRDKeys`, `prod2`), or whose description carries `[protected]`. A word that only contains them
+ * (`product`) is not one. Pools have no protected flag of their own yet; this marks them without a migration, and a person adds
+ * `[protected]` to any other pool.
  */
 export function isProtectedPool(p: { name: string; description?: string | null }): boolean {
-  const words = p.name.toLowerCase().split(/[^a-z0-9]+/);
+  const words = p.name
+    .normalize('NFKC')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+    .replace(/([A-Za-z])([0-9])|([0-9])([A-Za-z])/g, (_m, a, b, c, d) => (a ? `${a} ${b}` : `${c} ${d}`))
+    .toLowerCase()
+    .split(/[^a-z0-9]+/);
   if (words.some((w) => w === 'prd' || w === 'prod' || w === 'production')) return true;
   return /\[protected\]/i.test(p.description ?? '');
 }

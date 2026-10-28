@@ -268,11 +268,74 @@ export function writeOnlyArgsOf(toolName: string | null | undefined): readonly s
   return Object.hasOwn(PORTAL_WRITE_ONLY_ARGS, bare) ? PORTAL_WRITE_ONLY_ARGS[bare]! : [];
 }
 
-/** A copy of a call's arguments with its write-only ones masked; anything that is not an object comes back as it is. */
-export function maskWriteOnlyArgs<T>(toolName: string | null | undefined, args: T): T {
+/** A tool's bare portal name: `mcp__pilot__pool_create` → `pool_create`. */
+const bareToolName = (toolName: string): string => (toolName.startsWith('mcp__') ? toolName.slice(toolName.lastIndexOf('__') + 2) : toolName);
+
+/**
+ * A copy of a call's arguments with only its declared write-only ones ({@link PORTAL_WRITE_ONLY_ARGS}) masked. This is what the
+ * "looks like a secret" refusal reads: a declared write-only argument is where a secret is meant to go, anything else is still checked.
+ */
+export function maskDeclaredWriteOnlyArgs<T>(toolName: string | null | undefined, args: T): T {
   const fields = writeOnlyArgsOf(toolName);
   if (!fields.length || !args || typeof args !== 'object' || Array.isArray(args)) return args;
   const out: Record<string, unknown> = { ...(args as Record<string, unknown>) };
   for (const f of fields) if (f in out) out[f] = WRITE_ONLY_MASK;
+  return out as T;
+}
+
+/** The pool tools whose `content` can carry a value a caller should never have sent (T-2866): it is masked wherever the call is kept. */
+const POOL_CONTENT_TOOLS = new Set(['pool_create', 'pool_update']);
+
+/** Keys inside a pool's `content` that can carry a value (a secret's, a variable's, an MCP set's secret slot): masked at any depth. */
+const VALUE_KEYS = new Set(['value', 'values', 'newvalue', 'new_value', 'secret', 'secrets', 'key_value', 'keys', 'password', 'token', 'credential', 'credentials']);
+
+const maskValueKeys = (v: unknown, depth: number): unknown => {
+  if (depth > 12) return WRITE_ONLY_MASK;
+  if (Array.isArray(v)) return v.map((x) => maskValueKeys(x, depth + 1));
+  if (!v || typeof v !== 'object') return v;
+  const out: Record<string, unknown> = {};
+  for (const [k, x] of Object.entries(v as Record<string, unknown>)) out[k] = VALUE_KEYS.has(k.toLowerCase()) ? WRITE_ONLY_MASK : maskValueKeys(x, depth + 1);
+  return out;
+};
+
+/**
+ * A secrets pool's `content` as it may be kept: names only. `names` stays when it is a list of strings, each entry keeps its `kind` and
+ * `name` (strings) and boolean options; every other field, at any level, is masked. A secrets pool over MCP is created with names only,
+ * so nothing a person needs is lost, and a value sent by mistake is never kept.
+ */
+const namesOnly = (content: unknown): unknown => {
+  if (!content || typeof content !== 'object' || Array.isArray(content)) return WRITE_ONLY_MASK;
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(content as Record<string, unknown>)) {
+    if (k === 'names' && Array.isArray(v) && v.every((n) => typeof n === 'string')) out[k] = v;
+    else if (k === 'entries' && Array.isArray(v))
+      out[k] = v.map((e) => {
+        if (!e || typeof e !== 'object' || Array.isArray(e)) return WRITE_ONLY_MASK;
+        const kept: Record<string, unknown> = {};
+        for (const [ek, ev] of Object.entries(e as Record<string, unknown>)) {
+          if ((ek === 'kind' || ek === 'name') && typeof ev === 'string') kept[ek] = ev;
+          else if (ek === 'options' && ev && typeof ev === 'object' && !Array.isArray(ev) && Object.values(ev).every((o) => typeof o === 'boolean')) kept[ek] = ev;
+          else kept[ek] = WRITE_ONLY_MASK;
+        }
+        return kept;
+      });
+    else out[k] = WRITE_ONLY_MASK;
+  }
+  return out;
+};
+
+/**
+ * A copy of a call's arguments as it may be kept anywhere (the audit row, the chat transcript's tool row, an approval card): its declared
+ * write-only arguments masked, and for `pool_create` and `pool_update` every value-bearing field of `content` masked too (T-2866). For a
+ * secrets pool (`type` "secrets", in any case) the content keeps names only. Anything that is not an object comes back as it is.
+ */
+export function maskWriteOnlyArgs<T>(toolName: string | null | undefined, args: T): T {
+  const declared = maskDeclaredWriteOnlyArgs(toolName, args);
+  if (!toolName || !POOL_CONTENT_TOOLS.has(bareToolName(toolName))) return declared;
+  if (!declared || typeof declared !== 'object' || Array.isArray(declared)) return declared;
+  const out: Record<string, unknown> = { ...(declared as Record<string, unknown>) };
+  if (!('content' in out)) return out as T;
+  const secrets = typeof out.type === 'string' && out.type.trim().toLowerCase() === 'secrets';
+  out.content = secrets ? namesOnly(out.content) : maskValueKeys(out.content, 0);
   return out as T;
 }

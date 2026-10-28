@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { isAppError } from '@isnanme/core';
-import { maskWriteOnlyArgs, PORTAL_AGENT_TOKEN_PREFIX, PORTAL_MANAGER_TOKEN_PREFIX, type PortalAuditOutcome } from '@portal/contracts';
+import { maskDeclaredWriteOnlyArgs, maskWriteOnlyArgs, PORTAL_AGENT_TOKEN_PREFIX, PORTAL_MANAGER_TOKEN_PREFIX, type PortalAuditOutcome } from '@portal/contracts';
 import { CLIENT_INFO_META_KEY, createMcpHandler, McpServer, type CallToolResult, type McpHttpHandler, type McpServerFactory } from '@modelcontextprotocol/server';
 import type { PortalAudit } from './audit.js';
 import { Confirmations } from './confirm.js';
@@ -248,8 +248,11 @@ export class PortalMcp {
     const method = typeof first?.method === 'string' ? first.method.slice(0, 80) : 'unknown';
     // A call the SDK refuses before any wrapper runs (arguments that fail their schema, an unknown tool) is still audited by name.
     const called = method === 'tools/call' && typeof first?.params?.name === 'string';
-    // T-2866: a write-only argument (a secret's value) is masked before anything is kept, even for a call the SDK refuses on its schema.
-    const callArgs = called ? maskWriteOnlyArgs(first!.params!.name as string, first!.params!.arguments) : undefined;
+    // T-2866: a write-only argument (a secret's value, a value in a pool's content) is masked before anything is kept, even for a call
+    // the SDK refuses on its schema. The "looks like a secret" check reads the arguments with only the declared write-only ones masked.
+    const toolName = called ? (first!.params!.name as string) : null;
+    const callArgs = called ? maskWriteOnlyArgs(toolName, first!.params!.arguments) : undefined;
+    const checkArgs = called ? maskDeclaredWriteOnlyArgs(toolName, first!.params!.arguments) : undefined;
     return {
       requestId: randomUUID(),
       principal,
@@ -258,7 +261,7 @@ export class PortalMcp {
       method,
       tool: called ? cleanText(first!.params!.name as string, 60) : null,
       args: called
-        ? findSecret(callArgs)
+        ? findSecret(checkArgs)
           ? '[redacted]'
           : auditArgs(callArgs)
         : method === 'resources/read' && typeof (first?.params as { uri?: unknown } | undefined)?.uri === 'string'
@@ -375,9 +378,10 @@ export class PortalMcp {
   async #call(tool: PortalToolDefinition, extra: RequestExtra, args: Record<string, unknown>, sdk: SdkCtx): Promise<CallToolResult> {
     const { principal, record } = extra;
     record.tool = tool.name;
-    // T-2866: the audit row never holds a write-only argument; the handler still gets the real one.
-    const kept = maskWriteOnlyArgs(tool.name, args);
-    record.args = auditArgs(kept);
+    // T-2866: the audit row never holds a write-only argument nor a value in a pool's content; the handler still gets the real one.
+    record.args = auditArgs(maskWriteOnlyArgs(tool.name, args));
+    // What the "looks like a secret" refusal reads: only the declared write-only arguments are left out of it.
+    const kept = maskDeclaredWriteOnlyArgs(tool.name, args);
     const fail = (outcome: PortalAuditOutcome, code: string, message: string, details?: unknown): CallToolResult => {
       record.outcome = outcome;
       record.errorCode = code;
