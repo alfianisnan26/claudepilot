@@ -240,22 +240,17 @@ pool_approval() {
 # folder, every argument, each followed by a NUL; apps/server/src/approvals/pass.ts) to a root-owned file. A run that hashes to a listed,
 # unexpired pass this workspace has not used yet may pass its deny-listed names ONCE: the hash goes to the used list first, then a 'used'
 # line to the outbox, so the portal drops the pass. It skips the deny-list only: the name must still be delivered by the pool (below).
-# Another folder or any other argument hashes differently and is refused as before. The file must be a regular file owned by root that
-# only root may write. Both lines are fixed on purpose (no variable overrides them); the tests run a copy with these two lines changed.
-pass_file=/etc/claudepilot/approval-passes
-pass_uid=0
+# Another folder or any other argument hashes differently and is refused as before. The live passes are printed by
+# scripts/approval-passes.sh, which checks the file (a regular file owned by root that only root may write) and drops expired ones. The
+# file is never named here (the T-2865 pattern, PILOT-1016): the rule guard refuses a script that both names a policy file and writes,
+# and this one writes. The helper only reads. Single use is best effort: the used list is in this workspace's home.
 pool_pass() {
-  local hash used="$HOME/.claudepilot/approval-passes-used" h u now hit=
-  [ -f "$pass_file" ] && [ ! -L "$pass_file" ] || return 1
-  [ "$(stat -c %u "$pass_file" 2>/dev/null)" = "$pass_uid" ] || return 1
-  [ $(( 8#$(stat -c %a "$pass_file" 2>/dev/null || echo 777) & 8#022 )) -eq 0 ] || return 1
+  local hash used="$HOME/.claudepilot/approval-passes-used" live now
   hash=$(printf '%s\0' jobrun.pool_env "$PWD" "${argv0[@]}" | sha256sum | cut -c1-64)
   [[ $hash =~ ^[0-9a-f]{64}$ ]] || return 1
+  live=$(bash "$here/scripts/approval-passes.sh" 2>/dev/null) || return 1
+  [[ $'\n'$live$'\n' == *$'\n'"$hash"$'\n'* ]] || return 1
   now=$(date +%s)
-  while read -r h u; do
-    [ "$h" = "$hash" ] && [[ $u =~ ^[0-9]{1,12}$ ]] && [ "$u" -gt "$now" ] && hit=1
-  done <"$pass_file"
-  [ -n "$hit" ] || return 1
   ! grep -qxF "$hash" "$used" 2>/dev/null || return 1
   mkdir -p "$HOME/.claudepilot" && printf '%s\n' "$hash" >>"$used" || return 1
   [ ! -d "$HOME/.claudepilot/outbox" ] || [ -L "$HOME/.claudepilot/outbox/approval.jsonl" ] ||

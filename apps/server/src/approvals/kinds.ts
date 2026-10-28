@@ -22,7 +22,7 @@ import { clip } from '../attention/registry.js';
 import { requireCan } from '../authz/seam.js';
 import { secretWriteAccess } from '../pools/authz.js';
 import type { PoolService } from '../pools/service.js';
-import { PASS_TTL_MS, passOf, refusedByJobRun, wasRedacted } from './pass.js';
+import { deniedPoolEnvNames, PASS_TTL_MS, passOf, refusedByJobRun, wasRedacted } from './pass.js';
 
 /** What the chat controller gives the approvals module: Bypass through its own gated path, a session's facts, and messages to a session. */
 export interface ApprovalChat {
@@ -273,7 +273,11 @@ const jobrunPoolEnv: ApprovalKindDef = {
     })
     .strict(),
   why: 'secrets_permissions',
-  title: (p) => `job-run with ${quoted(String(p.name ?? ''), 64)}`,
+  // Review m4: one pass lets every deny-listed name of the run through, so the title names them all (the filed name when none parse).
+  title: (p) => {
+    const names = Array.isArray(p.args) ? deniedPoolEnvNames(p.args) : [];
+    return `job-run with ${(names.length ? names : [String(p.name ?? '')]).map((n) => quoted(n, 64)).join(', ')}`;
+  },
   mayAsk: agentOnly,
   run: (p, ctx) => issuePass('jobrun.pool_env', p, ctx),
 };

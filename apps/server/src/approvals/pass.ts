@@ -93,13 +93,29 @@ export const JOBRUN_DENIED_GLOBS = [
 const globRe = (g: string) => new RegExp(`^${g.split('*').map((s) => s.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*')}$`);
 const DENIED = JOBRUN_DENIED_GLOBS.map(globRe);
 export const jobRunDenies = (name: string) => DENIED.some((r) => r.test(name));
+/** job-run.sh's options that take a value (its `case` before `--pool-env)`): each consumes the next word. */
+const JOBRUN_VALUE_OPTS = new Set(['--repo', '--ref', '--against', '--keep-tests', '--also', '--steps', '--artifacts', '--out', '--timeout', '--role', '--pool-env', '--image']);
+/** The `--pool-env` names of a run, parsed as job-run parses its arguments (a value option takes the next word; `--` ends the options). */
+export function poolEnvNames(args: readonly unknown[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === '--') break;
+    if (typeof a === 'string' && JOBRUN_VALUE_OPTS.has(a)) {
+      if (a === '--pool-env' && typeof args[i + 1] === 'string') out.push(args[i + 1] as string);
+      i++;
+    }
+  }
+  return out;
+}
+/** The deny-listed `--pool-env` names of a run, each once, in order: what one pass lets through (and what the card names, review m4). */
+export const deniedPoolEnvNames = (args: readonly unknown[]) => [...new Set(poolEnvNames(args).filter(jobRunDenies))];
 /** Whether job-run refuses this run: the name is deny-listed and the arguments pass it as `--pool-env <name>` (job-run's own parse). */
 export function refusedByJobRun(p: Record<string, unknown>): boolean {
   const name = p.name;
   const args = p.args;
   if (typeof name !== 'string' || !Array.isArray(args) || !jobRunDenies(name)) return false;
-  for (let i = 0; i + 1 < args.length; i++) if (args[i] === '--pool-env' && args[i + 1] === name) return true;
-  return false;
+  return poolEnvNames(args).includes(name);
 }
 
 /** Whether a stored payload lost parts to redaction (then it is not the exact call, and gets no pass). */

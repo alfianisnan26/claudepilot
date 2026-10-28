@@ -16,9 +16,9 @@ import { MANIFEST_PATH } from '../delivery/types.js';
 import { RULE_GUARD_MESSAGE, RULE_GUARD_SCRIPT } from '../settings/ruleGuard.js';
 import { generateSecretKey, parseSecretKey } from '../store/secretBox.js';
 import { Store } from '../store/store.js';
-import type { ApprovalChat } from './kinds.js';
+import { APPROVAL_KIND_DEFS, type ApprovalChat } from './kinds.js';
 import { APPROVAL_CHANNEL, fileRefusalRequests, markUsedPasses, OUTBOX_PENDING_MAX } from './outbox.js';
-import { APPROVAL_PASSES_PATH, PASS_TTL_MS, passesContent, passOf } from './pass.js';
+import { APPROVAL_PASSES_PATH, deniedPoolEnvNames, PASS_TTL_MS, passesContent, passOf, poolEnvNames } from './pass.js';
 import { APPROVAL_ID, Approvals } from './service.js';
 
 const roots: string[] = [];
@@ -261,6 +261,8 @@ test('T-2885 review M2: a refused Write stores the path and a digest of the cont
   assert.equal(r.code, 2, r.stderr);
   const id = idIn(r.stderr)!;
   assert.ok(id, r.stderr);
+  // Review m3: the refusal tells the agent the card has no content, and where to put it; a Bash refusal does not say so.
+  assert.match(r.stderr, /The card shows the path and a digest, not the content: put the content on your ticket/);
   // The outbox line: path kept, content as sha256.
   const raw = g.lines().join('\n');
   assert.ok(!raw.includes(pw), 'the outbox line never holds the content');
@@ -286,6 +288,8 @@ test('T-2885 review M2: a refused Write stores the path and a digest of the cont
   assert.equal(g.run('Write', { ...input, content: digest }).code, 2, 'the digest itself as content');
   const ok = g.run('Write', input);
   assert.equal(ok.code, 0, ok.stderr);
+  // A Bash refusal has no content to point at.
+  assert.doesNotMatch(g.run('Bash', { command: 'echo x > .claude/settings.json' }).stderr, /put the content on your ticket/);
 });
 
 test('T-2885 review M1: a forged outbox line buys no pass for a call that was never refused', async () => {
@@ -328,6 +332,22 @@ test('T-2885 review M1: a forged outbox line buys no pass for a call that was ne
   assert.doesNotMatch(r.stderr, /one-time pass/);
   assert.ok(!existsSync(join(g.home, '.claudepilot', 'approval-passes-used')), 'the pass is not consumed');
   assert.equal(g.run('Bash', { command: `echo '{"x":1}' > .claude/settings.json` }).code, 2, 'a refused call is still refused');
+});
+
+test('T-2889 review m4: the job-run card names every deny-listed name the run passes; the arguments parse as job-run parses them', async () => {
+  const { store, approvals } = await portal();
+  // Two deny-listed names, one delivered freely, and words after `--` (the command, not options).
+  const args = ['--ref', 'main', '--pool-env', 'GITHUB_TOKEN', '--pool-env', 'STG_SEARCH_READ_KEY', '--pool-env', 'X_RW_Y', '--pool-env', 'GITHUB_TOKEN', '--', 'echo', '--pool-env', 'PROD_X'];
+  assert.deepEqual(poolEnvNames(args), ['GITHUB_TOKEN', 'STG_SEARCH_READ_KEY', 'X_RW_Y', 'GITHUB_TOKEN']);
+  assert.deepEqual(deniedPoolEnvNames(args), ['GITHUB_TOKEN', 'X_RW_Y']);
+  // A value option takes the next word, even one that looks like --pool-env: job-run would not read it as an option.
+  assert.deepEqual(poolEnvNames(['--ref', '--pool-env', 'GITHUB_TOKEN']), []);
+  const [id] = fileRefusalRequests(approvals, store, WS, [{ id: `apr-${randomBytes(9).toString('hex')}`, type: 'request', kind: 'jobrun.pool_env', session: CHAT, payload: { name: 'GITHUB_TOKEN', args, cwd: '/w' } }]);
+  assert.ok(id);
+  const title = APPROVAL_KIND_DEFS['jobrun.pool_env'].title(approvals.getFor(ownerActor(), id!).payload as Record<string, unknown>, approvals.deps);
+  assert.match(title, /GITHUB_TOKEN/);
+  assert.match(title, /X_RW_Y/);
+  assert.doesNotMatch(title, /STG_SEARCH_READ_KEY|PROD_X/);
 });
 
 test('approval_request may not ask for a refusal kind as the portal (no session)', async () => {

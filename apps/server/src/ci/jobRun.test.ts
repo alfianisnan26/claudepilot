@@ -167,9 +167,11 @@ const poolDropin = (names: string[]) =>
 // The script's drop-in path is fixed (no variable overrides it: review 42840), so a test runs a scratch copy of the two files with
 // that one line pointing at its fixture.
 const DROPIN_LINE = 'pool_dropin=/etc/claude-code/managed-settings.d/20-claudepilot-env.json\n';
-// T-2889: the passes file and its owner are fixed the same way; a pass test points the copy at its own file and owner.
-const PASS_FILE_LINE = 'pass_file=/etc/claudepilot/approval-passes\n';
-const PASS_UID_LINE = 'pass_uid=0\n';
+// T-2889: the passes file and its owner are fixed the same way, in the read-only helper scripts/approval-passes.sh (job-run.sh never
+// names the file: review B1, the T-2865 pattern); a pass test points the helper's copy at its own file and owner.
+const PASSES_HELPER = join(REPO, 'scripts/approval-passes.sh');
+const PASS_FILE_LINE = 'passes=/etc/claudepilot/approval-passes\n';
+const PASS_UID_LINE = 'owner=0\n';
 function scriptWithDropin(dropin: string, pass?: { file: string; uid: number }) {
   const dir = mkdtempSync(join(tmpdir(), 'cp-jobrun-pool-'));
   roots.push(dir);
@@ -178,11 +180,12 @@ function scriptWithDropin(dropin: string, pass?: { file: string; uid: number }) 
   writeFileSync(join(dir, 'deploy/k3s-build/job-run.yaml'), readFileSync(TEMPLATE, 'utf8'));
   const src = readFileSync(SCRIPT, 'utf8');
   assert.equal(src.split(DROPIN_LINE).length, 2, 'the script names the drop-in path on exactly one line');
-  assert.equal(src.split(PASS_FILE_LINE).length, 2, 'the script names the passes file on exactly one line');
-  assert.equal(src.split(PASS_UID_LINE).length, 2, 'the script names the passes owner on exactly one line');
-  let out = src.replace(DROPIN_LINE, `pool_dropin=${dropin}\n`);
-  if (pass) out = out.replace(PASS_FILE_LINE, `pass_file=${pass.file}\n`).replace(PASS_UID_LINE, `pass_uid=${pass.uid}\n`);
-  writeFileSync(join(dir, 'scripts/job-run.sh'), out);
+  assert.ok(!src.includes('/etc/claudepilot/approval-passes'), 'job-run.sh never names the passes file (B1)');
+  writeFileSync(join(dir, 'scripts/job-run.sh'), src.replace(DROPIN_LINE, `pool_dropin=${dropin}\n`));
+  const helper = readFileSync(PASSES_HELPER, 'utf8');
+  assert.equal(helper.split(PASS_FILE_LINE).length, 2, 'the helper names the passes file on exactly one line');
+  assert.equal(helper.split(PASS_UID_LINE).length, 2, 'the helper names the passes owner on exactly one line');
+  writeFileSync(join(dir, 'scripts/approval-passes.sh'), pass ? helper.replace(PASS_FILE_LINE, `passes=${pass.file}\n`).replace(PASS_UID_LINE, `owner=${pass.uid}\n`) : helper);
   return join(dir, 'scripts/job-run.sh');
 }
 

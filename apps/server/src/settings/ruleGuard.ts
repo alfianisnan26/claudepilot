@@ -2457,7 +2457,9 @@ function refuse(input, tool, form, p, todo) {
   const filed = id === 'large'
     ? ' This call is too large to file as an approval request.'
     : id
-      ? ' Or a person allows this exact call: approval request ' + id + ' is filed (approval_get ' + id + ' shows it within a minute; if it never shows, the portal refused the request). When it is allowed, run this same call again (same input, same folder) within 15 minutes; it goes through once.'
+      ? ' Or a person allows this exact call: approval request ' + id + ' is filed (approval_get ' + id + ' shows it within a minute; if it never shows, the portal refused the request). When it is allowed, run this same call again (same input, same folder) within 15 minutes; it goes through once.' +
+        // T-2889 review m3: the card shows the path and a sha256 of what would be written, never the content.
+        (Object.prototype.hasOwnProperty.call(CONTENT_FIELDS, tool) ? ' The card shows the path and a digest, not the content: put the content on your ticket so the person can read what they allow.' : '')
       : '';
   process.stderr.write(MESSAGE + '. Refused: ' + form + (p ? ' (' + p + ')' : '') + '. ' + next + filed + '\n');
   process.exit(2);
