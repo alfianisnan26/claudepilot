@@ -43,7 +43,7 @@ export function recordGuardRefusals(store: Store, workspaceId: string, events: O
 }
 
 /** The portal chat a Claude Code session id belongs to (its first run uses the chat's own id; later runs are segments). */
-function portalSession(store: Store, claudeSession: string): string | null {
+export function portalSession(store: Pick<Store, 'db'>, claudeSession: string): string | null {
   try {
     const seg = store.db!.prepare('SELECT session_id FROM chat_segments WHERE claude_session_id = ? ORDER BY n DESC LIMIT 1').get(claudeSession) as { session_id: string } | undefined;
     if (seg) return seg.session_id;

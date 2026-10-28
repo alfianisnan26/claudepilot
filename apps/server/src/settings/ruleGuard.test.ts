@@ -1811,3 +1811,28 @@ test('T-2865 the guard lets lanes run the real scripts/job-run.sh and scripts/po
   refused(bash('scripts/job-run-old.sh --list'), 'job-run.sh naming the drop-in');
   refused(bash('bash scripts/job-run-old.sh --list'), 'bash job-run.sh naming the drop-in');
 });
+
+// T-2889 review B1: job-run.sh named the passes file (/etc/claudepilot/approval-passes) and writes, the PILOT-1016 pattern: the live guard
+// would refuse every lane's job-run. The file is now read by scripts/approval-passes.sh, which only reads. The check that catches it: the
+// guard on the real scripts, by the absolute path the lanes use and with bash; and the old line put back, refused.
+test('T-2889 the guard lets lanes run the real job-run.sh and approval-passes.sh; job-run.sh naming the passes file is refused', () => {
+  const scripts = join(dirname(fileURLToPath(import.meta.url)), '../../../../scripts');
+  const jobRun = join(scripts, 'job-run.sh');
+  const helper = join(scripts, 'approval-passes.sh');
+  const passes = '/etc/claudepilot/approval-passes';
+  assert.ok(readFileSync(helper, 'utf8').includes(passes), 'the helper names the passes file (else this test proves nothing)');
+  assert.ok(!readFileSync(jobRun, 'utf8').includes(passes), 'job-run.sh does not name it');
+  allowed(bash(`${jobRun} --list`), 'job-run.sh by its absolute path');
+  allowed(bash(`bash ${jobRun} --list`), 'bash job-run.sh');
+  allowed(bash(`${helper}`), 'approval-passes.sh by its absolute path');
+  allowed(bash(`bash ${helper}`), 'bash approval-passes.sh');
+  // The helper may name the file only while it writes nothing: a write added to it is refused.
+  writeFileSync(join(R.repo, 'scripts', 'approval-passes-w.sh'), readFileSync(helper, 'utf8') + 'echo x >> "$HOME/used"\n', { mode: 0o755 });
+  refused(bash('scripts/approval-passes-w.sh'), 'the helper with a write');
+  // The old line, put back into job-run.sh: refused.
+  const old = readFileSync(jobRun, 'utf8').replace('pool_pass() {', `pass_file=${passes}\npool_pass() {`);
+  assert.ok(old.includes(`pass_file=${passes}`), 'the line is in the mutant');
+  writeFileSync(join(R.repo, 'scripts', 'job-run-passes.sh'), old, { mode: 0o755 });
+  refused(bash('scripts/job-run-passes.sh --list'), 'job-run.sh naming the passes file');
+  refused(bash('bash scripts/job-run-passes.sh --list'), 'bash job-run.sh naming the passes file');
+});

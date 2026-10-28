@@ -145,6 +145,7 @@ case "${1:-}" in
 esac
 
 repo=; ref=; against=; keep=; steps=npm-ci; steps_given=; artifacts=; out=; timeout=3600; role=${PILOT_AGENT:-agent}; also=(); big=; pool=(); reuse=; run_image=; image_given=; layout=
+argv0=("$@") # T-2885: the run's exact arguments, for an approval request (pool_approval)
 while [ $# -gt 0 ]; do
   case "$1" in
     --repo|--ref|--against|--keep-tests|--also|--steps|--artifacts|--out|--timeout|--role|--pool-env|--image) [ $# -ge 2 ] || die "$1 needs a value" ;;&
@@ -215,10 +216,59 @@ pool_denied() {
   esac
   return 1
 }
-pool_names=; pool_delivered=; pool_read=
+# T-2885 (PILOT-1000): a deny-listed name files ONE approval request for a person. No portal token here, so it is a line in this
+# workspace's outbox (approval.jsonl), which the portal pulls within about 10 s and turns into request <id> (kind jobrun.pool_env), the id
+# printed here. The line holds the NAME (never a value), this run's exact arguments and folder, and the session (PILOT_SESSION_ID): what a
+# person allows is exactly this run. The portal checks the line again (only a chat of this workspace, the payload's shape and size, no
+# secret-shaped value). No outbox, no jq, or a line over 4000 bytes: no request, no id.
+pool_approval() {
+  local box="$HOME/.claudepilot/outbox" id line args='[]' a
+  [ -d "$box" ] && [ ! -L "$box/approval.jsonl" ] && command -v jq >/dev/null 2>&1 || return 1
+  [ "$(stat -c %s "$box/approval.jsonl" 2>/dev/null || echo 0)" -lt 1048576 ] || return 1
+  id=apr-$(od -An -N9 -tx1 /dev/urandom | tr -d ' \n')
+  [[ $id =~ ^apr-[0-9a-f]{18}$ ]] || return 1
+  # One jq per argument: an argument may start with -- (jq would read it as its own option).
+  for a in ${argv0[@]+"${argv0[@]}"}; do args=$(jq -nc --argjson l "$args" --arg a "$a" '$l + [$a]') || return 1; done
+  line=$(jq -nc --arg id "$id" --arg t "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg s "${PILOT_SESSION_ID:-}" --arg n "$1" --argjson args "$args" --arg cwd "$PWD" \
+    '{id: $id, t: $t, type: "request", kind: "jobrun.pool_env", session: $s, payload: {name: $n, args: $args, cwd: $cwd}}') || return 1
+  # T-2885 review M3: bytes, not characters (${#line} counts characters in a UTF-8 locale; the portal's cap is in bytes).
+  [ "$(printf '%s' "$line" | wc -c)" -le 4000 ] || return 1
+  printf '%s\n' "$line" >>"$box/approval.jsonl" || return 1
+  printf '%s' "$id"
+}
+# T-2889: the one-time pass. A person who allowed request <id> made the portal deliver the sha256 of that exact run (the kind, this
+# folder, every argument, each followed by a NUL; apps/server/src/approvals/pass.ts) to a root-owned file. A run that hashes to a listed,
+# unexpired pass this workspace has not used yet may pass its deny-listed names ONCE: the hash goes to the used list first, then a 'used'
+# line to the outbox, so the portal drops the pass. It skips the deny-list only: the name must still be delivered by the pool (below).
+# Another folder or any other argument hashes differently and is refused as before. The live passes are printed by
+# scripts/approval-passes.sh, which checks the file (a regular file owned by root that only root may write) and drops expired ones. The
+# file is never named here (the T-2865 pattern, PILOT-1016): the rule guard refuses a script that both names a policy file and writes,
+# and this one writes. The helper only reads. Single use is best effort: the used list is in this workspace's home.
+pool_pass() {
+  local hash used="$HOME/.claudepilot/approval-passes-used" live now
+  hash=$(printf '%s\0' jobrun.pool_env "$PWD" "${argv0[@]}" | sha256sum | cut -c1-64)
+  [[ $hash =~ ^[0-9a-f]{64}$ ]] || return 1
+  live=$(bash "$here/scripts/approval-passes.sh" 2>/dev/null) || return 1
+  [[ $'\n'$live$'\n' == *$'\n'"$hash"$'\n'* ]] || return 1
+  now=$(date +%s)
+  ! grep -qxF "$hash" "$used" 2>/dev/null || return 1
+  mkdir -p "$HOME/.claudepilot" && printf '%s\n' "$hash" >>"$used" || return 1
+  [ ! -d "$HOME/.claudepilot/outbox" ] || [ -L "$HOME/.claudepilot/outbox/approval.jsonl" ] ||
+    printf '{"id":"used-%s-%s","t":"%s","type":"used","pass":"%s"}\n' "${hash:0:16}" "$now" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$hash" >>"$HOME/.claudepilot/outbox/approval.jsonl" || true
+  echo "job-run: this exact run passes its deny-listed --pool-env names once, on a one-time pass a person allowed (T-2889)" >&2
+}
+pool_names=; pool_delivered=; pool_read=; pool_passed=
 for n in ${pool[@]+"${pool[@]}"}; do
   [[ $n =~ ^[A-Z][A-Z0-9_]*$ ]] || die "--pool-env: refused: not a variable name (capital letters, digits and _, starting with a letter); the argument is not shown. Pass the NAME of the variable, never its value"
-  ! pool_denied "$n" || die "--pool-env: refused: a deny-listed name (write, admin, production or master credentials, and the runner's own tokens never go into a Job); the argument is not shown. It needs a person's approval (PILOT-1000)"
+  # One pass covers the whole run (every deny-listed name in it): it is used once, on the first such name.
+  if pool_denied "$n" && [ -z "$pool_passed" ] && pool_pass; then pool_passed=1; fi
+  if pool_denied "$n" && [ -z "$pool_passed" ]; then
+    denied="--pool-env: refused: a deny-listed name (write, admin, production or master credentials, and the runner's own tokens never go into a Job); the argument is not shown. It needs a person's approval (PILOT-1000)"
+    if apr=$(pool_approval "$n"); then
+      die "$denied: approval request $apr is filed for this exact run (approval_get $apr shows it within a minute; if it never shows, the portal refused the request). When it is allowed, run this same command again, in the same folder, within 15 minutes: it passes once (T-2889)"
+    fi
+    die "$denied: no request could be filed from here (no outbox or jq); ask on your ticket"
+  fi
   if [ -z "$pool_read" ]; then
     pool_read=1
     command -v jq >/dev/null 2>&1 || die "--pool-env: refused: jq is not installed here, so the delivered names cannot be checked; the argument is not shown. Write the need on your ticket under FOR THE COORDINATOR (jq in the workspace image)"

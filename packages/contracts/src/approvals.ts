@@ -6,9 +6,11 @@
 /**
  * What can be asked. `test.echo` exists for the tests and a dry run of the flow; `session.bypass` puts a bypass-capable session in Bypass;
  * `pool.secret_set` sets one secret in a secrets pool an agent may not write itself (a protected one): the payload names the pool and the
- * secret, and the VALUE is typed by the person on Allow (write-only, never stored with the request).
+ * secret, and the VALUE is typed by the person on Allow (write-only, never stored with the request). `jobrun.pool_env` and `guard.refusal`
+ * (T-2885) are filed through the workspace outbox when job-run refuses a deny-listed `--pool-env` name or the rule guard refuses a tool
+ * call: they carry the exact call (a name, never a value); Allow runs nothing yet (the one-time pass is T-2889).
  */
-export const APPROVAL_KINDS = ['test.echo', 'session.bypass', 'pool.secret_set'] as const;
+export const APPROVAL_KINDS = ['test.echo', 'session.bypass', 'pool.secret_set', 'jobrun.pool_env', 'guard.refusal'] as const;
 export type ApprovalKind = (typeof APPROVAL_KINDS)[number];
 export const isApprovalKind = (v: unknown): v is ApprovalKind => typeof v === 'string' && (APPROVAL_KINDS as readonly string[]).includes(v);
 
@@ -17,7 +19,12 @@ export const APPROVAL_KIND_LABEL: Record<ApprovalKind, string> = {
   'test.echo': 'Test',
   'session.bypass': 'Bypass',
   'pool.secret_set': 'Secret',
+  'jobrun.pool_env': 'Job secret',
+  'guard.refusal': 'Refused call',
 };
+
+/** The kinds a workspace files through its outbox (T-2885): only these, never Bypass or a secret write. */
+export const APPROVAL_OUTBOX_KINDS = ['jobrun.pool_env', 'guard.refusal'] as const satisfies readonly ApprovalKind[];
 
 /** The kinds whose Allow takes a value the person types (write-only: sent once with Allow, never stored, shown or returned). */
 export const approvalNeedsValue = (kind: ApprovalKind): boolean => kind === 'pool.secret_set';

@@ -2327,10 +2327,141 @@ function audit(input, tool, form, p) {
   }
 }
 
+// T-2885 (PILOT-1000): a refused call files ONE approval request for a person. The hook has no portal token, so it is a line in the
+// outbox (approval.jsonl) that the portal pulls within about 10 s and turns into request <id> (kind guard.refusal). The line holds the
+// tool, its exact input, the folder and the form, unclipped, so what a person allows is exactly this call; a call too large for one line
+// files nothing. The portal checks the line again (a chat of this workspace, the payload's shape and size, no secret-shaped value).
+// Returns the id, 'large', or '' (nothing filed).
+const LINE_MAX = 4000;
+// T-2885 review M2: what a file tool would write never leaves this hook. Each content field becomes 'sha256:<hex>' of it (approvals/pass.ts
+// digestInput, held equal by a test); the request shows the path and the digest, and the pass hashes this same form, so it still binds
+// the exact content.
+const CONTENT_FIELDS = { Write: ['content'], Edit: ['old_string', 'new_string'], NotebookEdit: ['new_source'], MultiEdit: [] };
+function digestFields(o, fields) {
+  const out = Object.assign({}, o);
+  fields.forEach(function (k) {
+    // always, even for a value that looks like a digest: a call that writes the literal 'sha256:<hex>' must not match a pass for the content
+    if (typeof out[k] === 'string') out[k] = 'sha256:' + require('crypto').createHash('sha256').update(out[k]).digest('hex');
+  });
+  return out;
+}
+function digestInput(tool, ti) {
+  const fields = Object.prototype.hasOwnProperty.call(CONTENT_FIELDS, tool) ? CONTENT_FIELDS[tool] : null;
+  if (!fields) return ti;
+  const out = digestFields(ti, fields);
+  if (tool === 'MultiEdit' && Array.isArray(out.edits)) {
+    out.edits = out.edits.map(function (e) { return e && typeof e === 'object' && !Array.isArray(e) ? digestFields(e, ['old_string', 'new_string']) : e; });
+  }
+  return out;
+}
+function ask(input, tool, form) {
+  try {
+    if (!input || typeof input !== 'object' || !tool) return '';
+    const session = typeof input.session_id === 'string' && /^[A-Za-z0-9-]{1,64}$/.test(input.session_id) ? input.session_id : '';
+    const ti = input.tool_input && typeof input.tool_input === 'object' && !Array.isArray(input.tool_input) ? input.tool_input : null;
+    const cwd = typeof input.cwd === 'string' ? input.cwd : '';
+    if (!session || !ti || !/^[A-Za-z0-9_.:-]{1,100}$/.test(tool) || cwd.length > 300) return '';
+    const dir = path.join(HOME, '.claudepilot', 'outbox');
+    if (!fs.statSync(dir).isDirectory()) return '';
+    const file = path.join(dir, 'approval.jsonl');
+    let size = 0;
+    try {
+      const st = fs.lstatSync(file);
+      if (!st.isFile()) return '';
+      size = st.size;
+    } catch (e) {
+      size = 0;
+    }
+    if (size >= OUTBOX_CAP) return '';
+    const id = 'apr-' + require('crypto').randomBytes(9).toString('hex');
+    const line = JSON.stringify({
+      id: id,
+      t: new Date().toISOString(),
+      type: 'request',
+      kind: 'guard.refusal',
+      claudeSession: session,
+      payload: { tool: tool, input: digestInput(tool, ti), cwd: cwd, form: String(form || '').slice(0, 80) },
+    });
+    if (Buffer.byteLength(line) > LINE_MAX) return 'large';
+    fs.appendFileSync(file, line + '\n', { mode: 384 });
+    return id;
+  } catch (e) {
+    return '';
+  }
+}
+
+// T-2889: the one-time pass. A person who allowed request <id> made the portal deliver the sha256 of that exact call (the kind, the tool,
+// the canonical JSON of its input, the folder; approvals/pass.ts) to a root-owned file. A call that hashes to a listed, unexpired pass
+// that this workspace has not used yet goes through ONCE: the hash goes to the used list first, then a 'used' line to the outbox, so the
+// portal drops the pass. Any other call (another input, folder or tool) hashes differently and is refused as before. The file must be a
+// regular file owned by root that only root may write; the agent cannot make one. The path and owner are fixed: the wrapper runs this
+// under env -i, so the two overrides below are only reachable by a test that runs the script itself.
+const PASSES_FILE = process.env.CLAUDEPILOT_GUARD_PASSES_FILE || '/etc/claudepilot/approval-passes';
+const PASSES_UID = process.env.CLAUDEPILOT_GUARD_PASSES_FILE && /^[0-9]+$/.test(process.env.CLAUDEPILOT_GUARD_PASSES_UID || '') ? Number(process.env.CLAUDEPILOT_GUARD_PASSES_UID) : 0;
+const PASSES_USED = path.join(HOME, '.claudepilot', 'approval-passes-used');
+function canon(v) {
+  if (Array.isArray(v)) return '[' + v.map(function (x) { return canon(x === undefined ? null : x); }).join(',') + ']';
+  if (v && typeof v === 'object') {
+    return '{' + Object.keys(v).filter(function (k) { return v[k] !== undefined; }).sort().map(function (k) { return JSON.stringify(k) + ':' + canon(v[k]); }).join(',') + '}';
+  }
+  const s = JSON.stringify(v);
+  return s === undefined ? 'null' : s;
+}
+function passOfCall(input, tool) {
+  const ti = input && input.tool_input && typeof input.tool_input === 'object' && !Array.isArray(input.tool_input) ? input.tool_input : null;
+  if (!ti || !tool) return '';
+  const cwd = typeof input.cwd === 'string' ? input.cwd : '';
+  const parts = ['guard.refusal', tool, canon(digestInput(tool, ti)), cwd];
+  return require('crypto').createHash('sha256').update(parts.map(function (x) { return x + '\0'; }).join('')).digest('hex');
+}
+function usePass(input, tool) {
+  try {
+    const st = fs.lstatSync(PASSES_FILE);
+    if (!st.isFile() || st.uid !== PASSES_UID || (st.mode & 18) !== 0) return false;
+    const pass = passOfCall(input, tool);
+    if (!pass) return false;
+    const now = Date.now() / 1000;
+    const live = fs.readFileSync(PASSES_FILE, 'utf8').split('\n').some(function (l) {
+      const m = /^([0-9a-f]{64}) ([0-9]{1,12})$/.exec(l.trim());
+      return !!m && m[1] === pass && Number(m[2]) > now;
+    });
+    if (!live) return false;
+    let used = '';
+    try {
+      used = fs.readFileSync(PASSES_USED, 'utf8');
+    } catch (e) {
+      used = '';
+    }
+    if (used.split('\n').indexOf(pass) >= 0) return false;
+    fs.mkdirSync(path.dirname(PASSES_USED), { recursive: true, mode: 448 });
+    fs.appendFileSync(PASSES_USED, pass + '\n', { mode: 384 });
+    try {
+      const file = path.join(HOME, '.claudepilot', 'outbox', 'approval.jsonl');
+      const line = JSON.stringify({ id: 'used-' + pass.slice(0, 16) + '-' + Date.now(), t: new Date().toISOString(), type: 'used', pass: pass });
+      fs.appendFileSync(file, line + '\n', { mode: 384 });
+    } catch (e) {
+      // the used list holds it; the portal drops the pass when it expires
+    }
+    process.stderr.write('claudepilot: this exact call runs once on a one-time pass a person allowed (T-2889).\n');
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
 function refuse(input, tool, form, p, todo) {
+  if (usePass(input, tool)) process.exit(0);
   audit(input, tool, form, p);
   const next = todo ? 'What to do: ' + todo + '.' : 'Propose the change as text on a ticket; the coordinator lands it.';
-  process.stderr.write(MESSAGE + '. Refused: ' + form + (p ? ' (' + p + ')' : '') + '. ' + next + '\n');
+  const id = ask(input, tool, form);
+  const filed = id === 'large'
+    ? ' This call is too large to file as an approval request.'
+    : id
+      ? ' Or a person allows this exact call: approval request ' + id + ' is filed (approval_get ' + id + ' shows it within a minute; if it never shows, the portal refused the request). When it is allowed, run this same call again (same input, same folder) within 15 minutes; it goes through once.' +
+        // T-2889 review m3: the card shows the path and a sha256 of what would be written, never the content.
+        (Object.prototype.hasOwnProperty.call(CONTENT_FIELDS, tool) ? ' The card shows the path and a digest, not the content: put the content on your ticket so the person can read what they allow.' : '')
+      : '';
+  process.stderr.write(MESSAGE + '. Refused: ' + form + (p ? ' (' + p + ')' : '') + '. ' + next + filed + '\n');
   process.exit(2);
 }
 

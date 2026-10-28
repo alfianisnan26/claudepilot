@@ -22,6 +22,7 @@ import { clip } from '../attention/registry.js';
 import { requireCan } from '../authz/seam.js';
 import { secretWriteAccess } from '../pools/authz.js';
 import type { PoolService } from '../pools/service.js';
+import { deniedPoolEnvNames, PASS_TTL_MS, passOf, refusedByJobRun, wasRedacted } from './pass.js';
 
 /** What the chat controller gives the approvals module: Bypass through its own gated path, a session's facts, and messages to a session. */
 export interface ApprovalChat {
@@ -35,10 +36,16 @@ export interface ApprovalChat {
 /** What the pools service gives the approvals module (pool.secret_set): the same calls pool_secret_set makes. */
 export type ApprovalPools = Pick<PoolService, 'types' | 'get' | 'update'>;
 
+/** What delivery gives the approvals module (T-2889): deliver a workspace again, so a new or used pass lands in its passes file. */
+export interface ApprovalDelivery {
+  passesChanged(workspaceId: string): void;
+}
+
 /** The services a kind may use, wired in index.ts (absent in a test that does not need them). */
 export interface ApprovalDeps {
   chat: ApprovalChat | null;
   pools: ApprovalPools | null;
+  delivery?: ApprovalDelivery | null;
 }
 
 /** Who asks, verified (an agent's token), or null when the portal asks for one of its own refusals. */
@@ -52,6 +59,10 @@ export interface ApprovalRequester {
 /** What an executor gets besides its payload. */
 export interface ApprovalRunContext extends ApprovalDeps {
   approvalId: string;
+  /** The workspace the request came from (null when the portal asked). */
+  workspaceId?: string | null;
+  /** Now, in ms (the service's clock). */
+  now?: number;
   /** The person who clicked Allow. */
   actor: Actor;
   /** Their sign-in, for a kind that needs a fresh server code. */
@@ -219,8 +230,79 @@ function secretEntries(p: PoolDetail): SecretEntryInput[] {
   );
 }
 
+/**
+ * T-2889: Allow on a refused call issues a one-time pass for exactly that call (approvals/pass.ts). The portal does not run the command
+ * itself (decided on T-2885, c43584: the job-run case would need the secret's value in a portal exec, and the output would flow back): it
+ * stores the pass in the result and delivers the workspace again; the agent runs the same call, and job-run or the guard lets it through.
+ */
+async function issuePass(kind: ApprovalKind, p: Record<string, unknown>, ctx: ApprovalRunContext): Promise<ApprovalResult> {
+  // T-2885 review M1: the outbox line is the workspace's word, not proof of a refusal. Two checks keep a forged line from buying a pass
+  // for a call that was never refused: here, the request must describe a call the refuser would refuse (job-run: the name is deny-listed
+  // and the arguments pass it as --pool-env; guard: nothing redacted out of it); and at use, job-run and the guard consult the pass only
+  // on their own refusal path (job-run's deny branch, the guard's refuse()), after their own verdict refused that call again.
+  if (kind === 'jobrun.pool_env' && !refusedByJobRun(p)) return { ok: false, message: 'No pass: job-run would not refuse this run (the name is not deny-listed, or the arguments do not pass it).' };
+  if (kind === 'guard.refusal' && wasRedacted(p)) return { ok: false, message: 'No pass: parts of this call were redacted, so it is not the exact call that was refused.' };
+  const pass = passOf(kind, p);
+  if (!pass || !ctx.workspaceId) return { ok: false, message: 'No pass: this request has no workspace to deliver it to.' };
+  if (!ctx.delivery) return { ok: false, message: 'No pass: delivery is not available; ask again later.' };
+  // The service asks delivery to run once the result (which holds the pass) is stored, so the reconciler reads it.
+  const until = (ctx.now ?? Date.now()) + PASS_TTL_MS;
+  return {
+    ok: true,
+    message: `A one-time pass for this exact call reaches the workspace within a minute and lasts until ${new Date(until).toISOString()}: run the same call again, in the same folder with the same arguments; any other call is still refused.`,
+    output: { pass, until: new Date(until).toISOString(), used: false },
+  };
+}
+
+/** Only an agent session's refusal files these (through the outbox, or approval_request): the portal never asks for one. */
+const agentOnly = (_p: Record<string, unknown>, requester: ApprovalRequester | null) => {
+  if (!requester) throw new AppError('VALIDATION_FAILED', 'Only an agent session asks for this.');
+};
+
+/**
+ * job-run.sh refused a deny-listed `--pool-env` name (write, admin, production or master credentials, the runner's own tokens). The
+ * payload is that NAME, the run's exact arguments and its folder: what a person allows is exactly this run.
+ */
+const jobrunPoolEnv: ApprovalKindDef = {
+  kind: 'jobrun.pool_env',
+  schema: z
+    .object({
+      name: z.string().regex(/^[A-Z][A-Z0-9_]{0,63}$/),
+      args: z.array(z.string().max(2000)).min(1).max(80),
+      cwd: z.string().min(1).max(300),
+    })
+    .strict(),
+  why: 'secrets_permissions',
+  // Review m4: one pass lets every deny-listed name of the run through, so the title names them all (the filed name when none parse).
+  title: (p) => {
+    const names = Array.isArray(p.args) ? deniedPoolEnvNames(p.args) : [];
+    return `job-run with ${(names.length ? names : [String(p.name ?? '')]).map((n) => quoted(n, 64)).join(', ')}`;
+  },
+  mayAsk: agentOnly,
+  run: (p, ctx) => issuePass('jobrun.pool_env', p, ctx),
+};
+
+/** The rule guard (D-60) refused a tool call. The payload is the tool, its exact input, the folder and the guard's form, unclipped. */
+const guardRefusal: ApprovalKindDef = {
+  kind: 'guard.refusal',
+  schema: z
+    .object({
+      tool: z.string().regex(/^[A-Za-z0-9_.:-]{1,100}$/),
+      input: z.record(z.string(), z.unknown()),
+      cwd: z.string().max(300),
+      form: z.string().max(80),
+    })
+    .strict(),
+  why: 'secrets_permissions',
+  title: (p) => `Refused ${quoted(String(p.tool ?? ''), 40)} call`,
+  mayAsk: agentOnly,
+  run: (p, ctx) => issuePass('guard.refusal', p, ctx),
+};
+
 export const APPROVAL_KIND_DEFS: Record<ApprovalKind, ApprovalKindDef> = {
   'test.echo': testEcho,
   'session.bypass': sessionBypass,
   'pool.secret_set': poolSecretSet,
+  'jobrun.pool_env': jobrunPoolEnv,
+  'guard.refusal': guardRefusal,
 };

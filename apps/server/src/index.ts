@@ -45,6 +45,7 @@ import { METRICS_MEMO_MS } from './lab/metricsService.js';
 import { createRepos, registerRepoTools } from './repos/index.js';
 import { changesGlance, createGlance } from './glance/index.js';
 import { approvalAttentionSource, createApprovals, registerApprovalTools } from './approvals/index.js';
+import { APPROVAL_CHANNEL, fileRefusalRequests, markUsedPasses } from './approvals/outbox.js';
 import { bridgeAttentionNotify, createAttention, registerAttentionTools } from './attention/index.js';
 import { createPlatform } from './platform/index.js';
 import { createCodespaces } from './codespaces/index.js';
@@ -423,9 +424,28 @@ attention.register(memoryAttentionSource(workspaceMemory));
 chatController.memory = workspaceMemory;
 // Approvals (docs/prd/approvals.md, PILOT-1000): an agent asks, a person allows on a Needs you card, the portal runs it (Bypass through
 // the chat's own gated path, a protected pool's secret through the pools service) and tells the asking session.
-const approvals = createApprovals(store, { chat: chatController, pools: poolService, changed: () => attention.changed() });
+// T-2889: Allow on a refused call issues a one-time pass, delivered as the policy owner's root-owned passes file; a new or used pass
+// delivers that workspace again.
+const approvals = createApprovals(store, {
+  chat: chatController,
+  pools: poolService,
+  delivery: { passesChanged: (ws) => void reconciler.request(ws, 'approval pass', { changed: true }).catch(() => undefined) },
+  changed: () => attention.changed(),
+});
+settingsModule.agentEnv.passSource = (ws) => approvals.livePasses(ws);
 attention.register(approvalAttentionSource(approvals));
 registerApprovalTools(approvals);
+// T-2885: job-run's deny-listed names and the rule guard's refusals file a request through the outbox (approval.jsonl), in the workspaces
+// the guard landed in (job-run runs in the same ones).
+outbox.subscribe(
+  APPROVAL_CHANNEL,
+  (workspaceId, events) => {
+    const log = (what: string, e: unknown) => console.error(`[approvals] ${what}: ${(e as Error).message}`);
+    fileRefusalRequests(approvals, store, workspaceId, events, log);
+    markUsedPasses(approvals, workspaceId, events, log); // T-2889
+  },
+  () => settingsModule.agentEnv.guardedWorkspaces((id) => workspaces.resolve(id) !== null),
+);
 const ATTENTION_TOPICS = new Set<LiveTopic>(['pools', 'tickets', 'ci']);
 const notify = (...topics: LiveTopic[]) =>
   topics.forEach((t) => {
