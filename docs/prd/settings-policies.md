@@ -1051,7 +1051,10 @@ create`), and any command that is not a known reader (`cat`, `grep`, `jq`, `git 
   `--git-dir`/`--work-tree` or `env -C`/`sudo -D` into a tool root, and writes to rule files (the rule-file checks run first). `$HOME`,
   `${HOME}`, `~` and quoted paths are resolved, but only when nothing in the call can change HOME (no assignment, `export`, `read`,
   `source`, `eval`..., no substitution); otherwise the variable form is refused as before. Every refusal of the guard now ends with
-  "What to do: ...".
+  "What to do: ...". Hooks (review 42840, accepted): `fetch` runs `reference-transaction` and `pull`/`merge --ff-only` run
+  `post-merge` from the tool checkout's `.git/hooks`. That folder is the common git dir of every lane worktree, whose already allowed
+  `git commit`/`merge` run the same hooks as the same user, so the tool-root allow adds no new program; setting `core.hooksPath` or
+  `core.fsmonitor` (by `git config`, `-c` or `--config-env`) stays refused. A write to that hooks folder is the boundary to watch.
   **S2: the allow's `*` takes everything after the folder**, so in a lane workspace the rest of the command is read too:
   `--git-dir` and `--work-tree` (both `=` and two-word forms) are read like `-C` and must stay below a lane root; before the subcommand
   only `--no-pager`, `-P`, `-p`, `--paginate`, `--no-optional-locks`, `--no-lazy-fetch`, the pathspec switches, `--no-advice`,

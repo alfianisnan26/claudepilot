@@ -2317,6 +2317,9 @@ function verdictOf(input) {
   const tool = typeof input.tool_name === 'string' ? input.tool_name : '';
   const ti = input.tool_input && typeof input.tool_input === 'object' ? input.tool_input : {};
   const cwd = typeof input.cwd === 'string' && path.isAbsolute(input.cwd) ? input.cwd : process.cwd();
+  // PILOT-998: HOME_TOUCHED belongs to ONE tool call (every lex of it, bash -c bodies included); a decision starts clean. Today each
+  // decision is its own process, so this only matters if the guard ever decides more than one call per process.
+  HOME_TOUCHED = false;
   try {
     return check(tool, ti, cwd);
   } catch (e) {

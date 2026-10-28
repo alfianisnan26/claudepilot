@@ -15,9 +15,11 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { runInThisContext } from 'node:vm';
 import { ChatStore } from '../chat/store.js';
 import { compile } from '../delivery/compile.js';
 import { parseOutbox } from '../delivery/outbox.js';
@@ -1348,8 +1350,29 @@ function toolRig() {
   writeFileSync(rootsFile, gitCRootsContent([lanes], [tool]));
   const sh = (command: string) =>
     run(g, 'Bash', { command, description: 'x' }, { cwd: wt, env: { CLAUDEPILOT_GUARD_GITC_ROOTS_FILE: rootsFile } });
-  return { g, lanes, wt, tool, sh };
+  return { g, lanes, wt, tool, sh, rootsFile };
 }
+
+test('PILOT-998: HOME_TOUCHED is reset per decision: a call that could change HOME does not taint the next clean $HOME call', () => {
+  const { g, wt, rootsFile } = toolRig();
+  // The guard script run in this process (no worker, no exit), so that several decisions share its module state.
+  const env = { HOME: g.home, PATH: process.env.PATH ?? '/usr/bin:/bin', CLAUDE_CONFIG_DIR: g.configDir };
+  const fakeProcess = Object.create(process, { env: { value: { ...env, CLAUDEPILOT_GUARD_GITC_ROOTS_FILE: rootsFile } } });
+  const req = createRequire(import.meta.url);
+  const fakeRequire = (m: string) =>
+    m === 'os'
+      ? { ...req('node:os'), homedir: () => g.home }
+      : m === 'worker_threads'
+        ? { isMainThread: false, workerData: {}, parentPort: { postMessage() {} } }
+        : req(m);
+  const load = runInThisContext(`(function (require, process, __filename) {\n${RULE_GUARD_SCRIPT}\nreturn verdictOf;\n})`);
+  const verdictOf = load(fakeRequire, fakeProcess, join(g.root, 'bin', 'policy-rule-guard.cjs')) as (i: object) => unknown;
+  const decide = (command: string) => verdictOf({ tool_name: 'Bash', tool_input: { command, description: 'x' }, cwd: wt });
+  const clean = `git -C ${'$' + 'HOME'}/work/claudepilot status`;
+  assert.equal(decide(clean) ?? null, null, 'a clean $HOME call is allowed');
+  assert.match(JSON.stringify(decide(`export HOME=/tmp; ${clean}`)), /could change HOME/);
+  assert.equal(decide(clean) ?? null, null, 'the next clean call is allowed again: the flag did not leak');
+});
 
 test('PILOT-998: git -C on a tool checkout allows reads and fast-forwards, with $HOME, ~ and quoted paths resolved', () => {
   const { tool, sh } = toolRig();
