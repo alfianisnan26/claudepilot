@@ -22,7 +22,7 @@ import { clip } from '../attention/registry.js';
 import { requireCan } from '../authz/seam.js';
 import { secretWriteAccess } from '../pools/authz.js';
 import type { PoolService } from '../pools/service.js';
-import { PASS_TTL_MS, passOf } from './pass.js';
+import { PASS_TTL_MS, passOf, refusedByJobRun, wasRedacted } from './pass.js';
 
 /** What the chat controller gives the approvals module: Bypass through its own gated path, a session's facts, and messages to a session. */
 export interface ApprovalChat {
@@ -236,6 +236,12 @@ function secretEntries(p: PoolDetail): SecretEntryInput[] {
  * stores the pass in the result and delivers the workspace again; the agent runs the same call, and job-run or the guard lets it through.
  */
 async function issuePass(kind: ApprovalKind, p: Record<string, unknown>, ctx: ApprovalRunContext): Promise<ApprovalResult> {
+  // T-2885 review M1: the outbox line is the workspace's word, not proof of a refusal. Two checks keep a forged line from buying a pass
+  // for a call that was never refused: here, the request must describe a call the refuser would refuse (job-run: the name is deny-listed
+  // and the arguments pass it as --pool-env; guard: nothing redacted out of it); and at use, job-run and the guard consult the pass only
+  // on their own refusal path (job-run's deny branch, the guard's refuse()), after their own verdict refused that call again.
+  if (kind === 'jobrun.pool_env' && !refusedByJobRun(p)) return { ok: false, message: 'No pass: job-run would not refuse this run (the name is not deny-listed, or the arguments do not pass it).' };
+  if (kind === 'guard.refusal' && wasRedacted(p)) return { ok: false, message: 'No pass: parts of this call were redacted, so it is not the exact call that was refused.' };
   const pass = passOf(kind, p);
   if (!pass || !ctx.workspaceId) return { ok: false, message: 'No pass: this request has no workspace to deliver it to.' };
   if (!ctx.delivery) return { ok: false, message: 'No pass: delivery is not available; ask again later.' };

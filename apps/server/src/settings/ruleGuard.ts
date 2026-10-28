@@ -2333,6 +2333,27 @@ function audit(input, tool, form, p) {
 // files nothing. The portal checks the line again (a chat of this workspace, the payload's shape and size, no secret-shaped value).
 // Returns the id, 'large', or '' (nothing filed).
 const LINE_MAX = 4000;
+// T-2885 review M2: what a file tool would write never leaves this hook. Each content field becomes 'sha256:<hex>' of it (approvals/pass.ts
+// digestInput, held equal by a test); the request shows the path and the digest, and the pass hashes this same form, so it still binds
+// the exact content.
+const CONTENT_FIELDS = { Write: ['content'], Edit: ['old_string', 'new_string'], NotebookEdit: ['new_source'], MultiEdit: [] };
+function digestFields(o, fields) {
+  const out = Object.assign({}, o);
+  fields.forEach(function (k) {
+    // always, even for a value that looks like a digest: a call that writes the literal 'sha256:<hex>' must not match a pass for the content
+    if (typeof out[k] === 'string') out[k] = 'sha256:' + require('crypto').createHash('sha256').update(out[k]).digest('hex');
+  });
+  return out;
+}
+function digestInput(tool, ti) {
+  const fields = Object.prototype.hasOwnProperty.call(CONTENT_FIELDS, tool) ? CONTENT_FIELDS[tool] : null;
+  if (!fields) return ti;
+  const out = digestFields(ti, fields);
+  if (tool === 'MultiEdit' && Array.isArray(out.edits)) {
+    out.edits = out.edits.map(function (e) { return e && typeof e === 'object' && !Array.isArray(e) ? digestFields(e, ['old_string', 'new_string']) : e; });
+  }
+  return out;
+}
 function ask(input, tool, form) {
   try {
     if (!input || typeof input !== 'object' || !tool) return '';
@@ -2359,7 +2380,7 @@ function ask(input, tool, form) {
       type: 'request',
       kind: 'guard.refusal',
       claudeSession: session,
-      payload: { tool: tool, input: ti, cwd: cwd, form: String(form || '').slice(0, 80) },
+      payload: { tool: tool, input: digestInput(tool, ti), cwd: cwd, form: String(form || '').slice(0, 80) },
     });
     if (Buffer.byteLength(line) > LINE_MAX) return 'large';
     fs.appendFileSync(file, line + '\n', { mode: 384 });
@@ -2390,7 +2411,7 @@ function passOfCall(input, tool) {
   const ti = input && input.tool_input && typeof input.tool_input === 'object' && !Array.isArray(input.tool_input) ? input.tool_input : null;
   if (!ti || !tool) return '';
   const cwd = typeof input.cwd === 'string' ? input.cwd : '';
-  const parts = ['guard.refusal', tool, canon(ti), cwd];
+  const parts = ['guard.refusal', tool, canon(digestInput(tool, ti)), cwd];
   return require('crypto').createHash('sha256').update(parts.map(function (x) { return x + '\0'; }).join('')).digest('hex');
 }
 function usePass(input, tool) {

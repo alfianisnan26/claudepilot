@@ -26,7 +26,7 @@ import {
 import { findSecret } from '../portalmcp/sanitize.js';
 import { mayDecide, NO_APPROVAL } from './authz.js';
 import { APPROVAL_KIND_DEFS, type ApprovalChat, type ApprovalDelivery, type ApprovalDeps, type ApprovalKindDef, type ApprovalPools, type ApprovalRequester } from './kinds.js';
-import { PASS_HASH, PASS_KINDS, PASS_TTL_MS, passFrom } from './pass.js';
+import { cleanRefusal, PASS_HASH, PASS_KINDS, PASS_TTL_MS, passFrom } from './pass.js';
 
 type Row = {
   id: string;
@@ -195,7 +195,8 @@ export class Approvals {
     if (opts.id !== undefined && this.#row(opts.id)) throw new AppError('CONFLICT', 'That approval id is in use.');
     if (!isApprovalKind(req.kind)) throw new AppError('VALIDATION_FAILED', 'Unknown kind.', { details: { kind: 'Unknown.' } });
     const def: ApprovalKindDef = APPROVAL_KIND_DEFS[req.kind];
-    const parsed = def.schema.safeParse(req.payload);
+    // T-2885 review M2: a refused file call's content is never stored, and the rest is redacted (approvals/pass.ts cleanRefusal).
+    const parsed = def.schema.safeParse(req.kind === 'guard.refusal' ? cleanRefusal(req.payload) : req.payload);
     if (!parsed.success) throw new AppError('VALIDATION_FAILED', `The payload does not fit ${req.kind}.`, { details: { payload: parsed.error.issues.map((i) => i.message).join('; ') } });
     const payload = parsed.data;
     const json = JSON.stringify(payload);

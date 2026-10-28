@@ -9,6 +9,7 @@
 //   guard.refusal:   kind, tool, canonical JSON of the input (keys sorted at every level), cwd as the hook gave it
 
 import { createHash } from 'node:crypto';
+import { REDACTED, redact } from '../chat/redact.js';
 import { APPROVAL_PASSES_PATH } from '../delivery/ownership.js';
 
 /** The file the policy owner delivers (root:root 0644, outside every workspace folder). */
@@ -31,6 +32,79 @@ export function canonicalJson(v: unknown): string {
   return JSON.stringify(v) ?? 'null';
 }
 
+/**
+ * T-2885 review M2: what a file tool would write is never stored (the card would show it): each content field is replaced by
+ * `sha256:<hex>` of it, the same way the guard does (ruleGuard.ts `digestInput`) before the line is written. The pass hashes this form, so it
+ * still binds the exact content. The portal applies it to what it pulls (a forged or old line with raw content); a value already in digest
+ * form is kept, so the guard's line is unchanged. The guard digests every value, a digest-shaped one too, so a call that writes the
+ * literal `sha256:<hex>` never matches the pass for the content it names.
+ */
+export const CONTENT_FIELDS: Readonly<Record<string, readonly string[]>> = {
+  Write: ['content'],
+  Edit: ['old_string', 'new_string'],
+  NotebookEdit: ['new_source'],
+  MultiEdit: [],
+};
+const DIGEST = /^sha256:[0-9a-f]{64}$/;
+const dig = (s: string) => (DIGEST.test(s) ? s : `sha256:${createHash('sha256').update(s).digest('hex')}`);
+function digestFields(o: Record<string, unknown>, fields: readonly string[]): Record<string, unknown> {
+  const out = { ...o };
+  for (const k of fields) if (typeof out[k] === 'string') out[k] = dig(out[k]);
+  return out;
+}
+export function digestInput(tool: string, input: Record<string, unknown>): Record<string, unknown> {
+  const fields = Object.hasOwn(CONTENT_FIELDS, tool) ? CONTENT_FIELDS[tool] : undefined;
+  if (!fields) return input;
+  const out = digestFields(input, fields);
+  if (tool === 'MultiEdit' && Array.isArray(out.edits))
+    out.edits = out.edits.map((e: unknown) => (e && typeof e === 'object' && !Array.isArray(e) ? digestFields(e as Record<string, unknown>, ['old_string', 'new_string']) : e));
+  return out;
+}
+
+/**
+ * T-2885 review M2: what a refused call stores (the service applies it to every guard.refusal payload, from the outbox or approval_request,
+ * before its checks). A file tool's content is never kept: each content field becomes `sha256:<hex>` (digestInput). Every other string of
+ * the input, and the folder, goes through chat/redact.ts. A payload that redaction changed holds REDACTED, and Allow gives it no pass
+ * (kinds.ts issuePass): it is not the call that was refused.
+ */
+export function cleanRefusal(payload: unknown): unknown {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return payload;
+  const p = payload as Record<string, unknown>;
+  const input = p.input;
+  if (!input || typeof input !== 'object' || Array.isArray(input) || typeof p.tool !== 'string') return payload;
+  const walk = (v: unknown): unknown => {
+    if (typeof v === 'string') return redact(v);
+    if (Array.isArray(v)) return v.map(walk);
+    if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v as Record<string, unknown>).map(([k, x]) => [k, walk(x)]));
+    return v;
+  };
+  const out: Record<string, unknown> = { ...p, input: walk(digestInput(p.tool, input as Record<string, unknown>)) };
+  if (typeof p.cwd === 'string') out.cwd = redact(p.cwd);
+  return out;
+}
+
+/**
+ * T-2885 review M1: job-run.sh's `pool_denied` as patterns; keep the two lists in step. A shell `case` glob: `*` is any run of characters.
+ */
+export const JOBRUN_DENIED_GLOBS = [
+  '*_RW_*', '*ADMIN*', '*PROD*', '*_PRD_*', 'CLOUDFLARE_API_TOKEN', 'GITEA_*', 'GITHUB_*', '*_MASTER_*',
+  '*_RW', 'RW_*', '*_PRD', 'PRD_*', '*_MASTER', 'MASTER_*', 'GH_*', 'NODE_AUTH_TOKEN', 'ANTHROPIC_*', 'CLAUDE_*', 'CLAUDEPILOT_*', 'PILOT_*',
+] as const;
+const globRe = (g: string) => new RegExp(`^${g.split('*').map((s) => s.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*')}$`);
+const DENIED = JOBRUN_DENIED_GLOBS.map(globRe);
+export const jobRunDenies = (name: string) => DENIED.some((r) => r.test(name));
+/** Whether job-run refuses this run: the name is deny-listed and the arguments pass it as `--pool-env <name>` (job-run's own parse). */
+export function refusedByJobRun(p: Record<string, unknown>): boolean {
+  const name = p.name;
+  const args = p.args;
+  if (typeof name !== 'string' || !Array.isArray(args) || !jobRunDenies(name)) return false;
+  for (let i = 0; i + 1 < args.length; i++) if (args[i] === '--pool-env' && args[i + 1] === name) return true;
+  return false;
+}
+
+/** Whether a stored payload lost parts to redaction (then it is not the exact call, and gets no pass). */
+export const wasRedacted = (payload: unknown) => JSON.stringify(payload ?? null).includes(REDACTED);
+
 const digest = (parts: string[]) => createHash('sha256').update(parts.map((p) => `${p}\0`).join('')).digest('hex');
 
 /** The pass of a stored request's payload, or null for a kind that has none. */
@@ -39,7 +113,10 @@ export function passOf(kind: string, payload: Record<string, unknown>): string |
     const args = payload.args as string[];
     return digest(['jobrun.pool_env', String(payload.cwd), ...args]);
   }
-  if (kind === 'guard.refusal') return digest(['guard.refusal', String(payload.tool), canonicalJson(payload.input), String(payload.cwd)]);
+  if (kind === 'guard.refusal') {
+    const input = payload.input && typeof payload.input === 'object' && !Array.isArray(payload.input) ? (payload.input as Record<string, unknown>) : {};
+    return digest(['guard.refusal', String(payload.tool), canonicalJson(digestInput(String(payload.tool), input)), String(payload.cwd)]);
+  }
   return null;
 }
 
