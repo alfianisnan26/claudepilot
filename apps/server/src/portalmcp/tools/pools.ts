@@ -245,7 +245,11 @@ export function registerPoolTools(deps: PortalToolDeps): void {
     }),
     handler(ctx, args) {
       const p = secretsPoolFor(ctx, args.pool);
-      if (isProtectedPool(p)) throw new PortalToolError('PROTECTED', PROTECTED_POOL_REASON);
+      if (isProtectedPool(p))
+        throw new PortalToolError(
+          'PROTECTED',
+          `${PROTECTED_POOL_REASON}. Ask a person: approval_request with kind pool.secret_set and payload {pool: "${p.id}", name, expose (optional), baseRevision: ${p.latestRevision}}; never put the value in it (the person types it on Allow).`,
+        );
       assertCanChange(store, 'pool');
       const expose = args.expose ?? secretExposeDefault(args.name);
       const entries = ((p.content as { entries?: SecretEntryView[] } | null)?.entries ?? []).map((e): SecretEntryInput =>

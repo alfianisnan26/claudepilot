@@ -421,8 +421,8 @@ const workspaceMemory = new WorkspaceMemory({
 attention.register(memoryAttentionSource(workspaceMemory));
 chatController.memory = workspaceMemory;
 // Approvals (docs/prd/approvals.md, PILOT-1000): an agent asks, a person allows on a Needs you card, the portal runs it (Bypass through
-// the chat's own gated path) and tells the asking session.
-const approvals = createApprovals(store, { chat: chatController, changed: () => attention.changed() });
+// the chat's own gated path, a protected pool's secret through the pools service) and tells the asking session.
+const approvals = createApprovals(store, { chat: chatController, pools: poolService, changed: () => attention.changed() });
 attention.register(approvalAttentionSource(approvals));
 registerApprovalTools(approvals);
 const ATTENTION_TOPICS = new Set<LiveTopic>(['pools', 'tickets', 'ci']);

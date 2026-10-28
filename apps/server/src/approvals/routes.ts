@@ -2,7 +2,7 @@
 // with the same NOT_FOUND as a missing request.
 
 import { success } from '@isnanme/core';
-import type { DenyApprovalRequest } from '@portal/contracts';
+import type { AllowApprovalRequest, DenyApprovalRequest } from '@portal/contracts';
 import { Hono, type Context } from 'hono';
 import { actorOf } from '../authz/seam.js';
 import type { Approvals } from './service.js';
@@ -17,7 +17,12 @@ export function createApprovalRoutes(approvals: Approvals): Hono {
     return c.json(success({ items: approvals.pending(actorOf(c)) }));
   });
   r.get('/:id', (c) => c.json(success(approvals.getFor(actorOf(c), c.req.param('id')))));
-  r.post('/:id/allow', async (c) => c.json(success(await approvals.allow(actorOf(c), c.req.param('id'), { sessionToken: tokenOf(c), decidedBy: 'ui' }))));
+  r.post('/:id/allow', async (c) => {
+    // `value`: write-only (pool.secret_set); handed to the service and dropped, never echoed back.
+    const body = (await c.req.json().catch(() => null)) as Partial<AllowApprovalRequest> | null;
+    const value = typeof body?.value === 'string' ? body.value : undefined;
+    return c.json(success(await approvals.allow(actorOf(c), c.req.param('id'), { sessionToken: tokenOf(c), decidedBy: 'ui', value })));
+  });
   r.post('/:id/deny', async (c) => {
     const body = (await c.req.json().catch(() => null)) as Partial<DenyApprovalRequest> | null;
     const reason = typeof body?.reason === 'string' ? body.reason : undefined;

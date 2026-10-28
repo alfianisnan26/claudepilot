@@ -1,5 +1,5 @@
 import { Badge, Button } from '@isnanme/ui';
-import { APPROVAL_KIND_LABEL, APPROVAL_REASON_MAX, CODE_LENGTH, REAUTH_REQUIRED, type Approval } from '@portal/contracts';
+import { APPROVAL_KIND_LABEL, APPROVAL_REASON_MAX, approvalNeedsValue, CODE_LENGTH, REAUTH_REQUIRED, type Approval } from '@portal/contracts';
 import { ShieldCheck } from 'lucide-react';
 import { useRef, useState } from 'react';
 import { Link } from 'react-router';
@@ -27,16 +27,21 @@ export function ApprovalCard({ approval, onChange }: { approval: Approval; onCha
   const [step, setStep] = useState<'decide' | 'deny' | 'code'>('decide');
   const [reason, setReason] = useState('');
   const [code, setCode] = useState('');
+  // pool.secret_set: the secret the person types. Write-only: sent once with Allow, then cleared; never shown back.
+  const [value, setValue] = useState('');
   const [busy, setBusy] = useState<'allow' | 'deny' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const codeInput = useRef<{ focus: () => void }>(null);
   const open = a.status === 'pending' && Date.parse(a.expiresAt) > Date.now();
+  const needsValue = approvalNeedsValue(a.kind);
 
   const allow = async () => {
+    if (needsValue && !value) return setError('Type the value first.');
     setBusy('allow');
     setError(null);
     try {
-      onChange(await approvalsApi.allow(a.id));
+      onChange(await approvalsApi.allow(a.id, needsValue ? value : undefined));
+      setValue('');
       setStep('decide');
     } catch (e) {
       if (e instanceof ApiError && e.code === REAUTH_REQUIRED) {
@@ -119,6 +124,30 @@ export function ApprovalCard({ approval, onChange }: { approval: Approval; onCha
           {payloadText(a.payload)}
         </pre>
       </div>
+
+      {a.kind === 'session.bypass' && (
+        <p data-approval-bypass-note="" className="text-[14px]">
+          Claude will run every tool without asking in this session. Deny rules still apply; Bypass turns off when the agent sleeps, restarts or moves to another Claude.
+        </p>
+      )}
+
+      {open && needsValue && step === 'decide' && (
+        <label className="flex min-w-0 flex-col gap-1.5 text-[14px]">
+          <span className="flex items-center gap-1 font-semibold">
+            Value
+            <InfoTip label="About the value">You type the secret here; the agent never sees it. It goes once into the pool’s encrypted store and is not kept with this request.</InfoTip>
+          </span>
+          <input
+            type="password"
+            data-approval-value=""
+            autoComplete="new-password"
+            spellCheck={false}
+            value={value}
+            onChange={(e) => (setValue(e.target.value), setError(null))}
+            className="min-h-11 w-full min-w-0 rounded-xl border border-line bg-surface px-3 py-2 font-mono text-[15px]"
+          />
+        </label>
+      )}
 
       {a.result && (
         <p role="status" className={`rounded-xl px-3.5 py-2.5 text-[14px] [overflow-wrap:anywhere] ${a.result.ok ? 'bg-success-soft text-success' : 'bg-danger-soft text-danger'}`}>

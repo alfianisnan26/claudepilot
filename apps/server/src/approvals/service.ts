@@ -15,6 +15,7 @@ import {
   APPROVAL_REASON_MAX,
   APPROVAL_TTL_DEFAULT_MIN,
   APPROVAL_TTL_MAX_MIN,
+  approvalNeedsValue,
   isApprovalKind,
   type Actor,
   type Approval,
@@ -24,7 +25,7 @@ import {
 } from '@portal/contracts';
 import { findSecret } from '../portalmcp/sanitize.js';
 import { mayDecide, NO_APPROVAL } from './authz.js';
-import { APPROVAL_KIND_DEFS, type ApprovalChat, type ApprovalKindDef, type ApprovalRequester } from './kinds.js';
+import { APPROVAL_KIND_DEFS, type ApprovalChat, type ApprovalDeps, type ApprovalKindDef, type ApprovalPools, type ApprovalRequester } from './kinds.js';
 
 type Row = {
   id: string;
@@ -67,6 +68,8 @@ export interface ApprovalCreate {
 export interface ApprovalsOptions {
   db: () => DatabaseSync | null;
   chat?: ApprovalChat | null;
+  /** The pools service (pool.secret_set). Absent: that kind can't be asked for. */
+  pools?: ApprovalPools | null;
   now?: () => number;
   /** Tells Needs you something changed (attention.changed). */
   changed?: () => void;
@@ -76,10 +79,17 @@ export interface ApprovalsOptions {
 export class Approvals {
   readonly #o: ApprovalsOptions;
   chat: ApprovalChat | null;
+  pools: ApprovalPools | null;
 
   constructor(opts: ApprovalsOptions) {
     this.#o = opts;
     this.chat = opts.chat ?? null;
+    this.pools = opts.pools ?? null;
+  }
+
+  /** The services the kinds use (titles, mayAsk, the executors). */
+  get deps(): ApprovalDeps {
+    return { chat: this.chat, pools: this.pools };
   }
 
   #db(): DatabaseSync {
@@ -144,7 +154,7 @@ export class Approvals {
     if (secretAt) throw new AppError('VALIDATION_FAILED', `The payload may not hold a secret (at ${secretAt}); name the secret instead.`);
     const reason = (req.reason ?? '').replace(/\s+/g, ' ').trim().slice(0, APPROVAL_REASON_MAX);
     if (findSecret(reason)) throw new AppError('VALIDATION_FAILED', 'The reason may not hold a secret.');
-    def.mayAsk?.(payload, requester);
+    def.mayAsk?.(payload, requester, this.deps);
     const ttl = Math.min(Math.max(Math.round(req.ttlMinutes ?? APPROVAL_TTL_DEFAULT_MIN), 1), APPROVAL_TTL_MAX_MIN);
     const now = this.#now();
     const id = `apr-${randomBytes(9).toString('hex')}`;
@@ -203,11 +213,15 @@ export class Approvals {
   /**
    * A person allows: the kind's precheck, then one atomic claim (pending and not expired), then the executor runs ONCE on the stored
    * payload as the portal, and its result is stored and sent to the asking session.
+   *
+   * `value`: what the person typed, for a kind that needs one (pool.secret_set). It lives in this call only: it goes to the executor and
+   * nowhere else (not the row, the result, a message or a log); a value for a kind that takes none is refused.
    */
-  async allow(actor: Actor, id: string, opts: { sessionToken?: string | undefined; decidedBy?: string } = {}): Promise<Approval> {
+  async allow(actor: Actor, id: string, opts: { sessionToken?: string | undefined; decidedBy?: string; value?: string | undefined } = {}): Promise<Approval> {
     const { row, def } = this.#pendingOr404(actor, id);
+    if (opts.value !== undefined && !approvalNeedsValue(def.kind)) throw new AppError('VALIDATION_FAILED', 'This request takes no value.', { details: { value: 'Not used.' } });
     const payload = JSON.parse(row.payload) as Record<string, unknown>;
-    const ctx = { approvalId: id, actor, sessionToken: opts.sessionToken, chat: this.chat };
+    const ctx = { approvalId: id, actor, sessionToken: opts.sessionToken, value: opts.value, ...this.deps };
     def.precheck?.(payload, ctx);
     const at = this.#iso();
     const claimed = this.#db()
@@ -218,9 +232,12 @@ export class Approvals {
     try {
       result = await def.run(payload, ctx);
     } catch (e) {
-      this.#o.log?.(`running approval ${id}`, e);
+      const said = e instanceof Error ? e.message : String(e);
+      this.#o.log?.(`running approval ${id}`, opts.value && said.includes(opts.value) ? new Error('the executor threw') : e);
       result = { ok: false, message: e instanceof AppError ? e.message : 'The run failed.' };
     }
+    // Belt and braces: whatever an executor says, the typed value never reaches the row or the asking agent.
+    if (opts.value && JSON.stringify(result).includes(opts.value)) result = { ok: result.ok, message: result.ok ? 'Done.' : 'The run failed.' };
     this.#db().prepare('UPDATE approvals SET result = ? WHERE id = ?').run(JSON.stringify(result), id);
     this.#o.changed?.();
     const out = this.#toApproval(this.#row(id)!);
@@ -232,6 +249,8 @@ export class Approvals {
   async deny(actor: Actor, id: string, reasonIn?: string, decidedBy = 'ui'): Promise<Approval> {
     const { row } = this.#pendingOr404(actor, id);
     const reason = (reasonIn ?? '').replace(/\s+/g, ' ').trim().slice(0, APPROVAL_REASON_MAX) || 'Denied.';
+    // The reason is stored and sent to an agent: a pasted credential would land in both (review nit 4, T-2867).
+    if (findSecret(reason)) throw new AppError('VALIDATION_FAILED', 'The reason may not hold a secret.', { details: { reason: 'Looks like a secret.' } });
     const at = this.#iso();
     const result: ApprovalResult = { ok: false, message: reason };
     const r = this.#db()

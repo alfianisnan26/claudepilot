@@ -115,9 +115,13 @@ test('pool_get and pool_list warn about an environment-style secret stored witho
 test('a protected pool is refused with the reason, by name or by its [protected] mark, for an admin token too', async () => {
   const admin = h.token('admin').secret;
   for (const pool of [prd.id, marked.id]) {
-    const r = await h.call(admin, 'pool_secret_set', { pool, name: 'API_KEY', value: value() });
+    const v = value();
+    const r = await h.call(admin, 'pool_secret_set', { pool, name: 'API_KEY', value: v });
     assert.equal(code(r), 'PROTECTED');
     assert.match(textOf(r), new RegExp(PROTECTED_POOL_REASON.replace(/[()]/g, '\\$&')));
+    // PILOT-1000 / T-2867: the refusal says how to ask a person instead, with the pool's id and revision, and never echoes the value.
+    assert.match(textOf(r), new RegExp(`approval_request with kind pool\\.secret_set and payload \\{pool: "${pool}", name, expose \\(optional\\), baseRevision: 1\\}`));
+    assert.ok(!JSON.stringify(r).includes(v));
   }
   assert.equal(s.service.get(prd.id).latestRevision, 1, 'nothing was written');
   assert.equal(s.service.get(marked.id).latestRevision, 1);
