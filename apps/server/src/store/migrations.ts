@@ -3836,6 +3836,35 @@ export const MIGRATIONS: Migration[] = [
       db.exec(`CREATE INDEX IF NOT EXISTS tickets_updated_at ON tickets (updated_at)`);
     },
   },
+  {
+    version: 883,
+    name: 'approvals: a request a person allows or denies, and the portal runs (PILOT-1000, T-2867)',
+    up(db) {
+      // T-2867 (docs/prd/approvals.md): the T2 tier of PILOT-996. `payload` is the exact JSON the portal runs on Allow; nothing updates it
+      // (approvals/store.ts writes only status, decided_by, decided_at and result, once, from pending). No secret value is ever stored here
+      // (a kind names a secret). No area block fits; the next free number after 882 (checked on integration and the open S1-S3 branches).
+      // Additive only (D-92): new objects with IF NOT EXISTS.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS approvals (
+          id TEXT PRIMARY KEY,
+          kind TEXT NOT NULL CHECK (length(kind) BETWEEN 1 AND 60),
+          payload TEXT NOT NULL CHECK (json_valid(payload)),
+          requester_session TEXT,
+          workspace TEXT,
+          tier TEXT NOT NULL DEFAULT 'T2',
+          reason TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'allowed', 'denied', 'expired')),
+          created_at TEXT NOT NULL,
+          expires_at TEXT NOT NULL,
+          decided_by TEXT,
+          decided_at TEXT,
+          result TEXT CHECK (result IS NULL OR json_valid(result))
+        ) STRICT;
+        CREATE INDEX IF NOT EXISTS approvals_status_created ON approvals (status, created_at);
+        CREATE INDEX IF NOT EXISTS approvals_requester ON approvals (requester_session, created_at);
+      `);
+    },
+  },
 ];
 
 /**
