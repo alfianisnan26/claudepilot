@@ -255,7 +255,8 @@ export function registerPoolTools(deps: PortalToolDeps): void {
       // An existing secret keeps its expose unless the call names one; the name's default is for a new entry only (T-2866 review).
       const found = at >= 0 ? entries[at]! : undefined;
       const existing = found?.kind === 'secret' ? found.options : undefined;
-      const expose = args.expose ?? (typeof existing?.expose === 'boolean' ? existing.expose : secretExposeDefault(args.name));
+      // A stored secret's options omit a false expose, so an existing secret is exposed exactly when expose is true (as this tool reports it).
+      const expose = args.expose ?? (found ? existing?.expose === true : secretExposeDefault(args.name));
       const target: SecretEntryInput = at >= 0 ? { ...entries[at]!, options: { ...entries[at]!.options, expose }, newValue: args.value } : { kind: 'secret', name: args.name, options: { expose }, newValue: args.value };
       if (at >= 0) entries[at] = target;
       else entries.push(target);
