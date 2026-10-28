@@ -1582,6 +1582,7 @@ export class ChatController {
       actor: 'portal',
       detail: { why: how, ...(kept ? { kept: true } : {}) },
     });
+    void this.#parentLeftBypass(sessionId, { why: how, kept }); // PILOT-997 review 42957: not for a kept pause
   }
 
   /** (Re)schedules the idle check of a live, idle session; any other state cancels it. */
@@ -4073,6 +4074,7 @@ export class ChatController {
         detail: { why, how },
       });
       this.#emitSession(sessionId);
+      void this.#parentLeftBypass(sessionId, { why });
     };
     try {
       const row = this.#chat.row(sessionId);
@@ -4093,8 +4095,9 @@ export class ChatController {
           'not_confirmed',
           `Bypass not kept ${after}: no entry by a person with the confirmation and the server code is on record for this chat.`,
         );
-      // PILOT-996: a worker gets Bypass only from a parent that is in it now (never wider than its parent).
-      if (how === 'inherit') {
+      // PILOT-996: a worker gets Bypass only from a parent that is in it now (never wider than its parent). PILOT-997 review 42957: on every
+      // way back too (a move, a restart, a recovery, Keep going) for a session whose capability came from its parent, not only at the inherit.
+      if (how === 'inherit' || this.#inheritedBypass(sessionId)) {
         const parent = row.parent_id ? this.#chat.row(row.parent_id) : null;
         if (!parent || parent.state === 'ended' || parent.mode !== 'bypassPermissions')
           return drop('parent_not_bypass', `Bypass not kept ${after}: the parent is not in Bypass now.`);
@@ -4206,6 +4209,46 @@ export class ChatController {
     return this.#chat.row(id)?.mode === 'bypassPermissions';
   }
 
+  /** PILOT-997 review 42957: this session's Bypass capability came from its parent (its newest `bypass.capable` row says how `inherit`). */
+  #inheritedBypass(sessionId: string): boolean {
+    return this.#chat.audit({ kind: 'bypass.capable', sessionId, limit: 1 })[0]?.detail.how === 'inherit';
+  }
+
+  /**
+   * PILOT-997 review 42957 (D-103 "never wider than its parent"; D-15: a person's switch-off ends the lease): `sessionId` left Bypass for
+   * good, so each of its live workers in an INHERITED Bypass leaves it too, to dontAsk (a worker never waits on a person, D-62), audited
+   * `bypass.left` why `parent_left`; through `#setMode`, which carries it on to their own workers. Not for a pause that comes back (a kept
+   * sleep or vanishing, `kept`) or the relaunch row of a restart or move that is about to put it back (`restart`: when that fails, its
+   * `<how>_failed` row comes here); not when the policy blocks Bypass (`bypassPolicyChanged` takes every session out itself). Never throws.
+   */
+  async #parentLeftBypass(sessionId: string, detail: { why?: unknown; kept?: unknown }): Promise<void> {
+    if (detail.kept === true || detail.why === 'restart' || !this.#bypassAllowed()) return;
+    for (const row of this.#chat.liveRows()) {
+      if (row.parent_id !== sessionId || row.mode !== 'bypassPermissions' || !this.#inheritedBypass(row.id)) continue;
+      try {
+        await this.#setMode(row.id, 'dontAsk', 'portal', 'parent_left');
+        this.#note(row.id, 'Bypass turned off: the parent left it.');
+      } catch {
+        // Fail closed: the process out of it (or stopped, or ended for integrity), the row on dontAsk, on record, and on to its workers.
+        await this.#leaveBypass(row.id, 'Bypass turned off: the parent left it.').catch(() => undefined);
+        const now = this.#chat.row(row.id);
+        if (!now || now.state === 'ended') continue;
+        if (now.mode === 'bypassPermissions') this.#chat.patchSession(row.id, { mode: 'dontAsk' });
+        this.#note(row.id, 'Bypass turned off: the parent left it.');
+        this.#chat.addAudit({
+          severity: 'medium',
+          kind: 'bypass.left',
+          sessionId: row.id,
+          workspaceId: row.workspace_id,
+          actor: 'portal',
+          detail: { why: 'parent_left', parent: sessionId },
+        });
+        this.#emitSession(row.id);
+        await this.#parentLeftBypass(row.id, { why: 'parent_left' });
+      }
+    }
+  }
+
   /** PILOT-996: {@link autoModeAllowed} with this session's parent's mode and the policy `sessions.autonomousAuto`. */
   #autoAllowed(session: ChatSession): boolean {
     const parentMode = session.parentId ? (this.#chat.row(session.parentId)?.mode ?? null) : null;
@@ -4225,6 +4268,15 @@ export class ChatController {
     if (row.parent_id || !row.started_by || row.started_by === CHAT_ACTOR_UI || row.origin === 'persona_test') return false;
     if ((row as { kind?: string }).kind === 'manager') return false;
     return this.#autonomousAutoOn();
+  }
+
+  /**
+   * PILOT-997 review 42957: a chat that continues an ended one (Keep going's new chat) that ran narrower than Auto without waiting on a
+   * person (Plan or dontAsk) starts in that mode, not Auto. Null otherwise (it starts in Auto); Manual is not carried (it waits on a person).
+   */
+  #continuedNarrower(row: ChatSessionRow): 'plan' | 'dontAsk' | null {
+    const before = row.continued_from ? this.#chat.row(row.continued_from) : null;
+    return before?.mode === 'plan' || before?.mode === 'dontAsk' ? before.mode : null;
   }
 
   /** T-417: the newest Bypass record of this chat is its sleep that kept it (a lead's), so its wake puts it back through `#keepBypass`. */
@@ -5406,7 +5458,7 @@ export class ChatController {
    * `mode.auto`; elsewhere it is refused, audited `mode.refused`, with what to do. Claude Code refusing Auto (`auto_mode_model`,
    * `auto_mode_settings`) leaves the mode as it was and says why.
    */
-  async #setMode(sessionId: string, mode: unknown, actor?: string): Promise<void> {
+  async #setMode(sessionId: string, mode: unknown, actor?: string, leftWhy: 'mode' | 'parent_left' = 'mode'): Promise<void> {
     if (mode === 'bypassPermissions') {
       // Never a plain control: it takes the confirmation and the server code check (enterBypass).
       this.#refuseBypass(sessionId, 'control', 'socket');
@@ -5442,7 +5494,7 @@ export class ChatController {
         workspaceId: row?.workspace_id,
         // A mode switch out of Bypass is someone's choice (a person in the app, or a token on purpose): Keep going never undoes it (PILOT-997).
         actor: actor ?? 'portal',
-        detail: { to: applied, why: 'mode' },
+        detail: { to: applied, why: leftWhy, ...(leftWhy === 'parent_left' ? { parent: row?.parent_id ?? null } : {}) },
       });
     }
     if (applied === 'bypassPermissions') {
@@ -5452,6 +5504,8 @@ export class ChatController {
     this.#chat.patchSession(sessionId, { mode: applied });
     this.#emitSession(sessionId);
     this.#note(sessionId, `Mode: ${MODE_LABELS[applied] ?? applied}`);
+    // PILOT-997 review 42957: its workers in an inherited Bypass leave it with it (and theirs with them).
+    if (was === 'bypassPermissions') await this.#parentLeftBypass(sessionId, { why: leftWhy });
     if (applied === 'auto' && was !== 'auto')
       this.#chat.addAudit({
         severity: 'medium',
@@ -5573,7 +5627,7 @@ export class ChatController {
     const restore: Restore | null = opts.resume
       ? { model: row.model, effort: row.effort, ultracode: row.ultracode === 1, mode: wasBypass ? START_MODE : row.mode }
       : firstAuto
-        ? { model: null, effort: null, ultracode: false, mode: 'auto', start: true }
+        ? { model: null, effort: null, ultracode: false, mode: this.#continuedNarrower(row) ?? 'auto', start: true }
         : null;
     // The folder it's scanned in is the folder it runs in (and the one the session reports).
     const cwd = sessionCwd(row.cwd);
@@ -6885,6 +6939,7 @@ export class ChatController {
         actor: 'portal',
         detail: { why: 'downgrade', mode },
       });
+      void this.#parentLeftBypass(sessionId, { why: 'downgrade' }); // PILOT-997 review 42957
     } else this.#note(sessionId, `Mode is ${MODE_LABELS[mode] ?? mode} in this chat`);
     this.#emitSession(sessionId);
   }
@@ -6989,6 +7044,7 @@ export class ChatController {
       actor: 'portal',
       detail: lost ? { why: 'lost_touch', how, kept } : { why: 'restart_unfinished', how },
     });
+    void this.#parentLeftBypass(sessionId, lost ? { why: 'lost_touch', kept } : { why: 'restart_unfinished' }); // PILOT-997 review 42957
     this.#saveControl(sessionId);
     const leaving: Promise<void> = Promise.resolve()
       .then(() => this.#leaveBypass(sessionId, 'Bypass was not finished before the portal restarted.'))

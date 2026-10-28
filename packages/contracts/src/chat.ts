@@ -13,7 +13,7 @@ export type ChatOrigin = 'ui' | 'mcp' | 'persona_test';
 
 /**
  * Claude Code permission modes. `default` asks for everything (Manual); `acceptEdits` edits without asking (Edit); `auto` lets Claude
- * Code's classifier approve routine actions and block risky ones (Auto: see {@link autoModeAllowed});`plan` changes nothing until approved; `dontAsk` (not offered, kept for stored rows) denies what isn't
+ * Code's classifier approve routine actions and block risky ones (Auto: see {@link autoModeAllowed}); `plan` changes nothing until approved; `dontAsk` (not offered, kept for stored rows) denies what isn't
  * pre-approved; Bypass only through its own confirmation (FR20).
  */
 export type ChatPermissionMode = 'default' | 'acceptEdits' | 'plan' | 'auto' | 'dontAsk' | 'bypassPermissions';

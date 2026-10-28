@@ -268,6 +268,86 @@ test('PILOT-997: with “Auto for agents” OFF, a session no person started get
   }
 });
 
+test('PILOT-997 review 42957: a person switches a Bypass lead to Manual: its worker and grandchild in an inherited Bypass leave it, a restart does not put it back, and the worker can no longer hand Bypass on', async () => {
+  const r = await rig();
+  try {
+    r.s.controller.agentCaps = () => ({ maxDepth: 2, maxChildren: 5, spawnsPerHour: 20, messagesPerHour: 20 });
+    const lead = await bypassLead(r.s);
+    r.h.alive.add(lead);
+    const a = await r.h.agentToken('docker/ws1', lead);
+    const w = spawned(await answering(r.s, r.h.call(a.secret, 'session_spawn', { prompt: 'Ship the fix.', title: 'Worker' })));
+    r.h.alive.add(w.id);
+    const wa = await r.h.agentToken('docker/ws1', w.id);
+    const g = spawned(await answering(r.s, r.h.call(wa.secret, 'session_spawn', { prompt: 'Test it.', title: 'Grandchild' })));
+    assert.deepEqual([r.s.controller.get(w.id)!.mode, r.s.controller.get(g.id)!.mode], ['bypassPermissions', 'bypassPermissions']);
+
+    // A person switches the lead to Manual in the app: the lease ends for its whole line (D-15, D-103 "never wider than its parent").
+    await answering(r.s, r.s.controller.control(lead, 'mode', { mode: 'default' }, { actor: 'ui' }));
+    await answering(r.s, until(() => r.s.controller.get(g.id)!.mode !== 'bypassPermissions', 3000));
+    assert.deepEqual([r.s.controller.get(w.id)!.mode, r.s.controller.get(g.id)!.mode], ['dontAsk', 'dontAsk']);
+    for (const [id, parent] of [[w.id, lead], [g.id, w.id]] as const) {
+      const left = r.s.controller.audit({ kind: 'bypass.left' }).find((x) => x.sessionId === id)!;
+      assert.deepEqual([left.actor, left.detail.why, left.detail.parent], ['portal', 'parent_left', parent], id);
+      assert.equal(r.s.controller.bypassSeenAt(id), null, 'not a loss: Keep going never puts it back');
+    }
+
+    // A later restart of the worker does not put Bypass back.
+    await answering(r.s, r.s.controller.restart(w.id));
+    assert.equal(r.s.controller.get(w.id)!.mode, 'dontAsk');
+    assert.equal(r.s.controller.audit({ kind: 'bypass.entered' }).filter((x) => x.sessionId === w.id && x.detail.how !== 'inherit').length, 0);
+    // Its own session_spawn hands on no Bypass: a worker of a dontAsk parent asked for Bypass is refused, unasked it gets dontAsk.
+    assert.equal((await r.h.call(wa.secret, 'session_spawn', { prompt: 'x', mode: 'bypassPermissions' })).result?.isError, true);
+    const g2 = spawned(await answering(r.s, r.h.call(wa.secret, 'session_spawn', { prompt: 'Again.', title: 'Grandchild 2' })));
+    assert.deepEqual([r.s.controller.get(g2.id)!.mode, r.s.controller.get(g2.id)!.bypassCapable], ['dontAsk', false]);
+  } finally {
+    await r.done();
+  }
+});
+
+test('PILOT-997 review 42957: a session whose Bypass was inherited gets it back on a restart only while its parent is in Bypass now', async () => {
+  const r = await rig();
+  try {
+    const lead = await bypassLead(r.s);
+    r.h.alive.add(lead);
+    const a = await r.h.agentToken('docker/ws1', lead);
+    const w = spawned(await answering(r.s, r.h.call(a.secret, 'session_spawn', { prompt: 'Ship the fix.', title: 'Worker' })));
+    // The parent in Bypass: the worker's restart keeps it.
+    await answering(r.s, r.s.controller.restart(w.id));
+    assert.equal(r.s.controller.get(w.id)!.mode, 'bypassPermissions', 'kept while the parent is in Bypass');
+    // The parent out of Bypass with the worker still in it (only the row, so no cascade runs): the restart's keep asks the parent and drops it.
+    new ChatStore(r.s.store).patchSession(lead, { mode: 'default' });
+    await answering(r.s, r.s.controller.restart(w.id));
+    assert.notEqual(r.s.controller.get(w.id)!.mode, 'bypassPermissions');
+    const left = r.s.controller.audit({ kind: 'bypass.left' }).find((x) => x.sessionId === w.id)!;
+    assert.deepEqual([left.detail.why, left.detail.how], ['parent_not_bypass', 'restart']);
+  } finally {
+    await r.done();
+  }
+});
+
+test('PILOT-997 review 42957: Keep going’s new chat of a chat that ran in dontAsk or Plan keeps that mode, not Auto', async () => {
+  const s = await liveSession();
+  try {
+    s.controller.autonomousAuto = () => true;
+    const before = s.ws.tails.length;
+    const first = await answering(s, s.controller.create({ workspaceId: 'docker/ws1', title: 'Run' }, { actor: 'portal:trigger-abc' }));
+    await until(() => s.ws.tails.length === before + 1);
+    await answering(s, until(() => s.controller.get(first.id)?.mode === 'auto', 3000));
+    await answering(s, s.controller.control(first.id, 'mode', { mode: 'dontAsk' }, { actor: 'portal' }));
+    assert.equal(s.controller.get(first.id)!.mode, 'dontAsk');
+    await s.controller.end(first.id);
+    const n = s.ws.tails.length;
+    const next = await answering(s, s.controller.create({ workspaceId: 'docker/ws1', title: 'Run', continuedFrom: first.id }, { actor: KEEPGOING_ACTOR }));
+    await until(() => s.ws.tails.length === n + 1);
+    await answering(s, until(() => s.controller.get(next.id)?.mode === 'dontAsk', 3000));
+    await sleep(50);
+    assert.equal(s.controller.get(next.id)!.mode, 'dontAsk');
+    assert.equal(s.controller.audit({ kind: 'mode.auto' }).filter((x) => x.sessionId === next.id).length, 0);
+  } finally {
+    await s.done();
+  }
+});
+
 test('PILOT-997: a new session no person started starts in Auto while “Auto for agents” is on; a person’s own and a worker do not', async () => {
   const s = await liveSession();
   try {
