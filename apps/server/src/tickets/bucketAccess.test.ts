@@ -112,7 +112,7 @@ test('tools: every ticket tool takes the key and the old id; ticket_create picks
 
     const made = await call('ticket_create', { summary: 'by tool', bucket: 'cp' });
     assert.equal(made.isError, undefined, JSON.stringify(made));
-    assert.equal(made.structuredContent.summary, 'Created CP-1 (T-1).');
+    assert.equal(made.structuredContent.summary, 'Created CP-1 (T-1) in CP (named).', 'T-2881: the summary names the bucket and why');
     assert.deepEqual([made.structuredContent.ticket.key, made.structuredContent.ticket.bucket], ['CP-1', 'CP']);
 
     for (const id of ['T-1', 'CP-1', 'cp-1']) assert.equal((await call('ticket_get', { id })).structuredContent.ticket.id, 'T-1', id);

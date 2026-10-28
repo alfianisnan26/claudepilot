@@ -135,7 +135,32 @@ export const TICKET_SETTING_KEYS = {
   agentAssignUserTags: 'tickets.agentAssignUserTags',
   /** FR9g (D-85): groups of lead sessions that may comment on each other's tickets: groups split by `;`, session ids by `,`. Owner only. */
   leadPeerGroups: 'tickets.leadPeerGroups',
+  /**
+   * T-2881: which bucket a ticket filed without one goes to, by its tags: rules split by `;`, each `KEY: tag, tag, prefix-*`. An exact tag
+   * beats a `prefix-*` pattern; two buckets tied on the stronger kind decide nothing. Owner only (the settings route).
+   */
+  bucketRoutes: 'tickets.bucketRoutes',
 } as const;
+
+/**
+ * T-2881: the routes the portal ships with. `claudepilot` or `program-claudepilot` keeps the portal's own tickets (which carry `area-*` tags too) in PILOT; Konfersi's
+ * `konfersi-migration` and `area-*` go to KONF; the trading lab's `tradingbot` to TB. A rule naming a bucket that does not exist is skipped.
+ */
+export const TICKET_BUCKET_ROUTES_DEFAULT = 'PILOT: claudepilot, program-claudepilot; KONF: konfersi-migration, area-*; TB: tradingbot';
+
+/**
+ * T-2881: why a new ticket went to its bucket. `named` the request said so; `tags` a `tickets.bucketRoutes` rule matched its tags; `parent`
+ * the bucket of the ticket named as its parent; `workspace` the one bucket whose default workspace is the ticket's; `session_ticket` and
+ * `lead_ticket` the bucket of the ticket the filing session, then its lead, works on; `default` {@link TICKET_DEFAULT_BUCKET}.
+ */
+export type TicketBucketReason = 'named' | 'tags' | 'parent' | 'workspace' | 'session_ticket' | 'lead_ticket' | 'default';
+
+export interface TicketBucketChoice {
+  bucket: string;
+  reason: TicketBucketReason;
+  /** One line for the caller: the rule, tag or ticket that decided it. */
+  why: string;
+}
 
 export type TicketEventKind =
   | 'created'
@@ -379,10 +404,13 @@ export interface TicketFilter {
 
 export interface CreateTicketRequest {
   /**
-   * T-1098: the bucket (`KONF`). Left out: the bucket whose default workspace is the ticket's (or the agent's) workspace, else the bucket of the
-   * ticket the calling session or its lead works on, else {@link TICKET_DEFAULT_BUCKET}.
+   * T-1098: the bucket (`KONF`). Left out (T-2881), in this order: the bucket a `tickets.bucketRoutes` rule gives the tags; the `parent`
+   * ticket's bucket; the bucket whose default workspace is the ticket's (or the agent's) workspace; the bucket of the ticket the calling
+   * session, then its lead, works on; else {@link TICKET_DEFAULT_BUCKET}. See {@link TicketBucketReason}.
    */
   bucket?: string;
+  /** T-2881: the epic or parent ticket (`T-12` or `KONF-3`); only its bucket is used, when no bucket is named. One the caller cannot see is ignored. */
+  parent?: string;
   summary: string;
   description?: string;
   type?: TicketType;

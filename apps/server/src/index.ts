@@ -544,6 +544,8 @@ const tickets = new Tickets(store, new ChatTicketSessions(chatController), {
   agentOpenPerWorkspace: () => settingsModule.settings.get<number>(TICKET_SETTING_KEYS.agentOpenPerWorkspace),
   agentAssignUserTags: () => settingsModule.settings.get<string>(TICKET_SETTING_KEYS.agentAssignUserTags),
   leadPeerGroups: () => settingsModule.settings.get<string>(TICKET_SETTING_KEYS.leadPeerGroups),
+  // T-2881: a ticket filed without a bucket goes where its tags say, read each call.
+  bucketRoutes: () => settingsModule.settings.get<string>(TICKET_SETTING_KEYS.bucketRoutes),
   // T-2014 (FR36e), D-99: who may record ticket_merge_status: every lead of the flow programs' groups (and their workers), read each call.
   mergeGates: () => mergeRecordersOf(flowProgramsRaw(settingsModule.settings), settingsModule.settings.get<string>(TICKET_SETTING_KEYS.leadPeerGroups)),
 });

@@ -88,6 +88,7 @@ export async function ticketsHarness(
     agentOpenPerWorkspace?: () => number;
     agentAssignUserTags?: () => string;
     mergeGates?: TicketsOptions['mergeGates'];
+    bucketRoutes?: TicketsOptions['bucketRoutes'];
   } = {},
 ) {
   const dataDir = mkdtempSync(join(tmpdir(), 'cp-tickets-'));
@@ -100,6 +101,7 @@ export async function ticketsHarness(
     agentOpenPerWorkspace: opts.agentOpenPerWorkspace,
     agentAssignUserTags: opts.agentAssignUserTags,
     mergeGates: opts.mergeGates,
+    bucketRoutes: opts.bucketRoutes,
   });
   tickets.start();
   let changes = 0;

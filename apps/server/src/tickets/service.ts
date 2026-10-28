@@ -1,6 +1,7 @@
 import { AppError } from '@isnanme/core';
 import { can } from '../authz/seam.js';
 import type { WorkspaceRefs } from '../workspaces/identity.js';
+import { parseBucketRoutes, routeByTags } from './bucketRoutes.js';
 import {
   BUMP_PRIORITY,
   TICKET_ATTACHMENT_LIMITS,
@@ -33,6 +34,7 @@ import {
   type TicketBucketMove,
   type TicketBucketMoveResult,
   type TicketBucket,
+  type TicketBucketChoice,
   type UpdateTicketBucketRequest,
   type BumpRequest,
   type BumpTarget,
@@ -318,6 +320,8 @@ export interface TicketsOptions {
    * (flow/programs.ts `mergeGatesOf`). Absent or empty: nobody may record a merge status.
    */
   mergeGates?: () => { tag: string; gates: string[] }[];
+  /** T-2881: `tickets.bucketRoutes`, the tag rules for a ticket filed without a bucket. Absent: no rules (tests); index.ts wires the setting. */
+  bucketRoutes?: () => unknown;
 }
 
 /** One move the orphan sweep made (T-270 layer 3): where the ticket went and why. `to` null: back in the agents' queue. */
@@ -389,6 +393,7 @@ export class Tickets {
   readonly #agentAssignUserTags: () => string;
   readonly #leadPeerGroups: () => unknown;
   readonly #mergeGates: () => { tag: string; gates: string[] }[];
+  readonly #bucketRoutes: () => unknown;
   #orphans: { lastRunAt: string | null; dead: Record<string, string> } | null = null;
 
   constructor(
@@ -404,6 +409,7 @@ export class Tickets {
     this.#agentAssignUserTags = opts.agentAssignUserTags ?? (() => AGENT_ASSIGN_USER_TAGS_DEFAULT);
     this.#leadPeerGroups = opts.leadPeerGroups ?? (() => '');
     this.#mergeGates = opts.mergeGates ?? (() => []);
+    this.#bucketRoutes = opts.bucketRoutes ?? (() => '');
   }
 
   /* ---------- The workspace column (T-42 slice 3): written as the stable id, read as the key, matched in either form ---------- */
@@ -1769,6 +1775,11 @@ export class Tickets {
   }
 
   create(caller: Caller, req: Partial<CreateTicketRequest>, opts: { sessionId?: string | null } = {}): TicketItem {
+    return this.createExplained(caller, req, opts).ticket;
+  }
+
+  /** {@link create}, and which bucket it went to and why (T-2881: `ticket_create` says so). */
+  createExplained(caller: Caller, req: Partial<CreateTicketRequest>, opts: { sessionId?: string | null } = {}): { ticket: TicketItem; bucket: TicketBucketChoice } {
     this.#assertWrites(caller);
     const w = this.#writer(caller, opts.sessionId);
     const summary = cleanLine(req.summary, 'summary', TICKET_LIMITS.summary);
@@ -1781,7 +1792,7 @@ export class Tickets {
     let workspaceId = caller.kind === 'agent' ? caller.workspaceId : workspaceIdOf(req.workspaceId);
     if (assignee?.kind === 'session') workspaceId = assignee.session.workspaceId;
     // T-1098: the bucket, named or found; its default workspace when nothing named one, and its default tags.
-    const bucket = this.#bucketFor(caller, w, req.bucket, workspaceId);
+    const { row: bucket, choice } = this.#bucketFor(caller, w, req.bucket, workspaceId, given, req.parent);
     if (workspaceId === null && req.workspaceId === undefined && bucket.default_workspace_id) workspaceId = this.#bucketWorkspace(bucket);
     const tags = cleanTags([...new Set([...given, ...(JSON.parse(bucket.default_tags) as string[])])].slice(0, TICKET_LIMITS.tags));
     const assignedAudit = this.#assertAgentAssign(caller, w, {
@@ -1833,7 +1844,7 @@ export class Tickets {
         );
       const n = Number(r.lastInsertRowid);
       this.#setTags(n, tags);
-      this.#addEvent(n, 'created', w, null, { type, priority, tags, workspaceId, source, bucket: bucket.key });
+      this.#addEvent(n, 'created', w, null, { type, priority, tags, workspaceId, source, bucket: bucket.key, bucketReason: choice.reason });
       if (assignee)
         this.#addEvent(n, 'assigned', w, null, {
           from: null,
@@ -1845,7 +1856,7 @@ export class Tickets {
     this.#auditAssignedPerson(assignedAudit, ticketIdOf(number));
     this.#auditChecklistTagged(checklistAudit, ticketIdOf(number));
     this.onChange?.();
-    return this.#items([this.#row(number)!])[0]!;
+    return { ticket: this.#items([this.#row(number)!])[0]!, bucket: choice };
   }
 
   update(caller: Caller, id: string, req: Partial<UpdateTicketRequest>, opts: { sessionId?: string | null } = {}): TicketItem {
@@ -2166,32 +2177,58 @@ export class Tickets {
   }
 
   /**
-   * The bucket a new ticket goes in: the one named (refused as not found when it does not exist or is not the agent's); else the one bucket whose
-   * default workspace is the ticket's workspace; else the bucket of the ticket the calling session, then its lead, works on; else PILOT.
+   * The bucket a new ticket goes in, and why (T-2881): the one named (refused as not found when it does not exist or is not the agent's); else
+   * the one bucket a `tickets.bucketRoutes` rule gives the ticket's own tags; else the parent ticket's bucket (one the caller can see); else the
+   * one bucket whose default workspace is the ticket's workspace; else the bucket of the ticket the calling session, then its lead, works on;
+   * else PILOT. The tag, parent and session/lead ticket guesses skip a bucket the caller may not file in (`#bucketOpenTo`); the workspace guess
+   * finds only a bucket whose default workspace is the ticket's own, and PILOT is not checked.
    */
-  #bucketFor(caller: Caller, w: Writer, raw: unknown, workspaceId: string | null): BucketRow {
+  #bucketFor(caller: Caller, w: Writer, raw: unknown, workspaceId: string | null, tags: string[], parent: unknown): { row: BucketRow; choice: TicketBucketChoice } {
+    const pick = (row: BucketRow, reason: TicketBucketChoice['reason'], why: string) => ({ row, choice: { bucket: row.key, reason, why } });
     if (raw !== undefined && raw !== null && raw !== '') {
       if (typeof raw !== 'string') throw invalid('bucket', 'A bucket is its key, like KONF.');
       const b = this.#bucketRow(raw.trim().toUpperCase());
       if (!b || !this.#bucketOpenTo(caller, b)) throw noBucket();
-      return b;
+      return pick(b, 'named', `${b.key}: named in the request.`);
+    }
+    const usable = (key: string) => {
+      const b = this.#bucketRow(key);
+      return b && this.#bucketOpenTo(caller, b) ? b : undefined;
+    };
+    let routes: ReturnType<typeof parseBucketRoutes> = [];
+    try {
+      routes = parseBucketRoutes(this.#bucketRoutes());
+    } catch {
+      // the setting could not be read: no tag rules
+    }
+    const hit = routeByTags(routes, tags, (k) => !!usable(k));
+    if (hit) return pick(usable(hit.bucket)!, 'tags', `${hit.bucket}: tag ${hit.tag} matches its rule ${hit.rule} (tickets.bucketRoutes).`);
+    if (typeof parent === 'string' && parent.trim()) {
+      const n = this.#numberOf(parent.trim());
+      const row = n === null ? undefined : this.#row(n);
+      const b = row && this.#visible(caller, row) ? usable(row.bucket_key) : undefined;
+      if (b && row) return pick(b, 'parent', `${b.key}: the bucket of the parent ${ticketIdOf(row.number)}.`);
     }
     if (workspaceId) {
       const one = this.#inWorkspace('default_workspace_id', workspaceId);
       const rows = this.#db.prepare(`SELECT * FROM ticket_buckets WHERE ${one.sql} ORDER BY key LIMIT 2`).all(...one.args) as unknown as BucketRow[];
-      if (rows.length === 1) return rows[0]!;
+      if (rows.length === 1) return pick(rows[0]!, 'workspace', `${rows[0]!.key}: the bucket of the workspace ${workspaceId}.`);
     }
     const s = w.session;
     const lead = s?.parentId ? this.sessions.get(s.parentId) : null;
-    for (const x of [s, lead]) {
+    for (const [x, reason] of [
+      [s, 'session_ticket'],
+      [lead, 'lead_ticket'],
+    ] as const) {
       const n = x?.ticketId ? this.#numberOf(x.ticketId) : null;
       const row = n === null ? undefined : this.#row(n);
       const b = row ? this.#bucketRow(row.bucket_key) : undefined;
-      if (b && this.#bucketOpenTo(caller, b)) return b;
+      if (b && row && this.#bucketOpenTo(caller, b))
+        return pick(b, reason, `${b.key}: the bucket of ${ticketIdOf(row.number)}, the ticket ${reason === 'session_ticket' ? 'this session' : 'its lead'} works on.`);
     }
     const fallback = this.#bucketRow(TICKET_DEFAULT_BUCKET);
     if (!fallback) throw noBucket();
-    return fallback;
+    return pick(fallback, 'default', `${fallback.key}: nothing else decided (no bucket, tag rule, parent, workspace or session ticket).`);
   }
 
   #bucketView(b: BucketRow, open: number, total?: number): TicketBucket {
