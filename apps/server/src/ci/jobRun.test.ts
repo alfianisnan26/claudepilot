@@ -1628,7 +1628,7 @@ test('T-426 --pool-env refusals, before any kubectl call: a name outside E2E_CF_
     [
       ['--pool-env', 'GITHUB_TOKEN'],
       { GITHUB_TOKEN: val },
-      /--pool-env: refused: not an allowed name \(E2E_CF_ACCESS_\*, E2E_QA_EMAIL, E2E_QA_PASSWORD, E2E_QA2_EMAIL, E2E_QA2_PASSWORD, E2E_QA3_EMAIL, E2E_QA3_PASSWORD, E2E_STAFF_EMAIL, E2E_STAFF_PASSWORD, E2E_STAFF2_EMAIL, E2E_STAFF2_PASSWORD, E2E_TURNSTILE_TOKEN\)/,
+      /--pool-env: refused: not an allowed name \(E2E_CF_ACCESS_\*, E2E_QA_EMAIL, E2E_QA_PASSWORD, E2E_QA2_EMAIL, E2E_QA2_PASSWORD, E2E_QA3_EMAIL, E2E_QA3_PASSWORD, E2E_STAFF_EMAIL, E2E_STAFF_PASSWORD, E2E_STAFF2_EMAIL, E2E_STAFF2_PASSWORD, E2E_TURNSTILE_TOKEN, KONEVIRO_S3_RO_ACCESS_KEY_ID, KONEVIRO_S3_RO_SECRET_ACCESS_KEY\)/,
     ],
     // T-2294: the QA3, staff and Turnstile names exactly, nothing near them.
     [['--pool-env', 'E2E_QA4_EMAIL'], { E2E_QA4_EMAIL: val }, /not an allowed name/],
