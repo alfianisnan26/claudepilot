@@ -1787,3 +1787,27 @@ test('T-2099 running scripts/cf-logs.sh is allowed; its old `> 7 *` comparison w
   writeFileSync(join(R.repo, 'scripts', 'cf-logs-old.sh'), old, { mode: 0o755 });
   refused(bash('scripts/cf-logs-old.sh --since 1h'), 'the old comparison');
 });
+
+// T-2865: S2 put the Secrets env drop-in's path into scripts/job-run.sh, which writes files, and the live guard refused every lane's
+// job-run (reverted in dc52db7c). The drop-in is now read by scripts/pool-env-names.sh, which only reads. This is the check that would
+// have caught it: the guard on the real scripts, by the absolute path the lanes use and with bash; and the old line, put back, refused.
+test('T-2865 the guard lets lanes run the real scripts/job-run.sh and scripts/pool-env-names.sh; job-run.sh naming the drop-in is refused', () => {
+  const scripts = join(dirname(fileURLToPath(import.meta.url)), '../../../../scripts');
+  const jobRun = join(scripts, 'job-run.sh');
+  const helper = join(scripts, 'pool-env-names.sh');
+  const dropin = '/etc/claude-code/managed-settings.d/20-claudepilot-env.json';
+  assert.ok(readFileSync(helper, 'utf8').includes(dropin), 'the helper names the drop-in (else this test proves nothing)');
+  allowed(bash(`${jobRun} --list`), 'job-run.sh by its absolute path');
+  allowed(bash(`bash ${jobRun} --list`), 'bash job-run.sh');
+  allowed(bash(`${helper}`), 'pool-env-names.sh by its absolute path');
+  allowed(bash(`bash ${helper}`), 'bash pool-env-names.sh');
+  // The helper may name the drop-in only while it writes nothing: a redirect added to it is refused.
+  writeFileSync(join(R.repo, 'scripts', 'pool-env-names-w.sh'), readFileSync(helper, 'utf8') + 'echo x > /tmp/names\n', { mode: 0o755 });
+  refused(bash('scripts/pool-env-names-w.sh'), 'the helper with a write');
+  // S2's line, put back into job-run.sh: refused, as the live guard did.
+  const old = readFileSync(jobRun, 'utf8').replace('pool_denied() {', `pool_dropin=${dropin}\npool_denied() {`);
+  assert.ok(old.includes(`pool_dropin=${dropin}`), 'the line is in the mutant');
+  writeFileSync(join(R.repo, 'scripts', 'job-run-old.sh'), old, { mode: 0o755 });
+  refused(bash('scripts/job-run-old.sh --list'), 'job-run.sh naming the drop-in');
+  refused(bash('bash scripts/job-run-old.sh --list'), 'bash job-run.sh naming the drop-in');
+});

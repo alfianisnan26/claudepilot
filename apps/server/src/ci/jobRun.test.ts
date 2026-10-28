@@ -163,18 +163,20 @@ const WORLD_DELIVERED = [
 ];
 const poolDropin = (names: string[]) =>
   JSON.stringify({ env: Object.fromEntries(names.map((n) => [n, 'filler'])), permissions: { deny: [] } });
-// The script's drop-in path is fixed (no variable overrides it: review 42840), so a test runs a scratch copy of the two files with
-// that one line pointing at its fixture.
-const DROPIN_LINE = 'pool_dropin=/etc/claude-code/managed-settings.d/20-claudepilot-env.json\n';
+// The drop-in path is fixed in the read-only helper (no variable overrides it: review 42840; job-run.sh never names it: T-2865), so a
+// test runs a scratch copy of the script, its helper and the template, with the helper's one line pointing at its fixture.
+const NAMES_HELPER = join(REPO, 'scripts/pool-env-names.sh');
+const DROPIN_LINE = 'dropin=/etc/claude-code/managed-settings.d/20-claudepilot-env.json\n';
 function scriptWithDropin(dropin: string) {
   const dir = mkdtempSync(join(tmpdir(), 'cp-jobrun-pool-'));
   roots.push(dir);
   mkdirSync(join(dir, 'scripts'));
   mkdirSync(join(dir, 'deploy/k3s-build'), { recursive: true });
   writeFileSync(join(dir, 'deploy/k3s-build/job-run.yaml'), readFileSync(TEMPLATE, 'utf8'));
-  const src = readFileSync(SCRIPT, 'utf8');
-  assert.equal(src.split(DROPIN_LINE).length, 2, 'the script names the drop-in path on exactly one line');
-  writeFileSync(join(dir, 'scripts/job-run.sh'), src.replace(DROPIN_LINE, `pool_dropin=${dropin}\n`));
+  writeFileSync(join(dir, 'scripts/job-run.sh'), readFileSync(SCRIPT, 'utf8'));
+  const src = readFileSync(NAMES_HELPER, 'utf8');
+  assert.equal(src.split(DROPIN_LINE).length, 2, 'the helper names the drop-in path on exactly one line');
+  writeFileSync(join(dir, 'scripts/pool-env-names.sh'), src.replace(DROPIN_LINE, `dropin=${dropin}\n`));
   return join(dir, 'scripts/job-run.sh');
 }
 

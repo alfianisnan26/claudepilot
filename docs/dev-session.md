@@ -198,7 +198,8 @@ scripts/job-run.sh --repo konfersi:<org>/<repo> --ref <branch> --image registry.
   `scripts/job-run.sh --pool-env E2E_CF_ACCESS_CLIENT_ID --pool-env E2E_CF_ACCESS_CLIENT_SECRET -- 'scripts/e2e-stg.sh'`. Since PILOT-998
   (decision PILOT-996 #42754) there is no fixed list: a name is accepted when it is a variable name (`[A-Z][A-Z0-9_]*`), it is not on the
   deny-list, and this workspace's Secrets pool delivers it as env (a key of the env drop-in
-  `/etc/claude-code/managed-settings.d/20-claudepilot-env.json`; only the key names are read). The deny-list, refused even when delivered,
+  `/etc/claude-code/managed-settings.d/20-claudepilot-env.json`; only the key names are read, by the read-only helper
+  `scripts/pool-env-names.sh`, so job-run.sh, which writes files, never names a rule file and the rule guard lets it run, T-2865). The deny-list, refused even when delivered,
   "needs a person's approval (PILOT-1000)": `*_RW_*`, `*ADMIN*`, `*PROD*`, `*_PRD_*`, `CLOUDFLARE_API_TOKEN`, `GITEA_*`, `GITHUB_*`,
   `*_MASTER_*`, and the same words at a name's start or end (`*_RW`, `RW_*`, `*_PRD`, `PRD_*`, `*_MASTER`, `MASTER_*`) plus the runner's
   and the portal's own tokens (`GH_*`, `NODE_AUTH_TOKEN`, `ANTHROPIC_*`, `CLAUDE_*`, `CLAUDEPILOT_*`, `PILOT_*`). A name the pool does not
