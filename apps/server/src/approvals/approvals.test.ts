@@ -184,7 +184,12 @@ test('the MCP tools: an agent asks for itself and sees only its own requests; an
   const registry = new ToolRegistry();
   registerApprovalTools(h.approvals, registry);
   const ctx = (sessionId: string | null, isAgent = true) =>
-    ({ isAgent, sessionId, workspaceId: 'docker/ws1', untrusted: (t: string | null | undefined) => (t ? { untrusted_text: t } : null), affected: () => undefined }) as never;
+    ({
+      isAgent,
+      sessionId,
+      workspaceId: 'docker/ws1',
+      principal: { kind: isAgent ? 'agent' : 'user', userId: FOUNDING_USER_ID, tokenId: 'tk-test', scope: 'operate', workspaceId: 'docker/ws1', sessionId },
+      untrusted: (t: string | null | undefined) => (t ? { untrusted_text: t } : null), affected: () => undefined }) as never;
   const call = (name: string, c: never, args: Record<string, unknown>) => Promise.resolve().then(() => registry.get(name)!.handler(c, registry.get(name)!.input.parse(args) as never));
   const mine = (await call('approval_request', ctx('s-a'), { kind: 'test.echo', payload: { text: 'hi' }, reason: 'please' })) as { approval: { id: string; status: string } };
   assert.equal(mine.approval.status, 'pending');
