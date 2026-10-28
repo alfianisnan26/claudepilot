@@ -79,6 +79,7 @@ spec:
             - {name: JR_REPO_URL, value: "__REPO_URL__"}
             - {name: JR_REF, value: "__REF__"}
             - {name: JR_ALSO, value: "__ALSO__"}
+            - {name: JR_LAYOUT, value: "__LAYOUT__"}
             - {name: JR_STEPS, value: "__STEPS__"}
             - {name: JR_AGAINST, value: "__AGAINST__"}
             - {name: NODE_AUTH_TOKEN, valueFrom: {secretKeyRef: {name: __NAME__, key: node-auth-token, optional: true}}}
@@ -171,8 +172,11 @@ spec:
                 [ ! -f "$1/.npmrc.t401" ] || mv "$1/.npmrc.t401" "$1/.npmrc"
                 return $r
               }
+              # The folders that install: each --also clone and the repository; with --deploy-layout (T-2865) the repository alone, as
+              # stg-deploy lays them out (a sibling without node_modules). The run part below uses the same list.
+              installs() { [ "${JR_LAYOUT:-}" = deploy ] || for a in $JR_ALSO; do echo "${a%%=*}"; done; echo "$main"; }
               if [ "$JR_STEPS" = npm-ci ]; then
-                for d in $(for a in $JR_ALSO; do echo "${a%%=*}"; done) "$main"; do npmci "$root/w/$d" "$d"; done
+                for d in $(installs); do npmci "$root/w/$d" "$d"; done
                 # Another lockfile on the other ref: its packages into npm's cache now, so the run container installs them offline.
                 if git -C "$root/w/$main" rev-parse -q --verify refs/job-run/against >/dev/null \
                   && ! git -C "$root/w/$main" diff --quiet HEAD refs/job-run/against -- package-lock.json; then
@@ -215,6 +219,7 @@ spec:
             - {name: JR_REPO_URL, value: "__REPO_URL__"}
             - {name: JR_REF, value: "__REF__"}
             - {name: JR_ALSO, value: "__ALSO__"}
+            - {name: JR_LAYOUT, value: "__LAYOUT__"}
             - {name: JR_STEPS, value: "__STEPS__"}
             - {name: JR_ARTIFACTS, value: "__ARTIFACTS__"}
             - {name: JR_ARTIFACT_MAX, value: "__ARTMAX__"}
@@ -255,8 +260,10 @@ spec:
                 (cd "$1" && npm rebuild --no-audit --no-fund --loglevel=error && for s in $(lifecycle); do npm run --ignore-scripts --loglevel=error "$s" || exit; done) && return 0
                 rc=$?; say "install scripts failed in $2 (rc=$rc)"; say "EXIT $rc"; exit "$rc"
               }
+              # The same folders as fetch's npm ci (--deploy-layout: the repository alone, T-2865).
+              installs() { [ "${JR_LAYOUT:-}" = deploy ] || for a in $JR_ALSO; do echo "${a%%=*}"; done; echo "$main"; }
               if [ "$JR_STEPS" = npm-ci ]; then
-                for d in $(for a in $JR_ALSO; do echo "${a%%=*}"; done) "$main"; do installscripts "$root/w/$d" "$d"; done
+                for d in $(installs); do installscripts "$root/w/$d" "$d"; done
               fi
               t2=$(date +%s); say "steps ($JR_STEPS) in $((t2 - t1))s; running the command"
               cd "$root/w/$main" && printf '%s' "$JR_CMD" | base64 -d > "$root/cmd.sh"

@@ -150,6 +150,7 @@ after it ends), so the pod's flock queue is only for what must run in the pod:
 git push origin HEAD:wip/<name>                                              # the Job clones what is on the remote, nothing local
 scripts/job-run.sh -- 'cd apps/server && node --import tsx --test src/ci/jobRun.test.ts'
 scripts/job-run.sh --repo konfersi:platform/konfersi-backend --ref <branch> --also platform/konfersi-shared -- 'npx vitest run'   # platform/, not the manifest's stale shared/
+scripts/job-run.sh --repo konfersi:platform/<app> --ref <commit> --also platform/konfersi-shared@stg --deploy-layout -- '<build>'   # T-2865: the sibling gets no npm ci (no node_modules), as stg-deploy lays it out; only the app installs
 scripts/job-run.sh --artifacts test-results --out /tmp/cp-shots -- 'npx playwright test'   # files back, at most 4 MiB compressed
 # Scripts that rewrite the checkout (tools/qa/rtk-history.sh, rtk-classes.sh, rtk-measure.sh, and the mutant runner rtk-guard-mutants.sh; T-736) refuse unless the Job's own env var JR_REPO_URL is set and the tree is clean.
 scripts/job-run.sh --list ; scripts/job-run.sh --stop --chat <session id>

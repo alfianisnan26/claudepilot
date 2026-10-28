@@ -631,7 +631,8 @@ session's result. With it, a Job that passed is saved, and the same work later r
 
 - **Key:** the SHA-256 of these, NUL-separated, in order: key version `v2`; the hash of `scripts/job-run.sh` and `deploy/k3s-build/job-run.yaml` together (a change
   to either, even a comment, is a miss); the resolved runner image reference (its tag); `--big`; the repository's clone URL; the full 40-hex commit; the exact
-  command (the single string, or the quoted words); `--against`; `--keep-tests`; the `--also` list with its refs; `--steps`. Not in it, because they do not change
+  command (the single string, or the quoted words); `--against`; `--keep-tests`; the `--also` list with its refs; `--steps`; `--deploy-layout` (T-2865: a pass with the `--also` clones installed is not one
+  without). Not in it, because they do not change
   what a pass means: `--timeout`, `--role`, the chat.
 - **Trust boundary:** the store is one workspace home. Any session in that workspace can write an entry, and a `--reuse` run from any session there trusts it.
   A result is evidence only as far as that is acceptable; the reuse line names the original Job and when it passed, so the evidence can be opened.

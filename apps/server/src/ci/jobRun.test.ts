@@ -927,6 +927,8 @@ test('usage errors: nothing is created', () => {
     // T-491: the Event token is for that one repository; no second one rides along.
     [['--repo', 'event', '--also', 'x/y', '--ref', 'main', '--', 'x'], /--also cannot be used with --repo event/],
     [['--also', 'x/y', '--repo', 'event', '--ref', 'main', '--', 'x'], /--also cannot be used with --repo event/],
+    // T-2865: --deploy-layout only changes the --also clones; without one it is a mistake, not a no-op.
+    [['--repo', 'claudepilot', '--ref', 'main', '--deploy-layout', '--', 'x'], /--deploy-layout needs --also/],
   ];
   for (const [argv, re] of cases) {
     const r = w.run(argv);
@@ -1466,6 +1468,55 @@ test("the Job's own script: the proof (passes on the ref, fails on the other, ke
   assert.equal(readFileSync(got, 'utf8'), `${poolVal}|unset\n`, 'the command gets the name, and the JR_POOL_ form is gone');
   assert.match(readFileSync(seen, 'utf8'), /^(unset\|unset\n)+$/, 'npm (and its lifecycle scripts) see neither');
   assert.ok(!text(pooled).includes(poolVal), 'the value is not printed');
+});
+
+test("T-2865 the Job's own script: --deploy-layout installs the repository alone (the --also clone has no npm step, no node_modules); without it both install", () => {
+  const root = mkdtempSync(join(tmpdir(), 'cp-jobrun-layout-'));
+  roots.push(root);
+  const env0 = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
+  const git = (args: string[], cwd: string) =>
+    spawnSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', ...args], { cwd, encoding: 'utf8', env: env0 });
+  for (const name of ['claudepilot', 'shared']) {
+    const src = join(root, `${name}-src`);
+    mkdirSync(src);
+    git(['init', '-q', '-b', 'main'], src);
+    writeFileSync(join(src, 'package.json'), '{}');
+    writeFileSync(join(src, 'package-lock.json'), '{}');
+    git(['add', '.'], src);
+    git(['commit', '-qm', name], src);
+    git(['clone', '-q', '--bare', src, join(root, `${name}.git`)], root);
+  }
+  // A fake npm: which folder it ran in, and the subcommand; npm ci leaves a node_modules.
+  const bin = join(root, 'bin');
+  mkdirSync(bin);
+  const calls = join(root, 'npm.calls');
+  writeFileSync(join(bin, 'npm'), `#!/bin/sh\necho "$(basename "$PWD") $1" >> "${calls}"\n[ "$1" != ci ] || mkdir -p node_modules\n`);
+  chmodSync(join(bin, 'npm'), 0o755);
+  const pod = (layout: string) => {
+    rmSync(calls, { force: true });
+    const jr = join(root, `run-${hex(3)}`);
+    const r = runPod(TEMPLATE, {
+      PATH: `${bin}:${process.env.PATH}`,
+      JR_ROOT: jr,
+      JR_REPO_URL: `file://${join(root, 'claudepilot.git')}`,
+      JR_REF: 'main',
+      JR_ALSO: `shared=file://${join(root, 'shared.git')}@main`,
+      JR_LAYOUT: layout,
+      JR_STEPS: 'npm-ci',
+      JR_ARTIFACTS: '',
+      JR_ARTIFACT_MAX: '1',
+      JR_CMD: Buffer.from('test -f ../shared/package.json').toString('base64'),
+      NODE_NAME: 'k3s-master',
+    });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    return { calls: readFileSync(calls, 'utf8'), sharedModules: existsSync(join(jr, 'w/shared/node_modules')) };
+  };
+  const deploy = pod('deploy');
+  assert.equal(deploy.calls, 'claudepilot ci\nclaudepilot rebuild\n', 'only the repository installs');
+  assert.equal(deploy.sharedModules, false, 'the --also clone is there, as stg-deploy lays it out: no node_modules');
+  const plain = pod('');
+  assert.equal(plain.calls, 'shared ci\nclaudepilot ci\nshared rebuild\nclaudepilot rebuild\n', 'without it nothing changes: both install');
+  assert.equal(plain.sharedModules, true);
 });
 
 test('T-365: job-run and gate Jobs prefer a node away from the portal (preferred: a required rule left every Job Pending)', () => {
@@ -2906,7 +2957,12 @@ test('T-731 reuse: a changed commit, command, steps, --against, --also, the hash
   miss('--steps none', go(w, c, 'npm test', ['--steps', 'none']));
   miss('--against', go(w, c, 'npm test', ['--against', sha()]));
   miss('--keep-tests', go(w, c, 'npm test', ['--against', sha(), '--keep-tests', 'a.test.ts']));
-  miss('--also at a commit', go(w, c, 'npm test', ['--also', `org/shared@${sha()}`]));
+  const shared = `org/shared@${sha()}`;
+  miss('--also at a commit', go(w, c, 'npm test', ['--also', shared]));
+  // T-2865: a pass made with the --also clone installed never stands for one without (or the other way round).
+  miss('--deploy-layout', go(w, c, 'npm test', ['--also', shared, '--deploy-layout']));
+  assert.match(go(w, c, 'npm test', ['--also', shared, '--deploy-layout']).out, /reused a passed result/, '--deploy-layout is keyed: a hit');
+  assert.match(go(w, c, 'npm test', ['--also', shared]).out, /reused a passed result/, 'the run without it is still its own hit');
   const upgraded = mutant(
     (y) => `${y}# a newer runner\n`,
     (s) => s,
