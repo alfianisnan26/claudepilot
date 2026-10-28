@@ -163,6 +163,20 @@ const WORLD_DELIVERED = [
 ];
 const poolDropin = (names: string[]) =>
   JSON.stringify({ env: Object.fromEntries(names.map((n) => [n, 'filler'])), permissions: { deny: [] } });
+// The script's drop-in path is fixed (no variable overrides it: review 42840), so a test runs a scratch copy of the two files with
+// that one line pointing at its fixture.
+const DROPIN_LINE = 'pool_dropin=/etc/claude-code/managed-settings.d/20-claudepilot-env.json\n';
+function scriptWithDropin(dropin: string) {
+  const dir = mkdtempSync(join(tmpdir(), 'cp-jobrun-pool-'));
+  roots.push(dir);
+  mkdirSync(join(dir, 'scripts'));
+  mkdirSync(join(dir, 'deploy/k3s-build'), { recursive: true });
+  writeFileSync(join(dir, 'deploy/k3s-build/job-run.yaml'), readFileSync(TEMPLATE, 'utf8'));
+  const src = readFileSync(SCRIPT, 'utf8');
+  assert.equal(src.split(DROPIN_LINE).length, 2, 'the script names the drop-in path on exactly one line');
+  writeFileSync(join(dir, 'scripts/job-run.sh'), src.replace(DROPIN_LINE, `pool_dropin=${dropin}\n`));
+  return join(dir, 'scripts/job-run.sh');
+}
 
 function world(seeds: Seed[] = [], scenario: Scenario = {}) {
   const root = mkdtempSync(join(tmpdir(), 'cp-jobrun-'));
@@ -200,6 +214,8 @@ function world(seeds: Seed[] = [], scenario: Scenario = {}) {
   // PILOT-998: the fake Secrets env drop-in, the names this workspace's pool delivers (its values are never read by the script).
   const dropin = join(root, 'env-dropin.json');
   writeFileSync(dropin, poolDropin(WORLD_DELIVERED));
+  // run() with the real script runs the copy that reads this drop-in; a mutant passed in runs as it is.
+  const poolScript = scriptWithDropin(dropin);
   // UNSET as an override value leaves that variable out entirely (to test a script default that applies only when it is unset).
   const env = (over: Record<string, string> = {}): NodeJS.ProcessEnv =>
     withoutUnset({
@@ -221,7 +237,6 @@ function world(seeds: Seed[] = [], scenario: Scenario = {}) {
       NODE_AUTH_TOKEN: npmToken,
       PILOT_SESSION_ID: 'chat-a',
       PILOT_AGENT: 't107',
-      JOB_RUN_POOL_ENV_DROPIN: dropin,
       ...over,
     });
   const start = (argv: string[], over: Record<string, string> = {}) => {
@@ -234,7 +249,8 @@ function world(seeds: Seed[] = [], scenario: Scenario = {}) {
     return { p, done, out: () => out };
   };
   const run = (argv: string[], over: Record<string, string> = {}, script = SCRIPT) => {
-    const r = spawnSync('bash', [script, ...argv], { env: env(over), cwd: root, encoding: 'utf8', timeout: 30_000 });
+    const file = script === SCRIPT ? poolScript : script;
+    const r = spawnSync('bash', [file, ...argv], { env: env(over), cwd: root, encoding: 'utf8', timeout: 30_000 });
     return { code: r.status, out: r.stdout + r.stderr };
   };
   const state = () =>
@@ -1674,10 +1690,19 @@ test('PILOT-998 --pool-env: any name the Secrets pool delivers is accepted (the 
   writeFileSync(dropin, poolDropin([...WORLD_DELIVERED, custom, ...deny]));
   const vals: Record<string, string> = {};
   for (const n of [custom, 'KONEVIRO_S3_RO_ACCESS_KEY_ID', 'KONEVIRO_S3_RO_SECRET_ACCESS_KEY', ...deny]) vals[n] = `v${hex(12)}`;
-  const over = { ...vals, JOB_RUN_POOL_ENV_DROPIN: dropin };
+  const over = vals;
+  const script = scriptWithDropin(dropin);
+  // Review 42840: no variable moves the drop-in. A caller's JOB_RUN_POOL_ENV_DROPIN naming a file that delivers the name is ignored:
+  // world's own drop-in (which does not deliver it) is what the script reads.
+  const moved = w.run(['--repo', 'claudepilot', '--ref', 'main', '--pool-env', custom, '--', 'true'], {
+    ...over,
+    JOB_RUN_POOL_ENV_DROPIN: dropin,
+  });
+  assert.equal(moved.code, 2, moved.out);
+  assert.match(moved.out, /not delivered as env by this workspace's Secrets pool/);
   // Refused first (before any kubectl call): each deny-listed name, delivered and set, with why and what to do; the name is not shown.
   for (const n of deny) {
-    const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--pool-env', n, '--', 'true'], over);
+    const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--pool-env', n, '--', 'true'], over, script);
     assert.equal(r.code, 2, `${n}: ${r.out}`);
     assert.match(
       r.out,
@@ -1689,7 +1714,7 @@ test('PILOT-998 --pool-env: any name the Secrets pool delivers is accepted (the 
   }
   // An undelivered name, set in the shell, built at runtime: refused with what to do, and shown nowhere.
   const stray = `STRAY_${hex(6).toUpperCase()}`;
-  const u = w.run(['--repo', 'claudepilot', '--ref', 'main', '--pool-env', stray, '--', 'true'], { ...over, [stray]: `v${hex(12)}` });
+  const u = w.run(['--repo', 'claudepilot', '--ref', 'main', '--pool-env', stray, '--', 'true'], { ...over, [stray]: `v${hex(12)}` }, script);
   assert.equal(u.code, 2, u.out);
   assert.match(
     u.out,
@@ -1697,10 +1722,11 @@ test('PILOT-998 --pool-env: any name the Secrets pool delivers is accepted (the 
   );
   assert.ok(!u.out.includes(stray), 'the undelivered name is not shown');
   // No drop-in (nothing exposed in this workspace): refused with what to do.
-  const none = w.run(['--repo', 'claudepilot', '--ref', 'main', '--pool-env', custom, '--', 'true'], {
-    ...over,
-    JOB_RUN_POOL_ENV_DROPIN: join(w.root, 'no-such.json'),
-  });
+  const none = w.run(
+    ['--repo', 'claudepilot', '--ref', 'main', '--pool-env', custom, '--', 'true'],
+    over,
+    scriptWithDropin(join(w.root, 'no-such.json')),
+  );
   assert.equal(none.code, 2, none.out);
   assert.match(none.out, /delivers no env .*Turn on expose for the secret in its pool/);
   assert.ok(!none.out.includes(custom));
@@ -1722,6 +1748,7 @@ test('PILOT-998 --pool-env: any name the Secrets pool delivers is accepted (the 
       'true',
     ],
     over,
+    script,
   );
   assert.equal(ok.code, 0, ok.out);
   const m = yamlLoad(w.applied1()) as Manifest;

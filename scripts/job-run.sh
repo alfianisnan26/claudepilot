@@ -193,16 +193,17 @@ for a in $keep; do [[ $a =~ ^[A-Za-z0-9_.][A-Za-z0-9_./-]*$ && ! $a =~ (^|/)\.\.
 #   1. it is a variable name, [A-Z][A-Z0-9_]*;
 #   2. it is NOT on the deny-list below: write, admin, production and master credentials, and the runner's own tokens (refused even when the
 #      pool delivers them: they need a person's approval, PILOT-1000);
-#   3. this workspace's Secrets pool DELIVERS it as env: it is a key of the pool's env drop-in (JOB_RUN_POOL_ENV_DROPIN, default
-#      /etc/claude-code/managed-settings.d/20-claudepilot-env.json; only its key names are read, never its values). A secret that is not
-#      exposed is not there: turn on expose for it in its pool.
-# The deny-list is the boundary (a production credential whose name matches none of its patterns is the known gap; masking stays). The
-# drop-in check stops typos and names a Job was never meant to see; the override is for the tests.
+#   3. this workspace's Secrets pool DELIVERS it as env: it is a key of the pool's env drop-in
+#      /etc/claude-code/managed-settings.d/20-claudepilot-env.json (written by the portal, owner secrets; only its key names are read,
+#      never its values). A secret that is not exposed is not there: turn on expose for it in its pool.
+# The path is fixed on purpose: no variable overrides it, so an agent cannot point the check at a file it wrote (PILOT-998 review 42840).
+# The tests run a copy of this script with this one line changed. The deny-list is still the hard boundary (a production credential
+# whose name matches none of its patterns is the known gap; masking stays).
 # The name check and the unknown-option branch never echo what they refuse (it may be a secret value pasted by mistake, and a value can look
 # like a name): the message says only that it was refused, why, and what to do. A name is shown only once it is known to be delivered. Other
 # options' messages still show their own value (--ref, --repo ... "got X"): never paste a value into any option. Values under 8 characters are
 # refused: the log mask skips them.
-pool_dropin=${JOB_RUN_POOL_ENV_DROPIN:-/etc/claude-code/managed-settings.d/20-claudepilot-env.json}
+pool_dropin=/etc/claude-code/managed-settings.d/20-claudepilot-env.json
 pool_denied() {
   case $1 in
     # The deny-list of PILOT-996 #42754, then the same words at the start or end of a name, and the runner's and the portal's own tokens.
