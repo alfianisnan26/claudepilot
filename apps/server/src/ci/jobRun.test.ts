@@ -2961,7 +2961,11 @@ test('T-731 reuse: a changed commit, command, steps, --against, --also, the hash
   miss('--also at a commit', go(w, c, 'npm test', ['--also', shared]));
   // T-2865: a pass made with the --also clone installed never stands for one without (or the other way round).
   miss('--deploy-layout', go(w, c, 'npm test', ['--also', shared, '--deploy-layout']));
-  assert.match(go(w, c, 'npm test', ['--also', shared, '--deploy-layout']).out, /reused a passed result/, '--deploy-layout is keyed: a hit');
+  assert.match(
+    go(w, c, 'npm test', ['--also', shared, '--deploy-layout']).out,
+    /reused a passed result/,
+    '--deploy-layout is keyed: a hit',
+  );
   assert.match(go(w, c, 'npm test', ['--also', shared]).out, /reused a passed result/, 'the run without it is still its own hit');
   const upgraded = mutant(
     (y) => `${y}# a newer runner\n`,
