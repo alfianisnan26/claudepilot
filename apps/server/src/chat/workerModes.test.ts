@@ -351,8 +351,13 @@ test('PILOT-997 review 43296: a lead in a kept pause that a person then Ends (ke
     assert.equal(r.s.controller.get(w)!.mode, 'bypassPermissions', 'set up: the worker is in Bypass under a paused lead');
 
     // A person Ends the lead and keeps its workers: the kept pause is superseded, and the worker leaves Bypass with it.
-    await answering(r.s, r.s.controller.end(lead));
-    await answering(r.s, until(() => r.s.controller.get(w)!.mode !== 'bypassPermissions', 3000));
+    // One `answering` for both: the cascade's mode switch reaches the worker just after `end` returns, and a second `answering` would
+    // start counting after it (never answered).
+    const ended = async () => {
+      await r.s.controller.end(lead);
+      await until(() => r.s.controller.get(w)!.mode !== 'bypassPermissions', 3000);
+    };
+    await answering(r.s, ended());
     assert.equal(r.s.controller.get(lead)!.state, 'ended');
     assert.notEqual(r.s.controller.get(w)!.state, 'ended', 'the worker was kept');
     assert.equal(r.s.controller.get(w)!.mode, 'dontAsk');
