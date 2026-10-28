@@ -34,20 +34,26 @@ test('workerMode, modeWithin and autoModeAllowed: inherit, cap, default Auto', (
 
 /** Answers every mode switch (with the mode asked), settings read and usage read, in the order they reach the process, until `p` settles. */
 async function answering<T>(s: Live, p: Promise<T>): Promise<T> {
-  const seen = new Set(controls(s.ws).map((c) => c.id));
+  let done = s.ws.sends.length;
   let settled = false;
   p.then(
     () => (settled = true),
     () => (settled = true),
   );
   while (!settled) {
-    for (const c of controls(s.ws)) {
-      if (seen.has(c.id)) continue;
-      seen.add(c.id);
-      // The lead and its workers each have a process: the answer goes to every one (an id a process did not ask is ignored by it).
-      const answer =
-        c.request.subtype === 'set_permission_mode' ? ok(c.id, { mode: String(c.request.mode) }) : c.request.subtype === 'get_settings' ? ok(c.id, APPLIED) : c.request.subtype === 'get_usage' ? ok(c.id, USAGE_API_KEY) : null;
-      if (answer) for (const t of s.ws.tails) t.push(answer);
+    for (; done < s.ws.sends.length; done++) {
+      const sent = s.ws.sends[done]!;
+      const c = controls({ sends: [sent] } as unknown as Live['ws'])[0];
+      if (!c) continue;
+      // The lead and its workers each have a process: the answer goes to the one that asked (`send <claude session>`, `tail <claude session>`),
+      // since a process answered for a request it never made is ended for integrity.
+      let at = -1;
+      for (let i = s.ws.tailArgs.length - 1; i >= 0 && at < 0; i--) if (s.ws.tailArgs[i]![1] === sent.args[1]) at = i;
+      const tail = s.ws.tails[at];
+      if (!tail) break; // its process is not tailed yet: try again on the next round
+      if (c.request.subtype === 'set_permission_mode') tail.push(ok(c.id, { mode: String(c.request.mode) }));
+      else if (c.request.subtype === 'get_settings') tail.push(ok(c.id, APPLIED));
+      else if (c.request.subtype === 'get_usage') tail.push(ok(c.id, USAGE_API_KEY));
     }
     await sleep(5);
   }
