@@ -9,6 +9,7 @@ import { ToolRegistry } from '../portalmcp/registry.js';
 import { portalMcpHarness } from '../portalmcp/testkit.js';
 import { AUTO_REFUSED } from './controller.js';
 import { registerChatTools } from './portalTools.js';
+import { ChatStore } from './store.js';
 import { APPLIED, controls, init, line, liveSession, ok, sleep, until, USAGE_API_KEY, type Live } from './testkit.js';
 
 test('workerMode, modeWithin and autoModeAllowed: inherit, cap, default Auto', () => {
@@ -212,7 +213,7 @@ test('PILOT-997: Keep going never puts back a Bypass a person switched off, and 
     // Later the chat LOSES Bypass (a restart that could not keep it is the newest record): Keep going puts it back within 24 hours, allows
     // the tool card raised meanwhile, and leaves a question for a person.
     await sleep(5);
-    r.s.store.addAudit({ severity: 'info', kind: 'bypass.left', sessionId: lead, workspaceId: 'docker/ws1', actor: 'portal', detail: { why: 'restart' } });
+    new ChatStore(r.s.store).addAudit({ severity: 'info', kind: 'bypass.left', sessionId: lead, workspaceId: 'docker/ws1', actor: 'portal', detail: { why: 'restart' } });
     card(r.s, lead, 'Q1', 'AskUserQuestion', { questions: [{ question: 'Which one?', header: 'Pick', options: [{ label: 'A', description: 'a' }, { label: 'B', description: 'b' }], multiSelect: false }] });
     await until(() => r.s.controller.openRequests(lead).length === 2);
     assert.ok(r.s.controller.bypassSeenAt(lead), 'a loss within 24 hours is seen');
