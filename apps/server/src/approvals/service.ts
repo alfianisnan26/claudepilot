@@ -155,12 +155,15 @@ export class Approvals {
     const reason = (req.reason ?? '').replace(/\s+/g, ' ').trim().slice(0, APPROVAL_REASON_MAX);
     if (findSecret(reason)) throw new AppError('VALIDATION_FAILED', 'The reason may not hold a secret.');
     def.mayAsk?.(payload, requester, this.deps);
-    // T-2887: one pending Bypass card per session. The same ask again gets the card that waits (no new row, no second push); an expired
-    // card does not count, so the ask makes a fresh one.
+    // T-2887: one pending Bypass card per session and requester. The same ask again by the same asker gets the card that waits (no new row,
+    // no second push); an expired card does not count, so the ask makes a fresh one. Never another asker's card: an agent must be able to
+    // read its own request and hear its outcome, which the portal's card would not give it (review c43483).
     if (req.kind === 'session.bypass') {
       const waiting = this.#db()
-        .prepare("SELECT * FROM approvals WHERE kind = ? AND payload = ? AND status = 'pending' AND expires_at > ? ORDER BY created_at, id LIMIT 1")
-        .get(req.kind, json, this.#iso()) as Row | undefined;
+        .prepare(
+          "SELECT * FROM approvals WHERE kind = ? AND payload = ? AND requester_session IS ? AND status = 'pending' AND expires_at > ? ORDER BY created_at, id LIMIT 1",
+        )
+        .get(req.kind, json, requester?.sessionId ?? null, this.#iso()) as Row | undefined;
       if (waiting) return this.#toApproval(waiting);
     }
     const ttl = Math.min(Math.max(Math.round(req.ttlMinutes ?? APPROVAL_TTL_DEFAULT_MIN), 1), APPROVAL_TTL_MAX_MIN);

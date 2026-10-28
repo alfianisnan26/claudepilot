@@ -212,9 +212,13 @@ test('T-2887: one pending session.bypass card per session: the same ask gets the
   const second = h.approvals.create({ kind: 'session.bypass', payload: { sessionId: 's-a' }, reason: 'two' }, asker);
   assert.equal(second.id, first.id, 'the waiting card');
   assert.equal(second.reason, 'one', 'it keeps its first reason');
-  assert.equal(h.approvals.create({ kind: 'session.bypass', payload: { sessionId: 's-a' } }, null).id, first.id, 'the portal asking for the same session too');
   assert.equal(h.changes(), pushes, 'no second Needs you change, so no second push');
   assert.equal(needsYou(), 1);
+  // Another asker for the same session is never folded into it (review c43483): its own card, then that one is reused for it.
+  const portal = h.approvals.create({ kind: 'session.bypass', payload: { sessionId: 's-a' } }, null);
+  assert.notEqual(portal.id, first.id);
+  assert.equal(h.approvals.create({ kind: 'session.bypass', payload: { sessionId: 's-a' } }, null).id, portal.id);
+  assert.equal(needsYou(), 2);
 
   // Another session has its own card; a decided card does not count.
   const other = h.approvals.create({ kind: 'session.bypass', payload: { sessionId: 's-b' } }, null);
@@ -236,6 +240,34 @@ test('T-2887: one pending session.bypass card per session: the same ask gets the
   // Other kinds are not folded: each test.echo ask is its own card.
   const e1 = h.approvals.create({ kind: 'test.echo', payload: { text: 'x' } }, asker);
   assert.notEqual(h.approvals.create({ kind: 'test.echo', payload: { text: 'x' } }, asker).id, e1.id);
+});
+
+test('T-2887 (review c43483): a portal card for S first, then S asks itself: S gets its own card, reads it, and hears the outcome', async () => {
+  const h = await harness();
+  // The harness's chat records what is sent; a fresh server code so Allow passes its precheck.
+  h.approvals.chat = { ...h.approvals.chat!, reauth: { fresh: () => true } };
+  const registry = new ToolRegistry();
+  registerApprovalTools(h.approvals, registry);
+  const ctx = (sessionId: string) =>
+    ({
+      isAgent: true,
+      sessionId,
+      workspaceId: 'docker/ws1',
+      principal: { kind: 'agent', userId: FOUNDING_USER_ID, tokenId: 'tk-test', scope: 'operate', workspaceId: 'docker/ws1', sessionId },
+      untrusted: (t: string | null | undefined) => (t ? { untrusted_text: t } : null),
+      affected: () => undefined,
+    }) as never;
+  const call = (name: string, c: never, args: Record<string, unknown>) =>
+    Promise.resolve().then(() => registry.get(name)!.handler(c, registry.get(name)!.input.parse(args) as never)) as Promise<{ approval: { id: string; reason: unknown } }>;
+
+  const portal = h.approvals.create({ kind: 'session.bypass', payload: { sessionId: 's-a' }, reason: 'token asked' }, null);
+  const mine = await call('approval_request', ctx('s-a'), { kind: 'session.bypass', payload: { sessionId: 's-a' }, reason: 'I asked' });
+  assert.notEqual(mine.approval.id, portal.id, 'not the portal’s card');
+  assert.deepEqual(mine.approval.reason, { untrusted_text: 'I asked' });
+  assert.equal((await call('approval_get', ctx('s-a'), { id: mine.approval.id })).approval.id, mine.approval.id);
+
+  await h.approvals.allow(person, mine.approval.id, { sessionToken: 'tok' });
+  assert.ok(h.sent.some((d) => d.sessionId === 's-a' && d.text.includes(mine.approval.id)), `S is told: ${JSON.stringify(h.sent)}`);
 });
 
 test('a payload can not be changed: it is validated and stored once, a secret value or a secret-named key is refused, and Allow runs what was stored', async () => {
