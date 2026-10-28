@@ -25,7 +25,8 @@ import {
 } from '@portal/contracts';
 import { findSecret } from '../portalmcp/sanitize.js';
 import { mayDecide, NO_APPROVAL } from './authz.js';
-import { APPROVAL_KIND_DEFS, type ApprovalChat, type ApprovalDeps, type ApprovalKindDef, type ApprovalPools, type ApprovalRequester } from './kinds.js';
+import { APPROVAL_KIND_DEFS, type ApprovalChat, type ApprovalDelivery, type ApprovalDeps, type ApprovalKindDef, type ApprovalPools, type ApprovalRequester } from './kinds.js';
+import { PASS_HASH, PASS_KINDS, PASS_TTL_MS, passFrom } from './pass.js';
 
 type Row = {
   id: string;
@@ -73,6 +74,8 @@ export interface ApprovalsOptions {
   chat?: ApprovalChat | null;
   /** The pools service (pool.secret_set). Absent: that kind can't be asked for. */
   pools?: ApprovalPools | null;
+  /** Delivery (T-2889): deliver a workspace again when its passes change. Absent: a refused call's Allow issues no pass. */
+  delivery?: ApprovalDelivery | null;
   now?: () => number;
   /** Tells Needs you something changed (attention.changed). */
   changed?: () => void;
@@ -83,16 +86,57 @@ export class Approvals {
   readonly #o: ApprovalsOptions;
   chat: ApprovalChat | null;
   pools: ApprovalPools | null;
+  delivery: ApprovalDelivery | null;
 
   constructor(opts: ApprovalsOptions) {
     this.#o = opts;
     this.chat = opts.chat ?? null;
     this.pools = opts.pools ?? null;
+    this.delivery = opts.delivery ?? null;
   }
 
   /** The services the kinds use (titles, mayAsk, the executors). */
   get deps(): ApprovalDeps {
-    return { chat: this.chat, pools: this.pools };
+    return { chat: this.chat, pools: this.pools, delivery: this.delivery };
+  }
+
+  /**
+   * T-2889: the live one-time passes of a workspace (allowed refusals, unexpired, not reported used), for its passes file. The rows are
+   * read through the decision time, so only the last PASS_TTL_MS of decisions are scanned.
+   */
+  livePasses(workspaceId: string): { pass: string; until: number }[] {
+    const db = this.#o.db();
+    if (!db) return [];
+    const now = this.#now();
+    const rows = db
+      .prepare(`SELECT result FROM approvals WHERE workspace = ? AND status = 'allowed' AND decided_at > ? AND kind IN (${PASS_KINDS.map(() => '?').join(', ')}) ORDER BY decided_at, id`)
+      .all(workspaceId, this.#iso(now - PASS_TTL_MS - 60_000), ...PASS_KINDS) as { result: string | null }[];
+    const out: { pass: string; until: number }[] = [];
+    for (const r of rows) {
+      const p = passFrom(r.result);
+      if (p && !p.used && p.until > now) out.push({ pass: p.pass, until: p.until });
+    }
+    return out;
+  }
+
+  /** T-2889: a workspace reports it used a pass; the portal stops delivering it. True when one of its live passes matched. */
+  markPassUsed(workspaceId: string, pass: string): boolean {
+    const db = this.#o.db();
+    if (!db || !PASS_HASH.test(pass)) return false;
+    const rows = db
+      .prepare(`SELECT id, result FROM approvals WHERE workspace = ? AND status = 'allowed' AND decided_at > ? AND kind IN (${PASS_KINDS.map(() => '?').join(', ')})`)
+      .all(workspaceId, this.#iso(this.#now() - PASS_TTL_MS - 60_000), ...PASS_KINDS) as { id: string; result: string | null }[];
+    let hit = false;
+    for (const r of rows) {
+      const p = passFrom(r.result);
+      if (!p || p.used || p.pass !== pass) continue;
+      const result = JSON.parse(r.result!) as ApprovalResult & { output: Record<string, unknown> };
+      result.output = { ...result.output, used: true };
+      db.prepare('UPDATE approvals SET result = ? WHERE id = ?').run(JSON.stringify(result), r.id);
+      hit = true;
+    }
+    if (hit) this.#o.changed?.();
+    return hit;
   }
 
   #db(): DatabaseSync {
@@ -247,7 +291,7 @@ export class Approvals {
     const { row, def } = this.#pendingOr404(actor, id);
     if (opts.value !== undefined && !approvalNeedsValue(def.kind)) throw new AppError('VALIDATION_FAILED', 'This request takes no value.', { details: { value: 'Not used.' } });
     const payload = JSON.parse(row.payload) as Record<string, unknown>;
-    const ctx = { approvalId: id, actor, sessionToken: opts.sessionToken, value: opts.value, ...this.deps };
+    const ctx = { approvalId: id, actor, sessionToken: opts.sessionToken, value: opts.value, workspaceId: row.workspace, now: this.#now(), ...this.deps };
     def.precheck?.(payload, ctx);
     const at = this.#iso();
     const claimed = this.#db()
@@ -266,6 +310,14 @@ export class Approvals {
     if (opts.value && JSON.stringify(result).includes(opts.value)) result = { ok: result.ok, message: result.ok ? 'Done.' : 'The run failed.' };
     this.#db().prepare('UPDATE approvals SET result = ? WHERE id = ?').run(JSON.stringify(result), id);
     this.#o.changed?.();
+    // T-2889: a pass is in the stored result now; deliver its workspace so the passes file holds it.
+    if (result.ok && row.workspace && passFrom(JSON.stringify(result))) {
+      try {
+        this.delivery?.passesChanged(row.workspace);
+      } catch (e) {
+        this.#o.log?.(`delivering the pass of ${id}`, e);
+      }
+    }
     const out = this.#toApproval(this.#row(id)!);
     await this.#tell(out, result.ok ? `Allowed: ${result.message}` : `Allowed, but it did not run: ${result.message}`);
     return out;

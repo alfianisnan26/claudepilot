@@ -1,7 +1,8 @@
 import { SETTING_KEYS, type AgentEnvStatus } from '@portal/contracts';
-import type { Fragment } from '../delivery/types.js';
+import { ROOT, type Fragment } from '../delivery/types.js';
 import type { FragmentProvider } from '../delivery/reconciler.js';
-import { dropInPath } from '../delivery/ownership.js';
+import { APPROVAL_PASSES_PATH, dropInPath } from '../delivery/ownership.js';
+import { passesContent } from '../approvals/pass.js';
 import type { Store } from '../store/store.js';
 import { defineSetting } from './registry.js';
 import { RULE_GUARD_FILES, RULE_GUARD_HOOKS } from './ruleGuard.js';
@@ -164,9 +165,25 @@ export class AgentEnvPolicy implements FragmentProvider {
     return [];
   }
 
-  /** The agent policy's `env`, and the rule-file guard (D-60, T-404), which every workspace gets with it. */
-  fragments(): Fragment[] {
-    return [{ owner: 'policy', files: RULE_GUARD_FILES, settings: { env: this.desired(), hooks: RULE_GUARD_HOOKS } }];
+  /** T-2889: where the live one-time passes of a workspace come from (approvals, wired in index.ts). Unset: the file lists none. */
+  passSource: ((workspaceId: string) => { pass: string; until: number }[]) | null = null;
+
+  #passes(workspaceId: string): { pass: string; until: number }[] {
+    try {
+      return this.passSource?.(workspaceId) ?? [];
+    } catch (e) {
+      console.error(`[settings] the passes of ${workspaceId} could not be read: ${(e as Error).message}`);
+      return [];
+    }
+  }
+
+  /**
+   * The agent policy's `env`, and the rule-file guard (D-60, T-404), which every workspace gets with it; plus the workspace's one-time
+   * passes (T-2889), root-owned, so job-run and the guard trust them and the agent cannot add one.
+   */
+  fragments(workspaceId?: string): Fragment[] {
+    const passes = { path: APPROVAL_PASSES_PATH, content: passesContent(workspaceId ? this.#passes(workspaceId) : []), mode: 0o644, uid: ROOT, gid: ROOT };
+    return [{ owner: 'policy', files: [...RULE_GUARD_FILES, passes], settings: { env: this.desired(), hooks: RULE_GUARD_HOOKS } }];
   }
 
   /** After a delivery that wrote the policy drop-in: remember what landed (names and values, none of them secret). */

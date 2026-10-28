@@ -11,6 +11,7 @@ import type { OutboxEvent } from '../delivery/outbox.js';
 import type { Store } from '../store/store.js';
 import { portalSession } from '../settings/ruleGuardAudit.js';
 import type { Approvals } from './service.js';
+import { PASS_HASH } from './pass.js';
 
 /** The outbox channel (`approval.jsonl`). */
 export const APPROVAL_CHANNEL = 'approval';
@@ -43,4 +44,24 @@ export function fileRefusalRequests(approvals: Approvals, store: Pick<Store, 'db
     }
   }
   return made;
+}
+
+/**
+ * T-2889: each `used` line says the workspace used a pass (`{ type: 'used', pass }`). The portal marks the pass used and delivers the
+ * workspace again, so the passes file drops it. Only a live pass of THIS workspace is touched. Returns how many passes were marked.
+ */
+export function markUsedPasses(approvals: Approvals, workspaceId: string, events: OutboxEvent[], log?: (what: string, e: unknown) => void): number {
+  let n = 0;
+  for (const e of events) {
+    if (e.type !== 'used' || typeof e.pass !== 'string' || !PASS_HASH.test(e.pass)) continue;
+    if (approvals.markPassUsed(workspaceId, e.pass)) n++;
+  }
+  if (n) {
+    try {
+      approvals.delivery?.passesChanged(workspaceId);
+    } catch (err) {
+      log?.(`delivering ${workspaceId} after a used pass`, err);
+    }
+  }
+  return n;
 }

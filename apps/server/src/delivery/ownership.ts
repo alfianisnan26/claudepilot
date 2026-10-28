@@ -1,5 +1,11 @@
 import { DROPIN_DIR, MARKETPLACE_JSON, NODE, type HookName, type Owner, type PoolType } from './types.js';
 
+/**
+ * T-2889: the one-time passes of refused calls a person allowed (approvals/pass.ts), written by the policy owner, root:root 0644. Read by
+ * job-run.sh and the rule guard on each call, never by a Claude process at start, so a change to it is no configuration change (changes.ts).
+ */
+export const APPROVAL_PASSES_PATH = '/etc/claudepilot/approval-passes';
+
 /** Checks one settings key's value beyond "this owner may set it". Returns what's wrong, or null. */
 export type SettingsCheck = (value: unknown, ctx: { owner: Owner; dropIn: string | null }) => string | null;
 
@@ -120,8 +126,9 @@ const onlyTrue =
 export const OWNERSHIP: Record<Owner, Declaration> = {
   policy: {
     dropIn: '10-claudepilot-policy.json',
-    // Its own scripts: the rule-file guard (D-60, T-404, `settings/ruleGuard.ts`) and the roots its `git -C` check reads (T-924).
-    paths: ['/etc/claudepilot/bin/policy-', '/etc/claudepilot/git-c-roots'],
+    // Its own scripts: the rule-file guard (D-60, T-404, `settings/ruleGuard.ts`), the roots its `git -C` check reads (T-924) and the
+    // one-time passes job-run and the guard read (T-2889, root-owned so an agent cannot write one).
+    paths: ['/etc/claudepilot/bin/policy-', '/etc/claudepilot/git-c-roots', APPROVAL_PASSES_PATH],
     settings: ['permissions', 'sandbox', 'availableModels', 'maxEffortLevel', 'deniedMcpServers', 'env', 'hooks'],
     // The agent policy (settings/agentEnv.ts, T-285): exact names, so no pool's catch-all can set them (`mayUseEnv`).
     env: [
