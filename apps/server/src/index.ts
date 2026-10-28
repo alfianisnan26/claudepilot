@@ -44,6 +44,7 @@ import { registerMetricsTools } from './lab/metricsTools.js';
 import { METRICS_MEMO_MS } from './lab/metricsService.js';
 import { createRepos, registerRepoTools } from './repos/index.js';
 import { changesGlance, createGlance } from './glance/index.js';
+import { approvalAttentionSource, createApprovals, registerApprovalTools } from './approvals/index.js';
 import { bridgeAttentionNotify, createAttention, registerAttentionTools } from './attention/index.js';
 import { createPlatform } from './platform/index.js';
 import { createCodespaces } from './codespaces/index.js';
@@ -419,6 +420,11 @@ const workspaceMemory = new WorkspaceMemory({
 });
 attention.register(memoryAttentionSource(workspaceMemory));
 chatController.memory = workspaceMemory;
+// Approvals (docs/prd/approvals.md, PILOT-1000): an agent asks, a person allows on a Needs you card, the portal runs it (Bypass through
+// the chat's own gated path) and tells the asking session.
+const approvals = createApprovals(store, { chat: chatController, changed: () => attention.changed() });
+attention.register(approvalAttentionSource(approvals));
+registerApprovalTools(approvals);
 const ATTENTION_TOPICS = new Set<LiveTopic>(['pools', 'tickets', 'ci']);
 const notify = (...topics: LiveTopic[]) =>
   topics.forEach((t) => {
@@ -773,6 +779,7 @@ const app = createApp(portal, workspaces, store, accounts, pools, reconciler, he
   repos,
   glance,
   attention,
+  approvals,
   codespaces,
   platform,
   claudeVersions,

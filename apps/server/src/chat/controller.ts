@@ -3459,7 +3459,10 @@ export class ChatController {
    * a report of Bypass from Claude Code is accepted. Entering is a High audit event. Never over MCP: no other module
    * has a session token or the opt-in.
    */
-  async enterBypass(rawId: string, req: { acknowledged: boolean; sessionToken: string | undefined; actor?: string }): Promise<ChatSession> {
+  async enterBypass(
+    rawId: string,
+    req: { acknowledged: boolean; sessionToken: string | undefined; actor?: string; via?: { approvalId: string } },
+  ): Promise<ChatSession> {
     const sessionId = this.#chat.resolveId(rawId);
     const session = this.#require(sessionId);
     this.#notMoving(sessionId);
@@ -3502,7 +3505,15 @@ export class ChatController {
       sessionId,
       workspaceId: row.workspace_id,
       actor: 'ui',
-      detail: { claude: session.claudeName, policy: 'allowed', capable: true, acknowledged: true, reauth: 'fresh' },
+      // PILOT-1000: entered from an approval card, the person's Allow is the acknowledgement; the row names the request.
+      detail: {
+        claude: session.claudeName,
+        policy: 'allowed',
+        capable: true,
+        acknowledged: true,
+        reauth: 'fresh',
+        ...(req.via ? { via: 'approval', approvalId: req.via.approvalId } : {}),
+      },
     });
     this.#emitSession(sessionId);
     return this.#chat.get(sessionId)!;

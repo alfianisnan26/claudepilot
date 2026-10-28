@@ -8,6 +8,7 @@ import { Unreachable } from '@/components/Unreachable';
 import { AccessPage } from '@/features/admin/AccessPage';
 import { HomePage } from '@/features/home/HomePage';
 import { NeedsYouPage } from '@/features/attention/NeedsYouPage';
+import { ApprovalPage } from '@/features/approvals/ApprovalPage';
 import { SessionsPage } from '@/features/chat/SessionsPage';
 import { TicketsPage } from '@/features/tickets/TicketsPage';
 import { CiPage } from '@/features/ci/CiPage';
@@ -106,6 +107,8 @@ function Pages() {
         <Route index element={<Navigate to={HOME} replace />} />
         <Route path="home" element={<HomePage />} />
         <Route path="attention" element={<NeedsYouPage />} />
+        {/* An agent's request for the portal to act for it; the deck's card opens this (approvals PRD). */}
+        <Route path="approvals/:id" element={<ApprovalPage />} />
         <Route path="workspaces" element={<WorkspacesPage />} />
         <Route path="sessions" element={<SessionsPage />} />
         {/* One page for the queue and an open ticket (a Workbench, T-158): beside the board on a desktop, in its place on a phone. */}
