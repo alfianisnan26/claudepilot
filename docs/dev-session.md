@@ -196,10 +196,16 @@ scripts/job-run.sh --repo konfersi:<org>/<repo> --ref <branch> --image registry.
     ends everything. It also reads an OOMKill of the init container, so a fetch killed at the memory limit says so.
 - **Test credentials for the command (`--pool-env NAME`, T-426):** repeatable, for a command that needs a scoped test credential from the
   workspace's Secrets pool, today Konfersi's stg e2e and Lighthouse behind Cloudflare Access:
-  `scripts/job-run.sh --pool-env E2E_CF_ACCESS_CLIENT_ID --pool-env E2E_CF_ACCESS_CLIENT_SECRET -- 'scripts/e2e-stg.sh'`. Only
-  `E2E_CF_ACCESS_*` names, the stg QA test accounts' `E2E_QA_EMAIL`/`E2E_QA_PASSWORD` (T-384), `E2E_QA2_*` (T-1665) and `E2E_QA3_*`,
-  the stg staff test accounts' `E2E_STAFF_*`/`E2E_STAFF2_*` (each `_EMAIL` and `_PASSWORD`) and `E2E_TURNSTILE_TOKEN` (T-2294), and the two read-only Koneviro data keys `KONEVIRO_S3_RO_ACCESS_KEY_ID`/`KONEVIRO_S3_RO_SECRET_ACCESS_KEY` (read only, T-2823) are accepted, and the variable must
-  be set in the workspace; anything else is refused (exit 2) before a Job is made.
+  `scripts/job-run.sh --pool-env E2E_CF_ACCESS_CLIENT_ID --pool-env E2E_CF_ACCESS_CLIENT_SECRET -- 'scripts/e2e-stg.sh'`. Since PILOT-998
+  (decision PILOT-996 #42754) there is no fixed list: a name is accepted when it is a variable name (`[A-Z][A-Z0-9_]*`), it is not on the
+  deny-list, and this workspace's Secrets pool delivers it as env (a key of the env drop-in
+  `/etc/claude-code/managed-settings.d/20-claudepilot-env.json`; only the key names are read). The deny-list, refused even when delivered,
+  "needs a person's approval (PILOT-1000)": `*_RW_*`, `*ADMIN*`, `*PROD*`, `*_PRD_*`, `CLOUDFLARE_API_TOKEN`, `GITEA_*`, `GITHUB_*`,
+  `*_MASTER_*`, and the same words at a name's start or end (`*_RW`, `RW_*`, `*_PRD`, `PRD_*`, `*_MASTER`, `MASTER_*`) plus the runner's
+  and the portal's own tokens (`GH_*`, `NODE_AUTH_TOKEN`, `ANTHROPIC_*`, `CLAUDE_*`, `CLAUDEPILOT_*`, `PILOT_*`). A name the pool does not
+  deliver gets "turn on expose for it in its pool". The earlier names (the stg e2e and QA accounts, T-384/T-1665/T-2294, and the two
+  read-only Koneviro keys of T-2823) keep working because the pool delivers them. The variable must also be set in the workspace; anything
+  else is refused (exit 2) before a Job is made. Known gap: a production credential whose name matches no deny pattern; the log mask stays.
   An unknown option now gets a quieter message than before (T-426: it names the argument only when it is a plain `--option`, otherwise it says
   an option is not known and shows nothing of it). The unknown-option branch and the `--pool-env` name check never show what they refuse (it may be a pasted value; an argument is named only
   when it is a plain `--option`), but other options' messages still show their own value (`--ref ... (got X)`): never paste a value into any
