@@ -418,7 +418,7 @@ at every launch, resume and wake (Chat sessions §10.2):
 | Session budget            | `--max-budget-usd <remaining>`, because Claude Code doesn't count totals restored by `--resume` ✅                                                                                    | The portal stops the session at its own total (FR12)                                                                                                  |
 | Turn limits               | `--max-turns <per-prompt cap>`: it limits each prompt, not the session                                                                                                                | The portal counts turns per session and stops at the cap                                                                                              |
 | Model, effort, ultracode  | `--model`, `--effort`, only when the user picked them                                                                                                                                 | `set_model`, `apply_flag_settings {effortLevel, ultracode}`, each checked against policy. Clamps are silent, so chat shows `get_settings.applied` ✅. |
-| Scheduled tools           | `--disallowedTools CronCreate CronDelete CronList ScheduleWakeup RemoteTrigger`, always (T-1863)                                                                                                               | —                                                                                                                                                     |
+| Scheduled tools           | `--disallowedTools CronCreate CronDelete CronList ScheduleWakeup RemoteTrigger`, always (T-1863)                                                                                      | —                                                                                                                                                     |
 | Prompts nobody can answer | `--permission-prompt-tool stdio`; persona test prompts deny every request                                                                                                             | Chat approval dock                                                                                                                                    |
 
 Costs are client-side estimates at list price (contracted rates with `modelPricing`), and spend can
@@ -1042,6 +1042,24 @@ create`), and any command that is not a known reader (`cat`, `grep`, `jq`, `git 
   Every `-C` of a command is checked (`git -C a -C b`), in a pipe, after `cd x &&`, in `bash -c`. The refusal's audit line carries the
   form and no path (`path` is empty), never the command. The check is on only in a workspace that has the lane folder or a roots file;
   elsewhere (no lane allow rule to guard) `git -C` is tracked as before, so it does not refuse a lead's `git -C` in its own repository.
+  **Tool checkouts (PILOT-998, decision PILOT-996 #42754).** The roots file also carries `tool <abs>` lines, one per main checkout
+  whose scripts lanes run (`GITC_TOOL_ROOTS` in `settings/ruleGuard.ts`, today `/home/node/work/claudepilot`; each must be absolute, at
+  least three folders deep, not a worktrees folder and holding no lane root, or the delivery throws). `git -C <tool root or below>` is
+  allowed for reads and fast-forwards only: `fetch`, `pull --ff-only`, `merge --ff-only`, `log`, `show`, `status`, `rev-parse`, `diff`
+  and `branch --contains`. These only bring the checkout to its own upstream (review 43381 B1): `pull --ff-only` takes no ref or
+  `origin <the checked-out branch>`, `merge --ff-only` takes only `@{u}` or `origin/<the checked-out branch>` (read from the
+  checkout's `.git/HEAD`; detached or unreadable refuses a named ref), and `fetch` takes `origin` and at most one branch, with quiet,
+  verbose, prune, tags and `--dry-run` flags only (`--stdin`, `--depth`, `--set-upstream` are refused). A `--` is refused on all three
+  (review 43544: git reads the words after it as the remote and refs too). A lane can never move the
+  checkout, its door scripts or its `.claude/settings.json`, to a ref of its choice. Still refused there, each with its reason and what to do: any other subcommand (reset, checkout, push,
+  commit...), a plain or non-ff `pull`/`merge`, a forced or refspec `fetch` (`+`, `:`, `-u`, `--refmap`), `log/show/diff --output`,
+  `--git-dir`/`--work-tree` or `env -C`/`sudo -D` into a tool root, and writes to rule files (the rule-file checks run first). `$HOME`,
+  `${HOME}`, `~` and quoted paths are resolved, but only when nothing in the call can change HOME (no assignment, `export`, `read`,
+  `source`, `eval`..., no substitution); otherwise the variable form is refused as before. Every refusal of the guard now ends with
+  "What to do: ...". Hooks (review 42840, accepted): `fetch` runs `reference-transaction` and `pull`/`merge --ff-only` run
+  `post-merge` from the tool checkout's `.git/hooks`. That folder is the common git dir of every lane worktree, whose already allowed
+  `git commit`/`merge` run the same hooks as the same user, so the tool-root allow adds no new program; setting `core.hooksPath` or
+  `core.fsmonitor` (by `git config`, `-c` or `--config-env`) stays refused. A write to that hooks folder is the boundary to watch.
   **S2: the allow's `*` takes everything after the folder**, so in a lane workspace the rest of the command is read too:
   `--git-dir` and `--work-tree` (both `=` and two-word forms) are read like `-C` and must stay below a lane root; before the subcommand
   only `--no-pager`, `-P`, `-p`, `--paginate`, `--no-optional-locks`, `--no-lazy-fetch`, the pathspec switches, `--no-advice`,
