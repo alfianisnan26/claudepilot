@@ -64,7 +64,7 @@ async function rig() {
 }
 
 type Spawned = { id: string; applied: string[]; unconfirmed: string[] };
-const spawned = (raw: { result?: { structuredContent: Record<string, unknown> } }) => raw.result!.structuredContent.session as Spawned;
+const spawned = (raw: { result?: { structuredContent?: Record<string, unknown> } }) => raw.result!.structuredContent!.session as Spawned;
 
 test('PILOT-997: a worker of a Manual lead gets dontAsk; of an Auto lead, Auto; a mode wider than its lead is refused with the reason', async () => {
   const r = await rig();
