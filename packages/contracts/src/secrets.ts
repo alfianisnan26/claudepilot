@@ -229,6 +229,42 @@ export const SECRET_LIMITS = {
   entries: 200,
 } as const;
 
+/* ---------- Write-only over Portal MCP (T-2866, PILOT-996 S3) ---------- */
+
+/**
+ * An environment-style name (`AWS_ACCESS_KEY_ID`): upper case, digits and `_`, starting with a letter. A secret with such a name is
+ * meant to be read as a variable, so `pool_secret_set` exposes it unless told otherwise, and `pool_get` warns when one is stored without
+ * `expose` (T-2823: keys stored with options `{}` were delivered as files only and never reached the environment).
+ */
+export const SECRET_ENV_STYLE_NAME = /^[A-Z][A-Z0-9_]*$/;
+
+/** `expose` when the caller does not say: true for an environment-style name that may be a variable (not reserved, FR4). */
+export const secretExposeDefault = (name: string): boolean => SECRET_ENV_STYLE_NAME.test(name) && SECRET_VARIABLE_NAME.test(name) && secretVariableReserved(name) === null;
+
+/** The secrets of a set's content (as `PoolSummary.content` shows it) with an environment-style name that are not exposed as a variable. */
+export function unexposedEnvSecrets(content: unknown): string[] {
+  const entries = (content as { entries?: unknown } | null)?.entries;
+  if (!Array.isArray(entries)) return [];
+  return entries
+    .filter((e): e is SecretEntryView => !!e && typeof e === 'object' && (e as SecretEntryView).kind === 'secret')
+    .filter((e) => secretExposeDefault(e.name) && e.options?.expose !== true)
+    .map((e) => e.name);
+}
+
+/** Why a write over Portal MCP to a protected pool is refused; the approval card that lifts it is PILOT-1000 (S4). */
+export const PROTECTED_POOL_REASON = "protected pool: needs a person's approval (PILOT-1000)";
+
+/**
+ * A pool an agent or a token may not write to over Portal MCP (T-2866): one whose name has the word `prd`, `prod` or `production`
+ * (split on anything but letters and digits: `konfersi-prd`, `prod keys`), or whose description carries `[protected]`. Pools have no
+ * protected flag of their own yet; this marks them without a migration, and a person adds `[protected]` to any other pool.
+ */
+export function isProtectedPool(p: { name: string; description?: string | null }): boolean {
+  const words = p.name.toLowerCase().split(/[^a-z0-9]+/);
+  if (words.some((w) => w === 'prd' || w === 'prod' || w === 'production')) return true;
+  return /\[protected\]/i.test(p.description ?? '');
+}
+
 /* ---------- Reserved names (FR4) ---------- */
 
 const PROXY = new Set(['HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'ALL_PROXY', 'FTP_PROXY']);

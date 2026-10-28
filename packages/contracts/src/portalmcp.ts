@@ -247,3 +247,32 @@ export const PORTAL_MCP_API = {
   /** PUT `SetAgentAccessRequest` (`<target>/<name>`): turn agent access on or off for a workspace. */
   agent: (workspaceId: string) => `/api/portal-mcp/agents/${workspaceId}`,
 } as const;
+
+/* ---------- Write-only arguments (T-2866) ---------- */
+
+/** What a write-only argument is shown as wherever a call is kept: the audit row, the chat transcript, an approval card. */
+export const WRITE_ONLY_MASK = '[write-only]';
+
+/**
+ * The arguments of a Portal MCP tool that carry a value the portal stores and never gives back (a secret's value): masked in the audit row,
+ * in the chat transcript's tool row and on an approval card, and left out of the "looks like a secret" refusal (that is what they are for).
+ */
+export const PORTAL_WRITE_ONLY_ARGS: Readonly<Record<string, readonly string[]>> = {
+  pool_secret_set: ['value'],
+};
+
+/** The write-only arguments of a tool, by its portal name (`pool_secret_set`) or as Claude Code names it (`mcp__pilot__pool_secret_set`). */
+export function writeOnlyArgsOf(toolName: string | null | undefined): readonly string[] {
+  if (!toolName) return [];
+  const bare = toolName.startsWith('mcp__') ? toolName.slice(toolName.lastIndexOf('__') + 2) : toolName;
+  return Object.hasOwn(PORTAL_WRITE_ONLY_ARGS, bare) ? PORTAL_WRITE_ONLY_ARGS[bare]! : [];
+}
+
+/** A copy of a call's arguments with its write-only ones masked; anything that is not an object comes back as it is. */
+export function maskWriteOnlyArgs<T>(toolName: string | null | undefined, args: T): T {
+  const fields = writeOnlyArgsOf(toolName);
+  if (!fields.length || !args || typeof args !== 'object' || Array.isArray(args)) return args;
+  const out: Record<string, unknown> = { ...(args as Record<string, unknown>) };
+  for (const f of fields) if (f in out) out[f] = WRITE_ONLY_MASK;
+  return out as T;
+}
