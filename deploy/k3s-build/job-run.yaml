@@ -8,7 +8,7 @@
 # Credentials (T-401): only the init container `fetch` has the Secret. It clones (git's helper reads the token from its environment) and runs
 # `npm ci --ignore-scripts` (the npm token), so no code of the repository or of a dependency runs while a credential is there; its HOME
 # (git config, the user .npmrc) is a volume the `run` container does not mount; it checks that no credential value is in /tmp and writes
-# its log and exit code there. The `run` container has no git or npm secret, only the --pool-env values (T-426; which names may come is scripts/job-run.sh's check alone, PILOT-998: delivered by the workspace's Secrets pool and not on its deny-list; as env; they are moved out of the environment at once and back in only for the command, so npm rebuild and the lifecycle scripts do not inherit them, but /proc/1/environ still holds them): it prints that log, runs the install scripts npm ci left out
+# its log and exit code there. The `run` container has no git or npm secret, only the --pool-env values (T-426: E2E_CF_ACCESS_* test credentials and, T-384, the stg QA test account's E2E_QA_EMAIL and E2E_QA_PASSWORD, as env; they are moved out of the environment at once and back in only for the command, so npm rebuild and the lifecycle scripts do not inherit them, but /proc/1/environ still holds them): it prints that log, runs the install scripts npm ci left out
 # (`npm rebuild` and the package's own lifecycle scripts), then the command. --against is fetched by `fetch` too (and, when its lockfile
 # differs, its packages go into npm's cache, so `run` installs them offline).
 apiVersion: batch/v1
@@ -210,8 +210,8 @@ spec:
             requests: {cpu: 500m, memory: __MEMORY__}
             limits: {cpu: "4", memory: __MEMORY__}
       containers:
-        # T-401: no git or npm credential here, no envFrom. The one exception (T-426): each --pool-env name scripts/job-run.sh accepted (PILOT-998: delivered by the
-        # Secrets pool and not on its deny-list) as a secretKeyRef, written by job-run.sh in place of the __POOL_ENV__ line; never in fetch.
+        # T-401: no git or npm credential here, no envFrom. The one exception (T-426): each --pool-env name (E2E_CF_ACCESS_*, E2E_QA_EMAIL, E2E_QA_PASSWORD, and T-1665's E2E_QA2_EMAIL, E2E_QA2_PASSWORD only, the
+        # command's own scoped test credentials) as a secretKeyRef, written by job-run.sh in place of the __POOL_ENV__ line; never in fetch.
         - name: run
           image: __RUN_IMAGE__
           env:
@@ -242,8 +242,7 @@ spec:
               # leave the environment, so npm rebuild and the commit's lifecycle scripts do not inherit them; pool_on exports them for the
               # command alone. Known limit: this shell's own start-up environment (/proc/1/environ) still holds them: not hidden from code that reads it.
               declare -A jr_pool=()
-              # Every JR_POOL_<name> (T-2865): the manifest holds only names scripts/job-run.sh accepted (delivered by the Secrets pool, not on
-              # its deny-list, PILOT-998), so the name policy lives there alone.
+              # Every JR_POOL_<name> (T-2865): the manifest holds only names scripts/job-run.sh accepted, so the name policy lives there alone.
               for v in $(compgen -e); do case $v in JR_POOL_[A-Z]*) jr_pool[${v#JR_POOL_}]=${!v}; unset "$v" ;; esac; done
               pool_on() { local k; for k in "${!jr_pool[@]}"; do export "$k=${jr_pool[$k]}"; done; }
               pool_off() { local k; for k in "${!jr_pool[@]}"; do unset "$k"; done; }

@@ -35,10 +35,9 @@
 #     --big                                             8Gi of memory instead of 4Gi (T-524; /tmp 4Gi instead of 2Gi), for a run that was OOMKilled;
 #                                                       only k3s-node2 has room for it. Memory is requested = limited: the scheduler places a Job
 #                                                       only where it fits, says why it is Pending, and an OOMKilled Job says so with its limit.
-#     --pool-env <NAME>                               (repeatable, T-426) a credential from this workspace's Secrets pool for the
-#                                                       command (Konfersi's stg e2e: Cloudflare Access, the QA test accounts). Any name the pool
-#                                                       delivers as env (expose on), except the deny-list (PILOT-998: write, admin, prod, master,
-#                                                       the runner's tokens; see the check below), set here; the
+#     --pool-env <NAME>                               (repeatable, T-426) a scoped test credential from this workspace's Secrets pool for the
+#                                                       command (Konfersi's stg e2e: Cloudflare Access, the QA test account). Only E2E_CF_ACCESS_*,
+#                                                       E2E_QA_EMAIL and E2E_QA_PASSWORD (T-384), set here; the
 #                                                       value goes on stdin into the Job's Secret (deleted with the Job), the command's container
 #                                                       gets it as env by secretKeyRef (fetch does not), and the log is masked for it. Values under 8
 #                                                       characters are refused (the mask skips them); an --out file that holds a value, and any
@@ -72,7 +71,7 @@
 # the Job and is deleted on exit; they are never on a command line, and the streamed log is masked for them. Only the Job's init container
 # `fetch` reads that Secret (T-401): it clones and runs `npm ci --ignore-scripts`, and no code of the repository or a dependency runs there;
 # the install scripts and the command run in the `run` container, which has no git or npm credential in its environment, git config or files, and gets
-# only the --pool-env values (T-426) as env. They are kept out of the environment of npm rebuild and the lifecycle scripts, but a lifecycle script of the same user can still read /proc/<ppid>/environ (the shell's start-up environment); the real boundary is the --pool-env deny-list (PILOT-998: no write, admin, production or master credential, and none of the runner's own tokens, goes in; a delivered name outside it does, the T-2823 read-only Koneviro keys included). The raw
+# only the --pool-env values (T-426) as env. They are kept out of the environment of npm rebuild and the lifecycle scripts, but a lifecycle script of the same user can still read /proc/<ppid>/environ (the shell's start-up environment); the real boundary is that only test credentials may go in, plus the two read-only Koneviro data keys (T-2823) (E2E_CF_ACCESS_*, and the stg QA test account's E2E_QA_EMAIL and E2E_QA_PASSWORD, T-384). The raw
 # log in the cluster is unmasked until the Job is cleaned up (TTL); only the streamed copy is masked. The whole log: JOB_RUN_LOG
 # (default /tmp/job-run-<job>.log). Exit: the command's code; 1 when the Job did not finish, 2 for a usage error, 124 past the deadline.
 set -eu
@@ -190,43 +189,20 @@ for a in $artifacts; do [[ $a =~ ^[A-Za-z0-9_.][A-Za-z0-9_./*-]*$ && ! $a =~ (^|
 [ -z "$keep" ] || [ -n "$against" ] || die "--keep-tests needs --against"
 # A leading dot is a path too (.pilot/tests/x.py: T-960, 2026-10-17, no test under .pilot/ could be proved); never `..`, `.` or `./` alone.
 for a in $keep; do [[ $a =~ ^[A-Za-z0-9_.][A-Za-z0-9_./-]*$ && ! $a =~ (^|/)\.\.(/|$) && ! $a =~ ^\.(/)?$ ]] || die "--keep-tests: file paths inside the repository (got $a)"; done
-# --pool-env (T-426): credentials of the Secrets pool, by NAME, for the command. Checked here, before any kubectl call.
-# PILOT-998 (T-2865, decision PILOT-996 #42754): no hard-coded list any more (it held the E2E_* test accounts of T-384/T-1665/T-2294 and the two
-# read-only Koneviro keys of T-2823). A name is accepted when, in this order:
-#   1. it is a variable name, [A-Z][A-Z0-9_]*;
-#   2. it is NOT on the deny-list below: write, admin, production and master credentials, and the runner's own tokens (refused even when the
-#      pool delivers them: they need a person's approval, PILOT-1000);
-#   3. this workspace's Secrets pool DELIVERS it as env: it is a key of the pool's env drop-in
-#      /etc/claude-code/managed-settings.d/20-claudepilot-env.json (written by the portal, owner secrets; only its key names are read,
-#      never its values). A secret that is not exposed is not there: turn on expose for it in its pool.
-# The path is fixed on purpose: no variable overrides it, so an agent cannot point the check at a file it wrote (PILOT-998 review 42840).
-# The tests run a copy of this script with this one line changed. The deny-list is still the hard boundary (a production credential
-# whose name matches none of its patterns is the known gap; masking stays).
-# The name check and the unknown-option branch never echo what they refuse (it may be a secret value pasted by mistake, and a value can look
-# like a name): the message says only that it was refused, why, and what to do. A name is shown only once it is known to be delivered. Other
-# options' messages still show their own value (--ref, --repo ... "got X"): never paste a value into any option. Values under 8 characters are
-# refused: the log mask skips them.
-pool_dropin=/etc/claude-code/managed-settings.d/20-claudepilot-env.json
-pool_denied() {
-  case $1 in
-    # The deny-list of PILOT-996 #42754, then the same words at the start or end of a name, and the runner's and the portal's own tokens.
-    *_RW_* | *ADMIN* | *PROD* | *_PRD_* | CLOUDFLARE_API_TOKEN | GITEA_* | GITHUB_* | *_MASTER_*) return 0 ;;
-    *_RW | RW_* | *_PRD | PRD_* | *_MASTER | MASTER_* | GH_* | NODE_AUTH_TOKEN | ANTHROPIC_* | CLAUDE_* | CLAUDEPILOT_* | PILOT_*) return 0 ;;
-  esac
-  return 1
-}
-pool_names=; pool_delivered=; pool_read=
+# --pool-env (T-426): the scoped test credentials of the Secrets pool, by NAME, for the command. Checked here, before any kubectl call.
+# Only E2E_CF_ACCESS_* names, and the stg QA test account's two (E2E_QA_EMAIL, E2E_QA_PASSWORD: T-384, coordinator decision 2026-10-17
+# #9575; a test account on stg, never a person's). The --pool-env name check and the unknown-option branch never echo what they refuse (it may be a secret value
+# pasted by mistake, and a value can look like a name): the message says only that it was refused and why. Other options' messages still show
+# their own value (--ref, --repo ... "got X"): never paste a value into any option. Values under 8 characters are refused: the log mask skips them.
+pool_names=
 for n in ${pool[@]+"${pool[@]}"}; do
-  [[ $n =~ ^[A-Z][A-Z0-9_]*$ ]] || die "--pool-env: refused: not a variable name (capital letters, digits and _, starting with a letter); the argument is not shown. Pass the NAME of the variable, never its value"
-  ! pool_denied "$n" || die "--pool-env: refused: a deny-listed name (write, admin, production or master credentials, and the runner's own tokens never go into a Job); the argument is not shown. It needs a person's approval (PILOT-1000)"
-  if [ -z "$pool_read" ]; then
-    pool_read=1
-    command -v jq >/dev/null 2>&1 || die "--pool-env: refused: jq is not installed here, so the delivered names cannot be checked; the argument is not shown. Write the need on your ticket under FOR THE COORDINATOR (jq in the workspace image)"
-    [ -r "$pool_dropin" ] || die "--pool-env: refused: this workspace's Secrets pool delivers no env (no readable $pool_dropin); the argument is not shown. Turn on expose for the secret in its pool"
-    pool_delivered=$(jq -r '(.env // {}) | keys[] | select(test("^[A-Z][A-Z0-9_]*$"))' "$pool_dropin" 2>/dev/null) || die "--pool-env: refused: $pool_dropin cannot be read as JSON; the argument is not shown. Write the need on your ticket under FOR THE COORDINATOR"
-  fi
-  [[ $'\n'$pool_delivered$'\n' == *$'\n'"$n"$'\n'* ]] || die "--pool-env: refused: not delivered as env by this workspace's Secrets pool; the argument is not shown. Turn on expose for it in its pool"
-  [ -n "${!n:-}" ] || die "--pool-env: $n is not set in this workspace (the Secrets pool delivers it; open a new shell or session to pick it up)"
+  # T-1665: the second stg QA test account (E2E_QA2_*) for two-user checks, a test account like E2E_QA_*.
+  # T-2294: the third QA account (E2E_QA3_*), the stg staff test accounts (E2E_STAFF_*, E2E_STAFF2_*) and the stg Turnstile test token
+  # (E2E_TURNSTILE_TOKEN): standalone entries of the konfersi-stg pool, test accounts and a test token on stg, never a person's.
+  # T-2823 (owner go 2026-10-28): the one non-test exception, the two READ-ONLY Koneviro data keys (KONEVIRO_S3_RO_ACCESS_KEY_ID, KONEVIRO_S3_RO_SECRET_ACCESS_KEY) of the
+  # konfersi-stg pool, exact names, so a Job can verify the Garage copy. Never the RW pair, no wildcard.
+  [[ $n =~ ^E2E_CF_ACCESS_[A-Z0-9_]+$ || $n =~ ^E2E_QA[23]?_(EMAIL|PASSWORD)$ || $n =~ ^E2E_STAFF2?_(EMAIL|PASSWORD)$ || $n == E2E_TURNSTILE_TOKEN || $n == KONEVIRO_S3_RO_ACCESS_KEY_ID || $n == KONEVIRO_S3_RO_SECRET_ACCESS_KEY ]] || die "--pool-env: refused: not an allowed name (E2E_CF_ACCESS_*, E2E_QA_EMAIL, E2E_QA_PASSWORD, E2E_QA2_EMAIL, E2E_QA2_PASSWORD, E2E_QA3_EMAIL, E2E_QA3_PASSWORD, E2E_STAFF_EMAIL, E2E_STAFF_PASSWORD, E2E_STAFF2_EMAIL, E2E_STAFF2_PASSWORD, E2E_TURNSTILE_TOKEN, KONEVIRO_S3_RO_ACCESS_KEY_ID, KONEVIRO_S3_RO_SECRET_ACCESS_KEY); the argument is not shown"
+  [ -n "${!n:-}" ] || die "--pool-env: $n is not set in this workspace (the Secrets pool delivers it)"
   [[ ${!n} != *[$'\n\r']* ]] || die "--pool-env: $n holds a line break; refused"
   # Printable ASCII only (kubectl's env-file parser fails on other bytes and may then print the line).
   ! printf '%s' "${!n}" | LC_ALL=C grep -q '[^ -~]' || die "--pool-env: $n holds a character that is not printable ASCII; refused"

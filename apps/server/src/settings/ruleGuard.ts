@@ -441,30 +441,7 @@ function assignsGit(src, j) {
  * Splits a command line into words (quotes removed; NUL where a value is not known: a variable, $(...), backticks),
  * operators and redirections. Command substitutions and heredoc bodies are collected for their own checks.
  */
-// PILOT-998: $HOME, plain or in braces, is the one variable a git -C path may use: the guard reads it as its own HOME (the session's,
-// passed by the wrapper). Only while no text the guard lexes in this tool call names HOME any other way (HOME=..., export HOME,
-// read HOME, a default form in braces): then the shell's HOME may differ and the word stays a value the guard cannot see.
-let HOME_TOUCHED = false;
-function isHomeVar(src, j) {
-  if (src.startsWith('$HOME', j) && !/[A-Za-z0-9_]/.test(src[j + 5] || '')) return true;
-  return src.startsWith('$' + '{HOME}', j);
-}
-// Also refused for resolution: any command or process substitution, arithmetic ((, let, [[ -eq) and an assigning expansion (:= in
-// braces), since bash arithmetic on a value assigns (a value HOME=x). The words are checked after lexing (homeMayMove).
-function noteHome(src) {
-  const rest = src.split('$' + '{HOME}').join('').replace(/\$HOME(?![A-Za-z0-9_])/g, '');
-  if (/(^|[^A-Za-z0-9_])HOME(?![A-Za-z0-9_])/.test(rest)) HOME_TOUCHED = true;
-  if (/\$\(|<\(|>\(|\x60|\(\(|\[\[|:=|\$\{[^}]*=/.test(src)) HOME_TOUCHED = true;
-}
-/** A git -C word with $HOME in it, read as the guard's HOME when nothing in the tool call can move it; any other word as it is. */
-function homeWord(d) {
-  if (!d || !d.dyn || !d.home || d.subst || HOME_TOUCHED) return d;
-  if ((d.text.match(/\u0000/g) || []).length !== d.home) return d;
-  return Object.assign({}, d, { text: d.text.split('\u0000').join(HOME), dyn: false });
-}
-
 function lex(src) {
-  noteHome(src);
   const tokens = [];
   const subs = [];
   const bodies = [];
@@ -564,7 +541,6 @@ function lex(src) {
         }
         if (src[j] === '$' && VAR_START.test(src[j + 1] || '')) {
           if (assignsGit(src, j)) gitAssign = true;
-          if (isHomeVar(src, j)) w.home = (w.home || 0) + 1;
           w.dyn = true;
           w.text += '\u0000';
           j = skipVar(src, j);
@@ -602,7 +578,6 @@ function lex(src) {
     if (c === '$' && VAR_START.test(src[i + 1] || '')) {
       if (assignsGit(src, i)) gitAssign = true;
       const w = word();
-      if (isHomeVar(src, i)) w.home = (w.home || 0) + 1;
       w.dyn = true;
       w.text += '\u0000';
       i = skipVar(src, i);
@@ -694,17 +669,7 @@ function lex(src) {
   }
   end();
   readBodies();
-  if (subs.length || tokens.some(homeMayMove)) HOME_TOUCHED = true;
   return { tokens: tokens, subs: subs, bodies: bodies, bad: bad, gitAssign: gitAssign };
-}
-
-// A word after quote removal that could set HOME in this shell: an assignment word (any name, a variable one too), a builtin that
-// sets or reads into a variable or runs text in this shell, or HOME spelled out (HO''ME).
-const HOME_SETTERS = new Set(['source', '.', 'eval', 'declare', 'typeset', 'local', 'export', 'readonly', 'read', 'readarray', 'mapfile', 'printf', 'let', 'unset', 'getopts']);
-function homeMayMove(w) {
-  if (w.t !== 'w') return false;
-  const t = w.text;
-  return HOME_SETTERS.has(t) || /^[A-Za-z_\u0000][A-Za-z0-9_\u0000]*(\[[^\]]*\])?\+?=/.test(t) || /(^|[^A-Za-z0-9_])HOME(?![A-Za-z0-9_])/.test(t);
 }
 
 /** Simple commands: words and redirections between operators; whether stdin comes from a pipe. */
@@ -797,9 +762,8 @@ function analyzeBash(command, cwd) {
   return null;
 }
 
-// todo (PILOT-998): what the agent can do instead, printed after the reason; never in the audit row (its form stays the grouping key).
-function hit(form, p, todo) {
-  return todo ? { form: form, path: p, todo: todo } : { form: form, path: p };
+function hit(form, p) {
+  return { form: form, path: p };
 }
 
 /**
@@ -1451,8 +1415,6 @@ function analyze(command, st, cwd, depth) {
         (st.gitC || (st.gitC = [])).push(st.cmdN);
         const step = gitCStep(u.chdir, restore ? restore.base : base);
         if (step.hit) return step.hit;
-        // A tool checkout is read only through git -C, where gitToolPolicy reads the subcommand.
-        if (step.tool) return hit('env -C or sudo -D into a tool checkout', '', 'use git -C <tool root> with ' + GIT_TOOL_FORMS);
       }
       const r = git(args, st, base, stdinText, stdinFile, c.piped);
       if (r) return r;
@@ -1661,26 +1623,18 @@ function gitConfigHit(kv, unseen, st) {
 const GITC_DEFAULT_ROOT = '/home/node/work/agentic-worktrees';
 const GITC_ROOTS_FILE = process.env.CLAUDEPILOT_GUARD_GITC_ROOTS_FILE || '/etc/claudepilot/git-c-roots';
 
-// PILOT-998: a line "tool <absolute path>" names a read-only tool checkout (the main ClaudePilot folder whose scripts every lane runs).
-// git -C there is allowed for reads and fast-forwards only (gitToolPolicy). An older guard ignores these lines (not absolute).
 function gitCRoots() {
   const extra = [];
-  const tools = [];
   try {
     for (const line of fs.readFileSync(GITC_ROOTS_FILE, 'utf8').split('\n')) {
       const t = line.trim();
-      const m = /^tool\s+(\S+)$/.exec(t);
-      if (m && path.isAbsolute(m[1])) tools.push(path.resolve(m[1]));
-      else if (t && !t.startsWith('#') && path.isAbsolute(t)) extra.push(path.resolve(t));
+      if (t && !t.startsWith('#') && path.isAbsolute(t)) extra.push(path.resolve(t));
     }
   } catch (e) {
     // no file: only the default root
   }
-  return { extra: extra, tools: tools, active: extra.length > 0 || isDir(GITC_DEFAULT_ROOT) };
+  return { extra: extra, active: extra.length > 0 || isDir(GITC_DEFAULT_ROOT) };
 }
-
-const GIT_TOOL_FORMS = 'fetch, pull --ff-only, merge --ff-only, log, show, status, rev-parse, diff and branch --contains';
-const GITC_LANE_TODO = 'run git -C on your own worktree (below a lane root: git worktree add there), or on a tool checkout use only ' + GIT_TOOL_FORMS;
 
 /**
  * A GIT_* variable that moves a folder, adds config or runs a program (GIT_DIR, GIT_WORK_TREE, GIT_COMMON_DIR, GIT_CONFIG_COUNT,
@@ -1707,105 +1661,28 @@ function gitEnvNameHit(w) {
 }
 
 /** The folder a git -C path word names: { hit } when it is refused, else { base } (its real path), or { base: next } when the guard is off here. */
-function gitCStep(d0, b) {
+function gitCStep(d, b) {
   const roots = gitCRoots();
-  const d = homeWord(d0);
   // Not a lane workspace (no lane folder, no configured root): there is no lane allow rule to guard, and the folder is tracked as before.
   if (!roots.active) return { base: !d || d.dyn ? null : b === null ? null : path.resolve(b, expandHome(d.text)) };
-  if (!d) return { hit: hit('git -C without a folder', '', 'name the folder after -C') };
-  if (d.dyn) {
-    const why = d.home && HOME_TOUCHED ? ' ($HOME, in a command that could change HOME)' : ' (a variable other than $HOME, or a command substitution)';
-    return { hit: hit('git -C of a value the guard cannot see' + why, '', 'write the folder out as a path ($HOME and ~ are read; other variables are not), in a command that does not set HOME') };
-  }
-  if (d.glob) return { hit: hit('git -C of a pattern', '', 'write the folder out, without * ? [ or {') };
-  if (HOME_TOUCHED && /^~(\/|$)/.test(d.text)) return { hit: hit('git -C of ~ in a command that could change HOME', '', 'write the folder out as an absolute path') };
+  if (!d) return { hit: hit('git -C without a folder', '') };
+  if (d.dyn) return { hit: hit('git -C of a value the guard cannot see (a variable or a command substitution)', '') };
+  if (d.glob) return { hit: hit('git -C of a pattern', '') };
   const t = expandHome(d.text);
-  if (!t || /[\u0000-\u001f$]/.test(t)) return { hit: hit('git -C of a path the guard cannot read', '', 'write the folder out as a plain path (no $ or control characters)') };
-  if (b === null && !path.isAbsolute(t)) return { hit: hit('git -C of a folder relative to a folder the guard does not know', '', 'use an absolute path') };
+  if (!t || /[\u0000-\u001f$]/.test(t)) return { hit: hit('git -C of a path the guard cannot read', '') };
+  if (b === null && !path.isAbsolute(t)) return { hit: hit('git -C of a folder relative to a folder the guard does not know', '') };
   let real;
   try {
     real = fs.realpathSync(path.resolve(b === null ? '/' : b, t));
   } catch (e) {
-    return { hit: hit('git -C of a folder that does not exist', '', 'check the path; create your worktree first (git worktree add)') };
+    return { hit: hit('git -C of a folder that does not exist', '') };
   }
   const under = [GITC_DEFAULT_ROOT].concat(roots.extra).some((r) => {
     const rr = realish(r);
     return real.startsWith(rr === '/' ? rr : rr + '/');
   });
-  if (under) return { base: real };
-  // A tool checkout (PILOT-998): the folder itself or below it; the subcommand is read by gitToolPolicy.
-  const tool = roots.tools.map(realish).find((rr) => rr !== '/' && (real === rr || real.startsWith(rr + '/')));
-  if (tool) return { base: real, tool: true, toolRoot: tool };
-  return { hit: hit('git -C outside the lane worktrees', '', GITC_LANE_TODO) };
-}
-
-/**
- * PILOT-998: a git -C line on a tool checkout (a "tool <path>" line of the roots file): only reads and fast-forwards, every word
- * visible. Refused: every other subcommand (push, reset, checkout, commit, ...), a plain or non-ff pull or merge, a refspec that
- * writes a local branch, and a file written by --output. Each refusal says what to do.
- */
-const GIT_TOOL_SUBS = new Set(['fetch', 'pull', 'merge', 'log', 'show', 'status', 'rev-parse', 'diff', 'branch']);
-const GIT_TOOL_FF_FLAGS = /^(--ff-only|-q|--quiet|-v|--verbose|--progress|--no-progress|--stat|-n|--no-stat|--no-edit|--prune|-p|--tags|--no-tags|--all|--no-recurse-submodules)$/;
-const GIT_TOOL_BRANCH_FLAGS = /^(--contains(=.+)?|--no-contains(=.+)?|-a|--all|-r|--remotes|-l|--list|-v|--verbose|--format=.+|--sort=.+|--color(=.+)?|--no-color|--column(=.+)?|--no-column|--merged(=.+)?|--no-merged(=.+)?|--points-at(=.+)?|-i|--ignore-case|--omit-empty)$/;
-const GIT_TOOL_BRANCH_RE = /^[A-Za-z0-9_][A-Za-z0-9._\/-]*$/;
-/** The branch a tool checkout has checked out, from its own .git/HEAD; '' when detached, a linked worktree or unreadable (fail closed). */
-function gitToolHead(root) {
-  try {
-    const m = /^ref: refs\/heads\/(\S+)\s*$/.exec(fs.readFileSync(path.join(root, '.git', 'HEAD'), 'utf8'));
-    return m && GIT_TOOL_BRANCH_RE.test(m[1]) ? m[1] : '';
-  } catch (e) {
-    return '';
-  }
-}
-function gitToolPolicy(sub, rest, root) {
-  const forms = 'on a tool checkout only ' + GIT_TOOL_FORMS + ' are allowed; do any other work in your own worktree';
-  const no = (what, todo) => hit('git ' + (sub || '(no subcommand)') + ' ' + what + ' (a tool checkout)', '', todo || forms);
-  if (!GIT_TOOL_SUBS.has(sub)) return no('(not a read or a fast-forward)');
-  const argv = gitArgv(sub, rest);
-  for (const w of argv) {
-    if (w.dyn) return no('with a value the guard cannot see', 'write every word out (no variables or command substitutions)');
-    // @{u} and @{upstream} are literal words to the shell (a brace without a comma or .. does not expand).
-    if (w.glob && sub !== 'log' && sub !== 'show' && sub !== 'diff' && w.text !== '@{u}' && w.text !== '@{upstream}') return no('with a pattern', 'write the names out, without * ? [ or {');
-  }
-  const dd = argv.findIndex((w) => w.text === '--');
-  const before = dd < 0 ? argv : argv.slice(0, dd);
-  const flags = before.filter((w) => w.text.startsWith('-')).map((w) => w.text);
-  const pos = before.filter((w) => !w.text.startsWith('-')).map((w) => w.text);
-  // Review 43544: git reads the words after -- as the remote and refs too, so a -- would hide them from the checks below.
-  if (dd >= 0 && (sub === 'fetch' || sub === 'pull' || sub === 'merge')) return no('with -- (the words after it are refs the guard would not check)', 'drop the --: git -C <tool root> ' + sub + (sub === 'fetch' ? ' origin [<branch>]' : ' --ff-only'));
-  if (sub === 'fetch' || sub === 'pull') {
-    if (flags.some((f) => f === '-u' || gitLong(f, '--update-head-ok', 4) || gitLong(f, '--refmap', 5))) return no('with -u, --update-head-ok or --refmap', 'fetch by remote and branch name only');
-    if (flags.some((f) => gitLong(f, '--set-upstream', 6))) return no('with --set-upstream (it writes the checkout’s config)', 'drop --set-upstream');
-    if (pos.some((p) => p.startsWith('+') || p.indexOf(':') >= 0)) return no('of a refspec that writes a local branch (src:dst or +)', 'name only the remote and the branch: git -C <tool root> ' + sub + (sub === 'pull' ? ' --ff-only' : '') + ' origin <branch>');
-  }
-  if (sub === 'fetch') {
-    // Only flags that move nothing local (--stdin would read refspecs the guard never sees, --depth would make the checkout shallow).
-    const other = flags.find((f) => !GIT_TOOL_FF_FLAGS.test(f) && f !== '--dry-run');
-    if (other) return no('with ' + other + ' (only quiet, verbose, prune, tags and --dry-run flags)', 'use git -C <tool root> fetch origin [<branch>]');
-    // Review 43381 B1: origin, and at most one branch (a fetch without a refspec writes only FETCH_HEAD and origin/*).
-    if (pos.length > 2 || (pos.length && pos[0] !== 'origin') || (pos.length === 2 && !GIT_TOOL_BRANCH_RE.test(pos[1]))) return no('of ' + pos.join(' ') + ' (only origin and one branch)', 'use git -C <tool root> fetch origin [<branch>]');
-  }
-  if (sub === 'pull' || sub === 'merge') {
-    if (!flags.includes('--ff-only')) return no('without --ff-only (it could make a merge commit)', 'add --ff-only: git -C <tool root> ' + sub + ' --ff-only');
-    const other = flags.find((f) => !GIT_TOOL_FF_FLAGS.test(f));
-    if (other) return no('with ' + other + ' (only --ff-only and quiet, verbose, stat, prune and tags flags)', 'use ' + sub + ' --ff-only without ' + other);
-    // Review 43381 B1: a tool checkout is only brought to its own upstream, never moved to a ref a lane chose (its door scripts
-    // and its .claude/settings.json would then be unreviewed code). pull: no ref, or origin <the checked-out branch>; merge:
-    // @{u} or origin/<the checked-out branch>.
-    const up = sub === 'pull' ? 'git -C <tool root> pull --ff-only' : 'git -C <tool root> merge --ff-only @{u}';
-    if (sub === 'pull' && pos.length === 0) return null;
-    const head = gitToolHead(root);
-    if (!head) return no('of a named ref while the checked-out branch cannot be read (detached or unreadable HEAD)', 'use ' + up);
-    const ok = sub === 'pull' ? pos.length === 2 && pos[0] === 'origin' && pos[1] === head : pos.length === 1 && (pos[0] === '@{u}' || pos[0] === '@{upstream}' || pos[0] === 'origin/' + head);
-    if (!ok) return no('of ' + (pos.join(' ') || 'no ref') + ' (only the checked-out branch’s upstream, origin/' + head + ')', 'use ' + up);
-  }
-  if (sub === 'branch') {
-    if (!flags.some((f) => /^--contains(=|$)/.test(f))) return no('without --contains (it could create, move or delete a branch)', 'use git -C <tool root> branch --contains <commit>');
-    const other = flags.find((f) => !GIT_TOOL_BRANCH_FLAGS.test(f));
-    if (other) return no('with ' + other, 'use branch --contains <commit> with list flags only (-a, -r, -v, --format)');
-  }
-  if ((sub === 'log' || sub === 'show' || sub === 'diff') && flags.some((f) => /^--output(=|$)/.test(f))) return no('--output (it writes a file)', 'drop --output and redirect into a file of your own worktree');
-  return null;
+  if (!under) return { hit: hit('git -C outside the lane worktrees', '') };
+  return { base: real };
 }
 
 // Options git takes before the subcommand that move nothing: the only ones a lane workspace may use there (S2). Every other one is
@@ -1897,11 +1774,10 @@ function gitArgv(sub, rest) {
 function gitPolicy(sub, rest) {
   if (!GIT_POLICED.has(sub)) return null;
   const argv = gitArgv(sub, rest);
-  const no = (what, todo) =>
-    hit('git ' + sub + ' ' + what + ' (a lane workspace)', '', todo || 'this git form is refused in a lane workspace (T-974); use a form that keeps history and protected branches, or write the need on your ticket under FOR THE COORDINATOR');
+  const no = (what) => hit('git ' + sub + ' ' + what + ' (a lane workspace)', '');
   // Fail closed: a value the guard cannot see could be a flag or a protected branch.
   for (const w of argv) {
-    if (w.dyn) return no('with a value the guard cannot see (a variable or a command substitution)', 'write every word out (no variables or command substitutions)');
+    if (w.dyn) return no('with a value the guard cannot see (a variable or a command substitution)');
     if (w.glob && GIT_NO_GLOB.has(sub)) return no('with a pattern');
   }
   const dd = argv.findIndex((w) => w.text === '--');
@@ -1956,8 +1832,6 @@ function git(args, st, base, stdinText, stdinFile, piped) {
   let b = base;
   const lane = gitCRoots().active;
   let viaC = false;
-  let tool = false;
-  let toolRoot = '';
   const mark = (list) => (st[list] || (st[list] = [])).push(st.cmdN);
   for (; k < args.length; k++) {
     const t = args[k].text;
@@ -1970,8 +1844,6 @@ function git(args, st, base, stdinText, stdinFile, piped) {
         const step = gitCStep(args[++k], b);
         if (step.hit) return step.hit;
         b = step.base;
-        tool = !!step.tool; // the last -C decides, as in git
-        toolRoot = step.toolRoot || '';
         continue;
       }
       const dir = /^--(git-dir|work-tree)(?:=([\s\S]*))?$/.exec(t);
@@ -1984,7 +1856,6 @@ function git(args, st, base, stdinText, stdinFile, piped) {
         if (v && !v.dyn && !path.isAbsolute(expandHome(v.text))) return hit('a relative --git-dir or --work-tree in a lane workspace (git reads it after the last -C)', '');
         const step = gitCStep(v, b);
         if (step.hit) return step.hit;
-        if (step.tool) return hit('--git-dir or --work-tree of a tool checkout', '', 'use git -C <tool root> with ' + GIT_TOOL_FORMS);
         continue;
       }
       if (GITC_GLOBAL_OK.test(t) && !args[k].dyn) continue;
@@ -2030,10 +1901,6 @@ function git(args, st, base, stdinText, stdinFile, piped) {
   if (lane && viaC) {
     const pr = gitPolicy(sub, rest);
     if (pr) return pr;
-    if (tool) {
-      const tr = gitToolPolicy(sub, rest, toolRoot);
-      if (tr) return tr;
-    }
   }
   // A lane workspace: git config of a key that moves the work tree or runs a program (core.worktree, core.hooksPath, alias.x, include.path).
   if (lane && sub === 'config') {
@@ -2327,10 +2194,9 @@ function audit(input, tool, form, p) {
   }
 }
 
-function refuse(input, tool, form, p, todo) {
+function refuse(input, tool, form, p) {
   audit(input, tool, form, p);
-  const next = todo ? 'What to do: ' + todo + '.' : 'Propose the change as text on a ticket; the coordinator lands it.';
-  process.stderr.write(MESSAGE + '. Refused: ' + form + (p ? ' (' + p + ')' : '') + '. ' + next + '\n');
+  process.stderr.write(MESSAGE + '. Refused: ' + form + (p ? ' (' + p + ')' : '') + '. Propose the change as text on a ticket; the coordinator lands it.\n');
   process.exit(2);
 }
 
@@ -2346,9 +2212,6 @@ function verdictOf(input) {
   const tool = typeof input.tool_name === 'string' ? input.tool_name : '';
   const ti = input.tool_input && typeof input.tool_input === 'object' ? input.tool_input : {};
   const cwd = typeof input.cwd === 'string' && path.isAbsolute(input.cwd) ? input.cwd : process.cwd();
-  // PILOT-998: HOME_TOUCHED belongs to ONE tool call (every lex of it, bash -c bodies included); a decision starts clean. Today each
-  // decision is its own process, so this only matters if the guard ever decides more than one call per process.
-  HOME_TOUCHED = false;
   try {
     return check(tool, ti, cwd);
   } catch (e) {
@@ -2371,7 +2234,7 @@ function main() {
     if (done) return;
     done = true;
     if (!verdict) process.exit(0);
-    refuse(input, tool, verdict.form, verdict.path, verdict.todo);
+    refuse(input, tool, verdict.form, verdict.path);
   };
   let worker;
   try {
@@ -2407,32 +2270,8 @@ export const GITC_ROOTS: readonly string[] = [
   '/home/node/work/konfersi-universe.worktrees',
 ];
 
-/**
- * The read-only tool checkouts (PILOT-998), the one list: lanes run their scripts by these absolute paths and may keep them current
- * with `git -C <root>` fetch, pull --ff-only, merge --ff-only, log, show, status, rev-parse, diff and branch --contains, nothing else.
- */
-export const GITC_TOOL_ROOTS: readonly string[] = ['/home/node/work/claudepilot'];
-
-/**
- * The file's content: one lane root a line, then one `tool <path>` line per tool checkout. Throws for a lane root that is not
- * absolute, has `..` or is not a worktrees folder, and for a tool root that is not absolute, has `..`, is a worktrees folder or
- * holds a lane root (a tool root is never wider than its one checkout).
- */
-export function gitCRootsContent(roots: readonly string[], tools: readonly string[] = GITC_TOOL_ROOTS): string {
-  for (const t of tools) {
-    const ok =
-      t.startsWith('/') &&
-      t.split('/').filter(Boolean).length >= 3 &&
-      !t.split('/').includes('..') &&
-      !/[\s\u0000-\u001f]/.test(t) &&
-      !t.endsWith('/') &&
-      !/(^|\/)(agentic-worktrees|[^/]+\.worktrees)$/.test(t) &&
-      !roots.some((r) => r === t || r.startsWith(`${t}/`));
-    if (!ok)
-      throw new Error(
-        `git -C tool root "${t}" must be one absolute checkout folder (at least three levels deep, no "..", not a worktrees folder, holding no lane root)`,
-      );
-  }
+/** The file's content: one root a line. Throws for a root that is not absolute, has `..` or is not a worktrees folder. */
+export function gitCRootsContent(roots: readonly string[]): string {
   for (const r of roots) {
     const ok =
       r.startsWith('/') &&
@@ -2445,8 +2284,7 @@ export function gitCRootsContent(roots: readonly string[], tools: readonly strin
         `git -C root "${r}" must be an absolute path without "..", ending in .worktrees or agentic-worktrees (never a main checkout)`,
       );
   }
-  const toolLines = tools.map((t) => `tool ${t}\n`).join('');
-  return `# claudepilot: lane roots for the git -C check of policy-rule-guard (T-860, T-924). Root-owned; written by the portal.\n${roots.join('\n')}\n${toolLines}`;
+  return `# claudepilot: lane roots for the git -C check of policy-rule-guard (T-860, T-924). Root-owned; written by the portal.\n${roots.join('\n')}\n`;
 }
 
 /** The guard's files: root-owned, outside every workspace folder (policy owner: `/etc/claudepilot/bin/policy-*` and the roots file). */
