@@ -249,7 +249,8 @@ function world(seeds: Seed[] = [], scenario: Scenario = {}) {
     return { p, done, out: () => out };
   };
   const run = (argv: string[], over: Record<string, string> = {}, script = SCRIPT) => {
-    const file = script === SCRIPT ? poolScript : script;
+    // Only --pool-env reads the drop-in: those runs use the copy that names the fixture; the rest run the real script in place.
+    const file = script === SCRIPT && argv.includes('--pool-env') ? poolScript : script;
     const r = spawnSync('bash', [file, ...argv], { env: env(over), cwd: root, encoding: 'utf8', timeout: 30_000 });
     return { code: r.status, out: r.stdout + r.stderr };
   };
