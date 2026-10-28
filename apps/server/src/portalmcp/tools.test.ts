@@ -350,17 +350,24 @@ test('workspace_create resolves pool names before it creates anything, and gives
   assert.deepEqual(calls, ['ws.create:docker/fresh', 'accountPool.assign:docker/fresh:ap1:undefined:false', 'pools.set:docker/fresh:skillset:p-skill']);
 });
 
-test('pools: secrets pools are read-only over MCP, skillset and MCP set pools are written as drafts for review', async () => {
+test('pools: secrets pools are write-only over MCP (names on create, no update or delete), skillset and MCP set pools are written as drafts for review', async () => {
   reset();
   const admin = h.token('admin');
   const types = where(await h.call(admin.secret, 'pool_types')).types as Row[];
-  assert.deepEqual(types.map((x) => [x.type, x.mcp_writes]), [['secrets', false], ['skillset', true], ['mcpset', true]]);
-  const refused = await h.call(admin.secret, 'pool_create', { type: 'secrets', name: 'Mine', content: { names: ['X'] } });
-  assert.equal(err(refused), 'UI_ONLY');
-  assert.match(text(refused), /Pools → secrets/);
+  assert.deepEqual(types.map((x) => [x.type, x.mcp_writes]), [['secrets', 'write-only'], ['skillset', true], ['mcpset', true]]);
+  // T-2866: a secrets pool is created with names only; a value or a variable in the content is refused before anything is created.
+  const withValue = await h.call(admin.secret, 'pool_create', { type: 'secrets', name: 'Mine', content: { entries: [{ kind: 'secret', name: 'X', newValue: 'v' }] } });
+  assert.equal(err(withValue), 'VALIDATION_FAILED');
+  assert.match(text(withValue), /pool_secret_set/);
+  assert.equal(err(await h.call(admin.secret, 'pool_create', { type: 'secrets', name: 'Mine', content: { entries: [{ kind: 'variable', name: 'X', value: 'v' }] } })), 'VALIDATION_FAILED');
+  assert.equal(err(await h.call(admin.secret, 'pool_create', { type: 'secrets', name: 'konfersi-prd', content: { names: ['X'] } })), 'PROTECTED');
   assert.equal(err(await h.call(admin.secret, 'pool_update', { id: 'p-sec', base_revision: 1, content: {} })), 'UI_ONLY');
   assert.equal(err(await h.call(admin.secret, 'pool_delete', { id: 'p-sec' })), 'UI_ONLY');
   assert.deepEqual(calls, [], 'a secrets pool is never touched');
+  const names = where(await h.call(admin.secret, 'pool_create', { type: 'secrets', name: 'Mine', content: { names: ['API_KEY', 'id_rsa'] } }));
+  assert.deepEqual(names.secrets_missing, ['API_KEY', 'id_rsa'], 'each name still needs its value');
+  assert.deepEqual(calls, [`pools.create:secrets:Mine:via MCP (portal-mcp:${admin.id})`]);
+  calls.length = 0;
   const made = where(await h.call(admin.secret, 'pool_create', { type: 'skillset', name: 'New skills', content: { skills: [] } }));
   assert.equal(made.pool.status, 'waiting_review', 'saved for a person to approve, not delivered');
   assert.deepEqual(calls, [`pools.create:skillset:New skills:via MCP (portal-mcp:${admin.id})`]);

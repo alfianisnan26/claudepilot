@@ -743,6 +743,7 @@ Generated from the registered tool list (18 files) and checked for coverage. Sco
 | `pool_list` | read | list(pool) |  |
 | `pool_get` | read | pool view pool_id |  |
 | `pool_create` | admin | create(pool) |  |
+| `pool_secret_set` | agent | agent: workspace operate (own), pool(secrets) operate, pool assigned to its workspace only; token: pool(secrets) manage (`secretWriteAccess`, pools/authz.ts) | protected pool refused (PILOT-1000), value write-only (T-2866) |
 | `pool_update` | admin D | pool manage pool_id | delete +confirm |
 | `pool_delete` | admin D | pool manage pool_id | delete +confirm |
 | `pool_assign` | admin D | workspace manage workspace_id; pool operate pool_id |  |
