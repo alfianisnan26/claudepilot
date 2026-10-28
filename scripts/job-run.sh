@@ -69,7 +69,7 @@
 # the Job and is deleted on exit; they are never on a command line, and the streamed log is masked for them. Only the Job's init container
 # `fetch` reads that Secret (T-401): it clones and runs `npm ci --ignore-scripts`, and no code of the repository or a dependency runs there;
 # the install scripts and the command run in the `run` container, which has no git or npm credential in its environment, git config or files, and gets
-# only the --pool-env values (T-426) as env. They are kept out of the environment of npm rebuild and the lifecycle scripts, but a lifecycle script of the same user can still read /proc/<ppid>/environ (the shell's start-up environment); the real boundary is that only test credentials may go in (E2E_CF_ACCESS_*, and the stg QA test account's E2E_QA_EMAIL and E2E_QA_PASSWORD, T-384). The raw
+# only the --pool-env values (T-426) as env. They are kept out of the environment of npm rebuild and the lifecycle scripts, but a lifecycle script of the same user can still read /proc/<ppid>/environ (the shell's start-up environment); the real boundary is that only test credentials may go in, plus the two read-only Koneviro data keys (T-2823) (E2E_CF_ACCESS_*, and the stg QA test account's E2E_QA_EMAIL and E2E_QA_PASSWORD, T-384). The raw
 # log in the cluster is unmasked until the Job is cleaned up (TTL); only the streamed copy is masked. The whole log: JOB_RUN_LOG
 # (default /tmp/job-run-<job>.log). Exit: the command's code; 1 when the Job did not finish, 2 for a usage error, 124 past the deadline.
 set -eu
@@ -196,7 +196,9 @@ for n in ${pool[@]+"${pool[@]}"}; do
   # T-1665: the second stg QA test account (E2E_QA2_*) for two-user checks, a test account like E2E_QA_*.
   # T-2294: the third QA account (E2E_QA3_*), the stg staff test accounts (E2E_STAFF_*, E2E_STAFF2_*) and the stg Turnstile test token
   # (E2E_TURNSTILE_TOKEN): standalone entries of the konfersi-stg pool, test accounts and a test token on stg, never a person's.
-  [[ $n =~ ^E2E_CF_ACCESS_[A-Z0-9_]+$ || $n =~ ^E2E_QA[23]?_(EMAIL|PASSWORD)$ || $n =~ ^E2E_STAFF2?_(EMAIL|PASSWORD)$ || $n == E2E_TURNSTILE_TOKEN ]] || die "--pool-env: refused: not an allowed name (E2E_CF_ACCESS_*, E2E_QA_EMAIL, E2E_QA_PASSWORD, E2E_QA2_EMAIL, E2E_QA2_PASSWORD, E2E_QA3_EMAIL, E2E_QA3_PASSWORD, E2E_STAFF_EMAIL, E2E_STAFF_PASSWORD, E2E_STAFF2_EMAIL, E2E_STAFF2_PASSWORD, E2E_TURNSTILE_TOKEN); the argument is not shown"
+  # T-2823 (owner go 2026-10-28): the one non-test exception, the two READ-ONLY Koneviro data keys (KONEVIRO_S3_RO_ACCESS_KEY_ID, KONEVIRO_S3_RO_SECRET_ACCESS_KEY) of the
+  # konfersi-stg pool, exact names, so a Job can verify the Garage copy. Never the RW pair, no wildcard.
+  [[ $n =~ ^E2E_CF_ACCESS_[A-Z0-9_]+$ || $n =~ ^E2E_QA[23]?_(EMAIL|PASSWORD)$ || $n =~ ^E2E_STAFF2?_(EMAIL|PASSWORD)$ || $n == E2E_TURNSTILE_TOKEN || $n == KONEVIRO_S3_RO_ACCESS_KEY_ID || $n == KONEVIRO_S3_RO_SECRET_ACCESS_KEY ]] || die "--pool-env: refused: not an allowed name (E2E_CF_ACCESS_*, E2E_QA_EMAIL, E2E_QA_PASSWORD, E2E_QA2_EMAIL, E2E_QA2_PASSWORD, E2E_QA3_EMAIL, E2E_QA3_PASSWORD, E2E_STAFF_EMAIL, E2E_STAFF_PASSWORD, E2E_STAFF2_EMAIL, E2E_STAFF2_PASSWORD, E2E_TURNSTILE_TOKEN, KONEVIRO_S3_RO_ACCESS_KEY_ID, KONEVIRO_S3_RO_SECRET_ACCESS_KEY); the argument is not shown"
   [ -n "${!n:-}" ] || die "--pool-env: $n is not set in this workspace (the Secrets pool delivers it)"
   [[ ${!n} != *[$'\n\r']* ]] || die "--pool-env: $n holds a line break; refused"
   # Printable ASCII only (kubectl's env-file parser fails on other bytes and may then print the line).
