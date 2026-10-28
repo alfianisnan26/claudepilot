@@ -1734,11 +1734,8 @@ function gitCStep(d0, b) {
   });
   if (under) return { base: real };
   // A tool checkout (PILOT-998): the folder itself or below it; the subcommand is read by gitToolPolicy.
-  const tool = roots.tools.some((r) => {
-    const rr = realish(r);
-    return rr !== '/' && (real === rr || real.startsWith(rr + '/'));
-  });
-  if (tool) return { base: real, tool: true };
+  const tool = roots.tools.map(realish).find((rr) => rr !== '/' && (real === rr || real.startsWith(rr + '/')));
+  if (tool) return { base: real, tool: true, toolRoot: tool };
   return { hit: hit('git -C outside the lane worktrees', '', GITC_LANE_TODO) };
 }
 
@@ -1750,14 +1747,25 @@ function gitCStep(d0, b) {
 const GIT_TOOL_SUBS = new Set(['fetch', 'pull', 'merge', 'log', 'show', 'status', 'rev-parse', 'diff', 'branch']);
 const GIT_TOOL_FF_FLAGS = /^(--ff-only|-q|--quiet|-v|--verbose|--progress|--no-progress|--stat|-n|--no-stat|--no-edit|--prune|-p|--tags|--no-tags|--all|--no-recurse-submodules)$/;
 const GIT_TOOL_BRANCH_FLAGS = /^(--contains(=.+)?|--no-contains(=.+)?|-a|--all|-r|--remotes|-l|--list|-v|--verbose|--format=.+|--sort=.+|--color(=.+)?|--no-color|--column(=.+)?|--no-column|--merged(=.+)?|--no-merged(=.+)?|--points-at(=.+)?|-i|--ignore-case|--omit-empty)$/;
-function gitToolPolicy(sub, rest) {
+const GIT_TOOL_BRANCH_RE = /^[A-Za-z0-9_][A-Za-z0-9._\/-]*$/;
+/** The branch a tool checkout has checked out, from its own .git/HEAD; '' when detached, a linked worktree or unreadable (fail closed). */
+function gitToolHead(root) {
+  try {
+    const m = /^ref: refs\/heads\/(\S+)\s*$/.exec(fs.readFileSync(path.join(root, '.git', 'HEAD'), 'utf8'));
+    return m && GIT_TOOL_BRANCH_RE.test(m[1]) ? m[1] : '';
+  } catch (e) {
+    return '';
+  }
+}
+function gitToolPolicy(sub, rest, root) {
   const forms = 'on a tool checkout only ' + GIT_TOOL_FORMS + ' are allowed; do any other work in your own worktree';
   const no = (what, todo) => hit('git ' + (sub || '(no subcommand)') + ' ' + what + ' (a tool checkout)', '', todo || forms);
   if (!GIT_TOOL_SUBS.has(sub)) return no('(not a read or a fast-forward)');
   const argv = gitArgv(sub, rest);
   for (const w of argv) {
     if (w.dyn) return no('with a value the guard cannot see', 'write every word out (no variables or command substitutions)');
-    if (w.glob && sub !== 'log' && sub !== 'show' && sub !== 'diff') return no('with a pattern', 'write the names out, without * ? [ or {');
+    // @{u} and @{upstream} are literal words to the shell (a brace without a comma or .. does not expand).
+    if (w.glob && sub !== 'log' && sub !== 'show' && sub !== 'diff' && w.text !== '@{u}' && w.text !== '@{upstream}') return no('with a pattern', 'write the names out, without * ? [ or {');
   }
   const dd = argv.findIndex((w) => w.text === '--');
   const before = dd < 0 ? argv : argv.slice(0, dd);
@@ -1765,12 +1773,29 @@ function gitToolPolicy(sub, rest) {
   const pos = before.filter((w) => !w.text.startsWith('-')).map((w) => w.text);
   if (sub === 'fetch' || sub === 'pull') {
     if (flags.some((f) => f === '-u' || gitLong(f, '--update-head-ok', 4) || gitLong(f, '--refmap', 5))) return no('with -u, --update-head-ok or --refmap', 'fetch by remote and branch name only');
+    if (flags.some((f) => gitLong(f, '--set-upstream', 6))) return no('with --set-upstream (it writes the checkout’s config)', 'drop --set-upstream');
     if (pos.some((p) => p.startsWith('+') || p.indexOf(':') >= 0)) return no('of a refspec that writes a local branch (src:dst or +)', 'name only the remote and the branch: git -C <tool root> ' + sub + (sub === 'pull' ? ' --ff-only' : '') + ' origin <branch>');
+  }
+  if (sub === 'fetch') {
+    // Only flags that move nothing local (--stdin would read refspecs the guard never sees, --depth would make the checkout shallow).
+    const other = flags.find((f) => !GIT_TOOL_FF_FLAGS.test(f) && f !== '--dry-run');
+    if (other) return no('with ' + other + ' (only quiet, verbose, prune, tags and --dry-run flags)', 'use git -C <tool root> fetch origin [<branch>]');
+    // Review 43381 B1: origin, and at most one branch (a fetch without a refspec writes only FETCH_HEAD and origin/*).
+    if (pos.length > 2 || (pos.length && pos[0] !== 'origin') || (pos.length === 2 && !GIT_TOOL_BRANCH_RE.test(pos[1]))) return no('of ' + pos.join(' ') + ' (only origin and one branch)', 'use git -C <tool root> fetch origin [<branch>]');
   }
   if (sub === 'pull' || sub === 'merge') {
     if (!flags.includes('--ff-only')) return no('without --ff-only (it could make a merge commit)', 'add --ff-only: git -C <tool root> ' + sub + ' --ff-only');
     const other = flags.find((f) => !GIT_TOOL_FF_FLAGS.test(f));
     if (other) return no('with ' + other + ' (only --ff-only and quiet, verbose, stat, prune and tags flags)', 'use ' + sub + ' --ff-only without ' + other);
+    // Review 43381 B1: a tool checkout is only brought to its own upstream, never moved to a ref a lane chose (its door scripts
+    // and its .claude/settings.json would then be unreviewed code). pull: no ref, or origin <the checked-out branch>; merge:
+    // @{u} or origin/<the checked-out branch>.
+    const up = sub === 'pull' ? 'git -C <tool root> pull --ff-only' : 'git -C <tool root> merge --ff-only @{u}';
+    if (sub === 'pull' && pos.length === 0) return null;
+    const head = gitToolHead(root);
+    if (!head) return no('of a named ref while the checked-out branch cannot be read (detached or unreadable HEAD)', 'use ' + up);
+    const ok = sub === 'pull' ? pos.length === 2 && pos[0] === 'origin' && pos[1] === head : pos.length === 1 && (pos[0] === '@{u}' || pos[0] === '@{upstream}' || pos[0] === 'origin/' + head);
+    if (!ok) return no('of ' + (pos.join(' ') || 'no ref') + ' (only the checked-out branch’s upstream, origin/' + head + ')', 'use ' + up);
   }
   if (sub === 'branch') {
     if (!flags.some((f) => /^--contains(=|$)/.test(f))) return no('without --contains (it could create, move or delete a branch)', 'use git -C <tool root> branch --contains <commit>');
@@ -1930,6 +1955,7 @@ function git(args, st, base, stdinText, stdinFile, piped) {
   const lane = gitCRoots().active;
   let viaC = false;
   let tool = false;
+  let toolRoot = '';
   const mark = (list) => (st[list] || (st[list] = [])).push(st.cmdN);
   for (; k < args.length; k++) {
     const t = args[k].text;
@@ -1943,6 +1969,7 @@ function git(args, st, base, stdinText, stdinFile, piped) {
         if (step.hit) return step.hit;
         b = step.base;
         tool = !!step.tool; // the last -C decides, as in git
+        toolRoot = step.toolRoot || '';
         continue;
       }
       const dir = /^--(git-dir|work-tree)(?:=([\s\S]*))?$/.exec(t);
@@ -2002,7 +2029,7 @@ function git(args, st, base, stdinText, stdinFile, piped) {
     const pr = gitPolicy(sub, rest);
     if (pr) return pr;
     if (tool) {
-      const tr = gitToolPolicy(sub, rest);
+      const tr = gitToolPolicy(sub, rest, toolRoot);
       if (tr) return tr;
     }
   }

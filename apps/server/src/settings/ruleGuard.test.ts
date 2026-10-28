@@ -1346,6 +1346,7 @@ function toolRig() {
   const wt = join(lanes, 'lane1');
   const tool = join(g.home, 'work', 'claudepilot');
   for (const d of [wt, join(tool, '.git'), join(tool, 'scripts'), join(tool, '.claude')]) mkdirSync(d, { recursive: true });
+  writeFileSync(join(tool, '.git', 'HEAD'), 'ref: refs/heads/integration\n'); // the checked-out branch the upstream forms name
   const rootsFile = join(g.root, 'git-c-roots');
   writeFileSync(rootsFile, gitCRootsContent([lanes], [tool]));
   const sh = (command: string) =>
@@ -1383,9 +1384,12 @@ test('PILOT-998: git -C on a tool checkout allows reads and fast-forwards, with 
     ['fetch', `${c} fetch origin`],
     ['fetch --prune', `${c} fetch --prune origin`],
     ['pull --ff-only', `${c} pull --ff-only`],
-    ['pull --ff-only of a branch', `${c} pull --ff-only origin integration`],
+    ['fetch of one branch', `${c} fetch origin integration`],
+    ['fetch alone', `${c} fetch`],
+    ['pull --ff-only of the checked-out branch', `${c} pull --ff-only origin integration`],
     ['pull -q --ff-only', `${c} pull -q --ff-only`],
-    ['merge --ff-only', `${c} merge --ff-only origin/integration`],
+    ['merge --ff-only of origin/<checked-out>', `${c} merge --ff-only origin/integration`],
+    ['merge --ff-only @{u}', `${c} merge --ff-only @{u}`],
     ['log', `${c} log --oneline -5`],
     ['show', `${c} show HEAD --stat`],
     ['status', `${c} status --short`],
@@ -1427,6 +1431,22 @@ test('PILOT-998: git -C on a tool checkout refuses writes, plain pulls and merge
     ['a plain merge', `${c} merge origin/integration`, /without --ff-only/],
     ['merge --ff-only --squash', `${c} merge --ff-only --squash origin/x`, /with --squash/],
     ['merge --abort', `${c} merge --abort`, /without --ff-only/],
+    // Review 43381 B1: only the checked-out branch's upstream, never a ref a lane chose.
+    ['merge --ff-only of another branch', `${c} merge --ff-only origin/ticket/x`, /only the checked-out branch.s upstream, origin\/integration/],
+    ['merge --ff-only of FETCH_HEAD', `${c} merge --ff-only FETCH_HEAD`, /only the checked-out branch/],
+    ['merge --ff-only of a commit', `${c} merge --ff-only 0123abc`, /only the checked-out branch/],
+    ['merge --ff-only of no ref', `${c} merge --ff-only`, /What to do: use git -C <tool root> merge --ff-only @\{u\}/],
+    ['merge --ff-only of two refs', `${c} merge --ff-only origin/integration origin/x`, /only the checked-out branch/],
+    ['pull --ff-only of another branch', `${c} pull --ff-only origin other`, /only the checked-out branch/],
+    ['pull --ff-only of another remote', `${c} pull --ff-only upstream integration`, /only the checked-out branch/],
+    ['pull --ff-only of a remote alone', `${c} pull --ff-only origin`, /only the checked-out branch/],
+    ['pull --ff-only of a url', `${c} pull --ff-only ../other.git integration`, /only the checked-out branch/],
+    ['fetch of another remote', `${c} fetch upstream`, /only origin and one branch/],
+    ['fetch of two branches', `${c} fetch origin a b`, /only origin and one branch/],
+    ['fetch --set-upstream', `${c} fetch --set-upstream origin integration`, /--set-upstream/],
+    ['pull --set-upstream', `${c} pull --ff-only --set-upstream origin integration`, /--set-upstream/],
+    ['fetch --stdin', `${c} fetch --stdin origin`, /with --stdin/],
+    ['fetch --depth', `${c} fetch --depth=1 origin`, /with --depth=1/],
     ['push', `${c} push origin HEAD`, /git push \(not a read or a fast-forward\).*What to do: on a tool checkout only/],
     ['push alone', `${c} push`, /not a read or a fast-forward/],
     ['reset', `${c} reset HEAD~1`, /git reset/],

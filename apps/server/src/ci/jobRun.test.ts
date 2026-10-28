@@ -1702,6 +1702,29 @@ test('T-426 --pool-env refusals, before any kubectl call: a deny-listed or undel
   assert.deepEqual(w.applied(), []);
 });
 
+test('T-2865 --pool-env without jq: refused with a message that names jq (review 43381 nit 3), before any kubectl call', () => {
+  const w = world();
+  const val = `cs${hex(20)}`;
+  // A PATH with every program of the usual folders but jq.
+  const nojq = join(w.root, 'nojq');
+  mkdirSync(nojq);
+  for (const d of ['/usr/local/bin', '/usr/bin', '/bin']) {
+    if (!existsSync(d)) continue;
+    for (const f of readdirSync(d)) {
+      if (f === 'jq' || existsSync(join(nojq, f))) continue;
+      symlinkSync(join(d, f), join(nojq, f));
+    }
+  }
+  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--pool-env', POOL_ID, '--', 'true'], {
+    [POOL_ID]: val,
+    PATH: `${join(w.root, 'bin')}:${nojq}`,
+  });
+  assert.equal(r.code, 2, r.out);
+  assert.match(r.out, /--pool-env: refused: jq is not installed here/);
+  assert.ok(!r.out.includes(val), 'a value is never shown');
+  assert.equal(w.calls(), '', 'refused before any kubectl call');
+});
+
 test('PILOT-998 --pool-env: any name the Secrets pool delivers is accepted (the two T-2823 keys too); a deny-listed one is refused even when delivered; an undelivered one is refused and never shown', () => {
   const w = world();
   const custom = 'STG_SEARCH_READ_KEY'; // a name no old allow-list held

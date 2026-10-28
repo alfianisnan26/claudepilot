@@ -218,6 +218,7 @@ for n in ${pool[@]+"${pool[@]}"}; do
   ! pool_denied "$n" || die "--pool-env: refused: a deny-listed name (write, admin, production or master credentials, and the runner's own tokens never go into a Job); the argument is not shown. It needs a person's approval (PILOT-1000)"
   if [ -z "$pool_read" ]; then
     pool_read=1
+    command -v jq >/dev/null 2>&1 || die "--pool-env: refused: jq is not installed here, so the delivered names cannot be checked; the argument is not shown. Write the need on your ticket under FOR THE COORDINATOR (jq in the workspace image)"
     [ -r "$pool_dropin" ] || die "--pool-env: refused: this workspace's Secrets pool delivers no env (no readable $pool_dropin); the argument is not shown. Turn on expose for the secret in its pool"
     pool_delivered=$(jq -r '(.env // {}) | keys[] | select(test("^[A-Z][A-Z0-9_]*$"))' "$pool_dropin" 2>/dev/null) || die "--pool-env: refused: $pool_dropin cannot be read as JSON; the argument is not shown. Write the need on your ticket under FOR THE COORDINATOR"
   fi

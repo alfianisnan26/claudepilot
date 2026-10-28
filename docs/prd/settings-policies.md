@@ -1046,7 +1046,11 @@ create`), and any command that is not a known reader (`cat`, `grep`, `jq`, `git 
   whose scripts lanes run (`GITC_TOOL_ROOTS` in `settings/ruleGuard.ts`, today `/home/node/work/claudepilot`; each must be absolute, at
   least three folders deep, not a worktrees folder and holding no lane root, or the delivery throws). `git -C <tool root or below>` is
   allowed for reads and fast-forwards only: `fetch`, `pull --ff-only`, `merge --ff-only`, `log`, `show`, `status`, `rev-parse`, `diff`
-  and `branch --contains`. Still refused there, each with its reason and what to do: any other subcommand (reset, checkout, push,
+  and `branch --contains`. These only bring the checkout to its own upstream (review 43381 B1): `pull --ff-only` takes no ref or
+  `origin <the checked-out branch>`, `merge --ff-only` takes only `@{u}` or `origin/<the checked-out branch>` (read from the
+  checkout's `.git/HEAD`; detached or unreadable refuses a named ref), and `fetch` takes `origin` and at most one branch, with quiet,
+  verbose, prune, tags and `--dry-run` flags only (`--stdin`, `--depth`, `--set-upstream` are refused). A lane can never move the
+  checkout, its door scripts or its `.claude/settings.json`, to a ref of its choice. Still refused there, each with its reason and what to do: any other subcommand (reset, checkout, push,
   commit...), a plain or non-ff `pull`/`merge`, a forced or refspec `fetch` (`+`, `:`, `-u`, `--refmap`), `log/show/diff --output`,
   `--git-dir`/`--work-tree` or `env -C`/`sudo -D` into a tool root, and writes to rule files (the rule-file checks run first). `$HOME`,
   `${HOME}`, `~` and quoted paths are resolved, but only when nothing in the call can change HOME (no assignment, `export`, `read`,
