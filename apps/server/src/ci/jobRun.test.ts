@@ -1431,6 +1431,41 @@ test("the Job's own script: the proof (passes on the ref, fails on the other, ke
   const dead = pod({ JR_STEPS: 'npm-ci', NPM_FAIL_UNTIL: '9' });
   assert.equal(dead.status, 7);
   assert.match(dead.stdout, /retrying once[\s\S]*npm ci failed in claudepilot \(rc=7\)\n=== JOB-RUN EXIT 7\n$/);
+
+  // T-2865: every JR_POOL_<name> the manifest holds (job-run.sh decides which names may be there) reaches the command as <name>, and
+  // neither form is in npm's environment. A fixed case list here let KONEVIRO_S3_RO_* through job-run.sh but never to the command.
+  const pbin = join(root, 'pbin');
+  mkdirSync(pbin);
+  const seen = join(root, 'npm.env');
+  writeFileSync(
+    join(pbin, 'npm'),
+    `#!/bin/sh\nprintf '%s|%s\\n' "\${KONEVIRO_S3_RO_ACCESS_KEY_ID:-unset}" "\${JR_POOL_KONEVIRO_S3_RO_ACCESS_KEY_ID:-unset}" >> "${seen}"\nmkdir -p node_modules\n`,
+  );
+  chmodSync(join(pbin, 'npm'), 0o755);
+  const poolVal = `kv${hex(10)}`;
+  const got = join(root, 'cmd.env');
+  const cmd = `printf '%s|%s\\n' "\${KONEVIRO_S3_RO_ACCESS_KEY_ID:-unset}" "\${JR_POOL_KONEVIRO_S3_RO_ACCESS_KEY_ID:-unset}" > "${got}"`;
+  const pooled = runPod(
+    TEMPLATE,
+    {
+      PATH: `${pbin}:${process.env.PATH}`,
+      JR_ROOT: join(root, `run-${hex(3)}`),
+      JR_REPO_URL: `file://${join(root, 'claudepilot.git')}`,
+      JR_REF: 'main',
+      JR_ALSO: '',
+      JR_STEPS: 'npm-ci',
+      JR_ARTIFACTS: '',
+      JR_ARTIFACT_MAX: '1',
+      JR_CMD: Buffer.from(cmd).toString('base64'),
+      NODE_NAME: 'k3s-master',
+    },
+    {},
+    { JR_POOL_KONEVIRO_S3_RO_ACCESS_KEY_ID: poolVal },
+  );
+  assert.equal(pooled.status, 0, text(pooled));
+  assert.equal(readFileSync(got, 'utf8'), `${poolVal}|unset\n`, 'the command gets the name, and the JR_POOL_ form is gone');
+  assert.match(readFileSync(seen, 'utf8'), /^(unset\|unset\n)+$/, 'npm (and its lifecycle scripts) see neither');
+  assert.ok(!text(pooled).includes(poolVal), 'the value is not printed');
 });
 
 test('T-365: job-run and gate Jobs prefer a node away from the portal (preferred: a required rule left every Job Pending)', () => {
@@ -1593,7 +1628,7 @@ test('T-426 --pool-env refusals, before any kubectl call: a name outside E2E_CF_
     [
       ['--pool-env', 'GITHUB_TOKEN'],
       { GITHUB_TOKEN: val },
-      /--pool-env: refused: not an allowed name \(E2E_CF_ACCESS_\*, E2E_QA_EMAIL, E2E_QA_PASSWORD, E2E_QA2_EMAIL, E2E_QA2_PASSWORD, E2E_QA3_EMAIL, E2E_QA3_PASSWORD, E2E_STAFF_EMAIL, E2E_STAFF_PASSWORD, E2E_STAFF2_EMAIL, E2E_STAFF2_PASSWORD, E2E_TURNSTILE_TOKEN\)/,
+      /--pool-env: refused: not an allowed name \(E2E_CF_ACCESS_\*, E2E_QA_EMAIL, E2E_QA_PASSWORD, E2E_QA2_EMAIL, E2E_QA2_PASSWORD, E2E_QA3_EMAIL, E2E_QA3_PASSWORD, E2E_STAFF_EMAIL, E2E_STAFF_PASSWORD, E2E_STAFF2_EMAIL, E2E_STAFF2_PASSWORD, E2E_TURNSTILE_TOKEN, KONEVIRO_S3_RO_ACCESS_KEY_ID, KONEVIRO_S3_RO_SECRET_ACCESS_KEY\)/,
     ],
     // T-2294: the QA3, staff and Turnstile names exactly, nothing near them.
     [['--pool-env', 'E2E_QA4_EMAIL'], { E2E_QA4_EMAIL: val }, /not an allowed name/],
