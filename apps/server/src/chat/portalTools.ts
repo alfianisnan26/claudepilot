@@ -215,32 +215,25 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
       if (pick.model) asks.push(['model', { model: pick.model }, `model ${pick.model}${pick.fromRole ? ' (the role’s)' : ''}`]);
       if (args.effort) asks.push(['effort', { effort: args.effort }, `effort ${args.effort}`]);
       const whyOf = (e: unknown) => (e instanceof Error ? e.message.slice(0, 120) : 'refused');
-      // A narrowing mode not confirmed ends the worker before it gets any instruction (fail closed).
-      const narrow = async (m: ChatPermissionMode, label: string) => {
+      // Mode first. A narrowing mode asked by name and not confirmed ends the worker before it gets any instruction (fail closed); any other
+      // is said, not fatal. Bypass not kept (the policy, the parent left it) falls back to dontAsk, so the worker never waits on a person.
+      const setMode = async (m: ChatPermissionMode) => {
         try {
           await chat.control(child.id, 'mode', { mode: m }, { actor: ctx.actor });
-          applied.push(label);
+          applied.push(`mode ${m}`);
         } catch (e) {
-          await chat.end(child.id).catch(() => undefined);
-          throw new AppError('CONFLICT', `The worker could not be confirmed in ${m} mode (${whyOf(e)}), so it was ended before it got any instruction. Try again.`);
+          if (args.mode && NARROWING.has(args.mode)) {
+            await chat.end(child.id).catch(() => undefined);
+            throw new AppError('CONFLICT', `The worker could not be confirmed in ${args.mode} mode (${whyOf(e)}), so it was ended before it got any instruction. Try again.`);
+          }
+          unconfirmed.push(`mode ${m}: ${whyOf(e)}`);
         }
       };
-      // Mode first. A wider mode not confirmed (Bypass not kept, Auto refused on its model) falls back to dontAsk, so it never waits on a person.
       const applyMode = async () => {
-        const label = `mode ${mode}${args.mode ? '' : ' (yours)'}`;
-        if (mode === 'bypassPermissions') {
-          if (await chat.inheritBypass(child.id).catch(() => false)) return void applied.push(label);
-          unconfirmed.push(`${label}: not kept, dontAsk instead`);
-          return narrow('dontAsk', 'mode dontAsk');
-        }
-        if (NARROWING.has(mode)) return narrow(mode, label);
-        try {
-          await chat.control(child.id, 'mode', { mode }, { actor: ctx.actor });
-          applied.push(label);
-        } catch (e) {
-          unconfirmed.push(`${label}: ${whyOf(e)}; dontAsk instead`);
-          await narrow('dontAsk', 'mode dontAsk');
-        }
+        if (mode !== 'bypassPermissions') return setMode(mode);
+        if (await chat.inheritBypass(child.id).catch(() => false)) return void applied.push('mode bypassPermissions');
+        unconfirmed.push('mode bypassPermissions: not kept, dontAsk instead');
+        return setMode('dontAsk');
       };
       const deliver = async () => {
         await applyMode();
