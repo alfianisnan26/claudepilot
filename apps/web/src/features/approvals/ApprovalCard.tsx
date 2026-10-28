@@ -6,6 +6,7 @@ import { Link } from 'react-router';
 import { InfoTip } from '@/components/InfoTip';
 import { ServerCodeInput } from '@/features/auth/ServerCodeInput';
 import { chatApi } from '@/features/chat/api';
+import { BYPASS_LIFETIME, BYPASS_LIFETIME_ABOUT } from '@/features/chat/bypassCopy';
 import { ApiError, errorText } from '@/lib/api';
 import { approvalsApi } from './api';
 import { payloadText } from './mask';
@@ -128,8 +129,9 @@ export function ApprovalCard({ approval, onChange }: { approval: Approval; onCha
       </div>
 
       {a.kind === 'session.bypass' && (
-        <p data-approval-bypass-note="" className="text-[14px]">
-          Claude will run every tool without asking in this session. Deny rules still apply; Bypass turns off when the agent sleeps, restarts or moves to another Claude.
+        <p data-approval-bypass-note="" className="text-[14px] [overflow-wrap:anywhere]">
+          Claude will run every tool without asking in this session. {BYPASS_LIFETIME}{' '}
+          <InfoTip label="When Bypass ends">{BYPASS_LIFETIME_ABOUT}</InfoTip>
         </p>
       )}
 
