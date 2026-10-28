@@ -1715,7 +1715,11 @@ test('PILOT-998 --pool-env: any name the Secrets pool delivers is accepted (the 
   }
   // An undelivered name, set in the shell, built at runtime: refused with what to do, and shown nowhere.
   const stray = `STRAY_${hex(6).toUpperCase()}`;
-  const u = w.run(['--repo', 'claudepilot', '--ref', 'main', '--pool-env', stray, '--', 'true'], { ...over, [stray]: `v${hex(12)}` }, script);
+  const u = w.run(
+    ['--repo', 'claudepilot', '--ref', 'main', '--pool-env', stray, '--', 'true'],
+    { ...over, [stray]: `v${hex(12)}` },
+    script,
+  );
   assert.equal(u.code, 2, u.out);
   assert.match(
     u.out,
