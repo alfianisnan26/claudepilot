@@ -315,6 +315,12 @@ export const HANDOFF_REQUEST = [
 
 /** PILOT-996: tool cards a Bypass kept or re-entered never allows by itself: the model's question to a person, and leaving plan mode. */
 const BYPASS_KEEP_ASKS: ReadonlySet<string> = new Set(['AskUserQuestion', 'ExitPlanMode']);
+/**
+ * PILOT-997: the `bypass.left` reasons that are a LOSS (nobody chose it): only these may Keep going undo within 24 hours. Not here, so
+ * never undone: `mode` (a person's or a token's own switch), `policy`, the gate refusals (`not_capable`, `not_lead`, `not_confirmed`,
+ * `parent_not_bypass`), `downgrade`, `ended`, and Keep going's own failed try.
+ */
+const BYPASS_LOST: ReadonlySet<string> = new Set(['sleep', 'stopped', 'lost_touch', 'restart', 'restart_unfinished', 'move_failed', 'restart_failed', 'wake_failed', 'lost_failed', 'recover_failed']);
 /** PILOT-996: why Auto was refused, and what to do about it (it replaced "Auto is only for sessions a person started here…"). */
 export const AUTO_REFUSED = {
   parent:
@@ -4157,13 +4163,18 @@ export class ChatController {
     return entry?.detail.acknowledged === true && entry.detail.reauth === 'fresh';
   }
 
-  /** PILOT-996: when this chat was last in Bypass: now when it is, else its newest `bypass.left`; null when it never left it. */
+  /**
+   * PILOT-996: when this chat was last in Bypass: now when it is, else its newest `bypass.left` when that was a LOSS (a sleep, a stop, a
+   * vanished process, a restart, a move or restart that failed to keep it). Null when it never left it, or when it was taken out on
+   * purpose (a person's or a token's mode switch, the policy, a gate that said no, a downgrade): Keep going puts back only what was lost.
+   */
   bypassSeenAt(rawId: string): string | null {
     const id = this.#chat.resolveId(rawId);
     const row = this.#chat.row(id);
     if (!row) return null;
     if (row.mode === 'bypassPermissions') return new Date().toISOString();
-    return this.#chat.audit({ kind: 'bypass.left', sessionId: id, limit: 1 })[0]?.at ?? null;
+    const left = this.#chat.audit({ kind: 'bypass.left', sessionId: id, limit: 1 })[0];
+    return left && BYPASS_LOST.has(String(left.detail.why ?? '')) ? left.at : null;
   }
 
   /**
@@ -5429,8 +5440,9 @@ export class ChatController {
         kind: 'bypass.left',
         sessionId,
         workspaceId: row?.workspace_id,
-        actor: 'ui',
-        detail: { to: applied },
+        // A mode switch out of Bypass is someone's choice (a person in the app, or a token on purpose): Keep going never undoes it (PILOT-997).
+        actor: actor ?? 'portal',
+        detail: { to: applied, why: 'mode' },
       });
     }
     if (applied === 'bypassPermissions') {

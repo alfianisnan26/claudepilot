@@ -4,12 +4,12 @@
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { autoModeAllowed, modeWithin, workerMode, type ChatPermissionMode } from '@portal/contracts';
+import { autoModeAllowed, KEEPGOING_ACTOR, modeWithin, workerMode, type ChatPermissionMode } from '@portal/contracts';
 import { ToolRegistry } from '../portalmcp/registry.js';
 import { portalMcpHarness } from '../portalmcp/testkit.js';
 import { AUTO_REFUSED } from './controller.js';
 import { registerChatTools } from './portalTools.js';
-import { APPLIED, controls, init, liveSession, ok, sleep, until, USAGE_API_KEY, type Live } from './testkit.js';
+import { APPLIED, controls, init, line, liveSession, ok, sleep, until, USAGE_API_KEY, type Live } from './testkit.js';
 
 test('workerMode, modeWithin and autoModeAllowed: inherit, cap, default Auto', () => {
   assert.equal(workerMode(undefined, 'bypassPermissions'), 'bypassPermissions', 'a Bypass lead hands on Bypass');
@@ -167,6 +167,101 @@ test('PILOT-997: a worker of a lead in Bypass keeps Bypass through the gated inh
     assert.deepEqual(off.applied, ['mode dontAsk']);
     assert.match(off.unconfirmed.join(' '), /mode bypassPermissions: not kept, dontAsk instead/);
     assert.deepEqual([r.s.controller.get(off.id)!.mode, r.s.controller.get(off.id)!.bypassCapable], ['dontAsk', false]);
+  } finally {
+    await r.done();
+  }
+});
+
+/** The newest tail of a session's process (`tail <claude session>`). */
+function tailOf(s: Live, id: string) {
+  for (let i = s.ws.tailArgs.length - 1; i >= 0; i--) if (s.ws.tailArgs[i]![1] === id) return s.ws.tails[i]!;
+  throw new Error(`no tail for ${id}`);
+}
+
+/** A tool card on `id`'s process: `tool` asks for `input`. */
+function card(s: Live, id: string, requestId: string, tool: string, input: Record<string, unknown>) {
+  tailOf(s, id).push(line({ type: 'control_request', request_id: requestId, request: { subtype: 'can_use_tool', tool_name: tool, input, tool_use_id: `toolu_${requestId}` } }));
+}
+
+test('PILOT-997: Keep going never puts back a Bypass a person switched off, and allows no card; a Bypass that was LOST is put back, its tool cards allowed but not a question', async () => {
+  const r = await rig();
+  try {
+    const lead = await bypassLead(r.s);
+    r.h.alive.add(lead);
+    // A lead: it has a live worker (#keepBypass's lead gate).
+    const a = await r.h.agentToken('docker/ws1', lead);
+    spawned(await answering(r.s, r.h.call(a.secret, 'session_spawn', { prompt: 'Ship the fix.', title: 'Worker' })));
+
+    // A person switches Bypass off in the app: deliberate, so it is never put back and a card raised after it waits for a person.
+    await answering(r.s, r.s.controller.control(lead, 'mode', { mode: 'default' }, { actor: 'ui' }));
+    assert.equal(r.s.controller.get(lead)!.mode, 'default');
+    const left = r.s.controller.audit({ kind: 'bypass.left' }).find((x) => x.sessionId === lead)!;
+    assert.deepEqual([left.actor, left.detail.why], ['ui', 'mode']);
+    card(r.s, lead, 'P1', 'Bash', { command: 'ls' });
+    await until(() => r.s.controller.openRequests(lead).length === 1);
+    assert.equal(r.s.controller.bypassSeenAt(lead), null, 'a switch-off by a person is not a loss');
+    assert.equal(await answering(r.s, r.s.controller.restoreBypass(lead)), false);
+    assert.equal(r.s.controller.get(lead)!.mode, 'default');
+    assert.deepEqual(
+      r.s.controller.openRequests(lead).map((q) => q.requestId),
+      ['P1'],
+      'the card still waits for a person',
+    );
+    assert.equal(r.s.controller.audit({ kind: 'bypass.entered' }).filter((x) => x.sessionId === lead && x.detail.how === 'keepgoing').length, 0);
+
+    // Later the chat LOSES Bypass (a restart that could not keep it is the newest record): Keep going puts it back within 24 hours, allows
+    // the tool card raised meanwhile, and leaves a question for a person.
+    await sleep(5);
+    r.s.store.addAudit({ severity: 'info', kind: 'bypass.left', sessionId: lead, workspaceId: 'docker/ws1', actor: 'portal', detail: { why: 'restart' } });
+    card(r.s, lead, 'Q1', 'AskUserQuestion', { questions: [{ question: 'Which one?', header: 'Pick', options: [{ label: 'A', description: 'a' }, { label: 'B', description: 'b' }], multiSelect: false }] });
+    await until(() => r.s.controller.openRequests(lead).length === 2);
+    assert.ok(r.s.controller.bypassSeenAt(lead), 'a loss within 24 hours is seen');
+    assert.equal(await answering(r.s, r.s.controller.restoreBypass(lead)), true);
+    assert.equal(r.s.controller.get(lead)!.mode, 'bypassPermissions');
+    const entered = r.s.controller.audit({ kind: 'bypass.entered' }).find((x) => x.sessionId === lead && x.detail.how === 'keepgoing');
+    assert.ok(entered, 'audited as Keep going’s re-entry');
+    await until(() => r.s.controller.openRequests(lead).length === 1);
+    assert.deepEqual(
+      r.s.controller.openRequests(lead).map((q) => q.requestId),
+      ['Q1'],
+      'the Bash card is allowed; the question stays for a person',
+    );
+  } finally {
+    await r.done();
+  }
+});
+
+test('PILOT-997: with “Auto for agents” OFF, a session no person started gets no Auto on any path: start, Keep going’s new chat, configure, spawn', async () => {
+  const r = await rig();
+  try {
+    r.s.controller.autonomousAuto = () => false;
+    // Start: a trigger's session and Keep going's continuation start in Manual.
+    const made: string[] = [];
+    for (const actor of ['portal:trigger-abc', KEEPGOING_ACTOR]) {
+      const before = r.s.ws.tails.length;
+      const one = await answering(r.s, r.s.controller.create({ workspaceId: 'docker/ws1', title: 'Started by the portal' }, { actor }));
+      await until(() => r.s.ws.tails.length === before + 1);
+      await until(() => r.s.controller.get(one.id)?.state === 'idle');
+      await sleep(50);
+      assert.equal(r.s.controller.get(one.id)!.mode, 'default', actor);
+      assert.equal(r.s.controller.audit({ kind: 'mode.auto' }).filter((x) => x.sessionId === one.id).length, 0, actor);
+      made.push(one.id);
+    }
+    const trig = { id: made[0]! };
+    // Configure (what session_configure and session_start's mode call): refused with why and what to do, audited.
+    await assert.rejects(r.s.controller.control(trig.id, 'mode', { mode: 'auto' }, { actor: 'portal-mcp:tok1' }), (e: Error) => e.message === AUTO_REFUSED.origin);
+    assert.deepEqual(
+      r.s.controller.audit({ kind: 'mode.refused' }).filter((x) => x.sessionId === trig.id).map((x) => [x.actor, x.detail.why]),
+      [['portal-mcp:tok1', 'origin']],
+    );
+    // Spawn: its worker asked into Auto is wider than its lead and refused; unasked it gets dontAsk.
+    r.h.alive.add(trig.id);
+    const a = await r.h.agentToken('docker/ws1', trig.id);
+    const refused = await r.h.call(a.secret, 'session_spawn', { prompt: 'x', mode: 'auto' });
+    assert.equal(refused.result?.isError, true);
+    const w = spawned(await answering(r.s, r.h.call(a.secret, 'session_spawn', { prompt: 'Read it.', title: 'Trigger worker' })));
+    assert.equal(r.s.controller.get(w.id)!.mode, 'dontAsk');
+    assert.equal(r.s.controller.audit({ kind: 'mode.auto' }).length, 0, 'no Auto anywhere');
   } finally {
     await r.done();
   }
