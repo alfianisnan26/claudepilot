@@ -143,10 +143,10 @@ export const TICKET_SETTING_KEYS = {
 } as const;
 
 /**
- * T-2881: the routes the portal ships with. `claudepilot` keeps the portal's own tickets (which carry `area-*` tags too) in PILOT; Konfersi's
+ * T-2881: the routes the portal ships with. `claudepilot` or `program-claudepilot` keeps the portal's own tickets (which carry `area-*` tags too) in PILOT; Konfersi's
  * `konfersi-migration` and `area-*` go to KONF; the trading lab's `tradingbot` to TB. A rule naming a bucket that does not exist is skipped.
  */
-export const TICKET_BUCKET_ROUTES_DEFAULT = 'PILOT: claudepilot; KONF: konfersi-migration, area-*; TB: tradingbot';
+export const TICKET_BUCKET_ROUTES_DEFAULT = 'PILOT: claudepilot, program-claudepilot; KONF: konfersi-migration, area-*; TB: tradingbot';
 
 /**
  * T-2881: why a new ticket went to its bucket. `named` the request said so; `tags` a `tickets.bucketRoutes` rule matched its tags; `parent`

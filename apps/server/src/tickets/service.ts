@@ -2180,7 +2180,8 @@ export class Tickets {
    * The bucket a new ticket goes in, and why (T-2881): the one named (refused as not found when it does not exist or is not the agent's); else
    * the one bucket a `tickets.bucketRoutes` rule gives the ticket's own tags; else the parent ticket's bucket (one the caller can see); else the
    * one bucket whose default workspace is the ticket's workspace; else the bucket of the ticket the calling session, then its lead, works on;
-   * else PILOT. Every guess skips a bucket the caller may not file in.
+   * else PILOT. The tag, parent and session/lead ticket guesses skip a bucket the caller may not file in (`#bucketOpenTo`); the workspace guess
+   * finds only a bucket whose default workspace is the ticket's own, and PILOT is not checked.
    */
   #bucketFor(caller: Caller, w: Writer, raw: unknown, workspaceId: string | null, tags: string[], parent: unknown): { row: BucketRow; choice: TicketBucketChoice } {
     const pick = (row: BucketRow, reason: TicketBucketChoice['reason'], why: string) => ({ row, choice: { bucket: row.key, reason, why } });

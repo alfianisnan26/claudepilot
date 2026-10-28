@@ -17,7 +17,7 @@ test('the rules: exact tags beat prefix-*, a tie decides nothing, a bucket that 
   assert.deepEqual(
     r.map((x) => [x.bucket, x.tags, x.prefixes]),
     [
-      ['PILOT', ['claudepilot'], []],
+      ['PILOT', ['claudepilot', 'program-claudepilot'], []],
       ['KONF', ['konfersi-migration'], ['area-']],
       ['TB', ['tradingbot'], []],
     ],
@@ -27,6 +27,8 @@ test('the rules: exact tags beat prefix-*, a tie decides nothing, a bucket that 
   assert.deepEqual(routeByTags(r, ['konfersi-migration', 'ui'], all), { bucket: 'KONF', tag: 'konfersi-migration', rule: 'konfersi-migration' });
   // The portal's own tickets carry area-* too (area-sessions, area-qa from CI flakes): claudepilot, an exact tag, keeps them in PILOT.
   assert.deepEqual(routeByTags(r, ['area-sessions', 'claudepilot'], all), { bucket: 'PILOT', tag: 'claudepilot', rule: 'claudepilot' });
+  // Many PILOT tickets carry program-claudepilot instead (T-2865): the same exact-tag win.
+  assert.deepEqual(routeByTags(r, ['program-claudepilot', 'area-x'], all), { bucket: 'PILOT', tag: 'program-claudepilot', rule: 'program-claudepilot' });
   assert.equal(routeByTags(r, ['claudepilot', 'konfersi-migration'], all), null, 'two buckets by exact tags: no guess');
   assert.equal(routeByTags(r, ['area-'], all), null, 'the bare prefix is not a match');
   assert.equal(routeByTags(r, ['frontend'], all), null);
@@ -63,6 +65,8 @@ test('a ClaudePilot dev session lands in PILOT: by its claudepilot tag, and with
     const caller = agent('kubernetes/claudepilot', 'cp-dev');
     const tagged = h.tickets.createExplained(caller, { summary: 'Sessions list jumps', tags: ['claudepilot', 'area-sessions'] });
     assert.deepEqual([tagged.ticket.bucket, tagged.bucket.reason], ['PILOT', 'tags']);
+    const program = h.tickets.createExplained(caller, { summary: 'Perf of the portal', tags: ['program-claudepilot', 'area-x'] });
+    assert.deepEqual([program.ticket.bucket, program.bucket.reason], ['PILOT', 'tags'], 'program-claudepilot with area-* stays in PILOT');
     const bare = h.tickets.createExplained(caller, { summary: 'Something else' });
     assert.deepEqual([bare.ticket.bucket, bare.bucket.reason], ['PILOT', 'default']);
     assert.match(bare.bucket.why, /nothing else decided/);
