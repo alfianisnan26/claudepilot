@@ -247,12 +247,15 @@ export function registerPoolTools(deps: PortalToolDeps): void {
       const p = secretsPoolFor(ctx, args.pool);
       if (isProtectedPool(p)) throw new PortalToolError('PROTECTED', PROTECTED_POOL_REASON);
       assertCanChange(store, 'pool');
-      const expose = args.expose ?? secretExposeDefault(args.name);
       const entries = ((p.content as { entries?: SecretEntryView[] } | null)?.entries ?? []).map((e): SecretEntryInput =>
         e.kind === 'variable' ? { id: e.id, kind: 'variable', name: e.name, value: e.value, confirmed: e.confirmed } : { id: e.id, kind: 'secret', name: e.name, options: e.options ?? {} },
       );
       const at = entries.findIndex((e) => e.name === args.name);
       if (at >= 0 && entries[at]!.kind !== 'secret') throw new PortalToolError('CONFLICT', `${args.name} is a plain variable in ${p.name}, not a secret. Change it in the portal.`);
+      // An existing secret keeps its expose unless the call names one; the name's default is for a new entry only (T-2866 review).
+      const found = at >= 0 ? entries[at]! : undefined;
+      const existing = found?.kind === 'secret' ? found.options : undefined;
+      const expose = args.expose ?? (typeof existing?.expose === 'boolean' ? existing.expose : secretExposeDefault(args.name));
       const target: SecretEntryInput = at >= 0 ? { ...entries[at]!, options: { ...entries[at]!.options, expose }, newValue: args.value } : { kind: 'secret', name: args.name, options: { expose }, newValue: args.value };
       if (at >= 0) entries[at] = target;
       else entries.push(target);

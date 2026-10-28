@@ -102,6 +102,14 @@ test('expose defaults to true for an environment-style name and false otherwise;
   assert.equal(secretExposeDefault('ANTHROPIC_API_KEY'), false);
 });
 
+test('setting an existing secret again without expose keeps its expose; the default is for new entries only (T-2866 review)', async () => {
+  const a = await agent();
+  // QUIET_KEY is environment-style (default true) but was stored with expose false above: a new value must not expose it.
+  assert.equal(sc(await h.call(a, 'pool_secret_set', { pool: 'own-keys', name: 'QUIET_KEY', value: value() })).expose, false);
+  // DB_PASSWORD was stored exposed by default; a new value leaves it exposed.
+  assert.equal(sc(await h.call(a, 'pool_secret_set', { pool: 'own-keys', name: 'DB_PASSWORD', value: value() })).expose, true);
+});
+
 test('pool_get and pool_list warn about an environment-style secret stored without expose (T-2823)', async () => {
   const admin = h.token('admin').secret;
   const got = sc(await h.call(admin, 'pool_get', { id: own.id }));
