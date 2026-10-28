@@ -2327,10 +2327,58 @@ function audit(input, tool, form, p) {
   }
 }
 
+// T-2885 (PILOT-1000): a refused call files ONE approval request for a person. The hook has no portal token, so it is a line in the
+// outbox (approval.jsonl) that the portal pulls within about 10 s and turns into request <id> (kind guard.refusal). The line holds the
+// tool, its exact input, the folder and the form, unclipped, so what a person allows is exactly this call; a call too large for one line
+// files nothing. The portal checks the line again (a chat of this workspace, the payload's shape and size, no secret-shaped value).
+// Returns the id, 'large', or '' (nothing filed).
+const LINE_MAX = 4000;
+function ask(input, tool, form) {
+  try {
+    if (!input || typeof input !== 'object' || !tool) return '';
+    const session = typeof input.session_id === 'string' && /^[A-Za-z0-9-]{1,64}$/.test(input.session_id) ? input.session_id : '';
+    const ti = input.tool_input && typeof input.tool_input === 'object' && !Array.isArray(input.tool_input) ? input.tool_input : null;
+    const cwd = typeof input.cwd === 'string' ? input.cwd : '';
+    if (!session || !ti || !/^[A-Za-z0-9_.:-]{1,100}$/.test(tool) || cwd.length > 300) return '';
+    const dir = path.join(HOME, '.claudepilot', 'outbox');
+    if (!fs.statSync(dir).isDirectory()) return '';
+    const file = path.join(dir, 'approval.jsonl');
+    let size = 0;
+    try {
+      const st = fs.lstatSync(file);
+      if (!st.isFile()) return '';
+      size = st.size;
+    } catch (e) {
+      size = 0;
+    }
+    if (size >= OUTBOX_CAP) return '';
+    const id = 'apr-' + require('crypto').randomBytes(9).toString('hex');
+    const line = JSON.stringify({
+      id: id,
+      t: new Date().toISOString(),
+      type: 'request',
+      kind: 'guard.refusal',
+      claudeSession: session,
+      payload: { tool: tool, input: ti, cwd: cwd, form: String(form || '').slice(0, 80) },
+    });
+    if (Buffer.byteLength(line) > LINE_MAX) return 'large';
+    fs.appendFileSync(file, line + '\n', { mode: 384 });
+    return id;
+  } catch (e) {
+    return '';
+  }
+}
+
 function refuse(input, tool, form, p, todo) {
   audit(input, tool, form, p);
   const next = todo ? 'What to do: ' + todo + '.' : 'Propose the change as text on a ticket; the coordinator lands it.';
-  process.stderr.write(MESSAGE + '. Refused: ' + form + (p ? ' (' + p + ')' : '') + '. ' + next + '\n');
+  const id = ask(input, tool, form);
+  const filed = id === 'large'
+    ? ' This call is too large to file as an approval request.'
+    : id
+      ? ' Or a person allows this exact call: approval request ' + id + ' is filed (approval_get ' + id + ' shows it within a minute; if it never shows, the portal refused the request). Allow runs nothing yet (T-2889).'
+      : '';
+  process.stderr.write(MESSAGE + '. Refused: ' + form + (p ? ' (' + p + ')' : '') + '. ' + next + filed + '\n');
   process.exit(2);
 }
 

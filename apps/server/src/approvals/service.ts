@@ -43,6 +43,9 @@ type Row = {
   result: string | null;
 };
 
+/** The shape of a request id (`apr-` and 18 hex digits): the service draws it, or a workspace's writer does (T-2885). */
+export const APPROVAL_ID = /^apr-[0-9a-f]{18}$/;
+
 /** A key that names a secret's VALUE is refused: a kind that needs a secret names it (`secretName`), never carries it. */
 const SECRET_KEY = /^(?:password|passwd|secret|token|api[_-]?key|private[_-]?key|credential|credentials|auth|authorization|cookie)$/i;
 
@@ -142,7 +145,10 @@ export class Approvals {
    * Asks. `requester`: the verified asking session (an agent's token), or null for the portal's own request. Validates the kind and its
    * schema, caps the size, refuses a secret-shaped value or a key that would hold a secret, and stores the payload once.
    */
-  create(req: ApprovalCreate, requester: ApprovalRequester | null): Approval {
+  create(req: ApprovalCreate, requester: ApprovalRequester | null, opts: { id?: string } = {}): Approval {
+    // T-2885: a workspace's outbox line names the id its writer already printed. Only the service's own shape; an id in use is a conflict.
+    if (opts.id !== undefined && !APPROVAL_ID.test(opts.id)) throw new AppError('VALIDATION_FAILED', 'Not an approval id.');
+    if (opts.id !== undefined && this.#row(opts.id)) throw new AppError('CONFLICT', 'That approval id is in use.');
     if (!isApprovalKind(req.kind)) throw new AppError('VALIDATION_FAILED', 'Unknown kind.', { details: { kind: 'Unknown.' } });
     const def: ApprovalKindDef = APPROVAL_KIND_DEFS[req.kind];
     const parsed = def.schema.safeParse(req.payload);
@@ -168,7 +174,7 @@ export class Approvals {
     }
     const ttl = Math.min(Math.max(Math.round(req.ttlMinutes ?? APPROVAL_TTL_DEFAULT_MIN), 1), APPROVAL_TTL_MAX_MIN);
     const now = this.#now();
-    const id = `apr-${randomBytes(9).toString('hex')}`;
+    const id = opts.id ?? `apr-${randomBytes(9).toString('hex')}`;
     this.#db()
       .prepare(
         `INSERT INTO approvals (id, kind, payload, requester_session, workspace, tier, reason, status, created_at, expires_at)
@@ -177,6 +183,15 @@ export class Approvals {
       .run(id, req.kind, json, requester?.sessionId ?? null, requester?.workspaceId ?? null, reason, this.#iso(now), this.#iso(now + ttl * 60_000));
     this.#o.changed?.();
     return this.#toApproval(this.#row(id)!);
+  }
+
+  /** How many requests of these kinds wait (pending, not expired) for one session: the outbox's cap (T-2885). */
+  pendingCount(sessionId: string, kinds: readonly string[]): number {
+    if (!kinds.length) return 0;
+    const r = this.#db()
+      .prepare(`SELECT count(*) AS n FROM approvals WHERE requester_session = ? AND status = 'pending' AND expires_at > ? AND kind IN (${kinds.map(() => '?').join(', ')})`)
+      .get(sessionId, this.#iso(), ...kinds) as { n: number };
+    return Number(r.n);
   }
 
   /** The queue a person decides from (pending, not expired, oldest first). Anyone else: empty. */

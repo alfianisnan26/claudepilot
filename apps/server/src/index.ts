@@ -45,6 +45,7 @@ import { METRICS_MEMO_MS } from './lab/metricsService.js';
 import { createRepos, registerRepoTools } from './repos/index.js';
 import { changesGlance, createGlance } from './glance/index.js';
 import { approvalAttentionSource, createApprovals, registerApprovalTools } from './approvals/index.js';
+import { APPROVAL_CHANNEL, fileRefusalRequests } from './approvals/outbox.js';
 import { bridgeAttentionNotify, createAttention, registerAttentionTools } from './attention/index.js';
 import { createPlatform } from './platform/index.js';
 import { createCodespaces } from './codespaces/index.js';
@@ -426,6 +427,13 @@ chatController.memory = workspaceMemory;
 const approvals = createApprovals(store, { chat: chatController, pools: poolService, changed: () => attention.changed() });
 attention.register(approvalAttentionSource(approvals));
 registerApprovalTools(approvals);
+// T-2885: job-run's deny-listed names and the rule guard's refusals file a request through the outbox (approval.jsonl), in the workspaces
+// the guard landed in (job-run runs in the same ones).
+outbox.subscribe(
+  APPROVAL_CHANNEL,
+  (workspaceId, events) => void fileRefusalRequests(approvals, store, workspaceId, events, (what, e) => console.error(`[approvals] ${what}: ${(e as Error).message}`)),
+  () => settingsModule.agentEnv.guardedWorkspaces((id) => workspaces.resolve(id) !== null),
+);
 const ATTENTION_TOPICS = new Set<LiveTopic>(['pools', 'tickets', 'ci']);
 const notify = (...topics: LiveTopic[]) =>
   topics.forEach((t) => {

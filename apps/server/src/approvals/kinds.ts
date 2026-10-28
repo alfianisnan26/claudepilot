@@ -219,8 +219,57 @@ function secretEntries(p: PoolDetail): SecretEntryInput[] {
   );
 }
 
+/**
+ * T-2885: what Allow says for a refused call until the one-time pass exists (T-2889). Nothing runs: the portal does not run the command
+ * itself (decided on T-2885, c43584: the job-run case would need the secret's value in a portal exec, and the output would flow back).
+ */
+const NOTHING_RAN: ApprovalResult = { ok: false, message: 'Nothing ran: the one-time pass for this exact call is not built yet (T-2889); ask the coordinator to run it.' };
+
+/** Only an agent session's refusal files these (through the outbox, or approval_request): the portal never asks for one. */
+const agentOnly = (_p: Record<string, unknown>, requester: ApprovalRequester | null) => {
+  if (!requester) throw new AppError('VALIDATION_FAILED', 'Only an agent session asks for this.');
+};
+
+/**
+ * job-run.sh refused a deny-listed `--pool-env` name (write, admin, production or master credentials, the runner's own tokens). The
+ * payload is that NAME, the run's exact arguments and its folder: what a person allows is exactly this run.
+ */
+const jobrunPoolEnv: ApprovalKindDef = {
+  kind: 'jobrun.pool_env',
+  schema: z
+    .object({
+      name: z.string().regex(/^[A-Z][A-Z0-9_]{0,63}$/),
+      args: z.array(z.string().max(2000)).min(1).max(80),
+      cwd: z.string().min(1).max(300),
+    })
+    .strict(),
+  why: 'secrets_permissions',
+  title: (p) => `job-run with ${quoted(String(p.name ?? ''), 64)}`,
+  mayAsk: agentOnly,
+  run: async () => NOTHING_RAN,
+};
+
+/** The rule guard (D-60) refused a tool call. The payload is the tool, its exact input, the folder and the guard's form, unclipped. */
+const guardRefusal: ApprovalKindDef = {
+  kind: 'guard.refusal',
+  schema: z
+    .object({
+      tool: z.string().regex(/^[A-Za-z0-9_.:-]{1,100}$/),
+      input: z.record(z.string(), z.unknown()),
+      cwd: z.string().max(300),
+      form: z.string().max(80),
+    })
+    .strict(),
+  why: 'secrets_permissions',
+  title: (p) => `Refused ${quoted(String(p.tool ?? ''), 40)} call`,
+  mayAsk: agentOnly,
+  run: async () => NOTHING_RAN,
+};
+
 export const APPROVAL_KIND_DEFS: Record<ApprovalKind, ApprovalKindDef> = {
   'test.echo': testEcho,
   'session.bypass': sessionBypass,
   'pool.secret_set': poolSecretSet,
+  'jobrun.pool_env': jobrunPoolEnv,
+  'guard.refusal': guardRefusal,
 };

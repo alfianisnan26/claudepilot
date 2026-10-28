@@ -1776,6 +1776,39 @@ test('T-2865 --pool-env without jq: refused with a message that names jq (review
   assert.equal(w.calls(), '', 'refused before any kubectl call');
 });
 
+test('T-2885 a deny-listed --pool-env name files one approval request (name, exact arguments, folder, session; never a value) and shows its id', () => {
+  const w = world();
+  const val = `cs${hex(20)}`;
+  const box = join(w.root, 'home', '.claudepilot', 'outbox');
+  mkdirSync(box, { recursive: true });
+  const argv = ['--repo', 'claudepilot', '--ref', 'main', '--pool-env', 'GITHUB_TOKEN', '--', 'npm test -- --grep "a b"'];
+  const r = w.run(argv, { GITHUB_TOKEN: val });
+  assert.equal(r.code, 2, r.out);
+  const id = /approval request (apr-[0-9a-f]{18}) is filed for this exact run/.exec(r.out)?.[1];
+  assert.ok(id, r.out);
+  assert.match(r.out, /It needs a person's approval \(PILOT-1000\)/);
+  assert.match(r.out, /Allow runs nothing yet \(T-2889\)/);
+  assert.ok(!r.out.includes('GITHUB_TOKEN'), 'the name is not shown');
+  const raw = readFileSync(join(box, 'approval.jsonl'), 'utf8');
+  assert.ok(!raw.includes(val) && !r.out.includes(val), 'a value is never written or shown');
+  const lines = raw.trim().split('\n');
+  assert.equal(lines.length, 1);
+  assert.ok(lines[0]!.length <= 4000);
+  const line = JSON.parse(lines[0]!) as { id: string; type: string; kind: string; session: string; payload: unknown };
+  assert.equal(line.id, id);
+  assert.equal(line.type, 'request');
+  assert.equal(line.kind, 'jobrun.pool_env');
+  assert.equal(line.session, 'chat-a');
+  assert.deepEqual(line.payload, { name: 'GITHUB_TOKEN', args: argv, cwd: w.root });
+  assert.equal(w.calls(), '', 'refused before any kubectl call');
+  // No outbox (a home without one): refused as before, nothing filed, and it says so.
+  rmSync(box, { recursive: true });
+  const n = w.run(argv, { GITHUB_TOKEN: val });
+  assert.equal(n.code, 2, n.out);
+  assert.match(n.out, /no request could be filed from here/);
+  assert.ok(!existsSync(join(box, 'approval.jsonl')));
+});
+
 test('PILOT-998 --pool-env: any name the Secrets pool delivers is accepted (the two T-2823 keys too); a deny-listed one is refused even when delivered; an undelivered one is refused and never shown', () => {
   const w = world();
   const custom = 'STG_SEARCH_READ_KEY'; // a name no old allow-list held
