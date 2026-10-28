@@ -4270,15 +4270,6 @@ export class ChatController {
     return this.#autonomousAutoOn();
   }
 
-  /**
-   * PILOT-997 review 42957: a chat that continues an ended one (Keep going's new chat) that ran narrower than Auto without waiting on a
-   * person (Plan or dontAsk) starts in that mode, not Auto. Null otherwise (it starts in Auto); Manual is not carried (it waits on a person).
-   */
-  #continuedNarrower(row: ChatSessionRow): 'plan' | 'dontAsk' | null {
-    const before = row.continued_from ? this.#chat.row(row.continued_from) : null;
-    return before?.mode === 'plan' || before?.mode === 'dontAsk' ? before.mode : null;
-  }
-
   /** T-417: the newest Bypass record of this chat is its sleep that kept it (a lead's), so its wake puts it back through `#keepBypass`. */
   #sleptInBypass(sessionId: string): boolean {
     const last = this.#chat.audit({ kind: 'bypass', sessionId, limit: 1 })[0];
@@ -5627,7 +5618,7 @@ export class ChatController {
     const restore: Restore | null = opts.resume
       ? { model: row.model, effort: row.effort, ultracode: row.ultracode === 1, mode: wasBypass ? START_MODE : row.mode }
       : firstAuto
-        ? { model: null, effort: null, ultracode: false, mode: this.#continuedNarrower(row) ?? 'auto', start: true }
+        ? { model: null, effort: null, ultracode: false, mode: 'auto', start: true }
         : null;
     // The folder it's scanned in is the folder it runs in (and the one the session reports).
     const cwd = sessionCwd(row.cwd);

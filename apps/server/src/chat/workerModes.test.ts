@@ -338,33 +338,6 @@ test('PILOT-997 review 42957: a session whose Bypass was inherited gets it back 
   }
 });
 
-test('PILOT-997 review 42957: Keep going’s new chat of a chat that ran in dontAsk or Plan keeps that mode, not Auto', async () => {
-  const s = await liveSession();
-  try {
-    s.controller.autonomousAuto = () => true;
-    const before = s.ws.tails.length;
-    const first = await answering(s, s.controller.create({ workspaceId: 'docker/ws1', title: 'Run' }, { actor: 'portal:trigger-abc' }));
-    await until(() => s.ws.tails.length === before + 1);
-    await answering(s, until(() => s.controller.get(first.id)?.mode === 'auto', 3000));
-    await answering(s, s.controller.control(first.id, 'mode', { mode: 'dontAsk' }, { actor: 'portal' }));
-    assert.equal(s.controller.get(first.id)!.mode, 'dontAsk', 'the first chat switched to dontAsk');
-    await s.controller.end(first.id);
-    assert.deepEqual([s.controller.get(first.id)!.state, s.controller.get(first.id)!.mode], ['ended', 'dontAsk'], 'the ended chat keeps its mode');
-    const n = s.ws.tails.length;
-    const next = await answering(s, s.controller.create({ workspaceId: 'docker/ws1', title: 'Run', continuedFrom: first.id }, { actor: KEEPGOING_ACTOR }));
-    assert.equal(next.continuedFrom, first.id);
-    await answering(s, until(() => s.ws.tails.length === n + 1).catch(() => undefined));
-    assert.equal(s.ws.tails.length, n + 1, 'the new chat’s process started');
-    await answering(s, until(() => s.controller.get(next.id)?.mode === 'dontAsk', 3000).catch(() => undefined));
-    await sleep(50);
-    const asked = controls(s.ws).filter((c) => c.request.subtype === 'set_permission_mode').map((c) => c.request.mode);
-    assert.equal(s.controller.get(next.id)!.mode, 'dontAsk', `the new chat keeps dontAsk (modes asked: ${asked.join(', ')})`);
-    assert.equal(s.controller.audit({ kind: 'mode.auto' }).filter((x) => x.sessionId === next.id).length, 0);
-  } finally {
-    await s.done();
-  }
-});
-
 test('PILOT-997: a new session no person started starts in Auto while “Auto for agents” is on; a person’s own and a worker do not', async () => {
   const s = await liveSession();
   try {
