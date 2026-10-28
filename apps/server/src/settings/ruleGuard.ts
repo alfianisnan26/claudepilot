@@ -2397,7 +2397,9 @@ export function gitCRootsContent(roots: readonly string[], tools: readonly strin
       !/(^|\/)(agentic-worktrees|[^/]+\.worktrees)$/.test(t) &&
       !roots.some((r) => r === t || r.startsWith(`${t}/`));
     if (!ok)
-      throw new Error(`git -C tool root "${t}" must be one absolute checkout folder (at least three levels deep, no "..", not a worktrees folder, holding no lane root)`);
+      throw new Error(
+        `git -C tool root "${t}" must be one absolute checkout folder (at least three levels deep, no "..", not a worktrees folder, holding no lane root)`,
+      );
   }
   for (const r of roots) {
     const ok =

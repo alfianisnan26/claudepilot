@@ -1427,8 +1427,16 @@ test('PILOT-998: git -C on a tool checkout refuses writes, plain pulls and merge
     ['a variable in the argv', `${c} log $REF`, /cannot see/],
     ['env -C into the tool', `env -C ${tool} git push`, /env -C or sudo -D into a tool checkout/],
     ['--git-dir of the tool', `git --git-dir=${tool}/.git log`, /--git-dir or --work-tree of a tool checkout/],
-    ['the folder above the tool', `git -C ${g.home}/work status`, /outside the lane worktrees.*What to do: run git -C on your own worktree/],
-    ['HOME set first', `HOME=/tmp git -C ${H}/work/claudepilot status`, /value the guard cannot see .\$HOME, in a command that could change HOME/],
+    [
+      'the folder above the tool',
+      `git -C ${g.home}/work status`,
+      /outside the lane worktrees.*What to do: run git -C on your own worktree/,
+    ],
+    [
+      'HOME set first',
+      `HOME=/tmp git -C ${H}/work/claudepilot status`,
+      /value the guard cannot see .\$HOME, in a command that could change HOME/,
+    ],
     ['HOME exported', `export HOME=/tmp; git -C ${H}/work/claudepilot status`, /could change HOME/],
     ['HOME spelled with quotes', `export HO''ME=/tmp; git -C ${H}/work/claudepilot status`, /could change HOME/],
     ['an assignment of another name', `N=1; git -C ${H}/work/claudepilot status`, /could change HOME/],
@@ -1455,7 +1463,16 @@ test('PILOT-998: git -C on a tool checkout refuses writes, plain pulls and merge
 test('PILOT-998: a tool root is one checkout: never a worktrees folder, never one that holds a lane root, never shallow', () => {
   const lanes = ['/home/node/work/claudepilot.worktrees'];
   assert.match(gitCRootsContent(lanes, ['/home/node/work/claudepilot']), /^tool \/home\/node\/work\/claudepilot$/m);
-  for (const bad of ['/home/node/work', '/home/node', '/', 'home/node/work/x', '/home/node/work/../x', '/home/node/work/x/', '/home/node/work/a.worktrees', '/home/node/work/a b'])
+  for (const bad of [
+    '/home/node/work',
+    '/home/node',
+    '/',
+    'home/node/work/x',
+    '/home/node/work/../x',
+    '/home/node/work/x/',
+    '/home/node/work/a.worktrees',
+    '/home/node/work/a b',
+  ])
     assert.throws(() => gitCRootsContent(lanes, [bad]), /git -C tool root/, bad);
   assert.throws(() => gitCRootsContent(['/home/node/work/x/y.worktrees'], ['/home/node/work/x']), /git -C tool root/);
 });

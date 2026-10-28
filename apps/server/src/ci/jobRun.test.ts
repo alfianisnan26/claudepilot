@@ -1610,9 +1610,14 @@ test('T-426 without --pool-env the run container has no secretKeyRef at all (T-4
 test('T-426 --pool-env refusals, before any kubectl call: a deny-listed or undelivered name, a non-name (not echoed), an unset, empty or multi-line one', () => {
   const w = world();
   const val = `cs${hex(20)}`;
-  const NOT_DELIVERED = /--pool-env: refused: not delivered as env by this workspace's Secrets pool; the argument is not shown\. Turn on expose for it in its pool/;
+  const NOT_DELIVERED =
+    /--pool-env: refused: not delivered as env by this workspace's Secrets pool; the argument is not shown\. Turn on expose for it in its pool/;
   const cases: [string[], Record<string, string>, RegExp][] = [
-    [['--pool-env', 'GITHUB_TOKEN'], { GITHUB_TOKEN: val }, /--pool-env: refused: a deny-listed name .*It needs a person's approval \(PILOT-1000\)/],
+    [
+      ['--pool-env', 'GITHUB_TOKEN'],
+      { GITHUB_TOKEN: val },
+      /--pool-env: refused: a deny-listed name .*It needs a person's approval \(PILOT-1000\)/,
+    ],
     // PILOT-998: a name near a delivered one is not delivered (set in the shell or not).
     [['--pool-env', 'E2E_QA4_EMAIL'], { E2E_QA4_EMAIL: val }, NOT_DELIVERED],
     [['--pool-env', 'E2E_STAFF3_PASSWORD'], { E2E_STAFF3_PASSWORD: val }, NOT_DELIVERED],
@@ -1674,7 +1679,11 @@ test('PILOT-998 --pool-env: any name the Secrets pool delivers is accepted (the 
   for (const n of deny) {
     const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--pool-env', n, '--', 'true'], over);
     assert.equal(r.code, 2, `${n}: ${r.out}`);
-    assert.match(r.out, /--pool-env: refused: a deny-listed name \(write, admin, production or master credentials.*\); the argument is not shown\. It needs a person's approval \(PILOT-1000\)/, n);
+    assert.match(
+      r.out,
+      /--pool-env: refused: a deny-listed name \(write, admin, production or master credentials.*\); the argument is not shown\. It needs a person's approval \(PILOT-1000\)/,
+      n,
+    );
     assert.ok(!r.out.includes(n), `${n} is not shown`);
     assert.ok(!r.out.includes(vals[n] as string), 'nor its value');
   }
@@ -1682,17 +1691,36 @@ test('PILOT-998 --pool-env: any name the Secrets pool delivers is accepted (the 
   const stray = `STRAY_${hex(6).toUpperCase()}`;
   const u = w.run(['--repo', 'claudepilot', '--ref', 'main', '--pool-env', stray, '--', 'true'], { ...over, [stray]: `v${hex(12)}` });
   assert.equal(u.code, 2, u.out);
-  assert.match(u.out, /not delivered as env by this workspace's Secrets pool; the argument is not shown\. Turn on expose for it in its pool/);
+  assert.match(
+    u.out,
+    /not delivered as env by this workspace's Secrets pool; the argument is not shown\. Turn on expose for it in its pool/,
+  );
   assert.ok(!u.out.includes(stray), 'the undelivered name is not shown');
   // No drop-in (nothing exposed in this workspace): refused with what to do.
-  const none = w.run(['--repo', 'claudepilot', '--ref', 'main', '--pool-env', custom, '--', 'true'], { ...over, JOB_RUN_POOL_ENV_DROPIN: join(w.root, 'no-such.json') });
+  const none = w.run(['--repo', 'claudepilot', '--ref', 'main', '--pool-env', custom, '--', 'true'], {
+    ...over,
+    JOB_RUN_POOL_ENV_DROPIN: join(w.root, 'no-such.json'),
+  });
   assert.equal(none.code, 2, none.out);
   assert.match(none.out, /delivers no env .*Turn on expose for the secret in its pool/);
   assert.ok(!none.out.includes(custom));
   assert.equal(w.calls(), '', 'every refusal comes before any kubectl call');
   // Accepted: the custom delivered name and the two read-only Koneviro keys of T-2823, as secretKeyRefs of the run container.
   const ok = w.run(
-    ['--repo', 'claudepilot', '--ref', 'main', '--pool-env', custom, '--pool-env', 'KONEVIRO_S3_RO_ACCESS_KEY_ID', '--pool-env', 'KONEVIRO_S3_RO_SECRET_ACCESS_KEY', '--', 'true'],
+    [
+      '--repo',
+      'claudepilot',
+      '--ref',
+      'main',
+      '--pool-env',
+      custom,
+      '--pool-env',
+      'KONEVIRO_S3_RO_ACCESS_KEY_ID',
+      '--pool-env',
+      'KONEVIRO_S3_RO_SECRET_ACCESS_KEY',
+      '--',
+      'true',
+    ],
     over,
   );
   assert.equal(ok.code, 0, ok.out);
@@ -1703,7 +1731,8 @@ test('PILOT-998 --pool-env: any name the Secrets pool delivers is accepted (the 
       .map((e) => e.valueFrom?.secretKeyRef?.key),
     [custom, 'KONEVIRO_S3_RO_ACCESS_KEY_ID', 'KONEVIRO_S3_RO_SECRET_ACCESS_KEY'],
   );
-  for (const n of [custom, 'KONEVIRO_S3_RO_ACCESS_KEY_ID', 'KONEVIRO_S3_RO_SECRET_ACCESS_KEY']) assert.ok(!ok.out.includes(vals[n] as string), 'no value shown');
+  for (const n of [custom, 'KONEVIRO_S3_RO_ACCESS_KEY_ID', 'KONEVIRO_S3_RO_SECRET_ACCESS_KEY'])
+    assert.ok(!ok.out.includes(vals[n] as string), 'no value shown');
 });
 
 test('T-426 --pool-env: a pasted value that looks like a variable name (lowercase hex starting with a letter) is refused and shown nowhere', () => {
