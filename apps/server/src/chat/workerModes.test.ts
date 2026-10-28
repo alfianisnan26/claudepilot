@@ -338,6 +338,25 @@ test('PILOT-997 review 42957: a session whose Bypass was inherited gets it back 
   }
 });
 
+test('PILOT-997 review 43368: a Bypass lead’s own restart (Bypass kept) leaves its worker in the inherited Bypass, with no parent_left', async () => {
+  const r = await rig();
+  try {
+    const lead = await bypassLead(r.s);
+    const w = await bypassWorker(r.s, lead, 'Worker');
+    // One `answering` for the restart and the settle after it: a wrong cascade would send the worker a mode switch just after it.
+    const restarted = async () => {
+      await r.s.controller.restart(lead);
+      await sleep(300);
+    };
+    await answering(r.s, restarted());
+    assert.equal(r.s.controller.get(lead)!.mode, 'bypassPermissions', 'the lead kept Bypass across its restart');
+    assert.equal(r.s.controller.get(w)!.mode, 'bypassPermissions', 'the worker kept the inherited Bypass');
+    assert.deepEqual(r.s.controller.audit({ kind: 'bypass.left' }).filter((x) => x.sessionId === w).map((x) => x.detail.why), []);
+  } finally {
+    await r.done();
+  }
+});
+
 test('PILOT-997 review 43296: a lead in a kept pause that a person then Ends (keeping its workers) takes its worker out of the inherited Bypass', async () => {
   const r = await rig();
   try {
