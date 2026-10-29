@@ -64,8 +64,11 @@
 #   scripts/job-run.sh --list                           the Jobs, their chat, role and state
 #   scripts/job-run.sh --stop [<job> | --chat <id>]     stop Jobs (all, one, or a chat's) and delete their Secrets
 # Caps: JOB_RUN_MAX Jobs at once cluster-wide (default 12 since D-96, 2026-10-23; 8 before; 3 until T-1624, when k3s-node3 joined and the master and node3 had room for
-# about 6 more 4Gi Jobs while Konfersi Jobs queued a median 6 min to run 5-60 s), JOB_RUN_MAX_PER_CHAT per chat (2) and JOB_RUN_MAX_PER_PROGRAM per program (9 since D-96; 6, was 2;
-# claudepilot, event, konfersi: T-524). A Job over a cap is created suspended and waits its turn (creation order), with "queued behind K". The Job stops when this script is interrupted or killed (the next run removes a Job whose
+# about 6 more 4Gi Jobs while Konfersi Jobs queued a median 6 min to run 5-60 s), JOB_RUN_MAX_PER_CHAT per chat (4 since T-2966, 2026-10-29: a lead's Agent lanes share its chat; was 2) and JOB_RUN_MAX_PER_PROGRAM per program (9 since D-96; 6, was 2;
+# claudepilot, event, konfersi: T-524). A Job over a cap is created suspended and waits its turn (creation order), with "queued behind K".
+# Priority lane (T-2967, 2026-10-29; Konfersi T-2822 waited 2364 s): a Job whose role is in JOB_RUN_PRIORITY_ROLES (comma list, default
+# konfersi-stg-deploy) goes ahead of every waiting Job and is not held by the per-chat cap (pipeline runs all share the chat "manual") or the
+# per-program cap; the cluster-wide cap still holds, so it takes the next free slot. It still counts in the totals the other Jobs see. The Job stops when this script is interrupted or killed (the next run removes a Job whose
 # script is gone), and when the chat ends (the Claude process, CLAUDE_PID or JOB_RUN_WATCH_PID, exits).
 # A failed `npm ci` in the Job is tried once more (it says so in the log). Exit 0 of a proof means the proof held, not only the command.
 # Credentials (the npm token for GitHub Packages, Gitea's from git's credential helper) go to kubectl on stdin into a Secret that belongs to
@@ -80,7 +83,7 @@ set -eu
 case $- in *x*) echo "job-run: refuses to run under xtrace (set -x / bash -x would print the credentials)" >&2; exit 2 ;; esac
 here=$(cd "$(dirname "$0")/.." && pwd)
 ns=${JOB_RUN_NAMESPACE:-isnan-claudepilot}; registry=${DEPLOY_REGISTRY:-registry.int.isnan.me}
-max=${JOB_RUN_MAX:-12}; per=${JOB_RUN_MAX_PER_CHAT:-2}; pprog=${JOB_RUN_MAX_PER_PROGRAM:-9}; poll=${JOB_RUN_POLL_S:-5}
+max=${JOB_RUN_MAX:-12}; per=${JOB_RUN_MAX_PER_CHAT:-4}; pprog=${JOB_RUN_MAX_PER_PROGRAM:-9}; poll=${JOB_RUN_POLL_S:-5}
 queue_wait=${JOB_RUN_QUEUE_WAIT_S:-3600}; start_wait=${JOB_RUN_START_WAIT_S:-900}; art_max=${JOB_RUN_ARTIFACT_MAX:-4194304}
 gitea=${JOB_RUN_GITEA:-git.konfersi.com}; github_repo=${JOB_RUN_GITHUB_REPO:-alfianisnan26/claudepilot}
 event_repo=isnanme/event # fixed on purpose (T-491): the door names one repository, no override
@@ -93,6 +96,10 @@ mem_std=3Gi; tmp_std=2Gi; mem_big=8Gi; tmp_big=4Gi
 master_max=${JOB_RUN_MASTER_MAX_PCT:-85}
 die() { echo "job-run: $*" >&2; exit 2; }
 for n in "$max" "$per" "$pprog" "$art_max"; do [[ $n =~ ^[0-9]+$ ]] || die "the caps are numbers"; done
+prio_roles=${JOB_RUN_PRIORITY_ROLES-konfersi-stg-deploy}
+[[ $prio_roles =~ ^([a-z0-9][a-z0-9.-]*(,[a-z0-9][a-z0-9.-]*)*)?$ ]] || die "JOB_RUN_PRIORITY_ROLES is a comma list of role labels (a-z, 0-9, . and -)"
+# No jq here: a missing jq is reported later, with its own message (T-2865). The shape check above leaves nothing to escape.
+prio_json="[$(printf '%s' "$prio_roles" | sed 's/[^,][^,]*/"&"/g')]"
 # The placement numbers are used in $(( )): at most 3 / 6 digits (no wrap-around to a negative), and base 10 (a leading 08 is not octal) (T-611 C1 C2).
 [[ $master_max =~ ^[0-9]{1,3}$ ]] || die "JOB_RUN_MASTER_MAX_PCT is a percentage (at most 3 digits)"
 master_max=$((10#$master_max))
@@ -553,7 +560,8 @@ echo "job-run: $job: $repo@${ref:0:12} ($steps) on $image${run_image:+; the comm
 QUEUE_JQ="$JQ_FIN"'
 def chat: (.metadata.labels["job-run/chat"] // "manual");
 def prog: (.metadata.labels["job-run/program"] // (.metadata.labels["job-run/repo"] // "" | if . == "claudepilot" or . == "event" then . else "konfersi" end));
-def key: [.metadata.creationTimestamp, .metadata.name];
+def pri: (.metadata.labels["job-run/role"] // "") as $r | any($prio[]; . == $r);
+def key: [(pri | not), .metadata.creationTimestamp, .metadata.name];
 ([.items[] | select(.metadata.deletionTimestamp == null and (fin | not))] | sort_by(key)) as $q
 | ([$q[] | select(.metadata.name == $me)] | first) as $mine
 | if $mine == null then "gone"
@@ -563,7 +571,7 @@ def key: [.metadata.creationTimestamp, .metadata.name];
     | (reduce $q[] as $j ({total: ($run | length), per: (reduce $run[] as $r ({}; .[$r | chat] += 1)),
           prog: (reduce $run[] as $r ({}; .[$r | prog] += 1)), done: false, go: false};
         if .done or $j.spec.suspend != true then .
-        elif .total < $max and ((.per[$j | chat] // 0) < $per) and ((.prog[$j | prog] // 0) < $pprog) then
+        elif .total < $max and (($j | pri) or (((.per[$j | chat] // 0) < $per) and ((.prog[$j | prog] // 0) < $pprog))) then
           .total += 1 | .per[$j | chat] += 1 | .prog[$j | prog] += 1 | (if $j.metadata.name == $me then .go = true | .done = true else . end)
         elif $j.metadata.name == $me then .done = true
         else . end)) as $s
@@ -584,7 +592,7 @@ gate_waiting() {
 }
 last=
 while :; do
-  d=$(jobs_json | jq -r --arg me "$job" --argjson max "$max" --argjson per "$per" --argjson pprog "$pprog" "$QUEUE_JQ" 2>/dev/null || true)
+  d=$(jobs_json | jq -r --arg me "$job" --argjson max "$max" --argjson per "$per" --argjson pprog "$pprog" --argjson prio "$prio_json" "$QUEUE_JQ" 2>/dev/null || true)
   if [ "$d" = go ] && gate_waiting; then d=gate; fi
   case "$d" in
     go) break ;;
