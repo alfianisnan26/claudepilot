@@ -41,6 +41,40 @@ test('GET /api/tickets/:id/merge: the latest record per repo; declared view on t
   }
 });
 
+test('T-2016: the caller is checked before the arguments: a session that is not the gate gets FORBIDDEN (audited) even for bad input; the gate gets VALIDATION_FAILED', async () => {
+  const h = await ticketsHarness({ mergeGates: () => [{ tag: 'konfersi-migration', gates: [GATE] }] });
+  const audits: { kind: string; detail?: Record<string, unknown> }[] = [];
+  h.tickets.onAudit = (e) => void audits.push(e);
+  try {
+    h.sessions.add({ id: GATE, workspaceId: 'docker/api' });
+    h.sessions.add({ id: B, workspaceId: 'docker/api' });
+    const t = h.tickets.create(UI, { summary: 'merge me', workspaceId: 'docker/api', tags: ['konfersi-migration'] });
+    const code = (by: string, req: Record<string, unknown>) => {
+      try {
+        h.tickets.recordMergeStatus(agent('docker/api', by), t.id, req);
+        return 'ok';
+      } catch (e) {
+        return isAppError(e) ? e.code : String(e);
+      }
+    };
+    const bad = [
+      { repo: '../x y', pr: 7, prHead: head('a'), state: 'ready' },
+      { repo: 'konfersi/api', pr: 7, prHead: 'abc', state: 'ready' },
+      { repo: 'konfersi/api', pr: 7, prHead: head('a'), state: 'nonsense' },
+      { repo: 'konfersi/api', state: 'ready' },
+    ];
+    for (const req of bad) assert.equal(code(B, req), 'FORBIDDEN', `not the gate, ${JSON.stringify(req)}`);
+    const refused = audits.filter((a) => a.kind === 'ticket.merge_status_refused');
+    assert.equal(refused.length, bad.length, 'each refusal is audited');
+    assert.deepEqual(refused.map((a) => [a.detail?.repo, a.detail?.state]), [[null, 'ready'], ['konfersi/api', 'ready'], ['konfersi/api', null], ['konfersi/api', 'ready']], 'only well-formed fields are named');
+    for (const req of bad) assert.equal(code(GATE, req), 'VALIDATION_FAILED', `the gate, ${JSON.stringify(req)}`);
+    assert.equal(audits.filter((a) => a.kind === 'ticket.merge_status_refused').length, bad.length, 'a validation error is no refusal');
+    assert.deepEqual(h.tickets.mergeStatus(UI, t.id), []);
+  } finally {
+    h.done();
+  }
+});
+
 test('migration 796: one table; every state but no_pr names the PR and its full head (the database refuses otherwise)', async () => {
   assert.equal(MIGRATIONS.filter((m) => m.version === 796).length, 1);
   const h = await ticketsHarness();

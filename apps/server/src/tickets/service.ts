@@ -259,6 +259,8 @@ const OPEN_SQL = TICKET_OPEN_STATUSES.map((s) => `'${s}'`).join(', ');
 const MANAGER_NO_CLOSE = 'The General Manager does not close tickets: QA closes a ticket on its pass.';
 const CLOSED_SQL =TICKET_CLOSED_STATUSES.map((s) => `'${s}'`).join(', ');
 
+/** A merge status repo: owner/name (up to four path parts). */
+const MERGE_REPO = /^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+){0,3}$/;
 const invalid = (field: string, message: string) => new AppError('VALIDATION_FAILED', message, { details: { [field]: message } });
 const notFound = () => new AppError('NOT_FOUND', 'No such ticket.');
 const noBucket = () => new AppError('NOT_FOUND', 'No such bucket.');
@@ -2837,29 +2839,33 @@ export class Tickets {
   ): TicketMergeStatus {
     this.#assertWrites(caller);
     const row = this.#need(caller, id);
-    const state = oneOf(req.state, TICKET_MERGE_STATES, 'state');
-    const repo = cleanLine(req.repo, 'repo', TICKET_MERGE_LIMITS.repo, { required: true });
-    if (!/^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+){0,3}$/.test(repo)) throw invalid('repo', 'A repo is owner/name.');
-    const pr = req.pr === undefined || req.pr === null ? null : req.pr;
-    if (pr !== null && !(typeof pr === 'number' && Number.isInteger(pr) && pr > 0 && pr < TICKET_MERGE_LIMITS.pr)) throw invalid('pr', 'A pull request number.');
-    const prHead = req.prHead === undefined || req.prHead === null ? null : normalizeSha(req.prHead);
-    if (req.prHead !== undefined && req.prHead !== null && !prHead) throw invalid('pr_head', VERDICT_REFUSAL_TEXT.bad_commit);
-    if (state !== 'no_pr' && (pr === null || prHead === null)) throw invalid(pr === null ? 'pr' : 'pr_head', 'Every state but no_pr names the pull request and its head.');
-    const reason = req.reason === undefined || req.reason === null ? null : cleanLine(req.reason, 'reason', TICKET_MERGE_LIMITS.reason) || null;
+    // T-2016: who may record is checked before what is recorded, so a caller that is not the gate gets FORBIDDEN (audited), never a
+    // validation error. The refusal's audit row names only the fields that are well formed.
     const w = this.#writer(caller, opts.sessionId);
     const ticketId = ticketIdOf(row.number);
     const why = caller.kind === 'agent' && w.session ? this.#mergeGateWhy(w.session, row) : null;
     if (!why) {
+      const okRepo = typeof req.repo === 'string' && req.repo.length <= TICKET_MERGE_LIMITS.repo && MERGE_REPO.test(req.repo) ? req.repo : null;
+      const okState = typeof req.state === 'string' && (TICKET_MERGE_STATES as readonly string[]).includes(req.state) ? req.state : null;
       this.onAudit?.({
         kind: 'ticket.merge_status_refused',
         actor: w.actor,
         actorLabel: null,
         userId: FOUNDING_USER_ID,
         subject: `ticket:${ticketId}`,
-        detail: { ticketId, repo, state, sessionId: w.session?.id ?? null },
+        detail: { ticketId, repo: okRepo, state: okState, sessionId: w.session?.id ?? null },
       });
       throw new AppError('FORBIDDEN', 'Only a lead of a flow program this ticket belongs to, or a worker it started, records a merge status.');
     }
+    const state = oneOf(req.state, TICKET_MERGE_STATES, 'state');
+    const repo = cleanLine(req.repo, 'repo', TICKET_MERGE_LIMITS.repo, { required: true });
+    if (!MERGE_REPO.test(repo)) throw invalid('repo', 'A repo is owner/name.');
+    const pr = req.pr === undefined || req.pr === null ? null : req.pr;
+    if (pr !== null && !(typeof pr === 'number' && Number.isInteger(pr) && pr > 0 && pr < TICKET_MERGE_LIMITS.pr)) throw invalid('pr', 'A pull request number.');
+    const prHead = req.prHead === undefined || req.prHead === null ? null : normalizeSha(req.prHead);
+    if (req.prHead !== undefined && req.prHead !== null && !prHead) throw invalid('pr_head', VERDICT_REFUSAL_TEXT.bad_commit);
+    if (state !== 'no_pr' && (pr === null || prHead === null)) throw invalid(pr === null ? 'pr' : 'pr_head', 'Every state but no_pr names the pull request and its head.');
+    const reason = req.reason === undefined || req.reason === null ? null : cleanLine(req.reason, 'reason', TICKET_MERGE_LIMITS.reason) || null;
     const at = this.#now().toISOString();
     const stored = this.#tx(() => {
       this.#db
