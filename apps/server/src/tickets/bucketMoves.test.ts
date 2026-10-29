@@ -39,7 +39,7 @@ test('a move takes the next number of its new bucket; the old key, T-n, trailers
     const moved = h.tickets.update(UI, 'KONF-1', { bucket: 'cp' });
     assert.deepEqual([moved.id, moved.key, moved.bucket], ['T-2', 'CP-2', 'CP']);
     for (const ref of ['KONF-1', 'konf-1', 'CP-2', 'T-2']) assert.equal(h.tickets.get(UI, ref).ticket.id, 'T-2', ref);
-    assert.equal(h.tickets.resolve('KONF-1'), 'T-2');
+    assert.equal(h.tickets.resolve(UI, 'KONF-1'), 'T-2');
     assert.deepEqual(h.tickets.find({ branch: 'ticket/KONF-1-x', message: 'x\n\nTicket: KONF-1' }), ['T-2']);
     assert.deepEqual(h.tickets.list(UI, { query: 'KONF-1' }).items.map((x) => x.id), ['T-2'], 'search by the old key');
     const e = h.tickets.get(UI, 'T-2').events.at(-1)!;
@@ -47,10 +47,10 @@ test('a move takes the next number of its new bucket; the old key, T-n, trailers
     assert.deepEqual(audits.map((a) => [a.kind, a.detail]), [['ticket.bucket_moved', { ticketId: 'T-2', from: 'KONF-1', to: 'CP-2' }]]);
     // KONF's counter never goes back: its next ticket is KONF-2, and KONF-1 still names the moved ticket.
     assert.equal(h.tickets.create(UI, { summary: 'konf two', bucket: 'KONF' }).key, 'KONF-2');
-    assert.equal(h.tickets.resolve('KONF-1'), 'T-2');
+    assert.equal(h.tickets.resolve(UI, 'KONF-1'), 'T-2');
     // Moving back gives a new number, never the old one (that stays an alias of the same ticket).
     assert.equal(h.tickets.update(UI, 'T-2', { bucket: 'KONF' }).key, 'KONF-3');
-    assert.equal(h.tickets.resolve('CP-2'), 'T-2');
+    assert.equal(h.tickets.resolve(UI, 'CP-2'), 'T-2');
     assert.deepEqual(numbers(h, 'CP'), [1]);
     assert.deepEqual(numbers(h, 'KONF'), [2, 3]);
     // The same bucket is no change; an unknown one is not found.
@@ -101,7 +101,7 @@ test('bulk moves: the owner only, each on its own, with the new keys; refusals s
       { id: 'T-2', ok: false, error: 'No such bucket.' },
     ]);
     assert.deepEqual(numbers(h, 'PILOT'), [1, 2, 3]);
-    assert.equal(h.tickets.resolve('CP-1'), 'T-1');
+    assert.equal(h.tickets.resolve(UI, 'CP-1'), 'T-1');
     // The route's authz: a bucket the caller may not operate reads as a missing ticket.
     const denied = h.tickets.moveBuckets(UI, [{ id: 'T-1', bucket: 'KONF' }], { allow: (_from, to) => to !== 'KONF' });
     assert.deepEqual(denied, [{ id: 'T-1', ok: false, error: 'No such ticket.' }]);
@@ -134,14 +134,14 @@ test('merge CP into PILOT: every ticket in creation order with PILOT’s next nu
     ]);
     assert.deepEqual([r.bucket.key, r.bucket.name, r.bucket.description, r.bucket.nextNumber], ['PILOT', 'Pilot', 'ClaudePilot', 4]);
     assert.deepEqual(h.tickets.buckets(UI).map((b) => b.key), ['KONF', 'PILOT', 'TB'], 'CP is deleted');
-    for (const [ref, id] of [['CP-1', c1.id], ['CP-3', c1.id], ['KONF-1', c1.id], ['CP-2', c2.id]]) assert.equal(h.tickets.resolve(ref!), id, ref);
+    for (const [ref, id] of [['CP-1', c1.id], ['CP-3', c1.id], ['KONF-1', c1.id], ['CP-2', c2.id]]) assert.equal(h.tickets.resolve(UI, ref!), id, ref);
     assert.equal(h.tickets.get(UI, 'CP-2').ticket.key, 'PILOT-3');
     assert.equal(h.tickets.get(UI, c2.id).events.at(-1)!.data!.merged, true);
     assert.equal(code(() => h.tickets.create(UI, { summary: 'x', bucket: 'CP' })), 'NOT_FOUND:No such bucket.');
     // A bucket made again under CP counts on after CP's aliases, so CP-1..CP-3 keep naming their tickets.
     assert.equal(h.tickets.createBucket(UI, { key: 'CP', name: 'again' }).nextNumber, 4);
     assert.equal(h.tickets.create(UI, { summary: 'new cp', bucket: 'CP' }).key, 'CP-4');
-    assert.equal(h.tickets.resolve('CP-1'), c1.id);
+    assert.equal(h.tickets.resolve(UI, 'CP-1'), c1.id);
     // Other pairs keep their names unless asked.
     const tb = h.tickets.create(UI, { summary: 'tb', bucket: 'TB' });
     const r2 = h.tickets.mergeBucket(UI, 'TB', { into: 'KONF' });

@@ -2189,23 +2189,33 @@ export class Tickets {
   }
 
   /**
+   * T-1993 (FR39): whether the caller may file a new ticket in `b`: the agents' workspace rule (`#bucketOpenTo`) and, for a caller with a seam
+   * actor (an agent, a token, a person whose route passes it), `operate` on the bucket. The portal itself (system, a trigger) files anywhere.
+   */
+  #mayFileIn(caller: Caller, b: BucketRow): boolean {
+    if (!this.#bucketOpenTo(caller, b)) return false;
+    const actor = this.#actorOf(caller);
+    return !actor || can(actor, 'operate', ticketBucketRef(b.key)).allow;
+  }
+
+  /**
    * The bucket a new ticket goes in, and why (T-2881): the one named (refused as not found when it does not exist or is not the agent's); else
    * the one bucket a `tickets.bucketRoutes` rule gives the ticket's own tags; else the parent ticket's bucket (one the caller can see); else the
    * one bucket whose default workspace is the ticket's workspace; else the bucket of the ticket the calling session, then its lead, works on;
-   * else PILOT. The tag, parent and session/lead ticket guesses skip a bucket the caller may not file in (`#bucketOpenTo`); the workspace guess
-   * finds only a bucket whose default workspace is the ticket's own, and PILOT is not checked.
+   * else PILOT. Every step skips a bucket the caller may not file in (`#mayFileIn`, T-1993); when PILOT is one too, the create is refused as
+   * "No such bucket." (fail closed: never a bucket the caller may not see).
    */
   #bucketFor(caller: Caller, w: Writer, raw: unknown, workspaceId: string | null, tags: string[], parent: unknown): { row: BucketRow; choice: TicketBucketChoice } {
     const pick = (row: BucketRow, reason: TicketBucketChoice['reason'], why: string) => ({ row, choice: { bucket: row.key, reason, why } });
     if (raw !== undefined && raw !== null && raw !== '') {
       if (typeof raw !== 'string') throw invalid('bucket', 'A bucket is its key, like KONF.');
       const b = this.#bucketRow(raw.trim().toUpperCase());
-      if (!b || !this.#bucketOpenTo(caller, b)) throw noBucket();
+      if (!b || !this.#mayFileIn(caller, b)) throw noBucket();
       return pick(b, 'named', `${b.key}: named in the request.`);
     }
     const usable = (key: string) => {
       const b = this.#bucketRow(key);
-      return b && this.#bucketOpenTo(caller, b) ? b : undefined;
+      return b && this.#mayFileIn(caller, b) ? b : undefined;
     };
     let routes: ReturnType<typeof parseBucketRoutes> = [];
     try {
@@ -2224,7 +2234,7 @@ export class Tickets {
     if (workspaceId) {
       const one = this.#inWorkspace('default_workspace_id', workspaceId);
       const rows = this.#db.prepare(`SELECT * FROM ticket_buckets WHERE ${one.sql} ORDER BY key LIMIT 2`).all(...one.args) as unknown as BucketRow[];
-      if (rows.length === 1) return pick(rows[0]!, 'workspace', `${rows[0]!.key}: the bucket of the workspace ${workspaceId}.`);
+      if (rows.length === 1 && this.#mayFileIn(caller, rows[0]!)) return pick(rows[0]!, 'workspace', `${rows[0]!.key}: the bucket of the workspace ${workspaceId}.`);
     }
     const s = w.session;
     const lead = s?.parentId ? this.sessions.get(s.parentId) : null;
@@ -2235,11 +2245,11 @@ export class Tickets {
       const n = x?.ticketId ? this.#numberOf(x.ticketId) : null;
       const row = n === null ? undefined : this.#row(n);
       const b = row ? this.#bucketRow(row.bucket_key) : undefined;
-      if (b && row && this.#bucketOpenTo(caller, b))
+      if (b && row && this.#mayFileIn(caller, b))
         return pick(b, reason, `${b.key}: the bucket of ${ticketIdOf(row.number)}, the ticket ${reason === 'session_ticket' ? 'this session' : 'its lead'} works on.`);
     }
     const fallback = this.#bucketRow(TICKET_DEFAULT_BUCKET);
-    if (!fallback) throw noBucket();
+    if (!fallback || !this.#mayFileIn(caller, fallback)) throw noBucket();
     return pick(fallback, 'default', `${fallback.key}: nothing else decided (no bucket, tag rule, parent, workspace or session ticket).`);
   }
 
