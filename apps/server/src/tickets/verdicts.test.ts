@@ -503,6 +503,108 @@ test('T-1652: a past holder started on the ticket is still an author: its QA chi
   }
 });
 
+/* ---------- T-1854: the whole lead line, a continuation's climb, and commit authorship ---------- */
+
+const qaRec = (h: Awaited<ReturnType<typeof ticketsHarness>>, ticket: string, who: string, commit = A) =>
+  h.tickets.recordVerdict(agent(WS, who), ticket, { role: 'qa', verdict: 'pass', commit });
+const descends = (e: any) => e.code === 'FORBIDDEN' && /descends from/.test(e.message);
+
+test('T-1854 (1): a past holder anywhere on the lead’s line counts: the continued lead that handed the ticket on leads; a coding line does not', async () => {
+  const h = await ticketsHarness();
+  try {
+    const s = h.sessions;
+    // L1 held the ticket and was continued as L2 (which never held it); L2 started the builder and the ticket went to it.
+    s.add({ id: 'L1', workspaceId: WS, agent: null, state: 'ended' });
+    const t = h.tickets.create(UI, { summary: 'continued lead hands over', workspaceId: WS });
+    h.tickets.update(UI, t.id, { assignee: { kind: 'session', sessionId: 'L1' }, status: 'in_progress' });
+    s.add({ id: 'L2', workspaceId: WS, agent: null, continuedFrom: 'L1' });
+    s.add({ id: 'W', workspaceId: WS, agent: 'implementer', parentId: 'L2', ticketId: t.id });
+    h.tickets.update(UI, t.id, { assignee: { kind: 'session', sessionId: 'W' } });
+    s.add({ id: 'qaL2', workspaceId: WS, agent: 'qa-verifier', parentId: 'L2' });
+    assert.equal(qaRec(h, t.id, 'qaL2').actor, 'session:qaL2', 'the continuation’s QA: the past holder L1 is on its line');
+    s.add({ id: 'qaW', workspaceId: WS, agent: 'qa-verifier', parentId: 'W' });
+    assert.throws(() => qaRec(h, t.id, 'qaW'), descends, 'QA under the builder');
+
+    // The same shape, but L1 was started on the ticket: the line coded, so it is no lead.
+    const t2 = h.tickets.create(UI, { summary: 'continued coder hands over', workspaceId: WS });
+    s.add({ id: 'C1', workspaceId: WS, agent: null, state: 'ended', ticketId: t2.id });
+    h.tickets.update(UI, t2.id, { assignee: { kind: 'session', sessionId: 'C1' }, status: 'in_progress' });
+    s.add({ id: 'C2', workspaceId: WS, agent: null, continuedFrom: 'C1' });
+    s.add({ id: 'W2', workspaceId: WS, agent: 'implementer', parentId: 'C2', ticketId: t2.id });
+    h.tickets.update(UI, t2.id, { assignee: { kind: 'session', sessionId: 'W2' } });
+    s.add({ id: 'qaC2', workspaceId: WS, agent: 'qa-verifier', parentId: 'C2' });
+    assert.throws(() => qaRec(h, t2.id, 'qaC2'), descends, 'notStarted holds on the whole line');
+    assert.equal(h.tickets.verdicts(UI, t2.id).length, 0);
+  } finally {
+    h.done();
+  }
+});
+
+test('T-1854 (2): the climb goes on from a holder continuation without a parentId; the builder line’s own QA is still refused', async () => {
+  const h = await ticketsHarness();
+  try {
+    const s = h.sessions;
+    s.add({ id: 'lead', workspaceId: WS, agent: null });
+    const t = h.tickets.create(UI, { summary: 'builder continued', workspaceId: WS });
+    h.tickets.update(UI, t.id, { assignee: { kind: 'session', sessionId: 'lead' }, status: 'in_progress' });
+    s.add({ id: 'W0', workspaceId: WS, agent: 'implementer', parentId: 'lead', ticketId: t.id });
+    h.tickets.update(UI, t.id, { assignee: { kind: 'session', sessionId: 'W0' } });
+    s.sessions.get('W0')!.state = 'ended';
+    s.add({ id: 'W1', workspaceId: WS, agent: 'implementer', continuedFrom: 'W0' }); // a continuation: no parentId of its own
+    h.tickets.update(UI, t.id, { assignee: { kind: 'session', sessionId: 'W1' } });
+    s.add({ id: 'qaLead', workspaceId: WS, agent: 'qa-verifier', parentId: 'lead' });
+    assert.equal(qaRec(h, t.id, 'qaLead').actor, 'session:qaLead', 'the lead above the continued builder');
+    s.add({ id: 'qaW0', workspaceId: WS, agent: 'qa-verifier', parentId: 'W0' });
+    s.add({ id: 'qaW1', workspaceId: WS, agent: 'qa-verifier', parentId: 'W1' });
+    assert.throws(() => qaRec(h, t.id, 'qaW0'), descends, 'QA under the builder’s predecessor');
+    assert.throws(() => qaRec(h, t.id, 'qaW1'), descends, 'QA under the builder');
+
+    // The same climb above a lead started on the ticket: refused.
+    const t2 = h.tickets.create(UI, { summary: 'coding lead, builder continued', workspaceId: WS });
+    s.add({ id: 'lead2', workspaceId: WS, agent: null, ticketId: t2.id });
+    h.tickets.update(UI, t2.id, { assignee: { kind: 'session', sessionId: 'lead2' }, status: 'in_progress' });
+    s.add({ id: 'V0', workspaceId: WS, agent: 'implementer', parentId: 'lead2', ticketId: t2.id, state: 'ended' });
+    s.add({ id: 'V1', workspaceId: WS, agent: 'implementer', continuedFrom: 'V0' });
+    h.tickets.update(UI, t2.id, { assignee: { kind: 'session', sessionId: 'V1' } });
+    s.add({ id: 'qaLead2', workspaceId: WS, agent: 'qa-verifier', parentId: 'lead2' });
+    assert.throws(() => qaRec(h, t2.id, 'qaLead2'), descends);
+    assert.equal(h.tickets.verdicts(UI, t2.id).length, 0);
+  } finally {
+    h.done();
+  }
+});
+
+test('T-1854 (3): a lead recorded as the session of the judged commit is not exempted; on another commit it still leads', async () => {
+  const h = await ticketsHarness();
+  try {
+    const s = h.sessions;
+    const recorded = new Map<string, string[]>([[A, ['orch']], [B, []]]);
+    h.tickets.commitSessions = (sha) => recorded.get(sha) ?? [];
+    // The holder line (QA F1 shape): orch holds and leads an implementer started on the ticket.
+    s.add({ id: 'orch', workspaceId: WS, agent: null });
+    const t = h.tickets.create(UI, { summary: 'lead that also pushed', workspaceId: WS });
+    h.tickets.update(UI, t.id, { assignee: { kind: 'session', sessionId: 'orch' }, status: 'in_progress' });
+    s.add({ id: 'impl', workspaceId: WS, agent: 'implementer', parentId: 'orch', ticketId: t.id });
+    s.add({ id: 'qaO', workspaceId: WS, agent: 'qa-verifier', parentId: 'orch' });
+    assert.throws(() => qaRec(h, t.id, 'qaO', A), descends, 'orch is recorded on commit A: it coded');
+    assert.equal(qaRec(h, t.id, 'qaO', B).actor, 'session:qaO', 'nobody of its line is recorded on commit B');
+
+    // The past-holder line (T-1652 shape): the lead handed the ticket to its worker; its continuation is recorded on A.
+    s.add({ id: 'P1', workspaceId: WS, agent: null, state: 'ended' });
+    const t2 = h.tickets.create(UI, { summary: 'past-holder lead that pushed', workspaceId: WS });
+    h.tickets.update(UI, t2.id, { assignee: { kind: 'session', sessionId: 'P1' }, status: 'in_progress' });
+    s.add({ id: 'P2', workspaceId: WS, agent: null, continuedFrom: 'P1' });
+    s.add({ id: 'Wp', workspaceId: WS, agent: 'implementer', parentId: 'P1', ticketId: t2.id });
+    h.tickets.update(UI, t2.id, { assignee: { kind: 'session', sessionId: 'Wp' } });
+    s.add({ id: 'qaP', workspaceId: WS, agent: 'qa-verifier', parentId: 'P2' });
+    assert.equal(qaRec(h, t2.id, 'qaP', B).actor, 'session:qaP');
+    recorded.set(A, ['P2']);
+    assert.throws(() => qaRec(h, t2.id, 'qaP', A), descends, 'its line is recorded on commit A');
+  } finally {
+    h.done();
+  }
+});
+
 /* ---------- FR36d (T-1987, D-93): a QA batch, a verdict per ticket ---------- */
 
 test('recordVerdicts (T-1987): every refusal rule applies per item; the rest are recorded; one audit row per ticket, with the batch', async () => {

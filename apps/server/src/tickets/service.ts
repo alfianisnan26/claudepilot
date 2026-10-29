@@ -381,6 +381,11 @@ export class Tickets {
   }) => void;
   /** A person's or a script's act that reaches into a session (a bump) is written to the platform audit here (index.ts wires it). */
   onAudit?: (e: TicketAudit) => void;
+  /**
+   * T-1854 (3): the sessions recorded as the author of a commit (index.ts wires CI's session of the runs on that sha). A lead line that
+   * authored the commit a verdict judges is not exempted. Unset: nothing is recorded, and only "not started on the ticket" applies.
+   */
+  commitSessions?: (commit: string) => readonly string[];
   #told: { ticketId: string; kind: TicketEventKind; actor: string; fromAgent: boolean; data: Record<string, unknown> | null }[] = [];
   #inTx = false;
   readonly #now: () => Date;
@@ -2564,8 +2569,11 @@ export class Tickets {
    * The sessions whose work a ticket's verdict would judge (`authors`) and the sessions that lead them (`leads`): the holder and its
    * lineage, every session that was ever assigned the ticket, and every session started on it, and the parents of all of those.
    */
-  #workers(row: Row): { authors: Set<string>; leads: Set<string>; leadHolders: Set<string> } {
+  #workers(row: Row, commit: string | null): { authors: Set<string>; leads: Set<string>; leadHolders: Set<string> } {
     const authors = new Set<string>();
+    // T-1854 (3): "not started on the ticket" is a weak proxy for "did not code" (a long-lived lane works many tickets, D-70). A session
+    // recorded as the author of the commit being judged is never exempted as a lead, nor is any line it is part of.
+    const coded = new Set<string>(commit && this.commitSessions ? this.commitSessions(commit) : []);
     const holderLine: string[] = [];
     const holder = row.assignee_kind === 'session' && row.assignee_ref ? this.sessions.get(row.assignee_ref) : null;
     if (row.assignee_kind === 'session' && row.assignee_ref) {
@@ -2598,31 +2606,39 @@ export class Tickets {
       holderLine.every((id) => {
         // A line member that can't be looked up counts as started on the ticket (fail closed; blind review of T-1603).
         const info = id === row.assignee_ref ? holder : this.sessions.get(id);
-        return !!info && info.ticketId !== ticket;
+        return !!info && info.ticketId !== ticket && !coded.has(id);
       });
     const leadHolders = new Set<string>(leadsWork ? holderLine : []);
     // T-1652: a lead that held the ticket and handed it to its own worker (lead -> worker) is a past holder, so an author; T-1603 covers the
     // current holder line only, and every QA that lead spawned was refused (Konfersi T-993, T-1647, 2026-10-19). A past holder that is an
     // ancestor of the current holder by `parentId` and was not started on the ticket (nor any session it continues) leads the work too. The
     // builder (the holder, started on the ticket) and a past holder started on it stay authors; a missing session fails closed.
+    // T-1854: (1) the past holder may be anywhere on the parent's line (its predecessor or its continuation: a lead continued after it handed
+    // the ticket on), so the whole line is tested, and the whole line must not be started on the ticket nor have authored the commit; (2) the
+    // climb goes up from every member of a line, since a continuation has no parentId of its own (its predecessor has).
     if (holder) {
       const lineup = new Set(holderLine);
-      const seen = new Set<string>(holderLine);
-      let cur: TicketSessionInfo | null = holder;
-      while (cur?.parentId && seen.size < 200 && !seen.has(cur.parentId)) {
-        const up = cur.parentId;
-        seen.add(up);
+      const climbed = new Set<string>();
+      const ups = new Set<string>();
+      const queue = [...holderLine];
+      while (queue.length && climbed.size < 200) {
+        const id = queue.shift()!;
+        if (climbed.has(id)) continue;
+        climbed.add(id);
+        const up = (id === row.assignee_ref ? holder : this.sessions.get(id))?.parentId;
+        if (!up || lineup.has(up) || ups.has(up)) continue;
+        ups.add(up);
         const info = this.sessions.get(up);
-        if (!info) break;
-        if (pastHolders.has(up) && !lineup.has(up)) {
-          const line = [up, ...this.#ancestors(info)];
-          const notStarted = line.every((id) => {
-            const s = id === up ? info : this.sessions.get(id);
-            return !!s && s.ticketId !== ticket;
+        if (!info) continue; // a gap fails closed: nothing above it is reached through it
+        const line = [up, ...this.#ancestors(info), ...this.#successors(info)];
+        if (line.some((x) => pastHolders.has(x))) {
+          const clean = line.every((x) => {
+            const s = x === up ? info : this.sessions.get(x);
+            return !!s && s.ticketId !== ticket && !coded.has(x);
           });
-          if (notStarted) for (const id of line) leadHolders.add(id);
+          if (clean) for (const x of line) leadHolders.add(x);
         }
-        cur = info;
+        queue.push(...line);
       }
     }
     return { authors, leads, leadHolders };
@@ -2670,7 +2686,7 @@ export class Tickets {
     const commit = normalizeSha(req.commit);
     const w = this.#writer(caller, opts.sessionId);
     // An admin's token acting "for" a session is not that session: only the agent's own token or a person may record.
-    const { authors, leads, leadHolders } = this.#workers(row);
+    const { authors, leads, leadHolders } = this.#workers(row, commit);
     const self = caller.kind === 'agent' && w.session ? w.session : null;
     const d = canRecordVerdict({
       callerKind: caller.kind,

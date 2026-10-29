@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import { failureMessage, tailOf } from './message.js';
 import { isChatActor } from '@portal/contracts';
 import { ciActor, FakeSessions } from './sessions.js';
+import { CiStore } from './store.js';
 import { FakeTickets } from './tickets.js';
 import { harness, remote, WS, type H } from './testkit.js';
 
@@ -53,6 +54,12 @@ test('a run is linked to its ticket: the owning session first, then a trailer, t
     assert.deepEqual(Object.fromEntries(sources.map((s) => [s.branch, s.ticket_source])), { 'ticket/12-login': 'branch', 'feature/x': 'trailer', 'work/login': 'session', 'ticket/99-nothing': null, plain: null });
     assert.deepEqual(h.svc.list({ ticket: 'T-12' }).items.map((r) => r.branch), ['ticket/12-login']);
     assert.deepEqual(h.svc.list({ session: 's1' }).items.map((r) => r.branch), ['work/login']);
+    // T-1854: the session recorded for a commit (what the verdict rule reads); a run linked to no session records none.
+    const shaOf = (b: string) => (h.store.db!.prepare('SELECT sha FROM ci_runs WHERE branch = ?').get(b) as { sha: string }).sha;
+    const cs = new CiStore(h.store);
+    assert.deepEqual(cs.sessionsOfCommit(shaOf('work/login')), ['s1']);
+    assert.deepEqual(cs.sessionsOfCommit(shaOf('ticket/12-login')), []);
+    assert.deepEqual(cs.sessionsOfCommit('f'.repeat(40)), []);
   });
 });
 

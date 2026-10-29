@@ -67,6 +67,7 @@ import { Tickets } from './tickets/service.js';
 import { mergeRecordersOf } from './flow/programs.js';
 import { flowProgramsRaw } from './flow/settings.js';
 import { CiService } from './ci/service.js';
+import { CiStore } from './ci/store.js';
 import { runnerLostMinFrom, upstreamHostsFrom } from './ci/settings.js';
 import { WorkspacesCiHost } from './ci/host.js';
 import { registerCiTools } from './ci/portalTools.js';
@@ -652,6 +653,9 @@ ci.hooks.contextPack = (e) => void syncPack(e);
 // A resources change that restarts a workspace's pod (T-98) waits for the CI runs running in it.
 workspaces.hooks.runningCi = (id) => ci.list({ workspace: id, status: ['running'], limit: 1 }).total;
 ci.onChange = () => notify('ci');
+// T-1854: a lead recorded by CI as the session of the commit a verdict judges is an author of it, not exempted as a lead.
+const ciRuns = new CiStore(store);
+tickets.commitSessions = (sha) => ciRuns.sessionsOfCommit(sha);
 // T-591 (D-69): a passed release's report is written into the vault the remote's own setting names, as the portal (actor `system`; the vault
 // journal records it). An existing note is replaced with its own version as `baseVersion`; a missing one is created.
 const portalActor = parseActor('system');

@@ -563,6 +563,12 @@ export class CiStore {
       .all(repoId, repoId) as unknown as RunRow[];
   }
 
+  /** T-1854: the sessions CI recorded for a commit (the session owning the branch each run on that sha was linked to), for the verdict rule. */
+  sessionsOfCommit(sha: string): string[] {
+    const rows = this.#db.prepare('SELECT DISTINCT session_id AS s FROM ci_runs WHERE sha = ? AND session_id IS NOT NULL').all(sha) as { s: string }[];
+    return rows.map((r) => r.s);
+  }
+
   activeCount(repoId: string): number {
     return Number(
       (
