@@ -71,7 +71,15 @@ export interface ScheduleHeartbeatAck {
 }
 
 /** The heartbeat's bounds (`ScheduleHeartbeat`). */
-export const SCHEDULE_HEARTBEAT_LIMITS = { intervalMinS: 10, intervalMaxS: 604_800, helpersMax: 100, nameMax: 64, kindMax: 32, ownerMax: 80, descriptionMax: 200 } as const;
+export const SCHEDULE_HEARTBEAT_LIMITS = {
+  intervalMinS: 10,
+  intervalMaxS: 604_800,
+  helpersMax: 100,
+  nameMax: 64,
+  kindMax: 32,
+  ownerMax: 80,
+  descriptionMax: 200,
+} as const;
 
 /** One background loop of the portal, with what its runs did (platform/loops.ts; the Schedules page, owner 2026-10-18). */
 export interface PortalLoop {

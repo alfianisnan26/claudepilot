@@ -56,7 +56,8 @@ export function createHeartbeatRoutes(d: HeartbeatDeps): Hono {
     if (perToken.blocked(v.token.id)) throw new AppError('RATE_LIMITED', 'Too many beats. Wait a minute.');
     perToken.fail(v.token.id);
 
-    if (!/^application\/json/i.test(c.req.header('content-type') ?? '')) throw new AppError('UNSUPPORTED_MEDIA_TYPE', 'Send application/json.');
+    if (!/^application\/json/i.test(c.req.header('content-type') ?? ''))
+      throw new AppError('UNSUPPORTED_MEDIA_TYPE', 'Send application/json.');
     const text = await c.req.text();
     if (text.length > BODY_MAX) throw new AppError('PAYLOAD_TOO_LARGE', 'That request is too large.');
     let body: unknown;

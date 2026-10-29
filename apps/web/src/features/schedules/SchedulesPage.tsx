@@ -7,7 +7,17 @@ import { InfoTip } from '@/components/InfoTip';
 import { PageHeader } from '@/components/PageHeader';
 import { api, errorText } from '@/lib/api';
 import { timeAgo } from '@/lib/format';
-import { attentionCount, canRunNow, canSwitch, detailText, type KindFilter, STATE_LABEL, STATE_TONE, triggerIdOf, visibleRows } from './model';
+import {
+  attentionCount,
+  canRunNow,
+  canSwitch,
+  detailText,
+  type KindFilter,
+  STATE_LABEL,
+  STATE_TONE,
+  triggerIdOf,
+  visibleRows,
+} from './model';
 
 function Section({ id, title, tip, children }: { id: string; title: string; tip: string; children: React.ReactNode }) {
   return (
@@ -31,7 +41,12 @@ const FILTERS: { value: KindFilter; label: string }[] = [
   { value: 'trigger', label: 'Triggers' },
   { value: 'helper', label: 'Helpers' },
 ];
-const EMPTY: Record<KindFilter, string> = { all: 'Nothing runs by itself.', loop: 'No loops reported.', trigger: 'No triggers.', helper: 'No helper has reported.' };
+const EMPTY: Record<KindFilter, string> = {
+  all: 'Nothing runs by itself.',
+  loop: 'No loops reported.',
+  trigger: 'No triggers.',
+  helper: 'No helper has reported.',
+};
 
 /**
  * Schedules (owner, 2026-10-18: "list of scheduler as well", "list of running browser proxy session"; T-965): what runs by itself in one
@@ -133,11 +148,25 @@ export function SchedulesPage() {
                     <span className="block text-[12.5px] text-muted [overflow-wrap:anywhere]">{detailText(r, (iso) => timeAgo(iso))}</span>
                   </span>
                   {canRunNow(r) ? (
-                    <Button variant="ghost" size="icon" aria-label={`Run ${r.name} now`} disabled={acting !== null} loading={acting === r.id} onClick={() => void act(r, 'run')}>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      aria-label={`Run ${r.name} now`}
+                      disabled={acting !== null}
+                      loading={acting === r.id}
+                      onClick={() => void act(r, 'run')}
+                    >
                       <Play className="size-[18px]" />
                     </Button>
                   ) : null}
-                  {canSwitch(r) ? <Switch checked={!!r.enabled} label={`${r.name} on`} disabled={acting !== null} onChange={() => void act(r, 'switch')} /> : null}
+                  {canSwitch(r) ? (
+                    <Switch
+                      checked={!!r.enabled}
+                      label={`${r.name} on`}
+                      disabled={acting !== null}
+                      onChange={() => void act(r, 'switch')}
+                    />
+                  ) : null}
                 </li>
               );
             })}

@@ -75,7 +75,9 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
   if (path === '/api/tickets' && method === 'POST') return json(200, { data: { id: 'T-900' } });
   if (path === '/api/schedules/heartbeat' && method === 'POST') {
     portal.beatAuth.push(new Headers(init?.headers).get('authorization') ?? '');
-    return portal.beatDown ? json(404, { error: { code: 'NOT_FOUND', message: 'Not found.' } }) : json(200, { data: { id: `helper:${body?.name}` } });
+    return portal.beatDown
+      ? json(404, { error: { code: 'NOT_FOUND', message: 'Not found.' } })
+      : json(200, { data: { id: `helper:${body?.name}` } });
   }
   return json(404, { error: { code: 'NOT_FOUND', message: `fake portal: no ${method} ${path}` } });
 }) as typeof fetch;
@@ -360,8 +362,16 @@ test('T-965: one heartbeat a good round, with the supervisor’s admin token; no
   portal.recover = { status: 200, body: { data: { id: 'old-1' } } };
   await sup.watch({ rounds: 2 });
   assert.equal(beats().length, 2);
-  assert.deepEqual(beats()[0]?.body, { name: 'dev-sessions-supervisor', kind: 'supervisor', interval: 60, description: 'Keeps the dev tracks alive (docs/dev-sessions/supervisor.mjs).' });
-  assert.ok(portal.beatAuth.every((a) => /^Bearer fake-/.test(a)), 'the leased admin token, as a bearer');
+  assert.deepEqual(beats()[0]?.body, {
+    name: 'dev-sessions-supervisor',
+    kind: 'supervisor',
+    interval: 60,
+    description: 'Keeps the dev tracks alive (docs/dev-sessions/supervisor.mjs).',
+  });
+  assert.ok(
+    portal.beatAuth.every((a) => /^Bearer fake-/.test(a)),
+    'the leased admin token, as a bearer',
+  );
 
   portal.calls.length = 0;
   portal.healthDown = 1;

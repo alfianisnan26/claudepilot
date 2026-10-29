@@ -16,7 +16,9 @@ export interface SchedulesDeps {
   measured?: () => LoopInfo[];
   helpers?: Pick<HelperRegistry, 'rows'>;
   /** The triggers' store; absent when the triggers module is not there. */
-  triggers?: Pick<TriggerStore, 'list'> & { runs(f: { triggerId: string; ownerId: null; limit: number }): { rows: { state: TriggerRunState }[] } };
+  triggers?: Pick<TriggerStore, 'list'> & {
+    runs(f: { triggerId: string; ownerId: null; limit: number }): { rows: { state: TriggerRunState }[] };
+  };
   now?: () => Date;
 }
 

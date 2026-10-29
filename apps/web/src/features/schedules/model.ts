@@ -26,9 +26,16 @@ export function visibleRows(rows: readonly ScheduleRow[], kind: KindFilter): Sch
 }
 
 /** How many rows need a look (failing or stale). */
-export const attentionCount = (rows: readonly ScheduleRow[]): number => rows.filter((r) => r.state === 'failing' || r.state === 'stale').length;
+export const attentionCount = (rows: readonly ScheduleRow[]): number =>
+  rows.filter((r) => r.state === 'failing' || r.state === 'stale').length;
 
-export const STATE_LABEL: Record<ScheduleState, string> = { ok: 'OK', failing: 'Failing', stale: 'Late', stopped: 'Stopped', disabled: 'Off' };
+export const STATE_LABEL: Record<ScheduleState, string> = {
+  ok: 'OK',
+  failing: 'Failing',
+  stale: 'Late',
+  stopped: 'Stopped',
+  disabled: 'Off',
+};
 export const STATE_TONE: Record<ScheduleState, 'success' | 'danger' | 'warning' | 'neutral'> = {
   ok: 'success',
   failing: 'danger',

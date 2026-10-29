@@ -9,7 +9,12 @@ import type { UntrustedText } from '../portalmcp/sanitize.js';
 import type { Schedules } from './service.js';
 
 type Said = string | UntrustedText | null;
-export type ScheduleToolRow = Omit<ScheduleRow, 'name' | 'module' | 'owner' | 'description'> & { name: Said; module: Said; owner: Said; description: Said };
+export type ScheduleToolRow = Omit<ScheduleRow, 'name' | 'module' | 'owner' | 'description'> & {
+  name: Said;
+  module: Said;
+  owner: Said;
+  description: Said;
+};
 
 const ATTENTION: ReadonlySet<ScheduleState> = new Set(['stale', 'failing']);
 
@@ -34,7 +39,13 @@ export function registerSchedulesTools(schedules: Pick<Schedules, 'list'>, regis
         r.kind === 'trigger'
           ? { ...r, name: ctx.untrusted(r.name, 'trigger') }
           : r.kind === 'helper'
-            ? { ...r, name: ctx.untrusted(r.name, 'helper'), module: ctx.untrusted(r.module, 'helper'), owner: ctx.untrusted(r.owner, 'helper'), description: ctx.untrusted(r.description, 'helper') }
+            ? {
+                ...r,
+                name: ctx.untrusted(r.name, 'helper'),
+                module: ctx.untrusted(r.module, 'helper'),
+                owner: ctx.untrusted(r.owner, 'helper'),
+                description: ctx.untrusted(r.description, 'helper'),
+              }
             : r,
       );
       const stale = rows.filter((r) => r.state === 'stale').length;
