@@ -248,7 +248,13 @@ export function registerUsageSpendTools(spend: UsageSpend, registry: ToolRegistr
         const link = spend.sessionScope(ctx.sessionId!);
         if (link && link.claudeId !== args.claude_id) throw new AppError('FORBIDDEN', 'An agent can read only its own Claude’s requests.');
       }
-      const r = spend.attribution({ by: args.by, range: args.range, claudeId: args.claude_id, workspaceId: args.workspace_id, limit: args.limit, ...(args.done ? { done: true } : {}), ...(root ? { sessionId: root } : {}) });
+      // T-2945: by ticket, a ticket the caller may not see (another person's bucket) reads like one that does not exist: no type, status or done time.
+      const actor = actorOfPrincipal(ctx.principal);
+      const r = spend.attribution(
+        { by: args.by, range: args.range, claudeId: args.claude_id, workspaceId: args.workspace_id, limit: args.limit, ...(args.done ? { done: true } : {}), ...(root ? { sessionId: root } : {}) },
+        undefined,
+        { ticketVisible: (id) => ticketKeyOf(id, actor) !== null },
+      );
       return {
         summary: `${r.rows.length} rows by ${r.by} over ${r.range}: ${money(r.totals.costUsd)} (estimated) in ${r.totals.requests} requests${r.coverage.basis === 'unavailable' ? '' : `, ${r.coverage.value}% of the dollars attributed`}.`,
         by: r.by,

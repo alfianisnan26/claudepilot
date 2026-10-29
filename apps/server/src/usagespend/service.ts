@@ -702,8 +702,11 @@ export class UsageSpend {
     return this.#store.claudes().get(claudeId)?.name ?? 'Claude';
   }
 
-  /** The window's requests grouped by one dimension, for what `actorId` may see (§22). */
-  attribution(q: AttributionQuery = {}, actorId: string = OWNER_ACTOR): AttributionReport {
+  /**
+   * The window's requests grouped by one dimension, for what `actorId` may see (§22). By ticket, `ticketVisible` (T-2945) is the caller's
+   * bucket check: a ticket it may not see reads like one that does not exist (no type, status or done time).
+   */
+  attribution(q: AttributionQuery = {}, actorId: string = OWNER_ACTOR, opts: { ticketVisible?: (ticketId: string) => boolean } = {}): AttributionReport {
     const by = (q.by ?? 'session') as AttributionBy;
     if (!(ATTRIBUTION_BY as readonly unknown[]).includes(by)) throw invalid('by', `Pick ${ATTRIBUTION_BY.join(', ')}.`);
     const range = (q.range ?? '7d') as ChatUsageRange;
@@ -734,7 +737,7 @@ export class UsageSpend {
     const personas = by === 'persona' ? this.#store.personaRecords(ids) : new Map();
     const a =
       by === 'ticket'
-        ? ticketReport(this.#store, { rows, sessions, fromMs: from, toMs: now + 1, limit, doneOnly: q.done === true })
+        ? ticketReport(this.#store, { rows, sessions, fromMs: from, toMs: now + 1, limit, doneOnly: q.done === true, ...(opts.ticketVisible ? { ticketVisible: opts.ticketVisible } : {}) })
         : attribute({
             by,
             rows,
