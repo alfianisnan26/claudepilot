@@ -182,9 +182,16 @@ test('(4) FR39: a ticket filed without a bucket never lands in one the caller ma
 
     // Alice's own agent in the same workspace: her workspace bucket is chosen; with no bucket she may file in, the create is refused as not
     // found (never the owner's PILOT), and nothing is filed.
-    const aliceAgent: Caller = { ...agent('docker/api', 'sa'), actor: { kind: 'agent', userId: 'u_alice', tokenId: 'agt_sa', sessionId: 'sa', workspaceId: 'docker/api' } };
-    assert.equal(h.tickets.create(aliceAgent, { summary: 'hers' }).bucket, 'PRIV');
-    const bob: Caller = { ...agent('docker/web', 'sb'), actor: { kind: 'agent', userId: 'u_bob', tokenId: 'agt_sb', sessionId: 'sb', workspaceId: 'docker/web' } };
+    const agentOf = (userId: string, workspaceId: string, sessionId: string): Caller => ({
+      kind: 'agent',
+      tokenId: `agt_${sessionId}`,
+      label: `session ${sessionId} in ${workspaceId}`,
+      workspaceId,
+      sessionId,
+      actor: { kind: 'agent', userId, tokenId: `agt_${sessionId}`, sessionId, workspaceId },
+    });
+    assert.equal(h.tickets.create(agentOf('u_alice', 'docker/api', 'sa'), { summary: 'hers' }).bucket, 'PRIV');
+    const bob = agentOf('u_bob', 'docker/web', 'sb');
     h.sessions.add({ id: 'sb', workspaceId: 'docker/web' });
     const before = h.tickets.list(UI, { includeClosed: true }).total;
     assert.equal(code(() => h.tickets.create(bob, { summary: 'nowhere to go' })), code(() => h.tickets.create(bob, { summary: 'x', bucket: 'NOPE' })));

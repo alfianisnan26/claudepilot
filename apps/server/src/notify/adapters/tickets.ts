@@ -15,7 +15,8 @@ export interface TicketEventLike {
 
 export interface TicketSource {
   onEvent?: (e: TicketEventLike) => void;
-  brief?(id: string): { id: string; status: string } | null;
+  /** T-1993: asked as the portal itself (the bucket rule is the caller's; the notifier is not a person). */
+  brief?(caller: { kind: 'system' }, id: string): { id: string; status: string } | null;
 }
 
 export function adaptTickets(
