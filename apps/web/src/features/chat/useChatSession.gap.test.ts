@@ -41,7 +41,14 @@ class FakeSocket {
 }
 
 const g = globalThis as Record<string, unknown>;
-const saved = { fetch: g.fetch, WebSocket: g.WebSocket, window: g.window, location: g.location, raf: g.requestAnimationFrame, caf: g.cancelAnimationFrame };
+const saved = {
+  fetch: g.fetch,
+  WebSocket: g.WebSocket,
+  window: g.window,
+  location: g.location,
+  raf: g.requestAnimationFrame,
+  caf: g.cancelAnimationFrame,
+};
 let calls: Call[] = [];
 let mounted: Mounted<ChatSessionApi> | null = null;
 
@@ -50,7 +57,10 @@ beforeEach(() => {
   FakeSocket.all = [];
   g.fetch = (url: unknown) =>
     new Promise<Response>((resolve) => {
-      calls.push({ url: String(url), reply: (status, body) => resolve(new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })) });
+      calls.push({
+        url: String(url),
+        reply: (status, body) => resolve(new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })),
+      });
     });
   g.WebSocket = FakeSocket;
   g.window ??= globalThis;
@@ -119,7 +129,11 @@ test('a backlog with a gap re-seeds from the newest page: no hole, older events 
   const older = await take(/\/api\/chat\/sessions\/s1\/events\?before=111&limit=200$/);
   older.reply(200, { data: { events: range(101, 110), more: true, before: 101 } });
   await until(() => seqs()[0] === 101, 'the older page');
-  assert.deepEqual(seqs(), range(101, 121).map((e) => e.seq), 'in order, no hole');
+  assert.deepEqual(
+    seqs(),
+    range(101, 121).map((e) => e.seq),
+    'in order, no hole',
+  );
 });
 
 test('a backlog without a gap is appended as before; one with a gap whose page fails seeds from the backlog itself', async () => {
@@ -131,7 +145,10 @@ test('a backlog without a gap is appended as before; one with a gap whose page f
   sock.push({ type: 'events', session: 's1', items: range(201, 210), gap: true });
   (await take(NEWEST)).reply(500, { error: { code: 'INTERNAL_ERROR', message: 'down' } });
   await until(() => seqs()[0] === 201, 'the fallback re-seed');
-  assert.deepEqual(seqs(), range(201, 210).map((e) => e.seq));
+  assert.deepEqual(
+    seqs(),
+    range(201, 210).map((e) => e.seq),
+  );
   assert.equal(mounted!.current.paging.more, true);
   mounted!.current.loadOlder();
   await take(/\/api\/chat\/sessions\/s1\/events\?before=201&limit=200$/);

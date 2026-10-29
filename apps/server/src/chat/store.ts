@@ -1104,7 +1104,9 @@ export class ChatStore {
     const items = this.history(sessionId, after);
     const first = items[0]?.seq;
     if (first === undefined || items.length < HISTORY_MAX_EVENTS || first <= after + 1) return { items, gap: false };
-    const older = this.#db().prepare('SELECT 1 FROM chat_events WHERE session_id = ? AND seq > ? AND seq < ? LIMIT 1').get(sessionId, after, first);
+    const older = this.#db()
+      .prepare('SELECT 1 FROM chat_events WHERE session_id = ? AND seq > ? AND seq < ? LIMIT 1')
+      .get(sessionId, after, first);
     return { items, gap: older !== undefined };
   }
 
