@@ -1,4 +1,5 @@
-// `GET /api/schedules` (T-965, general-manager PRD §9.2; T-968 S2b): the one list of the portal's loops and cron triggers. Mounted behind
+// `GET /api/schedules` (T-965, general-manager PRD §9.2; T-968 S2b): the one list of the portal's loops, every trigger and the helpers
+// outside the portal that send a heartbeat (./heartbeat.ts). Mounted behind
 // the sign-in guard; `view` on the platform's `system` area (./authz.ts), so anyone else is told the route does not exist.
 
 import { success } from '@isnanme/core';

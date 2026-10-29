@@ -72,9 +72,10 @@ import {
   SCHEDULES_API,
   MANAGER_API,
   type ManagerStatus,
-  type PortalLoop,
+  type ScheduleRow,
   TRIGGER_API,
   type Trigger,
+  type TriggerRun,
   APP_PORTS_API,
   type AppPortSession,
   type DelegatedSession,
@@ -166,8 +167,9 @@ export const api = {
   enableManager: () => request<ManagerStatus>('POST', MANAGER_API.enable, {}),
   disableManager: () => request<ManagerStatus>('POST', MANAGER_API.disable, {}),
   // Schedules and open apps (owner, 2026-10-18).
-  portalLoops: () => request<PortalLoop[]>('GET', SCHEDULES_API.loops),
-  triggers: () => request<Trigger[] | { items: Trigger[] }>('GET', TRIGGER_API.list).then((d) => (Array.isArray(d) ? d : (d.items ?? []))),
+  schedules: () => request<{ items: ScheduleRow[] }>('GET', SCHEDULES_API.list).then((d) => d.items),
+  setTriggerEnabled: (id: string, enabled: boolean) => request<Trigger>('PATCH', TRIGGER_API.one(id), { enabled }),
+  runTrigger: (id: string) => request<TriggerRun>('POST', TRIGGER_API.run(id), {}),
   appSessions: () => request<AppPortSession[]>('GET', APP_PORTS_API.sessions),
   closeAppSession: (id: string) => request<{ removed: boolean }>('DELETE', APP_PORTS_API.session(id)),
   // SSO (owner, 2026-10-17).

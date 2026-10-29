@@ -88,11 +88,11 @@ export interface PortalLoop {
 }
 
 export const SCHEDULES_API = {
-  /** GET: `ScheduleRow[]` (T-968 S2b; the manager's `schedules_list`). */
+  /** GET: `{ items: ScheduleRow[] }` (T-968 S2b, T-965; the Schedules page and the manager's `schedules_list`). */
   list: '/api/schedules',
   /** POST `ScheduleHeartbeat` -> `ScheduleHeartbeatAck`: a helper outside the portal says it is alive (a portal MCP token, never a cookie). */
   heartbeat: '/api/schedules/heartbeat',
-  /** Full session only. GET: `PortalLoop[]` (the Schedules page). The cron triggers come from `TRIGGER_API.list`. */
+  /** Full session only. GET: `PortalLoop[]` (the measured loops with their run counts and durations; the Schedules page reads `list`). */
   loops: '/api/admin/loops',
 } as const;
 
