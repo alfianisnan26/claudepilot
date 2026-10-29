@@ -155,7 +155,7 @@ export interface ParsedLine {
     /** Whether the origin carries a `producer` key at all, whatever its value (`producer` above is null for one that isn't a plain token). */
     originProducerKey?: boolean;
     /** For origin `peer` (a sub-agent's SendMessage delivered to the main conversation): the sending task and a digest of the body. */
-    peer?: { taskId: string | null; digest: string | null };
+    peer?: { taskId: string | null; digest: string | null; from?: string | null; handback?: boolean };
     /** The task id when the line's text is exactly Claude Code's report of a task the host stopped (TASK_STOPPED_LINE; T-318). */
     taskStopped?: string;
   };
@@ -163,6 +163,12 @@ export interface ParsedLine {
   peerSends?: { toolUseId: string; taskId: string; digest: string }[];
   /** Sub-agent tool results that say exactly "Message queued for the main conversation's next turn." (T-136): their call ids. */
   peerQueued?: string[];
+  /**
+   * Agent-tool sub-agents this line shows (T-3025): `main` from the main thread's tool result of the call that started one
+   * (`tool_use_result.agentId`), `sub` from a line of the sub-agent itself (`agent_id`, under its call). Ids only; the controller checks
+   * the call is a stored Agent/Task call of the main thread before a later hand-back may follow.
+   */
+  agentSeen?: { toolUseId: string; taskId: string; via: 'main' | 'sub' }[];
   /** A `command_lifecycle` line's command uuid, whatever its state. */
   commandUuid?: string;
   /** The main thread called EnterPlanMode, which needs no approval: `plan` mode may follow. */
@@ -503,6 +509,8 @@ function parseAssistant(obj: Record<string, unknown>): ParsedLine {
   if (agents.length) out.agents = agents;
   if (enterPlan) out.enterPlan = true;
   if (peerSends.length) out.peerSends = peerSends;
+  const seen = subAgentSeen(obj, agentLabel);
+  if (seen) out.agentSeen = [seen];
   // A sub-agent's line says which model answered it.
   const model = agentLabel ? modelId(asObj(obj.message)?.model) : null;
   if (agentLabel && model) out.agentModels = [{ toolUseId: agentLabel, model, source: 'observed' }];
@@ -575,7 +583,9 @@ function parseUser(obj: Record<string, unknown>): ParsedLine {
     if (origin?.kind === 'peer') {
       const o = asObj(obj.origin);
       const body = asStr(o?.body);
-      replay.peer = { taskId: taskToken(o?.senderTaskId), digest: body === null ? null : textDigest(body) };
+      replay.peer = { taskId: taskToken(o?.senderTaskId), digest: body === null ? null : textDigest(body), from: taskToken(o?.from) };
+      // An Agent-tool sub-agent's final report (T-3025): Claude Code marks it itself; only the boolean true counts.
+      if (o?.handback === true) replay.peer.handback = true;
     }
     const stopped = typeof content === 'string' ? TASK_STOPPED_LINE.exec(content) : null;
     if (stopped) replay.taskStopped = stopped[1]!;
@@ -610,6 +620,15 @@ function parseUser(obj: Record<string, unknown>): ParsedLine {
   if (last && beside.length) last.rawImages = [...(last.rawImages ?? []), ...beside];
   const out: ParsedLine = { stored };
   if (peerQueued.length) out.peerQueued = peerQueued;
+  // T-3025: the main thread's result of a call that started a sub-agent names its agent id (foreground: when it handed back; background:
+  // at launch). One result alone on the line, not an error, like `agentModels` below.
+  const agentId = taskToken(asObj(obj.tool_use_result)?.agentId);
+  if (!agentLabel && agentId && stored.length === 1 && last?.toolUseId && last.isError !== true)
+    out.agentSeen = [{ toolUseId: last.toolUseId, taskId: agentId, via: 'main' }];
+  else {
+    const seen = subAgentSeen(obj, agentLabel);
+    if (seen) out.agentSeen = [seen];
+  }
   // The result of a call that launched a sub-agent names the model Claude Code started it on.
   const launched = modelId(asObj(obj.tool_use_result)?.resolvedModel);
   if (launched && stored.length === 1 && last?.toolUseId) out.agentModels = [{ toolUseId: last.toolUseId, model: launched, source: 'launched' }];
@@ -617,6 +636,12 @@ function parseUser(obj: Record<string, unknown>): ParsedLine {
 }
 
 /** A task id as Claude Code writes it (`a8b5…`, `b1ezh2fdm`): a short plain token, else null. */
+/** A sub-agent's own line (T-3025): its agent id under the call that started it. */
+function subAgentSeen(obj: Record<string, unknown>, agentLabel: string | null): { toolUseId: string; taskId: string; via: 'sub' } | null {
+  const taskId = taskToken(obj.agent_id);
+  return agentLabel && taskId ? { toolUseId: agentLabel, taskId, via: 'sub' } : null;
+}
+
 function taskToken(v: unknown): string | null {
   const s = asStr(v);
   return s && /^[A-Za-z0-9_-]{1,64}$/.test(s) ? s : null;
