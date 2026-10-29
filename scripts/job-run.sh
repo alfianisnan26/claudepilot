@@ -98,7 +98,8 @@ die() { echo "job-run: $*" >&2; exit 2; }
 for n in "$max" "$per" "$pprog" "$art_max"; do [[ $n =~ ^[0-9]+$ ]] || die "the caps are numbers"; done
 prio_roles=${JOB_RUN_PRIORITY_ROLES-konfersi-stg-deploy}
 [[ $prio_roles =~ ^([a-z0-9][a-z0-9.-]*(,[a-z0-9][a-z0-9.-]*)*)?$ ]] || die "JOB_RUN_PRIORITY_ROLES is a comma list of role labels (a-z, 0-9, . and -)"
-prio_json=$(jq -nc --arg r "$prio_roles" '$r | split(",") | map(select(. != ""))')
+# No jq here: a missing jq is reported later, with its own message (T-2865). The shape check above leaves nothing to escape.
+prio_json="[$(printf '%s' "$prio_roles" | sed 's/[^,][^,]*/"&"/g')]"
 # The placement numbers are used in $(( )): at most 3 / 6 digits (no wrap-around to a negative), and base 10 (a leading 08 is not octal) (T-611 C1 C2).
 [[ $master_max =~ ^[0-9]{1,3}$ ]] || die "JOB_RUN_MASTER_MAX_PCT is a percentage (at most 3 digits)"
 master_max=$((10#$master_max))
