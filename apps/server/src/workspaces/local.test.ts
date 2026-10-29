@@ -109,7 +109,11 @@ describe('LocalRuntime', () => {
       assert.equal(ran.text, '--disable-warning=ExperimentalWarning', 'a command keeps the other flags, not the heap cap');
       assert.equal((await rt.delivery.run(NAME, 'printf "%s" "$NODE_OPTIONS"')).stdout, '--disable-warning=ExperimentalWarning');
       process.env.NODE_OPTIONS = '--max-old-space-size=1536';
-      assert.equal((await rt.delivery.run(NAME, 'printf "%s" "${NODE_OPTIONS-unset}"')).stdout, 'unset', 'nothing else: the variable is gone');
+      assert.equal(
+        (await rt.delivery.run(NAME, 'printf "%s" "${NODE_OPTIONS-unset}"')).stdout,
+        'unset',
+        'nothing else: the variable is gone',
+      );
       assert.equal(process.env.NODE_OPTIONS, '--max-old-space-size=1536', 'the portal’s own environment is unchanged');
     } finally {
       if (before === undefined) delete process.env.NODE_OPTIONS;
