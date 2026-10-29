@@ -6,6 +6,7 @@
 import type { ChatSession, CrewChannelMessage } from '@portal/contracts';
 import { bySpawn } from './crew';
 import { roleOf } from './crewLimits';
+import { restoreScroll, type Anchor } from './scrollAnchor';
 
 /** One stored message (the contract's `CrewChannelMessage`): its id grows with time, `from` is the author's session id. */
 export type CrewMessage = CrewChannelMessage;
@@ -117,3 +118,79 @@ export function tail<T>(messages: readonly T[], shown: number): { items: T[]; ol
 
 /** The words for the pill and a screen reader: "3 crew messages". */
 export const threadCount = (n: number): string => `${n} crew ${n === 1 ? 'message' : 'messages'}`;
+
+// ---- Loading: a failed read is an error, never an empty channel ----
+
+/** What the thread knows of its channel: `failed` keeps what was read before, so a failed re-read never blanks the thread. */
+export interface ChannelLoad {
+  status: 'loading' | 'ready' | 'failed';
+  /** Oldest first. */
+  messages: CrewMessage[];
+  /** Why the last read failed, in words for the person; null unless `failed`. */
+  reason: string | null;
+}
+
+export const CHANNEL_START: ChannelLoad = { status: 'loading', messages: [], reason: null };
+
+/** The words for a failed read: the error's own message, else a plain one. Never a stack, never empty. */
+export function reasonOf(error: unknown): string {
+  const text = error instanceof Error ? error.message.trim() : typeof error === 'string' ? error.trim() : '';
+  return text || 'The portal did not answer.';
+}
+
+/** One read settled: its messages join what was known (ready), or its failure is kept with what was known (failed). */
+export function settleChannel(prev: ChannelLoad, outcome: { ok: readonly CrewMessage[] } | { failed: unknown }): ChannelLoad {
+  if ('failed' in outcome) return { status: 'failed', messages: prev.messages, reason: reasonOf(outcome.failed) };
+  return { status: 'ready', messages: mergeMessages(prev.messages, outcome.ok), reason: null };
+}
+
+/** At most this many pages of the channel are read at once. */
+export const MAX_READ_PAGES = 5;
+
+/**
+ * Reads the channel from the newest message known, page after page while there is more. Any failed page fails the read (the pages read so far
+ * are kept): a half-read channel is said to be one, not shown as the whole.
+ */
+export async function readChannel(
+  read: (after: number) => Promise<{ items: readonly CrewMessage[]; more: boolean }>,
+  known: readonly CrewMessage[],
+  maxPages = MAX_READ_PAGES,
+): Promise<ChannelLoad> {
+  let state: ChannelLoad = { status: 'loading', messages: [...known], reason: null };
+  for (let page = 0; page < maxPages; page++) {
+    let got: { items: readonly CrewMessage[]; more: boolean };
+    try {
+      got = await read(lastId(state.messages));
+    } catch (error) {
+      return settleChannel(state, { failed: error });
+    }
+    state = settleChannel(state, { ok: got.items });
+    if (!got.more || got.items.length === 0) break;
+  }
+  return state;
+}
+
+// ---- Scroll: open at the newest, hold the reader still when older ones join ----
+
+/** What the thread does with its scroll after it changed: go to the newest (first open, or a reader already at the end), or hold an anchor. */
+export type ScrollPlan = 'bottom' | Anchor | null;
+
+/** Within a few pixels of the end counts as at the end (a fractional scrollTop never sticks one pixel short). */
+export const atBottom = (scrollTop: number, clientHeight: number, scrollHeight: number, slack = 48): boolean =>
+  scrollHeight - (scrollTop + clientHeight) <= slack;
+
+/** The scrollTop to set for a plan, or null to leave it: the end for 'bottom', the anchor's row where it was for an anchor. */
+export function scrollTarget(plan: ScrollPlan, now: { rowTop: number | null; scrollHeight: number; clientHeight: number }): number | null {
+  if (plan === null) return null;
+  if (plan === 'bottom') return Math.max(0, now.scrollHeight - now.clientHeight);
+  return restoreScroll(plan, now);
+}
+
+// ---- Keyboard: Tab stays inside an open popover ----
+
+/** Where Tab goes inside a trap of `count` stops while focus is on stop `index` (-1: none): the stop to focus, or null to let the browser move. */
+export function tabWrap(index: number, count: number, shift: boolean): number | null {
+  if (count <= 0) return null;
+  if (shift) return index <= 0 ? count - 1 : null;
+  return index >= count - 1 ? 0 : null;
+}

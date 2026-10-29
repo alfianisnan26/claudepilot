@@ -1,6 +1,6 @@
 import { Badge, cn, Dialog } from '@isnanme/ui';
 import { needsYou, type ChatSession } from '@portal/contracts';
-import { ChevronDown, CornerLeftUp, MessagesSquare, Network } from 'lucide-react';
+import { ChevronDown, CircleAlert, CornerLeftUp, MessagesSquare, Network } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { Popover } from '@/components/Popover';
@@ -82,15 +82,31 @@ export function CrewLine({ session, crew, roomy }: { session: ChatSession; crew:
   // The channel is the lead's own: a session with workers shows it; a worker's page links up to its lead instead.
   const channel = useCrewChannel(session.id, count > 0, session.state);
   const posts = channel.messages.length;
+  const channelFailed = channel.status === 'failed';
   const asks = (workers ?? []).filter(needsYou).length;
   const close = useCallback(() => setSheet(null), []);
   // Another session opened from the list: the sheet closes.
   useEffect(() => setSheet(null), [session.id]);
+  // On a desktop popover, Escape closes it (the popover does that) and focus goes back to the pill that opened it, not to the page's first control.
+  useEffect(() => {
+    if (!roomy || !sheet) return;
+    const back = (sheet === 'thread' ? threadAnchor : anchor).current;
+    const esc = (e: KeyboardEvent) => e.key === 'Escape' && void setTimeout(() => back?.focus(), 0);
+    document.addEventListener('keydown', esc);
+    return () => document.removeEventListener('keydown', esc);
+  }, [roomy, sheet]);
   if (!crewShown(crew)) return null;
 
   const pill = 'flex h-8 min-w-0 items-center gap-1.5 rounded-full border border-line bg-surface px-3 text-[13px] text-ink-soft';
+  const channelLabel = channelFailed
+    ? 'Crew messages, could not load'
+    : posts > 0
+      ? threadCount(posts)
+      : channel.status === 'ready'
+        ? 'Crew messages, none yet'
+        : 'Crew messages';
   const list = workers && <WorkerList session={session} workers={workers} onPick={close} />;
-  const thread = <CrewThread lead={session} workers={workers ?? []} messages={channel.messages} />;
+  const thread = <CrewThread lead={session} workers={workers ?? []} channel={channel} trap={roomy} />;
   return (
     <div data-crew-line="" className="mx-auto flex max-w-[760px] items-center gap-2 px-1">
       {lead && (
@@ -128,24 +144,28 @@ export function CrewLine({ session, crew, roomy }: { session: ChatSession; crew:
           </span>
         </button>
       )}
-      {posts > 0 && (
+      {count > 0 && (
         <button
           ref={threadAnchor}
           type="button"
           data-crew-channel=""
           aria-haspopup="dialog"
           aria-expanded={threadOpen}
-          aria-label={threadCount(posts)}
-          title={threadCount(posts)}
+          aria-label={channelLabel}
+          title={channelLabel}
           onClick={() => {
             if (!threadOpen) refresh();
             setSheet(threadOpen ? null : 'thread');
           }}
           className="press pointer-events-auto flex h-11 shrink-0 items-center"
         >
-          <span className={cn(pill, 'hover:text-ink')}>
-            <MessagesSquare className="size-3.5 shrink-0" aria-hidden="true" />
-            <span className="font-semibold tabular-nums">{posts}</span>
+          <span className={cn(pill, 'hover:text-ink', channelFailed && 'border-amber-500/40 text-amber-700 dark:text-amber-400')}>
+            {channelFailed ? (
+              <CircleAlert className="size-3.5 shrink-0" aria-hidden="true" />
+            ) : (
+              <MessagesSquare className="size-3.5 shrink-0" aria-hidden="true" />
+            )}
+            {posts > 0 && <span className="font-semibold tabular-nums">{posts}</span>}
           </span>
         </button>
       )}
@@ -154,7 +174,7 @@ export function CrewLine({ session, crew, roomy }: { session: ChatSession; crew:
           <Popover anchor={anchor} open={open && !!list} onClose={close} label="Workers" prefer="below">
             {list}
           </Popover>
-          <Popover anchor={threadAnchor} open={threadOpen && posts > 0} onClose={close} label="Crew" prefer="below">
+          <Popover anchor={threadAnchor} open={threadOpen && count > 0} onClose={close} label="Crew" prefer="below">
             {thread}
           </Popover>
         </>
@@ -163,7 +183,7 @@ export function CrewLine({ session, crew, roomy }: { session: ChatSession; crew:
           <Dialog open={open && !!list} onClose={close} title="Workers" size="sm">
             {list ?? null}
           </Dialog>
-          <Dialog open={threadOpen && posts > 0} onClose={close} title="Crew" size="sm">
+          <Dialog open={threadOpen && count > 0} onClose={close} title="Crew" size="sm">
             {thread}
           </Dialog>
         </>

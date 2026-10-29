@@ -110,7 +110,7 @@ export const chatApi = {
   children: (id: string) => chatApi.listAll({ parentId: id }),
   /**
    * A lead's crew channel (T-294 slice 3): one read-only page after `after`, at most `CREW_CHANNEL_LIMIT_MAX` (a person reading never moves a
-   * member's place). A session the person may not see answers 404, and the thread stays hidden.
+   * member's place). A session the person may not see answers 404: the thread says it could not load, with a Retry (never silence).
    */
   crewChannel: (leadId: string, after = 0) =>
     request<CrewChannelPage>(
