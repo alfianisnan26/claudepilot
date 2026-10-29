@@ -125,6 +125,7 @@ interface Seed {
   owner?: string;
   program?: string;
   repo?: string;
+  role?: string;
 }
 /** What the fake "kubectl top nodes" prints for the control-plane node (T-611): a memory percentage, a raw text, or "FAIL"; none = the metrics API is missing (exit 1). */
 interface Scenario {
@@ -659,6 +660,59 @@ test('the per-chat cap: a chat with two running waits, another chat goes past it
   });
   const r = await a.done;
   assert.equal(r.code, 0, r.out);
+});
+
+test('T-2967 priority lane: a konfersi-stg-deploy Job is not held by the per-chat or per-program cap (pipeline runs share the chat "manual")', async () => {
+  const w = world([
+    { name: 'claudepilot-job-0000000a', chat: 'manual', program: 'konfersi' },
+    { name: 'claudepilot-job-0000000b', chat: 'manual', program: 'konfersi' },
+  ]);
+  const args = ['--repo', 'konfersi:platform/konfersi-backend', '--ref', 'main', '--role', 'konfersi-stg-deploy', '--', 'true'];
+  const r = await w.start(args, { PILOT_SESSION_ID: '' }).done;
+  assert.equal(r.code, 0, r.out);
+  assert.doesNotMatch(r.out, /queued behind/, 'two of its chat and two of its program run: the deploy still goes');
+  const lane = ['--repo', 'konfersi:platform/konfersi-backend', '--ref', 'main', '--role', 'lane', '--', 'true'];
+  const other = w.start(lane, { PILOT_SESSION_ID: '' });
+  await waitFor('a lane Job of the same chat waits', () => /queued behind 2 \(at most 3 at once, 2 per chat, 2 per program\)/.test(other.out()));
+  w.edit((st) => {
+    Object.assign(st.jobs[0] ?? {}, { done: true, rc: 0 });
+  });
+  assert.equal((await other.done).code, 0);
+});
+
+test('T-2967 priority lane: a deploy goes ahead of a lane Job that waited longer, and takes the next free cluster slot', async () => {
+  const w = world([
+    { name: 'claudepilot-job-00000001', chat: 'chat-x' },
+    { name: 'claudepilot-job-00000002', chat: 'chat-y' },
+    { name: 'claudepilot-job-00000003', chat: 'chat-z' },
+    { name: 'claudepilot-job-00000004', chat: 'chat-w', suspend: true },
+  ]);
+  const s = w.start(['--repo', 'claudepilot', '--ref', 'main', '--role', 'konfersi-stg-deploy', '--', 'true']);
+  await waitFor('behind the three running only', () => /queued behind 3 \(/.test(s.out()));
+  w.edit((st) => {
+    Object.assign(st.jobs[0] ?? {}, { done: true, rc: 0 });
+  });
+  const r = await s.done;
+  assert.equal(r.code, 0, r.out);
+  assert.equal(w.state().jobs.find((j) => j.name === 'claudepilot-job-00000004')?.suspend, true, 'the older lane Job still waits');
+});
+
+test('T-2967 priority lane: JOB_RUN_PRIORITY_ROLES is a comma list of labels; empty turns the lane off', async () => {
+  const w = world([
+    { name: 'claudepilot-job-0000000a', chat: 'manual' },
+    { name: 'claudepilot-job-0000000b', chat: 'manual' },
+  ]);
+  assert.equal(w.run(['--list'], { JOB_RUN_PRIORITY_ROLES: 'a b' }).code, 2, 'a space is refused');
+  assert.equal(w.run(['--list'], { JOB_RUN_PRIORITY_ROLES: 'x,,y' }).code, 2, 'an empty item is refused');
+  const s = w.start(['--repo', 'claudepilot', '--ref', 'main', '--role', 'konfersi-stg-deploy', '--', 'true'], {
+    PILOT_SESSION_ID: '',
+    JOB_RUN_PRIORITY_ROLES: '',
+  });
+  await waitFor('off: the per-chat cap holds it', () => /queued behind 2/.test(s.out()));
+  w.edit((st) => {
+    Object.assign(st.jobs[0] ?? {}, { done: true, rc: 0 });
+  });
+  assert.equal((await s.done).code, 0);
 });
 
 test('T-524 the per-program cap: two Konfersi Jobs running (one from before the label, known by its repo), a third waits; ClaudePilot goes past it', async () => {
