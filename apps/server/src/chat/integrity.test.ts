@@ -157,7 +157,8 @@ const background = (session: string, agentId = BG_AGENT, call = BG_CALL) => [
   agentResult(session, { call, agentId, background: true }),
   taskStarted(session, agentId, call),
 ];
-const handedBackRow = (s: Live) => s.controller.history(s.id).some((e) => e.kind === 'system' && e.text === 'Sub-agent "stepper fix" handed back its report');
+/** The transcript's row for a hand-back: the sub-agent's name as the transcript knows it (its call's description, or its task's label). */
+const handedBackRow = (s: Live, label = 'stepper fix') => s.controller.history(s.id).some((e) => e.kind === 'system' && e.text === `Sub-agent "${label}" handed back its report`);
 
 /** A session whose process has run sub-agent `w1`. */
 async function withTask(s: Live, taskId = 'w1') {
@@ -1281,7 +1282,7 @@ test('integrity (T-3025): a background Agent sub-agent hands back hours later, a
     await expectAccepted(s, background(s.id));
     s.advance(3 * 60 * 60_000); // no window: a background sub-agent may run for hours
     await expectAccepted(s, [init(s.id), handbackLine(s.id, { agentId: BG_AGENT, name: 'claude' })]);
-    assert.ok(handedBackRow(s));
+    assert.ok(handedBackRow(s, 'finish a slice'), JSON.stringify(s.controller.history(s.id).filter((e) => e.kind === 'system').map((e) => e.text)));
     // A foreign peer line after it still ends the chat.
     await expectIntegrityEnd(s, handbackLine(s.id, { agentId: 'a0000000000000005' }), /a message this portal didn't send reached Claude Code .*origin peer/);
     assert.equal(s.controller.get(s.id)!.endedFor?.case, 'replay-peer-unknown');
