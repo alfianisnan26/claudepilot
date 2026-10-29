@@ -76,16 +76,28 @@ test('T-3018: a lead asleep with its Bypass kept, woken while pilot-health resto
     assert.equal(s.controller.get(lead.id)!.mode, 'default', 'asleep: Bypass paused');
     s.controller.controlTimeoutMs = 2000; // the held Bypass replies below must not time out
 
-    // The wake (a message to the lead) and the acknowledged restore arrive together.
+    // A message wakes the lead; its wake puts the kept Bypass back (`#keepBypass('wake')`). While that switch is in flight, the
+    // acknowledged restore (pilot-health's `POST /bypass`) arrives: the row still reads the start mode, so it sends its own switch.
+    const bypassAsks = () => controls(s.ws).filter((c) => c.request.subtype === 'set_permission_mode' && c.request.mode === 'bypassPermissions');
+    const before = bypassAsks().length;
     const waking = s.controller.send(lead.id, 'wake-1', 'go on');
-    const restoring = s.controller.enterBypass(lead.id, { acknowledged: true, sessionToken: 'tok' });
-    await answeringHeld(s, Promise.allSettled([waking, restoring]), 2);
+    const both = (async () => {
+      await until(() => bypassAsks().length > before, 4000);
+      const restoring = s.controller.enterBypass(lead.id, { acknowledged: true, sessionToken: 'tok' });
+      return Promise.allSettled([waking, restoring]);
+    })();
+    await answeringHeld(s, both, 2);
     await sleep(100);
 
     const row = s.controller.get(lead.id)!;
     assert.notEqual(row.state, 'ended', `not ended for its own gated Bypass: ${row.endedReason ?? ''}`);
     assert.equal(row.process, 'live');
     assert.equal(row.mode, 'bypassPermissions', 'back in Bypass through the gated path');
+    assert.equal(bypassAsks().length - before, 2, 'both entries were in flight at once');
+    assert.ok(
+      s.controller.audit({ kind: 'bypass.entered', sessionId: lead.id }).some((a) => a.actor === 'portal' && a.detail.how === 'wake'),
+      'the wake put it back through #keepBypass',
+    );
   } finally {
     await s.done();
   }
