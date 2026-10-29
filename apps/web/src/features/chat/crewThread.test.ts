@@ -1,22 +1,46 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { ChatSession } from '@portal/contracts';
-import { authorOf, authorsOf, dayKey, dayLabel, lastId, mergeMessages, tail, THREAD_PAGE, threadCount, threadOf, type CrewMessage } from './crewThread';
+import {
+  authorOf,
+  authorsOf,
+  dayKey,
+  dayLabel,
+  lastId,
+  mergeMessages,
+  tail,
+  THREAD_PAGE,
+  threadCount,
+  threadOf,
+  type CrewMessage,
+} from './crewThread';
 
 // A fixed clock and local-time dates: no test depends on the real day or the machine's zone.
 const NOW = new Date(2026, 9, 29, 15, 0, 0);
 const local = (day: number, hour: number) => new Date(2026, 9, day, hour, 0, 0).toISOString();
 const msg = (id: number, from: string, text = `m${id}`, at = local(29, 9)): CrewMessage => ({ id, from, text, at });
-const sess = (id: string, over: Partial<ChatSession> = {}) => ({ id, title: `T ${id}`, agent: null, createdAt: local(28, 1), ...over }) as ChatSession;
+const sess = (id: string, over: Partial<ChatSession> = {}) =>
+  ({ id, title: `T ${id}`, agent: null, createdAt: local(28, 1), ...over }) as ChatSession;
 
 test('messages merge by id, each once, oldest first; a re-read of a page changes nothing', () => {
   const known = [msg(1, 'a'), msg(2, 'b')];
   const merged = mergeMessages(known, [msg(2, 'b', 'edited'), msg(3, 'a')]);
-  assert.deepEqual(merged.map((m) => m.id), [1, 2, 3]);
+  assert.deepEqual(
+    merged.map((m) => m.id),
+    [1, 2, 3],
+  );
   assert.equal(merged[1]!.text, 'edited', 'the newer read wins');
   assert.deepEqual(mergeMessages(merged, merged), merged);
-  assert.deepEqual(mergeMessages([msg(5, 'a'), msg(2, 'a')], []).map((m) => m.id), [2, 5], 'sorted by id, not by arrival');
-  assert.deepEqual(known.map((m) => m.id), [1, 2], 'the input is not changed');
+  assert.deepEqual(
+    mergeMessages([msg(5, 'a'), msg(2, 'a')], []).map((m) => m.id),
+    [2, 5],
+    'sorted by id, not by arrival',
+  );
+  assert.deepEqual(
+    known.map((m) => m.id),
+    [1, 2],
+    'the input is not changed',
+  );
 });
 
 test('the next read goes on from the newest id known, 0 for none', () => {
@@ -31,7 +55,11 @@ test('authors: the lead and its workers by id, their roles from `agent`, an unkn
   ]);
   assert.deepEqual(authorOf(authors, 'L'), { id: 'L', name: 'Konfersi lead', role: 'lead', isLead: true, known: true });
   assert.deepEqual(authorOf(authors, 'w1'), { id: 'w1', name: 'Fix login', role: 'implementer', isLead: false, known: true });
-  assert.deepEqual(authorOf(authors, 'w2'), { id: 'w2', name: 'Untitled', role: null, isLead: false, known: true }, 'a blank title and role say nothing');
+  assert.deepEqual(
+    authorOf(authors, 'w2'),
+    { id: 'w2', name: 'Untitled', role: null, isLead: false, known: true },
+    'a blank title and role say nothing',
+  );
   assert.deepEqual(authorOf(authors, 'gone'), { id: 'gone', name: 'Worker', role: null, isLead: false, known: false });
   // The lead not read yet (a worker's page): its messages still show, as a worker the portal does not list.
   assert.equal(authorOf(authorsOf(null, []), 'L').known, false);
@@ -66,7 +94,10 @@ test('the same author on two days starts a run again under the new day heading',
 test('a message with no readable time joins the day before it and never starts a heading of its own', () => {
   const authors = authorsOf(sess('L'), [sess('w1')]);
   const entries = threadOf([msg(1, 'w1', 'a', local(29, 9)), msg(2, 'w1', 'b', 'not a time')], authors, NOW);
-  assert.deepEqual(entries.map((e) => e.kind), ['day', 'message', 'message']);
+  assert.deepEqual(
+    entries.map((e) => e.kind),
+    ['day', 'message', 'message'],
+  );
   assert.equal(threadOf([], authors, NOW).length, 0, 'an empty channel is an empty thread');
 });
 

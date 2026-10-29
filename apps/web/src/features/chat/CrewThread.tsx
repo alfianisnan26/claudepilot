@@ -39,7 +39,12 @@ export function useCrewChannel(leadId: string | undefined, enabled: boolean, sta
         if (current) setView({ id: leadId, messages, status: 'ready' });
       } catch {
         // No route, or not allowed: what is known stays, and a channel never read stays hidden.
-        if (current) setView((v) => (v.id === leadId ? { ...v, status: v.messages.length ? 'ready' : 'unavailable' } : { id: leadId, messages: [], status: 'unavailable' }));
+        if (current)
+          setView((v) =>
+            v.id === leadId
+              ? { ...v, status: v.messages.length ? 'ready' : 'unavailable' }
+              : { id: leadId, messages: [], status: 'unavailable' },
+          );
       }
     })();
     return () => {
@@ -57,7 +62,15 @@ export function useCrewChannel(leadId: string | undefined, enabled: boolean, sta
  * for the rest. One name per run of one author, with its role; a session the portal lists links to its page. The time is the local one.
  * Every line breaks anywhere, so a long path or URL never pushes the sheet sideways.
  */
-export function CrewThread({ lead, workers, messages }: { lead: ChatSession; workers: readonly ChatSession[]; messages: readonly CrewMessage[] }) {
+export function CrewThread({
+  lead,
+  workers,
+  messages,
+}: {
+  lead: ChatSession;
+  workers: readonly ChatSession[];
+  messages: readonly CrewMessage[];
+}) {
   const [shown, setShown] = useState(THREAD_PAGE);
   useEffect(() => setShown(THREAD_PAGE), [lead.id]);
   const authors = useMemo(() => authorsOf(lead, workers), [lead, workers]);
@@ -69,8 +82,8 @@ export function CrewThread({ lead, workers, messages }: { lead: ChatSession; wor
       <p className="flex items-center gap-1 text-[13px] text-muted">
         <span>Shared by the crew</span>
         <InfoTip label="About the crew thread">
-          What the lead and its workers posted with crew_post, for everyone in the crew to look up: a decision, an interface, a finding. The portal keeps
-          the newest 500. Reading it here does not mark it read for any agent.
+          What the lead and its workers posted with crew_post, for everyone in the crew to look up: a decision, an interface, a finding. The
+          portal keeps the newest 500. Reading it here does not mark it read for any agent.
         </InfoTip>
       </p>
       {older > 0 && (

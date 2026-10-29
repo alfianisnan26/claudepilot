@@ -49,7 +49,10 @@ export interface Author {
 }
 
 /** Who wrote what: the lead and its workers by id. A lead names itself by its title, never a bare "Lead" beside a worker's title. */
-export function authorsOf(lead: Pick<ChatSession, 'id' | 'title' | 'agent'> | null, workers: readonly ChatSession[]): ReadonlyMap<string, Author> {
+export function authorsOf(
+  lead: Pick<ChatSession, 'id' | 'title' | 'agent'> | null,
+  workers: readonly ChatSession[],
+): ReadonlyMap<string, Author> {
   const out = new Map<string, Author>();
   const sorted = [...workers].sort(bySpawn);
   for (const w of sorted) out.set(w.id, { id: w.id, name: w.title?.trim() || 'Untitled', role: roleOf(w), isLead: false, known: true });
@@ -62,7 +65,14 @@ export const authorOf = (authors: ReadonlyMap<string, Author>, id: string): Auth
 
 export type ThreadEntry =
   | { kind: 'day'; key: string; label: string }
-  | { kind: 'message'; id: number; author: Author; text: string; at: string; /** The first of its author's run: the name shows on it only. */ first: boolean };
+  | {
+      kind: 'message';
+      id: number;
+      author: Author;
+      text: string;
+      at: string;
+      /** The first of its author's run: the name shows on it only. */ first: boolean;
+    };
 
 /** The local calendar day of a time ("2026-10-29"), the day a thread splits on. */
 export function dayKey(at: string | Date): string {
@@ -79,7 +89,11 @@ export function dayLabel(key: string, now: Date): string {
   if (key === dayKey(before)) return 'Yesterday';
   const [y, m, d] = key.split('-').map(Number);
   if (!y || !m || !d) return '';
-  return new Date(y, m - 1, d).toLocaleDateString([], { day: 'numeric', month: 'short', ...(y === now.getFullYear() ? {} : { year: 'numeric' }) });
+  return new Date(y, m - 1, d).toLocaleDateString([], {
+    day: 'numeric',
+    month: 'short',
+    ...(y === now.getFullYear() ? {} : { year: 'numeric' }),
+  });
 }
 
 /**
