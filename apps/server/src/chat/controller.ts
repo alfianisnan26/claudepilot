@@ -40,6 +40,7 @@ import {
   CHAT_RECOVER_CAPPED,
   CHAT_SESSION_TITLE_MAX,
   CHAT_SPAWN_WHY_MAX,
+  CREW_CHANNEL_LIMIT_MAX,
   isChatActor,
   isPortalActor,
   REAUTH_REQUIRED,
@@ -78,6 +79,7 @@ import {
   type CreateChatSessionRequest,
   type DeleteChatSessionResult,
   type ClaudeUsage,
+  type CrewChannelPage,
   type WorkspaceClaude,
 } from '@portal/contracts';
 import type { Store } from '../store/store.js';
@@ -4571,6 +4573,27 @@ export class ChatController {
     });
     // Again on the way out: a row stored before a secret was added to the workspace, or by an older build, is scrubbed too.
     return { lead: leadId, ...read, items: read.items.map((m) => ({ ...m, text: this.scrub(me.workspaceId, m.text) })) };
+  }
+
+  /**
+   * T-294: one read-only page of the crew channel THIS session leads (keyed by its own id, whether or not it has a parent: a person on a
+   * worker's page sees that worker's own crew), for a person's thread (`GET CHAT_API.crewChannel`). Always a peek from `after`: no member's
+   * cursor is read or moved. Each text is scrubbed again on the way out with the lead's workspace and, when it differs, the author's.
+   */
+  crewChannelPage(rawId: string, opts: { after: number; limit: number }): CrewChannelPage {
+    const lead = this.#require(this.#chat.resolveId(rawId));
+    const read = this.#chat.crewRead(lead.id, lead.id, { after: opts.after, limit: Math.min(Math.max(opts.limit, 1), CREW_CHANNEL_LIMIT_MAX), peek: true });
+    const authorWorkspace = new Map<string, string | null>();
+    const workspaceOf = (from: string): string | null => {
+      if (!authorWorkspace.has(from)) authorWorkspace.set(from, this.#chat.row(from)?.workspace_id ?? null);
+      return authorWorkspace.get(from)!;
+    };
+    const clean = (from: string, text: string): string => {
+      const once = this.scrub(lead.workspaceId, text);
+      const ws = workspaceOf(from);
+      return ws && ws !== lead.workspaceId ? this.scrub(ws, once) : once;
+    };
+    return { items: read.items.map((m) => ({ ...m, text: clean(m.from, m.text) })), cursor: read.cursor, more: read.more };
   }
 
   /** Every session below this one that hasn't ended, deepest first (what ending the parent may end with it). */

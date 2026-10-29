@@ -1,9 +1,10 @@
 // Chat sessions: the plain HTTP routes (chat-sessions PRD §10.5, CHAT_API). No auth middleware here —
 // the owner mounts this under a guarded group (`requireSession`) at /api/chat/sessions.
 
-import { AppError, success } from '@isnanme/core';
+import { AppError, isAppError, success } from '@isnanme/core';
 import { createHash } from 'node:crypto';
 import {
+  CREW_CHANNEL_LIMIT_MAX,
   sessionRef,
   type ChatAuditEntry,
   type ChatWorktreeRemoval,
@@ -22,6 +23,7 @@ import { Hono, type Context } from 'hono';
 import { actorOf, actorString, requireCan, visible } from '../authz/seam.js';
 import { RateLimiter } from '../rateLimit.js';
 import { serveBlob } from './artifacts/index.js';
+import { NO_SESSION } from './authz.js';
 import type { ChatController } from './controller.js';
 import { eventsQuery } from './eventPage.js';
 import type { Reauth } from './reauth.js';
@@ -56,6 +58,23 @@ function childrenMode(raw: string | undefined): 'end' | undefined {
   if (raw === undefined || raw === '' || raw === 'keep') return undefined;
   if (raw === 'end') return 'end';
   throw new AppError('VALIDATION_FAILED', 'children is keep or end.', { details: { children: 'Use keep or end.' } });
+}
+
+/** `?after=&limit=` of a crew channel read (T-294): `after` a whole number from 0 (default 0), `limit` 1 to CREW_CHANNEL_LIMIT_MAX (default it). */
+export function crewChannelQuery(q: { after?: string; limit?: string }): { after: number; limit: number } {
+  const whole = (raw: string | undefined, name: 'after' | 'limit', min: number, max: number, fallback: number): number => {
+    if (raw === undefined || raw === '') return fallback;
+    const n = Number(raw);
+    if (!/^\d+$/.test(raw) || !Number.isSafeInteger(n) || n < min || n > max)
+      throw new AppError('VALIDATION_FAILED', `${name} is a whole number from ${min} to ${max}.`, {
+        details: { [name]: `Expected a whole number from ${min} to ${max}.` },
+      });
+    return n;
+  };
+  return {
+    after: whole(q.after, 'after', 0, Number.MAX_SAFE_INTEGER, 0),
+    limit: whole(q.limit, 'limit', 1, CREW_CHANNEL_LIMIT_MAX, CREW_CHANNEL_LIMIT_MAX),
+  };
 }
 
 /** Builds the chat-session routes around a shared {@link ChatController}. Mount under a guarded group. */
@@ -257,6 +276,23 @@ export function createChatRoutes(controller: ChatController): Hono {
     requireCan(actorOf(c), 'view', sessionRef(c.req.param('id')));
     const raw = c.req.param('seq');
     return c.json(success(controller.event(c.req.param('id'), /^\d+$/.test(raw) ? Number(raw) : 0)));
+  });
+
+  // GET /api/chat/sessions/:id/crew-channel?after=<id>&limit=<n> — one read-only page of the crew channel this session leads (T-294), for
+  // whoever may view it; never moves a member's cursor. The access check comes first, so a session the caller may not see answers the same
+  // 404 as none whatever the parameters. An agent reads its channel through crew_read (one level, its own cursor), never here: the same 404.
+  chat.get('/:id/crew-channel', (c) => {
+    const id = c.req.param('id');
+    const actor = actorOf(c);
+    try {
+      if (actor.kind === 'agent') throw new AppError('NOT_FOUND', NO_SESSION);
+      requireCan(actor, 'view', sessionRef(id));
+    } catch (e) {
+      if (isAppError(e) && e.code === 'NOT_FOUND') throw new AppError('NOT_FOUND', NO_SESSION);
+      throw e;
+    }
+    const q = crewChannelQuery({ after: c.req.query('after'), limit: c.req.query('limit') });
+    return c.json(success(controller.crewChannelPage(id, q)));
   });
 
   // GET /api/chat/sessions/:id/models — what the session can switch to (asks Claude Code; resumes it if needed).

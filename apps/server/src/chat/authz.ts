@@ -41,6 +41,9 @@ export function registerChatAuthz(facts: (id: string) => SessionFacts | null): v
     // The stored transcript (whole after a seq, or a page; T-376) and one event of it whole: whoever may view the session.
     'GET /api/chat/sessions/:id/events': { kind: 'objects', checks: [{ type: 'session', verb: 'view', from: 'path', param: 'id' }] },
     'GET /api/chat/sessions/:id/events/:seq': { kind: 'objects', checks: [{ type: 'session', verb: 'view', from: 'path', param: 'id' }] },
+    // T-294: the crew channel the session leads, one read-only page (a person's thread): whoever may view the session; an agent reads its
+    // channel through crew_read only (the route answers it the same 404).
+    'GET /api/chat/sessions/:id/crew-channel': { kind: 'objects', checks: [{ type: 'session', verb: 'view', from: 'path', param: 'id' }] },
     // A sub-agent's own transcript: whoever may view the session (the Agents panel's detail view).
     'GET /api/chat/sessions/:id/tasks/:taskId/events': { kind: 'objects', checks: [{ type: 'session', verb: 'view', from: 'path', param: 'id' }] },
     // T-102: a restart (now, queued, or interrupting the turn), cancelling a queued one and the restart hint's memory operate the session.
