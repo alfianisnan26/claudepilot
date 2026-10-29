@@ -597,7 +597,11 @@ test('T-1982: neither the registry nor the cluster answers: exit 1, no Job; anot
 
 test('T-1624, D-96, T-2966: with no cap set, the defaults are 12 at once, 4 per chat and 9 per program', async () => {
   const w = world(Array.from({ length: 12 }, (_, i) => ({ name: `claudepilot-job-${String(i + 1).padStart(8, '0')}`, chat: `chat-${i}` })));
-  const s = w.start(['--repo', 'claudepilot', '--ref', 'main', '--', 'true'], { JOB_RUN_MAX: '', JOB_RUN_MAX_PER_CHAT: '', JOB_RUN_MAX_PER_PROGRAM: '' });
+  const s = w.start(['--repo', 'claudepilot', '--ref', 'main', '--', 'true'], {
+    JOB_RUN_MAX: '',
+    JOB_RUN_MAX_PER_CHAT: '',
+    JOB_RUN_MAX_PER_PROGRAM: '',
+  });
   await waitFor('the queue line', () => /queued behind 12 \(at most 12 at once, 4 per chat, 9 per program\)/.test(s.out()));
   w.edit((st) => {
     Object.assign(st.jobs[0] ?? {}, { done: true, rc: 0 });
