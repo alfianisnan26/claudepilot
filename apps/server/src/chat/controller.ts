@@ -1706,6 +1706,11 @@ export class ChatController {
     return this.#chat.history(this.#chat.resolveId(id), after, limit);
   }
 
+  /** T-2591: {@link history} after `after` with `gap` when events between it and the first one returned were left out (past the cap). */
+  historyAfter(id: string, after = 0) {
+    return this.#chat.historyAfter(this.#chat.resolveId(id), after);
+  }
+
   /** T-2589: the newest events of some kinds after `after`, bounded in rows and characters; `cut` when older ones were left unread. */
   historyTail(id: string, opts: { kinds: readonly string[]; after?: number; maxEvents: number; maxChars?: number }) {
     return this.#chat.historyTail(this.#chat.resolveId(id), opts);
