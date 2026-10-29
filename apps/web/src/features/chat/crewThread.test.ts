@@ -10,6 +10,7 @@ import {
   CHANNEL_START,
   lastId,
   mergeMessages,
+  pillToFocus,
   readChannel,
   reasonOf,
   scrollTarget,
@@ -232,4 +233,20 @@ test('Tab stays inside the popover: past the last stop to the first, Shift+Tab b
   assert.equal(tabWrap(1, 3, true), null);
   assert.equal(tabWrap(0, 1, false), 0, 'a single stop keeps focus');
   assert.equal(tabWrap(0, 0, false), null, 'nothing to trap');
+});
+
+test('a closed popover gives focus back to the pill that opened it, on every way it closes, when focus was lost to the page', () => {
+  // Escape from inside the panel, a click on blank page, a resize: the removed panel leaves focus on the body.
+  assert.equal(pillToFocus('thread', null, true, 'body'), 'thread');
+  assert.equal(pillToFocus('workers', null, true, 'body'), 'workers');
+  // Focus still on the pill (Escape from the pill, the pill toggled): nothing to move.
+  assert.equal(pillToFocus('thread', null, true, 'pill'), null);
+  // A control the person chose keeps it (a click on another button, a Tab onward).
+  assert.equal(pillToFocus('thread', null, true, 'other'), null);
+  // Switching from one sheet to the other, or opening one: no focus move.
+  assert.equal(pillToFocus('workers', 'thread', true, 'body'), null);
+  assert.equal(pillToFocus(null, 'thread', true, 'body'), null);
+  assert.equal(pillToFocus(null, null, true, 'body'), null);
+  // A phone's dialog returns focus on its own.
+  assert.equal(pillToFocus('thread', null, false, 'body'), null);
 });

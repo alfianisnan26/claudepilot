@@ -194,3 +194,21 @@ export function tabWrap(index: number, count: number, shift: boolean): number | 
   if (shift) return index <= 0 ? count - 1 : null;
   return index >= count - 1 ? 0 : null;
 }
+
+// ---- Focus: a closed sheet gives focus back to the pill that opened it ----
+
+/** The sheets the crew line opens, one at a time. */
+export type CrewSheet = 'workers' | 'thread' | null;
+
+/** Where focus is when a sheet has closed: gone to the page (`body`, which is where a removed panel leaves it), still on the pill, or on another control. */
+export type FocusAt = 'body' | 'pill' | 'other';
+
+/**
+ * Which pill takes focus once the sheet changed from `prev` to `next`: the one that opened `prev`, when it closed on a desktop popover (a phone's
+ * dialog gives focus back itself) and focus was lost to the page. Never while another sheet opens, and never when focus already went to a control
+ * the person chose (a click on another button, Tab onward): that is theirs.
+ */
+export function pillToFocus(prev: CrewSheet, next: CrewSheet, roomy: boolean, at: FocusAt): Exclude<CrewSheet, null> | null {
+  if (!roomy || prev === null || next !== null) return null;
+  return at === 'body' ? prev : null;
+}

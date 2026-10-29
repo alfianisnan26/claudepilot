@@ -104,10 +104,25 @@ export function CrewThread({
     if (to !== null) el.scrollTop = to;
   }, [entries, status]);
 
-  // The first stop on a desktop popover is the thread itself (it scrolls from the keyboard), so Escape and Tab have somewhere to start from.
+  // The first stop on a desktop popover is the thread itself (it scrolls from the keyboard), so Escape and Tab have somewhere to start from. The
+  // popover is hidden until it is placed (one render after it mounts), and a hidden element takes no focus, so this tries on the next frames until
+  // focus is inside; it never waits for the data (the thread's frame is the fallback until its scroll area exists).
   useEffect(() => {
-    if (trap) (scroller.current ?? root.current)?.focus({ preventScroll: true });
+    if (!trap) return;
+    let frame = 0;
+    let tries = 0;
+    const take = () => {
+      (scroller.current ?? root.current)?.focus({ preventScroll: true });
+      if (!root.current?.contains(document.activeElement) && tries++ < 20) frame = requestAnimationFrame(take);
+    };
+    frame = requestAnimationFrame(take);
+    return () => cancelAnimationFrame(frame);
   }, [trap]);
+  // The messages came in after focus took the frame: it moves to the scroll area, which scrolls from the keyboard.
+  const has = messages.length > 0;
+  useEffect(() => {
+    if (trap && has && document.activeElement === root.current) scroller.current?.focus({ preventScroll: true });
+  }, [trap, has]);
 
   const earlier = () => {
     const el = scroller.current;

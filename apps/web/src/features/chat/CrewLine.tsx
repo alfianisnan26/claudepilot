@@ -7,7 +7,7 @@ import { Popover } from '@/components/Popover';
 import { chatApi } from './api';
 import { crewOfSessions, otherClaude } from './crew';
 import { CrewThread, useCrewChannel } from './CrewThread';
-import { threadCount } from './crewThread';
+import { pillToFocus, threadCount, type CrewSheet } from './crewThread';
 import { roleOf } from './crewLimits';
 import { RoleBadge } from './RoleBadge';
 import { StateBadge } from './shared';
@@ -72,7 +72,7 @@ export const crewShown = (c: CrewState) => !!c.lead || (c.workers?.length ?? 0) 
  */
 export function CrewLine({ session, crew, roomy }: { session: ChatSession; crew: CrewState; roomy: boolean }) {
   // One sheet at a time: the workers, or the crew's thread.
-  const [sheet, setSheet] = useState<'workers' | 'thread' | null>(null);
+  const [sheet, setSheet] = useState<CrewSheet>(null);
   const open = sheet === 'workers';
   const threadOpen = sheet === 'thread';
   const anchor = useRef<HTMLButtonElement>(null);
@@ -87,14 +87,17 @@ export function CrewLine({ session, crew, roomy }: { session: ChatSession; crew:
   const close = useCallback(() => setSheet(null), []);
   // Another session opened from the list: the sheet closes.
   useEffect(() => setSheet(null), [session.id]);
-  // On a desktop popover, Escape closes it (the popover does that) and focus goes back to the pill that opened it, not to the page's first control.
+  // A desktop popover that closes, whichever way (Escape from inside it, a tap away, a resize), gives focus back to the pill that opened it. The
+  // removed panel leaves focus on the body; a control the person moved to is left alone (crewThread.pillToFocus). Not a keydown listener of
+  // ours: the popover's own Escape closes the sheet first and React removes such a listener before it runs.
+  const was = useRef<CrewSheet>(null);
   useEffect(() => {
-    if (!roomy || !sheet) return;
-    const back = (sheet === 'thread' ? threadAnchor : anchor).current;
-    const esc = (e: KeyboardEvent) => e.key === 'Escape' && void setTimeout(() => back?.focus(), 0);
-    document.addEventListener('keydown', esc);
-    return () => document.removeEventListener('keydown', esc);
-  }, [roomy, sheet]);
+    const prev = was.current;
+    was.current = sheet;
+    const at = !document.activeElement || document.activeElement === document.body ? 'body' : 'other';
+    const to = pillToFocus(prev, sheet, roomy, at);
+    if (to) (to === 'thread' ? threadAnchor : anchor).current?.focus();
+  }, [sheet, roomy]);
   if (!crewShown(crew)) return null;
 
   const pill = 'flex h-8 min-w-0 items-center gap-1.5 rounded-full border border-line bg-surface px-3 text-[13px] text-ink-soft';
