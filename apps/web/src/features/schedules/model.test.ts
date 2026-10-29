@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { ScheduleRow } from '@portal/contracts';
-import { attentionCount, canRunNow, canSwitch, detailText, everyText, triggerIdOf, visibleRows } from './model.js';
+import { attentionCount, canRunNow, canSwitch, detailText, everyText, settleList, triggerIdOf, visibleRows } from './model.js';
 
 const base: ScheduleRow = {
   id: 'loop:x',
@@ -123,4 +123,20 @@ test('everyText', () => {
     [everyText(30_000), everyText(90_000), everyText(300_000), everyText(21_600_000), everyText(86_400_000), everyText(172_800_000)],
     ['every 30 s', 'every 90 s', 'every 5 min', 'every 6 h', 'daily', 'every 2 d'],
   );
+});
+
+test('a failed load is an error with its reason, never an empty list (T-965 UX finding)', async () => {
+  const reason = (e: unknown) => (e instanceof Error ? e.message : 'No answer from the portal.');
+  const [failed, offline, none, some] = await Promise.allSettled([
+    Promise.reject(new Error('Server error (502)')),
+    Promise.reject('offline'),
+    Promise.resolve([] as ScheduleRow[]),
+    Promise.resolve([base]),
+  ]);
+  const err = settleList(failed, reason);
+  assert.deepEqual(err, { status: 'error', message: 'Server error (502)' });
+  assert.notEqual(err.status, 'ready', 'a rejected load must not become a list the page calls empty');
+  assert.deepEqual(settleList(offline, reason), { status: 'error', message: 'No answer from the portal.' });
+  assert.deepEqual(settleList(none, reason), { status: 'ready', items: [] });
+  assert.deepEqual(settleList(some, reason), { status: 'ready', items: [base] });
 });

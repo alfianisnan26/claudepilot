@@ -72,3 +72,14 @@ export const canSwitch = (r: ScheduleRow): boolean => r.kind === 'trigger' && r.
 export const canRunNow = (r: ScheduleRow): boolean => r.kind === 'trigger' && r.source !== 'webhook';
 /** `trigger:<id>` -> `<id>`, for the trigger routes. */
 export const triggerIdOf = (r: ScheduleRow): string => r.id.slice('trigger:'.length);
+
+/**
+ * One list's load (T-965 UX finding): a failed load is an error with its reason, never an empty list ("Nothing runs by itself." after a
+ * failed fetch was a false statement). `loading` before the first answer.
+ */
+export type ListLoad<T> = { status: 'loading' } | { status: 'error'; message: string } | { status: 'ready'; items: T[] };
+
+/** A settled fetch as a list's load; `reason` turns the rejection into the short message shown with the Retry button. */
+export function settleList<T>(r: PromiseSettledResult<T[]>, reason: (e: unknown) => string): ListLoad<T> {
+  return r.status === 'fulfilled' ? { status: 'ready', items: r.value } : { status: 'error', message: reason(r.reason) };
+}

@@ -315,7 +315,8 @@ loops, every trigger, the helpers.
   interval or cron, owner or target and action, last and next run and a failure, and the description in an InfoTip. A trigger row has
   its switch (`PATCH /api/triggers/:id { enabled }`, `manage` on that trigger) and, unless it is a webhook trigger, Run now
   (`POST /api/triggers/:id/run`, `operate`); the trigger routes check the person's right, so the page only offers. The open app
-  sessions stay below.
+  sessions stay below. A list whose load failed says "Couldn't load ..." with the reason in an InfoTip and a Retry button (44 px),
+  never its empty text: an empty list is only shown for an answer that was empty.
 
 Next slices:
 
