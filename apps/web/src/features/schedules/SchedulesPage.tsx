@@ -1,6 +1,6 @@
-import { Badge, Button, Segmented, Switch, useToast } from '@isnanme/ui';
-import type { AppPortSession, ScheduleKind, ScheduleRow } from '@portal/contracts';
-import { Activity, AppWindow, CalendarClock, Play, RefreshCw, Repeat, Trash2 } from 'lucide-react';
+import { Badge, Button, ConfirmDialog, Segmented, Switch, useToast } from '@isnanme/ui';
+import type { AppPortSession, ScheduleKind, ScheduleRow, Trigger } from '@portal/contracts';
+import { Activity, AppWindow, CalendarClock, Play, Plus, RefreshCw, Repeat, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Card } from '@/components/Card';
 import { InfoTip } from '@/components/InfoTip';
@@ -20,6 +20,8 @@ import {
   triggerIdOf,
   visibleRows,
 } from './model';
+import { ScheduleSheet } from './ScheduleSheet';
+import { TriggerEditor } from './TriggerEditor';
 
 function Section({ id, title, tip, children }: { id: string; title: string; tip: string; children: React.ReactNode }) {
   return (
@@ -92,6 +94,11 @@ export function SchedulesPage() {
   const [kind, setKind] = useState<KindFilter>('all');
   const [busy, setBusy] = useState(false);
   const [acting, setActing] = useState<string | null>(null);
+  // T-2950: the row in the sheet (by id, so it follows the refreshed list), the editor (a trigger, or null for a new one), the delete ask.
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [editor, setEditor] = useState<{ trigger: Trigger | null } | null>(null);
+  const [deleting, setDeleting] = useState<ScheduleRow | null>(null);
+  const [removing, setRemoving] = useState(false);
 
   const load = useCallback(async () => {
     setBusy(true);
@@ -131,6 +138,37 @@ export function SchedulesPage() {
     }
   };
 
+  const sheetRow = openId && rows ? (rows.find((r) => r.id === openId) ?? null) : null;
+
+  const edit = async (r: ScheduleRow) => {
+    setActing(r.id);
+    try {
+      const t = await api.trigger(triggerIdOf(r));
+      setOpenId(null);
+      setEditor({ trigger: t });
+    } catch (e) {
+      toast(errorText(e, 'Couldn’t open it.'), 'error');
+    } finally {
+      setActing(null);
+    }
+  };
+
+  const remove = async () => {
+    if (!deleting) return;
+    setRemoving(true);
+    try {
+      await api.deleteTrigger(triggerIdOf(deleting));
+      toast(`${deleting.name} deleted`);
+      setDeleting(null);
+      setOpenId(null);
+      await load();
+    } catch (e) {
+      toast(errorText(e, 'Couldn’t delete it.'), 'error');
+    } finally {
+      setRemoving(false);
+    }
+  };
+
   const close = async (s: AppPortSession) => {
     try {
       await api.closeAppSession(s.id);
@@ -147,9 +185,14 @@ export function SchedulesPage() {
         title="Schedules"
         description={`What runs by itself: the portal’s loops, triggers and helpers, and the apps open in App mode. Refreshes every 30 seconds.${late ? ` ${late} need a look.` : ''}`}
         action={
-          <Button variant="ghost" size="icon" aria-label="Refresh" onClick={() => void load()} loading={busy}>
-            <RefreshCw className="size-[18px]" />
-          </Button>
+          <span className="flex items-center gap-1">
+            <Button variant="ghost" size="icon" aria-label="New trigger" onClick={() => setEditor({ trigger: null })}>
+              <Plus className="size-[18px]" />
+            </Button>
+            <Button variant="ghost" size="icon" aria-label="Refresh" onClick={() => void load()} loading={busy}>
+              <RefreshCw className="size-[18px]" />
+            </Button>
+          </span>
         }
       />
 
@@ -175,16 +218,22 @@ export function SchedulesPage() {
                     className="flex min-h-14 items-center gap-3 px-4 py-2 sm:px-5"
                   >
                     <Icon className="size-4 shrink-0 text-muted" role="img" aria-label={r.kind} />
-                    <span className="min-w-0 flex-1">
+                    {/* The row opens its sheet (T-2950); the description moved there, as no button may hold another. */}
+                    <button
+                      type="button"
+                      data-schedule-open={r.id}
+                      aria-label={`Details of ${r.name}`}
+                      className="min-h-11 min-w-0 flex-1 rounded-lg text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+                      onClick={() => setOpenId(r.id)}
+                    >
                       <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
                         <span className="min-w-0 font-medium [overflow-wrap:anywhere]">{r.name}</span>
                         <Badge tone={STATE_TONE[r.state]}>{STATE_LABEL[r.state]}</Badge>
-                        {r.description ? <InfoTip label={`About ${r.name}`}>{r.description}</InfoTip> : null}
                       </span>
                       <span className="block text-[12.5px] text-muted [overflow-wrap:anywhere]">
                         {detailText(r, (iso) => timeAgo(iso))}
                       </span>
-                    </span>
+                    </button>
                     {canRunNow(r) ? (
                       <Button
                         variant="ghost"
@@ -243,6 +292,34 @@ export function SchedulesPage() {
           )}
         </ListBody>
       </Section>
+
+      <ScheduleSheet
+        row={sheetRow}
+        acting={acting !== null}
+        onClose={() => setOpenId(null)}
+        onAct={(r, what) => void act(r, what)}
+        onEdit={(r) => void edit(r)}
+        onDelete={setDeleting}
+      />
+      <TriggerEditor
+        open={!!editor}
+        trigger={editor?.trigger ?? null}
+        onClose={() => setEditor(null)}
+        onSaved={() => {
+          setEditor(null);
+          void load();
+        }}
+      />
+      <ConfirmDialog
+        open={!!deleting}
+        title={`Delete ${deleting?.name ?? ''}?`}
+        description="It stops at once. Its runs stay in the history for 90 days."
+        confirmLabel="Delete"
+        tone="danger"
+        loading={removing}
+        onConfirm={() => void remove()}
+        onClose={() => !removing && setDeleting(null)}
+      />
     </div>
   );
 }

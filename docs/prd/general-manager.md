@@ -271,7 +271,7 @@ How the build differs from the table above:
 | --- | --- | --- |
 | `schedules_list` | One list from `GET /api/schedules`: triggers, scheduled pipelines, the portal's loops, external helpers' heartbeats, with "stale" when a helper is late by 2 intervals. | read |
 | `schedule_get` | One schedule with its recent runs. | read |
-| `schedule_set_enabled` | Enables or disables a trigger or a scheduled pipeline. | operate |
+| `schedule_set_enabled` | Enables or disables a trigger (scheduled pipelines once they exist). | operate |
 | `schedule_run_now` | Runs one now (the trigger's own limits apply). | operate |
 
 `POST /api/schedules/heartbeat` is for helpers with their own token, not for the manager.
@@ -312,18 +312,33 @@ loops, every trigger, the helpers.
   before the list is read.
 - **The Schedules page (T-965, `/admin/schedules`).** Reads `GET /api/schedules` every 30 seconds. A filter (All, Loops, Triggers,
   Helpers); failing and late rows first, then stopped, then the rest, switched-off triggers last. Each row: name, state, a line with the
-  interval or cron, owner or target and action, last and next run and a failure, and the description in an InfoTip. A trigger row has
+  interval or cron, owner or target and action, last and next run and a failure (the description is in its sheet since T-2950). A trigger row has
   its switch (`PATCH /api/triggers/:id { enabled }`, `manage` on that trigger) and, unless it is a webhook trigger, Run now
   (`POST /api/triggers/:id/run`, `operate`); the trigger routes check the person's right, so the page only offers. The open app
   sessions stay below. A list whose load failed says "Couldn't load ..." with the reason in an InfoTip and a Retry button (44 px),
   never its empty text: an empty list is only shown for an answer that was empty.
+- **The action tools (T-2950, `schedules/portalTools.ts`, `schedules/actions.ts`).** `schedule_get { id, runs? }` returns one row of
+  the list by its id (`trigger:<id>`, `loop:<name>`, `helper:<name>`) and, for a trigger, its last runs (1 to 50, default 10: state,
+  reason code, session and ticket ids). `schedule_set_enabled { id, enabled }` switches a trigger (on also ends a pause; one
+  `trigger.updated` audit row, `via: schedule_set_enabled`). `schedule_run_now { id }` fires a cron or failed-CI trigger with a manual
+  event, as `POST /api/triggers/:id/run` does (its limits and approval apply; a run that was not started: 503). Who: the dispatch asks
+  `view` (get) or `operate` (the writes) on the platform's `system` area, so admins with a read or operate token; then, for a trigger,
+  the seam again on that trigger, `view` and `operate`. `operate`, not the route's `manage`, because an operate token is capped at
+  `operate` by the seam and this tool changes only the switch. An agent token, a read token for a write, a trigger the caller may not
+  see and an unknown id all get the same NOT_FOUND. A loop or a helper cannot be switched or run (CONFLICT), nor can a webhook
+  trigger be run. triggers PRD FR22 is amended to match.
+- **Details and the editor on the page (T-2950).** A row opens a sheet (the kit's Dialog, a bottom sheet on a phone whose header is
+  not a drag handle, `lib/sheetDrag.ts`): every field the list has, the description, and for a trigger its last five runs
+  (`GET /api/triggers/:id/runs`), its switch, Run now, Edit and Delete (a confirm; its runs stay 90 days). A **+** in the header makes
+  a cron trigger; Edit changes any trigger's name, cron and zone (cron triggers only), workspace, action (session, ticket, both),
+  instruction and switch through `POST` / `PATCH /api/triggers` (`manage`). The route replaces the action whole, so the form keeps
+  the trigger's Claude, folder, worktree, mode and ticket fields; limits and approval are not sent and stay. A 422's field errors land
+  on their fields. A webhook trigger is made through the API, where its secret is shown once.
 
 Next slices:
 
-1. The triggers editor on the page (create, edit, delete a trigger).
-2. `schedule_get`, `schedule_set_enabled` and `schedule_run_now` (the page uses the trigger routes for now).
-3. Scheduled pipelines, once CI accepts `on: schedule`.
-4. The T-971 refusal watcher calls `defineLoop` when it lands; it is not on `integration` yet.
+1. Scheduled pipelines, once CI accepts `on: schedule` (T-2950 checked: `ci/spec/validate.ts` still refuses it, a test pins that).
+2. The T-971 refusal watcher calls `defineLoop` when it lands; it is not on `integration` yet.
 
 ### 9.3 Writes, behind the S5 card design
 

@@ -83,3 +83,39 @@ export type ListLoad<T> = { status: 'loading' } | { status: 'error'; message: st
 export function settleList<T>(r: PromiseSettledResult<T[]>, reason: (e: unknown) => string): ListLoad<T> {
   return r.status === 'fulfilled' ? { status: 'ready', items: r.value } : { status: 'error', message: reason(r.reason) };
 }
+
+/** A trigger's settings can be changed on the page (the editor): every trigger; loops and helpers are code or outside the portal. */
+export const canEdit = (r: ScheduleRow): boolean => r.kind === 'trigger';
+
+const KIND_LABEL: Record<ScheduleKind, string> = { loop: 'Loop', trigger: 'Trigger', helper: 'Helper' };
+const ACTION_LABEL: Record<string, string> = { session: 'Session', ticket: 'Ticket', ticket_session: 'Ticket + session' };
+
+/**
+ * The detail sheet's lines for one row (T-2950): only what the server sent, a missing value left out (never a guess). `when` turns a time
+ * into words (an absolute time and how long ago on the page; a fixed one in tests).
+ */
+export function detailRows(r: ScheduleRow, when: (iso: string) => string): { label: string; value: string }[] {
+  const out: { label: string; value: string }[] = [
+    { label: 'Kind', value: KIND_LABEL[r.kind] },
+    { label: 'State', value: STATE_LABEL[r.state] },
+  ];
+  const add = (label: string, value: string | null | undefined) => {
+    if (value) out.push({ label, value });
+  };
+  if (r.kind === 'trigger') {
+    add('Source', SOURCE_LABEL[r.source ?? ''] ?? r.source);
+    add('Schedule', r.cron ? `${r.cron.expr} (${r.cron.tz})` : null);
+    add('Workspace', r.target);
+    add('Action', r.action ? (ACTION_LABEL[r.action] ?? r.action) : null);
+    add('Owner', r.owner);
+  } else {
+    add('Module', r.module);
+    add('Runs', r.interval_ms !== null ? everyText(r.interval_ms) : null);
+    if (r.kind === 'helper') add('Owner', r.owner);
+  }
+  add('Last run', r.last_run ? when(r.last_run) : 'Not yet');
+  add('Result', r.last_result === 'ok' ? 'OK' : r.last_result === 'failed' ? 'Failed' : null);
+  add('Error', r.last_error);
+  add('Next run', r.next_run && r.state !== 'disabled' && r.state !== 'stopped' ? when(r.next_run) : null);
+  return out;
+}
