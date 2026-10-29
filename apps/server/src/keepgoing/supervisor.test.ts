@@ -37,6 +37,9 @@ const portal = {
   listDown: 0,
   recover: { status: 404, body: { error: { code: 'NOT_FOUND', message: 'no such route' } } } as { status: number; body: unknown },
   calls: [] as { method: string; path: string; body: unknown }[],
+  /** T-965: the heartbeat answers 404 (an older portal), and the Authorization header of every beat. */
+  beatDown: false,
+  beatAuth: [] as string[],
 };
 const listFor = () => (portal.sessions ? (portal.sessions.length > 1 ? portal.sessions.shift()! : portal.sessions[0]!) : [portal.session]);
 const json = (status: number, body: unknown, headers: Record<string, string> = {}) =>
@@ -70,6 +73,10 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
   if (path === '/api/chat/reauth' || path.endsWith('/bypass')) return json(200, { data: {} });
   if (path.endsWith('/recover')) return json(portal.recover.status, portal.recover.body);
   if (path === '/api/tickets' && method === 'POST') return json(200, { data: { id: 'T-900' } });
+  if (path === '/api/schedules/heartbeat' && method === 'POST') {
+    portal.beatAuth.push(new Headers(init?.headers).get('authorization') ?? '');
+    return portal.beatDown ? json(404, { error: { code: 'NOT_FOUND', message: 'Not found.' } }) : json(200, { data: { id: `helper:${body?.name}` } });
+  }
   return json(404, { error: { code: 'NOT_FOUND', message: `fake portal: no ${method} ${path}` } });
 }) as typeof fetch;
 
@@ -120,6 +127,8 @@ beforeEach(() => {
   portal.sessions = null;
   portal.healthDown = 0;
   portal.listDown = 0;
+  portal.beatDown = false;
+  portal.beatAuth.length = 0;
 });
 after(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -342,4 +351,26 @@ test('T-400 item 4: no MOVED text on a stored-Claude mismatch at start; a move t
   portal.sessions = [[live('lead-1')], [live('lead-1', { claudeId: 'c-two', claudeName: 'two' })]];
   await sup.watch({ rounds: 2 });
   assert.equal(moved().length, 1);
+});
+
+test('T-965: one heartbeat a good round, with the supervisor’s admin token; none while the portal is down; a refusal is logged once', async () => {
+  const beats = () => portal.calls.filter((c) => c.method === 'POST' && c.path === '/api/schedules/heartbeat');
+  seed(0);
+  portal.session = ended(DUPLICATE, { classified: 'harmless', case: 'control-duplicate' });
+  portal.recover = { status: 200, body: { data: { id: 'old-1' } } };
+  await sup.watch({ rounds: 2 });
+  assert.equal(beats().length, 2);
+  assert.deepEqual(beats()[0]?.body, { name: 'dev-sessions-supervisor', kind: 'supervisor', interval: 60, description: 'Keeps the dev tracks alive (docs/dev-sessions/supervisor.mjs).' });
+  assert.ok(portal.beatAuth.every((a) => /^Bearer fake-/.test(a)), 'the leased admin token, as a bearer');
+
+  portal.calls.length = 0;
+  portal.healthDown = 1;
+  await sup.watch({ rounds: 1 });
+  assert.equal(beats().length, 0, 'a round that cannot reach the portal sends none');
+
+  portal.beatDown = true;
+  logs.length = 0;
+  await sup.watch({ rounds: 2 });
+  assert.equal(beats().length, 2, 'refused beats do not stop the rounds');
+  assert.equal(logs.filter((l) => /schedules heartbeat refused \(404\)/.test(l)).length, 1);
 });
