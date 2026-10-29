@@ -685,6 +685,7 @@ Generated from the REAL app (`createApp` with stub services, `app.routes`: 261 r
 | `GET /api/chat/sessions/:id/worktree` | obj(session manage path id) |  |
 | `DELETE /api/chat/sessions/:id/archive` | obj(session manage path id) |  |
 | `GET /api/chat/sessions/:id/events` | obj(session view path id) | files: the session's folder only, by the existing deny rules |
+| `GET /api/chat/sessions/:id/crew-channel` | obj(session view path id) | T-294: one read-only page of the crew channel the session leads (`?after=` from 0, `?limit=` 1 to 100, else 422, checked after access); never moves a member's cursor; text scrubbed again on read (workspace secret values, then credential shapes); a hidden or missing session, and any agent actor (an agent reads through `crew_read`), get the same 404 body as `GET /api/chat/sessions/:id`; `chat/crewChannelRoute.test.ts` |
 | `GET /api/chat/sessions/:id/events/:seq` | obj(session view path id) | one event whole (T-376) |
 | `GET /api/chat/sessions/:id/models` | obj(session operate path id) | asks Claude Code |
 | `GET /api/chat/sessions/:id/tasks` | obj(session view path id) | files: the session's folder only, by the existing deny rules |
