@@ -674,6 +674,13 @@ unread, the context file and the opening say older messages were left out. `sess
 (the approvals dock's own source), so a request older than the newest 2,000 events is still listed. A turn the portal waits on (the
 handoff, the new Claude's acknowledgement) is read forward a page at a time.
 
+**No silent gap past the cap (T-2591, 2026-10-29).** A reader more than 2,000 events behind is told that events were left out between
+its seq and the first one it got: the socket's subscribe backlog carries `gap: true`, and the REST `after` answer sets the header
+`X-Chat-History-Gap: 1` (its body stays the plain list). A tab that gets such a backlog (a phone back from a long sleep) does not put the
+newest events after a hole: it reads the newest page again, drops what it held older than that page, keeps what came live meanwhile, and
+the older events come back in order through the paged `before` read. When that page cannot be read, the tab keeps the backlog itself and
+pages back from before its first event.
+
 **Children without the portal's heap cap (T-2615, 2026-10-29).** The portal's container caps its own V8 heap (`NODE_OPTIONS=--max-old-space-size=1536`,
 `deploy/k3s/portal.yaml`, inside a 2 GiB limit). A process the portal starts would inherit that flag and could grow its own heap as large in
 the same memory cgroup. So every command, delivery script and terminal of This machine (`workspaces/local.ts`, the only runtime whose
