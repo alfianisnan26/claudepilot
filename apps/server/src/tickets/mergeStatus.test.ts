@@ -46,6 +46,7 @@ test('T-2016: the caller is checked before the arguments: a session that is not 
   const audits: { kind: string; detail?: Record<string, unknown> }[] = [];
   h.tickets.onAudit = (e) => void audits.push(e);
   try {
+    createTicketRoutes(h.tickets); // binds the bucket view rule to this harness's tickets (the previous test's store is closed)
     h.sessions.add({ id: GATE, workspaceId: 'docker/api' });
     h.sessions.add({ id: B, workspaceId: 'docker/api' });
     const t = h.tickets.create(UI, { summary: 'merge me', workspaceId: 'docker/api', tags: ['konfersi-migration'] });
