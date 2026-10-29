@@ -37,13 +37,20 @@ export function FlowCard() {
           <InfoTip label="What stalled means">No ticket was done in the stall window while tickets wait in review. You are notified once if it lasts after the leads were told.</InfoTip>
         </p>
       )}
+      {(v.idleLanes ?? 0) > 0 && (
+        <p role="status" data-flow-idle-lanes="" className="mb-1 flex items-center justify-center gap-1.5 text-xs font-semibold text-amber-700 dark:text-amber-400 [overflow-wrap:anywhere]">
+          <LevelDot level="warn" />
+          Idle lanes · {v.idleLanes}
+          <InfoTip label="What idle lanes means">Builder workers of a lead idle past the lane threshold while its unit has conflicts, PRs to open or open tickets. The lead is told which lanes are free and what waits, conflicts first.</InfoTip>
+        </p>
+      )}
       {v.unread.length > 0 && (
         <p role="status" data-flow-unread="" className="mb-1 flex items-center justify-center gap-1 text-xs font-semibold text-muted [overflow-wrap:anywhere]">
           Unavailable · {v.unread.join(', ')}
           <InfoTip label="Why unavailable">The last round could not read these programs (their tickets or sessions), so their counts are unknown, not zero. The portal log says why; the next round tries again.</InfoTip>
         </p>
       )}
-      {/* Four figures fit one row at 390 px; the stall is the status line above. */}
+      {/* Four figures fit one row at 390 px; the stall and idle lanes are status lines above. */}
       <Stats>
         <Stat value={v.merge} label="Merge" tone={v.merge ? 'accent' : undefined} />
         <Stat value={v.qa} label="No QA" tone={v.qa ? 'accent' : undefined} />

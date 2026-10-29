@@ -8,7 +8,7 @@
 //                                                                                        too when the ticket has review verdicts; a ticket
 //                                                                                        recorded merged is skipped; without a record, the
 //                                                                                        newest commit seen, labelled so
-//   conflict, no_pr  the gate recorded a PR needing a rebase, or no PR, that long        -> the ticket's unit lead: rebase it, or open the PR
+//   conflict, no_pr  the gate recorded a PR needing a rebase, or no PR (at once, T-2018) -> the ticket's unit lead: rebase it, or open the PR
 //                    each record is first checked with the forge (FlowPrPort, when set): merged there is merged, closed unmerged is no_pr,
 //                    an open PR is judged on its live head and is a conflict when the forge cannot merge it
 //                                                                                        D-102: or the implementer's self-test line on the head
@@ -21,6 +21,8 @@
 //   idle    a lead idle `flow.idleAfterMin` with open work in its unit, under cap   -> that lead, its next tickets (oldest high priority first)
 //                                                                                        open work: not dispatched, or its holder ended or idle;
 //                                                                                        the cap counts workers that work, not ones merely live
+//   idle_lanes  a lead's own builder workers idle `flow.laneIdleMin` while its unit has -> that lead: the idle lane ids and the next items
+//               conflicts, no_pr or open work (T-2018)                                  (conflicts, then no_pr, then oldest high priority)
 //   review  a HIGH ticket self-tested on the head, no review verdict that long         -> a peer lead (as qa, never the author's): REVIEW-ASK
 //   bypass  a lead that was in Bypass is not now                                      -> reported only (audit and the card): see below
 //   stall   nothing done in `flow.stallHours` while tickets wait in review           -> the owner, once, if it lasts `flow.notifyAfterHours`
@@ -55,7 +57,7 @@ import type { ClockPort } from '../autotransfer/ports.js';
 import type { NotifyBus } from '../notify/bus.js';
 import type { AuditInput } from '../platform/audit.js';
 import { evaluateVerdicts, type StoredVerdict } from '../tickets/verdicts.js';
-import { crewRoot, lineage, parseLeadPeerGroups, resolveHead, parsePrograms, type FlowProgram, type SessionReader } from './programs.js';
+import { crewRoot, isBuilderLaneName, lineage, parseLeadPeerGroups, resolveHead, parsePrograms, type FlowProgram, type SessionReader } from './programs.js';
 import { flowOn, flowPaused, flowProgramsRaw, flowThresholds, type FlowSettingsReader, type FlowThresholds } from './settings.js';
 import { trimState, type FlowState, type FlowStatePort } from './store.js';
 
@@ -346,7 +348,8 @@ export class FlowEngine {
       if (recorded.length && !pending.length) continue;
       const pr = pending[0] ?? null;
       if (pr && (pr.state === 'conflict' || pr.state === 'no_pr')) {
-        if (now - ms(pr.at) >= t.mergeAfterMs) (pr.state === 'conflict' ? conflict : noPr).push({ t: x, pr });
+        // T-2018: at once, the round they are seen (the rate limit still holds): 15 PRs sat in conflict while builders idled.
+        (pr.state === 'conflict' ? conflict : noPr).push({ t: x, pr });
         continue;
       }
       const verdicts = this.#d.tickets.verdicts(x.id);
@@ -420,8 +423,8 @@ export class FlowEngine {
         const n = items.length;
         await this.#tell(c, cond, l, heads.get(l) ?? null, resolved.get(l)?.why ?? null, items.map((i) => i.t.id), [
           cond === 'conflict'
-            ? `${FLOW_PREFIX} the merge gate recorded a conflict on ${plural(n, 'pull request')} of your unit for ${t.mergeAfterMs / MIN} min or more (program ${p.name}). Send ${n === 1 ? 'it' : 'each'} back to its builder for a rebase onto the base branch; QA then verifies the new head:`
-            : `${FLOW_PREFIX} the merge gate recorded no pull request for ${plural(n, 'ticket')} of your unit in review for ${t.mergeAfterMs / MIN} min or more (program ${p.name}). Open the PR for each (or have its builder open it), or say on the ticket why not:`,
+            ? `${FLOW_PREFIX} the merge gate recorded a conflict on ${plural(n, 'pull request')} of your unit (program ${p.name}). Send ${n === 1 ? 'it' : 'each'} back to its builder for a rebase onto the base branch; QA then verifies the new head:`
+            : `${FLOW_PREFIX} the merge gate recorded no pull request for ${plural(n, 'ticket')} of your unit in review (program ${p.name}). Open the PR for each (or have its builder open it), or say on the ticket why not:`,
           ...items.slice(0, FLOW_LIMITS.ticketsPerMessage).map((i) => `- ${ref(i.t)} ${i.pr.repo}${i.pr.pr ? `#${i.pr.pr}` : ''}${i.pr.prHead ? ` head ${i.pr.prHead}` : ''}`),
           ...more(n),
         ]);
@@ -510,6 +513,53 @@ export class FlowEngine {
       ]);
     }
 
+    // T-2018 idle lanes: a lead that may be told (reachable: live, not stopped by a person, Keep going not paused for it) whose own builder
+    // workers (direct children of any id it went by, a builder role name) sit idle past `flow.laneIdleMin` while its unit has a conflict, a
+    // missing PR or open work. The lead dispatches; the watchdog only names the free lanes and the next items. QA and review lanes are not
+    // counted here (they take QA-ASK batches).
+    let idleLanes = 0;
+    for (const l of leads) {
+      if (!reachable(l)) continue;
+      const h = heads.get(l)!;
+      const seen = new Set<string>();
+      const lanes: ChatSession[] = [];
+      for (const id of new Set([h.id, ...lineOf(l)]))
+        for (const s of chat.list({ parentId: id })) {
+          if (s.parentId !== id || seen.has(s.id)) continue;
+          seen.add(s.id);
+          if (ended(s) || s.process === 'gone' || s.state !== 'idle' || s.waiting > 0 || s.busySince || (s.agentsRunning ?? 0) > 0) continue;
+          if (!isBuilderLaneName(s.agent) || !(now - ms(s.lastActivityAt) >= t.laneIdleMs)) continue;
+          lanes.push(s);
+        }
+      if (!lanes.length) continue;
+      const mine = <T extends { t: TicketItem }>(xs: T[]) => xs.filter((i) => leadOf(i.t) === l);
+      const conf = mine(conflict);
+      const nop = mine(noPr);
+      const work = unitOpen
+        .filter((x) => leadOf(x) === l)
+        .sort((a, b) => rank(a.priority) - rank(b.priority) || ms(a.createdAt) - ms(b.createdAt) || a.number - b.number);
+      if (!conf.length && !nop.length && !work.length) continue;
+      idleLanes += lanes.length;
+      lanes.sort((a, b) => ms(a.lastActivityAt) - ms(b.lastActivityAt) || a.id.localeCompare(b.id));
+      const pr = (m: TicketMergeStatus) => `${m.repo}${m.pr ? `#${m.pr}` : ''}`;
+      // An agent name is printed only in the shape of a role word: anything else is left out of the message.
+      const named = (s: ChatSession) => (s.agent && /^[a-z0-9][a-z0-9_-]{0,39}$/.test(s.agent.toLowerCase()) ? ` ${s.agent.toLowerCase()}` : '');
+      const rows = [
+        ...conf.map((i) => ({ id: i.t.id, line: `- ${ref(i.t)} conflict ${pr(i.pr)}: rebase onto the base branch` })),
+        ...nop.map((i) => ({ id: i.t.id, line: `- ${ref(i.t)} no PR ${pr(i.pr)}: open the PR` })),
+        ...work.slice(0, 5).map((x) => ({ id: x.id, line: `- ${ref(x)} ${x.priority} ${x.status}` })),
+      ];
+      const n = rows.length;
+      await this.#tell(c, 'idle_lanes', l, h, null, rows.map((r) => r.id), [
+        `${FLOW_PREFIX} ${plural(lanes.length, 'builder lane')} of yours ${lanes.length === 1 ? 'has' : 'have'} been idle ${t.laneIdleMs / MIN} min or more while your unit has work (program ${p.name}):`,
+        ...lanes.slice(0, FLOW_LIMITS.ticketsPerMessage).map((s) => `- ${s.id}${named(s)} idle ${Math.floor((now - ms(s.lastActivityAt)) / MIN)} min`),
+        'Give them the next items, conflicts first:',
+        ...rows.slice(0, FLOW_LIMITS.ticketsPerMessage).map((r) => r.line),
+        ...more(n),
+        'Send each to an idle lane, or say on the ticket why not.',
+      ]);
+    }
+
     // (d) Bypass lost: reported only. A head asleep or gone whose own newest record says its sleep kept Bypass is not lost: its wake puts it
     // back through every gate (the policy, the capability, the person's own entry), and that wake is the only path the portal may take.
     let bypass = 0;
@@ -555,7 +605,7 @@ export class FlowEngine {
       mergeGate: gate,
       mergeGateLive: gateHead?.id ?? null,
       leads,
-      counts: { merge: merge.length, qa: qa.length, idle, bypass, stall: stalled ? 1 : 0, conflict: conflict.length, no_pr: noPr.length },
+      counts: { merge: merge.length, qa: qa.length, idle, bypass, stall: stalled ? 1 : 0, conflict: conflict.length, no_pr: noPr.length, idle_lanes: idleLanes },
       inReview: inReview.length,
       doneRecent,
       stallSince: stall ? iso(stall.since) : null,
@@ -707,6 +757,7 @@ const NOTE: Record<FlowCondition, string> = {
   stall: 'Told the owner the program has stalled.',
   conflict: 'Told a unit lead which pull requests need a rebase.',
   no_pr: 'Told a unit lead which tickets in review have no pull request.',
+  idle_lanes: 'Told a lead which of its builder lanes are idle and what to give them.',
 };
 
 const more = (n: number) => (n > FLOW_LIMITS.ticketsPerMessage ? [`- and ${n - FLOW_LIMITS.ticketsPerMessage} more`] : []);
@@ -727,7 +778,7 @@ function emptyView(p: FlowProgram, enabled: boolean, ok: boolean): FlowProgramVi
     mergeGate: p.mergeGate,
     mergeGateLive: null,
     leads: [],
-    counts: { merge: 0, qa: 0, idle: 0, bypass: 0, stall: 0, conflict: 0, no_pr: 0 },
+    counts: { merge: 0, qa: 0, idle: 0, bypass: 0, stall: 0, conflict: 0, no_pr: 0, idle_lanes: 0 },
     inReview: 0,
     doneRecent: 0,
     stallSince: null,

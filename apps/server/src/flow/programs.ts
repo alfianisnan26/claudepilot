@@ -113,6 +113,16 @@ export function crewRoot(chat: Pick<SessionReader, 'get'>, id: string): string |
   return cur.id;
 }
 
+/**
+ * T-2018: the builder role names the idle-lanes condition counts. Like `isPeerVerifierName` (tickets/authz.ts), the name IS a whole role
+ * word (`implementer`, `builder`, `lane-backend`, `lane-frontend`, `lane-fullstack`), with at most one prefix part (`konfersi-implementer`).
+ * So a QA or review lane, `builder-qa` or `rebuilder` is not a builder here.
+ */
+const BUILDER_NAME = /^(?:[a-z0-9]+[-_])?(?:implementer|builder|lane[-_](?:backend|frontend|fullstack))$/;
+export function isBuilderLaneName(agent: string | null | undefined): boolean {
+  return BUILDER_NAME.test((agent ?? '').toLowerCase());
+}
+
 /** `tickets.leadPeerGroups` as the tickets module parses it: groups by ";", ids by ","; a group needs two ids. */
 export { parseLeadPeerGroups } from '../tickets/authz.js';
 

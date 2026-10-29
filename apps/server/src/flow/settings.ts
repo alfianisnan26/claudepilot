@@ -19,7 +19,7 @@ defineSetting({
   group: 'flow',
   order: 10,
   label: 'Flow watchdog',
-  help: 'On: every 5 minutes the portal looks at each program below and messages the lead that can move a stuck ticket: a QA PASS not merged, a ticket in review nobody verifies, an idle lead with open work. It tells you only when nothing was done for hours after it nudged. It never answers an approval and never turns Bypass on. Off: nothing is looked at.',
+  help: 'On: every 5 minutes the portal looks at each program below and messages the lead that can move a stuck ticket: a QA PASS not merged, a PR in conflict or missing, a ticket in review nobody verifies, an idle lead with open work, a lead whose builders sit idle while its unit has work. It tells you only when nothing was done for hours after it nudged. It never answers an approval and never turns Bypass on. Off: nothing is looked at.',
 });
 
 defineSetting({
@@ -50,9 +50,10 @@ defineSetting({
 const minutes = (key: string, order: number, label: string, def: number, help: string) =>
   defineSetting({ key, type: 'number', default: def, min: 5, max: 1440, integer: true, scope: 'global', group: 'flow', order, label, help });
 
-minutes(K.mergeAfterMin, 30, 'Merge after', 20, 'Minutes a ticket may wait in review with a QA PASS on its head before the merge-gate lead is told.');
+minutes(K.mergeAfterMin, 30, 'Merge after', 20, 'Minutes a ticket may wait in review with a QA PASS on its head before the merge-gate lead is told. A PR recorded in conflict or missing is told to its unit lead at once.');
 minutes(K.qaAfterMin, 40, 'QA after', 60, 'Minutes a ticket may wait in review with no verdict and nobody working on it before a peer lead is asked to verify it.');
 minutes(K.idleAfterMin, 50, 'Idle lead', 30, 'Minutes a lead may be idle while its unit holds open work and it runs fewer workers than its cap before it is told its next tickets.');
+minutes(K.laneIdleMin, 55, 'Idle lane', 10, 'Minutes a builder worker of a lead (implementer, builder, lane-backend, lane-frontend, lane-fullstack) may sit idle while its unit has a conflict, a missing PR or open tickets before the lead is told which lanes are free and what to give them.');
 minutes(K.repeatMin, 60, 'Repeat', 30, 'Each lead hears about each condition at most once in this many minutes.');
 
 defineSetting({
@@ -87,6 +88,7 @@ export interface FlowThresholds {
   mergeAfterMs: number;
   qaAfterMs: number;
   idleAfterMs: number;
+  laneIdleMs: number;
   repeatMs: number;
   stallMs: number;
   notifyAfterMs: number;
@@ -109,6 +111,7 @@ export function flowThresholds(r: FlowSettingsReader | null): FlowThresholds {
     mergeAfterMs: read(r, K.mergeAfterMin, 20, 5, 1440) * MIN,
     qaAfterMs: read(r, K.qaAfterMin, 60, 5, 1440) * MIN,
     idleAfterMs: read(r, K.idleAfterMin, 30, 5, 1440) * MIN,
+    laneIdleMs: read(r, K.laneIdleMin, 10, 5, 1440) * MIN,
     repeatMs: read(r, K.repeatMin, 30, 5, 1440) * MIN,
     stallMs: read(r, K.stallHours, 3, 1, 48) * 60 * MIN,
     notifyAfterMs: read(r, K.notifyAfterHours, 3, 1, 48) * 60 * MIN,
