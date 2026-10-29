@@ -5,7 +5,9 @@ import { AppError, success } from '@isnanme/core';
 import { createHash } from 'node:crypto';
 import {
   sessionRef,
+  type Actor,
   type ChatAuditEntry,
+  type ChatSession,
   type ChatWorktreeRemoval,
   type CreateChatSessionRequest,
   type CreateWorkspaceClaudeRequest,
@@ -21,6 +23,7 @@ import {
 import { Hono, type Context } from 'hono';
 import { actorOf, actorString, requireCan, visible } from '../authz/seam.js';
 import { RateLimiter } from '../rateLimit.js';
+import { ticketKeyOf } from '../tickets/keys.js';
 import { serveBlob } from './artifacts/index.js';
 import type { ChatController } from './controller.js';
 import { eventsQuery } from './eventPage.js';
@@ -43,6 +46,16 @@ async function body<T>(c: Context): Promise<Partial<T>> {
     throw new AppError('BAD_REQUEST', 'Expected a JSON body.');
   }
 }
+
+/**
+ * T-2945: a session's `ticketKey` as THIS caller may see it. The controller decorates every session for the portal (sockets, tools); a key names
+ * a bucket and its number, so a route asks again with the caller's actor: a ticket of a bucket it may not view has no key (null), exactly like a
+ * ticket that is gone.
+ */
+const keyedFor =
+  (actor: Actor) =>
+  (s: ChatSession): ChatSession =>
+    s.ticketId ? { ...s, ticketKey: ticketKeyOf(s.ticketId, actor) } : s;
 
 /** `?worktree=` of a delete or an archive: keep the chat's worktree (the default), remove it when nothing is lost, or remove it and discard what is there. */
 function worktreeMode(raw: string | undefined): ChatWorktreeRemoval {
@@ -67,14 +80,11 @@ export function createChatRoutes(controller: ChatController): Hono {
   chat.get('/', (c) => {
     const actor = actorOf(c);
     const keep = (s: { id: string }) => visible(actor, 'session', [s], (x) => x.id).length > 0;
-    return c.json(
-      success(
-        controller.listPage(
-          { ...(c.req.query('parentId') ? { parentId: c.req.query('parentId')! } : {}) },
-          { cursor: c.req.query('cursor') || undefined, limit: c.req.query('limit'), keep },
-        ),
-      ),
+    const page = controller.listPage(
+      { ...(c.req.query('parentId') ? { parentId: c.req.query('parentId')! } : {}) },
+      { cursor: c.req.query('cursor') || undefined, limit: c.req.query('limit'), keep },
     );
+    return c.json(success({ ...page, items: page.items.map(keyedFor(actor)) }));
   });
 
   // POST /api/chat/sessions — create one (starts the host in the background); 409 FOLDER_UNTRUSTED with the scan first when the folder needs trusting.
@@ -90,7 +100,7 @@ export function createChatRoutes(controller: ChatController): Hono {
   chat.get('/:id', (c) => {
     const session = controller.get(c.req.param('id'));
     if (!session) throw new AppError('NOT_FOUND', 'No such session.');
-    return c.json(success(session));
+    return c.json(success(keyedFor(actorOf(c))(session)));
   });
 
   // POST /api/chat/sessions/:id/switch — confirmed move of the chat to another Claude on the same workspace (the chat stays this session).
