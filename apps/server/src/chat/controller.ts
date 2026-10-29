@@ -6509,6 +6509,11 @@ export class ChatController {
       this.#emitTasks(sessionId);
       this.#armIdle(sessionId); // a task that ended may be what kept it awake
     }
+    // T-3017: the set of background tasks still running is whole: one that left it has ended, even when its own end line never came.
+    if (parsed.taskSet && this.#chat.endBackgroundTasksNotIn(sessionId, parsed.taskSet)) {
+      this.#emitTasks(sessionId);
+      this.#armIdle(sessionId);
+    }
     // The model each sub-agent runs on: what its own lines report wins over what it was launched on.
     if (parsed.agentModels?.length) {
       let models = this.#agentModels.get(sessionId);

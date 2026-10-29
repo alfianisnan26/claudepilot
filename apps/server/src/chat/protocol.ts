@@ -114,6 +114,11 @@ export interface ParsedLine {
   inputs?: { uuid: string; state: ChatInputState }[];
   /** Sub-agent and background task changes. */
   tasks?: TaskPatch[];
+  /**
+   * T-3017: `background_tasks_changed` is Claude Code's whole set of background tasks still running (it is sent whenever that set
+   * changes, an empty one included): the ids in it. A background task not in it has ended, whether or not its own end line came.
+   */
+  taskSet?: string[];
   /** `Task`/`Agent` tool calls and their descriptions, to label sub-agent lines. */
   agents?: { toolUseId: string; description: string }[];
   /**
@@ -311,14 +316,16 @@ function parseSystem(obj: Record<string, unknown>): ParsedLine {
       return task ? { stored: [], tasks: [task] } : { stored: [] };
     }
     case 'background_tasks_changed': {
+      if (!Array.isArray(obj.tasks)) return { stored: [] }; // no set at all says nothing about what ended
       const tasks: TaskPatch[] = [];
-      for (const raw of Array.isArray(obj.tasks) ? obj.tasks : []) {
+      for (const raw of obj.tasks) {
         const t = asObj(raw);
         const taskId = asStr(t?.task_id);
         if (!t || !taskId) continue;
         tasks.push(taskFields(t, { taskId, background: true }));
       }
-      return tasks.length ? { stored: [], tasks } : { stored: [] };
+      // Only the main thread's set is the session's whole set.
+      return { stored: [], ...(tasks.length ? { tasks } : {}), ...(main ? { taskSet: tasks.map((t) => t.taskId) } : {}) };
     }
     default:
       return { stored: [] };
