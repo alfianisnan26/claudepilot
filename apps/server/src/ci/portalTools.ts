@@ -60,7 +60,7 @@ export function registerCiTools(ci: CiService, sessions: CiSessionsPort | undefi
     actor: r.actor,
     actor_label: r.actorLabel,
     ticket_id: r.ticketId,
-    ...ticketKeyField(r.ticketId),
+    ...ticketKeyField(r.ticketId, actorOfPrincipal(ctx.principal)),
     session_id: r.sessionId,
     created_at: r.createdAt,
     finished_at: r.finishedAt,
@@ -68,7 +68,7 @@ export function registerCiTools(ci: CiService, sessions: CiSessionsPort | undefi
   });
 
   /** A run as a list row (T-282): enough to pick one; ci_run_get has the rest. */
-  const runRow = (r: CiRunSummary) => ({
+  const runRow = (ctx: PortalToolContext, r: CiRunSummary) => ({
     id: r.id,
     number: r.number,
     pipeline: r.pipeline,
@@ -76,7 +76,7 @@ export function registerCiTools(ci: CiService, sessions: CiSessionsPort | undefi
     sha: r.sha ? r.sha.slice(0, 12) : r.sha,
     status: r.status,
     ...(r.reason ? { reason: r.reason } : {}),
-    ...(r.ticketId ? { ticket_id: r.ticketId, ...ticketKeyField(r.ticketId) } : {}),
+    ...(r.ticketId ? { ticket_id: r.ticketId, ...ticketKeyField(r.ticketId, actorOfPrincipal(ctx.principal)) } : {}),
     created_at: r.createdAt,
     duration_ms: r.durationMs,
   });
@@ -122,7 +122,7 @@ export function registerCiTools(ci: CiService, sessions: CiSessionsPort | undefi
       }
       return {
         summary: `${items.length} run${items.length === 1 ? '' : 's'}`,
-        runs: items.map((r) => (args.full ? runView(ctx, r) : runRow(r))),
+        runs: items.map((r) => (args.full ? runView(ctx, r) : runRow(ctx, r))),
         ...(stgAge.length ? { stg_age_minutes: stgAge } : {}),
       };
     },

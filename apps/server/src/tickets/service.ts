@@ -91,6 +91,7 @@ import {
   canPeerLeadAct, canPeerWorkerComment, canWorkerComment, parseLeadPeerGroups,
   D62_ASSIGN_REFUSAL,
   D62_CHECKLIST_REFUSAL,
+  registerTicketBucketAuthz,
   type EndedGrantReason,
   type WorkerCommentReason,
 } from './authz.js';
@@ -410,6 +411,9 @@ export class Tickets {
     this.#leadPeerGroups = opts.leadPeerGroups ?? (() => '');
     this.#mergeGates = opts.mergeGates ?? (() => []);
     this.#bucketRoutes = opts.bucketRoutes ?? (() => '');
+    // T-1993: the bucket rule needs its resolver (the seam refuses a ticket_bucket without one: fail closed), so the service that holds the
+    // buckets registers it itself; the routes and tools register the same one again.
+    registerTicketBucketAuthz(this);
   }
 
   /* ---------- The workspace column (T-42 slice 3): written as the stable id, read as the key, matched in either form ---------- */
@@ -861,22 +865,30 @@ export class Tickets {
     return row;
   }
 
+  /** CI's question (does this ticket exist?) is the portal's own: it is asked as `system`. */
   exists(id: string): boolean {
-    return this.resolve(id) !== null;
+    return this.resolve({ kind: 'system' }, id) !== null;
   }
 
-  /** T-1098: the stable id (`T-12`) of a ticket named either way, or null when there is no such ticket. Callers outside this module use it. */
-  resolve(ref: string): string | null {
+  /**
+   * T-1098: the stable id (`T-12`) of a ticket named either way, or null when there is no such ticket. Callers outside this module use it.
+   * T-1993: or one the caller may not see (`#visible`, its bucket's `view`): the same null. The portal's own bookkeeping passes `system`.
+   */
+  resolve(caller: Caller, ref: string): string | null {
     const n = this.#numberOf(ref);
-    return n !== null && this.#row(n) ? ticketIdOf(n) : null;
+    const row = n === null ? undefined : this.#row(n);
+    return row && this.#visible(caller, row) ? ticketIdOf(row.number) : null;
   }
 
-  /** T-1098: the bucket key (`KONF-12`) of a ticket named either way, for the screens that show a ticket's id; null when there is none. */
-  keyOf(ref: string): string | null {
+  /**
+   * T-1098: the bucket key (`KONF-12`) of a ticket named either way, for the screens that show a ticket's id; null when there is none.
+   * T-1993: null too when the caller may not see it, so a row of another module (a CI run, a lab or usage row) never names a hidden bucket.
+   */
+  keyOf(caller: Caller, ref: string): string | null {
     const n = this.#numberOf(ref);
-    if (n === null) return null;
-    const r = this.#db.prepare('SELECT bucket_key, bucket_number FROM tickets WHERE number = ?').get(n) as { bucket_key: string; bucket_number: number | null } | undefined;
-    return r ? (r.bucket_number === null ? ticketIdOf(n) : ticketKeyOf(r.bucket_key, r.bucket_number)) : null;
+    const row = n === null ? undefined : this.#row(n);
+    if (!row || !this.#visible(caller, row)) return null;
+    return row.bucket_number === null ? ticketIdOf(row.number) : ticketKeyOf(row.bucket_key, row.bucket_number);
   }
 
   /** T-1098: the bucket of a ticket named either way (for the routes' bucket check), or null when there is no such ticket. */
@@ -1511,11 +1523,11 @@ export class Tickets {
     }));
   }
 
-  /** A ticket's id and summary, for a link to it. */
-  brief(id: string): { id: string; key: string; summary: string; status: TicketStatus; type: TicketType } | null {
+  /** A ticket's id and summary, for a link to it. T-1993: null for one the caller may not see, the same as a missing one. */
+  brief(caller: Caller, id: string): { id: string; key: string; summary: string; status: TicketStatus; type: TicketType } | null {
     const n = this.#numberOf(id);
     const row = n === null ? undefined : this.#row(n);
-    if (!row) return null;
+    if (!row || !this.#visible(caller, row)) return null;
     const key = row.bucket_number === null ? ticketIdOf(row.number) : ticketKeyOf(row.bucket_key, row.bucket_number);
     return { id: ticketIdOf(row.number), key, summary: row.summary, status: row.status, type: row.type };
   }
@@ -2474,7 +2486,7 @@ export class Tickets {
       (x): x is string => !!x,
     );
     // T-1098: a bucket key (`ticket/KONF-12-…`, `Ticket: KONF-12`) resolves to the stable id, so CI keeps speaking T-<n>.
-    return [...new Set(ids.map((id) => this.resolve(id)).filter((id): id is string => !!id))];
+    return [...new Set(ids.map((id) => this.resolve({ kind: 'system' }, id)).filter((id): id is string => !!id))];
   }
 
   /** The checks CI attached to a ticket. */

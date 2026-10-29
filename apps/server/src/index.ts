@@ -578,8 +578,10 @@ const orphanSweep = new OrphanSweep(tickets);
 orphanSweep.start();
 chatController.ticketExists = (id) => tickets.exists(id);
 // T-1098: a session links the stable id, whichever form (T-12 or KONF-3) the caller gave.
-chatController.ticketResolve = (id) => tickets.resolve(id);
-chatController.ticketKeyOf = (id) => tickets.keyOf(id);
+// T-1993: the controller's own bookkeeping (a session's ticket link, the key on its row) is the portal's, asked as system; the tools that show
+// a session's ticket key to a caller ask with the caller's actor (portalmcp/tools/sessions.ts, usagespend/portalTools.ts).
+chatController.ticketResolve = (id) => tickets.resolve({ kind: 'system' }, id);
+chatController.ticketKeyOf = (id) => tickets.keyOf({ kind: 'system' }, id);
 // T-546: the crew digest's window is a setting, and each worker's line points to its latest ticket comment.
 chatController.crewSettings = (key) => settingsModule.settings.get(key);
 chatController.crewTicketOf = (sessionId) => tickets.latestCommentOf(sessionId);
@@ -760,7 +762,7 @@ const platform = createPlatform({
   usageSpend,
   tickets,
   ticketInfo: (id) => {
-    const t = tickets.brief(id) ? tickets.get({ kind: 'system' }, id, { eventsLimit: 1 }).ticket : null;
+    const t = tickets.brief({ kind: 'system' }, id) ? tickets.get({ kind: 'system' }, id, { eventsLimit: 1 }).ticket : null;
     return t ? { type: t.type, workspaceId: t.workspaceId, open: t.closedAt === null } : null;
   },
   uiUrl: config.portalMcp.uiUrl ?? null,

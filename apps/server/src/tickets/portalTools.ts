@@ -207,12 +207,12 @@ const assigneeArg = z.string().max(100).optional().describe('me (your session), 
 export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = portalTools, opts: TicketToolOptions = {}): void {
   declareTicketPolicies();
   registerTicketBucketAuthz(tickets);
-  setTicketKeyLookup((id) => tickets.keyOf(id));
+  setTicketKeyLookup((id, actor) => tickets.keyOf({ kind: 'ui', actor }, id));
   const registerPortalTool = registry.register.bind(registry);
   /** T-1098: `KONF-12 (T-1900)`: the key people see, with the stable id every tool also takes. */
   const named = (t: Pick<TicketItem, 'id' | 'key'>) => (t.key && t.key !== t.id ? `${t.key} (${t.id})` : t.id);
   /** The stable id of a ticket an argument names either way (for `affected`), or the argument as given. */
-  const stable = (ref: string) => tickets.resolve(ref) ?? ref;
+  const stable = (ctx: PortalToolContext, ref: string) => tickets.resolve(callerOf(ctx), ref) ?? ref;
   const bucketArg = z.string().max(6).optional();
   /** Every tool names a ticket either way (FR38): the stable id or its bucket key. */
   const ticketIdArg = z.string().max(20).describe('The ticket: T-12 or its bucket key (KONF-3).');
@@ -487,7 +487,7 @@ export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = p
     handler(ctx, args) {
       const e = tickets.comment(callerOf(ctx), args.id, args.text, { sessionId: args.session_id });
       ctx.affected(`ticket:${e.ticketId}`);
-      const key = tickets.keyOf(e.ticketId);
+      const key = tickets.keyOf(callerOf(ctx), e.ticketId);
       return { summary: `Commented on ${key && key !== e.ticketId ? `${key} (${e.ticketId})` : e.ticketId}.`, comment: { id: e.id, at: e.at, ticket_id: e.ticketId, ...(key ? { ticket_key: key } : {}) } };
     },
   });
@@ -552,7 +552,7 @@ export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = p
     input: z.object({ id: ticketIdArg, attachment_id: z.number().int().positive(), session_id: sessionIdArg }),
     handler(ctx, args) {
       tickets.removeAttachment(callerOf(ctx), args.id, args.attachment_id, { sessionId: args.session_id });
-      ctx.affected(`ticket:${stable(args.id)}`);
+      ctx.affected(`ticket:${stable(ctx, args.id)}`);
       return { summary: `Removed file ${args.attachment_id} from ${args.id}.` };
     },
   });
@@ -620,7 +620,7 @@ export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = p
       if (gate) return gate;
       const r = tickets.adopt(caller, args.from_session, { sessionId: args.session_id });
       ctx.affected(...r.tickets.map((id) => `ticket:${id}`));
-      return { summary: r.tickets.length ? `Took over ${r.tickets.length} tickets: ${r.tickets.join(', ')}.` : 'That session holds no unfinished tickets.', tickets: r.tickets, keys: r.tickets.map((id) => tickets.keyOf(id) ?? id), why: r.why, from_session: r.from };
+      return { summary: r.tickets.length ? `Took over ${r.tickets.length} tickets: ${r.tickets.join(', ')}.` : 'That session holds no unfinished tickets.', tickets: r.tickets, keys: r.tickets.map((id) => tickets.keyOf(callerOf(ctx), id) ?? id), why: r.why, from_session: r.from };
     },
   });
 
@@ -659,7 +659,7 @@ export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = p
       }
       const batch = args.evidence ? { jobId: args.evidence.job_id, note: args.evidence.note } : undefined;
       const v = tickets.recordVerdict(caller, args.id, { role: args.role, verdict: args.verdict, commit: args.commit, batch }, { sessionId: args.session_id });
-      ctx.affected(`ticket:${stable(args.id)}`);
+      ctx.affected(`ticket:${stable(ctx, args.id)}`);
       return {
         summary: `Recorded ${v.role} ${v.verdict} on ${v.commit.slice(0, 12)} for ${args.id}.`,
         verdict: { id: v.id, role: v.role, verdict: v.verdict, commit: v.commit, at: v.at, evidence: evidenceOf(v.batch) },
@@ -703,12 +703,12 @@ export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = p
         { sessionId: args.session_id },
       );
       const ok = results.filter((r) => r.ok);
-      if (ok.length) ctx.affected(...ok.map((r) => `ticket:${stable(r.id)}`));
+      if (ok.length) ctx.affected(...ok.map((r) => `ticket:${stable(ctx, r.id)}`));
       return {
         summary: `Recorded ${ok.length} of ${results.length} verdicts${ok.length < results.length ? ` (${results.length - ok.length} refused: see results)` : ''}.`,
         results: results.map((r) =>
           r.ok
-            ? { id: stable(r.id), key: tickets.keyOf(stable(r.id)) ?? stable(r.id), ok: true, verdict: { id: r.verdict.id, role: r.verdict.role, verdict: r.verdict.verdict, commit: r.verdict.commit, at: r.verdict.at } }
+            ? { id: stable(ctx, r.id), key: tickets.keyOf(callerOf(ctx), stable(ctx, r.id)) ?? stable(ctx, r.id), ok: true, verdict: { id: r.verdict.id, role: r.verdict.role, verdict: r.verdict.verdict, commit: r.verdict.commit, at: r.verdict.at } }
             : { id: r.id, ok: false, error: r.error },
         ),
       };
@@ -735,11 +735,11 @@ export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = p
       const view = (m: TicketMergeStatus) => ({ repo: m.repo, pr: m.pr, pr_head: m.prHead, state: m.state, reason: ctx.untrusted(m.reason, 'agent', TICKET_MERGE_LIMITS.reason), actor: m.actor, at: m.at });
       if (args.state === undefined) {
         const list = tickets.mergeStatus(caller, args.id);
-        return { summary: `${args.id} has a merge status in ${list.length} repos.`, id: stable(args.id), key: tickets.keyOf(stable(args.id)) ?? stable(args.id), merge: list.map(view) };
+        return { summary: `${args.id} has a merge status in ${list.length} repos.`, id: stable(ctx, args.id), key: tickets.keyOf(callerOf(ctx), stable(ctx, args.id)) ?? stable(ctx, args.id), merge: list.map(view) };
       }
       const m = tickets.recordMergeStatus(caller, args.id, { repo: args.repo, pr: args.pr, prHead: args.pr_head, state: args.state, reason: args.reason }, { sessionId: args.session_id });
-      ctx.affected(`ticket:${stable(args.id)}`);
-      return { summary: `Recorded ${m.repo}#${m.pr ?? '-'} ${m.state} for ${args.id}.`, id: stable(args.id), key: tickets.keyOf(stable(args.id)) ?? stable(args.id), merge: view(m) };
+      ctx.affected(`ticket:${stable(ctx, args.id)}`);
+      return { summary: `Recorded ${m.repo}#${m.pr ?? '-'} ${m.state} for ${args.id}.`, id: stable(ctx, args.id), key: tickets.keyOf(callerOf(ctx), stable(ctx, args.id)) ?? stable(ctx, args.id), merge: view(m) };
     },
   });
 
