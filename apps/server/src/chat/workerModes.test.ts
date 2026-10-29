@@ -412,3 +412,122 @@ test('PILOT-997: a new session no person started starts in Auto while “Auto fo
     await s.done();
   }
 });
+
+test('T-2997: “Auto for agents” on: a Manual lead’s worker with no mode runs in Auto, Auto asked by name is allowed; a wider other mode and Bypass by name stay refused', async () => {
+  const r = await rig();
+  try {
+    r.s.controller.autonomousAuto = () => true;
+    const a = await r.h.agentToken('docker/ws1', r.s.id);
+    assert.equal(r.s.controller.get(r.s.id)!.mode, 'default', 'set up: the lead runs in Manual');
+    const unset = spawned(await answering(r.s, r.h.call(a.secret, 'session_spawn', { prompt: 'Run the job.', title: 'Unset worker' })));
+    assert.deepEqual([unset.applied, unset.unconfirmed], [['mode auto'], []]);
+    const asked = spawned(await answering(r.s, r.h.call(a.secret, 'session_spawn', { prompt: 'Run the job.', title: 'Auto worker', mode: 'auto' })));
+    assert.deepEqual([asked.applied, asked.unconfirmed], [['mode auto'], []]);
+    for (const id of [unset.id, asked.id]) {
+      assert.deepEqual([r.s.controller.get(id)!.mode, r.s.controller.get(id)!.bypassCapable], ['auto', false], id);
+      assert.ok(r.s.controller.audit({ kind: 'mode.auto' }).some((x) => x.sessionId === id), `mode.auto is audited for ${id}`);
+    }
+    const count = r.s.controller.children(r.s.id).length;
+    const wide = await r.h.call(a.secret, 'session_spawn', { prompt: 'x', mode: 'acceptEdits' });
+    assert.equal(wide.result?.isError, true, 'any other mode is never wider than the parent');
+    assert.match(JSON.stringify(wide.result!.structuredContent), /never wider than its parent: you run in default, so acceptEdits is refused/);
+    assert.equal((await r.h.call(a.secret, 'session_spawn', { prompt: 'x', mode: 'bypassPermissions' })).result?.isError, true, 'Bypass is never asked by name');
+    assert.equal(r.s.controller.children(r.s.id).length, count, 'nothing started');
+    assert.equal(r.s.controller.audit({ kind: 'bypass.entered' }).length, 0, 'no Bypass anywhere');
+  } finally {
+    await r.done();
+  }
+});
+
+test('T-2997: with “Auto for agents” off the D-103 rule holds: a Manual lead’s worker gets dontAsk, Auto asked is refused as wider and says why', async () => {
+  const r = await rig();
+  try {
+    r.s.controller.autonomousAuto = () => false;
+    const a = await r.h.agentToken('docker/ws1', r.s.id);
+    const w = spawned(await answering(r.s, r.h.call(a.secret, 'session_spawn', { prompt: 'Read it.', title: 'Manual lead worker' })));
+    assert.deepEqual(w.applied, ['mode dontAsk']);
+    assert.equal(r.s.controller.get(w.id)!.mode, 'dontAsk');
+    const count = r.s.controller.children(r.s.id).length;
+    const refused = await r.h.call(a.secret, 'session_spawn', { prompt: 'x', mode: 'auto' });
+    assert.equal(refused.result?.isError, true);
+    assert.match(JSON.stringify(refused.result!.structuredContent), /you run in default, so auto is refused \(“Auto for agents” is off in Settings › Sessions\)/);
+    assert.equal((await r.h.call(a.secret, 'session_spawn', { prompt: 'x', mode: 'bypassPermissions' })).result?.isError, true, 'Bypass is never asked by name');
+    assert.equal(r.s.controller.children(r.s.id).length, count, 'nothing started');
+    assert.equal(r.s.controller.audit({ kind: 'mode.auto' }).length, 0, 'no Auto anywhere');
+  } finally {
+    await r.done();
+  }
+});
+
+test('T-2997: a lead in Bypass now hands Bypass to a worker with no mode through the inherit path, with no integrity end; a leave on record after its entry hands on Auto', async () => {
+  const r = await rig();
+  try {
+    r.s.controller.autonomousAuto = () => true;
+    const lead = await bypassLead(r.s);
+    r.h.alive.add(lead);
+    const a = await r.h.agentToken('docker/ws1', lead);
+    const w = spawned(await answering(r.s, r.h.call(a.secret, 'session_spawn', { prompt: 'Ship it.', title: 'Bypass worker' })));
+    assert.deepEqual([w.applied, w.unconfirmed], [['mode bypassPermissions'], []]);
+    await sleep(100); // a late integrity end would show here
+    const worker = r.s.controller.get(w.id)!;
+    assert.deepEqual([worker.mode, worker.bypassCapable, worker.state === 'ended', worker.endedReason], ['bypassPermissions', true, false, null]);
+    const entered = r.s.controller.audit({ kind: 'bypass.entered' }).filter((x) => x.sessionId === w.id);
+    assert.deepEqual(
+      entered.map((x) => x.detail.how),
+      ['inherit'],
+      'entered once, through the inherit path',
+    );
+    assert.equal(r.s.controller.audit({ kind: 'bypass.capable' }).find((x) => x.sessionId === w.id)?.detail.how, 'inherit');
+
+    // The portal recorded the lead leaving Bypass after its entry while its row still says Bypass: not in Bypass now, so Auto.
+    await sleep(5);
+    new ChatStore(r.s.store).addAudit({ severity: 'info', kind: 'bypass.left', sessionId: lead, workspaceId: 'docker/ws1', actor: 'portal', detail: { why: 'downgrade', mode: 'default' } });
+    assert.equal(r.s.controller.get(lead)!.mode, 'bypassPermissions', 'set up: the row still says Bypass');
+    const after = spawned(await answering(r.s, r.h.call(a.secret, 'session_spawn', { prompt: 'Ship more.', title: 'After the leave' })));
+    assert.deepEqual([after.applied, after.unconfirmed], [['mode auto'], []]);
+    assert.deepEqual([r.s.controller.get(after.id)!.mode, r.s.controller.get(after.id)!.bypassCapable], ['auto', false]);
+  } finally {
+    await r.done();
+  }
+});
+
+test('T-2997: a lead whose stored mode says Bypass but which is not in Bypass now gives its worker Auto, never a half-entered Bypass, the policy on or off', async () => {
+  const r = await rig();
+  try {
+    // A capable lead a person started, the Bypass policy on, that never entered Bypass: its process runs in Manual, only its row says Bypass.
+    r.s.controller.bypassAllowed = () => true;
+    const before = r.s.ws.tails.length;
+    const lead = (await r.s.controller.create({ workspaceId: 'docker/ws1', title: 'Lead' }, { bypassOptIn: true })).id;
+    await until(() => r.s.ws.tails.length === before + 1);
+    await until(() => r.s.controller.get(lead)?.state === 'idle');
+    await sleep(20);
+    r.s.ws.tails.at(-1)!.push(init(lead));
+    await sleep(20);
+    new ChatStore(r.s.store).patchSession(lead, { mode: 'bypassPermissions' });
+    assert.deepEqual([r.s.controller.get(lead)!.mode, r.s.controller.get(lead)!.bypassCapable], ['bypassPermissions', true], 'set up: a stale Bypass on the row');
+    r.h.alive.add(lead);
+    const a = await r.h.agentToken('docker/ws1', lead);
+    for (const on of [true, false]) {
+      r.s.controller.autonomousAuto = () => on;
+      const w = spawned(await answering(r.s, r.h.call(a.secret, 'session_spawn', { prompt: 'Run the job.', title: `Worker ${on}` })));
+      assert.deepEqual([w.applied, w.unconfirmed], [['mode auto'], []], `Auto for agents ${on}`);
+      const worker = r.s.controller.get(w.id)!;
+      assert.deepEqual([worker.mode, worker.bypassCapable, worker.state === 'ended'], ['auto', false, false], `Auto for agents ${on}`);
+    }
+    // The controller's own gate says the same to a direct create asking to inherit: no capability, no entry.
+    const direct = await r.s.controller.create({ workspaceId: 'docker/ws1', title: 'Direct' }, { actor: `session:${lead}`, parentId: lead, inheritBypass: true });
+    assert.equal(r.s.controller.get(direct.id)!.bypassCapable, false);
+    await until(() => r.s.controller.get(direct.id)?.state === 'idle');
+    assert.equal(await answering(r.s, r.s.controller.inheritBypass(direct.id)), false);
+    assert.equal(r.s.controller.audit({ kind: 'bypass.entered' }).length, 0, 'Bypass was never entered');
+    assert.equal(r.s.controller.audit({ kind: 'bypass.capable' }).filter((x) => x.detail.how === 'inherit').length, 0, 'no capability handed on');
+  } finally {
+    await r.done();
+  }
+});
+
+test('T-2997 base proof: workerMode from a stored Bypass and with Auto for agents on', () => {
+  const wm = workerMode as unknown as (a: ChatPermissionMode | undefined, p: ChatPermissionMode | null, ctx?: object) => ChatPermissionMode;
+  assert.equal(wm(undefined, 'bypassPermissions'), 'auto', 'a stored Bypass the parent is not in now: Auto');
+  assert.equal(wm(undefined, 'default', { autonomousAuto: true }), 'auto', 'Auto for agents on: Auto whatever the parent');
+});
