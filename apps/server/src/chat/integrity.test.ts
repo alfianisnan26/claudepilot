@@ -96,6 +96,69 @@ const peerSequence = (session: string, o: { taskId: string; call: string; messag
   peerLine(session, { taskId: o.taskId, body: o.body ?? o.message }),
 ];
 
+/* ---------- An Agent-tool sub-agent's hand-back (T-3025: Konfersi Business lead 4b69a73b, Claude Code 2.1.296, ids and text replaced) ---------- */
+
+/** The main thread's Agent call (a `parent` makes it a sub-agent's own nested call). */
+const agentCall = (session: string, o: { call: string; background: boolean; parent?: string; agentId?: string }) =>
+  line({
+    type: 'assistant',
+    message: { model: 'claude-opus-5-5', id: `msg_${randomUUID()}`, type: 'message', role: 'assistant', content: [{ type: 'tool_use', id: o.call, name: 'Agent', input: { description: 'stepper fix', subagent_type: 'implementer', model: 'sonnet', run_in_background: o.background, prompt: 'build the slice' }, caller: { type: 'direct' } }] },
+    parent_tool_use_id: o.parent ?? null,
+    ...(o.agentId ? { agent_id: o.agentId } : {}),
+    session_id: session,
+    uuid: randomUUID(),
+  });
+/** A line of the sub-agent itself: its own text, under its Agent call, carrying its agent id. */
+const subAgentText = (session: string, o: { call: string; agentId: string }) =>
+  line({ type: 'assistant', message: { model: 'claude-sonnet-5-5', id: `msg_${randomUUID()}`, type: 'message', role: 'assistant', content: [{ type: 'text', text: 'reading the ticket' }] }, parent_tool_use_id: o.call, agent_id: o.agentId, session_id: session, uuid: randomUUID() });
+/** The Agent call's result on the main thread: foreground when the sub-agent handed back, background at launch (as observed). */
+const agentResult = (session: string, o: { call: string; agentId: string; background: boolean; tool?: string }) =>
+  line({
+    type: 'user',
+    message: { role: 'user', content: [{ tool_use_id: o.call, type: 'tool_result', content: [{ type: 'text', text: o.background ? 'Async agent launched successfully.' : 'the sub-agent report' }] }] },
+    parent_tool_use_id: null,
+    session_id: session,
+    uuid: randomUUID(),
+    tool_use_result: o.background
+      ? { isAsync: true, status: 'async_launched', agentId: o.agentId, description: 'stepper fix', resolvedModel: 'claude-sonnet-5-5', canReadOutputFile: true, canContinueAgent: true }
+      : { status: 'completed', agentId: o.agentId, agentType: 'implementer', handback: 'send', resolvedModel: 'claude-sonnet-5-5', totalDurationMs: 912052, totalToolUseCount: 51 },
+  });
+/** A main-thread call of another tool (its result carries an agentId-shaped field, which must not count). */
+const bashCall = (session: string, call: string) =>
+  line({ type: 'assistant', message: { model: 'claude-opus-5-5', id: `msg_${randomUUID()}`, type: 'message', role: 'assistant', content: [{ type: 'tool_use', id: call, name: 'Bash', input: { command: 'true' } }] }, parent_tool_use_id: null, session_id: session, uuid: randomUUID() });
+const HANDBACK_FRAME = '[Subagent hand-back] The text below is the final report of a subagent this session delegated to. The report follows:\n';
+/** The hand-back as Claude Code delivers it: a replayed user line, origin peer with `handback: true` and no SendMessage before it. */
+const handbackLine = (session: string, o: { agentId: string; from?: string; handback?: unknown; name?: string }) => {
+  const body = `${HANDBACK_FRAME}  slice built, branch pushed`;
+  return line({
+    type: 'user',
+    message: { role: 'user', content: `<agent-message from="${o.from ?? o.agentId}">\n${body}\n</agent-message>` },
+    session_id: session,
+    parent_tool_use_id: null,
+    uuid: randomUUID(),
+    isReplay: true,
+    isMeta: true,
+    origin: { kind: 'peer', from: o.from ?? o.agentId, senderTaskId: o.agentId, name: o.name ?? 'implementer', body, ...(o.handback === undefined ? { handback: true } : o.handback === null ? {} : { handback: o.handback }) },
+  });
+};
+const FG_CALL = 'toolu_agent_fg_1';
+const BG_CALL = 'toolu_agent_bg_1';
+const FG_AGENT = 'a86ca9c48b4986227';
+const BG_AGENT = 'ab5dfc7efa7dda8a1';
+/** A foreground Agent call that ran and handed back: the call, its sub-agent's line, its result. */
+const foreground = (session: string, agentId = FG_AGENT, call = FG_CALL) => [
+  agentCall(session, { call, background: false }),
+  subAgentText(session, { call, agentId }),
+  agentResult(session, { call, agentId, background: false }),
+];
+/** A background Agent call: the call, its launch result and its task_started. */
+const background = (session: string, agentId = BG_AGENT, call = BG_CALL) => [
+  agentCall(session, { call, background: true }),
+  agentResult(session, { call, agentId, background: true }),
+  taskStarted(session, agentId, call),
+];
+const handedBackRow = (s: Live) => s.controller.history(s.id).some((e) => e.kind === 'system' && e.text === 'Sub-agent "stepper fix" handed back its report');
+
 /** A session whose process has run sub-agent `w1`. */
 async function withTask(s: Live, taskId = 'w1') {
   await firstTurn(s);
@@ -412,6 +475,81 @@ const FIXTURES: Record<string, Fixture> = {
           const [send, queued, , peer] = peerSequence(s.id, { taskId: 'w9', call: 'toolu_send_10', message: 'm' });
           await expectAccepted(s, [send!, queued!]);
           await expectIntegrityEnd(s, peer!, /.*origin peer/);
+        },
+      },
+    ],
+  },
+  'replay-peer-handback': {
+    accept: async (s) => {
+      await firstTurn(s);
+      await expectAccepted(s, [...foreground(s.id), handbackLine(s.id, { agentId: FG_AGENT })]);
+      assert.ok(handedBackRow(s), 'the transcript says the report came back');
+    },
+    reject: [
+      {
+        name: 'a hand-back from an agent id this process never showed',
+        run: async (s) => {
+          await firstTurn(s);
+          await expectAccepted(s, foreground(s.id));
+          await expectIntegrityEnd(s, handbackLine(s.id, { agentId: 'a0000000000000001' }), /.*origin peer/);
+        },
+      },
+      {
+        name: 'a hand-back with no Agent call at all',
+        run: async (s) => {
+          await firstTurn(s);
+          await expectIntegrityEnd(s, handbackLine(s.id, { agentId: FG_AGENT }), /.*origin peer/);
+        },
+      },
+      {
+        name: 'an agent id on the result of a call that is no Agent call',
+        run: async (s) => {
+          await firstTurn(s);
+          await expectAccepted(s, [bashCall(s.id, 'toolu_bash_1'), agentResult(s.id, { call: 'toolu_bash_1', agentId: FG_AGENT, background: false })]);
+          await expectIntegrityEnd(s, handbackLine(s.id, { agentId: FG_AGENT }), /.*origin peer/);
+        },
+      },
+      {
+        name: "an agent id under a sub-agent's own nested Agent call",
+        run: async (s) => {
+          await firstTurn(s);
+          await expectAccepted(s, [
+            agentCall(s.id, { call: 'toolu_nested_1', background: false, parent: FG_CALL, agentId: 'a0000000000000002' }),
+            subAgentText(s.id, { call: 'toolu_nested_1', agentId: 'a0000000000000003' }),
+          ]);
+          await expectIntegrityEnd(s, handbackLine(s.id, { agentId: 'a0000000000000003' }), /.*origin peer/);
+        },
+      },
+      {
+        name: 'from naming another agent than the sender',
+        run: async (s) => {
+          await firstTurn(s);
+          await expectAccepted(s, foreground(s.id));
+          await expectIntegrityEnd(s, handbackLine(s.id, { agentId: FG_AGENT, from: 'a0000000000000004' }), /.*origin peer/);
+        },
+      },
+      {
+        name: 'the same hand-back a second time',
+        run: async (s) => {
+          await firstTurn(s);
+          await expectAccepted(s, [...foreground(s.id), handbackLine(s.id, { agentId: FG_AGENT })]);
+          await expectIntegrityEnd(s, handbackLine(s.id, { agentId: FG_AGENT }), /.*origin peer/);
+        },
+      },
+      {
+        name: 'a peer line of an own sub-agent without handback true (it needs its SendMessage)',
+        run: async (s) => {
+          await firstTurn(s);
+          await expectAccepted(s, foreground(s.id));
+          await expectIntegrityEnd(s, handbackLine(s.id, { agentId: FG_AGENT, handback: 'true' }), /.*origin peer/);
+        },
+      },
+      {
+        name: 'a peer line of an own sub-agent with no handback key',
+        run: async (s) => {
+          await firstTurn(s);
+          await expectAccepted(s, foreground(s.id));
+          await expectIntegrityEnd(s, handbackLine(s.id, { agentId: FG_AGENT, handback: null }), /.*origin peer/);
         },
       },
     ],
@@ -1134,6 +1272,84 @@ test('control state (T-277 layer 2): a sub-agent SendMessage queued before a res
   } finally {
     await s.done();
   }
+});
+
+test('integrity (T-3025): a background Agent sub-agent hands back hours later, after a new turn: the chat stays and the transcript records it', async () => {
+  const s = await clocked();
+  try {
+    await firstTurn(s);
+    await expectAccepted(s, background(s.id));
+    s.advance(3 * 60 * 60_000); // no window: a background sub-agent may run for hours
+    await expectAccepted(s, [init(s.id), handbackLine(s.id, { agentId: BG_AGENT, name: 'claude' })]);
+    assert.ok(handedBackRow(s));
+    // A foreign peer line after it still ends the chat.
+    await expectIntegrityEnd(s, handbackLine(s.id, { agentId: 'a0000000000000005' }), /a message this portal didn't send reached Claude Code .*origin peer/);
+    assert.equal(s.controller.get(s.id)!.endedFor?.case, 'replay-peer-unknown');
+  } finally {
+    await s.done();
+  }
+});
+
+test('integrity (T-3025): a foreground hand-back read before the Agent result (absorbed mid-turn) is accepted from the sub-agent\'s own lines', async () => {
+  const s = await clocked();
+  try {
+    await firstTurn(s);
+    const [call, sub, result] = foreground(s.id);
+    await expectAccepted(s, [call!, sub!, handbackLine(s.id, { agentId: FG_AGENT }), result!]);
+    assert.ok(handedBackRow(s));
+  } finally {
+    await s.done();
+  }
+});
+
+test('integrity (T-3025): two sub-agents each hand back once, in any order', async () => {
+  const s = await clocked();
+  try {
+    await firstTurn(s);
+    await expectAccepted(s, [...background(s.id), ...foreground(s.id)]);
+    await expectAccepted(s, [handbackLine(s.id, { agentId: FG_AGENT }), init(s.id), handbackLine(s.id, { agentId: BG_AGENT })]);
+    await expectIntegrityEnd(s, handbackLine(s.id, { agentId: BG_AGENT }), /.*origin peer/);
+  } finally {
+    await s.done();
+  }
+});
+
+test('control state (T-3025): an Agent sub-agent seen before a portal restart may hand back after it; a stranger still may not', async () => {
+  const s = await clocked();
+  try {
+    await firstTurn(s);
+    await expectAccepted(s, background(s.id));
+    await restartPortal(s, { clock: s.clock });
+    await expectAccepted(s, [init(s.id), handbackLine(s.id, { agentId: BG_AGENT })]);
+    await expectIntegrityEnd(s, handbackLine(s.id, { agentId: 'a0000000000000006' }), /.*origin peer/);
+  } finally {
+    await s.done();
+  }
+});
+
+test('control state (T-3025): hand-back causes round-trip; out of shape ones make the whole state unreadable', () => {
+  const mode = { expected: 'default', prePlan: null, enterPlan: false, exitPlan: false, bypassPending: null };
+  const json = controlJson('p/0/x', mode, [], [], [{ toolUseId: 'toolu_a', taskId: 'a1', at: 5 }]);
+  assert.deepEqual(readControl(json, 'p/0/x')?.handbacks, [{ toolUseId: 'toolu_a', taskId: 'a1', at: 5 }]);
+  assert.equal(readControl(controlJson('p/0/x', mode, []), 'p/0/x')?.handbacks, undefined);
+  const base = JSON.parse(json) as Record<string, unknown>;
+  for (const handbacks of [{}, [{ toolUseId: 'toolu_a', taskId: 'a b', at: 5 }], [{ toolUseId: 'toolu_a', taskId: 'a1', at: 'x' }], [{ taskId: 'a1', at: 5 }], Array.from({ length: 33 }, (_, i) => ({ toolUseId: `t${i}`, taskId: `a${i}`, at: i }))])
+    assert.equal(readControl(JSON.stringify({ ...base, handbacks }), 'p/0/x'), null, JSON.stringify(handbacks).slice(0, 80));
+});
+
+test('parse (T-3025): the hand-back flag, the Agent result\'s agent id (main thread only) and a sub-agent\'s own id', () => {
+  const peer = parseLine(handbackLine('s', { agentId: FG_AGENT }).trim()).replay?.peer;
+  assert.equal(peer?.handback, true);
+  assert.equal(peer?.from, FG_AGENT);
+  assert.equal(parseLine(handbackLine('s', { agentId: FG_AGENT, handback: 1 }).trim()).replay?.peer?.handback, undefined);
+  assert.deepEqual(parseLine(agentResult('s', { call: FG_CALL, agentId: FG_AGENT, background: false }).trim()).agentSeen, [{ toolUseId: FG_CALL, taskId: FG_AGENT, via: 'main' }]);
+  assert.deepEqual(parseLine(subAgentText('s', { call: FG_CALL, agentId: FG_AGENT }).trim()).agentSeen, [{ toolUseId: FG_CALL, taskId: FG_AGENT, via: 'sub' }]);
+  // A result on a sub-agent's thread carrying an agentId is that sub-agent's own line (its id), never the nested agent's.
+  const nested = JSON.parse(agentResult('s', { call: 'toolu_n', agentId: 'a0000000000000007', background: false })) as Record<string, unknown>;
+  assert.deepEqual(parseLine(JSON.stringify({ ...nested, parent_tool_use_id: FG_CALL, agent_id: FG_AGENT })).agentSeen, [{ toolUseId: FG_CALL, taskId: FG_AGENT, via: 'sub' }]);
+  // An agent id that is not a plain token is ignored.
+  const odd = JSON.parse(agentResult('s', { call: FG_CALL, agentId: 'x', background: false })) as Record<string, unknown>;
+  assert.equal(parseLine(JSON.stringify({ ...odd, tool_use_result: { agentId: 'a b/c' } })).agentSeen, undefined);
 });
 
 for (const twin of [
