@@ -276,30 +276,53 @@ How the build differs from the table above:
 
 `POST /api/schedules/heartbeat` is for helpers with their own token, not for the manager.
 
-**Built (T-968 S2b).** `GET /api/schedules` and `schedules_list` read one list (`apps/server/src/schedules/`, wire type
-`ScheduleRow` in `packages/contracts/src/schedules.ts`):
+**Built (T-968 S2b, T-965).** `GET /api/schedules` (`{ items: ScheduleRow[] }`) and `schedules_list` read one list
+(`apps/server/src/schedules/`, wire type `ScheduleRow` in `packages/contracts/src/schedules.ts`). Order: the beating loops, the measured
+loops, every trigger, the helpers.
 
-- **Loops.** Each portal loop defines itself in `schedules/registry.ts` (`defineLoop`) and calls its heartbeat: `started`, `stopped`,
-  and `ok` or `fail` after each pass. Six beat today: `orphan-sweep`, `triggers-cron`, `usage-probe`, `delivery-reconcile`,
-  `version-canary`, `notify-clock`. A row has the module, interval, last run, last result, last error (credentials cleaned, 200
-  characters at most) and next run. Kept in memory: a restart starts the loops again.
+- **Beating loops.** A portal loop defines itself in `schedules/registry.ts` (`defineLoop`) and calls its heartbeat: `started`,
+  `stopped`, and `ok` or `fail` after each pass. Seven beat: `orphan-sweep`, `triggers-cron`, `usage-probe`, `delivery-reconcile`,
+  `version-canary`, `notify-clock`, `autotransfer-tick` (T-965). A row has the module, interval, last run, last result, last error
+  (credentials cleaned, 200 characters at most) and next run. Kept in memory: a restart starts the loops again.
+- **Measured loops (T-965).** The loops `platform/loops.ts` measures on each run (`loop(id, everyMs, what).wrap(fn)`) are listed too:
+  the nightly backup (`store.backup`), the repos scan, secrets rotation, the account and browser health checks, the Portal MCP prune,
+  Kubernetes delivery and the lab jobs. `id` is `loop:<id>`, the module is the part before the dot; stale after two intervals with no run
+  (since the start), failing when the last run failed. A loop that also beats (`claudeusage.poll` = `usage-probe`,
+  `claudeversion.schedule` = `version-canary`) is listed once, by its heartbeat.
 - **States.** `ok`; `failing` (the last pass failed); `stale` (running, but no beat, or no start, for more than two intervals; stale
   wins over failing); `stopped`; `disabled` (a trigger that is off or paused).
-- **Cron triggers.** Expression, last and next time, and how the last run ended. A trigger's name comes back to the tool as untrusted
-  text.
+- **Triggers, every source (T-965).** Cron, a failed CI run and webhook triggers, each with its `source`, `owner` (user id), `target`
+  (its workspace), `action` (`session`, `ticket`, `ticket_session`) and `enabled` (paused counts as off). A cron trigger has its
+  expression and next time; the others have no next time. A trigger's name comes back to the tool as untrusted text.
+- **Helpers (T-965).** Programs outside the portal say they are alive with `POST /api/schedules/heartbeat`: `Authorization: Bearer`
+  an admin's Portal MCP token (never a cookie), body `{ name, kind, interval (seconds, 10 to 604800), owner?, description? }`, answer
+  `{ id, next_due, stale_after }`. Name and kind are lower-case words of at most 64 and 32 characters; owner (80) and description
+  (200) are cleaned of escapes and anything credential-shaped and cut; no owner: the token's label. A helper is `stale` once its last
+  beat is older than two intervals. At most 100 helpers: a new one takes the place of the longest-silent stale one, or is refused
+  (429). Kept in memory, like the loops: after a restart a helper is listed at its next beat. A helper's name, kind, owner and
+  description come back to the tool as untrusted text. No audit row per beat (one a minute per helper would bury the audit). The
+  dev-sessions supervisor beats once a round (`docs/dev-sessions/supervisor.mjs`, interval: its round plus a minute).
+- **Heartbeat door.** Mounted in front of the cookie guard (`schedules/heartbeat.ts`). Off while Access, MCP is off (404). A cookie: 400.
+  No token, an unknown, revoked or expired one, an agent's per-session token, the manager's, or a first-party client's (VS Code): 401,
+  20 a minute per address. The token then goes through the seam as a token actor: `operate` on the platform's `system` area, so a read
+  token or a seam denial gets 404. 30 beats a minute per token; JSON only (415), 4 KiB at most (413), a bad field 422.
 - **Scheduled pipelines.** Not listed: CI refuses `on: schedule` as "not yet", so none exist.
 - **Who.** `view` on the platform's `system` area (admins), for the route and the tool. T-965 asked for a `schedules.read`
   permission, but the platform areas are a closed list and `system` already covers how the portal runs. Anyone else gets NOT_FOUND
   before the list is read.
+- **The Schedules page (T-965, `/admin/schedules`).** Reads `GET /api/schedules` every 30 seconds. A filter (All, Loops, Triggers,
+  Helpers); failing and late rows first, then stopped, then the rest, switched-off triggers last. Each row: name, state, a line with the
+  interval or cron, owner or target and action, last and next run and a failure, and the description in an InfoTip. A trigger row has
+  its switch (`PATCH /api/triggers/:id { enabled }`, `manage` on that trigger) and, unless it is a webhook trigger, Run now
+  (`POST /api/triggers/:id/run`, `operate`); the trigger routes check the person's right, so the page only offers. The open app
+  sessions stay below.
 
 Next slices:
 
-1. `POST /api/schedules/heartbeat` with a helper's own token. The supervisor and other outside helpers appear once it exists.
-2. The Schedules page (S3).
-3. `schedule_get`, `schedule_set_enabled` and `schedule_run_now`.
+1. The triggers editor on the page (create, edit, delete a trigger).
+2. `schedule_get`, `schedule_set_enabled` and `schedule_run_now` (the page uses the trigger routes for now).
+3. Scheduled pipelines, once CI accepts `on: schedule`.
 4. The T-971 refusal watcher calls `defineLoop` when it lands; it is not on `integration` yet.
-5. Loops without a heartbeat yet: secrets rotation, the delivery outbox, the account health check, the CI and repos timers, and the
-   nightly backup.
 
 ### 9.3 Writes, behind the S5 card design
 
