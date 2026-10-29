@@ -3,24 +3,15 @@
 // module is the pure part: a message names its author by session id, so the thread turns ids into names and roles from the lead and its
 // workers, joins one author's consecutive messages, splits the days, and keeps the newest ones in sight. Pure, so the rules are tested
 // (crewThread.test.ts); the view is CrewThread.tsx.
-import type { ChatSession } from '@portal/contracts';
+import type { ChatSession, CrewChannelMessage } from '@portal/contracts';
 import { bySpawn } from './crew';
 import { roleOf } from './crewLimits';
 
-/** One stored message (what `crew_read` returns for it): its id grows with time, `from` is the author's session id. */
-export interface CrewMessage {
-  id: number;
-  from: string;
-  text: string;
-  at: string;
-}
+/** One stored message (the contract's `CrewChannelMessage`): its id grows with time, `from` is the author's session id. */
+export type CrewMessage = CrewChannelMessage;
 
-/** One read of the channel: oldest first from the place asked, `more` when there are messages past these. */
-export interface CrewChannelPage {
-  items: CrewMessage[];
-  cursor: number;
-  more: boolean;
-}
+/** One read of the channel (`GET CHAT_API.crewChannel`): oldest first from the place asked, `more` when there are messages past these. */
+export type { CrewChannelPage } from '@portal/contracts';
 
 /** The messages shown at first, and how many each "Earlier" adds. */
 export const THREAD_PAGE = 30;

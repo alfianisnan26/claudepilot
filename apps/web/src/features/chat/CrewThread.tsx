@@ -13,7 +13,7 @@ const MAX_PAGES = 5;
 export interface CrewChannelState {
   /** Oldest first. */
   messages: CrewMessage[];
-  /** `unavailable`: the portal did not answer the read (no route yet, or no access): the thread stays hidden, never a guess. */
+  /** `unavailable`: the portal did not answer the read (no access, or an older portal without the route): the thread stays hidden, never a guess. */
   status: 'loading' | 'ready' | 'unavailable';
 }
 

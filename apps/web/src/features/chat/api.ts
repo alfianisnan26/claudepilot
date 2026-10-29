@@ -2,6 +2,7 @@ import { isApiErrorBody, isApiSuccess } from '@isnanme/core';
 import { track } from '@isnanme/ui';
 import {
   CHAT_API,
+  CREW_CHANNEL_LIMIT_MAX,
   EVENT_PAGE_LIMIT,
   KEEPGOING_API,
   type ChatEventPage,
@@ -30,6 +31,7 @@ import {
   type KeepGoingPause,
   type CreateChatSessionRequest,
   type CreateWorkspaceClaudeRequest,
+  type CrewChannelPage,
   type DeleteChatSessionResult,
   type EnterBypassRequest,
   type ReauthRequest,
@@ -43,7 +45,6 @@ import {
 } from '@portal/contracts';
 import { ApiError } from '@/lib/api';
 import { asPage } from './history';
-import type { CrewChannelPage } from './crewThread';
 
 /**
  * The chat endpoints, fetched exactly like `lib/api.ts`: same-origin credentials (Hono's `csrf`
@@ -108,12 +109,14 @@ export const chatApi = {
   /** The sessions a session started. */
   children: (id: string) => chatApi.listAll({ parentId: id }),
   /**
-   * A lead's crew channel (T-294 slice 3): one read-only page after `after` (a person reading never moves a member's place). NO SERVER ROUTE
-   * YET: `chat/controller.ts` `crewRead` has the data, nothing serves it over HTTP, so today this answers 404 and the thread stays hidden
-   * (T-294, "an API field needed"). Shape: `CrewChannelPage` plus the lead's id.
+   * A lead's crew channel (T-294 slice 3): one read-only page after `after`, at most `CREW_CHANNEL_LIMIT_MAX` (a person reading never moves a
+   * member's place). A session the person may not see answers 404, and the thread stays hidden.
    */
   crewChannel: (leadId: string, after = 0) =>
-    request<CrewChannelPage>('GET', `${CHAT_API.one(leadId)}/crew-channel${query({ after: after ? String(after) : undefined, limit: '100' })}`),
+    request<CrewChannelPage>(
+      'GET',
+      CHAT_API.crewChannel(leadId) + query({ after: after ? String(after) : undefined, limit: String(CREW_CHANNEL_LIMIT_MAX) }),
+    ),
   rename: (id: string, title: string) => request<ChatSession>('PATCH', CHAT_API.one(id), { title } satisfies UpdateChatSessionRequest),
   /** Deletes it, ending it first: the transcript and its files in the workspace go (FR4). */
   remove: (id: string, worktree?: ChatWorktreeRemoval, children?: 'end') =>
