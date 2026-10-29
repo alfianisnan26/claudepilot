@@ -137,8 +137,8 @@ export function CrewThread({
       <p className="flex items-center gap-1 text-[13px] text-muted">
         <span>Shared by the crew</span>
         <InfoTip label="About the crew thread">
-          What the lead and its workers posted with crew_post, for everyone in the crew to look up: a decision, an interface, a finding. The portal
-          keeps the newest 500. Reading it here does not mark it read for any agent.
+          What the lead and its workers posted with crew_post, for everyone in the crew to look up: a decision, an interface, a finding. The
+          portal keeps the newest 500. Reading it here does not mark it read for any agent.
         </InfoTip>
       </p>
       {status === 'failed' && (

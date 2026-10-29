@@ -159,7 +159,10 @@ test('a failed re-read keeps what was read before and says it failed; the next g
   assert.equal(ready.reason, null);
   const failed = settleChannel(ready, { failed: new Error('Could not reach the server.') });
   assert.equal(failed.status, 'failed');
-  assert.deepEqual(failed.messages.map((m) => m.id), [1, 2]);
+  assert.deepEqual(
+    failed.messages.map((m) => m.id),
+    [1, 2],
+  );
   const again = settleChannel(failed, { ok: [msg(3, 'a')] });
   assert.deepEqual([again.status, again.reason, again.messages.map((m) => m.id)], ['ready', null, [1, 2, 3]]);
 });
@@ -210,8 +213,15 @@ test('scroll: older messages joining above keep the message being read exactly w
   const after = scrollTarget(anchor, { rowTop: 2968, scrollHeight: 6677, clientHeight: 560 });
   assert.equal(after, 2700, 'the row sits 268 px below the top again');
   // The row is gone (folded away): the growth of the content is what was added above.
-  assert.equal(scrollTarget({ key: null, offset: 0, scrollTop: 120, scrollHeight: 3977 }, { rowTop: null, scrollHeight: 6677, clientHeight: 560 }), 2820);
-  assert.equal(scrollTarget({ ...anchor, key: 'gone' }, { rowTop: null, scrollHeight: 6677, clientHeight: 560 }), 2700, 'a lost row falls back to the growth');
+  assert.equal(
+    scrollTarget({ key: null, offset: 0, scrollTop: 120, scrollHeight: 3977 }, { rowTop: null, scrollHeight: 6677, clientHeight: 560 }),
+    2820,
+  );
+  assert.equal(
+    scrollTarget({ ...anchor, key: 'gone' }, { rowTop: null, scrollHeight: 6677, clientHeight: 560 }),
+    2700,
+    'a lost row falls back to the growth',
+  );
 });
 
 test('Tab stays inside the popover: past the last stop to the first, Shift+Tab before the first to the last', () => {
