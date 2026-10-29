@@ -2,7 +2,8 @@
 # The verdict of a gate run, in one place (the pipeline's gate job, the in-cluster gate Job and scripts/gate-job.sh read it the same way).
 #   scripts/gate-verdict.sh logs <logs dir> [steps]   the logs of scripts/gate.sh: every step ran with rc=0, and the server suite's LAST summary
 #                                                     (the rerun of the failing files alone, when there was one) has 0 failing and 0 timed-out
-#                                                     tests (node counts a timed-out file as "cancelled", not "fail"). steps: as GATE_STEPS.
+#                                                     tests (node counts a timed-out file as "cancelled", not "fail"), and no file reported
+#                                                     fewer tests than it registered (server-suite-short, T-2890). steps: as GATE_STEPS.
 #                                                     A `context-pack` line (any steps) must be rc=0 too.
 #   scripts/gate-verdict.sh joblog <file>             the log of a gate Job: its last `GATE-VERDICT:` line.
 #   scripts/gate-verdict.sh steps <steps> <gate.sh>   the steps that gate.sh can run (T-1992): a gate.sh from before the web-tests step has
@@ -30,6 +31,9 @@ case ${1:-} in
     fi
     case ",$steps," in
       *,server-suite,*)
+        # T-2890: a file that reported fewer tests than it registered stopped part way; its missing tests never ran or never counted.
+        short=$(sed -n 's/^server-suite-short: //p' "$logs/SUMMARY.txt" | head -n 5 | paste -sd ';' -)
+        [ -z "$short" ] || red "a test file reported fewer tests than it registered: $short"
         fails=$(grep -E '^# fail [0-9]+' "$logs/server-suite.log" 2>/dev/null | tail -n 1 | awk '{print $3}')
         cancelled=$(grep -E '^# cancelled [0-9]+' "$logs/server-suite.log" 2>/dev/null | tail -n 1 | awk '{print $3}')
         if [ "${fails:-x}" != 0 ] || [ "${cancelled:-0}" != 0 ]; then red "the server suite has ${fails:-an unknown number of} failing and ${cancelled:-0} timed-out tests"; fi

@@ -34,19 +34,31 @@ if wants web-tests; then step web-tests "${clean[@]}" nice -n 10 npm test -w @po
 # for ever (connect/agent/rekey.test.ts hung 9 to 26 minutes inside the full suite, twice, and passes alone in seconds), and the files with a failing
 # or timed-out test run once more, alone: a test that hangs or races under load passes alone (the known ones are in docs/open-items.md). The verdict
 # is the LAST summary in the log, the rerun's when there was one; node counts a timed-out file as "cancelled", not "fail", so read both.
+# No --test-force-exit (T-2890): with it a test file's process exits as soon as its last test ends, and under load the reports still buffered
+# in it are lost with exit code 0 (lab/scorecard.test.ts reported 17 to 33 of its 34 tests, the gate stayed green). A file that keeps the
+# process alive fails at the timeout instead. scripts/test-count-reporter.mjs counts, per file, the tests registered against the tests
+# reported; any file short of its count fails the suite (server-suite-short in the summary), whatever the rerun says.
 run_suite() {
-  local timeout=${GATE_TEST_TIMEOUT_MS:-600000} first="$logs/server-suite.first" files rc tests=('src/**/*.test.ts')
+  local timeout=${GATE_TEST_TIMEOUT_MS:-600000} first="$logs/server-suite.first" counts="$logs/server-suite.counts" files rc short tests=('src/**/*.test.ts')
+  local report=(--test-reporter=tap --test-reporter-destination=stdout --test-reporter="$dir/scripts/test-count-reporter.mjs" --test-reporter-destination="$counts")
   # node expands the glob itself (bash would not descend with **); GATE_FILES are plain paths.
   [ -z "${GATE_FILES:-}" ] || read -ra tests <<< "$GATE_FILES"
-  ( cd apps/server && "${clean[@]}" nice -n 10 node --import tsx --test --test-force-exit --test-timeout="$timeout" --test-concurrency="${GATE_CONCURRENCY:-2}" "${tests[@]}" ) > "$first" 2>&1
+  ( cd apps/server && "${clean[@]}" nice -n 10 node --import tsx --test "${report[@]}" --test-timeout="$timeout" --test-concurrency="${GATE_CONCURRENCY:-2}" "${tests[@]}" ) > "$first" 2>&1
   rc=$?
   cat "$first"
+  short=$(grep '^short ' "$counts" 2>/dev/null)
+  grep '^total ' "$counts" 2>/dev/null | sed 's/^/server-suite-count: /' >> "$logs/SUMMARY.txt"
+  if [ -n "$short" ]; then
+    printf '%s\n' "$short" | sed 's/^short /server-suite-short: /' | tee -a "$logs/SUMMARY.txt"
+    [ "$rc" = 0 ] && rc=1
+  fi
   [ "$rc" = 0 ] && return 0
   files=$( { awk '/^not ok /{f=1; next} f && /location:/{print; f=0} /^ok /{f=0}' "$first" | sed -E "s#.*location: '(/[^']*/apps/server/)?([^:']+\.ts):.*#\2#"; sed -nE 's/^not ok [0-9]+ - (src\/.*\.test\.ts)$/\1/p' "$first"; } | grep -E '^src/.*\.test\.ts$' | sort -u )
   [ -n "$files" ] || return "$rc"
   printf '\n=== the files with a failing or timed-out test, once more and alone:\n%s\n' "$files"
-  ( cd apps/server && "${clean[@]}" nice -n 10 node --import tsx --test --test-force-exit --test-timeout="$timeout" --test-concurrency=1 $files )
+  ( cd apps/server && "${clean[@]}" nice -n 10 node --import tsx --test --test-timeout="$timeout" --test-concurrency=1 $files )
   rc=$?
+  [ -z "$short" ] || return 1
   if [ "$rc" = 0 ]; then
     echo "server-suite-rerun: passed alone: $(echo $files)" >> "$logs/SUMMARY.txt"
     bash "$dir/scripts/gate-verdict.sh" flaky "$first" | sed 's/^/server-suite-flaky: /' >> "$logs/SUMMARY.txt"
