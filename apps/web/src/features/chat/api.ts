@@ -43,6 +43,7 @@ import {
 } from '@portal/contracts';
 import { ApiError } from '@/lib/api';
 import { asPage } from './history';
+import type { CrewChannelPage } from './crewThread';
 
 /**
  * The chat endpoints, fetched exactly like `lib/api.ts`: same-origin credentials (Hono's `csrf`
@@ -106,6 +107,13 @@ export const chatApi = {
   end: (id: string, children?: 'end') => request<{ ok: true }>('POST', CHAT_API.end(id) + childrenQuery(children)),
   /** The sessions a session started. */
   children: (id: string) => chatApi.listAll({ parentId: id }),
+  /**
+   * A lead's crew channel (T-294 slice 3): one read-only page after `after` (a person reading never moves a member's place). NO SERVER ROUTE
+   * YET: `chat/controller.ts` `crewRead` has the data, nothing serves it over HTTP, so today this answers 404 and the thread stays hidden
+   * (T-294, "an API field needed"). Shape: `CrewChannelPage` plus the lead's id.
+   */
+  crewChannel: (leadId: string, after = 0) =>
+    request<CrewChannelPage>('GET', `${CHAT_API.one(leadId)}/crew-channel${query({ after: after ? String(after) : undefined, limit: '100' })}`),
   rename: (id: string, title: string) => request<ChatSession>('PATCH', CHAT_API.one(id), { title } satisfies UpdateChatSessionRequest),
   /** Deletes it, ending it first: the transcript and its files in the workspace go (FR4). */
   remove: (id: string, worktree?: ChatWorktreeRemoval, children?: 'end') =>

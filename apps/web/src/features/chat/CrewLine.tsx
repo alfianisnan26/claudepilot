@@ -1,11 +1,13 @@
 import { Badge, cn, Dialog } from '@isnanme/ui';
 import { needsYou, type ChatSession } from '@portal/contracts';
-import { ChevronDown, CornerLeftUp, Network } from 'lucide-react';
+import { ChevronDown, CornerLeftUp, MessagesSquare, Network } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { Popover } from '@/components/Popover';
 import { chatApi } from './api';
 import { crewOfSessions, otherClaude } from './crew';
+import { CrewThread, useCrewChannel } from './CrewThread';
+import { threadCount } from './crewThread';
 import { roleOf } from './crewLimits';
 import { RoleBadge } from './RoleBadge';
 import { StateBadge } from './shared';
@@ -69,18 +71,26 @@ export const crewShown = (c: CrewState) => !!c.lead || (c.workers?.length ?? 0) 
  * number, a list on tap: title, state, Claude). Each pill sits in a 44 px target; the line itself lets taps through to the transcript.
  */
 export function CrewLine({ session, crew, roomy }: { session: ChatSession; crew: CrewState; roomy: boolean }) {
-  const [open, setOpen] = useState(false);
+  // One sheet at a time: the workers, or the crew's thread.
+  const [sheet, setSheet] = useState<'workers' | 'thread' | null>(null);
+  const open = sheet === 'workers';
+  const threadOpen = sheet === 'thread';
   const anchor = useRef<HTMLButtonElement>(null);
+  const threadAnchor = useRef<HTMLButtonElement>(null);
   const { lead, workers, refresh } = crew;
   const count = workers?.length ?? 0;
+  // The channel is the lead's own: a session with workers shows it; a worker's page links up to its lead instead.
+  const channel = useCrewChannel(session.id, count > 0, session.state);
+  const posts = channel.messages.length;
   const asks = (workers ?? []).filter(needsYou).length;
-  const close = useCallback(() => setOpen(false), []);
-  // Another session opened from the list: the list closes.
-  useEffect(() => setOpen(false), [session.id]);
+  const close = useCallback(() => setSheet(null), []);
+  // Another session opened from the list: the sheet closes.
+  useEffect(() => setSheet(null), [session.id]);
   if (!crewShown(crew)) return null;
 
   const pill = 'flex h-8 min-w-0 items-center gap-1.5 rounded-full border border-line bg-surface px-3 text-[13px] text-ink-soft';
   const list = workers && <WorkerList session={session} workers={workers} onPick={close} />;
+  const thread = <CrewThread lead={session} workers={workers ?? []} messages={channel.messages} />;
   return (
     <div data-crew-line="" className="mx-auto flex max-w-[760px] items-center gap-2 px-1">
       {lead && (
@@ -108,7 +118,7 @@ export function CrewLine({ session, crew, roomy }: { session: ChatSession; crew:
           aria-label={`${count} ${count === 1 ? 'worker' : 'workers'}${asks ? `, ${asks} ${asks === 1 ? 'needs' : 'need'} you` : ''}`}
           onClick={() => {
             if (!open) refresh();
-            setOpen((o) => !o);
+            setSheet(open ? null : 'workers');
           }}
           className="press pointer-events-auto flex h-11 shrink-0 items-center"
         >
@@ -118,14 +128,45 @@ export function CrewLine({ session, crew, roomy }: { session: ChatSession; crew:
           </span>
         </button>
       )}
+      {posts > 0 && (
+        <button
+          ref={threadAnchor}
+          type="button"
+          data-crew-channel=""
+          aria-haspopup="dialog"
+          aria-expanded={threadOpen}
+          aria-label={threadCount(posts)}
+          title={threadCount(posts)}
+          onClick={() => {
+            if (!threadOpen) refresh();
+            setSheet(threadOpen ? null : 'thread');
+          }}
+          className="press pointer-events-auto flex h-11 shrink-0 items-center"
+        >
+          <span className={cn(pill, 'hover:text-ink')}>
+            <MessagesSquare className="size-3.5 shrink-0" aria-hidden="true" />
+            <span className="font-semibold tabular-nums">{posts}</span>
+          </span>
+        </button>
+      )}
       {roomy ? (
-        <Popover anchor={anchor} open={open && !!list} onClose={close} label="Workers" prefer="below">
-          {list}
-        </Popover>
+        <>
+          <Popover anchor={anchor} open={open && !!list} onClose={close} label="Workers" prefer="below">
+            {list}
+          </Popover>
+          <Popover anchor={threadAnchor} open={threadOpen && posts > 0} onClose={close} label="Crew" prefer="below">
+            {thread}
+          </Popover>
+        </>
       ) : (
-        <Dialog open={open && !!list} onClose={close} title="Workers" size="sm">
-          {list ?? null}
-        </Dialog>
+        <>
+          <Dialog open={open && !!list} onClose={close} title="Workers" size="sm">
+            {list ?? null}
+          </Dialog>
+          <Dialog open={threadOpen && posts > 0} onClose={close} title="Crew" size="sm">
+            {thread}
+          </Dialog>
+        </>
       )}
     </div>
   );
