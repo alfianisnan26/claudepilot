@@ -243,6 +243,7 @@ function world(seeds: Seed[] = [], scenario: Scenario = {}) {
       JOB_RUN_POLL_S: '0.1',
       // The queue tests are written for these caps (the script's defaults until T-1624); the defaults themselves have their own test.
       JOB_RUN_MAX: '3',
+      JOB_RUN_MAX_PER_CHAT: '2',
       JOB_RUN_MAX_PER_PROGRAM: '2',
       // The placement tests are written with no node avoided (T-1643 made k3s-master the default; that default has its own test).
       JOB_RUN_AVOID_NODES: '',
@@ -594,14 +595,30 @@ test('T-1982: neither the registry nor the cluster answers: exit 1, no Job; anot
   assert.deepEqual(other.w.applied(), []);
 });
 
-test('T-1624, D-96: with no cap set, the defaults are 12 at once, 2 per chat and 9 per program', async () => {
+test('T-1624, D-96, T-2966: with no cap set, the defaults are 12 at once, 4 per chat and 9 per program', async () => {
   const w = world(Array.from({ length: 12 }, (_, i) => ({ name: `claudepilot-job-${String(i + 1).padStart(8, '0')}`, chat: `chat-${i}` })));
-  const s = w.start(['--repo', 'claudepilot', '--ref', 'main', '--', 'true'], { JOB_RUN_MAX: '', JOB_RUN_MAX_PER_PROGRAM: '' });
-  await waitFor('the queue line', () => /queued behind 12 \(at most 12 at once, 2 per chat, 9 per program\)/.test(s.out()));
+  const s = w.start(['--repo', 'claudepilot', '--ref', 'main', '--', 'true'], { JOB_RUN_MAX: '', JOB_RUN_MAX_PER_CHAT: '', JOB_RUN_MAX_PER_PROGRAM: '' });
+  await waitFor('the queue line', () => /queued behind 12 \(at most 12 at once, 4 per chat, 9 per program\)/.test(s.out()));
   w.edit((st) => {
     Object.assign(st.jobs[0] ?? {}, { done: true, rc: 0 });
   });
   await s.done;
+});
+
+test('T-2966: with the default per-chat cap, one chat (a lead and its Agent lanes) runs a fourth Job; a fifth waits for one to end', async () => {
+  const caps = { JOB_RUN_MAX: '12', JOB_RUN_MAX_PER_CHAT: '', JOB_RUN_MAX_PER_PROGRAM: '9', PILOT_SESSION_ID: 'chat-a' };
+  const w = world([1, 2, 3].map((i) => ({ name: `claudepilot-job-0000000${i}`, chat: 'chat-a' })));
+  const fourth = await w.start(['--repo', 'claudepilot', '--ref', 'main', '--', 'true'], caps).done;
+  assert.equal(fourth.code, 0, fourth.out);
+  assert.doesNotMatch(fourth.out, /queued behind/, 'three running in this chat: the fourth goes');
+  const v = world([1, 2, 3, 4].map((i) => ({ name: `claudepilot-job-0000000${i}`, chat: 'chat-a' })));
+  const fifth = v.start(['--repo', 'claudepilot', '--ref', 'main', '--', 'true'], caps);
+  await waitFor('the fifth queued', () => /queued behind 4 \(at most 12 at once, 4 per chat, 9 per program\)/.test(fifth.out()));
+  v.edit((st) => {
+    Object.assign(st.jobs[0] ?? {}, { done: true, rc: 0 });
+  });
+  const r = await fifth.done;
+  assert.equal(r.code, 0, r.out);
 });
 
 test('the cluster-wide cap: three running Jobs, the fourth says "queued behind 3" and starts when one ends', async () => {

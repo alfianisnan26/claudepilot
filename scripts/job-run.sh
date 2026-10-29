@@ -64,7 +64,7 @@
 #   scripts/job-run.sh --list                           the Jobs, their chat, role and state
 #   scripts/job-run.sh --stop [<job> | --chat <id>]     stop Jobs (all, one, or a chat's) and delete their Secrets
 # Caps: JOB_RUN_MAX Jobs at once cluster-wide (default 12 since D-96, 2026-10-23; 8 before; 3 until T-1624, when k3s-node3 joined and the master and node3 had room for
-# about 6 more 4Gi Jobs while Konfersi Jobs queued a median 6 min to run 5-60 s), JOB_RUN_MAX_PER_CHAT per chat (2) and JOB_RUN_MAX_PER_PROGRAM per program (9 since D-96; 6, was 2;
+# about 6 more 4Gi Jobs while Konfersi Jobs queued a median 6 min to run 5-60 s), JOB_RUN_MAX_PER_CHAT per chat (4 since T-2966, 2026-10-29: a lead's Agent lanes share its chat; was 2) and JOB_RUN_MAX_PER_PROGRAM per program (9 since D-96; 6, was 2;
 # claudepilot, event, konfersi: T-524). A Job over a cap is created suspended and waits its turn (creation order), with "queued behind K". The Job stops when this script is interrupted or killed (the next run removes a Job whose
 # script is gone), and when the chat ends (the Claude process, CLAUDE_PID or JOB_RUN_WATCH_PID, exits).
 # A failed `npm ci` in the Job is tried once more (it says so in the log). Exit 0 of a proof means the proof held, not only the command.
@@ -80,7 +80,7 @@ set -eu
 case $- in *x*) echo "job-run: refuses to run under xtrace (set -x / bash -x would print the credentials)" >&2; exit 2 ;; esac
 here=$(cd "$(dirname "$0")/.." && pwd)
 ns=${JOB_RUN_NAMESPACE:-isnan-claudepilot}; registry=${DEPLOY_REGISTRY:-registry.int.isnan.me}
-max=${JOB_RUN_MAX:-12}; per=${JOB_RUN_MAX_PER_CHAT:-2}; pprog=${JOB_RUN_MAX_PER_PROGRAM:-9}; poll=${JOB_RUN_POLL_S:-5}
+max=${JOB_RUN_MAX:-12}; per=${JOB_RUN_MAX_PER_CHAT:-4}; pprog=${JOB_RUN_MAX_PER_PROGRAM:-9}; poll=${JOB_RUN_POLL_S:-5}
 queue_wait=${JOB_RUN_QUEUE_WAIT_S:-3600}; start_wait=${JOB_RUN_START_WAIT_S:-900}; art_max=${JOB_RUN_ARTIFACT_MAX:-4194304}
 gitea=${JOB_RUN_GITEA:-git.konfersi.com}; github_repo=${JOB_RUN_GITHUB_REPO:-alfianisnan26/claudepilot}
 event_repo=isnanme/event # fixed on purpose (T-491): the door names one repository, no override

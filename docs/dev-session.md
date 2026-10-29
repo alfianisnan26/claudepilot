@@ -237,7 +237,7 @@ scripts/job-run.sh --repo konfersi:<org>/<repo> --ref <branch> --image registry.
   in a HAR or inside the Playwright HTML report's `index.html` (it can embed the report as a base64 zip). Switch the trace off or leave zips and
   the HTML report out of `--artifacts`; `job-out/` is git-ignored (an `--out` elsewhere is not); (4) the script refuses to run under
   `bash -x` / xtrace, which would print the values.
-- **Caps:** `JOB_RUN_MAX` (3) Jobs at once cluster-wide, `JOB_RUN_MAX_PER_CHAT` (2) per chat (`PILOT_SESSION_ID`) and `JOB_RUN_MAX_PER_PROGRAM`
+- **Caps:** `JOB_RUN_MAX` (3) Jobs at once cluster-wide, `JOB_RUN_MAX_PER_CHAT` (4 since T-2966; was 2) per chat (`PILOT_SESSION_ID`; a lead's Agent sub-agent lanes share its chat) and `JOB_RUN_MAX_PER_PROGRAM`
   (2) per program (claudepilot, event, konfersi; T-524). A Job over a cap is created suspended and waits in creation order ("queued behind K").
   Jobs carry the labels `job-run/chat`, `job-run/role` (`PILOT_AGENT`), `job-run/repo`, `job-run/program`.
 - **Placement (T-611):** the scheduler counts memory requests, but the control-plane node's own pods use far more for real. Before it creates a
