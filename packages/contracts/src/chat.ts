@@ -629,6 +629,29 @@ export interface ChatEventPage {
   before: number | null;
 }
 
+/** The most messages one read of `CHAT_API.crewChannel` returns (`?limit=`, 1 to this; the default). */
+export const CREW_CHANNEL_LIMIT_MAX = 100;
+
+/** One message of a lead's crew channel (T-294, `crew_post`): its id grows with time, `from` is the author's session id, `text` is agent text, scrubbed. */
+export interface CrewChannelMessage {
+  id: number;
+  from: string;
+  text: string;
+  at: string;
+}
+
+/**
+ * One read-only page of a lead's crew channel (`GET CHAT_API.crewChannel` `?after=<id>&limit=<n>`; T-294): oldest first, after `after`
+ * (0: from the first kept). A person reading never moves a member's cursor.
+ */
+export interface CrewChannelPage {
+  items: CrewChannelMessage[];
+  /** The id of the last message returned (`after` when none): pass it as `?after=` for the next page. */
+  cursor: number;
+  /** More messages exist past the ones returned. */
+  more: boolean;
+}
+
 /** A model the session can switch to (Claude Code's `list_models`). */
 export interface ChatModelOption {
   /** Pass to the `model` control op, e.g. `default`, `sonnet`, a full model id. */
@@ -919,6 +942,11 @@ export const CHAT_API = {
   limits: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/limits`,
   /** GET: the chat's Keep going (`ChatKeepGoing`). PUT `UpdateKeepGoingRequest`: set it (a person; T-259). */
   keepGoing: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/keep-going`,
+  /**
+   * GET `?after=<id>&limit=<n>`: one read-only page (`CrewChannelPage`) of the crew channel this session leads (T-294), for whoever may view
+   * the session; `limit` 1 to `CREW_CHANNEL_LIMIT_MAX`, `after` a whole number from 0 (422 otherwise). Never moves a member's cursor.
+   */
+  crewChannel: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/crew-channel`,
   /**
    * GET `?after=<seq>`: stored transcript events after a sequence number (history and resume), whole, as `ChatEvent[]`; neither `after`
    * nor the page parameters: the whole transcript, the same way. GET `?before=<seq>&limit=<n>` (either one is enough): a `ChatEventPage`
