@@ -56,17 +56,28 @@ const page = async (res: Response): Promise<CrewChannelPage> => {
   return ((await res.json()) as { data: CrewChannelPage }).data;
 };
 const texts = (p: CrewChannelPage) => p.items.map((m) => m.text);
-const cursors = (s: Live) => s.store.db!.prepare('SELECT lead_id, session_id, last_id FROM crew_cursors ORDER BY lead_id, session_id').all();
+const cursors = (s: Live) =>
+  s.store.db!.prepare('SELECT lead_id, session_id, last_id FROM crew_cursors ORDER BY lead_id, session_id').all();
 
 test('T-294 crew-channel route: the lead’s channel, oldest first, paged with after and limit, cursor and more; the web’s path', async () => {
   const { s, w1 } = await rig();
   try {
     const owner = app(s);
-    for (const [who, t] of [[s.id, 'one'], [w1.id, 'two'], [s.id, 'three'], [w1.id, 'four'], [s.id, 'five']] as const) s.controller.crewPost(who, t);
+    for (const [who, t] of [
+      [s.id, 'one'],
+      [w1.id, 'two'],
+      [s.id, 'three'],
+      [w1.id, 'four'],
+      [s.id, 'five'],
+    ] as const)
+      s.controller.crewPost(who, t);
 
     const all = await page(await owner.request(path(s.id)));
     assert.deepEqual(texts(all), ['one', 'two', 'three', 'four', 'five'], 'no parameter: from the first kept, oldest first');
-    assert.deepEqual(all.items.map((m) => m.from), [s.id, w1.id, s.id, w1.id, s.id]);
+    assert.deepEqual(
+      all.items.map((m) => m.from),
+      [s.id, w1.id, s.id, w1.id, s.id],
+    );
     assert.ok(all.items.every((m) => typeof m.id === 'number' && typeof m.at === 'string'));
     assert.equal(all.more, false);
     assert.equal(all.cursor, all.items.at(-1)!.id);
@@ -113,7 +124,10 @@ test('T-294 crew-channel route: a person reading never moves a member’s cursor
     const owner = app(s);
     for (const t of ['one', 'two', 'three']) s.controller.crewPost(w1.id, t);
     // w2 reads two (its cursor moves); the lead and w1 have read nothing.
-    assert.deepEqual(s.controller.crewRead(w2.id, { limit: 2 }).items.map((m) => m.text), ['one', 'two']);
+    assert.deepEqual(
+      s.controller.crewRead(w2.id, { limit: 2 }).items.map((m) => m.text),
+      ['one', 'two'],
+    );
     const before = cursors(s);
     assert.equal(before.length, 1, JSON.stringify(before));
 
@@ -121,9 +135,19 @@ test('T-294 crew-channel route: a person reading never moves a member’s cursor
     assert.deepEqual(cursors(s), before, 'the stored cursors are exactly as they were');
 
     // Each member goes on from its own place, untouched by the person's reads.
-    assert.deepEqual(s.controller.crewRead(w2.id).items.map((m) => m.text), ['three']);
-    assert.deepEqual(s.controller.crewRead(s.id).items.map((m) => m.text), ['one', 'two', 'three'], 'the lead still has all three as new');
-    assert.deepEqual(s.controller.crewRead(w1.id).items.map((m) => m.text), ['one', 'two', 'three']);
+    assert.deepEqual(
+      s.controller.crewRead(w2.id).items.map((m) => m.text),
+      ['three'],
+    );
+    assert.deepEqual(
+      s.controller.crewRead(s.id).items.map((m) => m.text),
+      ['one', 'two', 'three'],
+      'the lead still has all three as new',
+    );
+    assert.deepEqual(
+      s.controller.crewRead(w1.id).items.map((m) => m.text),
+      ['one', 'two', 'three'],
+    );
   } finally {
     await s.done();
   }
@@ -149,7 +173,11 @@ test('T-294 crew-channel route: declared with view; another user, an agent, an u
     const other = app(s, { kind: 'user', userId: 'u_a', loginSessionId: 'l1', via: 'ui' });
     const agentOfLead = app(s, { kind: 'agent', userId: 'u_owner', tokenId: 't1', sessionId: s.id, workspaceId: 'docker/ws1' });
     const agentElsewhere = app(s, { kind: 'agent', userId: 'u_owner', tokenId: 't2', sessionId: w1.id, workspaceId: 'docker/ws1' });
-    for (const [label, a] of [['another user', other], ['the lead’s own agent', agentOfLead], ['another session’s agent', agentElsewhere]] as const) {
+    for (const [label, a] of [
+      ['another user', other],
+      ['the lead’s own agent', agentOfLead],
+      ['another session’s agent', agentElsewhere],
+    ] as const) {
       for (const q of ['', '?limit=0', '?after=x', `?limit=${CREW_CHANNEL_LIMIT_MAX + 1}`]) {
         const res = await a.request(path(s.id, q));
         assert.equal(res.status, 404, `${label} ${q}`);
@@ -191,7 +219,10 @@ test('T-294 crew-channel route: bad parameters are a 422 naming the parameter; t
     assert.deepEqual(crewChannelQuery({}), { after: 0, limit: CREW_CHANNEL_LIMIT_MAX });
     assert.deepEqual(crewChannelQuery({ after: '', limit: '' }), { after: 0, limit: CREW_CHANNEL_LIMIT_MAX });
     assert.deepEqual(crewChannelQuery({ after: '0', limit: '1' }), { after: 0, limit: 1 });
-    assert.deepEqual(crewChannelQuery({ after: '42', limit: String(CREW_CHANNEL_LIMIT_MAX) }), { after: 42, limit: CREW_CHANNEL_LIMIT_MAX });
+    assert.deepEqual(crewChannelQuery({ after: '42', limit: String(CREW_CHANNEL_LIMIT_MAX) }), {
+      after: 42,
+      limit: CREW_CHANNEL_LIMIT_MAX,
+    });
   } finally {
     await s.done();
   }

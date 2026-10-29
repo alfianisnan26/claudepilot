@@ -4582,7 +4582,11 @@ export class ChatController {
    */
   crewChannelPage(rawId: string, opts: { after: number; limit: number }): CrewChannelPage {
     const lead = this.#require(this.#chat.resolveId(rawId));
-    const read = this.#chat.crewRead(lead.id, lead.id, { after: opts.after, limit: Math.min(Math.max(opts.limit, 1), CREW_CHANNEL_LIMIT_MAX), peek: true });
+    const read = this.#chat.crewRead(lead.id, lead.id, {
+      after: opts.after,
+      limit: Math.min(Math.max(opts.limit, 1), CREW_CHANNEL_LIMIT_MAX),
+      peek: true,
+    });
     const authorWorkspace = new Map<string, string | null>();
     const workspaceOf = (from: string): string | null => {
       if (!authorWorkspace.has(from)) authorWorkspace.set(from, this.#chat.row(from)?.workspace_id ?? null);
