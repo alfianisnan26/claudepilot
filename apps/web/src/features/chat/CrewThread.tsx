@@ -46,7 +46,6 @@ export function useCrewChannel(leadId: string | undefined, enabled: boolean, sta
       current = false;
     };
     // `view` is read for the place to go on from, not a trigger: only another lead or a new state reads again.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [leadId, enabled, state]);
 
   if (!leadId || !enabled || view.id !== leadId) return { messages: [], status: 'loading' };
