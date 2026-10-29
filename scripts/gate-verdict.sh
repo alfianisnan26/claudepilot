@@ -22,6 +22,10 @@ case ${1:-} in
   logs)
     logs=${2:?logs dir}; steps=${3:-${GATE_STEPS:-typecheck,web-build,web-tests,server-suite}}
     [ -f "$logs/SUMMARY.txt" ] || red "the gate left no summary"
+    # T-2890: a file that reported fewer tests than it registered stopped part way; its missing tests never ran or never counted. Read
+    # before the steps, so the verdict names the file rather than only "server-suite failed".
+    short=$(sed -n 's/^server-suite-short: //p' "$logs/SUMMARY.txt" | head -n 5 | paste -sd ';' -)
+    [ -z "$short" ] || red "a test file reported fewer tests than it registered: $short"
     for step in npm-ci ${steps//,/ }; do
       grep -q "^$step rc=0 " "$logs/SUMMARY.txt" || red "$step failed"
     done
@@ -31,9 +35,6 @@ case ${1:-} in
     fi
     case ",$steps," in
       *,server-suite,*)
-        # T-2890: a file that reported fewer tests than it registered stopped part way; its missing tests never ran or never counted.
-        short=$(sed -n 's/^server-suite-short: //p' "$logs/SUMMARY.txt" | head -n 5 | paste -sd ';' -)
-        [ -z "$short" ] || red "a test file reported fewer tests than it registered: $short"
         fails=$(grep -E '^# fail [0-9]+' "$logs/server-suite.log" 2>/dev/null | tail -n 1 | awk '{print $3}')
         cancelled=$(grep -E '^# cancelled [0-9]+' "$logs/server-suite.log" 2>/dev/null | tail -n 1 | awk '{print $3}')
         if [ "${fails:-x}" != 0 ] || [ "${cancelled:-0}" != 0 ]; then red "the server suite has ${fails:-an unknown number of} failing and ${cancelled:-0} timed-out tests"; fi
