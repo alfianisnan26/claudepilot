@@ -21,8 +21,8 @@ export type ChatPermissionMode = 'default' | 'acceptEdits' | 'plan' | 'auto' | '
 /**
  * Whether a session may use Auto (chat-sessions PRD, Auto mode). A session a person started in the app always may. Since PILOT-996
  * (owner, 2026-10-28) a session with no person behind it (a trigger's, a ticket's, Portal MCP's, another session's) may too when its
- * parent runs in Auto or Bypass (it is never wider than its parent, {@link modeWithin}), or when the policy `sessions.autonomousAuto`
- * is on (the default). The server checks this on every change to Auto and audits it (`mode.auto`, `mode.refused`).
+ * parent runs in Auto or Bypass, or when the policy `sessions.autonomousAuto` is on (the default; T-2997: then a worker may run in
+ * Auto whatever its parent's mode). The server checks this on every change to Auto and audits it (`mode.auto`, `mode.refused`).
  */
 export function autoModeAllowed(
   s: { startedBy: string | null; origin: ChatOrigin; parentId: string | null },
@@ -53,15 +53,33 @@ export function modeWithin(mode: ChatPermissionMode, cap: ChatPermissionMode): b
 }
 
 /**
- * PILOT-996 (D-103): the mode a worker starts in: the one asked, else its parent's, else Auto. Whether the ask fits under the parent
- * is {@link modeWithin}'s (the caller refuses a wider one); Bypass is entered only through the portal's gated inherit path. A parent in
- * `default` (a person answers its cards) hands on dontAsk instead: a worker never waits on a person nobody asked for (D-62); a worker
- * may still be asked into `default` by name.
+ * The mode a worker starts in (PILOT-996, D-103; T-2997, PILOT-1025). The one asked wins (whether it may be asked is
+ * {@link workerModeAllowed}'s). Unasked: Bypass only when the parent is in Bypass NOW (`parentInBypass`: the portal's live check of the
+ * parent, its policy and capability, never the stored mode alone), entered through the portal's gated inherit path; a parent whose stored
+ * mode says Bypass without that gives Auto. Otherwise Auto while `sessions.autonomousAuto` is on; off, the parent's mode, else Auto, where a
+ * parent in `default` (a person answers its cards) hands on dontAsk: a worker never waits on a person nobody asked for (D-62).
  */
-export function workerMode(asked: ChatPermissionMode | null | undefined, parent: ChatPermissionMode | null | undefined): ChatPermissionMode {
+export function workerMode(
+  asked: ChatPermissionMode | null | undefined,
+  parent: ChatPermissionMode | null | undefined,
+  ctx: { parentInBypass?: boolean; autonomousAuto?: boolean } = {},
+): ChatPermissionMode {
   if (asked) return asked;
+  if (ctx.parentInBypass === true) return 'bypassPermissions';
+  if (parent === 'bypassPermissions') return 'auto';
+  if (ctx.autonomousAuto === true) return 'auto';
   if (parent === 'default') return 'dontAsk';
   return parent ?? 'auto';
+}
+
+/**
+ * Whether a worker may be asked into `asked` by its parent (T-2997): never Bypass by name; Auto whatever the parent's mode while
+ * `sessions.autonomousAuto` is on; any other mode, and Auto with the policy off, never wider than the parent's ({@link modeWithin}).
+ */
+export function workerModeAllowed(asked: ChatPermissionMode, parent: ChatPermissionMode, ctx: { autonomousAuto?: boolean } = {}): boolean {
+  if (asked === 'bypassPermissions') return false;
+  if (asked === 'auto' && ctx.autonomousAuto === true) return true;
+  return modeWithin(asked, parent);
 }
 
 export interface ChatSession {
