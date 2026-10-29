@@ -28,8 +28,11 @@ if [ -n "${PILOT_RUNNER:-}" ]; then
 fi
 # T-1609: a gate Job for this commit already exists in the cluster (the deploy's whole gate, or an earlier check): another one only waits in
 # the shared Job queue for what that one checks (2026-10-18: #464, #466 and #470 each waited 30-40 min behind Konfersi Jobs for nothing).
-if command -v kubectl >/dev/null 2>&1 &&
-  kubectl -n "${GATE_NAMESPACE:-isnan-claudepilot}" get jobs -o name 2>/dev/null | grep -q "^job.batch/claudepilot-gate-${sha:0:7}-"; then
+# T-2167: the list is read whole first. `kubectl ... | grep -q` under pipefail read as "none" whenever grep matched an early line and quit
+# before kubectl wrote the rest: kubectl's next write failed (SIGPIPE), so the pipeline failed and a second Job went to the queue anyway.
+jobs=""
+if command -v kubectl >/dev/null 2>&1; then jobs=$(kubectl -n "${GATE_NAMESPACE:-isnan-claudepilot}" get jobs -o name 2>/dev/null || true); fi
+if grep -q "^job.batch/claudepilot-gate-${sha:0:7}-" <<<"$jobs"; then
   echo "check: a gate Job for ${sha:0:8} is already in the cluster (the deploy's or an earlier check's): nothing to add"
   exit 0
 fi
