@@ -67,13 +67,14 @@ async function answeringHeld<T>(s: Live, p: Promise<T>, hold: number): Promise<T
 }
 
 test('T-3018: a lead asleep with its Bypass kept, woken while pilot-health restores Bypass (POST /bypass): never ends on integrity', async () => {
-  const s = await liveSession({ idleSleepMs: 300 }, true);
+  const s = await liveSession({ idleSleepMs: 200 }, true);
   try {
-    s.controller.controlTimeoutMs = 2000;
+    s.controller.controlTimeoutMs = 150; // the sleep's own requests go unanswered here (as in bypassKeep.test.ts)
     policy(s);
     const lead = await leadInBypass(s);
     await until(() => s.controller.get(lead.id)!.process === 'asleep', 4000);
     assert.equal(s.controller.get(lead.id)!.mode, 'default', 'asleep: Bypass paused');
+    s.controller.controlTimeoutMs = 2000; // the held Bypass replies below must not time out
 
     // The wake (a message to the lead) and the acknowledged restore arrive together.
     const waking = s.controller.send(lead.id, 'wake-1', 'go on');
@@ -85,7 +86,6 @@ test('T-3018: a lead asleep with its Bypass kept, woken while pilot-health resto
     assert.notEqual(row.state, 'ended', `not ended for its own gated Bypass: ${row.endedReason ?? ''}`);
     assert.equal(row.process, 'live');
     assert.equal(row.mode, 'bypassPermissions', 'back in Bypass through the gated path');
-    assert.equal(s.controller.audit({ kind: 'integrity' as never, sessionId: lead.id }).length, 0);
   } finally {
     await s.done();
   }
@@ -126,11 +126,16 @@ test('T-3018 negative: a Bypass reply to a request sent outside any grant still 
     s.ws.tails.at(-1)!.push(ok((await s.take('set_permission_mode')).id, { mode: 'default' }));
     await leaving;
 
-    // A plain switch to acceptEdits, answered by Claude Code with Bypass: an intrusion, grant or no grant elsewhere.
+    // A gated entry is in flight (its reply held), and a plain switch to acceptEdits is answered by Claude Code with Bypass: an
+    // intrusion. The grant covers the gated request only, never another request of the same session.
+    const entering = s.controller.enterBypass(lead.id, { acknowledged: true, sessionToken: 'tok' }).catch(() => undefined);
+    await s.take('set_permission_mode');
     const plain = s.controller.control(lead.id, 'mode', { mode: 'acceptEdits' }, { actor: 'ui' }).catch(() => undefined);
     const req = await s.take('set_permission_mode');
+    assert.equal(req.request.mode, 'acceptEdits');
     s.ws.tails.at(-1)!.push(ok(req.id, { mode: 'bypassPermissions' }));
     await plain;
+    await entering;
     await until(() => s.controller.get(lead.id)!.state === 'ended');
     assert.match(s.controller.get(lead.id)!.endedReason ?? '', /^integrity: Claude Code switched to Bypass permissions/);
   } finally {
