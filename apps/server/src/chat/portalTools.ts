@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { AppError } from '@isnanme/core';
-import { CHAT_AGENT_NAME, CHAT_MAX_WORKERS_MAX, CHAT_SESSION_TITLE_MAX, CHAT_SPAWN_WHY_MAX, modeWithin, sessionRef, workerMode, workspaceRef, type ChatControl, type ChatPermissionMode, type ChatSession, type CreateChatSessionRequest } from '@portal/contracts';
+import { CHAT_AGENT_NAME, CHAT_MAX_WORKERS_MAX, CHAT_SESSION_TITLE_MAX, CHAT_SPAWN_WHY_MAX, sessionRef, workerMode, workerModeAllowed, workspaceRef, type ChatControl, type ChatPermissionMode, type ChatSession, type CreateChatSessionRequest } from '@portal/contracts';
 import { actorOfPrincipal, requireCan } from '../authz/seam.js';
 import { fullInput } from '../portalmcp/compact.js';
 import { costFields } from '../portalmcp/tools/common.js';
@@ -30,6 +30,12 @@ export interface ChatToolHost {
   ): Promise<ChatSession>;
   /** PILOT-996 (D-103): a worker of a parent in Bypass enters it through the gated keep path; true when it is in Bypass after. */
   inheritBypass(id: string): Promise<boolean>;
+  /** T-2997: the session is in Bypass now (its live mode, the policy, its capability; never its stored mode alone). */
+  bypassNow(id: string): boolean;
+  /** T-2997: the mode a worker gets when the Bypass it was to inherit was not kept: Auto where it may run in it, else dontAsk. */
+  bypassNotKeptMode(id: string): ChatPermissionMode;
+  /** T-2997: `sessions.autonomousAuto` is on (a spawn's unasked mode is Auto, and Auto may be asked whatever the parent's mode). */
+  autonomousAutoOn(): boolean;
   send(id: string, uuid: string, text: string, opts: { actor: string; actorLabel?: string; relation?: 'parent' | 'worker' | 'crew'; opening?: boolean }): Promise<void>;
   /** T-417 review: every other message to a worker waits until its spawn delivery (`until`) settles. */
   holdInput(id: string, until: Promise<unknown>): void;
@@ -80,8 +86,9 @@ function plainText(text: string): string {
 
 /**
  * The modes a session may ask for a worker (PILOT-996, D-103; before: plan, default, dontAsk only). Never wider than the parent's own
- * mode (`modeWithin`: plan < dontAsk < default < acceptEdits < auto). Bypass is never asked: a worker of a parent in Bypass keeps it
- * when no mode is asked, through the portal's gated inherit path.
+ * mode (`modeWithin`: plan < dontAsk < default < acceptEdits < auto), except Auto while `sessions.autonomousAuto` is on (T-2997,
+ * `workerModeAllowed`). Bypass is never asked: a worker of a parent in Bypass now keeps it when no mode is asked, through the portal's
+ * gated inherit path.
  */
 const WORKER_MODES = ['plan', 'default', 'dontAsk', 'acceptEdits', 'auto'] as const satisfies readonly ChatPermissionMode[];
 /** The modes that narrow a worker: unconfirmed, the worker is ended before it gets its instruction. */
@@ -142,7 +149,7 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
     name: 'session_spawn',
     title: 'Start a worker session',
     description:
-      'Starts another chat session in this workspace to do part of the work, and gives it a first instruction. It runs on your Claude unless claude says otherwise (auto: the least busy of this workspace with room), in your permission mode or a narrower one; you can message it, see it and stop it, and the workers you start can message each other (your crew). The folder must already be trusted. With worktree it works on a branch of its own; with role it runs as the agent .claude/agents/<role>.md, on the role’s model unless model is given (opus above a role on sonnet needs why, D-63); model, effort and mode apply before its first instruction. For a crew: the portal tells you in one line when a worker’s turn ends, waits on a person or ends (report), so wait for those, not session_family in a loop. How many, how deep and how often are limited in the portal; max_workers and subagents narrow the worker, never wider than yours. ticket: T-12 or KONF-3.',
+      'Starts another chat session in this workspace to do part of the work, and gives it a first instruction. It runs on your Claude unless claude says otherwise (auto: the least busy of this workspace with room), in the permission mode mode describes (unset: Bypass when you are in it now, else auto); you can message it, see it and stop it, and the workers you start can message each other (your crew). The folder must already be trusted. With worktree it works on a branch of its own; with role it runs as the agent .claude/agents/<role>.md, on the role’s model unless model is given (opus above a role on sonnet needs why, D-63); model, effort and mode apply before its first instruction. For a crew: the portal tells you in one line when a worker’s turn ends, waits on a person or ends (report), so wait for those, not session_family in a loop. How many, how deep and how often are limited in the portal; max_workers and subagents narrow the worker, never wider than yours. ticket: T-12 or KONF-3.',
     scope: 'agent',
     hints: { openWorld: true },
     rate: { perMinute: 10, perHour: 60 },
@@ -157,7 +164,7 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
       model: z.string().min(1).max(80).optional().describe('Its model (sonnet, opus, haiku or a full id), set before its first instruction. Default: its role’s model, if the persona gives one. Opus or fable for a role on sonnet needs why (D-63).'),
       why: z.string().min(1).max(CHAT_SPAWN_WHY_MAX).optional().describe('D-63: why this worker needs a model above its role’s (e.g. opus for a QA or review role): a gate, release or security check, or a slice too large for sonnet. Kept on the worker; the crew scorecard counts it.'),
       effort: z.string().min(1).max(20).optional().describe('Its effort level (low, medium, high), set before its first instruction.'),
-      mode: z.enum(WORKER_MODES).optional().describe('Its permission mode, never wider than yours (plan < dontAsk < default < acceptEdits < auto). Default: yours (in Bypass it keeps Bypass when the policy allows it; in default it gets dontAsk), else auto. dontAsk runs only what the folder allows and refuses the rest at once; plan changes no file; default asks a person (only when one is there to answer).'),
+      mode: z.enum(WORKER_MODES).optional().describe('Its permission mode: auto whatever your mode while Settings › Sessions › Auto for agents is on; any other, never wider than yours (plan < dontAsk < default < acceptEdits < auto); never bypassPermissions. Default: Bypass when you are in Bypass now and the policy allows it (the portal’s gated inherit), else auto (with Auto for agents off: yours, and dontAsk when you are in default). dontAsk runs only what the folder allows and refuses the rest at once; plan changes no file; default asks a person (only when one is there to answer).'),
       // T-294: the worker's own limits, never wider than yours (absent: yours).
       max_workers: z.number().int().min(0).max(CHAT_MAX_WORKERS_MAX).optional().describe('How many workers it may run at once (0: none), at most your own limit. Default: your limit.'),
       subagents: z.boolean().optional().describe('Whether it may start Claude Code sub-agents (the Agent tool). Default: as you; on only if yours are on.'),
@@ -173,14 +180,16 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
       plainText(args.prompt);
       // T-490 (D-63): its model: the one asked, else its role's (the persona's agent); opus for a role on sonnet with no why is refused here.
       const roleModel = args.role ? (chat.roleModel?.(parent.workspaceId, args.role) ?? null) : null;
-      // PILOT-996 (D-103, supersedes the owner's 2026-10-17 dontAsk default): the mode asked, else the parent's, else Auto; never wider than
-      // the parent's. A parent in Bypass hands it on only through the controller's gated inherit path (the policy, the parent in it now).
-      if (args.mode && !modeWithin(args.mode, parent.mode))
+      // PILOT-996 (D-103, supersedes the owner's 2026-10-17 dontAsk default) and T-2997 (PILOT-1025): the mode asked (Auto whatever the
+      // parent's mode while "Auto for agents" is on; any other never wider than the parent's), else Bypass from a parent in it NOW (its live
+      // mode, never the stored one alone) through the controller's gated inherit path, else Auto (policy off: the parent's, Manual -> dontAsk).
+      const autonomousAuto = chat.autonomousAutoOn();
+      if (args.mode && !workerModeAllowed(args.mode, parent.mode, { autonomousAuto }))
         throw new AppError(
           'FORBIDDEN',
-          `A worker is never wider than its parent: you run in ${parent.mode}, so ${args.mode} is refused. Ask for ${parent.mode} or a narrower mode, or leave mode out to give it yours.`,
+          `A worker is never wider than its parent: you run in ${parent.mode}, so ${args.mode} is refused${args.mode === 'auto' ? ' (“Auto for agents” is off in Settings › Sessions)' : ''}. Ask for ${parent.mode} or a narrower mode, or leave mode out.`,
         );
-      const mode = workerMode(args.mode, parent.mode);
+      const mode = workerMode(args.mode, parent.mode, { parentInBypass: !args.mode && chat.bypassNow(parentId), autonomousAuto });
       const pick = spawnModel(args.role ?? null, roleModel, args.model ?? null, args.why ?? null);
       // T-294: the Claude first (an unknown name, or a Claude billed per use, is refused before anything starts).
       const on = await chat.spawnClaude(parentId, args.claude, pick.model);
@@ -216,7 +225,8 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
       if (args.effort) asks.push(['effort', { effort: args.effort }, `effort ${args.effort}`]);
       const whyOf = (e: unknown) => (e instanceof Error ? e.message.slice(0, 120) : 'refused');
       // Mode first. A narrowing mode asked by name and not confirmed ends the worker before it gets any instruction (fail closed); any other
-      // is said, not fatal. Bypass not kept (the policy, the parent left it) falls back to dontAsk, so the worker never waits on a person.
+      // is said, not fatal. Bypass not kept (the policy, the parent left it) falls back to Auto where the worker may run in it, else dontAsk
+      // (T-2997), so the worker never waits on a person.
       const setMode = async (m: ChatPermissionMode) => {
         try {
           await chat.control(child.id, 'mode', { mode: m }, { actor: ctx.actor });
@@ -232,8 +242,9 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
       const applyMode = async () => {
         if (mode !== 'bypassPermissions') return setMode(mode);
         if (await chat.inheritBypass(child.id).catch(() => false)) return void applied.push('mode bypassPermissions');
-        unconfirmed.push('mode bypassPermissions: not kept, dontAsk instead');
-        return setMode('dontAsk');
+        const instead = chat.bypassNotKeptMode(child.id);
+        unconfirmed.push(`mode bypassPermissions: not kept, ${instead} instead`);
+        return setMode(instead);
       };
       const deliver = async () => {
         await applyMode();

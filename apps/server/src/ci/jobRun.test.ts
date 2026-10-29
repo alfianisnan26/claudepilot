@@ -125,6 +125,7 @@ interface Seed {
   owner?: string;
   program?: string;
   repo?: string;
+  role?: string;
 }
 /** What the fake "kubectl top nodes" prints for the control-plane node (T-611): a memory percentage, a raw text, or "FAIL"; none = the metrics API is missing (exit 1). */
 interface Scenario {
@@ -188,7 +189,10 @@ function scriptWithDropin(dropin: string, pass?: { file: string; uid: number }) 
   const helper = readFileSync(PASSES_HELPER, 'utf8');
   assert.equal(helper.split(PASS_FILE_LINE).length, 2, 'the helper names the passes file on exactly one line');
   assert.equal(helper.split(PASS_UID_LINE).length, 2, 'the helper names the passes owner on exactly one line');
-  writeFileSync(join(dir, 'scripts/approval-passes.sh'), pass ? helper.replace(PASS_FILE_LINE, `passes=${pass.file}\n`).replace(PASS_UID_LINE, `owner=${pass.uid}\n`) : helper);
+  writeFileSync(
+    join(dir, 'scripts/approval-passes.sh'),
+    pass ? helper.replace(PASS_FILE_LINE, `passes=${pass.file}\n`).replace(PASS_UID_LINE, `owner=${pass.uid}\n`) : helper,
+  );
   return join(dir, 'scripts/job-run.sh');
 }
 
@@ -243,6 +247,7 @@ function world(seeds: Seed[] = [], scenario: Scenario = {}) {
       JOB_RUN_POLL_S: '0.1',
       // The queue tests are written for these caps (the script's defaults until T-1624); the defaults themselves have their own test.
       JOB_RUN_MAX: '3',
+      JOB_RUN_MAX_PER_CHAT: '2',
       JOB_RUN_MAX_PER_PROGRAM: '2',
       // The placement tests are written with no node avoided (T-1643 made k3s-master the default; that default has its own test).
       JOB_RUN_AVOID_NODES: '',
@@ -594,14 +599,34 @@ test('T-1982: neither the registry nor the cluster answers: exit 1, no Job; anot
   assert.deepEqual(other.w.applied(), []);
 });
 
-test('T-1624, D-96: with no cap set, the defaults are 12 at once, 2 per chat and 9 per program', async () => {
+test('T-1624, D-96, T-2966: with no cap set, the defaults are 12 at once, 4 per chat and 9 per program', async () => {
   const w = world(Array.from({ length: 12 }, (_, i) => ({ name: `claudepilot-job-${String(i + 1).padStart(8, '0')}`, chat: `chat-${i}` })));
-  const s = w.start(['--repo', 'claudepilot', '--ref', 'main', '--', 'true'], { JOB_RUN_MAX: '', JOB_RUN_MAX_PER_PROGRAM: '' });
-  await waitFor('the queue line', () => /queued behind 12 \(at most 12 at once, 2 per chat, 9 per program\)/.test(s.out()));
+  const s = w.start(['--repo', 'claudepilot', '--ref', 'main', '--', 'true'], {
+    JOB_RUN_MAX: '',
+    JOB_RUN_MAX_PER_CHAT: '',
+    JOB_RUN_MAX_PER_PROGRAM: '',
+  });
+  await waitFor('the queue line', () => /queued behind 12 \(at most 12 at once, 4 per chat, 9 per program\)/.test(s.out()));
   w.edit((st) => {
     Object.assign(st.jobs[0] ?? {}, { done: true, rc: 0 });
   });
   await s.done;
+});
+
+test('T-2966: with the default per-chat cap, one chat (a lead and its Agent lanes) runs a fourth Job; a fifth waits for one to end', async () => {
+  const caps = { JOB_RUN_MAX: '12', JOB_RUN_MAX_PER_CHAT: '', JOB_RUN_MAX_PER_PROGRAM: '9', PILOT_SESSION_ID: 'chat-a' };
+  const w = world([1, 2, 3].map((i) => ({ name: `claudepilot-job-0000000${i}`, chat: 'chat-a' })));
+  const fourth = await w.start(['--repo', 'claudepilot', '--ref', 'main', '--', 'true'], caps).done;
+  assert.equal(fourth.code, 0, fourth.out);
+  assert.doesNotMatch(fourth.out, /queued behind/, 'three running in this chat: the fourth goes');
+  const v = world([1, 2, 3, 4].map((i) => ({ name: `claudepilot-job-0000000${i}`, chat: 'chat-a' })));
+  const fifth = v.start(['--repo', 'claudepilot', '--ref', 'main', '--', 'true'], caps);
+  await waitFor('the fifth queued', () => /queued behind 4 \(at most 12 at once, 4 per chat, 9 per program\)/.test(fifth.out()));
+  v.edit((st) => {
+    Object.assign(st.jobs[0] ?? {}, { done: true, rc: 0 });
+  });
+  const r = await fifth.done;
+  assert.equal(r.code, 0, r.out);
 });
 
 test('the cluster-wide cap: three running Jobs, the fourth says "queued behind 3" and starts when one ends', async () => {
@@ -638,6 +663,61 @@ test('the per-chat cap: a chat with two running waits, another chat goes past it
   });
   const r = await a.done;
   assert.equal(r.code, 0, r.out);
+});
+
+test('T-2967 priority lane: a konfersi-stg-deploy Job is not held by the per-chat or per-program cap (pipeline runs share the chat "manual")', async () => {
+  const w = world([
+    { name: 'claudepilot-job-0000000a', chat: 'manual', program: 'konfersi' },
+    { name: 'claudepilot-job-0000000b', chat: 'manual', program: 'konfersi' },
+  ]);
+  const args = ['--repo', 'konfersi:platform/konfersi-backend', '--ref', 'main', '--role', 'konfersi-stg-deploy', '--', 'true'];
+  const r = await w.start(args, { PILOT_SESSION_ID: '' }).done;
+  assert.equal(r.code, 0, r.out);
+  assert.doesNotMatch(r.out, /queued behind/, 'two of its chat and two of its program run: the deploy still goes');
+  const lane = ['--repo', 'konfersi:platform/konfersi-backend', '--ref', 'main', '--role', 'lane', '--', 'true'];
+  const other = w.start(lane, { PILOT_SESSION_ID: '' });
+  await waitFor('a lane Job of the same chat waits', () =>
+    /queued behind 2 \(at most 3 at once, 2 per chat, 2 per program\)/.test(other.out()),
+  );
+  w.edit((st) => {
+    Object.assign(st.jobs[0] ?? {}, { done: true, rc: 0 });
+  });
+  assert.equal((await other.done).code, 0);
+});
+
+test('T-2967 priority lane: a deploy goes ahead of a lane Job that waited longer, and takes the next free cluster slot', async () => {
+  const w = world([
+    { name: 'claudepilot-job-00000001', chat: 'chat-x' },
+    { name: 'claudepilot-job-00000002', chat: 'chat-y' },
+    { name: 'claudepilot-job-00000003', chat: 'chat-z' },
+    { name: 'claudepilot-job-00000004', chat: 'chat-w', suspend: true },
+  ]);
+  const s = w.start(['--repo', 'claudepilot', '--ref', 'main', '--role', 'konfersi-stg-deploy', '--', 'true']);
+  await waitFor('behind the three running only', () => /queued behind 3 \(/.test(s.out()));
+  w.edit((st) => {
+    Object.assign(st.jobs[0] ?? {}, { done: true, rc: 0 });
+  });
+  const r = await s.done;
+  assert.equal(r.code, 0, r.out);
+  assert.equal(w.state().jobs.find((j) => j.name === 'claudepilot-job-00000004')?.suspend, true, 'the older lane Job still waits');
+});
+
+test('T-2967 priority lane: JOB_RUN_PRIORITY_ROLES is a comma list of labels; empty turns the lane off', async () => {
+  const w = world([
+    { name: 'claudepilot-job-0000000a', chat: 'manual' },
+    { name: 'claudepilot-job-0000000b', chat: 'manual' },
+  ]);
+  assert.equal(w.run(['--list'], { JOB_RUN_PRIORITY_ROLES: 'a b' }).code, 2, 'a space is refused');
+  assert.equal(w.run(['--list'], { JOB_RUN_PRIORITY_ROLES: 'x,,y' }).code, 2, 'an empty item is refused');
+  const s = w.start(['--repo', 'claudepilot', '--ref', 'main', '--role', 'konfersi-stg-deploy', '--', 'true'], {
+    PILOT_SESSION_ID: '',
+    JOB_RUN_PRIORITY_ROLES: '',
+  });
+  await waitFor('off: the per-chat cap holds it', () => /queued behind 2/.test(s.out()));
+  w.edit((st) => {
+    Object.assign(st.jobs[0] ?? {}, { done: true, rc: 0 });
+  });
+  assert.equal((await s.done).code, 0);
 });
 
 test('T-524 the per-program cap: two Konfersi Jobs running (one from before the label, known by its repo), a third waits; ClaudePilot goes past it', async () => {
@@ -1825,7 +1905,10 @@ test('T-2885 a deny-listed --pool-env name files one approval request (name, exa
 
 test('T-2885 review M3: the 4000 cap on a request line counts bytes, not characters (a UTF-8 locale counts characters)', (t) => {
   // The cap only differs from a character count in a UTF-8 locale; without one here the test would prove nothing.
-  const probe = spawnSync('bash', ['-c', 'x=é; printf %s "${#x}"'], { env: { LC_ALL: 'C.UTF-8', PATH: '/usr/bin:/bin' }, encoding: 'utf8' });
+  const probe = spawnSync('bash', ['-c', 'x=é; printf %s "${#x}"'], {
+    env: { LC_ALL: 'C.UTF-8', PATH: '/usr/bin:/bin' },
+    encoding: 'utf8',
+  });
   if (probe.stdout !== '1') return t.skip('no UTF-8 locale here');
   const w = world();
   const box = join(w.root, 'home', '.claudepilot', 'outbox');
@@ -1845,7 +1928,18 @@ test('T-2885 review M1: the portal deny-list copy (approvals/pass.ts) is exactly
   assert.ok(globs.length > 10, `pool_denied parsed: ${body}`);
   assert.deepEqual([...new Set(globs)].sort(), [...JOBRUN_DENIED_GLOBS].sort());
   // The glob reading agrees with bash's own `case` for names on and off the list.
-  const names = ['GITHUB_TOKEN', 'X_RW_Y', 'MY_ADMIN_KEY', 'STG_SEARCH_READ_KEY', 'CLAUDE_X', 'PILOTX', 'NODE_AUTH_TOKEN', 'RW', 'A_PRD', 'PRDX'];
+  const names = [
+    'GITHUB_TOKEN',
+    'X_RW_Y',
+    'MY_ADMIN_KEY',
+    'STG_SEARCH_READ_KEY',
+    'CLAUDE_X',
+    'PILOTX',
+    'NODE_AUTH_TOKEN',
+    'RW',
+    'A_PRD',
+    'PRDX',
+  ];
   for (const n of names) {
     const sh = spawnSync('bash', ['-c', `${/^pool_denied\(\) \{\n[\s\S]*?^\}/m.exec(src)![0]}\npool_denied "$1"`, 'x', n]).status === 0;
     assert.equal(jobRunDenies(n), sh, n);

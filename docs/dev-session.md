@@ -237,9 +237,12 @@ scripts/job-run.sh --repo konfersi:<org>/<repo> --ref <branch> --image registry.
   in a HAR or inside the Playwright HTML report's `index.html` (it can embed the report as a base64 zip). Switch the trace off or leave zips and
   the HTML report out of `--artifacts`; `job-out/` is git-ignored (an `--out` elsewhere is not); (4) the script refuses to run under
   `bash -x` / xtrace, which would print the values.
-- **Caps:** `JOB_RUN_MAX` (3) Jobs at once cluster-wide, `JOB_RUN_MAX_PER_CHAT` (2) per chat (`PILOT_SESSION_ID`) and `JOB_RUN_MAX_PER_PROGRAM`
+- **Caps:** `JOB_RUN_MAX` (3) Jobs at once cluster-wide, `JOB_RUN_MAX_PER_CHAT` (4 since T-2966; was 2) per chat (`PILOT_SESSION_ID`; a lead's Agent sub-agent lanes share its chat) and `JOB_RUN_MAX_PER_PROGRAM`
   (2) per program (claudepilot, event, konfersi; T-524). A Job over a cap is created suspended and waits in creation order ("queued behind K").
   Jobs carry the labels `job-run/chat`, `job-run/role` (`PILOT_AGENT`), `job-run/repo`, `job-run/program`.
+  Priority lane (T-2967): a Job whose `--role` is in `JOB_RUN_PRIORITY_ROLES` (comma list, default `konfersi-stg-deploy`; empty turns it off)
+  goes ahead of every waiting Job and is not held by the per-chat or per-program cap (pipeline runs all share the chat `manual`); the
+  cluster-wide cap still holds.
 - **Placement (T-611):** the scheduler counts memory requests, but the control-plane node's own pods use far more for real. Before it creates a
   Job, `job-run.sh` reads that node's real memory (`kubectl top nodes`). The test is on the node's use PLUS the Job's expected peak (use x pct /
   used gives allocatable, no new verb): `JOB_RUN_EXPECTED_PEAK_MI` (default 2300 Mi, the measured p99 of Job peaks, 2270 Mi in the T-731 note;
