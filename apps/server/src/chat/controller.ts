@@ -767,8 +767,19 @@ export class ChatController {
    * launch that began before the latest change gives up, and stops a process it already started.
    */
   readonly #epochs = new Map<string, number>();
-  /** Sessions with a Bypass entry under way that passed every check: the one thing that may make Claude Code report Bypass. */
-  readonly #bypassGrant = new Set<string>();
+  /**
+   * Sessions with a Bypass entry under way that passed every check, and how many (a wake's `#keepBypass` and an acknowledged `enterBypass`
+   * can overlap). Only the `set_permission_mode` sent while it is held is recorded in {@link #bypassAsked}.
+   */
+  readonly #bypassGrant = new Map<string, number>();
+  /**
+   * T-3018: the ids of the `set_permission_mode {bypassPermissions}` requests sent under a grant: the one thing that may make Claude Code
+   * report Bypass, each for its own reply only. Before, the grant was one flag per session: two gated entries in flight at once (a lead's
+   * wake putting its kept Bypass back while pilot-health restored it through `POST /bypass`) shared it, the first to settle cleared it,
+   * and the second one's own reply ended the lead "Claude Code switched to Bypass permissions". Dropped when the reply is read, the
+   * request times out or fails, or its process is forgotten.
+   */
+  readonly #bypassAsked = new Set<string>();
   /** Chats moving to another Claude right now (a second move, a message, a control or an end is refused meanwhile), and how far along. */
   readonly #moving = new Map<string, { toClaude: string; step: 'handoff' | 'starting' | 'finishing' }>();
   /** How many tasks each session had running when tabs last heard of it: a change is news (its count, and whether it reads working). */
@@ -3539,7 +3550,7 @@ export class ChatController {
     if (this.reauth?.fresh(req.sessionToken) !== true)
       refuse('no_reauth', new AppError(REAUTH_REQUIRED, 'Enter the server code again to turn this on.', { status: 403 }));
     await this.#live(sessionId, true, true, req.actor); // resumes it when it slept (T-723: a refusal for memory names who asked); the policy and the flag are checked again at that launch
-    this.#bypassGrant.add(sessionId);
+    this.#holdGrant(sessionId);
     try {
       const reply = await this.#request(sessionId, 'set_permission_mode', { mode: 'bypassPermissions' });
       const applied = typeof reply.mode === 'string' && reply.mode ? reply.mode : 'bypassPermissions';
@@ -3550,7 +3561,7 @@ export class ChatController {
       if (isAppError(e)) throw e;
       throw new AppError('SERVICE_UNAVAILABLE', `Couldn’t turn Bypass on: ${this.#message(e)}`, { expose: true, cause: e });
     } finally {
-      this.#bypassGrant.delete(sessionId);
+      this.#releaseGrant(sessionId);
     }
     const row = this.#chat.row(sessionId)!;
     this.#chat.patchSession(sessionId, { mode: 'bypassPermissions' });
@@ -4335,14 +4346,26 @@ export class ChatController {
     await this.#live(sessionId, true, true, 'portal'); // T-723: the portal restores Bypass itself (#keepBypass), so `portal` is the true actor here; a process stopped for the retry comes back with the flag (capable, and the policy allows it)
     if (this.#chat.row(sessionId)?.bypass_capable !== 1)
       throw new AppError(BYPASS_NOT_CAPABLE, 'This session wasn’t started to allow Bypass.', { status: 409 });
-    this.#bypassGrant.add(sessionId);
+    this.#holdGrant(sessionId);
     try {
       const reply = await this.#request(sessionId, 'set_permission_mode', { mode: 'bypassPermissions' });
       const applied = typeof reply.mode === 'string' && reply.mode ? reply.mode : 'bypassPermissions';
       if (applied !== 'bypassPermissions') throw new AppError('CONFLICT', 'Claude Code didn’t switch to Bypass.');
     } finally {
-      this.#bypassGrant.delete(sessionId);
+      this.#releaseGrant(sessionId);
     }
+  }
+
+  /** T-3018: one more gated Bypass entry under way for this session (each holder passed every gate itself). */
+  #holdGrant(sessionId: string): void {
+    this.#bypassGrant.set(sessionId, (this.#bypassGrant.get(sessionId) ?? 0) + 1);
+  }
+
+  /** T-3018: that entry settled; the grant stays while another one is still under way. */
+  #releaseGrant(sessionId: string): void {
+    const left = (this.#bypassGrant.get(sessionId) ?? 0) - 1;
+    if (left > 0) this.#bypassGrant.set(sessionId, left);
+    else this.#bypassGrant.delete(sessionId);
   }
 
   /**
@@ -6721,9 +6744,11 @@ export class ChatController {
       if (track?.bypassPending === id) track.bypassPending = null;
       // `set_permission_mode`'s reply confirms the mode, before the status line that reports it.
       const mode = reply.ok ? reply.response.mode : undefined;
+      // T-3018: the grant was for this one request; read once.
+      const granted = this.#bypassAsked.delete(id);
       if (typeof mode === 'string' && mode) {
         // Bypass is accepted only as the answer to an entry the portal made after every check (a grant held for that one request).
-        if (mode === 'bypassPermissions' && !this.#bypassGrant.has(sessionId)) {
+        if (mode === 'bypassPermissions' && !granted) {
           // That request, sent under the grant by the portal before it restarted: not an intrusion, and not an entry either (fail closed).
           if (unfinished && track) {
             this.#bypassUnfinished(sessionId, track, 'reply');
@@ -7381,7 +7406,9 @@ export class ChatController {
       this.#pending.set(requestId, { sessionId, resolve, reject, timer });
       // The one request that enters Bypass, sent under the grant (every gate passed): its id is stored, so a portal that restarts before
       // its reply is read knows the reply is its own (T-277 layer 2, INTEGRITY_CASES `control-bypass-unfinished`). Grants nothing by itself.
+      // T-3018: in this portal life, its reply (and only its reply) may report Bypass (`#bypassAsked`).
       if (subtype === 'set_permission_mode' && fields.mode === 'bypassPermissions' && this.#bypassGrant.has(sessionId)) {
+        this.#bypassAsked.add(requestId);
         this.#mode(sessionId).bypassPending = requestId;
         this.#saveControl(sessionId);
       }
@@ -7400,6 +7427,7 @@ export class ChatController {
    * portal that restarts later never takes a late reply to it as its own unfinished entry (T-277 layer 2 review note).
    */
   #bypassRequestOver(sessionId: string, requestId: string): void {
+    this.#bypassAsked.delete(requestId); // T-3018: a late reply to it is no entry (it still ends the session, as before)
     const m = this.#modes.get(sessionId);
     if (m?.bypassPending !== requestId) return;
     m.bypassPending = null;
@@ -7559,6 +7587,7 @@ export class ChatController {
     for (const [id, pending] of this.#pending) {
       if (pending.sessionId !== sessionId) continue;
       this.#pending.delete(id);
+      this.#bypassAsked.delete(id); // T-3018: that process is gone; no reply of it grants anything now
       clearTimeout(pending.timer);
       pending.reject(new AppError('CONFLICT', why));
     }
