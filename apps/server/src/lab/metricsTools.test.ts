@@ -19,6 +19,9 @@ import { Lab } from './index.js';
 import { Metrics } from './metricsService.js';
 import { writeSnapshots } from './metricsSnapshots.js';
 import { fitRows, hours, metricsReach, registerMetricsTools, TICKETS_DEFAULT } from './metricsTools.js';
+import { setTicketKeyLookup } from '../tickets/keys.js';
+import { Tickets } from '../tickets/service.js';
+import { FakeSessions } from '../tickets/testkit.js';
 
 const H = 3_600_000;
 const NOW = Date.UTC(2026, 9, 14, 12);
@@ -27,7 +30,10 @@ const at = (hoursAgo: number) => NOW - hoursAgo * H;
 const SHA = 'cd34'.repeat(10);
 const TOOLS = ['metrics_overview', 'metrics_flow_times', 'metrics_trend', 'metrics_insights', 'metrics_tickets'];
 
-afterEach(() => clearResolvers());
+afterEach(() => {
+  clearResolvers();
+  setTicketKeyLookup(null);
+});
 
 /** The golden fixture of metricsRoutes.test.ts (T-1's full journey, won't-do, blocked, in review, stalled), plus a lead L1 and its worker W1. */
 async function seeded(metricsMemoMs = 0) {
@@ -108,6 +114,9 @@ async function harness(metricsMemoMs = 0) {
   const registry = new ToolRegistry();
   const mcp = await portalMcpHarness({ registry });
   registerMetricsTools(h.lab, registry);
+  // T-3070: the ticket lookup the portal installs at boot (tickets/routes.ts); without it a row shows no ticket's fields (fail closed).
+  const tickets = new Tickets(h.store, new FakeSessions());
+  setTicketKeyLookup((id, actor) => tickets.keyOf({ kind: 'ui', actor }, id));
   return { h, mcp, registry, done: () => (mcp.done(), h.done()) };
 }
 

@@ -17,7 +17,7 @@ import { PortalToolError, portalTools, z, type PortalToolContext, type ToolRegis
 import { declareLabPolicies } from './authz.js';
 import type { Lab } from './index.js';
 import { parseSince } from './routes.js';
-import { ticketKeyField } from '../tickets/keys.js';
+import { ticketKeyField, ticketVisibleTo } from '../tickets/keys.js';
 import { actorOfPrincipal } from '../authz/seam.js';
 
 declareLabPolicies();
@@ -170,17 +170,19 @@ export function registerLabTools(lab: Lab, registry: ToolRegistry = portalTools)
       }
       const own = ctx.isAgent ? ctx.sessionId : null;
       if (ctx.isAgent && !own) throw new PortalToolError('FORBIDDEN', 'This token is not bound to a session.');
-      const s = lab.summary({ ...(args.period ? { period: args.period } : {}), ...(sinceMs !== undefined ? { sinceMs } : {}), ...(own ? { sessionId: own } : {}) });
+      // T-3070: a ticket the caller may not see (another person's bucket) reads like one that does not exist: no key, type, status or done time.
+      const actor = actorOfPrincipal(ctx.principal);
+      const s = lab.summary({ ...(args.period ? { period: args.period } : {}), ...(sinceMs !== undefined ? { sinceMs } : {}), ...(own ? { sessionId: own } : {}), ticketVisible: (id) => ticketVisibleTo(id, actor) });
       const n = s.rows.reduce((t, r) => t + r.n, 0);
       const summary = `${n} slice${n === 1 ? '' : 's'} in ${s.rows.length} row${s.rows.length === 1 ? '' : 's'} since ${new Date(s.sinceMs).toISOString().slice(0, 10)}${own ? ' (this session only)' : ''}. Dollars are estimates.`;
-      if (!args.full) return { summary, scope: own ? 'session' : 'portal', period: s.period, rows: s.rows.map(compactRow), tickets: ticketsShort(actorOfPrincipal(ctx.principal), s.tickets), more: 'full: true for p90s, outcomes, Bash classes, experiments and sources.' };
+      if (!args.full) return { summary, scope: own ? 'session' : 'portal', period: s.period, rows: s.rows.map(compactRow), tickets: ticketsShort(actor, s.tickets), more: 'full: true for p90s, outcomes, Bash classes, experiments and sources.' };
       return {
         summary,
         scope: own ? 'session' : 'portal',
         period: s.period,
         since_ms: s.sinceMs,
         rows: s.rows,
-        tickets: ticketsShort(actorOfPrincipal(ctx.principal), s.tickets, 25),
+        tickets: ticketsShort(actor, s.tickets, 25),
         tickets_basis: ATTRIBUTION_LEAD_BASIS,
         ...(own ? {} : { experiments: lab.experimentViews().map((v) => experimentRow(v, ctx, lab)) }),
         basis: s.basis,

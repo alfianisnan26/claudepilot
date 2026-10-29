@@ -23,7 +23,7 @@ import { fullInput } from '../portalmcp/compact.js';
 import { portalTools, PortalToolError, z, type PortalToolContext, type ToolRegistry } from '../portalmcp/registry.js';
 import { OWNER_ACTOR, type Who } from './actor.js';
 import type { UsageSpend } from './service.js';
-import { ticketKeyField, ticketKeyOf } from '../tickets/keys.js';
+import { ticketKeyField, ticketKeyOf, ticketVisibleTo } from '../tickets/keys.js';
 import { actorOfPrincipal } from '../authz/seam.js';
 
 /** T-1993: a ticket's bucket key as the caller may see it (none for a bucket it may not view). */
@@ -253,7 +253,7 @@ export function registerUsageSpendTools(spend: UsageSpend, registry: ToolRegistr
       const r = spend.attribution(
         { by: args.by, range: args.range, claudeId: args.claude_id, workspaceId: args.workspace_id, limit: args.limit, ...(args.done ? { done: true } : {}), ...(root ? { sessionId: root } : {}) },
         undefined,
-        { ticketVisible: (id) => ticketKeyOf(id, actor) !== null },
+        { ticketVisible: (id) => ticketVisibleTo(id, actor) },
       );
       return {
         summary: `${r.rows.length} rows by ${r.by} over ${r.range}: ${money(r.totals.costUsd)} (estimated) in ${r.totals.requests} requests${r.coverage.basis === 'unavailable' ? '' : `, ${r.coverage.value}% of the dollars attributed`}.`,

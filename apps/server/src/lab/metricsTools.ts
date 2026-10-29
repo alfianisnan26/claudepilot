@@ -33,7 +33,7 @@ import { actorOfPrincipal, can } from '../authz/seam.js';
 import { fullInput } from '../portalmcp/compact.js';
 import { PAGE_DEFAULT, PAGE_MAX, pageInput, pageWindow } from '../portalmcp/paging.js';
 import { PortalToolError, portalTools, z, type PortalToolContext, type ToolRegistry } from '../portalmcp/registry.js';
-import { ticketKeyField } from '../tickets/keys.js';
+import { ticketKeyField, ticketVisibleTo } from '../tickets/keys.js';
 import type { Lab } from './index.js';
 import type { MetricsScope } from './metricsService.js';
 import { FULL_BUDGET_CHARS, withoutSources } from './portalTools.js';
@@ -138,19 +138,39 @@ const groupShort = (g: MetricsFlowGroup) => ({
   resolve_p90_h: hours(stageRow(g.current, 'resolve').p90Ms),
 });
 
-/** A drill-down row: ids, type, priority, status, close time, lead, the stage hours (null: left out), rounds and fails. */
-const ticketShort = (actor: Actor) => (r: MetricsTicketRow) => ({
-  ticket: r.ticket,
-  ...ticketKeyField(r.ticket, actor),
-  type: r.type,
-  priority: r.priority,
-  status: r.status,
-  closed: iso(r.closedAtMs),
-  lead: r.lead,
-  h: Object.fromEntries(METRICS_STAGES.map((st) => [st, hours(r.stages[st])])),
-  rounds: r.rounds,
-  fails: r.fails,
+/**
+ * T-3070: the row of a ticket the caller may not see (another person's bucket): every field null, its id too, so it says nothing of that ticket
+ * (its id in a list filtered by stage, type, priority or lead would tell those). It keeps its place, so `total` and the cursor stay true; the
+ * counts are the same aggregate the flow figures already give.
+ */
+export const HIDDEN_TICKET_ROW = Object.freeze({
+  ticket: null,
+  type: null,
+  priority: null,
+  status: null,
+  closed: null,
+  lead: null,
+  h: null,
+  rounds: null,
+  fails: null,
 });
+
+/** A drill-down row: ids, type, priority, status, close time, lead, the stage hours (null: left out), rounds and fails. */
+const ticketShort = (actor: Actor) => (r: MetricsTicketRow) => {
+  if (!ticketVisibleTo(r.ticket, actor)) return { ...HIDDEN_TICKET_ROW };
+  return {
+    ticket: r.ticket,
+    ...ticketKeyField(r.ticket, actor),
+    type: r.type,
+    priority: r.priority,
+    status: r.status,
+    closed: iso(r.closedAtMs),
+    lead: r.lead,
+    h: Object.fromEntries(METRICS_STAGES.map((st) => [st, hours(r.stages[st])])),
+    rounds: r.rounds,
+    fails: r.fails,
+  };
+};
 
 /** Removes every `title` (a session's title is an agent's text) from a copy. */
 function withoutTitles<T>(x: T): T {
@@ -374,7 +394,7 @@ export function registerMetricsTools(lab: Lab, registry: ToolRegistry = portalTo
   registry.register({
     name: 'metrics_tickets',
     title: 'Tickets behind a metric',
-    description: `The tickets behind a flow number: those closed done or won't-do in the last 24h or 7d, newest close first, optionally only those with a stage recorded and in one group (group_by and group, as in metrics_flow_times). Each: ticket and ticket_key, type, priority, status, closed, lead, hours per stage (null: left out), rounds, fails. Paged: ${TICKETS_DEFAULT} rows a page by default, limit up to ${TICKETS_MAX}, the next page with cursor (next_cursor; null on the last). ${reachNote}`,
+    description: `The tickets behind a flow number: those closed done or won't-do in the last 24h or 7d, newest close first, optionally only those with a stage recorded and in one group (group_by and group, as in metrics_flow_times). Each: ticket and ticket_key, type, priority, status, closed, lead, hours per stage (null: left out), rounds, fails; a ticket you may not view: every field null. Paged: ${TICKETS_DEFAULT} rows a page by default, limit up to ${TICKETS_MAX}, the next page with cursor (next_cursor; null on the last). ${reachNote}`,
     scope: 'agent',
     hints: { readOnly: true, idempotent: true },
     input: z.object({

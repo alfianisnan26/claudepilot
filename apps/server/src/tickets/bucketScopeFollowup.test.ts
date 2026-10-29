@@ -2,6 +2,7 @@
 // (1) The HTTP sessions list and one session carry `ticketKey` asked with the CALLER's actor, not the portal's; (2) usage by-ticket rows show
 // none of a hidden ticket's fields (type, status, done time; nor in done-only or done-by-type), exactly like a ticket that does not exist;
 // (3) `ownersOf` fails closed for the bucket type without its resolver, like `can()`: nobody, never the founding user.
+// T-3070: (4) lab_summary's ticket rows and (5) metrics_tickets' rows show none of a hidden ticket's fields either.
 import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
 import { Hono } from 'hono';
@@ -10,6 +11,9 @@ import { FOUNDING_USER_ID, platformRef, ticketBucketRef, type Actor } from '@por
 import { clearResolvers, ownersOf } from '../authz/seam.js';
 import { createChatRoutes } from '../chat/routes.js';
 import { liveSession } from '../chat/testkit.js';
+import { Lab } from '../lab/index.js';
+import { HIDDEN_TICKET_ROW, registerMetricsTools } from '../lab/metricsTools.js';
+import { registerLabTools } from '../lab/portalTools.js';
 import { portalMcpHarness } from '../portalmcp/testkit.js';
 import { ToolRegistry } from '../portalmcp/registry.js';
 import { registerUsageSpendTools } from '../usagespend/portalTools.js';
@@ -117,6 +121,75 @@ test('(2) usage_attribution by ticket: a hidden ticket shows no type, status or 
   } finally {
     h.done();
     mcp.done();
+  }
+});
+
+/** T-3070: a spend store with Alice's PRIV bucket, the owner's ticket (bug) and Alice's (feature), both closed done an hour ago, the lookup installed. */
+async function labSetup() {
+  const registry = new ToolRegistry();
+  const mcp = await portalMcpHarness({ registry });
+  const h = await spendHarness();
+  const lab = new Lab({ store: h.store, now: () => NOW, settings: { get: () => undefined } });
+  const tickets = new Tickets(h.store, new FakeSessions());
+  registerLabTools(lab, registry);
+  registerMetricsTools(lab, registry);
+  tickets.createBucket(UI, { key: 'PRIV', name: 'Private' }, { ownerId: 'u_alice' });
+  const mine = tickets.create(UI, { summary: 'mine', bucket: 'CP', type: 'bug' });
+  const theirs = tickets.create(UI, { summary: 'hers', bucket: 'PRIV', type: 'feature' });
+  const closed = new Date(NOW - HOUR).toISOString();
+  for (const id of [mine.id, theirs.id]) h.db.prepare("UPDATE tickets SET status = 'done', closed_at = ? WHERE number = ?").run(closed, Number(id.slice(2)));
+  installLookup(tickets);
+  return { mcp, h, lab, mine, theirs, t: mcp.token('read'), done: () => (lab.close(), h.done(), mcp.done()) };
+}
+
+test('(4, T-3070) lab_summary tickets: a hidden ticket shows no key, type, status or done time, exactly like a ticket that does not exist', async () => {
+  const s = await labSetup();
+  try {
+    s.h.seed.session('A', { ticketId: s.mine.id });
+    s.h.seed.session('B', { ticketId: s.theirs.id });
+    s.h.seed.session('C', { ticketId: 'T-404' }); // a ticket that does not exist
+    for (const id of ['A', 'B', 'C']) s.h.seed.usage({ atMs: NOW - 2 * HOUR, session: id, costUsd: 1 });
+    for (const full of [false, true]) {
+      const res = (await s.mcp.call(s.t.secret, 'lab_summary', { full })).result!.structuredContent as any;
+      const row = (k: string) => res.tickets.find((x: any) => x.ticket === k);
+      // Allowed: the owner's ticket with its key, type, status and done time.
+      assert.deepEqual([row(s.mine.id).ticket_key, row(s.mine.id).type, row(s.mine.id).status, !!row(s.mine.id).done_at], ['CP-1', 'bug', 'done', true], `full ${full}`);
+      // Denied: Alice's ticket shows none of its fields.
+      assert.deepEqual([row(s.theirs.id).type, row(s.theirs.id).status, row(s.theirs.id).done_at, 'ticket_key' in row(s.theirs.id)], [null, null, null, false], `full ${full}`);
+      // Same shape: its row is the missing ticket's row but for the id (its dollars stay, as a missing ticket's do).
+      assert.deepEqual({ ...row(s.theirs.id), ticket: '?' }, { ...row('T-404'), ticket: '?' }, `full ${full}`);
+      assert.ok(!JSON.stringify(res).includes('feature') && !JSON.stringify(res).includes('PRIV'), `full ${full}: nothing of the hidden ticket`);
+    }
+    // The lab's own read (no caller: the owner's screen) is unchanged.
+    assert.equal(s.lab.summary().tickets!.find((x) => x.ticket === s.theirs.id)!.type, 'feature');
+  } finally {
+    s.done();
+  }
+});
+
+test('(5, T-3070) metrics_tickets: a hidden ticket’s row has every field null, its id too, in place; a filter by its type names nothing', async () => {
+  const s = await labSetup();
+  try {
+    const res = (await s.mcp.call(s.t.secret, 'metrics_tickets', { window: '24h' })).result!.structuredContent as any;
+    assert.equal(res.total, 2);
+    const visible = res.rows.find((r: any) => r.ticket === s.mine.id);
+    // Allowed: the owner's ticket with its key and fields.
+    assert.deepEqual([visible.ticket_key, visible.type, visible.status, typeof visible.closed], ['CP-1', 'bug', 'done', 'string']);
+    // Denied: Alice's row is there (the count is the flow figure's) but says nothing: not its id, type, status, close time or hours.
+    const hidden = res.rows.filter((r: any) => r !== visible);
+    assert.deepEqual(hidden, [HIDDEN_TICKET_ROW]);
+    // Same shape: the fields of a visible row (but the key, which a hidden ticket never has), each null.
+    const { ticket_key: _k, ...fields } = visible;
+    assert.deepEqual(Object.keys(hidden[0]).sort(), Object.keys(fields).sort());
+    assert.ok(Object.values(hidden[0]).every((v) => v === null));
+    assert.ok(!JSON.stringify(res).includes(s.theirs.id) && !JSON.stringify(res).includes('PRIV'), 'nothing names the hidden ticket');
+    // A filter by the hidden ticket's type does not name it either (its id there would tell its type).
+    const byType = (await s.mcp.call(s.t.secret, 'metrics_tickets', { window: '24h', group_by: 'type', group: 'feature' })).result!.structuredContent as any;
+    assert.deepEqual(byType.rows, [HIDDEN_TICKET_ROW]);
+    // The lab's own rows (the owner's screen) are unchanged.
+    assert.equal(s.lab.metrics.tickets('all', '24h', {})!.rows.find((r) => r.ticket === s.theirs.id)!.type, 'feature');
+  } finally {
+    s.done();
   }
 });
 
