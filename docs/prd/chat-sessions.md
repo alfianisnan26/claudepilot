@@ -674,6 +674,13 @@ unread, the context file and the opening say older messages were left out. `sess
 (the approvals dock's own source), so a request older than the newest 2,000 events is still listed. A turn the portal waits on (the
 handoff, the new Claude's acknowledgement) is read forward a page at a time.
 
+**Children without the portal's heap cap (T-2615, 2026-10-29).** The portal's container caps its own V8 heap (`NODE_OPTIONS=--max-old-space-size=1536`,
+`deploy/k3s/portal.yaml`, inside a 2 GiB limit). A process the portal starts would inherit that flag and could grow its own heap as large in
+the same memory cgroup. So every command, delivery script and terminal of This machine (`workspaces/local.ts`, the only runtime whose
+processes the portal's own process starts) gets the portal's environment through `childEnv()` (`apps/server/src/childEnv.ts`): the
+heap-size flag is dropped (either spelling), every other NODE_OPTIONS flag stays, and NODE_OPTIONS is removed when nothing else is left.
+A Kubernetes, Docker or Connect workspace runs in its own container or host and never had the portal's environment.
+
 **History pages in the web (T-376, web slice, as built 2026-10-15).** Opening a session reads the newest page only (`?limit=200`; tried at 80 in T-376 S4 and reverted: a shorter page does not fill the screen, so older pages load by themselves during the open and add long tasks) and
 shows it at the bottom, rendered in a React transition (the page's rows commit in slices the browser can interrupt; older pages too), with the
 entry script split into `react`, `motion` and `router-icons` chunks so no single script is one long task. Measured on the built app with
