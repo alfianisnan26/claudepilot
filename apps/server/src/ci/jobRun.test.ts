@@ -189,7 +189,10 @@ function scriptWithDropin(dropin: string, pass?: { file: string; uid: number }) 
   const helper = readFileSync(PASSES_HELPER, 'utf8');
   assert.equal(helper.split(PASS_FILE_LINE).length, 2, 'the helper names the passes file on exactly one line');
   assert.equal(helper.split(PASS_UID_LINE).length, 2, 'the helper names the passes owner on exactly one line');
-  writeFileSync(join(dir, 'scripts/approval-passes.sh'), pass ? helper.replace(PASS_FILE_LINE, `passes=${pass.file}\n`).replace(PASS_UID_LINE, `owner=${pass.uid}\n`) : helper);
+  writeFileSync(
+    join(dir, 'scripts/approval-passes.sh'),
+    pass ? helper.replace(PASS_FILE_LINE, `passes=${pass.file}\n`).replace(PASS_UID_LINE, `owner=${pass.uid}\n`) : helper,
+  );
   return join(dir, 'scripts/job-run.sh');
 }
 
@@ -673,7 +676,9 @@ test('T-2967 priority lane: a konfersi-stg-deploy Job is not held by the per-cha
   assert.doesNotMatch(r.out, /queued behind/, 'two of its chat and two of its program run: the deploy still goes');
   const lane = ['--repo', 'konfersi:platform/konfersi-backend', '--ref', 'main', '--role', 'lane', '--', 'true'];
   const other = w.start(lane, { PILOT_SESSION_ID: '' });
-  await waitFor('a lane Job of the same chat waits', () => /queued behind 2 \(at most 3 at once, 2 per chat, 2 per program\)/.test(other.out()));
+  await waitFor('a lane Job of the same chat waits', () =>
+    /queued behind 2 \(at most 3 at once, 2 per chat, 2 per program\)/.test(other.out()),
+  );
   w.edit((st) => {
     Object.assign(st.jobs[0] ?? {}, { done: true, rc: 0 });
   });
@@ -1900,7 +1905,10 @@ test('T-2885 a deny-listed --pool-env name files one approval request (name, exa
 
 test('T-2885 review M3: the 4000 cap on a request line counts bytes, not characters (a UTF-8 locale counts characters)', (t) => {
   // The cap only differs from a character count in a UTF-8 locale; without one here the test would prove nothing.
-  const probe = spawnSync('bash', ['-c', 'x=é; printf %s "${#x}"'], { env: { LC_ALL: 'C.UTF-8', PATH: '/usr/bin:/bin' }, encoding: 'utf8' });
+  const probe = spawnSync('bash', ['-c', 'x=é; printf %s "${#x}"'], {
+    env: { LC_ALL: 'C.UTF-8', PATH: '/usr/bin:/bin' },
+    encoding: 'utf8',
+  });
   if (probe.stdout !== '1') return t.skip('no UTF-8 locale here');
   const w = world();
   const box = join(w.root, 'home', '.claudepilot', 'outbox');
@@ -1920,7 +1928,18 @@ test('T-2885 review M1: the portal deny-list copy (approvals/pass.ts) is exactly
   assert.ok(globs.length > 10, `pool_denied parsed: ${body}`);
   assert.deepEqual([...new Set(globs)].sort(), [...JOBRUN_DENIED_GLOBS].sort());
   // The glob reading agrees with bash's own `case` for names on and off the list.
-  const names = ['GITHUB_TOKEN', 'X_RW_Y', 'MY_ADMIN_KEY', 'STG_SEARCH_READ_KEY', 'CLAUDE_X', 'PILOTX', 'NODE_AUTH_TOKEN', 'RW', 'A_PRD', 'PRDX'];
+  const names = [
+    'GITHUB_TOKEN',
+    'X_RW_Y',
+    'MY_ADMIN_KEY',
+    'STG_SEARCH_READ_KEY',
+    'CLAUDE_X',
+    'PILOTX',
+    'NODE_AUTH_TOKEN',
+    'RW',
+    'A_PRD',
+    'PRDX',
+  ];
   for (const n of names) {
     const sh = spawnSync('bash', ['-c', `${/^pool_denied\(\) \{\n[\s\S]*?^\}/m.exec(src)![0]}\npool_denied "$1"`, 'x', n]).status === 0;
     assert.equal(jobRunDenies(n), sh, n);
