@@ -13,7 +13,7 @@
 //                    an open PR is judged on its live head and is a conflict when the forge cannot merge it
 //                                                                                        D-102: or the implementer's self-test line on the head
 //                                                                                        (a comment, `Self-test: <run> on <sha> pass <N>`), with a
-//                                                                                        review PASS too when HIGH (tag `risk:high`, or reviewed);
+//                                                                                        review PASS too when HIGH (tag `risk-high`, or reviewed);
 //                                                                                        a NORMAL self-test row goes to its unit lead (D-99)
 //   qa      in review, no verdict on the head, nobody on it for `flow.qaAfterMin`   -> a peer lead, round robin, never the author's: QA-ASK
 //                                                                                        as one batch (D-93, T-1987): at most 8 per peer per
@@ -175,8 +175,12 @@ export function headOf(verdicts: readonly StoredVerdict[], checks: readonly Tick
   return verdicts.find((v) => v.commit.startsWith(b.sha))?.commit ?? b.sha;
 }
 
-/** D-102: the tag of a HIGH ticket (security, permissions, money, migrations, infra): self-test plus one blind review by another unit. */
-export const RISK_HIGH_TAG = 'risk:high';
+/**
+ * D-102: the tags of a HIGH ticket (security, permissions, money, migrations, infra): self-test plus one blind review by another unit.
+ * T-2250: the tag rule refuses a colon, so tickets carry `risk-high` (or `risk_high`); `risk:high` is still read for any older row.
+ */
+export const RISK_HIGH_TAGS: readonly string[] = ['risk-high', 'risk_high', 'risk:high'];
+export const isHighRisk = (tags: readonly string[]): boolean => tags.some((t) => RISK_HIGH_TAGS.includes(t.toLowerCase()));
 /** D-102: the implementer's self-test line, the merge gate's own form: `Self-test: <job | command> on <sha> pass <N>[ stg same failures: <ids>]`. */
 const SELF_TEST = /^Self-test: \S.*? on ([0-9a-f]{12,40}) pass [1-9][0-9]*(?: stg same failures: .*\S.*)?$/;
 const sameCommit = (a: string, b: string) => a.length >= 12 && b.length >= 12 && (a.startsWith(b) || b.startsWith(a));
@@ -364,7 +368,7 @@ export class FlowEngine {
       // D-102: the implementer's self-test on the head is a merge basis of its own; a HIGH ticket (tagged, or reviewed at all) needs a
       // review PASS on that head as well, asked of another unit's lead below. QA only runs regression then: it is never asked per ticket.
       const selfTest = head ? this.#selfTest(x.id, head) : null;
-      const high = x.tags.includes(RISK_HIGH_TAG) || verdicts.some((v) => v.role === 'review');
+      const high = isHighRisk(x.tags) || verdicts.some((v) => v.role === 'review');
       const review = head && high ? evaluateVerdicts(verdicts, head, ['review']) : null;
       if (ev?.pass && head) {
         const passAt = passAtOf(need);

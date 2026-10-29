@@ -144,7 +144,9 @@ After every round the watchdog publishes the live topic `keepgoing` (the same wa
 
 - **Self-tested merges.** A ticket in review has a merge basis when the implementer's comment carries the merge gate's line
   `Self-test: <job | command> on <sha> pass <N>[ stg same failures: <ids>]` on the head (the recorded PR head, else the newest commit seen).
-  A HIGH ticket (tag `risk:high`, or any review verdict on it) needs a review PASS on that head as well. A QA PASS stays a basis on its own.
+  A HIGH ticket (tag `risk-high`, or any review verdict on it) needs a review PASS on that head as well. A QA PASS stays a basis on its own.
+  T-2250: the tag rule refuses a colon, so `risk:high` cannot be stored; the watchdog reads `risk-high`, `risk_high` and (for an older row)
+  `risk:high`, in any case.
   A NORMAL self-test row goes to its own unit lead (D-99); QA-passed and HIGH rows to the merge gate. A self-tested ticket is never asked of QA.
 - **REVIEW-ASK.** A HIGH ticket self-tested on the head with no review verdict for `flow.mergeAfterMin`, and nobody working on it, is asked of
   a peer lead (round robin, never the author's lineage), in the same message as that peer's QA-ASK batch. A review FAIL goes back to the author, not asked again.

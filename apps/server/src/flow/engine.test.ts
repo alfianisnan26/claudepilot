@@ -813,6 +813,23 @@ test('D-102: a HIGH ticket self-tested needs a blind review PASS; until then a p
   assert.equal(m.id, LEAD_A, 'HIGH rows go to the merge gate');
 });
 
+test('T-2250: a ticket tagged risk-high (the tag rule refuses risk:high) with only a self-test gets a REVIEW-ASK, never a merge nudge', async () => {
+  for (const tag of ['risk-high', 'risk_high', 'Risk-High']) {
+    const r = rig();
+    crew(r);
+    r.tickets.add(71, { holder: 'wb', tags: ['konfersi-migration', tag, 'security'] });
+    r.tickets.merged('T-71', { repo: 'konfersi/api', pr: 13, prHead: sha('a'), state: 'ready', reason: null });
+    r.tickets.comment('T-71', `Self-test: claudepilot-job-7b on ${sha('a')} pass 12`, 40);
+    await r.engine.round();
+    assert.equal(r.engine.snapshot().programs[0]!.counts.merge, 0, `${tag}: a self-test alone is no merge basis for HIGH`);
+    assert.equal(r.chat.sent.filter((x) => /merge basis/.test(x.text)).length, 0, `${tag}: no merge nudge`);
+    const ask = r.chat.sent.find((x) => x.text.includes('REVIEW-ASK'));
+    assert.ok(ask, `${tag}: a peer is asked to review`);
+    assert.notEqual(ask.id, LEAD_B);
+    assert.match(ask.text, /- T-71 \(KONF-71\) head/);
+  }
+});
+
 test('D-102: a HIGH ticket whose review failed, or whose author still works on it, is not asked again', async () => {
   for (const setup of [
     (r: ReturnType<typeof rig>) => r.tickets.verdict('T-70', { role: 'review', verdict: 'fail', commit: sha('a'), at: ago(r, 25) }),
