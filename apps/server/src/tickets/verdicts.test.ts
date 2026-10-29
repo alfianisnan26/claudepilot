@@ -514,9 +514,10 @@ test('T-1854 (1): a past holder anywhere on the lead’s line counts: the contin
   try {
     const s = h.sessions;
     // L1 held the ticket and was continued as L2 (which never held it); L2 started the builder and the ticket went to it.
-    s.add({ id: 'L1', workspaceId: WS, agent: null, state: 'ended' });
+    s.add({ id: 'L1', workspaceId: WS, agent: null });
     const t = h.tickets.create(UI, { summary: 'continued lead hands over', workspaceId: WS });
     h.tickets.update(UI, t.id, { assignee: { kind: 'session', sessionId: 'L1' }, status: 'in_progress' });
+    s.sessions.get('L1')!.state = 'ended';
     s.add({ id: 'L2', workspaceId: WS, agent: null, continuedFrom: 'L1' });
     s.add({ id: 'W', workspaceId: WS, agent: 'implementer', parentId: 'L2', ticketId: t.id });
     h.tickets.update(UI, t.id, { assignee: { kind: 'session', sessionId: 'W' } });
@@ -527,8 +528,9 @@ test('T-1854 (1): a past holder anywhere on the lead’s line counts: the contin
 
     // The same shape, but L1 was started on the ticket: the line coded, so it is no lead.
     const t2 = h.tickets.create(UI, { summary: 'continued coder hands over', workspaceId: WS });
-    s.add({ id: 'C1', workspaceId: WS, agent: null, state: 'ended', ticketId: t2.id });
+    s.add({ id: 'C1', workspaceId: WS, agent: null, ticketId: t2.id });
     h.tickets.update(UI, t2.id, { assignee: { kind: 'session', sessionId: 'C1' }, status: 'in_progress' });
+    s.sessions.get('C1')!.state = 'ended';
     s.add({ id: 'C2', workspaceId: WS, agent: null, continuedFrom: 'C1' });
     s.add({ id: 'W2', workspaceId: WS, agent: 'implementer', parentId: 'C2', ticketId: t2.id });
     h.tickets.update(UI, t2.id, { assignee: { kind: 'session', sessionId: 'W2' } });
@@ -590,9 +592,10 @@ test('T-1854 (3): a lead recorded as the session of the judged commit is not exe
     assert.equal(qaRec(h, t.id, 'qaO', B).actor, 'session:qaO', 'nobody of its line is recorded on commit B');
 
     // The past-holder line (T-1652 shape): the lead handed the ticket to its worker; its continuation is recorded on A.
-    s.add({ id: 'P1', workspaceId: WS, agent: null, state: 'ended' });
+    s.add({ id: 'P1', workspaceId: WS, agent: null });
     const t2 = h.tickets.create(UI, { summary: 'past-holder lead that pushed', workspaceId: WS });
     h.tickets.update(UI, t2.id, { assignee: { kind: 'session', sessionId: 'P1' }, status: 'in_progress' });
+    s.sessions.get('P1')!.state = 'ended';
     s.add({ id: 'P2', workspaceId: WS, agent: null, continuedFrom: 'P1' });
     s.add({ id: 'Wp', workspaceId: WS, agent: 'implementer', parentId: 'P1', ticketId: t2.id });
     h.tickets.update(UI, t2.id, { assignee: { kind: 'session', sessionId: 'Wp' } });
