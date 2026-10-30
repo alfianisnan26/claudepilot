@@ -473,6 +473,24 @@ queued for the main conversation's next turn."}`; then `system/init` (a new turn
   an answer the portal gave, the `behavior` it recorded (allow, deny). A different mode, an error, another shape, another behavior or an
   id never asked still ends the session.
 
+**An Agent-tool sub-agent's hand-back (T-3025, observed 2026-10-29).** Claude Code 2.1.296 delivers the final report of an Agent-tool
+sub-agent, foreground or background, as a peer line of its own, with **no** SendMessage before it: `origin: {kind: "peer", from,
+senderTaskId, name, body: "[Subagent hand-back] …", handback: true}`. The case `replay-peer` above never matched it, so every Agent-tool
+hand-back ended the lead ("origin peer"; the Konfersi Business lead three times on 2026-10-29). Seen in that lead's own transcript: a
+foreground Agent's main-thread tool result `{tool_use_result: {status: "completed", agentId, handback: "send"}}`, the hand-back read in
+the same moment (absorbed mid-turn); a background Agent's launch result `{tool_use_result: {isAsync: true, status: "async_launched",
+agentId}}`, the hand-back 14 minutes later. Case `replay-peer-handback`: the line is believed only when `handback` is the boolean
+`true`, `from` equals `senderTaskId`, and this process showed that agent id under one of its own main-thread Agent (or Task) calls
+stored in the transcript: in that call's tool result (`tool_use_result.agentId`, main thread only) or on a line of the sub-agent itself
+(`agent_id` under the call). No time window (a background sub-agent runs for hours). Each sighting allows one hand-back; a sub-agent
+seen again afterwards (continued) may hand back again. The causes are kept with the process's control state (`handbacks`, ids and time
+only), so a portal restart keeps them and a new process drops them. The transcript gets a system row, "Sub-agent "<description>" handed
+back its report" (the report itself is the Agent call's result, or the background task's output). Still ending the session: a hand-back
+from an agent id this process never showed (another process's task, `replay-peer-unknown`), an id seen only on a call that is no
+Agent/Task call or on a sub-agent's own nested Agent call, `from` naming another agent, a second copy, and a peer line without `handback:
+true` (that one needs its SendMessage, `replay-peer`). Not covered (not observed): a hand-back that arrives without any line of its
+sub-agent or its result in this process's stream.
+
 **The report of a task the portal stopped (T-318, observed 2026-10-14).** When the host stops a background command (`stop_task`),
 Claude Code 2.1.296 queues its own report of it, passive (it starts no turn), and delivers it with the NEXT turn, after that turn's
 `system/init`: a replayed user line with `origin: {kind: "task-notification", runId}` and **no** `producer` (the CLI enqueues it
@@ -511,7 +529,8 @@ report from the row. What the integrity checks decide by is stored on the sessio
 mode before plan, plan entered (EnterPlanMode seen), leaving plan approved (ExitPlanMode allowed), the id of a Bypass request sent under
 the grant whose reply was not read yet, the sub-agent SendMessage causes a peer line may follow (tool use id, task id, sha256 digest,
 time, queued; never text), and the `stop_task` requests whose report has not arrived (task id, time; `stops`, only when there are any,
-T-318). It is written with every change: a line's change commits in the same transaction as the line's byte offset,
+T-318), and the Agent-tool sub-agents whose hand-back may follow (tool use id, agent id, time; `handbacks`, only when there are any,
+T-3025). It is written with every change: a line's change commits in the same transaction as the line's byte offset,
 so a restart resumes from exactly the state that line left; an answer (ExitPlanMode), a launch, a move and the gated Bypass request
 write at once; it is cleared when the process is over. Control lines and the digest of their first reply were already stored
 (`chat_inputs`, migration 771). When the portal attaches to a live process it holds nothing for, it reloads that state exactly; a state
