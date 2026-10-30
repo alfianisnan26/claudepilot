@@ -16,7 +16,8 @@ const roots: string[] = [];
 after(() => roots.forEach((r) => rmSync(r, { recursive: true, force: true })));
 
 /** The machine's git configuration (signing, hooks) stays out of the fixture. */
-const GIT_ENV = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
+// NODE_TEST_CONTEXT is dropped: a nested `node --test` under it reports to the parent and exits 0 even when a test fails.
+const GIT_ENV = { ...process.env, NODE_TEST_CONTEXT: undefined, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
 const sh = (cwd: string, cmd: string) => {
   const r = spawnSync('bash', ['-c', cmd], {
     cwd,
