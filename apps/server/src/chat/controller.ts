@@ -871,8 +871,9 @@ export class ChatController {
       const other = this.#chat.listClaudes(lead.workspaceId).find((c) => c.id !== a.authorClaudeId && !c.removedAt);
       if (other) on = { claudeId: other.id, name: other.name, why: 'named' };
     }
-    // PILOT-996 (D-103): the QA worker takes its lead's mode (before: always dontAsk); Bypass only through the gated inherit path.
-    const mode = workerMode(undefined, lead.mode);
+    // PILOT-996 (D-103): the QA worker takes its lead's mode (before: always dontAsk); Bypass only through the gated inherit path. T-2997:
+    // the same rule as session_spawn's unasked mode (Bypass only from a lead in it now, else Auto while "Auto for agents" is on).
+    const mode = workerMode(undefined, lead.mode, { parentInBypass: this.bypassNow(a.leadId), autonomousAuto: this.#autonomousAutoOn() });
     const child = await this.create(
       {
         workspaceId: lead.workspaceId,
@@ -895,7 +896,7 @@ export class ChatController {
       throw new Error(`no free slot to start it (${child.slotWait})`);
     }
     if (mode !== 'bypassPermissions' || !(await this.inheritBypass(child.id)))
-      await this.control(child.id, 'mode', { mode: mode === 'bypassPermissions' ? 'dontAsk' : mode }, { actor: HANDOFF_ACTOR });
+      await this.control(child.id, 'mode', { mode: mode === 'bypassPermissions' ? this.bypassNotKeptMode(child.id) : mode }, { actor: HANDOFF_ACTOR });
     await this.control(child.id, 'model', { model: 'sonnet' }, { actor: HANDOFF_ACTOR });
     const prompt =
       `[Your role: ${HANDOFF_QA}.] Verify ${a.ticket} at commit ${a.sha} (the implementer's branch ticket/${a.ticket}-*, fetched from origin). ` +
@@ -2251,12 +2252,10 @@ export class ChatController {
       }
       bypassCapable = true;
     }
-    // PILOT-996 (D-103): a worker of a parent in Bypass now may keep its parent's mode; capability comes only from such a parent.
+    // PILOT-996 (D-103): a worker of a parent in Bypass now may keep its parent's mode; capability comes only from such a parent. T-2997:
+    // "in Bypass now" is the parent's live mode (`bypassNow`: its process, the mode confirmed for it, its newest record), never the row alone.
     let inherited = false;
-    if (opts.inheritBypass === true && parentId && !opts.manager && this.#bypassAllowed()) {
-      const parent = this.#chat.row(parentId);
-      if (parent && parent.state !== 'ended' && parent.bypass_capable === 1 && parent.mode === 'bypassPermissions') bypassCapable = inherited = true;
-    }
+    if (opts.inheritBypass === true && parentId && !opts.manager && this.bypassNow(parentId)) bypassCapable = inherited = true;
     // T-349: asked again after the last await, so nothing runs between this answer and the insert below.
     if (parentId && opts.liveParent !== undefined) this.#requireLiveParent(parentId, workspaceId, opts.liveParent);
     // T-490 (D-63): a worker's reason for running above its role's model, redacted and capped once, for its row and its audit row alike.
@@ -4117,7 +4116,8 @@ export class ChatController {
       // way back too (a move, a restart, a recovery, Keep going) for a session whose capability came from its parent, not only at the inherit.
       if (how === 'inherit' || this.#inheritedBypass(sessionId)) {
         const parent = row.parent_id ? this.#chat.row(row.parent_id) : null;
-        if (!parent || parent.state === 'ended' || parent.mode !== 'bypassPermissions')
+        // T-2997: the first entry asks the parent's live mode (`bypassNow`), not its row: a stale Bypass on the row hands on nothing.
+        if (!parent || parent.state === 'ended' || parent.mode !== 'bypassPermissions' || (how === 'inherit' && !this.bypassNow(parent.id)))
           return drop('parent_not_bypass', `Bypass not kept ${after}: the parent is not in Bypass now.`);
       }
       // T-1692: out of Bypass first, then back in: never two switches racing on separate execs.
@@ -4279,6 +4279,40 @@ export class ChatController {
     } catch {
       return false; // can't tell: not on
     }
+  }
+
+  /**
+   * T-2997 (PILOT-1025): the mode a worker gets when the Bypass it was to inherit was not kept (the parent left it, or a gate said no,
+   * between the spawn's check and the entry): Auto where this worker may run in it ({@link autoModeAllowed}), else dontAsk (never waits on
+   * a person, D-62).
+   */
+  bypassNotKeptMode(rawId: string): ChatPermissionMode {
+    const session = this.#chat.get(this.#chat.resolveId(rawId));
+    return session && this.#autoAllowed(session) ? 'auto' : 'dontAsk';
+  }
+
+  /** T-2997 (PILOT-1025): whether `sessions.autonomousAuto` is on now (a spawn's unasked mode and its Auto by name read it). */
+  autonomousAutoOn(): boolean {
+    return this.#autonomousAutoOn();
+  }
+
+  /**
+   * T-2997 (PILOT-1025): whether this session is in Bypass NOW, as far as the portal stands behind it, so a worker may inherit it: the
+   * policy allows Bypass; the session is live, capable and its row says Bypass; the mode the portal set or confirmed for its CURRENT process
+   * is Bypass with no entry still pending (the track, else the state stored for that process; none known is not in it); no leave is in
+   * flight; and its newest Bypass record is an entry, not a leave. The stored mode alone is not enough: it can say Bypass while the process
+   * is no longer in it (the live case: a worker was put in Bypass from a lead that had left it, then had to be taken out and ended for
+   * integrity). Fail closed: anything unknown is false, and the worker gets Auto instead. No side effects.
+   */
+  bypassNow(rawId: string): boolean {
+    const id = this.#chat.resolveId(rawId);
+    const row = this.#chat.row(id);
+    if (!row || row.state === 'ended' || row.process !== 'live' || row.bypass_capable !== 1 || row.mode !== 'bypassPermissions') return false;
+    if (!this.#bypassAllowed() || this.#leaving.has(id)) return false;
+    const track = this.#modes.get(id) ?? readControl(row.control_state, controlProc(row))?.mode ?? null;
+    if (!track || track.expected !== 'bypassPermissions' || track.bypassPending) return false;
+    const last = this.#chat.audit({ kind: 'bypass', sessionId: id, limit: 50 }).find((a) => a.kind === 'bypass.entered' || a.kind === 'bypass.left');
+    return last?.kind === 'bypass.entered';
   }
 
   /** PILOT-996: a top-level session no person started (not a worker, not a manager, not a persona test) starts in Auto while the policy is on. */
@@ -6474,6 +6508,11 @@ export class ChatController {
       }
       this.#emitTasks(sessionId);
       this.#armIdle(sessionId); // a task that ended may be what kept it awake
+    }
+    // T-3017: the set of background tasks still running is whole: one that left it has ended, even when its own end line never came.
+    if (parsed.taskSet && this.#chat.endBackgroundTasksNotIn(sessionId, parsed.taskSet)) {
+      this.#emitTasks(sessionId);
+      this.#armIdle(sessionId);
     }
     // The model each sub-agent runs on: what its own lines report wins over what it was launched on.
     if (parsed.agentModels?.length) {
