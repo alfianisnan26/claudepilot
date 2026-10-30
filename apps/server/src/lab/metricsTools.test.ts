@@ -488,20 +488,21 @@ test('size budget: a large store (3,000 done tickets, 300 leads, a month of snap
     assert.deepEqual([tk.rows.length, tk.total > 2000], [TICKETS_DEFAULT, true]);
     const ov = data(await mcp.call(admin, 'metrics_overview', { window: '7d' }));
     assert.ok(ov.flow.done > 2000);
-    // Paging past the service's 200 rows: three pages of (up to) 100, each cut to the size budget, carry on where the last one stopped.
+    // Paging past the service's 200 rows: four pages of (up to) 100, each cut to the size budget, carry on where the last one stopped
+    // (T-3070: with the boot lookup installed each row carries its ticket_key, as in the portal, so a page holds about 66).
     const want = [...h.lab.metrics.tickets('all', '7d', {})!.rows, ...h.lab.metrics.tickets('all', '7d', { offset: 200 })!.rows].map(
       (r) => r.ticket,
     );
     const got: string[] = [];
     let page = data(await mcp.call(admin, 'metrics_tickets', { window: '7d', limit: 100 }));
     got.push(...page.rows.map((r: any) => r.ticket));
-    for (let i = 0; i < 2; i++) {
+    for (let i = 0; i < 3; i++) {
       assert.equal(typeof page.next_cursor, 'string');
       page = data(await mcp.call(admin, 'metrics_tickets', { window: '7d', limit: 100, cursor: page.next_cursor }));
       assert.ok(JSON.stringify(page).length < MAX_RESULT_CHARS);
       got.push(...page.rows.map((r: any) => r.ticket));
     }
-    assert.ok(got.length > 200, `${got.length} rows over three pages`);
+    assert.ok(got.length > 200, `${got.length} rows over four pages`);
     assert.deepEqual(got, want.slice(0, got.length), 'no row skipped or repeated across the pages');
   } finally {
     done();
