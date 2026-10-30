@@ -157,6 +157,12 @@ spec:
               # The proof's other ref (T-333), fetched here while the credential is: the run container checks it out from refs/job-run/against.
               if [ -n "${JR_AGAINST:-}" ] && git -C "$root/w/$main" fetch -q --depth 1 "$JR_REPO_URL" "$JR_AGAINST" 2>/dev/null; then
                 git -C "$root/w/$main" update-ref refs/job-run/against FETCH_HEAD
+              elif [[ ${JR_AGAINST:-} =~ ^[0-9a-f]{7,39}$ ]]; then
+                # T-1751: a short sha is no ref a remote can serve: deepen the ref's history (the parent of a fix is in it) and resolve it
+                # here. Unknown or ambiguous: no ref, and the run part refuses with the hint. Only a 40-hex result is used.
+                git -C "$root/w/$main" fetch -q --deepen=1000 "$JR_REPO_URL" "$JR_REF" 2>/dev/null
+                afull=$(git -C "$root/w/$main" rev-parse -q --verify "$JR_AGAINST^{commit}" 2>/dev/null) || afull=
+                [[ $afull =~ ^[0-9a-f]{40}$ ]] && git -C "$root/w/$main" update-ref refs/job-run/against "$afull"
               fi
               npmci() { # <dir> <name>: npm ci WITHOUT install scripts (the run container runs them), once more when it fails (a flake)
                 [ -f "$1/package-lock.json" ] || return 0
@@ -226,6 +232,7 @@ spec:
             - {name: JR_CMD, value: "__CMD__"}
             - {name: JR_AGAINST, value: "__AGAINST__"}
             - {name: JR_KEEP, value: "__KEEP__"}
+            - {name: JR_FAIL_ON_SKIP, value: "__FAIL_ON_SKIP__"}
             - {name: NODE_NAME, valueFrom: {fieldRef: {fieldPath: spec.nodeName}}}
           command: [bash, -c]
           args:
@@ -269,7 +276,19 @@ spec:
               t2=$(date +%s); say "steps ($JR_STEPS) in $((t2 - t1))s; running the command"
               cd "$root/w/$main" && printf '%s' "$JR_CMD" | base64 -d > "$root/cmd.sh"
               pool_on
-              bash -o pipefail "$root/cmd.sh"; rc=$?
+              if [ "${JR_FAIL_ON_SKIP:-}" = 1 ]; then
+                # --fail-on-skip (T-1751): the output is kept to count the skipped tests of node:test ("# skipped N") and vitest ("Tests ... N skipped").
+                bash -o pipefail "$root/cmd.sh" 2>&1 | tee "$root/cmd.out"; rc=${PIPESTATUS[0]}
+                skipped=$(sed 's/\x1b\[[0-9;]*m//g' "$root/cmd.out" | awk '/^# skipped [0-9]+/ { n += $3 }
+                  /^[[:space:]]*Tests[[:space:]].*[0-9]+ skipped/ { if (match($0, /[0-9]+ skipped/)) n += substr($0, RSTART, RLENGTH) + 0 }
+                  END { print n + 0 }')
+                rm -f "$root/cmd.out"
+                if [[ $skipped =~ ^[0-9]+$ ]] && [ "$skipped" -gt 0 ]; then
+                  echo "job-run: --fail-on-skip: $skipped tests were skipped"; [ "$rc" -ne 0 ] || rc=1
+                fi
+              else
+                bash -o pipefail "$root/cmd.sh"; rc=$?
+              fi
               t3=$(date +%s)
               if [ -n "$JR_ARTIFACTS" ]; then
                 # shellcheck disable=SC2086 # a list of paths
@@ -287,7 +306,12 @@ spec:
                 rc1=$rc; refsha=$(git rev-parse HEAD)
                 noproof() { say "SUMMARY-AGAINST $JR_AGAINST rc=${1:-?}"; say "PROOF: NO PROOF: $2"; say "EXIT ${3:-1}"; exit "${3:-1}"; }
                 # Fetched by the fetch container (it has the credential); none here.
-                afull=$(git rev-parse -q --verify refs/job-run/against) || noproof "-" "$JR_AGAINST is not on the remote (use a full commit hash or a branch)" 2
+                if ! afull=$(git rev-parse -q --verify refs/job-run/against); then
+                  # T-1751: a short sha the fetch could not resolve (unknown, ambiguous, or outside the ref's last 1000 commits).
+                  [[ ! $JR_AGAINST =~ ^[0-9a-f]{7,39}$ ]] || noproof "-" "--against $JR_AGAINST is not a commit here; pass the 40-character sha (git rev-parse $JR_AGAINST)" 2
+                  noproof "-" "$JR_AGAINST is not on the remote (use a full commit hash or a branch)" 2
+                fi
+                say "against: $afull"
                 asha=$(git rev-parse --short "$afull")
                 pool_off # the install below (npm ci, install scripts) runs without them; the command gets them back
                 git checkout -q -f "$afull" || noproof "-" "cannot check out $JR_AGAINST" 2

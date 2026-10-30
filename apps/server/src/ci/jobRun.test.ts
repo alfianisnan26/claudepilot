@@ -1443,12 +1443,113 @@ test("the Job's own script: checkout, the command's exit code, the artifacts blo
   assert.ok(!existsSync(join(noToken.fetchHome, '.npmrc')), 'no token, no npmrc');
 });
 
+test("T-1751 the Job's own script: --against <short sha> resolves to the full sha; an unknown short sha is NO PROOF with the hint", () => {
+  const root = mkdtempSync(join(tmpdir(), 'cp-jobrun-short-'));
+  roots.push(root);
+  const env0 = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
+  const git = (args: string[], cwd: string) =>
+    spawnSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', ...args], { cwd, encoding: 'utf8', env: env0 });
+  const src = join(root, 'src');
+  mkdirSync(src);
+  git(['init', '-q', '-b', 'main'], src);
+  writeFileSync(join(src, 'value.txt'), 'old');
+  git(['add', '.'], src);
+  git(['commit', '-qm', 'old'], src);
+  const oldSha = git(['rev-parse', 'HEAD'], src).stdout.trim();
+  writeFileSync(join(src, 'value.txt'), 'new');
+  writeFileSync(join(src, 'check.sh'), 'test "$(cat value.txt)" = new\n');
+  git(['add', '.'], src);
+  git(['commit', '-qm', 'fix'], src);
+  git(['clone', '-q', '--bare', src, join(root, 'claudepilot.git')], root);
+  const pod = (against: string) =>
+    runPod(TEMPLATE, {
+      PATH: process.env.PATH,
+      JR_ROOT: join(root, `run-${hex(3)}`),
+      JR_REPO_URL: `file://${join(root, 'claudepilot.git')}`,
+      JR_REF: 'main',
+      JR_ALSO: '',
+      JR_STEPS: 'none',
+      JR_ARTIFACTS: '',
+      JR_ARTIFACT_MAX: '1',
+      JR_CMD: Buffer.from('bash check.sh').toString('base64'),
+      JR_AGAINST: against,
+      JR_KEEP: 'check.sh',
+      NODE_NAME: 'k3s-master',
+    });
+  // The parent of the fix by its first 9 characters: the clone is --depth 1, so the Job deepens and resolves it.
+  const short = pod(oldSha.slice(0, 9));
+  assert.equal(short.status, 0, short.stdout + short.stderr);
+  assert.match(short.stdout, new RegExp(`=== JOB-RUN against: ${oldSha}\\n`));
+  assert.match(short.stdout, /PROOF: passes on main \([0-9a-f]+\), fails on [0-9a-f]{9} \([0-9a-f]+\) \(rc=1\)/);
+  const unknown = pod('abcdef0');
+  assert.equal(unknown.status, 2, unknown.stdout + unknown.stderr);
+  assert.match(
+    unknown.stdout,
+    /PROOF: NO PROOF: --against abcdef0 is not a commit here; pass the 40-character sha \(git rev-parse abcdef0\)\n=== JOB-RUN EXIT 2\n$/,
+  );
+  // A branch name is fetched as before, and its full sha is printed too.
+  const branch = pod('main');
+  assert.equal(branch.status, 1, branch.stdout + branch.stderr);
+  assert.match(branch.stdout, /=== JOB-RUN against: [0-9a-f]{40}\n/);
+  assert.match(branch.stdout, /PROOF: NO PROOF: it passes on both main/);
+});
+
+test("T-1751 the Job's own script: --fail-on-skip makes a run with skipped tests (node:test or vitest) rc 1; without it nothing changes", () => {
+  const root = mkdtempSync(join(tmpdir(), 'cp-jobrun-skip-'));
+  roots.push(root);
+  const env0 = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
+  const git = (args: string[], cwd: string) =>
+    spawnSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', ...args], { cwd, encoding: 'utf8', env: env0 });
+  const src = join(root, 'src');
+  mkdirSync(src);
+  git(['init', '-q', '-b', 'main'], src);
+  writeFileSync(join(src, 'a.txt'), 'a');
+  git(['add', '.'], src);
+  git(['commit', '-qm', 'a'], src);
+  git(['clone', '-q', '--bare', src, join(root, 'claudepilot.git')], root);
+  const pod = (cmd: string, failOnSkip: string) =>
+    runPod(TEMPLATE, {
+      PATH: process.env.PATH,
+      JR_ROOT: join(root, `run-${hex(3)}`),
+      JR_REPO_URL: `file://${join(root, 'claudepilot.git')}`,
+      JR_REF: 'main',
+      JR_ALSO: '',
+      JR_STEPS: 'none',
+      JR_ARTIFACTS: '',
+      JR_ARTIFACT_MAX: '1',
+      JR_CMD: Buffer.from(cmd).toString('base64'),
+      JR_FAIL_ON_SKIP: failOnSkip,
+      NODE_NAME: 'k3s-master',
+    });
+  const one = pod("printf '# tests 3\\n# pass 2\\n# skipped 1\\n'", '1');
+  assert.equal(one.status, 1, one.stdout + one.stderr);
+  assert.match(one.stdout, /job-run: --fail-on-skip: 1 tests were skipped\n/);
+  assert.match(one.stdout, /=== JOB-RUN EXIT 1\n$/);
+  const zero = pod("printf '# tests 3\\n# pass 3\\n# skipped 0\\n'", '1');
+  assert.equal(zero.status, 0, zero.stdout + zero.stderr);
+  assert.doesNotMatch(zero.stdout, /--fail-on-skip/);
+  const off = pod("printf '# skipped 1\\n'", '');
+  assert.equal(off.status, 0, off.stdout + off.stderr);
+  assert.doesNotMatch(off.stdout, /--fail-on-skip/);
+  const vitest = pod("printf ' Test Files  1 passed (1)\\n      Tests  2 passed | 3 skipped (5)\\n'", '1');
+  assert.equal(vitest.status, 1, vitest.stdout + vitest.stderr);
+  assert.match(vitest.stdout, /job-run: --fail-on-skip: 3 tests were skipped\n/);
+  // A failing command keeps its own code.
+  const failed = pod("printf '# skipped 2\\n'; exit 4", '1');
+  assert.equal(failed.status, 4, failed.stdout + failed.stderr);
+  assert.match(failed.stdout, /--fail-on-skip: 2 tests were skipped/);
+});
+
 test('--against and --keep-tests: parsed into the manifest, validated; absent, the manifest carries nothing', () => {
   const w = world();
   assert.equal(w.run(['--repo', 'claudepilot', '--ref', 'main', '--', 'true']).code, 0);
   const none = envOf(yamlLoad(w.applied1()) as Manifest);
   assert.equal(none.JR_AGAINST, '');
   assert.equal(none.JR_KEEP, '');
+  assert.equal(none.JR_FAIL_ON_SKIP, '', 'T-1751: without --fail-on-skip the Job gets nothing');
+  const wf = world();
+  assert.equal(wf.run(['--repo', 'claudepilot', '--ref', 'main', '--fail-on-skip', '--', 'true']).code, 0);
+  assert.equal(envOf(yamlLoad(wf.applied1()) as Manifest).JR_FAIL_ON_SKIP, '1', 'T-1751: --fail-on-skip reaches the run container');
   const w2 = world();
   const r = w2.run([
     '--repo',
@@ -3356,6 +3457,9 @@ test('T-731 reuse: a changed commit, command, steps, --against, --also, the hash
     '--deploy-layout is keyed: a hit',
   );
   assert.match(go(w, c, 'npm test', ['--also', shared]).out, /reused a passed result/, 'the run without it is still its own hit');
+  // T-1751: a pass without --fail-on-skip never stands for a run with it (a skipped test would hide behind the saved pass).
+  miss('--fail-on-skip', go(w, c, 'npm test', ['--fail-on-skip']));
+  assert.match(go(w, c, 'npm test', ['--fail-on-skip']).out, /reused a passed result/, '--fail-on-skip is keyed: a hit');
   const upgraded = mutant(
     (y) => `${y}# a newer runner\n`,
     (s) => s,

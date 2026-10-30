@@ -16,6 +16,11 @@
 #                                                       branch; the parent of a fix: git rev-parse <fix>~1). npm ci again only when the lockfile
 #                                                       differs. Prints "PROOF: passes on <ref>, fails on <against>" (exit 0) or "NO PROOF: <why>"
 #                                                       (exit 1; 2 when <ref> or a kept path is missing). Without it nothing changes.
+#                                                       T-1751: a short sha (7-39 hex) is resolved in the Job within the last 1000 commits of
+#                                                       --ref and printed as "against: <full sha>"; unknown or ambiguous is NO PROOF (exit 2)
+#     --fail-on-skip                                    (T-1751) rc 1 when the command's output has a node:test "# skipped N" or a vitest
+#                                                       "Tests ... N skipped" summary with N > 0 ("job-run: --fail-on-skip: N tests were skipped");
+#                                                       its stderr is merged into stdout. Without it nothing changes
 #     --keep-tests <paths>                              with --against: these files (comma separated) are taken from --ref onto the other ref
 #     --also <org>/<repo>[@<ref>]                     one more repository cloned next to it (Konfersi's file:../konfersi-shared), ref stg
 #     --steps npm-ci|none                               before the command (default npm-ci, at the root of the repository and of each --also clone that has a package-lock.json)
@@ -55,7 +60,7 @@
 # into the Job's log as "=== JOB-RUN PLACEMENT" lines. T-524: it reads again when the queue lets the suspended Job out.
 # Reuse (T-731), OPT-IN with --reuse: a run with it that PASSED (exit 0) is saved, masked log, exit code and the Job's name, under JOB_RUN_CACHE_DIR
 # (default ~/.cache/claudepilot-job-run, one workspace home: any session there can write an entry). A later --reuse run with the same repo URL, FULL
-# commit, exact command, --against, --keep-tests, --also, --deploy-layout, --steps, --big and runner image, on the same job-run.sh and job-run.yaml (their hash is in
+# commit, exact command, --against, --keep-tests, --also, --deploy-layout, --fail-on-skip, --steps, --big and runner image, on the same job-run.sh and job-run.yaml (their hash is in
 # the key), returns that log and exit code at once with no Job, naming the Job that passed. Not reused: a ref that is not a full 40-hex commit (a
 # branch moves), an --also or --against ref that is not one, a run with --artifacts, and a run with --pool-env (refused together with --reuse, rc 2:
 # a pass without a credential must never stand for a run with it, and a log made with a credential is never saved). A failure is never saved. A
@@ -151,7 +156,7 @@ case "${1:-}" in
     echo "$n job(s) stopped"; exit 0 ;;
 esac
 
-repo=; ref=; against=; keep=; steps=npm-ci; steps_given=; artifacts=; out=; timeout=3600; role=${PILOT_AGENT:-agent}; also=(); big=; pool=(); reuse=; run_image=; image_given=; layout=
+repo=; ref=; against=; keep=; steps=npm-ci; steps_given=; artifacts=; out=; timeout=3600; role=${PILOT_AGENT:-agent}; also=(); big=; pool=(); reuse=; run_image=; image_given=; layout=; fos=
 argv0=("$@") # T-2885: the run's exact arguments, for an approval request (pool_approval)
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -161,6 +166,7 @@ while [ $# -gt 0 ]; do
     --big) big=1; shift ;;
     --reuse) reuse=1; shift ;;
     --deploy-layout) layout=deploy; shift ;;
+    --fail-on-skip) fos=1; shift ;;
     --repo) repo=$2; shift 2 ;;
     --ref) ref=$2; shift 2 ;;
     --against) against=$2; shift 2 ;;
@@ -386,7 +392,7 @@ if [ -n "$reuse" ]; then
     exact=1
     for a in ${also[@]+"${also[@]}"}; do [[ ${a##*@} != "$a" && ${a##*@} =~ $hex40 ]] || exact=; done
     if [ -n "$exact" ]; then
-      key=$({ printf '%s\0' v2 "$(cat "$0" "$here/deploy/k3s-build/job-run.yaml" | sha256sum | cut -d' ' -f1)" "$image" "${big:+big}" "$url" "$ref" "$cmd" "$against" "$keep" "$steps" "$alsos" "$layout"; } | sha256sum | cut -d' ' -f1)
+      key=$({ printf '%s\0' v2 "$(cat "$0" "$here/deploy/k3s-build/job-run.yaml" | sha256sum | cut -d' ' -f1)" "$image" "${big:+big}" "$url" "$ref" "$cmd" "$against" "$keep" "$steps" "$alsos" "$layout" "${fos:+fail-on-skip}"; } | sha256sum | cut -d' ' -f1)
     fi
   fi
   [ -n "$key" ] || echo "job-run: --reuse: this run has no exact key (a full commit is needed for --ref, --against and --also; no --artifacts): it runs as a Job and is not saved" >&2
@@ -513,7 +519,7 @@ pool_refs=${pool_refs#\\n}
 [ -n "$pool_refs" ] || pool_refs='            # no --pool-env'
 sed -e "s|^ *# __POOL_ENV__.*\$|$pool_refs|" -e "s#__MASTER_REQUIRED__#$master_rule#" -e "s#__NAME__#$job#g" -e "s#__CHAT__#$chat#g" -e "s#__ROLE__#$role#g" -e "s#__REPO__#$repo_label#g" -e "s#__PROGRAM__#$program#g" \
     -e "s#__MEMORY__#$memory#g" -e "s#__TMP_SIZE__#$tmp_size#" -e "s#__OWNER__#$host/$$/$(starttime $$)#" \
-    -e "s#__DEADLINE__#$timeout#" -e "s#__IMAGE__#$image#" -e "s#__RUN_IMAGE__#${run_image:-$image}#" -e "s#__REPO_URL__#$url#" -e "s#__REF__#$ref#" -e "s#__ALSO__#$alsos#" -e "s#__LAYOUT__#$layout#g" \
+    -e "s#__DEADLINE__#$timeout#" -e "s#__IMAGE__#$image#" -e "s#__RUN_IMAGE__#${run_image:-$image}#" -e "s#__REPO_URL__#$url#" -e "s#__REF__#$ref#" -e "s#__ALSO__#$alsos#" -e "s#__LAYOUT__#$layout#g" -e "s#__FAIL_ON_SKIP__#$fos#" \
     -e "s#__AGAINST__#$against#" -e "s#__KEEP__#$keep#" -e "s#__STEPS__#$steps#" -e "s#__ARTIFACTS__#$artifacts#" -e "s#__ARTMAX__#$art_max#" -e "s#__CMD__#$(printf '%s' "$cmd" | base64 -w0)#" \
     "$here/deploy/k3s-build/job-run.yaml" | kubectl apply -f - >/dev/null
 # The Secret belongs to the Job from its first moment (T-426): the Job was applied suspended (no pod needs the Secret yet), and the Secret is
