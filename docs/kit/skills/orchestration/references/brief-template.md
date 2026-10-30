@@ -24,6 +24,7 @@ ITEMS (in order)
 
 DONE MEANS
 - Tests written for the new behaviour, a regression test for a bug fix (it fails without the fix); run, with their output in your report.
+- Before you list an item as fixed, name (a) the file and line in your delta that changes it (`git diff --stat <prev-head>..<head>` shows the file) and (b) one test a Job ran red by full 40-character sha on the commit before the fix, and green on the fix. An item with no code in the delta or no red run goes under "Not verified", never in the fixed list. A test skipped in the evidence Job does not count as run (job-run `--fail-on-skip`).
 - <UI: the real-browser check at phone width first, then desktop, light and dark; screenshots you looked at>
 - <PRD and docs updated in the house style: what was observed, not what is hoped>
 - Committed with the trailers (Ticket, Pilot-Session, Pilot-Agent: <label>) and the branch pushed.
