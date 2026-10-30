@@ -186,9 +186,19 @@ What was observed and how (all with the generated host script and real git, none
 | --- | --- | --- |
 | G1 | Contract, migration, host commands (`repo-find`, `repo-state`, `repo-track`, `repo-sync`), discovery, tree, state, scans (request, start, chats, timer), events, retention, summary | **Built** and tried (§17) |
 | G2 | Worktrees (make, remove), sync now, keep synced, audit of every action, settings | **Built** and tried |
-| G3 | Portal MCP tools (`repos_list`, `repo_get`, `repo_events`, `repos_attention`, `worktree_create`) | **Built** and tried over `/mcp` |
+| G3 | Portal MCP tools (`repos_list`, `repo_get`, `repo_events`, `repos_attention`, `worktree_create`) | **Built** and tried over `/mcp`. `worktree_create` takes an optional `parent` (T-1261, below) |
 | G4 | The Repos tab, the repository sheet and the list chip | **Built** and tried in a real browser (§17). Not built: a deep link from a chat's worktree chip to its repo, a clone action for a not-cloned submodule (§4), changed-file lists (§4), virtual scrolling (the list is not windowed: 173 repos were fine, the server caps a scan at 300) |
 | G5 | Kubernetes workspaces, cloning not-cloned submodules, changed-file lists, deep links to the CI remote | **Not built** |
+
+**A worktree's parent folder (T-1261).** A worktree is made in `<repository>.worktrees/<leaf>` beside its repository unless the
+request names `parent` (the `worktree_create` tool and `POST REPOS_API.worktrees`), an existing folder to make it in. The portal
+takes it written like a path the host prints (`absPath`: absolute, no `.` or `..` part, no control character, at most 400
+characters), else 400 `VALIDATION_FAILED`. The host's `wt-add` then checks its real path with the Files policy (`allowed`: under the
+files root, not the portal's own files) and that it is a folder: anything else (missing, outside the workspace, the portal's own
+files, a link out of the root, a file) is one `NOT_FOUND`, "No such folder.", so a caller can't tell a folder it may not see from
+one that isn't there. A parent inside the repository or in a `.git` folder is refused (400). An agent's token reaches its own
+workspace only, as before. Note: the lane rule guard lets `git -C` reach only worktrees under a `.worktrees` or `agentic-worktrees`
+folder (settings-policies, T-860), so a lane's worktree belongs in one of those.
 
 ## 19. Decisions made on the owner's behalf (provisional)
 

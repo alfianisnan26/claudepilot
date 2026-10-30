@@ -673,12 +673,14 @@ case "$cmd" in
     # A git worktree of the repository containing <folder>, in <repo top>.worktrees/<leaf> (the host decides where; <leaf> is a plain
     # name and must not exist yet), on <branch>: a new one started from <base> ('-' is the repository's HEAD), or an existing one no
     # other worktree has. The repository may not be the files root itself. Git runs hardened: no hook, filter or fsmonitor of the
-    # repository runs while it checks out. Prints "ok", the worktree's real path, branch, commit, the repository's top folder and
-    # <folder> relative to it, tab separated. Exit 2 refused (names, places), 3 not a repository, 4 the branch is in use, 5 the base
-    # is unknown, 6 the folder exists.
+    # repository runs while it checks out. An optional fifth argument <parent> (T-1261) puts it in <parent>/<leaf> instead: an
+    # existing folder the Files policy allows (allowed), not inside the repository and not in a .git folder. Prints "ok", the
+    # worktree's real path, branch, commit, the repository's top folder and <folder> relative to it, tab separated. Exit 2 refused
+    # (names, places), 3 not a repository, 4 the branch is in use, 5 the base is unknown, 6 the folder exists, 8 the parent is not a
+    # folder the caller may see (missing, outside the files root, the portal's own files: one answer for all of them).
     exec 2>/dev/null </dev/null
     enter "\${1:-}" || exit 2
-    leaf="\${2:-}"; branch="\${3:-}"; base="\${4:-}"
+    leaf="\${2:-}"; branch="\${3:-}"; base="\${4:-}"; pfolder="\${5:-}"
     case "$leaf" in ''|.*|*[!A-Za-z0-9._-]*) exit 2 ;; esac
     [ "\${#leaf}" -le 64 ] || exit 2
     case "$branch" in ''|-*|*..*|*//*|*/|*.lock|*[!A-Za-z0-9._/-]*) exit 2 ;; esac
@@ -694,9 +696,14 @@ case "$cmd" in
     inroot "$repo" && [ "$repo" != "$root" ] || exit 2
     case "$here" in "$repo"|"$repo"/*) ;; *) exit 3 ;; esac
     rel="\${here#"$repo"}"
-    parent="$repo.worktrees"
-    [ ! -L "$parent" ] || exit 2
-    allowed "$parent" 2>/dev/null || { mkdir -p -- "$parent" && allowed "$parent"; } || exit 2
+    if [ -n "$pfolder" ]; then
+      allowed "$pfolder" && [ -d "$r" ] || exit 8
+      case "$r" in "$repo"|"$repo"/*|*/.git|*/.git/*) exit 2 ;; esac
+    else
+      parent="$repo.worktrees"
+      [ ! -L "$parent" ] || exit 2
+      allowed "$parent" 2>/dev/null || { mkdir -p -- "$parent" && allowed "$parent"; } || exit 2
+    fi
     wpath="$r/$leaf"
     [ ! -e "$wpath" ] && [ ! -L "$wpath" ] || exit 6
     if hg show-ref --verify --quiet "refs/heads/$branch"; then

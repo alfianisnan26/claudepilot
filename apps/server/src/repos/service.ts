@@ -33,7 +33,7 @@ import { describe, diffScan, type EventDraft } from './events.js';
 import type { RepoHost } from './host.js';
 import { mainFolder, parseFind, parseState, parseSync, type FoundRepo, type RawRepo } from './parse.js';
 import { RepoStore, type NewEvent, type StoredRepo } from './store.js';
-import { basename, plain, repoId, within } from './text.js';
+import { absPath, basename, plain, repoId, within } from './text.js';
 import { addSummaries, attentionOf, buildNodes, orderNodes, summarize, type NodeCore } from './tree.js';
 import { loop } from '../platform/loops.js';
 
@@ -798,11 +798,16 @@ export class ReposService {
     const branch = text(req.branch, 'branch') ?? `wt/${randomBytes(3).toString('hex')}`;
     const base = text(req.base, 'base');
     if (req.sync !== undefined && typeof req.sync !== 'boolean') throw new AppError('VALIDATION_FAILED', 'Check the sync setting.', { details: { sync: 'Expected true or false.' } });
+    // T-1261: the folder to make it in, written like the paths the host prints (absolute, no `.` or `..` part, no control
+    // character); the host then takes it only when its real path is a folder in the workspace's files, outside the repository.
+    const parentText = text(req.parent, 'parent');
+    const parent = parentText === undefined ? undefined : absPath(parentText);
+    if (parent === null) throw new AppError('VALIDATION_FAILED', 'Check the parent folder.', { details: { parent: 'An absolute path, without . or .. parts.' } });
     return this.#lock(id, async () => {
       await this.#deps.host.ensure(ws).catch((e: unknown) => {
         throw new AppError('SERVICE_UNAVAILABLE', plain((e as Error)?.message, 200) || 'The workspace can’t be reached.', { expose: true });
       });
-      const made = await this.#worktrees.add(ws, { folder: row.path, branch, base: base ?? null });
+      const made = await this.#worktrees.add(ws, { folder: row.path, branch, base: base ?? null, ...(parent ? { parent } : {}) });
       // A branch started from a remote branch follows it, as `git worktree add` does for a name (the host was given a commit id).
       if (base) await this.#deps.host.run(ws, ['repo-track', made.path, base]).catch(() => undefined);
       const at = this.#iso();

@@ -25,6 +25,8 @@ const BRANCH_IN_USE = 4;
 const NO_BASE = 5;
 const PATH_EXISTS = 6;
 const HAS_CHANGES = 7;
+/** `wt-add`'s parent folder is not one the caller may see (missing, outside the files root, the portal's own files). */
+const PARENT_UNSEEN = 8;
 
 /** A branch name the portal takes: a conservative subset of what git allows (the host asks git as well). */
 export function branchProblem(branch: string): string | null {
@@ -94,13 +96,14 @@ export class Worktrees {
    * Makes a worktree of the repository containing `folder`, on `branch`, started from `base` (the repository's HEAD when none). The
    * host picks the place; a folder name that is taken gets a number. Nothing is left behind when it is refused.
    */
-  async add(workspaceId: string, o: { folder: string; branch: string; base?: string | null }): Promise<MadeWorktree> {
+  async add(workspaceId: string, o: { folder: string; branch: string; base?: string | null; parent?: string }): Promise<MadeWorktree> {
     const bad = branchProblem(o.branch);
     if (bad) throw new AppError('VALIDATION_FAILED', bad, { details: { branch: bad } });
     const baseBad = o.base ? baseProblem(o.base) : null;
     if (baseBad) throw new AppError('VALIDATION_FAILED', baseBad, { details: { base: baseBad } });
     for (let attempt = 1; attempt <= 9; attempt++) {
-      const r = await this.run(workspaceId, ['wt-add', o.folder, worktreeLeaf(o.branch, attempt), o.branch, o.base || '-']);
+      // T-1261: a parent folder, when one is named, is the fifth argument; without it the host uses <repo>.worktrees/.
+      const r = await this.run(workspaceId, ['wt-add', o.folder, worktreeLeaf(o.branch, attempt), o.branch, o.base || '-', ...(o.parent ? [o.parent] : [])]);
       if (r.code === 0) {
         const made = parseMade(r.out);
         if (made) return made;
@@ -176,7 +179,10 @@ function refusal(code: number | null, out: string, o: { folder: string; branch: 
     case NO_BASE:
       return new AppError('VALIDATION_FAILED', `This repository has no “${o.base ?? 'HEAD'}”.`, { details: { base: 'Not found in this repository.' } });
     case REFUSED:
-      return new AppError('VALIDATION_FAILED', 'A worktree can’t be made there: pick a repository inside your home folder, not the home folder itself.', { details: { worktree: 'Not allowed here.' } });
+      return new AppError('VALIDATION_FAILED', 'A worktree can’t be made there: pick a repository inside your home folder, not the home folder itself (and a parent folder outside the repository).', { details: { worktree: 'Not allowed here.' } });
+    case PARENT_UNSEEN:
+      // One answer for a folder that isn't there and one the caller may not see, so neither tells the other apart.
+      return new AppError('NOT_FOUND', 'No such folder.', { details: { parent: 'Not found.' } });
     default: {
       const why = errorLine(out);
       return new AppError('SERVICE_UNAVAILABLE', `Couldn’t make the worktree${why ? `: ${why}` : ` (exit ${code ?? 'unknown'})`}.`, { expose: true });

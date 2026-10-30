@@ -3,7 +3,8 @@
 // script; every action is in the audit with who asked.
 
 import assert from 'node:assert/strict';
-import { writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { WORKTREE_DIRTY } from '@portal/contracts';
@@ -71,6 +72,87 @@ test('a worktree request that can’t be done is refused with what to fix, and l
     await assert.rejects(() => h.repos.createWorktree(proj, {}, 'ui'), /isn’t running/);
     assert.deepEqual(audit(h).filter((e) => e.kind === 'worktree_created'), []);
   } finally {
+    h.done();
+  }
+});
+
+// T-1261: a parent folder for the new worktree, checked like a path the host prints (absolute, no . or ..), then by the host's Files
+// policy (a real folder under the files root, not the portal's own files), and never inside the repository or a .git folder.
+test('T-1261 a worktree with no parent still goes to <repository>.worktrees/', async () => {
+  const { pool, h } = await rig();
+  try {
+    const made = await h.repos.createWorktree(id(pool.path('proj')), { branch: 'feat/default-place' }, 'ui');
+    assert.equal(made.worktree.path, join(pool.work, 'proj.worktrees', 'feat-default-place'));
+    const omitted = await h.repos.createWorktree(id(pool.path('proj')), { branch: 'feat/empty-parent', parent: '' }, 'ui');
+    assert.equal(omitted.worktree.path, join(pool.work, 'proj.worktrees', 'feat-empty-parent'), 'an empty parent is no parent');
+  } finally {
+    h.done();
+  }
+});
+
+test('T-1261 a worktree made in a named parent folder is there, in the tree under its repository and in the audit', async () => {
+  const { pool, h } = await rig();
+  try {
+    const proj = id(pool.path('proj'));
+    const lanes = join(pool.files, 'lanes');
+    mkdirSync(lanes);
+    const made = await h.repos.createWorktree(proj, { branch: 'feat/in-lanes', parent: `${lanes}/` }, 'session:abc');
+    assert.equal(made.worktree.path, join(lanes, 'feat-in-lanes'));
+    assert.deepEqual([made.worktree.kind, made.worktree.mainId], ['worktree', proj]);
+    assert.ok(existsSync(join(lanes, 'feat-in-lanes', '.git')));
+    assert.equal(existsSync(join(pool.work, 'proj.worktrees', 'feat-in-lanes')), false);
+    const ev = audit(h).find((e) => e.kind === 'worktree_created' && e.data.branch === 'feat/in-lanes')!;
+    assert.deepEqual([ev.actor, ev.data.path], ['session:abc', join(lanes, 'feat-in-lanes')]);
+  } finally {
+    h.done();
+  }
+});
+
+test('T-1261 a parent folder is refused when relative, with . or .., inside the repository, outside the workspace or not the caller’s to see; nothing is left behind', async () => {
+  const { pool, h } = await rig();
+  const outside = mkdtempSync(join(tmpdir(), 'cp-t1261-outside-'));
+  try {
+    const proj = id(pool.path('proj'));
+    const worktreesBefore = pool.g(pool.path('proj'), 'worktree', 'list').split('\n').length;
+    mkdirSync(join(pool.files, 'lanes'));
+    const invalid = (e: { code: string; message: string }) => e.code === 'VALIDATION_FAILED' && /parent folder/.test(e.message);
+    // relative
+    await assert.rejects(() => h.repos.createWorktree(proj, { branch: 'p/rel', parent: 'lanes' }, 'ui'), invalid);
+    // a .. or . part (written as a string: join would fold it away)
+    await assert.rejects(() => h.repos.createWorktree(proj, { branch: 'p/up', parent: `${pool.files}/lanes/../lanes` }, 'ui'), invalid);
+    await assert.rejects(() => h.repos.createWorktree(proj, { branch: 'p/dot', parent: `${pool.files}/./lanes` }, 'ui'), invalid);
+    await assert.rejects(() => h.repos.createWorktree(proj, { branch: 'p/type', parent: 5 as never }, 'ui'), (e: { code: string }) => e.code === 'VALIDATION_FAILED');
+    // inside the repository, or in a .git folder: the host refuses the place
+    await assert.rejects(() => h.repos.createWorktree(proj, { branch: 'p/inside', parent: pool.path('proj') }, 'ui'), (e: { code: string }) => e.code === 'VALIDATION_FAILED');
+    await assert.rejects(() => h.repos.createWorktree(proj, { branch: 'p/git', parent: join(pool.path('proj'), '.git') }, 'ui'), (e: { code: string }) => e.code === 'VALIDATION_FAILED');
+    // outside the workspace's files, the portal's own files, a missing folder, and a link out of the files root: one answer
+    mkdirSync(join(pool.files, '.claudepilot', 'kept'), { recursive: true });
+    symlinkSync(outside, join(pool.files, 'out-link'));
+    writeFileSync(join(pool.files, 'a-file'), 'x\n');
+    const unseen: [string, string][] = [
+      ['outside the workspace', outside],
+      ['the portal’s own files', join(pool.files, '.claudepilot', 'kept')],
+      ['a folder that isn’t there', join(pool.files, 'no-such-folder')],
+      ['a link out of the files root', join(pool.files, 'out-link')],
+      ['a file, not a folder', join(pool.files, 'a-file')],
+    ];
+    const messages = new Set<string>();
+    for (const [i, [what, parent]] of unseen.entries()) {
+      await assert.rejects(
+        () => h.repos.createWorktree(proj, { branch: `p/unseen-${i}`, parent }, 'ui'),
+        (e: { code: string; message: string }) => {
+          assert.equal(e.code, 'NOT_FOUND', what);
+          messages.add(e.message);
+          return true;
+        },
+      );
+    }
+    assert.equal(messages.size, 1, 'the same not-found for every folder the caller may not see');
+    assert.equal(pool.g(pool.path('proj'), 'worktree', 'list').split('\n').length, worktreesBefore);
+    assert.deepEqual(audit(h).filter((e) => e.kind === 'worktree_created'), []);
+    assert.deepEqual(readdirSync(outside), [], 'nothing was made outside');
+  } finally {
+    rmSync(outside, { recursive: true, force: true });
     h.done();
   }
 });
